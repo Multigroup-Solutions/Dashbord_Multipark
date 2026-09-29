@@ -356,16 +356,18 @@ describe("Sheets — exportador", () => {
   });
   it("relatórios usam o procedimento da página (mesmas permissões) e mapeiam as colunas", async () => {
     const call = vi.fn(async (path: string, input: any) => {
-      if (path === "clients.list") return input.page === 1
-        ? { canSeeTotals: false, rows: Array.from({ length: 200 }, (_, i) => ({ name: `C${i}`, email: `c${i}@x.pt`, bookings: 1 })) }
-        : { canSeeTotals: false, rows: [{ name: "Z", email: "z@x.pt", bookings: 2 }] };
+      if (path === "crm.list") return input.offset === 0
+        ? { canSeeTotals: false, rows: Array.from({ length: 200 }, (_, i) => ({ id: i + 1, displayName: `C${i}`, primaryEmail: `c${i}@x.pt`, bookings: 1 })) }
+        : { canSeeTotals: false, rows: [{ id: 999, displayName: "Z", primaryEmail: "z@x.pt", bookings: 2 }] };
       if (path === "evaluation.ranking") return [{ employeeName: "Ana", position: "driver", days: 2, score: { totalPoints: 10, positivePoints: 12, negativePoints: 2 }, openDisputes: 0, metrics: { actions: 5 } }];
       throw new Error(path);
     });
     const tabs = await loadReportTabs(call, { report: "clientes", projectId: 50 }, Date.now() + 60_000);
-    expect(call).toHaveBeenCalledWith("clients.list", expect.objectContaining({ page: 1, pageSize: 200, projectId: 50 }));
-    expect(call).toHaveBeenCalledWith("clients.list", expect.objectContaining({ page: 2 }));
+    // as fichas do CRM (a lista da página Clientes), às páginas de 200
+    expect(call).toHaveBeenCalledWith("crm.list", expect.objectContaining({ tab: "clients", offset: 0, limit: 200 }));
+    expect(call).toHaveBeenCalledWith("crm.list", expect.objectContaining({ offset: 200 }));
     expect(tabs[0].rows.length).toBe(1 + 201);
+    expect(tabs[0].rows[1].slice(0, 3)).toEqual([1, "C0", "c0@x.pt"]);
     expect(tabs[0].rows[0]).not.toContain("Gasto total"); // sem totais financeiros → sem colunas de gasto
     const av = await loadReportTabs(call, { report: "avaliacoes", from: "2026-09-01", to: "2026-09-25" }, Date.now() + 60_000);
     expect(av[0].rows[1].slice(0, 4)).toEqual(["Ana", "driver", 2, 10]);
@@ -421,7 +423,8 @@ describe("Drive — acesso aos registos", () => {
   const inCity = <T>(fn: () => Promise<T>) => cityScope.run({ all: false, defaultCityId: 50, cityIds: [50], projectIds: [50], missingCostCenter: false }, fn);
 
   it("cliente: exige Clientes e a cidade do cliente", async () => {
-    f.rows = [{ name: "Ana", n: 2 }];
+    // a ficha do CRM com este email (fase 2): o nome vem dela
+    f.rows = [{ id: 7, displayName: "Ana", bookings: 2 }];
     const r = await inCity(() => assertDriveEntityAccess({ id: 1, role: "team_leader" }, "client", "Ana@X.pt", "edit"));
     expect(f.inScope).toHaveBeenCalledWith("client", "ana@x.pt");
     expect(r.folder).toEqual({ kind: "client", name: "Ana", email: "ana@x.pt" });

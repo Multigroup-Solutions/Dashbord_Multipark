@@ -17,7 +17,6 @@ import { isExpiredSyncTokenError } from "./google/peopleApi";
 import { MIGRATION_0155_STATEMENTS } from "./migrations/migration_0155";
 import { cityScope } from "./cityScope";
 import { searchContacts, contactDetail, searchableKinds } from "./contactsSearch";
-import { invalidateClientsCache } from "./clientsCrm";
 
 const H = 3_600_000;
 const D = 24 * H;
@@ -405,10 +404,12 @@ describe("Contactos — quem pesquisa o quê", () => {
       expect(l.filter((k) => k.kind !== "google").every((k) => k.access === "national")).toBe(true);
     }
   });
-  it("override por pessoa: dar Contactos a um condutor não lhe dá clientes", () => {
+  it("quem vê os Contactos vê as fichas de clientes (para poder ligar), não os contactos do CRM antigo", () => {
     const ov = { contactos: { access: "city", actions: ["view"] } };
-    expect(kinds("condutor", ov)).toEqual(["directory", "google"]);
-    expect(kinds("backoffice", { clientes: { access: "none", actions: [] } })).not.toContain("client");
+    expect(kinds("condutor", ov)).toEqual(["client", "directory", "google"]);
+    const bo = kinds("backoffice", { clientes: { access: "none", actions: [] } });
+    expect(bo).toContain("client");
+    expect(bo).not.toContain("crm");
   });
 });
 
@@ -424,7 +425,7 @@ describe("Contactos — pesquisa: âmbito de cidade em todas as queries", () => 
       return [[], []];
     },
   };
-  beforeEach(() => { queries = []; invalidateClientsCache(); });
+  beforeEach(() => { queries = []; });
 
   it("\"todos\" sem pesquisa não consulta nada", async () => {
     const r = await cityScope.run(porto, () => searchContacts(fakeDb, { id: 9, role: "supervisor" }, { q: "a" }));
@@ -475,9 +476,12 @@ describe("Contactos — pesquisa: âmbito de cidade em todas as queries", () => 
     queries = [];
     const d = await cityScope.run(porto, () => contactDetail(fakeDb, { id: 9, role: "supervisor" }, "crm", "1"));
     expect(d.phones).toEqual(["+351912345678"]);
-    const bookings = queries.find((q) => q.sql.includes("ORDER BY b.checkIn DESC"))!;
-    expect(bookings.sql).toContain("b.projectId IN");
-    expect(bookings.params).toEqual(expect.arrayContaining(["ana@x.pt", "%912345678"]));
+    // a ficha do CRM do contacto: pelo email e pelo telefone, só nas cidades de quem pede; nada da cópia das reservas
+    const lookups = queries.filter((q) => q.sql.includes("FROM crm_clients c WHERE c.status = 'active'"));
+    expect(lookups.some((q) => q.sql.includes("crm_client_emails") && q.params.includes("ana@x.pt"))).toBe(true);
+    expect(lookups.some((q) => q.sql.includes("crm_client_phones") && q.params.includes("+351912345678"))).toBe(true);
+    expect(lookups.every((q) => q.sql.includes("sc.cityKeys"))).toBe(true);
+    expect(queries.some((q) => q.sql.includes("multipark_bookings"))).toBe(false);
     expect(queries.find((q) => q.sql.includes("FROM complaints c"))!.sql).toContain("c.projectId IN");
     const wa = queries.find((q) => q.sql.includes("FROM whatsapp_conversations"))!;
     expect(wa.sql).toContain("bookingProjectId");

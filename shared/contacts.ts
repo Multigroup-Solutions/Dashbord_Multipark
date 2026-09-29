@@ -489,7 +489,9 @@ export function matchContact(contact: { emails: readonly string[]; phones: reado
 
 /** Módulo que decide cada tipo (google = só os do próprio). */
 export const CONTACT_KIND_MODULES: Record<ContactKind, readonly ModuleId[]> = {
-  client: ["clientes"],
+  // Fichas do CRM: quem vê os Contactos pode ligar a um cliente (Jorge, 29 set
+  // 2026) — nome, email e telefone; as reservas da ficha só com "clientes".
+  client: ["clientes", "contactos"],
   crm: ["clientes"],
   lead: ["leads_extras"],
   partner: ["parcerias"],

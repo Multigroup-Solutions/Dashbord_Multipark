@@ -6839,18 +6839,49 @@ export async function findOpenComplaintByClient(clientEmail?: string | null, veh
 
 // ── Histórico completo de um cliente (cruza reservas + reclamações + perdidos +
 //    críticas) por email / telefone / matrícula / nome. Usado nos detalhes de
-//    Reclamações, Perdidos&Achados e Críticas para ver tudo o que se passou. ──
+//    Reclamações, Perdidos&Achados e Críticas para ver tudo o que se passou.
+//    CRM fase 2 (29 set 2026): o cliente é a FICHA do CRM (server/crm/lookup.ts)
+//    — as reservas vêm das ligações reserva → ficha, lidas AO VIVO da Multipark;
+//    reclamações, perdidos e críticas cruzam também os outros emails, telefones
+//    e matrículas da ficha. ──
 export interface ClientHistoryQuery {
+  /** Ficha do CRM (quando já se sabe qual é). */
+  clientId?: number | null;
   email?: string | null;
   phone?: string | null;
   plate?: string | null;
   name?: string | null;
 }
 
+export interface ClientHistoryBooking {
+  id: string; externalId: string; bookingNumber: string | null; status: string | null; parkName: string | null; city: string | null;
+  checkIn: string | null; checkOut: string | null; licensePlate: string | null; totalPrice: number | null;
+  clientFirstName: string | null; clientLastName: string | null;
+}
+
+/** Estatísticas das reservas de um cliente (todas, a lista mostra só 30). PURA. */
+export function clientBookingStats(facts: ReadonlyArray<{ status: string | null; checkIn: string | null; total: number }>) {
+  const VISITED = ["CHECKED_IN", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"];
+  let firstCheckIn: string | null = null, lastCheckIn: string | null = null, totalSpent = 0, visited = 0, cancelled = 0;
+  for (const f of facts) {
+    const st = String(f.status ?? "").toUpperCase();
+    if (f.checkIn) {
+      if (!firstCheckIn || f.checkIn < firstCheckIn) firstCheckIn = f.checkIn;
+      if (!lastCheckIn || f.checkIn > lastCheckIn) lastCheckIn = f.checkIn;
+    }
+    // Gasto só em estadias efetivas (= ficha do CRM): canceladas e futuras fora
+    if (VISITED.includes(st)) { visited++; totalSpent += Number(f.total) || 0; }
+    if (st.includes("CANCEL")) cancelled++;
+  }
+  totalSpent = Math.round(totalSpent * 100) / 100;
+  return { total: facts.length, firstCheckIn, lastCheckIn, totalSpent, avgSpend: visited > 0 ? totalSpent / visited : 0, cancelled };
+}
+
 export async function getClientHistory(q: ClientHistoryQuery) {
   const db = await getDb();
   const empty = {
-    bookings: [] as any[], complaints: [] as any[], lostFound: [] as any[], reviews: [] as any[],
+    clientIds: [] as number[], bookings: [] as ClientHistoryBooking[], bookingsError: null as string | null,
+    complaints: [] as any[], lostFound: [] as any[], reviews: [] as any[],
     bookingStats: { total: 0, firstCheckIn: null as string | null, lastCheckIn: null as string | null, totalSpent: 0, avgSpend: 0, cancelled: 0 },
   };
   if (!db) return empty;
@@ -6860,67 +6891,68 @@ export async function getClientHistory(q: ClientHistoryQuery) {
   const phone = q.phone?.trim() || null;
   const plate = q.plate?.trim() || null;
   const name = q.name?.trim() || null;
-  if (!email && !phone && !plate && !name) return empty;
+  const clientId = q.clientId && q.clientId > 0 ? q.clientId : null;
+  if (!email && !phone && !plate && !name && !clientId) return empty;
+
+  // 1) As fichas do CRM deste cliente (no âmbito de cidade de quem pede).
+  const { findCrmClientIds, crmBookingIdsOf } = await import("./crm/lookup");
+  const clientIds = await findCrmClientIds(db, { clientId, email, phone, plate, name });
+  const ids = clientIds.length ? inArraySql(clientIds) : null;
+  const rowsOf = (res: unknown): any[] => { const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res; return Array.isArray(r) ? r : []; };
+  const [fichaEmails, fichaPhones, fichaPlates] = ids ? await Promise.all([
+    db.execute(sql`SELECT DISTINCT email AS v FROM crm_client_emails WHERE clientId IN (${ids}) AND generic = 0 LIMIT 10`),
+    db.execute(sql`SELECT DISTINCT phone AS v FROM crm_client_phones WHERE clientId IN (${ids}) LIMIT 10`),
+    db.execute(sql`SELECT DISTINCT plate AS v FROM crm_client_vehicles WHERE clientId IN (${ids}) LIMIT 10`),
+  ]).then((rs) => rs.map((r) => rowsOf(r).map((x) => String(x.v)))) : [[], [], []];
 
   // O nome é fraco (há muitas "Ana Silva"): só entra quando não há email,
   // telefone nem matrícula. % e _ escapados.
   const namePat = name && !email && !phone && !plate ? `%${name.replace(/[\\%_]/g, (c) => "\\" + c)}%` : null;
   // Telefone pelos últimos 9 dígitos (+351 912… = 912…); matrícula sem espaços/hífens
-  const phone9 = phone ? phone.replace(/\D+/g, "").slice(-9) : null;
-  const phoneEq = (col: any) => sql`RIGHT(REGEXP_REPLACE(COALESCE(${col}, ''), '[^0-9]', ''), 9) = ${phone9}`;
-  const plateK = plate ? plate.replace(/[\s-]+/g, "").toUpperCase() : null;
-  const plateEq = (col: any) => sql`UPPER(REPLACE(REPLACE(TRIM(${col}), ' ', ''), '-', '')) = ${plateK}`;
-  const usePhone = !!phone9 && phone9.length === 9;
-
-  // Reservas (multipark_bookings)
-  const bookingConds: any[] = [];
-  if (email) bookingConds.push(sql`LOWER(TRIM(${multiparkBookings.clientEmail})) = ${email}`);
-  if (usePhone) bookingConds.push(phoneEq(multiparkBookings.clientPhone));
-  if (plateK) bookingConds.push(plateEq(multiparkBookings.licensePlate));
-  if (namePat) bookingConds.push(sql`CONCAT_WS(' ', ${multiparkBookings.clientFirstName}, ${multiparkBookings.clientLastName}) LIKE ${namePat}`);
+  const phones9 = [...new Set([phone, ...fichaPhones].map((p) => String(p ?? "").replace(/\D+/g, "").slice(-9)).filter((p) => p.length === 9))];
+  const emails = [...new Set([email, ...fichaEmails].filter((e): e is string => !!e))];
+  const plates = [...new Set([plate, ...fichaPlates].map((p) => String(p ?? "").replace(/[\s-]+/g, "").toUpperCase()).filter((p) => p.length >= 4))];
+  const emailIn = (col: any) => sql`LOWER(TRIM(${col})) IN (${inArraySql(emails)})`;
+  const phoneIn = (col: any) => sql`RIGHT(REGEXP_REPLACE(COALESCE(${col}, ''), '[^0-9]', ''), 9) IN (${inArraySql(phones9)})`;
+  const plateIn = (col: any) => sql`UPPER(REPLACE(REPLACE(TRIM(${col}), ' ', ''), '-', '')) IN (${inArraySql(plates)})`;
 
   const complaintConds: any[] = [];
-  if (email) complaintConds.push(sql`LOWER(TRIM(${complaints.clientEmail})) = ${email}`);
-  if (usePhone) complaintConds.push(phoneEq(complaints.clientPhone));
-  if (plateK) complaintConds.push(plateEq(complaints.vehiclePlate));
+  if (emails.length) complaintConds.push(emailIn(complaints.clientEmail));
+  if (phones9.length) complaintConds.push(phoneIn(complaints.clientPhone));
+  if (plates.length) complaintConds.push(plateIn(complaints.vehiclePlate));
   if (namePat) complaintConds.push(like(complaints.clientName, namePat));
 
   const lfConds: any[] = [];
-  if (email) lfConds.push(sql`LOWER(TRIM(${lostFoundItems.clientEmail})) = ${email}`);
-  if (usePhone) lfConds.push(phoneEq(lostFoundItems.clientPhone));
-  if (plateK) lfConds.push(plateEq(lostFoundItems.vehiclePlate));
+  if (emails.length) lfConds.push(emailIn(lostFoundItems.clientEmail));
+  if (phones9.length) lfConds.push(phoneIn(lostFoundItems.clientPhone));
+  if (plates.length) lfConds.push(plateIn(lostFoundItems.vehiclePlate));
   if (namePat) lfConds.push(like(lostFoundItems.clientName, namePat));
 
   const reviewConds: any[] = [];
-  if (email) reviewConds.push(sql`LOWER(TRIM(${googleReviews.reviewerEmail})) = ${email}`);
-  if (plateK) reviewConds.push(plateEq(googleReviews.vehiclePlate));
+  if (emails.length) reviewConds.push(emailIn(googleReviews.reviewerEmail));
+  if (plates.length) reviewConds.push(plateIn(googleReviews.vehiclePlate));
   if (namePat) reviewConds.push(like(googleReviews.reviewerName, namePat));
 
-  const [bookings, bookingStatsRows, complaintRows, lostFound, reviews] = await Promise.all([
-    bookingConds.length
-      ? db.select({
-          id: multiparkBookings.id, externalId: multiparkBookings.externalId,
-          bookingNumber: multiparkBookings.bookingNumber, status: multiparkBookings.status,
-          parkName: multiparkBookings.parkName, city: multiparkBookings.city,
-          checkIn: multiparkBookings.checkIn, checkOut: multiparkBookings.checkOut,
-          licensePlate: multiparkBookings.licensePlate, totalPrice: multiparkBookings.totalPrice,
-          clientFirstName: multiparkBookings.clientFirstName, clientLastName: multiparkBookings.clientLastName,
-        }).from(multiparkBookings).where(and(or(...bookingConds), projectScope(multiparkBookings.projectId))).orderBy(desc(multiparkBookings.checkIn)).limit(30)
-      : Promise.resolve([]),
-    // Agregados sobre TODAS as reservas do cliente (a lista acima é limitada
-    // a 30): quantas, desde quando, total gasto, média — o retrato para quem
-    // vai decidir a reclamação.
-    bookingConds.length
-      ? db.select({
-          total: sql<number>`COUNT(*)`,
-          firstCheckIn: sql<string | null>`MIN(${multiparkBookings.checkIn})`,
-          lastCheckIn: sql<string | null>`MAX(${multiparkBookings.checkIn})`,
-          // Gasto só em estadias efetivas (= ficha de Clientes): canceladas e futuras fora
-          totalSpent: sql<string | null>`SUM(CASE WHEN UPPER(COALESCE(${multiparkBookings.status}, '')) IN ('CHECKED_IN','CHECKING_OUT','PENDING_CHECKOUT','CHECKED_OUT') THEN ${multiparkBookings.totalPrice} END)`,
-          visited: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) IN ('CHECKED_IN','CHECKING_OUT','PENDING_CHECKOUT','CHECKED_OUT'))`,
-          cancelled: sql<number>`SUM(UPPER(COALESCE(${multiparkBookings.status}, '')) LIKE '%CANCEL%')`,
-        }).from(multiparkBookings).where(and(or(...bookingConds), projectScope(multiparkBookings.projectId)))
-      : Promise.resolve([] as any[]),
+  // 2) Reservas: ligações das fichas → factos lidos ao vivo, só das cidades de quem pede.
+  const loadBookings = async () => {
+    const bookingIds = await crmBookingIdsOf(db, clientIds);
+    if (!bookingIds.length) return { facts: [] as import("./multiparkDb/crmLive").CrmBookingFact[], error: null as string | null };
+    try {
+      const [{ readCrmBookingFacts }, { scopedCityNamesLive }, { cityAliases }] = await Promise.all([
+        import("./multiparkDb/crmLive"), import("./cityScope"), import("../shared/crmGeo"),
+      ]);
+      const facts = await readCrmBookingFacts(bookingIds);
+      const scope = scopedCityNamesLive();
+      const allowed = scope === undefined ? null : new Set(cityAliases(scope));
+      return { facts: allowed ? facts.filter((f) => !!f.city && allowed.has(f.city.trim().toLowerCase())) : facts, error: null };
+    } catch (err) {
+      console.warn("[clientHistory] reservas ao vivo indisponíveis:", (err as Error)?.message);
+      return { facts: [], error: "Reservas indisponíveis (BD da Multipark sem resposta)." };
+    }
+  };
+
+  const [live, complaintRows, lostFound, reviews] = await Promise.all([
+    loadBookings(),
     complaintConds.length
       ? db.select({
           id: complaints.id, title: complaints.title, status: complaints.complaintStatus,
@@ -6941,19 +6973,31 @@ export async function getClientHistory(q: ClientHistoryQuery) {
       : Promise.resolve([]),
   ]);
 
-  const s = bookingStatsRows[0] as any;
-  const total = Number(s?.total ?? 0);
-  const totalSpent = s?.totalSpent != null ? Number(s.totalSpent) : 0;
-  const bookingStats = {
-    total,
-    firstCheckIn: (s?.firstCheckIn as string | null) ?? null,
-    lastCheckIn: (s?.lastCheckIn as string | null) ?? null,
-    totalSpent,
-    avgSpend: Number(s?.visited ?? 0) > 0 ? totalSpent / Number(s.visited) : 0,
-    cancelled: Number(s?.cancelled ?? 0),
-  };
+  // Nome do cliente para as reservas: o da ficha (a reserva lida ao vivo não traz dados pessoais).
+  let first: string | null = null, last: string | null = null;
+  if (ids) {
+    const r = rowsOf(await db.execute(sql`SELECT firstName, lastName, displayName FROM crm_clients WHERE id IN (${ids}) ORDER BY bookings DESC LIMIT 1`))[0];
+    first = r?.firstName ?? r?.displayName ?? null;
+    last = r?.firstName ? r?.lastName ?? null : null;
+  }
+  const bookings: ClientHistoryBooking[] = [...live.facts]
+    .sort((a, b) => String(b.checkIn ?? "").localeCompare(String(a.checkIn ?? "")))
+    .slice(0, 30)
+    .map((f) => ({
+      id: f.id, externalId: f.id, bookingNumber: f.code, status: f.status, parkName: f.parkName, city: f.city,
+      checkIn: f.checkIn, checkOut: f.checkOut, licensePlate: f.plate, totalPrice: f.total,
+      clientFirstName: first, clientLastName: last,
+    }));
 
-  return { bookings, bookingStats, complaints: complaintRows, lostFound, reviews };
+  return {
+    clientIds, bookings, bookingsError: live.error, bookingStats: clientBookingStats(live.facts),
+    complaints: complaintRows, lostFound, reviews,
+  };
+}
+
+/** Lista parametrizada para IN (…). */
+function inArraySql(vals: ReadonlyArray<string | number>): SQL {
+  return sql.join(vals.map((v) => sql`${v}`), sql`, `);
 }
 
 // ── Threading: agrupar RESPOSTAS na mesma reclamação/perdido ──────────────────

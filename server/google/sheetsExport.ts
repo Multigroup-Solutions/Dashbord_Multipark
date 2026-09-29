@@ -76,19 +76,23 @@ export const SHEET_REPORTS: Record<SheetExportReport, ReportDef> = {
     },
   },
   clientes: {
+    // Fichas do CRM (fase 2 — o "CRM leve" antigo saiu), no âmbito de cidade de quem exporta.
     async load(call, input, deadlineAt) {
       const rows: SheetCell[][] = [];
       let totals = false;
+      const segment = input.segment && input.segment !== "all" && input.segment !== "shared" ? [input.segment] : undefined;
+      const search = input.search?.trim() ? { text: input.search.trim(), field: "all" as const } : null;
       // Até 25 páginas × 200 (5 000 clientes) e sempre dentro do prazo.
-      for (let page = 1; page <= 25 && Date.now() < deadlineAt - 20_000; page++) {
-        const res = await call("clients.list", { search: input.search ?? null, segment: input.segment ?? null, projectId: input.projectId, page, pageSize: 200, sort: "lastCheckIn", dir: "desc" });
+      for (let page = 0; page < 25 && Date.now() < deadlineAt - 20_000; page++) {
+        const res = await call("crm.list", { tab: "clients", search, groups: segment ? { segment } : undefined, sort: "lastVisit", dir: "desc", offset: page * 200, limit: 200 });
         totals = !!res.canSeeTotals;
         for (const c of res.rows ?? []) {
-          rows.push([c.name, c.email, c.phone, c.bookings, c.completed, c.upcoming, c.cancelled, c.partnerBookings, ...(totals ? [c.totalSpent == null ? null : r2(c.totalSpent), c.avgSpend == null ? null : r2(c.avgSpend)] : []), c.firstCheckIn, c.lastCheckIn]);
+          const avg = c.totalSpent != null && c.completed ? c.totalSpent / c.completed : null;
+          rows.push([c.id, c.displayName, c.primaryEmail, c.primaryPhone, c.bookings, c.completed, c.upcoming, c.cancelled, ...(totals ? [c.totalSpent == null ? null : r2(c.totalSpent), avg == null ? null : r2(avg)] : []), c.firstVisit, c.lastVisit]);
         }
         if (!res.rows?.length || res.rows.length < 200) break;
       }
-      const header: SheetCell[] = ["Nome", "Email", "Telefone", "Reservas", "Estadias", "Futuras", "Canceladas", "Via parceiro", ...(totals ? ["Gasto total", "Gasto médio"] : []), "Primeira entrada", "Última entrada"];
+      const header: SheetCell[] = ["N.º cliente", "Nome", "Email", "Telefone", "Reservas", "Estadias", "Futuras", "Canceladas", ...(totals ? ["Gasto total", "Gasto médio"] : []), "Primeira estadia", "Última estadia"];
       return [tabOf("Clientes", header, rows)];
     },
   },

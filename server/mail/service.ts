@@ -48,18 +48,14 @@ export const MAIL_PIPELINE_WINDOW_DAYS = 30;
 // ─── Dependências reais das ligações automáticas ────────────────────────────
 
 export const dbAutoLinkDeps: AutoLinkDeps = {
+  // CRM fase 2: o cliente é a ficha do CRM (emails/telefones das fichas), não a cópia das reservas.
   async clientExists(email) {
-    const d = await db();
-    return rowsOf(await d.execute(sql`SELECT 1 AS x FROM multipark_bookings WHERE LOWER(TRIM(clientEmail)) = ${email} LIMIT 1`)).length > 0;
+    const { crmEmailExists } = await import("../crm/lookup");
+    return crmEmailExists(await db(), email);
   },
   async clientEmailByPhone(phone) {
-    const digits = String(phone).replace(/\D/g, "").slice(-9);
-    if (digits.length < 9) return null;
-    const d = await db();
-    const r = rowsOf(await d.execute(sql`SELECT LOWER(TRIM(clientEmail)) AS email FROM multipark_bookings
-      WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(clientPhone, ' ', ''), '-', ''), '+', ''), '(', ''), ')', ''), 9) = ${digits}
-        AND clientEmail IS NOT NULL AND clientEmail <> '' ORDER BY checkIn DESC LIMIT 1`))[0];
-    return r?.email ?? null;
+    const { crmEmailByPhone } = await import("../crm/lookup");
+    return crmEmailByPhone(await db(), phone);
   },
   async matchBooking(s) {
     const { matchBookingForComplaint } = await import("../complaintDossier");

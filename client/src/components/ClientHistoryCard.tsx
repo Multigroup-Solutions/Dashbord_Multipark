@@ -1,12 +1,13 @@
 import { trpc } from "@/lib/trpc";
 import { Link } from "wouter";
-import { normalizeEmail } from "@shared/email";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { History, Car, MessageSquareWarning, PackageSearch, Star, Loader2 } from "lucide-react";
 
 type Props = {
+  /** Ficha do CRM, quando já se sabe qual é. */
+  clientId?: number | null;
   email?: string | null;
   phone?: string | null;
   plate?: string | null;
@@ -24,12 +25,13 @@ const d = (s?: string | null) => fmtPTDate(s);
 /**
  * Mostra TODO o histórico de um cliente (reservas, reclamações, perdidos,
  * críticas) cruzado por email / telefone / matrícula / nome. Reutilizável nos
- * detalhes de Reclamações, Perdidos & Achados e Críticas.
+ * detalhes de Reclamações, Perdidos & Achados e Críticas. O cliente é a ficha
+ * do CRM (as reservas vêm dela, lidas ao vivo da Multipark).
  */
-export default function ClientHistoryCard({ email, phone, plate, name, highlightRef, className }: Props) {
-  const hasKey = !!(email || phone || plate || name);
+export default function ClientHistoryCard({ clientId, email, phone, plate, name, highlightRef, className }: Props) {
+  const hasKey = !!(clientId || email || phone || plate || name);
   const { data, isLoading } = trpc.clients.history.useQuery(
-    { email: email ?? null, phone: phone ?? null, plate: plate ?? null, name: name ?? null },
+    { clientId: clientId ?? null, email: email ?? null, phone: phone ?? null, plate: plate ?? null, name: name ?? null },
     { enabled: hasKey },
   );
 
@@ -48,7 +50,11 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
         <CardTitle className="text-sm flex items-center gap-2">
           <History className="w-4 h-4 text-primary" />
           Histórico do cliente
-          {email && <Link href={`/clientes?email=${encodeURIComponent(normalizeEmail(email))}`} className="ml-auto text-xs font-normal text-primary underline">Abrir ficha de cliente</Link>}
+          {!clientId && data?.clientIds?.[0] && (
+            <Link href={`/clientes/${data.clientIds[0]}`} className="ml-auto text-xs font-normal text-primary underline">
+              Abrir ficha de cliente{data.clientIds.length > 1 ? ` (+${data.clientIds.length - 1})` : ""}
+            </Link>
+          )}
           {isLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
         </CardTitle>
         <div className="flex flex-wrap gap-1.5 text-xs">
@@ -59,7 +65,8 @@ export default function ClientHistoryCard({ email, phone, plate, name, highlight
         </div>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {!isLoading && counts.b + counts.c + counts.l + counts.r === 0 && (
+        {data?.bookingsError && <p className="text-xs text-amber-600">{data.bookingsError}</p>}
+        {!isLoading && !data?.bookingsError && counts.b + counts.c + counts.l + counts.r === 0 && (
           <p className="text-muted-foreground text-xs">Sem histórico associado a este cliente.</p>
         )}
 

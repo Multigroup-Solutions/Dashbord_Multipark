@@ -62,11 +62,22 @@ export async function matchRecordsFor(d: { execute: (q: any) => Promise<any> }, 
   const phoneCond = (col: any) => (last9.length ? sql`RIGHT(REGEXP_REPLACE(COALESCE(${col}, ''), '[^0-9]', ''), 9) IN (${inList(last9)})` : sql`1 = 0`);
   if (!emails.length && !last9.length) return out;
   if (beyondOwn(viewer, "clientes")) {
-    for (const r of rowsOf(await d.execute(sql`SELECT LOWER(TRIM(b.clientEmail)) AS email, MAX(NULLIF(TRIM(CONCAT_WS(' ', b.clientFirstName, b.clientLastName)), '')) AS name,
-        MAX(b.clientPhone) AS phone FROM multipark_bookings b
-      WHERE b.clientEmail IS NOT NULL AND b.clientEmail LIKE '%@%' AND (${emailCond(sql`b.clientEmail`)} OR ${phoneCond(sql`b.clientPhone`)}) AND ${projectScope(sql`b.projectId`)}
-      GROUP BY LOWER(TRIM(b.clientEmail)) LIMIT 300`))) {
-      out.push({ kind: "client", id: String(r.email), label: String(r.name ?? r.email), emails: [String(r.email)], phones: [String(r.phone ?? "")] });
+    // Fichas do CRM (fase 2) com estes emails/telefones, no âmbito de cidade.
+    const { clientVisibleSql } = await import("./crm/scope");
+    const e164 = uniqueStrings(phones.map((p) => phoneKey(p)).filter(Boolean));
+    const byEmail = emails.length ? sql`c.id IN (SELECT ce.clientId FROM crm_client_emails ce WHERE ce.email IN (${inList(emails)}))` : sql`1 = 0`;
+    const byPhone = e164.length ? sql`c.id IN (SELECT cp.clientId FROM crm_client_phones cp WHERE cp.phone IN (${inList(e164)}))` : sql`1 = 0`;
+    const fichas = rowsOf(await d.execute(sql`SELECT c.id, c.displayName FROM crm_clients c
+      WHERE c.status = 'active' AND (${byEmail} OR ${byPhone}) AND ${clientVisibleSql(sql`c.id`)} LIMIT 300`));
+    if (fichas.length) {
+      const ids = fichas.map((f) => Number(f.id));
+      const em = new Map<number, string[]>(), ph = new Map<number, string[]>();
+      for (const r of rowsOf(await d.execute(sql`SELECT clientId, email FROM crm_client_emails WHERE clientId IN (${inList(ids)})`))) em.set(Number(r.clientId), [...(em.get(Number(r.clientId)) ?? []), String(r.email)]);
+      for (const r of rowsOf(await d.execute(sql`SELECT clientId, phone FROM crm_client_phones WHERE clientId IN (${inList(ids)})`))) ph.set(Number(r.clientId), [...(ph.get(Number(r.clientId)) ?? []), String(r.phone)]);
+      for (const f of fichas) {
+        const id = Number(f.id);
+        out.push({ kind: "client", id: String(id), label: String(f.displayName ?? em.get(id)?.[0] ?? `Cliente n.º ${id}`), emails: em.get(id) ?? [], phones: ph.get(id) ?? [] });
+      }
     }
     for (const r of rowsOf(await d.execute(sql`SELECT c.id, c.name, c.email, c.phoneE164 FROM crm_contacts c
       WHERE (${emailCond(sql`c.email`)} OR ${phoneCond(sql`c.phoneE164`)}) AND ${projectScope(sql`c.projectId`)} LIMIT 300`).catch(() => [[]]))) {

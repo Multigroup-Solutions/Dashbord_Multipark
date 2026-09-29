@@ -29,7 +29,7 @@ import { ALERT_CLASS, ClientAvatar, ColorSwatch, Pill, SegmentPill, eur, mainSeg
 import type { CrmListRow } from "@/components/crm/crmTypes";
 import { ProAccountsPanel } from "@/components/crm/ProAccountsPanel";
 import { ParksPanel, PartnersPanel } from "@/components/crm/PartnersPanels";
-import LegacyClientsPage from "./ClientsPage";
+import { ExportToSheetsButton } from "@/components/google/DriveActions";
 
 type ViewState = {
   /** clients = fichas; pro = contas Pro (fase 2); partners / parks = parceiros e parques (fase 3, ao vivo) */
@@ -57,7 +57,7 @@ export default function CrmClientsPage() {
   return <CrmList />;
 }
 
-/** Ligações antigas `/clientes?email=` → ficha nova (ou a antiga, se ainda não existir). */
+/** Ligações antigas `/clientes?email=` → a ficha do CRM (várias ou nenhuma: a lista, pesquisada por esse email). */
 function OpenByEmail({ email }: { email: string }) {
   const [, navigate] = useLocation();
   // email EXATO (a pesquisa da lista é "contém": ana@x.pt também apanhava joana@x.pt)
@@ -66,8 +66,7 @@ function OpenByEmail({ email }: { email: string }) {
   const id = ids.length === 1 ? ids[0] : null;
   useEffect(() => { if (id) navigate(`/clientes/${id}`, { replace: true }); }, [id, navigate]);
   if (q.isLoading || id) return <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
-  if (ids.length > 1) return <CrmList initialSearch={{ text: email, field: "email" }} />;
-  return <LegacyClientsPage />;
+  return <CrmList initialSearch={{ text: email, field: "email" }} />;
 }
 
 function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
@@ -182,6 +181,9 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
             {pending > 0 && <Pill className="bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">{num(pending)}</Pill>}
           </Link>
         </Button>
+        {s.tab === "clients" && can(user as any, "clientes", "export") && (
+          <ExportToSheetsButton input={{ report: "clientes", search: s.search?.text ?? null, segment: s.groups.segment?.length === 1 ? s.groups.segment[0] : null }} />
+        )}
         {can(user as any, "clientes", "edit") && <Button onClick={() => setNewOpen(true)}><Plus className="h-4 w-4" />Novo cliente</Button>}
       </div>
 

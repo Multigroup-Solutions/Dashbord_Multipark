@@ -68,7 +68,7 @@ export function parksFor(ctx: LiveContext, projectIds?: number[] | null, scoped?
 
 async function scope(projectIds?: number[] | null) {
   const [ctx, { scopedProjectIds }, { INTERNAL_EMAIL_DOMAINS }] = await Promise.all([
-    loadLiveContext(), import("./cityScope"), import("./clientsCrm"),
+    loadLiveContext(), import("./cityScope"), import("../shared/crmIdentity"),
   ]);
   return { ctx, parkIds: parksFor(ctx, projectIds, scopedProjectIds()), internalDomains: INTERNAL_EMAIL_DOMAINS };
 }

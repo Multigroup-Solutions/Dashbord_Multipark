@@ -167,9 +167,9 @@ export const bookingFileRouter = router({
       }
       const email = input.email?.trim().toLowerCase();
       if (email && email.includes("@") && seesBeyondOwn(user, "clientes")) {
-        const hit = await db.select({ id: multiparkBookings.id }).from(multiparkBookings)
-          .where(and(sql`LOWER(TRIM(${multiparkBookings.clientEmail})) = ${email}`, inCities(multiparkBookings.projectId))).limit(1);
-        if (hit[0]) out.crmEmail = email;
+        // Há ficha do CRM com este email (nas cidades de quem pede)?
+        const { crmClientByEmail } = await import("./crm/lookup");
+        if (await crmClientByEmail(db, email)) out.crmEmail = email;
       }
       return out;
     }),

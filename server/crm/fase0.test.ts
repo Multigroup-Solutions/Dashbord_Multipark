@@ -5,7 +5,6 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { sql } from "drizzle-orm";
 import { clipAccount, dbErrorReason, PRO_ACCOUNT_LIMITS } from "./proSync";
 import { INTERNAL_EMAIL_DOMAINS, isGenericEmail, isHouseEmail } from "../../shared/crmIdentity";
-import { INTERNAL_EMAIL_DOMAINS as CLIENTS_CRM_DOMAINS } from "../clientsCrm";
 import { restoreSuggestionsSql } from "./merge";
 import { findEmailInMailbox } from "./review";
 
@@ -49,7 +48,6 @@ describe("domínios da casa: lista única", () => {
     for (const d of ["multipark.pt", "multipark.app", "multivalet.pt", "multibags.pt", "multibags.app", "multidriver.pt", "airpark.pt", "redpark.pt", "skypark.pt", "multigroup.pt"]) {
       expect(INTERNAL_EMAIL_DOMAINS).toContain(d);
     }
-    expect(CLIENTS_CRM_DOMAINS).toBe(INTERNAL_EMAIL_DOMAINS);
   });
   it("email da casa (e subdomínio) é genérico, nunca cliente", () => {
     expect(isHouseEmail("reservas@multibags.app")).toBe(true);
