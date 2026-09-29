@@ -7,6 +7,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { buildIdentityAudit, loadIdentitySnapshot } from "./identityReconcile";
 import { scopedProjectIds } from "./cityScope";
+import { looksLikeTestAgent } from "./personIdentity";
 
 const LIMIT = 150;
 
@@ -71,7 +72,8 @@ export async function getLinksOverview(): Promise<LinksOverview> {
       .filter((a) => a.suggestions.length > 0)
       .slice(0, LIMIT),
     agentsUnmatched: audit.agentsUnmatched
-      .filter((a) => a.actions > 0 && !aliasAgentIds.has(a.agentUserId))
+      // Agentes de teste saem da lista (decisão do dono); continuam na Multipark.
+      .filter((a) => a.actions > 0 && !aliasAgentIds.has(a.agentUserId) && !looksLikeTestAgent(a.agentNames[0], a.agentEmails[0]))
       .sort((a, b) => b.actions - a.actions)
       .slice(0, LIMIT)
       .map((a) => ({ agentUserId: a.agentUserId, agentName: a.agentNames[0] ?? a.agentUserId, email: a.agentEmails[0] ?? null, actions: a.actions, lastAction: a.lastAction })),

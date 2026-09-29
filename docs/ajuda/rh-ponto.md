@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes
+palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
 ---
 # RH e ponto
 
@@ -26,3 +26,25 @@ palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar e
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
 - Ordenados, recibos e folha para o contabilista só para admin.
+
+## Ligações (fichas, contas de login e agentes da Multipark)
+
+Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas, as contas de login e os agentes da Multipark. A ligação automática corre de hora a hora; aqui ficam os casos para decidir à mão. Para ligar ou procurar, só contam letras e números: acentos, maiúsculas, apóstrofos e traços não contam ("João d'Almeida-Sá" = "JOAO DALMEIDA SA").
+
+**Uma pessoa: contas e agentes**
+1. Escolhe a ficha. Vês as **contas de login** (principal e extra) e os **agentes da Multipark** (principal e extra). Uma pessoa pode ter vários agentes (emails antigos e novos).
+2. **Anexar agente**: escreve o nome ou o email do agente e carrega em **Anexar**. Se o agente estava noutra ficha, passa para esta. Se a pessoa já tinha agente, este entra como agente extra.
+3. **Retirar**: tira o agente da ficha. Se era o principal e havia extras, o primeiro extra passa a principal.
+
+**Juntar contas** (só administradores)
+- Caso típico: a ficha foi criada com um email (por exemplo do Outlook) e a pessoa entrou na app com outra conta Google, que ficou "perdida".
+- Na ficha, escolhe a **conta perdida (sem ficha)** e carrega em **Juntar**, ou numa conta extra carrega em **Ficar só com esta**.
+- Fica a conta que entra na app. Tudo o que era da pessoa passa para ela: a ficha, as permissões e cidades extra, as notificações, o Google, o email, o WhatsApp e os casos atribuídos. O papel fica o mais alto dos dois.
+- A outra conta fica **desativada** ("conta duplicada"), nunca apagada, e o email dela passa para a ficha como email pessoal. O registo de quem fez o quê fica como estava.
+
+**Agentes de teste**
+- Agentes cujo nome ou email diz "teste", "test", "demo" e parecidos não aparecem nos "por ligar". Continuam na Multipark.
+
+**Fichas sem cidade**
+- De hora a hora, uma ficha ativa sem cidade recebe a cidade onde o agente da Multipark da pessoa mais trabalhou nos últimos 180 dias. Se não houver agente, usa-se a cidade da candidatura ou da morada.
+- Se nada der, a ficha fica em aberto e é criada uma **tarefa**, com email, para a Márcia Nunes (Definições → "Responsável pelas fichas sem cidade"). Sem cidade a pessoa não consegue entrar na app.

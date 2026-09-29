@@ -260,6 +260,15 @@ export const SETTINGS = {
     defaultValue: [],
     wiring: "live",
   }),
+  "rh.missingCityAssignee": def({
+    key: "rh.missingCityAssignee",
+    group: "operacao",
+    label: "Responsável pelas fichas sem cidade",
+    description: "Nome ou email da pessoa que recebe a tarefa (e o email) quando uma ficha ativa não tem cidade e o dashboard não a consegue descobrir pelo agente da Multipark, pela candidatura ou pela morada.",
+    schema: z.string().trim().min(2, "Indica um nome ou email.").max(320),
+    defaultValue: "Márcia Nunes",
+    wiring: "live",
+  }),
   "availability.assigneeEmail": def({
     key: "availability.assigneeEmail",
     group: "disponibilidade",

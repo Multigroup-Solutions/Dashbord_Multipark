@@ -11,6 +11,8 @@ import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { AlertTriangle, Link2, Loader2, RefreshCw, UserPlus } from "lucide-react";
 import { toast } from "sonner";
+import { PersonIdentityCard } from "./PersonIdentityCard";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 const dm = (s: string | null) => (s ? `${String(s).slice(8, 10)}/${String(s).slice(5, 7)}` : "—");
 
@@ -42,6 +44,8 @@ function PickEmployee({ options, onPick, busy, label }: { options: { value: stri
 
 export function IdentityLinksSection() {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  const canMerge = user?.role === "admin" || user?.role === "super_admin";
   const q = trpc.identityLinks.overview.useQuery();
   const emps = trpc.multipark.employeesForMapping.useQuery();
   const empOptions = useMemo(() => ((emps.data ?? []) as any[]).map((e) => ({ value: String(e.id), label: e.fullName })), [emps.data]);
@@ -88,6 +92,8 @@ export function IdentityLinksSection() {
           </div>
         </CardContent>
       </Card>
+
+      <PersonIdentityCard employeeOptions={empOptions} orphanUsers={d.usersWithoutEmployee} canMerge={canMerge} />
 
       <Section title="Fichas sem utilizador" count={d.employeesWithoutUser.length} hint="Sem utilizador não há ponto nem app. Com email válido, cria-se (ou liga-se) num clique.">
         <table className="w-full text-sm">
