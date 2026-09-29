@@ -34,3 +34,14 @@ export function isNonPersonAgentName(name: string | null | undefined, email?: st
 export function isLinkableAgent(id: string | null | undefined, name?: string | null, email?: string | null): boolean {
   return !isSystemAgentId(id) && !isNonPersonAgentName(name, email);
 }
+
+/** Na lista "agentes por ligar" só entram os que mexeram em carros nestes dias. */
+export const UNLINKED_ACTIVE_DAYS = 60;
+
+/** Agente parado: nunca fez nada, ou a última ação foi há mais de UNLINKED_ACTIVE_DAYS dias. PURA. */
+export function isStaleAgent(total: number, lastSeen: string | null | undefined, nowMs: number = Date.now()): boolean {
+  if (!total) return true;
+  const t = lastSeen ? Date.parse(String(lastSeen).replace(" ", "T") + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(lastSeen)) ? "" : "Z")) : NaN;
+  if (!Number.isFinite(t)) return false;
+  return nowMs - t > UNLINKED_ACTIVE_DAYS * 86_400_000;
+}

@@ -206,7 +206,7 @@ export function buildLiveAgentsSql(opts: { since: string; limit?: number }): { s
     `    FROM "Agent" a GROUP BY a."userId"`,
     `)`,
     `SELECT COALESCE(act.uid, ag.uid) AS user_id, act.names AS history_names, ag.name AS agent_name,`,
-    `       COALESCE(ag.active, false) AS active, COALESCE(act.total, 0) AS total, COALESCE(act.checkins, 0) AS checkins,`,
+    `       COALESCE(ag.active, false) AS active, COALESCE(ag.partner_only, false) AS partner_only, COALESCE(act.total, 0) AS total, COALESCE(act.checkins, 0) AS checkins,`,
     `       COALESCE(act.checkouts, 0) AS checkouts, COALESCE(act.movements, 0) AS movements,`,
     `       ${ts("act.first_at")} AS first_at, ${ts("act.last_at")} AS last_at,`,
     `       (SELECT i."email" FROM "AgentInvite" i LEFT JOIN "Agent" a2 ON a2."id" = i."createdAgentId"`,
@@ -228,6 +228,8 @@ export interface LiveAgent {
   agentNames: string[];
   email: string | null;
   active: boolean;
+  /** Só tem contas de parceiro (role PARTNER) na Multipark: não é da equipa. */
+  partnerOnly?: boolean;
   total: number;
   checkins: number;
   checkouts: number;
@@ -255,6 +257,7 @@ export function mapLiveAgentRow(r: Record<string, unknown>): LiveAgent | null {
     agentNames: names,
     email: email ? email.toLowerCase() : null,
     active: r.active === true || r.active === "t" || r.active === 1 || r.active === "true",
+    partnerOnly: r.partner_only === true || r.partner_only === "t" || r.partner_only === 1 || r.partner_only === "true",
     total: int(r.total), checkins: int(r.checkins), checkouts: int(r.checkouts), movements: int(r.movements),
     firstSeen: toIsoUtc(r.first_at), lastSeen: toIsoUtc(r.last_at),
   };
