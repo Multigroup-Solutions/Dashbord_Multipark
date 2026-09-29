@@ -2,7 +2,7 @@
 modulo: faturacao
 titulo: Faturação
 rotas: /faturacao, /financeiro, /anual
-palavras: ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, no-shows, financeiro, anual, totais, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos
+palavras: preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, no-shows, financeiro, anual, totais, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos
 ---
 # Faturação
 
@@ -38,6 +38,11 @@ As reservas (receita, entregues, recolhidas, receita esperada e caixa) são lida
 3. **Viva Wallet (CSV)**: em **Confirmar pagamentos**, importa o extrato exportado da Viva Wallet (colunas Date, Time, Amount, Channel). Cada pagamento por multibanco procura uma transação do terminal com o mesmo valor, no mesmo dia ou no seguinte; os que não aparecem abrem caso. Os links de pagamento (Smart Checkout) não contam para o multibanco. Precisa de Faturação → gerir.
 4. **Fim do mês (Pro, agentes, agregadores)**: escolhe o mês. Aparece por cliente Pro e por parceiro o **devido do mês** na Multipark, contando as reservas que **saíram** nesse mês (uma reserva que entrou no mês passado e saiu neste conta neste; uma que entra neste e sai no próximo conta no próximo). Parceiros: soma do devido pelo parceiro; Pro: preço das reservas. Ao lado aparece o que está **em atraso** dos 12 meses anteriores (ainda por pagar na Multipark): um pagamento pode trazer meses em atraso, e só é diferença se passar o devido do mês mais o que está em atraso, ou se não chegar ao devido do mês. Carrega em **Registar recebido**: valor, data, nota e o comprovativo (foto ou PDF). Se o recebido não bater com o devido, abre caso "Recebimento mensal ≠ devido". Precisa de Faturação → gerir.
 5. **Cruzamentos automáticos** (Stripe, Viva Wallet, InvoiceExpress): estão **desligados** por omissão e confirma-se à mão. Liga-se em **Definições → Automações** (só super admin), depois de pôr as chaves só de leitura na Vercel: `STRIPE_READ_KEY` (restrita, `rk_`), `VIVA_MERCHANT_ID` + `VIVA_API_KEY`, `INVOICEXPRESS_ACCOUNT` + `INVOICEXPRESS_API_KEY`. O cartão mostra se cada um está ligado e se tem chave.
+
+**Preços iniciais (histórico da Multipark)**
+1. Em **Correção de caixa**, no cartão **Preços iniciais**, carrega o CSV exportado do histórico da Multipark (reservas.csv: o preço com que cada reserva foi criada).
+2. O cartão mostra quantas reservas entraram e como a nossa cópia antiga se compara: **igual** ao preço inicial, **reescrita** (tem o preço de agora, porque o sync escrevia por cima), **com outro valor**, **não está na cópia** ou **sem preço na criação**. As maiores diferenças ficam listadas.
+3. A partir daí, o **Comparar** e a conferência da ficha da reserva começam o "era" neste preço inicial (marcado "preço inicial do histórico"). Voltar a importar atualiza, nunca apaga. Precisa de Faturação → gerir.
 
 **Correção de caixa — comparar um dia**
 1. Separador **Correção de caixa**. Escolhe um ou mais parques (por defeito, os nossos; **Só os nossos** e **Limpar** ajudam) e o **dia** (hora de Lisboa).

@@ -7859,6 +7859,15 @@ export const appRouter = router({
         await logActivity({ userId: ctx.user.id, action: "agent_attach", entity: "employee", entityId: input.employeeId, details: `Agente Multipark ${input.agentUserId} "${agentName}" ligado (ecrã Ligações)` });
         return { success: true, agentName };
       }),
+    /** Lista de agentes exportada da Multipark (CSV) contra as fichas: quem está ligado e a quem ligar. Só leitura. */
+    compareAgentList: protectedProcedure.input(z.object({ csv: z.string().min(5).max(500_000) })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "rh", "manage");
+      const { parseAgentListCsv } = await import("../shared/multiparkExports");
+      const parsed = parseAgentListCsv(input.csv);
+      if (parsed.errors.length) throw new TRPCError({ code: "BAD_REQUEST", message: parsed.errors.join(" ") });
+      const { compareAgentList } = await import("./multiparkExportsImport");
+      return compareAgentList(parsed.rows.slice(0, 2000));
+    }),
   }),
 
   extraLeads: router({
