@@ -11,6 +11,7 @@ import { createContext } from "./context";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
+import { registerWhatsappCallStreamRoute } from "../whatsappCallStream";
 import { createMultiparkWebhookRouter, retryMultiparkDeliveries } from "../multiparkWebhook";
 import { getDeadline, waitUntil } from "@vercel/functions";
 import { deliveryErrorCode } from "../bookingDeliveryQueue";
@@ -59,6 +60,8 @@ try {
   registerMailRoutes(app, { defer: (p) => waitUntil(p) });
   app.use("/api/external", createExternalApiRouter());
   app.use("/api/v1", createMcpApiRouter());
+  // Toque das chamadas do WhatsApp por SSE (GET, sessão por cookie).
+  registerWhatsappCallStreamRoute(app);
 
   // Upload multipart (paridade com o index.ts do Railway — os PDAs usam isto
   // p/ a foto de entrada/saída do check-in; sem isto o Vercel dava 404).

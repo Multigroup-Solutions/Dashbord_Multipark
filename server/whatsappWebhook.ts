@@ -142,10 +142,12 @@ export function createWhatsappWebhookRouter(): Router {
       // process-then-ack (idempotente pelo id da chamada). Só importa o módulo
       // quando o payload traz algo de chamadas.
       let missedCalls: number[] = [];
+      let ringingCalls: string[] = [];
       if (hasCallContent(payload) && (await (await import("./whatsappCalls")).whatsappCallsEnabled())) {
         const { processCallWebhook } = await import("./whatsappCalls");
         const calls = await processCallWebhook(payload);
         missedCalls = calls.missed;
+        ringingCalls = calls.ringing;
         if (calls.connects || calls.terminates || calls.statuses || calls.permissions) {
           console.log(
             `[WhatsAppWebhook] chamadas: ${calls.connects} connect, ${calls.terminates} terminate, ${calls.statuses} status, ${calls.permissions} autorizações${calls.deduped ? `, ${calls.deduped} dedup` : ""}`,
@@ -153,6 +155,15 @@ export function createWhatsappWebhookRouter(): Router {
         }
       }
       res.sendStatus(200);
+      // Push do browser "Chamada WhatsApp de …" DEPOIS do 200 (a chamada já
+      // está gravada; nunca atrasa nem faz falhar a resposta à Meta).
+      if (ringingCalls.length) {
+        const work = import("./webPush").then((m) => m.pushRingingCalls(ringingCalls)).catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
       // Aviso das chamadas perdidas DEPOIS do 200 (não atrasa a Meta).
       if (missedCalls.length) {
         const work = import("./whatsappCalls").then((m) => m.notifyMissedByIds(missedCalls)).catch(() => {});

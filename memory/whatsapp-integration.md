@@ -49,6 +49,106 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-09-30 (c) — Chamadas: toque por SSE + Web Push (lacunas 1 e 2 da fase 0)
+**Type**: feature (NÃO commitado/deployado; **migração 0320** `web_push_subscriptions`, registada no `ensureRecentSchema`)
+**Scope**: NOVOS `shared/whatsappCallSignal.ts`, `shared/webPush.ts`, `server/whatsappCallStream.ts`,
+`server/webPush.ts`, `server/migrations/migration_0320.ts`, `client/public/sw.js`, `client/src/lib/webPush.ts`,
+`client/src/components/whatsapp/CallPushCard.tsx`, `scripts/generate-vapid-keys.ts`,
+`server/whatsappCallRealtime.test.ts` (15). ALTERADOS: `server/_core/index.ts` + `api-entry.ts` (rota),
+`server/whatsappCalls.ts` (`CallWebhookResult.ringing`), `server/whatsappWebhook.ts` (push depois do 200),
+`server/whatsappCallsRouter.ts` (`pushState`/`pushSubscribe`/`pushUnsubscribe`), `WhatsAppCallManager.tsx`,
+`ProfilePage.tsx`, `useAuth.ts` (logout), `drizzle/schema.ts`, `server/db.ts`, `server/opsRules.ts` (health `VAPID`),
+`.env.example`, `docs/ajuda/whatsapp-chamadas.md`, `server/whatsappCalls.test.ts` (+2 asserts), `package.json` (`web-push`).
+**What**:
+- **SSE** `GET /api/whatsapp/calls/stream` (mesma origem, cookie). Auth = router tRPC INTERNO com o MESMO caminho
+  `whatsapp.calls.streamScope` → passa pelo `protectedProcedure` (sessão, loginBlock, overrides, cityScope) sem
+  duplicar o middleware; 401/403/204(flag OFF)/503. Loop 1 s `listIncomingCalls(scope)` (probe indexado sem JOIN
+  quando não toca) + `sweepStaleCallsThrottled`; emite só `ring`/`ring-cleared` com o id (sem nome/número);
+  `: ping` 15 s; fecha aos 50 s (`maxDuration` 60), `retry: 1000`. Headers `no-cache, no-transform`,
+  `X-Accel-Buffering: no`, `flushHeaders`. Sem compressão no stack. RULE disconnect por `res.on("close")`, nunca `req`.
+- Cliente: `useRingStream` no `WhatsAppCallManager` invalida o `incoming` a cada evento/abertura; polling mantido
+  como rede: 15 s com o stream ligado, senão 3 s/10 s (`ringPollIntervalMs`). Recusado/fechado → nova tentativa 30 s.
+- **Web Push** (`web-push`, VAPID ES256 + cifra RFC 8291 aes128gcm): envs `VAPID_PUBLIC_KEY/PRIVATE_KEY/SUBJECT`
+  (falta → desligado + 1 warn). `pushRingingCalls(callIds)` via `waitUntil` DEPOIS do `res.sendStatus(200)`, só para
+  chamadas NOVAS (dedup = retry não avisa). Destinatários EXATOS: para cada pessoa com subscrição, `callScopeForUser`
+  (mesmo caller) + `listIncomingCalls(scope)` contém a chamada. TTL 60 s, urgency high. 404/410 → linha apagada.
+  Payload `Chamada WhatsApp de <nome | número mascarado>`, tag `wa-call-<id>`, url da conversa.
+- `sw.js` só push + notificationclick (foca separador existente, senão abre); SEM handler de fetch. Registado só
+  ao ativar. Opt-in no **Perfil** (`CallPushCard`, só `whatsapp:edit` + flag + VAPID); negado → mensagem pt.
+  Logout: `disablePush` + `pushUnsubscribe` antes do `auth.logout`.
+**Notes / por verificar em prod**: streaming de `res.write` na função Node do Vercel e através da Cloudflare (ver
+na aba Network que os eventos chegam 1 a 1); custo = 1 invocação viva por separador aberto + 1 query/s.
+Push não é retirado quando a chamada é atendida por outro (fica o aviso; clicar só abre o dashboard). iOS Safari só
+com o site instalado no ecrã principal (16.4+). Falhas da suite = as 7 pré-existentes (docs gerados, sanitize,
+multiparkDb x2, 0140); `docs/ajuda` precisa de `pnpm tsx scripts/gen-ajuda.ts` (já estava desatualizado antes).
+
+### 2026-09-30 (b) — Chamadas de voz: FASE 0 (recon) — JÁ EXISTE implementação completa em `main`
+**Type**: review (sem código, sem migração, sem escritas na Meta)
+**Scope**: leitura de código + docs Meta
+**What**:
+- ⚠️ **CORREÇÃO da entrada anterior**: as chamadas NÃO estão por fazer. Commit **`b5ba654`** (PR #108,
+  Jorge, 2026-09-26, em `origin/main`) já traz: migração **0185** `whatsapp_calls` +
+  `whatsapp_call_permissions` (registada no `ensureRecentSchema`, `server/db.ts:182`),
+  `server/whatsappCalls.ts` (parse `calls`/status `type:"call"`/`call_permission_reply`, serviço c/ repo
+  injetável, claim atómico `ringing→answering`, pre_accept+accept, reject, hangup, sweep de presas),
+  `whatsappCallsApi.ts` (POST `/{phone}/calls`, `/settings` GET/POST, permissões), `whatsappCallsRouter.ts`
+  (`whatsapp.calls.*`, `requireAccess(user,"whatsapp","edit")` + escopo de cidade da conversa; config Meta
+  só super_admin), `whatsappCallsDiagnostics.ts` (Integrações → Testar), `whatsappCallsQueries.ts`,
+  cliente `client/src/lib/whatsappCall.ts` (RTCPeerConnection, STUN Google, sem TURN, ICE não-trickle 3 s),
+  `WhatsAppCallManager.tsx` (toque em qualquer página, polling 3 s visível / 10 s fundo),
+  `WhatsAppCallsPanels.tsx` (Ligar, pedir autorização, "por devolver"), `docs/ajuda/whatsapp-chamadas.md`,
+  53 testes em `server/whatsappCalls.test.ts`. Interruptor **`WHATSAPP_CALLS`** (feature flag, OFF por
+  omissão): OFF = eventos `calls` ignorados no webhook e UI escondida.
+- Webhook: `hasCallContent` + `processCallWebhook` dentro do MESMO process-then-ack (grava antes do 200);
+  aviso de perdidas e triagem vão DEPOIS do 200 via `waitUntil`.
+- Lacunas vs spec do Jorge: sem Notification API do browser; sem página de registo de chamadas com
+  filtros; sem totais de minutos; sweep de "perdida" (75 s) não manda `reject` à Meta (a Meta já terminou);
+  sem coluna de payload bruto (deliberado: SDP nunca fica guardado); polling sofre o *intensive
+  throttling* do Chrome (separador oculto >5 min → timers 1×/min) → toque pode chegar tarde demais.
+- Dashboard é **só pt** (sem i18n) → pedido "pt/en/es" = questão aberta.
+**Notes**: estado de deploy/flag em prod e se a 0185 já correu na BD de prod NÃO verificados.
+
+### 2026-09-30 — Grupos WhatsApp + chamadas de voz: investigação (NADA construído)
+**Type**: review + decision (sem código, sem migração)
+**Scope**: só leitura — docs oficiais da Meta + GETs read-only à Graph API com o token do `.env`
+**What**:
+- **Estado REAL da conta (verificado 09-30)**: número `+351 911 955 252` (phone id 1257688664090269),
+  `is_official_business_account: false`, **`official_business_account.oba_status: "NOT_STARTED"`**,
+  `whatsapp_business_manager_messaging_limit: TIER_2K`, `platform_type: CLOUD_API`, quality GREEN,
+  display name APPROVED; WABA 910790285411664 `business_verification_status: verified`;
+  `GET /{phone}/settings` → `calling.status: NOT_SET`; `GET /{phone}/groups` → `{"data":[]}`.
+- **Groups API exige OBA** (selo azul) → **hoje não está disponível para esta conta**. Por instrução
+  ("se não houver Groups para a conta, parar e reportar") NÃO se construiu nada.
+- Factos da Groups API (docs 09-30): só grupos CRIADOS pela API (`POST /{phone}/groups`, subject ≤128,
+  `join_approval_mode`), pessoas entram por **link de convite** (`GET/POST /{group}/invite_link`, ou
+  template com parâmetro `group_id`); **máx. 8 participantes**, 10 000 grupos/número, 1 empresa
+  Cloud API por grupo; NÃO é possível meter o número num grupo já existente (a doc só cobre grupos
+  criados pela empresa). Tipos: texto, media, templates de texto/media (sem interativos, sem
+  chamadas, sem editar/apagar). Envio: `recipient_type:"group"`, `to:<GROUP_ID>`. Entrada: webhook
+  `messages` com `messages[].group_id` + `from` = telefone do participante + `contacts[].profile.name`.
+  Estados: `statuses[].recipient_type:"group"`, `recipient_id` = GROUP_ID, `recipient_participant_id`
+  (às vezes escrito `participant_recipient_id` na doc — aceitar os dois), agregados. Campos novos a
+  subscrever: `group_lifecycle_update`, `group_participants_update`, `group_settings_update`,
+  `group_status_update` (payload em `value.groups[]`). Gestão: info (`?fields=subject,participants,…`),
+  listar, remover participantes (≤8/pedido), apagar, settings, pedidos de adesão.
+- **Janela nos grupos**: "quando QUALQUER utilizador do grupo te escreve, abre-se (ou renova-se) uma
+  janela de atendimento entre ti e o GRUPO inteiro" → `lastInboundAt` por conversa-grupo serve;
+  duração não escrita na página de grupos → assumir a janela standard de 24h. Mensagens não-template
+  = `group_service` (grátis); templates cobrados por cada entrega a cada participante.
+- **Calling API**: possível e ELEGÍVEL já (TIER_2K ≥ 2000 exigido). Chamadas do utilizador grátis;
+  chamadas iniciadas pela empresa pagas ao minuto (pulsos de 6s) e exigem pedido de permissão
+  (1/dia, 2/semana por utilizador). Sinalização por webhook `calls` + `POST /{phone}/calls`
+  (pre_accept/accept/reject/terminate) com SDP WebRTC, ou SIP. Não suportado em grupos.
+**Why**: pedido do Jorge — "grupos no inbox" + "dá para fazer chamadas?".
+**Notes / plano quando a OBA for concedida** (esboço, não implementado): migração nova (a seguir à
+0315) com `whatsapp_conversations.kind ENUM('direct','group')`, `waGroupId` UNIQUE, `groupSubject`,
+`groupInviteLink`, `phoneE164` passar a NULLABLE; `whatsapp_messages.senderPhoneE164/senderName/
+senderEmployeeId`; tabela `whatsapp_group_participants`. `parseWebhookPayload` tem de separar
+mensagens com `group_id` ANTES do upsert por `from` (senão uma mensagem de grupo cai na conversa 1:1
+do remetente) + parser `value.groups[]`. `sendTextMessage` ganha variante `recipient_type:"group"`.
+Passos para desbloquear: 2FA no número + pedido OBA no WhatsApp Manager (reaplicar só 30 dias após
+recusa); depois subscrever os 4 campos `group_*`.
+
 ### 2026-09-21 — Fix: botões do diálogo desativados nos templates sem parâmetros
 **Type**: fix (NÃO deployado, sem migração)
 **Scope**: `client/src/pages/ExtrasDiaPage.tsx` (diálogo "Enviar WhatsApp" da tabela de disponibilidade)

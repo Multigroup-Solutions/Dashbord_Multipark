@@ -101,6 +101,8 @@ export function buildHealthBody(opts: { initFailed: boolean; detailed: boolean; 
       WHATSAPP_VERIFY_TOKEN: has("WHATSAPP_VERIFY_TOKEN"),
       WHATSAPP_APP_SECRET: has("WHATSAPP_APP_SECRET"),
       WHATSAPP_WABA_ID: has("WHATSAPP_WABA_ID"),
+      // Push do browser das chamadas do WhatsApp (as 3 chaves VAPID).
+      VAPID: has("VAPID_PUBLIC_KEY") && has("VAPID_PRIVATE_KEY") && has("VAPID_SUBJECT"),
       AVAILABILITY_FORM_TOKEN_SECRET: has("AVAILABILITY_FORM_TOKEN_SECRET"),
       AVAILABILITY_FORM_URL: has("AVAILABILITY_FORM_URL"),
       MULTIPARK_WEBHOOK_SECRET: has("MULTIPARK_WEBHOOK_SECRET"),

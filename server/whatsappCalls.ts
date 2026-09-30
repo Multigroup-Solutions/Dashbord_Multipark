@@ -218,6 +218,8 @@ export interface CallWebhookResult {
   deduped: number;
   /** Chamadas recebidas perdidas neste payload (aviso depois do 200). */
   missed: number[];
+  /** Chamadas recebidas NOVAS a tocar (id `wacid.…`; push depois do 200). */
+  ringing: string[];
 }
 
 /**
@@ -225,7 +227,7 @@ export interface CallWebhookResult {
  * condicionais). Lança se a BD falhar → a rota responde 5xx e a Meta repete.
  */
 export async function applyCallEvents(events: CallWebhookEvent[], deps: CallDeps): Promise<CallWebhookResult> {
-  const out: CallWebhookResult = { connects: 0, terminates: 0, statuses: 0, permissions: 0, deduped: 0, missed: [] };
+  const out: CallWebhookResult = { connects: 0, terminates: 0, statuses: 0, permissions: 0, deduped: 0, missed: [], ringing: [] };
   const { repo } = deps;
   const now = nowOf(deps);
   const nowS = toDbUtc(now);
@@ -243,6 +245,7 @@ export async function applyCallEvents(events: CallWebhookEvent[], deps: CallDeps
         });
         if (inserted) {
           out.connects++;
+          out.ringing.push(ev.callId);
           await repo.touchConversation(conv.conversationId, { at: ev.timestamp ?? nowS, preview: "📞 Chamada recebida", inbound: true });
           console.log(`[WhatsAppCalls] chamada recebida de ${maskPhone(phone)} (a tocar)`);
         } else out.deduped++;
@@ -857,7 +860,7 @@ async function conversationName(conversationId: number | null, phoneE164: string
 /** Webhook: parse + aplica. Devolve o resultado (o aviso das perdidas corre depois do 200). */
 export async function processCallWebhook(payload: any): Promise<CallWebhookResult & { ignored: number }> {
   const parsed = parseCallWebhook(payload, process.env.WHATSAPP_PHONE_NUMBER_ID);
-  if (!parsed.events.length) return { connects: 0, terminates: 0, statuses: 0, permissions: 0, deduped: 0, missed: [], ignored: parsed.ignored };
+  if (!parsed.events.length) return { connects: 0, terminates: 0, statuses: 0, permissions: 0, deduped: 0, missed: [], ringing: [], ignored: parsed.ignored };
   const r = await applyCallEvents(parsed.events, realCallDeps());
   return { ...r, ignored: parsed.ignored };
 }
