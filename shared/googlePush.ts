@@ -12,7 +12,7 @@
  *    (heartbeat do browser, limitado por pessoa no servidor);
  *  - o que muda no dashboard vai logo para o Google (fila "pendente" por
  *    âmbito, corrida imediata em segundo plano; o agendador repete o que
- *    falhar de 15 em 15 min);
+ *    falhar de hora a hora);
  *  - rede de segurança: google-sync completo de 4 em 4 horas.
  *
  * Sem BD nem rede: o servidor está em server/google/pushChannels.ts e

@@ -295,16 +295,17 @@ export async function loadSides(db: any, ids: number[]): Promise<Map<number, Sug
  * Junta sozinho as sugestões óbvias (shared/crmIdentity.ts autoMergeOk): o
  * mesmo nome e o mesmo telefone, email ou NIF. Fica a ficha com mais reservas.
  * Cada fusão fica em "Fusões recentes" (reason "automático") e separa-se lá.
- * Corre até ao prazo; o que sobrar fica para a próxima corrida.
+ * Corre até ao prazo; o que sobrar fica para a próxima corrida (o trabalho
+ * devolve "não acabei" e o agendador repete no tick seguinte).
  */
-export async function autoMergeConfident(db: any, o: { deadlineAt: number; userId: number; limit?: number }): Promise<{ checked: number; merged: number; skipped: number; errors: number }> {
+export async function autoMergeConfident(db: any, o: { deadlineAt: number; userId: number; limit?: number }): Promise<{ checked: number; merged: number; skipped: number; errors: number; stoppedAtDeadline: boolean }> {
   const { autoMergeOk } = await import("../../shared/crmIdentity");
   const rows = rowsOf(await db.execute(sql`SELECT s.clientA, s.clientB FROM crm_merge_suggestions s
     JOIN crm_clients a ON a.id = s.clientA AND a.status = 'active'
     JOIN crm_clients b ON b.id = s.clientB AND b.status = 'active'
     WHERE s.status = 'pending' AND (FIND_IN_SET('same_phone', s.reasons) OR FIND_IN_SET('same_email', s.reasons) OR FIND_IN_SET('same_nif', s.reasons))
     ORDER BY s.score DESC, s.id LIMIT ${Math.max(1, Math.min(5000, o.limit ?? 2000))}`));
-  const out = { checked: rows.length, merged: 0, skipped: 0, errors: 0 };
+  const out = { checked: rows.length, merged: 0, skipped: 0, errors: 0, stoppedAtDeadline: false };
   if (!rows.length) return out;
   const ids = [...new Set(rows.flatMap((r) => [Number(r.clientA), Number(r.clientB)]))];
   const sides = await loadSides(db, ids);
@@ -314,7 +315,7 @@ export async function autoMergeConfident(db: any, o: { deadlineAt: number; userI
   }
   const gone = new Set<number>();
   for (const r of rows) {
-    if (Date.now() > o.deadlineAt - 3_000) break;
+    if (Date.now() > o.deadlineAt - 3_000) { out.stoppedAtDeadline = true; break; }
     const a = Number(r.clientA), b = Number(r.clientB);
     if (gone.has(a) || gone.has(b)) { out.skipped++; continue; }
     const sa = sides.get(a), sb = sides.get(b);

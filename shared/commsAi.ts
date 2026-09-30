@@ -257,6 +257,16 @@ export function whatsappTriageRetry(failsAfter: number): boolean {
 }
 
 /**
+ * A falha conta para desistir? Só as que se repetem iguais (resposta inválida,
+ * texto que a IA não aceita). Timeout, 429, 5xx e rede são passageiras: voltam
+ * sempre a tentar — senão uma falha do fornecedor de meia hora deixava todas as
+ * conversas desse período sem triagem até o cliente voltar a escrever. PURA.
+ */
+export function whatsappTriageFailureCounts(code: string | null | undefined): boolean {
+  return code === "invalid_output" || code === "unsupported";
+}
+
+/**
  * Debounce por conversa: triagem já (now) se a última foi há ≥ debounce;
  * senão fica agendada para última + debounce (uma rajada de mensagens dá UMA
  * triagem). PURA.

@@ -13,7 +13,7 @@ import { SEVERITY_LABEL, SEVERITY_TONE } from "./BookingCashCheck";
 
 /**
  * Faturação → Correção de caixa → "Casos": a fila que a varredura automática
- * (cash-sweep, de 10 em 10 min) enche. Cada caso = reserva (ou contagem,
+ * (cash-sweep, de 3 em 3 h) enche. Cada caso = reserva (ou contagem,
  * agente, parque) × regra. Fecha-se com motivo e explicação obrigatória; a
  * varredura resolve sozinha o que a Multipark deixou de ter e reabre o que volta.
  */
@@ -61,7 +61,7 @@ export default function CashCasesPanel({ projectId }: { projectId?: number }) {
           )}
           {q.isFetching && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
         </CardTitle>
-        <p className="text-xs text-muted-foreground">A varredura corre de 10 em 10 minutos nos nossos parques e todas as manhãs para as saídas de ontem e anteontem. Carrega num caso para ver o era/é, quem mexeu no dinheiro e fechá-lo com explicação.</p>
+        <p className="text-xs text-muted-foreground">A varredura corre de 3 em 3 horas nos nossos parques (se ficar a meio, continua 5 minutos depois) e todas as manhãs para as saídas de ontem e anteontem. Carrega num caso para ver o era/é, quem mexeu no dinheiro e fechá-lo com explicação.</p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2">

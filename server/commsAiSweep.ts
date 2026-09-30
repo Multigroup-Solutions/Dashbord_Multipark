@@ -16,7 +16,7 @@ export async function runCommsAiSweep(opts: { deadlineAt?: number } = {}): Promi
   const deadlineAt = opts.deadlineAt ?? Date.now() + 45_000;
   const report: CommsAiSweepReport = { errors: [] };
   const step = async (name: keyof Omit<CommsAiSweepReport, "errors">, fn: () => Promise<unknown>) => {
-    if (Date.now() + 17_000 > deadlineAt) { report[name] = { skipped: "deadline" }; return; }
+    if (Date.now() + 22_000 > deadlineAt) { report[name] = { skipped: "deadline" }; return; }
     try { report[name] = await fn(); }
     catch (err: any) { report.errors.push(`${name}: ${String(err?.message ?? err).slice(0, 160)}`); }
   };

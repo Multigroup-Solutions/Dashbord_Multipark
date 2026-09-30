@@ -1,12 +1,13 @@
 /**
- * Serviços extra das reservas → tarefas. Desde 29 set 2026 (Jorge, "agendador
+ * Serviços extra das reservas → tarefas. Desde 29–30 set 2026 (Jorge, "agendador
  * mais leve"): a tarefa nasce quando chega o WEBHOOK da reserva
- * (`runServiceTasksForBookings`, chamado em processMultiparkWebhookEvent) e vai
- * logo para o Google Tarefas dos responsáveis; o trabalho `services-tasks` do
- * agendador corre 1×/dia às 18:00 — volta de segurança (a janela de 48 h, que
- * também junta os team leaders escalados entretanto) + aviso das tarefas de
- * AMANHÃ aos team leaders e supervisores da cidade. À mão em
- * /api/cron/services-tasks.
+ * (`runServiceTasksForBookings`, chamado em processMultiparkWebhookEvent) para
+ * saídas até 72 h e vai logo para o Google Tarefas dos responsáveis; o que
+ * falhar no webhook fica em `service_task_retries` e a fila do webhook repete
+ * (`retryServiceTasks`). O trabalho `services-tasks` do agendador corre 1×/dia
+ * às 18:00 — volta de segurança (a janela de 48 h, que cria as mais longe e
+ * junta os team leaders escalados entretanto); o aviso das tarefas de AMANHÃ é
+ * o trabalho `services-tomorrow` (interruptor). À mão em /api/cron/services-tasks.
  *
  * Lê AO VIVO da BD da Multipark (só leitura; regras de server/multiparkDb):
  *   "Park" (parques nossos — shared/multiparkParks.ts), "Booking" (id,
@@ -23,7 +24,7 @@
  * As decisões são puras (shared/serviceTasks.ts → planServiceTasks); aqui só
  * se lê e se aplica, com prazo (`deadlineAt`). Idempotente: uma tarefa por
  * linha BookingExtraService (tasks.sourceModule = 'service', sourceKey =
- * `svc:<reserva>:<linha>`), sem migração.
+ * `svc:<reserva>:<linha>`), com chave única desde a migração 0325.
  */
 import {
   SERVICE_TASK_CITIES,
@@ -146,6 +147,8 @@ export interface ServiceTasksDeps {
   loadParks(query: Query): Promise<ServicePark[]>;
   loadOpenTasks(): Promise<ExistingServiceTask[]>;
   loadTasksByKeys(keys: string[]): Promise<ExistingServiceTask[]>;
+  /** Todas as tarefas de serviço (abertas e fechadas) destas reservas — pela chave `svc:<reserva>:…`. */
+  loadTasksForBookings(bookingIds: string[]): Promise<ExistingServiceTask[]>;
   loadTeamLeaders(dates: string[]): Promise<TeamLeaderRow[]>;
   cityProjectIds(): Promise<Partial<Record<ServiceTaskCity, number>>>;
   systemUserId(): Promise<number>;
@@ -160,6 +163,25 @@ export interface ServiceTasksDeps {
 const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
 const mysqlNow = (ms: number = Date.now()) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
+const OPEN_TASKS_PAGE = 1000;
+const OPEN_TASKS_MAX_PAGES = 20;
+
+/** LIKE para as tarefas de UMA reserva (`svc:<reserva>:%`), com % e _ escapados. PURA. */
+export function serviceKeyPrefixLike(bookingId: string): string {
+  return `svc:${String(bookingId).replace(/[\\%_]/g, (c) => `\\${c}`)}:%`;
+}
+
+/** A tarefa desta linha já existe (criada por outra corrida ao mesmo tempo). */
+export class ServiceTaskExistsError extends Error {
+  readonly code = "SERVICE_TASK_EXISTS";
+  constructor(key: string) { super(`Tarefa já existe (${key})`); this.name = "ServiceTaskExistsError"; }
+}
+
+const isDuplicateEntry = (err: unknown): boolean => {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "ER_DUP_ENTRY" || e?.cause?.code === "ER_DUP_ENTRY";
+};
+
 async function withAssignees(db: any, rows: Array<{ id: number; sourceKey: string | null; taskStatus: string; dueDate: string | null }>): Promise<ExistingServiceTask[]> {
   if (!rows.length) return [];
   const { taskAssignees } = await import("../drizzle/schema");
@@ -167,7 +189,11 @@ async function withAssignees(db: any, rows: Array<{ id: number; sourceKey: strin
   const a = await db.select({ taskId: taskAssignees.taskId, employeeId: taskAssignees.employeeId }).from(taskAssignees)
     .where(inArray(taskAssignees.taskId, rows.map((r) => r.id)));
   const by = new Map<number, number[]>();
-  for (const x of a) { if (!by.has(x.taskId)) by.set(x.taskId, []); by.get(x.taskId)!.push(Number(x.employeeId)); }
+  for (const x of a) {
+    if (!by.has(x.taskId)) by.set(x.taskId, []);
+    const list = by.get(x.taskId)!;
+    if (!list.includes(Number(x.employeeId))) list.push(Number(x.employeeId)); // responsável repetido (corrida no "assign") conta uma vez
+  }
   return rows.map((r) => ({ id: r.id, sourceKey: String(r.sourceKey ?? ""), taskStatus: r.taskStatus, dueDate: r.dueDate ? String(r.dueDate) : null, assigneeIds: by.get(r.id) ?? [] }));
 }
 
@@ -196,10 +222,37 @@ export const defaultServiceTasksDeps: ServiceTasksDeps = {
     const db = await getDb();
     if (!db) throw new Error("BD indisponível");
     const { tasks } = await import("../drizzle/schema");
-    const { and, eq, ne } = await import("drizzle-orm");
-    const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate }).from(tasks)
-      .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), ne(tasks.taskStatus, "done"))).limit(1000);
-    return withAssignees(db, rows);
+    const { and, asc, eq, gt, ne } = await import("drizzle-orm");
+    // Por páginas de 1000, por id (antes: 1000 sem ordem — acima disso uma tarefa
+    // podia ficar de fora e nunca fechar quando o serviço era retirado).
+    const out: ExistingServiceTask[] = [];
+    let after = 0;
+    for (let page = 0; page < OPEN_TASKS_MAX_PAGES; page++) {
+      const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate }).from(tasks)
+        .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), ne(tasks.taskStatus, "done"), gt(tasks.id, after)))
+        .orderBy(asc(tasks.id)).limit(OPEN_TASKS_PAGE);
+      out.push(...await withAssignees(db, rows));
+      if (rows.length < OPEN_TASKS_PAGE) break;
+      after = rows[rows.length - 1].id;
+    }
+    return out;
+  },
+  async loadTasksForBookings(bookingIds) {
+    const ids = [...new Set(bookingIds.filter(Boolean))];
+    if (!ids.length) return [];
+    const { getDb } = await import("./db");
+    const db = await getDb();
+    if (!db) throw new Error("BD indisponível");
+    const { tasks } = await import("../drizzle/schema");
+    const { and, eq, like, or } = await import("drizzle-orm");
+    const out: ExistingServiceTask[] = [];
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate }).from(tasks)
+        .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), or(...chunk.map((id) => like(tasks.sourceKey, serviceKeyPrefixLike(id))))));
+      out.push(...await withAssignees(db, rows));
+    }
+    return out;
   },
   async loadTasksByKeys(keys) {
     if (!keys.length) return [];
@@ -249,11 +302,18 @@ export const defaultServiceTasksDeps: ServiceTasksDeps = {
     const db = await getDb();
     if (!db) throw new Error("BD indisponível");
     const { tasks, taskAssignees } = await import("../drizzle/schema");
-    const [res] = await db.insert(tasks).values({
-      title: t.title, description: t.description, projectId: t.projectId, assigneeId: t.assigneeIds[0] ?? null,
-      createdById: t.createdById, taskStatus: "todo", taskPriority: "high",
-      dueDate: mysqlNow(t.dueMs), dueHasTime: 1, sourceModule: SERVICE_TASK_SOURCE, sourceId: null, sourceKey: t.sourceKey,
-    });
+    let res: any;
+    try {
+      [res] = await db.insert(tasks).values({
+        title: t.title, description: t.description, projectId: t.projectId, assigneeId: t.assigneeIds[0] ?? null,
+        createdById: t.createdById, taskStatus: "todo", taskPriority: "high",
+        dueDate: mysqlNow(t.dueMs), dueHasTime: 1, sourceModule: SERVICE_TASK_SOURCE, sourceId: null, sourceKey: t.sourceKey,
+      });
+    } catch (err) {
+      // chave única (migração 0325): outra corrida criou-a no mesmo instante
+      if (isDuplicateEntry(err)) throw new ServiceTaskExistsError(t.sourceKey);
+      throw err;
+    }
     const taskId = Number((res as any).insertId);
     if (taskId && t.assigneeIds.length) await db.insert(taskAssignees).values(t.assigneeIds.map((employeeId) => ({ taskId, employeeId })));
     return taskId;
@@ -304,13 +364,15 @@ export interface ServiceTasksReport {
   assigned: number;
   closed: { cancelled: number; removed: number; done_multipark: number };
   pending: number;
+  /** Criações que outra corrida fez ao mesmo tempo (a chave única travou a gémea). */
+  alreadyExisted: number;
   truncated: boolean;
   errors: string[];
 }
 
 const emptyReport = (): ServiceTasksReport => ({
   ok: true, done: true, lines: 0, bookings: 0, created: 0, updated: 0, assigned: 0,
-  closed: { cancelled: 0, removed: 0, done_multipark: 0 }, pending: 0, truncated: false, errors: [],
+  closed: { cancelled: 0, removed: 0, done_multipark: 0 }, pending: 0, alreadyExisted: 0, truncated: false, errors: [],
 });
 
 /** Folga para gravar o resultado antes do fim do prazo. */
@@ -382,7 +444,9 @@ export async function runServiceTasks(o: { deadlineAt: number; now?: number }, d
   }
   const teamLeaders = await d.loadTeamLeaders([...dates].sort());
 
-  const actions = planServiceTasks({ lines, checkedBookingIds: checked, rules, existing: [...byId.values()], teamLeaders, nowMs: now });
+  // abertas por último: com uma aberta e uma fechada da mesma chave, a aberta é a que conta
+  const existing = [...byId.values()].sort((a, b) => Number(a.taskStatus !== "done") - Number(b.taskStatus !== "done"));
+  const actions = planServiceTasks({ lines, checkedBookingIds: checked, rules, existing, teamLeaders, nowMs: now });
   await applyServiceTaskActions(actions, o.deadlineAt, d, out);
   return out;
 }
@@ -398,8 +462,13 @@ async function applyServiceTaskActions(actions: ServiceTaskAction[], deadlineAt:
     const a: ServiceTaskAction = actions[i];
     try {
       if (a.kind === "create") {
-        touched.push(await d.createTask({ title: a.title, description: a.description, projectId: projectIds[a.line.city] ?? null, createdById: systemUser, dueMs: a.dueMs, sourceKey: a.key, assigneeIds: a.assigneeIds }));
-        out.created++;
+        try {
+          touched.push(await d.createTask({ title: a.title, description: a.description, projectId: projectIds[a.line.city] ?? null, createdById: systemUser, dueMs: a.dueMs, sourceKey: a.key, assigneeIds: a.assigneeIds }));
+          out.created++;
+        } catch (err) {
+          if ((err as { code?: string })?.code !== "SERVICE_TASK_EXISTS") throw err;
+          out.alreadyExisted++; // outra corrida criou-a: a próxima leitura já a vê
+        }
       } else if (a.kind === "update") {
         await d.updateTask(a.taskId, { title: a.title, description: a.description, dueMs: a.dueMs });
         touched.push(a.taskId);
@@ -422,13 +491,19 @@ async function applyServiceTaskActions(actions: ServiceTaskAction[], deadlineAt:
   out.ok = out.errors.length === 0;
 }
 
-/** Janela de criação quando a reserva chega pelo webhook: a saída pode ser daqui a semanas. */
-export const SERVICE_TASKS_WEBHOOK_WINDOW_HOURS = 24 * 400;
+/**
+ * Janela de criação quando a reserva chega pelo webhook (Jorge, 30 set 2026):
+ * 72 h. O resto nasce na volta das 18:00 quando a saída entra nas 48 h dela.
+ * (Com 400 dias as tarefas iam para o Google semanas antes, as mudanças nas
+ * Definições não chegavam às já criadas e passava-se o limite de abertas.)
+ */
+export const SERVICE_TASKS_WEBHOOK_WINDOW_HOURS = 72;
 
 /**
- * Só as reservas dadas (as do webhook): cria/atualiza/fecha as tarefas delas
- * logo que a reserva chega ou muda — sem esperar por nenhuma volta. Os team
- * leaders do turno só se juntam quando a escala existir (volta das 18:00).
+ * Só as reservas dadas (as do webhook ou da repetição): cria/atualiza/fecha as
+ * tarefas delas logo que a reserva chega ou muda — sem esperar por nenhuma
+ * volta. Os team leaders do turno só se juntam quando a escala existir (volta
+ * das 18:00).
  */
 export async function runServiceTasksForBookings(bookingIds: readonly string[], o: { deadlineAt: number; now?: number }, deps: Partial<ServiceTasksDeps> = {}): Promise<ServiceTasksReport> {
   const d: ServiceTasksDeps = { ...defaultServiceTasksDeps, ...deps };
@@ -438,8 +513,10 @@ export async function runServiceTasksForBookings(bookingIds: readonly string[], 
   if (!ids.length) return { ...out, skipped: "sem reservas" };
   if (!d.multiparkConfigured()) return { ...out, skipped: "DATABASE_URL_MULTIPARK não está definida" };
   const rules = await d.loadRules();
-  const existingOpen = (await d.loadOpenTasks()).filter((t) => ids.includes(parseServiceTaskKey(t.sourceKey)?.bookingId ?? ""));
-  if (!anyServiceTaskEnabled(rules) && !existingOpen.length) return { ...out, skipped: "nenhum serviço com \"gera tarefa\" ligado" };
+  // as tarefas destas reservas pela chave (índice), abertas e fechadas — antes filtrava-se
+  // uma lista de 1000 abertas sem ordem, e uma tarefa de fora nunca fechava
+  const existing = await d.loadTasksForBookings(ids);
+  if (!anyServiceTaskEnabled(rules) && !existing.some((t) => t.taskStatus !== "done")) return { ...out, skipped: "nenhum serviço com \"gera tarefa\" ligado" };
   const parkById = new Map((await d.loadParks(d.query)).map((p) => [p.id, p]));
   const q = buildServiceLinesByIdsSql(ids);
   const lines: ServiceLine[] = [];
@@ -449,15 +526,102 @@ export async function runServiceTasksForBookings(bookingIds: readonly string[], 
   }
   out.lines = lines.length;
   out.bookings = new Set(lines.map((l) => l.bookingId)).size;
-  const keys = lines.map((l) => serviceTaskKey(l.bookingId, l.lineId)).filter((k): k is string => !!k);
-  const byId = new Map<number, ExistingServiceTask>(existingOpen.map((t) => [t.id, t]));
-  for (const t of await d.loadTasksByKeys(keys)) byId.set(t.id, t);
+  // abertas por último: com uma aberta e uma fechada da mesma chave, a aberta é a que conta
+  const ordered = [...existing].sort((a, b) => Number(a.taskStatus !== "done") - Number(b.taskStatus !== "done"));
   const dates = new Set<string>();
   for (const l of lines) { const s = checkoutShifts(l.checkOutMs); dates.add(s.leaving.date); dates.add(s.previous.date); }
   const teamLeaders = await d.loadTeamLeaders([...dates].sort());
-  const actions = planServiceTasks({ lines, checkedBookingIds: new Set(ids), rules, existing: [...byId.values()], teamLeaders, nowMs: now, windowHours: SERVICE_TASKS_WEBHOOK_WINDOW_HOURS });
+  const actions = planServiceTasks({ lines, checkedBookingIds: new Set(ids), rules, existing: ordered, teamLeaders, nowMs: now, windowHours: SERVICE_TASKS_WEBHOOK_WINDOW_HOURS });
   await applyServiceTaskActions(actions, o.deadlineAt, d, out);
   return out;
+}
+
+// ─── Repetição do que falha no webhook ──────────────────────────────────────
+// A volta é só às 18:00 (Jorge, 29 set 2026) e não cria tarefas de saídas que
+// já passaram: uma tarefa que falhe no webhook (BD lenta, erro a gravar, prazo
+// esgotado) e cuja saída seja antes das 18:00 perdia-se sem ninguém saber.
+// Agora fica em `service_task_retries` e a fila do webhook (multipark-deliveries,
+// de hora a hora) repete-a.
+
+export const SERVICE_RETRY_MAX_ATTEMPTS = 10;
+export const SERVICE_RETRY_DELAY_MS = 10 * 60_000;
+
+/** O relatório de uma corrida por reservas pede repetição? PURA. */
+export function serviceReportNeedsRetry(r: Pick<ServiceTasksReport, "skipped" | "errors" | "done">): boolean {
+  return !r.skipped && (r.errors.length > 0 || !r.done);
+}
+
+export interface ServiceRetryStore {
+  queue(bookingId: string, error: string, nextAttemptAt: string): Promise<void>;
+  due(limit: number, maxAttempts: number): Promise<string[]>;
+  markDone(ids: string[]): Promise<void>;
+  markFailed(ids: string[], error: string, nextAttemptAt: string): Promise<void>;
+}
+
+const retryDb = async () => {
+  const { getDb } = await import("./db");
+  const db = await getDb();
+  if (!db) throw new Error("BD indisponível");
+  return db as any;
+};
+const inIds = async (ids: string[]) => { const { sql } = await import("drizzle-orm"); return sql.join(ids.map((x) => sql`${x}`), sql`, `); };
+
+export const defaultServiceRetryStore: ServiceRetryStore = {
+  async queue(bookingId, error, nextAttemptAt) {
+    const db = await retryDb();
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`INSERT INTO service_task_retries (bookingExternalId, attempts, nextAttemptAt, lastError) VALUES (${bookingId}, 0, ${nextAttemptAt}, ${error.slice(0, 250)})
+      ON DUPLICATE KEY UPDATE attempts = IF(doneAt IS NULL, attempts, 0), nextAttemptAt = VALUES(nextAttemptAt), lastError = VALUES(lastError), doneAt = NULL`);
+  },
+  async due(limit, maxAttempts) {
+    const db = await retryDb();
+    const { sql } = await import("drizzle-orm");
+    const res: any = await db.execute(sql`SELECT bookingExternalId AS id FROM service_task_retries
+      WHERE doneAt IS NULL AND attempts < ${maxAttempts} AND nextAttemptAt <= UTC_TIMESTAMP() ORDER BY nextAttemptAt LIMIT ${limit}`);
+    return ((Array.isArray(res) ? res[0] : res) as any[] ?? []).map((r) => String(r.id));
+  },
+  async markDone(ids) {
+    if (!ids.length) return;
+    const db = await retryDb();
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`UPDATE service_task_retries SET doneAt = UTC_TIMESTAMP() WHERE bookingExternalId IN (${await inIds(ids)})`);
+  },
+  async markFailed(ids, error, nextAttemptAt) {
+    if (!ids.length) return;
+    const db = await retryDb();
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`UPDATE service_task_retries SET attempts = attempts + 1, nextAttemptAt = ${nextAttemptAt}, lastError = ${error.slice(0, 250)}
+      WHERE bookingExternalId IN (${await inIds(ids)})`);
+  },
+};
+
+/** Guarda a reserva para repetir as tarefas dela (a fila do webhook trata). */
+export async function queueServiceTaskRetry(bookingId: string, error: string, o: { nowMs?: number; store?: ServiceRetryStore } = {}): Promise<void> {
+  if (!bookingId) return;
+  await (o.store ?? defaultServiceRetryStore).queue(bookingId, error || "erro", mysqlNow((o.nowMs ?? Date.now()) + SERVICE_RETRY_DELAY_MS));
+}
+
+/** Repete as tarefas das reservas que falharam no webhook (em lote, até ao prazo). */
+export async function retryServiceTasks(
+  o: { deadlineAt: number; limit?: number; nowMs?: number },
+  store: ServiceRetryStore = defaultServiceRetryStore,
+  run: typeof runServiceTasksForBookings = runServiceTasksForBookings,
+): Promise<{ due: number; done: number; failed: number; report?: ServiceTasksReport }> {
+  const ids = await store.due(Math.max(1, Math.min(IDS_CHUNK, o.limit ?? 50)), SERVICE_RETRY_MAX_ATTEMPTS);
+  if (!ids.length) return { due: 0, done: 0, failed: 0 };
+  const next = mysqlNow((o.nowMs ?? Date.now()) + SERVICE_RETRY_DELAY_MS);
+  try {
+    const report = await run(ids, { deadlineAt: o.deadlineAt });
+    if (serviceReportNeedsRetry(report)) {
+      await store.markFailed(ids, report.errors[0] ?? "prazo esgotado", next);
+      return { due: ids.length, done: 0, failed: ids.length, report };
+    }
+    await store.markDone(ids);
+    return { due: ids.length, done: ids.length, failed: 0, report };
+  } catch (err: any) {
+    await store.markFailed(ids, String(err?.message ?? err).slice(0, 250), next);
+    return { due: ids.length, done: 0, failed: ids.length };
+  }
 }
 
 // ─── Aviso das tarefas de amanhã (team leaders + supervisores da cidade) ────
@@ -492,7 +656,8 @@ export async function sendServiceTasksTomorrowAlert(nowMs: number = Date.now()):
   const byProject = new Map<number | null, TomorrowServiceTask[]>();
   for (const r of rows) {
     const t = { id: r.id, title: String(r.title ?? ""), dueDate: String(r.dueDate ?? ""), projectId: r.projectId ?? null };
-    byProject.set(t.projectId, [...(byProject.get(t.projectId) ?? []), t]);
+    if (!byProject.has(t.projectId)) byProject.set(t.projectId, []);
+    byProject.get(t.projectId)!.push(t);
   }
   const { notify } = await import("./notify");
   for (const [projectId, list] of byProject) {

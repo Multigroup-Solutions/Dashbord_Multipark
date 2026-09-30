@@ -1,5 +1,5 @@
 /**
- * Caixa, fase 2 (detetar) — varredura (cron `cash-sweep`, de 10 em 10 min,
+ * Caixa, fase 2 (detetar) — varredura (cron `cash-sweep`, de 3 em 3 h,
  * e `cash-close`, diário para as saídas de ontem e anteontem).
  *
  * Por cada reserva a ver (server/multiparkDb/cashSweep.ts): lê o dinheiro AO
@@ -130,7 +130,22 @@ export async function applyActions(d: Db, meta: SubjectMeta, actions: readonly C
   return { opened, reopened, resolved };
 }
 
-export interface SweepReport { mode: string; bookings: number; snapshots: number; missing: number; opened: number; reopened: number; resolved: number; partial: boolean; parksSilent?: number; agents?: number; alerts?: number; digests?: number }
+export interface SweepReport {
+  mode: string; bookings: number; snapshots: number; missing: number; opened: number; reopened: number; resolved: number; partial: boolean;
+  /** A lista de reservas alteradas veio cortada pelo LIMIT (continua na corrida seguinte). */
+  truncated?: boolean;
+  /** Corridas seguidas que ficaram a meio (o trabalho deixa de insistir à 3.ª). */
+  partialRuns?: number;
+  parksSilent?: number; agents?: number; alerts?: number; digests?: number;
+}
+
+/** Corridas seguidas a meio a partir das quais o trabalho dá a vez (espera pela fatia seguinte). */
+export const SWEEP_MAX_PARTIAL_RUNS = 3;
+
+/** O trabalho acabou? A meio → o agendador retoma no tick seguinte, até SWEEP_MAX_PARTIAL_RUNS seguidas. PURA. */
+export function sweepJobDone(r: Pick<SweepReport, "partial" | "partialRuns">): boolean {
+  return !r.partial || (r.partialRuns ?? 0) >= SWEEP_MAX_PARTIAL_RUNS;
+}
 
 /**
  * Processa reservas já lidas ao vivo (e as que desapareceram). Usado pela
@@ -186,11 +201,19 @@ async function processBookings(d: Db, o: {
 
 export const ALERTS_PER_RUN = 25;
 
-/** Envia os alertas pendentes (1 por caso — `alertedAt`), no máximo ALERTS_PER_RUN. */
+/** Envia os alertas pendentes desta corrida (1 por caso — `alertedAt`). */
 export async function flushCaseAlerts(d: Db, nowDb: string): Promise<number> {
   const list = pendingAlerts.splice(0, pendingAlerts.length);
   if (!list.length) return 0;
   const { notify } = await import("./notify");
+  return sendCaseAlerts(d, nowDb, list, notify as (input: any) => Promise<unknown>);
+}
+
+/**
+ * Até ALERTS_PER_RUN avisos um a um; o que passar disso vai num aviso-resumo
+ * (antes ia fora e esses casos nunca avisavam). Marca `alertedAt` em todos.
+ */
+export async function sendCaseAlerts(d: Db, nowDb: string, list: readonly CaseAlert[], notify: (input: any) => Promise<unknown>): Promise<number> {
   let sent = 0;
   for (const a of list.slice(0, ALERTS_PER_RUN)) {
     try {
@@ -204,6 +227,21 @@ export async function flushCaseAlerts(d: Db, nowDb: string): Promise<number> {
       sent++;
     } catch (err) {
       console.warn("[cash-sweep] alerta:", (err as Error)?.message);
+    }
+  }
+  // O que passou dos 25 não se perde: um aviso-resumo (antes ia fora e nunca avisava).
+  const rest = list.length - Math.min(list.length, ALERTS_PER_RUN);
+  if (rest > 0) {
+    try {
+      await notify({
+        kind: "cash_case_alert", title: `Caixa: mais ${rest} caso${rest === 1 ? "" : "s"} novo${rest === 1 ? "" : "s"} por ver`,
+        body: `Esta varredura abriu ${list.length} casos graves; os primeiros ${ALERTS_PER_RUN} foram avisados um a um. Vê os restantes em Faturação → Correção de caixa.`,
+        link: "/faturacao?tab=cash-check", entity: { type: "cash_case_batch", id: nowDb },
+      });
+      for (const a of list.slice(ALERTS_PER_RUN)) await d.execute(sql`UPDATE cash_cases SET alertedAt = ${nowDb} WHERE id = ${a.caseId}`);
+      sent++;
+    } catch (err) {
+      console.warn("[cash-sweep] aviso-resumo:", (err as Error)?.message);
     }
   }
   return sent;
@@ -255,7 +293,7 @@ export async function runCashSweep(o: { deadlineAt: number; nowMs?: number }): P
   const nowMs = o.nowMs ?? Date.now();
   pendingAlerts = [];
   const d = await database();
-  const [{ loadLiveContext }, { readSweepIds }] = await Promise.all([import("./finance/liveBookings"), import("./multiparkDb/cashSweep")]);
+  const [{ loadLiveContext }, { readSweepIds, SWEEP_IDS_LIMIT }] = await Promise.all([import("./finance/liveBookings"), import("./multiparkDb/cashSweep")]);
   const ctx = await loadLiveContext();
   const parkIds = [...ctx.ourParks.keys()];
   const last = await getState(d, "sweep_at");
@@ -264,11 +302,25 @@ export async function runCashSweep(o: { deadlineAt: number; nowMs?: number }): P
   // Casos de reserva abertos (para se resolverem sozinhos) e retratos das últimas 48 h (para R15).
   const openIds = rowsOf(await d.execute(sql`SELECT DISTINCT subjectId FROM cash_cases WHERE subjectType = 'booking' AND state IN ('aberto', 'em_analise') LIMIT 1000`)).map((r) => String(r.subjectId));
   const recentIds = rowsOf(await d.execute(sql`SELECT DISTINCT bookingExternalId AS id FROM cash_live_snapshots WHERE capturedAt >= ${utc(nowMs - 48 * 3_600_000)} LIMIT 3000`)).map((r) => String(r.id));
-  const ids = [...new Set([...found.map((f) => f.id), ...openIds, ...recentIds])];
+  // casos abertos primeiro (são poucos e resolvem-se sozinhos); se o prazo cortar, corta no fim
+  const ids = [...new Set([...openIds, ...found.map((f) => f.id), ...recentIds])];
   const read = await readChunks(ids, o.deadlineAt);
   const rep = await processBookings(d, { live: read.live, missingIds: read.missing, ourParks: ctx.ourParks, nowMs });
-  const report: SweepReport = { mode: "janela", ...rep, partial: read.partial };
-  if (!read.partial) await setState(d, "sweep_at", utc(nowMs));
+  // Lista cortada pelo LIMIT (vem por ordem de alteração): o marcador só avança
+  // até à última alteração lida — antes saltava para "agora" e o resto perdia-se.
+  const truncated = found.length >= SWEEP_IDS_LIMIT;
+  const report: SweepReport = { mode: "janela", ...rep, partial: read.partial || truncated, truncated };
+  if (!read.partial) {
+    if (!truncated) await setState(d, "sweep_at", utc(nowMs));
+    else {
+      const lastMs = Math.max(...found.map((f) => f.updatedAtMs).filter(Number.isFinite));
+      if (Number.isFinite(lastMs) && lastMs > sinceMs + SWEEP_OVERLAP_MS) await setState(d, "sweep_at", utc(lastMs));
+      console.warn(`[cash-sweep] lista cortada em ${SWEEP_IDS_LIMIT}: continua a partir de ${Number.isFinite(lastMs) ? utc(lastMs) : "?"}`);
+    }
+  }
+  const prevPartial = Number(await getState(d, "sweep_partial_runs")) || 0;
+  report.partialRuns = report.partial ? prevPartial + 1 : 0;
+  if (report.partialRuns !== prevPartial) await setState(d, "sweep_partial_runs", String(report.partialRuns));
   // R27 — parques nossos com movimento e sem webhooks (horas de operação).
   try { report.parksSilent = await checkParksSilent(d, ctx, nowMs); } catch (err) { console.warn("[cash-sweep] R27:", (err as Error)?.message); }
   // R26 — permissões dos agentes, 1× por dia.
@@ -309,7 +361,8 @@ export async function runCashClose(o: { deadlineAt: number; nowMs?: number; days
 
 async function checkParksSilent(d: Db, ctx: { ourParks: Map<string, number | null>; parkInfo?: Map<string, { name: string; city: string | null }> }, nowMs: number): Promise<number> {
   const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Lisbon", hour: "2-digit", hourCycle: "h23" }).format(new Date(nowMs)));
-  if (hour < 8 || hour >= 22) return 0;
+  // janela das últimas 3 h dentro do horário de operação (08–22): a corrida das 22:xx ainda conta
+  if (hour < 8 || hour > 22) return 0;
   const { readParkMovement } = await import("./multiparkDb/cashSweep");
   const since = utc(nowMs - PARK_SILENT_HOURS * 3_600_000);
   const parkIds = [...ctx.ourParks.keys()];

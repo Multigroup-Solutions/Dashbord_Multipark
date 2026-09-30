@@ -54,6 +54,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "crm-suggestions": async (o) => (await import("./cronJobs")).crmSuggestionsCron(o),
   "crm-pro-sync": async (o) => (await import("./cronJobs")).crmProSyncCron(o),
   "services-tasks": async (o) => (await import("./cronJobs")).serviceTasksCron(o),
+  "services-tomorrow": async () => (await import("./cronJobs")).serviceTasksTomorrowCron(),
   "cash-sweep": async (o) => (await import("./cronJobs")).cashSweepCron(o),
   "crm-auto-merge": async (o) => (await import("./cronJobs")).crmAutoMergeCron(o),
   "partner-mp-sync": async () => (await import("./cronJobs")).partnerMpSyncCron(),

@@ -1,6 +1,6 @@
 /**
  * Caixa, fase 2 (detetar) — leituras AO VIVO da BD da Multipark para a
- * varredura de 10 em 10 minutos (server/cashSweep.ts). Só leitura.
+ * varredura de 3 em 3 horas (server/cashSweep.ts). Só leitura.
  *
  *  1. Que reservas ver: dos NOSSOS parques, as alteradas desde a última
  *     varredura ("Booking".updatedAt, linhas "BookingPricing".updatedAt,
@@ -38,7 +38,7 @@ export function buildSweepIdsSql(o: { parkIds: readonly string[]; since: string;
   const now = p.add(o.now);
   const active = ACTIVE_STATUSES.map((s) => p.add(s)).join(", ");
   const sql = [
-    `SELECT DISTINCT b."id" AS id, b."parkId" AS park_id FROM "Booking" b`,
+    `SELECT DISTINCT b."id" AS id, b."parkId" AS park_id, b."updatedAt" AS updated_at FROM "Booking" b`,
     ` WHERE b."parkId" IN (${parks})`,
     `   AND (`,
     `     b."updatedAt" >= ${since}::timestamp`,
@@ -48,15 +48,25 @@ export function buildSweepIdsSql(o: { parkIds: readonly string[]; since: string;
     `     OR b."id" IN (SELECT y."bookingId" FROM "BookingPricing" y WHERE y."updatedAt" >= ${since}::timestamp)`,
     `     OR b."id" IN (SELECT y."bookingId" FROM "BookingPricingPayment" z JOIN "BookingPricing" y ON y."id" = z."pricingId" WHERE z."recordedAt" >= ${since}::timestamp)`,
     `   )`,
+    // por ordem de alteração: se o LIMIT cortar, cortam-se as mais recentes e a
+    // próxima corrida continua a partir da última lida (ver runCashSweep)
+    ` ORDER BY b."updatedAt", b."id"`,
     ` LIMIT ${p.add(SWEEP_IDS_LIMIT)}`,
   ].join("\n");
   return { sql, params: p.values };
 }
 
-export async function readSweepIds(o: { parkIds: readonly string[]; since: string; now: string }, query: Query = multiparkDbQuery): Promise<Array<{ id: string; parkId: string }>> {
+export async function readSweepIds(o: { parkIds: readonly string[]; since: string; now: string }, query: Query = multiparkDbQuery): Promise<Array<{ id: string; parkId: string; updatedAtMs: number }>> {
   if (!o.parkIds.length) return [];
   const { sql, params } = buildSweepIdsSql(o);
-  return (await query<J>(sql, params)).map((r) => ({ id: String(r.id), parkId: String(r.park_id ?? "") }));
+  return (await query<J>(sql, params)).map((r) => ({ id: String(r.id), parkId: String(r.park_id ?? ""), updatedAtMs: sweepUpdatedMs(r.updated_at) }));
+}
+
+/** "updatedAt" da Multipark (timestamp sem fuso, em UTC) → ms. PURA. */
+export function sweepUpdatedMs(v: unknown): number {
+  if (v instanceof Date) return v.getTime();
+  const s = String(v ?? "").trim();
+  return s ? Date.parse(`${s.replace(" ", "T").replace(/Z$/, "")}Z`) : NaN;
 }
 
 /** Reservas movimentadas nas últimas `hours` horas, por parque (saúde do webhook, R27). PURA. */

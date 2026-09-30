@@ -306,7 +306,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
         <div className="flex flex-col items-center gap-2 rounded-[10px] border bg-card py-14 text-center">
           <UsersRound className="h-8 w-8 text-muted-foreground" />
           <p className="text-sm font-semibold">{chips.length ? "Nenhum cliente com este filtro." : "Ainda não há fichas de clientes."}</p>
-          {!chips.length && <p className="max-w-md text-xs text-muted-foreground">As fichas são criadas a partir das reservas, a cada 15 minutos. Na primeira vez demora algumas horas a carregar tudo.</p>}
+          {!chips.length && <p className="max-w-md text-xs text-muted-foreground">As fichas são criadas quando chega cada reserva (webhook da Multipark), com uma volta de segurança às 04:00. Na primeira vez demora algumas horas a carregar tudo.</p>}
         </div>
       )}
 

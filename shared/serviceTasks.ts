@@ -279,7 +279,8 @@ export function planServiceTasks(o: {
       }
       continue;
     }
-    if (!type || !rule?.enabled || cancelled || l.done) continue;
+    // PENDING = compra online por acabar (o CRM e a página Serviços também a deixam de fora)
+    if (!type || !rule?.enabled || cancelled || l.done || l.status === "PENDING") continue;
     if (l.checkOutMs <= o.nowMs || l.checkOutMs > windowEnd) continue;
     out.push({
       kind: "create", key, line: l, typeKey: type.key,
