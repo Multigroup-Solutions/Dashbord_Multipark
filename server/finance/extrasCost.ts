@@ -44,9 +44,12 @@ export async function loadExtrasCostRows(db: any, q: ExtrasCostQuery): Promise<{
       ? [gte(timeRecords.recordedAt, q.pontoRange.start), lt(timeRecords.recordedAt, q.pontoRange.endExclusive)]
       : [gte(timeRecords.recordedAt, `${q.from} 00:00:00`), lte(timeRecords.recordedAt, `${q.to} 23:59:59`)]),
     or(eq(employees.contractType, "extra"), eq(employees.position, "extra")),
-    // como no ordenado (payroll/shifts countableShifts): suspeitos/rejeitados não pagam até aprovados
-    inArray(timeRecords.reviewStatus, ["ok", "approved"]),
-    sql`COALESCE(${timeRecords.notes}, '') NOT LIKE '%[SUSPEITO]%'`,
+    // como no ordenado (payroll/shifts countableShifts): aprovado conta sempre;
+    // "ok" só sem [SUSPEITO] nas notas; suspeitos/rejeitados não pagam
+    or(
+      eq(timeRecords.reviewStatus, "approved"),
+      and(eq(timeRecords.reviewStatus, "ok"), sql`COALESCE(${timeRecords.notes}, '') NOT LIKE '%[SUSPEITO]%'`),
+    ),
   ];
   if (q.projectIds) pontoConds.push(q.projectIds.length ? inArray(employees.projectId, q.projectIds) : sql`1 = 0`);
   const ponto = await db

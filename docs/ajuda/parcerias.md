@@ -28,7 +28,9 @@ Menu **Financeiro → Parcerias**. Os parceiros, os parques e as reservas vêm *
 1. Em **Registos** (ou na fila **Por configurar**), marca a caixa dos registos que são o mesmo parceiro (ex.: "Pro Cabopol" e "Blocotelha", da mesma agência, com o mesmo email).
 2. Carrega em **Juntar** na barra azul, escolhe o registo que **fica** e confirma.
 3. Tudo o que liga as reservas aos outros passa para o que fica: o nome e a chave de campanha antigos, o id da Multipark, os aliases e os agentes — as reservas passam a aparecer no que fica (Faturação, Análise). Campos vazios do que fica (contacto, NIF, acordo) são preenchidos com os dos outros.
-4. Os outros ficam **arquivados** "Junto a…" (nunca apagados). Enganaste-te? Em **Arquivados** carrega em **Separar**.
+4. Se mais do que um tinha id da Multipark, o que fica guarda o seu e os outros entram como ids extra: na **Faturação** e no **Fecho do mês** as reservas de todos somam no registo que fica. Se um desses ids já estiver noutro registo, a junção é recusada (separa-o de lá primeiro).
+5. A junção é tudo ou nada: se algo falhar a meio, nada muda.
+6. Os outros ficam **arquivados** "Junto a…" (nunca apagados). Enganaste-te? Em **Arquivados** carrega em **Separar**.
 
 **Ligar à Multipark** (cartão no topo dos Registos; aplicar só administradores)
 - A Multipark é a fonte: **parceiros** (agências e agregadores, com a taxa por parque), **clientes Pro** e **avenças** ficam cada um preso a **um** registo nosso pelo id de lá.

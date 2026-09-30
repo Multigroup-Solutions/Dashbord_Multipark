@@ -28,7 +28,10 @@ palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar e
   - Quem recebe carrega em **Visto** (com uma nota, se quiser). Sem ligação nem Visto em 10 min (Definições → Operação), e com o interruptor do WhatsApp ligado, vai um WhatsApp (modelo aprovado pela Meta) aos administradores da cidade e à cópia (Definições → Operação → "WhatsApp dos administradores").
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
+  - **Aprovar** com horas corrigidas paga essas horas — **0 horas quer dizer que não se paga** o turno (entra na folha com 0 h). Deixar vazio mantém as horas registadas.
+  - **Rejeitar** tira o turno da folha.
 - Ordenados, recibos e folha para o contabilista só para admin.
+- **Folha para o contabilista** gera o PDF da folha do mês, abre-o num separador novo e avisa o RH com o link. O envio ao contabilista faz-se à mão (descarrega o PDF e envia-o).
 
 ## Ligações (fichas, contas de login e agentes da Multipark)
 

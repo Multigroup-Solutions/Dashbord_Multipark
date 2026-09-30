@@ -8,7 +8,7 @@
  */
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { comparePartnerMonth, canClose, monthRangeLisbon, type CloseOurSnap, type PartnerCloseRow } from "../shared/partnerClose";
+import { comparePartnerMonth, canClose, monthRangeLisbon, partnerKeyIndex, type CloseOurSnap, type PartnerCloseRow } from "../shared/partnerClose";
 import { lisbonDayRangeUtc, lisbonDayOf } from "../shared/lisbonDay";
 
 const rowsOf = (res: unknown): any[] => {
@@ -124,8 +124,13 @@ export async function listPartnerClose(month: string) {
   const rows = rowsOf(await d.execute(sql`SELECT c.*, DATE_FORMAT(c.computedAt, '%Y-%m-%d %H:%i') AS computedAtText, DATE_FORMAT(c.closedAt, '%Y-%m-%d %H:%i') AS closedAtText
     FROM partner_month_closes c WHERE c.month = ${month} ORDER BY c.state = 'fechado', c.diffs DESC, c.mpOurs DESC`));
   // registo das Parcerias e quem fechou — lidos à parte (sem JOIN entre tabelas de collations diferentes)
-  const recs = rowsOf(await d.execute(sql`SELECT id, name, multiparkPartnerId FROM partnerships WHERE multiparkPartnerId IS NOT NULL AND archivedAt IS NULL`).catch(() => [[]]));
-  const recByKey = new Map(recs.map((x) => [String(x.multiparkPartnerId), { id: Number(x.id), name: String(x.name ?? "") }]));
+  const recs = rowsOf(await d.execute(sql`SELECT id, name, multiparkPartnerId FROM partnerships WHERE archivedAt IS NULL`).catch(() => [[]]));
+  // os aliases do id da Multipark (ex.: o 2.º id de registos juntos) também apontam para o registo
+  const aliases = rowsOf(await d.execute(sql`SELECT partnershipId, aliasValue FROM partner_aliases WHERE aliasType = 'multipark_partner_id'`).catch(() => [[]]));
+  const recByKey = partnerKeyIndex(
+    recs.map((x) => ({ id: Number(x.id), name: String(x.name ?? ""), multiparkPartnerId: x.multiparkPartnerId == null ? null : String(x.multiparkPartnerId) })),
+    aliases.map((a) => ({ partnershipId: Number(a.partnershipId), aliasValue: String(a.aliasValue ?? "") })),
+  );
   const closers = [...new Set(rows.map((r) => Number(r.closedBy)).filter((x) => x > 0))];
   const names = new Map<number, string>();
   if (closers.length) for (const u of rowsOf(await d.execute(sql`SELECT id, name FROM users WHERE id IN (${sql.join(closers.map((x) => sql`${x}`), sql`, `)})`).catch(() => [[]]))) names.set(Number(u.id), String(u.name ?? ""));
