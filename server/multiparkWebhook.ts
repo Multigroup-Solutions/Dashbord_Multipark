@@ -140,6 +140,11 @@ export async function processMultiparkWebhookEvent(ev: MultiparkWebhookEvent): P
   ok: boolean;
   detail: string;
 }> {
+  // Fichas do CRM e tarefas dos serviços desta reserva LOGO à chegada (Jorge,
+  // 29 set 2026: sem voltas de 15 em 15 min). Leem a BD da Multipark ao vivo;
+  // uma falha aqui não impede o resto (as voltas diárias apanham).
+  await onBookingArrived(ev.bookingId);
+
   const { getBookingTryAllParks, resolveParkForBooking, getParkApiKey, getBooking } = await import("./multipark");
   const { upsertMultiparkBooking } = await import("./db");
   const { enrichBookingsBatch } = await import("./jobs/multiparkBookingSync");
@@ -164,6 +169,23 @@ export async function processMultiparkWebhookEvent(ev: MultiparkWebhookEvent): P
   const r = await enrichBookingsBatch({ externalIds: [ev.bookingId], limit: 1, force: true,
     details: new Map([[ev.bookingId, found.booking]]) });
   return { ok: r.enriched === 1 && r.errors === 0 && r.noKey === 0, detail: `enriched=${r.enriched} errors=${r.errors} noKey=${r.noKey}` };
+}
+
+/** CRM (ficha do cliente) + serviços → tarefas de UMA reserva. Nunca lança. */
+export async function onBookingArrived(bookingId: string): Promise<void> {
+  if (!bookingId) return;
+  try {
+    const { syncCrmForBookings } = await import("./crm/sync");
+    await syncCrmForBookings([bookingId]);
+  } catch (err) {
+    console.warn("[MultiparkWebhook] CRM da reserva:", deliveryErrorCode(err));
+  }
+  try {
+    const { runServiceTasksForBookings } = await import("./serviceTasks");
+    await runServiceTasksForBookings([bookingId], { deadlineAt: Date.now() + 10_000 });
+  } catch (err) {
+    console.warn("[MultiparkWebhook] tarefas dos serviços:", deliveryErrorCode(err));
+  }
 }
 
 export async function retryMultiparkDeliveries(deadlineAt = Date.now() + 40_000) {

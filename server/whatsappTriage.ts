@@ -17,6 +17,7 @@ import { getDb } from "./db";
 import {
   WHATSAPP_TRIAGE_DEBOUNCE_MINUTES,
   mapWhatsappIntent,
+  whatsappTriageRetry,
   mapWhatsappUrgency,
   whatsappTriagePlan,
 } from "../shared/commsAi";
@@ -40,6 +41,8 @@ export async function noteInboundForTriage(conversationId: number, nowMs: number
       .select({ aiTriagedAt: whatsappConversations.aiTriagedAt, aiTriageDueAt: whatsappConversations.aiTriageDueAt })
       .from(whatsappConversations).where(eq(whatsappConversations.id, conversationId)).limit(1);
     if (!c) return false;
+    // mensagem nova do cliente: as falhas anteriores deixam de contar
+    await db.update(whatsappConversations).set({ aiTriageFails: 0 }).where(eq(whatsappConversations.id, conversationId)).catch(() => {});
     const plan = whatsappTriagePlan(c.aiTriagedAt, nowMs);
     if (plan.runNow) {
       // Reserva otimista: só ganha quem ainda vê o mesmo aiTriagedAt.
@@ -103,8 +106,10 @@ export async function triageConversation(conversationId: number): Promise<{ ok: 
       system: WHATSAPP_TRIAGE_SYSTEM,
       input: red.text,
       schema: whatsappTriageSchema,
-      maxTokens: 120,
-      timeoutMs: 15_000,
+      // o Gemini 3 "pensa" e o raciocínio conta como saída: com 120 ficava sem
+      // espaço para o JSON (resposta vazia → invalid_output em repetição)
+      maxTokens: 600,
+      timeoutMs: 20_000,
       retries: 1,
       entity: "whatsapp_conversation",
       entityId: conversationId,
@@ -113,13 +118,21 @@ export async function triageConversation(conversationId: number): Promise<{ ok: 
       aiIntent: mapWhatsappIntent(r.output.intent),
       aiUrgency: mapWhatsappUrgency(r.output.urgency),
       aiTriagedAt: nowStr(),
+      aiTriageFails: 0,
     }).where(eq(whatsappConversations.id, conversationId));
     return { ok: true };
   } catch (err) {
     if (!isStopAiError(err)) {
-      await db.update(whatsappConversations)
-        .set({ aiTriageDueAt: nowStr(Date.now() + WHATSAPP_TRIAGE_DEBOUNCE_MINUTES * 60_000) })
+      // conta a falha; à WHATSAPP_TRIAGE_MAX_FAILS.ª já não se reagenda (fica à mão)
+      await db.update(whatsappConversations).set({ aiTriageFails: sql`${whatsappConversations.aiTriageFails} + 1` })
         .where(eq(whatsappConversations.id, conversationId)).catch(() => {});
+      const [c] = await db.select({ fails: whatsappConversations.aiTriageFails }).from(whatsappConversations)
+        .where(eq(whatsappConversations.id, conversationId)).limit(1).catch(() => [] as { fails: number }[]);
+      if (c && whatsappTriageRetry(Number(c.fails ?? 0))) {
+        await db.update(whatsappConversations)
+          .set({ aiTriageDueAt: nowStr(Date.now() + WHATSAPP_TRIAGE_DEBOUNCE_MINUTES * 60_000) })
+          .where(eq(whatsappConversations.id, conversationId)).catch(() => {});
+      }
     }
     return { ok: false, error: aiErrorCode(err) };
   }

@@ -155,9 +155,9 @@ describe("caixa fase 2: tabelas e agendador", () => {
     expect(all).not.toMatch(/DROP|DELETE|ALTER/i);
     expect(readFileSync(join(__dirname, "..", "db.ts"), "utf8")).toContain('import("./migrations/migration_0265")');
   });
-  it("cash-sweep de 10 em 10 min e cash-close diário, com endpoint manual", async () => {
+  it("cash-sweep de 3 em 3 h e cash-close diário, com endpoint manual", async () => {
     const { TICK_JOBS, describeCadence } = await import("../cronSchedule");
-    expect(describeCadence(TICK_JOBS.find((j) => j.key === "cash-sweep")!.cadence)).toBe("a cada 10 min");
+    expect(describeCadence(TICK_JOBS.find((j) => j.key === "cash-sweep")!.cadence)).toBe("a cada 3 h");
     expect(TICK_JOBS.find((j) => j.key === "cash-close")!.cadence).toMatchObject({ kind: "daily" });
     const api = readFileSync(join(__dirname, "..", "_core", "api-entry.ts"), "utf8");
     expect(api).toContain('"/api/cron/cash-sweep"');

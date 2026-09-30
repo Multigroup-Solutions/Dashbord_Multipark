@@ -66,27 +66,29 @@ export const ZELLO_SAMEDAY_WINDOW = { from: "23:15", until: "23:55" } as const;
 // alimenta a cópia financeira (multipark_bookings) e o CRM.
 export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "mail-sync", runName: "mail-sync", label: "Comunicação: sincronização do Gmail", cadence: { kind: "interval", minutes: 5 }, priority: 10, minMs: 10 * S, maxMs: 25 * S },
-  { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark", cadence: { kind: "interval", minutes: 15 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
+  { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark (repescagem)", cadence: { kind: "interval", minutes: 60 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
   { key: "ai-comms", runName: "ai-comms", label: "IA na comunicação com clientes", cadence: { kind: "interval", minutes: 15 }, priority: 30, minMs: 20 * S, maxMs: 30 * S },
   // Google por eventos (26 set 2026): o que muda vai/vem logo (push da Google,
   // fila "sincronizar já", heartbeat do dashboard); aqui só a repetição do que
   // falhou (15 min), a rede de segurança completa (4 h) e a renovação diária
   // dos canais de notificação (expiram em ≤ 7 dias).
-  { key: "google-pending", runName: "google-pending", label: "Google: alterações por enviar/receber (repetição)", cadence: { kind: "interval", minutes: 15 }, priority: 38, minMs: 10 * S, maxMs: 25 * S },
+  { key: "google-pending", runName: "google-pending", label: "Google: alterações por enviar/receber (repetição)", cadence: { kind: "interval", minutes: 60 }, priority: 38, minMs: 10 * S, maxMs: 25 * S },
   { key: "google-sync", runName: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", cadence: { kind: "interval", minutes: 240 }, priority: 40, minMs: 12 * S, maxMs: 25 * S },
   { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 60, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
   { key: "extras-auto", runName: "extras-auto", label: "Automação dos extras", cadence: { kind: "interval", minutes: 60 }, priority: 70, minMs: 12 * S, maxMs: 40 * S },
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
-  { key: "crm-sync", runName: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", cadence: { kind: "interval", minutes: 15 }, priority: 82, minMs: 20 * S, maxMs: 45 * S },
-  // Serviços extra das reservas → tarefas (BD Multipark ao vivo; saídas nas próximas 48 h).
-  { key: "services-tasks", runName: "services-tasks", label: "Serviços das reservas → tarefas", cadence: { kind: "interval", minutes: 15 }, priority: 83, minMs: 10 * S, maxMs: 30 * S },
+  { key: "crm-sync", runName: "crm-sync", label: "CRM: fichas de cliente a partir das reservas (volta diária; no dia-a-dia é o webhook)", cadence: { kind: "daily", from: "04:00" }, priority: 82, minMs: 20 * S, maxMs: 45 * S },
+  // Serviços extra → tarefas (Jorge, 29 set 2026): as tarefas nascem quando chega o
+  // webhook da reserva; 1×/dia (18:00) vai o aviso das de amanhã aos team leaders
+  // da cidade + supervisor, e a volta serve também de rede de segurança.
+  { key: "services-tasks", runName: "services-tasks", label: "Serviços: aviso das tarefas de amanhã (team leaders + supervisor); as tarefas nascem no webhook", cadence: { kind: "daily", from: "18:00" }, priority: 83, minMs: 10 * S, maxMs: 30 * S },
   // Caixa, fase 2 (29 set 2026): varredura do dinheiro (BD Multipark ao vivo) → "Correção de caixa".
   { key: "ops-presence", runName: "ops-presence", label: "Operacional: a trabalhar sem PDA ou Zello ligado", cadence: { kind: "interval", minutes: 5 }, priority: 20, minMs: 10 * S, maxMs: 30 * S },
-  { key: "cash-sweep", runName: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", cadence: { kind: "interval", minutes: 10 }, priority: 25, minMs: 15 * S, maxMs: 40 * S },
+  { key: "cash-sweep", runName: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", cadence: { kind: "interval", minutes: 180 }, priority: 25, minMs: 15 * S, maxMs: 40 * S },
   { key: "cash-close", runName: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", cadence: { kind: "daily", from: "06:15" }, priority: 104, minMs: 20 * S, maxMs: 45 * S },
   // Caixa, fase 4: cruzar as saídas de ontem e anteontem com a InvoiceExpress e a Stripe (chaves só de leitura).
   { key: "cash-external", runName: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", cadence: { kind: "daily", from: "07:00" }, priority: 106, minMs: 20 * S, maxMs: 45 * S },
-  { key: "crm-auto-merge", runName: "crm-auto-merge", label: "CRM: juntar sozinho as fichas óbvias (mesmo nome + telefone/email/NIF)", cadence: { kind: "interval", minutes: 30 }, priority: 83, minMs: 20 * S, maxMs: 45 * S },
+  { key: "crm-auto-merge", runName: "crm-auto-merge", label: "CRM: juntar sozinho as fichas óbvias (mesmo nome + telefone/email/NIF)", cadence: { kind: "daily", from: "05:05" }, priority: 83, minMs: 20 * S, maxMs: 45 * S },
   { key: "partner-mp-sync", runName: "partner-mp-sync", label: "Parcerias: ligar à Multipark (parceiros, Pros, avenças e os seus agentes)", cadence: { kind: "daily", from: "05:40" }, priority: 108, minMs: 20 * S, maxMs: 45 * S },
   { key: "partner-close", runName: "partner-close", label: "Parceiros: comparar o fecho do mês (Multipark vs memória do webhook)", cadence: { kind: "daily", from: "06:40" }, priority: 109, minMs: 20 * S, maxMs: 45 * S },
   { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },

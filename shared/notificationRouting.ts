@@ -119,6 +119,8 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "whatsapp_missed_call", group: "operacoes", label: "Chamada WhatsApp perdida", description: "Um cliente ligou pelo WhatsApp e ninguém atendeu (conversa da tua cidade) — devolver a chamada.",
     module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 10 }),
+  K({ kind: "service_tasks_tomorrow", group: "operacoes", label: "Serviços: tarefas de amanhã", description: "Todos os dias às 18:00, as tarefas dos serviços extra (lavagens, carregamentos…) das saídas de amanhã da tua cidade.",
+    module: "servicos", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, dedupeMinutes: 12 * 60 }),
   K({ kind: "extras_gap", group: "operacoes", label: "Faltam condutores", description: "Horas sem condutores suficientes na escala (proposta e véspera).",
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "extras_schedule_reply", group: "operacoes", label: "Respostas ao aviso de escala", description: "Extra que não pode ir ao turno ou resposta por rever.",

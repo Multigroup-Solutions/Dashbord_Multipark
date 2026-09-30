@@ -6,7 +6,7 @@ palavras: consentimento, contactar, ao vivo, base da multipark, clientes, client
 ---
 # Clientes (CRM)
 
-Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são criadas e atualizadas sozinhas a partir das reservas (a cada 15 minutos). Um cliente pode ter vários emails, telefones e carros, e ter usado vários parques.
+Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são criadas e atualizadas sozinhas a partir das reservas: **quando a reserva chega** pelo webhook da Multipark, e numa volta de segurança todos os dias às 04:00. Um cliente pode ter vários emails, telefones e carros, e ter usado vários parques.
 
 **De onde vêm os clientes**
 - As reservas são lidas **ao vivo da base de dados da Multipark**. Contam todos os nossos clientes: reservas nos nossos parques (Airpark, Redpark e Skypark) e as que vendemos noutros parques do marketplace.

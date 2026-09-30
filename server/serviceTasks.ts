@@ -1,6 +1,12 @@
 /**
- * Serviços extra das reservas → tarefas (trabalho `services-tasks` do
- * agendador, de 15 em 15 min; à mão em /api/cron/services-tasks).
+ * Serviços extra das reservas → tarefas. Desde 29 set 2026 (Jorge, "agendador
+ * mais leve"): a tarefa nasce quando chega o WEBHOOK da reserva
+ * (`runServiceTasksForBookings`, chamado em processMultiparkWebhookEvent) e vai
+ * logo para o Google Tarefas dos responsáveis; o trabalho `services-tasks` do
+ * agendador corre 1×/dia às 18:00 — volta de segurança (a janela de 48 h, que
+ * também junta os team leaders escalados entretanto) + aviso das tarefas de
+ * AMANHÃ aos team leaders e supervisores da cidade. À mão em
+ * /api/cron/services-tasks.
  *
  * Lê AO VIVO da BD da Multipark (só leitura; regras de server/multiparkDb):
  *   "Park" (parques nossos — shared/multiparkParks.ts), "Booking" (id,
@@ -147,6 +153,8 @@ export interface ServiceTasksDeps {
   updateTask(id: number, patch: { title: string; description: string; dueMs: number }): Promise<void>;
   addAssignees(id: number, employeeIds: number[]): Promise<void>;
   closeTask(id: number, comment: string, systemUserId: number): Promise<void>;
+  /** Manda as tarefas para o Google Tarefas dos responsáveis (em segundo plano). */
+  syncGoogle(taskIds: number[]): void;
 }
 
 const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
@@ -165,6 +173,9 @@ async function withAssignees(db: any, rows: Array<{ id: number; sourceKey: strin
 
 export const defaultServiceTasksDeps: ServiceTasksDeps = {
   multiparkConfigured: () => isMultiparkDbConfigured(),
+  syncGoogle(taskIds) {
+    import("./google/syncService").then((m) => m.scheduleGoogleTaskSync({ taskIds })).catch(() => undefined);
+  },
   query: multiparkDbQuery,
   async loadRules() {
     const { getSetting } = await import("./appSettings");
@@ -372,33 +383,128 @@ export async function runServiceTasks(o: { deadlineAt: number; now?: number }, d
   const teamLeaders = await d.loadTeamLeaders([...dates].sort());
 
   const actions = planServiceTasks({ lines, checkedBookingIds: checked, rules, existing: [...byId.values()], teamLeaders, nowMs: now });
-  if (!actions.length) return out;
+  await applyServiceTaskActions(actions, o.deadlineAt, d, out);
+  return out;
+}
 
+/** Aplica as ações (até ao prazo) e manda as tarefas tocadas para o Google. */
+async function applyServiceTaskActions(actions: ServiceTaskAction[], deadlineAt: number, d: ServiceTasksDeps, out: ServiceTasksReport): Promise<void> {
+  if (!actions.length) return;
   const projectIds = actions.some((a) => a.kind === "create") ? await d.cityProjectIds() : {};
   const systemUser = await d.systemUserId();
+  const touched: number[] = [];
   for (let i = 0; i < actions.length; i++) {
-    if (o.deadlineAt - Date.now() < APPLY_MARGIN_MS) { out.done = false; out.pending = actions.length - i; break; }
+    if (deadlineAt - Date.now() < APPLY_MARGIN_MS) { out.done = false; out.pending = actions.length - i; break; }
     const a: ServiceTaskAction = actions[i];
     try {
       if (a.kind === "create") {
-        await d.createTask({ title: a.title, description: a.description, projectId: projectIds[a.line.city] ?? null, createdById: systemUser, dueMs: a.dueMs, sourceKey: a.key, assigneeIds: a.assigneeIds });
+        touched.push(await d.createTask({ title: a.title, description: a.description, projectId: projectIds[a.line.city] ?? null, createdById: systemUser, dueMs: a.dueMs, sourceKey: a.key, assigneeIds: a.assigneeIds }));
         out.created++;
       } else if (a.kind === "update") {
         await d.updateTask(a.taskId, { title: a.title, description: a.description, dueMs: a.dueMs });
+        touched.push(a.taskId);
         out.updated++;
       } else if (a.kind === "assign") {
         await d.addAssignees(a.taskId, a.employeeIds);
+        touched.push(a.taskId);
         out.assigned += a.employeeIds.length;
       } else {
         await d.closeTask(a.taskId, CLOSE_REASON_TEXT[a.reason], systemUser);
+        touched.push(a.taskId);
         out.closed[a.reason]++;
       }
     } catch (err: any) {
       out.errors.push(`${a.kind}: ${String(err?.message ?? err).slice(0, 160)}`);
     }
   }
+  const ids = touched.filter((x) => Number.isInteger(x) && x > 0);
+  if (ids.length) d.syncGoogle(ids);
   out.ok = out.errors.length === 0;
+}
+
+/** Janela de criação quando a reserva chega pelo webhook: a saída pode ser daqui a semanas. */
+export const SERVICE_TASKS_WEBHOOK_WINDOW_HOURS = 24 * 400;
+
+/**
+ * Só as reservas dadas (as do webhook): cria/atualiza/fecha as tarefas delas
+ * logo que a reserva chega ou muda — sem esperar por nenhuma volta. Os team
+ * leaders do turno só se juntam quando a escala existir (volta das 18:00).
+ */
+export async function runServiceTasksForBookings(bookingIds: readonly string[], o: { deadlineAt: number; now?: number }, deps: Partial<ServiceTasksDeps> = {}): Promise<ServiceTasksReport> {
+  const d: ServiceTasksDeps = { ...defaultServiceTasksDeps, ...deps };
+  const now = o.now ?? Date.now();
+  const out = emptyReport();
+  const ids = [...new Set(bookingIds.map((x) => String(x ?? "").trim()).filter(Boolean))].slice(0, IDS_CHUNK);
+  if (!ids.length) return { ...out, skipped: "sem reservas" };
+  if (!d.multiparkConfigured()) return { ...out, skipped: "DATABASE_URL_MULTIPARK não está definida" };
+  const rules = await d.loadRules();
+  const existingOpen = (await d.loadOpenTasks()).filter((t) => ids.includes(parseServiceTaskKey(t.sourceKey)?.bookingId ?? ""));
+  if (!anyServiceTaskEnabled(rules) && !existingOpen.length) return { ...out, skipped: "nenhum serviço com \"gera tarefa\" ligado" };
+  const parkById = new Map((await d.loadParks(d.query)).map((p) => [p.id, p]));
+  const q = buildServiceLinesByIdsSql(ids);
+  const lines: ServiceLine[] = [];
+  for (const r of await d.query(q.sql, q.params)) {
+    const l = mapServiceLineRow(r, parkById);
+    if (l) lines.push(l);
+  }
+  out.lines = lines.length;
+  out.bookings = new Set(lines.map((l) => l.bookingId)).size;
+  const keys = lines.map((l) => serviceTaskKey(l.bookingId, l.lineId)).filter((k): k is string => !!k);
+  const byId = new Map<number, ExistingServiceTask>(existingOpen.map((t) => [t.id, t]));
+  for (const t of await d.loadTasksByKeys(keys)) byId.set(t.id, t);
+  const dates = new Set<string>();
+  for (const l of lines) { const s = checkoutShifts(l.checkOutMs); dates.add(s.leaving.date); dates.add(s.previous.date); }
+  const teamLeaders = await d.loadTeamLeaders([...dates].sort());
+  const actions = planServiceTasks({ lines, checkedBookingIds: new Set(ids), rules, existing: [...byId.values()], teamLeaders, nowMs: now, windowHours: SERVICE_TASKS_WEBHOOK_WINDOW_HOURS });
+  await applyServiceTaskActions(actions, o.deadlineAt, d, out);
   return out;
+}
+
+// ─── Aviso das tarefas de amanhã (team leaders + supervisores da cidade) ────
+
+export interface TomorrowServiceTask { id: number; title: string; dueDate: string; projectId: number | null }
+
+/** Texto do aviso de uma cidade (hora de Lisboa, por ordem de saída). PURA. */
+export function tomorrowAlertBody(list: readonly TomorrowServiceTask[]): string {
+  const hm = (utc: string) => {
+    const ms = Date.parse(`${utc.replace(" ", "T")}Z`);
+    return Number.isFinite(ms) ? new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit" }).format(ms) : "--:--";
+  };
+  const sorted = [...list].sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.id - b.id);
+  const lines = sorted.slice(0, 40).map((t) => `${hm(t.dueDate)} · ${t.title}`);
+  if (sorted.length > 40) lines.push(`… e mais ${sorted.length - 40}`);
+  return lines.join("\n");
+}
+
+/** Tarefas de serviço por fazer com prazo (saída) AMANHÃ, hora de Lisboa → 1 aviso por cidade. */
+export async function sendServiceTasksTomorrowAlert(nowMs: number = Date.now()): Promise<{ date: string; tasks: number; cities: number }> {
+  const { getDb } = await import("./db");
+  const db = await getDb();
+  if (!db) throw new Error("BD indisponível");
+  const { tasks } = await import("../drizzle/schema");
+  const { and, eq, gte, lt, ne } = await import("drizzle-orm");
+  const { lisbonDayRangeUtc, lisbonDayOf, addDays: addDay } = await import("../shared/lisbonDay");
+  const date = addDay(lisbonDayOf(nowMs), 1);
+  const range = lisbonDayRangeUtc(date, date);
+  const rows = await db.select({ id: tasks.id, title: tasks.title, dueDate: tasks.dueDate, projectId: tasks.projectId }).from(tasks)
+    .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), ne(tasks.taskStatus, "done"), gte(tasks.dueDate, range.start), lt(tasks.dueDate, range.end)))
+    .limit(2000);
+  const byProject = new Map<number | null, TomorrowServiceTask[]>();
+  for (const r of rows) {
+    const t = { id: r.id, title: String(r.title ?? ""), dueDate: String(r.dueDate ?? ""), projectId: r.projectId ?? null };
+    byProject.set(t.projectId, [...(byProject.get(t.projectId) ?? []), t]);
+  }
+  const { notify } = await import("./notify");
+  for (const [projectId, list] of byProject) {
+    await notify({
+      kind: "service_tasks_tomorrow", projectId,
+      title: `Serviços de amanhã (${date.split("-").reverse().join("/")}): ${list.length} tarefa${list.length === 1 ? "" : "s"}`,
+      body: tomorrowAlertBody(list),
+      link: "/servicos",
+      entity: { type: "service_tasks_day", id: `${date}:${projectId ?? 0}` },
+    });
+  }
+  return { date, tasks: rows.length, cities: byProject.size };
 }
 
 // ─── Definições: catálogo dos tipos e pessoas por cidade ────────────────────

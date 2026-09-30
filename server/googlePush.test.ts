@@ -401,14 +401,14 @@ describe("fila 'sincronizar já'", () => {
 // ─── Agendador e migração ───────────────────────────────────────────────────
 
 describe("agendador e migração 0200", () => {
-  it("google-sync de 4 em 4 h (rede de segurança), repetição de 15 min e renovação diária", () => {
+  it("google-sync de 4 em 4 h (rede de segurança), repetição de hora a hora e renovação diária", () => {
     const c = Object.fromEntries(TICK_JOBS.map((j) => [j.key, describeCadence(j.cadence)]));
     expect(c["google-sync"]).toBe("a cada 4 h");
-    expect(c["google-pending"]).toBe("a cada 15 min");
+    expect(c["google-pending"]).toBe("de hora a hora");
     expect(c["google-watch-renew"]).toBe("diário a partir das 03:40");
     const known = Object.fromEntries(CRON_JOBS.map((j) => [j.name, j.intervalMinutes]));
     expect(known["google-sync"]).toBe(240);
-    expect(known["google-pending"]).toBe(15);
+    expect(known["google-pending"]).toBe(60);
     expect(known["google-watch-renew"]).toBe(1440);
   });
   it("tabelas dos canais e da fila, e a coluna do heartbeat", () => {

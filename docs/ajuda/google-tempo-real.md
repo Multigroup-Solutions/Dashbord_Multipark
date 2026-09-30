@@ -10,7 +10,7 @@ Desde 26 set 2026 a app já não pergunta à Google de 15 em 15 minutos se mudou
 
 ## O que muda no dashboard vai logo para o Google
 
-Criar, editar ou concluir uma tarefa, mudar a escala (turno criado, alterado, apagado ou escala confirmada), atribuir uma formação, mudar o responsável ou o SLA de uma reclamação e carregar uma prova numa reclamação (espelho no Shared Drive) — a app envia logo para o Google, em segundo plano (não atrasa o que estás a fazer). Se a Google falhar, a app volta a tentar sozinha (de 15 em 15 min, com esperas cada vez maiores).
+Criar, editar ou concluir uma tarefa, mudar a escala (turno criado, alterado, apagado ou escala confirmada), atribuir uma formação, mudar o responsável ou o SLA de uma reclamação e carregar uma prova numa reclamação (espelho no Shared Drive) — a app envia logo para o Google, em segundo plano (não atrasa o que estás a fazer). Se a Google falhar, a app volta a tentar sozinha (de hora a hora, com esperas cada vez maiores).
 
 ## Calendário e Drive: em tempo real
 

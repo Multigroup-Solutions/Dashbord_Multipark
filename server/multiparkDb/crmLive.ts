@@ -38,6 +38,30 @@ export interface CrmCursor { at: string; id: string }
  * Reservas alteradas depois do cursor ("updatedAt", id), com o cliente, o
  * carro e o parceiro. 2 min de folga (uma gravação a meio não fica para trás). PURA.
  */
+const CRM_BATCH_SELECT = [
+  `SELECT b."id" AS id, c."firstName" AS first_name, c."lastName" AS last_name, c."email" AS email, c."phoneNumber" AS phone,`,
+  `       c."nif" AS nif, v."licensePlate" AS plate, v."brand" AS brand, v."model" AS model, v."color" AS color, v."vehicleType"::text AS vehicle_type,`,
+  `       b."partnerId" AS partner_id, NULLIF(pa."name", '') AS partner_name, COALESCE(b."pro", false) AS pro, b."origin"::text AS origin,`,
+  `       ${ts(`COALESCE(b."createdAt", b."checkIn")`)} AS seen_at, to_char(b."updatedAt", 'YYYY-MM-DD HH24:MI:SS.MS') AS cursor_at`,
+  `  FROM "Booking" b`,
+  `  ${CLIENT_JOIN}`,
+  `  LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
+  `  LEFT JOIN "Partner" pa ON pa."id" = b."partnerId"`,
+];
+
+/** As mesmas colunas do lote, só para as reservas dadas (as do webhook). PURA. */
+export function buildCrmRowsByIdsSql(o: { ids: readonly string[]; ourParkIds: readonly string[] }): { sql: string; params: SqlParam[] } {
+  const ids = [...new Set(o.ids.filter(Boolean))].slice(0, CRM_LIVE_MAX_IDS);
+  if (!ids.length) throw new Error("Sem reservas.");
+  const p = new ParamList();
+  const list = ids.map((id) => p.add(id)).join(", ");
+  const ours = ourClientBookingSql(p, o.ourParkIds);
+  return {
+    sql: [...CRM_BATCH_SELECT, ` WHERE b."id" IN (${list})`, `   AND ${ours}`, ` LIMIT ${p.add(ids.length)}`].join("\n"),
+    params: p.values,
+  };
+}
+
 export function buildCrmBatchSql(o: { cursor: CrmCursor; limit: number; ourParkIds: readonly string[] }): { sql: string; params: SqlParam[] } {
   const p = new ParamList();
   const at = p.add(o.cursor.at);
@@ -45,14 +69,7 @@ export function buildCrmBatchSql(o: { cursor: CrmCursor; limit: number; ourParkI
   const ours = ourClientBookingSql(p, o.ourParkIds);
   const lim = p.add(Math.min(Math.max(Math.floor(o.limit), 1), 3000));
   const sql = [
-    `SELECT b."id" AS id, c."firstName" AS first_name, c."lastName" AS last_name, c."email" AS email, c."phoneNumber" AS phone,`,
-    `       c."nif" AS nif, v."licensePlate" AS plate, v."brand" AS brand, v."model" AS model, v."color" AS color, v."vehicleType"::text AS vehicle_type,`,
-    `       b."partnerId" AS partner_id, NULLIF(pa."name", '') AS partner_name, COALESCE(b."pro", false) AS pro, b."origin"::text AS origin,`,
-    `       ${ts(`COALESCE(b."createdAt", b."checkIn")`)} AS seen_at, to_char(b."updatedAt", 'YYYY-MM-DD HH24:MI:SS.MS') AS cursor_at`,
-    `  FROM "Booking" b`,
-    `  ${CLIENT_JOIN}`,
-    `  LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
-    `  LEFT JOIN "Partner" pa ON pa."id" = b."partnerId"`,
+    ...CRM_BATCH_SELECT,
     ` WHERE (b."updatedAt", b."id") > (${at}::timestamp, ${id})`,
     `   AND b."updatedAt" < (now() AT TIME ZONE 'UTC') - interval '2 minutes'`,
     `   AND ${ours}`,
