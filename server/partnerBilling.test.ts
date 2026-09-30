@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildPartnerBillingSql, mapPartnerBilling } from "./multiparkDb/partnerBilling";
 import { planMonthly, recordBillingFromMp } from "../shared/partnerBilling";
+import { partnerKeyIndex } from "../shared/partnerClose";
 
 describe("faturação de parceiros ← Multipark: SQL", () => {
   const { sql, params } = buildPartnerBillingSql({ ourParks: ["pk-al"], thirdParks: ["pk-x"], start: "2026-08-31 23:00:00", end: "2026-09-30 23:00:00" });
@@ -50,5 +51,41 @@ describe("faturação de parceiros ← Multipark: números", () => {
   it("avença anual → por mês", () => {
     expect(planMonthly(1200, "YEARLY")).toBe(100);
     expect(planMonthly(null, "MONTHLY")).toBe(0);
+  });
+});
+
+// Parceiros juntos (#184): o 2.º id da Multipark passou a alias e a faturação
+// só lia o id principal — as reservas dele desapareciam da Faturação.
+describe("faturação de parceiros ← Multipark: registos juntos", () => {
+  const live = mapPartnerBilling([
+    { kind: "partner", key: "u-a", name: "Pro Cabopol", n: "3", value: "300", ours: "30", missing: "1" },
+    { kind: "partner", key: "u-b", name: "Blocotelha", n: "2", value: "200", ours: "20", missing: "0" },
+    { kind: "pro", key: "c1", n: 2, value: "100" },
+    { kind: "pro", key: "c2", n: 1, value: "50" },
+  ], new Map());
+  const rec = (aliasPartnerIds: string[]) => ({ partnerType: "agencia_viagem", multiparkKind: "partner", multiparkPartnerId: "u-a", multiparkSnapshot: null, aliasPartnerIds });
+  it("soma o id principal e o alias", () => {
+    expect(recordBillingFromMp(rec(["u-b"]), live, "2026-09-01", "2026-09-30"))
+      .toEqual({ bookingsCount: 5, revenueGross: 500, aFaturar: 50, missing: 1, source: "multipark" });
+  });
+  it("ids repetidos contam uma vez; aliases de outro tipo não entram", () => {
+    expect(recordBillingFromMp(rec(["u-a", "u-b", "u-b", "pro:c2"]), live, "2026-09-01", "2026-09-30"))
+      .toMatchObject({ bookingsCount: 5, revenueGross: 500 });
+  });
+  it("Pro junto a Pro soma os dois", () => {
+    expect(recordBillingFromMp({ partnerType: "cliente_pro", multiparkKind: "pro", multiparkPartnerId: "pro:c1", multiparkSnapshot: null, aliasPartnerIds: ["pro:c2", "u-b"] }, live, "2026-09-01", "2026-09-30"))
+      .toMatchObject({ bookingsCount: 3, aFaturar: 150 });
+  });
+  it("sem aliases fica como antes", () => {
+    expect(recordBillingFromMp(rec([]), live, "2026-09-01", "2026-09-30")).toMatchObject({ bookingsCount: 3, aFaturar: 30 });
+  });
+  it("fecho do mês: o alias aponta para o registo que ficou; o principal de outro registo manda", () => {
+    const idx = partnerKeyIndex(
+      [{ id: 1, name: "Pro Cabopol", multiparkPartnerId: "u-a" }, { id: 4, name: "Outro", multiparkPartnerId: "u-x" }, { id: 5, name: "Sem id", multiparkPartnerId: null }],
+      [{ partnershipId: 1, aliasValue: "u-b" }, { partnershipId: 1, aliasValue: "u-x" }, { partnershipId: 9, aliasValue: "u-arquivado" }],
+    );
+    expect(idx.get("u-b")).toEqual({ id: 1, name: "Pro Cabopol" });
+    expect(idx.get("u-x")).toEqual({ id: 4, name: "Outro" });
+    expect(idx.has("u-arquivado")).toBe(false);
   });
 });

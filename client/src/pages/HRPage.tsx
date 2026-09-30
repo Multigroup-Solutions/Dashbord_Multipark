@@ -2029,7 +2029,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
           disabled={sendingEmail}
           onClick={() => setEmailDialog(true)}
         >
-          <Mail className="w-4 h-4 mr-2" /> Enviar ao Contabilista
+          <Mail className="w-4 h-4 mr-2" /> Folha para o contabilista
         </Button>
       </div>
 
@@ -2038,7 +2038,7 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
         <Dialog open onOpenChange={() => setEmailDialog(false)}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Enviar Folha ao Contabilista</DialogTitle>
+              <DialogTitle>Preparar a folha para o contabilista</DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
               <div>
@@ -2051,7 +2051,8 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
                 />
               </div>
               <p className="text-sm text-muted-foreground">
-                Será enviado um email com o PDF da folha de ordenados de {MONTH_NAMES[month - 1]} {year} em anexo.
+                Gera o PDF da folha de ordenados de {MONTH_NAMES[month - 1]} {year} e avisa o RH com o link.
+                O envio ao contabilista ainda se faz à mão: o PDF abre num separador novo para o descarregares e enviares.
               </p>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEmailDialog(false)}>Cancelar</Button>
@@ -2059,15 +2060,18 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
                   disabled={!accountantEmail || sendingEmail}
                   onClick={async () => {
                     setSendingEmail(true);
+                    // abre já o separador (no clique) para o browser não o bloquear
+                    const w = window.open("", "_blank");
                     try {
-                      await emailMutation.mutateAsync({ year, month, email: accountantEmail });
-                      toast.success(`Folha enviada para ${accountantEmail}!`);
+                      const r = await emailMutation.mutateAsync({ year, month, email: accountantEmail });
+                      if (r?.url) { if (w) w.location.href = r.url; else window.open(r.url, "_blank"); } else w?.close();
+                      toast.success(`PDF gerado — envia-o ao contabilista (${accountantEmail}).`);
                       setEmailDialog(false);
-                    } catch (e: any) { toast.error(e.message ?? "Erro ao enviar email"); }
+                    } catch (e: any) { w?.close(); toast.error(e.message ?? "Erro ao gerar o PDF"); }
                     setSendingEmail(false);
                   }}
                 >
-                  {sendingEmail ? "A enviar..." : "Enviar"}
+                  {sendingEmail ? "A gerar..." : "Gerar PDF"}
                 </Button>
               </div>
             </div>

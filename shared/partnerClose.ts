@@ -165,3 +165,24 @@ export function canClose(diffs: number, note: string | null | undefined): string
   if (diffs > 0 && String(note ?? "").replace(/\s+/g, " ").trim().length < 10) return "Há diferenças: escreve porque fechas assim (mínimo 10 letras).";
   return null;
 }
+
+/**
+ * Parceiro da Multipark (partnerKey) → registo das Parcerias. O id principal
+ * de cada registo ativo manda; os aliases `multipark_partner_id` (ex.: o 2.º id
+ * de registos juntos) apontam para o registo que os tem. PURA.
+ */
+export function partnerKeyIndex(
+  mains: ReadonlyArray<{ id: number; name: string; multiparkPartnerId: string | null }>,
+  aliases: ReadonlyArray<{ partnershipId: number; aliasValue: string }>,
+): Map<string, { id: number; name: string }> {
+  const out = new Map<string, { id: number; name: string }>();
+  const nameById = new Map(mains.map((m) => [m.id, m.name]));
+  for (const m of mains) if (m.multiparkPartnerId) out.set(String(m.multiparkPartnerId), { id: m.id, name: m.name });
+  for (const a of aliases) {
+    const k = String(a.aliasValue ?? "").trim();
+    const name = nameById.get(a.partnershipId);
+    if (!k || out.has(k) || name == null) continue; // o principal de outro registo manda; registo arquivado não conta
+    out.set(k, { id: a.partnershipId, name });
+  }
+  return out;
+}

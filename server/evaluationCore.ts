@@ -20,6 +20,7 @@ import {
   type DayMetrics,
 } from "../shared/evaluationRules";
 import { addDays, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
+import { pontoShiftHours } from "../shared/pontoHours";
 import type { EvaluationIdentity } from "./evaluationIdentity";
 
 // ─── Ponto ───────────────────────────────────────────────────────────────────
@@ -70,10 +71,10 @@ export function pairPonto(records: PontoRecord[]): PontoShift[] {
     }
     if (!open) continue; // saída sem entrada: ignorada (como no ordenado)
     const real = Math.max(0, (utcMs(r.recordedAt) - utcMs(open.recordedAt)) / 3_600_000);
-    const rec = r.hoursWorked != null ? Number(r.hoursWorked) : NaN;
     out.push({
       employeeId: open.employeeId, day: operationalDayOf(open.recordedAt), inAt: open.recordedAt, outAt: r.recordedAt,
-      hours: round2(Number.isFinite(rec) && rec > 0 ? rec : real), countable: !isFlaggedPonto(open, r),
+      // a mesma regra do ordenado (shared/pontoHours.ts)
+      hours: pontoShiftHours({ inRec: open, outRec: r, realHours: real }), countable: !isFlaggedPonto(open, r),
     });
     open = null;
   }
