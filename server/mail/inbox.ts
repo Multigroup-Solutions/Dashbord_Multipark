@@ -714,12 +714,7 @@ export async function entityTimeline(viewer: MailViewer, type: MailLinkType, raw
         const k = m.rfcMessageId ? String(m.rfcMessageId) : `id:${m.id}`;
         if (seen.has(k)) continue;
         seen.add(k);
-        const a = allowed.get(Number(m.threadId))!;
-        items.push({
-          kind: "email", id: `m${m.id}`, threadId: Number(m.threadId), at: m.sentAt ?? null, direction: m.direction === "out" ? "out" : "in",
-          who: m.fromName || m.fromEmail || "", subject: m.subject ?? "", text: String(m.text || m.snippet || "").replace(/\n>.*$/gms, "").trim().slice(0, 2000),
-          source: a.label, link: a.canOpen ? (a.mailboxKey ? `/comunicacao?caixa=${encodeURIComponent(a.mailboxKey)}&t=${m.threadId}` : `/comunicacao/meu-email?t=${m.threadId}`) : null,
-        });
+        items.push(emailTimelineItem(m, allowed.get(Number(m.threadId))!));
       }
     }
   }
@@ -757,6 +752,26 @@ export async function entityTimeline(viewer: MailViewer, type: MailLinkType, raw
   }
   items.sort((a, b) => String(b.at ?? "").localeCompare(String(a.at ?? "")));
   return { items: items.slice(0, 200) };
+}
+
+/** Texto que aparece na linha do tempo no lugar de um email que quem vê não pode abrir. */
+export const TIMELINE_NO_ACCESS_TEXT = "Sem acesso ao conteúdo (email de outra caixa ou pessoal).";
+
+/**
+ * Um email na linha do tempo. Quem não pode abrir a conversa (email pessoal de
+ * outra pessoa, caixa que não vê) fica só a saber que houve um email — quem,
+ * quando e de onde —, SEM assunto nem texto. PURA.
+ */
+export function emailTimelineItem(
+  m: { id: unknown; threadId: unknown; sentAt?: string | null; direction?: string | null; fromName?: string | null; fromEmail?: string | null; subject?: string | null; text?: string | null; snippet?: string | null },
+  a: { label: string; canOpen: boolean; mailboxKey: string | null },
+): TimelineItem {
+  const base = { kind: "email" as const, id: `m${m.id}`, threadId: Number(m.threadId), at: m.sentAt ?? null, direction: (m.direction === "out" ? "out" : "in") as "in" | "out", who: m.fromName || m.fromEmail || "", source: a.label };
+  if (!a.canOpen) return { ...base, subject: "", text: TIMELINE_NO_ACCESS_TEXT, link: null };
+  return {
+    ...base, subject: m.subject ?? "", text: String(m.text || m.snippet || "").replace(/\n>.*$/gms, "").trim().slice(0, 2000),
+    link: a.mailboxKey ? `/comunicacao?caixa=${encodeURIComponent(a.mailboxKey)}&t=${m.threadId}` : `/comunicacao/meu-email?t=${m.threadId}`,
+  };
 }
 
 export interface TimelineItem {
