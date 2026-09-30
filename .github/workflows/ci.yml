@@ -1,0 +1,41 @@
+# CI de cada PR (e do main): tipos, testes, build do cliente e da função da
+# Vercel. Sem segredos nem BD — os testes usam fakes. O Node é o da Vercel (22).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Instalar (lockfile congelado)
+        run: pnpm install --frozen-lockfile
+      - name: Tipos
+        run: pnpm check
+      - name: Testes
+        run: pnpm vitest run
+      - name: Build do cliente e do servidor
+        run: pnpm build
+      - name: Build da função da Vercel
+        run: pnpm build:api
+      - name: A função arranca (import do bundle)
+        run: node -e "import('./api/index.js').then(() => console.log('api/index.js ok'))"
