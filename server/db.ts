@@ -3432,6 +3432,30 @@ export async function getPartnerships(filters?: { partnerType?: string; status?:
  * de Lisboa, no âmbito de cidade). null se a BD deles não responder — nesse
  * caso os registos ligados ficam com a regra antiga (e a página avisa).
  */
+/**
+ * Outros ids da Multipark de cada registo (aliases `multipark_partner_id`, ex.:
+ * registos juntos) → somam-se na faturação. Um alias que é o id PRINCIPAL de
+ * outro registo ativo fica de fora (senão contava a dobrar).
+ */
+async function loadMpPartnerAliases(): Promise<Map<number, string[]>> {
+  const out = new Map<number, string[]>();
+  const db = await getDb();
+  if (!db) return out;
+  // lidas à parte (sem JOIN: as duas tabelas têm collations diferentes)
+  const rows = ((await db.execute(sql`SELECT partnershipId AS pid, aliasValue AS v FROM partner_aliases WHERE aliasType = 'multipark_partner_id'`)) as any)[0] as any[];
+  const mains = ((await db.execute(sql`SELECT id, multiparkPartnerId AS v FROM partnerships WHERE multiparkPartnerId IS NOT NULL AND archivedAt IS NULL`)) as any)[0] as any[];
+  const mainOwner = new Map<string, number>((mains ?? []).map((m: any) => [String(m.v).trim(), Number(m.id)]));
+  for (const r of rows ?? []) {
+    const pid = Number(r.pid), v = String(r.v ?? "").trim();
+    if (!pid || !v) continue;
+    const owner = mainOwner.get(v);
+    if (owner != null && owner !== pid) continue;
+    if (!out.has(pid)) out.set(pid, []);
+    out.get(pid)!.push(v);
+  }
+  return out;
+}
+
 async function loadMpBilling(from: string, to: string) {
   const { readPartnerBillingLive } = await import("./multiparkDb/partnerBilling");
   const { scopedCityNamesLive } = await import("./cityScope");
@@ -3499,6 +3523,7 @@ export async function getPartnerInvoicingSummary(filters: {
   if (partnerRows.length === 0) return [];
   // Registos ligados à Multipark (0295): os números vêm de lá (saídas do período)
   const mpBilling = await loadMpBilling(filters.from, filters.to);
+  const mpAliases = mpBilling ? await loadMpPartnerAliases() : new Map<number, string[]>();
 
   const { parsePartnerConfig } = await import("../shared/partnerTypes");
 
@@ -3634,7 +3659,7 @@ export async function getPartnerInvoicingSummary(filters: {
     }
     // enterprise / campanha_propria / outro → não há a faturar automático
 
-    const mp = mpBilling ? recordBillingFromMp(p, mpBilling, filters.from, filters.to) : null;
+    const mp = mpBilling ? recordBillingFromMp({ ...p, aliasPartnerIds: mpAliases.get(p.id) }, mpBilling, filters.from, filters.to) : null;
     if (mp) {
       displayBookingsCount = mp.bookingsCount;
       displayRevenue = mp.revenueGross;
@@ -3772,6 +3797,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
   }
 
   const mpBilling = await loadMpBilling(filters.from, filters.to);
+  const mpAliases = mpBilling ? await loadMpPartnerAliases() : new Map<number, string[]>();
   const partners = partnerRows.map((p) => {
     const cfg = parsePartnerConfig(p.notes ?? null);
     const cashbackPercent = Number(cfg.cashbackPercent ?? 0);
@@ -3806,7 +3832,7 @@ export async function getPartnerInvoicingDetailByType(filters: {
       aFaturar = bk.revenue;
     }
 
-    const mp = mpBilling ? recordBillingFromMp(p, mpBilling, filters.from, filters.to) : null;
+    const mp = mpBilling ? recordBillingFromMp({ ...p, aliasPartnerIds: mpAliases.get(p.id) }, mpBilling, filters.from, filters.to) : null;
     if (mp) {
       bookingsCount = mp.bookingsCount;
       revenueGross = mp.revenueGross;
@@ -4211,7 +4237,7 @@ export async function getSupervisorDayDashboard(date: string) {
 // Alguns "agentes" Multipark são agências de viagens/parceiros, não
 // colaboradores. Este mapa liga o agentName ao partnership. Tabela on-demand.
 let agentPartnerEnsured = false;
-async function ensureAgentPartnerTable() {
+export async function ensureAgentPartnerTable() {
   if (agentPartnerEnsured) return;
   const db = await getDb();
   if (!db) return;

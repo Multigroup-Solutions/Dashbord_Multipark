@@ -8,6 +8,8 @@
  * atravessa a meia-noite, o fim de semana ou o mês é dividido corretamente.
  */
 
+import { pontoShiftHours } from "../../shared/pontoHours";
+
 export interface TimeRecordLike {
   id: number;
   type: "check_in" | "check_out";
@@ -109,11 +111,12 @@ export function pairShifts(records: TimeRecordLike[]): { shifts: Shift[]; orphan
     }
     if (!open) { orphans.push(r); continue; }
     const inD = parseDbDate(open.recordedAt), outD = parseDbDate(r.recordedAt);
-    const recHours = r.hoursWorked != null ? Number(r.hoursWorked) : NaN;
     const realHours = Math.max(0, (outD.getTime() - inD.getTime()) / 3600000);
-    // a saída pode ter sido "cortada a 12h" (hoursWorked < real): respeita o registo
-    const hours = Number.isFinite(recHours) && recHours > 0 ? Math.min(recHours, Math.max(realHours, recHours)) : Math.round(realHours * 100) / 100;
-    const effectiveOut = Number.isFinite(recHours) && recHours > 0 && recHours < realHours - 0.01 ? new Date(inD.getTime() + recHours * 3600000) : outD;
+    // regra única (shared/pontoHours.ts): aprovado com horas corrigidas (mesmo 0)
+    // vale; a saída "cortada a 12h" também; senão a diferença real
+    const hours = pontoShiftHours({ inRec: open, outRec: r, realHours });
+    // horas abaixo das reais: a divisão noite/fim de semana só conta até lá
+    const effectiveOut = hours < realHours - 0.01 ? new Date(inD.getTime() + hours * 3600000) : outD;
     const sp = splitShiftHours(inD, effectiveOut);
     const { day } = lisbonParts(inD);
     shifts.push({
