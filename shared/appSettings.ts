@@ -688,10 +688,10 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "tick", label: "Agendador (cron-job.org → /api/cron/tick)", intervalMinutes: 5, workflow: "cron-job.org" },
   // 5 em 5 min sem push; de hora a hora (rede de segurança) com o push do Gmail saudável → "parado" só depois de 2 h.
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 60, workflow: "tick" },
-  { name: "multipark-deliveries", label: "Fila do webhook Multipark", intervalMinutes: 15, workflow: "tick" },
+  { name: "multipark-deliveries", label: "Fila do webhook Multipark (repescagem)", intervalMinutes: 60, workflow: "tick" },
   { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },
   // Google por eventos: repetição de 15 em 15 min, rede de segurança de 4 em 4 h, renovação diária dos canais.
-  { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 15, workflow: "tick" },
+  { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 60, workflow: "tick" },
   { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },
   { name: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "tick" },
@@ -700,16 +700,16 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
   // CRM (27 set 2026): fichas de cliente a partir das reservas + sugestões de fusão.
-  { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 15, workflow: "tick" },
+  { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 1440, workflow: "tick" },
   { name: "crm-suggestions", label: "CRM: sugestões para juntar fichas", intervalMinutes: 1440, workflow: "tick" },
   { name: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", intervalMinutes: 30, workflow: "tick" },
   // Serviços extra das reservas → tarefas (BD Multipark ao vivo, saídas nas próximas 48 h).
-  { name: "services-tasks", label: "Serviços das reservas → tarefas", intervalMinutes: 15, workflow: "tick" },
+  { name: "services-tasks", label: "Serviços: aviso das tarefas de amanhã", intervalMinutes: 1440, workflow: "tick" },
   // Caixa, fase 2 (29 set 2026): varredura do dinheiro e fecho do dia → "Correção de caixa".
-  { name: "crm-auto-merge", label: "CRM: juntar sozinho as fichas óbvias", intervalMinutes: 30, workflow: "tick" },
+  { name: "crm-auto-merge", label: "CRM: juntar sozinho as fichas óbvias", intervalMinutes: 1440, workflow: "tick" },
   { name: "partner-mp-sync", label: "Parcerias: ligar à Multipark", intervalMinutes: 1440, workflow: "tick" },
   { name: "partner-close", label: "Parceiros: comparar o fecho do mês", intervalMinutes: 1440, workflow: "tick" },
-  { name: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", intervalMinutes: 10, workflow: "tick" },
+  { name: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", intervalMinutes: 180, workflow: "tick" },
   { name: "ops-presence", label: "Operacional: a trabalhar sem PDA ou Zello ligado", intervalMinutes: 5, workflow: "tick" },
   { name: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", intervalMinutes: 1440, workflow: "tick" },
   { name: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", intervalMinutes: 1440, workflow: "tick" },

@@ -2293,6 +2293,8 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	aiUrgency: varchar({ length: 10 }),
 	aiTriagedAt: timestamp({ mode: 'string' }),
 	aiTriageDueAt: timestamp({ mode: 'string' }),
+	// Migração 0315 — falhas seguidas da triagem (à 3.ª desiste até chegar mensagem nova)
+	aiTriageFails: int().default(0).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },

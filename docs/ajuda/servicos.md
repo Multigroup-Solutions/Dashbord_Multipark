@@ -15,4 +15,6 @@ Menu **Operações → Serviços**: os serviços extra das reservas (lavagens, c
 **Tarefas automáticas dos serviços**
 - Em **Definições → Parâmetros → Serviços → tarefas** (admin) escolhe-se, por cidade e por tipo de serviço, se cada reserva com esse serviço gera uma tarefa e quem é o responsável (opcional).
 - A tarefa tem prazo na **saída do carro** e é atribuída a esse responsável e sempre aos **team leaders do turno da saída e do turno anterior**.
-- A verificação corre de 15 em 15 minutos, para as saídas das próximas 48 horas. A tarefa fecha sozinha quando a Multipark marca o serviço como feito, quando o serviço sai da reserva ou quando a reserva é cancelada.
+- A tarefa nasce **quando a reserva chega** (webhook da Multipark), seja qual for o dia da saída, e vai logo para o **Google Tarefas** dos responsáveis. Se a reserva mudar (hora de saída, serviço retirado, cancelada), a tarefa acompanha no próximo webhook.
+- Todos os dias às **18:00** há uma volta de segurança (saídas das próximas 48 horas; junta os team leaders que entretanto ficaram na escala) e os **team leaders e supervisores da cidade** recebem o aviso **Serviços: tarefas de amanhã** (sino e email) com a lista das tarefas das saídas do dia seguinte.
+- A tarefa fecha sozinha quando a Multipark marca o serviço como feito, quando o serviço sai da reserva ou quando a reserva é cancelada.

@@ -250,7 +250,7 @@ async function readChunks(ids: readonly string[], deadlineAt: number) {
   return { live, missing, partial };
 }
 
-/** Varredura de 10 em 10 min: alteradas desde a última + ativas + saídas de 48 h + casos abertos. */
+/** Varredura de 3 em 3 h: alteradas desde a última + ativas + saídas de 48 h + casos abertos. */
 export async function runCashSweep(o: { deadlineAt: number; nowMs?: number }): Promise<SweepReport> {
   const nowMs = o.nowMs ?? Date.now();
   pendingAlerts = [];

@@ -245,6 +245,16 @@ export function mapWhatsappUrgency(raw: unknown): WhatsappUrgency {
 
 /** Intervalo mínimo entre duas triagens da mesma conversa. */
 export const WHATSAPP_TRIAGE_DEBOUNCE_MINUTES = 5;
+/**
+ * Falhas seguidas da triagem de uma conversa até se desistir (fica para
+ * triagem à mão; uma mensagem nova do cliente volta a pôr o contador a 0).
+ * Antes (29 set 2026) repetia sem fim, de meia em meia hora, as mesmas conversas.
+ */
+export const WHATSAPP_TRIAGE_MAX_FAILS = 3;
+/** Depois de uma falha (já contada), volta a tentar? PURA. */
+export function whatsappTriageRetry(failsAfter: number): boolean {
+  return failsAfter < WHATSAPP_TRIAGE_MAX_FAILS;
+}
 
 /**
  * Debounce por conversa: triagem já (now) se a última foi há ≥ debounce;

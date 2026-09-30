@@ -9,7 +9,7 @@
  *    ninguém a marcou entretanto (`version`) — marcações durante uma
  *    corrida fazem-na correr outra vez, nunca se perdem;
  *  - falha → espera crescente (2, 4, 8… min, até 2 h) e o agendador
- *    (google-pending, de 15 em 15 min) repete; ao fim de 8 falhas desiste
+ *    (google-pending, de hora a hora) repete; ao fim de 8 falhas desiste
  *    (o google-sync de 4 em 4 h apanha);
  *  - heartbeat: Tarefas e Contactos (a Google não avisa) quando a pessoa
  *    abre o dashboard e de 5 em 5 min enquanto o tem aberto e visível;

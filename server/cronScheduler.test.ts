@@ -286,9 +286,10 @@ describe("registo dos trabalhos", () => {
   it("cadências pedidas (tabela do Jorge)", () => {
     const c = Object.fromEntries(TICK_JOBS.map((j) => [j.key, describeCadence(j.cadence)]));
     expect(c).toMatchObject({
-      "mail-sync": "a cada 5 min", "multipark-deliveries": "a cada 15 min", "ai-comms": "a cada 15 min", "google-sync": "a cada 4 h", "google-pending": "a cada 15 min", "google-watch-renew": "diário a partir das 03:40",
+      "mail-sync": "a cada 5 min", "multipark-deliveries": "de hora a hora", "ai-comms": "a cada 15 min", "google-sync": "a cada 4 h", "google-pending": "de hora a hora", "google-watch-renew": "diário a partir das 03:40",
       "extras-auto": "de hora a hora", "identity-sweep": "de hora a hora",
-      "crm-sync": "a cada 15 min", "crm-suggestions": "diário a partir das 05:15", "crm-pro-sync": "a cada 30 min",
+      "crm-sync": "diário a partir das 04:00", "crm-auto-merge": "diário a partir das 05:05",
+      "services-tasks": "diário a partir das 18:00", "cash-sweep": "a cada 3 h", "cash-close": "diário a partir das 06:15", "crm-suggestions": "diário a partir das 05:15", "crm-pro-sync": "a cada 30 min",
       "extras-schedule": "de hora a hora (08h–23h)",
       "daily-ops": "diário a partir das 04:30", "zello-sameday": "diário das 23:15 às 23:55", "rh-docs-weekly": "semanal, segunda a partir das 04:45", "extras-pressure": "diário a partir das 04:45", "ops-briefing": "diário a partir das 07:30", "web-analytics": "diário a partir das 09:00",
       "google-ads": "diário a partir das 05:45", "meta-ads": "diário a partir das 05:45",

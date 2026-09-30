@@ -241,15 +241,22 @@ export async function partnerCloseCron(): Promise<CronJobRun> {
 // ─── Serviços das reservas → tarefas ─────────────────────────────────────────
 
 /**
- * Serviços extra das reservas (BD Multipark ao vivo) → tarefas, pelas regras
- * de Definições → Parâmetros → "Serviços → tarefas" (server/serviceTasks.ts).
+ * Serviços extra → tarefas, 1×/dia às 18:00 (as tarefas nascem no webhook da
+ * reserva): volta de segurança da janela de 48 h (junta os team leaders que
+ * entretanto foram escalados) e, no fim, o aviso das tarefas de AMANHÃ aos
+ * team leaders e supervisores da cidade (server/serviceTasks.ts).
  * Idempotente; sem BD da Multipark ou sem nenhum tipo ligado → nota (ok).
  */
 export async function serviceTasksCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
-    const { runServiceTasks } = await import("./serviceTasks");
-    const r = await runServiceTasks({ deadlineAt: o.deadlineAt - 2_000 });
-    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done };
+    const { runServiceTasks, sendServiceTasksTomorrowAlert } = await import("./serviceTasks");
+    const r = await runServiceTasks({ deadlineAt: o.deadlineAt - 4_000 });
+    let tomorrow: unknown = null;
+    if (r.done) {
+      try { tomorrow = await sendServiceTasksTomorrowAlert(); }
+      catch (err) { tomorrow = { error: msg(err, 200) }; }
+    }
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, tomorrow }, done: r.done };
   } catch (err) {
     console.error("[cron services-tasks] falhou:", msg(err, 200));
     return fail(err);
@@ -257,7 +264,7 @@ export async function serviceTasksCron(o: { deadlineAt: number }): Promise<CronJ
 }
 
 /**
- * Caixa, fase 2 (detetar): varredura de 10 em 10 min — reservas alteradas,
+ * Caixa, fase 2 (detetar): varredura de 3 em 3 h (Jorge, 29 set 2026: a caixa só vem depois; o fecho das 06:15 apanha o resto) — reservas alteradas,
  * ativas e saídas de 48 h dos nossos parques, lidas ao vivo; retratos, regras
  * e casos da "Correção de caixa" (server/cashSweep.ts). Sem BD da Multipark → 503.
  */

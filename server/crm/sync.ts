@@ -296,9 +296,33 @@ export async function healMergedLeftovers(db: any): Promise<number[]> {
 async function runOneBatch(db: any, cursor: { at: string; id: string }, generic: Set<string>, limit: number) {
   const raw = await loadBatch(cursor, limit);
   if (!raw.length) return null;
-  const rows = raw.map(toBookingRow);
   const last = raw[raw.length - 1];
-  const nextCursor = `${last.cursorAt}|${last.id}`;
+  const r = await applyCrmRows(db, raw, generic);
+  return { cursor: `${last.cursorAt}|${last.id}`, ...r };
+}
+
+/**
+ * Só as reservas dadas (as do WEBHOOK, Jorge 29 set 2026: a ficha nasce quando
+ * a reserva chega; a volta das 04:00 é a rede de segurança). Não mexe no
+ * cursor. Reserva que não é de cliente nosso → nada. Idempotente.
+ */
+export async function syncCrmForBookings(ids: readonly string[]): Promise<{ rows: number; created: number; linked: number; kept: number }> {
+  const clean = [...new Set(ids.map((x) => String(x ?? "").trim()).filter(Boolean))];
+  if (!clean.length) return { rows: 0, created: 0, linked: 0, kept: 0 };
+  const { getDb } = await import("../db");
+  const db = await getDb();
+  if (!db) throw new Error("BD do dashboard indisponível.");
+  const [{ buildCrmRowsByIdsSql, mapCrmBatchRow }, { multiparkDbQuery }] = await Promise.all([import("../multiparkDb/crmLive"), import("../multiparkDb/client")]);
+  const { sql: q, params } = buildCrmRowsByIdsSql({ ids: clean, ourParkIds: await ourParkIds() });
+  const raw = (await multiparkDbQuery<Record<string, unknown>>(q, params)).map(mapCrmBatchRow);
+  if (!raw.length) return { rows: 0, created: 0, linked: 0, kept: 0 };
+  const r = await applyCrmRows(db, raw, await loadGenericEmails(db));
+  return { rows: r.rows, created: r.plan.stats.created, linked: r.plan.stats.linked, kept: r.plan.stats.kept };
+}
+
+/** Decide e grava as fichas de um conjunto de reservas (lote do cursor ou as do webhook). */
+async function applyCrmRows(db: any, raw: import("../multiparkDb/crmLive").CrmBatchRow[], generic: Set<string>) {
+  const rows = raw.map(toBookingRow);
 
   const linkRows = new Map<string, number>();
   for (const part of chunks(rows.map((r) => r.externalId), 800)) {
@@ -392,7 +416,7 @@ async function runOneBatch(db: any, cursor: { at: string; id: string }, generic:
   // 5) métricas das fichas tocadas (+ contagem de reservas por carro)
   const touchedIds = [...new Set([...plan.links.map((l) => real(l.clientId)), ...healed].filter(Boolean))];
   await recomputeMetrics(db, touchedIds);
-  return { cursor: nextCursor, rows: rows.length, plan };
+  return { rows: rows.length, plan };
 }
 
 /**

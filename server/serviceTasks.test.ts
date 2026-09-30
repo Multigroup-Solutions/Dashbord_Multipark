@@ -11,7 +11,7 @@ vi.mock("./multiparkDb/client", async (importOriginal) => {
 
 import { assertReadOnlySql } from "./multiparkDb/client";
 import {
-  buildExtraServiceCatalogSql, buildServiceLinesByIdsSql, buildServiceLinesWindowSql, runServiceTasks, type ServiceTasksDeps,
+  buildExtraServiceCatalogSql, buildServiceLinesByIdsSql, buildServiceLinesWindowSql, runServiceTasks, runServiceTasksForBookings, tomorrowAlertBody, type ServiceTasksDeps,
 } from "./serviceTasks";
 import {
   checkoutShifts, groupServiceTypes, parseServiceTaskKey, planServiceTasks, serviceTaskAssignees, serviceTaskKey, serviceTypeOf,
@@ -79,8 +79,10 @@ function fakeStore(o: { rules: ServiceTaskRules; teamLeaders?: TeamLeaderRow[] }
     updateTask: async (id, p) => { const t = tasks.get(id)!; t.dueDate = mysql(p.dueMs); t.title = p.title; t.description = p.description; },
     addAssignees: async (id, ids) => { tasks.get(id)!.assigneeIds.push(...ids); },
     closeTask: async (id, body) => { const t = tasks.get(id)!; if (t.taskStatus !== "done") { t.taskStatus = "done"; comments.push({ taskId: id, body }); } },
+    syncGoogle: (ids) => { google.push(...ids); },
   };
-  return { tasks, comments, deps };
+  const google: number[] = [];
+  return { tasks, comments, deps, google };
 }
 
 const RULES_RESP: ServiceTaskRules = { lisbon: { lavagem: { enabled: true, responsibleEmployeeId: 500 } }, porto: {}, faro: {} };
@@ -337,16 +339,62 @@ describe("runServiceTasks — cancelamento e fecho", () => {
 // ─── Agendador, endpoint e ajuda ────────────────────────────────────────────
 
 describe("agendador", () => {
-  it("services-tasks de 15 em 15 min, com função, entrada nos crons e endpoint manual", async () => {
+  it("services-tasks 1×/dia às 18:00 (as tarefas nascem no webhook), com função, entrada nos crons e endpoint manual", async () => {
     const spec = TICK_JOBS.find((j) => j.key === "services-tasks")!;
-    expect(describeCadence(spec.cadence)).toBe("a cada 15 min");
+    expect(describeCadence(spec.cadence)).toBe("diário a partir das 18:00");
     expect(spec.maxMs).toBeLessThan(50_000);
-    expect(CRON_JOBS.find((j) => j.name === "services-tasks")).toMatchObject({ intervalMinutes: 15, workflow: "tick" });
+    expect(CRON_JOBS.find((j) => j.name === "services-tasks")).toMatchObject({ intervalMinutes: 1440, workflow: "tick" });
     const { JOB_RUNNERS } = await import("./cronScheduler");
     expect(typeof JOB_RUNNERS["services-tasks"]).toBe("function");
     const api = readFileSync(resolve(root, "server/_core/api-entry.ts"), "utf8");
     expect(api).toMatch(/app\.get\("\/api\/cron\/services-tasks"[\s\S]{0,120}cronAuthOk\(req\)/);
     const help = readFileSync(resolve(root, "docs/ajuda/agendador.md"), "utf8");
     expect(help).toContain("services-tasks");
+  });
+});
+
+// ─── Webhook: a tarefa nasce quando a reserva chega ─────────────────────────
+
+describe("runServiceTasksForBookings (webhook)", () => {
+  it("cria a tarefa da reserva que chegou, mesmo com a saída daqui a semanas, e manda-a para o Google", async () => {
+    // saída a 20 out (fora das 48 h da volta diária)
+    fakeMultipark(() => [row({ booking_id: "bkW", check_out: "2026-10-20 08:00:00" }), row({ booking_id: "bkOther" })]);
+    const s = fakeStore({ rules: RULES_RESP });
+    const r = await runServiceTasksForBookings(["bkW"], { deadlineAt: Date.now() + 30_000, now: NOW }, s.deps);
+    expect(r.created).toBe(1);
+    expect([...s.tasks.values()].map((t) => t.sourceKey)).toEqual(["svc:bkW:l1"]);
+    expect([...s.tasks.values()][0].assigneeIds).toEqual([500]);
+    expect(s.google).toEqual([1]);
+    // o mesmo webhook outra vez: nada de novo
+    const again = await runServiceTasksForBookings(["bkW"], { deadlineAt: Date.now() + 30_000, now: NOW }, s.deps);
+    expect(again.created).toBe(0);
+    expect(s.tasks.size).toBe(1);
+  });
+
+  it("reserva cancelada no webhook fecha a tarefa; só toca nas reservas dadas", async () => {
+    let status = "BOOKED";
+    fakeMultipark(() => [row({ booking_id: "bkC", status }), row({ booking_id: "bkKeep", line_id: "l9" })]);
+    const s = fakeStore({ rules: RULES_RESP });
+    await runServiceTasksForBookings(["bkC", "bkKeep"], { deadlineAt: Date.now() + 30_000, now: NOW }, s.deps);
+    expect(s.tasks.size).toBe(2);
+    status = "CANCELLED";
+    const r = await runServiceTasksForBookings(["bkC"], { deadlineAt: Date.now() + 30_000, now: NOW }, s.deps);
+    expect(r.closed.cancelled).toBe(1);
+    expect([...s.tasks.values()].filter((t) => t.taskStatus === "done").map((t) => t.sourceKey)).toEqual(["svc:bkC:l1"]);
+  });
+
+  it("sem tipos ligados e sem tarefas → não lê a Multipark", async () => {
+    const s = fakeStore({ rules: { lisbon: {}, porto: {}, faro: {} } });
+    const r = await runServiceTasksForBookings(["bkX"], { deadlineAt: Date.now() + 30_000, now: NOW }, s.deps);
+    expect(r.skipped).toMatch(/gera tarefa/);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("aviso de amanhã: hora de Lisboa, por ordem de saída", () => {
+    const body = tomorrowAlertBody([
+      { id: 2, title: "Lavagem · AP-2", dueDate: "2026-09-30 16:00:00", projectId: 11 },
+      { id: 1, title: "Lavagem · AP-1", dueDate: "2026-09-30 06:30:00", projectId: 11 },
+    ]);
+    expect(body).toBe("07:30 · Lavagem · AP-1\n17:00 · Lavagem · AP-2");
   });
 });
