@@ -19,7 +19,7 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { requireAccess, canAccess, isOwnOnly, userIdsAtOrBelowInCity, employeeBelowCondition } from "./_core/access";
 import { ROLE_RANK as ACCESS_ROLE_RANK, MODULE_IDS, can, scopeFor, canSeeFinanceTotalsFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId, type Action as AccessAction } from "../shared/access";
 import { normalizeEmail } from "@shared/email";
-import { USER_ROLES, superAdminGuard, inviteCompletionError } from "./userAdminRules";
+import { USER_ROLES, superAdminGuard, inviteCompletionError, linkRoleGuard } from "./userAdminRules";
 import {
   USER_DIRECTORY_CITY,
   USER_DIRECTORY_EMPLOYEE,
@@ -497,6 +497,13 @@ const EXPENSE_LIST_INPUT = z.object({
 }).optional();
 
 /** Campos cuja alteração muda o valor financeiro (invalidam uma aprovação). */
+/** O comprador de uma despesa tem de existir e ser das cidades de quem lança. */
+async function assertExpenseBuyer(buyerId: number | null | undefined): Promise<void> {
+  if (buyerId == null) return;
+  if (!(await getEmployeeById(buyerId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Comprador não encontrado." });
+  await assertEmployeeAccess(buyerId);
+}
+
 const EXPENSE_FINANCIAL_FIELDS = ["amount", "currency", "expenseDate", "projectId", "categoryId", "supplier", "supplierNif", "documentNumber", "paidBy", "buyerId"] as const;
 
 function cleanText(v: string | null | undefined): string | null | undefined {
@@ -586,6 +593,8 @@ async function assertOwnOrScopedEmployee(user: { id: number; role: string }, emp
 /** Documentos: quem mexe nos dados pessoais da ficha; sem ficha, só admin+ (checklists vazias). */
 export async function assertCanViewDocuments(user: { id: number; role: string }, employeeId: number, message: string): Promise<void> {
   const viewer = await rhViewer(user);
+  // documentos de outra pessoa respeitam o módulo RH (incluindo um override "nenhum")
+  if (!isOwn(viewer, employeeId)) requireAccess(user as any, "rh", "view");
   const ref = await rhEmployeeRef(employeeId);
   const allowed = ref ? canViewDocuments(viewer, ref) : isRhAdmin(viewer);
   if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message });
@@ -1771,6 +1780,7 @@ export const appRouter = router({
         if (input.categoryId && !(await categoryExists(input.categoryId))) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Categoria inexistente" });
         }
+        await assertExpenseBuyer(input.buyerId);
         // Quem suportou: se há comprador (colaborador) e não foi dito, assume-se
         // que foi ele (dá origem a reembolso na fase de pagamentos).
         const paidBy = input.paidBy ?? (input.buyerId ? "employee" : "company");
@@ -1872,7 +1882,7 @@ export const appRouter = router({
           if (v !== undefined) patch[k] = v;
         }
         if (input.paymentMethod !== undefined) patch.paymentMethod = input.paymentMethod;
-        if (input.buyerId !== undefined) patch.buyerId = input.buyerId;
+        if (input.buyerId !== undefined) { await assertExpenseBuyer(input.buyerId); patch.buyerId = input.buyerId; }
         if (input.paidBy !== undefined) patch.paidBy = input.paidBy;
         if (input.categoryId !== undefined) {
           if (input.categoryId != null && !(await categoryExists(input.categoryId))) {
@@ -2714,8 +2724,9 @@ export const appRouter = router({
         }
         // role da conta de cada ficha: fichas de admin/super_admin ficam
         // protegidas de quem está abaixo (dados pessoais escondidos).
+        // (também para admins: a ficha de um super_admin fica mascarada a um admin, como no detalhe)
         const roleByUserId = new Map<number, string>();
-        if (!isRhAdmin(viewer)) for (const u of await getAllUsers()) roleByUserId.set(u.id, u.role);
+        for (const u of await getAllUsers()) roleByUserId.set(u.id, u.role);
         return sanitizeEmployeeRows(viewer, rows as any[], (emp) => (emp.userId != null ? roleByUserId.get(emp.userId) : null));
       }),
 
@@ -2723,6 +2734,8 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
         const viewer = await rhViewer(ctx.user);
+        // A própria ficha vê-se sempre; as outras respeitam o módulo RH (incluindo um override "nenhum").
+        if (!isOwn(viewer, input.id)) requireAccess(ctx.user, "rh", "view");
         const result = await getEmployeeById(input.id);
         if (!result) return result;
         const ref: EmployeeRef = { id: result.employee.id, projectId: result.employee.projectId ?? null, role: await employeeAccountRole(result.employee.userId ?? null) };
@@ -2998,6 +3011,14 @@ export const appRouter = router({
         }
         const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
         const meta = deactivation ? { ...deactivation, byUserId: ctx.user.id } : null;
+        // Desativar a ficha desativa a conta: vale a mesma guarda do ecrã Utilizadores
+        // (não te desativas a ti próprio nem tiras o último super_admin).
+        if (!input.isActive && found.employee.userId) {
+          const acct = await getUserById(found.employee.userId);
+          const guard = acct ? superAdminGuard(ctx.user.id, acct, null, await countActiveSuperAdmins()) : null;
+          if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
+          if (acct && acct.id === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes desativar a tua própria ficha." });
+        }
         await updateEmployee(input.id, {
           isActive: input.isActive ? 1 : 0,
           ...deactivationColumns(input.isActive, meta),
@@ -3710,7 +3731,7 @@ export const appRouter = router({
         .input(z.object({ id: z.number(), decision: z.enum(["confirmed", "dismissed"]), note: z.string().max(200).optional() }))
         .mutation(async ({ ctx, input }) => {
           requireAccess(ctx.user, "rh", "edit");
-          const r = await reviewPenalty(input.id, input.decision, ctx.user.id, input.note ?? null);
+          const r = await reviewPenalty(input.id, input.decision, ctx.user, input.note ?? null);
           await logActivity({ userId: ctx.user.id, action: input.decision === "confirmed" ? "confirm_penalty" : "dismiss_penalty", entity: "employee_penalty", entityId: input.id, details: `${input.decision}${input.note ? ` — ${input.note}` : ""} · pontos ${r.points}${r.blocked ? " · BLOQUEADO" : ""}` });
           return r;
         }),
@@ -5712,6 +5733,8 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "perdidos", "edit");
       await loadLostInScope(input.itemId);
+      // o colaborador anexado tem de ser das cidades de quem anexa (pode vir a levar pontos)
+      if (input.employeeId) await assertEmployeeAccess(input.employeeId);
       const { attachLostFoundDriver } = await import("./db");
       const id = await attachLostFoundDriver({ ...input, attachedById: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "attach_driver", entity: "lost_found", entityId: input.itemId, details: `Condutor anexado: ${input.driverName}` });
@@ -5747,6 +5770,7 @@ export const appRouter = router({
       try {
         await setLostDriverAccountability(input.linkId, { costAmount: input.costAmount, points: input.points }, ctx.user.id);
       } catch (e: any) {
+        if (e instanceof TRPCError) throw e;
         throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro" });
       }
       await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: link.itemId, details: `Responsabilização ${link.driverName}: custo=${input.costAmount ?? "—"} pontos=${input.points ?? "—"}` });
@@ -5761,8 +5785,9 @@ export const appRouter = router({
         await loadLostInScope(link.itemId);
         const { reviewLostDriverPoints } = await import("./caseOps");
         try {
-          return await reviewLostDriverPoints(input.linkId, input.decision, ctx.user.id);
+          return await reviewLostDriverPoints(input.linkId, input.decision, ctx.user);
         } catch (e: any) {
+          if (e instanceof TRPCError) throw e;
           throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Erro" });
         }
       }),
@@ -7890,6 +7915,14 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
         await assertEmployeeAccess(input.employeeId);
+        // A conta extra herda o papel da principal: não se pode subir ninguém acima de quem liga
+        // (nem despromover um super_admin) por aqui.
+        const linked = await getUserById(input.userId);
+        if (!linked) throw new TRPCError({ code: "NOT_FOUND", message: "Utilizador não encontrado" });
+        const fichaUserId = (await getEmployeeById(input.employeeId))?.employee.userId ?? null;
+        const primary = fichaUserId && fichaUserId !== input.userId ? await getUserById(fichaUserId) : null;
+        const guard = linkRoleGuard({ actor: ctx.user, linked, primaryRole: primary?.role ?? null, activeSuperAdminCount: await countActiveSuperAdmins() });
+        if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
         const { linkEmployeeToUser } = await import("./identityScreen");
         let mode: "principal" | "extra";
         try {

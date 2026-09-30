@@ -16,6 +16,7 @@ Objetos esquecidos pelos clientes nos carros.
 **Tratar**
 - Quadro por estados: Novo → Investigação → Encontrado → Devolvido/Fechado.
 - No caso podes anexar o condutor/agente, trocar mensagens e enviar email ao cliente.
+- **Pontos a um condutor**: quem gere o caso propõe; **só um supervisor (ou acima) confirma**, e nunca quem os propôs. Aos 3 pontos confirmados o login da pessoa fica bloqueado. Só dá para anexar e propor pontos a pessoas das tuas cidades.
 - No cartão "Dados da Reserva", **Abrir ficha da reserva** mostra tudo sobre a reserva, lido em tempo real da Multipark: quem mexeu no carro e quando, onde está, vídeo e assinaturas (ver "Ficha da reserva").
 - Ao devolver, regista a devolução com a **foto da entrega**.
 - **Cruzamento de condutores** mostra condutores que aparecem em vários casos (só Team Leader e acima).

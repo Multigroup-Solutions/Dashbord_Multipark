@@ -197,3 +197,18 @@ export type EmployeeAccess = ReturnType<typeof employeeAccess>;
 export function isRhAdmin(v: RhViewer): boolean {
   return rank(v.role) >= RANK.admin;
 }
+
+/**
+ * Pode `reviewer` confirmar/anular uma penalização (pontos)? Devolve o erro
+ * (PT-PT) ou null. Aos 3 pontos confirmados o login fica bloqueado, por isso:
+ *  - só supervisor ou acima (antes bastava editar Perdidos/RH — um team leader
+ *    propunha e confirmava);
+ *  - quem PROPÔS não confirma a própria proposta (pode anulá-la).
+ */
+export function penaltyReviewError(o: { reviewer: { id: number; role: string }; proposedById: number | null | undefined; decision: "confirmed" | "dismissed" }): string | null {
+  if (rank(o.reviewer.role) < RANK.supervisor) return "Só um supervisor (ou acima) confirma ou anula pontos.";
+  if (o.decision === "confirmed" && o.proposedById != null && o.proposedById === o.reviewer.id) {
+    return "Não podes confirmar pontos que tu próprio propuseste: pede a outro supervisor.";
+  }
+  return null;
+}

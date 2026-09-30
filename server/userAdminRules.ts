@@ -40,6 +40,34 @@ export function superAdminGuard(
   return null;
 }
 
+const RANK: Record<string, number> = { user: 0, extra: 1, condutor: 2, team_leader: 3, supervisor: 4, frontoffice: 5, backoffice: 5, admin: 6, super_admin: 7 };
+const rank = (r: string | null | undefined) => RANK[String(r ?? "")] ?? -1;
+
+/**
+ * Pode `actor` ligar a conta `linked` a uma ficha? Se a ficha já tem conta
+ * principal (`primaryRole`), a ligada entra como conta EXTRA e HERDA o papel
+ * da principal (a mesma pessoa, as mesmas permissões). Devolve o erro (PT-PT)
+ * ou null. Sem isto, um admin ligava o próprio login à ficha de um
+ * super_admin e ficava super_admin (ou despromovia um super_admin ao ligá-lo
+ * a uma ficha de papel mais baixo).
+ *  - super_admin pode tudo (o último super_admin continua protegido);
+ *  - ninguém mexe em contas acima de si;
+ *  - como extra, o papel herdado não pode ficar acima do de quem liga.
+ */
+export function linkRoleGuard(o: {
+  actor: { id: number; role: string };
+  linked: RoleChangeTarget;
+  primaryRole: string | null;
+  activeSuperAdminCount: number;
+}): string | null {
+  const becomes = o.primaryRole ?? o.linked.role; // principal: o papel não muda
+  if (o.actor.role !== "super_admin") {
+    if (rank(o.linked.role) > rank(o.actor.role)) return "Não podes ligar uma conta com um papel acima do teu.";
+    if (rank(becomes) > rank(o.actor.role)) return "Esta ficha é de alguém com um papel acima do teu: só um super_admin pode ligar contas a ela.";
+  }
+  return superAdminGuard(o.actor.id, o.linked, becomes, o.activeSuperAdminCount);
+}
+
 export interface InviteRow {
   email: string | null;
   inviteStatus: string;

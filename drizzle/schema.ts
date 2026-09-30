@@ -645,6 +645,8 @@ export const employeePenalties = mysqlTable("employee_penalties", {
 	status: mysqlEnum(['pending','confirmed','dismissed']).default('confirmed').notNull(),
 	reviewedById: int(),
 	reviewedAt: timestamp({ mode: 'string' }),
+	// 0320 — quem propôs (quem confirma tem de ser outra pessoa, supervisor+)
+	proposedById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [
