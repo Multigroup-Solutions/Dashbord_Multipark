@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // A função da Vercel carrega o sanitize-html por require(). Se a dependência
@@ -12,7 +12,8 @@ describe("sanitize-html no runtime da Vercel", () => {
     const sanitizeDir = dirname(req.resolve("sanitize-html/package.json"));
     const fromSanitize = createRequire(`${sanitizeDir}/index.js`);
     // Caminho que o require() escolhe (condição "require" dos exports).
-    const entry = fromSanitize.resolve("htmlparser2");
+    // Em Windows o caminho vem com barras invertidas: normaliza para "/" antes de o partir.
+    const entry = fromSanitize.resolve("htmlparser2").split(sep).join("/");
     const pkgDir = entry.slice(0, entry.lastIndexOf("/htmlparser2/") + "/htmlparser2".length);
     const pkg = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")) as { type?: string };
     // Em pacotes "type: module" só é CommonJS se o require cair num .cjs ou numa pasta commonjs.

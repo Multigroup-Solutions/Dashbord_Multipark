@@ -1,0 +1,2 @@
+# Fins de linha LF em todos os sistemas (os testes comparam ficheiros gerados).
+* text=auto eol=lf
