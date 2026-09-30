@@ -39,6 +39,9 @@ async function loadRecs(d: Db, ids: number[]): Promise<Map<number, Rec>> {
   }]));
 }
 
+/** O que a junção mudou num registo que saiu (mergeJson) — o "Separar" desfaz com isto. */
+interface MergeLog { aliasIds: number[]; agentNames: string[]; mpMovedToKeep: string | null; mpAliasId: number | null; mpCleared: string | null }
+
 export interface MergePreview {
   keep: { id: number; name: string; multiparkPartnerId: string | null };
   drops: Array<{ id: number; name: string; partnerType: string | null; multiparkPartnerId: string | null; aliases: number; agents: number; email: string | null }>;
@@ -74,73 +77,94 @@ export async function previewPartnershipMerge(keepId: number, dropIds: number[])
 
 export async function mergePartnerships(o: { keepId: number; dropIds: number[]; userId: number }): Promise<MergePreview> {
   const p = await previewPartnershipMerge(o.keepId, o.dropIds);
-  const d = (await getDb()) as unknown as Db;
-  const recs = await loadRecs(d, [o.keepId, ...p.drops.map((x) => x.id)]);
-  const keep = recs.get(o.keepId)!;
-  let keepMp = keep.multiparkPartnerId;
+  const d = (await getDb()) as any;
+  if (!d) throw new Error("BD indisponível.");
+  // A tabela dos agentes nasce a pedido: o CREATE fica FORA da transação (DDL faz commit implícito).
+  await (await import("./db")).ensureAgentPartnerTable();
   const now = utcNow();
-  for (const dr of p.drops) {
-    const r = recs.get(dr.id)!;
-    const log: { aliasIds: number[]; agentNames: string[]; mpMovedToKeep: string | null; mpAliasId: number | null } = { aliasIds: [], agentNames: [], mpMovedToKeep: null, mpAliasId: null };
-    // aliases → o que fica
-    log.aliasIds = rowsOf(await d.execute(sql`SELECT id FROM partner_aliases WHERE partnershipId = ${dr.id}`)).map((x) => Number(x.id));
-    await d.execute(sql`UPDATE partner_aliases SET partnershipId = ${o.keepId} WHERE partnershipId = ${dr.id}`);
-    // agentes → o que fica
-    log.agentNames = rowsOf(await d.execute(sql`SELECT agentName FROM agent_partner_map WHERE partnershipId = ${dr.id}`).catch(() => [[]])).map((x) => String(x.agentName));
-    await d.execute(sql`UPDATE agent_partner_map SET partnershipId = ${o.keepId} WHERE partnershipId = ${dr.id}`).catch(() => {});
-    // id da Multipark
-    if (r.multiparkPartnerId) {
-      await d.execute(sql`UPDATE partnerships SET multiparkPartnerId = NULL WHERE id = ${dr.id}`);
-      if (!keepMp) {
-        await d.execute(sql`UPDATE partnerships SET multiparkPartnerId = ${r.multiparkPartnerId}, multiparkKind = COALESCE(multiparkKind, (SELECT k FROM (SELECT multiparkKind AS k FROM partnerships WHERE id = ${dr.id}) x)) WHERE id = ${o.keepId}`);
-        keepMp = r.multiparkPartnerId; log.mpMovedToKeep = r.multiparkPartnerId;
-      } else {
-        const res: any = await d.execute(sql`INSERT IGNORE INTO partner_aliases (partnershipId, aliasType, aliasValue) VALUES (${o.keepId}, 'multipark_partner_id', ${r.multiparkPartnerId})`);
-        const id = Number((Array.isArray(res) ? res[0] : res)?.insertId ?? 0);
-        log.mpAliasId = id || null;
+  // Tudo ou nada: uma falha a meio desfaz a junção inteira (antes podia ficar meio feita, sem o registo para "Separar").
+  await d.transaction(async (tx: Db) => {
+    const recs = await loadRecs(tx, [o.keepId, ...p.drops.map((x) => x.id)]);
+    const keep = recs.get(o.keepId);
+    if (!keep) throw new Error("O registo que fica não existe.");
+    if (keep.mergedIntoId) throw new Error("O registo que fica já está junto a outro: escolhe esse.");
+    let keepMp = keep.multiparkPartnerId;
+    for (const dr of p.drops) {
+      const r = recs.get(dr.id);
+      if (!r) throw new Error(`Registo #${dr.id} não existe.`);
+      if (r.mergedIntoId) throw new Error(`"${r.name}" já está junto a outro registo.`);
+      const log: MergeLog = { aliasIds: [], agentNames: [], mpMovedToKeep: null, mpAliasId: null, mpCleared: null };
+      // aliases → o que fica
+      log.aliasIds = rowsOf(await tx.execute(sql`SELECT id FROM partner_aliases WHERE partnershipId = ${dr.id}`)).map((x) => Number(x.id));
+      await tx.execute(sql`UPDATE partner_aliases SET partnershipId = ${o.keepId} WHERE partnershipId = ${dr.id}`);
+      // agentes → o que fica
+      log.agentNames = rowsOf(await tx.execute(sql`SELECT agentName FROM agent_partner_map WHERE partnershipId = ${dr.id}`)).map((x) => String(x.agentName));
+      await tx.execute(sql`UPDATE agent_partner_map SET partnershipId = ${o.keepId} WHERE partnershipId = ${dr.id}`);
+      // id da Multipark
+      if (r.multiparkPartnerId) {
+        await tx.execute(sql`UPDATE partnerships SET multiparkPartnerId = NULL WHERE id = ${dr.id}`);
+        log.mpCleared = r.multiparkPartnerId;
+        if (!keepMp) {
+          await tx.execute(sql`UPDATE partnerships SET multiparkPartnerId = ${r.multiparkPartnerId}, multiparkKind = COALESCE(multiparkKind, (SELECT k FROM (SELECT multiparkKind AS k FROM partnerships WHERE id = ${dr.id}) x)) WHERE id = ${o.keepId}`);
+          keepMp = r.multiparkPartnerId; log.mpMovedToKeep = r.multiparkPartnerId;
+        } else if (r.multiparkPartnerId !== keepMp) {
+          const res: any = await tx.execute(sql`INSERT IGNORE INTO partner_aliases (partnershipId, aliasType, aliasValue) VALUES (${o.keepId}, 'multipark_partner_id', ${r.multiparkPartnerId})`);
+          const id = Number((Array.isArray(res) ? res[0] : res)?.insertId ?? 0);
+          log.mpAliasId = id || null;
+          // O alias já existia? Tem de ser do que fica — senão as reservas iam para outro registo.
+          const [own] = rowsOf(await tx.execute(sql`SELECT partnershipId FROM partner_aliases WHERE aliasType = 'multipark_partner_id' AND aliasValue = ${r.multiparkPartnerId} LIMIT 1`));
+          if (!own || Number(own.partnershipId) !== o.keepId) {
+            throw new Error(`O id ${r.multiparkPartnerId} da Multipark já está ligado ao registo #${own?.partnershipId ?? "?"}: separa-o de lá primeiro.`);
+          }
+        }
       }
+      // campos vazios do que fica ← do que sai
+      await tx.execute(sql`UPDATE partnerships SET
+          contactName = COALESCE(NULLIF(contactName, ''), ${r.contactName}),
+          contactEmail = COALESCE(NULLIF(contactEmail, ''), ${r.contactEmail}),
+          contactPhone = COALESCE(NULLIF(contactPhone, ''), ${r.contactPhone}),
+          partner_nif = COALESCE(NULLIF(partner_nif, ''), ${r.partnerNif}),
+          billingAgreement = COALESCE(NULLIF(billingAgreement, ''), ${r.billingAgreement})
+        WHERE id = ${o.keepId}`);
+      // o que sai: arquivado e junto (nunca apagado); o registo para "Separar" vai na MESMA transação
+      await tx.execute(sql`UPDATE partnerships SET archivedAt = COALESCE(archivedAt, ${now}), archivedReason = ${`Junto a #${o.keepId} (${keep.name})`.slice(0, 250)},
+          partnerStatus = 'inactive', mergedIntoId = ${o.keepId}, mergeJson = ${JSON.stringify(log)} WHERE id = ${dr.id}`);
     }
-    // campos vazios do que fica ← do que sai
-    await d.execute(sql`UPDATE partnerships SET
-        contactName = COALESCE(NULLIF(contactName, ''), ${r.contactName}),
-        contactEmail = COALESCE(NULLIF(contactEmail, ''), ${r.contactEmail}),
-        contactPhone = COALESCE(NULLIF(contactPhone, ''), ${r.contactPhone}),
-        partner_nif = COALESCE(NULLIF(partner_nif, ''), ${r.partnerNif}),
-        billingAgreement = COALESCE(NULLIF(billingAgreement, ''), ${r.billingAgreement})
-      WHERE id = ${o.keepId}`);
-    // o que sai: arquivado e junto (nunca apagado)
-    await d.execute(sql`UPDATE partnerships SET archivedAt = COALESCE(archivedAt, ${now}), archivedReason = ${`Junto a #${o.keepId} (${keep.name})`.slice(0, 250)},
-        partnerStatus = 'inactive', mergedIntoId = ${o.keepId}, mergeJson = ${JSON.stringify(log)} WHERE id = ${dr.id}`);
-  }
-  await d.execute(sql`UPDATE partnerships SET updatedAt = ${now} WHERE id = ${o.keepId}`);
+    await tx.execute(sql`UPDATE partnerships SET updatedAt = ${now} WHERE id = ${o.keepId}`);
+  });
   await resetCaches();
   return p;
 }
 
-/** Desfaz uma junção: o registo volta como estava (os aliases e agentes dele voltam). */
+/** Desfaz uma junção: o registo volta como estava (os aliases e agentes dele voltam). Tudo ou nada. */
 export async function unmergePartnership(dropId: number): Promise<{ keepId: number }> {
-  const d = (await getDb()) as unknown as Db;
+  const d = (await getDb()) as any;
   if (!d) throw new Error("BD indisponível.");
+  await (await import("./db")).ensureAgentPartnerTable();
   const r = (await loadRecs(d, [dropId])).get(dropId);
   if (!r || !r.mergedIntoId) throw new Error("Este registo não está junto a nenhum.");
   const keepId = r.mergedIntoId;
-  let log: { aliasIds?: number[]; agentNames?: string[]; mpMovedToKeep?: string | null; mpAliasId?: number | null } = {};
+  let log: Partial<MergeLog> = {};
   try { log = r.mergeJson ? JSON.parse(r.mergeJson) : {}; } catch { log = {}; }
-  if (log.aliasIds?.length) await d.execute(sql`UPDATE partner_aliases SET partnershipId = ${dropId} WHERE id IN (${sql.join(log.aliasIds.map((x) => sql`${x}`), sql`, `)})`);
-  if (log.agentNames?.length) await d.execute(sql`UPDATE agent_partner_map SET partnershipId = ${dropId} WHERE partnershipId = ${keepId} AND agentName IN (${sql.join(log.agentNames.map((x) => sql`${x}`), sql`, `)})`).catch(() => {});
-  if (log.mpMovedToKeep) {
-    await d.execute(sql`UPDATE partnerships SET multiparkPartnerId = NULL WHERE id = ${keepId} AND multiparkPartnerId = ${log.mpMovedToKeep}`);
-    await d.execute(sql`UPDATE partnerships SET multiparkPartnerId = ${log.mpMovedToKeep} WHERE id = ${dropId}`);
-  }
-  if (log.mpAliasId) {
-    // o alias foi criado pela junção: volta a ser o id do registo (sai do que ficou)
-    const [a] = rowsOf(await d.execute(sql`SELECT aliasValue FROM partner_aliases WHERE id = ${log.mpAliasId}`));
-    if (a?.aliasValue) {
-      await d.execute(sql`UPDATE partner_aliases SET partnershipId = ${dropId} WHERE id = ${log.mpAliasId}`);
-      await d.execute(sql`UPDATE partnerships SET multiparkPartnerId = ${String(a.aliasValue)} WHERE id = ${dropId}`);
+  await d.transaction(async (tx: Db) => {
+    if (log.aliasIds?.length) await tx.execute(sql`UPDATE partner_aliases SET partnershipId = ${dropId} WHERE id IN (${sql.join(log.aliasIds.map((x) => sql`${x}`), sql`, `)})`);
+    if (log.agentNames?.length) await tx.execute(sql`UPDATE agent_partner_map SET partnershipId = ${dropId} WHERE partnershipId = ${keepId} AND agentName IN (${sql.join(log.agentNames.map((x) => sql`${x}`), sql`, `)})`);
+    if (log.mpMovedToKeep) {
+      await tx.execute(sql`UPDATE partnerships SET multiparkPartnerId = NULL WHERE id = ${keepId} AND multiparkPartnerId = ${log.mpMovedToKeep}`);
+      await tx.execute(sql`UPDATE partnerships SET multiparkPartnerId = ${log.mpMovedToKeep} WHERE id = ${dropId}`);
+    } else if (log.mpAliasId) {
+      // o alias foi criado pela junção: volta a ser o id do registo (sai do que ficou)
+      const [a] = rowsOf(await tx.execute(sql`SELECT aliasValue FROM partner_aliases WHERE id = ${log.mpAliasId}`));
+      if (a?.aliasValue) {
+        await tx.execute(sql`UPDATE partner_aliases SET partnershipId = ${dropId} WHERE id = ${log.mpAliasId}`);
+        await tx.execute(sql`UPDATE partnerships SET multiparkPartnerId = ${String(a.aliasValue)} WHERE id = ${dropId}`);
+      }
+    } else if (log.mpCleared) {
+      // o id já era do que ficou (alias antigo ou o mesmo id): o registo que sai volta a tê-lo
+      await tx.execute(sql`UPDATE partnerships SET multiparkPartnerId = ${log.mpCleared} WHERE id = ${dropId}`);
     }
-  }
-  await d.execute(sql`UPDATE partnerships SET archivedAt = NULL, archivedReason = NULL, partnerStatus = 'active', mergedIntoId = NULL, mergeJson = NULL WHERE id = ${dropId}`);
+    await tx.execute(sql`UPDATE partnerships SET archivedAt = NULL, archivedReason = NULL, partnerStatus = 'active', mergedIntoId = NULL, mergeJson = NULL WHERE id = ${dropId}`);
+  });
   await resetCaches();
   return { keepId };
 }
