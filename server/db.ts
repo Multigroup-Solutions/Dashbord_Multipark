@@ -206,6 +206,7 @@ async function ensureRecentSchema(db: NonNullable<typeof _db>): Promise<void> {
       import("./migrations/migration_0305").then(m => ({ s: m.MIGRATION_0305_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0305 })),
       import("./migrations/migration_0310").then(m => ({ s: m.MIGRATION_0310_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0310 })),
       import("./migrations/migration_0315").then(m => ({ s: m.MIGRATION_0315_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0315 })),
+      import("./migrations/migration_0320").then(m => ({ s: m.MIGRATION_0320_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0320 })),
       import("./migrations/migration_0325").then(m => ({ s: m.MIGRATION_0325_STATEMENTS, ok: m.IDEMPOTENT_ERROR_CODES_0325 })),
     ]);
     for (const { s, ok } of mods) {
@@ -549,6 +550,16 @@ export async function seedDefaultCategories() {
 const buyerEmployees = aliasedTable(employees, "buyer");
 
 /**
+ * Quem comprou / quem registou: SÓ id e nome. Antes vinha a linha inteira da
+ * ficha de RH (NIF, NIB, salário, morada…) e da conta — e quem lança despesas
+ * (até um condutor) podia apontar o comprador a qualquer colega e ler-lhe a ficha.
+ */
+export const EXPENSE_PEOPLE_FIELDS = {
+  insertedBy: { id: users.id, name: users.name },
+  buyer: { id: buyerEmployees.id, fullName: buyerEmployees.fullName },
+};
+
+/**
  * Lista de despesas com joins. O `where` vem SEMPRE de
  * `expenseConditions()` (server/expenseScope.ts) — filtros + visibilidade do
  * utilizador numa regra única partilhada por lista, Excel e comparação.
@@ -561,8 +572,7 @@ export async function listExpenses(where?: SQL) {
       expense: expenses,
       category: expenseCategories,
       project: projects,
-      insertedBy: users,
-      buyer: buyerEmployees,
+      ...EXPENSE_PEOPLE_FIELDS,
     })
     .from(expenses)
     .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
@@ -679,8 +689,7 @@ export async function getExpenseById(id: number) {
       expense: expenses,
       category: expenseCategories,
       project: projects,
-      insertedBy: users,
-      buyer: buyerEmployees,
+      ...EXPENSE_PEOPLE_FIELDS,
     })
     .from(expenses)
     .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))

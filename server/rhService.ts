@@ -10,6 +10,7 @@
  *  - registos de ponto suspeitos não pagam até serem aprovados;
  *  - um fecho mensal é uma versão imutável do cálculo.
  */
+import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { getDb, getDocumentChecklistForEmployee, getPayrollData, toMysqlDateTime } from "./db";
 import { employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
@@ -191,11 +192,18 @@ export async function confirmedOpenPoints(employeeId: number): Promise<number> {
   return Number(agg?.total ?? 0);
 }
 
-export async function reviewPenalty(id: number, decision: "confirmed" | "dismissed", reviewerId: number, note?: string | null): Promise<{ points: number; blocked: boolean }> {
+export async function reviewPenalty(id: number, decision: "confirmed" | "dismissed", reviewer: { id: number; role: string }, note?: string | null): Promise<{ points: number; blocked: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("DB indisponível");
   const [p] = await db.select().from(employeePenalties).where(eq(employeePenalties.id, id)).limit(1);
   if (!p) throw new Error("Penalização não encontrada");
+  // supervisor+, quem propôs não confirma, e só pessoas das cidades de quem revê
+  const { penaltyReviewError } = await import("./rhAccess");
+  const denied = penaltyReviewError({ reviewer, proposedById: (p as any).proposedById ?? null, decision });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
+  const { assertEmployeeAccess } = await import("./cityScope");
+  await assertEmployeeAccess(p.employeeId);
+  const reviewerId = reviewer.id;
   await db.update(employeePenalties).set({ status: decision, reviewedById: reviewerId, reviewedAt: nowMysql(), notes: note ? `${p.notes ?? ""} · revisão: ${note}`.slice(0, 512) : p.notes, clearedAt: decision === "dismissed" ? nowMysql() : p.clearedAt, clearedById: decision === "dismissed" ? reviewerId : p.clearedById })
     .where(eq(employeePenalties.id, id));
   const points = await confirmedOpenPoints(p.employeeId);

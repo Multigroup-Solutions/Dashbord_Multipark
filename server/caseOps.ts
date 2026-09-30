@@ -628,18 +628,23 @@ export async function setLostDriverAccountability(linkId: number, patch: { costA
       if (empId) upd.employeeId = empId;
     }
     if (pts > 0 && !empId) throw new Error("Este condutor não está associado a um colaborador — anexa-o pelo colaborador para lhe atribuir pontos.");
+    if (empId && pts > 0) {
+      // só pontos a pessoas das cidades de quem propõe
+      const { assertEmployeeAccess } = await import("./cityScope");
+      await assertEmployeeAccess(empId);
+    }
     if (empId) {
       const [existing] = await d.select().from(employeePenalties)
         .where(and(eq(employeePenalties.employeeId, empId), eq(employeePenalties.reason, "lost_found_investigation"), eq(employeePenalties.relatedId, link.itemId))).limit(1);
       if (pts > 0) {
         if (existing) {
           if (existing.status === "confirmed" && existing.points !== pts) throw new Error("Pontos já confirmados por um supervisor — alterações só no RH.");
-          await d.update(employeePenalties).set({ points: pts, status: existing.status === "dismissed" ? "pending" : existing.status, clearedAt: existing.status === "dismissed" ? null : existing.clearedAt }).where(eq(employeePenalties.id, existing.id));
+          await d.update(employeePenalties).set({ points: pts, status: existing.status === "dismissed" ? "pending" : existing.status, clearedAt: existing.status === "dismissed" ? null : existing.clearedAt, ...(existing.status === "confirmed" ? {} : { proposedById: actorId }) }).where(eq(employeePenalties.id, existing.id));
           upd.penaltyId = existing.id;
         } else {
           const r = await d.insert(employeePenalties).values({
             employeeId: empId, reason: "lost_found_investigation", severity: "penalty", points: pts,
-            relatedId: link.itemId, notes: `Perdido #${link.itemId} (proposto por user #${actorId})`, status: "pending",
+            relatedId: link.itemId, notes: `Perdido #${link.itemId} (proposto por user #${actorId})`, status: "pending", proposedById: actorId,
           });
           upd.penaltyId = Number((r[0] as any).insertId);
         }
@@ -655,12 +660,12 @@ export async function setLostDriverAccountability(linkId: number, patch: { costA
 }
 
 /** Supervisor+: confirma/anula os pontos (usa o mesmo fluxo de revisão do RH). */
-export async function reviewLostDriverPoints(linkId: number, decision: "confirmed" | "dismissed", reviewerId: number) {
+export async function reviewLostDriverPoints(linkId: number, decision: "confirmed" | "dismissed", reviewer: { id: number; role: string }) {
   const d = await db();
   const [link] = await d.select().from(lostFoundAttachedDrivers).where(eq(lostFoundAttachedDrivers.id, linkId)).limit(1);
   if (!link?.penaltyId) throw new Error("Sem penalização proposta para este condutor");
   const { reviewPenalty } = await import("./rhService");
-  const r = await reviewPenalty(link.penaltyId, decision, reviewerId, `Perdido #${link.itemId}`);
+  const r = await reviewPenalty(link.penaltyId, decision, reviewer, `Perdido #${link.itemId}`);
   await d.update(lostFoundAttachedDrivers).set({ pointsConfirmed: decision === "confirmed" ? 1 : 0, ...(decision === "dismissed" ? { points: 0 } : {}) }).where(eq(lostFoundAttachedDrivers.id, linkId));
   return r;
 }
