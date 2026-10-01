@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -78,7 +79,7 @@ describe("serviços extra e grupo \"Serviço\" ao vivo", () => {
     expect(all).toContain("UNIQUE KEY `uq_service_extra_done_line` (`lineId`)");
     expect(all).toContain("INSERT IGNORE INTO `service_extra_done`");
     expect(all).not.toMatch(/DROP|DELETE/i);
-    expect(code("server/db.ts")).toContain('import("./migrations/migration_0255")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0255");
   });
   it("grupo Serviço: entradas/saídas da janela com telefone, nas cidades dadas", () => {
     const q = buildBookingsInWindowSql({ start: "2026-09-29 00:00:00", end: "2026-09-30 00:00:00", ourParkIds: ["pA"], cities: ["lisboa", "lisbon"] });

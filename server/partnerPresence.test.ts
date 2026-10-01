@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -51,7 +52,7 @@ describe("parcerias por cidade ao vivo", () => {
   });
   it("migração 0260 e refresco no cron", () => {
     expect(MIGRATION_0260_STATEMENTS.join("\n")).toContain("CREATE TABLE IF NOT EXISTS `partner_city_presence`");
-    expect(readFileSync(join(__dirname, "db.ts"), "utf8")).toContain('import("./migrations/migration_0260")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0260");
     expect(readFileSync(join(__dirname, "cronJobs.ts"), "utf8")).toContain("maybeRefreshPartnerCityPresence");
   });
 });

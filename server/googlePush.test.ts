@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 /**
  * Google por eventos (shared/googlePush.ts, server/google/pushChannels.ts,
  * server/google/pendingSync.ts): segredo dos canais, cabeçalhos do webhook,
@@ -417,7 +418,7 @@ describe("agendador e migração 0200", () => {
     expect(MIGRATION_0200_STATEMENTS[0]).not.toMatch(/`token` /);
     expect(MIGRATION_0200_STATEMENTS[1]).toMatch(/CREATE TABLE IF NOT EXISTS `google_sync_pending`/);
     expect(MIGRATION_0200_STATEMENTS[2]).toMatch(/ADD COLUMN `lastOnlineSyncAt`/);
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    expect(db.indexOf("migration_0200")).toBeGreaterThan(db.indexOf("migration_0190"));
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0200")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0190"));
+    expect(SCHEMA_MIGRATION_IDS).toContain("0190");
   });
 });

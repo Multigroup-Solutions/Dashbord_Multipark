@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -48,9 +49,8 @@ describe("migração 0215 (CRM)", () => {
     expect(all).toContain("`idx_mb_updated_id` (`updatedAt`, `id`)");
   });
   it("registada no ensureRecentSchema", () => {
-    const db = readFileSync(resolve(__dirname, "..", "db.ts"), "utf8");
-    expect(db).toContain('import("./migrations/migration_0215")');
-    expect(db).toContain('import("./migrations/migration_0220")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0215");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0220");
   });
 });
 

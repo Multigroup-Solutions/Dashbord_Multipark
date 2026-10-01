@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../../migrations/index";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -608,8 +609,7 @@ describe("IA: transcrição do rádio", () => {
 describe("migração 0111 (IA)", () => {
   const root = resolve(__dirname, "../../..");
   it("registada no ensureRecentSchema, a seguir à 0110, por ordem", () => {
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    const nums = [...db.matchAll(/import\("\.\/migrations\/migration_(\d{4})"\)\.then\(m => \(\{ s: m\.MIGRATION_/g)].map((x) => Number(x[1]));
+    const nums = SCHEMA_MIGRATION_IDS.map(Number);
     expect(nums).toContain(111);
     expect(nums.indexOf(111)).toBe(nums.indexOf(110) + 1);
     expect([...nums].sort((a, b) => a - b)).toEqual(nums);

@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,7 +54,7 @@ describe("caixa fase 3: contagem (R24)", () => {
     const all = MIGRATION_0270_STATEMENTS.join("\n");
     for (const t of ["cash_counts", "cash_count_expenses", "cash_count_log"]) expect(all).toContain(`CREATE TABLE IF NOT EXISTS \`${t}\``);
     expect(all).toContain("UNIQUE KEY `uq_cash_count` (`parkId`, `day`, `shift`)");
-    expect(read("server/db.ts")).toContain('import("./migrations/migration_0270")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0270");
   });
 });
 

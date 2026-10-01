@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -616,8 +617,7 @@ describe("acessos", () => {
 
 describe("migração 0185", () => {
   it("registada no ensureRecentSchema (por ordem), idempotente e espelhada no schema drizzle", async () => {
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    const nums = [...db.matchAll(/import\("\.\/migrations\/migration_(\d{4})"\)\.then\(m => \(\{ s: m\.MIGRATION_/g)].map((x) => Number(x[1]));
+    const nums = SCHEMA_MIGRATION_IDS.map(Number);
     expect(nums).toContain(185);
     expect([...nums].sort((a, b) => a - b)).toEqual(nums);
     const { MIGRATION_0185_STATEMENTS, IDEMPOTENT_ERROR_CODES_0185 } = await import("./migrations/migration_0185");

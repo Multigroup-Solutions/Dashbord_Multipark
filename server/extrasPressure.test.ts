@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -366,8 +367,7 @@ describe("agendador — extras-pressure", () => {
     expect(typeof JOB_RUNNERS["extras-pressure"]).toBe("function");
     const api = readFileSync(resolve(__dirname, "_core", "api-entry.ts"), "utf8");
     expect(api).toContain('app.get("/api/cron/extras-pressure"');
-    const db = readFileSync(resolve(__dirname, "db.ts"), "utf8");
-    expect(db).toContain('import("./migrations/migration_0235")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0235");
     const all = MIGRATION_0235_STATEMENTS.join("\n");
     expect(all).toContain("CREATE TABLE IF NOT EXISTS `ops_pressure_stats`");
     expect(all).toContain("UNIQUE KEY `uq_ops_pressure_cell` (`windowEnd`, `parkGroup`, `kind`, `weekday`, `hour`, `loadBucket`, `rush`)");

@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,7 +37,7 @@ describe("PDAs, passo 3 (decisões do dono)", () => {
   });
   it("cidade fixa do PDA: coluna nova e o âmbito de cidade usa-a primeiro", () => {
     expect(MIGRATION_0280_STATEMENTS.join("\n")).toContain("ALTER TABLE `pdas` ADD COLUMN `projectId` INT NULL");
-    expect(read("server/db.ts")).toContain('import("./migrations/migration_0280")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0280");
     expect(read("drizzle/schema.ts")).toMatch(/pdas[\s\S]{0,1500}projectId: int\(\)/);
     expect(read("server/cityScope.ts")).toContain("city_fix.projectId IS NOT NULL");
   });

@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -361,8 +362,7 @@ describe("todas as notificações passam por notify()", () => {
 
 describe("migração 0140", () => {
   it("registada no ensureRecentSchema (por ordem), idempotente e espelhada no schema drizzle", async () => {
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    const nums = [...db.matchAll(/import\("\.\/migrations\/migration_(\d{4})"\)\.then\(m => \(\{ s: m\.MIGRATION_/g)].map((x) => Number(x[1]));
+    const nums = SCHEMA_MIGRATION_IDS.map(Number);
     expect(nums).toContain(140);
     expect([...nums].sort((a, b) => a - b)).toEqual(nums);
     const { MIGRATION_0140_STATEMENTS, IDEMPOTENT_ERROR_CODES_0140, CLEANUP_0140_ID } = await import("./migrations/migration_0140");

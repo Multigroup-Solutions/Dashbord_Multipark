@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -110,6 +111,6 @@ describe("CRM fase 1: sem a cópia, consentimentos e migração", () => {
   it("migração 0245: só acrescenta colunas do resumo e preenche cityKeys a partir das cidades", () => {
     expect(MIGRATION_0245_STATEMENTS.filter((s) => s.startsWith("ALTER TABLE `crm_clients` ADD COLUMN"))).toHaveLength(3);
     expect(MIGRATION_0245_STATEMENTS.join("\n")).toContain("SET `cityKeys` = LOWER(`cities`) WHERE `cityKeys` IS NULL");
-    expect(readFileSync(join(__dirname, "..", "db.ts"), "utf8")).toContain('import("./migrations/migration_0245")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0245");
   });
 });

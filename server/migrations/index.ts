@@ -1,0 +1,178 @@
+/**
+ * Migrações aplicadas sozinhas no arranque (rede de segurança). Saíram do
+ * `db.ts` a 1 out 2026 (P2: só mudança de sítio — o comportamento é o mesmo;
+ * o `db.ts` chama `ensureRecentSchema` uma vez por processo, em `getDb()`).
+ *
+ * Para acrescentar uma: `migration_NNNN.ts` com `MIGRATION_NNNN_STATEMENTS` e
+ * `IDEMPOTENT_ERROR_CODES_NNNN`, e uma linha NO FIM de `SCHEMA_MIGRATIONS`
+ * (a ordem é a de aplicação e tem de ser crescente — há teste).
+ * As migrações só à mão (0044–0049, botões DB:NNNN e scripts/run-migration.ts)
+ * não entram aqui.
+ */
+import { sql } from "drizzle-orm";
+
+export interface SchemaMigrationStep {
+  statements: readonly string[];
+  /** Códigos do MySQL que querem dizer "já estava aplicada" (calados). */
+  idempotentErrors: ReadonlySet<string>;
+}
+
+const step = (statements: readonly string[], idempotentErrors: ReadonlySet<string>): SchemaMigrationStep => ({ statements, idempotentErrors });
+
+/** [id, carregador] por ordem de aplicação. */
+export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<SchemaMigrationStep>]> = [
+  ["0050", () => import("./migration_0050").then((m) => step(m.MIGRATION_0050_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0050))],
+  ["0051", () => import("./migration_0051").then((m) => step(m.MIGRATION_0051_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0051))],
+  ["0052", () => import("./migration_0052").then((m) => step(m.MIGRATION_0052_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0052))],
+  ["0053", () => import("./migration_0053").then((m) => step(m.MIGRATION_0053_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0053))],
+  ["0054", () => import("./migration_0054").then((m) => step(m.MIGRATION_0054_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0054))],
+  ["0055", () => import("./migration_0055").then((m) => step(m.MIGRATION_0055_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0055))],
+  ["0056", () => import("./migration_0056").then((m) => step(m.MIGRATION_0056_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0056))],
+  ["0058", () => import("./migration_0058").then((m) => step(m.MIGRATION_0058_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0058))],
+  ["0059", () => import("./migration_0059").then((m) => step(m.MIGRATION_0059_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0059))],
+  ["0060", () => import("./migration_0060").then((m) => step(m.MIGRATION_0060_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0060))],
+  ["0061", () => import("./migration_0061").then((m) => step(m.MIGRATION_0061_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0061))],
+  ["0062", () => import("./migration_0062").then((m) => step(m.MIGRATION_0062_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0062))],
+  ["0063", () => import("./migration_0063").then((m) => step(m.MIGRATION_0063_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0063))],
+  ["0064", () => import("./migration_0064").then((m) => step(m.MIGRATION_0064_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0064))],
+  ["0065", () => import("./migration_0065").then((m) => step(m.MIGRATION_0065_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0065))],
+  ["0066", () => import("./migration_0066").then((m) => step(m.MIGRATION_0066_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0066))],
+  ["0067", () => import("./migration_0067").then((m) => step(m.MIGRATION_0067_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0067))],
+  ["0068", () => import("./migration_0068").then((m) => step(m.MIGRATION_0068_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0068))],
+  ["0069", () => import("./migration_0069").then((m) => step(m.MIGRATION_0069_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0069))],
+  ["0070", () => import("./migration_0070").then((m) => step(m.MIGRATION_0070_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0070))],
+  ["0071", () => import("./migration_0071").then((m) => step(m.MIGRATION_0071_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0071))],
+  ["0072", () => import("./migration_0072").then((m) => step(m.MIGRATION_0072_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0072))],
+  ["0073", () => import("./migration_0073").then((m) => step(m.MIGRATION_0073_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0073))],
+  ["0074", () => import("./migration_0074").then((m) => step(m.MIGRATION_0074_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0074))],
+  ["0075", () => import("./migration_0075").then((m) => step(m.MIGRATION_0075_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0075))],
+  ["0076", () => import("./migration_0076").then((m) => step(m.MIGRATION_0076_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0076))],
+  ["0077", () => import("./migration_0077").then((m) => step(m.MIGRATION_0077_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0077))],
+  ["0078", () => import("./migration_0078").then((m) => step(m.MIGRATION_0078_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0078))],
+  ["0079", () => import("./migration_0079").then((m) => step(m.MIGRATION_0079_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0079))],
+  ["0080", () => import("./migration_0080").then((m) => step(m.MIGRATION_0080_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0080))],
+  ["0081", () => import("./migration_0081").then((m) => step(m.MIGRATION_0081_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0081))],
+  ["0082", () => import("./migration_0082").then((m) => step(m.MIGRATION_0082_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0082))],
+  ["0083", () => import("./migration_0083").then((m) => step(m.MIGRATION_0083_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0083))],
+  ["0084", () => import("./migration_0084").then((m) => step(m.MIGRATION_0084_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0084))],
+  ["0085", () => import("./migration_0085").then((m) => step(m.MIGRATION_0085_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0085))],
+  ["0086", () => import("./migration_0086").then((m) => step(m.MIGRATION_0086_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0086))],
+  ["0087", () => import("./migration_0087").then((m) => step(m.MIGRATION_0087_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0087))],
+  ["0088", () => import("./migration_0088").then((m) => step(m.MIGRATION_0088_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0088))],
+  ["0090", () => import("./migration_0090").then((m) => step(m.MIGRATION_0090_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0090))],
+  ["0091", () => import("./migration_0091").then((m) => step(m.MIGRATION_0091_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0091))],
+  ["0092", () => import("./migration_0092").then((m) => step(m.MIGRATION_0092_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0092))],
+  ["0093", () => import("./migration_0093").then((m) => step(m.MIGRATION_0093_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0093))],
+  ["0094", () => import("./migration_0094").then((m) => step(m.MIGRATION_0094_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0094))],
+  ["0095", () => import("./migration_0095").then((m) => step(m.MIGRATION_0095_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0095))],
+  ["0096", () => import("./migration_0096").then((m) => step(m.MIGRATION_0096_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0096))],
+  ["0097", () => import("./migration_0097").then((m) => step(m.MIGRATION_0097_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0097))],
+  ["0098", () => import("./migration_0098").then((m) => step(m.MIGRATION_0098_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0098))],
+  ["0099", () => import("./migration_0099").then((m) => step(m.MIGRATION_0099_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0099))],
+  ["0100", () => import("./migration_0100").then((m) => step(m.MIGRATION_0100_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0100))],
+  ["0101", () => import("./migration_0101").then((m) => step(m.MIGRATION_0101_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0101))],
+  ["0105", () => import("./migration_0105").then((m) => step(m.MIGRATION_0105_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0105))],
+  ["0110", () => import("./migration_0110").then((m) => step(m.MIGRATION_0110_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0110))],
+  ["0111", () => import("./migration_0111").then((m) => step(m.MIGRATION_0111_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0111))],
+  ["0115", () => import("./migration_0115").then((m) => step(m.MIGRATION_0115_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0115))],
+  ["0123", () => import("./migration_0123").then((m) => step(m.MIGRATION_0123_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0123))],
+  ["0125", () => import("./migration_0125").then((m) => step(m.MIGRATION_0125_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0125))],
+  ["0130", () => import("./migration_0130").then((m) => step(m.MIGRATION_0130_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0130))],
+  ["0138", () => import("./migration_0138").then((m) => step(m.MIGRATION_0138_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0138))],
+  ["0140", () => import("./migration_0140").then((m) => step(m.MIGRATION_0140_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0140))],
+  ["0145", () => import("./migration_0145").then((m) => step(m.MIGRATION_0145_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0145))],
+  ["0150", () => import("./migration_0150").then((m) => step(m.MIGRATION_0150_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0150))],
+  ["0155", () => import("./migration_0155").then((m) => step(m.MIGRATION_0155_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0155))],
+  ["0160", () => import("./migration_0160").then((m) => step(m.MIGRATION_0160_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0160))],
+  ["0165", () => import("./migration_0165").then((m) => step(m.MIGRATION_0165_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0165))],
+  ["0170", () => import("./migration_0170").then((m) => step(m.MIGRATION_0170_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0170))],
+  ["0175", () => import("./migration_0175").then((m) => step(m.MIGRATION_0175_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0175))],
+  ["0180", () => import("./migration_0180").then((m) => step(m.MIGRATION_0180_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0180))],
+  ["0185", () => import("./migration_0185").then((m) => step(m.MIGRATION_0185_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0185))],
+  ["0190", () => import("./migration_0190").then((m) => step(m.MIGRATION_0190_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0190))],
+  ["0195", () => import("./migration_0195").then((m) => step(m.MIGRATION_0195_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0195))],
+  ["0200", () => import("./migration_0200").then((m) => step(m.MIGRATION_0200_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0200))],
+  ["0205", () => import("./migration_0205").then((m) => step(m.MIGRATION_0205_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0205))],
+  ["0210", () => import("./migration_0210").then((m) => step(m.MIGRATION_0210_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0210))],
+  ["0215", () => import("./migration_0215").then((m) => step(m.MIGRATION_0215_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0215))],
+  ["0220", () => import("./migration_0220").then((m) => step(m.MIGRATION_0220_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0220))],
+  ["0225", () => import("./migration_0225").then((m) => step(m.MIGRATION_0225_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0225))],
+  ["0230", () => import("./migration_0230").then((m) => step(m.MIGRATION_0230_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0230))],
+  ["0235", () => import("./migration_0235").then((m) => step(m.MIGRATION_0235_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0235))],
+  ["0240", () => import("./migration_0240").then((m) => step(m.MIGRATION_0240_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0240))],
+  ["0245", () => import("./migration_0245").then((m) => step(m.MIGRATION_0245_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0245))],
+  ["0250", () => import("./migration_0250").then((m) => step(m.MIGRATION_0250_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0250))],
+  ["0255", () => import("./migration_0255").then((m) => step(m.MIGRATION_0255_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0255))],
+  ["0260", () => import("./migration_0260").then((m) => step(m.MIGRATION_0260_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0260))],
+  ["0265", () => import("./migration_0265").then((m) => step(m.MIGRATION_0265_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0265))],
+  ["0270", () => import("./migration_0270").then((m) => step(m.MIGRATION_0270_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0270))],
+  ["0275", () => import("./migration_0275").then((m) => step(m.MIGRATION_0275_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0275))],
+  ["0280", () => import("./migration_0280").then((m) => step(m.MIGRATION_0280_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0280))],
+  ["0285", () => import("./migration_0285").then((m) => step(m.MIGRATION_0285_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0285))],
+  ["0290", () => import("./migration_0290").then((m) => step(m.MIGRATION_0290_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0290))],
+  ["0295", () => import("./migration_0295").then((m) => step(m.MIGRATION_0295_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0295))],
+  ["0300", () => import("./migration_0300").then((m) => step(m.MIGRATION_0300_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0300))],
+  ["0305", () => import("./migration_0305").then((m) => step(m.MIGRATION_0305_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0305))],
+  ["0310", () => import("./migration_0310").then((m) => step(m.MIGRATION_0310_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0310))],
+  ["0315", () => import("./migration_0315").then((m) => step(m.MIGRATION_0315_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0315))],
+  ["0320", () => import("./migration_0320").then((m) => step(m.MIGRATION_0320_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0320))],
+  ["0325", () => import("./migration_0325").then((m) => step(m.MIGRATION_0325_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0325))],
+];
+
+export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
+
+type Executor = { execute: (q: any) => Promise<unknown> };
+
+/**
+ * Aplica (idempotente, uma vez por processo) as migrations cujo SCHEMA drizzle
+ * já referencia colunas/tabelas novas — senão `select()` parte com "Unknown
+ * column" antes de alguém carregar no botão DB:NNNN. Limitado às migrations que
+ * introduzem schema lido no arranque (0050 extras_availability, 0051 threading).
+ * Os botões manuais continuam a existir; isto é só uma rede de segurança.
+ */
+export async function ensureRecentSchema(db: Executor): Promise<void> {
+  try {
+    const mods = (await Promise.all(SCHEMA_MIGRATIONS.map(([, load]) => load()))).map((m) => ({ s: m.statements, ok: m.idempotentErrors }));
+    for (const { s, ok } of mods) {
+      for (const stmt of s) {
+        try {
+          await db.execute(sql.raw(stmt));
+        } catch (err: any) {
+          // O drizzle embrulha o erro do mysql2 (DrizzleQueryError) — o código
+          // MySQL vem em `cause.code`; sem isto TODAS as migrações já aplicadas
+          // faziam warning em cada arranque.
+          const code = err?.code ?? err?.cause?.code;
+          if (!(code && ok.has(code))) {
+            console.warn("[Schema ensure]", code ?? "ERR", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn("[Schema ensure] falhou:", String(err?.message ?? err).slice(0, 160));
+  }
+  // Passos de DADOS (código, uma vez, guardados por marca) — depois do SQL.
+  try {
+    const { runMigration0210Data } = await import("./migration_0210");
+    const r = await runMigration0210Data(db as any);
+    if (r.status === "applied" && r.patches.length) console.log("[Schema ensure] 0210 caixas de email:", r.patches.map((p) => `${p.mailboxKey} (${p.changes.join("; ")})`).join(" · ").slice(0, 500));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0210 (dados das caixas de email) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    const { runMigration0215Collation } = await import("./migration_0215");
+    const converted = await runMigration0215Collation(db as any);
+    if (converted.length) console.log("[Schema ensure] 0215 CRM: collation igual à de multipark_bookings em", converted.join(", "));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0215 (collation do CRM) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    // (Remetente de sistema lido pela própria migração — getSetting usaria
+    // getDb(), que espera por ESTE ensureRecentSchema.)
+    const { runMigration0230Data } = await import("./migration_0230");
+    const r = await runMigration0230Data(db as any);
+    if (r.status === "applied" && r.messages) console.log(`[Schema ensure] 0230 envios automáticos: ${r.messages} mensagem(ns), ${r.threads} conversa(s) escondida(s)/recalculada(s), ${r.sends} envio(s) na ficha dos extras`);
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0230 (envios automáticos na Comunicação) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+}

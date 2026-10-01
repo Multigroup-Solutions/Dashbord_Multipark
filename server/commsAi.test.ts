@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 /**
  * IA na comunicação com clientes (runAi simulado): mapeamento da
  * classificação, limiares de confiança, nada é enviado sozinho, duplicados,
@@ -472,8 +473,7 @@ describe("migração 0123 (IA na comunicação com clientes)", () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");
     const root = resolve(__dirname, "..");
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    const nums = [...db.matchAll(/import\("\.\/migrations\/migration_(\d{4})"\)\.then\(m => \(\{ s: m\.MIGRATION_/g)].map((x) => Number(x[1]));
+    const nums = SCHEMA_MIGRATION_IDS.map(Number);
     expect(nums).toContain(123);
     expect([...nums].sort((a, b) => a - b)).toEqual(nums);
     const { MIGRATION_0123_STATEMENTS, IDEMPOTENT_ERROR_CODES_0123 } = await import("./migrations/migration_0123");

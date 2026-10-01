@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -221,7 +222,7 @@ describe("caixa fase 4: ligações", () => {
     const all = MIGRATION_0275_STATEMENTS.join("\n");
     for (const t of ["cash_external_runs", "cash_mb_receipts", "cash_mb_days", "cash_viva_imports", "cash_viva_txns", "cash_monthly_receipts"]) expect(all).toContain(`CREATE TABLE IF NOT EXISTS \`${t}\``);
     expect(all).not.toMatch(/DROP|DELETE|TRUNCATE/i);
-    expect(read("server/db.ts")).toContain('import("./migrations/migration_0275")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0275");
   });
   it("cron cash-external registado nos 4 sítios + ajuda", () => {
     expect(read("server/cronSchedule.ts")).toContain('key: "cash-external"');
