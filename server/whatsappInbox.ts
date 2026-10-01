@@ -59,6 +59,12 @@ export interface ConversationRow {
   phoneE164: string;
   employeeId: number | null;
   name: string; // nome do extra ou o próprio número
+  /**
+   * Foto da ficha do colaborador ligado (`employees.photoUrl`, a MESMA URL que
+   * o RH e o Extras-Dia mostram); null = sem ficha ou sem foto → a UI mostra as
+   * iniciais. A Cloud API da Meta não dá a foto de perfil do WhatsApp.
+   */
+  photoUrl: string | null;
   unreadCount: number;
   lastInboundAt: string | null;
   lastMessageAt: string | null;
@@ -224,6 +230,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
       optedOutAt: whatsappConversations.optedOutAt,
       profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
+      employeePhotoUrl: employees.photoUrl,
       leadName: leadNameSql,
       status: whatsappConversations.status,
       assignedUserId: whatsappConversations.assignedUserId,
@@ -258,6 +265,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
       optedOutAt: whatsappConversations.optedOutAt,
       profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
+      employeePhotoUrl: employees.photoUrl,
       leadName: sql<string | null>`NULL`,
       status: sql<ConversationStatus>`'aberto'`,
       assignedUserId: sql<number | null>`NULL`,
@@ -296,6 +304,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
       phoneE164: c.phoneE164,
       employeeId: c.employeeId,
       name: conversationDisplayName(c),
+      photoUrl: c.employeePhotoUrl?.trim() || null,
       unreadCount: c.unreadCount,
       lastInboundAt: c.lastInboundAt,
       lastMessageAt: c.lastMessageAt,
@@ -353,6 +362,8 @@ export interface ConversationThread {
   /** Ficha do colaborador associada (null = número sem ficha; o cabeçalho não fica clicável). */
   employeeId: number | null;
   name: string;
+  /** Foto da ficha ligada (ver `ConversationRow.photoUrl`); null = iniciais. */
+  photoUrl: string | null;
   /** Primeiro nome real do destinatário (ficha → lead → perfil); null = só temos o número. */
   recipientFirstName: string | null;
   /** Pediu para não receber mensagens (STOP). */
@@ -385,6 +396,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
       optedOutAt: whatsappConversations.optedOutAt,
       profileName: whatsappConversations.profileName,
       employeeName: employees.fullName,
+      employeePhotoUrl: employees.photoUrl,
       leadName: leadNameSql,
       status: whatsappConversations.status,
       assignedUserId: whatsappConversations.assignedUserId,
@@ -432,6 +444,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
     phoneE164: conv.phoneE164,
     employeeId: conv.employeeId,
     name,
+    photoUrl: conv.employeePhotoUrl?.trim() || null,
     recipientFirstName: realName ? firstNameOf(realName) : null,
     optedOut: conv.optedOutAt != null,
     optedOutAt: conv.optedOutAt,

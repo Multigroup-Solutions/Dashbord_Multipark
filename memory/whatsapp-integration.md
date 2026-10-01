@@ -5,6 +5,7 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Related
 - `sync-runners-topology.md` — topologia de execução (Railway `setInterval` vs Vercel/GitHub Actions cron). Relevante porque o webhook e o broadcast correm no processo Railway; o `runConcurrent` reutilizado vem do `multiparkBookingSync.ts`.
+- `profile-photo-upload.md` — **2026-10-01**: a foto da ficha (`employees.photoUrl`) é a fonte do avatar do inbox (lista + cabeçalho da conversa).
 - `employee-city-derivation.md` — **2026-08-04**: a tabela de extras ganhou filtro
   por cidade (Lisboa/Porto/Faro, cidade DERIVADA, sem coluna nova). O alvo do
   broadcast ("a todos") passou a ser o conjunto visível JÁ FILTRADO — a Decisão 1
@@ -48,6 +49,60 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 5. **Confirmados**: default **+351** na normalização; **nome de template configurável no dialog** (desenvolver com placeholder até os templates estarem APPROVED); **sem fila persistente** → `runConcurrent(4)` + **1 retry**, MAS deixar comentário no código do broadcast a assinalar que um restart do Railway a meio **perde os envios em curso**.
 
 ## Changelog
+
+### 2026-10-01 — Inbox: redesenho UX (lista compacta, avatar com foto, scroll no fim, bolhas estilo WhatsApp)
+**Type**: feature + refactor (SEM migração, NÃO deployado, NÃO commitado)
+**Scope**: `client/src/pages/WhatsAppInboxPage.tsx` (≈1270 → ≈790 linhas), NOVOS em `client/src/components/whatsapp/`:
+`InboxListHeader.tsx` (título+atalhos, pesquisa, popover "Filtros", chips), `ConversationListItem.tsx` (linha),
+`MessageThread.tsx` (mensagens + scroll + `InboundMedia` movido para cá), `ContactAvatar.tsx`, `inboxFormat.ts`
+(helpers de data + `timeline` extraídos sem mudança), `inboxTypes.ts` (`inferRouterOutputs`); `shared/whatsappInboxView.ts`
+(PURO: `contactInitials`, `avatarToneIndex`, `daySeparatorLabel`, `localDayKey`, `DEFAULT_INBOX_FILTERS`,
+`activeInboxFilterCount`) + `server/whatsappInboxView.test.ts` (12); `server/whatsappInbox.ts` (`photoUrl` na lista e na thread).
+**What**:
+- **Layout**: página sem cabeçalho próprio (já removido no working tree antes desta tarefa; o texto dos atalhos passou para um
+  tooltip ⌨ no topo da lista). Card `h-[calc(100dvh-14rem)] md:h-[calc(100dvh-9.5rem)]` — no desktop o fundo do card fica
+  ~64px acima do fundo do ecrã para o botão flutuante do Assistente (`bottom-6 right-4`) não tapar o "Enviar"; no telemóvel
+  14rem por causa da tab bar + Assistente `bottom-24`. Lista `w-[340px] xl:w-[380px]`.
+- **Filtros**: pesquisa + botão "Filtros" (popover: responsável, estado, intenção, só não lidas/urgentes/com alerta, contador de
+  ativos, "Limpar filtros") + UMA linha de chips (Não lidas N · Minhas N · Urgentes N · chip de alerta ⏰N ⚠N que substitui o
+  banner vermelho · "Limpar"). "Chamadas por devolver" passou a pill no título. Estado único `filters: InboxListFilters`;
+  semântica IGUAL (`matchesInboxFilters`, conversa aberta sempre visível, grupos na ordem do servidor, contagens no âmbito
+  responsável+estado). Cabeçalhos de grupo mais finos.
+- **Linha**: avatar 40px · nome + hora (verde se há por ler; "Ontem" novo em `fmtListTime`) · preview + ⏱countdown + badge
+  redondo de não lidas · no máx. 1 linha de etiquetas h-4 (Urgente, ⏰espera, intenção, estado, responsável à direita). O
+  "fecha em 30m" e o badge "Janela a fechar" eram o MESMO sinal → ficou só o countdown (âmbar <2h).
+- **Cabeçalho da thread numa linha**: avatar 36 · nome (abre ficha) / telefone · opt-out · "Sem resposta · X" · à direita
+  estado, responsável, Resolver (texto só em xl), Ligar (ícone), Contexto (ícone; texto "Reserva/Cliente ligado" em lg+),
+  menu ⋯ (Resumo IA, Contexto, Abrir ficha, Marcar como não lida). Telemóvel: estado+responsável+Resolver numa 2.ª linha.
+  Enquanto a thread carrega usa nome/foto da linha da lista. Banners da janela/opt-out = 1 linha `py-1 text-[11px]`.
+- **Scroll** (`MessageThread`): abre no FIM (salto sem animação na 1.ª pintura com dados da conversa — `ready` =
+  `thread.data.conversationId === selectedId`); polling/novas só puxam se estava a <80px do fim, senão botão "N novas ↓";
+  `ResizeObserver` no conteúdo+contentor mantém o fim com imagens/áudios lazy, composer a crescer, resumo IA; `stickSignal`
+  (contador na página, sobe em `reply`/`sendTemplate` OK) força o fim depois de ESTE utilizador enviar.
+- **Bolhas**: fundo do chat `#efeae2/70` (dark `zinc-950`), entrada branca, saída `#d9fdd3` com texto escuro (dark `#005c4b`),
+  `text-[13px]`, `px-2 py-1`, max 88%/70%/62%, cauda só na 1.ª do grupo (mesmo lado, <5 min), hora+ticks absolutos no canto
+  com espaçador inline (truque do WhatsApp), etiqueta "Template · x" 10px, separadores "Hoje/Ontem/dia da semana/dd/mm(/aaaa)",
+  erro de envio por baixo da bolha (antes `text-red-200` dentro do verde). Pré-visualização do template no diálogo com o mesmo verde.
+- **Composer**: botões ghost, envio redondo, textarea cresce até 160px (`field-sizing: content` nativo + fallback JS só quando
+  `CSS.supports` falha), Enter envia / Shift+Enter nova linha (igual).
+- **Esc**: ignora `e.defaultPrevented` — fechar um popover/menu/select Radix com Esc já não fecha também a conversa.
+**Avatar — origem da foto**: `employees.photoUrl` da ficha ligada (`whatsapp_conversations.employeeId`), via o LEFT JOIN a
+`employees` que as 3 queries (lista completa, lista base de recurso, thread) já faziam → zero queries novas, sem N+1. É a
+MESMA URL pública que RH/Extras-Dia/DashboardLayout já mostram em `<img>` (bucket S3 público por policy / Blob público) — não há
+URL assinada para fotos de colaboradores. Sem ficha (leads, clientes, números soltos) ou sem foto → iniciais (2 dígitos finais
+se o nome for o número) numa cor fixa por nome. A Cloud API da Meta NÃO dá a foto de perfil do WhatsApp. Não se usou a foto do
+diretório Google (`google_directory_people.employeeId`, que o `contactsSearch` prefere) — seria mais um JOIN; candidata a follow-up.
+**Why**: pedido do Jorge 2026-10-01 — filtros ocupavam a coluna (cabia ~1,5 conversa), thread com ~230px úteis, conversa abria
+no topo, bolhas enormes, sem foto.
+**Notes**:
+- `tsc --noEmit` EXIT 0; vitest whatsappInboxView 12 + whatsappInbox + whatsappConversation + aiTouchpoints + whatsappCalls +
+  whatsappMedia = 121/121 verdes; `vite build` OK (CSS gerado com as classes arbitrárias novas). NÃO testado num browser real.
+- `photoUrl` é campo ADICIONADO a `ConversationRow`/`ConversationThread` (contrato só cresce). Deploy só código.
+- RULE as classes Tailwind da paleta do avatar vivem no componente (`ContactAvatar`), não em `shared/` — o Tailwind v4 pode não
+  varrer `shared/`.
+- `SelectTrigger` tem `data-[size=default]:h-9` que ganha a `h-7` em className — usar `size="sm"` (h-8).
+- Debt: `photoUrl` é dado pessoal (`PERSONAL_FIELDS` no `rhAccess`) mas o inbox já expunha nome+telefone ao mesmo público
+  (permissão `whatsapp.view` + âmbito de cidades) — não se aplicou `sanitizeEmployee`.
 
 ### 2026-09-30 (c) — Chamadas: toque por SSE + Web Push (lacunas 1 e 2 da fase 0)
 **Type**: feature (NÃO commitado/deployado; **migração 0330** `web_push_subscriptions` (era 0320; renumerada no merge para o main a 2026-10-01 porque o main já tinha a 0320 das penalizações), registada em `server/migrations/index.ts`)

@@ -33,6 +33,7 @@ dialog only nudges.
 - `memory/storage-backends-s3.md` — the storage abstraction these mutations write
   through (S3 → Vercel Blob → local), and the presigned-PUT groundwork that exists
   precisely because of the ~4.5 MB body cap documented above
+- `memory/whatsapp-integration.md` — **2026-10-01** o inbox WhatsApp mostra `employees.photoUrl` como avatar (lista + cabeçalho da conversa) através do JOIN que já existia; sem foto → iniciais
 - `memory/reference.md` — index
 
 ## Changelog

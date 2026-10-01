@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,25 +24,22 @@ import {
   MessageCircle,
   Send,
   Clock,
-  Check,
   CheckCheck,
-  XCircle,
   ArrowLeft,
   Hourglass,
   Lock,
   MailOpen,
-  Search,
   X,
   BellOff,
   AlarmClock,
-  AlertTriangle,
   UserRound,
   Link2,
   Sparkles,
   Zap,
   Settings2,
   Phone,
-  PhoneMissed,
+  MoreVertical,
+  Timer,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -57,75 +55,30 @@ import {
   fillQuickReply,
   formatWaiting,
   matchesInboxFilters,
-  type AssigneeFilter,
   type ConversationStatus,
-  type StatusFilter,
 } from "@shared/whatsappConversation";
-import { WHATSAPP_INTENTS, WHATSAPP_INTENT_LABELS, isWhatsappIntent } from "@shared/commsAi";
 import { withDraft, type WhatsAppDrafts } from "@shared/whatsappDrafts";
+import { DEFAULT_INBOX_FILTERS, type InboxListFilters } from "@shared/whatsappInboxView";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
-import { CallContactDialog, CallTimelineEntry, PendingCallbacksDialog } from "@/components/whatsapp/WhatsAppCallsPanels";
+import { CallContactDialog, PendingCallbacksDialog, type TimelineCall } from "@/components/whatsapp/WhatsAppCallsPanels";
+import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
+import { ConversationListItem } from "@/components/whatsapp/ConversationListItem";
+import { InboxListHeader } from "@/components/whatsapp/InboxListHeader";
+import { MessageThread } from "@/components/whatsapp/MessageThread";
+import { windowCountdown } from "@/components/whatsapp/inboxFormat";
+import type { InboxMessage } from "@/components/whatsapp/inboxTypes";
 import { can } from "@shared/access";
 import {
   DEFAULT_WHATSAPP_TEMPLATE_ID,
   WHATSAPP_TEMPLATES,
   findWhatsAppTemplate,
-  messageDisplayBody,
   previewTemplateBody,
   resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
-import { isMediaPlaceholderBody } from "@shared/whatsappMedia";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-/** Timestamp da BD (UTC wall-clock 'YYYY-MM-DD HH:MM:SS') → Date local, ou null. */
-function parseDbTime(s: string | null): Date | null {
-  if (!s) return null;
-  const iso = s.includes("T") ? s : s.replace(" ", "T");
-  const withZ = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + "Z";
-  const d = new Date(withZ);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-/** Timestamp da BD → hora local HH:MM (bolhas da thread). */
-function fmtTime(s: string | null): string {
-  const d = parseDbTime(s);
-  return d ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-}
-
-/**
- * Timestamp da BD → HH:MM se for hoje, senão DD/MM (lista de conversas). A lista
- * está ordenada pela última mensagem e mostrar só a hora numa conversa de há
- * uma semana fazia parecer que era de hoje.
- */
-function fmtListTime(s: string | null, now: number): string {
-  const d = parseDbTime(s);
-  if (!d) return "";
-  const today = new Date(now);
-  const sameDay =
-    d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
-  return sameDay
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
-}
-
-/** Countdown legível até windowExpiresAt (ISO), relativo a `now` (ms). */
-function windowCountdown(expiresAt: string | null, now: number): string {
-  if (!expiresAt) return "";
-  const ms = new Date(expiresAt).getTime() - now;
-  if (ms <= 0) return "a fechar";
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
-/** Janela a fechar em menos de 2h — a linha ganha destaque na lista. */
-function windowClosingSoon(expiresAt: string | null, now: number): boolean {
-  if (!expiresAt) return false;
-  return new Date(expiresAt).getTime() - now < 2 * 3_600_000;
-}
 
 type WindowState = "awaiting_first_reply" | "open" | "expired";
 
@@ -145,51 +98,21 @@ function usePageVisible(): boolean {
 
 /** Intervalo de atualização da lista e da conversa aberta. */
 const POLL_MS = 20_000;
+/** Altura máxima do composer (px) — a partir daqui ganha scroll próprio. */
+const COMPOSER_MAX_PX = 160;
+/** O browser cresce a textarea sozinho (`field-sizing: content`)? Senão, faz-se à mão. */
+const SUPPORTS_FIELD_SIZING = typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("field-sizing", "content");
+// Referências estáveis para a thread não recalcular a linha do tempo a cada render.
+const EMPTY_MESSAGES: InboxMessage[] = [];
+const EMPTY_CALLS: TimelineCall[] = [];
 
 /** Badge de opt-out (pediu STOP). */
 function OptedOutBadge() {
   return (
-    <Badge variant="outline" className="h-5 px-1.5 text-[11px] gap-1 border-red-300 text-red-700 dark:border-red-800 dark:text-red-300 shrink-0">
-      <BellOff className="h-3 w-3" /> Não quer mensagens
+    <Badge variant="outline" className="h-4 px-1 text-[10px] gap-0.5 border-red-300 text-red-700 dark:border-red-800 dark:text-red-300 shrink-0">
+      <BellOff className="h-2.5 w-2.5" /> Não quer mensagens
     </Badge>
   );
-}
-
-// ─── Ícone de status (só mensagens OUT) ─────────────────────────────────────
-
-function StatusIcon({ status }: { status: string }) {
-  switch (status) {
-    case "sent":
-      return <Check className="h-3 w-3 text-muted-foreground" aria-label="Enviado" />;
-    case "delivered":
-      return <CheckCheck className="h-3 w-3 text-muted-foreground" aria-label="Entregue" />;
-    case "read":
-      return <CheckCheck className="h-3 w-3 text-sky-500" aria-label="Lido" />;
-    case "failed":
-      return <XCircle className="h-3 w-3 text-red-500" aria-label="Falhou" />;
-    default:
-      return <Clock className="h-3 w-3 text-muted-foreground" aria-label="Pendente" />;
-  }
-}
-
-// ─── Linha do tempo: mensagens + chamadas por ordem de hora ─────────────────
-
-type TimelineItem<M, C> = { kind: "message"; at: number; message: M } | { kind: "call"; at: number; call: C };
-
-/** Junta mensagens e chamadas (ordem cronológica; empate: mensagem primeiro). */
-function timeline<M extends { id: number; waTimestamp: string | null; createdAt: string }, C extends { id: number; startedAt: string }>(
-  messages: readonly M[],
-  calls: readonly C[],
-): TimelineItem<M, C>[] {
-  const items: TimelineItem<M, C>[] = [
-    ...messages.map((m) => ({ kind: "message" as const, at: parseDbTime(m.waTimestamp ?? m.createdAt)?.getTime() ?? 0, message: m })),
-    ...calls.map((c) => ({ kind: "call" as const, at: parseDbTime(c.startedAt)?.getTime() ?? 0, call: c })),
-  ];
-  // Só chamadas dentro do período das mensagens carregadas (a thread mostra as últimas N).
-  const firstMsg = messages.length ? Math.min(...items.filter((i) => i.kind === "message").map((i) => i.at)) : -Infinity;
-  return items
-    .filter((i) => i.kind === "message" || i.at >= firstMsg || messages.length < 100)
-    .sort((a, b) => a.at - b.at || (a.kind === "message" ? -1 : 1));
 }
 
 // ─── Página ─────────────────────────────────────────────────────────────────
@@ -218,19 +141,13 @@ export default function WhatsAppInboxPage() {
   const [now, setNow] = useState(() => Date.now());
   // Pesquisa por nome ou número (filtro local — a lista já vem completa).
   const [search, setSearch] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
-  // Só conversas com mensagens por ler (filtro local, compõe em AND com a
-  // pesquisa). A conversa ABERTA fica sempre à vista: abrir marca como lida e
-  // sem isto a linha desaparecia debaixo do clique.
-  const [onlyUnread, setOnlyUnread] = useState(false);
-  // Estado + atribuição (0097): filtros locais, em AND com os de cima.
+  // Filtros locais, todos em AND com a pesquisa: responsável + estado (0097),
+  // só não lidas, só com alerta (SLA / janela a fechar), intenção e urgência
+  // (triagem IA). A conversa ABERTA fica sempre à vista: abrir marca como lida
+  // e sem isto a linha desaparecia debaixo do clique.
   const { user } = useAuth();
-  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  // Só conversas com alerta (sem resposta há +SLA ou janela a fechar).
-  const [onlyAlerts, setOnlyAlerts] = useState(false);
-  // Etiquetas da triagem por IA (intenção + urgência).
-  const [intentFilter, setIntentFilter] = useState<string>("all");
-  const [onlyUrgent, setOnlyUrgent] = useState(false);
+  const [filters, setFilters] = useState<InboxListFilters>(DEFAULT_INBOX_FILTERS);
+  const patchFilters = (patch: Partial<InboxListFilters>) => setFilters((f) => ({ ...f, ...patch }));
   const [contextOpen, setContextOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [aiSummaryOf, setAiSummary] = useState<{ conversationId: number; text: string } | null>(null);
@@ -238,6 +155,8 @@ export default function WhatsAppInboxPage() {
   // Chamadas de voz (WhatsApp Calling API): "Ligar" e "Por devolver" (?chamadas=1 abre a lista).
   const [callOpen, setCallOpen] = useState(false);
   const [callbacksOpen, setCallbacksOpen] = useState(() => new URLSearchParams(window.location.search).get("chamadas") === "1");
+  // Muda quando ESTE utilizador envia → a conversa volta ao fim mesmo que estivesse a ler acima.
+  const [stickSignal, setStickSignal] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -326,6 +245,7 @@ export default function WhatsAppInboxPage() {
   const reply = trpc.whatsapp.reply.useMutation({
     onSuccess: (_r, v) => {
       setDraft(v.conversationId, "");
+      setStickSignal((n) => n + 1);
       refreshAll();
     },
     onError: (e) => toast.error(e.message),
@@ -335,6 +255,7 @@ export default function WhatsAppInboxPage() {
       if (r.sent) toast.success("Template enviado.");
       else toast.error(r.recipients[0]?.error || "Falha ao enviar template.");
       setTplOpen(false);
+      setStickSignal((n) => n + 1);
       thread.refetch();
       conversations.refetch();
     },
@@ -356,13 +277,15 @@ export default function WhatsAppInboxPage() {
     return m;
   }, [allConversations, now, slaMinutes]);
   const scoped = allConversations.filter((c) =>
-    matchesInboxFilters(c, { assignee: assigneeFilter, status: statusFilter, userId: user?.id }),
+    matchesInboxFilters(c, { assignee: filters.assignee, status: filters.status, userId: user?.id }),
   );
-  const unreadTotal = scoped.filter((c) => c.unreadCount > 0).length;
-  const overdueTotal = scoped.filter((c) => alertsById.get(c.id)?.overdue).length;
-  const closingTotal = scoped.filter((c) => alertsById.get(c.id)?.windowClosing).length;
-  const urgentTotal = scoped.filter((c) => c.aiUrgency === "urgente" && c.status !== "resolvido").length;
-  const mineTotal = allConversations.filter((c) => c.assignedUserId != null && c.assignedUserId === user?.id && c.status !== "resolvido").length;
+  const counts = {
+    unread: scoped.filter((c) => c.unreadCount > 0).length,
+    overdue: scoped.filter((c) => alertsById.get(c.id)?.overdue).length,
+    closing: scoped.filter((c) => alertsById.get(c.id)?.windowClosing).length,
+    urgent: scoped.filter((c) => c.aiUrgency === "urgente" && c.status !== "resolvido").length,
+    mine: allConversations.filter((c) => c.assignedUserId != null && c.assignedUserId === user?.id && c.status !== "resolvido").length,
+  };
   const searchLower = search.trim().toLowerCase();
   // A conversa ABERTA fica sempre à vista (ex.: acabou de ser resolvida).
   const scopedIds = new Set(scoped.map((c) => c.id));
@@ -374,10 +297,10 @@ export default function WhatsAppInboxPage() {
         matchesContactQuery(search, { name: c.name, phone: c.phoneE164 }) ||
         (c.assignedName ?? "").toLowerCase().includes(searchLower) ||
         (c.preview ?? "").toLowerCase().includes(searchLower)) &&
-      (!onlyUnread || c.unreadCount > 0 || c.id === selectedId) &&
-      (!onlyAlerts || a?.overdue || a?.windowClosing || c.id === selectedId) &&
-      (intentFilter === "all" || c.aiIntent === intentFilter || c.id === selectedId) &&
-      (!onlyUrgent || c.aiUrgency === "urgente" || c.id === selectedId)
+      (!filters.onlyUnread || c.unreadCount > 0 || c.id === selectedId) &&
+      (!filters.onlyAlerts || a?.overdue || a?.windowClosing || c.id === selectedId) &&
+      (filters.intent === "all" || c.aiIntent === filters.intent || c.id === selectedId) &&
+      (!filters.onlyUrgent || c.aiUrgency === "urgente" || c.id === selectedId)
     );
   });
 
@@ -391,7 +314,8 @@ export default function WhatsAppInboxPage() {
         searchRef.current?.focus();
         return;
       }
-      if (e.key === "Escape" && !typing && selectedId != null && !tplOpen && !contextOpen && !quickOpen) {
+      // `defaultPrevented`: o Esc já fechou um popover/menu/select (Radix) — não fecha também a conversa.
+      if (e.key === "Escape" && !e.defaultPrevented && !typing && selectedId != null && !tplOpen && !contextOpen && !quickOpen) {
         setSelectedId(null);
         return;
       }
@@ -414,9 +338,21 @@ export default function WhatsAppInboxPage() {
   const openList = convList.filter((c) => c.windowState === "open");
   const closedList = convList.filter((c) => c.windowState !== "open");
   const t = thread.data;
+  // Enquanto a thread carrega, o cabeçalho usa a linha da lista (nome + foto já conhecidos).
+  const selectedRow = selectedId != null ? allConversations.find((c) => c.id === selectedId) : undefined;
+  const headerName = t?.name ?? selectedRow?.name ?? "…";
+  const headerPhoto = t?.photoUrl ?? selectedRow?.photoUrl ?? null;
   const windowState: WindowState | undefined = t?.windowState;
   const threadAlerts = t ? conversationAlerts(t, now, slaMinutes) : null;
   const aiConfigured = meta.data?.aiConfigured === true;
+
+  // Composer cresce com o texto até COMPOSER_MAX_PX (fallback para browsers sem `field-sizing`).
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el || SUPPORTS_FIELD_SIZING) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`;
+  }, [text, selectedId]);
 
   function insertQuickReply(body: string) {
     const filled = fillQuickReply(body, t?.recipientFirstName);
@@ -462,253 +398,61 @@ export default function WhatsAppInboxPage() {
     reply.mutate({ conversationId: selectedId, text: text.trim() });
   }
 
-  function conversationRow(c: (typeof convList)[number]) {
-    const isOpen = c.windowState === "open";
-    const a = alertsById.get(c.id);
-    return (
-      <button
-        key={c.id}
-        onClick={() => openConversation(c.id)}
-        className={`w-full text-left px-3 py-2.5 border-b hover:bg-muted/50 transition-colors ${
-          selectedId === c.id ? "bg-muted" : ""
-        }`}
-      >
-        <div className="flex items-center gap-2">
-          <span className="font-medium truncate flex-1">{c.name}</span>
-          {c.optedOut && <BellOff className="h-3.5 w-3.5 text-red-500 shrink-0" aria-label="Não quer mensagens" />}
-          <span className="text-[11px] text-muted-foreground shrink-0">{fmtListTime(c.lastMessageAt, now)}</span>
-          {c.unreadCount > 0 && (
-            <Badge className="bg-green-700 text-white h-5 min-w-5 px-1.5 justify-center shrink-0">
-              {c.unreadCount}
-            </Badge>
-          )}
-        </div>
-        <div className="flex items-center gap-1 mt-0.5">
-          {c.windowState === "awaiting_first_reply" && (
-            <Hourglass className="h-3 w-3 text-amber-500 shrink-0" aria-label="A aguardar 1ª resposta" />
-          )}
-          {c.windowState === "expired" && (
-            <Lock className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Janela fechada" />
-          )}
-          <span className="text-xs text-muted-foreground truncate flex-1">
-            {c.previewDirection === "out" ? "Tu: " : ""}
-            {c.preview ?? "—"}
-          </span>
-          {isOpen && (
-            // Critério de ordenação deste bloco, visível na própria linha.
-            <span
-              className={`text-[11px] shrink-0 tabular-nums ${
-                windowClosingSoon(c.windowExpiresAt, now) ? "text-amber-600 dark:text-amber-400 font-medium" : "text-green-700 dark:text-green-400"
-              }`}
-              title="Tempo que resta para responder em texto livre"
-            >
-              fecha em {windowCountdown(c.windowExpiresAt, now)}
-            </span>
-          )}
-        </div>
-        {(a?.overdue || a?.windowClosing || c.status !== "aberto" || c.assignedName || c.aiIntent || c.aiUrgency === "urgente") && (
-          <div className="flex flex-wrap items-center gap-1 mt-1">
-            {c.aiUrgency === "urgente" && c.status !== "resolvido" && (
-              <Badge className="h-5 px-1.5 text-[11px] gap-1 bg-orange-600 text-white" title="Urgente (IA) — entra mais cedo no aviso de SLA">
-                <Zap className="h-3 w-3" /> Urgente
-              </Badge>
-            )}
-            {isWhatsappIntent(c.aiIntent) && (
-              <Badge variant="outline" className="h-5 px-1.5 text-[11px] border-violet-300 text-violet-800 dark:border-violet-800 dark:text-violet-300" title="Intenção (IA)">
-                {WHATSAPP_INTENT_LABELS[c.aiIntent]}
-              </Badge>
-            )}
-            {a?.overdue && (
-              <Badge className="h-5 px-1.5 text-[11px] gap-1 bg-red-600 text-white" title={`Sem resposta há mais de ${slaMinutes} min`}>
-                <AlarmClock className="h-3 w-3" /> {formatWaiting(a.waitingMinutes)}
-              </Badge>
-            )}
-            {a?.windowClosing && (
-              <Badge variant="outline" className="h-5 px-1.5 text-[11px] gap-1 border-amber-400 text-amber-700 dark:text-amber-300" title="Janela de 24h a fechar">
-                <AlertTriangle className="h-3 w-3" /> Janela a fechar
-              </Badge>
-            )}
-            {c.status !== "aberto" && (
-              <Badge variant="secondary" className="h-5 px-1.5 text-[11px]">{CONVERSATION_STATUS_LABELS[c.status]}</Badge>
-            )}
-            {c.assignedName && (
-              <span className="text-[11px] text-muted-foreground inline-flex items-center gap-0.5 truncate max-w-[45%]" title={`Responsável: ${c.assignedName}`}>
-                <UserRound className="h-3 w-3 shrink-0" /> {c.assignedName}
-              </span>
-            )}
-          </div>
-        )}
-      </button>
-    );
-  }
-
   function groupHeader(label: string, count: number, tone: "open" | "closed") {
     return (
       <div
-        className={`sticky top-0 z-10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide border-b ${
+        className={cn(
+          "sticky top-0 z-10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide border-b backdrop-blur",
           tone === "open"
-            ? "bg-green-50 dark:bg-green-950/40 text-green-800 dark:text-green-300"
-            : "bg-muted text-muted-foreground"
-        }`}
+            ? "bg-green-50/95 dark:bg-green-950/80 text-green-800 dark:text-green-300"
+            : "bg-muted/95 text-muted-foreground",
+        )}
       >
         {label} · {count}
       </div>
     );
   }
 
+  const conversationRow = (c: (typeof convList)[number]) => (
+    <ConversationListItem
+      key={c.id}
+      c={c}
+      alerts={alertsById.get(c.id)}
+      selected={selectedId === c.id}
+      now={now}
+      slaMinutes={slaMinutes}
+      onOpen={openConversation}
+    />
+  );
+
   // ── Coluna esquerda: lista de conversas ──
   const listColumn = (
     <div className="flex flex-col h-full border-r min-w-0">
-      <div className="p-3 border-b flex items-center gap-2 shrink-0">
-        <MessageCircle className="h-5 w-5 text-green-600" />
-        <span className="font-semibold">Conversas</span>
-        {conversations.isFetching && <Clock className="h-3.5 w-3.5 animate-spin text-muted-foreground ml-auto" />}
-      </div>
-      <div className="p-2 border-b shrink-0 space-y-2">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <Input
-            ref={searchRef}
-            type="text"
-            placeholder="Pesquisar nome, número ou texto… ( / )"
-            aria-label="Pesquisar conversas por nome ou número"
-            className="h-9 pl-8 pr-8"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {hasSearch && (
-            <button
-              type="button"
-              aria-label="Limpar pesquisa"
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              onClick={() => setSearch("")}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-1" role="group" aria-label="Filtrar por responsável">
-          {([
-            ["all", "Todas"],
-            ["mine", `Minhas${mineTotal ? ` · ${mineTotal}` : ""}`],
-            ["unassigned", "Sem atribuição"],
-          ] as [AssigneeFilter, string][]).map(([v, label]) => (
-            <Button
-              key={v}
-              type="button"
-              size="sm"
-              variant={assigneeFilter === v ? "default" : "outline"}
-              className="h-7 px-2 text-xs flex-1"
-              aria-pressed={assigneeFilter === v}
-              onClick={() => setAssigneeFilter(v)}
-            >
-              {label}
-            </Button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-            <SelectTrigger className="h-7 w-[150px] text-xs" aria-label="Filtrar por estado">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="active">Ativas</SelectItem>
-              <SelectItem value="aberto">Abertas</SelectItem>
-              <SelectItem value="pendente">Pendentes</SelectItem>
-              <SelectItem value="resolvido">Resolvidas</SelectItem>
-              <SelectItem value="all">Todos os estados</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            size="sm"
-            variant={onlyUnread ? "default" : "outline"}
-            className="h-7 text-xs"
-            aria-pressed={onlyUnread}
-            title="Mostrar só conversas com mensagens por ler"
-            onClick={() => setOnlyUnread((v) => !v)}
-          >
-            <MessageCircle className="h-3.5 w-3.5 mr-1" />
-            Não lidas
-            <span className="ml-1 opacity-70 tabular-nums">{unreadTotal}</span>
-          </Button>
-          {onlyUnread && (
-            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setOnlyUnread(false)}>
-              <X className="h-3.5 w-3.5 mr-1" /> Todas
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Select value={intentFilter} onValueChange={setIntentFilter}>
-            <SelectTrigger className="h-7 w-[170px] text-xs" aria-label="Filtrar por intenção (IA)">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas as intenções</SelectItem>
-              {WHATSAPP_INTENTS.map((i) => (
-                <SelectItem key={i} value={i}>{WHATSAPP_INTENT_LABELS[i]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            size="sm"
-            variant={onlyUrgent ? "default" : "outline"}
-            className="h-7 text-xs"
-            aria-pressed={onlyUrgent}
-            title="Mostrar só conversas marcadas como urgentes pela IA"
-            onClick={() => setOnlyUrgent((v) => !v)}
-          >
-            <Zap className="h-3.5 w-3.5 mr-1" />
-            Urgentes
-            <span className="ml-1 opacity-70 tabular-nums">{urgentTotal}</span>
-          </Button>
-        </div>
-      </div>
-      {(pendingCallbacks.data?.length ?? 0) > 0 && (
-        <button
-          type="button"
-          onClick={() => setCallbacksOpen(true)}
-          className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs border-b text-left bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300"
-          title="Chamadas de clientes que ninguém atendeu"
-        >
-          <PhoneMissed className="h-4 w-4 shrink-0" />
-          <span className="flex-1"><strong>{pendingCallbacks.data!.length}</strong> chamada{pendingCallbacks.data!.length > 1 ? "s" : ""} perdida{pendingCallbacks.data!.length > 1 ? "s" : ""} por devolver</span>
-          <span className="underline shrink-0">Ver</span>
-        </button>
-      )}
-      {(overdueTotal > 0 || closingTotal > 0 || onlyAlerts) && (
-        <button
-          type="button"
-          onClick={() => setOnlyAlerts((v) => !v)}
-          aria-pressed={onlyAlerts}
-          className={`shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs border-b text-left ${
-            overdueTotal > 0
-              ? "bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300"
-              : "bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
-          }`}
-          title={onlyAlerts ? "Mostrar todas" : "Mostrar só as conversas com alerta"}
-        >
-          <AlarmClock className="h-4 w-4 shrink-0" />
-          <span className="flex-1">
-            {overdueTotal > 0 && <><strong>{overdueTotal}</strong> sem resposta há +{formatWaiting(slaMinutes)}</>}
-            {overdueTotal > 0 && closingTotal > 0 && " · "}
-            {closingTotal > 0 && <><strong>{closingTotal}</strong> com a janela de 24h a fechar</>}
-            {overdueTotal === 0 && closingTotal === 0 && "Sem alertas"}
-          </span>
-          <span className="underline shrink-0">{onlyAlerts ? "Ver todas" : "Ver"}</span>
-        </button>
-      )}
-      <div className="flex-1 overflow-y-auto">
+      <InboxListHeader
+        search={search}
+        onSearchChange={setSearch}
+        searchRef={searchRef}
+        filters={filters}
+        onFiltersChange={patchFilters}
+        onClearFilters={() => setFilters(DEFAULT_INBOX_FILTERS)}
+        counts={counts}
+        slaMinutes={slaMinutes}
+        shownCount={convList.length}
+        isFetching={conversations.isFetching}
+        showShortcuts={!isMobile}
+        pendingCallbacks={pendingCallbacks.data?.length ?? 0}
+        onOpenCallbacks={() => setCallbacksOpen(true)}
+      />
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         {convList.length === 0 && (
           <div className="p-4 text-sm text-muted-foreground text-center">
             {conversations.isLoading
               ? "A carregar…"
               : hasSearch
-                ? `Sem resultados para “${search.trim()}”${onlyUnread ? " entre as não lidas" : ""}.`
-                : onlyUnread
+                ? `Sem resultados para “${search.trim()}”${filters.onlyUnread ? " entre as não lidas" : ""}.`
+                : filters.onlyUnread
                   ? "Sem mensagens por ler."
-                  : onlyAlerts
+                  : filters.onlyAlerts
                     ? "Sem conversas com alerta."
                     : allConversations.length
                       ? "Nenhuma conversa com estes filtros."
@@ -723,19 +467,19 @@ export default function WhatsAppInboxPage() {
     </div>
   );
 
-  // ── Banner + composer por estado de janela ──
+  // ── Banner (uma linha) + composer por estado de janela ──
   function templateButton() {
     if (!t) return null;
     return (
       <Button
         size="sm"
         variant="outline"
-        className="ml-auto h-7"
+        className="ml-auto h-6 px-2 text-[11px] shrink-0 bg-background"
         disabled={t.optedOut}
         title={t.optedOut ? "Este contacto pediu para não receber mensagens" : "Enviar um template aprovado"}
         onClick={openTemplateDialog}
       >
-        <Send className="h-3.5 w-3.5 mr-1" /> Enviar template
+        <Send className="h-3 w-3 mr-1" /> Enviar template
       </Button>
     );
   }
@@ -743,11 +487,13 @@ export default function WhatsAppInboxPage() {
   function windowBanner() {
     if (!t) return null;
     const optOutNote = t.optedOut ? (
-      <div className="flex items-center gap-2 px-3 py-2 text-xs bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300 border-t">
-        <BellOff className="h-4 w-4 shrink-0" />
-        <span>
-          <strong>Não quer mensagens</strong> — pediu para parar. Templates bloqueados; texto livre só com confirmação.
-          Volta a receber se responder INICIAR.
+      <div
+        className="flex items-center gap-1.5 px-3 py-1 text-[11px] bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300 border-t"
+        title="Pediu para parar. Templates bloqueados; texto livre só com confirmação. Volta a receber se responder INICIAR."
+      >
+        <BellOff className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0">
+          <strong>Não quer mensagens</strong> — templates bloqueados; texto livre só com confirmação. Volta se responder INICIAR.
         </span>
       </div>
     ) : null;
@@ -755,11 +501,10 @@ export default function WhatsAppInboxPage() {
       return (
         <>
           {optOutNote}
-          <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 border-t">
-            <Hourglass className="h-4 w-4 shrink-0" />
-            <span>
-              <strong>A aguardar a primeira resposta.</strong> Só podes escrever texto livre depois de o contacto
-              responder — até lá, só templates.
+          <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 border-t">
+            <Hourglass className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0">
+              <strong>A aguardar a 1.ª resposta</strong> — só templates até o contacto responder.
             </span>
             {templateButton()}
           </div>
@@ -767,20 +512,22 @@ export default function WhatsAppInboxPage() {
       );
     }
     if (windowState === "open") {
+      const closing = !!threadAlerts?.windowClosing;
       return (
         <>
           {optOutNote}
           <div
-            className={`flex items-center gap-2 px-3 py-2 text-xs border-t ${
-              threadAlerts?.windowClosing
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1 text-[11px] border-t",
+              closing
                 ? "bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
-                : "bg-green-50 dark:bg-green-950/30 text-green-800 dark:text-green-300"
-            }`}
+                : "bg-green-50/70 dark:bg-green-950/20 text-green-800 dark:text-green-300",
+            )}
           >
-            <MessageCircle className="h-4 w-4 shrink-0" />
-            <span>
+            <Timer className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0">
               <strong>Janela aberta</strong> — fecha em {windowCountdown(t.windowExpiresAt, now)}.
-              {threadAlerts?.windowClosing && " Responde antes que feche — depois só com template."}
+              {closing && " Responde antes que feche — depois só com template."}
             </span>
           </div>
         </>
@@ -790,9 +537,9 @@ export default function WhatsAppInboxPage() {
     return (
       <>
         {optOutNote}
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs bg-muted text-muted-foreground border-t">
-          <Lock className="h-4 w-4 shrink-0" />
-          <span>
+        <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] bg-muted text-muted-foreground border-t">
+          <Lock className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0">
             <strong>Janela de 24h fechada</strong> — só é possível reiniciar com um template.
           </span>
           {templateButton()}
@@ -804,15 +551,15 @@ export default function WhatsAppInboxPage() {
   function composer() {
     const disabled = windowState !== "open";
     return (
-      <div className="p-3 border-t shrink-0">
-        <div className="flex gap-2 items-end">
+      <div className="px-2 py-2 border-t shrink-0 bg-muted/30">
+        <div className="flex gap-1.5 items-end">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 size="icon"
-                className="h-10 w-10 shrink-0"
+                className="h-9 w-9 shrink-0 text-muted-foreground"
                 disabled={disabled}
                 title="Respostas rápidas"
                 aria-label="Respostas rápidas"
@@ -840,9 +587,9 @@ export default function WhatsAppInboxPage() {
           {aiConfigured && (
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               size="icon"
-              className="h-10 w-10 shrink-0"
+              className="h-9 w-9 shrink-0 text-muted-foreground"
               disabled={disabled || aiAssist.isPending || selectedId == null}
               title="Sugerir resposta com IA (fica no composer para rever)"
               aria-label="Sugerir resposta com IA"
@@ -858,8 +605,9 @@ export default function WhatsAppInboxPage() {
           <Textarea
             ref={composerRef}
             rows={1}
-            className="resize-none min-h-[40px] max-h-32"
-            placeholder={disabled ? "Composer desativado — janela fechada." : "Escreve uma mensagem…"}
+            aria-label="Mensagem"
+            className="resize-none min-h-9 max-h-40 overflow-y-auto py-2 leading-5 bg-background"
+            placeholder={disabled ? "Composer desativado — janela fechada." : "Escreve uma mensagem… (Shift+Enter muda de linha)"}
             value={text}
             disabled={disabled || reply.isPending}
             onChange={(e) => setText(e.target.value)}
@@ -871,9 +619,12 @@ export default function WhatsAppInboxPage() {
             }}
           />
           <Button
-            className="bg-green-700 hover:bg-green-800 text-white shrink-0"
+            size="icon"
+            className="h-9 w-9 rounded-full bg-green-700 hover:bg-green-800 text-white shrink-0"
             disabled={disabled || !text.trim() || reply.isPending || selectedId == null}
             onClick={submitReply}
+            aria-label="Enviar mensagem"
+            title="Enviar (Enter)"
           >
             {reply.isPending ? <Clock className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
@@ -882,216 +633,229 @@ export default function WhatsAppInboxPage() {
     );
   }
 
+  // ── Cabeçalho da conversa: identidade + ações numa linha ──
+  const statusSelect = t && (
+    <Select
+      value={t.status}
+      onValueChange={(v) => setStatus.mutate({ conversationId: t.conversationId, status: v as ConversationStatus })}
+      disabled={setStatus.isPending}
+    >
+      <SelectTrigger size="sm" className="w-[108px] text-xs" aria-label="Estado da conversa">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="aberto">Aberta</SelectItem>
+        <SelectItem value="pendente">Pendente</SelectItem>
+        <SelectItem value="resolvido">Resolvida</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+
+  const assigneeSelect = t && (
+    <Select
+      value={t.assignedUserId != null ? String(t.assignedUserId) : "none"}
+      onValueChange={(v) => assign.mutate({ conversationId: t.conversationId, userId: v === "none" ? null : Number(v) })}
+      disabled={assign.isPending}
+    >
+      <SelectTrigger size="sm" className="w-[150px] min-w-0 text-xs" aria-label="Responsável" title="Responsável">
+        <UserRound className="h-3.5 w-3.5 shrink-0" />
+        <SelectValue placeholder="Responsável" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="none">Sem responsável</SelectItem>
+        {(assignees.data ?? []).map((u) => (
+          <SelectItem key={u.id} value={String(u.id)}>
+            {u.id === user?.id ? `${u.name} (eu)` : u.name}
+          </SelectItem>
+        ))}
+        {t.assignedUserId != null && !(assignees.data ?? []).some((u) => u.id === t.assignedUserId) && (
+          <SelectItem value={String(t.assignedUserId)}>Utilizador #{t.assignedUserId}</SelectItem>
+        )}
+      </SelectContent>
+    </Select>
+  );
+
+  const resolveButton = t && t.status !== "resolvido" && (
+    <Button
+      size="sm"
+      variant="outline"
+      className="h-8 px-2 text-xs shrink-0"
+      disabled={setStatus.isPending}
+      title="Marcar como resolvida (volta a abrir se o contacto escrever)"
+      aria-label="Resolver"
+      onClick={() => setStatus.mutate({ conversationId: t.conversationId, status: "resolvido" })}
+    >
+      <CheckCheck className="h-3.5 w-3.5" />
+      <span className="hidden xl:inline ml-1">Resolver</span>
+    </Button>
+  );
+
+  const linked = !!(t?.linkedBookingRef || t?.linkedClientEmail);
+  const contextButton = t && (
+    <Button
+      size="sm"
+      variant={linked ? "secondary" : "ghost"}
+      className="h-8 px-2 text-xs shrink-0"
+      title={
+        t.linkedBookingRef
+          ? `Reserva ligada${t.linkedBookingLabel ? `: ${t.linkedBookingLabel}` : ""} — reservas, reclamações e perdidos deste número`
+          : t.linkedClientEmail
+            ? `Cliente ligado: ${t.linkedClientEmail} — reservas, reclamações e perdidos deste número`
+            : "Reservas, reclamações e perdidos deste número; ligar a uma reserva ou cliente"
+      }
+      aria-label="Contexto"
+      onClick={() => setContextOpen(true)}
+    >
+      <Link2 className="h-3.5 w-3.5" />
+      <span className={cn("ml-1", linked ? "hidden lg:inline" : "hidden xl:inline")}>
+        {t.linkedBookingRef ? "Reserva ligada" : t.linkedClientEmail ? "Cliente ligado" : "Contexto"}
+      </span>
+    </Button>
+  );
+
+  const callButton = t && canEditWa && callsOn && (
+    <Button
+      size="icon"
+      variant="ghost"
+      className="h-8 w-8 shrink-0 text-green-700 hover:text-green-800 dark:text-green-400"
+      title="Chamada de voz pelo WhatsApp (pede autorização ao cliente se for preciso)"
+      aria-label="Ligar"
+      onClick={() => setCallOpen(true)}
+    >
+      <Phone className="h-4 w-4" />
+    </Button>
+  );
+
+  const moreMenu = t && (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" aria-label="Mais ações" title="Mais ações">
+          <MoreVertical className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60">
+        {aiConfigured && (
+          <DropdownMenuItem
+            disabled={aiAssist.isPending || !t.messages.length}
+            onSelect={() => aiAssist.mutate({ conversationId: t.conversationId, mode: "summary" })}
+          >
+            {aiAssist.isPending && aiAssist.variables?.mode === "summary" && aiAssist.variables.conversationId === selectedId ? (
+              <Clock className="h-3.5 w-3.5 mr-2 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5 mr-2" />
+            )}
+            Resumo da conversa (IA)
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onSelect={() => setContextOpen(true)}>
+          <Link2 className="h-3.5 w-3.5 mr-2" /> Contexto e ligações…
+        </DropdownMenuItem>
+        {t.employeeId != null && (
+          <DropdownMenuItem onSelect={() => openEmployee(t.employeeId!)}>
+            <UserRound className="h-3.5 w-3.5 mr-2" /> Abrir ficha do colaborador
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          disabled={markUnread.isPending}
+          onSelect={() => markUnread.mutate({ conversationId: t.conversationId })}
+          title="Volta a pôr esta conversa em “Não lidas” para retomar mais tarde"
+        >
+          <MailOpen className="h-3.5 w-3.5 mr-2" /> Marcar como não lida
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
   // ── Coluna direita: thread ──
   const threadColumn = (
     <div className="flex flex-col h-full min-w-0 flex-1">
       {selectedId == null ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground text-sm bg-[#efeae2]/40 dark:bg-zinc-950">
+          <MessageCircle className="h-10 w-10 text-green-600/50" />
           Escolhe uma conversa à esquerda.
         </div>
       ) : (
         <>
-          <div className="p-3 border-b flex items-center gap-2 shrink-0">
+          <div className="px-2 sm:px-3 py-2 border-b flex items-center gap-2 shrink-0 min-h-14">
             {isMobile && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedId(null)}>
+              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" aria-label="Voltar às conversas" onClick={() => setSelectedId(null)}>
                 <ArrowLeft className="h-4 w-4" />
               </Button>
             )}
-            <div className="min-w-0">
+            <ContactAvatar name={headerName} photoUrl={headerPhoto} className="h-9 w-9 text-sm" />
+            <div className="min-w-0 flex-1">
               {t?.employeeId ? (
                 // Mesmo padrão das outras páginas (Extras-Dia, Avaliação): o nome
                 // abre a ficha do colaborador em /rh via useOpenEmployee.
                 <button
                   type="button"
-                  className="block font-semibold truncate max-w-full text-left hover:underline"
+                  className="block font-semibold text-sm truncate max-w-full text-left hover:underline"
                   title="Abrir ficha do funcionário"
                   onClick={() => openEmployee(t.employeeId)}
                 >
-                  {t.name}
+                  {headerName}
                 </button>
               ) : (
-                <div className="font-semibold truncate" title={t ? "Número sem ficha de colaborador associada" : undefined}>
-                  {t?.name ?? "…"}
+                <div className="font-semibold text-sm truncate" title={t ? "Número sem ficha de colaborador associada" : undefined}>
+                  {headerName}
                 </div>
               )}
-              {t && (
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span>{t.phoneE164}</span>
-                  {t.optedOut && <OptedOutBadge />}
+              {(t || selectedRow) && (
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground min-w-0">
+                  <span className="truncate tabular-nums">{t?.phoneE164 ?? selectedRow?.phoneE164}</span>
+                  {t?.optedOut && <OptedOutBadge />}
+                  {threadAlerts?.overdue && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-red-600 dark:text-red-400 font-medium shrink-0"
+                      title={`Sem resposta há mais de ${slaMinutes} min`}
+                    >
+                      <AlarmClock className="h-3 w-3" /> Sem resposta · {formatWaiting(threadAlerts.waitingMinutes)}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
-            {t && threadAlerts?.overdue && (
-              <Badge className="ml-auto h-6 px-2 text-[11px] gap-1 bg-red-600 text-white shrink-0" title={`Sem resposta há mais de ${slaMinutes} min`}>
-                <AlarmClock className="h-3.5 w-3.5" /> Sem resposta · {formatWaiting(threadAlerts.waitingMinutes)}
-              </Badge>
+            {t && (
+              <div className="flex items-center gap-1 shrink-0">
+                {!isMobile && statusSelect}
+                {!isMobile && assigneeSelect}
+                {!isMobile && resolveButton}
+                {callButton}
+                {contextButton}
+                {moreMenu}
+              </div>
             )}
           </div>
 
-          {t && (
-            <div className="px-3 py-2 border-b flex flex-wrap items-center gap-1.5 shrink-0 bg-muted/10">
-              <Select
-                value={t.status}
-                onValueChange={(v) => setStatus.mutate({ conversationId: t.conversationId, status: v as ConversationStatus })}
-                disabled={setStatus.isPending}
-              >
-                <SelectTrigger className="h-8 w-[118px] text-xs" aria-label="Estado da conversa">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="aberto">Aberta</SelectItem>
-                  <SelectItem value="pendente">Pendente</SelectItem>
-                  <SelectItem value="resolvido">Resolvida</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select
-                value={t.assignedUserId != null ? String(t.assignedUserId) : "none"}
-                onValueChange={(v) => assign.mutate({ conversationId: t.conversationId, userId: v === "none" ? null : Number(v) })}
-                disabled={assign.isPending}
-              >
-                <SelectTrigger className="h-8 w-[180px] max-w-full text-xs" aria-label="Responsável">
-                  <UserRound className="h-3.5 w-3.5 mr-1 shrink-0" />
-                  <SelectValue placeholder="Responsável" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Sem responsável</SelectItem>
-                  {(assignees.data ?? []).map((u) => (
-                    <SelectItem key={u.id} value={String(u.id)}>
-                      {u.id === user?.id ? `${u.name} (eu)` : u.name}
-                    </SelectItem>
-                  ))}
-                  {t.assignedUserId != null && !(assignees.data ?? []).some((u) => u.id === t.assignedUserId) && (
-                    <SelectItem value={String(t.assignedUserId)}>Utilizador #{t.assignedUserId}</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-              {t.status !== "resolvido" && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs"
-                  disabled={setStatus.isPending}
-                  title="Marcar como resolvida (volta a abrir se o contacto escrever)"
-                  onClick={() => setStatus.mutate({ conversationId: t.conversationId, status: "resolvido" })}
-                >
-                  <CheckCheck className="h-3.5 w-3.5 mr-1" /> Resolver
-                </Button>
-              )}
-              {canEditWa && callsOn && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs border-green-300 text-green-800 dark:border-green-900 dark:text-green-300"
-                  title="Chamada de voz pelo WhatsApp (pede autorização ao cliente se for preciso)"
-                  onClick={() => setCallOpen(true)}
-                >
-                  <Phone className="h-3.5 w-3.5 mr-1" /> Ligar
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant={t.linkedBookingRef || t.linkedClientEmail ? "secondary" : "outline"}
-                className="h-8 text-xs"
-                title="Reservas, reclamações e perdidos deste número; ligar a uma reserva ou cliente"
-                onClick={() => setContextOpen(true)}
-              >
-                <Link2 className="h-3.5 w-3.5 mr-1" />
-                {t.linkedBookingRef ? "Reserva ligada" : t.linkedClientEmail ? "Cliente ligado" : "Contexto"}
-              </Button>
-              {aiConfigured && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs"
-                  disabled={aiAssist.isPending || !t.messages.length}
-                  title="Resumo da conversa com IA"
-                  onClick={() => aiAssist.mutate({ conversationId: t.conversationId, mode: "summary" })}
-                >
-                  {aiAssist.isPending && aiAssist.variables?.mode === "summary" && aiAssist.variables.conversationId === selectedId ? (
-                    <Clock className="h-3.5 w-3.5 mr-1 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5 mr-1" />
-                  )}
-                  Resumo
-                </Button>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 text-xs ml-auto"
-                title="Volta a pôr esta conversa em “Não lidas” para retomar mais tarde"
-                disabled={markUnread.isPending}
-                onClick={() => markUnread.mutate({ conversationId: t.conversationId })}
-              >
-                <MailOpen className="h-3.5 w-3.5 mr-1" />
-                {isMobile ? "Não lida" : "Marcar como não lida"}
-              </Button>
+          {/* Telemóvel: estado + responsável numa 2.ª linha (não cabem ao lado do nome). */}
+          {isMobile && t && (
+            <div className="px-2 py-1.5 border-b flex items-center gap-1.5 shrink-0">
+              {statusSelect}
+              <div className="flex-1 min-w-0 [&>button]:w-full">{assigneeSelect}</div>
+              {resolveButton}
             </div>
           )}
 
           {aiSummary && (
             <div className="px-3 py-2 border-b text-xs bg-violet-50 dark:bg-violet-950/30 text-violet-900 dark:text-violet-200 shrink-0 flex gap-2">
               <Sparkles className="h-4 w-4 shrink-0 mt-0.5" />
-              <div className="whitespace-pre-wrap flex-1 max-h-40 overflow-y-auto">{aiSummary}</div>
+              <div className="whitespace-pre-wrap flex-1 max-h-32 overflow-y-auto">{aiSummary}</div>
               <button type="button" aria-label="Fechar resumo" className="shrink-0 opacity-70 hover:opacity-100" onClick={() => setAiSummary(null)}>
                 <X className="h-4 w-4" />
               </button>
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-muted/20">
-            {thread.isLoading && <div className="text-sm text-muted-foreground text-center">A carregar…</div>}
-            {t?.messages.length === 0 && !(convCalls.data ?? []).length && (
-              <div className="text-sm text-muted-foreground text-center">Sem mensagens.</div>
-            )}
-            {t && timeline(t.messages, convCalls.data ?? []).map((item) => item.kind === "call" ? (
-              <CallTimelineEntry key={`call-${item.call.id}`} c={item.call} />
-            ) : ((m) => (
-              <div key={m.id} className={`flex ${m.direction === "out" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[75%] rounded-lg px-3 py-1.5 text-sm ${
-                    m.direction === "out"
-                      ? "bg-green-700 text-white rounded-br-sm"
-                      : "bg-background border rounded-bl-sm"
-                  }`}
-                >
-                  {m.type === "template" && (
-                    <div
-                      className={`text-[11px] uppercase tracking-wide mb-0.5 ${
-                        m.direction === "out" ? "text-green-100" : "text-muted-foreground"
-                      }`}
-                    >
-                      Template{m.templateName ? ` · ${m.templateName}` : ""}
-                    </div>
-                  )}
-                  {/* Imagens e áudios enviados pela pessoa (2026-09-09). Com o
-                      ficheiro à vista, o marcador "[imagem]"/"[áudio]" é redundante;
-                      a caption (quando existe) continua a aparecer por baixo. */}
-                  <InboundMedia m={m} />
-                  {/* Envios feitos antes de 2026-08-20 não gravaram o conteúdo:
-                      dizem-no em itálico em vez de aparecerem em branco. */}
-                  {!(m.mediaAvailable && isMediaPlaceholderBody(m.body)) && (
-                    <div
-                      className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere]${m.body?.trim() ? "" : " italic opacity-80"}`}
-                    >
-                      {messageDisplayBody(m) || "—"}
-                    </div>
-                  )}
-                  <div
-                    className={`flex items-center gap-1 justify-end mt-0.5 text-[11px] ${
-                      m.direction === "out" ? "text-green-100" : "text-muted-foreground"
-                    }`}
-                  >
-                    <span>{fmtTime(m.waTimestamp ?? m.createdAt)}</span>
-                    {m.direction === "out" && <StatusIcon status={m.status} />}
-                  </div>
-                  {m.direction === "out" && m.status === "failed" && m.errorDetail && (
-                    <div className="text-[11px] text-red-200 mt-0.5">{m.errorDetail}</div>
-                  )}
-                </div>
-              </div>
-            ))(item.message))}
-          </div>
+          <MessageThread
+            conversationId={selectedId}
+            messages={t?.messages ?? EMPTY_MESSAGES}
+            calls={convCalls.data ?? EMPTY_CALLS}
+            ready={t?.conversationId === selectedId}
+            isLoading={thread.isLoading}
+            now={now}
+            stickSignal={stickSignal}
+          />
 
           {windowBanner()}
           {composer()}
@@ -1102,18 +866,10 @@ export default function WhatsAppInboxPage() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <MessageCircle className="h-6 w-6 text-green-600" /> WhatsApp — Inbox
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Respostas de extras, leads e contactos. Só é possível texto livre com a janela de 24h aberta.
-          {!isMobile && <span className="ml-1 opacity-70">Atalhos: / pesquisar · Alt+↑/↓ mudar de conversa · Esc fechar.</span>}
-        </p>
-      </div>
-
-      <Card className="overflow-hidden p-0">
-        <div className="flex h-[calc(100vh-14rem)] min-h-[420px]">
+      <Card className="overflow-hidden p-0 gap-0">
+        {/* Altura: ecrã inteiro menos a barra de topo (4rem) e o padding do layout;
+            no telemóvel também a tab bar e o botão do assistente. */}
+        <div className="flex h-[calc(100dvh-14rem)] md:h-[calc(100dvh-9.5rem)] min-h-[420px]">
           {isMobile ? (
             selectedId == null ? (
               <div className="flex-1 min-w-0">{listColumn}</div>
@@ -1122,7 +878,7 @@ export default function WhatsAppInboxPage() {
             )
           ) : (
             <>
-              <div className="w-80 shrink-0">{listColumn}</div>
+              <div className="w-[340px] xl:w-[380px] shrink-0">{listColumn}</div>
               {threadColumn}
             </>
           )}
@@ -1203,7 +959,7 @@ export default function WhatsAppInboxPage() {
               {templatePreview.isLoading ? (
                 <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
               ) : tplPreviewText ? (
-                <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap">
+                <div className="rounded-md bg-[#d9fdd3] dark:bg-[#005c4b] text-zinc-900 dark:text-zinc-50 p-2.5 text-[13px] leading-[1.4] whitespace-pre-wrap max-h-64 overflow-y-auto">
                   {tplPreviewText}
                 </div>
               ) : (
@@ -1240,54 +996,5 @@ export default function WhatsAppInboxPage() {
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-// ─── Media recebida (imagem / áudio / vídeo / documento) ────────────────────
-// O ficheiro é privado: o URL assinado (10 min) é pedido só quando a bolha
-// aparece, e renovado antes de expirar.
-function InboundMedia({ m }: { m: { id: number; mediaType: string | null; mediaAvailable: boolean; mediaMime: string | null; body: string | null } }) {
-  const signed = trpc.whatsapp.mediaUrl.useQuery(
-    { messageId: m.id },
-    { enabled: !!m.mediaType && m.mediaAvailable, staleTime: 8 * 60_000, refetchInterval: 8 * 60_000, retry: 1 },
-  );
-  if (!m.mediaType) return null;
-  const label =
-    m.mediaType === "image" ? "Imagem" : m.mediaType === "audio" ? "Áudio" : m.mediaType === "video" ? "Vídeo" : m.mediaType === "document" ? "Documento" : "Ficheiro";
-  if (!m.mediaAvailable) {
-    // Download falhou (token/rede/storage/tamanho) — dizemos porquê em vez de
-    // mostrar uma bolha vazia; o cron horário re-tenta com o `mediaId`.
-    return <div className="text-[11px] italic opacity-80 mb-1">{label} recebido, mas ainda não foi possível descarregar.</div>;
-  }
-  const url = signed.data?.url;
-  if (!url) {
-    return <div className="text-[11px] italic opacity-80 mb-1">{signed.isError ? `${label} indisponível.` : `A carregar ${label.toLowerCase()}…`}</div>;
-  }
-  if (m.mediaType === "image") {
-    return (
-      <a href={url} target="_blank" rel="noreferrer" className="block mb-1" title="Abrir imagem">
-        <img src={url} alt={m.body && !isMediaPlaceholderBody(m.body) ? m.body : "Imagem recebida"} loading="lazy" className="max-h-64 max-w-full rounded-md object-contain bg-black/5" />
-      </a>
-    );
-  }
-  if (m.mediaType === "audio") {
-    return (
-      <audio controls preload="metadata" className="max-w-full mb-1 h-9">
-        <source src={url} type={m.mediaMime ?? undefined} />
-        <a href={url} target="_blank" rel="noreferrer">Ouvir áudio</a>
-      </audio>
-    );
-  }
-  if (m.mediaType === "video") {
-    return (
-      <video controls preload="metadata" className="max-h-64 max-w-full rounded-md mb-1">
-        <source src={url} type={m.mediaMime ?? undefined} />
-      </video>
-    );
-  }
-  return (
-    <a href={url} target="_blank" rel="noreferrer" className="underline text-[12px] block mb-1">
-      Abrir {label.toLowerCase()}
-    </a>
   );
 }
