@@ -8,15 +8,15 @@ palavras: preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, b
 
 Receita, custos e margem por período (só super admin; o dashboard Financeiro é para admin e acima).
 
-As reservas (receita, entregues, recolhidas, receita esperada e caixa) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro). Já não dependem de importações nem da cópia antiga. Se a base da Multipark não responder, a página mostra o erro em vez de números a zero.
+As reservas (receita, entregues, recolhidas, receita esperada e caixa) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro). Já não dependem de importações nem da cópia antiga. Se a base da Multipark não responder (ou faltar a permissão de ver totais), a página diz o porquê, em vez de números a zero, e tem um botão **Tentar de novo**.
 
 **Ler a página**
 1. Menu **Financeiro → Faturação**. Escolhe o período e, se quiseres, a marca/projeto.
 2. Separadores:
    - **Realizado**: receita (com e sem IVA), entregues, comissões, custos e margem realizada até hoje.
-   - **Custos detalhados**: despesas, salários + TSU, equipa do dia, parceiros.
+   - **Custos detalhados**: despesas, salários + TSU, **equipa do dia**, parceiros. A equipa do dia conta as horas do **ponto** × tarifa do nível (até hoje), por nível e com o total igual ao cartão "Equipa do dia"; a escala do Extras Dia do período aparece só como referência (não soma — num período em curso, a escala dos dias que faltam entra no Fecho previsto).
    - **Previsão**: **Fecho previsto** = realizado + receita esperada − custos do período inteiro. Num período já terminado não há previsão.
-   - **Caixa**: por cobrar e despesas a pagar com vencimento no período.
+   - **Caixa**: o dinheiro — recebido (por método de pagamento), por cobrar, no-shows pré-pagos e canceladas com pagamento (só informativo). As despesas a pagar com vencimento no período estão na **Previsão**.
    - **Correção de caixa**: compara, quando carregas em **Comparar**, o que a Multipark nos disse pelo webhook (**era**) com a base de dados da Multipark agora (**é**). Ver abaixo.
 3. Os valores de margem são sem IVA. Despesas já contadas pelo RH/ponto não entram duas vezes.
 

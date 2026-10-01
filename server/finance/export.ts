@@ -65,9 +65,26 @@ export function billingExportSheets(data: any, meta: { from: string; to: string;
     { name: "Comissões venda", rows: rows(["Parceiro", "Centro", "Reservas", "Receita c/ IVA", "Receita s/ IVA", "Base", "%", "Comissão"], data.salesCommissions, (c) => [c.partnerName, c.projectName ?? "Sem centro", c.bookingsCount, r2(c.revenueGross), r2(c.revenueNet), c.commissionBase === "gross" ? "c/ IVA" : "s/ IVA", c.commissionRate, r2(c.commission)]) },
     { name: "Parceiros operacionais", rows: rows(["Parceiro", "Centros", "Reservas", "Receita c/ IVA", "Receita s/ IVA", "Base", "%", "Comissão"], data.operationalPartners, (c) => [c.partnerName, (c.projectNames ?? []).join(", "), c.bookingsCount, r2(c.revenueGross), r2(c.revenueNet), c.commissionBase === "gross" ? "c/ IVA" : "s/ IVA", c.commissionRate, r2(c.commission)]) },
     { name: "Salários por centro", rows: rows(["Centro", "Custo"], data.salaries?.byProject, (x) => [x.projectName ?? "Por atribuir", r2(x.cost)]) },
+    { name: "Equipa do dia", rows: extrasSheet(data) },
     { name: "Previsão", rows: rows(["Centro", "Reservas", "Receita prevista c/ IVA"], data.forecast, (f) => [f.projectName ?? "Sem centro", f.count, r2(f.totalRevenue)]) },
     { name: "Qualidade", rows: quality },
   ];
+}
+
+/**
+ * Equipa do dia: o PONTO (horas × tarifa do nível) é o que conta nos custos —
+ * o total bate com "Equipa do dia" do Resumo; a ESCALA vem a seguir só como
+ * referência (previsto, não soma).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extrasSheet(data: any): Cell[][] {
+  const real: any[] = data.extrasReal ?? [];
+  const planned: any[] = data.extrasDia ?? [];
+  const out: Cell[][] = [["Origem", "Nível", "Pessoas / turnos", "Horas", "Custo"]];
+  for (const e of real) out.push(["Ponto (conta nos custos)", e.level, e.headcount, r2(e.hours), r2(e.cost)]);
+  out.push(["Total ponto", "", real.reduce((s, e) => s + (Number(e.headcount) || 0), 0), r2(real.reduce((s, e) => s + (Number(e.hours) || 0), 0)), r2(data.summary?.extrasDiaCost)]);
+  for (const e of planned) out.push(["Escala (previsto, não soma)", e.level, e.headcount, r2(e.hours), r2(e.cost)]);
+  return out;
 }
 
 const MONTHS = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];

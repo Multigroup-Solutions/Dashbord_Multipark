@@ -37,6 +37,8 @@ vi.mock("./liveBookings", async (orig) => {
 const agg = (o: any) => ({ day: "2026-08-10", projectId: null, parkId: "pk", campaign: null, paymentMethod: null, count: 1, total: 0, parking: 0, delivery: 0, extras: 0, paid: 0, remaining: 0, owingCount: 0, ...o });
 
 import { computeFinance, monthlyRowsFromTimeseries } from "./engine";
+import { billingPayload } from "./compat";
+import { billingExportSheets } from "./export";
 import { DEFAULT_FINANCE_RATES } from "./rates";
 import { lisbonDayOf, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 
@@ -261,5 +263,46 @@ describe("qualidade", () => {
     fakeDb = makeFakeDb({}).db;
     const withMkt = await computeFinance({ from: "2026-08-01", to: "2026-08-31", today: "2026-09-10", rates: DEFAULT_FINANCE_RATES, includeMarketingCoverage: true });
     expect(withMkt.quality.marketingExcluded).toEqual({ adSpend: 50, marketingExpenses: 7 });
+  });
+});
+
+// ─── Faturação: a tabela "Equipa do dia" e o cartão contam a MESMA coisa ─────
+// (P2.3, 1 out 2026) A tabela mostrava a ESCALA do período inteiro e o cartão
+// (e os custos/margem) o PONTO até hoje — não batiam.
+describe("Faturação — equipa do dia", () => {
+  it("tabela (ponto por nível) e exportação somam exatamente o cartão; a escala fica à parte (não soma)", async () => {
+    extrasRows.ponto = [
+      { recordedAt: "2026-09-02 10:00:00", hours: 8, level: 1, employeeId: 3, projectId: null },
+      { recordedAt: "2026-09-03 10:00:00", hours: 6, level: 1, employeeId: 4, projectId: null },
+      { recordedAt: "2026-09-03 18:00:00", hours: 5, level: 2, employeeId: 5, projectId: null },
+    ];
+    // escala: um turno no passado e dois no futuro (dias depois de "hoje")
+    extrasRows.assignments = [
+      { date: "2026-09-02", city: "lisbon", level: "junior", isTeamLeader: 0, startHour: 8, endHour: 16, sentHomeHour: null },
+      { date: "2026-09-20", city: "lisbon", level: "junior", isTeamLeader: 0, startHour: 8, endHour: 16, sentHomeHour: null },
+      { date: "2026-09-21", city: "lisbon", level: "senior", isTeamLeader: 0, startHour: 8, endHour: 16, sentHomeHour: null },
+    ];
+    fakeDb = makeFakeDb({}).db;
+    const r = await computeFinance({ from: "2026-09-01", to: "2026-09-30", today: "2026-09-10", rates: DEFAULT_FINANCE_RATES });
+    const data = billingPayload(r, { from: "2026-09-01", to: "2026-09-30" });
+    const card = data.summary.extrasDiaCost;
+    expect(card).toBeGreaterThan(0);
+    const tableTotal = data.extrasReal.reduce((s, e) => s + e.cost, 0);
+    expect(tableTotal).toBeCloseTo(card, 6);
+    expect(data.extrasReal.map((e) => [e.level, e.headcount, e.hours]).sort()).toEqual([["junior", 2, 14], ["senior", 1, 5]]);
+    // a escala (3 turnos, 24 h) é outra conta — não é o custo do cartão
+    const planned = data.extrasDia.reduce((s, e) => s + e.cost, 0);
+    expect(data.summary.extrasPlanned).toBeCloseTo(planned, 6);
+    expect(data.extrasDia.reduce((s, e) => s + e.headcount, 0)).toBe(3);
+    expect(planned).not.toBeCloseTo(card, 2);
+    // exportação: folha própria, total do ponto = cartão
+    const sheet = billingExportSheets(data, { from: "2026-09-01", to: "2026-09-30" }).find((x) => x.name === "Equipa do dia")!.rows;
+    const total = sheet.find((row) => row[0] === "Total ponto")!;
+    expect(total[4]).toBeCloseTo(card, 2);
+    expect(total[2]).toBe(3);
+    expect(sheet.filter((row) => row[0] === "Escala (previsto, não soma)")).toHaveLength(2);
+    // os custos do período usam o ponto (realizado), a escala futura vai para o Fecho previsto
+    expect(r.costs.totalNet).toBeCloseTo(r.costs.expensesNet + r.margin.personnel + card + r.costs.salesCommissions + r.costs.operationalCommissions, 6);
+    expect(r.projection.futureCostsNet).toBeGreaterThan(0);
   });
 });
