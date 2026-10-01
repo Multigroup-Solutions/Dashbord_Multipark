@@ -28,6 +28,7 @@ import {
   extractNoteItems,
   lisbonHourInShift,
   mergeCarryOver,
+  confirmedDraftKinds,
   nextShiftOf,
   openItemKey,
   parseOpenItems,
@@ -204,6 +205,9 @@ export function draftPartsFromLive(st: ShiftState): {
 }
 
 const LIST_LIMIT = 80;
+/** Limites das listas de pendentes: uma lista que chega ao limite veio cortada (H01). */
+const COMPLAINTS_LIMIT = 300;
+const OPEN_LIST_LIMIT = 200;
 const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
 const inIds = (col: SQL, ids: number[]): SQL => (ids.length ? sql`${col} IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})` : sql`1 = 0`);
 const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -228,8 +232,12 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
   const nowTs = new Date(nowMs).toISOString().slice(0, 19).replace("T", " ");
   const upTo = nowMs < win.endMs ? nowTs : win.end;
 
+  // Leituras que falharam (ficaram com o valor por omissão): os pendentes
+  // desses tipos não se dão como resolvidos por ausência (H01).
+  const failed = new Set<string>();
   const safe = async <T,>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
     try { return await fn(); } catch (err: any) {
+      failed.add(label);
       console.warn(`[handover draft] ${label}:`, String(err?.cause?.message ?? err?.message ?? err).slice(0, 200));
       return fallback;
     }
@@ -279,7 +287,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
       AND NOT EXISTS (SELECT 1 FROM multipark_booking_history c
         WHERE c.bookingExternalId = h.bookingExternalId AND c.changeType = 'CHECK_OUT' AND c.actionTime >= h.actionTime)
     GROUP BY h.bookingExternalId, b.bookingNumber, b.licensePlate, b.clientFirstName, b.clientLastName
-    ORDER BY t LIMIT 200`)), [] as any[]);
+    ORDER BY t LIMIT ${sql.raw(String(OPEN_LIST_LIMIT))}`)), [] as any[]);
 
   // Carros p/ coberto: reservas de lugar coberto ainda no parque (CHECKED_IN,
   // recebidas nos últimos 60 dias) — o filtro "sem movimento depois do
@@ -310,17 +318,17 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     FROM complaints
     WHERE ${inCity(sql`complaints.projectId`)}
       AND (complaint_status IN ('new', 'analyzing', 'waiting_client') OR (createdAt >= ${win.start} AND createdAt < ${win.end}))
-    ORDER BY createdAt DESC LIMIT 300`)), [] as any[]);
+    ORDER BY createdAt DESC LIMIT ${sql.raw(String(COMPLAINTS_LIMIT))}`)), [] as any[]);
 
   const lostRows = await safe("lost&found", async () => rowsOf(await db.execute(sql`
     SELECT id, clientName, description, status FROM lost_found_items
     WHERE status IN ('new', 'investigating', 'found') AND ${inCity(sql`lost_found_items.projectId`)}
-    ORDER BY createdAt DESC LIMIT 200`)), [] as any[]);
+    ORDER BY createdAt DESC LIMIT ${sql.raw(String(OPEN_LIST_LIMIT))}`)), [] as any[]);
 
   const incidentRows = liveParts ? [] as any[] : await safe("incidents", async () => rowsOf(await db.execute(sql`
     SELECT id, incidentType, severity, description, vehiclePlate FROM incidents
     WHERE status IN ('open', 'investigating') AND ${inCity(sql`incidents.projectId`)}
-    ORDER BY createdAt DESC LIMIT 200`)), [] as any[]);
+    ORDER BY createdAt DESC LIMIT ${sql.raw(String(OPEN_LIST_LIMIT))}`)), [] as any[]);
 
   // PDAs ainda com check-in (pessoa da cidade)
   const pdaRows = await safe("pdas", async () => rowsOf(await db.execute(sql`
@@ -330,7 +338,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     LEFT JOIN employees e ON e.id = pc.employeeId
     WHERE pc.checkin_status = 'checked_in' AND ${pdaScope(sql`pc.pdaId`)}
       AND pc.employeeId IS NOT NULL AND ${empInCity(sql`pc.employeeId`)}
-    ORDER BY pc.checkinAt LIMIT 200`)), [] as any[]);
+    ORDER BY pc.checkinAt LIMIT ${sql.raw(String(OPEN_LIST_LIMIT))}`)), [] as any[]);
 
   // Picagens de entrada sem saída (última picagem das últimas 20h é entrada)
   const clockSince = new Date(nowMs - 20 * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
@@ -435,7 +443,20 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
 
   const since = `${cur.date} ${cur.shift}`;
   const draftItems = draftOpenItems({ complaints: openComplaints, lostFound, pdas, incidents, pendingDeliveries }, since);
-  const carryOver = mergeCarryOver({ previous: previous?.openItems ?? [], draft: draftItems, nowIso: new Date(nowMs).toISOString() });
+  // Só fecha "pelo sistema" os tipos lidos por inteiro: uma leitura que falhou
+  // ou veio cortada pelo LIMIT deixa os pendentes desse tipo como estavam (H01).
+  const draftKinds = confirmedDraftKinds({
+    complaint: { ok: !failed.has("complaints"), truncated: complaintsRows.length >= COMPLAINTS_LIMIT },
+    lost_found: { ok: !failed.has("lost&found"), truncated: lostRows.length >= OPEN_LIST_LIMIT },
+    pda: { ok: !failed.has("pdas"), truncated: pdaRows.length >= OPEN_LIST_LIMIT },
+    incident: live.available
+      ? { ok: true, truncated: live.data.occurrences.truncated }
+      : { ok: !failed.has("incidents"), truncated: incidentRows.length >= OPEN_LIST_LIMIT },
+    delivery: live.available
+      ? { ok: true, truncated: live.data.inPark.truncated }
+      : { ok: !failed.has("pending deliveries"), truncated: pending.length >= OPEN_LIST_LIMIT },
+  });
+  const carryOver = mergeCarryOver({ previous: previous?.openItems ?? [], draft: draftItems, draftKinds, nowIso: new Date(nowMs).toISOString() });
 
   return {
     key,
