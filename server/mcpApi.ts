@@ -15,6 +15,7 @@ import { Router, Request, Response } from "express";
 import { and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { apiKeyMiddleware, requireScope, logApiKeyAction, apiKeyActorId, getApiKeyInfo } from "./apiKeyAuth";
+import { registerMcpReportRoutes } from "./mcpReportsApi";
 import {
   getMultiparkBookingStats,
   getComplaints,
@@ -77,6 +78,8 @@ export function createMcpApiRouter(): Router {
           "GET /complaints", "GET /complaints/stats", "GET /complaints/:id",
           "GET /reviews", "GET /vehicles", "GET /employees", "GET /dashboard/summary",
           "GET /campaigns", "GET /campaigns/api/:id/daily", "GET /projects",
+          "GET /cash/counts", "GET /cash/counts/:parkId/:day", "GET /cash/cases", "GET /cash/cases/:id",
+          "GET /drivers/daily", "GET /partners/billing", "GET /partners/close", "GET /shift-handovers",
           "GET /availability-form/context?token=",
         ],
         write: [
@@ -487,6 +490,9 @@ export function createMcpApiRouter(): Router {
     const byCity = (ops.actions.checkin?.byCity ?? []).map((c) => ({ city: c.name, count: c.count, revenue: c.revenue }));
     res.json({ success: true, bookings: bookingStats, complaints: complaintStats, byCity });
   }));
+
+  // ── RELATÓRIOS (só leitura): caixa, condutores, parceiros, passagens de turno ──
+  registerMcpReportRoutes(r, h);
 
   return r;
 }
