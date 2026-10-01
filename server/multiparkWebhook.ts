@@ -14,7 +14,7 @@
  * nem apagada) e depois na fila. A receção é persistida antes do ACK. O
  * processamento usa o detalhe atual
  * da API, nunca o estado antigo do payload, e é retomado após falhas/crashes.
- * O cron da fila corre de cinco em cinco minutos; o sync periódico (de hora a
+ * O cron da fila corre de hora a hora; o sync periódico (de hora a
  * hora) continua necessário para movimentos que não produzem notificações.
  * Montado antes do express.json global, para verificar o corpo original.
  */
@@ -141,8 +141,9 @@ export async function processMultiparkWebhookEvent(ev: MultiparkWebhookEvent): P
   detail: string;
 }> {
   // Fichas do CRM e tarefas dos serviços desta reserva LOGO à chegada (Jorge,
-  // 29 set 2026: sem voltas de 15 em 15 min). Leem a BD da Multipark ao vivo;
-  // uma falha aqui não impede o resto (as voltas diárias apanham).
+  // 29 set 2026: sem voltas de 15 em 15 min; 30 set: o que falha repete-se). Leem a BD da Multipark ao vivo;
+  // uma falha aqui não impede o resto (as tarefas que falham ficam para
+  // repetir na fila; as fichas apanham-se na volta das 04:00).
   await onBookingArrived(ev.bookingId);
 
   const { getBookingTryAllParks, resolveParkForBooking, getParkApiKey, getBooking } = await import("./multipark");
@@ -180,11 +181,21 @@ export async function onBookingArrived(bookingId: string): Promise<void> {
   } catch (err) {
     console.warn("[MultiparkWebhook] CRM da reserva:", deliveryErrorCode(err));
   }
+  // Tarefas dos serviços: o que falhar aqui (erro, prazo esgotado) fica para
+  // repetir na fila do webhook — a volta das 18:00 não cria saídas já passadas.
+  let st: typeof import("./serviceTasks") | null = null;
   try {
-    const { runServiceTasksForBookings } = await import("./serviceTasks");
-    await runServiceTasksForBookings([bookingId], { deadlineAt: Date.now() + 10_000 });
+    st = await import("./serviceTasks");
+    const r = await st.runServiceTasksForBookings([bookingId], { deadlineAt: Date.now() + 10_000 });
+    if (st.serviceReportNeedsRetry(r)) {
+      const why = r.errors[0] ?? `prazo esgotado (${r.pending} por fazer)`;
+      console.warn("[MultiparkWebhook] tarefas dos serviços por acabar — fica para repetir:", bookingId, why);
+      await st.queueServiceTaskRetry(bookingId, why);
+    }
   } catch (err) {
-    console.warn("[MultiparkWebhook] tarefas dos serviços:", deliveryErrorCode(err));
+    console.warn("[MultiparkWebhook] tarefas dos serviços — fica para repetir:", bookingId, deliveryErrorCode(err));
+    try { if (st) await st.queueServiceTaskRetry(bookingId, deliveryErrorCode(err)); }
+    catch (e) { console.error("[MultiparkWebhook] tarefas dos serviços: não deu para guardar a repetição:", bookingId, deliveryErrorCode(e)); }
   }
 }
 

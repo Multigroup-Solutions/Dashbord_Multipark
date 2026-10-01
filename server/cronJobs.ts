@@ -63,12 +63,24 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
   // parte B, 29 set 2026). Tudo o que a app mostra lê a BD da Multipark ao
   // vivo; a cópia `multipark_bookings` continua a ser gravada quando chega um
   // webhook (processMultiparkWebhookEvent) e nunca se apaga.
+  // Tarefas dos serviços que falharam no webhook (service_task_retries).
+  let serviceRetries: unknown = null;
+  if (o.deadlineAt - Date.now() > 8_000) {
+    try {
+      const { retryServiceTasks } = await import("./serviceTasks");
+      serviceRetries = await retryServiceTasks({ deadlineAt: o.deadlineAt - 2_000, limit: 50 });
+    } catch (err) {
+      console.warn("[cron multipark-deliveries] tarefas dos serviços por repetir:", await errCode(err));
+      serviceRetries = { error: await errCode(err) };
+    }
+  }
   // Memória do webhook: repetir a leitura da BD da Multipark que falhou no
   // momento do webhook (linha nova "#db"; a original não é tocada).
   let memoryRetry: unknown = null;
   try {
     const { retryWebhookMemoryReads } = await import("./webhookMemory");
-    memoryRetry = await retryWebhookMemoryReads({ deadlineAt: o.deadlineAt, limit: 30 });
+    // 120 por corrida: a fila passou a ser de hora a hora (antes 30 de 15 em 15 min)
+    memoryRetry = await retryWebhookMemoryReads({ deadlineAt: o.deadlineAt, limit: 120 });
   } catch (err) {
     console.warn("[cron multipark-deliveries] memória do webhook:", await errCode(err));
   }
@@ -90,7 +102,7 @@ export async function multiparkDeliveriesCron(o: { deadlineAt: number }): Promis
   }
   const { deliveriesVerdict } = await import("./syncRules");
   const verdict = deliveriesVerdict({ phaseErrors, queue, details });
-  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, memoryRetry, partnerPresence, alert }, done: true };
+  return { httpStatus: verdict.ok ? 200 : 503, body: { ...verdict, ranAt: ranAt(), ...(queue ?? {}), queue, details, memoryRetry, serviceRetries, partnerPresence, alert }, done: true };
 }
 
 /** Ligações automáticas funcionário ↔ utilizador ↔ agente Multipark (conservador e idempotente). */
@@ -179,7 +191,8 @@ export async function crmAutoMergeCron(o: { deadlineAt: number }): Promise<CronJ
     const { autoMergeConfident, refreshSuggestions } = await import("./crm/merge");
     const r = await autoMergeConfident(db, { deadlineAt: o.deadlineAt - 15_000, userId: await getSystemUserId() });
     const s = r.merged && Date.now() < o.deadlineAt - 12_000 ? await refreshSuggestions(db, { deadlineAt: o.deadlineAt - 2_000 }) : null;
-    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, suggestions: s }, done: true };
+    // parou no prazo → "não acabei": o agendador repete no tick seguinte (1×/dia não chega para um atraso)
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, suggestions: s }, done: !r.stoppedAtDeadline };
   } catch (err) {
     console.error("[cron crm-auto-merge] falhou:", msg(err, 200));
     return fail(err);
@@ -243,22 +256,39 @@ export async function partnerCloseCron(): Promise<CronJobRun> {
 /**
  * Serviços extra → tarefas, 1×/dia às 18:00 (as tarefas nascem no webhook da
  * reserva): volta de segurança da janela de 48 h (junta os team leaders que
- * entretanto foram escalados) e, no fim, o aviso das tarefas de AMANHÃ aos
- * team leaders e supervisores da cidade (server/serviceTasks.ts).
+ * entretanto foram escalados). Também à mão em /api/cron/services-tasks — já
+ * não manda o aviso de amanhã (é o trabalho `services-tomorrow`).
  * Idempotente; sem BD da Multipark ou sem nenhum tipo ligado → nota (ok).
  */
 export async function serviceTasksCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
-    const { runServiceTasks, sendServiceTasksTomorrowAlert } = await import("./serviceTasks");
+    const { runServiceTasks } = await import("./serviceTasks");
     const r = await runServiceTasks({ deadlineAt: o.deadlineAt - 4_000 });
-    let tomorrow: unknown = null;
-    if (r.done) {
-      try { tomorrow = await sendServiceTasksTomorrowAlert(); }
-      catch (err) { tomorrow = { error: msg(err, 200) }; }
-    }
-    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, tomorrow }, done: r.done };
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done };
   } catch (err) {
     console.error("[cron services-tasks] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
+/**
+ * Aviso das tarefas de AMANHÃ aos team leaders e supervisores da cidade, 1×/dia
+ * a partir das 18:00 (a seguir à volta, no mesmo tick). Lê só a nossa BD: não
+ * depende da Multipark. Interruptor SERVICE_TASKS_TOMORROW_ALERT (desligado
+ * por omissão). Falha → o agendador repete (30 min, até 3×).
+ */
+export async function serviceTasksTomorrowCron(): Promise<CronJobRun> {
+  try {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    if (!isFeatureEnabled("SERVICE_TASKS_TOMORROW_ALERT", { defaultEnabled: automationFlagDefault("SERVICE_TASKS_TOMORROW_ALERT") })) {
+      return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "SERVICE_TASKS_TOMORROW_ALERT desligado" }, done: true };
+    }
+    const { sendServiceTasksTomorrowAlert } = await import("./serviceTasks");
+    const r = await sendServiceTasksTomorrowAlert();
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron services-tomorrow] falhou:", msg(err, 200));
     return fail(err);
   }
 }
@@ -270,9 +300,10 @@ export async function serviceTasksCron(o: { deadlineAt: number }): Promise<CronJ
  */
 export async function cashSweepCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
-    const { runCashSweep } = await import("./cashSweep");
+    const { runCashSweep, sweepJobDone } = await import("./cashSweep");
     const r = await runCashSweep({ deadlineAt: o.deadlineAt - 2_000 });
-    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+    // a meio → o agendador retoma no tick seguinte (antes esperava 3 h), até 3 seguidas
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: sweepJobDone(r) };
   } catch (err) {
     console.error("[cron cash-sweep] falhou:", msg(err, 200));
     return fail(err);

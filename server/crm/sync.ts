@@ -1,7 +1,7 @@
 /**
  * CRM — carga das fichas a partir das reservas da BD da Multipark AO VIVO
  * (server/multiparkDb/crmLive.ts), por lotes, com cursor (trabalho `crm-sync`
- * do agendador, de 15 em 15 min). Fase 1 (29 set 2026): nada vem da cópia
+ * do agendador, 1×/dia às 04:00; no dia-a-dia é o webhook). Fase 1 (29 set 2026): nada vem da cópia
  * `multipark_bookings`; são os clientes de TODAS as reservas nossas (parques
  * nossos + o que vendemos no marketplace).
  *
@@ -316,12 +316,12 @@ export async function syncCrmForBookings(ids: readonly string[]): Promise<{ rows
   const { sql: q, params } = buildCrmRowsByIdsSql({ ids: clean, ourParkIds: await ourParkIds() });
   const raw = (await multiparkDbQuery<Record<string, unknown>>(q, params)).map(mapCrmBatchRow);
   if (!raw.length) return { rows: 0, created: 0, linked: 0, kept: 0 };
-  const r = await applyCrmRows(db, raw, await loadGenericEmails(db));
+  const r = await applyCrmRows(db, raw, await loadGenericEmails(db), { heal: false });
   return { rows: r.rows, created: r.plan.stats.created, linked: r.plan.stats.linked, kept: r.plan.stats.kept };
 }
 
 /** Decide e grava as fichas de um conjunto de reservas (lote do cursor ou as do webhook). */
-async function applyCrmRows(db: any, raw: import("../multiparkDb/crmLive").CrmBatchRow[], generic: Set<string>) {
+async function applyCrmRows(db: any, raw: import("../multiparkDb/crmLive").CrmBatchRow[], generic: Set<string>, o: { heal?: boolean } = {}) {
   const rows = raw.map(toBookingRow);
 
   const linkRows = new Map<string, number>();
@@ -411,7 +411,8 @@ async function applyCrmRows(db: any, raw: import("../multiparkDb/crmLive").CrmBa
   }
 
   // 4) o que caiu numa ficha entretanto junta a outra (corrida com uma fusão) passa para a que ficou
-  const healed = await healMergedLeftovers(db);
+  // (no webhook não: é uma volta por todas as fichas juntas — fica para as 04:00)
+  const healed = o.heal === false ? [] : await healMergedLeftovers(db);
 
   // 5) métricas das fichas tocadas (+ contagem de reservas por carro)
   const touchedIds = [...new Set([...plan.links.map((l) => real(l.clientId)), ...healed].filter(Boolean))];

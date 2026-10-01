@@ -21,10 +21,12 @@ describe("agendador mais leve", () => {
     expect(c["multipark-deliveries"]).toBe("de hora a hora");
     expect(c["google-pending"]).toBe("de hora a hora");
     expect(c["crm-sync"]).toBe("diário a partir das 04:00");
-    expect(c["crm-auto-merge"]).toBe("diário a partir das 05:05");
+    // 30 set 2026: depois das sugestões do dia (antes corria 10 min antes delas)
+    expect(c["crm-auto-merge"]).toBe("diário a partir das 05:15 (depois de crm-suggestions; o mais tardar 06:00)");
+    expect(c["services-tomorrow"]).toBe("diário a partir das 18:00");
     expect(c["services-tasks"]).toBe("diário a partir das 18:00");
     const known = Object.fromEntries(CRON_JOBS.map((j) => [j.name, j.intervalMinutes]));
-    expect(known).toMatchObject({ "cash-sweep": 180, "multipark-deliveries": 60, "google-pending": 60, "crm-sync": 1440, "crm-auto-merge": 1440, "services-tasks": 1440 });
+    expect(known).toMatchObject({ "cash-sweep": 180, "multipark-deliveries": 60, "google-pending": 60, "crm-sync": 1440, "crm-auto-merge": 1440, "services-tasks": 1440, "services-tomorrow": 1440 });
   });
 
   it("CRM das reservas do webhook: só leitura, por ids, só clientes nossos", () => {

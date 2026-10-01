@@ -16,9 +16,10 @@ import { whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { getDb } from "./db";
 import {
   WHATSAPP_TRIAGE_DEBOUNCE_MINUTES,
+  WHATSAPP_TRIAGE_MAX_FAILS,
   mapWhatsappIntent,
-  whatsappTriageRetry,
   mapWhatsappUrgency,
+  whatsappTriageFailureCounts,
   whatsappTriagePlan,
 } from "../shared/commsAi";
 import { isStopAiError } from "./complaintTriage";
@@ -38,11 +39,14 @@ export async function noteInboundForTriage(conversationId: number, nowMs: number
     const db = await getDb();
     if (!db) return false;
     const [c] = await db
-      .select({ aiTriagedAt: whatsappConversations.aiTriagedAt, aiTriageDueAt: whatsappConversations.aiTriageDueAt })
+      .select({ aiTriagedAt: whatsappConversations.aiTriagedAt, aiTriageDueAt: whatsappConversations.aiTriageDueAt, aiTriageFails: whatsappConversations.aiTriageFails })
       .from(whatsappConversations).where(eq(whatsappConversations.id, conversationId)).limit(1);
     if (!c) return false;
-    // mensagem nova do cliente: as falhas anteriores deixam de contar
-    await db.update(whatsappConversations).set({ aiTriageFails: 0 }).where(eq(whatsappConversations.id, conversationId)).catch(() => {});
+    // mensagem nova do cliente: as falhas anteriores deixam de contar (só escreve se havia falhas)
+    if (Number(c.aiTriageFails ?? 0) > 0) {
+      await db.update(whatsappConversations).set({ aiTriageFails: 0 }).where(eq(whatsappConversations.id, conversationId))
+        .catch((e: any) => console.warn("[WhatsApp triagem] repor falhas:", String(e?.message ?? e).slice(0, 120)));
+    }
     const plan = whatsappTriagePlan(c.aiTriagedAt, nowMs);
     if (plan.runNow) {
       // Reserva otimista: só ganha quem ainda vê o mesmo aiTriagedAt.
@@ -123,16 +127,15 @@ export async function triageConversation(conversationId: number): Promise<{ ok: 
     return { ok: true };
   } catch (err) {
     if (!isStopAiError(err)) {
-      // conta a falha; à WHATSAPP_TRIAGE_MAX_FAILS.ª já não se reagenda (fica à mão)
-      await db.update(whatsappConversations).set({ aiTriageFails: sql`${whatsappConversations.aiTriageFails} + 1` })
-        .where(eq(whatsappConversations.id, conversationId)).catch(() => {});
-      const [c] = await db.select({ fails: whatsappConversations.aiTriageFails }).from(whatsappConversations)
-        .where(eq(whatsappConversations.id, conversationId)).limit(1).catch(() => [] as { fails: number }[]);
-      if (c && whatsappTriageRetry(Number(c.fails ?? 0))) {
-        await db.update(whatsappConversations)
-          .set({ aiTriageDueAt: nowStr(Date.now() + WHATSAPP_TRIAGE_DEBOUNCE_MINUTES * 60_000) })
-          .where(eq(whatsappConversations.id, conversationId)).catch(() => {});
-      }
+      // Uma só instrução. Falha que se repete igual (resposta inválida) conta e, à
+      // WHATSAPP_TRIAGE_MAX_FAILS.ª, deixa de se reagendar (fica à mão); falha
+      // passageira (timeout, 429, 5xx) reagenda sempre. A ordem do SET importa: o
+      // IF lê o contador ANTES de subir.
+      const due = nowStr(Date.now() + WHATSAPP_TRIAGE_DEBOUNCE_MINUTES * 60_000);
+      const q = whatsappTriageFailureCounts(aiErrorCode(err))
+        ? sql`UPDATE whatsapp_conversations SET aiTriageDueAt = IF(aiTriageFails + 1 < ${WHATSAPP_TRIAGE_MAX_FAILS}, ${due}, NULL), aiTriageFails = aiTriageFails + 1 WHERE id = ${conversationId}`
+        : sql`UPDATE whatsapp_conversations SET aiTriageDueAt = ${due} WHERE id = ${conversationId}`;
+      await db.execute(q).catch((e: any) => console.warn("[WhatsApp triagem] reagendar falhou:", conversationId, String(e?.message ?? e).slice(0, 120)));
     }
     return { ok: false, error: aiErrorCode(err) };
   }
@@ -163,7 +166,8 @@ export async function runWhatsappTriageSweep(opts: { limit?: number; deadlineAt?
     .orderBy(whatsappConversations.aiTriageDueAt)
     .limit(Math.max(1, Math.min(20, opts.limit ?? 10)));
   for (const { id } of due) {
-    if (Date.now() + 16_000 > deadlineAt) { out.skipped = "deadline"; break; }
+    // uma triagem pode levar até 20 s (timeout do runAi) + gravar
+    if (Date.now() + 21_000 > deadlineAt) { out.skipped = "deadline"; break; }
     const claim = await db.update(whatsappConversations).set({ aiTriageDueAt: null, aiTriagedAt: nowStr() })
       .where(and(eq(whatsappConversations.id, id), isNotNull(whatsappConversations.aiTriageDueAt)));
     if (!Number((claim as any)?.[0]?.affectedRows ?? 0)) continue;

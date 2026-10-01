@@ -71,7 +71,7 @@ export function ServiceTasksSettings() {
         <p className="text-xs text-muted-foreground">
           Para cada tipo de serviço extra das reservas (lista lida do catálogo da Multipark), escolhe se cada reserva com esse serviço gera uma
           tarefa em <strong>Tarefas</strong>, com prazo na <strong>saída do carro</strong>. Os <strong>team leaders do turno da saída e do turno anterior</strong> (escala
-          do Extras-Dia) são sempre responsáveis; podes juntar uma pessoa da cidade. A verificação corre de 15 em 15 min (saídas nas próximas 48 h).
+          do Extras-Dia) são sempre responsáveis; podes juntar uma pessoa da cidade. A tarefa nasce quando chega o webhook da reserva (saídas até 72 h); as mais longe nascem na volta diária das 18:00 (saídas nas próximas 48 h). O que falhar no webhook repete-se de hora a hora. Mudanças aqui chegam às tarefas já criadas na volta seguinte.
         </p>
       </CardHeader>
       <CardContent className="space-y-3">

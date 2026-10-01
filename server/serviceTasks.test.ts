@@ -68,6 +68,7 @@ function fakeStore(o: { rules: ServiceTaskRules; teamLeaders?: TeamLeaderRow[] }
     loadRules: async () => o.rules,
     loadOpenTasks: async () => [...tasks.values()].filter((t) => t.taskStatus !== "done").map(view),
     loadTasksByKeys: async (keys) => [...tasks.values()].filter((t) => keys.includes(t.sourceKey)).map(view),
+    loadTasksForBookings: async (ids) => [...tasks.values()].filter((t) => ids.includes(parseServiceTaskKey(t.sourceKey)?.bookingId ?? "")).map(view),
     loadTeamLeaders: async (dates) => (o.teamLeaders ?? []).filter((r) => dates.includes(r.date)),
     cityProjectIds: async () => ({ lisbon: 11, porto: 12, faro: 13 }),
     systemUserId: async () => 1,
@@ -356,10 +357,13 @@ describe("agendador", () => {
 // ─── Webhook: a tarefa nasce quando a reserva chega ─────────────────────────
 
 describe("runServiceTasksForBookings (webhook)", () => {
-  it("cria a tarefa da reserva que chegou, mesmo com a saída daqui a semanas, e manda-a para o Google", async () => {
-    // saída a 20 out (fora das 48 h da volta diária)
-    fakeMultipark(() => [row({ booking_id: "bkW", check_out: "2026-10-20 08:00:00" }), row({ booking_id: "bkOther" })]);
+  it("cria a tarefa da reserva que chegou (saída até 72 h) e manda-a para o Google; mais longe fica para a volta", async () => {
+    // bkW sai daqui a 46 h (dentro das 72 h do webhook); bkFar só a 20 out
+    fakeMultipark(() => [row({ booking_id: "bkW", check_out: "2026-09-30 08:00:00" }), row({ booking_id: "bkFar", check_out: "2026-10-20 08:00:00" }), row({ booking_id: "bkOther" })]);
     const s = fakeStore({ rules: RULES_RESP });
+    // 30 set 2026: janela de 72 h (com 400 dias as tarefas iam para o Google semanas antes)
+    const far = await runServiceTasksForBookings(["bkFar"], { deadlineAt: Date.now() + 30_000, now: NOW }, s.deps);
+    expect(far.created).toBe(0);
     const r = await runServiceTasksForBookings(["bkW"], { deadlineAt: Date.now() + 30_000, now: NOW }, s.deps);
     expect(r.created).toBe(1);
     expect([...s.tasks.values()].map((t) => t.sourceKey)).toEqual(["svc:bkW:l1"]);

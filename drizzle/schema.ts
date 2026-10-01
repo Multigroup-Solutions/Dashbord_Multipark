@@ -1907,6 +1907,8 @@ export const tasks = mysqlTable("tasks", {
 	sourceModule: varchar({ length: 32 }),
 	sourceId: int(),
 	sourceKey: varchar({ length: 128 }),
+	// 0325 — chave única só das tarefas de serviço (gerada; nunca se escreve)
+	serviceSourceKey: varchar({ length: 128 }).generatedAlwaysAs(sql`IF(\`sourceModule\` = 'service', \`sourceKey\`, NULL)`, { mode: "stored" }),
 	dueHasTime: tinyint().default(0).notNull(),
 	templateId: int(),
 	templateDate: varchar({ length: 10 }),

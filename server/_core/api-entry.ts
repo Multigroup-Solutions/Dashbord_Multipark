@@ -165,7 +165,7 @@ app.get("/api/cron/tick", async (req, res) => {
   }
 });
 
-// Fila de notificações + detalhe (tick: de 15 em 15 min). Falhas
+// Fila de notificações + detalhe (tick: de hora a hora). Falhas
 // de itens vão em `warnings` e o cron fica verde; 503 só se uma fase falhar.
 app.get("/api/cron/multipark-deliveries", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
@@ -299,7 +299,7 @@ app.get("/api/cron/services-tasks", async (req, res) => {
   sendCronRun(res, await serviceTasksCron({ deadlineAt: manualDeadline() }));
 });
 
-// Caixa, fase 2: varredura do dinheiro (10 em 10 min) e fecho do dia (D-1 e D-2).
+// Caixa, fase 2: varredura do dinheiro (3 em 3 h) e fecho do dia (D-1 e D-2).
 app.get("/api/cron/cash-sweep", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { cashSweepCron, sendCronRun } = await import("../cronJobs");
