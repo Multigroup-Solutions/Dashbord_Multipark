@@ -1,4 +1,6 @@
 import { createContext, useContext, useState, useMemo, useEffect, type ReactNode } from "react";
+import { useLocation } from "wouter";
+import { isPublicPath } from "@shared/loginReturn";
 import { trpc } from "@/lib/trpc";
 
 interface DateRange {
@@ -32,11 +34,15 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
   const [brandId, setBrandId] = useState<number | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
 
-  const { data: allProjects, isLoading } = trpc.projects.list.useQuery();
+  // Páginas públicas (convite, registo de PDA) abrem-se SEM sessão: aqui não se
+  // pede nada protegido — um 401 mandava para o login e o convite perdia-se.
+  const [location] = useLocation();
+  const needsSession = !isPublicPath(location);
+  const { data: allProjects, isLoading } = trpc.projects.list.useQuery(undefined, { enabled: needsSession });
   // Acesso por cidade (pedido Jorge): cada um vê a cidade do seu centro de
   // custos (+ extras por permissão); admin/grupo vê todas. O seletor global só
   // mostra as permitidas e entra por defeito na cidade da pessoa.
-  const { data: cityAccess, isLoading: accessLoading, error: accessError } = trpc.permissions.myCityAccess.useQuery();
+  const { data: cityAccess, isLoading: accessLoading, error: accessError } = trpc.permissions.myCityAccess.useQuery(undefined, { enabled: needsSession });
 
   const cities = useMemo(() => {
     if (!allProjects || !cityAccess) return [];

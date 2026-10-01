@@ -18,6 +18,7 @@ import type { Request, Response } from "express";
 import fs from "fs";
 import path from "path";
 import { ROLE_RANK, grantFor, roleRank, type AccessOverrides, type ModuleId } from "../shared/access";
+import { loginUrlWithReturn } from "../shared/loginReturn";
 import type { CityAccess } from "./cityAccess";
 
 export type FileRule =
@@ -111,8 +112,8 @@ export function makeFileRoute(deps: FileRouteDeps) {
       if (!key || key.includes("..")) { res.status(400).json({ error: "Key inválida" }); return; }
       const auth = await deps.authenticate(req).catch(() => null);
       if (!auth) {
-        // clique num link (ex.: o email da folha) sem sessão → página de login
-        if (String(req.headers?.accept ?? "").includes("text/html")) { res.redirect(302, "/api/oauth/login"); return; }
+        // clique num link (ex.: o email da folha) sem sessão → login, e volta ao ficheiro
+        if (String(req.headers?.accept ?? "").includes("text/html")) { res.redirect(302, loginUrlWithReturn(req.originalUrl)); return; }
         res.status(401).json({ error: "Sessão inválida ou expirada — volta a entrar." });
         return;
       }

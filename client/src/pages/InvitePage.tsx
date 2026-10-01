@@ -78,7 +78,8 @@ export default function InvitePage() {
 
   // User is not logged in — show login prompt
   if (!user) {
-    const loginUrl = getLoginUrl();
+    // depois de entrar volta a este convite (antes ia para "/" e o convite perdia-se)
+    const loginUrl = getLoginUrl(`/convite/${encodeURIComponent(token)}`);
     return (
       <div className="min-h-screen flex items-center justify-center bg-background px-4 py-8">
         <Card className="w-full max-w-md">

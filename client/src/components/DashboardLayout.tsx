@@ -35,7 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getLoginUrl } from "@/const";
+import { currentPath, getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG } from "@shared/const";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
 import CameraCapture from "@/components/CameraCapture";
@@ -304,7 +304,8 @@ export default function DashboardLayout({
           {!accessDenied && (
             <Button
               onClick={() => {
-                window.location.href = getLoginUrl();
+                // entra e volta a esta página (ex.: um link para /rh aberto sem sessão)
+                window.location.href = getLoginUrl(currentPath());
               }}
               size="lg"
               className="w-full shadow-lg hover:shadow-xl transition-all"
