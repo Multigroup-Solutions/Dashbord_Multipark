@@ -1,7 +1,8 @@
 /**
- * Guarda Express para rotas de ficheiros (/api/upload, /api/file/*): exige uma
- * sessão válida — o MESMO autenticador do contexto tRPC (cookie de sessão,
- * conta ativa). Sem sessão → 401 JSON.
+ * Guarda Express para rotas de ficheiros (/api/upload, /uploads local): exige
+ * uma sessão válida — o MESMO autenticador do contexto tRPC (cookie de sessão,
+ * conta ativa). Sem sessão → 401 JSON. O /api/file/* autentica e AUTORIZA por
+ * entidade no próprio handler (server/fileRoute.ts).
  *
  * Nenhuma página pública usa estes endpoints (verificado: upload em RH/Radio/
  * Operacional/Formação e /api/file em Reclamações/Perdidos/Formação, todas

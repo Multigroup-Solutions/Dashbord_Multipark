@@ -59,7 +59,9 @@ async function downloadAudio(url: string): Promise<Audio> {
   if (!/^https?:\/\//i.test(url)) throw new AiUnsupportedInputError("url");
   let res: Response;
   try {
-    res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
+    // ficheiro do nosso bucket → link assinado (o bucket deixa de ser público)
+    const { storageReadableUrl } = await import("../../storageSign");
+    res = await fetchWithTimeout(await storageReadableUrl(url), { timeoutMs: 10_000 });
   } catch (err) {
     throw toAiError(err);
   }

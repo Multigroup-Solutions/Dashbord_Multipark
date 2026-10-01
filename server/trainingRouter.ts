@@ -24,6 +24,7 @@ import { TRAINING_ITEM_TYPES } from "./trainingRules";
 import { requireAccess, employeeBelowCondition } from "./_core/access";
 import { roleRank, scopeFor, seesBeyondOwn } from "../shared/access";
 import { trainingTutorRouter } from "./trainingTutorRouter";
+import { uploadRefsAllowed } from "./storageRefs";
 
 /** Fichas da equipa de um team_leader (abaixo dele, na cidade) + a própria. */
 async function trainingTeamIds(user: { id: number; role: string }): Promise<Set<number>> {
@@ -103,6 +104,13 @@ const pathInput = z.object({
   dueDays: z.number().int().min(1).max(365).optional(),
 });
 
+/** Anexo de um manual: só ficheiros carregados para a Formação (ou links de fora); nunca a key de outro módulo. */
+function assertManualFileRefs(refs: Array<string | null | undefined>): void {
+  if (!uploadRefsAllowed(refs, ["uploads/", "training/"])) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Anexo inválido: carrega o ficheiro de novo." });
+  }
+}
+
 export const trainingRouter = router({
   // ─── Tutor (IA) — server/trainingTutorRouter.ts ─────────────────────────
   tutor: trainingTutorRouter,
@@ -170,6 +178,7 @@ export const trainingRouter = router({
   }),
   createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string().min(1), content: z.string(), type: z.enum(MANUAL_TYPES).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
+    assertManualFileRefs([input.fileUrl, input.fileKey]);
     const result = await createTrainingManual({ ...input, createdBy: ctx.user.id });
     await logActivity({ userId: ctx.user.id, action: "create", entity: "training_manual", entityId: result.id, details: input.title });
     return result;
@@ -187,6 +196,12 @@ export const trainingRouter = router({
   updateManual: protectedProcedure.input(z.object({ id: z.number(), categoryId: z.number().nullable().optional(), title: z.string().min(1).optional(), content: z.string().optional(), type: z.enum(MANUAL_TYPES).optional(), published: z.boolean().optional(), fileUrl: z.string().nullable().optional(), fileKey: z.string().nullable().optional(), fileName: z.string().nullable().optional(), fileMimeType: z.string().nullable().optional(), careerLevel: z.string().max(32).nullable().optional() })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
     const { id, ...data } = input;
+    if (data.fileUrl != null || data.fileKey != null) {
+      // reenviar o anexo que o manual já tem (formulário completo) não conta
+      const d = await dbOrThrow();
+      const [cur] = await d.select({ fileUrl: trainingManuals.fileUrl, fileKey: trainingManuals.fileKey }).from(trainingManuals).where(eq(trainingManuals.id, id)).limit(1);
+      assertManualFileRefs([data.fileUrl, data.fileKey].filter((r) => r != null && r !== cur?.fileUrl && r !== cur?.fileKey));
+    }
     await updateTrainingManual(id, data);
     await logActivity({ userId: ctx.user.id, action: "update", entity: "training_manual", entityId: id, details: data.title || (data.published !== undefined ? (data.published ? "publicado" : "despublicado") : "") });
     return { success: true };

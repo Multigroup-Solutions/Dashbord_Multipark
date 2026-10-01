@@ -86,20 +86,11 @@ async function startServer() {
       return res.status(500).json({ error: err.message || "Upload failed" });
     }
   });
-  // Resolve ficheiro do storage pela KEY (paridade com o api-entry.ts do
-  // Vercel): Blob → redirect para a URL pública; local → redirect p/ /uploads.
-  app.get(/^\/api\/file\/(.+)/, requireSession, async (req: any, res: any) => {
-    try {
-      // O Express já decodifica os grupos capturados — sem 2º decode.
-      const key = String(req.params[0] ?? "");
-      if (!key || key.includes("..")) return res.status(400).json({ error: "Key inválida" });
-      const { storageGet } = await import("../storage");
-      const { url } = await storageGet(key);
-      if (url) return res.redirect(302, url);
-      return res.status(404).json({ error: "Ficheiro não encontrado no storage" });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Falha a resolver ficheiro" });
-    }
+  // Abre um ficheiro do storage pela KEY, com autorização por entidade
+  // (paridade com o api-entry.ts do Vercel — server/fileRoute.ts).
+  app.get(/^\/api\/file\/(.+)/, async (req: any, res: any) => {
+    const { fileRoute } = await import("../fileRoute");
+    return fileRoute(req, res);
   });
   // tRPC API
   app.use(

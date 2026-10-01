@@ -39,7 +39,7 @@ function check(name: string, ok: boolean, detail = "") {
 
 async function main() {
   // import dinâmico DEPOIS do dotenv, para o storage ver as envs
-  const { storagePut, storageGet, storageDelete, storagePresignPut } = await import("../server/storage");
+  const { storagePut, storageGet, storageDelete, storagePresignPut, storagePresignGet } = await import("../server/storage");
 
   const key = "verify/hello.txt";
   const body = `bucket verification ${new Date().toISOString()}`;
@@ -47,9 +47,14 @@ async function main() {
   const put = await storagePut(key, body, "text/plain");
   check("storagePut devolve key+url", put.key === key && put.url.includes(bucket), put.url);
 
+  // Bucket PRIVADO (P1, 1 out 2026): a URL "pública" é só o identificador; ler
+  // exige um GET assinado (server/storageSign.ts e storagePresignGet).
   const anonGet = await fetch(put.url);
-  const gotBody = anonGet.ok ? await anonGet.text() : "";
-  check("GET anónimo 200 + conteúdo igual", anonGet.status === 200 && gotBody === body, `status=${anonGet.status}`);
+  check("GET anónimo bloqueado (403)", anonGet.status === 403, `status=${anonGet.status}`);
+
+  const signedGet = await fetch((await storagePresignGet(key)).url);
+  const gotBody = signedGet.ok ? await signedGet.text() : "";
+  check("GET assinado 200 + conteúdo igual", signedGet.status === 200 && gotBody === body, `status=${signedGet.status}`);
 
   const got = await storageGet(key);
   check("storageGet existente → url", got.url.length > 0, got.url);
@@ -69,9 +74,9 @@ async function main() {
     body: presignBody,
   });
   check("PUT pré-assinado aceite", putRes.ok, `status=${putRes.status}`);
-  const presignGet = await fetch(presign.url);
+  const presignGet = await fetch((await storagePresignGet(presignKey)).url);
   check(
-    "objeto pré-assinado lê-se publicamente",
+    "objeto do PUT pré-assinado lê-se com GET assinado",
     presignGet.status === 200 && (await presignGet.text()) === presignBody,
     `status=${presignGet.status}`
   );
