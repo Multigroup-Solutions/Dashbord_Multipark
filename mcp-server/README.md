@@ -117,3 +117,20 @@ Reinicia o Claude Desktop e as tools aparecem (ícone de ferramentas no chat).
 - Para um MCP só de leitura, cria a chave com `permissions='read'`.
 - Os endpoints `/api/v1` validam o scope a cada chamada; uma chave `read`
   recebe `403` em qualquer escrita.
+
+## Relatórios (só leitura)
+
+Rotas e tools para a skill `multipark-relatorios` (todas pedem scope `read`; nada escreve na BD):
+
+| Tool | Rota | O que devolve |
+|---|---|---|
+| `cash_counts` | `GET /cash/counts?from&to[&parkId][&city]` | Contagens de caixa por parque e dia: recebido em dinheiro, gastos, previsto, contado, diferença (contado − previsto), quem contou; totais por dia e por cidade |
+| `cash_count_detail` | `GET /cash/counts/:parkId/:day` | Gastos e cada versão gravada (quem e quando) |
+| `cash_cases` | `GET /cash/cases` | Fila da "Correção de caixa" |
+| `cash_case_detail` | `GET /cash/cases/:id` | Caso com linha do tempo (quem abriu, analisou, fechou, explicação) |
+| `drivers_daily` | `GET /drivers/daily?from&to[&employeeId]` | Km, horas trabalhadas e paradas, velocidades, excessos, bateria; resumo por condutor |
+| `partners_billing` | `GET /partners/billing?from&to` | A faturar por parceiro (comissão ou avença) |
+| `partners_close` | `GET /partners/close?month=AAAA-MM` | Fecho de parceiros do mês |
+| `shift_handovers` | `GET /shift-handovers?from&to[&city]` | Passagens de turno: caixa no cofre, bolsas, gastos, quem preencheu e confirmou |
+
+Intervalos: `from` e `to` (AAAA-MM-DD) obrigatórios, máximo 366 dias. Código: `server/mcpReportsApi.ts` (testes em `server/mcpReportsApi.test.ts`).

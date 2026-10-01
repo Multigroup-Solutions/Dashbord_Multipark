@@ -196,6 +196,55 @@ const tools = [
     inputSchema: { type: "object", properties: {} },
     run: () => api("GET", "/employees"),
   },
+  // ── Relatórios (só leitura): caixa, condutores, parceiros, passagens de turno ──
+  {
+    name: "cash_counts",
+    description: "Contagens de caixa por parque e dia (recebido em dinheiro, gastos, previsto, contado, diferença, quem contou) com totais por dia e por cidade. from e to (AAAA-MM-DD) obrigatórios, máx. 366 dias. Opcional: parkId, city (lisbon|porto|faro). difference = contado − previsto.",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, parkId: { type: "string" }, city: { type: "string" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/cash/counts", { query: a }),
+  },
+  {
+    name: "cash_count_detail",
+    description: "Uma contagem de caixa (parque + dia): gastos pagos e cada versão gravada, com quem alterou e quando.",
+    inputSchema: { type: "object", properties: { parkId: { type: "string" }, day: { type: "string" } }, required: ["parkId", "day"] },
+    run: (a) => api("GET", `/cash/counts/${encodeURIComponent(a.parkId)}/${encodeURIComponent(a.day)}`),
+  },
+  {
+    name: "cash_cases",
+    description: "Fila da 'Correção de caixa' (divergências de preço, método, pago, contagem). Filtros: view (abertos|fechados|todos), severity (critical|high|medium), code, parkId, day, limit, offset.",
+    inputSchema: { type: "object", properties: { view: { type: "string" }, severity: { type: "string" }, code: { type: "string" }, parkId: { type: "string" }, day: { type: "string" }, limit: { type: "number" }, offset: { type: "number" } } },
+    run: (a) => api("GET", "/cash/cases", { query: a }),
+  },
+  {
+    name: "cash_case_detail",
+    description: "Um caso da 'Correção de caixa' com a linha do tempo: quem abriu, analisou, fechou, motivo e explicação.",
+    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+    run: (a) => api("GET", `/cash/cases/${a.id}`),
+  },
+  {
+    name: "drivers_daily",
+    description: "Condutores por dia: km, horas trabalhadas e paradas, velocidade média e máxima, excessos de velocidade, bateria, com resumo por condutor. from e to obrigatórios (máx. 366 dias). Opcional: employeeId.",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, employeeId: { type: "number" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/drivers/daily", { query: a }),
+  },
+  {
+    name: "partners_billing",
+    description: "A faturar por parceiro num período: reservas, receita bruta e líquida, comissão ou avença (aFaturar). from e to obrigatórios. Opcional: partnerType, projectId.",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, partnerType: { type: "string" }, projectId: { type: "number" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/partners/billing", { query: a }),
+  },
+  {
+    name: "partners_close",
+    description: "Fecho de parceiros de um mês (AAAA-MM): por parceiro, valores da Multipark vs cópia, faturas, reservas sem fatura, diferenças e quem fechou e quando.",
+    inputSchema: { type: "object", properties: { month: { type: "string" } }, required: ["month"] },
+    run: (a) => api("GET", "/partners/close", { query: a }),
+  },
+  {
+    name: "shift_handovers",
+    description: "Passagens de turno por dia e cidade: caixa no cofre, bolsas, gastos pagos, quem preencheu e quem confirmou. from e to obrigatórios. Opcional: city.",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, city: { type: "string" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/shift-handovers", { query: a }),
+  },
 ];
 
 const toolByName = new Map(tools.map((t) => [t.name, t]));
