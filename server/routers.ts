@@ -20,6 +20,7 @@ import { requireAccess, canAccess, isOwnOnly, userIdsAtOrBelowInCity, employeeBe
 import { ROLE_RANK as ACCESS_ROLE_RANK, MODULE_IDS, can, scopeFor, canSeeFinanceTotalsFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId, type Action as AccessAction } from "../shared/access";
 import { normalizeEmail } from "@shared/email";
 import { USER_ROLES, superAdminGuard, inviteCompletionError, linkRoleGuard } from "./userAdminRules";
+import { guardedAccountChange } from "./superAdminLock";
 import {
   USER_DIRECTORY_CITY,
   USER_DIRECTORY_EMPLOYEE,
@@ -1140,11 +1141,14 @@ export const appRouter = router({
         if (roleChanged) {
           const guard = superAdminGuard(ctx.user.id, target!, safeData.role!, await countActiveSuperAdmins());
           if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
-        } else if (safeData.role !== undefined) {
-          delete safeData.role;
+          // o papel muda dentro da tranca do último super_admin (atómico)
+          const newRole = safeData.role!;
+          const locked = await guardedAccountChange(userId, (t, n) => superAdminGuard(ctx.user.id, t, newRole, n), (tx) => updateUserRole(userId, newRole, tx));
+          if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
         }
+        const { role: _role, ...rest } = safeData;
         // Auto-edição nunca religa fichas por email.
-        await updateUser(userId, safeData, { relinkEmployees: !isSelf });
+        await updateUser(userId, rest, { relinkEmployees: !isSelf });
         await logActivity({
           userId: ctx.user.id,
           action: "update",
@@ -1165,7 +1169,9 @@ export const appRouter = router({
         if (previous === input.role) return { success: true };
         const guard = superAdminGuard(ctx.user.id, target, input.role, await countActiveSuperAdmins());
         if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
-        await updateUserRole(input.userId, input.role);
+        // a decisão que conta é a de dentro da tranca do último super_admin
+        const locked = await guardedAccountChange(input.userId, (t, n) => superAdminGuard(ctx.user.id, t, input.role, n), (tx) => updateUserRole(input.userId, input.role, tx));
+        if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
         await logActivity({
           userId: ctx.user.id,
           action: "update_role",
@@ -1197,11 +1203,14 @@ export const appRouter = router({
           if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
         }
         const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
-        await toggleUserActive(
-          input.userId,
-          input.isActive,
-          deactivation ? { ...deactivation, byUserId: ctx.user.id } : null,
-        );
+        const meta = deactivation ? { ...deactivation, byUserId: ctx.user.id } : null;
+        if (input.isActive) {
+          await toggleUserActive(input.userId, true, null);
+        } else {
+          // desativar corre dentro da tranca do último super_admin (atómico)
+          const locked = await guardedAccountChange(input.userId, (t, n) => superAdminGuard(ctx.user.id, t, null, n), (tx) => toggleUserActive(input.userId, false, meta, tx));
+          if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
+        }
         await logActivity({
           userId: ctx.user.id,
           action: input.isActive ? "activate" : "deactivate",
@@ -3032,19 +3041,25 @@ export const appRouter = router({
         const meta = deactivation ? { ...deactivation, byUserId: ctx.user.id } : null;
         // Desativar a ficha desativa a conta: vale a mesma guarda do ecrã Utilizadores
         // (não te desativas a ti próprio nem tiras o último super_admin).
-        if (!input.isActive && found.employee.userId) {
-          const acct = await getUserById(found.employee.userId);
+        const userId = found.employee.userId;
+        if (!input.isActive && userId) {
+          const acct = await getUserById(userId);
           const guard = acct ? superAdminGuard(ctx.user.id, acct, null, await countActiveSuperAdmins()) : null;
           if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
           if (acct && acct.id === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes desativar a tua própria ficha." });
+          // A conta desativa-se PRIMEIRO, dentro da tranca do último super_admin
+          // (atómico); se a guarda recusar, a ficha fica como estava.
+          if (acct) {
+            const locked = await guardedAccountChange(userId, (t, n) => superAdminGuard(ctx.user.id, t, null, n), (tx) => toggleUserActive(userId, false, meta, tx));
+            if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
+          }
         }
         await updateEmployee(input.id, {
           isActive: input.isActive ? 1 : 0,
           ...deactivationColumns(input.isActive, meta),
         });
-        const userId = found.employee.userId;
         // O motivo segue para a conta: a ficha e o login contam a MESMA história.
-        if (userId) await toggleUserActive(userId, input.isActive, meta);
+        if (userId && input.isActive) await toggleUserActive(userId, true, meta);
         await logActivity({
           userId: ctx.user.id,
           action: input.isActive ? "activate" : "deactivate",
@@ -7943,7 +7958,21 @@ export const appRouter = router({
         const primary = fichaUserId && fichaUserId !== input.userId ? await getUserById(fichaUserId) : null;
         const guard = linkRoleGuard({ actor: ctx.user, linked, primaryRole: primary?.role ?? null, activeSuperAdminCount: await countActiveSuperAdmins() });
         if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
-        const { linkEmployeeToUser } = await import("./identityScreen");
+        // O papel herdado entra DENTRO da tranca do último super_admin (atómico);
+        // a ligação a seguir grava o mesmo papel (sem mudança). O que impediria a
+        // ligação verifica-se ANTES, para o papel nunca mudar sem a ligação feita.
+        const { linkEmployeeConflict, linkEmployeeToUser } = await import("./identityScreen");
+        const inherited = primary?.role ?? null;
+        if (inherited && inherited !== linked.role) {
+          const conflict = await linkEmployeeConflict(input.employeeId, input.userId);
+          if (conflict) throw new TRPCError({ code: "BAD_REQUEST", message: conflict });
+          const locked = await guardedAccountChange(
+            input.userId,
+            (t, n) => linkRoleGuard({ actor: ctx.user, linked: t, primaryRole: inherited, activeSuperAdminCount: n }),
+            (tx) => updateUserRole(input.userId, inherited, tx),
+          );
+          if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
+        }
         let mode: "principal" | "extra";
         try {
           mode = await linkEmployeeToUser(input.employeeId, input.userId);

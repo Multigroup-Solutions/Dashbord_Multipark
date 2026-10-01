@@ -341,8 +341,9 @@ export async function getAllUsers() {
   return accounts.map(account => ({ ...account, employees: byUser.get(account.id) ?? [] }));
 }
 
-export async function updateUserRole(userId: number, role: string) {
-  const db = await getDb();
+/** `exec`: a transação da guarda do último super_admin (server/superAdminLock.ts), quando a há. */
+export async function updateUserRole(userId: number, role: string, exec?: any) {
+  const db = exec ?? (await getDb());
   if (!db) return;
   await db.update(users).set({ role: role as any }).where(eq(users.id, userId));
 }
@@ -464,8 +465,9 @@ export function deactivationColumns(isActive: boolean, meta?: DeactivationRecord
   };
 }
 
-export async function toggleUserActive(userId: number, isActive: boolean, meta?: DeactivationRecord | null) {
-  const db = await getDb();
+/** `exec`: a transação da guarda do último super_admin (server/superAdminLock.ts), quando a há. */
+export async function toggleUserActive(userId: number, isActive: boolean, meta?: DeactivationRecord | null, exec?: any) {
+  const db = exec ?? (await getDb());
   if (!db) return;
   await db
     .update(users)
