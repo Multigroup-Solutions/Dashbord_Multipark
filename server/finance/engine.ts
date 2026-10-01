@@ -56,6 +56,7 @@ import * as R from "./rules";
 import { resolveFinanceRates, rateCaseSql, type FinanceRates, type RatePeriod } from "./rates";
 import { loadPartnerIndex, operatedLeavesByPartner, partnerForCampaign } from "./partners";
 import { groupAgg, loadLiveBookingAgg, sumOf, type LiveBookingAgg } from "./liveBookings";
+import { financeProjectIds } from "./scope";
 
 export interface FinanceFilters {
   from: string;                 // YYYY-MM-DD (dia de Lisboa)
@@ -281,8 +282,10 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   let projectIds: number[] | undefined;
   let projectSet: Set<number> | undefined;
   let cities: string[] | null = null;
-  if (filters.projectId) {
-    const ids = await resolveProjectIds(filters.projectId);
+  // Sem centro escolhido vale o alcance de cidade do pedido (FM02).
+  const scopeIds = await financeProjectIds(filters.projectId);
+  if (scopeIds) {
+    const ids = scopeIds;
     projectIds = ids;
     projectSet = new Set(ids);
     const keys = new Set<string>();
@@ -291,6 +294,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     cities = hasUnscoped || keys.size === 0 ? null : Array.from(keys);
   }
   out.scope = { projectId: filters.projectId ?? null, projectIds: projectIds ?? null, cities };
+  // Alcance sem nenhum centro: nada a somar (e `cities: null` nos extras seria "todas").
+  if (projectIds && projectIds.length === 0) return out;
 
   // ─── 1. Entregues (por dia de Lisboa × centro) e por campanha ─────────────
   // Reservas AO VIVO da BD da Multipark (./liveBookings.ts), só os nossos
