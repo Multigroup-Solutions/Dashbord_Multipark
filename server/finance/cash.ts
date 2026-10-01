@@ -16,7 +16,7 @@
  *     cancelamento) — NÃO conta como receita.
  * Mesmos dias de Lisboa e o mesmo filtro de centro do motor financeiro.
  */
-import { resolveProjectIds } from "../db";
+import { financeProjectIds } from "./scope";
 import { lisbonDayOf, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 import { groupAgg, loadLiveBookingAgg, sumOf } from "./liveBookings";
 
@@ -54,7 +54,8 @@ export async function computeCash(filters: { from: string; to: string; projectId
   };
   const { from, to } = filters;
   const today = filters.today ?? lisbonDayOf(Date.now());
-  const projectIds = filters.projectId ? await resolveProjectIds(filters.projectId) : undefined;
+  // Sem centro escolhido vale o alcance de cidade do pedido (FM02).
+  const projectIds = await financeProjectIds(filters.projectId);
   const utc = lisbonDayRangeUtc(from, to);
   // No-shows: check-in no período E antes de hoje (Lisboa), nunca entraram, com pagamento
   const todayStart = lisbonDayRangeUtc(today).start;
