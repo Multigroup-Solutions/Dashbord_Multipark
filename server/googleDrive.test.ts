@@ -10,7 +10,7 @@ const f = vi.hoisted(() => ({
   rows: [] as any[],
 }));
 vi.mock("./mail/inbox", async (original) => ({ ...(await original<object>()), assertEntityInScope: f.inScope, threadAccess: f.threadAccess }));
-vi.mock("./routers", () => ({ assertCanViewDocuments: f.canView, assertCanUploadDocuments: f.canUpload }));
+vi.mock("./rhGuards", () => ({ assertCanViewDocuments: f.canView, assertCanUploadDocuments: f.canUpload }));
 vi.mock("./tasksRouter", () => ({ loadTaskFor: f.loadTask }));
 vi.mock("./db", async (original) => ({
   ...(await original<object>()),

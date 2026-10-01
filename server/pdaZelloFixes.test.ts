@@ -7,6 +7,8 @@ import {
 
 const root = resolve(__dirname, "..");
 const read = (p: string) => readFileSync(resolve(root, p), "utf8");
+// O appRouter está repartido (P2: rh e operational têm ficheiro próprio).
+const routersCode = () => ["server/routers.ts", "server/rhRouter.ts", "server/operationalRouter.ts"].map(read).join("\n");
 function tsFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((f) => {
     const p = join(dir, f);
@@ -42,7 +44,7 @@ describe("pda_checkins: a coluna chama-se checkin_status (B1)", () => {
   });
 
   it("falhas da ligação PDA deixam aviso no log (não são engolidas em silêncio)", () => {
-    const r = read("server/routers.ts");
+    const r = routersCode();
     expect(r).toContain(`console.warn("[pda] login→PDA falhou:", err)`);
     expect(r).toContain(`console.warn("[pda] logout→soltar PDA falhou:", err)`);
     expect(r).toContain(`console.warn("[pda] ponto→PDA automático (check-in) falhou:", err)`);
@@ -73,7 +75,7 @@ describe("Zello: exclusão do GPS só por lista explícita (B5)", () => {
     const job = read("server/jobs/dailyDriverCollection.ts");
     expect(job).not.toMatch(/\.admin\b/);
     expect(job).toContain("getZelloGpsUsers()");
-    const r = read("server/routers.ts");
+    const r = routersCode();
     expect(r).not.toContain("if (user.admin) continue");
     for (const f of ["client/src/components/ZelloLiveTab.tsx", "client/src/pages/OperationalPage.tsx"]) expect(read(f), f).not.toMatch(/!u\.admin\b/);
   });
