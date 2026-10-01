@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 /**
  * Tutor da Formação: procura por palavras-chave, "pergunta ao formador" fora
  * do conteúdo, explicação pós-quiz com as respostas erradas, limite de
@@ -317,7 +318,6 @@ describe("migração 0138 (tutor)", () => {
     for (const st of MIGRATION_0138_STATEMENTS) expect(st).toMatch(/^CREATE TABLE IF NOT EXISTS `training_tutor_/);
     expect(MIGRATION_0138_STATEMENTS.join("\n")).not.toMatch(/UPDATE|DROP|DELETE/i);
     expect(IDEMPOTENT_ERROR_CODES_0138.has("ER_TABLE_EXISTS_ERROR")).toBe(true);
-    const { readFileSync } = await import("node:fs");
-    expect(readFileSync(new URL("./db.ts", import.meta.url), "utf8")).toContain("migration_0138");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0138");
   });
 });

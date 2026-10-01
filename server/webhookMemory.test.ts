@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -148,7 +149,7 @@ describe("guarda: memória nunca é reescrita nem apagada", () => {
       expect(MIGRATION_0240_STATEMENTS.some((s) => s.includes(`ADD COLUMN \`${c}\``))).toBe(true);
     }
     expect(MIGRATION_0240_STATEMENTS.join()).toContain("UNIQUE KEY `uq_mp_webhook_snap_delivery` (`deliveryId`)");
-    expect(readFileSync(join(root, "db.ts"), "utf8")).toContain('import("./migrations/migration_0240")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0240");
   });
 });
 

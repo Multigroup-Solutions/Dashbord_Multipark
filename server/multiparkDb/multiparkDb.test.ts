@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import fs from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
@@ -319,8 +320,7 @@ describe("consultas mapeadas e reservas só pelo webhook", () => {
 describe("migração 0205", () => {
   it("idempotente e registada no fim do ensureRecentSchema", () => {
     for (const s of MIGRATION_0205_STATEMENTS) expect(s).toMatch(/^CREATE TABLE IF NOT EXISTS `multipark_(agents|db_cursors)`/);
-    const dbTs = fs.readFileSync(path.join(__dirname, "..", "db.ts"), "utf8");
-    const i205 = dbTs.indexOf("migration_0205");
-    expect(i205).toBeGreaterThan(dbTs.indexOf("migration_0200"));
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0205")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0200"));
+    expect(SCHEMA_MIGRATION_IDS).toContain("0200");
   });
 });

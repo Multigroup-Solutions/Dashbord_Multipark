@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -210,8 +211,7 @@ describe("migração 0100", () => {
     expect(IDEMPOTENT_ERROR_CODES_0100.has("ER_DUP_KEYNAME")).toBe(true);
   });
   it("registada no ensureRecentSchema a seguir à 0098 e no schema drizzle", () => {
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    const nums = [...db.matchAll(/import\("\.\/migrations\/migration_(\d{4})"\)\.then\(m => \(\{ s: m\.MIGRATION_/g)].map(x => Number(x[1]));
+    const nums = SCHEMA_MIGRATION_IDS.map(Number);
     expect(nums).toContain(99);
     expect(nums.indexOf(99)).toBe(nums.indexOf(98) + 1);
     const schema = readFileSync(resolve(root, "drizzle/schema.ts"), "utf8");

@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -68,7 +69,7 @@ describe("ligações a reservas pelo id da Multipark", () => {
     expect(all).toContain("ADD COLUMN `linkedBookingLabel`");
     expect(all).toContain("w.linkedBookingRef IS NULL");
     expect(all).not.toMatch(/DROP|DELETE/i);
-    expect(code("server/db.ts")).toContain('import("./migrations/migration_0250")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0250");
   });
   it("dossier: ficha ao vivo → campos que as páginas já mostram", () => {
     const core: any = {

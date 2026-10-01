@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -58,7 +59,7 @@ describe("agendador mais leve", () => {
     expect(whatsappTriageRetry(2)).toBe(true);
     expect(whatsappTriageRetry(3)).toBe(false);
     expect(MIGRATION_0315_STATEMENTS[0]).toMatch(/ADD COLUMN `aiTriageFails` INT NOT NULL DEFAULT 0/);
-    expect(src("server/db.ts")).toContain("migration_0315");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0315");
     const t = src("server/whatsappTriage.ts");
     expect(t).toMatch(/maxTokens: 600/);
     expect(t).toMatch(/aiTriageFails: 0/);

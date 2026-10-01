@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 /**
  * Todo o email pela API do Gmail + encaminhamento por alias (migração 0195):
  * resolução do alias pelos cabeçalhos (multi-domínio, "Por classificar"),
@@ -165,9 +166,8 @@ describe("tabela de aliases (extensão das caixas, sem sistema paralelo)", () =>
   it("migração 0195: idempotente, sem sementes, registada no fim do ensureRecentSchema", () => {
     expect(MIGRATION_0195_STATEMENTS.every((s) => /^ALTER TABLE `mail_threads` ADD (COLUMN|INDEX)/.test(s))).toBe(true);
     expect([...IDEMPOTENT_ERROR_CODES_0195].sort()).toEqual(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    const i190 = db.indexOf('import("./migrations/migration_0190")');
-    const i195 = db.indexOf('import("./migrations/migration_0195")');
+    const i190 = SCHEMA_MIGRATION_IDS.indexOf("0190");
+    const i195 = SCHEMA_MIGRATION_IDS.indexOf("0195");
     expect(i190).toBeGreaterThan(0);
     expect(i195).toBeGreaterThan(i190);
   });

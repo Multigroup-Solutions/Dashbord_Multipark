@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 /**
  * Caixa sem os envios automáticos da aplicação (migração 0230): os pedidos e
  * lembretes de disponibilidade que saem por recursos-humanos@ (e os outros
@@ -235,9 +236,8 @@ describe("migração 0230: limpa os pedidos de disponibilidade já sincronizados
     expect(all).toMatch(/UNIQUE KEY `uq_mail_auto_sends_msg` \(`accountKey`, `gmailMessageId`\)/);
     expect(all).toMatch(/KEY `idx_mail_auto_sends_employee` \(`employeeId`, `sentAt`\)/);
     expect(IDEMPOTENT_ERROR_CODES_0230.has("ER_TABLE_EXISTS_ERROR")).toBe(true);
-    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    expect(db).toMatch(/migration_0230/);
-    expect(db).toMatch(/runMigration0230Data/);
+    expect(SCHEMA_MIGRATION_IDS).toContain("0230");
+    expect(readFileSync(resolve(root, "server/migrations/index.ts"), "utf8")).toMatch(/runMigration0230Data/);
   });
   it("matcher do backfill: só os envios nossos (sem Re:, sem recebidas, sem humanos)", () => {
     const rows = [

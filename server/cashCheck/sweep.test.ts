@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -153,7 +154,7 @@ describe("caixa fase 2: tabelas e agendador", () => {
     const all = MIGRATION_0265_STATEMENTS.join("\n");
     for (const t of ["cash_live_snapshots", "cash_cases", "cash_case_events", "cash_agent_perms", "cash_sweep_state"]) expect(all).toContain(`CREATE TABLE IF NOT EXISTS \`${t}\``);
     expect(all).not.toMatch(/DROP|DELETE|ALTER/i);
-    expect(readFileSync(join(__dirname, "..", "db.ts"), "utf8")).toContain('import("./migrations/migration_0265")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0265");
   });
   it("cash-sweep de 3 em 3 h e cash-close diário, com endpoint manual", async () => {
     const { TICK_JOBS, describeCadence } = await import("../cronSchedule");

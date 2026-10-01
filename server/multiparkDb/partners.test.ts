@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "../migrations/index";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -170,6 +171,6 @@ describe("migração 0225", () => {
     const all = MIGRATION_0225_STATEMENTS.join("\n");
     expect(all).not.toMatch(/\bDROP\b|\bDELETE\b|COLLATE/i);
     expect(all).toContain("UNIQUE KEY `uq_crm_partner_link` (`kind`, `mpId`)");
-    expect(readFileSync(resolve(__dirname, "..", "db.ts"), "utf8")).toContain('import("./migrations/migration_0225")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0225");
   });
 });

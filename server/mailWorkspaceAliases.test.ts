@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 /**
  * Google Workspace real (dono, 27 set 2026): domínios alternativos no
  * encaminhamento por alias (reclamacoes@skypark.pt = reclamacoes@multipark.pt)
@@ -228,9 +229,9 @@ describe("migração 0210 — caixas do Workspace real", () => {
   it("registo: SQL idempotente, marca própria e passo de dados em ensureRecentSchema", () => {
     for (const s of MIGRATION_0210_STATEMENTS) expect(s).toMatch(/^CREATE TABLE IF NOT EXISTS/);
     expect(DATA_0210_ID.length).toBeLessThanOrEqual(64);
-    const dbTs = readFileSync(resolve(root, "server/db.ts"), "utf8");
-    expect(dbTs.indexOf("migration_0210")).toBeGreaterThan(dbTs.indexOf("migration_0205"));
-    expect(dbTs).toMatch(/runMigration0210Data/);
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0210")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0205"));
+    expect(SCHEMA_MIGRATION_IDS).toContain("0205");
+    expect(readFileSync(resolve(root, "server/migrations/index.ts"), "utf8")).toMatch(/runMigration0210Data/);
     const mig = readFileSync(resolve(root, "server/migrations/migration_0210.ts"), "utf8");
     // Marca inserida ANTES de ler/escrever as caixas, na mesma transação.
     expect(mig.indexOf("INSERT INTO app_notification_maintenance")).toBeLessThan(mig.indexOf("FROM mail_mailboxes FOR UPDATE"));

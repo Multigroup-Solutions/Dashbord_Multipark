@@ -1,3 +1,4 @@
+import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -383,7 +384,7 @@ describe("migração 0115", () => {
   });
   it("registada no ensureRecentSchema e no schema drizzle", () => {
     const root = resolve(__dirname, "..");
-    expect(readFileSync(resolve(root, "server/db.ts"), "utf8")).toContain('import("./migrations/migration_0115")');
+    expect(SCHEMA_MIGRATION_IDS).toContain("0115");
     const schema = readFileSync(resolve(root, "drizzle/schema.ts"), "utf8");
     expect(schema).toContain('mysqlTable("extras_dia_schedules"');
     expect(schema).toContain('mysqlTable("extras_dia_notifications"');
