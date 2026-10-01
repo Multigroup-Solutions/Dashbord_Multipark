@@ -120,3 +120,8 @@ temp/
 
 # Local operational exports (never publish booking data)
 /exports/
+
+# Ficheiros carregados no modo local (server/storage.ts sem S3/Blob): dados
+# pessoais (documentos de RH, fotos do ponto, faturas, trajetos GPS) — nunca
+# vão para o git. Em produção vivem no bucket S3 privado.
+uploads/
