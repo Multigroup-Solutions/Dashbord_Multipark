@@ -36,6 +36,10 @@ const fmt = (v: number | string) => {
 
 type Granularity = "day" | "week" | "month" | "year";
 
+/** Repete só falhas passageiras (BD lenta); sem permissão / pedido inválido mostra logo o erro. */
+const retryTransient = (count: number, err: unknown) =>
+  count < 2 && !["FORBIDDEN", "UNAUTHORIZED", "BAD_REQUEST"].includes(String((err as { data?: { code?: string } })?.data?.code ?? ""));
+
 export default function InvoicesPage() {
   const filters = useGlobalFilters();
   const initialMonth = rangeFor("month", new Date());
@@ -51,12 +55,12 @@ export default function InvoicesPage() {
     return undefined;
   }, [filters.cityId, filters.brandId]);
 
-  const { data, isLoading } = trpc.invoices.billing.useQuery({ from, to, projectId, granularity });
+  const { data, isLoading, error, refetch, isFetching } = trpc.invoices.billing.useQuery({ from, to, projectId, granularity }, { retry: retryTransient });
   // O alerta "Caixa: casos graves" abre /faturacao?tab=cash-check&case=N.
   const [tab, setTab] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("tab") === "cash-check" ? "cash-check" : "real"; } catch { return "real"; }
   });
-  const { data: cash, isLoading: cashLoading } = trpc.invoices.cash.useQuery({ from, to, projectId }, { enabled: tab === "cash" });
+  const { data: cash, isLoading: cashLoading, error: cashError, refetch: refetchCash } = trpc.invoices.cash.useQuery({ from, to, projectId }, { enabled: tab === "cash", retry: retryTransient });
 
   const summary = data?.summary as any;
   const timeseries = data?.timeseries ?? [];
@@ -65,7 +69,9 @@ export default function InvoicesPage() {
   const expensesPaid = data?.expensesPaid ?? [];
   const expensesPending = data?.expensesPending ?? [];
   const forecast = data?.forecast ?? [];
-  const extrasDia = (data as any)?.extrasDia ?? [];
+  // Equipa do dia: o PONTO é o que conta (soma o cartão); a escala é só referência
+  const extrasReal: Array<{ level: string; hours: number; headcount: number; cost: number }> = (data as any)?.extrasReal ?? [];
+  const extrasPlanned: Array<{ level: string; hours: number; headcount: number; cost: number }> = (data as any)?.extrasDia ?? [];
   const expensesExcluded = data?.expensesExcluded ?? [];
   const salesCommissions = data?.salesCommissions ?? [];
   const operationalPartners = data?.operationalPartners ?? [];
@@ -164,7 +170,10 @@ export default function InvoicesPage() {
         </div>
       </div>
 
-      {isLoading || !summary ? (
+      {error && !summary ? (
+        // Erro ≠ zero: sem dados mostra-se o porquê (antes ficava a rodar para sempre)
+        <LoadError message={error.message} onRetry={() => refetch()} busy={isFetching} />
+      ) : isLoading || !summary ? (
         <div className="flex justify-center py-20">
           <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
         </div>
@@ -414,16 +423,21 @@ export default function InvoicesPage() {
                 </Card>
               )}
 
-              {/* Extras-dia */}
+              {/* Equipa do dia: o PONTO (o que conta) — a escala só como referência */}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
-                    <UsersIcon className="w-4 h-4" /> Equipa do dia (extras-dia)
+                    <UsersIcon className="w-4 h-4" /> Equipa do dia (extras)
                   </CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    O custo que conta: horas do <strong>ponto</strong> × tarifa do nível{current ? ", até hoje" : ""} — o mesmo do cartão "Equipa do dia".
+                    Escala do Extras Dia no período (previsto, não soma): {fmt(summary.extrasPlanned ?? 0)} em {extrasPlanned.reduce((s, e) => s + e.headcount, 0)} turno(s)
+                    {current ? "; a escala dos dias que faltam entra no Fecho previsto" : ""}.
+                  </p>
                 </CardHeader>
                 <CardContent>
-                  {extrasDia.length === 0 ? (
-                    <p className="text-muted-foreground text-sm text-center py-6">Sem escalas extras-dia no período</p>
+                  {extrasReal.length === 0 ? (
+                    <p className="text-muted-foreground text-sm text-center py-6">Sem ponto de extras no período</p>
                   ) : (
                     <div className="overflow-x-auto"><table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
                       <thead>
@@ -435,7 +449,7 @@ export default function InvoicesPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {extrasDia.map((e: any, i: number) => (
+                        {extrasReal.map((e, i) => (
                           <tr key={i} className="border-b hover:bg-muted/50">
                             <td className="p-2 capitalize">{e.level}</td>
                             <td className="p-2 text-right tabular-nums">{e.headcount}</td>
@@ -443,6 +457,10 @@ export default function InvoicesPage() {
                             <td className="p-2 text-right tabular-nums font-bold text-amber-700">{fmt(e.cost)}</td>
                           </tr>
                         ))}
+                        <tr className="bg-muted/30 font-bold">
+                          <td className="p-2" colSpan={3}>Total</td>
+                          <td className="p-2 text-right tabular-nums">{fmt(summary.extrasDiaCost ?? 0)}</td>
+                        </tr>
                       </tbody>
                     </table></div>
                   )}
@@ -690,7 +708,7 @@ export default function InvoicesPage() {
             </TabsContent>
 
             <TabsContent value="cash" className="space-y-4">
-              <CashPanel cash={cash} loading={cashLoading} />
+              <CashPanel cash={cash} loading={cashLoading} error={cashError?.message ?? null} onRetry={() => refetchCash()} />
             </TabsContent>
 
             <TabsContent value="cash-check" className="space-y-4">
@@ -733,6 +751,24 @@ function KpiSmall({ icon, label, amount }: { icon: React.ReactNode; label: strin
   );
 }
 
+/** Falha a carregar (BD da Multipark sem resposta, sem permissão…): diz o porquê e deixa tentar de novo. */
+function LoadError({ message, onRetry, busy }: { message: string; onRetry: () => void; busy?: boolean }) {
+  return (
+    <Card className="p-4 border-red-200 bg-red-50/50">
+      <div className="flex items-start gap-2 text-sm text-red-800">
+        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+        <div className="min-w-0">
+          <p className="font-medium">Não foi possível carregar estes números.</p>
+          <p className="text-xs mt-0.5 break-words">{message}</p>
+          <button type="button" onClick={onRetry} disabled={busy} className="mt-2 text-xs px-2.5 py-1 rounded border bg-background hover:bg-muted disabled:opacity-60">
+            {busy ? "A tentar…" : "Tentar de novo"}
+          </button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 /** Avisos de qualidade dos dados (o que pode estar a distorcer os números). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function QualityWarnings({ quality }: { quality: any }) {
@@ -763,7 +799,8 @@ function QualityWarnings({ quality }: { quality: any }) {
 
 /** Caixa: o dinheiro (recebido / por cobrar / no-shows pré-pagos). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function CashPanel({ cash, loading }: { cash: any; loading: boolean }) {
+function CashPanel({ cash, loading, error, onRetry }: { cash: any; loading: boolean; error: string | null; onRetry: () => void }) {
+  if (error && !cash) return <LoadError message={error} onRetry={onRetry} />;
   if (loading || !cash) return <p className="text-sm text-muted-foreground text-center py-6">A carregar…</p>;
   return (
     <>

@@ -33,6 +33,9 @@ export function billingPayload(r: FinanceResult, filters: { from: string; to: st
     // Dívida com vencimento no período — INFORMAÇÃO; não é somada aos custos
     expensesPending: r.costs.expensesPending,
     extrasDiaCost: r.costs.extrasDia,
+    // escala do Extras Dia no período inteiro — referência, NÃO soma (os dias
+    // futuros entram no Fecho previsto)
+    extrasPlanned: r.costs.extrasPlanned,
     salariesCost: r.costs.salaries,
     salariesBase: r.costs.salariesBase, salariesProvisions: r.costs.salariesProvisions, salariesVariable: r.costs.salariesVariable,
     employerTax: r.costs.employerTax,
@@ -71,7 +74,10 @@ export function billingPayload(r: FinanceResult, filters: { from: string; to: st
     expensesExcluded: r.details.expensesExcluded,
     expensesPending: r.details.expensesPending,
     forecast: r.details.forecast,
+    // Equipa do dia: `extrasReal` (ponto) é o que conta nos custos e soma o
+    // cartão "Equipa do dia"; `extrasDia` é a escala (previsto), só referência.
     extrasDia: r.details.extrasDia,
+    extrasReal: r.details.extrasReal,
     salesCommissions: r.details.salesCommissions,
     operationalPartners: r.details.operationalPartners,
     salaries: { byProject: r.details.salariesByProject, details: r.details.salaryDetails, total: r.costs.salaries },
