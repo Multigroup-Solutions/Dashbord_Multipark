@@ -182,6 +182,8 @@ export interface ServiceLine {
   plate: string | null;
   serviceName: string;
   done: boolean;
+  /** Marcado feito CÁ, na página Serviços (`service_extra_done`) — a Multipark não sabe. */
+  doneLocal?: boolean;
 }
 
 /** Separador entre o nome do serviço e o resto do título (lido pela página Serviços). */
@@ -201,7 +203,7 @@ export function serviceTaskDescription(l: ServiceLine): string {
     `Saída do carro: ${fmtLisbon(l.checkOutMs)}`,
     `Ficha da reserva: ${bookingLink(l.bookingId)}`,
     "",
-    "Tarefa criada automaticamente (Definições → Parâmetros → Serviços → tarefas). Prazo: a saída do carro. Fecha sozinha quando a Multipark marca o serviço como feito, se o serviço for retirado ou se a reserva for cancelada.",
+    "Tarefa criada automaticamente (Definições → Parâmetros → Serviços → tarefas). Prazo: a saída do carro. Fecha sozinha quando o serviço é marcado como feito (na Multipark ou na página Serviços), se o serviço for retirado ou se a reserva for cancelada.",
   ].join("\n");
 }
 
@@ -216,11 +218,12 @@ export interface ExistingServiceTask {
   assigneeIds: number[];
 }
 
-export type CloseReason = "cancelled" | "removed" | "done_multipark";
+export type CloseReason = "cancelled" | "removed" | "done_multipark" | "done_local";
 export const CLOSE_REASON_TEXT: Record<CloseReason, string> = {
   cancelled: "Fechada automaticamente: a reserva foi cancelada na Multipark.",
   removed: "Fechada automaticamente: o serviço já não está na reserva.",
   done_multipark: "Fechada automaticamente: o serviço foi marcado como feito na Multipark.",
+  done_local: "Fechada automaticamente: o serviço foi marcado como feito na página Serviços.",
 };
 
 export type ServiceTaskAction =
@@ -235,8 +238,8 @@ const utcMsOf = (mysql: string | null) => (mysql ? Date.parse(`${mysql.replace("
  * Decide as ações. PURA.
  *  - linha com o tipo ligado na cidade, sem tarefa, reserva não cancelada,
  *    serviço por fazer e saída em (agora, agora + janela] → criar;
- *  - tarefa aberta: reserva cancelada → fechar; serviço feito na Multipark →
- *    fechar; saída mudou → novo prazo; faltam responsáveis (ex.: escala
+ *  - tarefa aberta: reserva cancelada → fechar; serviço feito na Multipark ou
+ *    marcado feito cá (página Serviços) → fechar; saída mudou → novo prazo; faltam responsáveis (ex.: escala
  *    publicada depois) → acrescentar (nunca tira ninguém);
  *  - tarefa aberta cuja reserva foi lida mas já não tem a linha → fechar;
  *  - tarefas já concluídas nunca são mexidas nem recriadas.
@@ -268,6 +271,7 @@ export function planServiceTasks(o: {
       if (ex.taskStatus === "done") continue;
       if (cancelled) { out.push({ kind: "close", taskId: ex.id, reason: "cancelled" }); continue; }
       if (l.done) { out.push({ kind: "close", taskId: ex.id, reason: "done_multipark" }); continue; }
+      if (l.doneLocal) { out.push({ kind: "close", taskId: ex.id, reason: "done_local" }); continue; }
       const due = utcMsOf(ex.dueDate);
       if (!Number.isFinite(due) || Math.abs(due - l.checkOutMs) >= 60_000) {
         out.push({ kind: "update", taskId: ex.id, key, title: serviceTaskTitle(l), description: serviceTaskDescription(l), dueMs: l.checkOutMs });
@@ -280,7 +284,7 @@ export function planServiceTasks(o: {
       continue;
     }
     // PENDING = compra online por acabar (o CRM e a página Serviços também a deixam de fora)
-    if (!type || !rule?.enabled || cancelled || l.done || l.status === "PENDING") continue;
+    if (!type || !rule?.enabled || cancelled || l.done || l.doneLocal || l.status === "PENDING") continue;
     if (l.checkOutMs <= o.nowMs || l.checkOutMs > windowEnd) continue;
     out.push({
       kind: "create", key, line: l, typeKey: type.key,

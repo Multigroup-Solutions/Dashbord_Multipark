@@ -2076,18 +2076,18 @@ export const appRouter = router({
       }),
 
     // ── DASHBOARD STATS ──────────────────────────────────────────────────────
-    stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+    stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
       // Totais da empresa inteira — só admin+ (matriz do Jorge), e respeita o
-      // deny de finance.view_totals por utilizador.
+      // deny de finance.view_totals por utilizador. Com o filtro do painel.
       await requireFinanceTotals(ctx.user, "financeiro", "view");
-      return getExpenseStats();
+      return getExpenseStats({ projectId: input?.projectId });
     }),
 
     // ── UPCOMING PAYMENTS ────────────────────────────────────────────────────
-    upcomingPayments: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
-      // Pagamentos de TODOS: respeita a restrição finance.view_totals
+    upcomingPayments: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+      // Pagamentos de TODOS: respeita a restrição finance.view_totals (e o filtro do painel)
       await requireFinanceTotals(ctx.user, "financeiro", "view");
-      return getUpcomingPayments(7);
+      return getUpcomingPayments(7, { projectId: input?.projectId });
     }),
 
     // ── EXPORT EXCEL ─────────────────────────────────────────────────────────
@@ -6289,17 +6289,33 @@ export const appRouter = router({
       const { getDb } = await import("./db");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+      const mpDown = () => { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD da Multipark sem resposta." }); };
+      // A linha tem de ser DESTA reserva (antes podia mandar-se a reserva de cá com a linha de outra cidade).
+      const { serviceLineBookingId } = await import("./multiparkDb/serviceExtras");
+      const lineBooking = await serviceLineBookingId(input.lineId).catch(mpDown);
+      if (lineBooking !== input.bookingId) throw new TRPCError({ code: "BAD_REQUEST", message: "Este serviço não é desta reserva." });
       const cities = scopedCityNames();
       if (cities !== undefined) {
         const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
-        const b = await liveBookingByRef(input.bookingId, { cities }).catch(() => { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD da Multipark sem resposta." }); });
-        if (!b) throw new TRPCError({ code: "FORBIDDEN", message: "Este serviço pertence a outra cidade." });
+        const b = await liveBookingByRef(input.bookingId, { cities }).catch(mpDown);
+        if (!b || b.id !== input.bookingId) throw new TRPCError({ code: "FORBIDDEN", message: "Este serviço pertence a outra cidade." });
       }
       const { sql } = await import("drizzle-orm");
       await db.execute(sql`INSERT INTO service_extra_done (bookingExternalId, lineId, done, userId) VALUES (${input.bookingId}, ${input.lineId}, ${input.done ? 1 : 0}, ${ctx.user.id})
         ON DUPLICATE KEY UPDATE done = VALUES(done), userId = VALUES(userId), bookingExternalId = VALUES(bookingExternalId)`);
       await logActivity({ userId: ctx.user.id, action: input.done ? "complete" : "reopen", entity: "booking_extra", details: `${input.bookingId}:${input.lineId}` } as any);
-      return { success: true };
+      // "Feito" fecha já a tarefa gerada por este serviço (e no Google). Reabrir o
+      // serviço não reabre a tarefa: reabre-se à mão em Tarefas, se for preciso.
+      let tasksClosed = 0;
+      if (input.done) {
+        const { closeServiceTaskForLine } = await import("./serviceTasks");
+        tasksClosed = await closeServiceTaskForLine(input.bookingId, input.lineId, ctx.user.id).catch((err) => {
+          // o "feito" já ficou gravado; a volta das 18:00 fecha a tarefa
+          console.warn("[services.setExtraDone] fechar tarefa:", (err as Error)?.message);
+          return 0;
+        });
+      }
+      return { success: true, tasksClosed };
     }),
 
     // Tarefas geradas pelos serviços (trabalho services-tasks): link na página /servicos.

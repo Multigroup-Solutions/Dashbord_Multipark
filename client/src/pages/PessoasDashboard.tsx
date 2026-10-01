@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
+import { isoWeekYearLisbon } from "@shared/caseRules";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -63,14 +64,6 @@ const legendLabel = (value: string, entry: any) => (
   </span>
 );
 
-function getWeekNumber(d: Date): number {
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const dayNum = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-}
-
 // ─── KPI CARD ────────────────────────────────────────────────────────────────
 
 function KpiCard({
@@ -110,9 +103,10 @@ function KpiCard({
 
 export default function PessoasDashboard() {
   const filters = useDashboardFilters();
+  // Semana ISO com o ANO ISO (dia de Lisboa): a 1 jan 2027 é a semana 53 de
+  // 2026 — antes pedia-se a "semana 53 de 2027" (não existe) e vinha vazio.
   const now = new Date();
-  const currentWeek = getWeekNumber(now);
-  const currentYear = now.getFullYear();
+  const { week: currentWeek, year: currentYear } = isoWeekYearLisbon(now);
 
   // Queries
   const { data: stats, isLoading: loadingStats } = trpc.rh.stats.useQuery();

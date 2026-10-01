@@ -156,6 +156,8 @@ export interface ServiceTasksDeps {
   updateTask(id: number, patch: { title: string; description: string; dueMs: number }): Promise<void>;
   addAssignees(id: number, employeeIds: number[]): Promise<void>;
   closeTask(id: number, comment: string, systemUserId: number): Promise<void>;
+  /** Linhas marcadas feitas CÁ (página Serviços → `service_extra_done`). */
+  loadLocalDone(lineIds: string[]): Promise<Set<string>>;
   /** Manda as tarefas para o Google Tarefas dos responsáveis (em segundo plano). */
   syncGoogle(taskIds: number[]): void;
 }
@@ -349,7 +351,44 @@ export const defaultServiceTasksDeps: ServiceTasksDeps = {
       await db.insert(taskComments).values({ taskId: id, userId: systemUserId, body: comment });
     }
   },
+  async loadLocalDone(lineIds) {
+    const out = new Set<string>();
+    const ids = [...new Set(lineIds.filter(Boolean))];
+    if (!ids.length) return out;
+    const { getDb } = await import("./db");
+    const db = await getDb();
+    if (!db) return out;
+    const { sql } = await import("drizzle-orm");
+    for (let i = 0; i < ids.length; i += 1000) {
+      const chunk = ids.slice(i, i + 1000);
+      const rows = rowsOf(await db.execute(sql`SELECT lineId FROM service_extra_done WHERE done = 1 AND lineId IN (${sql.join(chunk.map((x) => sql`${x}`), sql`, `)})`));
+      for (const r of rows) out.add(String(r.lineId));
+    }
+    return out;
+  },
 };
+
+/** Junta às linhas o "feito" marcado cá. Se a nossa BD falhar, fica como estava (só o da Multipark). */
+async function markLocalDone(lines: ServiceLine[], d: ServiceTasksDeps): Promise<void> {
+  if (!lines.length) return;
+  const done = await d.loadLocalDone(lines.map((l) => l.lineId)).catch(() => new Set<string>());
+  for (const l of lines) if (done.has(l.lineId)) l.doneLocal = true;
+}
+
+/**
+ * "Feito" na página Serviços → fecha já a tarefa desta linha (sem esperar pela
+ * volta das 18:00) e manda o fecho para o Google. O comentário fica em nome de
+ * quem marcou. Devolve quantas fechou.
+ */
+export async function closeServiceTaskForLine(bookingId: string, lineId: string, userId: number, deps: Partial<ServiceTasksDeps> = {}): Promise<number> {
+  const d: ServiceTasksDeps = { ...defaultServiceTasksDeps, ...deps };
+  const key = serviceTaskKey(bookingId, lineId);
+  if (!key) return 0;
+  const open = (await d.loadTasksByKeys([key])).filter((t) => t.taskStatus !== "done");
+  for (const t of open) await d.closeTask(t.id, CLOSE_REASON_TEXT.done_local, userId);
+  if (open.length) d.syncGoogle(open.map((t) => t.id));
+  return open.length;
+}
 
 // ─── Corrida ────────────────────────────────────────────────────────────────
 
@@ -362,7 +401,7 @@ export interface ServiceTasksReport {
   created: number;
   updated: number;
   assigned: number;
-  closed: { cancelled: number; removed: number; done_multipark: number };
+  closed: { cancelled: number; removed: number; done_multipark: number; done_local: number };
   pending: number;
   /** Criações que outra corrida fez ao mesmo tempo (a chave única travou a gémea). */
   alreadyExisted: number;
@@ -372,7 +411,7 @@ export interface ServiceTasksReport {
 
 const emptyReport = (): ServiceTasksReport => ({
   ok: true, done: true, lines: 0, bookings: 0, created: 0, updated: 0, assigned: 0,
-  closed: { cancelled: 0, removed: 0, done_multipark: 0 }, pending: 0, alreadyExisted: 0, truncated: false, errors: [],
+  closed: { cancelled: 0, removed: 0, done_multipark: 0, done_local: 0 }, pending: 0, alreadyExisted: 0, truncated: false, errors: [],
 });
 
 /** Folga para gravar o resultado antes do fim do prazo. */
@@ -430,6 +469,7 @@ export async function runServiceTasks(o: { deadlineAt: number; now?: number }, d
   for (const l of lines) uniq.set(`${l.bookingId}:${l.lineId}`, l);
   lines.length = 0;
   lines.push(...uniq.values());
+  await markLocalDone(lines, d);
   out.lines = lines.length;
   out.bookings = new Set(lines.map((l) => l.bookingId)).size;
 
@@ -524,6 +564,7 @@ export async function runServiceTasksForBookings(bookingIds: readonly string[], 
     const l = mapServiceLineRow(r, parkById);
     if (l) lines.push(l);
   }
+  await markLocalDone(lines, d);
   out.lines = lines.length;
   out.bookings = new Set(lines.map((l) => l.bookingId)).size;
   // abertas por último: com uma aberta e uma fechada da mesma chave, a aberta é a que conta

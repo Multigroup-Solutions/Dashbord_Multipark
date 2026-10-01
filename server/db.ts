@@ -724,7 +724,8 @@ export async function deleteExpense(id: number) {
 
 // ─── DASHBOARD STATS ──────────────────────────────────────────────────────────
 
-export async function getExpenseStats() {
+/** Totais das despesas (dashboard). `projectId`: o centro/cidade escolhido no filtro do painel. */
+export async function getExpenseStats(opts: { projectId?: number } = {}) {
   const db = await getDb();
   if (!db) return null;
 
@@ -742,25 +743,27 @@ export async function getExpenseStats() {
   const startOfYear = `${ty}-01-01 00:00:00`;
   const trendStart = `${iso(new Date(Date.UTC(ty, tm - 1 - 5, 1)))} 00:00:00`;
   const live = ne(expenses.status, "cancelled");
+  // alcance de cidade + o centro escolhido no filtro do painel
+  const scope = await projectFilterConds(expenses.projectId, opts.projectId);
 
   const [daily, weekly, monthly, yearly, byCategory, byProject, byUser, pending, overdue, paidYear] =
     await Promise.all([
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfDay))),
+        .where(and(...scope, live, gte(expenses.expenseDate, startOfDay))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfWeek))),
+        .where(and(...scope, live, gte(expenses.expenseDate, startOfWeek))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth))),
+        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfYear))),
+        .where(and(...scope, live, gte(expenses.expenseDate, startOfYear))),
       db
         .select({
           categoryId: expenses.categoryId,
@@ -771,7 +774,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
+        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.categoryId, expenseCategories.name, expenseCategories.color)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(8),
@@ -784,7 +787,7 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(projects, eq(expenses.projectId, projects.id))
-        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
+        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.projectId, projects.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -797,22 +800,22 @@ export async function getExpenseStats() {
         })
         .from(expenses)
         .leftJoin(users, eq(expenses.insertedById, users.id))
-        .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, startOfMonth)))
+        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth)))
         .groupBy(expenses.insertedById, users.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"))),
+        .where(and(...scope, eq(expenses.status, "pending"))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), eq(expenses.status, "overdue"))),
+        .where(and(...scope, eq(expenses.status, "overdue"))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(projectScope(expenses.projectId), eq(expenses.status, "paid"), gte(expenses.expenseDate, startOfYear))),
+        .where(and(...scope, eq(expenses.status, "paid"), gte(expenses.expenseDate, startOfYear))),
     ]);
 
   // Monthly trend (last 6 months)
@@ -823,7 +826,7 @@ export async function getExpenseStats() {
       count: sql<number>`COUNT(*)`,
     })
     .from(expenses)
-    .where(and(projectScope(expenses.projectId), live, gte(expenses.expenseDate, trendStart)))
+    .where(and(...scope, live, gte(expenses.expenseDate, trendStart)))
     .groupBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`)
     .orderBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`);
 
@@ -842,17 +845,19 @@ export async function getExpenseStats() {
   };
 }
 
-export async function getUpcomingPayments(daysAhead = 7) {
+export async function getUpcomingPayments(daysAhead = 7, opts: { projectId?: number } = {}) {
   const db = await getDb();
   if (!db) return [];
   const today = lisbonToday();
+  const scope = await projectFilterConds(expenses.projectId, opts.projectId);
   const end = new Date(`${today}T12:00:00Z`);
   end.setUTCDate(end.getUTCDate() + daysAhead);
 
   return db
     .select({
       expense: expenses,
-      insertedBy: users,
+      // só id e nome (não a linha inteira da conta) — como na lista de despesas
+      insertedBy: EXPENSE_PEOPLE_FIELDS.insertedBy,
       project: projects,
     })
     .from(expenses)
@@ -861,7 +866,7 @@ export async function getUpcomingPayments(daysAhead = 7) {
     .where(
       and(
         eq(expenses.status, "pending"),
-        projectScope(expenses.projectId),
+        ...scope,
         gte(expenses.paymentDueDate, `${today} 00:00:00`),
         lte(expenses.paymentDueDate, `${end.toISOString().slice(0, 10)} 23:59:59`)
       )

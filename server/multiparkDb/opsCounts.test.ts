@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildBookingTotalSql, buildOpsCountsSql, mapOpsCountRow, OPS_EVENTS, type OpsCountRow } from "./opsCounts";
-import { buildServiceExtrasSql, mapServiceExtraRow } from "./serviceExtras";
+import { buildServiceExtrasSql, buildServiceLineBookingSql, mapServiceExtraRow, serviceLineBookingId } from "./serviceExtras";
 import { buildBookingsInWindowSql } from "./bookingSearch";
 import { assertReadOnlySql } from "./client";
 import { summarizeBookingStats, summarizeOpsActions } from "../opsStatsLive";
@@ -63,6 +63,14 @@ describe("serviços extra e grupo \"Serviço\" ao vivo", () => {
     expect(q.sql).toContain(`NOT IN ('CANCELLED', 'PENDING')`);
     expect(mapServiceExtraRow({ line_id: "l1", booking_id: "b1", code: "29484", price: "12.5", done: "t", park_id: "pA", client_name: "Ana" }))
       .toMatchObject({ lineId: "l1", bookingId: "b1", bookingNumber: "29484", price: 12.5, done: true, clientName: "Ana" });
+  });
+  it("reserva de uma linha de serviço (para o \"Feito\"): só leitura, parametrizado, LIMIT 1", async () => {
+    const q = buildServiceLineBookingSql("l1'; DROP");
+    expect(() => assertReadOnlySql(q.sql)).not.toThrow();
+    expect(q.sql).toBe(`SELECT e."bookingId" AS booking_id FROM "BookingExtraService" e WHERE e."id" = $1 LIMIT 1`);
+    expect(q.params).toEqual(["l1'; DROP"]);
+    expect(await serviceLineBookingId("l1", async () => [{ booking_id: "b1" }] as any)).toBe("b1");
+    expect(await serviceLineBookingId("l1", async () => [])).toBeNull();
   });
   it("feito guardado cá por linha (migração 0255); os feitos antigos passam uma vez", () => {
     const all = MIGRATION_0255_STATEMENTS.join("\n");

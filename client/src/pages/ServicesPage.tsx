@@ -71,7 +71,11 @@ export default function ServicesPage() {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const setDoneMut = trpc.services.setExtraDone.useMutation({
-    onSuccess: () => { utils.services.multiparkExtras.invalidate(); },
+    onSuccess: (r) => {
+      utils.services.multiparkExtras.invalidate();
+      // "Feito" fecha a tarefa gerada por este serviço
+      if (r.tasksClosed) { utils.services.generatedTasks.invalidate(); toast.success("Tarefa do serviço concluída."); }
+    },
     onError: (e) => toast.error(e.message),
   });
 

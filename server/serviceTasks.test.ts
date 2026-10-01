@@ -11,7 +11,7 @@ vi.mock("./multiparkDb/client", async (importOriginal) => {
 
 import { assertReadOnlySql } from "./multiparkDb/client";
 import {
-  buildExtraServiceCatalogSql, buildServiceLinesByIdsSql, buildServiceLinesWindowSql, runServiceTasks, runServiceTasksForBookings, tomorrowAlertBody, type ServiceTasksDeps,
+  buildExtraServiceCatalogSql, buildServiceLinesByIdsSql, buildServiceLinesWindowSql, closeServiceTaskForLine, runServiceTasks, runServiceTasksForBookings, tomorrowAlertBody, type ServiceTasksDeps,
 } from "./serviceTasks";
 import {
   checkoutShifts, groupServiceTypes, parseServiceTaskKey, planServiceTasks, serviceTaskAssignees, serviceTaskKey, serviceTypeOf,
@@ -59,6 +59,8 @@ function fakeMultipark(rows: () => Row[]) {
 
 /** BD nossa falsa (tarefas + responsáveis + comentários) e o resto das dependências. */
 function fakeStore(o: { rules: ServiceTaskRules; teamLeaders?: TeamLeaderRow[] }) {
+  /** Linhas marcadas feitas na página Serviços (service_extra_done). */
+  const localDone = new Set<string>();
   const tasks = new Map<number, { id: number; sourceKey: string; taskStatus: string; dueDate: string | null; title: string; description: string; projectId: number | null; assigneeIds: number[] }>();
   const comments: Array<{ taskId: number; body: string }> = [];
   let next = 1;
@@ -81,9 +83,10 @@ function fakeStore(o: { rules: ServiceTaskRules; teamLeaders?: TeamLeaderRow[] }
     addAssignees: async (id, ids) => { tasks.get(id)!.assigneeIds.push(...ids); },
     closeTask: async (id, body) => { const t = tasks.get(id)!; if (t.taskStatus !== "done") { t.taskStatus = "done"; comments.push({ taskId: id, body }); } },
     syncGoogle: (ids) => { google.push(...ids); },
+    loadLocalDone: async (ids) => new Set(ids.filter((id) => localDone.has(id))),
   };
   const google: number[] = [];
-  return { tasks, comments, deps, google };
+  return { tasks, comments, deps, google, localDone };
 }
 
 const RULES_RESP: ServiceTaskRules = { lisbon: { lavagem: { enabled: true, responsibleEmployeeId: 500 } }, porto: {}, faro: {} };
@@ -327,6 +330,50 @@ describe("runServiceTasks — cancelamento e fecho", () => {
     const r = await run(s.deps);
     expect(r.closed.done_multipark).toBe(1);
     expect(s.comments[0].body).toMatch(/feito na Multipark/);
+  });
+
+  it("serviço marcado feito na página Serviços → a volta fecha a tarefa (e não a cria se ainda não existir)", async () => {
+    fakeMultipark(() => [row({ booking_id: "bk1" }), row({ booking_id: "bk1", line_id: "l2", service_name: "Lavagem Interior" })]);
+    const s = fakeStore({ rules: RULES_TL_ONLY, teamLeaders: TLS });
+    s.localDone.add("l2"); // feito cá antes de a tarefa nascer
+    expect((await run(s.deps)).created).toBe(1);
+    expect([...s.tasks.values()].map((t) => t.sourceKey)).toEqual(["svc:bk1:l1"]);
+    s.localDone.add("l1");
+    const r = await run(s.deps);
+    expect(r.closed.done_local).toBe(1);
+    expect(s.comments[0].body).toMatch(/feito na página Serviços/);
+    // o mesmo pelo webhook (só esta reserva)
+    const s2 = fakeStore({ rules: RULES_TL_ONLY, teamLeaders: TLS });
+    await runServiceTasksForBookings(["bk1"], { deadlineAt: Date.now() + 60_000, now: NOW }, s2.deps);
+    s2.localDone.add("l1");
+    s2.localDone.add("l2");
+    expect((await runServiceTasksForBookings(["bk1"], { deadlineAt: Date.now() + 60_000, now: NOW }, s2.deps)).closed.done_local).toBe(2);
+  });
+
+  it("a nossa BD falha ao ler o feito de cá → segue só com o da Multipark", async () => {
+    fakeMultipark(() => [row({ booking_id: "bk1" })]);
+    const s = fakeStore({ rules: RULES_TL_ONLY, teamLeaders: TLS });
+    const r = await run({ ...s.deps, loadLocalDone: async () => { throw new Error("BD em baixo"); } });
+    expect(r).toMatchObject({ ok: true, created: 1 });
+  });
+
+  it("Feito na página Serviços fecha já a tarefa da linha, em nome de quem marcou, e manda para o Google", async () => {
+    fakeMultipark(() => [row({ booking_id: "bk1" }), row({ booking_id: "bk1", line_id: "l2", service_name: "Lavagem Interior" })]);
+    const s = fakeStore({ rules: RULES_TL_ONLY, teamLeaders: TLS });
+    await run(s.deps);
+    s.google.length = 0;
+    const closed: Array<[number, string, number]> = [];
+    const deps = { ...s.deps, closeTask: async (id: number, body: string, userId: number) => { closed.push([id, body, userId]); await s.deps.closeTask!(id, body, userId); } };
+    expect(await closeServiceTaskForLine("bk1", "l2", 77, deps)).toBe(1);
+    const t2 = [...s.tasks.values()].find((t) => t.sourceKey === "svc:bk1:l2")!;
+    expect(t2.taskStatus).toBe("done");
+    expect(closed).toEqual([[t2.id, expect.stringMatching(/feito na página Serviços/), 77]]);
+    expect(s.google).toEqual([t2.id]);
+    expect([...s.tasks.values()].find((t) => t.sourceKey === "svc:bk1:l1")!.taskStatus).toBe("todo");
+    // segunda vez / linha sem tarefa: nada
+    expect(await closeServiceTaskForLine("bk1", "l2", 77, deps)).toBe(0);
+    expect(await closeServiceTaskForLine("bk1", "l-sem-tarefa", 77, deps)).toBe(0);
+    expect(s.google).toEqual([t2.id]);
   });
 
   it("plano puro: reserva não lida (fora do orçamento) não fecha a tarefa", () => {
