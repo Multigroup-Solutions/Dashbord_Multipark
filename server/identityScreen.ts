@@ -101,11 +101,19 @@ export async function getLinksOverview(): Promise<LinksOverview> {
  * noutra ficha ativa). Se a ficha já tem conta principal, esta entra como
  * conta EXTRA (ex.: email pessoal além do profissional). Devolve o modo.
  */
-export async function linkEmployeeToUser(employeeId: number, userId: number): Promise<"principal" | "extra"> {
+/** O utilizador já está noutra ficha ativa? Devolve o erro (PT-PT) ou null — o que impede a ligação. */
+export async function linkEmployeeConflict(employeeId: number, userId: number): Promise<string | null> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const rows = ((await db.execute(sql`SELECT id, fullName FROM employees WHERE userId = ${userId} AND isActive = 1 AND id <> ${employeeId} LIMIT 1`)) as any)[0] as any[];
-  if (rows?.[0]) throw new Error(`Esse utilizador já está na ficha ${rows[0].fullName} (#${rows[0].id}).`);
+  return rows?.[0] ? `Esse utilizador já está na ficha ${rows[0].fullName} (#${rows[0].id}).` : null;
+}
+
+export async function linkEmployeeToUser(employeeId: number, userId: number): Promise<"principal" | "extra"> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
+  const conflict = await linkEmployeeConflict(employeeId, userId);
+  if (conflict) throw new Error(conflict);
   const [emp] = ((await db.execute(sql`SELECT userId FROM employees WHERE id = ${employeeId} LIMIT 1`)) as any)[0] as any[];
   if (emp?.userId && Number(emp.userId) !== userId) {
     const { addAccountAlias } = await import("./employeeAliases");
