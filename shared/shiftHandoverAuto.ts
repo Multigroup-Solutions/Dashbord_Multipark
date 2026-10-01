@@ -218,6 +218,21 @@ export function mergeCarryOver(input: {
   return [...byKey.values()].slice(0, OPEN_ITEMS_MAX);
 }
 
+/** Como correu a leitura de um tipo de pendente no rascunho. */
+export interface DraftKindRead { ok: boolean; truncated: boolean }
+
+/**
+ * Tipos que o rascunho leu POR INTEIRO (leitura sem falha e não cortada pelo
+ * LIMIT). Só esses se podem dar como "resolvidos pelo sistema" por já não
+ * aparecerem: uma leitura que falhou ou veio cortada não prova que um pendente
+ * fechou (H01 — antes fechava-os e isso ia parar à passagem anterior). PURA.
+ */
+export function confirmedDraftKinds(reads: Partial<Record<Exclude<OpenItemKind, "note">, DraftKindRead>>): OpenItemKind[] {
+  return (Object.entries(reads) as Array<[OpenItemKind, DraftKindRead | undefined]>)
+    .filter(([, r]) => !!r && r.ok && !r.truncated)
+    .map(([kind]) => kind);
+}
+
 /**
  * Gravação: a resolução é monotónica — um item resolvido na BD (p.ex. pela
  * passagem seguinte) não volta a abrir porque um formulário antigo o trazia aberto.
