@@ -62,6 +62,7 @@ import {
   type StatusFilter,
 } from "@shared/whatsappConversation";
 import { WHATSAPP_INTENTS, WHATSAPP_INTENT_LABELS, isWhatsappIntent } from "@shared/commsAi";
+import { withDraft, type WhatsAppDrafts } from "@shared/whatsappDrafts";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
 import { CallContactDialog, CallTimelineEntry, PendingCallbacksDialog } from "@/components/whatsapp/WhatsAppCallsPanels";
@@ -198,7 +199,14 @@ export default function WhatsAppInboxPage() {
   const openEmployee = useOpenEmployee();
   // ?c=<id> (pesquisa global) abre logo a conversa.
   const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("c")) || null);
-  const [text, setText] = useState("");
+  // Um rascunho por conversa (F11): a sugestão da IA e o "limpar" depois de
+  // enviar vão para a conversa a que pertencem, mesmo que já se esteja noutra.
+  const [drafts, setDrafts] = useState<WhatsAppDrafts>({});
+  const setDraft = (id: number, v: string | ((prev: string) => string)) => setDrafts((d) => withDraft(d, id, v));
+  const text = selectedId != null ? drafts[selectedId] ?? "" : "";
+  const setText = (v: string | ((prev: string) => string)) => { if (selectedId != null) setDraft(selectedId, v); };
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
   const [tplOpen, setTplOpen] = useState(false);
   // Template escolhido do CATÁLOGO (shared/whatsappTemplate.ts) — nunca nome/língua à mão.
   const [tplId, setTplId] = useState(DEFAULT_WHATSAPP_TEMPLATE_ID);
@@ -225,7 +233,8 @@ export default function WhatsAppInboxPage() {
   const [onlyUrgent, setOnlyUrgent] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiSummaryOf, setAiSummary] = useState<{ conversationId: number; text: string } | null>(null);
+  const aiSummary = aiSummaryOf && aiSummaryOf.conversationId === selectedId ? aiSummaryOf.text : null;
   // Chamadas de voz (WhatsApp Calling API): "Ligar" e "Por devolver" (?chamadas=1 abre a lista).
   const [callOpen, setCallOpen] = useState(false);
   const [callbacksOpen, setCallbacksOpen] = useState(() => new URLSearchParams(window.location.search).get("chamadas") === "1");
@@ -290,11 +299,14 @@ export default function WhatsAppInboxPage() {
   });
   const aiAssist = trpc.whatsapp.aiAssist.useMutation({
     onSuccess: (r, v) => {
-      if (v.mode === "summary") setAiSummary(r.text);
+      const here = selectedRef.current === v.conversationId;
+      if (v.mode === "summary") { if (here) setAiSummary({ conversationId: v.conversationId, text: r.text }); }
       else {
-        setText(r.text);
-        setTimeout(() => composerRef.current?.focus(), 0);
-        toast.success("Sugestão no composer — revê antes de enviar.");
+        setDraft(v.conversationId, r.text);
+        if (here) {
+          setTimeout(() => composerRef.current?.focus(), 0);
+          toast.success("Sugestão no composer — revê antes de enviar.");
+        } else toast.success("Sugestão da IA pronta — fica no composer da conversa onde a pediste.");
       }
     },
     onError: (e) => toast.error(e.message),
@@ -302,9 +314,9 @@ export default function WhatsAppInboxPage() {
   // "Marcar como não lida": fecha a thread (abrir volta a marcar como lida) e
   // a conversa regressa ao filtro "Não lidas" com o badge verde.
   const markUnread = trpc.whatsapp.markUnread.useMutation({
-    onSuccess: () => {
+    onSuccess: (_r, v) => {
       setSelectedId(null);
-      setText("");
+      setDraft(v.conversationId, "");
       conversations.refetch();
       utils.whatsapp.badge.invalidate();
       toast.success("Conversa marcada como não lida.");
@@ -312,8 +324,8 @@ export default function WhatsAppInboxPage() {
     onError: (e) => toast.error(e.message),
   });
   const reply = trpc.whatsapp.reply.useMutation({
-    onSuccess: () => {
-      setText("");
+    onSuccess: (_r, v) => {
+      setDraft(v.conversationId, "");
       refreshAll();
     },
     onError: (e) => toast.error(e.message),
@@ -331,7 +343,6 @@ export default function WhatsAppInboxPage() {
 
   function openConversation(id: number) {
     setSelectedId(id);
-    setText("");
     setAiSummary(null);
     markRead.mutate({ conversationId: id });
   }
@@ -837,7 +848,7 @@ export default function WhatsAppInboxPage() {
               aria-label="Sugerir resposta com IA"
               onClick={() => selectedId != null && aiAssist.mutate({ conversationId: selectedId, mode: "reply" })}
             >
-              {aiAssist.isPending && aiAssist.variables?.mode === "reply" ? (
+              {aiAssist.isPending && aiAssist.variables?.mode === "reply" && aiAssist.variables.conversationId === selectedId ? (
                 <Clock className="h-4 w-4 animate-spin" />
               ) : (
                 <Sparkles className="h-4 w-4" />
@@ -996,7 +1007,7 @@ export default function WhatsAppInboxPage() {
                   title="Resumo da conversa com IA"
                   onClick={() => aiAssist.mutate({ conversationId: t.conversationId, mode: "summary" })}
                 >
-                  {aiAssist.isPending && aiAssist.variables?.mode === "summary" ? (
+                  {aiAssist.isPending && aiAssist.variables?.mode === "summary" && aiAssist.variables.conversationId === selectedId ? (
                     <Clock className="h-3.5 w-3.5 mr-1 animate-spin" />
                   ) : (
                     <Sparkles className="h-3.5 w-3.5 mr-1" />

@@ -62,3 +62,17 @@ export async function readServiceExtras(o: { start: string; end: string; parkIds
   const { sql, params } = buildServiceExtrasSql(o);
   return (await query<Record<string, unknown>>(sql, params)).map(mapServiceExtraRow);
 }
+
+/** De que reserva é esta linha de serviço (para o "Feito" não marcar a linha de outra reserva). PURA. */
+export function buildServiceLineBookingSql(lineId: string): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const sql = `SELECT e."bookingId" AS booking_id FROM "BookingExtraService" e WHERE e."id" = ${p.add(lineId)} LIMIT 1`;
+  return { sql, params: p.values };
+}
+
+/** Id da reserva da linha, ou null se a linha não existir. Lança se a BD da Multipark falhar. */
+export async function serviceLineBookingId(lineId: string, query: Query = multiparkDbQuery): Promise<string | null> {
+  const { sql, params } = buildServiceLineBookingSql(lineId);
+  const [r] = await query<Record<string, unknown>>(sql, params);
+  return r?.booking_id == null ? null : String(r.booking_id);
+}

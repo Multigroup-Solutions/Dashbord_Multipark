@@ -23,4 +23,4 @@ palavras: tarefa, tarefas, as minhas tarefas, quadro, nova tarefa, responsável,
 2. O título tem o serviço, o código da reserva e a matrícula; a descrição tem o parque, a hora de saída e o link para a **ficha da reserva** (o chip da origem também abre a ficha).
 3. O **prazo** é a hora de saída do carro. Se a saída mudar na Multipark, o prazo acompanha.
 4. **Responsáveis**: a pessoa escolhida nas Definições para essa cidade e serviço (se houver) e sempre os **team leaders do turno em que o carro sai e do turno anterior** (escala do Extras-Dia; manhã 03h–15h, noite 15h–03h). Se a escala ainda não estiver feita, os team leaders são acrescentados quando for.
-5. A tarefa **fecha sozinha** quando a Multipark marca o serviço como feito, quando o serviço sai da reserva ou quando a reserva é cancelada (fica um comentário a explicar). Uma tarefa concluída à mão não volta a abrir.
+5. A tarefa **fecha sozinha** quando o serviço é marcado como feito (na Multipark ou ao dar baixa na página **Serviços**), quando o serviço sai da reserva ou quando a reserva é cancelada (fica um comentário a explicar). Uma tarefa concluída à mão não volta a abrir.

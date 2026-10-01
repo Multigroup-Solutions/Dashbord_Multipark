@@ -34,7 +34,7 @@ const line = (p: Partial<ServiceLine> = {}): ServiceLine => ({
 });
 const report = (p: Partial<ServiceTasksReport> = {}): ServiceTasksReport => ({
   ok: true, done: true, lines: 0, bookings: 0, created: 0, updated: 0, assigned: 0,
-  closed: { cancelled: 0, removed: 0, done_multipark: 0 }, pending: 0, alreadyExisted: 0, truncated: false, errors: [], ...p,
+  closed: { cancelled: 0, removed: 0, done_multipark: 0, done_local: 0 }, pending: 0, alreadyExisted: 0, truncated: false, errors: [], ...p,
 });
 
 describe("tarefas dos serviços", () => {

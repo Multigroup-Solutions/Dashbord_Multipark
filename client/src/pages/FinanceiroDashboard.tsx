@@ -155,11 +155,11 @@ export default function FinanceiroDashboard() {
 
   // Expense stats
   const { data: expenseStats, isLoading: expenseLoading } =
-    trpc.expenses.stats.useQuery(undefined, { enabled: isAdmin });
+    trpc.expenses.stats.useQuery({ projectId: filters.projectId }, { enabled: isAdmin });
 
   // Upcoming payments
   const { data: upcoming, isLoading: upcomingLoading } =
-    trpc.expenses.upcomingPayments.useQuery(undefined, { enabled: isAdmin });
+    trpc.expenses.upcomingPayments.useQuery({ projectId: filters.projectId }, { enabled: isAdmin });
 
   const isLoading = finLoading || (isAdmin && expenseLoading);
 
@@ -173,7 +173,9 @@ export default function FinanceiroDashboard() {
   // Expense KPIs
   const totalDespesasAnual = expenseStats?.yearly?.total ?? 0;
   const totalDespesasCount = expenseStats?.yearly?.count ?? 0;
-  const pagoDespesas = totalDespesasAnual - pendente - emAtraso;
+  // Pago no ANO (o servidor soma as despesas pagas do ano). Antes era "total
+  // do ano − pendentes − em atraso", com pendentes e atrasos DE SEMPRE.
+  const pagoDespesas = expenseStats?.paidYear?.total ?? 0;
 
   // Expense status data for mini bar
   const statusData = [
