@@ -11,6 +11,9 @@
  * processamento (whatsappInbound.ts) corre ANTES de responder 200 à Meta
  * (decisão do Jorge: volume baixo, preferimos o retry da Meta a perder
  * mensagens). A escrita é idempotente por `waMessageId`.
+ *
+ * Fan-out: depois do 200, o evento original é reencaminhado para o
+ * be-multipark (whatsappWebhookForward.ts) — secundário, nunca bloqueia a Meta.
  */
 import express, { Router, type Request, type Response } from "express";
 import crypto from "crypto";
@@ -155,6 +158,20 @@ export function createWhatsappWebhookRouter(): Router {
         }
       }
       res.sendStatus(200);
+      // Fan-out para o be-multipark DEPOIS do 200 (whatsappWebhookForward.ts):
+      // reencaminha o raw body + assinatura originais. Secundário — nunca
+      // atrasa nem faz falhar a resposta à Meta; erros só são logados. Só
+      // corre quando a dashboard processou com sucesso: se falhar (500), a
+      // Meta faz retry e o forward acontece nessa entrega.
+      {
+        const work = import("./whatsappWebhookForward")
+          .then((m) => (m.shouldForwardWebhook(payload) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
+          .catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
       // Push do browser "Chamada WhatsApp de …" DEPOIS do 200 (a chamada já
       // está gravada; nunca atrasa nem faz falhar a resposta à Meta).
       if (ringingCalls.length) {

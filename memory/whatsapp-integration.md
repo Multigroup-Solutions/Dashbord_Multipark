@@ -670,3 +670,12 @@ Os dois erros do broadcast 8 resolvem-se do lado da Meta, não no código:
 - **Migrações por aplicar**: 0045 + 0047 (ver runbook).
 - **Cron de limpeza** de `availability_form_tokens` expirados (não crítico).
 - **API keys em plaintext** e `UPDATE lastUsedAt` por request (dívida pré-existente do mcpApi/externalApi, não introduzida aqui).
+
+### 2026-10-01 — Fan-out do webhook para o be-multipark
+**Type**: feature
+**Scope**: `server/whatsappWebhookForward.ts` (+ `.test.ts`), `server/whatsappWebhook.ts`, `.env.example`
+**What**:
+- A dashboard continua a ser o ÚNICO Callback URL na Meta. Depois de HMAC → processar → `res.sendStatus(200)`, reencaminha o raw body + `X-Hub-Signature-256` originais para `BE_MULTIPARK_WEBHOOK_URL`, com `FORWARD_SHARED_SECRET` em `X-Multipark-Forward-Secret` (nunca o App Secret).
+- Secundário: corre via `waitUntil` depois do 200, try/catch próprio, timeout 5s, `redirect: "error"`, sem retry; falhas só logadas. Só reencaminha entregas que a dashboard processou com sucesso (num 500 a Meta faz retry e o forward vem nessa entrega).
+- Ponto de filtragem: `shouldForwardWebhook(payload)` — hoje devolve sempre true.
+**Notes**: desligado enquanto faltar o URL ou o segredo; URL tem de ser https (http só em localhost). Lado be: `be-multipark/memory/whatsapp-booking-messaging.md`.
