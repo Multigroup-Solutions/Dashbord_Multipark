@@ -3,6 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { useCallback, useEffect, useMemo } from "react";
 import { getPdaToken, markClaimed } from "@/lib/pdaDevice";
+import { disablePush } from "@/lib/webPush";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
@@ -21,6 +22,7 @@ export function useAuth(options?: UseAuthOptions) {
 
   // Fase 2: sair num PDA registado solta-o (fica livre para o próximo turno)
   const releasePda = trpc.operational.pdas.releaseOnLogout.useMutation();
+  const pushUnsubscribe = trpc.whatsapp.calls.pushUnsubscribe.useMutation();
 
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: () => {
@@ -34,6 +36,12 @@ export function useAuth(options?: UseAuthOptions) {
       try { await releasePda.mutateAsync({ token: pdaToken }); } catch (err) { console.warn("[pda] soltar o PDA no logout falhou:", err); /* não impede o logout */ }
     }
     markClaimed(null);
+    // Este browser deixa de receber avisos de chamadas desta pessoa (ainda
+    // com a sessão válida, para o servidor apagar a subscrição).
+    try {
+      const endpoint = await disablePush();
+      if (endpoint) await pushUnsubscribe.mutateAsync({ endpoint });
+    } catch (err) { console.warn("[push] desativar no logout falhou:", err); /* não impede o logout */ }
     try {
       await logoutMutation.mutateAsync();
     } catch (error: unknown) {
@@ -48,7 +56,7 @@ export function useAuth(options?: UseAuthOptions) {
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }
-  }, [logoutMutation, releasePda, utils]);
+  }, [logoutMutation, releasePda, pushUnsubscribe, utils]);
 
   const state = useMemo(() => {
     return {

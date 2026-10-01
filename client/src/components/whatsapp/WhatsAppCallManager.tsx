@@ -1,7 +1,10 @@
 /**
  * Chamadas de voz do WhatsApp em QUALQUER página do dashboard:
  *  - toque (aviso + som) das chamadas recebidas a tocar na(s) cidade(s) da
- *    pessoa — polling curto (3 s com o separador visível, 10 s escondido);
+ *    pessoa — stream SSE (`/api/whatsapp/calls/stream`: evento de rede, não
+ *    sofre o travão dos temporizadores dos separadores escondidos) + polling
+ *    como rede de segurança (15 s com o stream ligado; sem stream 3 s
+ *    visível, 10 s escondido);
  *  - "Atender" (o primeiro ganha; os outros veem "atendida por X") / "Recusar";
  *  - painel da chamada em curso: nome, reserva, cronómetro, silenciar, desligar.
  * Só para quem tem o WhatsApp com "editar" (o servidor volta a verificar).
@@ -13,6 +16,7 @@ import { Mic, MicOff, Phone, PhoneIncoming, PhoneOff, X, MessageCircle } from "l
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { formatCallTimer } from "@shared/whatsappCalls";
+import { CALL_STREAM_PATH, CALL_STREAM_REOPEN_MS, ringPollIntervalMs } from "@shared/whatsappCallSignal";
 import {
   answerIncoming, applyRemoteAnswer, dismissEnded, hangup, startRingtone, stopRingtone, syncFromServer, toggleMute, useActiveCall,
   type CallClient,
@@ -28,6 +32,49 @@ function usePageVisible(): boolean {
   return visible;
 }
 
+/**
+ * Stream do toque: cada `ring` / `ring-cleared` chama `onSignal` (o componente
+ * volta a pedir o `incoming`). O EventSource volta a ligar-se sozinho quando o
+ * servidor fecha (50 s); recusado (401/403/204) ou fechado de vez → nova
+ * tentativa ao fim de 30 s. Devolve se está ligado (para alargar o polling).
+ */
+function useRingStream(enabled: boolean, onSignal: () => void): boolean {
+  const [connected, setConnected] = useState(false);
+  const signal = useRef(onSignal);
+  signal.current = onSignal;
+  useEffect(() => {
+    if (!enabled || typeof EventSource === "undefined") return;
+    let es: EventSource | null = null;
+    let reopen: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    const open = () => {
+      es = new EventSource(CALL_STREAM_PATH);
+      es.onopen = () => {
+        setConnected(true);
+        signal.current();
+      };
+      const onEvent = () => signal.current();
+      es.addEventListener("ring", onEvent);
+      es.addEventListener("ring-cleared", onEvent);
+      es.onerror = () => {
+        setConnected(false);
+        if (es && es.readyState === EventSource.CLOSED && !stopped) {
+          es = null;
+          reopen = setTimeout(open, CALL_STREAM_REOPEN_MS);
+        }
+      };
+    };
+    open();
+    return () => {
+      stopped = true;
+      if (reopen) clearTimeout(reopen);
+      es?.close();
+      setConnected(false);
+    };
+  }, [enabled]);
+  return connected;
+}
+
 export function WhatsAppCallManager({ enabled, userId }: { enabled: boolean; userId: number | null }) {
   const visible = usePageVisible();
   const [, setLocation] = useLocation();
@@ -39,9 +86,10 @@ export function WhatsAppCallManager({ enabled, userId }: { enabled: boolean; use
   const seenRinging = useRef<Map<number, number>>(new Map());
   const [now, setNow] = useState(() => Date.now());
 
+  const streamConnected = useRingStream(enabled, () => { void utils.whatsapp.calls.incoming.invalidate(); });
   const incoming = trpc.whatsapp.calls.incoming.useQuery(undefined, {
     enabled,
-    refetchInterval: visible ? 3_000 : 10_000,
+    refetchInterval: ringPollIntervalMs(visible, streamConnected),
     refetchIntervalInBackground: true,
     retry: false,
     staleTime: 0,

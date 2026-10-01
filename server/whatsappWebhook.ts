@@ -11,6 +11,9 @@
  * processamento (whatsappInbound.ts) corre ANTES de responder 200 à Meta
  * (decisão do Jorge: volume baixo, preferimos o retry da Meta a perder
  * mensagens). A escrita é idempotente por `waMessageId`.
+ *
+ * Fan-out: depois do 200, o evento original é reencaminhado para o
+ * be-multipark (whatsappWebhookForward.ts) — secundário, nunca bloqueia a Meta.
  */
 import express, { Router, type Request, type Response } from "express";
 import crypto from "crypto";
@@ -142,10 +145,12 @@ export function createWhatsappWebhookRouter(): Router {
       // process-then-ack (idempotente pelo id da chamada). Só importa o módulo
       // quando o payload traz algo de chamadas.
       let missedCalls: number[] = [];
+      let ringingCalls: string[] = [];
       if (hasCallContent(payload) && (await (await import("./whatsappCalls")).whatsappCallsEnabled())) {
         const { processCallWebhook } = await import("./whatsappCalls");
         const calls = await processCallWebhook(payload);
         missedCalls = calls.missed;
+        ringingCalls = calls.ringing;
         if (calls.connects || calls.terminates || calls.statuses || calls.permissions) {
           console.log(
             `[WhatsAppWebhook] chamadas: ${calls.connects} connect, ${calls.terminates} terminate, ${calls.statuses} status, ${calls.permissions} autorizações${calls.deduped ? `, ${calls.deduped} dedup` : ""}`,
@@ -153,6 +158,29 @@ export function createWhatsappWebhookRouter(): Router {
         }
       }
       res.sendStatus(200);
+      // Fan-out para o be-multipark DEPOIS do 200 (whatsappWebhookForward.ts):
+      // reencaminha o raw body + assinatura originais. Secundário — nunca
+      // atrasa nem faz falhar a resposta à Meta; erros só são logados. Só
+      // corre quando a dashboard processou com sucesso: se falhar (500), a
+      // Meta faz retry e o forward acontece nessa entrega.
+      {
+        const work = import("./whatsappWebhookForward")
+          .then((m) => (m.shouldForwardWebhook(payload) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
+          .catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
+      // Push do browser "Chamada WhatsApp de …" DEPOIS do 200 (a chamada já
+      // está gravada; nunca atrasa nem faz falhar a resposta à Meta).
+      if (ringingCalls.length) {
+        const work = import("./webPush").then((m) => m.pushRingingCalls(ringingCalls)).catch(() => {});
+        try {
+          const { waitUntil } = await import("@vercel/functions");
+          waitUntil(work);
+        } catch { /* fora do Vercel a promessa continua sozinha */ }
+      }
       // Aviso das chamadas perdidas DEPOIS do 200 (não atrasa a Meta).
       if (missedCalls.length) {
         const work = import("./whatsappCalls").then((m) => m.notifyMissedByIds(missedCalls)).catch(() => {});

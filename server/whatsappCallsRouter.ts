@@ -19,6 +19,8 @@ import { maskPhone } from "../shared/maskPhone";
 
 const SDP = z.string().min(20).max(20_000);
 const ID = z.number().int().positive();
+/** URL do serviço de push do browser (FCM, Mozilla, Apple…): https, tamanho razoável. */
+const PUSH_ENDPOINT = z.string().url().max(2048);
 
 async function assertConversation(conversationId: number | null | undefined): Promise<void> {
   if (!conversationId) throw new TRPCError({ code: "NOT_FOUND", message: "Chamada sem conversa associada." });
@@ -251,6 +253,44 @@ export const whatsappCallsRouter = router({
     if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
     await log(ctx.user.id, "whatsapp_call_start", input.conversationId, `Chamada WhatsApp feita (${maskPhone(conv.phoneE164)})`);
     return { id: r.id, warning: permission.warning };
+  }),
+
+  // ── Notificações push do browser (chamada a tocar) ───────────────────────
+  /** Push disponível (chaves VAPID + interruptor) e se ESTE browser está registado. */
+  pushState: protectedProcedure.input(z.object({ endpoint: PUSH_ENDPOINT.nullable() })).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "whatsapp", "edit");
+    const { whatsappCallsEnabled } = await import("./whatsappCalls");
+    const { vapidConfig, hasPushSubscription } = await import("./webPush");
+    const cfg = vapidConfig();
+    if (!cfg || !(await whatsappCallsEnabled())) return { available: false as const, publicKey: null, registered: false };
+    const registered = input.endpoint ? await hasPushSubscription(ctx.user.id, input.endpoint) : false;
+    return { available: true as const, publicKey: cfg.publicKey, registered };
+  }),
+
+  /** "Ativar notificações de chamadas" neste browser. */
+  pushSubscribe: protectedProcedure
+    .input(z.object({ endpoint: PUSH_ENDPOINT, keys: z.object({ p256dh: z.string().min(1).max(255), auth: z.string().min(1).max(64) }) }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "whatsapp", "edit");
+      await requireCallsEnabled();
+      const { vapidConfig, savePushSubscription } = await import("./webPush");
+      if (!vapidConfig()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "As notificações de chamadas não estão configuradas no servidor." });
+      const { pushSubscriptionError } = await import("../shared/webPush");
+      const err = pushSubscriptionError(input);
+      if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+      const ua = typeof ctx.req?.headers?.["user-agent"] === "string" ? ctx.req.headers["user-agent"] : null;
+      await savePushSubscription(ctx.user.id, input, ua);
+      return { ok: true };
+    }),
+
+  /** Desativar neste browser (também chamado ao sair da conta). Só apaga a da própria pessoa. */
+  pushUnsubscribe: protectedProcedure.input(z.object({ endpoint: PUSH_ENDPOINT })).mutation(async ({ ctx, input }) => {
+    // "view" chega: é só apagar a subscrição do próprio browser (quem perdeu o
+    // "editar" também pode limpar; o envio já não o escolhia).
+    requireAccess(ctx.user, "whatsapp", "view");
+    const { deletePushSubscription } = await import("./webPush");
+    await deletePushSubscription(ctx.user.id, input.endpoint);
+    return { ok: true };
   }),
 
   // ── Configuração (super admin) ────────────────────────────────────────────
