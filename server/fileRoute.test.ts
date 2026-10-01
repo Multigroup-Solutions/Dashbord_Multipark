@@ -66,7 +66,7 @@ function harness(who: Who | null, opts: { docsOwner?: number; readUrl?: string }
     res.setHeader = (k: string, v: string) => { res.headers[k] = v; };
     res.redirect = (c: number, u: string) => { res.statusCode = c; res.location = u; };
     res.sendFile = (p: string) => { res.body = p; };
-    await route({ params: { 0: key }, headers } as any, res);
+    await route({ params: { 0: key }, headers, originalUrl: `/api/file/${key}` } as any, res);
     return res;
   };
   return { call, deps };
@@ -81,7 +81,8 @@ describe("GET /api/file/<key> — autorização por entidade", () => {
     // clique no link do email sem sessão → login
     const nav = await h.call("payroll/folha.pdf", { accept: "text/html,application/xhtml+xml" });
     expect(nav.statusCode).toBe(302);
-    expect(nav.location).toBe("/api/oauth/login");
+    // …e volta ao ficheiro depois do login
+    expect(nav.location).toBe(`/api/oauth/login?next=${encodeURIComponent("/api/file/payroll/folha.pdf")}`);
   });
 
   it("condutor não abre os documentos de outra ficha; abre os seus (302 para o link assinado)", async () => {

@@ -46,7 +46,7 @@ export default function PdaRegisterPage() {
     if (!user) {
       // guarda o QR para continuar depois de entrar
       setPendingQr(window.location.search);
-      window.location.href = getLoginUrl();
+      window.location.href = getLoginUrl(`${window.location.pathname}${window.location.search}`);
       return;
     }
     if (!pdaId || !code) { setState({ ok: false, message: "QR incompleto." }); return; }

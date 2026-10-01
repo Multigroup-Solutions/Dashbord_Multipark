@@ -1,5 +1,6 @@
 import { AUTH_DENIED_PARAM, AUTH_DENIED_VALUE, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { normalizeEmail } from "@shared/email";
+import { safeReturnPath } from "@shared/loginReturn";
 import type { Express, Request, Response, CookieOptions } from "express";
 import crypto from "node:crypto";
 import * as db from "../db";
@@ -17,6 +18,8 @@ export const SESSION_MAX_MS = (() => {
 
 const OAUTH_STATE_COOKIE = "app_oauth_state";
 const OAUTH_STATE_MAX_MS = 10 * 60 * 1000; // 10 minutos para concluir o login
+/** Para onde voltar depois do login (`/api/oauth/login?next=…`, validado em shared/loginReturn.ts). */
+const OAUTH_NEXT_COOKIE = "app_oauth_next";
 
 /**
  * Modo fechado: recusa quem não tenha sido registado pelo backoffice, em vez
@@ -166,6 +169,8 @@ export function registerOAuthRoutes(app: Express) {
     // Gera state aleatório e guarda em cookie httpOnly para validar no callback
     const state = crypto.randomBytes(32).toString("base64url");
     res.cookie(OAUTH_STATE_COOKIE, state, getStateCookieOptions(req));
+    // Regresso depois do login (ex.: o convite): só caminhos desta app.
+    rememberReturnPath(req, res);
 
     const redirectUri = `${getOrigin(req)}/api/oauth/callback`;
     const scope = "openid email profile";
@@ -349,7 +354,7 @@ export function registerOAuthRoutes(app: Express) {
         maxAge: SESSION_MAX_MS,
       });
 
-      res.redirect(302, "/");
+      res.redirect(302, takeReturnPath(req, res));
     } catch (error: any) {
       const msg = error?.message || String(error);
       console.error("[OAuth] Callback failed", error);
@@ -379,6 +384,21 @@ function safeEquals(a: string, b: string): boolean {
 }
 
 /** Extrai uma cookie específica do header Cookie sem precisar de middleware. */
+/** No /api/oauth/login: guarda o `?next=` (se for um caminho seguro desta app) até ao callback. */
+export function rememberReturnPath(req: Request, res: Response): void {
+  const next = safeReturnPath((req.query as any)?.next);
+  if (next) res.cookie(OAUTH_NEXT_COOKIE, next, getStateCookieOptions(req));
+  else res.clearCookie(OAUTH_NEXT_COOKIE, { ...getSessionCookieOptions(req) });
+}
+
+/** No callback com sucesso: para onde voltar (validado OUTRA vez) — e a cookie sai. */
+export function takeReturnPath(req: Request, res: Response): string {
+  let raw: string | null = null;
+  try { raw = readCookie(req, OAUTH_NEXT_COOKIE); } catch { raw = null; }
+  res.clearCookie(OAUTH_NEXT_COOKIE, { ...getSessionCookieOptions(req) });
+  return safeReturnPath(raw) ?? "/";
+}
+
 function readCookie(req: Request, name: string): string | null {
   const raw = req.headers.cookie;
   if (!raw) return null;
