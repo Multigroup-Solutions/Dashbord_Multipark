@@ -2446,6 +2446,27 @@ export const whatsappCallPermissions = mysqlTable("whatsapp_call_permissions", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
+// Subscrições de push do browser (Web Push) — aviso de chamada do WhatsApp a
+// tocar com o separador em segundo plano. Uma linha por browser (migração 0330).
+export const webPushSubscriptions = mysqlTable("web_push_subscriptions", {
+	id: int().autoincrement().notNull().primaryKey(),
+	userId: int().notNull(),
+	/** SHA-256 (hex) do endpoint: chave única (o URL pode ser longo). */
+	endpointHash: char({ length: 64 }).notNull(),
+	endpoint: text().notNull(),
+	p256dh: varchar({ length: 255 }).notNull(),
+	auth: varchar({ length: 64 }).notNull(),
+	userAgent: varchar({ length: 255 }),
+	lastSuccessAt: datetime({ mode: 'string' }),
+	lastFailureAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_web_push_endpoint").on(table.endpointHash),
+	index("idx_web_push_user").on(table.userId),
+]);
+
 // ─── Leads de extras (2026-09-17) ───────────────────────────────────────────
 // Contactos que AINDA não são extras mas estão a ser recrutados. Vivem fora de
 // `employees` de propósito: uma ficha só nasce quando a pessoa aceita (aí o

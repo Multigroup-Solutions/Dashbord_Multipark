@@ -17,6 +17,13 @@ Os clientes podem **ligar para o número de WhatsApp da empresa** e a chamada é
 5. Uma chamada do cliente abre (ou renova) a janela de 24 h, como uma mensagem: depois podes escrever-lhe texto livre.
 6. Se ninguém atender em cerca de 1 minuto, a chamada fica **perdida**: aparece na conversa e em **Chamadas perdidas por devolver** (faixa vermelha no topo da lista de conversas), e a equipa da cidade recebe a notificação **"Chamada WhatsApp perdida"**.
 
+## Aviso com o separador em segundo plano
+
+- O toque chega ao dashboard em cerca de 1 segundo, mesmo com o separador escondido, desde que o separador esteja aberto.
+- Para receber também um **aviso do sistema** ("Chamada WhatsApp de ..."), abre o **Perfil** e carrega em **Ativar notificações de chamadas** (uma vez em cada browser). Carregar no aviso traz o dashboard para a frente para atender.
+- Se o browser disser que as notificações estão bloqueadas: definições do site (cadeado ao lado do endereço) e permitir notificações.
+- Ao sair da conta, esse browser deixa de receber os avisos.
+
 ## Ligar / devolver uma chamada
 
 1. Abre a conversa e carrega em **Ligar**.
@@ -52,6 +59,6 @@ Passos:
 
 ## Problemas comuns
 
-- **Não toca**: o separador tem de estar aberto (pode estar em segundo plano, com o som ligado). Confirma o Testar e que tens WhatsApp "editar" na cidade.
+- **Não toca**: o separador tem de estar aberto (pode estar em segundo plano, com o som ligado). Confirma o Testar e que tens WhatsApp "editar" na cidade. Para o aviso do sistema, ativa as notificações de chamadas no Perfil.
 - **Atendo mas não há som**: autoriza o microfone no browser; redes muito fechadas (firewall que bloqueia UDP) podem impedir o áudio — o dashboard usa só STUN público (sem servidor TURN).
 - **"O cliente não deu autorização"**: pede autorização primeiro; a temporária acaba ao fim de 7 dias.

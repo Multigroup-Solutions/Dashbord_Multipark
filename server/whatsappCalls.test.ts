@@ -179,6 +179,9 @@ describe("applyCallEvents", () => {
     const r2 = await applyCallEvents(parseCallWebhook(connectIn(), "PNID").events, deps);
     expect(r1.connects).toBe(1);
     expect(r2.deduped).toBe(1);
+    // Só a chamada NOVA vai para o push do browser (o retry não volta a avisar).
+    expect(r1.ringing).toEqual([repo.calls[0].callId]);
+    expect(r2.ringing).toEqual([]);
     expect(repo.calls).toHaveLength(1);
     expect(repo.calls[0]).toMatchObject({ status: "ringing", direction: "in", phoneE164: "+351912345678", conversationId: 10, projectId: 3, sdpOffer: SDP_OFFER });
   });

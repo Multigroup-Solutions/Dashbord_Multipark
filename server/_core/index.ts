@@ -13,6 +13,7 @@ import { serveStatic, setupVite } from "./vite";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
+import { registerWhatsappCallStreamRoute } from "../whatsappCallStream";
 import { createMultiparkWebhookRouter } from "../multiparkWebhook";
 import { seedProjectHierarchy } from "../db";
 import multer from "multer";
@@ -71,6 +72,8 @@ async function startServer() {
   app.use("/api/external", createExternalApiRouter());
   // MCP Control API (X-API-Key) — paridade com o api-entry.ts (Vercel)
   app.use("/api/v1", createMcpApiRouter());
+  // Toque das chamadas do WhatsApp por SSE (paridade com o api-entry.ts).
+  registerWhatsappCallStreamRoute(app);
 
   // File upload endpoint (multer)
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
