@@ -16,6 +16,7 @@ import { and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { apiKeyMiddleware, requireScope, logApiKeyAction, apiKeyActorId, getApiKeyInfo } from "./apiKeyAuth";
 import { registerMcpReportRoutes } from "./mcpReportsApi";
+import { registerMcpMarketingRoutes } from "./mcpMarketingApi";
 import {
   getMultiparkBookingStats,
   getComplaints,
@@ -505,6 +506,7 @@ export function createMcpApiRouter(): Router {
 
   // ── RELATÓRIOS (só leitura): caixa, condutores, parceiros, passagens de turno ──
   registerMcpReportRoutes(r, h);
+  registerMcpMarketingRoutes(r, h);
 
   return r;
 }

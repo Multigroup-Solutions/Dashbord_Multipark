@@ -245,6 +245,42 @@ const tools = [
     inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, city: { type: "string" } }, required: ["from", "to"] },
     run: (a) => api("GET", "/shift-handovers", { query: a }),
   },
+  {
+    name: "marketing_stats",
+    description: "Marketing (mesmos números do ecrã Marketing do Dashboard): gasto em anúncios (Google Ads, Meta), reservas, custo por reserva e ROAS no período. from e to obrigatórios (máx. 366 dias). Opcional: projectId (cidade).",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, projectId: { type: "number" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/marketing/stats", { query: a }),
+  },
+  {
+    name: "marketing_channels",
+    description: "Mix de canais de marketing: de onde vêm as reservas (pago, orgânico, direto, parceiros...) e o gasto associado. from e to obrigatórios. Opcional: projectId.",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, projectId: { type: "number" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/marketing/channels", { query: a }),
+  },
+  {
+    name: "marketing_brands",
+    description: "Gasto em anúncios e reservas por marca (AirPark, RedPark, SkyPark, Multipark...), com o mesmo gasto do ecrã. from e to obrigatórios. Opcional: projectId.",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, projectId: { type: "number" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/marketing/brands", { query: a }),
+  },
+  {
+    name: "marketing_campaign_roas",
+    description: "ROAS por campanha: reservas ligadas a cada campanha por utm_campaign ou código de desconto, versus o gasto. from e to obrigatórios. Opcional: projectId.",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, projectId: { type: "number" } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/marketing/campaign-roas", { query: a }),
+  },
+  {
+    name: "web_overview",
+    description: "Visitas aos sites: Google Analytics (sessões, eventos-chave, receita) e Search Console (cliques, impressões, posição), totais e por dia, com comparação com o período anterior ou o ano anterior. from e to obrigatórios. Opcional: brand (multipark|multibags|redpark|skypark|airpark|multidriver), compare (previous|yoy).",
+    inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, brand: { type: "string" }, compare: { type: "string", enum: ["previous", "yoy"] } }, required: ["from", "to"] },
+    run: (a) => api("GET", "/web/overview", { query: a }),
+  },
+  {
+    name: "web_list",
+    description: "Tabelas de web analytics. source=ga: dim = channel|landing|device|country|city|event; source=sc: dim = query|page|device|country. Opcional: brand, compare, sort, pageSize (5-100), search. from e to obrigatórios.",
+    inputSchema: { type: "object", properties: { source: { type: "string", enum: ["ga", "sc"] }, dim: { type: "string" }, from: { type: "string" }, to: { type: "string" }, brand: { type: "string" }, compare: { type: "string", enum: ["previous", "yoy"] }, sort: { type: "string" }, pageSize: { type: "number" }, search: { type: "string" } }, required: ["source", "dim", "from", "to"] },
+    run: (a) => api("GET", "/web/list", { query: a }),
+  },
 ];
 
 const toolByName = new Map(tools.map((t) => [t.name, t]));

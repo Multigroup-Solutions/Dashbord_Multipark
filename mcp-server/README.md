@@ -132,5 +132,11 @@ Rotas e tools para a skill `multipark-relatorios` (todas pedem scope `read`; nad
 | `partners_billing` | `GET /partners/billing?from&to` | A faturar por parceiro (comissão ou avença) |
 | `partners_close` | `GET /partners/close?month=AAAA-MM` | Fecho de parceiros do mês |
 | `shift_handovers` | `GET /shift-handovers?from&to[&city]` | Passagens de turno: caixa no cofre, bolsas, gastos, quem preencheu e confirmou |
+| `marketing_stats` | `GET /marketing/stats?from&to[&projectId]` | Gasto em anúncios (Google Ads, Meta), reservas, custo por reserva, ROAS |
+| `marketing_channels` | `GET /marketing/channels?from&to[&projectId]` | Mix de canais: origem das reservas + gasto |
+| `marketing_brands` | `GET /marketing/brands?from&to[&projectId]` | Gasto e reservas por marca |
+| `marketing_campaign_roas` | `GET /marketing/campaign-roas?from&to[&projectId]` | ROAS por campanha (utm_campaign / código de desconto) |
+| `web_overview` | `GET /web/overview?from&to[&brand][&compare]` | Google Analytics + Search Console: totais e por dia, com comparação |
+| `web_list` | `GET /web/list?source=ga\|sc&dim&from&to[&brand][&compare][&sort][&pageSize][&search]` | Canais, páginas, países, pesquisas... |
 
 Intervalos: `from` e `to` (AAAA-MM-DD) obrigatórios, máximo 366 dias. Código: `server/mcpReportsApi.ts` (testes em `server/mcpReportsApi.test.ts`).
