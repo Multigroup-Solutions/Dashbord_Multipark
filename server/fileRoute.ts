@@ -154,11 +154,11 @@ export const realFileDeps: FileRouteDeps = {
     return cityScope.run(access, fn);
   },
   async assertDocs(user, employeeId) {
-    const { assertCanViewDocuments } = await import("./routers");
+    const { assertCanViewDocuments } = await import("./rhGuards");
     await assertCanViewDocuments(user, employeeId, "Sem permissão para ver os documentos desta ficha.");
   },
   async assertTime(user, employeeId) {
-    const { assertCanViewTimeRecords } = await import("./routers");
+    const { assertCanViewTimeRecords } = await import("./rhGuards");
     await assertCanViewTimeRecords(user, employeeId);
   },
   assertModule(user, module, allowOwn) {

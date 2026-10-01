@@ -89,7 +89,7 @@ export async function assertDriveEntityAccess(user: DriveUser, type: DriveEntity
     return { type, id, label: a.thread.subject ? `Email: ${a.thread.subject}` : `Conversa #${id}`, folder: null };
   }
   if (type === "employee") {
-    const { assertCanViewDocuments, assertCanUploadDocuments } = await import("../routers");
+    const { assertCanViewDocuments, assertCanUploadDocuments } = await import("../rhGuards");
     if (action === "view") await assertCanViewDocuments(u, Number(id), "Sem permissão para ver os documentos desta ficha");
     else await assertCanUploadDocuments(u, Number(id));
     const { getEmployeeById } = await import("../db");

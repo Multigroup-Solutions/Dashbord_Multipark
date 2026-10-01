@@ -7,6 +7,8 @@ import { MIGRATION_0280_STATEMENTS } from "./migrations/migration_0280";
 import { AUTOMATION_FLAGS, automationFlagDefault } from "../shared/appSettings";
 
 const read = (f: string) => readFileSync(join(__dirname, "..", f), "utf8");
+// O appRouter está repartido (P2: rh e operational têm ficheiro próprio).
+const routersCode = () => ["server/routers.ts", "server/rhRouter.ts", "server/operationalRouter.ts"].map(read).join("\n");
 
 describe("PDAs, passo 3 (decisões do dono)", () => {
   it("nome no Zello: \"PDA 12 · Rui Santos\" com alguém, \"PDA 12\" sem ninguém", () => {
@@ -21,13 +23,13 @@ describe("PDAs, passo 3 (decisões do dono)", () => {
     expect(z).toContain("new URLSearchParams({ name: username, full_name: fullName })");
     expect(automationFlagDefault("ZELLO_PDA_NAMES")).toBe(false);
     expect(AUTOMATION_FLAGS.some((f) => f.name === "ZELLO_PDA_NAMES")).toBe(true);
-    const r = read("server/routers.ts");
+    const r = routersCode();
     expect(r).toContain("syncPdaZelloName(att.pdaId)");
     expect(r).toContain("syncPdaZelloNameByToken(input.token)");
     expect(r).toContain("syncPdaZelloNamesForEmployee(input.employeeId)");
   });
   it("só pelo QR: sem check-in manual nem registo pela lista", () => {
-    const r = read("server/routers.ts");
+    const r = routersCode();
     expect(r).toContain("Já não há check-in manual");
     expect(r).toContain("O PDA regista-se só pelo QR");
     const ui = read("client/src/pages/OperationalPage.tsx");

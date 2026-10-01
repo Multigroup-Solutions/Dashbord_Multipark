@@ -13,7 +13,7 @@ description: Especialista no Dashboard Multipark (React/Vite + tRPC + Drizzle My
 - A BD da Multipark é **só de leitura** (`server/multiparkDb/*`, `assertReadOnlySql`).
 
 ## Stack e onde está cada coisa
-- Servidor: `server/` (tRPC em `server/routers.ts`, crons em `server/cronJobs.ts` + `server/cronSchedule.ts` + `server/cronScheduler.ts`, tick de 5 em 5 min em `/api/cron/tick`).
+- Servidor: `server/` (tRPC: `appRouter` em `server/routers.ts`; os routers grandes têm ficheiro próprio — `rhRouter.ts`, `operationalRouter.ts`, `expensesRouter.ts`, … — e as guardas comuns estão em `routerGuards.ts` e `rhGuards.ts`; crons em `server/cronJobs.ts` + `server/cronSchedule.ts` + `server/cronScheduler.ts`, tick de 5 em 5 min em `/api/cron/tick`).
 - Esquema: `drizzle/schema.ts`. **Migrações**: `server/migrations/migration_XXXX.ts` (idempotentes, só acrescentam) registadas NO FIM da lista `SCHEMA_MIGRATIONS` em `server/migrations/index.ts` (aplicada no arranque por `ensureRecentSchema`; o teste `server/migrations/index.test.ts` falha se um ficheiro novo ficar por registar). Numeração de 5 em 5; vê a última antes de criar.
 - Regras puras em `shared/` (testáveis); leituras ao vivo da Multipark em `server/multiparkDb/`.
 - Interruptores: `AUTOMATION_FLAGS` em `shared/appSettings.ts` (`defaultEnabled`, `superAdminOnly`); verificar com `ensureFeatureFlagOverrides()` + `isFeatureEnabled(name, { defaultEnabled: automationFlagDefault(name) })`. Crons conhecidos também na lista de crons de `shared/appSettings.ts`.
