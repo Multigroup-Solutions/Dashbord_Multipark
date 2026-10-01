@@ -12,7 +12,28 @@ const t = initTRPC.context<TrpcContext>().create({
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+
+/**
+ * Ficheiros do bucket com links ASSINADOS (server/storageSign.ts): à saída,
+ * cada URL do bucket na resposta vira um GET assinado — só para quem a pode
+ * abrir (as regras do /api/file, server/fileRoute.ts, com o "próprio" a
+ * contar porque o procedimento já filtrou a linha); à entrada, um link
+ * assinado que o cliente devolve (formulário pré-preenchido) volta à URL
+ * canónica antes de qualquer gravação. Corre DEPOIS do login (dentro do
+ * alcance de cidade da pessoa) em todos os procedimentos.
+ */
+const storageLinks = t.middleware(async (opts) => {
+  const { canonicalStorageUrlsDeep, signStorageUrlsDeep } = await import("../storageSign");
+  const raw = await opts.getRawInput();
+  const clean = canonicalStorageUrlsDeep(raw);
+  const result = clean !== raw ? await opts.next({ getRawInput: async () => clean }) : await opts.next();
+  if (!result.ok) return result;
+  const { makeViewerSigner } = await import("../fileRoute");
+  const data = await signStorageUrlsDeep(result.data, { canSign: makeViewerSigner(opts.ctx.user as any) });
+  return data === result.data ? result : { ...result, data };
+});
+
+export const publicProcedure = t.procedure.use(storageLinks);
 
 // O grant `extras_dia.team_leader` NÃO sobe o papel efetivo (modelo de
 // acessos, 24 set 2026): só torna a pessoa elegível como TL na escala do
@@ -85,7 +106,7 @@ const requireUser = t.middleware(async opts => {
   });
 });
 
-export const protectedProcedure = t.procedure.use(requireUser);
+export const protectedProcedure = t.procedure.use(requireUser).use(storageLinks);
 
 export const adminProcedure = t.procedure.use(
   t.middleware(async opts => {
@@ -103,4 +124,4 @@ export const adminProcedure = t.procedure.use(
       },
     });
   }),
-);
+).use(storageLinks);

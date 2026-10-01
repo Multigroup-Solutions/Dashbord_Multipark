@@ -11,12 +11,12 @@ const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 // Sem as envs AWS_* o comportamento é EXATAMENTE o de antes — o SDK da AWS nem
 // chega a ser carregado (imports dinâmicos), para não pagar cold start à toa.
 
-type S3Env = {
+export type S3Env = {
   region: string;
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
-  /** Base pública sem barra final, ex.: https://bucket.s3.eu-west-1.amazonaws.com */
+  /** Base das URLs canónicas (sem barra final), ex.: https://bucket.s3.eu-west-1.amazonaws.com — com o bucket privado, ler exige link assinado. */
   publicBaseUrl: string;
 };
 
@@ -31,7 +31,7 @@ function isBlobConfigured(): boolean {
  * ficheiro). Envs: AWS_S3_REGION, AWS_S3_BUCKET_NAME, AWS_S3_ACCESS_KEY,
  * AWS_S3_SECRET_ACCESS_KEY + `S3_PUBLIC_BASE_URL` opcional.
  */
-function readS3Env(): S3Env | null {
+export function readS3Env(): S3Env | null {
   const region = process.env.AWS_S3_REGION;
   const bucket = process.env.AWS_S3_BUCKET_NAME;
   // As credenciais levam prefixo AWS_S3_ porque o Vercel RESERVA vários nomes
@@ -54,7 +54,7 @@ function readS3Env(): S3Env | null {
 // raro de a config mudar em runtime (testes).
 let s3ClientCache: { signature: string; client: S3Client } | null = null;
 
-async function getS3Client(env: S3Env): Promise<S3Client> {
+export async function getS3Client(env: S3Env): Promise<S3Client> {
   const signature = `${env.region}|${env.accessKeyId}`;
   if (s3ClientCache && s3ClientCache.signature === signature) return s3ClientCache.client;
 
@@ -68,8 +68,9 @@ async function getS3Client(env: S3Env): Promise<S3Client> {
 }
 
 /**
- * URL pública (GET não assinado) de uma key. Cada segmento é percent-encoded —
- * a key guardada na BD continua a ser a crua, só o link é que vai codificado.
+ * URL canónica de uma key (a que se grava na BD). Com o bucket privado NÃO se
+ * abre sem assinatura — server/storageSign.ts assina-a à saída. Cada segmento
+ * é percent-encoded; a key guardada continua a ser a crua.
  */
 function s3PublicUrl(env: S3Env, key: string): string {
   const encoded = key.split("/").map(encodeURIComponent).join("/");
@@ -82,7 +83,7 @@ function s3PublicUrl(env: S3Env, key: string): string {
  * NÃO remove o prefixo "uploads/" — no S3 isso é uma pasta real (o /api/upload
  * grava lá), ao contrário do modo local em que "uploads/" é a raiz do disco.
  */
-function s3NormalizeKey(input: string): string {
+export function s3NormalizeKey(input: string): string {
   if (!input) return input;
   if (input.startsWith("http://") || input.startsWith("https://")) {
     try {
@@ -101,7 +102,7 @@ function s3NormalizeKey(input: string): string {
 }
 
 /** True para uma string que é uma URL absoluta (e não uma key crua). */
-function isAbsoluteUrl(value: string | null | undefined): value is string {
+export function isAbsoluteUrl(value: string | null | undefined): value is string {
   return !!value && /^https?:\/\//i.test(value);
 }
 
@@ -117,7 +118,7 @@ function isAbsoluteUrl(value: string | null | undefined): value is string {
  * Confirma-se pelo HOST, não pelo backend configurado: o que decide onde um
  * ficheiro está é a URL que ficou gravada na BD, não a env de hoje.
  */
-function isS3OwnedUrl(env: S3Env, value: string): boolean {
+export function isS3OwnedUrl(env: S3Env, value: string): boolean {
   if (!isAbsoluteUrl(value)) return false;
 
   let host: string;
@@ -298,10 +299,10 @@ export async function storageDelete(keyOrUrl: string | null | undefined): Promis
  * por omissão 10 min). Fora do S3 devolve a URL normal (Blob público / local)
  * para o chamador não ter de distinguir backends.
  *
- * Nota: os objetos do bucket estão hoje PÚBLICOS por bucket policy (ver
- * scripts/provision-s3-bucket.ps1); tornar as faturas privadas é uma mudança
- * de infra (policy só para o prefixo `invoices/`). O código já não depende da
- * URL pública para as faturas — só das keys — pelo que a mudança é segura.
+ * Nota: o bucket é PRIVADO (P1, 1 out 2026 — scripts/provision-s3-bucket.ps1).
+ * As URLs "públicas" gravadas na BD são só o identificador; os procedimentos
+ * devolvem links assinados (server/storageSign.ts) e o /api/file assina depois
+ * de autorizar (server/fileRoute.ts).
  */
 export async function storagePresignGet(
   keyOrUrl: string,

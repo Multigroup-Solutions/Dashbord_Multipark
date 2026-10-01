@@ -4,12 +4,15 @@
   REAL configuration of the existing `multipark-bucket` (read from AWS on
   2026-08-20), applied to `dashboard-multipark-bucket` the same day:
 
-    - Objects publicly READABLE via plain https URL (bucket-policy statement
-      `AllowPublicRead`: s3:GetObject to Principal "*")
+    - PRIVATE since 2026-10-01 (P1): NO public read. The app reads through
+      short-lived presigned GETs (server/storageSign.ts, /api/file with
+      per-entity authorization — server/fileRoute.ts). The old
+      `AllowPublicRead` statement (s3:GetObject to Principal "*") is gone and
+      this script REMOVES it on re-run (put-bucket-policy replaces the policy).
     - Bucket listing NOT public (anonymous list => 403)
     - ACLs disabled (ObjectOwnership=BucketOwnerEnforced)
-    - Public access block: all four flags FALSE (same as multipark-bucket;
-      the public grant comes from the bucket policy)
+    - Public access block: all four flags TRUE (no public policy/ACL can be
+      added by mistake)
     - App writes via dedicated IAM user `dashboard-s3-uploader` whose
       Put/Get/Delete rights are granted by the BUCKET policy statement
       `AllowAppUserS3Actions` — the user has NO identity policy at all
@@ -106,14 +109,11 @@ Write-Host "== 3/8 Ownership controls (BucketOwnerEnforced) ==" -ForegroundColor
 Invoke-Aws @("s3api", "put-bucket-ownership-controls", "--bucket", $BucketName,
   "--ownership-controls", "Rules=[{ObjectOwnership=BucketOwnerEnforced}]")
 
-# --- 4. Public access block: all off (mirror of multipark-bucket) ------------
-Write-Host "== 4/8 Public access block (all false) ==" -ForegroundColor Cyan
-Invoke-Aws @("s3api", "put-public-access-block", "--bucket", $BucketName,
-  "--public-access-block-configuration",
-  "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false")
-
-# --- 5. Bucket policy: uploader RW + public read (mirror) --------------------
-Write-Host "== 5/8 Bucket policy ==" -ForegroundColor Cyan
+# --- 4/5. Bucket policy FIRST (uploader RW only, no public read), then the ---
+# public access block ON. Order matters on re-run: with BlockPublicPolicy=true
+# AWS refuses a policy that still grants public read, so the old public policy
+# is replaced before the block is switched on.
+Write-Host "== 4/8 Bucket policy (uploader RW, NO public read) ==" -ForegroundColor Cyan
 $policyFile = Join-Path $tmp "policy.json"
 @"
 {
@@ -125,19 +125,17 @@ $policyFile = Join-Path $tmp "policy.json"
       "Principal": { "AWS": "arn:aws:iam::${accountId}:user/$UploaderUserName" },
       "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
       "Resource": "arn:aws:s3:::$BucketName/*"
-    },
-    {
-      "Sid": "AllowPublicRead",
-      "Effect": "Allow",
-      "Principal": "*",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::$BucketName/*"
     }
   ]
 }
 "@ | Out-File -Encoding ascii $policyFile
 Invoke-Aws @("s3api", "put-bucket-policy", "--bucket", $BucketName,
   "--policy", "file://$policyFile")
+
+Write-Host "== 5/8 Public access block (all true) ==" -ForegroundColor Cyan
+Invoke-Aws @("s3api", "put-public-access-block", "--bucket", $BucketName,
+  "--public-access-block-configuration",
+  "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true")
 
 # --- 6. CORS (mirror: open origins — Vercel previews have changing URLs) -----
 Write-Host "== 6/8 CORS ==" -ForegroundColor Cyan

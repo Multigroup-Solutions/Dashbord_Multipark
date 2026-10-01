@@ -267,7 +267,8 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
     try {
       const zi = intervals.get(zello) ?? [];
       if (r.geoJsonUrl && zi.length) {
-        const resp = await fetch(String(r.geoJsonUrl));
+        const { storageReadableUrl } = await import("../storageSign");
+        const resp = await fetch(await storageReadableUrl(String(r.geoJsonUrl)));
         if (!resp.ok) throw new Error(`GeoJSON HTTP ${resp.status}`);
         const data = await resp.json();
         await saveDriverShares(Number(r.id), zello, day, splitByHolder(gpsPointsFromGeoJson(data), zi, threshold));

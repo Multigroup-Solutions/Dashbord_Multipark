@@ -11,7 +11,7 @@
  *
  * Cobre todos os parques e cidades (PARK_CONFIGS).
  */
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { apiKeyMiddleware, requireScope, logApiKeyAction, apiKeyActorId, getApiKeyInfo } from "./apiKeyAuth";
@@ -64,6 +64,18 @@ export function createMcpApiRouter(): Router {
   // Defesa em profundidade: TUDO em /admin/* exige 'admin', mesmo que uma rota
   // nova se esqueça do requireScope.
   r.use("/admin", requireScope("admin"));
+  // Ficheiros do bucket (ex.: fotos das reclamações) saem com link ASSINADO,
+  // como na app — o bucket deixa de ser público (server/storageSign.ts).
+  r.use((_req: Request, res: Response, next: NextFunction) => {
+    const send = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      import("./storageSign")
+        .then(({ signStorageUrlsDeep }) => signStorageUrlsDeep(body))
+        .then((signed) => send(signed), () => send(body));
+      return res;
+    }) as Response["json"];
+    next();
+  });
 
   // Índice / capacidades
   r.get("/", (req: Request, res: Response) => {

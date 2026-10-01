@@ -599,6 +599,13 @@ export async function assertCanViewDocuments(user: { id: number; role: string },
   const allowed = ref ? canViewDocuments(viewer, ref) : isRhAdmin(viewer);
   if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message });
 }
+/** Registos de ponto (e fotos do ponto) de uma ficha: o próprio, admin de RH, ou quem vê tempos e escalas dela, dentro das cidades. */
+export async function assertCanViewTimeRecords(user: { id: number; role: string }, employeeId: number): Promise<void> {
+  const viewer = await rhViewer(user);
+  const ref = await rhEmployeeRef(employeeId);
+  if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+  if (!isOwn(viewer, employeeId)) await assertEmployeeAccess(employeeId);
+}
 export async function assertCanUploadDocuments(user: { id: number; role: string }, employeeId: number): Promise<void> {
   const viewer = await rhViewer(user);
   const ref = await rhEmployeeRefOrThrow(employeeId);
@@ -2577,8 +2584,8 @@ export const appRouter = router({
         includeRegisterLink: z.boolean().optional(),
         candidateName: z.string().optional(),
         origin: z.string().url().optional(),
-        // Ficheiros já enviados para /api/upload (Vercel Blob público) —
-        // o servidor descarrega-os e envia como anexos do email.
+        // Ficheiros já enviados para /api/upload — o servidor descarrega-os
+        // (link assinado se forem do bucket) e envia como anexos do email.
         attachments: z.array(z.object({
           filename: z.string().min(1).max(255),
           url: z.string().url().startsWith("https://"),
@@ -2589,8 +2596,10 @@ export const appRouter = router({
         const { sendEmail } = await import("./mail/systemMail");
 
         const emailAttachments: Array<{ filename: string; content: Buffer }> = [];
+        const { storageReadableUrl } = await import("./storageSign");
         for (const a of input.attachments ?? []) {
-          const resp = await fetch(a.url);
+          // ficheiro do nosso bucket → link assinado (o bucket deixa de ser público)
+          const resp = await fetch(await storageReadableUrl(a.url));
           if (!resp.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `Anexo "${a.filename}" inacessível (HTTP ${resp.status})` });
           const buf = Buffer.from(await resp.arrayBuffer());
           if (buf.length > 10 * 1024 * 1024) throw new TRPCError({ code: "BAD_REQUEST", message: `Anexo "${a.filename}" excede 10 MB` });
@@ -2939,6 +2948,16 @@ export const appRouter = router({
         // Âmbito de cidade também nas ESCRITAS (revisão 16 set): sem isto um
         // admin do Porto editava salário/NIF de uma ficha de Lisboa.
         await assertEmployeeWriteScope(viewer, ref);
+        // Foto: só uma carregada para ESTA ficha (ou por /api/upload); nunca a
+        // key de um documento ou de outra pessoa. Reenviar a atual não conta.
+        if (input.photoUrl !== undefined || input.photoKey !== undefined) {
+          const cur = (await getEmployeeById(input.id))?.employee;
+          const changed = [input.photoUrl, input.photoKey].filter((r) => r != null && r !== cur?.photoUrl && r !== cur?.photoKey);
+          const { uploadRefsAllowed } = await import("./storageRefs");
+          if (!uploadRefsAllowed(changed, [`employees/${input.id}/photo-`, "uploads/"])) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Foto inválida: carrega a fotografia de novo." });
+          }
+        }
         const { id, birthDate, contractStart, contractEnd, ...rest } = input;
         const data: any = { ...rest };
         if (typeof data.personalEmail === "string") data.personalEmail = data.personalEmail.trim().toLowerCase() || null;
@@ -3271,10 +3290,7 @@ export const appRouter = router({
       list: protectedProcedure
         .input(z.object({ employeeId: z.number(), startDate: z.string().optional(), endDate: z.string().optional() }))
         .query(async ({ ctx, input }) => {
-          const viewer = await rhViewer(ctx.user);
-          const ref = await rhEmployeeRef(input.employeeId);
-          if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
-          if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
+          await assertCanViewTimeRecords(ctx.user, input.employeeId);
           return getTimeRecords(
             input.employeeId,
             input.startDate ? new Date(input.startDate) : undefined,
@@ -3649,11 +3665,15 @@ export const appRouter = router({
         const key = `payroll/folha_ordenados_${input.year}_${String(input.month).padStart(2, "0")}_${Date.now()}.pdf`;
         const { url } = await storagePut(key, pdfBuffer, "application/pdf");
         // Aviso `payroll_ready` (quem tem RH — ordenados; app + email) com o link do PDF.
+        // O link é o da APP (/api/file pede login e RH — ordenados), nunca o do
+        // bucket: os emails ficam guardados e o bucket deixa de ser público.
         const { notify } = await import("./notify");
+        const { appOrigin } = await import("./shiftHandoverAutomation");
+        const pdfLink = `${appOrigin()}/api/file/${key.split("/").map(encodeURIComponent).join("/")}`;
         await notify({
           kind: "payroll_ready",
           title: `Folha de Ordenados - ${monthName} ${input.year}`,
-          body: `A folha de ordenados de ${monthName} ${input.year} foi gerada e est\u00e1 pronta para enviar ao contabilista (${input.email}).\n\nLink do PDF: ${url}`,
+          body: `A folha de ordenados de ${monthName} ${input.year} foi gerada e est\u00e1 pronta para enviar ao contabilista (${input.email}).\n\nLink do PDF: ${pdfLink}`,
           link: "/rh", entity: { type: "payroll", id: `${input.year}-${input.month}` },
         });
         return { url, email: input.email, monthName, year: input.year };

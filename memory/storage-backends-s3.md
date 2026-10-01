@@ -64,9 +64,28 @@ unprefixed convention on purpose — do not "harmonize" them.
 - The IAM uploader has only `s3:PutObject/GetObject/DeleteObject` on `<bucket>/*` —
   **never call ListObjects**. `storageGet` uses `HeadObject` (allowed by
   `s3:GetObject`) purely as an existence probe.
-- Objects are publicly readable, so the URL is *built*, not fetched:
-  `S3_PUBLIC_BASE_URL` if set, else `https://<bucket>.s3.<region>.amazonaws.com`.
-  Each key segment is percent-encoded for the URL; the DB key stays raw.
+- **The bucket is PRIVATE (P1, 2026-10-01).** The URL is still *built*, not fetched
+  (`S3_PUBLIC_BASE_URL` if set, else `https://<bucket>.s3.<region>.amazonaws.com`) and is
+  what the DB stores — but it is only the file's **canonical identifier**: reading needs a
+  presigned GET. Each key segment is percent-encoded for the URL; the DB key stays raw.
+- **Reads (P1):**
+  - every tRPC procedure's output passes through `server/storageSign.ts`
+    (`storageLinks` middleware in `server/_core/trpc.ts`, after login): each URL of this
+    bucket — also inside text — becomes a presigned GET; for the SENSITIVE prefixes
+    (`employees/<id>/docs|ponto`, `payroll/`, `payslips/`, `invoices/<userId>/`) only if the
+    viewer may open that key (`makeViewerSigner`/`outputSignRule` in `server/fileRoute.ts`) —
+    so pasting a document's URL into a text field never gets it signed back. Signing date rounded
+    to the hour, valid 3 h → the link is stable within the hour (browser cache) and valid ≥ 2 h.
+  - the same middleware strips `X-Amz-*` from this bucket's URLs on INPUT, so a form that echoes
+    a signed link stores the canonical URL.
+  - `GET /api/file/<key>` (`server/fileRoute.ts`) authorizes **by key prefix**
+    (`fileAccessRule`: `employees/<id>/docs|ponto`, `payroll/`, `invoices/<userId>/`, module
+    prefixes; `uploads/`, `inbound/`, `knowledge/` and unknown → admin+) and 302s to a 5-min
+    presigned GET.
+  - Server-side downloads use `storageReadableUrl` (presigns this bucket's URLs/keys).
+  - Client-supplied keys are validated by prefix (`server/storageRefs.ts`): training manuals
+    (`uploads/`, `training/`), employee photo (`employees/<id>/photo-`, `uploads/`).
+  - Old **Vercel Blob** URLs stay public (Blob has no private mode) — not migrated yet.
 - `s3NormalizeKey` accepts a public URL or a bare key (strips protocol/host/leading
   slash, then `decodeURIComponent` with a fallback for keys containing a literal `%`).
   It deliberately does **not** strip a leading `uploads/` — in S3 that is a real
