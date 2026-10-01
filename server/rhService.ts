@@ -270,9 +270,23 @@ export async function getPayrollRun(runId: number) {
   const [run] = await db.select().from(payrollRuns).where(eq(payrollRuns.id, runId)).limit(1);
   if (!run) return null;
   const lines = await db.select().from(payrollRunLines).where(eq(payrollRunLines.runId, runId));
-  return { run, lines: lines.map((l) => ({ ...l, snapshot: safeJson(l.snapshot) })) };
+  return { run, lines: lines.map((l) => ({ ...l, snapshot: payrollSnapshotForRead(safeJson(l.snapshot)) })) };
 }
 function safeJson(s: string) { try { return JSON.parse(s); } catch { return null; } }
+
+/** Dados de identificação/bancários que o snapshot de um fecho guarda mas que nenhum ecrã do fecho usa. */
+const SNAPSHOT_HIDDEN_FIELDS = ["nif", "nib"] as const;
+/**
+ * Snapshot de uma linha do fecho tal como sai para o cliente: o fecho guarda
+ * tudo (nada se apaga), mas NIF e NIB não saem ao ler — servem à folha e aos
+ * recibos, não ao fecho (decisão Jorge, 1 out 2026). PURA.
+ */
+export function payrollSnapshotForRead<T>(snapshot: T): T {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return snapshot;
+  const out: Record<string, unknown> = { ...(snapshot as Record<string, unknown>) };
+  for (const f of SNAPSHOT_HIDDEN_FIELDS) delete out[f];
+  return out as T;
+}
 
 export async function transitionPayrollRun(runId: number, to: "approved" | "paid" | "void", userId: number, paymentRef?: string | null) {
   const db = await getDb();
