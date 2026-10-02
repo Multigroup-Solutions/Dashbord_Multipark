@@ -34,6 +34,9 @@ import { matchesContactQuery } from "@shared/contactSearch";
 import { can } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LeadScoreCell, { type LeadScoreRow } from "@/components/aiOps/LeadScoreCell";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CandidaturasSection } from "@/components/CandidaturasSection";
+import { RecruitmentSection } from "@/components/RecruitmentSection";
 import {
   LEAD_SLA,
   LEAD_SOURCE_LABELS,
@@ -103,7 +106,7 @@ function validateDraft(d: LeadDraft): string | null {
   return null;
 }
 
-export default function ExtraLeadsPage() {
+function LeadsTab() {
   const template = findWhatsAppTemplate(LEAD_RECRUITMENT_TEMPLATE_ID)!;
 
   const [statusFilter, setStatusFilter] = useState<LeadStatus | "all">("all");
@@ -305,14 +308,9 @@ export default function ExtraLeadsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <UserPlus className="h-6 w-6 text-primary" /> Leads de Extras
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Contactos que ainda não são extras. Convida-os com o template “{template.label}” e acompanha quem responde.
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground max-w-2xl">
+          Contactos que ainda não são extras. Convida-os com o template “{template.label}” e acompanha quem responde.
+        </p>
         <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
@@ -929,6 +927,54 @@ export default function ExtraLeadsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ─── Página: leads, candidaturas do site e recrutamento, tudo junto ─────────
+// (Jorge, 2 out 2026: "isto deve aparecer tudo junto na parte das leads extras
+// e a parte de recrutamento que está nos RH também vai para lá"). Separador
+// em ?tab= (leads | candidaturas | recrutamento).
+const LEADS_TABS = ["leads", "candidaturas", "recrutamento"] as const;
+type LeadsTabKey = (typeof LEADS_TABS)[number];
+
+function NewApplicationsBadge() {
+  const q = trpc.driverApplications.list.useQuery({ status: "new" }, { refetchInterval: 60_000, retry: false });
+  const n = q.data?.length ?? 0;
+  if (n === 0) return null;
+  return <Badge className="ml-1.5 h-5 px-1.5 bg-blue-600 text-white hover:bg-blue-600">{n}</Badge>;
+}
+
+export default function ExtraLeadsPage() {
+  const [tab, setTab] = useState<LeadsTabKey>(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return (LEADS_TABS as readonly string[]).includes(t ?? "") ? (t as LeadsTabKey) : "leads";
+  });
+  function changeTab(v: string) {
+    const next = (LEADS_TABS as readonly string[]).includes(v) ? (v as LeadsTabKey) : "leads";
+    setTab(next);
+    const p = new URLSearchParams(window.location.search);
+    if (next === "leads") p.delete("tab"); else p.set("tab", next);
+    window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}`);
+  }
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <UserPlus className="h-6 w-6 text-primary" /> Leads de Extras
+        </h1>
+        <p className="text-sm text-muted-foreground">Leads, candidaturas do site e emails de recrutamento, tudo no mesmo sítio.</p>
+      </div>
+      <Tabs value={tab} onValueChange={changeTab}>
+        <TabsList className="h-auto flex-wrap justify-start">
+          <TabsTrigger value="leads">Leads</TabsTrigger>
+          <TabsTrigger value="candidaturas">Candidaturas do site<NewApplicationsBadge /></TabsTrigger>
+          <TabsTrigger value="recrutamento"><Mail className="h-3.5 w-3.5 mr-1" />Recrutamento (email)</TabsTrigger>
+        </TabsList>
+        <TabsContent value="leads" className="mt-4"><LeadsTab /></TabsContent>
+        <TabsContent value="candidaturas" className="mt-4"><CandidaturasSection /></TabsContent>
+        <TabsContent value="recrutamento" className="mt-4"><RecruitmentSection /></TabsContent>
+      </Tabs>
     </div>
   );
 }

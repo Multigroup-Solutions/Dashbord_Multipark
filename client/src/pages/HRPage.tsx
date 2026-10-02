@@ -4,7 +4,6 @@ import { useSearch, useLocation } from 'wouter';
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { RecruitmentSection } from "@/components/RecruitmentSection";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
 import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
@@ -2272,8 +2271,8 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
   );
 }
 
-// Aba RECRUTAMENTO: extraída para components/RecruitmentSection (partilhada
-// com o hub da página Disponibilidade) — com email completo, anexos e notas.
+// O RECRUTAMENTO (recursos-humanos@) está nos Leads de Extras (17g-4 — Jorge,
+// 2 out 2026: "fica tudo junto nas leads"); components/RecruitmentSection.
 
 export default function HRPage() {
   const queryString = useSearch();
@@ -2297,6 +2296,8 @@ export default function HRPage() {
   // Separador Colaboradores/Extras/Recrutamento também persiste — voltar de
   // uma ficha de extra mantém-nos nos Extras (bug reportado pelo Jorge)
   const [activeTab, setActiveTab] = usePersistedState<string>("hr.tab", "employees");
+  // O Recrutamento (recursos-humanos@) passou para os Leads de Extras (17g-4).
+  useEffect(() => { if (activeTab === "recrutamento") setActiveTab("employees"); }, [activeTab, setActiveTab]);
   const isAdminRole = userRole === "admin" || userRole === "super_admin";
   // Para admins, os agentes por ligar vivem no separador Ligações
   useEffect(() => { if (isAdminRole && activeTab === "agentes") setActiveTab("ligacoes"); }, [isAdminRole, activeTab, setActiveTab]);
@@ -2589,9 +2590,6 @@ export default function HRPage() {
                 Agentes s/ funcionário <UnlinkedAgentsBadge />
               </TabsTrigger>
             )}
-            <TabsTrigger value="recrutamento">
-              <Mail className="w-4 h-4 mr-2" />Recrutamento
-            </TabsTrigger>
             {isAdminRole && (
               <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
             )}
@@ -2622,9 +2620,6 @@ export default function HRPage() {
               <UnlinkedAgentsSection />
             </TabsContent>
           )}
-          <TabsContent value="recrutamento" className="mt-4">
-            <RecruitmentSection />
-          </TabsContent>
           {isAdminRole && (
             <TabsContent value="ligacoes" className="mt-4">
               <IdentityLinksSection />

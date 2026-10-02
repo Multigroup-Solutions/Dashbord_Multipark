@@ -17,7 +17,7 @@ palavras: pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensa
 - Carrega documentos (CC, carta de condução, comprovativo de morada, NIB…) no separador **Documentos**. Documentos em falta podem bloquear o acesso.
 
 **Gestão** (Team Leader e acima, na sua cidade)
-- **Pessoas → Recursos Humanos** lista os colaboradores (separadores Colaboradores, Extras, Agentes, Recrutamento).
+- **Pessoas → Recursos Humanos** lista os colaboradores (separadores Colaboradores, Extras, Agentes). Os emails de **recrutamento** (recursos-humanos@) passaram para os **Leads de Extras**.
 - O separador **Agentes** ("Agentes por ligar") lê os agentes **ao vivo** da BD da Multipark: os ativos e os que tiveram ações nos últimos 180 dias e ainda não estão ligados a uma ficha, a um parceiro nem marcados como "não é funcionário". A ligação automática de hora a hora (por email e por nome) usa a mesma leitura. Se a BD da Multipark não responder, aparece um aviso e a lista vem da cópia antiga (sem os agentes novos).
 - Num **PDA registado**, ao entrar na app o aparelho fica ligado a ti (e ao Zello do PDA) até saíres ou outra pessoa entrar. Se essa ligação falhar, aparece um aviso — fala com a chefia.
 - **PDAs só pelo QR**: cada PDA regista-se uma vez lendo, no próprio aparelho, o QR colado nele (Operacional → PDAs → botão QR). Já não há check-in manual nem registo pela lista. A seguir ao registo aparece **Instalar a app neste PDA**: o dashboard fica instalado e abre sempre direto, no mesmo browser.

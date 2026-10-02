@@ -6,8 +6,8 @@ import { Loader2, CalendarCheck, CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { AvailabilitySection, CandidaturasSection } from "@/pages/ExtrasDiaPage";
-import { RecruitmentSection } from "@/components/RecruitmentSection";
+import { AvailabilitySection } from "@/pages/ExtrasDiaPage";
+import { Link } from "wouter";
 import { ExtrasMetricsSection } from "@/components/ExtrasMetricsSection";
 import { Mail, BarChart3, Users, ChevronDown, ChevronRight, CalendarDays } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +51,8 @@ export default function DisponibilidadePage() {
             Disponibilidades
           </h1>
           <p className="text-sm text-muted-foreground">
-            Quem está disponível, pedidos por email/WhatsApp e candidaturas do site.
+            Quem está disponível e pedidos por email/WhatsApp. As candidaturas do site e o recrutamento estão nos{" "}
+            <Link href="/extras-leads?tab=candidaturas" className="text-primary underline">Leads de Extras</Link>.
           </p>
         </div>
         <AvailabilitySection />
@@ -59,17 +60,6 @@ export default function DisponibilidadePage() {
             scroll aparecia tudo de uma vez). Fechado = não carrega nada. */}
         <HubSection id="metricas" title="Métricas dos extras" icon={<BarChart3 className="h-5 w-5 text-primary" />}>
           <ExtrasMetricsSection />
-        </HubSection>
-        <HubSection
-          id="candidaturas"
-          title="Candidaturas do site"
-          icon={<Users className="h-5 w-5 text-emerald-600" />}
-          badge={<NewApplicationsBadge />}
-        >
-          <CandidaturasSection />
-        </HubSection>
-        <HubSection id="recrutamento" title="Recrutamento (recursos-humanos@)" icon={<Mail className="h-5 w-5 text-primary" />}>
-          <RecruitmentSection />
         </HubSection>
       </div>
     );
@@ -133,13 +123,6 @@ function HubSection({
 }
 
 /** "N novas" no cabeçalho das candidaturas, mesmo com a secção fechada. */
-function NewApplicationsBadge() {
-  const q = trpc.driverApplications.list.useQuery({ status: "new" }, { refetchInterval: 60_000 });
-  const n = q.data?.length ?? 0;
-  if (n === 0) return null;
-  return <Badge className="bg-blue-600 text-white hover:bg-blue-600">{n} nova{n > 1 ? "s" : ""}</Badge>;
-}
-
 function MyAvailability() {
   const weekStart = useWeekParam();
 
