@@ -2347,9 +2347,15 @@ export function AvailabilitySection() {
     null | { total: number; sent: number; failed: number; invalidPhone: number; optedOut: number; recipients: WaRecipient[] }
   >(null);
 
+  // Código único de cada envio (17b): carregar outra vez depois de um corte
+  // (60 s da Vercel) retoma a mesma difusão — quem já recebeu não recebe 2×.
+  const [waSendKey, setWaSendKey] = useState(() => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+  // Depois do envio real o botão fica "Enviado": um 2.º clique não manda outra vez a todos.
+  const [waSentReal, setWaSentReal] = useState(false);
   const broadcast = trpc.whatsapp.sendBroadcast.useMutation({
-    onSuccess: (r) => {
+    onSuccess: (r, v) => {
       setWaResult(r);
+      if (!v.testPhone) setWaSentReal(true);
       toast.success(
         `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}${r.optedOut ? `, ${r.optedOut} não querem mensagens` : ""}`,
       );
@@ -2415,6 +2421,7 @@ export function AvailabilitySection() {
       weekStart: effectiveWeek || null,
       note: note.trim() || null,
       testPhone: testPhone ? testPhone.trim() : undefined,
+      sendKey: testPhone ? undefined : waSendKey,
     });
   }
 
@@ -2683,7 +2690,7 @@ export function AvailabilitySection() {
           <Button
             variant="outline"
             className="border-green-600 text-green-700 hover:bg-green-50 dark:hover:bg-green-950"
-            onClick={() => { setWaResult(null); setWaOpen(true); }}
+            onClick={() => { setWaResult(null); setWaSentReal(false); setWaSendKey(globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`); setWaOpen(true); }}
           >
             <MessageCircle className="h-4 w-4 mr-2" />
             {selectedIds.size > 0 ? `WhatsApp aos ${selectedIds.size} selecionados` : `WhatsApp aos ${shownExtras.length} filtrados`}
@@ -3216,11 +3223,12 @@ export function AvailabilitySection() {
               </Button>
               <Button
                 className="bg-green-700 hover:bg-green-800 text-white"
-                disabled={waMissingParam || broadcast.isPending || waValidCount === 0}
+                disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal}
                 onClick={() => submitBroadcast()}
+                title={waSentReal ? "Já enviado — fecha e abre o diálogo para um envio novo" : undefined}
               >
                 {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <MessageCircle className="h-4 w-4 mr-2" />}
-                Enviar a {waValidCount} extra(s)
+                {waSentReal ? "Enviado" : `Enviar a ${waValidCount} extra(s)`}
               </Button>
             </DialogFooter>
           </DialogContent>

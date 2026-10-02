@@ -52,6 +52,12 @@ export interface TemplateAnalysis {
   hasDynamicUrlButton: boolean;
   /** Índice do botão dinâmico dentro do bloco BUTTONS (a Meta conta a partir de 0). */
   dynamicUrlButtonIndex: number;
+  /**
+   * Cabeçalho que exige parâmetro no envio (17b): imagem/vídeo/documento ou
+   * texto com variável. Este envio não o preenche — a Meta recusava cada
+   * destinatário (132012). null = sem cabeçalho ou cabeçalho fixo.
+   */
+  headerNeedingParam?: "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION" | "TEXT" | null;
 }
 
 /** Resultado da seleção de uma tradução dentro da resposta da Graph API. */
@@ -140,10 +146,20 @@ export function analyzeTemplateEntry(entry: any): TemplateAnalysis {
     (b) => String(b?.type ?? "").toUpperCase() === "URL" && /\{\{.+?\}\}/.test(String(b?.url ?? "")),
   );
 
+  const header = findComponent(components, "HEADER");
+  const headerFormat = String(header?.format ?? "").toUpperCase();
+  const headerNeedingParam =
+    headerFormat === "IMAGE" || headerFormat === "VIDEO" || headerFormat === "DOCUMENT" || headerFormat === "LOCATION"
+      ? (headerFormat as "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION")
+      : headerFormat === "TEXT" && /\{\{.+?\}\}/.test(String(header?.text ?? ""))
+        ? "TEXT"
+        : null;
+
   return {
     name: String(entry?.name ?? ""),
     language: String(entry?.language ?? ""),
     status: String(entry?.status ?? "UNKNOWN"),
+    headerNeedingParam,
     bodyText,
     parameterFormat,
     paramNames: parameterFormat === "NAMED" ? paramNames : [],
@@ -221,6 +237,13 @@ export function validateTemplateUsage(
     ? ` (${analysis.paramNames.map((n) => `{{${n}}}`).join(", ")})`
     : "";
 
+  if (analysis.headerNeedingParam) {
+    const what = { IMAGE: "uma imagem", VIDEO: "um vídeo", DOCUMENT: "um documento", LOCATION: "uma localização", TEXT: "texto com variável" }[analysis.headerNeedingParam];
+    return (
+      `O template "${analysis.name}" tem um cabeçalho com ${what}, que este envio não preenche — a Meta ` +
+      `recusava cada destinatário. Usa outro template ou tira o cabeçalho no WhatsApp Manager.`
+    );
+  }
   if (analysis.paramCount > 2) {
     return (
       `O template "${analysis.name}" tem ${analysis.paramCount} parâmetros${paramsRef}, ` +

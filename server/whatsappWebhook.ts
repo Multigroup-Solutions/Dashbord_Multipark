@@ -107,7 +107,9 @@ export function createWhatsappWebhookRouter(): Router {
 
   // ── POST: eventos entrantes (mensagens + status) ───────────────────────────
   // express.raw local: mantém o body como Buffer para a validação HMAC.
-  r.post("/", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
+  // Limite de 3 MB (17b): o de omissão (100 kB) dava 413 num lote grande da
+  // Meta, que repetia até desistir — e o evento perdia-se aqui e no be-multipark.
+  r.post("/", express.raw({ type: "application/json", limit: "3mb" }), async (req: Request, res: Response) => {
     const appSecret = process.env.WHATSAPP_APP_SECRET;
     const signature = req.headers["x-hub-signature-256"] as string | undefined;
     const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
@@ -164,8 +166,13 @@ export function createWhatsappWebhookRouter(): Router {
       // corre quando a dashboard processou com sucesso: se falhar (500), a
       // Meta faz retry e o forward acontece nessa entrega.
       {
+        // Um pedido que JÁ veio reencaminhado (traz o cabeçalho do segredo) não
+        // volta a sair: sem isto, dois sistemas a reencaminhar um para o outro
+        // ficavam em laço (17b).
+        const alreadyForwarded = req.headers["x-multipark-forward-secret"] != null;
         const work = import("./whatsappWebhookForward")
-          .then(async (m) => ((await m.shouldForwardWebhook(payload)) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
+          // Já reencaminhado (17b) → não sai outra vez nem consulta os números internos (936a1ec).
+          .then(async (m) => (!alreadyForwarded && (await m.shouldForwardWebhook(payload)) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
           .catch(() => {});
         try {
           const { waitUntil } = await import("@vercel/functions");

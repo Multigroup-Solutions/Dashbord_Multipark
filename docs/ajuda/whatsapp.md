@@ -36,8 +36,17 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Liga a conversa a uma reserva ou cliente no painel lateral. Com a Multipark em baixo, o painel diz "indisponível" (não "nenhuma reserva").
 - Contactos que pediram STOP ficam marcados "Não quer mensagens".
 
-**Ficheiros recebidos**
+**Ficheiros e localizações recebidos**
 - Imagens, áudios, vídeos e documentos ficam guardados até 16 MB. Se não for possível guardar, a mensagem diz porquê ("demasiado grande", "a descarregar") — pede ao contacto para reenviar ou mandar por email.
+- Uma localização partilhada aparece com o nome/morada e o link para o mapa; um contacto partilhado com o nome e o número.
+- Não há grupos do WhatsApp: cada conversa é com uma pessoa.
+
+**Envios em massa (Extras-Dia, leads)**
+- Só com templates aprovados. Quem pediu STOP nunca recebe.
+- Se o envio for cortado a meio (rede, prazo) e carregares outra vez no **mesmo** diálogo, **retoma**: quem já recebeu não recebe outra vez. Depois de um envio completo, o botão fica "Enviado".
+- Uma tabela filtrada sem ninguém não envia a toda a gente — dá "Nenhum destinatário".
+- "Enviado" quer dizer **aceite pela Meta**. Se a Meta disser depois que falhou (ex.: número sem WhatsApp), a contagem da difusão corrige-se e o aviso de escala dessa pessoa passa a "falhou".
+- Templates com cabeçalho de imagem, vídeo, documento ou texto com variável são recusados antes de enviar (a Meta recusava cada destinatário).
 
 **Respostas rápidas**
 - Servem a toda a empresa. Criar e editar: quem responde no WhatsApp. **Arquivar** (sai do menu de toda a gente, não se apaga): admin.

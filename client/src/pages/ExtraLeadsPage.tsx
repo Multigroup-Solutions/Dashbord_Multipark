@@ -237,6 +237,8 @@ export default function ExtraLeadsPage() {
     onSuccess: () => { toast.success("Lead apagado"); setDeleteFor(null); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  // Código único deste envio (17b): carregar outra vez (rede/corte a meio) retoma, não duplica.
+  const [contactSendKey, setContactSendKey] = useState("");
   const contact = trpc.extraLeads.contact.useMutation({
     onSuccess: (r) => {
       setContactResult(r);
@@ -281,6 +283,7 @@ export default function ExtraLeadsPage() {
   function openContact(ids: number[]) {
     setContactIds(ids);
     setContactResult(null);
+    setContactSendKey(globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
     setContactOpen(true);
   }
 
@@ -861,7 +864,7 @@ export default function ExtraLeadsPage() {
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white"
                 disabled={contact.isPending || contactWithPhone === 0}
-                onClick={() => contact.mutate({ leadIds: contactIds, templateId: template.id })}
+                onClick={() => contact.mutate({ leadIds: contactIds, templateId: template.id, sendKey: contactSendKey || undefined })}
               >
                 {contact.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
                 Enviar a {contactWithPhone}

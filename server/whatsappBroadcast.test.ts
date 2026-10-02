@@ -65,9 +65,10 @@ describe("resolveRecipients", () => {
     expect(out.every(r => r.phoneE164 !== null)).toBe(true);
   });
 
-  it("devolve todos quando employeeIds é null ou vazio", () => {
+  it("null = todos; lista vazia = ninguém (17b: uma tabela filtrada vazia mandava a todos)", () => {
     expect(resolveRecipients(EXTRAS, null)).toHaveLength(5);
-    expect(resolveRecipients(EXTRAS, [])).toHaveLength(5);
+    expect(resolveRecipients(EXTRAS, undefined)).toHaveLength(5);
+    expect(resolveRecipients(EXTRAS, [])).toHaveLength(0);
   });
 
   it("preserva nome e id de cada extra", () => {

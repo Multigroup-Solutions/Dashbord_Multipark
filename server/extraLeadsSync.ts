@@ -487,7 +487,12 @@ export async function handleLeadInbound(input: { phoneE164: string; conversation
         } catch { /* segue */ }
 
         const applicationUrl = driverApplicationUrl();
-        if (isFeatureEnabled("LEAD_AUTO_REPLY") && applicationUrl) {
+        // Vem do webhook (sem o contexto tRPC que lê as Definições): lê o
+        // interruptor fresco — numa instância acabada de arrancar valia a
+        // omissão (ligado) mesmo com ele desligado nas Definições (17b).
+        const [{ ensureFeatureFlagOverrides }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+        await ensureFeatureFlagOverrides();
+        if (isFeatureEnabled("LEAD_AUTO_REPLY", { defaultEnabled: automationFlagDefault("LEAD_AUTO_REPLY") }) && applicationUrl) {
           const claim = await db
             .update(extraLeads)
             .set({ autoRepliedAt: at })
