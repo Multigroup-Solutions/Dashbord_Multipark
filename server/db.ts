@@ -62,12 +62,10 @@ import {
   incidents,
   performanceEvaluations,
   services,
-  invoices,
   partnerships,
   partnerAliases,
   partnershipTransactions,
   partnershipInvoices,
-  annualReports,
   multiparkBookings,
   multiparkBookingExtras,
   InsertMultiparkBooking,
@@ -3761,30 +3759,8 @@ export async function partnershipNameExists(name: string, exceptId?: number): Pr
   return rows.length > 0;
 }
 
-// ─── ANUAL (ANNUAL REPORTS) ────────────────────────────────────────────────
-export async function createAnnualReport(data: any) {
-  const db = await getDb(); if (!db) return null;
-  const [result] = await db.insert(annualReports).values(data as any).$returningId();
-  return result?.id;
-}
-
-export async function getAnnualReports(filters?: { year?: number; projectId?: number }) {
-  const db = await getDb(); if (!db) return [];
-  const conditions: any[] = await projectFilterConds(annualReports.projectId, filters?.projectId);
-  if (filters?.year) conditions.push(eq(annualReports.year, filters.year));
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db.select().from(annualReports).where(where).orderBy(annualReports.month);
-}
-
-export async function updateAnnualReport(id: number, data: any) {
-  const db = await getDb(); if (!db) return;
-  await db.update(annualReports).set(data).where(eq(annualReports.id, id));
-}
-
-export async function deleteAnnualReport(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(annualReports).where(eq(annualReports.id, id));
-}
+// Relatório anual antigo (annual_reports, divisão parceiro/empresa) retirado a
+// 2 out 2026: o Anual usa o motor das Finanças. A tabela e os dados ficam.
 
 // ─── HISTÓRICO FINANCEIRO MENSAL (importado de Excel/CSV, 2016→) ─────────────
 // Anos anteriores à app não têm reservas na BD; o Jorge importa os totais
@@ -4553,92 +4529,6 @@ export async function checkGeofenceNote(employeeId: number, latitude?: string | 
     return null; // geofence nunca pode partir o ponto
   }
 }
-
-export async function generateAnnualSummary(year: number, projectId?: number, splitPartner: number = 60) {
-  const db = await getDb(); if (!db) return [];
-  // Get all invoices for the year (Faturação)
-  const allInvoices = await db.select().from(invoices);
-  const yearInvoices = allInvoices.filter(i => {
-    const d = new Date(i.issueDate);
-    return d.getFullYear() === year && (!projectId || i.projectId === projectId);
-  });
-  
-  // Get all services for the year (Serviços extra: lavagens, carregamentos, valet)
-  const allServices = await db.select().from(services);
-  const yearServices = allServices.filter(s => {
-    const d = new Date(s.serviceDate);
-    return d.getFullYear() === year;
-  });
-  
-  // Get all expenses for the year (Despesas)
-  const allExpenses = await db.select().from(expenses);
-  const yearExpenses = allExpenses.filter(e => {
-    const d = new Date(e.createdAt);
-    return d.getFullYear() === year && (!projectId || e.projectId === projectId);
-  });
-  
-  // Group by month
-  const monthly: Record<number, { invoiceRevenue: number; serviceRevenue: number; serviceCost: number; expenses: number }> = {};
-  for (let m = 1; m <= 12; m++) monthly[m] = { invoiceRevenue: 0, serviceRevenue: 0, serviceCost: 0, expenses: 0 };
-  
-  for (const inv of yearInvoices) {
-    const m = new Date(inv.issueDate).getMonth() + 1;
-    monthly[m].invoiceRevenue += inv.totalAmount || 0;
-  }
-  for (const svc of yearServices) {
-    const m = new Date(svc.serviceDate).getMonth() + 1;
-    monthly[m].serviceRevenue += svc.revenue || 0;
-    monthly[m].serviceCost += svc.cost || 0;
-  }
-  for (const exp of yearExpenses) {
-    const m = new Date(exp.createdAt).getMonth() + 1;
-    monthly[m].expenses += parseFloat(exp.amount) || 0;
-  }
-  
-  const partnerPct = splitPartner / 100;
-  const companyPct = 1 - partnerPct;
-  const splitLabel = `${splitPartner}/${100 - splitPartner}`;
-  
-  const results: any[] = [];
-  for (let m = 1; m <= 12; m++) {
-    const revenue = monthly[m].invoiceRevenue + monthly[m].serviceRevenue;
-    const expenseTotal = monthly[m].expenses + monthly[m].serviceCost;
-    const profit = revenue - expenseTotal;
-    const partnerShare = Math.round(profit * partnerPct);
-    const companyShare = Math.round(profit * companyPct);
-    
-    // Check if report exists
-    const existing = await db.select().from(annualReports).where(
-      and(
-        eq(annualReports.month, m),
-        eq(annualReports.year, year),
-        projectId ? eq(annualReports.projectId, projectId) : sql`1=1`
-      )
-    );
-    
-    const reportData = {
-      projectId: projectId || null,
-      month: m,
-      year,
-      totalRevenue: revenue,
-      totalExpenses: expenseTotal,
-      partnerShare,
-      companyShare,
-      splitRatio: splitLabel,
-    };
-    
-    if (existing.length > 0) {
-      await db.update(annualReports).set(reportData as any).where(eq(annualReports.id, existing[0].id));
-      results.push({ ...reportData, id: existing[0].id });
-    } else {
-      const [result] = await db.insert(annualReports).values(reportData as any).$returningId();
-      results.push({ ...reportData, id: result?.id });
-    }
-  }
-  
-  return results;
-}
-
 
 // ─── MULTIPARK BOOKINGS ──────────────────────────────────────────────────────
 
