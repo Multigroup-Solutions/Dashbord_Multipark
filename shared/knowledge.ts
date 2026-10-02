@@ -33,7 +33,13 @@ export const KB_CITIES = ["Lisboa", "Porto", "Faro"] as const;
 export type KbCity = (typeof KB_CITIES)[number];
 
 /** Máximo de um ficheiro carregado (o tRPC leva base64; o Vercel corta ~4,5 MB). */
-export const KB_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+/**
+ * Máximo de um ficheiro carregado. 18d: era 4 MB, mas vai em base64 (+1/3) e a
+ * Vercel corta os pedidos acima de 4,5 MB — entre ~3,3 e 4 MB falhava sem
+ * explicação. 3 MB cabem com folga.
+ */
+export const KB_MAX_UPLOAD_MB = 3;
+export const KB_MAX_UPLOAD_BYTES = KB_MAX_UPLOAD_MB * 1024 * 1024;
 /** Tipos aceites no carregamento manual. */
 export const KB_UPLOAD_MIME = {
   pdf: "application/pdf",
@@ -58,6 +64,30 @@ export const kbFolderSchema = z.object({
   visibility: kbVisibilitySchema.default(KB_VISIBILITY_ALL),
 });
 export type KbFolder = z.infer<typeof kbFolderSchema>;
+
+const normFolder = (p: string): string => String(p ?? "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+
+/**
+ * A pasta configurada mais específica que contém `path` (18d — com
+ * "Procedimentos" e "Procedimentos/Porto" nas Definições, um ficheiro de
+ * Porto fica com a visibilidade de "Procedimentos/Porto", seja qual for a
+ * ordem; antes ganhava a última percorrida). null = nenhuma. PURA.
+ */
+export function mostSpecificKbFolder<T extends { path: string }>(folders: readonly T[], path: string): T | null {
+  const target = normFolder(path);
+  let best: T | null = null;
+  for (const f of folders) {
+    const fp = normFolder(f.path);
+    if (!fp || (target !== fp && !target.startsWith(`${fp}/`))) continue;
+    if (!best || fp.length > normFolder(best.path).length) best = f;
+  }
+  return best;
+}
+
+/** Pastas da mais geral para a mais específica (aplicar por esta ordem = a mais específica manda). PURA. */
+export function foldersBySpecificity<T extends { path: string }>(folders: readonly T[]): T[] {
+  return [...folders].sort((a, b) => normFolder(a.path).split("/").length - normFolder(b.path).split("/").length || normFolder(a.path).length - normFolder(b.path).length);
+}
 
 export const knowledgeConfigSchema = z.object({
   /** Sincronizar as pastas do Shared Drive (cron knowledge-sync). */
@@ -150,6 +180,11 @@ export interface KbCitation {
  * ([K1]…, as etiquetas que o prompt pede). Sem etiquetas (a resposta não
  * veio dos manuais, ex.: "não encontrei") → a resposta tal e qual. PURA.
  */
+/** Escapa o que o markdown leria como ligação/imagem/HTML num título. PURA. */
+export function escapeMdLabel(s: string): string {
+  return String(s ?? "").replace(/[\\`*_[\]()<>!]/g, (c) => `\\${c}`);
+}
+
 export function appendCitations(answer: string, citations: readonly KbCitation[]): { text: string; used: KbCitation[] } {
   const text = String(answer ?? "").trim();
   if (!citations.length) return { text, used: [] };
@@ -159,7 +194,8 @@ export function appendCitations(answer: string, citations: readonly KbCitation[]
   );
   if (!used.length) return { text, used: [] };
   const lines = used.map((c) => {
-    const label = c.section && c.section !== c.title ? `${c.title} — ${c.section}` : c.title;
+    // 18d: um título com [ ] ( ) já não parte nem injeta ligações no markdown.
+    const label = escapeMdLabel(c.section && c.section !== c.title ? `${c.title} — ${c.section}` : c.title);
     const href = safeCitationHref(c.href);
     return `- [${c.tag}] ${href ? `[${label}](${href})` : label}`;
   });

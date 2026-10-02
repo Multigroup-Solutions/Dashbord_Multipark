@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Streamdown } from "streamdown";
+import { aiRehypePlugins } from "@/lib/safeMarkdown";
 import { History, Loader2, MessageCircleQuestion, Plus, Send, Sparkles, Trash2, User } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -255,7 +256,7 @@ export function AssistantWidget() {
                       {m.role === "assistant" ? (
                         <>
                           <div className="prose prose-sm max-w-none dark:prose-invert [&_p]:my-1 [&_ul]:my-1">
-                            <Streamdown>{m.content}</Streamdown>
+                            <Streamdown rehypePlugins={aiRehypePlugins()}>{m.content}</Streamdown>
                           </div>
                           {m.tools && m.tools.length > 0 && (
                             <div className="mt-1 text-[11px] text-muted-foreground">

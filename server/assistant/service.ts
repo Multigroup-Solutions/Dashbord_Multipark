@@ -24,9 +24,15 @@ export async function assistantKnowledge(question: string, role: string, access:
   if (!(await loadKnowledgeConfig()).useInAssistant) return null;
   const { retrieveKnowledge, knowledgeBlock, kbViewerFrom } = await import("../knowledge/retrieve");
   const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, access), topK: 4, excludeSources: ["help"] });
+  // 18d: a consulta falhou → o assistente diz que não conseguiu consultar (não
+  // que os manuais não falam disso).
+  if (r.failed) return { block: KB_UNAVAILABLE_BLOCK, citations: [] };
   if (!r.hits.length) return null;
   return { block: knowledgeBlock(r.hits), citations: r.citations };
 }
+
+/** Aviso para o modelo quando a base de conhecimento não respondeu (18d). */
+export const KB_UNAVAILABLE_BLOCK = "<conhecimento>\nNão foi possível consultar os manuais agora (erro temporário). Se a pergunta for sobre procedimentos internos, diz que não conseguiste consultar os manuais e que tente de novo daqui a pouco — não digas que os manuais não falam disso.\n</conhecimento>";
 
 export const ASSISTANT_FEATURE = "assistant" as const;
 export const ASSISTANT_CHANNEL = "staff" as const;

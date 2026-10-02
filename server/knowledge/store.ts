@@ -129,16 +129,44 @@ export async function markStatus(d: Db, id: number, status: KbStatus, error: str
     ${status === "synced" ? sql`, syncedAt = ${nowMysql()}` : sql``} WHERE id = ${id}`);
 }
 
+/** Tentativas de um documento (erros + processamentos interrompidos) antes de desistir. */
+export const KB_MAX_ATTEMPTS = 3;
+
+/**
+ * Reserva para processar. Também apanha um "a processar" preso há > 10 min
+ * (a função morreu a meio) — 18d: antes a reserva exigia `status <> 'processing'`
+ * e o preso nunca mais saía (e, sendo dos mais antigos, travava a fila).
+ * Reapanhar conta como tentativa. `attempts` vem primeiro: o MySQL avalia o SET
+ * da esquerda para a direita e tem de ver o estado antigo.
+ */
 export async function claimForProcessing(d: Db, id: number): Promise<boolean> {
-  const res = await d.execute(sql`UPDATE kb_documents SET status = 'processing' WHERE id = ${id} AND status <> 'processing'`);
+  const res = await d.execute(sql`UPDATE kb_documents
+    SET attempts = IF(status = 'processing', attempts + 1, attempts), status = 'processing', updatedAt = NOW()
+    WHERE id = ${id} AND (status <> 'processing' OR (updatedAt < NOW() - INTERVAL 10 MINUTE AND attempts < ${KB_MAX_ATTEMPTS}))`);
   return Number(header(res)?.affectedRows ?? 0) === 1;
 }
 
-/** Documentos por processar (pendentes, erros com tentativas e "a processar" presos há > 10 min). */
-export async function pendingDocIds(d: Db, limit: number, now: Date = new Date()): Promise<number[]> {
-  const stale = nowMysql(new Date(now.getTime() - 10 * 60_000));
+/**
+ * Presos em "a processar" que já esgotaram as tentativas → erro visível (em
+ * vez de ficarem "a processar" para sempre). Devolve quantos.
+ */
+export async function failStuckProcessing(d: Db): Promise<number> {
+  const res = await d.execute(sql`UPDATE kb_documents SET status = 'error',
+      error = 'O processamento foi interrompido várias vezes (ficheiro grande ou demorado?). Corrige o ficheiro e carrega em «Voltar a sincronizar».'
+    WHERE deletedAt IS NULL AND status = 'processing' AND updatedAt < NOW() - INTERVAL 10 MINUTE AND attempts >= ${KB_MAX_ATTEMPTS}`);
+  return Number(header(res)?.affectedRows ?? 0);
+}
+
+/**
+ * Documentos por processar (pendentes, erros com tentativas e "a processar"
+ * presos há > 10 min). As horas comparam-se na própria BD (NOW()), sem
+ * depender do fuso da sessão (18d). `exclude`: os que já falharam nesta corrida.
+ */
+export async function pendingDocIds(d: Db, limit: number, _now: Date = new Date(), exclude: readonly number[] = []): Promise<number[]> {
+  const notIn = exclude.length ? sql` AND d.id NOT IN (${sql.join(exclude.map((x) => sql`${x}`), sql`, `)})` : sql``;
   const rows = rowsOf(await d.execute(sql`SELECT d.id FROM kb_documents d WHERE d.deletedAt IS NULL AND (
-      d.status = 'pending' OR (d.status = 'error' AND d.attempts < 3) OR (d.status = 'processing' AND d.updatedAt < ${stale}))
+      d.status = 'pending' OR (d.status = 'error' AND d.attempts < ${KB_MAX_ATTEMPTS})
+      OR (d.status = 'processing' AND d.updatedAt < NOW() - INTERVAL 10 MINUTE AND d.attempts < ${KB_MAX_ATTEMPTS}))${notIn}
     ORDER BY d.status = 'error', d.updatedAt LIMIT ${limit}`));
   return rows.map((r) => Number(r.id));
 }
@@ -172,15 +200,20 @@ export async function saveEmbeddings(d: Db, docId: number, items: Array<{ chunkI
   await d.execute(sql`UPDATE kb_documents SET embedded = 1, embedModel = ${model} WHERE id = ${docId}`);
 }
 
-export async function deleteDocHard(d: Db, id: number): Promise<void> {
-  await d.execute(sql`DELETE FROM kb_chunks WHERE docId = ${id}`);
-  await d.execute(sql`DELETE FROM kb_documents WHERE id = ${id}`);
-}
-
-/** Tira do índice (fica a linha, para a sincronização do Drive não o voltar a trazer). */
+/**
+ * Tira do índice (fica a linha — e, num carregado, o ficheiro: 18d, antes
+ * apagava-se tudo sem volta). Os trechos são derivados do texto e refazem-se
+ * ao "Voltar a incluir".
+ */
 export async function excludeDoc(d: Db, id: number): Promise<void> {
   await d.execute(sql`DELETE FROM kb_chunks WHERE docId = ${id}`);
   await d.execute(sql`UPDATE kb_documents SET status = 'skipped', error = 'Excluído por um administrador.', chunkCount = 0, embedded = 0 WHERE id = ${id}`);
+}
+
+/** Carregado já existente com o mesmo conteúdo (checksum dos bytes). */
+export async function uploadByChecksum(d: Db, sha: string): Promise<{ id: number; title: string; status: string } | null> {
+  const r = rowsOf(await d.execute(sql`SELECT id, title, status FROM kb_documents WHERE source = 'upload' AND deletedAt IS NULL AND uploadSha = ${sha} LIMIT 1`))[0];
+  return r ? { id: Number(r.id), title: String(r.title ?? ""), status: String(r.status ?? "") } : null;
 }
 
 export async function statusCounts(d: Db): Promise<Record<string, number>> {

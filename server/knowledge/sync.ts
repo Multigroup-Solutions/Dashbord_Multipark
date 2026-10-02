@@ -21,7 +21,7 @@
  * Nunca regista conteúdo (só ids, contagens e mensagens de erro curtas).
  */
 import { GOOGLE_MIME } from "../../shared/drive";
-import { KB_VISIBILITY_ALL, parseKnowledgeConfig, type KbFolder, type KnowledgeConfig } from "../../shared/knowledge";
+import { KB_VISIBILITY_ALL, mostSpecificKbFolder, parseKnowledgeConfig, type KbFolder, type KnowledgeConfig } from "../../shared/knowledge";
 import { chunkText, normalizeExtracted, textChecksum } from "./chunker";
 import { docxToText } from "./docx";
 import { isSupportedKbMime, type KbDriveApi } from "./drive";
@@ -103,7 +103,7 @@ export async function resolveFolder(api: Pick<KbDriveApi, "driveId" | "findFolde
 export async function upsertDriveFile(d: store.Db, f: { id: string; name: string; mimeType: string; modifiedTime: string | null; md5: string | null; size: number | null; webViewLink: string | null },
   folder: KbFolder, path: string, seenAt: string): Promise<boolean> {
   const { sql } = await import("drizzle-orm");
-  const r = store.rowsOf(await d.execute(sql`SELECT id, modifiedTime, md5, status, visibilityCustom FROM kb_documents WHERE driveFileId = ${f.id} LIMIT 1`))[0];
+  const r = store.rowsOf(await d.execute(sql`SELECT id, modifiedTime, md5, status, visibilityCustom, deletedAt FROM kb_documents WHERE driveFileId = ${f.id} LIMIT 1`))[0];
   const title = f.name.replace(/\.(pdf|docx|txt|md)$/i, "").slice(0, 300) || "(sem título)";
   if (!r) {
     await store.insertDoc(d, {
@@ -112,15 +112,39 @@ export async function upsertDriveFile(d: store.Db, f: { id: string; name: string
     });
     return true;
   }
-  const changed = String(r.modifiedTime ?? "") !== String(f.modifiedTime ?? "") || String(r.md5 ?? "") !== String(f.md5 ?? "");
+  // Voltou (estava fora do índice: apagado/movido e reposto) → processa de novo:
+  // os trechos tinham sido apagados (18d: ficava "Sincronizado" sem trechos).
+  const restored = r.deletedAt != null;
+  const changed = restored || String(r.modifiedTime ?? "") !== String(f.modifiedTime ?? "") || String(r.md5 ?? "") !== String(f.md5 ?? "");
   const excluded = String(r.status) === "skipped";
   const custom = Number(r.visibilityCustom ?? 0) === 1;
   await d.execute(sql`UPDATE kb_documents SET title = ${title}, folderPath = ${path}, mimeType = ${f.mimeType}, webViewLink = ${f.webViewLink},
       sizeBytes = ${f.size}, modifiedTime = ${f.modifiedTime}, md5 = ${f.md5}, seenAt = ${seenAt}, deletedAt = NULL
       ${custom ? sql`` : sql`, visibilityRoles = ${JSON.stringify(folder.visibility.roles)}, visibilityCities = ${JSON.stringify(folder.visibility.cities)}`}
-      ${changed && !excluded ? sql`, status = 'pending', attempts = 0, error = NULL` : sql``}
+      ${changed && !excluded ? sql`, status = 'pending', attempts = 0, error = NULL${restored ? sql`, checksum = NULL` : sql``}` : sql``}
     WHERE id = ${Number(r.id)}`);
   return changed && !excluded;
+}
+
+/**
+ * Aplica JÁ a visibilidade das pastas aos documentos do Drive que a seguem
+ * (não personalizados) — 18d: antes só na volta seguinte às pastas, até 4 h
+ * depois, e o assistente continuava a mostrar o que se tinha restringido.
+ * Da pasta mais geral para a mais específica (a mais específica manda).
+ */
+export async function applyFolderVisibility(d: store.Db, folders: readonly KbFolder[]): Promise<number> {
+  const { sql } = await import("drizzle-orm");
+  const { foldersBySpecificity } = await import("../../shared/knowledge");
+  let n = 0;
+  for (const f of foldersBySpecificity(folders)) {
+    const p = f.path.trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+    if (!p) continue;
+    const like = `${p.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`;
+    const res = await d.execute(sql`UPDATE kb_documents SET visibilityRoles = ${JSON.stringify(f.visibility.roles)}, visibilityCities = ${JSON.stringify(f.visibility.cities)}
+      WHERE source = 'drive' AND visibilityCustom = 0 AND deletedAt IS NULL AND (LOWER(folderPath) = ${p} OR LOWER(folderPath) LIKE ${like})`);
+    n += Number((Array.isArray(res) ? (res[0] as any) : (res as any))?.affectedRows ?? 0);
+  }
+  return n;
 }
 
 /**
@@ -165,7 +189,8 @@ export async function discoverDrive(d: store.Db, api: KbDriveApi, folders: reado
         }
         report.drive.scanned++;
         if (!isSupportedKbMime(f.mimeType)) continue;
-        if (await upsertDriveFile(d, f, folder, top.path, cur.startedAt)) report.drive.queued++;
+        // A pasta configurada mais específica manda na visibilidade (18d).
+        if (await upsertDriveFile(d, f, mostSpecificKbFolder(folders, top.path) ?? folder, top.path, cur.startedAt)) report.drive.queued++;
       }
       cur.pageToken = page.nextPageToken;
       if (!cur.pageToken) cur.queue.shift();
@@ -365,17 +390,23 @@ export async function runKnowledgeSync(opts: { deadlineAt: number; d?: store.Db;
     if (drive && cfg.driveEnabled && cfg.folders.length) await discoverDrive(d, drive, cfg.folders, opts.deadlineAt, report, opts.now);
 
     const embed = opts.embed !== undefined ? opts.embed : (await embeddingsWanted(cfg)) ? defaultEmbed : null;
+    // Presos que já esgotaram as tentativas → erro visível (18d).
+    await store.failStuckProcessing(d).catch((err) => { report.errors.push(`Presos: ${errText(err)}`); });
+    // Os que falham nesta corrida saem da volta (18d: antes o mesmo voltava a
+    // ser pedido até ao fim do prazo e contava milhares de "com erro").
+    const tried: number[] = [];
     while (Date.now() < opts.deadlineAt - 10_000) {
-      const ids = await store.pendingDocIds(d, 3, opts.now);
+      const ids = await store.pendingDocIds(d, 3, opts.now, tried);
       if (!ids.length) break;
       for (const id of ids) {
         if (Date.now() > opts.deadlineAt - 10_000) { report.done = false; break; }
+        tried.push(id);
         const r = await processDoc(d, id, { drive, embed }, opts.deadlineAt);
         if (r.status === "error") { report.failed++; report.errors.push(`Documento ${id}: ${r.error}`); } else report.processed++;
         if (r.embedded) report.embedded++;
       }
     }
-    if ((await store.pendingDocIds(d, 1, opts.now)).length) report.done = false;
+    if ((await store.pendingDocIds(d, 1, opts.now, tried)).length) report.done = false;
     // Completar vetores de documentos já sincronizados (ex.: IA ligada depois).
     if (embed) {
       for (const id of await store.unembeddedDocIds(d, 3)) {

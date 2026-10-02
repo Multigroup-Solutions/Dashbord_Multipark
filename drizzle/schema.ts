@@ -4083,6 +4083,8 @@ export const kbDocuments = mysqlTable("kb_documents", {
 	modifiedTime: varchar({ length: 40 }),
 	md5: varchar({ length: 64 }),
 	checksum: char({ length: 64 }),
+	// 0390 — SHA-256 dos bytes de um carregado (o mesmo ficheiro não entra duas vezes).
+	uploadSha: char({ length: 64 }),
 	status: varchar({ length: 12 }).default('pending').notNull(), // pending | processing | synced | error | skipped
 	error: varchar({ length: 500 }),
 	attempts: int().default(0).notNull(),
