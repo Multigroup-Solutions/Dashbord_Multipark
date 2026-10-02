@@ -117,6 +117,8 @@ export const NOTIFICATION_KIND_DEFS = [
   // ── Operações ──
   K({ kind: "whatsapp_sla", group: "operacoes", label: "WhatsApp por responder", description: "Conversas fora do prazo, urgentes ou com a janela de 24h a fechar (e as que te estão atribuídas).",
     module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+  K({ kind: "whatsapp_undelivered", group: "operacoes", label: "WhatsApp não entregue", description: "A Meta não entregou uma mensagem (número sem WhatsApp ou limite de marketing) e não há email que a substitua — contactar por outro meio.",
+    module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 60 }),
   K({ kind: "whatsapp_missed_call", group: "operacoes", label: "Chamada WhatsApp perdida", description: "Um cliente ligou pelo WhatsApp e ninguém atendeu (conversa da tua cidade) — devolver a chamada.",
     module: "whatsapp", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 10 }),
   K({ kind: "service_tasks_tomorrow", group: "operacoes", label: "Serviços: tarefas de amanhã", description: "Todos os dias às 18:00, as tarefas dos serviços extra (lavagens, carregamentos…) das saídas de amanhã da tua cidade.",

@@ -2328,6 +2328,10 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	// 0365 (17f): caixa por tema (mail_mailboxes.mailboxKey; null = Geral) e quem a escolheu (rule | ai | manual).
 	boxKey: varchar({ length: 40 }),
 	boxSource: varchar({ length: 8 }),
+	// 0375: 131026 seguidos (entregue/lida repõe a 0) e "sem WhatsApp" ao 2.º —
+	// sem templates até a pessoa escrever (server/whatsappFailurePolicy.ts).
+	undeliverableCount: int().default(0).notNull(),
+	unreachableAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -2373,6 +2377,23 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	broadcastId: int(),
 	/** Código único do envio feito por uma pessoa (0350): repetir o pedido não reenvia. */
 	clientRequestId: varchar({ length: 64 }),
+	// 0375 — falhas de entrega 131026 / 131049 (server/whatsappFailurePolicy.ts).
+	/** Língua e categoria (UTILITY/MARKETING…) do template enviado. */
+	language: varchar({ length: 16 }),
+	category: varchar({ length: 16 }),
+	/** Erro da Meta estruturado (o `errorDetail` continua a ser o texto para o ecrã). */
+	errorCode: int(),
+	errorTitle: varchar({ length: 255 }),
+	/** JSON do envio de equipa (components sem o token do formulário) para a nova tentativa. */
+	sendPayload: text(),
+	/** Nova tentativa após 131049: scheduled → done | skipped. */
+	retryState: varchar({ length: 16 }),
+	retryAt: timestamp({ mode: 'string' }),
+	/** Esta linha é a nova tentativa da mensagem `retryOfId`. */
+	retryOfId: int(),
+	/** Alternativa por email (corre uma só vez) e o resultado. */
+	fallbackAt: timestamp({ mode: 'string' }),
+	fallbackResult: varchar({ length: 32 }),
 	waTimestamp: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -2383,6 +2404,7 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	index("idx_whatsapp_messages_conversation").on(table.conversationId),
 	index("idx_whatsapp_messages_broadcast").on(table.broadcastId),
 	index("idx_whatsapp_messages_status").on(table.status),
+	index("idx_whatsapp_messages_retry").on(table.retryState, table.retryAt),
 ]);
 
 // Status de entrega que chegou ANTES de a linha outbound existir (a Meta pode
@@ -2406,6 +2428,10 @@ export const whatsappPendingStatuses = mysqlTable("whatsapp_pending_statuses", {
 	waMessageId: varchar({ length: 128 }).notNull().primaryKey(),
 	status: mysqlEnum(['sent', 'delivered', 'read', 'failed']).notNull(),
 	errorDetail: text(),
+	// 0375: o erro estruturado e a categoria também esperam pela linha.
+	errorCode: int(),
+	errorTitle: varchar({ length: 255 }),
+	category: varchar({ length: 16 }),
 	receivedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
