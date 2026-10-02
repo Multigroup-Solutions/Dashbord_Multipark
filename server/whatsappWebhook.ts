@@ -171,7 +171,8 @@ export function createWhatsappWebhookRouter(): Router {
         // ficavam em laço (17b).
         const alreadyForwarded = req.headers["x-multipark-forward-secret"] != null;
         const work = import("./whatsappWebhookForward")
-          .then((m) => (!alreadyForwarded && m.shouldForwardWebhook(payload) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
+          // Já reencaminhado (17b) → não sai outra vez nem consulta os números internos (936a1ec).
+          .then(async (m) => (!alreadyForwarded && (await m.shouldForwardWebhook(payload)) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
           .catch(() => {});
         try {
           const { waitUntil } = await import("@vercel/functions");
