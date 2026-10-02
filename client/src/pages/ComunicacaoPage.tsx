@@ -20,6 +20,7 @@ import { GoogleAccountCard, useGoogleOAuthReturnToast } from "@/components/Googl
 import { MailThreadView } from "@/components/mail/MailThreadView";
 import { MailComposer } from "@/components/mail/MailComposer";
 import { BrandChip, LinkChip, listTime, waitingLabel } from "@/components/mail/mailUi";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const POLL_MS = 60_000;
 
@@ -68,7 +69,16 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   }, { enabled, refetchInterval: POLL_MS, placeholderData: (p) => p });
 
   const syncMine = trpc.mail.syncMine.useMutation({
-    onSuccess: (r) => { toast.success(r.stored ? `${r.stored} email(s) novos.` : "Sem emails novos."); list.refetch(); overview.refetch(); },
+    // "Sem emails novos" só quando a leitura correu bem (17d: antes dizia-o com a conta em erro).
+    onSuccess: (r) => {
+      const acc = r.accounts[0];
+      if (!r.configured || !acc) toast.error("A tua conta Google não está ligada ao Gmail — liga-a no cartão acima.");
+      else if (acc.status === "locked") toast.info("Já está a sincronizar — tenta daqui a pouco.");
+      else if (acc.status === "reauth_required" || acc.status === "disconnected") toast.error("A ligação ao Google expirou — volta a ligar a conta (cartão acima).");
+      else if (acc.status !== "ok") toast.error(`Não foi possível ler o teu Gmail: ${acc.error ?? acc.status}`);
+      else toast.success(r.stored ? `${r.stored} email(s) novos.` : "Sem emails novos.");
+      list.refetch(); overview.refetch();
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -113,6 +123,15 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   );
 
   if (overview.isLoading) return <div className="p-6"><Loader2 className="h-5 w-5 animate-spin" /></div>;
+  // Erro ≠ "sem acesso" nem "liga a tua conta" (17d).
+  if (overview.error && !overview.data) {
+    return (
+      <div className="space-y-3">
+        {header}
+        <QueryErrorNote error={overview.error} onRetry={() => overview.refetch()} retrying={overview.isFetching} what="as caixas de email" />
+      </div>
+    );
+  }
 
   if (personal && !personalReady && ownerUserId == null) {
     return (
@@ -192,7 +211,8 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
       </div>
       <div className="flex-1 overflow-y-auto">
         {list.isLoading && <div className="p-4"><Loader2 className="h-4 w-4 animate-spin" /></div>}
-        {!list.isLoading && threads.length === 0 && <p className="p-4 text-sm text-muted-foreground">Sem conversas com estes filtros.</p>}
+        {list.error && <div className="p-2"><QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="as conversas" /></div>}
+        {!list.isLoading && !list.error && threads.length === 0 && <p className="p-4 text-sm text-muted-foreground">Sem conversas com estes filtros.</p>}
         {threads.map((t) => {
           const overdue = t.status !== "resolvido" && isMailOverdue(t.awaitingSince, slaHours, now);
           return (

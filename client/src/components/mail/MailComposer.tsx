@@ -2,6 +2,8 @@
 // Envia pela API do Gmail como o alias certo ("Enviar como" verificado no
 // servidor — erro claro se o alias não estiver configurado). Contactos do
 // CRM ao escrever, assinatura por marca, anexos (via /api/upload) e rascunho IA.
+// Cada mensagem leva um código: carregar outra vez em Enviar (erro, rede)
+// nunca manda dois emails iguais ao cliente (17d).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -11,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Loader2, Paperclip, Send, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Loader2, Paperclip, Send, Sparkles, X } from "lucide-react";
 
 export type ComposeMode = "reply" | "replyAll" | "forward" | "new";
 
@@ -24,7 +26,11 @@ export interface ComposeDefaults {
   signature: string;
 }
 
-type Upload = { key: string; filename: string; contentType: string; size: number };
+type Upload = { key: string; filename: string; contentType: string; size: number; ticket: string | null };
+
+/** Código de um envio (um por mensagem escrita). */
+export const newSendRequestId = (): string =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 
 const splitList = (s: string) => s.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
 
@@ -85,13 +91,30 @@ export function MailComposer({
   const [files, setFiles] = useState<Upload[]>([]);
   const [uploading, setUploading] = useState(false);
   const [includeOriginal, setIncludeOriginal] = useState(true);
+  // O mesmo código em todas as tentativas desta mensagem; só muda quando a
+  // pessoa escolhe "Enviar outra vez" depois de um envio sem confirmação.
+  const [requestId, setRequestId] = useState(newSendRequestId);
+  const [uncertain, setUncertain] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { setTimeout(() => { bodyRef.current?.focus(); bodyRef.current?.setSelectionRange(0, 0); }, 0); }, []);
 
   const send = trpc.mail.send.useMutation({
-    onSuccess: (r) => { toast.success("Email enviado."); onSent(r); },
+    onSuccess: (r) => {
+      if (r.uncertain) { setUncertain(true); return; }
+      if (r.duplicate) toast.success("Este email já tinha sido enviado — não saiu outra vez.");
+      else if (r.warning) toast.success(r.warning, { duration: 8_000 });
+      else toast.success("Email enviado.");
+      onSent(r);
+    },
     onError: (e) => toast.error(e.message, { duration: 10_000 }),
+  });
+  const doSend = (id: string) => send.mutate({
+    mode, threadId: threadId ?? null, mailbox: mailbox ?? null, from: from || null,
+    to: splitList(to), cc: splitList(cc), bcc: splitList(bcc), subject: subject.trim() || null, body,
+    attachments: files.map(({ key, filename, contentType, ticket }) => ({ key, filename, contentType, ticket })),
+    includeOriginalAttachments: mode === "forward" ? includeOriginal : undefined,
+    clientRequestId: id,
   });
   const ai = trpc.mail.threads.aiDraft.useMutation({
     onSuccess: (r) => { setBody(`${r.text}${sig}`); toast.success("Rascunho da IA no editor — revê antes de enviar."); },
@@ -109,13 +132,13 @@ export function MailComposer({
         const r = await fetch("/api/upload", { method: "POST", body: fd, credentials: "include" });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j.key) { toast.error(j.error || `Falha a carregar ${f.name}.`); continue; }
-        setFiles((prev) => [...prev, { key: j.key, filename: f.name, contentType: f.type || "application/octet-stream", size: f.size }]);
+        setFiles((prev) => [...prev, { key: j.key, filename: f.name, contentType: f.type || "application/octet-stream", size: f.size, ticket: typeof j.ticket === "string" ? j.ticket : null }]);
       }
     } finally { setUploading(false); }
   }
 
   const title = useMemo(() => ({ reply: "Responder", replyAll: "Responder a todos", forward: "Reencaminhar", new: "Nova mensagem" }[mode]), [mode]);
-  const canSend = !send.isPending && !uploading && splitList(`${to},${cc},${bcc}`).length > 0 && body.trim().length > 0 && (mode !== "new" || subject.trim().length > 0);
+  const canSend = !send.isPending && !uploading && !uncertain && splitList(`${to},${cc},${bcc}`).length > 0 && body.trim().length > 0 && (mode !== "new" || subject.trim().length > 0);
 
   return (
     <div className="space-y-2">
@@ -165,13 +188,23 @@ export function MailComposer({
           ))}
         </div>
       )}
+      {uncertain && (
+        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-2 text-xs text-amber-900 dark:text-amber-200 space-y-1.5">
+          <div className="flex items-start gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>O Gmail não confirmou o envio — <b>pode ter chegado ao cliente</b>. Vê na pasta Enviados (ou espera uns minutos pela sincronização) antes de enviar outra vez.</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onCancel}>Fechar</Button>
+            <Button size="sm" variant="outline" className="h-auto min-h-7 py-1 text-xs whitespace-normal text-left max-w-full shrink" disabled={send.isPending}
+              onClick={() => { const id = newSendRequestId(); setRequestId(id); setUncertain(false); doSend(id); }}>
+              Confirmei que não saiu — enviar outra vez
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={!canSend} onClick={() => send.mutate({
-          mode, threadId: threadId ?? null, mailbox: mailbox ?? null, from: from || null,
-          to: splitList(to), cc: splitList(cc), bcc: splitList(bcc), subject: subject.trim() || null, body,
-          attachments: files.map(({ key, filename, contentType }) => ({ key, filename, contentType })),
-          includeOriginalAttachments: mode === "forward" ? includeOriginal : undefined,
-        })}>
+        <Button size="sm" disabled={!canSend} onClick={() => doSend(requestId)}>
           {send.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Send className="h-4 w-4 mr-1" />}Enviar
         </Button>
         <label className="inline-flex">

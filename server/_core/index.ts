@@ -83,7 +83,10 @@ async function startServer() {
       const ext = req.file.originalname?.split(".").pop() || "bin";
       const key = `uploads/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
       const { url } = await storagePut(key, req.file.buffer, req.file.mimetype);
-      return res.json({ url, key });
+      // Recibo: prova que foi esta pessoa que carregou (anexos de email, 17d).
+      const { uploadTicket } = await import("../uploadTicket");
+      const uid = Number(req.sessionUser?.id);
+      return res.json({ url, key, ...(uid ? { ticket: uploadTicket(uid, key) } : {}) });
     } catch (err: any) {
       console.error("[Upload] Error:", err);
       return res.status(500).json({ error: err.message || "Upload failed" });

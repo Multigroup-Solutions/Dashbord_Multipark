@@ -649,6 +649,10 @@ function DashboardLayoutContent({
                                 >
                                   <item.icon className="h-4 w-4" />
                                   <span>{item.label}</span>
+                                  {showMailBadge && mailBadgeQ.error && !mailBadgeQ.data && (item.path === "/comunicacao" || item.path === "/comunicacao/meu-email") && (
+                                    <span className="ml-auto group-data-[collapsible=icon]:hidden min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold leading-5 text-center text-amber-900 bg-amber-200"
+                                      title="Não foi possível contar os emails por ler">?</span>
+                                  )}
                                   {mailBadgeFor(item.path) > 0 && (
                                     <span className="ml-auto group-data-[collapsible=icon]:hidden min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold leading-5 text-center text-white bg-primary"
                                       title={`${mailBadgeFor(item.path)} conversa(s) com emails por ler`}>

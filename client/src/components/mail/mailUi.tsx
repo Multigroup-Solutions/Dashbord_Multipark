@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { MAIL_BRAND_LABELS, MAIL_LINK_LABELS, isMailBrand, type MailLinkType } from "@shared/mail";
+import { lisbonDayOf } from "@shared/lisbonDay";
 
 /** Data da BD (UTC "YYYY-MM-DD HH:MM:SS") → Date. */
 export function dbDate(s: string | null | undefined): Date | null {
@@ -11,18 +12,19 @@ export function dbDate(s: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** HH:MM hoje, senão DD/MM (lista). */
+/** HH:MM hoje, senão DD/MM (lista) — em hora de Lisboa, seja qual for o fuso do aparelho (17d). */
 export function listTime(s: string | null | undefined, now = Date.now()): string {
   const d = dbDate(s);
   if (!d) return "";
-  const t = new Date(now);
-  const same = d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
-  return same ? d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" }) : d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
+  const same = lisbonDayOf(d) === lisbonDayOf(now);
+  return same
+    ? d.toLocaleTimeString("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "2-digit" });
 }
 
 export function fullTime(s: string | null | undefined): string {
   const d = dbDate(s);
-  return d ? d.toLocaleString("pt-PT", { dateStyle: "short", timeStyle: "short" }) : "";
+  return d ? d.toLocaleString("pt-PT", { timeZone: "Europe/Lisbon", dateStyle: "short", timeStyle: "short" }) : "";
 }
 
 /** "há 3 h" / "há 2 d". */

@@ -536,7 +536,8 @@ describe("HTML dos emails", () => {
   });
   it("imagens remotas bloqueadas por omissão; 'Mostrar imagens' carrega-as; cid: resolvido para data:", () => {
     const blocked = sanitizeEmailHtml(dirty);
-    expect(blocked.blockedImages).toBe(1);
+    // 17d: a imagem cid: por resolver também conta (senão não havia "Mostrar imagens" para ela).
+    expect(blocked.blockedImages).toBe(2);
     expect(blocked.html).not.toContain("track.example");
     const shown = sanitizeEmailHtml(dirty, { showImages: true, cidMap: { logo1: "data:image/png;base64,AAAA" } });
     expect(shown.html).toContain("https://track.example/pixel.gif");

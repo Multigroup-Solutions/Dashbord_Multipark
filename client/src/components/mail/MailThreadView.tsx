@@ -20,6 +20,7 @@ import {
 import { BrandChip, EmailHtmlFrame, MAIL_LINK_HREF, fullTime } from "./mailUi";
 import { MailComposer, type ComposeMode } from "./MailComposer";
 import { TriagePanel } from "./TriagePanel";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 function LinksPanel({ threadId, links, canAct, onChanged }: {
   threadId: number;
@@ -81,7 +82,8 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
   const markRead = trpc.mail.threads.markRead.useMutation({ onSuccess: () => { onChanged(); utils.mail.badge.invalidate(); } });
   const setStatus = trpc.mail.threads.setStatus.useMutation({ onSuccess: () => { q.refetch(); onChanged(); }, onError: (e) => toast.error(e.message) });
   const assign = trpc.mail.threads.assign.useMutation({ onSuccess: () => { q.refetch(); onChanged(); }, onError: (e) => toast.error(e.message) });
-  const assignees = trpc.mail.threads.assignees.useQuery({ mailbox: t?.mailbox?.key ?? "" }, { enabled: !!t?.mailbox && !!t?.canAct, staleTime: 10 * 60_000 });
+  // Só quem responde nesta caixa E vê a cidade desta conversa (17d).
+  const assignees = trpc.mail.threads.assignees.useQuery({ mailbox: t?.mailbox?.key ?? "", threadId }, { enabled: !!t?.mailbox && !!t?.canAct, staleTime: 10 * 60_000 });
 
   useEffect(() => { setShowImages(false); setCompose(null); }, [threadId]);
   useEffect(() => {
@@ -90,7 +92,14 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
   }, [t?.thread.id, t?.thread.unreadCount]);
 
   if (q.isLoading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
-  if (q.error || !t) return <div className="flex-1 p-4 text-sm text-muted-foreground">{q.error?.message ?? "Conversa não encontrada."}</div>;
+  if (q.error || !t) {
+    return (
+      <div className="flex-1 p-4 space-y-2">
+        {onBack && <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft className="h-4 w-4 mr-1" />Voltar</Button>}
+        {q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="a conversa" /> : <p className="text-sm text-muted-foreground">Conversa não encontrada.</p>}
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 min-w-0 flex flex-col">

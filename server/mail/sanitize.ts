@@ -4,8 +4,10 @@
  *  - estilos inline só com propriedades conhecidas e SEM url()/expression();
  *  - links abrem noutro separador (noopener noreferrer), só http/https/mailto/tel;
  *  - imagens REMOTAS bloqueadas por omissão (pixels de rastreio): ficam sem
- *    `src` até a pessoa carregar em "Mostrar imagens"; `cid:` (inline) só
- *    aparecem quando o servidor as resolve para data: URIs.
+ *    `src` até a pessoa carregar em "Mostrar imagens"; `cid:` (inline — ex.:
+ *    fotos coladas no corpo de um email do iPhone) só aparecem quando o
+ *    servidor as resolve para data: URIs, e enquanto não estão resolvidas
+ *    CONTAM como bloqueadas (senão não havia botão para as ver, 17d).
  * A UI mostra o resultado dentro de um iframe `sandbox` (sem scripts) —
  * duas camadas. PURA.
  */
@@ -64,7 +66,7 @@ export function sanitizeEmailHtml(dirty: string | null | undefined, opts: Saniti
           const cid = src.slice(4).replace(/[<>]/g, "").trim();
           const data = opts.cidMap?.[cid];
           if (data) { next.src = data; inline++; }
-          else { delete next.src; next["data-cid"] = cid; next["data-blocked"] = "1"; }
+          else { delete next.src; next["data-cid"] = cid; next["data-blocked"] = "1"; blocked++; }
         } else if (/^https?:/i.test(src)) {
           if (!opts.showImages) { delete next.src; next["data-blocked"] = "1"; blocked++; }
         } else if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(src)) {

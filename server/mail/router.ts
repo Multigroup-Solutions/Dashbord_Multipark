@@ -51,8 +51,9 @@ export const mailRouter = router({
   }),
 
   badge: protectedProcedure.query(async ({ ctx }) => {
+    // Falha = erro (o menu mostra "?"), nunca "0 por ler" (17d).
     const { mailBadge } = await import("./inbox");
-    try { return await mailBadge(viewerOf(ctx.user as CtxUser)); } catch { return { shared: 0, personal: 0 }; }
+    return mailBadge(viewerOf(ctx.user as CtxUser));
   }),
 
   threads: router({
@@ -94,10 +95,10 @@ export const mailRouter = router({
       await assignThread(viewerOf(ctx.user as CtxUser), input.id, input.userId);
       return { ok: true };
     }),
-    assignees: protectedProcedure.input(z.object({ mailbox: z.string().min(1).max(40) })).query(async ({ ctx, input }) => {
+    assignees: protectedProcedure.input(z.object({ mailbox: z.string().min(1).max(40), threadId: z.number().int().positive().nullish() })).query(async ({ ctx, input }) => {
       sharedGate(ctx.user as CtxUser, input.mailbox);
       const { assigneesFor } = await import("./inbox");
-      return assigneesFor(viewerOf(ctx.user as CtxUser), input.mailbox);
+      return assigneesFor(viewerOf(ctx.user as CtxUser), input.mailbox, input.threadId ?? null);
     }),
     link: protectedProcedure.input(threadId.extend({ type: z.enum(MAIL_LINK_TYPES), entityId: z.string().trim().min(1).max(320) })).mutation(async ({ ctx, input }) => {
       const { linkThread } = await import("./inbox");
@@ -139,8 +140,10 @@ export const mailRouter = router({
       bcc: z.array(z.string().max(320)).max(50).default([]),
       subject: z.string().max(300).nullish(),
       body: z.string().min(1).max(100_000),
-      attachments: z.array(z.object({ key: z.string().max(300), filename: z.string().max(200), contentType: z.string().max(120) })).max(10).default([]),
+      attachments: z.array(z.object({ key: z.string().max(300), filename: z.string().max(200), contentType: z.string().max(120), ticket: z.string().max(64).nullish() })).max(10).default([]),
       includeOriginalAttachments: z.boolean().optional(),
+      /** Código do envio (o editor gera um por mensagem): carregar outra vez nunca manda 2 emails. */
+      clientRequestId: z.string().max(64).nullish(),
     }))
     .mutation(async ({ ctx, input }) => {
       if (input.mode === "new") sharedGate(ctx.user as CtxUser, input.mailbox);
@@ -190,6 +193,7 @@ export const mailRouter = router({
         systemSender: await systemSenderAddress(),
         routingWarnings: await mailRoutingWarningsNow().catch(() => [] as string[]),
         accounts: (await listMailAccountRows()).map((a) => ({ ...a, ownerUserId: userIdOfAccountKey(a.accountKey) })),
+        pipelineFailures: await (await import("./service")).listPipelineFailures(),
         googleUsers,
         env: {
           dwd: dwdConfigured(), oauth: oauthConfigured(), domains: cfg.domains,
@@ -208,15 +212,22 @@ export const mailRouter = router({
       } catch { /* registo */ }
       return { ok: true };
     }),
-    remove: protectedProcedure.input(z.object({ key: z.string().min(1).max(40) })).mutation(async ({ ctx, input }) => {
+    /** "Desativar" (17d): a caixa deixa de sincronizar e sai das listas; as conversas ficam (o super admin continua a vê-las). Nada se apaga. */
+    deactivate: protectedProcedure.input(z.object({ key: z.string().min(1).max(40) })).mutation(async ({ ctx, input }) => {
       superOnly(ctx.user as CtxUser);
-      const { deleteMailbox } = await import("./store");
-      await deleteMailbox(input.key);
+      const { setMailboxActive } = await import("./store");
+      if (!(await setMailboxActive(input.key, false, ctx.user.id))) throw new TRPCError({ code: "NOT_FOUND", message: "Caixa não encontrada." });
       try {
         const { logActivity } = await import("../db");
-        await logActivity({ userId: ctx.user.id, action: "delete", entity: "mail_mailbox", entityId: null, details: `Caixa ${input.key} apagada` } as any);
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "mail_mailbox", entityId: null, details: `Caixa ${input.key} desativada` } as any);
       } catch { /* registo */ }
       return { ok: true };
+    }),
+    /** Emails que deviam ter criado um caso e falharam (17d): voltar a tentar já. */
+    retryPipeline: protectedProcedure.input(z.object({ messageId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      adminOnly(ctx.user as CtxUser);
+      const { retryPipelineMessage } = await import("./service");
+      return retryPipelineMessage(input.messageId, { manual: true });
     }),
     /** Tabela de encaminhamento por alias (admin/super_admin): substitui os endereços das caixas. */
     saveAliases: protectedProcedure

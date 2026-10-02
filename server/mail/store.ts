@@ -91,10 +91,18 @@ export async function saveMailbox(cfg: MailboxConfig, userId: number): Promise<v
   invalidateMailboxCache();
 }
 
-export async function deleteMailbox(key: string): Promise<void> {
+/**
+ * Ativa/desativa uma caixa (17d — antes "Apagar" tirava a configuração e as
+ * conversas ficavam órfãs, fora de qualquer lista). Desativada: não
+ * sincroniza nem aparece a ninguém além do super admin; nada se apaga.
+ */
+export async function setMailboxActive(key: string, active: boolean, userId: number): Promise<boolean> {
   const d = await db();
-  await d.execute(sql`DELETE FROM mail_mailboxes WHERE mailboxKey = ${key}`);
+  const exists = rowsOf(await d.execute(sql`SELECT id FROM mail_mailboxes WHERE mailboxKey = ${key} LIMIT 1`)).length > 0;
+  if (!exists) return false;
+  await d.execute(sql`UPDATE mail_mailboxes SET active = ${active ? 1 : 0}, updatedById = ${userId} WHERE mailboxKey = ${key}`);
   invalidateMailboxCache();
+  return true;
 }
 
 export async function loadBrandDomains(): Promise<Record<string, string[]>> {
