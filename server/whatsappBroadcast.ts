@@ -14,7 +14,8 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, whatsappBroadcasts, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { NO_AUTO_WHATSAPP_ERROR } from "../shared/contactPrefs";
-import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, optedOutPhones, reserveOutboundMessage, sqlLaterTs } from "./whatsappStore";
+import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, optedOutPhones, reserveOutboundMessage, sqlLaterTs, unreachablePhones } from "./whatsappStore";
+import { FORM_TOKEN_PLACEHOLDER, UNREACHABLE_ERROR } from "./whatsappFailurePolicy";
 import { normalizePhoneE164 } from "../shared/phone";
 import {
   findActiveEmployeeByPhoneE164,
@@ -32,6 +33,7 @@ import {
   findWhatsAppTemplateByName,
   templateHasBodyParams,
   firstNameOf,
+  isTeamRetryTemplate,
   orderBodyValues,
   previewTemplateBody,
   resolveBodyParamRoles,
@@ -348,6 +350,9 @@ async function sendOne(
     /** Motivo de a inspeção do template não estar disponível (anexado ao erro). */
     metaUnavailableReason?: string | null;
     clientRequestId?: string | null;
+    /** 0375: categoria do template (metadados) e payload da nova tentativa (mensagens de equipa). */
+    category?: string | null;
+    sendPayload?: string | null;
   },
 ): Promise<BroadcastRecipient> {
   const phoneE164 = r.phoneE164!; // garantido pelo chamador
@@ -356,7 +361,15 @@ async function sendOne(
   // bolha e no preview da lista de conversas. A linha fica gravada ANTES de
   // chamar a Meta (17a): sem resposta dela fica "sem confirmação", não "falhou".
   const row = { conversationId, type: "template" as const, body: cfg.body || null, templateName: cfg.templateName };
-  const reserved = await reserveOutboundMessage(db, { ...row, sentById: cfg.sentById, broadcastId: cfg.broadcastId, clientRequestId: cfg.clientRequestId ?? null });
+  const reserved = await reserveOutboundMessage(db, {
+    ...row,
+    sentById: cfg.sentById,
+    broadcastId: cfg.broadcastId,
+    clientRequestId: cfg.clientRequestId ?? null,
+    language: cfg.languageCode,
+    category: cfg.category ?? null,
+    sendPayload: cfg.sendPayload ?? null,
+  });
   if (!reserved.reserved) {
     const dup = duplicateRequestOutcome(reserved.existing);
     return dup.kind === "sent"
@@ -368,7 +381,7 @@ async function sendOne(
   // contarem exactamente a mesma história.
   const error = res.ok ? null : withMetaHint(res.error, cfg.metaUnavailableReason ?? null);
   try {
-    await finishOutboundMessage(db, reserved.id, row, res.ok ? res : { ok: false, error: error!, uncertain: res.uncertain });
+    await finishOutboundMessage(db, reserved.id, row, res.ok ? res : { ok: false, error: error!, uncertain: res.uncertain, code: res.code });
   } catch (err: any) {
     // A Meta já respondeu: o resultado conta na mesma (a linha fica 'pending').
     console.warn("[WhatsApp] gravar o resultado do envio falhou:", String(err?.message ?? err).slice(0, 160));
@@ -398,6 +411,8 @@ interface DispatchConfig {
   sentById: number | null;
   /** Números com opt-out (STOP) — nunca recebem nada. */
   optedOut: Set<string>;
+  /** Números "sem WhatsApp" (2× 131026 seguidos, 0375) — sem templates até escreverem. */
+  unreachable: Set<string>;
   /** Fichas com "Não enviar WhatsApp" (17g) — nunca recebem envios em massa. */
   noAutoEmployees?: Set<number>;
   /** {{1}} quando o destinatário não tem nome utilizável ("Teste" só no modo teste). */
@@ -440,6 +455,10 @@ async function dispatchOne(
   // Opt-out ganha a tudo: nem token, nem conversa nova, nem chamada à Meta.
   if (r.phoneE164 && cfg.optedOut.has(r.phoneE164)) {
     return { ...r, status: "opted_out", error: OPTED_OUT_ERROR };
+  }
+  // 2× 131026 seguidos (0375): repetir não resolve — volta quando a pessoa escrever.
+  if (r.phoneE164 && cfg.unreachable.has(r.phoneE164)) {
+    return { ...r, status: "failed", error: UNREACHABLE_ERROR };
   }
   // "Não enviar WhatsApp" na ficha (17g): o mesmo efeito do STOP, com o motivo certo.
   if (r.employeeId != null && cfg.noAutoEmployees?.has(r.employeeId)) {
@@ -499,7 +518,26 @@ async function dispatchOne(
     sentById: cfg.sentById,
     metaUnavailableReason: cfg.metaUnavailableReason,
     clientRequestId: requestId,
+    category: cfg.analysis?.category ?? null,
+    sendPayload: teamSendPayload(cfg, r, params, buttonToken),
   });
+}
+
+/**
+ * O que é preciso para repetir uma mensagem de EQUIPA retida por 131049
+ * (whatsappFailurePolicy): língua e components, com o token do formulário
+ * trocado por um marcador — o token verdadeiro nunca fica na BD e a nova
+ * tentativa emite um novo. null para tudo o resto.
+ */
+function teamSendPayload(cfg: DispatchConfig, r: ResolvedRecipient, params: string[], buttonToken: string | undefined): string | null {
+  if (!isTeamRetryTemplate(cfg.templateName) || r.employeeId == null) return null;
+  const components = buildComponents({
+    analysis: cfg.analysis,
+    values: params,
+    roles: cfg.roles,
+    buttonToken: buttonToken ? FORM_TOKEN_PLACEHOLDER : undefined,
+  });
+  return JSON.stringify({ languageCode: cfg.languageCode, components, formWeekStart: buttonToken ? cfg.weekStart : null });
 }
 
 async function updateBroadcastCounts(
@@ -546,6 +584,8 @@ interface PreparedSend {
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>;
   /** Números com opt-out, lidos 1× por envio. */
   optedOut: Set<string>;
+  /** Números "sem WhatsApp" (0375), lidos 1× por envio. */
+  unreachable: Set<string>;
 }
 
 /**
@@ -626,7 +666,8 @@ async function prepareSend(opts: {
   if (!db) throw new Error("Base de dados indisponível.");
 
   const optedOut = await optedOutPhones(db);
-  return { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db, optedOut };
+  const unreachable = await unreachablePhones(db);
+  return { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db, optedOut, unreachable };
 }
 
 /**
@@ -720,6 +761,7 @@ function baseDispatch(prep: PreparedSend, broadcastId: number, sentById: number 
     broadcastId,
     sentById,
     optedOut: prep.optedOut,
+    unreachable: prep.unreachable,
     fallbackName,
   };
 }

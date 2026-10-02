@@ -31,7 +31,7 @@ palavras: tarefa, tarefas, as minhas tarefas, quadro, nova tarefa, responsável,
 
 **Avisos de atraso e conclusão** (de hora a hora)
 1. **Tarefas criadas à mão**: quando passam o prazo avisam no sino quem a criou, os gestores do centro de custos e os responsáveis; quem a criou recebe também email. Quando alguém a conclui, quem a criou é avisado.
-2. **Tarefas automáticas** (checklists, serviços, disponibilidade, fichas sem cidade): só com o interruptor **Avisos de atraso das tarefas automáticas** ligado (Definições → Automações; vem desligado). Avisa no sino os responsáveis e o **supervisor da cidade** (um resumo por cidade). Ninguém recebe email.
+2. **Tarefas automáticas** (checklists, serviços, disponibilidade, fichas sem cidade): com o interruptor **Avisos de atraso das tarefas automáticas** ligado (Definições → Automações; vem ligado). Só avisa as que passaram o prazo há menos de 48 h; as mais antigas ficam marcadas sem aviso. Avisa no sino os responsáveis e o **supervisor da cidade** (um resumo por cidade). Ninguém recebe email.
 3. Os avisos correm de hora a hora mesmo com a automação dos extras desligada; **Verificar agora** (só admin) corre-os já.
 
 **Tarefas dos serviços das reservas** (automáticas)

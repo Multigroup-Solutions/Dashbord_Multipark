@@ -78,7 +78,7 @@ export interface TaskListFilters {
 /** Team leader: quem é (users.id) e as fichas da equipa (ele incluído). */
 export interface TeamFilter { userId: number; employeeIds: readonly number[] }
 
-/** Arquivadas (0375) não aparecem em lado nenhum — só os geradores as veem. */
+/** Arquivadas (0376) não aparecem em lado nenhum — só os geradores as veem. */
 export const notArchived = (): SQL => sql`${tasks.archivedAt} IS NULL`;
 
 /**
@@ -242,7 +242,7 @@ export async function notAssignable(ids: ReadonlyArray<number | null | undefined
 }
 
 /**
- * "Eliminar" = ARQUIVAR (0375): a tarefa sai das listas, dos contadores, dos
+ * "Eliminar" = ARQUIVAR (0376): a tarefa sai das listas, dos contadores, dos
  * avisos e do Google, mas a linha (responsáveis e comentários incluídos) fica,
  * e os geradores (checklists, serviços) não a voltam a criar. Idempotente.
  */
@@ -280,11 +280,17 @@ async function defaultNotifyCity(n: { projectId: number; title: string; body: st
   await notify({ kind: "task_overdue_city", projectId: n.projectId, title: n.title, body: n.body, link: n.link, entity: { type: "task_overdue_city", id: n.entityId } });
 }
 
-/** Interruptor dos avisos de atraso das automáticas (lido fresco; desligado por omissão). */
+/** Interruptor dos avisos de atraso das automáticas (lido fresco; ligado por omissão — Jorge, 2 out 2026). */
 async function autoOverdueNoticesOn(): Promise<boolean> {
   const { automationFlagDefault } = await import("../shared/appSettings");
   return isFeatureEnabled("TASKS_AUTO_OVERDUE", { defaultEnabled: automationFlagDefault("TASKS_AUTO_OVERDUE") });
 }
+
+/**
+ * Automáticas que passaram o prazo há mais do que isto ficam marcadas sem
+ * aviso: ao ligar (ou no 1.º deploy) não chega uma enxurrada de atrasos velhos.
+ */
+export const AUTO_OVERDUE_NOTICE_MAX_AGE_MS = 48 * 3600_000;
 
 export interface TaskNotificationsReport { overdue: number; completed: number; silenced: number; details: string[] }
 
@@ -294,7 +300,8 @@ export interface TaskNotificationsReport { overdue: number; completed: number; s
  *    disser: nas manuais, criador + gestores da hierarquia (in-app; email ao
  *    criador) + responsáveis; nas automáticas (P3 18a), só os responsáveis e
  *    um resumo por cidade ao supervisor, no sino, com TASKS_AUTO_OVERDUE
- *    ligado — desligado, ficam marcadas sem aviso;
+ *    ligado (por omissão) — desligado, ou com o prazo passado há > 48 h,
+ *    ficam marcadas sem aviso;
  *  - concluída → criador (in-app + email), exceto se foi ele a concluir.
  * Cada tarefa só avisa 1× (notifiedOverdue/notifiedComplete). Arquivadas não avisam.
  */
@@ -335,7 +342,9 @@ export async function runTaskNotifications(
     // Marca primeiro (claim): duas corridas em paralelo não avisam 2×.
     const res: any = await db.update(tasks).set({ notifiedOverdue: 1 }).where(and(eq(tasks.id, t.id), sql`COALESCE(${tasks.notifiedOverdue}, 0) = 0`));
     if (Number(res?.[0]?.affectedRows ?? res?.affectedRows ?? 1) === 0) continue;
-    const aud = overdueAudience(t, hierarchyManagerIds(allProjects, t.projectId), autoOn);
+    const deadlineMs = taskDeadlineMs(t);
+    const stale = isAutomaticTask(t) && deadlineMs != null && nowMs - deadlineMs > AUTO_OVERDUE_NOTICE_MAX_AGE_MS;
+    const aud = overdueAudience(t, hierarchyManagerIds(allProjects, t.projectId), autoOn && !stale);
     if (!aud.assignees && !aud.managers.length) {
       // Automática com os avisos desligados: fica marcada (não avisa mais tarde em bloco).
       out.silenced++; out.details.push(`Em atraso (automática, sem aviso): ${t.title}`);
@@ -344,8 +353,7 @@ export async function runTaskNotifications(
     const link = `/tarefas?focus=${t.id}`;
     const people = byTask.get(t.id) ?? [];
     const names = people.map((p) => p.fullName).join(", ") || "sem responsável";
-    const deadline = taskDeadlineMs(t);
-    const when = deadline ? new Date(deadline - 1).toLocaleDateString("pt-PT", { timeZone: "Europe/Lisbon" }) : "?";
+    const when = deadlineMs ? new Date(deadlineMs - 1).toLocaleDateString("pt-PT", { timeZone: "Europe/Lisbon" }) : "?";
     const body = `A tarefa "${t.title}" passou o prazo (${when}). Responsáveis: ${names}.`;
     const managers = new Set<number>(aud.managers);
     for (const userId of managers) {
