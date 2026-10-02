@@ -108,7 +108,10 @@ export function buildEvaluationIdentity(input: EvaluationIdentityInput): Evaluat
   };
 }
 
-/** Carrega o resolvedor com os dados da BD (todas as fichas, sem âmbito de cidade). */
+/** Motivo de desativação da ficha que sai de uma junção (server/employeeMerge.ts). */
+export const MERGED_FICHA_REASON = "ficha_duplicada";
+
+/** Carrega o resolvedor com os dados da BD (todas as fichas, sem âmbito de cidade, sem as que foram juntas a outra). */
 export async function loadEvaluationIdentity(): Promise<{ identity: EvaluationIdentity; employees: EvaluationEmployee[] }> {
   const { getDb, listAgentPartners, listIgnoredAgents } = await import("./db");
   const { listAgentAliases, listAllAliases } = await import("./employeeAliases");
@@ -118,7 +121,12 @@ export async function loadEvaluationIdentity(): Promise<{ identity: EvaluationId
     ? (await db.select({
         id: employees.id, fullName: employees.fullName, userId: employees.userId,
         multiparkAgentName: employees.multiparkAgentName, multiparkAgentUserId: employees.multiparkAgentUserId,
-      }).from(employees)).map((e) => ({
+        deactivationReason: employees.deactivationReason,
+      }).from(employees))
+      // A ficha que saiu de uma junção fica com o mesmo nome da que ficou: contada
+      // aqui, tornava o nome "homónimo" e a pessoa deixava de ligar pelo nome.
+      .filter((e) => e.deactivationReason !== MERGED_FICHA_REASON)
+      .map((e) => ({
         id: e.id, fullName: e.fullName, userId: e.userId ?? null,
         multiparkAgentName: e.multiparkAgentName ?? null, multiparkAgentUserId: e.multiparkAgentUserId ?? null,
       }))

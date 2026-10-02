@@ -4,7 +4,11 @@ export interface CityAccess { all: boolean; defaultCityId: number | null; cityNa
 
 export function isPersonalAccessPath(path: string): boolean {
   return ['auth.me', 'auth.logout', 'permissions.mine', 'permissions.catalog', 'permissions.myCityAccess', 'projects.list',
-    'rh.me', 'rh.timeRecords.myStatus'].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
+    'rh.me', 'rh.timeRecords.myStatus',
+    // O que é de cada um (a ficha vem da sessão): sem centro de custos também.
+    'extrasAvailability.myWeek', 'extrasAvailability.setMyWeek', 'extrasAvailability.weekHints',
+    'evaluation.mine', 'evaluation.disputes.create',
+  ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 
 /** Rejeita filtros explícitos fora da cidade, mesmo que sejam enviados sem a interface. */

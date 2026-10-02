@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { trpc } from "@/lib/trpc";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -32,6 +33,7 @@ import {
   HANDOVER_CITY_LABELS,
   HANDOVER_EDIT_WINDOW_MINUTES,
   allowedHandoverCities,
+  canEditOldHandover,
   defaultHandoverCity,
   findPersonShift,
   maxHandoverDate,
@@ -46,6 +48,8 @@ import {
   SHIFT_LABELS,
   materialExceptionsFor,
   mergeCarryOver,
+  previousShiftOf,
+  shiftSince,
   withNoteItems,
   type ComplianceStatus,
   type MaterialException,
@@ -68,8 +72,11 @@ const CITY_LABELS: Record<string, string> = HANDOVER_CITY_LABELS;
 const LAST_CITY_KEY = "mp.handover.lastCity";
 
 /** Cidade da página: só as do centro de custos; uma → essa, várias → a última usada. */
-function useHandoverCity(): { city: HandoverCity | null; allowed: HandoverCity[]; setCity: (c: HandoverCity) => void; loading: boolean } {
-  const { data: access, isLoading } = trpc.permissions.myCityAccess.useQuery();
+function useHandoverCity(): {
+  city: HandoverCity | null; allowed: HandoverCity[]; setCity: (c: HandoverCity) => void; loading: boolean;
+  error: { message: string } | null; retry: () => void; retrying: boolean;
+} {
+  const { data: access, isLoading, error, refetch, isFetching } = trpc.permissions.myCityAccess.useQuery();
   const allowed = allowedHandoverCities(access);
   const [lastUsed, setLastUsed] = useState<string | null>(() => {
     try { return localStorage.getItem(LAST_CITY_KEY); } catch { return null; }
@@ -79,7 +86,7 @@ function useHandoverCity(): { city: HandoverCity | null; allowed: HandoverCity[]
     setLastUsed(c);
     try { localStorage.setItem(LAST_CITY_KEY, c); } catch { /* armazenamento indisponível */ }
   };
-  return { city, allowed, setCity, loading: isLoading };
+  return { city, allowed, setCity, loading: isLoading, error: error ?? null, retry: () => { void refetch(); }, retrying: isFetching };
 }
 
 function CitySelect({ city, allowed, onChange }: { city: HandoverCity | null; allowed: HandoverCity[]; onChange: (c: HandoverCity) => void }) {
@@ -124,6 +131,10 @@ export default function ShiftHandoverPage() {
   const { user } = useAuth();
   // "Resumo do dia": supervisor e acima (o team leader preenche e lê, mas não o vê).
   const isSupervisor = can(user, "passagem_resumo_dia", "view");
+  // Preencher, gerar o resumo e "Recebi" pedem a edição (o servidor exige o mesmo).
+  const canEdit = can(user, "passagem_turno", "edit");
+  // Passagens com mais de 24h: a MESMA regra do servidor.
+  const canEditOld = canEditOldHandover(user);
   const [tab, setTab] = usePersistedState("handover.tab", "preencher");
   const cityState = useHandoverCity();
 
@@ -137,18 +148,23 @@ export default function ShiftHandoverPage() {
           <TabsTrigger value="historico"><History className="w-4 h-4 mr-1" />Histórico</TabsTrigger>
           {isSupervisor && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Resumo do dia</TabsTrigger>}
         </TabsList>
-        {cityState.loading ? <p className="text-sm text-muted-foreground mt-4">A carregar…</p> : !cityState.city ? (
+        {cityState.loading ? <p className="text-sm text-muted-foreground mt-4">A carregar…</p> : cityState.error ? (
+          <div className="mt-4"><QueryErrorNote error={cityState.error} onRetry={cityState.retry} retrying={cityState.retrying} what="as tuas cidades" /></div>
+        ) : !cityState.city ? (
           <Card className="mt-4"><CardContent className="p-8 text-center text-muted-foreground">Sem cidade atribuída — pede a um administrador para associar o teu centro de custos.</CardContent></Card>
         ) : (
           <>
-            <TabsContent value="preencher"><HandoverForm cityState={cityState as CityState} isSupervisor={isSupervisor} userId={user?.id ?? null} /></TabsContent>
+            {/* Fica montado ao mudar de separador: o que se escreveu não se perde. */}
+            <TabsContent value="preencher" forceMount className="data-[state=inactive]:hidden">
+              <HandoverForm cityState={cityState as CityState} canEdit={canEdit} canEditOld={canEditOld} userId={user?.id ?? null} />
+            </TabsContent>
             <TabsContent value="aovivo">
               <ShiftHandoverLiveState
                 city={(cityState as CityState).city}
                 citySelect={<div><Label className="text-xs mb-1 block">Cidade</Label><CitySelect city={cityState.city} allowed={cityState.allowed} onChange={cityState.setCity} /></div>}
               />
             </TabsContent>
-            <TabsContent value="historico"><HandoverHistory cityState={cityState as CityState} userId={user?.id ?? null} /></TabsContent>
+            <TabsContent value="historico"><HandoverHistory cityState={cityState as CityState} userId={user?.id ?? null} canEdit={canEdit} /></TabsContent>
             {isSupervisor && <TabsContent value="dashboard"><SupervisorDashboard cityState={cityState as CityState} /></TabsContent>}
           </>
         )}
@@ -188,27 +204,61 @@ function formFromRecord(existing: any): FormState {
   };
 }
 
-function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityState; isSupervisor: boolean; userId: number | null }) {
+function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: CityState; canEdit: boolean; canEditOld: boolean; userId: number | null }) {
   const utils = trpc.useUtils();
-  const { city, allowed, setCity } = cityState;
+  const { allowed } = cityState;
+  // A cidade do formulário é dele: mudar a cidade noutro separador não deita
+  // fora o que está por gravar (só segue a da página quando não há alterações).
+  const [city, setCityLocal] = useState<HandoverCity>(cityState.city);
   // Turno operacional em Lisboa (01:30 → noite do dia anterior)
   const [date, setDate] = useState(() => operationalShift().date);
   const [shift, setShift] = useState<HandoverShift>(() => operationalShift().shift);
   const maxDate = maxHandoverDate();
 
-  const [f, setF] = useState<FormState>(EMPTY_FORM);
+  // Alterações por gravar: os setters "de quem escreve" marcam; os efeitos
+  // (carregar o registo, juntar pendentes) usam os *Raw e não contam.
+  const [dirty, setDirty] = useState(false);
+  const touch = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => { setDirty(true); fn(...a); };
+  const [f, setFRaw] = useState<FormState>(EMPTY_FORM);
+  const setF = touch(setFRaw);
   // Fardamento: linhas em rascunho (qty como texto enquanto se escreve). O
   // "Número de fardas" antigo deixou de se pedir (e saiu da API): o servidor
   // já não mexe no valor dos registos anteriores a 2026-09-09.
-  const [clothing, setClothing] = useState<ClothingDraftRow[]>([]);
+  const [clothing, setClothingRaw] = useState<ClothingDraftRow[]>([]);
+  const setClothing = touch(setClothingRaw);
   // Material simplificado: "Material OK?" + exceções (canetas/rolos/bateria).
-  const [materialOk, setMaterialOk] = useState<boolean | null>(null);
-  const [materialExc, setMaterialExc] = useState<MaterialExceptionItem[]>([]);
+  const [materialOk, setMaterialOkRaw] = useState<boolean | null>(null);
+  const setMaterialOk = touch(setMaterialOkRaw);
+  const [materialExc, setMaterialExcRaw] = useState<MaterialExceptionItem[]>([]);
+  const setMaterialExc = touch(setMaterialExcRaw);
   // Pendentes que passam de turno (carry-over) e resumo IA.
-  const [openItems, setOpenItems] = useState<OpenItem[]>([]);
+  const [openItems, setOpenItemsRaw] = useState<OpenItem[]>([]);
+  const setOpenItems = touch(setOpenItemsRaw);
   const [aiText, setAiText] = useState<string | null>(null);
   const [carriedKey, setCarriedKey] = useState<string | null>(null);
+  // Gravar mesmo sem conseguir ler os pendentes do turno anterior (escolha explícita).
+  const [saveWithoutPrev, setSaveWithoutPrev] = useState(false);
   const cityFields = HANDOVER_CITY_FIELDS[city];
+
+  useEffect(() => {
+    if (!dirty && cityState.city !== city) setCityLocal(cityState.city);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cityState.city]);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  /** Mudar de dia/turno/cidade ou recarregar deita fora o que não foi gravado: pergunta antes. */
+  const okToDiscard = () => !dirty || window.confirm("Tens alterações por gravar nesta passagem. Se mudares agora, perdes-as. Continuar?");
+
+  // Turno atual ou o que acabou agora: só nesses o rascunho (que é de AGORA)
+  // entra na passagem. Num turno antigo herdam-se só os pendentes da passagem anterior.
+  const op = operationalShift();
+  const opPrev = previousShiftOf(op);
+  const recent = (date === op.date && shift === op.shift) || (date === opPrev.date && shift === opPrev.shift);
+  const since = shiftSince({ date, shift });
 
   // Carrega o registo existente do (dia, turno, cidade) ANTES de deixar
   // escrever: os campos ficam bloqueados até a leitura acabar, e só se
@@ -223,35 +273,49 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
   const [loaded, setLoaded] = useState<any>(null);
   useEffect(() => {
     if (loadedKey === formKey || !existingQ.isSuccess || existingQ.isFetching) return;
-    setF(formFromRecord(existing));
-    setClothing(((existing?.clothingItems ?? []) as ClothingItem[]).map(toDraftRow));
+    setFRaw(formFromRecord(existing));
+    setClothingRaw(((existing?.clothingItems ?? []) as ClothingItem[]).map(toDraftRow));
     setLoadedVersion(existing ? Number(existing.version ?? 1) : null);
     setLoaded(existing ?? null);
-    setMaterialOk(existing?.materialOk == null ? null : !!existing.materialOk);
-    setMaterialExc((existing?.materialExceptions ?? []) as MaterialExceptionItem[]);
-    setOpenItems((existing?.openItems ?? []) as OpenItem[]);
+    setMaterialOkRaw(existing?.materialOk == null ? null : !!existing.materialOk);
+    setMaterialExcRaw((existing?.materialExceptions ?? []) as MaterialExceptionItem[]);
+    setOpenItemsRaw((existing?.openItems ?? []) as OpenItem[]);
     setAiText(existing?.aiSummary ?? null);
     setCarriedKey(null);
+    setSaveWithoutPrev(false);
+    setDirty(false);
     setLoadedKey(formKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formKey, loadedKey, existingQ.isSuccess, existingQ.isFetching, existingQ.dataUpdatedAt]);
   const loading = loadedKey !== formKey;
   const reload = () => { setLoadedKey(null); existingQ.refetch(); };
 
-  // Resumo automático (rascunho) do turno — só leitura.
-  const draftQ = trpc.shiftHandover.draft.useQuery({ date, shift, city }, { staleTime: 60_000, refetchOnWindowFocus: false });
+  // Resumo automático (rascunho) do turno — só leitura (pede a edição).
+  const draftQ = trpc.shiftHandover.draft.useQuery({ date, shift, city }, { enabled: canEdit, staleTime: 60_000, refetchOnWindowFocus: false });
   const draft = draftQ.data ?? null;
-  // Pendentes: junta (1× por chave) os da passagem anterior + os abertos do rascunho aos já gravados.
+  // Pendentes (1× por chave):
+  // - turno atual / que acabou: os da passagem anterior + os abertos de agora, juntos aos já gravados;
+  // - turno antigo e passagem nova: só os da passagem anterior (o "agora" não é desse turno);
+  // - turno antigo já gravado: fica como foi gravado.
   useEffect(() => {
     if (loading || !draft || draftQ.isFetching || carriedKey === formKey) return;
-    setOpenItems((cur) => mergeCarryOver({ previous: [], draft: draft.carryOver as OpenItem[], current: cur }));
-    // Carros p/ coberto: pré-preenchido com o número automático (continua editável).
-    if (draft.coveredCars) setF((prev) => (prev.carsForCovered === "" ? { ...prev, carsForCovered: String(draft.coveredCars.count) } : prev));
+    if (recent) {
+      setOpenItemsRaw((cur) => mergeCarryOver({ previous: [], draft: draft.carryOver as OpenItem[], current: cur, currentSince: since }));
+      // Carros p/ coberto: pré-preenchido com o número automático (continua editável).
+      if (draft.coveredCars && !(draft.failed ?? []).includes("covered cars")) {
+        setFRaw((prev) => (prev.carsForCovered === "" ? { ...prev, carsForCovered: String(draft.coveredCars!.count) } : prev));
+      }
+    } else if (!loaded) {
+      setOpenItemsRaw((cur) => mergeCarryOver({ previous: (draft.previous?.openItems ?? []) as OpenItem[], draft: [], draftKinds: [], current: cur, currentSince: since }));
+    }
     setCarriedKey(formKey);
-  }, [loading, draft, draftQ.isFetching, carriedKey, formKey]);
+  }, [loading, draft, draftQ.isFetching, carriedKey, formKey, recent, loaded, since]);
 
   const ai = trpc.shiftHandover.aiSummary.useMutation({
-    onSuccess: (r) => { setAiText(r.aiSummary); toast.success("Resumo gerado"); },
+    onSuccess: (r) => {
+      setAiText(r.aiSummary);
+      toast.success(r.saved ? "Resumo gerado e guardado na passagem" : "Resumo gerado (não ficou guardado: ao gravar a passagem é gerado de novo)");
+    },
     onError: (e) => toast.error(e.message),
   });
   const ack = trpc.shiftHandover.ack.useMutation({
@@ -280,8 +344,13 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
   const hasNumErrors = Object.values(numErrors).some(Boolean);
   const numVal = (k: NumField) => parseNumField(f[k], NUM_RULES[k]).value;
   const dateTooLate = date > maxDate;
-  const lockedOld = !!loaded && !isSupervisor && loaded.createdAt != null
+  const lockedOld = !!loaded && !canEditOld && loaded.createdAt != null
     && (Date.now() - new Date(loaded.createdAt).getTime()) / 60_000 > HANDOVER_EDIT_WINDOW_MINUTES;
+
+  // Passagem nova: os pendentes do turno anterior TÊM de estar na lista antes
+  // de gravar (senão o turno seguinte herda a lista sem eles e perdem-se).
+  const carryPending = canEdit && !loaded && !draftQ.isError && carriedKey !== formKey;
+  const prevUnknown = canEdit && !loaded && (draftQ.isError || (draft?.failed ?? []).includes("previous"));
 
   const NumInput = ({ k, label, decimal }: { k: NumField; label: string; decimal?: boolean }) => (
     <div>
@@ -304,8 +373,8 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
     <div className="flex items-center justify-between gap-2 border rounded-lg p-2.5">
       <span className="text-sm min-w-0">{label}</span>
       <div className="flex gap-1 shrink-0" role="group" aria-label={label}>
-        <Button type="button" size="sm" variant={value === true ? "default" : "outline"} className="h-7 px-2.5" onClick={() => onChange(true)}>Sim</Button>
-        <Button type="button" size="sm" variant={value === false ? "destructive" : "outline"} className="h-7 px-2.5" onClick={() => onChange(false)}>Não</Button>
+        <Button type="button" size="sm" variant={value === true ? "default" : "outline"} className="h-7 px-2.5" aria-pressed={value === true} onClick={() => onChange(true)}>Sim</Button>
+        <Button type="button" size="sm" variant={value === false ? "destructive" : "outline"} className="h-7 px-2.5" aria-pressed={value === false} onClick={() => onChange(false)}>Não</Button>
       </div>
     </div>
   );
@@ -313,37 +382,47 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
   const blockedReason = loading ? "A carregar o registo…"
     : dateTooLate ? "Não é possível registar passagens para depois de amanhã"
     : lockedOld ? "Passaram mais de 24h — só um supervisor pode alterar"
+    : carryPending ? "A juntar os pendentes do turno anterior…"
+    : prevUnknown && !saveWithoutPrev ? "Não foi possível ler os pendentes do turno anterior — tenta de novo ou confirma que gravas sem eles"
     : hasNumErrors ? "Há valores inválidos" : hasIncompleteClothingRow(clothing) ? "Há peças de fardamento sem quantidade válida" : undefined;
 
   const prev = draft?.previous ?? null;
+  // "Recebi": quem pode preencher, e nunca quem entregou ou editou essa passagem.
+  const canAck = (h: { createdById?: number | null; filledById?: number | null }) =>
+    canEdit && userId != null && h.createdById !== userId && h.filledById !== userId;
   return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-end gap-3">
-          <div><Label className="text-xs mb-1 block">Dia</Label><UniDateNav date={date} onChange={setDate} /></div>
+          <div><Label className="text-xs mb-1 block">Dia</Label><UniDateNav date={date} onChange={(d) => { if (okToDiscard()) setDate(d); }} /></div>
           <div>
             <Label className="text-xs mb-1 block">Turno</Label>
             <div className="flex gap-1">
-              <Button type="button" size="sm" variant={shift === "morning" ? "default" : "outline"} onClick={() => setShift("morning")}><Sun className="w-3.5 h-3.5 mr-1" />Manhã</Button>
-              <Button type="button" size="sm" variant={shift === "night" ? "default" : "outline"} onClick={() => setShift("night")}><Moon className="w-3.5 h-3.5 mr-1" />Noite</Button>
+              <Button type="button" size="sm" variant={shift === "morning" ? "default" : "outline"} aria-pressed={shift === "morning"} onClick={() => { if (shift !== "morning" && okToDiscard()) setShift("morning"); }}><Sun className="w-3.5 h-3.5 mr-1" />Manhã</Button>
+              <Button type="button" size="sm" variant={shift === "night" ? "default" : "outline"} aria-pressed={shift === "night"} onClick={() => { if (shift !== "night" && okToDiscard()) setShift("night"); }}><Moon className="w-3.5 h-3.5 mr-1" />Noite</Button>
             </div>
           </div>
           <div>
             <Label className="text-xs mb-1 block">Cidade</Label>
-            <CitySelect city={city} allowed={allowed} onChange={setCity} />
+            <CitySelect city={city} allowed={allowed} onChange={(c) => { if (c !== city && okToDiscard()) { setCityLocal(c); cityState.setCity(c); } }} />
           </div>
-          {loading && <Badge variant="outline" className="mb-1 gap-1"><Loader2 className="w-3 h-3 animate-spin" />A carregar…</Badge>}
+          {loading && !existingQ.isError && <Badge variant="outline" className="mb-1 gap-1"><Loader2 className="w-3 h-3 animate-spin" />A carregar…</Badge>}
           {!loading && loaded && (
             <Badge variant="outline" className="mb-1 whitespace-normal break-words text-left">
               criada por {loaded.createdByName ?? loaded.filledByName ?? "?"}
-              {loaded.filledByName && loaded.filledByName !== (loaded.createdByName ?? loaded.filledByName) ? ` · última edição: ${loaded.filledByName}` : ""} — a editar
+              {loaded.filledByName && loaded.filledByName !== (loaded.createdByName ?? loaded.filledByName) ? ` · última edição: ${loaded.filledByName}` : ""}{canEdit ? " — a editar" : ""}
             </Badge>
           )}
           {!loading && loaded?.ackAt && <Badge variant="outline" className="mb-1 whitespace-normal break-words text-left border-emerald-300 text-emerald-700">Recebida por {loaded.ackByName ?? "?"}</Badge>}
-          {!loading && <Button type="button" size="sm" variant="ghost" className="mb-0.5" onClick={reload} title="Recarregar o registo guardado"><RefreshCw className="w-3.5 h-3.5" /></Button>}
+          {dirty && !loading && <Badge variant="outline" className="mb-1 border-amber-300 text-amber-700">por gravar</Badge>}
+          {!loading && <Button type="button" size="sm" variant="ghost" className="mb-0.5" onClick={() => { if (okToDiscard()) reload(); }} title="Recarregar o registo guardado" aria-label="Recarregar o registo guardado"><RefreshCw className="w-3.5 h-3.5" /></Button>}
         </div>
+        {existingQ.isError && loading && (
+          <div className="mt-2"><QueryErrorNote error={existingQ.error} onRetry={reload} retrying={existingQ.isFetching} what="o registo deste turno (não se pode preencher sem saber se já existe)" /></div>
+        )}
         {dateTooLate && <p className="text-xs text-red-600 mt-2">Não é possível registar passagens de turno para depois de amanhã.</p>}
         {lockedOld && <p className="text-xs text-amber-700 mt-2">Esta passagem foi criada há mais de 24h — só um supervisor a pode alterar.</p>}
+        {!canEdit && <p className="text-xs text-muted-foreground mt-2">Só consulta: a tua conta não preenche passagens de turno.</p>}
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Passagem que este turno recebeu — "Recebi" do team leader que entra */}
@@ -352,24 +431,44 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <p className="text-sm font-medium">Passagem recebida — {SHIFT_LABELS[prev.shift]} {fmtPTDate(prev.date)}{prev.authorName ? ` · por ${prev.authorName}` : ""}</p>
               {prev.acked ? <Badge variant="outline" className="border-emerald-300 text-emerald-700">Recebida por {prev.ackByName ?? "?"}</Badge>
-                : prev.createdById !== userId ? (
+                : canAck(prev) ? (
                   <Button type="button" size="sm" disabled={ack.isPending} onClick={() => ack.mutate({ id: prev.id, city })}>
                     {ack.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}Recebi
                   </Button>
                 ) : <Badge variant="outline">à espera do "Recebi"</Badge>}
             </div>
+            {(prev.missingShifts ?? 0) > 0 && (
+              <p className="text-xs text-amber-700">É a última passagem que houve: {prev.missingShifts === 1 ? "o turno entre essa e este não fez passagem" : `os ${prev.missingShifts} turnos entre essa e este não fizeram passagem`}. Os pendentes vêm dela.</p>
+            )}
             {prev.aiSummary ? <p className="text-sm whitespace-pre-line">{prev.aiSummary}</p> : prev.notes ? <p className="text-sm text-muted-foreground whitespace-pre-line">{prev.notes}</p> : null}
             {prev.openItems.length > 0 && <p className="text-xs text-amber-700">{prev.openItems.length} pendente(s) por resolver — estão na lista "Pendentes" abaixo.</p>}
           </div>
         )}
-        <ShiftHandoverDraftPanel draft={draft} loading={draftQ.isFetching} onRefresh={() => draftQ.refetch()} />
+        {canEdit && (draftQ.isError
+          ? <QueryErrorNote error={draftQ.error} onRetry={() => draftQ.refetch()} retrying={draftQ.isFetching} what="o resumo automático do turno" />
+          : <ShiftHandoverDraftPanel draft={draft} loading={draftQ.isFetching} onRefresh={() => draftQ.refetch()} past={!recent} />)}
+        {prevUnknown && (
+          <div role="alert" className="border border-amber-300 bg-amber-50/70 dark:bg-amber-950/20 rounded-lg p-3 space-y-2 text-sm">
+            <p className="font-medium text-amber-800 dark:text-amber-200 flex items-center gap-1"><AlertTriangle className="w-4 h-4" />Não foi possível ler os pendentes do turno anterior</p>
+            <p className="text-xs">Se gravares agora, os pendentes da passagem anterior que não estão na lista abaixo não passam ao turno seguinte (continuam na passagem anterior). Tenta de novo daqui a pouco.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="button" size="sm" variant="outline" onClick={() => draftQ.refetch()} disabled={draftQ.isFetching}>
+                <RefreshCw className={`w-3.5 h-3.5 mr-1 ${draftQ.isFetching ? "animate-spin" : ""}`} />Tentar de novo
+              </Button>
+              <label className="flex items-center gap-2 text-xs">
+                <Checkbox checked={saveWithoutPrev} onCheckedChange={(v) => setSaveWithoutPrev(!!v)} />
+                Gravar mesmo assim, sem os pendentes do turno anterior
+              </label>
+            </div>
+          </div>
+        )}
         <HandoverRepeatsCard city={city} />
-        <fieldset disabled={loading} className="space-y-4 disabled:opacity-60">
+        <fieldset disabled={loading || !canEdit} className="space-y-4 disabled:opacity-60">
           {/* Operação */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Operação</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {cityFields.coveredCars && NumInput({ k: "carsForCovered", label: "Carros p/ coberto" })}
-            <div><Label className="text-xs">Carregamentos feitos até (dia)</Label><Input type="date" value={f.chargedUntilDate} onChange={(e) => setF({ ...f, chargedUntilDate: e.target.value })} /></div>
+            <div><Label className="text-xs" htmlFor="ho-chargedUntil">Carregamentos feitos até (dia)</Label><Input id="ho-chargedUntil" type="date" value={f.chargedUntilDate} onChange={(e) => setF({ ...f, chargedUntilDate: e.target.value })} /></div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <YesNo label="Fecho de caixa no cofre" value={f.cashClosedInSafe} onChange={(v) => setF({ ...f, cashClosedInSafe: v })} />
@@ -397,7 +496,7 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
                 const cur = materialExc.find((x) => x.code === code);
                 return (
                   <div key={code} className="flex flex-wrap items-center gap-2">
-                    <label className="flex items-center gap-2 text-sm min-w-[14rem]">
+                    <label className="flex items-center gap-2 text-sm min-w-0 sm:min-w-[14rem]">
                       <Checkbox
                         checked={!!cur}
                         onCheckedChange={(v) => setMaterialExc((l) => (v ? [...l, { code: code as MaterialException, note: null }] : l.filter((x) => x.code !== code)))}
@@ -405,7 +504,7 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
                       {MATERIAL_EXCEPTION_LABELS[code]}
                     </label>
                     {cur && (
-                      <Input className="h-8 flex-1 min-w-[10rem]" maxLength={200} placeholder="detalhe (opcional)" value={cur.note ?? ""}
+                      <Input className="h-8 flex-1 min-w-[10rem]" maxLength={200} placeholder="detalhe (opcional)" aria-label={`Detalhe: ${MATERIAL_EXCEPTION_LABELS[code]}`} value={cur.note ?? ""}
                         onChange={(e) => setMaterialExc((l) => l.map((x) => (x.code === code ? { ...x, note: e.target.value } : x)))} />
                     )}
                   </div>
@@ -432,50 +531,53 @@ function HandoverForm({ cityState, isSupervisor, userId }: { cityState: CityStat
 
           {/* Notas */}
           <div>
-            <Label className="text-xs">Observações / notas</Label>
-            <Textarea rows={3} maxLength={2000} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Tudo o que o turno seguinte precisa de saber… (linhas começadas por '- ' passam a pendentes)" />
+            <Label className="text-xs" htmlFor="ho-notes">Observações / notas</Label>
+            <Textarea id="ho-notes" rows={3} maxLength={2000} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Tudo o que o turno seguinte precisa de saber… (linhas começadas por '- ' passam a pendentes)" />
           </div>
 
           {/* Pendentes que passam de turno */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pendentes para o turno seguinte</p>
-          <OpenItemsEditor items={openItems} onChange={setOpenItems} />
+          <OpenItemsEditor items={openItems} onChange={setOpenItems} currentSince={since} />
 
           <AiSummaryBox
             text={aiText}
-            available
+            available={canEdit && !lockedOld}
             pending={ai.isPending}
             onGenerate={() => ai.mutate({ date, shift, city, notes: f.notes || null, openItems })}
           />
 
-          <Button
-            className="w-full gap-2"
-            disabled={save.isPending || !!blockedReason}
-            title={blockedReason}
-            onClick={() => save.mutate({
-              handoverDate: date, shift, city,
-              expectedVersion: loadedVersion,
-              carsForCovered: numVal("carsForCovered"),
-              chargedUntilDate: f.chargedUntilDate || null,
-              cashClosedInSafe: f.cashClosedInSafe,
-              checkoutCashDone: f.checkoutCashDone,
-              frontPouchValue: numVal("frontPouchValue"),
-              terminalPouchValue: numVal("terminalPouchValue"),
-              ticketsExpensesPaid: numVal("ticketsExpensesPaid"),
-              mbRolls: numVal("mbRolls"),
-              mbRollsInPouch: numVal("mbRollsInPouch"),
-              pensInPouch: numVal("pensInPouch"),
-              mbBattery: numVal("mbBattery"),
-              pdasCharged: f.pdasCharged,
-              materialOk,
-              materialExceptions: materialOk === false ? materialExc.map((x) => ({ code: x.code, note: x.note?.trim() || null })) : [],
-              clothingItems: draftRowsToItems(clothing),
-              notes: f.notes || null,
-              openItems: withNoteItems(openItems, f.notes, `${date} ${shift}`),
-            })}
-          >
-            {save.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-            {loaded ? "Atualizar passagem de turno" : "Guardar passagem de turno"}
-          </Button>
+          {canEdit && (
+            <Button
+              className="w-full gap-2"
+              disabled={save.isPending || !!blockedReason}
+              title={blockedReason}
+              onClick={() => save.mutate({
+                handoverDate: date, shift, city,
+                expectedVersion: loadedVersion,
+                carsForCovered: numVal("carsForCovered"),
+                chargedUntilDate: f.chargedUntilDate || null,
+                cashClosedInSafe: f.cashClosedInSafe,
+                checkoutCashDone: f.checkoutCashDone,
+                frontPouchValue: numVal("frontPouchValue"),
+                terminalPouchValue: numVal("terminalPouchValue"),
+                ticketsExpensesPaid: numVal("ticketsExpensesPaid"),
+                mbRolls: numVal("mbRolls"),
+                mbRollsInPouch: numVal("mbRollsInPouch"),
+                pensInPouch: numVal("pensInPouch"),
+                mbBattery: numVal("mbBattery"),
+                pdasCharged: f.pdasCharged,
+                materialOk,
+                materialExceptions: materialOk === false ? materialExc.map((x) => ({ code: x.code, note: x.note?.trim() || null })) : [],
+                clothingItems: draftRowsToItems(clothing),
+                notes: f.notes || null,
+                openItems: withNoteItems(openItems, f.notes, since),
+              })}
+            >
+              {save.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              {loaded ? "Atualizar passagem de turno" : "Guardar passagem de turno"}
+            </Button>
+          )}
+          {canEdit && blockedReason && !loading && <p className="text-[11px] text-muted-foreground text-center -mt-2">{blockedReason}</p>}
         </fieldset>
       </CardContent>
     </Card>
@@ -552,7 +654,7 @@ function ClothingEditor({ rows, onChange }: { rows: ClothingDraftRow[]; onChange
 }
 
 // ─── HISTÓRICO ───────────────────────────────────────────────────────────────
-function HandoverHistory({ cityState, userId }: { cityState: CityState; userId: number | null }) {
+function HandoverHistory({ cityState, userId, canEdit }: { cityState: CityState; userId: number | null; canEdit: boolean }) {
   const utils = trpc.useUtils();
   const ack = trpc.shiftHandover.ack.useMutation({
     onSuccess: async () => { toast.success("Passagem confirmada (Recebi)"); await utils.shiftHandover.invalidate(); },
@@ -562,8 +664,20 @@ function HandoverHistory({ cityState, userId }: { cityState: CityState; userId: 
   const [days, setDays] = useState(14);
   // Dias de Lisboa (não o relógio/UTC do browser)
   const from = addDays(lisbonDayOf(Date.now()), -days);
-  const { data = [], isLoading } = trpc.shiftHandover.list.useQuery({ from, city });
-  const YN = ({ v }: { v: any }) => v == null ? <span className="text-muted-foreground">—</span> : v ? <CheckCircle2 className="w-4 h-4 text-green-600 inline" /> : <XCircle className="w-4 h-4 text-red-600 inline" />;
+  const listQ = trpc.shiftHandover.list.useQuery({ from, city });
+  const data = listQ.data ?? [];
+  const YN = ({ v }: { v: any }) => v == null ? <span className="text-muted-foreground">—</span> : v ? <CheckCircle2 className="w-4 h-4 text-green-600 inline" aria-label="Sim" /> : <XCircle className="w-4 h-4 text-red-600 inline" aria-label="Não" />;
+  // "Recebi": quem pode preencher, e nunca quem entregou ou editou essa passagem.
+  const canAck = (h: any) => canEdit && userId != null && h.createdById !== userId && h.filledById !== userId;
+  const openOf = (h: any) => ((h.openItems ?? []) as OpenItem[]);
+  const author = (h: any) => (
+    <>{h.createdByName ?? h.filledByName ?? "—"}{h.filledByName && h.createdByName && h.filledByName !== h.createdByName ? <span className="text-muted-foreground"> (editado por {h.filledByName})</span> : null}</>
+  );
+  const ackCell = (h: any, size: "sm" | "card") => h.ackAt
+    ? <span className="text-emerald-700" title={String(h.ackAt)}>✓ {size === "card" ? "Recebida por " : ""}{h.ackByName ?? "?"}</span>
+    : canAck(h)
+      ? <Button type="button" size="sm" variant="outline" className="h-7" disabled={ack.isPending} onClick={() => ack.mutate({ id: h.id, city: h.city })}>Recebi</Button>
+      : <span className="text-muted-foreground">{size === "card" ? "Por receber" : "—"}</span>;
 
   return (
     <div className="space-y-3">
@@ -571,68 +685,95 @@ function HandoverHistory({ cityState, userId }: { cityState: CityState; userId: 
         <CitySelect city={city} allowed={allowed} onChange={setCity} />
         <Label className="text-xs">Últimos</Label>
         <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v))}>
-          <SelectTrigger className="w-28 h-8"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-28 h-8" aria-label="Período"><SelectValue /></SelectTrigger>
           <SelectContent>
             {[7, 14, 30, 60].map((n) => <SelectItem key={n} value={String(n)}>{n} dias</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
-      {isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p> : data.length === 0 ? (
+      {listQ.isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p> : listQ.isError ? (
+        <QueryErrorNote error={listQ.error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="o histórico de passagens" />
+      ) : data.length === 0 ? (
         <Card><CardContent className="p-8 text-center text-muted-foreground">Sem passagens de turno registadas neste período</CardContent></Card>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
-            <thead>
-              <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="p-2">Dia</th>
-                <th className="p-2">Turno</th>
-                <th className="p-2">Cidade</th>
-                <th className="p-2 text-right">Coberto</th>
-                <th className="p-2 text-center">Cofre</th>
-                <th className="p-2 text-center">Caixa de check-out</th>
-                <th className="p-2 text-right">Bolsa front</th>
-                <th className="p-2 text-right">Bolsa term.</th>
-                <th className="p-2 text-right">Rolos</th>
-                <th className="p-2 text-right">Bat. MB</th>
-                <th className="p-2 text-center">PDAs 100%</th>
-                <th className="p-2">Fardamento</th>
-                <th className="p-2">Preenchido por</th>
-                <th className="p-2">Notas</th>
-                <th className="p-2">Pendentes</th>
-                <th className="p-2">Recebida</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((h: any) => (
-                <tr key={h.id} className="border-b hover:bg-muted/30">
-                  <td className="p-2 font-mono text-xs">{h.handoverDate}</td>
-                  <td className="p-2">{h.shift === "morning" ? "☀️ Manhã" : "🌙 Noite"}</td>
-                  <td className="p-2 text-xs">{CITY_LABELS[h.city] ?? h.city}</td>
-                  <td className="p-2 text-right tabular-nums">{h.carsForCovered ?? "—"}</td>
-                  <td className="p-2 text-center"><YN v={h.cashClosedInSafe} /></td>
-                  <td className="p-2 text-center"><YN v={h.checkoutCashDone} /></td>
-                  <td className="p-2 text-right tabular-nums">{h.frontPouchValue != null ? `${Number(h.frontPouchValue).toFixed(2)}€` : "—"}</td>
-                  <td className="p-2 text-right tabular-nums">{h.terminalPouchValue != null ? `${Number(h.terminalPouchValue).toFixed(2)}€` : "—"}</td>
-                  <td className="p-2 text-right tabular-nums">{h.mbRolls ?? "—"}{h.mbRollsInPouch != null ? ` (+${h.mbRollsInPouch})` : ""}</td>
-                  <td className="p-2 text-right tabular-nums">{h.mbBattery != null ? `${h.mbBattery}%` : "—"}</td>
-                  <td className="p-2 text-center"><YN v={h.pdasCharged} /></td>
-                  <td className="p-2 text-xs max-w-[220px] truncate" title={clothingCell(h)}>{clothingCell(h) || "—"}</td>
-                  <td className="p-2 text-xs">{h.createdByName ?? h.filledByName ?? "—"}{h.filledByName && h.createdByName && h.filledByName !== h.createdByName ? <span className="text-muted-foreground"> (editado por {h.filledByName})</span> : null}</td>
-                  <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={h.aiSummary ?? h.notes ?? ""}>{h.notes ?? (h.aiSummary ? "✨ resumo IA" : "—")}</td>
-                  <td className="p-2 text-xs tabular-nums" title={(h.openItems ?? []).filter((i: any) => !i.resolved).map((i: any) => i.text).join("\n")}>
-                    {(h.openItems ?? []).length ? `${(h.openItems ?? []).filter((i: any) => !i.resolved).length} abertos / ${(h.openItems ?? []).length}` : "—"}
-                  </td>
-                  <td className="p-2 text-xs">
-                    {h.ackAt ? <span className="text-emerald-700" title={String(h.ackAt)}>✓ {h.ackByName ?? "?"}</span>
-                      : h.createdById !== userId ? (
-                        <Button type="button" size="sm" variant="outline" className="h-7" disabled={ack.isPending} onClick={() => ack.mutate({ id: h.id, city: h.city })}>Recebi</Button>
-                      ) : <span className="text-muted-foreground">—</span>}
-                  </td>
+        <>
+          {/* Telemóvel: um cartão por passagem (a tabela tem 16 colunas). */}
+          <div className="md:hidden space-y-2">
+            {data.map((h: any) => {
+              const items = openOf(h);
+              const open = items.filter((i) => !i.resolved);
+              return (
+                <Card key={h.id}>
+                  <CardContent className="p-3 space-y-1.5 text-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-medium">{fmtPTDate(h.handoverDate)} · {h.shift === "morning" ? "☀️ Manhã" : "🌙 Noite"} · {CITY_LABELS[h.city] ?? h.city}</p>
+                      <div className="shrink-0 text-xs">{ackCell(h, "card")}</div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Por {author(h)}</p>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                      <span>Cofre <YN v={h.cashClosedInSafe} /></span>
+                      <span>Caixa check-out <YN v={h.checkoutCashDone} /></span>
+                      <span>Bolsa front: {h.frontPouchValue != null ? `${Number(h.frontPouchValue).toFixed(2).replace(".", ",")} €` : "—"}</span>
+                      <span>PDAs 100% <YN v={h.pdasCharged} /></span>
+                      {h.carsForCovered != null && <span>Coberto: {h.carsForCovered}</span>}
+                      {clothingCell(h) && <span className="col-span-2 break-words">Fardamento: {clothingCell(h)}</span>}
+                    </div>
+                    {items.length > 0 && <p className={`text-xs ${open.length ? "text-amber-700" : "text-muted-foreground"}`}>Pendentes: {open.length} abertos / {items.length}</p>}
+                    {(h.notes || h.aiSummary) && <p className="text-xs text-muted-foreground whitespace-pre-line line-clamp-3">{h.notes ?? h.aiSummary}</p>}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-sm min-w-[900px]">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="p-2">Dia</th>
+                  <th className="p-2">Turno</th>
+                  <th className="p-2">Cidade</th>
+                  <th className="p-2 text-right">Coberto</th>
+                  <th className="p-2 text-center">Cofre</th>
+                  <th className="p-2 text-center">Caixa de check-out</th>
+                  <th className="p-2 text-right">Bolsa front</th>
+                  <th className="p-2 text-right">Bolsa term.</th>
+                  <th className="p-2 text-right">Rolos</th>
+                  <th className="p-2 text-right">Bat. MB</th>
+                  <th className="p-2 text-center">PDAs 100%</th>
+                  <th className="p-2">Fardamento</th>
+                  <th className="p-2">Preenchido por</th>
+                  <th className="p-2">Notas</th>
+                  <th className="p-2">Pendentes</th>
+                  <th className="p-2">Recebida</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {data.map((h: any) => (
+                  <tr key={h.id} className="border-b hover:bg-muted/30">
+                    <td className="p-2 font-mono text-xs">{h.handoverDate}</td>
+                    <td className="p-2">{h.shift === "morning" ? "☀️ Manhã" : "🌙 Noite"}</td>
+                    <td className="p-2 text-xs">{CITY_LABELS[h.city] ?? h.city}</td>
+                    <td className="p-2 text-right tabular-nums">{h.carsForCovered ?? "—"}</td>
+                    <td className="p-2 text-center"><YN v={h.cashClosedInSafe} /></td>
+                    <td className="p-2 text-center"><YN v={h.checkoutCashDone} /></td>
+                    <td className="p-2 text-right tabular-nums">{h.frontPouchValue != null ? `${Number(h.frontPouchValue).toFixed(2)}€` : "—"}</td>
+                    <td className="p-2 text-right tabular-nums">{h.terminalPouchValue != null ? `${Number(h.terminalPouchValue).toFixed(2)}€` : "—"}</td>
+                    <td className="p-2 text-right tabular-nums">{h.mbRolls ?? "—"}{h.mbRollsInPouch != null ? ` (+${h.mbRollsInPouch})` : ""}</td>
+                    <td className="p-2 text-right tabular-nums">{h.mbBattery != null ? `${h.mbBattery}%` : "—"}</td>
+                    <td className="p-2 text-center"><YN v={h.pdasCharged} /></td>
+                    <td className="p-2 text-xs max-w-[220px] truncate" title={clothingCell(h)}>{clothingCell(h) || "—"}</td>
+                    <td className="p-2 text-xs">{author(h)}</td>
+                    <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={h.aiSummary ?? h.notes ?? ""}>{h.notes ?? (h.aiSummary ? "✨ resumo IA" : "—")}</td>
+                    <td className="p-2 text-xs tabular-nums" title={openOf(h).filter((i) => !i.resolved).map((i) => i.text).join("\n")}>
+                      {openOf(h).length ? `${openOf(h).filter((i) => !i.resolved).length} abertos / ${openOf(h).length}` : "—"}
+                    </td>
+                    <td className="p-2 text-xs">{ackCell(h, "sm")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -643,7 +784,8 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
   const { city, allowed, setCity } = cityState;
   // Dia operacional (03:00 → 03:00): de madrugada ainda é o dia anterior.
   const [date, setDate] = useState(() => operationalShift().date);
-  const { data, isLoading } = trpc.shiftHandover.supervisorDashboard.useQuery({ date, city });
+  const dashQ = trpc.shiftHandover.supervisorDashboard.useQuery({ date, city });
+  const data = dashQ.data;
   const peopleSort = useTableSort((data?.people ?? []) as any[]);
   const complianceQ = trpc.shiftHandover.compliance.useQuery({ date, city });
 
@@ -660,8 +802,15 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
         <div><Label className="text-xs mb-1 block">Cidade</Label><CitySelect city={city} allowed={allowed} onChange={setCity} /></div>
         <p className="text-[11px] text-muted-foreground pb-2">Dia operacional: 03:00 → 03:00 do dia seguinte (inclui o turno da noite)</p>
       </div>
-      {isLoading || !data ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
+      {dashQ.isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p> : dashQ.isError ? (
+        <QueryErrorNote error={dashQ.error} onRetry={() => dashQ.refetch()} retrying={dashQ.isFetching} what="o resumo do dia" />
+      ) : !data ? (
+        <Card><CardContent className="p-8 text-center text-muted-foreground">Base de dados indisponível — sem resumo do dia.</CardContent></Card>
+      ) : (
         <>
+          {data.timingsTruncated && (
+            <p className="text-xs text-amber-700">Dia com movimentos a mais para ler de uma vez: os tempos de entrega e de recolha são só de uma parte do dia.</p>
+          )}
           {/* KPIs do dia */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <Card className="p-3"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold text-emerald-700">{data.totals.checkins}</p></Card>
@@ -687,7 +836,9 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
           </div>
 
           {/* Cumprimento das passagens de turno */}
-          <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} />
+          {complianceQ.isError
+            ? <QueryErrorNote error={complianceQ.error} onRetry={() => complianceQ.refetch()} retrying={complianceQ.isFetching} what="o cumprimento das passagens" />
+            : <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} />}
 
           {/* Piores entregas */}
           {data.delivery.worst.length > 0 && (

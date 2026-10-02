@@ -21,6 +21,8 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { AlertTriangle, ChevronDown, ChevronRight, Download, MapPin, Pencil, Check, X } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { operationalDayOf } from "@shared/lisbonDay";
 import { MOVEMENT_PHASE_LABELS, movementLabel, movementPhase } from "@shared/multiparkMovements";
@@ -67,7 +69,8 @@ export function MovementSourceNotice({ notice }: { notice: string | null | undef
 export default function DayEvaluationTab({ initialDate }: { initialDate?: string }) {
   const { projectId } = useGlobalFilters();
   const { user } = useAuth();
-  const isSupervisor = !!user?.role && ["supervisor", "admin", "super_admin"].includes(user.role);
+  // Ajustar: a mesma regra do servidor (evaluation.adjust → avaliação "edit").
+  const isSupervisor = !!user && can(user as any, "avaliacao", "edit");
   const [date, setDate] = useState(initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate) ? initialDate : operationalDayOf(Date.now()));
   const [scoreOf, setScoreOf] = useState<ScoreTarget | null>(null);
 
@@ -128,9 +131,10 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
       {(assignmentsQ.isLoading || evaluationQ.isLoading) && (
         <p className="text-sm text-muted-foreground">A calcular o dia...</p>
       )}
-      {evaluationQ.error && <Card className="p-4 text-sm text-red-700">{evaluationQ.error.message}</Card>}
+      {evaluationQ.error && <QueryErrorNote error={evaluationQ.error} onRetry={() => evaluationQ.refetch()} retrying={evaluationQ.isFetching} what="a avaliação do dia" />}
+      {assignmentsQ.error && <QueryErrorNote error={assignmentsQ.error} onRetry={() => assignmentsQ.refetch()} retrying={assignmentsQ.isFetching} what="a escala do dia" />}
 
-      {!assignmentsQ.isLoading && assignments.length === 0 && (
+      {!assignmentsQ.isLoading && !assignmentsQ.error && assignments.length === 0 && (
         <Card>
           <CardContent className="p-8 text-center text-muted-foreground">
             Sem extras escalados para {fmtDay(date)}. Vai ao Extras Dia, escolhe este dia e adiciona equipa.
@@ -275,6 +279,9 @@ function LiveSummary({ live }: { live: any }) {
 
 function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; date: string; metrics?: any; onScore: (t: ScoreTarget) => void }) {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  // Ligar o nome do agente à ficha pede "gerir RH" (o servidor exige o mesmo).
+  const canMapAgent = !!user && can(user as any, "rh", "manage");
   const [expanded, setExpanded] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState("");
@@ -341,7 +348,7 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
                     {assignment.multiparkAgentName
                       ? <Badge variant="outline" className="text-[11px]">manual</Badge>
                       : <Badge variant="outline" className="text-[11px] text-muted-foreground">auto</Badge>}
-                    {assignment.employeeId && (
+                    {assignment.employeeId && canMapAgent && (
                       <Button size="sm" variant="ghost" className="h-5 w-5 p-0" aria-label="Editar nome do agente" onClick={startEdit}>
                         <Pencil className="h-3 w-3" />
                       </Button>
@@ -422,7 +429,7 @@ function MovementsList({ date, agentUserIds, agentName }: { date: string; agentU
     { refetchOnWindowFocus: false },
   );
   if (q.isLoading) return <p className="text-muted-foreground">A ler os movimentos da BD da Multipark...</p>;
-  if (q.error) return <p className="text-red-700">{q.error.message}</p>;
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os movimentos" />;
   const d = q.data;
   if (!d) return null;
   if (!d.available) return <p className="text-amber-800">Movimentos indisponíveis: {d.reason}</p>;

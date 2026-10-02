@@ -54,7 +54,8 @@ describe("SQL do estado do parque", () => {
     expect(q.params).toEqual(["p1", "2026-09-27 10:00:00", "2026-09-27 18:00:00", "2026-09-26 10:00:00", "2026-09-28 18:00:00", 1001]);
     expect(q.sql).toContain(`b."checkOutDate" >= $4::timestamp`);
     expect(q.sql).toContain(`b."returnFlightEta"`);
-    expect(q.sql).toContain(`<> 'CANCELLED'`);
+    // Nem canceladas nem compras online por acabar (PENDING).
+    expect(q.sql).toContain(`NOT IN ('CANCELLED', 'PENDING')`);
   });
   it("ocorrências: só por resolver", () => {
     expect(buildOpenOccurrencesSql(["p1"]).sql).toContain(`o."resolved" = false`);

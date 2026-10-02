@@ -1,7 +1,10 @@
 import { useMemo } from "react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { trpc } from "@/lib/trpc";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
-import { isoWeekYearLisbon } from "@shared/caseRules";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can, scopeFor } from "@shared/access";
+import { addDays, operationalDayOf } from "@shared/lisbonDay";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -103,19 +106,20 @@ function KpiCard({
 
 export default function PessoasDashboard() {
   const filters = useDashboardFilters();
-  // Semana ISO com o ANO ISO (dia de Lisboa): a 1 jan 2027 é a semana 53 de
-  // 2026 — antes pedia-se a "semana 53 de 2027" (não existe) e vinha vazio.
-  const now = new Date();
-  const { week: currentWeek, year: currentYear } = isoWeekYearLisbon(now);
+  const { user } = useAuth();
+  // Avaliação: o MESMO motor da página Avaliação (dias operacionais, últimos 7).
+  // Antes pedia a avaliação semanal da semana corrente, que só é gerada na
+  // segunda-feira seguinte — vinha sempre vazia.
+  const evalTo = operationalDayOf(Date.now());
+  const evalFrom = addDays(evalTo, -6);
+  const canEval = !!user && can(user as any, "avaliacao", "view") && scopeFor(user as any, "avaliacao") !== "own";
 
   // Queries
   const { data: stats, isLoading: loadingStats } = trpc.rh.stats.useQuery();
   const { data: employees = [] } = trpc.rh.list.useQuery();
   const { data: docStatus } = trpc.rh.documents.allStatus.useQuery();
-  const { data: evaluations = [] } = trpc.performance.list.useQuery({
-    weekNumber: currentWeek,
-    yearNumber: currentYear,
-  });
+  const evalQ = trpc.evaluation.ranking.useQuery({ from: evalFrom, to: evalTo }, { enabled: canEval });
+  const evaluations = evalQ.data ?? [];
   const { data: quizRanking = [] } = trpc.training.quizRanking.useQuery();
   const { data: examAttempts = [] } = trpc.training.careerExamAttempts.useQuery({});
 
@@ -136,6 +140,7 @@ export default function PessoasDashboard() {
 
   // ── KPI: Contratos a expirar em 30 dias
   const contractsExpiring30d = useMemo(() => {
+    const now = new Date();
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() + 30);
     let count = 0;
@@ -164,8 +169,8 @@ export default function PessoasDashboard() {
     return Object.values(docStatus).filter((s: any) => s.missing.length > 0).length;
   }, [docStatus]);
 
-  // ── KPI: Avaliações esta semana
-  const evaluationsThisWeek = evaluations.length;
+  // ── KPI: pessoas avaliadas nos últimos 7 dias ("—" sem dados: nunca 0 por erro)
+  const evaluationsThisWeek: string | number = !canEval ? "—" : evalQ.data ? evaluations.length : "—";
 
   // ── KPI: Taxa de aprovação exames
   const examApprovalRate = useMemo(() => {
@@ -208,9 +213,9 @@ export default function PessoasDashboard() {
   const top5Performance = useMemo(() => {
     return evaluations
       .slice(0, 5)
-      .map((ev: any) => ({
-        name: employeeMap.get(ev.employeeId)?.fullName || `#${ev.employeeId}`,
-        totalPoints: ev.totalPoints || 0,
+      .map((ev) => ({
+        name: employeeMap.get(ev.employeeId)?.fullName || ev.employeeName || `#${ev.employeeId}`,
+        totalPoints: Math.round(ev.score.totalPoints * 10) / 10,
       }));
   }, [evaluations, employeeMap]);
 
@@ -282,9 +287,9 @@ export default function PessoasDashboard() {
           iconBg="bg-red-100"
         />
         <KpiCard
-          title="Avaliações esta Semana"
+          title="Avaliados (7 dias)"
           value={evaluationsThisWeek}
-          subtitle={`Semana ${currentWeek}/${currentYear}`}
+          subtitle={evalQ.isError ? "erro a ler a avaliação" : "pessoas com dias avaliados"}
           icon={ClipboardCheck}
           iconColor="text-green-600"
           iconBg="bg-green-100"
@@ -370,13 +375,19 @@ export default function PessoasDashboard() {
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Trophy className="w-4 h-4 text-yellow-500" />
-              Top 5 Condutores — Semana {currentWeek}
+              Top 5 — últimos 7 dias
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {top5Performance.length === 0 ? (
+            {!canEval ? (
+              <p className="text-center text-muted-foreground py-8">A tua conta não vê a avaliação de outras pessoas.</p>
+            ) : evalQ.isError ? (
+              <QueryErrorNote error={evalQ.error} onRetry={() => evalQ.refetch()} retrying={evalQ.isFetching} what="a avaliação" />
+            ) : evalQ.isLoading ? (
+              <p className="text-center text-muted-foreground py-8">A carregar…</p>
+            ) : top5Performance.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">
-                Sem avaliações esta semana
+                Sem dias avaliados nos últimos 7 dias
               </p>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
