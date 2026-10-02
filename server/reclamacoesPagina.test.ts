@@ -77,7 +77,8 @@ beforeEach(() => {
 
 describe("Migração 0340: arquivo e registo do que sai", () => {
   it("registada no fim, com as colunas do arquivo e a tabela removed_records", () => {
-    expect(SCHEMA_MIGRATION_IDS.at(-1)).toBe("0340");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0340");
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0340")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0335"));
     const all = MIGRATION_0340_STATEMENTS.join("\n");
     for (const c of ["`archivedAt`", "`archivedById`", "`archiveReason`", "CREATE TABLE IF NOT EXISTS `removed_records`", "`rowJson` MEDIUMTEXT"]) expect(all).toContain(c);
     expect(all).not.toMatch(/\bDELETE\b|\bDROP\b/);

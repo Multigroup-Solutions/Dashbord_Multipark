@@ -1189,6 +1189,10 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	lastReminderAt: timestamp({ mode: 'string' }),
 	/** 0123 — correspondências perdido ↔ achado calculadas pela última vez. */
 	aiMatchCheckedAt: timestamp({ mode: 'string' }),
+	// 0345 — arquivado em vez de apagado (sai das listas, contadores e cruzamento).
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+	archiveReason: varchar({ length: 255 }),
 	createdBy: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),

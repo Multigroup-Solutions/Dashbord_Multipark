@@ -34,9 +34,10 @@ import {
   HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
+import { compressImage } from "@/lib/compressImage";
 
 // ─── Devolução estruturada + email ao cliente ────────────────────────────────
-export function ReturnPanel({ item }: { item: any }) {
+export function ReturnPanel({ item, canEdit = true }: { item: any; canEdit?: boolean }) {
   const utils = trpc.useUtils();
   const [form, setForm] = useState({
     foundLocation: item.foundLocation || "",
@@ -53,20 +54,24 @@ export function ReturnPanel({ item }: { item: any }) {
     onSuccess: () => { utils.lostFound.getById.invalidate({ id: item.id }); toast.success("Foto da entrega guardada"); },
     onError: (e) => toast.error(e.message),
   });
-  const onPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]; if (!f) return;
+  const onPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const original = e.target.files?.[0];
+    e.target.value = "";
+    if (!original) return;
+    // Reduzida antes de enviar (limite de ~4,5 MB por pedido) — 16c.
+    const f = await compressImage(original, 1600, 0.85);
     const r = new FileReader();
     r.onload = () => uploadReturn.mutate({ itemId: item.id, base64: String(r.result).split(",")[1], filename: f.name });
+    r.onerror = () => toast.error("Não foi possível ler a foto");
     r.readAsDataURL(f);
-    e.target.value = "";
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base flex items-center justify-between gap-2">
+        <CardTitle className="text-base flex flex-wrap items-center justify-between gap-2">
           <span>Devolução ao cliente</span>
-          {item.clientEmail && (
+          {canEdit && item.clientEmail && (
             <Button size="sm" variant="outline" onClick={() => setEmailOpen(true)}>
               <Mail className="w-4 h-4 mr-1" /> Avisar cliente
             </Button>
@@ -95,7 +100,7 @@ export function ReturnPanel({ item }: { item: any }) {
             <Input type="date" value={form.returnedAt} onChange={e => setForm(f => ({ ...f, returnedAt: e.target.value }))} /></div>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          <Button size="sm" disabled={save.isPending} onClick={() => save.mutate({
+          {canEdit && <Button size="sm" disabled={save.isPending} onClick={() => save.mutate({
             id: item.id,
             foundLocation: form.foundLocation || null,
             foundByName: form.foundByName || null,
@@ -103,11 +108,11 @@ export function ReturnPanel({ item }: { item: any }) {
             returnedAt: form.returnedAt ? form.returnedAt + " 00:00:00" : null,
           })}>
             <CheckCircle2 className="w-4 h-4 mr-1" /> Guardar devolução
-          </Button>
-          <label className="text-xs text-blue-600 cursor-pointer inline-flex items-center gap-1">
-            <Upload className="w-3 h-3" /> Foto/assinatura da entrega
+          </Button>}
+          {canEdit && <label className="text-xs text-blue-600 cursor-pointer inline-flex items-center gap-1">
+            <Upload className="w-3 h-3" /> {uploadReturn.isPending ? "A carregar…" : "Foto/assinatura da entrega"}
             <input type="file" accept="image/*" className="hidden" onChange={onPhoto} />
-          </label>
+          </label>}
           {(item.returnPhotoUrl || item.returnPhotoKey) && <a href={fileHref(item.returnPhotoUrl, item.returnPhotoKey) ?? undefined} target="_blank" rel="noreferrer" className="text-xs underline">ver foto</a>}
         </div>
         {item.clientEmailSentAt && (

@@ -35,26 +35,35 @@ import {
   HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { lisbonDayOf } from "@shared/lisbonDay";
+import { useConfirm } from "../training/shared";
 
 // ─── Condutores do caso (roubos): anexar quem mexeu no carro ──────────────────
-export function CaseDriversPanel({ itemId, agents, employees, role }: {
+export function CaseDriversPanel({ itemId, agents, agentsFailed, employees, role, canEdit = true }: {
   itemId: number;
   agents: any[];
+  /** "Quem mexeu no carro" não se leu (≠ ninguém mexeu). */
+  agentsFailed?: boolean;
   employees: { id: number; fullName: string }[];
   role?: string;
+  /** Falso num caso arquivado ou para quem só vê. */
+  canEdit?: boolean;
 }) {
   // Ligar suspeitos e propor pontos: team leader+. Confirmar pontos: supervisor+.
   const { user: me } = useAuth();
-  const isLeader = seesBeyondOwn(me ?? role, "perdidos") && can(me ?? role, "perdidos", "edit");
+  const isLeader = canEdit && seesBeyondOwn(me ?? role, "perdidos") && can(me ?? role, "perdidos", "edit");
   const isSupervisor = isLeader && roleRank(role) >= roleRank("supervisor");
   const utils = trpc.useUtils();
-  const { data: attached = [] } = trpc.lostFound.attachedDrivers.useQuery({ itemId });
+  const [confirm, confirmUi] = useConfirm();
+  const attachedQ = trpc.lostFound.attachedDrivers.useQuery({ itemId });
+  const { data: attached = [] } = attachedQ;
   const attach = trpc.lostFound.attachDriver.useMutation({
     onSuccess: () => { utils.lostFound.attachedDrivers.invalidate({ itemId }); toast.success("Condutor anexado"); },
     onError: (e) => toast.error(e.message),
   });
   const detach = trpc.lostFound.detachDriver.useMutation({
-    onSuccess: () => { utils.lostFound.attachedDrivers.invalidate({ itemId }); toast.success("Removido"); },
+    onSuccess: () => { utils.lostFound.attachedDrivers.invalidate({ itemId }); toast.success("Condutor retirado do caso (fica registado)"); },
     onError: (e) => toast.error(e.message),
   });
   const acct = trpc.lostFound.setDriverAccountability.useMutation({
@@ -69,6 +78,7 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
   const [date, setDate] = useState("");
   const [note, setNote] = useState("");
   const attachedNames = new Set((attached as any[]).map(a => (a.driverName || "").toLowerCase()));
+  const attachedEmp = new Set((attached as any[]).map(a => a.employeeId).filter((x) => x != null));
 
   return (
     <Card>
@@ -78,7 +88,9 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {(attached as any[]).length > 0 ? (attached as any[]).map(a => (
+        {attachedQ.isError ? (
+          <QueryErrorNote error={attachedQ.error} what="os condutores do caso" onRetry={() => attachedQ.refetch()} retrying={attachedQ.isFetching} />
+        ) : (attached as any[]).length > 0 ? (attached as any[]).map(a => (
           <div key={a.id} className="flex items-start justify-between border-b last:border-0 py-1 gap-2">
             <div className="min-w-0 flex-1">
               <span className="font-medium">{a.driverName}</span>
@@ -106,25 +118,32 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
                 </div>
               )}
             </div>
-            {isLeader && <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={() => detach.mutate({ id: a.id })}><Trash2 className="w-3 h-3" /></Button>}
+            {isLeader && <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label={`Tirar ${a.driverName} do caso`} disabled={detach.isPending}
+              onClick={async () => {
+                if (!(await confirm({ title: `Tirar ${a.driverName} do caso?`, description: "Os pontos ainda por confirmar são anulados. A ligação fica registada (nada é apagado).", confirmLabel: "Tirar", destructive: true }))) return;
+                detach.mutate({ id: a.id });
+              }}><Trash2 className="w-3 h-3" /></Button>}
           </div>
         )) : <p className="text-xs text-muted-foreground">Nenhum condutor anexado a este caso.</p>}
 
+        {isLeader && agentsFailed && <p className="text-xs text-amber-800 border-t pt-2">"Quem mexeu no carro" não respondeu (Multipark) — não quer dizer que ninguém mexeu.</p>}
         {isLeader && agents.length > 0 && (
           <div className="border-t pt-2">
             <p className="text-xs font-medium text-muted-foreground mb-1">Quem mexeu no carro (1 clique p/ anexar)</p>
             <div className="space-y-1 max-h-40 overflow-y-auto">
               {agents.map((ag, i) => {
                 const summary = `${ag.actions} ações · ${ag.checkins} entr. / ${ag.checkouts} saí. / ${ag.movements} mov.`;
-                const linked = attachedNames.has((ag.agentName || "").toLowerCase());
+                // A ficha vem da conta do agente na Multipark (nunca adivinhada pelo nome) — 16c.
+                const linked = ag.employeeId != null ? attachedEmp.has(ag.employeeId) : attachedNames.has((ag.agentName || "").toLowerCase());
                 return (
                   <div key={i} className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs">
-                      <span className="font-medium">{ag.agentName}</span> · {summary}
+                    <span className="truncate text-xs min-w-0">
+                      <span className="font-medium">{ag.employeeName ?? ag.agentName}</span> · {summary}
+                      {ag.employeeId == null && <Badge variant="outline" className="ml-1 text-[11px]">sem ficha ligada</Badge>}
                       {ag.flagged ? <Badge variant="outline" className="ml-1 text-[11px] text-red-600 border-red-300">tocou nesta reserva</Badge> : null}
                     </span>
                     <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={linked || attach.isPending}
-                      onClick={() => attach.mutate({ itemId, driverName: ag.agentName, source: "history", movementDate: ag.lastActionAt ? String(ag.lastActionAt).slice(0, 10) : null, movementsSummary: summary })}>
+                      onClick={() => attach.mutate({ itemId, employeeId: ag.employeeId ?? null, driverName: ag.employeeName ?? ag.agentName, source: "history", movementDate: ag.lastActionAt ? lisbonDayOf(String(ag.lastActionAt)) : null, movementsSummary: summary })}>
                       {linked ? "anexado" : "Anexar"}
                     </Button>
                   </div>
@@ -134,7 +153,7 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
           </div>
         )}
 
-        {!isLeader && <p className="text-[11px] text-muted-foreground">Ligar condutores a um caso é reservado a team leaders+.</p>}
+        {!isLeader && canEdit && <p className="text-[11px] text-muted-foreground">Ligar condutores a um caso é reservado a team leaders+.</p>}
         {isLeader && <div className="border-t pt-2 space-y-2">
           <p className="text-xs font-medium text-muted-foreground">Anexar manualmente (qualquer colaborador)</p>
           <div className="flex gap-2 items-end flex-wrap">
@@ -157,6 +176,7 @@ export function CaseDriversPanel({ itemId, agents, employees, role }: {
             setEmpId("none"); setDate(""); setNote("");
           }}>Anexar colaborador</Button>
         </div>}
+        {confirmUi}
       </CardContent>
     </Card>
   );

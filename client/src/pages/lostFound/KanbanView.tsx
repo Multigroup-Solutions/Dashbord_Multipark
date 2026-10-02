@@ -36,6 +36,10 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
 import CaseDashboardCard from "@/components/CaseDashboardCard";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { toCsv } from "@shared/csv";
+import { lisbonDayOf } from "@shared/lisbonDay";
+import { Archive } from "lucide-react";
 
 // ─── KANBAN VIEW ──────────────────────────────────────────────────────────────
 
@@ -44,19 +48,28 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   // "Sem cidade": casos sem projeto (só quem vê todas as cidades os tem).
   const [noProject, setNoProject] = useState(false);
   const canCrossRef = seesBeyondOwn(user, "perdidos") && can(user, "perdidos", "edit");
+  const canEdit = can(user, "perdidos", "edit");
+  const canManage = can(user, "perdidos", "manage");
+  const [showArchived, setShowArchived] = useState(false);
   const queryInput = useMemo(() => {
     const input: any = {};
     if (filterType !== "all") input.itemType = filterType;
     if (searchTerm.trim()) input.search = searchTerm.trim();
     if (noProject) input.noProject = true;
     else if (globalFilters.projectId !== undefined) input.projectId = globalFilters.projectId;
+    if (showArchived) input.archived = true;
     return input;
-  }, [filterType, searchTerm, globalFilters.projectId, noProject]);
+  }, [filterType, searchTerm, globalFilters.projectId, noProject, showArchived]);
 
-  const { data: items = [], isLoading } = trpc.lostFound.list.useQuery(queryInput);
-  const { data: dashboard } = trpc.lostFound.dashboard.useQuery(
+  const listQ = trpc.lostFound.list.useQuery(queryInput);
+  const { data: items = [], isLoading } = listQ;
+  // O painel (envelhecimento, por tipo, condutores repetidos) é da cidade: quem só
+  // vê os próprios casos não o pede (o servidor recusa) — 16c.
+  const dashboardQ = trpc.lostFound.dashboard.useQuery(
     noProject ? { noProject: true } : globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : undefined,
+    { enabled: seesBeyondOwn(user, "perdidos") },
   );
+  const dashboard = dashboardQ.data;
   const updateMut = trpc.lostFound.update.useMutation();
   const utils = trpc.useUtils();
 
@@ -74,7 +87,9 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   const stats = useMemo(() => {
     const s = { total: items.length, new: 0, investigating: 0, found: 0, returned: 0, closed: 0, highPriority: 0 };
     items.forEach((i: any) => {
-      if (s[i.status as keyof typeof s] !== undefined) (s as any)[i.status]++;
+      // Convertidos contam em Fechados, como na coluna (16c).
+      const st = i.status === "converted" ? "closed" : i.status;
+      if (s[st as keyof typeof s] !== undefined) (s as any)[st]++;
       if (i.priority === "high") s.highPriority++;
     });
     return s;
@@ -91,9 +106,9 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
     try {
       await updateMut.mutateAsync({ id, status: newStatus as (typeof KANBAN_COLUMNS)[number] });
       toast.success("Estado atualizado");
-    } catch {
+    } catch (e: any) {
       utils.lostFound.list.setData(queryInput, prev);
-      toast.error("Erro ao mover");
+      toast.error(e?.message || "Erro ao mover");
     } finally {
       utils.lostFound.list.invalidate();
     }
@@ -111,36 +126,34 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
           <p className="text-muted-foreground">Gestão de objetos perdidos e achados nos veículos</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={items.length === 0}
-            onClick={() => {
-              const headers = ["ID","Criado","Tipo","Estado","Prioridade","Cliente","Email","Telefone","Matrícula","Ref.Reserva","Valor est.","Descrição","Resolução"];
-              const rows = (items as any[]).map(i => [
-                i.id,
-                i.createdAt ? new Date(i.createdAt).toISOString().slice(0, 16) : "",
-                i.itemType ?? "",
-                i.status ?? "",
-                i.priority ?? "",
-                (i.clientName ?? "").replace(/;/g, ","),
-                (i.clientEmail ?? "").replace(/;/g, ","),
-                i.clientPhone ?? "",
-                i.vehiclePlate ?? "",
-                i.bookingRef ?? "",
-                i.estimatedValue ?? "",
-                (i.description ?? "").replace(/[;\n\r]/g, " "),
-                (i.resolution ?? "").replace(/[;\n\r]/g, " "),
-              ]);
-              const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-              const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url; a.download = `perdidos_achados_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-              URL.revokeObjectURL(url);
-            }}
-          >
-            <Download className="w-4 h-4 mr-2" /> CSV
-          </Button>
+          {/* CSV leva contactos do cliente: só quem pode exportar (matriz) — 16c. */}
+          {can(user, "perdidos", "export") && (
+            <Button
+              variant="outline"
+              disabled={items.length === 0}
+              onClick={() => {
+                const headers = ["ID","Criado","Tipo","Estado","Prioridade","Cliente","Email","Telefone","Matrícula","Ref.Reserva","Valor est.","Descrição","Resolução"];
+                const rows = (items as any[]).map(i => [
+                  i.id, i.createdAt ? fmtPTDateTime(i.createdAt) : "",
+                  TYPE_CONFIG[i.itemType]?.label ?? i.itemType ?? "", STATUS_CONFIG[i.status]?.label ?? i.status ?? "", PRIORITY_CONFIG[i.priority]?.label ?? i.priority ?? "",
+                  i.clientName ?? "", i.clientEmail ?? "", i.clientPhone ?? "", i.vehiclePlate ?? "", i.bookingRef ?? "", i.estimatedValue ?? "",
+                  (i.description ?? "").replace(/[\n\r]+/g, " "), (i.resolution ?? "").replace(/[\n\r]+/g, " "),
+                ]);
+                const blob = new Blob(["\ufeff" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8;" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = `perdidos_achados_${lisbonDayOf(Date.now())}.csv`; a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              <Download className="w-4 h-4 mr-2" /> CSV
+            </Button>
+          )}
+          {canManage && (
+            <Button variant={showArchived ? "default" : "outline"} onClick={() => setShowArchived((v) => !v)}>
+              <Archive className="w-4 h-4 mr-2" /> {showArchived ? "A ver arquivados" : "Arquivados"}
+            </Button>
+          )}
           <Button variant="outline" onClick={onShowHistory}>
             <Clock className="w-4 h-4 mr-2" /> Histórico Reservas
           </Button>
@@ -149,12 +162,17 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
               <ShieldAlert className="w-4 h-4 mr-2" /> Cruzamento de condutores
             </Button>
           )}
-          <Button onClick={onNew}><Plus className="w-4 h-4 mr-2" /> Novo Registo</Button>
+          {canEdit && <Button onClick={onNew}><Plus className="w-4 h-4 mr-2" /> Novo Registo</Button>}
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
+      {listQ.isError && <QueryErrorNote error={listQ.error} what="os casos" onRetry={() => listQ.refetch()} retrying={listQ.isFetching} />}
+      {showArchived && !listQ.isError && (
+        <p className="text-xs text-muted-foreground">Casos arquivados: não entram nos contadores, lembretes nem no cruzamento. Abre um para o tirar do arquivo.</p>
+      )}
+
+      {/* Stats (contadas da lista do quadro) — escondidas quando a lista falha (nunca 0 por erro) */}
+      {!listQ.isError && !isLoading && !showArchived && <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
         {[
           { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
           { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
@@ -172,8 +190,9 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
             <p className={`text-xl font-bold tabular-nums truncate ${s.color}`}>{s.value}</p>
           </Card>
         ))}
-      </div>
+      </div>}
 
+      {dashboardQ.isError && <QueryErrorNote error={dashboardQ.error} what="o painel dos perdidos" onRetry={() => dashboardQ.refetch()} retrying={dashboardQ.isFetching} />}
       <CaseDashboardCard
         data={dashboard}
         resolveLabel="Tempo médio p/ fechar"
@@ -211,6 +230,21 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
       {/* Kanban Board */}
       {isLoading ? (
         <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
+      ) : listQ.isError ? null : showArchived ? (
+        <div className="space-y-2">
+          {(items as any[]).length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Sem casos arquivados.</p>}
+          {(items as any[]).map((i: any) => (
+            <Card key={i.id} className="cursor-pointer hover:shadow-md" onClick={() => onSelect(i.id)}>
+              <CardContent className="p-3 flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-xs text-muted-foreground tabular-nums">#{i.id}</span>
+                <span className="font-medium min-w-0 break-words">{i.description}</span>
+                <Badge variant="secondary">Arquivado</Badge>
+                {i.archiveReason && <span className="text-xs text-muted-foreground break-words">— {i.archiveReason}</span>}
+                {i.archivedAt && <span className="text-xs text-muted-foreground ml-auto">{fmtPTDate(i.archivedAt)}</span>}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
           {KANBAN_COLUMNS.map(status => {
@@ -220,13 +254,14 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
               <div
                 key={status}
                 className={`space-y-3 rounded-lg transition-colors ${dragOverCol === status ? "ring-2 ring-primary/60 bg-primary/5" : ""}`}
-                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
+                onDragOver={(e) => { if (!canEdit) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null); }}
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragOverCol(null);
                   const id = Number(e.dataTransfer.getData("text/plain"));
-                  if (id) moveCard(id, status);
+                  const card = (items as any[]).find((x) => x.id === id);
+                  if (id && canEdit && card?.status !== "converted") moveCard(id, status);
                 }}
               >
                 <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
@@ -244,6 +279,8 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
                         onSelect={() => onSelect(item.id)}
                         onMove={moveCard}
                         currentStatus={status}
+                        // Convertidos não se movem (o servidor recusa); sem edição, só se vê.
+                        canMove={canEdit && item.status !== "converted"}
                       />
                     ))}
                     {colItems.length === 0 && (
@@ -260,10 +297,10 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   );
 }
 
-export function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
+export function ItemCard({ item, onSelect, onMove, currentStatus, canMove }: any) {
   const colIdx = KANBAN_COLUMNS.indexOf(currentStatus);
-  const canMoveLeft = colIdx > 0;
-  const canMoveRight = colIdx < KANBAN_COLUMNS.length - 1;
+  const canMoveLeft = canMove && colIdx > 0;
+  const canMoveRight = canMove && colIdx < KANBAN_COLUMNS.length - 1;
   const TypeIcon = TYPE_CONFIG[item.itemType]?.icon || Package;
 
   const ageDays = (item.status !== "returned" && item.status !== "closed" && item.status !== "converted")
@@ -273,7 +310,7 @@ export function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
 
   return (
     <Card
-      draggable
+      draggable={!!canMove}
       onDragStart={(e) => {
         e.dataTransfer.setData("text/plain", String(item.id));
         e.dataTransfer.effectAllowed = "move";
@@ -283,7 +320,7 @@ export function ItemCard({ item, onSelect, onMove, currentStatus }: any) {
         if (e.currentTarget instanceof HTMLElement) e.currentTarget.style.opacity = "1";
       }}
       onClick={onSelect}
-      className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${stale ? "border-red-400 border-2" : ""}`}
+      className={`${canMove ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} hover:shadow-md transition-shadow ${stale ? "border-red-400 border-2" : ""}`}
     >
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start gap-2">

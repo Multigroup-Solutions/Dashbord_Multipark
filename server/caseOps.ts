@@ -15,7 +15,7 @@ import { isFeatureEnabled } from "./_core/featureFlags";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import {
   complaintDriversOnDuty, complaints, employees, incidents, lostFoundAttachedDrivers,
-  lostFoundItems, lostFoundMessages, lostFoundPhotos, projects, users,
+  lostFoundItems, projects, users,
 } from "../drizzle/schema";
 import { getDb, resolveProjectIds } from "./db";
 import { projectScope, scopedProjectIds } from "./cityScope";
@@ -146,8 +146,9 @@ export interface CrossRefLinkRow extends CrossRefLink {
   employeeName: string | null;
 }
 
-const AGENT_MAP = sql`(SELECT multiparkAgentName AS n, MIN(id) AS empId FROM employees
-  WHERE multiparkAgentName IS NOT NULL AND multiparkAgentName <> '' GROUP BY multiparkAgentName)`;
+// Agente da Multipark → ficha: SEMPRE pelo ID do agente (principal ou extra,
+// personIdentity.employeesForAgentIds), nunca pelo nome; agentes de sistema/API
+// e não-pessoas ficam de fora (isLinkableAgent) — P3 16c.
 
 const fmt = (v: any): string | null => (v == null ? null : v instanceof Date ? utcNowStr(v) : String(v));
 
@@ -156,17 +157,16 @@ const fmt = (v: any): string | null => (v == null ? null : v instanceof Date ? u
  * condutores ANEXADOS ao caso + agentes com ações no histórico da reserva do
  * caso. Uma só query (UNION ALL), agregação no JS (casos são poucos).
  */
-async function fetchLinks(caseWhere: SQL): Promise<CrossRefLinkRow[]> {
+async function fetchLinks(caseWhere: SQL, out?: { truncated: boolean }): Promise<CrossRefLinkRow[]> {
   const d = await db();
-  // 1) condutores ANEXADOS aos casos
+  // 1) condutores ANEXADOS aos casos (a ficha só se foi anexado pela ficha)
   const attached = rowsOf(await d.execute(sql`
-    SELECT l.id AS caseId, COALESCE(ad.employeeId, am.empId) AS employeeId, ad.driverName AS name,
+    SELECT l.id AS caseId, ad.employeeId AS employeeId, ad.driverName AS name,
            l.description AS caseDescription, l.status AS caseStatus, l.createdAt AS caseCreatedAt,
            l.vehiclePlate AS casePlate, l.bookingRef AS bookingRef, e.fullName AS employeeName
     FROM lost_found_items l
     JOIN lost_found_attached_drivers ad ON ad.itemId = l.id
-    LEFT JOIN ${AGENT_MAP} am ON am.n = ad.driverName
-    LEFT JOIN employees e ON e.id = COALESCE(ad.employeeId, am.empId)
+    LEFT JOIN employees e ON e.id = ad.employeeId
     WHERE ${caseWhere}
     LIMIT 20000`));
   // 2) agentes com ações no histórico da reserva de cada caso — "History" AO VIVO
@@ -179,16 +179,18 @@ async function fetchLinks(caseWhere: SQL): Promise<CrossRefLinkRow[]> {
   if (cases.length) {
     const { readLiveHistory } = await import("./multiparkDb/historyLive");
     const refs = Array.from(new Set(cases.map((c) => String(c.bookingRef))));
-    const hist = await readLiveHistory({ bookingIds: refs, limit: 5000 });
-    const agentMap = new Map(rowsOf(await d.execute(sql`SELECT am.n AS n, am.empId AS empId, e.fullName AS fullName FROM ${AGENT_MAP} am LEFT JOIN employees e ON e.id = am.empId`))
-      .map((r) => [String(r.n).trim().toLowerCase(), { empId: r.empId != null ? Number(r.empId) : null, fullName: r.fullName ?? null }]));
+    const hist = await readLiveHistory({ bookingIds: refs, limit: CROSSREF_HISTORY_LIMIT });
+    if (out && (hist.length >= CROSSREF_HISTORY_LIMIT || cases.length >= 5000)) out.truncated = true;
+    const { isLinkableAgent } = await import("../shared/agentIdentity");
+    const people = hist.filter((h) => h.agentName && isLinkableAgent(h.agentUserId, h.agentName));
+    const { employeesForAgentIds } = await import("./personIdentity");
+    const owners = await employeesForAgentIds(people.map((h) => h.agentUserId).filter((x): x is string => !!x));
     const casesByRef = new Map<string, any[]>();
     for (const c of cases) { const k = String(c.bookingRef); casesByRef.set(k, [...(casesByRef.get(k) ?? []), c]); }
-    for (const h of hist) {
-      if (!h.agentName) continue;
-      const emp = agentMap.get(h.agentName.trim().toLowerCase());
+    for (const h of people) {
+      const emp = h.agentUserId ? owners.get(h.agentUserId) : undefined;
       for (const c of casesByRef.get(h.bookingExternalId) ?? []) {
-        movement.push({ ...c, via: "movement", employeeId: emp?.empId ?? null, name: h.agentName, employeeName: emp?.fullName ?? null,
+        movement.push({ ...c, via: "movement", employeeId: emp?.id ?? null, name: h.agentName, employeeName: emp?.fullName ?? null,
           changeType: h.changeType, actionTime: h.actionTime, parkName: h.parkName });
       }
     }
@@ -216,14 +218,15 @@ export interface CrossRefInput extends CaseScopeFilter { from: string; to: strin
 async function periodCaseWhere(input: CrossRefInput): Promise<{ where: SQL; start: string; end: string }> {
   const { start, end } = lisbonDayRangeUtc(input.from, input.to);
   const scope = await caseScopeSql(sql`l.projectId`, input);
-  return { where: sql`l.status <> 'converted' AND l.createdAt >= ${start} AND l.createdAt < ${end} AND ${scope}`, start, end };
+  return { where: sql`l.status <> 'converted' AND l.archivedAt IS NULL AND l.createdAt >= ${start} AND l.createdAt < ${end} AND ${scope}`, start, end };
 }
 
 /** Ranking do Cruzamento de condutores (período + cidade). */
-export async function getDriverCrossRef(input: CrossRefInput): Promise<{ rows: CrossRefRow[]; teamRate: number | null; totalCases: number; from: string; to: string }> {
+export async function getDriverCrossRef(input: CrossRefInput): Promise<{ rows: CrossRefRow[]; teamRate: number | null; totalCases: number; from: string; to: string; truncated: boolean }> {
   const d = await db();
   const { where, start, end } = await periodCaseWhere(input);
-  const links = await fetchLinks(where);
+  const cut = { truncated: false };
+  const links = await fetchLinks(where, cut);
   const bookingScope = await caseScopeSql(sql`b.projectId`, input.noProject ? {} : input);
   const incScope = await caseScopeSql(sql`i.projectId`, input);
   const cScope = await caseScopeSql(sql`c.projectId`, input);
@@ -235,14 +238,18 @@ export async function getDriverCrossRef(input: CrossRefInput): Promise<{ rows: C
   const cities = input.noProject ? undefined : scopedCityNamesLive();
   const caseRefs = Array.from(new Set(links.map((l) => l.bookingRef).filter((x): x is string => !!x)));
   const [byAgent, inCaseRows] = await Promise.all([
-    readLiveHistoryByAgent({ from: start, to: end, cities, limit: 5000 }),
-    caseRefs.length ? readLiveHistory({ bookingIds: caseRefs, from: start, to: end, cities, limit: 5000 }) : Promise.resolve([]),
+    readLiveHistoryByAgent({ from: start, to: end, cities, limit: CROSSREF_HISTORY_LIMIT }),
+    caseRefs.length ? readLiveHistory({ bookingIds: caseRefs, from: start, to: end, cities, limit: CROSSREF_HISTORY_LIMIT }) : Promise.resolve([]),
   ]);
+  if (byAgent.length >= CROSSREF_HISTORY_LIMIT || inCaseRows.length >= CROSSREF_HISTORY_LIMIT) cut.truncated = true;
+  const { isLinkableAgent } = await import("../shared/agentIdentity");
   const inCase = new Map<string, number>();
   for (const h of inCaseRows) if (h.agentName) inCase.set(h.agentName, (inCase.get(h.agentName) ?? 0) + 1);
-  const agentMap = new Map(rowsOf(await d.execute(sql`SELECT n, empId FROM ${AGENT_MAP} am`)).map((r) => [String(r.n).trim().toLowerCase(), r.empId != null ? Number(r.empId) : null]));
-  const movementTotals = byAgent.filter((a) => a.agentName).map((a) => ({
-    agentName: a.agentName as string, employeeId: agentMap.get((a.agentName as string).trim().toLowerCase()) ?? null,
+  const agents = byAgent.filter((a) => a.agentName && isLinkableAgent(a.agentUserId, a.agentName));
+  const { employeesForAgentIds } = await import("./personIdentity");
+  const owners = await employeesForAgentIds(agents.map((a) => a.agentUserId).filter((x): x is string => !!x));
+  const movementTotals = agents.map((a) => ({
+    agentName: a.agentName as string, employeeId: (a.agentUserId ? owners.get(a.agentUserId)?.id : undefined) ?? null,
     total: a.total, inCase: inCase.get(a.agentName as string) ?? 0,
   }));
 
@@ -265,8 +272,11 @@ export async function getDriverCrossRef(input: CrossRefInput): Promise<{ rows: C
     incidentsByEmployee: new Map(incRows.map((r) => [Number(r.employeeId), Number(r.n)])),
     complaintsByEmployee: new Map(cRows.map((r) => [Number(r.employeeId), Number(r.n)])),
   });
-  return { ...out, from: input.from, to: input.to };
+  return { ...out, from: input.from, to: input.to, truncated: cut.truncated };
 }
+
+/** Teto das leituras do histórico no cruzamento; acima disto o resultado diz-se incompleto. */
+const CROSSREF_HISTORY_LIMIT = 5000;
 
 /** Drill-down: casos do condutor e os movimentos EXATOS nas reservas desses casos. */
 export async function getDriverCrossRefDetail(input: CrossRefInput & { key: string }) {
@@ -294,7 +304,7 @@ export async function getDriverCrossRefDetail(input: CrossRefInput & { key: stri
 export async function getCaseRepeatDrivers(itemId: number) {
   const since = utcNowStr(new Date(Date.now() - 180 * 86_400_000));
   const scope = await caseScopeSql(sql`l.projectId`);
-  const links = await fetchLinks(sql`l.status <> 'converted' AND ${scope}
+  const links = await fetchLinks(sql`l.status <> 'converted' AND l.archivedAt IS NULL AND ${scope}
     AND (l.id = ${itemId} OR l.status IN ('new', 'investigating', 'found') OR l.createdAt >= ${since})`);
   return repeatDriversForCase(itemId, links);
 }
@@ -354,7 +364,7 @@ export async function getIncidentDashboard(f: CaseScopeFilter) {
 
 export async function getLostDashboard(f: CaseScopeFilter) {
   const d = await db();
-  const scope = await caseScopeSql(sql`l.projectId`, f);
+  const scope = sql`${await caseScopeSql(sql`l.projectId`, f)} AND l.archivedAt IS NULL`;
   const now = utcNowStr();
   const due = sql`COALESCE(l.dueDate, DATE_ADD(l.createdAt, INTERVAL 7 DAY))`;
   const open = sql`l.status IN ('new','investigating','found')`;
@@ -419,7 +429,7 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
   // repetia-se para sempre (P3 lote 16a). A tabela e os dados ficam.
   const lostRows = rowsOf(await d.execute(sql`
     SELECT id, projectId, assignedTo, lastReminderAt FROM lost_found_items
-    WHERE status IN ('new','investigating','found') AND COALESCE(dueDate, DATE_ADD(createdAt, INTERVAL 7 DAY)) < ${nowStr}
+    WHERE status IN ('new','investigating','found') AND archivedAt IS NULL AND COALESCE(dueDate, DATE_ADD(createdAt, INTERVAL 7 DAY)) < ${nowStr}
     ORDER BY id ASC LIMIT 500`)).filter((r) => reminderDue(fmt(r.lastReminderAt), now));
   let complaintRows: any[] = [];
   try {
@@ -608,12 +618,8 @@ export async function setLostDriverAccountability(linkId: number, patch: { costA
     const pts = Math.max(0, Math.min(20, Math.trunc(patch.points)));
     upd.points = pts;
     const { employeePenalties } = await import("../drizzle/schema");
-    let empId = link.employeeId;
-    if (!empId && pts > 0) {
-      const [e] = await d.select({ id: employees.id }).from(employees).where(eq(employees.multiparkAgentName, link.driverName)).limit(1);
-      empId = e?.id ?? null;
-      if (empId) upd.employeeId = empId;
-    }
+    // Pontos só a uma ficha escolhida explicitamente — nunca adivinhada pelo nome (16c).
+    const empId = link.employeeId;
     if (pts > 0 && !empId) throw new Error("Este condutor não está associado a um colaborador — anexa-o pelo colaborador para lhe atribuir pontos.");
     if (empId && pts > 0) {
       // só pontos a pessoas das cidades de quem propõe
@@ -670,26 +676,5 @@ export async function signedFileUrl(key: string | null | undefined, url: string 
   } catch { /* cai no fallback */ }
   if (url && /^https?:\/\//.test(url)) return url;
   return key ? `/api/file/${encodeURI(key)}` : url ?? null;
-}
-
-/** Apaga o caso E os ficheiros (fotos + foto da entrega), mensagens e condutores. */
-export async function deleteLostCaseFully(id: number): Promise<void> {
-  const d = await db();
-  const [item] = await d.select({ returnPhotoKey: lostFoundItems.returnPhotoKey, returnPhotoUrl: lostFoundItems.returnPhotoUrl }).from(lostFoundItems).where(eq(lostFoundItems.id, id)).limit(1);
-  const photos = await d.select({ fileKey: lostFoundPhotos.fileKey, url: lostFoundPhotos.url }).from(lostFoundPhotos).where(eq(lostFoundPhotos.itemId, id));
-  const { storageDelete } = await import("./storage");
-  // Fotos copiadas de/para reclamações partilham a key — só apaga ficheiros que
-  // nenhuma reclamação ainda referencia.
-  const { complaintPhotos } = await import("../drizzle/schema");
-  const keys = photos.map((p) => p.fileKey || p.url).filter(Boolean) as string[];
-  const shared = keys.length
-    ? new Set((await d.select({ k: complaintPhotos.fileKey }).from(complaintPhotos).where(inArray(complaintPhotos.fileKey, keys))).map((r) => r.k))
-    : new Set<string>();
-  for (const k of keys) if (!shared.has(k)) await storageDelete(k);
-  if (item?.returnPhotoKey || item?.returnPhotoUrl) await storageDelete(item.returnPhotoKey || item.returnPhotoUrl);
-  await d.delete(lostFoundPhotos).where(eq(lostFoundPhotos.itemId, id));
-  await d.delete(lostFoundMessages).where(eq(lostFoundMessages.itemId, id));
-  await d.delete(lostFoundAttachedDrivers).where(eq(lostFoundAttachedDrivers.itemId, id));
-  await d.delete(lostFoundItems).where(eq(lostFoundItems.id, id));
 }
 

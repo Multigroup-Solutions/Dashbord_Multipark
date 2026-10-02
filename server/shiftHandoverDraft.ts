@@ -339,7 +339,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
 
   const lostRows = await safe("lost&found", async () => rowsOf(await db.execute(sql`
     SELECT id, clientName, description, status FROM lost_found_items
-    WHERE status IN ('new', 'investigating', 'found') AND ${inCity(sql`lost_found_items.projectId`)}
+    WHERE status IN ('new', 'investigating', 'found') AND archivedAt IS NULL AND ${inCity(sql`lost_found_items.projectId`)}
     ORDER BY createdAt DESC LIMIT ${sql.raw(String(OPEN_LIST_LIMIT))}`)), [] as any[]);
 
   // Ocorrências só existem na Multipark: sem ela não há cópia a que recorrer
