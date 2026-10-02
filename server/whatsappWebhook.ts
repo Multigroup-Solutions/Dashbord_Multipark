@@ -165,7 +165,7 @@ export function createWhatsappWebhookRouter(): Router {
       // Meta faz retry e o forward acontece nessa entrega.
       {
         const work = import("./whatsappWebhookForward")
-          .then((m) => (m.shouldForwardWebhook(payload) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
+          .then(async (m) => ((await m.shouldForwardWebhook(payload)) ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
           .catch(() => {});
         try {
           const { waitUntil } = await import("@vercel/functions");

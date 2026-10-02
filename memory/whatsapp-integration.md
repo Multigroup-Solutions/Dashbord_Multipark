@@ -734,3 +734,12 @@ Os dois erros do broadcast 8 resolvem-se do lado da Meta, não no código:
 - Secundário: corre via `waitUntil` depois do 200, try/catch próprio, timeout 5s, `redirect: "error"`, sem retry; falhas só logadas. Só reencaminha entregas que a dashboard processou com sucesso (num 500 a Meta faz retry e o forward vem nessa entrega).
 - Ponto de filtragem: `shouldForwardWebhook(payload)` — hoje devolve sempre true.
 **Notes**: desligado enquanto faltar o URL ou o segredo; URL tem de ser https (http só em localhost). Lado be: `be-multipark/memory/whatsapp-booking-messaging.md`.
+
+### 2026-10-02 — Filtro do forward: números internos ficam só na dashboard
+**Type**: feature (decisão do utilizador: dashboard = números INTERNOS, multipark = clientes/reservas, independentes, SEM sincronização)
+**Scope**: `server/whatsappWebhookForward.ts` (+ teste), `server/whatsappWebhook.ts` (await do filtro)
+**What**:
+- `shouldForwardWebhook(payload, lookup?)` agora é ASYNC. NÃO reencaminha só quando o evento é APENAS mensagens recebidas e TODOS os remetentes são internos: `employees.phone` (normalizado com `shared/phone.ts`, como o inbox) + `extra_leads` (`phoneE164`/`phone`). Cache do conjunto 5 min (`invalidateInternalPhoneCache`).
+- Segue SEMPRE: qualquer `statuses`, qualquer evento que não seja `messages` (templates, chamadas…), payload misto (o raw body vai inteiro ou não vai — editar partia a assinatura), payload estranho, e erro na consulta à BD (fail-open: no be um número desconhecido cai em "não atribuídas", só admins).
+- `classifyForwardPayload` (PURA) separa a decisão da consulta; corre depois do 200, nunca atrasa a Meta.
+**Notes**: vitest `server/whatsappWebhookForward.test.ts` 13/13, `server/whatsappWebhook*` 13/13; tsc limpo. O inbox da dashboard NÃO mudou (continua a ver mensagens de clientes). Lado be: `be-multipark/memory/whatsapp-booking-messaging.md`.
