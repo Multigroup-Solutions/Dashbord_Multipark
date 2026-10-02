@@ -8,6 +8,8 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 const state = vi.hoisted(() => ({
   lineBooking: "bk1" as string | null,
+  /** Feito na app Multipark? */
+  lineDone: false,
   sql: [] as string[],
   closed: [] as Array<[string, string, number]>,
   access: null as any,
@@ -25,6 +27,7 @@ vi.mock("./db", async (original) => ({
 vi.mock("./multiparkDb/serviceExtras", async (original) => ({
   ...(await original<object>()),
   serviceLineBookingId: async () => state.lineBooking,
+  serviceLine: async () => (state.lineBooking == null ? null : { bookingId: state.lineBooking, done: state.lineDone }),
 }));
 vi.mock("./multiparkDb/bookingSearch", async (original) => ({
   ...(await original<object>()),
@@ -43,6 +46,7 @@ const porto = { all: false, defaultCityId: 50, cityName: "Porto", cityIds: [50],
 
 beforeEach(() => {
   state.lineBooking = "bk1";
+  state.lineDone = false;
   state.sql = [];
   state.closed = [];
   state.access = national;
@@ -74,6 +78,18 @@ describe("services.setExtraDone", () => {
     expect(r).toEqual({ success: true, tasksClosed: 0 });
     expect(state.sql).toHaveLength(1);
     expect(state.closed).toHaveLength(0);
+  });
+
+  it("feito na app Multipark: reabrir cá → recusa (reabre-se lá), sem gravar", async () => {
+    state.lineDone = true;
+    await expect(caller().services.setExtraDone({ bookingId: "bk1", lineId: "l1", done: false })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("app Multipark") });
+    expect(state.sql).toHaveLength(0);
+  });
+
+  it("feito na app Multipark: dar baixa cá na mesma → grava (não estraga nada)", async () => {
+    state.lineDone = true;
+    const r = await caller().services.setExtraDone({ bookingId: "bk1", lineId: "l1", done: true });
+    expect(r.success).toBe(true);
   });
 
   it("quem só vê a sua cidade: reserva de outra cidade → recusa", async () => {

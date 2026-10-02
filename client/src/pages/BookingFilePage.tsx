@@ -9,13 +9,14 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { multiparkBookingUrl } from "@/lib/multiparkLinks";
 import BookingCashCheck from "@/components/cashCheck/BookingCashCheck";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertTriangle, Car, ChevronDown, ChevronRight, Clock, CreditCard, ExternalLink, FileSearch, FileText, Info, Lock,
-  MapPin, MessageSquare, PenLine, RefreshCw, Search, Sparkles, Star, User, Video,
+  MapPin, MessageSquare, PenLine, Search, Sparkles, Star, User, Video,
 } from "lucide-react";
 
 /**
@@ -64,19 +65,6 @@ function UnavailableNote({ reason }: { reason: string }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
       <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" /> <span>{reason}</span>
-    </div>
-  );
-}
-
-/** Erro ≠ vazio: a secção diz que falhou e deixa tentar de novo. */
-function QueryErrorNote({ error, onRetry, retrying }: { error: { message: string }; onRetry: () => void; retrying?: boolean }) {
-  return (
-    <div className="flex flex-wrap items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-900">
-      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-      <span className="min-w-0 flex-1">Não foi possível carregar: {error.message}</span>
-      <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={onRetry} disabled={retrying}>
-        <RefreshCw className={`w-3 h-3 mr-1 ${retrying ? "animate-spin" : ""}`} /> Tentar de novo
-      </Button>
     </div>
   );
 }

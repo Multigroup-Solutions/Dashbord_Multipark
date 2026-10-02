@@ -72,7 +72,19 @@ export function buildServiceLineBookingSql(lineId: string): { sql: string; param
 
 /** Id da reserva da linha, ou null se a linha não existir. Lança se a BD da Multipark falhar. */
 export async function serviceLineBookingId(lineId: string, query: Query = multiparkDbQuery): Promise<string | null> {
-  const { sql, params } = buildServiceLineBookingSql(lineId);
+  return (await serviceLine(lineId, query))?.bookingId ?? null;
+}
+
+/** A linha na Multipark: de que reserva é e se já está feita lá. PURA. */
+export function buildServiceLineSql(lineId: string): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const sql = `SELECT e."bookingId" AS booking_id, e."done" AS done FROM "BookingExtraService" e WHERE e."id" = ${p.add(lineId)} LIMIT 1`;
+  return { sql, params: p.values };
+}
+
+/** A linha (reserva + feito na Multipark), ou null se não existir. Lança se a BD da Multipark falhar. */
+export async function serviceLine(lineId: string, query: Query = multiparkDbQuery): Promise<{ bookingId: string; done: boolean } | null> {
+  const { sql, params } = buildServiceLineSql(lineId);
   const [r] = await query<Record<string, unknown>>(sql, params);
-  return r?.booking_id == null ? null : String(r.booking_id);
+  return r?.booking_id == null ? null : { bookingId: String(r.booking_id), done: bool(r.done) };
 }

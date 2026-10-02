@@ -11,6 +11,12 @@ import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "sonner";
 import { Satellite, Gauge, Battery, WifiOff, Link as LinkIcon, RefreshCw } from "lucide-react";
+import { fmtPTTime } from "@/lib/lisbonTime";
+import { retryTransient } from "@/lib/queryRetry";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+// Tooltip/popup do Leaflet são HTML e os nomes vêm do Zello e das fichas:
+// sem escapar, um nome com "<img onerror=…>" corria no browser.
+import { escapeHtml } from "@shared/caseRules";
 
 const SPEED_ALERT_KMH = 130;
 const BATTERY_ALERT = 15;
@@ -35,8 +41,8 @@ function markerColor(l: LiveLoc): string {
 
 export function ZelloLiveTab() {
   const utils = trpc.useUtils();
-  const { data: locations = [], isFetching, refetch, dataUpdatedAt } =
-    trpc.operational.zello.locations.useQuery(undefined, { refetchInterval: 30_000 });
+  const locQ = trpc.operational.zello.locations.useQuery(undefined, { refetchInterval: 30_000, retry: retryTransient });
+  const { data: locations = [], isFetching, refetch, dataUpdatedAt } = locQ;
   const { data: zelloUsers = [] } = trpc.operational.zello.users.useQuery();
   const { data: mappings = [] } = trpc.operational.zello.mappings.useQuery(undefined, { refetchInterval: 60_000 });
   const { data: pdas = [] } = trpc.operational.pdas.list.useQuery();
@@ -109,11 +115,11 @@ export function ZelloLiveTab() {
         radius: 9, weight: 2, color: "#ffffff", fillColor: markerColor(l), fillOpacity: 0.95,
       });
       const resolved = mapByZello.get(l.username.toLowerCase());
-      m.bindTooltip(name, { permanent: true, direction: "top", offset: [0, -8], className: "zello-tooltip" });
+      m.bindTooltip(escapeHtml(name), { permanent: true, direction: "top", offset: [0, -8], className: "zello-tooltip" });
       m.bindPopup(
-        `<b>${name}</b><br/>` +
-        `${resolved?.source === "pda" ? `via check-in de hoje no PDA ${resolved.pdaName ?? ""}<br/>` : ""}` +
-        `${l.displayName !== name ? `Zello: ${l.displayName}<br/>` : ""}` +
+        `<b>${escapeHtml(name)}</b><br/>` +
+        `${resolved?.source === "pda" ? `via check-in de hoje no PDA ${escapeHtml(String(resolved.pdaName ?? ""))}<br/>` : ""}` +
+        `${l.displayName !== name ? `Zello: ${escapeHtml(String(l.displayName ?? ""))}<br/>` : ""}` +
         `Velocidade: ${Math.round(l.speed)} km/h<br/>` +
         `${l.batteryLevel > 0 ? `Bateria: ${l.batteryLevel}%<br/>` : ""}` +
         `${l.lastReportDelay > 60 ? `Último report há ${Math.round(l.lastReportDelay / 60)} min` : "A reportar agora"}`
@@ -152,14 +158,17 @@ export function ZelloLiveTab() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Satellite className="w-4 h-4" />
-          {live.length} condutor(es) com posição · atualiza a cada 30s
-          {dataUpdatedAt ? ` · última: ${new Date(dataUpdatedAt).toLocaleTimeString("pt-PT")}` : ""}
+          {locQ.error && !locQ.data ? "Sem posições" : `${live.length} condutor(es) com posição`} · atualiza a cada 30s
+          {dataUpdatedAt ? ` · última: ${fmtPTTime(dataUpdatedAt)}` : ""}
         </div>
         <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching}>
           <RefreshCw className={`w-3.5 h-3.5 mr-1 ${isFetching ? "animate-spin" : ""}`} /> Atualizar
         </Button>
       </div>
 
+      {locQ.error && (
+        <QueryErrorNote error={locQ.error} onRetry={() => refetch()} retrying={isFetching} what={locQ.data ? "as posições mais recentes (o mapa mostra as últimas que chegaram)" : "as posições do Zello"} />
+      )}
       {alerts.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {alerts.map((a) => (
@@ -172,7 +181,7 @@ export function ZelloLiveTab() {
 
       <Card>
         <CardContent className="p-0 overflow-hidden rounded-lg">
-          <div ref={mapDiv} className="w-full h-[520px] z-0" />
+          <div ref={mapDiv} className="w-full h-[360px] sm:h-[520px] z-0" />
         </CardContent>
       </Card>
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
@@ -214,7 +223,7 @@ export function ZelloLiveTab() {
                 const isPda = !!pda;
                 const hasToday = linked?.source === "pda";
                 return (
-                  <div key={u.name} className={`flex items-center gap-2 p-2 rounded-lg border ${isPda ? (hasToday ? "bg-muted/30" : "bg-blue-50/40 border-blue-200") : linked ? "bg-muted/30" : "bg-amber-50/50 border-amber-200"}`}>
+                  <div key={u.name} className={`flex flex-wrap sm:flex-nowrap items-center gap-2 p-2 rounded-lg border ${isPda ? (hasToday ? "bg-muted/30" : "bg-blue-50/40 border-blue-200") : linked ? "bg-muted/30" : "bg-amber-50/50 border-amber-200"}`}>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{u.fullName || u.name}</p>
                       <p className="text-[11px] text-muted-foreground truncate">
@@ -234,7 +243,7 @@ export function ZelloLiveTab() {
                         )}
                       </div>
                     ) : (
-                      <div className="w-52 shrink-0">
+                      <div className="w-full sm:w-52 shrink-0">
                         <SearchableSelect
                           options={employeeOptions}
                           value={linked ? String(linked.employeeId) : ""}

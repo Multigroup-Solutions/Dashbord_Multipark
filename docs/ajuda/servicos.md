@@ -2,15 +2,26 @@
 modulo: servicos
 titulo: Serviços
 rotas: /servicos
-palavras: serviços, servicos, serviços extra, lavagem, lavagens, carregamento elétrico, carregamento, valet, flexível, dar baixa, feito, pendente, tarefa do serviço
+palavras: serviços, servicos, serviços extra, lavagem, lavagens, carregamento elétrico, carregamento, valet, flexível, dar baixa, feito, pendente, reabrir, feito por, feito na app multipark, tarefa do serviço
 ---
 # Serviços
 
 Menu **Operações → Serviços**: os serviços extra das reservas (lavagens, carregamentos elétricos, valet…) no período escolhido, com totais por tipo e por parque. Lidos **ao vivo** da base da Multipark (reservas não canceladas com saída no período, só das tuas cidades).
 
 1. Filtra por **tipo** e **estado** (Feito / Pendente). As marcas operacionais a 0 € (ex.: "No pay") ficam escondidas por omissão.
-2. Clica numa linha para abrir a **ficha da reserva**. Clica no estado para **dar baixa** (ou reabrir): fica guardado na app; o serviço aparece feito se estiver feito na Multipark ou se lhe deres baixa aqui. Dar baixa **fecha logo a tarefa** desse serviço (também no Google Tarefas); reabrir o serviço não reabre a tarefa — reabre-a à mão em **Tarefas** se for preciso.
-3. Quando o serviço gerou uma tarefa, aparece o botão **Tarefa** ao lado do nome (**Tarefa ✓** se já está concluída): abre-a em **Tarefas**.
+2. Clica numa linha (ou carrega em Enter) para abrir a **ficha da reserva**.
+3. **Dar baixa e reabrir** (team leaders, supervisores e quem edita Serviços): clica no estado.
+   - Fica guardado na app, por linha de serviço. Por baixo do estado aparece **quem** e **quando**: "Feito por Ana · 02/10/2026 14:32".
+   - O serviço está **feito** se estiver feito na app Multipark **ou** se lhe deres baixa aqui.
+   - Se foi feito na app Multipark, aparece **"Feito na app Multipark"** e só se reabre lá: aqui não dá para reabrir.
+   - Dar baixa **fecha logo a tarefa** desse serviço (também no Google Tarefas). Reabrir o serviço não reabre a tarefa: reabre-a à mão em **Tarefas**, se for preciso.
+   - Condutores e extras veem o estado, mas não o mudam.
+4. Quando o serviço gerou uma tarefa, aparece o botão **Tarefa** ao lado do nome (**Tarefa ✓** se já está concluída): abre-a em **Tarefas**.
+5. **CSV** descarrega a lista filtrada. A data de saída é o dia de Lisboa e há a coluna **Feito por**.
+
+**Limites e falhas**
+- A leitura traz até 5000 serviços por período. Se chegar a esse teto, aparece o aviso para encurtares o período.
+- Se a base da Multipark não responder, aparece **"Não foi possível carregar os serviços"** com **Tentar de novo**, em vez de "Sem serviços extra neste período".
 
 **Tarefas automáticas dos serviços**
 - Em **Definições → Parâmetros → Serviços → tarefas** (admin) escolhe-se, por cidade e por tipo de serviço, se cada reserva com esse serviço gera uma tarefa e quem é o responsável (opcional).

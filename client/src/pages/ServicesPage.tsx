@@ -16,6 +16,11 @@ import { toast } from "sonner";
 import { StatValue } from "@/components/StatValue";
 import { Link, useLocation } from "wouter";
 import { serviceTypeOf } from "@shared/serviceTasks";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can, seesBeyondOwn } from "@shared/access";
+import { lisbonDayOf, utcMs } from "@shared/lisbonDay";
+import { retryTransient } from "@/lib/queryRetry";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 import {
   Sparkles, Euro, TrendingUp, CheckCircle2, Clock, Droplets, Zap, Car, Package, Download, ListChecks,
@@ -65,7 +70,16 @@ export default function ServicesPage() {
   // Cidade/projeto do filtro global (o servidor aplica sempre o âmbito do utilizador)
   const globalFilters = useGlobalFilters();
 
-  const { data, isLoading } = trpc.services.multiparkExtras.useQuery({ startDate, endDate, projectId: globalFilters.projectId });
+  const servicesQ = trpc.services.multiparkExtras.useQuery(
+    { startDate, endDate, projectId: globalFilters.projectId },
+    { retry: retryTransient },
+  );
+  const { data, isLoading } = servicesQ;
+  // Erro ≠ "sem serviços": sem resposta mostra-se o erro, nunca a lista vazia.
+  const servicesError = servicesQ.error && !data ? servicesQ.error : null;
+  // Dar baixa / reabrir: a mesma permissão que o servidor exige.
+  const { user } = useAuth();
+  const canMark = !!user && can(user as any, "servicos", "edit") && seesBeyondOwn(user as any, "servicos");
   const [showFlags, setShowFlags] = usePersistedState<boolean>("servicos.flags", false);
   // Detalhe: a ficha da reserva (ao vivo da Multipark).
   const [, navigate] = useLocation();
@@ -186,7 +200,14 @@ export default function ServicesPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {data?.truncated && !servicesError && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          A lista mostra só os primeiros {fmtN(data.limit)} serviços deste período — encurta o período para os veres todos.
+        </p>
+      )}
+      {servicesError ? (
+        <QueryErrorNote error={servicesError} onRetry={() => servicesQ.refetch()} retrying={servicesQ.isFetching} what="os serviços" />
+      ) : isLoading ? (
         <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
       ) : services.length === 0 ? (
         <Card className="p-10 text-center">
@@ -294,16 +315,16 @@ export default function ServicesPage() {
               size="sm"
               disabled={filtered.length === 0}
               onClick={() => {
-                const headers = ["Serviço","Cliente","Matrícula","Parque","Preço","Check-out","Estado"];
+                const headers = ["Serviço","Cliente","Matrícula","Parque","Preço","Check-out (dia de Lisboa)","Estado","Feito por"];
+                const cell = (v: unknown) => String(v ?? "").replace(/[;\r\n]+/g, " ");
                 const rows = filtered.map((s: any) => [
-                  (s.serviceName || "").replace(/;/g, ","),
-                  (s.clientName || "").replace(/;/g, ","),
-                  s.licensePlate || "",
-                  (s.parkName || "").replace(/;/g, ","),
+                  s.serviceName, s.clientName, s.licensePlate, s.parkName,
                   (s.price || 0).toFixed(2),
-                  s.checkOut ? new Date(s.checkOut).toISOString().slice(0, 10) : "",
+                  // Dia de LISBOA da saída (a BD grava UTC): 23:30 de Lisboa não passa para o dia seguinte.
+                  s.checkOut ? lisbonDayOf(utcMs(s.checkOut)) : "",
                   s.done ? "Feito" : "Pendente",
-                ]);
+                  doneByText(s),
+                ].map(cell));
                 const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
                 const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
                 const url = URL.createObjectURL(blob);
@@ -331,11 +352,14 @@ export default function ServicesPage() {
                 </tr>
               </thead>
               <tbody>
-                {sortedServices.map((s: any, i: number) => (
+                {sortedServices.map((s: any) => (
                   <tr
-                    key={`${s.bookingId}-${i}`}
-                    className="border-b hover:bg-muted/50 cursor-pointer"
+                    key={`${s.bookingId}:${s.id}`}
+                    className="border-b hover:bg-muted/50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => navigate(`/reserva/${encodeURIComponent(s.bookingId)}`)}
+                    tabIndex={0}
+                    aria-label={`Abrir a ficha da reserva de ${s.clientName || s.licensePlate || "cliente"}`}
+                    onKeyDown={(e) => { if (e.key === "Enter") navigate(`/reserva/${encodeURIComponent(s.bookingId)}`); }}
                   >
                     <td className="p-2 font-medium min-w-[12rem]">
                       {s.serviceName}
@@ -357,17 +381,12 @@ export default function ServicesPage() {
                     <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtE(s.price || 0)}</td>
                     <td className="p-2 text-xs whitespace-nowrap">{s.checkOut ? fmtPTDate(s.checkOut) : "—"}</td>
                     <td className="p-2">
-                      {/* Clicar dá baixa / reabre (guardado na app; o sync respeita) */}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); if (s.id) setDoneMut.mutate({ bookingId: s.bookingId, lineId: s.id, done: !s.done }); }}
-                        title={s.done ? "Clique para reabrir" : "Clique para dar baixa (feito)"}
-                        disabled={setDoneMut.isPending}
-                      >
-                        <Badge variant={s.done ? "default" : "secondary"} className="cursor-pointer hover:opacity-80">
-                          {s.done ? "Feito ✓" : "Pendente"}
-                        </Badge>
-                      </button>
+                      <DoneCell
+                        s={s}
+                        canMark={canMark}
+                        pending={setDoneMut.isPending && setDoneMut.variables?.lineId === s.id}
+                        onToggle={() => setDoneMut.mutate({ bookingId: s.bookingId, lineId: s.id, done: !s.done })}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -380,6 +399,50 @@ export default function ServicesPage() {
 
         </>
       )}
+    </div>
+  );
+}
+
+/** "Feito na app Multipark" / "Feito por Ana · 02/10/2026 14:32" / "". */
+function doneByText(s: { done: boolean; doneSource: string | null; localBy: string | null; localAt: string | null }): string {
+  if (!s.done) return s.localBy ? `Reaberto por ${s.localBy}${s.localAt ? ` · ${fmtPTDateTime(s.localAt)}` : ""}` : "";
+  if (s.doneSource === "multipark") return "Feito na app Multipark";
+  return `Feito por ${s.localBy ?? "—"}${s.localAt ? ` · ${fmtPTDateTime(s.localAt)}` : ""}`;
+}
+
+/**
+ * Estado de uma linha de serviço. Quem pode marcar dá baixa / reabre cá (por
+ * linha); o que está feito na app Multipark reabre-se lá. Diz sempre quem deu
+ * o "feito" (a app Multipark ou a pessoa, com a hora).
+ */
+function DoneCell({ s, canMark, pending, onToggle }: {
+  s: { done: boolean; doneSource: string | null; localBy: string | null; localAt: string | null; canReopen: boolean };
+  canMark: boolean; pending: boolean; onToggle: () => void;
+}) {
+  const who = doneByText(s);
+  const badge = (
+    <Badge variant={s.done ? "default" : "secondary"} className={canMark ? "cursor-pointer hover:opacity-80" : ""}>
+      {pending ? "A guardar…" : s.done ? "Feito ✓" : "Pendente"}
+    </Badge>
+  );
+  const clickable = canMark && (!s.done || s.canReopen);
+  return (
+    <div className="space-y-0.5">
+      {clickable ? (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggle(); }}
+          onKeyDown={(e) => e.stopPropagation()}
+          title={s.done ? "Reabrir (desfaz o feito marcado cá)" : "Dar baixa (feito)"}
+          aria-label={s.done ? "Reabrir o serviço" : "Dar baixa no serviço"}
+          disabled={pending}
+        >
+          {badge}
+        </button>
+      ) : (
+        <span title={s.done && s.doneSource === "multipark" && canMark ? "Feito na app Multipark — reabre-se lá" : undefined}>{badge}</span>
+      )}
+      {who && <p className="text-[11px] leading-snug text-muted-foreground whitespace-nowrap">{who}</p>}
     </div>
   );
 }

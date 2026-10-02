@@ -1941,18 +1941,52 @@ export async function acknowledgeSpeedAlert(id: number, userId: number) {
 
 // ─── OPERACIONAL: RADIO TRANSCRIPTIONS ──────────────────────────────────────
 
-export async function getRadioTranscriptions(filters?: { employeeId?: number; vehicleId?: number; limit?: number }) {
+/** Transcrições por página (as mais recentes primeiro). */
+export const RADIO_PAGE_DEFAULT = 50;
+export const RADIO_PAGE_MAX = 200;
+
+/**
+ * Transcrições de rádio, mais recentes primeiro, com quem é quem já resolvido:
+ * o condutor (ficha), quem transcreveu (conta; sem conta = veio pela API
+ * externa) e a viatura. Página de `limit` (por omissão 50, máx. 200); `beforeId`
+ * continua a lista ("Ver mais"). `hasMore`/`nextCursor` dizem se há mais antigas.
+ */
+export async function getRadioTranscriptions(filters?: { employeeId?: number; vehicleId?: number; limit?: number; beforeId?: number }) {
   const db = await getDb();
-  if (!db) return [];
-  let query = db.select().from(radioTranscriptions).orderBy(desc(radioTranscriptions.createdAt));
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível." });
+  const limit = Math.min(Math.max(Math.floor(filters?.limit ?? RADIO_PAGE_DEFAULT), 1), RADIO_PAGE_MAX);
   // Cidade: a do condutor; sem condutor, a de quem transcreveu.
   const conditions: any[] = [sql`((${radioTranscriptions.employeeId} IS NOT NULL AND ${employeeScope(radioTranscriptions.employeeId)})
     OR (${radioTranscriptions.employeeId} IS NULL AND ${userScope(radioTranscriptions.createdById)}))`];
   if (filters?.employeeId) conditions.push(eq(radioTranscriptions.employeeId, filters.employeeId));
   if (filters?.vehicleId) conditions.push(eq(radioTranscriptions.vehicleId, filters.vehicleId));
-  if (conditions.length > 0) query = query.where(and(...conditions) as any) as any;
-  if (filters?.limit) query = query.limit(filters.limit) as any;
-  return query;
+  if (filters?.beforeId) conditions.push(lt(radioTranscriptions.id, filters.beforeId));
+  const rows = await db.select({
+    id: radioTranscriptions.id,
+    audioUrl: radioTranscriptions.audioUrl,
+    transcription: radioTranscriptions.transcription,
+    summary: radioTranscriptions.summary,
+    employeeId: radioTranscriptions.employeeId,
+    vehicleId: radioTranscriptions.vehicleId,
+    duration: radioTranscriptions.duration,
+    transcribedAt: radioTranscriptions.transcribedAt,
+    createdById: radioTranscriptions.createdById,
+    createdAt: radioTranscriptions.createdAt,
+    employeeName: employees.fullName,
+    createdByName: users.name,
+    vehiclePlate: vehicles.plate,
+  })
+    .from(radioTranscriptions)
+    .leftJoin(employees, eq(employees.id, radioTranscriptions.employeeId))
+    .leftJoin(users, eq(users.id, radioTranscriptions.createdById))
+    .leftJoin(vehicles, eq(vehicles.id, radioTranscriptions.vehicleId))
+    .where(and(...conditions))
+    // Mesma ordem que o cursor (id cresce com a criação).
+    .orderBy(desc(radioTranscriptions.id))
+    .limit(limit + 1);
+  const items = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
+  return { items, hasMore, nextCursor: hasMore ? items[items.length - 1].id : null };
 }
 
 export async function createRadioTranscription(data: InsertRadioTranscription) {
@@ -5207,12 +5241,6 @@ export async function updatePda(id: number, data: Partial<InsertPda>) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(pdas).set(data).where(eq(pdas.id, id));
-}
-
-export async function deletePda(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.delete(pdas).where(eq(pdas.id, id));
 }
 
 /** PDAs da(s) cidade(s) do utilizador — um PDA é da cidade de quem lá fez check-in (ver pdaScope). */

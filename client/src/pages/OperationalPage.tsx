@@ -21,7 +21,7 @@ import { OpsPresencePanel } from "@/components/OpsPresencePanel";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { lisbonToday } from "@shared/expensePeriods";
-import { addDays } from "@shared/lisbonDay";
+import { addDays, daysInRange } from "@shared/lisbonDay";
 import {
   Plus, Trash2, Eye, Gauge, ArrowUpDown, Satellite, Users, Settings,
   History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw,
@@ -29,10 +29,15 @@ import {
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { roleRank } from "@shared/access";
-function useRoleAtLeast(min: string): boolean {
+import { can, seesBeyondOwn, type ModuleId } from "@shared/access";
+import { OPERATIONAL_TABS as TABS, operationalAccess, type OperationalTab as TabKey } from "@shared/operationalTabs";
+import { retryTransient } from "@/lib/queryRetry";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+
+/** Pode fazer `action` no módulo para além do que é seu? (a mesma regra do servidor) */
+function useCan(module: ModuleId, action: "view" | "edit" | "manage" = "view"): boolean {
   const { user } = useAuth();
-  return roleRank(user?.role) >= (roleRank(min) < 0 ? 99 : roleRank(min));
+  return !!user && can(user as any, module, action) && seesBeyondOwn(user as any, module);
 }
 
 /** Recolha GPS: o cron diário corre às 03:30 UTC (≈ 04:30 de Lisboa no verão, 03:30 no inverno). */
@@ -40,12 +45,12 @@ const GPS_COLLECTION_TEXT = "de madrugada (≈ 04:30 em Lisboa no verão, 03:30 
 
 type SpeedTarget = { employeeId?: number; zelloUsername?: string } | null;
 
-const TABS = ["dia", "live", "history", "pdas"] as const;
-type TabKey = (typeof TABS)[number];
-
 export default function OperationalPage() {
+  const { user } = useAuth();
+  // Abas pelas permissões (as do servidor); condutor/extra: só o próprio histórico de velocidade.
+  const { tabs: allowed, ownSpeedOnly } = operationalAccess(user as any);
   const [rawTab, setTab] = usePersistedState<string>("operacional.tab", "dia");
-  const tab: TabKey = (TABS as readonly string[]).includes(rawTab) ? (rawTab as TabKey) : "dia";
+  const tab: TabKey = (allowed as string[]).includes(rawTab) ? (rawTab as TabKey) : (allowed[0] ?? "dia");
   // Links das notificações: /operacional?tab=pdas abre esse separador.
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -53,26 +58,46 @@ export default function OperationalPage() {
   }, []);
   const [speedTarget, setSpeedTarget] = useState<SpeedTarget>(null);
   const openSpeedHistory = (t: SpeedTarget) => { setSpeedTarget(t); setTab("history"); };
+  if (ownSpeedOnly) {
+    return (
+      <div className="space-y-6">
+        <p className="text-muted-foreground">O teu histórico de velocidade (GPS do Zello, por dia).</p>
+        <SpeedHistoryCard target={{ employeeId: 0 }} onTarget={() => undefined} people={undefined} threshold={null} own />
+      </div>
+    );
+  }
+  if (!allowed.length) {
+    return <Card className="p-8 text-center text-sm text-muted-foreground">A tua conta não tem acesso à Actividade Diária.</Card>;
+  }
+  const has = (t: TabKey) => allowed.includes(t);
   return (
     <div className="space-y-6">
       <div>
         <p className="text-muted-foreground">Quem fez o quê, km e velocidades, e os PDAs. As transcrições de rádio estão em Operações → Rádio.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="dia"><Activity className="w-4 h-4 mr-1" />Atividade do Dia</TabsTrigger>
-          <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>
-          <TabsTrigger value="history"><Gauge className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>
-          <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>
+        <TabsList className="flex-wrap h-auto">
+          {has("dia") && <TabsTrigger value="dia"><Activity className="w-4 h-4 mr-1" />Atividade do Dia</TabsTrigger>}
+          {has("live") && <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>}
+          {has("history") && <TabsTrigger value="history"><Gauge className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>}
+          {has("pdas") && <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>}
         </TabsList>
-        <TabsContent value="dia"><DayActivityTab onOpenSpeedHistory={openSpeedHistory} /></TabsContent>
-        <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>
-        <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>
-        <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>
+        {has("dia") && <TabsContent value="dia"><DayActivityTab onOpenSpeedHistory={has("history") ? openSpeedHistory : undefined} /></TabsContent>}
+        {has("live") && <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>}
+        {has("history") && <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>}
+        {has("pdas") && <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>}
       </Tabs>
     </div>
   );
 }
+
+/** Tipo de pessoa na Atividade, por extenso (o ícone sozinho não chega). */
+const PERSON_KIND_LABEL: Record<string, { icon: string; label: string; title: string }> = {
+  colaborador: { icon: "", label: "", title: "Colaborador (ficha ligada ao agente da Multipark)" },
+  parceiro: { icon: "🤝", label: "parceiro", title: "Parceiro/agência: marca reservas pelo portal" },
+  por_ligar: { icon: "⚠", label: "agente por ligar", title: "Agente da Multipark sem ficha ligada — liga-o em RH → Agentes" },
+  sem_login: { icon: "📡", label: "PDA sem login", title: "Km do PDA sem ninguém com login (check-in de PDA)" },
+};
 
 const fmtEur = (n: number) => n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 const pct = (a: number, total: number) => (total > 0 ? `${Math.round((a / total) * 100)}%` : "—");
@@ -83,7 +108,10 @@ const pct = (a: number, total: number) => (total > 0 ? `${Math.round((a / total)
 // km/velocidades do GPS e ponto. Clicar numa pessoa abre o dia dela.
 type Preset = "today" | "yesterday" | "last7" | "last30" | "month" | "custom";
 
-function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedTarget) => void }) {
+/** Máximo de dias por pedido (o servidor recusa mais). */
+const ACTIVITY_MAX_DAYS = 93;
+
+function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: SpeedTarget) => void }) {
   const { projectId } = useGlobalFilters();
   const today = lisbonToday();
   const [preset, setPreset] = usePersistedState<Preset>("operacional.dia.preset", "today");
@@ -99,10 +127,12 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
     }
   }, [preset, custom, today]);
   const single = startDate === endDate;
-  const { data, isLoading } = trpc.multipark.dayActivity.useQuery(
+  const tooLong = daysInRange(startDate, endDate).length > ACTIVITY_MAX_DAYS;
+  const activityQ = trpc.multipark.dayActivity.useQuery(
     { startDate, endDate, projectId },
-    { enabled: !!startDate, refetchOnWindowFocus: false },
+    { enabled: !!startDate && !tooLong, refetchOnWindowFocus: false, retry: retryTransient },
   );
+  const { data, isLoading } = activityQ;
   const totals = data?.totals;
   const people = (data?.people ?? []) as any[];
   const canSeeCost = !!data?.canSeeCost;
@@ -133,6 +163,15 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
           <div className="ml-auto text-xs text-muted-foreground">{single ? startDate : `${startDate} → ${endDate}`}</div>
         </CardContent>
       </Card>
+
+      {tooLong && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          Intervalo demasiado longo: no máximo {ACTIVITY_MAX_DAYS} dias de cada vez.
+        </p>
+      )}
+      {activityQ.error && !data && (
+        <QueryErrorNote error={activityQ.error} onRetry={() => activityQ.refetch()} retrying={activityQ.isFetching} what="a atividade" />
+      )}
 
       {data?.actionsNotice && (
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
@@ -214,7 +253,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
           </p>
         </CardHeader>
         <CardContent>
-          {isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
+          {activityQ.error && !data ? <p className="text-sm text-muted-foreground">Sem números (ver o aviso acima).</p> : tooLong ? null : isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -238,17 +277,22 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
                   </tr>
                 </thead>
                 <tbody>
-                  {(daySort.sorted as any[]).map((pers) => (
+                  {(daySort.sorted as any[]).map((pers) => {
+                    const open = () => setDrawer({ key: pers.key, name: pers.name, employeeId: pers.employeeId, zello: pers.kind === "sem_login" ? pers.key.slice(5) : null });
+                    const kind = PERSON_KIND_LABEL[pers.kind] ?? PERSON_KIND_LABEL.colaborador;
+                    return (
                     <tr
                       key={pers.key}
-                      className={`border-b hover:bg-muted/40 cursor-pointer ${pers.kind === "por_ligar" || pers.kind === "sem_login" ? "bg-amber-50/40" : ""}`}
-                      onClick={() => setDrawer({ key: pers.key, name: pers.name, employeeId: pers.employeeId, zello: pers.kind === "sem_login" ? pers.key.slice(5) : null })}
+                      className={`border-b hover:bg-muted/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${pers.kind === "por_ligar" || pers.kind === "sem_login" ? "bg-amber-50/40 dark:bg-amber-950/20" : ""}`}
+                      onClick={open}
+                      tabIndex={0}
+                      aria-label={`Ver o dia de ${pers.name}`}
+                      onKeyDown={(e) => { if (e.key === "Enter") open(); }}
                     >
-                      <td className="p-2 font-medium min-w-[11rem]">
-                        {pers.kind === "parceiro" && "🤝 "}
-                        {pers.kind === "por_ligar" && "⚠ "}
-                        {pers.kind === "sem_login" && "📡 "}
+                      <td className="p-2 font-medium min-w-[11rem]" title={kind.title}>
+                        {kind.icon && <span aria-hidden>{kind.icon} </span>}
                         {pers.name}
+                        {kind.label && <span className="ml-1 text-[11px] font-normal text-muted-foreground">({kind.label})</span>}
                         {pers.isTeamLeader && <Badge className="ml-1 bg-amber-100 text-amber-800 border-amber-300 text-[11px] px-1.5 py-0">TL</Badge>}
                       </td>
                       <td className="p-2 text-right text-emerald-700 tabular-nums">{pers.checkins || ""}</td>
@@ -274,7 +318,8 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
                       <td className="p-2 text-right tabular-nums">{pers.pontoHours != null ? `${pers.pontoHours}h` : "—"}</td>
                       <td className="p-2 text-xs text-muted-foreground">{pers.pdaNames ?? ""}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {people.length === 0 && <tr><td colSpan={16} className="p-6 text-center text-muted-foreground">Sem atividade registada neste período.</td></tr>}
                 </tbody>
               </table>
@@ -290,11 +335,11 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory: (t: SpeedT
           minDate={startDate}
           maxDate={endDate}
           onClose={() => setDrawer(null)}
-          onOpenSpeedHistory={() => {
+          onOpenSpeedHistory={onOpenSpeedHistory ? () => {
             const t = drawer.employeeId != null ? { employeeId: drawer.employeeId } : drawer.zello ? { zelloUsername: drawer.zello } : null;
             setDrawer(null);
             if (t) onOpenSpeedHistory(t);
-          }}
+          } : undefined}
         />
       )}
     </div>
@@ -310,14 +355,15 @@ const CHANGE_LABEL: Record<string, string> = {
 function PersonDayDrawer({ person, defaultDate, minDate, maxDate, onClose, onOpenSpeedHistory }: {
   person: { key: string; name: string; employeeId: number | null; zello: string | null };
   defaultDate: string; minDate: string; maxDate: string;
-  onClose: () => void; onOpenSpeedHistory: () => void;
+  onClose: () => void; onOpenSpeedHistory?: () => void;
 }) {
   const { projectId } = useGlobalFilters();
   const [date, setDate] = useState(defaultDate);
   const clamped = date < minDate ? minDate : date > maxDate ? maxDate : date;
-  const { data, isLoading } = trpc.multipark.personDay.useQuery({ date: clamped, key: person.key, projectId }, { refetchOnWindowFocus: false });
+  const dayQ = trpc.multipark.personDay.useQuery({ date: clamped, key: person.key, projectId }, { refetchOnWindowFocus: false, retry: retryTransient });
+  const { data, isLoading } = dayQ;
   const d = data as any;
-  const canSpeed = person.employeeId != null || !!person.zello;
+  const canSpeed = !!onOpenSpeedHistory && (person.employeeId != null || !!person.zello);
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
@@ -334,7 +380,9 @@ function PersonDayDrawer({ person, defaultDate, minDate, maxDate, onClose, onOpe
               <Button size="sm" variant="outline" onClick={onOpenSpeedHistory}><Gauge className="w-4 h-4 mr-1" />Histórico de velocidade</Button>
             )}
           </div>
-          {isLoading || !d ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
+          {dayQ.error && !d ? (
+            <QueryErrorNote error={dayQ.error} onRetry={() => dayQ.refetch()} retrying={dayQ.isFetching} what="o dia desta pessoa" />
+          ) : isLoading || !d ? <p className="text-sm text-muted-foreground">A carregar…</p> : (
             <>
               <section>
                 <h3 className="text-sm font-semibold mb-1">Ações ({d.actions.length})</h3>
@@ -417,14 +465,19 @@ function PersonDayDrawer({ person, defaultDate, minDate, maxDate, onClose, onOpe
 
 function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTarget; onSpeedTarget: (t: SpeedTarget) => void }) {
   const { projectId } = useGlobalFilters();
-  const isAdmin = useRoleAtLeast("admin");
+  // Recolher / re-dividir: a mesma permissão do servidor (gerir o Histórico diário).
+  const isAdmin = useCan("historico_diario", "manage");
   const [selectedDate, setSelectedDate] = usePersistedState("operacional.hist.date", addDays(lisbonToday(), -1));
   const utils = trpc.useUtils();
 
-  const { data: history, isLoading } = trpc.operational.driverHistory.byDate.useQuery({ date: selectedDate, projectId });
+  const historyQ = trpc.operational.driverHistory.byDate.useQuery({ date: selectedDate, projectId }, { retry: retryTransient });
+  const { data: history, isLoading } = historyQ;
   const histSort = useTableSort(((history ?? []) as any[]));
-  const { data: stats } = trpc.operational.driverHistory.stats.useQuery({ date: selectedDate, projectId });
-  const { data: peopleData } = trpc.operational.driverHistory.people.useQuery({ projectId });
+  const statsQ = trpc.operational.driverHistory.stats.useQuery({ date: selectedDate, projectId }, { retry: retryTransient });
+  const stats = statsQ.data;
+  // Sem números (a carregar ou erro): "—", nunca 0.
+  const st = (v: number | undefined, f: (n: number) => string) => (stats ? f(v ?? 0) : "—");
+  const { data: peopleData } = trpc.operational.driverHistory.people.useQuery({ projectId }, { retry: retryTransient });
   const threshold = peopleData?.threshold ?? null;
 
   const [running, setRunning] = useState<null | "collect" | "resplit">(null);
@@ -504,14 +557,22 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
         <p className="text-sm text-muted-foreground">Recolha automática {GPS_COLLECTION_TEXT}, com os dados do dia anterior.</p>
       </div>
 
+      {(historyQ.error || statsQ.error) && !(history && stats) && (
+        <QueryErrorNote
+          error={(historyQ.error ?? statsQ.error)!}
+          onRetry={() => { historyQ.refetch(); statsQ.refetch(); }}
+          retrying={historyQ.isFetching || statsQ.isFetching}
+          what={`o GPS de ${selectedDate}`}
+        />
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
-        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Zellos com GPS</p><p className="text-xl font-bold tabular-nums truncate">{stats?.totalDrivers ?? 0}</p></CardContent></Card>
-        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Km Total</p><p className="text-xl font-bold tabular-nums truncate">{(stats?.totalKm ?? 0).toFixed(1)}</p></CardContent></Card>
-        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Horas em movimento</p><p className="text-xl font-bold tabular-nums truncate">{(stats?.totalHoursWorked ?? 0).toFixed(1)}h</p></CardContent></Card>
-        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Horas Parado</p><p className="text-xl font-bold tabular-nums truncate">{(stats?.totalHoursStopped ?? 0).toFixed(1)}h</p></CardContent></Card>
-        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Vel. Máx</p><p className="text-xl font-bold tabular-nums truncate text-red-600">{(stats?.maxSpeedOfDay ?? 0).toFixed(0)} km/h</p></CardContent></Card>
-        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Bat. Média</p><p className="text-xl font-bold tabular-nums truncate">{stats?.avgBattery ?? 0}%</p></CardContent></Card>
-        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Excessos{threshold ? ` (> ${Math.round(threshold)} km/h)` : ""}</p><p className="text-xl font-bold tabular-nums truncate text-amber-600">{stats?.totalViolations ?? 0}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Zellos com GPS</p><p className="text-xl font-bold tabular-nums truncate">{st(stats?.totalDrivers, String)}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Km Total</p><p className="text-xl font-bold tabular-nums truncate">{st(stats?.totalKm, (n) => n.toFixed(1))}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Horas em movimento</p><p className="text-xl font-bold tabular-nums truncate">{st(stats?.totalHoursWorked, (n) => `${n.toFixed(1)}h`)}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Horas Parado</p><p className="text-xl font-bold tabular-nums truncate">{st(stats?.totalHoursStopped, (n) => `${n.toFixed(1)}h`)}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Vel. Máx</p><p className="text-xl font-bold tabular-nums truncate text-red-600">{st(stats?.maxSpeedOfDay, (n) => `${n.toFixed(0)} km/h`)}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Bat. Média</p><p className="text-xl font-bold tabular-nums truncate">{st(stats?.avgBattery, (n) => `${n}%`)}</p></CardContent></Card>
+        <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Excessos{threshold ? ` (> ${Math.round(threshold)} km/h)` : ""}</p><p className="text-xl font-bold tabular-nums truncate text-amber-600">{st(stats?.totalViolations, String)}</p></CardContent></Card>
       </div>
 
       <SpeedHistoryCard target={speedTarget} onTarget={onSpeedTarget} people={peopleData} threshold={threshold} />
@@ -528,6 +589,8 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
         <CardContent>
           {isLoading ? (
             <p className="text-center text-muted-foreground py-8">A carregar...</p>
+          ) : historyQ.error && !history ? (
+            <p className="text-center text-muted-foreground py-8">Sem números (ver o aviso acima).</p>
           ) : !history || history.length === 0 ? (
             <div className="text-center py-8">
               <History className="w-12 h-12 mx-auto text-muted-foreground/40 mb-3" />
@@ -611,10 +674,12 @@ function downloadCsv(filename: string, rows: (string | number)[][]) {
 
 // Histórico de velocidade de UMA pessoa: últimos 30/90 dias — gráfico da
 // máxima e da média em movimento (com o limite dos excessos) + tabela.
-function SpeedHistoryCard({ target, onTarget, people, threshold }: {
+function SpeedHistoryCard({ target, onTarget, people, threshold, own }: {
   target: SpeedTarget; onTarget: (t: SpeedTarget) => void;
   people: { employees: { id: number; name: string }[]; zellos: { zelloUsername: string; name: string }[] } | undefined;
   threshold: number | null;
+  /** Condutor/extra: só o próprio (o servidor ignora a pessoa pedida e usa a da conta). */
+  own?: boolean;
 }) {
   const { projectId } = useGlobalFilters();
   const [days, setDays] = usePersistedState<number>("operacional.hist.days", 30);
@@ -623,31 +688,34 @@ function SpeedHistoryCard({ target, onTarget, people, threshold }: {
     ...(people?.employees ?? []).map((e) => ({ value: `e:${e.id}`, label: e.name })),
     ...(people?.zellos ?? []).map((z) => ({ value: `z:${z.zelloUsername}`, label: `📡 ${z.name} (sem login)` })),
   ], [people]);
-  const { data, isLoading } = trpc.operational.driverHistory.personHistory.useQuery(
+  const speedQ = trpc.operational.driverHistory.personHistory.useQuery(
     { employeeId: target?.employeeId, zelloUsername: target?.zelloUsername, days, projectId },
-    { enabled: !!target, refetchOnWindowFocus: false },
+    { enabled: !!target, refetchOnWindowFocus: false, retry: retryTransient },
   );
+  const { data, isLoading } = speedQ;
   const rows = (data?.days ?? []) as any[];
   const chartData = useMemo(() => [...rows].reverse().map((r) => ({ date: r.date.slice(5), max: r.maxSpeed, avg: r.avgSpeed })), [rows]);
   const lim = data?.threshold ?? threshold;
   useEffect(() => {
-    if (target) document.getElementById("speed-history-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [target]);
+    if (target && !own) document.getElementById("speed-history-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [target, own]);
 
   return (
     <Card id="speed-history-card">
       <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2"><Gauge className="w-4 h-4" />Histórico de velocidade por pessoa</CardTitle>
+        <CardTitle className="text-base flex items-center gap-2"><Gauge className="w-4 h-4" />{own ? "O meu histórico de velocidade" : "Histórico de velocidade por pessoa"}</CardTitle>
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <SearchableSelect
-            className="w-72"
-            value={value}
-            onChange={(v) => onTarget(!v ? null : v.startsWith("e:") ? { employeeId: Number(v.slice(2)) } : { zelloUsername: v.slice(2) })}
-            options={options}
-            placeholder="Escolher pessoa…"
-            searchPlaceholder="Pesquisar por nome…"
-            emptyText="Sem GPS nos últimos 90 dias"
-          />
+          {!own && (
+            <SearchableSelect
+              className="w-full sm:w-72"
+              value={value}
+              onChange={(v) => onTarget(!v ? null : v.startsWith("e:") ? { employeeId: Number(v.slice(2)) } : { zelloUsername: v.slice(2) })}
+              options={options}
+              placeholder="Escolher pessoa…"
+              searchPlaceholder="Pesquisar por nome…"
+              emptyText="Sem GPS nos últimos 90 dias"
+            />
+          )}
           {[30, 90].map((n) => (
             <Button key={n} size="sm" variant={days === n ? "default" : "outline"} onClick={() => setDays(n)}>{n} dias</Button>
           ))}
@@ -665,10 +733,12 @@ function SpeedHistoryCard({ target, onTarget, people, threshold }: {
       <CardContent>
         {!target ? (
           <p className="text-sm text-muted-foreground">Escolhe uma pessoa (ou clica numa linha da Atividade do Dia / da tabela abaixo) para ver como anda ao longo dos dias.</p>
+        ) : speedQ.error && !data ? (
+          <QueryErrorNote error={speedQ.error} onRetry={() => speedQ.refetch()} retrying={speedQ.isFetching} what="o histórico de velocidade" />
         ) : isLoading ? (
           <p className="text-sm text-muted-foreground">A carregar…</p>
         ) : rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Sem GPS para {data?.name ?? "esta pessoa"} nos últimos {days} dias.</p>
+          <p className="text-sm text-muted-foreground">Sem GPS para {own ? "ti" : data?.name ?? "esta pessoa"} nos últimos {days} dias.</p>
         ) : (
           <div className="space-y-3">
             <p className="text-sm font-medium">{data?.name}</p>
@@ -771,21 +841,26 @@ function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister:
 }
 
 function PdasTab() {
-  // Escrita: criar/editar/QR = team_leader+ (como o servidor); eliminar = admin.
-  const canManage = useRoleAtLeast("team_leader");
-  const canDelete = useRoleAtLeast("admin");
+  // As mesmas permissões do servidor: criar/editar/QR = editar PDAs; eliminar = gerir.
+  const canManage = useCan("pdas", "edit");
+  const canDelete = useCan("pdas", "manage");
   const [showCreate, setShowCreate] = useState(false);
   const [editPda, setEditPda] = useState<any | null>(null);
   const [viewPda, setViewPda] = useState<number | null>(null);
   const [qrPda, setQrPda] = useState<{ id: number; name: string } | null>(null);
   const utils = trpc.useUtils();
 
-  const { data: pdaList, isLoading } = trpc.operational.pdas.list.useQuery();
+  const pdasQ = trpc.operational.pdas.list.useQuery(undefined, { retry: retryTransient });
+  const { data: pdaList, isLoading } = pdasQ;
   const { data: allProjects } = trpc.projects.list.useQuery();
   const cityName = new Map<number, string>(((allProjects as any[]) ?? []).filter((p) => p.level === "city").map((p) => [Number(p.id), String(p.name)]));
-  const { data: activeCheckins } = trpc.operational.pdas.checkins.active.useQuery();
-  const deleteMut = trpc.operational.pdas.delete.useMutation({
-    onSuccess: () => { utils.operational.pdas.list.invalidate(); toast.success("PDA eliminado"); },
+  const activeQ = trpc.operational.pdas.checkins.active.useQuery(undefined, { retry: retryTransient });
+  const activeCheckins = activeQ.data;
+  // Sem lista (a carregar ou erro): "—", nunca 0.
+  const n = (v: number | undefined) => (v == null ? "—" : String(v));
+  // "Retirar" passa o PDA a Inativo: o histórico (quem o teve, GPS) fica.
+  const retireMut = trpc.operational.pdas.delete.useMutation({
+    onSuccess: () => { utils.operational.pdas.list.invalidate(); toast.success("PDA retirado (passou a Inativo; o histórico fica)."); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -807,25 +882,25 @@ function PdasTab() {
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Total PDAs</p>
-            <p className="text-xl font-bold tabular-nums truncate">{pdaList?.length ?? 0}</p>
+            <p className="text-xl font-bold tabular-nums truncate">{n(pdaList?.length)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Ativos</p>
-            <p className="text-xl font-bold tabular-nums truncate text-green-600">{(pdaList || []).filter((p: any) => p.status === "active").length}</p>
+            <p className="text-xl font-bold tabular-nums truncate text-green-600">{n(pdaList?.filter((p: any) => p.status === "active").length)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Em Uso (Check-in)</p>
-            <p className="text-xl font-bold tabular-nums truncate text-blue-600">{activeCheckins?.length ?? 0}</p>
+            <p className="text-xl font-bold tabular-nums truncate text-blue-600">{n(activeCheckins?.length)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-3 pb-2">
             <p className="text-xs text-muted-foreground">Manutenção/Perdido</p>
-            <p className="text-xl font-bold tabular-nums truncate text-amber-600">{(pdaList || []).filter((p: any) => p.status === "maintenance" || p.status === "lost").length}</p>
+            <p className="text-xl font-bold tabular-nums truncate text-amber-600">{n(pdaList?.filter((p: any) => p.status === "maintenance" || p.status === "lost").length)}</p>
           </CardContent>
         </Card>
       </div>
@@ -839,9 +914,14 @@ function PdasTab() {
       {/* Este aparelho: ponto→PDA automático (QR é o caminho principal) */}
       <ThisDeviceCard pdaList={pdaList || []} canRegister={canManage} />
 
+      {activeQ.error && !activeCheckins && (
+        <QueryErrorNote error={activeQ.error} onRetry={() => activeQ.refetch()} retrying={activeQ.isFetching} what="quem está com cada PDA" />
+      )}
       {/* PDA Cards */}
       {isLoading ? (
         <p className="text-center text-muted-foreground py-8">A carregar...</p>
+      ) : pdasQ.error && !pdaList ? (
+        <QueryErrorNote error={pdasQ.error} onRetry={() => pdasQ.refetch()} retrying={pdasQ.isFetching} what="os PDAs" />
       ) : !pdaList || pdaList.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
@@ -901,12 +981,12 @@ function PdasTab() {
                         <QrCode className="w-3 h-3" />
                       </Button>
                     )}
-                    <Button size="sm" variant="outline" onClick={() => setViewPda(pda.id)}>
+                    <Button size="sm" variant="outline" title="Histórico de quem o teve" aria-label={`Histórico do ${pda.name}`} onClick={() => setViewPda(pda.id)}>
                       <Eye className="w-3 h-3" />
                     </Button>
-                    {canDelete && (
-                      <Button size="sm" variant="ghost" className="text-red-600" title="Eliminar" onClick={() => {
-                        if (confirm(`Eliminar PDA ${pda.name}?`)) deleteMut.mutate({ id: pda.id });
+                    {canDelete && pda.status !== "inactive" && (
+                      <Button size="sm" variant="ghost" className="text-red-600" title="Retirar (passa a Inativo)" aria-label={`Retirar o ${pda.name}`} disabled={retireMut.isPending} onClick={() => {
+                        if (confirm(`Retirar o ${pda.name}? Passa a Inativo; o histórico de quem o teve fica.`)) retireMut.mutate({ id: pda.id });
                       }}>
                         <Trash2 className="w-3 h-3" />
                       </Button>
@@ -922,7 +1002,7 @@ function PdasTab() {
       {/* Dialogs */}
       {showCreate && <CreatePdaDialog onClose={() => setShowCreate(false)} />}
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
-      {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} onClose={() => setViewPda(null)} />}
+      {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} pdaName={pdaList?.find((p: any) => p.id === viewPda)?.name ?? null} onClose={() => setViewPda(null)} />}
       {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
     </div>
   );
@@ -1108,15 +1188,21 @@ function EditPdaDialog({ pda, onClose }: { pda: any; onClose: () => void }) {
   );
 }
 
-function PdaHistoryDialog({ pdaId, onClose }: { pdaId: number; onClose: () => void }) {
-  const { data: checkins, isLoading } = trpc.operational.pdas.checkins.byPda.useQuery({ pdaId });
+/** Últimos check-ins mostrados no histórico de um PDA. */
+const PDA_HISTORY_LIMIT = 100;
+
+function PdaHistoryDialog({ pdaId, pdaName, onClose }: { pdaId: number; pdaName: string | null; onClose: () => void }) {
+  const histQ = trpc.operational.pdas.checkins.byPda.useQuery({ pdaId, limit: PDA_HISTORY_LIMIT }, { retry: retryTransient });
+  const { data: checkins, isLoading } = histQ;
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="sm:max-w-2xl">
-        <DialogHeader><DialogTitle>Histórico PDA #{pdaId}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Histórico do {pdaName ?? `PDA #${pdaId}`}</DialogTitle></DialogHeader>
         {isLoading ? (
           <p className="text-center py-4 text-muted-foreground">A carregar...</p>
+        ) : histQ.error && !checkins ? (
+          <QueryErrorNote error={histQ.error} onRetry={() => histQ.refetch()} retrying={histQ.isFetching} what="o histórico deste PDA" />
         ) : !checkins || checkins.length === 0 ? (
           <p className="text-center py-4 text-muted-foreground">Sem registos de check-in.</p>
         ) : (
@@ -1135,7 +1221,7 @@ function PdaHistoryDialog({ pdaId, onClose }: { pdaId: number; onClose: () => vo
                 {checkins.map((c: any) => (
                   <tr key={c.id} className="border-b">
                     <td className="p-2 font-medium">
-                      {c.employeeName || c.zelloUsername || `Emp #${c.employeeId}`}
+                      {c.employeeName || (c.employeeId ? `ficha #${c.employeeId} (já não existe)` : c.zelloUsername || "sem pessoa")}
                       {c.employeeName && c.zelloUsername && (
                         <p className="text-xs text-muted-foreground font-normal">{c.zelloUsername}</p>
                       )}
@@ -1156,6 +1242,9 @@ function PdaHistoryDialog({ pdaId, onClose }: { pdaId: number; onClose: () => vo
                 ))}
               </tbody>
             </table>
+            {checkins.length >= PDA_HISTORY_LIMIT && (
+              <p className="p-2 text-xs text-muted-foreground">Mostram-se os últimos {PDA_HISTORY_LIMIT} check-ins.</p>
+            )}
           </div>
         )}
         <DialogFooter>
