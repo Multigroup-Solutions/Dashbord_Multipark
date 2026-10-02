@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
+palavras: pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
 ---
 # RH e ponto
 
@@ -73,4 +73,5 @@ Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas
 
 **Fichas sem cidade**
 - De hora a hora, uma ficha ativa sem cidade recebe a cidade onde o agente da Multipark da pessoa mais trabalhou nos últimos 180 dias. Se não houver agente, usa-se a cidade da candidatura ou da morada.
-- Se nada der, a ficha fica em aberto e é criada uma **tarefa**, com email, para a Márcia Nunes (Definições → "Responsável pelas fichas sem cidade"). Sem cidade a pessoa não consegue entrar na app.
+- Se nada der, a ficha fica em aberto e é criada uma **tarefa** com **prazo de uma semana**, com email, para a Márcia Nunes (Definições → "Responsável pelas fichas sem cidade"). Sem cidade a pessoa não consegue entrar na app **nem é chamada para a escala**.
+- **Extras sem cidade** (com **"Pedir a cidade aos extras sem cidade"** ligado em Definições → Automações; desligado por omissão): antes da tarefa, o dashboard pede-lhe a cidade **uma vez**, por email (sai da recursos-humanos@, e a resposta cai na caixa RH) e por WhatsApp se a conversa com ele estiver aberta (respondeu nas últimas 24 h). Respeita o "Não enviar" da ficha. A tarefa e o email à Márcia dizem se o pedido saiu e por onde.

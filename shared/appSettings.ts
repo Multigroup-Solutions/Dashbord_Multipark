@@ -587,6 +587,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "LEAD_REMINDERS", label: "Lembretes das leads de extras", description: "Lembretes automáticos às leads que ainda não responderam." },
   // 17e (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão, como as outras.
   { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas (por WhatsApp). Desligado por omissão.", defaultEnabled: false },
+  // 17g-3 (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão.
+  { name: "EXTRAS_ASK_CITY", label: "Pedir a cidade aos extras sem cidade", description: "Quando um extra chega sem cidade, pede-lha uma vez por email (pela recursos-humanos@) e por WhatsApp se a conversa estiver aberta. A tarefa para quem trata das fichas sem cidade cria-se sempre. Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   { name: "CASE_REMINDERS", label: "Lembretes de SLA dos casos", description: "Avisa quando ocorrências/perdidos passam do prazo." },
   { name: "COMPLAINT_AUTO_ACK", label: "Aviso de receção das reclamações", description: "Responde automaticamente ao cliente quando chega uma reclamação por email." },

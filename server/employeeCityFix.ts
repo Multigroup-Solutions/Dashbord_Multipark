@@ -11,6 +11,9 @@
  */
 import { sql } from "drizzle-orm";
 import { matchCityKey, CITY_LABELS, type CityKey } from "../shared/city";
+import type { CityAskOutcome } from "../shared/extrasCityRequest";
+
+const lisbonDay = (dbDate: string): string => { const [y, m, d] = dbDate.slice(0, 10).split("-"); return `${d}/${m}/${y}`; };
 
 type Db = { execute: (q: any) => Promise<any> };
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r?.rows ?? r) as any[]) ?? [];
@@ -29,14 +32,14 @@ export function dominantCity(counts: ReadonlyArray<ReadonlyMap<string, number>>)
   return best;
 }
 
-export interface CityFixReport { checked: number; fromAgent: number; fromAddress: number; openTasks: number; errors: string[] }
+export interface CityFixReport { checked: number; fromAgent: number; fromAddress: number; openTasks: number; asked?: number; errors: string[] }
 
 export async function fixMissingEmployeeCities(o: { nowMs?: number } = {}): Promise<CityFixReport> {
   const rep: CityFixReport = { checked: 0, fromAgent: 0, fromAddress: 0, openTasks: 0, errors: [] };
   const { getDb } = await import("./db");
   const d = (await getDb()) as unknown as Db | null;
   if (!d) return rep;
-  const emps = rowsOf(await d.execute(sql`SELECT id, fullName, address, multiparkAgentUserId FROM employees WHERE isActive = 1 AND projectId IS NULL LIMIT 2000`));
+  const emps = rowsOf(await d.execute(sql`SELECT id, fullName, address, multiparkAgentUserId, position, email, personalEmail FROM employees WHERE isActive = 1 AND projectId IS NULL LIMIT 2000`));
   rep.checked = emps.length;
   if (!emps.length) return rep;
   // Nós de cidade da árvore de projetos.
@@ -64,7 +67,7 @@ export async function fixMissingEmployeeCities(o: { nowMs?: number } = {}): Prom
 
   const { getSystemUserId } = await import("./db");
   const systemUser = await getSystemUserId();
-  const stillOpen: Array<{ id: number; fullName: string }> = [];
+  const stillOpen: OpenEmployee[] = [];
   for (const e of emps) {
     const id = Number(e.id);
     const viaAgent = dominantCity((agentsOf.get(id) ?? []).map((a) => agentCities.get(a) ?? new Map()));
@@ -76,26 +79,90 @@ export async function fixMissingEmployeeCities(o: { nowMs?: number } = {}): Prom
       await d.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details)
         VALUES (${systemUser}, 'employee_city_auto', 'employee', ${id}, ${`Cidade ${CITY_LABELS[city]} definida automaticamente (${viaAgent ? "onde o agente da Multipark trabalha" : "candidatura/morada"})`})`).catch(() => undefined);
     } else {
-      stillOpen.push({ id, fullName: String(e.fullName) });
+      stillOpen.push({ id, fullName: String(e.fullName), position: e.position ?? null, email: e.email ?? null, personalEmail: e.personalEmail ?? null });
     }
   }
-  // 3. Sem cidade: uma tarefa (com email) por ficha, para quem trata do RH.
+  // 3. Sem cidade: a um EXTRA pede-se a cidade (uma vez, com o interruptor
+  //    EXTRAS_ASK_CITY); depois uma tarefa (com email e prazo de 1 semana)
+  //    para quem trata do RH (17g-3).
+  const askOn = stillOpen.some((e) => e.position === "extra") && (await askCityEnabled());
   for (const e of stillOpen) {
-    try { if (await openMissingCityTask(d, e)) rep.openTasks++; } catch (err) { rep.errors.push(`tarefa #${e.id}: ${(err as Error).message}`); }
+    try {
+      const asked = askOn && e.position === "extra" ? await askExtraCity(d, e) : null;
+      if (asked && !asked.previously) rep.asked = (rep.asked ?? 0) + 1;
+      if (await openMissingCityTask(d, e, asked)) rep.openTasks++;
+    } catch (err) { rep.errors.push(`tarefa #${e.id}: ${(err as Error).message}`); }
   }
   return rep;
 }
 
-async function openMissingCityTask(d: Db, e: { id: number; fullName: string }): Promise<boolean> {
+type OpenEmployee = { id: number; fullName: string; position: string | null; email: string | null; personalEmail: string | null };
+
+async function askCityEnabled(): Promise<boolean> {
+  try {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    return isFeatureEnabled("EXTRAS_ASK_CITY", { defaultEnabled: automationFlagDefault("EXTRAS_ASK_CITY") });
+  } catch { return false; }
+}
+
+/**
+ * Pede a cidade a um extra (17g-3): email pela recursos-humanos@ (a resposta
+ * cai na caixa RH) e WhatsApp em texto livre só com a conversa aberta (24 h).
+ * UMA vez por pessoa (activity_logs "extra_city_requested"); respeita o "Não
+ * enviar" da ficha. Uma falha de envio não fica registada → tenta na próxima hora.
+ */
+export async function askExtraCity(d: Db, e: OpenEmployee): Promise<CityAskOutcome> {
+  const before = rowsOf(await d.execute(sql`SELECT 1 AS x FROM activity_logs WHERE action = 'extra_city_requested' AND entity = 'employee' AND entityId = ${e.id} LIMIT 1`))[0];
+  if (before) return { email: "no_contact", whatsapp: "no_contact", previously: true };
+  const { cityRequestMessage } = await import("../shared/extrasCityRequest");
+  const msg = cityRequestMessage(e.fullName);
+  const out: CityAskOutcome = { email: "no_contact", whatsapp: "no_contact" };
+  const to = (e.email || e.personalEmail || "").trim();
+  if (to) {
+    const { sendEmailDetailed } = await import("./mail/systemMail");
+    const r = await sendEmailDetailed({
+      to, subject: msg.subject, text: msg.text, html: msg.html,
+      from: "recursos-humanos@multipark.pt", fromName: "Multipark Recursos Humanos",
+      auto: { kind: "city_request", employeeId: e.id },
+    } as any);
+    out.email = r.ok ? "sent" : r.blocked ? "blocked" : "failed";
+  }
+  const { employeesWithNoAuto } = await import("./contactPrefs");
+  if ((await employeesWithNoAuto([e.id], "whatsapp")).has(e.id)) out.whatsapp = "blocked";
+  else {
+    const conv = rowsOf(await d.execute(sql`SELECT id FROM whatsapp_conversations WHERE employeeId = ${e.id} ORDER BY lastMessageAt DESC, id DESC LIMIT 1`))[0];
+    if (conv) {
+      try {
+        const { replyToConversation } = await import("./whatsappInbox");
+        const r = await replyToConversation(Number(conv.id), msg.whatsapp, null);
+        out.whatsapp = r.ok ? "sent" : (r as any).optedOut ? "blocked" : "closed";
+      } catch { out.whatsapp = "failed"; }
+    }
+  }
+  // Regista (= não volta a pedir) quando saiu por algum lado ou quando não há
+  // por onde pedir; uma falha de envio deixa tentar outra vez na próxima hora.
+  if (out.email !== "failed" && out.whatsapp !== "failed") {
+    const { getSystemUserId } = await import("./db");
+    await d.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details)
+      VALUES (${await getSystemUserId()}, 'extra_city_requested', 'employee', ${e.id}, ${`Pedida a cidade: email ${out.email}, WhatsApp ${out.whatsapp}`})`).catch(() => undefined);
+  }
+  return out;
+}
+
+async function openMissingCityTask(d: Db, e: { id: number; fullName: string }, asked: CityAskOutcome | null = null): Promise<boolean> {
   const key = `rh:missing-city:${e.id}`;
   const existing = rowsOf(await d.execute(sql`SELECT id FROM tasks WHERE sourceKey = ${key} AND taskStatus <> 'done' LIMIT 1`))[0];
   if (existing) return false;
   const [{ getSystemUserId, findEmployeeByEmailOrName }, { getSetting }] = await Promise.all([import("./db"), import("./appSettings")]);
   const systemUser = await getSystemUserId();
-  const res: any = await d.execute(sql`INSERT INTO tasks (title, description, createdById, taskStatus, taskPriority, sourceModule, sourceId, sourceKey)
+  const { askedSummary, cityTaskDueDate, CITY_TASK_DUE_DAYS } = await import("../shared/extrasCityRequest");
+  const summary = askedSummary(asked);
+  // Prazo de uma semana para contactar (17g-3).
+  const res: any = await d.execute(sql`INSERT INTO tasks (title, description, createdById, taskStatus, taskPriority, dueDate, sourceModule, sourceId, sourceKey)
     VALUES (${`Ficha sem cidade: ${e.fullName}`.slice(0, 250)},
-      ${`A ficha #${e.id} (${e.fullName}) não tem cidade e não foi possível descobri-la (nem pelo agente da Multipark, nem pela candidatura ou morada). Define a cidade (centro de custo) na ficha: sem cidade a pessoa não entra na app.`},
-      ${systemUser}, 'todo', 'high', 'rh', ${e.id}, ${key})`);
+      ${`A ficha #${e.id} (${e.fullName}) não tem cidade e não foi possível descobri-la (nem pelo agente da Multipark, nem pela candidatura ou morada). ${summary} Define a cidade (centro de custo) na ficha em ${CITY_TASK_DUE_DAYS} dias: sem cidade a pessoa não entra na app nem é chamada para a escala.`},
+      ${systemUser}, 'todo', 'high', ${cityTaskDueDate()}, 'rh', ${e.id}, ${key})`);
   const taskId = Number((Array.isArray(res) ? res[0] : res)?.insertId ?? 0);
   let who = MISSING_CITY_ASSIGNEE_DEFAULT;
   try { who = (await getSetting("rh.missingCityAssignee")) || who; } catch { /* omissão */ }
@@ -107,7 +174,7 @@ async function openMissingCityTask(d: Db, e: { id: number; fullName: string }): 
     if (email) {
       const { sendEmail } = await import("./mail/systemMail");
       await sendEmail({ to: String(email), subject: `Ficha sem cidade: ${e.fullName}`,
-        text: `Olá,\n\nA ficha de ${e.fullName} (#${e.id}) não tem cidade e o dashboard não a conseguiu descobrir (nem pelo agente da Multipark, nem pela candidatura ou morada).\n\nDefine a cidade (centro de custo) na ficha: sem cidade a pessoa não consegue entrar na app. Ficou uma tarefa no dashboard.\n\nObrigado.`,
+        text: `Olá,\n\nA ficha de ${e.fullName} (#${e.id}) não tem cidade e o dashboard não a conseguiu descobrir (nem pelo agente da Multipark, nem pela candidatura ou morada).\n\n${summary}\n\nDefine a cidade (centro de custo) na ficha até ${lisbonDay(cityTaskDueDate())}: sem cidade a pessoa não consegue entrar na app nem é chamada para a escala. Ficou uma tarefa no dashboard com esse prazo.\n\nObrigado.`,
       }).catch(() => false);
     }
   }
