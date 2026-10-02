@@ -21,6 +21,7 @@ import { CAREER_LEVEL_LABELS, CITY_OPTIONS, ITEM_TYPE_LABELS, STATUS_LABELS, TAR
 import { TutorPanel, TutorQuestionsCard } from "./TutorPanel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const ITEM_ICONS: Record<string, any> = { video: Play, manual: BookOpen, exam: GraduationCap, quiz: Gamepad2 };
 const cityLabel = (c: string | null | undefined) => CITY_OPTIONS.find((x) => x.id === c)?.label ?? "Sem cidade";
@@ -32,8 +33,14 @@ function StatusBadge({ status }: { status: string }) {
 
 // ─── A MINHA FORMAÇÃO ──────────────────────────────────────────────────────
 
-export function MyTrainingTab({ data, onOpenItem }: { data: any; onOpenItem: (item: { itemType: string; itemId: number }) => void }) {
+export function MyTrainingTab({ data, loading, error, onRetry, retrying, onOpenItem }: {
+  data: any; loading?: boolean; error?: { message: string } | null; onRetry?: () => void; retrying?: boolean;
+  onOpenItem: (item: { itemType: string; itemId: number }) => void;
+}) {
   const assignments: any[] = data?.assignments ?? [];
+  // Erro ≠ vazio (18c): com a rede fraca não se diz "não há formação".
+  if (error) return <QueryErrorNote error={error} onRetry={() => onRetry?.()} retrying={retrying} what="a tua formação" />;
+  if (loading || !data) return <Card><CardContent className="py-12 text-center text-muted-foreground">A carregar a tua formação…</CardContent></Card>;
   if (!data?.employeeId) {
     return <Card><CardContent className="py-12 text-center text-muted-foreground">Sem ficha de colaborador associada — não há formação atribuída.</CardContent></Card>;
   }
@@ -67,9 +74,10 @@ export function MyTrainingTab({ data, onOpenItem }: { data: any; onOpenItem: (it
                       {it.completedAt ? <CheckCircle className="w-5 h-5 text-green-600 shrink-0" /> : <Icon className="w-5 h-5 text-muted-foreground shrink-0" />}
                       <span className={`truncate ${it.completedAt ? "text-muted-foreground line-through" : ""}`}>{it.title}</span>
                       <Badge variant="outline" className="text-xs">{ITEM_TYPE_LABELS[it.itemType] ?? it.itemType}</Badge>
-                      {!it.required && <Badge variant="secondary" className="text-xs">Opcional</Badge>}
+                      {!it.required && !it.unavailable && <Badge variant="secondary" className="text-xs">Opcional</Badge>}
+                      {it.unavailable && <Badge variant="secondary" className="text-xs" title="Foi retirado — já não é preciso para concluir o percurso">Já não conta</Badge>}
                     </div>
-                    {!it.completedAt && <Button size="sm" variant="outline" onClick={() => onOpenItem(it)}>{it.itemType === "exam" || it.itemType === "quiz" ? "Fazer" : "Abrir"}</Button>}
+                    {!it.completedAt && !it.unavailable && <Button size="sm" variant="outline" onClick={() => onOpenItem(it)}>{it.itemType === "exam" || it.itemType === "quiz" ? "Fazer" : "Abrir"}</Button>}
                   </div>
                 );
               })}
@@ -94,12 +102,13 @@ export function PathsAdminTab({ isAdmin }: { isAdmin: boolean }) {
   const [itemsFor, setItemsFor] = useState<{ pathId: number; name: string; items: EditItem[] } | null>(null);
   const [assignFor, setAssignFor] = useState<{ pathId: number; name: string } | null>(null);
   const [confirm, confirmUi] = useConfirm();
-  const { data: paths = [], refetch } = trpc.training.paths.useQuery({ includeInactive: true });
+  const pathsQ = trpc.training.paths.useQuery({ includeInactive: true });
+  const { data: paths = [], refetch } = pathsQ;
   const onErr = (e: { message: string }) => toast.error(e.message);
   const refresh = () => { refetch(); void utils.training.myTraining.invalidate(); };
   const createPath = trpc.training.createPath.useMutation({ onSuccess: () => { refresh(); setForm(null); toast.success("Percurso criado — adiciona os itens"); }, onError: onErr });
   const updatePath = trpc.training.updatePath.useMutation({ onSuccess: () => { refresh(); setForm(null); toast.success("Percurso atualizado"); }, onError: onErr });
-  const deletePath = trpc.training.deletePath.useMutation({ onSuccess: () => { refresh(); toast.success("Percurso eliminado"); }, onError: onErr });
+  const deletePath = trpc.training.deletePath.useMutation({ onSuccess: () => { refresh(); toast.success("Percurso arquivado"); }, onError: onErr });
   const setItems = trpc.training.setPathItems.useMutation({ onSuccess: () => { refresh(); setItemsFor(null); toast.success("Itens guardados"); }, onError: onErr });
   const bulk = trpc.training.assignToActiveExtras.useMutation({ onSuccess: (r) => { refresh(); toast.success(`Atribuído: ${r.created} novo(s) de ${r.total} extras ativos`); }, onError: onErr });
 
@@ -123,7 +132,8 @@ export function PathsAdminTab({ isAdmin }: { isAdmin: boolean }) {
         {isAdmin && <Button onClick={() => setForm({ ...emptyPath })}><Plus className="w-4 h-4 mr-1" />Novo percurso</Button>}
       </div>
 
-      {paths.length === 0 ? <Card><CardContent className="py-12 text-center text-muted-foreground">Ainda não há percursos. Cria o percurso de onboarding dos extras.</CardContent></Card> : (
+      {pathsQ.error && <QueryErrorNote error={pathsQ.error} onRetry={() => pathsQ.refetch()} retrying={pathsQ.isFetching} what="os percursos" />}
+      {pathsQ.isLoading ? <p className="text-sm text-muted-foreground">A carregar percursos…</p> : pathsQ.error ? null : paths.length === 0 ? <Card><CardContent className="py-12 text-center text-muted-foreground">Ainda não há percursos. Cria o percurso de onboarding dos extras.</CardContent></Card> : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {(paths as any[]).map((p) => (
             <Card key={p.id} className={!p.active ? "opacity-60" : undefined}>
@@ -141,9 +151,14 @@ export function PathsAdminTab({ isAdmin }: { isAdmin: boolean }) {
                 </p>
               </CardHeader>
               <CardContent className="space-y-3">
+                {p.gateProblem && p.items.length > 0 && (
+                  <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 flex gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{p.gateProblem} Acrescenta um quiz ou exame obrigatório nos Itens.
+                  </p>
+                )}
                 {p.items.length === 0 ? <p className="text-sm text-muted-foreground">Sem itens.</p> : (
                   <ol className="space-y-1 text-sm list-decimal pl-5">
-                    {p.items.map((it: any) => <li key={it.id}><Badge variant="outline" className="text-xs mr-1">{ITEM_TYPE_LABELS[it.itemType]}</Badge>{it.title}{!it.required && <span className="text-xs text-muted-foreground"> (opcional)</span>}</li>)}
+                    {p.items.map((it: any) => <li key={it.id}><Badge variant="outline" className="text-xs mr-1">{ITEM_TYPE_LABELS[it.itemType]}</Badge>{it.title}{!it.required && <span className="text-xs text-muted-foreground"> (opcional)</span>}{it.unavailable && <span className="text-xs text-amber-700"> (retirado — já não conta)</span>}</li>)}
                   </ol>
                 )}
                 <div className="flex flex-wrap gap-2">
@@ -153,9 +168,9 @@ export function PathsAdminTab({ isAdmin }: { isAdmin: boolean }) {
                   {isAdmin && <Button size="sm" variant="outline" disabled={!p.active || bulk.isPending} onClick={async () => {
                     if (await confirm({ title: "Atribuir a todos os extras ativos?", description: `"${p.name}" é atribuído a todos os extras ativos da tua cidade que ainda não o tenham (prazo: ${p.dueDays} dias a partir de hoje).`, confirmLabel: "Atribuir a todos" })) bulk.mutate({ pathId: p.id });
                   }}><Users className="w-4 h-4 mr-1" />Atribuir a todos os extras ativos</Button>}
-                  {isAdmin && <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => {
-                    if (p.assignedCount > 0) { toast.error(`Tem ${p.assignedCount} atribuição(ões) — desativa-o em vez de apagar.`); return; }
-                    if (await confirm({ title: `Eliminar o percurso "${p.name}"?`, confirmLabel: "Eliminar", destructive: true })) deletePath.mutate({ id: p.id });
+                  {isAdmin && <Button size="sm" variant="ghost" className="text-destructive" title="Arquivar" aria-label="Arquivar percurso" onClick={async () => {
+                    if (p.assignedCount > 0) { toast.error(`Tem ${p.assignedCount} atribuição(ões) — desativa-o em vez de arquivar.`); return; }
+                    if (await confirm({ title: `Arquivar o percurso "${p.name}"?`, description: "Sai da lista e fica desligado; nada se apaga.", confirmLabel: "Arquivar", destructive: true })) deletePath.mutate({ id: p.id });
                   }}><Trash2 className="w-4 h-4" /></Button>}
                 </div>
               </CardContent>
@@ -266,7 +281,8 @@ function PathItemsDialog({ value, onClose, onSave, pending }: { value: { name: s
 function AssignDialog({ value, onClose, onDone }: { value: { pathId: number; name: string }; onClose: () => void; onDone: () => void }) {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<Set<number>>(new Set());
-  const { data: people = [] } = trpc.training.assignableEmployees.useQuery();
+  const peopleQ = trpc.training.assignableEmployees.useQuery();
+  const people = peopleQ.data ?? [];
   const assign = trpc.training.assignPath.useMutation({
     onSuccess: (r) => { toast.success(`Atribuído: ${r.created} novo(s)${r.skipped ? ` · ${r.skipped} já tinham` : ""}`); onDone(); onClose(); },
     onError: (e) => toast.error(e.message),
@@ -278,6 +294,8 @@ function AssignDialog({ value, onClose, onDone }: { value: { pathId: number; nam
         <DialogHeader><DialogTitle>Atribuir — {value.name}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <Input placeholder="Procurar colaborador…" value={q} onChange={(e) => setQ(e.target.value)} />
+          {peopleQ.error && <QueryErrorNote error={peopleQ.error} onRetry={() => peopleQ.refetch()} retrying={peopleQ.isFetching} what="as pessoas" />}
+          {peopleQ.isLoading && <p className="text-sm text-muted-foreground">A carregar…</p>}
           <div className="max-h-80 overflow-y-auto border rounded-lg divide-y">
             {filtered.map((p) => (
               <label key={p.id} className="flex items-center gap-2 p-2 text-sm cursor-pointer hover:bg-accent/40">
@@ -419,6 +437,9 @@ export function DashboardTab() {
 
 function PersonProgressDialog({ employeeId, onClose }: { employeeId: number; onClose: () => void }) {
   const { data, isLoading, error } = trpc.training.personProgress.useQuery({ employeeId });
+  // "Remover atribuição" só a quem o servidor deixa (gerir) — 18c: antes aparecia a TL/supervisor e dava erro.
+  const { user } = useAuth();
+  const canUnassign = !!user && can(user as any, "formacao", "manage");
   const [confirm, confirmUi] = useConfirm();
   const utils = trpc.useUtils();
   const unassign = trpc.training.unassign.useMutation({ onSuccess: () => { void utils.training.personProgress.invalidate(); void utils.training.dashboard.invalidate(); toast.success("Atribuição removida"); }, onError: (e) => toast.error(e.message) });
@@ -438,9 +459,9 @@ function PersonProgressDialog({ employeeId, onClose }: { employeeId: number; onC
                   <div className="flex items-center gap-2">
                     <StatusBadge status={a.status} />
                     {a.dueAt && <span className="text-xs text-muted-foreground">prazo {fmtPTDate(a.dueAt)}</span>}
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" title="Remover atribuição" onClick={async () => {
-                      if (await confirm({ title: `Remover "${a.pathName}" desta pessoa?`, confirmLabel: "Remover", destructive: true })) unassign.mutate({ assignmentId: a.id });
-                    }}><Trash2 className="w-4 h-4" /></Button>
+                    {canUnassign && <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" title="Remover atribuição" aria-label="Remover atribuição" onClick={async () => {
+                      if (await confirm({ title: `Remover "${a.pathName}" desta pessoa?`, description: "Deixa de contar (e de bloquear a escala); fica no registo.", confirmLabel: "Remover", destructive: true })) unassign.mutate({ assignmentId: a.id });
+                    }}><Trash2 className="w-4 h-4" /></Button>}
                   </div>
                 </div>
                 <Progress value={a.progress.pct} className="h-2" />

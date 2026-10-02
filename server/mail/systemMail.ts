@@ -125,8 +125,13 @@ export async function sendMailWith(deps: SystemMailDeps, o: SendEmailOptions): P
   const to = listOf(o.to), cc = listOf(o.cc), bcc = listOf(o.bcc);
   if (!to.length && !cc.length && !bcc.length) return { ok: false, error: "Sem destinatários." };
   // "Não enviar email" na ficha (17g): nenhum email AUTOMÁTICO para essa pessoa.
-  if (o.auto?.employeeId != null && deps.noAutoEmail && (await deps.noAutoEmail(o.auto.employeeId).catch(() => false))) {
-    return { ok: false, error: NO_AUTO_EMAIL_ERROR, blocked: true };
+  if (o.auto?.employeeId != null && deps.noAutoEmail) {
+    // 18c: sem conseguir ler o "Não enviar email" NÃO se envia (antes enviava a
+    // quem pediu para não receber). Conta como falha — quem repete, repete.
+    let blocked: boolean;
+    try { blocked = await deps.noAutoEmail(o.auto.employeeId); }
+    catch { return { ok: false, error: "Não foi possível confirmar o «Não enviar email» da ficha — não enviado (tenta de novo)." }; }
+    if (blocked) return { ok: false, error: NO_AUTO_EMAIL_ERROR, blocked: true };
   }
   if (!deps.dwdAvailable()) {
     deps.log?.(`[email] Não enviado (conta de serviço Google em falta): ${o.subject}`);
@@ -227,7 +232,7 @@ export const dbSystemMailDeps: SystemMailDeps = {
   },
   async noAutoEmail(employeeId) {
     const { employeesWithNoAuto } = await import("../contactPrefs");
-    return (await employeesWithNoAuto([employeeId], "email")).has(employeeId);
+    return (await employeesWithNoAuto([employeeId], "email", { strict: true })).has(employeeId);
   },
 };
 

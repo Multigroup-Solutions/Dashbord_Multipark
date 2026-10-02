@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -80,7 +81,8 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
   const [confirm, confirmUi] = useConfirm();
 
   const { data: info, isLoading: infoLoading, error: infoError } = trpc.training.quizInfo.useQuery({});
-  const { data: ranking = [] } = trpc.training.quizRanking.useQuery();
+  const rankingQ = trpc.training.quizRanking.useQuery();
+  const ranking = rankingQ.data ?? [];
   const rankedIds = useMemo(() => (ranking as any[]).slice(0, 10).map((r) => r.employeeId), [ranking]);
   const { data: names = [] } = trpc.training.rankingNames.useQuery({ employeeIds: rankedIds }, { enabled: rankedIds.length > 0 });
   const nameMap = useMemo(() => new Map((names as any[]).map((n) => [n.id, n.name])), [names]);
@@ -94,7 +96,7 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
   const afterSave = () => { refetchAdmin(); setEditing(null); void utils.training.quizInfo.invalidate(); };
   const createQ = trpc.training.createQuizQuestion.useMutation({ onSuccess: () => { afterSave(); toast.success("Pergunta adicionada"); }, onError: onErr });
   const updateQ = trpc.training.updateQuizQuestion.useMutation({ onSuccess: () => { afterSave(); toast.success("Pergunta atualizada"); }, onError: onErr });
-  const deleteQ = trpc.training.deleteQuizQuestion.useMutation({ onSuccess: () => { afterSave(); toast.success("Pergunta eliminada"); }, onError: onErr });
+  const deleteQ = trpc.training.deleteQuizQuestion.useMutation({ onSuccess: () => { afterSave(); toast.success("Pergunta arquivada"); }, onError: onErr });
 
   const questions = (adminQuestions as any[]).filter((q) => !onlyDrafts || q.published === 0);
   const drafts = (adminQuestions as any[]).filter((q) => q.published === 0).length;
@@ -147,7 +149,9 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><Trophy className="w-5 h-5 text-amber-500" />Ranking (melhor pontuação)</CardTitle></CardHeader>
           <CardContent>
-            {ranking.length === 0 ? <p className="text-muted-foreground text-center py-4">Nenhuma tentativa ainda</p> : (
+            {rankingQ.error ? <QueryErrorNote error={rankingQ.error} onRetry={() => rankingQ.refetch()} retrying={rankingQ.isFetching} what="o ranking" />
+              : rankingQ.isLoading ? <p className="text-muted-foreground text-center py-4">A carregar…</p>
+              : ranking.length === 0 ? <p className="text-muted-foreground text-center py-4">Nenhuma tentativa ainda</p> : (
               <div className="space-y-2">
                 {(ranking as any[]).slice(0, 10).map((r, i) => (
                   <div key={r.employeeId} className="flex items-center justify-between p-2 rounded-lg bg-accent/30 gap-2">
@@ -193,7 +197,7 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
                     {q.published === 0 && <Button size="sm" variant="outline" disabled={updateQ.isPending} onClick={() => updateQ.mutate({ id: q.id, published: true })}><Eye className="w-4 h-4 mr-1" />Publicar</Button>}
                     <Button variant="ghost" size="icon" title="Editar" onClick={() => setEditing({ id: q.id, value: questionFrom(q) })}><Pencil className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="icon" className="text-destructive" title="Eliminar" onClick={async () => {
-                      if (await confirm({ title: "Eliminar esta pergunta?", description: q.question, confirmLabel: "Eliminar", destructive: true })) deleteQ.mutate({ id: q.id });
+                      if (await confirm({ title: "Arquivar esta pergunta?", description: `${q.question} — sai do quiz; as tentativas antigas ficam como estavam.`, confirmLabel: "Arquivar", destructive: true })) deleteQ.mutate({ id: q.id });
                     }}><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 </div>
@@ -235,14 +239,15 @@ export function CareerTab({ isAdmin, isSuperAdmin, certificates }: { isAdmin: bo
 
   const { data: exams = [], refetch, isLoading: examsLoading, error: examsError } = trpc.training.careerExams.useQuery();
   const { data: examQuestionsAdmin = [], refetch: refetchQ } = trpc.training.careerExamQuestions.useQuery({ examId: selectedExam?.id || 0 }, { enabled: !!selectedExam && isAdmin });
-  const { data: myAttempts = [] } = trpc.training.myCareerExamAttempts.useQuery();
+  const myAttemptsQ = trpc.training.myCareerExamAttempts.useQuery();
+  const myAttempts = myAttemptsQ.data ?? [];
   const onErr = (e: { message: string }) => toast.error(e.message);
   const createExam = trpc.training.createCareerExam.useMutation({ onSuccess: () => { refetch(); setShowCreate(false); toast.success("Exame criado"); }, onError: onErr });
   const updateExam = trpc.training.updateCareerExam.useMutation({ onSuccess: () => { refetch(); setSettings(null); toast.success("Exame atualizado"); }, onError: onErr });
   const afterQ = () => { refetchQ(); refetch(); setEditingQ(null); };
   const createExamQ = trpc.training.createCareerExamQuestion.useMutation({ onSuccess: () => { afterQ(); toast.success("Pergunta adicionada"); }, onError: onErr });
   const updateExamQ = trpc.training.updateCareerExamQuestion.useMutation({ onSuccess: () => { afterQ(); toast.success("Pergunta atualizada"); }, onError: onErr });
-  const deleteExamQ = trpc.training.deleteCareerExamQuestion.useMutation({ onSuccess: () => { afterQ(); toast.success("Pergunta eliminada"); }, onError: onErr });
+  const deleteExamQ = trpc.training.deleteCareerExamQuestion.useMutation({ onSuccess: () => { afterQ(); toast.success("Pergunta arquivada"); }, onError: onErr });
   const deleteExam = trpc.training.deleteCareerExam.useMutation({ onSuccess: () => { refetch(); setSelectedExam(null); toast.success("Exame arquivado; resultados preservados"); }, onError: onErr });
   const certUrl = trpc.training.certificateUrl.useMutation({ onError: onErr });
   const start = trpc.training.startCareerExam.useMutation({
@@ -393,6 +398,7 @@ export function CareerTab({ isAdmin, isSuperAdmin, certificates }: { isAdmin: bo
             {exam.description && <p className="text-muted-foreground mt-2">{exam.description}</p>}
           </CardHeader>
           <CardContent className="space-y-4">
+            {myAttemptsQ.error && <QueryErrorNote error={myAttemptsQ.error} onRetry={() => myAttemptsQ.refetch()} retrying={myAttemptsQ.isFetching} what="as tuas tentativas" />}
             <div className="flex items-center gap-3 flex-wrap">
               <Button size="lg" disabled={!exam.questionCount || start.isPending} onClick={() => start.mutate({ examId: exam.id })}>
                 <GraduationCap className="w-4 h-4 mr-2" />Iniciar exame ({exam.questionCount ?? 0} perguntas)
@@ -444,7 +450,7 @@ export function CareerTab({ isAdmin, isSuperAdmin, certificates }: { isAdmin: bo
                     <div className="flex shrink-0">
                       <Button variant="ghost" size="icon" title="Editar" onClick={() => setEditingQ({ id: q.id, value: questionFrom(q) })}><Pencil className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="text-destructive" title="Eliminar" onClick={async () => {
-                        if (await confirm({ title: "Eliminar esta pergunta do exame?", description: q.question, confirmLabel: "Eliminar", destructive: true })) deleteExamQ.mutate({ id: q.id });
+                        if (await confirm({ title: "Arquivar esta pergunta do exame?", description: `${q.question} — sai do exame; as tentativas antigas ficam como estavam.`, confirmLabel: "Arquivar", destructive: true })) deleteExamQ.mutate({ id: q.id });
                       }}><Trash2 className="w-4 h-4" /></Button>
                     </div>
                   </div>

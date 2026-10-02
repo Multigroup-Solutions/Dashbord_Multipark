@@ -6,7 +6,7 @@
  * SQL parametrizado (drizzle) e seguro com ONLY_FULL_GROUP_BY (só agregados
  * nas colunas fora do GROUP BY).
  */
-import { and, asc, desc, eq, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   quizAttempts, quizQuestions, trainingAssignments, trainingAttemptSessions, trainingCategories, trainingManuals, trainingPathItems,
@@ -121,7 +121,7 @@ export async function trainerUserId(ctx: TutorContext, employeeId: number | null
     const rows = await d.select({ owner: trainingPaths.createdById }).from(trainingAssignments)
       .innerJoin(trainingPaths, eq(trainingPaths.id, trainingAssignments.pathId))
       .innerJoin(trainingPathItems, eq(trainingPathItems.pathId, trainingPaths.id))
-      .where(and(eq(trainingAssignments.employeeId, employeeId), eq(trainingPathItems.itemType, ctx.type), eq(trainingPathItems.itemId, ctx.id), isNotNull(trainingPaths.createdById)))
+      .where(and(eq(trainingAssignments.employeeId, employeeId), isNull(trainingAssignments.removedAt), eq(trainingPathItems.itemType, ctx.type), eq(trainingPathItems.itemId, ctx.id), isNotNull(trainingPaths.createdById)))
       .orderBy(desc(trainingAssignments.assignedAt))
       .limit(1);
     if (rows[0]?.owner != null) return rows[0].owner;

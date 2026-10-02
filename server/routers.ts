@@ -4366,10 +4366,14 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
         const list = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
-        // Badge "Formação em falta" no seletor da escala (server/trainingPaths.ts)
+        // Badge "Formação em falta" no seletor da escala (server/trainingPaths.ts).
+        // Leitura falhada → "por verificar" em todos (18c: antes o badge sumia
+        // e parecia que ninguém tinha formação em falta).
         const { employeesMissingTraining } = await import("./trainingPaths");
-        const missing = await employeesMissingTraining(list.map(c => c.id));
-        return list.map(c => ({ ...c, trainingMissing: missing.has(c.id) }));
+        let missing: Set<number> | null = null;
+        try { missing = await employeesMissingTraining(list.map(c => c.id)); }
+        catch (err: any) { console.warn("[Training] verificação da formação falhou:", String(err?.message ?? err).slice(0, 160)); }
+        return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null }));
       }),
 
     assignments: protectedProcedure

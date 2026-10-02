@@ -5,7 +5,7 @@
  */
 import { aiFeatureAvailable } from "./_core/ai/status";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   getDb, logActivity, saveCareerExamAttempt, saveQuizAttempt,
@@ -13,7 +13,7 @@ import {
 import { projectScope } from "./cityScope";
 import { gradeAssessment } from "./trainingAssessments";
 import {
-  careerExamQuestions, careerExams, employees, quizAttempts, quizQuestions, trainingAttemptSessions,
+  careerExamAttempts, careerExamQuestions, careerExams, employees, quizAttempts, quizQuestions, trainingAttemptSessions,
   trainingCertificates, trainingManuals, trainingPromotions,
 } from "../drizzle/schema";
 import {
@@ -53,7 +53,7 @@ export async function startExamAttempt(employeeId: number, examId: number, now: 
   const d = await db();
   const [exam] = await d.select().from(careerExams).where(and(eq(careerExams.id, examId), sql`${careerExams.archivedAt} IS NULL`)).limit(1);
   if (!exam) throw new TRPCError({ code: "NOT_FOUND", message: "Exame não disponível." });
-  const qs = await d.select().from(careerExamQuestions).where(eq(careerExamQuestions.examId, examId));
+  const qs = await d.select().from(careerExamQuestions).where(and(eq(careerExamQuestions.examId, examId), isNull(careerExamQuestions.archivedAt)));
   if (!qs.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Este exame ainda não tem perguntas." });
   const max = exam.maxAttemptsPerDay ?? 3;
   const starts = await recentStarts(employeeId, "exam", examId, now);
@@ -74,7 +74,7 @@ export async function startExamAttempt(employeeId: number, examId: number, now: 
 export async function startQuizAttempt(employeeId: number, categoryId: number | null, now: Date = new Date()) {
   const d = await db();
   const qs = await d.select().from(quizQuestions)
-    .where(and(eq(quizQuestions.published, 1), categoryId ? eq(quizQuestions.categoryId, categoryId) : undefined));
+    .where(and(eq(quizQuestions.published, 1), isNull(quizQuestions.archivedAt), categoryId ? eq(quizQuestions.categoryId, categoryId) : undefined));
   if (!qs.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Ainda não há perguntas publicadas." });
   const starts = await recentStarts(employeeId, "quiz", null, now);
   try { assertCanStartAttempt(starts, now, QUIZ_MAX_PER_DAY); } catch (e) { asTrpc(e); }
@@ -112,7 +112,50 @@ export async function submitAttempt(employeeId: number, sessionId: number, answe
   // Reserva atómica: só uma submissão ganha (duplo clique / dois separadores).
   const claim = await d.update(trainingAttemptSessions).set({ submittedAt: toDbDate(now) })
     .where(and(eq(trainingAttemptSessions.id, sessionId), sql`${trainingAttemptSessions.submittedAt} IS NULL`));
-  if (affected(claim) !== 1) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta tentativa já foi submetida." });
+  if (affected(claim) !== 1) {
+    // 18c: voltar a enviar (a resposta perdeu-se na rede) devolve o resultado guardado.
+    const stored = await storedResult(sessionId);
+    if (stored) return stored;
+    throw new TRPCError({ code: "CONFLICT", message: "Esta tentativa está a ser corrigida — espera uns segundos e tenta de novo." });
+  }
+  try {
+    return await gradeAndSave(d, s, servedIds, answers, mode, employeeId, sessionId, now);
+  } catch (err) {
+    // 18c: falhou a gravar depois da reserva → a tentativa não fica gasta sem resultado.
+    await d.update(trainingAttemptSessions).set({ submittedAt: null })
+      .where(and(eq(trainingAttemptSessions.id, sessionId), isNull(trainingAttemptSessions.resultId))).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** Resultado de uma tentativa já corrigida (sem a revisão pergunta a pergunta). */
+async function storedResult(sessionId: number): Promise<SubmitResult | null> {
+  const d = await db();
+  const [s] = await d.select().from(trainingAttemptSessions).where(eq(trainingAttemptSessions.id, sessionId)).limit(1);
+  if (!s?.resultId) return null;
+  const isExam = s.kind === "exam";
+  const [r] = isExam
+    ? await d.select({ total: careerExamAttempts.totalQuestions, correct: careerExamAttempts.correctAnswers, score: careerExamAttempts.score }).from(careerExamAttempts).where(eq(careerExamAttempts.id, s.resultId)).limit(1)
+    : await d.select({ total: quizAttempts.totalQuestions, correct: quizAttempts.correctAnswers, score: quizAttempts.score }).from(quizAttempts).where(eq(quizAttempts.id, s.resultId)).limit(1);
+  if (!r) return null;
+  const total = Number(r.total ?? 0), correct = Number(r.correct ?? 0);
+  const percentage = isExam ? Number(r.score ?? 0) : total ? Math.round((correct * 100) / total) : 0;
+  let passingScore: number | null = null;
+  if (isExam && s.examId) {
+    const [exam] = await d.select({ passingScore: careerExams.passingScore }).from(careerExams).where(eq(careerExams.id, s.examId)).limit(1);
+    passingScore = exam?.passingScore ?? null;
+  }
+  return {
+    kind: isExam ? "exam" : "quiz", correct, total, score: Number(s.score ?? r.score ?? 0), percentage,
+    passed: s.passed == null ? null : !!s.passed, passingScore, timedOut: false, expired: false, promotionRequested: false, review: [],
+  };
+}
+
+async function gradeAndSave(
+  d: Awaited<ReturnType<typeof db>>, s: typeof trainingAttemptSessions.$inferSelect, servedIds: number[],
+  answers: { questionId: number; answer: "A" | "B" | "C" | "D" }[], mode: ReturnType<typeof validateSubmission>,
+  employeeId: number, sessionId: number, now: Date,
+): Promise<SubmitResult> {
 
   const isExam = s.kind === "exam";
   const questions: Array<{ id: number; question: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: string; explanation: string | null; points: number }> = isExam
@@ -246,6 +289,8 @@ export async function decidePromotion(id: number, approve: boolean, note: string
   if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido não encontrado." });
   const [emp] = await d.select().from(employees).where(and(eq(employees.id, p.employeeId), projectScope(employees.projectId))).limit(1);
   if (!emp) throw new TRPCError({ code: "FORBIDDEN", message: "Colaborador fora do teu âmbito." });
+  // 18c: ninguém decide a própria promoção (antes um TL aprovava-se a si próprio).
+  if (emp.userId != null && emp.userId === user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes decidir a tua própria promoção." });
   const claim = await d.update(trainingPromotions).set({ status: approve ? "approved" : "rejected", decidedAt: toDbDate(new Date()), decidedById: user.id, note })
     .where(and(eq(trainingPromotions.id, id), eq(trainingPromotions.status, "pending")));
   if (affected(claim) !== 1) throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido já foi decidido." });

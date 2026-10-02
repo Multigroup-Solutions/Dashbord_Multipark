@@ -23,19 +23,23 @@ export default function TrainingPage() {
   const [openManualId, setOpenManualId] = useState<number | null>(null);
   const [playVideo, setPlayVideo] = useState<any>(null);
 
-  const { data: mine } = trpc.training.myTraining.useQuery();
+  const mineQ = trpc.training.myTraining.useQuery();
+  const mine = mineQ.data;
   const done = useDoneSet(mine?.progress);
   const pending = useMemo(() => (mine?.assignments ?? []).filter((a: any) => a.status !== "completed").length, [mine]);
-  const { data: allVideos = [] } = trpc.training.videos.useQuery({});
+  const allVideosQ = trpc.training.videos.useQuery({});
+  const allVideos = allVideosQ.data ?? [];
 
   const openItem = useCallback((it: { itemType: string; itemId: number }) => {
     if (it.itemType === "video") {
       const v = (allVideos as any[]).find((x) => x.id === it.itemId);
       if (v) setPlayVideo(v);
+      // 18c: antes o "Abrir" não fazia nada quando a lista de vídeos falhava.
+      else { setTab("videos"); if (allVideosQ.error) void allVideosQ.refetch(); }
     } else if (it.itemType === "manual") { setOpenManualId(it.itemId); setTab("manuals"); }
     else if (it.itemType === "exam") setTab("career");
     else if (it.itemType === "quiz") setTab("quiz");
-  }, [allVideos, setTab]);
+  }, [allVideos, allVideosQ, setTab]);
   const clearOpenManual = useCallback(() => setOpenManualId(null), []);
 
   return (
@@ -60,7 +64,7 @@ export default function TrainingPage() {
           {seesProgress && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Acompanhamento</TabsTrigger>}
         </TabsList>
 
-        <TabsContent value="mine"><MyTrainingTab data={mine} onOpenItem={openItem} /></TabsContent>
+        <TabsContent value="mine"><MyTrainingTab data={mine} loading={mineQ.isLoading} error={mineQ.error} onRetry={() => mineQ.refetch()} retrying={mineQ.isFetching} onOpenItem={openItem} /></TabsContent>
         <TabsContent value="videos"><VideosTab isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} done={done} /></TabsContent>
         <TabsContent value="manuals"><ManualsTab isAdmin={isAdmin} done={done} openId={openManualId} onOpened={clearOpenManual} /></TabsContent>
         <TabsContent value="faqs"><FAQsTab isAdmin={isAdmin} /></TabsContent>

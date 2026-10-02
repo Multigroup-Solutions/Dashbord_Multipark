@@ -2194,11 +2194,12 @@ export async function deleteTrainingCategory(id: number) {
   await db.delete(trainingCategories).where(eq(trainingCategories.id, id));
 }
 
+// Formação (18c): sem BD lança (erro ≠ "não há vídeos"); arquivados ficam de fora.
 export async function getTrainingVideos(categoryId?: number) {
   const db = await getDb();
-  if (!db) return [];
-  const conditions = categoryId ? [eq(trainingVideos.categoryId, categoryId)] : [];
-  return db.select().from(trainingVideos).where(conditions.length ? and(...conditions) : undefined).orderBy(trainingVideos.sortOrder);
+  if (!db) throw new Error("Base de dados indisponível");
+  const conditions = [isNull(trainingVideos.archivedAt), ...(categoryId ? [eq(trainingVideos.categoryId, categoryId)] : [])];
+  return db.select().from(trainingVideos).where(and(...conditions)).orderBy(trainingVideos.sortOrder);
 }
 
 export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number; careerLevel?: string }) {
@@ -2208,17 +2209,18 @@ export async function createTrainingVideo(data: { categoryId: number; title: str
   return result;
 }
 
+/** "Apagar" um vídeo = arquivar (0385): sai da lista e deixa de contar nos percursos. */
 export async function deleteTrainingVideo(id: number) {
   const db = await getDb();
-  if (!db) return;
-  await db.delete(trainingVideos).where(eq(trainingVideos.id, id));
+  if (!db) throw new Error("Base de dados indisponível");
+  await db.update(trainingVideos).set({ archivedAt: toMysqlDateTime(new Date()) } as any).where(and(eq(trainingVideos.id, id), isNull(trainingVideos.archivedAt)));
 }
 
 export async function getTrainingManuals(categoryId?: number, type?: string, includeUnpublished = false) {
   const db = await getDb();
-  if (!db) return [];
-  // Admins veem também os não publicados (com badge); os restantes não.
-  const conditions: any[] = includeUnpublished ? [] : [eq(trainingManuals.published, 1)];
+  if (!db) throw new Error("Base de dados indisponível");
+  // Admins veem também os não publicados (com badge); os restantes não. Arquivados (0385) nunca.
+  const conditions: any[] = includeUnpublished ? [isNull(trainingManuals.archivedAt)] : [eq(trainingManuals.published, 1), isNull(trainingManuals.archivedAt)];
   if (categoryId) conditions.push(eq(trainingManuals.categoryId, categoryId));
   if (type) conditions.push(eq(trainingManuals.type, type as any));
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
@@ -2240,17 +2242,18 @@ export async function updateTrainingManual(id: number, data: { title?: string; c
   await db.update(trainingManuals).set(updates).where(eq(trainingManuals.id, id));
 }
 
+/** "Apagar" um manual = arquivar (0385): o ficheiro fica; deixa de contar nos percursos. */
 export async function deleteTrainingManual(id: number) {
   const db = await getDb();
-  if (!db) return;
-  await db.delete(trainingManuals).where(eq(trainingManuals.id, id));
+  if (!db) throw new Error("Base de dados indisponível");
+  await db.update(trainingManuals).set({ archivedAt: toMysqlDateTime(new Date()) } as any).where(and(eq(trainingManuals.id, id), isNull(trainingManuals.archivedAt)));
 }
 
 export async function getFAQs(categoryId?: number) {
   const db = await getDb();
-  if (!db) return [];
-  const conditions = categoryId ? [eq(faqs.categoryId, categoryId)] : [];
-  return db.select().from(faqs).where(conditions.length ? and(...conditions) : undefined).orderBy(faqs.sortOrder);
+  if (!db) throw new Error("Base de dados indisponível");
+  const conditions = [isNull(faqs.archivedAt), ...(categoryId ? [eq(faqs.categoryId, categoryId)] : [])];
+  return db.select().from(faqs).where(and(...conditions)).orderBy(faqs.sortOrder);
 }
 
 export async function createFAQ(data: { categoryId?: number; question: string; answer: string; sortOrder?: number }) {
@@ -2266,17 +2269,18 @@ export async function updateFAQ(id: number, data: { question?: string; answer?: 
   await db.update(faqs).set(data).where(eq(faqs.id, id));
 }
 
+/** "Apagar" uma FAQ = arquivar (0385). */
 export async function deleteFAQ(id: number) {
   const db = await getDb();
-  if (!db) return;
-  await db.delete(faqs).where(eq(faqs.id, id));
+  if (!db) throw new Error("Base de dados indisponível");
+  await db.update(faqs).set({ archivedAt: toMysqlDateTime(new Date()) } as any).where(eq(faqs.id, id));
 }
 
 export async function getQuizQuestions(categoryId?: number) {
   const db = await getDb();
-  if (!db) return [];
-  const conditions = categoryId ? [eq(quizQuestions.categoryId, categoryId)] : [];
-  return db.select().from(quizQuestions).where(conditions.length ? and(...conditions) : undefined);
+  if (!db) throw new Error("Base de dados indisponível");
+  const conditions = [isNull(quizQuestions.archivedAt), ...(categoryId ? [eq(quizQuestions.categoryId, categoryId)] : [])];
+  return db.select().from(quizQuestions).where(and(...conditions));
 }
 
 /** Versão pública: nunca devolve a resposta correcta nem a explicação.
@@ -2284,8 +2288,8 @@ export async function getQuizQuestions(categoryId?: number) {
  *  à API e ver a opção correcta. */
 export async function getQuizQuestionsForPlayer(categoryId?: number) {
   const db = await getDb();
-  if (!db) return [];
-  const conditions = categoryId ? [eq(quizQuestions.categoryId, categoryId)] : [];
+  if (!db) throw new Error("Base de dados indisponível");
+  const conditions = [isNull(quizQuestions.archivedAt), ...(categoryId ? [eq(quizQuestions.categoryId, categoryId)] : [])];
   return db
     .select({
       id: quizQuestions.id,
@@ -2299,7 +2303,7 @@ export async function getQuizQuestionsForPlayer(categoryId?: number) {
       points: quizQuestions.points,
     })
     .from(quizQuestions)
-    .where(conditions.length ? and(...conditions) : undefined);
+    .where(and(...conditions));
 }
 
 export async function createQuizQuestion(data: { categoryId?: number; question: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: "A" | "B" | "C" | "D"; explanation?: string; difficulty?: "easy" | "medium" | "hard"; points?: number }) {
@@ -2309,10 +2313,11 @@ export async function createQuizQuestion(data: { categoryId?: number; question: 
   return result;
 }
 
+/** "Apagar" uma pergunta do quiz = arquivar (0385): sai do quiz, as tentativas antigas ficam certas. */
 export async function deleteQuizQuestion(id: number) {
   const db = await getDb();
-  if (!db) return;
-  await db.delete(quizQuestions).where(eq(quizQuestions.id, id));
+  if (!db) throw new Error("Base de dados indisponível");
+  await db.update(quizQuestions).set({ archivedAt: toMysqlDateTime(new Date()) } as any).where(eq(quizQuestions.id, id));
 }
 
 export async function saveQuizAttempt(data: { employeeId: number; totalQuestions: number; correctAnswers: number; score: number; timeSpentSeconds?: number }) {
@@ -2348,8 +2353,8 @@ export async function createCareerExam(data: { level: string; title: string; des
 
 export async function getCareerExamQuestions(examId: number) {
   const db = await getDb();
-  if (!db) return [];
-  return db.select().from(careerExamQuestions).where(eq(careerExamQuestions.examId, examId));
+  if (!db) throw new Error("Base de dados indisponível");
+  return db.select().from(careerExamQuestions).where(and(eq(careerExamQuestions.examId, examId), isNull(careerExamQuestions.archivedAt)));
 }
 
 /** Versão para o jogador — sem correctOption e sem explicação. */
@@ -2368,7 +2373,7 @@ export async function getCareerExamQuestionsForPlayer(examId: number) {
       points: careerExamQuestions.points,
     })
     .from(careerExamQuestions)
-    .where(eq(careerExamQuestions.examId, examId));
+    .where(and(eq(careerExamQuestions.examId, examId), isNull(careerExamQuestions.archivedAt)));
 }
 
 export async function createCareerExamQuestion(data: { examId: number; question: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: "A" | "B" | "C" | "D"; explanation?: string; points?: number }) {

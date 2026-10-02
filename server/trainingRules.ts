@@ -17,7 +17,15 @@ export type AssignmentStatus = "assigned" | "in_progress" | "completed" | "overd
 
 // ─── 1. Progresso de um percurso ───────────────────────────────────────────
 
-export interface PathItemRef { itemType: string; itemId: number; required: boolean | number }
+export interface PathItemRef {
+  itemType: string; itemId: number; required: boolean | number;
+  /**
+   * false = o item já não se consegue concluir (arquivado, apagado, manual
+   * por publicar, exame arquivado) → não conta como obrigatório (18c: antes
+   * prendia a pessoa "em atraso" e fora da escala para sempre).
+   */
+  available?: boolean;
+}
 export interface ProgressRef { itemType: string; itemId: number; completedAt: string | null; viewedAt?: string | null }
 
 export const progressKey = (itemType: string, itemId: number) => `${itemType}:${itemId}`;
@@ -42,7 +50,7 @@ export function computePathProgress(items: PathItemRef[], progress: ProgressRef[
     const isDone = done.has(k);
     if (isDone) doneKeys.push(k);
     if (touched.has(k)) started = true;
-    if (it.required) { requiredTotal++; if (isDone) requiredDone++; }
+    if (it.required && it.available !== false) { requiredTotal++; if (isDone) requiredDone++; }
     else if (isDone) optionalDone++;
   }
   // Percurso sem obrigatórios conta como concluído (nada a exigir).
@@ -56,6 +64,40 @@ export function assignmentStatusFor(p: Pick<PathProgress, "complete" | "started"
   if (p.complete) return "completed";
   if (dueAt && parseDbDate(dueAt).getTime() < now.getTime()) return "overdue";
   return p.started ? "in_progress" : "assigned";
+}
+
+/**
+ * Um percurso "Obrigatório para ser escalado" tem de ter pelo menos um quiz
+ * ou exame obrigatório (P3 18c — Jorge: o "visto" de vídeos e manuais é a
+ * própria pessoa que o marca; só um quiz/exame corrigido no servidor prova
+ * que fez a formação). null = está bem. PURA.
+ */
+export function blockingPathProblem(blocksEscala: boolean | number | null | undefined, items: ReadonlyArray<{ itemType: string; required: boolean | number }>): string | null {
+  if (!blocksEscala) return null;
+  if (items.some((i) => !!i.required && (i.itemType === "quiz" || i.itemType === "exam"))) return null;
+  return "Um percurso «Obrigatório para ser escalado» tem de ter pelo menos um quiz ou exame obrigatório (o «visto» de vídeos e manuais é a própria pessoa que marca).";
+}
+
+/**
+ * Prazo de uma atribuição: fim do dia de Lisboa (23:59:59) de hoje + N dias
+ * (18c: antes era "agora + N×24 h", à hora da atribuição). Em UTC, para a BD. PURA.
+ */
+export function trainingDueAt(now: Date, days: number): string {
+  const day = lisbonDay(now);
+  const [y, m, d] = day.split("-").map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + Math.max(0, Math.trunc(days)) + 1)).toISOString().slice(0, 10);
+  // Meia-noite de Lisboa do dia a seguir ao prazo, menos 1 s.
+  const guess = Date.parse(`${next}T00:00:00Z`);
+  const offsetMin = lisbonOffsetMinutes(new Date(guess));
+  return toDbDate(new Date(guess - offsetMin * 60_000 - 1000));
+}
+
+/** Diferença (min) entre a hora de Lisboa e UTC nesse instante (0 no inverno, 60 no verão). */
+function lisbonOffsetMinutes(at: Date): number {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Lisbon", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(at);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"));
+  return Math.round((asUtc - at.getTime()) / 60_000);
 }
 
 // ─── 2. Elegibilidade para a escala ─────────────────────────────────────────

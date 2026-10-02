@@ -21,6 +21,7 @@ import {
   ALL_CAREER_LEVELS, CAREER_LEVEL_LABELS, isDirectVideo, useConfirm, useOpenManualFile, useUploadTrainingFile, videoEmbedUrl,
 } from "./shared";
 import { TutorPanel } from "./TutorPanel";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 /** Conjunto "tipo:id" dos itens concluídos pelo próprio (vem de myTraining). */
 export type DoneSet = Set<string>;
@@ -49,11 +50,12 @@ export function VideosTab({ isAdmin, isSuperAdmin, done }: { isAdmin: boolean; i
 
   const utils = trpc.useUtils();
   const { data: categories = [] } = trpc.training.categories.useQuery();
-  const { data: videos = [], refetch } = trpc.training.videos.useQuery({ categoryId: selectedCat !== "all" ? Number(selectedCat) : undefined });
+  const videosQ = trpc.training.videos.useQuery({ categoryId: selectedCat !== "all" ? Number(selectedCat) : undefined });
+  const { data: videos = [], refetch } = videosQ;
   const onErr = (e: { message: string }) => toast.error(e.message);
   const createVideo = trpc.training.createVideo.useMutation({ onSuccess: () => { refetch(); setEditing(null); toast.success("Vídeo adicionado"); }, onError: onErr });
   const updateVideo = trpc.training.updateVideo.useMutation({ onSuccess: () => { refetch(); setEditing(null); toast.success("Vídeo atualizado"); }, onError: onErr });
-  const deleteVideo = trpc.training.deleteVideo.useMutation({ onSuccess: () => { refetch(); toast.success("Vídeo eliminado"); }, onError: onErr });
+  const deleteVideo = trpc.training.deleteVideo.useMutation({ onSuccess: () => { refetch(); toast.success("Vídeo arquivado"); }, onError: onErr });
   const createCat = trpc.training.createCategory.useMutation({
     onSuccess: () => { utils.training.categories.invalidate(); setShowCreateCat(false); setCatForm({ name: "", description: "" }); toast.success("Categoria criada"); },
     onError: onErr,
@@ -107,7 +109,11 @@ export function VideosTab({ isAdmin, isSuperAdmin, done }: { isAdmin: boolean; i
         {isAdmin && <Button onClick={() => setEditing({ id: null, form: { ...emptyVideo, categoryId: selectedCat !== "all" ? selectedCat : "" } })}><Plus className="w-4 h-4 mr-1" />Novo Vídeo</Button>}
       </div>
 
-      {videos.length === 0 ? (
+      {videosQ.error ? (
+        <QueryErrorNote error={videosQ.error} onRetry={() => videosQ.refetch()} retrying={videosQ.isFetching} what="os vídeos" />
+      ) : videosQ.isLoading ? (
+        <p className="text-sm text-muted-foreground">A carregar vídeos…</p>
+      ) : videos.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-muted-foreground">Nenhum vídeo nesta categoria</CardContent></Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -129,8 +135,8 @@ export function VideosTab({ isAdmin, isSuperAdmin, done }: { isAdmin: boolean; i
                   {isAdmin && (
                     <div className="flex">
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Editar" onClick={() => setEditing({ id: v.id, form: { categoryId: String(v.categoryId), title: v.title, description: v.description ?? "", videoUrl: v.videoUrl, durationMinutes: v.durationMinutes ? String(v.durationMinutes) : "", careerLevel: v.careerLevel ?? "" } })}><Pencil className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" title="Eliminar" onClick={async () => {
-                        if (await confirm({ title: `Eliminar o vídeo "${v.title}"?`, description: "Sai também dos percursos onde estiver.", confirmLabel: "Eliminar", destructive: true })) deleteVideo.mutate({ id: v.id });
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" title="Arquivar" aria-label="Arquivar vídeo" onClick={async () => {
+                        if (await confirm({ title: `Arquivar o vídeo "${v.title}"?`, description: "Sai da lista e deixa de contar nos percursos onde estiver (ninguém fica preso por ele). Nada se apaga.", confirmLabel: "Arquivar", destructive: true })) deleteVideo.mutate({ id: v.id });
                       }}><Trash2 className="w-4 h-4" /></Button>
                     </div>
                   )}
@@ -273,13 +279,14 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
 
   const utils = trpc.useUtils();
   const { data: categories = [] } = trpc.training.categories.useQuery();
-  const { data: manuals = [], refetch } = trpc.training.manuals.useQuery({ type: typeFilter !== "all" ? typeFilter : undefined });
+  const manualsQ = trpc.training.manuals.useQuery({ type: typeFilter !== "all" ? typeFilter : undefined });
+  const { data: manuals = [], refetch } = manualsQ;
   const { data: llm } = trpc.training.llmStatus.useQuery(undefined, { enabled: isAdmin });
   const onErr = (e: { message: string }) => toast.error(e.message);
   const done_ = () => { refetch(); setEditing(null); };
   const createManual = trpc.training.createManual.useMutation({ onSuccess: () => { done_(); toast.success("Conteúdo criado"); }, onError: onErr });
   const updateManual = trpc.training.updateManual.useMutation({ onSuccess: () => { done_(); toast.success("Conteúdo atualizado"); }, onError: onErr });
-  const deleteManual = trpc.training.deleteManual.useMutation({ onSuccess: () => { refetch(); setSelectedManual(null); toast.success("Eliminado"); }, onError: onErr });
+  const deleteManual = trpc.training.deleteManual.useMutation({ onSuccess: () => { refetch(); setSelectedManual(null); toast.success("Arquivado"); }, onError: onErr });
   const genAi = trpc.training.generateQuizDrafts.useMutation({
     onSuccess: (r) => {
       setAiFor(null);
@@ -335,7 +342,7 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
     form: { title: m.title, content: m.content ?? "", type: m.type, linkUrl: m.type === "link" ? m.fileUrl ?? "" : "", careerLevel: m.careerLevel ?? "", categoryId: m.categoryId ? String(m.categoryId) : "", published: m.published !== 0 },
   });
   const askDelete = async (m: any) => {
-    if (await confirm({ title: `Eliminar "${m.title}"?`, description: "Sai também dos percursos onde estiver. Não se pode desfazer.", confirmLabel: "Eliminar", destructive: true })) deleteManual.mutate({ id: m.id });
+    if (await confirm({ title: `Arquivar "${m.title}"?`, description: "Sai da lista e deixa de contar nos percursos onde estiver (ninguém fica preso por ele). O ficheiro fica guardado.", confirmLabel: "Arquivar", destructive: true })) deleteManual.mutate({ id: m.id });
   };
 
   const editDialog = (
@@ -452,7 +459,11 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
         {isAdmin && <Button onClick={() => setEditing({ id: null, form: emptyManual, file: null, removeFile: false })}><Plus className="w-4 h-4 mr-1" />Novo</Button>}
       </div>
 
-      {manuals.length === 0 ? (
+      {manualsQ.error ? (
+        <QueryErrorNote error={manualsQ.error} onRetry={() => manualsQ.refetch()} retrying={manualsQ.isFetching} what="os manuais" />
+      ) : manualsQ.isLoading ? (
+        <p className="text-sm text-muted-foreground">A carregar manuais…</p>
+      ) : manuals.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-muted-foreground">Nenhum conteúdo disponível</CardContent></Card>
       ) : (
         <div className="space-y-3">
@@ -575,11 +586,12 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
   const [editing, setEditing] = useState<{ id: number | null; question: string; answer: string } | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [confirm, confirmUi] = useConfirm();
-  const { data: faqsList = [], refetch } = trpc.training.faqs.useQuery({});
+  const faqsQ = trpc.training.faqs.useQuery({});
+  const { data: faqsList = [], refetch } = faqsQ;
   const onErr = (e: { message: string }) => toast.error(e.message);
   const createFAQ = trpc.training.createFAQ.useMutation({ onSuccess: () => { refetch(); setEditing(null); toast.success("FAQ adicionada"); }, onError: onErr });
   const updateFAQ = trpc.training.updateFAQ.useMutation({ onSuccess: () => { refetch(); setEditing(null); toast.success("FAQ atualizada"); }, onError: onErr });
-  const deleteFAQ = trpc.training.deleteFAQ.useMutation({ onSuccess: () => { refetch(); toast.success("FAQ eliminada"); }, onError: onErr });
+  const deleteFAQ = trpc.training.deleteFAQ.useMutation({ onSuccess: () => { refetch(); toast.success("FAQ arquivada"); }, onError: onErr });
 
   return (
     <div className="space-y-4">
@@ -587,7 +599,11 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
       <div className="flex justify-end">
         {isAdmin && <Button onClick={() => setEditing({ id: null, question: "", answer: "" })}><Plus className="w-4 h-4 mr-1" />Nova FAQ</Button>}
       </div>
-      {faqsList.length === 0 ? (
+      {faqsQ.error ? (
+        <QueryErrorNote error={faqsQ.error} onRetry={() => faqsQ.refetch()} retrying={faqsQ.isFetching} what="as FAQs" />
+      ) : faqsQ.isLoading ? (
+        <p className="text-sm text-muted-foreground">A carregar FAQs…</p>
+      ) : faqsList.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-muted-foreground">Nenhuma FAQ disponível</CardContent></Card>
       ) : (
         <div className="space-y-2">
@@ -605,8 +621,8 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
                       <div className="flex gap-2 mt-2">
                         <Button variant="ghost" size="sm" onClick={() => setEditing({ id: f.id, question: f.question, answer: f.answer })}><Pencil className="w-3 h-3 mr-1" />Editar</Button>
                         <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
-                          if (await confirm({ title: "Eliminar esta FAQ?", description: f.question, confirmLabel: "Eliminar", destructive: true })) deleteFAQ.mutate({ id: f.id });
-                        }}><Trash2 className="w-3 h-3 mr-1" />Eliminar</Button>
+                          if (await confirm({ title: "Arquivar esta FAQ?", description: f.question, confirmLabel: "Arquivar", destructive: true })) deleteFAQ.mutate({ id: f.id });
+                        }}><Trash2 className="w-3 h-3 mr-1" />Arquivar</Button>
                       </div>
                     )}
                   </div>
