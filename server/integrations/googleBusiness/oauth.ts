@@ -47,45 +47,73 @@ async function tokenRequest(params: Record<string, string>): Promise<Tokens> {
   const body: Tokens = await res.json().catch(() => ({}));
   if (!res.ok || body.error || !body.access_token) {
     const code = ['invalid_grant', 'invalid_client', 'access_denied'].includes(body.error || '') ? body.error : String(res.status);
+    // 19d: invalid_client é configuração (client ID/secret), não autorização — religar não resolve
+    if (code === 'invalid_client') throw new Error('Autorização Google: invalid_client. A Google não aceita o GOOGLE_BUSINESS_CLIENT_ID/SECRET configurado — confirma as variáveis na Vercel.');
     throw new Error(`Autorização Google: ${code}. Volta a ligar a conta.`);
   }
   return body;
 }
-export async function finishOAuth(code: string, verifier: string, userId: number) {
+export async function finishOAuth(code: string, verifier: string, userId: number): Promise<{ email: string; previousEmail: string | null; identityChanged: boolean }> {
   const c = config();
   const t = await tokenRequest({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: c.redirectUri });
   if (!t.scope?.split(' ').includes(SCOPE) || !t.id_token) throw new Error('A autorização não incluiu acesso aos perfis de empresas.');
   const { payload } = await jwtVerify(t.id_token, keys, { audience: c.clientId, issuer: ['https://accounts.google.com', 'accounts.google.com'] });
   if (payload.email_verified !== true || typeof payload.email !== 'string') throw new Error('A Google não confirmou a identidade da conta.');
   const old = await connection();
-  const refresh = t.refresh_token || (old?.accountEmail === payload.email && old.refreshTokenEnc ? decryptSecret(old.refreshTokenEnc) : null);
+  // 19d: um token antigo que já não abre (chave mudou) não rebenta o religar
+  const previous = (() => { try { return old?.accountEmail === payload.email && old.refreshTokenEnc ? decryptSecret(old.refreshTokenEnc) : null; } catch { return null; } })();
+  const refresh = t.refresh_token || previous;
   if (!refresh) throw new Error('Falta autorização de acesso contínuo. Volta a ligar a conta.');
   await saveConnection({ status: 'connected', refreshTokenEnc: encryptSecret(refresh), scope: t.scope,
     accountEmail: payload.email, connectedById: userId, connectedAt: mysqlNow(), lastError: null });
   // Never carry park selections over silently when a different Google identity connects.
-  if (old?.accountEmail && old.accountEmail !== payload.email) {
+  const identityChanged = !!old?.accountEmail && old.accountEmail !== payload.email;
+  if (identityChanged) {
     const db = await database();
     await db.execute(sql`UPDATE google_business_locations SET selected = 0, available = 0, nextPageToken = NULL`);
   }
+  return { email: payload.email, previousEmail: old?.accountEmail ?? null, identityChanged };
 }
 export async function accessToken() {
   const conn = await connection();
   if (!conn?.refreshTokenEnc || conn.status === 'disconnected' || conn.status === 'reauth_required') throw new Error('Google Business Profile desligado.');
+  let refresh: string;
+  try { refresh = decryptSecret(conn.refreshTokenEnc); }
+  catch (error) {
+    // 19d: token que já não abre (chave de cifra mudou) → estado honesto, não "Ligado"
+    await saveConnection({ status: 'reauth_required', lastError: 'Não foi possível decifrar o token guardado (a chave de cifra mudou). Volta a ligar a conta.', lastCheckedAt: mysqlNow() });
+    throw error;
+  }
   try {
-    const t = await tokenRequest({ grant_type: 'refresh_token', refresh_token: decryptSecret(conn.refreshTokenEnc) });
+    const t = await tokenRequest({ grant_type: 'refresh_token', refresh_token: refresh });
     return t.access_token!;
   } catch (error) {
-    if (error instanceof Error && /invalid_grant|invalid_client/.test(error.message)) {
-      await saveConnection({ status: 'reauth_required', lastError: 'A autorização expirou ou foi revogada. Volta a ligar a conta.' });
+    if (error instanceof Error && /invalid_grant/.test(error.message)) {
+      await saveConnection({ status: 'reauth_required', lastError: 'A autorização expirou ou foi revogada. Volta a ligar a conta.', lastCheckedAt: mysqlNow() });
+    } else if (error instanceof Error && /invalid_client/.test(error.message)) {
+      await saveConnection({ status: 'error', lastError: error.message.slice(0, 300), lastCheckedAt: mysqlNow() });
     }
     throw error;
   }
 }
-export async function disconnect() {
+/**
+ * Desligar (19d): revoga o token na Google (antes ficava válido do lado de
+ * lá) e MANTÉM a escolha dos perfis — ao religar com a mesma conta volta tudo
+ * como estava (com outra conta o `finishOAuth` limpa, como antes).
+ */
+export async function disconnect(): Promise<{ revoked: boolean; accountEmail: string | null }> {
   const db = await database();
-  await db.transaction(async tx => {
-    await tx.update(integrationConnections).set({ status: 'disconnected', refreshTokenEnc: null, lastError: null })
-      .where(eq(integrationConnections.provider, PROVIDER));
-    await tx.execute(sql`UPDATE google_business_locations SET selected = 0, nextPageToken = NULL`);
-  });
+  const conn = await connection();
+  let revoked = false;
+  if (conn?.refreshTokenEnc) {
+    try {
+      const res = await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout(8_000),
+        body: new URLSearchParams({ token: decryptSecret(conn.refreshTokenEnc) }) });
+      revoked = res.ok || res.status === 400;   // 400 = já não era válido
+    } catch { /* best-effort */ }
+  }
+  await db.update(integrationConnections).set({ status: 'disconnected', refreshTokenEnc: null, lastError: null })
+    .where(eq(integrationConnections.provider, PROVIDER));
+  return { revoked, accountEmail: conn?.accountEmail ?? null };
 }

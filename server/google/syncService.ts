@@ -546,8 +546,8 @@ export async function googleSyncSummary(userId: number) {
   };
 }
 
-/** "Testar" no hub das Integrações: chamada real e só de leitura. */
-export async function testGoogleSync(): Promise<string> {
+/** "Testar" no hub das Integrações: chamada real e só de leitura — 19d: com a conta de QUEM testa (nunca a de um colega). */
+export async function testGoogleSync(testerUserId?: number | null): Promise<string> {
   const cfg = await loadSharedCalendarsConfig();
   const parts: string[] = [];
   if (cfg.enabled) {
@@ -561,7 +561,8 @@ export async function testGoogleSync(): Promise<string> {
   const rows = rowsOf(await d.execute(sql`SELECT userId, scopes FROM google_user_accounts WHERE status = 'connected' LIMIT 500`));
   const withTasks = rows.filter((r) => hasFeatureScopes(String(r.scopes ?? ""), "tasks"));
   const withCal = rows.filter((r) => hasFeatureScopes(String(r.scopes ?? ""), "calendar"));
-  const first = withTasks[0] ?? withCal[0];
+  const first = testerUserId != null ? [...withTasks, ...withCal].find((r) => Number(r.userId) === testerUserId) : undefined;
+  if (!first && (withTasks.length || withCal.length)) parts.push("a parte pessoal não foi testada: liga as Tarefas/Calendário na tua conta (Perfil → Google) para a testar");
   if (first) {
     const { userGoogleAuth } = await import("./userAccounts");
     if (hasFeatureScopes(String(first.scopes), "tasks")) {

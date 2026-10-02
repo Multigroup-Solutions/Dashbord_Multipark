@@ -125,6 +125,9 @@ export async function evaluateIntegrationAlerts(opts: { force?: boolean; now?: n
       }
     } catch { /* sem crons → só ligações */ }
 
+    // 19d: o detalhe vai por email — nunca com valores de segredos (tokens em URLs, chaves)
+    const { scrubSecrets } = await import("../integrationsStatus");
+    for (const it of items) if (it.detail) it.detail = scrubSecrets(it.detail, process.env, 300);
     for (const it of items) {
       const prev = await claimTransition(db as any, it.key, it.state, it.detail ? it.detail.slice(0, 500) : null);
       if (prev === undefined) continue;

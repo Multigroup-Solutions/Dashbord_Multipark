@@ -61,18 +61,20 @@ describe("matriz de acessos — papéis do dono", () => {
     }
   });
 
-  it("supervisor: team_leader + Utilizadores, Permissões, Sincronização e Integrações da cidade", () => {
-    for (const m of ["utilizadores", "permissoes", "sincronizacao", "integracoes"] as ModuleId[]) {
+  it("supervisor: team_leader + Utilizadores, Permissões e Sincronização da cidade (Integrações: só admin+ — 19d)", () => {
+    for (const m of ["utilizadores", "permissoes", "sincronizacao"] as ModuleId[]) {
       expect(scopeFor("supervisor", m)).toBe("city");
     }
+    expect(sees("supervisor", "integracoes")).toBe(false);
     expect(can("supervisor", "permissoes", "manage")).toBe(true);
     expect(isNationalRole("supervisor")).toBe(false);
   });
 
   it("backoffice: o supervisor a nível nacional; frontoffice: backoffice sem Permissões", () => {
-    for (const m of ["utilizadores", "permissoes", "sincronizacao", "integracoes", "rh", "despesas", "whatsapp"] as ModuleId[]) {
+    for (const m of ["utilizadores", "permissoes", "sincronizacao", "rh", "despesas", "whatsapp"] as ModuleId[]) {
       expect(scopeFor("backoffice", m)).toBe("national");
     }
+    expect(sees("backoffice", "integracoes")).toBe(false);   // 19d (Jorge): hub só admin e super_admin
     expect(sees("frontoffice", "permissoes")).toBe(false);
     for (const m of MODULES.map(x => x.id).filter(id => id !== "permissoes")) {
       expect(MATRIX[m].frontoffice).toEqual(MATRIX[m].backoffice);

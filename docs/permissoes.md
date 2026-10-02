@@ -74,7 +74,7 @@
 | Utilizadores | — | — | — | — | cidade VEG | nacional VEG | nacional VEG | nacional VEG | nacional VEG |
 | Permissões | — | — | — | — | cidade VEG | — | nacional VEG | nacional VEG | nacional VEG |
 | Sincronização | — | — | — | — | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |
-| Integrações | — | — | — | — | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |
+| Integrações | — | — | — | — | — | — | — | nacional VEG | nacional VEG |
 | Definições | — | — | — | — | — | — | — | nacional VEG | nacional VEG |
 | Logs | — | — | — | — | — | — | — | — | nacional V |
 | API Keys | — | — | — | — | — | — | — | — | nacional VEG |

@@ -113,7 +113,7 @@ export const settingsRouter = router({
       .mutation(async ({ ctx, input }) => {
         const { integrationTestSuperAdminOnly, testIntegration } = await import("./integrationsStatus");
         if (integrationTestSuperAdminOnly(input.id)) requireSuperAdmin(ctx.user.role);
-        const r = await testIntegration(input.id);
+        const r = await testIntegration(input.id, ctx.user.id);
         await log(ctx.user.id, "test", "integration", `${input.id}: ${r.ok ? "OK" : "falhou"}`);
         return r;
       }),

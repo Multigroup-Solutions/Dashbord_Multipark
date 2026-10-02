@@ -618,7 +618,12 @@ export async function driveStatus(userId: number) {
 }
 
 /** Integrações → Testar: Shared Drive (delegação) e/ou a API Drive de alguém com o Drive ativo. */
-export async function testGoogleDrive(): Promise<string> {
+/**
+ * "Testar" do Drive (19d): SÓ LEITURA e só com a conta de quem carrega no
+ * botão. Antes pegava na conta de uma pessoa qualquer e criava-lhe a pasta
+ * "Multipark" no Drive pessoal.
+ */
+export async function testGoogleDrive(testerUserId?: number | null): Promise<string> {
   const parts: string[] = [];
   const cfg = await loadDriveConfig();
   if (cfg.sharedEnabled && cfg.ownerEmail) {
@@ -629,10 +634,13 @@ export async function testGoogleDrive(): Promise<string> {
   const d = await database();
   const rows = rowsOf(await d.execute(sql`SELECT userId, scopes FROM google_user_accounts WHERE status = 'connected' LIMIT 500`));
   const withDrive = rows.filter((r) => hasFeatureScopes(String(r.scopes ?? ""), "drive"));
-  if (withDrive[0]) {
-    const { apis } = await userDriveApis(Number(withDrive[0].userId), Date.now() + 20_000);
-    await ensureUserFolder(apis.drive, Number(withDrive[0].userId));
-    parts.push("API Drive (pasta \"Multipark\" da pessoa) OK");
+  const mine = testerUserId != null ? withDrive.find((r) => Number(r.userId) === testerUserId) : undefined;
+  if (mine) {
+    const { apis } = await userDriveApis(Number(mine.userId), Date.now() + 20_000);
+    await apis.drive.getFile("root");   // só lê a raiz do teu Drive — não cria nada
+    parts.push("API Drive com a tua conta OK (só leitura)");
+  } else if (withDrive.length) {
+    parts.push("a parte pessoal não foi testada: ativa o Drive na tua conta (Perfil → Google) para a testar com a tua conta");
   }
   if (!parts.length) throw new Error("O Shared Drive está desligado e ninguém ativou ainda o Drive (Perfil → Google).");
   return `Ligação OK (${parts.join("; ")}; ${withDrive.length} pessoa(s) com o Drive).`;

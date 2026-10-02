@@ -9,9 +9,10 @@ import { notificationLocation, safeError } from './domain';
 import { refreshLocations, syncReviews } from './service';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
+/** 19d (decisão do Jorge): ligar o Google Business é só do super admin (publica respostas e muda horários no Google). */
 export async function authorizedAdmin(req: Request) {
   const user = await sdk.authenticateRequest(req).catch(() => null);
-  if (!user || !['admin', 'super_admin'].includes(user.role)) return null;
+  if (!user || user.role !== 'super_admin') return null;
   return (await loadCityAccess(user.id, user.role)).all ? user : null;
 }
 export async function verifyPush(authorization: string | undefined) {
@@ -26,28 +27,34 @@ export function registerGoogleBusinessRoutes(app: Express, afterReceive?: () => 
   app.get('/api/integrations/google-business/oauth/start', async (req, res) => {
     try {
       const user = await authorizedAdmin(req);
-      if (!user) { res.status(403).send('Só um administrador com acesso global pode ligar os perfis Google.'); return; }
+      if (!user) { res.status(403).send('Só o super admin pode ligar os perfis Google.'); return; }
       res.redirect(302, await startOAuth(user.id));
     } catch (error) { res.status(500).type('text').send(safeError(error)); }
   });
   app.get(CALLBACK, async (req, res) => {
     try {
       const user = await authorizedAdmin(req);
-      if (!user) { res.status(403).send('Inicia sessão com o administrador que iniciou a ligação.'); return; }
+      if (!user) { res.status(403).send('Inicia sessão com o super admin que iniciou a ligação.'); return; }
       const { state, code } = req.query;
       if (typeof state !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(state)) { res.status(400).send('Pedido OAuth inválido.'); return; }
       const verifier = await consumeState(state, user.id);
       if (!verifier) { res.status(400).send('Pedido expirado. Volta a carregar em Ligar Google Business Profile nas Críticas.'); return; }
       if (req.query.error || typeof code !== 'string') { res.status(400).send('Autorização não concluída. Volta às Críticas para tentar novamente.'); return; }
-      await finishOAuth(code, verifier, user.id);
+      const done = await finishOAuth(code, verifier, user.id);
+      try {
+        const { logActivity } = await import('../../db');
+        await logActivity({ userId: user.id, action: 'connect', entity: 'integration_connections',
+          details: `Google Business ligado com ${done.email}${done.identityChanged ? ` — OUTRA conta (antes ${done.previousEmail}): a escolha dos perfis foi limpa` : ''}` });
+      } catch { /* o registo não impede a ligação */ }
       try { await refreshLocations(); }
       catch (error) { await saveConnection({ lastError: safeError(error) }); }
       res.redirect(302, `${PAGE}?googleBusiness=connected`);
     } catch (error) { res.status(500).type('text').send(safeError(error)); }
   });
   app.get('/api/cron/google-business', async (req, res) => {
-    const secret = process.env.CRON_SECRET?.trim();
-    if (!secret || req.headers.authorization !== `Bearer ${secret}`) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    // 19d: a mesma verificação dos outros crons (tempo constante, segredo com trim)
+    const { cronAuthOk } = await import('../../cronAuth');
+    if (!cronAuthOk(req.headers.authorization)) { res.status(401).json({ error: 'Unauthorized' }); return; }
     const started = Date.now();
     try {
       const reviews = await syncReviews(started + 35_000);

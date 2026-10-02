@@ -111,7 +111,8 @@ const DEFS: Def[] = [
     links: [{ label: "Interruptores e custo (Definições)", href: "/definicoes" }] },
   { id: "multipark_db", label: "BD Multipark (só leitura)", description: "Ligação direta à base de dados da aplicação Multipark: as páginas (Reservas do dia, ficha da reserva, Ocorrências, Avaliação, Extras-Dia, Parcerias) leem-na ao vivo. Deve ser um utilizador SÓ DE LEITURA. O Testar (só super admin) diz se liga, o motor e versão, se a sessão ficou só de leitura, a latência e o n.º de tabelas.", require: [["DATABASE_URL_MULTIPARK"]], testable: true, group: "main",
     links: [{ label: "Reservas do dia", href: "/operacoes" }] },
-  { id: "storage", label: "Armazenamento de ficheiros", description: "S3 ou Vercel Blob.", require: [["BLOB_READ_WRITE_TOKEN", "AWS_S3_BUCKET_NAME"]], group: "main", links: [] },
+  // 19d: S3 só funciona com as 4 variáveis (storage.ts) — antes bastava o bucket para "Configurada".
+  { id: "storage", label: "Armazenamento de ficheiros", description: "S3 (AWS_S3_REGION, AWS_S3_BUCKET_NAME, AWS_S3_ACCESS_KEY, AWS_S3_SECRET_ACCESS_KEY) ou Vercel Blob (BLOB_READ_WRITE_TOKEN).", require: [], group: "main", links: [] },
   // ── sistema ──
   { id: "database", label: "Base de dados", description: "MySQL principal.", require: [["DATABASE_URL"]], testable: true, group: "system", links: [] },
   { id: "multipark_webhook", label: "Webhook Multipark", description: "Reservas em tempo real (assinatura HMAC) para a cópia financeira e o CRM; o detalhe de cada reserva vem da API Multipark (MULTIPARK_API_KEY ou chaves por parque).", require: [["MULTIPARK_WEBHOOK_SECRET"]], cron: "multipark-deliveries", group: "system", links: [] },
@@ -125,10 +126,20 @@ export function missingEnvs(require: string[][], env: Env): string[] {
   return require.filter((group) => !group.some((k) => has(env, k))).map((group) => group.join(" ou "));
 }
 
+/**
+ * Armazenamento: Vercel Blob (1 variável) OU S3 com as 4 (região, bucket e as
+ * duas chaves — com os nomes antigos AWS_ACCESS_KEY/AWS_SECRET_ACCESS_KEY como
+ * alternativa, como em storage.ts). Devolve o que falta ao S3. PURA.
+ */
+export function storageMissing(env: Env): string[] {
+  if (has(env, "BLOB_READ_WRITE_TOKEN")) return [];
+  return missingEnvs([["AWS_S3_REGION"], ["AWS_S3_BUCKET_NAME"], ["AWS_S3_ACCESS_KEY", "AWS_ACCESS_KEY"], ["AWS_S3_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"]], env);
+}
+
 /** Estado estático (só env). PURA — nunca devolve valores. */
 export function integrationStatusesFromEnv(env: Env = process.env): IntegrationStatus[] {
   return DEFS.map((d) => {
-    const missing = missingEnvs(d.require, env);
+    const missing = d.id === "storage" ? storageMissing(env) : missingEnvs(d.require, env);
     return { id: d.id, label: d.label, description: d.description, configured: missing.length === 0, missing, testable: !!d.testable, group: d.group, links: d.links, warnings: [] };
   });
 }
@@ -178,7 +189,17 @@ export async function mailRoutingWarningsNow(env: Env = process.env): Promise<st
 }
 
 export async function listIntegrationStatuses(env: Env = process.env): Promise<IntegrationStatus[]> {
+  return (await listIntegrationStatusesFull(env)).items;
+}
+
+/**
+ * Lista + `statusError` (19d): uma falha a ler o estado guardado (ligações,
+ * recolhas, crons) já não é engolida — antes o hub ficava todo "Sem problemas
+ * conhecidos" (verde) com a BD em baixo ou uma consulta a falhar.
+ */
+export async function listIntegrationStatusesFull(env: Env = process.env): Promise<{ items: IntegrationStatus[]; statusError: string | null }> {
   const list = integrationStatusesFromEnv(env);
+  let statusError: string | null = null;
   const byId = new Map(list.map((s) => [s.id, s]));
   const defOf = (id: string) => DEFS.find((d) => d.id === id)!;
 
@@ -201,7 +222,7 @@ export async function listIntegrationStatuses(env: Env = process.env): Promise<I
   try {
     const { getDb } = await import("./db");
     const db = await getDb();
-    if (!db) return list;
+    if (!db) return { items: list, statusError: "Base de dados indisponível: o estado das ligações e das recolhas não se conseguiu ler." };
 
     const connRes = await db.execute(sql`
       SELECT provider, status, DATE_FORMAT(lastCheckedAt, '%Y-%m-%d %H:%i:%s') AS lastCheckedAt, lastError
@@ -247,7 +268,15 @@ export async function listIntegrationStatuses(env: Env = process.env): Promise<I
         const last = cronLast.get(d.cron);
         if (!s.lastError && last && Number(last.ok) === 0 && last.error) s.lastError = oneLine(last.error);
       }
-      if (d.id === "google_business" && !s.lastSyncAt && s.connection?.lastCheckedAt) s.lastSyncAt = s.connection.lastCheckedAt;
+      // 19d: o Google Business já não usa `lastCheckedAt` como "última recolha OK"
+      // (era atualizado mesmo com erros) — só o cron concluído com sucesso.
+    }
+    // 19d: o erro da recolha do desempenho dos perfis (gbp:lastError) chega ao cartão
+    const gbp = byId.get("google_business");
+    if (gbp?.configured) {
+      const [row] = rowsOf(await db.execute(sql`SELECT \`value\` FROM web_analytics_state WHERE stateKey = 'gbp:lastError' LIMIT 1`));
+      const v = row?.value == null ? null : String(row.value);
+      if (v && v.trim()) gbp.warnings!.push(`Desempenho dos perfis: ${oneLine(v)}`);
     }
     // Encaminhamento por alias: pipeline/caixa sem conta Gmail ligada NÃO cria registos (não há IMAP de reserva) — avisar, nunca em silêncio.
     const gmail = byId.get("gmail");
@@ -256,8 +285,10 @@ export async function listIntegrationStatuses(env: Env = process.env): Promise<I
         gmail.warnings!.push(...(await mailRoutingWarningsNow(env)));
       } catch { /* sem tabelas da Comunicação */ }
     }
-  } catch { /* só o estado da env */ }
-  return list;
+  } catch (err: any) {
+    statusError = `Não foi possível ler o estado guardado das ligações: ${oneLine(err?.message ?? err) ?? "erro"}`;
+  }
+  return { items: list, statusError };
 }
 
 export interface TestResult { ok: boolean; message: string; ms: number }
@@ -285,13 +316,27 @@ async function graphGet(path: string, token: string): Promise<any> {
   return body;
 }
 
+/** 19d: o teste da Meta com o token recusado grava a ligação como "reauth_required". */
+async function recordMetaTokenError(detail: string): Promise<void> {
+  try {
+    const { getDb } = await import("./db");
+    const db = await getDb();
+    if (!db) return;
+    const msg = `Token Meta inválido ou expirado (190): ${scrubSecrets(detail, process.env, 300)}`;
+    await db.execute(sql`
+      INSERT INTO integration_connections (provider, status, lastError, lastCheckedAt)
+      VALUES ('meta', 'reauth_required', ${msg}, UTC_TIMESTAMP())
+      ON DUPLICATE KEY UPDATE status = 'reauth_required', lastError = ${msg}, lastCheckedAt = UTC_TIMESTAMP()`);
+  } catch { /* melhor esforço */ }
+}
+
 /** Testes que só o super_admin pode correr (ligam a sistemas de terceiros sensíveis). */
 const SUPER_ADMIN_TESTS = new Set(["multipark_db"]);
 export function integrationTestSuperAdminOnly(id: string): boolean {
   return SUPER_ADMIN_TESTS.has(id);
 }
 
-export async function testIntegration(id: string): Promise<TestResult> {
+export async function testIntegration(id: string, testerUserId: number | null = null): Promise<TestResult> {
   const started = Date.now();
   const env = process.env;
   const def = DEFS.find((d) => d.id === id);
@@ -304,17 +349,17 @@ export async function testIntegration(id: string): Promise<TestResult> {
       switch (id) {
         case "google_sync": {
           const { testGoogleSync } = await import("./google/syncService");
-          message = await testGoogleSync();
+          message = await testGoogleSync(testerUserId);
           break;
         }
         case "google_contacts": {
           const { testGoogleContacts } = await import("./google/contactsService");
-          message = await testGoogleContacts();
+          message = await testGoogleContacts(testerUserId);
           break;
         }
         case "google_drive": {
           const { testGoogleDrive } = await import("./google/driveService");
-          message = await testGoogleDrive();
+          message = await testGoogleDrive(testerUserId);
           break;
         }
         case "google_analytics":
@@ -381,7 +426,13 @@ export async function testIntegration(id: string): Promise<TestResult> {
         case "meta_ads": {
           const { readMetaConfig } = await import("./integrations/meta/config");
           const cfg = readMetaConfig(env);
-          await graphGet(`/${cfg.apiVersion}/me?fields=id`, cfg.accessToken!);
+          try {
+            await graphGet(`/${cfg.apiVersion}/me?fields=id`, cfg.accessToken!);
+          } catch (err: any) {
+            // 19d: token recusado (190) fica gravado — antes só se via no resultado do Testar
+            if (/\b190\b|access token|validating access token|Session has expired/i.test(String(err?.message ?? ""))) await recordMetaTokenError(String(err?.message ?? err));
+            throw err;
+          }
           message = `Token válido (${cfg.accountIds.length} conta(s) configurada(s)).`;
           break;
         }
