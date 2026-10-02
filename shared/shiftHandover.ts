@@ -7,6 +7,8 @@
  * Nada aqui usa o relógio/fuso do browser nem do servidor (Vercel = UTC).
  */
 import { addDays, lisbonDayOf, lisbonMidnightUtcMs, lisbonOffsetMs } from "./lisbonDay";
+import { can } from "./access";
+import { matchKey } from "./textKey";
 
 export type HandoverShift = "morning" | "night";
 export const HANDOVER_CITIES = ["lisbon", "porto", "faro"] as const;
@@ -76,6 +78,16 @@ export const HANDOVER_CONFLICT_MESSAGE = "Outra pessoa alterou esta passagem —
 export const HANDOVER_EXISTS_MESSAGE = "Esta passagem de turno já foi criada por outra pessoa — recarrega";
 export const HANDOVER_LOCKED_MESSAGE = "Passaram mais de 24h desde que esta passagem foi criada — só um supervisor a pode alterar";
 export const HANDOVER_EDIT_WINDOW_MINUTES = 24 * 60;
+
+/**
+ * Quem altera uma passagem com mais de 24h: quem vê o "Resumo do dia"
+ * (supervisor, front/backoffice e administração — com as permissões por
+ * utilizador). A MESMA regra no ecrã e no servidor (antes o servidor comparava
+ * o papel e o ecrã a permissão: com um override davam respostas diferentes).
+ */
+export function canEditOldHandover(user: Parameters<typeof can>[0] | null | undefined): boolean {
+  return !!user && can(user, "passagem_resumo_dia", "view");
+}
 
 export type HandoverWriteDecision =
   | { ok: true; mode: "insert" | "update" }
@@ -164,10 +176,11 @@ export function findPersonShift(
     const byId = assignments.find((a) => a.employeeId === person.employeeId);
     if (byId) return byId;
   }
-  const name = person.name.trim().toLowerCase();
+  // Nome comparado sem acentos, maiúsculas nem pontuação ("João  Silva" = "joao silva").
+  const name = matchKey(person.name);
   if (!name) return undefined;
   return assignments.find((a) =>
     (person.employeeId == null || a.employeeId == null) &&
-    (a.personName ?? "").trim().toLowerCase() === name &&
+    matchKey(a.personName) === name &&
     (!city || a.city === city));
 }

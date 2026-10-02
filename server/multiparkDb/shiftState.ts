@@ -126,7 +126,9 @@ export function buildUpcomingSql(kind: "checkin" | "checkout", parkIds: string[]
     `WHERE b."parkId" IN (${parks})`,
     `  AND ${dateCol} >= ${ws}::timestamp AND ${dateCol} < ${we}::timestamp`,
     `  AND ${at} >= ${s}::timestamp AND ${at} < ${e}::timestamp`,
-    `  AND b."status" <> 'CANCELLED'`,
+    // Compras online por acabar (PENDING) não são trabalho do turno — a mesma
+    // regra das Reservas do dia, do Dashboard, da Faturação e do CRM.
+    `  AND b."status"::text NOT IN ('CANCELLED', 'PENDING')`,
     `ORDER BY ${at}`,
     `LIMIT ${l}`,
   ].join("\n");
@@ -406,7 +408,7 @@ export function mapLiveUpcoming(kind: "checkin" | "checkout", r: Row, park: Park
     kind,
     at: toIsoUtc(r.at),
     status,
-    done: kind === "checkin" ? !["BOOKED", "PENDING", "CHECKING_IN"].includes(st) : st === "CHECKED_OUT",
+    done: kind === "checkin" ? !["BOOKED", "CHECKING_IN"].includes(st) : st === "CHECKED_OUT",
     parkId: String(r.park_id ?? ""),
     parkName: park?.name ?? null,
     plate: str(r.plate),

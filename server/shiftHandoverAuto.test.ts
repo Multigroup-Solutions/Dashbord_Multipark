@@ -273,11 +273,12 @@ describe("SQL da automação — parametrizado e sem mexer na versão", () => {
     expect(q.sql).toMatch(/`emailSentVersion` IS NULL OR `emailSentVersion` < \?/);
     expect(q.params).toEqual([2, 5, 2, 2]);
   });
-  it("Recebi: só a 1.ª vez e nunca o autor", () => {
+  it("Recebi: só a 1.ª vez e nunca o autor nem quem a editou por último", () => {
     const q = compile(buildHandoverAck(9, { id: 4, name: evil }));
     expect(q.sql).toContain("`ackAt` IS NULL");
     expect(q.sql).toContain("`createdById` <> ?");
-    expect(q.params).toEqual([4, evil, 9, 4]);
+    expect(q.sql).toContain("`filledById` <> ?");
+    expect(q.params).toEqual([4, evil, 9, 4, 4]);
   });
 });
 

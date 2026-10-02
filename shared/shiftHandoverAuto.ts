@@ -50,6 +50,15 @@ export function shiftWindowUtc(s: ShiftRef): { start: string; end: string; start
   return { start: mysqlTs(startMs), end: mysqlTs(endMs), startMs, endMs };
 }
 
+/** Até quantos dias para trás se procura a última passagem (pendentes herdados). */
+export const PREVIOUS_HANDOVER_MAX_DAYS = 3;
+
+/** Turnos em falta ENTRE `a` (mais antigo) e `b` (0 = `a` é mesmo o anterior de `b`). PURA. */
+export function shiftsBetween(a: ShiftRef, b: ShiftRef): number {
+  const idx = (s: ShiftRef) => Math.round(Date.UTC(+s.date.slice(0, 4), +s.date.slice(5, 7) - 1, +s.date.slice(8, 10)) / 86_400_000) * 2 + (s.shift === "night" ? 1 : 0);
+  return Math.max(0, idx(b) - idx(a) - 1);
+}
+
 /** Hora de Lisboa (0–26) de um instante relativo ao dia `date` (a noite passa das 24). */
 export function lisbonHourInShift(date: string, ms: number): number {
   // Horas de relógio contadas pelo offset do próprio instante (DST).
@@ -165,8 +174,43 @@ export interface OpenItem {
   resolved: boolean;
   resolvedAt?: string | null;
   resolvedByName?: string | null;
-  /** Turno em que apareceu pela 1.ª vez. */
+  /** Turno em que apareceu pela 1.ª vez ("YYYY-MM-DD morning|night"). */
   since?: string | null;
+  /** Veio de uma linha "- …" das notas (acompanha as notas do turno em que nasceu). */
+  fromNotes?: boolean;
+}
+
+/** Chave do turno para `since` ("2026-10-02 night"). */
+export const shiftSince = (s: ShiftRef): string => `${s.date} ${s.shift}`;
+
+/**
+ * Pode sair da lista? Só uma nota por resolver escrita NESTE turno (ou ainda
+ * sem turno, acabada de escrever). O que veio de turnos anteriores resolve-se,
+ * nunca se apaga — senão desaparecia sem registo de quem. PURA.
+ */
+export function canRemoveOpenItem(i: OpenItem, currentSince: string): boolean {
+  return !i.resolved && i.kind === "note" && (!i.since || i.since === currentSince);
+}
+
+/** Ordem de prioridade no limite: notas e pendentes herdados primeiro, entidades automáticas depois. */
+function openItemRank(i: OpenItem, currentSince: string | null): number {
+  if (i.kind === "note") return i.since && i.since !== currentSince ? 0 : 1;
+  return i.since && i.since !== currentSince ? 2 : 3;
+}
+
+/**
+ * Corta a lista em OPEN_ITEMS_MAX sem deixar cair o que o team leader
+ * escreveu: notas (herdadas e deste turno) primeiro, depois pendentes
+ * herdados, por fim as entidades automáticas (reclamações, perdidos…), que
+ * continuam visíveis nas suas páginas. Diz quantos ficaram de fora. PURA.
+ */
+export function capOpenItems(items: OpenItem[], currentSince: string | null = null): { items: OpenItem[]; cut: number } {
+  if (items.length <= OPEN_ITEMS_MAX) return { items, cut: 0 };
+  const ranked = items.map((i, idx) => ({ i, idx, r: openItemRank(i, currentSince) }))
+    .sort((a, b) => a.r - b.r || a.idx - b.idx)
+    .slice(0, OPEN_ITEMS_MAX)
+    .sort((a, b) => a.idx - b.idx);
+  return { items: ranked.map((x) => x.i), cut: items.length - OPEN_ITEMS_MAX };
 }
 
 const normText = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -182,7 +226,7 @@ export function extractNoteItems(notes: string | null | undefined, since?: strin
     const m = raw.match(/^\s*(?:[-*•]|\[\s?\])\s+(.{3,})$/);
     if (!m) continue;
     const text = m[1].trim().slice(0, 300);
-    out.push({ key: openItemKey("note", text), kind: "note", text, resolved: false, since: since ?? null });
+    out.push({ key: openItemKey("note", text), kind: "note", text, resolved: false, since: since ?? null, fromNotes: true });
   }
   return out;
 }
@@ -201,21 +245,29 @@ export function mergeCarryOver(input: {
   current?: OpenItem[];
   /** Tipos que o rascunho consegue confirmar como ainda abertos. */
   draftKinds?: OpenItemKind[];
+  /**
+   * Item a item: pode o rascunho dar este como fechado? (ex.: uma ocorrência
+   * guardada com o id da nossa cópia não se fecha só porque a leitura de agora
+   * veio da Multipark, onde o id é outro).
+   */
+  isCheckable?: (i: OpenItem) => boolean;
   nowIso?: string;
+  /** Turno de quem preenche (para a ordem no limite). */
+  currentSince?: string | null;
 }): OpenItem[] {
   const draftKeys = new Set(input.draft.map((i) => i.key));
   const checkable = new Set(input.draftKinds ?? ["complaint", "lost_found", "pda", "incident", "delivery"]);
   const byKey = new Map<string, OpenItem>();
   for (const p of input.previous) {
     if (p.resolved) continue;
-    const autoResolved = p.kind !== "note" && checkable.has(p.kind) && !draftKeys.has(p.key);
+    const autoResolved = p.kind !== "note" && checkable.has(p.kind) && (input.isCheckable?.(p) ?? true) && !draftKeys.has(p.key);
     byKey.set(p.key, autoResolved
       ? { ...p, resolved: true, resolvedAt: input.nowIso ?? null, resolvedByName: "sistema" }
       : { ...p });
   }
   for (const d of input.draft) if (!byKey.has(d.key)) byKey.set(d.key, { ...d });
   for (const c of input.current ?? []) byKey.set(c.key, { ...(byKey.get(c.key) ?? {}), ...c });
-  return [...byKey.values()].slice(0, OPEN_ITEMS_MAX);
+  return capOpenItems([...byKey.values()], input.currentSince ?? null).items;
 }
 
 /** Como correu a leitura de um tipo de pendente no rascunho. */
@@ -239,10 +291,31 @@ export function confirmedDraftKinds(reads: Partial<Record<Exclude<OpenItemKind, 
  */
 export function mergeStoredOpenItems(stored: OpenItem[], incoming: OpenItem[]): OpenItem[] {
   const prev = new Map(stored.map((i) => [i.key, i]));
-  return incoming.slice(0, OPEN_ITEMS_MAX).map((i) => {
+  return capOpenItems(incoming).items.map((i) => {
     const s = prev.get(i.key);
     if (s?.resolved && !i.resolved) return { ...i, resolved: true, resolvedAt: s.resolvedAt ?? null, resolvedByName: s.resolvedByName ?? null };
     return i;
+  });
+}
+
+/**
+ * Antes de gravar (servidor): quem resolveu e quando vêm SEMPRE da conta que
+ * grava (nunca do formulário), só para os itens que passam agora a resolvidos;
+ * os já resolvidos mantêm quem e quando; itens sem turno ganham o turno desta
+ * passagem (deixam de se poder apagar no turno seguinte). PURA.
+ */
+export function stampOpenItems(stored: OpenItem[], incoming: OpenItem[], ctx: { since: string; userName: string | null; nowIso: string }): OpenItem[] {
+  const prev = new Map(stored.map((i) => [i.key, i]));
+  return incoming.map((i) => {
+    const s = prev.get(i.key);
+    const since = i.since || s?.since || ctx.since;
+    if (!i.resolved) return { ...i, since, resolvedAt: null, resolvedByName: null };
+    if (s?.resolved) return { ...i, since, resolvedAt: s.resolvedAt ?? null, resolvedByName: s.resolvedByName ?? null };
+    // A passagem anterior pode já o ter dado como resolvido (sistema/turno seguinte):
+    // mantém esse quem/quando; senão é quem grava agora.
+    // (o sistema nunca fecha notas: uma nota "resolvida pelo sistema" é de quem grava).
+    if (!s && i.kind !== "note" && i.resolvedByName === "sistema" && i.resolvedAt) return { ...i, since };
+    return { ...i, since, resolvedAt: ctx.nowIso, resolvedByName: ctx.userName };
   });
 }
 
@@ -263,6 +336,7 @@ export function parseOpenItems(raw: unknown): OpenItem[] {
       resolvedAt: typeof i.resolvedAt === "string" ? i.resolvedAt : null,
       resolvedByName: typeof i.resolvedByName === "string" ? i.resolvedByName : null,
       since: typeof i.since === "string" ? i.since : null,
+      ...(i.fromNotes === true ? { fromNotes: true } : {}),
     }))
     .slice(0, OPEN_ITEMS_MAX);
 }
@@ -388,22 +462,46 @@ export interface HandoverDraftCounts {
   toCollectEur: number;
 }
 
-/** Contagens-chave (texto curto) — email, notificações e IA. */
-export function draftKeyLines(c: HandoverDraftCounts): string[] {
+/**
+ * Contagens-chave (texto curto) — email, notificações e IA. Uma contagem cuja
+ * leitura falhou (`unavailable`) diz "sem dados (falhou a leitura)" — nunca 0. PURA.
+ */
+export function draftKeyLines(c: HandoverDraftCounts, unavailable: ReadonlyArray<keyof HandoverDraftCounts> = []): string[] {
   const eur = (n: number) => `${n.toFixed(2).replace(".", ",")} €`;
+  const na = new Set(unavailable);
+  const v = (k: keyof HandoverDraftCounts) => (na.has(k) ? "sem dados (falhou a leitura)" : String(c[k]));
   const lines = [
-    `Recolhas no próximo turno: ${c.checkinsNext}`,
-    `Entregas no próximo turno: ${c.checkoutsNext}${c.toCollectEur > 0 ? ` (a cobrar ${eur(c.toCollectEur)})` : ""}`,
-    `Entregas pendentes (sem check-out): ${c.pendingDeliveries}`,
-    `Reclamações novas no turno: ${c.complaintsNew} · abertas: ${c.complaintsOpen}`,
-    `Perdidos e achados abertos: ${c.lostFoundOpen}`,
-    `Ocorrências abertas: ${c.incidentsOpen}`,
-    `WhatsApp por ler: ${c.whatsappUnread}`,
-    `PDAs ainda com check-in: ${c.pdasCheckedIn}`,
-    `Picagens de entrada sem saída: ${c.clockInsOpen}`,
-    `Alertas de velocidade/GPS no turno: ${c.speedAlerts}/${c.gpsAlerts}`,
+    `Recolhas no próximo turno: ${v("checkinsNext")}`,
+    `Entregas no próximo turno: ${v("checkoutsNext")}${!na.has("toCollectEur") && c.toCollectEur > 0 ? ` (a cobrar ${eur(c.toCollectEur)})` : ""}`,
+    `Entregas pendentes (sem check-out): ${v("pendingDeliveries")}`,
+    `Reclamações novas no turno: ${v("complaintsNew")} · abertas: ${v("complaintsOpen")}`,
+    `Perdidos e achados abertos: ${v("lostFoundOpen")}`,
+    `Ocorrências abertas: ${v("incidentsOpen")}`,
+    `WhatsApp por ler: ${v("whatsappUnread")}`,
+    `PDAs ainda com check-in: ${v("pdasCheckedIn")}`,
+    `Picagens de entrada sem saída: ${v("clockInsOpen")}`,
+    `Alertas de velocidade/GPS no turno: ${v("speedAlerts")}/${v("gpsAlerts")}`,
   ];
   return lines;
+}
+
+/** Leitura do rascunho que falhou → contagens que deixam de valer. PURA. */
+export const DRAFT_FAILED_COUNTS: Record<string, Array<keyof HandoverDraftCounts>> = {
+  "bookings checkIn": ["checkinsNext"],
+  "bookings checkOut": ["checkoutsNext", "toCollectEur"],
+  "pending deliveries": ["pendingDeliveries"],
+  complaints: ["complaintsNew", "complaintsOpen"],
+  "lost&found": ["lostFoundOpen"],
+  incidents: ["incidentsOpen"],
+  whatsapp: ["whatsappUnread"],
+  pdas: ["pdasCheckedIn"],
+  time_records: ["clockInsOpen"],
+  speed: ["speedAlerts"],
+  gps: ["gpsAlerts"],
+};
+
+export function unavailableCounts(failed: readonly string[]): Array<keyof HandoverDraftCounts> {
+  return [...new Set(failed.flatMap((f) => DRAFT_FAILED_COUNTS[f] ?? []))];
 }
 
 // ─── Email ao team leader do turno seguinte ─────────────────────────────────
@@ -421,6 +519,8 @@ export function buildHandoverEmail(input: {
   authorName: string | null;
   aiSummary: string | null;
   counts: HandoverDraftCounts | null;
+  /** Contagens cuja leitura falhou (não vão como 0). */
+  unavailable?: ReadonlyArray<keyof HandoverDraftCounts>;
   notes: string | null;
   openItems: OpenItem[];
   link: string;
@@ -428,7 +528,7 @@ export function buildHandoverEmail(input: {
   const subject = handoverEmailSubject(input.city, input.shift);
   const summary = (input.aiSummary ?? "").trim()
     || [input.notes?.trim() ? `Notas: ${input.notes.trim()}` : "", "Sem resumo automático — vê os números abaixo."].filter(Boolean).join("\n");
-  const keys = input.counts ? draftKeyLines(input.counts) : [];
+  const keys = input.counts ? draftKeyLines(input.counts, input.unavailable ?? []) : [];
   const open = input.openItems.filter((i) => !i.resolved);
   const text = [
     `${subject}${input.authorName ? ` (por ${input.authorName})` : ""}`,
@@ -464,9 +564,17 @@ export function normalizeAiBullets(raw: string): string | null {
   return lines.length ? lines.map((l) => `• ${l.slice(0, 300)}`).join("\n") : null;
 }
 
-/** Acrescenta aos pendentes as linhas em lista das notas (sem repetir). */
+/**
+ * Pendentes das notas: as linhas "- …" das notas DESTE turno acompanham as
+ * notas — uma linha editada ou apagada deixa de ter pendente (antes ficavam as
+ * duas versões, sem se poderem remover). Os de turnos anteriores e os já
+ * resolvidos ficam sempre. PURA.
+ */
 export function withNoteItems(items: OpenItem[], notes: string | null | undefined, since: string): OpenItem[] {
-  const keys = new Set(items.map((i) => i.key));
-  const extra = extractNoteItems(notes, since).filter((i) => !keys.has(i.key));
-  return [...items, ...extra].slice(0, OPEN_ITEMS_MAX);
+  const fromNotes = extractNoteItems(notes, since);
+  const noteKeys = new Set(fromNotes.map((i) => i.key));
+  const kept = items.filter((i) => !(i.fromNotes && i.since === since && !i.resolved && !noteKeys.has(i.key)));
+  const keys = new Set(kept.map((i) => i.key));
+  const extra = fromNotes.filter((i) => !keys.has(i.key));
+  return capOpenItems([...kept, ...extra], since).items;
 }
