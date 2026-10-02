@@ -3,7 +3,6 @@ import { ImportFromSheetButton } from "@/components/google/DriveActions";
 import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -12,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
+import { normalizeMonthRange, yearOptions } from "@shared/annualFilters";
 import FinanceExportButtons from "@/components/FinanceExportButtons";
 import FitAmount from "@/components/finance/FitAmount";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
@@ -22,6 +22,10 @@ import {
   BarChart3, ArrowUpRight, ArrowDownRight, Receipt, Users, Landmark,
   Megaphone, HandCoins, Calendar, Upload, Loader2,
 } from "lucide-react";
+
+/** Falha passageira (BD) tenta mais 2 vezes; sem permissão mostra logo o erro. */
+const retryTransient = (count: number, err: unknown) =>
+  count < 2 && !["FORBIDDEN", "UNAUTHORIZED", "BAD_REQUEST"].includes(String((err as { data?: { code?: string } })?.data?.code ?? ""));
 
 const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const MONTHS_SHORT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
@@ -259,11 +263,16 @@ export default function AnnualPage() {
 
   const projectId = selectedProject !== "all" ? parseInt(selectedProject) : undefined;
 
-  const { data: monthsRaw = [], isLoading } = trpc.annual.breakdown.useQuery({ year, projectId });
-  const { data: monthsCompareRaw = [] } = trpc.annual.breakdown.useQuery(
+  const { data: monthsRaw = [], isLoading, error, refetch, isFetching } = trpc.annual.breakdown.useQuery({ year, projectId }, { retry: retryTransient });
+  const { data: monthsCompareRaw = [], error: compareError } = trpc.annual.breakdown.useQuery(
     { year: compareYear, projectId },
-    { enabled: compareMode === "year" },
+    { enabled: compareMode === "year", retry: retryTransient },
   );
+  const years = useMemo(() => yearOptions(currentYear), [currentYear]);
+  const setRange = (from: number, to: number, changed: "from" | "to") => {
+    const r = normalizeMonthRange(from, to, changed);
+    setFromMonth(r.from); setToMonth(r.to);
+  };
   const { data: projects = [] } = trpc.projects.list.useQuery();
 
   // Filtra ao range de meses (filtragem client-side; o backend devolve 12 meses)
@@ -308,11 +317,16 @@ export default function AnnualPage() {
           )}
           <div>
             <Label className="text-xs mb-1 block">Ano</Label>
-            <Input type="number" value={year} onChange={e => setYear(parseInt(e.target.value) || currentYear)} className="w-24 h-9" />
+            <Select value={String(year)} onValueChange={(v) => setYear(parseInt(v))}>
+              <SelectTrigger className="w-24 h-9" aria-label="Ano"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <Label className="text-xs mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> De</Label>
-            <Select value={String(fromMonth)} onValueChange={(v) => setFromMonth(parseInt(v))}>
+            <Select value={String(fromMonth)} onValueChange={(v) => setRange(parseInt(v), toMonth, "from")}>
               <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {MONTHS.map((m, i) => <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>)}
@@ -321,7 +335,7 @@ export default function AnnualPage() {
           </div>
           <div>
             <Label className="text-xs mb-1 block">Até</Label>
-            <Select value={String(toMonth)} onValueChange={(v) => setToMonth(parseInt(v))}>
+            <Select value={String(toMonth)} onValueChange={(v) => setRange(fromMonth, parseInt(v), "to")}>
               <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {MONTHS.map((m, i) => <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>)}
@@ -359,21 +373,38 @@ export default function AnnualPage() {
           {compareMode === "year" && (
             <div>
               <Label className="text-xs mb-1 block">Ano comparado</Label>
-              <Input
-                type="number"
-                value={compareYear}
-                onChange={(e) => setCompareYear(parseInt(e.target.value) || currentYear - 1)}
-                className="w-24 h-9"
-              />
+              <Select value={String(compareYear)} onValueChange={(v) => setCompareYear(parseInt(v))}>
+                <SelectTrigger className="w-24 h-9" aria-label="Ano comparado"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           )}
         </div>
+        {compareMode === "year" && compareError && (
+          <p className="text-xs text-red-700 mt-2" role="alert">Não foi possível carregar {compareYear} para comparar: {String(compareError.message ?? "").slice(0, 160)}</p>
+        )}
       </Card>
 
       {isLoading ? (
-        <div className="flex justify-center py-20">
+        <div className="flex justify-center py-20" role="status" aria-label="A calcular o ano">
           <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" />
         </div>
+      ) : error ? (
+        // Erro ≠ zero: antes uma falha (BD da Multipark em baixo, sem permissão) mostrava 0 € no ano inteiro
+        <Card className="p-4 border-red-200 bg-red-50/50" role="alert">
+          <div className="flex items-start gap-2 text-sm text-red-800">
+            <TrendingDown className="w-4 h-4 mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-medium">Não foi possível calcular o ano.</p>
+              <p className="text-xs mt-0.5 break-words">{String(error.message ?? "").slice(0, 200)}</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()} disabled={isFetching}>
+                {isFetching ? "A tentar…" : "Tentar de novo"}
+              </Button>
+            </div>
+          </div>
+        </Card>
       ) : (
         <>
           {/* KPI Cards */}
@@ -448,11 +479,11 @@ export default function AnnualPage() {
           {/* IVA summary */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 [&>*]:min-w-0">
             <Card className="p-4 gap-1 bg-blue-50/50 dark:bg-transparent">
-              <p className="text-xs text-muted-foreground mb-1">IVA Cobrado (23% das receitas líquidas)</p>
+              <p className="text-xs text-muted-foreground mb-1" title="À taxa em vigor em cada dia (Definições → Parâmetros)">IVA cobrado (nas receitas)</p>
               <FitAmount value={totals.vatRevenue} className="text-xl lg:text-2xl font-bold text-blue-700 dark:text-blue-400" />
             </Card>
             <Card className="p-4 gap-1 bg-cyan-50/50 dark:bg-transparent">
-              <p className="text-xs text-muted-foreground mb-1">IVA Dedutível (23% das despesas)</p>
+              <p className="text-xs text-muted-foreground mb-1" title="À taxa de cada categoria (rendas, seguros, pessoal: 0%; autoliquidação: 0%; vazio = taxa normal)">IVA dedutível (nas despesas, à taxa de cada categoria)</p>
               <FitAmount value={totals.vatExpenses} className="text-xl lg:text-2xl font-bold text-cyan-700 dark:text-cyan-400" />
             </Card>
             <Card className={`p-4 gap-1 ${totals.vatToPay >= 0 ? "bg-red-50/50" : "bg-green-50/50"} dark:bg-transparent`}>
@@ -544,7 +575,7 @@ export default function AnnualPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {months.sort((a, b) => a.month - b.month).map(m => {
+                    {[...months].sort((a, b) => a.month - b.month).map(m => {
                       const mc = showCompare ? monthsCompare.find(x => x.month === m.month) : undefined;
                       const commissions = (m.salesCommissions ?? 0) + (m.operationalCommissions ?? 0);
                       return (
