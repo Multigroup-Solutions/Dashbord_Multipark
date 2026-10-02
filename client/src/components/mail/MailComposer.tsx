@@ -68,7 +68,7 @@ function RecipientsInput({ label, value, onChange, autoFocus }: { label: string;
 }
 
 export function MailComposer({
-  mode, threadId, mailbox, defaults, onSent, onCancel, canAi,
+  mode, threadId, mailbox, defaults, onSent, onCancel, canAi, prefillTo,
 }: {
   mode: ComposeMode;
   threadId?: number | null;
@@ -78,8 +78,10 @@ export function MailComposer({
   onSent: (r: { threadId: number }) => void;
   onCancel: () => void;
   canAi?: boolean;
+  /** "new": destinatário já escrito ("Email" nas fichas — 17f). */
+  prefillTo?: string | null;
 }) {
-  const initialTo = mode === "reply" || mode === "replyAll" ? defaults.replyTo.join(", ") : "";
+  const initialTo = mode === "reply" || mode === "replyAll" ? defaults.replyTo.join(", ") : mode === "new" ? prefillTo ?? "" : "";
   const [from, setFrom] = useState(defaults.defaultFrom ?? defaults.fromOptions[0] ?? "");
   const [to, setTo] = useState(initialTo);
   const [cc, setCc] = useState(mode === "replyAll" ? defaults.replyAllCc.join(", ") : "");

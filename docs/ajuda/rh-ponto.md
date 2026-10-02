@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
+palavras: telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
 ---
 # RH e ponto
 
@@ -26,6 +26,7 @@ palavras: rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar e
 - **A trabalhar sem PDA ou Zello ligado** (Operacional → PDAs, em cima): de 5 em 5 minutos aparecem aqui as pessoas do operacional com o ponto aberto sem PDA (passados 10 min), com o Zello do PDA desligado, ou com movimentos na Multipark sem ponto aberto ou com o Zello desligado. O back office e o front office ficam de fora. Cada alerta fecha sozinho quando o problema desaparece.
   - Com o interruptor **"Alertas: a trabalhar sem PDA ou Zello ligado"** ligado, avisa no sino o team leader escalado nesse turno e cidade, os team leaders com ponto aberto na cidade e o supervisor.
   - Quem recebe carrega em **Visto** (com uma nota, se quiser). Sem ligação nem Visto em 10 min (Definições → Operação), e com o interruptor do WhatsApp ligado, vai um WhatsApp (modelo aprovado pela Meta) aos administradores da cidade e à cópia (Definições → Operação → "WhatsApp dos administradores").
+- Na ficha, **Ligar**, **WhatsApp** e **Email** para o colaborador (o telefone e o email da empresa e os pessoais). O WhatsApp fica ligado à ficha e na caixa RH; o email abre na caixa **RH**.
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
   - **Aprovar** com horas corrigidas paga essas horas — **0 horas quer dizer que não se paga** o turno (entra na folha com 0 h). Deixar vazio mantém as horas registadas.

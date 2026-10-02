@@ -12,6 +12,9 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Cada pessoa vê as conversas das suas cidades: um colaborador pela cidade da ficha, um lead pela cidade do lead, um número solto pela cidade da reserva com esse telefone. Números **sem cidade** (sem ficha, lead nem reserva) são de **todos** os que têm o WhatsApp.
 - Responder, atribuir e mudar o estado: team leader e acima.
 
+**Começar uma conversa**
+- Nas fichas do cliente, da reserva e do colaborador há o botão **WhatsApp**: abre a conversa desse número ou cria-a (sem enviar nada). A primeira mensagem é um **template** (ver **Janela de 24 h**).
+
 **Quem é**
 - O nome da conversa vem da ficha do colaborador, do candidato a extra ou do **cliente no CRM** (pelo número); só depois o nome do perfil do WhatsApp.
 - Por baixo do número aparece uma linha **quem é**: "Colaborador · Condutor · Lisboa", "Candidato a extra · respondeu" ou "Cliente · 3 reservas (1 por vir) · última 12/09/2026" (carrega para abrir a ficha do cliente). Número sem nada: "Número sem ficha, candidatura nem cliente no CRM".

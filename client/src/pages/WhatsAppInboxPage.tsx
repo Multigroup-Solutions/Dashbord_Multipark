@@ -428,6 +428,14 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
   const headerName = t?.name ?? selectedRow?.name ?? "…";
   const headerPhoto = t?.photoUrl ?? selectedRow?.photoUrl ?? null;
   const windowState: WindowState | undefined = t?.windowState;
+  // ?ligar=1 ("Ligar pelo WhatsApp" nas fichas — 17f): abre a chamada quando a conversa carregar.
+  const callOnOpen = useRef(!embedded && new URLSearchParams(window.location.search).get("ligar") === "1");
+  useEffect(() => {
+    if (!callOnOpen.current || !t || (canEditWa && !callsFlag.isFetched)) return;
+    callOnOpen.current = false;
+    if (callsOn) setCallOpen(true);
+    else toast.info("As chamadas pelo WhatsApp estão desligadas — liga pelo telemóvel.");
+  }, [t, callsOn, canEditWa, callsFlag.isFetched]);
   const threadAlerts = t ? conversationAlerts(t, now, slaMinutes) : null;
   const aiConfigured = meta.data?.aiConfigured === true;
 

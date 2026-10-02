@@ -160,6 +160,47 @@ export async function conversationIdentity(conversationId: number) {
   return describeIdentity({});
 }
 
+/**
+ * Conversa de um número (17f parte 3 — "WhatsApp" nas fichas). Existe → o id.
+ * Não existe → cria SÓ a conversa (sem mensagens; como numa chamada que chega):
+ * nada é enviado — quem a abriu escreve o template no ecrã do WhatsApp.
+ * `employeeId` só quando o número é o da ficha (o router confirma); nunca
+ * troca o colaborador de uma conversa que já o tem.
+ */
+export async function openConversationForPhone(phoneE164: string, employeeId: number | null): Promise<{ conversationId: number; created: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível.");
+  const find = async () => (await db.select({ id: whatsappConversations.id, employeeId: whatsappConversations.employeeId })
+    .from(whatsappConversations).where(eq(whatsappConversations.phoneE164, phoneE164)).limit(1))[0];
+  let row = await find();
+  let created = false;
+  if (!row) {
+    await db.insert(whatsappConversations).values({ phoneE164, employeeId, statusChangedAt: nowStr() })
+      .onDuplicateKeyUpdate({ set: { phoneE164: sql`${whatsappConversations.phoneE164}` } });
+    row = await find();
+    if (!row) throw new Error("Conversa não criada.");
+    created = true;
+    if (row.employeeId == null) {
+      const { matchBookingCity } = await import("./whatsappInbound");
+      await matchBookingCity(db as any, row.id, phoneE164);
+    }
+  } else if (employeeId != null && row.employeeId == null) {
+    await db.update(whatsappConversations).set({ employeeId })
+      .where(and(eq(whatsappConversations.id, row.id), sql`${whatsappConversations.employeeId} IS NULL`));
+  }
+  const { assignBoxByRule } = await import("./whatsappInbox");
+  await assignBoxByRule(row.id);
+  return { conversationId: row.id, created };
+}
+
+/** Só a procura (quem só vê o WhatsApp não cria conversas). */
+export async function conversationIdForPhone(phoneE164: string): Promise<number | null> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível.");
+  const [r] = await db.select({ id: whatsappConversations.id }).from(whatsappConversations).where(eq(whatsappConversations.phoneE164, phoneE164)).limit(1);
+  return r?.id ?? null;
+}
+
 /** Muda a caixa (17f) — `manual` fica: a regra e a IA não a voltam a mudar. */
 export async function setConversationBox(conversationId: number, boxKey: string | null, source: "rule" | "ai" | "manual"): Promise<void> {
   const db = await getDb();
