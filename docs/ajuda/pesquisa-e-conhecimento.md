@@ -24,7 +24,7 @@ Regras:
 
 ## Base de conhecimento
 
-Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente** e a **pesquisa global** usam para responder. As respostas indicam as **Fontes** (título do documento); nas do Drive, carregar na fonte abre o documento (os ficheiros carregados na app não têm ligação). Na pesquisa global os documentos aparecem pelo título ou pela pasta.
+Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente** e a **pesquisa global** usam para responder. As respostas indicam as **Fontes** (título do documento). No tutor e na pesquisa global, carregar na fonte abre o documento (só se o puderes ver); nas Fontes do assistente só os do Drive têm ligação. Na pesquisa global os documentos aparecem pelo título ou pela pasta.
 
 **Onde estão os documentos**
 - Pastas do Shared Drive "Multipark" (por omissão **Formação** e **Procedimentos**), sincronizadas sozinhas quando alguém muda um ficheiro nessas pastas (a Google avisa a app) e, mesmo sem avisos, de 4 em 4 horas; **Sincronizar agora** continua a funcionar: Google Docs, PDF, DOCX e ficheiros de texto. Um ficheiro alterado no Drive é lido outra vez; um ficheiro apagado sai do índice e, se for recuperado do lixo do Drive, volta a ser lido.
