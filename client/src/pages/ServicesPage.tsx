@@ -343,12 +343,13 @@ export default function ServicesPage() {
               <thead>
                 <tr className="border-b text-left">
                   <Th k="serviceName" label="Serviço" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                  {/* Estado logo a seguir: no telemóvel, dar baixa fica à vista sem deslizar */}
+                  <Th k="done" label="Estado" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="clientName" label="Cliente" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="licensePlate" label="Matrícula" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="parkName" label="Parque" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="price" label="Preço" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                   <Th k="checkOut" label="Check-out" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
-                  <Th k="done" label="Estado" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 </tr>
               </thead>
               <tbody>
@@ -361,7 +362,7 @@ export default function ServicesPage() {
                     aria-label={`Abrir a ficha da reserva de ${s.clientName || s.licensePlate || "cliente"}`}
                     onKeyDown={(e) => { if (e.key === "Enter") navigate(`/reserva/${encodeURIComponent(s.bookingId)}`); }}
                   >
-                    <td className="p-2 font-medium min-w-[12rem]">
+                    <td className="p-2 font-medium min-w-[9rem] sm:min-w-[12rem]">
                       {s.serviceName}
                       {s.isFlag && <Badge variant="outline" className="ml-1 text-[11px] text-muted-foreground">flag</Badge>}
                       {(() => {
@@ -375,12 +376,7 @@ export default function ServicesPage() {
                         ) : null;
                       })()}
                     </td>
-                    <td className="p-2 text-xs">{(s as any).clientName || "—"}</td>
-                    <td className="p-2 font-mono text-xs whitespace-nowrap">{s.licensePlate || "—"}</td>
-                    <td className="p-2">{s.parkName || "—"}</td>
-                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtE(s.price || 0)}</td>
-                    <td className="p-2 text-xs whitespace-nowrap">{s.checkOut ? fmtPTDate(s.checkOut) : "—"}</td>
-                    <td className="p-2">
+                    <td className="p-2 min-w-[8rem]">
                       <DoneCell
                         s={s}
                         canMark={canMark}
@@ -388,6 +384,11 @@ export default function ServicesPage() {
                         onToggle={() => setDoneMut.mutate({ bookingId: s.bookingId, lineId: s.id, done: !s.done })}
                       />
                     </td>
+                    <td className="p-2 text-xs">{(s as any).clientName || "—"}</td>
+                    <td className="p-2 font-mono text-xs whitespace-nowrap">{s.licensePlate || "—"}</td>
+                    <td className="p-2">{s.parkName || "—"}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtE(s.price || 0)}</td>
+                    <td className="p-2 text-xs whitespace-nowrap">{s.checkOut ? fmtPTDate(s.checkOut) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -442,7 +443,7 @@ function DoneCell({ s, canMark, pending, onToggle }: {
       ) : (
         <span title={s.done && s.doneSource === "multipark" && canMark ? "Feito na app Multipark — reabre-se lá" : undefined}>{badge}</span>
       )}
-      {who && <p className="text-[11px] leading-snug text-muted-foreground whitespace-nowrap">{who}</p>}
+      {who && <p className="text-[11px] leading-snug text-muted-foreground">{who}</p>}
     </div>
   );
 }

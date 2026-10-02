@@ -899,7 +899,7 @@ function PdasTab() {
         </Card>
         <Card>
           <CardContent className="pt-3 pb-2">
-            <p className="text-xs text-muted-foreground">Manutenção/Perdido</p>
+            <p className="text-xs text-muted-foreground">Manutenção / Perdido</p>
             <p className="text-xl font-bold tabular-nums truncate text-amber-600">{n(pdaList?.filter((p: any) => p.status === "maintenance" || p.status === "lost").length)}</p>
           </CardContent>
         </Card>

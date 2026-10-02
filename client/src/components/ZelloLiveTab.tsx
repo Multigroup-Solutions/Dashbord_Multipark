@@ -172,7 +172,7 @@ export function ZelloLiveTab() {
       {alerts.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {alerts.map((a) => (
-            <Badge key={a.key} variant="outline" className={`gap-1 ${a.color}`}>
+            <Badge key={a.key} variant="outline" className={`gap-1 max-w-full whitespace-normal break-words text-left ${a.color}`}>
               <a.icon className="w-3 h-3" /> {a.text}
             </Badge>
           ))}
