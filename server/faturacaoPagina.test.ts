@@ -23,3 +23,28 @@ describe("Faturação — página", () => {
     expect(src).not.toMatch(/extrasDia\.map\(/);
   });
 });
+
+const diagnose = () => readFileSync(resolve(import.meta.dirname, "..", "client/src/pages/BillingDiagnosePage.tsx"), "utf8");
+
+describe("Faturação → Diagnóstico — página", () => {
+  it("o mês por omissão é o da Faturação (dias locais), não o toISOString que no verão recuava um dia", () => {
+    const src = diagnose();
+    expect(src).toContain('const month = rangeFor("month", new Date());');
+    expect(src).not.toMatch(/toISOString\(\)\.slice\(0, 10\)/);
+  });
+
+  it("erro ≠ \"Sem dados.\": mostra o porquê e deixa tentar de novo", () => {
+    const src = diagnose();
+    expect(src).toMatch(/error && !data \? \(/);
+    expect(src).toContain("Não foi possível fazer o diagnóstico.");
+    expect(src).not.toContain("Sem dados.");
+  });
+
+  it("sem verificações que não verificam nada (leitura direta à BD da Multipark)", () => {
+    const src = diagnose();
+    expect(src).not.toContain("Duplicados em externalId");
+    expect(src).not.toContain("+ checkOut IS NOT NULL");
+    expect(src).not.toContain("cancelledAt");
+    expect(src).not.toContain("b.campaign");
+  });
+});

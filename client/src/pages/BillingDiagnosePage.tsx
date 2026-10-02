@@ -6,20 +6,21 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Bug } from "lucide-react";
+import { AlertTriangle, Bug } from "lucide-react";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
+import { rangeFor } from "@/components/DateRangeNav";
 
 const fmt = (v: number) =>
   new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(Number.isFinite(v) ? v : 0);
 
 export default function BillingDiagnosePage() {
   const filters = useGlobalFilters();
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  // Mês corrente em dias locais — o mesmo da Faturação. (Com toISOString, no
+  // horário de verão o mês começava e acabava um dia antes: 30 set → 30 out.)
+  const month = rangeFor("month", new Date());
 
-  const [from, setFrom] = useState(monthStart);
-  const [to, setTo] = useState(monthEnd);
+  const [from, setFrom] = useState(month.start);
+  const [to, setTo] = useState(month.end);
 
   const projectId = useMemo(() => {
     if (filters.brandId !== null) return filters.brandId;
@@ -27,7 +28,10 @@ export default function BillingDiagnosePage() {
     return undefined;
   }, [filters.cityId, filters.brandId]);
 
-  const { data, isLoading, refetch } = trpc.invoices.diagnose.useQuery({ from, to, projectId });
+  const { data, isLoading, error, refetch, isFetching } = trpc.invoices.diagnose.useQuery({ from, to, projectId }, {
+    // sem permissão / pedido inválido mostra logo o erro; falha passageira tenta mais 2 vezes
+    retry: (count, err) => count < 2 && !["FORBIDDEN", "UNAUTHORIZED", "BAD_REQUEST"].includes(String((err as { data?: { code?: string } })?.data?.code ?? "")),
+  });
 
   return (
     <div className="space-y-6">
@@ -48,23 +52,35 @@ export default function BillingDiagnosePage() {
           <Label className="text-xs mb-1 block">Até</Label>
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-full sm:w-[160px] h-9" />
         </div>
-        <Button onClick={() => refetch()} className="w-full sm:w-auto">Atualizar</Button>
+        <Button onClick={() => refetch()} disabled={isFetching} className="w-full sm:w-auto">{isFetching ? "A atualizar…" : "Atualizar"}</Button>
       </div>
 
       {filters.brandId === null && filters.cityId === null && (
         <Card className="border-amber-300 bg-amber-50">
           <CardContent className="p-3 text-sm">
             <AlertTriangle className="w-4 h-4 inline mr-1 text-amber-600" />
-            Sem filtro de marca/cidade activo — o diagnóstico cobre <strong>todos</strong> os projetos. Filtra
-            no topo da aplicação por uma marca para focar em Airpark Lisboa.
+            Sem filtro de marca/cidade ativo — o diagnóstico cobre <strong>todos</strong> os nossos parques. Escolhe
+            uma cidade ou marca no topo da aplicação para focar.
           </CardContent>
         </Card>
       )}
 
-      {isLoading ? (
+      {error && !data ? (
+        // Erro ≠ "sem dados": a BD da Multipark sem resposta ou sem permissão diz-se como é
+        <Card className="border-red-200 bg-red-50/50">
+          <CardContent className="p-3 text-sm text-red-800 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-medium">Não foi possível fazer o diagnóstico.</p>
+              <p className="text-xs mt-0.5 break-words">{error.message}</p>
+              <Button size="sm" variant="outline" className="mt-2 h-7 text-xs" disabled={isFetching} onClick={() => refetch()}>
+                {isFetching ? "A tentar…" : "Tentar de novo"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isLoading || !data ? (
         <p className="text-sm text-muted-foreground">A carregar...</p>
-      ) : !data ? (
-        <p className="text-sm text-muted-foreground">Sem dados.</p>
       ) : (
         <>
           {/* Filtros progressivos */}
@@ -86,14 +102,9 @@ export default function BillingDiagnosePage() {
                 </thead>
                 <tbody>
                   <tr className="border-b">
-                    <td className="p-2">saída no período (dia de Lisboa)</td>
+                    <td className="p-2">saída no período (dia de Lisboa), qualquer estado</td>
                     <td className="p-2 text-right tabular-nums">{data.sumByCheckoutPeriod.count}</td>
                     <td className="p-2 text-right tabular-nums">{fmt(data.sumByCheckoutPeriod.sum)}</td>
-                  </tr>
-                  <tr className="border-b">
-                    <td className="p-2">+ checkOut IS NOT NULL</td>
-                    <td className="p-2 text-right tabular-nums">{data.sumWithCheckoutNotNull.count}</td>
-                    <td className="p-2 text-right tabular-nums">{fmt(data.sumWithCheckoutNotNull.sum)}</td>
                   </tr>
                   <tr className="border-b">
                     <td className="p-2">+ status = 'CHECKED_OUT' (receita realizada)</td>
@@ -115,48 +126,6 @@ export default function BillingDiagnosePage() {
               <p className="text-xs text-muted-foreground mt-2">
                 Canceladas no período: <strong>{data.cancelledCount} bookings, {fmt(data.cancelledSum)}</strong>
               </p>
-            </CardContent>
-          </Card>
-
-          {/* Duplicados */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                {data.duplicatedExternalIds.length === 0 ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                ) : (
-                  <AlertTriangle className="w-4 h-4 text-red-600" />
-                )}
-                Duplicados em externalId
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm">
-                Linhas totais: <strong>{data.rowsCount}</strong> · External IDs distintos: <strong>{data.distinctExternalIds}</strong>
-              </p>
-              {data.rowsCount !== data.distinctExternalIds ? (
-                <>
-                  <p className="text-sm text-red-700 mt-2">
-                    <AlertTriangle className="w-4 h-4 inline mr-1" />
-                    Há <strong>{data.rowsCount - data.distinctExternalIds}</strong> duplicados — a migration 0043 não terá sido aplicada.
-                  </p>
-                  {data.duplicatedExternalIds.length > 0 && (
-                    <div className="mt-2 text-xs">
-                      <p className="font-medium">Top duplicados:</p>
-                      <ul className="list-disc list-inside text-muted-foreground">
-                        {data.duplicatedExternalIds.map((d) => (
-                          <li key={d.externalId}><code>{d.externalId}</code> · {d.count}x</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-sm text-emerald-700 mt-2">
-                  <CheckCircle2 className="w-4 h-4 inline mr-1" />
-                  Sem duplicados.
-                </p>
-              )}
             </CardContent>
           </Card>
 
@@ -259,10 +228,8 @@ export default function BillingDiagnosePage() {
                       <th className="p-2">externalId</th>
                       <th className="p-2">Nº Reserva</th>
                       <th className="p-2">Projeto</th>
-                      <th className="p-2">Campaign</th>
                       <th className="p-2">Status</th>
                       <th className="p-2">checkOut</th>
-                      <th className="p-2">cancelledAt</th>
                       <th className="p-2 text-right">Valor</th>
                     </tr>
                   </thead>
@@ -272,10 +239,8 @@ export default function BillingDiagnosePage() {
                         <td className="p-2 font-mono">{b.externalId.slice(0, 16)}</td>
                         <td className="p-2">{b.bookingNumber ?? "—"}</td>
                         <td className="p-2">{b.projectName ?? "—"}</td>
-                        <td className="p-2 whitespace-normal break-all min-w-[10rem]">{b.campaign ?? "—"}</td>
                         <td className="p-2">{b.status ?? "—"}</td>
                         <td className="p-2">{b.checkOut?.slice(0, 16) ?? "—"}</td>
-                        <td className="p-2">{b.cancelledAt?.slice(0, 16) ?? "—"}</td>
                         <td className="p-2 text-right tabular-nums">{fmt(b.totalPrice)}</td>
                       </tr>
                     ))}
