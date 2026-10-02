@@ -71,6 +71,8 @@ export interface InboxListFilters {
   assignee: AssigneeFilter;
   status: StatusFilter;
   intent: string;
+  /** Caixa por tema (17f): "all", "geral" (sem caixa) ou a chave da caixa. */
+  box: string;
   onlyUnread: boolean;
   onlyUrgent: boolean;
   onlyAlerts: boolean;
@@ -81,10 +83,18 @@ export const DEFAULT_INBOX_FILTERS: InboxListFilters = {
   assignee: "all",
   status: "all",
   intent: "all",
+  box: "all",
   onlyUnread: false,
   onlyUrgent: false,
   onlyAlerts: false,
 };
+
+/** A conversa está na caixa do filtro? ("geral" = sem caixa). PURA. */
+export function matchesBoxFilter(boxKey: string | null | undefined, box: string): boolean {
+  if (box === "all") return true;
+  if (box === "geral") return !boxKey;
+  return boxKey === box;
+}
 
 /** Quantos filtros estão diferentes do valor por omissão (badge do botão "Filtros"). */
 export function activeInboxFilterCount(f: InboxListFilters): number {
@@ -92,6 +102,7 @@ export function activeInboxFilterCount(f: InboxListFilters): number {
     (f.assignee !== DEFAULT_INBOX_FILTERS.assignee ? 1 : 0) +
     (f.status !== DEFAULT_INBOX_FILTERS.status ? 1 : 0) +
     (f.intent !== DEFAULT_INBOX_FILTERS.intent ? 1 : 0) +
+    (f.box !== DEFAULT_INBOX_FILTERS.box ? 1 : 0) +
     (f.onlyUnread ? 1 : 0) +
     (f.onlyUrgent ? 1 : 0) +
     (f.onlyAlerts ? 1 : 0)

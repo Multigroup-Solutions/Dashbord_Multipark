@@ -2,7 +2,7 @@
 modulo: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
-palavras: whatsapp, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, arquivar, ficheiro, documento, imagem, pesquisa
+palavras: whatsapp, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, arquivar, ficheiro, documento, imagem, pesquisa
 ---
 # WhatsApp
 
@@ -28,6 +28,12 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Confirmação do **STOP** / **INICIAR** (sempre).
 - Resposta a pedidos de disponibilidade dos extras ("Obrigado, fica confirmado") — só com a automação dos extras ligada.
 - Link da candidatura a um lead que responde — só com a **resposta automática aos leads** ligada (Definições → Automações; desligada por omissão).
+
+**Caixas por tema**
+- Cada conversa fica numa caixa: **Recursos Humanos**, **Reservas**, **Alterações**, **Serviços extra**, **Reclamações**, **Perdidos e Achados**, **Parcerias**, **Faturação**… ou **Geral** (ainda por separar). São as mesmas caixas do email.
+- Colaboradores e candidatos vão sozinhos para **Recursos Humanos**. Os clientes vão para a caixa que a **IA** escolhe pela conversa (com a triagem por IA ligada).
+- Escolhe **Todas as caixas** ou uma caixa no topo da lista. Na conversa, o seletor da caixa **move-a** — e a IA deixa de a mudar.
+- Só vês as caixas do teu módulo (ex.: RH, Reclamações) e, como sempre, a tua cidade e as conversas sem cidade.
 
 **Organizar**
 - Estados: **Aberta** (precisa de atenção), **Pendente** (à espera de algo), **Resolvida**. Se o contacto voltar a escrever, reabre.

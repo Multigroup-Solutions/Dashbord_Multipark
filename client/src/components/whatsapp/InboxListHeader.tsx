@@ -11,6 +11,7 @@ import {
   AlarmClock,
   AlertTriangle,
   Clock,
+  Inbox,
   Keyboard,
   MessageCircle,
   PhoneMissed,
@@ -90,6 +91,7 @@ export function InboxListHeader({
   pendingCallbacks,
   pendingCallbacksError = false,
   onOpenCallbacks,
+  boxes = [],
 }: {
   search: string;
   onSearchChange: (v: string) => void;
@@ -106,6 +108,8 @@ export function InboxListHeader({
   /** Leitura das chamadas por devolver falhou: mostra-se (não desaparece). */
   pendingCallbacksError?: boolean;
   onOpenCallbacks: () => void;
+  /** Caixas por tema que a pessoa vê (17f). */
+  boxes?: Array<{ key: string; label: string }>;
 }) {
   const active = activeInboxFilterCount(filters);
   const hasSearch = search.trim().length > 0;
@@ -167,6 +171,23 @@ export function InboxListHeader({
           )}
         </div>
       </div>
+
+      {/* Caixa por tema (17f): Geral = ainda por separar. */}
+      {boxes.length > 0 && (
+        <div className="px-2 pb-1.5">
+          <Select value={filters.box} onValueChange={(v) => onFiltersChange({ box: v })}>
+            <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Caixa">
+              <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as caixas</SelectItem>
+              <SelectItem value="geral">Geral (por separar)</SelectItem>
+              {boxes.map((b) => <SelectItem key={b.key} value={b.key}>{b.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {/* Pesquisa + Filtros */}
       <div className="flex items-center gap-1.5 px-2 pb-1.5">

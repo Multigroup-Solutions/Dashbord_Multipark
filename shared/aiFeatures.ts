@@ -24,6 +24,7 @@ export type AiFlag =
   | "AI_COMPLAINT_TRIAGE"
   | "AI_REVIEW_AUTO_DRAFTS"
   | "AI_WHATSAPP_TRIAGE"
+  | "AI_MAIL_ROUTING"
   | "AI_LOST_FOUND_MATCH"
   | "AI_ASSISTANT"
   // Automações internas (set 2026) — cada uma com o seu interruptor.
@@ -72,6 +73,8 @@ export const AI_FEATURES = {
   complaint_triage: { label: "Reclamações: triagem e rascunho", flag: "AI_COMPLAINT_TRIAGE", tier: "lite", essential: false },
   review_auto_draft: { label: "Críticas: rascunho automático", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
   whatsapp_triage: { label: "WhatsApp: intenção e urgência", flag: "AI_WHATSAPP_TRIAGE", tier: "lite", essential: false },
+  // 17f: separar os emails novos das caixas gerais (info@) pela caixa do tema.
+  mail_routing: { label: "Email: separar pelas caixas", flag: "AI_MAIL_ROUTING", tier: "lite", essential: false },
   lost_found_match: { label: "Perdidos: correspondências", flag: "AI_LOST_FOUND_MATCH", tier: "lite", essential: false },
   // Assistente da app (chat da equipa): "como se usa" + perguntas aos dados
   // por ferramentas só de leitura. Lite (regra do dono; muitas mensagens curtas).

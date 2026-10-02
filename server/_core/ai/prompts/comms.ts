@@ -51,7 +51,7 @@ export function complaintTriageInput(p: { firstName: string; subject: string; bo
 
 export const WHATSAPP_TRIAGE_SYSTEM = [
   `Classificas mensagens de WhatsApp recebidas pelo apoio ao cliente. ${COMPANY_CONTEXT} A empresa também recruta condutores extra.`,
-  "intent: reserva, alteracao, cancelamento, perdido_achado, reclamacao, recrutamento, outro.",
+  "intent: reserva, alteracao, cancelamento, perdido_achado, reclamacao, recrutamento, servicos_extra (lavagem, carregamento, outros serviços ao carro), parcerias (empresas, agências, propostas B2B), faturacao (faturas, recibos, NIF, pagamentos, reembolsos), outro.",
   "urgency: urgente só se o cliente está à espera agora (no aeroporto, carro não entregue, voo a partir), perdeu algo de valor ou está muito irritado; senão normal.",
   "Responde só com o JSON pedido.",
 ].join("\n");
@@ -60,6 +60,27 @@ export const whatsappTriageSchema = z.object({
   intent: z.string(),
   urgency: z.string(),
 });
+
+// ─── Email: separar pelas caixas (17f) ──────────────────────────────────────
+
+export const MAIL_ROUTING_SYSTEM = [
+  `Separas emails recebidos numa caixa geral pela caixa do tema certo. ${COMPANY_CONTEXT}`,
+  "Recebes as caixas possíveis (chave: descrição) e o email. Responde com a chave da caixa certa em `box`,",
+  "ou `geral` se não for claro ou não encaixar em nenhuma. Não inventes chaves.",
+  "Responde só com o JSON pedido.",
+].join("\n");
+
+export const mailRoutingSchema = z.object({ box: z.string() });
+
+export function mailRoutingInput(p: { targets: ReadonlyArray<{ key: string; hint: string }>; subject: string; body: string }): string {
+  return [
+    "Caixas:",
+    ...p.targets.map((t) => `- ${t.key}: ${t.hint}`),
+    "",
+    `Assunto: ${p.subject.slice(0, 200)}`,
+    `Email:\n"""\n${p.body.slice(0, 2500)}\n"""`,
+  ].join("\n");
+}
 
 // ─── Perdidos & Achados ─────────────────────────────────────────────────────
 

@@ -19,6 +19,7 @@ import {
   WHATSAPP_TRIAGE_MAX_FAILS,
   mapWhatsappIntent,
   mapWhatsappUrgency,
+  type WhatsappIntent,
   whatsappTriageFailureCounts,
   whatsappTriagePlan,
 } from "../shared/commsAi";
@@ -65,6 +66,34 @@ export async function noteInboundForTriage(conversationId: number, nowMs: number
   } catch (err: any) {
     console.warn("[WhatsApp triagem] agendar falhou:", String(err?.message ?? err).slice(0, 160));
     return false;
+  }
+}
+
+/**
+ * Caixa por tema a partir da intenção (17f): colaborador/candidato fica no RH,
+ * a escolha à mão nunca muda; "outro" não tira a conversa de onde está.
+ * Nunca lança.
+ */
+async function applyBoxFromIntent(conversationId: number, intent: WhatsappIntent): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const [c] = await db.select({
+      boxKey: whatsappConversations.boxKey, boxSource: whatsappConversations.boxSource, employeeId: whatsappConversations.employeeId,
+      isLead: sql<number>`EXISTS (SELECT 1 FROM extra_leads l WHERE l.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci)`,
+    }).from(whatsappConversations).where(eq(whatsappConversations.id, conversationId)).limit(1);
+    if (!c) return;
+    const { whatsappBoxFor } = await import("../shared/commsBoxes");
+    const next = whatsappBoxFor({
+      boxKey: c.boxKey ?? null, boxSource: (c.boxSource as any) ?? null, employeeId: c.employeeId ?? null, isLead: Number(c.isLead) === 1,
+      intent: intent === "outro" ? null : intent,
+    });
+    if (!next) return;
+    // Só mexe se ninguém a mudou à mão entretanto.
+    await db.update(whatsappConversations).set({ boxKey: next.boxKey, boxSource: next.boxSource })
+      .where(and(eq(whatsappConversations.id, conversationId), sql`COALESCE(${whatsappConversations.boxSource}, '') <> 'manual'`));
+  } catch (err: any) {
+    console.warn("[WhatsApp triagem] caixa falhou:", conversationId, String(err?.message ?? err).slice(0, 160));
   }
 }
 
@@ -118,12 +147,14 @@ export async function triageConversation(conversationId: number): Promise<{ ok: 
       entity: "whatsapp_conversation",
       entityId: conversationId,
     });
+    const intent = mapWhatsappIntent(r.output.intent);
     await db.update(whatsappConversations).set({
-      aiIntent: mapWhatsappIntent(r.output.intent),
+      aiIntent: intent,
       aiUrgency: mapWhatsappUrgency(r.output.urgency),
       aiTriagedAt: nowStr(),
       aiTriageFails: 0,
     }).where(eq(whatsappConversations.id, conversationId));
+    await applyBoxFromIntent(conversationId, intent);
     return { ok: true };
   } catch (err) {
     if (!isStopAiError(err)) {

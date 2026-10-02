@@ -87,6 +87,8 @@ export interface ConversationRow {
   /** Triagem por IA (0123): intenção e urgência (null = por classificar). */
   aiIntent: string | null;
   aiUrgency: string | null;
+  /** Caixa por tema (17f): mailboxKey da caixa; null = Geral. */
+  boxKey: string | null;
   /**
    * A leitura completa falhou e veio a de recurso: estado, responsável e
    * ligações NÃO são reais (17a) — o ecrã avisa.
@@ -193,10 +195,58 @@ export function visibilitySql(scope: number[] | undefined): SQL {
   )`;
 }
 
-/** A conversa pertence às cidades do utilizador? (guarda da thread/resposta/lido) */
-export async function conversationVisible(conversationId: number): Promise<boolean> {
+// ─── Caixas por tema (17f) ───────────────────────────────────────────────────
+
+type BoxUser = { id: number; role: string; accessOverrides?: unknown } | null | undefined;
+
+/**
+ * Caixas que esta pessoa NÃO vê (pelo módulo/papéis da caixa — a mesma regra
+ * das caixas de email, sem exigir o módulo Comunicação). As conversas de
+ * WhatsApp nessas caixas não lhe aparecem; as da "Geral" (sem caixa) e de
+ * caixas desconhecidas aparecem. Super admin: nenhuma.
+ */
+export async function hiddenBoxKeys(user: BoxUser): Promise<string[]> {
+  if (!user) return [];
+  const { withOverrides } = await import("./_core/access");
+  const v = withOverrides(user as any);
+  if (v.role === "super_admin") return [];
+  const { listMailboxes } = await import("./mail/store");
+  const { canSeeBoxModule } = await import("../shared/commsBoxes");
+  return (await listMailboxes()).filter((b) => !canSeeBoxModule({ id: v.id, role: v.role, accessOverrides: v.accessOverrides ?? null }, b)).map((b) => b.key);
+}
+
+/** Condição SQL das caixas visíveis (null = sem restrição). */
+export function boxVisibleSql(hidden: readonly string[]): SQL | null {
+  if (!hidden.length) return null;
+  return sql`(${whatsappConversations.boxKey} IS NULL OR ${whatsappConversations.boxKey} NOT IN (${sql.join(hidden.map((k) => sql`${k}`), sql`, `)}))`;
+}
+
+/**
+ * Colaborador ou candidato (lead) → caixa RH ("rule"), salvo escolha à mão.
+ * Chamado a cada mensagem recebida. Nunca lança.
+ */
+export async function assignBoxByRule(conversationId: number): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.execute(sql`UPDATE whatsapp_conversations c SET c.boxKey = 'rh', c.boxSource = 'rule'
+      WHERE c.id = ${conversationId} AND COALESCE(c.boxSource, '') <> 'manual' AND COALESCE(c.boxKey, '') <> 'rh'
+        AND (c.employeeId IS NOT NULL OR EXISTS (SELECT 1 FROM extra_leads l WHERE l.phoneE164 = c.phoneE164 COLLATE utf8mb4_unicode_ci))`);
+  } catch (err: any) {
+    console.warn("[WhatsApp caixa] regra falhou:", conversationId, String(err?.message ?? err).slice(0, 160));
+  }
+}
+
+/**
+ * A conversa pertence às cidades do utilizador? (guarda da thread/resposta/lido)
+ * Com `user`, também a caixa (17f): uma conversa numa caixa que a pessoa não
+ * vê fica escondida como as de outra cidade.
+ */
+export async function conversationVisible(conversationId: number, user?: BoxUser): Promise<boolean> {
+  const hidden = user ? await hiddenBoxKeys(user) : [];
+  const boxCond = boxVisibleSql(hidden);
   const scope = scopedProjectIds();
-  if (scope === undefined) return true;
+  if (scope === undefined && !boxCond) return true;
   const db = await getDb();
   if (!db) return false;
   const exists = await db
@@ -209,7 +259,7 @@ export async function conversationVisible(conversationId: number): Promise<boole
     .select({ id: whatsappConversations.id })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
-    .where(and(eq(whatsappConversations.id, conversationId), visibilitySql(scope)))
+    .where(and(eq(whatsappConversations.id, conversationId), visibilitySql(scope), boxCond ?? sql`1 = 1`))
     .limit(1);
   return rows.length > 0;
 }
@@ -238,11 +288,18 @@ async function fillMissingPreviews(db: NonNullable<Awaited<ReturnType<typeof get
   return out;
 }
 
-export async function listConversations(opts: { search?: string | null } = {}): Promise<ConversationRow[]> {
+export async function listConversations(opts: { search?: string | null; boxKey?: string | null; hiddenBoxes?: readonly string[] } = {}): Promise<ConversationRow[]> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
   const searchCond = conversationSearchSql(opts.search);
-  const whereList = searchCond ? and(visibilitySql(scopedProjectIds()), searchCond) : visibilitySql(scopedProjectIds());
+  // Caixa (17f): as que a pessoa não vê saem; filtro por uma caixa ("geral" = sem caixa).
+  const conds: SQL[] = [visibilitySql(scopedProjectIds())];
+  if (searchCond) conds.push(searchCond);
+  const boxCond = boxVisibleSql(opts.hiddenBoxes ?? []);
+  if (boxCond) conds.push(boxCond);
+  if (opts.boxKey === "geral") conds.push(sql`${whatsappConversations.boxKey} IS NULL`);
+  else if (opts.boxKey) conds.push(sql`${whatsappConversations.boxKey} = ${opts.boxKey}`);
+  const whereList = and(...conds);
 
   // O filtro de cidade vai no WHERE, ANTES do LIMIT — senão quem só vê uma
   // cidade podia ficar com uma lista vazia porque as 300 mais recentes eram
@@ -271,6 +328,7 @@ export async function listConversations(opts: { search?: string | null } = {}): 
       linkedClientEmail: whatsappConversations.linkedClientEmail,
       aiIntent: whatsappConversations.aiIntent,
       aiUrgency: whatsappConversations.aiUrgency,
+      boxKey: whatsappConversations.boxKey,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -306,6 +364,7 @@ export async function listConversations(opts: { search?: string | null } = {}): 
       linkedClientEmail: sql<string | null>`NULL`,
       aiIntent: sql<string | null>`NULL`,
       aiUrgency: sql<string | null>`NULL`,
+      boxKey: sql<string | null>`NULL`,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -354,6 +413,7 @@ export async function listConversations(opts: { search?: string | null } = {}): 
       linkedClientEmail: c.linkedClientEmail,
       aiIntent: c.aiIntent ?? null,
       aiUrgency: c.aiUrgency ?? null,
+      boxKey: c.boxKey ?? null,
       ...(partial ? { partial: true as const } : {}),
     };
   });

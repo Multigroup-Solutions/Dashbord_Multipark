@@ -2,7 +2,7 @@
 modulo: comunicacao
 titulo: Comunicação (email)
 rotas: /comunicacao, /comunicacao/meu-email
-palavras: email, emails, gmail, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
+palavras: email, emails, gmail, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
 ---
 # Comunicação (email)
 
@@ -21,6 +21,12 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 6. **Por classificar** (só admin e super admin): emails que chegaram por um endereço fora da tabela de aliases (ex.: em Bcc). Abre e carrega em **Atribuir à caixa** — ver a ajuda "Email por alias".
 7. **Notificações automáticas de reserva** (os emails "Nova Reserva" que o sistema Multipark manda para a caixa "Reservas (geral)", ~4000 por mês): ficam guardadas, mas **escondidas** nas listas. Carrega em **Mostrar automáticos** para as ver (aparecem com a etiqueta "Automático"). A **pesquisa** encontra-as sempre. Não contam como por ler nem geram avisos.
 8. **Emails que a aplicação envia sozinha** (pedidos e lembretes de disponibilidade aos extras — "Disponibilidade — semana de…", "Lembrete: ainda não indicaste a tua disponibilidade" —, avisos de escala, turnos cancelados, lembretes de formação, notificações e relatórios): também ficam **escondidos** como automáticos, mesmo quando saem por recursos-humanos@. Não aparecem como conversas abertas, não contam como por ler, por responder nem abertas, e não ficam para atribuir. **Se a pessoa responder**, a conversa passa a normal e aparece na caixa (quem respondeu foi uma pessoa). Os envios a um extra ficam na ficha dele: **Recursos Humanos → abre o colaborador → Comunicações automáticas** (data, tipo, assunto e estado *Enviado*/*Respondido*; o assunto abre a conversa). Os que já estavam na caixa antes desta mudança foram limpos uma vez, automaticamente.
+
+**Caixas por tema (email e WhatsApp)**
+- As caixas são as mesmas do WhatsApp: além das que já havia (Reclamações, Perdidos, Críticas, Ocorrências, RH, Info, Comercial…) há **Alterações**, **Serviços extra**, **Parcerias** e **Faturação** — caixas "por tema", sem endereço próprio.
+- Os emails novos que chegam ao **info@** (caixa geral) vão para a caixa do tema pela **IA** — com **"IA: separar os emails pelas caixas"** ligado em Definições → Automações (desligado por omissão). A conversa mostra **"veio de Info (IA)"**. A IA não cria reclamações nem perdidos sozinha — só move.
+- **Mover para…** (na conversa) muda a caixa à mão; depois disso a IA não volta a mexer. Quem não vê a caixa nova deixa de ver a conversa.
+- Responder numa caixa por tema sai pelo endereço por onde o cliente escreveu (ex.: info@). Mensagens novas escrevem-se nas caixas com endereço.
 
 **Ligações**
 - Cada email fica ligado automaticamente ao cliente, à reserva, à reclamação ou ao perdido (com a confiança da ligação). A ligação a uma reclamação aberta usa o email ou a matrícula — **o nome sozinho nunca liga**. Em **Ligações** podes ligar ou desligar à mão.

@@ -2322,6 +2322,9 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	aiTriageDueAt: timestamp({ mode: 'string' }),
 	// Migração 0315 — falhas seguidas da triagem (à 3.ª desiste até chegar mensagem nova)
 	aiTriageFails: int().default(0).notNull(),
+	// 0365 (17f): caixa por tema (mail_mailboxes.mailboxKey; null = Geral) e quem a escolheu (rule | ai | manual).
+	boxKey: varchar({ length: 40 }),
+	boxSource: varchar({ length: 8 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -3004,6 +3007,8 @@ export const mailMailboxes = mysqlTable("mail_mailboxes", {
 	notify: tinyint().default(1).notNull(),
 	active: tinyint().default(1).notNull(),
 	sortOrder: int().default(100).notNull(),
+	// 0365 (17f): caixa geral — a IA separa os emails novos pelas caixas do tema.
+	aiRoute: tinyint().default(0).notNull(),
 	updatedById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -3068,6 +3073,9 @@ export const mailThreads = mysqlTable("mail_threads", {
 	routeLabel: varchar({ length: 80 }),
 	// 0360: arquivada pela retenção (+5 anos, sem ligação) — fica, mas só o super admin a vê, a pedido.
 	archivedAt: datetime({ mode: 'string' }),
+	// 0365 (17f): movida de outra caixa (pela IA ou à mão) — de onde veio e quem moveu.
+	routedFromKey: varchar({ length: 40 }),
+	routedBy: varchar({ length: 8 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },

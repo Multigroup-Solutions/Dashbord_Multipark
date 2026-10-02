@@ -83,6 +83,11 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
   const markRead = trpc.mail.threads.markRead.useMutation({ onSuccess: () => { onChanged(); utils.mail.badge.invalidate(); } });
   const setStatus = trpc.mail.threads.setStatus.useMutation({ onSuccess: () => { q.refetch(); onChanged(); }, onError: (e) => toast.error(e.message) });
   const assign = trpc.mail.threads.assign.useMutation({ onSuccess: () => { q.refetch(); onChanged(); }, onError: (e) => toast.error(e.message) });
+  // 17f: mover para outra caixa (tema). Depois de mover, quem não vê a caixa nova deixa de ver a conversa.
+  const move = trpc.mail.threads.move.useMutation({
+    onSuccess: () => { toast.success("Conversa movida."); onChanged(); q.refetch(); },
+    onError: (e) => toast.error(e.message),
+  });
   // Só quem responde nesta caixa E vê a cidade desta conversa (17d).
   const assignees = trpc.mail.threads.assignees.useQuery({ mailbox: t?.mailbox?.key ?? "", threadId }, { enabled: !!t?.mailbox && !!t?.canAct, staleTime: 10 * 60_000 });
 
@@ -115,6 +120,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
               <BrandChip brand={t.thread.brand} />
               {t.thread.routeLabel && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] font-normal">{t.thread.routeLabel}</Badge>}
               {t.thread.needsTriage && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] border-amber-400 text-amber-700 dark:text-amber-300">Por classificar</Badge>}
+              {t.routedFrom && <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] font-normal" title="Movida de outra caixa">veio de {t.routedFrom.label}{t.routedFrom.by === "ai" ? " (IA)" : ""}</Badge>}
               {t.thread.contactEmail && <span className="truncate">· {t.thread.contactName ? `${t.thread.contactName} <${t.thread.contactEmail}>` : t.thread.contactEmail}</span>}
             </div>
           </div>
@@ -133,6 +139,12 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
                 <SelectItem value="none">Sem responsável</SelectItem>
                 {(assignees.data ?? []).map((u) => <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>)}
               </SelectContent>
+            </Select>
+          )}
+          {t.moveTargets.length > 0 && (
+            <Select value="" onValueChange={(v) => move.mutate({ id: threadId, box: v })}>
+              <SelectTrigger className="h-7 w-[150px] text-xs" aria-label="Mover para outra caixa"><SelectValue placeholder="Mover para…" /></SelectTrigger>
+              <SelectContent>{t.moveTargets.map((b) => <SelectItem key={b.key} value={b.key}>{b.label}</SelectItem>)}</SelectContent>
             </Select>
           )}
           <Button size="sm" variant={showLinks ? "secondary" : "outline"} className="h-7 text-xs" onClick={() => setShowLinks((x) => !x)}>

@@ -358,7 +358,7 @@ export const MAIL_TRIAGE_LABEL = "Por classificar";
 /** Módulos da matriz a que uma caixa pode pertencer (quem a vê). */
 export const MAILBOX_MODULES = [
   "comunicacao", "reclamacoes", "perdidos", "criticas", "ocorrencias", "rh", "leads_extras",
-  "reservas_operacoes", "clientes", "marketing", "parcerias", "financeiro", "despesas",
+  "reservas_operacoes", "clientes", "marketing", "parcerias", "financeiro", "despesas", "servicos",
 ] as const satisfies readonly ModuleId[];
 export type MailboxModule = (typeof MAILBOX_MODULES)[number];
 
@@ -395,10 +395,15 @@ export type MailboxAddress = z.infer<typeof mailboxAddressSchema>;
 export const mailboxConfigSchema = z.object({
   key: z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{1,39}$/, "Chave: 2–40 letras minúsculas, números, - ou _."),
   label: z.string().trim().min(1, "Indica o nome da caixa.").max(80),
-  /** Endereços/aliases que chegam a esta caixa (e com que marca). */
-  addresses: z.array(mailboxAddressSchema).min(1, "Indica pelo menos um endereço.").max(300),
-  /** De onde se lê: conta do Workspace por delegação (service account) ou a conta Google ligada de um utilizador. */
-  sourceKind: z.enum(["dwd", "user"]),
+  /** Endereços/aliases que chegam a esta caixa (e com que marca). Caixa por tema: pode não ter. */
+  addresses: z.array(mailboxAddressSchema).max(300),
+  /**
+   * De onde se lê: conta do Workspace por delegação (service account), a conta
+   * Google ligada de um utilizador, ou "tema" (17f): caixa por tema SEM conta
+   * própria — recebe as conversas que a IA ou uma pessoa movem para lá
+   * (email das caixas gerais e WhatsApp).
+   */
+  sourceKind: z.enum(["dwd", "user", "tema"]),
   /** Conta do Workspace a impersonar (sourceKind = dwd). */
   sourceEmail: z.union([z.literal(""), addressSchema]).default(""),
   /** Utilizador cuja conta Google ligada serve de fonte (sourceKind = user). */
@@ -416,7 +421,10 @@ export const mailboxConfigSchema = z.object({
   notify: z.boolean().default(true),
   active: z.boolean().default(true),
   sortOrder: z.number().int().min(0).max(999).default(100),
+  /** 17f: a IA separa os emails novos desta caixa (geral) pelas caixas do tema (interruptor AI_MAIL_ROUTING). */
+  aiRoute: z.boolean().default(false),
 }).superRefine((v, ctx) => {
+  if (v.sourceKind !== "tema" && !v.addresses.length) ctx.addIssue({ code: "custom", message: "Indica pelo menos um endereço." });
   if (v.sourceKind === "dwd" && !v.sourceEmail) ctx.addIssue({ code: "custom", message: "Indica a conta Google (Workspace) de onde se lê esta caixa." });
   if (v.sourceKind === "user" && !v.sourceUserId) ctx.addIssue({ code: "custom", message: "Escolhe o utilizador cuja conta Google ligada serve esta caixa." });
   const seen = new Set<string>();
@@ -467,6 +475,7 @@ export function applyAliasTable<M extends MailboxConfig>(mailboxes: readonly M[]
 
 /** Chave da conta de sincronização de uma caixa ("dwd:email" / "user:id"). PURA. */
 export function sourceAccountKey(m: Pick<MailboxConfig, "sourceKind" | "sourceEmail" | "sourceUserId">): string | null {
+  if (m.sourceKind === "tema") return null; // caixa por tema: sem conta própria (17f)
   if (m.sourceKind === "dwd") return m.sourceEmail ? `dwd:${normalizeAddress(m.sourceEmail)}` : null;
   return m.sourceUserId ? `user:${m.sourceUserId}` : null;
 }

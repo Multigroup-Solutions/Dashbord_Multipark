@@ -86,10 +86,11 @@ describe("activeInboxFilterCount", () => {
         assignee: "unassigned",
         status: "pendente",
         intent: "reclamacao",
+        box: "rh", // 17f: caixa por tema
         onlyUnread: true,
         onlyUrgent: true,
         onlyAlerts: true,
       }),
-    ).toBe(6);
+    ).toBe(7);
   });
 });

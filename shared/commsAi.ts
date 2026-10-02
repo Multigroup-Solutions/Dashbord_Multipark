@@ -203,7 +203,7 @@ export function reviewSentiment(rating: number | null | undefined, text?: string
 
 // ─── WhatsApp ───────────────────────────────────────────────────────────────
 
-export const WHATSAPP_INTENTS = ["reserva", "alteracao", "cancelamento", "perdido_achado", "reclamacao", "recrutamento", "outro"] as const;
+export const WHATSAPP_INTENTS = ["reserva", "alteracao", "cancelamento", "perdido_achado", "reclamacao", "recrutamento", "servicos_extra", "parcerias", "faturacao", "outro"] as const;
 export type WhatsappIntent = (typeof WHATSAPP_INTENTS)[number];
 
 export const WHATSAPP_INTENT_LABELS: Record<WhatsappIntent, string> = {
@@ -213,6 +213,9 @@ export const WHATSAPP_INTENT_LABELS: Record<WhatsappIntent, string> = {
   perdido_achado: "Perdido/achado",
   reclamacao: "Reclamação",
   recrutamento: "Recrutamento/extra",
+  servicos_extra: "Serviços extra",
+  parcerias: "Parcerias",
+  faturacao: "Faturação",
   outro: "Outro",
 };
 
@@ -226,6 +229,9 @@ const INTENT_ALIASES: Record<string, WhatsappIntent> = {
   perdido_achado: "perdido_achado", "perdido/achado": "perdido_achado", perdido: "perdido_achado", achado: "perdido_achado", lost_found: "perdido_achado",
   reclamacao: "reclamacao", reclamação: "reclamacao", queixa: "reclamacao", complaint: "reclamacao",
   recrutamento: "recrutamento", "recrutamento/extra": "recrutamento", extra: "recrutamento", emprego: "recrutamento", trabalho: "recrutamento",
+  servicos_extra: "servicos_extra", servicos: "servicos_extra", servico: "servicos_extra", serviços_extra: "servicos_extra", lavagem: "servicos_extra", carregamento: "servicos_extra",
+  parcerias: "parcerias", parceria: "parcerias", parceiro: "parcerias", partnership: "parcerias",
+  faturacao: "faturacao", faturação: "faturacao", fatura: "faturacao", factura: "faturacao", invoice: "faturacao", recibo: "faturacao", pagamento: "faturacao", reembolso: "faturacao",
   outro: "outro", other: "outro",
 };
 

@@ -44,6 +44,9 @@ export interface ThreadRow {
   routeLabel: string | null;
   /** Arquivada pela retenção (+5 anos, sem ligação): só o super admin a vê, a pedido. */
   archivedAt: string | null;
+  /** Movida de outra caixa (17f): a caixa de origem e quem moveu (ai | manual). */
+  routedFromKey: string | null;
+  routedBy: string | null;
 }
 
 /** Quem trata "Por classificar" (e edita a tabela de aliases): admin e super_admin. */
@@ -62,7 +65,25 @@ function toThread(r: any): ThreadRow {
     needsTriage: Number(r.needsTriage ?? 0) === 1,
     routeLabel: r.routeLabel ?? null,
     archivedAt: r.archivedAt ?? null,
+    routedFromKey: r.routedFromKey ?? null,
+    routedBy: r.routedBy ?? null,
   };
+}
+
+/**
+ * Endereços por onde se responde numa conversa: os da caixa + os da caixa de
+ * origem quando foi movida (17f — uma caixa por tema não tem endereços; o
+ * cliente escreveu para o info@ e a resposta sai do info@).
+ */
+async function replyAddressesOf(mailbox: MailboxRow, thread: Pick<ThreadRow, "routedFromKey">): Promise<MailboxRow["addresses"]> {
+  const origin = thread.routedFromKey ? await getMailbox(thread.routedFromKey) : null;
+  const seen = new Set<string>();
+  return [...mailbox.addresses, ...(origin?.addresses ?? [])].filter((a) => {
+    const k = normalizeAddress(a.address);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // ─── Acesso a uma conversa ──────────────────────────────────────────────────
@@ -150,6 +171,8 @@ export async function visibleMailboxes(viewer: MailViewer) {
     out.push({
       key: m.key, label: m.label, module: m.module, brands: Array.from(new Set(m.addresses.map((a) => a.brand))),
       addresses: m.addresses, signatures: m.signatures, canAct: canActOnMailbox(viewer, m), pipeline: m.pipeline,
+      // Caixa por tema (sem conta): não se escreve uma mensagem nova daqui (17f).
+      canCompose: canActOnMailbox(viewer, m) && m.sourceKind !== "tema",
       unread: Number(r.unread ?? 0), awaiting: Number(r.awaiting ?? 0), open: Number(r.open ?? 0),
     });
   }
@@ -333,8 +356,9 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
   let fromOptions: string[] = [];
   let defaultFrom: string | null = null;
   if (acc.mailbox) {
-    fromOptions = acc.mailbox.addresses.map((a) => a.address);
-    defaultFrom = pickFromAddress(acc.mailbox, { matchedAddress: acc.thread.matchedAddress, brand: isMailBrand(acc.thread.brand) ? acc.thread.brand : null });
+    const replyAddrs = await replyAddressesOf(acc.mailbox, acc.thread);
+    fromOptions = replyAddrs.map((a) => a.address);
+    defaultFrom = pickFromAddress({ addresses: replyAddrs }, { matchedAddress: acc.thread.matchedAddress, brand: isMailBrand(acc.thread.brand) ? acc.thread.brand : null });
   } else if (acc.personal) {
     const g = rowsOf(await d.execute(sql`SELECT email FROM google_user_accounts WHERE userId = ${acc.thread.ownerUserId} LIMIT 1`))[0];
     defaultFrom = g?.email ?? null;
@@ -353,6 +377,11 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
     canSend: acc.canSend,
     /** "Por classificar" e quem vê pode atribuí-la a uma caixa (admin/super_admin). */
     canTriage: acc.thread.needsTriage && canTriageMail(viewer),
+    /** 17f: caixas para onde a pessoa pode mover a conversa ("Mover para…"). */
+    moveTargets: acc.mailbox && acc.canAct && !acc.thread.needsTriage
+      ? (await listMailboxes()).filter((m) => m.active && m.key !== acc.mailbox!.key && canSeeMailbox(viewer, m)).map((m) => ({ key: m.key, label: m.label }))
+      : [],
+    routedFrom: acc.thread.routedFromKey ? { key: acc.thread.routedFromKey, label: (await getMailbox(acc.thread.routedFromKey))?.label ?? acc.thread.routedFromKey, by: acc.thread.routedBy } : null,
     messages,
     /** Super admin: mensagens arquivadas (+5 anos) escondidas nesta conversa — "Mostrar arquivadas". */
     archivedHidden,
@@ -477,6 +506,22 @@ export async function assigneesFor(viewer: MailViewer, mailboxKey: string, threa
   const d = await db();
   return rowsOf(await d.execute(sql`SELECT id, name FROM users WHERE id IN (${inList(ids)}) ORDER BY name LIMIT 500`))
     .map((u) => ({ id: Number(u.id), name: String(u.name ?? `#${u.id}`) }));
+}
+
+// ─── Mover para outra caixa (17f) ───────────────────────────────────────────
+
+/** "Mover para…": quem trata a conversa e vê a caixa de destino. */
+export async function moveThread(viewer: MailViewer, threadId: number, boxKey: string): Promise<void> {
+  const acc = await requireAct(viewer, threadId);
+  if (!acc.mailbox || acc.thread.needsTriage) throw bad("Esta conversa não muda de caixa (email pessoal ou por classificar).");
+  const target = await getMailbox(boxKey);
+  if (!target || !target.active || !canSeeMailbox(viewer, target)) throw bad("Caixa desconhecida.");
+  const { moveThreadToBox } = await import("./service");
+  if (!(await moveThreadToBox(threadId, target.key, "manual"))) throw bad("A conversa já está nessa caixa.");
+  try {
+    const { logActivity } = await import("../db");
+    await logActivity({ userId: viewer.id, action: "update", entity: "mail_thread", entityId: threadId, details: `Caixa ${acc.mailbox.key} → ${target.key}` } as any);
+  } catch { /* registo */ }
 }
 
 // ─── "Por classificar" → caixa ──────────────────────────────────────────────
@@ -774,7 +819,7 @@ async function prepareSend(viewer: MailViewer, input: SendInput, list: { to: str
   const api = await gmailApiForAccount(accountKey);
   const brand = isMailBrand(threadRow?.brand) ? threadRow!.brand as any : null;
   let from: string | null;
-  if (mailbox) from = pickFromAddress(mailbox, { requested: input.from, matchedAddress: threadRow?.matchedAddress, brand });
+  if (mailbox) from = pickFromAddress({ addresses: threadRow ? await replyAddressesOf(mailbox, threadRow) : mailbox.addresses }, { requested: input.from, matchedAddress: threadRow?.matchedAddress, brand });
   else {
     const d = await db();
     const g = rowsOf(await d.execute(sql`SELECT email FROM google_user_accounts WHERE userId = ${viewer.id} LIMIT 1`))[0];
