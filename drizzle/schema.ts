@@ -1940,6 +1940,9 @@ export const tasks = mysqlTable("tasks", {
 	templateDate: varchar({ length: 10 }),
 	templateShift: varchar({ length: 8 }),
 	completedById: int(),
+	// 0375 — "Eliminar" arquiva (os geradores continuam a ver a linha e não a recriam).
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
 });
 
 // 0091 — checklists recorrentes por turno/cidade
@@ -1955,6 +1958,9 @@ export const taskTemplates = mysqlTable("task_templates", {
 	assigneeRole: varchar({ length: 32 }),
 	assigneeEmployeeIds: text(),
 	active: tinyint().default(1).notNull(),
+	// 0375 — "Eliminar" arquiva o modelo (e desliga-o).
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),

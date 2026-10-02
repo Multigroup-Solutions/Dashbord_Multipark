@@ -128,15 +128,19 @@ const tasks: SearchSource = {
   async run({ d, q, viewer }) {
     const { canEditTasks } = await import("../shared/taskRules");
     let mine = sql`1 = 1`;
-    // Como a página: quem não edita tarefas só vê as suas.
-    if (!canEditTasks(viewer.role)) {
+    // Como a página: quem não edita tarefas só vê as suas; o team leader, as da equipa (18a).
+    if (!canEditTasks(viewer)) {
       const me = rowsOf(await d.execute(sql`SELECT id FROM employees WHERE userId = ${viewer.id} LIMIT 1`))[0];
       if (!me) return [];
       const eid = Number(me.id);
       mine = sql`(t.assigneeId = ${eid} OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.taskId = t.id AND ta.employeeId = ${eid}))`;
+    } else {
+      const { teamFilterFor, teamSeeCond } = await import("./tasksService");
+      const team = await teamFilterFor(viewer as any);
+      if (team) mine = teamSeeCond(team, { id: sql`t.id`, createdById: sql`t.createdById`, assigneeId: sql`t.assigneeId` });
     }
     const rows = rowsOf(await d.execute(sql`SELECT t.id, t.title, t.taskStatus AS status, t.dueDate FROM tasks t
-      WHERE (t.projectId IS NULL OR ${projectScope(sql`t.projectId`)}) AND ${mine}
+      WHERE (t.projectId IS NULL OR ${projectScope(sql`t.projectId`)}) AND t.archivedAt IS NULL AND ${mine}
         AND (LOWER(t.title) LIKE ${q.like} OR LOWER(COALESCE(t.description, '')) LIKE ${q.like})
       ORDER BY (t.taskStatus = 'done'), t.updatedAt DESC LIMIT ${LIMIT}`));
     return rows.map((r) => ({

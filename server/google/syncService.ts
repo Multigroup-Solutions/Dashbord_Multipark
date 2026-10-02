@@ -127,7 +127,7 @@ export async function desiredEventsForUser(u: { userId: number; role: string; em
   if (u.prefs.calTaskDue && u.employeeId != null) {
     const rows = rowsOf(await d.execute(sql`SELECT t.id, t.title, t.dueDate, t.dueHasTime FROM tasks t
       WHERE (t.assigneeId = ${u.employeeId} OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.taskId = t.id AND ta.employeeId = ${u.employeeId}))
-        AND t.taskStatus <> 'done' AND t.dueDate IS NOT NULL AND t.dueDate >= ${toSqlUtc(lisbonMidnightUtcMs(fromDay) - 86_400_000)} AND t.dueDate < ${toSql}
+        AND t.taskStatus <> 'done' AND t.archivedAt IS NULL AND t.dueDate IS NOT NULL AND t.dueDate >= ${toSqlUtc(lisbonMidnightUtcMs(fromDay) - 86_400_000)} AND t.dueDate < ${toSql}
       LIMIT 500`));
     for (const r of rows) { const e = taskDueEvent({ id: Number(r.id), title: String(r.title), dueDate: String(r.dueDate), dueHasTime: Number(r.dueHasTime ?? 0) }, appUrl); if (e) out.push(e); }
   }

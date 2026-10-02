@@ -23,6 +23,9 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
 /** Tarefas concluídas há mais do que isto ficam escondidas por omissão ("Mostrar antigas"). */
 export const TASK_HIDE_DONE_AFTER_DAYS = 30;
 
+/** Máximo de tarefas numa lista (as mais recentes); a página avisa quando chega a isto. */
+export const TASK_LIST_LIMIT = 2000;
+
 // ─── Prazo (Europe/Lisbon) ──────────────────────────────────────────────────
 
 export interface TaskDueLike { dueDate: string | Date | null | undefined; dueHasTime?: number | boolean | null }
@@ -63,10 +66,14 @@ export function dueDateFromDay(day: string | null | undefined): string | null {
 // Modelo de acessos (shared/access.ts): quem tem Tarefas para além das suas
 // (team_leader para a equipa, supervisor/front/backoffice/admin) cria, edita
 // e apaga; extra/condutor só mudam o estado das suas.
-/** Criar / editar / apagar / arrastar. */
-export function canEditTasks(role: string | null | undefined): boolean {
-  return seesBeyondOwn(role, "tarefas") && can(role, "tarefas", "edit");
+/**
+ * Criar / editar / arquivar / arrastar. Recebe o utilizador (com as exceções
+ * por pessoa — P3 18a: antes só o papel contava) ou só o papel.
+ */
+export function canEditTasks(user: TaskUserLike): boolean {
+  return seesBeyondOwn(user, "tarefas") && can(user, "tarefas", "edit");
 }
+type TaskUserLike = Parameters<typeof can>[0];
 
 // ─── Filtro "centro de custos" (/tarefas) ───────────────────────────────────
 // O texto antigo "Todos (grupo / cidade / marca / projeto)" não cabia no
@@ -91,10 +98,62 @@ export function isTaskAssignee(employeeId: number | null | undefined, t: TaskAss
   return t.assigneeId === employeeId || (t.assigneeIds ?? []).includes(employeeId);
 }
 
-/** Mudar o ESTADO: editores, ou qualquer responsável (extra incluído) na sua própria tarefa. */
-export function canChangeTaskStatus(viewer: { role: string; employeeId: number | null }, t: TaskAssignLike): boolean {
-  if (canEditTasks(viewer.role)) return true;
-  return can(viewer.role, "tarefas", "edit") && isTaskAssignee(viewer.employeeId, t);
+/**
+ * Mudar o ESTADO: editores, ou qualquer responsável (extra incluído) na sua
+ * própria tarefa. O team leader só vê as da equipa — isso é verificado à
+ * parte, no servidor (`teamTaskAccess`).
+ */
+export function canChangeTaskStatus(viewer: { role: string; employeeId: number | null; accessOverrides?: any }, t: TaskAssignLike): boolean {
+  if (canEditTasks(viewer)) return true;
+  return can(viewer, "tarefas", "edit") && isTaskAssignee(viewer.employeeId, t);
+}
+
+/**
+ * Team leader (alcance "below_city"), P3 18a — Jorge: "só a equipa dele".
+ * Vê / muda o estado / comenta numa tarefa se ele a criou ou se algum
+ * responsável é da equipa (ele incluído). Editar e arquivar pede mais: todos
+ * os responsáveis da equipa — e uma tarefa sem responsáveis só se foi ele a
+ * criar (as transversais ficam para supervisor e acima). PURA.
+ */
+export function teamTaskAccess(
+  viewer: { userId: number; team: ReadonlySet<number> },
+  t: { createdById: number | null; assigneeIds: ReadonlyArray<number | null | undefined> },
+): { see: boolean; edit: boolean } {
+  const ids = t.assigneeIds.filter((x): x is number => x != null);
+  const mine = t.createdById === viewer.userId;
+  const see = mine || ids.some((id) => viewer.team.has(id));
+  const edit = ids.length ? ids.every((id) => viewer.team.has(id)) : mine;
+  return { see, edit };
+}
+
+// ─── Tarefas automáticas (geradas pelo sistema) ─────────────────────────────
+
+/** Origens das tarefas que o sistema cria sozinho (o "criador" é o utilizador de sistema). */
+export const AUTOMATIC_TASK_SOURCES = ["availability", "template", "service", "rh"] as const;
+
+export function isAutomaticTask(t: { sourceModule?: string | null }): boolean {
+  return (AUTOMATIC_TASK_SOURCES as readonly string[]).includes(String(t.sourceModule ?? ""));
+}
+
+/**
+ * Quem é avisado quando uma tarefa passa o prazo (P3 18a — Jorge: "responsáveis
+ * + supervisor"). Manuais: como sempre (criador + gestores da hierarquia no
+ * sino e email ao criador; responsáveis no sino). Automáticas: só os
+ * responsáveis e o supervisor da cidade, no sino — nada ao "criador" (o
+ * utilizador de sistema) nem por email — e só com o interruptor ligado. PURA.
+ */
+export function overdueAudience(
+  t: { sourceModule?: string | null; createdById: number | null; projectId: number | null },
+  managerIds: readonly number[],
+  autoNoticesOn: boolean,
+): { managers: number[]; emailCreator: boolean; assignees: boolean; citySupervisors: boolean } {
+  if (isAutomaticTask(t)) {
+    return autoNoticesOn
+      ? { managers: [], emailCreator: false, assignees: true, citySupervisors: t.projectId != null }
+      : { managers: [], emailCreator: false, assignees: false, citySupervisors: false };
+  }
+  const managers = [...new Set([t.createdById, ...managerIds].filter((x): x is number => x != null))];
+  return { managers, emailCreator: t.createdById != null, assignees: true, citySupervisors: false };
 }
 
 // ─── Atualização (efeitos colaterais do estado / prazo) ─────────────────────
@@ -124,10 +183,10 @@ export function taskUpdateSideEffects(
 
 // ─── Origem (link para o registo) ───────────────────────────────────────────
 
-export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template", "google_tasks", "service"] as const;
+export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template", "google_tasks", "service", "rh"] as const;
 export type TaskSourceModule = (typeof TASK_SOURCE_MODULES)[number];
 export const TASK_SOURCE_LABELS: Record<TaskSourceModule, string> = {
-  manual: "Manual", availability: "Disponibilidade", complaint: "Reclamação", incident: "Ocorrência", lost_found: "Perdidos e achados", template: "Checklist", google_tasks: "Google Tarefas", service: "Serviço da reserva",
+  manual: "Manual", availability: "Disponibilidade", complaint: "Reclamação", incident: "Ocorrência", lost_found: "Perdidos e achados", template: "Checklist", google_tasks: "Google Tarefas", service: "Serviço da reserva", rh: "Ficha (RH)",
 };
 
 /** Link da origem (null quando não há página própria). */
@@ -141,6 +200,8 @@ export function taskSourceLink(module: string | null | undefined, id: number | n
     case "complaint": return id ? `/reclamacoes?id=${id}` : "/reclamacoes";
     case "incident": return "/ocorrencias";
     case "lost_found": return "/perdidos-achados";
+    // Ficha sem cidade (rh:missing-city:<ficha>) → a ficha no RH.
+    case "rh": return id ? `/rh?employeeId=${id}` : "/rh";
     // Serviço extra de uma reserva (sourceKey "svc:<reserva>:<linha>") → ficha da reserva.
     case "service": {
       const m = /^svc:([^:]+):/.exec(key ?? "");

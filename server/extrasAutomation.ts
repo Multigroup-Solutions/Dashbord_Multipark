@@ -1000,9 +1000,12 @@ export async function runExtrasAutomation(now: Date = new Date(), opts: { deadli
     // A manutenção do WhatsApp (ficheiros por descarregar, estados pendentes,
     // chamadas penduradas) e os alertas de SLA não são automação dos extras
     // (17b): correm sempre — antes paravam com este interruptor.
+    // As tarefas (checklists do dia e avisos de atraso) também não (P3 18a):
+    // com isto desligado ficavam só para a rede de segurança das 04:30.
     for (const [key, fn] of [
       ["whatsapp-maintenance", async () => (await import("./whatsappInbound")).runWhatsappMaintenance()],
       ["whatsapp-sla", async () => (await import("./whatsappInboxOps")).runWhatsappSlaAlerts(now)],
+      ["tasks", async () => (await import("./tasksService")).runTaskAutomation(now)],
     ] as const) {
       try {
         report.details[key] = await fn();

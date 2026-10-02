@@ -11,7 +11,8 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, Pencil, Plus, Repeat, Trash2, Zap } from "lucide-react";
+import { Archive, Loader2, Pencil, Plus, Repeat, Zap } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { ALL_WEEKDAYS_MASK, TEMPLATE_SHIFT_LABELS, TEMPLATE_SHIFTS, WEEKDAY_LABELS, type TemplateShift } from "@shared/taskRules";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -29,8 +30,12 @@ const EMPTY: Form = { title: "", description: "", cityProjectId: "", shift: "man
 
 const maskLabel = (m: number) => (m === ALL_WEEKDAYS_MASK ? "Todos os dias" : WEEKDAY_LABELS.filter((_, i) => m & (1 << i)).join(", "));
 
-/** Gestão das checklists recorrentes (supervisor+). As tarefas geram-se de hora a hora (idempotente). */
-export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number; name: string; level: string }> }) {
+/**
+ * Gestão das checklists recorrentes (quem tem "gerir" nas Tarefas). As tarefas
+ * geram-se de hora a hora (idempotente); "Gerar hoje" só para admin (o servidor
+ * exige-o). "Eliminar" arquiva o modelo (18a).
+ */
+export function TaskTemplatesPanel({ projects, canGenerate }: { projects: Array<{ id: number; name: string; level: string }>; canGenerate: boolean }) {
   const utils = trpc.useUtils();
   const list = trpc.tasks.templates.list.useQuery();
   const [form, setForm] = useState<Form | null>(null);
@@ -40,11 +45,15 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
     onError: (e) => toast.error(e.message),
   });
   const del = trpc.tasks.templates.delete.useMutation({
-    onSuccess: () => { toast.success("Checklist apagada"); utils.tasks.templates.list.invalidate(); },
+    onSuccess: () => { toast.success("Checklist arquivada: deixa de gerar tarefas"); utils.tasks.templates.list.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   const gen = trpc.tasks.templates.generateNow.useMutation({
-    onSuccess: (r) => { toast.success(`${r.created} tarefa(s) criada(s) para ${r.date}`); utils.tasks.list.invalidate(); },
+    onSuccess: (r) => {
+      if (r.failed) toast.error(`${r.created} criada(s); ${r.failed} falharam (tenta de novo): ${r.errors.slice(0, 2).join("; ")}`);
+      else toast.success(`${r.created} tarefa(s) criada(s) para ${r.date}`);
+      utils.tasks.list.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
   const cities = projects.filter((p) => p.level === "city");
@@ -55,14 +64,17 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-sm text-muted-foreground">Cada checklist ativa cria uma tarefa por dia (e turno) nos dias escolhidos. Não duplica.</p>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => gen.mutate()} disabled={gen.isPending} title="Gera já as tarefas de hoje (o cron faz isto de hora a hora)">
-            {gen.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Zap className="h-4 w-4 mr-1" />}Gerar hoje
-          </Button>
+          {canGenerate && (
+            <Button variant="outline" size="sm" onClick={() => gen.mutate()} disabled={gen.isPending} title="Gera já as tarefas de hoje (o cron faz isto de hora a hora)">
+              {gen.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Zap className="h-4 w-4 mr-1" />}Gerar hoje
+            </Button>
+          )}
           <Button size="sm" onClick={() => setForm({ ...EMPTY })}><Plus className="h-4 w-4 mr-1" />Nova checklist</Button>
         </div>
       </div>
       {list.isLoading && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
-      {(list.data ?? []).length === 0 && !list.isLoading && (
+      {list.error && <QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="as checklists" />}
+      {list.isSuccess && list.data.length === 0 && (
         <Card><CardContent className="py-8 text-center text-muted-foreground"><Repeat className="h-8 w-8 mx-auto mb-2 opacity-40" />Sem checklists recorrentes.</CardContent></Card>
       )}
       <div className="grid gap-2 md:grid-cols-2">
@@ -76,8 +88,8 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
                     id: t.id, title: t.title, description: t.description ?? "", cityProjectId: t.cityProjectId ? String(t.cityProjectId) : "",
                     shift: t.shift, weekdaysMask: t.weekdaysMask, dueHour: t.dueHour == null ? "" : String(t.dueHour), priority: t.priority,
                     assigneeRole: t.assigneeRole ?? "none", assigneeEmployeeIds: t.assigneeEmployeeIds ?? [], active: !!t.active,
-                  })}><Pencil className="h-3.5 w-3.5" /></Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Apagar esta checklist? As tarefas já criadas ficam.")) del.mutate({ id: t.id }); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  })} aria-label="Editar checklist" title="Editar"><Pencil className="h-3.5 w-3.5" /></Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Arquivar checklist" title="Arquivar" onClick={() => { if (confirm("Arquivar esta checklist? Deixa de gerar tarefas; as já criadas ficam.")) del.mutate({ id: t.id }); }}><Archive className="h-3.5 w-3.5" /></Button>
                 </div>
               </div>
               <div className="flex flex-wrap gap-1 text-xs">
@@ -99,11 +111,11 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
             <div className="space-y-3">
               <div><Label>Título</Label><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Ex.: Verificar chaves no cofre" /></div>
               <div><Label>Descrição / passos</Label><Textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label>Cidade</Label>
                   <Select value={form.cityProjectId || "all"} onValueChange={(v) => setForm({ ...form, cityProjectId: v === "all" ? "" : v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Sem cidade</SelectItem>
                       {cities.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
@@ -113,7 +125,7 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
                 <div>
                   <Label>Turno</Label>
                   <Select value={form.shift} onValueChange={(v) => setForm({ ...form, shift: v as TemplateShift })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>{TEMPLATE_SHIFTS.map((s) => <SelectItem key={s} value={s}>{TEMPLATE_SHIFT_LABELS[s]}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
@@ -128,7 +140,7 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
                   ))}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label>Hora limite (0–23)</Label>
                   <Input inputMode="numeric" value={form.dueHour} onChange={(e) => setForm({ ...form, dueHour: e.target.value.replace(/\D/g, "").slice(0, 2) })} placeholder="fim do turno" />
@@ -136,7 +148,7 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
                 <div>
                   <Label>Prioridade</Label>
                   <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>{Object.entries(PRIORITY_LABELS).map(([k, l]) => <SelectItem key={k} value={k}>{l}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
@@ -144,9 +156,10 @@ export function TaskTemplatesPanel({ projects }: { projects: Array<{ id: number;
               <div>
                 <Label>Responsáveis</Label>
                 <Select value={form.assigneeRole} onValueChange={(v) => setForm({ ...form, assigneeRole: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>{Object.entries(ROLE_LABELS).map(([k, l]) => <SelectItem key={k} value={k}>{l}</SelectItem>)}</SelectContent>
                 </Select>
+                {people.error && <div className="mt-2"><QueryErrorNote error={people.error} onRetry={() => people.refetch()} retrying={people.isFetching} what="as pessoas" /></div>}
                 <div className="border rounded-lg max-h-36 overflow-y-auto p-2 space-y-1 mt-2">
                   {(people.data ?? []).map((p: any) => (
                     <label key={p.id} className="flex items-center gap-2 text-sm px-1">

@@ -141,6 +141,8 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "reservas_operacoes", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "task", group: "operacoes", label: "As tuas tarefas", description: "Tarefas tuas: atribuídas, comentários, atrasos e conclusões.",
     module: "tarefas", action: "view", roles: [], cityScoped: false, personal: true, channels: IN_APP }),
+  K({ kind: "task_overdue_city", group: "operacoes", label: "Tarefas automáticas em atraso", description: "Checklists, serviços e outras tarefas automáticas da tua cidade que passaram o prazo (um resumo por cidade).",
+    module: "tarefas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 50 }),
 
   // ── Pessoas ──
   K({ kind: "rh_docs_missing", group: "pessoas", label: "Documentos em falta (RH)", description: "Extras com documentos obrigatórios em falta há 14 dias.",

@@ -590,6 +590,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   // 17g-3 (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão.
   { name: "EXTRAS_ASK_CITY", label: "Pedir a cidade aos extras sem cidade", description: "Quando um extra chega sem cidade, pede-lha uma vez por email (pela recursos-humanos@) e por WhatsApp se a conversa estiver aberta. A tarefa para quem trata das fichas sem cidade cria-se sempre. Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
+  // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.
+  { name: "TASKS_AUTO_OVERDUE", label: "Avisos de atraso das tarefas automáticas", description: "Checklists, serviços, disponibilidade e fichas sem cidade que passam o prazo: avisa no sino os responsáveis e o supervisor da cidade (um resumo por cidade). Sem email. Desligado por omissão.", defaultEnabled: false },
   { name: "CASE_REMINDERS", label: "Lembretes de SLA dos casos", description: "Avisa quando ocorrências/perdidos passam do prazo." },
   { name: "COMPLAINT_AUTO_ACK", label: "Aviso de receção das reclamações", description: "Responde automaticamente ao cliente quando chega uma reclamação por email." },
   { name: "HANDOVER_EMAIL", label: "Email da passagem de turno", description: "Envia a passagem de turno por email aos team leaders." },

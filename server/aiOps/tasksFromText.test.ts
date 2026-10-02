@@ -29,6 +29,8 @@ vi.mock("../db", async (original) => ({
 }));
 vi.mock("../tasksService", async (original) => ({
   ...(await original<object>()),
+  // 18a: os responsáveis passam a ser validados no servidor (ativos e no âmbito) — aqui todos são.
+  notAssignable: async () => [],
   assignableEmployees: async () => [
     { id: 7, fullName: "Rui Costa", projectId: 1 },
     { id: 8, fullName: "Ana Martins", projectId: 1 },

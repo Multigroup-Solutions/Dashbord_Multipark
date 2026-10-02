@@ -104,7 +104,7 @@ async function loadTasksByIds(ids: readonly number[]): Promise<LocalTaskLike[]> 
   if (!ids.length) return [];
   const d = await db();
   const rows = rowsOf(await d.execute(sql`SELECT id, title, description, dueDate, dueHasTime, taskStatus, updatedAt, projectId, createdById, assigneeId
-    FROM tasks WHERE id IN (${inList(ids)})`));
+    FROM tasks WHERE id IN (${inList(ids)}) AND archivedAt IS NULL`));
   const ass = rowsOf(await d.execute(sql`SELECT taskId, employeeId FROM task_assignees WHERE taskId IN (${inList(ids)})`));
   const byTask = new Map<number, number[]>();
   for (const a of ass) {
@@ -157,6 +157,7 @@ export const dbTaskSyncStore: TaskSyncStore = {
     const linked = linkedTaskIds.length ? sql` OR t.id IN (${inList(linkedTaskIds)})` : sql``;
     const ids = rowsOf(await d.execute(sql`SELECT t.id FROM tasks t
       WHERE (t.assigneeId = ${employeeId} OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.taskId = t.id AND ta.employeeId = ${employeeId}))
+        AND t.archivedAt IS NULL
         AND (t.taskStatus <> 'done' OR COALESCE(t.completedAt, t.updatedAt) >= ${cutoff}${linked})
       ORDER BY t.id DESC LIMIT 1000`)).map((r) => Number(r.id));
     return loadTasksByIds(ids);
