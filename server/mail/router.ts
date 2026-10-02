@@ -47,7 +47,7 @@ export const mailRouter = router({
         WHERE g.status <> 'disconnected' AND g.userId <> ${v.id} ORDER BY u.name LIMIT 300`))
         .map((r) => ({ userId: Number(r.userId), name: String(r.name ?? r.email), email: String(r.email) }));
     }
-    return { ...boxes, google, others, slaHours: await slaHours() };
+    return { ...boxes, google, others, slaHours: await slaHours(), isSuperAdmin: v.role === "super_admin" };
   }),
 
   badge: protectedProcedure.query(async ({ ctx }) => {
@@ -68,6 +68,8 @@ export const mailRouter = router({
         unread: z.boolean().optional(),
         search: z.string().max(100).nullish(),
         showAutomatic: z.boolean().optional(),
+        /** Arquivo da retenção (+5 anos, sem ligação) — só o super admin. */
+        archived: z.boolean().optional(),
         page: z.number().int().min(1).max(500).optional(),
         pageSize: z.number().int().min(10).max(100).optional(),
       }))
@@ -76,9 +78,9 @@ export const mailRouter = router({
         const { listThreads } = await import("./inbox");
         return listThreads(viewerOf(ctx.user as CtxUser), input);
       }),
-    get: protectedProcedure.input(threadId.extend({ showImages: z.boolean().optional() })).query(async ({ ctx, input }) => {
+    get: protectedProcedure.input(threadId.extend({ showImages: z.boolean().optional(), showArchived: z.boolean().optional() })).query(async ({ ctx, input }) => {
       const { getThread } = await import("./inbox");
-      return getThread(viewerOf(ctx.user as CtxUser), input.id, { showImages: input.showImages });
+      return getThread(viewerOf(ctx.user as CtxUser), input.id, { showImages: input.showImages, showArchived: input.showArchived });
     }),
     markRead: protectedProcedure.input(threadId.extend({ read: z.boolean() })).mutation(async ({ ctx, input }) => {
       const { markThreadRead } = await import("./inbox");

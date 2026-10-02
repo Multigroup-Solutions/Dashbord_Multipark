@@ -8,8 +8,11 @@
 //  2. `mail_messages.pipelineAttempts` / `pipelineError`: um email que devia
 //     criar uma reclamação (perdido, crítica…) e falhou a meio fica marcado e
 //     volta a ser tentado nas corridas seguintes (antes perdia-se).
+//  3. `archivedAt` em mail_messages e mail_threads: a retenção (+5 anos, sem
+//     ligação) deixa de APAGAR — arquiva. Ficam guardados e só o super admin
+//     os vê, a pedido (decisão do Jorge, 2 out 2026).
 // Idempotente: CREATE TABLE/ADD COLUMN/ADD KEY ignoram o que já existe.
-export const MIGRATION_0360_NAME = "0360_mail_send_requests_pipeline_retry";
+export const MIGRATION_0360_NAME = "0360_mail_send_requests_pipeline_retry_archive";
 
 export const MIGRATION_0360_STATEMENTS: string[] = [
   "CREATE TABLE IF NOT EXISTS `mail_send_requests` ("
@@ -27,6 +30,8 @@ export const MIGRATION_0360_STATEMENTS: string[] = [
     + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
   "ALTER TABLE `mail_messages` ADD COLUMN `pipelineAttempts` TINYINT NOT NULL DEFAULT 0",
   "ALTER TABLE `mail_messages` ADD COLUMN `pipelineError` VARCHAR(300) NULL",
+  "ALTER TABLE `mail_messages` ADD COLUMN `archivedAt` DATETIME NULL",
+  "ALTER TABLE `mail_threads` ADD COLUMN `archivedAt` DATETIME NULL",
 ];
 // Sem índice novo: as consultas dos casos falhados vão pela data (idx_mail_messages_sent),
 // e um ADD KEY numa tabela grande no arranque da função não vale o risco.

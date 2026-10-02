@@ -2,7 +2,7 @@
 modulo: comunicacao
 titulo: Comunicação (email)
 rotas: /comunicacao, /comunicacao/meu-email
-palavras: email, emails, gmail, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
+palavras: email, emails, gmail, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
 ---
 # Comunicação (email)
 
@@ -43,7 +43,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 - As imagens de fora ficam bloqueadas até carregares em **Mostrar imagens** (evita pixels de rastreio). As **fotos coladas no corpo** do email (ex.: danos enviados do iPhone) também aparecem com **Mostrar imagens** e ficam na lista de anexos.
 - Os anexos abrem a pedido; o conteúdo dos emails é limpo antes de ser mostrado.
 - As horas são sempre de Lisboa.
-- **Retenção:** emails com mais de 5 anos sem ligação a nenhum registo saem da base do dashboard (o Gmail fica intacto).
+- **Retenção (arquivo):** emails com mais de 5 anos sem ligação a nenhum registo **não se apagam**. Deixam de aparecer nas listas, contagens e pesquisas, e ficam guardados no **Arquivo (+5 anos)**, que só o super admin vê, a pedido. Numa conversa com mensagens antigas arquivadas, o super admin tem **Mostrar arquivadas**. Uma mensagem nova, ou ligar a conversa a um cliente/caso, tira-a do arquivo. O Gmail fica sempre intacto.
 
 **Quando a leitura falha**
 - Caixas, lista, conversa, comunicações de um registo e a classificação mostram **"Não foi possível carregar…"** com **Tentar de novo**. Nunca "Não tens acesso", "Sem conversas" ou "liga a tua conta" por engano. No menu, o contador passa a **?**.

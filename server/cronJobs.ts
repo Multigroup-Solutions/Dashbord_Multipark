@@ -471,11 +471,12 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         if (r.deleted > 0) console.log(`[daily-ops] assistente: ${r.deleted} mensagem(ns)/conversa(s) antigas apagadas${r.done ? "" : ", continua amanhã"}`);
       });
       // Comunicação: emails mais antigos do que `mail.retentionYears` e SEM
-      // ligação a cliente/reserva/caso são apagados (os ligados ficam).
+      // ligação a cliente/reserva/caso vão para o ARQUIVO (ficam guardados; só
+      // o super admin os vê, a pedido). Nada se apaga (Jorge, 2 out 2026).
       await step("mail-retention", "retenção emails", async () => {
         const { runMailRetention } = await import("./mail/store");
         const r = await runMailRetention({ deadlineAt: cap(5_000) });
-        if (r.messages > 0) console.log(`[daily-ops] emails: ${r.messages} mensagem(ns) e ${r.threads} conversa(s) antes de ${r.cutoff} apagadas${r.partial ? ", continua amanhã" : ""}`);
+        if (r.messages > 0) console.log(`[daily-ops] emails: ${r.messages} mensagem(ns) e ${r.threads} conversa(s) antes de ${r.cutoff} arquivadas${r.partial ? ", continua amanhã" : ""}`);
       });
     }
 

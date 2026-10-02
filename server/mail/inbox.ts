@@ -42,6 +42,8 @@ export interface ThreadRow {
   needsTriage: boolean;
   /** Etiqueta do alias por onde entrou. */
   routeLabel: string | null;
+  /** Arquivada pela retenção (+5 anos, sem ligação): só o super admin a vê, a pedido. */
+  archivedAt: string | null;
 }
 
 /** Quem trata "Por classificar" (e edita a tabela de aliases): admin e super_admin. */
@@ -59,6 +61,7 @@ function toThread(r: any): ThreadRow {
     automated: Number(r.automated ?? 0) === 1,
     needsTriage: Number(r.needsTriage ?? 0) === 1,
     routeLabel: r.routeLabel ?? null,
+    archivedAt: r.archivedAt ?? null,
   };
 }
 
@@ -91,6 +94,8 @@ export async function loadThread(threadId: number): Promise<ThreadRow | null> {
 export async function threadAccess(viewer: MailViewer, threadId: number): Promise<ThreadAccess> {
   const thread = await loadThread(threadId);
   if (!thread) throw notFound();
+  // Arquivo da retenção (+5 anos, sem ligação): fica guardada, só o super admin a vê.
+  if (thread.archivedAt && viewer.role !== "super_admin") throw forbidden("Conversa arquivada (mais de 5 anos) — só o super admin a consulta.");
   if (thread.ownerUserId != null && !thread.mailboxKey) {
     if (!canSeePersonalMailbox(viewer, thread.ownerUserId)) throw forbidden();
     const own = canSendFromPersonalMailbox(viewer, thread.ownerUserId);
@@ -119,11 +124,13 @@ export async function threadAccess(viewer: MailViewer, threadId: number): Promis
  * próprio email pessoal. O super admin vê tudo (IT / procurar o que se perdeu).
  */
 export async function visibleThreadsCondition(viewer: MailViewer): Promise<SQL> {
-  if (viewer.role === "super_admin") return sql`1 = 1`;
+  // As arquivadas pela retenção ficam de fora de tudo (pesquisas, contactos,
+  // CRM); o super admin vê-as só a pedido (Comunicação → Arquivo).
+  if (viewer.role === "super_admin") return sql`t.archivedAt IS NULL`;
   const all = await listMailboxes();
   const parts: SQL[] = all.filter((m) => canSeeMailbox(viewer, m)).map((m) => sql`(t.mailboxKey = ${m.key} AND ${cityCondition(viewer, m)})`);
   parts.push(sql`(t.mailboxKey IS NULL AND t.ownerUserId = ${viewer.id})`);
-  return sql`(${sql.join(parts, sql` OR `)})`;
+  return sql`((${sql.join(parts, sql` OR `)}) AND t.archivedAt IS NULL)`;
 }
 
 export async function visibleMailboxes(viewer: MailViewer) {
@@ -136,7 +143,7 @@ export async function visibleMailboxes(viewer: MailViewer) {
         SUM(CASE WHEN t.unreadCount > 0 THEN 1 ELSE 0 END) AS unread,
         SUM(CASE WHEN t.awaitingSince IS NOT NULL AND t.status <> 'resolvido' THEN 1 ELSE 0 END) AS awaiting,
         SUM(CASE WHEN t.status = 'aberto' THEN 1 ELSE 0 END) AS open
-      FROM mail_threads t WHERE t.mailboxKey = ${m.key} AND ${cityCondition(viewer, m)} AND COALESCE(t.automated, 0) = 0`))[0] ?? {};
+      FROM mail_threads t WHERE t.mailboxKey = ${m.key} AND ${cityCondition(viewer, m)} AND COALESCE(t.automated, 0) = 0 AND t.archivedAt IS NULL`))[0] ?? {};
     out.push({
       key: m.key, label: m.label, module: m.module, brands: Array.from(new Set(m.addresses.map((a) => a.brand))),
       addresses: m.addresses, signatures: m.signatures, canAct: canActOnMailbox(viewer, m), pipeline: m.pipeline,
@@ -144,11 +151,11 @@ export async function visibleMailboxes(viewer: MailViewer) {
     });
   }
   const pr = rowsOf(await d.execute(sql`SELECT SUM(CASE WHEN unreadCount > 0 THEN 1 ELSE 0 END) AS unread FROM mail_threads
-    WHERE ownerUserId = ${viewer.id} AND mailboxKey IS NULL AND COALESCE(automated, 0) = 0`))[0] ?? {};
+    WHERE ownerUserId = ${viewer.id} AND mailboxKey IS NULL AND COALESCE(automated, 0) = 0 AND archivedAt IS NULL`))[0] ?? {};
   let triage: { open: number; unread: number } | null = null;
   if (canTriageMail(viewer)) {
     const tr = rowsOf(await d.execute(sql`SELECT COUNT(*) AS n, SUM(CASE WHEN unreadCount > 0 THEN 1 ELSE 0 END) AS unread FROM mail_threads
-      WHERE needsTriage = 1 AND status <> 'resolvido'`))[0] ?? {};
+      WHERE needsTriage = 1 AND status <> 'resolvido' AND archivedAt IS NULL`))[0] ?? {};
     triage = { open: Number(tr.n ?? 0), unread: Number(tr.unread ?? 0) };
   }
   return { mailboxes: out, personalUnread: Number(pr.unread ?? 0), triage };
@@ -173,6 +180,8 @@ export interface ThreadListInput {
   search?: string | null;
   /** Mostrar as conversas automáticas (notificações de reserva) — escondidas por omissão; a pesquisa mostra-as sempre. */
   showAutomatic?: boolean;
+  /** Arquivo da retenção (+5 anos, sem ligação): só o super admin, a pedido. */
+  archived?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -191,6 +200,8 @@ export async function listThreads(viewer: MailViewer, input: ThreadListInput) {
     if (!m || !canSeeMailbox(viewer, m)) throw forbidden();
     conds.push(sql`t.mailboxKey = ${m.key}`, cityCondition(viewer, m));
   }
+  if (input.archived && viewer.role !== "super_admin") throw forbidden("Só o super admin consulta o arquivo.");
+  conds.push(input.archived ? sql`t.archivedAt IS NOT NULL` : sql`t.archivedAt IS NULL`);
   if (input.brand && isMailBrand(input.brand)) conds.push(sql`t.brand = ${input.brand}`);
   if (input.status && input.status !== "all") conds.push(sql`t.status = ${input.status}`);
   if (input.assigned === "me") conds.push(sql`t.assignedUserId = ${viewer.id}`);
@@ -273,13 +284,18 @@ export function listedAttachment(a: Pick<MailAttachmentMeta, "inline" | "content
   return String(a.mimeType ?? "").startsWith("image/") && Number(a.size ?? 0) >= 20 * 1024;
 }
 
-export async function getThread(viewer: MailViewer, threadId: number, opts: { showImages?: boolean } = {}) {
+export async function getThread(viewer: MailViewer, threadId: number, opts: { showImages?: boolean; showArchived?: boolean } = {}) {
   const acc = await threadAccess(viewer, threadId);
   const d = await db();
-  const rows = rowsOf(await d.execute(sql`SELECT m.id, m.gmailMessageId, m.rfcMessageId, m.referencesText, m.direction, m.fromName, m.fromEmail, m.toJson, m.ccJson,
+  // Mensagens arquivadas pela retenção: só o super admin, a pedido (ou numa conversa toda arquivada, que só ele abre).
+  const superAdmin = viewer.role === "super_admin";
+  const withArchived = superAdmin && (!!opts.showArchived || !!acc.thread.archivedAt);
+  const allRows = rowsOf(await d.execute(sql`SELECT m.id, m.gmailMessageId, m.rfcMessageId, m.referencesText, m.direction, m.fromName, m.fromEmail, m.toJson, m.ccJson,
       m.subject, m.snippet, m.bodyText, m.bodyHtml, m.attachmentsJson, m.sentAt, m.isRead, m.brand, m.matchedAddress, m.sentById, m.pipeline, m.pipelineStatus,
-      u.name AS sentByName
+      m.archivedAt, u.name AS sentByName
     FROM mail_messages m LEFT JOIN users u ON u.id = m.sentById WHERE m.threadId = ${threadId} ORDER BY m.sentAt, m.id`));
+  const rows = withArchived ? allRows : allRows.filter((r) => !r.archivedAt);
+  const archivedHidden = superAdmin ? allRows.length - rows.length : 0;
   let blocked = 0;
   const messages = [];
   for (const r of rows) {
@@ -303,6 +319,7 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
       sentAt: r.sentAt ?? null, isRead: Number(r.isRead) === 1, brand: r.brand ?? null, sentByName: r.sentByName ?? null,
       pipeline: r.pipeline ?? null, pipelineStatus: r.pipelineStatus ?? null,
       rfcMessageId: r.rfcMessageId ?? null,
+      archived: !!r.archivedAt,
     });
   }
   const links = await linksForThreads([threadId]);
@@ -331,6 +348,8 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
     /** "Por classificar" e quem vê pode atribuí-la a uma caixa (admin/super_admin). */
     canTriage: acc.thread.needsTriage && canTriageMail(viewer),
     messages,
+    /** Super admin: mensagens arquivadas (+5 anos) escondidas nesta conversa — "Mostrar arquivadas". */
+    archivedHidden,
     blockedImages: blocked,
     links: links.map((l) => ({ type: l.entityType, id: l.entityId, confidence: l.confidence, source: l.source, reason: l.reason })),
     compose: {
@@ -807,7 +826,7 @@ export async function aiDraft(viewer: MailViewer, threadId: number): Promise<{ o
   const acc = await threadAccess(viewer, threadId);
   if (!acc.canSend) throw forbidden();
   const d = await db();
-  const msgs = rowsOf(await d.execute(sql`SELECT direction, fromName, bodyText, snippet FROM mail_messages WHERE threadId = ${threadId} ORDER BY sentAt DESC, id DESC LIMIT 8`)).reverse();
+  const msgs = rowsOf(await d.execute(sql`SELECT direction, fromName, bodyText, snippet FROM mail_messages WHERE threadId = ${threadId} AND archivedAt IS NULL ORDER BY sentAt DESC, id DESC LIMIT 8`)).reverse();
   if (!msgs.length) return { ok: false, error: "Conversa sem mensagens." };
   const { runAi } = await import("../_core/ai/run");
   const { aiUserMessage } = await import("../_core/ai/errors");
@@ -867,7 +886,7 @@ export async function entityTimeline(viewer: MailViewer, type: MailLinkType, raw
   const items: TimelineItem[] = [];
   const d = await db();
   if (ids.length) {
-    const threads = rowsOf(await d.execute(sql`SELECT * FROM mail_threads WHERE id IN (${inList(ids)})`)).map(toThread);
+    const threads = rowsOf(await d.execute(sql`SELECT * FROM mail_threads WHERE id IN (${inList(ids)}) AND archivedAt IS NULL`)).map(toThread);
     const mailboxes = await listMailboxes();
     const allowed = new Map<number, { label: string; canOpen: boolean; mailboxKey: string | null }>();
     for (const t of threads) {
@@ -885,7 +904,7 @@ export async function entityTimeline(viewer: MailViewer, type: MailLinkType, raw
     const okIds = Array.from(allowed.keys());
     if (okIds.length) {
       const msgs = rowsOf(await d.execute(sql`SELECT id, threadId, direction, fromName, fromEmail, subject, snippet, LEFT(bodyText, 3000) AS text, sentAt, rfcMessageId
-        FROM mail_messages WHERE threadId IN (${inList(okIds)}) ORDER BY sentAt DESC LIMIT 200`));
+        FROM mail_messages WHERE threadId IN (${inList(okIds)}) AND archivedAt IS NULL ORDER BY sentAt DESC LIMIT 200`));
       const seen = new Set<string>();
       for (const m of msgs) {
         const k = m.rfcMessageId ? String(m.rfcMessageId) : `id:${m.id}`;
@@ -988,9 +1007,10 @@ export async function contactSuggestions(viewer: MailViewer, q: string) {
 
 export async function attachmentBytes(viewer: MailViewer, messageId: number, index: number): Promise<{ filename: string; mimeType: string; content: Buffer }> {
   const d = await db();
-  const r = rowsOf(await d.execute(sql`SELECT threadId, accountKey, gmailMessageId, attachmentsJson FROM mail_messages WHERE id = ${messageId} LIMIT 1`))[0];
+  const r = rowsOf(await d.execute(sql`SELECT threadId, accountKey, gmailMessageId, attachmentsJson, archivedAt FROM mail_messages WHERE id = ${messageId} LIMIT 1`))[0];
   if (!r) throw notFound("Anexo não encontrado.");
   await threadAccess(viewer, Number(r.threadId));
+  if (r.archivedAt && viewer.role !== "super_admin") throw forbidden("Email arquivado (mais de 5 anos) — só o super admin o consulta.");
   const metas: MailAttachmentMeta[] = (() => { try { return JSON.parse(r.attachmentsJson || "[]"); } catch { return []; } })();
   const a = metas.find((x) => x.index === index);
   if (!a || !a.attachmentId) throw notFound("Anexo não encontrado.");

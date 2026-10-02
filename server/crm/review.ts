@@ -115,7 +115,7 @@ export async function findEmailInMailbox(db: any, clientId: number, visible: SQL
     const rows = rowsOf(await db.execute(sql`SELECT LOWER(TRIM(m.fromEmail)) AS email, MAX(m.fromName) AS fromName, COUNT(*) AS n,
         DATE_FORMAT(MAX(m.sentAt), '%Y-%m-%d %H:%i:%s') AS lastAt, MAX(m.subject) AS subject
       FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId
-      WHERE (${sql.join(terms, sql` OR `)}) AND m.fromEmail IS NOT NULL AND ${visible}
+      WHERE (${sql.join(terms, sql` OR `)}) AND m.fromEmail IS NOT NULL AND m.archivedAt IS NULL AND ${visible}
       GROUP BY LOWER(TRIM(m.fromEmail)) ORDER BY n DESC LIMIT 5`));
     return rows.filter((r) => r.email && !generic.has(String(r.email))).map((r) => ({ email: String(r.email), fromName: r.fromName ?? null, messages: Number(r.n), lastAt: r.lastAt ?? null, subject: r.subject ?? null }));
   } catch {

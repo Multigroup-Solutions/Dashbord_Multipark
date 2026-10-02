@@ -382,7 +382,8 @@ export async function contactDetail(d: Db, viewer: ContactViewer, kind: ContactK
     const boxConds = boxes.map((b) => (mailboxCityRestricted(viewer as any, b) && ids !== undefined
       ? (ids.length ? sql`(t.mailboxKey = ${b.key} AND t.projectId IN (${inList(ids)}))` : sql`1 = 0`)
       : sql`t.mailboxKey = ${b.key}`));
-    const scope = sql`(t.ownerUserId = ${viewer.id}${boxConds.length ? sql` OR ${sql.join(boxConds, sql` OR `)}` : sql``})`;
+    // Arquivadas pela retenção (+5 anos): só o super admin, a pedido, na Comunicação.
+    const scope = sql`(t.ownerUserId = ${viewer.id}${boxConds.length ? sql` OR ${sql.join(boxConds, sql` OR `)}` : sql``}) AND t.archivedAt IS NULL`;
     const labels = new Map(boxes.map((b) => [b.key, b.label]));
     out.mail = rowsOf(await d.execute(sql`SELECT t.id, t.subject, t.lastMessageAt, t.mailboxKey FROM mail_threads t
       WHERE ${scope} AND t.contactEmail IN (${inList(emails)}) ORDER BY t.lastMessageAt DESC LIMIT 10`).catch(() => [[]])).map((r) => ({

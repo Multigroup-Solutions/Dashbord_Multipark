@@ -244,6 +244,28 @@ describe("Erro ≠ vazio e horas de Lisboa", () => {
   });
 });
 
+describe("Retenção: arquivar, nunca apagar (só o super admin vê, a pedido)", () => {
+  it("sem DELETE na retenção; arquiva mensagens e conversas", () => {
+    const store = src("server/mail/store.ts");
+    expect(store).not.toMatch(/DELETE FROM mail_(messages|threads|links)/);
+    expect(store).toContain("UPDATE mail_messages SET archivedAt = ${nowUtc()} WHERE archivedAt IS NULL");
+    expect(store).toContain("UPDATE mail_threads SET archivedAt = NULL WHERE id = ${threadId} AND archivedAt IS NOT NULL");
+  });
+  it("arquivadas fora de listas, contagens, pesquisas, linha do tempo e CRM; o super admin pede o Arquivo", () => {
+    const inbox = src("server/mail/inbox.ts");
+    expect(inbox).toContain('if (thread.archivedAt && viewer.role !== "super_admin") throw forbidden(');
+    expect(inbox).toContain('if (input.archived && viewer.role !== "super_admin") throw forbidden("Só o super admin consulta o arquivo.");');
+    expect(inbox).toContain("conds.push(input.archived ? sql`t.archivedAt IS NOT NULL` : sql`t.archivedAt IS NULL`);");
+    expect(inbox).toContain('if (viewer.role === "super_admin") return sql`t.archivedAt IS NULL`;');
+    expect(inbox).toContain("AND archivedAt IS NULL ORDER BY sentAt DESC LIMIT 200");
+    expect(src("server/globalSearch.ts")).toContain("AND t.archivedAt IS NULL`;");
+    expect(src("server/contactsSearch.ts")).toContain("AND t.archivedAt IS NULL`;");
+    expect(src("server/crm/review.ts")).toContain("m.archivedAt IS NULL AND ${visible}");
+    expect(src("client/src/pages/ComunicacaoPage.tsx")).toContain("Arquivo (+5 anos)");
+    expect(src("client/src/components/mail/MailThreadView.tsx")).toContain("Mostrar arquivadas ({t.archivedHidden})");
+  });
+});
+
 describe("Migração 0360", () => {
   it("registada depois da 0355; tabela nova e colunas, sem DELETE nem DROP", () => {
     expect(SCHEMA_MIGRATION_IDS.indexOf("0360")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0355"));
@@ -251,6 +273,8 @@ describe("Migração 0360", () => {
     expect(all).toContain("CREATE TABLE IF NOT EXISTS `mail_send_requests`");
     expect(all).toContain("UNIQUE KEY `uq_mail_send_requests_request` (`requestId`)");
     expect(all).toContain("`pipelineAttempts`");
+    expect(all).toContain("ALTER TABLE `mail_messages` ADD COLUMN `archivedAt` DATETIME NULL");
+    expect(all).toContain("ALTER TABLE `mail_threads` ADD COLUMN `archivedAt` DATETIME NULL");
     expect(all).not.toMatch(/\bDELETE\b|\bDROP\b/);
   });
 });

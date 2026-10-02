@@ -186,7 +186,8 @@ export function mailSource(deps: MailDeps = defaultMailDeps): SearchSource {
       const boxConds = boxes.map((b) => (mailboxCityRestricted(viewer as any, b as any) && ids !== undefined
         ? (ids.length ? sql`(t.mailboxKey = ${b.key} AND t.projectId IN (${inList(ids)}))` : sql`1 = 0`)
         : sql`t.mailboxKey = ${b.key}`));
-      const scope = sql`(t.ownerUserId = ${viewer.id}${boxConds.length ? sql` OR ${sql.join(boxConds, sql` OR `)}` : sql``})`;
+      // Arquivadas pela retenção (+5 anos): só o super admin, a pedido, na Comunicação.
+      const scope = sql`(t.ownerUserId = ${viewer.id}${boxConds.length ? sql` OR ${sql.join(boxConds, sql` OR `)}` : sql``}) AND t.archivedAt IS NULL`;
       const labels = new Map(boxes.map((b) => [b.key, b.label]));
       const rows = rowsOf(await d.execute(sql`SELECT /*+ MAX_EXECUTION_TIME(2000) */ t.id, t.subject, t.contactEmail, t.contactName, t.lastMessageAt, t.mailboxKey
         FROM mail_threads t WHERE ${scope} AND (LOWER(COALESCE(t.subject, '')) LIKE ${q.like} OR LOWER(COALESCE(t.contactEmail, '')) LIKE ${q.like}

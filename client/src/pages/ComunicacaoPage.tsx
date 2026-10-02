@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useIsMobile } from "@/hooks/useMobile";
 import { toast } from "sonner";
-import { AlarmClock, Bot, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, UserRound } from "lucide-react";
+import { AlarmClock, Archive, Bot, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, UserRound } from "lucide-react";
 import {
   MAIL_BRAND_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, MAIL_TRIAGE_KEY, MAIL_TRIAGE_LABEL, isMailBrand, isMailOverdue, type MailThreadStatus,
 } from "@shared/mail";
@@ -46,6 +46,8 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const [unread, setUnread] = useState(false);
   // Notificações automáticas de reserva: escondidas por omissão (a pesquisa encontra-as sempre).
   const [showAutomatic, setShowAutomatic] = useState(false);
+  // Arquivo da retenção (+5 anos, sem ligação): só o super admin, a pedido.
+  const [archived, setArchived] = useState(false);
   const [q, setQ] = useState(() => (params.get("q") ?? "").slice(0, 120));
   const [page, setPage] = useState(1);
   const [composeNew, setComposeNew] = useState(false);
@@ -56,7 +58,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     if (!mailbox && boxes.length) setMailbox(boxes[0].key);
     else if (!mailbox && triage) setMailbox(MAIL_TRIAGE_KEY);
   }, [personal, boxes, mailbox, triage]);
-  useEffect(() => { setPage(1); }, [mailbox, brand, status, assigned, awaiting, unread, showAutomatic, q, ownerUserId]);
+  useEffect(() => { setPage(1); }, [mailbox, brand, status, assigned, awaiting, unread, showAutomatic, archived, q, ownerUserId]);
   useEffect(() => { const t = Number(params.get("t")) || null; if (t) setSelected(t); const c = params.get("caixa"); if (c && !personal) setMailbox(c); }, [params, personal]);
 
   const google = overview.data?.google;
@@ -65,7 +67,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const list = trpc.mail.threads.list.useQuery({
     mailbox: mailbox ?? "me", ownerUserId: mailbox === "me" ? ownerUserId : null,
     brand: brand === "all" ? null : brand, status, assigned: mailbox === "me" ? "all" : assigned, awaiting, unread,
-    search: q.trim() || null, showAutomatic, page, pageSize: 40,
+    search: q.trim() || null, showAutomatic, archived: archived && !!overview.data?.isSuperAdmin, page, pageSize: 40,
   }, { enabled, refetchInterval: POLL_MS, placeholderData: (p) => p });
 
   const syncMine = trpc.mail.syncMine.useMutation({
@@ -207,6 +209,12 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
             title="Notificações automáticas de reserva: escondidas por omissão; a pesquisa encontra-as sempre.">
             <Bot className="h-3.5 w-3.5 mr-1" />Mostrar automáticos
           </Button>
+          {overview.data?.isSuperAdmin && (
+            <Button size="sm" variant={archived ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => { setArchived((x) => !x); if (!archived) setStatus("all"); }}
+              title="Emails com mais de 5 anos e sem ligação a nenhum registo: não se apagam, ficam aqui e só tu os vês.">
+              <Archive className="h-3.5 w-3.5 mr-1" />Arquivo (+5 anos)
+            </Button>
+          )}
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
