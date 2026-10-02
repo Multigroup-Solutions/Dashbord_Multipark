@@ -105,7 +105,7 @@ import { AssistantWidget } from "@/components/assistant/AssistantWidget";
 import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
 import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
 import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
-import { can, roleRank, type AccessOverrides, type ModuleId } from "@shared/access";
+import { can, roleRank, seesBeyondOwn, type AccessOverrides, type ModuleId } from "@shared/access";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
@@ -119,6 +119,8 @@ export type MenuItem = {
   module?: ModuleId;
   /** Alternativas: visível se QUALQUER destes módulos se vir (ex.: RH ou a própria ficha). */
   anyOf?: ModuleId[];
+  /** Só aparece a quem vê mais do que os próprios casos no módulo (a página não tem vista "só meus"). */
+  beyondOwn?: boolean;
 };
 
 export type MenuGroup = {
@@ -128,8 +130,9 @@ export type MenuGroup = {
 };
 
 /** O item é visível para a pessoa (papel + overrides)? (sem módulo = visível a qualquer sessão) */
-export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf">): boolean {
+export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf" | "beyondOwn">): boolean {
   const mods = item.anyOf ?? (item.module ? [item.module] : []);
+  if (item.beyondOwn) return mods.some(m => seesBeyondOwn(userRole, m));
   return mods.length === 0 || mods.some(m => can(userRole, m, "view"));
 }
 
@@ -197,7 +200,9 @@ export const menuGroups: MenuGroup[] = [
       { icon: BookUser, label: "Contactos", path: "/contactos", module: "contactos" },
       { icon: MessageSquareWarning, label: "Reclamações", path: "/reclamacoes", module: "reclamacoes" },
       { icon: Star, label: "Críticas Google", path: "/criticas", module: "criticas" },
-      { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias", module: "ocorrencias" },
+      // Ocorrências vêm da app Multipark e só se leem por cidade: quem só tem
+      // "os próprios" (condutor, extra) caía no cadeado (16a).
+      { icon: AlertTriangle, label: "Ocorrências", path: "/ocorrencias", module: "ocorrencias", beyondOwn: true },
       { icon: Package, label: "Perdidos e Achados", path: "/perdidos-achados", module: "perdidos" },
     ],
   },

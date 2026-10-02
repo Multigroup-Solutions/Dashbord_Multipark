@@ -2,6 +2,9 @@ import { trpc } from "@/lib/trpc";
 import { seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { toCsv } from "@shared/csv";
+import { lisbonDayOf } from "@shared/lisbonDay";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +18,7 @@ import { useState, useMemo, useEffect } from "react";
 import { keepPreviousData } from "@tanstack/react-query";
 import {
   AlertTriangle, Clock, User, Car, BarChart3, AlertCircle, CheckCircle2, ShieldAlert,
-  MapPin, Download, ExternalLink, Search, Paperclip, Info, Lock,
+  MapPin, Download, ExternalLink, Search, Paperclip, Info, Lock, RefreshCw, Archive,
 } from "lucide-react";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
@@ -47,14 +50,19 @@ type MpOccurrence = {
 
 const isAccident = (o: MpOccurrence) => /acidente|sinistro|colis[aã]o|colidiu|embat|bateu|choque|capot/i.test(`${o.title} ${o.remarks ?? ""}`);
 
-function isoMinute(v: string | null): string {
-  return v ? new Date(v).toISOString().slice(0, 16) : "";
-}
+/** Data/hora de Lisboa para o CSV (vazio quando não há). */
+const csvDateTime = (v: string | null) => (v ? fmtPTDateTime(v) : "");
 
 export default function IncidentsPage() {
   const { user } = useAuth();
   const globalFilters = useGlobalFilters();
   const [detailId, setDetailId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("mp") || null);
+  // Ligações antigas (emails, perdidos convertidos) apontam para `?id=N` — uma
+  // ocorrência antiga do dashboard. Abre só para leitura (16a).
+  const [legacyId, setLegacyId] = useState<number | null>(() => {
+    const n = Number(new URLSearchParams(window.location.search).get("id"));
+    return Number.isInteger(n) && n > 0 ? n : null;
+  });
   const [status, setStatus] = useState<"all" | "open" | "resolved">("all");
   const [priority, setPriority] = useState<"all" | "LOW" | "MEDIUM" | "HIGH">("all");
   const [park, setPark] = useState("all");
@@ -85,18 +93,22 @@ export default function IncidentsPage() {
   const data = q.data;
   const rows: MpOccurrence[] = data?.available ? (data.rows as MpOccurrence[]) : [];
   const stats = data?.available ? data.stats : null;
+  /** Total com os filtros (das contagens); null se as contagens falharam. */
+  const total = stats ? stats.total : null;
+  const csvPartial = total != null && rows.length < total;
 
+  // CSV: só as linhas carregadas (diz quantas de quantas), datas de Lisboa e
+  // células protegidas contra fórmulas (csvCell).
   const exportCsv = () => {
-    const cell = (v: unknown) => String(v ?? "").replace(/[;\n\r]/g, " ");
     const headers = ["ID", "Data", "Tipo", "Estado", "Prioridade", "Matrícula", "Reserva", "Parque", "Cidade", "Criada por", "Notas", "Resolvida por", "Resolvida em"];
     const lines = rows.map(o => [
-      o.id, isoMinute(o.createdAt), o.title, o.resolved ? "Resolvida" : "Aberta", o.priority ? PRIORITY[o.priority]?.label : "",
-      o.plate, o.bookingCode ?? o.bookingId, o.parkName, o.parkCity, o.createdByName, o.remarks, o.resolvedByName, isoMinute(o.resolvedAt),
-    ].map(cell).join(";"));
-    const blob = new Blob(["﻿" + [headers.join(";"), ...lines].join("\n")], { type: "text/csv;charset=utf-8;" });
+      o.id, csvDateTime(o.createdAt), o.title, o.resolved ? "Resolvida" : "Aberta", o.priority ? PRIORITY[o.priority]?.label : "",
+      o.plate, o.bookingCode ?? o.bookingId, o.parkName, o.parkCity, o.createdByName, (o.remarks ?? "").replace(/[\n\r]+/g, " "), o.resolvedByName, csvDateTime(o.resolvedAt),
+    ]);
+    const blob = new Blob(["﻿" + toCsv(headers, lines)], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `ocorrencias_multipark_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    a.href = url; a.download = `ocorrencias_multipark_${lisbonDayOf(Date.now())}.csv`; a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -114,18 +126,36 @@ export default function IncidentsPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <p className="text-muted-foreground">Ocorrências registadas na app Multipark (lidas em tempo real)</p>
-          <Button variant="outline" disabled={rows.length === 0} onClick={exportCsv}>
-            <Download className="w-4 h-4 mr-2" /> CSV
+          <Button variant="outline" disabled={rows.length === 0} onClick={exportCsv}
+            title={csvPartial ? `Exporta as ${rows.length} ocorrências carregadas de ${total}. Carrega mais ou refina os filtros para levar o resto.` : "Exporta as ocorrências da lista"}>
+            <Download className="w-4 h-4 mr-2" /> CSV{rows.length > 0 ? ` (${rows.length}${csvPartial ? ` de ${total}` : ""})` : ""}
           </Button>
         </div>
 
+        {q.isError && (
+          <QueryErrorNote error={q.error} what="as ocorrências" onRetry={() => q.refetch()} retrying={q.isFetching} />
+        )}
+
         {data && !data.available && (
           <Card className="p-4 border-amber-300 bg-amber-50 text-amber-900">
-            <div className="flex items-start gap-2 text-sm">
+            <div className="flex items-start gap-2 text-sm flex-wrap">
               <Info className="w-4 h-4 mt-0.5 shrink-0" />
-              <span><span className="font-medium">Ocorrências indisponíveis de momento.</span> {data.reason}</span>
+              <span className="min-w-0 flex-1"><span className="font-medium">Ocorrências indisponíveis de momento.</span> {data.reason}</span>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={q.isFetching} onClick={() => q.refetch()}>
+                <RefreshCw className={`w-3 h-3 mr-1 ${q.isFetching ? "animate-spin" : ""}`} /> Tentar de novo
+              </Button>
             </div>
           </Card>
+        )}
+
+        {data?.available && !stats && (
+          <div role="alert" className="flex items-start gap-2 flex-wrap rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span className="min-w-0 flex-1">As contagens (total, abertas, por tipo e por parque) não responderam. A lista abaixo está certa.</span>
+            <Button size="sm" variant="outline" className="h-6 px-2 text-xs" disabled={q.isFetching} onClick={() => q.refetch()}>
+              <RefreshCw className={`w-3 h-3 mr-1 ${q.isFetching ? "animate-spin" : ""}`} /> Tentar de novo
+            </Button>
+          </div>
         )}
 
         {stats && (
@@ -213,6 +243,8 @@ export default function IncidentsPage() {
             <Input type="date" className="w-36" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
           {type !== "all" && <Button size="sm" variant="ghost" onClick={() => setType("all")}>Tipo: {type} ✕</Button>}
+          {/* Sem contagens não há lista de parques: o filtro escolhido continua visível para se poder tirar. */}
+          {park !== "all" && !(stats && stats.byPark.length > 0) && <Button size="sm" variant="ghost" onClick={() => setPark("all")}>Parque filtrado ✕</Button>}
         </div>
 
         {q.isLoading ? (
@@ -237,6 +269,7 @@ export default function IncidentsPage() {
       </div>
 
       {detailId && <OccurrenceDialog id={detailId} projectId={globalFilters.projectId} onClose={() => setDetailId(null)} />}
+      {legacyId != null && <LegacyIncidentDialog id={legacyId} onClose={() => setLegacyId(null)} />}
     </>
   );
 }
@@ -297,7 +330,7 @@ function OccurrenceCard({ occ, onOpen }: { occ: MpOccurrence; onOpen: () => void
 }
 
 function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: number; onClose: () => void }) {
-  const { data, isLoading } = trpc.incidents.multiparkById.useQuery(projectId !== undefined ? { id, projectId } : { id }, { retry: false });
+  const { data, isLoading, error, refetch, isFetching } = trpc.incidents.multiparkById.useQuery(projectId !== undefined ? { id, projectId } : { id }, { retry: false });
   const occ: MpOccurrence | null = data?.available ? (data.occurrence as MpOccurrence | null) : null;
   return (
     <Dialog open onOpenChange={onClose}>
@@ -311,8 +344,15 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
         </DialogHeader>
         {isLoading ? (
           <p className="text-sm text-muted-foreground">A ler da BD da Multipark…</p>
+        ) : error ? (
+          <QueryErrorNote error={error} what="esta ocorrência" onRetry={() => refetch()} retrying={isFetching} />
         ) : data && !data.available ? (
-          <p className="text-sm text-amber-800">{data.reason}</p>
+          <div className="flex items-start gap-2 flex-wrap text-sm text-amber-800">
+            <span className="min-w-0 flex-1">{data.reason}</span>
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={isFetching} onClick={() => refetch()}>
+              <RefreshCw className={`w-3 h-3 mr-1 ${isFetching ? "animate-spin" : ""}`} /> Tentar de novo
+            </Button>
+          </div>
         ) : !occ ? (
           <p className="text-sm text-muted-foreground">Ocorrência não encontrada (ou fora da tua cidade).</p>
         ) : (
@@ -350,6 +390,63 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
             <Button size="sm" variant="outline" onClick={() => openInMultipark(occ.bookingId)}><ExternalLink className="w-4 h-4 mr-1" /> Ver reserva na Multipark</Button>
           )}
           {occ && !occ.resolved && <ResolveButton />}
+          <Button size="sm" onClick={onClose}>Fechar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const LEGACY_TYPE: Record<string, string> = {
+  vidro_aberto: "Vidro aberto", mal_estacionado: "Mal estacionado", dano: "Dano", chave_errada: "Chave errada",
+  combustivel: "Combustível", limpeza: "Limpeza", documentos: "Documentos", outro: "Outro",
+};
+const LEGACY_STATUS: Record<string, string> = {
+  open: "Aberta", investigating: "Em investigação", resolved: "Resolvida", dismissed: "Descartada", converted: "Convertida",
+};
+const LEGACY_SEVERITY: Record<string, string> = { low: "Baixa", medium: "Média", high: "Alta", critical: "Crítica" };
+
+/**
+ * Ocorrência antiga do dashboard (tabela `incidents`, antes da ligação à app
+ * Multipark). Só leitura: não conta nos números desta página e não se altera
+ * aqui. Os dados ficam guardados (nada é apagado).
+ */
+function LegacyIncidentDialog({ id, onClose }: { id: number; onClose: () => void }) {
+  const { data: inc, isLoading, error, refetch, isFetching } = trpc.incidents.getById.useQuery({ id }, { retry: false });
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 flex-wrap">
+            <Archive className="w-4 h-4 shrink-0" /> Ocorrência antiga #{id}
+            {inc && <Badge variant="secondary">{LEGACY_STATUS[inc.status] ?? inc.status}</Badge>}
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-xs text-muted-foreground">Registada no dashboard antes da ligação à app Multipark. Só leitura: não entra nos números desta página.</p>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">A carregar…</p>
+        ) : error ? (
+          <QueryErrorNote error={error} what="esta ocorrência antiga" onRetry={() => refetch()} retrying={isFetching} />
+        ) : inc ? (
+          <div className="space-y-3">
+            <div className="max-h-[30vh] overflow-y-auto rounded bg-muted p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{inc.description || "(sem descrição)"}</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground">
+              <div>Tipo: <span className="font-medium text-foreground">{LEGACY_TYPE[inc.incidentType] ?? inc.incidentType}</span></div>
+              <div>Gravidade: <span className="font-medium text-foreground">{LEGACY_SEVERITY[inc.severity] ?? inc.severity}</span></div>
+              <div>Criada: <span className="font-medium text-foreground">{fmtPTDateTime(inc.sourceEmailDate ?? inc.createdAt)}</span></div>
+              <div>Matrícula: <span className="font-medium text-foreground">{inc.vehiclePlate ?? "—"}</span></div>
+              {inc.resolvedAt && <div>Resolvida: <span className="font-medium text-foreground">{fmtPTDateTime(inc.resolvedAt)}</span></div>}
+              {inc.convertedToType && <div>Convertida em: <span className="font-medium text-foreground">{inc.convertedToType === "complaint" ? "reclamação" : "perdido"} #{inc.convertedToId}</span></div>}
+            </div>
+            {inc.resolution && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1">Notas / resolução</p>
+                <div className="max-h-[20vh] overflow-y-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{inc.resolution}</div>
+              </div>
+            )}
+          </div>
+        ) : null}
+        <DialogFooter>
           <Button size="sm" onClick={onClose}>Fechar</Button>
         </DialogFooter>
       </DialogContent>

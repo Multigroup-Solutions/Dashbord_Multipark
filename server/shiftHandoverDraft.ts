@@ -342,10 +342,10 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     WHERE status IN ('new', 'investigating', 'found') AND ${inCity(sql`lost_found_items.projectId`)}
     ORDER BY createdAt DESC LIMIT ${sql.raw(String(OPEN_LIST_LIMIT))}`)), [] as any[]);
 
-  const incidentRows = liveParts ? [] as any[] : await safe("incidents", async () => rowsOf(await db.execute(sql`
-    SELECT id, incidentType, severity, description, vehiclePlate FROM incidents
-    WHERE status IN ('open', 'investigating') AND ${inCity(sql`incidents.projectId`)}
-    ORDER BY createdAt DESC LIMIT ${sql.raw(String(OPEN_LIST_LIMIT))}`)), [] as any[]);
+  // Ocorrências só existem na Multipark: sem ela não há cópia a que recorrer
+  // (a tabela antiga `incidents` está parada e não é cópia das da app) → a
+  // parte fica "sem dados (falhou a leitura)", nunca os #ids antigos (16a).
+  if (!liveParts) failed.add("incidents");
 
   // PDAs ainda com check-in (pessoa da cidade)
   const pdaRows = await safe("pdas", async () => rowsOf(await db.execute(sql`
@@ -439,7 +439,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
   }));
   const openComplaints = complaints.filter((c) => ["new", "analyzing", "waiting_client"].includes(c.status));
   const lostFound = lostRows.map((r) => ({ id: Number(r.id), clientName: String(r.clientName ?? ""), description: String(r.description ?? ""), status: String(r.status) }));
-  const incidents: HandoverDraft["incidents"] = liveParts ? liveParts.incidents : incidentRows.map((r) => ({ id: Number(r.id), type: String(r.incidentType), severity: String(r.severity), description: String(r.description ?? ""), plate: r.vehiclePlate ?? null }));
+  const incidents: HandoverDraft["incidents"] = liveParts ? liveParts.incidents : [];
   const pdas = pdaRows.map((r) => ({ id: Number(r.id), pdaName: r.pdaName ?? null, employeeName: r.employeeName ?? null, since: tsHHMM(r.t) }));
   const pendingDeliveries = liveParts ? liveParts.pendingDeliveries : pending.map((r) => ({
     externalId: String(r.externalId), bookingNumber: r.bookingNumber ?? null, plate: r.licensePlate ?? null,
@@ -472,7 +472,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     pda: { ok: !failed.has("pdas"), truncated: pdaRows.length >= OPEN_LIST_LIMIT },
     incident: live.available
       ? { ok: true, truncated: live.data.occurrences.truncated }
-      : { ok: !failed.has("incidents"), truncated: incidentRows.length >= OPEN_LIST_LIMIT },
+      : { ok: false, truncated: false }, // sem Multipark não há ocorrências a ler (16a)
     delivery: live.available
       ? { ok: true, truncated: live.data.inPark.truncated }
       : { ok: !failed.has("pending deliveries"), truncated: pending.length >= OPEN_LIST_LIMIT },

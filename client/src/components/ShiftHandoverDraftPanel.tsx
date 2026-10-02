@@ -79,7 +79,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
           <p role="alert" className="text-[11px] text-red-700 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" aria-hidden />Há partes que não se conseguiram ler (marcadas com "erro"): os números delas não são 0. Os pendentes desses tipos ficam como estavam.</p>
         )}
         {draft.source && !draft.source.live && (
-          <p className="text-[11px] text-amber-700">Sem BD da Multipark ao vivo ({draft.source.reason ?? "indisponível"}) — reservas, entregas pendentes, coberto e ocorrências vêm das cópias do dashboard.</p>
+          <p className="text-[11px] text-amber-700">Sem BD da Multipark ao vivo ({draft.source.reason ?? "indisponível"}) — reservas, entregas pendentes e coberto vêm das cópias do dashboard; as ocorrências ficam sem dados (só existem na Multipark).</p>
         )}
         {draft.liveSummary && (
           <p className="text-[11px] text-muted-foreground">
