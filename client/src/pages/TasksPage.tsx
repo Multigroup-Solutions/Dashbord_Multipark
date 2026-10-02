@@ -22,10 +22,14 @@ import {
 import { toast } from "sonner";
 import {
   ListTodo, Plus, Clock, AlertTriangle, CheckCircle2, Circle,
-  ArrowUpCircle, Pencil, Trash2, CalendarDays, Users, LayoutGrid, List, GripVertical, Bell, Search,
+  ArrowUpCircle, Pencil, Archive, CalendarDays, Users, LayoutGrid, List, GripVertical, Bell, Search,
   ChevronLeft, ChevronRight, User, Play, MessageSquare, Link2, Repeat, Loader2, RotateCcw, Sparkles,
 } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { can } from "@shared/access";
+import { lisbonDayOf, utcMs } from "@shared/lisbonDay";
 import {
+  TASK_LIST_LIMIT,
   TASK_SOURCE_LABELS,
   TASK_STATUS_LABELS,
   COST_CENTRE_ALL_HINT,
@@ -124,6 +128,31 @@ function fmtDue(t: Task): string {
 
 const overdue = (t: Task) => isTaskOverdue({ dueDate: t.dueDate, dueHasTime: t.dueHasTime, status: t.status }, Date.now());
 
+/** Dia do prazo para o campo de data: com hora → o dia de Lisboa (antes: o dia UTC). */
+function dueDayForInput(t: Task): string {
+  if (!t.dueDate) return "";
+  if (!t.dueHasTime) return String(t.dueDate).slice(0, 10);
+  const ms = utcMs(t.dueDate as any);
+  return Number.isFinite(ms) ? lisbonDayOf(ms) : String(t.dueDate).slice(0, 10);
+}
+
+/** Contadores do que está no ecrã (a lista já filtrada) — antes vinham de outra consulta e não batiam certo. */
+function countTasks(list: Task[]) {
+  const s = { total: 0, backlog: 0, todo: 0, inProgress: 0, review: 0, done: 0, overdue: 0 };
+  for (const t of list) {
+    s.total++;
+    if (t.status === "backlog") s.backlog++;
+    else if (t.status === "todo") s.todo++;
+    else if (t.status === "in_progress") s.inProgress++;
+    else if (t.status === "review") s.review++;
+    else if (t.status === "done") s.done++;
+    if (overdue(t)) s.overdue++;
+  }
+  return s;
+}
+
+const ARCHIVE_CONFIRM = "Arquivar a tarefa? Sai das listas e do Google Tarefas (fica no histórico). Se for automática, não volta a ser criada.";
+
 function SourceChip({ t }: { t: Task }) {
   if (!t.sourceModule || t.sourceModule === "manual") return null;
   const label = TASK_SOURCE_LABELS[t.sourceModule as TaskSourceModule] ?? t.sourceModule;
@@ -143,11 +172,12 @@ export default function TasksPage() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const [showFromText, setShowFromText] = useState(false);
-  const canEdit = canEditTasks(user?.role);
+  // Com as exceções por pessoa (18a): antes só o papel contava.
+  const canEdit = !!user && canEditTasks(user as any);
   const isAdmin = !!user && ["super_admin", "admin"].includes(user.role);
-  const canTemplates = !!user && ["super_admin", "admin", "supervisor"].includes(user.role);
+  const canTemplates = !!user && can(user as any, "tarefas", "manage");
 
-  const [viewMode, setViewMode] = useState<ViewMode>(() => (canEditTasks((user as any)?.role) ? "kanban" : "mine"));
+  const [viewMode, setViewMode] = useState<ViewMode>(() => (user && canEditTasks(user as any) ? "kanban" : "mine"));
   // O utilizador pode chegar depois do 1.º render — extras ficam em "As minhas".
   useEffect(() => { if (user && !canEdit && viewMode !== "mine") setViewMode("mine"); }, [user, canEdit, viewMode]);
 
@@ -167,8 +197,10 @@ export default function TasksPage() {
     showOld: showOld || undefined,
     focusId: focusId ?? undefined,
   };
-  const { data: rawTasks = [], isLoading } = trpc.tasks.list.useQuery(listInput, { enabled: viewMode !== "templates" });
-  const { data: stats } = trpc.tasks.stats.useQuery({ projectId: listInput.projectId, mine: listInput.mine });
+  const listQ = trpc.tasks.list.useQuery(listInput, { enabled: viewMode !== "templates" });
+  const rawTasks = listQ.data ?? [];
+  const isLoading = listQ.isLoading;
+  const truncated = rawTasks.length >= TASK_LIST_LIMIT;
   const { data: projects = [] } = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
 
   // ?new=1 (atalho "Nova tarefa" da pesquisa global) abre logo o formulário.
@@ -177,16 +209,17 @@ export default function TasksPage() {
   const [form, setForm] = useState({
     title: "", description: "", projectId: "", assigneeIds: [] as number[], priority: "medium", dueDate: "",
   });
-  const { data: assignable = [] } = trpc.tasks.assignable.useQuery(
+  const assignableQ = trpc.tasks.assignable.useQuery(
     { projectId: form.projectId ? parseInt(form.projectId) : null },
     { enabled: canEdit && (showCreate || !!editTask) },
   );
+  const assignable = assignableQ.data ?? [];
 
   // Drag & Drop state
   const [draggedTaskId, setDraggedTaskId] = useState<number | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
-  const invalidate = () => { utils.tasks.list.invalidate(); utils.tasks.stats.invalidate(); utils.tasks.getById.invalidate(); };
+  const invalidate = () => { utils.tasks.list.invalidate(); utils.tasks.getById.invalidate(); };
   const createMut = trpc.tasks.create.useMutation({
     onSuccess: () => { invalidate(); setShowCreate(false); resetForm(); toast.success("Tarefa criada!"); },
     onError: (e) => toast.error(e.message),
@@ -195,8 +228,9 @@ export default function TasksPage() {
     onSuccess: () => { invalidate(); setEditTask(null); toast.success("Tarefa atualizada!"); },
     onError: (e) => toast.error(e.message),
   });
+  // "Eliminar" arquiva (18a): nada se apaga.
   const deleteMut = trpc.tasks.delete.useMutation({
-    onSuccess: () => { invalidate(); setDetailId(null); toast.success("Tarefa eliminada!"); },
+    onSuccess: () => { invalidate(); setDetailId(null); toast.success("Tarefa arquivada"); },
     onError: (e) => toast.error(e.message),
   });
   // Mudança de estado (arrastar / setas / Começar / Concluir): permitida aos
@@ -216,8 +250,9 @@ export default function TasksPage() {
   });
   const checkNotifMut = trpc.tasks.checkNotifications.useMutation({
     onSuccess: (data) => {
-      if (data.notified > 0) toast.success(`${data.notified} notificação(ões) enviada(s)`);
-      else toast.info("Nenhuma notificação pendente");
+      const silenced = data.silenced ? ` (${data.silenced} automática(s) em atraso sem aviso: o interruptor está desligado)` : "";
+      if (data.notified > 0) toast.success(`${data.notified} notificação(ões) enviada(s)${silenced}`);
+      else toast.info(`Nenhuma notificação pendente${silenced}`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -235,7 +270,7 @@ export default function TasksPage() {
       projectId: t.projectId?.toString() ?? "",
       assigneeIds: ids,
       priority: t.priority,
-      dueDate: t.dueDate ? String(t.dueDate).slice(0, 10) : "",
+      dueDate: dueDayForInput(t),
     });
   }
 
@@ -303,8 +338,8 @@ export default function TasksPage() {
     if (isNaN(taskId)) return;
     const task = allTasks.find(t => t.id === taskId);
     if (!task || task.status === colId) return;
-    statusMut.mutate({ id: taskId, status: colId });
-    toast.success(`Tarefa movida para ${TASK_STATUS_LABELS[colId]}`);
+    // A confirmação só depois de o servidor aceitar (antes aparecia logo).
+    statusMut.mutate({ id: taskId, status: colId }, { onSuccess: () => toast.success(`Tarefa movida para ${TASK_STATUS_LABELS[colId]}`) });
   }, [allTasks, statusMut]);
 
   // ─── MULTI-ASSIGNEE PICKER (filtrado pelo âmbito de cidade / projeto) ─────
@@ -315,8 +350,10 @@ export default function TasksPage() {
     return (
       <div>
         <Label className="mb-2 block">Responsáveis</Label>
+        {assignableQ.error && <div className="mb-2"><QueryErrorNote error={assignableQ.error} onRetry={() => assignableQ.refetch()} retrying={assignableQ.isFetching} what="as pessoas" /></div>}
         <div className="border rounded-lg max-h-40 overflow-y-auto p-2 space-y-1">
-          {list.length === 0 && <p className="text-xs text-muted-foreground text-center py-2">Nenhum funcionário no âmbito</p>}
+          {assignableQ.isLoading && <Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground" />}
+          {assignableQ.isSuccess && list.length === 0 && <p className="text-xs text-muted-foreground text-center py-2">Nenhum funcionário no âmbito</p>}
           {list.map((emp) => (
             <label key={emp.id} className="flex items-center gap-2 py-1 px-2 rounded hover:bg-muted/50 cursor-pointer">
               <Checkbox checked={form.assigneeIds.includes(emp.id)} onCheckedChange={() => toggleAssignee(emp.id)} />
@@ -362,8 +399,8 @@ export default function TasksPage() {
                 <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Editar tarefa" title="Editar" onClick={(e) => { e.stopPropagation(); openEdit(task); }}>
                   <Pencil className="h-3 w-3" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" aria-label="Eliminar tarefa" title="Eliminar" onClick={(e) => { e.stopPropagation(); if (confirm("Eliminar tarefa?")) deleteMut.mutate({ id: task.id }); }}>
-                  <Trash2 className="h-3 w-3" />
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" aria-label="Arquivar tarefa" title="Arquivar" onClick={(e) => { e.stopPropagation(); if (confirm(ARCHIVE_CONFIRM)) deleteMut.mutate({ id: task.id }); }}>
+                  <Archive className="h-3 w-3" />
                 </Button>
               </div>
             )}
@@ -456,6 +493,11 @@ export default function TasksPage() {
 
   const myOpen = filteredTasks.filter((t) => t.status !== "done");
   const myDone = filteredTasks.filter((t) => t.status === "done");
+  const stats = useMemo(() => countTasks(filteredTasks), [filteredTasks]);
+  /** Erro ≠ vazio (18a): a lista falhou → diz-se, com "Tentar de novo". */
+  const listError = listQ.error ? (
+    <QueryErrorNote error={listQ.error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="as tarefas" />
+  ) : null;
 
   return (
     <div className="space-y-6">
@@ -532,7 +574,7 @@ export default function TasksPage() {
           )}
           {canEdit && viewMode !== "templates" && (
             <Button variant="outline" onClick={() => setShowFromText(true)} title="Cola notas ou uma passagem de turno; a IA propõe tarefas e tu confirmas">
-              <Sparkles className="h-4 w-4 mr-2" /> Criar tarefas a partir de texto
+              <Sparkles className="h-4 w-4 mr-2" /> <span className="hidden sm:inline">Criar tarefas a partir de texto</span><span className="sm:hidden">A partir de texto</span>
             </Button>
           )}
           {canEdit && viewMode !== "templates" && (
@@ -547,10 +589,17 @@ export default function TasksPage() {
           projectId={filterProject !== "all" ? parseInt(filterProject) : null} onCreated={invalidate} />
       )}
 
-      {viewMode === "templates" && canTemplates && <TaskTemplatesPanel projects={projects as any[]} />}
+      {viewMode === "templates" && canTemplates && <TaskTemplatesPanel projects={projects as any[]} canGenerate={isAdmin} />}
 
-      {/* Stats */}
-      {stats && viewMode !== "templates" && (
+      {viewMode !== "templates" && listError}
+      {viewMode !== "templates" && truncated && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+          A mostrar as {TASK_LIST_LIMIT} tarefas mais recentes (e os contadores só destas). Escolhe um centro de custos para ver as outras.
+        </p>
+      )}
+
+      {/* Contadores (do que está no ecrã) */}
+      {listQ.isSuccess && viewMode !== "templates" && (
         <div className="grid grid-cols-3 md:grid-cols-7 gap-2">
           {[
             { label: "Total", value: stats.total, color: "text-slate-700" },
@@ -572,7 +621,7 @@ export default function TasksPage() {
       )}
 
       {/* As minhas tarefas */}
-      {viewMode === "mine" && (isLoading ? (
+      {viewMode === "mine" && !listQ.error && (isLoading ? (
         <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
       ) : (
         <div className="space-y-3 max-w-2xl">
@@ -590,7 +639,7 @@ export default function TasksPage() {
       ))}
 
       {/* Quadro */}
-      {viewMode === "kanban" && (isLoading ? (
+      {viewMode === "kanban" && !listQ.error && (isLoading ? (
         <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
@@ -619,10 +668,12 @@ export default function TasksPage() {
       ))}
 
       {/* Lista */}
-      {viewMode === "list" && (
+      {viewMode === "list" && !listQ.error && (
         <Card>
           <CardContent className="p-0">
-            {filteredTasks.length === 0 ? (
+            {isLoading ? (
+              <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
+            ) : filteredTasks.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <ListTodo className="h-12 w-12 text-muted-foreground/30 mb-4" />
                 <p className="text-muted-foreground font-medium">Sem tarefas</p>
@@ -668,8 +719,8 @@ export default function TasksPage() {
                         </TableCell>
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(task)}><Pencil className="h-3 w-3" /></Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Eliminar?")) deleteMut.mutate({ id: task.id }); }}><Trash2 className="h-3 w-3" /></Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Editar tarefa" title="Editar" onClick={() => openEdit(task)}><Pencil className="h-3 w-3" /></Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Arquivar tarefa" title="Arquivar" onClick={() => { if (confirm(ARCHIVE_CONFIRM)) deleteMut.mutate({ id: task.id }); }}><Archive className="h-3 w-3" /></Button>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -706,11 +757,11 @@ export default function TasksPage() {
                 <Label>Descrição</Label>
                 <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="min-w-0">
                   <Label>Centro de custos</Label>
                   <Select value={form.projectId} onValueChange={v => setForm(f => ({ ...f, projectId: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Opcional..." /></SelectTrigger>
+                    <SelectTrigger className="w-full min-w-0"><SelectValue placeholder="Escolhe…" /></SelectTrigger>
                     <SelectContent>
                       {sortProjectsHierarchical(projects as any[]).map((p: any) => (
                         <SelectItem key={p.id} value={p.id.toString()}>
@@ -726,14 +777,14 @@ export default function TasksPage() {
                 <div>
                   <Label>Prioridade</Label>
                   <Select value={form.priority} onValueChange={v => setForm(f => ({ ...f, priority: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {Object.entries(PRIORITY_LABELS).map(([k, l]) => <SelectItem key={k} value={k}>{l}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label>Data limite</Label>
                   <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} />
@@ -743,7 +794,7 @@ export default function TasksPage() {
                   <div>
                     <Label>Estado</Label>
                     <Select value={editTask?.status ?? "todo"} onValueChange={v => setEditTask(prev => prev ? { ...prev, status: v } : null)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                       <SelectContent>{COLUMNS.map(c => <SelectItem key={c.id} value={c.id}>{c.label}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
@@ -757,7 +808,8 @@ export default function TasksPage() {
                 <Button disabled={!form.title || updateMut.isPending} onClick={() => editTask && updateMut.mutate({
                   id: editTask.id,
                   title: form.title,
-                  description: form.description || undefined,
+                  // "" apaga a descrição (antes ia undefined e não se conseguia tirar).
+                  description: form.description,
                   projectId: form.projectId ? parseInt(form.projectId) : null,
                   assigneeIds: form.assigneeIds,
                   priority: form.priority as any,
@@ -807,7 +859,7 @@ function TaskDetailDialog({ id, onClose, canEdit, onEdit, onStatus, statusPendin
         {q.isLoading ? (
           <div className="py-10 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
         ) : q.error ? (
-          <p className="text-sm text-red-600 py-6">{q.error.message}</p>
+          <div className="py-6"><QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="a tarefa" /></div>
         ) : t ? (
           <>
             <DialogHeader><DialogTitle className="pr-6">{t.title}</DialogTitle></DialogHeader>
@@ -838,7 +890,9 @@ function TaskDetailDialog({ id, onClose, canEdit, onEdit, onStatus, statusPendin
 
               <div className="border-t pt-3 space-y-2">
                 <p className="font-medium flex items-center gap-1"><MessageSquare className="h-4 w-4" />Comentários</p>
-                {(comments.data ?? []).length === 0 && <p className="text-xs text-muted-foreground">Sem comentários.</p>}
+                {comments.error && <QueryErrorNote error={comments.error} onRetry={() => comments.refetch()} retrying={comments.isFetching} what="os comentários" />}
+                {comments.isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                {comments.isSuccess && comments.data.length === 0 && <p className="text-xs text-muted-foreground">Sem comentários.</p>}
                 {(comments.data ?? []).map((c: any) => (
                   <div key={c.id} className="rounded-md bg-muted/50 p-2">
                     <p className="text-[11px] text-muted-foreground">{c.userName ?? "—"} · {fmtPTDateTime(c.createdAt)}</p>

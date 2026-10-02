@@ -184,7 +184,11 @@ const isDuplicateEntry = (err: unknown): boolean => {
   return e?.code === "ER_DUP_ENTRY" || e?.cause?.code === "ER_DUP_ENTRY";
 };
 
-async function withAssignees(db: any, rows: Array<{ id: number; sourceKey: string | null; taskStatus: string; dueDate: string | null }>): Promise<ExistingServiceTask[]> {
+/**
+ * Arquivada (0376, "Eliminar" nas Tarefas) conta como fechada: o planeador
+ * não a recria, não a atualiza nem a volta a fechar.
+ */
+async function withAssignees(db: any, rows: Array<{ id: number; sourceKey: string | null; taskStatus: string; dueDate: string | null; archivedAt?: string | null }>): Promise<ExistingServiceTask[]> {
   if (!rows.length) return [];
   const { taskAssignees } = await import("../drizzle/schema");
   const { inArray } = await import("drizzle-orm");
@@ -196,7 +200,7 @@ async function withAssignees(db: any, rows: Array<{ id: number; sourceKey: strin
     const list = by.get(x.taskId)!;
     if (!list.includes(Number(x.employeeId))) list.push(Number(x.employeeId)); // responsável repetido (corrida no "assign") conta uma vez
   }
-  return rows.map((r) => ({ id: r.id, sourceKey: String(r.sourceKey ?? ""), taskStatus: r.taskStatus, dueDate: r.dueDate ? String(r.dueDate) : null, assigneeIds: by.get(r.id) ?? [] }));
+  return rows.map((r) => ({ id: r.id, sourceKey: String(r.sourceKey ?? ""), taskStatus: r.archivedAt ? "done" : r.taskStatus, dueDate: r.dueDate ? String(r.dueDate) : null, assigneeIds: by.get(r.id) ?? [] }));
 }
 
 export const defaultServiceTasksDeps: ServiceTasksDeps = {
@@ -224,14 +228,14 @@ export const defaultServiceTasksDeps: ServiceTasksDeps = {
     const db = await getDb();
     if (!db) throw new Error("BD indisponível");
     const { tasks } = await import("../drizzle/schema");
-    const { and, asc, eq, gt, ne } = await import("drizzle-orm");
+    const { and, asc, eq, gt, isNull, ne } = await import("drizzle-orm");
     // Por páginas de 1000, por id (antes: 1000 sem ordem — acima disso uma tarefa
     // podia ficar de fora e nunca fechar quando o serviço era retirado).
     const out: ExistingServiceTask[] = [];
     let after = 0;
     for (let page = 0; page < OPEN_TASKS_MAX_PAGES; page++) {
       const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate }).from(tasks)
-        .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), ne(tasks.taskStatus, "done"), gt(tasks.id, after)))
+        .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), ne(tasks.taskStatus, "done"), isNull(tasks.archivedAt), gt(tasks.id, after)))
         .orderBy(asc(tasks.id)).limit(OPEN_TASKS_PAGE);
       out.push(...await withAssignees(db, rows));
       if (rows.length < OPEN_TASKS_PAGE) break;
@@ -250,7 +254,7 @@ export const defaultServiceTasksDeps: ServiceTasksDeps = {
     const out: ExistingServiceTask[] = [];
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100);
-      const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate }).from(tasks)
+      const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate, archivedAt: tasks.archivedAt }).from(tasks)
         .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), or(...chunk.map((id) => like(tasks.sourceKey, serviceKeyPrefixLike(id))))));
       out.push(...await withAssignees(db, rows));
     }
@@ -265,7 +269,7 @@ export const defaultServiceTasksDeps: ServiceTasksDeps = {
     const { and, eq, inArray } = await import("drizzle-orm");
     const out: ExistingServiceTask[] = [];
     for (let i = 0; i < keys.length; i += 500) {
-      const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate }).from(tasks)
+      const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, taskStatus: tasks.taskStatus, dueDate: tasks.dueDate, archivedAt: tasks.archivedAt }).from(tasks)
         .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), inArray(tasks.sourceKey, keys.slice(i, i + 500))));
       out.push(...await withAssignees(db, rows));
     }
@@ -687,12 +691,12 @@ export async function sendServiceTasksTomorrowAlert(nowMs: number = Date.now()):
   const db = await getDb();
   if (!db) throw new Error("BD indisponível");
   const { tasks } = await import("../drizzle/schema");
-  const { and, eq, gte, lt, ne } = await import("drizzle-orm");
+  const { and, eq, gte, isNull, lt, ne } = await import("drizzle-orm");
   const { lisbonDayRangeUtc, lisbonDayOf, addDays: addDay } = await import("../shared/lisbonDay");
   const date = addDay(lisbonDayOf(nowMs), 1);
   const range = lisbonDayRangeUtc(date, date);
   const rows = await db.select({ id: tasks.id, title: tasks.title, dueDate: tasks.dueDate, projectId: tasks.projectId }).from(tasks)
-    .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), ne(tasks.taskStatus, "done"), gte(tasks.dueDate, range.start), lt(tasks.dueDate, range.end)))
+    .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), ne(tasks.taskStatus, "done"), isNull(tasks.archivedAt), gte(tasks.dueDate, range.start), lt(tasks.dueDate, range.end)))
     .limit(2000);
   const byProject = new Map<number | null, TomorrowServiceTask[]>();
   for (const r of rows) {
@@ -792,13 +796,13 @@ export async function serviceTasksInRange(startDate: string, endDate: string): P
   const db = await getDb();
   if (!db) return [];
   const { tasks } = await import("../drizzle/schema");
-  const { and, eq, gte, lt } = await import("drizzle-orm");
+  const { and, eq, gte, isNull, lt } = await import("drizzle-orm");
   const { SERVICE_TASK_TITLE_SEP } = await import("../shared/serviceTasks");
   const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
   const { projectScope } = await import("./cityScope");
   const range = lisbonDayRangeUtc(startDate, endDate);
   const rows = await db.select({ id: tasks.id, sourceKey: tasks.sourceKey, title: tasks.title, taskStatus: tasks.taskStatus }).from(tasks)
-    .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), gte(tasks.dueDate, range.start), lt(tasks.dueDate, range.end), projectScope(tasks.projectId)))
+    .where(and(eq(tasks.sourceModule, SERVICE_TASK_SOURCE), isNull(tasks.archivedAt), gte(tasks.dueDate, range.start), lt(tasks.dueDate, range.end), projectScope(tasks.projectId)))
     .limit(5000);
   const out: Array<{ taskId: number; bookingId: string; lineId: string; serviceName: string; status: string }> = [];
   for (const r of rows) {

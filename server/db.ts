@@ -1751,21 +1751,6 @@ export async function projectFilterConds(column: any, projectId: number | undefi
   return conds;
 }
 
-export async function getTasks(filters?: {
-  projectId?: number;
-  assigneeId?: number;
-  status?: string;
-}) {
-  const db = await getDb();
-  if (!db) return [];
-  const conds: any[] = await projectFilterConds(tasks.projectId, filters?.projectId, { allowNull: true });
-  if (filters?.assigneeId) conds.push(eq(tasks.assigneeId, filters.assigneeId));
-  if (filters?.status) conds.push(eq(tasks.taskStatus, filters.status as any));
-  return db.select().from(tasks)
-    .where(conds.length ? and(...conds) : undefined)
-    .orderBy(desc(tasks.updatedAt));
-}
-
 export async function getTaskById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
@@ -1784,73 +1769,6 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(tasks).set(data).where(eq(tasks.id, id));
-}
-
-export async function deleteTask(id: number) {
-  // Apaga também os responsáveis e os comentários (antes ficavam órfãos).
-  const { deleteTaskCascade } = await import("./tasksService");
-  await deleteTaskCascade(id);
-}
-
-/**
- * Devolve tasks com a lista de assignees (employees) e nome do projeto
- * em uma só query — evita N+1 no frontend.
- */
-export async function getTasksWithAssignees(filters?: {
-  projectId?: number;
-  assigneeId?: number;
-  status?: string;
-}): Promise<Array<any & { assignees: Array<{ id: number; fullName: string }>; projectName: string | null }>> {
-  const db = await getDb();
-  if (!db) return [];
-  const conds: any[] = await projectFilterConds(tasks.projectId, filters?.projectId, { allowNull: true });
-  if (filters?.status) conds.push(eq(tasks.taskStatus, filters.status as any));
-
-  const taskRows = await db
-    .select({ task: tasks, projectName: projects.name })
-    .from(tasks)
-    .leftJoin(projects, eq(projects.id, tasks.projectId))
-    .where(conds.length ? and(...conds) : undefined)
-    .orderBy(desc(tasks.updatedAt));
-
-  if (taskRows.length === 0) return [];
-  const taskIds = taskRows.map(r => r.task.id);
-
-  const assigneeRows = await db
-    .select({
-      taskId: taskAssignees.taskId,
-      employeeId: taskAssignees.employeeId,
-      fullName: employees.fullName,
-    })
-    .from(taskAssignees)
-    .innerJoin(employees, eq(employees.id, taskAssignees.employeeId))
-    .where(inArray(taskAssignees.taskId, taskIds));
-
-  const assigneesByTask = new Map<number, Array<{ id: number; fullName: string }>>();
-  for (const r of assigneeRows) {
-    if (!assigneesByTask.has(r.taskId)) assigneesByTask.set(r.taskId, []);
-    assigneesByTask.get(r.taskId)!.push({ id: r.employeeId, fullName: r.fullName });
-  }
-
-  let result = taskRows.map(r => ({
-    ...r.task,
-    projectName: r.projectName,
-    assignees: assigneesByTask.get(r.task.id) ?? [],
-  }));
-
-  // assigneeId filter — apply after join because pode estar em assignees
-  if (filters?.assigneeId) {
-    const want = filters.assigneeId;
-    result = result.filter(t => t.assigneeId === want || t.assignees.some(a => a.id === want));
-  }
-
-  return result;
-}
-
-export async function getTaskStats() {
-  // COUNT/GROUP BY em SQL (antes carregava a tabela inteira para memória).
-  const { taskStats } = await import("./tasksService");
-  return taskStats();
 }
 
 // ─── OPERACIONAL: VEHICLES ──────────────────────────────────────────────────
@@ -4886,33 +4804,6 @@ export async function setTaskAssignees(taskId: number, employeeIds: number[]) {
   }
 }
 
-export async function getOverdueTasks() {
-  const db = await getDb();
-  if (!db) return [];
-  const now = new Date();
-  return db.select().from(tasks)
-    .where(and(
-      lte(tasks.dueDate, toMysqlDateTime(now)),
-      eq(tasks.notifiedOverdue, 0),
-      sql`${tasks.taskStatus} != 'done'`
-    ));
-}
-
-export async function getRecentlyCompletedTasks() {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(tasks)
-    .where(and(
-      eq(tasks.taskStatus, "done"),
-      eq(tasks.notifiedComplete, 0)
-    ));
-}
-
-export async function markTaskNotified(taskId: number, field: "notifiedOverdue" | "notifiedComplete") {
-  const db = await getDb();
-  if (!db) return;
-  await db.update(tasks).set({ [field]: 1 }).where(eq(tasks.id, taskId));
-}
 
 // Get project hierarchy chain (project → city → brand → group) with managers
 export async function getProjectHierarchyManagers(projectId: number) {
