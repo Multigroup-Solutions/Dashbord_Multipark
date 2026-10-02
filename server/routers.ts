@@ -5302,6 +5302,45 @@ export const appRouter = router({
         const { conversationIdentity } = await import("./whatsappInboxOps");
         return conversationIdentity(input.conversationId);
       }),
+      /**
+       * "WhatsApp" / "Ligar pelo WhatsApp" nas fichas (17f parte 3): a conversa
+       * deste número. Não existe → cria-a (só com edição do WhatsApp) SEM enviar
+       * nada. Com a ficha do colaborador, liga-o à conversa se o número for o dele.
+       */
+      openByPhone: protectedProcedure
+        .input(z.object({ phone: z.string().min(6).max(40), employeeId: z.number().int().positive().nullish() }))
+        .mutation(async ({ ctx, input }) => {
+          requireAccess(ctx.user, "whatsapp", "view");
+          const { normalizePhoneE164 } = await import("../shared/phone");
+          const phoneE164 = normalizePhoneE164(input.phone);
+          if (!phoneE164) throw new TRPCError({ code: "BAD_REQUEST", message: "Número de telefone inválido para o WhatsApp." });
+          const { conversationIdForPhone, openConversationForPhone } = await import("./whatsappInboxOps");
+          const existing = await conversationIdForPhone(phoneE164);
+          const canEdit = can(ctx.user as any, "whatsapp", "edit");
+          if (existing == null && !canEdit) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Ainda não há conversa de WhatsApp com este número." });
+          }
+          let employeeId: number | null = null;
+          if (input.employeeId && canEdit) {
+            const { getEmployeeById } = await import("./db");
+            const emp: any = await getEmployeeById(input.employeeId);
+            const own = [emp?.phone, emp?.personalPhone].map((p) => (p ? normalizePhoneE164(String(p)) : null));
+            if (own.includes(phoneE164)) employeeId = input.employeeId;
+          }
+          // Só ver: abre a que existe, sem escrever nada.
+          const r = canEdit ? await openConversationForPhone(phoneE164, employeeId) : { conversationId: existing as number, created: false };
+          const { conversationVisible } = await import("./whatsappInbox");
+          if (!(await conversationVisible(r.conversationId, ctx.user))) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "A conversa deste número é de uma cidade ou caixa que não vês." });
+          }
+          if (r.created) {
+            await logActivity({
+              userId: ctx.user.id, action: "whatsapp_conversation_open", entity: "whatsapp_conversation", entityId: r.conversationId,
+              details: `Conversa de WhatsApp criada a partir de uma ficha${employeeId ? ` (colaborador ${employeeId})` : ""} — sem mensagens enviadas`,
+            });
+          }
+          return r;
+        }),
       /** Caixas por tema que esta pessoa vê (filtro e "Mover para…"). */
       boxes: protectedProcedure.query(async ({ ctx }) => {
         requireAccess(ctx.user, "whatsapp", "view");

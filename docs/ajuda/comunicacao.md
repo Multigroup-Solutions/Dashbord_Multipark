@@ -2,7 +2,7 @@
 modulo: comunicacao
 titulo: Comunicação (email)
 rotas: /comunicacao, /comunicacao/meu-email
-palavras: email, emails, gmail, lista única, whatsapp na comunicação, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
+palavras: ligar, telefonar, enviar email, enviar whatsapp, ficha do cliente, ficha da reserva, ficha do colaborador, email, emails, gmail, lista única, whatsapp na comunicação, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
 ---
 # Comunicação (email)
 
@@ -30,6 +30,12 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 - Os emails novos que chegam ao **info@** (caixa geral) vão para a caixa do tema pela **IA** — com **"IA: separar os emails pelas caixas"** ligado em Definições → Automações (desligado por omissão). A conversa mostra **"veio de Info (IA)"**. A IA não cria reclamações nem perdidos sozinha — só move.
 - **Mover para…** (na conversa) muda a caixa à mão; depois disso a IA não volta a mexer. Quem não vê a caixa nova deixa de ver a conversa.
 - Responder numa caixa por tema sai pelo endereço por onde o cliente escreveu (ex.: info@). Mensagens novas escrevem-se nas caixas com endereço.
+
+**Ligar, WhatsApp e email a partir das fichas** (ficha do cliente, da reserva e do colaborador)
+- **WhatsApp** abre a conversa desse número. Se ainda não houver, cria-a **sem enviar nada**: escreves no ecrã do WhatsApp (com um template, porque a janela de 24 h ainda não abriu). Criar uma conversa nova precisa de poder responder no WhatsApp; quem só vê abre as que já existem.
+- **Ligar**: pelo telemóvel (abre o marcador) e, com as chamadas pelo WhatsApp ligadas, também **pelo WhatsApp** (abre a conversa e a chamada).
+- **Email** abre **Nova mensagem** aqui na Comunicação já com o destinatário (cliente e reserva: a caixa Reservas; colaborador: a caixa RH; se não puderes escrever nela, a primeira onde podes). Quem não tem a Comunicação usa o programa de email do aparelho.
+- Com vários telefones ou emails na ficha, o botão mostra a lista para escolheres.
 
 **Ligações**
 - Cada email fica ligado automaticamente ao cliente, à reserva, à reclamação ou ao perdido (com a confiança da ligação). A ligação a uma reclamação aberta usa o email ou a matrícula — **o nome sozinho nunca liga**. Em **Ligações** podes ligar ou desligar à mão.

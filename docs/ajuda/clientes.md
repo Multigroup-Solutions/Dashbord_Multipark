@@ -2,7 +2,7 @@
 modulo: clientes
 titulo: Clientes (CRM: fichas, filtros, juntar e separar)
 rotas: /clientes, /clientes/rever
-palavras: consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
+palavras: telefonar ao cliente, escrever email ao cliente, consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
 ---
 # Clientes (CRM)
 
@@ -27,6 +27,7 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 6. Separador **Pro**: clientes Pro e empresas.
 
 **Ficha**
+- No cabeçalho, **Ligar**, **WhatsApp** e **Email** (o telefone e o email principais primeiro; com vários, escolhes qual). Ver "Ligar, WhatsApp e email a partir das fichas" na ajuda da Comunicação.
 - Emails, telefones (com WhatsApp), NIF e faturação, ligações (**trabalha em** uma empresa, **familiar**), origem, zona, língua, sexo e faixa etária, etiquetas e o que aceita receber (email, WhatsApp, SMS).
 - Sem foto do cliente, aparece a **foto do carro**. Carrega na câmara para pôr uma foto.
 - Indicadores: reservas, gasto total, **gasto por mês** (média dos últimos 12 meses), por estadia, última vinda, **parques usados**, reclamações e mensagens. Os valores em euros só aparecem a quem vê totais financeiros.

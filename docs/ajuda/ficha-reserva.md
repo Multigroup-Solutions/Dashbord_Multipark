@@ -2,7 +2,7 @@
 modulo: reservas_operacoes
 titulo: Ficha da reserva
 rotas: /reserva
-palavras: ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto, canal, agência, agregador, parque nosso, conferência, era, é, webhook, preço mudou, correção de caixa
+palavras: telefonar ao cliente, escrever email ao cliente, ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto, canal, agência, agregador, parque nosso, conferência, era, é, webhook, preço mudou, correção de caixa
 ---
 # Ficha da reserva
 
@@ -16,7 +16,7 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 
 **O que mostra**
 - **Cabeçalho**: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, o **canal** para a contabilidade (**Direto**, **Parceiro · nome do parceiro** com o tipo — agência, agregador ou parceiro — ou **Marketplace**) e a origem (com a comissão do parceiro), a classificação do parque (**Parque nosso · marca + cidade** ou **Parque Marketplace**, e o tipo de listagem), preço (e o preço na criação, se mudou), valor pago e método. Por baixo, a hora de cada fase: a entrar, em movimento, à espera de saída, à espera da bagagem, a sair.
-- **Cliente**: nome, email, telefone, NIF e língua. Se o email existir nos nossos Clientes aparece **Ver ficha do cliente (CRM)**.
+- **Cliente**: nome, email, telefone, NIF e língua, com **Ligar**, **WhatsApp** e **Email** (o email abre na caixa Reservas, se puderes escrever nela). Num cliente anonimizado não aparecem. Se o email existir nos nossos Clientes aparece **Ver ficha do cliente (CRM)**.
 - **Viatura**: matrícula, marca, modelo, cor, km, autonomia e quem fez a entrada e a saída.
 - **Provas**: vídeo do check-in, assinaturas de entrada e saída e anexos. Os vídeos e anexos com link abrem diretamente. Os que estão guardados dentro da app mostram **abrir na app Multipark**. As assinaturas só são carregadas quando carregas em **Mostrar assinaturas**.
 - **Linha do tempo** (abre ao clicar): cada ação sobre a reserva, com quem, quando, em que aparelho, o que mudou (**antes → depois**) e o estado nesse momento. Quando a ação tem GPS aparece o link **mapa**. O percurso real dos condutores está nos dados do Zello. O histórico da Multipark só existe desde 2 mar 2026.

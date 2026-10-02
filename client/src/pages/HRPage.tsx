@@ -65,6 +65,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, Image, FolderOpen, Plus, Pencil, Save, X,
   Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3
 } from "lucide-react";
+import { ContactActions } from "@/components/ContactActions";
 import RhDashboardPage from "./RhDashboardPage";
 import UsersPage from "./UsersPage";
 
@@ -1398,6 +1399,10 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           </span>
         )}
         <div className="flex-1" />
+        {/* 17f: ligar, WhatsApp e email ao colaborador (a conversa fica ligada à ficha). */}
+        {!editing && (
+          <ContactActions phones={[emp.phone, emp.personalPhone]} emails={[emp.email, emp.personalEmail]} employeeId={emp.id} mailbox="rh" />
+        )}
         {!editing && access.canEditContract && (
           <Button
             variant={emp.isActive ? "outline" : "default"}

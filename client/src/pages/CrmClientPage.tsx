@@ -29,6 +29,7 @@ import {
 } from "@/components/crm/crmUi";
 import { EditClientDialog, IbanDialog, MergeDialog, RelationDialog, VehicleDialog, type VehicleForm } from "@/components/crm/CrmClientDialogs";
 import { FindEmailButton } from "@/components/crm/FindEmail";
+import { ContactActions } from "@/components/ContactActions";
 import { ProAccountSection } from "@/components/crm/ProAccountSection";
 import { isCrmFile, type CrmBooking, type CrmFile } from "@/components/crm/crmTypes";
 
@@ -160,6 +161,11 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
         {c.kind === "company" && <Pill className="bg-muted text-foreground">Empresa</Pill>}
         {m.firstVisit && <Pill className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Cliente desde {monthYear(m.firstVisit)}</Pill>}
         <div className="flex-1" />
+        {/* 17f: ligar, WhatsApp e email daqui (o principal primeiro). */}
+        <ContactActions
+          phones={[...c.phones].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((p) => p.phone)}
+          emails={[...c.emails].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((e) => e.email)}
+        />
         {latest && (
           <Button variant="outline" asChild>
             <a href={latest.multiparkUrl} target="_blank" rel="noreferrer">Abrir na Multipark<ExternalLink className="h-3.5 w-3.5" /></a>

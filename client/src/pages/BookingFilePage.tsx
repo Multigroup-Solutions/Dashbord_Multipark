@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ContactActions } from "@/components/ContactActions";
 import {
   AlertTriangle, Car, ChevronDown, ChevronRight, Clock, CreditCard, ExternalLink, FileSearch, FileText, Info, Lock,
   MapPin, MessageSquare, PenLine, Search, Sparkles, Star, User, Video,
@@ -308,6 +309,10 @@ function ClientVehicle({ data, scope }: { data: MainFound; scope: { projectId?: 
           <Field label="Telefone">{b.client.phone ?? "—"}</Field>
           <Field label="NIF">{b.client.nif ?? "—"}</Field>
           <Field label="Nome fiscal">{b.client.taxName ?? "—"}</Field>
+          {/* 17f: ligar, WhatsApp e email ao cliente daqui (anonimizado: não). */}
+          {!b.client.anonymized && (
+            <ContactActions className="col-span-2" phones={[b.client.phone]} emails={[b.client.email]} mailbox="reservas" />
+          )}
           {cases.data?.crmEmail && (
             <div className="col-span-2">
               <Link href={`/clientes?email=${encodeURIComponent(cases.data.crmEmail)}`} className="inline-flex items-center gap-1 text-xs text-primary underline">

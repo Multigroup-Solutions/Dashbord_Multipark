@@ -1,7 +1,7 @@
 // Comunicação (/comunicacao) — caixas de email partilhadas da empresa; e
 // "O meu email" (/comunicacao/meu-email) — a caixa pessoal @multipark de
 // cada pessoa (só o próprio; o super_admin pode consultar as dos outros).
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Card } from "@/components/ui/card";
@@ -60,6 +60,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const [q, setQ] = useState(() => (params.get("q") ?? "").slice(0, 120));
   const [page, setPage] = useState(1);
   const [composeNew, setComposeNew] = useState(false);
+  const [composeTo, setComposeTo] = useState("");
 
   // Primeira caixa visível por omissão.
   useEffect(() => {
@@ -73,6 +74,23 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     const w = Number(params.get("w")) || null; if (w && !personal) { setSelectedWa(w); setSelected(null); }
     const c = params.get("caixa"); if (c && !personal) setMailbox(c);
   }, [params, personal]);
+
+  // "Email" nas fichas (17f parte 3): ?novo=<email>[&caixa=] abre "Nova mensagem" já com o
+  // destinatário, na caixa sugerida se a pessoa puder escrever nela (senão na atual ou na primeira).
+  const novoHandled = useRef<string | null>(null);
+  useEffect(() => {
+    const to = params.get("novo");
+    if (personal || !to || !overview.data || novoHandled.current === to) return;
+    novoHandled.current = to;
+    const want = params.get("caixa");
+    const box = boxes.find((b) => b.key === want && b.canCompose) ?? boxes.find((b) => b.key === mailbox && b.canCompose) ?? boxes.find((b) => b.canCompose);
+    const p = new URLSearchParams(search);
+    p.delete("novo");
+    if (!box) toast.error("Não tens nenhuma caixa de onde possas escrever um email.");
+    else { setMailbox(box.key); p.set("caixa", box.key); setComposeTo(to.slice(0, 320)); setComposeNew(true); }
+    navigate(`${location.split("?")[0]}${p.toString() ? `?${p}` : ""}`, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params, personal, overview.data]);
 
   const google = overview.data?.google;
   const personalReady = !!google?.connected;
@@ -153,7 +171,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
             {syncMine.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}Atualizar
           </Button>
         )}
-        {canCompose && <Button size="sm" onClick={() => setComposeNew(true)}><PenSquare className="h-4 w-4 mr-1" />Nova mensagem</Button>}
+        {canCompose && <Button size="sm" onClick={() => { setComposeTo(""); setComposeNew(true); }}><PenSquare className="h-4 w-4 mr-1" />Nova mensagem</Button>}
       </div>
     </div>
   );
@@ -357,12 +375,13 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
         </div>
       </Card>
 
-      <Dialog open={composeNew} onOpenChange={setComposeNew}>
+      <Dialog open={composeNew} onOpenChange={(o) => { setComposeNew(o); if (!o) setComposeTo(""); }}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader><DialogTitle>Nova mensagem{current && !personal ? ` — ${current.label}` : ""}</DialogTitle></DialogHeader>
           {composeNew && (
             <MailComposer
               mode="new"
+              prefillTo={composeTo}
               mailbox={personal ? "me" : mailbox}
               defaults={{
                 fromOptions: personal ? (google?.email ? [google.email] : []) : (current?.addresses.map((a) => a.address) ?? []),
@@ -370,8 +389,8 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
                 replyTo: [], replyAllCc: [], subject: "",
                 signature: personal ? "" : (current?.addresses[0] ? (current.signatures as Record<string, string>)[current.addresses[0].brand] ?? "" : ""),
               }}
-              onCancel={() => setComposeNew(false)}
-              onSent={(r) => { setComposeNew(false); refresh(); if (r.threadId) open(r.threadId); }}
+              onCancel={() => { setComposeNew(false); setComposeTo(""); }}
+              onSent={(r) => { setComposeNew(false); setComposeTo(""); refresh(); if (r.threadId) open(r.threadId); }}
             />
           )}
         </DialogContent>
