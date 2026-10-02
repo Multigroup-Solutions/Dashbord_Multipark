@@ -17,7 +17,8 @@ import {
   whatsappMessages,
   whatsappQuickReplies,
 } from "../drizzle/schema";
-import { visibilitySql } from "./whatsappInbox";
+import { conversationVisibleTo, visibilitySql, type ConversationCityFacts } from "./whatsappInbox";
+import { ROLES, can } from "../shared/access";
 import { last9Digits } from "./whatsappInbound";
 import { messageDisplayBody, firstNameOf } from "../shared/whatsappTemplate";
 import { parseSlaMinutes, formatWaiting, type ConversationStatus } from "../shared/whatsappConversation";
@@ -31,8 +32,13 @@ export function slaMinutes(): number {
   return parseSlaMinutes(process.env.WHATSAPP_SLA_MINUTES);
 }
 
-/** Papéis a quem se pode atribuir uma conversa (os mesmos que recebem avisos do backoffice). */
-const ASSIGNABLE_ROLES = ["super_admin", "admin", "supervisor", "backoffice"] as const;
+/**
+ * Quem pode ser responsável (17a): os papéis que podem RESPONDER no WhatsApp
+ * (matriz: `whatsapp` editar) — os mesmos que ficam com a conversa ao
+ * responder (`claimIfUnassigned`). Antes TL e frontoffice ficavam com conversas
+ * mas não apareciam na lista. Overrides individuais não entram (a confirmar).
+ */
+export const ASSIGNABLE_ROLES = ROLES.filter((r) => can(r, "whatsapp", "edit"));
 
 // ─── Estado + atribuição ────────────────────────────────────────────────────
 
@@ -54,26 +60,68 @@ export async function setConversationStatus(conversationId: number, status: Conv
   return Number((res as { affectedRows?: number }).affectedRows ?? 0) > 0;
 }
 
-export async function listAssignees(): Promise<{ id: number; name: string }[]> {
+/** O que decide a cidade de UMA conversa (mesma regra de `conversationVisibleTo`). */
+async function conversationCityFacts(conversationId: number): Promise<ConversationCityFacts | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [c] = await db
+    .select({ employeeId: whatsappConversations.employeeId, employeeProjectId: employees.projectId, bookingProjectId: whatsappConversations.bookingProjectId, phoneE164: whatsappConversations.phoneE164 })
+    .from(whatsappConversations)
+    .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+    .where(eq(whatsappConversations.id, conversationId))
+    .limit(1);
+  if (!c) return null;
+  const [leadRows] = (await db.execute(sql`SELECT projectId FROM extra_leads WHERE phoneE164 = ${c.phoneE164} COLLATE utf8mb4_unicode_ci`)) as any;
+  return {
+    employeeId: c.employeeId,
+    employeeProjectId: c.employeeProjectId ?? null,
+    leadProjectIds: ((leadRows ?? []) as any[]).map((r) => (r.projectId == null ? null : Number(r.projectId))),
+    bookingProjectId: c.bookingProjectId ?? null,
+  };
+}
+
+/** Esta pessoa vê a conversa (cidades dela)? */
+async function userSeesConversation(u: { id: number; role: string | null }, facts: ConversationCityFacts): Promise<boolean> {
+  try {
+    const { loadCityAccess } = await import("./cityAccess");
+    const access = await loadCityAccess(u.id, u.role);
+    return conversationVisibleTo(facts, access.all ? undefined : access.projectIds);
+  } catch {
+    return false; // sem centro de custos resolvido: não se atribui
+  }
+}
+
+/**
+ * Responsáveis possíveis. Com `conversationId`: só quem vê ESSA conversa —
+ * senão recebia os avisos de SLA de uma conversa que não consegue abrir.
+ */
+export async function listAssignees(conversationId?: number | null): Promise<{ id: number; name: string }[]> {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
-    .select({ id: users.id, name: users.name, email: users.email })
+    .select({ id: users.id, name: users.name, email: users.email, role: users.role })
     .from(users)
     .where(
       sql`${users.role} IN (${sql.join(ASSIGNABLE_ROLES.map((r) => sql`${r}`), sql`, `)}) AND ${users.isActive} = 1`,
     );
-  return rows
+  let eligible = rows;
+  if (conversationId != null) {
+    const facts = await conversationCityFacts(conversationId);
+    if (!facts) return [];
+    const sees = await Promise.all(rows.map((r) => userSeesConversation(r, facts)));
+    eligible = rows.filter((_, i) => sees[i]);
+  }
+  return eligible
     .map((r) => ({ id: r.id, name: (r.name || r.email || `#${r.id}`).trim() }))
     .sort((a, b) => a.name.localeCompare(b.name, "pt"));
 }
 
-/** Atribui (ou tira, com null). Devolve false se o utilizador não for atribuível. */
+/** Atribui (ou tira, com null). Devolve false se a pessoa não puder responder nem vir esta conversa. */
 export async function assignConversation(conversationId: number, userId: number | null): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
   if (userId != null) {
-    const ok = (await listAssignees()).some((u) => u.id === userId);
+    const ok = (await listAssignees(conversationId)).some((u) => u.id === userId);
     if (!ok) return false;
   }
   await db.update(whatsappConversations).set({ assignedUserId: userId }).where(eq(whatsappConversations.id, conversationId));
@@ -237,11 +285,20 @@ export async function getConversationContext(conversationId: number) {
   if (!conv) return null;
   const { getClientHistory } = await import("./db");
   const hasPhone = !!last9Digits(conv.phoneE164);
+  // Multipark em baixo ≠ "sem reservas" (17a): o erro segue até ao ecrã.
+  let linkedBookingError: string | null = null;
   const [byPhone, byEmail, linked] = await Promise.all([
     hasPhone ? getClientHistory({ phone: conv.phoneE164 }) : Promise.resolve(null),
     conv.linkedClientEmail ? getClientHistory({ email: conv.linkedClientEmail }) : Promise.resolve(null),
-    conv.linkedBookingRef ? bookingInScope(conv.linkedBookingRef).catch(() => null) : Promise.resolve(null),
+    conv.linkedBookingRef
+      ? bookingInScope(conv.linkedBookingRef).catch((err: unknown) => {
+          console.warn("[WhatsApp] reserva ligada indisponível:", String((err as any)?.message ?? err).slice(0, 160));
+          linkedBookingError = "Reserva ligada indisponível (BD da Multipark sem resposta).";
+          return null;
+        })
+      : Promise.resolve(null),
   ]);
+  const bookingsError = byPhone?.bookingsError || byEmail?.bookingsError || null;
   const dedupe = <T extends { id: number | string }>(...lists: (T[] | undefined)[]): T[] => {
     const seen = new Set<number | string>();
     const out: T[] = [];
@@ -273,8 +330,12 @@ export async function getConversationContext(conversationId: number) {
   }));
   return {
     linkedBooking: linked ? toLinkable(linked) : null,
+    /** A reserva ligada existe mas não foi possível lê-la agora. */
+    linkedBookingError,
     linkedClientEmail: conv.linkedClientEmail,
     bookings,
+    /** Leitura das reservas falhou: a lista vazia NÃO quer dizer "sem reservas". */
+    bookingsError,
     complaints,
     lostFound,
   };
@@ -282,32 +343,43 @@ export async function getConversationContext(conversationId: number) {
 
 // ─── Respostas rápidas ──────────────────────────────────────────────────────
 
+/** Respostas rápidas em uso (as arquivadas ficam guardadas mas fora do menu). */
 export async function listQuickReplies() {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) throw new Error("Base de dados indisponível.");
   return db
     .select({ id: whatsappQuickReplies.id, title: whatsappQuickReplies.title, body: whatsappQuickReplies.body })
     .from(whatsappQuickReplies)
+    .where(sql`${whatsappQuickReplies.archivedAt} IS NULL`)
     .orderBy(whatsappQuickReplies.title);
 }
 
+/** Cria ou altera. Alterar uma que não existe (ou arquivada) devolve null — não finge que guardou. */
 export async function saveQuickReply(input: { id?: number | null; title: string; body: string }, userId: number): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
   const title = input.title.trim().slice(0, 80);
   const body = input.body.trim();
   if (input.id) {
-    await db.update(whatsappQuickReplies).set({ title, body }).where(eq(whatsappQuickReplies.id, input.id));
-    return input.id;
+    const [res] = (await db
+      .update(whatsappQuickReplies)
+      .set({ title, body })
+      .where(and(eq(whatsappQuickReplies.id, input.id), sql`${whatsappQuickReplies.archivedAt} IS NULL`))) as any;
+    return Number(res?.affectedRows ?? 0) > 0 ? input.id : null;
   }
   const res = await db.insert(whatsappQuickReplies).values({ title, body, createdById: userId });
   return Number((res as any)[0]?.insertId ?? 0) || null;
 }
 
-export async function deleteQuickReply(id: number): Promise<void> {
+/** "Apagar" arquiva (17a): sai do menu de todos, a linha fica. */
+export async function archiveQuickReply(id: number, userId: number): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
-  await db.delete(whatsappQuickReplies).where(eq(whatsappQuickReplies.id, id));
+  if (!db) return false;
+  const [res] = (await db
+    .update(whatsappQuickReplies)
+    .set({ archivedAt: nowStr(), archivedById: userId })
+    .where(and(eq(whatsappQuickReplies.id, id), sql`${whatsappQuickReplies.archivedAt} IS NULL`))) as any;
+  return Number(res?.affectedRows ?? 0) > 0;
 }
 
 // ─── IA: resumo e sugestão de resposta ──────────────────────────────────────

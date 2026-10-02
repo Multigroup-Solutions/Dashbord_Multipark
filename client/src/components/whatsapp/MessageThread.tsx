@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { Check, CheckCheck, ChevronDown, Clock, XCircle } from "lucide-react";
+import { AlertTriangle, Check, CheckCheck, ChevronDown, Clock, XCircle } from "lucide-react";
 import { messageDisplayBody } from "@shared/whatsappTemplate";
 import { isMediaPlaceholderBody } from "@shared/whatsappMedia";
 import { daySeparatorLabel, localDayKey } from "@shared/whatsappInboxView";
@@ -214,8 +214,10 @@ function StatusIcon({ status }: { status: string }) {
       return <CheckCheck className="h-3 w-3 text-sky-500" aria-label="Lido" />;
     case "failed":
       return <XCircle className="h-3 w-3 text-red-500" aria-label="Falhou" />;
+    case "unknown":
+      return <AlertTriangle className="h-3 w-3 text-amber-600" aria-label="Sem confirmação" />;
     default:
-      return <Clock className="h-3 w-3" aria-label="Pendente" />;
+      return <Clock className="h-3 w-3" aria-label="A enviar" />;
   }
 }
 
@@ -227,6 +229,8 @@ function MessageBubble({ m, groupStart }: { m: InboxMessage; groupStart: boolean
   // caption (quando existe) continua a aparecer por baixo.
   const showBody = !(m.mediaAvailable && isMediaPlaceholderBody(m.body));
   const failed = out && m.status === "failed";
+  // Sem resposta da Meta (17a): pode ter chegado — não se diz "falhou".
+  const inDoubt = out && m.status === "unknown";
   return (
     <div className={cn("flex flex-col", out ? "items-end" : "items-start", groupStart ? "mt-2" : "mt-0.5")}>
       <div
@@ -237,6 +241,7 @@ function MessageBubble({ m, groupStart }: { m: InboxMessage; groupStart: boolean
             : "bg-white text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100",
           groupStart && (out ? "rounded-tr-none" : "rounded-tl-none"),
           failed && "ring-1 ring-red-300 dark:ring-red-800",
+          inDoubt && "ring-1 ring-amber-300 dark:ring-amber-700",
         )}
       >
         {m.type === "template" && (
@@ -269,6 +274,11 @@ function MessageBubble({ m, groupStart }: { m: InboxMessage; groupStart: boolean
       {failed && m.errorDetail && (
         <div className="max-w-[88%] sm:max-w-[70%] mt-0.5 text-[11px] text-red-700 dark:text-red-300 text-right">{m.errorDetail}</div>
       )}
+      {inDoubt && (
+        <div className="max-w-[88%] sm:max-w-[70%] mt-0.5 text-[11px] text-amber-700 dark:text-amber-300 text-right">
+          Sem confirmação da Meta: pode ter chegado ao cliente. Confirma antes de enviar outra vez.
+        </div>
+      )}
     </div>
   );
 }
@@ -276,7 +286,7 @@ function MessageBubble({ m, groupStart }: { m: InboxMessage; groupStart: boolean
 // ─── Media recebida (imagem / áudio / vídeo / documento) ────────────────────
 // O ficheiro é privado: o URL assinado (10 min) é pedido só quando a bolha
 // aparece, e renovado antes de expirar.
-function InboundMedia({ m }: { m: Pick<InboxMessage, "id" | "mediaType" | "mediaAvailable" | "mediaMime" | "body"> }) {
+function InboundMedia({ m }: { m: Pick<InboxMessage, "id" | "mediaType" | "mediaAvailable" | "mediaMime" | "body" | "mediaState" | "errorDetail" | "direction"> }) {
   const signed = trpc.whatsapp.mediaUrl.useQuery(
     { messageId: m.id },
     { enabled: !!m.mediaType && m.mediaAvailable, staleTime: 8 * 60_000, refetchInterval: 8 * 60_000, retry: 1 },
@@ -287,7 +297,14 @@ function InboundMedia({ m }: { m: Pick<InboxMessage, "id" | "mediaType" | "media
   if (!m.mediaAvailable) {
     // Download falhou (token/rede/storage/tamanho) — dizemos porquê em vez de
     // mostrar uma bolha vazia; o cron horário re-tenta com o `mediaId`.
-    return <div className="text-[11px] italic opacity-80 mb-1">{label} recebido, mas ainda não foi possível descarregar.</div>;
+    const reason = m.direction === "in" && m.errorDetail ? `: ${m.errorDetail.replace(/\.$/, "").replace(/^\w/, (c) => c.toLowerCase())}` : "";
+    return (
+      <div className="text-[11px] italic opacity-80 mb-1">
+        {m.mediaState === "gave_up"
+          ? `${label} recebido, mas não foi possível guardá-lo${reason}. Pede ao contacto para o reenviar ou mandar por email (máx. 16 MB).`
+          : `${label} recebido, ainda a descarregar${reason} — volta a tentar sozinho.`}
+      </div>
+    );
   }
   const url = signed.data?.url;
   if (!url) {

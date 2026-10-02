@@ -693,6 +693,12 @@ async function dayAlreadyMarked(employeeId: number, day: string, shift: string |
  */
 export async function handleWhatsappReply(input: { employeeId: number; conversationId: number; body: string }): Promise<WhatsappReplyOutcome> {
   try {
+    // Com a automação desligada não se marca nem se responde sozinho (17a): a
+    // mensagem fica na caixa para uma pessoa. O webhook não passa pelo tRPC,
+    // por isso lê-se o interruptor fresco aqui.
+    const { ensureFeatureFlagOverrides } = await import("./_core/featureFlags");
+    await ensureFeatureFlagOverrides();
+    if (!isFeatureEnabled("EXTRAS_AUTOMATION")) return { action: "none" };
     const pending = await latestRequestFor(input.employeeId);
     if (!pending) return { action: "none" };
     const { classifyAvailabilityReply } = await import("./availabilityReply");

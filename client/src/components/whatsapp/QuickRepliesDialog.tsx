@@ -1,15 +1,21 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Pencil, Plus, Trash2, Zap } from "lucide-react";
+import { Archive, Pencil, Plus, Zap } from "lucide-react";
 
-/** Gestão das respostas rápidas (lista + criar/editar/apagar). */
+/** Gestão das respostas rápidas (lista + criar/editar; arquivar é de quem gere). */
 export function QuickRepliesDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const { user } = useAuth();
+  const canEdit = can(user as any, "whatsapp", "edit");
+  const canManage = can(user as any, "whatsapp", "manage");
   const utils = trpc.useUtils();
   const list = trpc.whatsapp.quickReplies.list.useQuery(undefined, { enabled: open });
   const [editId, setEditId] = useState<number | null>(null);
@@ -30,9 +36,9 @@ export function QuickRepliesDialog({ open, onOpenChange }: { open: boolean; onOp
     },
     onError: (e) => toast.error(e.message),
   });
-  const del = trpc.whatsapp.quickReplies.delete.useMutation({
+  const del = trpc.whatsapp.quickReplies.archive.useMutation({
     onSuccess: () => {
-      toast.success("Resposta rápida apagada.");
+      toast.success("Resposta rápida arquivada.");
       utils.whatsapp.quickReplies.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -52,6 +58,7 @@ export function QuickRepliesDialog({ open, onOpenChange }: { open: boolean; onOp
 
         <div className="space-y-2">
           {list.isLoading && <p className="text-sm text-muted-foreground">A carregar…</p>}
+          {list.error && <QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="as respostas rápidas" />}
           {list.data?.length === 0 && <p className="text-sm text-muted-foreground">Ainda não há respostas rápidas.</p>}
           {list.data?.map((r) => (
             <div key={r.id} className={`rounded-md border p-2 text-sm flex gap-2 ${editId === r.id ? "border-green-500" : ""}`}>
@@ -59,30 +66,35 @@ export function QuickRepliesDialog({ open, onOpenChange }: { open: boolean; onOp
                 <div className="font-medium truncate">{r.title}</div>
                 <div className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">{r.body}</div>
               </div>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-8 w-8 shrink-0"
-                aria-label={`Editar ${r.title}`}
-                onClick={() => { setEditId(r.id); setTitle(r.title); setBody(r.body); }}
-              >
-                <Pencil className="h-4 w-4" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-8 w-8 shrink-0 text-red-600"
-                aria-label={`Apagar ${r.title}`}
-                disabled={del.isPending}
-                onClick={() => { if (window.confirm(`Apagar a resposta rápida “${r.title}”?`)) del.mutate({ id: r.id }); }}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              {canEdit && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 shrink-0"
+                  aria-label={`Editar ${r.title}`}
+                  onClick={() => { setEditId(r.id); setTitle(r.title); setBody(r.body); }}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              )}
+              {canManage && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 shrink-0 text-muted-foreground"
+                  aria-label={`Arquivar ${r.title}`}
+                  title="Arquivar (sai do menu de toda a gente; não se apaga)"
+                  disabled={del.isPending}
+                  onClick={() => { if (window.confirm(`Arquivar a resposta rápida “${r.title}”? Sai do menu de toda a gente.`)) del.mutate({ id: r.id }); }}
+                >
+                  <Archive className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           ))}
         </div>
 
-        <div className="space-y-2 border-t pt-3">
+        {canEdit && <div className="space-y-2 border-t pt-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {editId ? "Editar resposta rápida" : "Nova resposta rápida"}
           </div>
@@ -107,7 +119,7 @@ export function QuickRepliesDialog({ open, onOpenChange }: { open: boolean; onOp
               <Plus className="h-4 w-4 mr-1" /> {editId ? "Guardar" : "Adicionar"}
             </Button>
           </div>
-        </div>
+        </div>}
       </DialogContent>
     </Dialog>
   );

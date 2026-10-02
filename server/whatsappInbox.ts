@@ -12,8 +12,9 @@ import { getDb } from "./db";
 import { employees, users, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
 import { firstNameOf } from "../shared/whatsappTemplate";
-import { OPTED_OUT_ERROR, previewFields, recordOutboundMessage } from "./whatsappStore";
+import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, previewFields, reserveOutboundMessage } from "./whatsappStore";
 import type { ConversationStatus } from "../shared/whatsappConversation";
+import { INBOX_LIST_LIMIT } from "../shared/whatsappInboxView";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -86,6 +87,32 @@ export interface ConversationRow {
   /** Triagem por IA (0123): intenção e urgência (null = por classificar). */
   aiIntent: string | null;
   aiUrgency: string | null;
+  /**
+   * A leitura completa falhou e veio a de recurso: estado, responsável e
+   * ligações NÃO são reais (17a) — o ecrã avisa.
+   */
+  partial?: true;
+}
+
+/**
+ * Filtro SQL da pesquisa (nome da ficha / lead / perfil, número, resumo ou
+ * responsável). Aplica-se ANTES do LIMIT, por isso uma conversa antiga fora
+ * das mais recentes também aparece. null = sem pesquisa.
+ */
+export function conversationSearchSql(raw: string | null | undefined): SQL | null {
+  const q = String(raw ?? "").trim().slice(0, 120);
+  if (!q) return null;
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const digits = q.replace(/\D/g, "");
+  const parts: SQL[] = [
+    sql`${whatsappConversations.profileName} LIKE ${like}`,
+    sql`${employees.fullName} LIKE ${like}`,
+    sql`${whatsappConversations.lastPreview} LIKE ${like}`,
+    sql`EXISTS (SELECT 1 FROM extra_leads sl WHERE sl.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci AND sl.fullName LIKE ${like})`,
+    sql`EXISTS (SELECT 1 FROM users su WHERE su.id = ${whatsappConversations.assignedUserId} AND su.name LIKE ${like})`,
+  ];
+  if (digits.length >= 3) parts.push(sql`${whatsappConversations.phoneE164} LIKE ${`%${digits}%`}`);
+  return sql`(${sql.join(parts, sql` OR `)})`;
 }
 
 /**
@@ -210,9 +237,11 @@ async function fillMissingPreviews(db: NonNullable<Awaited<ReturnType<typeof get
   return out;
 }
 
-export async function listConversations(): Promise<ConversationRow[]> {
+export async function listConversations(opts: { search?: string | null } = {}): Promise<ConversationRow[]> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) throw new Error("Base de dados indisponível.");
+  const searchCond = conversationSearchSql(opts.search);
+  const whereList = searchCond ? and(visibilitySql(scopedProjectIds()), searchCond) : visibilitySql(scopedProjectIds());
 
   // O filtro de cidade vai no WHERE, ANTES do LIMIT — senão quem só vê uma
   // cidade podia ficar com uma lista vazia porque as 300 mais recentes eram
@@ -245,9 +274,9 @@ export async function listConversations(): Promise<ConversationRow[]> {
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
     .leftJoin(users, eq(whatsappConversations.assignedUserId, users.id))
-    .where(visibilitySql(scopedProjectIds()))
+    .where(whereList)
     .orderBy(desc(whatsappConversations.lastMessageAt))
-    .limit(300);
+    .limit(INBOX_LIST_LIMIT);
 
   // Rede de segurança: se a query completa falhar em produção (ex.: coluna da
   // 0097 em falta, JOIN a users), a caixa continua a mostrar as conversas com
@@ -279,16 +308,18 @@ export async function listConversations(): Promise<ConversationRow[]> {
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
-    .where(visibilitySql(scopedProjectIds()))
+    .where(whereList)
     .orderBy(desc(whatsappConversations.lastMessageAt))
-    .limit(300);
+    .limit(INBOX_LIST_LIMIT);
 
   let convs: Awaited<ReturnType<typeof fullQuery>>;
+  let partial = false;
   try {
     convs = await fullQuery();
   } catch (err: any) {
     console.error("[WhatsApp] listConversations falhou, a usar query base:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 500));
     convs = (await baseQuery()) as typeof convs;
+    partial = true;
   }
 
   const missing = convs.filter((c) => c.lastDirection == null && c.lastMessageAt != null).map((c) => c.id);
@@ -322,6 +353,7 @@ export async function listConversations(): Promise<ConversationRow[]> {
       linkedClientEmail: c.linkedClientEmail,
       aiIntent: c.aiIntent ?? null,
       aiUrgency: c.aiUrgency ?? null,
+      ...(partial ? { partial: true as const } : {}),
     };
   });
   return sortConversations(rows);
@@ -349,6 +381,11 @@ export interface ThreadMessage {
   mediaType: "image" | "audio" | "video" | "document" | "sticker" | null;
   /** Há ficheiro guardado? false com `mediaType` preenchido = download falhou (o cron re-tenta). */
   mediaAvailable: boolean;
+  /**
+   * Sem ficheiro: "retrying" (o cron volta a tentar), "gave_up" (desistiu: 5
+   * tentativas, demasiado grande ou mais de 25 dias — a Meta já não o tem).
+   */
+  mediaState: "ok" | "retrying" | "gave_up" | null;
   mediaMime: string | null;
   status: string;
   errorDetail: string | null;
@@ -381,6 +418,14 @@ export interface ConversationThread {
   aiIntent: string | null;
   aiUrgency: string | null;
   messages: ThreadMessage[];
+}
+
+/** Estado do ficheiro de uma mensagem recebida (mesmas regras do cron de re-tentativa). PURA. */
+export function inboundMediaState(m: { mediaType: string | null; mediaAvailable: boolean; mediaAttempts: number | null; createdAt: string }, nowMs = Date.now()): ThreadMessage["mediaState"] {
+  if (!m.mediaType) return null;
+  if (m.mediaAvailable) return "ok";
+  const ageDays = (nowMs - Date.parse(m.createdAt.replace(" ", "T") + "Z")) / 86_400_000;
+  return (m.mediaAttempts ?? 0) >= 5 || ageDays > 25 ? "gave_up" : "retrying";
 }
 
 export async function getConversationThread(conversationId: number, limit = 100): Promise<ConversationThread | null> {
@@ -426,6 +471,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
       mediaKey: whatsappMessages.mediaKey,
       mediaUrl: whatsappMessages.mediaUrl,
       mediaMime: whatsappMessages.mediaMime,
+      mediaAttempts: whatsappMessages.mediaAttempts,
       status: whatsappMessages.status,
       errorDetail: whatsappMessages.errorDetail,
       waTimestamp: whatsappMessages.waTimestamp,
@@ -461,7 +507,10 @@ export async function getConversationThread(conversationId: number, limit = 100)
     aiUrgency: conv.aiUrgency ?? null,
     // Nunca devolve o URL do storage: só se há ficheiro (o link assinado é pedido à parte).
     messages: rows
-      .map(({ mediaKey, mediaUrl, ...m }) => ({ ...m, mediaAvailable: !!(mediaKey || mediaUrl) }) as ThreadMessage)
+      .map(({ mediaKey, mediaUrl, mediaAttempts, ...m }) => {
+        const mediaAvailable = !!(mediaKey || mediaUrl);
+        return { ...m, mediaAvailable, mediaState: inboundMediaState({ mediaType: m.mediaType, mediaAvailable, mediaAttempts, createdAt: m.createdAt }) } as ThreadMessage;
+      })
       .reverse(), // cronológico (antigo → recente)
   };
 }
@@ -527,6 +576,10 @@ export interface ReplyResult {
   error?: string;
   /** O contacto pediu STOP — a UI pede confirmação e reenvia com `allowOptedOut`. */
   optedOut?: boolean;
+  /** Sem confirmação da Meta: a mensagem pode ter saído. Reenviar pede confirmação (17a). */
+  uncertain?: boolean;
+  /** Pedido repetido com o mesmo código: não voltou a enviar. */
+  duplicate?: boolean;
 }
 
 /**
@@ -541,7 +594,8 @@ export async function replyToConversation(
   conversationId: number,
   text: string,
   userId: number | null,
-  opts: { allowOptedOut?: boolean } = {},
+  /** `clientRequestId`: código único do envio (do ecrã) — repetir o pedido não reenvia. */
+  opts: { allowOptedOut?: boolean; clientRequestId?: string | null } = {},
 ): Promise<ReplyResult> {
   const body = text.trim();
   if (!body) return { ok: false, error: "Mensagem vazia." };
@@ -578,16 +632,18 @@ export async function replyToConversation(
     };
   }
 
+  // A linha fica gravada ANTES de chamar a Meta (17a): um pedido repetido com o
+  // mesmo código encontra-a e não volta a mandar a mensagem ao cliente.
+  const row = { conversationId, type: "text" as const, body };
+  const reserved = await reserveOutboundMessage(db, { ...row, sentById: userId, clientRequestId: opts.clientRequestId ?? null });
+  if (!reserved.reserved) {
+    const dup = duplicateRequestOutcome(reserved.existing);
+    if (dup.kind === "sent") return { ok: true, duplicate: true, waMessageId: dup.waMessageId ?? undefined };
+    return { ok: false, uncertain: true, duplicate: true, error: dup.kind === "in_doubt" ? dup.error : "Envio repetido." };
+  }
   const res = await sendTextMessage(conv.phoneE164, body);
-  await recordOutboundMessage(db, {
-    conversationId,
-    waMessageId: res.ok ? res.waMessageId : null,
-    type: "text",
-    body,
-    status: res.ok ? "sent" : "failed",
-    errorDetail: res.ok ? null : res.error,
-    sentById: userId,
-  });
+  await finishOutboundMessage(db, reserved.id, row, res);
 
-  return res.ok ? { ok: true, waMessageId: res.waMessageId } : { ok: false, error: res.error };
+  if (res.ok) return { ok: true, waMessageId: res.waMessageId };
+  return { ok: false, error: res.error, ...(res.uncertain ? { uncertain: true } : {}) };
 }

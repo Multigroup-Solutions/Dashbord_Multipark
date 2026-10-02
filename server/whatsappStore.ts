@@ -13,7 +13,7 @@
  * As partes puras (`previewFields`, `laterTimestamp`, `nextStatus`) são
  * testadas em whatsappStore.test.ts.
  */
-import { eq, isNotNull, sql, type SQLWrapper } from "drizzle-orm";
+import { and, eq, isNotNull, sql, type SQLWrapper } from "drizzle-orm";
 import type { getDb } from "./db";
 import { whatsappConversations, whatsappMessages, whatsappPendingStatuses } from "../drizzle/schema";
 import { messageDisplayBody } from "../shared/whatsappTemplate";
@@ -23,6 +23,8 @@ export type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 export type DbLike = Pick<Db, "select" | "insert" | "update" | "delete" | "execute">;
 
 export type MessageStatus = "sent" | "delivered" | "read" | "failed";
+/** Estado de uma linha de saída: + 'pending' (a enviar) e 'unknown' (sem confirmação da Meta, 0350). */
+export type OutboundStatus = MessageStatus | "pending" | "unknown";
 
 // ─── Puras ──────────────────────────────────────────────────────────────────
 
@@ -202,4 +204,121 @@ export async function recordOutboundMessage(db: DbLike, row: OutboundRow): Promi
     })
     .where(eq(whatsappConversations.id, row.conversationId));
   await reconcilePendingStatus(db, row.waMessageId);
+}
+
+// ─── Saída sem duplicar (17a) ───────────────────────────────────────────────
+//
+// A Meta não tem chave de idempotência. Por isso a linha é gravada ANTES de
+// chamar a Meta ('pending'), com o código único do envio quando vem de uma
+// pessoa (`clientRequestId`). Repetir o mesmo pedido (duplo clique, rede que
+// cai e o ecrã volta a tentar) encontra a linha e NÃO volta a enviar. Sem
+// resposta da Meta → 'unknown' (pode ter saído), nunca 'failed'.
+
+/** O pedido repetido com o mesmo código: o que dizer sem voltar a enviar. PURA. */
+export function duplicateRequestOutcome(existing: { status: string; waMessageId: string | null; errorDetail?: string | null }):
+  | { kind: "sent"; waMessageId: string | null }
+  | { kind: "in_doubt"; error: string }
+  | { kind: "retry" } {
+  if (existing.status === "failed") return { kind: "retry" };
+  if (existing.status === "pending" || existing.status === "unknown") {
+    return {
+      kind: "in_doubt",
+      error: existing.status === "pending"
+        ? "Este envio já está a ser feito — espera um pouco antes de tentar outra vez."
+        : "Este envio já foi feito e a Meta não confirmou se chegou. Vê na conversa antes de reenviar.",
+    };
+  }
+  return { kind: "sent", waMessageId: existing.waMessageId };
+}
+
+function isDuplicateKey(err: unknown): boolean {
+  const e = err as any;
+  const code = e?.code ?? e?.cause?.code;
+  const errno = e?.errno ?? e?.cause?.errno;
+  return code === "ER_DUP_ENTRY" || errno === 1062;
+}
+
+export interface ReserveRow {
+  conversationId: number;
+  type: "text" | "template";
+  body: string | null;
+  templateName?: string | null;
+  sentById?: number | null;
+  broadcastId?: number | null;
+  clientRequestId?: string | null;
+}
+
+export type ReserveResult =
+  | { reserved: true; id: number }
+  | { reserved: false; existing: { id: number; conversationId: number; status: string; waMessageId: string | null; errorDetail: string | null } };
+
+/**
+ * Grava a mensagem como 'pending' antes de a mandar. Com o mesmo
+ * `clientRequestId` já gravado: só volta a reservar se o envio anterior FALHOU
+ * de certeza ('failed'); senão devolve a linha existente (não envia).
+ */
+export async function reserveOutboundMessage(db: DbLike, row: ReserveRow): Promise<ReserveResult> {
+  const now = nowStr();
+  try {
+    const res = await db.insert(whatsappMessages).values({
+      conversationId: row.conversationId,
+      direction: "out",
+      waMessageId: null,
+      type: row.type,
+      body: row.body,
+      templateName: row.templateName ?? null,
+      status: "pending",
+      sentById: row.sentById ?? null,
+      broadcastId: row.broadcastId ?? null,
+      clientRequestId: row.clientRequestId ?? null,
+      waTimestamp: now,
+    });
+    return { reserved: true, id: Number((res as any)?.[0]?.insertId ?? 0) };
+  } catch (err) {
+    if (!row.clientRequestId || !isDuplicateKey(err)) throw err;
+    const [existing] = await db
+      .select({ id: whatsappMessages.id, conversationId: whatsappMessages.conversationId, status: whatsappMessages.status, waMessageId: whatsappMessages.waMessageId, errorDetail: whatsappMessages.errorDetail })
+      .from(whatsappMessages)
+      .where(eq(whatsappMessages.clientRequestId, row.clientRequestId))
+      .limit(1);
+    if (!existing) throw err;
+    if (existing.conversationId === row.conversationId && existing.status === "failed") {
+      // Falhou de certeza → este pedido fica com a linha (só um ganha a corrida).
+      const upd = await db
+        .update(whatsappMessages)
+        .set({ status: "pending", errorDetail: null, type: row.type, body: row.body, templateName: row.templateName ?? null, broadcastId: row.broadcastId ?? null, sentById: row.sentById ?? null, waTimestamp: now })
+        .where(and(eq(whatsappMessages.id, existing.id), eq(whatsappMessages.status, "failed")));
+      if (Number((upd as any)?.[0]?.affectedRows ?? 0) === 1) return { reserved: true, id: existing.id };
+      return { reserved: false, existing: { ...existing, status: "pending" } };
+    }
+    return { reserved: false, existing };
+  }
+}
+
+/** Fecha a linha reservada com o resultado da Meta e atualiza a conversa. */
+export async function finishOutboundMessage(
+  db: DbLike,
+  id: number,
+  row: { conversationId: number; type: "text" | "template"; body: string | null; templateName?: string | null },
+  res: { ok: true; waMessageId: string } | { ok: false; error: string; uncertain?: boolean },
+): Promise<OutboundStatus> {
+  const status: OutboundStatus = res.ok ? "sent" : res.uncertain ? "unknown" : "failed";
+  await db
+    .update(whatsappMessages)
+    .set(res.ok ? { status: "sent", waMessageId: res.waMessageId, errorDetail: null } : { status: status as "unknown" | "failed", errorDetail: res.error })
+    .where(eq(whatsappMessages.id, id));
+  const now = nowStr();
+  const p = previewFields({ body: row.body, type: row.type, templateName: row.templateName, direction: "out" });
+  await db
+    .update(whatsappConversations)
+    .set({
+      lastMessageAt: sqlLaterTs(whatsappConversations.lastMessageAt, now),
+      lastPreview: p.lastPreview,
+      lastDirection: p.lastDirection,
+      lastType: p.lastType,
+      ...(status === "sent" ? { awaitingSince: null, slaAlertedAt: null } : {}),
+    })
+    .where(eq(whatsappConversations.id, row.conversationId));
+  if (res.ok) await reconcilePendingStatus(db, res.waMessageId);
+  return status;
 }

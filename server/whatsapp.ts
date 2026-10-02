@@ -3,8 +3,10 @@
  *
  * Uma chamada por destinatário (POST /{phoneNumberId}/messages). Sem
  * dependências novas — usa `fetch` nativo. Faz 1 retry com backoff curto apenas
- * em 429 / 5xx / erro de rede (erros de aplicação, ex. template não aprovado ou
- * número inválido, NÃO fazem retry). Mapeia os códigos de erro Meta mais comuns
+ * quando a Meta de certeza NÃO enviou: 429 (ritmo) ou erro de rede antes de o
+ * pedido sair. Prazo esgotado / ligação cortada / 5xx = "incerto" (`uncertain`)
+ * e nunca se repete sozinho — repetir duplicava a mensagem ao cliente (17a).
+ * Erros de aplicação (template não aprovado, número inválido) também não. Mapeia os códigos de erro Meta mais comuns
  * para mensagens legíveis em PT.
  *
  * Config por env: WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_API_VERSION
@@ -23,7 +25,22 @@ import { isWhatsappTokenError, recordWhatsappAuthError, recordWhatsappSuccess } 
 
 export type WhatsappSendResult =
   | { ok: true; waMessageId: string }
-  | { ok: false; error: string; code?: number };
+  /**
+   * `uncertain`: o pedido pode ter chegado à Meta (prazo esgotado, ligação
+   * cortada, erro 5xx dela) — NÃO se sabe se a mensagem saiu. Nunca se repete
+   * sozinho: repetir pode mandar a mesma mensagem duas vezes ao cliente.
+   */
+  | { ok: false; error: string; code?: number; uncertain?: true };
+
+/**
+ * Erro de rede ANTES de o pedido sair (nome não resolvido, ligação recusada):
+ * a Meta não recebeu nada → repetir é seguro. Qualquer outro (prazo, ligação
+ * cortada a meio) é incerto. PURA.
+ */
+export function isPreConnectError(err: unknown): boolean {
+  const code = String((err as any)?.cause?.code ?? (err as any)?.code ?? "");
+  return code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "ECONNREFUSED";
+}
 
 /**
  * Contexto do envio, usado só para tornar o erro AUTO-DIAGNOSTICÁVEL: sem isto
@@ -195,11 +212,12 @@ async function postMessage(
         ? describeMetaError(code, metaErr, ctx)
         : `HTTP ${resp.status}`;
 
-      // Retry só em rate limit / erro do servidor.
-      if ((resp.status === 429 || resp.status >= 500) && attempt < MAX_ATTEMPTS) {
+      // Só o 429 (a Meta recusou por ritmo: não enviou) se repete. Um 5xx é
+      // incerto — a mensagem pode ter saído — e NUNCA se repete sozinho (17a).
+      if (resp.status === 429 && attempt < MAX_ATTEMPTS) {
         lastError = detail;
         console.warn(
-          `[WhatsApp] Envio falhou (tentativa ${attempt}, HTTP ${resp.status}): ${maskPhonesInText(detail)} — a repetir…`,
+          `[WhatsApp] Envio recusado por ritmo (tentativa ${attempt}): ${maskPhonesInText(detail)} — a repetir…`,
         );
         await sleep(500 * attempt);
         continue;
@@ -207,16 +225,23 @@ async function postMessage(
 
       console.warn(`[WhatsApp] Envio falhou (HTTP ${resp.status}): ${maskPhonesInText(detail)}`);
       if (isWhatsappTokenError(code)) await recordWhatsappAuthError(String(metaErr?.message ?? detail));
+      if (resp.status >= 500) {
+        return { ok: false, error: `Sem confirmação da Meta (HTTP ${resp.status}): a mensagem pode ter saído. ${detail}`, code, uncertain: true };
+      }
       return { ok: false, error: detail, code };
     } catch (err: any) {
       lastError = err?.message || String(err);
-      if (attempt < MAX_ATTEMPTS) {
-        console.warn(`[WhatsApp] Erro de rede (tentativa ${attempt}): ${lastError} — a repetir…`);
+      if (isPreConnectError(err) && attempt < MAX_ATTEMPTS) {
+        console.warn(`[WhatsApp] Erro de rede antes do envio (tentativa ${attempt}): ${lastError} — a repetir…`);
         await sleep(500 * attempt);
         continue;
       }
-      console.error(`[WhatsApp] Erro de rede final: ${lastError}`);
-      return { ok: false, error: `Erro de rede: ${lastError}` };
+      if (isPreConnectError(err)) {
+        console.error(`[WhatsApp] Erro de rede final: ${lastError}`);
+        return { ok: false, error: `Erro de rede: ${lastError}` };
+      }
+      console.error(`[WhatsApp] Sem resposta da Meta: ${lastError}`);
+      return { ok: false, error: `Sem resposta da Meta (${lastError}): a mensagem pode ter saído.`, uncertain: true };
     }
   }
 

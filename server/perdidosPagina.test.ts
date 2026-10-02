@@ -46,7 +46,7 @@ beforeEach(() => { state.item = item(); state.archived = []; state.updates = [];
 
 describe("Migração 0345: arquivo dos perdidos", () => {
   it("registada depois da 0340, só colunas e chave (nada se apaga)", () => {
-    expect(SCHEMA_MIGRATION_IDS.at(-1)).toBe("0345");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0345");
     expect(SCHEMA_MIGRATION_IDS.indexOf("0345")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0340"));
     const all = MIGRATION_0345_STATEMENTS.join("\n");
     for (const c of ["`archivedAt`", "`archivedById`", "`archiveReason`", "`idx_lost_found_archived`"]) expect(all).toContain(c);
