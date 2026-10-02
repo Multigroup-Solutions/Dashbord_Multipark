@@ -31,6 +31,7 @@ import { pt } from "date-fns/locale";
 import { useAuth } from "@/_core/hooks/useAuth";
 import FitAmount from "@/components/finance/FitAmount";
 import { AXIS_TICK, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE, eurAxis, eurFull } from "@/lib/financeFormat";
+import { daysUntil, lisbonToday } from "@shared/expensePeriods";
 
 // Cores com significado: pendente = âmbar, em atraso = vermelho, pago = verde
 const STATUS_COLOR: Record<string, string> = {
@@ -84,14 +85,21 @@ function StatCard({
   );
 }
 
+/** Falha passageira (BD) tenta mais 2 vezes; sem permissão mostra logo o erro. */
+const retryTransient = (count: number, err: unknown) =>
+  count < 2 && !["FORBIDDEN", "UNAUTHORIZED", "BAD_REQUEST"].includes(String((err as { data?: { code?: string } })?.data?.code ?? ""));
+
 export default function ExpenseDashboard() {
   const { projectId } = useGlobalFilters();
   const { user } = useAuth();
 
   // stats/upcomingPayments são admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
-  const { data: stats, isLoading: statsLoading } = trpc.expenses.stats.useQuery({ projectId }, { enabled: isAdmin });
-  const { data: upcoming, isLoading: upcomingLoading } = trpc.expenses.upcomingPayments.useQuery({ projectId }, { enabled: isAdmin });
+  const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats, isFetching: statsFetching } =
+    trpc.expenses.stats.useQuery({ projectId }, { enabled: isAdmin, retry: retryTransient });
+  const { data: upcoming, isLoading: upcomingLoading, error: upcomingError } =
+    trpc.expenses.upcomingPayments.useQuery({ projectId }, { enabled: isAdmin, retry: retryTransient });
+  const today = lisbonToday();
 
 
   if (!isAdmin) {
@@ -107,6 +115,24 @@ export default function ExpenseDashboard() {
       <div className="flex items-center justify-center py-24">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
+    );
+  }
+
+  // Erro ≠ zero: antes uma falha (BD em baixo, sem permissão) mostrava 0 € em tudo
+  if (statsError && !stats) {
+    return (
+      <Card className="border-red-200 bg-red-50/50" role="alert">
+        <CardContent className="pt-6 flex items-start gap-2 text-sm text-red-800">
+          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+          <div className="min-w-0">
+            <p className="font-medium">Não foi possível carregar o resumo das despesas.</p>
+            <p className="text-xs mt-0.5 break-words">{String(statsError.message ?? "").slice(0, 200)}</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => refetchStats()} disabled={statsFetching}>
+              {statsFetching ? "A tentar…" : "Tentar de novo"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -275,6 +301,10 @@ export default function ExpenseDashboard() {
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : upcomingError && !upcoming ? (
+            <div className="text-center py-8 text-sm text-red-700" role="alert">
+              Não foi possível carregar os próximos pagamentos.
+            </div>
           ) : !upcoming || upcoming.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
               Nenhum pagamento pendente nos próximos 7 dias
@@ -282,15 +312,16 @@ export default function ExpenseDashboard() {
           ) : (
             <div className="space-y-3">
               {upcoming.map(({ expense, project }: any) => {
-                const daysLeft = Math.ceil(
-                  (new Date(expense.paymentDueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-                );
+                // Por DIA de Lisboa (0 = hoje). Antes: new Date("AAAA-MM-DD 00:00:00"),
+                // que no Safari é data inválida — o format rebentava e a página caía.
+                const dueDay = String(expense.paymentDueDate ?? "").slice(0, 10);
+                const daysLeft = daysUntil(dueDay, today) ?? 0;
                 return (
                   <div key={expense.id} className="flex items-center justify-between gap-3 p-3 rounded-lg bg-muted/50 border">
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm text-foreground truncate">{expense.supplier ?? "Sem fornecedor"}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {project?.name ?? "Sem projeto"} · Vence em {format(new Date(expense.paymentDueDate), "dd MMM", { locale: pt })}
+                        {project?.name ?? "Sem projeto"} · Vence em {format(new Date(`${dueDay}T00:00:00`), "dd MMM", { locale: pt })}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3 shrink-0">

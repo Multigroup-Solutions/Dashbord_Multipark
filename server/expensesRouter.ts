@@ -284,12 +284,13 @@ export const expensesRouter = router({
       });
 
       // Aviso `expense_due` (supervisor da cidade da despesa + admin/super_admin).
-      if (input.paymentDueDate && input.paymentDueDate !== 'null') {
+      if (paymentDueDate) {
         const { notify } = await import("./notify");
         await notify({
           kind: "expense_due", projectId: input.projectId ?? null,
           title: "Nova despesa com data de pagamento",
-          body: `Despesa de ${input.amount}€ (${input.supplier ?? "Sem fornecedor"}) com vencimento em ${new Date(input.paymentDueDate).toLocaleDateString("pt-PT")}.`,
+          // Valor e dia como ficaram gravados (antes o texto cru do formulário, ex. "45,9")
+          body: `Despesa de ${amountNorm}€ (${cleanText(input.supplier) ?? "Sem fornecedor"}) com vencimento em ${paymentDueDate.slice(0, 10).split("-").reverse().join("/")}.`,
           link: "/despesas", entity: newId ? { type: "expense", id: newId } : null,
         });
       }
@@ -618,7 +619,8 @@ export const expensesRouter = router({
       const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
       const base64 = Buffer.from(buffer).toString("base64");
 
-      return { base64, filename: `despesas-${new Date().toISOString().slice(0, 10)}.xlsx`, count: data.length };
+      // Dia de Lisboa (o toISOString dava o dia anterior entre a meia-noite e a 1h no verão)
+      return { base64, filename: `despesas-${lisbonToday()}.xlsx`, count: data.length };
     }),
 
   // ── CHECK OVERDUE ────────────────────────────────────────────────────────

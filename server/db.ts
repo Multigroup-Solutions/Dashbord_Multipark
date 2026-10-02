@@ -94,7 +94,7 @@ import {
 import { matchKey } from "../shared/textKey";
 import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import { lisbonToday } from "../shared/expensePeriods";
+import { expenseStatsWindows, lisbonToday } from "../shared/expensePeriods";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
 import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
@@ -581,18 +581,10 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
   if (!db) return null;
 
   // Dias de calendário em Lisboa; semana começa à segunda. Canceladas fora,
-  // como na lista, no Excel e nas Finanças (shared/expenseTotals).
-  const today = lisbonToday();
-  const [ty, tm, td] = today.split("-").map(Number);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  const todayUtc = new Date(Date.UTC(ty, tm - 1, td));
-  const monday = new Date(todayUtc);
-  monday.setUTCDate(td - ((todayUtc.getUTCDay() + 6) % 7));
-  const startOfDay = `${today} 00:00:00`;
-  const startOfWeek = `${iso(monday)} 00:00:00`;
-  const startOfMonth = `${today.slice(0, 7)}-01 00:00:00`;
-  const startOfYear = `${ty}-01-01 00:00:00`;
-  const trendStart = `${iso(new Date(Date.UTC(ty, tm - 1 - 5, 1)))} 00:00:00`;
+  // como na lista, no Excel e nas Finanças (shared/expenseTotals). Cada
+  // janela tem fim (despesas com data futura não entram em "este ano").
+  const w = expenseStatsWindows(lisbonToday());
+  const inWindow = (win: { start: string; end: string }) => and(gte(expenses.expenseDate, win.start), lt(expenses.expenseDate, win.end));
   const live = ne(expenses.status, "cancelled");
   // alcance de cidade + o centro escolhido no filtro do painel
   const scope = await projectFilterConds(expenses.projectId, opts.projectId);
@@ -602,19 +594,19 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, live, gte(expenses.expenseDate, startOfDay))),
+        .where(and(...scope, live, inWindow(w.day))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, live, gte(expenses.expenseDate, startOfWeek))),
+        .where(and(...scope, live, inWindow(w.week))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth))),
+        .where(and(...scope, live, inWindow(w.month))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, live, gte(expenses.expenseDate, startOfYear))),
+        .where(and(...scope, live, inWindow(w.year))),
       db
         .select({
           categoryId: expenses.categoryId,
@@ -625,7 +617,7 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
         })
         .from(expenses)
         .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
-        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth)))
+        .where(and(...scope, live, inWindow(w.month)))
         .groupBy(expenses.categoryId, expenseCategories.name, expenseCategories.color)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(8),
@@ -638,7 +630,7 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
         })
         .from(expenses)
         .leftJoin(projects, eq(expenses.projectId, projects.id))
-        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth)))
+        .where(and(...scope, live, inWindow(w.month)))
         .groupBy(expenses.projectId, projects.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -651,7 +643,7 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
         })
         .from(expenses)
         .leftJoin(users, eq(expenses.insertedById, users.id))
-        .where(and(...scope, live, gte(expenses.expenseDate, startOfMonth)))
+        .where(and(...scope, live, inWindow(w.month)))
         .groupBy(expenses.insertedById, users.name)
         .orderBy(desc(sql`SUM(expenses.amount)`))
         .limit(5),
@@ -666,7 +658,7 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, eq(expenses.status, "paid"), gte(expenses.expenseDate, startOfYear))),
+        .where(and(...scope, eq(expenses.status, "paid"), inWindow(w.year))),
     ]);
 
   // Monthly trend (last 6 months)
@@ -677,7 +669,7 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
       count: sql<number>`COUNT(*)`,
     })
     .from(expenses)
-    .where(and(...scope, live, gte(expenses.expenseDate, trendStart)))
+    .where(and(...scope, live, inWindow(w.trend)))
     .groupBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`)
     .orderBy(sql`DATE_FORMAT(expenseDate, '%Y-%m')`);
 
