@@ -12,7 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
   MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
-  extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
+  isHrMailThread, mailAttachmentDriveAllowed, extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
   pickFromAddress, type MailLinkType, type MailViewer, type MailThreadStatus,
 } from "../../shared/mail";
 import { can, grantFor } from "../../shared/access";
@@ -126,7 +126,10 @@ export async function threadAccess(viewer: MailViewer, threadId: number): Promis
 export async function visibleThreadsCondition(viewer: MailViewer): Promise<SQL> {
   // As arquivadas pela retenção ficam de fora de tudo (pesquisas, contactos,
   // CRM); o super admin vê-as só a pedido (Comunicação → Arquivo).
-  if (viewer.role === "super_admin") return sql`t.archivedAt IS NULL`;
+  // O super admin vê todas as caixas partilhadas e o SEU email; o email pessoal
+  // dos outros consulta-se só em "O meu email" → escolher a pessoa — nunca
+  // aparece na caixa geral nem nas pesquisas (Jorge, 2 out 2026).
+  if (viewer.role === "super_admin") return sql`((t.mailboxKey IS NOT NULL OR t.ownerUserId IS NULL OR t.ownerUserId = ${viewer.id}) AND t.archivedAt IS NULL)`;
   const all = await listMailboxes();
   const parts: SQL[] = all.filter((m) => canSeeMailbox(viewer, m)).map((m) => sql`(t.mailboxKey = ${m.key} AND ${cityCondition(viewer, m)})`);
   parts.push(sql`(t.mailboxKey IS NULL AND t.ownerUserId = ${viewer.id})`);
@@ -296,6 +299,8 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
     FROM mail_messages m LEFT JOIN users u ON u.id = m.sentById WHERE m.threadId = ${threadId} ORDER BY m.sentAt, m.id`));
   const rows = withArchived ? allRows : allRows.filter((r) => !r.archivedAt);
   const archivedHidden = superAdmin ? allRows.length - rows.length : 0;
+  // Email do RH: só os currículos podem ir para o Drive pessoal (Jorge, 2 out 2026).
+  const hrThread = isHrMailThread(acc.mailbox, acc.thread.matchedAddress);
   let blocked = 0;
   const messages = [];
   for (const r of rows) {
@@ -315,6 +320,7 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
       blockedImages: s?.blockedImages ?? 0,
       attachments: atts.filter(listedAttachment).map((a) => ({
         index: a.index, filename: a.filename, mimeType: a.mimeType, size: a.size, href: `/api/mail/attachment/${Number(r.id)}/${a.index}`,
+        driveAllowed: mailAttachmentDriveAllowed(hrThread, a.filename),
       })),
       sentAt: r.sentAt ?? null, isRead: Number(r.isRead) === 1, brand: r.brand ?? null, sentByName: r.sentByName ?? null,
       pipeline: r.pipeline ?? null, pipelineStatus: r.pipelineStatus ?? null,

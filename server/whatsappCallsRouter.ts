@@ -78,8 +78,10 @@ export const whatsappCallsRouter = router({
     if (!(await whatsappCallsEnabled())) return [];
     const { sweepStaleCallsThrottled } = await import("./whatsappCalls");
     await sweepStaleCallsThrottled();
-    const { listIncomingCalls } = await import("./whatsappCallsQueries");
-    return listIncomingCalls(scopedProjectIds());
+    // A leitura "há alguma a tocar?" é partilhada por processo (17e): sem chamadas, nem toca na BD.
+    const { anyIncomingCallCached, listIncomingCalls } = await import("./whatsappCallsQueries");
+    if (!(await anyIncomingCallCached())) return [];
+    return listIncomingCalls(scopedProjectIds(), Date.now(), { probed: true });
   }),
 
   /** "Atender": o primeiro ganha; devolve a oferta SDP só a esse. */

@@ -585,7 +585,8 @@ export interface AutomationFlag {
 export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "EXTRAS_AUTOMATION", label: "Automação dos extras", description: "Pedido de disponibilidade à quinta, lembrete ao sábado, aviso de escala e alerta de cobertura (cron horário)." },
   { name: "LEAD_REMINDERS", label: "Lembretes das leads de extras", description: "Lembretes automáticos às leads que ainda não responderam." },
-  { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas." },
+  // 17e (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão, como as outras.
+  { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas (por WhatsApp). Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   { name: "CASE_REMINDERS", label: "Lembretes de SLA dos casos", description: "Avisa quando ocorrências/perdidos passam do prazo." },
   { name: "COMPLAINT_AUTO_ACK", label: "Aviso de receção das reclamações", description: "Responde automaticamente ao cliente quando chega uma reclamação por email." },

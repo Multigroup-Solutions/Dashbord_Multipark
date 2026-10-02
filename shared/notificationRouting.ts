@@ -383,6 +383,12 @@ export interface RouteInput {
   alsoUserIds?: readonly number[];
   /** Restrição extra (ex.: só quem vê a caixa de email em causa). */
   filter?: (c: RoutingCandidate) => boolean;
+  /**
+   * Sem cidade conhecida (`city` null) num tipo por cidade: TODOS os que
+   * recebem o tipo em alguma cidade (ex.: chamada de um número sem cidade —
+   * Jorge, 2 out 2026). Sem isto, só quem vê o país todo.
+   */
+  noCityToAll?: boolean;
 }
 
 export interface RoutedRecipient { userId: number; email: boolean; reason: "role" | "override" | "personal" | "assignee" }
@@ -402,6 +408,14 @@ export function seesCity(c: RoutingCandidate, d: NotificationKindDef, city: Noti
   if (national || c.cities === "all") return true;
   if (city == null) return false;
   return c.cities.includes(city);
+}
+
+/** Recebe este tipo em ALGUMA cidade (para `noCityToAll`)? PURA. */
+export function seesSomeCity(c: RoutingCandidate, d: NotificationKindDef): boolean {
+  if (c.role === "super_admin") return true;
+  const g = grantFor(c, d.module);
+  if (g.access === "none" || g.access === "own") return false;
+  return c.cities === "all" || c.cities.length > 0;
 }
 
 /**
@@ -456,7 +470,8 @@ export function resolveRecipients(input: RouteInput, candidates: readonly Routin
     const byRole = roles.includes(c.role);
     const byOverride = !byRole && !!activeOverride(c, d.module);
     if (!byRole && !byOverride) continue;
-    if (!seesCity(c, d, d.cityScoped ? input.city : null, routing)) continue;
+    const anyCity = !!input.noCityToAll && d.cityScoped && input.city == null;
+    if (anyCity ? !seesSomeCity(c, d) : !seesCity(c, d, d.cityScoped ? input.city : null, routing)) continue;
     if (input.filter && !input.filter(c)) continue;
     add(c, byRole ? "role" : "override");
   }

@@ -15,8 +15,14 @@ export const CALL_STREAM_PATH = "/api/whatsapp/calls/stream";
 export const CALL_STREAM_REOPEN_MS = 30_000;
 /** Uma ligação SSE dura no máximo isto (a função do Vercel tem maxDuration 60 s). */
 export const CALL_STREAM_MAX_MS = 50_000;
-/** Intervalo entre verificações da BD dentro do stream. */
-export const CALL_STREAM_TICK_MS = 1_000;
+/**
+ * Intervalo entre verificações dentro do stream. 2 s (17e — era 1 s): a Meta
+ * dá 30–60 s para atender; e a leitura é partilhada por processo
+ * (`anyIncomingCallCached`), não uma por separador.
+ */
+export const CALL_STREAM_TICK_MS = 2_000;
+/** Validade da leitura partilhada "há alguma chamada a tocar?" (por processo). */
+export const RING_PROBE_TTL_MS = 2_000;
 /** Comentário SSE para manter a ligação viva nos proxies. */
 export const CALL_STREAM_PING_MS = 15_000;
 /** O browser volta a ligar-se este tempo depois de o servidor fechar o stream. */

@@ -11,9 +11,11 @@
  *  - autenticação e âmbito são os MESMOS do `whatsapp.calls.incoming`: o pedido
  *    passa pelo `protectedProcedure` (sessão, bloqueio de login, overrides,
  *    cidade) através de um caller interno com o mesmo caminho tRPC;
- *  - o servidor lê a BD de 1 em 1 s (`listIncomingCalls`, que sem chamadas é um
- *    SELECT indexado sem JOIN) e envia só `ring` / `ring-cleared` com o id da
- *    chamada; o cliente volta a pedir o `incoming` para saber quem liga;
+ *  - de 2 em 2 s pergunta "há alguma chamada a tocar?" a uma leitura PARTILHADA
+ *    por processo (`anyIncomingCallCached`, uma por 2 s para todos os
+ *    separadores — antes cada separador lia a BD de 1 em 1 s); só quando há
+ *    chamadas corre a consulta com a cidade de quem ouve, e envia
+ *    `ring` / `ring-cleared` com o id; o cliente pede o `incoming` para saber quem liga;
  *  - fecha antes do maxDuration da função (50 s); o EventSource volta a ligar-se
  *    sozinho (`retry: 1000`);
  *  - interruptor WHATSAPP_CALLS desligado → 204 (o EventSource deixa de tentar);
@@ -106,7 +108,7 @@ export async function handleCallStream(req: Request, res: Response): Promise<voi
   };
   write(`retry: ${CALL_STREAM_RETRY_MS}\n: ligado\n\n`);
 
-  const { listIncomingCalls } = await import("./whatsappCallsQueries");
+  const { anyIncomingCallCached, listIncomingCalls } = await import("./whatsappCallsQueries");
   const { sweepStaleCallsThrottled } = await import("./whatsappCalls");
   const endAt = Date.now() + CALL_STREAM_MAX_MS;
   let lastPing = Date.now();
@@ -117,7 +119,7 @@ export async function handleCallStream(req: Request, res: Response): Promise<voi
     try {
       // Mesmo varrimento do `incoming` (travado a 1 vez por 15 s por processo).
       await sweepStaleCallsThrottled();
-      const next = ringingIds(await listIncomingCalls(scope));
+      const next = (await anyIncomingCallCached()) ? ringingIds(await listIncomingCalls(scope, Date.now(), { probed: true })) : new Set<number>();
       for (const ev of diffRinging(prev, next)) write(formatSseEvent(ev));
       prev = next;
       dbErrors = 0;

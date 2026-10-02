@@ -244,8 +244,8 @@ describe("conversationVisibleTo", () => {
   it("quem vê todas as cidades vê tudo", () => {
     expect(conversationVisibleTo(unknown, undefined)).toBe(true);
   });
-  it("número solto sem reserva: só todas-as-cidades", () => {
-    expect(conversationVisibleTo(unknown, lisboa)).toBe(false);
+  it("número solto sem cidade conhecida: visível a todos (17e — antes só todas-as-cidades)", () => {
+    expect(conversationVisibleTo(unknown, lisboa)).toBe(true);
   });
   it("número solto com reserva da cidade → visível; de outra cidade → não", () => {
     expect(conversationVisibleTo({ ...unknown, bookingProjectId: 11 }, lisboa)).toBe(true);

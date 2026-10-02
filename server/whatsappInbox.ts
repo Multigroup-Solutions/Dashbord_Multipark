@@ -165,15 +165,16 @@ export interface ConversationCityFacts {
  *  - quem vê todas as cidades (`scope` undefined) vê tudo;
  *  - extra: pela cidade da ficha (ficha sem cidade → visível);
  *  - lead: se ALGUM lead com o número é da cidade (ou sem cidade);
- *  - número solto (sem ficha nem lead): só se uma reserva com o mesmo
- *    telefone (últimos 9 dígitos) for de uma cidade do utilizador — senão fica
- *    só para quem vê todas as cidades.
+ *  - número solto (sem ficha nem lead): pela cidade da reserva com o mesmo
+ *    telefone (últimos 9 dígitos); SEM cidade conhecida → todos os que têm o
+ *    WhatsApp o veem (Jorge, 2 out 2026: "só abre a cidade que tens acesso ou
+ *    aqueles que não têm cidade" — antes só quem via todas as cidades).
  */
 export function conversationVisibleTo(c: ConversationCityFacts, scope: number[] | undefined): boolean {
   if (scope === undefined) return true;
   if (c.employeeId != null) return projectVisible(c.employeeProjectId, scope);
   if (c.leadProjectIds.length) return c.leadProjectIds.some((p) => projectVisible(p, scope));
-  return c.bookingProjectId != null && scope.includes(c.bookingProjectId);
+  return c.bookingProjectId == null || scope.includes(c.bookingProjectId);
 }
 
 /** Mesma regra de `conversationVisibleTo`, em SQL (aplicada ANTES do LIMIT). */
@@ -188,7 +189,7 @@ export function visibilitySql(scope: number[] | undefined): SQL {
         AND (vis_lead.projectId IS NULL OR ${inScope(sql`vis_lead.projectId`)})))
     OR (${whatsappConversations.employeeId} IS NULL
       AND NOT EXISTS (SELECT 1 FROM extra_leads vis_any WHERE vis_any.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci)
-      AND ${inScope(sql`${whatsappConversations.bookingProjectId}`)})
+      AND (${whatsappConversations.bookingProjectId} IS NULL OR ${inScope(sql`${whatsappConversations.bookingProjectId}`)}))
   )`;
 }
 

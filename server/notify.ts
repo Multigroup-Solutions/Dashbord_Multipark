@@ -41,6 +41,8 @@ export interface NotifyInput {
   entity?: { type: string; id: string | number } | null;
   /** Restrição extra de destinatários (ex.: só quem vê a caixa de email). */
   recipientFilter?: (c: RoutingCandidate) => boolean;
+  /** Tipo por cidade SEM cidade conhecida → todos os que o recebem em alguma cidade (ver RouteInput). */
+  noCityToAll?: boolean;
 }
 
 export interface NotifyResult { recipients: number[]; emailed: number; duplicates: number; city: NotifyCity | null }
@@ -84,6 +86,7 @@ export async function notifyWith(deps: NotifyDeps, input: NotifyInput): Promise<
       targetUserIds: ids([input.targetUserId, ...(input.targetUserIds ?? [])]),
       alsoUserIds: ids(input.alsoUserIds),
       filter: input.recipientFilter,
+      noCityToAll: input.noCityToAll,
     }, candidates, routing);
     if (!routed.length) return out;
 
