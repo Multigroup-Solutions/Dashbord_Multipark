@@ -564,3 +564,8 @@ export function whatsappOutcomeStatus(recipientStatus: string | null | undefined
 export function scheduleCronOk(report: { errors: readonly string[] }): boolean {
   return report.errors.length === 0;
 }
+
+/** Quem não tem cidade não se escala (Jorge, 2 out 2026). PURA. */
+export function noCityScheduleMessage(name: string): string {
+  return `${name.trim() || "Esta pessoa"} não tem cidade na ficha: não pode ser escalado(a). Define a cidade primeiro (Recursos Humanos → ficha).`;
+}

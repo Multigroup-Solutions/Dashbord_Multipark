@@ -64,21 +64,23 @@ describe("preencher a escala com disponíveis", () => {
     expect(availableWindow({ ...yes(), status: "no_response" }, "morning")).toBeNull();
   });
 
-  it("já escalados cobrem os turnos maiores; cidade certa primeiro; outra cidade nunca", () => {
+  it("já escalados cobrem os turnos maiores; só extras da cidade (sem cidade, outra cidade ou funcionário nunca)", () => {
     const r = planAutofill(
-      [{ startHour: 6, endHour: 14 }, { startHour: 7, endHour: 11 }, { startHour: 8, endHour: 12 }],
+      [{ startHour: 6, endHour: 14 }, { startHour: 7, endHour: 11 }, { startHour: 8, endHour: 12 }, { startHour: 8, endHour: 12 }],
       1,
       [
         cand(1, "Ana", yes(), null),
         cand(2, "Bruno", yes(), false),
         cand(3, "Carla", yes()),
         cand(4, "Duarte", yes()),
+        { ...cand(5, "Eva", yes()), isExtra: false },
+        cand(6, "Filipe", yes()),
       ],
       "morning",
       new Set([4]),
     );
-    expect(r.picks.map((p) => [p.employeeId, p.startHour, p.endHour])).toEqual([[3, 7, 11], [1, 8, 12]]);
-    expect(r.unfilled).toEqual([]);
+    expect(r.picks.map((p) => [p.employeeId, p.startHour, p.endHour])).toEqual([[3, 7, 11], [6, 8, 12]]);
+    expect(r.unfilled).toEqual([{ startHour: 8, endHour: 12 }]);
   });
 
   it("encurta ao que a pessoa pode e deixa por preencher quando não há ninguém", () => {

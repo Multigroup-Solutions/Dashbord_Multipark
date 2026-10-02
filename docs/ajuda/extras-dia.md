@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -32,6 +32,9 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - O início é a partir das 03h; da 0h às 3h é a noite do dia anterior (24h–27h).
    - A mesma pessoa não pode ficar a horas sobrepostas no mesmo dia, nem noutra cidade.
 2. Ou usa **Preencher com disponíveis**: escala quem marcou disponibilidade, pelos turnos que a previsão sugere. Lê a disponibilidade da mesma forma que a proposta automática.
+   - A proposta automática e o **Preencher com disponíveis** só usam **extras da cidade da escala**. Quem não tem cidade na ficha, é de outra cidade ou é funcionário (condutor, TL, frontoffice…) nunca entra sozinho.
+   - **Quem não tem cidade não pode ser escalado**, nem à mão: define primeiro a cidade na ficha (Recursos Humanos).
+   - Um **funcionário** só entra na escala posto à mão e **não recebe avisos** (nem de trabalho, nem de turno cancelado, nem por email). Na lista para escolher, os extras aparecem antes dos funcionários.
 3. Define o **Team Leader** do turno (tem de vir do RH).
 4. Carrega em **Avisar este turno** para enviar o aviso de trabalho a quem desse turno está confirmado e ainda não foi avisado.
    - Ao lado de cada pessoa aparece o estado: avisado, ✓ confirmou, ✗ não pode.

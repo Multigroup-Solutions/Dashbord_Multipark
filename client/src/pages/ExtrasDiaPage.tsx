@@ -99,6 +99,7 @@ import {
   defaultOpenGroups,
   groupByCity,
   matchesAvailabilityStatus,
+  sortByAvailability,
   visibleSlice,
   type AvailabilityStatusFilter,
   type CityGroupKey,
@@ -838,14 +839,17 @@ function TeamSection({
   const allCandidates = candidatesQuery.data ?? [];
   const allTlCandidates = tlCandidatesQuery.data ?? [];
   // Mostra TODOS os extras ativos para podermos tentar/insistir com mais gente:
-  // disponíveis primeiro, depois sem-resposta, depois quem disse que não pode.
+  // disponíveis primeiro, depois sem-resposta, depois quem disse que não pode;
+  // em cada grupo os extras antes dos funcionários (estes só entram à mão e
+  // não recebem avisos — 2 out 2026). Sem cidade: o servidor recusa.
   const sortCandidates = (list: typeof allCandidates) => {
     const rank = (s?: string | null) => (s === "available" ? 0 : s === "no_response" ? 1 : 2);
+    const staff = (c: (typeof allCandidates)[number]) => ((c.position ?? "").toLowerCase() === "extra" ? 0 : 1);
     return list
       .slice()
       .sort((a, b) => {
         const r = rank(a.availability?.status) - rank(b.availability?.status);
-        return r !== 0 ? r : a.fullName.localeCompare(b.fullName);
+        return r !== 0 ? r : staff(a) - staff(b) || a.fullName.localeCompare(b.fullName);
       });
   };
   const candidates = useMemo(() => sortCandidates(allCandidates), [allCandidates]);
@@ -2061,7 +2065,15 @@ export function AvailabilitySection() {
   const [showCompose, setShowCompose] = useState(false);
   // Filtro de cidade. "all" = sem filtro; "none" = fichas sem cidade
   // identificada (ver server/employeeCity.ts — a cidade é DERIVADA).
-  const [cityFilter, setCityFilter] = useState<CityKey | "all" | "none">("all");
+  const [pickedCity, setCityFilter] = useState<CityKey | "all" | "none">("all");
+  // Cidade escolhida em cima (filtro global — Jorge, 2 out 2026: "aqui só deve
+  // aparecer a cidade escolhida"): manda sobre os botões de cidade.
+  const globalFilters = useGlobalFilters();
+  const globalCity = useMemo<CityKey | null>(() => {
+    const name = globalFilters.cities.find((p) => p.id === globalFilters.cityId)?.name;
+    return name ? matchCityKey(name) : null;
+  }, [globalFilters.cities, globalFilters.cityId]);
+  const cityFilter: CityKey | "all" | "none" = globalCity ?? pickedCity;
   // Filtro "disponível das X às Y" (Jorge, 2026-09-17): dia opcional + horas.
   // Com as duas horas → quem pode em ALGUM momento desse horário (sobreposição,
   // não cobertura total: alargar a janela nunca esconde ninguém), num dia certo
@@ -2141,7 +2153,8 @@ export function AvailabilitySection() {
     if (onlyNotContacted24h) list = list.filter(e => !e.contactedWithin24h);
     if (windowFilterActive) list = list.filter(matchesWindow);
     if (trimmedSearch) list = list.filter(e => matchesExtraQuery(trimmedSearch, e));
-    return list.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
+    // Disponíveis → sem resposta → indisponíveis (a ordenação da tabela continua a mandar se a pessoa a escolher).
+    return sortByAvailability(list).map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
   }, [o, cityFilter, statusFilter, onlyNotContacted24h, windowFilterActive, matchesWindow, trimmedSearch, lastWorked.data]);
   // Contagem do universo para o rótulo do filtro de horário (como os de cidade).
   const windowMatchCount = useMemo(
@@ -2284,6 +2297,8 @@ export function AvailabilitySection() {
     return counts;
   }, [o]);
 
+  // Mudar a cidade em cima também muda o alvo → limpa a seleção.
+  useEffect(() => { setSelectedIds(new Set()); }, [globalCity]);
   /** Mudar de alvo limpa a seleção — nunca enviar a quem já não se vê. */
   function changeCityFilter(next: CityKey | "all" | "none") {
     setCityFilter(next);
@@ -2774,11 +2789,13 @@ export function AvailabilitySection() {
                 morada); "sem cidade" é um estado real e filtrável, não um erro. */}
             <div className="flex items-center gap-1.5 flex-wrap">
               <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
-              {([
-                { key: "all" as const, label: "Todas" },
-                ...CITY_KEYS.map(k => ({ key: k, label: CITY_LABELS[k] })),
-                { key: "none" as const, label: "Sem cidade" },
-              ]).map(({ key, label }) => (
+              {(globalCity
+                ? [{ key: globalCity, label: CITY_LABELS[globalCity] }]
+                : [
+                    { key: "all" as const, label: "Todas" },
+                    ...CITY_KEYS.map(k => ({ key: k, label: CITY_LABELS[k] })),
+                    { key: "none" as const, label: "Sem cidade" },
+                  ]).map(({ key, label }) => (
                 <Button
                   key={key}
                   size="sm"
