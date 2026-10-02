@@ -899,9 +899,11 @@ export async function getEmployeeById(id: number) {
 export async function getEmployeeByUserId(userId: number) {
   const db = await getDb();
   if (!db) return undefined;
+  // 19c: numa readmissão a conta pode estar em duas fichas — a ATIVA primeiro
+  // (antes vinha uma qualquer: a foto, o ponto e "A minha ficha" iam para a antiga).
   const result = await db.select({ employee: employees, project: projects }).from(employees)
     .leftJoin(projects, eq(employees.projectId, projects.id))
-    .where(eq(employees.userId, userId)).limit(1);
+    .where(eq(employees.userId, userId)).orderBy(desc(employees.isActive), desc(employees.id)).limit(1);
   if (result[0]) return result[0];
   // Conta EXTRA (ex.: email pessoal além do profissional) → a mesma ficha
   const { employeeIdForAliasUser } = await import("./employeeAliases");

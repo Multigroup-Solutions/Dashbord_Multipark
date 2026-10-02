@@ -10,7 +10,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { requireAccess } from "../_core/access";
-import { createMeetingSchema, googleSyncPrefsSchema, lisbonLocalToUtcMs, sharedCalendarsConfigSchema, dashboardUrl } from "../../shared/googleSync";
+import { createMeetingSchema, googleSyncPrefsPatchSchema, lisbonLocalToUtcMs, sharedCalendarsConfigSchema, dashboardUrl } from "../../shared/googleSync";
 import { normalizeAddress } from "../../shared/mail";
 
 type CtxUser = { id: number; role: string; accessOverrides?: any };
@@ -27,15 +27,21 @@ export const googleSyncRouter = router({
     const { googleSyncSummary } = await import("./syncService");
     return googleSyncSummary(ctx.user.id);
   }),
-  setPrefs: protectedProcedure.input(googleSyncPrefsSchema).mutation(async ({ ctx, input }) => {
-    const { patchSyncState } = await import("./syncStore");
-    const { nowSql } = await import("./syncStore");
-    await patchSyncState(ctx.user.id, { prefsJson: JSON.stringify(input), dirtyAt: nowSql() });
+  // 19c: recebe SÓ o que mudou e junta às guardadas (lidas agora — se a leitura
+  // falhar, não grava nada). Antes o cartão mandava o objeto inteiro, com as
+  // omissões quando a leitura tinha falhado.
+  setPrefs: protectedProcedure.input(googleSyncPrefsPatchSchema).mutation(async ({ ctx, input }) => {
+    const { patchSyncState, getSyncState, nowSql } = await import("./syncStore");
+    const current = (await getSyncState(ctx.user.id)).prefs;
+    const changes = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<typeof current>;
+    if (!Object.keys(changes).length) return { ok: true, prefs: current };
+    const next = { ...current, ...changes };
+    await patchSyncState(ctx.user.id, { prefsJson: JSON.stringify(next), dirtyAt: nowSql() });
     try {
       const { logActivity } = await import("../db");
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "google_sync", entityId: null, details: `Preferências Google: ${JSON.stringify(input)}` } as any);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "google_sync", entityId: null, details: `Preferências Google: ${Object.entries(changes).map(([k, v]) => `${k} ${v ? "ligado" : "desligado"}`).join(", ")}` } as any);
     } catch { /* registo */ }
-    return { ok: true };
+    return { ok: true, prefs: next };
   }),
   syncNow: protectedProcedure.mutation(async ({ ctx }) => {
     const { runGoogleSync } = await import("./syncService");

@@ -14,7 +14,7 @@ import { sql } from "drizzle-orm";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess, withOverrides } from "./_core/access";
 import {
-  CONTACT_KINDS, CREATE_FROM_GOOGLE_AS, CREATE_FROM_GOOGLE_REQUIRES, buildMatchIndex, contactsConfigSchema, emailKey, googleContactsPrefsSchema, matchContact,
+  CONTACT_KINDS, CREATE_FROM_GOOGLE_AS, CREATE_FROM_GOOGLE_REQUIRES, buildMatchIndex, contactsConfigSchema, emailKey, googleContactsPrefsSchema, googleContactsPrefsPatchSchema, matchContact,
   phoneKey, uniqueStrings, type ContactMatch, type MatchRecord,
 } from "../shared/contacts";
 import { can, grantFor } from "../shared/access";
@@ -271,14 +271,20 @@ export const googleContactsRouter = router({
     const { contactsSummary } = await import("./google/contactsService");
     return contactsSummary(ctx.user.id, ctx.user.role);
   }),
-  setPrefs: protectedProcedure.input(googleContactsPrefsSchema).mutation(async ({ ctx, input }) => {
+  // 19c: só o que mudou, junto às guardadas (lidas agora; leitura falhada = não grava).
+  setPrefs: protectedProcedure.input(googleContactsPrefsPatchSchema).mutation(async ({ ctx, input }) => {
     const { setContactsPrefs } = await import("./google/contactsService");
-    await setContactsPrefs(ctx.user.id, input);
+    const { getContactsState } = await import("./google/contactsStore");
+    const current = (await getContactsState(ctx.user.id)).prefs;
+    const changes = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<typeof current>;
+    if (!Object.keys(changes).length) return { ok: true, prefs: current };
+    const next = { ...current, ...changes };
+    await setContactsPrefs(ctx.user.id, next);
     try {
       const { logActivity } = await import("./db");
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "google_contacts", entityId: null, details: `Preferências dos Contactos Google: ${JSON.stringify(input)}` } as any);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "google_contacts", entityId: null, details: `Preferências dos Contactos Google: ${Object.entries(changes).map(([k, v]) => `${k} ${v ? "ligado" : "desligado"}`).join(", ")}` } as any);
     } catch { /* registo */ }
-    return { ok: true };
+    return { ok: true, prefs: next };
   }),
   syncNow: protectedProcedure.mutation(async ({ ctx }) => {
     const { runGoogleSync } = await import("./google/syncService");

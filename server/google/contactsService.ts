@@ -198,8 +198,11 @@ export async function contactsSummary(userId: number, role: string) {
   const cfg = await loadContactsConfig();
   let state = null as Awaited<ReturnType<typeof getContactsState>> | null;
   let counts = { service: 0, partners: 0, contacts: 0 };
+  // 19c: preferências que não se leram ≠ omissões ("Sugestões" ligada por engano)
+  let prefsError: string | null = null;
+  try { state = await getContactsState(userId); }
+  catch (err: any) { prefsError = String(err?.message ?? err).slice(0, 200); }
   try {
-    state = await getContactsState(userId);
     const d = await db();
     const r = rowsOf(await d.execute(sql`SELECT SUM(groupKey = 'service') AS service, SUM(groupKey = 'partners') AS partners FROM google_pushed_contacts WHERE userId = ${userId}`))[0];
     const c = rowsOf(await d.execute(sql`SELECT COUNT(*) AS n FROM google_user_contacts WHERE userId = ${userId}`))[0];
@@ -210,7 +213,8 @@ export async function contactsSummary(userId: number, role: string) {
   return {
     account,
     granted,
-    prefs: state?.prefs ?? DEFAULT_GOOGLE_CONTACTS_PREFS,
+    prefs: prefsError ? null : state?.prefs ?? DEFAULT_GOOGLE_CONTACTS_PREFS,
+    prefsError,
     serviceAllowed: servicePushAllowed(role, cfg),
     partnersAllowed: partnersPushAllowed(role, cfg),
     retentionDays: cfg.service.retentionDays,

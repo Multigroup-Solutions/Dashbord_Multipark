@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { Camera, Loader2, RefreshCw, Check, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 /**
  * Mostrado a quem tem login e está associado a um colaborador SEM foto de perfil.
@@ -30,8 +31,8 @@ const OUTPUT_MIME = "image/jpeg";
 
 type Preview = { dataUrl: string; mimeType: string };
 
-/** Lê o ficheiro, redimensiona para MAX_DIMENSION e devolve um data-URL JPEG. */
-function readImageAsJpeg(file: File): Promise<string> {
+/** Lê o ficheiro, redimensiona para MAX_DIMENSION e devolve um data-URL JPEG. Também usado na ficha do RH (19c). */
+export function readImageAsJpeg(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
     const img = new Image();
@@ -63,6 +64,9 @@ function base64Bytes(base64: string): number {
 
 export default function ProfilePhotoPrompt({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  // 19c: a trocar uma foto que já existe, o texto não diz "vamos tirar… obrigatória"
+  const hasPhoto = !!(user as any)?.employee?.photoUrl;
   const setOpen = onOpenChange;
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -186,8 +190,9 @@ export default function ProfilePhotoPrompt({ open, onOpenChange }: { open: boole
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Camera className="w-5 h-5 text-primary" /> Foto de perfil</DialogTitle>
           <DialogDescription>
-            Vamos tirar uma foto para o teu perfil. Podes trocá-la mais tarde, mas é
-            <strong> obrigatória para picar o ponto</strong>.
+            {hasPhoto
+              ? <>Tira ou carrega uma foto nova. É a que se compara com a selfie do ponto, por isso tem de ser tua e de cara bem visível (a troca fica registada).</>
+              : <>Vamos tirar uma foto para o teu perfil. Podes trocá-la mais tarde, mas é<strong> obrigatória para picar o ponto</strong>.</>}
           </DialogDescription>
         </DialogHeader>
 
@@ -226,7 +231,7 @@ export default function ProfilePhotoPrompt({ open, onOpenChange }: { open: boole
               </Button>
             </div>
           ) : (
-            <div className="flex gap-2 w-full">
+            <div className="flex flex-col min-[380px]:flex-row gap-2 w-full">
               <Button variant="outline" className="flex-1" onClick={retake} disabled={busy}>
                 <RefreshCw className="w-4 h-4 mr-2" /> Repetir
               </Button>
@@ -242,7 +247,7 @@ export default function ProfilePhotoPrompt({ open, onOpenChange }: { open: boole
             onClick={close}
             disabled={upload.isPending}
           >
-            Mais tarde
+            {hasPhoto ? "Cancelar" : "Mais tarde"}
           </button>
         </div>
       </DialogContent>

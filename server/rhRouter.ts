@@ -11,15 +11,35 @@ import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
 import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
-import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity } from "./rhAccess";
+import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
 import { importExtrasFromCsv } from "./extrasImport";
+import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
 import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, deleteEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 import { ROLE_HIERARCHY, requireRole, resolveDeactivationOrThrow } from "./routerGuards";
 import { rhViewer, rhEmployeeRef, employeeAccountRole, rhEmployeeRefOrThrow, assertEmployeeWriteScope, assertOwnOrScopedEmployee, assertCanViewDocuments, assertCanViewTimeRecords, assertCanUploadDocuments } from "./rhGuards";
+
+/**
+ * 19c: grava a foto de perfil VALIDADA (tipo pelos primeiros bytes, ≤ 4 MB,
+ * extensão da lista) e regista a troca — esta foto é a referência da selfie
+ * do ponto: trocar por outra sem rasto permitia picar por um colega.
+ */
+async function savePhoto(employeeId: number, fileBase64: string, byUserId: number): Promise<{ url: string; key: string }> {
+  const { checkProfilePhoto } = await import("./photoUpload");
+  const photo = checkProfilePhoto(fileBase64);
+  if (!photo.ok) throw new TRPCError({ code: "BAD_REQUEST", message: photo.error });
+  const before = (await getEmployeeById(employeeId))?.employee ?? null;
+  const { storagePut } = await import("./storage");
+  const key = `employees/${employeeId}/photo-${Date.now()}.${photo.ext}`;
+  const { url } = await storagePut(key, photo.buffer, photo.mime);
+  await updateEmployee(employeeId, { photoUrl: url, photoKey: key });
+  await logActivity({ userId: byUserId, action: "photo", entity: "employee", entityId: employeeId,
+    details: `Foto de ${before?.fullName ?? `#${employeeId}`} trocada: ${before?.photoKey ?? "sem foto"} → ${key}` });
+  return { url, key };
+}
 
 export const rhRouter = router({
   // Envios automáticos da aplicação a este colaborador/extra (pedidos e
@@ -479,8 +499,18 @@ export const rhRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "Foto inválida: carrega a fotografia de novo." });
         }
       }
-      const { id, birthDate, contractStart, contractEnd, ...rest } = input;
+      // 19c (decisão do Jorge): o IBAN só muda logo quando é o RH da ficha;
+      // o próprio, o team leader ou o supervisor deixam um PEDIDO (o antigo
+      // mantém-se até o RH aprovar). Validado (mod 97); registos mascarados.
+      const current = (await getEmployeeById(input.id))?.employee ?? null;
+      const { nibChangeAction, createBankChangeRequest, supersedePendingForEmployee } = await import("./rhBankChange");
+      const { maskIban } = await import("../shared/iban");
+      const nibAct = nibChangeAction(current?.nib ?? null, input.nib, isRhFor(viewer, ref));
+      if (nibAct.kind === "error") throw new TRPCError({ code: "BAD_REQUEST", message: nibAct.message });
+      const { id, birthDate, contractStart, contractEnd, nib: _nib, ...rest } = input;
       const data: any = { ...rest };
+      if (nibAct.kind === "apply") data.nib = nibAct.value;
+      if (typeof data.fullName === "string") data.fullName = data.fullName.trim().slice(0, 256);
       if (typeof data.personalEmail === "string") data.personalEmail = data.personalEmail.trim().toLowerCase() || null;
       if (typeof data.personalPhone === "string") data.personalPhone = data.personalPhone.trim() || null;
       // Extras não têm contactos pessoais à parte (o pessoal é o principal).
@@ -499,8 +529,17 @@ export const rhRouter = router({
           if (taken) throw new TRPCError({ code: "BAD_REQUEST", message: `Esse utilizador já está ligado à ficha ${taken.fullName} (#${taken.id}).` });
         }
       }
-      await updateEmployee(id, data);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "employee", entityId: id, details: `Colaborador atualizado: ${id}` });
+      if (Object.keys(data).length) await updateEmployee(id, data);
+      // 19c: o registo diz O QUE mudou (sem valores pessoais; IBAN mascarado, foto pela key)
+      const changedFields = Object.keys(data).filter((k) => k !== "nib" && (data as any)[k] !== undefined && String((data as any)[k] ?? "") !== String((current as any)?.[k] ?? ""));
+      const parts: string[] = [];
+      if (changedFields.length) parts.push(`campos: ${changedFields.join(", ")}`);
+      if (nibAct.kind === "apply") parts.push(`IBAN ${maskIban(current?.nib)} → ${maskIban(nibAct.value)}`);
+      if (data.photoKey !== undefined && data.photoKey !== current?.photoKey) parts.push(`foto ${current?.photoKey ?? "—"} → ${data.photoKey ?? "—"}`);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "employee", entityId: id, details: `Colaborador ${current?.fullName ?? id} atualizado${parts.length ? ` — ${parts.join("; ")}` : ""}`.slice(0, 1000) });
+      let nibPending: string | null = null;
+      if (nibAct.kind === "apply") await supersedePendingForEmployee(id, ctx.user.id);
+      if (nibAct.kind === "request") nibPending = (await createBankChangeRequest(id, nibAct.value, ctx.user.id)).masked;
       // Fase 1: mudou o email → volta a tentar ligar ao utilizador com esse email
       if (input.email !== undefined || input.personalEmail !== undefined) {
         try {
@@ -513,7 +552,7 @@ export const rhRouter = router({
           }
         } catch (err) { console.warn("[rh.update] religar utilizador:", err); }
       }
-      return { success: true };
+      return { success: true, nibPending };
     }),
 
   delete: protectedProcedure
@@ -539,7 +578,9 @@ export const rhRouter = router({
     .mutation(async ({ ctx, input }) => {
       const viewer = await rhViewer(ctx.user);
       const ref = await rhEmployeeRefOrThrow(input.id);
-      if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar os dados desta ficha." });
+      // 19c (decisão do Jorge): "Não enviar" só o RH mexe — o próprio deixava de
+      // receber avisos de escala e "turno cancelado" sem ninguém saber.
+      if (!isRhFor(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Só o RH (front/back office ou administrador) liga ou desliga o \"Não enviar\"." });
       await assertEmployeeWriteScope(viewer, ref);
       const set: Record<string, number> = {};
       if (input.noAutoWhatsapp !== undefined) set.noAutoWhatsapp = input.noAutoWhatsapp ? 1 : 0;
@@ -556,6 +597,55 @@ export const rhRouter = router({
         details: [label(set.noAutoWhatsapp, "WhatsApp automáticos"), label(set.noAutoEmail, "emails automáticos")].filter(Boolean).join(" · ") });
       return { ok: true };
     }),
+
+  // 19c: pedidos de alteração do IBAN (o próprio/um chefe pede; o RH aprova).
+  bankChange: router({
+    /** Último pedido desta ficha — o próprio vê-o mascarado; o RH vê o IBAN novo para conferir. */
+    forEmployee: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const viewer = await rhViewer(ctx.user);
+        const ref = await rhEmployeeRefOrThrow(input.employeeId);
+        if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+        await assertEmployeeWriteScope(viewer, ref);
+        const { bankChangeForEmployee } = await import("./rhBankChange");
+        const canDecide = isRhFor(viewer, ref);
+        const v = await bankChangeForEmployee(input.employeeId, canDecide);
+        return { request: v, canDecide };
+      }),
+    /** Pedidos pendentes que ESTA pessoa pode tratar (topo da lista do RH). */
+    pending: protectedProcedure.query(async ({ ctx }) => {
+      const viewer = await rhViewer(ctx.user);
+      const { pendingBankChanges, hydrateBankChanges } = await import("./rhBankChange");
+      const rows = await pendingBankChanges();
+      const allowed = new Set<number>();
+      for (const r of rows) {
+        const ref = await rhEmployeeRef(r.employeeId);
+        if (!ref || !isRhFor(viewer, ref)) continue;
+        try { await assertEmployeeWriteScope(viewer, ref); allowed.add(r.employeeId); } catch { /* outra cidade */ }
+      }
+      return hydrateBankChanges(rows.filter((r) => allowed.has(r.employeeId)), () => false);
+    }),
+    decide: protectedProcedure
+      .input(z.object({ requestId: z.number().int().positive(), approve: z.boolean(), note: z.string().max(300).optional() }))
+      .mutation(async ({ ctx, input }) => {
+        const { getDb } = await import("./db");
+        const { employeeBankChangeRequests } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível." });
+        const [req] = await db.select({ employeeId: employeeBankChangeRequests.employeeId, requestedById: employeeBankChangeRequests.requestedById }).from(employeeBankChangeRequests).where(eq(employeeBankChangeRequests.id, input.requestId)).limit(1);
+        if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido não encontrado." });
+        const viewer = await rhViewer(ctx.user);
+        const ref = await rhEmployeeRefOrThrow(req.employeeId);
+        if (!isRhFor(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Só o RH aprova ou recusa pedidos de IBAN (e nunca o da própria ficha)." });
+        // quatro olhos: quem pediu não aprova o próprio pedido (exceto o super admin)
+        if (input.approve && req.requestedById === ctx.user.id && ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Quem fez o pedido não o pode aprovar." });
+        await assertEmployeeWriteScope(viewer, ref);
+        const { decideBankChange } = await import("./rhBankChange");
+        return decideBankChange(input.requestId, input.approve, ctx.user.id, input.note ?? null);
+      }),
+  }),
 
   setActive: protectedProcedure
     .input(z.object({
@@ -612,35 +702,23 @@ export const rhRouter = router({
     }),
 
   uploadPhoto: protectedProcedure
-    .input(z.object({ employeeId: z.number(), fileBase64: z.string(), mimeType: z.string() }))
+    .input(z.object({ employeeId: z.number(), fileBase64: z.string().max(PHOTO_MAX_BASE64_CHARS), mimeType: z.string().max(100) }))
     .mutation(async ({ ctx, input }) => {
       // A foto é dado pessoal: o próprio, ou quem gere o centro (rhAccess).
       const viewer = await rhViewer(ctx.user);
       const ref = await rhEmployeeRefOrThrow(input.employeeId);
       if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar a foto desta ficha." });
       await assertEmployeeWriteScope(viewer, ref);
-      const { storagePut } = await import("./storage");
-      const buffer = Buffer.from(input.fileBase64, "base64");
-      const ext = input.mimeType.split("/")[1] ?? "jpg";
-      const key = `employees/${input.employeeId}/photo-${Date.now()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
-      await updateEmployee(input.employeeId, { photoUrl: url, photoKey: key });
-      return { url, key };
+      return savePhoto(input.employeeId, input.fileBase64, ctx.user.id);
     }),
 
   // O PRÓPRIO utilizador define/troca a sua foto de perfil (obrigatória p/ ponto).
   uploadMyPhoto: protectedProcedure
-    .input(z.object({ fileBase64: z.string(), mimeType: z.string() }))
+    .input(z.object({ fileBase64: z.string().max(PHOTO_MAX_BASE64_CHARS), mimeType: z.string().max(100) }))
     .mutation(async ({ ctx, input }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
       if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "A tua conta não está associada a um colaborador." });
-      const { storagePut } = await import("./storage");
-      const buffer = Buffer.from(input.fileBase64, "base64");
-      const ext = input.mimeType.split("/")[1] ?? "jpg";
-      const key = `employees/${me.employee.id}/photo-${Date.now()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
-      await updateEmployee(me.employee.id, { photoUrl: url, photoKey: key });
-      return { url, key };
+      return savePhoto(me.employee.id, input.fileBase64, ctx.user.id);
     }),
 
   // ── DOCUMENTS ─────────────────────────────────────────────────────────────────────────────────
@@ -873,7 +951,7 @@ export const rhRouter = router({
     checkIn: protectedProcedure
       .input(z.object({
         employeeId: z.number(),
-        photoBase64: z.string().optional(),
+        photoBase64: z.string().max(PHOTO_MAX_BASE64_CHARS).optional(),
         mimeType: z.string().optional(),
         latitude: z.string().optional(),
         longitude: z.string().optional(),
@@ -919,11 +997,13 @@ export const rhRouter = router({
         let photoUrl: string | null = null;
         let photoKey: string | null = null;
         if (input.photoBase64 && input.mimeType) {
+          // 19c: a selfie do ponto passa pela mesma validação da foto de perfil (JPEG/PNG/WebP, ≤ 4 MB)
+          const { checkProfilePhoto } = await import("./photoUpload");
+          const photo = checkProfilePhoto(input.photoBase64);
+          if (!photo.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `Foto do ponto: ${photo.error}` });
           const { storagePut } = await import("./storage");
-          const buffer = Buffer.from(input.photoBase64, "base64");
-          const ext = input.mimeType.split("/")[1] ?? "jpg";
-          const key = `employees/${input.employeeId}/ponto/${Date.now()}.${ext}`;
-          const result = await storagePut(key, buffer, input.mimeType);
+          const key = `employees/${input.employeeId}/ponto/${Date.now()}.${photo.ext}`;
+          const result = await storagePut(key, photo.buffer, photo.mime);
           photoUrl = result.url;
           photoKey = key;
         }
@@ -965,7 +1045,7 @@ export const rhRouter = router({
     checkOut: protectedProcedure
       .input(z.object({
         employeeId: z.number(),
-        photoBase64: z.string().optional(),
+        photoBase64: z.string().max(PHOTO_MAX_BASE64_CHARS).optional(),
         mimeType: z.string().optional(),
         latitude: z.string().optional(),
         longitude: z.string().optional(),
@@ -991,11 +1071,13 @@ export const rhRouter = router({
         let photoUrl: string | null = null;
         let photoKey: string | null = null;
         if (input.photoBase64 && input.mimeType) {
+          // 19c: a selfie do ponto passa pela mesma validação da foto de perfil (JPEG/PNG/WebP, ≤ 4 MB)
+          const { checkProfilePhoto } = await import("./photoUpload");
+          const photo = checkProfilePhoto(input.photoBase64);
+          if (!photo.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `Foto do ponto: ${photo.error}` });
           const { storagePut } = await import("./storage");
-          const buffer = Buffer.from(input.photoBase64, "base64");
-          const ext = input.mimeType.split("/")[1] ?? "jpg";
-          const key = `employees/${input.employeeId}/ponto/${Date.now()}-out.${ext}`;
-          const result = await storagePut(key, buffer, input.mimeType);
+          const key = `employees/${input.employeeId}/ponto/${Date.now()}-out.${photo.ext}`;
+          const result = await storagePut(key, photo.buffer, photo.mime);
           photoUrl = result.url;
           photoKey = key;
         }

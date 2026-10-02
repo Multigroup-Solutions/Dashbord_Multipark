@@ -11,6 +11,12 @@ import { AlertTriangle, CheckCircle2, Link2, Loader2, LogOut, Mail } from "lucid
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { GOOGLE_FEATURE_LABELS, type GoogleFeature } from "@shared/mail";
 
+/** Detalhe do erro vindo no URL: sem links nem números de telefone, no máximo 160 caracteres. PURA. */
+export function safeReturnMessage(raw: string | null): string | undefined {
+  const t = String(raw ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/https?:\/\/\S+|www\.\S+/gi, "[link]").replace(/\+?\d[\d\s]{7,}\d/g, "[número]").trim();
+  return t ? t.slice(0, 160) : undefined;
+}
+
 /** Mostra o resultado do regresso do OAuth (?google=connected|error&msg=) e limpa a query. */
 export function useGoogleOAuthReturnToast(onDone?: () => void) {
   useEffect(() => {
@@ -18,7 +24,8 @@ export function useGoogleOAuthReturnToast(onDone?: () => void) {
     const g = params.get("google");
     if (!g) return;
     if (g === "connected") toast.success("Conta Google ligada. O email, as tarefas e o calendário começam a sincronizar em poucos minutos.");
-    else toast.error(params.get("msg") || "Não foi possível ligar a conta Google.");
+    // 19c: o texto do URL nunca é o título (um link podia pôr qualquer frase dentro da app) — só o detalhe, curto e sem links
+    else toast.error("Não foi possível ligar a conta Google.", { description: safeReturnMessage(params.get("msg")) });
     params.delete("google");
     params.delete("msg");
     const q = params.toString();
@@ -53,12 +60,15 @@ export function GoogleAccountCard({ compact = false, returnTo }: { compact?: boo
         <div className="flex-1 min-w-0">
           <div className="text-[13.5px] font-semibold text-foreground">A minha conta Google</div>
           <div className="text-[11.5px] text-muted-foreground truncate">
-            {q.isLoading ? "A verificar…" : s?.connected ? s.email : `Liga a tua conta @${s?.domains?.[0] ?? "multipark.pt"} para usares o teu email no dashboard.`}
+            {q.isLoading ? "A verificar…" : q.error || s?.readError ? "Não foi possível ver o estado da tua conta Google." : s?.connected ? s.email : `Liga a tua conta @${s?.domains?.[0] ?? "multipark.pt"} para usares o teu email no dashboard.`}
           </div>
         </div>
         {s?.connected && !needsReauth && <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="h-3 w-3" />Ligada</Badge>}
         {needsReauth && <Badge variant="outline" className="gap-1 border-amber-500/50 text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />Religar</Badge>}
       </div>
+      {(q.error || s?.readError) && (
+        <p className="text-xs text-red-700 dark:text-red-300" role="alert">{q.error?.message ?? s?.readError} <button type="button" className="underline" onClick={() => q.refetch()}>Tentar de novo</button></p>
+      )}
       {needsReauth && (
         <p className="text-xs text-amber-800 dark:text-amber-200">
           A autorização expirou ou foi revogada — o teu email, as tarefas e o calendário Google estão parados. {s?.lastError ?? ""}
@@ -73,7 +83,7 @@ export function GoogleAccountCard({ compact = false, returnTo }: { compact?: boo
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        {s?.configured && (!s.connected || needsReauth) && (
+        {s?.configured && !s.readError && (!s.connected || needsReauth) && (
           <Button asChild size="sm">
             <a href={googleConnectHref(returnTo)}><Link2 className="h-4 w-4 mr-1" />{needsReauth ? "Voltar a ligar" : "Ligar a minha conta Google"}</a>
           </Button>

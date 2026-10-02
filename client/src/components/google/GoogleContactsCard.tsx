@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
@@ -40,11 +41,14 @@ export function GoogleContactsCard({ returnTo = "/perfil" }: { returnTo?: string
   });
   const s = q.data;
   if (q.isLoading) return <div className="bg-card border border-border rounded-2xl p-4"><Loader2 className="h-4 w-4 animate-spin" /></div>;
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os Contactos Google" />;
   if (!s || !s.account.configured) return null;
+  // 19c: preferências que não se leram → interruptores bloqueados (nunca as omissões)
+  const prefsLocked = !s.prefs;
   const connected = s.account.connected;
   const needsReauth = s.account.status === "reauth_required" || s.account.status === "error";
   const prefs: GoogleContactsPrefs = s.prefs ?? DEFAULT_GOOGLE_CONTACTS_PREFS;
-  const toggle = (key: keyof GoogleContactsPrefs, value: boolean) => setPrefs.mutate({ ...prefs, [key]: value });
+  const toggle = (key: keyof GoogleContactsPrefs, value: boolean) => setPrefs.mutate({ [key]: value });
   const seesContacts = can(user as any, "contactos", "view");
 
   return (
@@ -73,21 +77,24 @@ export function GoogleContactsCard({ returnTo = "/perfil" }: { returnTo?: string
         </div>
       )}
 
+      {connected && s.granted && s.prefsError && (
+        <p className="text-xs text-red-700 dark:text-red-300" role="alert">Não foi possível ler as tuas preferências ({s.prefsError}). <button type="button" className="underline" onClick={() => q.refetch()}>Tentar de novo</button></p>
+      )}
       {connected && s.granted && (
         <div className="space-y-2">
           <PrefRow icon={<PhoneCall className="h-4 w-4 text-primary" />} label={`Grupo "${PUSH_GROUP_NAMES.service}"`}
             hint={s.serviceAllowed
               ? `Clientes das recolhas/entregas de hoje e amanhã do teu turno (ou da tua cidade), com nome e matrícula. Apagados ${s.retentionDays} dia(s) depois do serviço.${s.counts.service ? ` Agora: ${s.counts.service}.` : ""}`
               : "Não disponível para o teu papel (Definições → Comunicação → Contactos Google)."}
-            checked={s.serviceAllowed && prefs.serviceGroup} disabled={!s.serviceAllowed || setPrefs.isPending} onChange={(v) => toggle("serviceGroup", v)} />
+            checked={s.serviceAllowed && prefs.serviceGroup} disabled={!s.serviceAllowed || setPrefs.isPending || prefsLocked} onChange={(v) => toggle("serviceGroup", v)} />
           {s.partnersAllowed && (
             <PrefRow icon={<Handshake className="h-4 w-4 text-primary" />} label={`Grupo "${PUSH_GROUP_NAMES.partners}"`}
               hint={`Parceiros ativos com telefone.${s.counts.partners ? ` Agora: ${s.counts.partners}.` : ""}`}
-              checked={prefs.partnersGroup} disabled={setPrefs.isPending} onChange={(v) => toggle("partnersGroup", v)} />
+              checked={prefs.partnersGroup} disabled={setPrefs.isPending || prefsLocked} onChange={(v) => toggle("partnersGroup", v)} />
           )}
           <PrefRow icon={<Users className="h-4 w-4 text-primary" />} label="Sugestões a partir dos meus contactos"
             hint={`Lê "Os meus contactos" e "Outros contactos" (só nome, email e telefone; só tu os vês) para sugerir ligações e criar clientes/leads.${s.counts.contacts ? ` ${s.counts.contacts} lido(s).` : ""} Desligar apaga o que foi lido.`}
-            checked={prefs.suggestions} disabled={setPrefs.isPending} onChange={(v) => toggle("suggestions", v)} />
+            checked={prefs.suggestions} disabled={setPrefs.isPending || prefsLocked} onChange={(v) => toggle("suggestions", v)} />
         </div>
       )}
 

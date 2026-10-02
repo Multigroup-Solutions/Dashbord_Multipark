@@ -60,6 +60,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Tipo | Chave | Módulo (ação) | Âmbito | Quem recebe | Email | Obrigatória | Quando |
 |---|---|---|---|---|---|---|---|
 | Documentos em falta (RH) | `rh_docs_missing` | Recursos Humanos (view) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não | Regra documental dos extras: 14 dias com documentos obrigatórios em falta (1.º aviso). |
+| IBAN por aprovar | `rh_bank_change` | Recursos Humanos (edit) | por cidade | Frontoffice, Backoffice, Admin, Super Admin | — | não |  |
 | Os teus documentos em falta | `my_docs_missing` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | Mesmo momento, para a própria pessoa (app + email). |
 | Candidaturas | `driver_application` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Candidatura nova "Be a Driver" no site. |
 | Lead respondeu | `lead_replied` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Lead de extras responde por WhatsApp. |

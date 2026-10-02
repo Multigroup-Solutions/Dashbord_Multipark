@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { can, roleRank, seesBeyondOwn } from "@shared/access";
+import { can, roleRank, seesBeyondOwn, isNationalRole } from "@shared/access";
 import { useSearch, useLocation } from 'wouter';
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -7,6 +7,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
 import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
+import { readImageAsJpeg } from "@/components/ProfilePhotoPrompt";
+import { formatIban, ibanError, maskIban, maskNif, sameIban } from "@shared/iban";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { DeactivationDialog } from "@/components/DeactivationDialog";
@@ -471,8 +474,8 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
 // ─── DOCUMENT UPLOAD (MULTI-FILE + CHECKLIST) ───────────────────────────────
 // `access` vem de rh.byId: quem pode mexer nos dados pessoais carrega
 // documentos; apagar é admin (ficha não protegida) ou quem carregou o ficheiro.
-type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canViewSensitive: boolean; canViewDocuments: boolean };
-const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false };
+type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canViewSensitive: boolean; canViewDocuments: boolean; isRh?: boolean };
+const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false, isRh: false };
 
 function DocumentsTab({ employeeId, access }: { employeeId: number; access: EmployeeAccess }) {
   const utils = trpc.useUtils();
@@ -1271,10 +1274,13 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
   const [editForm, setEditForm] = useState<Record<string, any>>({});
 
   const updateEmployee = trpc.rh.update.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
       utils.rh.byId.invalidate({ id: employeeId });
       utils.rh.list.invalidate();
-      toast.success("Colaborador atualizado!");
+      utils.rh.bankChange.invalidate();
+      // 19c: mudar o IBAN sem ser o RH fica à espera de aprovação (o antigo mantém-se)
+      if (r.nibPending) toast.info("Dados guardados. O novo IBAN fica à espera da aprovação do RH — até lá mantém-se o atual.", { duration: 8000 });
+      else toast.success("Colaborador atualizado!");
       setEditing(false);
     },
     onError: (e) => toast.error(e.message),
@@ -1293,20 +1299,26 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
     onError: (e) => toast.error(e.message),
   });
   const photoRef = useRef<HTMLInputElement>(null);
+  const [showSensitive, setShowSensitive] = useState(false);
   const uploadPhoto = trpc.rh.uploadPhoto.useMutation({
     onSuccess: () => { utils.rh.byId.invalidate({ id: employeeId }); toast.success("Foto atualizada!"); },
     onError: (e) => toast.error(e.message),
   });
 
-  const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  // 19c: a foto vai SEMPRE reduzida para JPEG (≤ 1280 px) — o servidor só
+  // aceita JPEG/PNG/WebP até 4 MB e uma foto de telemóvel passa disso.
+  const handlePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    input.value = "";
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const base64 = (ev.target?.result as string).split(",")[1];
-      uploadPhoto.mutate({ employeeId, fileBase64: base64, mimeType: file.type });
-    };
-    reader.readAsDataURL(file);
+    if (!file.type.startsWith("image/") || file.type === "image/svg+xml") { toast.error("Escolhe uma foto (JPG, PNG ou WebP)."); return; }
+    try {
+      const dataUrl = await readImageAsJpeg(file);
+      uploadPhoto.mutate({ employeeId, fileBase64: dataUrl.split(",")[1] ?? "", mimeType: "image/jpeg" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não consegui ler a imagem.");
+    }
   };
 
   const startEditing = () => {
@@ -1338,6 +1350,11 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
   };
 
   const handleSave = () => {
+    // 19c: IBAN validado já aqui (o servidor volta a validar)
+    if (access.canEditPersonal && editForm.nib && !sameIban(editForm.nib, data?.employee?.nib)) {
+      const err = ibanError(editForm.nib);
+      if (err) { toast.error(err); return; }
+    }
     // Só se envia o que se pode alterar: quem não é admin manda apenas os
     // dados pessoais (o servidor recusa o resto de qualquer forma).
     const personal = access.canEditPersonal ? {
@@ -1505,16 +1522,19 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                     <Badge variant="outline" className="text-[11px]">pessoal</Badge>
                   </div>
                 )}
+                {/* 19c: NIF e IBAN mascarados (PDAs partilhados) — "mostrar" por extenso */}
                 {emp.nif && (
                   <div className="flex items-center gap-2 text-sm">
                     <CreditCard className="w-4 h-4 text-muted-foreground" />
-                    <span>NIF: {emp.nif}</span>
+                    <span>NIF: {showSensitive ? emp.nif : maskNif(emp.nif)}</span>
+                    <button type="button" className="text-xs text-primary underline" onClick={() => setShowSensitive((v) => !v)}>{showSensitive ? "esconder" : "mostrar"}</button>
                   </div>
                 )}
                 {emp.nib && (
                   <div className="flex items-center gap-2 text-sm">
                     <Euro className="w-4 h-4 text-muted-foreground" />
-                    <span className="break-all">NIB: {emp.nib}</span>
+                    <span className="break-all">IBAN: {showSensitive ? formatIban(emp.nib) : maskIban(emp.nib)}</span>
+                    {!emp.nif && <button type="button" className="text-xs text-primary underline" onClick={() => setShowSensitive((v) => !v)}>{showSensitive ? "esconder" : "mostrar"}</button>}
                   </div>
                 )}
                 {emp.address && (
@@ -1569,8 +1589,10 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 )}
               </div>
             </div>
+            {/* 19c: pedido de IBAN por aprovar — linha própria, largura toda (cabe no telemóvel) */}
+            {access.canEditPersonal && <BankChangeCard employeeId={emp.id} />}
             {/* "Não enviar" (17g): WhatsApp e email automáticos/em massa, por pessoa — linha própria (cabe no telemóvel). */}
-            <ContactPrefsRow employeeId={emp.id} noAutoWhatsapp={!!(emp as any).noAutoWhatsapp} noAutoEmail={!!(emp as any).noAutoEmail} canEdit={access.canEditPersonal} />
+            <ContactPrefsRow employeeId={emp.id} noAutoWhatsapp={!!(emp as any).noAutoWhatsapp} noAutoEmail={!!(emp as any).noAutoEmail} canEdit={!!access.isRh} />
           </CardContent>
         </Card>
       ) : (
@@ -1638,6 +1660,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
               <div>
                 <Label>NIB / IBAN</Label>
                 <Input value={editForm.nib} onChange={e => ef("nib", e.target.value)} placeholder="PT50..." />
+                {!access.isRh && <p className="text-[11px] text-muted-foreground mt-1">Mudar o IBAN fica à espera da aprovação do RH (o atual mantém-se até lá).</p>}
               </div>
               <div className="sm:col-span-2">
                 <Label>Morada</Label>
@@ -2465,6 +2488,8 @@ export default function HRPage() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
+      {/* 19c: pedidos de IBAN por aprovar (front/back office e administradores) */}
+      {isNationalRole(userRole) && <PendingBankChangesCard onOpen={(id) => { setSelectedId(id); setShowUsers(false); setShowPayroll(false); setShowDashboard(false); }} />}
       {/* Header com novo colaborador destacado + dropdown de ações */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-muted-foreground text-sm">Gestão de colaboradores, ponto e documentação</p>
@@ -3052,6 +3077,66 @@ function UnlinkedAgentsSection() {
   );
 }
 
+/**
+ * 19c: pedido de alteração do IBAN desta ficha. O próprio (ou o chefe) vê-o
+ * mascarado e à espera; o RH vê o IBAN novo por extenso para conferir com o
+ * comprovativo e aprova ou recusa. Até aprovar, a ficha mantém o IBAN antigo.
+ */
+function BankChangeCard({ employeeId }: { employeeId: number }) {
+  const utils = trpc.useUtils();
+  const q = trpc.rh.bankChange.forEmployee.useQuery({ employeeId }, { staleTime: 30_000 });
+  const decide = trpc.rh.bankChange.decide.useMutation({
+    onSuccess: (_r, v) => { toast.success(v.approve ? "IBAN aprovado e atualizado na ficha." : "Pedido recusado."); void utils.rh.bankChange.invalidate(); void utils.rh.byId.invalidate({ id: employeeId }); },
+    onError: (e) => toast.error(e.message),
+  });
+  if (q.error) return <div className="mt-4"><QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o pedido de IBAN" /></div>;
+  const r = q.data?.request;
+  if (!r) return null;
+  const when = fmtPTDateTime(r.requestedAt);
+  if (r.status !== "pending") {
+    if (r.status === "rejected" && q.data?.canDecide === false) {
+      return <div className="mt-4 text-xs text-muted-foreground">Último pedido de IBAN ({r.newMasked}) foi recusado{r.decisionNote ? `: ${r.decisionNote}` : ""}.</div>;
+    }
+    return null;
+  }
+  return (
+    <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 px-3 py-2 text-sm space-y-2" role="status">
+      <div><b>Pedido de alteração do IBAN</b> — {r.oldMasked ?? "sem IBAN"} → {q.data?.canDecide && r.newIban ? <span className="font-mono">{formatIban(r.newIban)}</span> : r.newMasked}</div>
+      <div className="text-xs">Pedido por {r.requestedByName ?? `#${r.requestedById}`} em {when}. {q.data?.canDecide ? "Confere com o documento \"Comprovativo NIB\" antes de aprovar." : "Até o RH aprovar, mantém-se o IBAN atual."}</div>
+      {q.data?.canDecide && (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={decide.isPending} onClick={() => { if (confirm("Aprovar e passar a pagar para este IBAN?")) decide.mutate({ requestId: r.id, approve: true }); }}>Aprovar</Button>
+          <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => { const note = prompt("Motivo da recusa (opcional):") ?? undefined; decide.mutate({ requestId: r.id, approve: false, note }); }}>Recusar</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 19c: pedidos de IBAN por aprovar (topo do RH, para quem os pode tratar).
+ * Sem o aviso no sino (desligado por omissão), é aqui que o RH os vê.
+ */
+function PendingBankChangesCard({ onOpen }: { onOpen: (employeeId: number) => void }) {
+  const q = trpc.rh.bankChange.pending.useQuery(undefined, { staleTime: 60_000 });
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os pedidos de IBAN por aprovar" />;
+  const rows = q.data ?? [];
+  if (!rows.length) return null;
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 px-3 py-2 text-sm" role="status">
+      <b>{rows.length} pedido(s) de IBAN por aprovar</b>
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {rows.slice(0, 8).map((r) => (
+          <li key={r.id}>
+            <button type="button" className="underline" onClick={() => onOpen(r.employeeId)}>{r.employeeName ?? `#${r.employeeId}`}</button>
+            {" "}— {r.oldMasked ?? "sem IBAN"} → {r.newMasked} · {fmtPTDateTime(r.requestedAt)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** "Não enviar WhatsApp / email" (17g — Jorge, 2 out 2026): tudo o automático ou em massa; as conversas uma a uma continuam. */
 function ContactPrefsRow({ employeeId, noAutoWhatsapp, noAutoEmail, canEdit }: { employeeId: number; noAutoWhatsapp: boolean; noAutoEmail: boolean; canEdit: boolean }) {
   const utils = trpc.useUtils();
@@ -3060,6 +3145,7 @@ function ContactPrefsRow({ employeeId, noAutoWhatsapp, noAutoEmail, canEdit }: {
     onError: (e) => toast.error(e.message),
   });
   if (!canEdit && !noAutoWhatsapp && !noAutoEmail) return null;
+  // 19c (decisão do Jorge): só o RH (front/back office, administrador) liga ou desliga isto.
   const item = (label: string, checked: boolean, patch: (v: boolean) => { noAutoWhatsapp?: boolean; noAutoEmail?: boolean }) => (
     <label className="inline-flex items-center gap-2">
       <Switch checked={checked} disabled={!canEdit || save.isPending} onCheckedChange={(v) => save.mutate({ id: employeeId, ...patch(v) })} aria-label={label} />
@@ -3071,7 +3157,7 @@ function ContactPrefsRow({ employeeId, noAutoWhatsapp, noAutoEmail, canEdit }: {
       {item("Não enviar WhatsApp", noAutoWhatsapp, (v) => ({ noAutoWhatsapp: v }))}
       {item("Não enviar email", noAutoEmail, (v) => ({ noAutoEmail: v }))}
       <span className="basis-full text-xs text-muted-foreground">
-        Automáticos e em massa: disponibilidade, lembretes, escala, turno cancelado, difusões, formação. Responder uma a uma continua a funcionar.
+        Automáticos e em massa: disponibilidade, lembretes, escala, turno cancelado, difusões, formação. Responder uma a uma continua a funcionar.{!canEdit ? " Só o RH muda isto." : ""}
       </span>
     </div>
   );

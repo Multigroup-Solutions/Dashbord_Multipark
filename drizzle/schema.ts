@@ -596,6 +596,26 @@ export const employees = mysqlTable("employees", {
 	deactivatedById: int(),
 });
 
+// 0400 (19c): mudar o IBAN é um PEDIDO aprovado pelo RH; o novo fica cifrado
+// até à aprovação (o antigo continua na ficha). Nada se apaga.
+export const employeeBankChangeRequests = mysqlTable("employee_bank_change_requests", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	newNibEnc: text().notNull(),
+	newNibMasked: varchar({ length: 40 }).notNull(),
+	oldNibMasked: varchar({ length: 40 }),
+	status: mysqlEnum(['pending','approved','rejected','superseded']).default('pending').notNull(),
+	requestedById: int().notNull(),
+	requestedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	decidedById: int(),
+	decidedAt: timestamp({ mode: 'string' }),
+	decisionNote: varchar({ length: 300 }),
+},
+(table) => [
+	index("idx_bank_change_employee_status").on(table.employeeId, table.status),
+	index("idx_bank_change_status").on(table.status, table.requestedAt),
+]);
+
 // Candidaturas de condutores vindas do website multidriver ("Be a Driver").
 // Email normalizado (lowercase/trim) e UNIQUE — re-submissões actualizam em vez
 // de duplicar. `payload` guarda a candidatura completa em bruto.

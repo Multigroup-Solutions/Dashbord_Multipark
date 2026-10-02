@@ -671,7 +671,8 @@ export const appRouter = router({
     update: protectedProcedure
       .input(z.object({
         userId: z.number(),
-        name: z.string().min(1).optional(),
+        // 19c: aparado e com limite (antes aceitava qualquer tamanho e espaços à volta)
+        name: z.string().trim().min(1).max(120).optional(),
         email: z.string().email().optional(),
         role: z.enum(USER_ROLES).optional(),
         department: z.string().nullable().optional(),
@@ -2160,25 +2161,45 @@ export const appRouter = router({
       const { getNotificationPrefsRaw, getSetting } = await import("./appSettings");
       const { parseNotificationPrefs, parseRouting } = await import("../shared/notificationRouting");
       const { receivableKinds } = await import("./notify");
+      // 19c: um erro aqui chega ao ecrã (antes virava "Não há notificações para o teu papel")
       const [raw, kinds, routing] = await Promise.all([
         getNotificationPrefsRaw(ctx.user.id),
-        receivableKinds(ctx.user.id).catch(() => [] as string[]),
-        getSetting("notifications.routing").catch(() => null),
+        receivableKinds(ctx.user.id),
+        getSetting("notifications.routing"),
       ]);
       return { ...parseNotificationPrefs(raw), kinds, routing: parseRouting(routing) };
     }),
+    // 19c: `change` grava SÓ o interruptor mexido, por cima do que está na BD
+    // (com duas abas abertas a segunda já não desfaz a primeira); o objeto
+    // inteiro continua aceite. Fica registado o que mudou.
     savePrefs: protectedProcedure
       .input(z.object({
-        muted: z.array(z.string().max(32)).max(80),
+        muted: z.array(z.string().max(32)).max(80).optional(),
         email: z.record(z.string().max(32), z.boolean()).optional(),
+        change: z.object({ kind: z.string().max(32), muted: z.boolean().optional(), email: z.boolean().optional() }).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const { saveNotificationPrefs } = await import("./appSettings");
-        const { parseNotificationPrefs } = await import("../shared/notificationRouting");
+        const { saveNotificationPrefs, getNotificationPrefsRaw } = await import("./appSettings");
+        const { parseNotificationPrefs, notificationPrefsDiff } = await import("../shared/notificationRouting");
         const { invalidateNotifyCache } = await import("./notify");
-        const prefs = parseNotificationPrefs(input);
+        const before = parseNotificationPrefs(await getNotificationPrefsRaw(ctx.user.id));
+        let next: { muted: string[]; email: Record<string, boolean> };
+        if (input.change) {
+          const muted = new Set(before.muted);
+          if (input.change.muted === true) muted.add(input.change.kind);
+          if (input.change.muted === false) muted.delete(input.change.kind);
+          const email = { ...before.email };
+          if (input.change.email !== undefined) email[input.change.kind] = input.change.email;
+          next = { muted: Array.from(muted), email };
+        } else {
+          if (!input.muted) throw new TRPCError({ code: "BAD_REQUEST", message: "Nada para guardar." });
+          next = { muted: input.muted, email: input.email ?? {} };
+        }
+        const prefs = parseNotificationPrefs(next);
         await saveNotificationPrefs(ctx.user.id, prefs);
         invalidateNotifyCache();
+        const diff = notificationPrefsDiff(before, prefs);
+        if (diff.length) await logActivity({ userId: ctx.user.id, action: "notification_prefs", entity: "users", entityId: ctx.user.id, details: `Notificações: ${diff.join("; ")}`.slice(0, 1000) });
         return prefs;
       }),
     // Regras das notificações (Definições): tabela tipo × papel. Ver: admin+;
