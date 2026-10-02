@@ -102,7 +102,7 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "criticas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
   K({ kind: "incident_critical", group: "suporte", label: "Ocorrência crítica", description: "Ocorrências registadas com gravidade crítica.",
     module: "ocorrencias", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true }),
-  K({ kind: "incident_sla", group: "suporte", label: "Ocorrências fora do prazo", description: "Resumo diário das ocorrências em atraso.",
+  K({ kind: "incident_sla", group: "suporte", label: "Ocorrências fora do prazo", description: "Já não é enviado (as ocorrências vêm da app Multipark).",
     module: "ocorrencias", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 12 * 60 }),
   K({ kind: "lost_found_new", group: "suporte", label: "Perdido novo", description: "Perdidos e achados registados na tua cidade.",
     module: "perdidos", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
