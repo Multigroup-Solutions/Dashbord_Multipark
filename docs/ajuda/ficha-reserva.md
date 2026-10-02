@@ -30,6 +30,10 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 
 **Se aparecer um aviso amarelo**, a base de dados da Multipark não respondeu ou falta uma parte (por exemplo, a lista de pagamentos). O resto da ficha continua visível. Tenta de novo daqui a pouco.
 
+**Se aparecer um aviso vermelho "Não foi possível carregar"** numa secção, o pedido falhou (por exemplo, sem rede). Essa secção não está vazia: carrega em **Tentar de novo** ali mesmo; o resto da ficha continua visível.
+
+**Preço e pagamento**: o cabeçalho e as **Contas** mostram o que a Multipark tem **agora**. Os números da Faturação continuam a vir do retrato guardado pelo webhook (ver **Conferência (era / é)**).
+
 Tem acesso quem vê as reservas (Reservas & Operações), e cada um só vê as reservas dos parques das suas cidades. As reclamações e os perdidos só aparecem a quem tem acesso a esses módulos.
 
 Os parques nossos (marca + cidade) são reconhecidos com as mesmas regras que agrupam as **Reservas do dia**. O canal (Direto / Parceiro / Marketplace) é da contabilidade e não aparece na lista Reservas do dia.

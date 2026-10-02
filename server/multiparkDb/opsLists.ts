@@ -22,6 +22,10 @@
  *                 alteração (Booking.updatedAt, índice parkId+updatedAt) e
  *                 ficam marcadas como data aproximada.
  *
+ * As compras online por acabar (PENDING) não entram em nenhuma lista — a
+ * mesma regra do Dashboard das Operações (opsCounts.ts), da Faturação, do CRM
+ * e dos Serviços.
+ *
  * Colunas usadas (docs/multipark-db/schema.md):
  *   Park: id, name, city, firebaseBrand, listingType, status
  *   Booking: id, allocation, status, checkIn, checkOut, checkInDate,
@@ -174,6 +178,8 @@ export function buildSource(spec: SourceSpec, p: ParamList, startTs: string, end
   ] : []);
   const common = (hasCx: boolean): string[] => {
     const out = [`b."parkId" IN (${inList(p, spec.parkIds)})`];
+    // Compras online por acabar nunca contam (nos cancelados o estado já é CANCELLED).
+    if (spec.kind !== "cancelados") out.push(`b."status"::text <> ${p.add("PENDING")}`);
     const st = statePredicate(spec.kind, spec.state, p, hasCx);
     if (st) out.push(st);
     if (withChannel && spec.channel) out.push(channelPredicate(spec.channel, spec.ourParkIds, p));

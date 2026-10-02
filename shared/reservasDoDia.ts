@@ -206,11 +206,20 @@ export function toDayMovements(bookings: DayBooking[], startMs: number, endMs: n
 
 // ─── Filtros e contagens (na página; o dia inteiro já está carregado) ───────
 
+/**
+ * Fora das contas do dia: canceladas e compras online por acabar (PENDING) —
+ * a mesma regra do Dashboard das Operações, da Faturação, do CRM e dos
+ * Serviços. Continuam à vista com o filtro de estado ("Todas" ou o estado).
+ */
+export function countsForDay(status: string | null | undefined): boolean {
+  return status !== "CANCELLED" && status !== "PENDING";
+}
+
 export interface DayFilters {
   kind?: "todas" | MovementKind;
   /** Park.id ou "" (todos). */
   parkId?: string;
-  /** "ativas" (sem canceladas), "todas" ou um estado. */
+  /** "ativas" (sem canceladas nem pendentes), "todas" ou um estado. */
   state?: string;
   search?: string;
 }
@@ -229,7 +238,7 @@ export function filterMovements(rows: DayMovement[], f: DayFilters): DayMovement
     const b = m.booking;
     if (f.kind && f.kind !== "todas" && m.kind !== f.kind) return false;
     if (f.parkId && b.parkId !== f.parkId) return false;
-    if (state === "ativas" && b.status === "CANCELLED") return false;
+    if (state === "ativas" && !countsForDay(b.status)) return false;
     if (state !== "ativas" && state !== "todas" && b.status !== state) return false;
     if (q) {
       const hit = norm(b.code).includes(qn)
@@ -248,27 +257,31 @@ export interface DaySummary {
   saidas: number;
   /** Reservas canceladas (distintas) com movimento previsto no dia. */
   canceladas: number;
-  /** Por fazer (não canceladas). */
+  /** Compras online por acabar (PENDING, distintas) com movimento previsto no dia. */
+  pendentes: number;
+  /** Por fazer (das que contam). */
   entradasPorFazer: number;
   saidasPorFazer: number;
   /** Por parque (grupo operacional), só os que têm movimentos, pela ordem da página. */
   groups: DayGroupCount[];
 }
 
-/** Contagens do dia (as canceladas não contam como entradas/saídas). PURA. */
+/** Contagens do dia (canceladas e pendentes não contam como entradas/saídas). PURA. */
 export function summarizeDay(rows: DayMovement[]): DaySummary {
   const groups = new Map<string, DayGroupCount>();
   const cancelled = new Set<string>();
+  const pending = new Set<string>();
   let entradas = 0, saidas = 0, entradasPorFazer = 0, saidasPorFazer = 0;
   for (const m of rows) {
     if (m.booking.status === "CANCELLED") { cancelled.add(m.booking.id); continue; }
+    if (m.booking.status === "PENDING") { pending.add(m.booking.id); continue; }
     const b = m.booking;
     let g = groups.get(b.groupKey);
     if (!g) groups.set(b.groupKey, (g = { key: b.groupKey, label: b.groupLabel, ours: b.ours, order: b.groupOrder, entradas: 0, saidas: 0 }));
     if (m.kind === "entrada") { entradas++; g.entradas++; if (!m.done) entradasPorFazer++; }
     else { saidas++; g.saidas++; if (!m.done) saidasPorFazer++; }
   }
-  return { entradas, saidas, canceladas: cancelled.size, entradasPorFazer, saidasPorFazer, groups: [...groups.values()].sort(compareGroups) };
+  return { entradas, saidas, canceladas: cancelled.size, pendentes: pending.size, entradasPorFazer, saidasPorFazer, groups: [...groups.values()].sort(compareGroups) };
 }
 
 export interface DayGroupSection extends OperationalGroup { rows: DayMovement[] }
