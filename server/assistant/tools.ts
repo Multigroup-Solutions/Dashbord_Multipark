@@ -9,7 +9,7 @@
  *  - devolve só agregados ou listas curtas (≤ 20 linhas), sem emails,
  *    telefones, matrículas nem nomes completos de clientes.
  */
-import { can, roleRank, ROLE_RANK, type AccessOverrides } from "../../shared/access";
+import { can, roleRank, ROLE_RANK, seesBeyondOwn, type AccessOverrides } from "../../shared/access";
 import type { CityAccess } from "../cityAccess";
 import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/ai/chat/tools";
 import type { HelpDoc } from "../_core/ai/chat/retrieval";
@@ -111,7 +111,6 @@ const rangeParams = {
 // ─── Ferramentas ────────────────────────────────────────────────────────────
 
 const OPEN_COMPLAINT = ["new", "analyzing", "waiting_client"];
-const OPEN_INCIDENT = ["open", "investigating"];
 const OPEN_LOST = ["new", "investigating", "found"];
 
 function countBy<T>(rows: T[], key: (r: T) => string): Record<string, number> {
@@ -216,12 +215,20 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
           recentes: rows.slice(0, 10).map((c) => ({ id: c.id, titulo: String(c.title ?? "").slice(0, 80), tipo: c.complaintType, estado: c.complaintStatus, prioridade: c.complaintPriority, criada: String(c.createdAt ?? "").slice(0, 10) })),
         };
       }
-      if (want("ocorrencias") && can(ctx.user, "ocorrencias", "view")) {
-        const rows = ((await ctx.call("incidents.list", filter)) as any[]).filter((c) => OPEN_INCIDENT.includes(c.status));
-        out.ocorrencias = {
-          abertas: rows.length, porEstado: countBy(rows, (c) => c.status), porTipo: countBy(rows, (c) => c.incidentType),
-          recentes: rows.slice(0, 10).map((c) => ({ id: c.id, tipo: c.incidentType, gravidade: c.severity, estado: c.status, criada: String(c.createdAt ?? "").slice(0, 10) })),
-        };
+      // Ocorrências = as da app Multipark, ao vivo (as mesmas da página
+      // /ocorrencias). As antigas `incidents` do dashboard já não contam.
+      // Leitura falhada → "indisponível", nunca 0 abertas.
+      if (want("ocorrencias") && seesBeyondOwn(ctx.user, "ocorrencias")) {
+        const r = await ctx.call("incidents.multipark", { ...filter, resolved: false, limit: 10 });
+        out.ocorrencias = !r?.available
+          ? { indisponivel: `Não foi possível ler as ocorrências da app Multipark${r?.reason ? ` (${r.reason})` : ""}.` }
+          : {
+            fonte: "app Multipark (ao vivo)",
+            abertas: r.stats ? r.stats.open : "contagem indisponível",
+            altaPrioridadeAbertas: r.stats ? r.stats.highOpen : "contagem indisponível",
+            porTipo: r.stats ? Object.fromEntries((r.stats.byType as any[]).map((g) => [g.label, g.count])) : undefined,
+            recentes: (r.rows as any[]).slice(0, 10).map((o) => ({ tipo: String(o.title ?? "").slice(0, 80), prioridade: o.priority, parque: o.parkName, criada: String(o.createdAt ?? "").slice(0, 10) })),
+          };
       }
       if (want("perdidos") && can(ctx.user, "perdidos", "view")) {
         const rows = ((await ctx.call("lostFound.list", filter)) as any[]).filter((c) => OPEN_LOST.includes(c.status));
