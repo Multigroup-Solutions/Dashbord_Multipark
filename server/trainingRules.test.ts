@@ -31,7 +31,9 @@ describe("elegibilidade para a escala", () => {
   it("feature flag TRAINING_BLOCKS_ESCALA=off desliga", () => {
     expect(trainingBlocksEscalaEnabled({ TRAINING_BLOCKS_ESCALA: "off" })).toBe(false);
     expect(trainingBlocksEscalaEnabled({ TRAINING_BLOCKS_ESCALA: "OFF " })).toBe(false);
-    expect(trainingBlocksEscalaEnabled({})).toBe(true);
+    // Jorge (2 out 2026): desligado por omissão; ligado só por interruptor/variável.
+    expect(trainingBlocksEscalaEnabled({})).toBe(false);
+    expect(trainingBlocksEscalaEnabled({ TRAINING_BLOCKS_ESCALA: "on" })).toBe(true);
     expect(escalaEligibility({ assignments: [pending], enabled: false }).ok).toBe(true);
   });
 });

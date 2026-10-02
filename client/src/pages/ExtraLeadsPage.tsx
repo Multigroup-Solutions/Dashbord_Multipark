@@ -210,7 +210,9 @@ function LeadsTab() {
     return c;
   }, [bySource]);
 
-  const invalidate = () => { list.refetch(); funnel.refetch(); };
+  const utils = trpc.useUtils();
+  // "Sem interesse" também rejeita a candidatura do site → refresca as Candidaturas.
+  const invalidate = () => { list.refetch(); funnel.refetch(); void utils.driverApplications.list.invalidate(); };
   const clearSelection = () => setSelectedIds(new Set());
 
   const bulk = trpc.extraLeads.bulkUpdate.useMutation({

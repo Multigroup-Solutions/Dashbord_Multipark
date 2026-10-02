@@ -75,7 +75,7 @@ export function assignmentStatusFor(p: Pick<PathProgress, "complete" | "started"
 export function blockingPathProblem(blocksEscala: boolean | number | null | undefined, items: ReadonlyArray<{ itemType: string; required: boolean | number }>): string | null {
   if (!blocksEscala) return null;
   if (items.some((i) => !!i.required && (i.itemType === "quiz" || i.itemType === "exam"))) return null;
-  return "Um percurso «Obrigatório para ser escalado» tem de ter pelo menos um quiz ou exame obrigatório (o «visto» de vídeos e manuais é a própria pessoa que marca).";
+  return "Um percurso «Obrigatório para ser escalado» devia ter pelo menos um quiz ou exame obrigatório (o «visto» de vídeos e manuais é a própria pessoa que marca).";
 }
 
 /**
@@ -112,7 +112,8 @@ export interface EligibilityAssignment {
 export interface EligibilityResult { ok: boolean; missing: string[]; overridden: boolean; message: string | null }
 
 export function trainingBlocksEscalaEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return isFeatureEnabled("TRAINING_BLOCKS_ESCALA", { env });
+  // Desligado por omissão (Jorge, 2 out 2026): para já a formação não bloqueia a escala.
+  return isFeatureEnabled("TRAINING_BLOCKS_ESCALA", { env, defaultEnabled: false });
 }
 
 /**

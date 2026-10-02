@@ -185,7 +185,7 @@ const isDuplicateEntry = (err: unknown): boolean => {
 };
 
 /**
- * Arquivada (0375, "Eliminar" nas Tarefas) conta como fechada: o planeador
+ * Arquivada (0376, "Eliminar" nas Tarefas) conta como fechada: o planeador
  * não a recria, não a atualiza nem a volta a fechar.
  */
 async function withAssignees(db: any, rows: Array<{ id: number; sourceKey: string | null; taskStatus: string; dueDate: string | null; archivedAt?: string | null }>): Promise<ExistingServiceTask[]> {

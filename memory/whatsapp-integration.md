@@ -50,6 +50,57 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-10-02 — Templates de equipa novos + botões do aviso + morada em texto livre (Fase 2)
+**Type**: feature. Mesma branch `feat/whatsapp-failure-handling`, NÃO enviada.
+**Scope**: `shared/whatsappTemplate.ts`, `server/extrasAutomation.ts`, `server/whatsappInbound.ts`, `server/whatsappTemplateMeta.ts`, testes (`whatsappTeamTemplates.test.ts` novo, catálogo e política atualizados).
+**What**:
+- **Templates trocados:** `aviso_de_trabalho` passa a `driver_shift_notice` e `disponibilidade_extras` passa a `driver_availability`. Os dois são UTILITY, pt_PT (`TEAM_TEMPLATE_LANGUAGE`), aprovados a 2026-10-02 segundo o Jorge.
+  - Parâmetros: `customer_name` + `day`; `customer_name` + `week_date`, mais o token no botão URL.
+  - Os ids do catálogo (`aviso_trabalho`, `disponibilidade`) não mudaram, por isso a UI não mudou.
+  - `DEFAULT_TEMPLATE_LANGUAGE` continua pt_BR para os outros templates.
+- **Botões do aviso:** "Confirmo" e "Não posso" chegam como `type: "button"` com `context.id`.
+  - O webhook guarda `contextId` e `buttonPayload`.
+  - `handleShiftNoticeButton` encontra o aviso pelo wamid (template `driver_shift_notice`, a mesma conversa, data na nota "Aviso de escala D") e aplica `applyShiftNoticeAnswer`. Essa função foi extraída da resposta por texto, que a usa também.
+  - O efeito é igual ao da resposta por texto: `extras_dia_notices.confirmedAt` / `declinedAt`, a resposta automática e, num "não", `extras_schedule_reply`.
+  - Quando é um botão de um aviso nosso, a leitura genérica do texto não corre. Com `EXTRAS_AUTOMATION` desligado, nada é marcado e a mensagem fica na caixa.
+- **Morada e regras:** o template deixa de ser o caminho normal. Com a janela de 24 h aberta, segue o MESMO conteúdo em texto livre; com a janela fechada, o template `morada_e_regras` continua como recurso.
+  - O texto vem do próprio template na Meta, em tempo de execução (`analysis.freeText`: cabeçalho, corpo, links dos botões e rodapé).
+  - O negrito é normalizado para `*texto*`.
+  - Sem leitura do template, tudo segue pelo template.
+- **`seja_motorista`:** sem mudança (decisão do Jorge). Hoje é disparado à mão em Leads de Extras (tRPC `extraLeads.contact`) e pelo lembrete automático (`LEAD_REMINDERS`): leads contactadas sem resposta há mais de 3 dias, no máximo 2 envios, de segunda a sábado entre as 10h e as 19h.
+**Tests**: tsc limpo; suite completa 3603 passed / 0 failed.
+**Notes**:
+- A estrutura dos templates na Meta NÃO foi lida (não há credenciais locais). A inspeção no envio apanha diferenças antes de enviar.
+- Os avisos antigos já enviados (`aviso_de_trabalho`) não têm botões; as respostas por texto continuam a ser lidas como antes.
+
+### 2026-10-02 — Falhas de entrega 131026 / 131049 (tarefa "WhatsApp resistente", Fase 1)
+**Type**: feature. Branch `feat/whatsapp-failure-handling`, NÃO enviada (repo trabalha por PR).
+**Migração**: `migration_0375.ts`, aplicada sozinha no arranque e idempotente.
+**Scope**:
+- Novos: `server/whatsappFailurePolicy.ts` (puras + I/O + novas tentativas) e `server/whatsappFailurePolicy.test.ts` (14 testes).
+- Alterados:
+  - `whatsappInbound.ts`: status estruturado; `handleStatus` chama a política; a mensagem recebida limpa a marca; a manutenção corre as novas tentativas.
+  - `whatsappStore.ts`: `StatusExtra`, `unreachablePhones`, campos novos no reserve, e a política também no caminho pendente e na falha síncrona.
+  - `whatsappBroadcast.ts`: bloqueio "sem WhatsApp" e `sendPayload` de equipa.
+  - `whatsappTemplateMeta.ts`: categoria.
+  - `extrasSchedule.ts`: `sendScheduleEmails` com `employeeIds` opcional.
+  - `extrasAutomation.ts`: `appOrigin` exportado; nota "Morada e regras (1.º turno) <data>".
+  - `shared/whatsappTemplate.ts`: `teamRetry` e `isTeamRetryTemplate`.
+  - `shared/notificationRouting.ts`: tipo `whatsapp_undelivered`.
+  - `docs/notificacoes.md` regenerado.
+**What**:
+- **Registo por mensagem:** `whatsapp_messages` passa a guardar língua, categoria, `errorCode` e `errorTitle`.
+- **131026:** a política corre só quando a linha passa a `failed`. `whatsapp_conversations.undeliverableCount` sobe e, ao 2.º seguido, fica `unreachableAt`. A partir daí `dispatchOne` recusa templates ("sem WhatsApp"). Entregue/lida repõe o contador; qualquer mensagem recebida limpa a marca.
+- **131049 em mensagens de equipa:** se o catálogo tiver `teamRetry` (disponibilidade, aviso de trabalho, morada e regras), agenda-se 1 nova tentativa às +24 h, só se o turno ainda não tiver começado. Executa no cron horário (`runWhatsappRetries`), que volta a verificar STOP, a marca, "Não enviar" e o início do turno. O token do formulário nunca vai para a BD: é um marcador, e a nova tentativa emite um token novo. Não há terceira tentativa (`retryOfId`).
+- **Alternativa por email:** corre uma só vez (`fallbackAt`).
+  - Aviso de escala → `sendScheduleEmails` só dessa pessoa.
+  - Pedido de disponibilidade → já seguiu no mesmo envio (`mail_auto_sends`) ou é reenviado só a essa pessoa.
+  - Resto (morada e regras, seja_motorista, envios à mão) → sem equivalente: sino `whatsapp_undelivered`.
+**Tests**: tsc limpo; suite completa 3595 passed / 0 failed (as 27 falhas antigas já não existem em main).
+**Notes**:
+- O I/O da política e as novas tentativas não foram exercitados contra uma BD real; só as partes puras têm testes, como no resto do repo.
+- Observado e não mexido: `afterOutboundFailed` (contadores do broadcast) continua a não correr quando o `failed` chega pelo caminho pendente.
+
 ### 2026-10-01 — Inbox: redesenho UX (lista compacta, avatar com foto, scroll no fim, bolhas estilo WhatsApp)
 **Type**: feature + refactor (SEM migração, NÃO deployado, NÃO commitado)
 **Scope**: `client/src/pages/WhatsAppInboxPage.tsx` (≈1270 → ≈790 linhas), NOVOS em `client/src/components/whatsapp/`:

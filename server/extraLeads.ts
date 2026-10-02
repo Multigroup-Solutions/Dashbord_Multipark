@@ -285,6 +285,11 @@ export async function updateExtraLead(
       entityId: id,
       details: `Lead ${current.fullName}: ${current.status} → ${patch.status}`,
     });
+    // "Sem interesse" rejeita também a candidatura do site (Jorge, 2 out 2026).
+    if (patch.status === "declined") {
+      const { rejectApplicationForLead } = await import("./extraLeadsSync");
+      await rejectApplicationForLead({ ...current, email: lead.email ?? current.email }, userId);
+    }
   }
   const [row] = await db.select().from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
   return row as ExtraLeadRow;
@@ -475,6 +480,14 @@ export async function bulkUpdateExtraLeads(
     if (opts.projectId !== undefined) set.projectId = opts.projectId ?? null;
     await db.update(extraLeads).set(set).where(inArray(extraLeads.id, toUpdate));
     res.updated = toUpdate.length;
+    // "Sem interesse" em lote também rejeita as candidaturas do site (Jorge, 2 out 2026).
+    if (opts.status === "declined") {
+      const { rejectApplicationForLead } = await import("./extraLeadsSync");
+      for (const id of toUpdate) {
+        const l = byId.get(id)!;
+        if (l.status !== "declined") await rejectApplicationForLead(l, userId);
+      }
+    }
     await logActivity({
       userId: userId ?? 0,
       action: "extra_lead_bulk",

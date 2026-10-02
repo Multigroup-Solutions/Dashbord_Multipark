@@ -25,7 +25,7 @@ import {
 } from "../shared/taskRules";
 import { automationFlagDefault } from "../shared/appSettings";
 import { kindDef } from "../shared/notificationRouting";
-import { MIGRATION_0375_STATEMENTS } from "./migrations/migration_0375";
+import { MIGRATION_0376_STATEMENTS } from "./migrations/migration_0376";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -86,7 +86,20 @@ describe("Avisos de atraso: quem é avisado", () => {
     expect(sent).toEqual([]);
     expect(city).toEqual([]);
     expect(f.updates).toContainEqual({ notifiedOverdue: 1 });
-    expect(automationFlagDefault("TASKS_AUTO_OVERDUE")).toBe(false);
+    // Jorge (2 out 2026): ligado por omissão.
+    expect(automationFlagDefault("TASKS_AUTO_OVERDUE")).toBe(true);
+  });
+  it("ligado: automática com o prazo passado há > 48 h fica marcada sem aviso (sem enxurrada ao ligar)", async () => {
+    const old = task({ sourceModule: "service", dueDate: "2026-09-29 10:00:00", dueHasTime: 1 });
+    const f = fakeDb([[old], [], [{ id: 10, parentId: null, managerId: 77 }], [{ taskId: 1, userId: 55, fullName: "Ana" }]]);
+    h.db = f.db;
+    const sent: number[] = [];
+    const city: any[] = [];
+    const r = await runTaskNotifications(now, async (n) => { sent.push(n.userId); }, { notifyCity: async (n) => { city.push(n); }, autoNoticesOn: true });
+    expect(r).toMatchObject({ overdue: 0, silenced: 1 });
+    expect(sent).toEqual([]);
+    expect(city).toEqual([]);
+    expect(f.updates).toContainEqual({ notifiedOverdue: 1 });
   });
   it("várias automáticas da mesma cidade → um resumo só", async () => {
     const f = fakeDb([[task({ id: 1, sourceModule: "service", title: "A" }), task({ id: 2, sourceModule: "service", title: "B" })], [], [], []]);
@@ -144,10 +157,10 @@ describe("Exceções por pessoa contam (antes só o papel)", () => {
 });
 
 describe("Nada se apaga: arquivar", () => {
-  it("migração 0375: colunas de arquivo nas tarefas e nos modelos, depois da 0370", () => {
-    expect(SCHEMA_MIGRATION_IDS.indexOf("0375")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0370"));
-    expect(MIGRATION_0375_STATEMENTS.every((s) => s.startsWith("ALTER TABLE") && s.includes("ADD COLUMN"))).toBe(true);
-    expect(MIGRATION_0375_STATEMENTS).toHaveLength(4);
+  it("migração 0376: colunas de arquivo nas tarefas e nos modelos, depois da 0375 (WhatsApp)", () => {
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0376")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0375"));
+    expect(MIGRATION_0376_STATEMENTS.every((s) => s.startsWith("ALTER TABLE") && s.includes("ADD COLUMN"))).toBe(true);
+    expect(MIGRATION_0376_STATEMENTS).toHaveLength(4);
   });
   it("sem DELETE de tarefas, responsáveis, comentários ou modelos", () => {
     const svc = src("server/tasksService.ts");

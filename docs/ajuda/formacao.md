@@ -17,13 +17,12 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
 6. Se a página não carregar aparece um aviso a vermelho com **Tentar de novo** (não quer dizer que não tens formação).
 
 **Formação e escala**
-- Um percurso marcado **Obrigatório para ser escalado** tem de ser concluído para entrares na escala: no Extras-Dia aparece "Formação em falta" e a proposta e o preenchimento automáticos não te escolhem. Um admin pode forçar (fica registado).
-- Esses percursos têm sempre pelo menos um **quiz ou exame obrigatório**: o "visto" dos vídeos e manuais não chega, porque é a própria pessoa que o marca.
-- Se a formação não se conseguir verificar, aparece "Formação por verificar", e a proposta e o preenchimento automáticos não avançam (antes deixavam escalar).
-- Pode ser desligado em Definições → Automações → **Formação bloqueia a escala**.
+- **Por agora a formação não bloqueia a escala**: o interruptor Definições → Automações → **Formação bloqueia a escala** vem desligado.
+- Se for ligado, um percurso marcado **Obrigatório para ser escalado** tem de ser concluído para entrares na escala: no Extras-Dia aparece "Formação em falta" e a proposta e o preenchimento automáticos não te escolhem. Um admin pode forçar (fica registado). Se a formação não se conseguir verificar, aparece "Formação por verificar".
+- Esses percursos deviam ter pelo menos um **quiz ou exame obrigatório** (o "visto" dos vídeos e manuais é a própria pessoa que o marca): sem isso aparece um aviso no percurso, mas grava-se na mesma.
 
 **Gestão**
-- **Percursos** (team leader e acima): define que itens cada função tem de fazer e atribui. O team leader só atribui à equipa. Um percurso que bloqueia a escala sem quiz/exame obrigatório não se grava (os antigos mostram um aviso).
+- **Percursos** (team leader e acima): define que itens cada função tem de fazer e atribui. O team leader só atribui à equipa. Um percurso que bloqueia a escala sem quiz/exame obrigatório mostra um aviso.
 - **Acompanhamento** (team leader e acima): progresso da equipa. **Remover atribuição** (só quem gere a formação) tira o percurso a uma pessoa e fica no registo.
 - **Promoções**: decide o supervisor da cidade, o backoffice ou o admin. Ninguém decide a sua própria promoção.
 - O admin cria vídeos, manuais, FAQs e perguntas, e pode **Gerar rascunhos** de perguntas a partir dos manuais com IA.

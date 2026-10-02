@@ -125,12 +125,6 @@ export async function createPath(input: PathInput, userId: number) {
 export async function updatePath(id: number, input: PathInput, userId: number) {
   const d = await db();
   const values = pathValues(input);
-  if (values.blocksEscala) {
-    const items = await d.select().from(trainingPathItems).where(eq(trainingPathItems.pathId, id));
-    // Sem itens não se exige nada (nada a concluir); com itens, tem de haver quiz/exame obrigatório.
-    const problem = items.length ? blockingPathProblem(1, items) : null;
-    if (problem) throw new Error(problem);
-  }
   await d.update(trainingPaths).set(values).where(eq(trainingPaths.id, id));
   await logActivity({ userId, action: "update", entity: "training_path", entityId: id, details: input.name });
 }
@@ -154,9 +148,8 @@ export async function setPathItems(pathId: number, items: Array<{ itemType: Trai
   const d = await db();
   const [path] = await d.select().from(trainingPaths).where(eq(trainingPaths.id, pathId)).limit(1);
   if (!path) throw new Error("Percurso não encontrado.");
-  // 18c (Jorge): bloqueia a escala → tem de ter quiz/exame obrigatório.
-  const problem = items.length ? blockingPathProblem(path.blocksEscala, items) : null;
-  if (problem) throw new Error(problem);
+  // Jorge (2 out 2026): o quiz/exame obrigatório já não impede gravar — fica só o
+  // aviso na lista (`gateProblem`), para quando a formação voltar a bloquear a escala.
   // Os itens são configuração: substituem-se, mas o antes e o depois ficam no registo.
   const before = await d.select().from(trainingPathItems).where(eq(trainingPathItems.pathId, pathId));
   const fmt = (xs: Array<{ itemType: string; itemId: number; required: boolean | number }>) => xs.map(x => `${x.itemType}:${x.itemId}${x.required ? "*" : ""}`).join(" ") || "—";

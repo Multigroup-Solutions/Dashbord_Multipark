@@ -9,7 +9,7 @@
  *    âmbito em update/archive/setStatus/comentários;
  *  - team leader: só as tarefas da equipa, para ver e para mexer (Jorge, 18a);
  *  - responsáveis validados no servidor (ativos e no âmbito de cidade);
- *  - "Eliminar" arquiva (0375) — nada se apaga;
+ *  - "Eliminar" arquiva (0376) — nada se apaga;
  *  - checklists recorrentes (modelos) e comentários por tarefa.
  */
 import { TRPCError } from "@trpc/server";
@@ -398,7 +398,7 @@ export const tasksRouter = router({
       return { success: true };
     }),
   /**
-   * "Eliminar" = ARQUIVAR (0375): sai das listas, dos avisos e do Google; a
+   * "Eliminar" = ARQUIVAR (0376): sai das listas, dos avisos e do Google; a
    * linha fica (com responsáveis e comentários) e as automáticas não voltam a
    * nascer. Fica no registo com o título.
    */
@@ -489,7 +489,7 @@ export const tasksRouter = router({
         await logActivity({ userId: ctx.user.id, action: "create", entity: "task_template", entityId: id, details: input.title });
         return { id };
       }),
-    /** "Eliminar" um modelo = arquivá-lo e desligá-lo (0375): as tarefas já geradas ficam; deixa de gerar novas. */
+    /** "Eliminar" um modelo = arquivá-lo e desligá-lo (0376): as tarefas já geradas ficam; deixa de gerar novas. */
     delete: protectedProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
