@@ -5181,13 +5181,15 @@ export const appRouter = router({
         z.object({
           leadIds: z.array(z.number().int().positive()).min(1).max(200),
           templateId: z.string().min(1).max(64),
+          /** Código único do envio (17b): carregar outra vez retoma, não duplica. */
+          sendKey: z.string().min(8).max(40).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
         const { contactExtraLeads } = await import("./extraLeads");
         try {
-          return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, createdById: ctx.user.id });
+          return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, createdById: ctx.user.id, sendKey: input.sendKey ?? null });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao enviar WhatsApp aos leads" });
         }
@@ -5245,6 +5247,8 @@ export const appRouter = router({
           weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
           note: z.string().max(500).nullable().optional(),
           testPhone: z.string().min(3).max(30).nullable().optional(),
+          /** Código único do envio (17b): carregar outra vez (ex.: depois de um corte) retoma, não duplica. */
+          sendKey: z.string().min(8).max(40).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -5252,6 +5256,7 @@ export const appRouter = router({
         let summary;
         try {
           summary = await sendBroadcast({
+            sendKey: input.testPhone ? null : input.sendKey ?? null,
             templateName: input.templateName,
             languageCode: input.languageCode,
             bodyParam2: input.bodyParam2 ?? null,

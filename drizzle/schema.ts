@@ -2417,6 +2417,8 @@ export const whatsappBroadcasts = mysqlTable("whatsapp_broadcasts", {
 	// JSON array dos employeeId que falharam por número inválido/ausente — para
 	// depois listar "extras com número inválido" e corrigir na origem.
 	invalidEmployeeIds: text(),
+	/** Código único do envio em massa (0355): carregar outra vez retoma, não duplica. */
+	sendKey: varchar({ length: 40 }).unique('uq_whatsapp_broadcasts_send_key'),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });

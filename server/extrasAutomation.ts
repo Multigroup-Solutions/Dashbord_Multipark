@@ -696,9 +696,9 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
     // Com a automação desligada não se marca nem se responde sozinho (17a): a
     // mensagem fica na caixa para uma pessoa. O webhook não passa pelo tRPC,
     // por isso lê-se o interruptor fresco aqui.
-    const { ensureFeatureFlagOverrides } = await import("./_core/featureFlags");
+    const [{ ensureFeatureFlagOverrides }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
     await ensureFeatureFlagOverrides();
-    if (!isFeatureEnabled("EXTRAS_AUTOMATION")) return { action: "none" };
+    if (!isFeatureEnabled("EXTRAS_AUTOMATION", { defaultEnabled: automationFlagDefault("EXTRAS_AUTOMATION") })) return { action: "none" };
     const pending = await latestRequestFor(input.employeeId);
     if (!pending) return { action: "none" };
     const { classifyAvailabilityReply } = await import("./availabilityReply");
@@ -978,7 +978,24 @@ export async function runExtrasAutomation(now: Date = new Date(), opts: { deadli
   const clock = lisbonClock(now);
   const due = dueTasks(clock);
   const report: AutomationReport = { clock, ran: [], skipped: [], errors: [], details: {}, done: true, nextStep: null };
-  if (!isFeatureEnabled("EXTRAS_AUTOMATION")) { report.skipped.push("desligado (EXTRAS_AUTOMATION=off)"); return report; }
+  if (!isFeatureEnabled("EXTRAS_AUTOMATION")) {
+    report.skipped.push("desligado (EXTRAS_AUTOMATION=off)");
+    // A manutenção do WhatsApp (ficheiros por descarregar, estados pendentes,
+    // chamadas penduradas) e os alertas de SLA não são automação dos extras
+    // (17b): correm sempre — antes paravam com este interruptor.
+    for (const [key, fn] of [
+      ["whatsapp-maintenance", async () => (await import("./whatsappInbound")).runWhatsappMaintenance()],
+      ["whatsapp-sla", async () => (await import("./whatsappInboxOps")).runWhatsappSlaAlerts(now)],
+    ] as const) {
+      try {
+        report.details[key] = await fn();
+        report.ran.push(key);
+      } catch (err: any) {
+        report.errors.push(`${key}: ${String(err?.message ?? err).slice(0, 200)}`);
+      }
+    }
+    return report;
+  }
 
   const run = async (key: string, fn: () => Promise<unknown>) => {
     if (!(await claimRun(key))) { report.skipped.push(key); return; }

@@ -313,6 +313,8 @@ export async function contactExtraLeads(opts: {
   createdById: number | null;
   /** Nota do broadcast/atividade (ex.: "lembrete automático"). */
   note?: string;
+  /** Código único do envio (do ecrã, 17b): carregar outra vez retoma, não duplica. */
+  sendKey?: string | null;
 }): Promise<ContactLeadsSummary> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
@@ -352,6 +354,7 @@ export async function contactExtraLeads(opts: {
       contacts: contactable.map((l) => ({ name: l.fullName, phone: l.phoneE164! })),
       note: `${opts.note ?? "leads de extras"} (${contactable.length})`,
       createdById: opts.createdById,
+      sendKey: opts.sendKey ?? null,
     });
     broadcastId = summary.broadcastId;
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -365,7 +368,8 @@ export async function contactExtraLeads(opts: {
           .set({
             lastContactedAt: now,
             firstContactedAt: sql`COALESCE(${extraLeads.firstContactedAt}, ${now})`,
-            contactCount: sql`${extraLeads.contactCount} + 1`,
+            // Retoma de um envio cortado (17b): já contado da 1.ª vez.
+            ...(r.resumed ? {} : { contactCount: sql`${extraLeads.contactCount} + 1` }),
             // Só o 1º contacto muda o estado; um lead já convertido/recusado
             // que volte a receber o template mantém o que o backoffice decidiu.
             ...(lead.status === "new" ? { status: "contacted" as const } : {}),

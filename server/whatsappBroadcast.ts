@@ -67,6 +67,13 @@ export interface BroadcastRecipient extends ResolvedRecipient {
   status: RecipientStatus;
   error?: string;
   waMessageId?: string;
+  /** Já tinha sido enviado por este mesmo envio (retoma, 17b): não saiu outra vez. */
+  resumed?: true;
+}
+
+/** Código da mensagem de UM destinatário dentro de um envio em massa (≤ 64). PURA. */
+export function recipientRequestKey(sendKey: string, phoneE164: string): string {
+  return `b:${sendKey}:${phoneE164.replace(/\D/g, "")}`.slice(0, 64);
 }
 
 export interface BroadcastSummary {
@@ -101,7 +108,9 @@ export interface SendBroadcastOptions {
    * a Meta rejeitar o envio inteiro (132000/100).
    */
   includeFormLink?: boolean;
-  employeeIds?: number[] | null; // subset; se vazio/null → todos os extras ativos
+  employeeIds?: number[] | null; // subset; null → todos os extras ativos; [] → ninguém
+  /** Código único do envio (do ecrã, 17b): carregar outra vez retoma, não duplica. */
+  sendKey?: string | null;
   weekStart?: string | null; // YYYY-MM-DD (contexto; obrigatório p/ includeFormLink)
   note?: string | null;
   testPhone?: string | null; // modo teste: envia SÓ a este número
@@ -117,7 +126,8 @@ export function resolveRecipients(
   employeeIds?: number[] | null,
 ): ResolvedRecipient[] {
   let list = extras;
-  if (employeeIds && employeeIds.length) {
+  // null/undefined = todos; [] = NINGUÉM (17b — antes uma tabela filtrada vazia mandava a todos).
+  if (employeeIds) {
     const set = new Set(employeeIds);
     list = extras.filter((e) => set.has(e.id));
   }
@@ -218,6 +228,7 @@ async function insertBroadcast(
     createdById: number | null;
     weekStart: string | null;
     totalCount: number;
+    sendKey?: string | null;
   },
 ): Promise<number> {
   const result = await db.insert(whatsappBroadcasts).values({
@@ -226,8 +237,33 @@ async function insertBroadcast(
     createdById: data.createdById,
     weekStart: data.weekStart,
     totalCount: data.totalCount,
+    sendKey: data.sendKey ?? null,
   });
   return Number((result as any)[0].insertId);
+}
+
+/**
+ * Difusão deste envio. Com `sendKey` já usado (a pessoa carregou outra vez
+ * depois de um corte), devolve a MESMA difusão — os destinatários que já
+ * receberam são saltados pelo código de cada mensagem (17b).
+ */
+async function openBroadcast(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  data: Parameters<typeof insertBroadcast>[1],
+): Promise<{ id: number; resumed: boolean }> {
+  if (!data.sendKey) return { id: await insertBroadcast(db, data), resumed: false };
+  const find = async () => (await db.select({ id: whatsappBroadcasts.id }).from(whatsappBroadcasts).where(eq(whatsappBroadcasts.sendKey, data.sendKey!)).limit(1))[0];
+  const prev = await find();
+  if (prev) return { id: prev.id, resumed: true };
+  try {
+    return { id: await insertBroadcast(db, data), resumed: false };
+  } catch (err: any) {
+    const code = err?.code ?? err?.cause?.code;
+    if (code !== "ER_DUP_ENTRY") throw err;
+    const again = await find(); // corrida: outro pedido com o mesmo código ganhou
+    if (!again) throw err;
+    return { id: again.id, resumed: true };
+  }
 }
 
 /**
@@ -324,14 +360,19 @@ async function sendOne(
   if (!reserved.reserved) {
     const dup = duplicateRequestOutcome(reserved.existing);
     return dup.kind === "sent"
-      ? { ...r, status: "sent", waMessageId: dup.waMessageId ?? undefined }
-      : { ...r, status: "failed", error: dup.kind === "in_doubt" ? dup.error : "Envio repetido." };
+      ? { ...r, status: "sent", waMessageId: dup.waMessageId ?? undefined, resumed: true }
+      : { ...r, status: "failed", error: dup.kind === "in_doubt" ? dup.error : "Envio repetido.", resumed: true };
   }
   const res = await sendTemplateMessage(phoneE164, cfg.templateName, cfg.languageCode, cfg.components);
   // A nota da inspeção entra ANTES de persistir, para a linha da BD e a UI
   // contarem exactamente a mesma história.
   const error = res.ok ? null : withMetaHint(res.error, cfg.metaUnavailableReason ?? null);
-  await finishOutboundMessage(db, reserved.id, row, res.ok ? res : { ok: false, error: error!, uncertain: res.uncertain });
+  try {
+    await finishOutboundMessage(db, reserved.id, row, res.ok ? res : { ok: false, error: error!, uncertain: res.uncertain });
+  } catch (err: any) {
+    // A Meta já respondeu: o resultado conta na mesma (a linha fica 'pending').
+    console.warn("[WhatsApp] gravar o resultado do envio falhou:", String(err?.message ?? err).slice(0, 160));
+  }
 
   return res.ok
     ? { ...r, status: "sent", waMessageId: res.waMessageId }
@@ -363,6 +404,8 @@ interface DispatchConfig {
   bodyParam2Override?: string | null;
   /** Código único do envio feito por uma pessoa (inbox, 17a): repetir não reenvia. */
   clientRequestId?: string | null;
+  /** Código do envio em massa (17b): cada destinatário fica com `recipientRequestKey`. */
+  sendKey?: string | null;
 }
 
 /**
@@ -395,6 +438,21 @@ async function dispatchOne(
   // Opt-out ganha a tudo: nem token, nem conversa nova, nem chamada à Meta.
   if (r.phoneE164 && cfg.optedOut.has(r.phoneE164)) {
     return { ...r, status: "opted_out", error: OPTED_OUT_ERROR };
+  }
+  const requestId = cfg.clientRequestId ?? (cfg.sendKey && r.phoneE164 ? recipientRequestKey(cfg.sendKey, r.phoneE164) : null);
+  // Retoma (17b): este destinatário já foi tratado por este envio → nem token
+  // novo do formulário, nem chamada à Meta.
+  if (requestId) {
+    const [prev] = await db
+      .select({ status: whatsappMessages.status, waMessageId: whatsappMessages.waMessageId, errorDetail: whatsappMessages.errorDetail })
+      .from(whatsappMessages)
+      .where(eq(whatsappMessages.clientRequestId, requestId))
+      .limit(1);
+    if (prev) {
+      const dup = duplicateRequestOutcome(prev);
+      if (dup.kind === "sent") return { ...r, status: "sent", waMessageId: dup.waMessageId ?? undefined, resumed: true };
+      if (dup.kind === "in_doubt") return { ...r, status: "failed", error: dup.error, resumed: true };
+    }
   }
   // Template sem parâmetros → nenhum valor de body (com ou sem metadados). Sem
   // isto, o modo "sem inspeção" mandava o nome como {{1}} e a Meta recusava.
@@ -434,7 +492,7 @@ async function dispatchOne(
     broadcastId: cfg.broadcastId,
     sentById: cfg.sentById,
     metaUnavailableReason: cfg.metaUnavailableReason,
-    clientRequestId: cfg.clientRequestId ?? null,
+    clientRequestId: requestId,
   });
 }
 
@@ -621,8 +679,18 @@ async function dispatchAll(
       recipients[i] = { ...r, status: "duplicate_phone", error: `Mesmo número de ${other.name ?? "outro destinatário"} — enviado só uma vez.` };
       return;
     }
-    recipients[i] = await dispatchOne(db, r, cfgFor(r));
+    // Um erro num destinatário nunca deixa buracos na lista (17b): antes o
+    // runConcurrent engolia-o e quem lia `recipients[i]` rebentava — e o pedido
+    // automático voltava a sair para todos na hora seguinte.
+    try {
+      recipients[i] = await dispatchOne(db, r, cfgFor(r));
+    } catch (err: any) {
+      recipients[i] = { ...r, status: "failed", error: `Erro no envio: ${String(err?.message ?? err).slice(0, 200)}` };
+    }
   });
+  for (let i = 0; i < recipients.length; i++) {
+    if (!recipients[i]) recipients[i] = { ...resolved[i], status: "failed", error: "Envio interrompido." };
+  }
   return recipients;
 }
 
@@ -664,6 +732,8 @@ export async function sendTemplateToContacts(opts: {
   contacts: ContactRecipient[];
   note?: string | null;
   createdById?: number | null;
+  /** Código único do envio (do ecrã, 17b): carregar outra vez retoma, não duplica. */
+  sendKey?: string | null;
 }): Promise<BroadcastSummary> {
   const prep = await prepareSend({ templateName: opts.templateName, languageCode: opts.languageCode });
   if (prep.includeFormLink) {
@@ -687,12 +757,13 @@ export async function sendTemplateToContacts(opts: {
     };
   });
 
-  const broadcastId = await insertBroadcast(db, {
+  const { id: broadcastId } = await openBroadcast(db, {
     templateName: prep.templateName,
     note: `[LEADS] ${opts.note ?? ""}`.trim(),
     createdById: opts.createdById ?? null,
     weekStart: null,
     totalCount: resolved.length,
+    sendKey: opts.sendKey ?? null,
   });
 
   const cfg: DispatchConfig = {
@@ -700,6 +771,7 @@ export async function sendTemplateToContacts(opts: {
     bodyParam2: null,
     includeFormLink: false,
     weekStart: null,
+    sendKey: opts.sendKey ?? null,
   };
   const recipients = await dispatchAll(db, resolved, () => cfg);
   const sum = summarize(recipients);
@@ -850,16 +922,18 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     if (missing.length > 0) pool = [...extras, ...(await listActiveEmployeesByIds(missing))];
   }
   const resolved = resolveRecipients(pool, opts.employeeIds ?? null);
+  if (!resolved.length) throw new Error("Nenhum destinatário para este envio.");
 
-  const broadcastId = await insertBroadcast(db, {
+  const { id: broadcastId } = await openBroadcast(db, {
     templateName: prep.templateName,
     note: opts.note ?? null,
     createdById: sentById,
     weekStart: prep.weekStart,
     totalCount: resolved.length,
+    sendKey: opts.sendKey ?? null,
   });
 
-  const base = baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME);
+  const base = { ...baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME), sendKey: opts.sendKey ?? null };
   const recipients = await dispatchAll(db, resolved, (r) =>
     r.employeeId != null && perRecipient?.[r.employeeId] ? { ...base, bodyParam2Override: perRecipient[r.employeeId] } : base,
   );

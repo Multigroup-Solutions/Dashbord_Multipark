@@ -41,6 +41,7 @@ import {
   applyStatusToMessage,
   laterTimestamp,
   previewFields,
+  reconcilePendingStatus,
   stashPendingStatus,
   type Db,
   type MessageStatus,
@@ -118,10 +119,25 @@ export function messageBody(m: any): string {
       return "[mensagem de voz]";
     case "sticker":
       return "[sticker]";
-    case "location":
-      return "[localização]";
-    case "contacts":
-      return "[contacto]";
+    case "location": {
+      // Guardar o conteúdo (17b): antes ficava só "[localização]" e quem
+      // pedia "onde está?" para a recolha não via onde.
+      const l = m?.location ?? {};
+      const lat = Number(l.latitude);
+      const lng = Number(l.longitude);
+      const place = [l.name, l.address].filter((x: unknown) => typeof x === "string" && x.trim()).join(" — ");
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return place ? `[localização] ${place}` : "[localização]";
+      return `[localização]${place ? ` ${place}` : ""}\nhttps://maps.google.com/?q=${lat.toFixed(6)},${lng.toFixed(6)}`;
+    }
+    case "contacts": {
+      const list: any[] = Array.isArray(m?.contacts) ? m.contacts : [];
+      const lines = list.slice(0, 5).map((c) => {
+        const name = String(c?.name?.formatted_name ?? c?.name?.first_name ?? "").trim();
+        const phones = (Array.isArray(c?.phones) ? c.phones : []).map((p: any) => String(p?.phone ?? p?.wa_id ?? "").trim()).filter(Boolean);
+        return [name, phones.join(", ")].filter(Boolean).join(": ");
+      }).filter(Boolean);
+      return lines.length ? `[contacto] ${lines.join(" · ")}` : "[contacto]";
+    }
     case "reaction": {
       const emoji = m?.reaction?.emoji;
       return emoji ? `[reação ${emoji}]` : "[reação removida]";
@@ -494,12 +510,10 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
 
   // Tudo o resto é best-effort: a mensagem já está gravada; falhar aqui não
   // pode fazer a Meta repetir (o retry seria deduplicado e perdia-se na mesma).
-  if (steps.has("download_media") && m.media) {
-    await fetchAndStoreMedia(db, w.messageId, m.waMessageId, m.media);
-  }
-  if (w.employeeId == null && !w.bookingChecked) {
-    await matchBookingCity(db, w.conversationId, phoneE164);
-  }
+  // Ordem (17b): primeiro o que é rápido e não pode perder-se (STOP, respostas
+  // de disponibilidade, leads, triagem); o ficheiro (até ~45 s) e a cidade pela
+  // reserva (até ~22 s) ficam no FIM — se a função morrer aos 60 s, o cron
+  // re-tenta o ficheiro, mas um STOP perdido já não voltava.
   if (steps.has("opt_out") || steps.has("opt_in")) {
     await applyOptIntent(db, steps.has("opt_out") ? "opt_out" : "opt_in", w.conversationId, phoneE164);
   }
@@ -528,6 +542,13 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
   if (w.plan.bumpUnread && !w.optedOut && triage) {
     const { noteInboundForTriage } = await import("./whatsappTriage");
     if (await noteInboundForTriage(w.conversationId)) triage.push(w.conversationId);
+  }
+  // Lentos no fim (o ficheiro volta a ser tentado pelo cron se ficar a meio).
+  if (steps.has("download_media") && m.media) {
+    await fetchAndStoreMedia(db, w.messageId, m.waMessageId, m.media);
+  }
+  if (w.employeeId == null && !w.bookingChecked) {
+    await matchBookingCity(db, w.conversationId, phoneE164);
   }
   return true;
 }
@@ -652,7 +673,46 @@ async function handleStatus(db: Db, s: ParsedStatusUpdate): Promise<boolean> {
     await stashPendingStatus(db, s.waMessageId, s.status, s.errorDetail);
     return false;
   }
-  return applyStatusToMessage(db, rows[0], s.status, s.errorDetail);
+  const changed = await applyStatusToMessage(db, rows[0], s.status, s.errorDetail);
+  if (changed && s.status === "failed") {
+    try { await afterOutboundFailed(db, rows[0].id, rows[0].status, s.errorDetail); }
+    catch (err: any) { console.warn("[WhatsApp] corrigir contas do envio falhado:", String(err?.message ?? err).slice(0, 160)); }
+  }
+  return changed;
+}
+
+/** Data do aviso de escala pela nota da difusão ("Aviso de escala AAAA-MM-DD"). PURA. */
+export function scheduleNoticeDateFromNote(note: string | null | undefined): string | null {
+  const m = String(note ?? "").match(/^Aviso de escala (\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+/**
+ * A Meta aceitou e só depois disse "falhou" (ex.: número sem WhatsApp, 17b):
+ * a difusão deixa de contar a mensagem como enviada e, num aviso de escala, o
+ * aviso passa a "falhou" — o Extras-Dia deixa de esperar um "sim" que nunca vem.
+ * Não volta a tentar sozinho (attempts = 3).
+ */
+async function afterOutboundFailed(db: Db, messageId: number, prevStatus: string, errorDetail: string | null): Promise<void> {
+  const [m] = await db
+    .select({ broadcastId: whatsappMessages.broadcastId, employeeId: whatsappConversations.employeeId })
+    .from(whatsappMessages)
+    .innerJoin(whatsappConversations, eq(whatsappMessages.conversationId, whatsappConversations.id))
+    .where(eq(whatsappMessages.id, messageId))
+    .limit(1);
+  if (!m?.broadcastId) return;
+  if (prevStatus === "sent" || prevStatus === "delivered" || prevStatus === "read") {
+    await db.execute(sql`UPDATE whatsapp_broadcasts SET sentCount = GREATEST(sentCount - 1, 0), failedCount = failedCount + 1 WHERE id = ${m.broadcastId}`);
+  }
+  if (m.employeeId == null) return;
+  const [rows] = (await db.execute(sql`SELECT note FROM whatsapp_broadcasts WHERE id = ${m.broadcastId} LIMIT 1`)) as any;
+  const date = scheduleNoticeDateFromNote((rows as any[])?.[0]?.note);
+  if (!date) return;
+  const why = `A Meta não entregou: ${String(errorDetail ?? "falhou").slice(0, 250)}`;
+  await db.execute(sql`UPDATE extras_dia_notices SET status = 'failed', error = ${why}
+     WHERE employeeId = ${m.employeeId} AND assignmentDate = ${date} AND status = 'sent' AND confirmedAt IS NULL AND declinedAt IS NULL`);
+  await db.execute(sql`UPDATE extras_dia_notifications SET status = 'failed', detail = ${why}, attempts = GREATEST(attempts, 3)
+     WHERE employeeId = ${m.employeeId} AND assignmentDate = ${date} AND kind = 'scheduled' AND channel = 'whatsapp' AND status = 'sent'`);
 }
 
 /**
@@ -694,6 +754,8 @@ export interface WhatsappMaintenanceResult {
   mediaRetried: number;
   mediaStored: number;
   pendingStatusesPurged: number;
+  /** Estados pendentes aplicados a mensagens que já existiam (17b). */
+  pendingStatusesApplied?: number;
 }
 
 /** Máximo de tentativas de download por mensagem, e lote por execução. */
@@ -744,6 +806,23 @@ export async function runWhatsappMaintenance(): Promise<WhatsappMaintenanceResul
     const { sweepStaleCallsThrottled } = await import("./whatsappCalls");
     await sweepStaleCallsThrottled(true);
   } catch { /* nunca parte a manutenção */ }
+
+  // Estados que chegaram antes da mensagem e ficaram por aplicar (corrida entre
+  // o webhook e o fim do envio, 17b): aplica-os à mensagem que já existe ANTES
+  // de limpar — senão um "falhou" perdia-se e a mensagem ficava "enviada".
+  try {
+    const stuck = await db
+      .select({ waMessageId: whatsappPendingStatuses.waMessageId })
+      .from(whatsappPendingStatuses)
+      .where(sql`EXISTS (SELECT 1 FROM whatsapp_messages pm WHERE pm.waMessageId = ${whatsappPendingStatuses.waMessageId})`)
+      .limit(200);
+    for (const r of stuck) {
+      await reconcilePendingStatus(db, r.waMessageId);
+      out.pendingStatusesApplied = (out.pendingStatusesApplied ?? 0) + 1;
+    }
+  } catch (err: any) {
+    console.warn("[WhatsApp] aplicar estados pendentes falhou:", String(err?.message ?? err).slice(0, 160));
+  }
 
   const del = await db
     .delete(whatsappPendingStatuses)
