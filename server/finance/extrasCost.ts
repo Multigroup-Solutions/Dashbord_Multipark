@@ -75,6 +75,8 @@ export function aggregateExtrasCost(
   const byDayCity = new Map<string, { day: string; city: CityKey | null; real: number; planned: number }>();
   const plannedByLevel = new Map<string, LevelAgg>();
   const realByLevel = new Map<string, LevelAgg>();
+  /** `${day}|${projectId ?? ""}` → custo REAL (ponto) por dia × centro da ficha do extra */
+  const realByDayProject = new Map<string, { day: string; projectId: number | null; cost: number }>();
   const realPeople = new Map<string, Set<number>>();
   let teamLeaderShifts = 0;
   const cell = (day: string, city: CityKey | null) => {
@@ -101,7 +103,13 @@ export function aggregateExtrasCost(
     const lvName = LEVEL_BY_NUMBER[Number(r.level ?? 1)] ?? "junior";
     const cost = hours * rateFor(rates, lvName);
     const day = opts.dayOfRecord(r.recordedAt);
-    if (cost) realByDay.set(day, (realByDay.get(day) ?? 0) + cost);
+    if (cost) {
+      realByDay.set(day, (realByDay.get(day) ?? 0) + cost);
+      const k = `${day}|${r.projectId ?? ""}`;
+      const dp = realByDayProject.get(k) ?? { day, projectId: r.projectId ?? null, cost: 0 };
+      dp.cost += cost;
+      realByDayProject.set(k, dp);
+    }
     cell(day, opts.cityOfProject(r.projectId)).real += cost;
     const ex = realByLevel.get(lvName) ?? { level: lvName, hours: 0, headcount: 0, cost: 0 };
     ex.hours += hours; ex.cost += cost;
@@ -109,7 +117,7 @@ export function aggregateExtrasCost(
     const people = realPeople.get(lvName) ?? new Set<number>(); people.add(r.employeeId); realPeople.set(lvName, people);
   }
   for (const [lv, ppl] of realPeople) realByLevel.get(lv)!.headcount = ppl.size;
-  return { plannedByDay, realByDay, byDayCity, plannedByLevel, realByLevel, teamLeaderShifts };
+  return { plannedByDay, realByDay, realByDayProject, byDayCity, plannedByLevel, realByLevel, teamLeaderShifts };
 }
 
 /** O custo que conta num dia: real até hoje (inclusive), previsto depois. */

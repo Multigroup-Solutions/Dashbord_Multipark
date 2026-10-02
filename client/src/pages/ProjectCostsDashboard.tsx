@@ -19,20 +19,18 @@ import {
 import {
   Euro,
   Loader2,
-  TrendingUp,
-  TrendingDown,
   Wallet,
   Users,
   Receipt,
   FolderTree,
   AlertTriangle,
-  CheckCircle2,
   ArrowLeft,
   Download,
   ChevronDown,
   ChevronRight,
+  Handshake,
 } from "lucide-react";
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import FitAmount from "@/components/finance/FitAmount";
 import { AXIS_TICK, CHART_PALETTE, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE, eurAxis } from "@/lib/financeFormat";
@@ -68,25 +66,22 @@ function budgetBadge(percentUsed: number, budget: number) {
   return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Saudável</Badge>;
 }
 
-type ProjectCost = {
-  id: number;
-  name: string;
-  level: string;
-  parentId: number | null;
-  color: string | null;
-  managerId: number | null;
+/** Falha passageira (BD) tenta mais 2 vezes; sem permissão mostra logo o erro. */
+const retryTransient = (count: number, err: unknown) =>
+  count < 2 && !["FORBIDDEN", "UNAUTHORIZED", "BAD_REQUEST"].includes(String((err as { data?: { code?: string } })?.data?.code ?? ""));
+
+/** Uma linha do servidor (server/finance/projectCosts.ts). */
+type Row = {
+  id: number; name: string; level: string; parentId: number | null; color: string | null; isActive: boolean;
   managerName: string;
-  budget: number;
-  expenses: number;
-  expenseCount: number;
-  pendingExpenses: number;
-  paidExpenses: number;
-  salaryCost: number;
-  employeeCount: number;
-  totalCost: number;
-  remaining: number;
-  percentUsed: number;
+  budgetAnnual: number; budget: number;
+  expenses: number; expensesGross: number;
+  salaries: number; employerTax: number; extras: number; personnel: number;
+  commissions: number; totalCost: number;
 };
+type Sums = { expenses: number; personnel: number; commissions: number; totalCost: number; budget: number };
+/** O que a tabela, os alertas e a lista "requerem atenção" mostram de um nó (uma regra só). */
+type View = Sums & { percent: number; hasChildren: boolean };
 
 export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void } = {}) {
   const [, setLocation] = useLocation();
@@ -97,145 +92,114 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [levelFilter, setLevelFilter] = useState<string>("all");
 
-  const prevDataRef = useRef<ProjectCost[]>([]);
-  const { data: costData, isLoading } = trpc.projects.costs.useQuery(
+  const { data: report, isLoading, error, refetch, isFetching, isPlaceholderData } = trpc.projects.costs.useQuery(
     { year, month },
-    { placeholderData: (prev) => prev }
+    { placeholderData: (prev) => prev, retry: retryTransient }
   );
-  // Keep a stable ref for previous data
-  if (costData && costData.length > 0) {
-    prevDataRef.current = costData as ProjectCost[];
-  }
+  const data = (report?.rows ?? []) as Row[];
+  const unallocated = report?.unallocated;
 
-  const data = (costData ?? []) as ProjectCost[];
-
-  // Build hierarchy helpers
   const childrenMap = useMemo(() => {
-    const map = new Map<number | null, ProjectCost[]>();
+    const map = new Map<number | null, Row[]>();
     for (const p of data) {
-      const pid = p.parentId;
-      if (!map.has(pid)) map.set(pid, []);
-      map.get(pid)!.push(p);
+      if (!map.has(p.parentId)) map.set(p.parentId, []);
+      map.get(p.parentId)!.push(p);
     }
     return map;
   }, [data]);
 
-  // Hierarchical rollup: compute aggregated costs (own + children)
+  // Rollup: custos do nó + descendentes (cada custo vive num só nó, por isso
+  // somar não duplica — é a mesma soma que a Faturação filtrada nesse nó).
   const rollupData = useMemo(() => {
-    // Build children map
-    const cMap = new Map<number | null, ProjectCost[]>();
-    for (const p of data) {
-      const pid = p.parentId;
-      if (!cMap.has(pid)) cMap.set(pid, []);
-      cMap.get(pid)!.push(p);
-    }
-    // Recursive rollup
-    const rollup = new Map<number, { expenses: number; salaryCost: number; totalCost: number; budget: number; employeeCount: number; expenseCount: number }>(); 
-    function computeRollup(id: number): { expenses: number; salaryCost: number; totalCost: number; budget: number; employeeCount: number; expenseCount: number } {
-      if (rollup.has(id)) return rollup.get(id)!;
-      const item = data.find(d => d.id === id);
-      if (!item) return { expenses: 0, salaryCost: 0, totalCost: 0, budget: 0, employeeCount: 0, expenseCount: 0 };
-      let agg = { expenses: item.expenses, salaryCost: item.salaryCost, totalCost: item.totalCost, budget: item.budget, employeeCount: item.employeeCount, expenseCount: item.expenseCount };
-      const children = cMap.get(id) || [];
-      for (const child of children) {
-        const cr = computeRollup(child.id);
-        agg.expenses += cr.expenses;
-        agg.salaryCost += cr.salaryCost;
-        agg.totalCost += cr.totalCost;
-        agg.budget += cr.budget;
-        agg.employeeCount += cr.employeeCount;
-        agg.expenseCount += cr.expenseCount;
-      }
+    const rollup = new Map<number, Sums>();
+    const byId = new Map(data.map((d) => [d.id, d]));
+    const compute = (id: number): Sums => {
+      const hit = rollup.get(id);
+      if (hit) return hit;
+      const item = byId.get(id);
+      const agg: Sums = item
+        ? { expenses: item.expenses, personnel: item.personnel, commissions: item.commissions, totalCost: item.totalCost, budget: item.budget }
+        : { expenses: 0, personnel: 0, commissions: 0, totalCost: 0, budget: 0 };
       rollup.set(id, agg);
+      for (const child of childrenMap.get(id) ?? []) {
+        const c = compute(child.id);
+        agg.expenses += c.expenses; agg.personnel += c.personnel; agg.commissions += c.commissions;
+        agg.totalCost += c.totalCost; agg.budget += c.budget;
+      }
       return agg;
-    }
-    for (const d of data) computeRollup(d.id);
+    };
+    for (const d of data) compute(d.id);
     return rollup;
-  }, [data]);
+  }, [data, childrenMap]);
 
-  // Aggregate totals from ALL items (sem double-counting do orçamento).
-  // O orçamento total da empresa = soma dos budgets dos roots (top-level
-  // Grupos), porque um budget hierárquico inclui o dos filhos. Despesas
-  // e salários NÃO duplicam (cada despesa vai a um projecto e cada
-  // salário a um único projecto), por isso somam-se todos os itens.
+  // Orçamento do nó (o budget é hierárquico: definido em cima, os filhos
+  // consomem dele); sem budget próprio mas com filhos, conta a soma dos filhos.
+  const viewOf = (item: Row): View => {
+    const hasChildren = (childrenMap.get(item.id) ?? []).length > 0;
+    const r = rollupData.get(item.id);
+    const sums = hasChildren && r ? r : item;
+    const budget = item.budget > 0 ? item.budget : (hasChildren && r ? r.budget : item.budget);
+    return {
+      expenses: sums.expenses, personnel: sums.personnel, commissions: sums.commissions, totalCost: sums.totalCost,
+      budget, percent: budget > 0 ? (sums.totalCost / budget) * 100 : 0, hasChildren,
+    };
+  };
+
   const totals = useMemo(() => {
-    const roots = data.filter(d => d.parentId === null);
-    // Se algum root tem budget próprio, usa-se isso; senão usa-se o rollup
-    // (soma dos filhos) para captar empresas que definem budget só ao nível
-    // de Cidade/Marca/Projeto.
-    const totalBudget = roots.reduce((s, root) => {
-      if (root.budget > 0) return s + root.budget;
-      const r = rollupData.get(root.id);
-      return s + (r?.budget ?? 0);
-    }, 0);
-    const totalExpenses = data.reduce((s, d) => s + d.expenses, 0);
-    const totalSalary = data.reduce((s, d) => s + d.salaryCost, 0);
-    const totalCost = totalExpenses + totalSalary;
-    const totalRemaining = totalBudget - totalCost;
-    const percentUsed = totalBudget > 0 ? (totalCost / totalBudget) * 100 : 0;
-    const allWithBudget = data.filter(d => d.budget > 0);
-    const projectsOverBudget = allWithBudget.filter(d => {
-      const r = rollupData.get(d.id);
-      return r && r.budget > 0 && (r.totalCost / r.budget) * 100 >= 100;
-    }).length;
-    const projectsAtRisk = allWithBudget.filter(d => {
-      const r = rollupData.get(d.id);
-      if (!r || r.budget <= 0) return false;
-      const pct = (r.totalCost / r.budget) * 100;
-      return pct >= 80 && pct < 100;
-    }).length;
-    return { totalBudget, totalExpenses, totalSalary, totalCost, totalRemaining, percentUsed, projectsOverBudget, projectsAtRisk, projectCount: data.length };
-  }, [data, rollupData]);
+    // Orçamento total = budgets dos nós de topo (ou a soma dos filhos quando o topo não tem)
+    const roots = data.filter((d) => d.parentId === null);
+    const totalBudget = roots.reduce((s, root) => s + (root.budget > 0 ? root.budget : rollupData.get(root.id)?.budget ?? 0), 0);
+    // Custos: os do servidor (= Faturação, mesmo alcance) — incluem o "Por atribuir"
+    const t = report?.totals ?? { expenses: 0, personnel: 0, commissions: 0, totalCost: 0 };
+    const views = data.map((d) => viewOf(d)).filter((v) => v.budget > 0);
+    return {
+      totalBudget, ...t,
+      totalRemaining: totalBudget - t.totalCost,
+      overBudget: views.filter((v) => v.percent >= 100).length,
+      atRisk: views.filter((v) => v.percent >= 80 && v.percent < 100).length,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, rollupData, report?.totals]);
 
-  // Chart data: top items by cost (any level with costs)
   const topProjectsChart = useMemo(() => {
     return data
-      .filter(d => d.totalCost > 0)
+      .filter((d) => d.totalCost > 0)
       .sort((a, b) => b.totalCost - a.totalCost)
       .slice(0, 10)
-      .map(d => ({
+      .map((d) => ({
         name: d.name.length > 18 ? d.name.slice(0, 18) + "…" : d.name,
         despesas: d.expenses,
-        salarios: d.salaryCost,
+        pessoal: d.personnel,
+        comissoes: d.commissions,
         orcamento: d.budget,
       }));
   }, [data]);
 
-  // Pie data: cost distribution by top-level groups/cities
-  const costByLevel = useMemo(() => {
-    const levelMap = new Map<string, number>();
-    // Group costs by root-level items (groups) using rollup
-    const roots = data.filter(d => d.parentId === null);
-    for (const root of roots) {
-      const r = rollupData.get(root.id);
-      if (r && r.totalCost > 0) {
-        levelMap.set(root.name, r.totalCost);
-      }
-    }
-    // Add unallocated costs (items with no project)
-    const unallocated = data.filter(d => d.totalCost > 0 && !data.some(p => p.id === d.parentId) && d.parentId !== null);
-    for (const u of unallocated) {
-      levelMap.set(u.name, (levelMap.get(u.name) || 0) + u.totalCost);
-    }
-    return Array.from(levelMap.entries())
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value);
-  }, [data, rollupData]);
+  // Distribuição pelos nós de topo (com descendentes) + o que não tem centro
+  const costByRoot = useMemo(() => {
+    const out = data
+      .filter((d) => d.parentId === null)
+      .map((root) => ({ name: root.name, value: rollupData.get(root.id)?.totalCost ?? 0 }))
+      .filter((x) => x.value > 0);
+    if (unallocated && unallocated.totalCost > 0) out.push({ name: "Por atribuir", value: unallocated.totalCost });
+    return out.sort((a, b) => b.value - a.value);
+  }, [data, rollupData, unallocated]);
 
-  // Filtered data for table
-  const filteredData = useMemo(() => {
-    if (levelFilter === "all") return data;
-    return data.filter(d => d.level === levelFilter);
-  }, [data, levelFilter]);
+  const filteredData = useMemo(() => (levelFilter === "all" ? data : data.filter((d) => d.level === levelFilter)), [data, levelFilter]);
 
-  // Roots (no parent or parent not in filtered set)
   const rootItems = useMemo(() => {
-    if (levelFilter !== "all") return filteredData.sort((a, b) => b.totalCost - a.totalCost);
-    return filteredData.filter(d => d.parentId === null).sort((a, b) => b.totalCost - a.totalCost);
-  }, [filteredData, levelFilter]);
+    const base = levelFilter === "all" ? filteredData.filter((d) => d.parentId === null) : filteredData;
+    return [...base].sort((a, b) => (rollupData.get(b.id)?.totalCost ?? b.totalCost) - (rollupData.get(a.id)?.totalCost ?? a.totalCost));
+  }, [filteredData, levelFilter, rollupData]);
+
+  const attention = useMemo(
+    () => data.map((d) => ({ d, v: viewOf(d) })).filter(({ v }) => v.budget > 0 && v.percent >= 80).sort((a, b) => b.v.percent - a.v.percent),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, rollupData],
+  );
 
   const toggleExpand = (id: number) => {
-    setExpandedIds(prev => {
+    setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -243,31 +207,19 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
     });
   };
 
-  const expandAll = () => {
-    setExpandedIds(new Set(data.map(d => d.id)));
-  };
-
-  const collapseAll = () => {
-    setExpandedIds(new Set());
-  };
-
-  // CSV export
+  // CSV: valores do próprio nó e, à parte, com os descendentes
   const exportCSV = () => {
-    const projectRows = data;
-    const header = "Projeto;Gestor;Orçamento;Despesas;Salários;Custo Total;Restante;% Utilizado";
-    const rows = projectRows.map(d =>
-      [
-        d.name,
-        d.managerName,
-        d.budget.toFixed(2).replace(".", ","),
-        d.expenses.toFixed(2).replace(".", ","),
-        d.salaryCost.toFixed(2).replace(".", ","),
-        d.totalCost.toFixed(2).replace(".", ","),
-        d.remaining.toFixed(2).replace(".", ","),
-        d.percentUsed.toFixed(1).replace(".", ",") + "%",
-      ].join(";")
-    );
-    const csv = "\uFEFF" + [header, ...rows].join("\n");
+    const n = (v: number) => v.toFixed(2).replace(".", ",");
+    const header = "Nó;Nível;Gestor;Orçamento anual;Orçamento do período;Despesas (sem IVA);Despesas (com IVA);Salários;TSU;Extras;Comissões;Custo do nó;Custo com descendentes;Restante;% utilizado";
+    const rows = data.map((d) => {
+      const v = viewOf(d);
+      return [d.name, levelLabels[d.level] ?? d.level, d.managerName, n(d.budgetAnnual), n(v.budget), n(d.expenses), n(d.expensesGross), n(d.salaries), n(d.employerTax), n(d.extras), n(d.commissions), n(d.totalCost), n(v.totalCost), n(v.budget - v.totalCost), v.budget > 0 ? v.percent.toFixed(1).replace(".", ",") + "%" : ""].join(";");
+    });
+    if (unallocated && unallocated.totalCost > 0) {
+      const u = unallocated;
+      rows.push(["Por atribuir", "", "", "", "", n(u.expenses), n(u.expensesGross), n(u.salaries), n(u.employerTax), n(u.extras), n(u.commissions), n(u.totalCost), n(u.totalCost), "", ""].join(";"));
+    }
+    const csv = "﻿" + [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -302,124 +254,65 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
     project: "Projeto",
   };
 
-  function renderRow(item: ProjectCost, depth: number) {
-    const children = childrenMap.get(item.id) || [];
-    const hasChildren = children.length > 0 && levelFilter === "all";
-    const isExpanded = expandedIds.has(item.id);
+  const money = (v: number) => (v > 0 ? fmt(v) : <span className="text-muted-foreground text-xs">—</span>);
 
-    // Use rollup para custos/salários quando há filhos (cada despesa/salário
-    // só vive num projecto, por isso somar não duplica). Para o orçamento
-    // usamos sempre o do próprio item — o budget é hierárquico, definido
-    // em cima, e os filhos "consomem" desse pool. Se o próprio item não
-    // tem budget definido mas tem filhos com budget, caímos no rollup
-    // (cobertura para empresas que só atribuem budget aos filhos).
-    const r = rollupData.get(item.id);
-    const displayExpenses = hasChildren && r ? r.expenses : item.expenses;
-    const displaySalary = hasChildren && r ? r.salaryCost : item.salaryCost;
-    const displayTotal = hasChildren && r ? r.totalCost : item.totalCost;
-    const displayBudget = item.budget > 0 ? item.budget : (hasChildren && r ? r.budget : item.budget);
-    const displayPercent = displayBudget > 0 ? (displayTotal / displayBudget) * 100 : 0;
+  function renderRow(item: Row, depth: number) {
+    const children = childrenMap.get(item.id) || [];
+    const v = viewOf(item);
+    const hasChildren = v.hasChildren && levelFilter === "all";
+    const isExpanded = expandedIds.has(item.id);
 
     return (
       <div key={item.id}>
         <div
-          className={`flex items-center gap-2 px-3 py-2.5 border-b hover:bg-muted/50 transition-colors ${
-            depth === 0 ? "bg-muted/20" : ""
-          }`}
+          className={`flex items-center gap-2 px-3 py-2.5 border-b hover:bg-muted/50 transition-colors ${depth === 0 ? "bg-muted/20" : ""}`}
           style={{ paddingLeft: `${12 + depth * 24}px` }}
         >
-          {/* Expand toggle */}
           <div className="w-5 shrink-0">
             {hasChildren ? (
-              <button onClick={() => toggleExpand(item.id)} className="p-0.5 hover:bg-accent rounded">
-                {isExpanded ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                )}
+              <button onClick={() => toggleExpand(item.id)} className="p-0.5 hover:bg-accent rounded" aria-label={isExpanded ? "Fechar" : "Abrir"}>
+                {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
               </button>
             ) : null}
           </div>
 
-          {/* Color dot + name */}
           <div className="flex items-center gap-2 min-w-[13rem] flex-1">
-            <div
-              className="h-3 w-3 rounded-full shrink-0"
-              style={{ backgroundColor: item.color || "#6366f1" }}
-            />
-            <span className={`truncate ${depth === 0 ? "font-semibold" : "font-medium"} text-sm`} title={hasChildren ? `${item.name} · ${r?.employeeCount ?? item.employeeCount} funcionário(s)` : item.name}>
-              {item.name}
-            </span>
-            <Badge variant="outline" className="text-[11px] shrink-0">
-              {levelLabels[item.level] || item.level}
-            </Badge>
-            {hasChildren && (
-              <span className="hidden 2xl:inline text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
-                ({(r?.employeeCount ?? item.employeeCount)} func.)
-              </span>
-            )}
+            <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: item.color || "#6366f1" }} />
+            <span className={`truncate ${depth === 0 ? "font-semibold" : "font-medium"} text-sm`} title={item.name}>{item.name}</span>
+            <Badge variant="outline" className="text-[11px] shrink-0">{levelLabels[item.level] || item.level}</Badge>
+            {!item.isActive && <Badge variant="outline" className="text-[11px] shrink-0 text-muted-foreground">Inativo</Badge>}
           </div>
 
-          {/* Manager */}
           <div className="hidden md:block w-28 text-xs text-muted-foreground truncate shrink-0">
             {item.managerName !== "—" ? item.managerName : ""}
           </div>
+          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">{money(v.budget)}</div>
+          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">{money(v.expenses)}</div>
+          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">{money(v.personnel)}</div>
+          <div className="w-24 text-right text-sm tabular-nums whitespace-nowrap shrink-0">{money(v.commissions)}</div>
+          <div className="w-28 text-right text-sm font-semibold tabular-nums whitespace-nowrap shrink-0">{money(v.totalCost)}</div>
 
-          {/* Budget */}
-          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">
-            {displayBudget > 0 ? fmt(displayBudget) : <span className="text-muted-foreground text-xs">—</span>}
-          </div>
-
-          {/* Expenses */}
-          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">
-            {displayExpenses > 0 ? fmt(displayExpenses) : <span className="text-muted-foreground text-xs">—</span>}
-          </div>
-
-          {/* Salaries */}
-          <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">
-            {displaySalary > 0 ? fmt(displaySalary) : <span className="text-muted-foreground text-xs">—</span>}
-          </div>
-
-          {/* Total cost */}
-          <div className="w-28 text-right text-sm font-semibold tabular-nums whitespace-nowrap shrink-0">
-            {displayTotal > 0 ? fmt(displayTotal) : <span className="text-muted-foreground text-xs">—</span>}
-          </div>
-
-          {/* Progress bar + badge */}
           <div className="w-36 shrink-0 flex items-center gap-2">
-            {displayBudget > 0 ? (
+            {v.budget > 0 ? (
               <>
                 <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${budgetBg(displayPercent)}`}
-                    style={{ width: `${Math.min(displayPercent, 100)}%` }}
-                  />
+                  <div className={`h-full rounded-full transition-all ${budgetBg(v.percent)}`} style={{ width: `${Math.min(v.percent, 100)}%` }} />
                 </div>
-                <span className={`text-xs font-medium w-12 text-right tabular-nums ${budgetColor(displayPercent)}`}>
-                  {pct(displayPercent)}
-                </span>
+                <span className={`text-xs font-medium w-12 text-right tabular-nums ${budgetColor(v.percent)}`}>{pct(v.percent)}</span>
               </>
             ) : (
               <span className="text-xs text-muted-foreground">—</span>
             )}
           </div>
 
-          {/* Status badge */}
-          <div className="w-28 shrink-0 flex justify-end">
-            {budgetBadge(displayPercent, displayBudget)}
-          </div>
+          <div className="w-28 shrink-0 flex justify-end">{budgetBadge(v.percent, v.budget)}</div>
         </div>
 
-        {/* Children */}
         {hasChildren && isExpanded && (
           <div>
-            {children
-              .sort((a, b) => {
-                const ra = rollupData.get(a.id);
-                const rb = rollupData.get(b.id);
-                return (rb?.totalCost ?? b.totalCost) - (ra?.totalCost ?? a.totalCost);
-              })
-              .map(child => renderRow(child, depth + 1))}
+            {[...children]
+              .sort((a, b) => (rollupData.get(b.id)?.totalCost ?? b.totalCost) - (rollupData.get(a.id)?.totalCost ?? a.totalCost))
+              .map((child) => renderRow(child, depth + 1))}
           </div>
         )}
       </div>
@@ -428,11 +321,13 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-24">
+      <div className="flex items-center justify-center py-24" role="status" aria-label="A carregar custos">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
+
+  const asOf = report?.period?.isCurrent ? report.period.asOf.split("-").reverse().join("/") : null;
 
   return (
     <div className="space-y-6">
@@ -444,123 +339,83 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
           </Button>
           <div>
             <p className="text-sm text-muted-foreground">
-              Comparação de despesas e salários vs. orçamento definido
+              Custos realizados{asOf ? ` até ${asOf}` : ""} vs. orçamento, com as regras da Faturação (sem IVA).
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Orçamento anual{month ? " — com um mês escolhido conta 1/12" : ""}. Cada nó com os de baixo dá o mesmo que a Faturação filtrada nele.
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
-            <SelectTrigger className="w-28">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {years.map(y => (
-                <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-              ))}
+              {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={month ? String(month) : "all"} onValueChange={(v) => setMonth(v === "all" ? undefined : Number(v))}>
-            <SelectTrigger className="w-36">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {months.map(m => (
-                <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-              ))}
+              {months.map((m) => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" onClick={exportCSV} className="gap-1.5">
+          <Button variant="outline" size="sm" onClick={exportCSV} className="gap-1.5" disabled={!report}>
             <Download className="h-3.5 w-3.5" />
             CSV
           </Button>
         </div>
       </div>
 
+      {/* Erro ≠ zero: antes uma falha (BD da Multipark em baixo, sem permissão) mostrava 0 € e "Sem projetos" */}
+      {/* também quando o que está à vista é o período anterior (placeholder) */}
+      {error && (!report || isPlaceholderData) ? (
+        <Card className="border-red-200 bg-red-50/50" role="alert">
+          <CardContent className="pt-6 flex items-start gap-2 text-sm text-red-800">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-medium">Não foi possível calcular os custos.</p>
+              <p className="text-xs mt-0.5 break-words">{String(error.message ?? "").slice(0, 200)}</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()} disabled={isFetching}>
+                {isFetching ? "A tentar…" : "Tentar de novo"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3 [&>*]:min-w-0">
-        <Card className="relative overflow-hidden">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="space-y-1 min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground font-medium">Orçamento Total</p>
-                <FitAmount value={totals.totalBudget} className="text-base sm:text-lg font-bold" />
+        {([
+          { label: month ? "Orçamento do mês" : "Orçamento do ano", value: totals.totalBudget, icon: Wallet, box: "bg-blue-100", ic: "text-blue-600", hint: "" },
+          { label: "Despesas (sem IVA)", value: totals.expenses, icon: Receipt, box: "bg-amber-100", ic: "text-amber-600", hint: "" },
+          { label: "Pessoal", value: totals.personnel, icon: Users, box: "bg-purple-100", ic: "text-purple-600", hint: "salários, TSU e extras" },
+          { label: "Comissões", value: totals.commissions, icon: Handshake, box: "bg-teal-100", ic: "text-teal-600", hint: "parceiros" },
+          { label: "Custo total", value: totals.totalCost, icon: Euro, box: "bg-indigo-100", ic: "text-indigo-600", hint: totals.totalBudget > 0 ? `${totals.totalRemaining < 0 ? "excede em" : "restam"} ${fmt(Math.abs(totals.totalRemaining))}` : "" },
+        ] as const).map((k) => (
+          <Card key={k.label} className="relative overflow-hidden">
+            <CardContent className="pt-5 pb-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="space-y-1 min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground font-medium">{k.label}</p>
+                  <FitAmount value={k.value} className="text-base sm:text-lg font-bold" />
+                  {k.hint && <p className={`text-[11px] ${k.label === "Custo total" && totals.totalRemaining < 0 ? "text-red-700 dark:text-red-400" : "text-muted-foreground"}`}>{k.hint}</p>}
+                </div>
+                <div className={`h-8 w-8 shrink-0 rounded-lg flex items-center justify-center ${k.box}`}>
+                  <k.icon className={`h-4 w-4 ${k.ic}`} />
+                </div>
               </div>
-              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-blue-100">
-                <Wallet className="h-4 w-4 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="relative overflow-hidden">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="space-y-1 min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground font-medium">Despesas</p>
-                <FitAmount value={totals.totalExpenses} className="text-base sm:text-lg font-bold" />
-              </div>
-              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-amber-100">
-                <Receipt className="h-4 w-4 text-amber-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="relative overflow-hidden">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="space-y-1 min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground font-medium">Salários</p>
-                <FitAmount value={totals.totalSalary} className="text-base sm:text-lg font-bold" />
-              </div>
-              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-purple-100">
-                <Users className="h-4 w-4 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="relative overflow-hidden">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="space-y-1 min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground font-medium">Custo Total</p>
-                <FitAmount value={totals.totalCost} className="text-base sm:text-lg font-bold" />
-              </div>
-              <div className="h-8 w-8 shrink-0 rounded-lg flex items-center justify-center bg-indigo-100">
-                <Euro className="h-4 w-4 text-indigo-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="relative overflow-hidden">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="space-y-1 min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground font-medium">Restante</p>
-                <FitAmount value={totals.totalRemaining} className={`text-base sm:text-lg font-bold ${totals.totalRemaining < 0 ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`} />
-              </div>
-              <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${totals.totalRemaining < 0 ? "bg-red-100" : "bg-emerald-100"}`}>
-                {totals.totalRemaining < 0 ? (
-                  <TrendingDown className="h-4 w-4 text-red-600" />
-                ) : (
-                  <TrendingUp className="h-4 w-4 text-emerald-600" />
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
+            </CardContent>
+          </Card>
+        ))}
         <Card className="relative overflow-hidden">
           <CardContent className="pt-5 pb-4">
             <div className="flex items-start justify-between gap-2">
               <div className="space-y-1 min-w-0 flex-1">
                 <p className="text-xs text-muted-foreground font-medium">Alertas</p>
                 <p className="text-lg font-bold">
-                  <span className="text-red-700 dark:text-red-400">{totals.projectsOverBudget}</span>
+                  <span className="text-red-700 dark:text-red-400">{totals.overBudget}</span>
                   <span className="text-muted-foreground text-sm mx-1">/</span>
-                  <span className="text-amber-700 dark:text-amber-400">{totals.projectsAtRisk}</span>
+                  <span className="text-amber-700 dark:text-amber-400">{totals.atRisk}</span>
                 </p>
                 <p className="text-[11px] text-muted-foreground">excedidos / em risco</p>
               </div>
@@ -574,16 +429,13 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Top projects bar chart */}
         <Card className="lg:col-span-2">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-semibold">Top 10 Projetos por Custo</CardTitle>
+            <CardTitle className="text-base font-semibold">Top 10 nós por custo (só o próprio nó)</CardTitle>
           </CardHeader>
           <CardContent>
             {topProjectsChart.length === 0 ? (
-              <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
-                Sem dados disponíveis
-              </div>
+              <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">Sem custos neste período</div>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={topProjectsChart} margin={{ top: 4, right: 4, left: 0, bottom: 4 }}>
@@ -591,22 +443,15 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
                   <XAxis dataKey="name" tick={AXIS_TICK} angle={-25} textAnchor="end" height={70} interval="preserveStartEnd" />
                   <YAxis tick={AXIS_TICK} tickFormatter={eurAxis} width={68} />
                   <Tooltip
-                    formatter={(v: any, name: string) => [
-                      fmt(parseFloat(v)),
-                      name === "despesas" ? "Despesas" : name === "salarios" ? "Salários" : "Orçamento",
-                    ]}
+                    formatter={(v: any, name: string) => [fmt(parseFloat(v)), SERIES[name] ?? name]}
                     contentStyle={CHART_TOOLTIP_STYLE}
                     itemStyle={CHART_TOOLTIP_ITEM}
                     cursor={{ fill: "var(--muted)" }}
                   />
-                  <Legend
-                    formatter={(value: string) => (
-                      <span className="text-foreground">{value === "despesas" ? "Despesas" : value === "salarios" ? "Salários" : "Orçamento"}</span>
-                    )}
-                    wrapperStyle={{ fontSize: "12px" }}
-                  />
-                  <Bar dataKey="despesas" stackId="cost" fill="var(--chart-4)" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="salarios" stackId="cost" fill="var(--chart-3)" radius={[4, 4, 0, 0]} />
+                  <Legend formatter={(value: string) => <span className="text-foreground">{SERIES[value] ?? value}</span>} wrapperStyle={{ fontSize: "12px" }} />
+                  <Bar dataKey="despesas" stackId="cost" fill="var(--chart-4)" />
+                  <Bar dataKey="pessoal" stackId="cost" fill="var(--chart-3)" />
+                  <Bar dataKey="comissoes" stackId="cost" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="orcamento" fill="var(--muted-foreground)" fillOpacity={0.35} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -614,37 +459,20 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
           </CardContent>
         </Card>
 
-        {/* Cost by root group pie */}
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-semibold">Custos por Grupo</CardTitle>
+            <CardTitle className="text-base font-semibold">Custos por grupo</CardTitle>
           </CardHeader>
           <CardContent>
-            {costByLevel.length === 0 ? (
-              <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
-                Sem dados disponíveis
-              </div>
+            {costByRoot.length === 0 ? (
+              <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">Sem custos neste período</div>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
-                  <Pie
-                    data={costByLevel}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={90}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {costByLevel.map((_: any, i: number) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
+                  <Pie data={costByRoot} cx="50%" cy="50%" innerRadius={55} outerRadius={90} paddingAngle={3} dataKey="value">
+                    {costByRoot.map((_: any, i: number) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
-                  <Tooltip
-                    formatter={(v: any) => [fmt(parseFloat(String(v)))]}
-                    contentStyle={CHART_TOOLTIP_STYLE}
-                    itemStyle={CHART_TOOLTIP_ITEM}
-                  />
+                  <Tooltip formatter={(v: any) => [fmt(parseFloat(String(v)))]} contentStyle={CHART_TOOLTIP_STYLE} itemStyle={CHART_TOOLTIP_ITEM} />
                   <Legend iconSize={10} wrapperStyle={{ fontSize: "12px" }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                 </PieChart>
               </ResponsiveContainer>
@@ -653,19 +481,17 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
         </Card>
       </div>
 
-      {/* Projects Table */}
+      {/* Tabela em árvore */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <CardTitle className="text-base font-semibold flex items-center gap-2">
               <FolderTree className="h-4 w-4 text-primary" />
-              Detalhe por Projeto
+              Detalhe por nó
             </CardTitle>
             <div className="flex items-center gap-2 flex-wrap">
               <Select value={levelFilter} onValueChange={setLevelFilter}>
-                <SelectTrigger className="w-32 h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-32 h-8 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Hierarquia</SelectItem>
                   <SelectItem value="project">Só projetos</SelectItem>
@@ -675,42 +501,53 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
               </Select>
               {levelFilter === "all" && (
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="sm" onClick={expandAll} className="text-xs h-8 px-2">
-                    Expandir
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={collapseAll} className="text-xs h-8 px-2">
-                    Colapsar
-                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setExpandedIds(new Set(data.map((d) => d.id)))} className="text-xs h-8 px-2">Expandir</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setExpandedIds(new Set())} className="text-xs h-8 px-2">Colapsar</Button>
                 </div>
               )}
             </div>
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {/* Tabela em árvore: no telemóvel faz scroll horizontal dentro do cartão */}
+          {/* No telemóvel faz scroll horizontal dentro do cartão */}
           <div className="overflow-x-auto">
-          <div className="min-w-[1040px]">
-          {/* Table header */}
+          <div className="min-w-[1120px]">
           <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/40 text-xs font-medium text-muted-foreground">
             <div className="w-5 shrink-0" />
-            <div className="flex-1 min-w-[13rem]">Projeto</div>
+            <div className="flex-1 min-w-[13rem]">Nó</div>
             <div className="hidden md:block w-28 shrink-0">Gestor</div>
             <div className="w-28 text-right shrink-0">Orçamento</div>
             <div className="w-28 text-right shrink-0">Despesas</div>
-            <div className="w-28 text-right shrink-0">Salários</div>
-            <div className="w-28 text-right shrink-0">Custo Total</div>
+            <div className="w-28 text-right shrink-0">Pessoal</div>
+            <div className="w-24 text-right shrink-0">Comissões</div>
+            <div className="w-28 text-right shrink-0">Custo total</div>
             <div className="w-36 shrink-0 text-center">Utilização</div>
             <div className="w-28 shrink-0 text-right">Estado</div>
           </div>
 
-          {/* Table body */}
           <div className="max-h-[500px] overflow-y-auto">
             {rootItems.length === 0 ? (
-              <div className="text-center py-12 text-muted-foreground text-sm">
-                Sem projetos com dados de custos
-              </div>
+              <div className="text-center py-12 text-muted-foreground text-sm">Sem nós de projeto</div>
             ) : (
-              rootItems.map(item => renderRow(item, 0))
+              rootItems.map((item) => renderRow(item, 0))
+            )}
+            {/* Custos sem centro de custos: entram no total (como na Faturação) */}
+            {levelFilter === "all" && unallocated && unallocated.totalCost > 0 && (
+              <div className="flex items-center gap-2 px-3 py-2.5 border-b bg-amber-50/40 dark:bg-amber-950/10" title="Despesas, pessoas e extras sem centro de custos">
+                <div className="w-5 shrink-0" />
+                <div className="flex items-center gap-2 min-w-[13rem] flex-1">
+                  <span className="text-sm font-semibold">Por atribuir</span>
+                  <span className="text-[11px] text-muted-foreground truncate">sem centro de custos</span>
+                </div>
+                <div className="hidden md:block w-28 shrink-0" />
+                <div className="w-28 text-right text-xs text-muted-foreground shrink-0">—</div>
+                <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">{money(unallocated.expenses)}</div>
+                <div className="w-28 text-right text-sm tabular-nums whitespace-nowrap shrink-0">{money(unallocated.personnel)}</div>
+                <div className="w-24 text-right text-sm tabular-nums whitespace-nowrap shrink-0">{money(unallocated.commissions)}</div>
+                <div className="w-28 text-right text-sm font-semibold tabular-nums whitespace-nowrap shrink-0">{money(unallocated.totalCost)}</div>
+                <div className="w-36 shrink-0" />
+                <div className="w-28 shrink-0" />
+              </div>
             )}
           </div>
           </div>
@@ -718,41 +555,35 @@ export default function ProjectCostsDashboard({ onBack }: { onBack?: () => void 
         </CardContent>
       </Card>
 
-      {/* Budget health summary */}
-      {data.filter(d => d.budget > 0 && d.percentUsed >= 80).length > 0 && (
+      {/* Mesma regra da tabela (com descendentes) */}
+      {attention.length > 0 && (
         <Card className="border-amber-200 bg-amber-50/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-base font-semibold flex items-center gap-2 text-amber-800">
               <AlertTriangle className="h-4 w-4" />
-              Projetos que Requerem Atenção
+              Nós que requerem atenção
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {data
-                .filter(d => d.budget > 0 && d.percentUsed >= 80)
-                .sort((a, b) => b.percentUsed - a.percentUsed)
-                .map(d => (
-                  <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg bg-card border">
-                    <div
-                      className="h-3 w-3 rounded-full shrink-0"
-                      style={{ backgroundColor: d.color || "#6366f1" }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{d.name}</p>
-                      <p className="text-xs text-muted-foreground tabular-nums">
-                        {fmt(d.totalCost)} / {fmt(d.budget)}
-                      </p>
-                    </div>
-                    <div className="shrink-0">
-                      {budgetBadge(d.percentUsed, d.budget)}
-                    </div>
+              {attention.map(({ d, v }) => (
+                <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg bg-card border">
+                  <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: d.color || "#6366f1" }} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{d.name}</p>
+                    <p className="text-xs text-muted-foreground tabular-nums">{fmt(v.totalCost)} / {fmt(v.budget)}</p>
                   </div>
-                ))}
+                  <div className="shrink-0">{budgetBadge(v.percent, v.budget)}</div>
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>
       )}
+      </>
+      )}
     </div>
   );
 }
+
+const SERIES: Record<string, string> = { despesas: "Despesas", pessoal: "Pessoal", comissoes: "Comissões", orcamento: "Orçamento" };
