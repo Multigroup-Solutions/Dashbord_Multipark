@@ -103,7 +103,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   };
 
   const title = personal ? "O meu email" : "Comunicação";
-  const canCompose = personal ? (personalReady && ownerUserId == null) : !!current?.canAct;
+  const canCompose = personal ? (personalReady && ownerUserId == null) : !!current?.canCompose;
 
   const header = (
     <div className="flex flex-wrap items-end gap-2 justify-between">

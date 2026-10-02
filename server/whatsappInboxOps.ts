@@ -128,6 +128,13 @@ export async function assignConversation(conversationId: number, userId: number 
   return true;
 }
 
+/** Muda a caixa (17f) — `manual` fica: a regra e a IA não a voltam a mudar. */
+export async function setConversationBox(conversationId: number, boxKey: string | null, source: "rule" | "ai" | "manual"): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível.");
+  await db.update(whatsappConversations).set({ boxKey, boxSource: source }).where(eq(whatsappConversations.id, conversationId));
+}
+
 /** Quem responde a uma conversa sem responsável fica com ela. */
 export async function claimIfUnassigned(conversationId: number, userId: number): Promise<void> {
   const db = await getDb();

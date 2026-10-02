@@ -537,6 +537,13 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
     await handleLeadInbound({ phoneE164, conversationId: w.conversationId, at: ts, stampOnly: steps.has("lead_stamp") });
   }
 
+  // Caixa por tema (17f): colaborador ou candidato → RH (salvo escolha à mão).
+  // A caixa dos clientes vem da triagem por IA (abaixo).
+  {
+    const { assignBoxByRule } = await import("./whatsappInbox");
+    await assignBoxByRule(w.conversationId);
+  }
+
   // Triagem por IA (intenção + urgência), com debounce por conversa. Só
   // reserva aqui; a chamada à IA corre depois de responder à Meta.
   if (w.plan.bumpUnread && !w.optedOut && triage) {

@@ -27,7 +27,7 @@ import { fmtPTDateTime } from "@/lib/lisbonTime";
 
 const EMPTY: MailboxConfig = {
   key: "", label: "", addresses: [{ address: "", brand: "multipark", cityId: null, destination: "caixa", owner: null, tag: "", active: true }], sourceKind: "dwd", sourceEmail: "", sourceUserId: null,
-  module: "comunicacao", pipeline: null, cityRule: "all", visibleRoles: [], signatures: {}, catchAll: false, notify: true, active: true, sortOrder: 100,
+  module: "comunicacao", pipeline: null, cityRule: "all", visibleRoles: [], signatures: {}, catchAll: false, notify: true, active: true, sortOrder: 100, aiRoute: false,
 };
 
 const moduleLabel = (id: string) => MODULES.find((m) => m.id === id)?.label ?? id;
@@ -84,10 +84,13 @@ function MailboxDialog({ initial, isNew, googleUsers, onClose }: {
               <SelectContent>
                 <SelectItem value="dwd">Conta do Workspace (delegação)</SelectItem>
                 <SelectItem value="user">Conta ligada de um utilizador</SelectItem>
+                <SelectItem value="tema">Por tema (sem conta própria)</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          {m.sourceKind === "dwd" ? (
+          {m.sourceKind === "tema" ? (
+            <p className="text-[11px] text-muted-foreground self-end">Recebe as conversas (email e WhatsApp) que a IA ou uma pessoa movem para aqui. As respostas por email saem pelo endereço por onde o cliente escreveu.</p>
+          ) : m.sourceKind === "dwd" ? (
             <div className="space-y-1"><Label className="text-xs">Conta a ler (email real, não alias)</Label><Input value={m.sourceEmail} onChange={(e) => set("sourceEmail", e.target.value.trim().toLowerCase())} placeholder="reservas@multipark.pt" /></div>
           ) : (
             <div className="space-y-1">
@@ -144,6 +147,7 @@ function MailboxDialog({ initial, isNew, googleUsers, onClose }: {
           <label className="flex items-center gap-2 text-xs"><Switch checked={m.active} onCheckedChange={(v) => set("active", v)} /> Ativa</label>
           <label className="flex items-center gap-2 text-xs"><Switch checked={m.notify} onCheckedChange={(v) => set("notify", v)} /> Avisar quando chega conversa nova</label>
           <label className="flex items-center gap-2 text-xs sm:col-span-2"><Switch checked={m.catchAll} onCheckedChange={(v) => set("catchAll", v)} /> Recebe o resto do que chega à conta (sem outra caixa)</label>
+          <label className="flex items-center gap-2 text-xs sm:col-span-2"><Switch checked={m.aiRoute} onCheckedChange={(v) => set("aiRoute", v)} /> Caixa geral: a IA separa os emails novos pelas caixas do tema (com "IA: separar os emails pelas caixas" ligado nas Automações)</label>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
@@ -223,8 +227,8 @@ export function MailboxesSettings() {
                 <div className="font-semibold">{m.label} <span className="text-xs text-muted-foreground font-normal">({m.key})</span> {!m.active && <Badge variant="secondary">inativa</Badge>}</div>
                 <div className="text-xs text-muted-foreground break-all">{m.addresses.map((a) => `${a.address} (${MAIL_BRAND_LABELS[a.brand]})`).join(" · ")}</div>
                 <div className="text-xs text-muted-foreground">
-                  Lê de: {m.sourceKind === "dwd" ? m.sourceEmail : `conta de #${m.sourceUserId}`} · Quem vê: {moduleLabel(m.module)}{m.visibleRoles.length ? ` (só ${m.visibleRoles.map((r) => ROLE_LABELS[r]).join(", ")})` : ""}
-                  {m.pipeline ? ` · processa: ${m.pipeline}` : ""}{m.catchAll ? " · apanha o resto" : ""}{m.cityRule === "linked" ? " · por cidade" : ""}
+                  Lê de: {m.sourceKind === "tema" ? "por tema (sem conta)" : m.sourceKind === "dwd" ? m.sourceEmail : `conta de #${m.sourceUserId}`} · Quem vê: {moduleLabel(m.module)}{m.visibleRoles.length ? ` (só ${m.visibleRoles.map((r) => ROLE_LABELS[r]).join(", ")})` : ""}
+                  {m.pipeline ? ` · processa: ${m.pipeline}` : ""}{m.catchAll ? " · apanha o resto" : ""}{m.aiRoute ? " · a IA separa pelos temas" : ""}{m.cityRule === "linked" ? " · por cidade" : ""}
                 </div>
               </div>
               {d.canEdit && (

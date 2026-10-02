@@ -35,8 +35,11 @@ export function ConversationListItem({
   now,
   slaMinutes,
   onOpen,
+  boxLabel = null,
 }: {
   c: InboxConversation;
+  /** Caixa por tema (17f) — nome a mostrar. */
+  boxLabel?: string | null;
   alerts: ConversationAlerts | undefined;
   selected: boolean;
   now: number;
@@ -48,7 +51,7 @@ export function ConversationListItem({
   const closing = isOpen && (alerts?.windowClosing || windowClosingSoon(c.windowExpiresAt, now));
   const urgent = c.aiUrgency === "urgente" && c.status !== "resolvido";
   const intent = isWhatsappIntent(c.aiIntent) ? WHATSAPP_INTENT_LABELS[c.aiIntent] : null;
-  const hasTags = urgent || !!alerts?.overdue || !!intent || c.status !== "aberto" || !!c.assignedName;
+  const hasTags = urgent || !!alerts?.overdue || !!intent || !!boxLabel || c.status !== "aberto" || !!c.assignedName;
 
   return (
     <button
@@ -124,6 +127,11 @@ export function ConversationListItem({
             {alerts?.overdue && (
               <Tag className="bg-red-600 text-white" title={`Sem resposta há mais de ${slaMinutes} min`}>
                 <AlarmClock className="h-2.5 w-2.5" /> {formatWaiting(alerts.waitingMinutes)}
+              </Tag>
+            )}
+            {boxLabel && (
+              <Tag className="bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300" title="Caixa">
+                {boxLabel}
               </Tag>
             )}
             {intent && (

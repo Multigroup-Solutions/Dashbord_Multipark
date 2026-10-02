@@ -41,7 +41,7 @@ export function rowToMailbox(r: any): MailboxRow | null {
     key: r.mailboxKey,
     label: r.label,
     addresses: parseJson(r.addressesJson, []),
-    sourceKind: r.sourceKind === "user" ? "user" : "dwd",
+    sourceKind: r.sourceKind === "user" ? "user" : r.sourceKind === "tema" ? "tema" : "dwd",
     sourceEmail: r.sourceEmail ?? "",
     sourceUserId: r.sourceUserId != null ? Number(r.sourceUserId) : null,
     module: r.module,
@@ -53,6 +53,7 @@ export function rowToMailbox(r: any): MailboxRow | null {
     notify: Number(r.notify) === 1,
     active: Number(r.active) === 1,
     sortOrder: Number(r.sortOrder ?? 100),
+    aiRoute: Number(r.aiRoute ?? 0) === 1,
   });
   if (!cfg.success) {
     console.warn("[mail] caixa inválida ignorada:", r.mailboxKey, cfg.error.issues[0]?.message);
@@ -80,14 +81,14 @@ export async function getMailbox(key: string | null | undefined): Promise<Mailbo
 export async function saveMailbox(cfg: MailboxConfig, userId: number): Promise<void> {
   const d = await db();
   await d.execute(sql`INSERT INTO mail_mailboxes (mailboxKey, label, addressesJson, sourceKind, sourceEmail, sourceUserId, module, pipeline, cityRule,
-      visibleRolesJson, signaturesJson, catchAll, notify, active, sortOrder, updatedById)
+      visibleRolesJson, signaturesJson, catchAll, notify, active, sortOrder, aiRoute, updatedById)
     VALUES (${cfg.key}, ${cfg.label}, ${JSON.stringify(cfg.addresses)}, ${cfg.sourceKind}, ${cfg.sourceKind === "dwd" ? normalizeAddress(cfg.sourceEmail) : null},
       ${cfg.sourceKind === "user" ? cfg.sourceUserId : null}, ${cfg.module}, ${cfg.pipeline}, ${cfg.cityRule}, ${JSON.stringify(cfg.visibleRoles)},
-      ${JSON.stringify(cfg.signatures)}, ${cfg.catchAll ? 1 : 0}, ${cfg.notify ? 1 : 0}, ${cfg.active ? 1 : 0}, ${cfg.sortOrder}, ${userId})
+      ${JSON.stringify(cfg.signatures)}, ${cfg.catchAll ? 1 : 0}, ${cfg.notify ? 1 : 0}, ${cfg.active ? 1 : 0}, ${cfg.sortOrder}, ${cfg.aiRoute ? 1 : 0}, ${userId})
     ON DUPLICATE KEY UPDATE label = VALUES(label), addressesJson = VALUES(addressesJson), sourceKind = VALUES(sourceKind), sourceEmail = VALUES(sourceEmail),
       sourceUserId = VALUES(sourceUserId), module = VALUES(module), pipeline = VALUES(pipeline), cityRule = VALUES(cityRule),
       visibleRolesJson = VALUES(visibleRolesJson), signaturesJson = VALUES(signaturesJson), catchAll = VALUES(catchAll), notify = VALUES(notify),
-      active = VALUES(active), sortOrder = VALUES(sortOrder), updatedById = VALUES(updatedById)`);
+      active = VALUES(active), sortOrder = VALUES(sortOrder), aiRoute = VALUES(aiRoute), updatedById = VALUES(updatedById)`);
   invalidateMailboxCache();
 }
 

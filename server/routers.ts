@@ -5288,9 +5288,37 @@ export const appRouter = router({
     // ── INBOX ──────────────────────────────────────────────────────────────
     conversations: router({
       // `search` vai ao servidor (17a): procura também fora das 300 mais recentes.
-      list: protectedProcedure.input(z.object({ search: z.string().max(120).optional() }).optional()).query(async ({ ctx, input }) => {
+      list: protectedProcedure.input(z.object({ search: z.string().max(120).optional(), boxKey: z.string().max(40).nullish() }).optional()).query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
-        return listConversations({ search: input?.search ?? null });
+        // 17f: as caixas que a pessoa não vê ficam de fora; `boxKey` filtra uma ("geral" = sem caixa).
+        const { hiddenBoxKeys } = await import("./whatsappInbox");
+        return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user) });
+      }),
+      /** Caixas por tema que esta pessoa vê (filtro e "Mover para…"). */
+      boxes: protectedProcedure.query(async ({ ctx }) => {
+        requireAccess(ctx.user, "whatsapp", "view");
+        const { hiddenBoxKeys } = await import("./whatsappInbox");
+        const { listMailboxes } = await import("./mail/store");
+        const { GENERAL_BOX_KEY } = await import("../shared/commsBoxes");
+        const hidden = new Set(await hiddenBoxKeys(ctx.user));
+        // A "Geral" do WhatsApp é a conversa sem caixa (= info@ no email): não aparece em duplicado.
+        return (await listMailboxes()).filter((b) => b.active && b.key !== GENERAL_BOX_KEY && !hidden.has(b.key)).map((b) => ({ key: b.key, label: b.label }));
+      }),
+      /** Mover a conversa para uma caixa (null = Geral). Fica "à mão": a IA não a volta a mudar. */
+      setBox: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), boxKey: z.string().max(40).nullable() })).mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "whatsapp", "edit");
+        const { conversationVisible, hiddenBoxKeys } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (input.boxKey) {
+          const { listMailboxes } = await import("./mail/store");
+          const box = (await listMailboxes()).find((b) => b.key === input.boxKey && b.active);
+          if (!box || (await hiddenBoxKeys(ctx.user)).includes(box.key)) throw new TRPCError({ code: "BAD_REQUEST", message: "Caixa desconhecida." });
+        }
+        const { setConversationBox } = await import("./whatsappInboxOps");
+        const { GENERAL_BOX_KEY } = await import("../shared/commsBoxes");
+        await setConversationBox(input.conversationId, input.boxKey === GENERAL_BOX_KEY ? null : input.boxKey, "manual");
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "whatsapp_conversation", entityId: input.conversationId, details: `Caixa → ${input.boxKey ?? "Geral"}` } as any).catch(() => {});
+        return { ok: true };
       }),
     }),
 
@@ -5300,7 +5328,7 @@ export const appRouter = router({
         .query(async ({ ctx, input }) => {
           requireAccess(ctx.user, "whatsapp", "view");
           const { conversationVisible } = await import("./whatsappInbox");
-          if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+          if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
           const thread = await getConversationThread(input.conversationId, input.limit ?? 100);
           if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
           return thread;
@@ -5336,7 +5364,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { sendTemplateToConversation } = await import("./whatsappBroadcast");
         let summary;
         try {
@@ -5366,7 +5394,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         await markConversationRead(input.conversationId);
         return { success: true };
       }),
@@ -5378,7 +5406,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { markConversationUnread, conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const ok = await markConversationUnread(input.conversationId);
         if (!ok) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         return { success: true };
@@ -5395,7 +5423,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const result = await replyToConversation(input.conversationId, input.text, ctx.user.id, {
           allowOptedOut: input.confirmOptedOut === true,
           clientRequestId: input.clientRequestId ?? null,
@@ -5440,7 +5468,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "whatsapp", "view");
       if (input?.conversationId != null) {
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
       }
       const { listAssignees } = await import("./whatsappInboxOps");
       return listAssignees(input?.conversationId ?? null);
@@ -5451,7 +5479,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { setConversationStatus } = await import("./whatsappInboxOps");
         if (!(await setConversationStatus(input.conversationId, input.status))) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
@@ -5471,7 +5499,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { assignConversation } = await import("./whatsappInboxOps");
         if (!(await assignConversation(input.conversationId, input.userId))) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Essa pessoa não pode responder no WhatsApp ou não vê esta conversa (cidade)." });
@@ -5492,7 +5520,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { getConversationContext } = await import("./whatsappInboxOps");
         const out = await getConversationContext(input.conversationId);
         if (!out) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
@@ -5518,7 +5546,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { linkConversation } = await import("./whatsappInboxOps");
         const target = input.bookingId
           ? { bookingId: input.bookingId }
@@ -5575,7 +5603,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
-        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { aiAssist } = await import("./whatsappInboxOps");
         const r = await aiAssist(input.conversationId, input.mode, { userId: ctx.user.id });
         if (!r.ok || !r.text) throw new TRPCError({ code: "BAD_REQUEST", message: r.error || "A IA falhou" });

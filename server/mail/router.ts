@@ -111,6 +111,12 @@ export const mailRouter = router({
       await unlinkThread(viewerOf(ctx.user as CtxUser), input.id, input.type, input.entityId);
       return { ok: true };
     }),
+    /** "Mover para…" outra caixa (17f): quem trata a conversa e vê o destino. */
+    move: protectedProcedure.input(threadId.extend({ box: z.string().min(1).max(40) })).mutation(async ({ ctx, input }) => {
+      const { moveThread } = await import("./inbox");
+      await moveThread(viewerOf(ctx.user as CtxUser), input.id, input.box);
+      return { ok: true };
+    }),
     /** "Por classificar" → caixa (admin/super_admin): opcionalmente pelo alias e acrescentando um endereço novo à tabela. */
     assignTriage: protectedProcedure
       .input(threadId.extend({

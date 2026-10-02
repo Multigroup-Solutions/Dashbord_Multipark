@@ -243,14 +243,69 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     const createdCase = !!routed && ["complaint", "lostfound", "review", "incident", "incident_dup"].includes(routed.targetModule);
     const automated = !!(await (await db()).execute(sql`SELECT automated FROM mail_messages WHERE id = ${e.result.messageId ?? 0}`).then((r) => Number(rowsOf(r)[0]?.automated ?? 0)));
     const fresh = !p.outbound && !automated && (e.result.newThread || e.result.reopened);
+    // 2b) Caixa geral (info@): a IA separa a conversa NOVA pela caixa do tema
+    // (17f, interruptor AI_MAIL_ROUTING). O aviso vai a quem vê a caixa nova.
+    let noticeBox: MailboxConfig | null = mailbox;
+    if (fresh && e.result.newThread && mailbox?.aiRoute && !createdCase && !e.classification.personal) {
+      const target = await routeNewThreadByAi(e.result.threadId, mailbox, { subject: p.subject, text: p.text || p.snippet || "" }).catch(() => null);
+      if (target) noticeBox = target;
+    }
     let ownerNotified = false;
-    if (fresh && mailbox && alias?.owner && e.result.newThread) {
+    if (fresh && mailbox && alias?.owner && e.result.newThread && noticeBox === mailbox) {
       ownerNotified = await notifyAliasOwner(e, mailbox, alias, projectId).catch(() => false);
     }
-    if (fresh && mailbox?.notify && !createdCase && !ownerNotified) {
-      await notifyNewMail(e, mailbox, projectId).catch(() => {});
+    if (fresh && noticeBox?.notify && !createdCase && !ownerNotified) {
+      await notifyNewMail(e, noticeBox, projectId).catch(() => {});
     }
   };
+}
+
+/**
+ * IA (lite): para que caixa do tema vai esta conversa nova de uma caixa geral?
+ * Move-a (mailboxKey + routedFromKey/routedBy) e devolve a caixa nova; null =
+ * fica (IA desligada, sem resposta clara, erro). Nunca responde ao cliente.
+ */
+export async function routeNewThreadByAi(threadId: number, from: MailboxConfig, mail: { subject: string; text: string }): Promise<MailboxRow | null> {
+  const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
+  if (!(await aiFeatureAvailableFresh("mail_routing"))) return null;
+  const { listMailboxes } = await import("./store");
+  const all = await listMailboxes();
+  const { availableTargets, parseRoutingAnswer } = await import("../../shared/commsBoxes");
+  const targets = availableTargets(all).filter((t) => t.key !== from.key);
+  if (!targets.length) return null;
+  const { runAi } = await import("../_core/ai/run");
+  const { redactPii } = await import("../_core/ai/pii");
+  const { MAIL_ROUTING_SYSTEM, mailRoutingInput, mailRoutingSchema } = await import("../_core/ai/prompts/comms");
+  const red = redactPii(`${mail.subject}\n${mail.text}`.slice(0, 3000));
+  try {
+    const r = await runAi({
+      feature: "mail_routing", system: MAIL_ROUTING_SYSTEM, schema: mailRoutingSchema,
+      input: mailRoutingInput({ targets, subject: "", body: red.text }),
+      maxTokens: 400, timeoutMs: 15_000, retries: 1, entity: "mail_thread", entityId: threadId,
+    });
+    const key = parseRoutingAnswer((r.output as any)?.box, targets);
+    if (!key) return null;
+    const moved = await moveThreadToBox(threadId, key, "ai");
+    return moved ? all.find((b) => b.key === key) ?? null : null;
+  } catch (err: any) {
+    console.warn("[mail] separar pela IA falhou:", threadId, String(err?.message ?? err).slice(0, 160));
+    return null;
+  }
+}
+
+/**
+ * Move uma conversa de email para outra caixa (IA ou à mão). Guarda de onde
+ * veio (a 1.ª caixa) e quem moveu; a IA nunca muda uma conversa já movida.
+ */
+export async function moveThreadToBox(threadId: number, boxKey: string, by: "ai" | "manual"): Promise<boolean> {
+  const d = await db();
+  const guard = by === "ai" ? sql`AND routedBy IS NULL` : sql``;
+  const res = await d.execute(sql`UPDATE mail_threads SET routedFromKey = COALESCE(routedFromKey, mailboxKey), mailboxKey = ${boxKey}, routedBy = ${by}
+    WHERE id = ${threadId} AND mailboxKey IS NOT NULL AND mailboxKey <> ${boxKey} AND needsTriage = 0 ${guard}`);
+  const head = Array.isArray(res) ? res[0] : res;
+  if (Number((head as any)?.affectedRows ?? 0) !== 1) return false;
+  await d.execute(sql`UPDATE mail_messages SET mailboxKey = ${boxKey} WHERE threadId = ${threadId}`);
+  return true;
 }
 
 /**

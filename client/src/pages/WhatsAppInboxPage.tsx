@@ -40,6 +40,7 @@ import {
   Phone,
   MoreVertical,
   Timer,
+  Inbox,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -58,7 +59,7 @@ import {
   type ConversationStatus,
 } from "@shared/whatsappConversation";
 import { withDraft, type WhatsAppDrafts } from "@shared/whatsappDrafts";
-import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, type InboxListFilters } from "@shared/whatsappInboxView";
+import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, matchesBoxFilter, type InboxListFilters } from "@shared/whatsappInboxView";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
@@ -217,6 +218,13 @@ export default function WhatsAppInboxPage() {
     { enabled: selectedId != null, staleTime: 5 * 60_000 },
   );
   const quickReplies = trpc.whatsapp.quickReplies.list.useQuery(undefined, { staleTime: 60_000 });
+  // Caixas por tema (17f): filtro da lista e "Mover para…".
+  const boxes = trpc.whatsapp.conversations.boxes.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const boxLabels = new Map((boxes.data ?? []).map((b) => [b.key, b.label]));
+  const setBox = trpc.whatsapp.conversations.setBox.useMutation({
+    onSuccess: () => { toast.success("Conversa movida."); refreshAll(); },
+    onError: (e) => toast.error(e.message),
+  });
   /** Depois de qualquer mudança: lista, conversa aberta e badge do menu. */
   function refreshAll() {
     conversations.refetch();
@@ -338,6 +346,7 @@ export default function WhatsAppInboxPage() {
       (!filters.onlyUnread || c.unreadCount > 0 || c.id === selectedId) &&
       (!filters.onlyAlerts || a?.overdue || a?.windowClosing || c.id === selectedId) &&
       (filters.intent === "all" || c.aiIntent === filters.intent || c.id === selectedId) &&
+      (matchesBoxFilter(c.boxKey, filters.box) || c.id === selectedId) &&
       (!filters.onlyUrgent || c.aiUrgency === "urgente" || c.id === selectedId)
     );
   });
@@ -462,6 +471,7 @@ export default function WhatsAppInboxPage() {
       c={c}
       alerts={alertsById.get(c.id)}
       selected={selectedId === c.id}
+      boxLabel={c.boxKey ? boxLabels.get(c.boxKey) ?? null : null}
       now={now}
       slaMinutes={slaMinutes}
       onOpen={openConversation}
@@ -486,6 +496,7 @@ export default function WhatsAppInboxPage() {
         pendingCallbacks={pendingCallbacks.data?.length ?? 0}
         pendingCallbacksError={callsOn && !!pendingCallbacks.error}
         onOpenCallbacks={() => setCallbacksOpen(true)}
+        boxes={boxes.data ?? []}
       />
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {conversations.error && (
@@ -749,6 +760,24 @@ export default function WhatsAppInboxPage() {
     </Select>
   );
 
+  const boxSelect = t && (boxes.data?.length ?? 0) > 0 && (
+    <Select
+      value={selectedRow?.boxKey ?? "geral"}
+      onValueChange={(v) => setBox.mutate({ conversationId: t.conversationId, boxKey: v === "geral" ? null : v })}
+      disabled={setBox.isPending}
+    >
+      <SelectTrigger size="sm" className="w-[130px] min-w-0 text-xs" aria-label="Caixa" title="Caixa (tema) — mudar move a conversa">
+        <Inbox className="h-3.5 w-3.5 shrink-0" />
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="geral">Geral</SelectItem>
+        {(boxes.data ?? []).map((b) => <SelectItem key={b.key} value={b.key}>{b.label}</SelectItem>)}
+        {selectedRow?.boxKey && !boxLabels.has(selectedRow.boxKey) && <SelectItem value={selectedRow.boxKey}>{selectedRow.boxKey}</SelectItem>}
+      </SelectContent>
+    </Select>
+  );
+
   const resolveButton = t && t.status !== "resolvido" && (
     <Button
       size="sm"
@@ -892,6 +921,7 @@ export default function WhatsAppInboxPage() {
             </div>
             {t && (
               <div className="flex items-center gap-1 shrink-0">
+                {!isMobile && boxSelect}
                 {!isMobile && statusSelect}
                 {!isMobile && assigneeSelect}
                 {!isMobile && resolveButton}
@@ -904,7 +934,8 @@ export default function WhatsAppInboxPage() {
 
           {/* Telemóvel: estado + responsável numa 2.ª linha (não cabem ao lado do nome). */}
           {isMobile && t && (
-            <div className="px-2 py-1.5 border-b flex items-center gap-1.5 shrink-0">
+            <div className="px-2 py-1.5 border-b flex flex-wrap items-center gap-1.5 shrink-0">
+              {boxSelect && <div className="w-full [&>button]:w-full">{boxSelect}</div>}
               {statusSelect}
               <div className="flex-1 min-w-0 [&>button]:w-full">{assigneeSelect}</div>
               {resolveButton}
