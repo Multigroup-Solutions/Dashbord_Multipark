@@ -103,3 +103,44 @@ export function parseRoutingAnswer(raw: unknown, targets: ReadonlyArray<{ key: s
   const k = String(raw ?? "").trim().toLowerCase().replace(/[^a-z_]/g, "");
   return targets.some((t) => t.key === k) ? k : null;
 }
+
+// ─── Quem é (17f): nome e histórico do CRM / RH numa conversa ──────────────
+
+const POSITION_LABELS: Record<string, string> = {
+  director: "Diretor", supervisor: "Supervisor", team_leader: "Team leader", backoffice: "Backoffice", frontoffice: "Frontoffice",
+  senior_driver: "Condutor sénior", driver: "Condutor", extra: "Extra",
+};
+const LEAD_STATUS_LABELS: Record<string, string> = { new: "novo", contacted: "contactado", replied: "respondeu", converted: "convertido", declined: "recusado" };
+
+export type ContactIdentity =
+  | { kind: "employee"; name: string; detail: string }
+  | { kind: "lead"; name: string; detail: string }
+  | { kind: "client"; name: string | null; detail: string; clientId: number; email: string | null }
+  | { kind: "unknown"; name: null; detail: string };
+
+const ptDate = (s: string | null | undefined): string | null => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s ?? ""));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : null;
+};
+
+/** Uma linha "quem é" a partir do que se sabe (ficha → candidato → cliente do CRM). PURA. */
+export function describeIdentity(f: {
+  employee?: { fullName: string; position: string | null; city: string | null } | null;
+  lead?: { fullName: string; status: string | null; city: string | null } | null;
+  client?: { id: number; name: string | null; email: string | null; bookings: number; upcoming: number; lastVisit: string | null } | null;
+}): ContactIdentity {
+  if (f.employee) {
+    return { kind: "employee", name: f.employee.fullName, detail: ["Colaborador", f.employee.position ? POSITION_LABELS[f.employee.position] ?? f.employee.position : null, f.employee.city].filter(Boolean).join(" · ") };
+  }
+  if (f.lead) {
+    return { kind: "lead", name: f.lead.fullName, detail: ["Candidato a extra", f.lead.status ? LEAD_STATUS_LABELS[f.lead.status] ?? f.lead.status : null, f.lead.city].filter(Boolean).join(" · ") };
+  }
+  if (f.client) {
+    const c = f.client;
+    const parts = [`Cliente · ${c.bookings} reserva${c.bookings === 1 ? "" : "s"}${c.upcoming ? ` (${c.upcoming} por vir)` : ""}`];
+    const last = ptDate(c.lastVisit);
+    if (last) parts.push(`última ${last}`);
+    return { kind: "client", name: c.name, detail: parts.join(" · "), clientId: c.id, email: c.email };
+  }
+  return { kind: "unknown", name: null, detail: "Número sem ficha, candidatura nem cliente no CRM" };
+}

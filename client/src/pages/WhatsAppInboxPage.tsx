@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
@@ -129,11 +130,30 @@ function OptedOutBadge() {
 
 // ─── Página ─────────────────────────────────────────────────────────────────
 
-export default function WhatsAppInboxPage() {
+export interface WhatsAppInboxProps {
+  /**
+   * Comunicação única (17f): mostra SÓ esta conversa (sem a lista de
+   * conversas — a lista vive na Comunicação, com os emails).
+   */
+  embeddedConversationId?: number | null;
+  /** Modo embutido: "voltar"/Esc/não lida fecham a conversa na Comunicação. */
+  onEmbeddedClose?: () => void;
+  /** Modo embutido: algo mudou (estado, caixa, resposta) — a lista da Comunicação refresca. */
+  onEmbeddedChanged?: () => void;
+}
+
+export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedClose, onEmbeddedChanged }: WhatsAppInboxProps = {}) {
+  const embedded = embeddedConversationId !== undefined;
   const isMobile = useIsMobile();
   const openEmployee = useOpenEmployee();
   // ?c=<id> (pesquisa global) abre logo a conversa.
-  const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("c")) || null);
+  const [selectedId, setSelectedIdState] = useState<number | null>(() =>
+    embedded ? embeddedConversationId ?? null : Number(new URLSearchParams(window.location.search).get("c")) || null);
+  // Embutida na Comunicação, "fechar" é da Comunicação (volta à lista dela).
+  const setSelectedId = (id: number | null) => {
+    if (embedded && id == null) { onEmbeddedClose?.(); return; }
+    setSelectedIdState(id);
+  };
   // Um rascunho por conversa (F11): a sugestão da IA e o "limpar" depois de
   // enviar vão para a conversa a que pertencem, mesmo que já se esteja noutra.
   const [drafts, setDrafts] = useState<WhatsAppDrafts>({});
@@ -188,17 +208,26 @@ export default function WhatsAppInboxPage() {
     return () => clearInterval(t);
   }, []);
 
+  // Dentro da Comunicação (embedded) a lista é a da Comunicação — aqui não se pede.
   const conversations = trpc.whatsapp.conversations.list.useQuery(serverSearch ? { search: serverSearch } : undefined, {
+    enabled: !embedded,
     refetchInterval: pageVisible ? POLL_MS : false,
     placeholderData: (prev) => prev,
   });
+  const refetchList = () => { if (embedded) onEmbeddedChanged?.(); else void conversations.refetch(); };
   const thread = trpc.whatsapp.messages.byConversation.useQuery(
     { conversationId: selectedId ?? 0 },
     { enabled: selectedId != null, refetchInterval: pageVisible ? POLL_MS : false },
   );
+  // Quem é (17f): ficha de colaborador → candidato → cliente do CRM, com um resumo do histórico.
+  const identity = trpc.whatsapp.conversations.identity.useQuery(
+    { conversationId: selectedId ?? 0 },
+    { enabled: selectedId != null, staleTime: 5 * 60_000, retry: false },
+  );
 
   const utils = trpc.useUtils();
   const canEditWa = !!user && can(user as any, "whatsapp", "edit");
+  const canSeeClients = !!user && can(user as any, "clientes", "view");
   // Interruptor WHATSAPP_CALLS (desligado por omissão): sem ele não aparece "Ligar".
   const callsFlag = trpc.whatsapp.calls.enabled.useQuery(undefined, { enabled: canEditWa, staleTime: 5 * 60_000, retry: false });
   const callsOn = !!callsFlag.data?.enabled;
@@ -227,7 +256,7 @@ export default function WhatsAppInboxPage() {
   });
   /** Depois de qualquer mudança: lista, conversa aberta e badge do menu. */
   function refreshAll() {
-    conversations.refetch();
+    refetchList();
     if (selectedId != null) thread.refetch();
     if (selectedId != null) convCalls.refetch();
     utils.whatsapp.badge.invalidate();
@@ -235,7 +264,7 @@ export default function WhatsAppInboxPage() {
 
   const markRead = trpc.whatsapp.markRead.useMutation({
     onSuccess: () => {
-      conversations.refetch();
+      refetchList();
       utils.whatsapp.badge.invalidate();
     },
   });
@@ -270,7 +299,7 @@ export default function WhatsAppInboxPage() {
     onSuccess: (_r, v) => {
       setSelectedId(null);
       setDraft(v.conversationId, "");
-      conversations.refetch();
+      refetchList();
       utils.whatsapp.badge.invalidate();
       toast.success("Conversa marcada como não lida.");
     },
@@ -298,7 +327,7 @@ export default function WhatsAppInboxPage() {
       setTplOpen(false);
       setStickSignal((n) => n + 1);
       thread.refetch();
-      conversations.refetch();
+      refetchList();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -351,8 +380,17 @@ export default function WhatsAppInboxPage() {
     );
   });
 
+  // Embutida (17f): a Comunicação escolhe a conversa — abrir conta como lida.
+  useEffect(() => {
+    if (!embedded || embeddedConversationId == null || embeddedConversationId === selectedId) return;
+    openConversation(embeddedConversationId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded, embeddedConversationId]);
+
   // Atalhos: "/" pesquisa · Esc fecha a conversa · Alt+↑/↓ conversa anterior/seguinte.
   useEffect(() => {
+    // Embutida na Comunicação: os atalhos da lista são da Comunicação.
+    if (embedded) return;
     function onKey(e: KeyboardEvent) {
       const el = e.target as HTMLElement | null;
       const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
@@ -886,7 +924,8 @@ export default function WhatsAppInboxPage() {
                 <ArrowLeft className="h-4 w-4" />
               </Button>
             )}
-            <ContactAvatar name={headerName} photoUrl={headerPhoto} className="h-9 w-9 text-sm" />
+            {/* Ecrãs muito estreitos (320 px): sem foto, o nome e o "quem é" cabem. */}
+            <ContactAvatar name={headerName} photoUrl={headerPhoto} className="h-9 w-9 text-sm max-[360px]:hidden" />
             <div className="min-w-0 flex-1">
               {t?.employeeId ? (
                 // Mesmo padrão das outras páginas (Extras-Dia, Avaliação): o nome
@@ -905,16 +944,28 @@ export default function WhatsAppInboxPage() {
                 </div>
               )}
               {(t || selectedRow) && (
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground min-w-0">
+                // flex-wrap: no telemóvel o "Sem resposta" desce de linha em vez de tapar o número (17f).
+                <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground min-w-0">
                   <span className="truncate tabular-nums">{t?.phoneE164 ?? selectedRow?.phoneE164}</span>
                   {t?.optedOut && <OptedOutBadge />}
                   {threadAlerts?.overdue && (
                     <span
-                      className="inline-flex items-center gap-0.5 text-red-600 dark:text-red-400 font-medium shrink-0"
+                      className="inline-flex items-center gap-0.5 text-red-600 dark:text-red-400 font-medium max-w-full"
                       title={`Sem resposta há mais de ${slaMinutes} min`}
                     >
-                      <AlarmClock className="h-3 w-3" /> Sem resposta · {formatWaiting(threadAlerts.waitingMinutes)}
+                      <AlarmClock className="h-3 w-3 shrink-0" /> Sem resposta · {formatWaiting(threadAlerts.waitingMinutes)}
                     </span>
+                  )}
+                </div>
+              )}
+              {identity.data && (
+                <div className="text-[11px] leading-snug text-muted-foreground line-clamp-2 break-words" title={identity.data.detail}>
+                  {identity.data.kind === "client" && canSeeClients ? (
+                    <Link href={`/clientes/${identity.data.clientId}`} className="hover:underline">
+                      {identity.data.detail}
+                    </Link>
+                  ) : (
+                    identity.data.detail
                   )}
                 </div>
               )}
@@ -980,53 +1031,9 @@ export default function WhatsAppInboxPage() {
     </div>
   );
 
-  return (
-    <div className="space-y-3">
-      <Card className="overflow-hidden p-0 gap-0">
-        {/* Altura: ecrã inteiro menos a barra de topo (4rem) e o padding do layout;
-            no telemóvel também a tab bar e o botão do assistente. */}
-        <div className="flex h-[calc(100dvh-14rem)] md:h-[calc(100dvh-9.5rem)] min-h-[420px]">
-          {isMobile ? (
-            selectedId == null ? (
-              <div className="flex-1 min-w-0">{listColumn}</div>
-            ) : (
-              threadColumn
-            )
-          ) : (
-            <>
-              <div className="w-[340px] xl:w-[380px] shrink-0">{listColumn}</div>
-              {threadColumn}
-            </>
-          )}
-        </div>
-      </Card>
-
-      <WhatsAppContextSheet
-        conversationId={selectedId}
-        contactName={t?.name ?? "contacto"}
-        open={contextOpen && selectedId != null}
-        onOpenChange={setContextOpen}
-        onLinked={refreshAll}
-      />
-      <QuickRepliesDialog open={quickOpen} onOpenChange={setQuickOpen} />
-      {t && selectedId != null && (
-        <CallContactDialog
-          open={callOpen}
-          onOpenChange={setCallOpen}
-          conversationId={t.conversationId}
-          name={t.name}
-          subtitle={t.phoneE164}
-        />
-      )}
-      <PendingCallbacksDialog
-        open={callbacksOpen}
-        onOpenChange={(v) => { setCallbacksOpen(v); if (!v) void pendingCallbacks.refetch(); }}
-        onOpenConversation={openConversation}
-        canEdit={canEditWa}
-        isSuperAdmin={user?.role === "super_admin"}
-      />
-
-      {/* Dialog de template (janela fechada ou ainda sem resposta) */}
+  // Dialog de template (janela fechada ou ainda sem resposta)
+  const templateDialog = (
+    <>
       <Dialog open={tplOpen} onOpenChange={(open) => { if (!sendTemplate.isPending) setTplOpen(open); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -1112,6 +1119,73 @@ export default function WhatsAppInboxPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </>
+  );
+
+  const dialogs = (
+    <>
+      <WhatsAppContextSheet
+        conversationId={selectedId}
+        contactName={t?.name ?? "contacto"}
+        open={contextOpen && selectedId != null}
+        onOpenChange={setContextOpen}
+        onLinked={refreshAll}
+      />
+      <QuickRepliesDialog open={quickOpen} onOpenChange={setQuickOpen} />
+      {t && selectedId != null && (
+        <CallContactDialog
+          open={callOpen}
+          onOpenChange={setCallOpen}
+          conversationId={t.conversationId}
+          name={t.name}
+          subtitle={t.phoneE164}
+        />
+      )}
+    </>
+  );
+
+  // Comunicação única (17f): só a conversa (a lista é a da Comunicação).
+  if (embedded) {
+    return (
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+        {threadColumn}
+        {dialogs}
+        {templateDialog}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <Card className="overflow-hidden p-0 gap-0">
+        {/* Altura: ecrã inteiro menos a barra de topo (4rem) e o padding do layout;
+            no telemóvel também a tab bar e o botão do assistente. */}
+        <div className="flex h-[calc(100dvh-14rem)] md:h-[calc(100dvh-9.5rem)] min-h-[420px]">
+          {isMobile ? (
+            selectedId == null ? (
+              <div className="flex-1 min-w-0">{listColumn}</div>
+            ) : (
+              threadColumn
+            )
+          ) : (
+            <>
+              <div className="w-[340px] xl:w-[380px] shrink-0">{listColumn}</div>
+              {threadColumn}
+            </>
+          )}
+        </div>
+      </Card>
+
+      {dialogs}
+      <PendingCallbacksDialog
+        open={callbacksOpen}
+        onOpenChange={(v) => { setCallbacksOpen(v); if (!v) void pendingCallbacks.refetch(); }}
+        onOpenConversation={openConversation}
+        canEdit={canEditWa}
+        isSuperAdmin={user?.role === "super_admin"}
+      />
+
+      {templateDialog}
     </div>
   );
 }

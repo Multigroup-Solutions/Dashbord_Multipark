@@ -2,14 +2,17 @@
 modulo: comunicacao
 titulo: Comunicação (email)
 rotas: /comunicacao, /comunicacao/meu-email
-palavras: email, emails, gmail, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
+palavras: email, emails, gmail, lista única, whatsapp na comunicação, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
 ---
 # Comunicação (email)
 
 Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard. Todo o email entra e sai pela API do Gmail; cada email é separado pelo alias a que foi enviado (tabela em Definições → Comunicação — ver a ajuda "Email por alias").
 
-**Caixas partilhadas** (menu **Comunicação → Caixas partilhadas**)
+**Caixas (email e WhatsApp)** (menu **Comunicação → Caixas (email e WhatsApp)**)
 1. Escolhe a caixa (ex.: Reclamações, Info, Comercial). Só vês as caixas do teu módulo; algumas caixas (ex.: admin@) são só para a administração.
+   - A lista junta os **emails e as conversas de WhatsApp** dessa caixa, das mais recentes para as mais antigas. As de WhatsApp têm a etiqueta verde **WhatsApp**; na caixa **Info** aparecem as conversas de WhatsApp ainda sem caixa (Geral).
+   - Abrir uma conversa de WhatsApp abre-a ali mesmo, com tudo o que tens no menu **Comunicação → WhatsApp** (responder, templates, estado, responsável, ligar).
+   - Com uma **marca** escolhida só aparecem emails (o WhatsApp não tem marca). Para ver mais de 300 conversas de WhatsApp, usa o menu **WhatsApp**.
 2. Filtra por estado (Aberta, Pendente, Resolvida), responsável, marca, **Por responder** ou **Não lidas**, e pesquisa por assunto, nome ou email.
 3. Abre a conversa: **Responder**, **Responder a todos** ou **Reencaminhar**. O email sai pelo endereço (alias) a que o cliente escreveu, com a assinatura da marca. Se o alias não estiver configurado como "Enviar email como" no Gmail, aparece um erro a explicar o que falta.
    - Carregar duas vezes em **Enviar**, ou carregar outra vez depois de um erro, **nunca manda dois emails** ao cliente.
