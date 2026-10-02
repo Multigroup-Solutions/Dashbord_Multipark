@@ -4,8 +4,9 @@
 > (`setInterval`, INPROCESS_SCHEDULERS) foram REMOVIDOS do código e os
 > schedules do GitHub Actions retirados. Agendador único: `GET /api/cron/tick`
 > (server/cronScheduler.ts + server/cronSchedule.ts, estado em
-> `cron_job_state`), chamado de 5 em 5 min pelo cron-job.org e de hora a hora
-> pelo `.github/workflows/cron-tick.yml` (rede de segurança). Ver
+> `cron_job_state`), chamado de 5 em 5 min pelo cron-job.org. Desde 2 out 2026
+> o GitHub não agenda nada: `.github/workflows/cron-tick.yml` ficou só manual
+> (a rede de segurança de hora a hora levava 401 desde 27 set). Ver
 > docs/ajuda/agendador.md.
 
 ## Summary

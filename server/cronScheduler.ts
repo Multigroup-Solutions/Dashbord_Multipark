@@ -1,9 +1,8 @@
 /**
  * Agendador único do servidor: GET /api/cron/tick (Bearer CRON_SECRET).
  *
- * Chamado de 5 em 5 min pelo cron-job.org (e de hora a hora pelo GitHub
- * Actions, como rede de segurança — o lease torna as chamadas duplicadas
- * inofensivas). Cada tick:
+ * Chamado de 5 em 5 min pelo cron-job.org (e, só à mão, pelo workflow
+ * cron-tick.yml — o lease torna as chamadas duplicadas inofensivas). Cada tick:
  *   1. lê o estado de cada trabalho (cron_job_state, migração 0190) e decide,
  *      pela hora de Lisboa, o que está na altura (server/cronSchedule.ts);
  *   2. corre os devidos UM A UM (primeiro os que ficaram a meio, depois por

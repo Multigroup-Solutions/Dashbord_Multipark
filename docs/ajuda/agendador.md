@@ -8,7 +8,7 @@ palavras: agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/
 
 Todas as tarefas automáticas da app (sincronizar o Gmail, reservas Multipark, extras, recolha GPS do Zello, relatórios, Google Ads…) correm a partir de **um só endereço**, `/api/cron/tick`. Um serviço externo gratuito, o **cron-job.org**, chama-o de **5 em 5 minutos**; em cada chamada a app vê, pela hora de Lisboa, o que está na altura e corre essas tarefas uma a uma. O que não couber nessa chamada fica para a seguinte.
 
-Antes eram os workflows do GitHub a chamar cada tarefa, mas o GitHub atrasava-os horas (o Gmail chegou a sincronizar só 8 vezes num dia). O GitHub ficou apenas como **rede de segurança** (1 vez por hora) e para corridas manuais.
+Antes eram os workflows do GitHub a chamar cada tarefa, mas o GitHub atrasava-os horas (o Gmail chegou a sincronizar só 8 vezes num dia). Hoje o GitHub **não agenda nada**: os workflows ficam só para corridas manuais. (A "rede de segurança" de hora a hora saiu a 2 out 2026.) Se o cron-job.org falhar, o aviso chega por email do próprio cron-job.org (passo 6) e as tarefas aparecem como **Parado** no Estado do sistema.
 
 ## Configurar o cron-job.org (dono / super admin, uma vez)
 
@@ -78,6 +78,6 @@ O cartão **Estado do sistema** (por cima) continua a mostrar o histórico de co
 
 ## Corridas manuais
 
-- **GitHub → Actions → "Agendador — rede de segurança (tick)" → Run workflow**: corre um tick completo e mostra o relatório (vermelho se alguma tarefa falhou).
+- **GitHub → Actions → "Agendador — tick (corrida manual)" → Run workflow**: corre um tick completo e mostra o relatório (vermelho se alguma tarefa falhou). Usa o segredo `CRON_SECRET` dos Actions do GitHub: se der **401**, esse segredo não é igual ao do Vercel (o cron-job.org não é afetado).
 - **GitHub → Actions → "Multipark Sync Cron" (e os outros workflows) → Run workflow**: corre cada tarefa à mão (extras, escala, ligações, manutenção diária, avaliação, anúncios e briefing — já sem sync de reservas).
 - Chamar o tick duas vezes ao mesmo tempo não faz mal: cada tarefa só corre numa chamada de cada vez.
