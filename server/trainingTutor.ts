@@ -31,7 +31,7 @@ import {
 } from "./trainingTutorRules";
 import * as store from "./trainingTutorStore";
 import type { KbHit } from "./knowledge/retrieve";
-import { safeCitationHref } from "../shared/knowledge";
+import { kbPlainText, safeCitationHref } from "../shared/knowledge";
 import { lisbonDay } from "./trainingRules";
 
 export interface TutorUser { id: number; role: string; name?: string | null }
@@ -127,19 +127,26 @@ function uniqueSources(hits: Chunk[]) {
 
 // ─── Base de conhecimento ──────────────────────────────────────────────────
 
-/** Trechos da base de conhecimento visíveis para quem pergunta (nunca lança). */
-async function tutorKnowledge(question: string, role: string, topK: number): Promise<KbHit[]> {
+/**
+ * Trechos da base de conhecimento visíveis para quem pergunta (nunca lança).
+ * `failed`: a consulta falhou — 18d: o tutor diz que não conseguiu consultar,
+ * em vez de responder como se os manuais não tivessem nada.
+ */
+async function tutorKnowledge(question: string, role: string, topK: number): Promise<{ hits: KbHit[]; failed: boolean }> {
   try {
     const { loadKnowledgeConfig } = await import("./knowledge/sync");
-    if (!(await loadKnowledgeConfig()).useInTutor) return [];
+    if (!(await loadKnowledgeConfig()).useInTutor) return { hits: [], failed: false };
     const { retrieveKnowledge, kbViewerFrom } = await import("./knowledge/retrieve");
     const { cityScope } = await import("./cityScope");
     const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, cityScope.getStore()), topK });
-    return r.hits;
+    return { hits: r.hits, failed: !!r.failed };
   } catch {
-    return [];
+    return { hits: [], failed: true };
   }
 }
+
+/** Resposta quando nem o módulo nem a base de conhecimento responderam por erro (18d). */
+export const TUTOR_KB_UNAVAILABLE = "Não consegui consultar os manuais agora. Tenta de novo daqui a pouco.";
 
 // ─── Pergunta ──────────────────────────────────────────────────────────────
 
@@ -186,8 +193,13 @@ export async function tutorAsk(
 
   // Base de conhecimento (manuais do Drive/carregados): só o que a pessoa pode
   // ver; completa os trechos do módulo (ou substitui-os quando o módulo não tem).
-  const kbHits = await tutorKnowledge(detail && lastUserQ ? `${safeQ} ${lastUserQ}` : safeQ, user.role, hits.length ? 2 : 3);
+  const kb = await tutorKnowledge(detail && lastUserQ ? `${safeQ} ${lastUserQ}` : safeQ, user.role, hits.length ? 2 : 3);
+  const kbHits = kb.hits;
 
+  if (!hits.length && !kbHits.length && kb.failed) {
+    // Não se grava como "pergunta sem resposta nos manuais" — foi um erro.
+    return { ...base, answer: TUTOR_KB_UNAVAILABLE, outOfContent: false, fallback: null };
+  }
   if (!hits.length && !kbHits.length) {
     const answer = outOfContentAnswer(trainerName);
     await persist(answer, true);
@@ -229,7 +241,8 @@ export async function tutorAsk(
     await persist(answer, true);
     return { ...base, answer, outOfContent: true, fallback: null };
   }
-  const stored = limitWords(output, maxWords);
+  // Texto corrido (Jorge, 2 out 2026): mesmo que a IA mande Markdown, sai sem #, ** nem listas com -.
+  const stored = limitWords(kbPlainText(output), maxWords);
   await persist(stored, false);
   const kbSources = kbHits
     .filter((h, i, arr) => arr.findIndex((x) => x.docId === h.docId) === i)

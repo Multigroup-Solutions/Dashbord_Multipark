@@ -201,7 +201,7 @@ export function GlobalSearch() {
               const Icon = GROUP_ICON[g.group] ?? FileText;
               return (
                 <CommandPrimitive.Group key={g.group} heading={g.label} className="px-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground">
-                  {g.timedOut && !g.items.length && <p className="px-2 py-1 text-xs text-muted-foreground">Sem resposta a tempo — abre a página para pesquisar.</p>}
+                  {g.timedOut && !g.items.length && <p className="px-2 py-1 text-xs text-muted-foreground">Sem resposta (lenta ou com erro) — abre a página para pesquisar.</p>}
                   {g.items.map((it) => (
                     <CommandPrimitive.Item
                       key={it.key}

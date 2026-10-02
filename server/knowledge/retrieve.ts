@@ -29,6 +29,8 @@ export interface KbRetrieval {
   hits: KbHit[];
   citations: KbCitation[];
   mode: "embeddings" | "fulltext" | "keywords" | "none";
+  /** A consulta falhou (BD/IA) — não é o mesmo que "os manuais não falam disso" (18d). */
+  failed?: boolean;
 }
 
 export type QueryEmbedFn = (question: string) => Promise<number[] | null>;
@@ -192,7 +194,7 @@ export async function retrieveKnowledge(input: {
     return { hits, citations: citationsFor(hits), mode: usedEmbeddings ? "embeddings" : mode };
   } catch (err) {
     console.warn("[knowledge] recuperação falhou:", String((err as any)?.code ?? (err as any)?.name ?? "erro"));
-    return empty;
+    return { ...empty, failed: true };
   }
 }
 

@@ -317,7 +317,7 @@ describe("sincronização incremental", () => {
   });
   const dbFor = (row: Record<string, unknown>) => createFakeDb((q) => {
     if (q.sql.includes("FROM kb_documents d WHERE d.id")) return [[row]];
-    if (q.sql.includes("SET status = 'processing'")) return [{ affectedRows: 1 }];
+    if (q.sql.includes("status = 'processing', updatedAt = NOW()")) return [{ affectedRows: 1 }];
     if (q.sql.startsWith("SELECT id, ord")) return [[{ id: 1, ord: 0, section: null, text: "t", hasEmb: 0 }]];
     return [[]];
   });

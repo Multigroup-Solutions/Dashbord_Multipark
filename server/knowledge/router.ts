@@ -15,7 +15,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { requireAccess, withOverrides } from "../_core/access";
 import { cityScope } from "../cityScope";
 import {
-  KB_MAX_UPLOAD_BYTES, KB_SOURCES, KB_STATUSES, KB_UPLOAD_MIME, canSeeKbDoc, knowledgeConfigSchema, kbVisibilitySchema, parseKnowledgeConfig,
+  KB_DIRECT_KEY_RE, KB_MAX_DIRECT_UPLOAD_BYTES, KB_MAX_DIRECT_UPLOAD_MB, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCES, KB_STATUSES, KB_UPLOAD_MIME, canSeeKbDoc, knowledgeConfigSchema, kbVisibilitySchema, parseKnowledgeConfig,
   safeCitationHref,
 } from "../../shared/knowledge";
 import { kbViewerFrom } from "./retrieve";
@@ -55,6 +55,36 @@ async function processNow(id: number): Promise<{ status: string; error?: string 
   return { status: r.status, error: r.error };
 }
 
+/** Nome de ficheiro seguro para a key do armazenamento. PURA. */
+export function safeUploadName(fileName: string): string {
+  return String(fileName).replace(/[^\w.\-]+/g, "_").slice(-120) || "ficheiro";
+}
+
+type UploadResult = { id: number; status: string; error: string | null; duplicateOf: string | null };
+
+/**
+ * Regista um carregado (os bytes já estão no armazenamento): o mesmo ficheiro
+ * outra vez → o documento que já existe (18d); senão cria e processa já.
+ */
+async function registerUpload(userId: number, f: { buffer: Buffer; mime: string; fileName: string; title?: string; visibility: { roles: string[]; cities: string[] }; store: () => Promise<{ key: string; url: string }> }): Promise<UploadResult> {
+  const { createHash } = await import("node:crypto");
+  const sha = createHash("sha256").update(f.buffer).digest("hex");
+  const dup = await store.uploadByChecksum(await store.kbDb(), sha);
+  if (dup) return { id: dup.id, status: dup.status, error: null, duplicateOf: dup.title };
+  const { key, url } = await f.store();
+  const d = await store.kbDb();
+  const title = (f.title?.trim() || f.fileName.replace(/\.[a-z0-9]+$/i, "")).slice(0, 300);
+  const id = await store.insertDoc(d, {
+    source: "upload", title, mimeType: f.mime, fileKey: key, fileUrl: url, sizeBytes: f.buffer.length,
+    visibility: f.visibility as any, visibilityCustom: true, createdById: userId,
+  });
+  const { sql } = await import("drizzle-orm");
+  await d.execute(sql`UPDATE kb_documents SET uploadSha = ${sha} WHERE id = ${id}`);
+  await log(userId, "create", id, `Base de conhecimento: carregado "${title}"`);
+  const r = await processNow(id).catch((err) => ({ status: "error", error: String(err?.message ?? err).slice(0, 200) }));
+  return { id, status: r.status, error: r.error ?? null, duplicateOf: null };
+}
+
 export const knowledgeRouter = router({
   /** Estado geral: definições, Drive, contagens, última corrida, IA. */
   status: protectedProcedure.query(async ({ ctx }) => {
@@ -70,7 +100,8 @@ export const knowledgeRouter = router({
     return {
       config: cfg,
       drive: { sharedEnabled: drive.sharedEnabled, sharedDriveName: drive.sharedDriveName, ownerEmail: drive.ownerEmail, delegation: dwdConfigured() },
-      counts: await store.statusCounts(d).catch(() => ({})),
+      // 18d: sem o `.catch(() => ({}))` — uma falha diz-se, não aparece "0 documentos".
+      counts: await store.statusCounts(d),
       embeddingsActive: await embeddingsWanted(cfg),
       lastRun,
     };
@@ -101,12 +132,21 @@ export const knowledgeRouter = router({
   saveConfig: protectedProcedure.input(knowledgeConfigSchema).mutation(async ({ ctx, input }) => {
     manage(ctx.user);
     const { setSetting } = await import("../appSettings");
+    let r;
     try {
-      const r = await setSetting("knowledge.config", input, ctx.user.id);
-      return { changed: r.changed, config: parseKnowledgeConfig(r.value) };
+      r = await setSetting("knowledge.config", input, ctx.user.id);
     } catch (err: any) {
       throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? "Definições inválidas.") });
     }
+    const config = parseKnowledgeConfig(r.value);
+    // 18d: a visibilidade das pastas aplica-se JÁ (antes só na volta seguinte às
+    // pastas, até 4 h depois) e a próxima sincronização percorre tudo.
+    const d = await store.kbDb();
+    const { applyFolderVisibility, forceNextDiscovery } = await import("./sync");
+    const updated = await applyFolderVisibility(d, config.folders);
+    await forceNextDiscovery(d);
+    if (updated) await log(ctx.user.id, "update", null, `Base de conhecimento: visibilidade das pastas aplicada a ${updated} documento(s)`);
+    return { changed: r.changed, config, updated };
   }),
 
   upload: protectedProcedure
@@ -123,19 +163,57 @@ export const knowledgeRouter = router({
       if (!mime) throw new TRPCError({ code: "BAD_REQUEST", message: "Tipo de ficheiro não suportado (PDF, DOCX, TXT ou MD)." });
       const buffer = Buffer.from(input.fileBase64, "base64");
       if (!buffer.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Ficheiro vazio." });
-      if (buffer.length > KB_MAX_UPLOAD_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Ficheiro demasiado grande (máx. 4 MB)." });
-      const { storagePut } = await import("../storage");
-      const safe = input.fileName.replace(/[^\w.\-]+/g, "_").slice(-120);
-      const { key, url } = await storagePut(`knowledge/${Date.now()}-${safe}`, buffer, mime);
-      const d = await store.kbDb();
-      const title = (input.title?.trim() || input.fileName.replace(/\.[a-z0-9]+$/i, "")).slice(0, 300);
-      const id = await store.insertDoc(d, {
-        source: "upload", title, mimeType: mime, fileKey: key, fileUrl: url, sizeBytes: buffer.length,
-        visibility: input.visibility, visibilityCustom: true, createdById: ctx.user.id,
+      if (buffer.length > KB_MAX_UPLOAD_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: `Ficheiro demasiado grande (máx. ${KB_MAX_UPLOAD_MB} MB).` });
+      return registerUpload(ctx.user.id, {
+        buffer, mime, fileName: input.fileName, title: input.title, visibility: input.visibility,
+        store: async () => (await import("../storage")).storagePut(`knowledge/${Date.now()}-${safeUploadName(input.fileName)}`, buffer, mime),
       });
-      await log(ctx.user.id, "create", id, `Base de conhecimento: carregado "${title}"`);
-      const r = await processNow(id).catch((err) => ({ status: "error", error: String(err?.message ?? err).slice(0, 200) }));
-      return { id, status: r.status, error: r.error ?? null };
+    }),
+
+  /**
+   * Carregamento direto, passo 1: URL assinada para o browser gravar o ficheiro
+   * no armazenamento (até 25 MB, sem passar pela Vercel). Sem S3 → `direct:false`
+   * e a página usa o caminho antigo (3 MB).
+   */
+  uploadTicket: protectedProcedure
+    .input(z.object({ fileName: z.string().trim().min(1).max(255), mimeType: z.string().max(160).default(""), size: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      manage(ctx.user);
+      const mime = uploadMimeFor(input.fileName, input.mimeType);
+      if (!mime) throw new TRPCError({ code: "BAD_REQUEST", message: "Tipo de ficheiro não suportado (PDF, DOCX, TXT ou MD)." });
+      if (input.size > KB_MAX_DIRECT_UPLOAD_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: `Ficheiro demasiado grande (máx. ${KB_MAX_DIRECT_UPLOAD_MB} MB). Põe-no numa pasta do Drive sincronizada.` });
+      const { isPresignedUploadAvailable, storagePresignPut } = await import("../storage");
+      if (!isPresignedUploadAvailable()) return { direct: false as const };
+      const { randomBytes } = await import("node:crypto");
+      const key = `knowledge/${Date.now()}-${randomBytes(4).toString("hex")}-${safeUploadName(input.fileName)}`;
+      const r = await storagePresignPut(key, mime, 600);
+      return { direct: true as const, key: r.key, uploadUrl: r.uploadUrl, contentType: mime };
+    }),
+
+  /** Carregamento direto, passo 2: o ficheiro já está no armazenamento → regista e processa. */
+  uploadDone: protectedProcedure
+    .input(z.object({
+      key: z.string().regex(KB_DIRECT_KEY_RE, "Ficheiro inválido."),
+      fileName: z.string().trim().min(1).max(255),
+      mimeType: z.string().max(160).default(""),
+      title: z.string().trim().max(300).optional(),
+      visibility: kbVisibilitySchema.default({ roles: [], cities: [] }),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      manage(ctx.user);
+      const mime = uploadMimeFor(input.fileName, input.mimeType);
+      if (!mime) throw new TRPCError({ code: "BAD_REQUEST", message: "Tipo de ficheiro não suportado (PDF, DOCX, TXT ou MD)." });
+      const { storageGet } = await import("../storage");
+      const got = await storageGet(input.key);
+      if (!got.url) throw new TRPCError({ code: "NOT_FOUND", message: "O ficheiro não chegou ao armazenamento. Tenta carregar outra vez." });
+      const { loadStoredFile } = await import("./sync");
+      const buffer = await loadStoredFile(input.key, got.url);
+      if (!buffer.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Ficheiro vazio." });
+      if (buffer.length > KB_MAX_DIRECT_UPLOAD_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: `Ficheiro demasiado grande (máx. ${KB_MAX_DIRECT_UPLOAD_MB} MB).` });
+      return registerUpload(ctx.user.id, {
+        buffer, mime, fileName: input.fileName, title: input.title, visibility: input.visibility,
+        store: async () => ({ key: input.key, url: got.url }),
+      });
     }),
 
   updateVisibility: protectedProcedure
@@ -147,7 +225,8 @@ export const knowledgeRouter = router({
       if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado." });
       // "Seguir a pasta" (Drive): a próxima sincronização volta a aplicar a visibilidade da pasta.
       await store.setVisibility(d, input.id, input.visibility, !(input.followFolder && doc.source === "drive"));
-      await log(ctx.user.id, "update", input.id, `Base de conhecimento: visibilidade de "${doc.title}"`);
+      const fmt = (v: { roles: string[]; cities: string[] }) => `${v.roles.join(",") || "todos"} / ${v.cities.join(",") || "todas"}`;
+      await log(ctx.user.id, "update", input.id, `Base de conhecimento: visibilidade de "${doc.title}": ${fmt(doc.visibility)} → ${input.followFolder && doc.source === "drive" ? "a da pasta" : fmt(input.visibility)}`);
       return { success: true };
     }),
 
@@ -157,9 +236,11 @@ export const knowledgeRouter = router({
     const doc = await store.getDoc(d, input.id);
     if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado." });
     if (doc.source === "help") throw new TRPCError({ code: "BAD_REQUEST", message: "A ajuda da app atualiza-se sozinha com cada versão." });
+    // A processar agora → não se mete outro processamento por cima (18d: duplicava os trechos).
+    if (doc.status === "processing") throw new TRPCError({ code: "CONFLICT", message: "Este documento está a ser processado — espera uns minutos." });
     // Força nova extração (checksum limpo) — ex.: depois de corrigir o ficheiro.
     const { sql } = await import("drizzle-orm");
-    await d.execute(sql`UPDATE kb_documents SET status = 'pending', attempts = 0, error = NULL, checksum = NULL WHERE id = ${input.id}`);
+    await d.execute(sql`UPDATE kb_documents SET status = 'pending', attempts = 0, error = NULL, checksum = NULL WHERE id = ${input.id} AND status <> 'processing'`);
     await log(ctx.user.id, "update", input.id, `Base de conhecimento: voltar a sincronizar "${doc.title}"`);
     return processNow(input.id).catch((err) => ({ status: "error", error: String(err?.message ?? err).slice(0, 200) }));
   }),
@@ -173,28 +254,31 @@ export const knowledgeRouter = router({
     return r;
   }),
 
-  /** Carregados: apaga (ficheiro + trechos). Drive/ajuda: exclui do índice (não volta na sincronização). */
+  /**
+   * Excluir do índice (todos: carregados, Drive, ajuda). Sai das respostas e da
+   * pesquisa; a linha e o ficheiro ficam (18d: um carregado era apagado de vez,
+   * sem volta). "Voltar a incluir" repõe.
+   */
   remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     manage(ctx.user);
     const d = await store.kbDb();
     const doc = await store.getDoc(d, input.id);
     if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado." });
-    if (doc.source === "upload") {
-      await store.deleteDocHard(d, input.id);
-      try { const { storageDelete } = await import("../storage"); await storageDelete(doc.fileKey || doc.fileUrl); } catch { /* ficheiro já não existe */ }
-    } else {
-      await store.excludeDoc(d, input.id);
-    }
-    await log(ctx.user.id, "delete", input.id, `Base de conhecimento: ${doc.source === "upload" ? "apagado" : "excluído"} "${doc.title}"`);
-    return { success: true, excluded: doc.source !== "upload" };
+    await store.excludeDoc(d, input.id);
+    await log(ctx.user.id, "exclude", input.id, `Base de conhecimento: excluído "${doc.title}" (${doc.source})`);
+    return { success: true, excluded: true };
   }),
 
-  /** Volta a incluir um documento excluído (Drive). */
+  /** Volta a incluir um documento excluído. */
   include: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     manage(ctx.user);
     const d = await store.kbDb();
+    const doc = await store.getDoc(d, input.id);
+    if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado." });
+    if (doc.status !== "skipped") throw new TRPCError({ code: "BAD_REQUEST", message: "Este documento não está excluído." });
     const { sql } = await import("drizzle-orm");
     await d.execute(sql`UPDATE kb_documents SET status = 'pending', attempts = 0, error = NULL, checksum = NULL WHERE id = ${input.id} AND status = 'skipped'`);
+    await log(ctx.user.id, "include", input.id, `Base de conhecimento: voltou a incluir "${doc.title}"`);
     return processNow(input.id).catch((err) => ({ status: "error", error: String(err?.message ?? err).slice(0, 200) }));
   }),
 

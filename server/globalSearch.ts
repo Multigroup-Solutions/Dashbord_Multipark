@@ -387,7 +387,11 @@ export async function globalSearch(
     if (r.ok) {
       for (const it of r.value) put(it.group, [it]);
       if (!r.value.length && src.group !== "contactos") put(src.group, []);
-    } else if (r.timedOut) put(src.group, [], true);
+    } else {
+      // Sem resposta a tempo OU com erro → o grupo aparece "sem resposta" (18d:
+      // um erro fazia o grupo desaparecer e parecia "sem resultados").
+      put(src.group, [], true);
+    }
   }));
 
   put("navegacao", matchNavigation(q.raw, viewer));

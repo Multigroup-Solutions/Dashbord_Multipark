@@ -77,7 +77,7 @@ export async function applyKbChanges(d: store.Db, api: KbChangesApi, roots: Read
     const r = await api.listChanges(token);
     for (const c of r.changes) {
       out.seen++;
-      const known = store.rowsOf(await d.execute(sql`SELECT id, modifiedTime, md5, status FROM kb_documents
+      const known = store.rowsOf(await d.execute(sql`SELECT id, modifiedTime, md5, status, deletedAt FROM kb_documents
         WHERE driveFileId = ${c.fileId} AND source = 'drive' LIMIT 1`))[0];
       const gone = c.removed || !c.file || c.file.trashed;
       if (known) {
@@ -88,12 +88,14 @@ export async function applyKbChanges(d: store.Db, api: KbChangesApi, roots: Read
           continue;
         }
         const f = c.file!;
-        const changed = String(known.modifiedTime ?? "") !== String(f.modifiedTime ?? "") || String(known.md5 ?? "") !== String(f.md5 ?? "");
+        // Reposto do lixo: os trechos tinham sido apagados → processa de novo (18d).
+        const restored = known.deletedAt != null;
+        const changed = restored || String(known.modifiedTime ?? "") !== String(f.modifiedTime ?? "") || String(known.md5 ?? "") !== String(f.md5 ?? "");
         const excluded = String(known.status) === "skipped";
         const title = f.name.replace(/\.(pdf|docx|txt|md)$/i, "").slice(0, 300) || "(sem título)";
         await d.execute(sql`UPDATE kb_documents SET title = ${title}, mimeType = ${f.mimeType}, webViewLink = ${f.webViewLink}, sizeBytes = ${f.size},
             modifiedTime = ${f.modifiedTime}, md5 = ${f.md5}, deletedAt = NULL
-            ${changed && !excluded ? sql`, status = 'pending', attempts = 0, error = NULL` : sql``}
+            ${changed && !excluded ? sql`, status = 'pending', attempts = 0, error = NULL${restored ? sql`, checksum = NULL` : sql``}` : sql``}
           WHERE id = ${Number(known.id)}`);
         if (changed && !excluded) out.updated++;
         continue;

@@ -33,7 +33,22 @@ export const KB_CITIES = ["Lisboa", "Porto", "Faro"] as const;
 export type KbCity = (typeof KB_CITIES)[number];
 
 /** Máximo de um ficheiro carregado (o tRPC leva base64; o Vercel corta ~4,5 MB). */
-export const KB_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+/**
+ * Máximo de um ficheiro carregado. 18d: era 4 MB, mas vai em base64 (+1/3) e a
+ * Vercel corta os pedidos acima de 4,5 MB — entre ~3,3 e 4 MB falhava sem
+ * explicação. 3 MB cabem com folga.
+ */
+export const KB_MAX_UPLOAD_MB = 3;
+export const KB_MAX_UPLOAD_BYTES = KB_MAX_UPLOAD_MB * 1024 * 1024;
+/**
+ * Carregamento DIRETO do browser para o armazenamento (S3, URL assinada) — não
+ * passa pelo pedido da Vercel, por isso não tem o teto dos 4,5 MB (Jorge, 2 out
+ * 2026: "pode ir direto para o armazenamento"). Sem S3 cai no caminho antigo (3 MB).
+ */
+export const KB_MAX_DIRECT_UPLOAD_MB = 25;
+export const KB_MAX_DIRECT_UPLOAD_BYTES = KB_MAX_DIRECT_UPLOAD_MB * 1024 * 1024;
+/** Key de um carregamento direto (o servidor só aceita registar keys deste formato). */
+export const KB_DIRECT_KEY_RE = /^knowledge\/\d{10,16}-[a-f0-9]{8}-[\w.\-]{1,120}$/;
 /** Tipos aceites no carregamento manual. */
 export const KB_UPLOAD_MIME = {
   pdf: "application/pdf",
@@ -58,6 +73,30 @@ export const kbFolderSchema = z.object({
   visibility: kbVisibilitySchema.default(KB_VISIBILITY_ALL),
 });
 export type KbFolder = z.infer<typeof kbFolderSchema>;
+
+const normFolder = (p: string): string => String(p ?? "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+
+/**
+ * A pasta configurada mais específica que contém `path` (18d — com
+ * "Procedimentos" e "Procedimentos/Porto" nas Definições, um ficheiro de
+ * Porto fica com a visibilidade de "Procedimentos/Porto", seja qual for a
+ * ordem; antes ganhava a última percorrida). null = nenhuma. PURA.
+ */
+export function mostSpecificKbFolder<T extends { path: string }>(folders: readonly T[], path: string): T | null {
+  const target = normFolder(path);
+  let best: T | null = null;
+  for (const f of folders) {
+    const fp = normFolder(f.path);
+    if (!fp || (target !== fp && !target.startsWith(`${fp}/`))) continue;
+    if (!best || fp.length > normFolder(best.path).length) best = f;
+  }
+  return best;
+}
+
+/** Pastas da mais geral para a mais específica (aplicar por esta ordem = a mais específica manda). PURA. */
+export function foldersBySpecificity<T extends { path: string }>(folders: readonly T[]): T[] {
+  return [...folders].sort((a, b) => normFolder(a.path).split("/").length - normFolder(b.path).split("/").length || normFolder(a.path).length - normFolder(b.path).length);
+}
 
 export const knowledgeConfigSchema = z.object({
   /** Sincronizar as pastas do Shared Drive (cron knowledge-sync). */
@@ -150,6 +189,11 @@ export interface KbCitation {
  * ([K1]…, as etiquetas que o prompt pede). Sem etiquetas (a resposta não
  * veio dos manuais, ex.: "não encontrei") → a resposta tal e qual. PURA.
  */
+/** Escapa o que o markdown leria como ligação/imagem/HTML num título. PURA. */
+export function escapeMdLabel(s: string): string {
+  return String(s ?? "").replace(/[\\`*_[\]()<>!]/g, (c) => `\\${c}`);
+}
+
 export function appendCitations(answer: string, citations: readonly KbCitation[]): { text: string; used: KbCitation[] } {
   const text = String(answer ?? "").trim();
   if (!citations.length) return { text, used: [] };
@@ -159,9 +203,62 @@ export function appendCitations(answer: string, citations: readonly KbCitation[]
   );
   if (!used.length) return { text, used: [] };
   const lines = used.map((c) => {
-    const label = c.section && c.section !== c.title ? `${c.title} — ${c.section}` : c.title;
+    // 18d: um título com [ ] ( ) já não parte nem injeta ligações no markdown.
+    const label = escapeMdLabel(c.section && c.section !== c.title ? `${c.title} — ${c.section}` : c.title);
     const href = safeCitationHref(c.href);
     return `- [${c.tag}] ${href ? `[${label}](${href})` : label}`;
   });
   return { text: `${text}\n\nFontes:\n${lines.join("\n")}`, used };
+}
+
+// ─── Texto corrido (Jorge, 2 out 2026: "o conhecimento vem em Markdown") ─────
+
+const MD_TABLE_SEP = /^\|?(\s*:?-{2,}:?\s*\|)+\s*(:?-{2,}:?)?\s*\|?$/;
+
+/** Tira as marcas de Markdown de UMA linha (títulos, citações, listas, tabelas, ênfase, código, ligações). PURA. */
+function mdLineToText(line: string): string | null {
+  let l = line;
+  const t = l.trim();
+  if (/^([-*_])(\s*\1){2,}$/.test(t)) return null; // régua
+  if (MD_TABLE_SEP.test(t)) return null; // separador de tabela
+  if (t.startsWith("|") && t.endsWith("|") && t.length > 1) l = t.slice(1, -1).split("|").map((c) => c.trim()).filter(Boolean).join(" · ");
+  l = l.replace(/^\s{0,3}#{1,6}\s+/, "").replace(/\s+#+\s*$/, ""); // títulos
+  l = l.replace(/^\s{0,3}>\s?/, ""); // citação
+  l = l.replace(/^(\s*)[-*+]\s+(\[[ xX]\]\s+)?/, "$1• "); // listas (e caixas de seleção)
+  l = l.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1"); // imagens → texto alternativo
+  l = l.replace(/\[([^\]]+)\]\((?:[^()\s]|\([^)]*\))*\)/g, "$1"); // ligações → texto
+  l = l.replace(/`([^`]+)`/g, "$1"); // código em linha
+  l = l.replace(/(\*\*|__)(?=\S)([^*_]*?\S)\1/g, "$2"); // negrito
+  l = l.replace(/(^|[\s(«"'])([*_])(?=\S)([^*_\n]*?\S)\2(?=[\s).,;:!?»"']|$)/g, "$1$3"); // itálico
+  l = l.replace(/<br\s*\/?>/gi, " ").replace(/\\([\\`*_[\]()#>!|-])/g, "$1"); // <br> e escapes
+  return l;
+}
+
+/**
+ * Markdown → texto corrido, sem #, **, `, [](…) nem tabelas com barras; as
+ * listas ficam com "• " e os parágrafos mantêm-se. Para mostrar documentos e
+ * respostas do tutor como texto normal. PURA.
+ */
+export function kbPlainText(md: string): string {
+  const lines = String(md ?? "").replace(/\r\n?/g, "\n").split("\n").filter((l) => !/^\s*```/.test(l));
+  return lines.map(mdLineToText).filter((l): l is string => l !== null).join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Blocos para ler um documento: cada título (#…) é um bloco em destaque; o
+ * resto junta-se em parágrafos (separados por linha em branco). PURA.
+ */
+export function kbReadableBlocks(md: string): Array<{ heading: boolean; text: string }> {
+  const out: Array<{ heading: boolean; text: string }> = [];
+  let para: string[] = [];
+  const flush = () => { const t = para.join("\n").trim(); if (t) out.push({ heading: false, text: t }); para = []; };
+  for (const raw of String(md ?? "").replace(/\r\n?/g, "\n").split("\n")) {
+    if (/^\s*```/.test(raw)) continue;
+    if (/^\s{0,3}#{1,6}\s+\S/.test(raw)) { flush(); const t = (mdLineToText(raw) ?? "").trim(); if (t) out.push({ heading: true, text: t }); continue; }
+    if (!raw.trim()) { flush(); continue; }
+    const t = mdLineToText(raw);
+    if (t?.trim()) para.push(t.replace(/\s+$/, ""));
+  }
+  flush();
+  return out;
 }

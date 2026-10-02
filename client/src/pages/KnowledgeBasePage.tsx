@@ -7,6 +7,7 @@
  * (rascunhos) e definições das pastas.
  */
 import { useMemo, useRef, useState } from "react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { toast } from "sonner";
 import {
   AlertTriangle, BookOpen, CheckCircle2, ChevronDown, Eye, FileUp, FolderSync, HelpCircle, Loader2, Plus, RefreshCw, Settings2, Shield,
@@ -26,7 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { can, ROLE_LABELS, ROLES } from "@shared/access";
 import {
-  KB_CITIES, KB_MAX_UPLOAD_BYTES, KB_SOURCE_LABELS, KB_STATUS_LABELS, KB_UPLOAD_ACCEPT, KB_VISIBILITY_ALL, visibilityLabel,
+  KB_CITIES, KB_MAX_DIRECT_UPLOAD_BYTES, KB_MAX_DIRECT_UPLOAD_MB, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCE_LABELS, kbReadableBlocks, KB_STATUS_LABELS, KB_UPLOAD_ACCEPT, KB_VISIBILITY_ALL, visibilityLabel,
   type KbFolder, type KbSource, type KbStatus, type KbVisibility, type KnowledgeConfig,
 } from "@shared/knowledge";
 
@@ -89,7 +90,7 @@ function SettingsCard({ config, onSaved }: { config: KnowledgeConfig; onSaved: (
   const [draft, setDraft] = useState<KnowledgeConfig>(config);
   const [open, setOpen] = useState(false);
   const save = trpc.knowledge.saveConfig.useMutation({
-    onSuccess: (r) => { toast.success(r.changed ? "Definições guardadas." : "Sem alterações."); onSaved(); },
+    onSuccess: (r) => { toast.success(r.changed ? `Definições guardadas.${r.updated ? ` Visibilidade aplicada já a ${r.updated} documento(s).` : ""}` : "Sem alterações."); onSaved(); },
     onError: (e) => toast.error(e.message),
   });
   const setFolder = (i: number, f: KbFolder) => setDraft({ ...draft, folders: draft.folders.map((x, j) => (j === i ? f : x)) });
@@ -163,7 +164,7 @@ function PreviewDialog({ id, onClose }: { id: number; onClose: () => void }) {
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader><DialogTitle>{d?.title ?? "Documento"}</DialogTitle></DialogHeader>
-        {q.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : !d ? <p className="text-sm text-muted-foreground">Não encontrado.</p> : (
+        {q.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o documento" /> : !d ? <p className="text-sm text-muted-foreground">Não encontrado.</p> : (
           <div className="space-y-3 text-sm">
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span>{KB_SOURCE_LABELS[d.source]}</span>
@@ -172,7 +173,13 @@ function PreviewDialog({ id, onClose }: { id: number; onClose: () => void }) {
               {d.webViewLink && /^https:/.test(d.webViewLink) && <a href={d.webViewLink} target="_blank" rel="noopener noreferrer" className="text-primary underline">Abrir no Drive</a>}
             </div>
             {d.error && <p className="rounded-md bg-red-50 p-2 text-red-800">{d.error}</p>}
-            <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-xs">{d.textContent || "(sem texto extraído)"}</pre>
+            {/* Texto corrido (Jorge, 2 out 2026): sem #, ** nem tabelas com barras — títulos a negrito. */}
+            <div className="max-h-[50vh] space-y-2 overflow-auto rounded-md border bg-muted/30 p-3 text-sm leading-relaxed break-words">
+              {d.textContent ? kbReadableBlocks(d.textContent).map((b, i) => b.heading
+                ? <p key={i} className="pt-1 font-semibold">{b.text}</p>
+                : <p key={i} className="whitespace-pre-line">{b.text}</p>)
+                : <p className="text-muted-foreground">(sem texto extraído)</p>}
+            </div>
             {d.textTruncated && <p className="text-xs text-muted-foreground">Mostram-se os primeiros 20 000 caracteres.</p>}
           </div>
         )}
@@ -230,7 +237,8 @@ function QuizDialog({ doc, onClose }: { doc: Doc; onClose: () => void }) {
             </div>
             <div>
               <Label className="text-xs">Categoria</Label>
-              <Select value={categoryId} onValueChange={setCategoryId}>
+              {cats.error && <QueryErrorNote error={cats.error} onRetry={() => cats.refetch()} retrying={cats.isFetching} what="as categorias" />}
+              <Select value={categoryId} onValueChange={setCategoryId} disabled={!!cats.error}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Geral</SelectItem>
@@ -256,21 +264,39 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [v, setV] = useState<KbVisibility>(KB_VISIBILITY_ALL);
-  const up = trpc.knowledge.upload.useMutation({
-    onSuccess: (r) => {
-      if (r.status === "error") toast.error(`Carregado, mas não foi possível ler: ${r.error ?? "erro"}`);
-      else toast.success("Documento carregado e indexado.");
-      onDone();
-      onClose();
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  const up = trpc.knowledge.upload.useMutation();
+  const ticket = trpc.knowledge.uploadTicket.useMutation();
+  const done = trpc.knowledge.uploadDone.useMutation();
+  const [busy, setBusy] = useState(false);
+  const finish = (r: { status: string; error: string | null; duplicateOf: string | null }) => {
+    if (r.duplicateOf) toast.info(`Este ficheiro já estava na base: «${r.duplicateOf}». Não foi carregado outra vez.${r.status === "skipped" ? " Está excluído — usa «Voltar a incluir»." : ""}`);
+    else if (r.status === "error") toast.error(`Carregado, mas não foi possível ler: ${r.error ?? "erro"}`);
+    else if (r.status === "pending" || r.status === "processing") toast.success("Documento carregado — está a ser lido (ficheiro grande); aparece como Sincronizado daqui a pouco.");
+    else toast.success("Documento carregado e indexado.");
+    onDone();
+    onClose();
+  };
+  // Direto para o armazenamento (até 25 MB, sem passar pela Vercel); sem S3, o caminho antigo (3 MB).
   const submit = async () => {
     if (!file) return;
-    if (file.size > KB_MAX_UPLOAD_BYTES) { toast.error("Ficheiro demasiado grande (máx. 4 MB). Põe-no numa pasta do Drive sincronizada."); return; }
+    if (file.size > KB_MAX_DIRECT_UPLOAD_BYTES) { toast.error(`Ficheiro demasiado grande (máx. ${KB_MAX_DIRECT_UPLOAD_MB} MB). Põe-no numa pasta do Drive sincronizada.`); return; }
+    const base = { fileName: file.name, mimeType: file.type, title: title.trim() || undefined, visibility: v };
+    setBusy(true);
     try {
-      up.mutate({ fileName: file.name, mimeType: file.type, fileBase64: await readAsBase64(file), title: title.trim() || undefined, visibility: v });
-    } catch (e: any) { toast.error(e.message); }
+      const t = await ticket.mutateAsync({ fileName: file.name, mimeType: file.type, size: file.size });
+      if (t.direct) {
+        const put = await fetch(t.uploadUrl, { method: "PUT", headers: { "Content-Type": t.contentType }, body: file });
+        if (!put.ok) throw new Error(`O armazenamento recusou o ficheiro (${put.status}). Tenta outra vez.`);
+        finish(await done.mutateAsync({ ...base, key: t.key }));
+      } else {
+        if (file.size > KB_MAX_UPLOAD_BYTES) throw new Error(`Sem armazenamento direto configurado: máx. ${KB_MAX_UPLOAD_MB} MB. Põe-no numa pasta do Drive sincronizada.`);
+        finish(await up.mutateAsync({ ...base, fileBase64: await readAsBase64(file) }));
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? "Não foi possível carregar.");
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -278,7 +304,7 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
         <DialogHeader><DialogTitle>Carregar documento</DialogTitle></DialogHeader>
         <div className="space-y-3 text-sm">
           <div>
-            <Label className="text-xs">Ficheiro (PDF, DOCX, TXT ou MD — máx. 4 MB)</Label>
+            <Label className="text-xs">Ficheiro (PDF, DOCX, TXT ou MD — máx. {KB_MAX_DIRECT_UPLOAD_MB} MB)</Label>
             <Input ref={fileRef} type="file" accept={KB_UPLOAD_ACCEPT} onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           </div>
           <div>
@@ -289,8 +315,8 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={submit} disabled={!file || up.isPending}>
-            {up.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}Carregar
+          <Button onClick={submit} disabled={!file || busy}>
+            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}Carregar
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -319,7 +345,8 @@ export default function KnowledgeBasePage() {
     onError: onErr,
   });
   const resync = trpc.knowledge.resync.useMutation({ onSuccess: (r) => { r.status === "error" ? toast.error(r.error ?? "Erro") : toast.success("Sincronizado."); refresh(); }, onError: onErr });
-  const remove = trpc.knowledge.remove.useMutation({ onSuccess: (r) => { toast.success(r.excluded ? "Excluído do índice." : "Apagado."); refresh(); }, onError: onErr });
+  // 18d: carregados também se EXCLUEM (o ficheiro fica e pode voltar a ser incluído).
+  const remove = trpc.knowledge.remove.useMutation({ onSuccess: () => { toast.success("Excluído do índice (pode voltar a ser incluído)."); refresh(); }, onError: onErr });
   const include = trpc.knowledge.include.useMutation({ onSuccess: () => { toast.success("Voltou ao índice."); refresh(); }, onError: onErr });
 
   const docs = (list.data ?? []) as Doc[];
@@ -348,7 +375,8 @@ export default function KnowledgeBasePage() {
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      {st.error && <QueryErrorNote error={st.error} onRetry={() => st.refetch()} retrying={st.isFetching} what="o estado da base de conhecimento" />}
+      {!st.error && <div className="grid gap-3 md:grid-cols-3">
         <Card>
           <CardContent className="space-y-1 p-4 text-sm">
             <p className="font-medium">Google Drive</p>
@@ -377,12 +405,18 @@ export default function KnowledgeBasePage() {
             {lastRun ? (
               <>
                 <p>{fmtWhen(lastRun.at)} · {lastRun.processed} processados · {lastRun.failed} com erro</p>
-                {lastRun.errors?.length > 0 && <p className="line-clamp-3 text-xs text-red-700" title={lastRun.errors.join("\n")}>{lastRun.errors.join(" · ")}</p>}
+                {lastRun.errors?.length > 0 && (
+                  // 18d: no telemóvel não há "title" — o texto todo abre aqui.
+                  <details className="text-xs text-red-700">
+                    <summary className="cursor-pointer">{lastRun.errors.length} erro(s) — ver</summary>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 break-words">{lastRun.errors.map((e: string, i: number) => <li key={i}>{e}</li>)}</ul>
+                  </details>
+                )}
               </>
             ) : <p className="text-muted-foreground">Ainda não correu.</p>}
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
       {st.data && <SettingsCard key={JSON.stringify(st.data.config)} config={st.data.config} onSaved={refresh} />}
 
@@ -407,7 +441,9 @@ export default function KnowledgeBasePage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {list.isLoading ? <div className="p-6"><Loader2 className="h-5 w-5 animate-spin" /></div> : docs.length === 0 ? (
+          {list.isLoading ? <div className="p-6"><Loader2 className="h-5 w-5 animate-spin" /></div> : list.error ? (
+            <div className="p-3"><QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="os documentos" /></div>
+          ) : docs.length === 0 ? (
             <p className="p-6 text-sm text-muted-foreground">Sem documentos. Carrega um ficheiro ou liga a sincronização das pastas do Drive nas definições.</p>
           ) : (
             <ul className="divide-y">
@@ -422,7 +458,7 @@ export default function KnowledgeBasePage() {
                       {d.status === "synced" && <span>· {d.chunkCount} trechos{d.embedded ? " · IA" : ""}</span>}
                       <span>· {fmtWhen(d.syncedAt)}</span>
                     </p>
-                    {d.error && d.status !== "synced" && <p className="truncate text-xs text-red-700" title={d.error}>{d.error}</p>}
+                    {d.error && d.status !== "synced" && <p className="break-words text-xs text-red-700">{d.error}</p>}
                   </div>
                   <div className="flex flex-wrap items-center gap-1">
                     <Badge variant="outline" className={STATUS_STYLE[d.status]}>{KB_STATUS_LABELS[d.status]}</Badge>
@@ -431,17 +467,17 @@ export default function KnowledgeBasePage() {
                       <>
                         <Button variant="ghost" size="icon" title="Visibilidade" onClick={() => setVisDoc(d)}><Shield className="h-4 w-4" /></Button>
                         {d.status === "skipped" ? (
-                          <Button variant="ghost" size="icon" title="Voltar a incluir" onClick={() => include.mutate({ id: d.id })}><Undo2 className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" title="Voltar a incluir" aria-label="Voltar a incluir" onClick={() => include.mutate({ id: d.id })}><Undo2 className="h-4 w-4" /></Button>
                         ) : (
-                          <Button variant="ghost" size="icon" title="Voltar a sincronizar" disabled={resync.isPending} onClick={() => resync.mutate({ id: d.id })}><RefreshCw className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" title="Voltar a sincronizar" aria-label="Voltar a sincronizar" disabled={resync.isPending || d.status === "processing"} onClick={() => resync.mutate({ id: d.id })}><RefreshCw className="h-4 w-4" /></Button>
                         )}
                         {d.status === "synced" && (
                           <Button variant="ghost" size="icon" title="Perguntas de quiz (rascunhos)" onClick={() => setQuizDoc(d)}><Sparkles className="h-4 w-4" /></Button>
                         )}
-                        <Button
-                          variant="ghost" size="icon" title={d.source === "upload" ? "Apagar" : "Excluir do índice"}
-                          onClick={() => { if (confirm(d.source === "upload" ? `Apagar «${d.title}»?` : `Excluir «${d.title}» do índice? (o ficheiro fica no Drive)`)) remove.mutate({ id: d.id }); }}
-                        ><Trash2 className="h-4 w-4 text-red-600" /></Button>
+                        {d.status !== "skipped" && <Button
+                          variant="ghost" size="icon" title="Excluir do índice" aria-label="Excluir do índice"
+                          onClick={() => { if (confirm(`Excluir «${d.title}» do índice? Sai das respostas e da pesquisa; ${d.source === "upload" ? "o ficheiro fica guardado" : "o ficheiro fica no Drive"} e pode voltar a ser incluído.`)) remove.mutate({ id: d.id }); }}
+                        ><Trash2 className="h-4 w-4 text-red-600" /></Button>}
                       </>
                     )}
                     {d.source === "help" && <span title="A ajuda da app atualiza-se sozinha com cada versão"><HelpCircle className="h-4 w-4 text-muted-foreground" /></span>}
