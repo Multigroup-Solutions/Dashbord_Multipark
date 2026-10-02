@@ -258,13 +258,15 @@ describe("Regra das 24h e 'Recebi'", () => {
   });
 });
 
-describe("Compras online por acabar (PENDING) não são trabalho do turno", () => {
-  it("as próximas recolhas/entregas ao vivo tiram PENDING e canceladas", () => {
+describe("Compras online por pagar (PENDING) contam no turno: vão ser recolhidas", () => {
+  it("as próximas recolhas/entregas ao vivo só tiram as canceladas", () => {
     const q = buildUpcomingSql("checkin", ["p1"], Date.UTC(2026, 9, 2, 8), Date.UTC(2026, 9, 2, 16));
-    expect(q.sql).toContain(`NOT IN ('CANCELLED', 'PENDING')`);
+    expect(q.sql).toContain(`<> 'CANCELLED'`);
+    expect(q.sql).not.toContain(`'PENDING')`);
   });
   it("a leitura de recurso (nossa cópia) também", () => {
-    expect(src("server/shiftHandoverDraft.ts")).toMatch(/b\.status NOT IN \('CANCELLED', 'PENDING'\)/);
+    expect(src("server/shiftHandoverDraft.ts")).toMatch(/b\.status IS NULL OR b\.status <> 'CANCELLED'/);
+    expect(src("server/shiftHandoverDraft.ts")).not.toMatch(/NOT IN \('CANCELLED', 'PENDING'\)/);
   });
 });
 
