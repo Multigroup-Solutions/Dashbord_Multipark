@@ -1,5 +1,12 @@
 import { trpc } from "@/lib/trpc";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
+import { lisbonDayOf } from "@shared/lisbonDay";
+import { toCsv } from "@shared/csv";
+import { can, roleRank, seesBeyondOwn } from "@shared/access";
+import { isMarkedPublished } from "@shared/reviewRules";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { useConfirm } from "./training/shared";
+import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
@@ -14,12 +21,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useMemo, useState } from "react";
-import { groupReviewsByPark, isReviewPending, NO_PARK_KEY } from "@shared/reviewParks";
+import { groupReviewsByPark, isReviewAnswered, isReviewConverted, isReviewPending, NO_PARK_KEY } from "@shared/reviewParks";
 import {
   Star, Plus, MessageSquare, Bot, CheckCircle2, AlertTriangle,
   Search, ExternalLink, Sparkles, ThumbsUp, ThumbsDown, Eye,
-  BarChart3, TrendingUp, Clock, XCircle, Edit, Mail, RefreshCw, Loader2,
-  Car, Users, Calendar, Download,
+  BarChart3, Clock, XCircle, Edit, Mail, Loader2, Undo2,
+  Car, Users, Download,
 } from "lucide-react";
 import BookingSearchField from "@/components/BookingSearchField";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
@@ -63,23 +70,36 @@ function Stars({ rating, size = "w-4 h-4" }: { rating: number; size?: string }) 
   );
 }
 
+/** Início do mês e hoje, em dias de Lisboa (não no fuso do browser). */
+function lisbonMonthToDate(): { start: string; end: string } {
+  const today = lisbonDayOf(new Date());
+  return { start: `${today.slice(0, 8)}01`, end: today };
+}
+
 export default function GoogleReviewsPage() {
-  const [tab, setTab] = useState("dashboard");
+  const { user } = useAuth();
+  // Condutores/extras só veem as críticas em que estão envolvidos: sem
+  // dashboard, ranking nem agentes (isso é da equipa).
+  const beyondOwn = seesBeyondOwn(user as any, "criticas");
+  const canEdit = can(user as any, "criticas", "edit");
+  // Sincronizar o Gmail = admin com todas as cidades (a mesma regra do servidor).
+  const isAdmin = roleRank(user?.role) >= roleRank("admin");
+  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery(undefined, { enabled: isAdmin });
+  const canSync = isAdmin && !!cityAccess?.all;
+  const [tab, setTab] = useState(() => (beyondOwn ? "dashboard" : "list"));
   const [showCreate, setShowCreate] = useState(false);
   // ?id=N abre logo a crítica (links a partir da ficha do cliente no CRM).
   const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
   const [syncResult, setSyncResult] = useState<any>(null);
   const utils = trpc.useUtils();
   const syncGmail = trpc.reviews.syncFromGmail.useMutation({
-    onSuccess: (data: any) => {
+    onSuccess: (data) => {
       setSyncResult(data);
       utils.reviews.list.invalidate();
       utils.reviews.stats.invalidate();
-      if (data.message) {
-        toast.info(data.message);
-      } else {
-        toast.success(`Sync concluído: ${data.reviewsImported} reviews, ${data.incidentsImported} ocorrências importadas`);
-      }
+      if (!data.configured) toast.info(data.message);
+      else if (data.ok) toast.success(data.message);
+      else toast.warning(data.message);
     },
     onError: (err) => toast.error("Erro no sync: " + err.message),
   });
@@ -90,31 +110,33 @@ export default function GoogleReviewsPage() {
         <GoogleBusinessConnection />
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <p className="text-muted-foreground">Gestão de avaliações e respostas automáticas</p>
+            <p className="text-muted-foreground">Avaliações do Google e respostas (a IA só prepara; publica sempre uma pessoa)</p>
           </div>
           <div className="flex gap-2 flex-wrap">
-            <Button variant="outline" onClick={() => syncGmail.mutate()} disabled={syncGmail.isPending}>
-              {syncGmail.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Mail className="w-4 h-4 mr-2" />}
-              {syncGmail.isPending ? "A sincronizar..." : "Sincronizar Gmail"}
-            </Button>
-            <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-2" /> Importar Review</Button>
+            {canSync && (
+              <Button variant="outline" onClick={() => syncGmail.mutate()} disabled={syncGmail.isPending}>
+                {syncGmail.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Mail className="w-4 h-4 mr-2" />}
+                {syncGmail.isPending ? "A sincronizar..." : "Sincronizar Gmail"}
+              </Button>
+            )}
+            {canEdit && <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-2" /> Importar Review</Button>}
           </div>
         </div>
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="max-w-full justify-start overflow-x-auto">
-            <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" /> Dashboard</TabsTrigger>
+            {beyondOwn && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" /> Dashboard</TabsTrigger>}
             <TabsTrigger value="list"><MessageSquare className="w-4 h-4 mr-1" /> Reviews</TabsTrigger>
-            <TabsTrigger value="drivers"><Car className="w-4 h-4 mr-1" /> Condutores</TabsTrigger>
-            <TabsTrigger value="agents"><Users className="w-4 h-4 mr-1" /> Agentes</TabsTrigger>
+            {beyondOwn && <TabsTrigger value="drivers"><Car className="w-4 h-4 mr-1" /> Condutores</TabsTrigger>}
+            {beyondOwn && <TabsTrigger value="agents"><Users className="w-4 h-4 mr-1" /> Agentes</TabsTrigger>}
           </TabsList>
 
-          <TabsContent value="dashboard" className="mt-4"><ReviewsDashboard /></TabsContent>
+          {beyondOwn && <TabsContent value="dashboard" className="mt-4"><ReviewsDashboard /></TabsContent>}
           <TabsContent value="list" className="mt-4">
             <ReviewsList onSelect={setSelectedId} />
           </TabsContent>
-          <TabsContent value="drivers" className="mt-4"><CheckoutDriversPanel /></TabsContent>
-          <TabsContent value="agents" className="mt-4"><AgentPerformancePanel /></TabsContent>
+          {beyondOwn && <TabsContent value="drivers" className="mt-4"><CheckoutDriversPanel /></TabsContent>}
+          {beyondOwn && <TabsContent value="agents" className="mt-4"><AgentPerformancePanel /></TabsContent>}
         </Tabs>
       </div>
 
@@ -130,9 +152,13 @@ export default function GoogleReviewsPage() {
 // Quadro por parque: a empresa toda em cima (KPIs), cada parque em baixo.
 function ParkBreakdown({ onOpenPark }: { onOpenPark?: (key: string) => void }) {
   const { projectId } = useGlobalFilters();
-  const { data: reviews = [] } = trpc.reviews.list.useQuery(projectId !== undefined ? { projectId } : undefined);
-  const { data: projs = [] } = trpc.projects.list.useQuery();
+  const reviewsQ = trpc.reviews.list.useQuery(projectId !== undefined ? { projectId } : undefined);
+  const projsQ = trpc.projects.list.useQuery();
+  const reviews = reviewsQ.data ?? [];
+  const projs = projsQ.data ?? [];
   const groups = useMemo(() => groupReviewsByPark(reviews as any[], projs as any[]), [reviews, projs]);
+  if (reviewsQ.error) return <QueryErrorNote error={reviewsQ.error} onRetry={() => reviewsQ.refetch()} retrying={reviewsQ.isFetching} what="as críticas por parque" />;
+  if (projsQ.error) return <QueryErrorNote error={projsQ.error} onRetry={() => projsQ.refetch()} retrying={projsQ.isFetching} what="os parques" />;
   if (groups.length === 0) return null;
   return (
     <Card>
@@ -171,8 +197,13 @@ function ParkBreakdown({ onOpenPark }: { onOpenPark?: (key: string) => void }) {
 
 function ReviewsDashboard() {
   const { projectId } = useGlobalFilters();
-  const { data: stats } = trpc.reviews.stats.useQuery({ projectId });
+  const statsQ = trpc.reviews.stats.useQuery({ projectId });
+  const stats = statsQ.data;
+  if (statsQ.error) return <QueryErrorNote error={statsQ.error} onRetry={() => statsQ.refetch()} retrying={statsQ.isFetching} what="os números das críticas" />;
   if (!stats) return <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
+  // Percentagens sobre as críticas COM estrelas (as "sem estrelas" não são positivas nem negativas).
+  const rated = stats.total - ((stats as any).unrated ?? 0);
+  const pct = (n: number) => (rated > 0 ? Math.round((n / rated) * 100) : 0);
 
   const starData = [
     { stars: 5, count: stats.star5, color: "bg-green-500" },
@@ -200,12 +231,12 @@ function ReviewsDashboard() {
         <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><CheckCircle2 className="w-4 h-4" /> Respondidas</div>
           <p className="text-3xl font-bold mt-1 tabular-nums truncate text-green-700" title={String(stats.responded)}>{stats.responded}</p>
-          <p className="text-xs text-muted-foreground">resposta enviada</p>
+          <p className="text-xs text-muted-foreground">publicadas no Google</p>
         </Card>
         <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Clock className="w-4 h-4" /> Por responder</div>
           <p className="text-3xl font-bold mt-1 tabular-nums truncate text-yellow-700" title={String(stats.pending)}>{stats.pending}</p>
-          <p className="text-xs text-muted-foreground">inclui rascunhos IA por enviar</p>
+          <p className="text-xs text-muted-foreground">inclui rascunhos por publicar</p>
         </Card>
         <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><AlertTriangle className="w-4 h-4" /> Reclamações</div>
@@ -247,7 +278,7 @@ function ReviewsDashboard() {
             <span className="font-medium">Positivas (4-5★)</span>
           </div>
           <p className="text-2xl font-bold tabular-nums">{stats.star4 + stats.star5}</p>
-          <p className="text-xs text-muted-foreground">{stats.total > 0 ? Math.round(((stats.star4 + stats.star5) / stats.total) * 100) : 0}% do total</p>
+          <p className="text-xs text-muted-foreground">{pct(stats.star4 + stats.star5)}% das com estrelas</p>
         </Card>
         <Card className="p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -255,7 +286,7 @@ function ReviewsDashboard() {
             <span className="font-medium">Negativas (1-3★)</span>
           </div>
           <p className="text-2xl font-bold tabular-nums">{stats.star1 + stats.star2 + stats.star3}</p>
-          <p className="text-xs text-muted-foreground">{stats.total > 0 ? Math.round(((stats.star1 + stats.star2 + stats.star3) / stats.total) * 100) : 0}% do total</p>
+          <p className="text-xs text-muted-foreground">{pct(stats.star1 + stats.star2 + stats.star3)}% das com estrelas</p>
         </Card>
       </div>
     </div>
@@ -265,6 +296,8 @@ function ReviewsDashboard() {
 // ─── REVIEWS LIST ─────────────────────────────────────────────────────────────
 
 function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
+  const { user } = useAuth();
+  const canExport = can(user as any, "criticas", "export");
   const globalFilters = useGlobalFilters();
   const [filterRating, setFilterRating] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -277,10 +310,14 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
     ...(filterStatus !== "all" ? { status: filterStatus } : {}),
     ...(globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}),
   };
-  const { data: reviews = [], isLoading } = trpc.reviews.list.useQuery(
+  const listQ = trpc.reviews.list.useQuery(
     Object.keys(queryInput).length > 0 ? queryInput : undefined
   );
-  const { data: projs = [] } = trpc.projects.list.useQuery();
+  const reviews = listQ.data ?? [];
+  const isLoading = listQ.isLoading;
+  const projsQ = trpc.projects.list.useQuery();
+  const projs = projsQ.data ?? [];
+  const filtered = filterRating !== "all" || filterStatus !== "all";
   const groups = useMemo(() => groupReviewsByPark(reviews as any[], projs as any[]), [reviews, projs]);
   const parkName = useMemo(() => new Map(groups.map(g => [g.key, g.name])), [groups]);
   const visibleGroups = park === "all" ? groups : groups.filter(g => g.key === park);
@@ -331,43 +368,48 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
             </SelectContent>
           </Select>
         </div>
+        {canExport && (
         <Button
           variant="outline"
           size="sm"
           disabled={visibleReviews.length === 0}
           onClick={() => {
-            const headers = ["ID","Parque","Data","Nome","Email","Estrelas","Estado","Texto","Resposta IA","Matrícula","Reclamação"];
+            const headers = ["ID","Parque","Data","Nome","Email","Estrelas","Estado","Texto","Resposta","Publicada no Google","Matrícula","Reclamação"];
             const rows = (visibleReviews as any[]).map(r => [
               r.id,
-              (parkName.get(r.projectId != null && projs.some((p: any) => p.id === r.projectId) ? String(r.projectId) : NO_PARK_KEY) || "").replace(/;/g, ","),
-              r.reviewDate ? new Date(r.reviewDate).toISOString().slice(0, 10) : "",
-              (r.reviewerName || "").replace(/[;\n\r]/g, " "),
-              (r.reviewerEmail || "").replace(/;/g, ","),
-              r.rating,
+              parkName.get(r.projectId != null && projs.some((p: any) => p.id === r.projectId) ? String(r.projectId) : NO_PARK_KEY) || "",
+              r.reviewDate ? lisbonDayOf(r.reviewDate) : "",
+              r.reviewerName || "",
+              r.reviewerEmail || "",
+              r.rating >= 1 ? r.rating : "",
               STATUS_LABELS[r.status]?.label ?? r.status,
-              (r.reviewText || "").replace(/[;\n\r]/g, " "),
-              (r.aiResponse || "").replace(/[;\n\r]/g, " "),
+              r.reviewText || "",
+              r.aiResponse || "",
+              r.googleReply ? "sim" : isReviewAnswered(r) ? "marcada" : "",
               r.vehiclePlate || "",
               r.complaintId || "",
             ]);
-            const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-            const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+            const blob = new Blob(["\ufeff" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8;" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
-            a.href = url; a.download = `reviews_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+            a.href = url; a.download = `criticas_${lisbonDayOf(new Date())}.csv`; a.click();
             URL.revokeObjectURL(url);
           }}
         >
           <Download className="w-4 h-4 mr-1" /> CSV
         </Button>
+        )}
       </div>
 
-      {isLoading ? (
+      {projsQ.error && <QueryErrorNote error={projsQ.error} onRetry={() => projsQ.refetch()} retrying={projsQ.isFetching} what="os parques (as críticas aparecem em Sem parque)" />}
+      {listQ.error ? (
+        <QueryErrorNote error={listQ.error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="as críticas" />
+      ) : isLoading ? (
         <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
       ) : reviews.length === 0 ? (
         <Card className="p-12 text-center">
           <Star className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-          <p className="text-muted-foreground">Sem avaliações. Importa a primeira!</p>
+          <p className="text-muted-foreground">{filtered ? "Nenhuma avaliação com estes filtros." : "Sem avaliações."}</p>
         </Card>
       ) : (
         <div className="space-y-6">
@@ -384,15 +426,15 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
                 )}
                 {g.pending > 0 ? (
                   <Badge className="bg-yellow-100 text-yellow-800">{g.pending} por responder</Badge>
-                ) : (
+                ) : filterStatus === "all" ? (
                   <Badge className="bg-green-100 text-green-800">tudo respondido</Badge>
-                )}
+                ) : null}
               </div>
               {g.reviews.map((r: any) => (
                 <Card key={r.id} className={`hover:shadow-md transition-shadow cursor-pointer ${isReviewPending(r) ? "border-yellow-200" : ""}`} onClick={() => onSelect(r.id)}>
                   <CardContent className="p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-3 mb-1 flex-wrap">
                           <span className="font-medium">{r.reviewerName}</span>
                           <Stars rating={r.rating} size="w-3.5 h-3.5" />
@@ -400,14 +442,15 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
                           {r.googleReply && <Badge className="bg-green-100 text-green-700 text-[11px]">no Google</Badge>}
                           {!r.googleReply && r.aiResponse && !r.aiResponseApproved && <Badge className="bg-amber-100 text-amber-800 text-[11px]">rascunho por aprovar</Badge>}
                           {(r as any).aiSentiment && <SentimentBadge value={(r as any).aiSentiment} />}
+                          {!r.googleReply && isMarkedPublished(r) && <Badge className="bg-green-100 text-green-700 text-[11px]">publicada (marcada)</Badge>}
                           {r.complaintId && (
                             <Badge variant="outline" className="text-red-600 border-red-200">
                               <AlertTriangle className="w-3 h-3 mr-1" /> Reclamação #{r.complaintId}
                             </Badge>
                           )}
                         </div>
-                        {r.reviewText && <p className="text-sm text-muted-foreground line-clamp-2 mt-1">"{r.reviewText}"</p>}
-                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                        {r.reviewText && <p className="text-sm text-muted-foreground line-clamp-2 mt-1 break-words">"{r.reviewText}"</p>}
+                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground flex-wrap">
                           {r.reviewDate && <span>{fmtPTDate(r.reviewDate)}</span>}
                           {r.vehiclePlate && <span>🚗 {r.vehiclePlate}</span>}
                         </div>
@@ -442,9 +485,9 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
   });
 
   const handleSubmit = async () => {
-    if (!form.reviewerName) { toast.error("Nome do reviewer obrigatório"); return; }
+    if (!form.reviewerName.trim()) { toast.error("Nome do reviewer obrigatório"); return; }
     try {
-      await createMut.mutateAsync({
+      const r = await createMut.mutateAsync({
         reviewerName: form.reviewerName,
         reviewerEmail: form.reviewerEmail || undefined,
         rating: form.rating,
@@ -455,18 +498,23 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
       });
       utils.reviews.list.invalidate();
       utils.reviews.stats.invalidate();
+      // O toast diz o que aconteceu de facto (a IA e a reclamação podem falhar).
       if (form.rating >= 4) {
-        toast.success("Review importada! Resposta IA gerada automaticamente.");
+        if (r.aiDrafted) toast.success("Review importada, com rascunho de resposta (por aprovar).");
+        else toast.warning("Review importada. O rascunho da IA não saiu: usa \"Gerar com IA\" ou escreve à mão.");
+      } else if (r.complaintId) {
+        utils.complaints.list.invalidate();
+        toast.success(`Review importada e Reclamação #${r.complaintId} aberta.`);
       } else {
-        toast.success("Review importada! Reclamação criada automaticamente.");
+        toast.warning("Review importada, mas a reclamação não foi criada: abre a crítica e carrega em \"Criar Reclamação\".");
       }
       onClose();
-    } catch { toast.error("Erro ao importar review"); }
+    } catch (e: any) { toast.error(e?.message ? `Erro ao importar: ${e.message}` : "Erro ao importar review"); }
   };
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Importar Avaliação Google</DialogTitle></DialogHeader>
         <div className="space-y-4">
           <BookingSearchField
@@ -514,7 +562,7 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
             </div>
             {form.rating >= 4 && (
               <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                <Bot className="w-3 h-3" /> Resposta automática IA será gerada
+                <Bot className="w-3 h-3" /> A IA prepara um rascunho (publica sempre uma pessoa)
               </p>
             )}
             {form.rating <= 3 && (
@@ -527,7 +575,7 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
             <Label>Texto da Avaliação</Label>
             <Textarea value={form.reviewText} onChange={e => setForm(f => ({ ...f, reviewText: e.target.value }))} rows={3} placeholder="O que o cliente escreveu..." />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Data</Label>
               <Input type="date" value={form.reviewDate} onChange={e => setForm(f => ({ ...f, reviewDate: e.target.value }))} />
@@ -563,85 +611,117 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
 // ─── REVIEW DETAIL DIALOG ─────────────────────────────────────────────────────
 
 function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
-  const { data: review, isLoading } = trpc.reviews.getById.useQuery({ id });
-  const { data: clientHistory } = trpc.reviews.searchClient.useQuery(
-    { name: review?.reviewerName, email: review?.reviewerEmail || undefined, plate: review?.vehiclePlate || undefined },
-    { enabled: !!review }
-  );
-  const generateMut = trpc.reviews.generateResponse.useMutation();
-  const approveMut = trpc.reviews.approveResponse.useMutation();
-  const updateMut = trpc.reviews.update.useMutation();
+  const { user } = useAuth();
+  const canEdit = can(user as any, "criticas", "edit");
+  const [, navigate] = useLocation();
+  const [confirm, confirmUi] = useConfirm();
+  const reviewQ = trpc.reviews.getById.useQuery({ id });
+  const review = reviewQ.data;
+  const utils = trpc.useUtils();
+  const refresh = () => {
+    utils.reviews.getById.invalidate({ id });
+    utils.reviews.list.invalidate();
+    utils.reviews.stats.invalidate();
+  };
+  const onError = (fallback: string) => (e: { message?: string }) => toast.error(e?.message || fallback);
+  const generateMut = trpc.reviews.generateResponse.useMutation({ onError: onError("A IA não conseguiu gerar a resposta") });
+  const approveMut = trpc.reviews.approveResponse.useMutation({ onError: onError("Não foi possível aprovar") });
+  const updateMut = trpc.reviews.update.useMutation({ onError: onError("Não foi possível guardar") });
   const publishMut = trpc.reviews.publishReply.useMutation({
-    onSuccess: () => {
-      utils.reviews.getById.invalidate({ id });
-      utils.reviews.list.invalidate();
-      toast.success("Resposta publicada no Google!");
-    },
-    onError: (e) => toast.error(e.message || "Não foi possível publicar no Google"),
+    onSuccess: () => { refresh(); toast.success("Resposta publicada no Google!"); },
+    onError: onError("Não foi possível publicar no Google"),
   });
   const convertMut = trpc.reviews.convertToComplaint.useMutation({
     onSuccess: (r) => {
       toast.success(r.alreadyConverted ? `Já estava convertida (reclamação #${r.complaintId})` : `Reclamação #${r.complaintId} criada`);
-      utils.reviews.getById.invalidate({ id });
-      utils.reviews.list.invalidate();
+      refresh();
       utils.complaints.list.invalidate();
     },
-    onError: (e) => toast.error(e.message || "Erro ao converter"),
+    onError: onError("Erro ao converter"),
   });
-  const utils = trpc.useUtils();
 
   const [editingResponse, setEditingResponse] = useState(false);
   const [responseText, setResponseText] = useState("");
 
-  if (isLoading || !review) return null;
+  if (reviewQ.isLoading) return null;
+  if (reviewQ.error || !review) {
+    return (
+      <Dialog open onOpenChange={onClose}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Crítica #{id}</DialogTitle></DialogHeader>
+          {reviewQ.error
+            ? <QueryErrorNote error={reviewQ.error} onRetry={() => reviewQ.refetch()} retrying={reviewQ.isFetching} what="a crítica" />
+            : <p className="text-sm text-muted-foreground">Crítica não encontrada (ou fora das tuas cidades).</p>}
+          <DialogFooter><Button variant="outline" onClick={onClose}>Fechar</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
-  const handleGenerate = async () => {
-    const result = await generateMut.mutateAsync({ id });
-    setResponseText(result.response);
-    utils.reviews.getById.invalidate({ id });
-    utils.reviews.list.invalidate();
-    toast.success("Resposta IA gerada!");
+  const converted = isReviewConverted(review);
+  const markedPublished = isMarkedPublished(review);
+  const linkedToGoogle = !!review.googleReviewName;
+
+  const handleGenerate = () => {
+    generateMut.mutate({ id }, {
+      onSuccess: (result) => { setResponseText(result.response); refresh(); toast.success("Rascunho da IA pronto (por aprovar)."); },
+    });
   };
 
-  const handleApprove = async () => {
-    await approveMut.mutateAsync({ id });
-    utils.reviews.getById.invalidate({ id });
-    utils.reviews.list.invalidate();
-    toast.success("Resposta aprovada!");
+  const handleApprove = () => {
+    approveMut.mutate({ id }, { onSuccess: () => { refresh(); toast.success("Resposta aprovada. Publica-a no perfil Google e carrega em \"Já publiquei\"."); } });
   };
 
   // Publicar é público e irreversível no Google: pede confirmação. A resposta
   // publicada fica aprovada (aiResponseApproved = 1) pelo publishReply.
-  const handleApproveAndPublish = (text: string) => {
+  const handleApproveAndPublish = async (text: string) => {
     const t = text.trim();
     if (!t) { toast.error("Escreve a resposta antes de publicar."); return; }
-    if (!confirm("Publicar esta resposta no Google? Fica visível para todos.")) return;
+    if (!(await confirm({ title: "Publicar no Google?", description: "A resposta fica visível para todos no perfil Google.", confirmLabel: "Publicar" }))) return;
     publishMut.mutate({ id, comment: t }, { onSuccess: () => setEditingResponse(false) });
   };
 
-  const handleSaveResponse = async () => {
-    await updateMut.mutateAsync({ id, aiResponse: responseText, status: "manually_responded" });
-    setEditingResponse(false);
-    utils.reviews.getById.invalidate({ id });
-    utils.reviews.list.invalidate();
-    toast.success("Resposta guardada!");
+  // Crítica de email: a pessoa publica no perfil Google e marca aqui.
+  const handleMarkPublished = async (text?: string) => {
+    if (!(await confirm({ title: "Já publicaste esta resposta no Google?", description: "Fica como respondida. Só marca depois de a publicares no perfil Google.", confirmLabel: "Já publiquei" }))) return;
+    updateMut.mutate({ id, status: "manually_responded", ...(text !== undefined ? { aiResponse: text } : {}) }, {
+      onSuccess: () => { setEditingResponse(false); refresh(); toast.success("Marcada como publicada no Google."); },
+    });
+  };
+
+  const handleUndoPublished = async () => {
+    if (!(await confirm({ title: "Desfazer \"publicada\"?", description: "A crítica volta a \"por responder\". O texto fica guardado.", confirmLabel: "Desfazer" }))) return;
+    updateMut.mutate({ id, status: "pending_response" }, { onSuccess: () => { refresh(); toast.success("A crítica voltou a por responder."); } });
+  };
+
+  const handleSaveResponse = () => {
+    updateMut.mutate({ id, aiResponse: responseText }, {
+      onSuccess: () => { setEditingResponse(false); refresh(); toast.success("Rascunho guardado (ainda não está publicado)."); },
+    });
   };
 
   const handleDismiss = async () => {
-    await updateMut.mutateAsync({ id, status: "dismissed" });
-    utils.reviews.getById.invalidate({ id });
-    utils.reviews.list.invalidate();
-    toast.success("Review dispensada");
-    onClose();
+    if (!(await confirm({ title: "Dispensar esta crítica?", description: "Sai de \"por responder\". Podes reabri-la depois.", confirmLabel: "Dispensar" }))) return;
+    updateMut.mutate({ id, status: "dismissed" }, { onSuccess: () => { refresh(); toast.success("Review dispensada"); onClose(); } });
+  };
+
+  const handleReopen = () => {
+    updateMut.mutate({ id, status: "pending_response" }, { onSuccess: () => { refresh(); toast.success("Crítica reaberta."); } });
+  };
+
+  const handleConvert = async () => {
+    if (!(await confirm({ title: "Criar Reclamação?", description: `A crítica${review.rating >= 1 ? ` de ${review.rating}★` : ""} passa a ser tratada como reclamação (prazo de 24 h e responsável). Não volta atrás.`, confirmLabel: "Criar Reclamação" }))) return;
+    convertMut.mutate({ id });
   };
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        {confirmUi}
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-3">
+          <DialogTitle className="flex items-center gap-2 flex-wrap pr-6">
             <Stars rating={review.rating} size="w-5 h-5" />
-            <span>{review.reviewerName}</span>
+            <span className="break-words min-w-0">{review.reviewerName}</span>
             <Badge className={STATUS_LABELS[review.status]?.color}>{STATUS_LABELS[review.status]?.label}</Badge>
           </DialogTitle>
         </DialogHeader>
@@ -651,11 +731,11 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
           {review.reviewText && (
             <Card>
               <CardContent className="p-4">
-                <p className="text-sm italic">"{review.reviewText}"</p>
-                <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+                <p className="text-sm italic break-words whitespace-pre-line">"{review.reviewText}"</p>
+                <div className="flex gap-4 mt-2 text-xs text-muted-foreground flex-wrap">
                   {review.reviewDate && <span>📅 {fmtPTDate(review.reviewDate)}</span>}
                   {review.vehiclePlate && <span>🚗 {review.vehiclePlate}</span>}
-                  {review.reviewerEmail && <span>📧 {review.reviewerEmail}</span>}
+                  {review.reviewerEmail && <span className="break-all">📧 {review.reviewerEmail}</span>}
                 </div>
               </CardContent>
             </Card>
@@ -671,28 +751,29 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
           {review.googleReply && (
             <Card className="border-green-200">
               <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
+                <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
                   <CheckCircle2 className="w-4 h-4 text-green-600" /> Publicada no Google
                   {review.respondedAt && <span className="text-xs font-normal text-muted-foreground">{fmtPTDateTime(review.respondedAt)}</span>}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-sm bg-green-50 p-3 rounded-lg border border-green-100">{review.googleReply}</p>
+                <p className="text-sm bg-green-50 p-3 rounded-lg border border-green-100 break-words whitespace-pre-line">{review.googleReply}</p>
               </CardContent>
             </Card>
           )}
 
-          {/* AI Response */}
+          {/* Resposta (rascunho / aprovada / marcada como publicada) */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm flex items-center gap-2">
+              <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
                 <Bot className="w-4 h-4 text-blue-500" /> Resposta
-                {review.aiResponseApproved ? <Badge className="bg-green-100 text-green-700 text-[11px]">Aprovada</Badge>
-                  : review.aiResponse && !review.googleReply ? <Badge className="bg-amber-100 text-amber-800 text-[11px]">Rascunho IA — por aprovar</Badge> : null}
+                {markedPublished ? <><Badge className="bg-green-100 text-green-700 text-[11px]">Publicada (marcada)</Badge>{review.respondedAt && <span className="text-xs font-normal text-muted-foreground">{fmtPTDateTime(review.respondedAt)}</span>}</>
+                  : review.aiResponseApproved ? <Badge className="bg-green-100 text-green-700 text-[11px]">Aprovada</Badge>
+                  : review.aiResponse && !review.googleReply ? <Badge className="bg-amber-100 text-amber-800 text-[11px]">Rascunho — por aprovar</Badge> : null}
                 {(review as any).aiSentiment && <SentimentBadge value={(review as any).aiSentiment} />}
-                {!review.googleReviewName && (
-                  <span className="text-xs font-normal text-muted-foreground ml-auto flex items-center gap-1" title="Esta crítica veio por email e não está ligada ao Google. Para publicar a resposta, usa o perfil Google, ou espera que a importação pela API a associe.">
-                    <Mail className="w-3 h-3" /> só local (veio por email)
+                {!linkedToGoogle && (
+                  <span className="text-xs font-normal text-muted-foreground sm:ml-auto flex items-center gap-1" title="Esta crítica veio por email e não está ligada ao Google. Publica a resposta no perfil Google e marca aqui com «Já publiquei no Google».">
+                    <Mail className="w-3 h-3" /> veio por email (publica-se no perfil Google)
                   </span>
                 )}
               </CardTitle>
@@ -700,137 +781,112 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             <CardContent className="space-y-3">
               {editingResponse ? (
                 <>
-                  <Textarea value={responseText} onChange={e => setResponseText(e.target.value)} rows={5} />
+                  <Textarea value={responseText} onChange={e => setResponseText(e.target.value)} rows={5} maxLength={4096} />
                   <div className="flex gap-2 flex-wrap">
-                    {review.googleReviewName && (
+                    {linkedToGoogle && (
                       <Button size="sm" onClick={() => handleApproveAndPublish(responseText)} disabled={publishMut.isPending || !responseText.trim()}>
                         <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : "Aprovar e publicar"}
                       </Button>
                     )}
-                    <Button size="sm" variant={review.googleReviewName ? "outline" : "default"} onClick={handleSaveResponse} disabled={updateMut.isPending}>Guardar</Button>
+                    <Button size="sm" variant={linkedToGoogle ? "outline" : "default"} onClick={handleSaveResponse} disabled={updateMut.isPending}>Guardar rascunho</Button>
+                    {!linkedToGoogle && (
+                      <Button size="sm" variant="outline" onClick={() => handleMarkPublished(responseText)} disabled={updateMut.isPending || !responseText.trim()}>
+                        <CheckCircle2 className="w-4 h-4 mr-1" /> Já publiquei no Google
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" onClick={() => setEditingResponse(false)}>Cancelar</Button>
                   </div>
                 </>
               ) : review.aiResponse ? (
                 <>
-                  <p className="text-sm bg-blue-50 p-3 rounded-lg border border-blue-100">{review.aiResponse}</p>
-                  <div className="flex gap-2 flex-wrap">
-                    {review.googleReviewName && review.googleReply !== review.aiResponse && (
-                      <Button size="sm" onClick={() => handleApproveAndPublish(review.aiResponse || "")} disabled={publishMut.isPending}>
-                        <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Aprovar e substituir no Google" : "Aprovar e publicar"}
-                      </Button>
-                    )}
-                    {!review.googleReviewName && !review.aiResponseApproved && (
-                      <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending} title="Esta crítica veio por email: depois de aprovar, publica a resposta no perfil Google.">
-                        <CheckCircle2 className="w-4 h-4 mr-1" /> Aprovar
-                      </Button>
-                    )}
-                    <Button size="sm" variant="outline" onClick={() => { setResponseText(review.aiResponse || ""); setEditingResponse(true); }}>
-                      <Edit className="w-4 h-4 mr-1" /> Editar
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={handleGenerate} disabled={generateMut.isPending}>
-                      <Sparkles className="w-4 h-4 mr-1" /> Regenerar
-                    </Button>
-                  </div>
+                  <p className="text-sm bg-blue-50 p-3 rounded-lg border border-blue-100 break-words whitespace-pre-line">{review.aiResponse}</p>
+                  {canEdit && (
+                    <div className="flex gap-2 flex-wrap">
+                      {linkedToGoogle && review.googleReply !== review.aiResponse && (
+                        <Button size="sm" onClick={() => handleApproveAndPublish(review.aiResponse || "")} disabled={publishMut.isPending}>
+                          <ExternalLink className="w-4 h-4 mr-1" /> {publishMut.isPending ? "A publicar..." : review.googleReply ? "Aprovar e substituir no Google" : "Aprovar e publicar"}
+                        </Button>
+                      )}
+                      {!linkedToGoogle && !markedPublished && !review.aiResponseApproved && (
+                        <Button size="sm" onClick={handleApprove} disabled={approveMut.isPending} title="O texto está bom. Depois publica-o no perfil Google e marca «Já publiquei».">
+                          <CheckCircle2 className="w-4 h-4 mr-1" /> Aprovar
+                        </Button>
+                      )}
+                      {!linkedToGoogle && !markedPublished && (
+                        <Button size="sm" variant={review.aiResponseApproved ? "default" : "outline"} onClick={() => handleMarkPublished()} disabled={updateMut.isPending}>
+                          <CheckCircle2 className="w-4 h-4 mr-1" /> Já publiquei no Google
+                        </Button>
+                      )}
+                      {markedPublished ? (
+                        <Button size="sm" variant="outline" onClick={handleUndoPublished} disabled={updateMut.isPending}>
+                          <Undo2 className="w-4 h-4 mr-1" /> Desfazer
+                        </Button>
+                      ) : (
+                        <>
+                          <Button size="sm" variant="outline" onClick={() => { setResponseText(review.aiResponse || ""); setEditingResponse(true); }}>
+                            <Edit className="w-4 h-4 mr-1" /> Editar
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={handleGenerate} disabled={generateMut.isPending}>
+                            <Sparkles className="w-4 h-4 mr-1" /> {generateMut.isPending ? "A gerar..." : "Regenerar"}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="text-center py-4">
-                  <p className="text-sm text-muted-foreground mb-3">Sem resposta gerada</p>
-                  <div className="flex gap-2 justify-center">
-                    <Button size="sm" onClick={handleGenerate} disabled={generateMut.isPending}>
-                      <Sparkles className="w-4 h-4 mr-1" /> {generateMut.isPending ? "A gerar..." : "Gerar com IA"}
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => { setResponseText(""); setEditingResponse(true); }}>
-                      <Edit className="w-4 h-4 mr-1" /> Escrever Manual
-                    </Button>
-                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">Sem resposta preparada</p>
+                  {canEdit && (
+                    <div className="flex gap-2 justify-center flex-wrap">
+                      <Button size="sm" onClick={handleGenerate} disabled={generateMut.isPending}>
+                        <Sparkles className="w-4 h-4 mr-1" /> {generateMut.isPending ? "A gerar..." : "Gerar com IA"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => { setResponseText(""); setEditingResponse(true); }}>
+                        <Edit className="w-4 h-4 mr-1" /> Escrever Manual
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
           </Card>
 
-          {/* Complaint link */}
+          {/* Reclamação ligada */}
           {review.complaintId && (
             <Card className="border-red-200">
-              <CardContent className="p-4 flex items-center gap-3">
-                <AlertTriangle className="w-5 h-5 text-red-500" />
-                <div>
-                  <p className="font-medium text-sm">Convertida em Reclamação #{review.complaintId}</p>
-                  <p className="text-xs text-muted-foreground">Esta avaliação negativa gerou automaticamente um ticket de reclamação.</p>
+              <CardContent className="p-4 flex items-center gap-3 flex-wrap">
+                <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-sm">Ligada à Reclamação #{review.complaintId}</p>
+                  <p className="text-xs text-muted-foreground">O caso trata-se na reclamação. A resposta pública continua a ser aqui.</p>
                 </div>
-                <Button size="sm" variant="outline" className="ml-auto" onClick={() => { onClose(); window.location.href = "/reclamacoes"; }}>
+                <Button size="sm" variant="outline" onClick={() => { onClose(); navigate(`/reclamacoes?id=${review.complaintId}`); }}>
                   <ExternalLink className="w-4 h-4 mr-1" /> Ver Reclamação
                 </Button>
               </CardContent>
             </Card>
           )}
-
-          {/* Client History */}
-          {clientHistory && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Search className="w-4 h-4" /> Histórico do Cliente
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {clientHistory.complaints.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Reclamações anteriores ({clientHistory.complaints.length})</p>
-                    {clientHistory.complaints.slice(0, 5).map((c: any) => (
-                      <div key={c.id} className="text-sm p-2 bg-muted rounded mb-1 flex items-center gap-2">
-                        <AlertTriangle className="w-3 h-3 text-orange-500" />
-                        <span>{c.title}</span>
-                        <Badge variant="outline" className="text-[11px] ml-auto">{c.complaintStatus}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {clientHistory.movements.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Movimentos de viatura ({clientHistory.movements.length})</p>
-                    {clientHistory.movements.slice(0, 5).map((m: any) => (
-                      <div key={m.id} className="text-sm p-2 bg-muted rounded mb-1">
-                        {m.movementType} — {fmtPTDate(m.createdAt)}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {clientHistory.reviews.length > 1 && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Avaliações anteriores ({clientHistory.reviews.length - 1})</p>
-                    {clientHistory.reviews.filter((r: any) => r.id !== id).slice(0, 5).map((r: any) => (
-                      <div key={r.id} className="text-sm p-2 bg-muted rounded mb-1 flex items-center gap-2">
-                        <Stars rating={r.rating} size="w-3 h-3" />
-                        <span className="line-clamp-1">{r.reviewText || "Sem texto"}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {clientHistory.complaints.length === 0 && clientHistory.movements.length === 0 && clientHistory.reviews.length <= 1 && (
-                  <p className="text-sm text-muted-foreground text-center py-4">Sem histórico encontrado para este cliente.</p>
-                )}
-              </CardContent>
-            </Card>
-          )}
         </div>
 
-        <DialogFooter>
-          {review.status !== "dismissed" && review.status !== "converted_complaint" && (
-            <Button variant="ghost" onClick={handleDismiss} className="text-muted-foreground">
+        <DialogFooter className="flex-wrap gap-2">
+          {canEdit && !converted && review.status !== "dismissed" && (
+            <Button variant="ghost" onClick={handleDismiss} className="text-muted-foreground" disabled={updateMut.isPending}>
               <XCircle className="w-4 h-4 mr-1" /> Dispensar
             </Button>
           )}
-          {review.rating <= 2 && review.status !== "converted_complaint" && (
+          {canEdit && !converted && review.status === "dismissed" && (
+            <Button variant="ghost" onClick={handleReopen} disabled={updateMut.isPending}>
+              <Undo2 className="w-4 h-4 mr-1" /> Reabrir
+            </Button>
+          )}
+          {canEdit && !converted && review.rating <= 3 && (
             <Button
               variant="outline"
               className="text-red-700 border-red-300"
               disabled={convertMut.isPending}
               title="Cria uma Reclamação a partir desta crítica para ser tratada com prazo e responsável"
-              onClick={() => {
-                if (!confirm(`Transformar esta crítica de ${review.rating}★ numa Reclamação?`)) return;
-                convertMut.mutate({ id });
-              }}
+              onClick={handleConvert}
             >
               {convertMut.isPending ? "A converter…" : "→ Criar Reclamação"}
             </Button>
@@ -844,7 +900,7 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
 
 
 // ─── GMAIL SYNC RESULT DIALOG ────────────────────────────────────────────────
-function GmailSyncResultDialog({ result, onClose }: { result: any; onClose: () => void }) {
+function GmailSyncResultDialog({ result, onClose }: { result: { ok: boolean; configured: boolean; done: boolean; emailsStored?: number; recordsCreated?: number; errors?: string[]; message: string }; onClose: () => void }) {
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-lg">
@@ -854,51 +910,31 @@ function GmailSyncResultDialog({ result, onClose }: { result: any; onClose: () =
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Card>
-              <CardContent className="p-4 text-center">
-                <div className="text-2xl font-bold text-green-500">{result.reviewsImported}</div>
-                <div className="text-sm text-muted-foreground">Reviews importadas</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 text-center">
-                <div className="text-2xl font-bold text-blue-500">{result.incidentsImported}</div>
-                <div className="text-sm text-muted-foreground">Ocorrências importadas</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 text-center">
-                <div className="text-2xl font-bold text-muted-foreground">{result.reviewsSkipped}</div>
-                <div className="text-sm text-muted-foreground">Reviews ignoradas (dup)</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 text-center">
-                <div className="text-2xl font-bold text-muted-foreground">{result.incidentsSkipped}</div>
-                <div className="text-sm text-muted-foreground">Ocorrências ignoradas (dup)</div>
-              </CardContent>
-            </Card>
-          </div>
-          {result.details?.length > 0 && (
-            <div>
-              <h4 className="font-medium mb-2">Detalhes:</h4>
-              <div className="max-h-40 overflow-y-auto space-y-1">
-                {result.details.map((d: string, i: number) => (
-                  <div key={i} className="text-sm flex items-center gap-2">
-                    <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" /> {d}
-                  </div>
-                ))}
-              </div>
+          <p className="text-sm">{result.message}</p>
+          {result.configured && (
+            <div className="grid grid-cols-2 gap-3">
+              <Card>
+                <CardContent className="p-4 text-center">
+                  <div className="text-2xl font-bold text-blue-500">{result.emailsStored ?? 0}</div>
+                  <div className="text-sm text-muted-foreground">Emails novos</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4 text-center">
+                  <div className="text-2xl font-bold text-green-500">{result.recordsCreated ?? 0}</div>
+                  <div className="text-sm text-muted-foreground">Registos criados</div>
+                  <div className="text-[11px] text-muted-foreground">críticas, reclamações e perdidos</div>
+                </CardContent>
+              </Card>
             </div>
           )}
-          {result.errors?.length > 0 && (
+          {!!result.errors?.length && (
             <div>
               <h4 className="font-medium mb-2 text-red-500">Erros:</h4>
               <div className="max-h-40 overflow-y-auto space-y-1">
                 {result.errors.map((e: string, i: number) => (
-                  <div key={i} className="text-sm flex items-center gap-2 text-red-500">
-                    <XCircle className="w-3 h-3 shrink-0" /> {e}
+                  <div key={i} className="text-sm flex items-start gap-2 text-red-500 break-words">
+                    <XCircle className="w-3 h-3 mt-0.5 shrink-0" /> {e}
                   </div>
                 ))}
               </div>
@@ -916,14 +952,14 @@ function GmailSyncResultDialog({ result, onClose }: { result: any; onClose: () =
 // ─── CHECKOUT DRIVERS PANEL ──────────────────────────────────────────────────
 
 function CheckoutDriversPanel() {
-  const today = new Date();
-  const [startDate, setStartDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10));
-  const [endDate, setEndDate] = useState(today.toISOString().slice(0, 10));
+  const [startDate, setStartDate] = useState(() => lisbonMonthToDate().start);
+  const [endDate, setEndDate] = useState(() => lisbonMonthToDate().end);
 
-  const { data, isLoading } = trpc.reviews.checkoutDrivers.useQuery(
+  const driversQ = trpc.reviews.checkoutDrivers.useQuery(
     { startDate, endDate },
-    { enabled: !!startDate && !!endDate }
+    { enabled: !!startDate && !!endDate && startDate <= endDate }
   );
+  const { data, isLoading } = driversQ;
 
   return (
     <div className="space-y-4">
@@ -934,7 +970,7 @@ function CheckoutDriversPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-4 mb-4">
+          <div className="flex gap-4 mb-4 flex-wrap">
             <div>
               <Label className="text-xs">De</Label>
               <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-40" />
@@ -944,7 +980,12 @@ function CheckoutDriversPanel() {
               <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-40" />
             </div>
           </div>
-          {isLoading ? (
+          <p className="text-xs text-muted-foreground mb-3">Entregas (CHECK_OUT) por agente da Multipark, nas tuas cidades, lidas ao vivo.</p>
+          {startDate > endDate ? (
+            <p className="text-sm text-muted-foreground">A data "De" tem de ser antes de "Até".</p>
+          ) : driversQ.error ? (
+            <QueryErrorNote error={driversQ.error} onRetry={() => driversQ.refetch()} retrying={driversQ.isFetching} what="o ranking (BD da Multipark)" />
+          ) : isLoading ? (
             <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" /></div>
           ) : !data?.drivers?.length ? (
             <p className="text-sm text-muted-foreground">Sem dados para o período selecionado.</p>
@@ -956,7 +997,7 @@ function CheckoutDriversPanel() {
               </div>
               {data.drivers.map((d: any, i: number) => (
                 <div key={d.userId || i} className="grid grid-cols-[1fr_auto] gap-2 items-center py-1.5 border-b border-border/50">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
                     <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i < 3 ? "bg-amber-100 text-amber-800" : "bg-muted text-muted-foreground"}`}>
                       {i + 1}
                     </span>
@@ -977,16 +1018,17 @@ function CheckoutDriversPanel() {
 // ─── AGENT PERFORMANCE PANEL ─────────────────────────────────────────────────
 
 function AgentPerformancePanel() {
-  const today = new Date();
-  const [startDate, setStartDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10));
-  const [endDate, setEndDate] = useState(today.toISOString().slice(0, 10));
+  const [startDate, setStartDate] = useState(() => lisbonMonthToDate().start);
+  const [endDate, setEndDate] = useState(() => lisbonMonthToDate().end);
   const [agentName, setAgentName] = useState("");
   const [searchAgent, setSearchAgent] = useState("");
 
-  const { data, isLoading } = trpc.reviews.agentHistory.useQuery(
+  const historyQ = trpc.reviews.agentHistory.useQuery(
     { startDate, endDate, agentName: searchAgent || undefined },
-    { enabled: !!startDate && !!endDate && !!searchAgent }
+    { enabled: !!startDate && !!endDate && startDate <= endDate && !!searchAgent }
   );
+  const { data } = historyQ;
+  const isLoading = historyQ.isFetching && !data;
 
   const handleSearch = () => {
     if (!agentName.trim()) return;
@@ -1029,6 +1071,10 @@ function AgentPerformancePanel() {
 
           {!searchAgent ? (
             <p className="text-sm text-muted-foreground">Introduz o nome de um agente para ver a performance.</p>
+          ) : startDate > endDate ? (
+            <p className="text-sm text-muted-foreground">A data "De" tem de ser antes de "Até".</p>
+          ) : historyQ.error ? (
+            <QueryErrorNote error={historyQ.error} onRetry={() => historyQ.refetch()} retrying={historyQ.isFetching} what="as ações do agente (BD da Multipark)" />
           ) : isLoading ? (
             <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" /></div>
           ) : !data?.history?.length ? (
@@ -1045,11 +1091,12 @@ function AgentPerformancePanel() {
                   </Card>
                 ))}
               </div>
-              <p className="text-sm font-medium">Total: {data.total} ações</p>
+              <p className="text-sm font-medium">Total: {data.truncated ? `pelo menos ${data.total}` : data.total} ações</p>
+              {data.truncated && <p className="text-xs text-amber-700">Mostra só as {data.total} mais recentes: escolhe um período mais curto para ver tudo.</p>}
               <div className="max-h-96 overflow-y-auto space-y-1">
                 {data.history.map((h: any) => (
-                  <div key={h.id} className="flex items-center justify-between text-sm p-2 rounded bg-muted">
-                    <div className="flex items-center gap-2">
+                  <div key={h.id} className="flex items-center justify-between gap-2 flex-wrap text-sm p-2 rounded bg-muted">
+                    <div className="flex items-center gap-2 flex-wrap min-w-0">
                       <Badge variant="outline" className="text-xs">{h.changeType}</Badge>
                       <span>{h.booking?.licensePlate || "—"}</span>
                       <span className="text-muted-foreground">{h.booking?.parkName || ""}</span>

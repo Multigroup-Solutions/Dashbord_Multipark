@@ -16,6 +16,8 @@ export interface ReviewLike {
   rating: number;
   status: string;
   respondedAt: string | null;
+  /** Reclamação aberta a partir da crítica (fecha-a aqui, mesmo que o estado diga outra coisa). */
+  complaintId?: number | null;
   reviewDate?: string | null;
   createdAt?: string | null;
 }
@@ -32,11 +34,16 @@ export function isReviewAnswered(r: Pick<ReviewLike, "respondedAt" | "status">):
   return r.respondedAt != null || r.status === "manually_responded";
 }
 
-export function isReviewClosed(r: Pick<ReviewLike, "status">): boolean {
-  return r.status === "dismissed" || r.status === "converted_complaint";
+/** Convertida (com reclamação) também conta como fechada, seja qual for o estado. */
+export function isReviewConverted(r: Pick<ReviewLike, "status" | "complaintId">): boolean {
+  return r.status === "converted_complaint" || r.complaintId != null;
 }
 
-export function isReviewPending(r: Pick<ReviewLike, "respondedAt" | "status">): boolean {
+export function isReviewClosed(r: Pick<ReviewLike, "status" | "complaintId">): boolean {
+  return r.status === "dismissed" || isReviewConverted(r);
+}
+
+export function isReviewPending(r: Pick<ReviewLike, "respondedAt" | "status" | "complaintId">): boolean {
   return !isReviewAnswered(r) && !isReviewClosed(r);
 }
 
@@ -85,7 +92,7 @@ export function groupReviewsByPark<T extends ReviewLike>(reviews: T[], projects:
     g.total = g.reviews.length;
     g.pending = g.reviews.filter(isReviewPending).length;
     g.responded = g.reviews.filter(isReviewAnswered).length;
-    g.complaints = g.reviews.filter((r) => r.status === "converted_complaint").length;
+    g.complaints = g.reviews.filter(isReviewConverted).length;
     const rated = g.reviews.filter((r) => r.rating >= 1);
     g.avg = rated.length ? Math.round((rated.reduce((s, r) => s + r.rating, 0) / rated.length) * 10) / 10 : null;
   }

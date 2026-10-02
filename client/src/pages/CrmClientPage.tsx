@@ -630,7 +630,7 @@ function Timeline({ c, history }: { c: FileData; history: any }) {
       else if (st === "CHECKED_OUT" && b.checkOut) ev.push({ at: b.checkOut, icon: "OUT", tone: "blue", title: "Carro entregue", detail: `${b.park ?? ""}${b.plate ? ` · ${b.plate}` : ""}`, meta: b.checkoutAgent ? `condutor ${b.checkoutAgent}` : null });
     }
     for (const x of history?.complaints ?? []) ev.push({ at: String(x.createdAt ?? ""), icon: "!", tone: "amber", title: "Reclamação", detail: x.title, meta: x.status, href: `/reclamacoes?id=${x.id}` });
-    for (const x of history?.reviews ?? []) ev.push({ at: String(x.createdAt ?? ""), icon: "★", tone: "violet", title: `Crítica no Google (${x.rating ?? "?"}★)`, detail: x.reviewText ? String(x.reviewText).slice(0, 140) : null, href: "/criticas" });
+    for (const x of history?.reviews ?? []) ev.push({ at: String(x.createdAt ?? ""), icon: "★", tone: "violet", title: `Crítica no Google (${x.rating ?? "?"}★)`, detail: x.reviewText ? String(x.reviewText).slice(0, 140) : null, href: `/criticas?id=${x.id}` });
     for (const x of history?.lostFound ?? []) ev.push({ at: String(x.createdAt ?? ""), icon: "?", tone: "gray", title: "Perdidos e achados", detail: x.description ?? x.itemType, meta: x.status, href: `/perdidos-achados/caso/${x.id}` });
     for (const l of c.log) ev.push({ at: l.at, icon: l.action.includes("merge") || l.action.includes("split") ? "JN" : "ED", tone: l.action.includes("merge") || l.action.includes("split") ? "amber" : "gray", title: LOG_LABEL[l.action] ?? l.action, detail: logDetail(l.action, l.details), meta: l.byName ? `por ${l.byName}` : null });
     return ev.filter((e) => e.at).sort((a, b) => (utcDate(b.at)?.getTime() ?? 0) - (utcDate(a.at)?.getTime() ?? 0));

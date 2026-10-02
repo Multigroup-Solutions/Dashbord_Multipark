@@ -109,12 +109,17 @@ async function routeToModule(
     const text = g.rating > 0 || g.reviewerName
       ? `${ctx.subject}\n\n${g.cleanText}`.trim().slice(0, 5000)
       : desc;
+    // Parque: o "sobre Y" do email é o título do perfil Google (16d). Sem
+    // correspondência exata fica "Sem parque" (nunca adivinha).
+    const { projectIdForReviewPark } = await import("../reviewOps");
+    const projectId = await projectIdForReviewPark(g.parkName);
     const id = await createGoogleReview({
       reviewerName: reviewer,
       reviewerEmail: parsed.clientEmail,
       rating: g.rating,
       reviewText: text,
       vehiclePlate: parsed.vehiclePlate,
+      projectId,
       status: "pending_response",
       sourceEmailId: ctx.messageId,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
