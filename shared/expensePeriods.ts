@@ -92,3 +92,46 @@ export function comparePeriods(
     b: { from: bFrom, to: `${by}-${pad(bm)}-${pad(bd)}`, label: `1–${bd} de ${pad(bm)}/${by}` },
   };
 }
+
+/** Dia `n` meses depois do dia 1 do mês de `day` ("YYYY-MM-01"). */
+function monthStart(day: string, n = 0): string {
+  const [y, m] = day.split("-").map(Number);
+  const t = y * 12 + (m - 1) + n;
+  return `${Math.floor(t / 12)}-${pad((t % 12) + 1)}-01`;
+}
+
+/** Janela [início, fim) em "YYYY-MM-DD 00:00:00" (fim exclusivo). */
+export interface StatsWindow { start: string; end: string }
+
+/**
+ * Janelas do Resumo das despesas (dias de Lisboa, semana à segunda). Cada uma
+ * tem FIM: antes "este mês"/"este ano" iam até ao infinito e somavam despesas
+ * com data futura (um 2027 mal escrito entrava no total deste ano). A
+ * tendência são os últimos 6 meses, até ao fim do mês corrente.
+ */
+export function expenseStatsWindows(today: string): Record<"day" | "week" | "month" | "year" | "trend", StatsWindow> {
+  if (!isIsoDay(today)) throw new Error(`Data inválida: ${today}`);
+  const [y, m, d] = today.split("-").map(Number);
+  const dow = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7; // segunda = 0
+  const plus = (n: number) => new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+  const at = (day: string) => `${day} 00:00:00`;
+  return {
+    day: { start: at(today), end: at(plus(1)) },
+    week: { start: at(plus(-dow)), end: at(plus(7 - dow)) },
+    month: { start: at(monthStart(today)), end: at(monthStart(today, 1)) },
+    year: { start: at(`${y}-01-01`), end: at(`${y + 1}-01-01`) },
+    trend: { start: at(monthStart(today, -5)), end: at(monthStart(today, 1)) },
+  };
+}
+
+/**
+ * Dias de calendário de `today` até ao vencimento (0 = hoje, 1 = amanhã).
+ * `due` vem da BD ("YYYY-MM-DD 00:00:00") — conta-se pelo DIA, sem passar por
+ * `new Date("… 00:00:00")`, que no Safari dá data inválida (e a página caía).
+ */
+export function daysUntil(due: string, today: string): number | null {
+  const day = String(due ?? "").slice(0, 10);
+  if (!isIsoDay(day) || !isIsoDay(today)) return null;
+  const ms = (s: string) => { const [a, b, c] = s.split("-").map(Number); return Date.UTC(a, b - 1, c); };
+  return Math.round((ms(day) - ms(today)) / 86_400_000);
+}

@@ -76,6 +76,7 @@ import { useTableSort, Th } from "@/components/SortableTable";
 import { Switch } from "@/components/ui/switch";
 import { expenseTotals } from "@shared/expenseTotals";
 import { parseExpenseAmount } from "@shared/expenseAmount";
+import { utcMs } from "@shared/lisbonDay";
 
 const PAID_BY_LABELS: Record<string, string> = { company: "Empresa", employee: "Colaborador" };
 
@@ -142,10 +143,15 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-/** "YYYY-MM-DD HH:mm:ss" da BD → Date (Safari não aceita o espaço). */
+/** "YYYY-MM-DD HH:mm:ss" da BD → Date (Safari não aceita o espaço). Para os DIAS da despesa (data, vencimento, pago em). */
 function parseDbDate(v: string | Date): Date {
   if (v instanceof Date) return v;
   return new Date(String(v).replace(" ", "T"));
+}
+
+/** Instante da BD (createdAt, histórico) — está em UTC; mostra-se na hora local (antes saía 1h atrasado no verão). */
+function parseDbInstant(v: string | Date): Date {
+  return new Date(utcMs(v));
 }
 
 function fmtEur(v: number | string) {
@@ -246,6 +252,8 @@ export default function ExpensesPage() {
   const role = user?.role ?? "";
   const isInputOnly = ["own", "below_city"].includes(scopeFor(user, "despesas"));
   const canManage = can(user, "despesas", "manage");
+  // Exportar é uma ação própria (supervisor, front/backoffice e admin+), não "gerir"
+  const canExport = can(user, "despesas", "export");
   const canDelete = role === "super_admin";
 
   // Queries
@@ -261,6 +269,11 @@ export default function ExpensesPage() {
   // Totais, comparar e resumo: só quando o servidor diz que se podem ver
   const { data: access } = trpc.expenses.access.useQuery();
   const showTotals = access?.canSeeTotals ?? false;
+  // O Resumo só existe para quem tem o separador. Antes o ?tab=resumo (e o
+  // antigo /despesas/dashboard, que redireciona para lá) abria-o a qualquer um:
+  // escondia a lista e não havia separador para voltar.
+  const canResumo = canManage && showTotals;
+  const shownTab = canResumo ? tab : "lista";
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
   const { data: employeesList } = trpc.rh.list.useQuery({});
@@ -359,7 +372,7 @@ export default function ExpensesPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          {tab === "lista" ? (
+          {shownTab === "lista" ? (
             <p className="text-sm text-muted-foreground">
               {kpisReady ? `${kpis.count} despesa(s)` : isError ? "Erro a carregar" : "A carregar…"}
               {kpisReady && kpis.cancelledCount > 0 && ` (+${kpis.cancelledCount} cancelada(s))`}
@@ -373,8 +386,8 @@ export default function ExpensesPage() {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          {canManage && showTotals && (
-            <Tabs value={tab} onValueChange={(v) => setTab(v as "lista" | "resumo")}>
+          {canResumo && (
+            <Tabs value={shownTab} onValueChange={(v) => setTab(v as "lista" | "resumo")}>
               <TabsList>
                 <TabsTrigger value="lista">Lista</TabsTrigger>
                 <TabsTrigger value="resumo">Resumo</TabsTrigger>
@@ -394,7 +407,8 @@ export default function ExpensesPage() {
                     <ArrowLeftRight className="h-4 w-4 mr-2" /> Comparar períodos
                   </DropdownMenuItem>
                 )}
-                {canManage && showTotals && (
+                {/* Antes só com "gerir" (admin+): o supervisor e o front/backoffice podem exportar e não tinham o botão */}
+                {canExport && showTotals && (
                   <DropdownMenuItem onClick={handleExport} disabled={exportMutation.isPending}>
                     <FileDown className="h-4 w-4 mr-2" /> Exportar Excel
                   </DropdownMenuItem>
@@ -424,13 +438,13 @@ export default function ExpensesPage() {
         <p className="text-xs text-muted-foreground -mt-3">{scopeFor(user, "despesas") === "own" ? "As tuas despesas" : "As tuas despesas e as da tua equipa"} e o estado de cada uma. Os totais da empresa são reservados à administração.</p>
       )}
 
-      {tab === "resumo" && <ExpenseDashboard />}
+      {shownTab === "resumo" && <ExpenseDashboard />}
       <CategoryVatDialog open={showVat} onClose={() => setShowVat(false)} categories={categories ?? []} />
       <RecurringExpensesDialog open={showRecurring} onClose={() => setShowRecurring(false)} categories={categories ?? []} projects={projectsList ?? []} />
       <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={projectFilterId} />
 
       {/* KPI Cards — "—" enquanto carrega ou em erro; nunca um 0 enganador */}
-      {showTotals && tab === "lista" && (
+      {showTotals && shownTab === "lista" && (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" aria-busy={isLoading}>
         {([
           { label: "Total", value: kpis.total, icon: Euro, box: "bg-primary/10", ic: "text-primary", txt: "", hint: kpis.cancelledCount > 0 ? `sem ${kpis.cancelledCount} cancelada(s) · ${fmtEur(kpis.cancelled)}` : "" },
@@ -457,7 +471,7 @@ export default function ExpensesPage() {
       )}
 
       {/* Filters */}
-      {tab === "lista" && (
+      {shownTab === "lista" && (
       <Card>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -536,7 +550,7 @@ export default function ExpensesPage() {
       )}
 
       {/* Table */}
-      {tab === "lista" && (
+      {shownTab === "lista" && (
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -771,6 +785,7 @@ function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () =
   const events = trpc.expenses.events.useQuery({ id: expense.id }, { staleTime: 30_000 });
   const openDocument = useOpenExpenseDocument();
   const day = (v: string | null | undefined, fmt = "dd MMMM yyyy") => (v ? format(parseDbDate(v), fmt, { locale: pt }) : null);
+  const when = (v: string | null | undefined, fmt: string) => (v ? format(parseDbInstant(v), fmt, { locale: pt }) : null);
 
   return (
     <>
@@ -842,7 +857,7 @@ function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () =
               Dados extraídos por IA
             </div>
           ) : null}
-          <DetailRow label="Criado em" value={day(expense.createdAt, "dd MMM yyyy, HH:mm")} />
+          <DetailRow label="Criado em" value={when(expense.createdAt, "dd MMM yyyy, HH:mm")} />
         </div>
 
         {/* Histórico */}
@@ -854,7 +869,7 @@ function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () =
               <ul className="space-y-1.5 text-xs">
                 {events.data.slice(0, 8).map((ev) => (
                   <li key={ev.id} className="flex gap-2">
-                    <span className="text-muted-foreground shrink-0 w-28">{day(ev.at, "dd MMM yyyy HH:mm")}</span>
+                    <span className="text-muted-foreground shrink-0 w-28">{when(ev.at, "dd MMM yyyy HH:mm")}</span>
                     <span className="min-w-0">
                       <span className="font-medium">{EVENT_LABELS[ev.type] ?? ev.type}</span>
                       {ev.user?.name ? ` · ${ev.user.name}` : ""}

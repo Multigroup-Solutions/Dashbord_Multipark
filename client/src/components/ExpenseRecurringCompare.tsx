@@ -10,6 +10,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { comparePeriods, lisbonToday } from "@shared/expensePeriods";
+import { parseExpenseAmount } from "@shared/expenseAmount";
 import { useGlobalFilters } from '@/contexts/GlobalFiltersContext';
 
 const fmtEur = (v: any) => parseFloat(String(v || 0)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
@@ -18,12 +19,18 @@ const fmtEur = (v: any) => parseFloat(String(v || 0)).toLocaleString("pt-PT", { 
 export function RecurringExpensesDialog({ open, onClose, categories, projects }: { open: boolean; onClose: () => void; categories: any[]; projects: any[] }) {
   const { projectId } = useGlobalFilters();
   const utils = trpc.useUtils();
-  const { data: list = [] } = trpc.expenses.recurring.list.useQuery({ projectId }, { enabled: open });
+  const { data: list = [], error: listError } = trpc.expenses.recurring.list.useQuery({ projectId }, { enabled: open });
   const [f, setF] = useState<any>({ description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" });
   const refresh = () => utils.expenses.recurring.list.invalidate();
   const create = trpc.expenses.recurring.create.useMutation({ onSuccess: () => { setF({ description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" }); refresh(); toast.success("Modelo criado"); }, onError: (e) => toast.error(e.message) });
   const update = trpc.expenses.recurring.update.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
   const remove = trpc.expenses.recurring.remove.useMutation({ onSuccess: () => { refresh(); toast.success("Removido"); }, onError: (e) => toast.error(e.message) });
+  // Mesma regra do servidor: "1.234,56", "450,00" e "450.5" valem; lixo avisa aqui em vez de um erro técnico
+  const addModel = () => {
+    const amount = parseExpenseAmount(f.amount);
+    if (!amount) { toast.error("Valor inválido", { description: "Usa um número positivo com até 2 casas (ex.: 450,00)." }); return; }
+    create.mutate({ description: f.description || undefined, supplier: f.supplier || undefined, amount: Number(amount), dayOfMonth: Number(f.dayOfMonth) || 1, categoryId: f.categoryId ? Number(f.categoryId) : undefined, projectId: Number(f.projectId) });
+  };
   const projOpts = projects.map((p: any) => ({ value: String(p.id), label: p.name }));
 
   return (
@@ -44,7 +51,7 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
             <SearchableSelect className="w-full" value={f.projectId} onChange={(v) => setF({ ...f, projectId: v })} options={projOpts} placeholder="Escolher centro de custos" />
           </div>
           <div className="col-span-2 flex justify-end">
-            <Button size="sm" disabled={!f.amount || !f.projectId || create.isPending} onClick={() => create.mutate({ description: f.description || undefined, supplier: f.supplier || undefined, amount: Number(String(f.amount).replace(/\s/g, "").replace(",", ".")), dayOfMonth: Number(f.dayOfMonth) || 1, categoryId: f.categoryId ? Number(f.categoryId) : undefined, projectId: Number(f.projectId) })}>+ Adicionar modelo</Button>
+            <Button size="sm" disabled={!f.amount || !f.projectId || create.isPending} onClick={addModel}>+ Adicionar modelo</Button>
           </div>
         </div>
         <div className="space-y-1.5 max-h-72 overflow-y-auto">
@@ -58,7 +65,9 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
               <Button size="sm" variant="ghost" className="text-red-600 h-7 w-7 p-0" onClick={() => { if (confirm("Remover modelo recorrente?")) remove.mutate({ id: r.id }); }}><Trash2 className="h-4 w-4" /></Button>
             </div>
           ))}
-          {(list as any[]).length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Ainda não há modelos recorrentes.</p>}
+          {listError ? (
+            <p className="text-sm text-red-700 text-center py-4" role="alert">Não foi possível carregar os modelos: {String(listError.message ?? "").slice(0, 160)}</p>
+          ) : (list as any[]).length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Ainda não há modelos recorrentes.</p>}
         </div>
       </DialogContent>
     </Dialog>
