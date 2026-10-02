@@ -16,6 +16,10 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Mail, Users, Phone, Calendar, Paperclip, StickyNote, X, Loader2, Eye } from "lucide-react";
 import { toast } from "sonner";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
+import { fmtPTDateTime } from "@/lib/lisbonTime";
 
 type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string };
 type ReplyAttachment = { filename: string; url: string };
@@ -38,7 +42,14 @@ function fmtSize(bytes?: number): string {
 }
 
 export function RecruitmentSection() {
-  const { data: emails = [], isLoading, refetch } = trpc.rh.recruitmentEmails.useQuery();
+  const q = trpc.rh.recruitmentEmails.useQuery();
+  const emails = q.data ?? [];
+  const { isLoading, refetch } = q;
+  const { user } = useAuth();
+  // 18b: o botão só aparece a quem o servidor deixa (antes dava "Acesso não autorizado").
+  const canSync = !!user && can(user as any, "sincronizacao", "edit");
+  // Criar a conta do candidato = gerir utilizadores (o servidor exige-o, 18b).
+  const canInvite = !!user && can(user as any, "utilizadores", "edit");
   const [detail, setDetail] = useState<any | null>(null);
   const [replyFor, setReplyFor] = useState<any | null>(null);
   const [replyTo, setReplyTo] = useState("");
@@ -86,7 +97,7 @@ export function RecruitmentSection() {
     setReplyTo(e.clientEmail || e.fromEmail || "");
     setReplySubject(`Re: ${e.subject || "Candidatura"}`);
     setReplyBody("");
-    setIncludeLink(true);
+    setIncludeLink(canInvite);
     setReplyFiles([]);
   };
 
@@ -121,15 +132,18 @@ export function RecruitmentSection() {
   };
 
   if (isLoading) return <div className="text-center py-12 text-muted-foreground">A carregar emails de recrutamento...</div>;
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os emails de recrutamento" />;
   if (!emails.length)
     return (
       <div className="text-center py-12 text-muted-foreground">
         <Mail className="w-12 h-12 mx-auto mb-3 opacity-30" />
         <p>Sem emails de recrutamento.</p>
         <p className="text-xs mt-1">Reencaminha um email para <b>recursos-humanos@multipark.pt</b> e aparece aqui.</p>
-        <Button className="mt-4" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
-          <Mail className="w-4 h-4 mr-2" />{sync.isPending ? "A sincronizar…" : "Sincronizar emails agora"}
-        </Button>
+        {canSync && (
+          <Button className="mt-4" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
+            <Mail className="w-4 h-4 mr-2" />{sync.isPending ? "A sincronizar…" : "Sincronizar emails agora"}
+          </Button>
+        )}
       </div>
     );
 
@@ -137,9 +151,11 @@ export function RecruitmentSection() {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{emails.length} email(s) recebido(s)</p>
-        <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
-          <Mail className="w-4 h-4 mr-2" />{sync.isPending ? "A sincronizar…" : "Sincronizar emails"}
-        </Button>
+        {canSync && (
+          <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
+            <Mail className="w-4 h-4 mr-2" />{sync.isPending ? "A sincronizar…" : "Sincronizar emails"}
+          </Button>
+        )}
       </div>
       <div className="grid grid-cols-1 gap-3">
         {emails.map((e: any) => {
@@ -163,7 +179,7 @@ export function RecruitmentSection() {
                       <span className="flex items-center gap-1"><Users className="w-3 h-3" />{e.clientName || e.fromName || "Desconhecido"}</span>
                       {(e.clientEmail || e.fromEmail) && <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{e.clientEmail || e.fromEmail}</span>}
                       {e.clientPhone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{e.clientPhone}</span>}
-                      {e.receivedAt && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{String(e.receivedAt).slice(0, 16)}</span>}
+                      {e.receivedAt && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{fmtPTDateTime(e.receivedAt)}</span>}
                     </div>
                     {e.bodyText && <p className="text-sm mt-2 line-clamp-2 text-muted-foreground whitespace-pre-wrap">{e.bodyText.slice(0, 300)}</p>}
                   </div>
@@ -192,7 +208,7 @@ export function RecruitmentSection() {
                 <span className="flex items-center gap-1"><Users className="w-3 h-3" />{detail.clientName || detail.fromName || "Desconhecido"}</span>
                 {(detail.clientEmail || detail.fromEmail) && <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{detail.clientEmail || detail.fromEmail}</span>}
                 {detail.clientPhone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{detail.clientPhone}</span>}
-                {detail.receivedAt && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{String(detail.receivedAt).slice(0, 16)}</span>}
+                {detail.receivedAt && <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{fmtPTDateTime(detail.receivedAt)}</span>}
               </div>
 
               {(() => {
@@ -279,20 +295,20 @@ export function RecruitmentSection() {
                 </label>
               </div>
             </div>
-            <label className="flex items-start gap-2 text-sm cursor-pointer">
+            {canInvite && <label className="flex items-start gap-2 text-sm cursor-pointer">
               <input type="checkbox" className="mt-0.5" checked={includeLink} onChange={(ev) => setIncludeLink(ev.target.checked)} />
               <span>
                 Incluir <strong>link de registo</strong> — cria a conta do candidato e adiciona o link à mensagem
                 (ele entra com o Google e fica utilizador).
               </span>
-            </label>
+            </label>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setReplyFor(null)}>Cancelar</Button>
             <Button
               onClick={() => reply.mutate({
                 to: replyTo, subject: replySubject, body: replyBody, fromAlias: replyFor?.alias,
-                includeRegisterLink: includeLink,
+                includeRegisterLink: canInvite && includeLink,
                 candidateName: replyFor?.clientName || replyFor?.fromName || undefined,
                 origin: window.location.origin,
                 attachments: replyFiles.length ? replyFiles : undefined,

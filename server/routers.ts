@@ -4794,7 +4794,8 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "view");
         const { listDriverApplications } = await import("./webIntake");
-        return listDriverApplications(input?.status ?? null);
+        try { return await listDriverApplications(input?.status ?? null); }
+        catch (err: any) { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: err?.message || "Erro a ler as candidaturas" }); }
       }),
 
     setStatus: protectedProcedure
@@ -4808,7 +4809,8 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
         const { setApplicationStatus } = await import("./webIntake");
-        await setApplicationStatus(input.id, input.status, ctx.user.id, input.notes);
+        try { await setApplicationStatus(input.id, input.status, ctx.user.id, input.notes); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err?.message || "Erro ao mudar o estado" }); }
         return { success: true };
       }),
 
@@ -4839,13 +4841,13 @@ export const appRouter = router({
     // middleware já recusa um `projectId` fora das cidades do utilizador
     // (`hasForeignCityFilter`); o `assertProjectAccess` aqui é a segunda linha.
     approve: protectedProcedure
-      .input(z.object({ id: z.number(), projectId: z.number().int().positive() }))
+      .input(z.object({ id: z.number(), projectId: z.number().int().positive(), confirmReactivate: z.boolean().optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { approveApplication } = await import("./webIntake");
         try {
-          return await approveApplication(input.id, ctx.user.id, { projectId: input.projectId });
+          return await approveApplication(input.id, ctx.user.id, { projectId: input.projectId, confirmReactivate: input.confirmReactivate });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao aprovar" });
         }
@@ -5073,13 +5075,18 @@ export const appRouter = router({
             status: z.enum(LEAD_STATUS_ENUM).nullable().optional(),
             search: z.string().max(120).nullable().optional(),
             source: z.string().max(64).nullable().optional(),
+            archived: z.boolean().optional(),
           })
           .optional(),
       )
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "view");
         const { listExtraLeads } = await import("./extraLeads");
-        return listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null, source: input?.source ?? null });
+        try {
+          return await listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null, source: input?.source ?? null, archived: input?.archived ?? false });
+        } catch (err: any) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: err?.message || "Erro a ler os leads" });
+        }
       }),
 
     // Funil: origem × cidade × semana ISO (new→contacted→replied→converted) +
@@ -5158,25 +5165,39 @@ export const appRouter = router({
       }),
 
     // Converte o lead numa ficha de extra no centro de custos (cidade) escolhido.
+    // 18b: a pessoa já teve ficha desativada → devolve `needsConfirm` (motivo
+    // da saída); só reativa com `confirmReactivate`. Roubo/despedimento/ficha
+    // junta sem destino nunca reativam a partir daqui.
     convert: protectedProcedure
-      .input(z.object({ id: z.number().int().positive(), projectId: z.number().int().positive() }))
+      .input(z.object({ id: z.number().int().positive(), projectId: z.number().int().positive(), confirmReactivate: z.boolean().optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { convertLeadToExtra } = await import("./extrasAutomation");
         try {
-          return await convertLeadToExtra(input.id, input.projectId, ctx.user.id);
+          return await convertLeadToExtra(input.id, input.projectId, ctx.user.id, { confirmReactivate: input.confirmReactivate });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao converter" });
         }
       }),
 
+    // "Apagar" = arquivar (0380); `restore` repõe.
     remove: protectedProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
-        const { deleteExtraLead } = await import("./extraLeads");
-        await deleteExtraLead(input.id, ctx.user.id);
+        const { archiveExtraLead } = await import("./extraLeads");
+        try { await archiveExtraLead(input.id, ctx.user.id); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao arquivar" }); }
+        return { success: true };
+      }),
+    restore: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "leads_extras", "edit");
+        const { restoreExtraLead } = await import("./extraLeads");
+        try { await restoreExtraLead(input.id, ctx.user.id); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao repor" }); }
         return { success: true };
       }),
 

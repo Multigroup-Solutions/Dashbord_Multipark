@@ -7,7 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { scopedProjectIds, assertEmployeeAccess, assertProjectAccess } from './cityScope';
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
-import { requireAccess } from "./_core/access";
+import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
 import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
@@ -65,7 +65,9 @@ export const rhRouter = router({
   // ── RECRUTAMENTO (emails recebidos em recursos-humanos@) ───────────────────
   recruitmentEmails: protectedProcedure.query(async ({ ctx }) => {
     requireAccess(ctx.user, "leads_extras", "view");
-    const { listInboundEmailsByAlias } = await import("./db");
+    const { getDb, listInboundEmailsByAlias } = await import("./db");
+    // Erro ≠ vazio (18b): sem BD diz-se, em vez de "não há emails".
+    if (!(await getDb())) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível" });
     return listInboundEmailsByAlias("recursos-humanos", 200);
   }),
 
@@ -79,7 +81,12 @@ export const rhRouter = router({
       const database = await getDb();
       if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
       const { inboundEmails } = await import("../drizzle/schema");
-      await database.update(inboundEmails).set({ notes: input.notes.trim() || null }).where(eq(inboundEmails.id, input.id));
+      const { and } = await import("drizzle-orm");
+      // Só emails de recrutamento (18b: antes gravava em qualquer email, ex.: reclamações) e fica registado.
+      const res: any = await database.update(inboundEmails).set({ notes: input.notes.trim() || null })
+        .where(and(eq(inboundEmails.id, input.id), eq(inboundEmails.alias, "recursos-humanos")));
+      if (Number(res?.[0]?.affectedRows ?? res?.affectedRows ?? 0) === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Email de recrutamento não encontrado." });
+      await logActivity({ userId: ctx.user.id, action: "recruitment_notes", entity: "inbound_emails", entityId: input.id, details: (input.notes.trim() || "(notas apagadas)").slice(0, 300) });
       return { ok: true };
     }),
 
@@ -102,6 +109,10 @@ export const rhRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "leads_extras", "edit");
+      // Criar a conta do candidato é gerir utilizadores (18b: antes qualquer TL criava contas "extra").
+      if (input.includeRegisterLink && !canAccess(ctx.user, "utilizadores", "edit")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Só quem gere utilizadores pode criar a conta do candidato (link de registo)." });
+      }
       const { sendEmail } = await import("./mail/systemMail");
 
       const emailAttachments: Array<{ filename: string; content: Buffer }> = [];
@@ -114,8 +125,9 @@ export const rhRouter = router({
         if (buf.length > 10 * 1024 * 1024) throw new TRPCError({ code: "BAD_REQUEST", message: `Anexo "${a.filename}" excede 10 MB` });
         emailAttachments.push({ filename: a.filename, content: buf });
       }
-      const from = input.fromAlias ? `${input.fromAlias}@multipark.pt` : undefined;
-      const fromName = input.fromAlias === "recursos-humanos" ? "Multipark Recrutamento" : "Multipark";
+      // Recrutamento responde sempre pela recursos-humanos@ (18b: dava para responder como criticas@ ou reclamacoes@).
+      const from = "recursos-humanos@multipark.pt";
+      const fromName = "Multipark Recrutamento";
 
       let body = input.body;
       let inviteLink: string | null = null;

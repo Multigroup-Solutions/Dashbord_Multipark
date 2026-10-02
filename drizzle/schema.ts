@@ -2574,6 +2574,9 @@ export const extraLeads = mysqlTable("extra_leads", {
 	employeeId: int(),
 	/** Centro de custos (cidade) do lead — migração 0077; NULL = visível a todos. */
 	projectId: int(),
+	// 0380 — "Apagar" arquiva (sai da lista, do funil, dos envios e dos lembretes; pode ser reposto).
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),

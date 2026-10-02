@@ -98,6 +98,7 @@ import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
 import { ensureRecentSchema } from "./migrations/index";
+import { CITY_LABELS, cityKeyFromPlace } from "../shared/city";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _schemaEnsure: Promise<void> | null = null;
@@ -3780,27 +3781,13 @@ export async function deleteFinancialHistoryYear(year: number) {
 // Regra do Jorge: se não indicarem centro de custos ao criar um extra, o
 // sistema infere a CIDADE pela morada (Algarve→Faro, Grande Porto→Porto,
 // Grande Lisboa/Setúbal→Lisboa) e aloca ao nó-cidade da árvore de projetos.
-const CITY_ADDRESS_KEYWORDS: Record<string, string[]> = {
-  Faro: ["faro", "algarve", "albufeira", "portimao", "olhao", "loule", "quarteira", "vilamoura", "tavira", "lagos", "silves", "almancil", "sao bras", "vila real de santo antonio", "monchique", "aljezur", "castro marim", "alcoutim", "vila do bispo", "montenegro", "quelfes", "armacao de pera", "ferreiras", "guia", "paderne", "boliqueime", "estoi", "moncarapacho"],
-  Porto: ["porto", "vila nova de gaia", "gaia", "matosinhos", "maia", "gondomar", "valongo", "povoa de varzim", "vila do conde", "santo tirso", "trofa", "penafiel", "paredes", "ermesinde", "rio tinto", "espinho", "senhora da hora", "aguas santas", "sao mamede de infesta", "leca"],
-  Lisboa: ["lisboa", "amadora", "sintra", "cascais", "oeiras", "loures", "odivelas", "almada", "seixal", "barreiro", "montijo", "setubal", "alcochete", "moita", "sesimbra", "palmela", "mafra", "torres vedras", "vila franca de xira", "alverca", "sacavem", "queluz", "agualva", "cacem", "rio de mouro", "massama", "corroios", "feijo", "laranjeiro", "camarate", "povoa de santa iria", "odivelas", "carnaxide", "algés", "alges", "damaia", "benfica", "chelas", "marvila", "monte abraao", "monte abraão"],
-};
-
-function normAddress(s: string): string {
-  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-}
+// As terras de cada cidade vivem em shared/city.ts (CITY_PLACE_KEYWORDS — 18b:
+// as candidaturas usam a mesma regra).
 
 /** Devolve a cidade inferida pela morada ("Faro"/"Porto"/"Lisboa") ou null. */
 export function inferCityFromAddress(address?: string | null): string | null {
-  if (!address) return null;
-  const a = ` ${normAddress(address)} `;
-  // Faro e Porto primeiro (mais específicos); Lisboa por fim (apanha resto da AML)
-  for (const city of ["Faro", "Porto", "Lisboa"]) {
-    for (const kw of CITY_ADDRESS_KEYWORDS[city]) {
-      if (a.includes(` ${kw} `) || a.includes(` ${kw},`) || a.includes(`,${kw} `) || a.includes(` ${kw}\n`) || a.includes(`-${kw} `) || a.includes(` ${kw}-`)) return city;
-    }
-  }
-  return null;
+  const k = cityKeyFromPlace(address);
+  return k ? CITY_LABELS[k] : null;
 }
 
 /** ID do nó-cidade na árvore de projetos para a morada dada, ou null. */

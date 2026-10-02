@@ -25,7 +25,7 @@ import { getDb, logActivity } from "./db";
 import { driverApplications, employees, extraLeadSources, extraLeads, inboundEmails } from "../drizzle/schema";
 import { normalizeEmail } from "../shared/email";
 import { normalizePhoneE164 } from "../shared/phone";
-import { matchCityKey } from "../shared/city";
+import { cityKeyFromText, matchCityKey } from "../shared/city";
 import { canAutoMarkReplied, isAutomatedSender, matchExistingLead } from "../shared/extraLeadsFunnel";
 import { normalizeLeadInput } from "./extraLeads";
 import { extractAffectedRows } from "./availabilityFormToken";
@@ -43,7 +43,8 @@ export function cityProjectIdFromText(
   text: string | null | undefined,
   projects: { id: number; name: string; level: string | null }[],
 ): number | null {
-  const key = matchCityKey(text ?? "");
+  // 18b: também pela terra ("Corroios" → Lisboa, "Gaia" → Porto).
+  const key = cityKeyFromText(text ?? "");
   if (!key) return null;
   const hits = projects.filter((p) => p.level === "city" && matchCityKey(p.name) === key);
   return hits.length === 1 ? hits[0].id : null;
@@ -64,6 +65,7 @@ interface LeadLite {
   email: string | null;
   sourceRef: string | null;
   notes: string | null;
+  archivedAt?: string | null;
 }
 
 interface SyncContext {
@@ -74,7 +76,7 @@ interface SyncContext {
 
 async function loadSyncContext(db: Db): Promise<SyncContext> {
   const leads = (await db
-    .select({ id: extraLeads.id, phoneE164: extraLeads.phoneE164, email: extraLeads.email, sourceRef: extraLeads.sourceRef, notes: extraLeads.notes })
+    .select({ id: extraLeads.id, phoneE164: extraLeads.phoneE164, email: extraLeads.email, sourceRef: extraLeads.sourceRef, notes: extraLeads.notes, archivedAt: extraLeads.archivedAt })
     .from(extraLeads)) as LeadLite[];
   const emps = await db
     .select({ phone: employees.phone, email: employees.email })
@@ -144,10 +146,16 @@ async function ingestCandidate(db: Db, ctx: SyncContext, cand: LeadCandidate): P
   const existing = matchExistingLead(lead, ctx.leads);
   if (existing) {
     const notes = appendSourceNote(existing.notes, tag);
+    // Voltou a candidatar-se depois de o lead ter sido arquivado (0380) → sai do arquivo.
+    const unarchive = existing.archivedAt ? { archivedAt: null, archivedById: null } : {};
     await db
       .update(extraLeads)
-      .set({ notes, sourceRef: sql`COALESCE(${extraLeads.sourceRef}, ${cand.sourceRef})` } as any)
+      .set({ notes, sourceRef: sql`COALESCE(${extraLeads.sourceRef}, ${cand.sourceRef})`, ...unarchive } as any)
       .where(eq(extraLeads.id, existing.id));
+    if (existing.archivedAt) {
+      await logActivity({ userId: 0, action: "extra_lead_restore", entity: "extra_leads", entityId: existing.id, details: `Lead reposto: voltou a candidatar-se (${tag})` });
+      existing.archivedAt = null;
+    }
     existing.notes = notes;
     existing.sourceRef = existing.sourceRef ?? cand.sourceRef;
     await markSeen(db, cand.sourceRef, existing.id, "merged");
@@ -342,6 +350,77 @@ async function findLeadForApplication(db: Db, app: { id: number; email: string; 
 }
 
 /**
+ * Candidatura rejeitada → o lead da mesma pessoa fica "Sem interesse" (18b):
+ * antes continuava aberto, contava no resumo diário e podia receber o
+ * WhatsApp em lote e o lembrete. Só leads abertos (novo/contactado/respondeu)
+ * e sem ficha. Best-effort (nunca parte a rejeição).
+ */
+export async function declineLeadForApplication(app: { id: number; email: string; phone: string | null; fullName?: string | null }, userId: number | null): Promise<number | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const lead = await findLeadForApplication(db, app);
+    if (!lead || lead.employeeId != null || lead.archivedAt) return null;
+    const upd = await db.update(extraLeads).set({ status: "declined" })
+      .where(and(eq(extraLeads.id, lead.id), inArray(extraLeads.status, ["new", "contacted", "replied"]), isNull(extraLeads.employeeId)));
+    if (extractAffectedRows(upd) === 0) return null;
+    await logActivity({
+      userId: userId ?? 0,
+      action: "extra_lead_status",
+      entity: "extra_leads",
+      entityId: lead.id,
+      details: `Lead ${lead.fullName}: ${lead.status} → declined (candidatura #${app.id} rejeitada)`,
+    });
+    return lead.id;
+  } catch (err) {
+    console.warn("[extraLeadsSync] fechar o lead da candidatura rejeitada:", String(err).slice(0, 160));
+    return null;
+  }
+}
+
+/**
+ * O contrário (Jorge, 2 out 2026): lead marcado "Sem interesse" → a candidatura
+ * do site da mesma pessoa fica Rejeitada. A candidatura liga-se pela
+ * `sourceRef` do lead ("application:N") ou pelo email (único nas candidaturas).
+ * Nunca mexe numa aprovada (já tem ficha) nem numa já rejeitada. Atualiza a
+ * candidatura diretamente (não por `setApplicationStatus`, que voltaria a
+ * fechar o lead). Best-effort: nunca parte a mudança do lead.
+ */
+export async function rejectApplicationForLead(
+  lead: { id: number; fullName: string; email: string | null; sourceRef: string | null },
+  userId: number | null,
+): Promise<number | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const refId = /^application:(\d+)$/.exec(String(lead.sourceRef ?? ""))?.[1];
+    const conds = [];
+    if (refId) conds.push(eq(driverApplications.id, Number(refId)));
+    if (lead.email) conds.push(eq(driverApplications.email, normalizeEmail(lead.email)));
+    if (!conds.length) return null;
+    const rows = await db.select({ id: driverApplications.id, status: driverApplications.status, fullName: driverApplications.fullName })
+      .from(driverApplications).where(or(...conds)).limit(5);
+    const app = rows.find((r) => refId && r.id === Number(refId)) ?? rows[0];
+    if (!app || app.status === "approved" || app.status === "rejected") return null;
+    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const upd = await db.update(driverApplications).set({ status: "rejected", reviewedById: userId, reviewedAt: now })
+      .where(and(eq(driverApplications.id, app.id), inArray(driverApplications.status, ["new", "reviewed"])));
+    if (extractAffectedRows(upd) === 0) return null;
+    await logActivity({
+      userId: userId ?? 0,
+      action: "driver_application_status",
+      entity: "driver_applications",
+      entityId: app.id,
+      details: `Candidatura de ${app.fullName}: ${app.status} → rejected (lead #${lead.id} marcado Sem interesse)`,
+    });
+    return app.id;
+  } catch (err) {
+    console.warn("[extraLeadsSync] rejeitar a candidatura do lead sem interesse:", String(err).slice(0, 160));
+    return null;
+  }
+}
+
+/**
  * Candidatura aprovada → o lead correspondente fica Convertido e ligado à
  * ficha. Não mexe num lead já ligado a outra ficha. Best-effort.
  */
@@ -461,7 +540,8 @@ export async function handleLeadInbound(input: { phoneE164: string; conversation
   try {
     const db = await getDb();
     if (!db || !input.phoneE164) return out;
-    const leads = await db.select().from(extraLeads).where(eq(extraLeads.phoneE164, input.phoneE164)).limit(5);
+    // Arquivados (0380) não contam: nem "respondeu", nem aviso, nem resposta automática.
+    const leads = await db.select().from(extraLeads).where(and(eq(extraLeads.phoneE164, input.phoneE164), isNull(extraLeads.archivedAt))).limit(5);
     if (!leads.length) return out;
     const at = input.at ?? new Date().toISOString().slice(0, 19).replace("T", " ");
     for (const lead of leads) {

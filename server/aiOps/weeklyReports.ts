@@ -200,7 +200,7 @@ async function rh(cur: Range, prev: Range): Promise<Pick<WeeklyReportData, "metr
     const x = rowsOf(await db.execute(sql`
       SELECT SUM(CASE WHEN createdAt >= ${u.start} AND createdAt < ${u.end} THEN 1 ELSE 0 END) AS created,
              SUM(CASE WHEN convertedAt >= ${u.start} AND convertedAt < ${u.end} THEN 1 ELSE 0 END) AS converted
-        FROM extra_leads WHERE createdAt >= ${u.start} OR convertedAt >= ${u.start}`))[0] ?? {};
+        FROM extra_leads WHERE (createdAt >= ${u.start} OR convertedAt >= ${u.start}) AND archivedAt IS NULL`))[0] ?? {};
     return { created: Number(x.created ?? 0), converted: Number(x.converted ?? 0) };
   };
   const [la, lb] = [await leads(cur), await leads(prev)];
