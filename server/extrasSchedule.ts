@@ -592,12 +592,18 @@ function esc(s: string): string {
 }
 
 /** Email "estás escalado" a quem tem email na ficha (1 por pessoa e versão). */
-export async function sendScheduleEmails(date: string, city: ScheduleCity, opts: { respectHold?: boolean } = {}): Promise<NotifySummary["email"]> {
+export async function sendScheduleEmails(
+  date: string,
+  city: ScheduleCity,
+  /** `employeeIds`: só estas pessoas (alternativa de um WhatsApp não entregue, 0375). */
+  opts: { respectHold?: boolean; employeeIds?: readonly number[] } = {},
+): Promise<NotifySummary["email"]> {
   const db = await getDb();
   const out = { sent: 0, failed: 0, noEmail: 0, skipped: 0 };
   if (!db) return out;
   if (opts.respectHold && (await heldCities(date)).has(city)) return out;
-  const rows = (await loadDayRows(date)).filter((r) => r.city === city);
+  const only = opts.employeeIds ? new Set(opts.employeeIds) : null;
+  const rows = (await loadDayRows(date)).filter((r) => r.city === city && (!only || (r.employeeId != null && only.has(r.employeeId))));
   const log = await loadNotifyLog(rows.map((r) => r.id));
   const pending = pendingScheduleNotifications(rows, log, "email");
   out.skipped = rows.filter((r) => r.status === "confirmed" && r.employeeId != null).length - pending.length;

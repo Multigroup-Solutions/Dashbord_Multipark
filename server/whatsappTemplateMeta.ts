@@ -58,6 +58,8 @@ export interface TemplateAnalysis {
    * destinatário (132012). null = sem cabeçalho ou cabeçalho fixo.
    */
   headerNeedingParam?: "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION" | "TEXT" | null;
+  /** Categoria na Meta (UTILITY / MARKETING / AUTHENTICATION), gravada com cada envio (0375). */
+  category?: string | null;
 }
 
 /** Resultado da seleção de uma tradução dentro da resposta da Graph API. */
@@ -159,6 +161,7 @@ export function analyzeTemplateEntry(entry: any): TemplateAnalysis {
     name: String(entry?.name ?? ""),
     language: String(entry?.language ?? ""),
     status: String(entry?.status ?? "UNKNOWN"),
+    category: typeof entry?.category === "string" && entry.category ? entry.category.toUpperCase().slice(0, 16) : null,
     headerNeedingParam,
     bodyText,
     parameterFormat,

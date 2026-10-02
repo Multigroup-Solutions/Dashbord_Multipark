@@ -50,6 +50,34 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-10-02 — Falhas de entrega 131026 / 131049 (tarefa "WhatsApp resistente", Fase 1)
+**Type**: feature. Branch `feat/whatsapp-failure-handling`, NÃO enviada (repo trabalha por PR).
+**Migração**: `migration_0375.ts`, aplicada sozinha no arranque e idempotente.
+**Scope**:
+- Novos: `server/whatsappFailurePolicy.ts` (puras + I/O + novas tentativas) e `server/whatsappFailurePolicy.test.ts` (14 testes).
+- Alterados:
+  - `whatsappInbound.ts`: status estruturado; `handleStatus` chama a política; a mensagem recebida limpa a marca; a manutenção corre as novas tentativas.
+  - `whatsappStore.ts`: `StatusExtra`, `unreachablePhones`, campos novos no reserve, e a política também no caminho pendente e na falha síncrona.
+  - `whatsappBroadcast.ts`: bloqueio "sem WhatsApp" e `sendPayload` de equipa.
+  - `whatsappTemplateMeta.ts`: categoria.
+  - `extrasSchedule.ts`: `sendScheduleEmails` com `employeeIds` opcional.
+  - `extrasAutomation.ts`: `appOrigin` exportado; nota "Morada e regras (1.º turno) <data>".
+  - `shared/whatsappTemplate.ts`: `teamRetry` e `isTeamRetryTemplate`.
+  - `shared/notificationRouting.ts`: tipo `whatsapp_undelivered`.
+  - `docs/notificacoes.md` regenerado.
+**What**:
+- **Registo por mensagem:** `whatsapp_messages` passa a guardar língua, categoria, `errorCode` e `errorTitle`.
+- **131026:** a política corre só quando a linha passa a `failed`. `whatsapp_conversations.undeliverableCount` sobe e, ao 2.º seguido, fica `unreachableAt`. A partir daí `dispatchOne` recusa templates ("sem WhatsApp"). Entregue/lida repõe o contador; qualquer mensagem recebida limpa a marca.
+- **131049 em mensagens de equipa:** se o catálogo tiver `teamRetry` (disponibilidade, aviso de trabalho, morada e regras), agenda-se 1 nova tentativa às +24 h, só se o turno ainda não tiver começado. Executa no cron horário (`runWhatsappRetries`), que volta a verificar STOP, a marca, "Não enviar" e o início do turno. O token do formulário nunca vai para a BD: é um marcador, e a nova tentativa emite um token novo. Não há terceira tentativa (`retryOfId`).
+- **Alternativa por email:** corre uma só vez (`fallbackAt`).
+  - Aviso de escala → `sendScheduleEmails` só dessa pessoa.
+  - Pedido de disponibilidade → já seguiu no mesmo envio (`mail_auto_sends`) ou é reenviado só a essa pessoa.
+  - Resto (morada e regras, seja_motorista, envios à mão) → sem equivalente: sino `whatsapp_undelivered`.
+**Tests**: tsc limpo; suite completa 3595 passed / 0 failed (as 27 falhas antigas já não existem em main).
+**Notes**:
+- O I/O da política e as novas tentativas não foram exercitados contra uma BD real; só as partes puras têm testes, como no resto do repo.
+- Observado e não mexido: `afterOutboundFailed` (contadores do broadcast) continua a não correr quando o `failed` chega pelo caminho pendente.
+
 ### 2026-10-01 — Inbox: redesenho UX (lista compacta, avatar com foto, scroll no fim, bolhas estilo WhatsApp)
 **Type**: feature + refactor (SEM migração, NÃO deployado, NÃO commitado)
 **Scope**: `client/src/pages/WhatsAppInboxPage.tsx` (≈1270 → ≈790 linhas), NOVOS em `client/src/components/whatsapp/`:

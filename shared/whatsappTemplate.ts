@@ -80,6 +80,18 @@ export interface WhatsAppTemplateDef {
   sharedParam: SharedParamSpec | null;
   /** Papéis dos parâmetros; `null` = template sem parâmetros de body. */
   roles: TemplateBodyRoles | null;
+  /**
+   * Mensagem de EQUIPA (automática, para extras): se a Meta a reter por limite
+   * de marketing (131049) tem direito a UMA nova tentativa passadas 24 h
+   * (server/whatsappFailurePolicy.ts). Recrutamento e envios à mão não.
+   */
+  teamRetry?: boolean;
+}
+
+/** O template é uma mensagem de equipa com direito a 1 nova tentativa após 131049? PURA. */
+export function isTeamRetryTemplate(name: string | null | undefined): boolean {
+  if (!name) return false;
+  return WHATSAPP_TEMPLATES.some((t) => t.name === name && t.teamRetry === true);
 }
 
 /** Templates sem parâmetros de body não levam `components.body` (a Meta responde 132000 se levarem). */
@@ -108,6 +120,7 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
       kind: "week",
     },
     roles: { recipient: "nome", shared: "semana" },
+    teamRetry: true,
   },
   {
     id: "aviso_trabalho",
@@ -121,6 +134,7 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
       kind: "day",
     },
     roles: { recipient: "customer_name", shared: "day" },
+    teamRetry: true,
   },
   // Dois templates SEM parâmetros (Jorge, 2026-09-17): o texto é fixo na Meta,
   // por isso não há nome nem campo do diálogo a preencher.
@@ -141,6 +155,7 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
     description: "Envia a morada e as regras a quem vem trabalhar. Sem campos a preencher.",
     sharedParam: null,
     roles: null,
+    teamRetry: true,
   },
 ] as const;
 

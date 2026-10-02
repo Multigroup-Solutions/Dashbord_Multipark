@@ -92,7 +92,28 @@ export async function optedOutPhones(db: DbLike): Promise<Set<string>> {
 
 export const OPTED_OUT_ERROR = "Não quer mensagens (pediu STOP) — envio não feito.";
 
+/**
+ * Números marcados "sem WhatsApp" (2× 131026 seguidos, 0375): não recebem
+ * templates até a pessoa escrever. Lidos 1× por envio, como o opt-out.
+ */
+export async function unreachablePhones(db: DbLike): Promise<Set<string>> {
+  const rows = await db
+    .select({ phoneE164: whatsappConversations.phoneE164 })
+    .from(whatsappConversations)
+    .where(isNotNull(whatsappConversations.unreachableAt));
+  return new Set(rows.map((r) => r.phoneE164));
+}
+
 // ─── Status pendentes ───────────────────────────────────────────────────────
+
+/** O que vem com um status além do texto do erro (0375). */
+export interface StatusExtra {
+  /** `errors[0].code` (131026, 131049, …). */
+  errorCode?: number | null;
+  errorTitle?: string | null;
+  /** `pricing.category` (UTILITY / MARKETING …). */
+  category?: string | null;
+}
 
 /** Aplica um status a uma linha existente respeitando a progressão. */
 export async function applyStatusToMessage(
@@ -100,27 +121,40 @@ export async function applyStatusToMessage(
   row: { id: number; status: string },
   status: MessageStatus,
   errorDetail: string | null,
+  extra: StatusExtra = {},
 ): Promise<boolean> {
   const next = nextStatus(row.status, status);
   if (!next) return false;
+  const category = extra.category ? { category: extra.category } : {};
   await db
     .update(whatsappMessages)
-    .set(next === "failed" ? { status: "failed", errorDetail } : { status: next })
+    .set(
+      next === "failed"
+        ? { status: "failed", errorDetail, errorCode: extra.errorCode ?? null, errorTitle: extra.errorTitle ?? null, ...category }
+        : { status: next, ...category },
+    )
     .where(eq(whatsappMessages.id, row.id));
   return true;
 }
 
 /** Guarda um status de uma mensagem que ainda não existe (mantém o "maior"). */
-export async function stashPendingStatus(db: DbLike, waMessageId: string, status: MessageStatus, errorDetail: string | null): Promise<void> {
+export async function stashPendingStatus(
+  db: DbLike,
+  waMessageId: string,
+  status: MessageStatus,
+  errorDetail: string | null,
+  extra: StatusExtra = {},
+): Promise<void> {
   const rows = await db
     .select({ status: whatsappPendingStatuses.status })
     .from(whatsappPendingStatuses)
     .where(eq(whatsappPendingStatuses.waMessageId, waMessageId))
     .limit(1);
+  const failedExtra = { errorCode: extra.errorCode ?? null, errorTitle: extra.errorTitle ?? null };
   if (!rows.length) {
     await db
       .insert(whatsappPendingStatuses)
-      .values({ waMessageId, status, errorDetail })
+      .values({ waMessageId, status, errorDetail, ...failedExtra, category: extra.category ?? null })
       // Corrida com outro webhook do mesmo id: 'failed' nunca é sobreposto.
       .onDuplicateKeyUpdate({ set: { status: sql`IF(${whatsappPendingStatuses.status} = 'failed', 'failed', ${status})` } });
     return;
@@ -129,8 +163,22 @@ export async function stashPendingStatus(db: DbLike, waMessageId: string, status
   if (next) {
     await db
       .update(whatsappPendingStatuses)
-      .set({ status: next, errorDetail: next === "failed" ? errorDetail : null })
+      .set(
+        next === "failed"
+          ? { status: next, errorDetail, ...failedExtra, ...(extra.category ? { category: extra.category } : {}) }
+          : { status: next, errorDetail: null, ...(extra.category ? { category: extra.category } : {}) },
+      )
       .where(eq(whatsappPendingStatuses.waMessageId, waMessageId));
+  }
+}
+
+/** Depois de uma linha de saída mudar de estado: política 131026/131049 (nunca lança). */
+async function afterStatusApplied(db: DbLike, messageId: number, next: MessageStatus, errorCode: number | null, errorDetail: string | null): Promise<void> {
+  try {
+    const { onOutboundStatusChanged } = await import("./whatsappFailurePolicy");
+    await onOutboundStatusChanged(db as Db, { messageId, next, errorCode, errorDetail });
+  } catch (err: any) {
+    console.warn("[WhatsApp] política de falha não correu:", String(err?.message ?? err).slice(0, 160));
   }
 }
 
@@ -150,8 +198,16 @@ export async function reconcilePendingStatus(db: DbLike, waMessageId: string | n
       .where(eq(whatsappMessages.waMessageId, waMessageId))
       .limit(1);
     if (!rows.length) return;
-    await applyStatusToMessage(db, rows[0], pending[0].status as MessageStatus, pending[0].errorDetail ?? null);
+    const p = pending[0];
+    const status = p.status as MessageStatus;
+    const changed = await applyStatusToMessage(db, rows[0], status, p.errorDetail ?? null, {
+      errorCode: p.errorCode ?? null,
+      errorTitle: p.errorTitle ?? null,
+      category: p.category ?? null,
+    });
     await db.delete(whatsappPendingStatuses).where(eq(whatsappPendingStatuses.waMessageId, waMessageId));
+    // O 'failed' que chegou antes da linha também passa pela política (0375).
+    if (changed) await afterStatusApplied(db, rows[0].id, status, p.errorCode ?? null, p.errorDetail ?? null);
   } catch (err: any) {
     console.warn("[WhatsApp] reconciliar status pendente falhou:", String(err?.message ?? err).slice(0, 160));
   }
@@ -246,6 +302,11 @@ export interface ReserveRow {
   sentById?: number | null;
   broadcastId?: number | null;
   clientRequestId?: string | null;
+  /** 0375: língua e categoria do template enviado. */
+  language?: string | null;
+  category?: string | null;
+  /** 0375: JSON para a nova tentativa de uma mensagem de equipa (ver whatsappFailurePolicy). */
+  sendPayload?: string | null;
 }
 
 export type ReserveResult =
@@ -271,6 +332,9 @@ export async function reserveOutboundMessage(db: DbLike, row: ReserveRow): Promi
       sentById: row.sentById ?? null,
       broadcastId: row.broadcastId ?? null,
       clientRequestId: row.clientRequestId ?? null,
+      language: row.language ?? null,
+      category: row.category ?? null,
+      sendPayload: row.sendPayload ?? null,
       waTimestamp: now,
     });
     return { reserved: true, id: Number((res as any)?.[0]?.insertId ?? 0) };
@@ -300,12 +364,13 @@ export async function finishOutboundMessage(
   db: DbLike,
   id: number,
   row: { conversationId: number; type: "text" | "template"; body: string | null; templateName?: string | null },
-  res: { ok: true; waMessageId: string } | { ok: false; error: string; uncertain?: boolean },
+  res: { ok: true; waMessageId: string } | { ok: false; error: string; uncertain?: boolean; code?: number },
 ): Promise<OutboundStatus> {
   const status: OutboundStatus = res.ok ? "sent" : res.uncertain ? "unknown" : "failed";
+  const errorCode = !res.ok && typeof res.code === "number" ? res.code : null;
   await db
     .update(whatsappMessages)
-    .set(res.ok ? { status: "sent", waMessageId: res.waMessageId, errorDetail: null } : { status: status as "unknown" | "failed", errorDetail: res.error })
+    .set(res.ok ? { status: "sent", waMessageId: res.waMessageId, errorDetail: null } : { status: status as "unknown" | "failed", errorDetail: res.error, errorCode })
     .where(eq(whatsappMessages.id, id));
   const now = nowStr();
   const p = previewFields({ body: row.body, type: row.type, templateName: row.templateName, direction: "out" });
@@ -320,5 +385,7 @@ export async function finishOutboundMessage(
     })
     .where(eq(whatsappConversations.id, row.conversationId));
   if (res.ok) await reconcilePendingStatus(db, res.waMessageId);
+  // Raro, mas a Meta pode recusar logo com 131026/131049: mesma política do webhook.
+  else if (status === "failed" && errorCode != null) await afterStatusApplied(db, id, "failed", errorCode, res.error);
   return status;
 }

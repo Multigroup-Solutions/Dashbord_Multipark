@@ -76,6 +76,12 @@ export interface ParsedStatusUpdate {
   status: MessageStatus;
   timestamp: string | null;
   errorDetail: string | null;
+  /** `errors[0].code` da Meta (131026, 131049, …) — 0375. */
+  errorCode: number | null;
+  /** `errors[0].title` da Meta. */
+  errorTitle: string | null;
+  /** `pricing.category` (marketing / utility / …) quando vem. */
+  category: string | null;
 }
 
 export interface ParsedWebhook {
@@ -232,18 +238,27 @@ export function parseWebhookPayload(payload: any, expectedPhoneNumberId?: string
         const status = s?.status;
         if (!waMessageId || !isMessageStatus(status)) continue;
         let errorDetail: string | null = null;
+        let errorCode: number | null = null;
+        let errorTitle: string | null = null;
         const errs = Array.isArray(s?.errors) ? s.errors : [];
         if (errs.length) {
           const e = errs[0];
           const code = e?.code;
           const title = e?.title || e?.message || e?.error_data?.details || "erro";
           errorDetail = code != null ? `${title} (código ${code})` : String(title);
+          const n = Number(code);
+          errorCode = code != null && Number.isFinite(n) ? n : null;
+          errorTitle = typeof e?.title === "string" && e.title.trim() ? e.title.trim().slice(0, 255) : null;
         }
+        const pricingCategory = s?.pricing?.category;
         statuses.push({
           waMessageId: String(waMessageId),
           status,
           timestamp: parseMetaTimestamp(s?.timestamp),
           errorDetail,
+          errorCode,
+          errorTitle,
+          category: typeof pricingCategory === "string" && pricingCategory.trim() ? pricingCategory.trim().toUpperCase().slice(0, 16) : null,
         });
       }
     }
@@ -474,6 +489,10 @@ async function writeInbound(db: Db, m: ParsedInboundMessage, phoneE164: string, 
       ...(m.profileName ? { profileName: m.profileName } : {}),
     };
     if (plan.openWindow) set.lastInboundAt = laterTimestamp(conv.lastInboundAt, ts);
+    // Qualquer mensagem recebida prova que o número tem WhatsApp: acaba a série
+    // de 131026 e a marca "sem WhatsApp" (os templates voltam) — 0375.
+    set.undeliverableCount = 0;
+    set.unreachableAt = null;
     if (plan.bumpUnread) set.unreadCount = sql`${whatsappConversations.unreadCount} + 1`;
     // Estado (0097): uma resposta verdadeira reabre a conversa resolvida/pendente
     // e marca-a "por responder" desde a 1.ª mensagem sem resposta (SLA).
@@ -674,16 +693,23 @@ async function handleStatus(db: Db, s: ParsedStatusUpdate): Promise<boolean> {
     .from(whatsappMessages)
     .where(and(eq(whatsappMessages.waMessageId, s.waMessageId), eq(whatsappMessages.direction, "out")))
     .limit(1);
+  const extra = { errorCode: s.errorCode, errorTitle: s.errorTitle, category: s.category };
   if (!rows.length) {
     // A Meta pode mandar o status (sobretudo 'failed') antes de o envio ter
     // gravado a linha: guarda-se e o envio aplica-o quando grava.
-    await stashPendingStatus(db, s.waMessageId, s.status, s.errorDetail);
+    await stashPendingStatus(db, s.waMessageId, s.status, s.errorDetail, extra);
     return false;
   }
-  const changed = await applyStatusToMessage(db, rows[0], s.status, s.errorDetail);
+  const changed = await applyStatusToMessage(db, rows[0], s.status, s.errorDetail, extra);
   if (changed && s.status === "failed") {
     try { await afterOutboundFailed(db, rows[0].id, rows[0].status, s.errorDetail); }
     catch (err: any) { console.warn("[WhatsApp] corrigir contas do envio falhado:", String(err?.message ?? err).slice(0, 160)); }
+  }
+  // 131026 / 131049 (alternativa, "sem WhatsApp", nova tentativa) e entregue →
+  // fim da série de 131026. Só na mudança: um status repetido não corre nada.
+  if (changed) {
+    const { onOutboundStatusChanged } = await import("./whatsappFailurePolicy");
+    await onOutboundStatusChanged(db, { messageId: rows[0].id, next: s.status, errorCode: s.errorCode, errorDetail: s.errorDetail });
   }
   return changed;
 }
@@ -763,6 +789,8 @@ export interface WhatsappMaintenanceResult {
   pendingStatusesPurged: number;
   /** Estados pendentes aplicados a mensagens que já existiam (17b). */
   pendingStatusesApplied?: number;
+  /** Novas tentativas de mensagens de equipa retidas por 131049 (0375). */
+  retries?: { due: number; sent: number; failed: number; skipped: number };
 }
 
 /** Máximo de tentativas de download por mensagem, e lote por execução. */
@@ -835,5 +863,15 @@ export async function runWhatsappMaintenance(): Promise<WhatsappMaintenanceResul
     .delete(whatsappPendingStatuses)
     .where(sql`${whatsappPendingStatuses.receivedAt} < DATE_SUB(NOW(), INTERVAL 7 DAY)`);
   out.pendingStatusesPurged = Number((del as any)[0]?.affectedRows ?? 0);
+
+  // Nova tentativa das mensagens de equipa retidas por 131049 há 24 h (0375).
+  if (process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    try {
+      const { runWhatsappRetries } = await import("./whatsappFailurePolicy");
+      out.retries = await runWhatsappRetries(db);
+    } catch (err: any) {
+      console.warn("[WhatsApp] novas tentativas (131049) falharam:", String(err?.message ?? err).slice(0, 160));
+    }
+  }
   return out;
 }

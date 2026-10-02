@@ -258,7 +258,7 @@ async function releaseRun(key: string): Promise<void> {
   if (db) await db.execute(sql`DELETE FROM \`extras_automation_runs\` WHERE runKey = ${key}`);
 }
 
-function appOrigin(): string {
+export function appOrigin(): string {
   return (process.env.APP_URL || process.env.PUBLIC_APP_URL || "https://dashboard.multipark.pt").replace(/\/+$/, "");
 }
 
@@ -502,7 +502,8 @@ export async function notifyAssignments(
     const firstTimers = sentEmployees.filter((id) => !already.has(id));
     if (firstTimers.length) {
       try {
-        const r = await sendBroadcast({ templateName: regras.name, languageCode: regras.language, employeeIds: firstTimers, note: "Morada e regras (1.º turno)", createdById: by });
+        // A data na nota liga a mensagem ao turno (nova tentativa após 131049, 0375).
+        const r = await sendBroadcast({ templateName: regras.name, languageCode: regras.language, employeeIds: firstTimers, note: `Morada e regras (1.º turno) ${date}`, createdById: by });
         for (const rec of r.recipients) {
           if (rec.status === "sent" && rec.employeeId != null) {
             await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${rec.employeeId})`);
