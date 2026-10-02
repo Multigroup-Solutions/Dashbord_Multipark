@@ -1,4 +1,7 @@
 import { trpc } from "@/lib/trpc";
+import { seesBeyondOwn } from "@shared/access";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
@@ -67,7 +70,20 @@ export default function SuporteDashboard() {
 
   const { data: complaintStats, isLoading: loadingComplaints } = trpc.complaints.stats.useQuery();
   const { data: reviewStats, isLoading: loadingReviews } = trpc.reviews.stats.useQuery();
-  const { data: incidentStats, isLoading: loadingIncidents } = trpc.incidents.stats.useQuery({});
+  // Ocorrências = as da app Multipark ao vivo (as mesmas de /ocorrencias),
+  // com a cidade escolhida. As antigas `incidents` do dashboard já não contam.
+  const { user } = useAuth();
+  const seesIncidents = seesBeyondOwn(user, "ocorrencias");
+  const incidentsQ = trpc.incidents.multipark.useQuery(
+    { limit: 1, ...(globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}) },
+    { enabled: seesIncidents, staleTime: 60_000 },
+  );
+  const loadingIncidents = incidentsQ.isLoading;
+  const incidentStats = incidentsQ.data?.available ? incidentsQ.data.stats : null;
+  /** Leitura falhada (erro, Multipark indisponível ou contagens em falta) — nunca 0. */
+  const incidentsFailed = seesIncidents && !incidentsQ.isLoading && !incidentStats;
+  const incidentsReason = incidentsQ.error?.message
+    ?? (incidentsQ.data && !incidentsQ.data.available ? incidentsQ.data.reason : "as contagens não responderam");
   const { data: lostFoundItems = [], isLoading: loadingLostFound } = trpc.lostFound.list.useQuery(
     globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : undefined
   );
@@ -111,19 +127,11 @@ export default function SuporteDashboard() {
     ];
   }, [reviewStats]);
 
-  // Chart data: incidents by severity (bar)
+  // Ocorrências por tipo (título da ocorrência na app Multipark).
   const severityBarData = useMemo(() => {
     if (!incidentStats) return [];
-    // Count by severity from byType isn't available directly;
-    // we use the stats shape. Let's build from the overall stats.
-    // incidentStats only has: total, open, resolved, critical, byType
-    // We don't have per-severity counts from the stats endpoint,
-    // so we'll show byType instead as a useful alternative
-    return Object.entries(incidentStats.byType || {})
-      .map(([type, count]) => ({
-        name: TYPE_LABELS[type] || type,
-        count: count as number,
-      }))
+    return incidentStats.byType
+      .map((g) => ({ name: g.label, count: g.count }))
       .sort((a, b) => b.count - a.count);
   }, [incidentStats]);
 
@@ -220,8 +228,10 @@ export default function SuporteDashboard() {
             <div className="flex items-start justify-between gap-2">
               <div className="space-y-1 min-w-0">
                 <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Ocorrências Abertas</p>
-                <p className="text-2xl font-bold text-orange-700 tabular-nums truncate">{incidentStats?.open ?? 0}</p>
-                <p className="text-xs text-muted-foreground">{incidentStats?.total ?? 0} total</p>
+                <p className="text-2xl font-bold text-orange-700 tabular-nums truncate">{incidentStats ? incidentStats.open : "—"}</p>
+                <p className="text-xs text-muted-foreground">
+                  {incidentStats ? `${incidentStats.total} total · app Multipark` : incidentsFailed ? "Leitura falhou — não é 0" : !seesIncidents ? "Sem acesso" : ""}
+                </p>
               </div>
               <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-orange-100">
                 <AlertCircle className="h-5 w-5 text-orange-600" />
@@ -324,9 +334,11 @@ export default function SuporteDashboard() {
             <CardTitle className="text-base">Ocorrências por Tipo</CardTitle>
           </CardHeader>
           <CardContent>
-            {severityBarData.length === 0 ? (
+            {incidentsFailed ? (
+              <QueryErrorNote error={{ message: incidentsReason }} what="as ocorrências da app Multipark" onRetry={() => incidentsQ.refetch()} retrying={incidentsQ.isFetching} />
+            ) : severityBarData.length === 0 ? (
               <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
-                Sem dados de ocorrências
+                {seesIncidents ? "Sem ocorrências" : "Sem acesso às ocorrências"}
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
@@ -406,14 +418,3 @@ export default function SuporteDashboard() {
     </div>
   );
 }
-
-const TYPE_LABELS: Record<string, string> = {
-  vidro_aberto: "Vidro Aberto",
-  mal_estacionado: "Mal Estacionado",
-  dano: "Dano",
-  chave_errada: "Chave Errada",
-  combustivel: "Combustível",
-  limpeza: "Limpeza",
-  documentos: "Documentos",
-  outro: "Outro",
-};

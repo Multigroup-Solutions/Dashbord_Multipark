@@ -18,7 +18,7 @@ export const KIND_SOURCES: Record<string, string> = {
   google_reviews_alert: "Recolha do Google Business Profile (/api/cron/google-business), 1×/dia: média de estrelas dos últimos 7 dias abaixo da dos 90 dias anteriores e críticas Google sem resposta há mais de N horas (por perfil; vai à cidade do perfil).",
   google_account_reauth: "A autorização da tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada — 1× por mudança de estado.",
   incident_critical: "Ocorrência criada com gravidade crítica.",
-  incident_sla: "Cron horário: ocorrências fora do prazo (1×/dia, resumo por cidade).",
+  incident_sla: "Já não é enviado: as ocorrências vêm da app Multipark e as antigas do dashboard deixaram de ter lembretes (P3 16a).",
   lost_found_new: "Perdido registado.",
   lost_found_sla: "Cron horário: perdidos fora do prazo (1×/dia, resumo por cidade + responsável).",
   whatsapp_sla: "Cron: conversas por responder / urgentes / janela de 24h a fechar (resumo por cidade + responsável da conversa).",

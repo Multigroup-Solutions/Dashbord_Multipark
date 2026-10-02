@@ -2657,11 +2657,6 @@ export async function updateIncident(id: number, data: any) {
   await closeLinkedTasksIfResolved("incident", id, data?.status);
 }
 
-export async function deleteIncident(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(incidents).where(eq(incidents.id, id));
-}
-
 export async function getIncidentStats(filters?: { projectId?: number; noProject?: boolean }) {
   const db = await getDb(); if (!db) return { total: 0, open: 0, resolved: 0, critical: 0, byType: {} as Record<string, number> };
   const conditions: any[] = await projectFilterConds(incidents.projectId, filters?.noProject ? undefined : filters?.projectId);
