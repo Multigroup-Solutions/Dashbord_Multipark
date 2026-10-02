@@ -33,7 +33,7 @@ export function describeCallingDiagnosis(d: CallingDiagnosis): { ok: boolean; me
     const s = d.summary;
     if (!s.enabled) {
       ok = false;
-      parts.push("Chamadas DESATIVADAS neste número — ativa em WhatsApp → Chamadas → Configuração (super admin) ou no WhatsApp Manager → Números de telefone → Chamadas.");
+      parts.push("Chamadas DESATIVADAS neste número — ativa em WhatsApp → Por devolver → Configuração das chamadas (super admin; a lista abre em /whatsapp?chamadas=1) ou no WhatsApp Manager → Números de telefone → Chamadas.");
     } else {
       parts.push("Chamadas ativas no número.");
     }

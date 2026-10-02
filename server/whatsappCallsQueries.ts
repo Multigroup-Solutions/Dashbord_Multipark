@@ -146,7 +146,7 @@ export async function listPendingCallbacks(scope: number[] | undefined, nowMs = 
       FROM whatsapp_calls k
       JOIN whatsapp_conversations ON whatsapp_conversations.id = k.conversationId
       LEFT JOIN employees ON employees.id = whatsapp_conversations.employeeId
-     WHERE k.direction = 'in' AND k.status IN ('missed','rejected') AND k.callbackDoneAt IS NULL AND k.startedAt >= ${since}
+     WHERE k.direction = 'in' AND (k.status IN ('missed','rejected') OR k.missed = 1) AND k.callbackDoneAt IS NULL AND k.startedAt >= ${since}
        AND ${callScopeSql(scope)}
      ORDER BY k.startedAt DESC LIMIT 300`)) as any;
   return groupPendingCallbacks(

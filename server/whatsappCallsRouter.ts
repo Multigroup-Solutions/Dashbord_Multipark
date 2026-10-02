@@ -108,7 +108,15 @@ export const whatsappCallsRouter = router({
     const row = await assertCallVisible(input.id);
     const { answerCall } = await import("./whatsappCalls");
     const r = await answerCall(input.id, ctx.user.id, input.sdp, await deps());
-    if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+    if (!r.ok) {
+      // Não ligou: avisa os outros (por devolver) — antes ninguém sabia (17c).
+      // Só se foi ESTE atender que a marcou ("já não está contigo" não avisa).
+      if (r.missed) {
+        const { notifyMissedByIds } = await import("./whatsappCalls");
+        await notifyMissedByIds([input.id]).catch(() => undefined);
+      }
+      throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+    }
     await log(ctx.user.id, "whatsapp_call_answer", row.conversationId, `Chamada WhatsApp atendida (${maskPhone(row.phoneE164)})`);
     try {
       const { claimIfUnassigned } = await import("./whatsappInboxOps");

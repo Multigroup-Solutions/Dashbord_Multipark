@@ -16,6 +16,8 @@ Os clientes podem **ligar para o número de WhatsApp da empresa** e a chamada é
 4. **Recusar** termina a chamada do lado do cliente. **✕** só deixa de tocar no teu computador.
 5. Uma chamada do cliente abre (ou renova) a janela de 24 h, como uma mensagem: depois podes escrever-lhe texto livre.
 6. Se ninguém atender em cerca de 1 minuto, a chamada fica **perdida**: aparece na conversa e em **Chamadas perdidas por devolver** (faixa vermelha no topo da lista de conversas), e a equipa da cidade recebe a notificação **"Chamada WhatsApp perdida"**.
+7. Se alguém carregou em **Atender** mas a chamada **não chegou a ligar** (o cliente desligou entretanto, o microfone demorou, a Meta recusou), também conta como perdida: entra em **por devolver** e a equipa é avisada. Se o browser falhar antes de atender, a chamada volta a tocar para os outros.
+8. **Desligar** enquanto a nossa chamada ainda se prepara cancela-a — o telemóvel do cliente não chega a tocar (ou deixa de tocar).
 
 ## Aviso com o separador em segundo plano
 
@@ -23,6 +25,8 @@ Os clientes podem **ligar para o número de WhatsApp da empresa** e a chamada é
 - Para receber também um **aviso do sistema** ("Chamada WhatsApp de ..."), abre o **Perfil** e carrega em **Ativar notificações de chamadas** (uma vez em cada browser). Carregar no aviso traz o dashboard para a frente para atender.
 - Se o browser disser que as notificações estão bloqueadas: definições do site (cadeado ao lado do endereço) e permitir notificações.
 - Ao sair da conta, esse browser deixa de receber os avisos.
+- O aviso do sistema fecha-se sozinho cerca de 1 minuto depois (quando a chamada já deixou de tocar ou foi atendida por outra pessoa).
+- As horas nas chamadas são sempre de Lisboa.
 
 ## Ligar / devolver uma chamada
 
@@ -56,6 +60,9 @@ Passos:
 4. (Opcional) Para pedir autorização com a janela de 24 h fechada: criar no WhatsApp Manager um **template** com o botão "pedido de autorização de chamada" (componente `call_permission_request`), sem variáveis, e pôr o nome em `WHATSAPP_CALL_PERMISSION_TEMPLATE` (língua em `WHATSAPP_CALL_PERMISSION_TEMPLATE_LANG`, por omissão `pt_PT`).
 
 **Preços (Meta)**: chamadas **recebidas são grátis**. Chamadas **feitas pela empresa** pagam por minuto (blocos de 6 s, só quando o cliente atende), com tarifa do país de destino e escalões de volume mensais. O pedido de autorização é uma mensagem cobrada como as outras.
+
+## Quando a leitura falha
+- A lista **por devolver**, as chamadas da conversa e a configuração das chamadas mostram **"Não foi possível carregar…"** com **Tentar de novo** — nunca "Nada por devolver" nem o formulário com tudo desligado. No topo da lista, o contador passa a "por devolver: ?".
 
 ## Problemas comuns
 

@@ -14,16 +14,25 @@ self.addEventListener("push", (event) => {
     data = {};
   }
   const title = data.title || "Chamada WhatsApp";
+  const tag = data.tag || "wa-call";
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body: data.body || "Abre o dashboard para atender.",
-      tag: data.tag || "wa-call",
-      renotify: true,
-      requireInteraction: true,
-      icon: "/icon.png",
-      badge: "/icon.png",
-      data: { url: data.url || "/whatsapp" },
-    }),
+    (async () => {
+      await self.registration.showNotification(title, {
+        body: data.body || "Abre o dashboard para atender.",
+        tag,
+        renotify: true,
+        requireInteraction: true,
+        icon: "/icon.png",
+        badge: "/icon.png",
+        data: { url: data.url || "/whatsapp" },
+      });
+      // Uma chamada deixa de tocar ao fim de ~1 min (atendida por outra
+      // pessoa, perdida): o aviso fecha-se sozinho em vez de ficar horas no
+      // ecrã. (Um 2.º push "fechar" obrigava o Chrome a mostrar outro aviso.)
+      await new Promise((resolve) => setTimeout(resolve, 70000));
+      const open = await self.registration.getNotifications({ tag });
+      open.forEach((n) => n.close());
+    })(),
   );
 });
 
