@@ -9,22 +9,24 @@ import { StatValue } from "@/components/StatValue";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard, CalendarCheck, ArrowDownToLine, ArrowUpFromLine,
-  XCircle, Euro, Activity, MapPin, Building2, PieChart as PieIcon, CalendarDays,
+  XCircle, Euro, Activity, MapPin, Building2, PieChart as PieIcon, CalendarDays, AlertTriangle, RefreshCw,
 } from "lucide-react";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
 import { QuickRangeBar, thisMonthRange, previousPeriod } from "@/components/QuickRangeBar";
 import DateRangeNav from "@/components/DateRangeNav";
 import ReservasDoDia from "@/components/operacoes/ReservasDoDia";
 import OpsList, { defaultOpsShared, type OpsListShared } from "@/components/operacoes/OpsList";
-import { OPS_LIST_KINDS, OPS_LIST_LABELS } from "@shared/opsLists";
+import { OPS_LIST_KINDS, OPS_LIST_LABELS, OPS_LIST_MAX_DAYS, rangeDays } from "@shared/opsLists";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { cohortCancelRate } from "@shared/operationsDaily";
+import { retryTransient } from "@/lib/queryRetry";
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6"];
 
-function MiniPie({ title, icon, data }: { title: string; icon?: React.ReactNode; data: Array<{ name: string; value: number }> }) {
+function MiniPie({ title, icon, data, loading }: { title: string; icon?: React.ReactNode; data: Array<{ name: string; value: number }>; loading?: boolean }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   return (
     <Card>
@@ -32,7 +34,9 @@ function MiniPie({ title, icon, data }: { title: string; icon?: React.ReactNode;
         <CardTitle className="text-sm flex items-center gap-2">{icon}{title}</CardTitle>
       </CardHeader>
       <CardContent>
-        {total === 0 ? (
+        {loading ? (
+          <p className="text-xs text-muted-foreground text-center py-12">A carregar…</p>
+        ) : total === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-12">Sem dados</p>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
@@ -93,9 +97,16 @@ export default function OperacoesPage() {
   // "Serviços" saiu daqui (fica no menu, em /servicos) → Dashboard.
   const tab = OPERACOES_TABS.includes(storedTab) ? storedTab : "dashboard";
   // Filtros das listas por período, PARTILHADOS entre Reservas / Recolhas /
-  // Entregas / Cancelados (mudar de aba mantém o período). Abrem sempre em HOJE.
+  // Entregas / Cancelados (mudar de aba mantém o período). Abrem em HOJE, ou no
+  // período do Dashboard quando se chega por um cartão.
   const [listShared, setListShared] = useState<OpsListShared>(listSeedFromUrl);
   const patchShared = (patch: Partial<OpsListShared>) => setListShared((s) => ({ ...s, ...patch }));
+  // Cartão do Dashboard → lista no MESMO período (se couber nos 62 dias das listas).
+  const jumpToList = (target: string, range: { from: string; to: string }) => {
+    const n = rangeDays(range.from, range.to);
+    if (n > 0 && n <= OPS_LIST_MAX_DAYS) patchShared({ from: range.from, to: range.to });
+    setTab(target);
+  };
   return (
     <div className="space-y-6 max-w-[1400px] mx-auto">
       <div>
@@ -116,7 +127,7 @@ export default function OperacoesPage() {
 
         <TabsContent value="dashboard" className="mt-4 space-y-4">
           <BookingAlerts />
-          <OperacoesDashboard onJump={setTab} />
+          <OperacoesDashboard onJump={jumpToList} />
         </TabsContent>
         <TabsContent value="dia" className="mt-4">
           <ReservasDoDia />
@@ -133,7 +144,7 @@ export default function OperacoesPage() {
 
 // ─── Dashboard simples ───────────────────────────────────────────────────────
 
-function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
+function OperacoesDashboard({ onJump }: { onJump: (tab: string, range: { from: string; to: string }) => void }) {
   const [defFrom, defTo] = thisMonthRange();
   // Datas PARTILHADAS com as folhas (mesmas keys) — mudar o período aqui ou
   // numa folha mantém-no em todas as abas das Operações
@@ -147,15 +158,19 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
   const globalFilters = useGlobalFilters();
   const summaryQ = trpc.multipark.operationsSummary.useQuery(
     { startDate: from, endDate: to, projectId: globalFilters.projectId },
-    { refetchOnWindowFocus: false },
+    { refetchOnWindowFocus: false, retry: retryTransient },
   );
 
   // Período anterior (mesma duração) — só corre quando "comparar" está ligado
   const [pf, pt] = previousPeriod(from, to);
   const prevQ = trpc.multipark.operationsSummary.useQuery(
     { startDate: pf, endDate: pt, projectId: globalFilters.projectId },
-    { refetchOnWindowFocus: false, enabled: compare },
+    { refetchOnWindowFocus: false, enabled: compare, retry: retryTransient },
   );
+  // Sem resposta (ou sem o período anterior) não há números: nunca zeros a fingir.
+  const ready = !!summaryQ.data;
+  const prevReady = compare && !!prevQ.data;
+  const jump = (tab: string) => onJump(tab, { from, to });
 
   const actions = summaryQ.data?.actions;
   const stats = useMemo(() => ({
@@ -217,45 +232,62 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
             <div className="text-xs text-muted-foreground ml-auto mb-2">
               {isLoading ? "A carregar..." : `${from} → ${to}`}
               {compare && <span className="block">vs {pf} → {pt}</span>}
+              {compare && prevQ.error && <span className="block text-amber-700">Sem o período anterior (a Multipark não respondeu).</span>}
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* KPIs clicáveis */}
+      {summaryQ.error && !ready && (
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardContent className="p-4 text-sm flex flex-wrap items-start gap-3">
+            <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">Não foi possível ler as reservas da Multipark.</p>
+              <p className="text-muted-foreground">{summaryQ.error.message}</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => summaryQ.refetch()} disabled={summaryQ.isFetching}>
+              <RefreshCw className={`w-4 h-4 mr-1 ${summaryQ.isFetching ? "animate-spin" : ""}`} /> Tentar de novo
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {!summaryQ.error || ready ? (<>
+      {/* KPIs clicáveis — só parques NOSSOS, sem compras online por acabar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           icon={<CalendarCheck className="w-5 h-5 text-blue-600" />}
           label="Reservas criadas"
-          value={stats.criadas}
-          sub={`${stats.reservas} não canceladas · ${stats.criadas - stats.reservas} já canceladas`}
-          extra={`${fmtEur(stats.reservasReceita)} c/ IVA (não canceladas)`}
-          compareValue={compare ? prevStats.criadas : undefined}
-          onClick={() => onJump("reservas")}
+          value={ready ? stats.criadas : null}
+          sub={ready ? `${stats.reservas} não canceladas · ${stats.criadas - stats.reservas} já canceladas` : undefined}
+          extra={ready ? `${fmtEur(stats.reservasReceita)} c/ IVA (não canceladas)` : undefined}
+          compareValue={prevReady ? prevStats.criadas : undefined}
+          onClick={() => jump("reservas")}
         />
         <KpiCard
           icon={<ArrowDownToLine className="w-5 h-5 text-emerald-600" />}
           label="Recolhas"
-          value={stats.recolhas}
-          compareValue={compare ? prevStats.recolhas : undefined}
-          onClick={() => onJump("entradas")}
+          value={ready ? stats.recolhas : null}
+          compareValue={prevReady ? prevStats.recolhas : undefined}
+          onClick={() => jump("entradas")}
         />
         <KpiCard
           icon={<ArrowUpFromLine className="w-5 h-5 text-amber-600" />}
           label="Entregas"
-          value={stats.entregas}
-          extra={`${fmtEur(stats.entregasReceita)} c/ IVA`}
-          compareValue={compare ? prevStats.entregas : undefined}
-          onClick={() => onJump("saidas")}
+          value={ready ? stats.entregas : null}
+          extra={ready ? `${fmtEur(stats.entregasReceita)} c/ IVA` : undefined}
+          compareValue={prevReady ? prevStats.entregas : undefined}
+          onClick={() => jump("saidas")}
         />
         <KpiCard
           icon={<XCircle className="w-5 h-5 text-red-600" />}
           label="Cancelamentos no período"
-          value={stats.cancelados}
-          extra={`${fmtEur(stats.canceladosReceita)} c/ IVA`}
-          compareValue={compare ? prevStats.cancelados : undefined}
+          value={ready ? stats.cancelados : null}
+          extra={ready ? `${fmtEur(stats.canceladosReceita)} c/ IVA` : undefined}
+          compareValue={prevReady ? prevStats.cancelados : undefined}
           invertDelta
-          onClick={() => onJump("cancelados")}
+          onClick={() => jump("cancelados")}
         />
       </div>
 
@@ -304,15 +336,16 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <MiniPie title={`Reservas não canceladas por ${dimLabel}`} icon={<CalendarCheck className="w-3.5 h-3.5 text-blue-600" />} data={pies.reservas} />
-          <MiniPie title={`Recolhas por ${dimLabel}`} icon={<ArrowDownToLine className="w-3.5 h-3.5 text-emerald-600" />} data={pies.recolhas} />
-          <MiniPie title={`Entregas por ${dimLabel}`} icon={<ArrowUpFromLine className="w-3.5 h-3.5 text-amber-600" />} data={pies.entregas} />
+          <MiniPie title={`Reservas não canceladas por ${dimLabel}`} icon={<CalendarCheck className="w-3.5 h-3.5 text-blue-600" />} data={pies.reservas} loading={!ready} />
+          <MiniPie title={`Recolhas por ${dimLabel}`} icon={<ArrowDownToLine className="w-3.5 h-3.5 text-emerald-600" />} data={pies.recolhas} loading={!ready} />
+          <MiniPie title={`Entregas por ${dimLabel}`} icon={<ArrowUpFromLine className="w-3.5 h-3.5 text-amber-600" />} data={pies.entregas} loading={!ready} />
         </div>
       </div>
+      </>) : null}
 
       <p className="text-xs text-muted-foreground flex items-center gap-1">
         <Activity className="w-3 h-3" />
-        Clica num cartão para abrir a lista da secção (abre em hoje)
+        Só parques nossos e sem as compras online por acabar. Clica num cartão para abrir a lista no mesmo período (até {OPS_LIST_MAX_DAYS} dias); a lista mostra também os parques Marketplace e diz quantas são dos nossos.
       </p>
     </div>
   );
@@ -320,8 +353,8 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string) => void }) {
 
 function KpiCard({
   icon, label, value, sub, extra, onClick, compareValue, invertDelta,
-}: { icon: React.ReactNode; label: string; value: number; sub?: string; extra?: string; onClick?: () => void; compareValue?: number; invertDelta?: boolean }) {
-  const delta = compareValue != null ? value - compareValue : null;
+}: { icon: React.ReactNode; label: string; value: number | null; sub?: string; extra?: string; onClick?: () => void; compareValue?: number; invertDelta?: boolean }) {
+  const delta = compareValue != null && value != null ? value - compareValue : null;
   const pct = compareValue != null && compareValue > 0 ? (delta! / compareValue) * 100 : null;
   // Para cancelados, subir é mau (invertDelta) → cor invertida.
   const positive = delta == null ? false : (invertDelta ? delta < 0 : delta > 0);
@@ -340,7 +373,7 @@ function KpiCard({
         <div className="p-2 rounded-lg bg-muted self-start shrink-0">{icon}</div>
         <div className="min-w-0 flex-1">
           <p className="text-xs text-muted-foreground leading-snug">{label}</p>
-          <StatValue value={value.toLocaleString("pt-PT")} min={18} max={24} />
+          <StatValue value={value == null ? "…" : value.toLocaleString("pt-PT")} min={18} max={24} />
           {sub && <p className="text-[11px] leading-snug text-muted-foreground tabular-nums">{sub}</p>}
           {extra && <p className="text-xs leading-snug text-muted-foreground tabular-nums mt-0.5"><Euro className="w-3 h-3 inline -mt-0.5" aria-hidden /> {extra}</p>}
           {delta != null && (

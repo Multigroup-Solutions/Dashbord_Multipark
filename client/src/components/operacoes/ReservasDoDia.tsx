@@ -140,6 +140,17 @@ export default function ReservasDoDia() {
             <Counter icon={<ArrowUpFromLine className="w-4 h-4 text-amber-600" />} label="Saídas" value={summary.saidas} sub={summary.saidasPorFazer ? `${summary.saidasPorFazer} por fazer` : undefined} onClick={() => setKind(kind === "saida" ? "todas" : "saida")} active={kind === "saida"} />
             <Counter icon={<XCircle className="w-4 h-4 text-red-600" />} label="Canceladas" value={summary.canceladas} onClick={() => setState(state === "CANCELLED" ? "ativas" : "CANCELLED")} active={state === "CANCELLED"} />
           </div>
+          {summary.pendentes > 0 && (
+            <button
+              type="button"
+              onClick={() => setState(state === "PENDING" ? "ativas" : "PENDING")}
+              aria-pressed={state === "PENDING"}
+              className={`text-xs rounded-md border px-2 py-1 transition-colors ${state === "PENDING" ? "bg-primary/10 ring-1 ring-primary" : "bg-background hover:bg-muted"} text-muted-foreground`}
+              title="Compras online que o cliente não acabou (estado Pendente). Não contam nas entradas nem nas saídas."
+            >
+              + {summary.pendentes} {summary.pendentes === 1 ? "compra online por acabar" : "compras online por acabar"} (fora das contas){state === "PENDING" ? " — a mostrar" : " — ver"}
+            </button>
+          )}
           <div className="flex flex-wrap gap-1.5">
             {summary.groups.map((g) => (
               <Badge key={g.key} variant="outline" className="text-xs py-1 px-2 font-normal">
@@ -192,7 +203,7 @@ export default function ReservasDoDia() {
           <Select value={state} onValueChange={setState}>
             <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="ativas">Sem canceladas</SelectItem>
+              <SelectItem value="ativas">Sem canceladas nem pendentes</SelectItem>
               <SelectItem value="todas">Todas</SelectItem>
               {BOOKING_STATUSES.map((s) => <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>)}
             </SelectContent>

@@ -2,7 +2,7 @@
 modulo: reservas_operacoes
 titulo: Reservas do dia (entradas e saídas)
 rotas: /operacoes
-palavras: lista de reservas, lista do dia, entradas e saídas, movimentos do dia, entradas, saídas, recolhas, entregas, check-in, check-out, parque, parques, airpark, redpark, skypark, outros parques, parques que a operação não faz, excluir parque, firebaseBrand, voo, eta, lugar, garagem, cancelada, multipark
+palavras: lista de reservas, lista do dia, entradas e saídas, movimentos do dia, entradas, saídas, recolhas, entregas, check-in, check-out, parque, parques, airpark, redpark, skypark, outros parques, parques que a operação não faz, excluir parque, firebaseBrand, voo, eta, lugar, garagem, cancelada, pendente, compra por acabar, multipark
 ---
 # Reservas do dia
 
@@ -35,9 +35,10 @@ Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **u
 
 **Contadores e filtros**
 - No topo: **entradas**, **saídas** (com as que ainda estão por fazer), **canceladas** e as entradas/saídas de cada parque. Clicar num contador filtra.
-- Filtros: **Entradas / Saídas / Todas**, **parque**, **estado** (por omissão sem as canceladas) e **pesquisa** pelo n.º da reserva, matrícula ou nome do cliente.
+- As **compras online por acabar** (estado **Pendente**: o cliente começou a compra no site e não a acabou) **não contam** nas entradas nem nas saídas, como no Dashboard, na Faturação, no CRM e nos Serviços. Quando há alguma, aparece por baixo dos contadores **"+ N compras online por acabar (fora das contas)"**: clicar mostra-as (e clicar de novo volta à lista normal).
+- Filtros: **Entradas / Saídas / Todas**, **parque**, **estado** (por omissão **sem canceladas nem pendentes**; "Todas" mostra tudo) e **pesquisa** pelo n.º da reserva, matrícula ou nome do cliente.
 
-**Se aparecer "Reservas indisponíveis"**, a base de dados da Multipark não respondeu. Tenta de novo daqui a pouco.
+**Se aparecer "Reservas indisponíveis" ou "Erro a carregar as reservas"**, a base de dados da Multipark não respondeu. Carrega em **Atualizar** daqui a pouco.
 
 Cada pessoa só vê os parques das suas cidades.
 

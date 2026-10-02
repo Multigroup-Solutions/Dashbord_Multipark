@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertTriangle, Car, ChevronDown, ChevronRight, Clock, CreditCard, ExternalLink, FileSearch, FileText, Info, Lock,
-  MapPin, MessageSquare, PenLine, Search, Sparkles, Star, User, Video,
+  MapPin, MessageSquare, PenLine, RefreshCw, Search, Sparkles, Star, User, Video,
 } from "lucide-react";
 
 /**
@@ -64,6 +64,19 @@ function UnavailableNote({ reason }: { reason: string }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
       <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" /> <span>{reason}</span>
+    </div>
+  );
+}
+
+/** Erro ≠ vazio: a secção diz que falhou e deixa tentar de novo. */
+function QueryErrorNote({ error, onRetry, retrying }: { error: { message: string }; onRetry: () => void; retrying?: boolean }) {
+  return (
+    <div className="flex flex-wrap items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-900">
+      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+      <span className="min-w-0 flex-1">Não foi possível carregar: {error.message}</span>
+      <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={onRetry} disabled={retrying}>
+        <RefreshCw className={`w-3 h-3 mr-1 ${retrying ? "animate-spin" : ""}`} /> Tentar de novo
+      </Button>
     </div>
   );
 }
@@ -167,7 +180,7 @@ function BookingFile({ refValue }: { refValue: string }) {
   const d = main.data;
 
   if (main.isLoading) return <Card className="p-6"><Loading /></Card>;
-  if (main.error) return <Card className="p-6"><UnavailableNote reason={main.error.message} /></Card>;
+  if (main.error) return <Card className="p-6"><QueryErrorNote error={main.error} onRetry={() => main.refetch()} retrying={main.isFetching} /></Card>;
   if (!d) return null;
   if (!d.available) return <Card className="p-6"><UnavailableNote reason={`Ficha indisponível de momento. ${(d as Unavail).reason}`} /></Card>;
   if (d.kind === "not_found") {
@@ -184,7 +197,7 @@ function BookingFile({ refValue }: { refValue: string }) {
               <Badge className={STATUS_TONE[c.status ?? ""] ?? ""}>{c.statusLabel}</Badge>
               <span>{c.parkName ?? "—"}{c.parkCity ? ` (${c.parkCity})` : ""}</span>
               <span>{c.plate ?? ""}</span>
-              <span className="text-muted-foreground">{c.checkInDate ?? "?"} → {c.checkOutDate ?? "?"}</span>
+              <span className="text-muted-foreground">{c.checkInDate ? fmtPTDate(c.checkInDate) : "?"} → {c.checkOutDate ? fmtPTDate(c.checkOutDate) : "?"}</span>
             </Link>
           ))}
         </CardContent>
@@ -218,7 +231,8 @@ function FoundFile({ data, scope }: { data: MainFound; scope: { projectId?: numb
           <ClientVehicle data={data} scope={scope} />
           <EvidenceSection data={data} scope={scope} />
           <TimelineSection id={id} scope={scope} />
-          <AccountsSection core={b} accounts={accounts.data} loading={accounts.isLoading} currency={cur} />
+          <AccountsSection core={b} accounts={accounts.data} loading={accounts.isLoading} currency={cur}
+            error={accounts.error} onRetry={() => accounts.refetch()} retrying={accounts.isFetching} />
           <BookingCashCheck id={id} scope={scope} />
           <ExtrasSection id={id} scope={scope} currency={cur} />
           <CommunicationSection id={id} scope={scope} />
@@ -362,7 +376,7 @@ function EvidenceSection({ data, scope }: { data: MainFound; scope: { projectId?
         <Field label="Assinaturas">
           {!hasSigs ? "Sem assinaturas" : !showSigs ? (
             <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowSigs(true)}><PenLine className="w-3 h-3 mr-1" /> Mostrar assinaturas</Button>
-          ) : sigs.isLoading ? <Loading /> : null}
+          ) : sigs.isLoading ? <Loading /> : sigs.error ? <QueryErrorNote error={sigs.error} onRetry={() => sigs.refetch()} retrying={sigs.isFetching} /> : null}
         </Field>
       </div>
       {showSigs && sigs.data && (sigs.data.available ? (
@@ -373,7 +387,7 @@ function EvidenceSection({ data, scope }: { data: MainFound; scope: { projectId?
       ) : <UnavailableNote reason={(sigs.data as Unavail).reason} />)}
       <div>
         <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Anexos</div>
-        {ev.isLoading ? <Loading /> : !e ? null : !e.available ? <UnavailableNote reason={(e as Unavail).reason} /> : e.attachments.length === 0 ? (
+        {ev.isLoading ? <Loading /> : ev.error ? <QueryErrorNote error={ev.error} onRetry={() => ev.refetch()} retrying={ev.isFetching} /> : !e ? null : !e.available ? <UnavailableNote reason={(e as Unavail).reason} /> : e.attachments.length === 0 ? (
           <p className="text-xs text-muted-foreground">Sem anexos.</p>
         ) : (
           <ul className="mt-1 space-y-1">
@@ -396,7 +410,7 @@ function TimelineSection({ id, scope }: { id: string; scope: { projectId?: numbe
   const shown = all ? entries : entries.slice(0, 40);
   return (
     <Section title="Linha do tempo" icon={<Clock className="w-4 h-4" />} lazy onOpen={() => setEnabled(true)} right={d?.available ? `${entries.length}` : undefined}>
-      {q.isLoading || (!d && enabled) ? <Loading /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
+      {q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} /> : q.isLoading || (!d && enabled) ? <Loading /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
         <>
           <MissingNote missing={d.missing} />
           {entries.length === 0 && <p className="text-xs text-muted-foreground">Sem histórico (o sistema da Multipark só guarda histórico desde 2 mar 2026).</p>}
@@ -468,7 +482,9 @@ function Validation({ label, v }: { label: string; v: { done: boolean; at: strin
   );
 }
 
-function AccountsSection({ core, accounts, loading, currency }: { core: MainFound["core"]; accounts: any; loading: boolean; currency: string }) {
+function AccountsSection({ core, accounts, loading, currency, error, onRetry, retrying }: {
+  core: MainFound["core"]; accounts: any; loading: boolean; currency: string; error: { message: string } | null; onRetry: () => void; retrying: boolean;
+}) {
   const a = accounts;
   return (
     <Section title="Contas" icon={<CreditCard className="w-4 h-4" />}>
@@ -477,7 +493,7 @@ function AccountsSection({ core, accounts, loading, currency }: { core: MainFoun
         <Validation label="Dinheiro conferido" v={core.cashier.cashValidated} />
         <Validation label="Caixa fechada" v={core.cashier.cashierClosed} />
       </div>
-      {loading ? <Loading /> : !a ? null : !a.available ? <UnavailableNote reason={a.reason} /> : (
+      {loading ? <Loading /> : error ? <QueryErrorNote error={error} onRetry={onRetry} retrying={retrying} /> : !a ? null : !a.available ? <UnavailableNote reason={a.reason} /> : (
         <>
           <MissingNote missing={a.missing} />
           <div>
@@ -535,7 +551,7 @@ function ExtrasSection({ id, scope, currency }: { id: string; scope: { projectId
   const d = q.data;
   return (
     <Section title="Serviços extra" icon={<Sparkles className="w-4 h-4" />}>
-      {q.isLoading ? <Loading /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : d.extras.length === 0 ? (
+      {q.isLoading ? <Loading /> : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : d.extras.length === 0 ? (
         <p className="text-xs text-muted-foreground">Sem serviços extra.</p>
       ) : (
         <ul className="space-y-1 text-xs">
@@ -559,7 +575,7 @@ function CommunicationSection({ id, scope }: { id: string; scope: { projectId?: 
   const d = q.data;
   return (
     <Section title="Comunicação (app Multipark)" icon={<MessageSquare className="w-4 h-4" />} lazy onOpen={() => setEnabled(true)}>
-      {q.isLoading || (!d && enabled) ? <Loading /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
+      {q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} /> : q.isLoading || (!d && enabled) ? <Loading /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
         <>
           <MissingNote missing={d.missing} />
           <div>
@@ -595,7 +611,7 @@ function FeedbackSection({ id, scope }: { id: string; scope: { projectId?: numbe
   const d = q.data;
   return (
     <Section title="Ocorrências e avaliação" icon={<AlertTriangle className="w-4 h-4" />}>
-      {q.isLoading ? <Loading /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
+      {q.isLoading ? <Loading /> : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
         <>
           <MissingNote missing={d.missing} />
           {d.occurrences.length === 0 ? <p className="text-xs text-muted-foreground">Sem ocorrências na app Multipark.</p> : (
@@ -640,7 +656,7 @@ function OurCases({ id, code, email, scope }: { id: string; code: string | null;
     <Card>
       <CardHeader className="py-3"><CardTitle className="flex items-center gap-2 text-sm"><FileText className="w-4 h-4" /> Os nossos casos</CardTitle></CardHeader>
       <CardContent className="space-y-2 pt-0 text-xs">
-        {q.isLoading ? <Loading /> : !d ? null : (
+        {q.isLoading ? <Loading /> : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} /> : !d ? null : (
           <>
             {!d.canComplaints && !d.canLost && <p className="text-muted-foreground">Sem acesso a reclamações nem a perdidos e achados.</p>}
             {d.canComplaints && (

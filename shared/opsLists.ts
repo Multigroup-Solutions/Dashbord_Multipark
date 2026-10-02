@@ -218,6 +218,13 @@ export interface OpsListSummary {
   /** Cancelados: com reembolso pedido e o valor reembolsado. */
   refund: number;
   refunded: number;
+  /**
+   * Quantas são de parques NOSSOS e, dessas, quantas têm data aproximada (só
+   * nos cancelados). O Dashboard das Operações conta `ours - oursApprox`: só
+   * parques nossos e só cancelamentos com registo na Multipark.
+   */
+  ours: number;
+  oursApprox: number;
   byPark: OpsParkCount[];
   byGroup: OpsGroupCount[];
   byChannel: OpsChannelCount[];
@@ -249,7 +256,7 @@ export function summarizeOps(kind: OpsListKind, rows: OpsAggRow[], parks: OpsPar
   const reasons = new Map<string, OpsReasonCount>();
   const s: OpsListSummary = {
     total: 0, prevTotal: 0, value: 0, paid: 0, toPay: 0, active: 0, cancelled: 0, cancelledValue: 0, done: 0, pending: 0,
-    approx: 0, refund: 0, refunded: 0, byPark: [], byGroup: [], byChannel: [], byReason: [],
+    approx: 0, refund: 0, refunded: 0, ours: 0, oursApprox: 0, byPark: [], byGroup: [], byChannel: [], byReason: [],
   };
   for (const r of rows) {
     const park = parkById.get(r.parkId);
@@ -265,6 +272,7 @@ export function summarizeOps(kind: OpsListKind, rows: OpsAggRow[], parks: OpsPar
     if (!r.current) { s.prevTotal += r.count; g.prevCount += r.count; p.prevCount += r.count; continue; }
     s.total += r.count; g.count += r.count; p.count += r.count; p.value += r.value;
     s.approx += r.approx; s.refund += r.refund; s.refunded += r.refunded;
+    if (ours) { s.ours += r.count; s.oursApprox += r.approx; }
     if (kind === "reservas" && r.status === "CANCELLED") { s.cancelled += r.count; s.cancelledValue += r.value; continue; }
     // Valores: nas Reservas só as não canceladas contam (como na lista antiga).
     s.value += r.value; s.paid += r.paid; s.toPay += r.toPay;

@@ -177,6 +177,8 @@ export default function OpsList({ kind, shared, onShared }: { kind: OpsListKind;
 
   const eventLabel = OPS_LIST_EVENT_LABELS[kind];
   const pageFrom = page * PAGE_SIZE;
+  // Sem filtros a lista compara-se com o cartão do Dashboard (mesmo período).
+  const unfiltered = state === "all" && !shared.channel && !shared.parkId && !shared.search.trim();
 
   return (
     <div className="space-y-4 min-w-0">
@@ -251,6 +253,16 @@ export default function OpsList({ kind, shared, onShared }: { kind: OpsListKind;
           {kind === "cancelados" && s.approx > 0 && (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
               {fmtN(s.approx)} de {fmtN(s.total)} sem registo de cancelamento na Multipark — datadas pela última alteração da reserva (aproximado, assinaladas com ≈).
+            </p>
+          )}
+          {unfiltered && s.ours - s.oursApprox !== s.total && (
+            <p className="text-xs text-muted-foreground">
+              No Dashboard das Operações: <b className="text-foreground">{fmtN(s.ours - s.oursApprox)}</b> (só parques nossos
+              {s.oursApprox > 0 ? ", sem as de data aproximada" : ""}). Aqui entram também{" "}
+              {[
+                s.total > s.ours ? `${fmtN(s.total - s.ours)} de parques Marketplace` : null,
+                s.oursApprox > 0 ? `${fmtN(s.oursApprox)} de parques nossos com data aproximada` : null,
+              ].filter(Boolean).join(" e ")}.
             </p>
           )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">

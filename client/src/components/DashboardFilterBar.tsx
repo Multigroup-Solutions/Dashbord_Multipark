@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import DateRangeNav, { type DateGran } from "@/components/DateRangeNav";
+import { lisbonDayOf } from "@shared/lisbonDay";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -18,11 +19,11 @@ import {
 export function useDashboardFilters(defaults?: { from?: string; to?: string }) {
   const globalFilters = useGlobalFilters();
 
-  const now = new Date();
-  const defaultFrom =
-    defaults?.from ??
-    new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const defaultTo = defaults?.to ?? now.toISOString().slice(0, 10);
+  // Dias de Lisboa: o toISOString() dava o dia UTC (no verão, o dia 1 às 00:00
+  // de Lisboa ainda é o último dia do mês anterior em UTC).
+  const today = lisbonDayOf(Date.now());
+  const defaultFrom = defaults?.from ?? `${today.slice(0, 7)}-01`;
+  const defaultTo = defaults?.to ?? today;
 
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);

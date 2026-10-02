@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { useIsMobile } from "@/hooks/useMobile";
 import { trpc } from "@/lib/trpc";
-import { fmtPTDate } from "@/lib/lisbonTime";
+import { isForbidden, retryTransient } from "@/lib/queryRetry";
 import { addDays, lisbonDayOf } from "@shared/lisbonDay";
+import { Button } from "@/components/ui/button";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
 import { StatValue } from "@/components/StatValue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +29,8 @@ import {
   Car,
   Shield,
   Loader2,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -107,40 +110,43 @@ function ChartTooltip({ active, payload, label }: any) {
 
 export default function OperacoesDashboard() {
   const isMobile = useIsMobile();
-  // Default date range: 30 days ago to today
-  const thirtyDaysAgo = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  }, []);
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Por omissão: os últimos 30 dias (dias de Lisboa, hoje incluído).
+  const today = useMemo(() => lisbonDayOf(Date.now()), []);
+  const thirtyDaysAgo = useMemo(() => addDays(today, -29), [today]);
 
   const filters = useDashboardFilters({ from: thirtyDaysAgo, to: today });
 
   // ── Queries ──
 
-  const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery({
-    from: filters.from,
-    to: filters.to,
-    projectId: filters.projectId,
-  });
+  const bk = trpc.multipark.bookingStats.useQuery(
+    { from: filters.from, to: filters.to, projectId: filters.projectId },
+    { retry: retryTransient },
+  );
+  const bookingStats = bk.data;
+  const bkLoading = bk.isLoading;
+  // Erro ≠ zero: sem números mostra-se "—" e o motivo, nunca 0.
+  const bkError = bk.error && !bookingStats ? bk.error : null;
+  const bkValue = (n: number | undefined) => (bookingStats ? fmtNum(n ?? 0) : "—");
 
   // GPS de ontem (Zello): km, velocidades e condutores — substitui os antigos
   // KPIs mortos (viaturas/violações manuais, tabelas sempre vazias)
   // Ontem no calendário de Lisboa (antes era UTC). Os dados de ontem são os da
   // recolha provisória (23:15–23:55); a final (D-2) substitui-os 2 dias depois.
   const yesterdayStr = useMemo(() => addDays(lisbonDayOf(Date.now()), -1), []);
-  const { data: gpsYesterday = [], isLoading: gpsLoading } =
-    trpc.operational.driverHistory.byDate.useQuery({ date: yesterdayStr });
+  const gpsQ = trpc.operational.driverHistory.byDate.useQuery({ date: yesterdayStr }, { retry: retryTransient });
+  const gpsYesterday = gpsQ.data ?? [];
+  const gpsLoading = gpsQ.isLoading;
+  const gpsError = gpsQ.error && !gpsQ.data ? gpsQ.error : null;
 
   // ── Derived data ──
 
   // Area chart: reservas by day from bookingStats
   const areaChartData = useMemo(() => {
     if (!bookingStats?.byDay?.length) return [];
+    // "YYYY-MM-DD" (dia de Lisboa) → "dd/mm", sem passar por Date (fuso do browser).
     return bookingStats.byDay.map((d) => ({
       ...d,
-      label: new Date(d.date).toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" }),
+      label: `${d.date.slice(8, 10)}/${d.date.slice(5, 7)}`,
     }));
   }, [bookingStats]);
 
@@ -194,46 +200,72 @@ export default function OperacoesDashboard() {
         onBrandChange={filters.setBrandId}
       />
 
-      {/* KPIs */}
+      {bkError && (
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardContent className="p-4 text-sm flex flex-wrap items-start gap-3">
+            <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              {isForbidden(bkError) ? (
+                <>
+                  <p className="font-medium">Sem acesso aos números das reservas.</p>
+                  <p className="text-muted-foreground">Estes cartões pedem a permissão de ver os totais do Financeiro. As listas das Operações (/operacoes) mostram as reservas a quem vê Reservas &amp; Operações.</p>
+                </>
+              ) : (
+                <>
+                  <p className="font-medium">Não foi possível ler as reservas da Multipark.</p>
+                  <p className="text-muted-foreground">{bkError.message}</p>
+                </>
+              )}
+            </div>
+            {!isForbidden(bkError) && (
+              <Button variant="outline" size="sm" onClick={() => bk.refetch()} disabled={bk.isFetching}>
+                <RefreshCw className={`w-4 h-4 mr-1 ${bk.isFetching ? "animate-spin" : ""}`} /> Tentar de novo
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* KPIs (reservas: parques nossos, sem compras online por acabar) */}
       <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3 sm:gap-4">
         <KPICard
           icon={CalendarCheck}
           label="Reservas hoje"
-          value={fmtNum(bookingStats?.reservasHoje ?? 0)}
+          value={bkValue(bookingStats?.reservasHoje)}
           loading={bkLoading}
         />
         <KPICard
           icon={ArrowDownToLine}
           label="Check-ins hoje"
-          value={fmtNum(bookingStats?.checkinHoje ?? 0)}
+          value={bkValue(bookingStats?.checkinHoje)}
           loading={bkLoading}
           color="text-green-600"
         />
         <KPICard
           icon={ArrowUpFromLine}
           label="Check-outs hoje"
-          value={fmtNum(bookingStats?.checkoutHoje ?? 0)}
+          value={bkValue(bookingStats?.checkoutHoje)}
           loading={bkLoading}
           color="text-blue-600"
         />
         <KPICard
           icon={XCircle}
           label="Cancelados hoje"
-          value={fmtNum(bookingStats?.canceladosHoje ?? 0)}
+          value={bkValue(bookingStats?.canceladosHoje)}
           loading={bkLoading}
           color="text-red-600"
         />
         <KPICard
           icon={Car}
-          label={`Km ontem (GPS · ${gpsAgg.drivers} condutores)`}
-          value={`${fmtNum(Math.round(gpsAgg.km))} km`}
+          label={gpsError ? "Km ontem (GPS)" : `Km ontem (GPS · ${gpsAgg.drivers} condutores)`}
+          value={gpsError ? "—" : `${fmtNum(Math.round(gpsAgg.km))} km`}
           loading={gpsLoading}
           color="text-emerald-600"
         />
         <KPICard
           icon={Shield}
           label="Vel. máxima ontem (GPS)"
-          value={`${fmtNum(Math.round(gpsAgg.vmax))} km/h`}
+          value={gpsError ? "—" : `${fmtNum(Math.round(gpsAgg.vmax))} km/h`}
           loading={gpsLoading}
           color="text-amber-600"
         />
@@ -244,13 +276,15 @@ export default function OperacoesDashboard() {
         {/* Area chart: reservas por dia */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Reservas — últimos 30 dias</CardTitle>
+            <CardTitle className="text-base">Reservas criadas por dia</CardTitle>
           </CardHeader>
           <CardContent>
             {bkLoading ? (
               <div className="flex items-center justify-center h-[260px]">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
+            ) : bkError ? (
+              <p className="text-muted-foreground text-center py-16">Sem números (ver o aviso acima).</p>
             ) : areaChartData.length === 0 ? (
               <p className="text-muted-foreground text-center py-16">Sem dados de reservas.</p>
             ) : (
@@ -290,6 +324,8 @@ export default function OperacoesDashboard() {
               <div className="flex items-center justify-center h-[260px]">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
+            ) : bkError ? (
+              <p className="text-muted-foreground text-center py-16">Sem números (ver o aviso acima).</p>
             ) : cityDonutData.length === 0 ? (
               <p className="text-muted-foreground text-center py-16">Sem dados por cidade.</p>
             ) : (
@@ -335,6 +371,10 @@ export default function OperacoesDashboard() {
               <div className="flex items-center justify-center h-[240px]">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
+            ) : gpsError ? (
+              <p className="text-muted-foreground text-center py-12">
+                {isForbidden(gpsError) ? "Sem acesso ao GPS dos condutores." : `Não foi possível ler o GPS de ontem: ${gpsError.message}`}
+              </p>
             ) : gpsAgg.perDriver.length === 0 ? (
               <p className="text-muted-foreground text-center py-12">Sem dados GPS de ontem (a recolha provisória corre às 23:15; a final 2 dias depois).</p>
             ) : (
