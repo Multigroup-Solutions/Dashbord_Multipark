@@ -591,6 +591,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "EXTRAS_ASK_CITY", label: "Pedir a cidade aos extras sem cidade", description: "Quando um extra chega sem cidade, pede-lha uma vez por email (pela recursos-humanos@) e por WhatsApp se a conversa estiver aberta. A tarefa para quem trata das fichas sem cidade cria-se sempre. Desligado por omissão.", defaultEnabled: false },
   // 19a: o email semanal de marketing tinha só a variável MARKETING_WEEKLY=off (invisível nas Definições).
   { name: "MARKETING_WEEKLY", label: "Email semanal de marketing", description: "À segunda a partir das 8h: gasto, reservas e ROAS da semana por marca e cidade, para os endereços em MARKETING_REPORT_EMAILS." },
+  // 19c: avisa gente → desligado por omissão. Sem ele, os pedidos aparecem na lista do RH e na ficha.
+  { name: "RH_BANK_CHANGE_NOTIFY", label: "Aviso dos pedidos de IBAN", description: "Quando alguém pede para mudar o IBAN de uma ficha, avisa no sino o front/back office da cidade para aprovar ou recusar. Desligado por omissão: os pedidos aparecem na mesma no RH (topo da lista) e na ficha.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.
   { name: "TASKS_AUTO_OVERDUE", label: "Avisos de atraso das tarefas automáticas", description: "Checklists, serviços, disponibilidade e fichas sem cidade que passam o prazo: avisa no sino os responsáveis e o supervisor da cidade (um resumo por cidade). Sem email. Só as que passaram o prazo há menos de 48 h (as mais antigas ficam marcadas sem aviso)." },

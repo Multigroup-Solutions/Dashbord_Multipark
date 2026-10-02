@@ -60,38 +60,47 @@ const requireUser = t.middleware(async opts => {
     req.overrides = await getUserModuleOverrides(ctx.user!.id);
     const user = { ...ctx.user!, accessOverrides: req.overrides };
 
-    const { loadCityAccess, loadCityAccessParts, isPersonalAccessPath, hasForeignCityFilter, scopeCityQuery, selectedCityAccess, MISSING_COST_CENTRE_MESSAGE } = await import('../cityAccess');
+    const { loadCityAccess, loadCityAccessParts, isPersonalAccessPath, ownRecordEmployeeId, hasForeignCityFilter, scopeCityQuery, selectedCityAccess, MISSING_COST_CENTRE_MESSAGE } = await import('../cityAccess');
     let requestAccess: CityAccess | undefined;
     let scopedInput: unknown;
     let scopeInput = false;
     if (!isPersonalAccessPath(opts.path)) {
       let access = await loadCityAccess(user.id, user.role);
-      if (access.missingCostCenter) throw new TRPCError({ code: 'FORBIDDEN', message: MISSING_COST_CENTRE_MESSAGE });
-      // Só quem TEM overrides de módulo precisa das cidades base/todas (para
-      // o alcance de cidade seguir o override); os outros ficam como sempre.
-      if (Object.keys(req.overrides).length > 0) {
-        const parts = await loadCityAccessParts(user.id, user.role);
-        req.cityBase = parts.base;
-        req.cityAll = parts.all ?? undefined;
-        // Override do módulo deste procedimento muda o alcance de cidade ANTES
-        // dos guardas (filtros de outra cidade, registos por id).
-        const module = moduleForPath(opts.path);
-        if (module && activeOverride(user, module)) {
-          const g = grantFor(user, module);
-          if (g.access === 'national' && !access.all && parts.all) { access = parts.all; req.adjusted = true; }
-          else if (g.access !== 'national' && g.access !== 'none' && access.all && !parts.base.all) {
-            access = { ...parts.base, missingCostCenter: false }; req.adjusted = true;
+      if (access.missingCostCenter) {
+        // 19c: sem centro de custos, só a PRÓPRIA ficha (foto, dados, documentos,
+        // pedido de IBAN) — com âmbito de cidades vazio, nunca "todas".
+        const target = ownRecordEmployeeId(opts.path, await opts.getRawInput());
+        const { getEmployeeByUserId } = await import('../db');
+        const mine = target != null ? (await getEmployeeByUserId(user.id))?.employee?.id ?? null : null;
+        if (target == null || mine !== target) throw new TRPCError({ code: 'FORBIDDEN', message: MISSING_COST_CENTRE_MESSAGE });
+        requestAccess = { ...access, all: false, cityIds: [], projectIds: [] };
+      } else {
+        // Só quem TEM overrides de módulo precisa das cidades base/todas (para
+        // o alcance de cidade seguir o override); os outros ficam como sempre.
+        if (Object.keys(req.overrides).length > 0) {
+          const parts = await loadCityAccessParts(user.id, user.role);
+          req.cityBase = parts.base;
+          req.cityAll = parts.all ?? undefined;
+          // Override do módulo deste procedimento muda o alcance de cidade ANTES
+          // dos guardas (filtros de outra cidade, registos por id).
+          const module = moduleForPath(opts.path);
+          if (module && activeOverride(user, module)) {
+            const g = grantFor(user, module);
+            if (g.access === 'national' && !access.all && parts.all) { access = parts.all; req.adjusted = true; }
+            else if (g.access !== 'national' && g.access !== 'none' && access.all && !parts.base.all) {
+              access = { ...parts.base, missingCostCenter: false }; req.adjusted = true;
+            }
           }
         }
+        const raw = await opts.getRawInput();
+        if (hasForeignCityFilter(access, raw)) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Este projeto não pertence à cidade do teu centro de custos.' });
+        }
+        scopedInput = scopeCityQuery(opts.path, access, raw);
+        scopeInput = scopedInput !== raw;
+        requestAccess = opts.type === 'query' || opts.path === 'expenses.recurring.generateMonth'
+          ? await selectedCityAccess(access, scopedInput) : access;
       }
-      const raw = await opts.getRawInput();
-      if (hasForeignCityFilter(access, raw)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Este projeto não pertence à cidade do teu centro de custos.' });
-      }
-      scopedInput = scopeCityQuery(opts.path, access, raw);
-      scopeInput = scopedInput !== raw;
-      requestAccess = opts.type === 'query' || opts.path === 'expenses.recurring.generateMonth'
-        ? await selectedCityAccess(access, scopedInput) : access;
     }
 
     const proceed = async () => {

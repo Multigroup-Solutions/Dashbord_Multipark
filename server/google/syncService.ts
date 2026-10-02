@@ -516,8 +516,11 @@ export async function googleSyncSummary(userId: number) {
   let state = null as Awaited<ReturnType<typeof getSyncState>> | null;
   let linked = 0;
   let rejected = 0;
+  // 19c: preferências que não se leram ≠ omissões (gravar por cima estragava as reais)
+  let prefsError: string | null = null;
+  try { state = await getSyncState(userId); }
+  catch (err: any) { prefsError = String(err?.message ?? err).slice(0, 200); }
   try {
-    state = await getSyncState(userId);
     const d = await db();
     const r = rowsOf(await d.execute(sql`SELECT SUM(CASE WHEN state = 'active' THEN 1 ELSE 0 END) AS linked, SUM(CASE WHEN state = 'rejected' THEN 1 ELSE 0 END) AS rejected
       FROM google_task_links WHERE userId = ${userId}`))[0];
@@ -527,7 +530,8 @@ export async function googleSyncSummary(userId: number) {
   const granted = (f: string) => account.features.find((x) => x.id === f)?.granted ?? false;
   return {
     account,
-    prefs: state?.prefs ?? (await import("../../shared/googleSync")).DEFAULT_GOOGLE_SYNC_PREFS,
+    prefs: prefsError ? null : state?.prefs ?? (await import("../../shared/googleSync")).DEFAULT_GOOGLE_SYNC_PREFS,
+    prefsError,
     tasksGranted: granted("tasks"),
     calendarGranted: granted("calendar"),
     lastRunAt: state?.lastRunAt ?? null,

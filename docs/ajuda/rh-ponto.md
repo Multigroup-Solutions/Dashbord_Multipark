@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
+palavras: iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
 ---
 # RH e ponto
 
@@ -13,7 +13,9 @@ palavras: pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensa
 4. As tuas horas do mês aparecem na tua ficha (separador **Ponto**).
 
 **A tua ficha**
-- Em **Perfil** ou **Pessoas → Recursos Humanos** (a tua ficha) vês os teus dados, **Documentos**, **Ponto** e **Horário**.
+- Em **Perfil → A minha ficha** (ou **Pessoas → Recursos Humanos**) abres a tua ficha: dados, **Documentos**, **Ponto** e **Horário**. O Perfil em si tem os atalhos, a foto, as notificações e as contas Google (ver a ajuda "Perfil").
+- O **NIF** e o **IBAN** aparecem escondidos (PT50 •••• 1234); carrega em **mostrar** para os ver por extenso.
+- **Mudar o IBAN**: se não és do RH, a mudança fica como **pedido** à espera de aprovação — o IBAN atual mantém-se até o RH aprovar. O IBAN é validado (número de controlo) e o pedido fica registado (mascarado). Carrega também o **Comprovativo NIB** nos Documentos. Sem centro de custos atribuído, consegues na mesma abrir a tua ficha, pôr a foto e carregar documentos.
 - Carrega documentos (CC, carta de condução, comprovativo de morada, NIB…) no separador **Documentos**. Documentos em falta podem bloquear o acesso.
 
 **Gestão** (Team Leader e acima, na sua cidade)
@@ -27,7 +29,9 @@ palavras: pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensa
   - Com o interruptor **"Alertas: a trabalhar sem PDA ou Zello ligado"** ligado, avisa no sino o team leader escalado nesse turno e cidade, os team leaders com ponto aberto na cidade e o supervisor.
   - Quem recebe carrega em **Visto** (com uma nota, se quiser). Sem ligação nem Visto em 10 min (Definições → Operação), e com o interruptor do WhatsApp ligado, vai um WhatsApp (modelo aprovado pela Meta) aos administradores da cidade e à cópia (Definições → Operação → "WhatsApp dos administradores").
 - Na ficha, **Ligar**, **WhatsApp** e **Email** para o colaborador (o telefone e o email da empresa e os pessoais). O WhatsApp fica ligado à ficha e na caixa RH; o email abre na caixa **RH**.
-- **Não enviar WhatsApp / Não enviar email** (na ficha, por baixo dos contactos): desliga para essa pessoa tudo o que é **automático ou em massa** nesse canal: pedidos e lembretes de disponibilidade, avisos de escala, turno cancelado, difusões, lembretes de formação e o pedido da cidade. Responder uma a uma (no WhatsApp ou num email) continua a funcionar. Muda quem pode editar os dados pessoais da ficha (e o próprio); fica no registo.
+- **Não enviar WhatsApp / Não enviar email** (na ficha, por baixo dos contactos): desliga para essa pessoa tudo o que é **automático ou em massa** nesse canal: pedidos e lembretes de disponibilidade, avisos de escala, turno cancelado, difusões, lembretes de formação e o pedido da cidade. Responder uma a uma (no WhatsApp ou num email) continua a funcionar. **Só o RH** (front office, back office, administrador) liga ou desliga — o próprio já não; fica no registo.
+- **Pedidos de IBAN** (RH): aparecem no topo de **Recursos Humanos** e na ficha, com o IBAN novo por extenso para conferires com o comprovativo → **Aprovar** (passa a ser o IBAN da ficha) ou **Recusar** (com motivo). Quem pediu não aprova o próprio pedido. O RH muda o IBAN de uma ficha diretamente (validado e registado). Aviso no sino: interruptor **"Aviso dos pedidos de IBAN"** (Definições → Automações, desligado por omissão).
+- **Foto da ficha**: só JPEG, PNG ou WebP (a app reduz a foto antes de enviar); a troca fica registada — é a foto que se compara com a selfie do ponto.
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
   - **Aprovar** com horas corrigidas paga essas horas — **0 horas quer dizer que não se paga** o turno (entra na folha com 0 h). Deixar vazio mantém as horas registadas.

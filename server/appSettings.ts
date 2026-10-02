@@ -228,7 +228,8 @@ export async function listSettingsAudit(limit = 50) {
 
 export async function getNotificationPrefsRaw(userId: number): Promise<unknown> {
   const db = await getDb();
-  if (!db) return null;
+  // 19c: sem BD é erro — antes `null` lia-se como "nada silenciado"
+  if (!db) throw new Error("Base de dados indisponível.");
   const res = await db.execute(sql`SELECT notificationPrefs FROM users WHERE id = ${userId} LIMIT 1`);
   return parseJsonValue(rowsOf(res)[0]?.notificationPrefs ?? null);
 }

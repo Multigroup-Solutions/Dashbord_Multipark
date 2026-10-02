@@ -3,7 +3,10 @@ import { useLocation } from "wouter";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail } from "lucide-react";
+import { useState } from "react";
+import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail, Camera, MonitorX, Loader2 } from "lucide-react";
+import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { GoogleAccountCard } from "@/components/GoogleAccountCard";
 import { GoogleSyncCard } from "@/components/google/GoogleSyncCard";
@@ -20,7 +23,16 @@ const ROLE_LABELS: Record<string, string> = { ...ACCESS_ROLE_LABELS };
 export default function ProfilePage() {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
-  const { data: myStatus } = trpc.rh.timeRecords.myStatus.useQuery();
+  const myStatusQ = trpc.rh.timeRecords.myStatus.useQuery();
+  const myStatus = myStatusQ.data;
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const employee = (user as any)?.employee as { photoUrl?: string | null } | null | undefined;
+  const photoUrl = employee?.photoUrl ?? null;
+  // 19c: perder o telemóvel = a sessão continuava válida 30 dias; "Sair" só fecha ESTE aparelho.
+  const endOthers = trpc.settings.security.endMySessions.useMutation({
+    onSuccess: () => toast.success("Sessões terminadas nos outros aparelhos. Este continua ligado."),
+    onError: (e) => toast.error("Não foi possível terminar as sessões", { description: e.message }),
+  });
 
   const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
   const { data: myPda } = trpc.operational.pdas.mine.useQuery(undefined, { staleTime: 60_000 });
@@ -44,7 +56,8 @@ export default function ProfilePage() {
   };
 
   const rows = [
-    { icon: Clock, label: "O meu ponto", note: myStatus?.status === "in" ? "entrada aberta" : "picar entrada", action: () => openMyEmployee("timerecords") },
+    // 19c: leitura falhada ou sem ficha ≠ "picar entrada"
+    { icon: Clock, label: "O meu ponto", note: myStatusQ.error ? "estado indisponível" : myStatusQ.isLoading ? "…" : !myStatus?.employeeId ? "sem ficha" : myStatus.status === "in" ? "entrada aberta" : "picar entrada", action: () => openMyEmployee("timerecords") },
     { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => openMyEmployee() },
     ...(can(user, "permissoes", "manage")
       ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
@@ -58,9 +71,9 @@ export default function ProfilePage() {
     <div className="p-4 space-y-3 max-w-lg mx-auto">
       {/* Cartão do utilizador */}
       <div className="bg-card text-card-foreground border border-border rounded-2xl shadow-sm p-4 flex items-center gap-3.5">
-        <div className="w-[52px] h-[52px] rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-lg shrink-0">
-          {initials}
-        </div>
+        {photoUrl
+          ? <img src={photoUrl} alt="A tua foto" className="w-[52px] h-[52px] rounded-full object-cover shrink-0 border border-border" />
+          : <div className="w-[52px] h-[52px] rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-lg shrink-0">{initials}</div>}
         <div className="flex-1 min-w-0">
           <div className="font-bold text-[16px] text-foreground truncate" title={user?.name ?? undefined}>{user?.name ?? "—"}</div>
           <div className="text-xs text-muted-foreground truncate">{user?.email ?? ""}</div>
@@ -69,6 +82,19 @@ export default function ProfilePage() {
           {ROLE_LABELS[user?.role ?? "user"] ?? user?.role}
         </span>
       </div>
+
+      {employee && (
+        <button
+          type="button"
+          onClick={() => setPhotoOpen(true)}
+          className="w-full bg-card border border-border rounded-2xl shadow-sm flex items-center gap-3 px-3.5 min-h-[48px] text-left hover:bg-accent"
+        >
+          <span className="w-8 h-8 rounded-[9px] bg-primary/10 text-primary flex items-center justify-center shrink-0"><Camera className="w-4 h-4" /></span>
+          <span className="flex-1 text-[13.5px] font-semibold text-foreground">{photoUrl ? "Trocar a foto" : "Adicionar foto"}</span>
+          <span className="text-[11.5px] text-muted-foreground">{photoUrl ? "usada no ponto" : "obrigatória p/ ponto"}</span>
+        </button>
+      )}
+      {employee && <ProfilePhotoPrompt open={photoOpen} onOpenChange={setPhotoOpen} />}
 
       {cityAccess?.missingCostCenter && (
         <div role="status" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
@@ -122,6 +148,21 @@ export default function ProfilePage() {
 
       <button
         type="button"
+        disabled={endOthers.isPending}
+        onClick={() => { if (confirm("Terminar a sessão em todos os OUTROS aparelhos (telemóveis, PDAs, computadores)? Este continua ligado.")) endOthers.mutate(); }}
+        className="w-full bg-card border border-border rounded-2xl shadow-sm flex items-center gap-3 px-3.5 min-h-[52px] text-left hover:bg-accent disabled:opacity-60"
+      >
+        <span className="w-8 h-8 rounded-[9px] bg-primary/10 text-primary flex items-center justify-center shrink-0">
+          {endOthers.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <MonitorX className="w-4 h-4" />}
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className="block text-[13.5px] font-semibold text-foreground">Terminar sessões noutros aparelhos</span>
+          <span className="block text-[11.5px] text-muted-foreground">Perdeste o telemóvel ou entraste num PDA partilhado? Fecha-as daqui.</span>
+        </span>
+      </button>
+
+      <button
+        type="button"
         onClick={() => logout()}
         className="w-full bg-card border border-destructive/30 rounded-2xl shadow-sm flex items-center gap-3 px-3.5 min-h-[52px] text-left hover:bg-destructive/10"
       >
@@ -140,13 +181,14 @@ export default function ProfilePage() {
 // há um segundo interruptor para o email.
 function NotificationPrefsCard() {
   const utils = trpc.useUtils();
-  const { data } = trpc.notifications.prefs.useQuery(undefined, { staleTime: 60_000 });
+  const prefsQ = trpc.notifications.prefs.useQuery(undefined, { staleTime: 60_000 });
+  const { data } = prefsQ;
   const save = trpc.notifications.savePrefs.useMutation({
     onSuccess: (prefs) => {
       utils.notifications.prefs.setData(undefined, (old) => (old ? { ...old, ...prefs } : old));
       toast.success("Preferências guardadas.");
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => { toast.error(e.message); utils.notifications.prefs.invalidate(); },
   });
   const muted = new Set(data?.muted ?? []);
   const email = data?.email ?? {};
@@ -156,14 +198,9 @@ function NotificationPrefsCard() {
     .map((g) => ({ g, items: defs.filter((d) => d.group === g) }))
     .filter((x) => x.items.length);
   const emailOn = (kind: string, emailDefault: boolean) => email[kind] ?? (data?.routing?.kinds?.[kind]?.email ?? emailDefault);
-  const toggle = (kind: string, on: boolean) => {
-    const next = new Set(muted);
-    if (on) next.delete(kind); else next.add(kind);
-    save.mutate({ muted: Array.from(next), email });
-  };
-  const toggleEmail = (kind: string, on: boolean) => {
-    save.mutate({ muted: Array.from(muted), email: { ...email, [kind]: on } });
-  };
+  // 19c: grava só o interruptor mexido (outra aba aberta já não desfaz este)
+  const toggle = (kind: string, on: boolean) => save.mutate({ change: { kind, muted: !on } });
+  const toggleEmail = (kind: string, on: boolean) => save.mutate({ change: { kind, email: on } });
   return (
     <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
       <div className="flex items-center gap-3 px-3.5 pt-3 pb-2">
@@ -175,6 +212,9 @@ function NotificationPrefsCard() {
           <div className="text-[11.5px] text-muted-foreground">O que recebes (só da tua área e da tua cidade). Desliga o que não precisas.</div>
         </div>
       </div>
+      {prefsQ.error && (
+        <div className="px-3.5 pb-3"><QueryErrorNote error={prefsQ.error} onRetry={() => prefsQ.refetch()} retrying={prefsQ.isFetching} what="as tuas notificações" /></div>
+      )}
       {data && groups.length === 0 && (
         <p className="px-3.5 pb-3 text-[12px] text-muted-foreground">Não há notificações para o teu papel.</p>
       )}

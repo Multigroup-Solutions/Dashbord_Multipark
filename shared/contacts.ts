@@ -250,6 +250,10 @@ export const googleContactsPrefsSchema = z.object({
   partnersGroup: z.boolean().default(true),
 });
 export type GoogleContactsPrefs = z.output<typeof googleContactsPrefsSchema>;
+/** 19c: só os interruptores mexidos (desligar "Sugestões" apaga os contactos lidos — nunca por engano). */
+export const googleContactsPrefsPatchSchema = z.object({
+  suggestions: z.boolean().optional(), serviceGroup: z.boolean().optional(), partnersGroup: z.boolean().optional(),
+});
 export const DEFAULT_GOOGLE_CONTACTS_PREFS: GoogleContactsPrefs = { suggestions: true, serviceGroup: true, partnersGroup: true };
 
 export function parseGoogleContactsPrefs(raw: unknown): GoogleContactsPrefs {

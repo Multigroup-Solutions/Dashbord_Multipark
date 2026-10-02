@@ -4,6 +4,7 @@
 // formação, prazos de tarefas, SLAs). O token nunca chega ao browser.
 import type { ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -51,14 +52,17 @@ export function GoogleSyncCard({ returnTo = "/perfil" }: { returnTo?: string }) 
   const push = trpc.googleAccount.sync.pushStatus.useQuery(undefined, { staleTime: 60_000, enabled: !!q.data?.account.connected });
   const s = q.data;
   if (q.isLoading) return <div className="bg-card border border-border rounded-2xl p-4"><Loader2 className="h-4 w-4 animate-spin" /></div>;
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="a sincronização com o Google" />;
   if (!s || !s.account.configured) return null;
+  // 19c: preferências que não se leram → interruptores bloqueados (nunca as omissões)
+  const prefsLocked = !s.prefs;
   const connected = s.account.connected;
   const needsReauth = s.account.status === "reauth_required" || s.account.status === "error";
   const prefs = s.prefs ?? DEFAULT_GOOGLE_SYNC_PREFS;
   const missing: GoogleFeature[] = [];
   if (!s.tasksGranted) missing.push("tasks");
   if (!s.calendarGranted) missing.push("calendar");
-  const toggle = (key: PrefKey, value: boolean) => setPrefs.mutate({ ...prefs, [key]: value });
+  const toggle = (key: PrefKey, value: boolean) => setPrefs.mutate({ [key]: value });
   const shown: GoogleFeature[] = ["gmail", "tasks", "calendar"];
 
   return (
@@ -100,14 +104,17 @@ export function GoogleSyncCard({ returnTo = "/perfil" }: { returnTo?: string }) 
         </div>
       )}
 
+      {connected && s.prefsError && (
+        <p className="text-xs text-red-700 dark:text-red-300" role="alert"><AlertTriangle className="inline h-3 w-3 mr-1" />Não foi possível ler as tuas preferências ({s.prefsError}). <button type="button" className="underline" onClick={() => q.refetch()}>Tentar de novo</button></p>
+      )}
       {connected && (
         <div className="space-y-2">
-          <PrefRow icon={<ListChecks className="h-4 w-4 text-primary" />} label="Tarefas ↔ Google Tasks" disabled={!s.tasksGranted || setPrefs.isPending}
+          <PrefRow icon={<ListChecks className="h-4 w-4 text-primary" />} label="Tarefas ↔ Google Tasks" disabled={!s.tasksGranted || setPrefs.isPending || prefsLocked}
             hint={'As tarefas atribuídas a ti aparecem na lista "Multipark" do Google Tasks; o que concluíres ou criares lá volta ao dashboard.'}
             checked={prefs.tasks} onChange={(v) => toggle("tasks", v)} />
           <div className="text-[12px] font-semibold text-foreground pt-1">Calendário</div>
           {CAL_PREFS.map((p) => (
-            <PrefRow key={p.key} label={p.label} hint={p.hint} disabled={!s.calendarGranted || setPrefs.isPending}
+            <PrefRow key={p.key} label={p.label} hint={p.hint} disabled={!s.calendarGranted || setPrefs.isPending || prefsLocked}
               checked={!!prefs[p.key]} onChange={(v) => toggle(p.key, v)} />
           ))}
         </div>

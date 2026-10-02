@@ -92,6 +92,18 @@ export function canEditPersonal(v: RhViewer, e: EmployeeRef): boolean {
   return inManagedScope(v, e);
 }
 
+/**
+ * É o RH a tratar desta ficha (19c)? front office / back office / admin+ que
+ * pode mexer nos dados pessoais dela — e NUNCA na própria (só o super_admin).
+ * Decide: mudar o IBAN sem pedido (e aprovar os pedidos dos outros) e o
+ * "Não enviar WhatsApp/email" (decisão do Jorge: só o RH mexe).
+ */
+export function isRhFor(v: RhViewer, e: EmployeeRef): boolean {
+  if (v.role === "super_admin") return true;
+  if (isOwn(v, e.id)) return false;
+  return isNationalRole(v.role) && canEditPersonal(v, e);
+}
+
 /** Pode editar o CONTRATUAL (posto, centro, contrato, salário, conta, ativo)? admin+, nunca acima de si. */
 export function canEditContract(v: RhViewer, e: EmployeeRef): boolean {
   if (rank(v.role) < RANK.admin) return false;
@@ -189,6 +201,8 @@ export function employeeAccess(v: RhViewer, e: EmployeeRef) {
     canEditContract: canEditContract(v, e),
     canViewSensitive: canViewSensitive(v, e),
     canViewDocuments: canViewDocuments(v, e),
+    /** 19c: RH desta ficha — muda o IBAN sem pedido, aprova pedidos e mexe no "Não enviar". */
+    isRh: isRhFor(v, e),
   };
 }
 export type EmployeeAccess = ReturnType<typeof employeeAccess>;

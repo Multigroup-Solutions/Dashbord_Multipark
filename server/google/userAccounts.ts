@@ -216,9 +216,13 @@ export async function disconnectGoogleAccount(userId: number): Promise<void> {
 
 /** Resumo para a UI (nunca tokens). */
 export async function googleAccountSummary(userId: number) {
-  const acc = await getGoogleAccount(userId).catch(() => null);
+  // 19c: uma leitura falhada já não aparece como "não ligada" (o ecrã pedia
+  // para ligar uma conta que estava ligada) — vai em `readError`.
+  let readError: string | null = null;
+  const acc = await getGoogleAccount(userId).catch((err: any) => { readError = String(err?.message ?? err).slice(0, 200); return null; });
   const cfg = workspaceConfig();
   return {
+    readError: readError as string | null,
     configured: !!(cfg.clientId && cfg.clientSecret),
     domains: cfg.domains,
     connected: !!acc && acc.status !== "disconnected" && !!acc.refreshTokenEnc,

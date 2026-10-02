@@ -8,7 +8,28 @@ export function isPersonalAccessPath(path: string): boolean {
     // O que é de cada um (a ficha vem da sessão): sem centro de custos também.
     'extrasAvailability.myWeek', 'extrasAvailability.setMyWeek', 'extrasAvailability.weekHints',
     'evaluation.mine', 'evaluation.disputes.create',
+    // 19c: a foto, o PDA, o Drive e terminar as próprias sessões são de cada um
+    // (um extra novo sem cidade tirava a foto pedida e recebia "Sem centro de custos").
+    'rh.uploadMyPhoto', 'operational.pdas.mine', 'googleDrive.status', 'settings.security.endMySessions',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
+}
+
+/**
+ * 19c: procedimentos sobre UMA ficha que, sem centro de custos, passam quando
+ * a ficha é a da própria pessoa (abrir a ficha, mudar os dados pessoais,
+ * documentos pedidos pelo aviso "documentos em falta", pedido de IBAN).
+ * Devolve o id da ficha no pedido, ou null se o caminho não é destes. PURA.
+ */
+const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
+  'rh.byId': 'id', 'rh.update': 'id',
+  'rh.documents.list': 'employeeId', 'rh.documents.upload': 'employeeId', 'rh.documents.checklist': 'employeeId',
+  'rh.bankChange.forEmployee': 'employeeId',
+};
+export function ownRecordEmployeeId(path: string, input: unknown): number | null {
+  const field = OWN_RECORD_PATHS[path];
+  if (!field || !input || typeof input !== 'object') return null;
+  const v = (input as Record<string, unknown>)[field];
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : null;
 }
 
 /** Rejeita filtros explícitos fora da cidade, mesmo que sejam enviados sem a interface. */

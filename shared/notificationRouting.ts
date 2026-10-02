@@ -149,6 +149,9 @@ export const NOTIFICATION_KIND_DEFS = [
   // ── Pessoas ──
   K({ kind: "rh_docs_missing", group: "pessoas", label: "Documentos em falta (RH)", description: "Extras com documentos obrigatórios em falta há 14 dias.",
     module: "rh", action: "view", roles: ["backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
+  // 19c: pedido de alteração do IBAN (o próprio/um chefe pediu; o RH aprova). Só sai com o interruptor RH_BANK_CHANGE_NOTIFY.
+  K({ kind: "rh_bank_change", group: "pessoas", label: "IBAN por aprovar", description: "Alguém pediu para mudar o IBAN de uma ficha da tua cidade — confirma com o comprovativo e aprova ou recusa na ficha. Só chega com \"Aviso dos pedidos de IBAN\" ligado nas Definições.",
+    module: "rh", action: "edit", roles: ["frontoffice", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "my_docs_missing", group: "pessoas", label: "Os teus documentos em falta", description: "Documentos obrigatórios que ainda tens de carregar na tua ficha.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "driver_application", group: "pessoas", label: "Candidaturas", description: "Candidaturas novas \"Be a Driver\" da tua cidade.",
@@ -329,6 +332,20 @@ export const notificationPrefsSchema = z.object({
 export interface NotificationPrefs { muted: string[]; email: Record<string, boolean> }
 
 /** Normaliza as preferências guardadas (JSON cru ou objeto) — nunca lança. Tipos antigos → novos. PURA. */
+/** O que mudou entre duas preferências, em português ("silenciou X", "email de Y ligado"). PURA. */
+export function notificationPrefsDiff(before: NotificationPrefs, after: NotificationPrefs): string[] {
+  const label = (k: string) => DEF_BY_KIND.get(k)?.label ?? k;
+  const out: string[] = [];
+  const a = new Set(before.muted), b = new Set(after.muted);
+  for (const k of after.muted) if (!a.has(k)) out.push(`silenciou «${label(k)}»`);
+  for (const k of before.muted) if (!b.has(k)) out.push(`voltou a receber «${label(k)}»`);
+  const keys = new Set([...Object.keys(before.email), ...Object.keys(after.email)]);
+  for (const k of keys) {
+    if (before.email[k] !== after.email[k] && after.email[k] !== undefined) out.push(`email de «${label(k)}» ${after.email[k] ? "ligado" : "desligado"}`);
+  }
+  return out;
+}
+
 export function parseNotificationPrefs(raw: unknown): NotificationPrefs {
   let v = raw;
   if (typeof v === "string") {

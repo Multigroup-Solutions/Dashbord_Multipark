@@ -76,12 +76,12 @@ describe("Na ficha", () => {
     expect(contactPrefsLabel({ noAutoWhatsapp: true, noAutoEmail: true })).toBe("Não enviar WhatsApp nem email");
     expect(contactPrefsLabel({})).toBeNull();
   });
-  it("muda quem edita os dados pessoais, no âmbito da cidade, e fica no registo", () => {
+  it("só o RH muda (19c, decisão do Jorge), no âmbito da cidade, e fica no registo", () => {
     const r = src("server/rhRouter.ts");
     const i = r.indexOf("setContactPrefs: protectedProcedure");
     expect(i).toBeGreaterThan(0);
     const body = r.slice(i, i + 2000);
-    expect(body).toContain("if (!canEditPersonal(viewer, ref)) throw new TRPCError");
+    expect(body).toContain("if (!isRhFor(viewer, ref)) throw new TRPCError");
     expect(body).toContain("await assertEmployeeWriteScope(viewer, ref);");
     expect(body).toContain('action: "employee_contact_prefs"');
     expect(src("client/src/pages/HRPage.tsx")).toContain("<ContactPrefsRow employeeId={emp.id}");

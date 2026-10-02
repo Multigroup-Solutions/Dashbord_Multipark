@@ -233,7 +233,7 @@ function GoogleTab({ onOpen }: { onOpen: (it: Item) => void }) {
   const [onlyUnmatched, setOnlyUnmatched] = useState(false);
   const q = useDebounced(text.trim());
   const status = trpc.googleAccount.contacts.status.useQuery(undefined, { staleTime: 30_000 });
-  const ready = !!status.data?.granted && !!status.data?.prefs.suggestions;
+  const ready = !!status.data?.granted && !!status.data?.prefs?.suggestions;
   const listQ = trpc.contacts.google.suggestions.useInfiniteQuery(
     { q, onlyUnmatched },
     { enabled: ready, getNextPageParam: (last) => last.nextCursor ?? undefined, initialCursor: 0 },

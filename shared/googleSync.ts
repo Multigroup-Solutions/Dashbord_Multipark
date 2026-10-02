@@ -72,6 +72,10 @@ export const googleSyncPrefsSchema = z.object({
   calSla: z.boolean().default(false),
 });
 export type GoogleSyncPrefs = z.output<typeof googleSyncPrefsSchema>;
+/** 19c: só os interruptores mexidos (o servidor junta-os aos guardados — nunca grava omissões por cima). */
+export const googleSyncPrefsPatchSchema = z.object({
+  tasks: z.boolean().optional(), calShifts: z.boolean().optional(), calTraining: z.boolean().optional(), calTaskDue: z.boolean().optional(), calSla: z.boolean().optional(),
+});
 export const DEFAULT_GOOGLE_SYNC_PREFS: GoogleSyncPrefs = googleSyncPrefsSchema.parse({});
 
 /** Lê as preferências guardadas (JSON) com omissões seguras. PURA. */
