@@ -430,10 +430,13 @@ function IntegrationsCard() {
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+        {/* 19d: erro ≠ "sem problemas" */}
+        {q.error && <p className="text-sm text-red-700" role="alert">Não foi possível ler o estado das integrações: {q.error.message} <button type="button" className="underline" onClick={() => q.refetch()}>Tentar de novo</button></p>}
+        {q.data?.statusError && <p className="text-xs text-amber-800" role="alert"><AlertTriangle className="inline h-3 w-3 mr-1" />{q.data.statusError}</p>}
         {q.data && (
           <p>
             {configured} de {items.length} configuradas
-            {problems.length > 0
+            {q.data.statusError ? <span className="text-muted-foreground"> · estado desconhecido</span> : problems.length > 0
               ? <span className="text-red-700"> · com problemas: {problems.map((p) => p.label).join(", ")}</span>
               : <span className="text-emerald-700"> · sem problemas conhecidos</span>}
           </p>

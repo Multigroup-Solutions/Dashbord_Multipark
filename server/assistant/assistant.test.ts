@@ -305,7 +305,7 @@ describe("ajuda: escolha do ficheiro", () => {
 
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
-      "agendador.md", "atividade-diaria.md", "avaliacao.md", "clientes.md", "comunicacao.md", "contactos.md", "criticas.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "email-aliases.md", "extras-dia.md", "faturacao.md", "ficha-reserva.md", "formacao.md", "google-business.md", "google-tempo-real.md", "integracoes-google-ads.md", "leads-extras.md", "marketing.md",
+      "agendador.md", "atividade-diaria.md", "avaliacao.md", "clientes.md", "comunicacao.md", "contactos.md", "criticas.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "email-aliases.md", "extras-dia.md", "faturacao.md", "ficha-reserva.md", "formacao.md", "google-business.md", "google-tempo-real.md", "integracoes-google-ads.md", "integracoes.md", "leads-extras.md", "marketing.md",
       "ocorrencias.md", "operacoes-listas.md", "parcerias.md", "passagem-turno.md", "perdidos.md", "perfil.md", "permissoes.md", "pesquisa-e-conhecimento.md", "projetos.md", "radio.md", "reclamacoes.md", "reservas-do-dia.md", "rh-ponto.md", "servicos.md", "tarefas.md", "web-analytics.md", "whatsapp-chamadas.md", "whatsapp.md",
     ]);
   });

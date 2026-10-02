@@ -53,7 +53,7 @@ A Google começa todos os projetos com **0 pedidos por minuto** nas APIs do Busi
 - **Google My Business API** (v4) — críticas, resposta às críticas e publicações. Esta só aparece na Biblioteca **depois** da aprovação do passo 1.
 
 **3. Ligar a conta Google certa**
-Em **Críticas → Ligar Google Business Profile** entra com a conta que é **Proprietária ou Gestora** dos perfis dos parques (a mesma que vês em business.google.com → "Perfis"). Se os perfis estão num **grupo de empresas**, a conta tem de ter acesso ao grupo. Aceita todas as permissões.
+Só o **super admin** liga e desliga (o admin vê o estado e gere os perfis). Em **Críticas → Ligar Google Business Profile** entra com a conta que é **Proprietária ou Gestora** dos perfis dos parques (a mesma que vês em business.google.com → "Perfis"). Se os perfis estão num **grupo de empresas**, a conta tem de ter acesso ao grupo. Aceita todas as permissões.
 
 **4. Testar**
 Em **Integrações → Google Business Profile → Testar** (ou "Testar APIs" no separador Google Business) cada API é testada por ordem e aparece ✓/✗ com a causa:
@@ -66,3 +66,5 @@ Em **Integrações → Google Business Profile → Testar** (ou "Testar APIs" no
 Depois do Testar ficar todo com ✓, carrega em **Atualizar agora** (a recolha automática está **em pausa** até a Google aprovar o acesso à API; depois volta ao agendador): a 1.ª recolha traz ~6 meses de desempenho; depois relê só os últimos 5 dias, 1×/dia.
 
 **Variáveis no Vercel** (já existentes): `GOOGLE_BUSINESS_CLIENT_ID` e `GOOGLE_BUSINESS_CLIENT_SECRET` (se faltarem usa-se o cliente do Google Ads), `INTEGRATIONS_ENCRYPTION_KEY` (cifra do token). Nada de novo é preciso para o Google Business.
+
+**Desligar** (só super admin, pede confirmação): revoga a autorização na Google e pára a importação das críticas e o desempenho em todos os parques. A **escolha dos perfis fica guardada** — ao voltar a ligar com a mesma conta, volta tudo como estava (com outra conta Google, a escolha é limpa). Ligar, desligar e mudar a associação de um perfil ficam nos Logs.

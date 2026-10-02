@@ -258,7 +258,10 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
   utilizadores: { supervisor: "city:vem", ...same("national:vem", ...NAT_OPS), ...same("national:vem", ...TOP) },
   permissoes: { supervisor: "city:vem", backoffice: "national:vem", ...same("national:vem", ...TOP) },
   sincronizacao: { supervisor: "city:ve", ...same("national:ve", ...NAT_OPS), ...same("national:vem", ...TOP) },
-  integracoes: { supervisor: "city:ve", ...same("national:ve", ...NAT_OPS), ...same("national:vem", ...TOP) },
+  // 19d (Jorge, 2 out 2026): o hub (ver, testar, recolhas manuais) é só de admin e super_admin —
+  // os outros papéis viam erros nacionais e corriam testes com custo/tokens de colegas.
+  // Ligar/desligar Google Ads e Google Business: só super_admin (nas próprias rotas).
+  integracoes: same("national:vem", ...TOP),
   // Dashboards: só a partir de admin (matriz do dono: "admin = backoffice + dashboards").
   dashboards: same("national:v", ...TOP),
   // Correção do dono (24 set 2026): Marketing só super_admin (admin não).

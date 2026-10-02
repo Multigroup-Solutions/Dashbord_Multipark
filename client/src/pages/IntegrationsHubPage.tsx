@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, Plug, XCircle } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const CONN: Record<string, { label: string; cls: string }> = {
   connected: { label: "Ligado", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
@@ -25,8 +26,9 @@ type TestResult = { ok: boolean; message: string; ms: number };
 
 export default function IntegrationsHubPage() {
   const { user } = useAuth();
-  const canView = can(user?.role, "integracoes", "view");
-  const canTest = can(user?.role, "integracoes", "edit");
+  // 19d: `can(user, …)` conta com as exceções por pessoa (antes só o papel)
+  const canView = can(user as any, "integracoes", "view");
+  const canTest = can(user as any, "integracoes", "edit");
   const q = trpc.integrations.hub.list.useQuery(undefined, { enabled: canView, refetchInterval: 60_000 });
   const [results, setResults] = useState<Record<string, TestResult>>({});
   const [testing, setTesting] = useState<string | null>(null);
@@ -44,6 +46,8 @@ export default function IntegrationsHubPage() {
   const system = items.filter((i) => i.group === "system");
   const key = q.data?.encryptionKey;
   const problems = main.filter((i) => i.configured && (i.connection?.status === "reauth_required" || i.connection?.status === "error" || !!i.lastError)).length;
+  // 19d: sem o estado guardado (erro na leitura) nunca "Sem problemas conhecidos"
+  const statusUnknown = !!q.error || !!q.data?.statusError;
 
   return (
     <div className="space-y-4 max-w-6xl mx-auto">
@@ -51,11 +55,13 @@ export default function IntegrationsHubPage() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><Plug className="h-5 w-5" /> Integrações</h1>
           <p className="text-sm text-muted-foreground max-w-3xl">
-            Estado de cada ligação externa. Só se mostra se está configurada — os valores dos segredos nunca saem do servidor. "Testar" não envia nem altera nada.
+            Estado de cada ligação externa. Só se mostra se está configurada — os valores dos segredos nunca saem do servidor. "Testar" não envia nem altera nada (as contas Google pessoais testam-se com a tua conta). Só administradores.
             Quando uma ligação precisa de ser religada ou um cron para, os administradores recebem um aviso (uma vez por mudança).
           </p>
         </div>
-        {!q.isLoading && (problems > 0
+        {!q.isLoading && (statusUnknown
+          ? <Badge variant="outline" className="bg-muted text-secondary-foreground">Estado desconhecido</Badge>
+          : problems > 0
           ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">{problems} com problemas</Badge>
           : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Sem problemas conhecidos</Badge>)}
       </div>
@@ -72,7 +78,13 @@ export default function IntegrationsHubPage() {
       )}
 
       {q.isLoading && <Loader2 className="h-5 w-5 animate-spin" />}
-      {q.error && <p className="text-sm text-destructive">{q.error.message}</p>}
+      {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o estado das integrações" />}
+      {!q.error && q.data?.statusError && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 text-amber-900 px-3 py-2 text-sm flex gap-2" role="alert">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>{q.data.statusError} Os cartões mostram só se cada ligação está configurada. <button type="button" className="underline" onClick={() => q.refetch()}>Tentar de novo</button></span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {main.map((i) => (
@@ -131,7 +143,10 @@ type HubItem = {
 };
 
 function IntegrationCard({ item: i, result, canTest, testing, onTest }: { item: HubItem; result?: TestResult; canTest: boolean; testing: string | null; onTest: () => void }) {
-  const conn = i.connection ? CONN[i.connection.status] ?? { label: i.connection.status, cls: "bg-muted" } : null;
+  // 19d: sem configuração não há selo de ligação; "Ligado" com erro fica âmbar (não verde)
+  const conn0 = i.configured && i.connection ? CONN[i.connection.status] ?? { label: i.connection.status, cls: "bg-muted" } : null;
+  const conn = conn0 && i.connection?.status === "connected" && (i.connection.hasError || !!i.lastError)
+    ? { label: "Ligado, com erro", cls: "bg-amber-100 text-amber-800 border-amber-200" } : conn0;
   const bad = i.configured && (i.connection?.status === "reauth_required" || i.connection?.status === "error");
   return (
     <Card className={bad ? "border-red-300" : undefined}>
@@ -148,7 +163,7 @@ function IntegrationCard({ item: i, result, canTest, testing, onTest }: { item: 
           <div className="text-[11px] text-muted-foreground font-mono break-all">Falta: {i.missing.join(", ")}</div>
         )}
         <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs">
-          <dt className="text-muted-foreground">Última recolha OK</dt>
+          <dt className="text-muted-foreground">Última recolha com sucesso</dt>
           <dd>{i.lastSyncAt ? fmtPTDateTime(i.lastSyncAt) : "—"}</dd>
           {i.connection?.lastCheckedAt && (<>
             <dt className="text-muted-foreground">Última verificação</dt>

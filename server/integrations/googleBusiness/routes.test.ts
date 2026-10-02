@@ -16,7 +16,8 @@ const envelope = (subscription = 'projects/test/subscriptions/reviews') => ({ su
 beforeEach(() => {
   vi.resetAllMocks(); routes = {};
   registerGoogleBusinessRoutes({ get: (p: string, h: Function) => { routes[p] = h; }, post: (p: string, h: Function) => { routes[p] = h; } } as any);
-  mock.auth.mockResolvedValue({ id: 10, role: 'admin' }); mock.access.mockResolvedValue({ all: true });
+  // 19d: ligar o Google Business é só do super admin
+  mock.auth.mockResolvedValue({ id: 10, role: 'super_admin' }); mock.access.mockResolvedValue({ all: true });
   mock.db.mockResolvedValue({ execute: mock.execute }); mock.execute.mockResolvedValue([{ affectedRows: 1 }]);
   mock.jwt.mockResolvedValue({ payload: { email: 'push@test.iam.gserviceaccount.com', email_verified: true } });
   vi.stubEnv('GOOGLE_BUSINESS_PUSH_AUDIENCE', 'https://dashboard.multipark.pt/api/integrations/google-business/webhook');
@@ -35,6 +36,11 @@ describe('Google Business routes fail closed', () => {
     vi.stubEnv('CRON_SECRET', ''); const res = response();
     await routes['/api/cron/google-business']({ headers: { authorization: 'Bearer ' } }, res);
     expect(res.status).toHaveBeenCalledWith(401);
+  });
+  it('denies an admin (19d: only the super admin connects) before starting OAuth', async () => {
+    mock.auth.mockResolvedValue({ id: 10, role: 'admin' }); const res = response();
+    await routes['/api/integrations/google-business/oauth/start'](request(), res);
+    expect(res.status).toHaveBeenCalledWith(403); expect(mock.start).not.toHaveBeenCalled();
   });
   it('denies a city-scoped admin before starting OAuth', async () => {
     mock.access.mockResolvedValue({ all: false }); const res = response();

@@ -249,7 +249,7 @@ export async function removeAllAppContacts(userId: number, deadlineAt: number): 
 }
 
 /** Contas com a funcionalidade autorizada (para o "Testar"). */
-export async function testGoogleContacts(): Promise<string> {
+export async function testGoogleContacts(testerUserId?: number | null): Promise<string> {
   const parts: string[] = [];
   const cfg = await loadContactsConfig();
   if (cfg.directory.enabled && cfg.directory.adminEmail) {
@@ -261,9 +261,12 @@ export async function testGoogleContacts(): Promise<string> {
   const d = await db();
   const rows = rowsOf(await d.execute(sql`SELECT userId, scopes FROM google_user_accounts WHERE status = 'connected' LIMIT 500`));
   const withContacts = rows.filter((r) => hasFeatureScopes(String(r.scopes ?? ""), "contacts"));
-  if (withContacts[0]) {
+  // 19d: com a conta de QUEM testa (antes usava o token de um colega qualquer)
+  const mine = testerUserId != null ? withContacts.find((r) => Number(r.userId) === testerUserId) : undefined;
+  if (!mine && withContacts.length) parts.push("a parte pessoal não foi testada: autoriza os Contactos na tua conta (Perfil → Google) para a testar");
+  if (mine) {
     const { userGoogleAuth } = await import("./userAccounts");
-    const { client } = await userGoogleAuth(Number(withContacts[0].userId), "contacts");
+    const { client } = await userGoogleAuth(Number(mine.userId), "contacts");
     await wrapPeople(peopleFor(client), { deadlineAt: Date.now() + 15_000 }).listContactGroups();
     parts.push("API People (contactos) OK");
   }

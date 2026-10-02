@@ -41,6 +41,9 @@ function LocationRow({ location, projects, onSaved }: { location: Location; proj
 }
 function ConnectionPanel() {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  // 19d (decisão do Jorge): ligar/desligar só o super admin; o admin vê e gere os perfis
+  const isSuper = user?.role === 'super_admin';
   const query = trpc.integrations.googleBusiness.status.useQuery(undefined, { retry: false });
   const { data: parks = [] } = trpc.projects.list.useQuery();
   const refresh = () => { void query.refetch(); void utils.reviews.invalidate(); };
@@ -51,26 +54,29 @@ function ConnectionPanel() {
     else toast.success(`${d.imported} avaliações importadas/atualizadas; ${d.pending} por conciliar.${d.done ? '' : ' O histórico continua na próxima recolha.'}`);
     refresh();
   }, onError: e => { toast.error(e.message); refresh(); } });
-  const disconnect = trpc.integrations.googleBusiness.disconnect.useMutation({ onSuccess: refresh, onError: e => toast.error(e.message) });
+  const disconnect = trpc.integrations.googleBusiness.disconnect.useMutation({
+    onSuccess: r => { r.revoked ? toast.success('Google Business desligado e autorização revogada na Google. Os perfis escolhidos ficam guardados.') : toast.warning('Google Business desligado', { description: 'Não foi possível revogar a autorização na Google — tira-a em myaccount.google.com → Segurança.' }); refresh(); },
+    onError: e => toast.error(e.message) });
   const reconcile = trpc.integrations.googleBusiness.reconcile.useMutation({ onSuccess: refresh, onError: e => toast.error(e.message) });
   const data = query.data;
   const busy = discover.isPending || sync.isPending || disconnect.isPending;
   return <Card id="google-business">
     <CardHeader><CardTitle className="flex flex-wrap justify-between gap-2 text-base">Ligação Google Business Profile
-      <Badge variant={data?.status === 'connected' ? 'default' : 'secondary'}>{data?.status === 'connected' ? 'Conta autorizada' : data?.status === 'reauth_required' ? 'Reautorizar conta' : 'Desligado'}</Badge>
+      <Badge variant={data?.status === 'connected' ? 'default' : 'secondary'} className={query.error || data?.status === 'error' || data?.status === 'reauth_required' ? 'bg-amber-100 text-amber-900 border-amber-300' : undefined}>{query.error ? 'Estado desconhecido' : data?.status === 'connected' ? 'Conta autorizada' : data?.status === 'reauth_required' ? 'Reautorizar conta' : data?.status === 'error' ? 'Erro' : 'Desligado'}</Badge>
     </CardTitle></CardHeader>
     <CardContent className="space-y-4">
       <p className="text-sm">Liga a conta Google que gere os perfis e associa cada estabelecimento ao parque correto. As avaliações de 1–3 estrelas são encaminhadas para Reclamações; as restantes ficam disponíveis para resposta.</p>
-      {query.error && <p className="text-sm text-destructive">{query.error.message}</p>}
+      {query.error && <p className="text-sm text-destructive" role="alert">{query.error.message} <button type="button" className="underline" onClick={() => query.refetch()}>Tentar de novo</button></p>}
       {data?.accountEmail && <p className="text-sm">Conta: <strong>{data.accountEmail}</strong></p>}
       {data?.lastError && <p role="alert" className="text-sm text-destructive">{data.lastError}</p>}
       {data && !data.configured && <p className="text-sm text-destructive">Falta configurar as credenciais Google no servidor.</p>}
       <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || !data?.configured} onClick={() => window.location.assign('/api/integrations/google-business/oauth/start')}>{data?.status === 'connected' ? 'Autorizar novamente' : 'Ligar Google Business Profile'}</Button>
+        {isSuper && <Button disabled={busy || !data?.configured} onClick={() => window.location.assign('/api/integrations/google-business/oauth/start')}>{data?.status === 'connected' ? 'Autorizar novamente' : 'Ligar Google Business Profile'}</Button>}
         <Button variant="outline" disabled={busy || data?.status !== 'connected'} onClick={() => discover.mutate()}>Atualizar perfis</Button>
         <Button variant="outline" disabled={busy || data?.status !== 'connected' || !data.locations.some(l => l.selected && l.available)} onClick={() => sync.mutate()}>{sync.isPending ? 'A importar…' : 'Importar avaliações agora'}</Button>
-        {data?.status === 'connected' && <Button variant="ghost" disabled={busy} onClick={() => disconnect.mutate()}>Desligar</Button>}
+        {isSuper && data?.status === 'connected' && <Button variant="ghost" disabled={busy} onClick={() => { if (confirm('Desligar o Google Business? A importação das críticas e o desempenho dos perfis param em todos os parques e a autorização é revogada na Google. Os perfis escolhidos ficam guardados para quando voltares a ligar.')) disconnect.mutate(); }}>Desligar</Button>}
       </div>
+      {!isSuper && <p className="text-xs text-muted-foreground">Ligar e desligar a conta Google é só com o super admin.</p>}
       {data?.status === 'connected' && !data.locations.length && <p className="text-sm">Ainda sem perfis disponíveis. Confirma a aprovação da API pela Google e carrega em Atualizar perfis.</p>}
       {data?.locations.map(l => <LocationRow key={`${l.id}-${l.projectId}-${l.selected}`} location={l} projects={parks} onSaved={refresh} />)}
       {!!data?.pending.length && <div className="space-y-3"><h3 className="font-medium">Possíveis avaliações já recebidas por email</h3>

@@ -56,7 +56,7 @@ Pré-requisitos da Meta:
 Passos:
 1. **Meta for Developers → a tua app → WhatsApp → Configuração → Webhooks**: no campo `whatsapp_business_account` subscrever **`calls`** (além de `messages`). O URL do webhook é o mesmo (`/api/whatsapp/webhook`).
 2. **Ativar as chamadas no número**: no dashboard, WhatsApp → faixa **Chamadas perdidas por devolver** (ou `/whatsapp?chamadas=1`) → **Configuração das chamadas (Meta)** → ligar **Chamadas ativas**, **Pedir autorização ao cliente quando ele liga** e, se quiseres, o **horário** (fuso Europe/Lisbon). Em alternativa: WhatsApp Manager → Números de telefone → o número → **Chamadas**.
-3. **Definições → Integrações → WhatsApp — Chamadas → Testar**: confirma se as chamadas estão ativas, o horário e se o campo `calls` está subscrito.
+3. **Integrações** (menu Sistema, só administradores) **→ WhatsApp — Chamadas → Testar**: confirma se as chamadas estão ativas, o horário e se o campo `calls` está subscrito.
 4. (Opcional) Para pedir autorização com a janela de 24 h fechada: criar no WhatsApp Manager um **template** com o botão "pedido de autorização de chamada" (componente `call_permission_request`), sem variáveis, e pôr o nome em `WHATSAPP_CALL_PERMISSION_TEMPLATE` (língua em `WHATSAPP_CALL_PERMISSION_TEMPLATE_LANG`, por omissão `pt_PT`).
 
 **Preços (Meta)**: chamadas **recebidas são grátis**. Chamadas **feitas pela empresa** pagam por minuto (blocos de 6 s, só quando o cliente atende), com tarifa do país de destino e escalões de volume mensais. O pedido de autorização é uma mensagem cobrada como as outras.
