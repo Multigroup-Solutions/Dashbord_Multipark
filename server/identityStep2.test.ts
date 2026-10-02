@@ -13,9 +13,13 @@ const read = (f: string) => readFileSync(join(__dirname, "..", f), "utf8");
 describe("juntar contas da mesma pessoa (decisão do dono)", () => {
   it("passa tudo o que é da pessoa; nas chaves únicas ganha o que a conta que fica já tinha", () => {
     const st = reassignStatements(7, 3);
-    for (const t of ["employee_accounts", "user_permissions", "app_notifications", "google_user_accounts", "mail_threads", "whatsapp_conversations", "complaints"]) {
+    for (const t of ["employee_accounts", "user_permissions", "app_notifications", "google_user_accounts", "mail_threads", "whatsapp_conversations"]) {
       expect(st.some((s) => s.includes(`\`${t}\``))).toBe(true);
     }
+    // O responsável de reclamações/perdidos é uma FICHA (employees.id), não uma
+    // conta: juntar contas não lhe mexe — a ficha da pessoa é a mesma (P3 16b).
+    expect(st.some((s) => s.includes("`complaints`"))).toBe(false);
+    expect(st.some((s) => s.includes("`lost_found_items`"))).toBe(false);
     expect(st).toContain("UPDATE IGNORE `user_permissions` SET `userId` = 3 WHERE `userId` = 7");
     expect(st).toContain("DELETE FROM `user_permissions` WHERE `userId` = 7");
     expect(st).toContain("UPDATE `ai_chat_conversations` SET `ownerKey` = 'user:3' WHERE `ownerKey` = 'user:7'");

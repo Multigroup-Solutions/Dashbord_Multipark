@@ -20,6 +20,24 @@ export async function assertScopedOperation(path: string, type: string, raw: unk
     if (path === 'reviews.create') assertProjectAccess(input.projectId);
     if (path === 'reviews.syncFromGmail') requireGlobalCityAccess();
   }
+  // Reclamações (16b): tudo o que mexe num caso pelo id confirma a cidade do
+  // caso guardado (antes só o getById o fazia — um TL do Porto fechava, enviava
+  // emails ou tirava condutores de reclamações de Lisboa).
+  if (path.startsWith('complaints.')) {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Não foi possível verificar a cidade.' });
+    const complaintOfRow = async (table: { id: any; complaintId: any }, id: number) => {
+      const [row] = await db.select({ complaintId: table.complaintId }).from(table as any).where(eq(table.id, id)).limit(1);
+      if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Registo não encontrado.' });
+      await projectRecord(schema.complaints, Number(row.complaintId));
+    };
+    if (path === 'complaints.detachDriver' && input.id != null) await complaintOfRow(schema.complaintDriversOnDuty as any, input.id);
+    else if (path === 'complaints.removePhoto' && input.id != null) await complaintOfRow(schema.complaintPhotos as any, input.id);
+    else if (input.id != null) await projectRecord(schema.complaints, input.id);
+    if (input.complaintId != null) await projectRecord(schema.complaints, input.complaintId);
+    // Mudar de cidade só para uma das tuas (e nunca para "sem cidade").
+    if (type === 'mutation' && input.projectId !== undefined) assertProjectAccess(input.projectId);
+  }
   if (path.startsWith('expenses.')) {
     if (input.id != null) await projectRecord(path.startsWith('expenses.recurring.') ? schema.recurringExpenses : schema.expenses, input.id);
     if (type === 'mutation' && (path.endsWith('.create') || input.projectId !== undefined)) assertProjectAccess(input.projectId);

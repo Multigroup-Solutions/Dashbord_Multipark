@@ -78,7 +78,7 @@ export async function deriveBookingForCase(s: { bookingRef?: string | null; plat
 }
 
 /** Nó de cidade de cada projeto (para agrupar "por cidade" e escolher destinatários). */
-async function projectCityMap(): Promise<{ cityOf: (pid: number | null | undefined) => { id: number; name: string } | null; nodes: any[] }> {
+export async function projectCityMap(): Promise<{ cityOf: (pid: number | null | undefined) => { id: number; name: string } | null; nodes: any[] }> {
   const d = await db();
   const nodes = await d.select({ id: projects.id, parentId: projects.parentId, level: projects.level, name: projects.name }).from(projects);
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -427,7 +427,7 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
     complaintRows = rowsOf(await d.execute(sql`
       SELECT id, projectId, assignedToId FROM complaints
       WHERE complaint_status IN ('new','analyzing') AND slaDeadline IS NOT NULL AND slaDeadline < ${nowStr}
-        AND slaAlertedAt IS NULL
+        AND slaAlertedAt IS NULL AND archivedAt IS NULL
       ORDER BY slaDeadline ASC LIMIT 500`));
   } catch { /* coluna slaAlertedAt ainda por criar (0140) */ }
   if (!incRows.length && !lostRows.length && !complaintRows.length) return report;
@@ -477,7 +477,8 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
   for (const g of byCity(complaintRows)) {
     const r = await notify({
       kind: "complaint_sla", projectId: g.cityId,
-      alsoUserIds: g.rows.map((x) => (x.assignedToId == null ? null : Number(x.assignedToId))),
+      // assignedToId é uma ficha (16b) → avisa a conta dessa pessoa.
+      alsoUserIds: await (await import("./complaintsExtended")).assigneeUserIds(g.rows.map((x) => (x.assignedToId == null ? null : Number(x.assignedToId)))),
       title: "Reclamações fora do prazo", body: `Passaram o SLA: ${g.rows.length} reclamação(ões) (${idList(g.rows)}).`,
       link: "/reclamacoes", entity: { type: "complaint_sla", id: `${day}:${g.cityId ?? "-"}` },
     });

@@ -131,10 +131,11 @@ export async function desiredEventsForUser(u: { userId: number; role: string; em
       LIMIT 500`));
     for (const r of rows) { const e = taskDueEvent({ id: Number(r.id), title: String(r.title), dueDate: String(r.dueDate), dueHasTime: Number(r.dueHasTime ?? 0) }, appUrl); if (e) out.push(e); }
   }
-  if (u.prefs.calSla) {
+  // O responsável da reclamação é uma ficha (assignedToId = employees.id), não a conta (16b).
+  if (u.prefs.calSla && u.employeeId != null) {
     const rows = rowsOf(await d.execute(sql`SELECT id, title, slaDeadline FROM complaints
-      WHERE assignedToId = ${u.userId} AND slaDeadline IS NOT NULL AND slaDeadline >= ${fromSql} AND slaDeadline < ${toSql}
-        AND complaint_status NOT IN ('resolved', 'closed', 'converted') LIMIT 300`));
+      WHERE assignedToId = ${u.employeeId} AND slaDeadline IS NOT NULL AND slaDeadline >= ${fromSql} AND slaDeadline < ${toSql}
+        AND complaint_status NOT IN ('resolved', 'closed', 'converted') AND archivedAt IS NULL LIMIT 300`));
     for (const r of rows) { const e = slaEvent({ id: Number(r.id), title: String(r.title), slaDeadline: String(r.slaDeadline) }, appUrl); if (e) out.push(e); }
   }
   const seen = new Set<string>();

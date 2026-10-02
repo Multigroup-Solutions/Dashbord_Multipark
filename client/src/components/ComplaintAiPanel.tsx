@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,7 +67,9 @@ export default function ComplaintAiPanel({
   });
 
   const data = q.data;
-  // Sem sugestões e IA indisponível → não mostra nada (sem erros na UI).
+  // Leitura falhada ≠ "sem sugestões" (16b).
+  if (q.isError) return <QueryErrorNote error={q.error} what="as sugestões da IA" onRetry={() => q.refetch()} retrying={q.isFetching} />;
+  // Sem sugestões e IA indisponível → não mostra nada.
   if (!data || (!data.suggestions.length && !data.available)) return null;
   const visible = data.suggestions.filter((s) => s.status !== "rejected" && s.status !== "accepted");
   const decided = data.suggestions.length - visible.length;

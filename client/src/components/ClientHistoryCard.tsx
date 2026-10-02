@@ -4,6 +4,7 @@ import { fmtPTDate } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { History, Car, MessageSquareWarning, PackageSearch, Star, Loader2 } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 type Props = {
   /** Ficha do CRM, quando já se sabe qual é. */
@@ -30,7 +31,7 @@ const d = (s?: string | null) => fmtPTDate(s);
  */
 export default function ClientHistoryCard({ clientId, email, phone, plate, name, highlightRef, className }: Props) {
   const hasKey = !!(clientId || email || phone || plate || name);
-  const { data, isLoading } = trpc.clients.history.useQuery(
+  const { data, isLoading, error, refetch, isFetching } = trpc.clients.history.useQuery(
     { clientId: clientId ?? null, email: email ?? null, phone: phone ?? null, plate: plate ?? null, name: name ?? null },
     { enabled: hasKey },
   );
@@ -57,16 +58,20 @@ export default function ClientHistoryCard({ clientId, email, phone, plate, name,
           )}
           {isLoading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
         </CardTitle>
-        <div className="flex flex-wrap gap-1.5 text-xs">
-          <Badge variant="outline"><Car className="w-3 h-3 mr-1" />{counts.b} reservas</Badge>
-          <Badge variant="outline"><MessageSquareWarning className="w-3 h-3 mr-1" />{counts.c} reclamações</Badge>
-          <Badge variant="outline"><PackageSearch className="w-3 h-3 mr-1" />{counts.l} perdidos</Badge>
-          <Badge variant="outline"><Star className="w-3 h-3 mr-1" />{counts.r} críticas</Badge>
-        </div>
+        {/* Leitura falhada: sem contagens (nunca "0 reservas") — 16b. */}
+        {!error && (
+          <div className="flex flex-wrap gap-1.5 text-xs">
+            <Badge variant="outline"><Car className="w-3 h-3 mr-1" />{counts.b} reservas</Badge>
+            <Badge variant="outline"><MessageSquareWarning className="w-3 h-3 mr-1" />{counts.c} reclamações</Badge>
+            <Badge variant="outline"><PackageSearch className="w-3 h-3 mr-1" />{counts.l} perdidos</Badge>
+            <Badge variant="outline"><Star className="w-3 h-3 mr-1" />{counts.r} críticas</Badge>
+          </div>
+        )}
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
+        {error && <QueryErrorNote error={error} what="o histórico do cliente" onRetry={() => refetch()} retrying={isFetching} />}
         {data?.bookingsError && <p className="text-xs text-amber-600">{data.bookingsError}</p>}
-        {!isLoading && !data?.bookingsError && counts.b + counts.c + counts.l + counts.r === 0 && (
+        {!isLoading && !error && !data?.bookingsError && counts.b + counts.c + counts.l + counts.r === 0 && (
           <p className="text-muted-foreground text-xs">Sem histórico associado a este cliente.</p>
         )}
 

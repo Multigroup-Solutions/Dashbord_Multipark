@@ -2066,10 +2066,12 @@ export async function deleteApiKey(id: number) {
 
 // ─── RECLAMAÇÕES ─────────────────────────────────────────────────────────────
 
-export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number }) {
+export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number; archived?: boolean }) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = await projectFilterConds(complaints.projectId, filters?.projectId);
+  // Arquivadas (16b) só quando pedidas; nunca misturadas com as outras.
+  conditions.push(filters?.archived ? sql`${complaints.archivedAt} IS NOT NULL` : sql`${complaints.archivedAt} IS NULL`);
   if (filters?.status) conditions.push(eq(complaints.complaintStatus, filters.status as any));
   if (filters?.type) conditions.push(eq(complaints.complaintType, filters.type as any));
   if (filters?.vehicleId) conditions.push(eq(complaints.vehicleId, filters.vehicleId));
@@ -2117,12 +2119,22 @@ async function closeLinkedTasksIfResolved(module: "complaint" | "incident" | "lo
   await closeTasksForSource(module, id);
 }
 
-export async function deleteComplaint(id: number) {
+/**
+ * "Eliminar" passou a ARQUIVAR (16b): a reclamação, as mensagens e as fotos
+ * ficam; sai das listas, contadores, lembretes e avaliação. As tarefas
+ * ligadas fecham. Devolve false se já estava arquivada.
+ */
+export async function archiveComplaint(id: number, actorId: number, reason: string): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  await db.delete(complaintPhotos).where(eq(complaintPhotos.complaintId, id));
-  await db.delete(complaintMessages).where(eq(complaintMessages.complaintId, id));
-  await db.delete(complaints).where(eq(complaints.id, id));
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const [r] = (await db.update(complaints)
+    .set({ archivedAt: now, archivedById: actorId, archiveReason: reason.slice(0, 255) } as any)
+    .where(and(eq(complaints.id, id), sql`${complaints.archivedAt} IS NULL`))) as any;
+  if (!r?.affectedRows) return false;
+  const { closeTasksForSource } = await import("./tasksService");
+  await closeTasksForSource("complaint", id).catch((err: unknown) => console.warn("[complaint archive] tarefas:", String((err as any)?.message ?? err)));
+  return true;
 }
 
 export async function getComplaintMessages(complaintId: number) {
@@ -2153,28 +2165,36 @@ export async function addComplaintPhoto(data: Omit<InsertComplaintPhoto, "id" | 
   return Number(result[0].insertId);
 }
 
-export async function deleteComplaintPhoto(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.delete(complaintPhotos).where(eq(complaintPhotos.id, id));
+/** Tira a foto do caso sem a perder: a linha vai para removed_records (o ficheiro fica no storage). */
+export async function removeComplaintPhoto(id: number, actorId: number) {
+  const { removeWithRecord } = await import("./removedRecords");
+  return removeWithRecord({ table: complaintPhotos, entity: "complaint_photo", id, parentField: "complaintId", reason: "Retirada do caso", removedById: actorId });
 }
 
+/**
+ * Contadores das reclamações (sem as arquivadas). "Fechados" junta fechadas e
+ * convertidas, como a coluna Fechado do quadro; "Em atraso" usa a mesma regra
+ * do cron (o SLA para em "Aguarda Cliente").
+ */
 export async function getComplaintStats(projectId?: number) {
   const db = await getDb();
-  if (!db) return { total: 0, new: 0, analyzing: 0, waitingClient: 0, resolved: 0, closed: 0, overdue: 0 };
+  if (!db) throw new Error("DB unavailable");
   const all = await db
-    .select()
+    .select({ complaintStatus: complaints.complaintStatus, slaDeadline: complaints.slaDeadline })
     .from(complaints)
-    .where(and(...await projectFilterConds(complaints.projectId, projectId)));
-  const now = new Date();
+    .where(and(...await projectFilterConds(complaints.projectId, projectId), sql`${complaints.archivedAt} IS NULL`));
+  const { complaintOverdue } = await import("../shared/caseRules");
+  const nowMs = Date.now();
+  const n = (s: string) => all.filter(c => c.complaintStatus === s).length;
   return {
     total: all.length,
-    new: all.filter(c => c.complaintStatus === "new").length,
-    analyzing: all.filter(c => c.complaintStatus === "analyzing").length,
-    waitingClient: all.filter(c => c.complaintStatus === "waiting_client").length,
-    resolved: all.filter(c => c.complaintStatus === "resolved").length,
-    closed: all.filter(c => c.complaintStatus === "closed").length,
-    overdue: all.filter(c => c.slaDeadline && new Date(c.slaDeadline) < now && c.complaintStatus !== "resolved" && c.complaintStatus !== "closed").length,
+    new: n("new"),
+    analyzing: n("analyzing"),
+    waitingClient: n("waiting_client"),
+    resolved: n("resolved"),
+    closed: n("closed") + n("converted"),
+    converted: n("converted"),
+    overdue: all.filter(c => complaintOverdue(c, nowMs)).length,
   };
 }
 

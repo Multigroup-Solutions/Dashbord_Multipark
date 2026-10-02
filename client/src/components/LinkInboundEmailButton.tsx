@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Mail, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 /**
  * Anexa um email da caixa (inbound) a um caso, transcrevendo-o como MENSAGEM.
@@ -24,12 +25,13 @@ export default function LinkInboundEmailButton({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState(defaultSearch || "");
-  const { data: emails = [], isFetching } = trpc.clients.inboundEmails.useQuery(
+  const emailsQ = trpc.clients.inboundEmails.useQuery(
     { alias, search: search || null },
     { enabled: open },
   );
+  const { data: emails = [], isFetching } = emailsQ;
   const link = trpc.clients.linkInbound.useMutation({
-    onSuccess: () => { toast.success("Email anexado ao caso (visível nas mensagens)"); onLinked?.(); setOpen(false); },
+    onSuccess: (r: any) => { toast.success(r?.already ? "Este email já estava anexado a este caso" : "Email anexado ao caso (visível nas mensagens)"); onLinked?.(); setOpen(false); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -48,7 +50,8 @@ export default function LinkInboundEmailButton({
           />
           <div className="space-y-1 max-h-[50vh] overflow-y-auto">
             {isFetching && <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>}
-            {!isFetching && emails.length === 0 && (
+            {emailsQ.isError && <QueryErrorNote error={emailsQ.error} what="os emails da caixa" onRetry={() => emailsQ.refetch()} retrying={isFetching} />}
+            {!isFetching && !emailsQ.isError && emails.length === 0 && (
               <p className="text-xs text-muted-foreground text-center py-6">
                 Sem emails. Reencaminha para <b>{alias}@multipark.pt</b> e sincroniza.
               </p>

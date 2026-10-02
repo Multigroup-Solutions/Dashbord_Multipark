@@ -419,3 +419,66 @@ export function repeatDriversForCase(caseId: number, links: CrossRefLink[]): Arr
     .filter((r) => r.otherCaseIds.length > 0)
     .sort((a, b) => b.otherCaseIds.length - a.otherCaseIds.length);
 }
+
+// ─── Reclamações (P3 lote 16b) ──────────────────────────────────────────────
+
+/** Estados em que o prazo (SLA) corre. Em "Aguarda Cliente" para (é o cliente que deve). */
+export const COMPLAINT_SLA_RUNNING: readonly string[] = ["new", "analyzing"];
+const COMPLAINT_DONE = new Set(["resolved", "closed"]);
+
+/** Fora do prazo: prazo passado e o SLA a correr. A mesma regra no cron, nos contadores e nos cartões. PURA. */
+export function complaintOverdue(c: { slaDeadline?: string | null; complaintStatus?: string | null }, nowMs: number): boolean {
+  const due = parseUtc(c.slaDeadline ?? null);
+  return due != null && due < nowMs && COMPLAINT_SLA_RUNNING.includes(String(c.complaintStatus ?? ""));
+}
+
+/**
+ * Campos a mudar com a mudança de estado. Fechar regista quem e quando (só na
+ * 1.ª vez); reabrir limpa o fecho e o aviso de SLA (pode voltar a avisar).
+ * PURA — `now` em "AAAA-MM-DD HH:MM:SS" UTC.
+ */
+export function complaintStatusPatch(prev: string | null | undefined, next: string, actorId: number, now: string): Record<string, unknown> {
+  const from = String(prev ?? "");
+  if (from === next) return {};
+  const patch: Record<string, unknown> = { complaintStatus: next };
+  if (next === "resolved") patch.resolvedAt = now;
+  if (COMPLAINT_DONE.has(next) && !COMPLAINT_DONE.has(from)) { patch.closedById = actorId; patch.closedAt = now; }
+  if (!COMPLAINT_DONE.has(next) && COMPLAINT_DONE.has(from)) {
+    patch.resolvedAt = null; patch.closedAt = null; patch.closedById = null; patch.slaAlertedAt = null;
+  }
+  return patch;
+}
+
+/** Enviar email ao cliente passa o caso a "Aguarda Cliente" — só se ainda estava a ser tratado. PURA. */
+export function complaintStatusAfterEmail(prev: string | null | undefined): "waiting_client" | null {
+  return COMPLAINT_SLA_RUNNING.includes(String(prev ?? "")) ? "waiting_client" : null;
+}
+
+/** O cliente respondeu: volta a "Em Análise" se estava à espera dele ou já fechado. PURA. */
+export function complaintStatusOnClientReply(prev: string | null | undefined): "analyzing" | null {
+  return ["waiting_client", "resolved", "closed"].includes(String(prev ?? "")) ? "analyzing" : null;
+}
+
+/** Teto de uma foto de reclamação (o pedido inteiro tem de caber nos ~4,5 MB da Vercel). */
+export const COMPLAINT_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
+const PHOTO_TYPES: Record<string, string> = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif", heic: "image/heic", heif: "image/heif" };
+
+/** Tipo de uma foto pelo nome do ficheiro; null se não for uma imagem aceite. PURA. */
+export function complaintPhotoType(filename: string): { ext: string; mime: string } | null {
+  const ext = String(filename ?? "").split(".").pop()?.toLowerCase() ?? "";
+  const mime = PHOTO_TYPES[ext];
+  return mime ? { ext: ext === "jpeg" ? "jpg" : ext, mime } : null;
+}
+
+/** Estados que uma pessoa (ou a API) pode escolher; "converted" só por conversão. */
+export const COMPLAINT_MANUAL_STATUSES: readonly string[] = ["new", "analyzing", "waiting_client", "resolved", "closed"];
+
+/**
+ * Prazo de um caso → UTC da BD. Só o dia ("AAAA-MM-DD") = fim desse dia em
+ * Lisboa; com hora = hora de parede de Lisboa. Inválido → null (quem chama
+ * recusa, nunca limpa o prazo por engano). PURA.
+ */
+export function caseDueToUtc(v: string): string | null {
+  const s = String(v ?? "").trim();
+  return lisbonLocalToUtc(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T23:59:59` : s);
+}

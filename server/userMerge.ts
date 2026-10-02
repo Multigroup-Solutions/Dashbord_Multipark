@@ -42,8 +42,8 @@ export const USER_OWNERSHIP_COLUMNS: ReadonlyArray<{ table: string; column: stri
   { table: "mail_threads", column: "ownerUserId" },
   { table: "mail_threads", column: "assignedUserId" },
   { table: "whatsapp_conversations", column: "assignedUserId" },
-  { table: "complaints", column: "assignedToId" },
-  { table: "lost_found_items", column: "assignedTo" },
+  // complaints.assignedToId e lost_found_items.assignedTo são FICHAS (employees.id),
+  // não contas: juntar contas não lhes mexe (P3 16b).
   { table: "crm_saved_filters", column: "userId" },
   { table: "ai_chat_conversations", column: "userId" },
   { table: "training_tutor_messages", column: "userId" },

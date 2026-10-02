@@ -25,7 +25,7 @@ import {
   getComplaintPhotos,
   createComplaint,
   updateComplaint,
-  deleteComplaint,
+  archiveComplaint,
   addComplaintMessage,
   getComplaintStats,
   getGoogleReviews,
@@ -367,12 +367,21 @@ export function createMcpApiRouter(): Router {
     if (b.title !== undefined) data.title = b.title;
     if (b.description !== undefined) data.description = b.description;
     if (b.type !== undefined) data.complaintType = b.type;
-    if (b.status !== undefined) data.complaintStatus = b.status;
     if (b.priority !== undefined) data.complaintPriority = b.priority;
     if (b.assignedToId !== undefined) data.assignedToId = b.assignedToId === null ? null : Number(b.assignedToId);
     if (b.penaltyPoints !== undefined) data.penaltyPoints = Number(b.penaltyPoints);
-    if (b.slaHours !== undefined) data.slaDeadline = Number(b.slaHours) > 0 ? new Date(Date.now() + Number(b.slaHours) * 3600000) : null;
-    if (b.status === "resolved") data.resolvedAt = new Date();
+    if (b.slaHours !== undefined) { data.slaDeadline = Number(b.slaHours) > 0 ? new Date(Date.now() + Number(b.slaHours) * 3600000) : null; data.slaAlertedAt = null; }
+    // Estado: as mesmas regras do ecrã (16b) — só os estados manuais, nunca
+    // numa convertida/arquivada; fechar regista quem/quando, reabrir limpa.
+    if (b.status !== undefined) {
+      const { COMPLAINT_MANUAL_STATUSES, complaintStatusPatch, utcNowStr } = await import("../shared/caseRules");
+      if (!COMPLAINT_MANUAL_STATUSES.includes(String(b.status))) return res.status(400).json({ error: `status inválido (${COMPLAINT_MANUAL_STATUSES.join("|")})` });
+      const cur = await getComplaintById(id);
+      if (!cur) return res.status(404).json({ error: "Reclamação não encontrada" });
+      if (cur.complaintStatus === "converted") return res.status(409).json({ error: "Reclamação convertida — trata-a no registo novo." });
+      if ((cur as any).archivedAt) return res.status(409).json({ error: "Reclamação arquivada." });
+      Object.assign(data, complaintStatusPatch(cur.complaintStatus, String(b.status), apiKeyActorId(getApiKeyInfo(req)) || 0, utcNowStr()));
+    }
     if (Object.keys(data).length === 0) return res.status(400).json({ error: "Nada para atualizar" });
     await updateComplaint(id, data);
     await logApiKeyAction(req, { action: "update", entity: "complaint", entityId: id, details: `[MCP] update (${Object.keys(data).join(", ")})` });
@@ -394,11 +403,13 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true, id: msgId });
   }));
 
+  // DELETE arquiva (16b): a reclamação, as mensagens e as fotos ficam.
   r.delete("/complaints/:id", requireScope("admin"), h(async (req, res) => {
     const id = Number(req.params.id);
-    await deleteComplaint(id);
-    await logApiKeyAction(req, { action: "delete", entity: "complaint", entityId: id, details: `[MCP] delete`, asKeyEvent: true });
-    res.json({ success: true });
+    const reason = String((req.body ?? {}).reason ?? req.query.reason ?? "Arquivada pela API").slice(0, 255);
+    const done = await archiveComplaint(id, apiKeyActorId(getApiKeyInfo(req)) || 0, reason);
+    await logApiKeyAction(req, { action: "archive", entity: "complaint", entityId: id, details: `[MCP] arquivar: ${reason}`, asKeyEvent: true });
+    res.json({ success: true, archived: true, alreadyArchived: !done });
   }));
 
   // ── GOOGLE REVIEWS ────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { can, scopeFor } from "@shared/access";
 import { trpc } from "@/lib/trpc";
+import { compressImage } from "@/lib/compressImage";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
@@ -1602,40 +1603,6 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-}
-
-// Reduz fotos grandes antes do upload: o limite de body da Vercel (~4.5MB)
-// rebenta com fotos de telemóvel em base64 (+33%). Redimensiona para maxDim
-// e re-encoda em JPEG; se falhar (formato exótico), devolve o original.
-async function compressImage(file: File, maxDim = 1600, quality = 0.85): Promise<File> {
-  try {
-    const dataUrl: string = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = reject;
-      el.src = dataUrl;
-    });
-    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(img.width * scale);
-    canvas.height = Math.round(img.height * scale);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return file;
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", quality)
-    );
-    if (!blob || blob.size >= file.size) return file;
-    return new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
-  } catch {
-    return file;
-  }
 }
 
 // Converte as primeiras páginas de um PDF numa única imagem PNG (empilhadas

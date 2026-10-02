@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UserPlus, Save, CheckCircle2 } from "lucide-react";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { lisbonDayOf } from "@shared/lisbonDay";
 
 type SavePatch = { projectId: number | null; assigneeId: number | null; dueDate: string | null };
 
@@ -31,7 +32,7 @@ export default function CaseAssignmentCard({
 }) {
   const [proj, setProj] = useState<string>(projectId ? String(projectId) : "none");
   const [person, setPerson] = useState<string>(assigneeId ? String(assigneeId) : "none");
-  const [due, setDue] = useState<string>(dueDate ? String(dueDate).slice(0, 10) : "");
+  const [due, setDue] = useState<string>(dueDate ? lisbonDayOf(String(dueDate)) : "");
 
   return (
     <Card>
@@ -68,7 +69,8 @@ export default function CaseAssignmentCard({
         <Button size="sm" disabled={saving} onClick={() => onSave({
           projectId: proj === "none" ? null : parseInt(proj),
           assigneeId: person === "none" ? null : parseInt(person),
-          dueDate: due ? due + "T00:00:00" : null,
+          // Fim do dia escolhido, em Lisboa (o servidor converte para UTC).
+          dueDate: due ? due + "T23:59:59" : null,
         })}>
           <Save className="w-4 h-4 mr-1" /> Guardar
         </Button>

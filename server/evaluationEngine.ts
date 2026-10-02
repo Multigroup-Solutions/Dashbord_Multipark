@@ -142,7 +142,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       SELECT d.complaintId, d.employeeId, c.createdAt AS at, c.penaltyPoints, c.complaint_status AS status
         FROM complaint_drivers_on_duty d
         JOIN complaints c ON c.id = d.complaintId
-       WHERE d.employeeId IS NOT NULL AND c.createdAt >= ${range.start} AND c.createdAt < ${range.end}`));
+       WHERE d.employeeId IS NOT NULL AND c.archivedAt IS NULL AND c.createdAt >= ${range.start} AND c.createdAt < ${range.end}`));
   } catch { /* tabela ainda não criada */ }
 
   // Reclamações/alertas a que as penalizações apontam, de qualquer data: contam
@@ -156,7 +156,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       const rel = rowsOf(await db.execute(sql`
         SELECT d.complaintId, d.employeeId, c.penaltyPoints, c.complaint_status AS status
           FROM complaint_drivers_on_duty d JOIN complaints c ON c.id = d.complaintId
-         WHERE d.employeeId IS NOT NULL AND d.complaintId IN (${sql.join(cIds.map((id) => sql`${id}`), sql`, `)})`));
+         WHERE d.employeeId IS NOT NULL AND c.archivedAt IS NULL AND d.complaintId IN (${sql.join(cIds.map((id) => sql`${id}`), sql`, `)})`));
       for (const r of rel) {
         if (complaintIsConfirmed({ penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null })) relatedCountedElsewhere.complaints.push(`${Number(r.employeeId)}|${Number(r.complaintId)}`);
       }

@@ -108,7 +108,7 @@ async function findDuplicate(db: any, c: any) {
     SELECT id, clientEmail, reservationRef, vehiclePlate, complaint_status AS complaintStatus, createdAt
       FROM complaints
      WHERE id <> ${c.id}
-       AND complaint_status IN ('new', 'analyzing', 'waiting_client')
+       AND complaint_status IN ('new', 'analyzing', 'waiting_client') AND archivedAt IS NULL
        AND createdAt >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${DUPLICATE_WINDOW_DAYS} DAY)
        AND (${sql.join(conds, sql` OR `)})
      ORDER BY id ASC
@@ -250,10 +250,10 @@ export async function triageComplaint(complaintId: number, opts: { userId?: numb
       await notify({
         kind: "complaint_triage",
         projectId: (patch as any).projectId ?? c.projectId ?? null,
-        alsoUserIds: [c.assignedToId],
+        alsoUserIds: await (await import("./complaintsExtended")).assigneeUserIds([c.assignedToId]),
         title: `Reclamação #${complaintId}: sugestões da IA por rever`,
         body: `${String(c.title ?? "").slice(0, 120)} — ${reasons}.`,
-        link: `/reclamacoes/${complaintId}`,
+        link: `/reclamacoes?id=${complaintId}`,
         entity: { type: "complaint", id: complaintId },
       });
     } catch { /* o aviso nunca parte a triagem */ }

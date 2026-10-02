@@ -9,6 +9,12 @@ import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { fileHref } from "@/lib/fileHref";
 import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
+import { lisbonDayOf } from "@shared/lisbonDay";
+import { toCsv } from "@shared/csv";
+import { complaintOverdue } from "@shared/caseRules";
+import { compressImage } from "@/lib/compressImage";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { useConfirm } from "./training/shared";
 import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -30,12 +36,13 @@ import CaseAssignmentCard from "@/components/CaseAssignmentCard";
 import LinkInboundEmailButton from "@/components/LinkInboundEmailButton";
 import ComplaintAiPanel from "@/components/ComplaintAiPanel";
 import { useState, useMemo, useEffect } from "react";
+import { useSearch } from "wouter";
 import {
   AlertTriangle, Plus, MessageSquare, Camera, Clock, User, Car,
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
   Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical, Package,
-  ExternalLink, Paperclip, FileSearch,
+  ExternalLink, Paperclip, FileSearch, Archive, ArchiveRestore,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -84,6 +91,12 @@ export default function ComplaintsPage() {
   // ?id=N abre logo o caso (links a partir da ficha do cliente no CRM).
   const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
   const [view, setView] = useState<"kanban" | "detail">(() => (selectedId ? "detail" : "kanban"));
+  // Um link para outra reclamação estando já na página (sino, pesquisa) também abre (16b).
+  const search = useSearch();
+  useEffect(() => {
+    const id = Number(new URLSearchParams(search).get("id")) || null;
+    if (id) { setSelectedId(id); setView("detail"); }
+  }, [search]);
   const [, setFilterProject] = useState<string>("all");
   // ?new=1 (atalho "Nova reclamação" da pesquisa global) abre logo o formulário.
   const [showCreate, setShowCreate] = useState(() => new URLSearchParams(window.location.search).get("new") === "1");
@@ -115,13 +128,18 @@ export default function ComplaintsPage() {
 
 function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
   const globalFilters = useGlobalFilters();
+  const canEdit = can(user, "reclamacoes", "edit");
+  const canManage = can(user, "reclamacoes", "manage");
+  const [showArchived, setShowArchived] = useState(false);
   const complaintsQueryInput = useMemo(() => {
     const input: any = {};
     if (filterType !== "all") input.type = filterType;
     if (globalFilters.projectId !== undefined) input.projectId = globalFilters.projectId;
+    if (showArchived) input.archived = true;
     return input;
-  }, [filterType, globalFilters.projectId]);
-  const { data: allComplaints = [], isLoading } = trpc.complaints.list.useQuery(complaintsQueryInput);
+  }, [filterType, globalFilters.projectId, showArchived]);
+  const listQ = trpc.complaints.list.useQuery(complaintsQueryInput);
+  const { data: allComplaints = [], isLoading } = listQ;
   // ?q= (pesquisa global → "ver todos"): filtro local por título, cliente, reserva, matrícula ou nº.
   const [q, setQ] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
   const complaints = useMemo(() => {
@@ -131,9 +149,18 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     return (allComplaints as any[]).filter((c: any) => [c.id, c.title, c.clientName, c.clientEmail, c.reservationRef, c.vehiclePlate]
       .some((v) => norm(v).includes(needle) || norm(v).replace(/-/g, "").includes(needle.replace(/-/g, ""))));
   }, [allComplaints, q]);
-  const { data: stats } = trpc.complaints.stats.useQuery(
-    globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : undefined
-  );
+  // Contadores contados da MESMA lista do quadro (tipo, pesquisa e cidade
+  // incluídos) — antes vinham de outra consulta que ignorava os filtros (16b).
+  const stats = useMemo(() => {
+    const list = complaints as any[];
+    const n = (st: string) => list.filter((c) => c.complaintStatus === st).length;
+    const nowMs = Date.now();
+    return {
+      total: list.length, new: n("new"), analyzing: n("analyzing"), waitingClient: n("waiting_client"),
+      resolved: n("resolved"), closed: n("closed") + n("converted"),
+      overdue: list.filter((c) => complaintOverdue(c, nowMs)).length,
+    };
+  }, [complaints]);
   const updateMut = trpc.complaints.update.useMutation();
   const utils = trpc.useUtils();
 
@@ -159,9 +186,9 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     try {
       await updateMut.mutateAsync({ id, status: newStatus as any });
       toast.success("Estado atualizado");
-    } catch {
+    } catch (e: any) {
       utils.complaints.list.setData(complaintsQueryInput, prev);
-      toast.error("Erro ao mover");
+      toast.error(e?.message || "Erro ao mover");
     } finally {
       utils.complaints.list.invalidate();
       utils.complaints.stats.invalidate();
@@ -187,44 +214,52 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
             className="h-9 w-full sm:w-64"
             aria-label="Filtrar reclamações"
           />
-          <Button
-            variant="outline"
-            disabled={complaints.length === 0}
-            onClick={() => {
-              const headers = ["ID","Título","Tipo","Estado","Prioridade","Cliente","Email","Telefone","Matrícula","Ref.Reserva","Criado","Resolvido","SLA","Atribuída a"];
-              const rows = (complaints as any[]).map(c => [
-                c.id,
-                (c.title || "").replace(/;/g, ","),
-                TYPE_CONFIG[c.complaintType]?.label ?? c.complaintType,
-                STATUS_CONFIG[c.complaintStatus]?.label ?? c.complaintStatus,
-                PRIORITY_CONFIG[c.complaintPriority]?.label ?? c.complaintPriority,
-                (c.clientName ?? "").replace(/;/g, ","),
-                (c.clientEmail ?? "").replace(/;/g, ","),
-                c.clientPhone ?? "",
-                c.vehiclePlate ?? "",
-                c.reservationRef ?? "",
-                c.createdAt ? new Date(c.createdAt).toISOString().slice(0, 10) : "",
-                c.resolvedAt ? new Date(c.resolvedAt).toISOString().slice(0, 10) : "",
-                c.slaDeadline ? new Date(c.slaDeadline).toISOString().slice(0, 10) : "",
-                c.assignedToName ?? "",
-              ]);
-              const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-              const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url; a.download = `reclamacoes_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-              URL.revokeObjectURL(url);
-            }}
-          >
-            <Download className="w-4 h-4 mr-2" /> CSV
-          </Button>
+          {/* CSV leva contactos do cliente: só quem pode exportar (matriz) — 16b. */}
+          {can(user, "reclamacoes", "export") && (
+            <Button
+              variant="outline"
+              disabled={complaints.length === 0}
+              onClick={() => {
+                const headers = ["ID","Título","Tipo","Estado","Prioridade","Cliente","Email","Telefone","Matrícula","Ref.Reserva","Criado","Resolvido","SLA","Atribuída a"];
+                const day = (v: string | null | undefined) => (v ? lisbonDayOf(String(v)) : "");
+                const rows = (complaints as any[]).map(c => [
+                  c.id, c.title ?? "",
+                  TYPE_CONFIG[c.complaintType]?.label ?? c.complaintType,
+                  STATUS_CONFIG[c.complaintStatus]?.label ?? c.complaintStatus,
+                  PRIORITY_CONFIG[c.complaintPriority]?.label ?? c.complaintPriority,
+                  c.clientName ?? "", c.clientEmail ?? "", c.clientPhone ?? "", c.vehiclePlate ?? "", c.reservationRef ?? "",
+                  day(c.createdAt), day(c.resolvedAt), day(c.slaDeadline),
+                  c.assignedToName ?? "",
+                ]);
+                const blob = new Blob(["\ufeff" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8;" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = `reclamacoes_${lisbonDayOf(Date.now())}.csv`; a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              <Download className="w-4 h-4 mr-2" /> CSV
+            </Button>
+          )}
+          {canManage && (
+            <Button variant={showArchived ? "default" : "outline"} onClick={() => setShowArchived((v) => !v)}>
+              <Archive className="w-4 h-4 mr-2" /> {showArchived ? "A ver arquivadas" : "Arquivadas"}
+            </Button>
+          )}
           <SyncEmailsButton />
-          <Button onClick={onNew}><Plus className="w-4 h-4 mr-2" /> Nova Reclamação</Button>
+          {canEdit && <Button onClick={onNew}><Plus className="w-4 h-4 mr-2" /> Nova Reclamação</Button>}
         </div>
       </div>
 
+      {listQ.isError && (
+        <QueryErrorNote error={listQ.error} what="as reclamações" onRetry={() => listQ.refetch()} retrying={listQ.isFetching} />
+      )}
+      {showArchived && !listQ.isError && (
+        <p className="text-xs text-muted-foreground">Reclamações arquivadas: não entram nos contadores, lembretes nem na avaliação. Abre uma para a tirar do arquivo.</p>
+      )}
+
       {/* Stats */}
-      {stats && (
+      {!listQ.isError && !isLoading && !showArchived && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
           {[
             { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
@@ -270,6 +305,21 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
       {/* Kanban Board */}
       {isLoading ? (
         <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
+      ) : listQ.isError ? null : showArchived ? (
+        <div className="space-y-2">
+          {(complaints as any[]).length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Sem reclamações arquivadas.</p>}
+          {(complaints as any[]).map((c: any) => (
+            <Card key={c.id} className="cursor-pointer hover:shadow-md" onClick={() => onSelect(c.id)}>
+              <CardContent className="p-3 flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-xs text-muted-foreground tabular-nums">#{c.id}</span>
+                <span className="font-medium min-w-0 break-words">{c.title}</span>
+                <Badge variant="secondary">Arquivada</Badge>
+                {c.archiveReason && <span className="text-xs text-muted-foreground break-words">— {c.archiveReason}</span>}
+                {c.archivedAt && <span className="text-xs text-muted-foreground ml-auto">{fmtPTDate(c.archivedAt)}</span>}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
           {KANBAN_COLUMNS.map(status => {
@@ -279,13 +329,14 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
               <div
                 key={status}
                 className={`space-y-3 rounded-lg transition-colors ${dragOverCol === status ? "ring-2 ring-primary/60 bg-primary/5" : ""}`}
-                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
+                onDragOver={(e) => { if (!canEdit) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null); }}
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragOverCol(null);
                   const id = Number(e.dataTransfer.getData("text/plain"));
-                  if (id) moveCard(id, status);
+                  const card = (complaints as any[]).find((x) => x.id === id);
+                  if (id && canEdit && card?.complaintStatus !== "converted") moveCard(id, status);
                 }}
               >
                 <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
@@ -303,6 +354,8 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
                         onSelect={() => onSelect(c.id)}
                         onMove={moveCard}
                         currentStatus={status}
+                        // Convertidas não se movem (o servidor recusa); sem edição, só se vê.
+                        canMove={canEdit && c.complaintStatus !== "converted"}
                       />
                     ))}
                     {items.length === 0 && (
@@ -319,15 +372,15 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
   );
 }
 
-function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
-  const isOverdue = c.slaDeadline && new Date(c.slaDeadline) < new Date() && c.complaintStatus !== "resolved" && c.complaintStatus !== "closed";
+function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus, canMove }: any) {
+  const isOverdue = complaintOverdue(c, Date.now());
   const colIdx = KANBAN_COLUMNS.indexOf(currentStatus);
-  const canMoveLeft = colIdx > 0;
-  const canMoveRight = colIdx < KANBAN_COLUMNS.length - 1;
+  const canMoveLeft = canMove && colIdx > 0;
+  const canMoveRight = canMove && colIdx < KANBAN_COLUMNS.length - 1;
 
   return (
     <Card
-      draggable
+      draggable={!!canMove}
       onDragStart={(e) => {
         e.dataTransfer.setData("text/plain", String(c.id));
         e.dataTransfer.effectAllowed = "move";
@@ -337,7 +390,7 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
         if (e.currentTarget instanceof HTMLElement) e.currentTarget.style.opacity = "1";
       }}
       onClick={onSelect}
-      className={`cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}
+      className={`${canMove ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}
     >
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start gap-2">
@@ -372,7 +425,7 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus }: any) {
           </div>
         )}
 
-        {c.slaDeadline && !isOverdue && c.complaintStatus !== "resolved" && c.complaintStatus !== "closed" && (
+        {c.slaDeadline && !isOverdue && ["new", "analyzing", "waiting_client"].includes(c.complaintStatus) && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <Clock className="w-3 h-3" /> Prazo: {fmtPTDate(c.slaDeadline)}
           </div>
@@ -420,25 +473,38 @@ const CHANGE_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
 };
 
 function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () => void }) {
-  const { data, isLoading } = trpc.complaints.getById.useQuery({ id });
-  const { data: vehicleHistory } = trpc.complaints.vehicleHistory.useQuery(
+  const detailQ = trpc.complaints.getById.useQuery({ id });
+  const { data, isLoading } = detailQ;
+  // Quem só vê os próprios casos não lê a reserva, a viatura nem os condutores
+  // (as rotas recusam): os separadores ficam escondidos em vez de darem erro (16b).
+  const seesMore = seesBeyondOwn(user, "reclamacoes");
+  const canEdit = can(user, "reclamacoes", "edit");
+  const canManage = can(user, "reclamacoes", "manage");
+  const vehicleHistoryQ = trpc.complaints.vehicleHistory.useQuery(
     { vehicleId: data?.complaint?.vehicleId ?? 0 },
-    { enabled: !!data?.complaint?.vehicleId }
+    { enabled: seesMore && !!data?.complaint?.vehicleId }
   );
-  const { data: apiTimeline, isLoading: timelineLoading } = trpc.complaints.bookingTimeline.useQuery(
+  const vehicleHistory = vehicleHistoryQ.data;
+  const timelineQ = trpc.complaints.bookingTimeline.useQuery(
     { bookingId: data?.complaint?.reservationRef || "" },
-    { enabled: !!data?.complaint?.reservationRef }
+    { enabled: seesMore && !!data?.complaint?.reservationRef }
   );
+  const { data: apiTimeline, isLoading: timelineLoading } = timelineQ;
   // Dossier completo da reserva ligada (detalhe + extras) — automático, sem
   // passos manuais.
-  const { data: dossier } = trpc.complaints.bookingDossier.useQuery(
+  const dossierQ = trpc.complaints.bookingDossier.useQuery(
     { reservationRef: data?.complaint?.reservationRef || "" },
-    { enabled: !!data?.complaint?.reservationRef }
+    { enabled: seesMore && !!data?.complaint?.reservationRef }
   );
-  const { data: vehicleAgents } = trpc.complaints.vehicleAgents.useQuery(
+  const dossier = dossierQ.data;
+  const vehicleAgentsQ = trpc.complaints.vehicleAgents.useQuery(
     { plate: data?.complaint?.vehiclePlate || "", currentBookingRef: data?.complaint?.reservationRef || undefined },
-    { enabled: !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2 }
+    { enabled: seesMore && !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2 }
   );
+  const vehicleAgents = vehicleAgentsQ.data;
+  const [confirm, confirmUi] = useConfirm();
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveReason, setArchiveReason] = useState("");
   const autoLinkMut = trpc.complaints.autoLink.useMutation({
     onSuccess: (r) => {
       if (r.linked) {
@@ -467,16 +533,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     return filtered
       .sort((a: any, b: any) => new Date(b.actionDate || 0).getTime() - new Date(a.actionDate || 0).getTime());
   }, [apiTimeline, showAllHist]);
-  const { data: vehicles = [] } = trpc.operational.vehicles.list.useQuery();
-  const { data: employees = [] } = trpc.rh.list.useQuery();
-  const { data: projectsList = [] } = trpc.projects.list.useQuery();
+  const { data: employees = [] } = trpc.rh.list.useQuery(undefined, { enabled: canEdit });
+  const { data: projectsList = [] } = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
   const updateMut = trpc.complaints.update.useMutation();
   const addMsgMut = trpc.complaints.addMessage.useMutation();
   const uploadPhotoMut = trpc.complaints.uploadPhoto.useMutation();
-  const deletePhotoMut = trpc.complaints.deletePhoto.useMutation();
-  const deleteMut = trpc.complaints.delete.useMutation({
-    onSuccess: () => { toast.success("Reclamação eliminada"); utils.complaints.list.invalidate(); utils.complaints.stats.invalidate(); onBack(); },
-    onError: (e) => toast.error(e.message || "Erro ao eliminar"),
+  const removePhotoMut = trpc.complaints.removePhoto.useMutation();
+  // "Eliminar" passou a arquivar (com motivo): nada se apaga (16b).
+  const archiveMut = trpc.complaints.archive.useMutation({
+    onSuccess: () => { toast.success("Reclamação arquivada"); setArchiveOpen(false); setArchiveReason(""); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); onBack(); },
+    onError: (e) => toast.error(e.message || "Erro ao arquivar"),
+  });
+  const unarchiveMut = trpc.complaints.unarchive.useMutation({
+    onSuccess: () => { toast.success("Reclamação tirada do arquivo"); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); },
+    onError: (e) => toast.error(e.message || "Erro ao tirar do arquivo"),
   });
   const convertMut = trpc.complaints.convertToLostFound.useMutation({
     onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId} (a reclamação fica fechada e ligada)`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
@@ -491,10 +561,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   // Rascunho da IA → janela "Enviar email" (quem envia é sempre uma pessoa).
   const [emailPreset, setEmailPreset] = useState<{ body: string; n: number } | null>(null);
 
+  // Erro (sem acesso, não existe, falha) ≠ a carregar para sempre (16b).
+  if (detailQ.isError) {
+    return (
+      <div className="space-y-4">
+        <Button variant="outline" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
+        <QueryErrorNote error={detailQ.error} what={`a reclamação #${id}`} onRetry={() => detailQ.refetch()} retrying={detailQ.isFetching} />
+      </div>
+    );
+  }
   if (isLoading || !data) return <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
   const c = data.complaint;
-  const isOverdue = c.slaDeadline && new Date(c.slaDeadline) < new Date() && c.complaintStatus !== "resolved" && c.complaintStatus !== "closed";
+  const archived = !!(c as any).archivedAt;
+  const isOverdue = complaintOverdue(c, Date.now());
   const drivers = parseDriversInvolved(c.driversInvolved);
 
   const startEditing = () => {
@@ -532,37 +612,46 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
       utils.complaints.list.invalidate();
       setIsEditing(false);
       toast.success("Reclamação atualizada");
-    } catch { toast.error("Erro ao atualizar"); }
+    } catch (e: any) { toast.error(e?.message || "Erro ao atualizar"); }
   };
 
+  // Mutações com erro visível (antes falhavam em silêncio) — 16b.
   const handleStatusChange = async (status: string) => {
-    await updateMut.mutateAsync({ id, status: status as any });
-    utils.complaints.getById.invalidate({ id });
-    utils.complaints.list.invalidate();
-    utils.complaints.stats.invalidate();
-    toast.success("Estado atualizado");
+    try {
+      await updateMut.mutateAsync({ id, status: status as any });
+      utils.complaints.getById.invalidate({ id });
+      utils.complaints.list.invalidate();
+      toast.success("Estado atualizado");
+    } catch (e: any) { toast.error(e?.message || "Erro ao mudar o estado"); }
   };
 
   const handleSendMsg = async () => {
     if (!newMsg.trim()) return;
-    await addMsgMut.mutateAsync({ complaintId: id, message: newMsg, isInternal });
-    setNewMsg("");
-    utils.complaints.getById.invalidate({ id });
-    toast.success("Mensagem adicionada");
+    try {
+      await addMsgMut.mutateAsync({ complaintId: id, message: newMsg, isInternal });
+      setNewMsg("");
+      utils.complaints.getById.invalidate({ id });
+      toast.success(isInternal ? "Nota interna adicionada" : "Mensagem adicionada ao caso (não é enviada ao cliente)");
+    } catch (e: any) { toast.error(e?.message || "Erro ao guardar a mensagem"); }
   };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = (reader.result as string).split(",")[1];
+    const original = e.target.files?.[0];
+    e.target.value = "";
+    if (!original) return;
+    try {
+      // Reduz a foto antes de enviar (o pedido tem limite de ~4,5 MB).
+      const file = await compressImage(original, 1600, 0.85);
+      const base64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
       await uploadPhotoMut.mutateAsync({ complaintId: id, base64, filename: file.name });
       utils.complaints.getById.invalidate({ id });
       toast.success("Foto carregada");
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
+    } catch (err: any) { toast.error(err?.message || "Não foi possível carregar a foto"); }
   };
 
   return (
@@ -588,13 +677,21 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             {c.assignedToName ? ` — Atribuída a: ${c.assignedToName}` : " — Por atribuir"}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>
+        {canEdit && !archived && <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>}
         {c.complaintStatus === "converted" && (c as any).convertedToId && (
           <a href={`/perdidos-achados/caso/${(c as any).convertedToId}`} className="text-xs underline text-violet-700">
             Convertida no Perdido #{(c as any).convertedToId}
           </a>
         )}
-        <Select value={c.complaintStatus} onValueChange={handleStatusChange} disabled={c.complaintStatus === "converted"}>
+        {(c as any).convertedFromType && (c as any).convertedFromId && (
+          <a
+            href={(c as any).convertedFromType === "incident" ? `/ocorrencias?id=${(c as any).convertedFromId}` : `/perdidos-achados/caso/${(c as any).convertedFromId}`}
+            className="text-xs underline text-violet-700"
+          >
+            Veio {(c as any).convertedFromType === "incident" ? "da ocorrência" : "do perdido"} #{(c as any).convertedFromId}
+          </a>
+        )}
+        <Select value={c.complaintStatus} onValueChange={handleStatusChange} disabled={!canEdit || archived || c.complaintStatus === "converted"}>
           <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
           <SelectContent>
             {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "converted" || c.complaintStatus === "converted").map(([k, v]) => (
@@ -602,32 +699,56 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             ))}
           </SelectContent>
         </Select>
-        {can(user, "reclamacoes", "manage") && (
+        {canManage && (
           <>
-            {c.complaintStatus !== "converted" && <Button
+            {c.complaintStatus !== "converted" && !archived && <Button
               variant="outline" size="sm"
               disabled={convertMut.isPending}
               title="Isto afinal é um Perdido — cria o caso e fecha esta reclamação (ligados)"
-              onClick={() => {
-                if (!confirm("Converter em caso de Perdidos? Leva mensagens, fotos e condutores; a reclamação fica fechada como 'Convertida' e ligada.")) return;
+              onClick={async () => {
+                if (!(await confirm({ title: "Converter em caso de Perdidos?", description: "Leva mensagens, fotos e condutores; a reclamação fica fechada como 'Convertida' e ligada.", confirmLabel: "Converter" }))) return;
                 convertMut.mutate({ id });
               }}
             >
               <Package className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A converter…" : "Converter em Perdido"}
             </Button>}
-            <Button
-              variant="destructive" size="sm"
-              disabled={deleteMut.isPending}
-              onClick={() => {
-                if (!confirm("Eliminar esta reclamação definitivamente?")) return;
-                deleteMut.mutate({ id });
-              }}
-            >
-              <Trash2 className="w-4 h-4 mr-1" /> Eliminar
-            </Button>
+            {archived ? (
+              <Button variant="outline" size="sm" disabled={unarchiveMut.isPending} onClick={() => unarchiveMut.mutate({ id })}>
+                <ArchiveRestore className="w-4 h-4 mr-1" /> {unarchiveMut.isPending ? "A tirar…" : "Tirar do arquivo"}
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setArchiveOpen(true)} title="Sai das listas e contadores; nada é apagado">
+                <Archive className="w-4 h-4 mr-1" /> Arquivar
+              </Button>
+            )}
           </>
         )}
       </div>
+
+      {archived && (
+        <div role="status" className="rounded-md border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800 dark:bg-slate-900/40 dark:text-slate-200">
+          <Archive className="w-4 h-4 inline mr-1" /> Arquivada{(c as any).archivedAt ? ` em ${fmtPTDateTime((c as any).archivedAt)}` : ""}{(c as any).archiveReason ? ` — ${(c as any).archiveReason}` : ""}.
+          {" "}Não entra nas listas, contadores, lembretes nem na avaliação. Nada foi apagado.
+        </div>
+      )}
+
+      <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Arquivar a reclamação #{id}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Sai das listas, dos contadores, dos lembretes e da avaliação. A reclamação, as mensagens e as fotos ficam guardadas e pode voltar com "Tirar do arquivo".</p>
+          <div>
+            <Label>Porquê?</Label>
+            <Input value={archiveReason} onChange={(e) => setArchiveReason(e.target.value)} placeholder="Ex.: duplicada da #123, teste, spam" maxLength={255} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveOpen(false)}>Cancelar</Button>
+            <Button disabled={archiveReason.trim().length < 3 || archiveMut.isPending} onClick={() => archiveMut.mutate({ id, reason: archiveReason.trim() })}>
+              <Archive className="w-4 h-4 mr-1" /> {archiveMut.isPending ? "A arquivar…" : "Arquivar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {confirmUi}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Details */}
@@ -637,18 +758,18 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               <TabsTrigger value="details">Detalhes</TabsTrigger>
               <TabsTrigger value="messages">Mensagens ({data.messages.length})</TabsTrigger>
               <TabsTrigger value="photos">Fotos ({data.photos.length}){(data as any).emailAttachments?.length ? ` · Anexos (${(data as any).emailAttachments.length})` : ""}</TabsTrigger>
-              {(c.vehiclePlate || c.vehicleId) && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
-              <TabsTrigger value="duty">Em serviço</TabsTrigger>
-              <TabsTrigger value="booking-history">Histórico ({timelineHist.length})</TabsTrigger>
-              <TabsTrigger value="comms">Comunicações</TabsTrigger>
+              {seesMore && (c.vehiclePlate || c.vehicleId) && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
+              {seesMore && <TabsTrigger value="duty">Em serviço</TabsTrigger>}
+              {seesMore && <TabsTrigger value="booking-history">Histórico{timelineQ.isError || apiTimeline?.error ? "" : ` (${timelineHist.length})`}</TabsTrigger>}
+              {seesMore && <TabsTrigger value="comms">Comunicações</TabsTrigger>}
             </TabsList>
 
             <TabsContent value="details" className="space-y-4 mt-4">
-              <ComplaintAiPanel
+              {seesMore && <ComplaintAiPanel
                 complaintId={id}
-                canEdit={can(user, "reclamacoes", "edit")}
+                canEdit={canEdit && !archived}
                 onUseDraft={(text) => setEmailPreset((p) => ({ body: text, n: (p?.n ?? 0) + 1 }))}
-              />
+              />}
               {c.description && (
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Descrição</CardTitle></CardHeader>
@@ -656,9 +777,9 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 </Card>
               )}
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
                   <CardTitle className="text-sm">Dados da Reserva</CardTitle>
-                  {!c.reservationRef ? (
+                  {!seesMore ? null : !c.reservationRef ? (canEdit && 
                     <Button
                       size="sm" variant="outline"
                       disabled={autoLinkMut.isPending}
@@ -728,8 +849,17 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       </div>
                     );
                   })()}
-                  {c.reservationRef && dossier && !dossier.booking && (
-                    <p className="text-xs text-muted-foreground border-t pt-3">A ref. "{c.reservationRef}" não corresponde a nenhuma reserva na base de dados.</p>
+                  {/* Multipark sem resposta ≠ "não corresponde a nenhuma reserva" (16b). */}
+                  {dossierQ.isError && <QueryErrorNote error={dossierQ.error} what="a reserva" onRetry={() => dossierQ.refetch()} retrying={dossierQ.isFetching} />}
+                  {dossier?.error && (
+                    <div className="flex flex-wrap items-center gap-2 border-t pt-3 text-xs text-amber-800">
+                      <span className="min-w-0 flex-1">{dossier.error}</span>
+                      <Button size="sm" variant="outline" className="h-6 text-xs" disabled={dossierQ.isFetching} onClick={() => dossierQ.refetch()}><RefreshCw className="w-3 h-3 mr-1" /> Tentar de novo</Button>
+                    </div>
+                  )}
+                  {dossier?.booking && (dossier as any).extrasError && <p className="text-xs text-amber-800">{(dossier as any).extrasError}</p>}
+                  {c.reservationRef && dossier && !dossier.booking && !dossier.error && (
+                    <p className="text-xs text-muted-foreground border-t pt-3">A ref. "{c.reservationRef}" não corresponde a nenhuma reserva na Multipark (nas tuas cidades).</p>
                   )}
                 </CardContent>
               </Card>
@@ -760,19 +890,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       message: m.message, isInternal: m.isInternal,
                     }))}
                   />
-                  <Separator />
+                  {canEdit && !archived && <><Separator />
                   <div className="space-y-2">
                     <Textarea placeholder="Escrever mensagem..." value={newMsg} onChange={e => setNewMsg(e.target.value)} rows={3} />
                     <div className="flex items-center justify-between">
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input type="checkbox" checked={isInternal} onChange={e => setIsInternal(e.target.checked)} className="rounded" />
-                        <Shield className="w-4 h-4 text-amber-600" /> Nota interna (não visível ao cliente)
+                        <Shield className="w-4 h-4 text-amber-600" /> Nota interna
                       </label>
                       <Button onClick={handleSendMsg} disabled={!newMsg.trim() || addMsgMut.isPending}>
-                        <Send className="w-4 h-4 mr-2" /> Enviar
+                        <Send className="w-4 h-4 mr-2" /> Guardar
                       </Button>
                     </div>
-                  </div>
+                    <p className="text-[11px] text-muted-foreground">Fica no caso. Ao cliente só chega o que enviares com "Enviar email".</p>
+                  </div></>}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -783,21 +914,27 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     {data.photos.map((p: any) => (
                       <div key={p.id} className="relative group">
-                        <img src={fileHref(p.url, p.key) ?? undefined} alt={p.label || "Foto"} className="w-full h-40 object-cover rounded-lg" />
+                        <img src={fileHref(p.url, p.fileKey) ?? undefined} alt={p.label || "Foto"} className="w-full h-40 object-cover rounded-lg" />
                         {p.label && <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[11px] px-2 py-0.5 rounded">{p.label}</span>}
                         <span className="absolute top-1 left-1 opacity-80 group-hover:opacity-100 bg-background/90 rounded"><SaveToDriveButton source={{ kind: "complaint_photo", id: p.id }} iconOnly label="Guardar no meu Drive" /></span>
-                        <Button
-                          variant="destructive" size="icon"
+                        {canEdit && !archived && <Button
+                          variant="destructive" size="icon" aria-label="Tirar a foto do caso"
                           className="absolute top-1 right-1 h-6 w-6 opacity-60 group-hover:opacity-100 transition-opacity"
                           onClick={async () => {
-                            await deletePhotoMut.mutateAsync({ id: p.id });
-                            utils.complaints.getById.invalidate({ id });
-                            toast.success("Foto eliminada");
+                            if (!(await confirm({ title: "Tirar esta foto do caso?", description: "A foto deixa de aparecer aqui, mas fica guardada (nada é apagado).", confirmLabel: "Tirar", destructive: true }))) return;
+                            try {
+                              await removePhotoMut.mutateAsync({ id: p.id });
+                              utils.complaints.getById.invalidate({ id });
+                              toast.success("Foto retirada do caso");
+                            } catch (e: any) { toast.error(e?.message || "Não foi possível tirar a foto"); }
                           }}
-                        ><Trash2 className="w-3 h-3" /></Button>
+                        ><Trash2 className="w-3 h-3" /></Button>}
                       </div>
                     ))}
                   </div>
+                  {(data as any).emailAttachmentsFailed && (
+                    <p className="text-xs text-amber-800">Não foi possível ler os anexos dos emails deste caso. Recarrega para tentar de novo.</p>
+                  )}
                   {(data as any).emailAttachments?.length > 0 && (
                     <div className="space-y-1">
                       <p className="text-xs font-medium text-muted-foreground">Anexos recebidos por email</p>
@@ -817,15 +954,15 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       })}
                     </div>
                   )}
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <Button variant="outline" asChild><span><Upload className="w-4 h-4 mr-2" /> Carregar Foto</span></Button>
-                    <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-                  </label>
+                  {canEdit && !archived && <label className="flex items-center gap-2 cursor-pointer">
+                    <Button variant="outline" asChild disabled={uploadPhotoMut.isPending}><span><Upload className="w-4 h-4 mr-2" /> {uploadPhotoMut.isPending ? "A carregar…" : "Carregar Foto"}</span></Button>
+                    <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif" className="hidden" onChange={handlePhotoUpload} />
+                  </label>}
                 </CardContent>
               </Card>
             </TabsContent>
 
-            {(c.vehiclePlate || c.vehicleId) && (
+            {seesMore && (c.vehiclePlate || c.vehicleId) && (
               <TabsContent value="vehicle" className="mt-4 space-y-4">
                 {c.vehiclePlate && (
                   <Card>
@@ -834,10 +971,12 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       <p className="text-xs text-muted-foreground">Agentes Multipark com ações em reservas desta matrícula. Destacados os que tocaram na reserva desta reclamação.</p>
                     </CardHeader>
                     <CardContent>
-                      {!vehicleAgents ? (
+                      {vehicleAgentsQ.isError ? (
+                        <QueryErrorNote error={vehicleAgentsQ.error} what="quem mexeu no carro" onRetry={() => vehicleAgentsQ.refetch()} retrying={vehicleAgentsQ.isFetching} />
+                      ) : !vehicleAgents ? (
                         <div className="flex justify-center py-4"><div className="animate-spin w-5 h-5 border-2 border-primary border-t-transparent rounded-full" /></div>
                       ) : vehicleAgents.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">Sem histórico de agentes para esta matrícula na BD local.</p>
+                        <p className="text-sm text-muted-foreground">Sem ações de agentes da Multipark nesta matrícula.</p>
                       ) : (
                         <div className="overflow-x-auto">
                           <table className="w-full min-w-[520px] text-sm">
@@ -873,7 +1012,9 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Histórico da Viatura (frota interna)</CardTitle></CardHeader>
                   <CardContent>
-                    {vehicleHistory && vehicleHistory.length > 0 ? (
+                    {vehicleHistoryQ.isError ? (
+                      <QueryErrorNote error={vehicleHistoryQ.error} what="o histórico da viatura" onRetry={() => vehicleHistoryQ.refetch()} retrying={vehicleHistoryQ.isFetching} />
+                    ) : vehicleHistory && vehicleHistory.length > 0 ? (
                       <div className="space-y-2">
                         {vehicleHistory.map((h: any, i: number) => (
                           <div key={i} className="flex items-center gap-3 text-sm p-2 bg-muted rounded">
@@ -896,23 +1037,23 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               </TabsContent>
             )}
 
-            <TabsContent value="duty" className="mt-4">
-              <DutyDriversPanel complaintId={id} penaltyPoints={c.penaltyPoints ?? 0} onPenaltyChange={async (v) => {
+            {seesMore && <TabsContent value="duty" className="mt-4">
+              <DutyDriversPanel complaintId={id} canEdit={canEdit && !archived} penaltyPoints={c.penaltyPoints ?? 0} onPenaltyChange={async (v) => {
                 await updateMut.mutateAsync({ id, penaltyPoints: v });
                 utils.complaints.getById.invalidate({ id });
               }} />
-            </TabsContent>
+            </TabsContent>}
 
-            <TabsContent value="comms" className="mt-4 space-y-3">
+            {seesMore && <TabsContent value="comms" className="mt-4 space-y-3">
               <div className="flex justify-end"><CreateMeetingButton entityType="complaint" entityId={id} defaultTitle={`Reunião — reclamação #${id}${c.clientName ? ` (${c.clientName})` : ""}`} /></div>
               <CommunicationsTimeline type="complaint" id={id} compact />
               <DriveFilesPanel entityType="complaint" entityId={id} />
-            </TabsContent>
-            <TabsContent value="booking-history" className="mt-4">
+            </TabsContent>}
+            {seesMore && <TabsContent value="booking-history" className="mt-4">
                 <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      <Clock className="w-4 h-4" /> Histórico da Reserva {c.reservationRef ? `— ${c.reservationRef}` : ""}
+                  <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+                    <CardTitle className="text-sm flex items-center gap-2 min-w-0 break-all">
+                      <Clock className="w-4 h-4 shrink-0" /> Histórico da Reserva {c.reservationRef ? `— ${c.reservationRef}` : ""}
                     </CardTitle>
                     <Button size="sm" variant={showAllHist ? "default" : "outline"} onClick={() => setShowAllHist(v => !v)}>
                       {showAllHist ? "A mostrar tudo" : "Mostrar tudo"}
@@ -923,6 +1064,10 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                       <p className="text-sm text-muted-foreground">Sem ID de reserva associado a esta reclamação.</p>
                     ) : timelineLoading ? (
                       <div className="flex justify-center py-6"><div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" /></div>
+                    ) : timelineQ.isError ? (
+                      <QueryErrorNote error={timelineQ.error} what="o histórico da reserva" onRetry={() => timelineQ.refetch()} retrying={timelineQ.isFetching} />
+                    ) : apiTimeline?.error ? (
+                      <QueryErrorNote error={{ message: apiTimeline.error }} what="o histórico da reserva" onRetry={() => timelineQ.refetch()} retrying={timelineQ.isFetching} />
                     ) : timelineHist.length === 0 ? (
                       <p className="text-sm text-muted-foreground">Sem histórico para esta reserva{showAllHist ? "" : " (experimenta \"Mostrar tudo\")"}.</p>
                     ) : (
@@ -963,7 +1108,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     )}
                   </CardContent>
                 </Card>
-              </TabsContent>
+              </TabsContent>}
           </Tabs>
         </div>
 
@@ -978,7 +1123,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               {c.clientNotes && (
                 <div className="text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap"><span className="text-muted-foreground">Notas: </span>{c.clientNotes}</div>
               )}
-              <SendClientEmailButton
+              {canEdit && !archived && <><SendClientEmailButton
                 complaintId={id}
                 clientEmail={c.clientEmail}
                 clientName={c.clientName}
@@ -990,11 +1135,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 module="complaint" alias="reclamacoes" caseId={id}
                 defaultSearch={c.clientEmail || c.clientName}
                 onLinked={() => utils.complaints.getById.invalidate({ id })}
-              />
+              /></>}
             </CardContent>
           </Card>
 
-          <CaseAssignmentCard
+          {canEdit && !archived && <CaseAssignmentCard
             projectId={c.projectId}
             assigneeId={c.assignedToId}
             dueDate={c.dueDate}
@@ -1005,16 +1150,19 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             onSave={(patch) => updateMut.mutate({
               id, projectId: patch.projectId, assignedToId: patch.assigneeId,
               investigatedById: patch.assigneeId, dueDate: patch.dueDate,
-            } as any, { onSuccess: () => { utils.complaints.getById.invalidate({ id }); toast.success("Atribuição guardada"); } })}
-          />
+            } as any, {
+              onSuccess: () => { utils.complaints.getById.invalidate({ id }); toast.success("Atribuição guardada"); },
+              onError: (e) => toast.error(e.message || "Não foi possível guardar a atribuição"),
+            })}
+          />}
 
-          <ClientHistoryCard
+          {seesMore && <ClientHistoryCard
             email={c.clientEmail}
             phone={c.clientPhone}
             plate={c.vehiclePlate}
             name={c.clientName}
             highlightRef={c.reservationRef}
-          />
+          />}
 
           {/* Edit Dialog */}
           <Dialog open={isEditing} onOpenChange={setIsEditing}>
@@ -1119,16 +1267,19 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
 // ─── RESERVATION PREVIEW (histórico da reserva, BD Multipark) ────────────────────
 
 function ReservationPreview({ bookingId }: { bookingId: string }) {
-  const { data, isLoading } = trpc.complaints.bookingTimeline.useQuery(
+  const q = trpc.complaints.bookingTimeline.useQuery(
     { bookingId },
     { enabled: bookingId.length >= 4 }
   );
+  const { data, isLoading } = q;
 
   if (!bookingId || bookingId.length < 4) return null;
 
   if (isLoading) {
     return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico...</p>;
   }
+  if (q.isError) return <div className="mt-2"><QueryErrorNote error={q.error} what="o histórico" onRetry={() => q.refetch()} retrying={q.isFetching} /></div>;
+  if (data?.error) return <div className="mt-2"><QueryErrorNote error={{ message: data.error }} what="o histórico" onRetry={() => q.refetch()} retrying={q.isFetching} /></div>;
 
   const history = data?.history || [];
 
@@ -1159,7 +1310,7 @@ function ReservationPreview({ bookingId }: { bookingId: string }) {
 // ─── CREATE DIALOG ────────────────────────────────────────────────────────────
 
 function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
-  const { data: vehicles = [] } = trpc.operational.vehicles.list.useQuery();
+  const { data: vehicles = [] } = trpc.operational.vehicles.list.useQuery(undefined, { enabled: can(user, "atividade_diaria", "view") });
   const { data: emps = [] } = trpc.rh.list.useQuery();
   const { data: projs = [] } = trpc.projects.list.useQuery();
   const createMut = trpc.complaints.create.useMutation();
@@ -1174,18 +1325,20 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
 
   // Booking search
   const [bookingSearch, setBookingSearch] = useState("");
-  const { data: foundBookings = [] } = trpc.complaints.searchBooking.useQuery(
+  const searchQ = trpc.complaints.searchBooking.useQuery(
     { search: bookingSearch },
     { enabled: bookingSearch.length >= 2 }
   );
+  const { data: foundBookings = [] } = searchQ;
 
   const fillFromBooking = (b: any) => {
     // Cópia local (já completa pelo webhook: cliente, matrícula, datas)
     setForm(f => ({
       ...f,
       reservationRef: b.externalId || b.bookingNumber || f.reservationRef,
-      reservationStart: b.checkIn ? b.checkIn.slice(0, 10) : f.reservationStart,
-      reservationEnd: b.checkOut ? b.checkOut.slice(0, 10) : f.reservationEnd,
+      // Dias de Lisboa (o timestamp vem em UTC) — 16b.
+      reservationStart: b.checkIn ? lisbonDayOf(String(b.checkIn)) : f.reservationStart,
+      reservationEnd: b.checkOut ? lisbonDayOf(String(b.checkOut)) : f.reservationEnd,
       projectId: b.projectId ? String(b.projectId) : f.projectId,
       clientName: [b.clientFirstName, b.clientLastName].filter(Boolean).join(" ") || f.clientName,
       clientEmail: b.clientEmail || f.clientEmail,
@@ -1284,7 +1437,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
       utils.complaints.stats.invalidate();
       toast.success("Reclamação criada");
       onClose();
-    } catch { toast.error("Erro ao criar reclamação"); }
+    } catch (e: any) { toast.error(e?.message || "Erro ao criar reclamação"); }
   };
 
   return (
@@ -1293,7 +1446,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
         <DialogHeader><DialogTitle>Nova Reclamação</DialogTitle></DialogHeader>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Email import */}
-          <div className="col-span-2 p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200">
+          <div className="sm:col-span-2 p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200">
             <div className="flex items-center justify-between">
               <div>
                 <Label className="text-amber-700 dark:text-amber-300 font-medium">Importar email do cliente</Label>
@@ -1307,7 +1460,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
           </div>
 
           {/* Booking search */}
-          <div className="col-span-2 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200">
+          <div className="sm:col-span-2 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200">
             <Label className="text-blue-700 dark:text-blue-300 font-medium">Buscar reserva (nº reserva, matrícula, email, nome)</Label>
             <div className="flex items-center gap-2 mt-1">
               <Input
@@ -1338,12 +1491,13 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
                 ))}
               </div>
             )}
-            {bookingSearch.length >= 2 && foundBookings.length === 0 && (
+            {searchQ.isError && <div className="mt-1"><QueryErrorNote error={searchQ.error} what="a pesquisa de reservas" onRetry={() => searchQ.refetch()} retrying={searchQ.isFetching} /></div>}
+            {bookingSearch.length >= 2 && !searchQ.isFetching && !searchQ.isError && foundBookings.length === 0 && (
               <p className="text-xs text-muted-foreground mt-1">Nenhuma reserva encontrada</p>
             )}
           </div>
 
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Label>Título *</Label>
             <Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="Descrição breve da reclamação" />
           </div>
@@ -1369,15 +1523,15 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
               </SelectContent>
             </Select>
           </div>
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Label>Descrição</Label>
             <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={3} />
           </div>
-          <Separator className="col-span-2" />
+          <Separator className="sm:col-span-2" />
           {/* Reservation ID — highlighted */}
-          <div className="col-span-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200">
-            <Label className="text-emerald-700 dark:text-emerald-300 font-medium">ID da Reserva (Multipark) *</Label>
-            <p className="text-xs text-muted-foreground mb-1">O histórico completo é carregado automaticamente da API</p>
+          <div className="sm:col-span-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200">
+            <Label className="text-emerald-700 dark:text-emerald-300 font-medium">ID da Reserva (Multipark)</Label>
+            <p className="text-xs text-muted-foreground mb-1">Opcional: sem ele, a reserva liga-se sozinha pela matrícula, email, telefone ou nome. O histórico vem ao vivo da Multipark.</p>
             <Input
               value={form.reservationRef}
               onChange={e => setForm(f => ({ ...f, reservationRef: e.target.value }))}
@@ -1392,7 +1546,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
           <div><Label>Matrícula</Label><Input value={form.vehiclePlate} onChange={e => setForm(f => ({ ...f, vehiclePlate: e.target.value }))} /></div>
           <div><Label>Início Reserva</Label><Input type="date" value={form.reservationStart} onChange={e => setForm(f => ({ ...f, reservationStart: e.target.value }))} /></div>
           <div><Label>Fim Reserva</Label><Input type="date" value={form.reservationEnd} onChange={e => setForm(f => ({ ...f, reservationEnd: e.target.value }))} /></div>
-          <Separator className="col-span-2" />
+          <Separator className="sm:col-span-2" />
           <div>
             <Label>Viatura (interna)</Label>
             <Select value={form.vehicleId} onValueChange={handleVehicleChange}>
@@ -1445,30 +1599,38 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
 // ─── Panel: Condutores em serviço (Duty) ───────────────────────────────────
 function DutyDriversPanel({
   complaintId,
+  canEdit,
   penaltyPoints,
   onPenaltyChange,
 }: {
   complaintId: number;
+  canEdit: boolean;
   penaltyPoints: number;
   onPenaltyChange: (v: number) => Promise<void>;
 }) {
   const utils = trpc.useUtils();
-  const candidatesQ = trpc.complaints.findDriversOnDuty.useQuery({ complaintId });
+  const candidatesQ = trpc.complaints.findDriversOnDuty.useQuery({ complaintId }, { enabled: canEdit });
   const attachedQ = trpc.complaints.listAttachedDrivers.useQuery({ complaintId });
   const penaltyConfigQ = trpc.complaints.listPenaltyConfig.useQuery();
+  const [confirm, confirmUi] = useConfirm();
   const attachMut = trpc.complaints.attachDriver.useMutation({
     onSuccess: () => {
       utils.complaints.listAttachedDrivers.invalidate({ complaintId });
       utils.complaints.findDriversOnDuty.invalidate({ complaintId });
       toast.success("Condutor associado");
     },
+    onError: (e) => toast.error(e.message || "Não foi possível associar"),
   });
+  // Tirar pede confirmação e a linha fica guardada (com os pontos) — 16b.
   const detachMut = trpc.complaints.detachDriver.useMutation({
     onSuccess: () => {
       utils.complaints.listAttachedDrivers.invalidate({ complaintId });
       utils.complaints.findDriversOnDuty.invalidate({ complaintId });
+      toast.success("Condutor retirado da reclamação");
     },
+    onError: (e) => toast.error(e.message || "Não foi possível tirar o condutor"),
   });
+  const candidates = candidatesQ.data?.drivers ?? [];
 
   const [pendingPenalty, setPendingPenalty] = useState<number>(penaltyPoints);
   const [savingPenalty, setSavingPenalty] = useState(false);
@@ -1509,10 +1671,11 @@ function DutyDriversPanel({
               <Input
                 type="number"
                 value={pendingPenalty}
+                disabled={!canEdit}
                 onChange={(e) => setPendingPenalty(Number(e.target.value))}
               />
             </div>
-            <Button onClick={handleSavePenalty} disabled={savingPenalty}>
+            <Button onClick={handleSavePenalty} disabled={savingPenalty || !canEdit}>
               {savingPenalty ? "A guardar..." : "Guardar"}
             </Button>
           </div>
@@ -1535,12 +1698,14 @@ function DutyDriversPanel({
       <Card>
         <CardHeader>
           <CardTitle className="text-sm flex items-center gap-2">
-            <LinkIcon className="w-4 h-4" /> Associados à reclamação ({attachedQ.data?.length ?? 0})
+            <LinkIcon className="w-4 h-4" /> Associados à reclamação{attachedQ.data ? ` (${attachedQ.data.length})` : ""}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {attachedQ.isLoading ? (
             <p className="text-xs text-muted-foreground">A carregar...</p>
+          ) : attachedQ.isError ? (
+            <QueryErrorNote error={attachedQ.error} what="os condutores associados" onRetry={() => attachedQ.refetch()} retrying={attachedQ.isFetching} />
           ) : (attachedQ.data?.length ?? 0) === 0 ? (
             <p className="text-xs text-muted-foreground">Nenhum condutor associado ainda.</p>
           ) : (
@@ -1548,18 +1713,23 @@ function DutyDriversPanel({
               {attachedQ.data!.map((d: any) => (
                 <div key={d.id} className="flex items-center gap-2 text-sm p-2 bg-muted rounded min-w-0">
                   <User className="w-4 h-4 shrink-0" />
-                  <span className="font-medium truncate">{d.employeeName}</span>
+                  <span className="font-medium truncate min-w-0">{d.employeeName}</span>
                   {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
                   <Badge variant="outline" className="text-[11px]">{d.source}</Badge>
-                  {d.notes && <span className="text-xs text-muted-foreground">— {d.notes}</span>}
-                  <Button
+                  {d.notes && <span className="text-xs text-muted-foreground min-w-0 truncate">— {d.notes}</span>}
+                  {canEdit && <Button
                     variant="ghost"
                     size="icon"
-                    className="ml-auto h-6 w-6"
-                    onClick={() => detachMut.mutate({ id: d.id })}
+                    aria-label={`Tirar ${d.employeeName} da reclamação`}
+                    className="ml-auto h-6 w-6 shrink-0"
+                    disabled={detachMut.isPending}
+                    onClick={async () => {
+                      if (!(await confirm({ title: `Tirar ${d.employeeName} da reclamação?`, description: "Deixa de contar na avaliação desta pessoa. A associação fica registada (nada é apagado).", confirmLabel: "Tirar", destructive: true }))) return;
+                      detachMut.mutate({ id: d.id });
+                    }}
                   >
                     <XIcon className="w-3 h-3" />
-                  </Button>
+                  </Button>}
                 </div>
               ))}
             </div>
@@ -1567,8 +1737,8 @@ function DutyDriversPanel({
         </CardContent>
       </Card>
 
-      {/* Candidatos sugeridos (cruzamento) */}
-      <Card>
+      {/* Candidatos sugeridos (cruzamento) — só para quem pode associar */}
+      {canEdit && <Card>
         <CardHeader>
           <CardTitle className="text-sm flex items-center gap-2">
             <UserPlus className="w-4 h-4" /> Sugeridos por cruzamento
@@ -1577,20 +1747,27 @@ function DutyDriversPanel({
         <CardContent>
           {candidatesQ.isLoading ? (
             <p className="text-xs text-muted-foreground">A pesquisar...</p>
-          ) : (candidatesQ.data?.length ?? 0) === 0 ? (
+          ) : candidatesQ.isError ? (
+            <QueryErrorNote error={candidatesQ.error} what="os condutores sugeridos" onRetry={() => candidatesQ.refetch()} retrying={candidatesQ.isFetching} />
+          ) : (
+            <>
+            {candidatesQ.data?.historyFailed && (
+              <p className="text-xs text-amber-800 mb-2">O histórico da reserva (Multipark) não respondeu: faltam quem mexeu no carro. Tenta de novo daqui a pouco.</p>
+            )}
+            {candidates.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              Sem candidatos. (Necessita de Ref. de reserva ou datas de reserva.)
+              Sem candidatos. (Precisa da reserva ligada ou das datas de entrada/saída.)
             </p>
           ) : (
             <div className="space-y-2">
-              {candidatesQ.data!.map((d: any, i: number) => (
+              {candidates.map((d: any, i: number) => (
                 <div key={i} className="flex items-center gap-2 text-sm p-2 border rounded">
                   <User className="w-4 h-4" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium">{d.employeeName}</span>
                       <Badge variant="outline" className="text-[11px]">
-                        {d.source === "history" ? "histórico API" : "escalado"}
+                        {d.source === "history" ? "mexeu na reserva" : "escalado"}
                       </Badge>
                       {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
                     </div>
@@ -1607,8 +1784,11 @@ function DutyDriversPanel({
               ))}
             </div>
           )}
+            </>
+          )}
         </CardContent>
-      </Card>
+      </Card>}
+      {confirmUi}
     </div>
   );
 }
@@ -1755,21 +1935,23 @@ function SyncEmailsButton() {
 }
 
 // ─── PICKER DE RESERVA (diálogo Editar) ──────────────────────────────────────
-// Procura na NOSSA BD por matrícula / email / telefone / nome / nº de reserva
-// e preenche a ref (externalId) — liga logo o histórico e os condutores.
+// Procura AO VIVO na Multipark por matrícula / email / telefone / nome / nº de
+// reserva e preenche a ref (externalId) — liga logo o histórico e os condutores.
 function EditBookingPicker({ onPick }: { onPick: (b: any) => void }) {
   const [q, setQ] = useState("");
-  const { data: results = [], isFetching } = trpc.complaints.searchBooking.useQuery(
+  const searchQ = trpc.complaints.searchBooking.useQuery(
     { search: q },
     { enabled: q.trim().length >= 2 },
   );
+  const { data: results = [], isFetching } = searchQ;
   return (
     <div className="space-y-2 rounded-md border p-3 bg-muted/30">
       <Label className="text-xs">Associar reserva (procura por matrícula, email, telefone, nome ou nº)</Label>
       <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Ex: BF21SA, joao@mail.com, 912…, Celia" />
       {isFetching && <p className="text-xs text-muted-foreground animate-pulse">A procurar…</p>}
-      {q.trim().length >= 2 && !isFetching && results.length === 0 && (
-        <p className="text-xs text-muted-foreground">Nenhuma reserva encontrada na nossa base de dados.</p>
+      {searchQ.isError && <QueryErrorNote error={searchQ.error} what="a pesquisa de reservas" onRetry={() => searchQ.refetch()} retrying={isFetching} />}
+      {q.trim().length >= 2 && !isFetching && !searchQ.isError && results.length === 0 && (
+        <p className="text-xs text-muted-foreground">Nenhuma reserva encontrada na Multipark (nas tuas cidades).</p>
       )}
       {results.length > 0 && (
         <div className="max-h-40 overflow-y-auto space-y-1">
@@ -1782,7 +1964,7 @@ function EditBookingPicker({ onPick }: { onPick: (b: any) => void }) {
             >
               <span className="font-medium">{[b.clientFirstName, b.clientLastName].filter(Boolean).join(" ") || "(sem nome)"}</span>
               {" · "}{b.licensePlate || "—"}{" · "}{b.parkName || "—"}
-              {" · "}{b.checkIn ? String(b.checkIn).slice(0, 10) : "—"}
+              {" · "}{b.checkIn ? fmtPTDate(b.checkIn) : "—"}
               {" · "}<span className="uppercase text-muted-foreground">{b.status}</span>
             </button>
           ))}
