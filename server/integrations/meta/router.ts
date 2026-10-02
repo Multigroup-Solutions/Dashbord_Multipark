@@ -39,6 +39,8 @@ export const metaAdsRouter = router({
       .input(z.object({ kind: z.enum(["initial", "daily", "monthly", "manual"]).default("daily") }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "integracoes", "edit");
+        // 19b: a inicial (37 meses) reescreve o histórico todo → só quem gere
+        if (input.kind === "initial") requireAccess(ctx.user, "integracoes", "manage");
         return runMetaAdsSync({ kind: input.kind, deadlineAt: Date.now() + 40_000, triggeredById: ctx.user.id });
       }),
     runs: protectedProcedure.input(z.object({ limit: z.number().min(1).max(100).optional() }).optional()).query(async ({ ctx, input }) => {

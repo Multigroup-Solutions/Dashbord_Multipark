@@ -29,6 +29,8 @@ import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import FitAmount from "@/components/finance/FitAmount";
 import { eurAxis, eurCompact } from "@/lib/financeFormat";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
 
 function lisbonDay(d = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
@@ -99,8 +101,9 @@ export default function MarketingDashboardPanel() {
   const q: AttributionQuality = st?.attributionQuality ?? { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
   const hasAttribution = !!st?.attributionQuality;
   const health = attributionHealth(q, st?.spend ?? 0, st?.conversionsGoogle ?? null);
-  // Resultados dos anúncios: as conversões da Google quando medem mais do que as reservas que conseguimos ligar.
-  const results = adResultsMeasure(st?.bookingsAttributed ?? 0, st?.conversionsGoogle ?? 0);
+  // Resultados dos anúncios: as conversões das plataformas (Google + Meta) quando medem mais do que as reservas que conseguimos ligar.
+  const platformConversions = st?.conversionsPlatforms ?? st?.conversionsGoogle ?? 0;
+  const results = adResultsMeasure(st?.bookingsAttributed ?? 0, platformConversions);
   const costPerResult = results.value > 0 ? (st?.spend ?? 0) / results.value : null;
   const HealthIcon = health.level === "ok" ? CheckCircle2 : health.level === "critical" ? CircleAlert : AlertTriangle;
   const healthCls = health.level === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
@@ -152,11 +155,11 @@ export default function MarketingDashboardPanel() {
               hint={metaWarning ?? (st.spendOther > 0 ? `+ ${eur(st.spendOther)} de outras plataformas (importações antigas)` : "Facebook + Instagram")} warn={!!metaWarning} />
             <Kpi icon={Euro} label="Gasto total em anúncios" value={eur(st.spend)} compact={eurCompact(st.spend)} hint={st.budgetEstimate > 0 ? `orçamento Google × dias: ${eur(st.budgetEstimate)} (indicador, não gasto)` : "Google + Meta + outros"} />
             <Kpi icon={MousePointerClick} label="Conversões dos anúncios" value={num(Math.round(results.value))}
-              hint={noBookings ? "contadas pelas plataformas · reservas indisponíveis" : results.source === "google" ? `contadas pelas plataformas · só ligámos ${num(st.bookingsAttributed)} reservas (${pct(st.bookingsAttributed, Math.round(st.conversionsGoogle))})` : `reservas ligadas pelo link · as plataformas contam ${num(Math.round(st.conversionsGoogle))}`} />
+              hint={noBookings ? "contadas pelas plataformas · reservas indisponíveis" : results.source === "google" ? `contadas pelas plataformas · só ligámos ${num(st.bookingsAttributed)} reservas (${pct(st.bookingsAttributed, Math.round(platformConversions))})` : `reservas ligadas pelo link · as plataformas contam ${num(Math.round(platformConversions))}`} />
             <Kpi icon={Target} label="Custo por conversão" value={eur(costPerResult, 2)} hint={`por reserva ligada: ${eur(st.costPerAttributedBooking, 2)} · global: ${eur(st.adCostPerBooking, 2)}/reserva`} />
             <Kpi icon={TrendingUp} label="ROAS (s/ IVA)" value={roas(st.roasAttributedNet)}
               hint={`reservas ligadas, receita sem IVA ÷ gasto · todas as reservas: ${roas(st.roasTotalNet)}`} />
-            <Kpi icon={TrendingUp} label="ROAS Google (reportado)" value={roas(st.roasGoogle)} hint="valor de conversão que a plataforma reporta ÷ gasto" />
+            <Kpi icon={TrendingUp} label="ROAS Google (reportado)" value={roas(st.roasGoogle)} hint="valor de conversão que a Google reporta ÷ gasto do Google Ads" />
             <Kpi icon={Receipt} label="Outras despesas de marketing" value={eur(st.mktExpenses)} compact={eurCompact(st.mktExpenses)}
               hint={st.adInvoicesInExpenses > 0 ? `Despesas «Marketing» sem ${eur(st.adInvoicesInExpenses)} de faturas Google/Meta (já contam no gasto)` : "Despesas da categoria «Marketing» (sem faturas Google/Meta)"} />
             <Kpi icon={Euro} label="Custo total de marketing" value={eur(totalMarketing)} compact={eurCompact(totalMarketing)} hint={noBookings ? "anúncios + outras despesas · reservas indisponíveis" : `anúncios + outras despesas · ${eur(st.bookingsTotal > 0 ? totalMarketing / st.bookingsTotal : null, 2)} por reserva (todas)`} />
@@ -243,6 +246,9 @@ export default function MarketingDashboardPanel() {
 
 /** Alertas (independentes do período escolhido: últimos 14 dias e mês corrente). Nunca só cor: ícone + texto. */
 export function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "critical" | "warning"; code: string; title: string; detail: string; link?: string; linkLabel?: string; items?: string[] }>; windowFrom?: string }) {
+  const { user } = useAuth();
+  // 19b: links para Integrações só para quem as abre (senão era um link morto)
+  const canOpenIntegrations = can(user, "integracoes", "view");
   if (!alerts) return null;
   if (!alerts.length) {
     return (
@@ -257,7 +263,8 @@ export function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "cr
         <CardTitle className="text-sm flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-600" /> Alertas ({alerts.length})</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        {alerts.map((a, i) => {
+        {alerts.map((raw, i) => {
+          const a = raw.link?.startsWith("/integracoes") && !canOpenIntegrations ? { ...raw, link: undefined, linkLabel: undefined } : raw;
           const critical = a.level === "critical";
           const Icon = critical ? CircleAlert : AlertTriangle;
           const body = (

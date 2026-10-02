@@ -12,7 +12,7 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import { adAccounts, integrationConnections, oauthStates } from "../../../drizzle/schema";
 import { fetchWithTimeout } from "../../_core/fetchWithTimeout";
-import { decryptSecret, encryptSecret, encryptionKeyInfo } from "./crypto";
+import { decryptSecret, decryptSecretInfo, encryptSecret, encryptionKeyInfo } from "./crypto";
 import { GOOGLE_ADS_PROVIDER, GOOGLE_ADS_SCOPE, readGoogleAdsConfig, resolveRedirectUri } from "./config";
 
 const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -126,7 +126,10 @@ export async function storeRefreshToken(tokens: TokenResponse, userId: number, l
   const existing = await getConnection();
   const identity = identityFromIdToken(tokens.id_token);
   const changed = identityChanged(existing?.accountEmail, identity);
-  const refresh = tokens.refresh_token ?? (!changed && existing?.refreshTokenEnc ? decryptSecret(existing.refreshTokenEnc) : null);
+  // 19b: um token antigo que já não abre (chave mudou) não rebenta o religar —
+  // conta como "sem token anterior" (a Google devolve um novo com prompt=consent).
+  const previous = (() => { try { return !changed && existing?.refreshTokenEnc ? decryptSecret(existing.refreshTokenEnc) : null; } catch { return null; } })();
+  const refresh = tokens.refresh_token ?? previous;
   if (!refresh) throw new Error("A Google não devolveu refresh token (tenta de novo com consentimento)");
   cachedAccess = null;
   if (changed) {
@@ -157,8 +160,19 @@ export async function getAccessToken(opts: { forceRefresh?: boolean } = {}): Pro
   if (!conn || conn.status === "disconnected" || !conn.refreshTokenEnc) throw new Error("Google Ads não está ligado");
   if (!cfg.clientId || !cfg.clientSecret) throw new Error("GOOGLE_ADS_CLIENT_ID/SECRET em falta");
   let refresh: string;
-  try { refresh = decryptSecret(conn.refreshTokenEnc); }
-  catch { throw new Error("Não foi possível decifrar o refresh token (a chave de cifra mudou?) — volta a ligar"); }
+  try {
+    const d = decryptSecretInfo(conn.refreshTokenEnc);
+    refresh = d.plain;
+    // 19b: guardado com a chave antiga (antes de INTEGRATIONS_ENCRYPTION_KEY) → recifra com a atual
+    if (d.legacyKey) { try { await saveConnection({ refreshTokenEnc: encryptSecret(refresh) }); } catch { /* fica para a próxima */ } }
+  } catch (e: any) {
+    // 19b: estado honesto — antes ficava "ligado" e só a recolha falhava
+    const msg = "Não foi possível decifrar o refresh token guardado (a chave de cifra mudou) — volta a ligar o Google Ads";
+    try { await saveConnection({ status: "reauth_required", lastError: msg, lastCheckedAt: nowMysql() }); } catch { /* o erro original é o que interessa */ }
+    const err = new Error(msg, { cause: e });
+    (err as any).oauthError = "decrypt_failed";
+    throw err;
+  }
   try {
     const t = await tokenRequest({ refresh_token: refresh, client_id: cfg.clientId, client_secret: cfg.clientSecret, grant_type: "refresh_token" });
     cachedAccess = { token: t.access_token, expiresAt: Date.now() + (t.expires_in ?? 3600) * 1000 };
@@ -166,8 +180,11 @@ export async function getAccessToken(opts: { forceRefresh?: boolean } = {}): Pro
     return t.access_token;
   } catch (err: any) {
     const code = err?.oauthError;
-    if (code === "invalid_grant" || code === "invalid_client") {
+    if (code === "invalid_grant") {
       await saveConnection({ status: "reauth_required", lastError: `${code}: é preciso voltar a autorizar (${err.message})`, lastCheckedAt: nowMysql() });
+    } else if (code === "invalid_client") {
+      // 19b: client ID/secret errados — religar não resolve, é configuração
+      await saveConnection({ status: "error", lastError: `invalid_client: a Google não aceita o GOOGLE_ADS_CLIENT_ID/SECRET configurado (confirma as variáveis na Vercel)`, lastCheckedAt: nowMysql() });
     } else {
       await saveConnection({ status: "error", lastError: String(err?.message ?? err).slice(0, 500), lastCheckedAt: nowMysql() });
     }
@@ -176,9 +193,28 @@ export async function getAccessToken(opts: { forceRefresh?: boolean } = {}): Pro
   }
 }
 
-export async function disconnect() {
+/**
+ * Desliga: apaga o token guardado e (19b) REVOGA-o na Google — antes ficava
+ * válido do lado da Google até alguém o tirar à mão. A revogação é
+ * best-effort: se falhar, desliga na mesma e diz que não foi revogado.
+ */
+export async function disconnect(): Promise<{ revoked: boolean }> {
   cachedAccess = null;
+  const conn = await getConnection();
+  let revoked = false;
+  if (conn?.refreshTokenEnc) {
+    try {
+      const token = decryptSecret(conn.refreshTokenEnc);
+      const res = await fetchWithTimeout("https://oauth2.googleapis.com/revoke", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token }).toString(), timeoutMs: 8_000,
+      });
+      // 400 invalid_token = já não era válido → para todos os efeitos, revogado
+      revoked = res.ok || res.status === 400;
+    } catch { /* best-effort */ }
+  }
   await saveConnection({ status: "disconnected", refreshTokenEnc: null, lastError: null, lastCheckedAt: nowMysql() });
+  return { revoked };
 }
 
 export function connectionSummary(conn: Awaited<ReturnType<typeof getConnection>>) {

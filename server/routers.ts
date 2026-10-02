@@ -1510,7 +1510,7 @@ export const appRouter = router({
         try {
           marketingPeriodGuard(from, to);
           const ads = await getAdMetrics({ from, to, projectIds });
-          return await getChannels(db, { from, to, projectIds, adSpend: ads.totals.cost, adConversions: ads.totals.conversions });
+          return await getChannels(db, { from, to, projectIds, adSpend: ads.totals.cost, adConversions: ads.byProviderTotals.google_ads.conversions });
         } catch (e: any) {
           throw marketingError(e);
         }

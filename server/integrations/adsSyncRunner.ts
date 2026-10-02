@@ -92,7 +92,14 @@ export interface AdsSyncStore {
   saveConnection(provider: string, patch: { status?: "connected" | "error" | "reauth_required" | "disconnected"; lastError?: string | null; lastCheckedAt?: string }): Promise<void>;
 }
 
-export const LOCK_TTL_MIN = 20;
+/**
+ * Validade do trinco (19b: era 20 min). Uma corrida vive no máximo ~60 s
+ * (prazo da Vercel); um trinco mais velho do que isto é de uma função que
+ * morreu a meio — e prendia as recolhas seguintes 20 min.
+ */
+export const LOCK_TTL_MIN = 3;
+/** Não começar um pedaço com menos do que isto até ao prazo (cada pedido à API pode demorar). */
+export const CHUNK_MIN_MS = 15_000;
 const RESUME_MAX_MS = 6 * 3600_000;
 
 export type ErrorClass = "auth" | "stop_account" | "continue";
@@ -132,7 +139,8 @@ export async function runAdsSync<A extends AdsAccountRef, Ctx = undefined>(o: Ru
     const accounts = await o.loadAccounts();
     accountsTotal = accounts.length;
     if (accounts.length === 0) return { ...base, skipped: "no_accounts", reason: `nenhuma conta${label} selecionada` };
-    const chunks = chunkRange(window.from, window.to, normalizeSyncKind(kind) === "daily" ? 7 : 31);
+    const nk = normalizeSyncKind(kind);
+    const chunks = chunkRange(window.from, window.to, nk === "daily" || nk === "recent" ? 7 : 31);
 
     // retoma uma execução parcial recente do mesmo tipo (só as paradas por falta
     // de tempo — cursor e sem fim; uma "partial" terminada já tem finishedAt)
@@ -150,6 +158,8 @@ export async function runAdsSync<A extends AdsAccountRef, Ctx = undefined>(o: Ru
     accountsDone = Math.min(cursor.accountIdx, accounts.length);
     let accountsFailed = Number(cursor.failed ?? 0);
     let authError: string | null = null;
+    /** pedaços tentados nesta invocação (o 1.º corre sempre — senão uma corrida curta nunca avançava) */
+    let chunksThisRun = 0;
     for (let ai = accountsDone; ai < accounts.length; ai++) {
       const acc = accounts[ai];
       let accountFailed = ai === cursor.accountIdx ? Boolean(cursor.curFailed) : false;
@@ -159,11 +169,13 @@ export async function runAdsSync<A extends AdsAccountRef, Ctx = undefined>(o: Ru
         catch (err) { warnings.push(`${acc.customerId}: preparação falhou (${msgOf(err, 120)})`); }
       }
       for (let ci = ai === cursor.accountIdx ? cursor.chunkIdx : 0; ci < chunks.length; ci++) {
-        if (o.deadlineAt && Date.now() > o.deadlineAt) {
+        // 19b: sem tempo para um pedaço inteiro → fica para a próxima (antes só parava DEPOIS do prazo).
+        if (o.deadlineAt && (Date.now() > o.deadlineAt || (chunksThisRun > 0 && Date.now() > o.deadlineAt - CHUNK_MIN_MS))) {
           await store.updateRun(runId, { status: "partial", cursor: JSON.stringify({ accountIdx: ai, chunkIdx: ci, failed: accountsFailed, curFailed: accountFailed }), accountsDone, rowsWritten, warnings: warnings.join("\n") || null });
           return { ok: true, done: false, runId, kind, status: "partial", accountsTotal, accountsDone, rowsWritten, warnings, range: window, authError };
         }
         const ch = chunks[ci];
+        chunksThisRun++;
         try {
           const payload = await o.fetchChunk(acc, ch.from, ch.to, ctx, warnings);
           if (payload.daily.length === 0) {
@@ -173,6 +185,11 @@ export async function runAdsSync<A extends AdsAccountRef, Ctx = undefined>(o: Ru
             rowsWritten += await store.writeChunk(provider, acc, ch.from, ch.to, runId, today, payload);
           }
         } catch (err) {
+          // 19b: acabou o tempo a meio do pedaço → parcial, retoma AQUI (não é falha da conta).
+          if ((err as any)?.deadline) {
+            await store.updateRun(runId, { status: "partial", cursor: JSON.stringify({ accountIdx: ai, chunkIdx: ci, failed: accountsFailed, curFailed: accountFailed }), accountsDone, rowsWritten, warnings: warnings.join("\n") || null });
+            return { ok: true, done: false, runId, kind, status: "partial", accountsTotal, accountsDone, rowsWritten, warnings, range: window, authError };
+          }
           accountFailed = true;
           const msg = msgOf(err);
           warnings.push(`${acc.customerId} ${ch.from}→${ch.to}: ${msg}`);

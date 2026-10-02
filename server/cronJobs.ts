@@ -709,13 +709,25 @@ export async function webAnalyticsRefreshMinutes(): Promise<number | null> {
   } catch { return null; }
 }
 
-/** Google Ads: daily (última semana) | monthly (mês anterior); hourly/nightly = daily. */
+/**
+ * O período de uma recolha de anúncios fica fechado? Saltada por trinco
+ * ocupado = NÃO (repete); saltada por não haver contas/configuração = sim. PURA.
+ */
+export function adsCronDone(r: { status?: string; done?: boolean; skipped?: string }): boolean {
+  if (r.skipped === "locked") return false;
+  if (r.status === "skipped" || r.skipped) return true;
+  return r.done !== false;
+}
+
+/** Google Ads: daily (última semana) | recent (35 dias, semanal) | monthly (mês anterior); hourly/nightly = daily. */
 export async function googleAdsCron(o: { deadlineAt: number; kind: string }): Promise<CronJobRun> {
   const { normalizeSyncKind } = await import("./integrations/googleAds/metrics");
   try {
     const { runGoogleAdsSync } = await import("./integrations/googleAds/sync");
     const r = await runGoogleAdsSync({ kind: normalizeSyncKind(o.kind), deadlineAt: o.deadlineAt, triggeredById: null });
-    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.status === "skipped" || r.done !== false };
+    // 19b: trinco ocupado (outra recolha a correr ou uma que morreu a meio) ≠ feita —
+    // repete no tick seguinte; antes o período (ex.: o mês do dia 2) ficava dado por fechado.
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: adsCronDone(r) };
   } catch (err) { return { httpStatus: 500, body: { ok: false, done: true, error: msg(err) } }; }
 }
 
@@ -725,7 +737,7 @@ export async function metaAdsCron(o: { deadlineAt: number; kind: string }): Prom
   try {
     const { runMetaAdsSync } = await import("./integrations/meta/sync");
     const r = await runMetaAdsSync({ kind: normalizeSyncKind(o.kind), deadlineAt: o.deadlineAt, triggeredById: null });
-    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.status === "skipped" || !!(r as any).skipped || r.done !== false };
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: adsCronDone(r as any) };
   } catch (err) { return { httpStatus: 500, body: { ok: false, done: true, error: msg(err) } }; }
 }
 

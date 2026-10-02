@@ -12,6 +12,8 @@ import MarketingWebPanel from "@/components/marketing/MarketingWebPanel";
 import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
 import { TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
 
 /**
  * Marketing (Jorge, 16 set 2026): o menu "Marketing" abre o DASHBOARD de
@@ -39,6 +41,9 @@ export { MarketingDashboardPanel };
 /** Aviso vermelho das recolhas (Google Ads / Meta) — mesmo alerta da rota marketing.alerts. */
 function SyncHealthBanner() {
   const { projectId } = useGlobalFilters();
+  const { user } = useAuth();
+  // 19b: quem não abre Integrações (exceção só ao Marketing) não recebe um link morto
+  const canOpenIntegrations = can(user, "integracoes", "view");
   const q = trpc.marketing.alerts.useQuery({ projectId }, { staleTime: 60_000 });
   const { data } = q;
   // 19a: se os alertas não se conseguem ler, diz-se — antes o aviso vermelho desaparecia e parecia tudo bem.
@@ -52,7 +57,9 @@ function SyncHealthBanner() {
           <CircleAlert className="w-4 h-4 shrink-0" />
           <span className="font-semibold">{a.title}</span>
           <span className="text-xs">{a.detail}</span>
-          {a.link && <Link href={a.link} className="ml-auto text-xs font-semibold underline">{a.linkLabel ?? "Abrir Integrações"}</Link>}
+          {a.link && canOpenIntegrations
+            ? <Link href={a.link} className="ml-auto text-xs font-semibold underline">{a.linkLabel ?? "Abrir Integrações"}</Link>
+            : <span className="ml-auto text-xs">Avisa o administrador.</span>}
         </div>
       ))}
     </div>

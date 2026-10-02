@@ -203,8 +203,8 @@ describe("triagem do WhatsApp", () => {
 
 describe("cadências: as duas tabelas não se desencontram", () => {
   // de propósito diferentes: o Gmail com push (5 min vs rede de segurança), a
-  // escala só de dia, e os mensais que partilham o nome com o diário
-  const EXCEPTIONS = new Set(["mail-sync", "extras-schedule", "google-ads-monthly", "meta-ads-monthly"]);
+  // escala só de dia, e os mensais/semanais que partilham o nome com o diário
+  const EXCEPTIONS = new Set(["mail-sync", "extras-schedule", "google-ads-monthly", "meta-ads-monthly", "google-ads-recent"]);
   const minutes = (c: (typeof TICK_JOBS)[number]["cadence"]) => (c.kind === "interval" ? c.minutes : c.kind === "daily" ? 1440 : c.kind === "weekly" ? 10080 : 44640);
   it("CRON_JOBS.intervalMinutes = cadência do agendador", () => {
     for (const j of TICK_JOBS) {

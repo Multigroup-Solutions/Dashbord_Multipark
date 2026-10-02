@@ -70,11 +70,18 @@ export function daysInclusive(from: string, to: string): number {
  * "hourly" e "nightly" ficam aceites como sinónimos de "daily" (execuções
  * antigas na lista e chamadas de crons não atualizados).
  */
-export type SyncKind = "initial" | "daily" | "monthly" | "manual" | "hourly" | "nightly";
+export type SyncKind = "initial" | "daily" | "monthly" | "manual" | "hourly" | "nightly" | "recent";
+
+/**
+ * 19b: passagem semanal dos últimos 35 dias. A Google atribui as conversões ao
+ * dia do CLIQUE e acerta-as até semanas depois; só com a diária (7 dias) e a
+ * mensal (dia 2) as do meio do mês ficavam sempre por baixo.
+ */
+export const RECENT_SYNC_DAYS = 35;
 
 export function normalizeSyncKind(raw: string | null | undefined): SyncKind {
   const k = String(raw ?? "").trim().toLowerCase();
-  if (k === "initial" || k === "manual" || k === "monthly" || k === "daily") return k;
+  if (k === "initial" || k === "manual" || k === "monthly" || k === "daily" || k === "recent") return k;
   return "daily"; // hourly, nightly, vazio, desconhecido
 }
 
@@ -88,6 +95,7 @@ export function previousMonth(today: string): { from: string; to: string } {
 export function syncWindow(kind: SyncKind, today: string, retentionMonths = 37): { from: string; to: string } {
   switch (normalizeSyncKind(kind)) {
     case "daily": return { from: addDays(today, -6), to: today };
+    case "recent": return { from: addDays(today, -(RECENT_SYNC_DAYS - 1)), to: today };
     case "monthly": return previousMonth(today);
     default: return { from: addMonths(today, -retentionMonths), to: today };
   }
