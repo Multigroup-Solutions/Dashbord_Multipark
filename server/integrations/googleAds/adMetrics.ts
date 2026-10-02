@@ -4,9 +4,9 @@
  * Financeiro → marketingExcluded.adSpend). Mesmo número em todo o lado.
  *
  *  - Fornecedores da API: Google Ads (`google_ads`) e Meta (`meta`), na mesma
- *    tabela ad_daily_metrics. Só contas SELECIONADAS (e não gestoras) contam —
- *    a mesma regra em todos os ecrãs (antes o "Por marca" filtrava e o
- *    dashboard não).
+ *    tabela ad_daily_metrics. Contam todas as contas NÃO gestoras com dados —
+ *    selecionadas ou não (19b): desselecionar uma conta só pára a recolha; o
+ *    gasto já recolhido foi dinheiro gasto e não desaparece dos totais.
  *  - Precedência por DIA E PLATAFORMA: se a API de uma plataforma tem dados
  *    nesse dia, as linhas antigas dessa plataforma (campaign_daily_stats:
  *    google_ads → Google; meta_ads/instagram → Meta) são ignoradas nesse dia.
@@ -54,6 +54,8 @@ export interface AdMetricsResult {
   totals: MetricTotals & ReturnType<typeof derivedRatios>;
   /** gasto por fornecedor (Google Ads, Meta = API + legado Meta/Instagram, outros = legado "other") */
   byProvider: Record<SpendProvider, number>;
+  /** 19b: totais completos por fornecedor — o "ROAS Google" usa só o Google (antes misturava a Meta) */
+  byProviderTotals: Record<SpendProvider, MetricTotals & ReturnType<typeof derivedRatios>>;
   byDay: Array<{ date: string; source: "api" | "legacy"; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number }>;
   /** dia × nó; projectId null = sem cidade / nacional por atribuir. Σ = totals.cost */
   byDayProject: Array<{ date: string; projectId: number | null; cost: number }>;
@@ -93,18 +95,21 @@ function lisbonToday(): string {
   return `${g("year")}-${g("month")}-${g("day")}`;
 }
 
+const withRatios = (t: MetricTotals) => ({ ...t, ...derivedRatios(t) });
 const rowsOf = <T = any>(r: any): T[] => (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r) as T[];
 
 export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult> {
   if (!ISO.test(f.from) || !ISO.test(f.to)) throw new Error("datas inválidas");
   const today = f.today ?? lisbonToday();
   const empty: AdMetricsResult = {
-    totals: { ...emptyTotals(), ...derivedRatios(emptyTotals()) }, byProvider: { google_ads: 0, meta: 0, other: 0 }, byDay: [], byDayProject: [], byCampaign: [], nationalShares: [],
+    totals: { ...emptyTotals(), ...derivedRatios(emptyTotals()) }, byProvider: { google_ads: 0, meta: 0, other: 0 },
+    byProviderTotals: { google_ads: withRatios(emptyTotals()), meta: withRatios(emptyTotals()), other: withRatios(emptyTotals()) }, byDay: [], byDayProject: [], byCampaign: [], nationalShares: [],
     coverage: coverageFor(f.from, f.to, new Set(), new Set(), null, today), meta: { lastDataDay: null, hasDataInPeriod: false }, budgetEstimate: 0, unmappedCampaigns: 0, apiConnected: false, currencyExcluded: [],
   };
   if (f.projectIds?.length === 0) return empty;
   const db = await getDb();
-  if (!db) return empty;
+  // 19b: sem BD é erro (antes devolvia 0 € e o ecrã mostrava "sem gasto")
+  if (!db) throw new Error("Base de dados indisponível");
   const projectFilter = f.projectIds && f.projectIds.length ? f.projectIds : null;
 
   // ── API (fonte oficial) — desde (from − 27) para os pesos do nacional ────
@@ -117,7 +122,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     costMicros: adDailyMetrics.costMicros, impressions: adDailyMetrics.impressions, clicks: adDailyMetrics.clicks,
     conversions: adDailyMetrics.conversions, conversionValueMicros: adDailyMetrics.conversionValueMicros,
   }).from(adDailyMetrics)
-    .innerJoin(adAccounts, and(eq(adAccounts.id, adDailyMetrics.accountId), eq(adAccounts.selected, 1), eq(adAccounts.isManager, 0)))
+    .innerJoin(adAccounts, and(eq(adAccounts.id, adDailyMetrics.accountId), eq(adAccounts.isManager, 0)))
     .leftJoin(adCampaigns, and(eq(adCampaigns.provider, adDailyMetrics.provider), eq(adCampaigns.accountId, adDailyMetrics.accountId), eq(adCampaigns.externalId, adDailyMetrics.campaignExternalId)))
     .where(and(inArray(adDailyMetrics.provider, [...API_PROVIDERS]), eq(adDailyMetrics.source, "api"), gte(adDailyMetrics.date, weightsFrom), lte(adDailyMetrics.date, f.to)));
   // Moeda: fora dos totais tudo o que não é EUR (sem conversão cambial) — com aviso.
@@ -189,6 +194,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   };
   const byCampaignMap = new Map<string, AdCampaignRow>();
   const byProvider: Record<SpendProvider, number> = { google_ads: 0, meta: 0, other: 0 };
+  const providerTotals: Record<SpendProvider, MetricTotals> = { google_ads: emptyTotals(), meta: emptyTotals(), other: emptyTotals() };
   let totals = emptyTotals();
   const unmappedSet = new Set<string>();
   let metaDaysInPeriod = 0;
@@ -200,6 +206,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     const full = { costMicros: Number(r.costMicros), impressions: Number(r.impressions), clicks: Number(r.clicks), conversions: Number(r.conversions), conversionValueMicros: Number(r.conversionValueMicros) };
     const t = fraction === 1 ? full : { costMicros: Math.round(full.costMicros * fraction), impressions: Math.round(full.impressions * fraction), clicks: Math.round(full.clicks * fraction), conversions: full.conversions * fraction, conversionValueMicros: Math.round(full.conversionValueMicros * fraction) };
     totals = addTotals(totals, t);
+    providerTotals[provider] = addTotals(providerTotals[provider], t);
     byProvider[provider] += microsToAmount(t.costMicros);
     if (provider === "meta") metaDaySet.add(day);
     if (r.scope === "national") {
@@ -241,6 +248,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     const spend = Number(r.spend ?? 0);
     const t = { costMicros: Math.round(spend * 1_000_000), impressions: Number(r.impressions ?? 0), clicks: Number(r.clicks ?? 0), conversions: Number(r.conversions ?? 0), conversionValueMicros: Math.round(Number(r.conversionValue ?? 0) * 1_000_000) };
     totals = addTotals(totals, t);
+    providerTotals[provider] = addTotals(providerTotals[provider], t);
     byProvider[provider] += spend;
     addDayProject(day, r.projectId != null ? Number(r.projectId) : null, spend);
     const d = byDayMap.get(day) ?? { date: day, source: "legacy" as const, cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
@@ -253,11 +261,11 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   }
   metaDaysInPeriod = metaDaySet.size;
 
-  // Meta: último dia com dados (API das contas selecionadas ou legado Meta/Instagram)
+  // Meta: último dia com dados (API das contas não gestoras ou legado Meta/Instagram)
   let metaLast: string | null = null;
   try {
     const [a] = rowsOf<any>(await db.execute(sql`
-      SELECT MAX(m.date) AS d FROM ad_daily_metrics m JOIN ad_accounts a ON a.id = m.accountId AND a.selected = 1
+      SELECT MAX(m.date) AS d FROM ad_daily_metrics m JOIN ad_accounts a ON a.id = m.accountId AND a.isManager = 0
       WHERE m.provider = ${META_PROVIDER} AND m.source = 'api' AND m.costMicros > 0`));
     const [b] = rowsOf<any>(await db.execute(sql`
       SELECT MAX(DATE(s.date)) AS d FROM campaign_daily_stats s JOIN campaigns c ON c.id = s.campaignId
@@ -284,6 +292,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   return {
     totals: { ...totals, ...derivedRatios(totals) },
     byProvider,
+    byProviderTotals: { google_ads: withRatios(providerTotals.google_ads), meta: withRatios(providerTotals.meta), other: withRatios(providerTotals.other) },
     byDay: Array.from(byDayMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
     byDayProject: Array.from(byDayProject.values()).sort((a, b) => a.date.localeCompare(b.date)),
     byCampaign: Array.from(byCampaignMap.values()).sort((a, b) => b.cost - a.cost),

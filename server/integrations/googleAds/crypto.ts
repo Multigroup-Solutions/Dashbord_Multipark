@@ -30,15 +30,46 @@ export function encryptSecret(plain: string, key?: Buffer): string {
   return PREFIX + Buffer.concat([iv, tag, enc]).toString("base64");
 }
 
-export function decryptSecret(stored: string, key?: Buffer): string {
-  const k = key ?? encryptionKeyInfo().key;
-  if (!k) throw new Error("Sem chave de cifra (INTEGRATIONS_ENCRYPTION_KEY ou JWT_SECRET)");
+function decryptWith(stored: string, k: Buffer): string {
   if (!stored.startsWith(PREFIX)) throw new Error("Segredo em formato desconhecido");
   const buf = Buffer.from(stored.slice(PREFIX.length), "base64");
   const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), enc = buf.subarray(28);
   const decipher = crypto.createDecipheriv("aes-256-gcm", k, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(enc), decipher.final()]).toString("utf8");
+}
+
+/** Chave antiga (derivada do JWT_SECRET) — o que se usava antes de existir INTEGRATIONS_ENCRYPTION_KEY. */
+function derivedKey(): Buffer | null {
+  const jwt = process.env.JWT_SECRET;
+  return jwt ? crypto.createHash("sha256").update(`${jwt}:integrations:v1`).digest() : null;
+}
+
+/**
+ * Decifra e diz se foi preciso a chave ANTIGA (19b). Quando se define
+ * INTEGRATIONS_ENCRYPTION_KEY depois de já haver segredos guardados com a
+ * chave derivada do JWT_SECRET, esses deixavam de abrir (e a ligação ficava
+ * "a funcionar" até à primeira recolha). Agora tenta a antiga; quem chama
+ * deve voltar a cifrar com a atual (`legacyKey: true`).
+ */
+export function decryptSecretInfo(stored: string): { plain: string; legacyKey: boolean } {
+  const info = encryptionKeyInfo();
+  if (!info.key) throw new Error("Sem chave de cifra (INTEGRATIONS_ENCRYPTION_KEY ou JWT_SECRET)");
+  if (!stored.startsWith(PREFIX)) throw new Error("Segredo em formato desconhecido");
+  try {
+    return { plain: decryptWith(stored, info.key), legacyKey: false };
+  } catch (err) {
+    const old = info.source === "env" ? derivedKey() : null;
+    if (old) {
+      try { return { plain: decryptWith(stored, old), legacyKey: true }; } catch { /* nem com a antiga */ }
+    }
+    throw new Error("Não foi possível decifrar o segredo guardado: a chave de cifra mudou (INTEGRATIONS_ENCRYPTION_KEY/JWT_SECRET). Volta a ligar a integração.", { cause: err });
+  }
+}
+
+export function decryptSecret(stored: string, key?: Buffer): string {
+  if (key) return decryptWith(stored, key);
+  return decryptSecretInfo(stored).plain;
 }
 
 /** Mascara um segredo para logs/UI ("ya29.a0…" → "ya29…"). */

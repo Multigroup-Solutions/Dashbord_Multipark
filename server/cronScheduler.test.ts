@@ -243,8 +243,8 @@ describe("mensais (dia 2)", () => {
     expect(isDue(m, done, at("2026-12-20T10:00:00Z")).due).toBe(false);
     expect(new Date(nextDueAt(m, done, at("2026-12-20T10:00:00Z"))!).toISOString()).toBe("2027-01-02T05:45:00.000Z");
   });
-  it("mesmos parâmetros dos workflows: kind daily e monthly do Google Ads e da Meta", () => {
-    expect(TICK_JOBS.filter((j) => j.runName === "google-ads").map((j) => j.cadence.kind).sort()).toEqual(["daily", "monthly"]);
+  it("mesmos parâmetros dos workflows: kind daily e monthly do Google Ads e da Meta (+ 35 dias semanal no Google — 19b)", () => {
+    expect(TICK_JOBS.filter((j) => j.runName === "google-ads").map((j) => j.cadence.kind).sort()).toEqual(["daily", "monthly", "weekly"]);
     expect(TICK_JOBS.filter((j) => j.runName === "meta-ads").map((j) => j.cadence.kind).sort()).toEqual(["daily", "monthly"]);
   });
 });

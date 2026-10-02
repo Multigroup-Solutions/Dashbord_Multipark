@@ -65,9 +65,10 @@ const PROVIDER_LINK: Record<SyncHealth["provider"], string> = { google_ads: "/in
 /** Alerta vermelho de uma recolha com problemas (ou null se está bem). */
 export function syncHealthAlert(h: SyncHealth): MarketingAlert | null {
   const name = PROVIDER_LABEL[h.provider];
-  const base = { level: "critical" as const, code: `ads_sync_${h.provider}`, link: PROVIDER_LINK[h.provider], linkLabel: `Religar ${name}` };
+  // 19b: "Religar" só quando é mesmo preciso religar; nos outros casos abre-se a página da integração
+  const base = { level: "critical" as const, code: `ads_sync_${h.provider}`, link: PROVIDER_LINK[h.provider], linkLabel: `Abrir Integrações → ${name}` };
   const last = h.lastSuccessAt ? ` Última recolha com sucesso: ${h.lastSuccessAt.slice(0, 16).replace("T", " ")}.` : " Nunca houve uma recolha com sucesso.";
-  if (h.connection === "reauth_required") return { ...base, title: `${name} precisa de ser religado`, detail: `A autorização expirou ou foi revogada — os números de gasto deixaram de atualizar.${last}` };
+  if (h.connection === "reauth_required") return { ...base, linkLabel: `Religar ${name}`, title: `${name} precisa de ser religado`, detail: `A autorização expirou ou foi revogada — os números de gasto deixaram de atualizar.${last}` };
   if (h.lastRunStatus === "failed") return { ...base, title: `Recolha do ${name} falhou`, detail: `${h.lastRunError ? `${h.lastRunError}. ` : ""}O gasto mostrado pode estar incompleto.${last}` };
   if (h.lastRunStatus === "partial") return { ...base, title: `Recolha do ${name} com contas falhadas`, detail: `${h.lastRunError ? `${h.lastRunError}. ` : ""}O gasto dessas contas pode estar incompleto.${last}` };
   if (h.stale) return { ...base, title: `Recolha do ${name} parada há mais de 26 h`, detail: `A recolha é diária e não correu com sucesso.${last}` };

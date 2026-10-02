@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
-/** Configurar contas / desligar: gestão de Integrações (admin+). Ver e recolher: supervisor+. */
+/** Configurar contas: gestão de Integrações (admin+). Ligar/desligar: só super admin (19b). */
 function useIntegrationPerms() {
   const { user } = useAuth();
-  return { canManage: can(user, "integracoes", "manage"), canMarketing: can(user, "marketing", "manage") };
+  return { canManage: can(user, "integracoes", "manage"), isSuperAdmin: user?.role === "super_admin" };
 }
+
+const INITIAL_CONFIRM = "Recolha inicial: volta a pedir à plataforma os últimos 37 meses e substitui o que já está guardado. Demora vários minutos (corre em partes). Continuar?";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
-import { Plug, PlugZap, RefreshCw, Loader2, AlertTriangle, CheckCircle2, Unplug, PlayCircle, Link2 } from "lucide-react";
+import { Plug, PlugZap, RefreshCw, Loader2, AlertTriangle, Unplug, PlayCircle, Link2 } from "lucide-react";
 
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   connected: { label: "Ligado", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
@@ -23,11 +26,11 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   reauth_required: { label: "Reautorização necessária", cls: "bg-amber-100 text-amber-800 border-amber-200" },
   error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
 };
-const KIND_LABEL: Record<string, string> = { initial: "Inicial (37 meses)", daily: "Diária (última semana)", monthly: "Mensal (mês anterior)", manual: "Manual (tudo)", hourly: "Horária (antiga)", nightly: "Noturna (antiga)" };
+const KIND_LABEL: Record<string, string> = { initial: "Inicial (37 meses)", daily: "Diária (última semana)", recent: "Últimos 35 dias", monthly: "Mensal (mês anterior)", manual: "Manual (tudo)", hourly: "Horária (antiga)", nightly: "Noturna (antiga)" };
 const RUN_STATUS: Record<string, string> = { running: "a correr", partial: "parcial (contas falhadas, ou a continuar)", done: "concluída", failed: "falhou", skipped: "saltada" };
 
 export default function IntegrationsGoogleAdsPage() {
-  const { canManage, canMarketing } = useIntegrationPerms();
+  const { canManage, isSuperAdmin } = useIntegrationPerms();
   const utils = trpc.useUtils();
   const status = trpc.integrations.googleAds.status.useQuery(undefined, { refetchInterval: 30_000 });
   const accounts = trpc.integrations.googleAds.accounts.list.useQuery();
@@ -50,10 +53,9 @@ export default function IntegrationsGoogleAdsPage() {
     },
     onError: (e) => toast.error("Erro na recolha", { description: e.message }),
   });
-  const disconnect = trpc.integrations.googleAds.disconnect.useMutation({ onSuccess: () => { invalidate(); toast.success("Google Ads desligado"); } });
-  const backfill = trpc.integrations.googleAds.backfillAttribution.useMutation({
-    onSuccess: (r) => toast.success(`Atribuição: ${r.scanned} reservas analisadas, ${r.attributed} atribuídas ao Google Ads, ${r.remaining} por analisar`),
-    onError: (e) => toast.error(e.message),
+  const disconnect = trpc.integrations.googleAds.disconnect.useMutation({
+    onSuccess: (r) => { invalidate(); r.revoked ? toast.success("Google Ads desligado e autorização revogada na Google") : toast.warning("Google Ads desligado", { description: "Não foi possível revogar a autorização na Google — tira-a em myaccount.google.com → Segurança → Apps de terceiros." }); },
+    onError: (e) => toast.error("Não foi possível desligar", { description: e.message }),
   });
 
   // mensagem do retorno OAuth (?connected=1&accounts=N | accountsError=…)
@@ -81,10 +83,11 @@ export default function IntegrationsGoogleAdsPage() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2"><Plug className="h-5 w-5" /> <a href="/integracoes" className="hover:underline">Integrações</a> · Google Ads</h1>
-          <p className="text-sm text-muted-foreground max-w-2xl">Ligação de leitura à Google Ads API. Depois de ligada, o servidor recolhe custo, impressões, cliques e conversões por campanha uma vez por dia (última semana) e no dia 2 de cada mês (mês anterior fechado), sem CSV, emails ou browser aberto. Nada aqui altera campanhas ou orçamentos.</p>
+          <p className="text-sm text-muted-foreground max-w-2xl">Ligação de leitura à Google Ads API. Depois de ligada, o servidor recolhe custo, impressões, cliques e conversões por campanha uma vez por dia (última semana), ao domingo (últimos 35 dias) e no dia 2 de cada mês (mês anterior fechado), sem CSV, emails ou browser aberto. Nada aqui altera campanhas ou orçamentos.</p>
         </div>
-        <Badge variant="outline" className={`text-sm px-3 py-1 ${st.cls}`}>{status.isLoading ? "…" : st.label}</Badge>
+        <Badge variant="outline" className={`text-sm px-3 py-1 ${status.error ? "bg-amber-100 text-amber-800 border-amber-200" : st.cls}`}>{status.isLoading ? "…" : status.error ? "Estado desconhecido" : st.label}</Badge>
       </div>
+      {status.error && <QueryErrorNote error={status.error} onRetry={() => status.refetch()} retrying={status.isFetching} what="o estado do Google Ads" />}
 
       {/* 1. Estado e ligação */}
       <Card>
@@ -123,24 +126,28 @@ export default function IntegrationsGoogleAdsPage() {
             <dt className="text-muted-foreground">Ligado em</dt>
             <dd>{s?.connectedAt ? fmtPTDateTime(s.connectedAt) : "—"}</dd>
             <dt className="text-muted-foreground">Última recolha concluída</dt>
-            <dd>{s?.lastSuccessfulSyncAt ? fmtPTDateTime(s.lastSuccessfulSyncAt) : "nunca"}{s?.stale && s?.status === "connected" ? <span className="ml-2 text-amber-700 text-xs">atrasada (&gt; 2 ciclos)</span> : null}</dd>
+            <dd>{s?.lastSuccessfulSyncAt ? fmtPTDateTime(s.lastSuccessfulSyncAt) : "nunca"}{s?.stale && s?.status === "connected" ? <span className="ml-2 text-amber-700 text-xs">parada há mais de 26 h</span> : null}</dd>
             <dt className="text-muted-foreground">Cifra do token</dt>
             <dd className="text-xs">{s?.encryptionKeySource === "env" ? "chave dedicada (INTEGRATIONS_ENCRYPTION_KEY)" : s?.encryptionKeySource === "derived" ? "derivada do JWT_SECRET (define INTEGRATIONS_ENCRYPTION_KEY para produção)" : s?.encryptionKeySource ?? "—"}</dd>
             <dt className="text-muted-foreground">Versão da API</dt>
             <dd className="font-mono text-xs">{s?.config.apiVersion}</dd>
           </dl>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild disabled={!canConnect} className="gap-2">
-              <a href="/api/integrations/google-ads/oauth/start" aria-disabled={!canConnect} onClick={(e) => { if (!canConnect) e.preventDefault(); }}>
-                <Link2 className="h-4 w-4" /> {s?.status === "connected" ? "Voltar a autorizar" : "Ligar Google Ads"}
-              </a>
-            </Button>
-            {s?.status !== "disconnected" && (
-              <Button variant="outline" className="gap-2" disabled={!canManage} onClick={() => { if (confirm("Desligar o Google Ads? Os dados já recolhidos ficam.")) disconnect.mutate(); }}>
-                <Unplug className="h-4 w-4" /> Desligar
+          {status.error ? null : isSuperAdmin ? (
+            <div className="flex flex-wrap gap-2">
+              <Button asChild disabled={!canConnect} className="gap-2">
+                <a href="/api/integrations/google-ads/oauth/start" aria-disabled={!canConnect} onClick={(e) => { if (!canConnect) e.preventDefault(); }}>
+                  <Link2 className="h-4 w-4" /> {s?.status === "connected" ? "Voltar a autorizar" : "Ligar Google Ads"}
+                </a>
               </Button>
-            )}
-          </div>
+              {s && s.status !== "disconnected" && (
+                <Button variant="outline" className="gap-2" disabled={disconnect.isPending} onClick={() => { if (confirm("Desligar o Google Ads? A autorização é revogada na Google e as recolhas param. Os dados já recolhidos ficam.")) disconnect.mutate(); }}>
+                  {disconnect.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Unplug className="h-4 w-4" />} Desligar
+                </Button>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Ligar e desligar o Google Ads é só com o super admin.</p>
+          )}
         </CardContent>
       </Card>
 
@@ -153,8 +160,12 @@ export default function IntegrationsGoogleAdsPage() {
           </Button>
         </CardHeader>
         <CardContent>
-          <p className="text-xs text-muted-foreground mb-3">Seleciona as contas que a dashboard deve consultar e associa cada uma a uma marca ou cidade. Campanhas sem associação entram no total geral e ficam assinaladas no Marketing.</p>
-          {(accounts.data ?? []).length === 0 ? (
+          <p className="text-xs text-muted-foreground mb-3">Seleciona as contas que a dashboard deve recolher e associa cada uma a uma marca ou cidade. Campanhas sem associação entram no total geral e ficam assinaladas no Marketing. Deixar de recolher uma conta não apaga o gasto já recolhido — continua a contar no Marketing.</p>
+          {accounts.error ? (
+            <QueryErrorNote error={accounts.error} onRetry={() => accounts.refetch()} retrying={accounts.isFetching} what="as contas do Google Ads" />
+          ) : accounts.isLoading ? (
+            <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : (accounts.data ?? []).length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">{s?.status === "connected" ? "Sem contas listadas. Carrega em “Atualizar lista” e confirma o acesso do projeto Google Cloud à API." : "Liga o Google Ads para listar as contas."}</p>
           ) : (
             <div className="overflow-x-auto">
@@ -192,22 +203,20 @@ export default function IntegrationsGoogleAdsPage() {
       <Card>
         <CardHeader><CardTitle className="text-base flex items-center gap-2"><PlayCircle className="h-4 w-4" /> Recolha</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">Automática pelo agendador: diária a partir das 05:45 de Lisboa (última semana, hoje e os 2 dias anteriores provisórios) e mensal no dia 2 a partir das 05:45 (o mês anterior inteiro, já fechado — é o custo reportado pela API, que não desconta IVA nem os créditos por tráfego inválido da fatura; a fatura entra pelas Despesas). A dashboard não volta a pedir o resto. Aqui só se dispara à mão.</p>
+          <p className="text-xs text-muted-foreground">Automática pelo agendador: diária a partir das 05:45 de Lisboa (última semana, hoje e os 2 dias anteriores provisórios), ao domingo a partir das 06:15 os últimos 35 dias (a Google ainda acerta conversões semanas depois do clique) e mensal no dia 2 a partir das 05:45 (o mês anterior inteiro, já fechado — é o custo reportado pela API, que não desconta IVA nem os créditos por tráfego inválido da fatura; a fatura entra pelas Despesas e não se soma outra vez no Marketing). Aqui só se dispara à mão.</p>
           <div className="flex flex-wrap gap-2">
-            {(["daily", "monthly", "initial"] as const).map((k) => (
-              <Button key={k} variant="outline" size="sm" disabled={s?.status !== "connected" || runSync.isPending} onClick={() => runSync.mutate({ kind: k })} className="gap-1.5">
+            {(["daily", "recent", "monthly", "initial"] as const).filter((k) => k !== "initial" || canManage).map((k) => (
+              <Button key={k} variant="outline" size="sm" disabled={s?.status !== "connected" || runSync.isPending} onClick={() => { if (k === "initial" && !confirm(INITIAL_CONFIRM)) return; runSync.mutate({ kind: k }); }} className="gap-1.5">
                 {runSync.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} {KIND_LABEL[k]}
               </Button>
             ))}
-            <Button variant="ghost" size="sm" disabled={backfill.isPending || !canMarketing} onClick={() => backfill.mutate({ limit: 2000 })} className="gap-1.5" title="Lê o originUrl das reservas já sincronizadas e marca as que vieram de anúncios Google (gclid/utm)">
-              {backfill.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />} Atribuir reservas (originUrl)
-            </Button>
           </div>
-          <div className="overflow-x-auto">
+          {runs.error && <QueryErrorNote error={runs.error} onRetry={() => runs.refetch()} retrying={runs.isFetching} what="as recolhas do Google Ads" />}
+          {!runs.error && <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="p-2">Início</th><th className="p-2">Tipo</th><th className="p-2">Intervalo</th><th className="p-2">Contas</th><th className="p-2 text-right">Linhas</th><th className="p-2">Estado</th><th className="p-2">Avisos / erro</th></tr></thead>
               <tbody>
-                {(runs.data ?? []).length === 0 && <tr><td className="p-3 text-center text-muted-foreground" colSpan={7}>Ainda não houve recolhas.</td></tr>}
+                {!runs.error && !runs.isLoading && (runs.data ?? []).length === 0 && <tr><td className="p-3 text-center text-muted-foreground" colSpan={7}>Ainda não houve recolhas.</td></tr>}
                 {(runs.data ?? []).map((r) => (
                   <tr key={r.id} className="border-b align-top">
                     <td className="p-2 text-xs whitespace-nowrap">{fmtPTDateTime(r.startedAt)}</td>
@@ -221,7 +230,7 @@ export default function IntegrationsGoogleAdsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </div>}
         </CardContent>
       </Card>
 
@@ -260,12 +269,13 @@ function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           <Plug className="h-4 w-4" /> Meta Ads (Facebook / Instagram)
-          <Badge variant="outline" className={`ml-auto text-xs ${!s ? "" : !s.configured ? "bg-muted text-secondary-foreground" : connStatus === "reauth_required" || connStatus === "error" ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
-            {!s ? "…" : !s.configured ? "Não configurada" : connStatus === "reauth_required" ? "Token inválido" : connStatus === "error" ? "Erro" : "Configurada"}
+          <Badge variant="outline" className={`ml-auto text-xs ${status.error ? "bg-amber-100 text-amber-800 border-amber-200" : !s ? "" : !s.configured ? "bg-muted text-secondary-foreground" : connStatus === "reauth_required" || connStatus === "error" ? "bg-red-100 text-red-800 border-red-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
+            {status.error ? "Estado desconhecido" : !s ? "…" : !s.configured ? "Não configurada" : connStatus === "reauth_required" ? "Token inválido" : connStatus === "error" ? "Erro" : "Configurada"}
           </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
+        {status.error && <QueryErrorNote error={status.error} onRetry={() => status.refetch()} retrying={status.isFetching} what="o estado da Meta" />}
         {s && !s.configured && (
           <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
             <p>Integração dormente. Para ligar, definir no servidor (Vercel → Environment Variables):</p>
@@ -311,12 +321,13 @@ function MetaAdsCard({ projectOptions }: { projectOptions: any[] }) {
               </table>
             </div>
             <div className="flex flex-wrap gap-2">
-              {(["daily", "monthly", "initial"] as const).map((k) => (
-                <Button key={k} variant="outline" size="sm" disabled={run.isPending} onClick={() => run.mutate({ kind: k })} className="gap-1.5">
+              {(["daily", "monthly", "initial"] as const).filter((k) => k !== "initial" || canManage).map((k) => (
+                <Button key={k} variant="outline" size="sm" disabled={run.isPending} onClick={() => { if (k === "initial" && !confirm(INITIAL_CONFIRM)) return; run.mutate({ kind: k }); }} className="gap-1.5">
                   {run.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} {KIND_LABEL[k]}
                 </Button>
               ))}
             </div>
+            {runs.error && <QueryErrorNote error={runs.error} onRetry={() => runs.refetch()} retrying={runs.isFetching} what="as recolhas da Meta" />}
             <ul className="text-xs space-y-0.5">
               {(runs.data ?? []).map((r: any) => (
                 <li key={r.id}>{fmtPTDateTime(r.startedAt)} · {KIND_LABEL[r.kind] ?? r.kind} · {r.rangeFrom} → {r.rangeTo} · {r.accountsDone}/{r.accountsTotal} contas · {r.rowsWritten} linhas · <b>{RUN_STATUS[r.status] ?? r.status}</b>{r.error ? <span className="text-red-700"> — {r.error}</span> : null}</li>

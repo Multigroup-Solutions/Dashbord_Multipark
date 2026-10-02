@@ -94,7 +94,7 @@ export function registerMcpMarketingRoutes(r: Router, h: Handler): void {
       if (!db) return res.status(500).json({ success: false, error: "BD indisponível" });
       const projectIds = await marketingProjectIds(f.projectId);
       const ads = await getAdMetrics({ from: f.from, to: f.to, projectIds });
-      res.json({ success: true, from: f.from, to: f.to, data: await getChannels(db, { from: f.from, to: f.to, projectIds, adSpend: ads.totals.cost, adConversions: ads.totals.conversions }) });
+      res.json({ success: true, from: f.from, to: f.to, data: await getChannels(db, { from: f.from, to: f.to, projectIds, adSpend: ads.totals.cost, adConversions: ads.byProviderTotals.google_ads.conversions }) });
     } catch (e) { failed(res, e); }
   }));
 

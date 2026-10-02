@@ -24,6 +24,17 @@ export class GoogleAdsApiError extends Error {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Prazo da corrida em curso (19b). Cada pedido usa só o tempo que resta e não
+ * repete se a repetição já não cabe — antes um pedido podia levar 30 s × 4
+ * tentativas e a Vercel cortava a função a meio, deixando o trinco preso.
+ */
+let apiDeadlineAt: number | null = null;
+export function setGoogleAdsApiDeadline(at: number | null | undefined): void { apiDeadlineAt = at ?? null; }
+/** Erro de "sem tempo": a corrida fica parcial e retoma (não é falha da conta). */
+export class DeadlineError extends Error { readonly deadline = true; }
+const timeLeft = () => (apiDeadlineAt == null ? Infinity : apiDeadlineAt - Date.now() - 2_000);
+
+/**
  * Código do erro da Google Ads API: `error.status` (ex.: PERMISSION_DENIED) ou,
  * na falta dele, o primeiro `errorCode` dos detalhes. PURA.
  * (Antes: `a ?? b ? c : d` — o `??` ligava primeiro e o status nunca saía.)
@@ -49,13 +60,16 @@ async function apiFetch(path: string, init: RequestInit, loginCustomerId?: strin
   let attempt = 0;
   for (;;) {
     attempt++;
-    const res = await fetchWithTimeout(url, { ...init, headers: { ...headers, ...(init.headers as any) }, timeoutMs: 30_000 });
+    const left = timeLeft();
+    if (left < 3_000) throw new DeadlineError("Sem tempo para mais um pedido à Google nesta corrida (continua na próxima).");
+    const res = await fetchWithTimeout(url, { ...init, headers: { ...headers, ...(init.headers as any) }, timeoutMs: Math.min(30_000, left) });
     if (res.ok) return res.json();
     const text = await res.text().catch(() => "");
     let code: string | undefined;
     try { code = errorCodeOf(JSON.parse(text)); } catch { /* texto */ }
     const retryable = res.status === 429 || res.status >= 500;
-    if (retryable && attempt < 4) { await sleep(500 * 2 ** attempt); continue; }
+    const wait = 500 * 2 ** attempt;
+    if (retryable && attempt < 4 && timeLeft() > wait + 5_000) { await sleep(wait); continue; }
     throw new GoogleAdsApiError(`Google Ads API ${res.status}: ${text.slice(0, 400)}`, res.status, code, retryable);
   }
 }

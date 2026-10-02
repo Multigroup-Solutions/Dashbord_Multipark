@@ -1,16 +1,16 @@
 /**
  * Rotas Express da integração Google Ads:
- *   GET /api/integrations/google-ads/oauth/start     (admin com sessão) → consentimento Google
- *   GET /api/integrations/google-ads/oauth/callback  → troca do código, guarda o token, descobre contas
- *   GET /api/cron/google-ads?kind=hourly|nightly|monthly  (Bearer CRON_SECRET) → recolha com prazo
+ *   GET /api/integrations/google-ads/oauth/start     (SUPER ADMIN com sessão — 19b) → consentimento Google
+ *   GET /api/integrations/google-ads/oauth/callback  → confere que é quem iniciou, troca o código, guarda o token, descobre contas
+ *   GET /api/cron/google-ads?kind=daily|monthly|recent|initial  (Bearer CRON_SECRET) → recolha com prazo
  */
 import type { Express, Request, Response } from "express";
 import { sdk } from "../../_core/sdk";
+import { cronAuthOk } from "../../cronAuth";
 import { OAUTH_CALLBACK_PATH, missingOAuthEnvs, readGoogleAdsConfig, safeRedirectPath } from "./config";
 import { buildConsentUrl, consumeOAuthState, createOAuthState, exchangeCodeForTokens, saveConnection, storeRefreshToken } from "./oauth";
 import { refreshAccounts } from "./sync";
 
-const ROLE_RANK: Record<string, number> = { super_admin: 7, admin: 6 };
 const PAGE = "/integracoes/google-ads";
 
 function getOrigin(req: Request): string {
@@ -32,8 +32,9 @@ export function registerGoogleAdsRoutes(app: Express) {
   app.get("/api/integrations/google-ads/oauth/start", async (req: Request, res: Response) => {
     let user;
     try { user = await sdk.authenticateRequest(req); } catch { user = null; }
-    if (!user || (ROLE_RANK[user.role] ?? 0) < ROLE_RANK.admin) {
-      res.status(403).type("html").send(errorPage("Sem permissão", "Só administradores podem ligar o Google Ads. Inicia sessão na dashboard primeiro."));
+    // 19b (decisão do Jorge): ligar/religar o Google Ads só o super admin
+    if (!user || user.role !== "super_admin") {
+      res.status(403).type("html").send(errorPage("Sem permissão", "Só o super admin pode ligar o Google Ads. Inicia sessão na dashboard primeiro."));
       return;
     }
     const missing = missingOAuthEnvs();
@@ -54,12 +55,24 @@ export function registerGoogleAdsRoutes(app: Express) {
     const { code, state, error } = req.query as Record<string, string | undefined>;
     if (error) { res.status(400).type("html").send(errorPage("Autorização recusada", `A Google devolveu: ${error}`)); return; }
     if (!code || !state) { res.status(400).type("html").send(errorPage("Pedido inválido", "Faltam code/state.")); return; }
+    // 19b: o retorno tem de vir do MESMO utilizador (com sessão) que iniciou — um
+    // link de retorno aberto noutro browser/sessão não liga a conta Google de outra pessoa.
+    let user;
+    try { user = await sdk.authenticateRequest(req); } catch { user = null; }
+    if (!user || user.role !== "super_admin") { res.status(403).type("html").send(errorPage("Sem permissão", "Inicia sessão na dashboard como super admin e volta a carregar em “Ligar Google Ads”.")); return; }
     const st = await consumeOAuthState(state);
     if (!st) { res.status(400).type("html").send(errorPage("Sessão OAuth expirada", "O pedido não corresponde a nenhum início válido (10 min). Volta a carregar em “Ligar Google Ads”.")); return; }
+    if (st.userId !== user.id) { res.status(403).type("html").send(errorPage("Sessão diferente", "Esta ligação foi iniciada por outro utilizador. Volta a carregar em “Ligar Google Ads” com a tua sessão.")); return; }
     try {
       const tokens = await exchangeCodeForTokens(code, getOrigin(req));
       const cfg = readGoogleAdsConfig();
       const stored = await storeRefreshToken(tokens, st.userId, cfg.loginCustomerId);
+      try {
+        const { logActivity } = await import("../../db");
+        const { getConnection } = await import("./oauth");
+        const conn = await getConnection();
+        await logActivity({ userId: st.userId, action: "connect", entity: "integration_connections", details: `Google Ads ligado${conn?.accountEmail ? ` com ${conn.accountEmail}` : ""}${stored.identityChanged ? " — OUTRA conta Google: as contas selecionadas foram limpas" : ""}` });
+      } catch { /* o registo não impede a ligação */ }
       // descobre as contas (não bloqueia a ligação se o acesso do projeto Cloud ainda não estiver aprovado)
       let discovered = "";
       try {
@@ -84,9 +97,9 @@ export function registerGoogleAdsRoutes(app: Express) {
 
   // ── 3. cron manual (o agendador /api/cron/tick corre a diária e a mensal) ──
   app.get("/api/cron/google-ads", async (req: Request, res: Response) => {
-    const secret = process.env.CRON_SECRET?.trim();
-    if (!secret || req.headers["authorization"] !== `Bearer ${secret}`) { res.status(401).json({ error: "Unauthorized" }); return; }
-    // daily (última semana) | monthly (mês anterior) | initial; hourly/nightly = daily
+    // 19b: a mesma verificação dos outros crons (tempo constante, segredo com trim)
+    if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
+    // daily (última semana) | recent (35 dias) | monthly (mês anterior) | initial; hourly/nightly = daily
     const { googleAdsCron, sendCronRun } = await import("../../cronJobs");
     sendCronRun(res, await googleAdsCron({ kind: String(req.query.kind ?? "daily"), deadlineAt: Date.now() + 45_000 }));
   });

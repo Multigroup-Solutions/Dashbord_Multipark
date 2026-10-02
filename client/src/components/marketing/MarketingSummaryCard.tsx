@@ -35,7 +35,7 @@ export default function MarketingSummaryCard({ from, to, projectId }: { from: st
   // 19a: só "sem acesso" esconde o cartão; um erro mostra-se (antes escondia-se e parecia não haver marketing).
   if (error && (error as any)?.data?.code === "FORBIDDEN") return null;
   const s: any = st;
-  const results = s ? adResultsMeasure(s.bookingsAttributed ?? 0, s.conversionsGoogle ?? 0) : null;
+  const results = s ? adResultsMeasure(s.bookingsAttributed ?? 0, s.conversionsPlatforms ?? s.conversionsGoogle ?? 0) : null;
   // Custo total = anúncios (APIs) + outras despesas de marketing (SEM as faturas Google/Meta — já estão no gasto).
   const totalMarketing = s ? (s.spend ?? 0) + (s.mktExpenses ?? 0) : 0;
   const health = s?.attributionQuality ? attributionHealth(s.attributionQuality, s.spend ?? 0, s.conversionsGoogle ?? null) : null;

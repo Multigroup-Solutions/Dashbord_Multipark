@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const f = vi.hoisted(() => ({ load: vi.fn(), channels: vi.fn() }));
 vi.mock("./cityAccess", async original => ({ ...(await original<object>()), loadCityAccess: f.load }));
 vi.mock("./db", async original => ({ ...(await original<object>()), getDb: async () => ({ execute: async () => [[], []] }) }));
-vi.mock("./integrations/googleAds/adMetrics", () => ({ getAdMetrics: async () => ({ totals: { cost: 120 } }) }));
+vi.mock("./integrations/googleAds/adMetrics", () => ({ getAdMetrics: async () => ({ totals: { cost: 120, conversions: 9 }, byProviderTotals: { google_ads: { conversions: 4 } } }) }));
 vi.mock("./marketingChannels", () => ({ getChannels: f.channels }));
 
 import { appRouter } from "./routers";
@@ -31,6 +31,6 @@ describe("marketing.channels — permissões", () => {
   });
   it("passa o gasto do Google Ads do período", async () => {
     await caller().marketing.channels({ from: "2026-09-01", to: "2026-09-30" });
-    expect(f.channels).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ from: "2026-09-01", to: "2026-09-30", adSpend: 120 }));
+    expect(f.channels).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ from: "2026-09-01", to: "2026-09-30", adSpend: 120, adConversions: 4 }));   // 19b: só as conversões do Google
   });
 });

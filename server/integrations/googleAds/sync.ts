@@ -82,6 +82,8 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
   if (conn.status === "reauth_required") return { ...base, ok: false, status: "failed", reason: "Reautorização necessária: volta a ligar o Google Ads em Integrações" };
 
   const cfg = readGoogleAdsConfig();
+  const { setGoogleAdsApiDeadline } = await import("./client");
+  setGoogleAdsApiDeadline(opts.deadlineAt);
   const r = await runAdsSync<AdsAccountRef>({
     provider: GOOGLE_ADS_PROVIDER, kind: opts.kind, deadlineAt: opts.deadlineAt, triggeredById: opts.triggeredById ?? null,
     store: mysqlAdsSyncStore(db),
@@ -91,13 +93,19 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
       const login = acc.loginCustomerId ?? cfg.loginCustomerId ?? null;
       const rows = await fetchCampaignDaily(acc.customerId, from, to, login);
       if (!rows.length) return { campaigns: [], daily: [], actions: null };
-      let actions: Awaited<ReturnType<typeof fetchConversionActions>> = [];
+      // 19b: lista vazia com a chamada BEM feita = "já não há conversões" (substitui);
+      // só uma chamada falhada (null) mantém as anteriores.
+      let actions: Awaited<ReturnType<typeof fetchConversionActions>> | null = [];
       try { actions = await fetchConversionActions(acc.customerId, from, to, login); }
-      catch (err: any) { warnings.push(`${acc.customerId} ${from}→${to}: ações de conversão não recolhidas (${String(err?.message ?? err).slice(0, 120)})`); }
+      catch (err: any) {
+        if ((err as any)?.deadline) throw err;
+        actions = null;
+        warnings.push(`${acc.customerId} ${from}→${to}: ações de conversão não recolhidas (${String(err?.message ?? err).slice(0, 120)})`);
+      }
       return {
         campaigns: rows.map((r) => ({ externalId: r.campaignId, name: r.campaignName, status: r.campaignStatus, channelType: r.channelType, budgetMicros: r.budgetMicros })),
         daily: rows.map((r) => ({ campaignExternalId: r.campaignId, date: r.date, costMicros: r.costMicros, impressions: r.impressions, clicks: r.clicks, conversions: r.conversions, conversionValueMicros: r.conversionValueMicros, allConversions: r.allConversions })),
-        actions: actions.length ? actions.map((a) => ({ campaignExternalId: a.campaignId, date: a.date, actionResource: a.actionResource, actionName: a.actionName, category: a.category, conversions: a.conversions, valueMicros: a.valueMicros })) : null,
+        actions: actions ? actions.map((a) => ({ campaignExternalId: a.campaignId, date: a.date, actionResource: a.actionResource, actionName: a.actionName, category: a.category, conversions: a.conversions, valueMicros: a.valueMicros })) : null,
       };
     },
     // sem acesso à conta (401/403): não vale a pena continuar essa conta
@@ -105,6 +113,7 @@ export async function runGoogleAdsSync(opts: { kind: SyncKind; deadlineAt?: numb
     classifyError: (err) => ((err as any)?.oauthError ? "auth"
       : err instanceof GoogleAdsApiError && (err.status === 401 || err.status === 403) ? "stop_account" : "continue"),
   });
+  setGoogleAdsApiDeadline(null);
   if (r.status !== "skipped" && r.done) {
     try { await saveConnection({ lastCheckedAt: nowMysql() }); } catch { /* indicador */ }
   }

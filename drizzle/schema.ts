@@ -202,7 +202,7 @@ export const adConversionActionMetrics = mysqlTable("ad_conversion_action_metric
 export const integrationSyncRuns = mysqlTable("integration_sync_runs", {
 	id: int().autoincrement().primaryKey(),
 	provider: varchar({ length: 32 }).notNull(),
-	kind: mysqlEnum(['initial','hourly','nightly','monthly','manual','daily']).notNull(), // daily desde 0074; hourly/nightly = execuções antigas
+	kind: mysqlEnum(['initial','hourly','nightly','monthly','manual','daily','recent']).notNull(), // daily desde 0074; recent (35 dias, semanal) desde 19b; hourly/nightly = execuções antigas
 	status: mysqlEnum(['running','partial','done','failed','skipped']).default('running').notNull(),
 	rangeFrom: date({ mode: 'string' }),
 	rangeTo: date({ mode: 'string' }),

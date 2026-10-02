@@ -22,7 +22,7 @@
 import { projectScope } from '../../cityScope';
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../../db";
-import { adAccounts, multiparkBookings, projects } from "../../../drizzle/schema";
+import { adAccounts, projects } from "../../../drizzle/schema";
 import { brandNameForProject } from "../../../shared/adCampaignMapping";
 import { isAdPlatformInvoice, roasNetOfVat } from "../../../shared/marketingRules";
 import { lisbonDaySql } from "../../../shared/lisbonDay";
@@ -130,11 +130,13 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     clicks: ads.totals.clicks,
     cpc: ads.totals.cpc,
     ctr: ads.totals.ctr,
-    // Google (da Google)
-    conversionsGoogle: ads.totals.conversions,
-    conversionValueGoogle: ads.totals.conversionValue,
-    costPerConversionGoogle: ads.totals.costPerConversion,
-    roasGoogle: ads.totals.roasGoogle,
+    // Google (da Google) — 19b: SÓ o Google (antes somava as conversões e o gasto da Meta)
+    conversionsGoogle: ads.byProviderTotals.google_ads.conversions,
+    conversionValueGoogle: ads.byProviderTotals.google_ads.conversionValue,
+    costPerConversionGoogle: ads.byProviderTotals.google_ads.costPerConversion,
+    roasGoogle: ads.byProviderTotals.google_ads.roasGoogle,
+    /** conversões contadas pelas plataformas (Google + Meta + importações antigas) */
+    conversionsPlatforms: ads.totals.conversions,
     // Reservas reais (Multipark), pela data de criação — null se a BD da Multipark não respondeu
     bookingsError,
     bookingsTotal: bk(bookingsTotal), bookingsAttributed: bk(bookingsAttributed), bookingsUnattributed: bk(bookingsUnattributed),
@@ -201,8 +203,10 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   const vat = await vatRateForPeriod(f.from, f.to);
 
   const allProjects = await db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects);
-  const accounts = await db.select({ id: adAccounts.id, name: adAccounts.name, projectId: adAccounts.projectId, provider: adAccounts.provider })
-    .from(adAccounts).where(and(inArray(adAccounts.provider, [...API_PROVIDERS]), eq(adAccounts.selected, 1), eq(adAccounts.isManager, 0))).orderBy(adAccounts.name);
+  // 19b: todas as contas não gestoras (uma conta desselecionada continua a ter
+  // gasto já recolhido, que conta na marca dela); só as selecionadas aparecem sem gasto.
+  const accounts = await db.select({ id: adAccounts.id, name: adAccounts.name, projectId: adAccounts.projectId, provider: adAccounts.provider, selected: adAccounts.selected })
+    .from(adAccounts).where(and(inArray(adAccounts.provider, [...API_PROVIDERS]), eq(adAccounts.isManager, 0))).orderBy(adAccounts.name);
   const accountProject = new Map(accounts.map((a) => [a.id, a.projectId]));
   const ads = preloadedAds ?? await getAdMetrics({ from: f.from, to: f.to, projectIds });
 
@@ -227,6 +231,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   if (!projectIds) {
     // sem âmbito: todas as contas aparecem (mesmo sem gasto no período)
     for (const a of accounts) {
+      if (!a.selected) continue;
       const brand = brandNameForProject(a.projectId, allProjects);
       const k = brand ? key(brand) : `conta:${a.id}`;
       const row = brands.get(k) ?? newRow(brand ?? (a.name ?? `Conta ${a.id}`), !!brand);
@@ -294,22 +299,4 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     vatRate: vat,
     bookingsError,
   };
-}
-
-/** Preenche a atribuição das reservas já sincronizadas que têm originUrl (lotes). */
-export async function backfillBookingAttribution(limit = 500): Promise<{ scanned: number; attributed: number; remaining: number }> {
-  const db = await getDb();
-  if (!db) return { scanned: 0, attributed: 0, remaining: 0 };
-  const { attributionFromUrl, attributionColumns } = await import("./attribution");
-  const rows = await db.select({ id: multiparkBookings.id, originUrl: multiparkBookings.originUrl }).from(multiparkBookings)
-    .where(and(sql`${multiparkBookings.originUrl} IS NOT NULL`, sql`${multiparkBookings.adAttribution} IS NULL`)).limit(limit);
-  let attributed = 0;
-  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
-  for (const r of rows) {
-    const a = attributionFromUrl(r.originUrl);
-    if (a.adAttribution !== "unknown") attributed++;
-    await db.update(multiparkBookings).set({ ...attributionColumns(a), adAttributedAt: now }).where(eq(multiparkBookings.id, r.id));
-  }
-  const [rem] = await db.select({ n: sql<number>`COUNT(*)` }).from(multiparkBookings).where(and(sql`${multiparkBookings.originUrl} IS NOT NULL`, sql`${multiparkBookings.adAttribution} IS NULL`));
-  return { scanned: rows.length, attributed, remaining: Number(rem?.n ?? 0) };
 }

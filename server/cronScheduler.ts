@@ -69,6 +69,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "evaluation-recompute": async (o) => (await import("./cronJobs")).evaluationRecomputeCron({ deadlineAt: o.deadlineAt, offsetDays: offset(o.cursor) }),
   "google-ads": async (o) => (await import("./cronJobs")).googleAdsCron({ deadlineAt: o.deadlineAt, kind: "daily" }),
   "google-ads-monthly": async (o) => (await import("./cronJobs")).googleAdsCron({ deadlineAt: o.deadlineAt, kind: "monthly" }),
+  "google-ads-recent": async (o) => (await import("./cronJobs")).googleAdsCron({ deadlineAt: o.deadlineAt, kind: "recent" }),
   "meta-ads": async (o) => (await import("./cronJobs")).metaAdsCron({ deadlineAt: o.deadlineAt, kind: "daily" }),
   "meta-ads-monthly": async (o) => (await import("./cronJobs")).metaAdsCron({ deadlineAt: o.deadlineAt, kind: "monthly" }),
   "web-analytics": async (o) => (await import("./cronJobs")).webAnalyticsCron(o),
@@ -76,7 +77,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
 
 /** Meta do registo de corridas (o que o GitHub Actions punha na query). */
 function runMeta(key: string, cursor: string | null): string {
-  const kind = key.endsWith("-monthly") ? "kind=monthly" : key === "google-ads" || key === "meta-ads" ? "kind=daily" : "";
+  const kind = key.endsWith("-monthly") ? "kind=monthly" : key.endsWith("-recent") ? "kind=recent" : key === "google-ads" || key === "meta-ads" ? "kind=daily" : "";
   return ["tick", kind, cursor ? `cursor=${cursor.slice(0, 120)}` : ""].filter(Boolean).join(" ");
 }
 
