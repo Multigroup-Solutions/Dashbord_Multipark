@@ -48,8 +48,11 @@ export async function webOverview(i: OverviewInput) {
     list("ga", "channel", 12, "sessions"), list("ga", "device", 6, "sessions"), list("sc", "device", 6, "clicks"), list("ga", "event", 20, "sessions"),
   ]);
   // Negócio: reservas (Multipark) e gasto (anúncios) no mesmo período e marca.
+  // 19a: reservas da Multipark em baixo → `bookingsError` (o ecrã diz "indisponível"), nunca 0 reservas / 0 % de conversão.
+  let bookingsError: string | null = null;
+  const noteBookings = (err: any): Awaited<ReturnType<typeof bookingsByDay>> => { bookingsError = String(err?.message ?? err).slice(0, 200); return new Map(); };
   const [bookCur, bookPrev, spendCur, spendPrev] = await Promise.all([
-    bookingsByDay(cur.from, cur.to, brand).catch(() => new Map()), bookingsByDay(prev.from, prev.to, brand).catch(() => new Map()),
+    bookingsByDay(cur.from, cur.to, brand).catch(noteBookings), bookingsByDay(prev.from, prev.to, brand).catch(noteBookings),
     adSpendByDay(cur.from, cur.to, brand), adSpendByDay(prev.from, prev.to, brand),
   ]);
   const sessionsMap = (rows: typeof gaCur) => new Map(rows.map((r) => [r.day, r.sessions]));
@@ -105,7 +108,7 @@ export async function webOverview(i: OverviewInput) {
     channels,
     devices: { ga: devicesGa, sc: devicesSc },
     funnel,
-    business: { totals: business.totals, prevTotals: businessPrev.totals, adSpendAvailable: spendCur.available },
+    business: { totals: business.totals, prevTotals: businessPrev.totals, adSpendAvailable: spendCur.available, adSpendError: spendCur.error ?? null, bookingsError },
     lastRun,
     lastSuccessAt: await store.getState("lastSuccessAt"),
     insight,

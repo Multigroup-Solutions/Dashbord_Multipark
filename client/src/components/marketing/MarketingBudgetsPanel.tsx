@@ -3,7 +3,8 @@
  * marca (e fornecedor opcional) e o RITMO — gasto do dia 1 até ONTEM contra o
  * esperado pelos dias completos do mês (hoje está a meio e não conta).
  * Acima de 110 % ou abaixo de 80 % do esperado → alerta no Marketing.
- * Ver: backoffice (âmbito de cidade). Definir: admin.
+ * Ver: marketing "view" (âmbito de cidade). Definir/arquivar: marketing "manage".
+ * 19a: erro ≠ "sem orçamentos"; "Apagar" passa a ARQUIVAR (fica no registo).
  */
 import { useMemo, useState } from "react";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
@@ -17,7 +18,8 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Copy, Loader2, Plus, Trash2 } from "lucide-react";
+import { Archive, ChevronLeft, ChevronRight, Copy, Loader2, Plus } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 
 const EUR = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: 0, minimumFractionDigits: 0 });
@@ -40,11 +42,12 @@ export default function MarketingBudgetsPanel() {
   const { projectId } = useGlobalFilters();
   const [month, setMonth] = useState(lisbonMonth());
   const utils = trpc.useUtils();
-  const { data: rows = [], isLoading } = trpc.marketing.budgets.list.useQuery({ month, projectId });
+  const listQ = trpc.marketing.budgets.list.useQuery({ month, projectId });
+  const { data: rows = [], isLoading } = listQ;
   const { data: projects = [] } = trpc.projects.list.useQuery();
   const refresh = () => { utils.marketing.budgets.list.invalidate(); utils.marketing.alerts.invalidate(); };
   const upsert = trpc.marketing.budgets.upsert.useMutation({ onSuccess: () => { refresh(); toast.success("Orçamento guardado"); setAmount(""); }, onError: (e) => toast.error(e.message) });
-  const remove = trpc.marketing.budgets.remove.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
+  const remove = trpc.marketing.budgets.remove.useMutation({ onSuccess: () => { refresh(); toast.success("Orçamento arquivado (fica no registo)"); }, onError: (e) => toast.error(e.message) });
   const copy = trpc.marketing.budgets.copyFromPrevious.useMutation({ onSuccess: (r) => { refresh(); toast.success(`${r.copied} orçamento(s) copiado(s) do mês anterior`); }, onError: (e) => toast.error(e.message) });
 
   const options = useMemo(() => {
@@ -111,7 +114,9 @@ export default function MarketingBudgetsPanel() {
 
       <Card>
         <CardContent className="p-0 overflow-x-auto">
-          {isLoading ? (
+          {listQ.error ? (
+            <div className="p-3"><QueryErrorNote error={listQ.error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="os orçamentos" /></div>
+          ) : isLoading ? (
             <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
           ) : rows.length === 0 ? (
             <p className="text-sm text-muted-foreground p-6 text-center">Sem orçamentos definidos para {monthLabel(month)}.{isAdmin ? " Define um acima." : ""}</p>
@@ -140,7 +145,8 @@ export default function MarketingBudgetsPanel() {
                   const mark = Math.min(100, r.amount > 0 ? (r.pacing.expected / r.amount) * 100 : 0);
                   return (
                     <tr key={r.id} className="border-b last:border-0">
-                      <td className="px-4 py-2 font-medium min-w-[9rem]">{r.label}{r.notes && <div className="text-[11px] text-muted-foreground font-normal">{r.notes}</div>}</td>
+                      <td className="px-4 py-2 font-medium min-w-[9rem]">{r.label}{r.notes && <div className="text-[11px] text-muted-foreground font-normal">{r.notes}</div>}
+                        {r.partialScope && <div className="text-[11px] text-muted-foreground font-normal">Só a parte das tuas cidades — o ritmo compara-se com o orçamento inteiro, por isso não aparece.</div>}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{eur(r.amount)}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{eur(r.spentToDate)}</td>
                       <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{eur(r.pacing.expected)}</td>
@@ -156,7 +162,7 @@ export default function MarketingBudgetsPanel() {
                       <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{eur(r.pacing.projected)}</td>
                       {isAdmin && (
                         <td className="px-2 py-2 text-right">
-                          <Button size="icon" variant="ghost" aria-label={`Apagar orçamento ${r.label}`} onClick={() => { if (confirm(`Apagar o orçamento de ${r.label}?`)) remove.mutate({ id: r.id }); }}><Trash2 className="w-4 h-4" /></Button>
+                          <Button size="icon" variant="ghost" title="Arquivar" aria-label={`Arquivar orçamento ${r.label}`} onClick={() => { if (confirm(`Arquivar o orçamento de ${r.label}? Sai da lista e dos alertas; fica no registo. Definir o mesmo orçamento outra vez repõe-no.`)) remove.mutate({ id: r.id }); }}><Archive className="w-4 h-4" /></Button>
                         </td>
                       )}
                     </tr>

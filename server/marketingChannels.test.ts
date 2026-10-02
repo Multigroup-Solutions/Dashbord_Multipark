@@ -4,8 +4,9 @@ import { cityScope } from "./cityScope";
 import { buildChannels, type ClientRowAgg, type MixRow } from "./marketingChannels";
 import { channelOf, groupOf, parseFirstBooking } from "../shared/marketingChannels";
 
-const partners: Record<string, { id: number; name: string; commissionRate: number }> = {
+const partners: Record<string, { id: number; name: string; commissionRate: number | null; configuredAt?: string | null }> = {
   parclick: { id: 1, name: "Parclick", commissionRate: 20 },
+  semtaxa: { id: 2, name: "Sem Taxa", commissionRate: null },
 };
 const partnerFor = (c: string) => partners[c.trim().toLowerCase()];
 const hasPartner = (c: string) => !!partnerFor(c);
@@ -60,16 +61,23 @@ describe("canais e clientes", () => {
     expect(g.organico.channels.map((c) => [c.key, c.bookings])).toEqual([["site", 5], ["telefone", 3]]);
   });
 
-  it("parceiros com comissão", () => {
-    expect(g.parceiros).toMatchObject({ bookings: 5, cost: 200, costPerBooking: 40 });
-    expect(r.partners).toEqual([{ name: "Parclick", bookings: 5, revenue: 1000, commissionRate: 20, commission: 200 }]);
+  it("parceiros com comissão — regra da Faturação: base sem IVA (19a)", () => {
+    // 1000 € com IVA → 813,01 € sem IVA × 20 % = 162,60 € (antes 200 € sobre o valor com IVA)
+    expect(g.parceiros.cost).toBeCloseTo(162.6, 1);
+    expect(r.partners).toEqual([{ name: "Parclick", bookings: 5, revenue: 1000, commissionRate: 20, commission: expect.closeTo(162.6, 1), rateMissing: false }]);
     expect(r.bookingsTotal).toBe(23);
+  });
+
+  it("taxa em falta fica assinalada (não é 0 % silencioso)", () => {
+    const x = buildChannels([mix({ campaign: "SemTaxa", bookings: 2, revenue: 100 })], [], range, 0, partnerFor);
+    expect(x.partners).toEqual([{ name: "Sem Taxa", bookings: 2, revenue: 100, commissionRate: null, commission: 0, rateMissing: true }]);
   });
 
   it("clientes novos no grupo de entrada e custo por cliente novo", () => {
     expect(r.newClients).toBe(2);
     expect(g.anuncios).toMatchObject({ newClients: 1, costPerNewClient: 300 });
-    expect(g.parceiros).toMatchObject({ newClients: 1, costPerNewClient: 200 });
+    expect(g.parceiros).toMatchObject({ newClients: 1 });
+    expect(g.parceiros.costPerNewClient).toBeCloseTo(162.6, 1);
     expect(r.returningBookings).toBe(2);
   });
 

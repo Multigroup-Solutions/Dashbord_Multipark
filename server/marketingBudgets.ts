@@ -7,7 +7,7 @@
  * escolhido ou de todos. Esperado = valor × dias completos ÷ dias do mês
  * (shared/marketingRules.budgetPacing). Âmbito de cidade do utilizador.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb, getProjects, resolveProjectIds } from "./db";
 import { marketingBudgets } from "../drizzle/schema";
 import { scopedProjectIds } from "./cityScope";
@@ -21,6 +21,12 @@ const PROVIDER_LABEL: Record<string, string> = { all: "", google_ads: " · Googl
 export interface BudgetWithPacing {
   id: number; month: string; projectId: number; provider: string; amount: number; notes: string | null;
   label: string; spentToDate: number; spentMonth: number; pacing: BudgetPacing;
+  /**
+   * 19a: quem só vê parte das cidades do orçamento (ex.: "Marca (todas as
+   * cidades)" visto por quem só tem Lisboa) vê o gasto dessa parte — o ritmo
+   * não se compara com o orçamento inteiro (dava "abaixo do orçamento" falso).
+   */
+  partialScope: boolean;
 }
 
 function lisbonToday(): string {
@@ -38,12 +44,13 @@ export function monthBounds(month: string): { from: string; to: string; days: nu
 export async function listBudgetsWithPacing(opts: { month: string; projectId?: number; today?: string }): Promise<BudgetWithPacing[]> {
   if (!/^\d{4}-\d{2}$/.test(opts.month)) throw new Error("Mês inválido (AAAA-MM)");
   const db = await getDb();
-  if (!db) return [];
+  // 19a: sem BD → erro (antes "Sem orçamentos definidos", que convidava a recriá-los).
+  if (!db) throw new Error("Base de dados indisponível");
   const today = opts.today ?? lisbonToday();
   const { from, to, days } = monthBounds(opts.month);
   const allowed = scopedProjectIds();
   const filterIds = opts.projectId ? new Set(await resolveProjectIds(opts.projectId)) : null;
-  const rows = await db.select().from(marketingBudgets).where(eq(marketingBudgets.month, opts.month));
+  const rows = await db.select().from(marketingBudgets).where(and(eq(marketingBudgets.month, opts.month), isNull(marketingBudgets.archivedAt)));
   const projects = await getProjects();
   const byId = new Map(projects.map((p: any) => [p.id, p]));
   const label = (id: number) => {
@@ -60,9 +67,11 @@ export async function listBudgetsWithPacing(opts: { month: string; projectId?: n
   const cache = new Map<string, Awaited<ReturnType<typeof getAdMetrics>> | null>();
   const out: BudgetWithPacing[] = [];
   for (const b of rows) {
-    let ids = await resolveProjectIds(b.projectId);
+    const allIds = await resolveProjectIds(b.projectId);
+    let ids = allIds;
     if (allowed) ids = ids.filter((id) => allowed.includes(id));
     if (!ids.length) continue;
+    const partialScope = ids.length < allIds.length;
     if (filterIds && !ids.some((id) => filterIds.has(id)) && !filterIds.has(b.projectId)) continue;
     const key = ids.slice().sort((a, c) => a - c).join(",");
     if (!cache.has(key)) cache.set(key, spendTo >= from ? await getAdMetrics({ from, to: spendTo, projectIds: ids }) : null);
@@ -73,37 +82,63 @@ export async function listBudgetsWithPacing(opts: { month: string; projectId?: n
       id: b.id, month: b.month, projectId: b.projectId, provider: b.provider, amount, notes: b.notes ?? null,
       label: `${label(b.projectId)}${PROVIDER_LABEL[b.provider] ?? ""}`,
       spentToDate: spent, spentMonth: spent,
-      pacing: budgetPacing({ amount, spentToDate: spent, dayOfMonth, daysInMonth: days }),
+      // Parte do orçamento: sem ritmo (o "esperado" seria o do orçamento inteiro).
+      pacing: partialScope
+        ? { ...budgetPacing({ amount, spentToDate: spent, dayOfMonth, daysInMonth: days }), ratio: null, status: "early" as const }
+        : budgetPacing({ amount, spentToDate: spent, dayOfMonth, daysInMonth: days }),
+      partialScope,
     });
   }
   return out.sort((a, c) => a.label.localeCompare(c.label));
 }
 
-export async function upsertBudget(input: { month: string; projectId: number; provider: BudgetProvider; amount: number; notes?: string | null; userId: number }) {
+/**
+ * Define (ou volta a definir) um orçamento. Devolve o valor anterior para o
+ * registo (antes → depois). Um orçamento arquivado volta a ficar ativo.
+ */
+export async function upsertBudget(input: { month: string; projectId: number; provider: BudgetProvider; amount: number; notes?: string | null; userId: number }): Promise<{ previous: number | null; wasArchived: boolean }> {
   const db = await getDb();
-  if (!db) throw new Error("DB indisponível");
+  if (!db) throw new Error("Base de dados indisponível");
+  const [prev] = await db.select({ amount: marketingBudgets.amount, archivedAt: marketingBudgets.archivedAt }).from(marketingBudgets)
+    .where(and(eq(marketingBudgets.month, input.month), eq(marketingBudgets.projectId, input.projectId), eq(marketingBudgets.provider, input.provider))).limit(1);
   await db.insert(marketingBudgets).values({
     month: input.month, projectId: input.projectId, provider: input.provider, amount: input.amount.toFixed(2), notes: input.notes ?? null, createdById: input.userId,
-  }).onDuplicateKeyUpdate({ set: { amount: input.amount.toFixed(2), notes: input.notes ?? null } });
+  }).onDuplicateKeyUpdate({ set: { amount: input.amount.toFixed(2), notes: input.notes ?? null, archivedAt: null, archivedById: null } });
+  return { previous: prev ? Number(prev.amount) : null, wasArchived: !!prev?.archivedAt };
 }
 
-export async function removeBudget(id: number) {
+/**
+ * "Apagar" = ARQUIVAR (0395, P3 19a): sai da lista, do ritmo e dos alertas,
+ * mas a linha fica (quem e quando). Antes era um DELETE sem rasto.
+ * Só dentro do âmbito de cidades de quem pede.
+ */
+export async function archiveBudget(id: number, userId: number): Promise<{ month: string; projectId: number; provider: string; amount: number } | null> {
   const db = await getDb();
-  if (!db) throw new Error("DB indisponível");
-  await db.delete(marketingBudgets).where(eq(marketingBudgets.id, id));
+  if (!db) throw new Error("Base de dados indisponível");
+  const [b] = await db.select().from(marketingBudgets).where(eq(marketingBudgets.id, id)).limit(1);
+  if (!b || b.archivedAt) return null;
+  const allowed = scopedProjectIds();
+  if (allowed) {
+    const ids = await resolveProjectIds(b.projectId);
+    if (!ids.length || ids.some((x) => !allowed.includes(x))) throw new Error("Sem acesso a todas as cidades deste orçamento.");
+  }
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  await db.update(marketingBudgets).set({ archivedAt: now, archivedById: userId }).where(and(eq(marketingBudgets.id, id), isNull(marketingBudgets.archivedAt)));
+  return { month: b.month, projectId: b.projectId, provider: b.provider, amount: Number(b.amount) };
 }
 
 /** Copia os objetivos de um mês para o seguinte (só os que ainda não existem). */
 export async function copyBudgets(fromMonth: string, toMonth: string, userId: number): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("DB indisponível");
-  const src = await db.select().from(marketingBudgets).where(eq(marketingBudgets.month, fromMonth));
+  const src = await db.select().from(marketingBudgets).where(and(eq(marketingBudgets.month, fromMonth), isNull(marketingBudgets.archivedAt)));
   const allowed = scopedProjectIds();
   let n = 0;
   for (const b of src) {
     if (allowed && !allowed.includes(b.projectId)) continue;
-    const ex = await db.select({ id: marketingBudgets.id }).from(marketingBudgets)
+    const ex = await db.select({ id: marketingBudgets.id, archivedAt: marketingBudgets.archivedAt }).from(marketingBudgets)
       .where(and(eq(marketingBudgets.month, toMonth), eq(marketingBudgets.projectId, b.projectId), eq(marketingBudgets.provider, b.provider))).limit(1);
+    // Já existe (ativo ou arquivado de propósito) → não se mexe.
     if (ex.length) continue;
     await db.insert(marketingBudgets).values({ month: toMonth, projectId: b.projectId, provider: b.provider, amount: b.amount, notes: b.notes, createdById: userId });
     n++;

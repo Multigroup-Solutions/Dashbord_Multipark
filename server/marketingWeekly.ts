@@ -8,7 +8,10 @@
  * por cidade, as melhores/piores campanhas e os alertas ativos.
  *
  * Destinatários: MARKETING_REPORT_EMAILS (vírgulas). Sem envio de email (Gmail) ou sem
- * destinatários → não envia (e não gasta a chave). MARKETING_WEEKLY=off desliga.
+ * destinatários → não envia (e não gasta a chave). Interruptor "Email semanal de
+ * marketing" em Definições → Automações (19a; a variável MARKETING_WEEKLY=off
+ * continua a mandar). Reservas da Multipark indisponíveis → o email diz-o e
+ * mostra "—" nas reservas (nunca 0).
  * Números da fonte única (getAdMetrics / getSpendAndBookingsByBrand), sem
  * âmbito de cidade (é um resumo da direção).
  */
@@ -32,6 +35,8 @@ export interface WeeklyLine { label: string; spend: number; bookings: number; re
 export interface WeeklyReport {
   range: { from: string; to: string }; prevRange: { from: string; to: string };
   vatRate: number;
+  /** 19a: a BD da Multipark não respondeu numa das semanas → reservas e ROAS ficam "—" */
+  bookingsUnavailable?: boolean;
   total: WeeklyLine;
   brands: WeeklyLine[];
   cities: WeeklyLine[];
@@ -64,12 +69,16 @@ export async function buildWeeklyReport(monday: string): Promise<WeeklyReport> {
   }
   const total = Array.from(lines.values()).reduce((t, l) => ({ ...t, spend: t.spend + l.spend, bookings: t.bookings + l.bookings, revenue: t.revenue + l.revenue, prevSpend: t.prevSpend + l.prevSpend, prevBookings: t.prevBookings + l.prevBookings, prevRevenue: t.prevRevenue + l.prevRevenue }),
     { label: "Total", spend: 0, bookings: 0, revenue: 0, prevSpend: 0, prevBookings: 0, prevRevenue: 0 } as WeeklyLine);
+  // 19a: as reservas sem marca também contam no total (antes ficavam de fora).
+  total.bookings += Number((cur as any).bookingsWithoutBrand ?? 0);
+  total.prevBookings += Number((prev as any).bookingsWithoutBrand ?? 0);
+  const bookingsUnavailable = !!((cur as any).bookingsError || (prev as any).bookingsError);
   const withSpend = roas.rows.filter((r: any) => r.cost >= 20);
   const top = withSpend.filter((r: any) => r.bookings > 0).sort((a: any, b: any) => (b.roasNet ?? 0) - (a.roasNet ?? 0)).slice(0, 5);
   const bottom = withSpend.slice().sort((a: any, b: any) => (a.roasNet ?? 0) - (b.roasNet ?? 0) || b.cost - a.cost).slice(0, 5);
   const pick = (r: any) => ({ name: String(r.name), cost: Number(r.cost), bookings: Number(r.bookings), roasNet: r.roasNet ?? null });
   return {
-    range: current, prevRange: previous, vatRate: vat, total,
+    range: current, prevRange: previous, vatRate: vat, total, bookingsUnavailable,
     brands: Array.from(lines.values()).sort((a, b) => b.spend - a.spend),
     cities: Array.from(cities.values()).sort((a, b) => b.spend - a.spend),
     top: top.map(pick), bottom: bottom.map(pick),
@@ -79,11 +88,13 @@ export async function buildWeeklyReport(monday: string): Promise<WeeklyReport> {
 
 /** Assunto, HTML e texto do email (puro). */
 export function renderWeeklyEmail(r: WeeklyReport, appUrl = "https://dashboard.multipark.pt"): { subject: string; html: string; text: string } {
-  const roasNet = (rev: number, spend: number) => (spend > 0 ? rev / (1 + r.vatRate) / spend : null);
-  const cpa = (spend: number, n: number) => (n > 0 ? spend / n : null);
+  const na = !!r.bookingsUnavailable;
+  const roasNet = (rev: number, spend: number) => (na ? null : spend > 0 ? rev / (1 + r.vatRate) / spend : null);
+  const cpa = (spend: number, n: number) => (na ? null : n > 0 ? spend / n : null);
+  const bookings = (n: number, prev: number) => (na ? "—" : `${NUM.format(n)} <small style="color:#667">${delta(n, prev)}</small>`);
   const row = (l: WeeklyLine) => `<tr><td style="padding:4px 8px">${esc(l.label)}</td>
     <td style="padding:4px 8px;text-align:right">${eur(l.spend)} <small style="color:#667">${delta(l.spend, l.prevSpend)}</small></td>
-    <td style="padding:4px 8px;text-align:right">${NUM.format(l.bookings)} <small style="color:#667">${delta(l.bookings, l.prevBookings)}</small></td>
+    <td style="padding:4px 8px;text-align:right">${bookings(l.bookings, l.prevBookings)}</td>
     <td style="padding:4px 8px;text-align:right">${eur(cpa(l.spend, l.bookings), 2)}</td>
     <td style="padding:4px 8px;text-align:right">${x(roasNet(l.revenue, l.spend))} <small style="color:#667">(antes ${x(roasNet(l.prevRevenue, l.prevSpend))})</small></td></tr>`;
   const table = (title: string, ls: WeeklyLine[]) => `<h3 style="font-size:15px;margin:18px 0 6px">${title}</h3>
@@ -93,15 +104,16 @@ export function renderWeeklyEmail(r: WeeklyReport, appUrl = "https://dashboard.m
   const camp = (title: string, cs: WeeklyReport["top"]) => cs.length ? `<h3 style="font-size:15px;margin:18px 0 6px">${title}</h3><ul style="font-size:13px;padding-left:18px">${cs.map((c) => `<li>${esc(c.name)} — ${eur(c.cost)}, ${NUM.format(c.bookings)} reserva(s) ligada(s), ROAS s/ IVA ${x(c.roasNet)}</li>`).join("")}</ul>` : "";
   const alerts = r.alerts.length ? `<h3 style="font-size:15px;margin:18px 0 6px">Alertas ativos (${r.alerts.length})</h3><ul style="font-size:13px;padding-left:18px">${r.alerts.map((a) => `<li><b>${a.level === "critical" ? "Crítico" : "Atenção"}:</b> ${esc(a.title)} — ${esc(a.detail)}</li>`).join("")}</ul>` : `<p style="font-size:13px">Sem alertas ativos.</p>`;
   const period = `${shortDay(r.range.from)}–${shortDay(r.range.to)}`;
-  const subject = `Marketing semanal ${period}: ${eur(r.total.spend)} gastos, ${NUM.format(r.total.bookings)} reservas`;
+  const subject = `Marketing semanal ${period}: ${eur(r.total.spend)} gastos, ${na ? "reservas indisponíveis" : `${NUM.format(r.total.bookings)} reservas`}`;
+  const naNote = na ? `<p style="font-size:13px;color:#9a3412;margin:0 0 8px"><b>Atenção:</b> a base de dados da Multipark não respondeu — as reservas e o ROAS não estão neste email (aparecem como "—"). O gasto está completo.</p>` : "";
   const html = `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;color:#1b2430;max-width:760px">
     <h2 style="font-size:18px;margin:0 0 4px">Marketing — semana ${period}</h2>
-    <p style="font-size:13px;color:#556;margin:0 0 8px">Comparado com ${shortDay(r.prevRange.from)}–${shortDay(r.prevRange.to)}. Gasto Google Ads + Meta; reservas pela data de criação, sem canceladas; ROAS sem IVA (receita ÷ ${(1 + r.vatRate).toFixed(2).replace(".", ",")} ÷ gasto).</p>
+    <p style="font-size:13px;color:#556;margin:0 0 8px">Comparado com ${shortDay(r.prevRange.from)}–${shortDay(r.prevRange.to)}. Gasto Google Ads + Meta; reservas pela data de criação, sem canceladas; ROAS sem IVA (receita ÷ ${(1 + r.vatRate).toFixed(2).replace(".", ",")} ÷ gasto).</p>${naNote}
     ${table("Total", [r.total])}${table("Por marca", r.brands)}${table("Por cidade", r.cities)}
     ${camp("Melhores campanhas (ROAS s/ IVA)", r.top)}${camp("Piores campanhas", r.bottom)}${alerts}
-    <p style="font-size:12px;color:#667;margin-top:18px"><a href="${appUrl}/marketing">Abrir o Marketing</a> · MARKETING_WEEKLY=off desliga este email.</p></div>`;
-  const tl = (l: WeeklyLine) => `${l.label}: ${eur(l.spend)} (${delta(l.spend, l.prevSpend)}), ${l.bookings} reservas (${delta(l.bookings, l.prevBookings)}), gasto/reserva ${eur(cpa(l.spend, l.bookings), 2)}, ROAS s/ IVA ${x(roasNet(l.revenue, l.spend))}`;
-  const text = [`Marketing — semana ${period}`, "", tl(r.total), "", "Por marca:", ...r.brands.map(tl), "", "Por cidade:", ...r.cities.map(tl), "",
+    <p style="font-size:12px;color:#667;margin-top:18px"><a href="${appUrl}/marketing">Abrir o Marketing</a> · desliga-se em Definições → Automações → «Email semanal de marketing».</p></div>`;
+  const tl = (l: WeeklyLine) => `${l.label}: ${eur(l.spend)} (${delta(l.spend, l.prevSpend)}), ${na ? "reservas indisponíveis" : `${l.bookings} reservas (${delta(l.bookings, l.prevBookings)})`}, gasto/reserva ${eur(cpa(l.spend, l.bookings), 2)}, ROAS s/ IVA ${x(roasNet(l.revenue, l.spend))}`;
+  const text = [`Marketing — semana ${period}`, ...(na ? ["ATENÇÃO: reservas da Multipark indisponíveis — reservas e ROAS não estão neste email."] : []), "", tl(r.total), "", "Por marca:", ...r.brands.map(tl), "", "Por cidade:", ...r.cities.map(tl), "",
     "Alertas:", ...(r.alerts.length ? r.alerts.map((a) => `- ${a.title}`) : ["- nenhum"]), "", `${appUrl}/marketing`].join("\n");
   return { subject, html, text };
 }
@@ -111,7 +123,10 @@ export function renderWeeklyEmail(r: WeeklyReport, appUrl = "https://dashboard.m
  * da automação (chave em extras_automation_runs; em erro liberta a chave).
  */
 export async function maybeSendMarketingWeekly(clock: { date: string; dow: number; hour: number }, run: (key: string, fn: () => Promise<unknown>) => Promise<void>): Promise<{ skipped?: string; key?: string }> {
-  if (process.env.MARKETING_WEEKLY === "off") return { skipped: "desligado (MARKETING_WEEKLY=off)" };
+  // 19a: interruptor nas Definições (lido fresco), com a variável de ambiente a mandar se existir.
+  const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+  await ensureFeatureFlagOverrides().catch(() => undefined);
+  if (!isFeatureEnabled("MARKETING_WEEKLY", { defaultEnabled: automationFlagDefault("MARKETING_WEEKLY") })) return { skipped: "desligado (Definições → Automações)" };
   if (!weeklyReportDue(clock)) return { skipped: "fora de horas" };
   const to = weeklyRecipients();
   if (!to.length) return { skipped: "sem MARKETING_REPORT_EMAILS" };

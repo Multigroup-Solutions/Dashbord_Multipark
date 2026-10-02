@@ -87,9 +87,11 @@ export async function loadMarketingBookings(from: string, to: string, projectIds
   const hit = bookingsCache.get(key);
   if (hit && Date.now() - hit.at < BOOKINGS_TTL_MS) return hit.value;
   const value = (async () => {
-    const { readMarketingBookings } = await import("./multiparkDb/marketingBookings");
+    const { readMarketingBookings, MARKETING_BOOKINGS_LIMIT } = await import("./multiparkDb/marketingBookings");
     const utc = lisbonDayRangeUtc(from, to);
     const rows = await readMarketingBookings({ start: utc.start, end: utc.end, parkIds, internalDomains });
+    // 19a: chegar ao teto = dados cortados → erro (antes contava só um pedaço, sem aviso).
+    if (rows.length >= MARKETING_BOOKINGS_LIMIT) throw new Error(`Demasiadas reservas no período (mais de ${MARKETING_BOOKINGS_LIMIT.toLocaleString("pt-PT")}): escolhe um período mais curto.`);
     return rows.map((r) => toMarketingBooking(r, ctx)).filter((b): b is MarketingBooking => !!b);
   })();
   bookingsCache.set(key, { at: Date.now(), value });
@@ -116,8 +118,10 @@ export function toMarketingClient(r: MarketingClientRow, aliases: Map<string, st
 export async function loadMarketingClients(from: string, to: string, projectIds?: number[] | null): Promise<MarketingClient[]> {
   const { ctx, parkIds, internalDomains } = await scope(projectIds);
   if (!parkIds.length) return [];
-  const { readMarketingClients } = await import("./multiparkDb/marketingBookings");
+  const { readMarketingClients, MARKETING_CLIENTS_LIMIT } = await import("./multiparkDb/marketingBookings");
   const utc = lisbonDayRangeUtc(from, to);
   const rows = await readMarketingClients({ start: utc.start, end: utc.end, parkIds, internalDomains });
+  // 19a: o histórico de clientes não pode vir cortado em silêncio (clientes novos e valor por cliente saíam errados).
+  if (rows.length >= MARKETING_CLIENTS_LIMIT) throw new Error(`Histórico de clientes maior do que o limite (${MARKETING_CLIENTS_LIMIT.toLocaleString("pt-PT")}): os números de clientes não se conseguem calcular.`);
   return rows.map((r) => toMarketingClient(r, ctx.aliases));
 }

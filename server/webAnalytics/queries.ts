@@ -282,7 +282,7 @@ export async function bookingsByDay(from: string, to: string, brand: string | nu
 }
 
 /** Gasto em anúncios por dia (fonte única getAdMetrics; por marca pelo nó da campanha). */
-export async function adSpendByDay(from: string, to: string, brand: string | null): Promise<{ byDay: Map<string, number>; available: boolean }> {
+export async function adSpendByDay(from: string, to: string, brand: string | null): Promise<{ byDay: Map<string, number>; available: boolean; error?: string }> {
   try {
     const { getAdMetrics } = await import("../integrations/googleAds/adMetrics");
     const { marketingProjectIds } = await import("../marketingSql");
@@ -296,7 +296,8 @@ export async function adSpendByDay(from: string, to: string, brand: string | nul
       for (const x of ads.byDayProject) if (brandOf(x.projectId) === brand) out.set(x.date, (out.get(x.date) ?? 0) + x.cost);
     }
     return { byDay: out, available: ads.byDay.length > 0 };
-  } catch {
-    return { byDay: new Map(), available: false };
+  } catch (err: any) {
+    // 19a: erro ≠ "sem dados de anúncios" — o ecrã mostra o erro.
+    return { byDay: new Map(), available: false, error: String(err?.message ?? err).slice(0, 200) };
   }
 }

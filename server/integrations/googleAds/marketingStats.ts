@@ -13,14 +13,18 @@
  *    vigor no fim do período (finance/rates.ts → vatRateForPeriod). O
  *    ROAS que a Google reporta (valor de conversão ÷ gasto) mostra-se à parte.
  *  - "Outras despesas de marketing" = Despesas da categoria "Marketing" no
- *    período e âmbito (marketing_expenses não tinha caminho de escrita).
+ *    período e âmbito, SEM as faturas do Google/Meta (19a: o gasto delas já
+ *    vem das APIs — somá-las contava-o duas vezes). As faturas aparecem à
+ *    parte (`adInvoicesInExpenses`), só como informação.
+ *  - Reservas da Multipark em baixo (19a): o gasto (nosso) mostra-se na mesma
+ *    e as reservas vêm a null com `bookingsError` — nunca 0 reservas.
  */
 import { projectScope } from '../../cityScope';
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import { adAccounts, multiparkBookings, projects } from "../../../drizzle/schema";
 import { brandNameForProject } from "../../../shared/adCampaignMapping";
-import { roasNetOfVat } from "../../../shared/marketingRules";
+import { isAdPlatformInvoice, roasNetOfVat } from "../../../shared/marketingRules";
 import { lisbonDaySql } from "../../../shared/lisbonDay";
 import { vatRateForPeriod } from "../../finance/rates";
 import { inLisbonDaysSql, marketingProjectIds, notCancelledSql } from "../../marketingSql";
@@ -35,28 +39,39 @@ const rowsOf = <T = any>(r: any): T[] => (Array.isArray(r) && Array.isArray(r[0]
 
 export interface MarketingStatsFilters { from: string; to: string; projectId?: number }
 
-/** Despesas da categoria "Marketing" (Despesas), no período e âmbito. */
-export async function marketingCategoryExpenses(db: any, from: string, to: string, projectIds: number[] | null): Promise<number> {
-  if (projectIds && !projectIds.length) return 0;
+/**
+ * Despesas da categoria "Marketing" (Despesas), no período e âmbito, separadas
+ * em faturas das plataformas de anúncios (Google/Meta — já contam no gasto das
+ * APIs) e outras (agências, impressos…). Só as outras entram no custo total.
+ */
+export async function marketingCategoryExpenses(db: any, from: string, to: string, projectIds: number[] | null): Promise<{ other: number; adInvoices: number }> {
+  if (projectIds && !projectIds.length) return { other: 0, adInvoices: 0 };
   const proj = projectIds ? sql` AND e.projectId IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})` : sql``;
-  const [m] = rowsOf<any>(await db.execute(sql`
-    SELECT COALESCE(SUM(e.amount), 0) AS t
+  const rows = rowsOf<any>(await db.execute(sql`
+    SELECT e.supplier, e.supplierNif, COALESCE(SUM(e.amount), 0) AS t
     FROM expenses e JOIN expense_categories c ON c.id = e.categoryId
     WHERE LOWER(TRIM(c.name)) = 'marketing' AND e.status <> 'cancelled'
       AND e.expenseDate >= ${`${from} 00:00:00`} AND e.expenseDate <= ${`${to} 23:59:59`}
-      AND ${projectScope(sql`e.projectId`)}${proj}`));
-  return Number(m?.t ?? 0);
+      AND ${projectScope(sql`e.projectId`)}${proj}
+    GROUP BY e.supplier, e.supplierNif`));
+  let other = 0, adInvoices = 0;
+  for (const r of rows) {
+    const t = Number(r.t ?? 0);
+    if (isAdPlatformInvoice(r.supplier, r.supplierNif)) adInvoices += t; else other += t;
+  }
+  return { other, adInvoices };
 }
 
 export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?: AdMetricsResult) {
   if (!ISO.test(f.from) || !ISO.test(f.to)) throw new Error("Datas inválidas (AAAA-MM-DD)");
   const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
   const projectIds = await marketingProjectIds(f.projectId);
   const ads = preloadedAds ?? await getAdMetrics({ from: f.from, to: f.to, projectIds });
   const conn = await getConnection();
   const vat = await vatRateForPeriod(f.from, f.to);
 
-  let bookingsTotal = 0, bookingsAttributed = 0, bookingsGoogle = 0, bookingsMeta = 0, revenueTotal = 0, revenueAttributed = 0, mktExpenses = 0;
+  let bookingsTotal = 0, bookingsAttributed = 0, bookingsGoogle = 0, bookingsMeta = 0, revenueTotal = 0, revenueAttributed = 0;
   let bookingsByDay: Array<{ date: string; total: number; attributed: number }> = [];
   /** reservas ligadas por ID externo da campanha (Google ou Meta) */
   const attributedByCampaign: Record<string, number> = {};
@@ -64,7 +79,13 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no
   // período, sem canceladas, atribuição Google/Meta a partir do link de origem.
   const { loadMarketingBookings } = await import("../../marketingLive");
-  const bookings = await loadMarketingBookings(f.from, f.to, projectIds);
+  // 19a: a BD da Multipark em baixo não esconde o gasto (que é nosso) — as
+  // reservas ficam "indisponíveis" (null), nunca 0.
+  let bookingsError: string | null = null;
+  const bookings = await loadMarketingBookings(f.from, f.to, projectIds).catch((err: any) => {
+    bookingsError = String(err?.message ?? err).slice(0, 300);
+    return [];
+  });
   const byDay = new Map<string, { total: number; attributed: number }>();
   for (const b of bookings) {
     const paid = PAID.includes(b.adAttribution);
@@ -86,9 +107,9 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     if (paid && b.adCampaignExternalId) attributedByCampaign[b.adCampaignExternalId] = (attributedByCampaign[b.adCampaignExternalId] ?? 0) + 1;
   }
   bookingsByDay = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, v]) => ({ date, ...v }));
-  if (db) {
-    mktExpenses = await marketingCategoryExpenses(db, f.from, f.to, projectIds);
-  }
+  const expensesSplit = await marketingCategoryExpenses(db, f.from, f.to, projectIds);
+  const mktExpenses = expensesSplit.other;
+  const bk = <T,>(v: T): T | null => (bookingsError ? null : v);
 
   const spend = ads.totals.cost;
   const bookingsUnattributed = bookingsTotal - bookingsAttributed;
@@ -114,24 +135,28 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     conversionValueGoogle: ads.totals.conversionValue,
     costPerConversionGoogle: ads.totals.costPerConversion,
     roasGoogle: ads.totals.roasGoogle,
-    // Reservas reais (Multipark), pela data de criação
-    bookingsTotal, bookingsAttributed, bookingsUnattributed, bookingsGoogle, bookingsMeta,
-    revenueTotal, revenueAttributed,
+    // Reservas reais (Multipark), pela data de criação — null se a BD da Multipark não respondeu
+    bookingsError,
+    bookingsTotal: bk(bookingsTotal), bookingsAttributed: bk(bookingsAttributed), bookingsUnattributed: bk(bookingsUnattributed),
+    bookingsGoogle: bk(bookingsGoogle), bookingsMeta: bk(bookingsMeta),
+    revenueTotal: bk(revenueTotal), revenueAttributed: bk(revenueAttributed),
     vatRate: vat,
-    costPerAttributedBooking: ratio(spend, bookingsAttributed),
+    costPerAttributedBooking: bookingsError ? null : ratio(spend, bookingsAttributed),
     /** ROAS das reservas ligadas, sem IVA */
-    roasAttributedNet: roasNetOfVat(revenueAttributed, spend, vat),
+    roasAttributedNet: bookingsError ? null : roasNetOfVat(revenueAttributed, spend, vat),
     /** ROAS global (todas as reservas ÷ gasto), sem IVA — indicador, não atribuição */
-    roasTotalNet: roasNetOfVat(revenueTotal, spend, vat),
-    adCostPerBooking: ratio(spend, bookingsTotal),      // indicador GLOBAL — não atribui todas as reservas aos anúncios
-    // Outros custos de marketing (Despesas, categoria Marketing), separados
+    roasTotalNet: bookingsError ? null : roasNetOfVat(revenueTotal, spend, vat),
+    adCostPerBooking: bookingsError ? null : ratio(spend, bookingsTotal),      // indicador GLOBAL — não atribui todas as reservas aos anúncios
+    // Outros custos de marketing (Despesas, categoria Marketing, SEM as faturas Google/Meta)
     mktExpenses,
+    /** faturas Google/Meta lançadas nas Despesas → Marketing (não somadas: já estão no gasto) */
+    adInvoicesInExpenses: expensesSplit.adInvoices,
     // Cobertura e qualidade
     coverage: ads.coverage,
     unmappedCampaigns: ads.unmappedCampaigns,
     byDay: ads.byDay,
     bookingsByDay,
-    attributionQuality,
+    attributionQuality: bookingsError ? null : attributionQuality,
     attributedByCampaign,
     byCampaign: ads.byCampaign,
     nationalShares: ads.nationalShares,
@@ -171,8 +196,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   if (!ISO.test(f.from) || !ISO.test(f.to)) throw new Error("Datas inválidas (AAAA-MM-DD)");
   const db = await getDb();
   type CityRow = { projectId: number; spend: number; bookings: number; attributed: number; revenue: number; revenueAttributed: number };
-  const empty = { range: { from: f.from, to: f.to }, accounts: [] as Array<{ id: number; name: string; provider: string }>, brands: [] as BrandRow[], byBrandCity: [] as CityRow[], bookingsWithoutBrand: 0, unassignedSpend: 0 };
-  if (!db) return empty;
+  if (!db) throw new Error("Base de dados indisponível");
   const projectIds = await marketingProjectIds(f.projectId);
   const vat = await vatRateForPeriod(f.from, f.to);
 
@@ -185,7 +209,10 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts), somadas por centro.
   const { loadMarketingBookings } = await import("../../marketingLive");
   const byProject = new Map<number | null, { projectId: number | null; n: number; attributed: number; rev: number; revAttributed: number }>();
-  for (const b of await loadMarketingBookings(f.from, f.to, projectIds)) {
+  // 19a: Multipark em baixo → gasto por marca na mesma; reservas "indisponíveis".
+  let bookingsError: string | null = null;
+  const live = await loadMarketingBookings(f.from, f.to, projectIds).catch((err: any) => { bookingsError = String(err?.message ?? err).slice(0, 300); return []; });
+  for (const b of live) {
     const r = byProject.get(b.projectId) ?? { projectId: b.projectId, n: 0, attributed: 0, rev: 0, revAttributed: 0 };
     const paid = b.adAttribution === "google_paid" || b.adAttribution === "meta_paid";
     r.n++; r.rev += b.total;
@@ -256,7 +283,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
       c.bookings += Number(r.n); c.attributed += Number(r.attributed ?? 0); c.revenue += Number(r.rev); c.revenueAttributed += Number(r.revAttributed ?? 0);
     }
   }
-  for (const b of brands.values()) b.roasNet = roasNetOfVat(b.revenue, b.spend, vat);
+  for (const b of brands.values()) b.roasNet = bookingsError ? null : roasNetOfVat(b.revenue, b.spend, vat);
   return {
     range: { from: f.from, to: f.to },
     accounts: accounts.map((a) => ({ id: a.id, name: a.name ?? `Conta ${a.id}`, provider: a.provider })),
@@ -265,6 +292,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     bookingsWithoutBrand,
     unassignedSpend,
     vatRate: vat,
+    bookingsError,
   };
 }
 

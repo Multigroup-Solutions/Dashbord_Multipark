@@ -11,6 +11,7 @@ import MarketingBudgetsPanel from "@/components/marketing/MarketingBudgetsPanel"
 import MarketingWebPanel from "@/components/marketing/MarketingWebPanel";
 import AnomalyAlerts from "@/components/aiOps/AnomalyAlerts";
 import { TABS_SCROLL } from "@/components/finance/layoutClasses";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 /**
  * Marketing (Jorge, 16 set 2026): o menu "Marketing" abre o DASHBOARD de
@@ -38,7 +39,10 @@ export { MarketingDashboardPanel };
 /** Aviso vermelho das recolhas (Google Ads / Meta) — mesmo alerta da rota marketing.alerts. */
 function SyncHealthBanner() {
   const { projectId } = useGlobalFilters();
-  const { data } = trpc.marketing.alerts.useQuery({ projectId }, { staleTime: 60_000 });
+  const q = trpc.marketing.alerts.useQuery({ projectId }, { staleTime: 60_000 });
+  const { data } = q;
+  // 19a: se os alertas não se conseguem ler, diz-se — antes o aviso vermelho desaparecia e parecia tudo bem.
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o estado das recolhas (Google Ads / Meta)" />;
   const syncAlerts = (data?.alerts ?? []).filter((a: any) => String(a.code).startsWith("ads_sync_"));
   if (!syncAlerts.length) return null;
   return (
