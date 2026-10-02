@@ -95,6 +95,20 @@ export interface FinancePoint {
   marginForecast: number;
 }
 
+/** Custo realizado de um centro (base LÍQUIDA, como os cartões da Faturação). */
+export interface ProjectCost {
+  projectId: number | null;
+  /** despesas sem IVA (as que entram na margem) e com IVA */
+  expensesNet: number; expenses: number;
+  /** base + provisões (13.º/14.º) + variável do RH */
+  salaries: number;
+  employerTax: number;
+  /** equipa do dia: real (ponto) */
+  extras: number;
+  salesCommissions: number; operationalCommissions: number;
+  total: number;
+}
+
 type SalesCommissionRow = { partnerId: number; partnerName: string; projectId: number | null; projectName: string | null; bookingsCount: number; revenueGross: number; revenueNet: number; commissionBase: R.CommissionBase; commissionRate: number | null; commission: number; status: R.CommissionStatus };
 type OperationalRow = { partnershipId: number; partnerName: string | null; partnerType: string | null; projectNames: string[]; bookingsCount: number; revenueGross: number; revenueNet: number; commissionBase: R.CommissionBase; commissionRate: number; commission: number };
 
@@ -157,6 +171,13 @@ export interface FinanceResult {
     salesCommissions: SalesCommissionRow[];
     operationalPartners: OperationalRow[];
     salariesByProject: Array<{ projectId: number | null; projectName: string | null; cost: number }>;
+    /**
+     * Custos REALIZADOS por centro, com as mesmas regras dos totais (Projetos →
+     * Custos). projectId null = "Por atribuir". A soma de todos dá
+     * `costs.totalNet`, e cada centro (com descendentes) dá o mesmo que a
+     * Faturação filtrada nesse centro.
+     */
+    costsByProject: ProjectCost[];
     salaryDetails: Array<{ employeeId: number; fullName: string; projectId: number | null; cost: number; base: number; provisions: number; variable: number; days: number; ratedTo: number[] }>;
     forecast: Array<{ projectId: number | null; projectName: string | null; count: number; totalRevenue: number }>;
     months: Array<{ year: number; month: number; from: string; to: string; days: number; daysInMonth: number }>;
@@ -213,7 +234,7 @@ export function emptyFinanceResult(filters: FinanceFilters): FinanceResult {
     projection: { applies: false, revenueGross: 0, revenueNet: 0, forecastRevenueNet: 0, costsNet: 0, futureCostsNet: 0, margin: 0, marginPct: null },
     timeseries: [],
     forecast: { revenue: 0, revenueNet: 0, count: 0, from: filters.from, to: filters.to },
-    details: { deliveries: [], collected: [], expenses: [], expensesExcluded: [], expensesPending: [], extrasDia: [], extrasReal: [], salesCommissions: [], operationalPartners: [], salariesByProject: [], salaryDetails: [], forecast: [], months: [] },
+    details: { deliveries: [], collected: [], expenses: [], expensesExcluded: [], expensesPending: [], extrasDia: [], extrasReal: [], salesCommissions: [], operationalPartners: [], salariesByProject: [], costsByProject: [], salaryDetails: [], forecast: [], months: [] },
     quality: {
       partnerConflicts: [], partnersRateMissing: [], campaignsWithoutPartner: [], salesCommissionsCoveredByOperational: { count: 0, revenueGross: 0 },
       expensesWithoutProject: { count: 0, total: 0 }, bookingsWithoutProject: { count: 0, total: 0 },
@@ -404,6 +425,15 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const forecastByDay = new Map<string, number>();
   /** custos dos dias futuros (não realizados) — só para o Fecho previsto */
   const futureCostByDay = new Map<string, number>();
+  /** custo REALIZADO por centro (null = por atribuir) — cada parcela soma no mesmo sítio que o total */
+  const costByProject = new Map<number | null, ProjectCost>();
+  const costAt = (pid: number | null | undefined, field: Exclude<keyof ProjectCost, "projectId" | "total">, v: number) => {
+    if (!v) return;
+    const k = pid ?? null;
+    let c = costByProject.get(k);
+    if (!c) { c = { projectId: k, expensesNet: 0, expenses: 0, salaries: 0, employerTax: 0, extras: 0, salesCommissions: 0, operationalCommissions: 0, total: 0 }; costByProject.set(k, c); }
+    c[field] += v;
+  };
 
   // Receita
   const delivByProject = new Map<string, FinanceResult["details"]["deliveries"][number]>();
@@ -453,6 +483,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     if (!isPast(day)) { addTo(futureCostByDay, day, num(r.totalNet)); continue; }
     addTo(expensesByDay, day, num(r.totalAmount));
     addTo(expensesNetByDay, day, num(r.totalNet));
+    costAt(r.projectId, "expensesNet", num(r.totalNet)); costAt(r.projectId, "expenses", num(r.totalAmount));
     if (r.projectId == null) { expensesWithoutProject.count += num(r.count); expensesWithoutProject.total += num(r.totalAmount); }
     const ex = expByProjCat.get(k) ?? { projectId: r.projectId ?? null, projectName, categoryName: r.categoryName ?? null, count: 0, totalAmount: 0, totalNet: 0 };
     ex.count += num(r.count); ex.totalAmount += num(r.totalAmount); ex.totalNet += num(r.totalNet);
@@ -467,6 +498,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const extrasAgg = aggregateExtrasCost(extrasCostRows, extraRatesLive, { dayOfRecord: (v) => (v ? lisbonDayOf(v) : ""), cityOfProject: () => null });
   out.quality.extrasDiaTeamLeaderShifts = extrasAgg.teamLeaderShifts;
   for (const [d, v] of extrasAgg.realByDay) if (isPast(d)) addTo(extrasByDay, d, v);
+  for (const r of extrasAgg.realByDayProject.values()) if (isPast(r.day)) costAt(r.projectId, "extras", r.cost);
   for (const [d, v] of extrasAgg.plannedByDay) if (!isPast(d)) addTo(futureCostByDay, d, v);
 
   // Comissões — venda (campanha → parceiro) e operacional (centros operados).
@@ -477,7 +509,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const salesAgg = new Map<string, SalesCommissionRow>();
   const salesCommissionOf = (
     rows: Array<{ day: unknown; projectId: number | null; projectName: string | null; campaign: string | null; count: unknown; totalRevenue: unknown }>,
-    sink: (day: string, v: number) => void, track: boolean,
+    sink: (day: string, v: number, projectId: number | null) => void, track: boolean,
   ) => {
     for (const r of rows) {
       if (!r.campaign || !String(r.campaign).trim()) continue;
@@ -498,7 +530,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
         continue;
       }
       const { commission, status } = R.commissionFor(gross, partner, net);
-      sink(day, commission);
+      sink(day, commission, r.projectId ?? null);
       if (!track) continue;
       if (status === "rate_missing") rateMissing.add(partner.name);
       const k = `${partner.id}|${r.projectId ?? "null"}`;
@@ -510,7 +542,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const opAgg = new Map<number, OperationalRow>();
   const operationalCommissionOf = (
     rows: Array<{ day: unknown; projectId: number | null; projectName: string | null; count: unknown; totalRevenue: unknown }>,
-    sink: (day: string, v: number) => void, track: boolean,
+    sink: (day: string, v: number, projectId: number | null) => void, track: boolean,
   ) => {
     for (const p of partnerRows) {
       const leaves = operatedLeaves.get(p.id);
@@ -523,7 +555,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
         const day = dayOf(r.day);
         const gross = num(r.totalRevenue), net = netOn(gross, day);
         const commission = (base === "gross" ? gross : net) * (rate / 100);
-        sink(day, commission);
+        sink(day, commission, r.projectId ?? null);
         if (!track) continue;
         agg.revenueGross += gross; agg.revenueNet += net; agg.bookingsCount += num(r.count); agg.commission += commission;
         if (r.projectName && !agg.projectNames.includes(r.projectName)) agg.projectNames.push(r.projectName);
@@ -531,8 +563,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
       if (track) opAgg.set(p.id, agg);
     }
   };
-  salesCommissionOf(campaignRows, (d, v) => addTo(salesByDay, d, v), true);
-  operationalCommissionOf(deliveryRows, (d, v) => addTo(opByDay, d, v), true);
+  salesCommissionOf(campaignRows, (d, v, pid) => { addTo(salesByDay, d, v); costAt(pid, "salesCommissions", v); }, true);
+  operationalCommissionOf(deliveryRows, (d, v, pid) => { addTo(opByDay, d, v); costAt(pid, "operationalCommissions", v); }, true);
   // Receita esperada paga as mesmas comissões (Fecho previsto).
   const forecastCommissionByDay = new Map<string, number>();
   salesCommissionOf(forecastRows, (d, v) => addTo(forecastCommissionByDay, d, v), false);
@@ -580,21 +612,24 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     const effShare = targets.length === 0 ? (projectSet ? 0 : 1) : share;
     if (effShare === 0) continue;
     empShare.set(e.id, { share: effShare, targets: matching });
-    let base = 0, prov = 0, days = 0;
+    let base = 0, prov = 0, days = 0, tax = 0;
     for (const d of sal.perDay) {
       const b = d.base * effShare, p = d.provisions * effShare;
       // TSU com a taxa do dia sobre base + provisões (13.º/14.º pagam TSU)
       const dayTax = R.employerTaxFor(b + p, rates.tsuOn(d.day));
       if (!isPast(d.day)) { addTo(futureCostByDay, d.day, b + p + dayTax); continue; }
-      base += b; prov += p; days++;
+      base += b; prov += p; days++; tax += dayTax;
       addTo(salariesByDay, d.day, b + p);
       employerTax += dayTax;
       addTo(employerTaxByDay, d.day, dayTax);
     }
     salariesBase += base; salariesProvisions += prov;
     if (base + prov === 0) continue;
-    if (matching.length === 0) salariesUnallocated += base + prov;
-    else for (const t of matching) salaryByProject.set(t, (salaryByProject.get(t) ?? 0) + (base + prov) / matching.length);
+    if (matching.length === 0) { salariesUnallocated += base + prov; costAt(null, "salaries", base + prov); costAt(null, "employerTax", tax); }
+    else for (const t of matching) {
+      salaryByProject.set(t, (salaryByProject.get(t) ?? 0) + (base + prov) / matching.length);
+      costAt(t, "salaries", (base + prov) / matching.length); costAt(t, "employerTax", tax / matching.length);
+    }
     salaryDetails.push({ employeeId: e.id, fullName: e.fullName, projectId: e.projectId ?? null, cost: base + prov, base, provisions: prov, variable: 0, days, ratedTo: matching });
   }
   out.quality.employeesWithoutProject = employeesWithoutProject;
@@ -612,6 +647,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     let payroll: Awaited<ReturnType<typeof getPayrollData>>;
     try { payroll = await getPayrollData(mo.year, mo.month); } catch { continue; }
     let monthVariable = 0, monthTaxable = 0;
+    /** quem tem variável tributável neste mês (para repartir a TSU pelos centros) */
+    const taxableByEmp: Array<{ targets: number[]; taxable: number }> = [];
     for (const p of payroll) {
       if (p.isExtra) continue;
       const sh = empShare.get(p.employeeId);
@@ -621,10 +658,11 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
       const variable = taxable + p.mealAllowance * sh.share * frac;
       if (!variable) continue;
       monthVariable += variable; monthTaxable += taxable;
+      if (taxable) taxableByEmp.push({ targets: sh.targets, taxable });
       const d = detailById.get(p.employeeId);
       if (d) { d.variable += variable; d.cost += variable; }
-      if (sh.targets.length) for (const t of sh.targets) salaryByProject.set(t, (salaryByProject.get(t) ?? 0) + variable / sh.targets.length);
-      else salariesUnallocated += variable;
+      if (sh.targets.length) for (const t of sh.targets) { salaryByProject.set(t, (salaryByProject.get(t) ?? 0) + variable / sh.targets.length); costAt(t, "salaries", variable / sh.targets.length); }
+      else { salariesUnallocated += variable; costAt(null, "salaries", variable); }
     }
     if (monthVariable) {
       payrollMonths.push(`${mo.year}-${String(mo.month).padStart(2, "0")}`);
@@ -632,10 +670,17 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
       const lastDay = R.minDay(mo.to, today);
       const nDays = R.daysBetweenInclusive(mo.from, lastDay);
       const perDayV = monthVariable / nDays, perDayTaxable = monthTaxable / nDays;
+      let monthTax = 0;
       for (let d = mo.from; d <= lastDay; d = R.addDays(d, 1)) {
         const dayTax = R.employerTaxFor(perDayTaxable, rates.tsuOn(d));
-        employerTax += dayTax;
+        employerTax += dayTax; monthTax += dayTax;
         addTo(salariesByDay, d, perDayV); addTo(employerTaxByDay, d, dayTax);
+      }
+      // TSU do variável: a do mês, repartida na proporção do tributável de cada um
+      if (monthTaxable > 0) for (const e of taxableByEmp) {
+        const t = monthTax * (e.taxable / monthTaxable);
+        if (e.targets.length) for (const pid of e.targets) costAt(pid, "employerTax", t / e.targets.length);
+        else costAt(null, "employerTax", t);
       }
     }
   }
@@ -717,6 +762,9 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .map(([pid, cost]) => ({ projectId: pid, projectName: projById.get(pid)?.name ?? null, cost }))
     .sort((a, b) => b.cost - a.cost);
   if (salariesUnallocated > 0) salariesByProjectRows.push({ projectId: null, projectName: "Por atribuir", cost: salariesUnallocated });
+  const costsByProject = Array.from(costByProject.values()).map((c) => ({
+    ...c, total: c.expensesNet + c.salaries + c.employerTax + c.extras + c.salesCommissions + c.operationalCommissions,
+  })).sort((a, b) => b.total - a.total);
   out.details = {
     deliveries: Array.from(delivByProject.values()).sort((a, b) => b.totalRevenue - a.totalRevenue),
     collected: Array.from(collByProject.values()).sort((a, b) => b.totalRevenue - a.totalRevenue),
@@ -728,6 +776,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     salesCommissions,
     operationalPartners,
     salariesByProject: salariesByProjectRows,
+    costsByProject,
     salaryDetails: filters.includePersonDetails ? salaryDetails : [],
     forecast: Array.from(forecastByProject.values()).sort((a, b) => b.totalRevenue - a.totalRevenue),
     months,

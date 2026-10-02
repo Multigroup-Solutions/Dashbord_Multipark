@@ -284,7 +284,7 @@ export default function ProjectsPage() {
             </span>
           )}
           {node.budget && (
-            <span className="text-xs tabular-nums whitespace-nowrap text-emerald-700 dark:text-emerald-400" title="Orçamento">{eurFull(node.budget)}</span>
+            <span className="text-xs tabular-nums whitespace-nowrap text-emerald-700 dark:text-emerald-400" title="Orçamento anual">{eurFull(node.budget)}</span>
           )}
           <Badge variant="outline" className={`text-xs shrink-0 ${LEVEL_COLORS[node.level] ?? ""}`}>
             {LEVEL_LABELS[node.level] ?? node.level}
@@ -476,7 +476,7 @@ export default function ProjectsPage() {
               </div>
             </div>
             <div>
-              <Label>Budget (€)</Label>
+              <Label>Orçamento anual (€)</Label>
               <Input type="number" step="0.01" min="0" value={form.budget} onChange={e => setForm(f => ({ ...f, budget: e.target.value }))} placeholder="Ex: 50000" />
             </div>
             <div className="flex gap-4">
@@ -545,7 +545,7 @@ export default function ProjectsPage() {
               </div>
             </div>
             <div>
-              <Label>Budget (€)</Label>
+              <Label>Orçamento anual (€)</Label>
               <Input type="number" step="0.01" min="0" value={form.budget} onChange={e => setForm(f => ({ ...f, budget: e.target.value }))} placeholder="Ex: 50000" />
             </div>
             <div className="flex gap-4">
