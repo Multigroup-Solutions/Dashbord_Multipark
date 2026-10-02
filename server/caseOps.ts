@@ -424,10 +424,9 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
   if (!isCaseReminderHour(hour)) return { ...report, skipped: "fora de horas" };
   const d = await db();
   const nowStr = utcNowStr(now);
-  const incRows = rowsOf(await d.execute(sql`
-    SELECT id, projectId, lastReminderAt FROM incidents
-    WHERE status IN ('open','investigating') AND dueAt IS NOT NULL AND dueAt < ${nowStr}
-    ORDER BY dueAt ASC LIMIT 500`)).filter((r) => reminderDue(fmt(r.lastReminderAt), now));
+  // As ocorrências antigas (`incidents`) já não entram: a página /ocorrencias
+  // mostra só as da app Multipark e não há onde as fechar — o aviso diário
+  // repetia-se para sempre (P3 lote 16a). A tabela e os dados ficam.
   const lostRows = rowsOf(await d.execute(sql`
     SELECT id, projectId, assignedTo, lastReminderAt FROM lost_found_items
     WHERE status IN ('new','investigating','found') AND archivedAt IS NULL AND COALESCE(dueDate, DATE_ADD(createdAt, INTERVAL 7 DAY)) < ${nowStr}
@@ -440,7 +439,7 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
         AND slaAlertedAt IS NULL AND archivedAt IS NULL
       ORDER BY slaDeadline ASC LIMIT 500`));
   } catch { /* coluna slaAlertedAt ainda por criar (0140) */ }
-  if (!incRows.length && !lostRows.length && !complaintRows.length) return report;
+  if (!lostRows.length && !complaintRows.length) return report;
 
   const { cityOf } = await projectCityMap();
   const day = nowStr.slice(0, 10);
@@ -458,15 +457,6 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
   };
   const idList = (rows: any[]) => `#${rows.slice(0, 5).map((r) => Number(r.id)).join(", #")}${rows.length > 5 ? "…" : ""}`;
   const { notify } = await import("./notify");
-
-  for (const g of byCity(incRows)) {
-    const r = await notify({
-      kind: "incident_sla", projectId: g.cityId,
-      title: "Ocorrências em atraso", body: `Fora do prazo: ${g.rows.length} ocorrência(s) (${idList(g.rows)}).`,
-      link: "/ocorrencias", entity: { type: "incident_sla", id: `${day}:${g.cityId ?? "-"}` },
-    });
-    report.notified += r.recipients.length;
-  }
 
   const assigneeIds = Array.from(new Set(lostRows.map((r) => Number(r.assignedTo)).filter(Boolean)));
   const assigneeUser = new Map<number, number>();
@@ -499,13 +489,9 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
       WHERE id IN (${sql.join(complaintRows.map((r) => sql`${Number(r.id)}`), sql`, `)}) AND slaAlertedAt IS NULL`);
   }
   report.complaints = complaintRows.length;
-  if (incRows.length) {
-    await d.update(incidents).set({ lastReminderAt: nowStr }).where(inArray(incidents.id, incRows.map((r) => Number(r.id))));
-  }
   if (lostRows.length) {
     await d.update(lostFoundItems).set({ lastReminderAt: nowStr }).where(inArray(lostFoundItems.id, lostRows.map((r) => Number(r.id))));
   }
-  report.incidents = incRows.length;
   report.lost = lostRows.length;
   return report;
 }
