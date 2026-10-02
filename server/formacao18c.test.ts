@@ -1,13 +1,15 @@
 /**
- * P3 lote 18c — Formação. Decisão do Jorge (2 out 2026): um percurso que
- * bloqueia a escala exige quiz/exame obrigatório (o "visto" é autodeclarado).
+ * P3 lote 18c — Formação. Decisão do Jorge (2 out 2026, revista no mesmo dia):
+ * para já a formação NÃO bloqueia a escala (interruptor desligado por omissão)
+ * e o quiz/exame obrigatório num percurso que bloqueia é só um aviso.
  * E ainda: leitura falhada não deixa escalar, itens retirados não prendem
  * ninguém, nada se apaga, promoções nunca pelo próprio nem pelo TL, submissão
  * idempotente, prazos ao fim do dia de Lisboa, erro ≠ vazio.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { blockingPathProblem, computePathProgress, trainingDueAt } from "./trainingRules";
+import { blockingPathProblem, computePathProgress, trainingBlocksEscalaEnabled, trainingDueAt } from "./trainingRules";
+import { automationFlagDefault } from "../shared/appSettings";
 import { clearSendAsCache, sendMailWith, type SystemMailDeps } from "./mail/systemMail";
 import { MIGRATION_0385_STATEMENTS } from "./migrations/migration_0385";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
@@ -15,17 +17,24 @@ import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const fnBody = (file: string, start: string, len = 900) => { const s = src(file); const i = s.indexOf(start); expect(i).toBeGreaterThan(-1); return s.slice(i, i + len); };
 
-describe("Percurso que bloqueia a escala: quiz ou exame obrigatório", () => {
-  it("só vídeos/manuais → recusado; com quiz ou exame obrigatório → aceite; quiz opcional não chega", () => {
+describe("Formação não bloqueia a escala (por agora)", () => {
+  it("interruptor desligado por omissão; a variável de ambiente ainda manda", () => {
+    expect(automationFlagDefault("TRAINING_BLOCKS_ESCALA")).toBe(false);
+    expect(trainingBlocksEscalaEnabled({})).toBe(false);
+    expect(trainingBlocksEscalaEnabled({ TRAINING_BLOCKS_ESCALA: "true" })).toBe(true);
+  });
+});
+
+describe("Percurso que bloqueia a escala: quiz ou exame obrigatório é um aviso", () => {
+  it("só vídeos/manuais → aviso; com quiz ou exame obrigatório → sem aviso; quiz opcional não chega", () => {
     expect(blockingPathProblem(1, [{ itemType: "video", required: 1 }, { itemType: "manual", required: 1 }])).toMatch(/quiz ou exame obrigatório/);
     expect(blockingPathProblem(1, [{ itemType: "video", required: 1 }, { itemType: "quiz", required: 1 }])).toBeNull();
     expect(blockingPathProblem(true, [{ itemType: "exam", required: true }])).toBeNull();
     expect(blockingPathProblem(1, [{ itemType: "video", required: 1 }, { itemType: "quiz", required: 0 }])).toMatch(/quiz ou exame/);
     expect(blockingPathProblem(0, [{ itemType: "video", required: 1 }])).toBeNull();
   });
-  it("aplicado ao gravar os itens e ao editar o percurso; os antigos mostram aviso", () => {
-    expect(src("server/trainingPaths.ts")).toContain("const problem = items.length ? blockingPathProblem(path.blocksEscala, items) : null;");
-    expect(src("server/trainingPaths.ts")).toContain("const problem = items.length ? blockingPathProblem(1, items) : null;");
+  it("não impede gravar (sem throw); a lista mostra o aviso", () => {
+    expect(src("server/trainingPaths.ts")).not.toContain("if (problem) throw new Error(problem);");
     expect(src("server/trainingPaths.ts")).toContain("gateProblem: blockingPathProblem(p.blocksEscala, its),");
     expect(src("client/src/pages/training/Management.tsx")).toContain("{p.gateProblem && p.items.length > 0 && (");
   });

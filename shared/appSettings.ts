@@ -597,7 +597,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "HANDOVER_EMAIL", label: "Email da passagem de turno", description: "Envia a passagem de turno por email aos team leaders." },
   { name: "HANDOVER_REMINDERS", label: "Lembretes da passagem de turno", description: "Lembra quem ainda não entregou/confirmou a passagem." },
   { name: "TRAINING_REMINDERS", label: "Lembretes da formação", description: "Avisa quem tem formação por concluir." },
-  { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala." },
+  { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala. Desligado por omissão (Jorge, 2 out 2026: para já a formação não bloqueia nada).", defaultEnabled: false },
   { name: "OPS_BRIEFING", label: "Briefing diário por cidade", description: "Às 07:30 (Lisboa): reservas do dia, extras, SLA, pendentes e alertas por email aos team leaders/supervisores da cidade e no Dashboard." },
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
