@@ -91,10 +91,18 @@ export async function saveMailbox(cfg: MailboxConfig, userId: number): Promise<v
   invalidateMailboxCache();
 }
 
-export async function deleteMailbox(key: string): Promise<void> {
+/**
+ * Ativa/desativa uma caixa (17d — antes "Apagar" tirava a configuração e as
+ * conversas ficavam órfãs, fora de qualquer lista). Desativada: não
+ * sincroniza nem aparece a ninguém além do super admin; nada se apaga.
+ */
+export async function setMailboxActive(key: string, active: boolean, userId: number): Promise<boolean> {
   const d = await db();
-  await d.execute(sql`DELETE FROM mail_mailboxes WHERE mailboxKey = ${key}`);
+  const exists = rowsOf(await d.execute(sql`SELECT id FROM mail_mailboxes WHERE mailboxKey = ${key} LIMIT 1`)).length > 0;
+  if (!exists) return false;
+  await d.execute(sql`UPDATE mail_mailboxes SET active = ${active ? 1 : 0}, updatedById = ${userId} WHERE mailboxKey = ${key}`);
   invalidateMailboxCache();
+  return true;
 }
 
 export async function loadBrandDomains(): Promise<Record<string, string[]>> {
@@ -309,6 +317,8 @@ export const dbSyncStore: SyncStore = {
     const stored = Number(header(ins)?.affectedRows ?? 0) === 1;
     if (!stored) return { stored: false, threadId, messageId: null, newThread: false, reopened: false };
     const messageId = Number(header(ins)?.insertId ?? 0) || null;
+    // Mensagem nova numa conversa arquivada pela retenção: volta a aparecer (as antigas ficam no arquivo).
+    await d.execute(sql`UPDATE mail_threads SET archivedAt = NULL WHERE id = ${threadId} AND archivedAt IS NOT NULL`);
     let reopened = false;
     if (!p.outbound && !extra.automated && !extra.reservationNotice && String(thread.status) === "resolvido") {
       await d.execute(sql`UPDATE mail_threads SET status = 'aberto', statusChangedAt = ${nowUtc()} WHERE id = ${threadId}`);
@@ -348,6 +358,8 @@ export async function addAutoLink(l: { threadId: number; messageId: number | nul
   await d.execute(sql`INSERT INTO mail_links (threadId, messageId, entityType, entityId, confidence, source, reason)
     VALUES (${l.threadId}, ${l.messageId}, ${l.entityType}, ${l.entityId}, ${l.confidence}, 'auto', ${l.reason.slice(0, 120)})
     ON DUPLICATE KEY UPDATE confidence = IF(removedAt IS NULL, GREATEST(confidence, VALUES(confidence)), confidence)`);
+  // Ligada a um registo: a retenção já não se aplica — sai do arquivo.
+  await unarchiveThread(l.threadId, { messages: true });
 }
 
 export async function addManualLink(l: { threadId: number; entityType: MailLinkType; entityId: string; userId: number }): Promise<void> {
@@ -355,6 +367,7 @@ export async function addManualLink(l: { threadId: number; entityType: MailLinkT
   await d.execute(sql`INSERT INTO mail_links (threadId, messageId, entityType, entityId, confidence, source, reason, createdById)
     VALUES (${l.threadId}, NULL, ${l.entityType}, ${l.entityId}, 100, 'manual', 'ligado à mão', ${l.userId})
     ON DUPLICATE KEY UPDATE removedAt = NULL, removedById = NULL, source = 'manual', confidence = 100, createdById = VALUES(createdById)`);
+  await unarchiveThread(l.threadId, { messages: true });
 }
 
 export async function removeLink(l: { threadId: number; entityType: MailLinkType; entityId: string; userId: number }): Promise<void> {
@@ -378,30 +391,34 @@ export async function threadIdsForEntity(type: MailLinkType, entityId: string, l
     ORDER BY t.lastMessageAt DESC LIMIT ${limit}`)).map((r) => Number(r.threadId));
 }
 
-// ─── Retenção ───────────────────────────────────────────────────────────────
+// ─── Retenção (arquivo — nada se apaga) ─────────────────────────────────────
 
+/**
+ * Retenção (decisão do Jorge, 2 out 2026): emails com mais de N anos e SEM
+ * ligação a cliente/reserva/caso deixam de aparecer — ficam guardados com
+ * `archivedAt` e só o super admin os vê, a pedido (Comunicação → Arquivo).
+ * Antes eram APAGADOS. Uma mensagem nova na conversa, ou uma ligação, tira-a
+ * do arquivo.
+ */
 export interface RetentionDeps {
-  /** Mensagens mais antigas do que o limite em conversas SEM ligações ativas. */
+  /** Mensagens mais antigas do que o limite, ainda não arquivadas, em conversas SEM ligações ativas. */
   expired(cutoff: string, limit: number): Promise<Array<{ id: number; threadId: number }>>;
-  deleteMessages(ids: number[]): Promise<void>;
-  /** Apaga as conversas que ficaram sem mensagens; devolve quantas. */
-  deleteEmptyThreads(threadIds: number[]): Promise<number>;
-  recompute(threadIds: number[]): Promise<void>;
+  archiveMessages(ids: number[]): Promise<void>;
+  /** Arquiva as conversas que ficaram sem mensagens à vista; devolve quantas. */
+  archiveEmptyThreads(threadIds: number[]): Promise<number>;
 }
 
-/** Limpeza da retenção (lotes, com prazo). */
-export async function purgeExpiredMail(deps: RetentionDeps, cutoff: string, opts: { deadlineAt: number; batch?: number }): Promise<{ messages: number; threads: number; partial: boolean }> {
+/** Arquivo da retenção (lotes, com prazo). */
+export async function archiveExpiredMail(deps: RetentionDeps, cutoff: string, opts: { deadlineAt: number; batch?: number }): Promise<{ messages: number; threads: number; partial: boolean }> {
   const out = { messages: 0, threads: 0, partial: false };
   const batch = opts.batch ?? 500;
   for (;;) {
     if (Date.now() > opts.deadlineAt) { out.partial = true; break; }
     const rows = await deps.expired(cutoff, batch);
     if (!rows.length) break;
-    await deps.deleteMessages(rows.map((r) => r.id));
+    await deps.archiveMessages(rows.map((r) => r.id));
     out.messages += rows.length;
-    const threads = Array.from(new Set(rows.map((r) => r.threadId)));
-    out.threads += await deps.deleteEmptyThreads(threads);
-    await deps.recompute(threads);
+    out.threads += await deps.archiveEmptyThreads(Array.from(new Set(rows.map((r) => r.threadId))));
     if (rows.length < batch) break;
   }
   return out;
@@ -411,38 +428,39 @@ export const dbRetentionDeps: RetentionDeps = {
   async expired(cutoff, limit) {
     const d = await db();
     return rowsOf(await d.execute(sql`SELECT m.id, m.threadId FROM mail_messages m
-      WHERE m.sentAt < ${cutoff}
+      WHERE m.sentAt < ${cutoff} AND m.archivedAt IS NULL
         AND NOT EXISTS (SELECT 1 FROM mail_links l WHERE l.threadId = m.threadId AND l.removedAt IS NULL)
       ORDER BY m.id LIMIT ${limit}`)).map((r) => ({ id: Number(r.id), threadId: Number(r.threadId) }));
   },
-  async deleteMessages(ids) {
+  async archiveMessages(ids) {
     if (!ids.length) return;
     const d = await db();
-    await d.execute(sql`DELETE FROM mail_messages WHERE id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`);
+    await d.execute(sql`UPDATE mail_messages SET archivedAt = ${nowUtc()} WHERE archivedAt IS NULL AND id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`);
   },
-  async deleteEmptyThreads(threadIds) {
+  async archiveEmptyThreads(threadIds) {
     if (!threadIds.length) return 0;
     const d = await db();
     const list = sql.join(threadIds.map((i) => sql`${i}`), sql`, `);
-    const empty = rowsOf(await d.execute(sql`SELECT t.id FROM mail_threads t WHERE t.id IN (${list})
-      AND NOT EXISTS (SELECT 1 FROM mail_messages m WHERE m.threadId = t.id)`)).map((r) => Number(r.id));
-    if (!empty.length) return 0;
-    const el = sql.join(empty.map((i) => sql`${i}`), sql`, `);
-    await d.execute(sql`DELETE FROM mail_links WHERE threadId IN (${el})`);
-    await d.execute(sql`DELETE FROM mail_threads WHERE id IN (${el})`);
-    return empty.length;
-  },
-  async recompute(threadIds) {
-    for (const id of threadIds) await recomputeThread(id).catch(() => {});
+    const res = await d.execute(sql`UPDATE mail_threads t SET t.archivedAt = ${nowUtc()}
+      WHERE t.id IN (${list}) AND t.archivedAt IS NULL
+        AND NOT EXISTS (SELECT 1 FROM mail_messages m WHERE m.threadId = t.id AND m.archivedAt IS NULL)`);
+    return Number(header(res)?.affectedRows ?? 0);
   },
 };
+
+/** Tira uma conversa (e as mensagens) do arquivo: ganhou uma ligação, ou o super admin pediu. */
+export async function unarchiveThread(threadId: number, opts: { messages?: boolean } = {}): Promise<void> {
+  const d = await db();
+  await d.execute(sql`UPDATE mail_threads SET archivedAt = NULL WHERE id = ${threadId} AND archivedAt IS NOT NULL`);
+  if (opts.messages) await d.execute(sql`UPDATE mail_messages SET archivedAt = NULL WHERE threadId = ${threadId} AND archivedAt IS NOT NULL`);
+}
 
 export async function runMailRetention(opts: { deadlineAt: number; now?: Date }): Promise<{ messages: number; threads: number; partial: boolean; cutoff: string }> {
   const { getSetting } = await import("../appSettings");
   const { retentionCutoff, MAIL_DEFAULT_RETENTION_YEARS } = await import("../../shared/mail");
   const years = (await getSetting("mail.retentionYears")) ?? MAIL_DEFAULT_RETENTION_YEARS;
   const cutoff = retentionCutoff(years, opts.now);
-  const r = await purgeExpiredMail(dbRetentionDeps, cutoff, { deadlineAt: opts.deadlineAt });
+  const r = await archiveExpiredMail(dbRetentionDeps, cutoff, { deadlineAt: opts.deadlineAt });
   return { ...r, cutoff };
 }
 

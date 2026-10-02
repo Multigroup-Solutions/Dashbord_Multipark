@@ -3066,6 +3066,8 @@ export const mailThreads = mysqlTable("mail_threads", {
 	needsTriage: tinyint().default(0).notNull(),
 	// 0195: etiqueta do alias por onde entrou.
 	routeLabel: varchar({ length: 80 }),
+	// 0360: arquivada pela retenção (+5 anos, sem ligação) — fica, mas só o super admin a vê, a pedido.
+	archivedAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -3111,6 +3113,11 @@ export const mailMessages = mysqlTable("mail_messages", {
 	sentById: int(),
 	pipeline: varchar({ length: 40 }),
 	pipelineStatus: varchar({ length: 16 }),
+	// 0360: tentativas do pipeline (reclamação/perdido…) e o último erro — um caso que falhou volta a ser tentado.
+	pipelineAttempts: tinyint().default(0).notNull(),
+	pipelineError: varchar({ length: 300 }),
+	// 0360: arquivada pela retenção (+5 anos, sem ligação) — nunca se apaga.
+	archivedAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [
@@ -3119,6 +3126,22 @@ export const mailMessages = mysqlTable("mail_messages", {
 	index("idx_mail_messages_rfc").on(table.rfcMessageId),
 	index("idx_mail_messages_from").on(table.fromEmail),
 	index("idx_mail_messages_sent").on(table.sentAt),
+]);
+
+// 0360: envios do editor de email (código único por envio → nunca dois emails iguais ao cliente).
+export const mailSendRequests = mysqlTable("mail_send_requests", {
+	id: int().autoincrement().primaryKey(),
+	requestId: varchar({ length: 64 }).notNull(),
+	userId: int().notNull(),
+	status: mysqlEnum(['sending','sent','unknown','failed']).default('sending').notNull(),
+	gmailMessageId: varchar({ length: 32 }),
+	threadId: int(),
+	errorDetail: varchar({ length: 500 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_mail_send_requests_request").on(table.requestId),
 ]);
 
 // 0230: envios automáticos da aplicação a um colaborador/extra (pedidos e

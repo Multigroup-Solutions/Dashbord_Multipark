@@ -15,7 +15,7 @@ import { resolveRecipients, type RoutingCandidate } from "../shared/notification
 import { syncAccount, addedMessageIds, readChanges, backfillQuery, type GmailApiLike, type SyncStore, type AccountSyncState, type SyncAccount } from "./mail/sync";
 import { parseGmailMessage, gmailThreadIdToImap, decodeBase64Url } from "./mail/parse";
 import { proposeLinks, bookingConfidence, type AutoLinkDeps } from "./mail/autolink";
-import { purgeExpiredMail, type RetentionDeps } from "./mail/store";
+import { archiveExpiredMail, type RetentionDeps } from "./mail/store";
 import { sanitizeEmailHtml, wrapEmailDocument } from "./mail/sanitize";
 import { buildRawMessage, prefixedSubject, replyReferences, textToHtml } from "./mail/compose";
 import { consentUrl, scopesFor, isAuthRevokedError, workspaceConfig } from "./google/workspace";
@@ -390,25 +390,24 @@ describe("retenção dos emails", () => {
     expect(retentionCutoff(5, new Date(Date.UTC(2026, 8, 24, 10, 0, 0)))).toBe("2021-09-24 10:00:00");
     expect(retentionCutoff(0, new Date(Date.UTC(2026, 8, 24)))).toBe("2021-09-24 00:00:00");
   });
-  it("apaga só as mensagens antigas SEM ligação e as conversas que ficam vazias", async () => {
+  it("ARQUIVA (não apaga) só as mensagens antigas SEM ligação e as conversas que ficam sem nada à vista", async () => {
     const msgs = [
-      { id: 1, threadId: 10, sentAt: "2019-01-01 00:00:00" }, { id: 2, threadId: 10, sentAt: "2019-02-01 00:00:00" },
-      { id: 3, threadId: 11, sentAt: "2019-01-01 00:00:00" }, { id: 4, threadId: 12, sentAt: "2026-01-01 00:00:00" },
-      { id: 5, threadId: 13, sentAt: "2019-01-01 00:00:00" }, { id: 6, threadId: 13, sentAt: "2026-01-01 00:00:00" },
+      { id: 1, threadId: 10, sentAt: "2019-01-01 00:00:00", archived: false }, { id: 2, threadId: 10, sentAt: "2019-02-01 00:00:00", archived: false },
+      { id: 3, threadId: 11, sentAt: "2019-01-01 00:00:00", archived: false }, { id: 4, threadId: 12, sentAt: "2026-01-01 00:00:00", archived: false },
+      { id: 5, threadId: 13, sentAt: "2019-01-01 00:00:00", archived: false }, { id: 6, threadId: 13, sentAt: "2026-01-01 00:00:00", archived: false },
     ];
     const linked = new Set([11]);
-    let threads = new Set([10, 11, 12, 13]);
-    const recomputed: number[] = [];
+    const archivedThreads = new Set<number>();
     const deps: RetentionDeps = {
-      async expired(cutoff, limit) { return msgs.filter((m) => m.sentAt < cutoff && !linked.has(m.threadId)).slice(0, limit); },
-      async deleteMessages(ids) { for (const id of ids) msgs.splice(msgs.findIndex((m) => m.id === id), 1); },
-      async deleteEmptyThreads(ts) { const empty = ts.filter((t) => !msgs.some((m) => m.threadId === t)); threads = new Set([...threads].filter((t) => !empty.includes(t))); return empty.length; },
-      async recompute(ts) { recomputed.push(...ts); },
+      async expired(cutoff, limit) { return msgs.filter((m) => !m.archived && m.sentAt < cutoff && !linked.has(m.threadId)).slice(0, limit); },
+      async archiveMessages(ids) { for (const m of msgs) if (ids.includes(m.id)) m.archived = true; },
+      async archiveEmptyThreads(ts) { const empty = ts.filter((t) => !msgs.some((m) => m.threadId === t && !m.archived)); empty.forEach((t) => archivedThreads.add(t)); return empty.length; },
     };
-    const r = await purgeExpiredMail(deps, "2021-09-24 00:00:00", { deadlineAt: Date.now() + 5_000, batch: 2 });
+    const r = await archiveExpiredMail(deps, "2021-09-24 00:00:00", { deadlineAt: Date.now() + 5_000, batch: 2 });
     expect(r).toMatchObject({ messages: 3, threads: 1, partial: false });
-    expect(msgs.map((m) => m.id).sort()).toEqual([3, 4, 6]);   // 3 fica: conversa ligada a um cliente/caso
-    expect([...threads].sort()).toEqual([11, 12, 13]);
+    expect(msgs).toHaveLength(6); // nada se apaga (Jorge, 2 out 2026)
+    expect(msgs.filter((m) => m.archived).map((m) => m.id).sort()).toEqual([1, 2, 5]); // 3 fica: conversa ligada a um cliente/caso
+    expect([...archivedThreads]).toEqual([10]); // a 13 tem uma mensagem recente → continua à vista
   });
 });
 
@@ -536,7 +535,8 @@ describe("HTML dos emails", () => {
   });
   it("imagens remotas bloqueadas por omissão; 'Mostrar imagens' carrega-as; cid: resolvido para data:", () => {
     const blocked = sanitizeEmailHtml(dirty);
-    expect(blocked.blockedImages).toBe(1);
+    // 17d: a imagem cid: por resolver também conta (senão não havia "Mostrar imagens" para ela).
+    expect(blocked.blockedImages).toBe(2);
     expect(blocked.html).not.toContain("track.example");
     const shown = sanitizeEmailHtml(dirty, { showImages: true, cidMap: { logo1: "data:image/png;base64,AAAA" } });
     expect(shown.html).toContain("https://track.example/pixel.gif");

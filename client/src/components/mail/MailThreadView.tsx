@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
-  ArrowLeft, Forward, ImageOff, Image as ImageIcon, Link2, Loader2, MailOpen, Paperclip, Reply, ReplyAll, Unlink, UserRound,
+  Archive, ArrowLeft, Forward, ImageOff, Image as ImageIcon, Link2, Loader2, MailOpen, Paperclip, Reply, ReplyAll, Unlink, UserRound,
 } from "lucide-react";
 import {
   MAIL_LINK_LABELS, MAIL_LINK_TYPES, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, type MailLinkType, type MailThreadStatus,
@@ -20,6 +20,7 @@ import {
 import { BrandChip, EmailHtmlFrame, MAIL_LINK_HREF, fullTime } from "./mailUi";
 import { MailComposer, type ComposeMode } from "./MailComposer";
 import { TriagePanel } from "./TriagePanel";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 function LinksPanel({ threadId, links, canAct, onChanged }: {
   threadId: number;
@@ -73,24 +74,33 @@ function LinksPanel({ threadId, links, canAct, onChanged }: {
 
 export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadId: number; onBack?: () => void; onChanged: () => void; canAi?: boolean }) {
   const [showImages, setShowImages] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [compose, setCompose] = useState<ComposeMode | null>(null);
   const [showLinks, setShowLinks] = useState(false);
   const utils = trpc.useUtils();
-  const q = trpc.mail.threads.get.useQuery({ id: threadId, showImages }, { refetchInterval: 60_000 });
+  const q = trpc.mail.threads.get.useQuery({ id: threadId, showImages, showArchived }, { refetchInterval: 60_000 });
   const t = q.data;
   const markRead = trpc.mail.threads.markRead.useMutation({ onSuccess: () => { onChanged(); utils.mail.badge.invalidate(); } });
   const setStatus = trpc.mail.threads.setStatus.useMutation({ onSuccess: () => { q.refetch(); onChanged(); }, onError: (e) => toast.error(e.message) });
   const assign = trpc.mail.threads.assign.useMutation({ onSuccess: () => { q.refetch(); onChanged(); }, onError: (e) => toast.error(e.message) });
-  const assignees = trpc.mail.threads.assignees.useQuery({ mailbox: t?.mailbox?.key ?? "" }, { enabled: !!t?.mailbox && !!t?.canAct, staleTime: 10 * 60_000 });
+  // Só quem responde nesta caixa E vê a cidade desta conversa (17d).
+  const assignees = trpc.mail.threads.assignees.useQuery({ mailbox: t?.mailbox?.key ?? "", threadId }, { enabled: !!t?.mailbox && !!t?.canAct, staleTime: 10 * 60_000 });
 
-  useEffect(() => { setShowImages(false); setCompose(null); }, [threadId]);
+  useEffect(() => { setShowImages(false); setShowArchived(false); setCompose(null); }, [threadId]);
   useEffect(() => {
     if (t && t.thread.unreadCount > 0) markRead.mutate({ id: threadId, read: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t?.thread.id, t?.thread.unreadCount]);
 
   if (q.isLoading) return <div className="flex-1 flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
-  if (q.error || !t) return <div className="flex-1 p-4 text-sm text-muted-foreground">{q.error?.message ?? "Conversa não encontrada."}</div>;
+  if (q.error || !t) {
+    return (
+      <div className="flex-1 p-4 space-y-2">
+        {onBack && <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft className="h-4 w-4 mr-1" />Voltar</Button>}
+        {q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="a conversa" /> : <p className="text-sm text-muted-foreground">Conversa não encontrada.</p>}
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 min-w-0 flex flex-col">
@@ -139,7 +149,18 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
             </Button>
           )}
           {showImages && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><ImageOff className="h-3 w-3" />imagens carregadas</span>}
+          {t.archivedHidden > 0 && !showArchived && (
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowArchived(true)} title="Mensagens com mais de 5 anos (retenção). Só tu as vês.">
+              <Archive className="h-3.5 w-3.5 mr-1" />Mostrar arquivadas ({t.archivedHidden})
+            </Button>
+          )}
         </div>
+        {t.thread.archivedAt && (
+          <div className="rounded-md border border-slate-300 bg-slate-50 dark:bg-slate-900/40 p-2 text-xs text-muted-foreground flex items-start gap-1.5">
+            <Archive className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>Conversa arquivada: tem mais de 5 anos e não está ligada a nenhum registo. Está guardada e só o super admin a vê. Uma mensagem nova ou uma ligação tiram-na do arquivo.</span>
+          </div>
+        )}
         {t.canTriage && <TriagePanel threadId={threadId} matchedAddress={t.thread.matchedAddress} onDone={() => { q.refetch(); onChanged(); }} />}
         {showLinks && <LinksPanel threadId={threadId} links={t.links} canAct={t.canAct} onChanged={() => { q.refetch(); onChanged(); }} />}
         {showLinks && <DriveFilesPanel entityType="mail_thread" entityId={threadId} title="Ficheiros do Google Drive" compact />}
@@ -147,6 +168,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
 
       {/* Mensagens */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-muted/30">
+        {t.messages.length === 0 && <p className="text-xs text-muted-foreground">Sem mensagens à vista nesta conversa.</p>}
         {t.messages.map((m, i) => (
           <MessageCard key={m.id} m={m} defaultOpen={i >= t.messages.length - 3} />
         ))}
@@ -176,7 +198,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
 type Msg = {
   id: number; direction: "in" | "out"; fromName: string | null; fromEmail: string | null; to: string[]; cc: string[];
   subject: string; snippet: string; text: string; htmlDocument: string | null; attachments: Array<{ index: number; filename: string; size: number; href: string }>;
-  sentAt: string | null; sentByName: string | null; pipeline: string | null; pipelineStatus: string | null;
+  sentAt: string | null; sentByName: string | null; pipeline: string | null; pipelineStatus: string | null; archived?: boolean;
 };
 
 function MessageCard({ m, defaultOpen }: { m: Msg; defaultOpen: boolean }) {
@@ -198,6 +220,7 @@ function MessageCard({ m, defaultOpen }: { m: Msg; defaultOpen: boolean }) {
         <div className="text-[11px] text-muted-foreground shrink-0 text-right">
           {fullTime(m.sentAt)}
           {m.direction === "out" && <div className="text-primary font-medium">enviado</div>}
+          {m.archived && <div className="inline-flex items-center gap-0.5"><Archive className="h-3 w-3" />arquivada</div>}
           {m.pipeline && m.pipelineStatus === "processed" && <div className="text-emerald-700 dark:text-emerald-300">→ {m.pipeline}</div>}
         </div>
       </button>

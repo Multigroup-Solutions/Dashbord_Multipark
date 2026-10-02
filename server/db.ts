@@ -6278,8 +6278,13 @@ export async function findComplaintByClientSignals(
   if (plate.length >= 4) {
     conds.push(sql`UPPER(REPLACE(REPLACE(REPLACE(${complaints.vehiclePlate}, ' ', ''), '-', ''), '.', '')) = ${plate}`);
   }
+  // Nome: só quando não há email que o contradiga — com email do cliente, o
+  // nome só junta a uma reclamação SEM email (outra "Ana Costa", com outro
+  // email, ficava no caso de outra pessoa e na cidade dela; 17d).
   const name = clientSignalName(clientName);
-  if (name) conds.push(eq(complaints.clientName, name));
+  if (name) conds.push(email
+    ? sql`(${complaints.clientName} = ${name} AND (${complaints.clientEmail} IS NULL OR TRIM(${complaints.clientEmail}) = ''))`
+    : eq(complaints.clientName, name));
   if (!conds.length) return null;
   const since = new Date(Date.now() - COMPLAINT_SIGNALS_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
   const rows = await db.select().from(complaints)

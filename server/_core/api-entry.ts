@@ -78,7 +78,10 @@ try {
         const ext = file.originalname?.split(".").pop() || "bin";
         const key = `uploads/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
         const { url } = await storagePut(key, file.buffer, file.mimetype);
-        return res.json({ url, key });
+        // Recibo: prova que foi esta pessoa que carregou (anexos de email, 17d).
+        const { uploadTicket } = await import("../uploadTicket");
+        const uid = Number((req as any).sessionUser?.id);
+        return res.json({ url, key, ...(uid ? { ticket: uploadTicket(uid, key) } : {}) });
       } catch (e: any) {
         console.error("[Upload] Error:", e);
         return res.status(500).json({ error: e.message || "Upload failed" });

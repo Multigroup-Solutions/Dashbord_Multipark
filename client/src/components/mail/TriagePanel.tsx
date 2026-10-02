@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Inbox, Loader2 } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 export function TriagePanel({ threadId, matchedAddress, onDone }: { threadId: number; matchedAddress: string | null; onDone: () => void }) {
   const settings = trpc.mail.settings.list.useQuery(undefined, { staleTime: 5 * 60_000 });
@@ -28,7 +29,7 @@ export function TriagePanel({ threadId, matchedAddress, onDone }: { threadId: nu
     onError: (e) => toast.error(e.message),
   });
   if (settings.isLoading) return <Loader2 className="h-4 w-4 animate-spin" />;
-  if (!settings.data) return null;
+  if (!settings.data) return settings.error ? <QueryErrorNote error={settings.error} onRetry={() => settings.refetch()} retrying={settings.isFetching} what="as caixas para classificar" /> : null;
   return (
     <div className="rounded-lg border border-amber-300 bg-amber-50/60 dark:bg-amber-950/20 p-2.5 space-y-2">
       <div className="text-xs font-semibold flex items-center gap-1"><Inbox className="h-3.5 w-3.5" /> Por classificar</div>

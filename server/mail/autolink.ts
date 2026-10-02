@@ -30,7 +30,8 @@ export interface AutoLinkDeps {
   clientEmailByPhone(phone: string): Promise<string | null>;
   matchBooking(s: { ref?: string; plate?: string; email?: string; phone?: string; name?: string; anchorIso?: string }): Promise<{ externalId: string; projectId: number | null; score: number; matchedBy: string[] } | null>;
   complaintByThread(s: { gmThreadId: string | null; refs: string[] }): Promise<CaseRef | null>;
-  openComplaintBySignals(email: string | null, plate: string | null, name: string | null): Promise<CaseRef | null>;
+  /** Reclamação aberta pelo email ou matrícula — NUNCA só pelo nome (17d: outra "Ana Costa" ficava ligada). */
+  openComplaintBySignals(email: string | null, plate: string | null): Promise<CaseRef | null>;
   openLostFoundBySignals(email: string | null, plate: string | null): Promise<CaseRef | null>;
   caseProject?(type: "complaint" | "lost_found" | "incident", id: number): Promise<number | null>;
 }
@@ -93,7 +94,7 @@ export async function proposeLinks(s: AutoLinkSignals, deps: AutoLinkDeps): Prom
   const byThread = await deps.complaintByThread({ gmThreadId: s.gmThreadId, refs: s.refs });
   if (byThread) add({ entityType: "complaint", entityId: String(byThread.id), confidence: 95, reason: "mesma conversa da reclamação", projectId: byThread.projectId });
   if (email || plate) {
-    const open = await deps.openComplaintBySignals(bodyEmail ?? email, plate, name);
+    const open = await deps.openComplaintBySignals(bodyEmail ?? email, plate);
     if (open) add({ entityType: "complaint", entityId: String(open.id), confidence: 70, reason: "reclamação aberta do mesmo cliente", projectId: open.projectId });
     const lf = await deps.openLostFoundBySignals(bodyEmail ?? email, plate);
     if (lf) add({ entityType: "lost_found", entityId: String(lf.id), confidence: 70, reason: "perdido aberto do mesmo cliente", projectId: lf.projectId });

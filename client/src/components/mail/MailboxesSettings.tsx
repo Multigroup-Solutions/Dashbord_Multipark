@@ -15,7 +15,9 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Pencil, Plus, Power, RefreshCw } from "lucide-react";
+import { Link } from "wouter";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { MODULES, ROLES, ROLE_LABELS, type Role } from "@shared/access";
 import {
   MAILBOX_CITY_RULE_LABELS, MAILBOX_MODULES, MAIL_BRAND_IDS, MAIL_BRAND_LABELS, MAIL_PIPELINES, isMailBrand, mailboxConfigSchema,
@@ -156,16 +158,26 @@ export function MailboxesSettings() {
   const utils = trpc.useUtils();
   const q = trpc.mail.settings.list.useQuery();
   const [editing, setEditing] = useState<{ cfg: MailboxConfig; isNew: boolean } | null>(null);
-  const remove = trpc.mail.settings.remove.useMutation({
-    onSuccess: () => { toast.success("Caixa apagada."); utils.mail.settings.list.invalidate(); },
+  // Nada se apaga (17d): "Desativar" tira a caixa das listas e da sincronização; as conversas ficam.
+  const deactivate = trpc.mail.settings.deactivate.useMutation({
+    onSuccess: () => { toast.success("Caixa desativada. As conversas ficam guardadas."); utils.mail.settings.list.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const retryCase = trpc.mail.settings.retryPipeline.useMutation({
+    onSuccess: (r) => { r.ok ? toast.success(r.created ? "Caso criado." : "Tratado.") : toast.error(r.error ?? "Voltou a falhar."); q.refetch(); },
     onError: (e) => toast.error(e.message),
   });
   const sync = trpc.mail.settings.syncNow.useMutation({
-    onSuccess: (r) => { r.ok ? toast.success(`Sincronizado: ${r.stored} email(s) novos${r.done ? "" : " (continua no próximo ciclo)"}.`) : toast.error(r.errors.join(" · ") || "Falhou."); q.refetch(); },
+    // "Sincronizado" só quando correu tudo bem; casos que falharam ou contas em erro dizem-no (17d).
+    onSuccess: (r) => {
+      if (r.ok) toast.success(`Sincronizado: ${r.stored} email(s) novos${r.done ? "" : " (continua no próximo ciclo)"}.`);
+      else toast.error(`Sincronização com problemas: ${r.errors.slice(0, 3).join(" · ") || "falhou."}`, { duration: 12_000 });
+      q.refetch();
+    },
     onError: (e) => toast.error(e.message),
   });
   if (q.isLoading) return <Loader2 className="h-4 w-4 animate-spin" />;
-  if (!q.data) return <p className="text-sm text-muted-foreground">{q.error?.message ?? "Sem acesso."}</p>;
+  if (!q.data) return q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as definições do email" /> : null;
   const d = q.data;
   return (
     <div className="space-y-4">
@@ -218,13 +230,39 @@ export function MailboxesSettings() {
               {d.canEdit && (
                 <div className="flex gap-1">
                   <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditing({ cfg: m, isNew: false })} aria-label="Editar"><Pencil className="h-4 w-4" /></Button>
-                  <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="Apagar" onClick={() => { if (window.confirm(`Apagar a caixa "${m.label}"? Os emails guardados ficam, mas deixam de aparecer numa caixa.`)) remove.mutate({ key: m.key }); }}><Trash2 className="h-4 w-4" /></Button>
+                  {m.active && (
+                    <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="Desativar" title="Desativar"
+                      onClick={() => { if (window.confirm(`Desativar a caixa "${m.label}"? Deixa de sincronizar e sai das listas; as conversas ficam guardadas (o super admin continua a vê-las). Para voltar a ligar: Editar → Ativa.`)) deactivate.mutate({ key: m.key }); }}>
+                      <Power className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
           ))}
         </CardContent>
       </Card>
+
+      {d.pipelineFailures.length > 0 && (
+        <Card className="border-red-300">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base text-red-800 dark:text-red-300 flex items-center gap-1.5"><AlertTriangle className="h-4 w-4" />Emails que não criaram o caso ({d.pipelineFailures.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1.5">
+            <p className="text-xs text-muted-foreground">Deviam ter criado uma reclamação, perdido, crítica… e falharam. O sistema tenta de novo sozinho (até 5 vezes); depois fica aqui.</p>
+            {d.pipelineFailures.map((f) => (
+              <div key={f.messageId} className="text-xs border-b pb-1.5 last:border-0 flex flex-wrap items-start gap-2">
+                <div className="flex-1 min-w-[200px]">
+                  <Link href={f.mailboxKey ? `/comunicacao?caixa=${encodeURIComponent(f.mailboxKey)}&t=${f.threadId}` : `/comunicacao?t=${f.threadId}`} className="font-semibold text-primary underline break-words">{f.subject || "(sem assunto)"}</Link>
+                  <div className="text-muted-foreground break-all">{f.fromEmail ?? "—"} · {f.pipeline} · {f.sentAt ? fmtPTDateTime(f.sentAt) : "—"} · {f.attempts} tentativa(s)</div>
+                  {f.error && <div className="text-red-700 dark:text-red-300 break-words">{f.error}</div>}
+                </div>
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={retryCase.isPending} onClick={() => retryCase.mutate({ messageId: f.messageId })}>Tentar de novo</Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Contas a sincronizar</CardTitle></CardHeader>

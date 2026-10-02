@@ -37,6 +37,10 @@ export interface MailSyncReport {
   accounts: Array<Pick<AccountSyncResult, "accountKey" | "phase" | "fetched" | "stored" | "duplicates" | "partial"> & { status: string; error?: string }>;
   stored: number;
   pipelineCreated: number;
+  /** Emails que deviam ter criado um caso e falharam nesta corrida (ficam para nova tentativa). */
+  pipelineFailed?: number;
+  /** Casos que falharam antes e foram criados agora (nova tentativa). */
+  pipelineRetried?: number;
   errors: string[];
   aiTriaged?: number;
   watchRenewed?: number;
@@ -44,6 +48,8 @@ export interface MailSyncReport {
 
 /** Só emails recebidos nestes últimos dias criam registos (a importação inicial de 90 d não ressuscita casos antigos). */
 export const MAIL_PIPELINE_WINDOW_DAYS = 30;
+/** Tentativas automáticas de um caso que falhou (depois fica em Definições → Comunicação com "Tentar de novo"). */
+export const MAIL_PIPELINE_MAX_ATTEMPTS = 5;
 
 // ─── Dependências reais das ligações automáticas ────────────────────────────
 
@@ -70,9 +76,11 @@ export const dbAutoLinkDeps: AutoLinkDeps = {
     const c = await findComplaintByThread({ gmThreadId: s.gmThreadId, refs: s.refs });
     return c ? { id: Number(c.id), projectId: (c as any).projectId ?? null } : null;
   },
-  async openComplaintBySignals(email, plate, name) {
+  async openComplaintBySignals(email, plate) {
+    // Ligação automática: email ou matrícula — o nome sozinho não chega (outra
+    // "Ana Costa" ficava ligada à reclamação e à cidade de outra pessoa, 17d).
     const { findComplaintByClientSignals } = await import("../db");
-    const c = await findComplaintByClientSignals(email, plate, name);
+    const c = await findComplaintByClientSignals(email, plate, null);
     return c ? { id: Number(c.id), projectId: (c as any).projectId ?? null } : null;
   },
   async openLostFoundBySignals(email, plate) {
@@ -91,7 +99,7 @@ export const dbAutoLinkDeps: AutoLinkDeps = {
 
 // ─── Pós-processamento de cada email guardado ───────────────────────────────
 
-async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<GmailApi, "getAttachment">, pipeline: MailPipeline): Promise<{ targetModule: string; targetId?: number } | null> {
+async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<GmailApi, "getAttachment">, pipeline: MailPipeline): Promise<{ targetModule: string; targetId?: number; existing?: true } | null> {
   const p = e.parsed;
   if (!p.rfcMessageId) return null;
   const { processInboundEmail } = await import("../jobs/emailInboundSync");
@@ -117,7 +125,22 @@ async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<
     },
   });
   if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, out.status).catch(() => {});
-  return out.status === "processed" ? out.routed : null;
+  if (out.status === "processed") return out.routed;
+  if (out.status === "duplicate") {
+    // Já tratado (outra conta, ou uma tentativa anterior que criou o caso):
+    // liga ao registo que existe, sem o contar como novo.
+    const { getInboundEmailByMessageId } = await import("../db");
+    const row: any = await getInboundEmailByMessageId(p.rfcMessageId).catch(() => null);
+    if (row?.targetModule && row?.targetId) return { targetModule: String(row.targetModule), targetId: Number(row.targetId), existing: true };
+  }
+  return null;
+}
+
+/** Marca o caso que falhou (volta a ser tentado — `retryFailedPipelines`). */
+async function markPipelineError(messageId: number, pipeline: string, err: unknown): Promise<void> {
+  const d = await db();
+  await d.execute(sql`UPDATE mail_messages SET pipeline = ${pipeline}, pipelineStatus = 'error', pipelineAttempts = LEAST(pipelineAttempts + 1, 100),
+    pipelineError = ${String((err as any)?.message ?? err).slice(0, 300)} WHERE id = ${messageId}`);
 }
 
 async function notifyNewMail(e: StoredEvent, mailbox: MailboxConfig, projectId: number | null): Promise<void> {
@@ -173,15 +196,25 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     const p = e.parsed;
     const mailbox = e.classification.mailboxKey ? e.account.mailboxes.find((m) => m.key === e.classification.mailboxKey) ?? null : null;
     const alias = e.classification.alias ?? null;
-    let routed: { targetModule: string; targetId?: number } | null = null;
+    let routed: { targetModule: string; targetId?: number; existing?: true } | null = null;
     // 1) Pipeline temático — só emails RECEBIDOS (de pessoas), recentes, de caixas partilhadas.
     if (!p.outbound && !e.classification.personal && !p.systemMail) {
       const accountPipelines = [...configuredPipelines(e.account.mailboxes).keys()];
       const pipeline = aliasPipeline(mailbox, alias, p.subject, accountPipelines);
       const recent = p.sentAt ? Date.now() - Date.parse(p.sentAt.replace(" ", "T") + "Z") <= windowMs : false;
       if (pipeline && recent) {
-        routed = await runPipeline(e, api, pipeline);
-        if (routed && ["complaint", "lostfound", "review", "incident"].includes(routed.targetModule)) report.pipelineCreated++;
+        try {
+          routed = await runPipeline(e, api, pipeline);
+          if (routed && !routed.existing && ["complaint", "lostfound", "review", "incident"].includes(routed.targetModule)) report.pipelineCreated++;
+        } catch (err: any) {
+          // O caso NÃO foi criado: fica marcado para nova tentativa e o cron
+          // não fica verde (antes perdia-se em silêncio). O resto (ligações,
+          // aviso de email novo à equipa) continua.
+          if (e.result.messageId) await markPipelineError(e.result.messageId, pipeline, err).catch(() => {});
+          report.pipelineFailed = (report.pipelineFailed ?? 0) + 1;
+          report.ok = false;
+          report.errors.push(`caso por criar (${pipeline}) ${p.gmailMessageId}: ${String(err?.message ?? err).slice(0, 160)}`);
+        }
       }
     }
     // 2) Ligações automáticas (conversas com cliente externo ou registo do pipeline).
@@ -249,6 +282,71 @@ export async function reprocessThreadPipeline(threadId: number, mailbox: Mailbox
   return out;
 }
 
+// ─── Casos que falharam: nova tentativa ─────────────────────────────────────
+
+/**
+ * Volta a correr o pipeline de UM email cujo caso falhou (ou de um que a
+ * pessoa pede em Definições). O Message-ID reservado em inbound_emails impede
+ * criar o caso duas vezes: se a tentativa anterior chegou a criá-lo, liga-se
+ * a esse. Devolve o que aconteceu.
+ */
+export async function retryPipelineMessage(messageId: number, opts: { manual?: boolean } = {}): Promise<{ ok: boolean; created: boolean; error?: string }> {
+  const d = await db();
+  const m = rowsOf(await d.execute(sql`SELECT id, threadId, accountKey, gmailMessageId, pipeline, pipelineStatus, pipelineAttempts FROM mail_messages WHERE id = ${messageId} LIMIT 1`))[0];
+  if (!m || !m.pipeline) return { ok: false, created: false, error: "Email sem caso por criar." };
+  if (m.pipelineStatus !== "error") return { ok: true, created: false };
+  if (!opts.manual && Number(m.pipelineAttempts ?? 0) >= MAIL_PIPELINE_MAX_ATTEMPTS) return { ok: false, created: false, error: "Tentativas esgotadas." };
+  const pipeline = String(m.pipeline) as MailPipeline;
+  try {
+    const { gmailApiForAccount } = await import("./gmailApi");
+    const { parseGmailMessage } = await import("./parse");
+    const api = await gmailApiForAccount(String(m.accountKey));
+    const raw = await api.getMessage(String(m.gmailMessageId));
+    if (!raw) throw new Error("O email já não está no Gmail.");
+    const parsed = parseGmailMessage(raw);
+    const threadId = Number(m.threadId);
+    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline);
+    if (routed?.targetId) {
+      const links = await proposeLinks({ contactEmail: null, subject: "", bodyText: "", gmThreadId: null, refs: [], sentAt: null, pipeline: routed }, dbAutoLinkDeps);
+      for (const l of links) await addAutoLink({ threadId, messageId, entityType: l.entityType, entityId: l.entityId, confidence: l.confidence, reason: l.reason });
+      await setThreadProjectIfEmpty(threadId, projectFromLinks(links));
+    }
+    await d.execute(sql`UPDATE mail_messages SET pipelineError = NULL WHERE id = ${messageId}`);
+    return { ok: true, created: !!routed && !routed.existing };
+  } catch (err: any) {
+    await markPipelineError(messageId, pipeline, err).catch(() => {});
+    return { ok: false, created: false, error: String(err?.message ?? err).slice(0, 300) };
+  }
+}
+
+/** Nova tentativa dos casos que falharam (recentes, com tentativas por gastar). */
+export async function retryFailedPipelines(report: MailSyncReport, deadlineAt: number): Promise<void> {
+  const d = await db();
+  const since = new Date(Date.now() - MAIL_PIPELINE_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+  const rows = rowsOf(await d.execute(sql`SELECT id FROM mail_messages
+    WHERE pipelineStatus = 'error' AND pipelineAttempts < ${MAIL_PIPELINE_MAX_ATTEMPTS} AND direction = 'in' AND sentAt >= ${since}
+    ORDER BY sentAt LIMIT 5`));
+  for (const r of rows) {
+    if (Date.now() > deadlineAt) break;
+    const out = await retryPipelineMessage(Number(r.id));
+    if (out.ok) { if (out.created) { report.pipelineRetried = (report.pipelineRetried ?? 0) + 1; report.pipelineCreated++; } }
+    else { report.ok = false; report.errors.push(`caso por criar (mensagem ${r.id}): ${out.error ?? "falhou"}`); }
+  }
+}
+
+/** Emails cujo caso falhou (Definições → Comunicação). */
+export async function listPipelineFailures(): Promise<Array<{ messageId: number; threadId: number; mailboxKey: string | null; subject: string | null; fromEmail: string | null; pipeline: string | null; attempts: number; error: string | null; sentAt: string | null }>> {
+  const d = await db();
+  const since = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+  return rowsOf(await d.execute(sql`SELECT m.id, m.threadId, t.mailboxKey, m.subject, m.fromEmail, m.pipeline, m.pipelineAttempts, m.pipelineError,
+      DATE_FORMAT(m.sentAt, '%Y-%m-%d %H:%i:%s') AS sentAt
+    FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId
+    WHERE m.sentAt >= ${since} AND m.pipelineStatus = 'error' ORDER BY m.sentAt DESC LIMIT 50`)).map((r) => ({
+    messageId: Number(r.id), threadId: Number(r.threadId), mailboxKey: r.mailboxKey ?? null, subject: r.subject ?? null, fromEmail: r.fromEmail ?? null,
+    pipeline: r.pipeline ?? null, attempts: Number(r.pipelineAttempts ?? 0), error: r.pipelineError ?? null, sentAt: r.sentAt ?? null,
+  }));
+}
+
 // ─── Corrida ────────────────────────────────────────────────────────────────
 
 export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: string | null }): Promise<MailSyncReport> {
@@ -311,6 +409,11 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
     }
   }
 
+  // Casos que falharam em corridas anteriores: nova tentativa (até MAIL_PIPELINE_MAX_ATTEMPTS).
+  if (!opts.onlyAccountKey && Date.now() + 15_000 < opts.deadlineAt) {
+    try { await retryFailedPipelines(report, opts.deadlineAt - 10_000); }
+    catch (err: any) { report.errors.push(`nova tentativa dos casos: ${String(err?.message ?? err).slice(0, 160)}`); }
+  }
   // Triagem por IA das reclamações que o pipeline criou (como o IMAP fazia).
   if (report.pipelineCreated > 0 && Date.now() + 20_000 < opts.deadlineAt) {
     try {

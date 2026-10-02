@@ -8,19 +8,22 @@ import { trpc } from "@/lib/trpc";
 import { Loader2, Mail, MessageCircle, ArrowDownLeft, ArrowUpRight, Video } from "lucide-react";
 import type { MailLinkType } from "@shared/mail";
 import { fullTime } from "./mailUi";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { isForbidden } from "@/lib/queryRetry";
 
 export function CommunicationsTimeline({ type, id, title = "Comunicações", compact = false }: { type: MailLinkType; id: string | number | null | undefined; title?: string; compact?: boolean }) {
   const key = id == null ? "" : String(id).trim();
   const q = trpc.mail.timeline.useQuery({ type, id: key }, { enabled: key.length > 0, staleTime: 60_000, retry: false });
   const [expanded, setExpanded] = useState<string | null>(null);
   if (!key) return null;
-  if (q.error) return null; // sem acesso ao módulo → não mostra nada
+  if (q.error && isForbidden(q.error)) return null; // sem acesso ao módulo → não mostra nada
   const items = q.data?.items ?? [];
   return (
     <div className="space-y-2">
       {!compact && <div className="text-sm font-semibold flex items-center gap-1.5"><Mail className="h-4 w-4 text-primary" />{title} {q.data ? `(${items.length})` : ""}</div>}
       {q.isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-      {!q.isLoading && items.length === 0 && <p className="text-xs text-muted-foreground">Sem emails, mensagens nem reuniões ligadas.</p>}
+      {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as comunicações" />}
+      {!q.isLoading && !q.error && items.length === 0 && <p className="text-xs text-muted-foreground">Sem emails, mensagens nem reuniões ligadas.</p>}
       <div className="space-y-1.5">
         {items.map((it) => {
           const open = expanded === it.id;
