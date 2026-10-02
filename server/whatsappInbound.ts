@@ -69,6 +69,10 @@ export interface ParsedInboundMessage {
   phoneNumberId: string | null;
   /** `contacts[].profile.name` para este `from`, quando vem. */
   profileName: string | null;
+  /** `context.id`: wamid da NOSSA mensagem a que esta responde (botões de resposta rápida). */
+  contextId: string | null;
+  /** `button.payload` de uma resposta rápida de template. */
+  buttonPayload: string | null;
 }
 
 export interface ParsedStatusUpdate {
@@ -230,6 +234,8 @@ export function parseWebhookPayload(payload: any, expectedPhoneNumberId?: string
           media: parseInboundMedia(m),
           phoneNumberId,
           profileName: profileByWaId.get(String(from)) ?? null,
+          contextId: typeof m?.context?.id === "string" && m.context.id ? m.context.id : null,
+          buttonPayload: typeof m?.button?.payload === "string" && m.button.payload ? m.button.payload : null,
         });
       }
 
@@ -541,8 +547,20 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
   // escala ("sim" / "não"). Nunca lança.
   if (steps.has("employee_automations") && w.employeeId != null) {
     try {
-      const { handleWhatsappReply } = await import("./extrasAutomation");
-      await handleWhatsappReply({ employeeId: w.employeeId, conversationId: w.conversationId, body: m.body });
+      const { handleWhatsappReply, handleShiftNoticeButton } = await import("./extrasAutomation");
+      // Botão "Confirmo"/"Não posso" do aviso de turno: liga pelo context.id
+      // (o aviso exato a que respondeu). Tratado → não passa pela leitura do texto.
+      const viaButton =
+        m.type === "button" && m.contextId
+          ? await handleShiftNoticeButton({
+              employeeId: w.employeeId,
+              conversationId: w.conversationId,
+              contextId: m.contextId,
+              text: m.body,
+              payload: m.buttonPayload,
+            })
+          : false;
+      if (!viaButton) await handleWhatsappReply({ employeeId: w.employeeId, conversationId: w.conversationId, body: m.body });
     } catch (err: any) {
       console.warn("[WhatsAppWebhook] automação falhou:", String(err?.message ?? err).slice(0, 160));
     }

@@ -75,8 +75,9 @@ describe("planTeamRetry (131049)", () => {
     expect(planTeamRetry({ ...base, employeeId: null })).toEqual({ kind: "none" });
   });
   it("catálogo: equipa = disponibilidade, aviso de trabalho, morada e regras; recrutamento não", () => {
-    expect(isTeamRetryTemplate("disponibilidade_extras")).toBe(true);
-    expect(isTeamRetryTemplate("aviso_de_trabalho")).toBe(true);
+    expect(isTeamRetryTemplate("driver_availability")).toBe(true);
+    expect(isTeamRetryTemplate("driver_shift_notice")).toBe(true);
+    expect(isTeamRetryTemplate("aviso_de_trabalho")).toBe(false); // nome antigo, fora do catálogo
     expect(isTeamRetryTemplate("morada_e_regras")).toBe(true);
     expect(isTeamRetryTemplate("seja_motorista")).toBe(false);
     expect(isTeamRetryTemplate("alerta_operacional")).toBe(false);
@@ -85,11 +86,11 @@ describe("planTeamRetry (131049)", () => {
 
 describe("fallbackChannelFor", () => {
   it("aviso de escala → email da escala; pedido de disponibilidade → email do pedido; resto → sem equivalente", () => {
-    expect(fallbackChannelFor({ templateName: "aviso_de_trabalho", note: "Aviso de escala 2026-10-05", employeeId: 1 })).toBe("schedule_email");
-    expect(fallbackChannelFor({ templateName: "disponibilidade_extras", note: "Pedido automático de disponibilidade", employeeId: 1 })).toBe("availability_email");
+    expect(fallbackChannelFor({ templateName: "driver_shift_notice", note: "Aviso de escala 2026-10-05", employeeId: 1 })).toBe("schedule_email");
+    expect(fallbackChannelFor({ templateName: "driver_availability", note: "Pedido automático de disponibilidade", employeeId: 1 })).toBe("availability_email");
     expect(fallbackChannelFor({ templateName: "morada_e_regras", note: "Morada e regras (1.º turno) 2026-10-05", employeeId: 1 })).toBe("none");
     expect(fallbackChannelFor({ templateName: "seja_motorista", note: "[LEADS] x", employeeId: null })).toBe("none");
-    expect(fallbackChannelFor({ templateName: "aviso_de_trabalho", note: "Aviso de escala 2026-10-05", employeeId: null })).toBe("none");
+    expect(fallbackChannelFor({ templateName: "driver_shift_notice", note: "Aviso de escala 2026-10-05", employeeId: null })).toBe("none");
   });
 });
 

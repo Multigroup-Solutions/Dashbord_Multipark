@@ -50,6 +50,29 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-10-02 — Templates de equipa novos + botões do aviso + morada em texto livre (Fase 2)
+**Type**: feature. Mesma branch `feat/whatsapp-failure-handling`, NÃO enviada.
+**Scope**: `shared/whatsappTemplate.ts`, `server/extrasAutomation.ts`, `server/whatsappInbound.ts`, `server/whatsappTemplateMeta.ts`, testes (`whatsappTeamTemplates.test.ts` novo, catálogo e política atualizados).
+**What**:
+- **Templates trocados:** `aviso_de_trabalho` passa a `driver_shift_notice` e `disponibilidade_extras` passa a `driver_availability`. Os dois são UTILITY, pt_PT (`TEAM_TEMPLATE_LANGUAGE`), aprovados a 2026-10-02 segundo o Jorge.
+  - Parâmetros: `customer_name` + `day`; `customer_name` + `week_date`, mais o token no botão URL.
+  - Os ids do catálogo (`aviso_trabalho`, `disponibilidade`) não mudaram, por isso a UI não mudou.
+  - `DEFAULT_TEMPLATE_LANGUAGE` continua pt_BR para os outros templates.
+- **Botões do aviso:** "Confirmo" e "Não posso" chegam como `type: "button"` com `context.id`.
+  - O webhook guarda `contextId` e `buttonPayload`.
+  - `handleShiftNoticeButton` encontra o aviso pelo wamid (template `driver_shift_notice`, a mesma conversa, data na nota "Aviso de escala D") e aplica `applyShiftNoticeAnswer`. Essa função foi extraída da resposta por texto, que a usa também.
+  - O efeito é igual ao da resposta por texto: `extras_dia_notices.confirmedAt` / `declinedAt`, a resposta automática e, num "não", `extras_schedule_reply`.
+  - Quando é um botão de um aviso nosso, a leitura genérica do texto não corre. Com `EXTRAS_AUTOMATION` desligado, nada é marcado e a mensagem fica na caixa.
+- **Morada e regras:** o template deixa de ser o caminho normal. Com a janela de 24 h aberta, segue o MESMO conteúdo em texto livre; com a janela fechada, o template `morada_e_regras` continua como recurso.
+  - O texto vem do próprio template na Meta, em tempo de execução (`analysis.freeText`: cabeçalho, corpo, links dos botões e rodapé).
+  - O negrito é normalizado para `*texto*`.
+  - Sem leitura do template, tudo segue pelo template.
+- **`seja_motorista`:** sem mudança (decisão do Jorge). Hoje é disparado à mão em Leads de Extras (tRPC `extraLeads.contact`) e pelo lembrete automático (`LEAD_REMINDERS`): leads contactadas sem resposta há mais de 3 dias, no máximo 2 envios, de segunda a sábado entre as 10h e as 19h.
+**Tests**: tsc limpo; suite completa 3603 passed / 0 failed.
+**Notes**:
+- A estrutura dos templates na Meta NÃO foi lida (não há credenciais locais). A inspeção no envio apanha diferenças antes de enviar.
+- Os avisos antigos já enviados (`aviso_de_trabalho`) não têm botões; as respostas por texto continuam a ser lidas como antes.
+
 ### 2026-10-02 — Falhas de entrega 131026 / 131049 (tarefa "WhatsApp resistente", Fase 1)
 **Type**: feature. Branch `feat/whatsapp-failure-handling`, NÃO enviada (repo trabalha por PR).
 **Migração**: `migration_0375.ts`, aplicada sozinha no arranque e idempotente.

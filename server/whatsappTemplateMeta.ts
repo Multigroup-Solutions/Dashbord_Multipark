@@ -60,6 +60,43 @@ export interface TemplateAnalysis {
   headerNeedingParam?: "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION" | "TEXT" | null;
   /** Categoria na Meta (UTILITY / MARKETING / AUTHENTICATION), gravada com cada envio (0375). */
   category?: string | null;
+  /**
+   * O conteúdo do template como TEXTO LIVRE (cabeçalho de texto, corpo, rodapé
+   * e os links dos botões), com negrito WhatsApp de um asterisco. Usado para
+   * mandar o mesmo conteúdo sem template quando a janela de 24 h está aberta.
+   */
+  freeText?: string;
+}
+
+/** Negrito WhatsApp é `*texto*` (um asterisco): `**texto**` passa a `*texto*`. PURA. */
+export function toWhatsAppBold(text: string): string {
+  return text.replace(/\*\*([^*\n]+?)\*\*/g, "*$1*");
+}
+
+/**
+ * Texto livre equivalente a um template SEM parâmetros. Botões URL/telefone
+ * passam a "Etiqueta: link"; respostas rápidas não fazem sentido em texto e
+ * ficam de fora. PURA.
+ */
+export function templateFreeText(components: any[]): string {
+  const header = findComponent(components, "HEADER");
+  const body = findComponent(components, "BODY");
+  const footer = findComponent(components, "FOOTER");
+  const buttonsComp = findComponent(components, "BUTTONS");
+  const parts: string[] = [];
+  if (String(header?.format ?? "").toUpperCase() === "TEXT" && header?.text) parts.push(`*${String(header.text).trim()}*`);
+  if (body?.text) parts.push(String(body.text).trim());
+  const links = (Array.isArray(buttonsComp?.buttons) ? buttonsComp.buttons : [])
+    .map((b: any) => {
+      const type = String(b?.type ?? "").toUpperCase();
+      if (type === "URL" && b?.url) return `${String(b.text ?? "Link").trim()}: ${String(b.url).trim()}`;
+      if (type === "PHONE_NUMBER" && b?.phone_number) return `${String(b.text ?? "Telefone").trim()}: ${String(b.phone_number).trim()}`;
+      return null;
+    })
+    .filter((v: string | null): v is string => !!v);
+  if (links.length) parts.push(links.join("\n"));
+  if (footer?.text) parts.push(`_${String(footer.text).trim()}_`);
+  return toWhatsAppBold(parts.filter(Boolean).join("\n\n"));
 }
 
 /** Resultado da seleção de uma tradução dentro da resposta da Graph API. */
@@ -162,6 +199,7 @@ export function analyzeTemplateEntry(entry: any): TemplateAnalysis {
     language: String(entry?.language ?? ""),
     status: String(entry?.status ?? "UNKNOWN"),
     category: typeof entry?.category === "string" && entry.category ? entry.category.toUpperCase().slice(0, 16) : null,
+    freeText: templateFreeText(components),
     headerNeedingParam,
     bodyText,
     parameterFormat,

@@ -16,16 +16,43 @@
  * porque a Meta devolveu os parâmetros por outra ordem.
  */
 
-/** Nome EXATO do template aprovado no WhatsApp Manager. */
-export const AVAILABILITY_TEMPLATE_NAME = "disponibilidade_extras";
+/**
+ * Templates de EQUIPA (UTILITY, pt_PT — aprovados 2026-10-02; substituem
+ * `disponibilidade_extras` e `aviso_de_trabalho`, que eram pt_BR e arriscavam
+ * ser tratados como MARKETING → 131049).
+ */
+export const AVAILABILITY_TEMPLATE_NAME = "driver_availability";
+export const SHIFT_NOTICE_TEMPLATE_NAME = "driver_shift_notice";
+export const TEAM_TEMPLATE_LANGUAGE = "pt_PT";
 
 /**
- * Código de língua Meta. `pt_PT` (português europeu) ≠ `pt_BR` ≠ `pt` — a Meta
- * trata-os como traduções DISTINTAS e devolve 132001 se o template não estiver
- * aprovado exatamente nesta. O template `disponibilidade_extras` está aprovado
- * em `pt_BR` no WhatsApp Manager (confirmado 2026-08-04).
+ * Código de língua Meta por omissão (templates escritos à mão no dialog e os
+ * que ainda só existem em pt_BR: `seja_motorista`, `morada_e_regras`).
+ * `pt_PT` ≠ `pt_BR` ≠ `pt` — a Meta trata-os como traduções DISTINTAS e
+ * devolve 132001 se o template não estiver aprovado exatamente nesta.
  */
 export const DEFAULT_TEMPLATE_LANGUAGE = "pt_BR";
+
+/**
+ * Respostas rápidas do `driver_shift_notice`. Chegam ao webhook como mensagem
+ * de tipo `button` com `context.id` = wamid do aviso (é isso que liga a
+ * resposta ao turno).
+ */
+export const SHIFT_NOTICE_CONFIRM_LABEL = "Confirmo";
+export const SHIFT_NOTICE_DECLINE_LABEL = "Não posso";
+
+function foldLabel(v: string): string {
+  return v.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Botão do aviso de turno → resposta; null = não é um destes botões. PURA. */
+export function shiftNoticeButtonAction(text: string | null | undefined): "confirmed" | "declined" | null {
+  const v = foldLabel(String(text ?? ""));
+  if (!v) return null;
+  if (v === foldLabel(SHIFT_NOTICE_CONFIRM_LABEL)) return "confirmed";
+  if (v === foldLabel(SHIFT_NOTICE_DECLINE_LABEL)) return "declined";
+  return null;
+}
 
 /**
  * Nome usado no {{1}} SÓ no envio de TESTE explícito (número escrito à mão que
@@ -111,7 +138,7 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
   {
     id: "disponibilidade",
     name: AVAILABILITY_TEMPLATE_NAME,
-    language: DEFAULT_TEMPLATE_LANGUAGE,
+    language: TEAM_TEMPLATE_LANGUAGE,
     label: "Pedido de disponibilidade",
     description: "Pede ao extra que indique a disponibilidade da semana.",
     sharedParam: {
@@ -119,13 +146,13 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
       placeholder: "ex: semana de 12 a 19 de agosto",
       kind: "week",
     },
-    roles: { recipient: "nome", shared: "semana" },
+    roles: { recipient: "customer_name", shared: "week_date" },
     teamRetry: true,
   },
   {
     id: "aviso_trabalho",
-    name: "aviso_de_trabalho",
-    language: "pt_BR",
+    name: SHIFT_NOTICE_TEMPLATE_NAME,
+    language: TEAM_TEMPLATE_LANGUAGE,
     label: "Aviso de trabalho",
     description: "Avisa o extra de que tem trabalho num dia concreto.",
     sharedParam: {
