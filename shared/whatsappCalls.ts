@@ -106,10 +106,15 @@ export function formatCallTimer(ms: number): string {
  *    (`missed`, mas não entra no "por devolver" — isso é só para recebidas);
  *  - atendida → terminada; a atender (browser não chegou a aceitar) → falhada.
  */
-export function statusAfterTerminate(current: string, direction: CallDirection, metaStatus?: string | null): CallStatus {
+export function statusAfterTerminate(current: string, direction: CallDirection, metaStatus?: string | null, durationSec?: number | null): CallStatus {
   if (current === "rejected" || current === "failed" || current === "missed" || current === "ended") return current as CallStatus;
   if (current === "connected") return "ended";
   const ms = String(metaStatus ?? "").toLowerCase();
+  // A Meta dá duração (> 0) só a chamadas que ligaram: foi atendida, mesmo que
+  // o aviso de "atendida" chegue depois deste (17c). Antes ficava "não
+  // atendida" e contava para o limite das chamadas sem resposta. (O status
+  // "COMPLETED" vem em qualquer fim — não chega.)
+  if ((durationSec ?? 0) > 0) return "ended";
   if (direction === "out") {
     if (ms.includes("reject")) return "rejected";
     if (ms.includes("fail")) return "failed";
@@ -117,6 +122,15 @@ export function statusAfterTerminate(current: string, direction: CallDirection, 
   }
   if (current === "answering") return "failed";
   return "missed";
+}
+
+/**
+ * Chamada RECEBIDA que nunca chegou a ligar (perdida, ou "falhou" a atender:
+ * o cliente desligou, a Meta recusou, o browser falhou) → conta como perdida
+ * para a lista "por devolver" e o aviso (17c). PURA.
+ */
+export function countsAsMissed(direction: CallDirection, final: string): boolean {
+  return direction === "in" && (final === "missed" || final === "failed");
 }
 
 /** Estado depois de um "status" (RINGING/ACCEPTED/REJECTED) da Meta. PURA; null = não muda. */
@@ -188,10 +202,14 @@ export function canRequestPermission(json: string | null | undefined, now: numbe
   return { ok: true };
 }
 
+/** "dd/mm hh:mm" em hora de Lisboa (17c — antes dizia "… UTC" a quem lê). */
 function fmtRetry(ms: number): string {
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(new Date(ms))
+      .map((p) => [p.type, p.value]),
+  );
+  return `${parts.day}/${parts.month} ${parts.hour}:${parts.minute}`;
 }
 
 /** Validade de uma autorização aceite (webhook). PURA. */
@@ -243,7 +261,7 @@ export function callTimelineLabel(c: CallTimelineInput, time: string): string {
 export function describeCallError(code: number | undefined, message?: string | null): string {
   switch (code) {
     case 138000:
-      return "As chamadas não estão ativas neste número (super admin: WhatsApp → Chamadas → Configuração, ou WhatsApp Manager).";
+      return "As chamadas não estão ativas neste número (super admin: WhatsApp → Por devolver → Configuração das chamadas, ou WhatsApp Manager).";
     case 138001:
       return "O cliente não pode receber chamadas do WhatsApp (sem WhatsApp, termos por aceitar ou app sem chamadas).";
     case 138002:

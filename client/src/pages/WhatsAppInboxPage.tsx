@@ -484,6 +484,7 @@ export default function WhatsAppInboxPage() {
         isFetching={conversations.isFetching}
         showShortcuts={!isMobile}
         pendingCallbacks={pendingCallbacks.data?.length ?? 0}
+        pendingCallbacksError={callsOn && !!pendingCallbacks.error}
         onOpenCallbacks={() => setCallbacksOpen(true)}
       />
       <div className="flex-1 overflow-y-auto overscroll-contain">
@@ -923,6 +924,11 @@ export default function WhatsAppInboxPage() {
           {thread.error && (
             <div className="px-3 py-2 border-b shrink-0">
               <QueryErrorNote error={thread.error} onRetry={() => thread.refetch()} retrying={thread.isFetching} what="esta conversa" />
+            </div>
+          )}
+          {callsOn && convCalls.error && !thread.error && (
+            <div className="px-3 py-2 border-b shrink-0">
+              <QueryErrorNote error={convCalls.error} onRetry={() => convCalls.refetch()} retrying={convCalls.isFetching} what="as chamadas desta conversa" />
             </div>
           )}
 

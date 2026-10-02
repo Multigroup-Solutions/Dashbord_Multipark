@@ -25,12 +25,12 @@
  * Nunca se regista SDP nem números completos (maskPhone). O parse do webhook e
  * a lógica do serviço são testáveis sem BD (repositório injetável).
  */
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { maskPhone } from "../shared/maskPhone";
 import {
   ANSWERING_STALE_MS, CONNECTED_STALE_MS, DIALING_STALE_MS, MAX_CONNECTED_CALLS_24H, RING_TIMEOUT_MS, RING_VISIBLE_MS,
   UNANSWERED_REVOKE, UNANSWERED_WARN, appendRequestTime, canRequestPermission, dbUtcMs, effectivePermission, isLiveCallStatus,
-  permissionFromReply, statusAfterMetaStatus, statusAfterTerminate, toDbUtc,
+  countsAsMissed, permissionFromReply, statusAfterMetaStatus, statusAfterTerminate, toDbUtc,
   type CallDirection, type CallStatus, type PermissionRow, type PermissionStatus,
 } from "../shared/whatsappCalls";
 
@@ -298,7 +298,7 @@ export async function applyCallEvents(events: CallWebhookEvent[], deps: CallDeps
       // Até 2 tentativas: outro pedido pode ter mudado o estado entretanto.
       for (let attempt = 0; attempt < 2 && row; attempt++) {
         if (!isLiveCallStatus(row.status)) { out.deduped++; break; }
-        const final = statusAfterTerminate(row.status, row.direction, ev.status);
+        const final = statusAfterTerminate(row.status, row.direction, ev.status, ev.durationSec);
         const endedAt = ev.timestamp ?? nowS;
         let durationSec = final === "ended" ? ev.durationSec : null;
         if (final === "ended" && durationSec == null && row.answeredAt) {
@@ -308,12 +308,12 @@ export async function applyCallEvents(events: CallWebhookEvent[], deps: CallDeps
         }
         const set: Partial<CallRow> = {
           status: final, endedAt, durationSec, sdpOffer: null, sdpAnswer: null, metaStatus: ev.status,
-          missed: row.direction === "in" && final === "missed" ? 1 : 0,
+          missed: countsAsMissed(row.direction, final) ? 1 : 0,
           ...(ev.error ? { endReason: ev.error } : {}),
         };
         if (await repo.transition(row.id, [row.status], set)) {
           out.terminates++;
-          if (row.direction === "in" && final === "missed") {
+          if (countsAsMissed(row.direction, final)) {
             out.missed.push(row.id);
             if (row.conversationId) await repo.touchConversation(row.conversationId, { at: endedAt, preview: "📞 Chamada perdida", inbound: false, needsAttention: true });
           }
@@ -374,21 +374,22 @@ export async function releaseCall(id: number, userId: number, deps: CallDeps): P
 }
 
 /** Resposta SDP do browser → pre_accept + accept na Meta. */
-export async function answerCall(id: number, userId: number, sdpAnswer: string, deps: CallDeps): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function answerCall(id: number, userId: number, sdpAnswer: string, deps: CallDeps): Promise<{ ok: true } | { ok: false; error: string; missed?: true }> {
   const { repo, api } = deps;
   const row = await repo.getById(id);
   if (!row || row.status !== "answering" || row.answeredByUserId !== userId) return { ok: false, error: "Esta chamada já não está contigo." };
   const pre = await api.callAction("pre_accept", row.callId, sdpAnswer);
   if (!pre.ok) {
-    await repo.transition(id, ["answering"], { status: "failed", endedAt: toDbUtc(nowOf(deps)), sdpOffer: null, endReason: pre.error.slice(0, 200) });
+    // Nunca ligou → conta como perdida (por devolver + aviso, 17c).
+    const marked = await repo.transition(id, ["answering"], { status: "failed", missed: 1, endedAt: toDbUtc(nowOf(deps)), sdpOffer: null, endReason: pre.error.slice(0, 200) });
     await api.callAction("reject", row.callId).catch(() => undefined);
-    return { ok: false, error: `Não foi possível atender: ${pre.error}` };
+    return { ok: false, error: `Não foi possível atender: ${pre.error}`, ...(marked ? { missed: true as const } : {}) };
   }
   const acc = await api.callAction("accept", row.callId, sdpAnswer);
   if (!acc.ok) {
-    await repo.transition(id, ["answering"], { status: "failed", endedAt: toDbUtc(nowOf(deps)), sdpOffer: null, endReason: acc.error.slice(0, 200) });
+    const marked = await repo.transition(id, ["answering"], { status: "failed", missed: 1, endedAt: toDbUtc(nowOf(deps)), sdpOffer: null, endReason: acc.error.slice(0, 200) });
     await api.callAction("terminate", row.callId).catch(() => undefined);
-    return { ok: false, error: `Não foi possível atender: ${acc.error}` };
+    return { ok: false, error: `Não foi possível atender: ${acc.error}`, ...(marked ? { missed: true as const } : {}) };
   }
   // `answering → connected`; se a Meta já mandou terminate entretanto, fica como está.
   await repo.transition(id, ["answering"], { status: "connected", answeredAt: toDbUtc(nowOf(deps)), sdpOffer: null });
@@ -418,7 +419,11 @@ export async function hangupCall(id: number, user: { id: number; role: string },
   const mine = row.answeredByUserId === user.id || row.startedByUserId === user.id || user.role === "super_admin";
   if (!mine) return { ok: false, error: "Só quem está na chamada a pode desligar." };
   if (!isLiveCallStatus(row.status)) return { ok: true };
-  const res = await api.callAction("terminate", row.callId);
+  // Recebida ainda não ligada: na Meta é "reject" (o "terminate" é para
+  // chamadas ligadas — a confirmar) — senão o cliente podia continuar a ouvir
+  // tocar. Se a Meta recusar o reject, tenta o terminate.
+  let res = row.direction === "in" && row.status !== "connected" ? await api.callAction("reject", row.callId) : await api.callAction("terminate", row.callId);
+  if (!res.ok && row.direction === "in" && row.status !== "connected") res = await api.callAction("terminate", row.callId);
   const now = nowOf(deps);
   const final: CallStatus = row.status === "connected" ? "ended" : row.direction === "out" ? "missed" : "failed";
   let durationSec: number | null = null;
@@ -426,7 +431,7 @@ export async function hangupCall(id: number, user: { id: number; role: string },
     const a = dbUtcMs(row.answeredAt);
     if (a != null) durationSec = Math.max(0, Math.round((now - a) / 1000));
   }
-  await repo.transition(id, [row.status], { status: final, endedAt: toDbUtc(now), durationSec, sdpOffer: null, sdpAnswer: null });
+  await repo.transition(id, [row.status], { status: final, endedAt: toDbUtc(now), durationSec, sdpOffer: null, sdpAnswer: null, missed: countsAsMissed(row.direction, final) ? 1 : 0 });
   return res.ok || res.code === 138002 ? { ok: true } : { ok: false, error: `Desligado no dashboard; a Meta respondeu: ${res.error}` };
 }
 
@@ -570,11 +575,11 @@ export async function sweepStaleCalls(deps: CallDeps): Promise<{ closed: number;
   for (const row of await deps.repo.listStale(now)) {
     const final = staleOutcome(row, now);
     if (!final) continue;
-    const set: Partial<CallRow> = { status: final, endedAt: toDbUtc(now), sdpOffer: null, sdpAnswer: null, missed: row.direction === "in" && final === "missed" ? 1 : 0 };
+    const set: Partial<CallRow> = { status: final, endedAt: toDbUtc(now), sdpOffer: null, sdpAnswer: null, missed: countsAsMissed(row.direction, final) ? 1 : 0 };
     if (final === "ended" && row.answeredAt) set.durationSec = Math.max(0, Math.round((now - (dbUtcMs(row.answeredAt) ?? now)) / 1000));
     if (await deps.repo.transition(row.id, [row.status], set)) {
       out.closed++;
-      if (row.direction === "in" && final === "missed") {
+      if (countsAsMissed(row.direction, final)) {
         out.missed.push(row.id);
         if (row.conversationId) await deps.repo.touchConversation(row.conversationId, { at: toDbUtc(now), preview: "📞 Chamada perdida", inbound: false, needsAttention: true });
       }
@@ -687,7 +692,7 @@ export function createDbCallRepo(): CallRepo {
       const res = await db
         .update(whatsappCalls)
         .set({ callbackDoneAt: at, callbackByUserId: userId })
-        .where(and(eq(whatsappCalls.phoneE164, phoneE164), eq(whatsappCalls.direction, "in"), inArray(whatsappCalls.status, ["missed", "rejected"]), isNull(whatsappCalls.callbackDoneAt)));
+        .where(and(eq(whatsappCalls.phoneE164, phoneE164), eq(whatsappCalls.direction, "in"), or(inArray(whatsappCalls.status, ["missed", "rejected"]), eq(whatsappCalls.missed, 1)), isNull(whatsappCalls.callbackDoneAt)));
       return affected(res);
     },
     async getPermission(phoneE164) {
@@ -833,7 +838,9 @@ export async function notifyMissedCall(call: CallRow): Promise<void> {
       kind: "whatsapp_missed_call",
       projectId: call.projectId,
       title: `Chamada perdida no WhatsApp: ${name}`,
-      body: `${name} ligou às ${formatLisbonTime(call.startedAt)} e ninguém atendeu. Devolve a chamada na conversa (botão Ligar).`,
+      body: call.status === "failed"
+        ? `${name} ligou às ${formatLisbonTime(call.startedAt)}; alguém carregou em Atender mas a chamada não chegou a ligar. Devolve a chamada na conversa (botão Ligar).`
+        : `${name} ligou às ${formatLisbonTime(call.startedAt)} e ninguém atendeu. Devolve a chamada na conversa (botão Ligar).`,
       link: call.conversationId ? `/whatsapp?c=${call.conversationId}` : "/whatsapp",
       entity: { type: "whatsapp_call", id: call.id },
     });

@@ -163,10 +163,16 @@ export function WhatsAppCallManager({ enabled, userId }: { enabled: boolean; use
   async function onAnswer(c: (typeof rows)[number]) {
     setBusyId(c.id);
     stopRingtone();
-    const err = await answerIncoming(client, { id: c.id, name: c.name, subtitle: subtitleOf(c), conversationId: c.conversationId });
-    setBusyId(null);
-    if (err) toast.error(err);
-    void incoming.refetch();
+    try {
+      const err = await answerIncoming(client, { id: c.id, name: c.name, subtitle: subtitleOf(c), conversationId: c.conversationId });
+      if (err) toast.error(err);
+    } catch (e: any) {
+      toast.error(String(e?.message ?? "Não foi possível atender."));
+    } finally {
+      // Os botões nunca ficam presos (17c).
+      setBusyId(null);
+      void incoming.refetch();
+    }
   }
 
   async function onReject(c: (typeof rows)[number]) {

@@ -137,7 +137,13 @@ export interface CallClient {
 /** "Atender": ganha a chamada, cria a resposta SDP e aceita. Devolve a mensagem de erro, se houver. */
 export async function answerIncoming(client: CallClient, call: { id: number; name: string; subtitle: string | null; conversationId: number | null }): Promise<string | null> {
   if (active && active.phase !== "ended") return "Já estás numa chamada.";
-  const claim = await client.whatsapp.calls.claim.mutate({ id: call.id });
+  // Um erro de rede/acesso aqui já não deixa os botões presos (17c).
+  let claim: Awaited<ReturnType<CallClient["whatsapp"]["calls"]["claim"]["mutate"]>>;
+  try {
+    claim = await client.whatsapp.calls.claim.mutate({ id: call.id });
+  } catch (e: any) {
+    return String(e?.message ?? "Não foi possível atender.");
+  }
   if (!claim.ok) return claim.message;
   active = { id: call.id, direction: "in", conversationId: claim.conversationId ?? call.conversationId, name: call.name, subtitle: call.subtitle, phase: "connecting", connectedAt: null, muted: false, message: null, remoteAnswerApplied: true };
   emit();
@@ -150,26 +156,35 @@ export async function answerIncoming(client: CallClient, call: { id: number; nam
     return String(e?.message ?? e);
   }
   session = s;
+  let answerSent = false;
   try {
     await s.pc.setRemoteDescription({ type: "offer", sdp: claim.sdpOffer });
     const answer = await s.pc.createAnswer();
     await s.pc.setLocalDescription(answer);
     await waitIceComplete(s.pc);
     const sdp = s.pc.localDescription?.sdp ?? answer.sdp ?? "";
+    answerSent = true;
     await client.whatsapp.calls.answer.mutate({ id: call.id, sdp });
     set({ phase: "connected", connectedAt: Date.now() });
     return null;
   } catch (e: any) {
     closeSession();
+    // O browser falhou ANTES de responder à Meta: a chamada volta a tocar para
+    // os outros (antes ficava presa a esta pessoa até expirar).
+    if (!answerSent) await client.whatsapp.calls.release.mutate({ id: call.id }).catch(() => undefined);
     set({ phase: "ended", message: String(e?.message ?? "Não foi possível atender.") });
     return String(e?.message ?? "Não foi possível atender.");
   }
 }
 
+/** "Desligar" carregado antes de o servidor devolver o id da chamada nossa (17c). */
+let cancelPendingStart = false;
+
 /** "Ligar": oferta SDP → connect. A resposta SDP chega pelo polling do estado (applyRemoteAnswer). */
 export async function startOutbound(client: CallClient, conv: { conversationId: number; name: string; subtitle: string | null }): Promise<{ error: string | null; warning: string | null }> {
   if (active && active.phase !== "ended") return { error: "Já estás numa chamada.", warning: null };
   active = { id: null, direction: "out", conversationId: conv.conversationId, name: conv.name, subtitle: conv.subtitle, phase: "connecting", connectedAt: null, muted: false, message: null, remoteAnswerApplied: false };
+  cancelPendingStart = false;
   emit();
   try {
     const s = await openSession();
@@ -177,8 +192,17 @@ export async function startOutbound(client: CallClient, conv: { conversationId: 
     const offer = await s.pc.createOffer({ offerToReceiveAudio: true });
     await s.pc.setLocalDescription(offer);
     await waitIceComplete(s.pc);
+    if (cancelPendingStart) { closeSession(); return { error: null, warning: null }; }
     const sdp = s.pc.localDescription?.sdp ?? offer.sdp ?? "";
     const r = await client.whatsapp.calls.start.mutate({ conversationId: conv.conversationId, sdp });
+    if (cancelPendingStart) {
+      // "Desligar" durante a preparação: a chamada acabou de nascer na Meta —
+      // desliga-a já, sem reabrir o painel (antes o telemóvel do cliente tocava).
+      cancelPendingStart = false;
+      closeSession();
+      await client.whatsapp.calls.hangup.mutate({ id: r.id }).catch(() => undefined);
+      return { error: null, warning: null };
+    }
     set({ id: r.id, phase: "dialing" });
     return { error: null, warning: r.warning };
   } catch (e: any) {
@@ -223,6 +247,7 @@ export function endLocal(message: string | null = null) {
 
 export async function hangup(client: CallClient): Promise<string | null> {
   const id = active?.id;
+  if (!id && active?.direction === "out" && active.phase === "connecting") cancelPendingStart = true;
   endLocal("Chamada terminada.");
   if (!id) return null;
   try {

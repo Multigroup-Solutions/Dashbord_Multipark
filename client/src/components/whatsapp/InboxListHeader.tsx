@@ -88,6 +88,7 @@ export function InboxListHeader({
   isFetching,
   showShortcuts,
   pendingCallbacks,
+  pendingCallbacksError = false,
   onOpenCallbacks,
 }: {
   search: string;
@@ -102,6 +103,8 @@ export function InboxListHeader({
   isFetching: boolean;
   showShortcuts: boolean;
   pendingCallbacks: number;
+  /** Leitura das chamadas por devolver falhou: mostra-se (não desaparece). */
+  pendingCallbacksError?: boolean;
   onOpenCallbacks: () => void;
 }) {
   const active = activeInboxFilterCount(filters);
@@ -132,6 +135,16 @@ export function InboxListHeader({
             >
               <PhoneMissed className="h-3 w-3" />
               {pendingCallbacks} por devolver
+            </button>
+          )}
+          {pendingCallbacksError && pendingCallbacks === 0 && (
+            <button
+              type="button"
+              onClick={onOpenCallbacks}
+              className="inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900"
+              title="Não foi possível ler as chamadas por devolver — abre para tentar de novo"
+            >
+              <PhoneMissed className="h-3 w-3" /> por devolver: ?
             </button>
           )}
           {showShortcuts && (

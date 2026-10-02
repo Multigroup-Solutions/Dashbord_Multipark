@@ -17,13 +17,15 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { callTimelineLabel, dbUtcMs } from "@shared/whatsappCalls";
 import { startOutbound, useActiveCall, webrtcSupported, type CallClient } from "@/lib/whatsappCall";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
+/** Hora (e dia) em hora de Lisboa, seja qual for o fuso do aparelho (17c). */
 function fmtLocal(s: string | null, withDate = false): string {
   const ms = dbUtcMs(s);
   if (ms == null) return "";
   const d = new Date(ms);
-  const time = d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" });
-  return withDate ? `${d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" })} ${time}` : time;
+  const time = d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Lisbon" });
+  return withDate ? `${d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", timeZone: "Europe/Lisbon" })} ${time}` : time;
 }
 
 // ─── Entrada na conversa ────────────────────────────────────────────────────
@@ -197,37 +199,40 @@ export function PendingCallbacksDialog({
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><PhoneMissed className="h-5 w-5 text-red-600" /> Chamadas perdidas por devolver</DialogTitle>
-            <DialogDescription>Chamadas de clientes dos últimos 7 dias que ninguém atendeu (ou foram recusadas). Saem da lista quando alguém devolve a chamada com sucesso ou as marca como devolvidas.</DialogDescription>
+            <DialogDescription>Chamadas de clientes dos últimos 7 dias que nunca chegaram a ligar: ninguém atendeu, foram recusadas, ou alguém carregou em Atender e o áudio não ligou. Saem da lista quando alguém devolve a chamada com sucesso ou as marca como devolvidas.</DialogDescription>
           </DialogHeader>
           <div className="max-h-[50vh] overflow-y-auto divide-y border rounded-md">
             {list.isLoading && <div className="p-3 text-sm text-muted-foreground">A carregar…</div>}
-            {!list.isLoading && !(list.data ?? []).length && <div className="p-3 text-sm text-muted-foreground">Nada por devolver. 🎉</div>}
+            {list.error && <div className="p-2"><QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="as chamadas por devolver" /></div>}
+            {!list.isLoading && !list.error && !(list.data ?? []).length && <div className="p-3 text-sm text-muted-foreground">Nada por devolver. 🎉</div>}
             {(list.data ?? []).map((c) => (
-              <div key={c.id} className="p-2.5 flex items-center gap-2 text-sm">
+              <div key={c.id} className="p-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                 <PhoneMissed className="h-4 w-4 text-red-600 shrink-0" />
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-[11rem]">
                   <div className="font-medium truncate">{c.name}</div>
                   <div className="text-xs text-muted-foreground">
-                    {fmtLocal(c.startedAt, true)}{c.attempts > 1 ? ` · ${c.attempts} tentativas` : ""}{c.status === "rejected" ? " · recusada" : ""}
+                    {fmtLocal(c.startedAt, true)}{c.attempts > 1 ? ` · ${c.attempts} tentativas` : ""}{c.status === "rejected" ? " · recusada" : c.status === "failed" ? " · tentou-se atender, não ligou" : ""}
                   </div>
                 </div>
-                {c.conversationId != null && (
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { onOpenConversation(c.conversationId!); onOpenChange(false); }}>
-                    Abrir
-                  </Button>
-                )}
-                {canEdit && (
-                  <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={done.isPending} onClick={() => done.mutate({ id: c.id })}>
-                    Devolvida
-                  </Button>
-                )}
+                <div className="ml-auto flex items-center gap-2">
+                  {c.conversationId != null && (
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { onOpenConversation(c.conversationId!); onOpenChange(false); }}>
+                      Abrir
+                    </Button>
+                  )}
+                  {canEdit && (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={done.isPending} onClick={() => done.mutate({ id: c.id })}>
+                      Devolvida
+                    </Button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
           {isSuperAdmin && (
             <DialogFooter>
-              <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
-                <Settings2 className="h-4 w-4 mr-1.5" /> Configuração das chamadas (Meta)
+              <Button variant="outline" size="sm" className="h-auto min-h-8 whitespace-normal text-left" onClick={() => setSettingsOpen(true)}>
+                <Settings2 className="h-4 w-4 mr-1.5 shrink-0" /> Configuração das chamadas (Meta)
               </Button>
             </DialogFooter>
           )}
@@ -296,6 +301,9 @@ export function CallSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
         </DialogHeader>
         {q.isLoading ? (
           <p className="text-sm text-muted-foreground">A ler da Meta…</p>
+        ) : q.error ? (
+          // Leitura falhada ≠ "chamadas desligadas" (17c): sem dados não se mostra o formulário.
+          <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="a configuração das chamadas" />
         ) : q.data && !q.data.ok ? (
           <p className="text-sm text-red-700">{q.data.error}</p>
         ) : (
@@ -319,12 +327,14 @@ export function CallSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
               <div className="space-y-1.5 border rounded-md p-2">
                 <p className="text-[11px] text-muted-foreground">Fuso: Europe/Lisbon</p>
                 {DAYS.map((d) => (
-                  <div key={d.id} className="flex items-center gap-2">
+                  <div key={d.id} className="flex items-center gap-x-2 gap-y-1 flex-wrap">
                     <Switch checked={days[d.id].on} onCheckedChange={(v) => setDays((s) => ({ ...s, [d.id]: { ...s[d.id], on: v } }))} aria-label={d.label} />
                     <span className="w-20">{d.label}</span>
-                    <Input type="time" className="h-8 w-28" disabled={!days[d.id].on} value={days[d.id].open} onChange={(e) => setDays((s) => ({ ...s, [d.id]: { ...s[d.id], open: e.target.value } }))} />
-                    <span>–</span>
-                    <Input type="time" className="h-8 w-28" disabled={!days[d.id].on} value={days[d.id].close} onChange={(e) => setDays((s) => ({ ...s, [d.id]: { ...s[d.id], close: e.target.value } }))} />
+                    <span className="flex items-center gap-2 w-full sm:w-auto">
+                      <Input type="time" className="h-8 min-w-0 flex-1 px-2 text-sm sm:flex-none sm:w-28" disabled={!days[d.id].on} value={days[d.id].open} onChange={(e) => setDays((s) => ({ ...s, [d.id]: { ...s[d.id], open: e.target.value } }))} />
+                      <span>–</span>
+                      <Input type="time" className="h-8 min-w-0 flex-1 px-2 text-sm sm:flex-none sm:w-28" disabled={!days[d.id].on} value={days[d.id].close} onChange={(e) => setDays((s) => ({ ...s, [d.id]: { ...s[d.id], close: e.target.value } }))} />
+                    </span>
                   </div>
                 ))}
               </div>
