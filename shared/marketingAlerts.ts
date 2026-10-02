@@ -43,7 +43,8 @@ export interface SyncHealth {
 
 export interface AlertsInput {
   windowCampaigns: Array<{ name: string; accountName: string | null; cost: number; conversions: number; attributedBookings: number }>;
-  attribution: AttributionQuality;
+  /** null = reservas da Multipark indisponíveis (19a): sem alertas que dependem delas */
+  attribution: AttributionQuality | null;
   windowSpend: number;
   /** conversões Google na mesma janela */
   windowConversions?: number;
@@ -79,9 +80,18 @@ const eur = (v: number) => EUR0.format(Math.round(v));
 
 export function computeMarketingAlerts(i: AlertsInput): MarketingAlert[] {
   const out: MarketingAlert[] = [];
-  const health = attributionHealth(i.attribution, i.windowSpend, i.windowConversions);
-  const attributionBroken = health.level === "critical";
-  if (attributionBroken) {
+  // Reservas indisponíveis (19a): não se acusa "atribuição partida" nem
+  // "campanha sem resultados" por falta de reservas que não se conseguiram ler.
+  const bookingsUnavailable = i.attribution == null;
+  if (bookingsUnavailable) {
+    out.push({
+      level: "warning", code: "bookings_unavailable", title: "Reservas da Multipark indisponíveis",
+      detail: "A base de dados da Multipark não respondeu: os alertas de atribuição e de campanhas sem resultados ficam suspensos até voltar. O gasto e as recolhas continuam verificados.",
+    });
+  }
+  const health = bookingsUnavailable ? null : attributionHealth(i.attribution!, i.windowSpend, i.windowConversions);
+  const attributionBroken = health?.level === "critical";
+  if (attributionBroken && health) {
     out.push({ level: "critical", code: "attribution_broken", title: "Atribuição partida", detail: health.message, link: "/marketing" });
   }
 
@@ -97,7 +107,7 @@ export function computeMarketingAlerts(i: AlertsInput): MarketingAlert[] {
     });
   }
 
-  const wasting = i.windowCampaigns
+  const wasting = bookingsUnavailable ? [] : i.windowCampaigns
     .filter((c) => c.cost >= WASTE_MIN_SPEND && c.conversions <= 0 && (attributionBroken || c.attributedBookings === 0))
     .sort((a, b) => b.cost - a.cost);
   if (wasting.length) {

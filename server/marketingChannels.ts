@@ -12,17 +12,18 @@
  *     período, custo por cliente novo, peso dos clientes repetentes e quanto
  *     vale (historicamente) um cliente de cada canal.
  *
- * Tudo com âmbito de cidade (`projectScope`) e filtro de projeto, como o resto.
+ * Tudo com âmbito de cidade e filtro de projeto, como o resto.
  * Cancelada e dia = as MESMAS regras das Reservas & Operações (24 set 2026):
- * `status = 'CANCELLED'` e dias de Lisboa sobre `bookingCreatedAt` em UTC.
+ * `status = 'CANCELLED'` e dias de Lisboa sobre a criação em UTC.
  * Emails da casa ficam de fora (INTERNAL_EMAIL_DOMAINS do CRM).
+ *
+ * Comissões (19a): a MESMA regra da Faturação (finance/rules.commissionFor) —
+ * base sem IVA (salvo parceiro "com IVA") e taxa em falta assinalada, nunca
+ * contada como 0 %. Antes: receita com IVA × taxa, e taxa em falta = 0 %.
  */
-import { sql, type SQL } from "drizzle-orm";
-import { projectScope, scopedProjectIds } from "./cityScope";
-import { INTERNAL_EMAIL_DOMAINS } from "../shared/crmIdentity";
-import { VISITED_STATUSES } from "./crm/summary";
+import { scopedProjectIds } from "./cityScope";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
-import { CANCELLED_STATUS } from "../shared/marketingRules";
+import { commissionFor } from "./finance/rules";
 import { CHANNEL_LABEL, CHANNEL_ORDER, GROUP_LABEL, GROUP_ORDER, channelOf, groupOf, parseFirstBooking, type ChannelGroup, type ChannelKey } from "../shared/marketingChannels";
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -32,7 +33,15 @@ function rows<T = any>(r: any): T[] {
   return (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r) as T[];
 }
 
-export interface PartnerLite { id: number; name: string; commissionRate: number }
+export interface PartnerLite {
+  id: number; name: string;
+  /** null = taxa em falta */
+  commissionRate: number | null;
+  /** NULL = nunca gravado por um admin (0 % vindo da sincronização = taxa em falta) */
+  configuredAt?: string | null;
+  /** 'net' (sem IVA, omissão) | 'gross' */
+  commissionBase?: string | null;
+}
 
 export interface ChannelRow {
   key: ChannelKey; label: string; group: ChannelGroup;
@@ -65,7 +74,7 @@ export interface ValueByChannel {
 export interface ChannelsResult {
   range: { from: string; to: string };
   groups: GroupRow[];
-  partners: Array<{ name: string; bookings: number; revenue: number; commissionRate: number; commission: number }>;
+  partners: Array<{ name: string; bookings: number; revenue: number; commissionRate: number | null; commission: number; /** taxa em falta (comissão não contada) */ rateMissing: boolean }>;
   bookingsTotal: number;
   /** gasto Google Ads do período (custo do grupo "anúncios") */
   adSpend: number;
@@ -89,6 +98,8 @@ export function buildChannels(
   range: { from: string; to: string },
   adSpend: number,
   partnerFor: (campaign: string) => PartnerLite | undefined,
+  /** IVA do período (comissão sobre a receita sem IVA, como na Faturação) */
+  vatRate = 0.23,
 ): ChannelsResult {
   const hasPartner = (c: string) => !!partnerFor(c);
   const rows = new Map<string, ChannelRow>();
@@ -108,10 +119,11 @@ export function buildChannels(
     bookingsTotal += m.bookings; withEmail += m.withEmail;
     const p = key === "parceiro" && m.campaign ? partnerFor(m.campaign.trim()) : undefined;
     if (p) {
-      const commission = m.revenue * (p.commissionRate / 100);
-      commissions += commission;
-      const ex = partners.get(p.name) ?? { name: p.name, bookings: 0, revenue: 0, commissionRate: p.commissionRate, commission: 0 };
-      ex.bookings += m.bookings; ex.revenue += m.revenue; ex.commission += commission;
+      const c = commissionFor(m.revenue, { ...p, updatedAt: "" }, m.revenue / (1 + vatRate));
+      commissions += c.commission;
+      const ex = partners.get(p.name) ?? { name: p.name, bookings: 0, revenue: 0, commissionRate: p.commissionRate, commission: 0, rateMissing: false };
+      ex.bookings += m.bookings; ex.revenue += m.revenue; ex.commission += c.commission;
+      if (c.status === "rate_missing") ex.rateMissing = true;
       partners.set(p.name, ex);
     }
   }
@@ -183,15 +195,7 @@ export function mixFromBookings(bookings: Array<{ origin: string | null; adAttri
   return [...m.values()];
 }
 
-// ─── Queries ─────────────────────────────────────────────────────────────────
-function scopeWhere(projectIds?: number[] | null): SQL {
-  const proj = projectIds && projectIds.length
-    ? sql` AND b.projectId IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})`
-    : projectIds && !projectIds.length ? sql` AND 1 = 0` : sql``;
-  return sql`${projectScope(sql`b.projectId`)}${proj}`;
-}
-const NOT_CANCELLED = sql`COALESCE(b.status, '') <> ${CANCELLED_STATUS}`;
-const inPeriod = (from: string, to: string) => { const r = lisbonDayRangeUtc(from, to); return sql`(b.bookingCreatedAt >= ${r.start} AND b.bookingCreatedAt < ${r.end})`; };
+// ─── Leitura ─────────────────────────────────────────────────────────────────
 const cache = new Map<string, { at: number; value: ChannelsResult }>();
 export function invalidateChannelsCache(): void { cache.clear(); }
 
@@ -201,19 +205,22 @@ export async function getChannels(db: any, f: { from: string; to: string; projec
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   // Reservas e clientes AO VIVO da BD da Multipark (server/marketingLive.ts).
-  const { buildPartnerByCampaignMap } = await import("./db");
+  // Parceiros pelo MESMO índice da Faturação (taxa em falta fica null, não 0).
   const { loadMarketingBookings, loadMarketingClients } = await import("./marketingLive");
-  const [bookings, clients, partnerMap] = await Promise.all([
+  const { loadPartnerIndex } = await import("./finance/partners");
+  const { vatRateForPeriod } = await import("./finance/rates");
+  const [bookings, clients, partnerIndex, vat] = await Promise.all([
     loadMarketingBookings(f.from, f.to, f.projectIds),
     loadMarketingClients(f.from, f.to, f.projectIds),
-    buildPartnerByCampaignMap(),
+    loadPartnerIndex(db),
+    vatRateForPeriod(f.from, f.to),
   ]);
   const mix = mixFromBookings(bookings);
   const partnerFor = (c: string): PartnerLite | undefined => {
-    const p = partnerMap.get(c.trim().toLowerCase());
-    return p ? { id: p.id, name: p.name, commissionRate: Number(p.commissionRate ?? 0) } : undefined;
+    const p = partnerIndex.index.byKey.get(c.trim().toLowerCase());
+    return p ? { id: p.id, name: p.name, commissionRate: p.commissionRate ?? null, configuredAt: p.configuredAt, commissionBase: p.commissionBase ?? null } : undefined;
   };
-  const value = { ...buildChannels(mix, clients, { from: f.from, to: f.to }, f.adSpend, partnerFor), googleConversions: f.adConversions ?? 0 };
+  const value = { ...buildChannels(mix, clients, { from: f.from, to: f.to }, f.adSpend, partnerFor, vat), googleConversions: f.adConversions ?? 0 };
   cache.set(key, { at: Date.now(), value });
   return value;
 }

@@ -28,6 +28,7 @@ import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContai
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import FitAmount from "@/components/finance/FitAmount";
 import { eurAxis, eurCompact } from "@/lib/financeFormat";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 function lisbonDay(d = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
@@ -73,9 +74,13 @@ export default function MarketingDashboardPanel() {
   const [to, setTo] = useState(today);
   const [showTable, setShowTable] = useState(false);
   const { projectId } = useGlobalFilters();
-  const { data, isLoading, error } = trpc.marketing.dashboard.useQuery({ from, to, projectId });
-  const { data: alertsData } = trpc.marketing.alerts.useQuery({ projectId });
+  const dashQ = trpc.marketing.dashboard.useQuery({ from, to, projectId });
+  const { data, isLoading, error } = dashQ;
+  const alertsQ = trpc.marketing.alerts.useQuery({ projectId });
+  const alertsData = alertsQ.data;
   const st: any = data;
+  /** 19a: reservas da Multipark indisponíveis → "—" e aviso (nunca 0) */
+  const noBookings = !!st?.bookingsError;
 
   const series = useMemo(() => {
     if (!st) return [];
@@ -92,6 +97,7 @@ export default function MarketingDashboardPanel() {
   }, [st, from, to]);
 
   const q: AttributionQuality = st?.attributionQuality ?? { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
+  const hasAttribution = !!st?.attributionQuality;
   const health = attributionHealth(q, st?.spend ?? 0, st?.conversionsGoogle ?? null);
   // Resultados dos anúncios: as conversões da Google quando medem mais do que as reservas que conseguimos ligar.
   const results = adResultsMeasure(st?.bookingsAttributed ?? 0, st?.conversionsGoogle ?? 0);
@@ -118,13 +124,21 @@ export default function MarketingDashboardPanel() {
         <DateRangeNav start={from} end={to} gran="month" showAll={false} onChange={(s, e) => { setFrom(s); setTo(e); }} />
       </div>
 
-      <AlertsCard alerts={alertsData?.alerts} windowFrom={alertsData?.windowFrom} />
+      {alertsQ.error
+        ? <QueryErrorNote error={alertsQ.error} onRetry={() => alertsQ.refetch()} retrying={alertsQ.isFetching} what="os alertas do marketing" />
+        : <AlertsCard alerts={alertsData?.alerts} windowFrom={alertsData?.windowFrom} />}
 
-      {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
+      {error && <QueryErrorNote error={error} onRetry={() => dashQ.refetch()} retrying={dashQ.isFetching} what="o dashboard de marketing" />}
       {isLoading && <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>}
 
       {st && (
         <>
+          {noBookings && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 px-3 py-2 text-xs flex items-start gap-2" role="status">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span><b>Reservas da Multipark indisponíveis</b> — a base de dados da Multipark não respondeu. O gasto está completo; reservas, ROAS e custo por reserva aparecem como "—" até voltar. <button type="button" className="underline font-medium" onClick={() => dashQ.refetch()}>Tentar de novo</button></span>
+            </div>
+          )}
           {st.coverage && st.coverage.status !== "ok" && (
             <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 px-3 py-2 text-xs" role="status">
               {st.coverage.status === "none" ? "Sem dados de anúncios no período." : st.coverage.status === "partial" ? `Dados de anúncios incompletos: ${st.coverage.missingDays} dia(s) sem recolha.` : "A recolha do Google Ads está parada há mais de um dia."}
@@ -138,18 +152,19 @@ export default function MarketingDashboardPanel() {
               hint={metaWarning ?? (st.spendOther > 0 ? `+ ${eur(st.spendOther)} de outras plataformas (importações antigas)` : "Facebook + Instagram")} warn={!!metaWarning} />
             <Kpi icon={Euro} label="Gasto total em anúncios" value={eur(st.spend)} compact={eurCompact(st.spend)} hint={st.budgetEstimate > 0 ? `orçamento Google × dias: ${eur(st.budgetEstimate)} (indicador, não gasto)` : "Google + Meta + outros"} />
             <Kpi icon={MousePointerClick} label="Conversões dos anúncios" value={num(Math.round(results.value))}
-              hint={results.source === "google" ? `contadas pelas plataformas · só ligámos ${num(st.bookingsAttributed)} reservas (${pct(st.bookingsAttributed, Math.round(st.conversionsGoogle))})` : `reservas ligadas pelo link · as plataformas contam ${num(Math.round(st.conversionsGoogle))}`} />
+              hint={noBookings ? "contadas pelas plataformas · reservas indisponíveis" : results.source === "google" ? `contadas pelas plataformas · só ligámos ${num(st.bookingsAttributed)} reservas (${pct(st.bookingsAttributed, Math.round(st.conversionsGoogle))})` : `reservas ligadas pelo link · as plataformas contam ${num(Math.round(st.conversionsGoogle))}`} />
             <Kpi icon={Target} label="Custo por conversão" value={eur(costPerResult, 2)} hint={`por reserva ligada: ${eur(st.costPerAttributedBooking, 2)} · global: ${eur(st.adCostPerBooking, 2)}/reserva`} />
             <Kpi icon={TrendingUp} label="ROAS (s/ IVA)" value={roas(st.roasAttributedNet)}
               hint={`reservas ligadas, receita sem IVA ÷ gasto · todas as reservas: ${roas(st.roasTotalNet)}`} />
             <Kpi icon={TrendingUp} label="ROAS Google (reportado)" value={roas(st.roasGoogle)} hint="valor de conversão que a plataforma reporta ÷ gasto" />
-            <Kpi icon={Receipt} label="Outras despesas de marketing" value={eur(st.mktExpenses)} compact={eurCompact(st.mktExpenses)} hint="Despesas da categoria «Marketing» no período" />
-            <Kpi icon={Euro} label="Custo total de marketing" value={eur(totalMarketing)} compact={eurCompact(totalMarketing)} hint={`${eur(st.bookingsTotal > 0 ? totalMarketing / st.bookingsTotal : null, 2)} por reserva (todas)`} />
-            <Kpi icon={ShoppingCart} label="Reservas" value={num(st.bookingsTotal)} hint={`todas as origens · ${num(st.bookingsGoogle)} Google · ${num(st.bookingsMeta)} Meta (ligadas)`} />
-            <Kpi icon={ShoppingCart} label="Valor das reservas" value={eur(st.revenueTotal)} compact={eurCompact(st.revenueTotal)} hint="todas, c/ IVA, pela data de criação" />
+            <Kpi icon={Receipt} label="Outras despesas de marketing" value={eur(st.mktExpenses)} compact={eurCompact(st.mktExpenses)}
+              hint={st.adInvoicesInExpenses > 0 ? `Despesas «Marketing» sem ${eur(st.adInvoicesInExpenses)} de faturas Google/Meta (já contam no gasto)` : "Despesas da categoria «Marketing» (sem faturas Google/Meta)"} />
+            <Kpi icon={Euro} label="Custo total de marketing" value={eur(totalMarketing)} compact={eurCompact(totalMarketing)} hint={noBookings ? "anúncios + outras despesas · reservas indisponíveis" : `anúncios + outras despesas · ${eur(st.bookingsTotal > 0 ? totalMarketing / st.bookingsTotal : null, 2)} por reserva (todas)`} />
+            <Kpi icon={ShoppingCart} label="Reservas" value={num(st.bookingsTotal)} hint={noBookings ? "indisponíveis (BD da Multipark)" : `todas as origens · ${num(st.bookingsGoogle)} Google · ${num(st.bookingsMeta)} Meta (ligadas)`} warn={noBookings} />
+            <Kpi icon={ShoppingCart} label="Valor das reservas" value={eur(st.revenueTotal)} compact={st.revenueTotal == null ? "—" : eurCompact(st.revenueTotal)} hint="todas, c/ IVA, pela data de criação" />
           </div>
 
-          <div className={`rounded-md border px-3 py-2.5 text-sm space-y-1.5 ${healthCls}`} role="status">
+          {hasAttribution && <div className={`rounded-md border px-3 py-2.5 text-sm space-y-1.5 ${healthCls}`} role="status">
             <div className="flex items-center gap-2 font-medium"><HealthIcon className="w-4 h-4" /> {healthLabel}</div>
             <p className="text-xs">{health.message}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs tabular-nums">
@@ -159,7 +174,7 @@ export default function MarketingDashboardPanel() {
               <span>atribuídas aos anúncios: <b>{num(q.attributed)}</b> ({pct(q.attributed, q.siteBookings)})</span>
               <span>conversões contadas pela Google: <b>{num(Math.round(st.conversionsGoogle ?? 0))}</b> — ligámos {pct(q.attributed, Math.round(st.conversionsGoogle ?? 0))}</span>
             </div>
-          </div>
+          </div>}
 
           <div className={`grid grid-cols-1 lg:grid-cols-2 gap-4 ${SERIES}`}>
             <Card>

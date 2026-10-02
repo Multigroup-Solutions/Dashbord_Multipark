@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { projectScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
+import { marketingError, marketingPeriodGuard } from './marketingErrors';
 import {
   INCIDENT_SEVERITIES, INCIDENT_STATUSES, INCIDENT_TYPES, LOST_ITEM_TYPES, LOST_PRIORITIES, LOST_STATUSES,
   caseDueToUtc, contentTypeForFilename, incidentStatusPatch, lostStatusPatch, safeExt, textToSafeHtml, utcNowStr,
@@ -1471,9 +1472,10 @@ export const appRouter = router({
         const from = input?.from || `${today.slice(0, 7)}-01`;
         const to = input?.to || today;
         try {
+          marketingPeriodGuard(from, to);
           return await getMarketingStats({ from, to, projectId: input?.projectId });
         } catch (e: any) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+          throw marketingError(e);
         }
       }),
 
@@ -1506,10 +1508,11 @@ export const appRouter = router({
         // Mesmo recorte do marketing.dashboard: projeto pedido ∩ cidades do utilizador.
         const projectIds = await marketingProjectIds(input?.projectId);
         try {
+          marketingPeriodGuard(from, to);
           const ads = await getAdMetrics({ from, to, projectIds });
           return await getChannels(db, { from, to, projectIds, adSpend: ads.totals.cost, adConversions: ads.totals.conversions });
         } catch (e: any) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+          throw marketingError(e);
         }
       }),
     // Por marca: gasto (mesma fonte e âmbito do dashboard) e reservas da marca.
@@ -1523,9 +1526,10 @@ export const appRouter = router({
         const from = input?.from || `${today.slice(0, 7)}-01`;
         const to = input?.to || today;
         try {
+          marketingPeriodGuard(from, to);
           return await getSpendAndBookingsByBrand({ from, to, projectId: input?.projectId });
         } catch (e: any) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+          throw marketingError(e);
         }
       }),
 
@@ -1536,7 +1540,12 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "marketing", "view");
         const { getCampaignRoas } = await import("./marketingCampaignRoas");
-        return getCampaignRoas(input);
+        try {
+          marketingPeriodGuard(input.from, input.to);
+          return await getCampaignRoas(input);
+        } catch (e: any) {
+          throw marketingError(e);
+        }
       }),
 
     // Ligações campanha ↔ utm_campaign / código de desconto (admin; globais).
@@ -1552,21 +1561,27 @@ export const appRouter = router({
           requireAccess(ctx.user, "marketing", "manage");
           requireGlobalCityAccess();
           const { addCampaignLink } = await import("./marketingCampaignRoas");
-          await addCampaignLink({ ...input, userId: ctx.user.id });
-          await logActivity({ userId: ctx.user.id, action: "create", entity: "ad_campaign_links", entityId: input.adCampaignId, details: `Ligação ${input.keyType}=${input.keyValue}` });
-          return { success: true };
+          const r = await addCampaignLink({ ...input, userId: ctx.user.id });
+          // 19a: passar uma ligação de outra campanha fica dito (antes ficava "create" e a outra perdia-a em silêncio).
+          await logActivity({
+            userId: ctx.user.id, action: r.movedFromCampaignId != null ? "update" : "create", entity: "ad_campaign_links", entityId: input.adCampaignId,
+            details: `Ligação ${input.keyType}=${input.keyValue}${r.movedFromCampaignId != null ? ` passou da campanha #${r.movedFromCampaignId} para #${input.adCampaignId}` : r.restored ? " (reposta)" : ""}`,
+          });
+          return { success: true, movedFromCampaignId: r.movedFromCampaignId };
         }),
       remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "marketing", "manage");
         requireGlobalCityAccess();
-        const { removeCampaignLink } = await import("./marketingCampaignRoas");
-        await removeCampaignLink(input.id);
+        // "Remover" = arquivar (0395), com registo.
+        const { archiveCampaignLink } = await import("./marketingCampaignRoas");
+        const l = await archiveCampaignLink(input.id, ctx.user.id);
+        if (l) await logActivity({ userId: ctx.user.id, action: "archive", entity: "ad_campaign_links", entityId: l.adCampaignId, details: `Ligação ${l.keyType}=${l.keyValue} retirada da campanha #${l.adCampaignId}` });
         return { success: true };
       }),
     }),
 
-    // Orçamentos mensais por cidade/marca e ritmo (0093). Ler: backoffice
-    // (âmbito de cidade); definir: admin (a guarda de cidade valida o projectId).
+    // Orçamentos mensais por cidade/marca e ritmo (0093). Ler: marketing "view";
+    // definir/arquivar: marketing "manage" (a guarda de cidade valida o projectId).
     budgets: router({
       list: protectedProcedure
         .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), projectId: z.number().optional() }))
@@ -1580,14 +1595,20 @@ export const appRouter = router({
         .mutation(async ({ ctx, input }) => {
           requireAccess(ctx.user, "marketing", "manage");
           const { upsertBudget } = await import("./marketingBudgets");
-          await upsertBudget({ ...input, userId: ctx.user.id });
-          await logActivity({ userId: ctx.user.id, action: "update", entity: "marketing_budgets", entityId: input.projectId, details: `Orçamento ${input.month} ${input.provider}: ${input.amount} €` });
+          const r = await upsertBudget({ ...input, userId: ctx.user.id });
+          // 19a: antes → depois (antes só ficava o valor novo).
+          await logActivity({
+            userId: ctx.user.id, action: r.previous == null ? "create" : "update", entity: "marketing_budgets", entityId: input.projectId,
+            details: `Orçamento ${input.month} ${input.provider}: ${r.previous == null ? "" : `${r.previous} € → `}${input.amount} €${r.wasArchived ? " (estava arquivado)" : ""}`,
+          });
           return { success: true };
         }),
       remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "marketing", "manage");
-        const { removeBudget } = await import("./marketingBudgets");
-        await removeBudget(input.id);
+        // "Apagar" = arquivar (0395), com registo — antes DELETE sem rasto.
+        const { archiveBudget } = await import("./marketingBudgets");
+        const b = await archiveBudget(input.id, ctx.user.id);
+        if (b) await logActivity({ userId: ctx.user.id, action: "archive", entity: "marketing_budgets", entityId: b.projectId, details: `Orçamento ${b.month} ${b.provider}: ${b.amount} € arquivado` });
         return { success: true };
       }),
       copyFromPrevious: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
@@ -1595,7 +1616,9 @@ export const appRouter = router({
         const { copyBudgets } = await import("./marketingBudgets");
         const [y, m] = input.month.split("-").map(Number);
         const prev = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
-        return { copied: await copyBudgets(prev, input.month, ctx.user.id) };
+        const copied = await copyBudgets(prev, input.month, ctx.user.id);
+        if (copied) await logActivity({ userId: ctx.user.id, action: "create", entity: "marketing_budgets", details: `${copied} orçamento(s) copiados de ${prev} para ${input.month}` });
+        return { copied };
       }),
     }),
   }),

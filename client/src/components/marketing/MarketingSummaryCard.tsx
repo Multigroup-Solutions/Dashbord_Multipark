@@ -10,6 +10,7 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { adResultsMeasure, attributionHealth } from "@shared/marketingAttribution";
 import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, Megaphone } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const eur = (v: number | null | undefined, digits = 0) =>
   v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: digits, minimumFractionDigits: digits });
@@ -27,14 +28,17 @@ function Cell({ label, value, hint }: { label: string; value: string; hint?: str
 }
 
 export default function MarketingSummaryCard({ from, to, projectId }: { from: string; to: string; projectId?: number }) {
-  const { data: st, isLoading, error } = trpc.marketing.dashboard.useQuery({ from, to, projectId });
+  const q = trpc.marketing.dashboard.useQuery({ from, to, projectId });
+  const { data: st, isLoading, error } = q;
   const { data: alertsData } = trpc.marketing.alerts.useQuery({ projectId });
 
-  if (error) return null;   // sem acesso ao marketing (ou erro): o Financeiro segue sem este cartão
+  // 19a: só "sem acesso" esconde o cartão; um erro mostra-se (antes escondia-se e parecia não haver marketing).
+  if (error && (error as any)?.data?.code === "FORBIDDEN") return null;
   const s: any = st;
   const results = s ? adResultsMeasure(s.bookingsAttributed ?? 0, s.conversionsGoogle ?? 0) : null;
+  // Custo total = anúncios (APIs) + outras despesas de marketing (SEM as faturas Google/Meta — já estão no gasto).
   const totalMarketing = s ? (s.spend ?? 0) + (s.mktExpenses ?? 0) : 0;
-  const health = s ? attributionHealth(s.attributionQuality, s.spend ?? 0, s.conversionsGoogle ?? null) : null;
+  const health = s?.attributionQuality ? attributionHealth(s.attributionQuality, s.spend ?? 0, s.conversionsGoogle ?? null) : null;
   const critical = (alertsData?.alerts ?? []).filter((a) => a.level === "critical").length;
   const warnings = (alertsData?.alerts ?? []).length - critical;
 
@@ -47,14 +51,16 @@ export default function MarketingSummaryCard({ from, to, projectId }: { from: st
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {isLoading || !s || !results ? (
+        {error ? (
+          <QueryErrorNote error={error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o marketing" />
+        ) : isLoading || !s || !results ? (
           <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
         ) : (
           <>
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-4 gap-y-3">
               <Cell label="Gasto em anúncios" value={eur(s.spend)} hint={`Google ${eur(s.spendGoogle)} · Meta ${eur(s.spendMeta)}`} />
-              <Cell label="Outras despesas de marketing" value={eur(s.mktExpenses)} />
-              <Cell label="Custo total de marketing" value={eur(totalMarketing)} hint={s.bookingsTotal > 0 ? `${eur(totalMarketing / s.bookingsTotal, 2)} por reserva` : undefined} />
+              <Cell label="Outras despesas de marketing" value={eur(s.mktExpenses)} hint={s.adInvoicesInExpenses > 0 ? `sem ${eur(s.adInvoicesInExpenses)} de faturas Google/Meta (já no gasto)` : undefined} />
+              <Cell label="Custo total de marketing" value={eur(totalMarketing)} hint={s.bookingsError ? "reservas indisponíveis" : s.bookingsTotal > 0 ? `${eur(totalMarketing / s.bookingsTotal, 2)} por reserva` : undefined} />
               <Cell label="Conversões dos anúncios" value={num(results.value)} hint={results.source === "google" ? `plataformas · ligámos ${num(s.bookingsAttributed)}` : "reservas ligadas (link)"} />
               <Cell label="Custo por conversão" value={eur(results.value > 0 ? s.spend / results.value : null, 2)} />
               <Cell label="ROAS (s/ IVA)" value={roas(s.roasAttributedNet)} hint={`Google reporta ${roas(s.roasGoogle)}`} />
@@ -71,7 +77,8 @@ export default function MarketingSummaryCard({ from, to, projectId }: { from: st
                   <AlertTriangle className="w-3.5 h-3.5" /> {critical > 0 ? `${critical} alerta(s) crítico(s)` : ""}{critical > 0 && warnings > 0 ? " · " : ""}{warnings > 0 ? `${warnings} aviso(s)` : ""}
                 </Link>
               )}
-              <span className="text-muted-foreground">O gasto em anúncios entra nas contas pela fatura, nas Despesas (não é somado duas vezes).</span>
+              {s.bookingsError && <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400"><AlertTriangle className="w-3.5 h-3.5" /> Reservas da Multipark indisponíveis: só o gasto está completo.</span>}
+              <span className="text-muted-foreground">As faturas do Google/Meta nas Despesas não se somam outra vez: o gasto delas já vem das plataformas.</span>
             </div>
           </>
         )}

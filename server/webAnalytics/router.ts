@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { can, requireAccess, withOverrides } from "../_core/access";
+import { requireGlobalCityAccess } from "../cityScope";
 import { WEB_BRAND_IDS, daysBetweenInclusive, scopeByBrand, webAnalyticsConfigSchema, WEB_ANALYTICS_SETTING_KEY } from "../../shared/webAnalytics";
 import { addDays } from "../../shared/lisbonDay";
 
@@ -136,6 +137,7 @@ export const webAnalyticsRouter = router({
     }),
     save: protectedProcedure.input(webAnalyticsConfigSchema).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "marketing", "manage");
+      requireGlobalCityAccess(); // 19a: configuração/recolha de todas as cidades
       const { setSetting } = await import("../appSettings");
       try {
         const r = await setSetting(WEB_ANALYTICS_SETTING_KEY, input, ctx.user.id);
@@ -154,6 +156,7 @@ export const webAnalyticsRouter = router({
     }),
     runNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "marketing", "manage");
+      requireGlobalCityAccess(); // 19a: configuração/recolha de todas as cidades
       const { runWebAnalyticsSync } = await import("./sync");
       const r = await runWebAnalyticsSync({ deadlineAt: Date.now() + 45_000 });
       return { ok: r.ok, done: r.done, busy: !!r.busy, configured: r.configured, errors: r.errors, warnings: r.warnings, pagespeed: r.pagespeed, windows: r.units.reduce((s, u) => s + u.windows, 0) };

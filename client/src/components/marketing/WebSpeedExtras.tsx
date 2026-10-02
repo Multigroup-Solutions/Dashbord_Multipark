@@ -18,6 +18,7 @@ import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { AXIS_TICK, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE } from "@/lib/financeFormat";
 import { CRUX_METRICS, cruxLevel, type CruxMetric, type PsLevel, type WebBrand } from "@shared/webAnalytics";
 import { LEVEL_CLS, LEVEL_LABEL, fmtDay, num, shortDay } from "./webKpi";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const METRIC_LABEL: Record<CruxMetric, string> = { lcp: "LCP", inp: "INP", cls: "CLS", fcp: "FCP", ttfb: "TTFB" };
 const METRIC_TITLE: Record<CruxMetric, string> = {
@@ -131,7 +132,8 @@ export function CruxSection({ brand, enabled }: { brand: "" | WebBrand; enabled:
 
 export function FixFirstCard({ url, label, canEdit }: { url: string; label: string; canEdit: boolean }) {
   const [strategy, setStrategy] = useState<"mobile" | "desktop">("mobile");
-  const { data, isLoading } = trpc.marketing.web.opportunities.useQuery({ url, strategy }, { retry: false });
+  const oppQ = trpc.marketing.web.opportunities.useQuery({ url, strategy }, { retry: false });
+  const { data, isLoading } = oppQ;
   const [text, setText] = useState<string | null>(null);
   const explain = trpc.marketing.web.explainOpportunities.useMutation({
     onSuccess: (r) => { if (r?.text) setText(r.text); else toast.message(r?.skipped === "disabled" ? "IA desligada (interruptor \"IA: explicar o que corrigir na PageSpeed\")." : r?.skipped === "budget" ? "Orçamento da IA atingido este mês." : r?.skipped === "empty" ? "Nada para explicar." : "A IA não respondeu."); },
@@ -156,7 +158,8 @@ export function FixFirstCard({ url, label, canEdit }: { url: string; label: stri
       </CardHeader>
       <CardContent className="space-y-2">
         {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-        {!isLoading && !audits.length && <p className="text-xs text-muted-foreground">Sem oportunidades guardadas (aparecem depois da próxima medição semanal).</p>}
+        {oppQ.error && <QueryErrorNote error={oppQ.error} onRetry={() => oppQ.refetch()} retrying={oppQ.isFetching} what="as oportunidades" />}
+        {!isLoading && !oppQ.error && !audits.length && <p className="text-xs text-muted-foreground">Sem oportunidades guardadas (aparecem depois da próxima medição semanal).</p>}
         {audits.length > 0 && (
           <ol className="space-y-1 text-sm list-decimal pl-5">
             {audits.map((a) => (

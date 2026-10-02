@@ -1,7 +1,7 @@
 /**
  * Marketing → Canais e clientes (Jorge, 24 set 2026) — ver server/marketingChannels.ts.
  *
- *  - De onde vêm as reservas: grupo "Anúncios Google" (Marketplace, site das
+ *  - De onde vêm as reservas: grupo "Anúncios (Google + Meta)" (Marketplace, site das
  *    marcas, telefone; custo = gasto Google Ads), parceiros (comissões),
  *    campanhas sem parceiro e outros. O gclid é só prova de clique.
  *  - Ligação ao CRM: clientes novos por canal de entrada (canal da 1.ª
@@ -19,6 +19,7 @@ import { Handshake, Repeat, ShoppingCart, UserPlus } from "lucide-react";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import FitAmount from "@/components/finance/FitAmount";
 import { eurCompact } from "@/lib/financeFormat";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 function lisbonDay(d = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
@@ -56,7 +57,8 @@ export default function MarketingChannelsPanel() {
   const [from, setFrom] = useState(`${today.slice(0, 7)}-01`);
   const [to, setTo] = useState(today);
   const { projectId } = useGlobalFilters();
-  const { data, isLoading, error } = trpc.marketing.channels.useQuery({ from, to, projectId });
+  const chQ = trpc.marketing.channels.useQuery({ from, to, projectId });
+  const { data, isLoading, error } = chQ;
 
   const groups = (data?.groups ?? []).filter((g) => g.bookings > 0 || g.newClients > 0);
   const total = data?.bookingsTotal ?? 0;
@@ -70,7 +72,7 @@ export default function MarketingChannelsPanel() {
         <DateRangeNav start={from} end={to} gran="month" showAll={false} onChange={(s, e) => { setFrom(s); setTo(e); }} />
       </div>
 
-      {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
+      {error && <QueryErrorNote error={error} onRetry={() => chQ.refetch()} retrying={chQ.isFetching} what="os canais e clientes" />}
       {isLoading && <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>}
 
       {data && (
@@ -79,7 +81,7 @@ export default function MarketingChannelsPanel() {
             <Kpi icon={ShoppingCart} label="Reservas" value={num(total)} hint={data.bookingsWithoutEmail ? `${num(data.bookingsWithoutEmail)} sem email (fora dos clientes)` : "todas com email"} />
             <Kpi icon={UserPlus} label="Clientes novos" value={num(data.newClients)} hint="primeira reserva neste período" />
             <Kpi icon={Repeat} label="Reservas de repetentes" value={num(data.returningBookings)} hint={`${pct(data.returningBookings, total)} das reservas vêm de quem já tinha reservado`} />
-            <Kpi icon={Handshake} label="Comissões de parceiros" value={eur(data.partners.reduce((s, p) => s + p.commission, 0))} compact={eurCompact(data.partners.reduce((s, p) => s + p.commission, 0))} hint={`${data.partners.length} parceiro(s) com reservas`} />
+            <Kpi icon={Handshake} label="Comissões de parceiros" value={eur(data.partners.reduce((s, p) => s + p.commission, 0))} compact={eurCompact(data.partners.reduce((s, p) => s + p.commission, 0))} hint={`${data.partners.length} parceiro(s) com reservas · sem IVA, como na Faturação${data.partners.some((p) => p.rateMissing) ? " · há taxas em falta" : ""}`} />
           </div>
 
           <Card>
@@ -138,7 +140,7 @@ export default function MarketingChannelsPanel() {
                 </TableBody>
               </Table>
               <p className="text-[11px] text-muted-foreground px-4 py-2">
-                Marketplace, site das marcas e telefone: a reserva de um cliente novo (1.ª reserva daquele email, ou sem email) conta como <b>Anúncios Google</b> — custo = gasto do Google Ads (detalhe por marca no separador Google Ads); a de quem já era cliente conta como <b>Orgânico</b>. "Com prova de clique" = reservas em que o gclid chegou (só informação). Custo / cliente novo = custo do grupo ÷ clientes novos que entraram por ele.
+                Marketplace, site das marcas e telefone: a reserva de um cliente novo (1.ª reserva daquele email, ou sem email) conta como <b>Anúncios (Google + Meta)</b> — custo = gasto do Google Ads e da Meta (detalhe por marca no separador Anúncios); a de quem já era cliente conta como <b>Orgânico</b>. "Com prova de clique" = reservas em que o gclid chegou (só informação). Custo / cliente novo = custo do grupo ÷ clientes novos que entraram por ele.
               </p>
             </CardContent>
           </Card>
@@ -193,8 +195,8 @@ export default function MarketingChannelsPanel() {
                         <TableCell className="font-medium">{p.name}</TableCell>
                         <TableCell className="text-right tabular-nums">{num(p.bookings)}</TableCell>
                         <TableCell className="text-right tabular-nums">{eur(p.revenue)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{p.commissionRate}%</TableCell>
-                        <TableCell className="text-right tabular-nums">{eur(p.commission)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{p.rateMissing ? <span className="text-amber-700 dark:text-amber-400" title="Taxa por definir na Faturação → Parceiros: a comissão não está contada">taxa em falta</span> : `${p.commissionRate}%`}</TableCell>
+                        <TableCell className="text-right tabular-nums">{p.rateMissing ? "—" : eur(p.commission)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

@@ -61,10 +61,11 @@ export function matchBookingsToCampaigns(bookings: BookingForMatch[], campaigns:
 
 export async function listCampaignLinks(): Promise<Array<CampaignLinkKey & { campaignName: string | null; provider: string | null }>> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) throw new Error("Base de dados indisponível");
   return rowsOf<any>(await db.execute(sql`
     SELECT l.id, l.adCampaignId, l.keyType, l.keyValue, c.name AS campaignName, c.provider AS provider
     FROM ad_campaign_links l LEFT JOIN ad_campaigns c ON c.id = l.adCampaignId
+    WHERE l.archivedAt IS NULL
     ORDER BY c.name, l.keyType, l.keyValue`)).map((r) => ({ id: Number(r.id), adCampaignId: Number(r.adCampaignId), keyType: r.keyType, keyValue: String(r.keyValue), campaignName: r.campaignName ?? null, provider: r.provider ?? null }));
 }
 
@@ -76,8 +77,7 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
   const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
   const ads = await getAdMetrics({ from: f.from, to: f.to, projectIds });
   const apiCampaigns = ads.byCampaign.filter((c) => c.source === "api");
-  const empty = { range: { from: f.from, to: f.to }, vatRate: vat, rows: [] as any[], conversionActions: [] as any[], linkedTotal: 0, links: [] as any[] };
-  if (!db) return empty;
+  if (!db) throw new Error("Base de dados indisponível");
   const links = await listCampaignLinks();
   const utmKeys = links.filter((l) => l.keyType === "utm_campaign").map((l) => norm(l.keyValue));
   const codeKeys = links.filter((l) => l.keyType === "discount_code").map((l) => norm(l.keyValue));
@@ -135,19 +135,34 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
   };
 }
 
-export async function addCampaignLink(input: { adCampaignId: number; keyType: "utm_campaign" | "discount_code"; keyValue: string; userId: number }) {
+/**
+ * Liga um utm/código a uma campanha. Se já estava ligado a OUTRA campanha,
+ * passa para esta — e devolve de onde saiu, para o registo (19a: antes mudava
+ * em silêncio e ficava registado como "create"). Uma ligação arquivada volta.
+ */
+export async function addCampaignLink(input: { adCampaignId: number; keyType: "utm_campaign" | "discount_code"; keyValue: string; userId: number }): Promise<{ movedFromCampaignId: number | null; restored: boolean }> {
   const db = await getDb();
-  if (!db) throw new Error("DB indisponível");
+  if (!db) throw new Error("Base de dados indisponível");
   const v = input.keyValue.trim();
   if (!v) throw new Error("Valor vazio");
+  const [prev] = rowsOf<any>(await db.execute(sql`SELECT adCampaignId, archivedAt FROM ad_campaign_links WHERE keyType = ${input.keyType} AND keyValue = ${v} LIMIT 1`));
   await db.execute(sql`
     INSERT INTO ad_campaign_links (adCampaignId, keyType, keyValue, createdById)
     VALUES (${input.adCampaignId}, ${input.keyType}, ${v}, ${input.userId})
-    ON DUPLICATE KEY UPDATE adCampaignId = VALUES(adCampaignId)`);
+    ON DUPLICATE KEY UPDATE adCampaignId = VALUES(adCampaignId), archivedAt = NULL, archivedById = NULL`);
+  const prevCampaign = prev ? Number(prev.adCampaignId) : null;
+  return {
+    movedFromCampaignId: prev && !prev.archivedAt && prevCampaign !== input.adCampaignId ? prevCampaign : null,
+    restored: !!prev?.archivedAt,
+  };
 }
 
-export async function removeCampaignLink(id: number) {
+/** "Remover" = ARQUIVAR (0395, P3 19a); antes DELETE sem registo. */
+export async function archiveCampaignLink(id: number, userId: number): Promise<{ adCampaignId: number; keyType: string; keyValue: string } | null> {
   const db = await getDb();
-  if (!db) throw new Error("DB indisponível");
-  await db.execute(sql`DELETE FROM ad_campaign_links WHERE id = ${id}`);
+  if (!db) throw new Error("Base de dados indisponível");
+  const [l] = rowsOf<any>(await db.execute(sql`SELECT adCampaignId, keyType, keyValue, archivedAt FROM ad_campaign_links WHERE id = ${id} LIMIT 1`));
+  if (!l || l.archivedAt) return null;
+  await db.execute(sql`UPDATE ad_campaign_links SET archivedAt = NOW(), archivedById = ${userId} WHERE id = ${id} AND archivedAt IS NULL`);
+  return { adCampaignId: Number(l.adCampaignId), keyType: String(l.keyType), keyValue: String(l.keyValue) };
 }

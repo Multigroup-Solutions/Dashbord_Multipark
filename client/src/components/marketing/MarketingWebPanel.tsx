@@ -38,6 +38,7 @@ import { WEB_BRAND_LABELS, type CompareMode, type WebBrand } from "@shared/webAn
 import { SERIES, Delta, Kpi, PsChip, eur, fmtDay, lisbonDay, num, pctOf, posFmt, shortDay } from "./webKpi";
 import { GbpBusinessCard, GbpSection } from "./MarketingGbpPanel";
 import { CruxSection, FixFirstCard } from "./WebSpeedExtras";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const SECTIONS = ["trafego", "pesquisa", "velocidade", "negocio", "google-business"];
 /** Separador inicial a partir de `?sec=` (links dos alertas e das Integrações). */
@@ -62,7 +63,8 @@ function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, se
   const [q, setQ] = useState("");
   const [term, setTerm] = useState("");
   const input = { ...common, source, dim, sort, page, pageSize, ...(term ? { search: term } : {}) } as any;
-  const { data, isLoading, isFetching, error } = trpc.marketing.web.list.useQuery(input, { placeholderData: keepPreviousData });
+  const listQ = trpc.marketing.web.list.useQuery(input, { placeholderData: keepPreviousData });
+  const { data, isLoading, isFetching, error } = listQ;
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const head: Record<GaCol | ScCol, string> = { sessions: "Sessões", users: "Utilizadores", engaged: "Envolvimento", keyEvents: "Conversões", revenue: "Receita", clicks: "Cliques", impressions: "Impressões", ctr: "CTR", position: "Posição" };
@@ -101,7 +103,7 @@ function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, se
         </div>
       </CardHeader>
       <CardContent className="p-0 overflow-x-auto">
-        {error && <p role="alert" className="text-sm text-destructive px-4 py-2">{error.message}</p>}
+        {error && <div className="px-4 py-2"><QueryErrorNote error={error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="a tabela" /></div>}
         <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
           <TableHeader>
             <TableRow>
@@ -111,7 +113,7 @@ function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, se
           </TableHeader>
           <TableBody>
             {isLoading && <TableRow><TableCell colSpan={cols.length + 1} className="text-center py-6"><Loader2 className="w-4 h-4 animate-spin inline" /></TableCell></TableRow>}
-            {!isLoading && !data?.rows.length && <TableRow><TableCell colSpan={cols.length + 1} className="text-center py-6 text-muted-foreground">Sem dados no período.</TableCell></TableRow>}
+            {!isLoading && !error && !data?.rows.length && <TableRow><TableCell colSpan={cols.length + 1} className="text-center py-6 text-muted-foreground">Sem dados no período.</TableCell></TableRow>}
             {data?.rows.map((r: any) => (
               <TableRow key={r.key}>
                 <TableCell className="max-w-[320px]">
@@ -148,7 +150,8 @@ export default function MarketingWebPanel() {
   const [geoDim, setGeoDim] = useState<"country" | "city">("country");
   const common: Common = { from, to, brand, compare };
   const utils = trpc.useUtils();
-  const { data, isLoading, error } = trpc.marketing.web.overview.useQuery(common, { placeholderData: keepPreviousData });
+  const ovQ = trpc.marketing.web.overview.useQuery(common, { placeholderData: keepPreviousData });
+  const { data, isLoading, error } = ovQ;
   const settings = trpc.marketing.web.settings.get.useQuery(undefined, { retry: false, staleTime: 60_000 });
   const ps = trpc.marketing.web.pagespeed.useQuery({ brand, weeks: 26 }, { enabled: section === "velocidade" });
   const runNow = trpc.marketing.web.settings.runNow.useMutation({
@@ -198,7 +201,7 @@ export default function MarketingWebPanel() {
         </div>
       </div>
 
-      {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
+      {error && <QueryErrorNote error={error} onRetry={() => ovQ.refetch()} retrying={ovQ.isFetching} what="o Web & SEO" />}
       {isLoading && <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}
 
       {data && !data.configured && (
@@ -292,8 +295,8 @@ export default function MarketingWebPanel() {
             <Kpi icon={MousePointerClick} label="Cliques Google (orgânico)" value={num(s?.cur.clicks)} cur={s?.cur.clicks} prev={s?.prev.clicks} hint={s?.hasData ? undefined : "sem dados"} />
             <Kpi icon={Globe} label="Impressões" value={num(s?.cur.impressions)} cur={s?.cur.impressions} prev={s?.prev.impressions} hint={`CTR ${pctOf(s?.cur.ctr)}`} />
             <Kpi icon={Search} label="Posição média" value={posFmt(s?.cur.position)} cur={s?.cur.position} prev={s?.prev.position} invert abs={(d) => `${d > 0 ? "+" : "−"}${posFmt(Math.abs(d))}`} hint="menor é melhor" />
-            <Kpi icon={ShoppingCart} label="Conversão web → reserva" value={pctOf(b?.totals.conversionRate, 2)} cur={b?.totals.conversionRate} prev={b?.prevTotals.conversionRate}
-              hint={`${num(b?.totals.siteBookings)} reservas no site`} />
+            <Kpi icon={ShoppingCart} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate}
+              hint={b?.bookingsError ? "reservas da Multipark indisponíveis" : `${num(b?.totals.siteBookings)} reservas no site`} />
           </div>
 
           <Tabs value={section} onValueChange={setSection}>
@@ -441,17 +444,17 @@ export default function MarketingWebPanel() {
 
             {/* ── Velocidade ── */}
             <TabsContent value="velocidade" className={`mt-4 space-y-4 ${SERIES}`}>
-              <PagespeedSection data={ps.data} loading={ps.isLoading} canEdit={canEdit} brand={brand} />
+              {ps.error ? <QueryErrorNote error={ps.error} onRetry={() => ps.refetch()} retrying={ps.isFetching} what="a velocidade (PageSpeed)" /> : <PagespeedSection data={ps.data} loading={ps.isLoading} canEdit={canEdit} brand={brand} />}
             </TabsContent>
 
             {/* ── Negócio ── */}
             <TabsContent value="negocio" className={`mt-4 space-y-4 ${SERIES}`}>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <Kpi icon={ShoppingCart} label="Reservas feitas no site" value={num(b?.totals.siteBookings)} cur={b?.totals.siteBookings} prev={b?.prevTotals.siteBookings} hint={`de ${num(b?.totals.bookings)} no total`} />
-                <Kpi icon={TrendingUp} label="Conversão web → reserva" value={pctOf(b?.totals.conversionRate, 2)} cur={b?.totals.conversionRate} prev={b?.prevTotals.conversionRate} hint="reservas no site ÷ sessões" />
+                <Kpi icon={ShoppingCart} label="Reservas feitas no site" value={b?.bookingsError ? "—" : num(b?.totals.siteBookings)} cur={b?.bookingsError ? null : b?.totals.siteBookings} prev={b?.bookingsError ? null : b?.prevTotals.siteBookings} hint={b?.bookingsError ? "indisponíveis (BD da Multipark não respondeu)" : `de ${num(b?.totals.bookings)} no total`} />
+                <Kpi icon={TrendingUp} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate} hint={b?.bookingsError ? "reservas indisponíveis" : "reservas no site ÷ sessões"} />
                 <Kpi icon={TrendingUp} label="Receita por sessão" value={eur(b?.totals.revenuePerSession, 2)} cur={b?.totals.revenuePerSession} prev={b?.prevTotals.revenuePerSession} hint="reservas do site (c/ IVA) ÷ sessões" />
                 <Kpi icon={MousePointerClick} label="Gasto em anúncios por sessão" value={eur(b?.totals.spendPerSession, 2)} cur={b?.totals.spendPerSession} prev={b?.prevTotals.spendPerSession} invert
-                  hint={b?.adSpendAvailable ? `${eurCompact(b?.totals.spend ?? 0)} gastos · ${eur(b?.totals.spendPerSiteBooking, 2)}/reserva no site` : "sem dados de anúncios no período"} />
+                  hint={b?.adSpendError ? `erro a ler o gasto dos anúncios: ${b.adSpendError}` : b?.adSpendAvailable ? `${eurCompact(b?.totals.spend ?? 0)} gastos · ${eur(b?.totals.spendPerSiteBooking, 2)}/reserva no site` : "sem dados de anúncios no período"} />
               </div>
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-sm">Sessões, reservas no site e conversão por dia</CardTitle></CardHeader>

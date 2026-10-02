@@ -43,6 +43,7 @@ import {
 } from "@shared/googleBusinessProfile";
 import type { CompareMode } from "@shared/webAnalytics";
 import { Delta, Kpi, SERIES, fmtDay, lisbonDay, num, pctOf, shortDay } from "./webKpi";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 type Range = { from: string; to: string; compare: CompareMode };
 const stars = (v: number | null | undefined) => (v == null ? "—" : `${v.toLocaleString("pt-PT", { maximumFractionDigits: 2, minimumFractionDigits: 1 })}★`);
@@ -71,7 +72,8 @@ export function GbpSection({ range }: { range: Range }) {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const utils = trpc.useUtils();
   const input = { ...range, city, ...(locationId ? { locationId } : {}) };
-  const { data, isLoading, error } = trpc.marketing.gbp.overview.useQuery(input, { placeholderData: keepPreviousData });
+  const ovQ = trpc.marketing.gbp.overview.useQuery(input, { placeholderData: keepPreviousData });
+  const { data, isLoading, error } = ovQ;
   const runNow = trpc.marketing.gbp.settings.runNow.useMutation({
     onSuccess: (r) => {
       utils.marketing.gbp.invalidate();
@@ -88,7 +90,7 @@ export function GbpSection({ range }: { range: Range }) {
   const series = useMemo(() => (data?.series ?? []).map((r) => ({ ...r, label: shortDay(r.day) })), [data]);
   const weeks = useMemo(() => (data?.reviews.byWeek ?? []).map((w) => ({ ...w, label: shortDay(w.week) })), [data]);
   if (isLoading) return <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>;
-  if (error) return <p role="alert" className="text-sm text-destructive">{error.message}</p>;
+  if (error) return <QueryErrorNote error={error} onRetry={() => ovQ.refetch()} retrying={ovQ.isFetching} what="o Google Business" />;
   if (!data) return null;
   const t = data.totals, rv = data.reviews;
   const canEdit = data.canEdit;
@@ -304,9 +306,10 @@ function KeywordsTable({ range, city, locationId }: { range: Range; city: string
   const [term, setTerm] = useState("");
   useEffect(() => setPage(1), [range.from, range.to, city, locationId]);
   const pageSize = 15;
-  const { data, isLoading, isFetching } = trpc.marketing.gbp.keywords.useQuery(
+  const kwQ = trpc.marketing.gbp.keywords.useQuery(
     { from: range.from, to: range.to, city: city as any, ...(locationId ? { locationId } : {}), page, pageSize, ...(term ? { search: term } : {}) },
     { placeholderData: keepPreviousData });
+  const { data, isLoading, isFetching } = kwQ;
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return (
@@ -326,7 +329,8 @@ function KeywordsTable({ range, city, locationId }: { range: Range; city: string
           <TableHeader><TableRow><TableHead>Pesquisa</TableHead><TableHead className="text-right">Impressões</TableHead></TableRow></TableHeader>
           <TableBody>
             {isLoading && <TableRow><TableCell colSpan={2} className="text-center py-6"><Loader2 className="w-4 h-4 animate-spin inline" /></TableCell></TableRow>}
-            {!isLoading && !data?.rows.length && <TableRow><TableCell colSpan={2} className="text-center py-6 text-muted-foreground">Sem pesquisas nos meses do período.</TableCell></TableRow>}
+            {kwQ.error && <TableRow><TableCell colSpan={2} className="py-3"><QueryErrorNote error={kwQ.error} onRetry={() => kwQ.refetch()} retrying={kwQ.isFetching} what="as pesquisas" /></TableCell></TableRow>}
+            {!isLoading && !kwQ.error && !data?.rows.length && <TableRow><TableCell colSpan={2} className="text-center py-6 text-muted-foreground">Sem pesquisas nos meses do período.</TableCell></TableRow>}
             {data?.rows.map((r) => (
               <TableRow key={r.keyword}>
                 <TableCell className="text-sm max-w-[260px] truncate" title={r.keyword}>{r.keyword}</TableCell>
@@ -684,7 +688,7 @@ function GbpSettingsDialog({ onClose }: { onClose: () => void }) {
           <DialogTitle>Google Business — definições</DialogTitle>
           <DialogDescription>Cidade/marca de cada perfil (vazio = adivinhado pelo parque associado nas Críticas, pela morada ou pelo título), recolha e alertas.</DialogDescription>
         </DialogHeader>
-        {!cfg || !q.data ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+        {q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as definições do Google Business" /> : !cfg || !q.data ? <Loader2 className="w-5 h-5 animate-spin" /> : (
           <div className="space-y-4 text-sm">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex items-center gap-2 min-h-[44px]"><Switch checked={cfg.enabled} onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })} />Recolha diária do desempenho</label>
@@ -754,11 +758,14 @@ function GbpSettingsDialog({ onClose }: { onClose: () => void }) {
 // ─── Negócio: chamadas e direções vs reservas por cidade ───────────────────
 
 export function GbpBusinessCard({ from, to }: { from: string; to: string }) {
-  const { data, isLoading } = trpc.marketing.gbp.business.useQuery({ from, to }, { placeholderData: keepPreviousData, retry: false });
+  const bizQ = trpc.marketing.gbp.business.useQuery({ from, to }, { placeholderData: keepPreviousData, retry: false });
+  const { data, isLoading } = bizQ;
   const [city, setCity] = useState<CityKey | null>(null);
   const sel = data?.cities.find((c) => c.city === city) ?? data?.cities[0] ?? null;
   const rows = useMemo(() => (sel?.rows ?? []).map((r) => ({ ...r, label: shortDay(r.day), actions: r.calls + r.directions })), [sel]);
   if (isLoading) return null;
+  // 19a: erro ≠ "sem chamadas/direções… liga o GBP".
+  if (bizQ.error) return <QueryErrorNote error={bizQ.error} onRetry={() => bizQ.refetch()} retrying={bizQ.isFetching} what="as chamadas e direções do Google Business" />;
   if (!data || !data.cities.length || data.cities.every((c) => !c.calls && !c.directions)) {
     return <p className="text-[11px] text-muted-foreground">Google Business: sem chamadas/direções no período (liga o Google Business Profile e associa cada perfil a uma cidade).</p>;
   }
@@ -766,6 +773,7 @@ export function GbpBusinessCard({ from, to }: { from: string; to: string }) {
     <Card>
       <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Phone className="w-4 h-4" />Google Business: chamadas e direções vs reservas por cidade</CardTitle></CardHeader>
       <CardContent className="space-y-3">
+        {data.bookingsError && <p className="text-xs text-amber-700 dark:text-amber-400">Reservas da Multipark indisponíveis — a coluna das reservas aparece como "—".</p>}
         <div className="overflow-x-auto">
           <Table className="tabular-nums">
             <TableHeader><TableRow><TableHead>Cidade</TableHead><TableHead className="text-right">Chamadas</TableHead><TableHead className="text-right">Direções</TableHead><TableHead className="text-right">Cliques no site</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead className="text-right">(Chamadas + direções) / reserva</TableHead></TableRow></TableHeader>
@@ -776,8 +784,8 @@ export function GbpBusinessCard({ from, to }: { from: string; to: string }) {
                   <TableCell className="text-right">{num(c.calls)}</TableCell>
                   <TableCell className="text-right">{num(c.directions)}</TableCell>
                   <TableCell className="text-right">{num(c.website)}</TableCell>
-                  <TableCell className="text-right">{num(c.bookings)}</TableCell>
-                  <TableCell className="text-right">{c.actionsPerBooking == null ? "—" : num(c.actionsPerBooking, 2)}</TableCell>
+                  <TableCell className="text-right">{data.bookingsError ? "—" : num(c.bookings)}</TableCell>
+                  <TableCell className="text-right">{data.bookingsError || c.actionsPerBooking == null ? "—" : num(c.actionsPerBooking, 2)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

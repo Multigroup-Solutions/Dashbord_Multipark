@@ -146,3 +146,20 @@ export function summarizeCurrencyExclusions(rows: Array<{ accountId: number; acc
   }
   return Array.from(m.values()).sort((a, b) => b.cost - a.cost);
 }
+
+// ─── Faturas das plataformas de anúncios nas Despesas (P3 19a) ──────────────
+
+/** NIF (IVA intracomunitário) das plataformas: Google Ireland e Meta Platforms Ireland. */
+export const AD_PLATFORM_NIFS = ["IE6388047V", "IE9692928F"] as const;
+const AD_PLATFORM_SUPPLIER_RE = /\b(google|meta platforms|facebook|instagram)\b/i;
+
+/**
+ * Despesa que é a FATURA de uma plataforma de anúncios (Google/Meta)? O gasto
+ * dessas já vem das APIs — somar a fatura no "Custo total de marketing"
+ * contava-o duas vezes (Jorge, 2 out 2026: "não contar 2×"). PURA.
+ */
+export function isAdPlatformInvoice(supplier: string | null | undefined, supplierNif: string | null | undefined): boolean {
+  const nif = String(supplierNif ?? "").replace(/[\s.-]/g, "").toUpperCase();
+  if (nif && (AD_PLATFORM_NIFS as readonly string[]).some((n) => nif === n || nif === n.slice(2))) return true;
+  return AD_PLATFORM_SUPPLIER_RE.test(String(supplier ?? ""));
+}

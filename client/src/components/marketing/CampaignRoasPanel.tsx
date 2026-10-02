@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Link2, Loader2, Plus, X } from "lucide-react";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const EUR = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const EUR0 = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -38,17 +39,18 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
   const { user } = useAuth();
   const isAdmin = can(user, "marketing", "manage");
   const utils = trpc.useUtils();
-  const { data, isLoading, error } = trpc.marketing.campaignRoas.useQuery({ from, to, projectId });
+  const roasQ = trpc.marketing.campaignRoas.useQuery({ from, to, projectId });
+  const { data, isLoading, error } = roasQ;
   const refresh = () => { utils.marketing.campaignRoas.invalidate(); utils.marketing.campaignLinks.list.invalidate(); };
-  const add = trpc.marketing.campaignLinks.add.useMutation({ onSuccess: () => { refresh(); toast.success("Ligação criada"); }, onError: (e) => toast.error(e.message) });
-  const remove = trpc.marketing.campaignLinks.remove.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
+  const add = trpc.marketing.campaignLinks.add.useMutation({ onSuccess: (r) => { refresh(); toast.success(r.movedFromCampaignId != null ? "Ligação passada para esta campanha (estava noutra)" : "Ligação criada"); }, onError: (e) => toast.error(e.message) });
+  const remove = trpc.marketing.campaignLinks.remove.useMutation({ onSuccess: () => { refresh(); toast.success("Ligação retirada (fica no registo)"); }, onError: (e) => toast.error(e.message) });
   const [open, setOpen] = useState<string | null>(null);
   const [linkType, setLinkType] = useState<"utm_campaign" | "discount_code">("utm_campaign");
   const [linkValue, setLinkValue] = useState("");
   const rows: any[] = data?.rows ?? [];
   const totals = useMemo(() => rows.reduce((t, r) => ({ cost: t.cost + r.cost, clicks: t.clicks + r.clicks, conversions: t.conversions + r.conversions, bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, revenueNet: t.revenueNet + r.revenueNet }), { cost: 0, clicks: 0, conversions: 0, bookings: 0, revenue: 0, revenueNet: 0 }), [rows]);
 
-  if (error) return <p role="alert" className="text-sm text-destructive">{error.message}</p>;
+  if (error) return <QueryErrorNote error={error} onRetry={() => roasQ.refetch()} retrying={roasQ.isFetching} what="o ROAS por campanha" />;
   if (isLoading || !data) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
 
   return (

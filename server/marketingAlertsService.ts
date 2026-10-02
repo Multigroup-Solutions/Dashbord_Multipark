@@ -59,10 +59,14 @@ export async function computeAlertsFor(projectId?: number) {
   ]);
   // Reservas ligadas por campanha (ID externo) na janela — mesma regra de cancelada/dia.
   const byExt = new Map<string, number>();
-  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts).
-  const { loadMarketingBookings } = await import("./marketingLive");
-  for (const b of await loadMarketingBookings(windowFrom, today, projectIds)) {
-    if ((b.adAttribution === "google_paid" || b.adAttribution === "meta_paid") && b.adCampaignExternalId) byExt.set(b.adCampaignExternalId, (byExt.get(b.adCampaignExternalId) ?? 0) + 1);
+  // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts). 19a: se a
+  // Multipark não responde, os alertas das recolhas (os vermelhos) saem na
+  // mesma — antes desapareciam todos, exatamente quando havia problemas.
+  if (!win.bookingsError) {
+    const { loadMarketingBookings } = await import("./marketingLive");
+    for (const b of await loadMarketingBookings(windowFrom, today, projectIds).catch(() => [])) {
+      if ((b.adAttribution === "google_paid" || b.adAttribution === "meta_paid") && b.adCampaignExternalId) byExt.set(b.adCampaignExternalId, (byExt.get(b.adCampaignExternalId) ?? 0) + 1);
+    }
   }
   const windowCampaigns = win.byCampaign.filter((c) => c.source === "api").map((c) => ({
     name: String(c.name), accountName: c.accountName ?? null, cost: Number(c.cost ?? 0), conversions: Number(c.conversions ?? 0),

@@ -10,6 +10,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "../../_core/trpc";
 import { can, requireAccess, withOverrides } from "../../_core/access";
+import { requireGlobalCityAccess } from "../../cityScope";
 import { CITY_KEYS, type CityKey } from "../../../shared/city";
 import {
   GBP_METRIC_COLS, GBP_SETTING_KEY, POST_CTAS, POST_TOPICS, WEEKDAYS, gbpActions, gbpBusinessByCity, gbpConfigSchema, gbpImpressions,
@@ -154,9 +155,11 @@ export const gbpRouter = router({
       e.calls += r.values.callClicks; e.directions += r.values.directionRequests; e.website += r.values.websiteClicks;
       m.set(r.day, e); actions.set(c, m);
     }
-    const bookings = await q.bookingsByCityDay(input.from, input.to).catch(() => new Map());
+    // 19a: reservas indisponíveis ≠ 0 reservas.
+    let bookingsError: string | null = null;
+    const bookings = await q.bookingsByCityDay(input.from, input.to).catch((err: any) => { bookingsError = String(err?.message ?? err).slice(0, 200); return new Map(); });
     const allowed = q.allowedCities();
-    return { cities: gbpBusinessByCity(daysInRange(input.from, input.to), actions, bookings).filter((c) => !allowed || allowed.has(c.city)), unmapped: locs.filter((l) => !l.city).length };
+    return { cities: gbpBusinessByCity(daysInRange(input.from, input.to), actions, bookings).filter((c) => !allowed || allowed.has(c.city)), unmapped: locs.filter((l) => !l.city).length, bookingsError };
   }),
 
   settings: router({
@@ -173,6 +176,8 @@ export const gbpRouter = router({
     }),
     save: protectedProcedure.input(gbpConfigSchema).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "marketing", "manage");
+      // 19a: configuração de TODAS as cidades → só quem vê todas as cidades.
+      requireGlobalCityAccess();
       const { setSetting } = await import("../../appSettings");
       try {
         const r = await setSetting(GBP_SETTING_KEY, input, ctx.user.id);
@@ -182,6 +187,7 @@ export const gbpRouter = router({
     }),
     runNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "marketing", "manage");
+      requireGlobalCityAccess(); // 19a: recolha de todas as cidades
       const { runGbpInsightsSync } = await import("./insights");
       const r = await runGbpInsightsSync({ deadlineAt: Date.now() + 45_000 });
       return { ok: r.ok, done: r.done, busy: !!r.busy, skipped: r.skipped ?? null, blocked: r.blocked, errors: r.errors, warnings: r.warnings, windows: r.windows, keywordMonths: r.keywordMonths };

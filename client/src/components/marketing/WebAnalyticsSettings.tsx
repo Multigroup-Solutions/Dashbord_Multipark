@@ -198,7 +198,7 @@ export function WebAnalyticsSettings() {
           </p>
           {cfg.pagespeedUrls.map((u, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
-              <Input className="h-9 w-72" placeholder="https://multipark.pt/" aria-label="Página" value={u.url} disabled={!canEdit}
+              <Input className="h-9 w-full sm:w-72" placeholder="https://multipark.pt/" aria-label="Página" value={u.url} disabled={!canEdit}
                 onChange={(e) => set({ pagespeedUrls: cfg.pagespeedUrls.map((x, j) => (j === i ? { ...x, url: e.target.value, brand: x.brand || brandOfUrl(e.target.value) || "" } : x)) })} />
               <Input className="h-9 w-48" placeholder="Nome" aria-label="Nome" value={u.label} disabled={!canEdit}
                 onChange={(e) => set({ pagespeedUrls: cfg.pagespeedUrls.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />

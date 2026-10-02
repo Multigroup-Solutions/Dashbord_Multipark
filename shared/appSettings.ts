@@ -589,6 +589,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas (por WhatsApp). Desligado por omissão.", defaultEnabled: false },
   // 17g-3 (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão.
   { name: "EXTRAS_ASK_CITY", label: "Pedir a cidade aos extras sem cidade", description: "Quando um extra chega sem cidade, pede-lha uma vez por email (pela recursos-humanos@) e por WhatsApp se a conversa estiver aberta. A tarefa para quem trata das fichas sem cidade cria-se sempre. Desligado por omissão.", defaultEnabled: false },
+  // 19a: o email semanal de marketing tinha só a variável MARKETING_WEEKLY=off (invisível nas Definições).
+  { name: "MARKETING_WEEKLY", label: "Email semanal de marketing", description: "À segunda a partir das 8h: gasto, reservas e ROAS da semana por marca e cidade, para os endereços em MARKETING_REPORT_EMAILS." },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.
   { name: "TASKS_AUTO_OVERDUE", label: "Avisos de atraso das tarefas automáticas", description: "Checklists, serviços, disponibilidade e fichas sem cidade que passam o prazo: avisa no sino os responsáveis e o supervisor da cidade (um resumo por cidade). Sem email. Só as que passaram o prazo há menos de 48 h (as mais antigas ficam marcadas sem aviso)." },

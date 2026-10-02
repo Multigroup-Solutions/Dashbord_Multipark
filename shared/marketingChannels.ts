@@ -29,7 +29,7 @@ export function groupOf(channel: ChannelKey, newClient: boolean): ChannelGroup {
 }
 
 export const GROUP_LABEL: Record<ChannelGroup, string> = {
-  anuncios: "Anúncios Google — clientes novos",
+  anuncios: "Anúncios (Google + Meta) — clientes novos",
   organico: "Orgânico — clientes que voltam",
   parceiros: "Parceiros",
   campanhas: "Campanhas sem parceiro",

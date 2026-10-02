@@ -69,7 +69,11 @@ export function parseWebQuery(q: Record<string, unknown>, withList: boolean):
 
 export function registerMcpMarketingRoutes(r: Router, h: Handler): void {
   const bad = (res: Response, error: string) => res.status(400).json({ success: false, error });
-  const failed = (res: Response, e: unknown) => res.status(400).json({ success: false, error: String((e as any)?.message ?? e).slice(0, 300) });
+  // 19a: erro do servidor (BD da Multipark, Google…) = 500, não 400 ("pedido inválido").
+  const failed = (res: Response, e: unknown) => {
+    const msg = String((e as any)?.message ?? e).slice(0, 300);
+    res.status(/^(Datas inválidas|Mês inválido)/.test(msg) ? 400 : 500).json({ success: false, error: msg });
+  };
 
   r.get("/marketing/stats", requireScope("read"), h(async (req, res) => {
     const f = parseMarketingQuery(req.query);
@@ -87,7 +91,7 @@ export function registerMcpMarketingRoutes(r: Router, h: Handler): void {
     const { getDb } = await import("./db");
     try {
       const db = await getDb();
-      if (!db) return bad(res, "BD indisponível");
+      if (!db) return res.status(500).json({ success: false, error: "BD indisponível" });
       const projectIds = await marketingProjectIds(f.projectId);
       const ads = await getAdMetrics({ from: f.from, to: f.to, projectIds });
       res.json({ success: true, from: f.from, to: f.to, data: await getChannels(db, { from: f.from, to: f.to, projectIds, adSpend: ads.totals.cost, adConversions: ads.totals.conversions }) });

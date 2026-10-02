@@ -233,6 +233,9 @@ export const marketingBudgets = mysqlTable("marketing_budgets", {
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+	// 0395 — "Apagar" arquiva (fica quem e quando); voltar a definir reaproveita a linha.
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
 },
 (table) => [
 	uniqueIndex("uq_marketing_budgets").on(table.month, table.projectId, table.provider),
@@ -246,6 +249,9 @@ export const adCampaignLinks = mysqlTable("ad_campaign_links", {
 	keyValue: varchar({ length: 256 }).notNull(),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// 0395 — "Remover" arquiva; ligar outra vez reaproveita a linha.
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
 },
 (table) => [
 	uniqueIndex("uq_ad_campaign_links").on(table.keyType, table.keyValue),
