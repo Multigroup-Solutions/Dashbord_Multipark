@@ -27,7 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { can, ROLE_LABELS, ROLES } from "@shared/access";
 import {
-  KB_CITIES, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCE_LABELS, KB_STATUS_LABELS, KB_UPLOAD_ACCEPT, KB_VISIBILITY_ALL, visibilityLabel,
+  KB_CITIES, KB_MAX_DIRECT_UPLOAD_BYTES, KB_MAX_DIRECT_UPLOAD_MB, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCE_LABELS, kbReadableBlocks, KB_STATUS_LABELS, KB_UPLOAD_ACCEPT, KB_VISIBILITY_ALL, visibilityLabel,
   type KbFolder, type KbSource, type KbStatus, type KbVisibility, type KnowledgeConfig,
 } from "@shared/knowledge";
 
@@ -173,7 +173,13 @@ function PreviewDialog({ id, onClose }: { id: number; onClose: () => void }) {
               {d.webViewLink && /^https:/.test(d.webViewLink) && <a href={d.webViewLink} target="_blank" rel="noopener noreferrer" className="text-primary underline">Abrir no Drive</a>}
             </div>
             {d.error && <p className="rounded-md bg-red-50 p-2 text-red-800">{d.error}</p>}
-            <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-xs">{d.textContent || "(sem texto extraído)"}</pre>
+            {/* Texto corrido (Jorge, 2 out 2026): sem #, ** nem tabelas com barras — títulos a negrito. */}
+            <div className="max-h-[50vh] space-y-2 overflow-auto rounded-md border bg-muted/30 p-3 text-sm leading-relaxed break-words">
+              {d.textContent ? kbReadableBlocks(d.textContent).map((b, i) => b.heading
+                ? <p key={i} className="pt-1 font-semibold">{b.text}</p>
+                : <p key={i} className="whitespace-pre-line">{b.text}</p>)
+                : <p className="text-muted-foreground">(sem texto extraído)</p>}
+            </div>
             {d.textTruncated && <p className="text-xs text-muted-foreground">Mostram-se os primeiros 20 000 caracteres.</p>}
           </div>
         )}
@@ -258,22 +264,39 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [v, setV] = useState<KbVisibility>(KB_VISIBILITY_ALL);
-  const up = trpc.knowledge.upload.useMutation({
-    onSuccess: (r) => {
-      if (r.duplicateOf) toast.info(`Este ficheiro já estava na base: «${r.duplicateOf}». Não foi carregado outra vez.${r.status === "skipped" ? " Está excluído — usa «Voltar a incluir»." : ""}`);
-      else if (r.status === "error") toast.error(`Carregado, mas não foi possível ler: ${r.error ?? "erro"}`);
-      else toast.success("Documento carregado e indexado.");
-      onDone();
-      onClose();
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  const up = trpc.knowledge.upload.useMutation();
+  const ticket = trpc.knowledge.uploadTicket.useMutation();
+  const done = trpc.knowledge.uploadDone.useMutation();
+  const [busy, setBusy] = useState(false);
+  const finish = (r: { status: string; error: string | null; duplicateOf: string | null }) => {
+    if (r.duplicateOf) toast.info(`Este ficheiro já estava na base: «${r.duplicateOf}». Não foi carregado outra vez.${r.status === "skipped" ? " Está excluído — usa «Voltar a incluir»." : ""}`);
+    else if (r.status === "error") toast.error(`Carregado, mas não foi possível ler: ${r.error ?? "erro"}`);
+    else if (r.status === "pending" || r.status === "processing") toast.success("Documento carregado — está a ser lido (ficheiro grande); aparece como Sincronizado daqui a pouco.");
+    else toast.success("Documento carregado e indexado.");
+    onDone();
+    onClose();
+  };
+  // Direto para o armazenamento (até 25 MB, sem passar pela Vercel); sem S3, o caminho antigo (3 MB).
   const submit = async () => {
     if (!file) return;
-    if (file.size > KB_MAX_UPLOAD_BYTES) { toast.error(`Ficheiro demasiado grande (máx. ${KB_MAX_UPLOAD_MB} MB). Põe-no numa pasta do Drive sincronizada.`); return; }
+    if (file.size > KB_MAX_DIRECT_UPLOAD_BYTES) { toast.error(`Ficheiro demasiado grande (máx. ${KB_MAX_DIRECT_UPLOAD_MB} MB). Põe-no numa pasta do Drive sincronizada.`); return; }
+    const base = { fileName: file.name, mimeType: file.type, title: title.trim() || undefined, visibility: v };
+    setBusy(true);
     try {
-      up.mutate({ fileName: file.name, mimeType: file.type, fileBase64: await readAsBase64(file), title: title.trim() || undefined, visibility: v });
-    } catch (e: any) { toast.error(e.message); }
+      const t = await ticket.mutateAsync({ fileName: file.name, mimeType: file.type, size: file.size });
+      if (t.direct) {
+        const put = await fetch(t.uploadUrl, { method: "PUT", headers: { "Content-Type": t.contentType }, body: file });
+        if (!put.ok) throw new Error(`O armazenamento recusou o ficheiro (${put.status}). Tenta outra vez.`);
+        finish(await done.mutateAsync({ ...base, key: t.key }));
+      } else {
+        if (file.size > KB_MAX_UPLOAD_BYTES) throw new Error(`Sem armazenamento direto configurado: máx. ${KB_MAX_UPLOAD_MB} MB. Põe-no numa pasta do Drive sincronizada.`);
+        finish(await up.mutateAsync({ ...base, fileBase64: await readAsBase64(file) }));
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? "Não foi possível carregar.");
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -281,7 +304,7 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
         <DialogHeader><DialogTitle>Carregar documento</DialogTitle></DialogHeader>
         <div className="space-y-3 text-sm">
           <div>
-            <Label className="text-xs">Ficheiro (PDF, DOCX, TXT ou MD — máx. {KB_MAX_UPLOAD_MB} MB)</Label>
+            <Label className="text-xs">Ficheiro (PDF, DOCX, TXT ou MD — máx. {KB_MAX_DIRECT_UPLOAD_MB} MB)</Label>
             <Input ref={fileRef} type="file" accept={KB_UPLOAD_ACCEPT} onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           </div>
           <div>
@@ -292,8 +315,8 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={submit} disabled={!file || up.isPending}>
-            {up.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}Carregar
+          <Button onClick={submit} disabled={!file || busy}>
+            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}Carregar
           </Button>
         </DialogFooter>
       </DialogContent>

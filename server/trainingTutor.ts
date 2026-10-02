@@ -31,7 +31,7 @@ import {
 } from "./trainingTutorRules";
 import * as store from "./trainingTutorStore";
 import type { KbHit } from "./knowledge/retrieve";
-import { safeCitationHref } from "../shared/knowledge";
+import { kbPlainText, safeCitationHref } from "../shared/knowledge";
 import { lisbonDay } from "./trainingRules";
 
 export interface TutorUser { id: number; role: string; name?: string | null }
@@ -241,7 +241,8 @@ export async function tutorAsk(
     await persist(answer, true);
     return { ...base, answer, outOfContent: true, fallback: null };
   }
-  const stored = limitWords(output, maxWords);
+  // Texto corrido (Jorge, 2 out 2026): mesmo que a IA mande Markdown, sai sem #, ** nem listas com -.
+  const stored = limitWords(kbPlainText(output), maxWords);
   await persist(stored, false);
   const kbSources = kbHits
     .filter((h, i, arr) => arr.findIndex((x) => x.docId === h.docId) === i)

@@ -232,6 +232,9 @@ export interface ExtractDeps {
   pdfWithAi?: (bytes: Buffer, title: string, timeoutMs: number) => Promise<string>;
 }
 
+/** Lê um ficheiro do armazenamento (também para o carregamento direto). */
+export const loadStoredFile = (keyOrUrl: string, fallbackUrl: string | null): Promise<Buffer> => defaultLoadFile(keyOrUrl, fallbackUrl);
+
 async function defaultLoadFile(keyOrUrl: string, fallbackUrl: string | null): Promise<Buffer> {
   const { storagePresignGet } = await import("../storage");
   const { url } = await storagePresignGet(keyOrUrl, { fallbackUrl });

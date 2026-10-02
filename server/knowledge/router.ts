@@ -15,7 +15,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { requireAccess, withOverrides } from "../_core/access";
 import { cityScope } from "../cityScope";
 import {
-  KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCES, KB_STATUSES, KB_UPLOAD_MIME, canSeeKbDoc, knowledgeConfigSchema, kbVisibilitySchema, parseKnowledgeConfig,
+  KB_DIRECT_KEY_RE, KB_MAX_DIRECT_UPLOAD_BYTES, KB_MAX_DIRECT_UPLOAD_MB, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCES, KB_STATUSES, KB_UPLOAD_MIME, canSeeKbDoc, knowledgeConfigSchema, kbVisibilitySchema, parseKnowledgeConfig,
   safeCitationHref,
 } from "../../shared/knowledge";
 import { kbViewerFrom } from "./retrieve";
@@ -53,6 +53,36 @@ async function processNow(id: number): Promise<{ status: string; error?: string 
   const cfg = await loadKnowledgeConfig();
   const r = await processDoc(d, id, { drive, embed: (await embeddingsWanted(cfg)) ? defaultEmbed : null }, deadlineAt);
   return { status: r.status, error: r.error };
+}
+
+/** Nome de ficheiro seguro para a key do armazenamento. PURA. */
+export function safeUploadName(fileName: string): string {
+  return String(fileName).replace(/[^\w.\-]+/g, "_").slice(-120) || "ficheiro";
+}
+
+type UploadResult = { id: number; status: string; error: string | null; duplicateOf: string | null };
+
+/**
+ * Regista um carregado (os bytes já estão no armazenamento): o mesmo ficheiro
+ * outra vez → o documento que já existe (18d); senão cria e processa já.
+ */
+async function registerUpload(userId: number, f: { buffer: Buffer; mime: string; fileName: string; title?: string; visibility: { roles: string[]; cities: string[] }; store: () => Promise<{ key: string; url: string }> }): Promise<UploadResult> {
+  const { createHash } = await import("node:crypto");
+  const sha = createHash("sha256").update(f.buffer).digest("hex");
+  const dup = await store.uploadByChecksum(await store.kbDb(), sha);
+  if (dup) return { id: dup.id, status: dup.status, error: null, duplicateOf: dup.title };
+  const { key, url } = await f.store();
+  const d = await store.kbDb();
+  const title = (f.title?.trim() || f.fileName.replace(/\.[a-z0-9]+$/i, "")).slice(0, 300);
+  const id = await store.insertDoc(d, {
+    source: "upload", title, mimeType: f.mime, fileKey: key, fileUrl: url, sizeBytes: f.buffer.length,
+    visibility: f.visibility as any, visibilityCustom: true, createdById: userId,
+  });
+  const { sql } = await import("drizzle-orm");
+  await d.execute(sql`UPDATE kb_documents SET uploadSha = ${sha} WHERE id = ${id}`);
+  await log(userId, "create", id, `Base de conhecimento: carregado "${title}"`);
+  const r = await processNow(id).catch((err) => ({ status: "error", error: String(err?.message ?? err).slice(0, 200) }));
+  return { id, status: r.status, error: r.error ?? null, duplicateOf: null };
 }
 
 export const knowledgeRouter = router({
@@ -134,25 +164,56 @@ export const knowledgeRouter = router({
       const buffer = Buffer.from(input.fileBase64, "base64");
       if (!buffer.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Ficheiro vazio." });
       if (buffer.length > KB_MAX_UPLOAD_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: `Ficheiro demasiado grande (máx. ${KB_MAX_UPLOAD_MB} MB).` });
-      // O mesmo ficheiro outra vez → o documento que já existe (18d: antes duplicava).
-      const { createHash } = await import("node:crypto");
-      const sha = createHash("sha256").update(buffer).digest("hex");
-      const dup = await store.uploadByChecksum(await store.kbDb(), sha);
-      if (dup) return { id: dup.id, status: dup.status, error: null, duplicateOf: dup.title };
-      const { storagePut } = await import("../storage");
-      const safe = input.fileName.replace(/[^\w.\-]+/g, "_").slice(-120);
-      const { key, url } = await storagePut(`knowledge/${Date.now()}-${safe}`, buffer, mime);
-      const d = await store.kbDb();
-      const title = (input.title?.trim() || input.fileName.replace(/\.[a-z0-9]+$/i, "")).slice(0, 300);
-      const id = await store.insertDoc(d, {
-        source: "upload", title, mimeType: mime, fileKey: key, fileUrl: url, sizeBytes: buffer.length,
-        visibility: input.visibility, visibilityCustom: true, createdById: ctx.user.id,
+      return registerUpload(ctx.user.id, {
+        buffer, mime, fileName: input.fileName, title: input.title, visibility: input.visibility,
+        store: async () => (await import("../storage")).storagePut(`knowledge/${Date.now()}-${safeUploadName(input.fileName)}`, buffer, mime),
       });
-      const { sql } = await import("drizzle-orm");
-      await d.execute(sql`UPDATE kb_documents SET uploadSha = ${sha} WHERE id = ${id}`);
-      await log(ctx.user.id, "create", id, `Base de conhecimento: carregado "${title}"`);
-      const r = await processNow(id).catch((err) => ({ status: "error", error: String(err?.message ?? err).slice(0, 200) }));
-      return { id, status: r.status, error: r.error ?? null, duplicateOf: null as string | null };
+    }),
+
+  /**
+   * Carregamento direto, passo 1: URL assinada para o browser gravar o ficheiro
+   * no armazenamento (até 25 MB, sem passar pela Vercel). Sem S3 → `direct:false`
+   * e a página usa o caminho antigo (3 MB).
+   */
+  uploadTicket: protectedProcedure
+    .input(z.object({ fileName: z.string().trim().min(1).max(255), mimeType: z.string().max(160).default(""), size: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      manage(ctx.user);
+      const mime = uploadMimeFor(input.fileName, input.mimeType);
+      if (!mime) throw new TRPCError({ code: "BAD_REQUEST", message: "Tipo de ficheiro não suportado (PDF, DOCX, TXT ou MD)." });
+      if (input.size > KB_MAX_DIRECT_UPLOAD_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: `Ficheiro demasiado grande (máx. ${KB_MAX_DIRECT_UPLOAD_MB} MB). Põe-no numa pasta do Drive sincronizada.` });
+      const { isPresignedUploadAvailable, storagePresignPut } = await import("../storage");
+      if (!isPresignedUploadAvailable()) return { direct: false as const };
+      const { randomBytes } = await import("node:crypto");
+      const key = `knowledge/${Date.now()}-${randomBytes(4).toString("hex")}-${safeUploadName(input.fileName)}`;
+      const r = await storagePresignPut(key, mime, 600);
+      return { direct: true as const, key: r.key, uploadUrl: r.uploadUrl, contentType: mime };
+    }),
+
+  /** Carregamento direto, passo 2: o ficheiro já está no armazenamento → regista e processa. */
+  uploadDone: protectedProcedure
+    .input(z.object({
+      key: z.string().regex(KB_DIRECT_KEY_RE, "Ficheiro inválido."),
+      fileName: z.string().trim().min(1).max(255),
+      mimeType: z.string().max(160).default(""),
+      title: z.string().trim().max(300).optional(),
+      visibility: kbVisibilitySchema.default({ roles: [], cities: [] }),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      manage(ctx.user);
+      const mime = uploadMimeFor(input.fileName, input.mimeType);
+      if (!mime) throw new TRPCError({ code: "BAD_REQUEST", message: "Tipo de ficheiro não suportado (PDF, DOCX, TXT ou MD)." });
+      const { storageGet } = await import("../storage");
+      const got = await storageGet(input.key);
+      if (!got.url) throw new TRPCError({ code: "NOT_FOUND", message: "O ficheiro não chegou ao armazenamento. Tenta carregar outra vez." });
+      const { loadStoredFile } = await import("./sync");
+      const buffer = await loadStoredFile(input.key, got.url);
+      if (!buffer.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Ficheiro vazio." });
+      if (buffer.length > KB_MAX_DIRECT_UPLOAD_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: `Ficheiro demasiado grande (máx. ${KB_MAX_DIRECT_UPLOAD_MB} MB).` });
+      return registerUpload(ctx.user.id, {
+        buffer, mime, fileName: input.fileName, title: input.title, visibility: input.visibility,
+        store: async () => ({ key: input.key, url: got.url }),
+      });
     }),
 
   updateVisibility: protectedProcedure

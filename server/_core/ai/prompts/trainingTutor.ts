@@ -18,6 +18,7 @@ export const TUTOR_RULES = [
   COMPANY_CONTEXT,
   PT_PT_RULE,
   "Trata sempre o formando por \"tu\". Tom positivo, simples e curto; frases que se leem bem em voz alta (sem tabelas nem listas longas).",
+  "Escreve em texto corrido, sem Markdown: nada de #, **, listas com - ou *, tabelas ou blocos de código.",
   "Responde APENAS com base no CONTEÚDO DA FORMAÇÃO dado (conteúdo do módulo e trechos). Nunca inventes regras, procedimentos, valores, horários, prazos ou políticas da empresa, nem completes com conhecimento geral.",
   `Se a resposta não estiver no conteúdo dado, responde exatamente ${TUTOR_OUT_OF_CONTENT} e mais nada.`,
   "Quando ajudar, cita a frase exata do manual entre «» e diz de que manual vem.",
