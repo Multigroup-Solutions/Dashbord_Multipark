@@ -264,6 +264,32 @@ export async function conversationVisible(conversationId: number, user?: BoxUser
   return rows.length > 0;
 }
 
+/**
+ * Nome do cliente do CRM de cada número (17f: saber quem é; o mais recente).
+ * Uma consulta só, com os números como PARÂMETROS: o índice `idx_crm_phone`
+ * serve seja qual for a collation das tabelas do CRM (uma subconsulta por
+ * conversa com COLLATE podia ler a tabela toda 300 vezes). Se falhar, a lista
+ * continua — só fica sem o nome do CRM (cai no nome do perfil).
+ */
+export async function crmNamesByPhone(db: any, phones: ReadonlyArray<string>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const uniq = Array.from(new Set(phones.filter((p) => !!p))).slice(0, INBOX_LIST_LIMIT);
+  if (!uniq.length) return out;
+  try {
+    const [rows] = (await db.execute(sql`SELECT cp.phone AS phone, cc.displayName AS name FROM crm_client_phones cp
+      JOIN crm_clients cc ON cc.id = cp.clientId AND cc.status = 'active'
+      WHERE cp.phone IN (${sql.join(uniq.map((p) => sql`${p}`), sql`, `)}) AND cc.displayName IS NOT NULL AND cc.displayName <> ''
+      ORDER BY cc.lastVisit DESC`)) as any;
+    for (const r of (rows ?? []) as any[]) {
+      const phone = String(r.phone);
+      if (!out.has(phone)) out.set(phone, String(r.name));
+    }
+  } catch (err: any) {
+    console.warn("[WhatsApp] nomes do CRM indisponíveis:", String(err?.message ?? err).slice(0, 200));
+  }
+  return out;
+}
+
 /** Nome do lead mais recente com o número da conversa (subquery escalar). */
 export const leadNameSql = sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci ORDER BY ln.id DESC LIMIT 1)`;
 
@@ -384,6 +410,8 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
 
   const missing = convs.filter((c) => c.lastDirection == null && c.lastMessageAt != null).map((c) => c.id);
   const filled = await fillMissingPreviews(db, missing);
+  // Sem ficha nem lead: o nome do cliente do CRM (17f).
+  const crmNames = await crmNamesByPhone(db, convs.filter((c) => !c.employeeName?.trim() && !c.leadName?.trim()).map((c) => c.phoneE164));
 
   // A query vem por `lastMessageAt` desc só para o cap de 300 apanhar as
   // conversas ativas; a ordem que a UI mostra é a de `sortConversations`.
@@ -394,7 +422,7 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
       id: c.id,
       phoneE164: c.phoneE164,
       employeeId: c.employeeId,
-      name: conversationDisplayName(c),
+      name: conversationDisplayName({ ...c, crmName: crmNames.get(c.phoneE164) ?? null }),
       photoUrl: c.employeePhotoUrl?.trim() || null,
       unreadCount: c.unreadCount,
       lastInboundAt: c.lastInboundAt,
@@ -420,14 +448,15 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
   return sortConversations(rows);
 }
 
-/** Nome a mostrar: ficha → lead → nome de perfil WhatsApp → número. PURA. */
+/** Nome a mostrar: ficha → lead → cliente do CRM (17f) → nome de perfil WhatsApp → número. PURA. */
 export function conversationDisplayName(c: {
   employeeName?: string | null;
   leadName?: string | null;
+  crmName?: string | null;
   profileName?: string | null;
   phoneE164: string;
 }): string {
-  return c.employeeName?.trim() || c.leadName?.trim() || c.profileName?.trim() || c.phoneE164;
+  return c.employeeName?.trim() || c.leadName?.trim() || c.crmName?.trim() || c.profileName?.trim() || c.phoneE164;
 }
 
 // ─── Thread de uma conversa ─────────────────────────────────────────────────
@@ -544,8 +573,9 @@ export async function getConversationThread(conversationId: number, limit = 100)
     .limit(limit);
 
   const w = deriveWindowState(conv.lastInboundAt);
-  const name = conversationDisplayName(conv);
-  const realName = conv.employeeName || conv.leadName || conv.profileName;
+  const crmName = !conv.employeeName?.trim() && !conv.leadName?.trim() ? (await crmNamesByPhone(db, [conv.phoneE164])).get(conv.phoneE164) ?? null : null;
+  const name = conversationDisplayName({ ...conv, crmName });
+  const realName = conv.employeeName || conv.leadName || crmName || conv.profileName;
   return {
     conversationId: conv.id,
     phoneE164: conv.phoneE164,

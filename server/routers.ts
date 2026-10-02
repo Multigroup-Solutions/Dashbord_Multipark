@@ -5294,6 +5294,14 @@ export const appRouter = router({
         const { hiddenBoxKeys } = await import("./whatsappInbox");
         return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user) });
       }),
+      /** Quem é o contacto (17f): ficha do RH, candidato ou cliente do CRM, com o resumo do histórico. */
+      identity: protectedProcedure.input(z.object({ conversationId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "whatsapp", "view");
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        const { conversationIdentity } = await import("./whatsappInboxOps");
+        return conversationIdentity(input.conversationId);
+      }),
       /** Caixas por tema que esta pessoa vê (filtro e "Mover para…"). */
       boxes: protectedProcedure.query(async ({ ctx }) => {
         requireAccess(ctx.user, "whatsapp", "view");

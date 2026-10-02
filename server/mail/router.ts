@@ -47,7 +47,9 @@ export const mailRouter = router({
         WHERE g.status <> 'disconnected' AND g.userId <> ${v.id} ORDER BY u.name LIMIT 300`))
         .map((r) => ({ userId: Number(r.userId), name: String(r.name ?? r.email), email: String(r.email) }));
     }
-    return { ...boxes, google, others, slaHours: await slaHours(), isSuperAdmin: v.role === "super_admin" };
+    const { can } = await import("../../shared/access");
+    // 17f: a lista da Comunicação junta as conversas de WhatsApp da caixa (quem tem o WhatsApp).
+    return { ...boxes, google, others, slaHours: await slaHours(), isSuperAdmin: v.role === "super_admin", canWhatsapp: can(v as any, "whatsapp", "view") };
   }),
 
   badge: protectedProcedure.query(async ({ ctx }) => {

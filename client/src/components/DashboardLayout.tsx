@@ -189,7 +189,6 @@ export const menuGroups: MenuGroup[] = [
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
       { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },
       { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", anyOf: ["disponibilidade", "disponibilidade_extras"] },
-      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
     ],
   },
   {
@@ -211,7 +210,10 @@ export const menuGroups: MenuGroup[] = [
     icon: MailIcon,
     items: [
       // Caixas partilhadas: matriz (comunicacao) + regra de cada caixa no servidor.
-      { icon: Inbox, label: "Caixas partilhadas", path: "/comunicacao", module: "comunicacao" },
+      // 17f: a lista junta o email e o WhatsApp de cada caixa (por tema).
+      { icon: Inbox, label: "Caixas (email e WhatsApp)", path: "/comunicacao", module: "comunicacao" },
+      // 17f (Jorge): o WhatsApp passa para a Comunicação.
+      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
       // O próprio email: qualquer pessoa (a ficha é de todos); liga a conta Google na página.
       { icon: MailIcon, label: "O meu email", path: "/comunicacao/meu-email", anyOf: ["ficha"] },
     ],

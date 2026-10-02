@@ -1,7 +1,7 @@
 // Comunicação (/comunicacao) — caixas de email partilhadas da empresa; e
 // "O meu email" (/comunicacao/meu-email) — a caixa pessoal @multipark de
 // cada pessoa (só o próprio; o super_admin pode consultar as dos outros).
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Card } from "@/components/ui/card";
@@ -12,7 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useIsMobile } from "@/hooks/useMobile";
 import { toast } from "sonner";
-import { AlarmClock, Archive, Bot, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, UserRound } from "lucide-react";
+import { AlarmClock, Archive, Bot, Inbox, Loader2, Mail, MessageCircle, PenSquare, RefreshCw, Search, UserRound } from "lucide-react";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { GENERAL_BOX_KEY } from "@shared/commsBoxes";
+import { CONVERSATION_STATUS_LABELS } from "@shared/whatsappConversation";
 import {
   MAIL_BRAND_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, MAIL_TRIAGE_KEY, MAIL_TRIAGE_LABEL, isMailBrand, isMailOverdue, type MailThreadStatus,
 } from "@shared/mail";
@@ -23,6 +26,9 @@ import { BrandChip, LinkChip, listTime, waitingLabel } from "@/components/mail/m
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const POLL_MS = 60_000;
+
+// Comunicação única (17f): a conversa de WhatsApp abre aqui, com o mesmo ecrã da página do WhatsApp.
+const WhatsAppInboxPage = lazy(() => import("./WhatsAppInboxPage"));
 
 export default function ComunicacaoPage({ personal = false }: { personal?: boolean }) {
   const isMobile = useIsMobile();
@@ -38,6 +44,9 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const [mailbox, setMailbox] = useState<string | null>(() => personal ? "me" : params.get("caixa"));
   const [ownerUserId, setOwnerUserId] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(() => Number(params.get("t")) || null);
+  // Conversa de WhatsApp aberta (17f — ?w=<id>).
+  const [selectedWa, setSelectedWa] = useState<number | null>(() => Number(params.get("w")) || null);
+  const { user } = useAuth();
   const [brand, setBrand] = useState("all");
   // ?q= (pesquisa global → "ver todos"): pesquisa já escrita e todos os estados.
   const [status, setStatus] = useState<MailThreadStatus | "all">(personal || params.get("q") ? "all" : "aberto");
@@ -59,7 +68,11 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     else if (!mailbox && triage) setMailbox(MAIL_TRIAGE_KEY);
   }, [personal, boxes, mailbox, triage]);
   useEffect(() => { setPage(1); }, [mailbox, brand, status, assigned, awaiting, unread, showAutomatic, archived, q, ownerUserId]);
-  useEffect(() => { const t = Number(params.get("t")) || null; if (t) setSelected(t); const c = params.get("caixa"); if (c && !personal) setMailbox(c); }, [params, personal]);
+  useEffect(() => {
+    const t = Number(params.get("t")) || null; if (t) { setSelected(t); setSelectedWa(null); }
+    const w = Number(params.get("w")) || null; if (w && !personal) { setSelectedWa(w); setSelected(null); }
+    const c = params.get("caixa"); if (c && !personal) setMailbox(c);
+  }, [params, personal]);
 
   const google = overview.data?.google;
   const personalReady = !!google?.connected;
@@ -69,6 +82,14 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     brand: brand === "all" ? null : brand, status, assigned: mailbox === "me" ? "all" : assigned, awaiting, unread,
     search: q.trim() || null, showAutomatic, archived: archived && !!overview.data?.isSuperAdmin, page, pageSize: 40,
   }, { enabled, refetchInterval: POLL_MS, placeholderData: (p) => p });
+
+  // 17f: as conversas de WhatsApp desta caixa entram na mesma lista ("Geral" = Info).
+  const canWa = !personal && !!overview.data?.canWhatsapp && !!mailbox && mailbox !== MAIL_TRIAGE_KEY && !archived;
+  const waBox = mailbox === GENERAL_BOX_KEY ? "geral" : mailbox;
+  const wa = trpc.whatsapp.conversations.list.useQuery(
+    { boxKey: waBox, ...(q.trim() ? { search: q.trim().slice(0, 120) } : {}) },
+    { enabled: canWa, refetchInterval: POLL_MS, placeholderData: (p) => p },
+  );
 
   const syncMine = trpc.mail.syncMine.useMutation({
     // "Sem emails novos" só quando a leitura correu bem (17d: antes dizia-o com a conta em erro).
@@ -87,18 +108,31 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const current = boxes.find((b) => b.key === mailbox);
   const slaHours = overview.data?.slaHours ?? 24;
   const now = Date.now();
-  const refresh = () => { list.refetch(); overview.refetch(); utils.mail.badge.invalidate(); };
+  const refresh = () => { list.refetch(); overview.refetch(); utils.mail.badge.invalidate(); if (canWa) void wa.refetch(); };
   const open = (id: number) => {
     setSelected(id);
+    setSelectedWa(null);
     const p = new URLSearchParams(search);
     p.set("t", String(id));
+    p.delete("w");
     if (!personal && mailbox) p.set("caixa", mailbox);
+    navigate(`${location.split("?")[0]}?${p.toString()}`, { replace: true });
+  };
+  const openWa = (id: number) => {
+    setSelectedWa(id);
+    setSelected(null);
+    const p = new URLSearchParams(search);
+    p.set("w", String(id));
+    p.delete("t");
+    if (mailbox) p.set("caixa", mailbox);
     navigate(`${location.split("?")[0]}?${p.toString()}`, { replace: true });
   };
   const close = () => {
     setSelected(null);
+    setSelectedWa(null);
     const p = new URLSearchParams(search);
     p.delete("t");
+    p.delete("w");
     navigate(`${location.split("?")[0]}${p.toString() ? `?${p}` : ""}`, { replace: true });
   };
 
@@ -110,7 +144,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
       <div>
         <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><Mail className="h-5 w-5 text-primary" /> {title}</h1>
         <p className="text-sm text-muted-foreground">
-          {personal ? "O teu email @multipark dentro do dashboard. Os emails de clientes ficam ligados à ficha do cliente." : "Caixas de email partilhadas: ler, responder e ligar cada email ao cliente, reserva ou caso."}
+          {personal ? "O teu email @multipark dentro do dashboard. Os emails de clientes ficam ligados à ficha do cliente." : "Caixas partilhadas, com o email e o WhatsApp de cada tema: ler, responder e ligar cada conversa ao cliente, reserva ou caso."}
         </p>
       </div>
       <div className="flex gap-2">
@@ -155,6 +189,19 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
 
   const threads = list.data?.threads ?? [];
   const total = list.data?.total ?? 0;
+  // WhatsApp da caixa, com os mesmos filtros (a marca e os automáticos são só do email).
+  const waConvs = canWa && page === 1 && brand === "all"
+    ? (wa.data ?? []).filter((c) =>
+        (status === "all" || c.status === status) &&
+        (assigned === "all" || (assigned === "me" ? c.assignedUserId === user?.id : c.assignedUserId == null)) &&
+        (!awaiting || (!!c.awaitingSince && c.status !== "resolvido")) &&
+        (!unread || c.unreadCount > 0))
+    : [];
+  type Row = { kind: "email"; at: string | null; t: (typeof threads)[number] } | { kind: "wa"; at: string | null; c: (typeof waConvs)[number] };
+  const rows: Row[] = [
+    ...threads.map((t) => ({ kind: "email" as const, at: t.lastMessageAt, t })),
+    ...waConvs.map((c) => ({ kind: "wa" as const, at: c.lastMessageAt, c })),
+  ].sort((a, b) => String(b.at ?? "").localeCompare(String(a.at ?? "")));
   const listColumn = (
     <div className="flex flex-col h-full min-h-0 border-r">
       <div className="p-2 space-y-2 border-b">
@@ -220,8 +267,33 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
       <div className="flex-1 overflow-y-auto">
         {list.isLoading && <div className="p-4"><Loader2 className="h-4 w-4 animate-spin" /></div>}
         {list.error && <div className="p-2"><QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="as conversas" /></div>}
-        {!list.isLoading && !list.error && threads.length === 0 && <p className="p-4 text-sm text-muted-foreground">Sem conversas com estes filtros.</p>}
-        {threads.map((t) => {
+        {canWa && wa.error && <div className="p-2"><QueryErrorNote error={wa.error} onRetry={() => wa.refetch()} retrying={wa.isFetching} what="as conversas de WhatsApp" /></div>}
+        {!list.isLoading && !list.error && !(canWa && (wa.isLoading || wa.error)) && rows.length === 0 && <p className="p-4 text-sm text-muted-foreground">Sem conversas com estes filtros.</p>}
+        {rows.map((row) => {
+          if (row.kind === "wa") {
+            const c = row.c;
+            return (
+              <button key={`w${c.id}`} type="button" onClick={() => openWa(c.id)}
+                className={`w-full text-left px-3 py-2.5 border-b hover:bg-accent/60 ${selectedWa === c.id ? "bg-accent" : ""}`}>
+                <div className="flex items-center gap-1.5">
+                  <MessageCircle className="h-3.5 w-3.5 text-green-600 shrink-0" aria-label="WhatsApp" />
+                  <span className={`flex-1 truncate text-[13px] ${c.unreadCount ? "font-bold" : "font-medium"}`}>{c.name}</span>
+                  <span className="text-[11px] text-muted-foreground shrink-0">{listTime(c.lastMessageAt, now)}</span>
+                </div>
+                <div className="text-xs text-muted-foreground truncate">{c.previewDirection === "out" ? "Tu: " : ""}{c.preview ?? ""}</div>
+                <div className="flex flex-wrap items-center gap-1 mt-1">
+                  <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] font-normal border-green-300 text-green-800 dark:text-green-300">WhatsApp</Badge>
+                  {c.unreadCount > 0 && <Badge className="h-5 px-1.5 text-[10.5px] bg-green-600">{c.unreadCount} nova{c.unreadCount > 1 ? "s" : ""}</Badge>}
+                  {c.awaitingSince && c.status !== "resolvido" && (
+                    <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] gap-1"><AlarmClock className="h-3 w-3" />{waitingLabel(c.awaitingSince, now)}</Badge>
+                  )}
+                  {c.status !== "aberto" && <Badge variant="secondary" className="h-5 px-1.5 text-[10.5px]">{CONVERSATION_STATUS_LABELS[c.status]}</Badge>}
+                  {c.assignedName && <span className="text-[10.5px] text-muted-foreground inline-flex items-center gap-0.5"><UserRound className="h-3 w-3" />{c.assignedName}</span>}
+                </div>
+              </button>
+            );
+          }
+          const t = row.t;
           const overdue = t.status !== "resolvido" && isMailOverdue(t.awaitingSince, slaHours, now);
           return (
             <button key={t.id} type="button" onClick={() => open(t.id)}
@@ -260,7 +332,13 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     </div>
   );
 
-  const threadColumn = selected
+  const threadColumn = selectedWa
+    ? (
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}>
+        <WhatsAppInboxPage embeddedConversationId={selectedWa} onEmbeddedClose={close} onEmbeddedChanged={() => { void wa.refetch(); }} />
+      </Suspense>
+    )
+    : selected
     ? <MailThreadView threadId={selected} onBack={isMobile ? close : undefined} onChanged={refresh} canAi />
     : <div className="flex-1 hidden sm:flex items-center justify-center text-sm text-muted-foreground">Escolhe uma conversa.</div>;
 
@@ -270,7 +348,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
       {personal && google && google.status !== "connected" && ownerUserId == null && <GoogleAccountCard compact returnTo="/comunicacao/meu-email" />}
       <Card className="overflow-hidden p-0">
         <div className="flex h-[calc(100vh-13rem)] min-h-[440px]">
-          {isMobile ? (selected == null ? <div className="flex-1 min-w-0">{listColumn}</div> : threadColumn) : (
+          {isMobile ? (selected == null && selectedWa == null ? <div className="flex-1 min-w-0">{listColumn}</div> : threadColumn) : (
             <>
               <div className="w-[340px] shrink-0 min-h-0">{listColumn}</div>
               {threadColumn}

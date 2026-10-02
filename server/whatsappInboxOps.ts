@@ -128,6 +128,38 @@ export async function assignConversation(conversationId: number, userId: number 
   return true;
 }
 
+/**
+ * Quem é o contacto de uma conversa (17f): ficha do colaborador (RH) →
+ * candidato a extra → cliente do CRM (nas cidades de quem pede), com um
+ * resumo do histórico. Nunca devolve dados de outra cidade.
+ */
+export async function conversationIdentity(conversationId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível.");
+  const { describeIdentity } = await import("../shared/commsBoxes");
+  const [c] = await db.select({ employeeId: whatsappConversations.employeeId, phoneE164: whatsappConversations.phoneE164 })
+    .from(whatsappConversations).where(eq(whatsappConversations.id, conversationId)).limit(1);
+  if (!c) return describeIdentity({});
+  const cityOf = async (projectId: number | null | undefined): Promise<string | null> => {
+    if (!projectId) return null;
+    const [r] = (await db.execute(sql`SELECT name FROM projects WHERE id = ${projectId} LIMIT 1`)) as any;
+    return (r as any[])?.[0]?.name ?? null;
+  };
+  if (c.employeeId) {
+    const [r] = (await db.execute(sql`SELECT fullName, position, projectId FROM employees WHERE id = ${c.employeeId} LIMIT 1`)) as any;
+    const e = (r as any[])?.[0];
+    if (e) return describeIdentity({ employee: { fullName: String(e.fullName), position: e.position ?? null, city: await cityOf(e.projectId) } });
+  }
+  const [lr] = (await db.execute(sql`SELECT fullName, status, projectId FROM extra_leads WHERE phoneE164 = ${c.phoneE164} ORDER BY id DESC LIMIT 1`)) as any;
+  const lead = (lr as any[])?.[0];
+  if (lead) return describeIdentity({ lead: { fullName: String(lead.fullName), status: lead.status ?? null, city: await cityOf(lead.projectId) } });
+  const { findCrmClientIds, crmClientCards } = await import("./crm/lookup");
+  const ids = await findCrmClientIds(db, { phone: c.phoneE164 }, { limit: 1 });
+  const card = (await crmClientCards(db, ids))[0];
+  if (card) return describeIdentity({ client: { id: card.id, name: card.name, email: card.email, bookings: card.bookings, upcoming: card.upcoming, lastVisit: card.lastVisit } });
+  return describeIdentity({});
+}
+
 /** Muda a caixa (17f) — `manual` fica: a regra e a IA não a voltam a mudar. */
 export async function setConversationBox(conversationId: number, boxKey: string | null, source: "rule" | "ai" | "manual"): Promise<void> {
   const db = await getDb();
