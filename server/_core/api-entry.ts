@@ -109,8 +109,8 @@ try {
 
 // ─── Crons ───────────────────────────────────────────────────────────────────
 // Agendador OFICIAL: /api/cron/tick, chamado de 5 em 5 min pelo cron-job.org
-// (docs/ajuda/agendador.md) e de hora a hora pelo GitHub Actions como rede de
-// segurança (.github/workflows/cron-tick.yml). O tick decide pela hora de
+// (docs/ajuda/agendador.md); o GitHub Actions só o chama à mão
+// (.github/workflows/cron-tick.yml, sem schedule). O tick decide pela hora de
 // Lisboa o que está na altura (server/cronSchedule.ts) e corre os trabalhos
 // com lease, prazo e retoma (server/cronScheduler.ts). Os endpoints de cada
 // trabalho ficam para uso manual (workflow_dispatch / curl) e partilham o

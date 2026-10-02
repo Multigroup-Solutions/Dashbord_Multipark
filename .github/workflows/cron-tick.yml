@@ -1,16 +1,18 @@
-name: Agendador — rede de segurança (tick)
-# O agendador oficial é o próprio servidor: GET /api/cron/tick, chamado de 5
-# em 5 min pelo cron-job.org (docs/ajuda/agendador.md). Este workflow chama o
-# mesmo tick de hora a hora (e à mão), com ?wait=1 para receber o relatório
-# completo — se o cron-job.org parar, os trabalhos continuam a correr (mais
-# devagar). Chamadas duplicadas são inofensivas: cada trabalho tem um lease
-# (cron_job_state) e só corre o que estiver na altura.
+name: Agendador — tick (corrida manual)
+# O agendador é o próprio servidor: GET /api/cron/tick, chamado de 5 em 5 min
+# pelo cron-job.org (docs/ajuda/agendador.md). Este workflow chama o mesmo
+# tick SÓ À MÃO (Actions → Run workflow), com ?wait=1 para receber o
+# relatório completo. Chamadas duplicadas são inofensivas: cada trabalho tem
+# um lease (cron_job_state) e só corre o que estiver na altura.
+#
+# Sem schedule desde 2 out 2026: a "rede de segurança" de hora a hora levava
+# 401 desde 27 set (segredo do GitHub diferente do da Vercel) e ninguém deu
+# pela falta — o cron-job.org chega. O alarme de falha é o do cron-job.org
+# (email "execution fails") e o "Parado" em Definições → Estado do sistema.
 #
 # Vermelho (e issue aberta/comentada) quando o endpoint falha ou algum
 # trabalho deste tick devolveu erro ("ok":false).
 on:
-  schedule:
-    - cron: "41 * * * *" # minuto desfasado (o GitHub atrasa as horas cheias)
   workflow_dispatch: {}
 permissions:
   contents: read

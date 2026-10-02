@@ -2,8 +2,8 @@ name: Multipark Sync Cron
 
 # CORRIDA MANUAL (workflow_dispatch) dos crons da app. JÁ NÃO É O AGENDADOR:
 # o agendador oficial é o próprio servidor — GET /api/cron/tick, chamado de 5
-# em 5 min pelo cron-job.org (ver docs/ajuda/agendador.md) e, como rede de
-# segurança, de hora a hora pelo workflow cron-tick.yml. O tick decide pela
+# em 5 min pelo cron-job.org (ver docs/ajuda/agendador.md); o GitHub já não
+# agenda nada (cron-tick.yml é só manual). O tick decide pela
 # hora de Lisboa o que está na altura (server/cronSchedule.ts), com lease,
 # prazo e retoma (server/cronScheduler.ts). Os schedules do GitHub foram
 # retirados: o GitHub atrasava-os/saltava-os (mail-sync correu 8× em 29 h;
