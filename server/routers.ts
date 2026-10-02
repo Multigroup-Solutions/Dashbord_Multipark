@@ -93,7 +93,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
-import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, deleteComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, deleteComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, deleteLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, deleteIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, updatePerformanceEvaluation, deletePerformanceEvaluation, generateWeeklyEvaluation, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, createAnnualReport, getAnnualReports, updateAnnualReport, deleteAnnualReport, generateAnnualSummary, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
+import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, deleteComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, deleteComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, deleteLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, deleteIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, updatePerformanceEvaluation, deletePerformanceEvaluation, generateWeeklyEvaluation, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
@@ -3808,14 +3808,10 @@ export const appRouter = router({
   }),
 
   // ─── ANUAL ───────────────────────────────────────────────────────────────
+  // O relatório anual antigo (list/generate/update/delete sobre annual_reports,
+  // divisão parceiro/empresa) saiu a 2 out 2026 — nenhum ecrã o usava e o Anual
+  // é o motor das Finanças (breakdown). A tabela e os dados ficam.
   annual: router({
-    list: protectedProcedure.input(z.object({
-      year: z.number().optional(),
-      projectId: z.number().optional(),
-    }).optional()).query(async ({ ctx, input }) => {
-      await requireFinanceTotals(ctx.user, "anual", "view");
-      return getAnnualReports(input);
-    }),
 
     breakdown: protectedProcedure.input(z.object({
       year: z.number(),
@@ -3860,38 +3856,6 @@ export const appRouter = router({
       const { deleteFinancialHistoryYear } = await import("./db");
       await logActivity({ userId: ctx.user.id, action: "delete", entity: "financial_history", details: `Ano ${input.year}` });
       return deleteFinancialHistoryYear(input.year);
-    }),
-
-    generate: protectedProcedure.input(z.object({
-      year: z.number(),
-      projectId: z.number().optional(),
-      splitPartner: z.number().min(0).max(100).optional(),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "anual", "manage");
-      const results = await generateAnnualSummary(input.year, input.projectId, input.splitPartner ?? 60);
-      await logActivity({ userId: ctx.user.id, action: "generate", entity: "annual_report", details: `Relatório anual ${input.year}` });
-      return results;
-    }),
-
-    update: protectedProcedure.input(z.object({
-      id: z.number(),
-      totalRevenue: z.number().optional(),
-      totalExpenses: z.number().optional(),
-      partnerShare: z.number().optional(),
-      companyShare: z.number().optional(),
-      splitRatio: z.string().optional(),
-      notes: z.string().optional(),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "anual", "manage");
-      const { id, ...data } = input;
-      await updateAnnualReport(id, data);
-      return { success: true };
-    }),
-
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "anual", "manage");
-      await deleteAnnualReport(input.id);
-      return { success: true };
     }),
   }),
 
