@@ -4,7 +4,7 @@
  * obrigatórios, dashboard de conclusão, promoções e certificados.
  */
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { projectScope } from "./cityScope";
@@ -21,7 +21,7 @@ import {
 } from "./db";
 import { careerExamQuestions, careerExams, employees, quizQuestions, trainingManuals, trainingVideos } from "../drizzle/schema";
 import { TRAINING_ITEM_TYPES } from "./trainingRules";
-import { requireAccess, employeeBelowCondition } from "./_core/access";
+import { requireAccess, employeeBelowCondition, withOverrides } from "./_core/access";
 import { roleRank, scopeFor, seesBeyondOwn } from "../shared/access";
 import { trainingTutorRouter } from "./trainingTutorRouter";
 import { uploadRefsAllowed } from "./storageRefs";
@@ -265,7 +265,7 @@ export const trainingRouter = router({
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
     const d = await dbOrThrow();
     const [r] = await d.select({ n: sql<number>`COUNT(*)` }).from(quizQuestions)
-      .where(and(eq(quizQuestions.published, 1), input?.categoryId ? eq(quizQuestions.categoryId, input.categoryId) : undefined));
+      .where(and(eq(quizQuestions.published, 1), isNull(quizQuestions.archivedAt), input?.categoryId ? eq(quizQuestions.categoryId, input.categoryId) : undefined));
     const { QUIZ_MAX_PER_DAY, QUIZ_QUESTIONS_PER_GAME } = await import("./trainingRules");
     return { published: Number(r?.n ?? 0), perGame: QUIZ_QUESTIONS_PER_GAME, maxPerDay: QUIZ_MAX_PER_DAY };
   }),
@@ -334,7 +334,7 @@ export const trainingRouter = router({
     if (!exams.length) return [];
     const d = await dbOrThrow();
     const counts = await d.select({ examId: careerExamQuestions.examId, n: sql<number>`COUNT(*)` }).from(careerExamQuestions)
-      .where(inArray(careerExamQuestions.examId, exams.map(e => e.id))).groupBy(careerExamQuestions.examId);
+      .where(and(inArray(careerExamQuestions.examId, exams.map(e => e.id)), isNull(careerExamQuestions.archivedAt))).groupBy(careerExamQuestions.examId);
     const m = new Map(counts.map(c => [c.examId, Number(c.n)]));
     return exams.map(e => ({ ...e, questionCount: m.get(e.id) ?? 0 }));
   }),
@@ -391,8 +391,9 @@ export const trainingRouter = router({
   deleteCareerExamQuestion: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
     const d = await dbOrThrow();
-    await d.delete(careerExamQuestions).where(eq(careerExamQuestions.id, input.id));
-    await logActivity({ userId: ctx.user.id, action: "delete", entity: "career_exam_question", entityId: input.id, details: "" });
+    // Arquivar (0385): sai do exame; as tentativas e os certificados antigos ficam certos.
+    await d.update(careerExamQuestions).set({ archivedAt: new Date().toISOString().slice(0, 19).replace("T", " ") }).where(eq(careerExamQuestions.id, input.id));
+    await logActivity({ userId: ctx.user.id, action: "archive", entity: "career_exam_question", entityId: input.id, details: "" });
     return { success: true };
   }),
   startCareerExam: protectedProcedure.input(z.object({ examId: z.number() })).mutation(async ({ ctx, input }) => {
@@ -441,7 +442,9 @@ export const trainingRouter = router({
     if (!me) return { success: false };
     const d = await dbOrThrow();
     const table = input.itemType === "video" ? trainingVideos : trainingManuals;
-    const [exists] = await d.select({ id: table.id }).from(table).where(eq(table.id, input.itemId)).limit(1);
+    // Arquivado (0385) ou manual por publicar não conta (18c).
+    const [exists] = await d.select({ id: table.id }).from(table).where(and(eq(table.id, input.itemId), isNull(table.archivedAt),
+      input.itemType === "manual" ? sql`COALESCE(${trainingManuals.published}, 1) = 1` : undefined)).limit(1);
     if (!exists) throw new TRPCError({ code: "NOT_FOUND", message: "Conteúdo não encontrado." });
     const { recordProgress } = await import("./trainingPaths");
     await recordProgress(me.employee.id, input.itemType, input.itemId, { completed: input.completed, seconds: input.seconds });
@@ -463,7 +466,8 @@ export const trainingRouter = router({
     requireAccess(ctx.user, "formacao", "manage");
     const { id, ...data } = input;
     const { updatePath } = await import("./trainingPaths");
-    await updatePath(id, data, ctx.user.id);
+    try { await updatePath(id, data, ctx.user.id); }
+    catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Não foi possível guardar o percurso." }); }
     return { success: true };
   }),
   deletePath: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
@@ -476,7 +480,8 @@ export const trainingRouter = router({
   setPathItems: protectedProcedure.input(z.object({ pathId: z.number(), items: z.array(z.object({ itemType: z.enum(TRAINING_ITEM_TYPES as ["video", "manual", "exam", "quiz"]), itemId: z.number().int().min(0), required: z.boolean() })).max(100) })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
     const { setPathItems } = await import("./trainingPaths");
-    await setPathItems(input.pathId, input.items, ctx.user.id);
+    try { await setPathItems(input.pathId, input.items, ctx.user.id); }
+    catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Não foi possível guardar os itens." }); }
     return { success: true };
   }),
   assignPath: protectedProcedure.input(z.object({ pathId: z.number(), employeeIds: z.array(z.number().int().positive()).min(1).max(500) })).mutation(async ({ ctx, input }) => {
@@ -485,7 +490,9 @@ export const trainingRouter = router({
     // team_leader: só a equipa (abaixo dele, na cidade).
     for (const id of input.employeeIds) await assertTrainingTeam(ctx.user, id);
     const { assignPath } = await import("./trainingPaths");
-    const r = await assignPath(input.pathId, input.employeeIds, { assignedById: ctx.user.id, source: "manual" });
+    let r;
+    try { r = await assignPath(input.pathId, input.employeeIds, { assignedById: ctx.user.id, source: "manual" }); }
+    catch (e: any) { throw new TRPCError({ code: "BAD_REQUEST", message: e?.message ?? "Não foi possível atribuir." }); }
     await logActivity({ userId: ctx.user.id, action: "update", entity: "training_path", entityId: input.pathId, details: `Atribuído a ${input.employeeIds.length} colaborador(es): ${r.created} novos` });
     return r;
   }),
@@ -547,8 +554,11 @@ export const trainingRouter = router({
     const { listPromotions } = await import("./trainingAttempts");
     return listPromotions(input?.status ?? "pending");
   }),
+  // 18c: decide o supervisor da cidade, o backoffice e o admin — nunca o team
+  // leader (que tem "editar" para atribuir à equipa) nem o próprio.
   decidePromotion: protectedProcedure.input(z.object({ id: z.number(), approve: z.boolean(), note: z.string().max(500).optional() })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "edit");
+    if (scopeFor(withOverrides(ctx.user), "formacao") === "below_city") throw new TRPCError({ code: "FORBIDDEN", message: "As promoções são decididas pelo supervisor da cidade, pelo backoffice ou pelo admin." });
     const { decidePromotion } = await import("./trainingAttempts");
     return decidePromotion(input.id, input.approve, input.note?.trim() || null, ctx.user);
   }),

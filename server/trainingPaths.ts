@@ -11,9 +11,43 @@ import {
   trainingManuals, trainingPathItems, trainingPaths, trainingProgress, trainingVideos,
 } from "../drizzle/schema";
 import {
-  assignmentStatusFor, certificateStatus, computePathProgress, daysLate, escalaEligibility, isReminderHour, lisbonDay, parseDbDate,
-  selectReminders, toDbDate, trainingBlocksEscalaEnabled, trainingRemindersEnabled, type EligibilityResult, type TrainingItemType,
+  assignmentStatusFor, blockingPathProblem, certificateStatus, computePathProgress, daysLate, escalaEligibility, isReminderHour, lisbonDay, parseDbDate,
+  selectReminders, toDbDate, trainingBlocksEscalaEnabled, trainingDueAt, trainingRemindersEnabled, type EligibilityResult, type TrainingItemType,
 } from "./trainingRules";
+
+/** Atribuição em vigor (0385: "Remover" marca `removedAt` em vez de apagar). */
+const activeAssignment = () => isNull(trainingAssignments.removedAt);
+
+/**
+ * Itens que já não se conseguem concluir (apagados, arquivados, manual por
+ * publicar, exame arquivado) → chaves "tipo:id". Não contam como obrigatórios.
+ */
+export async function unavailableItemKeys(items: ReadonlyArray<{ itemType: string; itemId: number }>): Promise<Set<string>> {
+  const d = await db();
+  const out = new Set<string>();
+  const ids = (t: string) => Array.from(new Set(items.filter(i => i.itemType === t).map(i => i.itemId)));
+  const v = ids("video"), m = ids("manual"), e = ids("exam");
+  if (v.length) {
+    const ok = new Set((await d.select({ id: trainingVideos.id }).from(trainingVideos).where(and(inArray(trainingVideos.id, v), isNull(trainingVideos.archivedAt)))).map(r => r.id));
+    for (const id of v) if (!ok.has(id)) out.add(`video:${id}`);
+  }
+  if (m.length) {
+    const ok = new Set((await d.select({ id: trainingManuals.id }).from(trainingManuals)
+      .where(and(inArray(trainingManuals.id, m), isNull(trainingManuals.archivedAt), sql`COALESCE(${trainingManuals.published}, 1) = 1`))).map(r => r.id));
+    for (const id of m) if (!ok.has(id)) out.add(`manual:${id}`);
+  }
+  if (e.length) {
+    const ok = new Set((await d.select({ id: careerExams.id }).from(careerExams).where(and(inArray(careerExams.id, e), isNull(careerExams.archivedAt)))).map(r => r.id));
+    for (const id of e) if (!ok.has(id)) out.add(`exam:${id}`);
+  }
+  return out;
+}
+
+/** Itens com `available` (para o progresso). */
+async function withAvailability<T extends { itemType: string; itemId: number }>(items: T[]): Promise<Array<T & { available: boolean }>> {
+  const gone = items.length ? await unavailableItemKeys(items) : new Set<string>();
+  return items.map(i => ({ ...i, available: !gone.has(`${i.itemType}:${i.itemId}`) }));
+}
 
 async function db() {
   const d = await getDb();
@@ -38,8 +72,9 @@ export interface PathInput {
 
 export async function listPaths(opts: { includeInactive?: boolean } = {}) {
   const d = await db();
+  // Arquivados (0385) nunca aparecem; desativados só com includeInactive.
   const paths = await d.select().from(trainingPaths)
-    .where(opts.includeInactive ? undefined : eq(trainingPaths.active, 1))
+    .where(opts.includeInactive ? isNull(trainingPaths.archivedAt) : and(eq(trainingPaths.active, 1), isNull(trainingPaths.archivedAt)))
     .orderBy(desc(trainingPaths.isDefaultOnboarding), asc(trainingPaths.name));
   if (!paths.length) return [];
   const items = await d.select().from(trainingPathItems)
@@ -47,13 +82,23 @@ export async function listPaths(opts: { includeInactive?: boolean } = {}) {
     .orderBy(asc(trainingPathItems.sortOrder), asc(trainingPathItems.id));
   const titles = await itemTitles(items);
   const counts = await d.select({ pathId: trainingAssignments.pathId, n: sql<number>`COUNT(*)` })
-    .from(trainingAssignments).groupBy(trainingAssignments.pathId);
+    .from(trainingAssignments).where(activeAssignment()).groupBy(trainingAssignments.pathId);
   const countMap = new Map(counts.map(c => [c.pathId, Number(c.n)]));
-  return paths.map(p => ({
-    ...p,
-    assignedCount: countMap.get(p.id) ?? 0,
-    items: items.filter(i => i.pathId === p.id).map(i => ({ ...i, title: titles.get(`${i.itemType}:${i.itemId}`) ?? `(${i.itemType} #${i.itemId} removido)` })),
-  }));
+  const gone = await unavailableItemKeys(items);
+  return paths.map(p => {
+    const its = items.filter(i => i.pathId === p.id);
+    return {
+      ...p,
+      assignedCount: countMap.get(p.id) ?? 0,
+      // 18c: aviso no ecrã — percurso que bloqueia a escala sem quiz/exame obrigatório.
+      gateProblem: blockingPathProblem(p.blocksEscala, its),
+      items: its.map(i => ({
+        ...i,
+        unavailable: gone.has(`${i.itemType}:${i.itemId}`),
+        title: titles.get(`${i.itemType}:${i.itemId}`) ?? `(${i.itemType} #${i.itemId} removido)`,
+      })),
+    };
+  });
 }
 
 function pathValues(input: PathInput) {
@@ -79,33 +124,44 @@ export async function createPath(input: PathInput, userId: number) {
 
 export async function updatePath(id: number, input: PathInput, userId: number) {
   const d = await db();
-  await d.update(trainingPaths).set(pathValues(input)).where(eq(trainingPaths.id, id));
+  const values = pathValues(input);
+  await d.update(trainingPaths).set(values).where(eq(trainingPaths.id, id));
   await logActivity({ userId, action: "update", entity: "training_path", entityId: id, details: input.name });
 }
 
-/** Apaga um percurso SEM atribuições; com atribuições, só se pode desativar. */
+/**
+ * "Apagar" um percurso SEM atribuições = ARQUIVÁ-LO (0385: fica desligado e
+ * fora das listas, com os itens); com atribuições, só se pode desativar.
+ */
 export async function deletePath(id: number, userId: number): Promise<{ ok: boolean; assigned: number }> {
   const d = await db();
-  const [c] = await d.select({ n: sql<number>`COUNT(*)` }).from(trainingAssignments).where(eq(trainingAssignments.pathId, id));
+  const [c] = await d.select({ n: sql<number>`COUNT(*)` }).from(trainingAssignments).where(and(eq(trainingAssignments.pathId, id), activeAssignment()));
   const assigned = Number(c?.n ?? 0);
   if (assigned > 0) return { ok: false, assigned };
-  await d.delete(trainingPathItems).where(eq(trainingPathItems.pathId, id));
-  await d.delete(trainingPaths).where(eq(trainingPaths.id, id));
-  await logActivity({ userId, action: "delete", entity: "training_path", entityId: id, details: "" });
+  const [p] = await d.select({ name: trainingPaths.name }).from(trainingPaths).where(eq(trainingPaths.id, id)).limit(1);
+  await d.update(trainingPaths).set({ active: 0, archivedAt: toDbDate(new Date()) }).where(eq(trainingPaths.id, id));
+  await logActivity({ userId, action: "archive", entity: "training_path", entityId: id, details: p?.name ?? "" });
   return { ok: true, assigned: 0 };
 }
 
 export async function setPathItems(pathId: number, items: Array<{ itemType: TrainingItemType; itemId: number; required: boolean }>, userId: number) {
   const d = await db();
+  const [path] = await d.select().from(trainingPaths).where(eq(trainingPaths.id, pathId)).limit(1);
+  if (!path) throw new Error("Percurso não encontrado.");
+  // Jorge (2 out 2026): o quiz/exame obrigatório já não impede gravar — fica só o
+  // aviso na lista (`gateProblem`), para quando a formação voltar a bloquear a escala.
+  // Os itens são configuração: substituem-se, mas o antes e o depois ficam no registo.
+  const before = await d.select().from(trainingPathItems).where(eq(trainingPathItems.pathId, pathId));
+  const fmt = (xs: Array<{ itemType: string; itemId: number; required: boolean | number }>) => xs.map(x => `${x.itemType}:${x.itemId}${x.required ? "*" : ""}`).join(" ") || "—";
   await d.delete(trainingPathItems).where(eq(trainingPathItems.pathId, pathId));
   if (items.length) {
     await d.insert(trainingPathItems).values(items.map((it, i) => ({
       pathId, itemType: it.itemType, itemId: it.itemId, sortOrder: i, required: it.required ? 1 : 0,
     })));
   }
-  await logActivity({ userId, action: "update", entity: "training_path", entityId: pathId, details: `${items.length} itens` });
+  await logActivity({ userId, action: "update", entity: "training_path", entityId: pathId, details: `Itens: ${fmt(before)} → ${fmt(items)}`.slice(0, 1000) });
   // O progresso de quem já tem o percurso muda com os itens.
-  const emps = await d.select({ employeeId: trainingAssignments.employeeId }).from(trainingAssignments).where(eq(trainingAssignments.pathId, pathId));
+  const emps = await d.select({ employeeId: trainingAssignments.employeeId }).from(trainingAssignments).where(and(eq(trainingAssignments.pathId, pathId), activeAssignment()));
   for (const e of emps) await refreshAssignmentsFor(e.employeeId);
 }
 
@@ -128,8 +184,9 @@ async function itemTitles(items: Array<{ itemType: string; itemId: number }>): P
 
 // ─── Atribuições ───────────────────────────────────────────────────────────
 
+/** Prazo = fim do dia de Lisboa de hoje + N dias (18c). */
 function dueFrom(now: Date, days: number): string {
-  return toDbDate(new Date(now.getTime() + days * 86400_000));
+  return trainingDueAt(now, days);
 }
 
 /**
@@ -140,12 +197,22 @@ export async function assignPath(pathId: number, employeeIds: number[], opts: { 
   const d = await db();
   const [path] = await d.select().from(trainingPaths).where(eq(trainingPaths.id, pathId)).limit(1);
   if (!path) throw new Error("Percurso não encontrado.");
+  if (!path.active || path.archivedAt) throw new Error("Percurso desativado: ativa-o antes de o atribuir.");
   const now = opts.now ?? new Date();
   const dueAt = dueFrom(now, path.dueDays ?? 7);
   let created = 0, reset = 0, skipped = 0;
   for (const employeeId of Array.from(new Set(employeeIds))) {
     const [existing] = await d.select().from(trainingAssignments)
       .where(and(eq(trainingAssignments.employeeId, employeeId), eq(trainingAssignments.pathId, pathId))).limit(1);
+    if (existing && existing.removedAt) {
+      // Tinha sido removida → volta a contar, com prazo novo.
+      await d.update(trainingAssignments).set({
+        status: "assigned", dueAt, completedAt: null, lastReminderAt: null, escalatedAt: null, removedAt: null, removedById: null,
+        assignedById: opts.assignedById ?? null, source: opts.source ?? existing.source, assignedAt: toDbDate(now),
+      }).where(eq(trainingAssignments.id, existing.id));
+      created++;
+      continue;
+    }
     if (existing) {
       if (opts.reset) {
         await d.update(trainingAssignments).set({
@@ -167,10 +234,22 @@ export async function assignPath(pathId: number, employeeIds: number[], opts: { 
   return { created, reset, skipped };
 }
 
+/**
+ * Remover uma atribuição = MARCÁ-LA (0385): deixa de contar (e de bloquear a
+ * escala), mas fica o rasto de quem tinha que percurso e quem o tirou.
+ */
 export async function unassign(assignmentId: number, userId: number) {
   const d = await db();
-  await d.delete(trainingAssignments).where(eq(trainingAssignments.id, assignmentId));
-  await logActivity({ userId, action: "delete", entity: "training_assignment", entityId: assignmentId, details: "" });
+  const [a] = await d.select({ employeeId: trainingAssignments.employeeId, pathName: trainingPaths.name, fullName: employees.fullName, status: trainingAssignments.status })
+    .from(trainingAssignments)
+    .innerJoin(trainingPaths, eq(trainingPaths.id, trainingAssignments.pathId))
+    .innerJoin(employees, eq(employees.id, trainingAssignments.employeeId))
+    .where(and(eq(trainingAssignments.id, assignmentId), activeAssignment())).limit(1);
+  if (!a) return;
+  const { assertEmployeeAccess } = await import("./cityScope");
+  await assertEmployeeAccess(a.employeeId);
+  await d.update(trainingAssignments).set({ removedAt: toDbDate(new Date()), removedById: userId }).where(eq(trainingAssignments.id, assignmentId));
+  await logActivity({ userId, action: "training_unassign", entity: "training_assignment", entityId: assignmentId, details: `${a.fullName}: «${a.pathName}» removido (estava ${a.status})` });
 }
 
 /** Botão "atribuir a todos os extras ativos" (âmbito da cidade de quem pede). */
@@ -241,9 +320,10 @@ export async function clearProgress(employeeId: number, itemType: TrainingItemTy
 /** Recalcula o estado das atribuições de uma pessoa (após progresso/itens). */
 export async function refreshAssignmentsFor(employeeId: number, now: Date = new Date()) {
   const d = await db();
-  const assigns = await d.select().from(trainingAssignments).where(eq(trainingAssignments.employeeId, employeeId));
+  const assigns = await d.select().from(trainingAssignments).where(and(eq(trainingAssignments.employeeId, employeeId), activeAssignment()));
   if (!assigns.length) return;
-  const items = await d.select().from(trainingPathItems).where(inArray(trainingPathItems.pathId, assigns.map(a => a.pathId)));
+  // Itens que já não se conseguem concluir não contam (18c).
+  const items = await withAvailability(await d.select().from(trainingPathItems).where(inArray(trainingPathItems.pathId, assigns.map(a => a.pathId))));
   const progress = await d.select().from(trainingProgress).where(eq(trainingProgress.employeeId, employeeId));
   for (const a of assigns) {
     const p = computePathProgress(items.filter(i => i.pathId === a.pathId), progress);
@@ -260,10 +340,10 @@ export async function employeeTraining(employeeId: number, now: Date = new Date(
   const d = await db();
   const assigns = await d.select({ a: trainingAssignments, p: trainingPaths }).from(trainingAssignments)
     .innerJoin(trainingPaths, eq(trainingPaths.id, trainingAssignments.pathId))
-    .where(eq(trainingAssignments.employeeId, employeeId))
+    .where(and(eq(trainingAssignments.employeeId, employeeId), activeAssignment()))
     .orderBy(desc(trainingAssignments.assignedAt));
   const pathIds = assigns.map(x => x.p.id);
-  const items = pathIds.length ? await d.select().from(trainingPathItems).where(inArray(trainingPathItems.pathId, pathIds)).orderBy(asc(trainingPathItems.sortOrder), asc(trainingPathItems.id)) : [];
+  const items = await withAvailability(pathIds.length ? await d.select().from(trainingPathItems).where(inArray(trainingPathItems.pathId, pathIds)).orderBy(asc(trainingPathItems.sortOrder), asc(trainingPathItems.id)) : []);
   const progress = await d.select().from(trainingProgress).where(eq(trainingProgress.employeeId, employeeId));
   const titles = await itemTitles(items);
   const progMap = new Map(progress.map(p => [`${p.itemType}:${p.itemId}`, p]));
@@ -276,7 +356,7 @@ export async function employeeTraining(employeeId: number, now: Date = new Date(
       daysLate: pr.complete ? 0 : daysLate(a.dueAt, now), progress: pr,
       items: its.map(i => {
         const g = progMap.get(`${i.itemType}:${i.itemId}`);
-        return { id: i.id, itemType: i.itemType, itemId: i.itemId, required: !!i.required, title: titles.get(`${i.itemType}:${i.itemId}`) ?? "(removido)", viewedAt: g?.viewedAt ?? null, completedAt: g?.completedAt ?? null, seconds: g?.seconds ?? 0 };
+        return { id: i.id, itemType: i.itemType, itemId: i.itemId, required: !!i.required && i.available, unavailable: !i.available, title: titles.get(`${i.itemType}:${i.itemId}`) ?? "(removido)", viewedAt: g?.viewedAt ?? null, completedAt: g?.completedAt ?? null, seconds: g?.seconds ?? 0 };
       }),
     };
   });
@@ -293,28 +373,31 @@ async function eligibilityRows(employeeIds: number[]) {
     pathActive: trainingPaths.active, blocksEscala: trainingPaths.blocksEscala,
   }).from(trainingAssignments)
     .innerJoin(trainingPaths, eq(trainingPaths.id, trainingAssignments.pathId))
-    .where(inArray(trainingAssignments.employeeId, employeeIds));
+    .where(and(inArray(trainingAssignments.employeeId, employeeIds), activeAssignment()));
 }
 
 export async function checkEscalaEligibility(employeeId: number, opts: { override?: boolean; canOverride?: boolean } = {}): Promise<EligibilityResult> {
   const enabled = trainingBlocksEscalaEnabled();
   if (!enabled) return escalaEligibility({ assignments: [], enabled });
-  // Estado fresco (o progresso pode ter sido feito entretanto)
-  try { await refreshAssignmentsFor(employeeId); } catch { /* segue com o estado guardado */ }
+  // Estado fresco (o progresso pode ter sido feito entretanto). Falhar aqui é
+  // erro, não "por concluir" com a mensagem errada (18c).
+  try { await refreshAssignmentsFor(employeeId); }
+  catch (err: any) { throw new Error(`Não foi possível verificar a formação (${String(err?.message ?? err).slice(0, 80)}). Tenta de novo.`); }
   const rows = await eligibilityRows([employeeId]);
   return escalaEligibility({ assignments: rows, enabled, override: opts.override, canOverride: opts.canOverride });
 }
 
-/** Ids (do conjunto dado) com formação obrigatória em falta — badge + autofill. */
+/**
+ * Ids (do conjunto dado) com formação obrigatória em falta — badge, proposta
+ * automática e preenchimento automático. Uma leitura falhada LANÇA (18c):
+ * antes devolvia "ninguém em falta" e a proposta/o autofill escalavam quem
+ * não tinha a formação.
+ */
 export async function employeesMissingTraining(employeeIds: number[]): Promise<Set<number>> {
   const out = new Set<number>();
   if (!trainingBlocksEscalaEnabled() || !employeeIds.length) return out;
-  try {
-    const rows = await eligibilityRows(employeeIds);
-    for (const r of rows) if (r.pathActive && r.blocksEscala && r.status !== "completed") out.add(r.employeeId);
-  } catch (err: any) {
-    console.warn("[Training] verificação da formação falhou:", String(err?.message ?? err).slice(0, 160));
-  }
+  const rows = await eligibilityRows(employeeIds);
+  for (const r of rows) if (r.pathActive && r.blocksEscala && r.status !== "completed") out.add(r.employeeId);
   return out;
 }
 
@@ -338,7 +421,7 @@ export async function completionDashboard(filters: { city?: string | null; pathI
   }).from(trainingAssignments)
     .innerJoin(trainingPaths, eq(trainingPaths.id, trainingAssignments.pathId))
     .innerJoin(employees, eq(employees.id, trainingAssignments.employeeId))
-    .where(and(eq(employees.isActive, 1), projectScope(employees.projectId),
+    .where(and(eq(employees.isActive, 1), projectScope(employees.projectId), activeAssignment(),
       filters.pathId ? eq(trainingPaths.id, filters.pathId) : undefined,
       filters.targetRole ? eq(trainingPaths.targetRole, filters.targetRole) : undefined));
   // team_leader: só a equipa (o chamador passa as fichas permitidas).
@@ -397,7 +480,7 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
   const nowDb = toDbDate(now);
 
   const marked = await d.update(trainingAssignments).set({ status: "overdue" })
-    .where(and(sql`${trainingAssignments.status} IN ('assigned','in_progress')`, sql`${trainingAssignments.dueAt} < ${nowDb}`));
+    .where(and(sql`${trainingAssignments.status} IN ('assigned','in_progress')`, sql`${trainingAssignments.dueAt} < ${nowDb}`, activeAssignment()));
   report.overdueMarked = affected(marked);
 
   const open = await d.select({
@@ -409,7 +492,7 @@ export async function runTrainingAutomation(now: Date, hour: number): Promise<Tr
   }).from(trainingAssignments)
     .innerJoin(trainingPaths, eq(trainingPaths.id, trainingAssignments.pathId))
     .innerJoin(employees, eq(employees.id, trainingAssignments.employeeId))
-    .where(and(sql`${trainingAssignments.status} <> 'completed'`, eq(trainingPaths.active, 1), eq(employees.isActive, 1)));
+    .where(and(sql`${trainingAssignments.status} <> 'completed'`, eq(trainingPaths.active, 1), eq(employees.isActive, 1), activeAssignment()));
 
   const { remind, escalate } = selectReminders(open, now);
   const byId = new Map(open.map(o => [o.id, o]));

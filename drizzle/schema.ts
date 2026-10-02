@@ -341,6 +341,8 @@ export const careerExamQuestions = mysqlTable("career_exam_questions", {
 	correctOption: mysqlEnum(['A','B','C','D']).notNull(),
 	explanation: text(),
 	points: int().default(10).notNull(),
+	// 0385 — arquivada em vez de apagada (sai do exame; as tentativas antigas ficam).
+	archivedAt: timestamp({ mode: 'string' }),
 });
 
 export const careerExams = mysqlTable("career_exams", {
@@ -1009,6 +1011,8 @@ export const faqs = mysqlTable("faqs", {
 	question: text().notNull(),
 	answer: text().notNull(),
 	sortOrder: int().default(0),
+	// 0385 — arquivada em vez de apagada.
+	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
@@ -1819,6 +1823,8 @@ export const quizQuestions = mysqlTable("quiz_questions", {
 	published: tinyint().default(1).notNull(), // 0 = rascunho (ex.: gerado por IA) — 0090
 	sourceManualId: int(), // manual de origem (perguntas geradas por IA) — 0090
 	sourceKbDocId: int(), // documento da base de conhecimento de origem — 0175
+	// 0385 — arquivada em vez de apagada (sai do quiz).
+	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
@@ -2062,6 +2068,8 @@ export const trainingManuals = mysqlTable("training_manuals", {
 	type: varchar({ length: 32 }).default('manual').notNull(), // manual|update|news|procedure|link
 	published: tinyint().default(1),
 	createdBy: int(),
+	// 0385 — arquivado em vez de apagado (deixa de contar nos percursos).
+	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 	fileUrl: text(),
@@ -2082,6 +2090,8 @@ export const trainingVideos = mysqlTable("training_videos", {
 	careerLevel: varchar({ length: 32 }), // módulo de um nível de carreira (opcional)
 	sortOrder: int().default(0),
 	createdBy: int(),
+	// 0385 — arquivado em vez de apagado (deixa de contar nos percursos).
+	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
@@ -2097,6 +2107,8 @@ export const trainingPaths = mysqlTable("training_paths", {
 	isDefaultOnboarding: tinyint().default(0).notNull(),
 	blocksEscala: tinyint().default(1).notNull(),
 	dueDays: int().default(7).notNull(),
+	// 0385 — "Apagar" arquiva (e desliga) o percurso.
+	archivedAt: timestamp({ mode: 'string' }),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -2124,6 +2136,9 @@ export const trainingAssignments = mysqlTable("training_assignments", {
 	source: varchar({ length: 32 }),
 	lastReminderAt: datetime({ mode: 'string' }),
 	escalatedAt: datetime({ mode: 'string' }),
+	// 0385 — "Remover atribuição" marca em vez de apagar (fica o rasto).
+	removedAt: timestamp({ mode: 'string' }),
+	removedById: int(),
 },
 (table) => [
 	uniqueIndex("training_assignments_emp_path").on(table.employeeId, table.pathId),

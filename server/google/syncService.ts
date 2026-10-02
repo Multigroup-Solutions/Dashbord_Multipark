@@ -120,7 +120,7 @@ export async function desiredEventsForUser(u: { userId: number; role: string; em
   if (u.prefs.calTraining && u.employeeId != null) {
     const rows = rowsOf(await d.execute(sql`SELECT ta.id, ta.dueAt, p.name AS pathName FROM training_assignments ta
       JOIN training_paths p ON p.id = ta.pathId
-      WHERE ta.employeeId = ${u.employeeId} AND ta.dueAt IS NOT NULL AND ta.status <> 'completed' AND ta.dueAt >= ${fromSql} AND ta.dueAt < ${toSql}
+      WHERE ta.employeeId = ${u.employeeId} AND ta.removedAt IS NULL AND ta.dueAt IS NOT NULL AND ta.status <> 'completed' AND ta.dueAt >= ${fromSql} AND ta.dueAt < ${toSql}
       LIMIT 200`).catch(() => [[]]));
     for (const r of rows) { const e = trainingEvent({ id: Number(r.id), dueAt: String(r.dueAt), pathName: String(r.pathName ?? "Formação") }, appUrl); if (e) out.push(e); }
   }

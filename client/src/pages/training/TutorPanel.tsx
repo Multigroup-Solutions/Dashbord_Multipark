@@ -13,6 +13,7 @@ import { fmtPTDate } from "@/lib/lisbonTime";
 import { toast } from "sonner";
 import { BookOpen, ChevronDown, ChevronUp, Flame, GraduationCap, Lightbulb, Send, Sparkles, Trash2, Volume2 } from "lucide-react";
 import { TUTOR_MAX_INPUT_CHARS, type TutorContext } from "@shared/trainingTutor";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 type Msg = {
   role: "user" | "assistant";
@@ -102,6 +103,7 @@ export function TutorPanel({ context, defaultOpen = true, title }: { context: Tu
       {open && (
         <CardContent className="space-y-3 pt-0">
           {overview.isLoading && <p className="text-sm text-muted-foreground">A preparar o tutor…</p>}
+          {overview.error && <QueryErrorNote error={overview.error} onRetry={() => overview.refetch()} retrying={overview.isFetching} what="o tutor" />}
           {o && (
             <div className="rounded-lg bg-primary/5 p-3 text-sm space-y-2">
               <p>{o.greeting}</p>

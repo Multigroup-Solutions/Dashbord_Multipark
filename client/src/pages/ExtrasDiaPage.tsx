@@ -1083,6 +1083,7 @@ function AssignmentForm({
     photoUrl?: string | null;
     availability?: { status: "available" | "unavailable" | "no_response"; morning: boolean; night: boolean } | null;
     trainingMissing?: boolean;
+    trainingUnknown?: boolean;
   }[];
   asTeamLeader?: boolean;
   shift: ShiftId;
@@ -1155,6 +1156,9 @@ function AssignmentForm({
                     <span className={c.availability?.status === "unavailable" ? "text-muted-foreground" : undefined}>{c.fullName}</span>
                     {c.trainingMissing && (
                       <span className="ml-1 rounded bg-amber-100 px-1 text-[11px] font-medium text-amber-800" title="Formação obrigatória por concluir">Formação em falta</span>
+                    )}
+                    {c.trainingUnknown && (
+                      <span className="ml-1 rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-700" title="Não foi possível verificar a formação agora — ao guardar volta a ser verificada">Formação por verificar</span>
                     )}
                   </span>
                 </SelectItem>
