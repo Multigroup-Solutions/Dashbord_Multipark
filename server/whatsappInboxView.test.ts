@@ -45,28 +45,33 @@ describe("avatarToneIndex", () => {
   });
 });
 
+// Horas de LISBOA (17a), sejam quais forem as do aparelho. Outubro = UTC+1.
+const lx = (y: number, mo: number, d: number, h: number, mi: number) => Date.UTC(y, mo - 1, d, h - (mo >= 4 && mo <= 10 ? 1 : 0), mi);
+
 describe("daySeparatorLabel", () => {
-  const now = new Date(2026, 9, 1, 15, 0).getTime(); // qua 01/10/2026 15:00 local
-  it("Hoje / Ontem", () => {
-    expect(daySeparatorLabel(new Date(2026, 9, 1, 0, 5).getTime(), now)).toBe("Hoje");
-    expect(daySeparatorLabel(new Date(2026, 8, 30, 23, 59).getTime(), now)).toBe("Ontem");
+  const now = lx(2026, 10, 1, 15, 0); // qua 01/10/2026 15:00 em Lisboa
+  it("Hoje / Ontem (dias de Lisboa)", () => {
+    expect(daySeparatorLabel(lx(2026, 10, 1, 0, 5), now)).toBe("Hoje");
+    expect(daySeparatorLabel(lx(2026, 9, 30, 23, 59), now)).toBe("Ontem");
+    // 23:30 UTC de 30/09 = 00:30 de 01/10 em Lisboa → hoje
+    expect(daySeparatorLabel(Date.UTC(2026, 8, 30, 23, 30), now)).toBe("Hoje");
   });
   it("últimos 7 dias → dia da semana com maiúscula", () => {
-    const label = daySeparatorLabel(new Date(2026, 8, 28, 10, 0).getTime(), now);
-    expect(label).not.toMatch(/^\d/);
-    expect(label.charAt(0)).toBe(label.charAt(0).toUpperCase());
+    const label = daySeparatorLabel(lx(2026, 9, 28, 10, 0), now);
+    expect(label).toBe("Segunda-feira");
   });
   it("mais antigo → dd/mm; outro ano → dd/mm/aaaa", () => {
-    expect(daySeparatorLabel(new Date(2026, 8, 3, 10, 0).getTime(), now)).toBe("03/09");
-    expect(daySeparatorLabel(new Date(2025, 11, 31, 10, 0).getTime(), now)).toBe("31/12/2025");
+    expect(daySeparatorLabel(lx(2026, 9, 3, 10, 0), now)).toBe("03/09");
+    expect(daySeparatorLabel(lx(2025, 12, 31, 10, 0), now)).toBe("31/12/2025");
   });
 });
 
 describe("localDayKey", () => {
-  it("agrupa pelo dia local", () => {
-    expect(localDayKey(new Date(2026, 9, 1, 0, 0).getTime())).toBe("2026-10-01");
-    expect(localDayKey(new Date(2026, 9, 1, 23, 59).getTime())).toBe("2026-10-01");
-    expect(localDayKey(new Date(2026, 9, 2, 0, 0).getTime())).toBe("2026-10-02");
+  it("agrupa pelo dia de Lisboa", () => {
+    expect(localDayKey(lx(2026, 10, 1, 0, 0))).toBe("2026-10-01");
+    expect(localDayKey(lx(2026, 10, 1, 23, 59))).toBe("2026-10-01");
+    expect(localDayKey(lx(2026, 10, 2, 0, 0))).toBe("2026-10-02");
+    expect(localDayKey(Date.UTC(2026, 8, 30, 23, 30))).toBe("2026-10-01");
   });
 });
 

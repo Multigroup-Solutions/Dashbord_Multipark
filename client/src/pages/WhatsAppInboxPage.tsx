@@ -58,7 +58,8 @@ import {
   type ConversationStatus,
 } from "@shared/whatsappConversation";
 import { withDraft, type WhatsAppDrafts } from "@shared/whatsappDrafts";
-import { DEFAULT_INBOX_FILTERS, type InboxListFilters } from "@shared/whatsappInboxView";
+import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, type InboxListFilters } from "@shared/whatsappInboxView";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
 import { CallContactDialog, PendingCallbacksDialog, type TimelineCall } from "@/components/whatsapp/WhatsAppCallsPanels";
@@ -106,6 +107,16 @@ const SUPPORTS_FIELD_SIZING = typeof CSS !== "undefined" && typeof CSS.supports 
 const EMPTY_MESSAGES: InboxMessage[] = [];
 const EMPTY_CALLS: TimelineCall[] = [];
 
+/** Código único de um envio (17a): repetir o mesmo pedido nunca reenvia. */
+function newRequestId(): string {
+  const c = (globalThis as any).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** Ecrã tátil (telemóvel/tablet): Enter muda de linha, só o botão envia. */
+const COARSE_POINTER = typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+
 /** Badge de opt-out (pediu STOP). */
 function OptedOutBadge() {
   return (
@@ -139,8 +150,18 @@ export default function WhatsAppInboxPage() {
   const [tplWeekStart, setTplWeekStart] = useState("");
   const pageVisible = usePageVisible();
   const [now, setNow] = useState(() => Date.now());
-  // Pesquisa por nome ou número (filtro local — a lista já vem completa).
+  // Pesquisa por nome ou número: filtra já o que está na lista e vai ao
+  // servidor (17a) — a lista só traz as INBOX_LIST_LIMIT conversas mais recentes.
   const [search, setSearch] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
+  const [serverSearch, setServerSearch] = useState(() => search.trim());
+  useEffect(() => {
+    const t = setTimeout(() => setServerSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+  // Código do envio em curso por conversa: repetir com o MESMO texto (rede que
+  // falhou) reutiliza-o — o servidor não manda a mensagem duas vezes.
+  const replyReqIds = useRef(new Map<number, { text: string; id: string }>());
+  const [tplReqId, setTplReqId] = useState(() => newRequestId());
   // Filtros locais, todos em AND com a pesquisa: responsável + estado (0097),
   // só não lidas, só com alerta (SLA / janela a fechar), intenção e urgência
   // (triagem IA). A conversa ABERTA fica sempre à vista: abrir marca como lida
@@ -166,8 +187,9 @@ export default function WhatsAppInboxPage() {
     return () => clearInterval(t);
   }, []);
 
-  const conversations = trpc.whatsapp.conversations.list.useQuery(undefined, {
+  const conversations = trpc.whatsapp.conversations.list.useQuery(serverSearch ? { search: serverSearch } : undefined, {
     refetchInterval: pageVisible ? POLL_MS : false,
+    placeholderData: (prev) => prev,
   });
   const thread = trpc.whatsapp.messages.byConversation.useQuery(
     { conversationId: selectedId ?? 0 },
@@ -189,7 +211,11 @@ export default function WhatsAppInboxPage() {
   });
   const meta = trpc.whatsapp.inboxMeta.useQuery(undefined, { staleTime: 10 * 60_000 });
   const slaMinutes = meta.data?.slaMinutes ?? 15;
-  const assignees = trpc.whatsapp.assignees.useQuery(undefined, { staleTime: 10 * 60_000 });
+  // Responsáveis possíveis PARA ESTA conversa: quem responde e vê a cidade dela (17a).
+  const assignees = trpc.whatsapp.assignees.useQuery(
+    { conversationId: selectedId ?? undefined },
+    { enabled: selectedId != null, staleTime: 5 * 60_000 },
+  );
   const quickReplies = trpc.whatsapp.quickReplies.list.useQuery(undefined, { staleTime: 60_000 });
   /** Depois de qualquer mudança: lista, conversa aberta e badge do menu. */
   function refreshAll() {
@@ -243,17 +269,24 @@ export default function WhatsAppInboxPage() {
     onError: (e) => toast.error(e.message),
   });
   const reply = trpc.whatsapp.reply.useMutation({
-    onSuccess: (_r, v) => {
+    onSuccess: (r, v) => {
+      // Enviada ou "sem confirmação": o texto sai do composer (a mensagem já
+      // está na conversa) — voltar a carregar em Enter não a reenvia.
+      replyReqIds.current.delete(v.conversationId);
       setDraft(v.conversationId, "");
       setStickSignal((n) => n + 1);
       refreshAll();
+      if (!r.ok && r.uncertain) toast.warning(r.error || "Sem confirmação da Meta: a mensagem pode ter chegado. Confirma antes de enviar outra vez.", { duration: 10_000 });
     },
+    // Falhou de certeza (ou a rede caiu): o texto fica; tentar outra vez com o
+    // mesmo texto usa o mesmo código e o servidor não duplica.
     onError: (e) => toast.error(e.message),
   });
   const sendTemplate = trpc.whatsapp.sendTemplate.useMutation({
     onSuccess: (r) => {
       if (r.sent) toast.success("Template enviado.");
       else toast.error(r.recipients[0]?.error || "Falha ao enviar template.");
+      setTplReqId(newRequestId());
       setTplOpen(false);
       setStickSignal((n) => n + 1);
       thread.refetch();
@@ -267,6 +300,11 @@ export default function WhatsAppInboxPage() {
     setAiSummary(null);
     markRead.mutate({ conversationId: id });
   }
+  // Aberta por link (?c=, pesquisa global): também conta como lida (17a).
+  useEffect(() => {
+    if (selectedId != null) markRead.mutate({ conversationId: selectedId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const allConversations = conversations.data ?? [];
   const hasSearch = search.trim().length > 0;
@@ -381,21 +419,26 @@ export default function WhatsAppInboxPage() {
   function openTemplateDialog() {
     setTplParam2("");
     setTplWeekStart("");
+    setTplReqId(newRequestId());
     setTplOpen(true);
   }
 
   function submitReply() {
-    if (!text.trim() || selectedId == null) return;
+    if (!text.trim() || selectedId == null || reply.isPending) return;
+    const body = text.trim();
+    const prev = replyReqIds.current.get(selectedId);
+    const clientRequestId = prev && prev.text === body ? prev.id : newRequestId();
+    replyReqIds.current.set(selectedId, { text: body, id: clientRequestId });
     // Contacto que pediu STOP: texto livre só depois de confirmar (ex.: responder a uma dúvida dele).
     if (t?.optedOut) {
       const ok = window.confirm(
         "Este contacto pediu para não receber mensagens (STOP). Enviar mesmo assim esta resposta?",
       );
       if (!ok) return;
-      reply.mutate({ conversationId: selectedId, text: text.trim(), confirmOptedOut: true });
+      reply.mutate({ conversationId: selectedId, text: body, confirmOptedOut: true, clientRequestId });
       return;
     }
-    reply.mutate({ conversationId: selectedId, text: text.trim() });
+    reply.mutate({ conversationId: selectedId, text: body, clientRequestId });
   }
 
   function groupHeader(label: string, count: number, tone: "open" | "closed") {
@@ -444,7 +487,22 @@ export default function WhatsAppInboxPage() {
         onOpenCallbacks={() => setCallbacksOpen(true)}
       />
       <div className="flex-1 overflow-y-auto overscroll-contain">
-        {convList.length === 0 && (
+        {conversations.error && (
+          <div className="p-2">
+            <QueryErrorNote error={conversations.error} onRetry={() => conversations.refetch()} retrying={conversations.isFetching} what="as conversas" />
+          </div>
+        )}
+        {allConversations.some((c) => c.partial) && (
+          <div className="mx-2 mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            Leitura parcial: o estado, o responsável e as ligações das conversas não estão disponíveis agora.
+          </div>
+        )}
+        {!serverSearch && allConversations.length >= INBOX_LIST_LIMIT && (
+          <div className="mx-2 mt-2 text-[11px] text-muted-foreground">
+            Mostra as {INBOX_LIST_LIMIT} conversas mais recentes. Para uma mais antiga, pesquisa pelo nome ou número.
+          </div>
+        )}
+        {convList.length === 0 && !conversations.error && (
           <div className="p-4 text-sm text-muted-foreground text-center">
             {conversations.isLoading
               ? "A carregar…"
@@ -549,6 +607,8 @@ export default function WhatsAppInboxPage() {
   }
 
   function composer() {
+    // Leitura da conversa falhou: não se sabe a janela — não se fala de "janela fechada".
+    const threadFailed = !!thread.error && !t;
     const disabled = windowState !== "open";
     return (
       <div className="px-2 py-2 border-t shrink-0 bg-muted/30">
@@ -569,7 +629,9 @@ export default function WhatsAppInboxPage() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="top" className="w-72 max-h-80 overflow-y-auto">
               <DropdownMenuLabel className="text-xs">Respostas rápidas</DropdownMenuLabel>
-              {(quickReplies.data ?? []).length === 0 && (
+              {quickReplies.error ? (
+                <div className="px-2 py-1.5 text-xs text-red-700 dark:text-red-300">Não foi possível carregar as respostas rápidas.</div>
+              ) : (quickReplies.data ?? []).length === 0 && !quickReplies.isLoading && (
                 <div className="px-2 py-1.5 text-xs text-muted-foreground">Ainda não há respostas rápidas.</div>
               )}
               {(quickReplies.data ?? []).map((r) => (
@@ -607,12 +669,22 @@ export default function WhatsAppInboxPage() {
             rows={1}
             aria-label="Mensagem"
             className="resize-none min-h-9 max-h-40 overflow-y-auto py-2 leading-5 bg-background"
-            placeholder={disabled ? "Composer desativado — janela fechada." : "Escreve uma mensagem… (Shift+Enter muda de linha)"}
+            placeholder={
+              threadFailed
+                ? "Não foi possível carregar a conversa."
+                : disabled
+                  ? "Composer desativado — janela fechada."
+                  : isMobile || COARSE_POINTER
+                    ? "Escreve uma mensagem…"
+                    : "Escreve uma mensagem… (Shift+Enter muda de linha)"
+            }
             value={text}
             disabled={disabled || reply.isPending}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !disabled) {
+              // No telemóvel não há Shift+Enter: Enter muda de linha e só o botão envia (17a).
+              if (isMobile || COARSE_POINTER) return;
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !disabled) {
                 e.preventDefault();
                 submitReply();
               }
@@ -663,6 +735,7 @@ export default function WhatsAppInboxPage() {
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="none">Sem responsável</SelectItem>
+        {assignees.error && <div className="px-2 py-1.5 text-xs text-red-700">Não foi possível carregar a lista.</div>}
         {(assignees.data ?? []).map((u) => (
           <SelectItem key={u.id} value={String(u.id)}>
             {u.id === user?.id ? `${u.name} (eu)` : u.name}
@@ -847,6 +920,12 @@ export default function WhatsAppInboxPage() {
             </div>
           )}
 
+          {thread.error && (
+            <div className="px-3 py-2 border-b shrink-0">
+              <QueryErrorNote error={thread.error} onRetry={() => thread.refetch()} retrying={thread.isFetching} what="esta conversa" />
+            </div>
+          )}
+
           <MessageThread
             conversationId={selectedId}
             messages={t?.messages ?? EMPTY_MESSAGES}
@@ -920,7 +999,7 @@ export default function WhatsAppInboxPage() {
             <DialogDescription>
               {windowState === "awaiting_first_reply"
                 ? `Ainda sem resposta de ${t?.name ?? "este contacto"} — só é possível escrever com um template aprovado.`
-                : `A janela de 24h está fechada. Um template aprovado reabre a conversa com ${t?.name ?? "este contacto"}.`}
+                : `A janela de 24h está fechada. Com um template aprovado podes voltar a contactar ${t?.name ?? "este contacto"}; o texto livre só volta quando ele responder.`}
             </DialogDescription>
           </DialogHeader>
 
@@ -986,6 +1065,7 @@ export default function WhatsAppInboxPage() {
                   templateId: tplDef.id,
                   bodyParam2: tplDef.sharedParam ? tplParam2.trim() || null : null,
                   weekStart: tplNeedsWeek ? tplWeekStart : null,
+                  clientRequestId: tplReqId,
                 })
               }
             >

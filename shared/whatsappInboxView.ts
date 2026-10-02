@@ -5,6 +5,10 @@
  * `server/whatsappInboxView.test.ts` sem DOM.
  */
 import type { AssigneeFilter, StatusFilter } from "./whatsappConversation";
+import { lisbonDayOf } from "./lisbonDay";
+
+/** Máximo de conversas que a lista traz (as mais recentes); a pesquisa vai ao servidor. */
+export const INBOX_LIST_LIMIT = 300;
 
 /** Iniciais para o avatar: 1.ª letra do primeiro e do último nome; número → últimos 2 dígitos. */
 export function contactInitials(name: string | null | undefined): string {
@@ -34,31 +38,32 @@ export function avatarToneIndex(key: string | null | undefined, paletteSize: num
   return paletteSize > 0 ? h % paletteSize : 0;
 }
 
-/** Chave do dia LOCAL (yyyy-mm-dd) de um instante — para agrupar a conversa por dias. */
+/**
+ * Chave do dia (yyyy-mm-dd) de um instante, em hora de LISBOA (17a) — para
+ * agrupar a conversa por dias igual em qualquer browser.
+ */
 export function localDayKey(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return lisbonDayOf(ms);
 }
 
 /**
- * Rótulo do separador de dia na conversa (estilo WhatsApp): "Hoje", "Ontem",
- * dia da semana nos últimos 7 dias, senão dd/mm (com o ano se não for o atual).
+ * Rótulo do separador de dia na conversa (estilo WhatsApp), em dias de Lisboa:
+ * "Hoje", "Ontem", dia da semana nos últimos 7 dias, senão dd/mm (com o ano se
+ * não for o atual).
  */
 export function daySeparatorLabel(ms: number, now: number): string {
-  const d = new Date(ms);
-  const today = new Date(now);
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  // Arredondado: dias com mudança de hora (23h/25h) continuam a contar como 1.
-  const diffDays = Math.round((startOf(today) - startOf(d)) / 86_400_000);
+  const day = lisbonDayOf(ms);
+  const today = lisbonDayOf(now);
+  // Datas sem hora → meia-noite UTC: a diferença é sempre um número inteiro de dias.
+  const diffDays = Math.round((Date.parse(today) - Date.parse(day)) / 86_400_000);
   if (diffDays === 0) return "Hoje";
   if (diffDays === 1) return "Ontem";
   if (diffDays > 1 && diffDays < 7) {
-    const wd = d.toLocaleDateString("pt-PT", { weekday: "long" });
+    const wd = new Date(ms).toLocaleDateString("pt-PT", { weekday: "long", timeZone: "Europe/Lisbon" });
     return wd.charAt(0).toUpperCase() + wd.slice(1);
   }
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return d.getFullYear() === today.getFullYear() ? `${dd}/${mm}` : `${dd}/${mm}/${d.getFullYear()}`;
+  const [y, m, d] = day.split("-");
+  return y === today.slice(0, 4) ? `${d}/${m}` : `${d}/${m}/${y}`;
 }
 
 /** Filtros da lista do inbox (fora a pesquisa, que tem o seu próprio "limpar"). */

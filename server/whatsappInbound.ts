@@ -604,8 +604,14 @@ export async function matchBookingCity(db: Db, conversationId: number, phoneE164
 async function fetchAndStoreMedia(db: Db, messageId: number, waMessageId: string, media: ParsedInboundMedia): Promise<boolean> {
   const dl = await downloadMedia(media.id);
   let stored: { key: string; mime: string | null } | null = null;
+  // O motivo fica na mensagem (errorDetail das recebidas) para o ecrã o dizer (17a).
+  let failure: string | null = null;
+  // Demasiado grande não melhora a tentar outra vez: deixa de tentar já.
+  let giveUp = false;
   if (!dl.ok) {
     console.warn(`[WhatsAppWebhook] media ${media.kind} ${media.id} não descarregada: ${dl.error}`);
+    failure = dl.error.slice(0, 300);
+    giveUp = /demasiado grande/i.test(dl.error);
   } else {
     const mime = baseMime(dl.mime ?? media.mime);
     // Nome derivado do id da mensagem (único) — sem caracteres soltos.
@@ -616,6 +622,7 @@ async function fetchAndStoreMedia(db: Db, messageId: number, waMessageId: string
       stored = { key: put.key, mime };
     } catch (err: any) {
       console.warn(`[WhatsAppWebhook] media ${media.id} não gravada no storage: ${err?.message ?? err}`);
+      failure = "Não foi possível guardar o ficheiro.";
     }
   }
   try {
@@ -623,8 +630,8 @@ async function fetchAndStoreMedia(db: Db, messageId: number, waMessageId: string
       .update(whatsappMessages)
       .set(
         stored
-          ? { mediaKey: stored.key, mediaMime: stored.mime, mediaUrl: null }
-          : { mediaAttempts: sql`${whatsappMessages.mediaAttempts} + 1` },
+          ? { mediaKey: stored.key, mediaMime: stored.mime, mediaUrl: null, errorDetail: null }
+          : { mediaAttempts: giveUp ? MEDIA_MAX_ATTEMPTS : sql`${whatsappMessages.mediaAttempts} + 1`, errorDetail: failure },
       )
       .where(eq(whatsappMessages.id, messageId));
   } catch (err: any) {

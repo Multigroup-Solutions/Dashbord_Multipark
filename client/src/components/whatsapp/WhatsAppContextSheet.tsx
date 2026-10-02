@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { toast } from "sonner";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { CalendarDays, Link2, Link2Off, MessageSquareWarning, Package, Search, UserRound, Clock } from "lucide-react";
 
 /** 'YYYY-MM-DD HH:MM:SS' → DD/MM/AAAA (sem converter fuso: é só a data). */
@@ -96,12 +97,15 @@ export function WhatsAppContextSheet({ conversationId, contactName, open, onOpen
 
         <div className="space-y-4 px-4 pb-6">
           {ctx.isLoading && <p className="text-sm text-muted-foreground flex items-center gap-2"><Clock className="h-4 w-4 animate-spin" /> A procurar…</p>}
-          {ctx.isError && <p className="text-sm text-red-600">{ctx.error.message}</p>}
+          {ctx.error && <QueryErrorNote error={ctx.error} onRetry={() => ctx.refetch()} retrying={ctx.isFetching} what="o contexto deste contacto" />}
 
-          {d && (d.linkedBooking || d.linkedClientEmail) && (
+          {d && (d.linkedBooking || d.linkedBookingError || d.linkedClientEmail) && (
             <section className="space-y-2">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ligado a</h3>
               {d.linkedBooking && bookingRow(d.linkedBooking)}
+              {d.linkedBookingError && (
+                <QueryErrorNote error={{ message: d.linkedBookingError }} onRetry={() => ctx.refetch()} retrying={ctx.isFetching} what="a reserva ligada" />
+              )}
               {d.linkedClientEmail && (
                 <a className="block text-xs underline text-primary" href={`/clientes?email=${encodeURIComponent(d.linkedClientEmail)}`}>
                   Abrir ficha do cliente ({d.linkedClientEmail})
@@ -124,8 +128,11 @@ export function WhatsAppContextSheet({ conversationId, contactName, open, onOpen
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
                 <CalendarDays className="h-3.5 w-3.5" /> Reservas sugeridas · {d.bookings.length}
               </h3>
+              {d.bookingsError && (
+                <QueryErrorNote error={{ message: d.bookingsError }} onRetry={() => ctx.refetch()} retrying={ctx.isFetching} what="as reservas" />
+              )}
               {d.bookings.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Nenhuma reserva com este número.</p>
+                !d.bookingsError && <p className="text-xs text-muted-foreground">Nenhuma reserva com este número.</p>
               ) : (
                 d.bookings.map(bookingRow)
               )}
@@ -164,6 +171,9 @@ export function WhatsAppContextSheet({ conversationId, contactName, open, onOpen
               />
             </div>
             {debounced.length >= 2 && search.isLoading && <p className="text-xs text-muted-foreground">A pesquisar…</p>}
+            {debounced.length >= 2 && search.error && (
+              <QueryErrorNote error={search.error} onRetry={() => search.refetch()} retrying={search.isFetching} what="a pesquisa de reservas" />
+            )}
             {debounced.length >= 2 && search.data?.length === 0 && <p className="text-xs text-muted-foreground">Sem resultados.</p>}
             {search.data?.map(bookingRow)}
           </section>

@@ -1,5 +1,8 @@
-// Helpers de data/hora do inbox WhatsApp (lista + conversa). Extraídos da
-// WhatsAppInboxPage sem mudança de comportamento.
+// Helpers de data/hora do inbox WhatsApp (lista + conversa). Horas e dias em
+// hora de Lisboa (17a), seja qual for o fuso do aparelho.
+import { lisbonDayOf } from "@shared/lisbonDay";
+
+const LISBON = "Europe/Lisbon";
 
 /** Timestamp da BD (UTC wall-clock 'YYYY-MM-DD HH:MM:SS') → Date local, ou null. */
 export function parseDbTime(s: string | null): Date | null {
@@ -10,10 +13,10 @@ export function parseDbTime(s: string | null): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Timestamp da BD → hora local HH:MM (bolhas da thread). */
+/** Timestamp da BD → hora de Lisboa HH:MM (bolhas da thread). */
 export function fmtTime(s: string | null): string {
   const d = parseDbTime(s);
-  return d ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  return d ? d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit", timeZone: LISBON }) : "";
 }
 
 /**
@@ -24,12 +27,10 @@ export function fmtTime(s: string | null): string {
 export function fmtListTime(s: string | null, now: number): string {
   const d = parseDbTime(s);
   if (!d) return "";
-  const today = new Date(now);
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOf(today) - startOf(d)) / 86_400_000);
-  if (diffDays === 0) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const diffDays = Math.round((Date.parse(lisbonDayOf(now)) - Date.parse(lisbonDayOf(d))) / 86_400_000);
+  if (diffDays === 0) return d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit", timeZone: LISBON });
   if (diffDays === 1) return "Ontem";
-  return d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
+  return d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", timeZone: LISBON });
 }
 
 /** Countdown legível até windowExpiresAt (ISO), relativo a `now` (ms). */

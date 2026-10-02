@@ -5282,9 +5282,10 @@ export const appRouter = router({
 
     // ── INBOX ──────────────────────────────────────────────────────────────
     conversations: router({
-      list: protectedProcedure.query(async ({ ctx }) => {
+      // `search` vai ao servidor (17a): procura também fora das 300 mais recentes.
+      list: protectedProcedure.input(z.object({ search: z.string().max(120).optional() }).optional()).query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
-        return listConversations();
+        return listConversations({ search: input?.search ?? null });
       }),
     }),
 
@@ -5323,6 +5324,8 @@ export const appRouter = router({
           templateId: z.string().min(1).max(64),
           bodyParam2: z.string().max(512).nullable().optional(),
           weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+          /** Código único do envio (17a): repetir o pedido não reenvia. */
+          clientRequestId: z.string().min(8).max(64).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -5338,6 +5341,7 @@ export const appRouter = router({
             bodyParam2: input.bodyParam2 ?? null,
             weekStart: input.weekStart ?? null,
             createdById: ctx.user.id,
+            clientRequestId: input.clientRequestId ?? null,
           });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro no envio do template" });
@@ -5377,24 +5381,30 @@ export const appRouter = router({
 
     // Resposta em texto livre — a validação da janela de 24h é feita no servidor.
     // Contacto em opt-out (STOP): só com `confirmOptedOut` (a UI pede confirmação).
+    // `clientRequestId` (17a): código único de cada envio, gerado no ecrã —
+    // repetir o pedido (duplo clique, rede) nunca manda a mensagem duas vezes.
+    // Sem confirmação da Meta devolve `uncertain` (não lança): a mensagem fica
+    // na conversa como "sem confirmação" e reenviar pede confirmação.
     reply: protectedProcedure
-      .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000), confirmOptedOut: z.boolean().optional() }))
+      .input(z.object({ conversationId: z.number(), text: z.string().min(1).max(4000), confirmOptedOut: z.boolean().optional(), clientRequestId: z.string().min(8).max(64).optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const result = await replyToConversation(input.conversationId, input.text, ctx.user.id, {
           allowOptedOut: input.confirmOptedOut === true,
+          clientRequestId: input.clientRequestId ?? null,
         });
-        if (!result.ok) {
+        if (!result.ok && !result.uncertain) {
           throw new TRPCError({ code: "BAD_REQUEST", message: result.error || "Falha ao responder" });
         }
+        if (result.duplicate) return result;
         await logActivity({
           userId: ctx.user.id,
           action: "whatsapp_reply",
           entity: "whatsapp_conversation",
           entityId: input.conversationId,
-          details: `Resposta WhatsApp (conversa ${input.conversationId})`,
+          details: `Resposta WhatsApp (conversa ${input.conversationId})${result.uncertain ? " — sem confirmação da Meta" : ""}`,
         });
         // Quem responde a uma conversa sem responsável fica com ela.
         try {
@@ -5420,10 +5430,15 @@ export const appRouter = router({
       return inboxBadge();
     }),
 
-    assignees: protectedProcedure.query(async ({ ctx }) => {
+    // Com `conversationId`: só quem pode responder E vê essa conversa (17a).
+    assignees: protectedProcedure.input(z.object({ conversationId: z.number().int().positive().optional() }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "whatsapp", "view");
+      if (input?.conversationId != null) {
+        const { conversationVisible } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+      }
       const { listAssignees } = await import("./whatsappInboxOps");
-      return listAssignees();
+      return listAssignees(input?.conversationId ?? null);
     }),
 
     setStatus: protectedProcedure
@@ -5454,7 +5469,7 @@ export const appRouter = router({
         if (!(await conversationVisible(input.conversationId))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
         const { assignConversation } = await import("./whatsappInboxOps");
         if (!(await assignConversation(input.conversationId, input.userId))) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Utilizador inválido para atribuição" });
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Essa pessoa não pode responder no WhatsApp ou não vê esta conversa (cidade)." });
         }
         await logActivity({
           userId: ctx.user.id,
@@ -5533,15 +5548,17 @@ export const appRouter = router({
           requireAccess(ctx.user, "whatsapp", "edit");
           const { saveQuickReply } = await import("./whatsappInboxOps");
           const id = await saveQuickReply(input, ctx.user.id);
-          if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível guardar" });
+          if (!id) throw new TRPCError({ code: input.id ? "NOT_FOUND" : "INTERNAL_SERVER_ERROR", message: input.id ? "Essa resposta rápida já não existe (foi arquivada?)." : "Não foi possível guardar" });
           return { id };
         }),
-      delete: protectedProcedure
+      // "Apagar" arquiva (17a) e é de quem gere: as respostas são do país todo.
+      archive: protectedProcedure
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(async ({ ctx, input }) => {
-          requireAccess(ctx.user, "whatsapp", "edit");
-          const { deleteQuickReply } = await import("./whatsappInboxOps");
-          await deleteQuickReply(input.id);
+          requireAccess(ctx.user, "whatsapp", "manage");
+          const { archiveQuickReply } = await import("./whatsappInboxOps");
+          if (!(await archiveQuickReply(input.id, ctx.user.id))) throw new TRPCError({ code: "NOT_FOUND", message: "Resposta rápida não encontrada" });
+          await logActivity({ userId: ctx.user.id, action: "archive", entity: "whatsapp_quick_reply", entityId: input.id, details: "Resposta rápida arquivada" });
           return { success: true };
         }),
     }),

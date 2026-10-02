@@ -2360,16 +2360,20 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	mediaAttempts: int().default(0).notNull(),
 	/** phone_number_id da Meta que recebeu a mensagem (metadata do webhook, 0094). */
 	phoneNumberId: varchar({ length: 32 }),
-	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed']).default('pending').notNull(),
+	// 'unknown' (0350): a Meta não respondeu e não se sabe se saiu — reenviar pede confirmação.
+	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed', 'unknown']).default('pending').notNull(),
 	errorDetail: text(),
 	sentById: int(),
 	broadcastId: int(),
+	/** Código único do envio feito por uma pessoa (0350): repetir o pedido não reenvia. */
+	clientRequestId: varchar({ length: 64 }),
 	waTimestamp: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	uniqueIndex("whatsapp_messages_wa_message_id_unique").on(table.waMessageId),
+	uniqueIndex("uq_whatsapp_messages_client_request").on(table.clientRequestId),
 	index("idx_whatsapp_messages_conversation").on(table.conversationId),
 	index("idx_whatsapp_messages_broadcast").on(table.broadcastId),
 	index("idx_whatsapp_messages_status").on(table.status),
@@ -2385,6 +2389,9 @@ export const whatsappQuickReplies = mysqlTable("whatsapp_quick_replies", {
 	title: varchar({ length: 80 }).notNull(),
 	body: text().notNull(),
 	createdById: int(),
+	// "Apagar" arquiva (0350): sai do menu, a linha fica.
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });

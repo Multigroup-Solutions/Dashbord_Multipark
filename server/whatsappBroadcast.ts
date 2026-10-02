@@ -12,8 +12,8 @@
  */
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { employees, whatsappBroadcasts, whatsappConversations } from "../drizzle/schema";
-import { OPTED_OUT_ERROR, optedOutPhones, recordOutboundMessage, sqlLaterTs } from "./whatsappStore";
+import { employees, whatsappBroadcasts, whatsappConversations, whatsappMessages } from "../drizzle/schema";
+import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, optedOutPhones, reserveOutboundMessage, sqlLaterTs } from "./whatsappStore";
 import { normalizePhoneE164 } from "../shared/phone";
 import {
   findActiveEmployeeByPhoneE164,
@@ -311,28 +311,27 @@ async function sendOne(
     sentById: number | null;
     /** Motivo de a inspeção do template não estar disponível (anexado ao erro). */
     metaUnavailableReason?: string | null;
+    clientRequestId?: string | null;
   },
 ): Promise<BroadcastRecipient> {
   const phoneE164 = r.phoneE164!; // garantido pelo chamador
   const conversationId = await upsertConversation(db, phoneE164, r.employeeId);
+  // Conteúdo REAL enviado a este destinatário — é o que o inbox mostra na
+  // bolha e no preview da lista de conversas. A linha fica gravada ANTES de
+  // chamar a Meta (17a): sem resposta dela fica "sem confirmação", não "falhou".
+  const row = { conversationId, type: "template" as const, body: cfg.body || null, templateName: cfg.templateName };
+  const reserved = await reserveOutboundMessage(db, { ...row, sentById: cfg.sentById, broadcastId: cfg.broadcastId, clientRequestId: cfg.clientRequestId ?? null });
+  if (!reserved.reserved) {
+    const dup = duplicateRequestOutcome(reserved.existing);
+    return dup.kind === "sent"
+      ? { ...r, status: "sent", waMessageId: dup.waMessageId ?? undefined }
+      : { ...r, status: "failed", error: dup.kind === "in_doubt" ? dup.error : "Envio repetido." };
+  }
   const res = await sendTemplateMessage(phoneE164, cfg.templateName, cfg.languageCode, cfg.components);
   // A nota da inspeção entra ANTES de persistir, para a linha da BD e a UI
   // contarem exactamente a mesma história.
   const error = res.ok ? null : withMetaHint(res.error, cfg.metaUnavailableReason ?? null);
-
-  await recordOutboundMessage(db, {
-    conversationId,
-    waMessageId: res.ok ? res.waMessageId : null,
-    type: "template",
-    // Conteúdo REAL enviado a este destinatário — é o que o inbox mostra na
-    // bolha e no preview da lista de conversas.
-    body: cfg.body || null,
-    templateName: cfg.templateName,
-    status: res.ok ? "sent" : "failed",
-    errorDetail: error,
-    sentById: cfg.sentById,
-    broadcastId: cfg.broadcastId,
-  });
+  await finishOutboundMessage(db, reserved.id, row, res.ok ? res : { ok: false, error: error!, uncertain: res.uncertain });
 
   return res.ok
     ? { ...r, status: "sent", waMessageId: res.waMessageId }
@@ -362,6 +361,8 @@ interface DispatchConfig {
   fallbackName: string;
   /** {{2}} específico deste destinatário (sobrepõe `bodyParam2`). */
   bodyParam2Override?: string | null;
+  /** Código único do envio feito por uma pessoa (inbox, 17a): repetir não reenvia. */
+  clientRequestId?: string | null;
 }
 
 /**
@@ -433,6 +434,7 @@ async function dispatchOne(
     broadcastId: cfg.broadcastId,
     sentById: cfg.sentById,
     metaUnavailableReason: cfg.metaUnavailableReason,
+    clientRequestId: cfg.clientRequestId ?? null,
   });
 }
 
@@ -717,11 +719,30 @@ export async function sendTemplateToConversation(opts: {
   bodyParam2?: string | null;
   weekStart?: string | null;
   createdById: number | null;
+  /** Código único do envio (do ecrã, 17a): repetir o pedido não reenvia nem cria outra difusão. */
+  clientRequestId?: string | null;
 }): Promise<BroadcastSummary> {
   const def = findWhatsAppTemplate(opts.templateId);
   if (!def) throw new Error(`Template desconhecido: ${opts.templateId}`);
   const db0 = await getDb();
   if (!db0) throw new Error("Base de dados indisponível.");
+  if (opts.clientRequestId) {
+    const [prev] = await db0
+      .select({ id: whatsappMessages.id, conversationId: whatsappMessages.conversationId, status: whatsappMessages.status, waMessageId: whatsappMessages.waMessageId, errorDetail: whatsappMessages.errorDetail, broadcastId: whatsappMessages.broadcastId })
+      .from(whatsappMessages)
+      .where(eq(whatsappMessages.clientRequestId, opts.clientRequestId))
+      .limit(1);
+    if (prev && prev.conversationId === opts.conversationId) {
+      const dup = duplicateRequestOutcome(prev);
+      if (dup.kind !== "retry") {
+        const sent = dup.kind === "sent";
+        return {
+          broadcastId: prev.broadcastId ?? null, total: 1, sent: sent ? 1 : 0, failed: sent ? 0 : 1, invalidPhone: 0, optedOut: 0,
+          recipients: [{ employeeId: null, name: null, phone: "", phoneE164: null, status: sent ? "sent" : "failed", ...(sent ? { waMessageId: dup.waMessageId ?? undefined } : { error: dup.error }) }],
+        };
+      }
+    }
+  }
   const [conv] = await db0
     .select({
       id: whatsappConversations.id,
@@ -762,7 +783,7 @@ export async function sendTemplateToConversation(opts: {
     phoneE164: conv.phoneE164,
   };
   const [r] = await dispatchAll(prep.db, [recipient], () =>
-    baseDispatch(prep, broadcastId, opts.createdById, NEUTRAL_RECIPIENT_NAME),
+    ({ ...baseDispatch(prep, broadcastId, opts.createdById, NEUTRAL_RECIPIENT_NAME), clientRequestId: opts.clientRequestId ?? null }),
   );
   const sum = summarize([r]);
   await updateBroadcastCounts(prep.db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
