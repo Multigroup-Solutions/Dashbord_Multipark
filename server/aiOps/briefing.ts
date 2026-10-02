@@ -225,7 +225,7 @@ async function loadSla(day: string, tree: CityTree): Promise<SlaRow[]> {
   const ids = sql.join(tree.ids.map((id) => sql`${id}`), sql`, `);
   const complaints = rowsOf(await db.execute(sql`
     SELECT id, title, DATE_FORMAT(COALESCE(slaDeadline, dueDate), '%Y-%m-%d %H:%i:%s') AS dueAt FROM complaints
-     WHERE projectId IN (${ids}) AND complaint_status NOT IN ('resolved', 'closed', 'converted')
+     WHERE projectId IN (${ids}) AND complaint_status NOT IN ('resolved', 'closed', 'converted') AND archivedAt IS NULL
        AND COALESCE(slaDeadline, dueDate) IS NOT NULL AND COALESCE(slaDeadline, dueDate) < ${end}
      ORDER BY COALESCE(slaDeadline, dueDate) LIMIT 50`));
   const incidents = rowsOf(await db.execute(sql`

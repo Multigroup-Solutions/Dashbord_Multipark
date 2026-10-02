@@ -57,6 +57,23 @@ export async function getPersonIdentity(employeeId: number): Promise<PersonIdent
   };
 }
 
+/**
+ * Ficha de cada agente da Multipark pelo ID (agente principal da ficha ou
+ * agente extra) — a ligação explícita, nunca pelo nome. Sem ficha → fora do mapa.
+ */
+export async function employeesForAgentIds(ids: readonly string[]): Promise<Map<string, { id: number; fullName: string }>> {
+  const out = new Map<string, { id: number; fullName: string }>();
+  const clean = Array.from(new Set(ids.filter(Boolean)));
+  if (!clean.length) return out;
+  const d = await database();
+  const list = sql.join(clean.map((i) => sql`${i}`), sql`, `);
+  for (const r of rowsOf(await d.execute(sql`SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentUserId FROM employees e WHERE e.multiparkAgentUserId IN (${list})
+    UNION ALL SELECT e.id, e.fullName, a.agentUserId FROM employee_agents a JOIN employees e ON e.id = a.employeeId WHERE a.agentUserId IN (${list})`))) {
+    if (!out.has(String(r.agentUserId))) out.set(String(r.agentUserId), { id: Number(r.id), fullName: String(r.fullName) });
+  }
+  return out;
+}
+
 /** Procurar agentes da Multipark (ao vivo; a cópia local só se a BD deles falhar). Regra única de texto. */
 export async function searchAgents(q: string, limit = 30) {
   const d = await database();

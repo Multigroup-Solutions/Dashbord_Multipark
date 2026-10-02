@@ -333,7 +333,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     SELECT id, title, complaint_status AS status, complaint_priority AS priority, UNIX_TIMESTAMP(createdAt) AS t,
       (createdAt >= ${win.start} AND createdAt < ${win.end}) AS isNew
     FROM complaints
-    WHERE ${inCity(sql`complaints.projectId`)}
+    WHERE ${inCity(sql`complaints.projectId`)} AND complaints.archivedAt IS NULL
       AND (complaint_status IN ('new', 'analyzing', 'waiting_client') OR (createdAt >= ${win.start} AND createdAt < ${win.end}))
     ORDER BY createdAt DESC LIMIT ${sql.raw(String(COMPLAINTS_LIMIT))}`)), [] as any[]);
 

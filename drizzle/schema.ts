@@ -473,6 +473,22 @@ export const complaints = mysqlTable("complaints", {
 	convertedFromId: int(),
 	/** Triagem da IA já tentada (0123) — as sugestões ficam em ai_suggestions. */
 	aiTriagedAt: timestamp({ mode: 'string' }),
+	// 0340 — arquivada em vez de apagada (sai das listas, contadores e avaliação).
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+	archiveReason: varchar({ length: 255 }),
+});
+
+/** 0340 — o que se tira de um caso (foto, condutor associado…), com a linha inteira. Nada se apaga de vez. */
+export const removedRecords = mysqlTable("removed_records", {
+	id: int().autoincrement().primaryKey(),
+	entity: varchar({ length: 48 }).notNull(),
+	recordId: int().notNull(),
+	parentId: int(),
+	rowJson: text().notNull(),
+	reason: varchar({ length: 255 }),
+	removedById: int(),
+	removedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
 export const dailyDriverHistory = mysqlTable("daily_driver_history", {

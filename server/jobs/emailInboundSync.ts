@@ -182,9 +182,22 @@ async function routeToModule(
         isInternal: 0,
         authorName: (clientName || "").slice(0, 200) || null,
       } as any);
-      // Uma nova mensagem do cliente reabre uma reclamação resolvida/fechada.
-      if (existing.complaintStatus === "resolved" || existing.complaintStatus === "closed") {
-        try { await updateComplaint(existing.id, { complaintStatus: "analyzing", resolvedAt: null } as any); } catch { /* best-effort */ }
+      // O cliente respondeu: volta a "Em Análise" se estava à espera dele ou
+      // já fechada (reabrir limpa o fecho e o aviso de SLA). Arquivada → sai
+      // do arquivo: o cliente voltou a escrever, alguém tem de ver (16b).
+      try {
+        const { complaintStatusOnClientReply, complaintStatusPatch, utcNowStr } = await import("../../shared/caseRules");
+        const next = complaintStatusOnClientReply(existing.complaintStatus);
+        // `next` é sempre reabrir ("analyzing"): o patch limpa o fecho (nunca fecha).
+        const patch: Record<string, unknown> = next ? complaintStatusPatch(existing.complaintStatus, next, 0, utcNowStr()) : {};
+        if ((existing as any).archivedAt) Object.assign(patch, { archivedAt: null, archivedById: null, archiveReason: null });
+        if (Object.keys(patch).length) await updateComplaint(existing.id, patch as any);
+        if ((existing as any).archivedAt) {
+          await addComplaintMessage({ complaintId: existing.id, isInternal: 1, authorName: "Sistema",
+            message: "📂 Saiu do arquivo: o cliente voltou a escrever." } as any);
+        }
+      } catch (err) {
+        console.warn("[EmailInbound] reabrir a reclamação falhou:", String((err as any)?.message ?? err).slice(0, 200));
       }
       // Se ainda não tem reserva ligada, o email novo pode trazer sinais
       // suficientes — tenta ligar agora.

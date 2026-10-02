@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { projectScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
 import {
   INCIDENT_SEVERITIES, INCIDENT_STATUSES, INCIDENT_TYPES, LOST_ITEM_TYPES, LOST_PRIORITIES, LOST_STATUSES,
-  contentTypeForFilename, incidentStatusPatch, lostStatusPatch, safeExt, textToSafeHtml, utcNowStr,
+  caseDueToUtc, contentTypeForFilename, incidentStatusPatch, lostStatusPatch, safeExt, textToSafeHtml, utcNowStr,
 } from "../shared/caseRules";
 import { trainingRouter } from './trainingRouter';
 import { tasksRouter } from './tasksRouter';
@@ -93,7 +93,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
-import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, deleteComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, deleteComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, deleteLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
+import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, deleteLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
@@ -401,6 +401,9 @@ async function applyMigration0051(): Promise<{ ok: number; skipped: number; fail
 function hasRole(userRole: string, minRole: string): boolean {
   return (ROLE_HIERARCHY[userRole] ?? -1) >= (ROLE_HIERARCHY[minRole] ?? 0);
 }
+
+/** Módulo de cada caixa de email que se pode anexar a um caso (16b). */
+const INBOUND_ALIAS_MODULE = { reclamacoes: "reclamacoes", perdidos: "perdidos", criticas: "criticas", "recursos-humanos": "leads_extras" } as const;
 
 /** Cidade por omissão de quem está limitado a cidades (para o registo não ficar invisível). */
 function defaultScopedProjectId(): number | null {
@@ -1669,8 +1672,11 @@ export const appRouter = router({
       vehicleId: z.number().optional(),
       assignedToId: z.number().optional(),
       projectId: z.number().optional(),
+      /** Só as arquivadas (quem gere). Sem isto, as arquivadas nunca vêm. */
+      archived: z.boolean().optional(),
     }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "view", { allowOwn: true });
+      if (input?.archived) requireAccess(ctx.user, "reclamacoes", "manage");
       return filterOwnCases(ctx.user, "reclamacoes", "complaint", await getComplaints(input ?? {}));
     }),
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
@@ -1682,8 +1688,11 @@ export const appRouter = router({
       const photos = await getComplaintPhotos(input.id);
       // Anexos não-imagem dos emails do caso (as imagens já estão em photos).
       const { listComplaintEmailAttachments } = await import("./db");
-      const emailAttachments = await listComplaintEmailAttachments(input.id).catch(() => []);
-      return { complaint, messages, photos, emailAttachments };
+      // Leitura falhada ≠ "sem anexos" (16b).
+      let emailAttachments: Awaited<ReturnType<typeof listComplaintEmailAttachments>> = [];
+      let emailAttachmentsFailed = false;
+      try { emailAttachments = await listComplaintEmailAttachments(input.id); } catch { emailAttachmentsFailed = true; }
+      return { complaint, messages, photos, emailAttachments, emailAttachmentsFailed };
     }),
     // ── IA: sugestões da triagem (separadas dos campos humanos) ──────────
     aiSuggestions: protectedProcedure.input(z.object({ complaintId: z.number() })).query(async ({ ctx, input }) => {
@@ -1745,6 +1754,9 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "edit");
       const slaDeadline = input.slaHours ? new Date(Date.now() + input.slaHours * 3600000).toISOString().slice(0, 19).replace("T", " ") : null;
+      // Quem só vê a sua cidade e não escolhe o projeto: fica na cidade dele
+      // (sem projeto a reclamação desaparecia-lhe da lista — 16b).
+      const projectId = input.projectId ?? defaultScopedProjectId();
       const id = await createComplaint({
         title: input.title,
         description: input.description ?? null,
@@ -1761,7 +1773,7 @@ export const appRouter = router({
         vehiclePlate: input.vehiclePlate ?? null,
         driversInvolved: input.driversInvolved ?? null,
         slaDeadline,
-        projectId: input.projectId ?? null,
+        projectId: projectId ?? null,
         assignedToId: input.assignedToId ?? null,
         createdById: ctx.user.id,
       });
@@ -1814,12 +1826,17 @@ export const appRouter = router({
         const { listComplaintDrivers } = await import("./complaintsExtended");
         return listComplaintDrivers(input.complaintId);
       }),
+    // Tirar um condutor: a linha (com os pontos) vai para removed_records e
+    // deixa de contar na avaliação. Nada se apaga de vez (16b).
     detachDriver: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reclamacoes", "edit");
         const { detachComplaintDriver } = await import("./complaintsExtended");
-        await detachComplaintDriver(input.id);
+        const r = await detachComplaintDriver(input.id, ctx.user.id);
+        if (!r.removed) throw new TRPCError({ code: "NOT_FOUND", message: "Este condutor já não está associado." });
+        const row = r.row as any;
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: Number(row.complaintId), details: `Condutor retirado: ${row.employeeName}${row.penaltyPointsApplied ? ` (${row.penaltyPointsApplied} pts)` : ""}` });
         return { success: true };
       }),
 
@@ -1849,10 +1866,14 @@ export const appRouter = router({
         // Envia email em nome da empresa — só frontoffice+ pode disparar
         requireAccess(ctx.user, "reclamacoes", "edit");
         const { sendComplaintEmailToClient } = await import("./complaintsExtended");
+        const before = await getComplaintById(input.complaintId);
         const r = await sendComplaintEmailToClient(input);
         if (r.ok) {
-          // Responder ao cliente → reclamação passa a "aguarda cliente".
-          await updateComplaint(input.complaintId, { complaintStatus: "waiting_client" } as any);
+          // Responder ao cliente → "Aguarda Cliente", só se ainda estava a ser
+          // tratada (uma resolvida/fechada/convertida não muda — 16b).
+          const { complaintStatusAfterEmail } = await import("../shared/caseRules");
+          const next = complaintStatusAfterEmail(before?.complaintStatus);
+          if (next) await updateComplaint(input.complaintId, { complaintStatus: next } as any);
           // Transcreve o email enviado como mensagem do caso (histórico da conversa).
           await addComplaintMessage({
             complaintId: input.complaintId,
@@ -1899,31 +1920,36 @@ export const appRouter = router({
       if (status) updateData.complaintStatus = status;
       if (priority) updateData.complaintPriority = priority;
       if (penaltyPoints !== undefined) updateData.penaltyPoints = penaltyPoints;
-      if (dueDate !== undefined) updateData.dueDate = dueDate ? new Date(dueDate) : null;
+      // Prazo = hora de parede de Lisboa (o fim do dia escolhido) → UTC (16b).
+      if (dueDate !== undefined) {
+        const due = dueDate ? caseDueToUtc(dueDate) : null;
+        if (dueDate && !due) throw new TRPCError({ code: "BAD_REQUEST", message: "Prazo inválido." });
+        updateData.dueDate = due;
+      }
       // slaHours: 0 limpa o prazo, > 0 redefine. Antes 0 era ignorado.
+      // Prazo novo (ou sem prazo) → pode voltar a avisar quando passar.
       if (slaHours !== undefined) {
         updateData.slaDeadline = slaHours > 0
           ? new Date(Date.now() + slaHours * 3600000)
           : null;
+        updateData.slaAlertedAt = null;
       }
+      const cur = await getComplaintById(id);
+      if (!cur) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
       if (status) {
-        const cur = await getComplaintById(id);
-        if (cur?.complaintStatus === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Reclamação convertida (${cur.convertedToType} #${cur.convertedToId}) — trata-a no registo novo.` });
+        if (cur.complaintStatus === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Reclamação convertida (${cur.convertedToType} #${cur.convertedToId}) — trata-a no registo novo.` });
+        if ((cur as any).archivedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reclamação arquivada — tira-a do arquivo primeiro." });
+        // Fechar regista quem/quando; reabrir limpa o fecho e o aviso de SLA (16b).
+        const { complaintStatusPatch, utcNowStr } = await import("../shared/caseRules");
+        Object.assign(updateData, complaintStatusPatch(cur.complaintStatus, status, ctx.user.id, utcNowStr()));
       }
-      if (status === "resolved") updateData.resolvedAt = new Date();
-      // Auditoria de fecho: quem fechou e quando (em resolved/closed).
-      if (status === "resolved" || status === "closed") {
-        const existing = await getComplaintById(id);
-        if (existing && existing.complaintStatus !== "resolved" && existing.complaintStatus !== "closed") {
-          updateData.closedById = ctx.user.id;
-          updateData.closedAt = new Date();
-        }
-      }
-      const prevAssignee = rest.assignedToId !== undefined || slaHours !== undefined || status ? (await getComplaintById(id))?.assignedToId ?? null : null;
+      const prevAssignee = cur.assignedToId ?? null;
       await updateComplaint(id, updateData);
       // SLA no Google Calendar de quem tinha e de quem tem a reclamação, já.
+      // O responsável é uma ficha → sincroniza a conta dessa pessoa (16b).
       if (rest.assignedToId !== undefined || slaHours !== undefined || status) {
-        const ids = [prevAssignee, rest.assignedToId ?? null].filter((x): x is number => typeof x === "number");
+        const { assigneeUserIds } = await import("./complaintsExtended");
+        const ids = await assigneeUserIds([prevAssignee, rest.assignedToId ?? null]);
         if (ids.length) import("./google/pendingSync").then((m) => m.scheduleGoogleUsersSync(ids, "complaint_sla")).catch(() => undefined);
       }
       // Se a ref de reserva mudou, repopula os campos em falta a partir dela
@@ -1939,10 +1965,26 @@ export const appRouter = router({
       await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: id, details: `Reclamação atualizada` });
       return { success: true };
     }),
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    // "Eliminar" passou a ARQUIVAR (16b): nada se apaga. Sai das listas,
+    // contadores, lembretes e avaliação; volta com "Tirar do arquivo".
+    archive: protectedProcedure.input(z.object({ id: z.number(), reason: z.string().trim().min(3, "Diz porquê (mín. 3 letras).").max(255) })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "manage");
-      await deleteComplaint(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "complaint", entityId: input.id, details: "Reclamação eliminada" });
+      const c = await getComplaintById(input.id);
+      if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
+      const done = await archiveComplaint(input.id, ctx.user.id, input.reason);
+      if (!done) return { success: true, alreadyArchived: true };
+      await addComplaintMessage({ complaintId: input.id, isInternal: 1, authorId: ctx.user.id, authorName: ctx.user.name ?? null, message: `🗄️ Arquivada por ${ctx.user.name ?? "—"}: ${input.reason}` });
+      await logActivity({ userId: ctx.user.id, action: "archive", entity: "complaint", entityId: input.id, details: `Reclamação arquivada: ${input.reason}` });
+      return { success: true, alreadyArchived: false };
+    }),
+    unarchive: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "manage");
+      const c = await getComplaintById(input.id);
+      if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
+      if (!(c as any).archivedAt) return { success: true };
+      await updateComplaint(input.id, { archivedAt: null, archivedById: null, archiveReason: null } as any);
+      await addComplaintMessage({ complaintId: input.id, isInternal: 1, authorId: ctx.user.id, authorName: ctx.user.name ?? null, message: `📂 Tirada do arquivo por ${ctx.user.name ?? "—"}.` });
+      await logActivity({ userId: ctx.user.id, action: "unarchive", entity: "complaint", entityId: input.id, details: "Reclamação tirada do arquivo" });
       return { success: true };
     }),
     // "Isto afinal é um Perdido" — cria o caso nos Perdidos (dados, mensagens,
@@ -1982,10 +2024,14 @@ export const appRouter = router({
       label: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "edit");
+      // Só fotos, com o tipo certo (antes `image/<qualquer extensão>`) — 16b.
+      const { complaintPhotoType, COMPLAINT_PHOTO_MAX_BYTES } = await import("../shared/caseRules");
+      const type = complaintPhotoType(input.filename);
+      if (!type) throw new TRPCError({ code: "BAD_REQUEST", message: "Só fotos (JPG, PNG, WebP, GIF ou HEIC)." });
       const buffer = Buffer.from(input.base64, "base64");
-      const ext = input.filename.split(".").pop() || "jpg";
-      const key = `complaints/${input.complaintId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { url } = await storagePut(key, buffer, `image/${ext}`);
+      if (buffer.length > COMPLAINT_PHOTO_MAX_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Foto demasiado grande (máx. 4 MB)." });
+      const key = `complaints/${input.complaintId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${type.ext}`;
+      const { url } = await storagePut(key, buffer, type.mime);
       const id = await addComplaintPhoto({
         complaintId: input.complaintId,
         url,
@@ -1995,9 +2041,12 @@ export const appRouter = router({
       });
       return { id, url };
     }),
-    deletePhoto: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    // Tirar a foto do caso: a linha vai para removed_records e o ficheiro fica (16b).
+    removePhoto: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "edit");
-      await deleteComplaintPhoto(input.id);
+      const r = await removeComplaintPhoto(input.id, ctx.user.id);
+      if (!r.removed) throw new TRPCError({ code: "NOT_FOUND", message: "Esta foto já não está no caso." });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: Number((r.row as any).complaintId), details: `Foto retirada do caso (#${input.id})` });
       return { success: true };
     }),
     stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
@@ -2482,7 +2531,12 @@ export const appRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Só quem vê todas as cidades pode deixar um caso sem cidade." });
       }
       const data: any = { ...rest };
-      if (dueDate !== undefined) data.dueDate = dueDate ? dueDate.slice(0, 19).replace("T", " ") : null;
+      // Prazo = hora de parede de Lisboa (o fim do dia escolhido) → UTC (16b).
+      if (dueDate !== undefined) {
+        const due = dueDate ? caseDueToUtc(dueDate) : null;
+        if (dueDate && !due) throw new TRPCError({ code: "BAD_REQUEST", message: "Prazo inválido." });
+        data.dueDate = due;
+      }
       if (status && existing.status === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Caso convertido (${existing.convertedToType} #${existing.convertedToId}) — trata-o no registo novo.` });
       if (status) Object.assign(data, lostStatusPatch(existing, status, utcNowStr(), ctx.user.id));
       await updateLostFoundItem(id, data as any);
@@ -5869,7 +5923,10 @@ export const appRouter = router({
     inboundEmails: protectedProcedure
       .input(z.object({ alias: z.enum(["reclamacoes", "perdidos", "criticas", "recursos-humanos"]), search: z.string().nullable().optional() }))
       .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "clientes", "view");
+        // Cada caixa pede o módulo dela (16b): antes bastava "clientes" para ler
+        // os emails de recursos-humanos@ (candidaturas) — agora a mesma regra
+        // da aba Recrutamento (Leads de Extras).
+        requireAccess(ctx.user, INBOUND_ALIAS_MODULE[input.alias], "view");
         const { searchInboundEmails } = await import("./db");
         return searchInboundEmails(input.alias, input.search);
       }),
@@ -5884,10 +5941,17 @@ export const appRouter = router({
         caseId: z.number(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "clientes", "edit");
+        // Anexar mexe no caso: pede a edição do módulo do caso e confirma a
+        // cidade dele (16b).
+        requireAccess(ctx.user, input.module === "complaint" ? "reclamacoes" : "perdidos", "edit");
+        if (input.module === "complaint") {
+          if (!(await getComplaintById(input.caseId))) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
+        } else await loadLostInScope(input.caseId);
         const { getInboundEmailById, setInboundEmailTarget } = await import("./db");
         const em = await getInboundEmailById(input.inboundId);
         if (!em) throw new TRPCError({ code: "NOT_FOUND", message: "Email não encontrado" });
+        // Anexar outra vez ao mesmo caso não duplica a mensagem.
+        if ((em as any).targetModule === input.module && Number((em as any).targetId) === input.caseId) return { ok: true, already: true };
         const who = em.clientName || em.fromName || em.fromEmail || "Cliente";
         const msg = `📥 Email do cliente (${who}) — ${em.subject || "(sem assunto)"}\n\n${em.bodyText || ""}`.slice(0, 5000);
         if (input.module === "complaint") {

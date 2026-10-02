@@ -156,7 +156,7 @@ async function operacoes(cur: Range, prev: Range): Promise<Pick<WeeklyReportData
     const i = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM incidents WHERE createdAt >= ${u.start} AND createdAt < ${u.end}`))[0] ?? {};
     const late = rowsOf(await db.execute(sql`
       SELECT COUNT(*) AS n FROM complaints
-       WHERE complaint_status NOT IN ('resolved', 'closed', 'converted') AND COALESCE(slaDeadline, dueDate) < ${u.end}`))[0] ?? {};
+       WHERE complaint_status NOT IN ('resolved', 'closed', 'converted') AND archivedAt IS NULL AND COALESCE(slaDeadline, dueDate) < ${u.end}`))[0] ?? {};
     const h = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM shift_handovers WHERE handoverDate >= ${r.from} AND handoverDate <= ${r.to}`))[0] ?? {};
     const s = rowsOf(await db.execute(sql`
       SELECT COUNT(*) AS n FROM (SELECT DISTINCT assignmentDate, shift, city FROM extras_dia_assignments

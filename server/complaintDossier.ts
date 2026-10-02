@@ -259,12 +259,16 @@ export interface BookingTimelineItem {
  * Multipark (History; ref = id ou n.º da reserva). Sem nada lá, usa o
  * dossier (também ao vivo). Nunca vai à API da Multipark nem à cópia antiga.
  */
-export async function getBookingTimeline(ref: string, cities?: string[]): Promise<{ bookingId: string; total: number; history: BookingTimelineItem[] }> {
+export async function getBookingTimeline(ref: string, cities?: string[]): Promise<{ bookingId: string; total: number; history: BookingTimelineItem[]; error?: string }> {
+  // Leitura falhada ≠ "sem histórico" (16b): vazio por falha leva `error`.
+  let liveError: string | undefined;
   try {
     const { resolveBookingRef, getBookingFileTimeline, formatChange } = await import("./multiparkDb/bookingFile");
     const resolved = await resolveBookingRef(ref, cities);
+    if (!resolved.available) liveError = UNAVAILABLE_HISTORY;
     if (resolved.available && resolved.data.kind === "found") {
       const t = await getBookingFileTimeline(resolved.data.id, cities);
+      if (!t.available) liveError = UNAVAILABLE_HISTORY;
       const entries = t.available ? t.data.entries.filter((e) => e.source === "history") : [];
       if (entries.length) {
         const history = entries.map((e) => ({
@@ -274,14 +278,17 @@ export async function getBookingTimeline(ref: string, cities?: string[]): Promis
         return { bookingId: ref, total: history.length, history };
       }
     }
-  } catch { /* BD da Multipark indisponível: tenta o dossier */ }
+  } catch { liveError = UNAVAILABLE_HISTORY; /* tenta o dossier */ }
   const d = await getComplaintBookingDossier(ref, cities);
   const history = d.history.map((h) => ({
     id: h.historyId, changeType: h.changeType, actionTime: h.actionTime, remarks: h.remarks,
     agentName: h.agentName, userId: h.agentUserId, modifiedFields: h.modifiedFields, platform: h.platform,
   }));
-  return { bookingId: ref, total: history.length, history };
+  const error = history.length ? undefined : (d.error ?? d.historyError ?? liveError);
+  return { bookingId: ref, total: history.length, history, ...(error ? { error } : {}) };
 }
+
+const UNAVAILABLE_HISTORY = "Histórico indisponível (BD da Multipark sem resposta).";
 
 /** Reserva do dossier, com os nomes de campos que as páginas Reclamações/Perdidos já usam. */
 export interface DossierBooking {
@@ -332,6 +339,10 @@ export async function getComplaintBookingDossier(reservationRef: string, cities?
   history: Array<typeof multiparkBookingHistory.$inferSelect>;
   historyFetched: boolean;
   error?: string;
+  /** O histórico não se leu (a ficha sim) — não é "sem histórico". */
+  historyError?: string;
+  /** Os extras não se leram — não é "sem extras". */
+  extrasError?: string;
 }> {
   const empty = { booking: null, extras: [], history: [], historyFetched: false };
   const { resolveBookingRef, getBookingFileMain, getBookingFileExtras } = await import("./multiparkDb/bookingFile");
@@ -350,7 +361,7 @@ export async function getComplaintBookingDossier(reservationRef: string, cities?
         remarks: r.remarks, agentName: r.agentName, agentUserId: r.agentUserId, agentEmail: null, modifiedFields: r.modifiedFields,
         platform: r.platform, fetchedAt: r.actionTime ?? "",
       }) as typeof multiparkBookingHistory.$inferSelect))
-      .catch(() => [] as Array<typeof multiparkBookingHistory.$inferSelect>),
+      .catch(() => null),
   ]);
   const core = main.available ? main.data.data.core : null;
   if (!core) return { ...empty, error: main.available ? undefined : "Reserva indisponível (BD da Multipark sem resposta)." };
@@ -358,7 +369,9 @@ export async function getComplaintBookingDossier(reservationRef: string, cities?
   return {
     booking: dossierBookingFromCore(core, main.available ? main.data.data.location : null),
     extras: extraRows.map((e) => ({ name: e.name, description: e.description, price: e.price, done: e.done })),
-    history,
-    historyFetched: history.length > 0,
+    history: history ?? [],
+    historyFetched: !!history && history.length > 0,
+    ...(history ? {} : { historyError: UNAVAILABLE_HISTORY }),
+    ...(extras.available ? {} : { extrasError: "Extras indisponíveis (BD da Multipark sem resposta)." }),
   };
 }
