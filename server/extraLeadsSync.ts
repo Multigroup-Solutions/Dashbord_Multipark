@@ -379,6 +379,48 @@ export async function declineLeadForApplication(app: { id: number; email: string
 }
 
 /**
+ * O contrário (Jorge, 2 out 2026): lead marcado "Sem interesse" → a candidatura
+ * do site da mesma pessoa fica Rejeitada. A candidatura liga-se pela
+ * `sourceRef` do lead ("application:N") ou pelo email (único nas candidaturas).
+ * Nunca mexe numa aprovada (já tem ficha) nem numa já rejeitada. Atualiza a
+ * candidatura diretamente (não por `setApplicationStatus`, que voltaria a
+ * fechar o lead). Best-effort: nunca parte a mudança do lead.
+ */
+export async function rejectApplicationForLead(
+  lead: { id: number; fullName: string; email: string | null; sourceRef: string | null },
+  userId: number | null,
+): Promise<number | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const refId = /^application:(\d+)$/.exec(String(lead.sourceRef ?? ""))?.[1];
+    const conds = [];
+    if (refId) conds.push(eq(driverApplications.id, Number(refId)));
+    if (lead.email) conds.push(eq(driverApplications.email, normalizeEmail(lead.email)));
+    if (!conds.length) return null;
+    const rows = await db.select({ id: driverApplications.id, status: driverApplications.status, fullName: driverApplications.fullName })
+      .from(driverApplications).where(or(...conds)).limit(5);
+    const app = rows.find((r) => refId && r.id === Number(refId)) ?? rows[0];
+    if (!app || app.status === "approved" || app.status === "rejected") return null;
+    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const upd = await db.update(driverApplications).set({ status: "rejected", reviewedById: userId, reviewedAt: now })
+      .where(and(eq(driverApplications.id, app.id), inArray(driverApplications.status, ["new", "reviewed"])));
+    if (extractAffectedRows(upd) === 0) return null;
+    await logActivity({
+      userId: userId ?? 0,
+      action: "driver_application_status",
+      entity: "driver_applications",
+      entityId: app.id,
+      details: `Candidatura de ${app.fullName}: ${app.status} → rejected (lead #${lead.id} marcado Sem interesse)`,
+    });
+    return app.id;
+  } catch (err) {
+    console.warn("[extraLeadsSync] rejeitar a candidatura do lead sem interesse:", String(err).slice(0, 160));
+    return null;
+  }
+}
+
+/**
  * Candidatura aprovada → o lead correspondente fica Convertido e ligado à
  * ficha. Não mexe num lead já ligado a outra ficha. Best-effort.
  */

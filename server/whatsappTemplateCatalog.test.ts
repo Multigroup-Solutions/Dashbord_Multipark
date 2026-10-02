@@ -11,10 +11,10 @@ import {
 import { analyzeTemplateEntry } from "./whatsappTemplateMeta";
 import { buildComponents } from "./whatsappBroadcast";
 
-/** Como a Graph API devolve o template novo do Jorge (NAMED, pt_BR). */
+/** Como a Graph API devolve o `driver_shift_notice` (NAMED, pt_PT, Fase 2). */
 const WORK_NOTICE_ENTRY = {
-  name: "aviso_de_trabalho",
-  language: "pt_BR",
+  name: "driver_shift_notice",
+  language: "pt_PT",
   status: "APPROVED",
   parameter_format: "NAMED",
   components: [
@@ -32,12 +32,17 @@ const WORK_NOTICE_REVERSED = {
   components: [{ type: "BODY", text: "No dia {{day}}: {{customer_name}}, contamos contigo." }],
 };
 
+/** `driver_availability` (UTILITY, pt_PT, Fase 2): nome + semana + botão URL com o token. */
 const AVAILABILITY_ENTRY = {
-  name: "disponibilidade_extras",
-  language: "pt_BR",
+  name: "driver_availability",
+  language: "pt_PT",
   status: "APPROVED",
+  category: "UTILITY",
   parameter_format: "NAMED",
-  components: [{ type: "BODY", text: "Olá {{nome}}, indica a tua disponibilidade para {{semana}}." }],
+  components: [
+    { type: "BODY", text: "Olá {{customer_name}}, indica a tua disponibilidade para {{week_date}}." },
+    { type: "BUTTONS", buttons: [{ type: "URL", text: "Indicar disponibilidade", url: "https://dashboard.multipark.pt/f/{{1}}" }] },
+  ],
 };
 
 const workNoticeDef = findWhatsAppTemplate("aviso_trabalho")!;
@@ -62,10 +67,13 @@ describe("catálogo de templates", () => {
   });
 
   it("encontra a definição pelo nome (é assim que o servidor descobre os papéis)", () => {
-    expect(findWhatsAppTemplateByName("aviso_de_trabalho", "pt_BR")?.id).toBe("aviso_trabalho");
-    expect(findWhatsAppTemplateByName("disponibilidade_extras", "pt_BR")?.id).toBe("disponibilidade");
+    expect(findWhatsAppTemplateByName("driver_shift_notice", "pt_PT")?.id).toBe("aviso_trabalho");
+    expect(findWhatsAppTemplateByName("driver_availability", "pt_PT")?.id).toBe("disponibilidade");
     // Língua diferente da aprovada: continua a ser o mesmo template (mesmos parâmetros).
-    expect(findWhatsAppTemplateByName("aviso_de_trabalho", "pt_PT")?.id).toBe("aviso_trabalho");
+    expect(findWhatsAppTemplateByName("driver_shift_notice", "pt_BR")?.id).toBe("aviso_trabalho");
+    // Os nomes antigos (pt_BR) saíram do catálogo (Fase 2, 2 out 2026).
+    expect(findWhatsAppTemplateByName("aviso_de_trabalho", "pt_BR")).toBeUndefined();
+    expect(findWhatsAppTemplateByName("disponibilidade_extras", "pt_BR")).toBeUndefined();
     // Template fora do catálogo (nome escrito à mão no inbox) → sem papéis.
     expect(findWhatsAppTemplateByName("qualquer_outro", "pt_BR")).toBeUndefined();
   });
@@ -200,15 +208,19 @@ describe("buildComponents com o template aviso_de_trabalho", () => {
     ]);
   });
 
-  it("o template de disponibilidade continua exactamente como estava", () => {
+  it("driver_availability: customer_name = nome, week_date = semana e o token no botão URL", () => {
+    const analysis = analyzeTemplateEntry(AVAILABILITY_ENTRY);
+    expect(analysis.category).toBe("UTILITY");
     const comps = buildComponents({
-      analysis: analyzeTemplateEntry(AVAILABILITY_ENTRY),
+      analysis,
       values: ["Rafael", "semana de 11/08"],
       roles: availabilityDef.roles,
+      buttonToken: "tok123",
     }) as any[];
     expect(comps[0].parameters).toEqual([
-      { type: "text", parameter_name: "nome", text: "Rafael" },
-      { type: "text", parameter_name: "semana", text: "semana de 11/08" },
+      { type: "text", parameter_name: "customer_name", text: "Rafael" },
+      { type: "text", parameter_name: "week_date", text: "semana de 11/08" },
     ]);
+    expect(comps[1]).toMatchObject({ type: "button", sub_type: "url", parameters: [{ type: "text", text: "tok123" }] });
   });
 });

@@ -6,9 +6,11 @@
  *  6. "SIM" pelo WhatsApp: a resposta a um pedido de um dia marca a
  *     disponibilidade; a resposta a um aviso de escala CONFIRMA o turno (um
  *     "não" avisa o backoffice); a um pedido da semana devolve o link.
- *  7. Aviso por WhatsApp a quem está escalado (template `aviso_de_trabalho`,
- *     com dia e horas), à tarde para o dia seguinte ou por botão; na 1.ª vez
- *     de sempre segue também `morada_e_regras`.
+ *  7. Aviso por WhatsApp a quem está escalado (template `driver_shift_notice`,
+ *     com dia e horas e os botões "Confirmo" / "Não posso", ligados ao turno
+ *     pelo `context.id`), à tarde para o dia seguinte ou por botão; na 1.ª vez
+ *     de sempre segue também a morada e as regras (texto livre com a janela
+ *     de 24 h aberta, senão o template `morada_e_regras`).
  *  8. Escala sugerida preenchida com quem está disponível + alerta de horas
  *     sem gente suficiente (no ecrã e, à tarde, notificação para amanhã).
  *  9. Converter um lead de recrutamento numa ficha de extra (com cidade).
@@ -258,7 +260,7 @@ async function releaseRun(key: string): Promise<void> {
   if (db) await db.execute(sql`DELETE FROM \`extras_automation_runs\` WHERE runKey = ${key}`);
 }
 
-function appOrigin(): string {
+export function appOrigin(): string {
   return (process.env.APP_URL || process.env.PUBLIC_APP_URL || "https://dashboard.multipark.pt").replace(/\/+$/, "");
 }
 
@@ -301,11 +303,11 @@ export async function sendAvailabilityRequest(weekStart: string, employeeIds: nu
 
   if (process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID) {
     const { sendBroadcast } = await import("./whatsappBroadcast");
-    const { AVAILABILITY_TEMPLATE_NAME, DEFAULT_TEMPLATE_LANGUAGE } = await import("../shared/whatsappTemplate");
+    const { AVAILABILITY_TEMPLATE_NAME, TEAM_TEMPLATE_LANGUAGE } = await import("../shared/whatsappTemplate");
     const { getSystemUserId } = await import("./db");
     const wa = await sendBroadcast({
       templateName: AVAILABILITY_TEMPLATE_NAME,
-      languageCode: DEFAULT_TEMPLATE_LANGUAGE,
+      languageCode: TEAM_TEMPLATE_LANGUAGE,
       bodyParam2: fmtWeek(weekStart),
       employeeIds,
       weekStart,
@@ -368,6 +370,43 @@ export async function listNotices(date: string, city: string | null = null): Pro
 }
 
 export interface NotifyResult { total: number; sent: number; failed: number; skipped: number; rulesSent: number; optedOut: number }
+
+/**
+ * Morada e regras como TEXTO LIVRE a quem tem a janela de 24 h aberta (a
+ * última mensagem dessa pessoa chegou há menos de 24 h). O texto é o do
+ * próprio template na Meta (cabeçalho, corpo, rodapé, links), com negrito de
+ * um asterisco — o conteúdo é o mesmo nos dois caminhos. Devolve quem recebeu;
+ * os outros seguem pelo template. Sem leitura do template ou com qualquer
+ * falha, ninguém recebe por aqui (o template é o recurso). Nunca lança.
+ */
+async function sendRulesAsFreeText(employeeIds: number[], templateName: string, language: string): Promise<Set<number>> {
+  const sent = new Set<number>();
+  try {
+    const db = await getDb();
+    if (!db || !employeeIds.length) return sent;
+    const { getTemplateMeta } = await import("./whatsappTemplateMeta");
+    const meta = await getTemplateMeta(templateName, language);
+    const text = meta.available && meta.lookup.ok ? (meta.lookup.analysis.freeText ?? "").trim() : "";
+    if (!text) return sent;
+
+    const [rows] = (await db.execute(sql`
+      SELECT id, employeeId, DATE_FORMAT(lastInboundAt, '%Y-%m-%d %H:%i:%s') AS lastInboundAt FROM whatsapp_conversations
+       WHERE employeeId IN (${sql.join(employeeIds.map((id) => sql`${id}`), sql`, `)}) AND optedOutAt IS NULL
+       ORDER BY lastMessageAt DESC`)) as any;
+    const { deriveWindowState, replyToConversation } = await import("./whatsappInbox");
+    for (const r of (rows as any[]) ?? []) {
+      const empId = Number(r.employeeId);
+      if (sent.has(empId)) continue; // uma conversa por pessoa (a mais recente)
+      const lastInboundAt = r.lastInboundAt == null ? null : String(r.lastInboundAt);
+      if (deriveWindowState(lastInboundAt).windowState !== "open") continue;
+      const res = await replyToConversation(Number(r.id), text, null);
+      if (res.ok) sent.add(empId);
+    }
+  } catch (err: any) {
+    console.warn("[extras-auto] morada e regras em texto livre:", String(err?.message ?? err).slice(0, 160));
+  }
+  return sent;
+}
 
 /** Motivo registado quando quem está na escala não é extra (não recebe avisos). */
 export const NOT_EXTRA_NO_NOTICE = "funcionário (não é extra): não recebe avisos de escala";
@@ -501,16 +540,27 @@ export async function notifyAssignments(
     const already = new Set(((prev as any[]) ?? []).map((r) => Number(r.employeeId)));
     const firstTimers = sentEmployees.filter((id) => !already.has(id));
     if (firstTimers.length) {
-      try {
-        const r = await sendBroadcast({ templateName: regras.name, languageCode: regras.language, employeeIds: firstTimers, note: "Morada e regras (1.º turno)", createdById: by });
-        for (const rec of r.recipients) {
-          if (rec.status === "sent" && rec.employeeId != null) {
-            await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${rec.employeeId})`);
-            res.rulesSent++;
+      // Janela de 24 h aberta → o MESMO conteúdo em texto livre (sem template);
+      // fechada → o template `morada_e_regras` fica como recurso.
+      const viaText = await sendRulesAsFreeText(firstTimers, regras.name, regras.language);
+      for (const empId of Array.from(viaText)) {
+        await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${empId})`);
+        res.rulesSent++;
+      }
+      const viaTemplate = firstTimers.filter((id) => !viaText.has(id));
+      if (viaTemplate.length) {
+        try {
+          // A data na nota liga a mensagem ao turno (nova tentativa após 131049, 0375).
+          const r = await sendBroadcast({ templateName: regras.name, languageCode: regras.language, employeeIds: viaTemplate, note: `Morada e regras (1.º turno) ${date}`, createdById: by });
+          for (const rec of r.recipients) {
+            if (rec.status === "sent" && rec.employeeId != null) {
+              await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${rec.employeeId})`);
+              res.rulesSent++;
+            }
           }
+        } catch (err) {
+          console.warn("[extras-auto] morada e regras falhou:", err);
         }
-      } catch (err) {
-        console.warn("[extras-auto] morada e regras falhou:", err);
       }
     }
   }
@@ -768,37 +818,17 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
     if (action === "none") return { action };
 
     const { replyToConversation } = await import("./whatsappInbox");
-    const { employees } = await import("../drizzle/schema");
-    const { eq } = await import("drizzle-orm");
-    const [emp] = await db.select({ fullName: employees.fullName, projectId: employees.projectId }).from(employees).where(eq(employees.id, input.employeeId)).limit(1);
-    const name = emp?.fullName ?? `#${input.employeeId}`;
 
     if (action === "confirmed" || action === "declined") {
-      await ensureTables();
-      const col = action === "confirmed" ? sql`confirmedAt` : sql`declinedAt`;
-      const upd = await db.execute(sql`
-        UPDATE \`extras_dia_notices\` SET ${col} = CURRENT_TIMESTAMP
-         WHERE employeeId = ${input.employeeId} AND assignmentDate = ${pending.targetDate}
-           AND confirmedAt IS NULL AND declinedAt IS NULL`);
-      if (extractAffectedRows(upd) === 0) return { action: "none" }; // já tinha respondido
-      await claimRequestAnswer(pending.id, input.employeeId, action);
-      if (action === "confirmed") {
-        const reply = "Obrigado! Fica confirmado ✅ Até lá.";
-        await replyToConversation(input.conversationId, reply, null);
-        return { action, reply };
-      }
-      const { notify } = await import("./notify");
-      await notify({
-        kind: "extras_schedule_reply",
-        projectId: emp?.projectId ?? null,
-        title: `${name} não pode ir ao turno de ${pending.targetDate}`,
-        body: `Respondeu "não" ao aviso de escala por WhatsApp. Procura substituto.`,
-        link: "/extras-dia",
-        entity: { type: "extras_notice", id: `${input.employeeId}:${pending.targetDate}` },
+      if (!pending.targetDate) return { action: "none" };
+      return applyShiftNoticeAnswer({
+        employeeId: input.employeeId,
+        conversationId: input.conversationId,
+        date: pending.targetDate,
+        action,
+        requestId: pending.id,
+        via: "texto",
       });
-      const reply = "Obrigado por avisares. Vamos tratar da substituição.";
-      await replyToConversation(input.conversationId, reply, null);
-      return { action, reply };
     }
 
     // Pedido do dia / da semana: reserva ANTES de agir (duas mensagens seguidas
@@ -828,6 +858,125 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
   } catch (err) {
     console.warn("[extras-auto] resposta WhatsApp:", err);
     return { action: "none" };
+  }
+}
+
+/**
+ * Resposta ao aviso de escala (texto lido pelas regras/IA ou botão do
+ * `driver_shift_notice`): marca o turno confirmado/recusado em
+ * `extras_dia_notices` (uma vez — a 2.ª resposta não muda nada), responde e,
+ * num "não", avisa o backoffice para procurar substituto.
+ */
+async function applyShiftNoticeAnswer(input: {
+  employeeId: number;
+  conversationId: number;
+  date: string;
+  action: "confirmed" | "declined";
+  requestId: number | null;
+  via: "texto" | "botão";
+}): Promise<WhatsappReplyOutcome> {
+  const db = await getDb();
+  if (!db) return { action: "none" };
+  await ensureTables();
+  const col = input.action === "confirmed" ? sql`confirmedAt` : sql`declinedAt`;
+  const upd = await db.execute(sql`
+    UPDATE \`extras_dia_notices\` SET ${col} = CURRENT_TIMESTAMP
+     WHERE employeeId = ${input.employeeId} AND assignmentDate = ${input.date}
+       AND confirmedAt IS NULL AND declinedAt IS NULL`);
+  if (extractAffectedRows(upd) === 0) return { action: "none" }; // já tinha respondido
+  if (input.requestId != null) await claimRequestAnswer(input.requestId, input.employeeId, input.action);
+
+  const { replyToConversation } = await import("./whatsappInbox");
+  if (input.action === "confirmed") {
+    const reply = "Obrigado! Fica confirmado ✅ Até lá.";
+    await replyToConversation(input.conversationId, reply, null);
+    return { action: input.action, reply };
+  }
+  const { employees } = await import("../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+  const [emp] = await db.select({ fullName: employees.fullName, projectId: employees.projectId }).from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+  const name = emp?.fullName ?? `#${input.employeeId}`;
+  const { notify } = await import("./notify");
+  await notify({
+    kind: "extras_schedule_reply",
+    projectId: emp?.projectId ?? null,
+    title: `${name} não pode ir ao turno de ${input.date}`,
+    body: input.via === "botão"
+      ? `Carregou em "Não posso" no aviso de escala do WhatsApp. Procura substituto.`
+      : `Respondeu "não" ao aviso de escala por WhatsApp. Procura substituto.`,
+    link: "/extras-dia",
+    entity: { type: "extras_notice", id: `${input.employeeId}:${input.date}` },
+  });
+  const reply = "Obrigado por avisares. Vamos tratar da substituição.";
+  await replyToConversation(input.conversationId, reply, null);
+  return { action: input.action, reply };
+}
+
+/** Pedido "assignment" (aviso de escala) registado para este colaborador e dia. */
+async function assignmentRequestFor(employeeId: number, date: string): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const [rows] = (await db.execute(sql`
+      SELECT id FROM \`availability_request_log\`
+       WHERE employeeId = ${employeeId} AND kind = 'assignment' AND targetDate = ${date}
+       ORDER BY sentAt DESC, id DESC LIMIT 1`)) as any;
+    const r = (rows as any[])?.[0];
+    return r ? Number(r.id) : null;
+  } catch {
+    return null; // tabela ainda não existe
+  }
+}
+
+/**
+ * Botão "Confirmo" / "Não posso" do `driver_shift_notice`. A resposta liga-se
+ * ao turno pelo `context.id` (o wamid do aviso que a pessoa recebeu) — não pelo
+ * "último pedido", que pode ser outro (vários turnos, um pedido de
+ * disponibilidade entretanto). true = era um botão de um aviso nosso a esta
+ * conversa (tratado, mesmo que já estivesse respondido): a leitura genérica do
+ * texto não corre. Nunca lança.
+ */
+export async function handleShiftNoticeButton(input: {
+  employeeId: number;
+  conversationId: number;
+  contextId: string;
+  text: string | null;
+  payload: string | null;
+}): Promise<boolean> {
+  try {
+    const { SHIFT_NOTICE_TEMPLATE_NAME, shiftNoticeButtonAction } = await import("../shared/whatsappTemplate");
+    const action = shiftNoticeButtonAction(input.payload) ?? shiftNoticeButtonAction(input.text);
+    if (!action) return false;
+    const db = await getDb();
+    if (!db) return false;
+    const [rows] = (await db.execute(sql`
+      SELECT m.conversationId, m.templateName, b.note
+        FROM whatsapp_messages m LEFT JOIN whatsapp_broadcasts b ON b.id = m.broadcastId
+       WHERE m.waMessageId = ${input.contextId} AND m.direction = 'out' LIMIT 1`)) as any;
+    const sent = (rows as any[])?.[0];
+    // Só um aviso de turno NOSSO, enviado a ESTA conversa.
+    if (!sent || String(sent.templateName) !== SHIFT_NOTICE_TEMPLATE_NAME || Number(sent.conversationId) !== input.conversationId) return false;
+    const { shiftDateFromNote } = await import("./whatsappFailurePolicy");
+    const date = shiftDateFromNote(sent.note);
+    if (!date) return false;
+
+    const [{ ensureFeatureFlagOverrides }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    // Automação desligada: a resposta fica na caixa para uma pessoa (como o texto).
+    if (!isFeatureEnabled("EXTRAS_AUTOMATION", { defaultEnabled: automationFlagDefault("EXTRAS_AUTOMATION") })) return true;
+
+    await applyShiftNoticeAnswer({
+      employeeId: input.employeeId,
+      conversationId: input.conversationId,
+      date,
+      action,
+      requestId: await assignmentRequestFor(input.employeeId, date),
+      via: "botão",
+    });
+    return true;
+  } catch (err) {
+    console.warn("[extras-auto] botão do aviso de escala:", String((err as any)?.message ?? err).slice(0, 160));
+    return false;
   }
 }
 

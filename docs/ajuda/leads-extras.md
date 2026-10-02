@@ -27,7 +27,7 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 **Candidaturas do site** (formulário "Be a Driver")
 - O número ao lado do separador é o das candidaturas novas.
 - **Aprovar** pede a cidade (centro de custo) e cria ou liga a ficha de extra. Se a pessoa já teve ficha desativada, aparece o motivo e só se reativa com confirmação (a mesma regra do Converter). Duas pessoas a aprovar a mesma candidatura ao mesmo tempo já não criam duas fichas.
-- **Rejeitar** fecha a candidatura e põe o lead da mesma pessoa em "Sem interesse".
+- **Rejeitar** fecha a candidatura e põe o lead da mesma pessoa em "Sem interesse". E ao contrário: marcar um lead como **Sem interesse** (um a um ou em lote) rejeita a candidatura do site da mesma pessoa, menos se já estiver aprovada.
 - Uma candidatura aprovada já não muda de estado. Para tirar a pessoa, desativa a ficha no RH.
 - A cidade escrita na candidatura também se reconhece pela terra (ex.: "Corroios" é Lisboa, "Gaia" é Porto, "Albufeira" é Faro). Só vês e mexes nas candidaturas das tuas cidades.
 - O filtro em cima mostra Novas, Revistas, Aprovadas, Rejeitadas ou Todas.
