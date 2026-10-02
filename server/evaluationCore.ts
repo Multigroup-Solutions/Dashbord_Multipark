@@ -289,6 +289,12 @@ export interface EngineInput {
   complaints: EngineComplaint[];
   speedAlerts: EngineSpeedAlert[];
   penalties: EnginePenalty[];
+  /**
+   * Reclamações confirmadas e alertas de velocidade a que as penalizações do
+   * período apontam, de QUALQUER data ("empregado|id"): já contam no dia deles
+   * (noutra fatia do recálculo), por isso a penalização não os conta outra vez.
+   */
+  relatedCountedElsewhere?: { complaints: string[]; speedAlerts: string[] };
   /** €/hora por nível (extraRates.rateFor) */
   rate: (level: string | number | null) => number;
   /** dias do TL por mês (custo diário = salário / isto) */
@@ -480,15 +486,18 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
 
   // ── Penalizações RH confirmadas (informativo; as de reclamação contam como
   // reclamação e as de velocidade como excesso de velocidade)
+  const elsewhereComplaints = new Set(input.relatedCountedElsewhere?.complaints ?? []);
+  const elsewhereAlerts = new Set(input.relatedCountedElsewhere?.speedAlerts ?? []);
   for (const p of input.penalties) {
     const d = operationalDayOf(p.createdAt);
     if (!inRange(d, startDay, endDay)) continue;
     const m = row(p.employeeId, d).metrics;
     m.penaltyPoints += Number(p.points) || 0;
-    if (p.reason === "speeding" && !(p.relatedId != null && alertIds.has(`${p.employeeId}|${p.relatedId}`))) m.speedingEvents += 1;
+    const relKey = p.relatedId != null ? `${p.employeeId}|${p.relatedId}` : null;
+    if (p.reason === "speeding" && !(relKey && (alertIds.has(relKey) || elsewhereAlerts.has(relKey)))) m.speedingEvents += 1;
     if (p.reason === "complaint_investigation") {
-      const key = `${p.employeeId}|${p.relatedId ?? `p${p.createdAt}`}`;
-      if (!seenComplaint.has(key)) { seenComplaint.add(key); m.complaints += 1; }
+      const key = relKey ?? `${p.employeeId}|p${p.createdAt}`;
+      if (!seenComplaint.has(key) && !elsewhereComplaints.has(key)) { seenComplaint.add(key); m.complaints += 1; }
     }
   }
 

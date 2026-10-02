@@ -5,6 +5,7 @@
  * As regras vêm de shared/evaluationRules.ts — o mesmo ficheiro do motor.
  */
 import { useState } from "react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { trpc } from "@/lib/trpc";
 import EvaluationExplanation from "@/components/aiOps/EvaluationExplanation";
 import { toast } from "sonner";
@@ -438,7 +439,7 @@ export function EvaluationDrawer({
         </SheetHeader>
         <div className="px-4 pb-6">
           {q.isLoading && <p className="text-sm text-muted-foreground">A carregar...</p>}
-          {q.error && <p className="text-sm text-red-700">{q.error.message}</p>}
+          {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os dias desta pessoa" />}
           {q.data && employeeId != null && (
             <div className="space-y-4">
               <EvaluationExplanation employeeId={employeeId} from={from} to={to} />

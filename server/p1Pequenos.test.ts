@@ -50,9 +50,10 @@ describe("Pessoas: semana ISO com o ano ISO", () => {
     expect(isoWeekYearLisbon("2029-12-31T12:00:00Z")).toEqual({ week: 1, year: 2030 });
     expect(isoWeekYearLisbon("2026-10-01T12:00:00Z")).toEqual({ week: 40, year: 2026 });
   });
-  it("o painel usa a semana e o ano ISO juntos (já não o ano civil)", () => {
+  it("o painel já não pede semanas: lê o motor da Avaliação nos últimos 7 dias operacionais (nunca o ano civil)", () => {
     const src = readFileSync(resolve(root, "client/src/pages/PessoasDashboard.tsx"), "utf8");
-    expect(src).toContain("isoWeekYearLisbon(now)");
+    expect(src).toContain("operationalDayOf(Date.now())");
+    expect(src).toContain("trpc.evaluation.ranking.useQuery({ from: evalFrom, to: evalTo }");
     expect(src).not.toMatch(/currentYear\s*=\s*now\.getFullYear\(\)/);
   });
 });

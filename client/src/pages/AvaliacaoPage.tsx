@@ -27,7 +27,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Award, Clock, Download, RefreshCw, Trophy, Zap } from "lucide-react";
 import DateRangeNav, { type DateGran } from "@/components/DateRangeNav";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
-import { can } from "@shared/access";
+import { can, scopeFor } from "@shared/access";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { addDays, operationalDayOf } from "@shared/lisbonDay";
 import { RECOMPUTE_WINDOW_DAYS } from "@shared/evaluationRules";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
@@ -44,9 +45,6 @@ import {
   ptsClass,
 } from "@/components/evaluation/EvaluationBreakdown";
 
-const ROLE_LEVEL: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, extra: 1, user: 0 };
-const roleAtLeast = (role: string | undefined, min: string) => (ROLE_LEVEL[role ?? ""] ?? -1) >= ROLE_LEVEL[min];
-
 type View = "totals" | "perHour";
 type TabKey = "dia" | "semanas" | "minha" | "contestacoes";
 
@@ -58,10 +56,11 @@ function lastFourWeeks(): { start: string; end: string; gran: DateGran } {
 
 export default function AvaliacaoPage() {
   const { user } = useAuth();
-  // só para mostrar/esconder — quem decide é o servidor
+  // Só para mostrar/esconder — quem decide é o servidor, com a MESMA matriz
+  // (shared/access.ts + permissões por utilizador).
   const canDay = !!user && can(user as any, "avaliacao_operacional", "view");
-  const canRank = roleAtLeast(user?.role, "frontoffice");
-  const isSupervisor = roleAtLeast(user?.role, "supervisor");
+  const canRank = !!user && can(user as any, "avaliacao", "view") && scopeFor(user as any, "avaliacao") !== "own";
+  const isSupervisor = !!user && can(user as any, "avaliacao", "edit");
   const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const allowed: TabKey[] = [
     ...(canDay ? ["dia" as const] : []),
@@ -146,9 +145,13 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
   const q = trpc.evaluation.ranking.useQuery({ from, to });
   const recompute = trpc.evaluation.recompute.useMutation({
     onSuccess: (r) => {
-      const msg = `Recalculado: ${r.written} dia(s) de colaboradores${r.partial ? ` (até ${fmtDay(r.until)} — o resto fica para o recálculo automático)` : ""}`;
-      if (r.source === "copia") toast.warning(`${msg}. ${r.notice ?? "BD da Multipark indisponível: movimentos da cópia local."}`);
-      else toast.success(msg);
+      if (r.skipped && r.days === 0) {
+        toast.warning(r.notice ?? "BD da Multipark indisponível: nada foi recalculado; ficam os valores anteriores.");
+      } else {
+        const msg = `Recalculado: ${r.written} dia(s) de colaboradores${r.partial ? ` (até ${fmtDay(r.until)} — o resto fica para o recálculo automático)` : ""}`;
+        if (r.skipped) toast.warning(`${msg}. ${r.notice ?? "Parou: BD da Multipark indisponível."}`);
+        else toast.success(msg);
+      }
       utils.evaluation.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -194,6 +197,8 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
     cost: rows.reduce((s, r) => s + r.metrics.cost, 0),
   }), [rows]);
   const top = rows[0];
+  // Sem dados (a carregar ou erro) os cartões dizem "—", nunca 0.
+  const ready = !!q.data;
 
   const exportCSV = () => {
     const headers = ["Pos", "Colaborador", "Dias", "Horas", "Ações", "Recolhas", "Entregas", "Movimentos", "Levar ao parque", "Atrasos", "Velocidade", "Reclamações", "Acidentes", "Pts+", "Pts−", "Total", "Ações/h", "Pontos/h", "Custo"];
@@ -212,9 +217,9 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Clock className="w-4 h-4 shrink-0" /><span className="text-xs text-muted-foreground">Horas (ponto)</span></div><p className="text-xl font-bold tabular-nums truncate">{fmtNum(totals.hours)} h</p></Card>
-        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-blue-500" /><span className="text-xs text-muted-foreground">Ações</span></div><p className="text-xl font-bold tabular-nums truncate">{totals.actions}</p></Card>
-        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-amber-500" /><span className="text-xs text-muted-foreground">Custo</span></div><p className="text-xl font-bold tabular-nums truncate">{fmtNum(totals.cost, 0)} €</p></Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Clock className="w-4 h-4 shrink-0" /><span className="text-xs text-muted-foreground">Horas (ponto)</span></div><p className="text-xl font-bold tabular-nums truncate">{ready ? `${fmtNum(totals.hours)} h` : "—"}</p></Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-blue-500" /><span className="text-xs text-muted-foreground">Ações</span></div><p className="text-xl font-bold tabular-nums truncate">{ready ? totals.actions : "—"}</p></Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-amber-500" /><span className="text-xs text-muted-foreground">Custo</span></div><p className="text-xl font-bold tabular-nums truncate">{ready ? `${fmtNum(totals.cost, 0)} €` : "—"}</p></Card>
         <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Award className="w-4 h-4 shrink-0 text-yellow-600" /><span className="text-xs text-muted-foreground">Melhor</span></div>{top ? (<><p className="text-sm font-bold truncate" title={top.employeeName}>{top.employeeName}</p><p className="text-xs font-semibold tabular-nums text-muted-foreground">{fmtPts(top.score.totalPoints)} pts</p></>) : <p className="text-xl font-bold">—</p>}</Card>
       </div>
 
@@ -223,7 +228,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
           <Button size="sm" variant={view === "totals" ? "default" : "ghost"} className="h-8" onClick={() => setView("totals")}>Totais</Button>
           <Button size="sm" variant={view === "perHour" ? "default" : "ghost"} className="h-8" onClick={() => setView("perHour")}>Por hora</Button>
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap justify-end gap-2">
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={rows.length === 0}><Download className="w-4 h-4 mr-1" /> CSV</Button>
           <ExportToSheetsButton input={{ report: "avaliacoes", from, to }} disabled={rows.length === 0} />
           {isSupervisor && (
@@ -237,7 +242,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
       {q.isLoading ? (
         <div className="flex justify-center py-16"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
       ) : q.error ? (
-        <Card className="p-6 text-sm text-red-700">{q.error.message}</Card>
+        <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o ranking" />
       ) : rows.length === 0 ? (
         <Card className="p-10 text-center">
           <Trophy className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
@@ -353,7 +358,7 @@ function LiveMovementsCard({ from, to }: { from: string; to: string }) {
       <CardContent className="px-2 sm:px-6">
         {tooLong ? <p className="text-sm text-muted-foreground">Escolhe no máximo {LIVE_MAX_DAYS} dias para ver os movimentos.</p>
           : q.isLoading ? <p className="text-sm text-muted-foreground">A ler a BD da Multipark...</p>
-          : q.error ? <p className="text-sm text-red-700">{q.error.message}</p>
+          : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os movimentos" />
           : !d ? null
           : !d.available ? <MovementSourceNotice notice={`Movimentos indisponíveis: ${d.reason}`} />
           : d.rows.length === 0 ? <p className="text-sm text-muted-foreground">Sem movimentos neste período.</p>
@@ -409,7 +414,7 @@ function MineView({ from, to }: { from: string; to: string }) {
   const utils = trpc.useUtils();
   const q = trpc.evaluation.mine.useQuery({ from, to });
   if (q.isLoading) return <p className="text-sm text-muted-foreground">A carregar...</p>;
-  if (q.error) return <Card className="p-6 text-sm text-red-700">{q.error.message}</Card>;
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="a tua avaliação" />;
   const d = q.data;
   if (!d?.employee) {
     return <Card className="p-8 text-center text-muted-foreground">A tua conta não está ligada a uma ficha de colaborador — fala com o RH.</Card>;
@@ -443,7 +448,7 @@ function DisputesView() {
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center gap-2 space-y-0">
         <CardTitle className="text-base">Contestações</CardTitle>
-        <div className="ml-auto inline-flex rounded-md border p-0.5">
+        <div className="ml-auto inline-flex flex-wrap rounded-md border p-0.5">
           {(["open", "accepted", "rejected"] as const).map((s) => (
             <Button key={s} size="sm" variant={status === s ? "default" : "ghost"} className="h-8" onClick={() => setStatus(s)}>
               {s === "open" ? "Em análise" : s === "accepted" ? "Aceites" : "Recusadas"}
@@ -453,6 +458,7 @@ function DisputesView() {
       </CardHeader>
       <CardContent>
         {q.isLoading ? <p className="text-sm text-muted-foreground">A carregar...</p>
+          : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as contestações" />
           : (q.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground">Sem contestações.</p>
           : <DisputeList disputes={q.data ?? []} onResolve={setResolving} />}
       </CardContent>

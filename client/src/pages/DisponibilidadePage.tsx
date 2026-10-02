@@ -14,12 +14,15 @@ import { Badge } from "@/components/ui/badge";
 // Campos de cada dia partilhados com o diálogo do backoffice (ExtrasDiaPage →
 // AvailabilitySection): o extra e o backoffice marcam exatamente as mesmas coisas.
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState as DayState } from "@/components/AvailabilityDayFields";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { isForbidden } from "@/lib/queryRetry";
+import { availabilityWeekFrom } from "@shared/availabilityWeek";
 
-function useWeekParam(fallback: string): string {
-  return useMemo(() => {
-    const q = new URLSearchParams(window.location.search).get("week");
-    return q && /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : fallback;
-  }, [fallback]);
+// Semana a mostrar: a do link (?week=, levada à segunda-feira) ou a PRÓXIMA
+// semana de Lisboa — calculada aqui (antes vinha do servidor e, se essa
+// leitura falhasse, a página ficava a carregar para sempre).
+function useWeekParam(): string {
+  return useMemo(() => availabilityWeekFrom(window.location.search, Date.now()), []);
 }
 
 // Dois modos na mesma rota (pedido do Jorge, jul 2026):
@@ -138,14 +141,9 @@ function NewApplicationsBadge() {
 }
 
 function MyAvailability() {
-  const hints = trpc.extrasAvailability.weekHints.useQuery();
-  const fallbackWeek = hints.data?.next ?? "";
-  const weekStart = useWeekParam(fallbackWeek);
+  const weekStart = useWeekParam();
 
-  const myWeek = trpc.extrasAvailability.myWeek.useQuery(
-    { weekStart },
-    { enabled: !!weekStart },
-  );
+  const myWeek = trpc.extrasAvailability.myWeek.useQuery({ weekStart });
 
   const [days, setDays] = useState<DayState[]>([]);
   const [savedOnce, setSavedOnce] = useState(false);
@@ -172,10 +170,18 @@ function MyAvailability() {
     setDays((prev) => prev.map((d, i) => (i === idx ? { ...d, ...p } : d)));
   }
 
-  if (!weekStart || hints.isLoading || myWeek.isLoading) {
+  if (myWeek.isLoading) {
     return (
       <div className="py-24 flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (myWeek.error && !isForbidden(myWeek.error)) {
+    return (
+      <div className="max-w-md mx-auto py-12 px-4">
+        <QueryErrorNote error={myWeek.error} onRetry={() => myWeek.refetch()} retrying={myWeek.isFetching} what="a tua disponibilidade" />
       </div>
     );
   }

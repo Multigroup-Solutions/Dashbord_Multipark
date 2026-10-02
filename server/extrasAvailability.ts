@@ -18,6 +18,8 @@ import { getDb } from "./db";
 import { employees, extrasAvailability } from "../drizzle/schema";
 import { normalizePhoneE164 } from "../shared/phone";
 import { resolveCitiesForEmployeeIds, type CityKey, type CitySource } from "./employeeCity";
+import { addDays } from "../shared/lisbonDay";
+import { currentMondayLisbon, isMondayIso, NOT_MONDAY_MESSAGE } from "../shared/availabilityWeek";
 
 // ─── Helpers de datas ──────────────────────────────────────────────────────────
 
@@ -38,9 +40,12 @@ function parseIsoDate(s: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Segunda-feira da semana que contém `ref` (ou hoje). */
+export { isMondayIso, NOT_MONDAY_MESSAGE } from "../shared/availabilityWeek";
+
+/** Segunda-feira da semana que contém `ref` (ou HOJE EM LISBOA — o servidor corre em UTC). */
 export function mondayOf(ref?: Date): string {
-  const d = ref ? new Date(ref) : new Date();
+  if (!ref) return currentMondayLisbon();
+  const d = new Date(ref);
   d.setHours(0, 0, 0, 0);
   const dow = d.getDay(); // 0=Dom … 6=Sáb
   const diff = dow === 0 ? -6 : 1 - dow; // recua até segunda
@@ -50,9 +55,7 @@ export function mondayOf(ref?: Date): string {
 
 /** Segunda-feira da PRÓXIMA semana — default do pedido semanal. */
 export function nextMonday(ref?: Date): string {
-  const m = parseIsoDate(mondayOf(ref))!;
-  m.setDate(m.getDate() + 7);
-  return isoDate(m);
+  return addDays(mondayOf(ref), 7);
 }
 
 export interface DayInfo {
@@ -214,23 +217,28 @@ export interface SetDayInput {
   note?: string | null;
 }
 
+/** Uma linha de disponibilidade em texto curto (para o histórico). PURA. */
+export function availabilityLine(r: { day: string; morning: number | boolean; night: number | boolean; fromHour: number | null; toHour: number | null; note: string | null }): string {
+  const parts = [r.morning ? "manhã" : "", r.night ? "noite" : "", r.fromHour != null || r.toHour != null ? `${r.fromHour ?? "?"}–${r.toHour ?? "?"}h` : ""].filter(Boolean);
+  return `${r.day} ${parts.join("+") || "—"}${r.note ? ` (${r.note.slice(0, 60)})` : ""}`;
+}
+
 /**
- * Substitui a disponibilidade do extra para a semana: apaga as linhas dessa
- * semana e regrava apenas os dias com algo marcado (turno, horas ou nota).
+ * Substitui a disponibilidade do extra para a semana: regrava apenas os dias
+ * com algo marcado (turno, horas ou nota). Numa transação (nunca fica a
+ * semana a meio) e o que havia antes fica no registo de atividade (quem
+ * mudou e o que estava) — devolvido em `previous`.
  */
 export async function setMyAvailability(
   employeeId: number,
   weekStart: string,
   inputDays: SetDayInput[],
   createdById?: number | null,
-): Promise<{ saved: number }> {
+): Promise<{ saved: number; previous: string[] }> {
+  if (!isMondayIso(weekStart)) throw new Error(NOT_MONDAY_MESSAGE);
   const db = await getDb();
-  if (!db) return { saved: 0 };
+  if (!db) return { saved: 0, previous: [] };
   const validDays = new Set(weekDays(weekStart).map(d => d.day));
-
-  await db
-    .delete(extrasAvailability)
-    .where(and(eq(extrasAvailability.employeeId, employeeId), eq(extrasAvailability.weekStart, weekStart)));
 
   const rows = inputDays
     .filter(d => validDays.has(d.day))
@@ -248,14 +256,21 @@ export async function setMyAvailability(
     // só guarda dias com alguma indicação
     .filter(r => r.morning === 1 || r.night === 1 || r.fromHour != null || r.toHour != null || r.note);
 
-  if (rows.length > 0) await db.insert(extrasAvailability).values(rows);
+  const weekWhere = and(eq(extrasAvailability.employeeId, employeeId), eq(extrasAvailability.weekStart, weekStart));
+  let previous: string[] = [];
+  await db.transaction(async (tx) => {
+    const before = await tx.select().from(extrasAvailability).where(weekWhere);
+    previous = before.sort((a, b) => (a.day < b.day ? -1 : 1)).map((r) => availabilityLine(r));
+    await tx.delete(extrasAvailability).where(weekWhere);
+    if (rows.length > 0) await tx.insert(extrasAvailability).values(rows);
+  });
   // A disponibilidade da semana ficou registada → fecha a tarefa
   // "Disponibilidade a confirmar" dessa pessoa × semana (se existir).
   try {
     const { closeAvailabilityTasks } = await import("./tasksService");
     await closeAvailabilityTasks(employeeId, weekStart);
   } catch { /* best-effort */ }
-  return { saved: rows.length };
+  return { saved: rows.length, previous };
 }
 
 /**
@@ -271,8 +286,8 @@ export async function setEmployeeAvailability(
   weekStart: string,
   inputDays: SetDayInput[],
   createdById: number,
-): Promise<{ saved: number; employeeName: string }> {
-  if (!parseIsoDate(weekStart)) throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
+): Promise<{ saved: number; employeeName: string; previous: string[] }> {
+  if (!isMondayIso(weekStart)) throw new Error(NOT_MONDAY_MESSAGE);
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
   const rows = await db
@@ -281,8 +296,8 @@ export async function setEmployeeAvailability(
     .where(eq(employees.id, employeeId))
     .limit(1);
   if (!rows.length) throw new Error("Colaborador não encontrado.");
-  const { saved } = await setMyAvailability(employeeId, weekStart, inputDays, createdById);
-  return { saved, employeeName: rows[0].fullName };
+  const { saved, previous } = await setMyAvailability(employeeId, weekStart, inputDays, createdById);
+  return { saved, employeeName: rows[0].fullName, previous };
 }
 
 // ─── Resumo para o backoffice ──────────────────────────────────────────────────
@@ -696,9 +711,7 @@ export async function sendWeeklyAvailabilityRequest(opts: {
   /** Tipo do envio automático (X-Multipark-Auto): pedido (omissão) ou lembrete. */
   autoKind?: "availability_request" | "availability_reminder";
 }): Promise<SendResult> {
-  if (!parseIsoDate(opts.weekStart)) {
-    throw new Error("weekStart inválido (esperado YYYY-MM-DD)");
-  }
+  if (!isMondayIso(opts.weekStart)) throw new Error(NOT_MONDAY_MESSAGE);
   const { sendEmail } = await import("./mail/systemMail");
   const headers = weekDays(opts.weekStart);
   const weekLabel = headers.length
@@ -737,11 +750,12 @@ export async function sendWeeklyAvailabilityRequest(opts: {
     };
   }
 
-  let extras = await listActiveExtras(opts.projectId);
-  if (opts.employeeIds && opts.employeeIds.length) {
-    const set = new Set(opts.employeeIds);
-    extras = extras.filter(e => set.has(e.id));
-  }
+  // Escolhidos à mão: quem está na lista (mesmo sem função "extra" — quem
+  // respondeu ao formulário aparece na tabela); senão, todos os extras ativos.
+  let extras = opts.employeeIds && opts.employeeIds.length
+    ? await listActiveEmployeesByIds(opts.employeeIds)
+    : await listActiveExtras(opts.projectId);
+  if (opts.employeeIds?.length && opts.projectId != null) extras = extras.filter(e => e.projectId === opts.projectId);
   const result: SendResult = { total: extras.length, sent: 0, failed: 0, noEmail: 0, recipients: [] };
 
   for (const e of extras) {

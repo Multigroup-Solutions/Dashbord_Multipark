@@ -2,19 +2,21 @@
  * Router tRPC `evaluation` — Avaliação individual sobre o motor único
  * (employee_day_metrics + ajustes manuais + contestações).
  *
- * Guardas (as mesmas que já existiam na Avaliação — não mudam):
- *  - ranking e detalhe de OUTRA pessoa: frontoffice+ (como performance.range),
- *    dentro do âmbito de cidade (employeeScope / assertEmployeeAccess);
- *  - "A minha avaliação" (mine, detalhe próprio, contestar): qualquer pessoa
- *    com ficha (extra+), SÓ os próprios dados — o colaborador vem da sessão,
- *    nunca do pedido;
- *  - recalcular, ajustar e resolver contestações: supervisor+ (como
- *    performance.generate/update); ninguém ajusta nem resolve os seus.
+ * Guardas — a matriz de acessos (shared/access.ts, módulo `avaliacao`, com
+ * as permissões por utilizador), a MESMA que o ecrã usa:
+ *  - ranking e detalhe de OUTRA pessoa: ver além do "own" (team leader só a
+ *    equipa, "below_city"), dentro do âmbito de cidade;
+ *  - "A minha avaliação" (mine, detalhe próprio, contestar): quem tem o módulo,
+ *    SÓ os próprios dados — o colaborador vem da sessão, nunca do pedido;
+ *  - recalcular, ajustar e resolver contestações: "edit" (supervisor, front e
+ *    backoffice, administração); ninguém ajusta nem resolve os seus.
+ * (Antes havia aqui uma escada de papéis própria, diferente da do resto da app.)
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
-import { assertEmployeeAccess, cityScope } from "./cityScope";
+import { employeeBelowCondition, requireAccess, withOverrides } from "./_core/access";
+import { assertEmployeeAccess, cityScope, projectScope } from "./cityScope";
 import { getEmployeeByUserId, logActivity } from "./db";
 import {
   createAdjustment,
@@ -38,12 +40,41 @@ import {
   type MetricKey,
 } from "../shared/evaluationRules";
 import { addDays, daysInRange } from "../shared/lisbonDay";
-import { roleRank } from "../shared/access";
+import { scopeFor } from "../shared/access";
 
-const ROLE_HIERARCHY: Record<string, number> = { super_admin: 7, admin: 6, supervisor: 5, team_leader: 4, backoffice: 3, frontoffice: 2, condutor: 1, extra: 1, user: 0 };
-const atLeast = (role: string, min: string) => (ROLE_HIERARCHY[role] ?? -1) >= (ROLE_HIERARCHY[min] ?? 0);
-function requireRole(role: string, min: string) {
-  if (!atLeast(role, min)) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
+type Viewer = { id: number; role: string; name?: string | null };
+/** Ver OUTRAS pessoas (ranking, detalhe): o módulo além do "own". */
+const requireOthers = (user: Viewer) => requireAccess(user, "avaliacao", "view");
+/** Os próprios dados ("A minha avaliação", contestar): basta ter o módulo. */
+const requireOwn = (user: Viewer) => requireAccess(user, "avaliacao", "view", { allowOwn: true });
+/** Recalcular, ajustar, contestações: "edit". */
+const requireManage = (user: Viewer) => requireAccess(user, "avaliacao", "edit");
+
+/**
+ * Team leader ("below_city"): só a equipa (condutores/extras abaixo dele na
+ * cidade) e ele próprio. null = sem restrição além da cidade.
+ */
+export async function evaluationTeamIds(user: Viewer): Promise<Set<number> | null> {
+  if (scopeFor(withOverrides(user), "avaliacao") !== "below_city") return null;
+  const { getDb } = await import("./db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  const ids = new Set<number>();
+  if (db) {
+    const [rows] = await db.execute(sql`SELECT e.id FROM employees e
+      WHERE ${projectScope(sql`e.projectId`)} AND ${await employeeBelowCondition(user, sql`e.id`)}`) as any;
+    for (const r of (rows as any[]) ?? []) ids.add(Number(r.id));
+  }
+  const me = await myEmployee(user.id);
+  if (me) ids.add(me.id);
+  return ids;
+}
+
+/** Outra pessoa: dentro da cidade e, para o team leader, da equipa. */
+async function assertCanSee(user: Viewer, employeeId: number) {
+  await assertEmployeeAccess(employeeId);
+  const team = await evaluationTeamIds(user);
+  if (team && !team.has(employeeId)) throw new TRPCError({ code: "FORBIDDEN", message: "Só vês a avaliação da tua equipa." });
 }
 
 const isIsoDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`)) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
@@ -84,12 +115,14 @@ function scopedCityNames(): string[] | undefined {
 export const LIVE_MOVEMENTS_MAX_DAYS = 62;
 
 export const evaluationRouter = router({
-  /** Ranking do período (soma dos dias) — frontoffice+, âmbito de cidade. */
+  /** Ranking do período (soma dos dias) — quem vê outras pessoas, âmbito de cidade (team leader: a equipa). */
   ranking: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
-    requireRole(ctx.user.role, "frontoffice");
+    requireOthers(ctx.user);
     const days = await loadEvaluatedDays({ startDay: input.from, endDay: input.to, rankingOnly: true });
+    const team = await evaluationTeamIds(ctx.user);
     const byEmp = new Map<number, EvaluatedDay[]>();
     for (const d of days) {
+      if (team && !team.has(d.employeeId)) continue;
       const list = byEmp.get(d.employeeId) ?? [];
       list.push(d);
       byEmp.set(d.employeeId, list);
@@ -120,7 +153,7 @@ export const evaluationRouter = router({
    * cidade pelo parque (Park.city). Nunca lança por falta de BD.
    */
   liveMovements: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
-    requireRole(ctx.user.role, "frontoffice");
+    requireOthers(ctx.user);
     if (daysInRange(input.from, input.to).length > LIVE_MOVEMENTS_MAX_DAYS) {
       throw new TRPCError({ code: "BAD_REQUEST", message: `No máximo ${LIVE_MOVEMENTS_MAX_DAYS} dias.` });
     }
@@ -137,7 +170,10 @@ export const evaluationRouter = router({
       g.list.push(s);
       groups.set(who.key, g);
     }
+    // Team leader: só a equipa (agentes sem ficha e parceiros não são da equipa).
+    const team = await evaluationTeamIds(ctx.user);
     const rows = Array.from(groups.entries()).map(([key, g]) => ({ key, employeeId: g.employeeId, name: g.name, kind: g.kind, ...sumAgentSummaries(g.list)! }))
+      .filter((r) => !team || (r.employeeId != null && team.has(r.employeeId)))
       .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
     return { available: true as const, rows };
   }),
@@ -145,18 +181,18 @@ export const evaluationRouter = router({
   /** Detalhe (gaveta): dias e métricas de uma pessoa. O próprio vê sempre os seus. */
   employeeDays: protectedProcedure.input(rangeSchema.and(z.object({ employeeId: z.number().int().positive() })))
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireOwn(ctx.user);
       const me = await myEmployee(ctx.user.id);
       if (me?.id !== input.employeeId) {
-        requireRole(ctx.user.role, "frontoffice");
-        await assertEmployeeAccess(input.employeeId);
+        requireOthers(ctx.user);
+        await assertCanSee(ctx.user, input.employeeId);
       }
       return employeeDetail(input.employeeId, input.from, input.to);
     }),
 
   /** "A minha avaliação": só os dados da ficha de quem tem a sessão. */
   mine: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
-    requireRole(ctx.user.role, "extra");
+    requireOwn(ctx.user);
     const me = await myEmployee(ctx.user.id);
     if (!me) return { employee: null, days: [], totals: null, disputes: [] };
     const detail = await employeeDetail(me.id, input.from, input.to);
@@ -170,42 +206,42 @@ export const evaluationRouter = router({
    */
   explanation: protectedProcedure.input(rangeSchema.and(z.object({ employeeId: z.number().int().positive().optional() })))
     .query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireOwn(ctx.user);
       const me = await myEmployee(ctx.user.id);
       const employeeId = input.employeeId ?? me?.id;
       if (!employeeId) return null;
       const self = me?.id === employeeId;
       if (!self) {
-        requireRole(ctx.user.role, "frontoffice");
-        await assertEmployeeAccess(employeeId);
+        requireOthers(ctx.user);
+        await assertCanSee(ctx.user, employeeId);
       }
       const days = await loadEvaluatedDays({ startDay: input.from, endDay: input.to, employeeIds: [employeeId] });
       if (!days.length) return null;
       const t = totalsOf(days);
       const { getExplanation } = await import("./aiOps/evaluationExplain");
       const r = await getExplanation({ employeeId, from: input.from, to: input.to, lines: t.score.lines, total: t.score.totalPoints, viewerIsSelf: self, userId: ctx.user.id });
-      return { ...r, canHide: !self && roleRank(ctx.user.role) >= roleRank("team_leader") };
+      return { ...r, canHide: !self && scopeFor(withOverrides(ctx.user), "avaliacao") !== "own" };
     }),
 
   /** O team leader (ou acima) esconde/mostra a explicação a um colaborador. Nunca a própria. */
   setExplanationHidden: protectedProcedure.input(rangeSchema.and(z.object({ employeeId: z.number().int().positive(), hidden: z.boolean() })))
     .mutation(async ({ ctx, input }) => {
-      if (roleRank(ctx.user.role) < roleRank("team_leader")) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
+      requireOthers(ctx.user);
       const me = await myEmployee(ctx.user.id);
       if (me?.id === input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes esconder a explicação da tua própria avaliação." });
-      await assertEmployeeAccess(input.employeeId);
+      await assertCanSee(ctx.user, input.employeeId);
       const { setExplanationHidden } = await import("./aiOps/evaluationExplain");
       await setExplanationHidden({ employeeId: input.employeeId, from: input.from, to: input.to, hidden: input.hidden, user: { id: ctx.user.id, name: (ctx.user as any).name ?? null } });
       await logActivity({ userId: ctx.user.id, action: input.hidden ? "hide_explanation" : "show_explanation", entity: "evaluation", entityId: input.employeeId, details: `${input.from}..${input.to}` });
       return { success: true };
     }),
 
-  /** Recalcular um período (máx. 93 dias) — supervisor+ (como "Gerar Avaliação"). */
+  /** Recalcular um período (máx. 93 dias) — quem gere a Avaliação ("edit"). */
   recompute: protectedProcedure.input(rangeSchema).mutation(async ({ ctx, input }) => {
-    requireRole(ctx.user.role, "supervisor");
+    requireManage(ctx.user);
     const today = currentOperationalDay();
     const to = input.to > today ? today : input.to;
-    if (input.from > to) return { days: 0, written: 0, removed: 0, source: "multipark" as const, notice: null, partial: false, until: to };
+    if (input.from > to) return { days: 0, written: 0, removed: 0, source: "multipark" as const, notice: null, partial: false, until: to, skipped: false };
     const days = daysInRange(input.from, to);
     if (days.length > 93) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 93 dias de cada vez." });
     // Cada fatia de 7 dias lê os movimentos AO VIVO da BD da Multipark (uma
@@ -219,17 +255,21 @@ export const evaluationRouter = router({
       if (i > 0 && Date.now() > deadline) break;
       const end = Math.min(i + 6, days.length - 1);
       const r = await recomputeRange(days[i], days[end]);
+      // Sem a BD da Multipark nada se grava (ficam os valores anteriores): parar já.
+      if (r.skipped) { source = "copia"; notice = r.notice ?? notice; break; }
       written += r.written;
       removed += r.removed;
       doneDays = end + 1;
-      if (r.source === "copia") { source = "copia"; notice = r.notice ?? notice; }
     }
+    const skipped = source === "copia";
     const partial = doneDays < days.length;
-    await logActivity({ userId: ctx.user.id, action: "generate", entity: "employee_day_metrics", details: `Avaliação recalculada ${input.from} a ${days[Math.max(0, doneDays - 1)]}: ${written} dia(s)${source === "copia" ? " (movimentos da cópia local)" : ""}` });
-    return { days: doneDays, written, removed, source, notice, partial, until: days[Math.max(0, doneDays - 1)] };
+    await logActivity({ userId: ctx.user.id, action: "generate", entity: "employee_day_metrics", details: skipped && doneDays === 0
+      ? `Avaliação NÃO recalculada (${input.from} a ${to}): BD da Multipark indisponível, ficam os valores anteriores`
+      : `Avaliação recalculada ${input.from} a ${days[Math.max(0, doneDays - 1)]}: ${written} dia(s)${skipped ? " (parou: BD da Multipark indisponível)" : ""}` });
+    return { days: doneDays, written, removed, source, notice, partial, until: days[Math.max(0, doneDays - 1)], skipped };
   }),
 
-  /** Ajuste manual (delta sobre uma métrica de um dia) — supervisor+, com motivo. */
+  /** Ajuste manual (delta sobre uma métrica de um dia) — "edit", com motivo. */
   adjust: protectedProcedure.input(z.object({
     employeeId: z.number().int().positive(),
     day: daySchema,
@@ -237,7 +277,7 @@ export const evaluationRouter = router({
     delta: z.number().finite().refine((n) => n !== 0 && Math.abs(n) <= 100000, "Valor inválido"),
     reason: z.string().trim().min(3, "Indica o motivo").max(500),
   })).mutation(async ({ ctx, input }) => {
-    requireRole(ctx.user.role, "supervisor");
+    requireManage(ctx.user);
     if (!(ADJUSTABLE_METRICS as string[]).includes(input.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta métrica não se ajusta à mão." });
     await assertEmployeeAccess(input.employeeId);
     const me = await myEmployee(ctx.user.id);
@@ -251,10 +291,10 @@ export const evaluationRouter = router({
     return { id };
   }),
 
-  /** Anular um ajuste (fica no histórico) — supervisor+. */
+  /** Anular um ajuste (fica no histórico) — "edit". */
   voidAdjustment: protectedProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().max(255).optional() }))
     .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireManage(ctx.user);
       const adj = await getAdjustment(input.id);
       if (!adj) throw new TRPCError({ code: "NOT_FOUND", message: "Ajuste não encontrado." });
       await assertEmployeeAccess(adj.employeeId);
@@ -272,7 +312,7 @@ export const evaluationRouter = router({
       metric: metricSchema.nullable().optional(),
       comment: z.string().trim().min(5, "Explica o que está errado").max(2000),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "extra");
+      requireOwn(ctx.user);
       const me = await myEmployee(ctx.user.id);
       if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "A tua conta não tem ficha de colaborador." });
       if (input.day > currentOperationalDay()) throw new TRPCError({ code: "BAD_REQUEST", message: "Esse dia ainda não aconteceu." });
@@ -293,17 +333,17 @@ export const evaluationRouter = router({
       return { id };
     }),
 
-    /** Contestações (gestão) — supervisor+, âmbito de cidade. */
+    /** Contestações (gestão) — "edit", âmbito de cidade. */
     list: protectedProcedure.input(z.object({
       status: z.enum(["open", "accepted", "rejected"]).optional(),
       from: daySchema.optional(),
       to: daySchema.optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireManage(ctx.user);
       return listDisputes({ status: input?.status, startDay: input?.from, endDay: input?.to });
     }),
 
-    /** Aceitar (com ajuste opcional) ou recusar — supervisor+, nunca a própria. */
+    /** Aceitar (com ajuste opcional) ou recusar — "edit", nunca a própria. */
     resolve: protectedProcedure.input(z.object({
       id: z.number().int().positive(),
       accept: z.boolean(),
@@ -313,7 +353,7 @@ export const evaluationRouter = router({
         delta: z.number().finite().refine((n) => n !== 0 && Math.abs(n) <= 100000, "Valor inválido"),
       }).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "supervisor");
+      requireManage(ctx.user);
       const d = await getDispute(input.id);
       if (!d) throw new TRPCError({ code: "NOT_FOUND", message: "Contestação não encontrada." });
       await assertEmployeeAccess(d.employeeId);

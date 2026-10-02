@@ -84,6 +84,8 @@ import {
   nextMonday,
   mondayOf,
   setEmployeeAvailability,
+  isMondayIso,
+  NOT_MONDAY_MESSAGE,
 } from "./extrasAvailability";
 import { sendBroadcast } from "./whatsappBroadcast";
 import { describeLookupFailure, getTemplateMeta } from "./whatsappTemplateMeta";
@@ -93,7 +95,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
-import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, deleteComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, deleteComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, deleteLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, deleteIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, updatePerformanceEvaluation, deletePerformanceEvaluation, generateWeeklyEvaluation, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
+import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, deleteComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, deleteComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, deleteLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, deleteIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
@@ -202,6 +204,9 @@ async function filterOwnCases<T extends { id: number }>(user: { id: number; role
 }
 
 // ─── EQUIPA: fichas abaixo de quem vê, na sua cidade (alcance "below_city") ──
+/** Semana da disponibilidade: dia ISO e segunda-feira (senão as linhas ficavam numa "semana" que ninguém lê). */
+const weekStartSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isMondayIso, NOT_MONDAY_MESSAGE);
+
 async function belowEmployeeIds(user: { id: number; role: string }): Promise<Set<number>> {
   const { getDb } = await import("./db");
   const { sql } = await import("drizzle-orm");
@@ -3078,40 +3083,11 @@ export const appRouter = router({
       return filterBelowEmployees(ctx.user, "avaliacao", await getPerformanceEvaluations(input) as any[]);
     }),
 
-    generate: protectedProcedure.input(z.object({
-      weekNumber: z.number(),
-      yearNumber: z.number(),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "avaliacao", "edit");
-      const results = await generateWeeklyEvaluation(input.weekNumber, input.yearNumber);
-      await logActivity({ userId: ctx.user.id, action: "generate", entity: "performance_evaluation", details: `Semana ${input.weekNumber}/${input.yearNumber}: ${results.length} linhas` });
-      return results;
-    }),
-
-    update: protectedProcedure.input(z.object({
-      id: z.number(),
-      positivePoints: z.number().optional(),
-      negativePoints: z.number().optional(),
-      notes: z.string().nullable().optional(),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "avaliacao", "edit");
-      const { id, ...data } = input;
-      // Lê o valor actual para preservar campos não enviados ao calcular totalPoints
-      const current = await getPerformanceEvaluations({});
-      const row = current.find((r: any) => r.id === id);
-      const pos = data.positivePoints ?? row?.positivePoints ?? 0;
-      const neg = data.negativePoints ?? row?.negativePoints ?? 0;
-      (data as any).totalPoints = pos - neg;
-      await updatePerformanceEvaluation(id, data);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "performance_evaluation", entityId: id });
-      return { success: true };
-    }),
-
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "avaliacao", "edit");
-      await deletePerformanceEvaluation(input.id);
-      return { success: true };
-    }),
+    // Gerar, editar e apagar a avaliação SEMANAL antiga saíram (P3 lote 15b):
+    // nenhum ecrã os usava, o "apagar" era definitivo e o "editar" não olhava
+    // à cidade nem dizia o que mudou. A tabela fica (o cron de segunda-feira
+    // continua a gerá-la); os ajustes fazem-se na Avaliação (evaluation.adjust,
+    // com motivo e histórico).
   }),
 
   // ─── SERVIÇOS ────────────────────────────────────────────────────────────
@@ -4544,7 +4520,7 @@ export const appRouter = router({
   // ── DISPONIBILIDADE SEMANAL DOS EXTRAS ────────────────────────────────────
   extrasAvailability: router({
     forEmployee: protectedProcedure
-      .input(z.object({ employeeId: z.number(), weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .input(z.object({ employeeId: z.number(), weekStart: weekStartSchema }))
       .query(async ({ ctx, input }) => {
         const viewer = await rhViewer(ctx.user);
         const person = await getEmployeeById(input.employeeId);
@@ -4560,7 +4536,7 @@ export const appRouter = router({
 
     // O extra vê/edita a SUA disponibilidade da semana.
     myWeek: protectedProcedure
-      .input(z.object({ weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      .input(z.object({ weekStart: weekStartSchema }))
       .query(async ({ ctx, input }) => {
         const emp = await getEmployeeByUserId(ctx.user.id);
         if (!emp) {
@@ -4575,7 +4551,7 @@ export const appRouter = router({
     setMyWeek: protectedProcedure
       .input(
         z.object({
-          weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          weekStart: weekStartSchema,
           days: z.array(
             z.object({
               day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -4585,7 +4561,7 @@ export const appRouter = router({
               toHour: z.number().int().min(0).max(23).nullable().optional(),
               note: z.string().max(300).nullable().optional(),
             }),
-          ),
+          ).max(7),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -4596,7 +4572,13 @@ export const appRouter = router({
             message: "A tua conta não está associada a um colaborador. Fala com o backoffice.",
           });
         }
-        return setMyAvailability(emp.employee.id, input.weekStart, input.days, ctx.user.id);
+        const r = await setMyAvailability(emp.employee.id, input.weekStart, input.days, ctx.user.id);
+        // Fica registado quem mudou e o que estava antes (a semana é substituída).
+        await logActivity({
+          userId: ctx.user.id, action: "availability_set", entity: "extras_availability", entityId: emp.employee.id,
+          details: `Semana ${input.weekStart}: ${r.saved} dia(s)${r.previous.length ? ` · antes: ${r.previous.join("; ")}` : " · sem nada antes"}`.slice(0, 1000),
+        });
+        return { saved: r.saved };
       }),
 
     // Backoffice: marca a disponibilidade POR um extra (a semana inteira, como
@@ -4605,7 +4587,7 @@ export const appRouter = router({
       .input(
         z.object({
           employeeId: z.number().int().positive(),
-          weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          weekStart: weekStartSchema,
           days: z.array(
             z.object({
               day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -4620,7 +4602,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "disponibilidade_extras", "edit");
-        let result: { saved: number; employeeName: string };
+        let result: { saved: number; employeeName: string; previous: string[] };
         await assertEmployeeAccess(input.employeeId);
         try {
           result = await setEmployeeAvailability(input.employeeId, input.weekStart, input.days, ctx.user.id);
@@ -4632,14 +4614,14 @@ export const appRouter = router({
           action: "availability_manual",
           entity: "extras_availability",
           entityId: input.employeeId,
-          details: `Disponibilidade marcada pelo backoffice para ${result.employeeName} (semana ${input.weekStart}): ${result.saved} dia(s)`,
+          details: `Disponibilidade marcada pelo backoffice para ${result.employeeName} (semana ${input.weekStart}): ${result.saved} dia(s)${result.previous.length ? ` · antes: ${result.previous.join("; ")}` : ""}`.slice(0, 1000),
         });
-        return result;
+        return { saved: result.saved, employeeName: result.employeeName };
       }),
 
     // Backoffice: resumo da semana (quem respondeu, disponíveis por dia/turno).
     overview: protectedProcedure
-      .input(z.object({ weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().nullable().optional() }))
+      .input(z.object({ weekStart: weekStartSchema, projectId: z.number().nullable().optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "disponibilidade_extras", "view");
         return getWeekOverview(input.weekStart, input.projectId ?? null);
@@ -4649,11 +4631,12 @@ export const appRouter = router({
     sendRequest: protectedProcedure
       .input(
         z.object({
-          weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-          origin: z.string().url(),
+          weekStart: weekStartSchema,
+          // Ignorado: o link do email é sempre o da app (APP_URL), nunca o do browser.
+          origin: z.string().url().optional(),
           projectId: z.number().nullable().optional(),
           note: z.string().max(500).nullable().optional(),
-          employeeIds: z.array(z.number()).nullable().optional(),
+          employeeIds: z.array(z.number().int().positive()).max(2000).nullable().optional(),
           testEmail: z.string().email().nullable().optional(),
           message: z.object({
             kind: z.enum(["week", "day_shift", "day_hours", "day_range"]),
@@ -4668,9 +4651,10 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "disponibilidade_extras", "edit");
+        const { appOrigin } = await import("./google/workspace");
         const result = await sendWeeklyAvailabilityRequest({
           weekStart: input.weekStart,
-          origin: input.origin,
+          origin: appOrigin(),
           projectId: input.projectId ?? null,
           note: input.note ?? null,
           employeeIds: input.employeeIds ?? null,
