@@ -25,7 +25,7 @@ Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
 - Num turno antigo (nem o atual nem o que acabou agora), a passagem nova herda só os pendentes da anterior: o "ao vivo" é de agora, não desse turno.
 
 **Resumo automático** (no topo de **Preencher**)
-- As recolhas e entregas do próximo turno (com voo e valor a pagar), as entregas pendentes, os carros p/ coberto e as ocorrências abertas vêm **ao vivo da BD da Multipark**. As compras online por acabar não contam.
+- As recolhas e entregas do próximo turno (com voo e valor a pagar), as entregas pendentes, os carros p/ coberto e as ocorrências abertas vêm **ao vivo da BD da Multipark**. As compras online ainda por pagar também contam: vão ser recolhidas na mesma.
 - A equipa mostra **(por confirmar)** em quem ainda está só proposto na escala.
 - Se a BD da Multipark não responder, aparece um aviso a laranja e o resumo usa as cópias do dashboard. O resto da passagem funciona igual.
 - Uma parte que não se consegue ler mostra **erro** em vez do número. Não é 0, e no email e no resumo IA aparece como "sem dados (falhou a leitura)".

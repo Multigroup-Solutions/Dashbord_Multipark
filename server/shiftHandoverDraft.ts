@@ -281,7 +281,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
       ${field === "checkIn" ? sql`COALESCE(NULLIF(b.departingFlight, ''), b.departureFlight)` : sql`COALESCE(NULLIF(b.returnFlight, ''), b.arrivalFlight)`} AS flight
     FROM multipark_bookings b
     WHERE ${sql.identifier(field)} >= ${nwin.start} AND ${sql.identifier(field)} < ${nwin.end}
-      AND (b.status IS NULL OR b.status NOT IN ('CANCELLED', 'PENDING'))
+      AND (b.status IS NULL OR b.status <> 'CANCELLED')
       AND ${inCity(sql`b.projectId`)}
     ORDER BY t LIMIT 1000`)), [] as any[]);
   const [ciRows, coRows] = await Promise.all([bookingsIn("checkIn"), bookingsIn("checkOut")]);
