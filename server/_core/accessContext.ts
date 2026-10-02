@@ -93,6 +93,13 @@ const PATH_MODULE: Array<[string, ModuleId]> = [
   ["extrasAvailability.", "disponibilidade_extras"],
   ["shiftHandover.", "passagem_turno"],
   ["extraLeads.", "leads_extras"],
+  // Os separadores Candidaturas e Recrutamento e a pontuação das leads (18b):
+  // uma exceção "nacional" em Leads de extras vale também aqui.
+  ["driverApplications.", "leads_extras"],
+  ["rh.recruitmentEmails", "leads_extras"],
+  ["rh.setRecruitmentNotes", "leads_extras"],
+  ["rh.replyRecruitment", "leads_extras"],
+  ["aiOps.leads.", "leads_extras"],
   ["whatsapp.", "whatsapp"],
   ["clients.", "clientes"],
   ["contacts.", "contactos"],

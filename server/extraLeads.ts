@@ -28,7 +28,7 @@ import { normalizePhoneE164, normalizePhoneForStorage } from "../shared/phone";
 import { findWhatsAppTemplate, templateHasBodyParams } from "../shared/whatsappTemplate";
 import { sendTemplateToContacts, type BroadcastRecipient } from "./whatsappBroadcast";
 import { findActiveEmployeeByPhoneE164 } from "./extrasAvailability";
-import { aggregateFunnel, LEAD_STATUSES, manualStatusError, type FunnelLeadRow, type FunnelResult } from "../shared/extraLeadsFunnel";
+import { aggregateFunnel, EXTRA_LEADS_LIST_LIMIT, LEAD_STATUSES, manualStatusError, type FunnelLeadRow, type FunnelResult } from "../shared/extraLeadsFunnel";
 
 export const EXTRA_LEAD_STATUSES = LEAD_STATUSES;
 export type ExtraLeadStatus = (typeof EXTRA_LEAD_STATUSES)[number];
@@ -104,9 +104,19 @@ export interface ExtraLeadRow {
   optedOutAt: string | null;
   employeeId: number | null;
   projectId: number | null;
+  /** 0380 — arquivado (sai da lista, do funil, dos envios e dos lembretes). */
+  archivedAt?: string | null;
+  archivedById?: number | null;
   createdById: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** BD em falta → erro (antes: lista vazia, que parecia "ainda não há leads"). */
+async function requireDb() {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
+  return db;
 }
 
 /** Filtro de cidade dos leads: os da(s) cidade(s) do utilizador + os sem cidade. */
@@ -117,11 +127,11 @@ function leadScopeCondition() {
 }
 
 export async function listExtraLeads(
-  filter: { status?: ExtraLeadStatus | null; search?: string | null; source?: string | null } = {},
+  filter: { status?: ExtraLeadStatus | null; search?: string | null; source?: string | null; archived?: boolean | null } = {},
 ): Promise<ExtraLeadRow[]> {
-  const db = await getDb();
-  if (!db) return [];
-  const conds = [];
+  const db = await requireDb();
+  // Arquivados (0380) só com o filtro "Arquivados".
+  const conds = [filter.archived ? sql`${extraLeads.archivedAt} IS NOT NULL` : isNull(extraLeads.archivedAt)];
   if (filter.status) conds.push(eq(extraLeads.status, filter.status));
   if (filter.source) conds.push(eq(extraLeads.source, filter.source));
   const q = filter.search?.trim();
@@ -145,11 +155,12 @@ export async function listExtraLeads(
   const rows = await db
     .select()
     .from(extraLeads)
-    .where(conds.length ? and(...conds) : undefined)
+    .where(and(...conds))
     .orderBy(desc(extraLeads.createdAt))
-    .limit(500);
+    .limit(EXTRA_LEADS_LIST_LIMIT);
   return rows as ExtraLeadRow[];
 }
+
 
 /** Lead fora das cidades de quem pede → "não encontrado" (não revela que existe). */
 export function assertLeadVisible(lead: { projectId: number | null } | undefined | null): void {
@@ -179,7 +190,7 @@ async function findDuplicate(
   if (lead.email) conds.push(eq(extraLeads.email, lead.email));
   if (!conds.length) return null;
   const rows = await db
-    .select({ id: extraLeads.id, fullName: extraLeads.fullName, phoneE164: extraLeads.phoneE164, email: extraLeads.email })
+    .select({ id: extraLeads.id, fullName: extraLeads.fullName, phoneE164: extraLeads.phoneE164, email: extraLeads.email, archivedAt: extraLeads.archivedAt })
     .from(extraLeads)
     .where(or(...conds))
     .limit(5);
@@ -190,7 +201,8 @@ async function findDuplicate(
     // Existe noutra cidade: avisa sem mostrar quem é
     return { id: 0, fullName: "noutra cidade", field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
   }
-  return { id: hit.id, fullName: hit.fullName, field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
+  // Arquivado (0380): diz-se onde está, para o repor em vez de criar outro.
+  return { id: hit.id, fullName: hit.archivedAt ? `${hit.fullName} — está nos Arquivados, repõe-o` : hit.fullName, field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
 }
 
 export async function createExtraLead(input: LeadInput, createdById: number | null): Promise<ExtraLeadRow> {
@@ -232,6 +244,7 @@ export async function updateExtraLead(
   if (!db) throw new Error("Base de dados indisponível");
   const [current] = await db.select().from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
   assertLeadVisible(current);
+  if (current.archivedAt) throw new Error("Lead arquivado: repõe-o primeiro (filtro «Arquivados»).");
   if (patch.status) {
     const err = manualStatusError(current, patch.status);
     if (err) throw new Error(err);
@@ -277,13 +290,29 @@ export async function updateExtraLead(
   return row as ExtraLeadRow;
 }
 
-export async function deleteExtraLead(id: number, userId: number | null): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Base de dados indisponível");
-  const [current] = await db.select({ fullName: extraLeads.fullName, projectId: extraLeads.projectId }).from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
+/**
+ * "Apagar" = ARQUIVAR (0380, P3 18b): sai da lista, do funil, dos envios e dos
+ * lembretes, mas a linha fica (e a origem continua marcada como vista — não
+ * volta a ser importada). Pode ser reposto. Antes era um DELETE sem volta.
+ */
+export async function archiveExtraLead(id: number, userId: number | null): Promise<void> {
+  const db = await requireDb();
+  const [current] = await db.select({ fullName: extraLeads.fullName, projectId: extraLeads.projectId, status: extraLeads.status, archivedAt: extraLeads.archivedAt }).from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
   assertLeadVisible(current);
-  await db.delete(extraLeads).where(eq(extraLeads.id, id));
-  await logActivity({ userId: userId ?? 0, action: "extra_lead_delete", entity: "extra_leads", entityId: id, details: `Lead apagado: ${current.fullName}` });
+  if (current.archivedAt) return;
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  await db.update(extraLeads).set({ archivedAt: now, archivedById: userId }).where(and(eq(extraLeads.id, id), isNull(extraLeads.archivedAt)));
+  await logActivity({ userId: userId ?? 0, action: "extra_lead_archive", entity: "extra_leads", entityId: id, details: `Lead arquivado: ${current.fullName} (estava «${current.status}»)` });
+}
+
+/** Repor um lead arquivado (volta à lista com o estado que tinha). */
+export async function restoreExtraLead(id: number, userId: number | null): Promise<void> {
+  const db = await requireDb();
+  const [current] = await db.select({ fullName: extraLeads.fullName, projectId: extraLeads.projectId, archivedAt: extraLeads.archivedAt }).from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
+  assertLeadVisible(current);
+  if (!current.archivedAt) return;
+  await db.update(extraLeads).set({ archivedAt: null, archivedById: null }).where(eq(extraLeads.id, id));
+  await logActivity({ userId: userId ?? 0, action: "extra_lead_restore", entity: "extra_leads", entityId: id, details: `Lead reposto: ${current.fullName}` });
 }
 
 export interface LeadContactResult {
@@ -331,6 +360,11 @@ export async function contactExtraLeads(opts: {
     .filter((l) => projectVisible(l.projectId, scope));
   const results: LeadContactResult[] = [];
   const contactable = leads.filter((l) => {
+    // Arquivados (0380) não recebem nada.
+    if (l.archivedAt) {
+      results.push({ leadId: l.id, fullName: l.fullName, status: "skipped", error: "Arquivado" });
+      return false;
+    }
     // Convertidos (já trabalham cá) e sem interesse não recebem o convite
     if (l.status === "converted" || l.status === "declined") {
       results.push({ leadId: l.id, fullName: l.fullName, status: "skipped", error: l.status === "converted" ? "Já é extra" : "Sem interesse" });
@@ -428,6 +462,7 @@ export async function bulkUpdateExtraLeads(
       res.skipped.push({ leadId: id, fullName: null, error: err.message });
       continue;
     }
+    if (lead!.archivedAt) { res.skipped.push({ leadId: id, fullName: lead!.fullName, error: "Arquivado" }); continue; }
     if (opts.status) {
       const err = manualStatusError(lead!, opts.status);
       if (err) { res.skipped.push({ leadId: id, fullName: lead!.fullName, error: err }); continue; }
@@ -458,11 +493,9 @@ export async function bulkUpdateExtraLeads(
  */
 export async function getLeadFunnel(opts: { weeks?: number } = {}): Promise<FunnelResult & { weeks: number }> {
   const weeks = Math.min(52, Math.max(1, Math.floor(opts.weeks ?? 12)));
-  const db = await getDb();
-  const empty = aggregateFunnel([], () => "");
-  if (!db) return { ...empty, weeks };
+  const db = await requireDb();
   const since = new Date(Date.now() - weeks * 7 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
-  const conds = [gte(extraLeads.createdAt, since)];
+  const conds = [gte(extraLeads.createdAt, since), isNull(extraLeads.archivedAt)];
   const scoped = leadScopeCondition();
   if (scoped) conds.push(scoped);
   const rows = (await db

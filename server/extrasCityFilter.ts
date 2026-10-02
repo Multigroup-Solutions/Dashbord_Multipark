@@ -5,7 +5,7 @@
  * (melhor ver a mais do que perder um candidato).
  */
 import { cityScope, scopedProjectIds } from "./cityScope";
-import { matchCityKey, type CityKey } from "../shared/city";
+import { cityKeyFromText, matchCityKey, type CityKey } from "../shared/city";
 
 /** projectId dentro do âmbito do utilizador? `scope` undefined = todas as cidades. */
 export function projectVisible(projectId: number | null | undefined, scope: number[] | undefined): boolean {
@@ -16,7 +16,8 @@ export function projectVisible(projectId: number | null | undefined, scope: numb
 /** Cidade escrita à mão (candidatura do site) dentro das cidades do utilizador? */
 export function cityTextVisible(text: string | null | undefined, allowed: CityKey[] | undefined): boolean {
   if (allowed === undefined) return true;
-  const key = matchCityKey(text ?? "");
+  // 18b: também pela terra — "Corroios" já não fica visível a todas as cidades.
+  const key = cityKeyFromText(text ?? "");
   return key == null || allowed.includes(key);
 }
 

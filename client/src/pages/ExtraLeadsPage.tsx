@@ -28,7 +28,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { AlertTriangle, Clock, Filter, Mail, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Send, Trash2, UserPlus, X } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, Clock, Filter, Mail, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Send, UserPlus, X } from "lucide-react";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { findWhatsAppTemplate, LEAD_RECRUITMENT_TEMPLATE_ID } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
 import { can } from "@shared/access";
@@ -38,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CandidaturasSection } from "@/components/CandidaturasSection";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
 import {
+  EXTRA_LEADS_LIST_LIMIT,
   LEAD_SLA,
   LEAD_SOURCE_LABELS,
   LEAD_SOURCES,
@@ -88,6 +90,7 @@ type LeadRow = {
 type LeadDraft = { fullName: string; phone: string; email: string; notes: string; city: string };
 const EMPTY_DRAFT: LeadDraft = { fullName: "", phone: "", email: "", notes: "", city: "" };
 const NO_CITY = "none";
+const LEADS_LIST_LIMIT = EXTRA_LEADS_LIST_LIMIT;
 
 /** Timestamp da BD ('YYYY-MM-DD HH:MM:SS', UTC) → "dd/mm hh:mm" local. */
 function fmtWhen(s: string | null): string {
@@ -95,7 +98,7 @@ function fmtWhen(s: string | null): string {
   const iso = s.includes("T") ? s : s.replace(" ", "T");
   const d = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + "Z");
   if (Number.isNaN(d.getTime())) return s;
-  return d.toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Lisbon" });
 }
 
 /** Mesma regra do servidor (normalizeLeadInput): nome + telemóvel OU email. */
@@ -129,6 +132,10 @@ function LeadsTab() {
   }>(null);
 
   const [deleteFor, setDeleteFor] = useState<LeadRow | null>(null);
+  // 18b: arquivados só com o filtro "Arquivados" (e repõem-se daí).
+  const [showArchived, setShowArchived] = useState(false);
+  // 18b: a pessoa já teve ficha desativada → confirmar antes de reativar.
+  const [reactivateAsk, setReactivateAsk] = useState<null | { leadId: number; projectId: number; employeeId: number; fullName: string; reason: string; deactivatedAt: string | null }>(null);
 
   // Converter em extra: escolher a cidade (centro de custos), como na aprovação
   // das candidaturas do site. `projects.list` já vem limitado às cidades do utilizador.
@@ -149,7 +156,7 @@ function LeadsTab() {
 
   // Vem tudo e o estado filtra aqui: os contadores dos chips contam sempre
   // o total de cada estado (antes contavam só o estado escolhido).
-  const list = trpc.extraLeads.list.useQuery(undefined, { refetchInterval: 60_000 });
+  const list = trpc.extraLeads.list.useQuery(showArchived ? { archived: true } : undefined, { refetchInterval: 60_000 });
   const allLeads = (list.data ?? []) as LeadRow[];
   const funnel = trpc.extraLeads.funnel.useQuery({ weeks: 12 }, { refetchInterval: 5 * 60_000 });
   const cityName = useMemo(() => new Map((projects.data ?? []).map((p: any) => [p.id as number, String(p.name)])), [projects.data]);
@@ -220,9 +227,16 @@ function LeadsTab() {
   });
 
   const convert = trpc.extraLeads.convert.useMutation({
-    onSuccess: (r) => {
-      toast.success(r.created ? "Ficha de extra criada — já aparece na disponibilidade e na escala." : "Lead ligado à ficha de extra que já existia.");
+    onSuccess: (r, vars) => {
+      if (!r.ok) {
+        // Já teve ficha desativada: mostra o motivo e pede confirmação (18b).
+        setReactivateAsk({ leadId: vars.id, projectId: vars.projectId, ...r.needsConfirm });
+        setConvertFor(null);
+        return;
+      }
+      toast.success(r.created ? "Ficha de extra criada — já aparece na disponibilidade e na escala." : r.reactivated ? "Ficha reativada e ligada ao lead." : "Lead ligado à ficha de extra que já existia.");
       setConvertFor(null);
+      setReactivateAsk(null);
       invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -236,8 +250,13 @@ function LeadsTab() {
     onSuccess: () => { toast.success("Lead atualizado"); setEditOpen(false); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  // "Apagar" arquiva (18b): sai da lista, do funil e dos envios; repõe-se nos Arquivados.
   const remove = trpc.extraLeads.remove.useMutation({
-    onSuccess: () => { toast.success("Lead apagado"); setDeleteFor(null); invalidate(); },
+    onSuccess: () => { toast.success("Lead arquivado (está em «Arquivados»)"); setDeleteFor(null); invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const restore = trpc.extraLeads.restore.useMutation({
+    onSuccess: () => { toast.success("Lead reposto"); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   // Código único deste envio (17b): carregar outra vez (rede/corte a meio) retoma, não duplica.
@@ -341,7 +360,9 @@ function LeadsTab() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {funnel.isLoading ? (
+          {funnel.error ? (
+            <QueryErrorNote error={funnel.error} onRetry={() => funnel.refetch()} retrying={funnel.isFetching} what="o funil" />
+          ) : funnel.isLoading ? (
             <div className="text-sm text-muted-foreground">A calcular o funil…</div>
           ) : !f || f.totals.created === 0 ? (
             <div className="text-sm text-muted-foreground">Sem leads nas últimas semanas.</div>
@@ -460,7 +481,7 @@ function LeadsTab() {
             </Button>
           )}
           <span className="text-xs text-amber-900 dark:text-amber-200">
-            Os contactados sem resposta recebem 1 lembrete automático (máx. {LEAD_SLA.maxSends} envios por lead).
+            Com «Lembretes das leads de extras» ligado (Definições → Automações), os contactados sem resposta recebem 1 lembrete automático (máx. {LEAD_SLA.maxSends} envios por lead).
           </span>
         </div>
       )}
@@ -469,10 +490,12 @@ function LeadsTab() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <CardTitle className="text-base">
-              {shown.length}{shown.length !== leads.length ? ` de ${leads.length}` : ""} lead{leads.length === 1 ? "" : "s"}
-              <span className="ml-2 text-xs font-normal text-muted-foreground">
-                {shownWithPhone.length} com telemóvel
-              </span>
+              {list.isSuccess ? <>{shown.length}{shown.length !== leads.length ? ` de ${leads.length}` : ""} lead{leads.length === 1 ? "" : "s"}</> : "Leads"}
+              {list.isSuccess && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  {shownWithPhone.length} com telemóvel
+                </span>
+              )}
             </CardTitle>
             <div className="flex items-center gap-2 flex-wrap">
               <div className="relative w-full sm:w-auto">
@@ -502,6 +525,16 @@ function LeadsTab() {
                 </SelectContent>
               </Select>
               <div className="flex items-center gap-1 flex-wrap">
+                <Button
+                  size="sm"
+                  variant={showArchived ? "default" : "outline"}
+                  className="h-8 text-xs"
+                  aria-pressed={showArchived}
+                  title="Leads arquivados (podem ser repostos)"
+                  onClick={() => { setShowArchived(!showArchived); setStatusFilter("all"); setAttentionFilter(null); clearSelection(); }}
+                >
+                  <Archive className="h-3.5 w-3.5 mr-1" /> Arquivados
+                </Button>
                 {(["all", ...STATUS_ORDER] as (LeadStatus | "all")[]).map((s) => (
                   <Button
                     key={s}
@@ -562,11 +595,19 @@ function LeadsTab() {
               </Button>
             </div>
           )}
+          {list.error && <QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="os leads" />}
+          {list.isSuccess && allLeads.length >= LEADS_LIST_LIMIT && (
+            <p className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+              A mostrar os {LEADS_LIST_LIMIT} leads mais recentes (e os contadores só destes). Usa a pesquisa ou arquiva os antigos.
+            </p>
+          )}
           {list.isLoading && <div className="text-sm text-muted-foreground">A carregar leads…</div>}
-          {!list.isLoading && shown.length === 0 && (
+          {list.isSuccess && shown.length === 0 && (
             <div className="text-sm text-muted-foreground py-6 text-center">
               {trimmedSearch
                 ? `Sem resultados para “${trimmedSearch}”.`
+                : showArchived
+                  ? "Não há leads arquivados."
                 : attentionFilter
                   ? "Nenhum lead nesta situação."
                   : statusFilter !== "all"
@@ -707,6 +748,11 @@ function LeadsTab() {
                           <span className="block truncate text-muted-foreground" title={l.notes ?? undefined}>{l.notes ?? "—"}</span>
                         </td>
                         <td className="py-2 px-2 text-right whitespace-nowrap">
+                          {showArchived ? (
+                            <Button size="sm" variant="outline" className="h-8" disabled={restore.isPending} title="Volta à lista com o estado que tinha" onClick={() => restore.mutate({ id: l.id })}>
+                              <ArchiveRestore className="h-3.5 w-3.5 mr-1" /> Repor
+                            </Button>
+                          ) : (<>
                           <Button
                             size="sm"
                             variant="outline"
@@ -725,9 +771,10 @@ function LeadsTab() {
                           <Button size="sm" variant="ghost" className="h-8 mr-1" title="Editar" onClick={() => openEdit(l)}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="ghost" className="h-8 text-red-600 hover:text-red-700" title="Apagar" onClick={() => setDeleteFor(l)}>
-                            <Trash2 className="h-3.5 w-3.5" />
+                          <Button size="sm" variant="ghost" className="h-8 text-red-600 hover:text-red-700" title="Arquivar" aria-label="Arquivar lead" onClick={() => setDeleteFor(l)}>
+                            <Archive className="h-3.5 w-3.5" />
                           </Button>
+                          </>)}
                         </td>
                       </tr>
                     );
@@ -910,19 +957,42 @@ function LeadsTab() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Apagar ──────────────────────────────────────────────────────────── */}
+      {/* ── Arquivar (18b: nada se apaga) ────────────────────────────────────── */}
       <Dialog open={deleteFor != null} onOpenChange={(o) => { if (!o && !remove.isPending) setDeleteFor(null); }}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Apagar lead?</DialogTitle>
+            <DialogTitle>Arquivar lead?</DialogTitle>
             <DialogDescription>
-              {deleteFor?.fullName} deixa de aparecer nesta lista. As mensagens WhatsApp já trocadas ficam no inbox.
+              {deleteFor?.fullName} sai desta lista, do funil, dos envios e dos lembretes. Fica em «Arquivados» e pode ser reposto. As mensagens WhatsApp já trocadas ficam no inbox.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteFor(null)} disabled={remove.isPending}>Cancelar</Button>
             <Button variant="destructive" disabled={remove.isPending} onClick={() => deleteFor && remove.mutate({ id: deleteFor.id })}>
-              <Trash2 className="h-4 w-4 mr-2" /> Apagar
+              <Archive className="h-4 w-4 mr-2" /> Arquivar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Já teve ficha (desativada): reativar só com confirmação (18b) ───── */}
+      <Dialog open={reactivateAsk != null} onOpenChange={(o) => { if (!o && !convert.isPending) setReactivateAsk(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Esta pessoa já teve ficha</DialogTitle>
+            <DialogDescription>
+              {reactivateAsk?.fullName || "A ficha"} (#{reactivateAsk?.employeeId}) foi desativada
+              {reactivateAsk?.deactivatedAt ? ` em ${fmtWhen(reactivateAsk.deactivatedAt)}` : ""} por «{reactivateAsk?.reason}».
+              Converter o lead volta a ativá-la: aparece na disponibilidade e pode ser escalada.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReactivateAsk(null)} disabled={convert.isPending}>Não reativar</Button>
+            <Button
+              disabled={convert.isPending || !reactivateAsk}
+              onClick={() => reactivateAsk && convert.mutate({ id: reactivateAsk.leadId, projectId: reactivateAsk.projectId, confirmReactivate: true })}
+            >
+              <UserPlus className="h-4 w-4 mr-2" /> {convert.isPending ? "A reativar…" : "Reativar e converter"}
             </Button>
           </DialogFooter>
         </DialogContent>

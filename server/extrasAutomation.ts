@@ -861,12 +861,61 @@ async function flagAvailabilityForReview(employeeId: number, pending: PendingReq
 
 // ─── 9. Converter lead em extra ─────────────────────────────────────────────
 
-export async function convertLeadToExtra(leadId: number, projectId: number, userId: number | null): Promise<{ employeeId: number; created: boolean; city: string }> {
+export type ConvertLeadResult =
+  | { ok: true; employeeId: number; created: boolean; city: string; reactivated: boolean }
+  /** A pessoa já teve ficha, desativada: mostra-se o motivo e só se reativa com confirmação (18b). */
+  | { ok: false; needsConfirm: { employeeId: number; fullName: string; reason: string; deactivatedAt: string | null } };
+
+/**
+ * A ficha que já existe para esta pessoa (pelo telemóvel, senão pelo email),
+ * seguindo as juntas ("ficha_duplicada" → a ficha que ficou). null = não há.
+ * Usada pelo Converter (lead) e pelo Aprovar (candidatura) — 18b.
+ */
+export async function existingFichaFor(db: any, lead: { phoneE164: string | null; email: string | null }) {
+  const { employees } = await import("../drizzle/schema");
+  const { eq, sql } = await import("drizzle-orm");
+  const { mergedTargetId, pickFicha } = await import("../shared/extraLeadsConvert");
+  const cols = {
+    id: employees.id, fullName: employees.fullName, phone: employees.phone, position: employees.position, isActive: employees.isActive,
+    projectId: employees.projectId, deactivationReason: employees.deactivationReason, deactivationReasonOther: employees.deactivationReasonOther,
+    deactivatedAt: employees.deactivatedAt,
+  };
+  let found: any = null;
+  let via: "phone" | "email" = "phone";
+  if (lead.phoneE164) {
+    const { normalizePhoneE164 } = await import("../shared/phone");
+    const rows = await db.select(cols).from(employees).where(sql`${employees.phone} IS NOT NULL`);
+    found = pickFicha(rows.filter((r: any) => r.phone && normalizePhoneE164(r.phone) === lead.phoneE164));
+  }
+  if (!found && lead.email) {
+    const { findEmployeeByEmail } = await import("./identity");
+    const hit = await findEmployeeByEmail(db, lead.email);
+    if (hit) {
+      [found] = await db.select(cols).from(employees).where(eq(employees.id, hit.id)).limit(1);
+      via = "email";
+    }
+  }
+  // Ficha junta a outra → a que ficou (até 5 saltos).
+  let redirected = false;
+  for (let i = 0; found && i < 5; i++) {
+    const next = mergedTargetId(found);
+    if (next == null) break;
+    const [t] = await db.select(cols).from(employees).where(eq(employees.id, next)).limit(1);
+    if (!t) break;
+    found = t;
+    redirected = true;
+  }
+  return found ? { ...found, via, redirected } : null;
+}
+
+export async function convertLeadToExtra(
+  leadId: number, projectId: number, userId: number | null, opts: { confirmReactivate?: boolean } = {},
+): Promise<ConvertLeadResult> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const { extraLeads, employees } = await import("../drizzle/schema");
-  const { and, eq, isNull, sql } = await import("drizzle-orm");
-  const [lead] = await db.select().from(extraLeads).where(eq(extraLeads.id, leadId)).limit(1);
+  const { and, eq, isNull } = await import("drizzle-orm");
+  const [lead] = await db.select().from(extraLeads).where(and(eq(extraLeads.id, leadId), isNull(extraLeads.archivedAt))).limit(1);
   const { assertLeadVisible } = await import("./extraLeads");
   assertLeadVisible(lead);
   if (lead.employeeId) throw new Error("Este lead já tem ficha de extra.");
@@ -876,32 +925,46 @@ export async function convertLeadToExtra(leadId: number, projectId: number, user
   const { resolveApprovalCostCenter, planCostCenterAssignment } = await import("./webIntake");
   const costCenter = resolveApprovalCostCenter((await getProjects()) as any, projectId);
 
+  // 1) Já teve ficha? (P3 18b) Antes reativava-se qualquer uma, em silêncio.
+  const existing = await existingFichaFor(db, lead);
+  let reactivate = false;
+  if (existing) {
+    const { leadFichaDecision, blockedFichaMessage } = await import("../shared/extraLeadsConvert");
+    const d = leadFichaDecision(existing, !!opts.confirmReactivate);
+    if (d.kind === "blocked") throw new Error(blockedFichaMessage(existing, d.reason));
+    if (d.kind === "confirm") {
+      return { ok: false, needsConfirm: { employeeId: existing.id, fullName: String(existing.fullName ?? ""), reason: d.reason, deactivatedAt: existing.deactivatedAt ?? null } };
+    }
+    reactivate = d.reactivate;
+    // Ficha de outra cidade: não se liga nem se mexe nela daqui.
+    const { scopedProjectIds } = await import("./cityScope");
+    const scoped = scopedProjectIds();
+    if (scoped !== undefined && existing.projectId != null && !scoped.includes(existing.projectId)) {
+      throw new Error(`Já existe uma ficha com este contacto noutra cidade (#${existing.id}). Pede a quem gere essa cidade para converter.`);
+    }
+  }
+
   // Reserva o lead ANTES de criar a ficha: dois cliques (ou duas pessoas) ao
-  // mesmo tempo já não criam duas fichas. employeeId 0 = "a converter".
-  const claim = await db.update(extraLeads).set({ employeeId: 0 }).where(and(eq(extraLeads.id, leadId), isNull(extraLeads.employeeId)));
+  // mesmo tempo já não criam duas fichas. employeeId 0 = "a converter"; uma
+  // reserva com mais de 10 min (a função morreu a meio) já não prende (18b).
+  const { sql } = await import("drizzle-orm");
+  const claim = await db.update(extraLeads).set({ employeeId: 0 })
+    .where(and(eq(extraLeads.id, leadId), sql`(${extraLeads.employeeId} IS NULL OR (${extraLeads.employeeId} = 0 AND ${extraLeads.updatedAt} < NOW() - INTERVAL 10 MINUTE))`));
   if (Number((claim as any)[0]?.affectedRows ?? (claim as any).affectedRows ?? 0) !== 1) {
     throw new Error("Este lead já está a ser convertido.");
   }
 
   try {
-    let employeeId: number | null = null;
+    let employeeId: number | null = existing?.id ?? null;
     let created = false;
 
-    // 1) Já existe ficha com este telemóvel (ativa OU inativa)? Liga-se a ela.
-    if (lead.phoneE164) {
-      const { normalizePhoneE164 } = await import("../shared/phone");
-      const rows = await db.select({ id: employees.id, phone: employees.phone }).from(employees).where(sql`${employees.phone} IS NOT NULL`);
-      const hit = rows.find((r) => r.phone && normalizePhoneE164(r.phone) === lead.phoneE164);
-      if (hit) employeeId = hit.id;
-    }
-    // 2) Pelo email (encontra ou cria a ficha)
+    // 2) Sem ficha: pelo email (encontra ou cria), senão só com o telefone.
     if (employeeId == null && lead.email) {
       const { findOrCreateExtraByEmail } = await import("./identity");
       const r = await findOrCreateExtraByEmail(db as any, lead.email, { fullName: lead.fullName, phone: lead.phone, projectId });
       employeeId = r.id;
       created = r.created;
     }
-    // 3) Só telefone e sem ficha: cria
     if (employeeId == null) {
       const ins = await db.insert(employees).values({
         fullName: lead.fullName.slice(0, 256),
@@ -916,12 +979,15 @@ export async function convertLeadToExtra(leadId: number, projectId: number, user
     }
 
     if (!created) {
-      // Ficha existente: reativa (senão não aparece na disponibilidade) e
-      // atribui o centro de custos se a regra o permitir.
-      const [emp] = await db.select({ projectId: employees.projectId, isActive: employees.isActive }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+      // Ficha existente: reativa SÓ com confirmação (e limpa o motivo — a regra
+      // de reativar) e atribui o centro de custos se a regra o permitir.
+      const [emp] = await db.select({ projectId: employees.projectId, isActive: employees.isActive, phone: employees.phone }).from(employees).where(eq(employees.id, employeeId)).limit(1);
       const patch: Record<string, unknown> = {};
-      if (emp && emp.isActive !== 1) patch.isActive = 1;
+      if (reactivate && emp && emp.isActive !== 1) {
+        Object.assign(patch, { isActive: 1, deactivationReason: null, deactivationReasonOther: null, deactivationNotes: null, deactivatedAt: null, deactivatedById: null });
+      }
       if (planCostCenterAssignment(emp?.projectId ?? null, projectId, false).assign) patch.projectId = projectId;
+      if (emp && !emp.phone && lead.phone) patch.phone = lead.phone;
       if (Object.keys(patch).length) await db.update(employees).set(patch as any).where(eq(employees.id, employeeId));
     }
 
@@ -931,17 +997,21 @@ export async function convertLeadToExtra(leadId: number, projectId: number, user
     const { approveApplicationForConvertedLead } = await import("./extraLeadsSync");
     await approveApplicationForConvertedLead(lead, employeeId, userId);
     const { logActivity } = await import("./db");
+    const how = created ? " (criado)" : reactivate ? ` (existente, REATIVADA — tinha saído por «${existing ? (await import("../shared/deactivationReasons")).deactivationReasonLabel(existing.deactivationReason, existing.deactivationReasonOther) : "?"}»)` : " (existente)";
     await logActivity({
       userId: userId ?? 0,
       action: "extra_lead_convert",
       entity: "extra_leads",
       entityId: leadId,
-      details: `Lead convertido em extra: ${lead.fullName} → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenter.projectName}${lead.notes ? ` · notas do lead: ${lead.notes}` : ""}`,
+      details: `Lead convertido em extra: ${lead.fullName} → employee ${employeeId}${how} · ${costCenter.projectName}${lead.notes ? ` · notas do lead: ${lead.notes}` : ""}`.slice(0, 1000),
     });
+    if (reactivate) {
+      await logActivity({ userId: userId ?? 0, action: "employee_reactivate", entity: "employee", entityId: employeeId, details: `Reativada ao converter o lead #${leadId} (confirmado por quem converteu)` });
+    }
     // Percurso de onboarding por defeito (best-effort — nunca parte a conversão).
     const { autoAssignOnboarding } = await import("./trainingPaths");
     await autoAssignOnboarding(employeeId, "lead_convert", userId);
-    return { employeeId, created, city: costCenter.city };
+    return { ok: true, employeeId, created, city: costCenter.city, reactivated: reactivate };
   } catch (err) {
     // Falhou: liberta a reserva para se poder tentar de novo
     await db.update(extraLeads).set({ employeeId: null }).where(and(eq(extraLeads.id, leadId), eq(extraLeads.employeeId, 0)));
@@ -1006,6 +1076,12 @@ export async function runExtrasAutomation(now: Date = new Date(), opts: { deadli
       ["whatsapp-maintenance", async () => (await import("./whatsappInbound")).runWhatsappMaintenance()],
       ["whatsapp-sla", async () => (await import("./whatsappInboxOps")).runWhatsappSlaAlerts(now)],
       ["tasks", async () => (await import("./tasksService")).runTaskAutomation(now)],
+      // A entrada das candidaturas e dos emails de recrutamento nos Leads
+      // também não é automação dos extras (18b): antes parava com ela.
+      ["leads-sync", async () => {
+        const m = await import("./extraLeadsSync");
+        return { applications: await m.syncApplicationLeads(), emails: await m.syncEmailLeads() };
+      }],
     ] as const) {
       try {
         report.details[key] = await fn();
@@ -1182,8 +1258,8 @@ async function runLeadAutomation(
         phoneE164: extraLeads.phoneE164,
       })
       .from(extraLeads)
-      // Quem pediu STOP não entra no SLA nem no lembrete automático.
-      .where(and(inArray(extraLeads.status, ["new", "contacted"]), isNull(extraLeads.optedOutAt)));
+      // Quem pediu STOP não entra no SLA nem no lembrete automático; nem os arquivados (0380).
+      .where(and(inArray(extraLeads.status, ["new", "contacted"]), isNull(extraLeads.optedOutAt), isNull(extraLeads.archivedAt)));
   };
 
   if (clock.hour >= LEAD_SLA_NOTICE_HOUR) {
@@ -1230,6 +1306,8 @@ async function runLeadAutomation(
         templateId: LEAD_RECRUITMENT_TEMPLATE_ID,
         createdById: await getSystemUserId(),
         note: "lembrete automático a leads sem resposta",
+        // 18b: uma corrida repetida no mesmo dia retoma o envio, não o duplica.
+        sendKey: `leads-reminder:${clock.date}`,
       });
       return { due: due.length, sent: r.sent, failed: r.failed };
     });

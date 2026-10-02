@@ -128,7 +128,11 @@ describe("Interruptores", () => {
       expect(r.skipped.join(" ")).toContain("EXTRAS_AUTOMATION");
       expect(calls.maintenance).toBe(1);
       expect(calls.sla).toBe(1);
-      expect(r.ran).toEqual(["whatsapp-maintenance", "whatsapp-sla"]);
+      // 18a/18b: as tarefas e a entrada das candidaturas nos Leads também correm
+      // (aqui as tarefas falham por não haver BD — ficam nos erros, não em "ran").
+      expect(r.ran.slice(0, 2)).toEqual(["whatsapp-maintenance", "whatsapp-sla"]);
+      expect(r.ran).toContain("leads-sync");
+      expect(r.ran.concat(r.errors.map((e) => e.split(":")[0]))).toContain("tasks");
     } finally {
       if (prev === undefined) delete process.env.EXTRAS_AUTOMATION;
       else process.env.EXTRAS_AUTOMATION = prev;

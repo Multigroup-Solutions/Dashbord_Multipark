@@ -10,7 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { matchCityKey } from "@shared/city";
+import { cityKeyFromText, matchCityKey } from "@shared/city";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 // ─── Candidaturas de condutores vindas do website multidriver ────────────────
 // Novas candidaturas do formulário "Be a Driver" chegam via /api/v1 e ficam
@@ -52,17 +53,25 @@ export function CandidaturasSection() {
   );
   const [approveFor, setApproveFor] = useState<null | { id: number; fullName: string; email: string; city: string | null }>(null);
   const [approveProjectId, setApproveProjectId] = useState<string>("");
+  // 18b: a pessoa já teve ficha desativada → mostra o motivo e só reativa com confirmação.
+  const [reactivateAsk, setReactivateAsk] = useState<null | { appId: number; projectId: number; employeeId: number; fullName: string; reason: string }>(null);
 
   /** Abre o diálogo com a cidade da candidatura pré-selecionada (quando se reconhece). */
   function openApprove(a: { id: number; fullName: string; email: string; city: string | null }) {
-    const key = matchCityKey(a.city);
+    const key = cityKeyFromText(a.city);
     const match = key ? cityProjects.find((p: any) => matchCityKey(p.name) === key) : undefined;
     setApproveProjectId(match ? String(match.id) : cityProjects.length === 1 ? String(cityProjects[0].id) : "");
     setApproveFor(a);
   }
 
   const approve = trpc.driverApplications.approve.useMutation({
-    onSuccess: (r) => {
+    onSuccess: (r, vars) => {
+      if (!r.ok) {
+        setReactivateAsk({ appId: vars.id, projectId: vars.projectId, ...r.needsConfirm });
+        setApproveFor(null);
+        return;
+      }
+      setReactivateAsk(null);
       const cc = r.costCenter;
       const who = r.employeeCreated ? "extra criado" : "ligada a extra existente";
       if (cc.outcome === "kept_existing") {
@@ -79,7 +88,8 @@ export function CandidaturasSection() {
     onError: (e) => toast.error(e.message),
   });
   const setStatus = trpc.driverApplications.setStatus.useMutation({
-    onSuccess: () => {
+    onSuccess: (_r, vars) => {
+      if (vars.status === "rejected") toast.success("Candidatura rejeitada (o lead dela fica «Sem interesse»).");
       list.refetch();
       newCount.refetch();
     },
@@ -89,9 +99,11 @@ export function CandidaturasSection() {
   const apps = list.data ?? [];
   const pending = newCount.data?.length ?? 0;
 
+  // A BD guarda em UTC sem "Z" (18b: antes lia-se como hora local e o dia podia trocar).
   const fmtWhen = (s: string) => {
-    const d = new Date(s.includes("T") ? s : s.replace(" ", "T"));
-    return isNaN(d.getTime()) ? s : d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric" });
+    const iso = s.includes("T") ? s : s.replace(" ", "T");
+    const d = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`);
+    return isNaN(d.getTime()) ? s : d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Lisbon" });
   };
 
   return (
@@ -120,8 +132,9 @@ export function CandidaturasSection() {
         </div>
       </CardHeader>
       <CardContent>
+        {list.error && <QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="as candidaturas" />}
         {list.isLoading && <div className="text-sm text-muted-foreground">A carregar candidaturas...</div>}
-        {!list.isLoading && apps.length === 0 && (
+        {list.isSuccess && apps.length === 0 && (
           <div className="text-sm text-muted-foreground py-2">
             Sem candidaturas {statusFilter !== "all" ? `com estado "${APP_STATUS[statusFilter]?.label ?? statusFilter}"` : ""}.
           </div>
@@ -261,7 +274,7 @@ export function CandidaturasSection() {
             {approveFor?.city && (
               <p className="text-xs text-muted-foreground">
                 Na candidatura escreveu <span className="font-medium">“{approveFor.city}”</span>
-                {matchCityKey(approveFor.city) ? " — pré-selecionada, confirma ou muda." : " — não corresponde a nenhuma cidade operacional, escolhe tu."}
+                {cityKeyFromText(approveFor.city) ? " — pré-selecionada, confirma ou muda." : " — não corresponde a nenhuma cidade operacional, escolhe tu."}
               </p>
             )}
             {!projects.isLoading && cityProjects.length === 0 && (
@@ -286,6 +299,29 @@ export function CandidaturasSection() {
             >
               <CheckCircle2 className="h-4 w-4 mr-2" />
               {approve.isPending ? "A aprovar…" : "Aprovar e alocar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Já teve ficha (desativada): reativar só com confirmação (18b) ───── */}
+      <Dialog open={reactivateAsk != null} onOpenChange={(open) => { if (!open && !approve.isPending) setReactivateAsk(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Esta pessoa já teve ficha</DialogTitle>
+            <DialogDescription>
+              {reactivateAsk?.fullName || "A ficha"} (#{reactivateAsk?.employeeId}) foi desativada por «{reactivateAsk?.reason}».
+              Aprovar a candidatura volta a ativá-la: aparece na disponibilidade e pode ser escalada.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReactivateAsk(null)} disabled={approve.isPending}>Não reativar</Button>
+            <Button
+              className="bg-emerald-700 hover:bg-emerald-800 text-white"
+              disabled={approve.isPending || !reactivateAsk}
+              onClick={() => reactivateAsk && approve.mutate({ id: reactivateAsk.appId, projectId: reactivateAsk.projectId, confirmReactivate: true })}
+            >
+              <CheckCircle2 className="h-4 w-4 mr-2" /> {approve.isPending ? "A reativar…" : "Reativar e aprovar"}
             </Button>
           </DialogFooter>
         </DialogContent>

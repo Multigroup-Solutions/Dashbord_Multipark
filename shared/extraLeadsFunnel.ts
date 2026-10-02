@@ -11,6 +11,9 @@
  */
 
 export const LEAD_STATUSES = ["new", "contacted", "replied", "converted", "declined"] as const;
+
+/** Máximo da lista de leads (os mais recentes); a página avisa quando chega a isto (18b). */
+export const EXTRA_LEADS_LIST_LIMIT = 500;
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
 
 export const LEAD_SOURCES = ["manual", "site", "email"] as const;

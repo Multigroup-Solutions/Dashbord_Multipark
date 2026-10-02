@@ -245,9 +245,12 @@ export async function reviewFirstContact(leadId: number, input: { approve: boole
      WHERE leadId = ${leadId} AND draftStatus = 'pending'`);
   if (Number((Array.isArray(upd) ? (upd[0] as any) : (upd as any))?.affectedRows ?? 0) === 0) throw new Error("O rascunho já foi revisto.");
   if (!input.approve) return { status, sent: false };
-  const lead = rowsOf(await db.execute(sql`SELECT phoneE164, optedOutAt FROM extra_leads WHERE id = ${leadId} LIMIT 1`))[0];
+  const lead = rowsOf(await db.execute(sql`SELECT phoneE164, optedOutAt, status, archivedAt FROM extra_leads WHERE id = ${leadId} LIMIT 1`))[0];
   if (!lead?.phoneE164) return { status, sent: false, reason: "A lead não tem telemóvel." };
   if (lead.optedOutAt) return { status, sent: false, reason: "A lead pediu para não receber WhatsApp." };
+  // 18b: não se escreve a quem já é extra, disse que não ou foi arquivado.
+  if (lead.archivedAt) return { status, sent: false, reason: "A lead está arquivada." };
+  if (lead.status === "converted" || lead.status === "declined") return { status, sent: false, reason: lead.status === "converted" ? "A lead já é extra." : "A lead disse que não tem interesse." };
   const conv = rowsOf(await db.execute(sql`SELECT id FROM whatsapp_conversations WHERE phoneE164 = ${lead.phoneE164} ORDER BY id DESC LIMIT 1`))[0];
   if (!conv) return { status, sent: false, reason: "Sem conversa aberta: inicia com o template «seja_motorista»." };
   const { replyToConversation } = await import("../whatsappInbox");

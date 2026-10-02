@@ -14,7 +14,7 @@
  * nunca de input livre do utilizador.
  */
 import { z } from "zod";
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { cityTextVisible, currentCityKeys, projectVisible, scopedProjectIds } from "./extrasCityFilter";
 import { getDb, getProjects, logActivity } from "./db";
 import { driverApplications, employees } from "../drizzle/schema";
@@ -120,7 +120,7 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
       city: fields.city ?? null,
       title: `Nova candidatura Be a Driver: ${fullName}`,
       body: `${email}${fields.city ? ` · ${fields.city}` : ""}${fields.drivingExperience ? ` · ${fields.drivingExperience}` : ""}`,
-      link: "/disponibilidade",
+      link: "/extras-leads?tab=candidaturas",
       entity: { type: "driver_application", id },
     });
   } catch (err) {
@@ -139,7 +139,8 @@ export type ApplicationStatus = "new" | "reviewed" | "approved" | "rejected";
 
 export async function listDriverApplications(status?: ApplicationStatus | null) {
   const db = await getDb();
-  if (!db) return [];
+  // Erro ≠ vazio (18b): sem BD lança, em vez de "não há candidaturas".
+  if (!db) throw new Error("Base de dados indisponível");
   const base = db.select().from(driverApplications);
   const rows = status
     ? await base.where(eq(driverApplications.status, status)).orderBy(desc(driverApplications.lastSubmittedAt))
@@ -163,6 +164,26 @@ export async function listDriverApplications(status?: ApplicationStatus | null) 
   });
 }
 
+/**
+ * A candidatura está nas cidades de quem pede? A MESMA regra da lista:
+ * aprovada → a cidade da ficha; as outras → a cidade escrita (sem cidade
+ * reconhecível → visível a todos). Fora → "não encontrada" (18b: antes as
+ * escritas não verificavam e um TL de Faro mexia numa de Lisboa pelo id).
+ */
+async function assertApplicationVisible(db: any, app: { employeeId: number | null; city: string | null } | undefined): Promise<void> {
+  if (!app) throw new Error("Candidatura não encontrada");
+  const scope = scopedProjectIds();
+  if (scope === undefined) return;
+  if (app.employeeId != null) {
+    const [e] = await db.select({ projectId: employees.projectId }).from(employees).where(eq(employees.id, app.employeeId)).limit(1);
+    if (e?.projectId != null) {
+      if (!projectVisible(e.projectId, scope)) throw new Error("Candidatura não encontrada");
+      return;
+    }
+  }
+  if (!cityTextVisible(app.city, currentCityKeys())) throw new Error("Candidatura não encontrada");
+}
+
 export async function setApplicationStatus(
   id: number,
   status: ApplicationStatus,
@@ -171,11 +192,32 @@ export async function setApplicationStatus(
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
+  const [app] = await db.select().from(driverApplications).where(eq(driverApplications.id, id)).limit(1);
+  await assertApplicationVisible(db, app);
+  // Aprovada = já tem ficha: não volta a "nova" nem passa a rejeitada por aqui (18b).
+  if (app.status === "approved" && status !== "approved") {
+    throw new Error(`Candidatura aprovada${app.employeeId ? ` (ficha #${app.employeeId})` : ""}: já não muda de estado. Para tirar a pessoa, desativa a ficha no RH.`);
+  }
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   await db
     .update(driverApplications)
     .set({ status, reviewedById, reviewedAt: now, ...(notes !== undefined ? { notes: notes ? notes.slice(0, 512) : null } : {}) })
     .where(eq(driverApplications.id, id));
+  if (app.status !== status || notes !== undefined) {
+    await logActivity({
+      userId: reviewedById,
+      action: "driver_application_status",
+      entity: "driver_applications",
+      entityId: id,
+      details: `Candidatura de ${app.fullName}: ${app.status} → ${status}${notes ? ` · ${notes.slice(0, 200)}` : ""}`,
+    });
+  }
+  // Rejeitar fecha também o lead da mesma pessoa ("Sem interesse") — antes
+  // continuava aberto, no resumo diário e nos lembretes (18b).
+  if (status === "rejected" && app.status !== "rejected") {
+    const { declineLeadForApplication } = await import("./extraLeadsSync");
+    await declineLeadForApplication(app, reviewedById);
+  }
 }
 
 // ─── 1c. Aprovação: centro de custos (cidade) do extra ──────────────────────
@@ -256,24 +298,73 @@ export interface ApproveApplicationResult {
 export async function approveApplication(
   id: number,
   reviewedById: number,
-  opts: { projectId: number },
-): Promise<ApproveApplicationResult> {
+  opts: { projectId: number; confirmReactivate?: boolean },
+): Promise<({ ok: true } & ApproveApplicationResult) | { ok: false; needsConfirm: { employeeId: number; fullName: string; reason: string; deactivatedAt: string | null } }> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
 
   const rows = await db.select().from(driverApplications).where(eq(driverApplications.id, id)).limit(1);
   if (rows.length === 0) throw new Error("Candidatura não encontrada");
   const app = rows[0];
+  await assertApplicationVisible(db, app);
 
   const projects = (await getProjects()) as ProjectNode[];
   const costCenter = resolveApprovalCostCenter(projects, opts.projectId);
 
-  const { id: employeeId, created } = await findOrCreateExtraByEmail(db, app.email, {
-    fullName: app.fullName,
-    phone: app.phone,
-    nif: app.nif,
-    projectId: costCenter.projectId,
-  });
+  // Já teve ficha desativada? Mesma regra do Converter (18b — Jorge: "bloqueia,
+  // reativa com confirmação"; roubo/despedimento/ficha junta sem destino nunca).
+  const reapprove = app.status === "approved" && app.employeeId != null;
+  const { existingFichaFor } = await import("./extrasAutomation");
+  const existing = reapprove ? null : await existingFichaFor(db, { phoneE164: null, email: app.email });
+  let reactivate = false;
+  if (existing) {
+    const { leadFichaDecision, blockedFichaMessage } = await import("../shared/extraLeadsConvert");
+    const d = leadFichaDecision(existing, !!opts.confirmReactivate);
+    if (d.kind === "blocked") throw new Error(blockedFichaMessage(existing, d.reason));
+    if (d.kind === "confirm") {
+      return { ok: false, needsConfirm: { employeeId: existing.id, fullName: String(existing.fullName ?? ""), reason: d.reason, deactivatedAt: existing.deactivatedAt ?? null } };
+    }
+    reactivate = d.reactivate;
+  }
+
+  // Reserva (18b): duas pessoas (ou dois separadores) a aprovar ao mesmo tempo
+  // já não criam duas fichas — só quem passa a candidatura a "aprovada" segue.
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  if (!reapprove) {
+    const claim: any = await db.update(driverApplications)
+      .set({ status: "approved", reviewedById, reviewedAt: now })
+      .where(and(eq(driverApplications.id, id), ne(driverApplications.status, "approved")));
+    if (Number(claim?.[0]?.affectedRows ?? claim?.affectedRows ?? 0) !== 1) throw new Error("Esta candidatura já está a ser aprovada.");
+  }
+
+  let employeeId: number;
+  let created = false;
+  try {
+    if (reapprove) {
+      employeeId = app.employeeId!;
+    } else if (existing && existing.redirected) {
+      // Ficha junta a outra → a que ficou (o email pode não estar nela).
+      employeeId = existing.id;
+    } else {
+      const r = await findOrCreateExtraByEmail(db, app.email, {
+        fullName: app.fullName,
+        phone: app.phone,
+        nif: app.nif,
+        projectId: costCenter.projectId,
+      });
+      employeeId = r.id;
+      created = r.created;
+    }
+    if (reactivate) {
+      await db.update(employees).set({ isActive: 1, deactivationReason: null, deactivationReasonOther: null, deactivationNotes: null, deactivatedAt: null, deactivatedById: null } as any)
+        .where(and(eq(employees.id, employeeId), eq(employees.isActive, 0)));
+      await logActivity({ userId: reviewedById, action: "employee_reactivate", entity: "employee", entityId: employeeId, details: `Reativada ao aprovar a candidatura #${id} (confirmado por quem aprovou)` });
+    }
+  } catch (err) {
+    // Falhou: a candidatura volta ao estado em que estava (pode tentar-se de novo).
+    if (!reapprove) await db.update(driverApplications).set({ status: app.status }).where(and(eq(driverApplications.id, id), isNull(driverApplications.employeeId)));
+    throw err;
+  }
 
   // Ficha existente: só se lhe mexe no centro de custos se não tiver nenhum.
   let existingProjectId: number | null = null;
@@ -288,7 +379,6 @@ export async function approveApplication(
   const existingProjectName =
     plan.outcome === "kept_existing" ? (projects.find((p) => p.id === existingProjectId)?.name ?? `#${existingProjectId}`) : null;
 
-  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
   await db
     .update(driverApplications)
     .set({ status: "approved", employeeId, reviewedById, reviewedAt: now })
@@ -315,6 +405,7 @@ export async function approveApplication(
   await autoAssignOnboarding(employeeId, "application_approve", reviewedById);
 
   return {
+    ok: true,
     employeeId,
     employeeCreated: created,
     costCenter: { ...costCenter, outcome: plan.outcome, existingProjectName },
