@@ -107,6 +107,21 @@ export function buildHandoverCurrent(key: HandoverKey): SQL {
     LIMIT 1`;
 }
 
+/**
+ * A passagem MAIS RECENTE antes de um turno, na mesma cidade, até `sinceDate`
+ * (inclusive): se o turno anterior não tiver passagem, os pendentes vêm da
+ * última que houve (antes perdiam-se de vez). Noite > manhã no mesmo dia.
+ */
+export function buildHandoverLatestBefore(key: HandoverKey, sinceDate: string): SQL {
+  const sameDayEarlier = key.shift === "night" ? sql` OR (\`handoverDate\` = ${key.handoverDate} AND \`shift\` = 'morning')` : sql``;
+  return sql`SELECT *, TIMESTAMPDIFF(MINUTE, \`createdAt\`, NOW()) AS ageMinutes
+    FROM \`shift_handovers\`
+    WHERE \`city\` = ${key.city} AND \`handoverDate\` >= ${sinceDate}
+      AND (\`handoverDate\` < ${key.handoverDate}${sameDayEarlier})
+    ORDER BY \`handoverDate\` DESC, (\`shift\` = 'night') DESC
+    LIMIT 1`;
+}
+
 /** Histórico: filtros ligados como parâmetros + âmbito de cidades do utilizador. */
 export function buildHandoverList(opts: { from?: string; to?: string; city?: string }, scope: SQL): SQL {
   const conds: SQL[] = [scope];
@@ -143,10 +158,11 @@ export function buildHandoverOpenItemsUpdate(id: number, openItemsJson: string):
   return sql`UPDATE \`shift_handovers\` SET \`openItems\` = ${openItemsJson}, \`updatedAt\` = \`updatedAt\` WHERE \`id\` = ${id}`;
 }
 
-/** "Recebi": só a 1.ª confirmação conta; o autor original nunca confirma a própria. */
+/** "Recebi": só a 1.ª confirmação conta; nem o autor nem quem a editou por último confirmam a própria. */
 export function buildHandoverAck(id: number, user: { id: number; name: string | null }): SQL {
   return sql`UPDATE \`shift_handovers\` SET \`ackById\` = ${user.id}, \`ackByName\` = ${cut(user.name, 255)}, \`ackAt\` = NOW(), \`updatedAt\` = \`updatedAt\`
-    WHERE \`id\` = ${id} AND \`ackAt\` IS NULL AND (\`createdById\` IS NULL OR \`createdById\` <> ${user.id})`;
+    WHERE \`id\` = ${id} AND \`ackAt\` IS NULL AND (\`createdById\` IS NULL OR \`createdById\` <> ${user.id})
+      AND (\`filledById\` IS NULL OR \`filledById\` <> ${user.id})`;
 }
 
 /** Passagens de um intervalo de dias (cumprimento), com o âmbito de cidades. */

@@ -22,7 +22,8 @@
 import { sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
 import { projectScope, employeeScope, pdaScope } from "./cityScope";
-import { buildHandoverCurrent } from "./shiftHandoverSql";
+import { buildHandoverLatestBefore } from "./shiftHandoverSql";
+import { addDays } from "../shared/lisbonDay";
 import { handoverCityKey, type HandoverCity, type HandoverShift } from "../shared/shiftHandover";
 import {
   extractNoteItems,
@@ -32,7 +33,10 @@ import {
   nextShiftOf,
   openItemKey,
   parseOpenItems,
-  previousShiftOf,
+  PREVIOUS_HANDOVER_MAX_DAYS,
+  shiftsBetween,
+  shiftSince,
+  unavailableCounts,
   shiftHours,
   shiftWindowUtc,
   coveredCarsPending,
@@ -101,7 +105,11 @@ export function draftOpenItems(d: {
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
-export interface DraftPerson { name: string; employeeId: number | null; isTeamLeader: boolean; startHour: number; endHour: number }
+export interface DraftPerson {
+  name: string; employeeId: number | null; isTeamLeader: boolean; startHour: number; endHour: number;
+  /** Linha da escala automática ainda por confirmar (status 'proposed'). */
+  proposed: boolean;
+}
 
 export interface HandoverDraft {
   key: { date: string; shift: HandoverShift; city: HandoverCity };
@@ -129,10 +137,17 @@ export interface HandoverDraft {
   people: { current: DraftPerson[]; next: DraftPerson[] };
   previous: {
     id: number; date: string; shift: HandoverShift; authorName: string | null; createdById: number | null;
+    filledById: number | null;
     notes: string | null; aiSummary: string | null; openItems: OpenItem[];
     ackByName: string | null; acked: boolean;
+    /** Turnos sem passagem entre essa e esta (0 = é mesmo a do turno anterior). */
+    missingShifts: number;
   } | null;
   carryOver: OpenItem[];
+  /** Partes que não se conseguiram ler (os números delas não valem: não são 0). */
+  failed: string[];
+  /** Contagens que deixam de valer por causa de `failed`. */
+  unavailable: Array<keyof HandoverDraftCounts>;
   /** De onde vieram reservas/ocorrências: BD da Multipark ao vivo ou as nossas cópias (com o motivo). */
   source: { live: boolean; reason: string | null };
   /** Resumo do "Estado do parque (ao vivo)" — null sem BD da Multipark. */
@@ -250,6 +265,8 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     const { getSetting } = await import("./appSettings");
     return getMultiparkShiftState({
       cities: [key.city], nowMs,
+      // Bloqueios do dia a seguir ao turno (não ao relógio: às 02:30 a noite ainda é de ontem).
+      blocksDay: addDays(key.date, 1),
       excludedParkIds: (await getSetting("operations.excludedParks")) ?? [],
       upcoming: { startMs: nwin.startMs, endMs: nwin.endMs },
       cash: cashWindowOf(win, nowMs),
@@ -264,7 +281,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
       ${field === "checkIn" ? sql`COALESCE(NULLIF(b.departingFlight, ''), b.departureFlight)` : sql`COALESCE(NULLIF(b.returnFlight, ''), b.arrivalFlight)`} AS flight
     FROM multipark_bookings b
     WHERE ${sql.identifier(field)} >= ${nwin.start} AND ${sql.identifier(field)} < ${nwin.end}
-      AND (b.status IS NULL OR b.status <> 'CANCELLED')
+      AND (b.status IS NULL OR b.status NOT IN ('CANCELLED', 'PENDING'))
       AND ${inCity(sql`b.projectId`)}
     ORDER BY t LIMIT 1000`)), [] as any[]);
   const [ciRows, coRows] = await Promise.all([bookingsIn("checkIn"), bookingsIn("checkOut")]);
@@ -383,28 +400,32 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
   // Escala: turno atual e seguinte (com team leader)
   const people = await safe("assignments", async () => {
     const rows = rowsOf(await db.execute(sql`
-      SELECT assignmentDate, shift, personName, employeeId, isTeamLeader, startHour, endHour FROM extras_dia_assignments
+      SELECT assignmentDate, shift, personName, employeeId, isTeamLeader, startHour, endHour, status FROM extras_dia_assignments
       WHERE city = ${key.city} AND ((assignmentDate = ${cur.date} AND shift = ${cur.shift}) OR (assignmentDate = ${next.date} AND shift = ${next.shift}))
       ORDER BY isTeamLeader DESC, startHour, personName`));
-    const map = (r: any): DraftPerson => ({ name: r.personName, employeeId: r.employeeId == null ? null : Number(r.employeeId), isTeamLeader: Number(r.isTeamLeader) === 1, startHour: num(r.startHour), endHour: num(r.endHour) });
+    const map = (r: any): DraftPerson => ({ name: r.personName, employeeId: r.employeeId == null ? null : Number(r.employeeId), isTeamLeader: Number(r.isTeamLeader) === 1, startHour: num(r.startHour), endHour: num(r.endHour), proposed: r.status === "proposed" });
     return {
       current: rows.filter((r) => r.assignmentDate === cur.date && r.shift === cur.shift).map(map),
       next: rows.filter((r) => r.assignmentDate === next.date && r.shift === next.shift).map(map),
     };
   }, { current: [] as DraftPerson[], next: [] as DraftPerson[] });
 
-  // Passagem anterior (pendentes por resolver)
-  const prevRef = previousShiftOf(cur);
+  // Passagem anterior (pendentes por resolver): a mais recente antes deste
+  // turno, até 3 dias para trás — se o turno anterior não fez passagem, os
+  // pendentes vêm da última que houve (antes perdiam-se de vez).
   const previous = await safe("previous", async () => {
-    const r = rowsOf(await db.execute(buildHandoverCurrent({ handoverDate: prevRef.date, shift: prevRef.shift, city: key.city })))[0];
+    const r = rowsOf(await db.execute(buildHandoverLatestBefore({ handoverDate: cur.date, shift: cur.shift, city: key.city }, addDays(cur.date, -PREVIOUS_HANDOVER_MAX_DAYS))))[0];
     if (!r) return null;
+    const ref: ShiftRef = { date: String(r.handoverDate).slice(0, 10), shift: r.shift as HandoverShift };
     const items = parseOpenItems(r.openItems);
-    const notesItems = items.length ? [] : extractNoteItems(r.notes, `${prevRef.date} ${prevRef.shift}`);
+    const notesItems = items.length ? [] : extractNoteItems(r.notes, shiftSince(ref));
     return {
-      id: Number(r.id), date: prevRef.date, shift: prevRef.shift,
+      id: Number(r.id), date: ref.date, shift: ref.shift,
       authorName: r.createdByName ?? r.filledByName ?? null, createdById: r.createdById == null ? null : Number(r.createdById),
+      filledById: r.filledById == null ? null : Number(r.filledById),
       notes: r.notes ?? null, aiSummary: r.aiSummary ?? null, ackByName: r.ackByName ?? null, acked: r.ackAt != null,
       openItems: [...items, ...notesItems].filter((i) => !i.resolved),
+      missingShifts: shiftsBetween(ref, cur),
     };
   }, null as HandoverDraft["previous"]);
 
@@ -441,7 +462,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     toCollectEur: Math.round(checkouts.reduce((s, b) => s + Math.max(0, b.remainingToPay ?? 0), 0) * 100) / 100,
   };
 
-  const since = `${cur.date} ${cur.shift}`;
+  const since = shiftSince(cur);
   const draftItems = draftOpenItems({ complaints: openComplaints, lostFound, pdas, incidents, pendingDeliveries }, since);
   // Só fecha "pelo sistema" os tipos lidos por inteiro: uma leitura que falhou
   // ou veio cortada pelo LIMIT deixa os pendentes desse tipo como estavam (H01).
@@ -456,7 +477,13 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
       ? { ok: true, truncated: live.data.inPark.truncated }
       : { ok: !failed.has("pending deliveries"), truncated: pending.length >= OPEN_LIST_LIMIT },
   });
-  const carryOver = mergeCarryOver({ previous: previous?.openItems ?? [], draft: draftItems, draftKinds, nowIso: new Date(nowMs).toISOString() });
+  const carryOver = mergeCarryOver({
+    previous: previous?.openItems ?? [], draft: draftItems, draftKinds, nowIso: new Date(nowMs).toISOString(),
+    currentSince: since,
+    // Ocorrências: só se fecham pelo sistema se o id for da mesma fonte de agora
+    // (ao vivo = id texto da Multipark; sem ela = id numérico da nossa cópia).
+    isCheckable: (i) => i.kind !== "incident" || (live.available ? typeof i.refId === "string" : typeof i.refId === "number"),
+  });
 
   return {
     key,
@@ -490,6 +517,8 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     carryOver,
     source: live.available ? { live: true, reason: null } : { live: false, reason: live.reason },
     liveSummary: liveParts?.summary ?? null,
+    failed: [...failed],
+    unavailable: unavailableCounts([...failed]),
   };
 }
 
