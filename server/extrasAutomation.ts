@@ -334,16 +334,25 @@ export async function runReminder(weekStart: string): Promise<RequestRunResult> 
 
 // ─── 7. Aviso de escala por WhatsApp ────────────────────────────────────────
 
-export interface NoticeRow { assignmentId: number; status: string; sentAt: string; confirmedAt: string | null; declinedAt: string | null; error: string | null }
+export interface NoticeRow {
+  assignmentId: number; status: string; sentAt: string; confirmedAt: string | null; declinedAt: string | null; error: string | null;
+  /** O aviso foi de uma versão ANTERIOR da linha (mudaram as horas/pessoa depois): já não vale. */
+  outdated: boolean;
+}
 
 export async function listNotices(date: string, city: string | null = null): Promise<NoticeRow[]> {
   const db = await getDb();
   if (!db) return [];
   await ensureTables();
-  const byCity = city ? sql` AND EXISTS (SELECT 1 FROM extras_dia_assignments a WHERE a.id = n.assignmentId AND a.city = ${city})` : sql``;
+  const byCity = city ? sql` AND a.city = ${city}` : sql``;
+  // Desatualizado: a linha mudou (versão > 1) e a versão ATUAL não tem aviso enviado.
   const [rows] = (await db.execute(sql`
-    SELECT n.assignmentId, n.status, n.sentAt, n.confirmedAt, n.declinedAt, n.error
-      FROM \`extras_dia_notices\` n WHERE n.assignmentDate = ${date}${byCity}`)) as any;
+    SELECT n.assignmentId, n.status, n.sentAt, n.confirmedAt, n.declinedAt, n.error,
+      (a.version > 1 AND NOT EXISTS (SELECT 1 FROM extras_dia_notifications x
+        WHERE x.assignmentId = n.assignmentId AND x.version = a.version AND x.kind = 'scheduled' AND x.status = 'sent')) AS outdated
+      FROM \`extras_dia_notices\` n
+      LEFT JOIN extras_dia_assignments a ON a.id = n.assignmentId
+     WHERE n.assignmentDate = ${date}${byCity}`)) as any;
   return (rows as any[]).map((r) => ({
     assignmentId: Number(r.assignmentId),
     status: String(r.status),
@@ -351,6 +360,7 @@ export async function listNotices(date: string, city: string | null = null): Pro
     confirmedAt: r.confirmedAt ? String(r.confirmedAt) : null,
     declinedAt: r.declinedAt ? String(r.declinedAt) : null,
     error: r.error ? String(r.error) : null,
+    outdated: Number(r.outdated ?? 0) === 1,
   }));
 }
 
@@ -387,7 +397,8 @@ export async function notifyAssignments(
     rows = rows.filter((a) => !held.has(a.city));
   }
   const { pendingScheduleNotifications, scheduleMessageText, whatsappOutcomeStatus } = await import("../shared/extrasSchedule");
-  const legacySent = new Set((await listNotices(date)).filter((n) => n.status === "sent").map((n) => n.assignmentId));
+  // Um aviso antigo de uma versão anterior (horas mudadas) não impede o aviso novo.
+  const legacySent = new Set((await listNotices(date)).filter((n) => n.status === "sent" && !n.outdated).map((n) => n.assignmentId));
   const log = await sched.loadNotifyLog(rows.map((a) => a.id));
   const candidates = pendingScheduleNotifications(rows, log, "whatsapp", legacySent);
   res.total = rows.length;
@@ -568,11 +579,17 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
 
 /** Horas com falta de gente num dia/cidade (previsão vs escalados). */
 export async function coverageFor(date: string, city: CityId): Promise<CoverageGap[]> {
+  return (await coverageReport(date, city)).gaps;
+}
+
+/** O mesmo, e se a previsão está incompleta (nesse caso não se avisa ninguém de faltas). */
+export async function coverageReport(date: string, city: CityId): Promise<{ gaps: CoverageGap[]; incomplete: string | null }> {
   const { getExtrasDiaForecast, listAssignments } = await import("./extrasDia");
+  const { forecastIncompleteReason } = await import("./extrasSchedule");
   const forecast = await getExtrasDiaForecast(addDaysIso(date, -1), city);
   const needed = forecast.hourly.map((h) => h.driversNeeded);
   const drivers = (await listAssignments(date, city)).filter((a) => !a.isTeamLeader);
-  return coverageGaps(needed, drivers);
+  return { gaps: coverageGaps(needed, drivers), incomplete: forecastIncompleteReason(forecast) };
 }
 
 // ─── 6. Respostas pelo WhatsApp ─────────────────────────────────────────────
@@ -992,8 +1009,10 @@ export async function runExtrasAutomation(now: Date = new Date(), opts: { deadli
     steps.push({ key: "tomorrow-coverage", fn: () => run(`coverage:${date}`, async () => {
       const out: Record<string, number> = {};
       for (const city of ["lisbon", "porto", "faro"] as CityId[]) {
-        const gaps = await coverageFor(date, city);
+        const { gaps, incomplete } = await coverageReport(date, city);
         out[city] = gaps.length;
+        // Previsão incompleta: as "faltas" seriam falsas — não se avisa ninguém.
+        if (incomplete) { out[`${city}_incompleta`] = 1; continue; }
         if (gaps.length) {
           const label = city === "lisbon" ? "Lisboa" : city === "porto" ? "Porto" : "Faro";
           const { notify } = await import("./notify");

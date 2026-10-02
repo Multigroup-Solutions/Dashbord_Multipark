@@ -264,6 +264,23 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
 
 export const PAST_DAY_MESSAGE = "Esse dia já passou: não se confirma nem se avisa ninguém.";
 
+/**
+ * A previsão está incompleta? (leitura cortada no limite, ou só a cópia das
+ * reservas porque a BD da Multipark não respondeu). A automação não propõe
+ * nem avisa faltas com ela. null = completa. PURA.
+ */
+export function forecastIncompleteReason(f: { bookingsTruncated?: boolean; bookingSource?: string; bookingSourceNotice?: string | null }): string | null {
+  if (f.bookingsTruncated) return "previsão incompleta: a leitura das reservas foi cortada no limite";
+  if (f.bookingSource === "copy") return `previsão incompleta: ${f.bookingSourceNotice ?? "sem a BD da Multipark (só a cópia das reservas)"}`;
+  return null;
+}
+
+/** Liberta a reserva do cron (um dia suspenso volta a 'hold' — a suspensão não se perde). */
+async function releaseAutoClaim(db: { execute: (q: any) => Promise<any> }, date: string, city: string): Promise<void> {
+  await db.execute(sql`DELETE FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 0`);
+  await db.execute(sql`UPDATE extras_dia_schedules SET status = 'hold' WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 1`);
+}
+
 export interface ProposeResult {
   status: "proposed" | "skipped";
   reason?: string;
@@ -347,6 +364,13 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
   try {
     const { getExtrasDiaForecast } = await import("./extrasDia");
     const forecast = await getExtrasDiaForecast(addDaysIso(date, -1), city);
+    // Com a previsão incompleta o cron não propõe (faltariam pessoas); à mão
+    // propõe na mesma, com o aviso no resumo.
+    const incomplete = forecastIncompleteReason(forecast);
+    if (incomplete && by === "auto") {
+      await releaseAutoClaim(db, date, city);
+      return { status: "skipped", reason: incomplete, proposed: 0, kept: 0, gaps: [], summary: null };
+    }
     const needed = forecast.hourly.map((h) => h.driversNeeded);
     const dayRows = await loadDayRows(date);
     // Fica tudo o que a proposta não criou: confirmadas e as postas à mão (mesmo por confirmar).
@@ -361,12 +385,13 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
     let peakDrivers = 0;
     let peakHour: number | null = null;
     needed.forEach((n, h) => { if (n > peakDrivers) { peakDrivers = n; peakHour = h; } });
-    const summary = explainProposal({
+    const summaryBody = explainProposal({
       date, city, carsPerHour: forecast.carsPerHourPerDriver, peakDrivers, peakHour,
       picks: plan.picks.map((p) => ({ personName: p.personName, startHour: p.startHour, endHour: p.endHour, hourlyRate: p.hourlyRate })),
       keptCount: kept.length,
       gaps: plan.gaps,
     });
+    const summary = incomplete ? `⚠ ${incomplete[0].toUpperCase()}${incomplete.slice(1)}.\n${summaryBody}` : summaryBody;
 
     await db.transaction(async (tx) => {
       await tx.execute(sql`
@@ -411,10 +436,8 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
     return { status: "proposed", proposed: plan.picks.length, kept: kept.length, gaps: plan.gaps, summary };
   } catch (err) {
     if (by === "auto") {
-      // Liberta a reserva para a próxima corrida tentar outra vez (um dia
-      // suspenso volta a 'hold' — a suspensão não se perde).
-      await db.execute(sql`DELETE FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 0`);
-      await db.execute(sql`UPDATE extras_dia_schedules SET status = 'hold' WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 1`);
+      // Liberta a reserva para a próxima corrida tentar outra vez.
+      await releaseAutoClaim(db, date, city);
     }
     throw err;
   }
@@ -748,15 +771,27 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
 
 // ─── Pedir disponibilidade a quem não respondeu ─────────────────────────────
 
-export async function resendAvailabilityRequest(date: string, city: ScheduleCity, userId: number | null): Promise<{ targets: number; emailSent: number; whatsappSent: number }> {
-  const { listDriverCandidates } = await import("./extrasDia");
-  const all = await listDriverCandidates(date);
-  const noAnswer = all.filter((c) => (c.availability?.status ?? "no_response") === "no_response");
-  if (!noAnswer.length) return { targets: 0, emailSent: 0, whatsappSent: 0 };
+/**
+ * Quem recebe "Pedir disponibilidade a quem não respondeu": EXTRAS ativos, sem
+ * resposta para esse dia, da cidade (ou sem cidade na ficha). A MESMA lista dá
+ * o número do botão e o envio — antes o botão contava toda a gente de todas as
+ * cidades (25) e o envio ia a 10.
+ */
+export async function noAnswerTargets(
+  date: string, city: ScheduleCity,
+  cands?: Array<{ id: number; position?: string | null; availability?: { status?: string | null } | null }>,
+): Promise<number[]> {
+  const list = cands ?? await (await import("./extrasDia")).listDriverCandidates(date);
+  const noAnswer = list.filter((c) => (c.position ?? "").toLowerCase() === "extra" && (c.availability?.status ?? "no_response") === "no_response");
+  if (!noAnswer.length) return [];
   const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
   const cities = await resolveCitiesForEmployeeIds(noAnswer.map((c) => c.id));
   const cityKey = city === "lisbon" ? "lisboa" : city;
-  const ids = noAnswer.filter((c) => { const k = cities.get(c.id)?.city ?? null; return k == null || k === cityKey; }).map((c) => c.id);
+  return noAnswer.filter((c) => { const k = cities.get(c.id)?.city ?? null; return k == null || k === cityKey; }).map((c) => c.id);
+}
+
+export async function resendAvailabilityRequest(date: string, city: ScheduleCity, userId: number | null): Promise<{ targets: number; emailSent: number; whatsappSent: number }> {
+  const ids = await noAnswerTargets(date, city);
   if (!ids.length) return { targets: 0, emailSent: 0, whatsappSent: 0 };
   const { mondayOf } = await import("./extrasAvailability");
   const weekStart = mondayOf(new Date(`${date}T12:00:00`));
@@ -823,7 +858,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     neededPeak: Math.max(0, ...needed),
     proposedCount: mine.filter((r) => r.status === "proposed").length,
     confirmedCount: mine.filter((r) => r.status !== "proposed").length,
-    noAnswerCount: cands.filter((c) => (c.availability?.status ?? "no_response") === "no_response").length,
+    noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
     availableCount: cands.filter((c) => availabilityWindow(c.availability ?? null) != null).length,
     notifications,
     settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead },

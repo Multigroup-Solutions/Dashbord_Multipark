@@ -205,6 +205,13 @@ async function filterOwnCases<T extends { id: number }>(user: { id: number; role
 /** Semana da disponibilidade: dia ISO e segunda-feira (senão as linhas ficavam numa "semana" que ninguém lê). */
 const weekStartSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isMondayIso, NOT_MONDAY_MESSAGE);
 
+/** Que euros do Extras Dia esta conta vê (shared/extrasCostView.ts). */
+async function extrasCostViewFor(user: { id: number; role: string }) {
+  const { extrasCostView } = await import("../shared/extrasCostView");
+  const { withOverrides } = await import("./_core/access");
+  return extrasCostView(withOverrides(user as any), { financeTotals: await canSeeFinanceTotals(user) });
+}
+
 async function belowEmployeeIds(user: { id: number; role: string }): Promise<Set<number>> {
   const { getDb } = await import("./db");
   const { sql } = await import("drizzle-orm");
@@ -4265,11 +4272,20 @@ export const appRouter = router({
 
   // ── EXTRAS DIA — Daily forecast & driver allocation (Lisboa) ────────────────
   extrasDia: router({
+    // Que euros esta conta vê (o ecrã esconde as colunas; o servidor tira os valores).
+    costAccess: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "extras_dia", "view");
+      return extrasCostViewFor(ctx.user);
+    }),
+
     forecast: protectedProcedure
-      .input(z.object({ baseDate: z.string().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }).optional())
+      .input(z.object({ baseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
-        return getExtrasDiaForecast(input?.baseDate, input?.city ?? "lisbon");
+        const f = await getExtrasDiaForecast(input?.baseDate, input?.city ?? "lisbon");
+        const v = await extrasCostViewFor(ctx.user);
+        const { maskForecastCosts } = await import("./extrasDia");
+        return v.costs ? f : maskForecastCosts(f);
       }),
 
     candidates: protectedProcedure
@@ -4291,7 +4307,9 @@ export const appRouter = router({
       .input(z.object({ date: z.string(), projectId: z.number().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
-        return listAssignments(input.date, input.city);
+        const v = await extrasCostViewFor(ctx.user);
+        const { maskAssignmentCost } = await import("../shared/extrasCostView");
+        return (await listAssignments(input.date, input.city)).map((a) => maskAssignmentCost(a, v));
       }),
 
     upsertAssignment: protectedProcedure
@@ -4356,14 +4374,16 @@ export const appRouter = router({
           throw new TRPCError({ code: err instanceof ScheduleConflictError ? "CONFLICT" : "BAD_REQUEST", message: err.message || "Erro ao guardar" });
         }
         // Quem fez o quê na escala (antes só a remoção ficava registada).
-        if (saved) {
+        if (!saved) return null;
+        {
           await logActivity({
             userId: ctx.user.id, action: input.id ? "extras_dia_assignment_update" : "extras_dia_assignment_create",
             entity: "extras_dia_assignments", entityId: saved.id,
             details: `${input.id ? "Alterado" : "Escalado"}: ${input.personName}${input.isTeamLeader ? " (TL)" : ""} · ${input.assignmentDate} · ${input.city ?? "lisbon"} · ${input.startHour}h–${input.endHour}h`,
           });
         }
-        return saved;
+        const { maskAssignmentCost } = await import("../shared/extrasCostView");
+        return maskAssignmentCost(saved, await extrasCostViewFor(ctx.user));
       }),
 
     deleteAssignment: protectedProcedure
@@ -4384,7 +4404,11 @@ export const appRouter = router({
         requireAccess(ctx.user, "extras_dia", "view");
         const { assertCityInScope, getScheduleOverview } = await import("./extrasSchedule");
         await assertCityInScope(input.city);
-        return getScheduleOverview(input.date, input.city);
+        const o = await getScheduleOverview(input.date, input.city);
+        const v = await extrasCostViewFor(ctx.user);
+        if (v.costs || !o.state?.summary) return o;
+        const { stripEuros } = await import("../shared/extrasCostView");
+        return { ...o, state: { ...o.state, summary: stripEuros(o.state.summary) } };
       }),
 
     propose: protectedProcedure
@@ -4462,7 +4486,9 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
         const { getExtrasMetrics } = await import("./extrasMetrics");
-        return getExtrasMetrics(input?.days ?? 30);
+        const m = await getExtrasMetrics(input?.days ?? 30);
+        // Custos só para quem os vê (as horas ficam).
+        return (await extrasCostViewFor(ctx.user)).costs ? m : { ...m, cost: { ...m.cost, planned: 0, paid: 0 }, costHidden: true as const };
       }),
 
     coverageOutlook: protectedProcedure

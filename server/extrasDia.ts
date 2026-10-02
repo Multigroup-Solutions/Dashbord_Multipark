@@ -25,7 +25,7 @@ import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from ".
 import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
 import { DEFAULT_CARS_PER_HOUR } from "../shared/appSettings";
 import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, carsPerHourFor, driversNeededFor } from "../shared/extrasSchedule";
-import { lisbonWallTimeUtcMs } from "../shared/lisbonDay";
+import { lisbonDayOf, lisbonWallTimeUtcMs } from "../shared/lisbonDay";
 import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -335,6 +335,11 @@ export interface ExtrasDiaForecast {
   bookingSource: BookingSource;
   /** Aviso quando se usou a cópia (BD da Multipark indisponível / não configurada). */
   bookingSourceNotice: string | null;
+  /**
+   * Leitura das reservas cortada no limite: a previsão está INCOMPLETA (faltam
+   * reservas). A automação não propõe nem avisa faltas com ela.
+   */
+  bookingsTruncated: boolean;
   parksQueried: string[]; // parques da cidade (ao vivo) ou distinct parkName (cópia)
   parksFailed: { park: string; error: string }[]; // always empty for DB mode (kept for UI compat)
   hourly: HourlyRow[];
@@ -370,6 +375,24 @@ export interface ExtrasDiaForecast {
   allocation: {
     cheapest: ReturnType<typeof suggestShifts>;
     bySingleLevel: { level: DriverLevelId; label: string; totalCost: number; totalHours: number }[];
+  };
+  /** Taxas €/h em vigor (null = a conta não vê custos). Antes o ecrã pedia-as a uma rota só de admin e caía nas de origem. */
+  rates: ExtraRates | null;
+  /** true = os euros foram tirados (a conta só vê escalas e turnos). */
+  costsHidden: boolean;
+}
+
+/** Previsão sem euros para quem não vê custos (as horas e as pessoas ficam). PURA. */
+export function maskForecastCosts(f: ExtrasDiaForecast): ExtrasDiaForecast {
+  const zero = (s: DriverShift): DriverShift => ({ ...s, hourlyRate: 0, cost: 0 });
+  return {
+    ...f,
+    rates: null,
+    costsHidden: true,
+    allocation: {
+      cheapest: { ...f.allocation.cheapest, totalCost: 0, shifts: f.allocation.cheapest.shifts.map(zero) },
+      bySingleLevel: f.allocation.bySingleLevel.map((l) => ({ ...l, totalCost: 0 })),
+    },
   };
 }
 
@@ -454,7 +477,7 @@ async function fetchBookingsInRange(
         lisbonCond,
       ),
     )
-    .limit(20000);
+    .limit(COPY_ROWS_LIMIT);
 
   // Converte UTC → Lisboa nas horas das reservas (a API dá UTC). As horas-string
   // soltas (checkInTime/checkOutTime, normalmente vazias e em UTC) são anuladas
@@ -516,7 +539,10 @@ export function filterRowsByField(rows: BookingRow[], field: "checkIn" | "checkO
   });
 }
 
-type LiveWindow = { ok: true; rows: BookingRow[]; parks: string[] } | { ok: false; notice: string };
+type LiveWindow = { ok: true; rows: BookingRow[]; parks: string[]; truncated: boolean } | { ok: false; notice: string };
+
+/** Teto da leitura de recurso (cópia): chegar a ele = previsão incompleta. */
+export const COPY_ROWS_LIMIT = 20000;
 
 /**
  * Reservas da cidade com entrada ou saída na janela [start, end) (horas de
@@ -531,7 +557,7 @@ async function liveBookingsInWindow(startInclusive: Date, endExclusive: Date, ci
     const r = await getLiveExtrasBookings(city, lisbonWallToUtcMs(toMysqlDateTime(startInclusive)), lisbonWallToUtcMs(toMysqlDateTime(endExclusive)), undefined, undefined, excluded);
     if (!r.available) return { ok: false, notice: `${r.reason} A usar a cópia das reservas (pode estar desatualizada).` };
     if (r.data.truncated) console.warn(`[extrasDia] leitura ao vivo cortada (${r.data.bookings.length} reservas) — ${city}`);
-    return { ok: true, rows: r.data.bookings.map(liveToBookingRow), parks: r.data.parks };
+    return { ok: true, rows: r.data.bookings.map(liveToBookingRow), parks: r.data.parks, truncated: r.data.truncated };
   } catch (err: any) {
     return { ok: false, notice: `Leitura ao vivo falhou (${String(err?.message ?? err).slice(0, 80)}). A usar a cópia das reservas.` };
   }
@@ -559,6 +585,10 @@ export interface Assignment {
   proposalReason: string | null;
   hoursBilled: number;
   cost: number;
+  /** Quem pôs / alterou por último (ids; nomes no ecrã quando houver). */
+  createdById?: number | null;
+  updatedById?: number | null;
+  source?: string;
   // Mapeamento Multipark (preenchido se employeeId está associado a empregado RH)
   multiparkAgentName: string | null;
   multiparkAgentUserId: string | null;
@@ -995,7 +1025,9 @@ function distinctParks(rows: BookingRow[]): string[] {
 }
 
 export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCity = "lisbon"): Promise<ExtrasDiaForecast> {
-  const baseDate = baseDateInput ? new Date(baseDateInput) : new Date();
+  // Sem dia pedido: HOJE em Lisboa (o servidor corre em UTC — entre a meia-noite
+  // e a 01h de Lisboa no verão, "hoje" ainda era ontem).
+  const baseDate = new Date(`${baseDateInput ?? lisbonDayOf(Date.now())}T00:00:00`);
   const baseStart = startOfDay(baseDate);
   const targetStart = addDays(baseStart, 1);
   const nextStart = addDays(baseStart, 2);
@@ -1176,8 +1208,10 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     seenForExtras.add(r.externalId);
     const v = r.extrasTotal ? parseFloat(r.extrasTotal) : 0;
     if (!Number.isFinite(v) || v === 0) return;
-    const d = dateStr ? new Date(dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T")) : null;
-    const isFuture = d && d.getTime() > nowMs;
+    // As horas das reservas já estão em hora de Lisboa: compara-as como tal (não como UTC).
+    let at: number | null = null;
+    try { at = dateStr ? lisbonWallToUtcMs(dateStr) : null; } catch { at = null; }
+    const isFuture = at != null && at > nowMs;
     if (isFuture) extrasValue.estimate += v;
     else extrasValue.real += v;
     extrasValue.total += v;
@@ -1194,6 +1228,7 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     source: "db",
     bookingSource: live.ok ? "multipark-db" : "copy",
     bookingSourceNotice: live.ok ? null : live.notice,
+    bookingsTruncated: live.ok ? live.truncated : [targetCheckins, baseCheckouts, targetCheckouts, nextCheckouts].some((r) => r.length >= COPY_ROWS_LIMIT),
     parksQueried: live.ok ? live.parks : Array.from(allParks).sort(),
     parksFailed: [],
     hourly,
@@ -1211,5 +1246,7 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
       next: { date: dateKey(nextStart), exitsWithWash: countWashes(nextCheckouts) },
     },
     allocation: { cheapest, bySingleLevel },
+    rates: liveRates,
+    costsHidden: false,
   };
 }
