@@ -381,6 +381,8 @@ app.get("/api/cron/ai-comms", async (req, res) => {
 // Health check. Público: só { ok, version? }. Com sessão admin/super_admin
 // ou Authorization: Bearer <CRON_SECRET> → presença (booleana) das variáveis
 // críticas. O erro/stack de arranque NUNCA sai na resposta — só no log.
+// Servido SÓ por este bundle: uma função própria em api/ sobrepõe-se ao rewrite
+// e, compilada sozinha (ESM), rebentava — ver server/apiHealth.test.ts.
 app.get("/api/health", async (req, res) => {
   const { buildHealthBody, cronBearerOk } = await import("../opsRules");
   let detailed = cronBearerOk(req.headers["authorization"]);
