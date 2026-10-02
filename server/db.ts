@@ -2,7 +2,7 @@ import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerSco
 import { TRPCError } from '@trpc/server';
 import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
 import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
-import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
+import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, stampOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -3960,10 +3960,14 @@ export async function saveShiftHandover(
     opts.canEditOld,
   );
   if (!decision.ok) throw new TRPCError({ code: decision.code, message: decision.message });
-  // Pendentes: a resolução é monotónica (um item resolvido pela passagem
-  // seguinte não reabre por causa de um formulário antigo).
-  if (cur && Array.isArray(data.openItems)) {
-    data = { ...data, openItems: mergeStoredOpenItems(parseOpenItems(cur.openItems), data.openItems as OpenItem[]) };
+  // Pendentes: quem resolveu e quando vêm da conta que grava (só para os que
+  // passam agora a resolvidos); itens sem turno ganham o desta passagem; e a
+  // resolução é monotónica (um item resolvido pela passagem seguinte não reabre
+  // por causa de um formulário antigo).
+  if (Array.isArray(data.openItems)) {
+    const stored = cur ? parseOpenItems(cur.openItems) : [];
+    const stamped = stampOpenItems(stored, data.openItems as OpenItem[], { since: `${key.handoverDate} ${key.shift}`, userName: opts.userName, nowIso: new Date().toISOString() });
+    data = { ...data, openItems: mergeStoredOpenItems(stored, stamped) };
   }
   const bound = handoverBoundValues(data);
   const before = cur ? handoverBoundValues(cur) : null;
@@ -4055,7 +4059,8 @@ export async function getSupervisorDayDashboard(date: string) {
   // Movimentos AO VIVO da BD da Multipark ("History"; a cópia local está congelada desde o #141).
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
-  const hist = await readLiveHistory({ changeTypes: ["PENDING_CHECKOUT", "CHECK_OUT", "CHECK_IN"], from: start, to: checkoutEnd, cities: scopedCityNamesLive(), limit: 5000, order: "asc" });
+  const HIST_LIMIT = 5000;
+  const hist = await readLiveHistory({ changeTypes: ["PENDING_CHECKOUT", "CHECK_OUT", "CHECK_IN"], from: start, to: checkoutEnd, cities: scopedCityNamesLive(), limit: HIST_LIMIT, order: "asc" });
   const { deliveryTimes, pickupDelays } = supervisorTimings(hist, { start, end, checkoutEnd });
   deliveryTimes.sort((a, b) => b.mins - a.mins);
   const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
@@ -4099,6 +4104,8 @@ export async function getSupervisorDayDashboard(date: string) {
       over15: late,
     },
     complaintsToday: Number((compl as any)?.n ?? 0),
+    // Movimentos cortados no limite: os tempos são de uma parte do dia (o ecrã avisa).
+    timingsTruncated: hist.length >= HIST_LIMIT,
   };
 }
 

@@ -20,6 +20,7 @@ import {
   buildClaimEmailVersion,
   buildHandoverAck,
   buildHandoverCurrent,
+  buildHandoverLatestBefore,
   buildHandoverMetaUpdate,
   buildHandoverOpenItemsUpdate,
   buildHandoverRange,
@@ -38,6 +39,7 @@ import {
   normalizeAiBullets,
   parseOpenItems,
   previousShiftOf,
+  PREVIOUS_HANDOVER_MAX_DAYS,
   remindersDue,
   type ComplianceStatus,
   type OpenItem,
@@ -99,7 +101,8 @@ export async function shiftTeamLeaders(s: ShiftRef, city: string): Promise<Shift
 export function aiPrompt(d: HandoverDraft | null, input: { city: HandoverCity; shift: ShiftRef; notes: string | null; openItems: OpenItem[] }): string {
   const lines = [
     `Cidade: ${HANDOVER_CITY_LABELS[input.city]}. Turno que termina: ${input.shift.date} ${SHIFT_LABELS[input.shift.shift]}.`,
-    ...(d ? draftKeyLines(d.counts) : []),
+    // Leituras que falharam vão como "sem dados", nunca como 0.
+    ...(d ? draftKeyLines(d.counts, d.unavailable ?? []) : []),
     // Só o primeiro nome (política de dados pessoais da IA).
     d?.people.next.length ? `Equipa do turno seguinte: ${d.people.next.map((p) => `${firstName(p.name, "?")}${p.isTeamLeader ? " (TL)" : ""}`).join(", ")}` : "",
     d?.byHour.length ? `Picos (recolhas/entregas por hora): ${d.byHour.filter((h) => h.checkins + h.checkouts > 0).map((h) => `${h.label} ${h.checkins}/${h.checkouts}`).join("; ")}` : "",
@@ -142,15 +145,22 @@ export async function generateAiSummary(
   }
 }
 
-/** Guarda o resumo IA pedido no ecrã, se a passagem já existir. */
-export async function saveHandoverAiSummary(key: { handoverDate: string; shift: HandoverShift; city: HandoverCity }, text: string): Promise<boolean> {
+/**
+ * Guarda o resumo IA pedido no ecrã, se a passagem já existir — com a mesma
+ * regra das 24h da gravação (passado esse prazo só quem pode editar passagens
+ * antigas). Devolve o id gravado (null = não gravou).
+ */
+export async function saveHandoverAiSummary(key: { handoverDate: string; shift: HandoverShift; city: HandoverCity }, text: string, opts: { canEditOld: boolean }): Promise<number | null> {
   const db = await getDb();
-  if (!db) return false;
+  if (!db) return null;
   const row = rowsOf(await db.execute(buildHandoverCurrent(key)))[0];
-  const q = row ? buildHandoverMetaUpdate(Number(row.id), { aiSummary: text }) : null;
-  if (!q) return false;
+  if (!row) return null;
+  const { HANDOVER_EDIT_WINDOW_MINUTES } = await import("../shared/shiftHandover");
+  if (!opts.canEditOld && Number(row.ageMinutes ?? 0) > HANDOVER_EDIT_WINDOW_MINUTES) return null;
+  const q = buildHandoverMetaUpdate(Number(row.id), { aiSummary: text });
+  if (!q) return null;
   await db.execute(q);
-  return true;
+  return Number(row.id);
 }
 
 // ─── Depois de gravar ───────────────────────────────────────────────────────
@@ -178,10 +188,10 @@ export async function afterHandoverSave(input: {
     console.warn("[handover] rascunho falhou:", String(err?.message ?? err).slice(0, 200));
   }
 
-  // 1. Pendentes resolvidos agora → marca-os também na passagem anterior
+  // 1. Pendentes resolvidos agora → marca-os também na passagem de onde vieram
+  //    (a última antes desta, até 3 dias: o turno anterior pode não ter passagem).
   try {
-    const prev = previousShiftOf(ref);
-    const prevRow = rowsOf(await db.execute(buildHandoverCurrent({ handoverDate: prev.date, shift: prev.shift, city: input.key.city })))[0];
+    const prevRow = rowsOf(await db.execute(buildHandoverLatestBefore(input.key, addDays(ref.date, -PREVIOUS_HANDOVER_MAX_DAYS))))[0];
     if (prevRow) {
       const resolvedNow = new Map(openItems.filter((i) => i.resolved).map((i) => [i.key, i]));
       let changed = 0;
@@ -241,7 +251,7 @@ export async function afterHandoverSave(input: {
       if ((to.length || cc.length) && extractAffectedRows(await db.execute(buildClaimEmailVersion(id, version))) > 0) {
         const mail = buildHandoverEmail({
           city: input.key.city, shift: ref, authorName: row.createdByName ?? input.userName,
-          aiSummary: ai ?? row.aiSummary ?? null, counts: draft?.counts ?? null, notes: row.notes ?? null,
+          aiSummary: ai ?? row.aiSummary ?? null, counts: draft?.counts ?? null, unavailable: draft?.unavailable ?? [], notes: row.notes ?? null,
           openItems, link: `${appOrigin()}/passagem-turno`,
         });
         const { sendEmail } = await import("./mail/systemMail");
@@ -269,9 +279,12 @@ export async function afterHandoverSave(input: {
 export async function ackHandover(id: number, city: HandoverCity, user: { id: number; name: string | null }): Promise<{ ok: true } | { ok: false; message: string }> {
   const db = await getDb();
   if (!db) return { ok: false, message: "BD indisponível" };
-  const row = rowsOf(await db.execute(sql`SELECT id, city, createdById, ackAt FROM shift_handovers WHERE id = ${id} AND city = ${city} AND ${cityNameScope(sql`city`)} LIMIT 1`))[0];
+  const row = rowsOf(await db.execute(sql`SELECT id, city, createdById, filledById, ackAt FROM shift_handovers WHERE id = ${id} AND city = ${city} AND ${cityNameScope(sql`city`)} LIMIT 1`))[0];
   if (!row) return { ok: false, message: "Passagem de turno não encontrada" };
-  if (row.createdById != null && Number(row.createdById) === user.id) return { ok: false, message: "Quem entrega a passagem não a pode confirmar — é o team leader do turno seguinte que carrega em \"Recebi\"" };
+  // Nem quem a criou nem quem a editou por último confirma a própria passagem.
+  if ((row.createdById != null && Number(row.createdById) === user.id) || (row.filledById != null && Number(row.filledById) === user.id)) {
+    return { ok: false, message: "Quem entrega (ou editou) a passagem não a pode confirmar — é o team leader do turno seguinte que carrega em \"Recebi\"" };
+  }
   if (row.ackAt != null) return { ok: false, message: "Esta passagem já foi confirmada" };
   const n = extractAffectedRows(await db.execute(buildHandoverAck(id, user)));
   return n > 0 ? { ok: true } : { ok: false, message: "Esta passagem já foi confirmada" };

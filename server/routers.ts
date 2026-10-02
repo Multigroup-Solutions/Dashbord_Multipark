@@ -15,7 +15,7 @@ import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { requireAccess, canAccess, isOwnOnly, employeeBelowCondition } from "./_core/access";
+import { requireAccess, canAccess, isOwnOnly, employeeBelowCondition, withOverrides } from "./_core/access";
 import { MODULE_IDS, can, scopeFor, canManageUserRole, canGrantPermissionsTo, canTouchPermission, assignableRoles, isNationalRole, seesBeyondOwn, type ModuleId } from "../shared/access";
 import { normalizeEmail } from "@shared/email";
 import { USER_ROLES, superAdminGuard, inviteCompletionError, linkRoleGuard } from "./userAdminRules";
@@ -3371,20 +3371,19 @@ export const appRouter = router({
       }
       const { saveShiftHandover } = await import("./db");
       const { handoverDate, shift, city, expectedVersion, ...values } = input;
+      const { canEditOldHandover } = await import("../shared/shiftHandover");
       const result = await saveShiftHandover({ handoverDate, shift, city }, {
         ...values,
         // Linhas repetidas (mesmo tipo+tamanho) somam-se antes de gravar.
         clothingItems: values.clothingItems == null ? values.clothingItems : normalizeClothingItems(values.clothingItems),
-        // Quem resolve e quando (o formulário só manda o visto).
-        openItems: values.openItems == null ? values.openItems : values.openItems.map((i) => (i.resolved && !i.resolvedAt
-          ? { ...i, resolvedAt: new Date().toISOString(), resolvedByName: i.resolvedByName ?? ctx.user.name ?? null }
-          : i)),
+        // Quem resolve e quando é carimbado na gravação (saveShiftHandover), a
+        // partir da conta — nunca do que o formulário manda.
       }, {
         expectedVersion,
         userId: ctx.user.id,
         userName: ctx.user.name ?? null,
-        // Passadas 24h desde a criação só supervisor+ edita.
-        canEditOld: (ROLE_HIERARCHY[ctx.user.role] ?? -1) >= ROLE_HIERARCHY["supervisor"],
+        // Passadas 24h desde a criação: a mesma regra do ecrã (com overrides).
+        canEditOld: canEditOldHandover(withOverrides(ctx.user)),
       });
       await logActivity({
         userId: ctx.user.id,
@@ -3429,10 +3428,14 @@ export const appRouter = router({
       const { shiftWindowUtc } = await import("../shared/shiftHandoverAuto");
       const { operationalShift } = await import("../shared/shiftHandover");
       const nowMs = Date.now();
-      const win = shiftWindowUtc(operationalShift(nowMs));
+      const opShift = operationalShift(nowMs);
+      const win = shiftWindowUtc(opShift);
       const { getSetting } = await import("./appSettings");
+      const { addDays } = await import("../shared/lisbonDay");
       const r = await getMultiparkShiftState({
         cities: [input.city], nowMs,
+        // "Amanhã" = o dia a seguir ao dia OPERACIONAL: às 02:30 a noite ainda é de ontem.
+        blocksDay: addDays(opShift.date, 1),
         excludedParkIds: (await getSetting("operations.excludedParks")) ?? [],
         upcoming: { startMs: nowMs, endMs: nowMs + (input.windowHours ?? 8) * 3_600_000 },
         cash: { startMs: win.startMs, endMs: Math.max(win.startMs, Math.min(nowMs, win.endMs)) },
@@ -3462,8 +3465,11 @@ export const appRouter = router({
       }
       if (!text) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
       const { saveHandoverAiSummary } = await import("./shiftHandoverAutomation");
-      await saveHandoverAiSummary({ handoverDate: input.date, shift: input.shift, city: input.city }, text);
-      return { aiSummary: text };
+      const { canEditOldHandover } = await import("../shared/shiftHandover");
+      // Mesma regra das 24h que a gravação; e fica registado quem o gerou.
+      const savedId = await saveHandoverAiSummary({ handoverDate: input.date, shift: input.shift, city: input.city }, text, { canEditOld: canEditOldHandover(withOverrides(ctx.user)) });
+      if (savedId != null) await logActivity({ userId: ctx.user.id, action: "update", entity: "shift_handover", entityId: savedId, details: `Resumo IA gerado — ${input.date} ${input.shift} ${input.city}` });
+      return { aiSummary: text, saved: savedId != null };
     }),
 
     // "Recebi" — o team leader que entra confirma (nunca o autor).
