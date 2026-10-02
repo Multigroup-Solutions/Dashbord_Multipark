@@ -107,12 +107,10 @@ export async function listActiveExtras(projectId?: number | null): Promise<Activ
 }
 
 /**
- * Colaboradores ATIVOS por id, no mesmo shape de `listActiveExtras`.
- *
- * Necessário porque a tabela do backoffice pode mostrar (e o backoffice pode
- * selecionar) quem respondeu ao formulário sem ter função "extra". Sem isto o
- * broadcast descartava-os em silêncio — "o que envio" deixava de ser "o que
- * vejo". Filtra por `isActive` de propósito: nunca contactar fichas inativas.
+ * EXTRAS ativos por id, no mesmo shape de `listActiveExtras`. Só extras
+ * (Jorge, 2 out 2026: "não devia enviar a mensagem ou o email de
+ * disponibilidade ou de escala para os funcionários"): um id de outra função
+ * fica de fora. Filtra por `isActive`: nunca contactar fichas inativas.
  */
 export async function listActiveEmployeesByIds(ids: number[]): Promise<ActiveExtra[]> {
   if (ids.length === 0) return [];
@@ -127,8 +125,18 @@ export async function listActiveEmployeesByIds(ids: number[]): Promise<ActiveExt
       projectId: employees.projectId,
     })
     .from(employees)
-    .where(and(eq(employees.isActive, 1), inArray(employees.id, ids), projectScope(employees.projectId)))
+    .where(and(eq(employees.isActive, 1), eq(employees.position, "extra"), inArray(employees.id, ids), projectScope(employees.projectId)))
     .orderBy(asc(employees.fullName));
+}
+
+/** Quais destes ids são EXTRAS ativos (os avisos de escala e de disponibilidade só vão a esses). */
+export async function extraIdsAmong(ids: number[]): Promise<Set<number>> {
+  if (ids.length === 0) return new Set();
+  const db = await getDb();
+  if (!db) return new Set();
+  const rows = await db.select({ id: employees.id }).from(employees)
+    .where(and(eq(employees.isActive, 1), eq(employees.position, "extra"), inArray(employees.id, ids)));
+  return new Set(rows.map((r) => r.id));
 }
 
 /**
@@ -422,37 +430,10 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
   const db = await getDb();
 
   const extras = [...(await listActiveExtras(projectId))];
-  const extraIds = new Set(extras.map(e => e.id));
 
-  // Quem SUBMETEU disponibilidade tem de aparecer, mesmo que a ficha não tenha
-  // função "extra" (ex.: um `driver` que preencheu o formulário do site). Sem
-  // isto a disponibilidade entrava na BD e ficava invisível no backoffice.
-  if (db) {
-    const responders = await db
-      .selectDistinct({ employeeId: extrasAvailability.employeeId })
-      .from(extrasAvailability)
-      .where(eq(extrasAvailability.weekStart, weekStart));
-    const missing = responders.map(r => r.employeeId).filter(id => !extraIds.has(id));
-    if (missing.length > 0) {
-      const rows = await db
-        .select({
-          id: employees.id,
-          fullName: employees.fullName,
-          email: employees.email,
-          phone: employees.phone,
-          projectId: employees.projectId,
-        })
-        .from(employees)
-        .where(and(eq(employees.isActive, 1), inArray(employees.id, missing), projectScope(employees.projectId)))
-        .orderBy(asc(employees.fullName));
-      for (const row of rows) {
-        if (projectId != null && row.projectId !== projectId) continue;
-        extras.push(row);
-        extraIds.add(row.id);
-      }
-    }
-  }
-
+  // Só EXTRAS (Jorge, 2 out 2026: "aqui devia aparecer só os extras e não
+  // funcionários"). Antes entrava também quem não é extra mas respondeu ao
+  // formulário; essa disponibilidade fica guardada, só deixa de aparecer aqui.
   const ids = extras.map(e => e.id);
   const rows = db && ids.length
     ? await db
@@ -750,8 +731,8 @@ export async function sendWeeklyAvailabilityRequest(opts: {
     };
   }
 
-  // Escolhidos à mão: quem está na lista (mesmo sem função "extra" — quem
-  // respondeu ao formulário aparece na tabela); senão, todos os extras ativos.
+  // Escolhidos à mão: só os que são extras (a lista só mostra extras); senão,
+  // todos os extras ativos.
   let extras = opts.employeeIds && opts.employeeIds.length
     ? await listActiveEmployeesByIds(opts.employeeIds)
     : await listActiveExtras(opts.projectId);

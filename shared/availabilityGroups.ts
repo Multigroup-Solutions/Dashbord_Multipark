@@ -45,6 +45,17 @@ export function countAvailabilityStatuses(
   return out;
 }
 
+/**
+ * Ordem por omissão da lista (Jorge, 2 out 2026: "os com disponibilidade
+ * devem estar primeiro e só depois os que não responderam e depois os que não
+ * podem"): disponíveis → sem resposta → indisponíveis, e por nome. PURA.
+ */
+const STATUS_RANK: Record<AvailabilityStatus, number> = { available: 0, no_answer: 1, unavailable: 2 };
+export function sortByAvailability<T extends { responded: boolean; availableDays: number; fullName: string }>(rows: readonly T[]): T[] {
+  return rows.slice().sort((a, b) =>
+    STATUS_RANK[availabilityStatus(a)] - STATUS_RANK[availabilityStatus(b)] || a.fullName.localeCompare(b.fullName, "pt", { sensitivity: "base" }));
+}
+
 export type CityGroupKey = CityKey | "none";
 export const CITY_GROUP_ORDER: CityGroupKey[] = [...CITY_KEYS, "none"];
 

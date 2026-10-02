@@ -133,6 +133,8 @@ export interface AutofillCandidate {
   availability: { status: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null } | null;
   /** true = cidade da ficha bate com a da escala; null = ficha sem cidade. */
   cityMatch: boolean | null;
+  /** false = funcionário (não extra): só entra na escala à mão (2 out 2026). */
+  isExtra?: boolean;
 }
 export interface AutofillPick { employeeId: number; personName: string; level: AutofillCandidate["level"]; startHour: number; endHour: number }
 
@@ -154,8 +156,9 @@ export function availableWindow(a: AutofillCandidate["availability"], shift: Shi
 /**
  * Distribui os turnos sugeridos que ainda faltam pelos extras disponíveis.
  * Os primeiros `existing` turnos sugeridos (os mais compridos) contam como já
- * cobertos por quem já está escalado. Cidade certa primeiro, depois sem
- * cidade; quem é de outra cidade nunca entra.
+ * cobertos por quem já está escalado. Só EXTRAS da cidade da escala (Jorge,
+ * 2 out 2026): quem não tem cidade, é de outra cidade ou é funcionário nunca
+ * entra no preenchimento automático.
  */
 export function planAutofill(
   suggested: { startHour: number; endHour: number }[],
@@ -169,10 +172,10 @@ export function planAutofill(
     .sort((a, b) => (b.endHour - b.startHour) - (a.endHour - a.startHour) || a.startHour - b.startHour)
     .slice(Math.max(0, existingCount));
   const pool = candidates
-    .filter((c) => c.cityMatch !== false && !alreadyAssigned.has(c.id))
+    .filter((c) => c.cityMatch === true && c.isExtra !== false && !alreadyAssigned.has(c.id))
     .map((c) => ({ c, win: availableWindow(c.availability, shift) }))
     .filter((x): x is { c: AutofillCandidate; win: { from: number; to: number } } => x.win != null)
-    .sort((a, b) => Number(b.c.cityMatch === true) - Number(a.c.cityMatch === true) || a.c.fullName.localeCompare(b.c.fullName));
+    .sort((a, b) => a.c.fullName.localeCompare(b.c.fullName));
 
   const picks: AutofillPick[] = [];
   const unfilled: { startHour: number; endHour: number }[] = [];
@@ -366,6 +369,9 @@ export async function listNotices(date: string, city: string | null = null): Pro
 
 export interface NotifyResult { total: number; sent: number; failed: number; skipped: number; rulesSent: number; optedOut: number }
 
+/** Motivo registado quando quem está na escala não é extra (não recebe avisos). */
+export const NOT_EXTRA_NO_NOTICE = "funcionário (não é extra): não recebe avisos de escala";
+
 /**
  * Avisa por WhatsApp quem está escalado em `date` e ainda não foi avisado
  * NESTA versão da linha (tabela extras_dia_notifications; a versão sobe
@@ -438,22 +444,32 @@ export async function notifyAssignments(
   }
 
   const outcome = new Map<number, { status: string; error: string | null }>();
-  try {
-    const r = await sendBroadcast({
-      templateName: aviso.name,
-      languageCode: aviso.language,
-      bodyParam2ByEmployee: texts,
-      employeeIds: Array.from(byEmp.keys()),
-      note: `Aviso de escala ${date}`,
-      createdById: by,
-    });
-    for (const rec of r.recipients) {
-      if (rec.employeeId == null) continue;
-      outcome.set(rec.employeeId, { status: whatsappOutcomeStatus(rec.status), error: rec.status === "sent" ? null : (rec.error ?? rec.status) });
+  // Só EXTRAS recebem avisos de escala (Jorge, 2 out 2026): um funcionário
+  // posto à mão na escala fica escalado mas sem aviso, e fica registado porquê.
+  const { extraIdsAmong } = await import("./extrasAvailability");
+  const extrasSet = await extraIdsAmong(Array.from(byEmp.keys()));
+  const toNotify = Array.from(byEmp.keys()).filter((id) => extrasSet.has(id));
+  for (const empId of Array.from(byEmp.keys())) {
+    if (!extrasSet.has(empId)) outcome.set(empId, { status: "no_contact", error: NOT_EXTRA_NO_NOTICE });
+  }
+  if (toNotify.length) {
+    try {
+      const r = await sendBroadcast({
+        templateName: aviso.name,
+        languageCode: aviso.language,
+        bodyParam2ByEmployee: texts,
+        employeeIds: toNotify,
+        note: `Aviso de escala ${date}`,
+        createdById: by,
+      });
+      for (const rec of r.recipients) {
+        if (rec.employeeId == null) continue;
+        outcome.set(rec.employeeId, { status: whatsappOutcomeStatus(rec.status), error: rec.status === "sent" ? null : (rec.error ?? rec.status) });
+      }
+    } catch (err: any) {
+      const error = String(err?.message ?? err);
+      for (const empId of toNotify) outcome.set(empId, { status: "failed", error });
     }
-  } catch (err: any) {
-    const error = String(err?.message ?? err);
-    for (const empId of Array.from(byEmp.keys())) outcome.set(empId, { status: "failed", error });
   }
 
   const sentEmployees: number[] = [];
@@ -554,6 +570,7 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
         level: c.suggestedLevel,
         availability: c.availability ?? null,
         cityMatch: key ? CITY_KEY_TO_EXTRA[key] === input.city : null,
+        isExtra: (c.position ?? "").toLowerCase() === "extra",
       };
     }),
     input.shift,

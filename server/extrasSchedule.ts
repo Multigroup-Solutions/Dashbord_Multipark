@@ -221,7 +221,8 @@ async function loadHistory(ids: number[], date: string): Promise<{
 
 /**
  * Extras disponíveis para o dia/cidade, com o que a ordenação precisa. Fora:
- * formação obrigatória por concluir, ficha de outra cidade, sem disponibilidade.
+ * formação obrigatória por concluir, ficha de outra cidade ou SEM cidade, sem
+ * disponibilidade, e quem não é extra (funcionários só à mão).
  */
 export async function loadScheduleCandidates(date: string, city: ScheduleCity): Promise<ScheduleCandidate[]> {
   const db = await getDb();
@@ -236,10 +237,12 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
   const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
   const cities = await resolveCitiesForEmployeeIds(available.map((c) => c.id));
   const cityKey = city === "lisbon" ? "lisboa" : city;
+  // Proposta automática: só EXTRAS e só da cidade da escala (Jorge, 2 out 2026:
+  // funcionários só à mão; quem não tem cidade não se escala).
   const pool = available.filter((c) => {
     if (untrained.has(c.id)) return false;
-    const k = cities.get(c.id)?.city ?? null;
-    return k == null || k === cityKey;
+    if ((c.position ?? "").toLowerCase() !== "extra") return false;
+    return (cities.get(c.id)?.city ?? null) === cityKey;
   });
   if (!pool.length) return [];
 
@@ -601,8 +604,12 @@ export async function sendScheduleEmails(date: string, city: ScheduleCity, opts:
   if (!pending.length) return out;
 
   const empIds = Array.from(new Set(pending.map((r) => r.employeeId as number)));
-  const res = await db.execute(sql`SELECT id, fullName, email FROM employees WHERE id IN (${inList(empIds)})`);
-  const people = new Map(rowsOf(res).map((r) => [Number(r.id), { fullName: String(r.fullName ?? ""), email: r.email ? String(r.email).trim() : "" }]));
+  const res = await db.execute(sql`SELECT id, fullName, email, position, isActive FROM employees WHERE id IN (${inList(empIds)})`);
+  const people = new Map(rowsOf(res).map((r) => [Number(r.id), {
+    fullName: String(r.fullName ?? ""), email: r.email ? String(r.email).trim() : "",
+    // Só EXTRAS ativos recebem o email da escala (Jorge, 2 out 2026).
+    extra: String(r.position ?? "") === "extra" && Number(r.isActive) === 1,
+  }]));
   const settings = await loadScheduleSettings();
   const { sendEmail } = await import("./mail/systemMail");
 
@@ -612,6 +619,12 @@ export async function sendScheduleEmails(date: string, city: ScheduleCity, opts:
     for (const a of mine) if (await claimNotification(a, "scheduled", "email")) claimed.push(a);
     if (!claimed.length) continue;
     const p = people.get(empId);
+    if (p && !p.extra) {
+      const { NOT_EXTRA_NO_NOTICE } = await import("./extrasAutomation");
+      for (const a of claimed) await finishNotification(a, "scheduled", "email", "no_contact", NOT_EXTRA_NO_NOTICE);
+      out.skipped += claimed.length;
+      continue;
+    }
     if (!p?.email || !/@/.test(p.email)) {
       for (const a of claimed) await finishNotification(a, "scheduled", "email", "no_contact", "sem email na ficha");
       out.noEmail += claimed.length;
@@ -722,8 +735,10 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
   const out: RemoveResult["notified"] = { whatsapp: null, email: null };
   if (!db || row.employeeId == null) return out;
   const text = scheduleMessageText({ date: row.assignmentDate, city: row.city, spans: [{ startHour: row.startHour, endHour: row.endHour }], meetingPoint: null });
-  const empRes = await db.execute(sql`SELECT fullName, email FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
+  const empRes = await db.execute(sql`SELECT fullName, email, position FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
   const emp = rowsOf(empRes)[0];
+  // Funcionário posto à mão na escala: nunca foi avisado, também não é avisado da saída.
+  if (String(emp?.position ?? "") !== "extra") return out;
   const first = String(emp?.fullName ?? "").split(/\s+/)[0] || "Olá";
   const msg = `Olá ${first}, o teu turno de ${text} foi cancelado — já não precisas de vir. Obrigado!`;
 
@@ -773,7 +788,7 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
 
 /**
  * Quem recebe "Pedir disponibilidade a quem não respondeu": EXTRAS ativos, sem
- * resposta para esse dia, da cidade (ou sem cidade na ficha). A MESMA lista dá
+ * resposta para esse dia, DA cidade (sem cidade não — 2 out 2026). A MESMA lista dá
  * o número do botão e o envio — antes o botão contava toda a gente de todas as
  * cidades (25) e o envio ia a 10.
  */
@@ -787,7 +802,8 @@ export async function noAnswerTargets(
   const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
   const cities = await resolveCitiesForEmployeeIds(noAnswer.map((c) => c.id));
   const cityKey = city === "lisbon" ? "lisboa" : city;
-  return noAnswer.filter((c) => { const k = cities.get(c.id)?.city ?? null; return k == null || k === cityKey; }).map((c) => c.id);
+  // Sem cidade não se pede disponibilidade para uma cidade (pede-se a cidade — ver employeeCityFix).
+  return noAnswer.filter((c) => cities.get(c.id)?.city === cityKey).map((c) => c.id);
 }
 
 export async function resendAvailabilityRequest(date: string, city: ScheduleCity, userId: number | null): Promise<{ targets: number; emailSent: number; whatsappSent: number }> {

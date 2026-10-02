@@ -4428,6 +4428,12 @@ export const appRouter = router({
         // Só verifica quando a pessoa entra na escala (nova linha ou troca de pessoa).
         const { checkEscalaEligibility, escalaAssignmentEmployeeId } = await import("./trainingPaths");
         if (input.employeeId && (!input.id || (await escalaAssignmentEmployeeId(input.id)) !== input.employeeId)) {
+          // Sem cidade não se escala (2 out 2026) — nem à mão. A cidade é a derivada (a mesma da Disponibilidade).
+          const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
+          if (!(await resolveCitiesForEmployeeIds([input.employeeId])).get(input.employeeId)?.city) {
+            const { noCityScheduleMessage } = await import("../shared/extrasSchedule");
+            throw new TRPCError({ code: "PRECONDITION_FAILED", message: noCityScheduleMessage(input.personName) });
+          }
           const canOverride = (ROLE_HIERARCHY[ctx.user.role] ?? 0) >= ROLE_HIERARCHY.admin;
           const elig = await checkEscalaEligibility(input.employeeId, { override, canOverride });
           if (!elig.ok) throw new TRPCError({ code: "PRECONDITION_FAILED", message: elig.message ?? "Formação obrigatória por concluir." });

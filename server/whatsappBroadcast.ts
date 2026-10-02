@@ -17,7 +17,6 @@ import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, optedO
 import { normalizePhoneE164 } from "../shared/phone";
 import {
   findActiveEmployeeByPhoneE164,
-  listActiveEmployeesByIds,
   listActiveExtras,
   type ActiveExtra,
 } from "./extrasAvailability";
@@ -911,16 +910,9 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
   }
 
   // ── MODO NORMAL ────────────────────────────────────────────────────────────
-  const extras = await listActiveExtras();
-  // A tabela do backoffice também mostra quem respondeu ao formulário sem ter
-  // função "extra"; se o alvo explícito incluir algum, vai buscá-lo à ficha
-  // (só ATIVOS) para não desaparecer do envio sem aviso.
-  let pool = extras;
-  if (opts.employeeIds && opts.employeeIds.length) {
-    const known = new Set(extras.map((e) => e.id));
-    const missing = opts.employeeIds.filter((id) => !known.has(id));
-    if (missing.length > 0) pool = [...extras, ...(await listActiveEmployeesByIds(missing))];
-  }
+  // Só EXTRAS ativos (Jorge, 2 out 2026: disponibilidade e escala nunca vão
+  // a funcionários). Um id de outra função pedido à mão fica de fora.
+  const pool = await listActiveExtras();
   const resolved = resolveRecipients(pool, opts.employeeIds ?? null);
   if (!resolved.length) throw new Error("Nenhum destinatário para este envio.");
 
