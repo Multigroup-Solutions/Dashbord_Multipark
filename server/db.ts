@@ -2720,22 +2720,13 @@ export async function createPerformanceEvaluation(data: any) {
 
 export async function getPerformanceEvaluations(filters?: { weekNumber?: number; yearNumber?: number; employeeId?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [];
+  // Só as pessoas das cidades de quem pede (sem pedido — cron — vê todas).
+  const conditions: any[] = [employeeScope(performanceEvaluations.employeeId)];
   if (filters?.weekNumber) conditions.push(eq(performanceEvaluations.weekNumber, filters.weekNumber));
   if (filters?.yearNumber) conditions.push(eq(performanceEvaluations.yearNumber, filters.yearNumber));
   if (filters?.employeeId) conditions.push(eq(performanceEvaluations.employeeId, filters.employeeId));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   return db.select().from(performanceEvaluations).where(where).orderBy(desc(performanceEvaluations.totalPoints));
-}
-
-export async function updatePerformanceEvaluation(id: number, data: any) {
-  const db = await getDb(); if (!db) return;
-  await db.update(performanceEvaluations).set(data).where(eq(performanceEvaluations.id, id));
-}
-
-export async function deletePerformanceEvaluation(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(performanceEvaluations).where(eq(performanceEvaluations.id, id));
 }
 
 export async function generateWeeklyEvaluation(weekNumber: number, yearNumber: number) {

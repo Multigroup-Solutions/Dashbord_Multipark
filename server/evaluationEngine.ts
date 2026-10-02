@@ -32,6 +32,7 @@ import {
 } from "../drizzle/schema";
 import { employeeScope } from "./cityScope";
 import {
+  complaintIsConfirmed,
   computeEmployeeDays,
   type ActionCountRow,
   type AgentOccurrenceCount,
@@ -144,6 +145,30 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
        WHERE d.employeeId IS NOT NULL AND c.createdAt >= ${range.start} AND c.createdAt < ${range.end}`));
   } catch { /* tabela ainda não criada */ }
 
+  // Reclamações/alertas a que as penalizações apontam, de qualquer data: contam
+  // no dia deles (talvez noutra fatia) — a penalização não os repete.
+  const penRows = rowsOf(penalties);
+  const relIds = (reason: string) => [...new Set(penRows.filter((p) => p.reason === reason && p.relatedId != null).map((p) => Number(p.relatedId)).filter(Number.isFinite))];
+  const relatedCountedElsewhere = { complaints: [] as string[], speedAlerts: [] as string[] };
+  try {
+    const cIds = relIds("complaint_investigation");
+    if (cIds.length) {
+      const rel = rowsOf(await db.execute(sql`
+        SELECT d.complaintId, d.employeeId, c.penaltyPoints, c.complaint_status AS status
+          FROM complaint_drivers_on_duty d JOIN complaints c ON c.id = d.complaintId
+         WHERE d.employeeId IS NOT NULL AND d.complaintId IN (${sql.join(cIds.map((id) => sql`${id}`), sql`, `)})`));
+      for (const r of rel) {
+        if (complaintIsConfirmed({ penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null })) relatedCountedElsewhere.complaints.push(`${Number(r.employeeId)}|${Number(r.complaintId)}`);
+      }
+    }
+    const aIds = relIds("speeding");
+    if (aIds.length) {
+      const rel = rowsOf(await db.execute(sql`
+        SELECT id, employeeId FROM speed_alerts WHERE employeeId IS NOT NULL AND id IN (${sql.join(aIds.map((id) => sql`${id}`), sql`, `)})`));
+      for (const r of rel) relatedCountedElsewhere.speedAlerts.push(`${Number(r.employeeId)}|${Number(r.id)}`);
+    }
+  } catch { /* sem a tabela das reclamações: fica a regra antiga (dentro do período) */ }
+
   const { loadExtraRates, rateFor } = await import("./extraRates");
   const { TL_WORKING_DAYS_PER_MONTH } = await import("./extrasDia");
   const rates = await loadExtraRates();
@@ -177,7 +202,8 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       at: toUtcStr(r.at), penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null,
     })),
     speedAlerts: rowsOf(speed).map((r) => ({ id: Number(r.id), employeeId: r.employeeId != null ? Number(r.employeeId) : null, createdAt: toUtcStr(r.createdAt) })),
-    penalties: rowsOf(penalties).map((r) => ({
+    relatedCountedElsewhere,
+    penalties: penRows.map((r) => ({
       employeeId: Number(r.employeeId), points: Number(r.points ?? 0), reason: String(r.reason ?? ""),
       relatedId: r.relatedId != null ? Number(r.relatedId) : null, createdAt: toUtcStr(r.createdAt),
     })),
@@ -232,10 +258,15 @@ export async function persistRows(rows: EmployeeDayRow[], startDay: string, endD
 }
 
 /** Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional). */
-export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number }> {
+export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number; skipped: boolean }> {
   const out = await computeRange(startDay, endDay, readLive);
+  // Sem a BD da Multipark os movimentos vêm da cópia local (congelada): gravar
+  // por cima punha zeros nos dias bons e apagava linhas. Fica o que estava.
+  if (out.source === "copia") {
+    return { ...out, written: 0, removed: 0, skipped: true, notice: `${out.notice ?? "BD da Multipark indisponível."} Nada foi gravado: ficam os valores anteriores.` };
+  }
   const p = await persistRows(out.rows, startDay, endDay);
-  return { ...out, ...p };
+  return { ...out, ...p, skipped: false };
 }
 
 /**

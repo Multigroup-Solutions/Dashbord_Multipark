@@ -6,6 +6,10 @@ const state = vi.hoisted(() => ({
   executed: [] as string[],
   localHistory: [] as any[],
   inserted: 0,
+  deleted: 0,
+  penalties: [] as any[],
+  relComplaints: [] as any[],
+  relAlerts: [] as any[],
 }));
 
 function textOf(q: any): string {
@@ -19,10 +23,13 @@ vi.mock("./db", () => {
       const t = textOf(q);
       state.executed.push(t);
       if (t.includes("multipark_booking_history")) return [state.localHistory];
+      if (t.includes("employee_penalties")) return [state.penalties];
+      if (t.includes("d.complaintId IN")) return [state.relComplaints];
+      if (t.includes("FROM speed_alerts WHERE employeeId IS NOT NULL AND id IN")) return [state.relAlerts];
       return [[]];
     },
     insert: () => ({ values: (v: any[]) => ({ onDuplicateKeyUpdate: async () => { state.inserted += v.length; } }) }),
-    delete: () => ({ where: async () => [{ affectedRows: 0 }] }),
+    delete: () => ({ where: async () => { state.deleted += 1; return [{ affectedRows: 0 }]; } }),
   };
   return { getDb: async () => db };
 });
@@ -37,7 +44,7 @@ vi.mock("./evaluationIdentity", async (original) => {
 vi.mock("./extraRates", () => ({ loadExtraRates: async () => ({}), rateFor: () => 10 }));
 vi.mock("./extrasDia", () => ({ TL_WORKING_DAYS_PER_MONTH: 22 }));
 
-import { computeRange, runEvaluationRecompute } from "./evaluationEngine";
+import { computeRange, recomputeRange, runEvaluationRecompute } from "./evaluationEngine";
 
 const liveOk = vi.fn(async (_s: string, _e: string) => ({
   available: true as const,
@@ -54,6 +61,10 @@ const liveDown = vi.fn(async () => ({ available: false as const, reason: "Sem li
 beforeEach(() => {
   state.executed = [];
   state.inserted = 0;
+  state.deleted = 0;
+  state.penalties = [];
+  state.relComplaints = [];
+  state.relAlerts = [];
   state.localHistory = [
     { bookingExternalId: "B1", historyId: "1", changeType: "CHECK_IN", actionTime: "2026-09-24 14:30:00", agentUserId: "mp-1", agentName: "Gelson Sousa" },
     { bookingExternalId: "B1", historyId: "2", changeType: "MOVEMENT", actionTime: "2026-09-24 14:50:00", agentUserId: "mp-1", agentName: "Gelson Sousa" },
@@ -108,5 +119,45 @@ describe("cron evaluation-recompute", () => {
     expect(r.done).toBe(false);
     expect(r.nextOffset).toBe(7);
     expect(r.slices[0]).toMatchObject({ source: "copia" });
+  });
+});
+
+describe("BD da Multipark em baixo: o recálculo não estraga o que está gravado", () => {
+  it("não grava nem apaga nada e diz porquê", async () => {
+    const r = await recomputeRange("2026-09-24", "2026-09-24", liveDown);
+    expect(r).toMatchObject({ skipped: true, written: 0, removed: 0, source: "copia" });
+    expect(r.notice).toContain("Nada foi gravado");
+    expect(state.inserted).toBe(0);
+    expect(state.deleted).toBe(0);
+  });
+  it("o cron também não (todas as fatias)", async () => {
+    const r = await runEvaluationRecompute({ deadlineAt: Date.now() + 600_000, now: new Date("2026-09-25T12:00:00Z"), readLive: liveDown });
+    expect(r.slices.every((x) => x.written === 0 && x.removed === 0)).toBe(true);
+    expect(state.inserted).toBe(0);
+    expect(state.deleted).toBe(0);
+  });
+  it("com a BD da Multipark grava como sempre", async () => {
+    const r = await recomputeRange("2026-09-24", "2026-09-24", liveOk);
+    expect(r).toMatchObject({ skipped: false, written: 1, source: "multipark" });
+    expect(state.inserted).toBe(1);
+  });
+});
+
+describe("penalização que aponta para uma reclamação/alerta de outra fatia", () => {
+  it("não volta a contar a reclamação nem o excesso de velocidade", async () => {
+    state.penalties = [
+      { employeeId: 1, points: 2, reason: "complaint_investigation", relatedId: 70, createdAt: "2026-09-24 13:00:00" },
+      { employeeId: 1, points: 1, reason: "speeding", relatedId: 50, createdAt: "2026-09-24 13:00:00" },
+    ];
+    state.relComplaints = [{ complaintId: 70, employeeId: 1, penaltyPoints: 2, status: "closed" }];
+    state.relAlerts = [{ id: 50, employeeId: 1 }];
+    const out = await computeRange("2026-09-24", "2026-09-24", liveOk);
+    expect(out.rows[0].metrics).toMatchObject({ complaints: 0, speedingEvents: 0, penaltyPoints: 3 });
+  });
+  it("sem reclamação confirmada noutro dia, a penalização conta como antes", async () => {
+    state.penalties = [{ employeeId: 1, points: 2, reason: "complaint_investigation", relatedId: 71, createdAt: "2026-09-24 13:00:00" }];
+    state.relComplaints = [{ complaintId: 71, employeeId: 1, penaltyPoints: 0, status: "closed" }];
+    const out = await computeRange("2026-09-24", "2026-09-24", liveOk);
+    expect(out.rows[0].metrics.complaints).toBe(1);
   });
 });
