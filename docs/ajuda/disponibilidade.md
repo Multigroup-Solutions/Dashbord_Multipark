@@ -25,6 +25,7 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - A lista vem por esta ordem: **disponíveis primeiro**, depois **sem resposta**, depois **indisponíveis** (e por nome). Carregar no título de uma coluna reordena.
 - Daqui envias o pedido de disponibilidade por email/WhatsApp e vês as **Candidaturas do site** e as **Métricas dos extras**.
 - O pedido vai para os extras escolhidos na tabela; sem escolha, para todos os extras ativos. **Nunca vai para funcionários** (nem o pedido, nem os avisos de escala).
+- Quem tem **"Não enviar WhatsApp"** ou **"Não enviar email"** na ficha aparece com a etiqueta **sem WA** / **sem email** / **nada** e não recebe o pedido nesse canal (o resultado do envio conta-os à parte).
 - O link do email é sempre o endereço da app.
 - A semana começa sempre à segunda-feira.
 - Marcar a disponibilidade por alguém também fica registado, com o que estava antes.

@@ -66,6 +66,7 @@ import {
   Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3
 } from "lucide-react";
 import { ContactActions } from "@/components/ContactActions";
+import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
 import UsersPage from "./UsersPage";
 
@@ -1569,6 +1570,8 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 )}
               </div>
             </div>
+            {/* "Não enviar" (17g): WhatsApp e email automáticos/em massa, por pessoa — linha própria (cabe no telemóvel). */}
+            <ContactPrefsRow employeeId={emp.id} noAutoWhatsapp={!!(emp as any).noAutoWhatsapp} noAutoEmail={!!(emp as any).noAutoEmail} canEdit={access.canEditPersonal} />
           </CardContent>
         </Card>
       ) : (
@@ -3050,6 +3053,31 @@ function UnlinkedAgentsSection() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** "Não enviar WhatsApp / email" (17g — Jorge, 2 out 2026): tudo o automático ou em massa; as conversas uma a uma continuam. */
+function ContactPrefsRow({ employeeId, noAutoWhatsapp, noAutoEmail, canEdit }: { employeeId: number; noAutoWhatsapp: boolean; noAutoEmail: boolean; canEdit: boolean }) {
+  const utils = trpc.useUtils();
+  const save = trpc.rh.setContactPrefs.useMutation({
+    onSuccess: () => { toast.success("Guardado."); void utils.rh.byId.invalidate({ id: employeeId }); },
+    onError: (e) => toast.error(e.message),
+  });
+  if (!canEdit && !noAutoWhatsapp && !noAutoEmail) return null;
+  const item = (label: string, checked: boolean, patch: (v: boolean) => { noAutoWhatsapp?: boolean; noAutoEmail?: boolean }) => (
+    <label className="inline-flex items-center gap-2">
+      <Switch checked={checked} disabled={!canEdit || save.isPending} onCheckedChange={(v) => save.mutate({ id: employeeId, ...patch(v) })} aria-label={label} />
+      <span>{label}</span>
+    </label>
+  );
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm rounded-md border border-dashed px-3 py-2">
+      {item("Não enviar WhatsApp", noAutoWhatsapp, (v) => ({ noAutoWhatsapp: v }))}
+      {item("Não enviar email", noAutoEmail, (v) => ({ noAutoEmail: v }))}
+      <span className="basis-full text-xs text-muted-foreground">
+        Automáticos e em massa: disponibilidade, lembretes, escala, turno cancelado, difusões, formação. Responder uma a uma continua a funcionar.
+      </span>
     </div>
   );
 }

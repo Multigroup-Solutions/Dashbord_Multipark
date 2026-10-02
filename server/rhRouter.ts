@@ -516,6 +516,35 @@ export const rhRouter = router({
 
   // Ativa/desativa o colaborador E, em cascata, o utilizador associado
   // (login + notificações por email param imediatamente). Útil p/ extras.
+  /**
+   * "Não enviar" (17g — Jorge, 2 out 2026): desliga os WhatsApp e/ou os emails
+   * AUTOMÁTICOS e em massa para esta pessoa (disponibilidade, lembretes,
+   * escala, turno cancelado, difusões, formação, pedido da cidade). As
+   * conversas uma a uma continuam. Quem pode mudar os dados pessoais da ficha.
+   */
+  setContactPrefs: protectedProcedure
+    .input(z.object({ id: z.number().int().positive(), noAutoWhatsapp: z.boolean().optional(), noAutoEmail: z.boolean().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const viewer = await rhViewer(ctx.user);
+      const ref = await rhEmployeeRefOrThrow(input.id);
+      if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar os dados desta ficha." });
+      await assertEmployeeWriteScope(viewer, ref);
+      const set: Record<string, number> = {};
+      if (input.noAutoWhatsapp !== undefined) set.noAutoWhatsapp = input.noAutoWhatsapp ? 1 : 0;
+      if (input.noAutoEmail !== undefined) set.noAutoEmail = input.noAutoEmail ? 1 : 0;
+      if (!Object.keys(set).length) return { ok: true };
+      const { getDb } = await import("./db");
+      const { employees } = await import("../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível." });
+      await db.update(employees).set(set as any).where(eq(employees.id, input.id));
+      const label = (v: number | undefined, what: string) => (v === undefined ? null : `${what}: ${v ? "não enviar" : "enviar"}`);
+      await logActivity({ userId: ctx.user.id, action: "employee_contact_prefs", entity: "employees", entityId: input.id,
+        details: [label(set.noAutoWhatsapp, "WhatsApp automáticos"), label(set.noAutoEmail, "emails automáticos")].filter(Boolean).join(" · ") });
+      return { ok: true };
+    }),
+
   setActive: protectedProcedure
     .input(z.object({
       id: z.number(),

@@ -85,6 +85,9 @@ export interface ActiveExtra {
   email: string | null;
   phone: string | null;
   projectId: number | null;
+  /** "Não enviar" da ficha (17g): só para mostrar na lista; o envio verifica outra vez. */
+  noAutoWhatsapp?: number;
+  noAutoEmail?: number;
 }
 
 export async function listActiveExtras(projectId?: number | null): Promise<ActiveExtra[]> {
@@ -99,6 +102,8 @@ export async function listActiveExtras(projectId?: number | null): Promise<Activ
       email: employees.email,
       phone: employees.phone,
       projectId: employees.projectId,
+      noAutoWhatsapp: employees.noAutoWhatsapp,
+      noAutoEmail: employees.noAutoEmail,
     })
     .from(employees)
     .where(and(...conds))
@@ -313,6 +318,9 @@ export async function setEmployeeAvailability(
 export interface OverviewExtra {
   employeeId: number;
   fullName: string;
+  /** "Não enviar" da ficha (17g). */
+  noAutoWhatsapp?: boolean;
+  noAutoEmail?: boolean;
   email: string | null;
   phone: string | null;
   /**
@@ -475,6 +483,8 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
     return {
       employeeId: e.id,
       fullName: e.fullName,
+      noAutoWhatsapp: Number(e.noAutoWhatsapp ?? 0) === 1,
+      noAutoEmail: Number(e.noAutoEmail ?? 0) === 1,
       email: e.email,
       phone: e.phone,
       phoneE164: e.phone ? normalizePhoneE164(e.phone) : null,
@@ -560,6 +570,8 @@ export interface SendResult {
   sent: number;
   failed: number;
   noEmail: number;
+  /** Fichas com "Não enviar email" (17g): não recebem, e não é uma falha. */
+  optedOut?: number;
   recipients: { name: string; email: string | null; ok: boolean }[];
 }
 
@@ -737,9 +749,16 @@ export async function sendWeeklyAvailabilityRequest(opts: {
     ? await listActiveEmployeesByIds(opts.employeeIds)
     : await listActiveExtras(opts.projectId);
   if (opts.employeeIds?.length && opts.projectId != null) extras = extras.filter(e => e.projectId === opts.projectId);
-  const result: SendResult = { total: extras.length, sent: 0, failed: 0, noEmail: 0, recipients: [] };
+  const result: SendResult = { total: extras.length, sent: 0, failed: 0, noEmail: 0, optedOut: 0, recipients: [] };
+  const { employeesWithNoAuto } = await import("./contactPrefs");
+  const noAuto = await employeesWithNoAuto(extras.map((e) => e.id), "email");
 
   for (const e of extras) {
+    if (noAuto.has(e.id)) {
+      result.optedOut = (result.optedOut ?? 0) + 1;
+      result.recipients.push({ name: e.fullName, email: e.email, ok: false });
+      continue;
+    }
     if (!e.email) {
       result.noEmail++;
       result.recipients.push({ name: e.fullName, email: null, ok: false });

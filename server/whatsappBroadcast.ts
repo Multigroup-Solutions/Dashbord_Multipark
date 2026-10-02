@@ -13,6 +13,7 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, whatsappBroadcasts, whatsappConversations, whatsappMessages } from "../drizzle/schema";
+import { NO_AUTO_WHATSAPP_ERROR } from "../shared/contactPrefs";
 import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, optedOutPhones, reserveOutboundMessage, sqlLaterTs } from "./whatsappStore";
 import { normalizePhoneE164 } from "../shared/phone";
 import {
@@ -397,6 +398,8 @@ interface DispatchConfig {
   sentById: number | null;
   /** Números com opt-out (STOP) — nunca recebem nada. */
   optedOut: Set<string>;
+  /** Fichas com "Não enviar WhatsApp" (17g) — nunca recebem envios em massa. */
+  noAutoEmployees?: Set<number>;
   /** {{1}} quando o destinatário não tem nome utilizável ("Teste" só no modo teste). */
   fallbackName: string;
   /** {{2}} específico deste destinatário (sobrepõe `bodyParam2`). */
@@ -437,6 +440,10 @@ async function dispatchOne(
   // Opt-out ganha a tudo: nem token, nem conversa nova, nem chamada à Meta.
   if (r.phoneE164 && cfg.optedOut.has(r.phoneE164)) {
     return { ...r, status: "opted_out", error: OPTED_OUT_ERROR };
+  }
+  // "Não enviar WhatsApp" na ficha (17g): o mesmo efeito do STOP, com o motivo certo.
+  if (r.employeeId != null && cfg.noAutoEmployees?.has(r.employeeId)) {
+    return { ...r, status: "opted_out", error: NO_AUTO_WHATSAPP_ERROR };
   }
   const requestId = cfg.clientRequestId ?? (cfg.sendKey && r.phoneE164 ? recipientRequestKey(cfg.sendKey, r.phoneE164) : null);
   // Retoma (17b): este destinatário já foi tratado por este envio → nem token
@@ -925,7 +932,9 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     sendKey: opts.sendKey ?? null,
   });
 
-  const base = { ...baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME), sendKey: opts.sendKey ?? null };
+  const { employeesWithNoAuto } = await import("./contactPrefs");
+  const noAutoEmployees = await employeesWithNoAuto(resolved.map((r) => r.employeeId).filter((id): id is number => id != null), "whatsapp");
+  const base = { ...baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME), sendKey: opts.sendKey ?? null, noAutoEmployees };
   const recipients = await dispatchAll(db, resolved, (r) =>
     r.employeeId != null && perRecipient?.[r.employeeId] ? { ...base, bodyParam2Override: perRecipient[r.employeeId] } : base,
   );

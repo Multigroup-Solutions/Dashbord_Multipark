@@ -604,11 +604,12 @@ export async function sendScheduleEmails(date: string, city: ScheduleCity, opts:
   if (!pending.length) return out;
 
   const empIds = Array.from(new Set(pending.map((r) => r.employeeId as number)));
-  const res = await db.execute(sql`SELECT id, fullName, email, position, isActive FROM employees WHERE id IN (${inList(empIds)})`);
+  const res = await db.execute(sql`SELECT id, fullName, email, position, isActive, noAutoEmail FROM employees WHERE id IN (${inList(empIds)})`);
   const people = new Map(rowsOf(res).map((r) => [Number(r.id), {
     fullName: String(r.fullName ?? ""), email: r.email ? String(r.email).trim() : "",
     // Só EXTRAS ativos recebem o email da escala (Jorge, 2 out 2026).
     extra: String(r.position ?? "") === "extra" && Number(r.isActive) === 1,
+    noAutoEmail: Number(r.noAutoEmail ?? 0) === 1,
   }]));
   const settings = await loadScheduleSettings();
   const { sendEmail } = await import("./mail/systemMail");
@@ -619,6 +620,12 @@ export async function sendScheduleEmails(date: string, city: ScheduleCity, opts:
     for (const a of mine) if (await claimNotification(a, "scheduled", "email")) claimed.push(a);
     if (!claimed.length) continue;
     const p = people.get(empId);
+    if (p?.noAutoEmail) {
+      const { NO_AUTO_EMAIL_ERROR } = await import("../shared/contactPrefs");
+      for (const a of claimed) await finishNotification(a, "scheduled", "email", "opted_out", NO_AUTO_EMAIL_ERROR);
+      out.skipped += claimed.length;
+      continue;
+    }
     if (p && !p.extra) {
       const { NOT_EXTRA_NO_NOTICE } = await import("./extrasAutomation");
       for (const a of claimed) await finishNotification(a, "scheduled", "email", "no_contact", NOT_EXTRA_NO_NOTICE);
@@ -735,7 +742,7 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
   const out: RemoveResult["notified"] = { whatsapp: null, email: null };
   if (!db || row.employeeId == null) return out;
   const text = scheduleMessageText({ date: row.assignmentDate, city: row.city, spans: [{ startHour: row.startHour, endHour: row.endHour }], meetingPoint: null });
-  const empRes = await db.execute(sql`SELECT fullName, email, position FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
+  const empRes = await db.execute(sql`SELECT fullName, email, position, noAutoWhatsapp, noAutoEmail FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
   const emp = rowsOf(empRes)[0];
   // Funcionário posto à mão na escala: nunca foi avisado, também não é avisado da saída.
   if (String(emp?.position ?? "") !== "extra") return out;
@@ -749,7 +756,10 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
     try {
       const conv = rowsOf(await db.execute(sql`
         SELECT id FROM whatsapp_conversations WHERE employeeId = ${row.employeeId} ORDER BY lastMessageAt DESC, id DESC LIMIT 1`))[0];
-      if (conv) {
+      if (Number(emp?.noAutoWhatsapp ?? 0) === 1) {
+        const { NO_AUTO_WHATSAPP_ERROR } = await import("../shared/contactPrefs");
+        status = "opted_out"; detail = NO_AUTO_WHATSAPP_ERROR;
+      } else if (conv) {
         const { replyToConversation } = await import("./whatsappInbox");
         const r = await replyToConversation(Number(conv.id), msg, userId);
         if (r.ok) { status = "sent"; detail = null; }
@@ -765,7 +775,11 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
   }
   const email = emp?.email ? String(emp.email).trim() : "";
   if ((await emailConfigured()) && (await claimNotification(row, "removed", "email"))) {
-    if (!email) {
+    if (Number(emp?.noAutoEmail ?? 0) === 1) {
+      const { NO_AUTO_EMAIL_ERROR } = await import("../shared/contactPrefs");
+      await finishNotification(row, "removed", "email", "opted_out", NO_AUTO_EMAIL_ERROR);
+      out.email = "opted_out";
+    } else if (!email) {
       await finishNotification(row, "removed", "email", "no_contact", "sem email na ficha");
       out.email = "no_contact";
     } else {
