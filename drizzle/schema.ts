@@ -541,6 +541,9 @@ export const employees = mysqlTable("employees", {
 	phone: varchar({ length: 32 }),
 	personalEmail: varchar({ length: 320 }),
 	personalPhone: varchar({ length: 32 }),
+	// "Não enviar" (0370, 17g): sem WhatsApp automáticos/em massa; sem emails automáticos.
+	noAutoWhatsapp: tinyint().default(0).notNull(),
+	noAutoEmail: tinyint().default(0).notNull(),
 	nif: varchar({ length: 20 }),
 	nib: varchar({ length: 30 }),
 	address: text(),

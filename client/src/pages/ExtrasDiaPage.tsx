@@ -63,6 +63,7 @@ import {
   Wand2,
   Sparkles,
   PauseCircle,
+  BellOff,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -92,6 +93,7 @@ import {
   resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
+import { contactPrefsLabel } from "@shared/contactPrefs";
 import {
   AVAILABILITY_PAGE_SIZE,
   AVAILABILITY_STATUS_LABELS,
@@ -2097,7 +2099,7 @@ export function AvailabilitySection() {
 
   const send = trpc.extrasAvailability.sendRequest.useMutation({
     onSuccess: (r) => {
-      toast.success(`Pedido enviado: ${r.sent} extras${r.failed ? `, ${r.failed} falhas` : ""}${r.noEmail ? `, ${r.noEmail} sem email` : ""}`);
+      toast.success(`Pedido enviado: ${r.sent} extras${r.failed ? `, ${r.failed} falhas` : ""}${r.noEmail ? `, ${r.noEmail} sem email` : ""}${r.optedOut ? `, ${r.optedOut} com "Não enviar email"` : ""}`);
       overview.refetch();
     },
     onError: (e) => toast.error(e.message),
@@ -2470,6 +2472,14 @@ export function AvailabilitySection() {
           >
             {ex.fullName}
           </button>
+          {(ex.noAutoWhatsapp || ex.noAutoEmail) && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded border px-1 text-[10px] text-amber-700 dark:text-amber-400"
+              title={`Ficha com "${contactPrefsLabel(ex) ?? ""}": não recebe pedidos nem avisos por ${ex.noAutoWhatsapp && ex.noAutoEmail ? "WhatsApp nem email" : ex.noAutoWhatsapp ? "WhatsApp" : "email"}.`}
+            >
+              <BellOff className="h-3 w-3" />{ex.noAutoWhatsapp && ex.noAutoEmail ? "nada" : ex.noAutoWhatsapp ? "sem WA" : "sem email"}
+            </span>
+          )}
           <button
             type="button"
             className="text-muted-foreground/60 hover:text-foreground"

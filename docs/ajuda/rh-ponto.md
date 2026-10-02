@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
+palavras: não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
 ---
 # RH e ponto
 
@@ -27,6 +27,7 @@ palavras: telefonar ao colaborador, escrever email ao colaborador, rh, recursos 
   - Com o interruptor **"Alertas: a trabalhar sem PDA ou Zello ligado"** ligado, avisa no sino o team leader escalado nesse turno e cidade, os team leaders com ponto aberto na cidade e o supervisor.
   - Quem recebe carrega em **Visto** (com uma nota, se quiser). Sem ligação nem Visto em 10 min (Definições → Operação), e com o interruptor do WhatsApp ligado, vai um WhatsApp (modelo aprovado pela Meta) aos administradores da cidade e à cópia (Definições → Operação → "WhatsApp dos administradores").
 - Na ficha, **Ligar**, **WhatsApp** e **Email** para o colaborador (o telefone e o email da empresa e os pessoais). O WhatsApp fica ligado à ficha e na caixa RH; o email abre na caixa **RH**.
+- **Não enviar WhatsApp / Não enviar email** (na ficha, por baixo dos contactos): desliga para essa pessoa tudo o que é **automático ou em massa** nesse canal: pedidos e lembretes de disponibilidade, avisos de escala, turno cancelado, difusões, lembretes de formação e o pedido da cidade. Responder uma a uma (no WhatsApp ou num email) continua a funcionar. Muda quem pode editar os dados pessoais da ficha (e o próprio); fica no registo.
 - **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).
 - Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.
   - **Aprovar** com horas corrigidas paga essas horas — **0 horas quer dizer que não se paga** o turno (entra na folha com 0 h). Deixar vazio mantém as horas registadas.

@@ -24,6 +24,7 @@ import {
 } from "../../shared/mail";
 import { parseServiceAccount } from "../_core/ai/client";
 import { buildRawMessage } from "./compose";
+import { NO_AUTO_EMAIL_ERROR } from "../../shared/contactPrefs";
 
 export type SendEmailOptions = {
   /** Um ou vários destinatários ("a@x.pt, b@y.pt" também serve). */
@@ -59,6 +60,8 @@ export interface SendResult {
   ok: boolean; messageId?: string; from?: string; accountKey?: string; error?: string;
   /** Ids do Gmail do email enviado (conversa na Comunicação). */
   gmailMessageId?: string; gmailThreadId?: string | null;
+  /** Não saiu porque a ficha tem "Não enviar email" (17g) — não é uma falha. */
+  blocked?: boolean;
 }
 
 /** Envio automático a registar (mail_auto_sends). */
@@ -85,6 +88,8 @@ export interface SystemMailDeps {
   log?(msg: string): void;
   /** Regista um envio automático (best-effort; nunca impede o envio). */
   recordAutoSend?(r: AutoSendRecord): Promise<void>;
+  /** A ficha desligou os emails automáticos? ("Não enviar email", 17g) */
+  noAutoEmail?(employeeId: number): Promise<boolean>;
 }
 
 const SEND_AS_TTL_MS = 10 * 60_000;
@@ -119,6 +124,10 @@ export function accountForAlias(alias: string, mailboxes: readonly MailboxConfig
 export async function sendMailWith(deps: SystemMailDeps, o: SendEmailOptions): Promise<SendResult> {
   const to = listOf(o.to), cc = listOf(o.cc), bcc = listOf(o.bcc);
   if (!to.length && !cc.length && !bcc.length) return { ok: false, error: "Sem destinatários." };
+  // "Não enviar email" na ficha (17g): nenhum email AUTOMÁTICO para essa pessoa.
+  if (o.auto?.employeeId != null && deps.noAutoEmail && (await deps.noAutoEmail(o.auto.employeeId).catch(() => false))) {
+    return { ok: false, error: NO_AUTO_EMAIL_ERROR, blocked: true };
+  }
   if (!deps.dwdAvailable()) {
     deps.log?.(`[email] Não enviado (conta de serviço Google em falta): ${o.subject}`);
     return { ok: false, error: "Conta de serviço Google (delegação) em falta — sem envio de email." };
@@ -215,6 +224,10 @@ export const dbSystemMailDeps: SystemMailDeps = {
   async recordAutoSend(r) {
     const { recordAutoSend } = await import("./autoSends");
     await recordAutoSend(r);
+  },
+  async noAutoEmail(employeeId) {
+    const { employeesWithNoAuto } = await import("../contactPrefs");
+    return (await employeesWithNoAuto([employeeId], "email")).has(employeeId);
   },
 };
 
