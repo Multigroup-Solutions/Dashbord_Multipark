@@ -287,7 +287,8 @@ export function createExternalApiRouter(): Router {
             }
             const id = await createGoogleReview({
               reviewerName: rev.reviewerName || "An\u00f3nimo",
-              rating: rev.rating || 5,
+              // Sem estrelas = 0 ("sem estrelas"), nunca 5 (inflacionava a média).
+              rating: Number(rev.rating) || 0,
               reviewText: rev.reviewText || "",
               reviewDate: new Date().toISOString().slice(0, 19).replace("T", " "),
               status: "pending_response",
@@ -301,7 +302,7 @@ export function createExternalApiRouter(): Router {
               // Rascunho IA best-effort, dentro de um orçamento de tempo (60 s do Vercel).
               try {
                 const { draftReviewReply } = await import("./_core/ai/reviewReply");
-                const aiText = await draftReviewReply({ rating: rev.rating || 5, reviewerName: rev.reviewerName, reviewText: rev.reviewText || "" }, { reviewId: id, timeoutMs: 12_000 });
+                const aiText = await draftReviewReply({ rating: Number(rev.rating) || 0, reviewerName: rev.reviewerName, reviewText: rev.reviewText || "" }, { reviewId: id, timeoutMs: 12_000 });
                 if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
               } catch { /* IA opcional */ }
             }

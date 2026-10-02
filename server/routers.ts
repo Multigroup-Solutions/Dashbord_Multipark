@@ -93,7 +93,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
-import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
+import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
@@ -2203,42 +2203,17 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "view");
       return getGoogleReviewStats(input);
     }),
-    // Transforma uma crítica (tipicamente 1-2★) numa Reclamação para ser
-    // tratada com SLA/atribuição/dossier. A crítica fica marcada como
-    // convertida e ligada à reclamação (o schema já previa isto).
+    // Transforma uma crítica numa Reclamação (prazo, responsável, dossier). A
+    // crítica fica ligada e não volta atrás. Transação: nunca duas reclamações.
     convertToComplaint: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "edit");
-      const review = await getGoogleReviewById(input.id);
-      if (!review) throw new TRPCError({ code: "NOT_FOUND" });
-      if (review.status === "converted_complaint" && review.complaintId) {
-        return { complaintId: review.complaintId, alreadyConverted: true };
-      }
-      const complaintId = await createComplaint({
-        title: `Crítica Google ${review.rating}★ — ${review.reviewerName}`.slice(0, 255),
-        description: review.reviewText ?? null,
-        complaintType: "other",
-        complaintStatus: "new",
-        complaintPriority: review.rating <= 1 ? "high" : "medium",
-        clientName: review.reviewerName,
-        clientEmail: review.reviewerEmail ?? null,
-        vehiclePlate: review.vehiclePlate ?? null,
-        projectId: review.projectId ?? null,
-        createdById: ctx.user.id,
-      });
-      await addComplaintMessage({
-        complaintId,
-        message: `⭐ Convertida da crítica Google #${review.id} (${review.rating}★) por ${ctx.user.name ?? "—"}.${review.aiResponse ? `\n\nResposta preparada na crítica:\n${review.aiResponse}` : ""}`,
-        isInternal: 1,
-        authorId: ctx.user.id,
-        authorName: ctx.user.name ?? null,
-      });
-      try {
-        const { autoLinkComplaintBooking } = await import("./complaintDossier");
-        await autoLinkComplaintBooking(complaintId);
-      } catch { /* best-effort */ }
-      await updateGoogleReview(review.id, { status: "converted_complaint", complaintId } as any);
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "complaint", entityId: complaintId, details: `Convertida da crítica Google #${review.id}` });
-      return { complaintId, alreadyConverted: false };
+      const review = await getGoogleReviewById(input.id); // âmbito de cidade
+      if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      const { convertReviewToComplaint } = await import("./reviewOps");
+      const r = await convertReviewToComplaint(review.id, { id: ctx.user.id, name: ctx.user.name }, { defaultProjectId: defaultScopedProjectId() });
+      if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      if (!r.alreadyConverted) await logActivity({ userId: ctx.user.id, action: "review_to_complaint", entity: "google_review", entityId: review.id, details: `Convertida na reclamação #${r.complaintId}` });
+      return r;
     }),
     create: protectedProcedure.input(z.object({
       reviewerName: z.string().min(1),
@@ -2255,59 +2230,59 @@ export const appRouter = router({
       const reviewDate = (input.reviewDate ? new Date(input.reviewDate) : new Date()).toISOString().slice(0, 19).replace("T", " ");
       const id = await createGoogleReview({
         ...input,
+        // Quem só vê a sua cidade e não escolhe o parque: fica na cidade dessa pessoa.
+        projectId: input.projectId ?? defaultScopedProjectId() ?? undefined,
         reviewDate,
         createdById: ctx.user.id,
       });
+      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gravar a crítica." });
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "google_review", entityId: Number(id), details: `Review ${input.rating}\u2605 de ${input.reviewerName}` });
 
       // Críticas 4–5★: rascunho de resposta por IA (best-effort; nunca publica sozinho).
-      if (input.rating >= 4 && id) {
+      let aiDrafted = false;
+      if (input.rating >= 4) {
         try {
           const { draftReviewReply } = await import("./_core/ai/reviewReply");
-          const aiText = await draftReviewReply(input, { userId: ctx.user.id, reviewId: id });
-          if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
+          const aiText = await draftReviewReply(input, { userId: ctx.user.id, reviewId: Number(id) });
+          if (aiText) { await updateGoogleReview(Number(id), { aiResponse: aiText, aiResponseApproved: 0, status: "ai_responded" }); aiDrafted = true; }
         } catch (e: any) {
           console.warn("[Reviews] rascunho IA falhou:", String(e?.code ?? e?.name ?? "erro"));
         }
       }
 
-      // If rating <= 3, auto-convert to complaint
-      if (input.rating <= 3 && id) {
+      // 1–3★ → reclamação (a mesma conversão do botão; o toast diz se falhou).
+      let complaintId: number | null = null;
+      if (input.rating <= 3) {
         try {
-          const complaintId = await createComplaint({
-            title: `Crítica Google ${input.rating}\u2605 — ${input.reviewerName}`,
-            description: `Avaliação negativa no Google (${input.rating} estrelas):\n\n"${input.reviewText || 'Sem texto'}"\n\nCliente: ${input.reviewerName}${input.reviewerEmail ? '\nEmail: ' + input.reviewerEmail : ''}${input.vehiclePlate ? '\nMatrícula: ' + input.vehiclePlate : ''}`,
-            complaintType: "other",
-            complaintPriority: input.rating === 1 ? "urgent" : "high",
-            clientName: input.reviewerName,
-            clientEmail: input.reviewerEmail || undefined,
-            vehiclePlate: input.vehiclePlate || undefined,
-            projectId: input.projectId || undefined,
-            slaDeadline: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " "), // 24h SLA
-            createdById: ctx.user.id,
-          });
-          await updateGoogleReview(id, { complaintId, status: "converted_complaint" });
-          await logActivity({ userId: ctx.user.id, action: "review_to_complaint", entity: "google_review", entityId: id, details: `Review ${input.rating}\u2605 convertida em reclamação #${complaintId}` });
+          const { convertReviewToComplaint } = await import("./reviewOps");
+          const r = await convertReviewToComplaint(Number(id), { id: ctx.user.id, name: ctx.user.name }, { defaultProjectId: defaultScopedProjectId(), via: "import" });
+          complaintId = r?.complaintId ?? null;
+          if (complaintId) await logActivity({ userId: ctx.user.id, action: "review_to_complaint", entity: "google_review", entityId: Number(id), details: `Review ${input.rating}\u2605 convertida em reclamação #${complaintId}` });
         } catch (e) {
-          console.error("[Reviews] Complaint conversion failed:", e);
+          console.error("[Reviews] Complaint conversion failed:", String((e as any)?.message ?? e));
         }
       }
-
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "google_review", entityId: id ?? 0, details: `Review ${input.rating}\u2605 de ${input.reviewerName}` });
-      return { id };
+      return { id: Number(id), aiDrafted, complaintId };
     }),
+    // Guardar texto = rascunho (por aprovar). "Respondida" só quando publicada:
+    // pela API ("Aprovar e publicar") ou, nas de email, "Já publiquei no Google".
     update: protectedProcedure.input(z.object({
       id: z.number(),
-      aiResponse: z.string().optional(),
+      aiResponse: z.string().max(4096).optional(),
       status: z.enum(["pending_response", "ai_responded", "manually_responded", "converted_complaint", "dismissed"]).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "edit");
-      const { id, ...data } = input;
-      if (data.status === "manually_responded" || data.aiResponse) {
-        (data as any).respondedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
-        (data as any).respondedBy = ctx.user.id;
-      }
-      await updateGoogleReview(id, data);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "google_review", entityId: id, details: `Review atualizada` });
+      const review = await getGoogleReviewById(input.id); // âmbito de cidade
+      if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      const { reviewUpdatePatch } = await import("../shared/reviewRules");
+      const r = reviewUpdatePatch(review, { aiResponse: input.aiResponse, status: input.status }, ctx.user.id, new Date().toISOString().slice(0, 19).replace("T", " "));
+      if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+      await updateGoogleReview(input.id, r.patch as any);
+      const what = r.patch.status === "manually_responded" ? "Marcada como publicada no Google"
+        : r.patch.status === "dismissed" ? "Dispensada"
+        : r.patch.status === "pending_response" ? "Reaberta"
+        : "Rascunho da resposta guardado";
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "google_review", entityId: input.id, details: what });
       return { success: true };
     }),
     generateResponse: protectedProcedure.input(z.object({
@@ -2317,6 +2292,8 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id);
       if (!review) throw new TRPCError({ code: "NOT_FOUND" });
+      const { isMarkedPublished } = await import("../shared/reviewRules");
+      if (isMarkedPublished(review)) throw new TRPCError({ code: "BAD_REQUEST", message: "A resposta já foi marcada como publicada. Para a mudar, primeiro \"Desfazer\"." });
       const { draftReviewReply } = await import("./_core/ai/reviewReply");
       const { aiTrpcError } = await import("./_core/ai/trpcError");
       let aiText: string;
@@ -2325,17 +2302,11 @@ export const appRouter = router({
       } catch (err) {
         throw aiTrpcError(err);
       }
-      await updateGoogleReview(input.id, { aiResponse: aiText, status: "ai_responded" });
+      // Rascunho novo: nunca muda uma convertida/respondida/dispensada de estado.
+      const { draftStatusAfterGenerate } = await import("../shared/reviewRules");
+      const status = draftStatusAfterGenerate(review.status);
+      await updateGoogleReview(input.id, { aiResponse: aiText, aiResponseApproved: 0, ...(status ? { status } : {}) });
       return { response: aiText };
-    }),
-    searchClient: protectedProcedure.input(z.object({
-      name: z.string().optional(),
-      email: z.string().optional(),
-      plate: z.string().optional(),
-    })).query(async ({ ctx, input }) => {
-      // PII de clientes — restringir
-      requireAccess(ctx.user, "criticas", "edit");
-      return searchClientHistory(input.name, input.email, input.plate);
     }),
     // Publica no Google a resposta escrita/gerada no dashboard (Jorge, 16 set
     // 2026: "receber a crítica e responder pela dashboard"). Só críticas
@@ -2354,9 +2325,13 @@ export const appRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: safeError(error) });
       }
     }),
+    // Aprovar = o texto está bom. Não é "respondida": isso só quando publicada.
     approveResponse: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "edit");
-      await updateGoogleReview(input.id, { aiResponseApproved: 1, respondedAt: new Date().toISOString().slice(0, 19).replace("T", " "), respondedBy: ctx.user.id, status: "manually_responded" });
+      const review = await getGoogleReviewById(input.id); // âmbito de cidade
+      if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      if (!String(review.aiResponse ?? "").trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "Não há resposta para aprovar." });
+      await updateGoogleReview(input.id, { aiResponseApproved: 1 });
       await logActivity({ userId: ctx.user.id, action: "approve", entity: "google_review", entityId: input.id, details: "Resposta aprovada" });
       return { success: true };
     }),
@@ -2365,14 +2340,18 @@ export const appRouter = router({
       // Sincronização do Gmail (a mesma do agendador/push; o alias criticas@ cria as críticas).
       const { runMailSync } = await import("./mail/service");
       const r = await runMailSync({ deadlineAt: Date.now() + 45_000 });
+      // O número de registos junta críticas, reclamações e perdidos (o leitor é
+      // um só); os erros vêm à vista — "0 novos" com erros não é "tudo em dia".
       return {
-        reviewsImported: r.pipelineCreated,
-        reviewsSkipped: 0,
-        incidentsImported: 0,
-        incidentsSkipped: 0,
-        message: r.configured
-          ? `Sincronizado: ${r.stored} email(s) novos, ${r.pipelineCreated} registo(s) criados.${r.done ? "" : " Parcial — carregue outra vez para continuar."}`
-          : "Nenhuma caixa Gmail ligada (Definições → Comunicação).",
+        ok: r.ok && r.errors.length === 0,
+        configured: r.configured,
+        done: r.done,
+        emailsStored: r.stored,
+        recordsCreated: r.pipelineCreated,
+        errors: r.errors.slice(0, 10).map((e) => String(e).slice(0, 300)),
+        message: !r.configured
+          ? "Nenhuma caixa Gmail ligada (Definições → Comunicação)."
+          : `${r.errors.length ? `Sincronizado com ${r.errors.length} erro(s)` : "Sincronizado"}: ${r.stored} email(s) novos, ${r.pipelineCreated} registo(s) criados.${r.done ? "" : " Parcial — carrega outra vez para continuar."}`,
       };
     }),
     // Checkout drivers ranking (DB local — alimentada pelo sync da API Multipark)

@@ -2246,46 +2246,13 @@ export async function getGoogleReviewStats(filters?: { projectId?: number }) {
   // Respondida DE FACTO = resposta enviada (respondedAt) ou marcada como
   // respondida manualmente. Rascunho da IA (ai_responded) NÃO conta — era isso
   // que fazia o painel dizer que estava tudo respondido.
-  const isAnswered = (r: typeof all[number]) => r.respondedAt != null || r.status === "manually_responded";
-  const isClosed = (r: typeof all[number]) => r.status === "dismissed" || r.status === "converted_complaint";
-  const responded = all.filter(isAnswered).length;
-  const pending = all.filter(r => !isAnswered(r) && !isClosed(r)).length;
-  const complaints = all.filter(r => r.status === "converted_complaint").length;
+  // Regras únicas de shared/reviewParks (convertida = tem reclamação, seja qual for o estado).
+  const { isReviewAnswered, isReviewConverted, isReviewPending } = await import("../shared/reviewParks");
+  const responded = all.filter(isReviewAnswered).length;
+  const pending = all.filter(isReviewPending).length;
+  const complaints = all.filter(isReviewConverted).length;
   return { total, avg: Math.round(avg * 10) / 10, star1, star2, star3, star4, star5, unrated, pending, responded, complaints };
 }
-
-export async function searchClientHistory(name?: string, email?: string, plate?: string) {
-  const db = await getDb(); if (!db) return { complaints: [], movements: [], reviews: [] };
-  const results: any = { complaints: [], movements: [], reviews: [] };
-
-  // Search complaints by client name/email/plate
-  if (name || email || plate) {
-    const conds: any[] = [];
-    if (name) conds.push(sql`${complaints.clientName} LIKE ${'%' + name + '%'}`);
-    if (email) conds.push(sql`${complaints.clientEmail} LIKE ${'%' + email + '%'}`);
-    if (plate) conds.push(sql`${complaints.vehiclePlate} LIKE ${'%' + plate + '%'}`);
-    results.complaints = await db.select().from(complaints).where(or(...conds)).limit(20);
-  }
-
-  // Search vehicle movements by plate
-  if (plate) {
-    const vehs = await db.select().from(vehicles).where(sql`${vehicles.plate} LIKE ${'%' + plate + '%'}`).limit(5);
-    if (vehs.length > 0) {
-      results.movements = await db.select().from(vehicleMovements).where(eq(vehicleMovements.vehicleId, vehs[0].id)).orderBy(desc(vehicleMovements.createdAt)).limit(20);
-    }
-  }
-
-  // Search previous reviews by name/email
-  if (name || email) {
-    const rConds: any[] = [];
-    if (name) rConds.push(sql`${googleReviews.reviewerName} LIKE ${'%' + name + '%'}`);
-    if (email) rConds.push(sql`${googleReviews.reviewerEmail} LIKE ${'%' + email + '%'}`);
-    results.reviews = await db.select().from(googleReviews).where(and(or(...rConds), projectScope(googleReviews.projectId))).limit(20);
-  }
-
-  return results;
-}
-
 
 // ─── FORMAÇÃO E APOIO ─────────────────────────────────────────────────────────
 
@@ -5975,6 +5942,8 @@ export async function getCheckoutDriversFromDb(
  * Histórico de um agente (todas as ações no período, com a reserva associada).
  * Substitui `/agent/history` da API Multipark.
  */
+const AGENT_HISTORY_LIMIT = 500;
+
 export async function getAgentHistoryFromDb(opts: {
   startDate: string;
   endDate: string;
@@ -5982,6 +5951,7 @@ export async function getAgentHistoryFromDb(opts: {
   userId?: string;
 }): Promise<{
   total: number;
+  truncated?: boolean;
   period: { startDate: string; endDate: string };
   agentName: string;
   agentUserId: string;
@@ -6020,7 +5990,7 @@ export async function getAgentHistoryFromDb(opts: {
   const { scopedCityNamesLive } = await import("./cityScope");
   const range = lisbonDayRangeUtc(opts.startDate, opts.endDate);
   const live = await readLiveHistory({
-    from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: 500,
+    from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: AGENT_HISTORY_LIMIT,
     ...(opts.userId ? { userIds: [opts.userId] } : { agentName: { contains: opts.agentName! } }),
   });
   const rows = live.map((r) => ({
@@ -6053,6 +6023,8 @@ export async function getAgentHistoryFromDb(opts: {
   const first = rows[0];
   return {
     total: history.length,
+    // Leitura limitada a AGENT_HISTORY_LIMIT ações: no limite, o total é "pelo menos".
+    truncated: history.length >= AGENT_HISTORY_LIMIT,
     period: { startDate: opts.startDate, endDate: opts.endDate },
     agentName: first?.agentName ?? opts.agentName ?? "",
     agentUserId: first?.agentUserId ?? opts.userId ?? "",

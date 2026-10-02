@@ -133,7 +133,9 @@ export async function importReview(locationId: number, payload: GoogleReview, us
     if (existing) {
       id = existing.id;
       await tx.update(googleReviews).set({ ...data,
-        ...(contentChanged ? { aiResponse: null, aiResponseApproved: 0, aiDraftAttemptedAt: null } : {}),
+        // Texto/estrelas mudaram: o rascunho volta a "por aprovar" (16d — o texto
+        // fica, pode ser de uma pessoa; "Regenerar" faz um novo).
+        ...(contentChanged ? { aiResponseApproved: 0 } : {}),
         ...(review.reply ? { respondedAt: review.replyAt, status: existing.complaintId ? 'converted_complaint' as const : 'manually_responded' as const }
           : { respondedAt: null, status: existing.complaintId ? 'converted_complaint' as const : existing.status === 'dismissed' ? 'dismissed' as const : 'pending_response' as const }),
       }).where(eq(googleReviews.id, id));
