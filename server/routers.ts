@@ -3818,7 +3818,8 @@ export const appRouter = router({
     }),
 
     breakdown: protectedProcedure.input(z.object({
-      year: z.number(),
+      // Ano inteiro e plausível (um ano lixo era um erro interno do motor)
+      year: z.number().int().min(2000).max(2100),
       projectId: z.number().optional(),
     })).query(async ({ ctx, input }) => {
       // Lucros, salários e IVA — reservado à administração e respeita o deny
