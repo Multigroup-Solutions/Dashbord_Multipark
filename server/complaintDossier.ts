@@ -87,7 +87,9 @@ export async function matchBookingForComplaint(
     if (nameOk && `${b.clientFirstName ?? ""} ${b.clientLastName ?? ""}`.trim().toLowerCase() === name!.toLowerCase()) {
       score += 10; matchedBy.push("nome");
     }
-    if (!matchedBy.length) continue;
+    // Só um sinal forte liga (16c): o nome (homónimos) e a janela de datas
+    // não chegam sozinhos — copiava o email/telefone de outra pessoa.
+    if (!isStrongBookingMatch(matchedBy)) continue;
 
     // Âncora temporal: a queixa costuma chegar durante/logo após a estadia.
     const inMs = b.checkIn ? new Date(String(b.checkIn).replace(" ", "T") + "Z").getTime() : NaN;
@@ -107,6 +109,11 @@ export async function matchBookingForComplaint(
   }
   // Exige pelo menos um sinal forte ou combinação (>= 30).
   return best && best.score >= 30 ? best : null;
+}
+
+/** Há matrícula, email ou telefone iguais? (o nome sozinho não chega). PURA. */
+export function isStrongBookingMatch(matchedBy: readonly string[]): boolean {
+  return matchedBy.some((m) => m === "matricula" || m === "email" || m === "telefone");
 }
 
 /**
@@ -139,6 +146,10 @@ export async function autoLinkComplaintBooking(complaintId: number): Promise<{
       booking = existing;
       matchedBy = ["ref"];
       alreadyLinked = true;
+    } else {
+      // Ref escrita à mão que não se encontra: fica como está — nunca é
+      // trocada sem aviso por outra reserva (16c).
+      return { linked: false, alreadyLinked: false, matchedBy: [], booking: null };
     }
   }
 
@@ -205,6 +216,9 @@ export async function autoLinkLostFoundBooking(itemId: number): Promise<{
       booking = existing;
       matchedBy = ["ref"];
       alreadyLinked = true;
+    } else {
+      // Ref escrita à mão que não se encontra: fica como está (16c).
+      return { linked: false, alreadyLinked: false, matchedBy: [], booking: null };
     }
   }
 

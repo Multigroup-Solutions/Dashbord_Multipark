@@ -2533,12 +2533,14 @@ export async function createLostFoundItem(data: Omit<LostFoundItem, "id" | "crea
   return result.id;
 }
 
-export async function getLostFoundItems(filters?: { status?: string; itemType?: string; projectId?: number; noProject?: boolean; search?: string }) {
-  const db = await getDb(); if (!db) return [];
+export async function getLostFoundItems(filters?: { status?: string; itemType?: string; projectId?: number; noProject?: boolean; search?: string; archived?: boolean }) {
+  const db = await getDb(); if (!db) throw new Error("DB unavailable");
   // Quem vê todas as cidades vê também os casos "Sem cidade" (projectScope é
   // 1=1); `noProject` mostra SÓ esses (e nada a quem está limitado a cidades).
   const conditions: any[] = await projectFilterConds(lostFoundItems.projectId, filters?.noProject ? undefined : filters?.projectId);
   if (filters?.noProject) conditions.push(scopedProjectIds() === undefined ? isNull(lostFoundItems.projectId) : sql`1 = 0`);
+  // Arquivados (16c) só quando pedidos; nunca misturados com os outros.
+  conditions.push(filters?.archived ? sql`${lostFoundItems.archivedAt} IS NOT NULL` : sql`${lostFoundItems.archivedAt} IS NULL`);
   if (filters?.status) conditions.push(eq(lostFoundItems.status, filters.status as any));
   if (filters?.itemType) conditions.push(eq(lostFoundItems.itemType, filters.itemType as any));
   if (filters?.search) conditions.push(or(
@@ -2562,10 +2564,25 @@ export async function updateLostFoundItem(id: number, data: Partial<LostFoundIte
   await closeLinkedTasksIfResolved("lost_found", id, (data as any).status);
 }
 
-/** Apaga o caso, os ficheiros no storage, mensagens e condutores ligados. */
-export async function deleteLostFoundItem(id: number) {
-  const { deleteLostCaseFully } = await import("./caseOps");
-  await deleteLostCaseFully(id);
+/**
+ * "Eliminar" passou a ARQUIVAR (16c): o caso, as mensagens, as fotos, os
+ * condutores e os FICHEIROS ficam. Sai das listas, contadores, lembretes e
+ * cruzamento; os pontos ainda por confirmar são anulados (com registo) e as
+ * tarefas ligadas fecham. Devolve false se já estava arquivado.
+ */
+export async function archiveLostFoundItem(id: number, actorId: number, reason: string): Promise<boolean> {
+  const db = await getDb(); if (!db) throw new Error("DB unavailable");
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const [r] = (await db.update(lostFoundItems)
+    .set({ archivedAt: now, archivedById: actorId, archiveReason: reason.slice(0, 255) } as any)
+    .where(and(eq(lostFoundItems.id, id), sql`${lostFoundItems.archivedAt} IS NULL`))) as any;
+  if (!r?.affectedRows) return false;
+  await db.update(employeePenalties)
+    .set({ status: "dismissed", reviewedById: actorId, reviewedAt: now, clearedAt: now, clearedById: actorId, notes: sql`LEFT(CONCAT(COALESCE(${employeePenalties.notes}, ''), ' · anulada: caso arquivado'), 512)` } as any)
+    .where(and(eq(employeePenalties.reason, "lost_found_investigation"), eq(employeePenalties.relatedId, id), eq(employeePenalties.status, "pending")));
+  const { closeTasksForSource } = await import("./tasksService");
+  await closeTasksForSource("lost_found", id).catch((err: unknown) => console.warn("[lost archive] tarefas:", String((err as any)?.message ?? err)));
+  return true;
 }
 
 export async function addLostFoundPhoto(data: Omit<LostFoundPhoto, "id" | "createdAt">) {
@@ -2614,9 +2631,10 @@ export async function listLostFoundDrivers(itemId: number) {
   return rows.map(r => ({ ...r.d, penaltyStatus: r.penaltyStatus ?? null, pointsConfirmed: r.penaltyStatus === "confirmed" ? 1 : 0 }));
 }
 
-export async function detachLostFoundDriver(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(lostFoundAttachedDrivers).where(eq(lostFoundAttachedDrivers.id, id));
+/** Tira o condutor do caso sem o perder (16c): a linha vai para removed_records. */
+export async function detachLostFoundDriver(id: number, actorId: number) {
+  const { removeWithRecord } = await import("./removedRecords");
+  return removeWithRecord({ table: lostFoundAttachedDrivers, entity: "lost_found_driver", id, parentField: "itemId", reason: "Retirado do caso", removedById: actorId });
 }
 
 export async function getLostFoundMessages(itemId: number) {
@@ -5636,7 +5654,7 @@ export async function getBookingHistoryByBookingId(bookingId: string): Promise<H
   // AO VIVO da BD da Multipark ("History") — a cópia local está congelada desde o #141.
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
-  const rows = await readLiveHistory({ bookingIds: [bookingId], cities: scopedCityNamesLive(), limit: 500 });
+  const rows = await readLiveHistory({ bookingIds: [bookingId], cities: scopedCityNamesLive(), limit: HISTORY_LIST_LIMIT });
   return mapMultiparkHistoryRows(rows);
 }
 
@@ -5644,7 +5662,7 @@ export async function getBookingHistoryByPlate(plate: string): Promise<HistoryRo
   // AO VIVO da BD da Multipark (matrícula "contém", sem hífenes/espaços).
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
-  const rows = await readLiveHistory({ plate: { contains: plate }, cities: scopedCityNamesLive(), limit: 500 });
+  const rows = await readLiveHistory({ plate: { contains: plate }, cities: scopedCityNamesLive(), limit: HISTORY_LIST_LIMIT });
   return mapMultiparkHistoryRows(rows);
 }
 
@@ -5652,7 +5670,7 @@ export async function searchBookingHistory(search: string): Promise<HistoryRow[]
   // AO VIVO da BD da Multipark (reserva, matrícula, agente ou tipo).
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
-  const rows = await readLiveHistory({ text: search, cities: scopedCityNamesLive(), limit: 200 });
+  const rows = await readLiveHistory({ text: search, cities: scopedCityNamesLive(), limit: HISTORY_SEARCH_LIMIT });
   return mapMultiparkHistoryRows(rows);
 }
 
@@ -5767,6 +5785,10 @@ export async function getVehicleAgentsByPlate(
   Array<{
     agentName: string;
     agentEmail: string | null;
+    /** Conta do agente na Multipark e a ficha ligada a ela (nunca pelo nome) — 16c. */
+    agentUserId: string | null;
+    employeeId: number | null;
+    employeeName: string | null;
     actions: number;
     checkins: number;
     checkouts: number;
@@ -5782,19 +5804,22 @@ export async function getVehicleAgentsByPlate(
   // AO VIVO da BD da Multipark (matrícula exata, sem hífenes/espaços).
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
-  const rows: Array<{ agentName: string | null; agentEmail: string | null; changeType: string | null; actionTime: string | null; bookingExternalId: string }> =
+  const rows: Array<{ agentName: string | null; agentUserId: string | null; agentEmail: string | null; changeType: string | null; actionTime: string | null; bookingExternalId: string }> =
     await readLiveHistory({ plate: { exact: plate }, cities: scopedCityNamesLive(), limit: 2000 });
+  // Ações de sistema/API não são de uma pessoa (o nome é o de quem estava do outro lado) — 16c.
+  const { isLinkableAgent } = await import("../shared/agentIdentity");
 
   const map = new Map<
     string,
-    { agentName: string; agentEmail: string | null; actions: number; checkins: number; checkouts: number; movements: number; lastActionAt: string | null; bookings: Set<string>; touchedRef: boolean }
+    { agentName: string; agentEmail: string | null; agentUserId: string | null; actions: number; checkins: number; checkouts: number; movements: number; lastActionAt: string | null; bookings: Set<string>; touchedRef: boolean }
   >();
 
   for (const r of rows) {
-    if (!r.agentName) continue;
+    if (!r.agentName || !isLinkableAgent(r.agentUserId, r.agentName)) continue;
     const e = map.get(r.agentName) ?? {
       agentName: r.agentName,
       agentEmail: r.agentEmail ?? null,
+      agentUserId: r.agentUserId ?? null,
       actions: 0,
       checkins: 0,
       checkouts: 0,
@@ -5815,10 +5840,15 @@ export async function getVehicleAgentsByPlate(
     map.set(r.agentName, e);
   }
 
+  const { employeesForAgentIds } = await import("./personIdentity");
+  const owners = await employeesForAgentIds(Array.from(map.values()).map((e) => e.agentUserId).filter((x): x is string => !!x));
   return Array.from(map.values())
     .map((e) => ({
       agentName: e.agentName,
       agentEmail: e.agentEmail,
+      agentUserId: e.agentUserId,
+      employeeId: e.agentUserId ? owners.get(e.agentUserId)?.id ?? null : null,
+      employeeName: e.agentUserId ? owners.get(e.agentUserId)?.fullName ?? null : null,
       actions: e.actions,
       checkins: e.checkins,
       checkouts: e.checkouts,
@@ -5836,6 +5866,11 @@ export async function getVehicleAgentsByPlate(
  * reservas. `flagged` marca movimentos em reservas/matrículas com caso aberto
  * nos Perdidos & Achados.
  */
+export const AGENT_MOVEMENTS_LIMIT = 2000;
+/** Tetos das listas do histórico de reservas (Perdidos) — acima disto a lista diz-se cortada. */
+export const HISTORY_LIST_LIMIT = 500;
+export const HISTORY_SEARCH_LIMIT = 200;
+
 export async function getAgentMovements(opts: {
   agentName: string;
   from: string; // YYYY-MM-DD
@@ -5853,16 +5888,18 @@ export async function getAgentMovements(opts: {
   }>;
   plates: Array<{ plate: string; actions: number; first: string | null; last: string | null; isCaseVehicle: 0 | 1 }>;
   totals: { actions: number; checkins: number; checkouts: number; movements: number; plates: number; flaggedPlates: number };
+  /** Bateu no teto de linhas: os totais são só de uma parte do período (16c). */
+  truncated: boolean;
 }> {
   const db = await getDb();
-  const empty = { movements: [], plates: [], totals: { actions: 0, checkins: 0, checkouts: 0, movements: 0, plates: 0, flaggedPlates: 0 } };
+  const empty = { movements: [], plates: [], totals: { actions: 0, checkins: 0, checkouts: 0, movements: 0, plates: 0, flaggedPlates: 0 }, truncated: false };
   if (!db) return empty;
 
   // AO VIVO da BD da Multipark: dias de LISBOA → intervalo UTC; só as cidades do utilizador.
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
   const range = lisbonDayRangeUtc(opts.from, opts.to);
-  const rows = await readLiveHistory({ agentName: { exact: opts.agentName }, from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: 2000 });
+  const rows = await readLiveHistory({ agentName: { exact: opts.agentName }, from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: AGENT_MOVEMENTS_LIMIT });
 
   const caseRefs = await getLostFoundBookingRefSet();
   const normPlate = (p: string) => p.replace(/[\s-]/g, "").toUpperCase();
@@ -5905,7 +5942,7 @@ export async function getAgentMovements(opts: {
   totals.plates = plates.length;
   totals.flaggedPlates = plates.filter((p) => p.isCaseVehicle).length;
 
-  return { movements, plates, totals };
+  return { movements, plates, totals, truncated: rows.length >= AGENT_MOVEMENTS_LIMIT };
 }
 
 // ─── MULTIPARK BOOKING HISTORY (local DB instead of remote API) ─────────────

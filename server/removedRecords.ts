@@ -9,7 +9,7 @@ import type { MySqlColumn, MySqlTable } from "drizzle-orm/mysql-core";
 import { removedRecords } from "../drizzle/schema";
 import { getDb } from "./db";
 
-export type RemovedEntity = "complaint_photo" | "complaint_driver" | "lost_found_photo" | "lost_found_driver";
+export type RemovedEntity = "complaint_photo" | "complaint_driver" | "lost_found_photo" | "lost_found_driver" | "lost_found_return_photo";
 
 /** Linha → texto JSON para o arquivo (datas como texto). PURA. */
 export function removedRowJson(row: Record<string, unknown>): string {

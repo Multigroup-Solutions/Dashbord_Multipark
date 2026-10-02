@@ -34,6 +34,7 @@ import {
   HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 // ─── BOOKING HISTORY VIEW ────────────────────────────────────────────────────
 
@@ -41,11 +42,14 @@ export function BookingHistoryView({ onBack }: { onBack: () => void }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
 
-  const { data: history = [], isLoading } = trpc.lostFound.bookingHistory.useQuery(
+  const historyQ = trpc.lostFound.bookingHistory.useQuery(
     { search: activeSearch || undefined },
     { enabled: !!activeSearch }
   );
-  const { data: driverStats = [] } = trpc.lostFound.bookingHistoryDriverStats.useQuery();
+  const { isLoading } = historyQ;
+  const history = historyQ.data?.rows ?? [];
+  const driverStatsQ = trpc.lostFound.bookingHistoryDriverStats.useQuery();
+  const { data: driverStats = [] } = driverStatsQ;
 
   const handleSearch = () => setActiveSearch(searchTerm.trim());
 
@@ -67,7 +71,7 @@ export function BookingHistoryView({ onBack }: { onBack: () => void }) {
               <Clock className="w-6 h-6 text-indigo-500" /> Histórico de Reservas
             </h1>
             <p className="text-muted-foreground">
-              Histórico Multipark sincronizado (cron 15min). Condutores envolvidos em casos de perdidos/achados
+              Histórico lido ao vivo da Multipark (nas tuas cidades). Condutores envolvidos em casos de perdidos/achados
               aparecem sinalizados.
             </p>
           </div>
@@ -91,6 +95,7 @@ export function BookingHistoryView({ onBack }: { onBack: () => void }) {
         </Button>
       </div>
 
+      {driverStatsQ.isError && <QueryErrorNote error={driverStatsQ.error} what="a atividade por condutor" onRetry={() => driverStatsQ.refetch()} retrying={driverStatsQ.isFetching} />}
       {/* Driver stats summary */}
       {driverStats.length > 0 && (
         <Card>
@@ -159,13 +164,19 @@ export function BookingHistoryView({ onBack }: { onBack: () => void }) {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">
-              Resultados para "{activeSearch}" — {history.length} registos
+              Resultados para "{activeSearch}"{historyQ.data ? ` — ${history.length}${historyQ.data.truncated ? "+" : ""} registos` : ""}
             </CardTitle>
+            {/* Cortado no teto: diz-se (antes eram "os resultados") — 16c. */}
+            {historyQ.data?.truncated && <p className="text-xs text-amber-800">Mostra só os primeiros {historyQ.data.limit}: há mais. Refina a pesquisa (reserva ou matrícula).</p>}
           </CardHeader>
           <CardContent className="p-0">
-            {history.length === 0 ? (
+            {historyQ.isError ? (
+              <div className="p-3"><QueryErrorNote error={historyQ.error} what="o histórico" onRetry={() => historyQ.refetch()} retrying={historyQ.isFetching} /></div>
+            ) : isLoading ? (
+              <p className="p-4 text-center text-muted-foreground animate-pulse">A procurar na Multipark…</p>
+            ) : history.length === 0 ? (
               <p className="p-4 text-center text-muted-foreground">
-                Sem resultados. Confirma que a reserva já foi sincronizada pela API Multipark.
+                Sem resultados na Multipark para esta pesquisa (nas tuas cidades).
               </p>
             ) : (
               <div className="overflow-x-auto">

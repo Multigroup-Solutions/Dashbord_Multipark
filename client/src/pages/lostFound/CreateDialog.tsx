@@ -34,19 +34,24 @@ import {
   HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 // ─── CREATE DIALOG ────────────────────────────────────────────────────────────
 
 // ─── RESERVATION PREVIEW (histórico da reserva, BD Multipark) ────────────────────
 
 export function LostFoundReservationPreview({ bookingId }: { bookingId: string }) {
-  const { data, isLoading } = trpc.lostFound.bookingTimeline.useQuery(
+  const q = trpc.lostFound.bookingTimeline.useQuery(
     { bookingId },
     { enabled: bookingId.length >= 4 }
   );
+  const { data, isLoading } = q;
 
   if (!bookingId || bookingId.length < 4) return null;
   if (isLoading) return <p className="text-xs text-muted-foreground mt-2 animate-pulse">A carregar histórico...</p>;
+  // Multipark sem resposta ≠ "nenhum histórico" (16c).
+  if (q.isError) return <div className="mt-2"><QueryErrorNote error={q.error} what="o histórico" onRetry={() => q.refetch()} retrying={q.isFetching} /></div>;
+  if ((data as any)?.error) return <div className="mt-2"><QueryErrorNote error={{ message: (data as any).error }} what="o histórico" onRetry={() => q.refetch()} retrying={q.isFetching} /></div>;
 
   const history = data?.history || [];
   if (history.length === 0) return <p className="text-xs text-amber-600 mt-2">Nenhum histórico encontrado para este ID.</p>;

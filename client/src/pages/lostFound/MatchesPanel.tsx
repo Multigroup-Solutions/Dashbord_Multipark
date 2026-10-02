@@ -7,6 +7,7 @@ import { useLocation } from "wouter";
 import { Link2, Check, X, RefreshCw, ExternalLink } from "lucide-react";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { lostFoundSide } from "@shared/commsAi";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { BASE_PATH, TYPE_CONFIG } from "./config";
 
 function scoreCls(score: number): string {
@@ -24,7 +25,9 @@ export function MatchesPanel({ item, canEdit }: { item: any; canEdit: boolean })
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const side = lostFoundSide(item);
-  const q = trpc.lostFound.matches.useQuery({ id: item.id }, { enabled: !!side, retry: false });
+  // Lê sempre: uma correspondência CONFIRMADA continua visível depois de o caso
+  // passar a Encontrado/Devolvido/Fechado (antes só ficava numa nota) — 16c.
+  const q = trpc.lostFound.matches.useQuery({ id: item.id }, { retry: false });
   const recompute = trpc.lostFound.recomputeMatches.useMutation({
     onSuccess: (r) => {
       utils.lostFound.matches.invalidate({ id: item.id });
@@ -40,16 +43,18 @@ export function MatchesPanel({ item, canEdit }: { item: any; canEdit: boolean })
     },
     onError: (e) => toast.error(e.message || "Erro ao guardar"),
   });
-  if (!side) return null;
-  const rows = q.data ?? [];
+  const all = q.data ?? [];
+  // Caso fechado (sem lado para procurar): só as confirmadas.
+  const rows = side ? all : all.filter((m) => m.status === "confirmed");
+  if (!side && !rows.length && !q.isError) return null;
 
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           <Link2 className="w-4 h-4 text-violet-600" /> Possíveis correspondências
-          <Badge variant="outline" className="text-[11px]">{side === "lost" ? "objetos encontrados" : "perdidos reportados"}</Badge>
-          {canEdit && (
+          {side && <Badge variant="outline" className="text-[11px]">{side === "lost" ? "objetos encontrados" : "perdidos reportados"}</Badge>}
+          {canEdit && side && (
             <Button size="sm" variant="ghost" className="ml-auto h-7 px-2 text-xs" disabled={recompute.isPending} onClick={() => recompute.mutate({ id: item.id })}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> Procurar
             </Button>
@@ -57,7 +62,8 @@ export function MatchesPanel({ item, canEdit }: { item: any; canEdit: boolean })
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        {!rows.length && <p className="text-xs text-muted-foreground">{q.isLoading ? "A carregar…" : "Sem correspondências sugeridas."}</p>}
+        {q.isError && <QueryErrorNote error={q.error} what="as correspondências" onRetry={() => q.refetch()} retrying={q.isFetching} />}
+        {!rows.length && !q.isError && <p className="text-xs text-muted-foreground">{q.isLoading ? "A carregar…" : "Sem correspondências sugeridas."}</p>}
         {rows.map((m) => (
           <div key={m.id} className="rounded-md border p-2 space-y-1.5">
             <div className="flex items-center gap-1.5 flex-wrap text-sm">

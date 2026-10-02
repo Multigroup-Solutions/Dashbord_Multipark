@@ -34,6 +34,7 @@ import {
   HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, RefreshCw, ExternalLink } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 /**
  * "Cruzamento de condutores" — o valor principal dos Perdidos: num período e
@@ -60,11 +61,12 @@ export function CrossRefView({ onBack }: { onBack: () => void }) {
   const pct = (v: number | null | undefined) => v == null ? "—" : `${(v * 100).toLocaleString("pt-PT", { maximumFractionDigits: 1 })}%`;
 
   // "Movimentos por Condutor": escolher um condutor + período e ver tudo o que
-  // ele mexeu (fonte: histórico Multipark sincronizado na BD local).
+  // ele mexeu (fonte: histórico AO VIVO da Multipark, nas cidades de quem vê).
   const [agent, setAgent] = useState("");
   const [from, setFrom] = useState(() => fmtDay(new Date(Date.now() - 30 * 86_400_000)));
   const [to, setTo] = useState(() => fmtDay(new Date()));
-  const { data: drivers = [] } = trpc.lostFound.driversForPeriod.useQuery({ from, to }, { retry: false });
+  const driversQ = trpc.lostFound.driversForPeriod.useQuery({ from, to }, { retry: false });
+  const { data: drivers = [] } = driversQ;
   const movQ = trpc.lostFound.agentMovements.useQuery(
     { agentName: agent, from, to },
     { enabled: !!agent, retry: false },
@@ -114,22 +116,26 @@ export function CrossRefView({ onBack }: { onBack: () => void }) {
               <input type="checkbox" checked={noProject} onChange={(e) => setNoProject(e.target.checked)} /> Só casos sem cidade
             </label>
             {cross && (
-              <div className="flex gap-2 pb-1 text-xs">
+              <div className="flex flex-wrap gap-2 pb-1 text-xs">
                 <Badge variant="outline">{cross.totalCases} casos com condutores</Badge>
                 <Badge variant="outline">média da equipa: {pct(cross.teamRate)}</Badge>
               </div>
             )}
           </div>
+          {/* Leituras cortadas no teto: o ranking é só de uma parte (16c). */}
+          {cross?.truncated && <p className="text-xs text-amber-800 pt-1">Resultado incompleto: o histórico do período passou o teto de leitura. Encurta o período para ver tudo.</p>}
         </CardHeader>
         <CardContent>
           {crossQ.isLoading ? (
             <div className="flex justify-center py-10"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
+          ) : crossQ.isError ? (
+            <QueryErrorNote error={crossQ.error} what="o cruzamento" onRetry={() => crossQ.refetch()} retrying={crossQ.isFetching} />
           ) : !cross || cross.rows.length === 0 ? (
             <div className="text-center py-10">
               <Package className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
               <p className="text-muted-foreground">Sem casos com condutores ligados neste período.</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Os casos precisam de reserva ligada (histórico Multipark sincronizado) ou de condutores anexados.
+                Os casos precisam de reserva ligada (histórico lido ao vivo da Multipark) ou de condutores anexados.
               </p>
             </div>
           ) : (
@@ -182,7 +188,9 @@ export function CrossRefView({ onBack }: { onBack: () => void }) {
                 <p className="font-medium">Detalhe — {detailQ.data?.name ?? "…"}</p>
                 <Button size="sm" variant="ghost" onClick={() => setSelKey(null)}>fechar</Button>
               </div>
-              {detailQ.isLoading ? <p className="text-xs text-muted-foreground">A carregar…</p> : detailQ.data && (
+              {detailQ.isLoading ? <p className="text-xs text-muted-foreground">A carregar…</p> : detailQ.isError ? (
+                <QueryErrorNote error={detailQ.error} what="o detalhe do condutor" onRetry={() => detailQ.refetch()} retrying={detailQ.isFetching} />
+              ) : detailQ.data && (
                 <>
                   <div className="space-y-1">
                     <p className="text-xs font-medium text-muted-foreground">Casos</p>
@@ -255,14 +263,18 @@ export function CrossRefView({ onBack }: { onBack: () => void }) {
             </div>
           </div>
 
+          {driversQ.isError && <QueryErrorNote error={driversQ.error} what="os condutores do período" onRetry={() => driversQ.refetch()} retrying={driversQ.isFetching} />}
           {!agent ? (
             <p className="text-sm text-muted-foreground py-6 text-center">Escolhe um condutor para ver os movimentos.</p>
           ) : movQ.isLoading ? (
             <div className="flex justify-center py-10"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
+          ) : movQ.isError ? (
+            <QueryErrorNote error={movQ.error} what="os movimentos do condutor" onRetry={() => movQ.refetch()} retrying={movQ.isFetching} />
           ) : !mov || mov.movements.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-6 text-center">Sem movimentos deste condutor no período (a BD local só tem o histórico já sincronizado pelo cron).</p>
+            <p className="text-sm text-muted-foreground py-6 text-center">Sem movimentos deste condutor no período (Multipark, nas tuas cidades).</p>
           ) : (
             <>
+              {mov.truncated && <p className="text-xs text-amber-800">Mostra só os primeiros movimentos do período (há mais): os totais são de uma parte. Encurta o período.</p>}
               <div className="flex flex-wrap gap-2 text-sm">
                 <Badge variant="outline">{mov.totals.actions} ações</Badge>
                 <Badge variant="outline" className="text-green-600">{mov.totals.checkins} check-ins</Badge>

@@ -39,26 +39,44 @@ import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH,
 import { ReturnPanel } from "./ReturnPanel";
 import { MatchesPanel } from "./MatchesPanel";
 import { CaseDriversPanel } from "./CaseDriversPanel";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { compressImage } from "@/lib/compressImage";
+import { useConfirm } from "../training/shared";
+import { Archive, ArchiveRestore } from "lucide-react";
 
 // ─── DETAIL VIEW ──────────────────────────────────────────────────────────────
 
 export function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () => void }) {
-  const { data: item, isLoading } = trpc.lostFound.getById.useQuery({ id });
-  const { data: photos = [] } = trpc.lostFound.getPhotos.useQuery({ itemId: id });
-  const { data: messages = [] } = trpc.lostFound.getMessages.useQuery({ itemId: id });
-  const { data: vehicleAgents = [] } = trpc.lostFound.vehicleAgents.useQuery(
+  const itemQ = trpc.lostFound.getById.useQuery({ id });
+  const { data: item, isLoading } = itemQ;
+  // Quem só vê os próprios casos não lê a reserva, a viatura nem os condutores
+  // (as rotas recusam): fica sem esses separadores em vez de erros (16c).
+  const seesMore = seesBeyondOwn(user, "perdidos");
+  const canEdit = can(user, "perdidos", "edit");
+  const canManage = can(user, "perdidos", "manage");
+  const photosQ = trpc.lostFound.getPhotos.useQuery({ itemId: id });
+  const { data: photos = [] } = photosQ;
+  const messagesQ = trpc.lostFound.getMessages.useQuery({ itemId: id });
+  const { data: messages = [] } = messagesQ;
+  const vehicleAgentsQ = trpc.lostFound.vehicleAgents.useQuery(
     { plate: item?.vehiclePlate || "", currentBookingRef: item?.bookingRef || undefined },
-    { enabled: !!item?.vehiclePlate }
+    { enabled: seesMore && !!item?.vehiclePlate }
   );
-  const { data: apiTimeline, isLoading: timelineLoading } = trpc.lostFound.bookingTimeline.useQuery(
+  const { data: vehicleAgents = [] } = vehicleAgentsQ;
+  const timelineQ = trpc.lostFound.bookingTimeline.useQuery(
     { bookingId: item?.bookingRef || "" },
-    { enabled: !!item?.bookingRef }
+    { enabled: seesMore && !!item?.bookingRef }
   );
+  const { data: apiTimeline, isLoading: timelineLoading } = timelineQ;
   // Dossier completo da reserva ligada — automático, sem passos manuais.
-  const { data: dossier } = trpc.lostFound.bookingDossier.useQuery(
+  const dossierQ = trpc.lostFound.bookingDossier.useQuery(
     { reservationRef: item?.bookingRef || "" },
-    { enabled: !!item?.bookingRef }
+    { enabled: seesMore && !!item?.bookingRef }
   );
+  const dossier = dossierQ.data;
+  const [confirm, confirmUi] = useConfirm();
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveReason, setArchiveReason] = useState("");
   const autoLinkMut = trpc.lostFound.autoLink.useMutation({
     onSuccess: (r) => {
       if (r.linked) {
@@ -86,12 +104,20 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
     return filtered
       .sort((a: any, b: any) => new Date(b.actionDate || 0).getTime() - new Date(a.actionDate || 0).getTime());
   }, [apiTimeline, showAllHist]);
-  const { data: lfProjects = [] } = trpc.projects.list.useQuery();
-  const { data: lfEmployees = [] } = trpc.rh.list.useQuery();
+  const { data: lfProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
+  const { data: lfEmployees = [] } = trpc.rh.list.useQuery(undefined, { enabled: canEdit });
   const updateMut = trpc.lostFound.update.useMutation();
   const uploadPhotoMut = trpc.lostFound.uploadPhoto.useMutation();
   const addMsgMut = trpc.lostFound.addMessage.useMutation();
-  const deleteMut = trpc.lostFound.delete.useMutation();
+  // "Eliminar" passou a arquivar (com motivo): nada se apaga, nem os ficheiros (16c).
+  const archiveMut = trpc.lostFound.archive.useMutation({
+    onSuccess: () => { toast.success("Caso arquivado"); setArchiveOpen(false); setArchiveReason(""); utils.lostFound.list.invalidate(); utils.lostFound.getById.invalidate({ id }); onBack(); },
+    onError: (e) => toast.error(e.message || "Erro ao arquivar"),
+  });
+  const unarchiveMut = trpc.lostFound.unarchive.useMutation({
+    onSuccess: () => { toast.success("Caso tirado do arquivo"); utils.lostFound.list.invalidate(); utils.lostFound.getById.invalidate({ id }); },
+    onError: (e) => toast.error(e.message || "Erro ao tirar do arquivo"),
+  });
   const convertMut = trpc.lostFound.convertToComplaint.useMutation({
     onSuccess: (r) => { toast.success(`Convertido na Reclamação #${r.newId} (este caso fica fechado e ligado)`); utils.lostFound.list.invalidate(); utils.lostFound.getById.invalidate({ id }); utils.complaints.list.invalidate(); },
     onError: (e) => toast.error(e.message || "Erro ao mover"),
@@ -104,9 +130,19 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>(null);
 
+  // Erro (sem acesso, não existe, falha) ≠ a carregar para sempre (16c).
+  if (itemQ.isError) {
+    return (
+      <div className="space-y-4">
+        <Button variant="outline" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
+        <QueryErrorNote error={itemQ.error} what={`o caso #${id}`} onRetry={() => itemQ.refetch()} retrying={itemQ.isFetching} />
+      </div>
+    );
+  }
   if (isLoading || !item) return <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
   const TypeIcon = TYPE_CONFIG[item.itemType]?.icon || Package;
+  const archived = !!(item as any).archivedAt;
 
   const startEditing = () => {
     setEditForm({
@@ -126,16 +162,17 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
 
   const handleSaveEdit = async () => {
     try {
+      // Campos de contacto vazios limpam (antes ficavam como estavam) — 16c.
       await updateMut.mutateAsync({
         id,
         clientName: editForm.clientName || undefined,
-        clientEmail: editForm.clientEmail || undefined,
-        clientPhone: editForm.clientPhone || undefined,
-        bookingRef: editForm.bookingRef || undefined,
-        vehiclePlate: editForm.vehiclePlate || undefined,
+        clientEmail: editForm.clientEmail.trim(),
+        clientPhone: editForm.clientPhone.trim(),
+        bookingRef: editForm.bookingRef.trim(),
+        vehiclePlate: editForm.vehiclePlate.trim(),
         itemType: editForm.itemType || undefined,
         description: editForm.description || undefined,
-        estimatedValue: editForm.estimatedValue ? Number(editForm.estimatedValue) : undefined,
+        estimatedValue: editForm.estimatedValue === "" || editForm.estimatedValue == null ? 0 : Number(editForm.estimatedValue),
         priority: editForm.priority || undefined,
         clientNotes: editForm.clientNotes || null,
       });
@@ -143,44 +180,46 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
       utils.lostFound.list.invalidate();
       setIsEditing(false);
       toast.success("Registo atualizado");
-    } catch { toast.error("Erro ao atualizar"); }
+    } catch (e: any) { toast.error(e?.message || "Erro ao atualizar"); }
   };
 
+  // Mutações com erro visível (antes falhavam em silêncio) — 16c.
   const handleStatusChange = async (status: string) => {
-    await updateMut.mutateAsync({ id, status: status as (typeof KANBAN_COLUMNS)[number] });
-    utils.lostFound.getById.invalidate({ id });
-    utils.lostFound.list.invalidate();
-    toast.success("Estado atualizado");
+    try {
+      await updateMut.mutateAsync({ id, status: status as (typeof KANBAN_COLUMNS)[number] });
+      utils.lostFound.getById.invalidate({ id });
+      utils.lostFound.list.invalidate();
+      toast.success("Estado atualizado");
+    } catch (e: any) { toast.error(e?.message || "Erro ao mudar o estado"); }
   };
 
   const handleSendMsg = async () => {
     if (!newMsg.trim()) return;
-    await addMsgMut.mutateAsync({ itemId: id, message: newMsg, isInternal });
-    setNewMsg("");
-    utils.lostFound.getMessages.invalidate({ itemId: id });
-    toast.success("Mensagem adicionada");
+    try {
+      await addMsgMut.mutateAsync({ itemId: id, message: newMsg, isInternal });
+      setNewMsg("");
+      utils.lostFound.getMessages.invalidate({ itemId: id });
+      toast.success("Mensagem guardada no caso");
+    } catch (e: any) { toast.error(e?.message || "Erro ao guardar a mensagem"); }
   };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = (reader.result as string).split(",")[1];
+    const original = e.target.files?.[0];
+    e.target.value = "";
+    if (!original) return;
+    try {
+      // Fotos reduzidas antes de enviar (limite de ~4,5 MB por pedido); PDFs tal e qual.
+      const file = original.type.startsWith("image/") ? await compressImage(original, 1600, 0.85) : original;
+      const base64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
       await uploadPhotoMut.mutateAsync({ itemId: id, base64, filename: file.name });
       utils.lostFound.getPhotos.invalidate({ itemId: id });
       toast.success("Foto carregada");
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
-  };
-
-  const handleDelete = async () => {
-    if (!confirm("Tens a certeza que queres eliminar este registo?")) return;
-    await deleteMut.mutateAsync({ id });
-    utils.lostFound.list.invalidate();
-    toast.success("Registo eliminado");
-    onBack();
+    } catch (err: any) { toast.error(err?.message || "Não foi possível carregar a foto"); }
   };
 
   return (
@@ -225,8 +264,8 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
             )}
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>
-        <Select value={item.status} onValueChange={handleStatusChange} disabled={item.status === "converted"}>
+        {canEdit && !archived && <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>}
+        <Select value={item.status} onValueChange={handleStatusChange} disabled={!canEdit || archived || item.status === "converted"}>
           <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
           <SelectContent>
             {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "converted" || item.status === "converted").map(([k, v]) => (
@@ -234,23 +273,56 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
             ))}
           </SelectContent>
         </Select>
-        {can(user, "perdidos", "manage") && item.status !== "converted" && (
+        {canManage && (
           <>
-            <Button
+            {item.status !== "converted" && !archived && <Button
               variant="outline" size="sm"
               disabled={convertMut.isPending}
               title="Isto afinal é uma Reclamação — cria a reclamação e fecha este caso (ligados)"
-              onClick={() => {
-                if (!confirm("Converter em Reclamação? A reclamação nova leva mensagens, fotos e condutores; este caso fica fechado como 'Convertido' e ligado a ela.")) return;
+              onClick={async () => {
+                if (!(await confirm({ title: "Converter em Reclamação?", description: "A reclamação nova leva mensagens, fotos e condutores; este caso fica fechado como 'Convertido' e ligado a ela.", confirmLabel: "Converter" }))) return;
                 convertMut.mutate({ id });
               }}
             >
               <MessageSquareWarning className="w-4 h-4 mr-1" /> {convertMut.isPending ? "A converter…" : "Converter em Reclamação"}
-            </Button>
-            <Button variant="destructive" size="sm" onClick={handleDelete}><Trash2 className="w-4 h-4" /></Button>
+            </Button>}
+            {archived ? (
+              <Button variant="outline" size="sm" disabled={unarchiveMut.isPending} onClick={() => unarchiveMut.mutate({ id })}>
+                <ArchiveRestore className="w-4 h-4 mr-1" /> {unarchiveMut.isPending ? "A tirar…" : "Tirar do arquivo"}
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setArchiveOpen(true)} title="Sai das listas e contadores; nada é apagado">
+                <Archive className="w-4 h-4 mr-1" /> Arquivar
+              </Button>
+            )}
           </>
         )}
       </div>
+
+      {archived && (
+        <div role="status" className="rounded-md border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800 dark:bg-slate-900/40 dark:text-slate-200">
+          <Archive className="w-4 h-4 inline mr-1" /> Arquivado{(item as any).archivedAt ? ` em ${fmtPTDateTime((item as any).archivedAt)}` : ""}{(item as any).archiveReason ? ` — ${(item as any).archiveReason}` : ""}.
+          {" "}Não entra nas listas, contadores, lembretes nem no cruzamento. Nada foi apagado.
+        </div>
+      )}
+
+      <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Arquivar o caso #{id}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Sai das listas, dos contadores, dos lembretes e do cruzamento. O caso, as mensagens, as fotos e os ficheiros ficam guardados; os pontos ainda por confirmar são anulados. Pode voltar com "Tirar do arquivo".</p>
+          <div>
+            <Label>Porquê?</Label>
+            <Input value={archiveReason} onChange={(e) => setArchiveReason(e.target.value)} placeholder="Ex.: duplicado do #123, teste" maxLength={255} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveOpen(false)}>Cancelar</Button>
+            <Button disabled={archiveReason.trim().length < 3 || archiveMut.isPending} onClick={() => archiveMut.mutate({ id, reason: archiveReason.trim() })}>
+              <Archive className="w-4 h-4 mr-1" /> {archiveMut.isPending ? "A arquivar…" : "Arquivar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {confirmUi}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Details */}
@@ -258,11 +330,11 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
           <Tabs defaultValue="details">
             <TabsList className="flex-wrap">
               <TabsTrigger value="details">Detalhes</TabsTrigger>
-              <TabsTrigger value="messages">Mensagens ({messages.length})</TabsTrigger>
-              <TabsTrigger value="photos">Fotos ({photos.length})</TabsTrigger>
-              {item.vehiclePlate && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
-              {item.bookingRef && <TabsTrigger value="booking-history">Histórico ({timelineHist.length})</TabsTrigger>}
-              <TabsTrigger value="comms">Comunicações</TabsTrigger>
+              <TabsTrigger value="messages">Mensagens{messagesQ.isError ? "" : ` (${messages.length})`}</TabsTrigger>
+              <TabsTrigger value="photos">Fotos{photosQ.isError ? "" : ` (${photos.length})`}</TabsTrigger>
+              {seesMore && item.vehiclePlate && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
+              {seesMore && item.bookingRef && <TabsTrigger value="booking-history">Histórico{timelineQ.isError || (apiTimeline as any)?.error ? "" : ` (${timelineHist.length})`}</TabsTrigger>}
+              {seesMore && <TabsTrigger value="comms">Comunicações</TabsTrigger>}
             </TabsList>
 
             <TabsContent value="details" className="space-y-4">
@@ -314,9 +386,9 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
               </Card>
 
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
                   <CardTitle className="text-base">Dados da Reserva</CardTitle>
-                  {!item.bookingRef ? (
+                  {!seesMore ? null : !item.bookingRef ? (canEdit && !archived &&
                     <Button
                       size="sm" variant="outline"
                       disabled={autoLinkMut.isPending}
@@ -334,7 +406,16 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   {!item.bookingRef ? (
-                    <p className="text-xs text-muted-foreground">Sem reserva ligada — usa o botão para procurar pela matrícula/contactos do cliente.</p>
+                    <p className="text-xs text-muted-foreground">Sem reserva ligada{canEdit ? " — usa o botão para procurar pela matrícula/contactos do cliente." : "."}</p>
+                  ) : !seesMore ? (
+                    <p className="text-xs text-muted-foreground">Ref. Reserva: {item.bookingRef}</p>
+                  ) : dossierQ.isError ? (
+                    <QueryErrorNote error={dossierQ.error} what="a reserva" onRetry={() => dossierQ.refetch()} retrying={dossierQ.isFetching} />
+                  ) : dossier?.error ? (
+                    // Multipark sem resposta ≠ "não corresponde a nenhuma reserva" (16c).
+                    <QueryErrorNote error={{ message: dossier.error }} what="a reserva" onRetry={() => dossierQ.refetch()} retrying={dossierQ.isFetching} />
+                  ) : !dossier ? (
+                    <p className="text-xs text-muted-foreground animate-pulse">A ler a reserva da Multipark…</p>
                   ) : dossier?.booking ? (() => {
                     const b: any = dossier.booking;
                     const eur = (v: any) => v != null ? Number(v).toLocaleString("pt-PT", { style: "currency", currency: b.currency || "EUR" }) : "—";
@@ -361,26 +442,26 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                       </div>
                     );
                   })() : (
-                    <p className="text-xs text-muted-foreground">A ref. "{item.bookingRef}" não corresponde a nenhuma reserva na base de dados.</p>
+                    <p className="text-xs text-muted-foreground">A ref. "{item.bookingRef}" não corresponde a nenhuma reserva na Multipark (nas tuas cidades).</p>
                   )}
                 </CardContent>
               </Card>
 
-              <ClientHistoryCard
+              {seesMore && <ClientHistoryCard
                 email={item.clientEmail}
                 phone={item.clientPhone}
                 plate={item.vehiclePlate}
                 name={item.clientName}
                 highlightRef={item.bookingRef}
-              />
+              />}
 
-              <LinkInboundEmailButton
+              {canEdit && !archived && <LinkInboundEmailButton
                 module="lostfound" alias="perdidos" caseId={item.id}
                 defaultSearch={item.clientEmail || item.clientName}
                 onLinked={() => utils.lostFound.getMessages.invalidate({ itemId: item.id })}
-              />
+              />}
 
-              <CaseAssignmentCard
+              {canEdit && !archived && <CaseAssignmentCard
                 projectId={item.projectId}
                 assigneeId={item.assignedTo}
                 dueDate={item.dueDate}
@@ -391,8 +472,11 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                 onSave={(patch) => updateMut.mutate({
                   id: item.id, projectId: patch.projectId, assignedTo: patch.assigneeId,
                   investigatedById: patch.assigneeId, dueDate: patch.dueDate,
-                } as any, { onSuccess: () => { utils.lostFound.getById.invalidate({ id: item.id }); toast.success("Atribuição guardada"); } })}
-              />
+                } as any, {
+                  onSuccess: () => { utils.lostFound.getById.invalidate({ id: item.id }); toast.success("Atribuição guardada"); },
+                  onError: (e) => toast.error(e.message || "Não foi possível guardar a atribuição"),
+                })}
+              />}
 
               {item.vehiclePlate && (
                 <Card>
@@ -415,46 +499,51 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                 </Card>
               )}
 
-              <MatchesPanel item={item} canEdit={can(user, "perdidos", "edit")} />
+              {seesMore && <MatchesPanel item={item} canEdit={canEdit && !archived} />}
 
               {canSeeDrivers && <RepeatDriversCard itemId={item.id} />}
 
-              <ReturnPanel item={item} />
+              <ReturnPanel item={item} canEdit={canEdit && !archived} />
 
-              <CaseDriversPanel
+              {seesMore && <CaseDriversPanel
                 role={user?.role}
+                canEdit={canEdit && !archived}
                 itemId={item.id}
                 agents={vehicleAgents as any[]}
+                agentsFailed={vehicleAgentsQ.isError}
                 employees={(lfEmployees as any[]).map(e => e.employee ?? e).map((e: any) => ({ id: e.id, fullName: e.fullName }))}
-              />
+              />}
             </TabsContent>
 
             <TabsContent value="messages" className="space-y-4">
               <Card>
                 <CardContent className="p-4 space-y-4">
-                  <CaseMessageList
+                  {messagesQ.isError ? (
+                    <QueryErrorNote error={messagesQ.error} what="as mensagens" onRetry={() => messagesQ.refetch()} retrying={messagesQ.isFetching} />
+                  ) : <CaseMessageList
                     messages={(messages as any[]).map((m: any) => ({
                       id: m.id, author: m.userName, createdAt: m.createdAt,
                       message: m.message, isInternal: m.isInternal,
                     }))}
-                  />
-                  <Separator />
-                  <div className="flex gap-2">
+                  />}
+                  {canEdit && !archived && <><Separator />
+                  <div className="flex gap-2 flex-wrap">
                     <Input
                       placeholder="Escrever mensagem..."
                       value={newMsg}
                       onChange={e => setNewMsg(e.target.value)}
                       onKeyDown={e => e.key === "Enter" && handleSendMsg()}
-                      className="flex-1"
+                      className="flex-1 min-w-0"
                     />
                     <label className="flex items-center gap-1 text-xs cursor-pointer">
                       <input type="checkbox" checked={isInternal} onChange={e => setIsInternal(e.target.checked)} />
-                      Interna
+                      Nota interna
                     </label>
-                    <Button size="sm" onClick={handleSendMsg} disabled={!newMsg.trim()}>
+                    <Button size="sm" onClick={handleSendMsg} disabled={!newMsg.trim() || addMsgMut.isPending} aria-label="Guardar mensagem">
                       <Send className="w-4 h-4" />
                     </Button>
                   </div>
+                  <p className="text-[11px] text-muted-foreground">Fica no caso. Ao cliente só chega o que enviares com "Avisar cliente" (email).</p></>}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -462,13 +551,15 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
             <TabsContent value="photos" className="space-y-4">
               <Card>
                 <CardContent className="p-4 space-y-4">
-                  <div className="flex items-center gap-2">
+                  {canEdit && !archived && <div className="flex items-center gap-2">
                     <label className="cursor-pointer">
                       <input type="file" accept="image/*,application/pdf" className="hidden" onChange={handlePhotoUpload} />
-                      <Button variant="outline" asChild><span><Upload className="w-4 h-4 mr-2" /> Carregar Foto</span></Button>
+                      <Button variant="outline" asChild disabled={uploadPhotoMut.isPending}><span><Upload className="w-4 h-4 mr-2" /> {uploadPhotoMut.isPending ? "A carregar…" : "Carregar Foto"}</span></Button>
                     </label>
-                  </div>
-                  {photos.length === 0 ? (
+                  </div>}
+                  {photosQ.isError ? (
+                    <QueryErrorNote error={photosQ.error} what="as fotos" onRetry={() => photosQ.refetch()} retrying={photosQ.isFetching} />
+                  ) : photos.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-8">Sem fotos</p>
                   ) : (
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -492,7 +583,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
               </Card>
             </TabsContent>
 
-            {item.vehiclePlate && (
+            {seesMore && item.vehiclePlate && (
               <TabsContent value="vehicle" className="space-y-4">
                 <Card>
                   <CardHeader>
@@ -505,14 +596,18 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                     </p>
                   </CardHeader>
                   <CardContent>
-                    {vehicleAgents.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Sem registos no histórico Multipark para esta matrícula.</p>
+                    {vehicleAgentsQ.isError ? (
+                      <QueryErrorNote error={vehicleAgentsQ.error} what="quem mexeu no carro" onRetry={() => vehicleAgentsQ.refetch()} retrying={vehicleAgentsQ.isFetching} />
+                    ) : vehicleAgentsQ.isLoading ? (
+                      <p className="text-sm text-muted-foreground animate-pulse">A ler da Multipark…</p>
+                    ) : vehicleAgents.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">Sem ações de agentes da Multipark nesta matrícula.</p>
                     ) : (
                       <div className="space-y-2">
                         {vehicleAgents.map((a: any, i: number) => (
                           <div
                             key={i}
-                            className={`flex items-center justify-between text-sm p-3 rounded border ${
+                            className={`flex flex-wrap items-center justify-between gap-2 text-sm p-3 rounded border ${
                               a.flagged
                                 ? "bg-red-50 border-red-300 dark:bg-red-950/30"
                                 : "bg-muted border-transparent"
@@ -549,15 +644,15 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
               </TabsContent>
             )}
 
-            <TabsContent value="comms" className="space-y-4">
+            {seesMore && <TabsContent value="comms" className="space-y-4">
               <CommunicationsTimeline type="lost_found" id={id} compact />
-            </TabsContent>
+            </TabsContent>}
 
-            {item.bookingRef && (
+            {seesMore && item.bookingRef && (
               <TabsContent value="booking-history" className="space-y-4">
                 <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="text-base flex items-center gap-2">
+                  <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+                    <CardTitle className="text-base flex flex-wrap items-center gap-2 min-w-0">
                       <Clock className="w-5 h-5" /> Histórico da Reserva — {item.bookingRef.slice(-12)}
                       {item.bookingRef && item.bookingRef.length >= 20 && (
                         <Button size="sm" variant="outline" className="h-7 text-xs gap-1 ml-2" onClick={() => openInMultipark(item.bookingRef)}>
@@ -572,6 +667,10 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                   <CardContent>
                     {timelineLoading ? (
                       <div className="flex justify-center py-6"><div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" /></div>
+                    ) : timelineQ.isError ? (
+                      <QueryErrorNote error={timelineQ.error} what="o histórico da reserva" onRetry={() => timelineQ.refetch()} retrying={timelineQ.isFetching} />
+                    ) : (apiTimeline as any)?.error ? (
+                      <QueryErrorNote error={{ message: (apiTimeline as any).error }} what="o histórico da reserva" onRetry={() => timelineQ.refetch()} retrying={timelineQ.isFetching} />
                     ) : timelineHist.length === 0 ? (
                       <p className="text-sm text-muted-foreground">Sem histórico para esta reserva{showAllHist ? "" : " (experimenta \"Mostrar tudo\")"}.</p>
                     ) : (
@@ -653,7 +752,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
             </CardContent>
           </Card>
 
-          <Card>
+          {canEdit && !archived && item.status !== "converted" && <Card>
             <CardHeader><CardTitle className="text-sm">Ações Rápidas</CardTitle></CardHeader>
             <CardContent className="space-y-2">
               {item.status === "new" && (
@@ -677,7 +776,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                 </Button>
               )}
             </CardContent>
-          </Card>
+          </Card>}
         </div>
       </div>
       {/* Edit Dialog */}
@@ -739,7 +838,9 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
  * mais útil do Cruzamento, mostrado onde se investiga. Team leader+.
  */
 function RepeatDriversCard({ itemId }: { itemId: number }) {
-  const { data = [] } = trpc.lostFound.caseRepeatDrivers.useQuery({ itemId }, { retry: false });
+  const q = trpc.lostFound.caseRepeatDrivers.useQuery({ itemId }, { retry: false });
+  const data = q.data ?? [];
+  if (q.isError) return <QueryErrorNote error={q.error} what="os condutores que se repetem" onRetry={() => q.refetch()} retrying={q.isFetching} />;
   if (!data.length) return null;
   return (
     <Card className="border-red-300 bg-red-50/60 dark:bg-red-950/20">

@@ -93,7 +93,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
-import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, deleteLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, deleteIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
+import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, deleteTask, getTaskStats, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, searchClientHistory, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, deleteIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getOverdueTasks, getRecentlyCompletedTasks, markTaskNotified, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
@@ -447,12 +447,15 @@ async function getLostDriverLink(id: number) {
   return link;
 }
 
-/** A reserva (id da Multipark ou nº) pertence às cidades do utilizador? Ao vivo na Multipark. */
-async function bookingRefInScope(ref: string): Promise<boolean> {
+/**
+ * A reserva (id da Multipark ou nº) pertence às cidades do utilizador? Ao vivo
+ * na Multipark. "unavailable" = a Multipark não respondeu (≠ fora do âmbito — 16c).
+ */
+async function bookingRefInScope(ref: string): Promise<boolean | "unavailable"> {
   const cities = scopedCityNames();
   if (cities === undefined) return true;
   const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
-  return !!(await liveBookingByRef(ref, { cities }).catch(() => null));
+  try { return !!(await liveBookingByRef(ref, { cities })); } catch { return "unavailable"; }
 }
 
 const dayStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -2412,8 +2415,11 @@ export const appRouter = router({
       projectId: z.number().optional(),
       noProject: z.boolean().optional(),
       search: z.string().max(200).optional(),
+      /** Só os arquivados (quem gere). Sem isto, os arquivados nunca vêm. */
+      archived: z.boolean().optional(),
     }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      if (input?.archived) requireAccess(ctx.user, "perdidos", "manage");
       return filterOwnCases(ctx.user, "perdidos", "lost_found", await getLostFoundItems(input));
     }),
 
@@ -2538,6 +2544,7 @@ export const appRouter = router({
         data.dueDate = due;
       }
       if (status && existing.status === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Caso convertido (${existing.convertedToType} #${existing.convertedToId}) — trata-o no registo novo.` });
+      if ((existing as any).archivedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Caso arquivado — tira-o do arquivo primeiro." });
       if (status) Object.assign(data, lostStatusPatch(existing, status, utcNowStr(), ctx.user.id));
       await updateLostFoundItem(id, data as any);
       // Se a ref de reserva mudou, repopula os campos em falta a partir dela.
@@ -2560,11 +2567,20 @@ export const appRouter = router({
       filename: z.string().max(255),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "perdidos", "edit");
-      await loadLostInScope(input.itemId);
+      const item = await loadLostInScope(input.itemId);
       const buffer = Buffer.from(input.base64, "base64");
       const key = `lost-found/${input.itemId}/return-${Date.now()}.${safeExt(input.filename)}`;
       const { url } = await storagePut(key, buffer, contentTypeForFilename(input.filename));
+      // A foto da entrega anterior não se perde: fica em removed_records (16c).
+      if (item.returnPhotoKey || item.returnPhotoUrl) {
+        const { getDb } = await import("./db");
+        const { removedRecords } = await import("../drizzle/schema");
+        const { removedRowJson } = await import("./removedRecords");
+        const db = await getDb();
+        await db?.insert(removedRecords).values({ entity: "lost_found_return_photo", recordId: input.itemId, parentId: input.itemId, rowJson: removedRowJson({ returnPhotoUrl: item.returnPhotoUrl, returnPhotoKey: item.returnPhotoKey }), reason: "Substituída por outra foto da entrega", removedById: ctx.user.id });
+      }
       await updateLostFoundItem(input.itemId, { returnPhotoUrl: url, returnPhotoKey: key } as any);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: input.itemId, details: "Foto da entrega carregada" });
       const { signedFileUrl } = await import("./caseOps");
       return { url: await signedFileUrl(key, url) };
     }),
@@ -2603,11 +2619,24 @@ export const appRouter = router({
       return { ok: true };
     }),
 
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireRole(ctx.user.role, "super_admin");
+    // "Eliminar" passou a ARQUIVAR (16c): nada se apaga — nem os ficheiros.
+    // Sai das listas, contadores, lembretes e cruzamento; volta com "Tirar do arquivo".
+    archive: protectedProcedure.input(z.object({ id: z.number(), reason: z.string().trim().min(3, "Diz porquê (mín. 3 letras).").max(255) })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "perdidos", "manage");
       await loadLostInScope(input.id);
-      await deleteLostFoundItem(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "lost_found", entityId: input.id, details: "Eliminado (com ficheiros e condutores)" });
+      const done = await archiveLostFoundItem(input.id, ctx.user.id, input.reason);
+      if (!done) return { success: true, alreadyArchived: true };
+      await addLostFoundMessage({ itemId: input.id, userId: ctx.user.id, userName: ctx.user.name ?? "—", message: `🗄️ Arquivado por ${ctx.user.name ?? "—"}: ${input.reason}`, isInternal: 1 } as any);
+      await logActivity({ userId: ctx.user.id, action: "archive", entity: "lost_found", entityId: input.id, details: `Perdido arquivado: ${input.reason}` });
+      return { success: true, alreadyArchived: false };
+    }),
+    unarchive: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "perdidos", "manage");
+      const item = await loadLostInScope(input.id);
+      if (!(item as any).archivedAt) return { success: true };
+      await updateLostFoundItem(input.id, { archivedAt: null, archivedById: null, archiveReason: null } as any);
+      await addLostFoundMessage({ itemId: input.id, userId: ctx.user.id, userName: ctx.user.name ?? "—", message: `📂 Tirado do arquivo por ${ctx.user.name ?? "—"}.`, isInternal: 1 } as any);
+      await logActivity({ userId: ctx.user.id, action: "unarchive", entity: "lost_found", entityId: input.id, details: "Perdido tirado do arquivo" });
       return { success: true };
     }),
 
@@ -2678,7 +2707,10 @@ export const appRouter = router({
       await loadLostInScope(input.itemId);
       // o colaborador anexado tem de ser das cidades de quem anexa (pode vir a levar pontos)
       if (input.employeeId) await assertEmployeeAccess(input.employeeId);
-      const { attachLostFoundDriver } = await import("./db");
+      // A mesma pessoa não fica anexada duas vezes ao mesmo caso (16c).
+      const { attachLostFoundDriver, listLostFoundDrivers } = await import("./db");
+      const already = (await listLostFoundDrivers(input.itemId)).find((d) => (input.employeeId != null && d.employeeId === input.employeeId) || (input.employeeId == null && d.employeeId == null && d.driverName === input.driverName));
+      if (already) return { id: already.id, duplicate: true };
       const id = await attachLostFoundDriver({ ...input, attachedById: ctx.user.id });
       await logActivity({ userId: ctx.user.id, action: "attach_driver", entity: "lost_found", entityId: input.itemId, details: `Condutor anexado: ${input.driverName}` });
       return { id };
@@ -2695,8 +2727,11 @@ export const appRouter = router({
         const { setLostDriverAccountability } = await import("./caseOps");
         await setLostDriverAccountability(input.id, { points: 0 }, ctx.user.id);
       }
+      // A ligação (com custo e notas) vai para removed_records — nada se apaga (16c).
       const { detachLostFoundDriver } = await import("./db");
-      await detachLostFoundDriver(input.id);
+      const r = await detachLostFoundDriver(input.id, ctx.user.id);
+      if (!r.removed) throw new TRPCError({ code: "NOT_FOUND", message: "Este condutor já não está ligado ao caso." });
+      await logActivity({ userId: ctx.user.id, action: "detach_driver", entity: "lost_found", entityId: link.itemId, details: `Condutor retirado: ${link.driverName}` });
       return { success: true };
     }),
 
@@ -2766,15 +2801,18 @@ export const appRouter = router({
         return getVehicleAgentsByPlate(input.plate, input.currentBookingRef);
       }),
 
-    // ── Booking History (Multipark DB local, sincronizado pelo cron job) ──
+    // ── Histórico das reservas — AO VIVO da BD da Multipark ──
     bookingHistory: protectedProcedure
       .input(z.object({ bookingId: z.string().optional(), plate: z.string().optional(), search: z.string().optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "perdidos", "view");
-        if (input.bookingId) return getBookingHistoryByBookingId(input.bookingId);
-        if (input.plate) return getBookingHistoryByPlate(input.plate);
-        if (input.search) return searchBookingHistory(input.search);
-        return [];
+        // Diz quando a lista bateu no teto (antes cortava calada) — 16c.
+        const { HISTORY_LIST_LIMIT, HISTORY_SEARCH_LIMIT } = await import("./db");
+        const [rows, limit] = input.bookingId ? [await getBookingHistoryByBookingId(input.bookingId), HISTORY_LIST_LIMIT]
+          : input.plate ? [await getBookingHistoryByPlate(input.plate), HISTORY_LIST_LIMIT]
+          : input.search ? [await searchBookingHistory(input.search), HISTORY_SEARCH_LIMIT]
+          : [[], HISTORY_LIST_LIMIT];
+        return { rows, truncated: rows.length >= limit, limit };
       }),
 
     bookingHistoryDriverStats: protectedProcedure.query(({ ctx }) => {
@@ -2813,7 +2851,10 @@ export const appRouter = router({
       bookingId: z.string().max(128),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "perdidos", "view");
-      if (!(await bookingRefInScope(input.bookingId))) return { bookingId: input.bookingId, total: 0, history: [] };
+      const inScope = await bookingRefInScope(input.bookingId);
+      // Multipark sem resposta ≠ "sem histórico" (16c).
+      if (inScope === "unavailable") return { bookingId: input.bookingId, total: 0, history: [], error: "Histórico indisponível (BD da Multipark sem resposta)." };
+      if (!inScope) return { bookingId: input.bookingId, total: 0, history: [] };
       const { getBookingTimeline } = await import("./complaintDossier");
       return getBookingTimeline(input.bookingId, scopedCityNames());
     }),

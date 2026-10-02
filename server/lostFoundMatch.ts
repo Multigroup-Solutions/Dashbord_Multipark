@@ -50,7 +50,7 @@ async function loadCandidates(db: any, item: Item): Promise<Item[]> {
     SELECT id, clientName, status, convertedFromType, foundLocation, projectId, vehiclePlate, bookingRef, itemType, createdAt, description
       FROM lost_found_items
      WHERE id <> ${item.id}
-       AND status NOT IN ('returned', 'closed', 'converted')
+       AND status NOT IN ('returned', 'closed', 'converted') AND archivedAt IS NULL
        AND createdAt BETWEEN ${from} AND ${to}
        AND (${pid} IS NULL OR projectId IS NULL OR projectId = ${pid})
      ORDER BY id DESC
@@ -152,7 +152,7 @@ export async function runLostFoundMatchSweep(opts: { limit?: number; deadlineAt?
   const deadlineAt = opts.deadlineAt ?? Date.now() + 30_000;
   const ids = rowsOf(await db.execute(sql`
     SELECT id FROM lost_found_items
-     WHERE status IN ('new', 'investigating')
+     WHERE status IN ('new', 'investigating') AND archivedAt IS NULL
        AND COALESCE(convertedFromType, '') <> 'incident'
        AND LOWER(TRIM(clientName)) NOT IN ('', 'desconhecido', 'desconhecida', 'n/a', '-')
        AND createdAt >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${MATCH_WINDOW_DAYS} DAY)
@@ -219,7 +219,10 @@ export async function decideMatch(matchId: number, itemId: number, decision: "co
   if (!db) return { ok: false, error: "Base de dados indisponível." };
   const [m] = await db.select().from(lostFoundMatches).where(eq(lostFoundMatches.id, matchId)).limit(1);
   if (!m || (m.lostId !== itemId && m.foundId !== itemId)) return { ok: false, error: "Correspondência não encontrada." };
-  await db.update(lostFoundMatches).set({ status: decision, decidedById: user.id, decidedAt: nowStr() }).where(eq(lostFoundMatches.id, matchId));
+  // Só se decide o que ainda está sugerido (16c): confirmar 2× duplicava as notas.
+  const [r] = (await db.update(lostFoundMatches).set({ status: decision, decidedById: user.id, decidedAt: nowStr() })
+    .where(and(eq(lostFoundMatches.id, matchId), eq(lostFoundMatches.status, "suggested")))) as any;
+  if (!r?.affectedRows) return { ok: false, error: "Esta correspondência já foi decidida." };
   if (decision === "confirmed") {
     const who = user.name || "Utilizador";
     const note = (other: number) => `🔗 Possível correspondência confirmada com o caso #${other} (${who}). Contactar o cliente antes de devolver.`;
