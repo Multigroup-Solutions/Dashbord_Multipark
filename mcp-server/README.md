@@ -10,28 +10,29 @@ API REST `/api/v1` da dashboard.
 Claude (Desktop/Code)  ──stdio──►  este MCP server  ──HTTPS──►  /api/v1 (Vercel)  ──►  BD + BD Multipark (leitura)
 ```
 
-A autenticação é por **API key** (header `X-API-Key`). Cada chave tem um
-**scope** que limita o que pode fazer:
+A autenticação é por **API key** (header `X-API-Key`). Cada chave tem
+**capacidades** que limitam o que pode fazer (ecrã **API Keys** da dashboard):
 
-| Scope (campo `permissions` da chave) | Pode |
+| Capacidade | Pode |
 |---|---|
-| `read` | Ler tudo (reservas, reclamações, reviews, stats, RH) |
-| `read,write` (ou `write`) | O acima + criar/editar reclamações e reviews |
-| `admin` (ou `*`) | Tudo, incluindo **apagar** reclamações e rotas `/admin/*` |
+| Relatórios de operação (`reports:ops`) | Parques, projetos, viaturas, condutores, estatísticas de reservas e de reclamações, resumo |
+| Caixa e parceiros (`reports:cash`) | Contagens e correções de caixa, passagens de turno, faturação e fecho de parceiros |
+| Marketing (`reports:marketing`) | Campanhas, gasto em anúncios, ROAS, Google Analytics, Search Console |
+| Dados pessoais (`pii`) | Reservas com os dados do cliente, reclamações, críticas, colaboradores |
+| Reclamações e críticas — escrever (`complaints:write`) | Criar/atualizar reclamações, mensagens e críticas |
+| Formulários do site (`site:intake`) | Candidaturas e disponibilidades que chegam do site |
+| Administração (`admin`) | Tudo, mais arquivar reclamações, criar projetos e `/admin/*` — **não uses num MCP** |
 
-> `admin` implica `write` implica `read`.
+Chaves antigas (`read` / `write` / `admin`) continuam a fazer o que faziam; no
+ecrã podes reduzi-las ao que precisam.
 
 ## 1. Criar a API key
 
-Na base de dados (tabela `api_keys`), cria uma chave com o `permissions` que
-queres. Exemplo SQL para controlo total:
-
-```sql
-INSERT INTO api_keys (name, apiKey, permissions, active)
-VALUES ('Claude MCP', '<gera-uma-string-aleatória-longa>', 'admin', 1);
-```
-
-Gera a chave com, por exemplo: `openssl rand -hex 32`.
+No ecrã **API Keys** da dashboard (só super admin): **Nova API Key**, dá-lhe um
+nome, marca só as capacidades de que o MCP precisa (para relatórios:
+Relatórios de operação, Caixa e parceiros, Marketing) e copia a chave — só
+aparece uma vez. Não se criam chaves diretamente na base de dados (lá só fica
+o hash).
 
 ## 2. Pôr o ficheiro na tua máquina
 
@@ -39,7 +40,7 @@ Este servidor **não tem dependências** — só precisa do **Node.js 18+**. Nã
 `npm install`. Basta teres o repositório clonado:
 
 ```bash
-git clone https://github.com/JorgeTabuada/Dashbord_Multipark.git
+git clone https://github.com/Multigroup-Solutions/Dashbord_Multipark.git
 # o servidor é o ficheiro: Dashbord_Multipark/mcp-server/index.mjs
 ```
 
@@ -90,37 +91,38 @@ Reinicia o Claude Desktop e as tools aparecem (ícone de ferramentas no chat).
 
 ## Tools disponíveis
 
-| Tool | Scope | Descrição |
+| Tool | Capacidade | Descrição |
 |---|---|---|
-| `list_parks` | read | Todos os parques/cidades |
-| `dashboard_summary` | read | Visão cruzada (reservas + reclamações + por cidade) |
-| `list_bookings` | read | Reservas com filtros (city, parkId, status, datas, search) |
-| `booking_stats` | read | Estatísticas de reservas |
-| `get_booking` | read | Detalhe de reserva (cópia local + ao vivo da BD Multipark) |
-| `list_complaints` | read | Reclamações |
-| `complaint_stats` | read | Stats de reclamações |
-| `get_complaint` | read | Detalhe (mensagens + fotos) |
-| `create_complaint` | write | Criar reclamação |
-| `update_complaint` | write | Atualizar reclamação |
-| `add_complaint_message` | write | Adicionar mensagem/nota |
-| `delete_complaint` | **admin** | Apagar reclamação |
-| `list_reviews` | read | Avaliações Google |
-| `create_review` | write | Registar avaliação |
-| `list_vehicles` | read | Viaturas |
-| `list_employees` | read | Colaboradores |
+| `list_parks` | reports:ops | Todos os parques/cidades |
+| `dashboard_summary` | reports:ops | Visão cruzada (reservas + reclamações + por cidade) |
+| `list_bookings` | pii | Reservas com filtros (city, parkId, status, datas, search) |
+| `booking_stats` | reports:ops | Estatísticas de reservas |
+| `get_booking` | pii | Detalhe de reserva (ao vivo da BD Multipark) |
+| `list_complaints` | pii | Reclamações |
+| `complaint_stats` | reports:ops | Stats de reclamações |
+| `get_complaint` | pii | Detalhe (mensagens + fotos) |
+| `create_complaint` | complaints:write | Criar reclamação |
+| `update_complaint` | complaints:write | Atualizar reclamação |
+| `add_complaint_message` | complaints:write | Adicionar mensagem/nota |
+| `delete_complaint` | **admin** | Arquivar reclamação (não apaga) |
+| `list_reviews` | pii | Avaliações Google |
+| `create_review` | complaints:write | Registar avaliação |
+| `list_vehicles` | reports:ops | Viaturas |
+| `list_employees` | pii | Colaboradores |
 
 ## Notas de segurança
 
 - A API key dá acesso programático à operação. **Guarda-a como um segredo**
-  (não a metas em repositórios). Roda-a com `UPDATE api_keys SET active=0` se
-  for comprometida.
-- Para um MCP só de leitura, cria a chave com `permissions='read'`.
-- Os endpoints `/api/v1` validam o scope a cada chamada; uma chave `read`
-  recebe `403` em qualquer escrita.
+  (não a metas em repositórios). Se for comprometida, **revoga-a** no ecrã
+  API Keys — deixa de funcionar logo.
+- Dá a cada chave só as capacidades de que precisa. Sem a capacidade, a rota
+  responde `403`. Limite: 240 pedidos por minuto por chave (`429`).
+- O que uma chave escreve fica nos Logs com a etiqueta da chave (nome e
+  prefixo), como "Sistema" — não em nome de quem a criou.
 
 ## Relatórios (só leitura)
 
-Rotas e tools para a skill `multipark-relatorios` (todas pedem scope `read`; nada escreve na BD):
+Rotas e tools para a skill `multipark-relatorios` (nada escreve na BD). Capacidades: caixa, parceiros e passagens de turno → `reports:cash`; condutores → `reports:ops`; marketing e web → `reports:marketing`.
 
 | Tool | Rota | O que devolve |
 |---|---|---|

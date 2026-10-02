@@ -89,8 +89,10 @@ describe("Erros e período", () => {
     expect(r.match(/throw marketingError\(e\);/g)?.length).toBe(4);
     expect(r).not.toContain('throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });');
   });
-  it("API MCP: erro do servidor = 500", () => {
-    expect(src("server/mcpMarketingApi.ts")).toContain("res.status(/^(Datas inválidas|Mês inválido)/.test(msg) ? 400 : 500)");
+  it("API MCP: erro do servidor = 500 (20a: só com a referência, sem a mensagem real)", () => {
+    const s = src("server/mcpMarketingApi.ts");
+    expect(s).toContain("if (/^(Datas inválidas|Mês inválido)/.test(msg)) return res.status(400)");
+    expect(s).toContain('apiInternalError(res, "v1 marketing", e, { success: false });');
   });
 });
 

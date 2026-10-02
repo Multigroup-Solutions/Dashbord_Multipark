@@ -1,8 +1,9 @@
 /**
  * MCP Control API — rotas de RELATÓRIOS (SÓ LEITURA), para a skill `multipark-relatorios`.
  *
- * Montadas por `server/mcpApi.ts` em /api/v1 (mesma autenticação X-API-Key e o
- * mesmo scope "read" das restantes rotas de leitura). Nada aqui escreve na BD:
+ * Montadas por `server/mcpApi.ts` em /api/v1 (mesma autenticação X-API-Key;
+ * capacidade "reports:cash" para caixa/parceiros/passagens de turno e
+ * "reports:ops" para condutores). Nada aqui escreve na BD:
  * não há INSERT/UPDATE/DELETE e a caixa nunca é contada nem fechada por aqui
  * (isso continua a ser feito no ecrã "Correção de caixa", com autor e explicação).
  *
@@ -17,7 +18,7 @@
  */
 import type { Router, Request, Response } from "express";
 import { sql } from "drizzle-orm";
-import { requireScope } from "./apiKeyAuth";
+import { requireCapability } from "./apiKeyAuth";
 
 type Handler = (fn: (req: Request, res: Response) => Promise<any>) => (req: Request, res: Response) => void;
 type Db = { execute: (q: any) => Promise<any> };
@@ -167,7 +168,7 @@ async function parkNames(): Promise<Map<string, { name: string | null; city: str
 
 export function registerMcpReportRoutes(r: Router, h: Handler): void {
   // ── CAIXA: contagens por parque e dia ─────────────────────────────────────
-  r.get("/cash/counts", requireScope("read"), h(async (req, res) => {
+  r.get("/cash/counts", requireCapability("reports:cash"), h(async (req, res) => {
     const rg = parseRange(req.query.from, req.query.to);
     if ("error" in rg) return res.status(400).json({ success: false, error: rg.error });
     const parkId = str(req.query.parkId);
@@ -203,7 +204,7 @@ export function registerMcpReportRoutes(r: Router, h: Handler): void {
     });
   }));
 
-  r.get("/cash/counts/:parkId/:day", requireScope("read"), h(async (req, res) => {
+  r.get("/cash/counts/:parkId/:day", requireCapability("reports:cash"), h(async (req, res) => {
     const parkId = String(req.params.parkId);
     const day = String(req.params.day);
     if (!DAY_RE.test(day)) return res.status(400).json({ success: false, error: "day tem de ser AAAA-MM-DD" });
@@ -231,7 +232,7 @@ export function registerMcpReportRoutes(r: Router, h: Handler): void {
   }));
 
   // ── CAIXA: casos da "Correção de caixa" ───────────────────────────────────
-  r.get("/cash/cases", requireScope("read"), h(async (req, res) => {
+  r.get("/cash/cases", requireCapability("reports:cash"), h(async (req, res) => {
     const view = str(req.query.view) ?? "abertos";
     if (!["abertos", "fechados", "todos"].includes(view)) return res.status(400).json({ success: false, error: "view: abertos | fechados | todos" });
     const severity = str(req.query.severity);
@@ -274,7 +275,7 @@ export function registerMcpReportRoutes(r: Router, h: Handler): void {
     });
   }));
 
-  r.get("/cash/cases/:id", requireScope("read"), h(async (req, res) => {
+  r.get("/cash/cases/:id", requireCapability("reports:cash"), h(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, error: "id inválido" });
     const d = await database();
@@ -297,7 +298,7 @@ export function registerMcpReportRoutes(r: Router, h: Handler): void {
   }));
 
   // ── CONDUTORES ────────────────────────────────────────────────────────────
-  r.get("/drivers/daily", requireScope("read"), h(async (req, res) => {
+  r.get("/drivers/daily", requireCapability("reports:ops"), h(async (req, res) => {
     const rg = parseRange(req.query.from, req.query.to);
     if ("error" in rg) return res.status(400).json({ success: false, error: rg.error });
     const employeeId = req.query.employeeId !== undefined ? Number(req.query.employeeId) : undefined;
@@ -323,7 +324,7 @@ export function registerMcpReportRoutes(r: Router, h: Handler): void {
   }));
 
   // ── PARCEIROS ─────────────────────────────────────────────────────────────
-  r.get("/partners/billing", requireScope("read"), h(async (req, res) => {
+  r.get("/partners/billing", requireCapability("reports:cash"), h(async (req, res) => {
     const rg = parseRange(req.query.from, req.query.to);
     if ("error" in rg) return res.status(400).json({ success: false, error: rg.error });
     const projectId = req.query.projectId !== undefined ? Number(req.query.projectId) : undefined;
@@ -339,7 +340,7 @@ export function registerMcpReportRoutes(r: Router, h: Handler): void {
     });
   }));
 
-  r.get("/partners/close", requireScope("read"), h(async (req, res) => {
+  r.get("/partners/close", requireCapability("reports:cash"), h(async (req, res) => {
     const month = str(req.query.month);
     if (!month || !MONTH_RE.test(month)) return res.status(400).json({ success: false, error: "month (AAAA-MM) é obrigatório" });
     const { listPartnerClose } = await import("./partnerClose");
@@ -356,7 +357,7 @@ export function registerMcpReportRoutes(r: Router, h: Handler): void {
   }));
 
   // ── PASSAGENS DE TURNO ────────────────────────────────────────────────────
-  r.get("/shift-handovers", requireScope("read"), h(async (req, res) => {
+  r.get("/shift-handovers", requireCapability("reports:cash"), h(async (req, res) => {
     const rg = parseRange(req.query.from, req.query.to);
     if ("error" in rg) return res.status(400).json({ success: false, error: rg.error });
     const city = str(req.query.city)?.toLowerCase();
