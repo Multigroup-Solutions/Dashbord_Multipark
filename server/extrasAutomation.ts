@@ -25,6 +25,7 @@ import { isFeatureEnabled } from "./_core/featureFlags";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
+import { availabilityWindow } from "../shared/extrasSchedule";
 
 // ─── Relógio de Lisboa (puro) ───────────────────────────────────────────────
 
@@ -135,16 +136,19 @@ export interface AutofillCandidate {
 }
 export interface AutofillPick { employeeId: number; personName: string; level: AutofillCandidate["level"]; startHour: number; endHour: number }
 
-/** Janela (horas) em que o extra disse que pode, para este turno; null = não pode. */
+/**
+ * Janela (horas) em que o extra disse que pode, para este turno; null = não
+ * pode. É a MESMA leitura da proposta automática (availabilityWindow: horas
+ * que atravessam a meia-noite, só o início, só os turnos), cortada ao turno —
+ * antes "Preencher" e a proposta davam respostas diferentes para a mesma pessoa.
+ */
 export function availableWindow(a: AutofillCandidate["availability"], shift: ShiftKey): { from: number; to: number } | null {
-  if (!a || a.status !== "available") return null;
+  const w = availabilityWindow(a);
+  if (!w) return null;
   const bounds = shift === "morning" ? { from: 3, to: 15 } : { from: 15, to: 27 };
-  if (a.fromHour != null && a.toHour != null) {
-    const from = Math.max(bounds.from, a.fromHour);
-    const to = Math.min(bounds.to, a.toHour);
-    return to - from >= 3 ? { from, to } : null;
-  }
-  return (shift === "morning" ? a.morning : a.night) ? bounds : null;
+  const from = Math.max(bounds.from, w.from);
+  const to = Math.min(bounds.to, w.to);
+  return to - from >= 3 ? { from, to } : null;
 }
 
 /**
@@ -332,13 +336,14 @@ export async function runReminder(weekStart: string): Promise<RequestRunResult> 
 
 export interface NoticeRow { assignmentId: number; status: string; sentAt: string; confirmedAt: string | null; declinedAt: string | null; error: string | null }
 
-export async function listNotices(date: string): Promise<NoticeRow[]> {
+export async function listNotices(date: string, city: string | null = null): Promise<NoticeRow[]> {
   const db = await getDb();
   if (!db) return [];
   await ensureTables();
+  const byCity = city ? sql` AND EXISTS (SELECT 1 FROM extras_dia_assignments a WHERE a.id = n.assignmentId AND a.city = ${city})` : sql``;
   const [rows] = (await db.execute(sql`
-    SELECT assignmentId, status, sentAt, confirmedAt, declinedAt, error
-      FROM \`extras_dia_notices\` WHERE assignmentDate = ${date}`)) as any;
+    SELECT n.assignmentId, n.status, n.sentAt, n.confirmedAt, n.declinedAt, n.error
+      FROM \`extras_dia_notices\` n WHERE n.assignmentDate = ${date}${byCity}`)) as any;
   return (rows as any[]).map((r) => ({
     assignmentId: Number(r.assignmentId),
     status: String(r.status),
@@ -361,7 +366,7 @@ export interface NotifyResult { total: number; sent: number; failed: number; ski
  */
 export async function notifyAssignments(
   date: string,
-  opts: { city?: string | null; createdById?: number | null; respectHold?: boolean } = {},
+  opts: { city?: string | null; shift?: "morning" | "night" | null; createdById?: number | null; respectHold?: boolean } = {},
 ): Promise<NotifyResult> {
   const db = await getDb();
   const res: NotifyResult = { total: 0, sent: 0, failed: 0, skipped: 0, rulesSent: 0, optedOut: 0 };
@@ -374,6 +379,7 @@ export async function notifyAssignments(
   const { and, eq, isNotNull } = await import("drizzle-orm");
   const conds = [eq(extrasDiaAssignments.assignmentDate, date), isNotNull(extrasDiaAssignments.employeeId), eq(extrasDiaAssignments.status, "confirmed")];
   if (opts.city) conds.push(eq(extrasDiaAssignments.city, opts.city));
+  if (opts.shift) conds.push(eq(extrasDiaAssignments.shift, opts.shift));
   let rows = await db.select().from(extrasDiaAssignments).where(and(...conds));
   const sched = await import("./extrasSchedule");
   if (opts.respectHold) {

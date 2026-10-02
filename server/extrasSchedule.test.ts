@@ -356,9 +356,14 @@ describe("idempotência de propor e confirmar (BD simulada)", () => {
   it("confirmar automaticamente outra vez não reconfirma nem reenvia", async () => {
     const { confirmSchedule } = await import("./extrasSchedule");
     dbState.affected = [0]; // UPDATE … WHERE status='proposed' AND holdAuto=0 não mexeu
-    const r = await confirmSchedule({ date: "2026-09-25", city: "lisbon", by: "auto", userId: null });
+    const r = await confirmSchedule({ date: "2099-09-25", city: "lisbon", by: "auto", userId: null });
     expect(r).toEqual({ status: "skipped", reason: "sem proposta por confirmar ou envio suspenso", confirmed: 0, notifications: null });
     expect(dbState.executed.length).toBe(1);
+  });
+  it("um dia que já passou nunca se confirma (nem avisa ninguém)", async () => {
+    const { confirmSchedule } = await import("./extrasSchedule");
+    await expect(confirmSchedule({ date: "2020-01-06", city: "lisbon", by: "manual", userId: 1 })).rejects.toThrow(/já passou/);
+    expect(dbState.executed.length).toBe(0);
   });
   it("reserva do aviso: só quem insere (ou retoma uma falha) envia", async () => {
     const { claimNotification } = await import("./extrasSchedule");

@@ -56,18 +56,6 @@ export const SLOTS_PER_DAY = 24 * SLOTS_PER_HOUR; // 72
 export const FORECAST_HOURS = 27;
 export const FORECAST_SLOTS = FORECAST_HOURS * SLOTS_PER_HOUR; // 81
 
-/**
- * Quantos slots de 20min uma reserva consome consoante o deliveryType.
- * - T1/VIP/sem info: 20min → consome 1 slot completo.
- * - T2: 30min → consome 1 slot inteiro + meio do seguinte (1.5).
- * - Outro (Partidas genérico, Oriente, Rossio, Faro, ...): 60min → 3 slots.
- */
-export function deliverySlotSpread(deliveryType: string | null | undefined): number[] {
-  const cls = classifyDeliveryType(deliveryType);
-  if (cls === "t2") return [1, 0.5];
-  if (cls === "other") return [1, 1, 1];
-  return [1]; // t1 | vip | unknown
-}
 
 export type ShiftId = "morning" | "night";
 
@@ -719,6 +707,10 @@ export interface UpsertAssignmentInput {
   sentHomeHour?: number | null;
   notes?: string | null;
   createdById?: number | null;
+  /** Quem grava (fica como "alterado por" numa edição). */
+  updatedById?: number | null;
+  /** 'auto' só para a proposta automática; à mão é sempre 'manual'. */
+  source?: "auto" | "manual";
   /** Omissão: 'proposed' se o dia/cidade tem uma proposta por confirmar; senão 'confirmed'. */
   status?: "proposed" | "confirmed";
   proposalReason?: string | null;
@@ -732,6 +724,16 @@ export function assignmentVersionChanged(
   return prev.employeeId !== next.employeeId || prev.assignmentDate !== next.assignmentDate
     || prev.startHour !== next.startHour || prev.endHour !== next.endHour || prev.shift !== next.shift
     || (prev.employeeId == null && prev.personName !== next.personName);
+}
+
+/** Conflito de escala (a mesma pessoa a horas sobrepostas): o router devolve 409. */
+export class ScheduleConflictError extends Error {}
+
+/** Outra linha da mesma pessoa no mesmo dia com horas sobrepostas ([início, fim)). PURA. */
+export function findScheduleOverlap<T extends { id: number; startHour: number; endHour: number }>(
+  sameDay: T[], cand: { id: number | null; startHour: number; endHour: number },
+): T | null {
+  return sameDay.find((r) => r.id !== cand.id && r.startHour < cand.endHour && cand.startHour < r.endHour) ?? null;
 }
 
 export async function upsertAssignment(input: UpsertAssignmentInput): Promise<Assignment | null> {
@@ -774,12 +776,29 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     notes: input.notes ?? null,
   };
 
+  // A mesma pessoa não fica em duas linhas com horas sobrepostas no mesmo dia
+  // (nesta ou noutra cidade) — o caminho "um a um" não tinha esta verificação.
+  if (payload.employeeId != null) {
+    const sameDay = await db
+      .select({ id: extrasDiaAssignments.id, city: extrasDiaAssignments.city, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour })
+      .from(extrasDiaAssignments)
+      .where(and(eq(extrasDiaAssignments.assignmentDate, payload.assignmentDate), eq(extrasDiaAssignments.employeeId, payload.employeeId)));
+    const clash = findScheduleOverlap(sameDay, { id: input.id ?? null, startHour: payload.startHour, endHour: payload.endHour });
+    if (clash) throw new ScheduleConflictError(`${payload.personName} já está na escala deste dia das ${clash.startHour}h às ${clash.endHour}h${clash.city !== payload.city ? ` (${clash.city})` : ""}.`);
+  }
+
   if (input.id) {
     const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, input.id)).limit(1);
     if (!prev) return null;
     const bump = assignmentVersionChanged(prev, { ...payload, shift: payload.shift });
+    // Editar não apaga as notas (o formulário de horas não as manda); quem
+    // edita fica registado e a linha passa a "à mão" (a proposta refeita já não a substitui).
+    const { notes: _notes, ...rest } = payload;
     await db.update(extrasDiaAssignments).set({
-      ...payload,
+      ...rest,
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      source: input.source ?? "manual",
+      updatedById: input.updatedById ?? null,
       ...(input.status ? { status: input.status } : {}),
       ...(input.proposalReason !== undefined ? { proposalReason: input.proposalReason } : {}),
       ...(bump ? { version: sql`${extrasDiaAssignments.version} + 1` } : {}),
@@ -803,7 +822,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
   }
   const [result] = await db
     .insert(extrasDiaAssignments)
-    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null })
+    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null, source: input.source ?? "manual" })
     .$returningId();
   const newId = (result as any).id;
   const [row] = await db
@@ -817,14 +836,6 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
   return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
 }
 
-export async function deleteAssignment(id: number): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id)).limit(1);
-  await db.delete(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id));
-  if (prev) googleShiftChanged({ city: prev.city, date: String(prev.assignmentDate), employeeIds: [prev.employeeId] });
-}
-
 /**
  * Escala mudou → turnos já para o Google Calendar (calendário partilhado da
  * cidade + calendário "Multipark" de quem está escalado), em segundo plano.
@@ -833,79 +844,6 @@ function googleShiftChanged(input: { city: string | null; date: string; employee
   import("./google/pendingSync")
     .then((m) => m.scheduleGoogleShiftSync({ city: input.city, date: input.date.slice(0, 10), employeeIds: input.employeeIds.filter((x): x is number => typeof x === "number") }))
     .catch(() => undefined);
-}
-
-/**
- * Custo total do "extras-dia" para um intervalo de datas.
- *
- *   • Dias passados:
- *      - Se houver assignments gravados → real += soma
- *      - Se NÃO houver → estimate += cheapest do forecast (fallback para
- *        não dar 0, com etiqueta de estimativa)
- *   • Dias futuros: estimate += cheapest do forecast
- *
- * Para que um dia passado conte como "real" tens de ir a /extras-dia,
- * escolher o dia base, adicionar Team Leader e condutores em "Equipa do dia".
- */
-export async function getExtrasDiaCostForRange(
-  startDate: string,
-  endDate: string,
-): Promise<{
-  real: number;
-  estimate: number;
-  total: number;
-  days: number;
-  daysWithReal: number;
-  daysWithEstimate: number;
-}> {
-  const db = await getDb();
-  if (!db) return { real: 0, estimate: 0, total: 0, days: 0, daysWithReal: 0, daysWithEstimate: 0 };
-
-  const start = startOfDay(new Date(startDate + "T00:00:00"));
-  const end = startOfDay(new Date(endDate + "T00:00:00"));
-  const todayStart = startOfDay(new Date());
-
-  let real = 0;
-  let estimate = 0;
-  let days = 0;
-  let daysWithReal = 0;
-  let daysWithEstimate = 0;
-
-  async function forecastCheapestFor(d: Date): Promise<number> {
-    // baseDate é o dia ANTES (porque o forecast olha para baseDate + 1).
-    const baseDate = new Date(d);
-    baseDate.setDate(baseDate.getDate() - 1);
-    try {
-      const forecast = await getExtrasDiaForecast(dateKey(baseDate));
-      return forecast.allocation.cheapest.totalCost;
-    } catch {
-      return 0;
-    }
-  }
-
-  for (let d = new Date(start); d.getTime() <= end.getTime(); d.setDate(d.getDate() + 1)) {
-    const dateKey_ = dateKey(d);
-    days++;
-
-    if (d.getTime() < todayStart.getTime()) {
-      // Dia passado
-      const assignments = await listAssignments(dateKey_);
-      if (assignments.length > 0) {
-        for (const a of assignments) real += a.cost;
-        daysWithReal++;
-      } else {
-        // Sem turnos gravados → fallback para a estimativa do forecast
-        estimate += await forecastCheapestFor(d);
-        daysWithEstimate++;
-      }
-    } else {
-      // Hoje ou futuro
-      estimate += await forecastCheapestFor(d);
-      daysWithEstimate++;
-    }
-  }
-
-  return { real, estimate, total: real + estimate, days, daysWithReal, daysWithEstimate };
 }
 
 // ─── Drill-down: reservas num slot de 20min ──────────────────────────────────

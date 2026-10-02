@@ -855,6 +855,9 @@ export const extrasDiaAssignments = mysqlTable("extras_dia_assignments", {
 	status: varchar({ length: 12 }).default('confirmed').notNull(),
 	version: int().default(1).notNull(),
 	proposalReason: varchar({ length: 500 }),
+	// 0335 — 'auto' (criada pela proposta automática) | 'manual'; quem alterou por último.
+	source: varchar({ length: 8 }).default('manual').notNull(),
+	updatedById: int(),
 },
 (table) => [
 	index("idx_extras_dia_date").on(table.assignmentDate),

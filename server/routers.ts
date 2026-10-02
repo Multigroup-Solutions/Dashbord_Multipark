@@ -71,10 +71,8 @@ import {
   getExtrasDiaForecast,
   listAssignments,
   upsertAssignment,
-  deleteAssignment,
   listDriverCandidates,
   getBookingsInSlot,
-  getExtrasDiaCostForRange,
 } from "./extrasDia";
 import {
   sendWeeklyAvailabilityRequest,
@@ -4318,16 +4316,18 @@ export const appRouter = router({
       .input(
         z.object({
           id: z.number().optional(),
-          assignmentDate: z.string(),
+          assignmentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida"),
           employeeId: z.number().nullable().optional(),
           personName: z.string().min(1).max(128),
           level: z.enum(["junior", "senior", "terminal", "master"]).nullable().optional(),
           isTeamLeader: z.boolean().optional(),
           shift: z.enum(["morning", "night"]),
           city: z.enum(["lisbon", "porto", "faro"]).optional(),
-          startHour: z.number().int().min(0).max(27),
-          endHour: z.number().int().min(1).max(27),
-          sentHomeHour: z.number().int().min(0).max(27).nullable().optional(),
+          // O dia operacional começa às 03h (a noite vai até às 27 = 03h do dia seguinte):
+          // um turno das 0h–2h é da noite ANTERIOR (antes era aceite e a previsão ignorava-o).
+          startHour: z.number().int().min(3, "O dia operacional começa às 03h — da 0h às 3h é a noite do dia anterior (24h–27h)").max(26),
+          endHour: z.number().int().min(4).max(27),
+          sentHomeHour: z.number().int().min(3).max(27).nullable().optional(),
           notes: z.string().max(255).nullable().optional(),
           // Admin força a escala de quem ainda não concluiu a formação obrigatória
           override: z.boolean().optional(),
@@ -4366,11 +4366,22 @@ export const appRouter = router({
             await logActivity({ userId: ctx.user.id, action: "training_escala_override", entity: "employees", entityId: input.employeeId, details: `Escalado sem formação concluída (${elig.missing.join(", ")}) · ${input.assignmentDate} ${input.shift}` });
           }
         }
+        let saved: Awaited<ReturnType<typeof upsertAssignment>>;
         try {
-          return await upsertAssignment({ ...input, createdById: ctx.user.id });
+          saved = await upsertAssignment({ ...input, createdById: ctx.user.id, updatedById: ctx.user.id, source: "manual" });
         } catch (err: any) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao guardar" });
+          const { ScheduleConflictError } = await import("./extrasDia");
+          throw new TRPCError({ code: err instanceof ScheduleConflictError ? "CONFLICT" : "BAD_REQUEST", message: err.message || "Erro ao guardar" });
         }
+        // Quem fez o quê na escala (antes só a remoção ficava registada).
+        if (saved) {
+          await logActivity({
+            userId: ctx.user.id, action: input.id ? "extras_dia_assignment_update" : "extras_dia_assignment_create",
+            entity: "extras_dia_assignments", entityId: saved.id,
+            details: `${input.id ? "Alterado" : "Escalado"}: ${input.personName}${input.isTeamLeader ? " (TL)" : ""} · ${input.assignmentDate} · ${input.city ?? "lisbon"} · ${input.startHour}h–${input.endHour}h`,
+          });
+        }
+        return saved;
       }),
 
     deleteAssignment: protectedProcedure
@@ -4481,30 +4492,32 @@ export const appRouter = router({
       }),
 
     notices: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      // Com a cidade: só os avisos dessa cidade (antes vinham os de todas).
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
         const { listNotices } = await import("./extrasAutomation");
-        return listNotices(input.date);
+        return listNotices(input.date, input.city ?? null);
       }),
 
     notify: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .input(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        city: z.enum(["lisbon", "porto", "faro"]),
+        // O botão é de um turno: só avisa esse turno (antes avisava o dia todo).
+        shift: z.enum(["morning", "night"]).optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "edit");
         const { notifyAssignments } = await import("./extrasAutomation");
+        const { PAST_DAY_MESSAGE } = await import("./extrasSchedule");
+        const { lisbonNow } = await import("../shared/extrasSchedule");
+        if (input.date < lisbonNow().date) throw new TRPCError({ code: "BAD_REQUEST", message: PAST_DAY_MESSAGE });
         try {
-          return await notifyAssignments(input.date, { city: input.city, createdById: ctx.user.id });
+          return await notifyAssignments(input.date, { city: input.city, shift: input.shift ?? null, createdById: ctx.user.id });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao avisar" });
         }
-      }),
-
-    costForRange: protectedProcedure
-      .input(z.object({ startDate: z.string(), endDate: z.string() }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "extras_dia", "view");
-        return getExtrasDiaCostForRange(input.startDate, input.endDate);
       }),
 
     bookingsInSlot: protectedProcedure
