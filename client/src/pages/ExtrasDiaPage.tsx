@@ -1,5 +1,8 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { can } from "@shared/access";
+import { addDays as addDaysIso, lisbonDayOf } from "@shared/lisbonDay";
 import { atLeast, useConfirm } from "./training/shared";
 import { createContext, useContext } from "react";
 import { usePersistedState } from "@/hooks/usePersistedState";
@@ -112,27 +115,26 @@ const LEVELS = [
 ] as const;
 type LevelId = (typeof LEVELS)[number]["id"];
 
-/** Devolve os 4 níveis de extras-dia com taxas vivas da BD (fallback aos
- *  defaults se o endpoint ainda não respondeu). */
+/**
+ * Quem pode o quê no Extras Dia (shared/access.ts + shared/extrasCostView.ts):
+ * editar a escala; ver custos e taxas dos extras; ver o custo do TL (salário).
+ * O servidor já tira os euros a quem não os vê — o ecrã esconde as colunas.
+ */
+type ExtrasAccess = { canEdit: boolean; costs: boolean; salaries: boolean };
+const ExtrasAccessContext = createContext<ExtrasAccess>({ canEdit: false, costs: false, salaries: false });
+/** Taxas €/h em vigor, vindas na previsão (null = a conta não vê custos). */
+const RatesContext = createContext<Record<string, number> | null>(null);
+
+/** Os 4 níveis com as taxas em vigor (as mesmas do servidor). Antes vinham de
+ *  uma rota só de administração e os outros viam as taxas de origem. */
 function useLiveLevels() {
-  const { data: rates = [] } = trpc.rh.extraRates.list.useQuery();
-  return useMemo(() => {
-    const byName = new Map<string, number>();
-    const NAME_BY_LEVEL: Record<number, string> = { 1: "junior", 2: "senior", 3: "terminal", 4: "master" };
-    for (const r of rates as any[]) {
-      const name = r.levelName ? String(r.levelName).toLowerCase() : NAME_BY_LEVEL[Number(r.level)];
-      const rate = parseFloat(String(r.hourlyRate));
-      if (name && Number.isFinite(rate) && rate > 0) byName.set(name, rate);
-    }
-    return LEVELS.map(l => ({
-      ...l,
-      hourlyRate: byName.get(l.id) ?? l.hourlyRate,
-    }));
-  }, [rates]);
+  const rates = useContext(RatesContext);
+  return useMemo(() => LEVELS.map(l => ({ ...l, hourlyRate: rates?.[l.id] ?? l.hourlyRate })), [rates]);
 }
 
-// 0-26 cobre 00:00 do dia alvo até 02:00 do dia seguinte (último slot da noite).
-const HOURS_24 = Array.from({ length: 27 }, (_, i) => i);
+// Início: 03h–02h+1 (3–26). O dia operacional começa às 03h; da 0h às 3h é a
+// noite do dia anterior (o servidor recusa um início antes das 03h).
+const HOURS_24 = Array.from({ length: 24 }, (_, i) => i + 3);
 // 1-27 para fim do turno (27 = 03:00 do dia seguinte).
 const HOURS_25 = Array.from({ length: 28 }, (_, i) => i);
 
@@ -158,10 +160,9 @@ const fmtDate = (s: string) => {
 /** 'YYYY-MM-DD' → 'DD/MM' (sem Date: a string ISO já traz o que precisamos). */
 const ddmm = (isoDay: string) => `${isoDay.slice(8, 10)}/${isoDay.slice(5, 7)}`;
 
+/** Hoje em Lisboa (nunca o relógio do browser). */
 function todayISO(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return lisbonDayOf(Date.now());
 }
 
 function baseDateFromUrl(): string | null {
@@ -170,10 +171,7 @@ function baseDateFromUrl(): string | null {
   if (dia === "amanha") return todayISO();
   const target = dia === "hoje" ? todayISO() : /^\d{4}-\d{2}-\d{2}$/.test(dia) ? dia : null;
   if (!target) return null;
-  const d = new Date(`${target}T12:00:00`);
-  d.setDate(d.getDate() - 1);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return addDaysIso(target, -1);
 }
 
 // Cidade ativa do Extras-Dia (Lisboa/Porto/Faro) — contexto para não arrastar
@@ -203,7 +201,15 @@ export default function ExtrasDiaPage() {
   const [baseDate, setBaseDate] = useState(() => baseDateFromUrl() ?? todayISO());
 
   const [tab, setTab] = usePersistedState<"dia" | "pressao">("extrasdia.tab", "dia");
-  const { data, isLoading, error } = trpc.extrasDia.forecast.useQuery({ baseDate, city }, { enabled: !globalFilters.isLoading && allowedCities.length > 0 });
+  const { user } = useAuth();
+  const costQ = trpc.extrasDia.costAccess.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const access: ExtrasAccess = {
+    canEdit: !!user && can(user as any, "extras_dia", "edit"),
+    costs: costQ.data?.costs ?? false,
+    salaries: costQ.data?.salaries ?? false,
+  };
+  const forecastQ = trpc.extrasDia.forecast.useQuery({ baseDate, city }, { enabled: !globalFilters.isLoading && allowedCities.length > 0 });
+  const { data, isLoading, error } = forecastQ;
   const targetDate = data?.targetDate ?? "";
   // "hora apertada": histórico de 60 dias (trabalho extras-pressure) da cidade.
   const pressureQ = trpc.extrasDia.pressure.useQuery(undefined, { staleTime: 10 * 60_000 });
@@ -220,9 +226,11 @@ export default function ExtrasDiaPage() {
   const assignments = assignmentsQ.data ?? [];
 
   const actuals = useMemo(() => {
-    const cost = assignments.reduce((s, a) => s + a.cost, 0);
+    const cost = assignments.reduce((s, a) => s + (a.cost ?? 0), 0);
     const hours = assignments.reduce((s, a) => s + a.hoursBilled, 0);
-    return { cost, hours, count: assignments.length };
+    // Custos que esta conta não vê (ex.: o do TL, que vem do salário).
+    const hiddenCost = assignments.some((a) => a.cost == null);
+    return { cost, hours, count: assignments.length, hiddenCost };
   }, [assignments]);
 
   const peakHour = useMemo(() => {
@@ -241,6 +249,8 @@ export default function ExtrasDiaPage() {
 
   return (
     <ExtrasCityContext.Provider value={city}>
+    <ExtrasAccessContext.Provider value={access}>
+    <RatesContext.Provider value={(data?.rates as Record<string, number> | null | undefined) ?? null}>
     <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
@@ -284,7 +294,7 @@ export default function ExtrasDiaPage() {
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>
       )}
       {tab === "dia" && error && (
-        <div className="text-sm text-red-600">Erro: {error.message}</div>
+        <QueryErrorNote error={error} onRetry={() => forecastQ.refetch()} retrying={forecastQ.isFetching} what="a previsão" />
       )}
 
       {tab === "dia" && data && (
@@ -314,6 +324,13 @@ export default function ExtrasDiaPage() {
                   <li>... e mais {data.parksFailed.length - 5}</li>
                 )}
               </ul>
+            </div>
+          )}
+
+          {data.bookingsTruncated && (
+            <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3 text-sm text-amber-900">
+              <AlertTriangle className="inline h-4 w-4 mr-1 align-text-bottom" />
+              Previsão incompleta: a leitura das reservas foi cortada no limite. Os números podem estar abaixo do real; a proposta automática e os avisos de falta de gente ficam parados.
             </div>
           )}
 
@@ -357,16 +374,19 @@ export default function ExtrasDiaPage() {
                   : `${data.allocation.cheapest.totalDriverHours}h totais`
               }
             />
-            <KpiCard
-              icon={<Euro className="h-4 w-4 text-purple-600" />}
-              label={actuals.count > 0 ? "Custo real" : "Estimativa (Júnior)"}
-              value={fmtEur(actuals.count > 0 ? actuals.cost : data.allocation.cheapest.totalCost)}
-              hint={
-                actuals.count > 0
-                  ? `Estimativa: ${fmtEur(data.allocation.cheapest.totalCost)}`
-                  : undefined
-              }
-            />
+            {access.costs && (
+              <KpiCard
+                icon={<Euro className="h-4 w-4 text-purple-600" />}
+                // É o custo da ESCALA (estimativa): o extra recebe pelo ponto.
+                label={actuals.count > 0 ? "Custo escalado (estimativa)" : "Estimativa (Júnior)"}
+                value={fmtEur(actuals.count > 0 ? actuals.cost : data.allocation.cheapest.totalCost)}
+                hint={
+                  actuals.count > 0
+                    ? `Previsão: ${fmtEur(data.allocation.cheapest.totalCost)}${actuals.hiddenCost ? " · sem o custo do TL" : ""} · pago pelo ponto`
+                    : undefined
+                }
+              />
+            )}
           </div>
 
           {/* Hourly table */}
@@ -499,7 +519,7 @@ export default function ExtrasDiaPage() {
                   ) : (
                     <div>
                       <h3 className="font-medium text-sm mb-2">
-                        {actuals.count > 0 ? "Slots ainda por cobrir" : "Turnos propostos (Júnior — mais barato)"}
+                        {actuals.count > 0 ? "Slots ainda por cobrir" : access.costs ? "Turnos propostos (Júnior — mais barato)" : "Turnos propostos"}
                       </h3>
                       {remainingSuggested.length === 0 ? (
                         <p className="text-sm text-muted-foreground">Sem slots por cobrir.</p>
@@ -513,8 +533,8 @@ export default function ExtrasDiaPage() {
                                 <th className="text-right py-2 px-2">Início</th>
                                 <th className="text-right py-2 px-2">Fim</th>
                                 <th className="text-right py-2 px-2">Horas</th>
-                                <th className="text-right py-2 px-2">€/h</th>
-                                <th className="text-right py-2 px-2">Custo</th>
+                                {access.costs && <th className="text-right py-2 px-2">€/h</th>}
+                                {access.costs && <th className="text-right py-2 px-2">Custo</th>}
                               </tr>
                             </thead>
                             <tbody>
@@ -525,15 +545,15 @@ export default function ExtrasDiaPage() {
                                   <td className="py-1.5 px-2 text-right font-mono">{fmtHour(s.startHour)}</td>
                                   <td className="py-1.5 px-2 text-right font-mono">{fmtHour(s.endHour)}</td>
                                   <td className="py-1.5 px-2 text-right">{s.hours}h</td>
-                                  <td className="py-1.5 px-2 text-right">{fmtEur(s.hourlyRate)}</td>
-                                  <td className="py-1.5 px-2 text-right">{fmtEur(s.cost)}</td>
+                                  {access.costs && <td className="py-1.5 px-2 text-right">{fmtEur(s.hourlyRate)}</td>}
+                                  {access.costs && <td className="py-1.5 px-2 text-right">{fmtEur(s.cost)}</td>}
                                 </tr>
                               ))}
                               <tr className="font-semibold bg-muted/40">
                                 <td colSpan={4} className="py-2 px-2 text-right">Em falta</td>
                                 <td className="py-2 px-2 text-right">{remainingHours}h</td>
-                                <td></td>
-                                <td className="py-2 px-2 text-right">{fmtEur(remainingCost)}</td>
+                                {access.costs && <td></td>}
+                                {access.costs && <td className="py-2 px-2 text-right">{fmtEur(remainingCost)}</td>}
                               </tr>
                             </tbody>
                           </table>
@@ -542,7 +562,7 @@ export default function ExtrasDiaPage() {
                     </div>
                   )}
 
-                  <div>
+                  {access.costs && <div>
                     <h3 className="font-medium text-sm mb-2">Estimativa por nível (referência)</h3>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                       {data.allocation.bySingleLevel.map(l => (
@@ -556,7 +576,7 @@ export default function ExtrasDiaPage() {
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </div>}
                 </CardContent>
               </Card>
             );
@@ -564,6 +584,8 @@ export default function ExtrasDiaPage() {
         </>
       )}
     </div>
+    </RatesContext.Provider>
+    </ExtrasAccessContext.Provider>
   </ExtrasCityContext.Provider>
   );
 }
@@ -572,6 +594,8 @@ export default function ExtrasDiaPage() {
 
 const SCHEDULE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   none: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
+  // Só suspenso (sem proposta): a proposta automática ainda corre.
+  hold: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
   proposing: { label: "A propor…", cls: "bg-muted text-muted-foreground" },
   proposed: { label: "Proposta por confirmar", cls: "bg-violet-100 text-violet-800 border-violet-200" },
   confirmed: { label: "Escala confirmada", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
@@ -580,6 +604,9 @@ const SCHEDULE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
 function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPerHour: number }) {
   const utils = trpc.useUtils();
   const city = useContext(ExtrasCityContext);
+  const { canEdit } = useContext(ExtrasAccessContext);
+  // Dias passados: não se confirma nem se avisa ninguém (o servidor também recusa).
+  const pastDay = !!targetDate && targetDate < todayISO();
   const q = trpc.extrasDia.schedule.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
   const refresh = () => {
     utils.extrasDia.schedule.invalidate();
@@ -649,26 +676,26 @@ function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPe
               </p>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          {canEdit && <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" disabled={busy || !targetDate} onClick={() => propose.mutate({ date: targetDate, city })}
-              title="Preenche as horas em falta com os extras disponíveis (substitui a proposta anterior; não mexe no que já está confirmado)">
+              title="Preenche as horas em falta com os extras disponíveis (substitui só a proposta automática anterior; não mexe no que está confirmado nem em quem foi posto à mão)">
               <Wand2 className="h-4 w-4 mr-1" />{propose.isPending ? "A propor…" : "Proposta automática"}
             </Button>
-            <Button size="sm" disabled={busy || !targetDate || rows === 0}
+            <Button size="sm" disabled={busy || !targetDate || rows === 0 || pastDay}
               onClick={() => confirm.mutate({ date: targetDate, city })}
-              title="Confirma todas as propostas e avisa cada extra por WhatsApp e email (quem já foi avisado não recebe outra vez)">
+              title={pastDay ? "Esse dia já passou" : "Confirma todas as propostas e avisa cada extra por WhatsApp e email (quem já foi avisado não recebe outra vez)"}>
               <CheckCircle2 className="h-4 w-4 mr-1" />{confirm.isPending ? "A confirmar…" : `Confirmar escala${d?.proposedCount ? ` (${d.proposedCount})` : ""}`}
             </Button>
             <label className="flex items-center gap-2 text-xs border rounded-md px-2 py-1.5" title="O cron não confirma nem envia avisos deste dia/cidade enquanto estiver suspenso">
               <Switch checked={held} disabled={busy || !targetDate} onCheckedChange={(v) => hold.mutate({ date: targetDate, city, hold: v })} aria-label="Suspender envio automático" />
               <PauseCircle className="h-3.5 w-3.5" /> Suspender envio automático
             </label>
-          </div>
+          </div>}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {q.isLoading && <div className="text-sm text-muted-foreground">A carregar…</div>}
-        {q.error && <div className="text-sm text-red-600">Erro: {q.error.message}</div>}
+        {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o estado da escala" />}
         {d && d.gaps.length > 0 && (
           <div className="rounded-md border-2 border-red-400 bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/40 dark:text-red-200">
             <div className="flex items-center gap-2 font-semibold">
@@ -677,11 +704,13 @@ function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPe
             <ul className="mt-1 space-y-0.5">
               {d.gaps.map((g, i) => <li key={i}>• {describeGap(g).replace(/^./, (c) => c.toUpperCase())}</li>)}
             </ul>
-            <Button size="sm" variant="outline" className="mt-2 h-auto min-h-8 max-w-full whitespace-normal text-left py-1.5 bg-white dark:bg-transparent" disabled={ask.isPending || d.noAnswerCount === 0}
-              onClick={() => ask.mutate({ date: targetDate, city })}>
-              <Send className="h-4 w-4 mr-1" />
-              {ask.isPending ? "A enviar…" : `Pedir disponibilidade a quem não respondeu (${d.noAnswerCount})`}
-            </Button>
+            {canEdit && (
+              <Button size="sm" variant="outline" className="mt-2 h-auto min-h-8 max-w-full whitespace-normal text-left py-1.5 bg-white dark:bg-transparent" disabled={ask.isPending || d.noAnswerCount === 0}
+                onClick={() => ask.mutate({ date: targetDate, city })}>
+                <Send className="h-4 w-4 mr-1" />
+                {ask.isPending ? "A enviar…" : `Pedir disponibilidade a quem não respondeu (${d.noAnswerCount})`}
+              </Button>
+            )}
           </div>
         )}
         {d && d.gaps.length === 0 && d.neededPeak > 0 && (
@@ -718,16 +747,30 @@ function TeamSection({
   const utils = trpc.useUtils();
   const city = useContext(ExtrasCityContext);
   const assignmentsQuery = trpc.extrasDia.assignments.useQuery({ date: targetDate, city });
-  const candidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate });
+  const access = useContext(ExtrasAccessContext);
+  const { canEdit } = access;
+  const pastDay = !!targetDate && targetDate < todayISO();
+  const candidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate }, { enabled: canEdit });
   // TL: só chefias + quem tem a permissão extras_dia.team_leader (regra Jorge:
   // "só devia aparecer aqueles que têm permissão de ser team leader")
-  const tlCandidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate, forTeamLeader: true });
+  const tlCandidatesQuery = trpc.extrasDia.candidates.useQuery({ date: targetDate, forTeamLeader: true }, { enabled: canEdit });
 
   // Formação obrigatória em falta: o servidor recusa (PRECONDITION_FAILED);
   // um admin pode forçar (fica registado no log de atividade).
   const { user } = useAuth();
   const canForceTraining = atLeast(user?.role, "admin");
   const [confirmForce, confirmForceUi] = useConfirm();
+  // Remover pergunta antes (a linha vai para o arquivo e, se já foi avisada, a pessoa recebe aviso de que saiu).
+  const [confirmDel, confirmDelUi] = useConfirm();
+  const askRemove = async (a: { id: number; personName: string; startHour: number; endHour: number }) => {
+    const ok = await confirmDel({
+      title: `Tirar ${a.personName} da escala?`,
+      description: `${fmtHour(a.startHour)}–${fmtHour(a.endHour)}. Se a pessoa já tinha sido avisada, recebe um aviso de que saiu. A linha fica guardada no arquivo.`,
+      confirmLabel: "Tirar da escala",
+      destructive: true,
+    });
+    if (ok) del.mutate({ id: a.id });
+  };
   const upsert = trpc.extrasDia.upsertAssignment.useMutation({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
@@ -762,7 +805,7 @@ function TeamSection({
 
   // Automação: horas sem gente suficiente, avisos WhatsApp e preenchimento
   const coverageQ = trpc.extrasDia.coverage.useQuery({ date: targetDate, city });
-  const noticesQ = trpc.extrasDia.notices.useQuery({ date: targetDate });
+  const noticesQ = trpc.extrasDia.notices.useQuery({ date: targetDate, city });
   const autofill = trpc.extrasDia.autofill.useMutation({
     onSuccess: (r) => {
       utils.extrasDia.assignments.invalidate();
@@ -777,7 +820,8 @@ function TeamSection({
   const notify = trpc.extrasDia.notify.useMutation({
     onSuccess: (r) => {
       utils.extrasDia.notices.invalidate();
-      if (r.sent === 0 && r.failed === 0) toast.info("Todos os escalados já tinham sido avisados.");
+      if (r.total === 0) toast.info("Ninguém confirmado neste turno para avisar (as propostas por confirmar não recebem aviso).");
+      else if (r.sent === 0 && r.failed === 0) toast.info("Todos os confirmados deste turno já tinham sido avisados.");
       else if (r.failed === 0) toast.success(`${r.sent} aviso(s) enviado(s) por WhatsApp${r.rulesSent ? ` · ${r.rulesSent} com morada e regras` : ""}.`);
       else toast.warning(`${r.sent} enviado(s), ${r.failed} falhado(s) — vê o motivo na linha de cada pessoa.`);
     },
@@ -811,7 +855,8 @@ function TeamSection({
   const tl = assignments.find(a => a.isTeamLeader);
   const drivers = assignments.filter(a => !a.isTeamLeader);
 
-  const totalCost = assignments.reduce((s, a) => s + a.cost, 0);
+  const totalCost = assignments.reduce((s, a) => s + (a.cost ?? 0), 0);
+  const costHidden = assignments.some((a) => a.cost == null);
   const totalHours = drivers.reduce((s, a) => s + a.hoursBilled, 0);
 
   const [adding, setAdding] = useState(false);
@@ -832,36 +877,48 @@ function TeamSection({
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <div className="text-right">
-              <div className="text-xs text-muted-foreground">Custo escalado</div>
-              <div className="text-lg font-bold">{fmtEur(totalCost)}</div>
+              {access.costs && (
+                <>
+                  <div className="text-xs text-muted-foreground">Custo escalado (estimativa)</div>
+                  <div className="text-lg font-bold">{fmtEur(totalCost)}</div>
+                  {costHidden && <div className="text-[11px] text-muted-foreground">sem o custo do TL</div>}
+                </>
+              )}
               <div className="text-xs text-muted-foreground">{totalHours}h pagas</div>
             </div>
-            <Button
+            {canEdit && <Button
               size="sm"
               variant="outline"
               title="Escala quem disse que está disponível, pelos turnos que a previsão sugere"
-              disabled={autofill.isPending}
+              disabled={autofill.isPending || pastDay}
               onClick={() => autofill.mutate({ date: targetDate, city, shift })}
             >
               <Wand2 className="h-4 w-4 mr-1" /> {autofill.isPending ? "A preencher…" : "Preencher com disponíveis"}
-            </Button>
-            <Button
+            </Button>}
+            {canEdit && <Button
               size="sm"
               variant="outline"
-              title="Envia o aviso de trabalho por WhatsApp a quem ainda não foi avisado (1.ª vez: também morada e regras)"
-              disabled={notify.isPending || assignments.length === 0}
-              onClick={() => notify.mutate({ date: targetDate, city })}
+              title={pastDay ? "Esse dia já passou" : "Envia o aviso de trabalho por WhatsApp a quem deste turno está confirmado e ainda não foi avisado (1.ª vez: também morada e regras)"}
+              disabled={notify.isPending || assignments.length === 0 || pastDay}
+              onClick={() => notify.mutate({ date: targetDate, city, shift })}
             >
-              <MessageCircle className="h-4 w-4 mr-1" /> {notify.isPending ? "A avisar…" : "Avisar por WhatsApp"}
-            </Button>
-            <Button size="sm" variant="default" onClick={() => setAdding(v => !v)}>
+              <MessageCircle className="h-4 w-4 mr-1" /> {notify.isPending ? "A avisar…" : "Avisar este turno"}
+            </Button>}
+            {canEdit && <Button size="sm" variant="default" onClick={() => setAdding(v => !v)}>
               <Plus className="h-4 w-4 mr-1" /> {adding ? "Cancelar" : "Adicionar"}
-            </Button>
+            </Button>}
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {confirmForceUi}
+        {confirmDelUi}
+        {assignmentsQuery.error && <QueryErrorNote error={assignmentsQuery.error} onRetry={() => assignmentsQuery.refetch()} retrying={assignmentsQuery.isFetching} what="a equipa deste turno" />}
+        {coverageQ.error && <QueryErrorNote error={coverageQ.error} onRetry={() => coverageQ.refetch()} retrying={coverageQ.isFetching} what="a falta de gente por hora" />}
+        {noticesQ.error && <QueryErrorNote error={noticesQ.error} onRetry={() => noticesQ.refetch()} retrying={noticesQ.isFetching} what="os avisos enviados" />}
+        {(candidatesQuery.error || tlCandidatesQuery.error) && (adding || addingTL) && (
+          <QueryErrorNote error={(candidatesQuery.error ?? tlCandidatesQuery.error)!} onRetry={() => { void candidatesQuery.refetch(); void tlCandidatesQuery.refetch(); }} retrying={candidatesQuery.isFetching || tlCandidatesQuery.isFetching} what="a lista de pessoas" />
+        )}
         {gaps.length > 0 && (
           <div className="rounded-md border border-red-300 bg-red-50/60 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
             <div className="flex items-center gap-2 font-medium">
@@ -886,7 +943,7 @@ function TeamSection({
                   </Avatar>
                   <span className="truncate" title={tl.personName}>{tl.personName}</span>{" "}
                   <span className="font-normal text-sm text-muted-foreground">
-                    · {fmtHour(tl.startHour)}–{fmtHour(tl.sentHomeHour ?? tl.endHour)} · {fmtEur(tl.cost)}/dia
+                    · {fmtHour(tl.startHour)}–{fmtHour(tl.sentHomeHour ?? tl.endHour)}{tl.cost != null && access.costs ? ` · ${fmtEur(tl.cost)}/dia` : ""}
                   </span>
                 </div>
               ) : (
@@ -895,13 +952,13 @@ function TeamSection({
                 </div>
               )}
             </div>
-            {!tl && (
+            {!tl && canEdit && (
               <Button size="sm" variant="outline" onClick={() => setAddingTL(v => !v)}>
                 {addingTL ? "Cancelar" : "Definir Team Leader"}
               </Button>
             )}
-            {tl && (
-              <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: tl.id })}>
+            {tl && canEdit && (
+              <Button size="sm" variant="ghost" aria-label={`Tirar ${tl.personName} de Team Leader`} onClick={() => void askRemove(tl)}>
                 <Trash2 className="h-3 w-3" />
               </Button>
             )}
@@ -947,9 +1004,9 @@ function TeamSection({
           <div className="text-sm text-muted-foreground">A carregar...</div>
         )}
 
-        {!assignmentsQuery.isLoading && drivers.length === 0 && !adding && (
+        {!assignmentsQuery.isLoading && !assignmentsQuery.error && drivers.length === 0 && !adding && (
           <div className="text-sm text-muted-foreground py-4 text-center">
-            Nenhum condutor escalado. Clica em "Adicionar" para começar.
+            Nenhum condutor escalado.{canEdit ? ' Clica em "Adicionar" para começar.' : ""}
           </div>
         )}
 
@@ -959,13 +1016,14 @@ function TeamSection({
               <thead>
                 <tr className="border-b text-xs uppercase text-muted-foreground">
                   <th className="text-left py-2 px-2">Pessoa</th>
-                  <th className="text-left py-2 px-2">Nível</th>
-                  <th className="text-right py-2 px-2">Início</th>
-                  <th className="text-right py-2 px-2">Fim</th>
-                  <th className="text-right py-2 px-2">Mandado p/ casa</th>
-                  <th className="text-right py-2 px-2">Horas pagas</th>
-                  <th className="text-right py-2 px-2">Custo</th>
-                  <th className="text-right py-2 px-2"></th>
+                  <th className="text-left py-2 px-2 hidden sm:table-cell">Nível</th>
+                  <th className="text-right py-2 px-2"><span className="sm:hidden">Horas</span><span className="hidden sm:inline">Início</span></th>
+                  <th className="text-right py-2 px-2 hidden sm:table-cell">Fim</th>
+                  <th className="text-right py-2 px-2 hidden sm:table-cell">Mandado p/ casa</th>
+                  <th className="text-right py-2 px-2 hidden sm:table-cell">Horas pagas</th>
+                  {access.costs && <th className="text-right py-2 px-2 hidden sm:table-cell">Custo</th>}
+                  {/* Sem <span sr-only>: absoluto, saía do contentor que rola e alargava a página no telemóvel. */}
+                  {canEdit && <th className="text-right py-2 px-2 hidden sm:table-cell" aria-label="Ações" />}
                 </tr>
               </thead>
               <tbody>
@@ -975,7 +1033,7 @@ function TeamSection({
                     assignment={a}
                     notice={noticeByAssignment.get(a.id) ?? null}
                     onSave={(payload) => { void saveAssignment({ ...payload, id: a.id, city }).catch(() => {}); }}
-                    onDelete={() => del.mutate({ id: a.id })}
+                    onDelete={() => void askRemove(a)}
                     busy={upsert.isPending || del.isPending}
                   />
                 ))}
@@ -1029,6 +1087,7 @@ function AssignmentForm({
   submitting: boolean;
 }) {
   const levels = useLiveLevels();
+  const { costs } = useContext(ExtrasAccessContext);
   const [employeeId, setEmployeeId] = useState<number | null>(null);
   const [personName, setPersonName] = useState("");
   const [level, setLevel] = useState<LevelId>("junior");
@@ -1119,7 +1178,7 @@ function AssignmentForm({
               <SelectContent>
                 {levels.map(l => (
                   <SelectItem key={l.id} value={l.id}>
-                    {l.label} ({fmtEur(l.hourlyRate)}/h)
+                    {costs ? `${l.label} (${fmtEur(l.hourlyRate)}/h)` : l.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1157,11 +1216,11 @@ function AssignmentForm({
           <div className="text-xs text-muted-foreground">Pré-visualização</div>
           {asTeamLeader ? (
             <div className="font-semibold">
-              Custo diário do TL (salário/15)
+              {span}h{costs ? " · custo diário do TL pelo salário" : ""}
             </div>
           ) : (
             <div className="font-semibold">
-              {span}h × {fmtEur(rate)} = {fmtEur(previewCost)}
+              {costs ? `${span}h × ${fmtEur(rate)} = ${fmtEur(previewCost)} (estimativa)` : `${span}h`}
             </div>
           )}
           {span < 3 && <div className="text-xs text-red-600">Mínimo 3h</div>}
@@ -1196,8 +1255,10 @@ function AssignmentForm({
   );
 }
 
-function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null } | null }) {
+function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null; outdated?: boolean } | null }) {
   if (!notice) return null;
+  // Mudaram as horas/pessoa depois do aviso: o que foi dito já não vale.
+  if (notice.outdated) return <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-800" title="O aviso foi das horas antigas — avisa outra vez">aviso desatualizado</Badge>;
   if (notice.declinedAt) return <Badge variant="destructive" className="text-[11px]" title="Respondeu que não pode">✗ não pode</Badge>;
   if (notice.confirmedAt) return <Badge className="bg-emerald-700 text-[11px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>;
   if (notice.status === "sent") return <Badge variant="secondary" className="text-[11px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>;
@@ -1211,7 +1272,7 @@ function AssignmentRow({
   onDelete,
   busy,
 }: {
-  notice?: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null } | null;
+  notice?: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null; outdated?: boolean } | null;
   assignment: {
     id: number;
     assignmentDate: string;
@@ -1225,7 +1286,8 @@ function AssignmentRow({
     sentHomeHour: number | null;
     notes: string | null;
     hoursBilled: number;
-    cost: number;
+    /** null = esta conta não vê o custo. */
+    cost: number | null;
     status?: "proposed" | "confirmed";
     proposalReason?: string | null;
   };
@@ -1235,6 +1297,7 @@ function AssignmentRow({
 }) {
   const a = assignment;
   const levels = useLiveLevels();
+  const { canEdit, costs } = useContext(ExtrasAccessContext);
   const openEmployeeRow = useOpenEmployee();
   const [editing, setEditing] = useState(false);
   const [level, setLevel] = useState<LevelId>((a.level ?? "junior") as LevelId);
@@ -1250,7 +1313,7 @@ function AssignmentRow({
     return (
       <tr className="border-b hover:bg-muted/30">
         <td className="py-2 px-2">
-          <span className="flex items-center gap-2">
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <Avatar className="h-6 w-6">
               <AvatarImage src={(a as any).photoUrl ?? undefined} className="object-cover" />
               <AvatarFallback className="text-[11px]">{a.personName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
@@ -1266,37 +1329,75 @@ function AssignmentRow({
             )}
           </span>
           {a.proposalReason && (
-            <div className="text-[11px] text-muted-foreground mt-0.5 max-w-md leading-snug" title="Porquê esta pessoa">
+            <div className="text-[11px] text-muted-foreground mt-0.5 max-w-[16rem] sm:max-w-md leading-snug break-words" title="Porquê esta pessoa">
               {a.proposalReason}
             </div>
           )}
+          {/* No telemóvel as colunas do nível e das horas pagas escondem-se: vão aqui. */}
+          <div className="sm:hidden text-[11px] text-muted-foreground mt-0.5">
+            {levels.find(l => l.id === a.level)?.label} · {a.hoursBilled}h pagas{a.sentHomeHour != null ? ` · p/ casa ${fmtHour(a.sentHomeHour)}` : ""}{costs && a.cost != null ? ` · ${fmtEur(a.cost)}` : ""}
+          </div>
+          {canEdit && (
+            <div className="sm:hidden flex gap-1 mt-1">
+              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => setEditing(true)}>Editar</Button>
+              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onDelete} disabled={busy} aria-label={`Tirar ${a.personName} da escala`}>
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            </div>
+          )}
         </td>
-        <td className="py-2 px-2">
+        <td className="py-2 px-2 hidden sm:table-cell">
           <Badge variant="secondary">{levels.find(l => l.id === a.level)?.label}</Badge>
         </td>
-        <td className="py-2 px-2 text-right font-mono">{fmtHour(a.startHour)}</td>
-        <td className="py-2 px-2 text-right font-mono">{fmtHour(a.endHour)}</td>
-        <td className="py-2 px-2 text-right font-mono">
+        <td className="py-2 px-2 text-right font-mono whitespace-nowrap">
+          {fmtHour(a.startHour)}<span className="sm:hidden">–{fmtHour(a.endHour)}</span>
+        </td>
+        <td className="py-2 px-2 text-right font-mono hidden sm:table-cell">{fmtHour(a.endHour)}</td>
+        <td className="py-2 px-2 text-right font-mono hidden sm:table-cell">
           {a.sentHomeHour != null ? fmtHour(a.sentHomeHour) : "—"}
         </td>
-        <td className="py-2 px-2 text-right">{a.hoursBilled}h</td>
-        <td className="py-2 px-2 text-right font-semibold">{fmtEur(a.cost)}</td>
-        <td className="py-2 px-2 text-right">
+        <td className="py-2 px-2 text-right hidden sm:table-cell">{a.hoursBilled}h</td>
+        {costs && <td className="py-2 px-2 text-right font-semibold hidden sm:table-cell">{a.cost != null ? fmtEur(a.cost) : "—"}</td>}
+        {canEdit && <td className="py-2 px-2 text-right hidden sm:table-cell">
           <div className="flex justify-end gap-1">
-            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>Editar</Button>
-            <Button size="sm" variant="ghost" onClick={onDelete} disabled={busy}>
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)} aria-label={`Editar ${a.personName}`}>Editar</Button>
+            <Button size="sm" variant="ghost" className="px-2" onClick={onDelete} disabled={busy} aria-label={`Tirar ${a.personName} da escala`}>
               <Trash2 className="h-3 w-3" />
             </Button>
           </div>
-        </td>
+        </td>}
       </tr>
     );
   }
 
   return (
     <tr className="border-b bg-muted/20">
-      <td className="py-2 px-2">{a.personName}</td>
       <td className="py-2 px-2">
+        {a.personName}
+        <div className="sm:hidden mt-1 flex flex-wrap gap-1">
+          <Select value={level} onValueChange={v => setLevel(v as LevelId)}>
+            <SelectTrigger className="h-8 w-28" aria-label="Nível"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {levels.map(l => (
+                <SelectItem key={l.id} value={l.id}>{l.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={sentHomeHour == null ? "none" : String(sentHomeHour)}
+            onValueChange={v => setSentHomeHour(v === "none" ? null : parseInt(v, 10))}
+          >
+            <SelectTrigger className="h-8 w-28" aria-label="Mandado para casa"><SelectValue placeholder="p/ casa —" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">— Não vai p/ casa —</SelectItem>
+              {HOURS_25.filter(h => h >= startHour && h <= endHour).map(h => (
+                <SelectItem key={h} value={String(h)}>p/ casa {fmtHour(h)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </td>
+      <td className="py-2 px-2 hidden sm:table-cell">
         <Select value={level} onValueChange={v => setLevel(v as LevelId)}>
           <SelectTrigger className="h-8 w-24"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -1308,21 +1409,30 @@ function AssignmentRow({
       </td>
       <td className="py-2 px-2 text-right">
         <Select value={String(startHour)} onValueChange={v => setStartHour(parseInt(v, 10))}>
-          <SelectTrigger className="h-8 w-20"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-8 w-[4.5rem] sm:w-20" aria-label="Início"><SelectValue /></SelectTrigger>
           <SelectContent>
             {HOURS_24.map(h => <SelectItem key={h} value={String(h)}>{fmtHour(h)}</SelectItem>)}
           </SelectContent>
         </Select>
+        {/* No telemóvel o fim vai por baixo do início (a coluna "Fim" esconde-se). */}
+        <div className="sm:hidden mt-1">
+          <Select value={String(endHour)} onValueChange={v => setEndHour(parseInt(v, 10))}>
+            <SelectTrigger className="h-8 w-[4.5rem]" aria-label="Fim"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {HOURS_25.map(h => <SelectItem key={h} value={String(h)}>{fmtHour(h)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
       </td>
-      <td className="py-2 px-2 text-right">
+      <td className="py-2 px-2 text-right hidden sm:table-cell">
         <Select value={String(endHour)} onValueChange={v => setEndHour(parseInt(v, 10))}>
-          <SelectTrigger className="h-8 w-20"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-8 w-[4.5rem] sm:w-20" aria-label="Fim"><SelectValue /></SelectTrigger>
           <SelectContent>
             {HOURS_25.map(h => <SelectItem key={h} value={String(h)}>{fmtHour(h)}</SelectItem>)}
           </SelectContent>
         </Select>
       </td>
-      <td className="py-2 px-2 text-right">
+      <td className="py-2 px-2 text-right hidden sm:table-cell">
         <Select
           value={sentHomeHour == null ? "none" : String(sentHomeHour)}
           onValueChange={v => setSentHomeHour(v === "none" ? null : parseInt(v, 10))}
@@ -1340,10 +1450,10 @@ function AssignmentRow({
           </SelectContent>
         </Select>
       </td>
-      <td className="py-2 px-2 text-right">{Math.max(0, span)}h</td>
-      <td className="py-2 px-2 text-right font-semibold">{fmtEur(computedCost)}</td>
+      <td className="py-2 px-2 text-right hidden sm:table-cell">{Math.max(0, span)}h</td>
+      {costs && <td className="py-2 px-2 text-right font-semibold hidden sm:table-cell">{fmtEur(computedCost)}</td>}
       <td className="py-2 px-2 text-right">
-        <div className="flex justify-end gap-1">
+        <div className="flex flex-col sm:flex-row justify-end gap-1">
           <Button
             size="sm"
             disabled={busy || endHour - startHour < 3 || endHour - startHour > 12}
@@ -1531,6 +1641,10 @@ function SlotBookings({
   const checkins = checkinsQ.data ?? [];
   const checkouts = checkoutsQ.data ?? [];
   const loading = checkinsQ.isLoading || checkoutsQ.isLoading;
+  const failed = checkinsQ.error ?? checkoutsQ.error;
+  if (failed) {
+    return <QueryErrorNote error={failed} onRetry={() => { void checkinsQ.refetch(); void checkoutsQ.refetch(); }} retrying={checkinsQ.isFetching || checkoutsQ.isFetching} what="as reservas deste intervalo" />;
+  }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">

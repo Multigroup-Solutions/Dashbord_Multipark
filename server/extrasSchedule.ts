@@ -145,9 +145,11 @@ export async function getScheduleState(date: string, city: string): Promise<Sche
 export async function setScheduleHold(date: string, city: ScheduleCity, hold: boolean, userId: number | null): Promise<{ hold: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
+  // Sem estado ainda: 'hold' (só suspenso) — NÃO é uma proposta. Antes ficava
+  // 'proposed' sem proposta e o cron nunca mais propunha esse dia.
   await db.execute(sql`
     INSERT INTO extras_dia_schedules (assignmentDate, city, status, holdAuto)
-    VALUES (${date}, ${city}, 'proposed', ${hold ? 1 : 0})
+    VALUES (${date}, ${city}, 'hold', ${hold ? 1 : 0})
     ON DUPLICATE KEY UPDATE holdAuto = VALUES(holdAuto)`);
   await logActivity({
     userId: userId ?? 0,
@@ -260,6 +262,25 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
 
 // ─── Propor ─────────────────────────────────────────────────────────────────
 
+export const PAST_DAY_MESSAGE = "Esse dia já passou: não se confirma nem se avisa ninguém.";
+
+/**
+ * A previsão está incompleta? (leitura cortada no limite, ou só a cópia das
+ * reservas porque a BD da Multipark não respondeu). A automação não propõe
+ * nem avisa faltas com ela. null = completa. PURA.
+ */
+export function forecastIncompleteReason(f: { bookingsTruncated?: boolean; bookingSource?: string; bookingSourceNotice?: string | null }): string | null {
+  if (f.bookingsTruncated) return "previsão incompleta: a leitura das reservas foi cortada no limite";
+  if (f.bookingSource === "copy") return `previsão incompleta: ${f.bookingSourceNotice ?? "sem a BD da Multipark (só a cópia das reservas)"}`;
+  return null;
+}
+
+/** Liberta a reserva do cron (um dia suspenso volta a 'hold' — a suspensão não se perde). */
+async function releaseAutoClaim(db: { execute: (q: any) => Promise<any> }, date: string, city: string): Promise<void> {
+  await db.execute(sql`DELETE FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 0`);
+  await db.execute(sql`UPDATE extras_dia_schedules SET status = 'hold' WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 1`);
+}
+
 export interface ProposeResult {
   status: "proposed" | "skipped";
   reason?: string;
@@ -273,19 +294,47 @@ type AssignmentRow = {
   id: number; assignmentDate: string; employeeId: number | null; personName: string; city: string;
   isTeamLeader: number; startHour: number; endHour: number; sentHomeHour: number | null;
   status: string; version: number; shift: string;
+  /** 'auto' = criada pela proposta automática (só essas se substituem ao refazer). */
+  source?: string;
 };
+
+/** A proposta refeita substitui esta linha? Só as que ela criou e ainda estão por confirmar (nunca TL). PURA. */
+export function replacedByNewProposal(r: { city: string; status: string; isTeamLeader: number; source?: string }, city: string): boolean {
+  return r.city === city && r.status === "proposed" && r.isTeamLeader === 0 && (r.source ?? "manual") === "auto";
+}
+
+type Exec = { execute: (q: any) => Promise<any> };
+/**
+ * Linhas que saem da escala → arquivo (a linha inteira, quem, quando e porquê)
+ * e só depois saem da tabela. Nunca se perdem.
+ */
+export async function archiveAssignments(exec: Exec, where: ReturnType<typeof sql>, reason: "removida" | "substituida", userId: number | null): Promise<number> {
+  await exec.execute(sql`
+    INSERT INTO extras_dia_assignments_removed
+      (assignmentId, assignmentDate, city, employeeId, personName, isTeamLeader, shift, startHour, endHour, status, version, rowJson, removedReason, removedById)
+    SELECT id, assignmentDate, city, employeeId, personName, isTeamLeader, shift, startHour, endHour, status, version,
+      JSON_OBJECT('id', id, 'assignmentDate', assignmentDate, 'city', city, 'employeeId', employeeId, 'personName', personName,
+        'level', level, 'isTeamLeader', isTeamLeader, 'shift', shift, 'startHour', startHour, 'endHour', endHour,
+        'sentHomeHour', sentHomeHour, 'notes', notes, 'status', status, 'version', version, 'source', source,
+        'proposalReason', proposalReason, 'createdById', createdById, 'updatedById', updatedById,
+        'createdAt', createdAt, 'updatedAt', updatedAt),
+      ${reason}, ${userId}
+      FROM extras_dia_assignments WHERE ${where}`);
+  return extractAffectedRows(await exec.execute(sql`DELETE FROM extras_dia_assignments WHERE ${where}`));
+}
 
 async function loadDayRows(date: string): Promise<AssignmentRow[]> {
   const db = await getDb();
   if (!db) return [];
   const res = await db.execute(sql`
-    SELECT id, assignmentDate, employeeId, personName, city, isTeamLeader, startHour, endHour, sentHomeHour, status, version, shift
+    SELECT id, assignmentDate, employeeId, personName, city, isTeamLeader, startHour, endHour, sentHomeHour, status, version, shift, source
       FROM extras_dia_assignments WHERE assignmentDate = ${date}`);
   return rowsOf(res).map((r) => ({
     id: Number(r.id), assignmentDate: String(r.assignmentDate), employeeId: r.employeeId == null ? null : Number(r.employeeId),
     personName: String(r.personName), city: String(r.city), isTeamLeader: Number(r.isTeamLeader), startHour: Number(r.startHour),
     endHour: Number(r.endHour), sentHomeHour: r.sentHomeHour == null ? null : Number(r.sentHomeHour),
     status: String(r.status ?? "confirmed"), version: Number(r.version ?? 1), shift: String(r.shift),
+    source: String(r.source ?? "manual"),
   }));
 }
 
@@ -300,9 +349,13 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
   const { date, city, by } = input;
 
   if (by === "auto") {
+    // Um dia só "suspenso" (hold, sem proposta) também se propõe; a suspensão
+    // continua (o cron não confirma nem envia).
     const claim = await db.execute(sql`
-      INSERT IGNORE INTO extras_dia_schedules (assignmentDate, city, status, proposedBy, proposedAt)
-      VALUES (${date}, ${city}, 'proposing', 'auto', NOW())`);
+      INSERT INTO extras_dia_schedules (assignmentDate, city, status, proposedBy, proposedAt)
+      VALUES (${date}, ${city}, 'proposing', 'auto', NOW())
+      ON DUPLICATE KEY UPDATE proposedBy = IF(status = 'hold', 'auto', proposedBy), proposedAt = IF(status = 'hold', NOW(), proposedAt),
+        status = IF(status = 'hold', 'proposing', status)`);
     if (extractAffectedRows(claim) === 0) {
       return { status: "skipped", reason: "já tem proposta ou escala", proposed: 0, kept: 0, gaps: [], summary: null };
     }
@@ -311,12 +364,20 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
   try {
     const { getExtrasDiaForecast } = await import("./extrasDia");
     const forecast = await getExtrasDiaForecast(addDaysIso(date, -1), city);
+    // Com a previsão incompleta o cron não propõe (faltariam pessoas); à mão
+    // propõe na mesma, com o aviso no resumo.
+    const incomplete = forecastIncompleteReason(forecast);
+    if (incomplete && by === "auto") {
+      await releaseAutoClaim(db, date, city);
+      return { status: "skipped", reason: incomplete, proposed: 0, kept: 0, gaps: [], summary: null };
+    }
     const needed = forecast.hourly.map((h) => h.driversNeeded);
     const dayRows = await loadDayRows(date);
-    const kept = dayRows.filter((r) => r.city === city && r.isTeamLeader === 0 && r.status !== "proposed");
-    // Quem já está no dia (outra cidade, TL, ou confirmado aqui) não entra outra vez.
+    // Fica tudo o que a proposta não criou: confirmadas e as postas à mão (mesmo por confirmar).
+    const kept = dayRows.filter((r) => r.city === city && r.isTeamLeader === 0 && !replacedByNewProposal(r, city));
+    // Quem já está no dia (outra cidade, TL, confirmado ou posto à mão aqui) não entra outra vez.
     const exclude = new Set(
-      dayRows.filter((r) => !(r.city === city && r.status === "proposed" && r.isTeamLeader === 0) && r.employeeId != null).map((r) => r.employeeId as number),
+      dayRows.filter((r) => !replacedByNewProposal(r, city) && r.employeeId != null).map((r) => r.employeeId as number),
     );
     const candidates = await loadScheduleCandidates(date, city);
     const plan = planSchedule({ needed, existing: kept, candidates, exclude });
@@ -324,27 +385,27 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
     let peakDrivers = 0;
     let peakHour: number | null = null;
     needed.forEach((n, h) => { if (n > peakDrivers) { peakDrivers = n; peakHour = h; } });
-    const summary = explainProposal({
+    const summaryBody = explainProposal({
       date, city, carsPerHour: forecast.carsPerHourPerDriver, peakDrivers, peakHour,
       picks: plan.picks.map((p) => ({ personName: p.personName, startHour: p.startHour, endHour: p.endHour, hourlyRate: p.hourlyRate })),
       keptCount: kept.length,
       gaps: plan.gaps,
     });
+    const summary = incomplete ? `⚠ ${incomplete[0].toUpperCase()}${incomplete.slice(1)}.\n${summaryBody}` : summaryBody;
 
     await db.transaction(async (tx) => {
       await tx.execute(sql`
         INSERT IGNORE INTO extras_dia_schedules (assignmentDate, city, status) VALUES (${date}, ${city}, 'proposing')`);
       // Serializa propostas concorrentes do mesmo dia/cidade.
       await tx.execute(sql`SELECT assignmentDate FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} FOR UPDATE`);
-      await tx.execute(sql`
-        DELETE FROM extras_dia_assignments
-         WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposed' AND isTeamLeader = 0`);
+      // Só as linhas da proposta anterior saem — para o arquivo, nunca apagadas de vez.
+      await archiveAssignments(tx, sql`assignmentDate = ${date} AND city = ${city} AND status = 'proposed' AND isTeamLeader = 0 AND source = 'auto'`, "substituida", input.userId);
       for (const p of plan.picks) {
         await tx.execute(sql`
           INSERT INTO extras_dia_assignments
-            (assignmentDate, city, employeeId, personName, level, isTeamLeader, shift, startHour, endHour, notes, status, version, proposalReason, createdById)
+            (assignmentDate, city, employeeId, personName, level, isTeamLeader, shift, startHour, endHour, notes, status, version, proposalReason, createdById, source)
           VALUES (${date}, ${city}, ${p.employeeId}, ${p.personName.slice(0, 128)}, ${p.level}, 0, ${p.shift}, ${p.startHour}, ${p.endHour},
-                  'proposta automática', 'proposed', 1, ${p.reason.slice(0, 500)}, ${input.userId})`);
+                  'proposta automática', 'proposed', 1, ${p.reason.slice(0, 500)}, ${input.userId}, 'auto')`);
       }
       await tx.execute(sql`
         UPDATE extras_dia_schedules
@@ -376,7 +437,7 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
   } catch (err) {
     if (by === "auto") {
       // Liberta a reserva para a próxima corrida tentar outra vez.
-      await db.execute(sql`DELETE FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing'`);
+      await releaseAutoClaim(db, date, city);
     }
     throw err;
   }
@@ -407,6 +468,8 @@ export async function confirmSchedule(input: { date: string; city: ScheduleCity;
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
   const { date, city, by } = input;
+  // Confirmar avisa as pessoas: nunca para um dia que já passou.
+  if (date < lisbonNow().date) throw new Error(PAST_DAY_MESSAGE);
   let confirmed = 0;
   if (by === "auto") {
     const claim = await db.execute(sql`
@@ -636,7 +699,8 @@ export async function removeAssignment(id: number, userId: number | null): Promi
   };
   await assertCityInScope(row.city);
   const notified = await wasScheduledNotified(row.id);
-  await db.execute(sql`DELETE FROM extras_dia_assignments WHERE id = ${id}`);
+  // Para o arquivo (linha inteira + quem + quando), nunca apagada de vez.
+  await db.transaction(async (tx) => { await archiveAssignments(tx, sql`id = ${id}`, "removida", userId); });
   out.removed = true;
   import("./google/pendingSync")
     .then((m) => m.scheduleGoogleShiftSync({ city: row.city, date: row.assignmentDate.slice(0, 10), employeeIds: row.employeeId != null ? [row.employeeId] : [] }))
@@ -707,15 +771,27 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
 
 // ─── Pedir disponibilidade a quem não respondeu ─────────────────────────────
 
-export async function resendAvailabilityRequest(date: string, city: ScheduleCity, userId: number | null): Promise<{ targets: number; emailSent: number; whatsappSent: number }> {
-  const { listDriverCandidates } = await import("./extrasDia");
-  const all = await listDriverCandidates(date);
-  const noAnswer = all.filter((c) => (c.availability?.status ?? "no_response") === "no_response");
-  if (!noAnswer.length) return { targets: 0, emailSent: 0, whatsappSent: 0 };
+/**
+ * Quem recebe "Pedir disponibilidade a quem não respondeu": EXTRAS ativos, sem
+ * resposta para esse dia, da cidade (ou sem cidade na ficha). A MESMA lista dá
+ * o número do botão e o envio — antes o botão contava toda a gente de todas as
+ * cidades (25) e o envio ia a 10.
+ */
+export async function noAnswerTargets(
+  date: string, city: ScheduleCity,
+  cands?: Array<{ id: number; position?: string | null; availability?: { status?: string | null } | null }>,
+): Promise<number[]> {
+  const list = cands ?? await (await import("./extrasDia")).listDriverCandidates(date);
+  const noAnswer = list.filter((c) => (c.position ?? "").toLowerCase() === "extra" && (c.availability?.status ?? "no_response") === "no_response");
+  if (!noAnswer.length) return [];
   const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
   const cities = await resolveCitiesForEmployeeIds(noAnswer.map((c) => c.id));
   const cityKey = city === "lisbon" ? "lisboa" : city;
-  const ids = noAnswer.filter((c) => { const k = cities.get(c.id)?.city ?? null; return k == null || k === cityKey; }).map((c) => c.id);
+  return noAnswer.filter((c) => { const k = cities.get(c.id)?.city ?? null; return k == null || k === cityKey; }).map((c) => c.id);
+}
+
+export async function resendAvailabilityRequest(date: string, city: ScheduleCity, userId: number | null): Promise<{ targets: number; emailSent: number; whatsappSent: number }> {
+  const ids = await noAnswerTargets(date, city);
   if (!ids.length) return { targets: 0, emailSent: 0, whatsappSent: 0 };
   const { mondayOf } = await import("./extrasAvailability");
   const weekStart = mondayOf(new Date(`${date}T12:00:00`));
@@ -782,7 +858,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     neededPeak: Math.max(0, ...needed),
     proposedCount: mine.filter((r) => r.status === "proposed").length,
     confirmedCount: mine.filter((r) => r.status !== "proposed").length,
-    noAnswerCount: cands.filter((c) => (c.availability?.status ?? "no_response") === "no_response").length,
+    noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
     availableCount: cands.filter((c) => availabilityWindow(c.availability ?? null) != null).length,
     notifications,
     settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead },

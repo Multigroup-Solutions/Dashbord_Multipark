@@ -71,10 +71,8 @@ import {
   getExtrasDiaForecast,
   listAssignments,
   upsertAssignment,
-  deleteAssignment,
   listDriverCandidates,
   getBookingsInSlot,
-  getExtrasDiaCostForRange,
 } from "./extrasDia";
 import {
   sendWeeklyAvailabilityRequest,
@@ -206,6 +204,13 @@ async function filterOwnCases<T extends { id: number }>(user: { id: number; role
 // ─── EQUIPA: fichas abaixo de quem vê, na sua cidade (alcance "below_city") ──
 /** Semana da disponibilidade: dia ISO e segunda-feira (senão as linhas ficavam numa "semana" que ninguém lê). */
 const weekStartSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isMondayIso, NOT_MONDAY_MESSAGE);
+
+/** Que euros do Extras Dia esta conta vê (shared/extrasCostView.ts). */
+async function extrasCostViewFor(user: { id: number; role: string }) {
+  const { extrasCostView } = await import("../shared/extrasCostView");
+  const { withOverrides } = await import("./_core/access");
+  return extrasCostView(withOverrides(user as any), { financeTotals: await canSeeFinanceTotals(user) });
+}
 
 async function belowEmployeeIds(user: { id: number; role: string }): Promise<Set<number>> {
   const { getDb } = await import("./db");
@@ -4267,11 +4272,20 @@ export const appRouter = router({
 
   // ── EXTRAS DIA — Daily forecast & driver allocation (Lisboa) ────────────────
   extrasDia: router({
+    // Que euros esta conta vê (o ecrã esconde as colunas; o servidor tira os valores).
+    costAccess: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "extras_dia", "view");
+      return extrasCostViewFor(ctx.user);
+    }),
+
     forecast: protectedProcedure
-      .input(z.object({ baseDate: z.string().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }).optional())
+      .input(z.object({ baseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }).optional())
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
-        return getExtrasDiaForecast(input?.baseDate, input?.city ?? "lisbon");
+        const f = await getExtrasDiaForecast(input?.baseDate, input?.city ?? "lisbon");
+        const v = await extrasCostViewFor(ctx.user);
+        const { maskForecastCosts } = await import("./extrasDia");
+        return v.costs ? f : maskForecastCosts(f);
       }),
 
     candidates: protectedProcedure
@@ -4293,23 +4307,27 @@ export const appRouter = router({
       .input(z.object({ date: z.string(), projectId: z.number().optional(), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
-        return listAssignments(input.date, input.city);
+        const v = await extrasCostViewFor(ctx.user);
+        const { maskAssignmentCost } = await import("../shared/extrasCostView");
+        return (await listAssignments(input.date, input.city)).map((a) => maskAssignmentCost(a, v));
       }),
 
     upsertAssignment: protectedProcedure
       .input(
         z.object({
           id: z.number().optional(),
-          assignmentDate: z.string(),
+          assignmentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida"),
           employeeId: z.number().nullable().optional(),
           personName: z.string().min(1).max(128),
           level: z.enum(["junior", "senior", "terminal", "master"]).nullable().optional(),
           isTeamLeader: z.boolean().optional(),
           shift: z.enum(["morning", "night"]),
           city: z.enum(["lisbon", "porto", "faro"]).optional(),
-          startHour: z.number().int().min(0).max(27),
-          endHour: z.number().int().min(1).max(27),
-          sentHomeHour: z.number().int().min(0).max(27).nullable().optional(),
+          // O dia operacional começa às 03h (a noite vai até às 27 = 03h do dia seguinte):
+          // um turno das 0h–2h é da noite ANTERIOR (antes era aceite e a previsão ignorava-o).
+          startHour: z.number().int().min(3, "O dia operacional começa às 03h — da 0h às 3h é a noite do dia anterior (24h–27h)").max(26),
+          endHour: z.number().int().min(4).max(27),
+          sentHomeHour: z.number().int().min(3).max(27).nullable().optional(),
           notes: z.string().max(255).nullable().optional(),
           // Admin força a escala de quem ainda não concluiu a formação obrigatória
           override: z.boolean().optional(),
@@ -4348,11 +4366,24 @@ export const appRouter = router({
             await logActivity({ userId: ctx.user.id, action: "training_escala_override", entity: "employees", entityId: input.employeeId, details: `Escalado sem formação concluída (${elig.missing.join(", ")}) · ${input.assignmentDate} ${input.shift}` });
           }
         }
+        let saved: Awaited<ReturnType<typeof upsertAssignment>>;
         try {
-          return await upsertAssignment({ ...input, createdById: ctx.user.id });
+          saved = await upsertAssignment({ ...input, createdById: ctx.user.id, updatedById: ctx.user.id, source: "manual" });
         } catch (err: any) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao guardar" });
+          const { ScheduleConflictError } = await import("./extrasDia");
+          throw new TRPCError({ code: err instanceof ScheduleConflictError ? "CONFLICT" : "BAD_REQUEST", message: err.message || "Erro ao guardar" });
         }
+        // Quem fez o quê na escala (antes só a remoção ficava registada).
+        if (!saved) return null;
+        {
+          await logActivity({
+            userId: ctx.user.id, action: input.id ? "extras_dia_assignment_update" : "extras_dia_assignment_create",
+            entity: "extras_dia_assignments", entityId: saved.id,
+            details: `${input.id ? "Alterado" : "Escalado"}: ${input.personName}${input.isTeamLeader ? " (TL)" : ""} · ${input.assignmentDate} · ${input.city ?? "lisbon"} · ${input.startHour}h–${input.endHour}h`,
+          });
+        }
+        const { maskAssignmentCost } = await import("../shared/extrasCostView");
+        return maskAssignmentCost(saved, await extrasCostViewFor(ctx.user));
       }),
 
     deleteAssignment: protectedProcedure
@@ -4373,7 +4404,11 @@ export const appRouter = router({
         requireAccess(ctx.user, "extras_dia", "view");
         const { assertCityInScope, getScheduleOverview } = await import("./extrasSchedule");
         await assertCityInScope(input.city);
-        return getScheduleOverview(input.date, input.city);
+        const o = await getScheduleOverview(input.date, input.city);
+        const v = await extrasCostViewFor(ctx.user);
+        if (v.costs || !o.state?.summary) return o;
+        const { stripEuros } = await import("../shared/extrasCostView");
+        return { ...o, state: { ...o.state, summary: stripEuros(o.state.summary) } };
       }),
 
     propose: protectedProcedure
@@ -4451,7 +4486,9 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
         const { getExtrasMetrics } = await import("./extrasMetrics");
-        return getExtrasMetrics(input?.days ?? 30);
+        const m = await getExtrasMetrics(input?.days ?? 30);
+        // Custos só para quem os vê (as horas ficam).
+        return (await extrasCostViewFor(ctx.user)).costs ? m : { ...m, cost: { ...m.cost, planned: 0, paid: 0 }, costHidden: true as const };
       }),
 
     coverageOutlook: protectedProcedure
@@ -4463,30 +4500,32 @@ export const appRouter = router({
       }),
 
     notices: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      // Com a cidade: só os avisos dessa cidade (antes vinham os de todas).
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]).optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
         const { listNotices } = await import("./extrasAutomation");
-        return listNotices(input.date);
+        return listNotices(input.date, input.city ?? null);
       }),
 
     notify: protectedProcedure
-      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), city: z.enum(["lisbon", "porto", "faro"]) }))
+      .input(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        city: z.enum(["lisbon", "porto", "faro"]),
+        // O botão é de um turno: só avisa esse turno (antes avisava o dia todo).
+        shift: z.enum(["morning", "night"]).optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "edit");
         const { notifyAssignments } = await import("./extrasAutomation");
+        const { PAST_DAY_MESSAGE } = await import("./extrasSchedule");
+        const { lisbonNow } = await import("../shared/extrasSchedule");
+        if (input.date < lisbonNow().date) throw new TRPCError({ code: "BAD_REQUEST", message: PAST_DAY_MESSAGE });
         try {
-          return await notifyAssignments(input.date, { city: input.city, createdById: ctx.user.id });
+          return await notifyAssignments(input.date, { city: input.city, shift: input.shift ?? null, createdById: ctx.user.id });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao avisar" });
         }
-      }),
-
-    costForRange: protectedProcedure
-      .input(z.object({ startDate: z.string(), endDate: z.string() }))
-      .query(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "extras_dia", "view");
-        return getExtrasDiaCostForRange(input.startDate, input.endDate);
       }),
 
     bookingsInSlot: protectedProcedure

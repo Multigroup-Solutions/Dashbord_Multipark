@@ -25,6 +25,7 @@ import { isFeatureEnabled } from "./_core/featureFlags";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
+import { availabilityWindow } from "../shared/extrasSchedule";
 
 // ─── Relógio de Lisboa (puro) ───────────────────────────────────────────────
 
@@ -135,16 +136,19 @@ export interface AutofillCandidate {
 }
 export interface AutofillPick { employeeId: number; personName: string; level: AutofillCandidate["level"]; startHour: number; endHour: number }
 
-/** Janela (horas) em que o extra disse que pode, para este turno; null = não pode. */
+/**
+ * Janela (horas) em que o extra disse que pode, para este turno; null = não
+ * pode. É a MESMA leitura da proposta automática (availabilityWindow: horas
+ * que atravessam a meia-noite, só o início, só os turnos), cortada ao turno —
+ * antes "Preencher" e a proposta davam respostas diferentes para a mesma pessoa.
+ */
 export function availableWindow(a: AutofillCandidate["availability"], shift: ShiftKey): { from: number; to: number } | null {
-  if (!a || a.status !== "available") return null;
+  const w = availabilityWindow(a);
+  if (!w) return null;
   const bounds = shift === "morning" ? { from: 3, to: 15 } : { from: 15, to: 27 };
-  if (a.fromHour != null && a.toHour != null) {
-    const from = Math.max(bounds.from, a.fromHour);
-    const to = Math.min(bounds.to, a.toHour);
-    return to - from >= 3 ? { from, to } : null;
-  }
-  return (shift === "morning" ? a.morning : a.night) ? bounds : null;
+  const from = Math.max(bounds.from, w.from);
+  const to = Math.min(bounds.to, w.to);
+  return to - from >= 3 ? { from, to } : null;
 }
 
 /**
@@ -330,15 +334,25 @@ export async function runReminder(weekStart: string): Promise<RequestRunResult> 
 
 // ─── 7. Aviso de escala por WhatsApp ────────────────────────────────────────
 
-export interface NoticeRow { assignmentId: number; status: string; sentAt: string; confirmedAt: string | null; declinedAt: string | null; error: string | null }
+export interface NoticeRow {
+  assignmentId: number; status: string; sentAt: string; confirmedAt: string | null; declinedAt: string | null; error: string | null;
+  /** O aviso foi de uma versão ANTERIOR da linha (mudaram as horas/pessoa depois): já não vale. */
+  outdated: boolean;
+}
 
-export async function listNotices(date: string): Promise<NoticeRow[]> {
+export async function listNotices(date: string, city: string | null = null): Promise<NoticeRow[]> {
   const db = await getDb();
   if (!db) return [];
   await ensureTables();
+  const byCity = city ? sql` AND a.city = ${city}` : sql``;
+  // Desatualizado: a linha mudou (versão > 1) e a versão ATUAL não tem aviso enviado.
   const [rows] = (await db.execute(sql`
-    SELECT assignmentId, status, sentAt, confirmedAt, declinedAt, error
-      FROM \`extras_dia_notices\` WHERE assignmentDate = ${date}`)) as any;
+    SELECT n.assignmentId, n.status, n.sentAt, n.confirmedAt, n.declinedAt, n.error,
+      (a.version > 1 AND NOT EXISTS (SELECT 1 FROM extras_dia_notifications x
+        WHERE x.assignmentId = n.assignmentId AND x.version = a.version AND x.kind = 'scheduled' AND x.status = 'sent')) AS outdated
+      FROM \`extras_dia_notices\` n
+      LEFT JOIN extras_dia_assignments a ON a.id = n.assignmentId
+     WHERE n.assignmentDate = ${date}${byCity}`)) as any;
   return (rows as any[]).map((r) => ({
     assignmentId: Number(r.assignmentId),
     status: String(r.status),
@@ -346,6 +360,7 @@ export async function listNotices(date: string): Promise<NoticeRow[]> {
     confirmedAt: r.confirmedAt ? String(r.confirmedAt) : null,
     declinedAt: r.declinedAt ? String(r.declinedAt) : null,
     error: r.error ? String(r.error) : null,
+    outdated: Number(r.outdated ?? 0) === 1,
   }));
 }
 
@@ -361,7 +376,7 @@ export interface NotifyResult { total: number; sent: number; failed: number; ski
  */
 export async function notifyAssignments(
   date: string,
-  opts: { city?: string | null; createdById?: number | null; respectHold?: boolean } = {},
+  opts: { city?: string | null; shift?: "morning" | "night" | null; createdById?: number | null; respectHold?: boolean } = {},
 ): Promise<NotifyResult> {
   const db = await getDb();
   const res: NotifyResult = { total: 0, sent: 0, failed: 0, skipped: 0, rulesSent: 0, optedOut: 0 };
@@ -374,6 +389,7 @@ export async function notifyAssignments(
   const { and, eq, isNotNull } = await import("drizzle-orm");
   const conds = [eq(extrasDiaAssignments.assignmentDate, date), isNotNull(extrasDiaAssignments.employeeId), eq(extrasDiaAssignments.status, "confirmed")];
   if (opts.city) conds.push(eq(extrasDiaAssignments.city, opts.city));
+  if (opts.shift) conds.push(eq(extrasDiaAssignments.shift, opts.shift));
   let rows = await db.select().from(extrasDiaAssignments).where(and(...conds));
   const sched = await import("./extrasSchedule");
   if (opts.respectHold) {
@@ -381,7 +397,8 @@ export async function notifyAssignments(
     rows = rows.filter((a) => !held.has(a.city));
   }
   const { pendingScheduleNotifications, scheduleMessageText, whatsappOutcomeStatus } = await import("../shared/extrasSchedule");
-  const legacySent = new Set((await listNotices(date)).filter((n) => n.status === "sent").map((n) => n.assignmentId));
+  // Um aviso antigo de uma versão anterior (horas mudadas) não impede o aviso novo.
+  const legacySent = new Set((await listNotices(date)).filter((n) => n.status === "sent" && !n.outdated).map((n) => n.assignmentId));
   const log = await sched.loadNotifyLog(rows.map((a) => a.id));
   const candidates = pendingScheduleNotifications(rows, log, "whatsapp", legacySent);
   res.total = rows.length;
@@ -562,11 +579,17 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
 
 /** Horas com falta de gente num dia/cidade (previsão vs escalados). */
 export async function coverageFor(date: string, city: CityId): Promise<CoverageGap[]> {
+  return (await coverageReport(date, city)).gaps;
+}
+
+/** O mesmo, e se a previsão está incompleta (nesse caso não se avisa ninguém de faltas). */
+export async function coverageReport(date: string, city: CityId): Promise<{ gaps: CoverageGap[]; incomplete: string | null }> {
   const { getExtrasDiaForecast, listAssignments } = await import("./extrasDia");
+  const { forecastIncompleteReason } = await import("./extrasSchedule");
   const forecast = await getExtrasDiaForecast(addDaysIso(date, -1), city);
   const needed = forecast.hourly.map((h) => h.driversNeeded);
   const drivers = (await listAssignments(date, city)).filter((a) => !a.isTeamLeader);
-  return coverageGaps(needed, drivers);
+  return { gaps: coverageGaps(needed, drivers), incomplete: forecastIncompleteReason(forecast) };
 }
 
 // ─── 6. Respostas pelo WhatsApp ─────────────────────────────────────────────
@@ -986,8 +1009,10 @@ export async function runExtrasAutomation(now: Date = new Date(), opts: { deadli
     steps.push({ key: "tomorrow-coverage", fn: () => run(`coverage:${date}`, async () => {
       const out: Record<string, number> = {};
       for (const city of ["lisbon", "porto", "faro"] as CityId[]) {
-        const gaps = await coverageFor(date, city);
+        const { gaps, incomplete } = await coverageReport(date, city);
         out[city] = gaps.length;
+        // Previsão incompleta: as "faltas" seriam falsas — não se avisa ninguém.
+        if (incomplete) { out[`${city}_incompleta`] = 1; continue; }
         if (gaps.length) {
           const label = city === "lisbon" ? "Lisboa" : city === "porto" ? "Porto" : "Faro";
           const { notify } = await import("./notify");

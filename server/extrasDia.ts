@@ -25,7 +25,7 @@ import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from ".
 import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
 import { DEFAULT_CARS_PER_HOUR } from "../shared/appSettings";
 import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, carsPerHourFor, driversNeededFor } from "../shared/extrasSchedule";
-import { lisbonWallTimeUtcMs } from "../shared/lisbonDay";
+import { lisbonDayOf, lisbonWallTimeUtcMs } from "../shared/lisbonDay";
 import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -56,18 +56,6 @@ export const SLOTS_PER_DAY = 24 * SLOTS_PER_HOUR; // 72
 export const FORECAST_HOURS = 27;
 export const FORECAST_SLOTS = FORECAST_HOURS * SLOTS_PER_HOUR; // 81
 
-/**
- * Quantos slots de 20min uma reserva consome consoante o deliveryType.
- * - T1/VIP/sem info: 20min → consome 1 slot completo.
- * - T2: 30min → consome 1 slot inteiro + meio do seguinte (1.5).
- * - Outro (Partidas genérico, Oriente, Rossio, Faro, ...): 60min → 3 slots.
- */
-export function deliverySlotSpread(deliveryType: string | null | undefined): number[] {
-  const cls = classifyDeliveryType(deliveryType);
-  if (cls === "t2") return [1, 0.5];
-  if (cls === "other") return [1, 1, 1];
-  return [1]; // t1 | vip | unknown
-}
 
 export type ShiftId = "morning" | "night";
 
@@ -347,6 +335,11 @@ export interface ExtrasDiaForecast {
   bookingSource: BookingSource;
   /** Aviso quando se usou a cópia (BD da Multipark indisponível / não configurada). */
   bookingSourceNotice: string | null;
+  /**
+   * Leitura das reservas cortada no limite: a previsão está INCOMPLETA (faltam
+   * reservas). A automação não propõe nem avisa faltas com ela.
+   */
+  bookingsTruncated: boolean;
   parksQueried: string[]; // parques da cidade (ao vivo) ou distinct parkName (cópia)
   parksFailed: { park: string; error: string }[]; // always empty for DB mode (kept for UI compat)
   hourly: HourlyRow[];
@@ -382,6 +375,24 @@ export interface ExtrasDiaForecast {
   allocation: {
     cheapest: ReturnType<typeof suggestShifts>;
     bySingleLevel: { level: DriverLevelId; label: string; totalCost: number; totalHours: number }[];
+  };
+  /** Taxas €/h em vigor (null = a conta não vê custos). Antes o ecrã pedia-as a uma rota só de admin e caía nas de origem. */
+  rates: ExtraRates | null;
+  /** true = os euros foram tirados (a conta só vê escalas e turnos). */
+  costsHidden: boolean;
+}
+
+/** Previsão sem euros para quem não vê custos (as horas e as pessoas ficam). PURA. */
+export function maskForecastCosts(f: ExtrasDiaForecast): ExtrasDiaForecast {
+  const zero = (s: DriverShift): DriverShift => ({ ...s, hourlyRate: 0, cost: 0 });
+  return {
+    ...f,
+    rates: null,
+    costsHidden: true,
+    allocation: {
+      cheapest: { ...f.allocation.cheapest, totalCost: 0, shifts: f.allocation.cheapest.shifts.map(zero) },
+      bySingleLevel: f.allocation.bySingleLevel.map((l) => ({ ...l, totalCost: 0 })),
+    },
   };
 }
 
@@ -466,7 +477,7 @@ async function fetchBookingsInRange(
         lisbonCond,
       ),
     )
-    .limit(20000);
+    .limit(COPY_ROWS_LIMIT);
 
   // Converte UTC → Lisboa nas horas das reservas (a API dá UTC). As horas-string
   // soltas (checkInTime/checkOutTime, normalmente vazias e em UTC) são anuladas
@@ -528,7 +539,10 @@ export function filterRowsByField(rows: BookingRow[], field: "checkIn" | "checkO
   });
 }
 
-type LiveWindow = { ok: true; rows: BookingRow[]; parks: string[] } | { ok: false; notice: string };
+type LiveWindow = { ok: true; rows: BookingRow[]; parks: string[]; truncated: boolean } | { ok: false; notice: string };
+
+/** Teto da leitura de recurso (cópia): chegar a ele = previsão incompleta. */
+export const COPY_ROWS_LIMIT = 20000;
 
 /**
  * Reservas da cidade com entrada ou saída na janela [start, end) (horas de
@@ -543,7 +557,7 @@ async function liveBookingsInWindow(startInclusive: Date, endExclusive: Date, ci
     const r = await getLiveExtrasBookings(city, lisbonWallToUtcMs(toMysqlDateTime(startInclusive)), lisbonWallToUtcMs(toMysqlDateTime(endExclusive)), undefined, undefined, excluded);
     if (!r.available) return { ok: false, notice: `${r.reason} A usar a cópia das reservas (pode estar desatualizada).` };
     if (r.data.truncated) console.warn(`[extrasDia] leitura ao vivo cortada (${r.data.bookings.length} reservas) — ${city}`);
-    return { ok: true, rows: r.data.bookings.map(liveToBookingRow), parks: r.data.parks };
+    return { ok: true, rows: r.data.bookings.map(liveToBookingRow), parks: r.data.parks, truncated: r.data.truncated };
   } catch (err: any) {
     return { ok: false, notice: `Leitura ao vivo falhou (${String(err?.message ?? err).slice(0, 80)}). A usar a cópia das reservas.` };
   }
@@ -571,6 +585,10 @@ export interface Assignment {
   proposalReason: string | null;
   hoursBilled: number;
   cost: number;
+  /** Quem pôs / alterou por último (ids; nomes no ecrã quando houver). */
+  createdById?: number | null;
+  updatedById?: number | null;
+  source?: string;
   // Mapeamento Multipark (preenchido se employeeId está associado a empregado RH)
   multiparkAgentName: string | null;
   multiparkAgentUserId: string | null;
@@ -719,6 +737,10 @@ export interface UpsertAssignmentInput {
   sentHomeHour?: number | null;
   notes?: string | null;
   createdById?: number | null;
+  /** Quem grava (fica como "alterado por" numa edição). */
+  updatedById?: number | null;
+  /** 'auto' só para a proposta automática; à mão é sempre 'manual'. */
+  source?: "auto" | "manual";
   /** Omissão: 'proposed' se o dia/cidade tem uma proposta por confirmar; senão 'confirmed'. */
   status?: "proposed" | "confirmed";
   proposalReason?: string | null;
@@ -732,6 +754,16 @@ export function assignmentVersionChanged(
   return prev.employeeId !== next.employeeId || prev.assignmentDate !== next.assignmentDate
     || prev.startHour !== next.startHour || prev.endHour !== next.endHour || prev.shift !== next.shift
     || (prev.employeeId == null && prev.personName !== next.personName);
+}
+
+/** Conflito de escala (a mesma pessoa a horas sobrepostas): o router devolve 409. */
+export class ScheduleConflictError extends Error {}
+
+/** Outra linha da mesma pessoa no mesmo dia com horas sobrepostas ([início, fim)). PURA. */
+export function findScheduleOverlap<T extends { id: number; startHour: number; endHour: number }>(
+  sameDay: T[], cand: { id: number | null; startHour: number; endHour: number },
+): T | null {
+  return sameDay.find((r) => r.id !== cand.id && r.startHour < cand.endHour && cand.startHour < r.endHour) ?? null;
 }
 
 export async function upsertAssignment(input: UpsertAssignmentInput): Promise<Assignment | null> {
@@ -774,12 +806,29 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     notes: input.notes ?? null,
   };
 
+  // A mesma pessoa não fica em duas linhas com horas sobrepostas no mesmo dia
+  // (nesta ou noutra cidade) — o caminho "um a um" não tinha esta verificação.
+  if (payload.employeeId != null) {
+    const sameDay = await db
+      .select({ id: extrasDiaAssignments.id, city: extrasDiaAssignments.city, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour })
+      .from(extrasDiaAssignments)
+      .where(and(eq(extrasDiaAssignments.assignmentDate, payload.assignmentDate), eq(extrasDiaAssignments.employeeId, payload.employeeId)));
+    const clash = findScheduleOverlap(sameDay, { id: input.id ?? null, startHour: payload.startHour, endHour: payload.endHour });
+    if (clash) throw new ScheduleConflictError(`${payload.personName} já está na escala deste dia das ${clash.startHour}h às ${clash.endHour}h${clash.city !== payload.city ? ` (${clash.city})` : ""}.`);
+  }
+
   if (input.id) {
     const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, input.id)).limit(1);
     if (!prev) return null;
     const bump = assignmentVersionChanged(prev, { ...payload, shift: payload.shift });
+    // Editar não apaga as notas (o formulário de horas não as manda); quem
+    // edita fica registado e a linha passa a "à mão" (a proposta refeita já não a substitui).
+    const { notes: _notes, ...rest } = payload;
     await db.update(extrasDiaAssignments).set({
-      ...payload,
+      ...rest,
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      source: input.source ?? "manual",
+      updatedById: input.updatedById ?? null,
       ...(input.status ? { status: input.status } : {}),
       ...(input.proposalReason !== undefined ? { proposalReason: input.proposalReason } : {}),
       ...(bump ? { version: sql`${extrasDiaAssignments.version} + 1` } : {}),
@@ -803,7 +852,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
   }
   const [result] = await db
     .insert(extrasDiaAssignments)
-    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null })
+    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null, source: input.source ?? "manual" })
     .$returningId();
   const newId = (result as any).id;
   const [row] = await db
@@ -817,14 +866,6 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
   return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
 }
 
-export async function deleteAssignment(id: number): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id)).limit(1);
-  await db.delete(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, id));
-  if (prev) googleShiftChanged({ city: prev.city, date: String(prev.assignmentDate), employeeIds: [prev.employeeId] });
-}
-
 /**
  * Escala mudou → turnos já para o Google Calendar (calendário partilhado da
  * cidade + calendário "Multipark" de quem está escalado), em segundo plano.
@@ -833,79 +874,6 @@ function googleShiftChanged(input: { city: string | null; date: string; employee
   import("./google/pendingSync")
     .then((m) => m.scheduleGoogleShiftSync({ city: input.city, date: input.date.slice(0, 10), employeeIds: input.employeeIds.filter((x): x is number => typeof x === "number") }))
     .catch(() => undefined);
-}
-
-/**
- * Custo total do "extras-dia" para um intervalo de datas.
- *
- *   • Dias passados:
- *      - Se houver assignments gravados → real += soma
- *      - Se NÃO houver → estimate += cheapest do forecast (fallback para
- *        não dar 0, com etiqueta de estimativa)
- *   • Dias futuros: estimate += cheapest do forecast
- *
- * Para que um dia passado conte como "real" tens de ir a /extras-dia,
- * escolher o dia base, adicionar Team Leader e condutores em "Equipa do dia".
- */
-export async function getExtrasDiaCostForRange(
-  startDate: string,
-  endDate: string,
-): Promise<{
-  real: number;
-  estimate: number;
-  total: number;
-  days: number;
-  daysWithReal: number;
-  daysWithEstimate: number;
-}> {
-  const db = await getDb();
-  if (!db) return { real: 0, estimate: 0, total: 0, days: 0, daysWithReal: 0, daysWithEstimate: 0 };
-
-  const start = startOfDay(new Date(startDate + "T00:00:00"));
-  const end = startOfDay(new Date(endDate + "T00:00:00"));
-  const todayStart = startOfDay(new Date());
-
-  let real = 0;
-  let estimate = 0;
-  let days = 0;
-  let daysWithReal = 0;
-  let daysWithEstimate = 0;
-
-  async function forecastCheapestFor(d: Date): Promise<number> {
-    // baseDate é o dia ANTES (porque o forecast olha para baseDate + 1).
-    const baseDate = new Date(d);
-    baseDate.setDate(baseDate.getDate() - 1);
-    try {
-      const forecast = await getExtrasDiaForecast(dateKey(baseDate));
-      return forecast.allocation.cheapest.totalCost;
-    } catch {
-      return 0;
-    }
-  }
-
-  for (let d = new Date(start); d.getTime() <= end.getTime(); d.setDate(d.getDate() + 1)) {
-    const dateKey_ = dateKey(d);
-    days++;
-
-    if (d.getTime() < todayStart.getTime()) {
-      // Dia passado
-      const assignments = await listAssignments(dateKey_);
-      if (assignments.length > 0) {
-        for (const a of assignments) real += a.cost;
-        daysWithReal++;
-      } else {
-        // Sem turnos gravados → fallback para a estimativa do forecast
-        estimate += await forecastCheapestFor(d);
-        daysWithEstimate++;
-      }
-    } else {
-      // Hoje ou futuro
-      estimate += await forecastCheapestFor(d);
-      daysWithEstimate++;
-    }
-  }
-
-  return { real, estimate, total: real + estimate, days, daysWithReal, daysWithEstimate };
 }
 
 // ─── Drill-down: reservas num slot de 20min ──────────────────────────────────
@@ -1057,7 +1025,9 @@ function distinctParks(rows: BookingRow[]): string[] {
 }
 
 export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCity = "lisbon"): Promise<ExtrasDiaForecast> {
-  const baseDate = baseDateInput ? new Date(baseDateInput) : new Date();
+  // Sem dia pedido: HOJE em Lisboa (o servidor corre em UTC — entre a meia-noite
+  // e a 01h de Lisboa no verão, "hoje" ainda era ontem).
+  const baseDate = new Date(`${baseDateInput ?? lisbonDayOf(Date.now())}T00:00:00`);
   const baseStart = startOfDay(baseDate);
   const targetStart = addDays(baseStart, 1);
   const nextStart = addDays(baseStart, 2);
@@ -1238,8 +1208,10 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     seenForExtras.add(r.externalId);
     const v = r.extrasTotal ? parseFloat(r.extrasTotal) : 0;
     if (!Number.isFinite(v) || v === 0) return;
-    const d = dateStr ? new Date(dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T")) : null;
-    const isFuture = d && d.getTime() > nowMs;
+    // As horas das reservas já estão em hora de Lisboa: compara-as como tal (não como UTC).
+    let at: number | null = null;
+    try { at = dateStr ? lisbonWallToUtcMs(dateStr) : null; } catch { at = null; }
+    const isFuture = at != null && at > nowMs;
     if (isFuture) extrasValue.estimate += v;
     else extrasValue.real += v;
     extrasValue.total += v;
@@ -1256,6 +1228,7 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     source: "db",
     bookingSource: live.ok ? "multipark-db" : "copy",
     bookingSourceNotice: live.ok ? null : live.notice,
+    bookingsTruncated: live.ok ? live.truncated : [targetCheckins, baseCheckouts, targetCheckouts, nextCheckouts].some((r) => r.length >= COPY_ROWS_LIMIT),
     parksQueried: live.ok ? live.parks : Array.from(allParks).sort(),
     parksFailed: [],
     hourly,
@@ -1273,5 +1246,7 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
       next: { date: dateKey(nextStart), exitsWithWash: countWashes(nextCheckouts) },
     },
     allocation: { cheapest, bySingleLevel },
+    rates: liveRates,
+    costsHidden: false,
   };
 }
