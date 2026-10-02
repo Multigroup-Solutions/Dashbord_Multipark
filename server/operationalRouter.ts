@@ -8,7 +8,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess, isOwnOnly } from "./_core/access";
 import { ROLE_RANK as ACCESS_ROLE_RANK } from "../shared/access";
-import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, getSpeedLimits, getDefaultSpeedLimit, createSpeedLimit, updateSpeedLimit, deleteSpeedLimit, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, deletePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
+import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, getSpeedLimits, getDefaultSpeedLimit, createSpeedLimit, updateSpeedLimit, deleteSpeedLimit, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
 import { getZelloUsers, getZelloChannels, getZelloLocations, getZelloUserHistory, getZelloUserLocation } from "./zello";
 import { collectDailyDriverData } from "./jobs/dailyDriverCollection";
 import { requireRole } from "./routerGuards";
@@ -156,18 +156,32 @@ export const operationalRouter = router({
   }),
 
   radio: router({
-    list: protectedProcedure.input(z.object({ employeeId: z.number().optional(), vehicleId: z.number().optional(), limit: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+    // Página de 50 (máx. 200), mais recentes primeiro; `cursor` (o id da
+    // última vista) continua para as mais antigas ("Ver mais").
+    list: protectedProcedure.input(z.object({
+      employeeId: z.number().int().positive().optional(),
+      vehicleId: z.number().int().positive().optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      cursor: z.number().int().positive().nullish(),
+    }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "radio", "view");
-      return getRadioTranscriptions(input ?? undefined);
+      return getRadioTranscriptions({ ...input, beforeId: input?.cursor ?? undefined });
     }),
     transcribe: protectedProcedure.input(z.object({
-      audioUrl: z.string(),
-      employeeId: z.number().optional(),
-      vehicleId: z.number().optional(),
-      duration: z.number().optional(),
+      audioUrl: z.string().trim().min(1).max(2048),
+      employeeId: z.number().int().positive().optional(),
+      vehicleId: z.number().int().positive().optional(),
+      duration: z.number().int().min(0).max(24 * 3600).optional(),
     })).mutation(async ({ ctx, input }) => {
       // Transcrição com custo real (IA). Restringir a team_leader+.
       requireAccess(ctx.user, "radio", "edit");
+      // O servidor descarrega o áudio: só ficheiros do NOSSO storage (o que o
+      // "Carregar ficheiro" grava), nunca um endereço qualquer.
+      const { readS3Env, isS3OwnedUrl } = await import("./storage");
+      const s3 = readS3Env();
+      if (s3 && !isS3OwnedUrl(s3, input.audioUrl)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "O áudio tem de ser carregado aqui (escolhe o ficheiro e carrega em Transcrever)." });
+      }
       const { transcribeAndSummarizeRadio } = await import("./radioAi");
       const { aiTrpcError } = await import("./_core/ai/trpcError");
       let transcriptionText: string;
@@ -623,11 +637,16 @@ export const operationalRouter = router({
       await logActivity({ userId: ctx.user.id, action: "update", entity: "pda", entityId: input.id, details: "PDA atualizado" });
       return { success: true };
     }),
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    // "Retirar" um PDA: passa a Inativo — NUNCA se apaga (as passagens de mão,
+    // o GPS partido por quem o tinha e o dia de cada pessoa dependem dele).
+    // O nome da rota fica por compatibilidade.
+    delete: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "pdas", "manage");
-      await deletePda(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "pda", entityId: input.id, details: "PDA eliminado" });
-      return { success: true };
+      const pda = await getPdaById(input.id);
+      if (!pda) throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado." });
+      await updatePda(input.id, { status: "inactive" });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "pda", entityId: input.id, details: `PDA retirado (passou a Inativo; histórico mantido): ${pda.name}` });
+      return { success: true, retired: true };
     }),
     // Check-ins
     checkins: router({
@@ -639,7 +658,7 @@ export const operationalRouter = router({
         requireAccess(ctx.user, "pdas", "view");
         return getCheckinsByDate(input.date);
       }),
-      byPda: protectedProcedure.input(z.object({ pdaId: z.number(), limit: z.number().optional() })).query(async ({ ctx, input }) => {
+      byPda: protectedProcedure.input(z.object({ pdaId: z.number().int().positive(), limit: z.number().int().min(1).max(500).optional() })).query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "pdas", "view");
         return getCheckinsByPda(input.pdaId, input.limit);
       }),

@@ -107,8 +107,11 @@ export function scoreDocs(docs: HelpDoc[], question: string, opts: { path?: stri
         const k = normalizeText(kw);
         if (!k) continue;
         if (k.includes(" ")) {
+          // Só palavras com significado; sem nenhuma ("ver mais") não conta —
+          // um every() sobre a lista vazia dava acerto em qualquer pergunta.
+          const words = k.split(" ").filter((w) => w.length >= 3 && !STOP.has(w));
           if (q.includes(` ${k} `)) score += 3;
-          else if (k.split(" ").filter((w) => w.length >= 3 && !STOP.has(w)).every((w) => qStems.has(stem(w)))) score += 2;
+          else if (words.length && words.every((w) => qStems.has(stem(w)))) score += 2;
         } else if (!STOP.has(k) && k.length >= 3) {
           if (q.includes(` ${k} `)) score += 2;
           else if (k.length >= 5 && qStems.has(stem(k))) score += 1;

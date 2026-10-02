@@ -3135,9 +3135,12 @@ export const appRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
       const mpDown = () => { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD da Multipark sem resposta." }); };
       // A linha tem de ser DESTA reserva (antes podia mandar-se a reserva de cá com a linha de outra cidade).
-      const { serviceLineBookingId } = await import("./multiparkDb/serviceExtras");
-      const lineBooking = await serviceLineBookingId(input.lineId).catch(mpDown);
-      if (lineBooking !== input.bookingId) throw new TRPCError({ code: "BAD_REQUEST", message: "Este serviço não é desta reserva." });
+      const { serviceLine } = await import("./multiparkDb/serviceExtras");
+      const line = await serviceLine(input.lineId).catch(mpDown);
+      if (!line || line.bookingId !== input.bookingId) throw new TRPCError({ code: "BAD_REQUEST", message: "Este serviço não é desta reserva." });
+      // Feito na app Multipark conta sempre (feito = Multipark OU cá): reabrir
+      // cá não o desfazia e a página mostrava-o "Pendente" com a tarefa fechada.
+      if (!input.done && line.done) throw new TRPCError({ code: "BAD_REQUEST", message: "Este serviço está feito na app Multipark — reabre-se lá." });
       const cities = scopedCityNames();
       if (cities !== undefined) {
         const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
@@ -3185,7 +3188,8 @@ export const appRouter = router({
       requireAccess(ctx.user, "servicos", "view");
       const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
       const { liveParkScope } = await import("./opsStatsLive");
-      const { readServiceExtras } = await import("./multiparkDb/serviceExtras");
+      const { readServiceExtras, SERVICE_EXTRAS_LIMIT } = await import("./multiparkDb/serviceExtras");
+      const { serviceDoneState } = await import("../shared/serviceDone");
       const range = lisbonDayRangeUtc(input.startDate, input.endDate);
       const { parkIds, parkInfo } = await liveParkScope(input.projectId);
       let lines;
@@ -3195,18 +3199,20 @@ export const appRouter = router({
         console.warn("[services.multiparkExtras] BD da Multipark:", (err as Error)?.message);
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Serviços indisponíveis (BD da Multipark sem resposta)." });
       }
-      const doneLocal = new Map<string, boolean>();
+      // O "feito" marcado CÁ (por linha), com quem e quando.
+      const doneLocal = new Map<string, { done: boolean; by: string | null; at: string | null }>();
       const ids = [...new Set(lines.map((l) => l.lineId))];
       if (ids.length) {
         const { getDb } = await import("./db");
         const db = await getDb();
         const { sql } = await import("drizzle-orm");
-        if (db) {
-          for (let i = 0; i < ids.length; i += 1000) {
-            const chunk = ids.slice(i, i + 1000);
-            const [rows] = (await db.execute(sql`SELECT lineId, done FROM service_extra_done WHERE lineId IN (${sql.join(chunk.map((x) => sql`${x}`), sql`, `)})`)) as any;
-            for (const r of rows as any[]) doneLocal.set(String(r.lineId), Number(r.done) === 1);
-          }
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível: não dá para saber o que já foi dado como feito." });
+        for (let i = 0; i < ids.length; i += 1000) {
+          const chunk = ids.slice(i, i + 1000);
+          const [rows] = (await db.execute(sql`SELECT d.lineId, d.done, DATE_FORMAT(d.updatedAt, '%Y-%m-%d %H:%i:%s') AS updatedAt, u.name AS userName
+              FROM service_extra_done d LEFT JOIN users u ON u.id = d.userId
+             WHERE d.lineId IN (${sql.join(chunk.map((x) => sql`${x}`), sql`, `)})`)) as any;
+          for (const r of rows as any[]) doneLocal.set(String(r.lineId), { done: Number(r.done) === 1, by: r.userName ? String(r.userName) : null, at: r.updatedAt ? String(r.updatedAt) : null });
         }
       }
       const services = lines.map((l) => {
@@ -3223,10 +3229,11 @@ export const appRouter = router({
           checkOut: l.checkOut ?? "",
           serviceName: l.serviceName ?? "?",
           price: l.price,
-          done: doneLocal.get(l.lineId) ?? l.done,
+          ...serviceDoneState(l.done, doneLocal.get(l.lineId)),
         };
       });
-      return { total: services.length, services };
+      // Teto da leitura: se o atingir, a lista está cortada — diz-se.
+      return { total: services.length, services, truncated: lines.length >= SERVICE_EXTRAS_LIMIT, limit: SERVICE_EXTRAS_LIMIT };
     }),
   }),
 

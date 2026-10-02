@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { AlertTriangle, Check } from "lucide-react";
 import { NOTIFY_CITY_LABELS, type NotifyCity } from "@shared/notificationRouting";
+import { retryTransient } from "@/lib/queryRetry";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 /**
  * Alertas "a trabalhar sem PDA ou Zello ligado" (server/opsPresence.ts): os
@@ -16,7 +18,10 @@ import { NOTIFY_CITY_LABELS, type NotifyCity } from "@shared/notificationRouting
  */
 export function OpsPresencePanel() {
   const utils = trpc.useUtils();
-  const { data, isLoading } = trpc.operational.opsPresence.list.useQuery({ hours: 24 }, { refetchInterval: 60_000 });
+  const q = trpc.operational.opsPresence.list.useQuery({ hours: 24 }, { refetchInterval: 60_000, retry: retryTransient });
+  const { data, isLoading } = q;
+  // Erro ≠ "nada em aberto": sem resposta não se sabe se há alertas.
+  const failed = !!q.error && !data;
   const [notes, setNotes] = useState<Record<number, string>>({});
   const ack = trpc.operational.opsPresence.acknowledge.useMutation({
     onSuccess: () => { toast.success("Visto."); utils.operational.opsPresence.list.invalidate(); },
@@ -41,7 +46,8 @@ export function OpsPresencePanel() {
       </CardHeader>
       <CardContent className="space-y-2">
         {isLoading && <p className="text-sm text-muted-foreground">A carregar…</p>}
-        {!isLoading && open.length === 0 && <p className="text-sm text-muted-foreground">Nada em aberto. 👍</p>}
+        {failed && <QueryErrorNote error={q.error!} onRetry={() => q.refetch()} retrying={q.isFetching} what="os alertas" />}
+        {!isLoading && !failed && open.length === 0 && <p className="text-sm text-muted-foreground">Nada em aberto. 👍</p>}
         {open.map((a) => (
           <div key={a.id} className="border rounded-md p-2 text-sm space-y-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -55,7 +61,7 @@ export function OpsPresencePanel() {
             {a.acknowledgedAt ? (
               <div className="text-xs text-emerald-700">Visto por {a.acknowledgedBy ?? "—"} às {fmtPTTime(a.acknowledgedAt)}{a.ackNote ? ` · ${a.ackNote}` : ""}</div>
             ) : (
-              <div className="flex gap-2 items-center">
+              <div className="flex flex-wrap sm:flex-nowrap gap-2 items-center">
                 <Input className="h-8 text-xs" placeholder="Nota (opcional): ex. PDA avariado, já falei com ele" value={notes[a.id] ?? ""} maxLength={255}
                   onChange={(e) => setNotes((n) => ({ ...n, [a.id]: e.target.value }))} />
                 <Button size="sm" variant="outline" disabled={ack.isPending} onClick={() => ack.mutate({ id: a.id, note: notes[a.id] || undefined })}>
