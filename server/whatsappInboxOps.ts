@@ -508,6 +508,8 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
         kind: "whatsapp_sla", projectId: g.projectId,
         alsoUserIds: [...g.overdue, ...g.closing].map((x) => x.assignedUserId),
         title, body, link: "/whatsapp",
+        // Conversas sem cidade são de todos (17e): o aviso também.
+        noCityToAll: true,
       });
       if (r.recipients.length) out.notifications++;
     } catch (err: any) {

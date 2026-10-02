@@ -766,6 +766,35 @@ export function canSeePersonalMailbox(v: Pick<MailViewer, "id" | "role"> | null 
   return v.id === ownerUserId || v.role === "super_admin";
 }
 
+// ─── RH → Google Drive: só currículos (Jorge, 2 out 2026) ───────────────────
+
+/**
+ * A conversa é do email do RH (recursos-humanos@)? Caixa do módulo RH, caixa
+ * com pipeline do RH, ou o alias por onde entrou vai para o RH. PURA.
+ */
+export function isHrMailThread(
+  mailbox: Pick<MailboxConfig, "module" | "pipeline" | "addresses"> | null | undefined,
+  matchedAddress: string | null | undefined,
+): boolean {
+  const addr = normalizeAddress(matchedAddress);
+  if (addr.startsWith("recursos-humanos@")) return true;
+  if (!mailbox) return false;
+  if (mailbox.module === "rh" || mailbox.pipeline === "recursos-humanos") return true;
+  const alias = mailbox.addresses.find((a) => normalizeAddress(a.address) === addr);
+  return alias?.destination === "recursos-humanos";
+}
+
+/** O ficheiro é um currículo (pelo nome: CV, currículo, curriculum, resume)? PURA. */
+export function isCurriculumFilename(name: string | null | undefined): boolean {
+  const n = String(name ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return /(^|[^a-z])cv([^a-z]|$)/.test(n) || /curricul/.test(n) || /(^|[^a-z])resume/.test(n);
+}
+
+/** "Guardar no meu Drive" de um anexo de email: do RH, só currículos; o resto sim. PURA. */
+export function mailAttachmentDriveAllowed(hrThread: boolean, filename: string | null | undefined): boolean {
+  return !hrThread || isCurriculumFilename(filename);
+}
+
 /** Só o próprio envia pela sua conta pessoal (nem o super_admin envia em nome de outro). PURA. */
 export function canSendFromPersonalMailbox(v: Pick<MailViewer, "id"> | null | undefined, ownerUserId: number | null | undefined): boolean {
   return !!v && ownerUserId != null && v.id === ownerUserId;

@@ -35,13 +35,14 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 
 **O meu email** (menu **Comunicação → O meu email**)
 1. Carrega em **Ligar a minha conta Google** (também no Perfil). Só contas do Workspace da empresa.
-2. Os teus emails aparecem em poucos minutos. Na caixa, vês tu e o **super admin**, que consegue consultar o email pessoal de todos mas não enviar em nome de ninguém. Os emails trocados com um cliente ficam também no separador **Comunicações** da ficha desse cliente, visíveis a quem tem acesso aos Clientes.
+2. Os teus emails aparecem em poucos minutos. Na caixa, vês tu e o **super admin**, que consegue consultar o email pessoal de todos — só em **O meu email → escolher a pessoa**; nunca aparece na caixa geral nem nas pesquisas — mas não envia em nome de ninguém. Os emails trocados com um cliente ficam também no separador **Comunicações** da ficha desse cliente, visíveis a quem tem acesso aos Clientes.
    - **Atualizar** diz se a leitura falhou (por exemplo "a ligação ao Google expirou"), em vez de "Sem emails novos".
 3. **Desligar** revoga o acesso na Google.
 
 **Segurança**
 - As imagens de fora ficam bloqueadas até carregares em **Mostrar imagens** (evita pixels de rastreio). As **fotos coladas no corpo** do email (ex.: danos enviados do iPhone) também aparecem com **Mostrar imagens** e ficam na lista de anexos.
 - Os anexos abrem a pedido; o conteúdo dos emails é limpo antes de ser mostrado.
+- **Guardar no meu Drive**: do email do RH (recursos-humanos@) só os **currículos** (ficheiros com CV/currículo no nome) podem ir para o Drive pessoal; os outros documentos do RH ficam na app.
 - As horas são sempre de Lisboa.
 - **Retenção (arquivo):** emails com mais de 5 anos sem ligação a nenhum registo **não se apagam**. Deixam de aparecer nas listas, contagens e pesquisas, e ficam guardados no **Arquivo (+5 anos)**, que só o super admin vê, a pedido. Numa conversa com mensagens antigas arquivadas, o super admin tem **Mostrar arquivadas**. Uma mensagem nova, ou ligar a conversa a um cliente/caso, tira-a do arquivo. O Gmail fica sempre intacto.
 

@@ -79,8 +79,10 @@ describe("sugestões depois de separar", () => {
 });
 
 describe("procurar email na caixa", () => {
-  it("super admin vê todas as conversas (menos o arquivo +5 anos, que pede à parte); os outros só as caixas visíveis e o próprio email", async () => {
-    expect(render(await visibleThreadsCondition({ id: 1, role: "super_admin", accessOverrides: null })).sql).toBe("t.archivedAt IS NULL");
+  it("super admin vê as caixas partilhadas e o seu email (sem o arquivo +5 anos nem o email pessoal dos outros); os outros só as caixas visíveis e o próprio email", async () => {
+    // ...e sem o email pessoal dos outros (consulta-se só em "O meu email" → pessoa).
+    expect(render(await visibleThreadsCondition({ id: 1, role: "super_admin", accessOverrides: null })).sql)
+      .toBe("((t.mailboxKey IS NOT NULL OR t.ownerUserId IS NULL OR t.ownerUserId = ?) AND t.archivedAt IS NULL)");
     const q = render(await visibleThreadsCondition({ id: 7, role: "frontoffice", accessOverrides: null }));
     expect(q.sql).toContain("t.mailboxKey IS NULL AND t.ownerUserId = ?");
     expect(q.sql).toContain("AND t.archivedAt IS NULL");

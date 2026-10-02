@@ -320,6 +320,10 @@ export async function sendComplaintAutoAck(
   opts: { inReplyTo?: string | null } = {},
 ): Promise<{ sent: boolean; reason?: string }> {
   try {
+    // Interruptor lido fresco (o email entra pelo cron, sem tRPC): desligado nas
+    // Definições → não responde, mesmo numa instância acabada de arrancar (17e).
+    const { ensureFeatureFlagOverrides } = await import("./_core/featureFlags");
+    await ensureFeatureFlagOverrides().catch(() => {});
     if (!isComplaintAutoAckEnabled()) return { sent: false, reason: "desligado (COMPLAINT_AUTO_ACK=off)" };
     if (!isEmailSendConfigured()) return { sent: false, reason: "envio de email (Gmail) não configurado" };
     const db = await getDb();

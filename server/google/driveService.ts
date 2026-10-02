@@ -247,7 +247,12 @@ export async function loadSourceBytes(user: DriveUser, s: SaveSource): Promise<{
     const { withOverrides } = await import("../_core/access");
     const u = withOverrides(user);
     const a = await attachmentBytes({ id: u.id, role: u.role, accessOverrides: u.accessOverrides ?? null } as any, s.messageId, s.index);
-    const t = rowsOf(await d.execute(sql`SELECT threadId FROM mail_messages WHERE id = ${s.messageId} LIMIT 1`))[0];
+    const t = rowsOf(await d.execute(sql`SELECT m.threadId, t.mailboxKey, t.matchedAddress FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId WHERE m.id = ${s.messageId} LIMIT 1`))[0];
+    // Email do RH: só os CURRÍCULOS podem ir para o Drive pessoal; o resto fica na app (Jorge, 2 out 2026).
+    const { isHrMailThread, mailAttachmentDriveAllowed } = await import("../../shared/mail");
+    const { getMailbox } = await import("../mail/store");
+    const hr = isHrMailThread(await getMailbox(t?.mailboxKey ?? null), t?.matchedAddress ?? null);
+    if (!mailAttachmentDriveAllowed(hr, a.filename)) throw new TRPCError({ code: "FORBIDDEN", message: HR_MAIL_NO_DRIVE_MESSAGE });
     return { name: a.filename || "anexo", mimeType: a.mimeType || "application/octet-stream", bytes: a.content, link: t ? { entityType: "mail_thread", entityId: String(t.threadId) } : null };
   }
   if ((s as { kind: string }).kind === "employee_document") throw new TRPCError({ code: "FORBIDDEN", message: HR_NO_DRIVE_MESSAGE });
@@ -258,6 +263,9 @@ export async function loadSourceBytes(user: DriveUser, s: SaveSource): Promise<{
   const mime = /\.pdf$/i.test(name) ? "application/pdf" : /\.png$/i.test(name) ? "image/png" : /\.(jpe?g)$/i.test(name) ? "image/jpeg" : /\.webp$/i.test(name) ? "image/webp" : "application/octet-stream";
   return { name: r.label ? `${r.label} — ${name}` : name, mimeType: mime, bytes: await fetchStoredBytes(String(r.fileKey || r.url), r.url), link: { entityType: "complaint", entityId: String(r.complaintId) } };
 }
+
+/** Do email do RH só os currículos vão para o Drive pessoal (decisão do dono, 2 out 2026). */
+export const HR_MAIL_NO_DRIVE_MESSAGE = "Do email do RH só os currículos vão para o Google Drive — os outros documentos ficam na app.";
 
 /** Os documentos do RH nunca vão para o Google Drive (decisão do dono, 26 set 2026). */
 export const HR_NO_DRIVE_MESSAGE = "Os documentos do RH nunca vão para o Google Drive — ficam só nos documentos da ficha, na app.";

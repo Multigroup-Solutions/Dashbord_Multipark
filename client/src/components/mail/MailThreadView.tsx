@@ -197,7 +197,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
 
 type Msg = {
   id: number; direction: "in" | "out"; fromName: string | null; fromEmail: string | null; to: string[]; cc: string[];
-  subject: string; snippet: string; text: string; htmlDocument: string | null; attachments: Array<{ index: number; filename: string; size: number; href: string }>;
+  subject: string; snippet: string; text: string; htmlDocument: string | null; attachments: Array<{ index: number; filename: string; size: number; href: string; driveAllowed?: boolean }>;
   sentAt: string | null; sentByName: string | null; pipeline: string | null; pipelineStatus: string | null; archived?: boolean;
 };
 
@@ -235,7 +235,8 @@ function MessageCard({ m, defaultOpen }: { m: Msg; defaultOpen: boolean }) {
                     <Paperclip className="h-3 w-3 shrink-0" /><span className="truncate">{a.filename}</span>
                     <span className="text-muted-foreground shrink-0">{a.size > 0 ? `${Math.max(1, Math.round(a.size / 1024))} KB` : ""}</span>
                   </a>
-                  <SaveToDriveButton source={{ kind: "mail_attachment", messageId: m.id, index: a.index }} iconOnly label="Guardar no meu Drive" />
+                  {/* Email do RH: só os currículos vão para o Drive pessoal. */}
+                  {a.driveAllowed !== false && <SaveToDriveButton source={{ kind: "mail_attachment", messageId: m.id, index: a.index }} iconOnly label="Guardar no meu Drive" />}
                 </span>
               ))}
             </div>

@@ -256,7 +256,7 @@ describe("Retenção: arquivar, nunca apagar (só o super admin vê, a pedido)",
     expect(inbox).toContain('if (thread.archivedAt && viewer.role !== "super_admin") throw forbidden(');
     expect(inbox).toContain('if (input.archived && viewer.role !== "super_admin") throw forbidden("Só o super admin consulta o arquivo.");');
     expect(inbox).toContain("conds.push(input.archived ? sql`t.archivedAt IS NOT NULL` : sql`t.archivedAt IS NULL`);");
-    expect(inbox).toContain('if (viewer.role === "super_admin") return sql`t.archivedAt IS NULL`;');
+    expect(inbox).toContain('if (viewer.role === "super_admin") return sql`((t.mailboxKey IS NOT NULL OR t.ownerUserId IS NULL OR t.ownerUserId = ${viewer.id}) AND t.archivedAt IS NULL)`;');
     expect(inbox).toContain("AND archivedAt IS NULL ORDER BY sentAt DESC LIMIT 200");
     expect(src("server/globalSearch.ts")).toContain("AND t.archivedAt IS NULL`;");
     expect(src("server/contactsSearch.ts")).toContain("AND t.archivedAt IS NULL`;");

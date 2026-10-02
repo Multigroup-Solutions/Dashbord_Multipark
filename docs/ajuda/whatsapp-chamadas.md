@@ -10,7 +10,7 @@ Os clientes podem **ligar para o número de WhatsApp da empresa** e a chamada é
 
 ## Atender
 
-1. Quando um cliente liga, aparece um aviso **"Chamada WhatsApp"** com toque, em qualquer página, a quem tem o WhatsApp com permissão de **editar** na cidade da conversa (o super admin vê todas as cidades).
+1. Quando um cliente liga, aparece um aviso **"Chamada WhatsApp"** com toque, em qualquer página, a quem tem o WhatsApp com permissão de **editar** na cidade da conversa (o super admin vê todas as cidades). Números **sem cidade** (sem ficha, lead nem reserva) tocam a **todos** os que podem atender, e o aviso de chamada perdida também chega a todos.
 2. **Atender** — o primeiro a carregar fica com a chamada; os outros veem "atendida por …". Na primeira vez o browser pede autorização para usar o **microfone**: aceita.
 3. Durante a chamada: nome do cliente, reserva ligada (se houver), cronómetro, **Silenciar** e **Desligar**. Podes mudar de página sem cair a chamada (não feches nem recarregues o separador).
 4. **Recusar** termina a chamada do lado do cliente. **✕** só deixa de tocar no teu computador.

@@ -6,6 +6,7 @@
  */
 import { eq, sql, type SQL } from "drizzle-orm";
 import { RING_VISIBLE_MS, toDbUtc, type CallDirection, type CallStatus } from "../shared/whatsappCalls";
+import { RING_PROBE_TTL_MS } from "../shared/whatsappCallSignal";
 import { conversationProjectId } from "./whatsappCalls";
 import { leadNameSql, visibilitySql } from "./whatsappInbox";
 
@@ -41,16 +42,40 @@ export interface IncomingCallView {
   bookingClient: string | null;
 }
 
+/** Há alguma chamada recebida a tocar/ativa (qualquer cidade)? SELECT indexado sem JOIN. */
+async function probeIncoming(nowMs: number): Promise<boolean> {
+  const db = await dbOrThrow();
+  const since = toDbUtc(nowMs - RING_VISIBLE_MS);
+  const [probe] = (await db.execute(sql`SELECT id FROM whatsapp_calls WHERE status IN ('ringing','answering','connected','rejected') AND startedAt >= ${since} AND direction = 'in' LIMIT 1`)) as any;
+  return !!(probe as any[])?.length;
+}
+
+let probeCache: { at: number; value: Promise<boolean> } | null = null;
+
+/**
+ * "Há alguma chamada a tocar?" — UMA leitura por processo a cada
+ * RING_PROBE_TTL_MS, partilhada por todos os separadores ligados ao toque
+ * (17e: antes cada separador lia a BD de 1 em 1 s, o dia todo).
+ */
+export function anyIncomingCallCached(nowMs = Date.now()): Promise<boolean> {
+  if (probeCache && nowMs - probeCache.at < RING_PROBE_TTL_MS) return probeCache.value;
+  const value = probeIncoming(nowMs);
+  const entry = { at: nowMs, value };
+  probeCache = entry;
+  value.catch(() => { if (probeCache === entry) probeCache = null; });
+  return value;
+}
+
 /**
  * Chamadas recebidas a tocar (e as atendidas/recusadas há instantes, para
  * mostrar "atendida por X") visíveis ao utilizador. Leve quando não há nada:
  * primeiro um SELECT indexado sem JOIN; só com chamadas corre o resto.
+ * `probed: true` = quem chama já sabe que há chamadas (stream).
  */
-export async function listIncomingCalls(scope: number[] | undefined, nowMs = Date.now()): Promise<IncomingCallView[]> {
+export async function listIncomingCalls(scope: number[] | undefined, nowMs = Date.now(), opts: { probed?: boolean } = {}): Promise<IncomingCallView[]> {
   const db = await dbOrThrow();
   const since = toDbUtc(nowMs - RING_VISIBLE_MS);
-  const [probe] = (await db.execute(sql`SELECT id FROM whatsapp_calls WHERE status IN ('ringing','answering','connected','rejected') AND startedAt >= ${since} AND direction = 'in' LIMIT 1`)) as any;
-  if (!(probe as any[])?.length) return [];
+  if (!opts.probed && !(await probeIncoming(nowMs))) return [];
   const [rows] = (await db.execute(sql`
     SELECT k.id, k.conversationId, k.status, k.phoneE164, k.startedAt, k.answeredByUserId,
            ${convNameSql} AS name, u.name AS answeredByName,

@@ -843,6 +843,8 @@ export async function notifyMissedCall(call: CallRow): Promise<void> {
         : `${name} ligou às ${formatLisbonTime(call.startedAt)} e ninguém atendeu. Devolve a chamada na conversa (botão Ligar).`,
       link: call.conversationId ? `/whatsapp?c=${call.conversationId}` : "/whatsapp",
       entity: { type: "whatsapp_call", id: call.id },
+      // Número sem cidade: avisa todos os que têm o WhatsApp (17e — antes só quem via o país todo).
+      noCityToAll: true,
     });
   } catch (err: any) {
     console.warn("[WhatsAppCalls] aviso de chamada perdida falhou:", String(err?.message ?? err).slice(0, 160));

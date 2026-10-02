@@ -9,7 +9,7 @@ palavras: whatsapp, mensagem, mensagens, conversa, conversas, não lidas, respon
 Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e clientes.
 
 **Quem vê o quê**
-- Cada pessoa vê as conversas das suas cidades: um colaborador pela cidade da ficha, um lead pela cidade do lead, um número solto pela cidade da reserva com esse telefone. Números sem ficha, lead nem reserva só os vê quem vê todas as cidades.
+- Cada pessoa vê as conversas das suas cidades: um colaborador pela cidade da ficha, um lead pela cidade do lead, um número solto pela cidade da reserva com esse telefone. Números **sem cidade** (sem ficha, lead nem reserva) são de **todos** os que têm o WhatsApp.
 - Responder, atribuir e mudar o estado: team leader e acima.
 
 **Responder**
@@ -27,7 +27,7 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 **Respostas automáticas (sem uma pessoa)**
 - Confirmação do **STOP** / **INICIAR** (sempre).
 - Resposta a pedidos de disponibilidade dos extras ("Obrigado, fica confirmado") — só com a automação dos extras ligada.
-- Link da candidatura a um lead que responde — só com a resposta automática aos leads ligada.
+- Link da candidatura a um lead que responde — só com a **resposta automática aos leads** ligada (Definições → Automações; desligada por omissão).
 
 **Organizar**
 - Estados: **Aberta** (precisa de atenção), **Pendente** (à espera de algo), **Resolvida**. Se o contacto voltar a escrever, reabre.
