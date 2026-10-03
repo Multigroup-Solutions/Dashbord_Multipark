@@ -11,7 +11,7 @@ Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
 **Preencher** (Team Leader)
 1. Menu **Operações → Passagem de Turno**. Escolhe a cidade e o turno (manhã/noite). O dia operacional vai das 03:00 às 03:00 do dia seguinte.
 2. Preenche a caixa (caixa de check-out, fecho de caixa no cofre, valores das bolsas front/terminal, tickets/despesas pagos), o material (canetas, rolos MB, bateria), o fardamento e os **Pendentes para o turno seguinte**.
-3. Escreve observações e carrega em **Guardar passagem de turno**.
+3. Escreve observações e carrega em **Guardar passagem de turno**. Grava logo. O resumo IA, o aviso e o email ao team leader do turno seguinte seguem dentro de momentos, e o histórico atualiza-se sozinho.
 4. Quem entra confirma com **Recebi**. Nem quem criou a passagem nem quem a editou por último a podem confirmar.
 
 **Pendentes que passam de turno**

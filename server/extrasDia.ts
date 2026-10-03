@@ -11,9 +11,10 @@
  *
  *   - Hourly check-ins / check-outs for tomorrow (or chosen base date + 1)
  *   - Lavagem (wash) counts for context days
- *   - Driver shift suggestion (carros/hora por condutor POR CIDADE — definição
- *     `extras.carsPerHourPerDriver`, omissão Lisboa 2 / Porto 3 / Faro 3 —
- *     turnos de 3–12h)
+ *   - Driver shift suggestion (tempo por carro conforme as pessoas no turno,
+ *     TL incluído, POR CIDADE — definição `extras.crewRules` (D12, Jorge
+ *     3 out): Lisboa 2→75 / 3–4→60 / 5–6→45 / 7+→30 min; Porto e Faro
+ *     2→45 / 3+→30 min, mínimo 2 extras + TL — turnos de 3–12h)
  *
  * Driver levels are flat — all do everything — so the cheapest tier wins.
  */
@@ -22,9 +23,9 @@ import { cityNameScope, projectScope } from './cityScope';
 import { and, asc, eq, gte, lte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from "./extraRates";
-import { multiparkBookings, extrasDiaAssignments, employees, projects } from "../drizzle/schema";
-import { DEFAULT_CARS_PER_HOUR } from "../shared/appSettings";
-import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, carsPerHourFor, driversNeededFor } from "../shared/extrasSchedule";
+import { multiparkBookings, extrasDiaAssignments, employees, projects, users } from "../drizzle/schema";
+import { DEFAULT_CREW_RULES } from "../shared/appSettings";
+import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, describeCrewRule, extrasNeededFor, type CrewRule } from "../shared/extrasSchedule";
 import { lisbonDayOf, lisbonWallTimeUtcMs } from "../shared/lisbonDay";
 import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
@@ -40,10 +41,7 @@ export const DRIVER_LEVELS = [
 
 export type DriverLevelId = (typeof DRIVER_LEVELS)[number]["id"];
 
-/**
- * SÓ fallback: a capacidade viva é por cidade (definição
- * `extras.carsPerHourPerDriver`, ver loadCarsPerHour).
- */
+/** (Antigo) carros/hora fixos — a capacidade viva é a tabela por equipa (`extras.crewRules`, loadCrewRule). */
 export const CARS_PER_HOUR_PER_DRIVER = FALLBACK_CARS_PER_HOUR;
 export const MIN_SHIFT_HOURS = SHIFT_MIN;
 export const MAX_SHIFT_HOURS = SHIFT_MAX;
@@ -117,14 +115,14 @@ const CITY_CONFIG: Record<ExtraCity, { re: RegExp; pattern: string; prefix: stri
 
 // Resolve os projectIds da arvore da cidade (no cidade + descendentes),
 // EXATAMENTE como a folha operacional. Cacheado por processo e por cidade.
-/** Carros/hora por condutor da cidade (Definições → Parâmetros), com omissões. */
-export async function loadCarsPerHour(city: ExtraCity): Promise<number> {
-  let map: Record<string, number> | null = null;
+/** Tempo por carro conforme as pessoas no turno, da cidade (Definições → Parâmetros), com omissões (D12). */
+export async function loadCrewRule(city: ExtraCity): Promise<CrewRule> {
+  let map: Partial<Record<ExtraCity, CrewRule>> | null = null;
   try {
     const { getSetting } = await import("./appSettings");
-    map = await getSetting("extras.carsPerHourPerDriver");
+    map = await getSetting("extras.crewRules");
   } catch { /* sem BD → omissões */ }
-  return carsPerHourFor(map ?? DEFAULT_CARS_PER_HOUR, city);
+  return map?.[city] ?? DEFAULT_CREW_RULES[city];
 }
 
 export function cityLabel(city: ExtraCity): string {
@@ -238,11 +236,11 @@ export function suggestShifts(
   hourlyCars: number[],
   level: DriverLevelId = "junior",
   rates?: ExtraRates,
-  carsPerHour: number = CARS_PER_HOUR_PER_DRIVER,
+  crewRule: CrewRule = DEFAULT_CREW_RULES.lisbon,
 ): { shifts: DriverShift[]; totalCost: number; peakDrivers: number; totalDriverHours: number } {
   const base = DRIVER_LEVELS.find(l => l.id === level)!;
   const rateInfo = { ...base, hourlyRate: rates ? rateFor(rates, level) : base.hourlyRate };
-  const driversPerHour = hourlyCars.map(c => driversNeededFor(c, carsPerHour));
+  const driversPerHour = hourlyCars.map(c => extrasNeededFor(c, crewRule));
   const peak = Math.max(0, ...driversPerHour);
 
   if (peak === 0) {
@@ -328,8 +326,9 @@ export interface ExtrasDiaForecast {
   city: string;
   /** Id da cidade (lisbon/porto/faro). */
   cityId: ExtraCity;
-  /** Capacidade usada nesta previsão (carros/hora por condutor, da cidade). */
-  carsPerHourPerDriver: number;
+  /** Regra de capacidade usada nesta previsão (tempo por carro conforme as pessoas no turno, D12) e o texto dela. */
+  crewRule: CrewRule;
+  crewRuleText: string;
   source: "db";
   /** De onde vieram as reservas: BD da Multipark ao vivo, ou a nossa cópia (recurso). */
   bookingSource: BookingSource;
@@ -585,9 +584,12 @@ export interface Assignment {
   proposalReason: string | null;
   hoursBilled: number;
   cost: number;
-  /** Quem pôs / alterou por último (ids; nomes no ecrã quando houver). */
+  /** Quem pôs / alterou por último (D14: os nomes aparecem na linha da escala). */
   createdById?: number | null;
   updatedById?: number | null;
+  createdByName?: string | null;
+  updatedByName?: string | null;
+  /** 'auto' (proposta automática) | 'manual' */
   source?: string;
   // Mapeamento Multipark (preenchido se employeeId está associado a empregado RH)
   multiparkAgentName: string | null;
@@ -659,6 +661,9 @@ function rowToAssignment(
     multiparkAgentName: multiparkAgentName ?? null,
     multiparkAgentUserId: multiparkAgentUserId ?? null,
     photoUrl: photoUrl ?? null,
+    createdById: r.createdById ?? null,
+    updatedById: r.updatedById ?? null,
+    source: r.source ?? "manual",
     ...computed,
   };
 }
@@ -710,6 +715,14 @@ export async function listAssignments(date: string, city?: ExtraCity): Promise<A
     }
   }
 
+  // D14: nomes de quem pôs e de quem alterou por último (utilizadores)
+  const userIds = Array.from(new Set(rows.flatMap((r) => [r.createdById, r.updatedById]).filter((x): x is number => x != null && x > 0)));
+  const userNames = new Map<number, string>();
+  if (userIds.length > 0) {
+    const us = await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, userIds));
+    for (const u of us) if (u.name) userNames.set(u.id, u.name);
+  }
+
   // Resolve TL daily cost for each TL row (employees.monthlySalary / 15)
   const result: Assignment[] = [];
   for (const r of rows) {
@@ -718,7 +731,10 @@ export async function listAssignments(date: string, city?: ExtraCity): Promise<A
       tlCost = await getEmployeeDailyCost(r.employeeId);
     }
     const map = r.employeeId ? empMap.get(r.employeeId) : undefined;
-    result.push(rowToAssignment(r, tlCost, map?.multiparkAgentName, map?.multiparkAgentUserId, map?.photoUrl, rates));
+    const a = rowToAssignment(r, tlCost, map?.multiparkAgentName, map?.multiparkAgentUserId, map?.photoUrl, rates);
+    a.createdByName = r.createdById ? userNames.get(r.createdById) ?? null : null;
+    a.updatedByName = r.updatedById ? userNames.get(r.updatedById) ?? null : null;
+    result.push(a);
   }
   return result;
 }
@@ -1141,27 +1157,27 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
       markHourClass(hm.hour, r.deliveryType, "checkout");
     }
   }
-  // Capacidade da CIDADE: carros/hora que um condutor despacha (Lisboa 2,
-  // Porto 3, Faro 3 por omissão). Num bloco de 20min vale carsPerHour/3.
-  const carsPerHour = await loadCarsPerHour(city);
+  // Capacidade da CIDADE (D12): tempo por carro de cada condutor conforme as
+  // pessoas no turno (TL incluído; conduzem os extras). driversNeeded = extras
+  // precisos (sem o TL). Num bloco de 20 min conta a procura ×3 (por hora).
+  const crewRule = await loadCrewRule(city);
   for (const row of hourly) {
-    // Condutores por HORA = ⌈procura pesada da hora ÷ carros/hora⌉.
     let hourWeighted = 0;
     for (const s of row.slots) {
       const idx = s.hour * SLOTS_PER_HOUR + s.slot;
       s.weightedDemand = weightedBySlot[idx];
-      s.driversNeeded = driversNeededFor(s.weightedDemand * SLOTS_PER_HOUR, carsPerHour);
+      s.driversNeeded = extrasNeededFor(s.weightedDemand * SLOTS_PER_HOUR, crewRule);
       hourWeighted += s.weightedDemand;
     }
-    row.driversNeeded = driversNeededFor(hourWeighted, carsPerHour);
+    row.driversNeeded = extrasNeededFor(hourWeighted, crewRule);
   }
 
   // Para sugestão de turnos usa a procura pesada agregada por hora.
   const hourlyCars = hourly.map(h => h.slots.reduce((acc, s) => acc + s.weightedDemand, 0));
   const liveRates = await loadExtraRates();
-  const cheapest = suggestShifts(hourlyCars, "junior", liveRates, carsPerHour);
+  const cheapest = suggestShifts(hourlyCars, "junior", liveRates, crewRule);
   const bySingleLevel = DRIVER_LEVELS.map(l => {
-    const r = suggestShifts(hourlyCars, l.id, liveRates, carsPerHour);
+    const r = suggestShifts(hourlyCars, l.id, liveRates, crewRule);
     return { level: l.id, label: l.label, totalCost: r.totalCost, totalHours: r.totalDriverHours };
   });
 
@@ -1224,7 +1240,8 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     targetDate: dateKey(targetStart),
     city: cityLabel(city),
     cityId: city,
-    carsPerHourPerDriver: carsPerHour,
+    crewRule,
+    crewRuleText: describeCrewRule(crewRule),
     source: "db",
     bookingSource: live.ok ? "multipark-db" : "copy",
     bookingSourceNotice: live.ok ? null : live.notice,

@@ -44,7 +44,7 @@ import {
   type ScheduleCandidate,
   type ScheduleSettings,
 } from "../shared/extrasSchedule";
-import { DEFAULT_CARS_PER_HOUR, SETTINGS, hhmmToMinutes } from "../shared/appSettings";
+import { DEFAULT_CREW_RULES, SETTINGS, hhmmToMinutes, type CrewRulesMap } from "../shared/appSettings";
 
 export type ScheduleCity = "lisbon" | "porto" | "faro";
 export const SCHEDULE_CITIES: ScheduleCity[] = ["lisbon", "porto", "faro"];
@@ -73,7 +73,7 @@ export async function assertCityInScope(city: string): Promise<void> {
 export interface LoadedScheduleSettings extends ScheduleSettings {
   autoProposeAt: string;
   autoConfirmAt: string;
-  carsPerHour: Record<ScheduleCity, number>;
+  crewRules: CrewRulesMap;
   meetingPoints: Record<ScheduleCity, string>;
 }
 
@@ -84,7 +84,7 @@ export async function loadScheduleSettings(): Promise<LoadedScheduleSettings> {
     getSetting("extras.autoProposeDaysAhead"),
     getSetting("extras.autoConfirm"),
     getSetting("extras.autoConfirmAt"),
-    getSetting("extras.carsPerHourPerDriver"),
+    getSetting("extras.crewRules"),
     getSetting("extras.meetingPoints"),
   ]);
   const autoProposeAt = propose ?? (SETTINGS["extras.autoProposeAt"].defaultValue as string);
@@ -96,7 +96,7 @@ export async function loadScheduleSettings(): Promise<LoadedScheduleSettings> {
     autoConfirmAtMin: hhmmToMinutes(autoConfirmAt),
     daysAhead: days ?? (SETTINGS["extras.autoProposeDaysAhead"].defaultValue as number),
     autoConfirm: auto ?? (SETTINGS["extras.autoConfirm"].defaultValue as boolean),
-    carsPerHour: { ...DEFAULT_CARS_PER_HOUR, ...(cars ?? {}) },
+    crewRules: { ...DEFAULT_CREW_RULES, ...(cars ?? {}) },
     meetingPoints: { lisbon: "", porto: "", faro: "", ...(mp ?? {}) },
   };
 }
@@ -389,7 +389,7 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
     let peakHour: number | null = null;
     needed.forEach((n, h) => { if (n > peakDrivers) { peakDrivers = n; peakHour = h; } });
     const summaryBody = explainProposal({
-      date, city, carsPerHour: forecast.carsPerHourPerDriver, peakDrivers, peakHour,
+      date, city, capacityText: forecast.crewRuleText, peakDrivers, peakHour,
       picks: plan.picks.map((p) => ({ personName: p.personName, startHour: p.startHour, endHour: p.endHour, hourlyRate: p.hourlyRate })),
       keptCount: kept.length,
       gaps: plan.gaps,
@@ -848,7 +848,8 @@ export interface ScheduleOverview {
   date: string;
   city: ScheduleCity;
   state: ScheduleState | null;
-  carsPerHour: number;
+  /** Regra de capacidade da cidade (D12), em texto. */
+  capacityText: string;
   /** Buracos AGORA (previsão vs. escala actual, propostas incluídas). */
   gaps: Gap[];
   neededPeak: number;
@@ -889,7 +890,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     date,
     city,
     state,
-    carsPerHour: forecast.carsPerHourPerDriver,
+    capacityText: forecast.crewRuleText,
     gaps,
     neededPeak: Math.max(0, ...needed),
     proposedCount: mine.filter((r) => r.status === "proposed").length,

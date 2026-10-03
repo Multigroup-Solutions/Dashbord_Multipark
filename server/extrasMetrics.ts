@@ -8,11 +8,10 @@
  *  - tempo da candidatura ao 1.º turno (ponto)
  *  - extras ativos sem trabalho há mais de 90 dias → sugerir desativar
  *
- * Tudo dentro das cidades do utilizador (projectScope / cityNameScope).
+ * Tudo dentro das cidades do utilizador (o custo como na Faturação: server/finance/extrasCost.ts).
  */
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { cityNameScope } from "./cityScope";
 
 // ─── Puros ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +62,18 @@ function addDays(iso: string, n: number): string {
 }
 const rowsOf = (res: any): any[] => ((Array.isArray(res) ? res[0] : res) as any[]) ?? [];
 
+/** Cidades do âmbito (nomes) → cidades da escala (lisbon|porto|faro). PURA. */
+export function extrasCityKeys(names: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const n of names) {
+    const k = n.trim().toLowerCase();
+    if (k.startsWith("lisb")) out.add("lisbon");
+    else if (k.includes("porto")) out.add("porto");
+    else if (k.startsWith("faro")) out.add("faro");
+  }
+  return [...out];
+}
+
 export interface ExtrasMetrics {
   period: { from: string; to: string };
   responseRate: { weekStart: string; total: number; responded: number }[];
@@ -98,36 +109,20 @@ export async function getExtrasMetrics(days = 30): Promise<ExtrasMetrics> {
     out.responseRate.push({ weekStart: ov.weekStart, total: ov.totalExtras, responded: ov.responded });
   }
 
-  // 2. Custo previsto (escala, sem TL) vs pago (ponto × tarifa, só turnos válidos)
-  const { loadExtraRates, rateFor } = await import("./extraRates");
+  // 2. Custo previsto (escala, sem TL) vs pago (ponto × tarifa) — 22b (D13, Jorge 3 out):
+  //    a MESMA conta da Faturação (server/finance/extrasCost.ts): todos os extras (também
+  //    os que já saíram), picagens aprovadas pelo RH contam sempre, dias de Lisboa.
+  const [{ loadExtraRates }, { loadExtrasCostRows, aggregateExtrasCost }, { lisbonDayOf, lisbonDayRangeUtc }, { scopedCityNamesLive, scopedProjectIds }] = await Promise.all([
+    import("./extraRates"), import("./finance/extrasCost"), import("../shared/lisbonDay"), import("./cityScope"),
+  ]);
   const rates = await loadExtraRates();
-  const { extrasDiaAssignments } = await import("../drizzle/schema");
-  const planned = rowsOf(await db.execute(sql`
-    SELECT level, SUM(GREATEST(COALESCE(sentHomeHour, endHour) - startHour, 0)) AS h
-      FROM extras_dia_assignments
-     WHERE isTeamLeader = 0 AND assignmentDate BETWEEN ${from} AND ${to}
-       AND ${cityNameScope(extrasDiaAssignments.city)}
-     GROUP BY level`));
-  for (const r of planned) {
-    const h = Number(r.h ?? 0);
-    out.cost.plannedHours += h;
-    out.cost.planned += h * rateFor(rates, r.level ?? "junior");
-  }
-  if (ids.length) {
-    const paid = rowsOf(await db.execute(sql`
-      SELECT e.extraLevel AS lvl, SUM(t.hoursWorked) AS h
-        FROM time_records t JOIN employees e ON e.id = t.employeeId
-       WHERE t.type = 'check_out' AND t.employeeId IN (${idList})
-         AND t.recordedAt BETWEEN ${`${from} 00:00:00`} AND ${`${to} 23:59:59`}
-         AND COALESCE(t.reviewStatus, 'ok') IN ('ok', 'approved')
-         AND COALESCE(t.notes, '') NOT LIKE '%[SUSPEITO]%'
-       GROUP BY e.extraLevel`));
-    for (const r of paid) {
-      const h = Number(r.h ?? 0);
-      out.cost.paidHours += h;
-      out.cost.paid += h * rateFor(rates, r.lvl != null ? Number(r.lvl) : 1);
-    }
-  }
+  const scopedNames = scopedCityNamesLive();
+  const cities = scopedNames === undefined ? null : extrasCityKeys(scopedNames);
+  const utc = lisbonDayRangeUtc(from, to);
+  const costRows = await loadExtrasCostRows(db, { from, to, cities, projectIds: scopedProjectIds(), pontoRange: { start: utc.start, endExclusive: utc.end } });
+  const agg = aggregateExtrasCost(costRows, rates, { dayOfRecord: (v) => (v ? lisbonDayOf(v) : ""), cityOfProject: () => null });
+  for (const l of agg.plannedByLevel.values()) { out.cost.plannedHours += l.hours; out.cost.planned += l.cost; }
+  for (const l of agg.realByLevel.values()) { out.cost.paidHours += l.hours; out.cost.paid += l.cost; }
   out.cost.planned = Math.round(out.cost.planned * 100) / 100;
   out.cost.paid = Math.round(out.cost.paid * 100) / 100;
   out.cost.plannedHours = Math.round(out.cost.plannedHours * 10) / 10;

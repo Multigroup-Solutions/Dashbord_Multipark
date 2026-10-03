@@ -332,13 +332,15 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
   });
 
   const save = trpc.shiftHandover.save.useMutation({
-    onSuccess: async (r) => {
-      const a = r.automation;
-      toast.success("Passagem de turno guardada" + (a?.emailed ? ` — email enviado (${a.emailed})` : "") + (a?.notified ? ` — ${a.notified} team leader(s) avisado(s)` : ""));
+    onSuccess: async () => {
+      // D7: grava logo; o resumo (IA), o aviso e o email ao turno seguinte seguem dentro de momentos
+      toast.success("Passagem de turno guardada — o resumo e o aviso ao turno seguinte seguem dentro de momentos");
       await utils.shiftHandover.draft.invalidate();
       // Recarrega o registo gravado (nova versão) antes de permitir nova edição.
       await utils.shiftHandover.list.invalidate();
       setLoadedKey(null);
+      // e outra vez quando o resumo da IA já deve estar guardado
+      setTimeout(() => { void utils.shiftHandover.list.invalidate(); }, 15_000);
     },
     onError: (e) => {
       if (e.data?.code === "CONFLICT") toast.error(e.message, { action: { label: "Recarregar", onClick: reload }, duration: 15000 });

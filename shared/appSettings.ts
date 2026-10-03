@@ -131,7 +131,30 @@ const carsPerHourValue = z
   .min(0.5, "Mínimo 0,5 carros/hora.")
   .max(20, "Máximo 20 carros/hora.");
 
-/** Carros/hora que UM condutor despacha, por cidade (Lisboa 2, Porto 3, Faro 3). */
+/**
+ * Tempo por carro de cada condutor conforme as PESSOAS no turno, TL incluído
+ * (Jorge, 3 out — D12): "2 pessoas" = TL + 1 extra. Quem conduz são os
+ * extras (o TL vai buscá-los). `minCrew`: o mínimo de pessoas quando há
+ * trabalho (Faro/Porto: 2 extras + TL = 3).
+ */
+const crewBandSchema = z.object({
+  upTo: z.number().int().min(1).max(60).nullable(),
+  minutes: z.number().min(5, "Mínimo 5 minutos por carro.").max(240, "Máximo 240 minutos por carro."),
+});
+const crewRuleSchema = z.object({
+  minCrew: z.number().int().min(1).max(20),
+  bands: z.array(crewBandSchema).min(1).max(12),
+}).refine((r) => r.bands[r.bands.length - 1].upTo === null, { message: "A última linha é \"a partir daí\" (upTo: null)." })
+  .refine((r) => r.bands.every((b, i) => i === 0 || b.upTo === null || (r.bands[i - 1].upTo ?? 0) < b.upTo), { message: "As linhas vão por ordem crescente de pessoas." });
+export const crewRulesSchema = z.object({ lisbon: crewRuleSchema, porto: crewRuleSchema, faro: crewRuleSchema }, { error: "Indica as regras de Lisboa, Porto e Faro." });
+export type CrewRulesMap = z.infer<typeof crewRulesSchema>;
+export const DEFAULT_CREW_RULES: CrewRulesMap = {
+  lisbon: { minCrew: 2, bands: [{ upTo: 2, minutes: 75 }, { upTo: 4, minutes: 60 }, { upTo: 6, minutes: 45 }, { upTo: null, minutes: 30 }] },
+  porto: { minCrew: 3, bands: [{ upTo: 2, minutes: 45 }, { upTo: null, minutes: 30 }] },
+  faro: { minCrew: 3, bands: [{ upTo: 2, minutes: 45 }, { upTo: null, minutes: 30 }] },
+};
+
+/** (Antigo, até 22b) Carros/hora que UM condutor despacha, por cidade. Já não é usado. */
 export const carsPerHourMapSchema = z.object({
   lisbon: carsPerHourValue,
   porto: carsPerHourValue,
@@ -352,13 +375,13 @@ export const SETTINGS = {
     defaultValue: {},
     wiring: "live",
   }),
-  "extras.carsPerHourPerDriver": def({
-    key: "extras.carsPerHourPerDriver",
+  "extras.crewRules": def({
+    key: "extras.crewRules",
     group: "extras",
-    label: "Carros por hora por condutor",
-    description: "Quantos carros (recolhas + entregas, pesados por tipo de entrega) um condutor despacha por hora, por cidade. Define quantos condutores a previsão do Extras-dia pede em cada hora e a proposta automática de escala.",
-    schema: carsPerHourMapSchema,
-    defaultValue: DEFAULT_CARS_PER_HOUR,
+    label: "Tempo por carro conforme as pessoas no turno",
+    description: "Minutos que cada condutor leva por carro, conforme as pessoas no turno com o TL incluído (2 = TL + 1 extra; quem conduz são os extras, o TL vai buscá-los), por cidade, e o mínimo de pessoas quando há trabalho. Define quantos extras a previsão do Extras-dia pede em cada hora e a proposta automática de escala. JSON: {\"lisbon\": {\"minCrew\": 2, \"bands\": [{\"upTo\": 2, \"minutes\": 75}, {\"upTo\": 4, \"minutes\": 60}, {\"upTo\": 6, \"minutes\": 45}, {\"upTo\": null, \"minutes\": 30}]}, \"porto\": {…}, \"faro\": {…}}.",
+    schema: crewRulesSchema,
+    defaultValue: DEFAULT_CREW_RULES,
     wiring: "live",
   }),
   "extras.autoProposeAt": def({
