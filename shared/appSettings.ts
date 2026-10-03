@@ -284,7 +284,7 @@ export const SETTINGS = {
     key: "ops.presencePhones",
     group: "operacao",
     label: "Alertas sem PDA/Zello: WhatsApp dos administradores",
-    description: "Telefones que recebem o WhatsApp quando um alerta \"a trabalhar sem PDA ou Zello ligado\" fica sem resposta: os administradores de cada cidade (lisbon, porto, faro) e a cópia (copy) para todas as cidades. JSON: {\"lisbon\": [\"+351…\"], \"porto\": [], \"faro\": [], \"copy\": [\"+351…\"]}.",
+    description: "Telefones que recebem o WhatsApp quando um alerta \"a trabalhar sem PDA ou Zello ligado\" fica sem resposta: os administradores de cada cidade e a cópia para todas as cidades. Um número por linha (ex.: +351912345678).",
     schema: presencePhonesSchema,
     defaultValue: { lisbon: [], porto: [], faro: [], copy: [] },
     wiring: "live",
@@ -543,6 +543,23 @@ export const SETTINGS = {
   }),
 } as const;
 
+/**
+ * Definições que só o super admin muda (os admins veem-nas). Inclui o
+ * remetente dos emails de sistema (decisão do Jorge, 2 out 2026).
+ */
+export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
+  "notifications.routing",
+  "google.sharedCalendars",
+  "marketing.webAnalytics",
+  "marketing.googleBusiness",
+  "google.contacts",
+  "google.drive",
+  "mail.systemSender",
+]);
+export function settingSuperAdminOnly(key: string): boolean {
+  return SUPER_ADMIN_SETTING_KEYS.has(key);
+}
+
 export type SettingKey = keyof typeof SETTINGS;
 export type SettingValue<K extends SettingKey> = z.output<(typeof SETTINGS)[K]["schema"]>;
 export const SETTING_KEYS = Object.keys(SETTINGS) as SettingKey[];
@@ -607,7 +624,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
   { name: "ZELLO_PDA_NAMES", label: "Zello: nome de quem tem o PDA no mapa", description: "Quando alguém faz login num PDA (registado pelo QR), o nome da conta Zello desse PDA passa a \"PDA 12 · Rui Santos\"; no logout volta a \"PDA 12\". Assim o mapa do Zello mostra quem está com cada PDA. Escreve no Zello (só o nome). Desligado por omissão até testar com um PDA.", defaultEnabled: false },
-  { name: "CRM_AUTO_MERGE", label: "CRM: juntar sozinho as fichas óbvias", description: "Todas as madrugadas (depois das sugestões das 05:15; se não acabar, continua) o CRM junta sozinho as fichas com o mesmo nome E o mesmo telefone, email (não genérico) ou NIF. Empresas nunca. Fica a ficha com mais reservas; cada fusão aparece em Rever fichas → Fusões recentes e pode ser separada.", defaultEnabled: true },
+  // 20b (Jorge, 2 out 2026): mexe em fichas de clientes sozinho → só o super admin o liga/desliga.
+  { name: "CRM_AUTO_MERGE", label: "CRM: juntar sozinho as fichas óbvias", description: "Todas as madrugadas (depois das sugestões das 05:15; se não acabar, continua) o CRM junta sozinho as fichas com o mesmo nome E o mesmo telefone, email (não genérico) ou NIF. Empresas nunca. Fica a ficha com mais reservas; cada fusão aparece em Rever fichas → Fusões recentes e pode ser separada.", defaultEnabled: true, superAdminOnly: true },
   { name: "PARTNER_MP_SYNC", label: "Parcerias: manter ligadas à Multipark todos os dias", description: "Todas as madrugadas (05:40) as Parcerias acertam-se com a Multipark: parceiros (agências e agregadores, com a taxa por parque), clientes Pro e avenças ficam presos ao id de lá, os novos são criados, os que deixaram de existir são arquivados (nunca apagados) e os agentes de cada parceiro ficam ligados à parceria. Liga depois de aplicares a primeira vez em Parcerias → Ligar à Multipark.", defaultEnabled: false },
   { name: "SERVICE_TASKS_TOMORROW_ALERT", label: "Serviços: aviso das tarefas de amanhã", description: "Todos os dias a partir das 18:00 (Lisboa): a lista das tarefas dos serviços extra com saída no dia seguinte, no sino e por email aos team leaders e supervisores de cada cidade. Lê só a nossa BD (sai mesmo com a Multipark em baixo). Desligado por omissão.", defaultEnabled: false },
   { name: "PARTNER_CLOSE_ALERTS", label: "Parceiros: avisar diferenças no fecho do mês", description: "Todas as manhãs (06:40) compara-se o mês corrente e o anterior, parceiro a parceiro, entre a Multipark e a nossa memória do webhook (a comparação corre sempre; isto só liga os avisos). Com isto ligado, quando aparecem diferenças NOVAS chega um aviso (sino e email) a quem vê as Parcerias.", defaultEnabled: false },
@@ -697,7 +715,8 @@ export interface CronJob {
 export const CRON_JOBS: readonly CronJob[] = [
   // O próprio agendador (cron-job.org de 5 em 5 min; GitHub Actions de hora a hora).
   { name: "tick", label: "Agendador (cron-job.org → /api/cron/tick)", intervalMinutes: 5, workflow: "cron-job.org" },
-  // 5 em 5 min sem push; de hora a hora (rede de segurança) com o push do Gmail saudável → "parado" só depois de 2 h.
+  // 5 em 5 min sem push; 1×/dia (rede de segurança) com o push do Gmail saudável. O Estado do
+  // sistema usa a cadência em vigor (20b); este valor fica só para quem não a conhece.
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 60, workflow: "tick" },
   { name: "multipark-deliveries", label: "Fila do webhook Multipark (repescagem)", intervalMinutes: 60, workflow: "tick" },
   { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },

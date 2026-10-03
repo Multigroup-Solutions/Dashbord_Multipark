@@ -19,6 +19,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { cronAuthOk } from "./cronAuth";
 import { CRON_JOBS, cronHealth, cronNameFromPath, cronOutcome, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
+import { scrubSecrets } from "./integrationsStatus";
 
 /** "YYYY-MM-DD HH:MM:SS.mmm" (UTC) — DATETIME(3). */
 export function toMysqlMs(d: Date): string {
@@ -40,11 +41,17 @@ function rowsOf(res: unknown): any[] {
 
 const RETENTION_DAYS = 30;
 
+/** 20b: erros e query strings sem segredos (tokens, passwords em URLs) antes de gravar/mostrar. */
+function clean(v: string | null, max: number): string | null {
+  if (v == null) return null;
+  return scrubSecrets(v, process.env, max);
+}
+
 async function insertRun(name: string, startedAt: Date, meta: string | null): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
   const res = await db.execute(sql`
-    INSERT INTO cron_runs (name, startedAt, meta) VALUES (${name}, ${toMysqlMs(startedAt)}, ${meta})`);
+    INSERT INTO cron_runs (name, startedAt, meta) VALUES (${name}, ${toMysqlMs(startedAt)}, ${clean(meta, 255)})`);
   const header = Array.isArray(res) ? res[0] : res;
   const id = Number((header as any)?.insertId ?? 0);
   return id > 0 ? id : null;
@@ -55,14 +62,17 @@ async function finishRun(id: number, startedAt: Date, finishedAt: Date, httpStat
   if (!db) return;
   const durationMs = Math.max(0, finishedAt.getTime() - startedAt.getTime());
   await db.execute(sql`
-    UPDATE cron_runs SET finishedAt = ${toMysqlMs(finishedAt)}, ok = ${ok ? 1 : 0}, error = ${error},
+    UPDATE cron_runs SET finishedAt = ${toMysqlMs(finishedAt)}, ok = ${ok ? 1 : 0}, error = ${clean(error, 1000)},
            durationMs = ${durationMs}, httpStatus = ${httpStatus}
      WHERE id = ${id}`);
   // Retenção: ~1 em 50 corridas apaga o que tiver mais de 30 dias (em lote,
-  // sem subquery sobre a mesma tabela).
+  // sem subquery sobre a mesma tabela). 20b: a ÚLTIMA corrida de cada cron
+  // fica sempre — um cron parado há mais de 30 dias continua a aparecer como
+  // "Parado" (antes ficava "Sem registo", sem alarme).
   if (Math.random() < 0.02) {
     const cutoff = toMysqlMs(new Date(Date.now() - RETENTION_DAYS * 86_400_000));
-    await db.execute(sql`DELETE FROM cron_runs WHERE startedAt < ${cutoff} LIMIT 5000`);
+    const keep = rowsOf(await db.execute(sql`SELECT MAX(id) AS id FROM cron_runs GROUP BY name`)).map((r) => Number(r.id)).filter((n) => n > 0);
+    await db.execute(sql`DELETE FROM cron_runs WHERE startedAt < ${cutoff}${keep.length ? sql` AND id NOT IN (${sql.join(keep.map((k) => sql`${k}`), sql`, `)})` : sql``} LIMIT 5000`);
   }
 }
 
@@ -174,19 +184,25 @@ function toView(r: any): CronRunView {
     startedAt: fromMysqlMs(r.startedAt) ?? 0,
     finishedAt: fromMysqlMs(r.finishedAt),
     ok: r.ok == null ? null : Number(r.ok) === 1,
-    error: r.error ? String(r.error) : null,
+    error: r.error ? clean(String(r.error), 1000) : null,
     durationMs: r.durationMs == null ? null : Number(r.durationMs),
     httpStatus: r.httpStatus == null ? null : Number(r.httpStatus),
-    meta: r.meta ? String(r.meta) : null,
+    meta: r.meta ? clean(String(r.meta), 255) : null,
   };
 }
 
 const RUN_COLUMNS = sql`id, DATE_FORMAT(startedAt, '%Y-%m-%d %H:%i:%s.%f') AS startedAt,
   DATE_FORMAT(finishedAt, '%Y-%m-%d %H:%i:%s.%f') AS finishedAt, ok, error, durationMs, httpStatus, meta`;
 
-export async function getCronStatuses(now = Date.now()): Promise<CronStatus[]> {
+/**
+ * `intervalOverrides`: intervalo esperado efetivo de um cron quando a agenda
+ * muda em tempo real (ex.: mail-sync de 5 em 5 min sem o push do Gmail, de
+ * hora a hora com ele) — o "Parado" passa a ser medido pelo que está em vigor.
+ */
+export async function getCronStatuses(now = Date.now(), intervalOverrides: ReadonlyMap<string, number> = new Map()): Promise<CronStatus[]> {
   const db = await getDb();
-  if (!db) return [];
+  // 20b: sem BD é erro — antes [] e a página dizia "Tudo a correr".
+  if (!db) throw new Error("Base de dados indisponível — estado dos crons desconhecido.");
   const known = new Map(CRON_JOBS.map((j) => [j.name, j]));
   const since = toMysqlMs(new Date(now - 86_400_000));
 
@@ -194,9 +210,11 @@ export async function getCronStatuses(now = Date.now()): Promise<CronStatus[]> {
   const aggRes = await db.execute(sql`
     SELECT name, COUNT(*) AS runs, SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures
       FROM cron_runs WHERE startedAt >= ${since} GROUP BY name`);
+  // "Último OK" = a última que FEZ o trabalho: uma corrida saltada (interruptor
+  // desligado, sem configuração…) é verde mas não conta (20b).
   const okRes = await db.execute(sql`
     SELECT name, DATE_FORMAT(MAX(finishedAt), '%Y-%m-%d %H:%i:%s.%f') AS lastOkAt
-      FROM cron_runs WHERE ok = 1 GROUP BY name`);
+      FROM cron_runs WHERE ok = 1 AND (error IS NULL OR error NOT LIKE 'saltado:%') GROUP BY name`);
   const namesRes = await db.execute(sql`SELECT DISTINCT name FROM cron_runs`);
   const agg = new Map(rowsOf(aggRes).map((r) => [String(r.name), { runs: Number(r.runs), failures: Number(r.failures ?? 0) }]));
   const lastOk = new Map(rowsOf(okRes).map((r) => [String(r.name), fromMysqlMs(r.lastOkAt)]));
@@ -208,7 +226,7 @@ export async function getCronStatuses(now = Date.now()): Promise<CronStatus[]> {
     const failRes = await db.execute(sql`SELECT ${RUN_COLUMNS} FROM cron_runs WHERE name = ${name} AND ok = 0 ORDER BY startedAt DESC LIMIT 1`);
     const recent = rowsOf(recentRes).map(toView);
     const last = recent[0] ?? null;
-    const interval = job?.intervalMinutes ?? null;
+    const interval = intervalOverrides.get(name) ?? job?.intervalMinutes ?? null;
     return {
       name,
       label: job?.label ?? name,

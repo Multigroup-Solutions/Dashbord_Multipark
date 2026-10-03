@@ -10,6 +10,7 @@
 //  - Modelos Google Docs com {{marcadores}} (admin e super admin).
 import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { SettingsCardError } from "@/components/SettingsCardError";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,7 +45,7 @@ export function GoogleDriveSettings() {
     },
     onError: (e) => toast.error(e.message),
   });
-  if (q.error) return null;
+  if (q.error) return <SettingsCardError title="Google Drive — Shared Drive da empresa" error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} />;
   if (q.isLoading || !cfg || !q.data) return <Card><CardContent className="py-4"><Loader2 className="h-4 w-4 animate-spin" /></CardContent></Card>;
   const d = q.data;
   const canEdit = d.canEdit;
@@ -170,7 +171,7 @@ function DocTemplatesCard({ sharedReady }: { sharedReady: boolean }) {
     onSuccess: () => { utils.googleDrive.templates.all.invalidate(); utils.googleDrive.templates.forEntity.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
-  if (q.error) return null;
+  if (q.error) return <SettingsCardError title="Modelos de documentos (Google Docs)" error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} />;
   const list = q.data ?? [];
   const entities = form ? (DOC_TEMPLATE_ENTITIES[form.templateType] as readonly GenerateEntityType[]) : [];
   const catalog = form ? Array.from(new Map(entities.flatMap((e) => placeholdersFor(e)).map((p) => [p.key, p])).values()) : [];

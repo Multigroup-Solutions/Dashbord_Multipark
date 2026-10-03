@@ -11,6 +11,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   AUTOMATION_FLAGS,
+  settingSuperAdminOnly,
   FLAG_SETTING_PREFIX,
   SETTINGS,
   SETTING_KEYS,
@@ -100,7 +101,9 @@ export interface SettingRow {
 async function storedRows(): Promise<Map<string, SettingRow>> {
   const db = await getDb();
   const out = new Map<string, SettingRow>();
-  if (!db) return out;
+  // 20b: sem BD é erro — antes a página mostrava tudo "por omissão" e quem
+  // gravasse a seguir pisava o que lá estava.
+  if (!db) throw new Error("Base de dados indisponível.");
   const res = await db.execute(sql`
     SELECT s.settingKey, s.\`value\`, DATE_FORMAT(s.updatedAt, '%Y-%m-%d %H:%i:%s') AS updatedAt, u.name AS updatedByName
       FROM app_settings s LEFT JOIN users u ON u.id = s.updatedById`);
@@ -131,6 +134,9 @@ export async function listSettings() {
       defaultValue: d.defaultValue as unknown,
       value: parsed?.ok ? parsed.value : null,
       isSet: !!parsed?.ok,
+      /** 20b: há um valor gravado que já não passa na validação (fica a omissão). */
+      invalid: !!row && !parsed?.ok,
+      superAdminOnly: settingSuperAdminOnly(key),
       updatedAt: row?.updatedAt ?? null,
       updatedByName: row?.updatedByName ?? null,
     };
@@ -161,11 +167,21 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
+/** Outra pessoa gravou entretanto (20b): quem grava tem de ver o valor novo primeiro. */
+export class SettingConflictError extends Error {
+  constructor(public readonly current: { updatedAt: string | null; updatedByName: string | null }) {
+    super(`Alguém mudou isto entretanto${current.updatedByName ? ` (${current.updatedByName})` : ""}. Os valores foram atualizados: revê e volta a gravar.`);
+    this.name = "SettingConflictError";
+  }
+}
+
 /**
  * Grava (ou, com `value === null`, apaga → volta à omissão/env) uma definição,
  * com auditoria. Lança Error com mensagem PT se o valor for inválido.
+ * `expectedUpdatedAt` (20b): o `updatedAt` que o ecrã leu (null = não havia
+ * valor gravado); se entretanto mudou, lança SettingConflictError e não grava.
  */
-export async function setSetting(key: string, value: unknown, userId: number): Promise<{ changed: boolean; value: unknown }> {
+export async function setSetting(key: string, value: unknown, userId: number, opts: { expectedUpdatedAt?: string | null } = {}): Promise<{ changed: boolean; value: unknown }> {
   if (!isSettingKey(key) && !isFlagSettingKey(key)) throw new Error(`Definição desconhecida: ${key}`);
   let normalized: unknown = null;
   if (value !== null) {
@@ -175,9 +191,17 @@ export async function setSetting(key: string, value: unknown, userId: number): P
   }
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
-  const oldRes = await db.execute(sql`SELECT \`value\` FROM app_settings WHERE settingKey = ${key} LIMIT 1`);
+  const oldRes = await db.execute(sql`
+    SELECT s.\`value\`, DATE_FORMAT(s.updatedAt, '%Y-%m-%d %H:%i:%s') AS updatedAt, u.name AS updatedByName
+      FROM app_settings s LEFT JOIN users u ON u.id = s.updatedById WHERE s.settingKey = ${key} LIMIT 1`);
   const oldRow = rowsOf(oldRes)[0];
   const oldValue = oldRow ? parseJsonValue(oldRow.value) : null;
+  if (opts.expectedUpdatedAt !== undefined) {
+    const currentAt = oldRow?.updatedAt ? String(oldRow.updatedAt) : null;
+    if (currentAt !== (opts.expectedUpdatedAt ?? null)) {
+      throw new SettingConflictError({ updatedAt: currentAt, updatedByName: oldRow?.updatedByName ? String(oldRow.updatedByName) : null });
+    }
+  }
   if ((oldRow ? oldValue : null) === null && normalized === null) return { changed: false, value: null };
   if (oldRow && sameJson(oldValue, normalized)) return { changed: false, value: normalized };
 
@@ -204,14 +228,15 @@ export async function setSetting(key: string, value: unknown, userId: number): P
   return { changed: true, value: normalized };
 }
 
-export async function listSettingsAudit(limit = 50) {
+export async function listSettingsAudit(limit = 50, key?: string | null) {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) throw new Error("Base de dados indisponível.");
   const n = Math.max(1, Math.min(200, Math.floor(limit)));
   const res = await db.execute(sql`
     SELECT a.id, a.settingKey, a.oldValue, a.newValue,
            DATE_FORMAT(a.changedAt, '%Y-%m-%d %H:%i:%s') AS changedAt, u.name AS changedByName
       FROM app_settings_audit a LEFT JOIN users u ON u.id = a.changedById
+     ${key ? sql`WHERE a.settingKey = ${key}` : sql``}
      ORDER BY a.changedAt DESC, a.id DESC
      LIMIT ${n}`);
   return rowsOf(res).map((r) => ({

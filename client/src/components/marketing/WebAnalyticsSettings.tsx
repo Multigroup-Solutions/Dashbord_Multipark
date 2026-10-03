@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { SettingsCardError } from "@/components/SettingsCardError";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -59,7 +60,7 @@ export function WebAnalyticsSettings() {
     },
     onError: (e) => toast.error(e.message),
   });
-  if (q.error) return null;
+  if (q.error) return <SettingsCardError title="Web & SEO — Google Analytics 4, Search Console e PageSpeed" error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} />;
   if (q.isLoading || !cfg || !q.data) return <Card><CardContent className="py-4"><Loader2 className="h-4 w-4 animate-spin" /></CardContent></Card>;
   const d = q.data;
   const canEdit = d.canEdit;
