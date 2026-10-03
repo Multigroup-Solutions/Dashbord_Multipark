@@ -26,7 +26,7 @@ export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => 
   return (
     <div className="flex flex-col gap-3.5">
       <div className="flex flex-wrap items-center gap-3 rounded-[10px] border bg-card p-3.5">
-        <div className="flex h-10 min-w-[260px] flex-1 items-center gap-2 rounded-lg border bg-card px-3">
+        <div className="flex h-10 w-full min-w-0 flex-1 items-center gap-2 rounded-lg border bg-card px-3 sm:min-w-[260px]">
           <Search className="h-4 w-4 text-muted-foreground" />
           <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Procurar conta Pro (nome, email, NIF)…" className="min-w-0 flex-1 bg-transparent text-sm outline-none" />
         </div>

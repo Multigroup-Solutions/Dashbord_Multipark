@@ -29,6 +29,7 @@
  * `replaceAllText`, divisão de linhas para a API Sheets e leitura de uma
  * folha como CSV para as importações existentes.
  */
+import { crmQuerySchema } from "./crmFilters";
 import { z } from "zod";
 import type { Action, ModuleId } from "./access";
 
@@ -472,7 +473,12 @@ export function generatedDocName(type: DocTemplateType, label: string, today: st
 // ─── Sheets: escrita em blocos e leitura como CSV ───────────────────────────
 
 export type SheetCell = string | number | boolean | null;
-export interface SheetTab { name: string; rows: SheetCell[][] }
+export interface SheetTab {
+  name: string;
+  rows: SheetCell[][];
+  /** O relatório cortou linhas (ex.: "5 000 de 12 345 clientes") — a folha fica marcada como incompleta. */
+  note?: string;
+}
 
 /** Letra(s) da coluna (1 → A, 27 → AA). PURA. */
 export function columnLetter(n: number): string {
@@ -589,6 +595,9 @@ export const sheetExportInputSchema = z.discriminatedUnion("report", [
   z.object({ report: z.literal("extras_metricas"), days: z.number().int().min(7).max(180).optional() }),
   z.object({
     report: z.literal("clientes"),
+    /** 21a: a pesquisa EXATA da lista (filtros, regras, pesquisa no campo escolhido, ordem) */
+    query: crmQuerySchema.omit({ offset: true, limit: true }).optional(),
+    // antigos (só pesquisa livre + 1 segmento): ficam para links/relatórios já guardados
     search: z.string().max(200).nullable().optional(),
     segment: z.enum(["all", "new", "recurring", "vip", "at_risk", "partner", "shared"]).nullable().optional(),
     projectId: z.number().optional(),

@@ -367,7 +367,8 @@ describe("Sheets — exportador", () => {
     expect(call).toHaveBeenCalledWith("crm.list", expect.objectContaining({ tab: "clients", offset: 0, limit: 200 }));
     expect(call).toHaveBeenCalledWith("crm.list", expect.objectContaining({ offset: 200 }));
     expect(tabs[0].rows.length).toBe(1 + 201);
-    expect(tabs[0].rows[1].slice(0, 3)).toEqual([1, "C0", "c0@x.pt"]);
+    // 21a: a 3.ª coluna passou a ser o tipo (pessoa/empresa); o email vem a seguir
+    expect(tabs[0].rows[1].slice(0, 4)).toEqual([1, "C0", "Pessoa", "c0@x.pt"]);
     expect(tabs[0].rows[0]).not.toContain("Gasto total"); // sem totais financeiros → sem colunas de gasto
     const av = await loadReportTabs(call, { report: "avaliacoes", from: "2026-09-01", to: "2026-09-25" }, Date.now() + 60_000);
     expect(av[0].rows[1].slice(0, 4)).toEqual(["Ana", "driver", 2, 10]);

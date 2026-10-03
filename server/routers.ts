@@ -97,6 +97,7 @@ import {
 } from "./whatsappInbox";
 import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
+import { crmQuerySchema } from "../shared/crmFilters";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
 import { rhViewer } from "./rhGuards";
@@ -114,22 +115,10 @@ const handoverDaySchema = z.string().refine(isIsoDay, "Data inválida (AAAA-MM-D
 
 // ─── CRM: auxiliares do router `crm` ────────────────────────────────────────
 
-const crmRule = z.object({ field: z.string().max(40), op: z.enum(["is", "is_not", "contains", "gte", "lte", "before", "after", "on", "within_days", "older_than_days", "yes", "no"]), value: z.union([z.string().max(200), z.number()]).nullable().optional() });
-const crmList = (max = 60) => z.array(z.string().max(160)).max(max).optional();
-const crmQueryInput = z.object({
-  tab: z.enum(["clients", "pro"]).optional(),
-  search: z.object({ text: z.string().max(200), field: z.enum(["all", "name", "email", "phone", "plate", "nif", "number", "booking", "carColor", "carModel", "tags"]) }).nullable().optional(),
-  groups: z.object({
-    segment: z.array(z.enum(["new", "recurring", "vip", "at_risk", "partner"])).optional(),
-    city: crmList(), region: crmList(), country: crmList(), park: crmList(200), clientCountry: crmList(), channel: crmList(), partner: crmList(200),
-    kind: z.array(z.enum(["pro", "private"])).optional(),
-    alerts: z.array(z.enum(["noEmail", "genericEmail", "duplicate"])).optional(),
-  }).optional(),
-  rules: z.object({ match: z.enum(["all", "any"]), items: z.array(crmRule).max(20) }).nullable().optional(),
-  sort: z.enum(["lastVisit", "firstVisit", "bookings", "totalSpent", "name", "number", "nextCheckIn"]).optional(),
-  dir: z.enum(["asc", "desc"]).optional(),
-  offset: z.number().int().min(0).max(1_000_000).optional(),
-  limit: z.number().int().min(1).max(200).optional(),
+/** Pesquisa da lista do CRM (o esquema é o de shared/crmFilters.ts: a exportação usa o mesmo). */
+const crmQueryInput = crmQuerySchema.extend({
+  /** 21a: contactos (telefone) só para a exportação, e só a quem pode exportar */
+  includeContacts: z.boolean().optional(),
 });
 
 async function crmDb() {
@@ -5721,7 +5710,9 @@ export const appRouter = router({
         const db = await crmDb();
         const canSeeTotals = await canSeeFinanceTotals(ctx.user);
         const { listClients } = await import("./crm/queries");
-        return { ...(await listClients(db, input, { canSeeTotals })), canSeeTotals };
+        // telefone na resposta: só para a exportação, e só a quem pode exportar
+        const includeContacts = !!input.includeContacts && canAccess(ctx.user, "clientes", "export");
+        return { ...(await listClients(db, input, { canSeeTotals, includeContacts })), canSeeTotals };
       }),
     facets: protectedProcedure
       .input(crmQueryInput.extend({ text: z.string().min(1).max(200) }))
@@ -6044,18 +6035,20 @@ export const appRouter = router({
       return listSavedFilters(await crmDb(), ctx.user.id);
     }),
     saveFilter: protectedProcedure
-      .input(z.object({ id: z.number().int().optional(), name: z.string().min(1).max(128), payload: z.any(), shared: z.boolean(), isDefault: z.boolean() }))
+      .input(z.object({ id: z.number().int().optional(), name: z.string().min(1).max(128), payload: z.unknown(), shared: z.boolean(), isDefault: z.boolean() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "view");
         const { saveFilter } = await import("./crm/edit");
-        return saveFilter(await crmDb(), ctx.user.id, input);
+        try { return await saveFilter(await crmDb(), ctx.user.id, input); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
       }),
     deleteFilter: protectedProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "view");
         const { deleteFilter } = await import("./crm/edit");
-        await deleteFilter(await crmDb(), ctx.user.id, input.id);
+        try { await deleteFilter(await crmDb(), ctx.user.id, input.id); }
+        catch (err: any) { throw new TRPCError({ code: "NOT_FOUND", message: String(err?.message ?? err) }); }
         return { ok: true };
       }),
   }),

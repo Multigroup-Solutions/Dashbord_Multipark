@@ -58,9 +58,20 @@ export function colorVariants(v: string): string[] {
  * Filtros sobre as reservas resolvidos AO VIVO antes da consulta
  * (prepareLiveFilters): índice da regra → fichas; e a pesquisa por n.º de reserva.
  */
-export interface LiveFilters { rules: Map<number, number[]>; bookingSearch: number[] | null }
-export const NO_LIVE: LiveFilters = { rules: new Map(), bookingSearch: null };
+export interface LiveFilters {
+  rules: Map<number, number[]>;
+  bookingSearch: number[] | null;
+  /**
+   * 21a: avisos de resultado incompleto (uma regra apanhou mais reservas do que
+   * o limite, ou a pesquisa livre não conseguiu ver as reservas) — a lista diz
+   * isto em vez de mostrar menos clientes em silêncio.
+   */
+  warnings: string[];
+}
+export const NO_LIVE: LiveFilters = { rules: new Map(), bookingSearch: null, warnings: [] };
 const idsIn = (ids: number[] | undefined | null) => (ids && ids.length ? sql`c.id IN (${inList(ids)})` : sql`1 = 0`);
+/** "Não é" das reservas = nenhuma reserva é (como nos carros): fora das fichas que têm uma que é. */
+const idsNotIn = (ids: number[] | undefined | null) => (ids && ids.length ? sql`c.id NOT IN (${inList(ids)})` : sql`1 = 1`);
 /** Parque no resumo da ficha (parksJson: [{"park":"…",…}]). */
 const parkIs = (name: string) => sql`c.parksJson LIKE ${like(`"park":${JSON.stringify(name)}`)}`;
 const listHas = (col: SQL, sep: string, value: string) => sql`CONCAT(${sep}, COALESCE(${col}, ''), ${sep}) LIKE ${like(`${sep}${value}${sep}`)}`;
@@ -84,7 +95,8 @@ function dateCond(col: SQL, op: string, value: unknown): SQL | null {
   if (op === "within_days" || op === "older_than_days") {
     const n = Math.max(0, Math.min(3650, Math.trunc(Number(s))));
     if (!Number.isFinite(n)) return null;
-    return op === "within_days" ? sql`${col} >= ${daysAgo(n)}` : sql`${col} < ${daysAgo(n)}`;
+    // "nos últimos N dias" acaba agora (sem o futuro)
+    return op === "within_days" ? sql`(${col} >= ${daysAgo(n)} AND ${col} <= ${utcNow()})` : sql`${col} < ${daysAgo(n)}`;
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const { start, end } = lisbonRangeUtc(s, s);
@@ -100,7 +112,8 @@ export function liveDateRange(op: string, value: unknown): { from?: string; to?:
   if (op === "within_days" || op === "older_than_days") {
     const n = Math.max(0, Math.min(3650, Math.trunc(Number(s))));
     if (!s || !Number.isFinite(n)) return null;
-    return op === "within_days" ? { from: daysAgo(n) } : { to: daysAgo(n) };
+    // 21a: "nos últimos N dias" acaba agora — antes apanhava todas as entradas futuras
+    return op === "within_days" ? { from: daysAgo(n), to: utcNow() } : { to: daysAgo(n) };
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const { start, end } = lisbonRangeUtc(s, s);
@@ -120,34 +133,57 @@ async function clientsOfBookings(db: any, bookingIds: string[]): Promise<number[
   return [...out];
 }
 
+/** Quantas leituras da Multipark correm ao mesmo tempo (as regras eram uma a uma: até 20 × 15 s). */
+const LIVE_CONCURRENCY = 4;
+
+/** Nome curto de uma regra para os avisos ("Reserva › Estado"). */
+const ruleLabel = (field: string) => RULE_FIELDS.find((f) => f.id === field)?.label ?? field;
+
 /**
  * Filtros que dependem das reservas → a BD da Multipark diz que reservas
  * cumprem e cruza-se com as ligações (índice da regra → fichas). Também a
- * pesquisa por n.º de reserva. Lança se a BD da Multipark falhar.
+ * pesquisa por n.º de reserva. Lança se a BD da Multipark falhar (a lista
+ * mostra o erro) — exceto na pesquisa livre, em que o n.º de reserva é só
+ * mais um sítio onde procurar: aí fica um aviso.
  */
 export async function prepareLiveFilters(db: any, q: CrmQuery): Promise<LiveFilters> {
   const items = q.rules?.items ?? [];
   const needed = items.map((r, i) => ({ r, i })).filter(({ r }) => (LIVE_RULE_FIELDS as readonly string[]).includes(r.field));
   const s = q.search;
-  const refText = s?.text?.trim() && (s.field === "booking") ? s.text.trim() : null;
-  if (!needed.length && !refText) return NO_LIVE;
-  const [{ readBookingIdsForFilter }, { loadLiveContext }] = await Promise.all([import("../multiparkDb/crmLive"), import("../finance/liveBookings")]);
+  const text = s?.text?.trim() ?? "";
+  const refText = text && s?.field === "booking" ? text : null;
+  // 21a: "Qualquer campo" também procura o n.º de reserva quando o texto é um número
+  const refInAll = text && s?.field === "all" && /^\d{4,}$/.test(text) ? text : null;
+  if (!needed.length && !refText && !refInAll) return NO_LIVE;
+  const [{ readBookingIdsForFilter, CRM_RULE_MAX_BOOKINGS }, { loadLiveContext }] = await Promise.all([import("../multiparkDb/crmLive"), import("../finance/liveBookings")]);
   const parks = [...(await loadLiveContext()).ourParks.keys()];
   const rules = new Map<number, number[]>();
-  for (const { r, i } of needed) {
+  const warnings: string[] = [];
+  const runRule = async ({ r, i }: { r: CrmRule; i: number }) => {
     const val = r.value == null ? "" : String(r.value);
-    const op = (r.op === "is" || r.op === "is_not" ? r.op : "contains") as "is" | "is_not" | "contains";
+    // "não é" lê as reservas que SÃO e nega na nossa BD (idsNotIn)
+    const op = (r.op === "is" || r.op === "is_not" ? "is" : "contains") as "is" | "contains";
     let ids: string[] = [];
     if (r.field === "booking.checkIn" || r.field === "booking.checkOut") {
       const range = liveDateRange(r.op, val);
-      if (!range) continue;
+      if (!range) return;
       ids = await readBookingIdsForFilter({ kind: "date", col: r.field === "booking.checkIn" ? "checkIn" : "checkOut", ...range }, parks);
     } else if (r.field === "booking.status" && val) ids = await readBookingIdsForFilter({ kind: "status", op, value: val }, parks);
     else if (r.field === "booking.flight" && val) ids = await readBookingIdsForFilter({ kind: "flight", op, value: val }, parks);
+    else return;
+    if (ids.length >= CRM_RULE_MAX_BOOKINGS) {
+      warnings.push(`«${ruleLabel(r.field)}» apanhou mais de ${CRM_RULE_MAX_BOOKINGS.toLocaleString("pt-PT")} reservas: o resultado pode estar incompleto. Junta outra regra (por exemplo, datas).`);
+    }
     rules.set(i, ids.length ? await clientsOfBookings(db, ids) : []);
+  };
+  for (let k = 0; k < needed.length; k += LIVE_CONCURRENCY) await Promise.all(needed.slice(k, k + LIVE_CONCURRENCY).map(runRule));
+  let bookingSearch: number[] | null = null;
+  if (refText) bookingSearch = await clientsOfBookings(db, await readBookingIdsForFilter({ kind: "ref", value: refText }, parks));
+  else if (refInAll) {
+    try { bookingSearch = await clientsOfBookings(db, await readBookingIdsForFilter({ kind: "ref", value: refInAll }, parks)); }
+    catch { warnings.push("Não foi possível procurar no n.º de reserva (a Multipark não respondeu): o resultado mostra só os outros campos."); }
   }
-  const bookingSearch = refText ? await clientsOfBookings(db, await readBookingIdsForFilter({ kind: "ref", value: refText }, parks)) : null;
-  return { rules, bookingSearch };
+  return { rules, bookingSearch, warnings };
 }
 
 function numberCond(col: SQL, op: string, value: unknown): SQL | null {
@@ -178,8 +214,9 @@ export function ruleSql(r: CrmRule, opts: { canSeeTotals: boolean }, liveIds?: n
     case "booking.checkIn":
     case "booking.checkOut":
       return liveDateRange(r.op, val) ? idsIn(liveIds) : null;
-    case "booking.status": return val ? idsIn(liveIds) : null;
-    case "booking.flight": return val ? idsIn(liveIds) : null;
+    case "booking.status":
+    case "booking.flight":
+      return val ? (r.op === "is_not" ? idsNotIn(liveIds) : idsIn(liveIds)) : null;
     // parque: pelo resumo da ficha
     case "booking.park": {
       if (!val) return null;
@@ -236,6 +273,8 @@ export function searchCond(field: SearchField, raw: string, live: LiveFilters = 
     case "tags": return sql`CONCAT(COALESCE(c.tagsJson, ''), ' ', COALESCE(c.notes, '')) LIKE ${like(t)}`;
     case "all": {
       const any = (["name", "email", "phone", "plate", "nif", "number"] as const).map((k) => searchCond(k, t, live)).filter(Boolean) as SQL[];
+      // n.º de reserva: só quando o texto é um número e a Multipark respondeu (prepareLiveFilters)
+      if (live.bookingSearch?.length) any.push(idsIn(live.bookingSearch));
       return any.length ? sql`(${sql.join(any, sql` OR `)})` : null;
     }
   }
@@ -264,6 +303,7 @@ export function buildWhere(q: CrmQuery, opts: { vipThreshold: number | null; can
   if (g.channel?.length) parts.push(sql`(c.originChannel IN (${inList(g.channel)}) OR ${sql.join(g.channel.map((ch) => listHas(sql`c.channels`, ",", ch)), sql` OR `)})`);
   if (g.partner?.length) parts.push(sql`(${sql.join(g.partner.map((pn) => listHas(sql`c.partners`, "|", pn)), sql` OR `)})`);
   if (g.kind?.length === 1) parts.push(g.kind[0] === "pro" ? sql`c.isPro = 1` : sql`c.isPro = 0`);
+  if (g.type?.length === 1) parts.push(g.type[0] === "company" ? sql`c.kind = 'company'` : sql`c.kind <> 'company'`);
   if (g.alerts?.length) {
     const a = g.alerts.map((x) => (x === "noEmail" ? sql`c.noEmail = 1` : x === "genericEmail" ? sql`c.genericEmailOnly = 1`
       : sql`EXISTS (SELECT 1 FROM crm_merge_suggestions ms WHERE ms.status = 'pending' AND (ms.clientA = c.id OR ms.clientB = c.id))`));
@@ -275,15 +315,20 @@ export function buildWhere(q: CrmQuery, opts: { vipThreshold: number | null; can
   return sql.join(parts, sql` AND `);
 }
 
+/**
+ * Ordem da lista. Termina SEMPRE no n.º da ficha (21a): com valores iguais
+ * (nome, gasto vazio, sem próxima reserva) a paginação repetia ou saltava fichas.
+ */
 function orderBy(q: CrmQuery, canSeeTotals: boolean): SQL {
   const dir = q.dir === "asc" ? sql.raw("ASC") : sql.raw("DESC");
+  const asc = q.dir === "desc" ? sql.raw("DESC") : sql.raw("ASC");
   switch (q.sort) {
-    case "name": return sql`c.displayName IS NULL, c.displayName ${q.dir === "desc" ? sql.raw("DESC") : sql.raw("ASC")}`;
+    case "name": return sql`c.displayName IS NULL, c.displayName ${asc}, c.id ${asc}`;
     case "number": return sql`c.id ${dir}`;
     case "bookings": return sql`c.bookings ${dir}, c.id DESC`;
-    case "firstVisit": return sql`c.firstVisit IS NULL, c.firstVisit ${dir}`;
-    case "nextCheckIn": return sql`c.nextCheckIn IS NULL, c.nextCheckIn ${q.dir === "desc" ? sql.raw("DESC") : sql.raw("ASC")}`;
-    case "totalSpent": return canSeeTotals ? sql`c.totalSpent IS NULL, c.totalSpent ${dir}` : sql`c.lastVisit IS NULL, c.lastVisit DESC`;
+    case "firstVisit": return sql`c.firstVisit IS NULL, c.firstVisit ${dir}, c.id DESC`;
+    case "nextCheckIn": return sql`c.nextCheckIn IS NULL, c.nextCheckIn ${asc}, c.id ${asc}`;
+    case "totalSpent": return canSeeTotals ? sql`c.totalSpent IS NULL, c.totalSpent ${dir}, c.id DESC` : sql`c.lastVisit IS NULL, c.lastVisit DESC, c.id DESC`;
     default: return sql`c.lastVisit IS NULL, c.lastVisit ${dir}, c.id DESC`;
   }
 }
@@ -314,7 +359,7 @@ export interface CrmListRow {
   vehicle: { plate: string; brand: string | null; model: string | null; color: string | null; photoUrl: string | null } | null;
 }
 
-export async function listClients(db: any, q: CrmQuery, opts: { canSeeTotals: boolean }) {
+export async function listClients(db: any, q: CrmQuery, opts: { canSeeTotals: boolean; includeContacts?: boolean }) {
   // o limiar VIP é gasto: quem não vê totais não pode filtrar por ele (revelava quem mais gasta)
   const vip = opts.canSeeTotals ? await vipThreshold(db) : null;
   const live = await prepareLiveFilters(db, q);
@@ -351,7 +396,8 @@ export async function listClients(db: any, q: CrmQuery, opts: { canSeeTotals: bo
     const v = veh.get(Number(r.id));
     return {
       id: Number(r.id), displayName: r.displayName ?? null, kind: String(r.kind), isPro: m.isPro, photoUrl: r.photoUrl ?? null,
-      primaryEmail: r.primaryEmail ?? null, primaryPhone: r.primaryPhone ?? null, country: r.country ?? null,
+      // 21a: o telefone não aparece na lista — só vai para a exportação (a quem pode exportar)
+      primaryEmail: r.primaryEmail ?? null, primaryPhone: opts.includeContacts ? r.primaryPhone ?? null : null, country: r.country ?? null,
       bookings: m.bookings, completed: m.completed, cancelled: m.cancelled, upcoming: m.upcoming,
       totalSpent: opts.canSeeTotals ? m.totalSpent : null,
       firstVisit: r.firstVisit ?? null, lastVisit: r.lastVisit ?? null, nextCheckIn: r.nextCheckIn ?? null,
@@ -361,7 +407,7 @@ export async function listClients(db: any, q: CrmQuery, opts: { canSeeTotals: bo
       vehicle: v ? { plate: v.plateDisplay || v.plate, brand: v.brand ?? null, model: v.model ?? null, color: v.color ?? null, photoUrl: v.photoUrl ?? null } : null,
     };
   });
-  return { total: Number(cnt?.n ?? 0), offset, limit, rows: out, vipThreshold: vip };
+  return { total: Number(cnt?.n ?? 0), offset, limit, rows: out, vipThreshold: vip, warnings: live.warnings };
 }
 
 export const FACET_FIELDS = ["name", "email", "phone", "plate", "nif", "number", "booking", "carColor", "carModel", "tags"] as const;
@@ -398,8 +444,21 @@ async function liveOptionRows() {
   return rows;
 }
 
+/**
+ * Opções dos filtros de grupo. As que vêm da Multipark (cidades, parques,
+ * canais, parceiros) e as nossas (países do cliente, regiões) são separadas:
+ * se a Multipark falhar, as nossas aparecem na mesma e `liveError` diz porquê
+ * (21a — antes o pedido inteiro falhava e até o "+ Regra" deixava de abrir).
+ * Os números ao lado são RESERVAS (da Multipark), não clientes.
+ */
 export async function filterOptions(db: any) {
-  const live = await liveOptionRows();
+  let live: Awaited<ReturnType<typeof liveOptionRows>> = [];
+  let liveError: string | null = null;
+  try { live = await liveOptionRows(); }
+  catch (err: any) {
+    console.warn("[crm] opções ao vivo indisponíveis:", String(err?.message ?? err).slice(0, 160));
+    liveError = "Cidades, parques, canais e parceiros indisponíveis: a Multipark não respondeu. Os outros filtros funcionam.";
+  }
   // quem só vê algumas cidades só vê os parques dessas cidades
   const scope = scopedCityNamesLive();
   const inScope = scope === undefined ? () => true : (city: string | null) => !!city && cityAliases(scope).includes(city.trim().toLowerCase());
@@ -419,6 +478,9 @@ export async function filterOptions(db: any) {
     partners: partners.map((p) => ({ value: String(p.v), label: String(p.v), n: Number(p.n) })),
     channels: channels.map((p) => ({ value: String(p.v), label: String(p.v), n: Number(p.n) })),
     clientCountries: clientCountries.map((p) => ({ value: String(p.v), label: COUNTRY_NAMES[String(p.v)] ?? String(p.v), n: Number(p.n) })),
+    /** os números das opções vindas da Multipark são reservas (não clientes) */
+    liveCounts: "bookings" as const,
+    liveError,
   };
 }
 

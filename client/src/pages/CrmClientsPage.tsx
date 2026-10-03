@@ -30,6 +30,7 @@ import type { CrmListRow } from "@/components/crm/crmTypes";
 import { ProAccountsPanel } from "@/components/crm/ProAccountsPanel";
 import { ParksPanel, PartnersPanel } from "@/components/crm/PartnersPanels";
 import { ExportToSheetsButton } from "@/components/google/DriveActions";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 type ViewState = {
   /** clients = fichas; pro = contas Pro (fase 2); partners / parks = parceiros e parques (fase 3, ao vivo) */
@@ -47,9 +48,11 @@ const PAGE_SIZES = [24, 48, 96, 200];
 
 const GROUP_LABEL: Record<keyof CrmGroups, string> = {
   segment: "Segmento", city: "Cidade", region: "Região", country: "País", park: "Parque", clientCountry: "País do cliente",
-  channel: "Canal de origem", partner: "Parceiro", kind: "Pro ou particular", alerts: "Avisos",
+  channel: "Canal de origem", partner: "Parceiro", kind: "Pro ou particular", type: "Pessoa ou empresa", alerts: "Avisos",
 };
-const GROUP_ORDER: (keyof CrmGroups)[] = ["segment", "city", "region", "country", "park", "clientCountry", "channel", "partner", "kind", "alerts"];
+const GROUP_ORDER: (keyof CrmGroups)[] = ["segment", "city", "region", "country", "park", "clientCountry", "channel", "partner", "kind", "type", "alerts"];
+/** O que conta o número ao lado de cada opção (21a: as da Multipark são reservas, não clientes). */
+const GROUP_COUNT: Partial<Record<keyof CrmGroups, string>> = { city: "reservas", park: "reservas", channel: "reservas", partner: "reservas", clientCountry: "clientes" };
 
 export default function CrmClientsPage() {
   const email = new URLSearchParams(useSearch()).get("email");
@@ -113,14 +116,24 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
     if (appliedDefault.current || !saved.data || initialSearch) return;
     appliedDefault.current = true;
     const def = saved.data.find((f) => f.isDefault);
-    if (def && JSON.stringify(st) === JSON.stringify(DEFAULT_VIEW)) applySaved(def.payload as Partial<ViewState>);
+    if (def && JSON.stringify(st) === JSON.stringify(DEFAULT_VIEW)) applySaved(def.payload as Partial<ViewState>, { dropped: def.dropped });
   }, [saved.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function applySaved(p: Partial<ViewState>) {
-    const next = { ...DEFAULT_VIEW, ...p, view: s.view };
+  /**
+   * Aplica um filtro guardado (o servidor já o limpou de valores que deixaram de
+   * existir — `dropped`). Regras que esta conta não pode usar (ex.: gasto, para quem
+   * não vê totais) também saem — antes o chip ficava à vista e o servidor ignorava-as.
+   */
+  function applySaved(p: Partial<ViewState>, meta?: { dropped?: number }) {
+    const allowed = new Set((options.data?.ruleFields ?? []).map((f) => f.id));
+    const items = p.rules?.items ?? [];
+    const usable = options.data ? items.filter((r) => allowed.has(r.field)) : items;
+    const lost = (meta?.dropped ?? 0) + (items.length - usable.length);
+    const next = { ...DEFAULT_VIEW, ...p, rules: usable.length ? { match: p.rules!.match, items: usable } : null, view: s.view };
     setSt(next);
     setText(next.search?.text ?? "");
     setField(next.search?.field ?? "all");
+    if (lost > 0) toast.warning(`${lost === 1 ? "1 parte do filtro deixou" : `${lost} partes do filtro deixaram`} de existir (ou não se aplicam à tua conta). O resto foi aplicado.`);
   }
 
   const o = options.data;
@@ -135,6 +148,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
     channel: (o?.channels ?? []).map((x) => ({ value: x.value, label: x.label, n: x.n })),
     partner: (o?.partners ?? []).map((x) => ({ value: x.value, label: x.label, n: x.n })),
     kind: [{ value: "pro", label: "Pro" }, { value: "private", label: "Particular" }],
+    type: [{ value: "person", label: "Pessoa" }, { value: "company", label: "Empresa" }],
     alerts: ALERTS.map((x) => ({ value: x.id, label: x.label })),
   }), [o, canSeeTotals]);
   const ruleFields = o?.ruleFields ?? [];
@@ -157,10 +171,12 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
       remove: () => { const items = s.rules!.items.filter((_, j) => j !== i); patch({ rules: items.length ? { ...s.rules!, items } : null }); },
     });
   });
-  const clearAll = () => { setText(""); setField("all"); patch({ search: null, groups: {}, rules: null }); };
+  // "Limpar tudo" volta à vista por omissão (também a ordem e o tamanho da página)
+  const clearAll = () => { setText(""); setField("all"); patch({ search: null, groups: {}, rules: null, sort: DEFAULT_VIEW.sort, dir: DEFAULT_VIEW.dir, limit: DEFAULT_VIEW.limit }); };
 
   const rows = list.data?.rows ?? [];
   const total = list.data?.total ?? 0;
+  const warnings = list.data?.warnings ?? [];
   const pending = (review.data?.counts.suggestions ?? 0);
   const sorts = SORTS.filter((x) => !x.finance || canSeeTotals);
   const facetList = SEARCH_FIELDS.filter((f) => f.id !== "all")
@@ -182,18 +198,19 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
           </Link>
         </Button>
         {s.tab === "clients" && can(user as any, "clientes", "export") && (
-          <ExportToSheetsButton input={{ report: "clientes", search: s.search?.text ?? null, segment: s.groups.segment?.length === 1 ? s.groups.segment[0] : null }} />
+          // exatamente o conjunto da lista: pesquisa no campo escolhido, grupos, regras e ordem
+          <ExportToSheetsButton disabled={!!list.error} input={{ report: "clientes", query: { tab: "clients", search: s.search, groups: s.groups, rules: s.rules, sort: s.sort, dir: s.dir } }} />
         )}
         {can(user as any, "clientes", "edit") && <Button onClick={() => setNewOpen(true)}><Plus className="h-4 w-4" />Novo cliente</Button>}
       </div>
 
       {/* separadores */}
-      <div className="flex gap-1 border-b">
+      <div className="flex gap-1 overflow-x-auto border-b [scrollbar-width:none]">
         {([["clients", "Clientes"], ["pro", "Pro"], ["partners", "Agregadores e agências"], ["parks", "Parcerias (nós agregamos)"]] as const).map(([id, label]) => (
           <button key={id} type="button" onClick={() => patch({ tab: id })}
-            className={cn("-mb-px border-b-[3px] px-3.5 py-2.5 text-sm", s.tab === id ? "border-primary font-bold text-primary" : "border-transparent font-semibold text-foreground hover:text-primary")}>
+            className={cn("-mb-px shrink-0 whitespace-nowrap border-b-[3px] px-3.5 py-2.5 text-sm", s.tab === id ? "border-primary font-bold text-primary" : "border-transparent font-semibold text-foreground hover:text-primary")}>
             {label}
-            {s.tab === id && id === "clients" && list.data && <span className="ml-1 font-medium text-muted-foreground">{num(total)}</span>}
+            {s.tab === id && id === "clients" && list.data && !list.error && <span className="ml-1 font-medium text-muted-foreground">{num(total)}</span>}
           </button>
         ))}
       </div>
@@ -249,7 +266,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
 
         <div className="flex flex-wrap items-center gap-2">
           {GROUP_ORDER.map((g) => (
-            <FilterGroup key={g} label={GROUP_LABEL[g]} options={groupOptions[g]} value={s.groups[g] as string[] | undefined}
+            <FilterGroup key={g} label={GROUP_LABEL[g]} options={groupOptions[g]} value={s.groups[g] as string[] | undefined} countLabel={GROUP_COUNT[g]}
               onChange={(v) => patch({ groups: { ...s.groups, [g]: v } })} />
           ))}
           <SelButton active onClick={() => setRulesOpen((x) => !x)} className="font-bold">+ Regra</SelButton>
@@ -257,6 +274,9 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
             current={{ tab: s.tab, search: s.search, groups: s.groups, rules: s.rules, sort: s.sort, dir: s.dir }}
             onApply={applySaved} saveRequest={saveReq} onSaveHandled={() => setSaveReq(false)} />
         </div>
+
+        {options.error && <QueryErrorNote error={options.error} onRetry={() => options.refetch()} retrying={options.isFetching} what="as opções dos filtros" />}
+        {o?.liveError && <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{o.liveError}</p>}
 
         {rulesOpen && ruleFields.length > 0 && (
           <RulesEditor fields={ruleFields} initial={s.rules}
@@ -269,7 +289,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
       {/* contagem, ordem, intervalo, vista */}
       <div className="flex flex-wrap items-center gap-2.5">
         <div className="text-[13px]">
-          <strong>{num(total)} {total === 1 ? "cliente" : "clientes"}</strong>
+          <strong>{list.error || !list.data ? "—" : `${num(total)} ${total === 1 ? "cliente" : "clientes"}`}</strong>
           {rows.length > 0 && <span className="text-muted-foreground"> · a mostrar {num(offset + 1)}–{num(offset + rows.length)}</span>}
           {list.isFetching && <Loader2 className="ml-2 inline h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
@@ -301,7 +321,12 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
       </div>
 
       {list.isLoading && <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}
-      {list.error && <p className="text-sm text-destructive">{list.error.message}</p>}
+      {list.error && <QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="os clientes" />}
+      {!list.error && warnings.length > 0 && (
+        <div role="status" className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          {warnings.map((w) => <p key={w}>{w}</p>)}
+        </div>
+      )}
       {!list.isLoading && !list.error && rows.length === 0 && (
         <div className="flex flex-col items-center gap-2 rounded-[10px] border bg-card py-14 text-center">
           <UsersRound className="h-8 w-8 text-muted-foreground" />
@@ -361,6 +386,7 @@ function ClientCard({ c, canSeeTotals }: { c: Row; canSeeTotals: boolean }) {
           <div className="truncate text-sm font-bold">{c.displayName ?? "Sem nome"}</div>
           <div className="text-[11px] text-muted-foreground">N.º {c.id.toLocaleString("pt-PT")}</div>
         </div>
+        {c.kind === "company" && <Pill className="bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200">Empresa</Pill>}
         {seg && <SegmentPill id={seg} />}
       </div>
       <div className="flex min-h-[34px] items-center gap-2 rounded-lg bg-muted p-2">
@@ -410,7 +436,7 @@ function ClientTable({ rows, canSeeTotals, onOpen }: { rows: Row[]; canSeeTotals
               <span className="flex min-w-0 items-center gap-2">
                 <ClientAvatar name={c.displayName} photoUrl={c.photoUrl} vip={seg === "vip"} size={28} />
                 <span className="min-w-0">
-                  <span className="block truncate font-bold">{c.displayName ?? "Sem nome"}</span>
+                  <span className="block truncate font-bold">{c.displayName ?? "Sem nome"}{c.kind === "company" && <span className="ml-1.5 text-[11px] font-semibold text-muted-foreground">· Empresa</span>}</span>
                   <span className="block truncate text-[11px] text-muted-foreground">N.º {c.id.toLocaleString("pt-PT")}{c.primaryEmail ? ` · ${c.primaryEmail}` : ""}</span>
                 </span>
               </span>

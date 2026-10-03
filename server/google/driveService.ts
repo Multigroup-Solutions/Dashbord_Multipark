@@ -543,7 +543,7 @@ export async function exportGeneratedPdf(user: DriveUser, linkId: number): Promi
 /** "Exportar para Sheets" — folha nova na pasta "Multipark" da pessoa. */
 export async function exportReportToSheets(
   user: DriveUser, input: SheetExportInput, call: (path: string, input?: unknown) => Promise<any>,
-): Promise<{ url: string; name: string; partial: boolean; rows: number }> {
+): Promise<{ url: string; name: string; partial: boolean; rows: number; note: string | null }> {
   const deadlineAt = Date.now() + 50_000;
   const { assertCanExportReport, loadReportTabs, createSpreadsheet } = await import("./sheetsExport");
   assertCanExportReport(user, input.report);
@@ -555,8 +555,11 @@ export async function exportReportToSheets(
     const name = exportSpreadsheetName(input, lisbonDayOf(Date.now()));
     const r = await createSpreadsheet(apis, { name, parentId: folder, tabs, deadlineAt });
     const rows = tabs.reduce((s, t) => s + Math.max(0, t.rows.length - 1), 0);
-    await logDrive(user.id, "export", `Exportar para Sheets: ${input.report} (${rows} linhas${r.partial ? ", incompleto" : ""})`);
-    return { url: safeGoogleLink(r.file.webViewLink) ?? fallbackViewLink(r.file.id, GOOGLE_MIME.sheet), name, partial: r.partial, rows };
+    // o relatório pode ter cortado linhas (note) — a folha fica marcada como incompleta
+    const note = tabs.map((t) => t.note).filter(Boolean).join(" ") || null;
+    const partial = r.partial || !!note;
+    await logDrive(user.id, "export", `Exportar para Sheets: ${input.report} (${rows} linhas${partial ? ", incompleto" : ""})`);
+    return { url: safeGoogleLink(r.file.webViewLink) ?? fallbackViewLink(r.file.id, GOOGLE_MIME.sheet), name, partial, rows, note };
   } catch (err) { throw driveError(err, "Exportar para Sheets"); }
 }
 
