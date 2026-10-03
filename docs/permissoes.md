@@ -57,9 +57,9 @@
 | Contactos (pesquisa unificada e diretório) | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Comunicação (caixas de email partilhadas) | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |
 | Reclamações | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
-| Críticas Google | — | próprio V | próprio V | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
-| Ocorrências | — | próprio V | próprio V | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
-| Perdidos e Achados | — | — | próprio V | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
+| Críticas Google | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
+| Ocorrências | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
+| Perdidos e Achados | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | **Financeiro** |  |  |  |  |  |  |  |  |  |
 | Despesas | — | — | próprio VE | equipa (cidade) VE | cidade VEX | nacional VEX | nacional VEX | nacional VEXG | nacional VEXG |
 | Parcerias | — | — | — | cidade V | cidade V | nacional V | nacional V | nacional VEXG | nacional VEXG |

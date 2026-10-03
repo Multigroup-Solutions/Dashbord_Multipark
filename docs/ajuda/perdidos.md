@@ -21,7 +21,7 @@ Objetos esquecidos pelos clientes nos carros.
 - **Parado há N dias**: âmbar a ~3/7 do prazo (3 dias com 7), vermelho quando passa o prazo.
 - **Mensagens** ficam no caso (nota interna ou não). Ao cliente só chega o que enviares com **Avisar cliente** (email de perdidos@).
 - **Possíveis correspondências** (perdido ↔ achado): confirmar deixa uma nota nos dois casos; uma confirmada continua visível depois de o caso fechar. Contactar o cliente é sempre uma pessoa.
-- **Devolvido** obriga a dizer **como foi devolvido** (em mãos, correio, entrega ao domicílio ou outro) e **a data**: no quadro, no estado do caso e em **Marcar como Devolvido** abre-se uma janela para isso. Num caso Devolvido não dá para apagar o método nem a data.
+- **Devolvido** obriga a dizer **como foi devolvido** (em mãos, correio, entrega ao domicílio ou outro — com **Outro** escreve-se como foi) e **a data**: no quadro, no estado do caso e em **Marcar como Devolvido** abre-se uma janela para isso. Num caso Devolvido não dá para apagar o método nem a data.
 - **Devolução**: onde estava, quem encontrou, como foi devolvido, data e **foto da entrega** (uma foto nova não apaga a anterior).
 - No cartão "Dados da Reserva", **Abrir ficha da reserva** mostra tudo sobre a reserva, lido em tempo real da Multipark.
 - Se afinal é uma reclamação, **Converter em Reclamação** (admin).
@@ -41,4 +41,5 @@ Objetos esquecidos pelos clientes nos carros.
 
 **Quem pode**
 - **CSV** (leva contactos do cliente): só quem pode exportar.
-- Condutores e extras só veem os casos em que estão envolvidos, sem os separadores da reserva e dos condutores.
+- Condutores e extras **não veem** os Perdidos e Achados — nem os casos em que estão envolvidos. Só a partir de team leader.
+- O **responsável** do caso só pode ser team leader ou acima. Um responsável antigo abaixo disso aparece marcado "(abaixo de team leader — troca)".

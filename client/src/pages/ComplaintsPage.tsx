@@ -549,7 +549,8 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
     return filtered
       .sort((a: any, b: any) => new Date(b.actionDate || 0).getTime() - new Date(a.actionDate || 0).getTime());
   }, [apiTimeline, showAllHist]);
-  const { data: employees = [] } = trpc.rh.list.useQuery(undefined, { enabled: canEdit });
+  // Responsável só team leader ou acima (Jorge, 3 out 2026).
+  const { data: assigneeOptions = [] } = trpc.complaints.assigneeOptions.useQuery(undefined, { enabled: canEdit });
   const { data: projectsList = [] } = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
   const updateMut = trpc.complaints.update.useMutation();
   const addMsgMut = trpc.complaints.addMessage.useMutation();
@@ -1161,7 +1162,8 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             dueDate={c.dueDate}
             closedAt={c.closedAt}
             projects={(projectsList as any[]).map(p => ({ id: p.id, name: p.name }))}
-            people={(employees as any[]).map(e => e.employee ?? e).map((e: any) => ({ id: e.id, fullName: e.fullName }))}
+            people={assigneeOptions.map((p) => ({ id: p.id, fullName: `${p.fullName} · ${p.roleLabel}` }))}
+            currentAssigneeName={(c as any).assignedToName}
             saving={updateMut.isPending}
             onSave={(patch) => updateMut.mutate({
               id, projectId: patch.projectId, assignedToId: patch.assigneeId,
@@ -1327,7 +1329,7 @@ function ReservationPreview({ bookingId }: { bookingId: string }) {
 
 function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
   const { data: vehicles = [] } = trpc.operational.vehicles.list.useQuery(undefined, { enabled: can(user, "atividade_diaria", "view") });
-  const { data: emps = [] } = trpc.rh.list.useQuery();
+  const { data: assigneeOptions = [] } = trpc.complaints.assigneeOptions.useQuery();
   const { data: projs = [] } = trpc.projects.list.useQuery();
   const createMut = trpc.complaints.create.useMutation();
   const utils = trpc.useUtils();
@@ -1416,7 +1418,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
     e.target.value = "";
   };
 
-  const employees = emps.map((e: any) => e.employee ?? e);
+
 
   const handleVehicleChange = (val: string) => {
     const v = vehicles.find((v: any) => String(v.id) === val);
@@ -1590,8 +1592,8 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
             <Select value={form.assignedToId} onValueChange={v => setForm(f => ({ ...f, assignedToId: v }))}>
               <SelectTrigger><SelectValue placeholder="Selecionar responsável" /></SelectTrigger>
               <SelectContent>
-                {employees.map((e: any) => (
-                  <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>
+                {assigneeOptions.map((e) => (
+                  <SelectItem key={e.id} value={String(e.id)}>{e.fullName} · {e.roleLabel}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

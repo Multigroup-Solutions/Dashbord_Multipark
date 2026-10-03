@@ -102,7 +102,7 @@ describe("D22 — 'Devolvido' obriga método e data", () => {
   it("os 3 caminhos para Devolvido abrem a janela do método e da data", () => {
     const panel = src("client/src/pages/lostFound/ReturnPanel.tsx");
     expect(panel).toMatch(/export function MarkReturnedDialog/);
-    expect(panel).toMatch(/save\.mutate\(\{ id: item\.id, status: "returned", returnMethod: method, returnedAt: `\$\{day\} 00:00:00` \}\)/);
+    expect(panel).toMatch(/save\.mutate\(\{ id: item\.id, status: "returned", returnMethod: method, returnedAt: `\$\{day\} 00:00:00`, returnNote: /);
     expect(panel).not.toMatch(/<SelectItem value="em_maos">/); // a lista vem de LOST_RETURN_METHODS
     const detail = src("client/src/pages/lostFound/DetailView.tsx");
     expect(detail).toMatch(/if \(status === "returned" && item\?\.status !== "returned"\) \{ setReturning\(true\); return; \}/);

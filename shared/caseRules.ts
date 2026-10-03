@@ -155,9 +155,11 @@ export const isLostReturnMethod = (v: unknown): boolean => (LOST_RETURN_METHODS 
  * Erro (texto para a pessoa) se o caso fica "Devolvido" sem método ou sem
  * data válida (até ~1 dia no futuro, por fusos); null se está bem. PURA.
  */
-export function lostReturnedError(after: { status?: string | null; returnMethod?: string | null; returnedAt?: string | null }, nowMs: number): string | null {
+export function lostReturnedError(after: { status?: string | null; returnMethod?: string | null; returnedAt?: string | null; returnNote?: string | null }, nowMs: number): string | null {
   if (after.status !== "returned") return null;
   if (!String(after.returnMethod ?? "").trim()) return "Para marcar como Devolvido, diz como foi devolvido.";
+  // Jorge, 3 out 2026: "Outro" obriga a escrever como foi.
+  if (after.returnMethod === "outro" && !String(after.returnNote ?? "").trim()) return "Escolheste \"Outro\": escreve como foi devolvido.";
   const t = parseUtc(after.returnedAt ?? null);
   if (t == null) return "Para marcar como Devolvido, diz a data da devolução.";
   if (t > nowMs + 36 * 3_600_000) return "A data da devolução não pode ser no futuro.";

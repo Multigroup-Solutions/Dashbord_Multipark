@@ -56,6 +56,8 @@ export function MarkReturnedDialog({ item, onClose, onDone }: { item: any; onClo
   const utils = trpc.useUtils();
   const [method, setMethod] = useState<string>(item.returnMethod || "");
   const [day, setDay] = useState<string>(item.returnedAt ? String(item.returnedAt).slice(0, 10) : lisbonDayOf(Date.now()));
+  // "Outro" obriga a escrever como foi (Jorge, 3 out 2026).
+  const [note, setNote] = useState<string>(item.returnNote || "");
   const save = trpc.lostFound.update.useMutation({
     onSuccess: () => {
       utils.lostFound.getById.invalidate({ id: item.id });
@@ -67,7 +69,8 @@ export function MarkReturnedDialog({ item, onClose, onDone }: { item: any; onClo
     onError: (e) => toast.error(e.message),
   });
   const today = lisbonDayOf(Date.now());
-  const ok = !!method && /^\d{4}-\d{2}-\d{2}$/.test(day) && day <= today;
+  const needsNote = method === "outro";
+  const ok = !!method && /^\d{4}-\d{2}-\d{2}$/.test(day) && day <= today && (!needsNote || !!note.trim());
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-md">
@@ -80,13 +83,18 @@ export function MarkReturnedDialog({ item, onClose, onDone }: { item: any; onClo
               <SelectContent><ReturnMethodOptions current={item.returnMethod} /></SelectContent>
             </Select>
           </div>
+          {needsNote && (
+            <div><Label className="text-xs">Como foi? (obrigatório com "Outro")</Label>
+              <Input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Ex: levantou o filho no parque de Faro" aria-label="Como foi devolvido (Outro)" />
+            </div>
+          )}
           <div><Label className="text-xs">Data da devolução</Label>
             <Input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value)} aria-label="Data da devolução" />
           </div>
         </div>
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={!ok || save.isPending} onClick={() => save.mutate({ id: item.id, status: "returned", returnMethod: method, returnedAt: `${day} 00:00:00` })}>
+          <Button disabled={!ok || save.isPending} onClick={() => save.mutate({ id: item.id, status: "returned", returnMethod: method, returnedAt: `${day} 00:00:00`, returnNote: needsNote ? note.trim() : (item.returnNote ?? null) })}>
             <CheckCircle2 className="w-4 h-4 mr-1" /> {save.isPending ? "A guardar…" : "Devolvido"}
           </Button>
         </DialogFooter>
@@ -103,6 +111,7 @@ export function ReturnPanel({ item, canEdit = true }: { item: any; canEdit?: boo
     foundByName: item.foundByName || "",
     returnMethod: item.returnMethod || "",
     returnedAt: item.returnedAt ? String(item.returnedAt).slice(0, 10) : "",
+    returnNote: item.returnNote || "",
   });
   const [emailOpen, setEmailOpen] = useState(false);
   const save = trpc.lostFound.update.useMutation({
@@ -154,6 +163,10 @@ export function ReturnPanel({ item, canEdit = true }: { item: any; canEdit?: boo
           </div>
           <div><Label className="text-xs">Data da devolução</Label>
             <Input type="date" value={form.returnedAt} onChange={e => setForm(f => ({ ...f, returnedAt: e.target.value }))} /></div>
+          {(form.returnMethod === "outro" || form.returnNote) && (
+            <div className="sm:col-span-2"><Label className="text-xs">Como foi devolvido{form.returnMethod === "outro" ? " (obrigatório com \"Outro\")" : ""}</Label>
+              <Input value={form.returnNote} maxLength={500} onChange={e => setForm(f => ({ ...f, returnNote: e.target.value }))} placeholder="Ex: levantou o filho no parque de Faro" /></div>
+          )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {canEdit && <Button size="sm" disabled={save.isPending} onClick={() => save.mutate({
@@ -162,6 +175,7 @@ export function ReturnPanel({ item, canEdit = true }: { item: any; canEdit?: boo
             foundByName: form.foundByName || null,
             returnMethod: form.returnMethod || null,
             returnedAt: form.returnedAt ? form.returnedAt + " 00:00:00" : null,
+            returnNote: form.returnNote.trim() || null,
           })}>
             <CheckCircle2 className="w-4 h-4 mr-1" /> Guardar devolução
           </Button>}

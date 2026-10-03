@@ -22,11 +22,11 @@ describe("matriz de acessos — papéis do dono", () => {
   });
 
   it("extra: user + avaliação/histórico/ocorrências próprios, serviços, PDAs e tarefas", () => {
-    for (const m of ["avaliacao", "historico_diario", "criticas", "ocorrencias"] as ModuleId[]) {
+    for (const m of ["avaliacao", "historico_diario"] as ModuleId[]) {
       expect(scopeFor("extra", m)).toBe("own");
     }
-    // D19 (Jorge, 3 out 2026): reclamações só a partir de team leader — nem as em que estão envolvidos.
-    expect(sees("extra", "reclamacoes")).toBe(false);
+    // D19 (Jorge, 3 out 2026): casos de clientes só a partir de team leader — nem os em que estão envolvidos.
+    for (const m of ["reclamacoes", "criticas", "ocorrencias", "perdidos"] as ModuleId[]) expect(sees("extra", m)).toBe(false);
     expect(sees("extra", "servicos")).toBe(true);
     expect(can("extra", "pdas", "edit")).toBe(true);
     expect(can("extra", "tarefas", "edit")).toBe(true);
@@ -35,14 +35,13 @@ describe("matriz de acessos — papéis do dono", () => {
     }
   });
 
-  it("condutor: extra + as próprias despesas, Reservas e Extras-dia (cidade), perdidos próprios", () => {
+  it("condutor: extra + as próprias despesas, Reservas e Extras-dia (cidade), sem casos de clientes", () => {
     expect(scopeFor("condutor", "despesas")).toBe("own");
     expect(can("condutor", "despesas", "edit")).toBe(true);
     expect(scopeFor("condutor", "reservas_operacoes")).toBe("city");
     expect(scopeFor("condutor", "extras_dia")).toBe("city");
     expect(can("condutor", "extras_dia", "edit")).toBe(false);
-    expect(scopeFor("condutor", "perdidos")).toBe("own");
-    expect(sees("condutor", "reclamacoes")).toBe(false); // D19
+    for (const m of ["reclamacoes", "criticas", "ocorrencias", "perdidos"] as ModuleId[]) expect(sees("condutor", m)).toBe(false); // D19
     expect(scopeFor("team_leader", "reclamacoes")).toBe("city");
     expect(sees("condutor", "parcerias")).toBe(false);
     expect(sees("condutor", "rh")).toBe(false);

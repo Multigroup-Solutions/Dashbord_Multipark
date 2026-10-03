@@ -43,4 +43,4 @@ As ocorrências registadas pelos agentes na **app Multipark** (vidro aberto, aci
 - As ocorrências registadas no dashboard antes da ligação à app Multipark ficam guardadas, mas já não entram nos números nem nos lembretes.
 - As ligações antigas (num email ou num perdido convertido) abrem-nas só para leitura.
 
-Só quem vê a cidade tem acesso a esta página (condutores e extras não a veem no menu) e cada um vê as ocorrências dos parques das suas cidades.
+Só a partir de team leader se tem acesso a esta página: condutores e extras não a veem — nem as ocorrências em que estão envolvidos, nem na ficha da reserva. Cada um vê as ocorrências dos parques das suas cidades.

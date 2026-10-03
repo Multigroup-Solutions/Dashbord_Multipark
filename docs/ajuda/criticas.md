@@ -40,7 +40,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - Lista, números, parques, crítica, condutores e agentes mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem avaliações" ou "sem dados".
 
 **Quem pode**
-- Ver: condutores e extras só as críticas em que estão envolvidos (sem Dashboard, Condutores e Agentes).
+- Condutores e extras **não veem** as Críticas — nem as em que estão envolvidos. Só a partir de team leader.
 - Responder, aprovar, dispensar, converter e importar: team leader e acima, nas suas cidades.
 - **CSV** (leva emails dos clientes): só quem pode exportar.
 - **Sincronizar Gmail**: admin com todas as cidades.
