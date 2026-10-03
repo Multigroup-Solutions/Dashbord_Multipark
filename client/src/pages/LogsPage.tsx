@@ -16,7 +16,7 @@ import { can } from "@shared/access";
 import { LOG_SOURCES, LOG_SOURCE_LABELS, type LogSource } from "@shared/logMask";
 import { csvLine, groupLogEntities, logActionLabel } from "@shared/logsView";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CashLogsTab } from "@/components/logs/CashLogsTab";
+import { CashLogsTab } from "@/components/CashLogsTab";
 
 const ACTION_STYLE: Record<string, { icon: any; color: string }> = {
   create: { icon: Plus, color: "text-green-600" },
