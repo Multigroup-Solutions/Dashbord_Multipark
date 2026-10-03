@@ -127,7 +127,7 @@ export function GbpSection({ range }: { range: Range }) {
       )}
       {problem && (
         <div role="alert" className="rounded-md border border-rose-300 bg-rose-50 text-rose-900 dark:bg-rose-950/40 dark:text-rose-200 px-3 py-2 text-xs flex items-start gap-2">
-          <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" /><span className="whitespace-pre-line"><b>Google Business Profile:</b> {problem} <span className="text-muted-foreground">(passo a passo: pergunta ao Assistente "Google Business Profile")</span></span>
+          <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" /><span className="whitespace-pre-line"><b>Google Business Profile:</b> {problem} <span className="text-muted-foreground">(passo a passo: pergunta à Multis "Google Business Profile")</span></span>
         </div>
       )}
       {!data.enabled && <p className="text-xs text-muted-foreground">A recolha do desempenho está desligada (Configurar).</p>}
