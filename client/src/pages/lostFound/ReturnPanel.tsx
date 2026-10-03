@@ -35,6 +35,65 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
 import { compressImage } from "@/lib/compressImage";
+import { LOST_RETURN_METHODS, LOST_RETURN_METHOD_LABEL, isLostReturnMethod } from "@shared/caseRules";
+import { lisbonDayOf } from "@shared/lisbonDay";
+
+/** Opções do "Como foi devolvido" (+ o valor antigo que já lá estava, se não for da lista). */
+function ReturnMethodOptions({ current }: { current?: string | null }) {
+  return (
+    <>
+      {LOST_RETURN_METHODS.map((m) => <SelectItem key={m} value={m}>{LOST_RETURN_METHOD_LABEL[m]}</SelectItem>)}
+      {current && !isLostReturnMethod(current) && <SelectItem value={current}>{current} (antigo)</SelectItem>}
+    </>
+  );
+}
+
+/**
+ * D22 (Jorge, 3 out 2026): passar a "Devolvido" pede como e quando — no quadro,
+ * no estado do caso e no "Marcar como Devolvido". O servidor recusa sem eles.
+ */
+export function MarkReturnedDialog({ item, onClose, onDone }: { item: any; onClose: () => void; onDone?: () => void }) {
+  const utils = trpc.useUtils();
+  const [method, setMethod] = useState<string>(item.returnMethod || "");
+  const [day, setDay] = useState<string>(item.returnedAt ? String(item.returnedAt).slice(0, 10) : lisbonDayOf(Date.now()));
+  const save = trpc.lostFound.update.useMutation({
+    onSuccess: () => {
+      utils.lostFound.getById.invalidate({ id: item.id });
+      utils.lostFound.list.invalidate();
+      toast.success("Marcado como Devolvido");
+      onDone?.();
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const today = lisbonDayOf(Date.now());
+  const ok = !!method && /^\d{4}-\d{2}-\d{2}$/.test(day) && day <= today;
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Marcar como Devolvido</DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">Caso #{item.id}{item.description ? ` — ${String(item.description).slice(0, 80)}` : ""}</p>
+          <div><Label className="text-xs">Como foi devolvido</Label>
+            <Select value={method || undefined} onValueChange={setMethod}>
+              <SelectTrigger className="w-full" aria-label="Como foi devolvido"><SelectValue placeholder="Escolhe…" /></SelectTrigger>
+              <SelectContent><ReturnMethodOptions current={item.returnMethod} /></SelectContent>
+            </Select>
+          </div>
+          <div><Label className="text-xs">Data da devolução</Label>
+            <Input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value)} aria-label="Data da devolução" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button disabled={!ok || save.isPending} onClick={() => save.mutate({ id: item.id, status: "returned", returnMethod: method, returnedAt: `${day} 00:00:00` })}>
+            <CheckCircle2 className="w-4 h-4 mr-1" /> {save.isPending ? "A guardar…" : "Devolvido"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // ─── Devolução estruturada + email ao cliente ────────────────────────────────
 export function ReturnPanel({ item, canEdit = true }: { item: any; canEdit?: boolean }) {
@@ -89,10 +148,7 @@ export function ReturnPanel({ item, canEdit = true }: { item: any; canEdit?: boo
               <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">—</SelectItem>
-                <SelectItem value="em_maos">Em mãos (no parque)</SelectItem>
-                <SelectItem value="correio">Correio / transportadora</SelectItem>
-                <SelectItem value="entrega">Entrega ao domicílio</SelectItem>
-                <SelectItem value="outro">Outro</SelectItem>
+                <ReturnMethodOptions current={item.returnMethod} />
               </SelectContent>
             </Select>
           </div>

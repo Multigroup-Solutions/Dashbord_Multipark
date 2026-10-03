@@ -21,7 +21,7 @@ export const KIND_SOURCES: Record<string, string> = {
   incident_critical: "Ocorrência criada com gravidade crítica.",
   incident_sla: "Já não é enviado: as ocorrências vêm da app Multipark e as antigas do dashboard deixaram de ter lembretes (P3 16a).",
   lost_found_new: "Perdido registado.",
-  lost_found_sla: "Cron horário: perdidos fora do prazo (1×/dia, resumo por cidade + responsável).",
+  lost_found_sla: "Cron horário: perdidos fora do prazo — o da Atribuição, senão os dias de Definições → Prazo dos perdidos e achados (7 por omissão) — 1×/dia, resumo por cidade + responsável.",
   whatsapp_sla: "Cron: conversas por responder / urgentes / janela de 24h a fechar (resumo por cidade + responsável da conversa).",
   whatsapp_missed_call: "Webhook de chamadas do WhatsApp: chamada recebida que ninguém atendeu (terminou a tocar, ou passou o prazo de ~1 min) — 1× por chamada, à cidade da conversa (mesma regra do inbox).",
   extras_gap: "Proposta automática da escala e verificação da véspera com horas sem condutores.",

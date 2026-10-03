@@ -25,10 +25,21 @@ import {
   buildDriverCrossRef, convertedOriginPatch, complaintToLostFields, driverKey,
   incidentToComplaintFields, incidentToLostFields, isDuplicateIncident, isCaseReminderHour,
   lostToComplaintFields, parseUtc, reminderDue, repeatDriversForCase, utcNowStr,
-  INCIDENT_TYPE_LABEL, type CrossRefLink, type CrossRefRow,
+  DEFAULT_LOST_SLA_DAYS, INCIDENT_TYPE_LABEL, type CrossRefLink, type CrossRefRow,
 } from "../shared/caseRules";
 
 const rowsOf = (r: any): any[] => (Array.isArray(r?.[0]) ? r[0] : r) as any[];
+
+/** D24: prazo dos Perdidos em dias (Definições → sla.lostFoundDays; 7 se não houver). Nunca lança. */
+export async function lostFoundSlaDays(): Promise<number> {
+  try {
+    const { getSetting } = await import("./appSettings");
+    const { lostSlaDays } = await import("../shared/caseRules");
+    return lostSlaDays(await getSetting("sla.lostFoundDays"));
+  } catch {
+    return DEFAULT_LOST_SLA_DAYS;
+  }
+}
 
 async function db() {
   const d = await getDb();
@@ -366,7 +377,8 @@ export async function getLostDashboard(f: CaseScopeFilter) {
   const d = await db();
   const scope = sql`${await caseScopeSql(sql`l.projectId`, f)} AND l.archivedAt IS NULL`;
   const now = utcNowStr();
-  const due = sql`COALESCE(l.dueDate, DATE_ADD(l.createdAt, INTERVAL 7 DAY))`;
+  const slaDays = await lostFoundSlaDays();
+  const due = sql`COALESCE(l.dueDate, DATE_ADD(l.createdAt, INTERVAL ${slaDays} DAY))`;
   const open = sql`l.status IN ('new','investigating','found')`;
   const [agg] = rowsOf(await d.execute(sql`
     SELECT
@@ -398,6 +410,7 @@ export async function getLostDashboard(f: CaseScopeFilter) {
     open: Number(agg?.openCount ?? 0),
     ageBuckets: { lt1d: Number(agg?.lt1d ?? 0), d1to3: Number(agg?.d1to3 ?? 0), d3to7: Number(agg?.d3to7 ?? 0), gt7d: Number(agg?.gt7d ?? 0) },
     overdue: Number(agg?.overdue ?? 0),
+    slaDays,
     noCity: Number(agg?.noCity ?? 0),
     unconfirmedDriver: 0,
     avgResolveHours: agg?.avgResolveMin != null ? Math.round(Number(agg.avgResolveMin) / 6) / 10 : null,
@@ -429,7 +442,7 @@ export async function runCaseSlaReminders(now: Date, hour: number): Promise<Case
   // repetia-se para sempre (P3 lote 16a). A tabela e os dados ficam.
   const lostRows = rowsOf(await d.execute(sql`
     SELECT id, projectId, assignedTo, lastReminderAt FROM lost_found_items
-    WHERE status IN ('new','investigating','found') AND archivedAt IS NULL AND COALESCE(dueDate, DATE_ADD(createdAt, INTERVAL 7 DAY)) < ${nowStr}
+    WHERE status IN ('new','investigating','found') AND archivedAt IS NULL AND COALESCE(dueDate, DATE_ADD(createdAt, INTERVAL ${await lostFoundSlaDays()} DAY)) < ${nowStr}
     ORDER BY id ASC LIMIT 500`)).filter((r) => reminderDue(fmt(r.lastReminderAt), now));
   let complaintRows: any[] = [];
   try {

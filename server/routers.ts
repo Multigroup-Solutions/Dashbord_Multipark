@@ -3,7 +3,7 @@ import { projectScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAcce
 import { marketingError, marketingPeriodGuard } from './marketingErrors';
 import {
   INCIDENT_SEVERITIES, INCIDENT_STATUSES, INCIDENT_TYPES, LOST_ITEM_TYPES, LOST_PRIORITIES, LOST_STATUSES,
-  caseDueToUtc, contentTypeForFilename, incidentStatusPatch, lostStatusPatch, safeExt, textToSafeHtml, utcNowStr,
+  caseDueToUtc, contentTypeForFilename, incidentStatusPatch, isLostReturnMethod, lostReturnedError, lostStatusPatch, parseUtc, safeExt, textToSafeHtml, utcNowStr,
 } from "../shared/caseRules";
 import { trainingRouter } from './trainingRouter';
 import { tasksRouter } from './tasksRouter';
@@ -2378,20 +2378,30 @@ export const appRouter = router({
     }),
 
     // Agent performance history (DB local — alimentada pelo sync da API Multipark)
+    // D27 (Jorge, 3 out 2026): o agente escolhe-se pela FICHA (os agentes da
+    // Multipark ligados a ela), nunca por nome escrito — homónimos e grafias
+    // diferentes davam o histórico de outra pessoa.
+    agentPeople: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "criticas", "view");
+      const { employeesWithAgents } = await import("./personIdentity");
+      return employeesWithAgents(scopedProjectIds());
+    }),
     agentHistory: protectedProcedure.input(z.object({
-      startDate: z.string(),
-      endDate: z.string(),
-      agentName: z.string().optional(),
-      userId: z.string().optional(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      employeeId: z.number().int().positive(),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "view");
+      await assertEmployeeAccess(input.employeeId);
+      const { agentIdsOfEmployee } = await import("./personIdentity");
+      const who = await agentIdsOfEmployee(input.employeeId);
+      if (!who.fullName) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
+      if (!who.agentUserIds.length) {
+        return { total: 0, period: { startDate: input.startDate, endDate: input.endDate }, agentName: who.fullName, agentUserId: "", history: [], noAgent: true as const };
+      }
       const { getAgentHistoryFromDb } = await import("./db");
-      return getAgentHistoryFromDb({
-        startDate: input.startDate,
-        endDate: input.endDate,
-        agentName: input.agentName,
-        userId: input.userId,
-      });
+      const r = await getAgentHistoryFromDb({ startDate: input.startDate, endDate: input.endDate, userIds: who.agentUserIds });
+      return { ...r, agentName: who.fullName, noAgent: false as const };
     }),
   }),
 
@@ -2419,8 +2429,19 @@ export const appRouter = router({
       requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
       await assertOwnCase(ctx.user, "perdidos", "lost_found", input.id);
       const item = await loadLostInScope(input.id);
-      const { signedFileUrl } = await import("./caseOps");
-      return { ...item, returnPhotoUrl: item.returnPhotoUrl || item.returnPhotoKey ? await signedFileUrl(item.returnPhotoKey, item.returnPhotoUrl) : null };
+      const { signedFileUrl, lostFoundSlaDays } = await import("./caseOps");
+      return {
+        ...item,
+        returnPhotoUrl: item.returnPhotoUrl || item.returnPhotoKey ? await signedFileUrl(item.returnPhotoKey, item.returnPhotoUrl) : null,
+        // D24: prazo das Definições (para a cor do "Parado há N dias").
+        slaDays: await lostFoundSlaDays(),
+      };
+    }),
+    /** D24: prazo dos Perdidos (Definições → sla.lostFoundDays) para as cores do quadro. */
+    slaDays: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      const { lostFoundSlaDays } = await import("./caseOps");
+      return { days: await lostFoundSlaDays() };
     }),
 
     // ── IA: possíveis correspondências perdido ↔ achado (humano contacta) ──
@@ -2537,6 +2558,21 @@ export const appRouter = router({
       }
       if (status && existing.status === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Caso convertido (${existing.convertedToType} #${existing.convertedToId}) — trata-o no registo novo.` });
       if ((existing as any).archivedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Caso arquivado — tira-o do arquivo primeiro." });
+      // D22: "Devolvido" obriga a método (da lista; um valor antigo que já lá estava fica) e data.
+      if (rest.returnMethod != null && !isLostReturnMethod(rest.returnMethod) && rest.returnMethod !== (existing as any).returnMethod) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Método de devolução inválido." });
+      }
+      if (rest.returnedAt != null && parseUtc(rest.returnedAt) == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Data da devolução inválida." });
+      const touchesReturn = (status === "returned" && existing.status !== "returned")
+        || (existing.status === "returned" && (status ?? "returned") === "returned" && (rest.returnMethod !== undefined || rest.returnedAt !== undefined));
+      if (touchesReturn) {
+        const err = lostReturnedError({
+          status: status ?? existing.status,
+          returnMethod: rest.returnMethod !== undefined ? rest.returnMethod : (existing as any).returnMethod,
+          returnedAt: rest.returnedAt !== undefined ? rest.returnedAt : (existing as any).returnedAt,
+        }, Date.now());
+        if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+      }
       if (status) Object.assign(data, lostStatusPatch(existing, status, utcNowStr(), ctx.user.id));
       await updateLostFoundItem(id, data as any);
       // Se a ref de reserva mudou, repopula os campos em falta a partir dela.

@@ -36,7 +36,8 @@ import {
   HelpCircle, TrendingUp, ShieldAlert, Flag, Mail, Download, Truck, GripVertical, MessageSquareWarning, ExternalLink, FileSearch } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
-import { ReturnPanel } from "./ReturnPanel";
+import { MarkReturnedDialog, ReturnPanel } from "./ReturnPanel";
+import { lostAgeTone } from "@shared/caseRules";
 import { MatchesPanel } from "./MatchesPanel";
 import { CaseDriversPanel } from "./CaseDriversPanel";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -130,6 +131,8 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
   const [newMsg, setNewMsg] = useState("");
   const [isInternal, setIsInternal] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  // D22: "Devolvido" pede como e quando (janela própria).
+  const [returning, setReturning] = useState(false);
   const [editForm, setEditForm] = useState<any>(null);
 
   // Erro (sem acesso, não existe, falha) ≠ a carregar para sempre (16c).
@@ -187,6 +190,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
 
   // Mutações com erro visível (antes falhavam em silêncio) — 16c.
   const handleStatusChange = async (status: string) => {
+    if (status === "returned" && item?.status !== "returned") { setReturning(true); return; }
     try {
       await updateMut.mutateAsync({ id, status: status as (typeof KANBAN_COLUMNS)[number] });
       utils.lostFound.getById.invalidate({ id });
@@ -236,11 +240,11 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
             <Badge className={STATUS_CONFIG[item.status]?.color}>{STATUS_CONFIG[item.status]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[item.priority]?.color}>{PRIORITY_CONFIG[item.priority]?.label}</Badge>
             {(() => {
-              if (item.status === "returned" || item.status === "closed" || item.status === "converted") return null;
-              const days = Math.floor((Date.now() - new Date(String(item.createdAt).replace(" ", "T") + "Z").getTime()) / 86400000);
-              if (days < 1) return null;
-              const cls = days >= 7 ? "bg-red-100 text-red-700 border-red-200" : days >= 3 ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-slate-100 text-slate-600";
-              return <Badge variant="outline" className={cls}>Parado há {days} {days === 1 ? "dia" : "dias"}</Badge>;
+              // D24: cor pelo prazo (Atribuição, senão Definições → sla.lostFoundDays).
+              const age = lostAgeTone(item, Date.now(), item.slaDays);
+              if (!age || age.days < 1) return null;
+              const cls = age.tone === "late" ? "bg-red-100 text-red-700 border-red-200" : age.tone === "warn" ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-slate-100 text-slate-600";
+              return <Badge variant="outline" className={cls}>Parado há {age.days} {age.days === 1 ? "dia" : "dias"}</Badge>;
             })()}
           </div>
           <p className="text-sm text-muted-foreground">Caso #{item.id} — Criado em {fmtPTDate(item.createdAt)}</p>
@@ -781,6 +785,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
           </Card>}
         </div>
       </div>
+      {returning && <MarkReturnedDialog item={item} onClose={() => setReturning(false)} />}
       {/* Edit Dialog */}
       <Dialog open={isEditing} onOpenChange={setIsEditing}>
         <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">

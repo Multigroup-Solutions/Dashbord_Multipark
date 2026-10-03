@@ -2,7 +2,7 @@
 modulo: perdidos
 titulo: Perdidos e Achados
 rotas: /perdidos-achados
-palavras: perdidos, achados, perdido, objeto, item, esquecido, encontrado, devolução, devolver, entregar ao cliente, cruzamento de condutores, documentos, eletrónica, acessórios, correspondências, sem cidade, prazo, lembretes, arquivar, arquivados, tirar do arquivo, eliminar, pontos, avisar cliente, quem mexeu no carro
+palavras: perdidos, achados, marcar como devolvido, como foi devolvido, data da devolução, parado há, perdido, objeto, item, esquecido, encontrado, devolução, devolver, entregar ao cliente, cruzamento de condutores, documentos, eletrónica, acessórios, correspondências, sem cidade, prazo, lembretes, arquivar, arquivados, tirar do arquivo, eliminar, pontos, avisar cliente, quem mexeu no carro
 ---
 # Perdidos e Achados
 
@@ -17,9 +17,11 @@ Objetos esquecidos pelos clientes nos carros.
 
 **Tratar**
 - Quadro por estados: Novo → Investigação → Encontrado → Devolvido/Fechado. Os convertidos ficam em Fechado e não se movem.
-- **Prazo**: 7 dias desde o registo, ou o prazo da **Atribuição** (conta até ao fim do dia escolhido). Fora do prazo, a cidade e o responsável recebem um lembrete (uma vez por dia).
+- **Prazo**: os dias de **Definições → Prazo dos perdidos e achados** (7 por omissão) desde o registo, ou o prazo da **Atribuição** (conta até ao fim do dia escolhido). Fora do prazo, a cidade e o responsável recebem um lembrete (uma vez por dia) e conta em **Em atraso**.
+- **Parado há N dias**: âmbar a ~3/7 do prazo (3 dias com 7), vermelho quando passa o prazo.
 - **Mensagens** ficam no caso (nota interna ou não). Ao cliente só chega o que enviares com **Avisar cliente** (email de perdidos@).
 - **Possíveis correspondências** (perdido ↔ achado): confirmar deixa uma nota nos dois casos; uma confirmada continua visível depois de o caso fechar. Contactar o cliente é sempre uma pessoa.
+- **Devolvido** obriga a dizer **como foi devolvido** (em mãos, correio, entrega ao domicílio ou outro) e **a data**: no quadro, no estado do caso e em **Marcar como Devolvido** abre-se uma janela para isso. Num caso Devolvido não dá para apagar o método nem a data.
 - **Devolução**: onde estava, quem encontrou, como foi devolvido, data e **foto da entrega** (uma foto nova não apaga a anterior).
 - No cartão "Dados da Reserva", **Abrir ficha da reserva** mostra tudo sobre a reserva, lido em tempo real da Multipark.
 - Se afinal é uma reclamação, **Converter em Reclamação** (admin).

@@ -225,7 +225,8 @@ describe("users", () => {
   it("reviews.checkoutDrivers / agentHistory exigem frontoffice+", async () => {
     const caller = appRouter.createCaller(createCtx({ role: "extra" }));
     await expect(caller.reviews.checkoutDrivers({ startDate: "2026-09-01", endDate: "2026-09-02" })).rejects.toThrow(/não autorizado/);
-    await expect(caller.reviews.agentHistory({ startDate: "2026-09-01", endDate: "2026-09-02", agentName: "x" })).rejects.toThrow(/não autorizado/);
+    await expect(caller.reviews.agentHistory({ startDate: "2026-09-01", endDate: "2026-09-02", employeeId: 7 })).rejects.toThrow(/não autorizado/);
+    await expect(caller.reviews.agentPeople()).rejects.toThrow(/não autorizado/);
   });
 
   it("updateRole is blocked for admin", async () => {
