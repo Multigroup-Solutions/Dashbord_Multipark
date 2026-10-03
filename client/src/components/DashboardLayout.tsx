@@ -56,6 +56,7 @@ import {
   UserPlus,
   Users,
   Trophy,
+  Car,
   GraduationCap,
   BookOpen,
   Truck,
@@ -179,6 +180,8 @@ export const menuGroups: MenuGroup[] = [
       // Avaliação: separadores "Dia" (avaliacao_operacional) e "4 semanas";
       // extra/condutor veem a própria avaliação — filtrado no servidor
       { icon: Trophy, label: "Avaliação", path: "/avaliacao", anyOf: ["avaliacao", "avaliacao_operacional"] },
+      // Jorge, 3 out 2026: saíram das Críticas (mesmo acesso: módulo Críticas, team leader+).
+      { icon: Car, label: "Condutores e agentes", path: "/pessoas/condutores-agentes", module: "criticas" },
     ],
   },
   {

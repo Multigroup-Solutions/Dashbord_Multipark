@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, Plug, XCircle } from "lucide-react";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import GoogleBusinessConnection from "@/components/GoogleBusinessConnection";
 
 const CONN: Record<string, { label: string; cls: string }> = {
   connected: { label: "Ligado", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
@@ -92,6 +93,10 @@ export default function IntegrationsHubPage() {
             onTest={() => { setTesting(i.id); test.mutate({ id: i.id }); }} />
         ))}
       </div>
+
+      {/* Ligação ao Google Business Profile (antes no topo das Críticas — Jorge, 3 out 2026).
+          O próprio cartão só aparece a admin/super admin com todas as cidades. */}
+      <div id="google-business" className="scroll-mt-20"><GoogleBusinessConnection /></div>
 
       {system.length > 0 && (
         <Card>

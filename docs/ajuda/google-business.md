@@ -53,7 +53,7 @@ A Google começa todos os projetos com **0 pedidos por minuto** nas APIs do Busi
 - **Google My Business API** (v4) — críticas, resposta às críticas e publicações. Esta só aparece na Biblioteca **depois** da aprovação do passo 1.
 
 **3. Ligar a conta Google certa**
-Só o **super admin** liga e desliga (o admin vê o estado e gere os perfis). Em **Críticas → Ligar Google Business Profile** entra com a conta que é **Proprietária ou Gestora** dos perfis dos parques (a mesma que vês em business.google.com → "Perfis"). Se os perfis estão num **grupo de empresas**, a conta tem de ter acesso ao grupo. Aceita todas as permissões.
+Só o **super admin** liga e desliga (o admin vê o estado e gere os perfis). Em **Integrações → Google Business Profile** (cartão "Ligação Google Business Profile", ao fundo da página) entra com a conta que é **Proprietária ou Gestora** dos perfis dos parques (a mesma que vês em business.google.com → "Perfis"). Se os perfis estão num **grupo de empresas**, a conta tem de ter acesso ao grupo. Aceita todas as permissões.
 
 **4. Testar**
 Em **Integrações → Google Business Profile → Testar** (ou "Testar APIs" no separador Google Business) cada API é testada por ordem e aparece ✓/✗ com a causa:

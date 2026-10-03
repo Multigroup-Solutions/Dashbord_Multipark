@@ -183,7 +183,8 @@ describe("D27 — agentes das Críticas escolhidos pela ficha", () => {
   });
 
   it("página: seletor de ficha em vez do nome escrito", () => {
-    const p = src("client/src/pages/GoogleReviewsPage.tsx");
+    // 23e: o painel dos agentes passou para Pessoas → Condutores e agentes.
+    const p = src("client/src/pages/CondutoresAgentesPage.tsx");
     const panel = p.slice(p.indexOf("function AgentPerformancePanel"));
     expect(panel).toMatch(/trpc\.reviews\.agentPeople\.useQuery\(\)/);
     expect(panel).toMatch(/\{ startDate, endDate, employeeId: Number\(employeeId\) \}/);

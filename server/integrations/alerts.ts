@@ -37,7 +37,7 @@ export function alertTransition(previous: string | null, next: AlertState): "ale
 export const CONNECTION_LABELS: Record<string, { label: string; link: string }> = {
   google_ads: { label: "Google Ads", link: "/integracoes/google-ads" },
   meta: { label: "Meta Ads", link: "/integracoes/google-ads#meta" },
-  google_business: { label: "Google Business Profile", link: "/criticas" },
+  google_business: { label: "Google Business Profile", link: "/integracoes#google-business" },
   whatsapp: { label: "WhatsApp", link: "/integracoes" },
 };
 

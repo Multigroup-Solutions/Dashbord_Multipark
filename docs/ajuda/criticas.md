@@ -2,7 +2,7 @@
 modulo: criticas
 titulo: Críticas Google
 rotas: /criticas
-palavras: críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, condutores, ranking, agentes, performance
+palavras: críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail
 ---
 # Críticas Google
 
@@ -32,12 +32,10 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - A média e as percentagens de positivas/negativas contam só as críticas com estrelas.
 - "tudo respondido" só aparece sem filtro de estado.
 
-**Condutores e Agentes** (team leader e acima)
-- **Condutores**: entregas (CHECK_OUT) por agente da Multipark nas tuas cidades, em dias de Lisboa.
-- **Agentes**: escolhe a **pessoa (ficha)** e vês as ações no período de **todos** os agentes da Multipark ligados a ela (RH → Ligações). Já não se escreve o nome: homónimos e grafias diferentes davam o histórico de outra pessoa. Só aparecem fichas com agente ligado; uma ficha sem agente diz isso. Se o período tiver ações a mais, diz "pelo menos" e mostra as mais recentes.
+**Separadores**: **Dashboard** e **Reviews**. Os antigos **Condutores** e **Agentes** passaram para **Pessoas → Condutores e agentes**. A ligação à conta Google (Google Business Profile) passou para **Integrações**.
 
 **Quando a leitura falha**
-- Lista, números, parques, crítica, condutores e agentes mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem avaliações" ou "sem dados".
+- Lista, números, parques e crítica mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem avaliações" ou "sem dados".
 
 **Quem pode**
 - Condutores e extras **não veem** as Críticas — nem as em que estão envolvidos. Só a partir de team leader.
