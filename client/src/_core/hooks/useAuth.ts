@@ -4,6 +4,7 @@ import { TRPCClientError } from "@trpc/client";
 import { useCallback, useEffect, useMemo } from "react";
 import { getPdaToken, markClaimed } from "@/lib/pdaDevice";
 import { disablePush } from "@/lib/webPush";
+import { RECENT_SEARCHES_KEY } from "@shared/globalSearch";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
@@ -36,6 +37,8 @@ export function useAuth(options?: UseAuthOptions) {
       try { await releasePda.mutateAsync({ token: pdaToken }); } catch (err) { console.warn("[pda] soltar o PDA no logout falhou:", err); /* não impede o logout */ }
     }
     markClaimed(null);
+    // 20d: as pesquisas recentes (nomes, matrículas) não ficam para quem usar o aparelho a seguir (PDAs partilhados).
+    try { localStorage.removeItem(RECENT_SEARCHES_KEY); sessionStorage.clear(); } catch { /* sem storage */ }
     // Este browser deixa de receber avisos de chamadas desta pessoa (ainda
     // com a sessão válida, para o servidor apagar a subscrição).
     try {

@@ -169,7 +169,9 @@ function todayISO(): string {
 }
 
 function baseDateFromUrl(): string | null {
-  const dia = new URLSearchParams(window.location.search).get("dia");
+  // 20d: "?dia=" (pesquisa, avisos) e "?date=" (eventos do Google Calendar já criados) — os dois abrem o dia.
+  const qs = new URLSearchParams(window.location.search);
+  const dia = qs.get("dia") ?? qs.get("date");
   if (!dia) return null;
   if (dia === "amanha") return todayISO();
   const target = dia === "hoje" ? todayISO() : /^\d{4}-\d{2}-\d{2}$/.test(dia) ? dia : null;

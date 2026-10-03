@@ -392,7 +392,8 @@ describe("Google Calendar (eventos idempotentes)", () => {
     expect(r1.inserted).toBe(1);
     const ev = api.live()[0];
     expect(ev.extendedProperties?.private).toMatchObject({ mpKey: "shift:11", mpSource: "shift", mpId: "11", mpVersion: "1" });
-    expect(ev.description).toContain(`${APP}/extras-dia?date=2026-09-27`);
+    // 20d: o turno de um extra leva à Disponibilidade (o Extras Dia não abre para ele).
+    expect(ev.description).toContain(`${APP}/disponibilidade`);
     expect(ev.id).toBe(calendarEventId("user:42", "shift:11"));
     api.calls = [];
     const r2 = await syncCalendarTarget(api, store, "user:42", desired, OPTS);
@@ -635,6 +636,6 @@ describe("Outros (preferências, configuração, livre/ocupado, migração)", ()
   it("evento de turno leva o link de volta e a versão", () => {
     const e: DesiredEvent = shiftEvent(shift({ isTeamLeader: 1 }), APP);
     expect(e.summary).toMatch(/^Team leader Multipark — Lisboa/);
-    expect(eventBody(e).source.url).toBe(`${APP}/extras-dia?date=2026-09-27`);
+    expect(eventBody(e).source.url).toBe(`${APP}/extras-dia?dia=2026-09-27`);
   });
 });

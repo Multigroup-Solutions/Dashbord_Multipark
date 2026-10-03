@@ -22,6 +22,9 @@ interface GlobalFiltersState {
   /** Project IDs matching current city+brand filter */
   projectIds: number[] | undefined;
   missingCostCenter: boolean;
+  /** 20d: a leitura do acesso falhou (≠ "sem centro de custos"). */
+  accessError: { message: string } | null;
+  retryAccess: () => void;
   /** Single projectId for tRPC queries (undefined = no filter) */
   projectId: number | undefined;
   isLoading: boolean;
@@ -37,12 +40,15 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
   // Páginas públicas (convite, registo de PDA) abrem-se SEM sessão: aqui não se
   // pede nada protegido — um 401 mandava para o login e o convite perdia-se.
   const [location] = useLocation();
-  const needsSession = !isPublicPath(location);
+  // 20d: só depois de haver sessão (auth.me com pessoa). Sem isto, a página de
+  // entrada pedia dados protegidos → 401 → login → recusado → entrada → 401…
+  const me = trpc.auth.me.useQuery(undefined, { retry: false, refetchOnWindowFocus: false });
+  const needsSession = !isPublicPath(location) && !!me.data;
   const { data: allProjects, isLoading } = trpc.projects.list.useQuery(undefined, { enabled: needsSession });
   // Acesso por cidade (pedido Jorge): cada um vê a cidade do seu centro de
   // custos (+ extras por permissão); admin/grupo vê todas. O seletor global só
   // mostra as permitidas e entra por defeito na cidade da pessoa.
-  const { data: cityAccess, isLoading: accessLoading, error: accessError } = trpc.permissions.myCityAccess.useQuery(undefined, { enabled: needsSession });
+  const { data: cityAccess, isLoading: accessLoading, error: accessError, refetch: refetchAccess } = trpc.permissions.myCityAccess.useQuery(undefined, { enabled: needsSession });
 
   const cities = useMemo(() => {
     if (!allProjects || !cityAccess) return [];
@@ -157,7 +163,9 @@ export function GlobalFiltersProvider({ children }: { children: ReactNode }) {
     <GlobalFiltersContext.Provider
       value={{
         cityId,
-        missingCostCenter: cityAccess?.missingCostCenter ?? !!accessError,
+        missingCostCenter: cityAccess?.missingCostCenter ?? false,
+        accessError: accessError ?? null,
+        retryAccess: () => { refetchAccess(); },
         brandId,
         dateRange,
         setCityId,

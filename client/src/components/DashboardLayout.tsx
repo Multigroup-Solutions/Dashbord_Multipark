@@ -106,6 +106,10 @@ import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
 import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
 import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
 import { can, roleRank, seesBeyondOwn, type AccessOverrides, type ModuleId } from "@shared/access";
+import { allowedWithoutCostCenter, decideRoute } from "@shared/routeAccess";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import ErrorBoundary from "@/components/ErrorBoundary";
+import { PAGE_RELOAD_EVENT, jumpTo } from "@/lib/jumpTo";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
@@ -281,10 +285,13 @@ export default function DashboardLayout({
     const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
   });
-  const { loading, user, error } = useAuth();
+  const { loading, user, error, logout } = useAuth();
+  const utils = trpc.useUtils();
   // Conta sem acesso (desativada/desconhecida): a MESMA mensagem que a página
   // de entrada mostra — nunca "inicia sessão", que levaria a tentar em ciclo.
   const accessDenied = error?.message === ACCESS_DENIED_MSG;
+  // 20d: falha a verificar a sessão (rede/servidor) ≠ "não tens sessão".
+  const sessionCheckFailed = !!error && !accessDenied;
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
@@ -300,15 +307,23 @@ export default function DashboardLayout({
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
           <div className="flex flex-col items-center gap-6">
             <h1 className="text-2xl font-semibold tracking-tight text-center">
-              {accessDenied ? "Sem acesso" : "Iniciar sessão"}
+              {accessDenied ? "Sem acesso" : sessionCheckFailed ? "Não foi possível verificar a sessão" : "Iniciar sessão"}
             </h1>
             <p className="text-sm text-muted-foreground text-center max-w-sm">
               {accessDenied
                 ? ACCESS_DENIED_MSG
-                : "É necessário autenticação para aceder ao painel. Clique para continuar."}
+                : sessionCheckFailed
+                  ? "O servidor não respondeu. A tua sessão pode continuar válida — tenta de novo."
+                  : "É necessário autenticação para aceder ao painel. Clique para continuar."}
             </p>
           </div>
-          {!accessDenied && (
+          {sessionCheckFailed && (
+            <Button size="lg" className="w-full" onClick={() => utils.auth.me.invalidate()}>Tentar de novo</Button>
+          )}
+          {accessDenied && (
+            <Button variant="outline" onClick={() => { logout().finally(() => { window.location.href = "/"; }); }}>Sair</Button>
+          )}
+          {!accessDenied && !sessionCheckFailed && (
             <Button
               onClick={() => {
                 // entra e volta a esta página (ex.: um link para /rh aberto sem sessão)
@@ -339,6 +354,8 @@ export default function DashboardLayout({
           <p className="text-xs text-muted-foreground border-t pt-3">
             Para libertar o acesso, fala com um supervisor ou administrador.
           </p>
+          {/* 20d: sem isto não havia como sair (ex.: PDA partilhado) */}
+          <Button variant="outline" onClick={() => { logout().finally(() => { window.location.href = "/"; }); }}>Sair</Button>
         </div>
       </div>
     );
@@ -486,23 +503,29 @@ function DashboardLayoutContent({
     if (isMobile) setOpenMobile(false);
   };
 
-  // Redirect para página permitida quando a rota é restrita ao role
+  // 20d: o Perfil (e o resto do que é pessoal) abre para todos; um ecrã do
+  // menu que não é para a pessoa mostra "Sem acesso" (antes saltava em
+  // silêncio); os ecrãs de entrada levam ao primeiro do menu da pessoa.
+  const isLowRole = roleRank(userRole) < roleRank("team_leader");
+  const routeDecision = user ? decideRoute({
+    path: location,
+    allowedPaths: new Set(filteredItems.map(i => i.path)),
+    allMenuPaths,
+    lowRole: isLowRole,
+    firstAllowed: filteredItems[0]?.path ?? (isLowRole ? "/rh" : "/formacao"),
+  }) : { kind: "ok" as const };
   useEffect(() => {
-    if (!user) return;
-    const allowedPaths = new Set(filteredItems.map(i => i.path));
-    const isLowRole = roleRank(userRole) < roleRank("team_leader");
-    if (isLowRole) {
-      // user/extra/condutor: whitelist estrita — qualquer rota fora do
-      // menu permitido (incl. /dashboard e /dashboards) cai na 1ª permitida
-      const base = "/" + (location.split("/")[1] ?? "");
-      if (!allowedPaths.has(location) && !allowedPaths.has(base)) {
-        setLocation(filteredItems[0]?.path ?? "/rh");
-      }
-    } else if (allMenuPaths.has(location) && !allowedPaths.has(location)) {
-      setLocation(filteredItems[0]?.path ?? "/formacao");
-    }
-  }, [location, user, filteredItems, userRole]);
+    if (routeDecision.kind === "redirect" && routeDecision.to !== location) setLocation(routeDecision.to, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeDecision.kind, (routeDecision as any).to, location]);
   const filters = useGlobalFilters();
+  // 20d: salto do sino/pesquisa para a mesma página com outro ?id → volta a montá-la.
+  const [pageNonce, setPageNonce] = useState(0);
+  useEffect(() => {
+    const bump = () => setPageNonce((n) => n + 1);
+    window.addEventListener(PAGE_RELOAD_EVENT, bump);
+    return () => window.removeEventListener(PAGE_RELOAD_EVENT, bump);
+  }, []);
 
   useEffect(() => {
     if (isCollapsed) {
@@ -891,12 +914,22 @@ function DashboardLayoutContent({
         {/* pb extra: a última linha da página não fica por baixo da tab bar
             (mobile) nem do botão flutuante do assistente */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
-          {filters.isLoading ? <p>A verificar o acesso às cidades…</p> : filters.missingCostCenter && location !== '/perfil' ? (
+          {routeDecision.kind === "no_access" ? (
+            <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout} />
+          ) : filters.isLoading && !allowedWithoutCostCenter(location) ? <p>A verificar o acesso às cidades…</p>
+          : filters.accessError && !allowedWithoutCostCenter(location) ? (
+            // 20d: falhar a leitura do acesso ≠ "sem centro de custos"
+            <QueryErrorNote error={filters.accessError} onRetry={filters.retryAccess} what="o teu acesso às cidades" />
+          ) : filters.missingCostCenter && !allowedWithoutCostCenter(location) ? (
             <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
-              <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição.
-              <a href="/perfil" className="block mt-2 underline">Abrir o meu perfil</a>
+              <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição. Entretanto, abre o que é teu:
+              <span className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+                <a href="/perfil" className="underline">O meu perfil</a>
+                <a href="/rh" className="underline">A minha ficha</a>
+                <a href="/disponibilidade" className="underline">Disponibilidade</a>
+              </span>
             </div>
-          ) : children}
+          ) : <ErrorBoundary compact resetKey={location}><div key={pageNonce} className="contents">{children}</div></ErrorBoundary>}
         </main>
         {/* Tab bar mobile (design Multipark Mobile) — só em ecrãs pequenos */}
         <MobileTabBar />
@@ -940,7 +973,7 @@ function NotificationsBell() {
 
   const onItemClick = (n: any) => {
     if (!n.isRead) markRead.mutate({ id: n.id });
-    if (n.link) setLocation(n.link);
+    if (n.link) jumpTo(n.link, setLocation);
   };
 
   const fmtTime = (iso?: string | Date | null) => {
@@ -1001,7 +1034,12 @@ function NotificationsBell() {
             </select>
           )}
           <div className="space-y-1 max-h-80 overflow-y-auto">
-            {items.length === 0 ? (
+            {listQ.error ? (
+              // 20d: erro ≠ "Sem notificações"
+              <QueryErrorNote error={listQ.error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="as notificações" />
+            ) : listQ.isLoading ? (
+              <p className="text-xs text-muted-foreground text-center py-6">A carregar…</p>
+            ) : items.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center py-6">{kindFilter ? "Sem notificações deste tipo" : "Sem notificações"}</p>
             ) : (
               items.map((n: any) => (
@@ -1030,5 +1068,21 @@ function NotificationsBell() {
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** 20d: ecrã do menu que não é para esta pessoa — diz porquê, em vez de saltar em silêncio. */
+function NoAccessScreen({ onHome, onLogout }: { onHome: () => void; onLogout: () => Promise<void> | void }) {
+  return (
+    <div role="alert" className="max-w-md mx-auto mt-10 text-center space-y-4 rounded-xl border bg-card p-6">
+      <h1 className="text-lg font-semibold">Sem acesso a esta página</h1>
+      <p className="text-sm text-muted-foreground">
+        A tua conta não tem permissão para abrir esta página. Se achas que devias ter, fala com o teu supervisor ou com a administração.
+      </p>
+      <div className="flex flex-wrap justify-center gap-2">
+        <Button onClick={onHome}>Ir para o início</Button>
+        <Button variant="outline" onClick={() => { Promise.resolve(onLogout()).finally(() => { window.location.href = "/"; }); }}>Sair</Button>
+      </div>
+    </div>
   );
 }
