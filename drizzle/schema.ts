@@ -1214,6 +1214,8 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	foundLocation: varchar({ length: 255 }),
 	foundByName: varchar({ length: 255 }),
 	returnMethod: varchar({ length: 100 }),
+	// Nota da devolução (obrigatória com o método "Outro" — migração 0435).
+	returnNote: varchar({ length: 500 }),
 	returnedAt: timestamp({ mode: 'string' }),
 	returnPhotoUrl: text(),
 	returnPhotoKey: varchar({ length: 512 }),

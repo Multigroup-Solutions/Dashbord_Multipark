@@ -607,7 +607,7 @@ function FeedbackSection({ id, scope }: { id: string; scope: { projectId?: numbe
       {q.isLoading ? <Loading /> : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
         <>
           <MissingNote missing={d.missing} />
-          {d.occurrences.length === 0 ? <p className="text-xs text-muted-foreground">Sem ocorrências na app Multipark.</p> : (
+          {d.occurrencesHidden ? <p className="text-xs text-muted-foreground">As ocorrências só aparecem a team leaders e acima.</p> : d.occurrences.length === 0 ? <p className="text-xs text-muted-foreground">Sem ocorrências na app Multipark.</p> : (
             <ul className="space-y-1 text-xs">
               {d.occurrences.map((o) => (
                 <li key={o.id} className="rounded-md border p-2">

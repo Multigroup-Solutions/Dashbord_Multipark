@@ -18,7 +18,7 @@ type SavePatch = { projectId: number | null; assigneeId: number | null; dueDate:
  */
 export default function CaseAssignmentCard({
   projectId, assigneeId, dueDate, closedAt, closedByName,
-  projects, people, onSave, saving,
+  projects, people: eligible, onSave, saving, currentAssigneeName,
 }: {
   projectId: number | null | undefined;
   assigneeId: number | null | undefined;
@@ -29,7 +29,14 @@ export default function CaseAssignmentCard({
   people: { id: number; fullName: string }[];
   onSave: (patch: SavePatch) => void;
   saving?: boolean;
+  /** Nome do responsável atual (para o mostrar se já não puder ser escolhido). */
+  currentAssigneeName?: string | null;
 }) {
+  // Responsável só team leader ou acima (Jorge, 3 out 2026): `eligible` já vem
+  // filtrado; um responsável antigo abaixo disso continua à vista, para se trocar.
+  const people = assigneeId && !eligible.some((p) => p.id === assigneeId)
+    ? [...eligible, { id: assigneeId, fullName: `${currentAssigneeName || `Ficha #${assigneeId}`} (abaixo de team leader — troca)` }]
+    : eligible;
   const [proj, setProj] = useState<string>(projectId ? String(projectId) : "none");
   const [person, setPerson] = useState<string>(assigneeId ? String(assigneeId) : "none");
   const [due, setDue] = useState<string>(dueDate ? lisbonDayOf(String(dueDate)) : "");
@@ -53,7 +60,7 @@ export default function CaseAssignmentCard({
           </Select>
         </div>
         <div>
-          <Label className="text-xs">Responsável (investiga)</Label>
+          <Label className="text-xs">Responsável (investiga) — team leader ou acima</Label>
           <Select value={person} onValueChange={setPerson}>
             <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
             <SelectContent>

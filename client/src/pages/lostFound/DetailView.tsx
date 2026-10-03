@@ -109,6 +109,8 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
   }, [apiTimeline, showAllHist]);
   const { data: lfProjects = [] } = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
   const { data: lfEmployees = [] } = trpc.rh.list.useQuery(undefined, { enabled: canEdit });
+  // Responsável só team leader ou acima (Jorge, 3 out 2026).
+  const { data: assigneeOptions = [] } = trpc.lostFound.assigneeOptions.useQuery(undefined, { enabled: canEdit });
   const updateMut = trpc.lostFound.update.useMutation();
   const uploadPhotoMut = trpc.lostFound.uploadPhoto.useMutation();
   const addMsgMut = trpc.lostFound.addMessage.useMutation();
@@ -473,7 +475,8 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                 dueDate={item.dueDate}
                 closedAt={item.closedAt}
                 projects={(lfProjects as any[]).map(p => ({ id: p.id, name: p.name }))}
-                people={(lfEmployees as any[]).map(e => e.employee ?? e).map((e: any) => ({ id: e.id, fullName: e.fullName }))}
+                people={assigneeOptions.map((p) => ({ id: p.id, fullName: `${p.fullName} · ${p.roleLabel}` }))}
+                currentAssigneeName={(lfEmployees as any[]).map(e => e.employee ?? e).find((e: any) => e.id === item.assignedTo)?.fullName}
                 saving={updateMut.isPending}
                 onSave={(patch) => updateMut.mutate({
                   id: item.id, projectId: patch.projectId, assignedTo: patch.assigneeId,

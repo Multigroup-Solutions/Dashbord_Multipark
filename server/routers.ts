@@ -165,42 +165,6 @@ function assertStructuralNodeEditable(node: { level: string }) {
   }
 }
 
-// ─── CASOS PRÓPRIOS (alcance "own" de extra/condutor) ─────────────────────────
-type OwnCaseKind = "review" | "incident" | "lost_found";
-/**
- * Ids dos casos em que o utilizador é o condutor envolvido: críticas (via a
- * reclamação em que foram convertidas), ocorrências (condutor da ocorrência)
- * e perdidos (condutores ligados). Reclamações não têm alcance "own" (D19).
- * Sem ficha → nenhum.
- */
-async function ownCaseIds(userId: number, kind: OwnCaseKind): Promise<Set<number>> {
-  const me = await getEmployeeByUserId(userId);
-  const emp = me?.employee?.id;
-  if (emp == null) return new Set();
-  const { getDb } = await import("./db");
-  const { sql } = await import("drizzle-orm");
-  const db = await getDb();
-  if (!db) return new Set();
-  const q = kind === "review"
-    ? sql`SELECT DISTINCT r.id AS id FROM google_reviews r JOIN complaint_drivers_on_duty d ON d.complaintId = r.complaintId WHERE d.employeeId = ${emp}`
-    : kind === "incident"
-      ? sql`SELECT id FROM incidents WHERE employeeId = ${emp}`
-      : sql`SELECT DISTINCT itemId AS id FROM lost_found_attached_drivers WHERE employeeId = ${emp}`;
-  const [rows] = await db.execute(q) as any;
-  return new Set(((rows as any[]) ?? []).map(r => Number(r.id)));
-}
-/** Alcance "own": só passa se o caso é do próprio. */
-async function assertOwnCase(user: { id: number; role: string }, module: ModuleId, kind: OwnCaseKind, id: number) {
-  if (!isOwnOnly(user, module)) return;
-  if (!(await ownCaseIds(user.id, kind)).has(id)) throw new TRPCError({ code: "FORBIDDEN", message: "Só podes ver os casos em que estás envolvido." });
-}
-/** Alcance "own": filtra a lista pelos casos do próprio. */
-async function filterOwnCases<T extends { id: number }>(user: { id: number; role: string }, module: ModuleId, kind: OwnCaseKind, rows: T[]): Promise<T[]> {
-  if (!isOwnOnly(user, module)) return rows;
-  const ids = await ownCaseIds(user.id, kind);
-  return rows.filter(r => ids.has(r.id));
-}
-
 // ─── EQUIPA: fichas abaixo de quem vê, na sua cidade (alcance "below_city") ──
 /** Semana da disponibilidade: dia ISO e segunda-feira (senão as linhas ficavam numa "semana" que ninguém lê). */
 const weekStartSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isMondayIso, NOT_MONDAY_MESSAGE);
@@ -1655,6 +1619,12 @@ export const appRouter = router({
 
   // ─── RECLAMAÇÕES ────────────────────────────────────────────────────────────
   complaints: router({
+    /** Quem pode ser responsável: team leader ou acima, na cidade de quem atribui. */
+    assigneeOptions: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "reclamacoes", "edit");
+      const { caseAssigneeOptions } = await import("./caseAssignees");
+      return caseAssigneeOptions(scopedProjectIds());
+    }),
     searchBooking: protectedProcedure
       .input(z.object({ search: z.string().min(2) }))
       .query(async ({ ctx, input }) => {
@@ -1749,6 +1719,9 @@ export const appRouter = router({
       assignedToId: z.number().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "reclamacoes", "edit");
+      // Responsável só team leader ou acima (Jorge, 3 out 2026).
+      const { assertCaseAssignee } = await import("./caseAssignees");
+      await assertCaseAssignee(input.assignedToId, null);
       const slaDeadline = input.slaHours ? new Date(Date.now() + input.slaHours * 3600000).toISOString().slice(0, 19).replace("T", " ") : null;
       // Quem só vê a sua cidade e não escolhe o projeto: fica na cidade dele
       // (sem projeto a reclamação desaparecia-lhe da lista — 16b).
@@ -1932,6 +1905,8 @@ export const appRouter = router({
       }
       const cur = await getComplaintById(id);
       if (!cur) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
+      const { assertCaseAssignee } = await import("./caseAssignees");
+      await assertCaseAssignee(rest.assignedToId, cur.assignedToId ?? null);
       if (status) {
         if (cur.complaintStatus === "converted") throw new TRPCError({ code: "BAD_REQUEST", message: `Reclamação convertida (${cur.convertedToType} #${cur.convertedToId}) — trata-a no registo novo.` });
         if ((cur as any).archivedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reclamação arquivada — tira-a do arquivo primeiro." });
@@ -2204,12 +2179,11 @@ export const appRouter = router({
       status: z.string().optional(),
       projectId: z.number().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view", { allowOwn: true });
-      return filterOwnCases(ctx.user, "criticas", "review", await getGoogleReviews(input ?? undefined));
+      requireAccess(ctx.user, "criticas", "view");
+      return await getGoogleReviews(input ?? undefined);
     }),
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "criticas", "review", input.id);
+      requireAccess(ctx.user, "criticas", "view");
       return getGoogleReviewById(input.id);
     }),
     stats: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
@@ -2411,6 +2385,12 @@ export const appRouter = router({
 
   // ─── PERDIDOS E ACHADOS ────────────────────────────────────────────────────
   lostFound: router({
+    /** Quem pode ser responsável: team leader ou acima, na cidade de quem atribui. */
+    assigneeOptions: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "perdidos", "edit");
+      const { caseAssigneeOptions } = await import("./caseAssignees");
+      return caseAssigneeOptions(scopedProjectIds());
+    }),
     list: protectedProcedure.input(z.object({
       status: z.enum(LOST_STATUSES).optional(),
       itemType: z.enum(LOST_ITEM_TYPES).optional(),
@@ -2420,14 +2400,13 @@ export const appRouter = router({
       /** Só os arquivados (quem gere). Sem isto, os arquivados nunca vêm. */
       archived: z.boolean().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      requireAccess(ctx.user, "perdidos", "view");
       if (input?.archived) requireAccess(ctx.user, "perdidos", "manage");
-      return filterOwnCases(ctx.user, "perdidos", "lost_found", await getLostFoundItems(input));
+      return await getLostFoundItems(input);
     }),
 
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.id);
+      requireAccess(ctx.user, "perdidos", "view");
       const item = await loadLostInScope(input.id);
       const { signedFileUrl, lostFoundSlaDays } = await import("./caseOps");
       return {
@@ -2439,15 +2418,14 @@ export const appRouter = router({
     }),
     /** D24: prazo dos Perdidos (Definições → sla.lostFoundDays) para as cores do quadro. */
     slaDays: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
+      requireAccess(ctx.user, "perdidos", "view");
       const { lostFoundSlaDays } = await import("./caseOps");
       return { days: await lostFoundSlaDays() };
     }),
 
     // ── IA: possíveis correspondências perdido ↔ achado (humano contacta) ──
     matches: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.id);
+      requireAccess(ctx.user, "perdidos", "view");
       await loadLostInScope(input.id);
       const { listMatchesFor } = await import("./lostFoundMatch");
       return listMatchesFor(input.id);
@@ -2537,6 +2515,7 @@ export const appRouter = router({
       foundByName: z.string().max(255).nullable().optional(),
       returnMethod: z.string().max(100).nullable().optional(),
       returnedAt: z.string().max(30).nullable().optional(),
+      returnNote: z.string().max(500).nullable().optional(),
       // Atribuição / prazo / auditoria
       projectId: z.number().nullable().optional(),
       dueDate: z.string().max(30).nullable().optional(),
@@ -2545,6 +2524,9 @@ export const appRouter = router({
       requireAccess(ctx.user, "perdidos", "edit");
       const existing = await loadLostInScope(input.id);
       const { id, dueDate, status, ...rest } = input;
+      // Responsável só team leader ou acima (Jorge, 3 out 2026).
+      const { assertCaseAssignee } = await import("./caseAssignees");
+      await assertCaseAssignee(rest.assignedTo, (existing as any).assignedTo ?? null);
       if (rest.projectId !== undefined && rest.projectId !== null) assertProjectAccess(rest.projectId);
       if (rest.projectId === null && scopedProjectIds() !== undefined) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Só quem vê todas as cidades pode deixar um caso sem cidade." });
@@ -2564,12 +2546,13 @@ export const appRouter = router({
       }
       if (rest.returnedAt != null && parseUtc(rest.returnedAt) == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Data da devolução inválida." });
       const touchesReturn = (status === "returned" && existing.status !== "returned")
-        || (existing.status === "returned" && (status ?? "returned") === "returned" && (rest.returnMethod !== undefined || rest.returnedAt !== undefined));
+        || (existing.status === "returned" && (status ?? "returned") === "returned" && (rest.returnMethod !== undefined || rest.returnedAt !== undefined || rest.returnNote !== undefined));
       if (touchesReturn) {
         const err = lostReturnedError({
           status: status ?? existing.status,
           returnMethod: rest.returnMethod !== undefined ? rest.returnMethod : (existing as any).returnMethod,
           returnedAt: rest.returnedAt !== undefined ? rest.returnedAt : (existing as any).returnedAt,
+          returnNote: rest.returnNote !== undefined ? rest.returnNote : (existing as any).returnNote,
         }, Date.now());
         if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
       }
@@ -2670,8 +2653,7 @@ export const appRouter = router({
 
     // Photos — URLs assinadas (temporárias), nunca a URL pública guardada.
     getPhotos: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.itemId);
+      requireAccess(ctx.user, "perdidos", "view");
       await loadLostInScope(input.itemId);
       const { signedFileUrl } = await import("./caseOps");
       const photos = await getLostFoundPhotos(input.itemId);
@@ -2696,8 +2678,7 @@ export const appRouter = router({
 
     // Messages
     getMessages: protectedProcedure.input(z.object({ itemId: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "perdidos", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "perdidos", "lost_found", input.itemId);
+      requireAccess(ctx.user, "perdidos", "view");
       await loadLostInScope(input.itemId);
       return getLostFoundMessages(input.itemId);
     }),
@@ -2931,8 +2912,8 @@ export const appRouter = router({
       projectId: z.number().optional(),
       noProject: z.boolean().optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "ocorrencias", "view", { allowOwn: true });
-      return filterOwnCases(ctx.user, "ocorrencias", "incident", await getIncidents(input));
+      requireAccess(ctx.user, "ocorrencias", "view");
+      return await getIncidents(input);
     }),
 
     // Ocorrências da app Multipark, lidas AO VIVO da BD deles ("Occurrence").
@@ -3070,8 +3051,7 @@ export const appRouter = router({
     }),
 
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "ocorrencias", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "ocorrencias", "incident", input.id);
+      requireAccess(ctx.user, "ocorrencias", "view");
       return loadIncidentInScope(input.id);
     }),
 

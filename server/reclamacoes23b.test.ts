@@ -41,12 +41,10 @@ const caller = (role: string) => appRouter.createCaller({ user: { id: 77, role, 
 beforeEach(() => { state.listCalls = []; });
 
 describe("D19 — condutores e extras não veem reclamações", () => {
-  it("matriz: nada para extra/condutor; team leader na cidade; Críticas continuam 'só as suas'", () => {
-    for (const r of ["extra", "condutor", "user"]) expect(sees(r, "reclamacoes")).toBe(false);
+  it("matriz: nada para extra/condutor; team leader na cidade (23d: o mesmo nas Críticas, Ocorrências e Perdidos)", () => {
+    for (const r of ["extra", "condutor", "user"]) for (const m of ["reclamacoes", "criticas", "ocorrencias", "perdidos"] as ModuleId[]) expect(sees(r, m)).toBe(false);
     expect(scopeFor("team_leader", "reclamacoes")).toBe("city");
     expect(can("team_leader", "reclamacoes", "edit")).toBe(true);
-    expect(scopeFor("condutor", "criticas")).toBe("own");
-    expect(scopeFor("extra", "ocorrencias")).toBe("own");
   });
 
   it("lista, caso e sugestões da IA recusam extra e condutor (mesmo envolvidos)", async () => {
@@ -67,7 +65,8 @@ describe("D19 — condutores e extras não veem reclamações", () => {
     expect(r).not.toMatch(/"reclamacoes", "view", \{ allowOwn: true \}/);
     expect(r).not.toMatch(/assertOwnCase\(ctx\.user, "reclamacoes"/);
     expect(r).not.toMatch(/filterOwnCases\(ctx\.user, "reclamacoes"/);
-    expect(r).toMatch(/type OwnCaseKind = "review" \| "incident" \| "lost_found";/);
+    // 23d: o alcance "own" saiu dos 4 módulos de casos — o código dos "casos próprios" foi-se.
+    expect(r).not.toMatch(/OwnCaseKind|filterOwnCases|assertOwnCase/);
     const reviews = src("client/src/pages/GoogleReviewsPage.tsx");
     expect(reviews).toMatch(/const canOpenComplaint = seesBeyondOwn\(user as any, "reclamacoes"\)/);
     expect(reviews).toMatch(/\{canOpenComplaint && \(\s*<Button[^]*?Ver Reclamação/);

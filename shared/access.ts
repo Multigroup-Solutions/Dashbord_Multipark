@@ -242,18 +242,17 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },
+  // D19 alargado (Jorge, 3 out 2026): o mesmo nas Críticas, Ocorrências e
+  // Perdidos — condutores e extras não veem nada, só a partir de team leader.
   criticas: {
-    ...same("own:v", "extra", "condutor"),
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },
   ocorrencias: {
-    ...same("own:v", "extra", "condutor"),
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },
   perdidos: {
-    condutor: "own:v",
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },

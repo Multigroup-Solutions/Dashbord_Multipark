@@ -98,7 +98,11 @@ export const bookingFileRouter = router({
     requireAccess(ctx.user, "reservas_operacoes", "view");
     const { getBookingFileFeedback } = await import("./multiparkDb/bookingFile");
     const r = await getBookingFileFeedback(input.id, scopedCityNames());
-    return r.available ? { available: true as const, ...r.data.data, missing: r.data.missing } : unavailable(r);
+    if (!r.available) return unavailable(r);
+    // D19 alargado (Jorge, 3 out 2026): ocorrências só a partir de team leader —
+    // quem não as vê fica sem a lista (e sabe porquê).
+    const occurrencesHidden = !seesBeyondOwn(withOverrides(ctx.user), "ocorrencias");
+    return { available: true as const, ...r.data.data, ...(occurrencesHidden ? { occurrences: [] } : {}), occurrencesHidden, missing: r.data.missing };
   }),
 
   /**

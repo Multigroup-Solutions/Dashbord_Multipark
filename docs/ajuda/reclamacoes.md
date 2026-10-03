@@ -54,4 +54,5 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 **Quem pode**
 - Ver, criar e tratar: conforme o acesso a Reclamações, sempre na tua cidade.
 - **CSV** (leva contactos do cliente): só quem pode exportar.
-- Condutores e extras **não veem** reclamações — nem as em que estão envolvidos (notas internas e contactos do cliente). Só a partir de team leader. Nas Críticas e nos Perdidos veem o nº da reclamação ligada, sem a poder abrir.
+- Condutores e extras **não veem** reclamações — nem as em que estão envolvidos (notas internas e contactos do cliente). Só a partir de team leader. O mesmo nas Críticas, Ocorrências e Perdidos.
+- O **responsável** só pode ser team leader ou acima (ao criar e em **Atribuição & prazo**). Um responsável antigo abaixo disso aparece marcado "(abaixo de team leader — troca)".
