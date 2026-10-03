@@ -164,6 +164,9 @@ export const googleAdsRouter = router({
     const conn = await getConnection();
     const r = await disconnect();
     await logActivity({ userId: ctx.user.id, action: "disconnect", entity: "integration_connections", details: `Google Ads desligado${conn?.accountEmail ? ` (${conn.accountEmail})` : ""}${r.revoked ? " · token revogado na Google" : " · não foi possível revogar o token na Google"}` });
+    // D51: avisa os admins e o super admin (interruptor; nunca lança).
+    const { notifyIntegrationDisconnected } = await import("../../integrationDisconnectNotify");
+    await notifyIntegrationDisconnected({ integration: "Google Ads", byUserId: ctx.user.id, byName: ctx.user.name, accountEmail: conn?.accountEmail ?? null, revoked: r.revoked });
     return { success: true, revoked: r.revoked };
   }),
 });

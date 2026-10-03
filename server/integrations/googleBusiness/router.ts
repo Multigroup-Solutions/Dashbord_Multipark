@@ -50,6 +50,9 @@ export const googleBusinessRouter = router({
       await logActivity({ userId: ctx.user.id, action: 'disconnect', entity: 'integration_connections',
         details: `Google Business desligado${r.accountEmail ? ` (${r.accountEmail})` : ''}${r.revoked ? ' · token revogado na Google' : ' · não foi possível revogar o token na Google'} — perfis escolhidos mantidos` });
     } catch { /* registo */ }
+    // D51: avisa os admins e o super admin (interruptor; nunca lança).
+    const { notifyIntegrationDisconnected } = await import('../../integrationDisconnectNotify');
+    await notifyIntegrationDisconnected({ integration: 'Google Business', byUserId: ctx.user.id, byName: ctx.user.name, accountEmail: r.accountEmail ?? null, revoked: r.revoked });
     return { ok: true, revoked: r.revoked };
   }),
 });

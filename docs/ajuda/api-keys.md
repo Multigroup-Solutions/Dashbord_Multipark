@@ -2,7 +2,7 @@
 modulo: api_keys
 titulo: API Keys (chaves para o site, o MCP e os dispositivos)
 rotas: /api-keys
-palavras: api key, api keys, chave, chaves, x-api-key, capacidades, permissões da chave, revogar, revogada, expirada, validade, mcp, claude, site, formulário, gps, zilo, rádio, gmail import, relatórios, dados pessoais, 403, 429, limite de pedidos
+palavras: criador inativo, conta desativada, api key, api keys, chave, chaves, x-api-key, capacidades, permissões da chave, revogar, revogada, expirada, validade, mcp, claude, site, formulário, gps, zilo, rádio, gmail import, relatórios, dados pessoais, 403, 429, limite de pedidos
 ---
 # API Keys
 
@@ -27,6 +27,8 @@ Sem a capacidade, o pedido recebe **403** e não faz nada.
 **Revogar em vez de apagar**: "Revogar" pede o motivo, desliga a chave para sempre (não se reativa) e fica o registo de quem, quando e porquê. Para ver as revogadas, liga **Mostrar revogadas**. Uma chave comprometida revoga-se e cria-se outra.
 
 **Ativa / Inativa**: o interruptor pausa uma chave (volta a ligar-se quando quiseres). Revogada é diferente: é definitivo.
+
+**Quem a criou ficou inativo**: a chave **deixa de funcionar** (403, a mesma resposta) enquanto a conta de quem a criou estiver desativada, e na lista aparece **Criador inativo**. Se a conta foi **junta a outra** (conta duplicada), conta a conta que ficou — a chave continua. Para continuar a usar o serviço, cria uma chave nova com uma conta ativa e revoga a antiga. As chaves muito antigas sem autor registado continuam como estavam.
 
 **Validade**: opcional, ao criar (30 dias, 90 dias, 1 ano) ou em **Definições → Segurança**. A chave funciona até ao **fim desse dia em Lisboa**. Chave errada, inativa, revogada ou expirada recebem todas a **mesma** resposta (403), para não dar pistas a quem tenta adivinhar.
 

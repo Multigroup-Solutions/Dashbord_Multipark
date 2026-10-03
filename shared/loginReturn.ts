@@ -40,3 +40,19 @@ export function loginUrlWithReturn(path?: string | null): string {
   const next = safeReturnPath(path);
   return next ? `/api/oauth/login?next=${encodeURIComponent(next)}` : "/api/oauth/login";
 }
+
+/**
+ * D61 (Jorge, 3 out 2026): num PDA (aparelho partilhado) o login da Google
+ * pede SEMPRE para escolher a conta — senão entra com a conta de quem usou o
+ * PDA antes. O servidor não sabe que é um PDA (o token do aparelho vive no
+ * browser), por isso o link de login leva `pda=1`. PURA.
+ */
+export function loginUrlForDevice(url: string, isPda: boolean): string {
+  if (!isPda) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}pda=1`;
+}
+
+/** `prompt` do pedido à Google: num PDA, escolher a conta. PURA. */
+export function googlePromptFor(pdaParam: unknown): string {
+  return pdaParam === "1" ? "consent select_account" : "consent";
+}

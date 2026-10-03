@@ -676,6 +676,12 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "RH_BANK_CHANGE_NOTIFY", label: "Aviso dos pedidos de IBAN", description: "Quando alguém pede para mudar o IBAN de uma ficha, avisa no sino o back office da cidade (e os administradores) para aprovar ou recusar. Desligado por omissão: os pedidos aparecem na mesma no RH (topo da lista) e na ficha.", defaultEnabled: false },
   // D45 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
   { name: "TASK_ASSIGNED_NOTIFY", label: "Tarefas: aviso \"Nova tarefa para ti\"", description: "Quando alguém te põe como responsável numa tarefa, recebes no sino \"Nova tarefa para ti\". Só tarefas feitas por pessoas (as automáticas — checklists, serviços, disponibilidade, RH — e as do Google não avisam) e nunca quem a atribuiu. Desligado por omissão.", defaultEnabled: false },
+  // D50 (Jorge, 3 out 2026): obrigatórias, mas só com este interruptor (desligado por omissão).
+  { name: "NOTIFY_CRITICAL_MANDATORY", label: "Avisos críticos obrigatórios", description: "\"Ocorrência crítica\" e \"A trabalhar sem PDA ou Zello\" passam a obrigatórias: ninguém as desliga no Perfil (quem as tinha desligado volta a recebê-las). Desligar isto devolve a cada um o que tinha escolhido. Não muda quem as recebe nem quando são enviadas. Desligado por omissão.", defaultEnabled: false },
+  // D51 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
+  { name: "INTEGRATION_DISCONNECT_NOTIFY", label: "Aviso quando desligam uma integração", description: "Quando alguém desliga o Google Business ou o Google Ads, avisa no sino (e por email, se a pessoa o tiver ligado) os administradores e o super admin — menos quem desligou. Fica sempre no registo (Logs). Desligado por omissão.", defaultEnabled: false },
+  // D52 (Jorge, 3 out 2026): o push já existia → ligado por omissão (nada muda até alguém o mudar).
+  { name: "GBP_PUSH", label: "Google Business: notificações push", description: "A Google avisa a app quando chega uma crítica nova e a app vai buscá-la logo. Desligado: os avisos da Google são ignorados (confirmados, sem repetições) e as críticas chegam na recolha agendada." },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.
   { name: "TASKS_AUTO_OVERDUE", label: "Avisos de atraso das tarefas automáticas", description: "Checklists, serviços, disponibilidade e fichas sem cidade que passam o prazo: avisa no sino os responsáveis e o supervisor da cidade (um resumo por cidade). Sem email. Só as que passaram o prazo há menos de 48 h (as mais antigas ficam marcadas sem aviso)." },
@@ -848,7 +854,7 @@ export function staleThresholdMinutes(intervalMinutes: number): number {
   return Math.max(2 * intervalMinutes, CRON_MIN_STALE_MINUTES);
 }
 
-export type CronHealth = "ok" | "failed" | "stale" | "never" | "running" | "unscheduled";
+export type CronHealth = "ok" | "failed" | "stale" | "never" | "running" | "unscheduled" | "skipping";
 
 export interface CronRunLite {
   startedAt: number;          // epoch ms
@@ -868,6 +874,41 @@ export function cronHealth(last: CronRunLite | null, intervalMinutes: number | n
   if (intervalMinutes != null && now - last.startedAt > staleThresholdMinutes(intervalMinutes) * 60_000) return "stale";
   if (last.finishedAt == null) return now - last.startedAt > 15 * 60_000 ? "failed" : "running";
   return last.ok ? "ok" : "failed";
+}
+
+/**
+ * D57 (Jorge, 3 out 2026): um cron que corre mas SALTA há vários dias por
+ * falta de configuração ou de ligação (Zello por configurar, BD da Multipark
+ * sem endereço, Google Ads/Business desligado, conta a religar…) é um problema
+ * no Estado. Saltar porque um interruptor está desligado, fora de horas ou
+ * porque outra corrida já está a trabalhar é escolha/normal — não conta.
+ */
+export const CRON_SKIP_PROBLEM_DAYS = 2;
+const SKIP_PROBLEM_RE = /not_configured|not_connected|reauth_required|disconnected|no_accounts|não (?:está|estão) (?:definid|ligad)|não configurad|sem contas|sem MARKETING_REPORT_EMAILS/i;
+const SKIP_BY_CHOICE_RE = /desligad|disabled|interruptor|fora de horas|locked|noutro tick|busy|meia-noite/i;
+
+/** A nota de uma corrida saltada diz que falta configuração/ligação? PURA. */
+export function isProblemSkip(note: string | null | undefined): boolean {
+  const n = String(note ?? "");
+  if (!/^saltado:/i.test(n)) return false;
+  return SKIP_PROBLEM_RE.test(n) && !SKIP_BY_CHOICE_RE.test(n);
+}
+
+/**
+ * A última corrida saltou por falta de configuração/ligação e não há trabalho
+ * feito há mais de `days` dias (desde o último OK que fez o trabalho; sem
+ * nenhum, desde a primeira corrida registada). PURA.
+ */
+export function cronSkipProblem(
+  last: { ok: boolean | null; error: string | null } | null,
+  lastOkAt: number | null,
+  firstRunAt: number | null,
+  now: number,
+  days = CRON_SKIP_PROBLEM_DAYS,
+): boolean {
+  if (!last || last.ok !== true || !isProblemSkip(last.error)) return false;
+  const since = lastOkAt ?? firstRunAt;
+  return since != null && now - since > days * 86_400_000;
 }
 
 /**

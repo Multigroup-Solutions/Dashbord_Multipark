@@ -18,7 +18,7 @@ import type { NextFunction, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { cronAuthOk } from "./cronAuth";
-import { CRON_JOBS, cronHealth, cronNameFromPath, cronOutcome, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
+import { CRON_JOBS, cronHealth, cronNameFromPath, cronOutcome, cronSkipProblem, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
 import { scrubSecrets } from "./integrationsStatus";
 
 /** "YYYY-MM-DD HH:MM:SS.mmm" (UTC) — DATETIME(3). */
@@ -215,10 +215,13 @@ export async function getCronStatuses(now = Date.now(), intervalOverrides: Reado
   const okRes = await db.execute(sql`
     SELECT name, DATE_FORMAT(MAX(finishedAt), '%Y-%m-%d %H:%i:%s.%f') AS lastOkAt
       FROM cron_runs WHERE ok = 1 AND (error IS NULL OR error NOT LIKE 'saltado:%') GROUP BY name`);
-  const namesRes = await db.execute(sql`SELECT DISTINCT name FROM cron_runs`);
+  // Nomes + 1.ª corrida registada (D57: "saltado há dias" sem nenhum OK desde o início).
+  const namesRes = await db.execute(sql`
+    SELECT name, DATE_FORMAT(MIN(startedAt), '%Y-%m-%d %H:%i:%s.%f') AS firstAt FROM cron_runs GROUP BY name`);
   const agg = new Map(rowsOf(aggRes).map((r) => [String(r.name), { runs: Number(r.runs), failures: Number(r.failures ?? 0) }]));
   const lastOk = new Map(rowsOf(okRes).map((r) => [String(r.name), fromMysqlMs(r.lastOkAt)]));
-  const names = Array.from(new Set([...known.keys(), ...rowsOf(namesRes).map((r) => String(r.name))]));
+  const firstAt = new Map(rowsOf(namesRes).map((r) => [String(r.name), fromMysqlMs(r.firstAt)]));
+  const names = Array.from(new Set([...known.keys(), ...firstAt.keys()]));
 
   return Promise.all(names.map(async (name) => {
     const job = known.get(name);
@@ -227,15 +230,19 @@ export async function getCronStatuses(now = Date.now(), intervalOverrides: Reado
     const recent = rowsOf(recentRes).map(toView);
     const last = recent[0] ?? null;
     const interval = intervalOverrides.get(name) ?? job?.intervalMinutes ?? null;
+    const okAt = lastOk.get(name) ?? null;
+    const health0 = cronHealth(last, interval, now);
+    // D57: corre mas salta há dias por falta de configuração/ligação → problema.
+    const health: CronHealth = health0 === "ok" && cronSkipProblem(last, okAt, firstAt.get(name) ?? null, now) ? "skipping" : health0;
     return {
       name,
       label: job?.label ?? name,
       workflow: job?.workflow ?? "—",
       intervalMinutes: interval,
       staleAfterMinutes: interval == null ? null : staleThresholdMinutes(interval),
-      health: cronHealth(last, interval, now),
+      health,
       last,
-      lastOkAt: lastOk.get(name) ?? null,
+      lastOkAt: okAt,
       lastFailure: rowsOf(failRes).map(toView)[0] ?? null,
       runs24h: agg.get(name)?.runs ?? 0,
       failures24h: agg.get(name)?.failures ?? 0,

@@ -105,7 +105,7 @@ export function NotificationRoutingCard() {
                     {rows.map((t) => (
                       <tr key={t.kind} className="border-b border-border/60 align-middle">
                         <td className="p-2 sticky left-0 bg-card z-10">
-                          <div className="font-medium flex items-center gap-1">{t.label}{t.mandatory && <Lock className="h-3 w-3 text-muted-foreground" aria-label="Obrigatória" />}</div>
+                          <div className="font-medium flex items-center gap-1">{t.label}{t.mandatory && <Lock className="h-3 w-3 text-muted-foreground" aria-label="Obrigatória" />}{!t.mandatory && t.mandatoryFlag && <Lock className="h-3 w-3 text-muted-foreground/60" aria-label="Obrigatória com o interruptor Avisos críticos obrigatórios" />}</div>
                           <div className="text-[11px] text-muted-foreground">{t.cityScoped ? "Por cidade" : "Nacional"} · módulo {t.module}</div>
                         </td>
                         {t.personal ? (
