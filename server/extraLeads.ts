@@ -113,6 +113,8 @@ export interface ExtraLeadRow {
   drivingLicenseNumber?: string | null;
   aiSummary?: string | null;
   aiReadAt?: string | null;
+  /** D46: foto da ficha (só depois de convertido em extra). */
+  photoUrl?: string | null;
   createdById: number | null;
   createdAt: string;
   updatedAt: string;
@@ -164,7 +166,16 @@ export async function listExtraLeads(
     .where(and(...conds))
     .orderBy(desc(extraLeads.createdAt))
     .limit(EXTRA_LEADS_LIST_LIMIT);
-  return rows as ExtraLeadRow[];
+  // D46: cartões com foto — a da ficha, para quem já é extra (os outros ficam com as iniciais).
+  const empIds = Array.from(new Set(rows.map((r) => r.employeeId).filter((x): x is number => x != null)));
+  const photos = new Map<number, string | null>();
+  if (empIds.length) {
+    try {
+      const { employees } = await import("../drizzle/schema");
+      for (const e of await db.select({ id: employees.id, photoUrl: employees.photoUrl }).from(employees).where(inArray(employees.id, empIds))) photos.set(e.id, e.photoUrl ?? null);
+    } catch { /* sem fotos: iniciais */ }
+  }
+  return rows.map((r) => ({ ...r, photoUrl: r.employeeId != null ? photos.get(r.employeeId) ?? null : null })) as ExtraLeadRow[];
 }
 
 

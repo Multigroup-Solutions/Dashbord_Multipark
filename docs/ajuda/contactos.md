@@ -2,9 +2,11 @@
 modulo: contactos
 titulo: Contactos (pesquisa, diretório e Google Contactos)
 rotas: /contactos, /perfil
-palavras: contactos, contacto, pesquisa, procurar, cliente, lead, parceiro, fornecedor, colaborador, diretório, directorio, telefone, telemóvel, quem liga, identificação de chamadas, google contactos, people, grupo multipark, serviço, sugestões, criar cliente, criar lead
+palavras: cartões, lista, ver em cartões, ver em lista, foto, contactos, contacto, pesquisa, procurar, cliente, lead, parceiro, fornecedor, colaborador, diretório, directorio, telefone, telemóvel, quem liga, identificação de chamadas, google contactos, people, grupo multipark, serviço, sugestões, criar cliente, criar lead
 ---
 # Contactos
+
+**Cartões ou Lista** (botão no topo da lista): vês as pessoas em **cartões com foto** ou numa **lista** compacta — no telemóvel e no PC. A escolha fica guardada neste aparelho, para esta página.
 
 Uma só pesquisa para clientes, contactos do CRM, leads de extras, parceiros, fornecedores, colaboradores, o diretório da empresa e os teus contactos Google.
 

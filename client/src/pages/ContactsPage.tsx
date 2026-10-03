@@ -31,6 +31,9 @@ import {
 import { CONTACT_KIND_LABELS, CREATE_FROM_GOOGLE_LABELS, type ContactKind } from "@shared/contacts";
 import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
 import { GoogleContactsCard } from "@/components/google/GoogleContactsCard";
+import { ViewToggle } from "@/components/ViewToggle";
+import { useViewPref } from "@/hooks/useViewPref";
+import type { ViewMode } from "@shared/viewPref";
 
 type Tab = "pesquisa" | "diretorio" | "google";
 const TABS: Tab[] = ["pesquisa", "diretorio", "google"];
@@ -84,6 +87,34 @@ function ContactRow({ it, onOpen }: { it: Item; onOpen: (it: Item) => void }) {
   );
 }
 
+/** D46: o mesmo contacto em cartão (foto grande). */
+function ContactCard({ it, onOpen }: { it: Item; onOpen: (it: Item) => void }) {
+  return (
+    <button type="button" onClick={() => onOpen(it)} className="flex items-center gap-3 rounded-xl border bg-card p-3 text-left hover:bg-muted/50 min-w-0">
+      <PersonAvatar name={it.name} photoUrl={it.photoUrl} size="h-12 w-12" />
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-sm truncate">{it.name}</span>
+        <Badge variant="outline" className={`text-[10.5px] mt-0.5 ${KIND_CLASS[it.kind]}`}>{CONTACT_KIND_LABELS[it.kind]}</Badge>
+        {it.subtitle && <span className="block text-xs text-muted-foreground truncate"><Building2 className="inline h-3 w-3 mr-0.5" />{it.subtitle}</span>}
+        {it.phone && <span className="block text-[11.5px] text-muted-foreground"><Phone className="inline h-3 w-3 mr-0.5" />{it.phone}</span>}
+        {it.email && <span className="block text-[11.5px] text-muted-foreground truncate"><Mail className="inline h-3 w-3 mr-0.5" />{it.email}</span>}
+      </span>
+    </button>
+  );
+}
+
+/** D46: cartões ou lista, com a mesma escolha em todo o lado. */
+function ContactItems({ items, view, onOpen }: { items: Item[]; view: ViewMode; onOpen: (it: Item) => void }) {
+  if (view === "cards") {
+    return (
+      <div className="grid gap-2 p-1 sm:grid-cols-2 xl:grid-cols-3">
+        {items.map((it) => <ContactCard key={it.ref} it={it} onOpen={onOpen} />)}
+      </div>
+    );
+  }
+  return <>{items.map((it) => <ContactRow key={it.ref} it={it} onOpen={onOpen} />)}</>;
+}
+
 /** Carrega a página seguinte quando o fim da lista fica visível. */
 function LoadMore({ hasMore, loading, onMore }: { hasMore: boolean; loading: boolean; onMore: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -118,6 +149,7 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
     { enabled: !all, getNextPageParam: (last) => last.groups[0]?.nextCursor ?? undefined, initialCursor: 0 },
   );
   const oneItems = useMemo(() => (oneQ.data?.pages ?? []).flatMap((p) => p.groups[0]?.items ?? []) as Item[], [oneQ.data]);
+  const [view, setView] = useViewPref("contacts", "list");
 
   return (
     <div className="space-y-3">
@@ -130,6 +162,7 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
         {kinds.map((k) => (
           <Button key={k} size="sm" variant={kind === k ? "selected" : "outline"} className="h-8" onClick={() => setKind(k)}>{CONTACT_KIND_LABELS[k]}</Button>
         ))}
+        <ViewToggle value={view} onChange={setView} className="ml-auto" />
       </div>
 
       {all && q.length < 2 && (
@@ -146,7 +179,7 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{CONTACT_KIND_LABELS[g.kind as ContactKind]}</span>
                   {g.hasMore && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setKind(g.kind as ContactKind)}>Ver todos</Button>}
                 </div>
-                {(g.items as Item[]).map((it) => <ContactRow key={it.ref} it={it} onOpen={onOpen} />)}
+                <ContactItems items={g.items as Item[]} view={view} onOpen={onOpen} />
               </CardContent>
             </Card>
           ))}
@@ -158,7 +191,7 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
             {oneQ.isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground m-2" />}
             {oneQ.error && <p className="text-sm text-red-700 p-2">{oneQ.error.message}</p>}
             {!oneQ.isLoading && !oneItems.length && !oneQ.error && <p className="text-sm text-muted-foreground p-2">Nenhum contacto encontrado.</p>}
-            {oneItems.map((it) => <ContactRow key={it.ref} it={it} onOpen={onOpen} />)}
+            <ContactItems items={oneItems} view={view} onOpen={onOpen} />
             <LoadMore hasMore={!!oneQ.hasNextPage} loading={oneQ.isFetchingNextPage} onMore={() => oneQ.fetchNextPage()} />
           </CardContent>
         </Card>
@@ -188,6 +221,7 @@ function DirectoryTab({ onOpen }: { onOpen: (it: Item) => void }) {
     onError: (e) => toast.error(e.message),
   });
   const items = useMemo(() => (listQ.data?.pages ?? []).flatMap((p) => p.groups[0]?.items ?? []) as Item[], [listQ.data]);
+  const [view, setView] = useViewPref("contacts-directory", "cards");
   const s = st.data;
   return (
     <div className="space-y-3">
@@ -205,8 +239,10 @@ function DirectoryTab({ onOpen }: { onOpen: (it: Item) => void }) {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Procurar no diretório (nome, cargo, departamento, email, telefone)…" className="pl-9 h-11" />
       </div>
+      <div className="flex justify-end"><ViewToggle value={view} onChange={setView} /></div>
       {listQ.isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
       {!listQ.isLoading && !items.length && <p className="text-sm text-muted-foreground">Sem pessoas no diretório{q ? " para esta pesquisa" : ""}.</p>}
+      {view === "cards" ? (
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {items.map((it) => (
           <button key={it.ref} type="button" onClick={() => onOpen(it)} className="flex items-center gap-3 rounded-xl border bg-card p-3 text-left hover:bg-muted/50 min-w-0">
@@ -220,6 +256,9 @@ function DirectoryTab({ onOpen }: { onOpen: (it: Item) => void }) {
           </button>
         ))}
       </div>
+      ) : (
+        <Card><CardContent className="p-2"><ContactItems items={items} view="list" onOpen={onOpen} /></CardContent></Card>
+      )}
       <LoadMore hasMore={!!listQ.hasNextPage} loading={listQ.isFetchingNextPage} onMore={() => listQ.fetchNextPage()} />
     </div>
   );

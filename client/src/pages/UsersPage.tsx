@@ -33,6 +33,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { directoryInfoFor, useDirectoryLookup } from "@/hooks/useDirectoryLookup";
+import { useViewPref } from "@/hooks/useViewPref";
+import { ViewToggle } from "@/components/ViewToggle";
 import {
   Users,
   Shield,
@@ -235,6 +237,8 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 
   // Filtros (lembrados) + página atual (não lembrada: volta sempre à 1ª).
   const [filters, setFilters] = useState<DirFilters>(loadDirFilters);
+  // D46: cartões ou lista (por omissão: cartões no telemóvel, lista no PC — como era).
+  const [view, setView] = useViewPref("users", "auto");
   // ?q= (pesquisa global) pré-preenche a pesquisa do diretório.
   const [searchInput, setSearchInput] = useState(() => new URLSearchParams(window.location.search).get("q")?.slice(0, 100) ?? filters.search);
   const [page, setPage] = useState(0);
@@ -761,6 +765,8 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
               {total > 0 ? `${from}–${to} de ${total}` : ""}
             </span>
             {searchQ.isFetching && !isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            {/* D46: cartões (com foto) ou lista, no telemóvel e no PC */}
+            <ViewToggle value={view} onChange={setView} className="ml-auto" />
           </CardTitle>
           {!hasFilters && (
             <p className="text-xs text-muted-foreground">
@@ -788,12 +794,13 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
             </div>
           ) : (
             <>
-              {/* Telemóvel: cartões */}
-              <div className="md:hidden divide-y">
+              {/* Cartões (D46: a escolha vale no telemóvel e no PC) */}
+              {view === "cards" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-px bg-border">
                 {rows.map((u) => (
-                  <div key={u.id} className={`p-3 space-y-2 ${!u.isActive ? "bg-muted/40" : ""}`}>
+                  <div key={u.id} className={`p-3 space-y-2 ${!u.isActive ? "bg-muted/40" : "bg-card"}`}>
                     <div className="flex items-start gap-3">
-                      <Avatar className="h-8 w-8 shrink-0">
+                      <Avatar className="h-12 w-12 shrink-0">
                         {avatarPhoto(u)}
                         <AvatarFallback className="text-xs font-semibold bg-primary/10 text-primary">
                           {u.name?.charAt(0).toUpperCase() ?? "?"}
@@ -822,9 +829,11 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                   </div>
                 ))}
               </div>
+              )}
 
-              {/* Desktop: tabela */}
-              <div className="hidden md:block overflow-x-auto">
+              {/* Lista (tabela) */}
+              {view === "list" && (
+              <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -876,6 +885,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                   </TableBody>
                 </Table>
               </div>
+              )}
 
               {/* Paginação */}
               <div className="flex items-center justify-between gap-2 flex-wrap border-t px-3 py-2">
