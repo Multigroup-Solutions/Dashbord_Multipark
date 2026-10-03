@@ -87,6 +87,9 @@ const HANDLERS: H[] = [
   [/^DELETE FROM (\w+) WHERE id IN \((.+)\)$/, (db, m, p) => { const set = new Set(p.map(Number)); db.tables.set(m[1], db.t(m[1]).filter((r) => !set.has(r.id))); return {}; }],
   [/^DELETE FROM (\w+) WHERE id = \? AND clientId = \?$/, (db, m, p) => { db.tables.set(m[1], db.t(m[1]).filter((r) => !(r.id === Number(p[0]) && r.clientId === Number(p[1])))); return {}; }],
   [/^DELETE FROM crm_client_relations WHERE id = \?$/, (db, _m, p) => { db.tables.set("crm_client_relations", db.t("crm_client_relations").filter((r) => r.id !== Number(p[0]))); return {}; }],
+  [/^DELETE FROM crm_blocked_identifiers WHERE clientId = \? AND kind = 'email' AND value = \?$/, (db, _m, p) => {
+    db.tables.set("crm_blocked_identifiers", db.t("crm_blocked_identifiers").filter((r) => !(r.clientId === Number(p[0]) && r.kind === "email" && r.value === p[1]))); return {};
+  }],
   [/^DELETE FROM crm_blocked_identifiers WHERE clientId = \? AND kind = \? AND value = \?$/, (db, _m, p) => {
     db.tables.set("crm_blocked_identifiers", db.t("crm_blocked_identifiers").filter((r) => !(r.clientId === Number(p[0]) && r.kind === p[1] && r.value === p[2]))); return {};
   }],
@@ -130,10 +133,81 @@ const HANDLERS: H[] = [
     }
     return {};
   }],
-  // ── sugestões e eventos ──
-  [/^UPDATE crm_merge_suggestions /, () => ({ affectedRows: 0 })],
-  [/^INSERT INTO crm_merge_events \(survivorId, mergedId, snapshotJson, reason, mergedBy, mergedAt\) VALUES \(\?, \?, \?, \?, \?, UTC_TIMESTAMP\(\)\)$/, (db, _m, p) => {
-    const r = db.insert("crm_merge_events", { survivorId: Number(p[0]), mergedId: Number(p[1]), snapshotJson: p[2], reason: p[3], mergedBy: p[4], undoneAt: null });
+  // ── sugestões (21c: recusas que acompanham as fichas, aceitar só pendentes) ──
+  [/^SELECT clientA, clientB, score, reasons, decidedBy, DATE_FORMAT\(decidedAt, '[^']+'\) AS decidedAt FROM crm_merge_suggestions WHERE status = 'dismissed' AND \(clientA = \? OR clientB = \?\)$/, (db, _m, p) =>
+    db.rows("crm_merge_suggestions", (r) => r.status === "dismissed" && (r.clientA === Number(p[0]) || r.clientB === Number(p[1]))).map((r) => ({ ...r }))],
+  [/^SELECT id, status FROM crm_merge_suggestions WHERE clientA = \? AND clientB = \? FOR UPDATE$/, (db, _m, p) =>
+    db.rows("crm_merge_suggestions", (r) => r.clientA === Number(p[0]) && r.clientB === Number(p[1])).map((r) => ({ id: r.id, status: r.status }))],
+  [/^SELECT clientA, clientB, status FROM crm_merge_suggestions WHERE id = \? FOR UPDATE$/, (db, _m, p) =>
+    db.rows("crm_merge_suggestions", (r) => r.id === Number(p[0])).map((r) => ({ ...r }))],
+  [/^SELECT s\.clientA, s\.clientB, s\.status, a\.status AS sa, b\.status AS sb FROM crm_merge_suggestions s LEFT JOIN crm_clients a ON a\.id = s\.clientA LEFT JOIN crm_clients b ON b\.id = s\.clientB WHERE s\.id = \? FOR UPDATE$/, (db, _m, p) =>
+    db.rows("crm_merge_suggestions", (r) => r.id === Number(p[0])).map((r) => ({
+      ...r, sa: db.rows("crm_clients", (c) => c.id === r.clientA)[0]?.status ?? null, sb: db.rows("crm_clients", (c) => c.id === r.clientB)[0]?.status ?? null,
+    }))],
+  [/^UPDATE crm_merge_suggestions SET status = 'dismissed', decidedBy = \?, decidedAt = (\?|UTC_TIMESTAMP\(\)) WHERE id = \?$/, (db, m, p) => {
+    const id = Number(m[1] === "?" ? p[2] : p[1]);
+    for (const r of db.rows("crm_merge_suggestions", (x) => x.id === id)) { r.status = "dismissed"; r.decidedBy = p[0]; r.decidedAt = m[1] === "?" ? p[1] : "agora"; }
+    return { affectedRows: 1 };
+  }],
+  [/^UPDATE crm_merge_suggestions SET status = \?, decidedBy = NULL, decidedAt = NULL WHERE id = \?$/, (db, _m, p) => {
+    for (const r of db.rows("crm_merge_suggestions", (x) => x.id === Number(p[1]))) { r.status = p[0]; r.decidedBy = null; r.decidedAt = null; }
+    return { affectedRows: 1 };
+  }],
+  [/^UPDATE crm_merge_suggestions SET status = \? WHERE id = \? AND status = 'dismissed'$/, (db, _m, p) => {
+    for (const r of db.rows("crm_merge_suggestions", (x) => x.id === Number(p[1]) && x.status === "dismissed")) r.status = p[0];
+    return {};
+  }],
+  [/^UPDATE crm_merge_suggestions SET status = 'accepted', decidedBy = \?, decidedAt = UTC_TIMESTAMP\(\) WHERE clientA = \? AND clientB = \?$/, (db, _m, p) => {
+    for (const r of db.rows("crm_merge_suggestions", (x) => x.clientA === Number(p[1]) && x.clientB === Number(p[2]))) { r.status = "accepted"; r.decidedBy = p[0]; }
+    return {};
+  }],
+  [/^UPDATE crm_merge_suggestions SET status = 'obsolete' WHERE status = 'pending' AND \(clientA = \? OR clientB = \?\)$/, (db, _m, p) => {
+    for (const r of db.rows("crm_merge_suggestions", (x) => x.status === "pending" && (x.clientA === Number(p[0]) || x.clientB === Number(p[1])))) r.status = "obsolete";
+    return {};
+  }],
+  [/^UPDATE crm_merge_suggestions s JOIN crm_clients a ON a\.id = s\.clientA JOIN crm_clients b ON b\.id = s\.clientB SET s\.status = 'pending' WHERE s\.status = 'obsolete' AND \(s\.clientA = \? OR s\.clientB = \?\) AND a\.status = 'active' AND b\.status = 'active'$/, (db, _m, p) => {
+    const active = (id: number) => db.rows("crm_clients", (c) => c.id === id)[0]?.status === "active";
+    for (const r of db.rows("crm_merge_suggestions", (x) => x.status === "obsolete" && (x.clientA === Number(p[0]) || x.clientB === Number(p[1])) && active(x.clientA) && active(x.clientB))) r.status = "pending";
+    return {};
+  }],
+  [/^INSERT INTO crm_merge_suggestions \(clientA, clientB, score, reasons, status, decidedBy, decidedAt\) VALUES \(\?, \?, \?, \?, 'dismissed', \?, \?\)$/, (db, _m, p) => {
+    const r = db.insert("crm_merge_suggestions", { clientA: Number(p[0]), clientB: Number(p[1]), score: Number(p[2]), reasons: p[3], status: "dismissed", decidedBy: p[4], decidedAt: p[5] });
+    return { insertId: r.id };
+  }],
+  [/^INSERT INTO crm_merge_suggestions \(clientA, clientB, score, reasons, status, decidedBy, decidedAt\) VALUES \(\?, \?, 0, '', 'dismissed', \?, UTC_TIMESTAMP\(\)\) ON DUPLICATE KEY UPDATE status = 'dismissed', decidedBy = VALUES\(decidedBy\), decidedAt = VALUES\(decidedAt\)$/, (db, _m, p) => {
+    const [cur] = db.rows("crm_merge_suggestions", (r) => r.clientA === Number(p[0]) && r.clientB === Number(p[1]));
+    if (cur) { cur.status = "dismissed"; cur.decidedBy = p[2]; cur.decidedAt = "agora"; return { insertId: cur.id }; }
+    const r = db.insert("crm_merge_suggestions", { clientA: Number(p[0]), clientB: Number(p[1]), score: 0, reasons: "", status: "dismissed", decidedBy: p[2], decidedAt: "agora" });
+    return { insertId: r.id };
+  }],
+  // ── junção automática (21c): sugestões pendentes, lados, contagens, parecer da IA ──
+  [/^SELECT s\.id, s\.clientA, s\.clientB, s\.aiAt FROM crm_merge_suggestions s JOIN crm_clients a ON a\.id = s\.clientA AND a\.status = 'active' JOIN crm_clients b ON b\.id = s\.clientB AND b\.status = 'active' WHERE s\.status = 'pending' ORDER BY s\.score DESC, s\.id LIMIT \?$/, (db, _m, p) => {
+    const active = (id: number) => db.rows("crm_clients", (c) => c.id === id)[0]?.status === "active";
+    return db.rows("crm_merge_suggestions", (r) => r.status === "pending" && active(r.clientA) && active(r.clientB))
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || a.id - b.id).slice(0, Number(p[0])).map((r) => ({ id: r.id, clientA: r.clientA, clientB: r.clientB, aiAt: r.aiAt ?? null }));
+  }],
+  [/^SELECT id, displayName, nif, kind, isPro, bookings FROM crm_clients WHERE id IN \((.+)\)$/, (db, _m, p) => db.rows("crm_clients", (r) => p.map(Number).includes(r.id)).map((r) => ({ ...r }))],
+  [/^SELECT clientId, (email|phone|plate) FROM (crm_client_\w+) WHERE (generic = 0 AND )?clientId IN \((.+)\)$/, (db, m, p) => db.rows(m[2], (r) => p.map(Number).includes(r.clientId) && (!m[3] || !r.generic)).map((r) => ({ clientId: r.clientId, [m[1]]: r[m[1]] }))],
+  [/^SELECT x\.(email|phone|plate) AS v, COUNT\(DISTINCT x\.clientId\) AS n FROM (crm_client_\w+) x JOIN crm_clients c ON c\.id = x\.clientId AND c\.status = 'active' WHERE x\.\1 IN \((.+)\) GROUP BY x\.\1$/, (db, m, p) => {
+    const active = (id: number) => db.rows("crm_clients", (c) => c.id === id)[0]?.status === "active";
+    return p.map((v) => ({ v, n: new Set(db.rows(m[2], (r) => r[m[1]] === v && active(r.clientId)).map((r) => r.clientId)).size }));
+  }],
+  [/^UPDATE crm_merge_suggestions SET aiVerdict = \?, aiConfidence = \?, aiReason = \?, aiAt = UTC_TIMESTAMP\(\) WHERE id = \? AND status = 'pending'$/, (db, _m, p) => {
+    for (const r of db.rows("crm_merge_suggestions", (x) => x.id === Number(p[3]) && x.status === "pending")) Object.assign(r, { aiVerdict: p[0], aiConfidence: p[1], aiReason: p[2], aiAt: "agora" });
+    return {};
+  }],
+  // ── email de balcão → o verdadeiro (21c) ──
+  [/^SELECT id, email FROM crm_client_emails WHERE clientId = \? AND generic = 1 FOR UPDATE$/, (db, _m, p) => db.rows("crm_client_emails", (r) => r.clientId === Number(p[0]) && !!r.generic).map((r) => ({ id: r.id, email: r.email }))],
+  [/^UPDATE crm_client_emails SET isPrimary = 0 WHERE clientId = \?$/, (db, _m, p) => { for (const r of db.rows("crm_client_emails", (x) => x.clientId === Number(p[0]))) r.isPrimary = 0; return {}; }],
+  [/^INSERT INTO crm_client_emails \(clientId, email, isPrimary, verified, source, firstSeenAt, lastSeenAt\) VALUES \(\?, \?, 1, 1, 'manual', UTC_TIMESTAMP\(\), UTC_TIMESTAMP\(\)\) ON DUPLICATE KEY UPDATE isPrimary = 1, generic = 0, verified = 1$/, (db, _m, p) => {
+    const [cur] = db.rows("crm_client_emails", (r) => r.clientId === Number(p[0]) && r.email === p[1]);
+    if (cur) Object.assign(cur, { isPrimary: 1, generic: 0, verified: 1 });
+    else db.insert("crm_client_emails", { clientId: Number(p[0]), email: p[1], isPrimary: 1, verified: 1, generic: 0, source: "manual" });
+    return {};
+  }],
+  // ── eventos ──
+  [/^INSERT INTO crm_merge_events \(survivorId, mergedId, snapshotJson, reason, mergedBy, mergedAt, source\) VALUES \(\?, \?, \?, \?, \?, UTC_TIMESTAMP\(\), \?\)$/, (db, _m, p) => {
+    const r = db.insert("crm_merge_events", { survivorId: Number(p[0]), mergedId: Number(p[1]), snapshotJson: p[2], reason: p[3], mergedBy: p[4], source: p[5], undoneAt: null });
     return { insertId: r.id };
   }],
   [/^SELECT \* FROM crm_merge_events WHERE id = \? FOR UPDATE$/, (db, _m, p) => db.rows("crm_merge_events", (r) => r.id === Number(p[0]))],

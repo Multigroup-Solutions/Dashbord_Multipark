@@ -99,6 +99,7 @@ da env.
 | `AI_REVIEW_AUTO_DRAFTS` | `review_auto_draft`: rascunho automático para cada crítica nova | lite |
 | `AI_WHATSAPP_TRIAGE` | `whatsapp_triage`: intenção e urgência das conversas | lite |
 | `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
+| `AI_CRM_IDENTITY` | `crm_identity`: "é a mesma pessoa?" nas sugestões duvidosas de Rever fichas (só o 1.º nome e factos; junta sozinha só com ≥ 85 %) | lite. **Desligado por omissão.** |
 | `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
 | `AI_OPS_BRIEFING` | `ops_briefing`: parágrafo do briefing diário por cidade | lite |
 | `AI_WEEKLY_REPORTS` | `weekly_report`: texto dos relatórios de segunda (direção, marketing, operações, RH) | lite |

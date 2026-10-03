@@ -1,12 +1,14 @@
 /**
  * CRM — ecrã "Rever fichas": sugestões para juntar (com as duas fichas lado a
- * lado), fusões recentes (para separar), emails estranhos e reservas próximas
- * de clientes sem email (pedir o email antes de o cliente se ir embora).
+ * lado, os avisos das regras e o parecer da IA), recusadas ("não é a mesma
+ * pessoa", com Desfazer), fusões recentes (para separar), emails estranhos e
+ * reservas próximas de clientes sem email (pedir o email antes de o cliente
+ * se ir embora).
  */
 import { sql, type SQL } from "drizzle-orm";
 import { scopedCityNamesLive } from "../cityScope";
 import { cityAliases } from "../../shared/crmGeo";
-import { REASON_LABELS, type SuggestionReason } from "../../shared/crmIdentity";
+import { isHouseEmail, isPersonalEmail, REASON_LABELS, SIGNAL_LABELS, type IdentitySignal, type SuggestionReason } from "../../shared/crmIdentity";
 import { clientVisibleSql } from "./scope";
 
 const rowsOf = (res: unknown): any[] => {
@@ -24,8 +26,9 @@ export async function reviewCounts(db: any) {
   const [row] = rowsOf(await db.execute(sql`SELECT
     (SELECT COUNT(*) FROM crm_merge_suggestions s WHERE s.status = 'pending' AND ${clientInScope("s.clientA")} AND ${clientInScope("s.clientB")}) AS suggestions,
     (SELECT COUNT(*) FROM crm_clients c WHERE c.status = 'active' AND c.genericEmailOnly = 1 AND ${clientInScope("c.id")}) AS generic`));
-  // clientes sem email com reserva nos próximos 3 dias — reservas lidas ao vivo da Multipark
-  const noEmail = await upcomingWithoutEmail(db, { days: 3 }).then((r) => new Set(r.map((x) => x.id)).size).catch(() => 0);
+  // clientes sem email com reserva nos próximos 3 dias — reservas lidas ao vivo da Multipark.
+  // 21c: a leitura falhou → null (a página mostra "—"), não 0 ("não há nenhum").
+  const noEmail = await upcomingWithoutEmail(db, { days: 3 }).then((r) => new Set(r.map((x) => x.id)).size).catch(() => null);
   return { suggestions: Number(row?.suggestions ?? 0), generic: Number(row?.generic ?? 0), noEmail };
 }
 
@@ -44,36 +47,102 @@ async function sidesFor(db: any, ids: number[]) {
   return out;
 }
 
+/** Offset dentro da lista (a última página que ficou vazia — porque se juntou/recusou — volta à anterior). PURO. */
+export function clampOffset(offset: number, total: number, limit: number): number {
+  if (total <= 0) return 0;
+  if (offset < total) return offset;
+  return Math.max(0, Math.floor((total - 1) / limit) * limit);
+}
+
+const parseSignals = (raw: unknown) => String(raw ?? "").split(",").filter(Boolean)
+  .map((x) => ({ id: x as IdentitySignal, label: SIGNAL_LABELS[x as IdentitySignal] ?? x }));
+const AI_LABELS: Record<string, string> = { same: "a mesma pessoa", diff: "pessoas diferentes", unsure: "não sabe" };
+
 export async function listSuggestions(db: any, o: { offset?: number; limit?: number; minScore?: number }) {
   const limit = Math.max(1, Math.min(50, o.limit ?? 10));
-  const offset = Math.max(0, o.offset ?? 0);
   const min = Math.max(0, o.minScore ?? 0);
   // as DUAS fichas visíveis (a comparação mostra emails, telefones e matrículas de ambas)
   const where = sql`s.status = 'pending' AND s.score >= ${min} AND ${clientInScope("s.clientA")} AND ${clientInScope("s.clientB")}`;
   const [cnt] = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM crm_merge_suggestions s WHERE ${where}`));
-  const rows = rowsOf(await db.execute(sql`SELECT s.id, s.clientA, s.clientB, s.score, s.reasons FROM crm_merge_suggestions s
+  const total = Number(cnt?.n ?? 0);
+  const offset = clampOffset(Math.max(0, o.offset ?? 0), total, limit);
+  const rows = rowsOf(await db.execute(sql`SELECT s.id, s.clientA, s.clientB, s.score, s.reasons, s.verdict, s.signals, s.aiVerdict, s.aiConfidence, s.aiReason
+    FROM crm_merge_suggestions s
     WHERE ${where} ORDER BY s.score DESC, s.id LIMIT ${sql.raw(String(limit))} OFFSET ${sql.raw(String(offset))}`));
   const sides = await sidesFor(db, [...new Set(rows.flatMap((r) => [Number(r.clientA), Number(r.clientB)]))]);
   return {
-    total: Number(cnt?.n ?? 0),
+    total,
+    offset,
     rows: rows.map((r) => {
       const a = sides.get(Number(r.clientA)), b = sides.get(Number(r.clientB));
       // fica a ficha com mais reservas (o utilizador pode trocar)
       const [keep, absorb] = (a?.bookings ?? 0) >= (b?.bookings ?? 0) ? [a, b] : [b, a];
       const reasons = String(r.reasons).split(",").filter(Boolean) as SuggestionReason[];
-      return { id: Number(r.id), score: Number(r.score), reasons: reasons.map((x) => ({ id: x, label: REASON_LABELS[x] ?? x })), keep, absorb };
+      return {
+        id: Number(r.id), score: Number(r.score), reasons: reasons.map((x) => ({ id: x, label: REASON_LABELS[x] ?? x })), keep, absorb,
+        verdict: (r.verdict ?? null) as "same" | "doubt" | "block" | null,
+        signals: parseSignals(r.signals),
+        ai: r.aiVerdict ? { verdict: String(r.aiVerdict) as "same" | "diff" | "unsure", label: AI_LABELS[String(r.aiVerdict)] ?? String(r.aiVerdict), confidence: r.aiConfidence == null ? null : Number(r.aiConfidence), reason: r.aiReason ?? null } : null,
+      };
     }),
   };
 }
 
-export async function recentMerges(db: any, o: { limit?: number }) {
-  const rows = rowsOf(await db.execute(sql`SELECT e.id, e.survivorId, e.mergedId, ${DT("e.mergedAt")} AS mergedAt, e.reason, u.name AS byName,
+/** Recusadas ("não é a mesma pessoa"), as mais recentes primeiro — com Desfazer (21c). */
+export async function listDismissed(db: any, o: { offset?: number; limit?: number }) {
+  const limit = Math.max(1, Math.min(50, o.limit ?? 10));
+  const where = sql`s.status = 'dismissed' AND ${clientInScope("s.clientA")} AND ${clientInScope("s.clientB")}`;
+  const [cnt] = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM crm_merge_suggestions s WHERE ${where}`));
+  const total = Number(cnt?.n ?? 0);
+  const offset = clampOffset(Math.max(0, o.offset ?? 0), total, limit);
+  const rows = rowsOf(await db.execute(sql`SELECT s.id, s.clientA, s.clientB, s.reasons, s.signals, ${DT("s.decidedAt")} AS decidedAt, u.name AS byName,
+      a.displayName AS nameA, a.status AS statusA, b.displayName AS nameB, b.status AS statusB
+    FROM crm_merge_suggestions s LEFT JOIN users u ON u.id = s.decidedBy
+    LEFT JOIN crm_clients a ON a.id = s.clientA LEFT JOIN crm_clients b ON b.id = s.clientB
+    WHERE ${where} ORDER BY s.decidedAt IS NULL, s.decidedAt DESC, s.id DESC LIMIT ${sql.raw(String(limit))} OFFSET ${sql.raw(String(offset))}`));
+  return {
+    total,
+    offset,
+    rows: rows.map((r) => ({
+      id: Number(r.id),
+      a: { id: Number(r.clientA), name: r.nameA ?? null, active: r.statusA === "active" },
+      b: { id: Number(r.clientB), name: r.nameB ?? null, active: r.statusB === "active" },
+      reasons: (String(r.reasons ?? "").split(",").filter(Boolean) as SuggestionReason[]).map((x) => REASON_LABELS[x] ?? x),
+      signals: parseSignals(r.signals),
+      decidedAt: r.decidedAt ?? null,
+      byName: r.byName ?? null,
+    })),
+  };
+}
+
+export type MergeSourceFilter = "all" | "ui" | "auto" | "ai";
+
+/** Origem de uma fusão (as antigas, sem `source`, pelo motivo "automático: …"). */
+const SOURCE_SQL = sql.raw(`COALESCE(e.source, IF(e.reason LIKE 'automático%', 'auto', 'ui'))`);
+
+/** Juntas recentemente (21c): paginado e por origem — uma pessoa, as regras ou a IA. */
+export async function recentMerges(db: any, o: { limit?: number; offset?: number; source?: MergeSourceFilter }) {
+  const limit = Math.max(1, Math.min(100, o.limit ?? 30));
+  const src = o.source && o.source !== "all" ? sql` AND ${SOURCE_SQL} = ${o.source}` : sql``;
+  const where = sql`e.undoneAt IS NULL AND ${clientInScope("e.survivorId")}${src}`;
+  const [cnt] = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM crm_merge_events e WHERE ${where}`));
+  const total = Number(cnt?.n ?? 0);
+  const offset = clampOffset(Math.max(0, o.offset ?? 0), total, limit);
+  const rows = rowsOf(await db.execute(sql`SELECT e.id, e.survivorId, e.mergedId, ${DT("e.mergedAt")} AS mergedAt, e.reason, ${SOURCE_SQL} AS source, e.mergedBy, u.name AS byName,
       s.displayName AS survivorName, m.displayName AS mergedName
     FROM crm_merge_events e LEFT JOIN users u ON u.id = e.mergedBy
     LEFT JOIN crm_clients s ON s.id = e.survivorId LEFT JOIN crm_clients m ON m.id = e.mergedId
-    WHERE e.undoneAt IS NULL AND ${clientInScope("e.survivorId")}
-    ORDER BY e.mergedAt DESC LIMIT ${sql.raw(String(Math.max(1, Math.min(100, o.limit ?? 30))))}`));
-  return rows.map((r) => ({ id: Number(r.id), survivorId: Number(r.survivorId), mergedId: Number(r.mergedId), survivorName: r.survivorName ?? null, mergedName: r.mergedName ?? null, mergedAt: r.mergedAt, reason: r.reason ?? null, byName: r.byName ?? null }));
+    WHERE ${where}
+    ORDER BY e.mergedAt DESC, e.id DESC LIMIT ${sql.raw(String(limit))} OFFSET ${sql.raw(String(offset))}`));
+  return {
+    total,
+    offset,
+    rows: rows.map((r) => ({
+      id: Number(r.id), survivorId: Number(r.survivorId), mergedId: Number(r.mergedId), survivorName: r.survivorName ?? null, mergedName: r.mergedName ?? null,
+      mergedAt: r.mergedAt, reason: r.reason ?? null, source: String(r.source ?? "ui") as "ui" | "auto" | "ai",
+      byName: Number(r.mergedBy ?? 0) > 0 ? r.byName ?? null : null,
+    })),
+  };
 }
 
 /** Fichas cujo único email é de balcão/agregador (email estranho). */
@@ -115,9 +184,13 @@ export async function findEmailInMailbox(db: any, clientId: number, visible: SQL
     const rows = rowsOf(await db.execute(sql`SELECT LOWER(TRIM(m.fromEmail)) AS email, MAX(m.fromName) AS fromName, COUNT(*) AS n,
         DATE_FORMAT(MAX(m.sentAt), '%Y-%m-%d %H:%i:%s') AS lastAt, MAX(m.subject) AS subject
       FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId
-      WHERE (${sql.join(terms, sql` OR `)}) AND m.fromEmail IS NOT NULL AND m.archivedAt IS NULL AND ${visible}
-      GROUP BY LOWER(TRIM(m.fromEmail)) ORDER BY n DESC LIMIT 5`));
-    return rows.filter((r) => r.email && !generic.has(String(r.email))).map((r) => ({ email: String(r.email), fromName: r.fromName ?? null, messages: Number(r.n), lastAt: r.lastAt ?? null, subject: r.subject ?? null }));
+      WHERE (${sql.join(terms, sql` OR `)}) AND m.direction = 'in' AND m.fromEmail IS NOT NULL AND m.archivedAt IS NULL AND ${visible}
+      GROUP BY LOWER(TRIM(m.fromEmail)) ORDER BY n DESC LIMIT 15`));
+    // 21c: só mensagens RECEBIDAS e de emails de pessoas (não as nossas respostas, nem info@/reservas@ de agências)
+    return rows
+      .filter((r) => r.email && !generic.has(String(r.email)) && !isHouseEmail(String(r.email)) && isPersonalEmail(String(r.email)))
+      .slice(0, 5)
+      .map((r) => ({ email: String(r.email), fromName: r.fromName ?? null, messages: Number(r.n), lastAt: r.lastAt ?? null, subject: r.subject ?? null }));
   } catch {
     return [];
   }

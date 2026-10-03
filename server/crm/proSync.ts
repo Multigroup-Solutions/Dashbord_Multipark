@@ -16,7 +16,7 @@
 import { sql } from "drizzle-orm";
 import { readMultiparkPro, type ProAccountOut, type ProDiagnostics, type ProLedgerOut } from "../multiparkDb/pro";
 import { multiparkProUrl } from "../../shared/crmPro";
-import { emailKey, namesMatch, nifKey, phoneKey } from "../../shared/crmIdentity";
+import { emailKey, looksLikeCompany, namesMatch, nifKey, phoneKey } from "../../shared/crmIdentity";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -27,11 +27,8 @@ const chunks = <T,>(a: T[], n: number) => Array.from({ length: Math.ceil(a.lengt
 const utcNow = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 const insertId = (res: any) => Number((Array.isArray(res) ? res[0] : res)?.insertId ?? 0);
 
-/** Nome de empresa? (para criar a ficha como empresa ou pessoa). PURA. */
-export function looksLikeCompany(name: string | null | undefined, taxName?: string | null): boolean {
-  const s = `${name ?? ""} ${taxName ?? ""}`;
-  return /\b(lda|l\.da|s\.\s?a\.?|sa|unipessoal|sociedade|ltd|limited|gmbh|sarl|s\.?l\.?|inc|corp|grupo|group|hotel|rent|car)\b/i.test(s);
-}
+/** Nome de empresa? (para criar a ficha como empresa ou pessoa). PURA — vive em shared/crmIdentity.ts (21c). */
+export { looksLikeCompany };
 
 export interface ProSyncResult {
   ok: boolean;

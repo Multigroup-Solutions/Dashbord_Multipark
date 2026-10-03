@@ -211,7 +211,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
         <Banner tone="amber">
           <MailX className="h-4 w-4 shrink-0 text-amber-700" />
           <span className="flex-1"><strong>Email estranho:</strong> o email desta ficha é de balcão ou de agregador, não do cliente. Procure o verdadeiro na nossa caixa ou peça-o ao cliente.</span>
-          <FindEmailButton clientId={c.id} onUsed={reload} genericIds={c.emails.filter((e) => e.generic).map((e) => e.id)} canEdit={c.canEdit} />
+          <FindEmailButton clientId={c.id} onUsed={reload} hasGeneric={c.emails.some((e) => e.generic)} canEdit={c.canEdit} />
         </Banner>
       )}
       {c.alerts.noEmail && !c.alerts.genericEmailOnly && (

@@ -80,6 +80,18 @@ function toBookingRow(r: import("../multiparkDb/crmLive").CrmBatchRow): BookingR
   };
 }
 
+const namesOf = (c: any): string[] =>
+  [...new Set([c.displayName, [c.firstName, c.lastName].filter(Boolean).join(" ")].filter((n) => n && String(n).trim()) as string[])];
+
+/** Nomes das fichas (pessoas) das reservas já ligadas — a reserva cujo nome é de outra pessoa não leva lá os contactos (21c). */
+async function loadKeptNames(db: any, ids: number[]): Promise<Map<number, string[]>> {
+  const out = new Map<number, string[]>();
+  for (const part of chunks([...new Set(ids)], 800)) {
+    for (const c of rowsOf(await db.execute(sql`SELECT id, displayName, firstName, lastName FROM crm_clients WHERE kind <> 'company' AND id IN (${inList(part)})`))) out.set(Number(c.id), namesOf(c));
+  }
+  return out;
+}
+
 /** Fichas ativas que partilham email, telefone ou matrícula com o lote. */
 async function loadCandidates(db: any, emails: string[], phones: string[], plates: string[]): Promise<ExistingClient[]> {
   const ids = new Set<number>();
@@ -92,9 +104,8 @@ async function loadCandidates(db: any, emails: string[], phones: string[], plate
   for (const part of chunks(list, 800)) {
     // empresas nunca são "quem viajou": funcionários que reservam com o email e o
     // telefone da empresa (conta Pro) ficam com ficha própria, não na da empresa
-    for (const c of rowsOf(await db.execute(sql`SELECT id, displayName, firstName, lastName, DATE_FORMAT(lastSeenAt, '%Y-%m-%d %H:%i:%s') AS lastSeenAt FROM crm_clients WHERE status = 'active' AND kind <> 'company' AND id IN (${inList(part)})`))) {
-      const names = [c.displayName, [c.firstName, c.lastName].filter(Boolean).join(" ")].filter((n) => n && String(n).trim()) as string[];
-      out.set(Number(c.id), { id: Number(c.id), displayName: c.displayName ?? null, names: [...new Set(names)], emails: [], phones: [], plates: [], lastSeen: c.lastSeenAt ?? null });
+    for (const c of rowsOf(await db.execute(sql`SELECT id, displayName, firstName, lastName, nif, isPro, DATE_FORMAT(lastSeenAt, '%Y-%m-%d %H:%i:%s') AS lastSeenAt FROM crm_clients WHERE status = 'active' AND kind <> 'company' AND id IN (${inList(part)})`))) {
+      out.set(Number(c.id), { id: Number(c.id), displayName: c.displayName ?? null, names: namesOf(c), emails: [], phones: [], plates: [], lastSeen: c.lastSeenAt ?? null, isPro: Number(c.isPro ?? 0) === 1, nif: c.nif ?? null });
     }
     for (const e of rowsOf(await db.execute(sql`SELECT clientId, email FROM crm_client_emails WHERE generic = 0 AND clientId IN (${inList(part)})`))) out.get(Number(e.clientId))?.emails.push(String(e.email));
     for (const p of rowsOf(await db.execute(sql`SELECT clientId, phone FROM crm_client_phones WHERE clientId IN (${inList(part)})`))) out.get(Number(p.clientId))?.phones.push(String(p.phone));
@@ -339,7 +350,9 @@ async function applyCrmRows(db: any, raw: import("../multiparkDb/crmLive").CrmBa
   const phones = [...new Set(rows.map((r) => phoneKey(r.phone)).filter(Boolean))];
   const plates = [...new Set(rows.map((r) => plateKey(r.plate)).filter(Boolean))];
   const candidates = await loadCandidates(db, emails, phones, plates);
-  const plan = planBatch(rows, generic, linkRows, candidates);
+  const loaded = new Set(candidates.map((c) => c.id));
+  const keptNames = await loadKeptNames(db, [...linkRows.values()].filter((id) => !loaded.has(id)));
+  const plan = planBatch(rows, generic, linkRows, candidates, keptNames);
 
   // 1) fichas novas (syncKey = 1.ª reserva) → ids reais
   const idOf = new Map<number, number>();

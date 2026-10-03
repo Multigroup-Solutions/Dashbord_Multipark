@@ -2,7 +2,7 @@
 modulo: clientes
 titulo: Clientes (CRM: fichas, filtros, juntar e separar)
 rotas: /clientes, /clientes/rever
-palavras: telefonar ao cliente, escrever email ao cliente, consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
+palavras: mesma pessoa, recusadas, não é a mesma pessoa, ia nas dúvidas, telefonar ao cliente, escrever email ao cliente, consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
 ---
 # Clientes (CRM)
 
@@ -14,10 +14,16 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - **Contactos**: email, WhatsApp e SMS vêm **ligados por defeito** para quem tem reservas (está nos termos e condições e é preciso para a recolha, a entrega e a fatura). Podem ser desligados na ficha; o que se muda à mão (também "Por saber") não volta a mudar sozinho.
 - O **nome** e o **NIF** mudados à mão também ficam: a carga das reservas já não volta a pôr um NIF que se limpou (por ser de outra pessoa).
 
+**Quando duas fichas são a mesma pessoa** (regras do dono)
+- **O mesmo nome**: o 1.º e o último nome iguais, sem contar acentos, maiúsculas, pontos, traços, "_", asteriscos, apóstrofos ou números ("António Gonçalves", "antonio_goncalves", "Antonio Gonçalves1"). Os nomes do meio não contam; um nome de uma palavra só ou só com a inicial ("A. Gonçalves") **não** é o mesmo nome.
+- **O mesmo nome + um dado igual** (email, telefone ou matrícula, ou o mesmo NIF) → é a mesma pessoa.
+- **Nome diferente** → só com o **mesmo email e o mesmo telefone** (quem atende e lê o email é a mesma pessoa). Só um dos dois fica como sugestão.
+- **Nunca sozinho**: empresas, clientes Pro, emails genéricos de empresa (info@, admin@, geral@, reservas@…), um email, telefone ou matrícula que já está em **mais de 2 fichas** (família, empresa, balcão), e **NIF pessoais diferentes** (um NIF de empresa, da faturação, não impede).
+- Só o email, ou só o nome, **nunca** chega.
+
 **Como uma reserva se liga a uma ficha**
-- Liga-se sozinha só com **email + telefone**, **email + nome** ou **email + matrícula**. Só o email, ou só o nome, **nunca** chega.
-- Sem email (ou com email de balcão/agregador), liga por **telefone + nome** ou **telefone + matrícula**.
-- Tudo o resto fica como **sugestão para juntar**, para uma pessoa decidir.
+- Com as regras de cima: a reserva liga-se sozinha à ficha com o mesmo nome e um dado igual, ou com o mesmo email **e** telefone. Tudo o resto cria uma ficha nova e, se parecer a mesma pessoa, aparece em **Rever fichas**.
+- Uma reserva que já estava ligada a uma ficha e passou a ter o **nome de outra pessoa** fica onde está, mas os contactos e o carro dessa pessoa não vão para a ficha.
 
 **Lista** (menu **Suporte → Clientes**)
 1. Na barra de pesquisa escreve e escolhe **onde procurar** (nome, email, telefone, matrícula, NIF, n.º de cliente, n.º de reserva, cor ou modelo do carro, notas). Cada opção mostra quantos clientes encontra. Em **Qualquer campo**, um número também procura o **n.º de reserva**.
@@ -68,12 +74,14 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - Os parques que não são nossos, em que levamos clientes pelo marketplace e ficamos com uma comissão: dono, contactos, reservas e a nossa comissão, mês a mês.
 
 **Rever fichas** (botão **Rever fichas** na lista)
-- **Junção automática**: todas as madrugadas, depois das sugestões das 05:15 (se não acabar, continua), o CRM junta sozinho as fichas com o **mesmo nome e o mesmo telefone, email ou NIF** (empresas nunca; a matrícula sozinha não chega). Fica a ficha com mais reservas. Cada junção aparece em **Juntas recentemente** e pode ser separada. O botão **Juntar agora os óbvios** (administração) corre-a já. Interruptor em Definições → Automações ("CRM: juntar sozinho as fichas óbvias").
-- **Sugestões para juntar**: as duas fichas lado a lado, com o que coincide (telefone, matrícula, NIF, email). **Juntar** (backoffice e administração), **Trocar qual fica** ou **Descartar** (não é a mesma pessoa).
-- **Sem email próprio** (antes "Emails estranhos"; não é preciso fazer nada): fichas cujo email é de balcão, de agregador ou da casa (os domínios das nossas marcas — Multipark, Multivalet, Multibags, Multidriver, Airpark, Redpark, Skypark e Multigroup — nunca contam como cliente). **Procurar na nossa caixa** propõe o email verdadeiro: o super admin procura em todas as caixas de email; os outros só nas caixas que já veem na Comunicação e no próprio email. Sem resultado, **Retirar o email** e a ficha fica com telefone e carro.
+- **Junção automática**: todas as madrugadas, depois das sugestões das 05:15 (se não acabar, continua), o CRM junta sozinho os pares que as **regras do dono** resolvem (ver "Quando duas fichas são a mesma pessoa"). Fica a ficha com mais reservas. Cada junção aparece em **Juntas recentemente** (por **regras**) e no registo das duas fichas, e pode ser separada. O botão **Juntar agora** (só o super admin, e só com o interruptor ligado) corre-a já. Interruptor em Definições → Automações ("CRM: juntar sozinho as fichas óbvias").
+- **IA nas dúvidas** (interruptor "IA: fichas de clientes duvidosas", **desligado por omissão**): os pares que as regras não resolvem (nome diferente, nome de uma palavra…) vão à IA, que dá um parecer — **a mesma pessoa**, **pessoas diferentes** ou **não sabe** — com a certeza e o porquê. Só junta sozinha com **85 % ou mais** (aparece em **Juntas recentemente** como **IA**); o resto fica nas sugestões com o parecer à vista. A IA recebe só o 1.º nome e comparações ("telefone igual", "NIF diferente"), nunca emails, telefones, matrículas ou NIF. Empresas, Pro e NIF diferentes nunca vão à IA.
+- **Sugestões para juntar**: as duas fichas lado a lado, com o que coincide (telefone, matrícula, NIF, email), os **avisos** (vermelho = nunca se junta sozinho: empresa, cliente Pro, NIF diferente; amarelo = não conta: email genérico, telefone/email/matrícula em várias fichas, nome de uma palavra, nome diferente) e o **parecer da IA**. **Juntar** (backoffice e administração), **Trocar qual fica** ou **Não é a mesma pessoa** (quem edita clientes; pede confirmação). Se outra pessoa já juntou ou recusou o par, aparece o aviso e nada muda.
+- **Recusadas**: os pares marcados "não é a mesma pessoa" (e os que se separaram), com quem e quando. A recusa **acompanha as fichas**: se uma delas for junta a outra, o par continua recusado. **Desfazer** põe o par outra vez nas sugestões.
+- **Sem email próprio** (antes "Emails estranhos"; não é preciso fazer nada): fichas cujo email é de balcão, de agregador ou da casa (os domínios das nossas marcas — Multipark, Multivalet, Multibags, Multidriver, Airpark, Redpark, Skypark e Multigroup — nunca contam como cliente). **Procurar na nossa caixa** propõe o email verdadeiro, só de mensagens **recebidas** e de emails de pessoas (não as nossas respostas nem info@/reservas@ de agências): o super admin procura em todas as caixas de email; os outros só nas caixas que já veem na Comunicação e no próprio email. **Usar este email** troca tudo de uma vez (o de balcão vai para **Retirados**). Sem resultado, **Retirar o email** e a ficha fica com telefone e carro.
 - Quando se **separa** uma junção, as outras sugestões dessa ficha voltam a aparecer.
-- **Reservas sem email**: clientes sem email que chegam nos próximos 3 dias — pedir o email à chegada e acrescentá-lo na ficha.
-- **Juntas recentemente**: **Separar** (pede confirmação) repõe as duas fichas como estavam: emails, telefones, carros, reservas, retirados, a **conta Pro**, o "é Pro", as notas e as etiquetas. O que entrou depois da junção fica na ficha que ficou; o que alguém mudou depois (ex.: notas reescritas) não é desfeito.
+- **Reservas sem email**: clientes sem email que chegam nos próximos 3 dias — pedir o email à chegada e acrescentá-lo na ficha. Se a Multipark não responder, o contador mostra "—" (não zero).
+- **Juntas recentemente**: filtra por quem juntou (**à mão**, **pelas regras**, **pela IA**), com páginas. **Separar** (pede confirmação) repõe as duas fichas como estavam: emails, telefones, carros, reservas, retirados, a **conta Pro**, o "é Pro", as notas e as etiquetas. O que entrou depois da junção fica na ficha que ficou; o que alguém mudou depois (ex.: notas reescritas) não é desfeito. O par separado fica em **Recusadas** (não se volta a juntar sozinho).
 - Ao **juntar**, as notas e as etiquetas das duas ficam (as da absorvida com "— Da ficha N.º …"), e o que se tinha retirado à mão da ficha que fica não volta por causa da junção.
 
 Tudo o que se faz nas fichas fica no **registo de ações**.

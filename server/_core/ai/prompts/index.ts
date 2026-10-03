@@ -11,3 +11,4 @@ export * from "./comms";
 export * from "./assistant";
 export * from "./ops";
 export * from "./mail";
+export * from "./crmIdentity";
