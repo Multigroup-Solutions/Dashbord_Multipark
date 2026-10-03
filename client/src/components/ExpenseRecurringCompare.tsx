@@ -112,9 +112,9 @@ export function CompareExpensesDialog({ open, onClose, categories, projectId }: 
       <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>Comparar períodos</DialogTitle></DialogHeader>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant={!custom && mode === "month_to_date" && offset === 1 ? "default" : "outline"} onClick={() => choose("month_to_date", 1)}>Mês até hoje vs. mesmos dias do anterior</Button>
-          <Button size="sm" variant={!custom && mode === "full_months" && offset === 1 ? "default" : "outline"} onClick={() => choose("full_months", 1)}>Meses completos</Button>
-          <Button size="sm" variant={!custom && offset === 12 ? "default" : "outline"} onClick={() => choose(mode, 12)}>Homólogo (ano anterior)</Button>
+          <Button size="sm" variant={!custom && mode === "month_to_date" && offset === 1 ? "selected" : "outline"} onClick={() => choose("month_to_date", 1)}>Mês até hoje vs. mesmos dias do anterior</Button>
+          <Button size="sm" variant={!custom && mode === "full_months" && offset === 1 ? "selected" : "outline"} onClick={() => choose("full_months", 1)}>Meses completos</Button>
+          <Button size="sm" variant={!custom && offset === 12 ? "selected" : "outline"} onClick={() => choose(mode, 12)}>Homólogo (ano anterior)</Button>
         </div>
         {!custom && mode === "month_to_date" && (
           <p className="text-xs text-muted-foreground -mt-1">A comparar {label(a)} com {label(b)} — os mesmos dias, para a comparação ser justa.</p>

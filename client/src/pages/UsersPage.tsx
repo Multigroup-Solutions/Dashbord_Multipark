@@ -645,7 +645,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                 <Button
                   key={key}
                   size="sm"
-                  variant={filters.city === key ? "default" : "outline"}
+                  variant={filters.city === key ? "selected" : "outline"}
                   className="h-7 text-xs"
                   onClick={() => patchFilters({ city: filters.city === key ? "all" : key })}
                   aria-pressed={filters.city === key}
@@ -1154,7 +1154,7 @@ function UserPermissionsDialog({ user, onClose }: { user: { id: number; name: st
                       <Button
                         key={m}
                         size="sm"
-                        variant={mode === m ? (m === "grant" ? "default" : m === "deny" ? "destructive" : "secondary") : "outline"}
+                        variant={mode === m ? (m === "deny" ? "destructive" : "selected") : "outline"}
                         className="h-7 text-xs px-2"
                         disabled={setMut.isPending || !canTouchPermission(me?.role, p.id)}
                         title={canTouchPermission(me?.role, p.id) ? undefined : "Não podes dar nem retirar esta permissão."}

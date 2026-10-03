@@ -147,7 +147,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
           {([
             ["today", "Hoje"], ["yesterday", "Ontem"], ["last7", "Últimos 7d"], ["last30", "Últimos 30d"], ["month", "Este mês"], ["custom", "Intervalo"],
           ] as const).map(([k, label]) => (
-            <Button key={k} size="sm" variant={preset === k ? "default" : "outline"} onClick={() => setPreset(k)}>{label}</Button>
+            <Button key={k} size="sm" variant={preset === k ? "selected" : "outline"} onClick={() => setPreset(k)}>{label}</Button>
           ))}
           {preset === "custom" ? (
             <>
@@ -717,7 +717,7 @@ function SpeedHistoryCard({ target, onTarget, people, threshold, own }: {
             />
           )}
           {[30, 90].map((n) => (
-            <Button key={n} size="sm" variant={days === n ? "default" : "outline"} onClick={() => setDays(n)}>{n} dias</Button>
+            <Button key={n} size="sm" variant={days === n ? "selected" : "outline"} onClick={() => setDays(n)}>{n} dias</Button>
           ))}
           {rows.length > 0 && (
             <Button size="sm" variant="outline" onClick={() => downloadCsv(`velocidade_${(data?.name ?? "pessoa").replace(/\s+/g, "_")}_${days}d.csv`, [

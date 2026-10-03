@@ -55,10 +55,9 @@ describe("Pesquisas e filtros: fundo branco e borda azul", () => {
     expect(css).toMatch(/:root:not\(\.dark\) :has\(> svg\.lucide-search\) > input\[data-slot="input"\]/);
     expect(css).toMatch(/:root:not\(\.dark\) \.mp-filter \{\s*background-color: #ffffff;\s*border-color: var\(--primary\);/);
   });
-  it("botões de contorno brancos com borda azul; os principais continuam azuis cheios", () => {
+  it("botões de contorno brancos com borda azul (24g: todos os botões brancos; azul só o escolhido — ver ui24g.test)", () => {
     const b = src("client/src/components/ui/button.tsx");
     expect(b).toMatch(/outline:\s*"border border-primary bg-white shadow-xs hover:bg-accent dark:bg-transparent dark:border-input dark:hover:bg-input\/50"/);
-    expect(b).toMatch(/default: "bg-primary text-primary-foreground hover:bg-primary\/90"/);
   });
   it("o campo base (formulários) não mudou", () => {
     expect(src("client/src/components/ui/input.tsx")).toMatch(/border-input h-9 w-full min-w-0 rounded-md border bg-transparent/);

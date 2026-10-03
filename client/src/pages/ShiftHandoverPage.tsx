@@ -383,7 +383,7 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
     <div className="flex items-center justify-between gap-2 border rounded-lg p-2.5">
       <span className="text-sm min-w-0">{label}</span>
       <div className="flex gap-1 shrink-0" role="group" aria-label={label}>
-        <Button type="button" size="sm" variant={value === true ? "default" : "outline"} className="h-7 px-2.5" aria-pressed={value === true} onClick={() => onChange(true)}>Sim</Button>
+        <Button type="button" size="sm" variant={value === true ? "selected" : "outline"} className="h-7 px-2.5" aria-pressed={value === true} onClick={() => onChange(true)}>Sim</Button>
         <Button type="button" size="sm" variant={value === false ? "destructive" : "outline"} className="h-7 px-2.5" aria-pressed={value === false} onClick={() => onChange(false)}>Não</Button>
       </div>
     </div>
@@ -408,8 +408,8 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
           <div>
             <Label className="text-xs mb-1 block">Turno</Label>
             <div className="flex gap-1">
-              <Button type="button" size="sm" variant={shift === "morning" ? "default" : "outline"} aria-pressed={shift === "morning"} onClick={() => { if (shift !== "morning" && okToDiscard()) setShift("morning"); }}><Sun className="w-3.5 h-3.5 mr-1" />Manhã</Button>
-              <Button type="button" size="sm" variant={shift === "night" ? "default" : "outline"} aria-pressed={shift === "night"} onClick={() => { if (shift !== "night" && okToDiscard()) setShift("night"); }}><Moon className="w-3.5 h-3.5 mr-1" />Noite</Button>
+              <Button type="button" size="sm" variant={shift === "morning" ? "selected" : "outline"} aria-pressed={shift === "morning"} onClick={() => { if (shift !== "morning" && okToDiscard()) setShift("morning"); }}><Sun className="w-3.5 h-3.5 mr-1" />Manhã</Button>
+              <Button type="button" size="sm" variant={shift === "night" ? "selected" : "outline"} aria-pressed={shift === "night"} onClick={() => { if (shift !== "night" && okToDiscard()) setShift("night"); }}><Moon className="w-3.5 h-3.5 mr-1" />Noite</Button>
             </div>
           </div>
           <div>

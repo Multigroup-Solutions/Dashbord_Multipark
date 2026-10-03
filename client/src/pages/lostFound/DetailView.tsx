@@ -669,7 +669,7 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
                         </Button>
                       )}
                     </CardTitle>
-                    <Button size="sm" variant={showAllHist ? "default" : "outline"} onClick={() => setShowAllHist(v => !v)}>
+                    <Button size="sm" variant={showAllHist ? "selected" : "outline"} onClick={() => setShowAllHist(v => !v)}>
                       {showAllHist ? "A mostrar tudo" : "Mostrar tudo"}
                     </Button>
                   </CardHeader>

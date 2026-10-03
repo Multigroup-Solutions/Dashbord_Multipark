@@ -105,7 +105,7 @@ export default function ReservasDoDia() {
           <Button variant="outline" size="icon" aria-label="Dia seguinte" onClick={() => setDay((d) => addDays(d, 1))}>
             <ChevronRight className="w-4 h-4" />
           </Button>
-          <Button variant={isToday ? "secondary" : "outline"} size="sm" onClick={() => setDay(todayLisbon())} disabled={isToday}>
+          <Button variant={isToday ? "selected" : "outline"} size="sm" onClick={() => setDay(todayLisbon())} disabled={isToday}>
             Hoje
           </Button>
           <span className="text-sm text-muted-foreground flex items-center gap-1.5 min-w-0">

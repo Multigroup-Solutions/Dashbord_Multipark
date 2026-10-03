@@ -87,7 +87,7 @@ export function ServiceTasksSettings() {
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2">
           {SERVICE_TASK_CITIES.map((c) => (
-            <Button key={c} size="sm" variant={c === city ? "default" : "outline"} onClick={() => setCity(c)}>
+            <Button key={c} size="sm" variant={c === city ? "selected" : "outline"} onClick={() => setCity(c)}>
               {SERVICE_TASK_CITY_LABELS[c]}
               {enabledCount(c) > 0 && <Badge variant="secondary" className="ml-2">{enabledCount(c)}</Badge>}
             </Button>

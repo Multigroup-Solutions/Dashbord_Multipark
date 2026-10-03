@@ -146,8 +146,8 @@ export function FixFirstCard({ url, label, canEdit }: { url: string; label: stri
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <CardTitle className="text-sm flex items-center gap-2 min-w-0"><Wrench className="w-4 h-4 shrink-0" /><span className="truncate">O que corrigir primeiro — {label}</span></CardTitle>
           <div className="flex items-center gap-1">
-            <Button variant={strategy === "mobile" ? "secondary" : "ghost"} size="sm" className="h-7" onClick={() => { setStrategy("mobile"); setText(null); }}>Móvel</Button>
-            <Button variant={strategy === "desktop" ? "secondary" : "ghost"} size="sm" className="h-7" onClick={() => { setStrategy("desktop"); setText(null); }}>Computador</Button>
+            <Button variant={strategy === "mobile" ? "selected" : "ghost"} size="sm" className="h-7" onClick={() => { setStrategy("mobile"); setText(null); }}>Móvel</Button>
+            <Button variant={strategy === "desktop" ? "selected" : "ghost"} size="sm" className="h-7" onClick={() => { setStrategy("desktop"); setText(null); }}>Computador</Button>
             {canEdit && audits.length > 0 && (
               <Button variant="outline" size="sm" className="h-7" disabled={explain.isPending} onClick={() => explain.mutate({ url, strategy })}>
                 {explain.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1" />}Explicar

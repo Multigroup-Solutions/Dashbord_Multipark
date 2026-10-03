@@ -401,8 +401,8 @@ export default function MarketingWebPanel() {
 
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <Button variant={geoDim === "country" ? "secondary" : "ghost"} size="sm" onClick={() => setGeoDim("country")}>Países</Button>
-                  <Button variant={geoDim === "city" ? "secondary" : "ghost"} size="sm" onClick={() => setGeoDim("city")}>Cidades</Button>
+                  <Button variant={geoDim === "country" ? "selected" : "ghost"} size="sm" onClick={() => setGeoDim("country")}>Países</Button>
+                  <Button variant={geoDim === "city" ? "selected" : "ghost"} size="sm" onClick={() => setGeoDim("city")}>Cidades</Button>
                 </div>
                 <DimTable key={geoDim} common={common} source="ga" dim={geoDim} title={geoDim === "country" ? "Países (GA4)" : "Cidades (GA4)"} firstCol={geoDim === "country" ? "País" : "Cidade"}
                   sorts={[{ value: "sessions", label: "Mais sessões" }]} defaultSort="sessions" cols={["sessions", "users", "keyEvents"]} pageSize={10} />

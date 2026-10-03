@@ -1029,7 +1029,7 @@ function SchedulesTab({ employeeId }: { employeeId: number }) {
             <div className="w-10 text-sm font-medium text-muted-foreground">{day}</div>
             <Button
               size="sm"
-              variant={d.isWorkDay ? "outline" : "secondary"}
+              variant={d.isWorkDay ? "selected" : "outline"}
               className="w-20"
               onClick={() => setDraft(idx, { isWorkDay: !d.isWorkDay })}
             >
@@ -2919,8 +2919,8 @@ function UnlinkedAgentsSection() {
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">{unlinked.notice}</p>
       )}
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <Button size="sm" variant={group === "equipa" ? "default" : "outline"} className="h-7 text-xs" onClick={() => setGroup("equipa")}>Equipa ({countOf("equipa")})</Button>
-        <Button size="sm" variant={group === "parceiro" ? "default" : "outline"} className="h-7 text-xs" onClick={() => setGroup("parceiro")}>Parceiros e agências ({countOf("parceiro")})</Button>
+        <Button size="sm" variant={group === "equipa" ? "selected" : "outline"} className="h-7 text-xs" onClick={() => setGroup("equipa")}>Equipa ({countOf("equipa")})</Button>
+        <Button size="sm" variant={group === "parceiro" ? "selected" : "outline"} className="h-7 text-xs" onClick={() => setGroup("parceiro")}>Parceiros e agências ({countOf("parceiro")})</Button>
         {withSuggestion.length > 0 && (
           <Button size="sm" className="h-7 text-xs" disabled={accepting}
             onClick={async () => {

@@ -320,12 +320,12 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
       {/* Parques: a empresa toda, e depois cada parque */}
       {groups.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant={park === "all" ? "default" : "outline"} onClick={() => setPark("all")}>
+          <Button size="sm" variant={park === "all" ? "selected" : "outline"} onClick={() => setPark("all")}>
             Todas <span className="ml-1 opacity-80">{reviews.length}</span>
             {totalPending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{totalPending} por responder</Badge>}
           </Button>
           {groups.map(g => (
-            <Button key={g.key} size="sm" variant={park === g.key ? "default" : "outline"} onClick={() => setPark(park === g.key ? "all" : g.key)}>
+            <Button key={g.key} size="sm" variant={park === g.key ? "selected" : "outline"} onClick={() => setPark(park === g.key ? "all" : g.key)}>
               {g.name} <span className="ml-1 opacity-80">{g.total}</span>
               {g.pending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{g.pending}</Badge>}
             </Button>

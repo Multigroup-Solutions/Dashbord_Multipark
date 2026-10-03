@@ -24,7 +24,7 @@ function RolePicker({ value, disabled, onChange, allowed }: { value: Role[]; dis
         const ok = allowed ? allowed(r) : true;
         const on = ok && value.includes(r);
         return (
-          <Button key={r} type="button" size="sm" variant={on ? "default" : "outline"} className="h-8" disabled={disabled || !ok}
+          <Button key={r} type="button" size="sm" variant={on ? "selected" : "outline"} className="h-8" disabled={disabled || !ok}
             title={ok ? undefined : "Só supervisor ou acima pode receber dados de clientes no telemóvel."}
             onClick={() => onChange(on ? value.filter((x) => x !== r) : [...value, r])}>{ROLE_LABELS[r]}</Button>
         );

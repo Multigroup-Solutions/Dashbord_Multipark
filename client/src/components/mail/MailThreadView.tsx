@@ -147,7 +147,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
               <SelectContent>{t.moveTargets.map((b) => <SelectItem key={b.key} value={b.key}>{b.label}</SelectItem>)}</SelectContent>
             </Select>
           )}
-          <Button size="sm" variant={showLinks ? "secondary" : "outline"} className="h-7 text-xs" onClick={() => setShowLinks((x) => !x)}>
+          <Button size="sm" variant={showLinks ? "selected" : "outline"} className="h-7 text-xs" onClick={() => setShowLinks((x) => !x)}>
             <Link2 className="h-3.5 w-3.5 mr-1" />Ligações ({t.links.length})
           </Button>
           {t.canAct && (

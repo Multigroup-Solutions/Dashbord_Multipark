@@ -218,7 +218,7 @@ export function InboxListHeader({
           <PopoverTrigger asChild>
             <Button
               type="button"
-              variant={active > 0 ? "secondary" : "outline"}
+              variant={active > 0 ? "selected" : "outline"}
               size="sm"
               className="h-8 px-2 gap-1 shrink-0"
               aria-label={active > 0 ? `Filtros (${active} ativos)` : "Filtros"}
@@ -245,7 +245,7 @@ export function InboxListHeader({
                     key={v}
                     type="button"
                     size="sm"
-                    variant={filters.assignee === v ? "default" : "outline"}
+                    variant={filters.assignee === v ? "selected" : "outline"}
                     className="h-7 px-2 text-xs flex-1"
                     aria-pressed={filters.assignee === v}
                     onClick={() => onFiltersChange({ assignee: v })}

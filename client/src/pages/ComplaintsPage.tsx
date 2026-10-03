@@ -247,7 +247,7 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
             </Button>
           )}
           {canManage && (
-            <Button variant={showArchived ? "default" : "outline"} onClick={() => setShowArchived((v) => !v)}>
+            <Button variant={showArchived ? "selected" : "outline"} onClick={() => setShowArchived((v) => !v)}>
               <Archive className="w-4 h-4 mr-2" /> {showArchived ? "A ver arquivadas" : "Arquivadas"}
             </Button>
           )}
@@ -300,7 +300,7 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
       {/* Type Tabs */}
       <div className="flex items-center gap-2 flex-wrap">
         <Button
-          variant={filterType === "all" ? "default" : "outline"}
+          variant={filterType === "all" ? "selected" : "outline"}
           size="sm"
           onClick={() => setFilterType("all")}
         >
@@ -309,7 +309,7 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
         {Object.entries(TYPE_CONFIG).map(([k, v]) => (
           <Button
             key={k}
-            variant={filterType === k ? "default" : "outline"}
+            variant={filterType === k ? "selected" : "outline"}
             size="sm"
             onClick={() => setFilterType(k)}
           >
@@ -1072,7 +1072,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     <CardTitle className="text-sm flex items-center gap-2 min-w-0 break-all">
                       <Clock className="w-4 h-4 shrink-0" /> Histórico da Reserva {c.reservationRef ? `— ${c.reservationRef}` : ""}
                     </CardTitle>
-                    <Button size="sm" variant={showAllHist ? "default" : "outline"} onClick={() => setShowAllHist(v => !v)}>
+                    <Button size="sm" variant={showAllHist ? "selected" : "outline"} onClick={() => setShowAllHist(v => !v)}>
                       {showAllHist ? "A mostrar tudo" : "Mostrar tudo"}
                     </Button>
                   </CardHeader>
