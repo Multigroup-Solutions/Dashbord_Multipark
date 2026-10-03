@@ -13,10 +13,26 @@ describe("histórico ao vivo (\"History\" da Multipark)", () => {
   });
   it("matrícula exata ou contém, normalizada (sem hífenes/espaços)", () => {
     const e = buildLiveHistorySql({ plate: { exact: "aa-00-bb" }, limit: 10 });
-    expect(e.sql).toContain(`upper(regexp_replace(coalesce(v."licensePlate", ''), '[^A-Za-z0-9]', '', 'g')) = $1`);
+    expect(() => assertReadOnlySql(e.sql)).not.toThrow();
+    expect(e.sql).toContain(`upper(regexp_replace(v."licensePlate", '[^A-Za-z0-9]', '', 'g')) = $1`);
     expect(e.params[0]).toBe("AA00BB");
     const c = buildLiveHistorySql({ plate: { contains: "00 bb" }, limit: 10 });
     expect(c.params[0]).toBe("%00BB%");
+  });
+  it("matrícula: condição estrita (sem coalesce) — reserva sem carro nunca entra e o Postgres filtra primeiro as viaturas", () => {
+    // Com coalesce(…, '') a condição não é estrita: o Postgres tinha de juntar o
+    // histórico todo (~280 mil linhas) às reservas e viaturas antes de filtrar.
+    for (const plate of [{ exact: "AA-00-BB" }, { contains: "00-BB" }]) {
+      expect(buildLiveHistorySql({ plate, limit: 10 }).sql).not.toMatch(/coalesce\(v\."licensePlate"/i);
+    }
+  });
+  it("matrícula sem letras nem números não identifica carro nenhum (antes = '' apanhava as linhas sem viatura)", () => {
+    for (const plate of [{ exact: "--" }, { exact: "" }, { exact: " · " }, { exact: "—" }, { contains: "-" }]) {
+      const q = buildLiveHistorySql({ plate, cities: ["Lisboa"], limit: 10 });
+      expect(q.sql).toContain(" WHERE FALSE\n");
+      expect(q.params).toEqual(["lisboa", "lisbon", 10]);
+    }
+    expect(buildLiveHistorySql({ plate: {}, limit: 10 }).sql).toContain(" WHERE TRUE\n");
   });
   it("agente, período, tipos, texto e cidades (vazio = nada)", () => {
     const q = buildLiveHistorySql({
