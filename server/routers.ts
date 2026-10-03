@@ -166,11 +166,11 @@ function assertStructuralNodeEditable(node: { level: string }) {
 }
 
 // ─── CASOS PRÓPRIOS (alcance "own" de extra/condutor) ─────────────────────────
-type OwnCaseKind = "complaint" | "review" | "incident" | "lost_found";
+type OwnCaseKind = "review" | "incident" | "lost_found";
 /**
- * Ids dos casos em que o utilizador é o condutor envolvido: reclamações
- * (condutores ligados), críticas (via a reclamação em que foram convertidas),
- * ocorrências (condutor da ocorrência) e perdidos (condutores ligados).
+ * Ids dos casos em que o utilizador é o condutor envolvido: críticas (via a
+ * reclamação em que foram convertidas), ocorrências (condutor da ocorrência)
+ * e perdidos (condutores ligados). Reclamações não têm alcance "own" (D19).
  * Sem ficha → nenhum.
  */
 async function ownCaseIds(userId: number, kind: OwnCaseKind): Promise<Set<number>> {
@@ -181,13 +181,11 @@ async function ownCaseIds(userId: number, kind: OwnCaseKind): Promise<Set<number
   const { sql } = await import("drizzle-orm");
   const db = await getDb();
   if (!db) return new Set();
-  const q = kind === "complaint"
-    ? sql`SELECT DISTINCT complaintId AS id FROM complaint_drivers_on_duty WHERE employeeId = ${emp}`
-    : kind === "review"
-      ? sql`SELECT DISTINCT r.id AS id FROM google_reviews r JOIN complaint_drivers_on_duty d ON d.complaintId = r.complaintId WHERE d.employeeId = ${emp}`
-      : kind === "incident"
-        ? sql`SELECT id FROM incidents WHERE employeeId = ${emp}`
-        : sql`SELECT DISTINCT itemId AS id FROM lost_found_attached_drivers WHERE employeeId = ${emp}`;
+  const q = kind === "review"
+    ? sql`SELECT DISTINCT r.id AS id FROM google_reviews r JOIN complaint_drivers_on_duty d ON d.complaintId = r.complaintId WHERE d.employeeId = ${emp}`
+    : kind === "incident"
+      ? sql`SELECT id FROM incidents WHERE employeeId = ${emp}`
+      : sql`SELECT DISTINCT itemId AS id FROM lost_found_attached_drivers WHERE employeeId = ${emp}`;
   const [rows] = await db.execute(q) as any;
   return new Set(((rows as any[]) ?? []).map(r => Number(r.id)));
 }
@@ -1671,14 +1669,16 @@ export const appRouter = router({
       projectId: z.number().optional(),
       /** Só as arquivadas (quem gere). Sem isto, as arquivadas nunca vêm. */
       archived: z.boolean().optional(),
+      /** D21: só as criadas nos últimos N dias (+ as ainda abertas). Sem isto, todas. */
+      sinceDays: z.number().int().min(1).max(3650).optional(),
     }).optional()).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "reclamacoes", "view", { allowOwn: true });
+      // D19: sem alcance "own" — condutores e extras não veem reclamações.
+      requireAccess(ctx.user, "reclamacoes", "view");
       if (input?.archived) requireAccess(ctx.user, "reclamacoes", "manage");
-      return filterOwnCases(ctx.user, "reclamacoes", "complaint", await getComplaints(input ?? {}));
+      return getComplaints(input ?? {});
     }),
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "reclamacoes", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "reclamacoes", "complaint", input.id);
+      requireAccess(ctx.user, "reclamacoes", "view");
       const complaint = await getComplaintById(input.id);
       if (!complaint) throw new TRPCError({ code: "NOT_FOUND" });
       const messages = await getComplaintMessages(input.id);
@@ -1693,8 +1693,7 @@ export const appRouter = router({
     }),
     // ── IA: sugestões da triagem (separadas dos campos humanos) ──────────
     aiSuggestions: protectedProcedure.input(z.object({ complaintId: z.number() })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "reclamacoes", "view", { allowOwn: true });
-      await assertOwnCase(ctx.user, "reclamacoes", "complaint", input.complaintId);
+      requireAccess(ctx.user, "reclamacoes", "view");
       const complaint = await getComplaintById(input.complaintId); // âmbito de cidade
       if (!complaint) throw new TRPCError({ code: "NOT_FOUND" });
       const { getComplaintSuggestions } = await import("./complaintTriage");

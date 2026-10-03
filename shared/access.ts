@@ -235,8 +235,10 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vem", ...TOP),
   },
+  // D19 (Jorge, 3 out 2026): condutores e extras não veem reclamações — nem
+  // as em que estão envolvidos (notas internas e contactos do cliente). Só a
+  // partir de team leader.
   reclamacoes: {
-    ...same("own:v", "extra", "condutor"),
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },

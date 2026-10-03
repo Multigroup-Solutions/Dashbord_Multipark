@@ -613,6 +613,8 @@ function CreateReviewDialog({ onClose }: { onClose: () => void }) {
 function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
   const { user } = useAuth();
   const canEdit = can(user as any, "criticas", "edit");
+  // D19: condutores e extras não abrem reclamações — veem só o número.
+  const canOpenComplaint = seesBeyondOwn(user as any, "reclamacoes");
   const [, navigate] = useLocation();
   const [confirm, confirmUi] = useConfirm();
   const reviewQ = trpc.reviews.getById.useQuery({ id });
@@ -861,9 +863,11 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
                   <p className="font-medium text-sm">Ligada à Reclamação #{review.complaintId}</p>
                   <p className="text-xs text-muted-foreground">O caso trata-se na reclamação. A resposta pública continua a ser aqui.</p>
                 </div>
-                <Button size="sm" variant="outline" onClick={() => { onClose(); navigate(`/reclamacoes?id=${review.complaintId}`); }}>
-                  <ExternalLink className="w-4 h-4 mr-1" /> Ver Reclamação
-                </Button>
+                {canOpenComplaint && (
+                  <Button size="sm" variant="outline" onClick={() => { onClose(); navigate(`/reclamacoes?id=${review.complaintId}`); }}>
+                    <ExternalLink className="w-4 h-4 mr-1" /> Ver Reclamação
+                  </Button>
+                )}
               </CardContent>
             </Card>
           )}
