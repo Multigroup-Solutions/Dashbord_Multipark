@@ -57,6 +57,7 @@ São as permissões de Definições → Permissões, iguais no ecrã e no servid
 
 **Acidentes: −6000 pontos**
 - Um acidente conta **−6000** pontos a quem conduzia, no dia operacional da ocorrência.
+- Só contam os acidentes **a partir de 3 de outubro de 2026**. Os antigos não contam: nem as ocorrências antigas do dashboard, nem ajustes de acidentes em dias anteriores.
 - Só conta depois de um **team leader** (ou acima) o confirmar na ocorrência, em **Operacional → Ocorrências**: abre a ocorrência, em **Foi um acidente?** escolhe quem conduzia e confirma.
 - A sugestão são as pessoas das últimas ações nessa reserva antes da ocorrência.
 - O team leader só confirma acidentes da sua equipa. Ninguém confirma um acidente seu.

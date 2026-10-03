@@ -173,7 +173,7 @@ describe("motor (dia operacional completo)", () => {
     expect(out.unresolved.get("2026-09-24")?.get("agent:outroagente")).toMatchObject({ actions: 4, byType: { UPDATE: 4 } });
   });
 
-  it("velocidade, reclamações confirmadas e acidentes vão para o dia certo", () => {
+  it("velocidade e reclamações confirmadas vão para o dia certo; o dano antigo do dashboard já não é acidente", () => {
     const out = computeEmployeeDays({
       ...base,
       actions: [], ponto: [], assignments: [],
@@ -190,8 +190,9 @@ describe("motor (dia operacional completo)", () => {
       ],
     });
     const m = out.rows[0].metrics;
-    expect(m).toMatchObject({ speedingEvents: 2, complaints: 1, accidents: 1, incidentsReported: 1, incidentsAgainst: 1, penaltyPoints: 4 });
-    expect(scoreOf(m).totalPoints).toBe(-20 - 20 - 6000);
+    // Jorge, 3 out: os acidentes antigos não contam — a ocorrência fica só informativa.
+    expect(m).toMatchObject({ speedingEvents: 2, complaints: 1, accidents: 0, incidentsReported: 1, incidentsAgainst: 1, penaltyPoints: 4 });
+    expect(scoreOf(m).totalPoints).toBe(-20 - 20);
   });
 
   it("agentes sem ficha ficam à parte (para a escala sem ficha no operacional)", () => {

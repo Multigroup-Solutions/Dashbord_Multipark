@@ -18,6 +18,7 @@ import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, getEmployeeByUserId, logActivity } from "./db";
 import { employees, evaluationAccidents } from "../drizzle/schema";
 import { operationalDayOf } from "../shared/lisbonDay";
+import { ACCIDENTS_FROM_DAY } from "../shared/evaluationRules";
 import type { MultiparkOccurrence } from "./multiparkDb/read";
 import type { EvaluationIdentity } from "./evaluationIdentity";
 
@@ -138,6 +139,10 @@ export async function confirmAccident(user: Viewer, occ: MultiparkOccurrence, in
   await assertCanJudge(user, input.employeeId);
   const day = accidentDayOf(occ);
   if (!day) throw new TRPCError({ code: "BAD_REQUEST", message: "A ocorrência não tem data: não dá para saber o dia da avaliação." });
+  if (day < ACCIDENTS_FROM_DAY) {
+    const [y, m, d] = ACCIDENTS_FROM_DAY.split("-");
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Os acidentes só contam a partir de ${d}/${m}/${y}: esta ocorrência é anterior.` });
+  }
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível." });
   let id: number;

@@ -11,8 +11,8 @@
  *   −20  por cada reclamação confirmada
  *   −6000 por cada acidente (D15, Jorge 3 out: era −600) — ocorrência da app
  *        Multipark que um team leader (ou acima) confirmou como acidente e
- *        disse quem conduzia (server/evaluationAccidents.ts); as antigas
- *        `incidents` de dano com envolvimento confirmado contam igual
+ *        disse quem conduzia (server/evaluationAccidents.ts). Só a partir de
+ *        ACCIDENTS_FROM_DAY: os acidentes antigos não contam (Jorge, 3 out)
  * Os totais podem ser negativos. A normalização por hora é uma vista
  * secundária (não entra na pontuação).
  *
@@ -38,9 +38,21 @@ export const EVALUATION_POINTS = {
   delay: -5,
   /** Reclamação confirmada (com pontos aplicados) em que o colaborador foi associado. */
   confirmedComplaint: -20,
-  /** Acidente confirmado pelo TL (ocorrência Multipark) ou dano com envolvimento confirmado (antigas). D15: −6000. */
+  /** Acidente confirmado pelo TL (ocorrência Multipark), a partir de ACCIDENTS_FROM_DAY. D15: −6000. */
   accidentOrDamage: -6000,
 } as const;
+
+/**
+ * Os acidentes só contam a partir deste dia operacional (Jorge, 3 out 2026:
+ * "os acidentes antigos não contam, só a partir de agora"). Antes dele a
+ * métrica `accidents` fica a 0 — também nos ajustes e nos dias já guardados.
+ */
+export const ACCIDENTS_FROM_DAY = "2026-10-03";
+
+/** Métricas de um dia com a regra dos acidentes antigos aplicada. PURA. */
+export function withAccidentCutoff<M extends { accidents: number }>(day: string, m: M): M {
+  return day < ACCIDENTS_FROM_DAY && m.accidents !== 0 ? { ...m, accidents: 0 } : m;
+}
 
 /** Minutos de tolerância antes de uma entrada contar como atraso (0 = qualquer minuto). */
 export const DELAY_TOLERANCE_MINUTES = 0;
