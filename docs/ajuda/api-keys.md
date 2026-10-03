@@ -6,7 +6,7 @@ palavras: api key, api keys, chave, chaves, x-api-key, capacidades, permissões 
 ---
 # API Keys
 
-Página **API Keys** (menu Sistema, **só super admin**): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades), o MCP do Claude (relatórios), a importação do Gmail e os dispositivos (GPS, rádios).
+Página **API Keys** (menu Sistema, **só super admin**): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades), o MCP do Claude (relatórios) e os dispositivos (GPS, rádios). A antiga importação do Gmail foi desligada: as críticas chegam pela sincronização do Gmail.
 
 **Cada chave diz o que pode fazer** (desde out 2026). Ao criar, marca só o necessário:
 - **Formulários do site** — candidaturas "Be a Driver", disponibilidades dos extras, formulário de disponibilidades.
@@ -14,7 +14,7 @@ Página **API Keys** (menu Sistema, **só super admin**): as chaves que os progr
 - **Caixa e parceiros** — contagens e correções de caixa, passagens de turno, faturação e fecho de parceiros.
 - **Marketing** — campanhas, gasto em anúncios, ROAS, Google Analytics, Search Console.
 - **Dados pessoais** — reservas com os dados do cliente, reclamações, críticas, lista de colaboradores. À parte de propósito: um relatório raramente precisa disto.
-- **Reclamações e críticas (escrever)** — criar e atualizar reclamações, mensagens e críticas; importação do Gmail.
+- **Reclamações e críticas (escrever)** — criar e atualizar reclamações, mensagens e críticas.
 - **Dispositivo (GPS / rádio)** — só a `/api/external`: alertas de velocidade, movimentos de viaturas, rádio.
 - **Administração (tudo)** — tudo o resto, mais arquivar reclamações, criar projetos e as rotas `/admin`. Só para manutenção; nunca num MCP.
 

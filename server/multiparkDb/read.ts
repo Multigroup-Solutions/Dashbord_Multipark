@@ -141,6 +141,11 @@ export interface OccurrenceFilters {
   search?: string;
   /** Âmbito de cidade do utilizador (Park.city). undefined = todas; [] = nenhuma. */
   cities?: string[];
+  /**
+   * 23a (D16): "Parques que a operação não faz" (Definições) — ficam fora da
+   * lista e das contagens. As sem parque ficam.
+   */
+  excludedParkIds?: readonly string[];
 }
 
 export interface OccurrenceListOptions extends OccurrenceFilters {
@@ -233,6 +238,8 @@ export function buildOccurrenceWhere(f: OccurrenceFilters, params: ParamList, li
     const aliases = cityAliases(f.cities);
     conds.push(aliases.length ? `lower(trim(p."city")) IN (${aliases.map((c) => params.add(c)).join(", ")})` : `FALSE`);
   }
+  const excluded = Array.from(new Set((f.excludedParkIds ?? []).map((x) => String(x).trim()).filter(Boolean))).slice(0, 300);
+  if (excluded.length) conds.push(`(o."parkId" IS NULL OR o."parkId" NOT IN (${excluded.map((x) => params.add(x)).join(", ")}))`);
   const q = f.search?.trim().slice(0, 100);
   if (q) {
     const like = params.add(likeContains(q));

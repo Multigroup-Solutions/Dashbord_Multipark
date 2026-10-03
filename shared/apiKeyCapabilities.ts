@@ -46,7 +46,7 @@ export const API_KEY_CAPABILITY_INFO: Record<ApiKeyCapability, { label: string; 
   },
   "complaints:write": {
     label: "Reclamações e críticas (escrever)",
-    description: "Criar e atualizar reclamações, mensagens e críticas; importação do Gmail.",
+    description: "Criar e atualizar reclamações, mensagens e críticas.",
   },
   device: {
     label: "Dispositivo (GPS / rádio)",

@@ -459,18 +459,12 @@ curl -H "X-API-Key: mp_xxxxxxxxxx" ${baseUrl}/api/external/docs`}</pre>
               </CardContent>
             </Card>
 
-            {/* Gmail import */}
+            {/* Gmail import: descontinuado (23a, D18) — as críticas chegam pela sincronização do Gmail. */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-rose-500" /> POST /api/external/gmail-import</CardTitle>
-                <CardDescription>Importar ocorrências e críticas já lidas do Gmail (tarefa agendada externa). Não duplica: o mesmo sourceEmailId é ignorado. Capacidade: Reclamações e críticas (escrever).</CardDescription>
+                <CardTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-muted-foreground" /> POST /api/external/gmail-import <span className="text-xs font-normal text-muted-foreground">(descontinuado)</span></CardTitle>
+                <CardDescription>Já não grava nada (responde 410): as críticas chegam pela sincronização do Gmail e as ocorrências vêm da app Multipark.</CardDescription>
               </CardHeader>
-              <CardContent>
-                <pre className="bg-slate-900 text-slate-100 p-4 rounded-lg text-sm overflow-x-auto">{`{
-  "occurrences": [{ "sourceEmailId": "...", "description": "...", "vehiclePlate": "AA-00-BB" }],
-  "reviews": [{ "sourceEmailId": "...", "reviewerName": "Ana", "rating": 4, "reviewText": "..." }]
-}`}</pre>
-              </CardContent>
             </Card>
 
             {/* MCP / API de controlo */}
