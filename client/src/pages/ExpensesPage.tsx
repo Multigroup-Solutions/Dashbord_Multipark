@@ -68,6 +68,7 @@ import {
   FileText,
   MoreHorizontal,
   Percent,
+  ArchiveRestore,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
@@ -256,9 +257,13 @@ export default function ExpensesPage() {
   // Exportar é uma ação própria (supervisor, front/backoffice e admin+), não "gerir"
   const canExport = can(user, "despesas", "export");
   const canDelete = role === "super_admin";
+  // D4 (Jorge, 3 out 2026): eliminada = desaparece de todo o lado, mas fica
+  // guardada — o super admin vê-as aqui, a pedido, e pode repor.
+  const [showDeleted, setShowDeleted] = useState(false);
 
   // Queries
   const { data: expensesList, isLoading, isError, error: listError, refetch: refetchList } = trpc.expenses.list.useQuery({
+    deleted: canDelete && showDeleted ? true : undefined,
     search: search || undefined,
     status: (filterStatus && filterStatus !== "all") ? filterStatus : undefined,
     categoryId: (filterCategory && filterCategory !== "all") ? parseInt(filterCategory) : undefined,
@@ -282,10 +287,17 @@ export default function ExpensesPage() {
 
   const deleteMutation = trpc.expenses.delete.useMutation({
     onSuccess: () => {
-      toast.success("Despesa eliminada");
+      toast.success("Despesa eliminada (fica guardada em «Eliminadas»)");
       utils.expenses.invalidate();
     },
     onError: (e) => toast.error(e.message || "Erro ao eliminar despesa"),
+  });
+  const restoreMutation = trpc.expenses.restore.useMutation({
+    onSuccess: () => {
+      toast.success("Despesa reposta");
+      utils.expenses.invalidate();
+    },
+    onError: (e) => toast.error(e.message || "Erro ao repor a despesa"),
   });
 
   const updateMutation = trpc.expenses.update.useMutation({
@@ -539,6 +551,12 @@ export default function ExpensesPage() {
                 <Switch checked={allHistory} onCheckedChange={setAllHistory} aria-label="Pesquisar em todo o histórico" />
                 Todo o histórico
               </label>
+              {canDelete && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none" title="Só o super admin: as despesas eliminadas (não contam em lado nenhum)">
+                  <Switch checked={showDeleted} onCheckedChange={setShowDeleted} aria-label="Ver as despesas eliminadas" />
+                  Eliminadas
+                </label>
+              )}
               {hasFilters && (
                 <Button variant="ghost" size="icon" onClick={clearFilters} title="Limpar filtros (volta à semana atual)" aria-label="Limpar filtros">
                   <XCircle className="h-4 w-4" />
@@ -671,7 +689,20 @@ export default function ExpensesPage() {
                                 <Eye className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {canManage && expense.status !== "paid" && expense.status !== "cancelled" && (
+                            {showDeleted && canDelete && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                title="Repor (volta às listas e aos totais)"
+                                aria-label="Repor despesa"
+                                disabled={restoreMutation.isPending}
+                                onClick={() => restoreMutation.mutate({ id: expense.id })}
+                              >
+                                <ArchiveRestore className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {!showDeleted && canManage && expense.status !== "paid" && expense.status !== "cancelled" && (
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -683,7 +714,7 @@ export default function ExpensesPage() {
                                 <CheckCircle2 className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {canManage && (
+                            {canManage && !showDeleted && (
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -695,7 +726,7 @@ export default function ExpensesPage() {
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {canDelete && (
+                            {canDelete && !showDeleted && (
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -703,7 +734,7 @@ export default function ExpensesPage() {
                                 title="Eliminar"
                                 aria-label="Eliminar despesa"
                                 onClick={() => {
-                                  if (confirm("Eliminar esta despesa?")) {
+                                  if (confirm("Eliminar esta despesa? Sai das listas, dos totais e da Faturação, mas fica guardada (vês e repões em «Eliminadas»).")) {
                                     deleteMutation.mutate({ id: expense.id });
                                   }
                                 }}

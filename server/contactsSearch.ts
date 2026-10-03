@@ -119,7 +119,7 @@ async function searchPartners(d: Db, k: KindQuery) {
 async function searchSuppliers(d: Db, k: KindQuery) {
   // Só o nome/NIF do fornecedor (sem valores); agrupado pela coluna que se seleciona.
   const rows = rowsOf(await d.execute(sql`SELECT e.supplier AS name, MAX(e.supplierNif) AS nif, COUNT(*) AS n, MAX(e.expenseDate) AS lastAt FROM expenses e
-    WHERE e.supplier IS NOT NULL AND e.supplier <> '' AND ${projectScope(sql`e.projectId`)}
+    WHERE e.supplier IS NOT NULL AND e.supplier <> '' AND e.deletedAt IS NULL AND ${projectScope(sql`e.projectId`)}
       AND ${k.q.text || k.q.digits ? sql`(LOWER(e.supplier) LIKE ${k.q.like}${k.q.digits.length >= 3 ? sql` OR e.supplierNif LIKE ${`%${k.q.digits}%`}` : sql``})` : sql`1 = 1`}
     GROUP BY e.supplier ORDER BY lastAt DESC LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
@@ -269,7 +269,7 @@ async function baseRecord(d: Db, viewer: ContactViewer, kind: ContactKind, id: s
       return { name: String(r.name), subtitle: s(r.contactName), emails: [s(r.contactEmail)], phones: [s(r.contactPhone)], photoUrl: null, clientEmail: null, openHref: "/parcerias" };
     }
     case "supplier": {
-      const r = await one(sql`SELECT MAX(e.supplierNif) AS nif, COUNT(*) AS n FROM expenses e WHERE e.supplier = ${id} AND ${projectScope(sql`e.projectId`)}`);
+      const r = await one(sql`SELECT MAX(e.supplierNif) AS nif, COUNT(*) AS n FROM expenses e WHERE e.supplier = ${id} AND e.deletedAt IS NULL AND ${projectScope(sql`e.projectId`)}`);
       if (!r || !Number(r.n)) return null;
       return { name: id, subtitle: `${r.nif ? `NIF ${r.nif} · ` : ""}${Number(r.n)} despesa(s)`, emails: [], phones: [], photoUrl: null, clientEmail: null, openHref: "/despesas" };
     }

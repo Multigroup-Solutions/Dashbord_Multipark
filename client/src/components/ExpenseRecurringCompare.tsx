@@ -24,7 +24,7 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
   const refresh = () => utils.expenses.recurring.list.invalidate();
   const create = trpc.expenses.recurring.create.useMutation({ onSuccess: () => { setF({ description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" }); refresh(); toast.success("Modelo criado"); }, onError: (e) => toast.error(e.message) });
   const update = trpc.expenses.recurring.update.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
-  const remove = trpc.expenses.recurring.remove.useMutation({ onSuccess: () => { refresh(); toast.success("Removido"); }, onError: (e) => toast.error(e.message) });
+  const remove = trpc.expenses.recurring.remove.useMutation({ onSuccess: () => { refresh(); toast.success("Modelo removido (desativado; as despesas já lançadas ficam)"); }, onError: (e) => toast.error(e.message) });
   // Mesma regra do servidor: "1.234,56", "450,00" e "450.5" valem; lixo avisa aqui em vez de um erro técnico
   const addModel = () => {
     const amount = parseExpenseAmount(f.amount);
@@ -62,7 +62,7 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
                 <div className="text-[11px] text-muted-foreground">{fmtEur(r.amount)} - dia {r.dayOfMonth}{r.projectId ? " - " + (projects.find((p: any) => p.id === r.projectId)?.name ?? r.projectId) : ""}</div>
               </div>
               <label className="flex items-center gap-1 text-[11px] cursor-pointer select-none"><input type="checkbox" checked={!!r.active} onChange={(e) => update.mutate({ id: r.id, active: e.target.checked })} /> ativo</label>
-              <Button size="sm" variant="ghost" className="text-red-600 h-7 w-7 p-0" onClick={() => { if (confirm("Remover modelo recorrente?")) remove.mutate({ id: r.id }); }}><Trash2 className="h-4 w-4" /></Button>
+              <Button size="sm" variant="ghost" className="text-red-600 h-7 w-7 p-0" title="Remover (desativa e sai da lista; as despesas já lançadas ficam)" aria-label="Remover modelo recorrente" onClick={() => { if (confirm("Remover este modelo recorrente? Deixa de lançar despesas e sai da lista; as despesas já lançadas ficam como estão.")) remove.mutate({ id: r.id }); }}><Trash2 className="h-4 w-4" /></Button>
             </div>
           ))}
           {listError ? (

@@ -3,6 +3,7 @@
  * mudança de sítio). Âmbito e regras: server/expenseScope.ts.
  */
 import { TRPCError } from "@trpc/server";
+import { sql } from "drizzle-orm";
 import { projectScope, assertEmployeeAccess } from './cityScope';
 import { z } from "zod";
 import * as XLSX from "xlsx";
@@ -13,7 +14,7 @@ import { resolveExpenseVisibility, expenseConditions, whereAll, canSeeExpense, c
 import { parseExpenseAmount } from "../shared/expenseAmount";
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
 import { expenseTotals } from "../shared/expenseTotals";
-import { getAllCategories, listExpenses, summarizeExpenses, recordExpenseEvent, getExpenseEvents, findPossibleDuplicateExpense, projectExists, categoryExists, resolveProjectIds, getExpenseById, createExpense, updateExpense, deleteExpense, getExpenseStats, getUpcomingPayments, getOverdueExpenses, markOverdueExpenses, logActivity, getEmployeeById, getEmployeeByUserId } from "./db";
+import { getAllCategories, listExpenses, summarizeExpenses, recordExpenseEvent, getExpenseEvents, findPossibleDuplicateExpense, projectExists, categoryExists, resolveProjectIds, getExpenseById, createExpense, updateExpense, softDeleteExpense, restoreExpense, getExpenseStats, getUpcomingPayments, getOverdueExpenses, markOverdueExpenses, logActivity, getEmployeeById, getEmployeeByUserId } from "./db";
 import { requireRole, isPermissionDenied, requireFinanceTotals } from "./routerGuards";
 
 // ─── DESPESAS: âmbito único (ver server/expenseScope.ts) ─────────────────────
@@ -30,6 +31,7 @@ async function expenseVisibilityFor(user: { id: number; role: string }): Promise
 }
 
 interface ExpenseListInput {
+  deleted?: boolean;
   startDate?: string; endDate?: string; projectId?: number; categoryId?: number;
   userId?: number; status?: string; search?: string;
 }
@@ -44,6 +46,8 @@ async function expenseWhereFor(user: { id: number; role: string }, input?: Expen
     userId: input?.userId || undefined,
     status: input?.status || undefined,
     search: input?.search?.trim() || undefined,
+    // D4: as eliminadas só aparecem ao super admin, quando as pede.
+    deleted: input?.deleted === true && user.role === "super_admin",
   };
   // Cidade inclui marcas e projetos descendentes; marca global (id negativo)
   // inclui essa marca em todas as cidades. Nunca "igualdade ao id".
@@ -56,6 +60,8 @@ async function expenseWhereFor(user: { id: number; role: string }, input?: Expen
 }
 
 const EXPENSE_LIST_INPUT = z.object({
+  /** D4: só as eliminadas (super admin). */
+  deleted: z.boolean().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   projectId: z.number().optional(),
@@ -125,7 +131,7 @@ export const expensesRouter = router({
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
-      const row = await getExpenseById(input.id);
+      const row = await getExpenseById(input.id, { includeDeleted: ctx.user.role === "super_admin" });
       if (!row) return row;
       const vis = await expenseVisibilityFor(ctx.user);
       if (!canSeeExpense(vis, { insertedById: row.expense.insertedById, projectId: row.expense.projectId ?? null })) {
@@ -140,7 +146,7 @@ export const expensesRouter = router({
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
-      const row = await getExpenseById(input.id);
+      const row = await getExpenseById(input.id, { includeDeleted: ctx.user.role === "super_admin" });
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       const vis = await expenseVisibilityFor(ctx.user);
       if (!canSeeExpense(vis, { insertedById: row.expense.insertedById, projectId: row.expense.projectId ?? null })) {
@@ -163,7 +169,7 @@ export const expensesRouter = router({
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
-      const row = await getExpenseById(input.id);
+      const row = await getExpenseById(input.id, { includeDeleted: ctx.user.role === "super_admin" });
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       const vis = await expenseVisibilityFor(ctx.user);
       if (!canSeeExpense(vis, { insertedById: row.expense.insertedById, projectId: row.expense.projectId ?? null })) {
@@ -449,34 +455,39 @@ export const expensesRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
-      // Matriz do Jorge: apagar faturas é SÓ super_admin.
+      // Matriz do Jorge: eliminar é SÓ super_admin.
       requireRole(ctx.user.role, "super_admin");
-      // Apaga a linha PRIMEIRO e só depois a fatura do storage (se o DELETE
-      // falhar, a despesa não fica com um link morto).
+      // D4 (Jorge, 3 out 2026): desaparece como se fosse apagada — sai das
+      // listas, totais e da Faturação — mas fica guardada com a fatura (o
+      // super admin vê-a em "Eliminadas" e pode repor). Nunca DELETE.
       const current = await getExpenseById(input.id);
-      if (current) {
-        try {
-          await recordExpenseEvent({
-            expenseId: input.id, type: "deleted", userId: ctx.user.id,
-            before: { amount: current.expense.amount, supplier: current.expense.supplier, expenseDate: current.expense.expenseDate, status: current.expense.status },
-          });
-        } catch { /* best-effort */ }
-      }
-      await deleteExpense(input.id);
-      const k = current?.expense?.invoiceImageKey || current?.expense?.invoiceImageUrl;
-      if (k) {
-        try {
-          const { storageDelete } = await import("./storage");
-          await storageDelete(k);
-        } catch { /* best-effort: órfão no storage é preferível a link morto */ }
-      }
+      if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Despesa não encontrada" });
+      try {
+        await recordExpenseEvent({
+          expenseId: input.id, type: "deleted", userId: ctx.user.id,
+          before: { amount: current.expense.amount, supplier: current.expense.supplier, expenseDate: current.expense.expenseDate, status: current.expense.status },
+        });
+      } catch { /* best-effort */ }
+      await softDeleteExpense(input.id, ctx.user.id);
       await logActivity({
         userId: ctx.user.id,
         action: "delete",
         entity: "expense",
         entityId: input.id,
-        details: `Despesa #${input.id} eliminada`,
+        details: `Despesa #${input.id} eliminada (fica guardada; o super admin pode repor)`,
       });
+      return { success: true };
+    }),
+
+  /** D4: repor uma despesa eliminada (super admin). */
+  restore: protectedProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "super_admin");
+      const current = await getExpenseById(input.id, { includeDeleted: true });
+      if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Despesa não encontrada" });
+      await restoreExpense(input.id);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "expense", entityId: input.id, details: `Despesa #${input.id} reposta (estava eliminada)` });
       return { success: true };
     }),
 
@@ -681,7 +692,9 @@ export const expensesRouter = router({
       const { recurringExpenses } = await import("../drizzle/schema");
       const { desc } = await import("drizzle-orm");
       const db = await getDb(); if (!db) return [];
-      return db.select().from(recurringExpenses).where(projectScope(recurringExpenses.projectId)).orderBy(desc(recurringExpenses.active));
+      const { and: andOp, isNull: isNullOp } = await import("drizzle-orm");
+      // D4: os removidos ficam guardados mas saem da lista.
+      return db.select().from(recurringExpenses).where(andOp(projectScope(recurringExpenses.projectId), isNullOp(recurringExpenses.removedAt))).orderBy(desc(recurringExpenses.active));
     }),
     create: protectedProcedure
       .input(z.object({ description: z.string().optional(), supplier: z.string().optional(), amount: z.number(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().optional(), projectId: z.number(), dayOfMonth: z.number().min(1).max(28).optional(), notes: z.string().optional() }))
@@ -723,7 +736,10 @@ export const expensesRouter = router({
       const { recurringExpenses } = await import("../drizzle/schema");
       const { eq } = await import("drizzle-orm");
       const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-      await db.delete(recurringExpenses).where(eq(recurringExpenses.id, input.id));
+      // D4 (Jorge, 3 out 2026): remover = desativar e sair da lista. Fica guardado
+      // e as despesas já lançadas continuam ligadas ao modelo. Nunca DELETE.
+      await db.update(recurringExpenses).set({ active: 0, removedAt: sql`CURRENT_TIMESTAMP`, removedById: ctx.user.id } as any).where(eq(recurringExpenses.id, input.id));
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "recurring_expense", entityId: input.id, details: `Modelo recorrente #${input.id} removido (desativado; fica guardado)` });
       return { success: true };
     }),
     // Lança as despesas dos modelos ativos para o mês. Idempotente e seguro

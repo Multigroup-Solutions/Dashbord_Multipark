@@ -2,7 +2,7 @@
 modulo: despesas
 titulo: Despesas
 rotas: /despesas, /despesas/dashboard
-palavras: despesa, despesas, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes
+palavras: despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes
 ---
 # Despesas
 
@@ -22,8 +22,10 @@ Registo de faturas e despesas da empresa.
 
 **Gerir (admin)**
 - Na linha: **Marcar como paga** (fica paga hoje), **Editar** (valores, datas, estado, data de pagamento) e, só o super admin, **Eliminar**.
+- **Eliminar** (só o super admin): a despesa desaparece das listas, dos totais, da Faturação e das exportações, mas **fica guardada** com a fatura. O super admin vê-as ligando **Eliminadas** nos filtros e pode **Repor**. Uma despesa recorrente eliminada não volta a ser lançada nesse mês.
 - Só o super admin pode tirar o "pago" a uma despesa já paga.
 - Em **Mais ações** (⋯): **Comparar períodos**, **Exportar Excel**, **Despesas recorrentes** (modelos lançados todos os meses pelo processo diário) e **Categorias, IVA e margem**.
+- **Remover** um modelo recorrente desativa-o e tira-o da lista: deixa de lançar despesas, e as que já lançou ficam como estão. Para só pausar, tira o visto em **ativo**.
 - Separador **Resumo**: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos próximos 7 dias. Despesas com data futura não entram nos totais do mês nem do ano.
 
 **Exportar e comparar**: supervisores, frontoffice, backoffice e admin — com os mesmos filtros e o mesmo alcance da lista.

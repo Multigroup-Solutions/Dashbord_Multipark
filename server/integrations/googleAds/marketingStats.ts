@@ -50,7 +50,7 @@ export async function marketingCategoryExpenses(db: any, from: string, to: strin
   const rows = rowsOf<any>(await db.execute(sql`
     SELECT e.supplier, e.supplierNif, COALESCE(SUM(e.amount), 0) AS t
     FROM expenses e JOIN expense_categories c ON c.id = e.categoryId
-    WHERE LOWER(TRIM(c.name)) = 'marketing' AND e.status <> 'cancelled'
+    WHERE LOWER(TRIM(c.name)) = 'marketing' AND e.status <> 'cancelled' AND e.deletedAt IS NULL
       AND e.expenseDate >= ${`${from} 00:00:00`} AND e.expenseDate <= ${`${to} 23:59:59`}
       AND ${projectScope(sql`e.projectId`)}${proj}
     GROUP BY e.supplier, e.supplierNif`));

@@ -741,6 +741,9 @@ export const expenses = mysqlTable("expenses", {
 	paymentDueDate: timestamp({ mode: 'string' }),
 	paidAt: timestamp({ mode: 'string' }),
 	status: mysqlEnum(['pending','paid','overdue','cancelled']).default('pending').notNull(),
+	// 0465 (D4): "Eliminar" esconde a despesa de todo o lado mas fica guardada (só o super admin a vê, a pedido).
+	deletedAt: timestamp({ mode: 'string' }),
+	deletedById: int(),
 	categoryId: int(),
 	projectId: int(),
 	buyerId: int(),
@@ -875,6 +878,9 @@ export const recurringExpenses = mysqlTable("recurring_expenses", {
 	projectId: int(),
 	dayOfMonth: int().default(1).notNull(),
 	active: tinyint().default(1).notNull(),
+	// 0465 (D4): "Remover" = desativar e sair da lista (fica guardado; as despesas lançadas continuam ligadas).
+	removedAt: timestamp({ mode: 'string' }),
+	removedById: int(),
 	notes: text(),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
