@@ -23,7 +23,7 @@ describe("regras do dono (pontos)", () => {
   it("os pontos são os definidos", () => {
     expect(EVALUATION_POINTS).toMatchObject({
       movement: 2, pickupOrDelivery: 3, firstMoveAfterPickup: 5,
-      speeding: -10, delay: -5, confirmedComplaint: -20, accidentOrDamage: -600,
+      speeding: -10, delay: -5, confirmedComplaint: -20, accidentOrDamage: -6000, // D15 (Jorge 3 out): era −600
     });
   });
 
@@ -42,8 +42,8 @@ describe("regras do dono (pontos)", () => {
   it("negativos: velocidade, atrasos, reclamações e acidentes; o total pode ser negativo", () => {
     const s = scoreOf(m({ entregas: 2, speedingEvents: 1, delays: 2, complaints: 1, accidents: 1 }));
     expect(s.positivePoints).toBe(6);
-    expect(s.negativePoints).toBe(10 + 10 + 20 + 600);
-    expect(s.totalPoints).toBe(6 - 640);
+    expect(s.negativePoints).toBe(10 + 10 + 20 + 6000);
+    expect(s.totalPoints).toBe(6 - 6040);
     expect(s.lines.map((l) => l.key)).toEqual([
       "movement", "pickupOrDelivery", "firstMoveAfterPickup", "speeding", "delay", "confirmedComplaint", "accidentOrDamage",
     ]);

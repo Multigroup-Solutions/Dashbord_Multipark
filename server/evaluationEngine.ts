@@ -9,7 +9,8 @@
  *        as regras de "levar ao parque" e entregas atrasadas) e as
  *        ocorrências que criou na app ("Occurrence");
  *      · a nossa BD: ponto, escala, ocorrências/reclamações nossas, alertas
- *        de velocidade (GPS Zello) e penalizações.
+ *        de velocidade (GPS Zello), penalizações e os acidentes confirmados
+ *        pelo TL nas ocorrências da app (evaluation_accidents, D15).
  *    Se a BD da Multipark não responder, os movimentos vêm da cópia local
  *    (multipark_booking_history) e o resultado diz `source: "copia"` com o
  *    motivo — nunca rebenta.
@@ -169,6 +170,14 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     }
   } catch { /* sem a tabela das reclamações: fica a regra antiga (dentro do período) */ }
 
+  // Acidentes confirmados pelo TL (D15): o dia operacional da ocorrência já vem gravado.
+  let accidentRows: any[] = [];
+  try {
+    accidentRows = rowsOf(await db.execute(sql`
+      SELECT employeeId, day FROM evaluation_accidents
+       WHERE voidedAt IS NULL AND day >= ${startDay} AND day <= ${endDay}`));
+  } catch { /* tabela ainda não criada (migração 0425) */ }
+
   const { loadExtraRates, rateFor } = await import("./extraRates");
   const { TL_WORKING_DAYS_PER_MONTH } = await import("./extrasDia");
   const rates = await loadExtraRates();
@@ -207,6 +216,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       employeeId: Number(r.employeeId), points: Number(r.points ?? 0), reason: String(r.reason ?? ""),
       relatedId: r.relatedId != null ? Number(r.relatedId) : null, createdAt: toUtcStr(r.createdAt),
     })),
+    confirmedAccidents: accidentRows.map((r) => ({ employeeId: Number(r.employeeId), day: String(r.day) })),
     rate: (level) => rateFor(rates, level),
     tlWorkingDaysPerMonth: TL_WORKING_DAYS_PER_MONTH,
   });

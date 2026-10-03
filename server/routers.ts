@@ -2922,9 +2922,13 @@ export const appRouter = router({
       const list = await listMultiparkOccurrences({ ...f, limit, offset });
       if (!list.available) return { available: false as const, reason: list.reason, code: list.code };
       const stats = await getMultiparkOccurrenceStats(f);
+      // 22c: as que já têm um acidente confirmado (−6000 na avaliação)
+      const { activeAccidentIds } = await import("./evaluationAccidents");
+      const accidents = await activeAccidentIds(list.data.rows.map((o) => o.id));
       return {
         available: true as const,
         ...list.data,
+        accidentIds: [...accidents],
         stats: stats.available ? stats.data : null,
       };
     }),
@@ -2935,6 +2939,69 @@ export const appRouter = router({
       const r = await getMultiparkOccurrence(input.id, scopedCityNames());
       if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
       return { available: true as const, occurrence: r.data };
+    }),
+
+    // 22c (D15, Jorge 3 out): acidente = −6000 na avaliação, só depois de um
+    // team leader (ou acima) o confirmar e dizer quem conduzia. Sugestão: os
+    // agentes das últimas ações na reserva antes da ocorrência.
+    accident: protectedProcedure.input(z.object({ occurrenceId: z.string().min(1).max(64) })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "ocorrencias", "view");
+      const { getMultiparkOccurrence } = await import("./multiparkDb/read");
+      const r = await getMultiparkOccurrence(input.occurrenceId, scopedCityNames());
+      if (!r.available) return { available: false as const, reason: r.reason };
+      if (!r.data) throw new TRPCError({ code: "NOT_FOUND", message: "Ocorrência não encontrada (ou fora da tua cidade)." });
+      const occ = r.data;
+      const acc = await import("./evaluationAccidents");
+      const [records, canConfirm] = await Promise.all([acc.listAccidentRecords(occ.id), acc.canConfirmAccidents(ctx.user)]);
+      let candidates: Awaited<ReturnType<typeof acc.accidentCandidates>> = [];
+      let candidatesError: string | null = null;
+      if (canConfirm && occ.bookingId && occ.createdAt) {
+        try {
+          const { readLiveHistory } = await import("./multiparkDb/historyLive");
+          const to = new Date(Date.parse(occ.createdAt) + 60_000).toISOString().slice(0, 19).replace("T", " ");
+          const from = new Date(Date.parse(occ.createdAt) - 3 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+          const rows = await readLiveHistory({ bookingIds: [occ.bookingId], from, to, limit: 40, order: "desc" });
+          const { loadEvaluationIdentity } = await import("./evaluationIdentity");
+          const { identity } = await loadEvaluationIdentity();
+          candidates = acc.accidentCandidates(rows, identity);
+        } catch {
+          candidatesError = "Não foi possível ler os movimentos desta reserva na BD da Multipark.";
+        }
+      }
+      const { looksLikeAccident } = await import("../shared/evaluationRules");
+      return {
+        available: true as const,
+        day: acc.accidentDayOf(occ),
+        looksLikeAccident: looksLikeAccident(occ),
+        canConfirm,
+        active: records.find((x) => !x.voidedAt) ?? null,
+        history: records.filter((x) => !!x.voidedAt),
+        candidates,
+        candidatesError,
+      };
+    }),
+
+    confirmAccident: protectedProcedure.input(z.object({
+      occurrenceId: z.string().min(1).max(64),
+      employeeId: z.number().int().positive(),
+      note: z.string().trim().max(500).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "ocorrencias", "view");
+      const { getMultiparkOccurrence } = await import("./multiparkDb/read");
+      const r = await getMultiparkOccurrence(input.occurrenceId, scopedCityNames());
+      if (!r.available) throw new TRPCError({ code: "PRECONDITION_FAILED", message: r.reason });
+      if (!r.data) throw new TRPCError({ code: "NOT_FOUND", message: "Ocorrência não encontrada (ou fora da tua cidade)." });
+      const { confirmAccident } = await import("./evaluationAccidents");
+      return confirmAccident(ctx.user, r.data, { employeeId: input.employeeId, note: input.note ?? null });
+    }),
+
+    voidAccident: protectedProcedure.input(z.object({
+      id: z.number().int().positive(),
+      reason: z.string().trim().min(3, "Indica o motivo").max(255),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "ocorrencias", "view");
+      const { voidAccident } = await import("./evaluationAccidents");
+      return voidAccident(ctx.user, input);
     }),
 
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {

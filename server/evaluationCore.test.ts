@@ -191,7 +191,7 @@ describe("motor (dia operacional completo)", () => {
     });
     const m = out.rows[0].metrics;
     expect(m).toMatchObject({ speedingEvents: 2, complaints: 1, accidents: 1, incidentsReported: 1, incidentsAgainst: 1, penaltyPoints: 4 });
-    expect(scoreOf(m).totalPoints).toBe(-20 - 20 - 600);
+    expect(scoreOf(m).totalPoints).toBe(-20 - 20 - 6000);
   });
 
   it("agentes sem ficha ficam à parte (para a escala sem ficha no operacional)", () => {

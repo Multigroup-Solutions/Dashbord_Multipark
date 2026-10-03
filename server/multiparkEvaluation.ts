@@ -11,7 +11,9 @@
  *  - Por Team Leader: o seu + agregado da equipa (mesmo turno).
  *  - Por turno e total do dia.
  *
- * Abrir o dia recalcula-o e grava-o (é o mesmo cálculo do cron diário).
+ * Abrir o dia SÓ MOSTRA o que está guardado (22c, D11 — Jorge 3 out): não
+ * recalcula nem grava. Recalcula o cron da madrugada (4 semanas) ou o botão
+ * Recalcular de quem gere a Avaliação.
  *
  * Fontes (plano-duas-bd.md, B5): os MOVIMENTOS (quem mexeu em que reserva,
  * quando, em que fase) vêm AO VIVO da BD da Multipark ("History", "Booking",
@@ -21,7 +23,7 @@
  */
 import { listAssignments } from "./extrasDia";
 import { agentKeyOf, loadEvaluationIdentity, shortNameOf } from "./evaluationIdentity";
-import { loadEvaluatedDays, recomputeRange, type MovementSource } from "./evaluationEngine";
+import { currentOperationalDay, loadEvaluatedDays } from "./evaluationEngine";
 import type { AgentMovementSummary } from "./multiparkDb/movements";
 import {
   actionPoints,
@@ -95,9 +97,13 @@ export interface ShiftEvaluation {
 
 export interface DayEvaluation {
   date: string;
-  /** De onde vieram os movimentos (BD da Multipark ao vivo ou cópia local). */
-  source: MovementSource;
-  /** Aviso quando a BD da Multipark não respondeu. */
+  /** Os pontos são sempre os GUARDADOS (D11): abrir o dia não recalcula. */
+  source: "guardado";
+  /** Quando foi calculado (o mais recente das pessoas do dia), UTC "YYYY-MM-DD HH:MM:SS". */
+  computedAt: string | null;
+  /** Dia ainda sem cálculo guardado (escala com ficha mas nada calculado). */
+  notComputed: boolean;
+  /** Aviso (ex.: o resumo ao vivo da BD da Multipark não respondeu). */
   notice: string | null;
   shifts: ShiftEvaluation[];
   totals: {
@@ -117,36 +123,37 @@ const addByType = (into: Record<string, number>, from: Record<string, number>) =
 export async function evaluateDay(date: string, opts: { cities?: string[] } = {}): Promise<DayEvaluation> {
   const assignments = await listAssignments(date);
   if (assignments.length === 0) {
-    return { date, source: "multipark", notice: null, shifts: [], totals: { people: 0, totalActions: 0, weightedActions: 0, totalCost: 0, byType: {}, costPerAction: 0 } };
+    return { date, source: "guardado", computedAt: null, notComputed: false, notice: null, shifts: [], totals: { people: 0, totalActions: 0, weightedActions: 0, totalCost: 0, byType: {}, costPerAction: 0 } };
   }
 
-  // Mesmo cálculo do cron (grava o dia) + ajustes manuais por cima
-  const computed = await recomputeRange(date, date);
   // Mesma identidade do motor: a linha da escala sem ficha liga-se pelo nome completo
   const { identity } = await loadEvaluationIdentity();
-
-  // Resumo vivo por agente (só quando a BD da Multipark respondeu ao motor)
-  const liveByKey = new Map<string, AgentMovementSummary[]>();
-  if (computed.source === "multipark") {
-    const { getAgentMovementSummaries } = await import("./multiparkDb/movements");
-    const r = await getAgentMovementSummaries({ startDay: date, byDay: false, cities: opts.cities });
-    if (r.available) {
-      for (const s of r.data) {
-        const who = identity.agent(s.agentUserId, s.agentName);
-        if (who.kind === "ignorado") continue;
-        const list = liveByKey.get(who.key) ?? [];
-        list.push(s);
-        liveByKey.set(who.key, list);
-      }
-    }
-  }
-  const { sumAgentSummaries } = await import("./multiparkDb/movements");
   const resolved = assignments.map((a) => ({ ...a, employeeId: identity.assignment({ employeeId: a.employeeId, personName: a.personName }).employeeId }));
   const empIds = Array.from(new Set(resolved.map((a) => a.employeeId).filter((x): x is number => x != null)));
+  // D11: só o que está GUARDADO (+ ajustes manuais por cima). Nada se recalcula nem grava aqui.
   // a escala já vem filtrada pela cidade (listAssignments → cityNameScope)
   const days = await loadEvaluatedDays({ startDay: date, endDay: date, employeeIds: empIds, employeeIdsAlreadyScoped: true });
   const byEmp = new Map(days.map((d) => [d.employeeId, d]));
-  const unresolved = computed.unresolved.get(date) ?? new Map();
+  const computedAt = days.reduce<string | null>((acc, d) => (d.computedAt && (!acc || d.computedAt > acc) ? d.computedAt : acc), null);
+  const notComputed = empIds.length > 0 && computedAt == null && date <= currentOperationalDay();
+
+  // Resumo AO VIVO por agente (só leitura): o painel de cada pessoa e as ações
+  // de quem não tem ficha (essas não se guardam).
+  const liveByKey = new Map<string, AgentMovementSummary[]>();
+  const { getAgentMovementSummaries, sumAgentSummaries } = await import("./multiparkDb/movements");
+  const r = await getAgentMovementSummaries({ startDay: date, byDay: false, cities: opts.cities });
+  let notice: string | null = null;
+  if (r.available) {
+    for (const s of r.data) {
+      const who = identity.agent(s.agentUserId, s.agentName);
+      if (who.kind === "ignorado") continue;
+      const list = liveByKey.get(who.key) ?? [];
+      list.push(s);
+      liveByKey.set(who.key, list);
+    }
+  } else {
+    notice = `${r.reason} O resumo ao vivo de cada pessoa não aparece; os pontos são os guardados.`;
+  }
 
   const used = new Set<number>(); // uma pessoa com 2 linhas na escala conta 1 vez
   const people: PersonEvaluation[] = resolved.map((a) => {
@@ -171,13 +178,13 @@ export async function evaluateDay(date: string, opts: { cities?: string[] } = {}
       }
       // sem linha calculada (sem atividade/ponto): fica o custo da escala
     } else {
-      // Sem ficha: ações do agente pelo nome curto (regra antiga do operacional)
-      const u = unresolved.get(agentKeyOf(shortName));
+      // Sem ficha: não há nada guardado — as ações do agente (nome curto) lidas
+      // ao vivo; o "levar ao parque" (+5) só se conta com ficha.
+      const u = sumAgentSummaries(liveByKey.get(agentKeyOf(shortName)) ?? []);
       if (u) {
-        m = { ...emptyDayMetrics(), actions: u.actions, actionsMorning: u.actionsMorning, actionsNight: u.actionsNight,
-          recolhas: u.recolhas, entregas: u.entregas, movements: u.movements, parkingMoves: u.parkingMoves };
+        m = { ...emptyDayMetrics(), actions: u.total, recolhas: u.recolhas, entregas: u.entregas, movements: u.movements };
         m.weightedActions = actionPoints(m);
-        byType = u.byType;
+        byType = { ...u.byType };
       }
       m.scheduledHours = a.hoursBilled;
       hoursSource = a.hoursBilled > 0 ? "escala" : null;
@@ -249,8 +256,10 @@ export async function evaluateDay(date: string, opts: { cities?: string[] } = {}
   for (const p of people) addByType(dayByType, p.byType);
   return {
     date,
-    source: computed.source,
-    notice: computed.notice,
+    source: "guardado",
+    computedAt,
+    notComputed,
+    notice,
     shifts,
     totals: {
       people: people.length,

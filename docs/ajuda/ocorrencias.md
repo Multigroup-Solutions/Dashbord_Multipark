@@ -2,7 +2,7 @@
 modulo: ocorrencias
 titulo: Ocorrências
 rotas: /ocorrencias
-palavras: ocorrência, ocorrências, incidente, vidro aberto, carro aberto, acidente, atraso, prioridade, multipark, app multipark, resolver, resolvida, parque, matrícula, reserva, ocorrência antiga, csv, indisponível, tentar de novo
+palavras: ocorrência, ocorrências, incidente, vidro aberto, carro aberto, acidente, foi um acidente, confirmar acidente, quem conduzia, desfazer acidente, menos 6000, atraso, prioridade, multipark, app multipark, resolver, resolvida, parque, matrícula, reserva, ocorrência antiga, csv, indisponível, tentar de novo
 ---
 # Ocorrências
 
@@ -19,6 +19,15 @@ As ocorrências registadas pelos agentes na **app Multipark** (vidro aberto, aci
 - As ocorrências resolvem-se na **app Multipark**. Quando são resolvidas lá, aparecem resolvidas aqui, com quem e quando.
 - O botão **Resolver** do dashboard está desligado até a Multipark disponibilizar a forma de o fazer a partir daqui.
 - **Ver na Multipark** abre a reserva na app.
+
+**Foi um acidente? (−6000 na avaliação)**
+- Ao abrir uma ocorrência, o team leader (ou acima) vê **Foi um acidente?**. Aparece a amarelo quando o tipo ou as notas parecem um acidente.
+- A lista sugere quem conduzia: as pessoas das últimas ações nessa reserva nos 3 dias antes da ocorrência, com a última em primeiro. Quem não tem ficha aparece, mas não se escolhe (liga-o à ficha no RH).
+- Escolhe a pessoa, junta uma nota se quiseres e carrega em **Confirmar acidente** e depois em **Sim**. A pessoa fica com **−6000 pontos** na avaliação do dia da ocorrência (dia operacional, 03h–03h).
+- Só conta depois de confirmado. O team leader só confirma acidentes da sua equipa e ninguém confirma um acidente seu.
+- Na lista, a ocorrência fica com **Acidente confirmado**.
+- **Desfazer** pede o motivo e tira os pontos. Nada se apaga: a confirmação fica no histórico da ocorrência, com quem a desfez e porquê.
+- Se ninguém mexeu na reserva antes da ocorrência, quem gere a avaliação faz um ajuste em **Avaliação** (Acidentes / danos).
 
 **Quando a leitura falha**
 - **"Ocorrências indisponíveis"**: a base de dados da Multipark não respondeu. Carrega em **Tentar de novo**.
