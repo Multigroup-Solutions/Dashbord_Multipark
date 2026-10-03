@@ -11,6 +11,7 @@ export const KIND_SOURCES: Record<string, string> = {
   complaint_new: "Reclamação criada (manual ou por email).",
   complaint_sla: "Cron horário: reclamações novas/em análise que passaram o SLA (1× por reclamação, resumo por cidade).",
   complaint_triage: "Triagem da IA com prioridade alta/urgente por aplicar ou possível duplicado.",
+  complaint_client_reply: "Entrada de email: o cliente (remetente externo, email com menos de 48 h) volta a escrever numa reclamação — só ao responsável, se ainda vê Reclamações. Interruptor COMPLAINT_CLIENT_REPLY_NOTIFY (desligado por omissão).",
   mail_new: "Sincronização do Gmail (5 em 5 min): conversa nova ou reaberta numa caixa partilhada com aviso ligado, que não criou reclamação/perdido/crítica/ocorrência — só a quem vê essa caixa (módulo, papéis e cidade da caixa).",
   mail_assigned: "Alguém te atribui uma conversa de email (Comunicação).",
   web_analytics_alert: "Recolha diária Web & SEO (/api/cron/web-analytics): sessões de ontem abaixo da média de 7 dias, cliques orgânicos da semana a cair, pesquisas do top a perder posição, PageSpeed móvel abaixo do mínimo e dados reais (Chrome UX Report) das páginas-chave acima dos limiares de LCP/INP/CLS (limiares em Definições → Integrações → Web & SEO; 1× por propriedade e dia).",

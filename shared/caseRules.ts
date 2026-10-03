@@ -470,6 +470,13 @@ export function complaintPhotoType(filename: string): { ext: string; mime: strin
   return mime ? { ext: ext === "jpeg" ? "jpg" : ext, mime } : null;
 }
 
+/**
+ * D21 (Jorge, 3 out 2026): a lista das Reclamações abre nos últimos 90 dias;
+ * as que ainda estão abertas aparecem sempre, sejam de quando forem.
+ */
+export const COMPLAINT_LIST_DEFAULT_DAYS = 90;
+export const COMPLAINT_OPEN_STATUSES: readonly string[] = ["new", "analyzing", "waiting_client"];
+
 /** Estados que uma pessoa (ou a API) pode escolher; "converted" só por conversão. */
 export const COMPLAINT_MANUAL_STATUSES: readonly string[] = ["new", "analyzing", "waiting_client", "resolved", "closed"];
 

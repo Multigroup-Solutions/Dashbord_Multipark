@@ -397,11 +397,12 @@ async function routeToModule(
  *    ficam em inbound_emails.attachmentsJson e aparecem como links no detalhe;
  *  - reclamação NOVA: alerta in-app (notifyComplaintCreated) + aviso de
  *    receção automático ao cliente (1×, [REC-<id>], COMPLAINT_AUTO_ACK=off
- *    desliga).
+ *    desliga);
+ *  - resposta a uma EXISTENTE: aviso ao responsável (D20, server/complaintClientReply.ts).
  */
 async function afterComplaintEmail(
   complaintId: number,
-  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string },
+  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string; fromName?: string; subject?: string; receivedAt?: string | null },
 ): Promise<void> {
   try {
     const systemUser = await getSystemUserId().catch(() => undefined);
@@ -419,7 +420,16 @@ async function afterComplaintEmail(
   } catch (err) {
     console.warn("[EmailInbound] cópia de anexos para a reclamação falhou:", err);
   }
-  if (!ctx.isNew) return;
+  if (!ctx.isNew) {
+    // D20: o cliente voltou a escrever → aviso ao responsável (interruptor, desligado por omissão).
+    try {
+      const { notifyComplaintClientReply } = await import("../complaintClientReply");
+      await notifyComplaintClientReply(complaintId, { fromEmail: ctx.fromEmail, fromName: ctx.fromName, subject: ctx.subject, receivedAt: ctx.receivedAt });
+    } catch (err) {
+      console.warn("[EmailInbound] aviso de resposta do cliente falhou:", err);
+    }
+    return;
+  }
   try {
     const { notifyComplaintCreated } = await import("../complaintsExtended");
     await notifyComplaintCreated(complaintId);
@@ -563,6 +573,9 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
         attachments,
         messageId,
         fromEmail,
+        fromName,
+        subject,
+        receivedAt,
       });
     }
     return { status: "processed", claimId, routed };

@@ -54,6 +54,8 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
   const seesMore = seesBeyondOwn(user, "perdidos");
   const canEdit = can(user, "perdidos", "edit");
   const canManage = can(user, "perdidos", "manage");
+  // D19: condutores não abrem reclamações — os números aparecem sem link.
+  const complaintHref = (cid: number | null | undefined) => (cid != null && seesBeyondOwn(user, "reclamacoes") ? `/reclamacoes?id=${cid}` : undefined);
   const photosQ = trpc.lostFound.getPhotos.useQuery({ itemId: id });
   const { data: photos = [] } = photosQ;
   const messagesQ = trpc.lostFound.getMessages.useQuery({ itemId: id });
@@ -245,20 +247,20 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
           <div className="flex flex-wrap gap-2 mt-1">
             {item.projectId == null && <Badge variant="destructive">Sem cidade — atribui em "Atribuição & prazo"</Badge>}
             {item.status === "converted" && item.convertedToId && (
-              <a href={item.convertedToType === "complaint" ? `/reclamacoes?id=${item.convertedToId}` : "#"} className="text-xs underline text-violet-700">
+              <a href={item.convertedToType === "complaint" ? complaintHref(item.convertedToId) : undefined} className="text-xs underline text-violet-700">
                 Convertido em {item.convertedToType === "complaint" ? "Reclamação" : item.convertedToType} #{item.convertedToId} (caso fechado)
               </a>
             )}
             {item.convertedFromType && item.convertedFromId && (
               <a
-                href={item.convertedFromType === "complaint" ? `/reclamacoes?id=${item.convertedFromId}` : item.convertedFromType === "incident" ? `/ocorrencias?id=${item.convertedFromId}` : "#"}
+                href={item.convertedFromType === "complaint" ? complaintHref(item.convertedFromId) : item.convertedFromType === "incident" ? `/ocorrencias?id=${item.convertedFromId}` : undefined}
                 className="text-xs underline text-muted-foreground"
               >
                 Veio de {item.convertedFromType === "complaint" ? "Reclamação" : item.convertedFromType === "incident" ? "Ocorrência" : item.convertedFromType} #{item.convertedFromId}
               </a>
             )}
             {item.relatedComplaintId && (
-              <a href={`/reclamacoes?id=${item.relatedComplaintId}`} className="text-xs underline text-amber-700">
+              <a href={complaintHref(item.relatedComplaintId)} className="text-xs underline text-amber-700">
                 Relacionado com reclamação #{item.relatedComplaintId}
               </a>
             )}

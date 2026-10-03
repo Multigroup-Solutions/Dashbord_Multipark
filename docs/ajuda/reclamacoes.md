@@ -2,7 +2,7 @@
 modulo: reclamacoes
 titulo: Reclamações
 rotas: /reclamacoes
-palavras: reclamação, reclamações, cliente, queixa, dano, sujidade, atraso, cobrança, sla, prazo, email ao cliente, condutores envolvidos, quem mexeu no carro, em serviço, reserva, converter em perdido, em análise, aguarda cliente, arquivar, arquivadas, tirar do arquivo, eliminar, fotos, pontos, csv, anexar email, sincronizar emails, aviso de receção, sugestões da ia
+palavras: reclamação, reclamações, cliente, 90 dias, ver todas, cliente respondeu, aviso ao responsável, queixa, dano, sujidade, atraso, cobrança, sla, prazo, email ao cliente, condutores envolvidos, quem mexeu no carro, em serviço, reserva, converter em perdido, em análise, aguarda cliente, arquivar, arquivadas, tirar do arquivo, eliminar, fotos, pontos, csv, anexar email, sincronizar emails, aviso de receção, sugestões da ia
 ---
 # Reclamações
 
@@ -17,10 +17,12 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 
 **Tratar**
 - O quadro mostra os estados: Novo → Em Análise → Aguarda Cliente → Resolvido/Fechado. Arrasta ou muda o estado no caso. As convertidas ficam em Fechado e não se movem.
-- Os contadores contam o que está no quadro (tipo e pesquisa incluídos). **Em atraso** = prazo passado em Novo ou Em Análise.
+- O quadro abre nas reclamações dos **últimos 90 dias** e em **todas as que ainda estão abertas** (Novo, Em Análise, Aguarda Cliente), sejam de quando forem. **Ver todas** tira o limite; **Só os últimos 90 dias** volta. Ao pesquisar procura em todas; as **Arquivadas** vêm sempre todas.
+- Os contadores contam o que está no quadro (tipo, pesquisa e limite de 90 dias incluídos). **Em atraso** = prazo passado em Novo ou Em Análise.
 - No caso: separadores **Detalhes**, **Mensagens**, **Fotos**, **Viatura** (quem mexeu no carro), **Em serviço**, **Histórico** e **Comunicações**.
 - **Mensagens**: o que escreves fica no caso. Ao cliente só chega o que enviares com **Enviar email** (há modelos de resposta).
 - **Enviar email** passa o caso a **Aguarda Cliente** (só se estava em Novo ou Em Análise). Quando o cliente responde, volta a **Em Análise**, e um caso fechado reabre.
+- Com **"Reclamações: avisar o responsável quando o cliente responde"** ligado nas Definições (vem desligado), o responsável recebe no sino **"O cliente respondeu à reclamação #n"** — no máximo um aviso por reclamação a cada 30 min, só emails do próprio cliente (um reencaminhamento interno não conta). Sem responsável não avisa ninguém.
 - **Reabrir** (voltar a um estado aberto) limpa a data de fecho e o aviso de prazo; pode voltar a avisar.
 - **Sugestões da IA** (tipo, prioridade, reserva, rascunho de resposta): nada é enviado ao cliente sem uma pessoa.
 - **Anexar email da caixa** junta ao caso um email que não se ligou sozinho. Anexar outra vez não duplica.
@@ -52,4 +54,4 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 **Quem pode**
 - Ver, criar e tratar: conforme o acesso a Reclamações, sempre na tua cidade.
 - **CSV** (leva contactos do cliente): só quem pode exportar.
-- Condutores e extras só veem as reclamações em que estão envolvidos, sem os separadores da reserva e dos condutores.
+- Condutores e extras **não veem** reclamações — nem as em que estão envolvidos (notas internas e contactos do cliente). Só a partir de team leader. Nas Críticas e nos Perdidos veem o nº da reclamação ligada, sem a poder abrir.

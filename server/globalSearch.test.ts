@@ -156,9 +156,12 @@ describe("paleta — leitura, pontuação, ordem e grupos", () => {
   });
 
   it("navegação: só páginas/ações que a pessoa pode abrir", () => {
-    const extra = matchNavigation("reclama", { role: "extra" });
-    expect(extra.map((x) => x.title)).toContain("Reclamações"); // extra vê as suas
-    expect(extra.map((x) => x.title)).not.toContain("Nova reclamação"); // sem "edit"
+    // D19: extras e condutores já não veem Reclamações (nem as suas).
+    expect(matchNavigation("reclama", { role: "extra" }).map((x) => x.title)).not.toContain("Reclamações");
+    const crit = matchNavigation("critica", { role: "extra" });
+    expect(crit.map((x) => x.title)).toContain("Críticas Google"); // extra vê as suas
+    const tl = matchNavigation("reclama", { role: "team_leader" });
+    expect(tl.map((x) => x.title)).toContain("Reclamações");
     const sup = matchNavigation("nova recl", { role: "supervisor" });
     expect(sup[0]).toMatchObject({ title: "Nova reclamação", href: "/reclamacoes?new=1" });
     expect(matchNavigation("escala de amanha", { role: "team_leader" })[0].href).toBe("/extras-dia?dia=amanha");

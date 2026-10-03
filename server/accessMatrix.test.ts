@@ -22,9 +22,11 @@ describe("matriz de acessos — papéis do dono", () => {
   });
 
   it("extra: user + avaliação/histórico/ocorrências próprios, serviços, PDAs e tarefas", () => {
-    for (const m of ["avaliacao", "historico_diario", "reclamacoes", "criticas", "ocorrencias"] as ModuleId[]) {
+    for (const m of ["avaliacao", "historico_diario", "criticas", "ocorrencias"] as ModuleId[]) {
       expect(scopeFor("extra", m)).toBe("own");
     }
+    // D19 (Jorge, 3 out 2026): reclamações só a partir de team leader — nem as em que estão envolvidos.
+    expect(sees("extra", "reclamacoes")).toBe(false);
     expect(sees("extra", "servicos")).toBe(true);
     expect(can("extra", "pdas", "edit")).toBe(true);
     expect(can("extra", "tarefas", "edit")).toBe(true);
@@ -40,6 +42,8 @@ describe("matriz de acessos — papéis do dono", () => {
     expect(scopeFor("condutor", "extras_dia")).toBe("city");
     expect(can("condutor", "extras_dia", "edit")).toBe(false);
     expect(scopeFor("condutor", "perdidos")).toBe("own");
+    expect(sees("condutor", "reclamacoes")).toBe(false); // D19
+    expect(scopeFor("team_leader", "reclamacoes")).toBe("city");
     expect(sees("condutor", "parcerias")).toBe(false);
     expect(sees("condutor", "rh")).toBe(false);
   });

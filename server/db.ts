@@ -2067,12 +2067,18 @@ export async function revokeApiKey(id: number, byUserId: number, reason: string)
 
 // ─── RECLAMAÇÕES ─────────────────────────────────────────────────────────────
 
-export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number; archived?: boolean }) {
+export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number; archived?: boolean; sinceDays?: number }) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = await projectFilterConds(complaints.projectId, filters?.projectId);
   // Arquivadas (16b) só quando pedidas; nunca misturadas com as outras.
   conditions.push(filters?.archived ? sql`${complaints.archivedAt} IS NOT NULL` : sql`${complaints.archivedAt} IS NULL`);
+  // D21: janela de N dias pela data de criação — as ainda abertas vêm sempre.
+  const since = Math.floor(Number(filters?.sinceDays ?? 0));
+  if (!filters?.archived && since > 0) {
+    const { COMPLAINT_OPEN_STATUSES } = await import("../shared/caseRules");
+    conditions.push(sql`(${complaints.createdAt} >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${Math.min(since, 3650)} DAY) OR ${complaints.complaintStatus} IN (${sql.join(COMPLAINT_OPEN_STATUSES.map((x) => sql`${x}`), sql`, `)}))`);
+  }
   if (filters?.status) conditions.push(eq(complaints.complaintStatus, filters.status as any));
   if (filters?.type) conditions.push(eq(complaints.complaintType, filters.type as any));
   if (filters?.vehicleId) conditions.push(eq(complaints.vehicleId, filters.vehicleId));

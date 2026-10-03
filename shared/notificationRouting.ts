@@ -98,6 +98,9 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "reclamacoes", action: "view", roles: ["frontoffice", "backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 12 * 60 }),
   K({ kind: "complaint_triage", group: "suporte", label: "Triagem da IA por rever", description: "Reclamação urgente ou possível duplicado sugerido pela IA.",
     module: "reclamacoes", action: "view", roles: ["frontoffice", "backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
+  // D20 (Jorge, 3 out 2026): só com o interruptor COMPLAINT_CLIENT_REPLY_NOTIFY ligado (desligado por omissão).
+  K({ kind: "complaint_client_reply", group: "suporte", label: "O cliente respondeu à tua reclamação", description: "O cliente voltou a escrever numa reclamação de que és responsável (1 aviso por reclamação a cada 30 min).",
+    module: "reclamacoes", action: "view", roles: [], cityScoped: false, personal: true, channels: IN_APP }),
   K({ kind: "google_reviews_alert", group: "suporte", label: "Críticas Google: alertas", description: "Média de estrelas dos últimos 7 dias a cair e críticas Google sem resposta há demasiado tempo (por perfil da tua cidade).",
     module: "criticas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
   K({ kind: "incident_critical", group: "suporte", label: "Ocorrência crítica", description: "Ocorrências registadas com gravidade crítica.",
@@ -480,7 +483,8 @@ export function resolveRecipients(input: RouteInput, candidates: readonly Routin
   if (d.personal) {
     for (const id of input.targetUserIds ?? []) {
       const c = byId.get(id);
-      if (c) add(c, "personal");
+      // O filtro do chamador também vale para os pessoais (ex.: o responsável ainda vê o módulo — D20).
+      if (c && (!input.filter || input.filter(c))) add(c, "personal");
     }
     return Array.from(out.values());
   }

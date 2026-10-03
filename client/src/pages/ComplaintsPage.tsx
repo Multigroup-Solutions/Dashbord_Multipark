@@ -11,7 +11,7 @@ import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import { toCsv } from "@shared/csv";
-import { complaintOverdue } from "@shared/caseRules";
+import { COMPLAINT_LIST_DEFAULT_DAYS, complaintOverdue } from "@shared/caseRules";
 import { compressImage } from "@/lib/compressImage";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useConfirm } from "./training/shared";
@@ -131,17 +131,22 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
   const canEdit = can(user, "reclamacoes", "edit");
   const canManage = can(user, "reclamacoes", "manage");
   const [showArchived, setShowArchived] = useState(false);
+  // ?q= (pesquisa global → "ver todos"): filtro local por título, cliente, reserva, matrícula ou nº.
+  const [q, setQ] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
+  // D21: abre nos últimos 90 dias (+ as abertas). Pesquisar ou "Ver todas" tira o limite; as arquivadas vêm todas.
+  const [allTime, setAllTime] = useState(false);
+  const searching = q.trim().length > 0;
+  const windowed = !showArchived && !allTime && !searching;
   const complaintsQueryInput = useMemo(() => {
     const input: any = {};
     if (filterType !== "all") input.type = filterType;
     if (globalFilters.projectId !== undefined) input.projectId = globalFilters.projectId;
     if (showArchived) input.archived = true;
+    if (windowed) input.sinceDays = COMPLAINT_LIST_DEFAULT_DAYS;
     return input;
-  }, [filterType, globalFilters.projectId, showArchived]);
+  }, [filterType, globalFilters.projectId, showArchived, windowed]);
   const listQ = trpc.complaints.list.useQuery(complaintsQueryInput);
   const { data: allComplaints = [], isLoading } = listQ;
-  // ?q= (pesquisa global → "ver todos"): filtro local por título, cliente, reserva, matrícula ou nº.
-  const [q, setQ] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
   const complaints = useMemo(() => {
     const needle = q.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     if (!needle) return allComplaints;
@@ -256,6 +261,17 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
       )}
       {showArchived && !listQ.isError && (
         <p className="text-xs text-muted-foreground">Reclamações arquivadas: não entram nos contadores, lembretes nem na avaliação. Abre uma para a tirar do arquivo.</p>
+      )}
+      {!showArchived && !listQ.isError && (
+        <p className="text-xs text-muted-foreground" data-testid="complaints-window">
+          {windowed ? (
+            <>A mostrar as dos últimos {COMPLAINT_LIST_DEFAULT_DAYS} dias e todas as que ainda estão abertas. <button type="button" className="underline text-primary" onClick={() => setAllTime(true)}>Ver todas</button></>
+          ) : searching ? (
+            <>A pesquisar em todas as reclamações (sem o limite de {COMPLAINT_LIST_DEFAULT_DAYS} dias).</>
+          ) : (
+            <>A mostrar todas as reclamações. <button type="button" className="underline text-primary" onClick={() => setAllTime(false)}>Só os últimos {COMPLAINT_LIST_DEFAULT_DAYS} dias</button></>
+          )}
+        </p>
       )}
 
       {/* Stats */}
