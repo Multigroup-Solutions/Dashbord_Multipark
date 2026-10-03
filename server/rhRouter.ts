@@ -780,7 +780,8 @@ export const rhRouter = router({
         let autofill: { filled: string[] } = { filled: [] };
         try {
           const { autofillFromDocument } = await import("./documentAutofill");
-          const r = await autofillFromDocument({ employeeId: input.employeeId, docType: input.docType, mimeType: input.mimeType, base64: input.fileBase64, userId: ctx.user.id });
+          const ibanDirect = canChangeIbanDirectly(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.employeeId));
+          const r = await autofillFromDocument({ employeeId: input.employeeId, docType: input.docType, mimeType: input.mimeType, base64: input.fileBase64, userId: ctx.user.id, ibanDirect });
           autofill = { filled: r.filled };
         } catch (err) { console.warn("[documents.upload] leitura por IA falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
         return { url, key, autofill };
@@ -821,10 +822,11 @@ export const rhRouter = router({
         const filled: string[] = [];
         try {
           const { autofillFromDocument } = await import("./documentAutofill");
+          const ibanDirect = canChangeIbanDirectly(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.employeeId));
           for (const f of input.files.slice(0, 3)) {
-            const r = await autofillFromDocument({ employeeId: input.employeeId, docType: input.docType, mimeType: f.mimeType, base64: f.fileBase64, userId: ctx.user.id });
+            const r = await autofillFromDocument({ employeeId: input.employeeId, docType: input.docType, mimeType: f.mimeType, base64: f.fileBase64, userId: ctx.user.id, ibanDirect });
             filled.push(...r.filled);
-            if (r.skipped) break;
+            if (r.skipped || r.ibanRequested) break;
           }
         } catch (err) { console.warn("[documents.uploadBatch] leitura por IA falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
         return Object.assign(results, { autofill: { filled } });

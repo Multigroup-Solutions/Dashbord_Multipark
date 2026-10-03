@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   thread: null as any,
   updateEmployee: vi.fn(),
   logActivity: vi.fn(),
+  bankReq: vi.fn(async () => ({ id: 1, masked: "PT50 **** 0154" })),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -27,6 +28,8 @@ vi.mock("./db", () => ({
   saveCareerExamAttempt: vi.fn(),
   saveQuizAttempt: vi.fn(),
 }));
+// 26b: o IBAN lido pela IA vira pedido ao RH para quem não o muda na hora.
+vi.mock("./rhBankChange", () => ({ createBankChangeRequest: h.bankReq }));
 vi.mock("./whatsappInbox", async (orig) => ({ ...(await orig<any>()), getConversationThread: vi.fn(async () => h.thread) }));
 
 import { setAiProvidersForTests } from "./_core/ai/client";
@@ -198,6 +201,29 @@ describe("documentos do RH", () => {
     expect(call().config.responseJsonSchema.properties.nif.type).toEqual(["string", "null"]);
   });
 
+  it("26b (D49): IBAN lido → pedido ao RH para quem não o muda na hora (nunca grava direto)", async () => {
+    process.env.AI_HR_AUTOFILL = "on";
+    h.bankReq.mockClear();
+    h.gen.mockResolvedValueOnce(sdk(JSON.stringify({ ...doc, iban: "PT50 0002 0123 1234 5678 9015 4" })));
+    h.db = createFakeDb((q) => (q.sql.includes("FROM employees") ? [[{ nif: null, birthDate: null, nationality: null, address: null, nib: null }]] : [[]]));
+    const r = await autofillFromDocument({ employeeId: 4, docType: "nib_proof", mimeType: "image/png", base64: "eA==", userId: 9 });
+    expect(r).toMatchObject({ filled: ["IBAN (pedido ao RH)"], ibanRequested: true });
+    expect(h.bankReq).toHaveBeenCalledWith(4, "PT50000201231234567890154", 9);
+    expect(h.updateEmployee).not.toHaveBeenCalled();
+  });
+
+  it("26b (D49): quem muda o IBAN na hora (back office, supervisor, admin) grava direto, sem pedido", async () => {
+    process.env.AI_HR_AUTOFILL = "on";
+    h.bankReq.mockClear();
+    h.gen.mockResolvedValueOnce(sdk(JSON.stringify({ ...doc, iban: "PT50000201231234567890154" })));
+    h.db = createFakeDb((q) => (q.sql.includes("FROM employees") ? [[{ nif: null, birthDate: null, nationality: null, address: null, nib: null }]] : [[]]));
+    const r = await autofillFromDocument({ employeeId: 4, docType: "nib_proof", mimeType: "image/png", base64: "eA==", userId: 9, ibanDirect: true });
+    expect(r.filled).toEqual(["IBAN"]);
+    expect(r.ibanRequested).toBeUndefined();
+    expect(h.updateEmployee).toHaveBeenCalledWith(4, { nib: "PT50000201231234567890154" });
+    expect(h.bankReq).not.toHaveBeenCalled();
+  });
+
   it("extractDocument devolve null (sem lançar) se a resposta for inválida", async () => {
     process.env.AI_HR_AUTOFILL = "on";
     h.gen.mockResolvedValue(sdk("isto não é JSON"));
@@ -226,5 +252,23 @@ describe("perguntas da formação", () => {
     expect(inserted[0]).toMatchObject({ correctOption: "B", published: 0, sourceManualId: 7 });
     expect(call().model).toBe(DEFAULT_GEMINI_MODELS.fast);
     expect(call().config.responseJsonSchema.properties.questions.type).toBe("array");
+  });
+
+  it("26b: o texto do manual vai sem dados pessoais (como na base de conhecimento)", async () => {
+    const manual = { id: 8, title: "Contactos", content: "Em caso de dúvida liga ao Rui 912 345 678 ou escreve a rui.almeida@gmail.com. A velocidade máxima é 20 km/h. ".repeat(3), categoryId: null, fileMimeType: null, fileKey: null, fileUrl: null };
+    const fake = createFakeDb();
+    h.db = {
+      queries: fake.queries,
+      execute: fake.execute,
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [manual] }) }) }),
+      insert: () => ({ values: async () => undefined }),
+    };
+    h.gen.mockResolvedValueOnce(sdk(JSON.stringify({ questions: [
+      { question: "Qual é a velocidade máxima?", optionA: "10", optionB: "20 km/h", optionC: "30", optionD: "50", correctOption: "B", explanation: null, difficulty: "easy" },
+    ] })));
+    await generateQuizDrafts(8, 1, 1);
+    expect(partsText()).not.toContain("rui.almeida@gmail.com");
+    expect(partsText()).not.toContain("912 345 678");
+    expect(partsText()).toContain("20 km/h");
   });
 });
