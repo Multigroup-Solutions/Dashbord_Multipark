@@ -26,6 +26,7 @@ export type AiFlag =
   | "AI_WHATSAPP_TRIAGE"
   | "AI_MAIL_ROUTING"
   | "AI_LOST_FOUND_MATCH"
+  | "AI_CRM_IDENTITY"
   | "AI_ASSISTANT"
   // Automações internas (set 2026) — cada uma com o seu interruptor.
   | "AI_OPS_BRIEFING"
@@ -76,6 +77,8 @@ export const AI_FEATURES = {
   // 17f: separar os emails novos das caixas gerais (info@) pela caixa do tema.
   mail_routing: { label: "Email: separar pelas caixas", flag: "AI_MAIL_ROUTING", tier: "lite", essential: false },
   lost_found_match: { label: "Perdidos: correspondências", flag: "AI_LOST_FOUND_MATCH", tier: "lite", essential: false },
+  // 21c: dúvidas de "é a mesma pessoa?" em Rever fichas (só factos e o 1.º nome, nunca contactos).
+  crm_identity: { label: "Clientes: mesma pessoa?", flag: "AI_CRM_IDENTITY", tier: "lite", essential: false },
   // Assistente da app (chat da equipa): "como se usa" + perguntas aos dados
   // por ferramentas só de leitura. Lite (regra do dono; muitas mensagens curtas).
   assistant: { label: "Assistente (chat)", flag: "AI_ASSISTANT", tier: "lite", essential: false },

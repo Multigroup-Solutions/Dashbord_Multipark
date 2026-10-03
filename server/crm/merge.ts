@@ -9,10 +9,14 @@
  * principal. No Odoo, juntar é irreversível; aqui não.
  *
  * Sugestões: pares de fichas ativas que partilham telefone, matrícula, NIF ou
- * email (regras e pontos em shared/crmIdentity.ts). Recusadas não voltam.
+ * email (regras e pontos em shared/crmIdentity.ts). Recusadas não voltam — e
+ * a recusa acompanha as fichas quando uma delas é junta a outra (21c).
+ *
+ * Juntar sozinho (21c): as regras do dono (identityVerdict) e, nas dúvidas,
+ * a IA (AI_CRM_IDENTITY, desligada por omissão) — o resto fica em Rever fichas.
  */
 import { sql } from "drizzle-orm";
-import { scoreSuggestion, type SuggestionSide } from "../../shared/crmIdentity";
+import { identityVerdict, scoreSuggestion, type IdentitySide, type IdentityVerdict } from "../../shared/crmIdentity";
 import { recomputeMetrics } from "./sync";
 
 /**
@@ -65,7 +69,12 @@ export interface MergeSnapshot {
   /** 21b: como estava a que fica (Pro, notas, etiquetas) e como ficou — separar repõe se ninguém mexeu */
   survivorBefore?: { isPro: number; notes: string | null; tagsJson: string | null };
   survivorAfter?: { isPro: number; notes: string | null; tagsJson: string | null };
+  /** 21c: recusas ("não é a mesma pessoa") da absorvida copiadas para a que fica — ao separar voltam ao que eram */
+  copiedRefusals?: { id: number; prev: string | null }[];
 }
+
+/** Quem juntou: uma pessoa, as regras do dono ou a IA (crm_merge_events.source). */
+export type MergeSource = "ui" | "auto" | "ai";
 
 /** Notas das duas fichas juntas, sem perder as da absorvida (21b). PURO. */
 export function mergeNotes(survivor: string | null | undefined, merged: string | null | undefined, mergedId: number): string | null {
@@ -94,7 +103,12 @@ export function fieldsToFill(survivor: Record<string, unknown>, merged: Record<s
   return out;
 }
 
-export async function mergeClients(db: any, o: { survivorId: number; mergedId: number; userId: number; reason?: string | null }): Promise<{ eventId: number }> {
+export async function mergeClients(db: any, o: {
+  survivorId: number; mergedId: number; userId: number; reason?: string | null;
+  /** 21c: a sugestão que se aceita (tem de continuar pendente — outra pessoa pode tê-la recusado entretanto) */
+  suggestionId?: number | null;
+  source?: MergeSource;
+}): Promise<{ eventId: number }> {
   if (o.survivorId === o.mergedId) throw new Error("Não se junta uma ficha consigo própria.");
   let eventId = 0;
   await db.transaction(async (tx: any) => {
@@ -104,6 +118,12 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
     const m = both.find((r) => Number(r.id) === o.mergedId);
     if (!s || !m) throw new Error("Ficha não encontrada.");
     if (s.status !== "active" || m.status !== "active") throw new Error("Só se juntam fichas ativas.");
+    const [pa, pb] = o.survivorId < o.mergedId ? [o.survivorId, o.mergedId] : [o.mergedId, o.survivorId];
+    if (o.suggestionId) {
+      const [sg] = rowsOf(await tx.execute(sql`SELECT clientA, clientB, status FROM crm_merge_suggestions WHERE id = ${o.suggestionId} FOR UPDATE`));
+      if (!sg || Number(sg.clientA) !== pa || Number(sg.clientB) !== pb) throw new Error("Sugestão não encontrada.");
+      if (sg.status !== "pending") throw new Error(sg.status === "dismissed" ? "Esta sugestão foi recusada entretanto (\"não é a mesma pessoa\")." : "Esta sugestão já foi decidida.");
+    }
     const snap: MergeSnapshot = {
       moved: { emails: [], phones: [], vehicles: [], externalIds: [], links: [], relations: [], removed: [], proAccounts: [] },
       dropped: { emails: [], phones: [], vehicles: [], relations: [] }, filled: {}, mergedStatus: String(m.status), copiedBlocks: [],
@@ -183,17 +203,45 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
       .filter((b) => !have.has(`${b.kind}|${b.value}`));
     await tx.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy, createdAt)
       SELECT ${o.survivorId}, kind, value, blockedBy, createdAt FROM crm_blocked_identifiers WHERE clientId = ${o.mergedId}`);
+    // 21c: "não é a mesma pessoa" acompanha a ficha — X recusada com a absorvida fica recusada com a que fica
+    // (senão a junção seguinte, sozinha, juntava X a quem alguém disse que não é ela)
+    snap.copiedRefusals = await copyRefusals(tx, o.mergedId, o.survivorId);
     await tx.execute(sql`UPDATE crm_clients SET status = 'merged', mergedInto = ${o.survivorId} WHERE id = ${o.mergedId}`);
 
-    const [a, b] = o.survivorId < o.mergedId ? [o.survivorId, o.mergedId] : [o.mergedId, o.survivorId];
-    await tx.execute(sql`UPDATE crm_merge_suggestions SET status = 'accepted', decidedBy = ${o.userId}, decidedAt = UTC_TIMESTAMP() WHERE clientA = ${a} AND clientB = ${b}`);
+    await tx.execute(sql`UPDATE crm_merge_suggestions SET status = 'accepted', decidedBy = ${o.userId}, decidedAt = UTC_TIMESTAMP() WHERE clientA = ${pa} AND clientB = ${pb}`);
     await tx.execute(sql`UPDATE crm_merge_suggestions SET status = 'obsolete' WHERE status = 'pending' AND (clientA = ${o.mergedId} OR clientB = ${o.mergedId})`);
-    const ins: any = await tx.execute(sql`INSERT INTO crm_merge_events (survivorId, mergedId, snapshotJson, reason, mergedBy, mergedAt)
-      VALUES (${o.survivorId}, ${o.mergedId}, ${JSON.stringify(snap)}, ${o.reason ?? null}, ${o.userId}, UTC_TIMESTAMP())`);
+    const ins: any = await tx.execute(sql`INSERT INTO crm_merge_events (survivorId, mergedId, snapshotJson, reason, mergedBy, mergedAt, source)
+      VALUES (${o.survivorId}, ${o.mergedId}, ${JSON.stringify(snap)}, ${o.reason ?? null}, ${o.userId}, UTC_TIMESTAMP(), ${o.source ?? "ui"})`);
     eventId = Number((Array.isArray(ins) ? ins[0] : ins)?.insertId ?? 0);
   });
   await refreshSummary(db, [o.survivorId]);
   return { eventId };
+}
+
+/**
+ * Copia as recusas da absorvida para a que fica (21c). Devolve o que mudou
+ * (id da sugestão + estado anterior; null = linha nova) para separar repor.
+ */
+async function copyRefusals(tx: any, mergedId: number, survivorId: number): Promise<{ id: number; prev: string | null }[]> {
+  const out: { id: number; prev: string | null }[] = [];
+  const refused = rowsOf(await tx.execute(sql`SELECT clientA, clientB, score, reasons, decidedBy, DATE_FORMAT(decidedAt, '%Y-%m-%d %H:%i:%s') AS decidedAt
+    FROM crm_merge_suggestions WHERE status = 'dismissed' AND (clientA = ${mergedId} OR clientB = ${mergedId})`));
+  for (const r of refused) {
+    const other = Number(r.clientA) === mergedId ? Number(r.clientB) : Number(r.clientA);
+    if (other === survivorId) continue;
+    const [x, y] = survivorId < other ? [survivorId, other] : [other, survivorId];
+    const [cur] = rowsOf(await tx.execute(sql`SELECT id, status FROM crm_merge_suggestions WHERE clientA = ${x} AND clientB = ${y} FOR UPDATE`));
+    if (cur?.status === "dismissed") continue;
+    if (cur) {
+      await tx.execute(sql`UPDATE crm_merge_suggestions SET status = 'dismissed', decidedBy = ${r.decidedBy ?? null}, decidedAt = ${r.decidedAt ?? null} WHERE id = ${Number(cur.id)}`);
+      out.push({ id: Number(cur.id), prev: String(cur.status) });
+    } else {
+      const ins: any = await tx.execute(sql`INSERT INTO crm_merge_suggestions (clientA, clientB, score, reasons, status, decidedBy, decidedAt)
+        VALUES (${x}, ${y}, ${Number(r.score ?? 0)}, ${String(r.reasons ?? "")}, 'dismissed', ${r.decidedBy ?? null}, ${r.decidedAt ?? null})`);
+      out.push({ id: Number((Array.isArray(ins) ? ins[0] : ins)?.insertId ?? 0), prev: null });
+    }
+  }
+  return out.filter((x) => x.id > 0);
 }
 
 export async function splitMerge(db: any, o: { eventId: number; userId: number }): Promise<{ survivorId: number; mergedId: number }> {
@@ -261,8 +309,15 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
     }
     await tx.execute(sql`UPDATE crm_clients SET status = 'active', mergedInto = NULL WHERE id = ${m}`);
     await tx.execute(sql`UPDATE crm_merge_events SET undoneAt = UTC_TIMESTAMP(), undoneBy = ${o.userId} WHERE id = ${o.eventId}`);
+    // 21c: as recusas copiadas da absorvida saem da que fica (voltam ao que eram; a absorvida mantém as suas)
+    for (const c of snap.copiedRefusals ?? []) {
+      await tx.execute(sql`UPDATE crm_merge_suggestions SET status = ${c.prev ?? "obsolete"} WHERE id = ${c.id} AND status = 'dismissed'`);
+    }
+    // separar = "não é a mesma pessoa": a recusa fica gravada mesmo sem sugestão (junção feita na ficha)
     const [a, b] = s < m ? [s, m] : [m, s];
-    await tx.execute(sql`UPDATE crm_merge_suggestions SET status = 'dismissed', decidedBy = ${o.userId}, decidedAt = UTC_TIMESTAMP() WHERE clientA = ${a} AND clientB = ${b}`);
+    await tx.execute(sql`INSERT INTO crm_merge_suggestions (clientA, clientB, score, reasons, status, decidedBy, decidedAt)
+      VALUES (${a}, ${b}, 0, '', 'dismissed', ${o.userId}, UTC_TIMESTAMP())
+      ON DUPLICATE KEY UPDATE status = 'dismissed', decidedBy = VALUES(decidedBy), decidedAt = VALUES(decidedAt)`);
     // As outras sugestões da ficha que volta (postas de lado pela junção) voltam a
     // pendentes — se a outra ficha ainda estiver ativa. As decididas à mão ficam.
     await tx.execute(sql`${restoreSuggestionsSql(m)}`);
@@ -290,27 +345,44 @@ export function restoreSuggestionsSql(clientId: number) {
 /** Um identificador partilhado por mais fichas do que isto é de empresa/balcão: não sugere. */
 export const MAX_SHARED = 6;
 
-export async function refreshSuggestions(db: any, o: { deadlineAt: number }): Promise<{ pairs: number; saved: number; obsolete: number; ms: number }> {
+/** Contagens "tipo|valor" → fichas ativas com esse email/telefone/matrícula. */
+type SharedCounts = Map<string, number>;
+/** `fallback`: em quantas fichas está um valor comum que não veio nas contagens (nas sugestões: só se contam 2–6 → mais de 6). */
+const fichasWithFrom = (counts: SharedCounts, fallback = 2) => (kind: "email" | "phone" | "plate", value: string) => counts.get(`${kind}|${value}`) ?? fallback;
+
+/**
+ * Sugestões da madrugada. Cada par fica com a pontuação, o veredicto das
+ * regras do dono e os avisos (21c). Numa corrida COMPLETA, as pendentes que
+ * deixaram de aparecer (já não partilham nada, ou alguém retirou o dado
+ * comum) ficam obsoletas; se voltarem a aparecer, voltam a pendentes.
+ */
+export async function refreshSuggestions(db: any, o: { deadlineAt: number }): Promise<{ pairs: number; saved: number; obsolete: number; stale: number; complete: boolean; ms: number }> {
   const t0 = Date.now();
+  const [{ t: runStart } = { t: null }] = rowsOf(await db.execute(sql`SELECT DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s') AS t`));
   const pairs = new Set<string>();
-  const addGroup = (ids: string) => {
-    const list = [...new Set(String(ids).split(",").map(Number).filter(Boolean))].sort((x, y) => x - y);
+  const counts: SharedCounts = new Map();
+  const addGroup = (kind: string | null, r: any) => {
+    if (kind && r.v != null) counts.set(`${kind}|${r.v}`, Number(r.n ?? 2));
+    const list = [...new Set(String(r.ids).split(",").map(Number).filter(Boolean))].sort((x, y) => x - y);
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) pairs.add(`${list[i]}|${list[j]}`);
   };
-  const groups = async (q: any) => rowsOf(await db.execute(q)).forEach((r) => addGroup(r.ids));
-  await groups(sql`SELECT GROUP_CONCAT(DISTINCT p.clientId) AS ids FROM crm_client_phones p JOIN crm_clients c ON c.id = p.clientId AND c.status = 'active'
+  const groups = async (kind: string | null, q: any) => rowsOf(await db.execute(q)).forEach((r) => addGroup(kind, r));
+  await groups("phone", sql`SELECT p.phone AS v, COUNT(DISTINCT p.clientId) AS n, GROUP_CONCAT(DISTINCT p.clientId) AS ids FROM crm_client_phones p JOIN crm_clients c ON c.id = p.clientId AND c.status = 'active'
     GROUP BY p.phone HAVING COUNT(DISTINCT p.clientId) BETWEEN 2 AND ${MAX_SHARED}`);
-  await groups(sql`SELECT GROUP_CONCAT(DISTINCT v.clientId) AS ids FROM crm_client_vehicles v JOIN crm_clients c ON c.id = v.clientId AND c.status = 'active'
+  await groups("plate", sql`SELECT v.plate AS v, COUNT(DISTINCT v.clientId) AS n, GROUP_CONCAT(DISTINCT v.clientId) AS ids FROM crm_client_vehicles v JOIN crm_clients c ON c.id = v.clientId AND c.status = 'active'
     GROUP BY v.plate HAVING COUNT(DISTINCT v.clientId) BETWEEN 2 AND ${MAX_SHARED}`);
-  await groups(sql`SELECT GROUP_CONCAT(DISTINCT e.clientId) AS ids FROM crm_client_emails e JOIN crm_clients c ON c.id = e.clientId AND c.status = 'active'
+  await groups("email", sql`SELECT e.email AS v, COUNT(DISTINCT e.clientId) AS n, GROUP_CONCAT(DISTINCT e.clientId) AS ids FROM crm_client_emails e JOIN crm_clients c ON c.id = e.clientId AND c.status = 'active'
     WHERE e.generic = 0 GROUP BY e.email HAVING COUNT(DISTINCT e.clientId) BETWEEN 2 AND ${MAX_SHARED}`);
-  await groups(sql`SELECT GROUP_CONCAT(DISTINCT id) AS ids FROM crm_clients WHERE status = 'active' AND nif IS NOT NULL AND nif <> ''
+  await groups(null, sql`SELECT GROUP_CONCAT(DISTINCT id) AS ids FROM crm_clients WHERE status = 'active' AND nif IS NOT NULL AND nif <> ''
     GROUP BY nif HAVING COUNT(*) BETWEEN 2 AND ${MAX_SHARED}`);
+  // um valor que as duas têm em comum e não está nos grupos de 2–6 fichas está em mais de 6
+  const fichasWith = fichasWithFrom(counts, MAX_SHARED + 1);
 
   const allPairs = [...pairs].map((p) => p.split("|").map(Number) as [number, number]);
   let saved = 0;
+  let complete = true;
   for (const part of chunks(allPairs, 400)) {
-    if (Date.now() > o.deadlineAt - 8_000) break;
+    if (Date.now() > o.deadlineAt - 8_000) { complete = false; break; }
     const ids = [...new Set(part.flat())];
     const sides = await loadSides(db, ids);
     const related = new Set(rowsOf(await db.execute(sql`SELECT clientId, relatedClientId FROM crm_client_relations
@@ -325,11 +397,16 @@ export async function refreshSuggestions(db: any, o: { deadlineAt: number }): Pr
       if (!sa || !sb) continue;
       const r = scoreSuggestion(sa, sb);
       if (!r) continue;
-      values.push(sql`(${a}, ${b}, ${r.score}, ${r.reasons.join(",")})`);
+      const v = identityVerdict(sa, sb, fichasWith);
+      values.push(sql`(${a}, ${b}, ${r.score}, ${r.reasons.join(",")}, ${v.verdict}, ${v.signals.join(",").slice(0, 255)}, UTC_TIMESTAMP())`);
     }
     if (values.length) {
-      await db.execute(sql`INSERT INTO crm_merge_suggestions (clientA, clientB, score, reasons) VALUES ${sql.join(values, sql`, `)}
-        ON DUPLICATE KEY UPDATE score = VALUES(score), reasons = VALUES(reasons),
+      // o parecer da IA só vale para os mesmos motivos e avisos: se mudaram, volta a perguntar-se
+      await db.execute(sql`INSERT INTO crm_merge_suggestions (clientA, clientB, score, reasons, verdict, signals, seenAt) VALUES ${sql.join(values, sql`, `)}
+        ON DUPLICATE KEY UPDATE
+          aiAt = IF(reasons <=> VALUES(reasons) AND signals <=> VALUES(signals), aiAt, NULL),
+          aiVerdict = IF(aiAt IS NULL, NULL, aiVerdict), aiConfidence = IF(aiAt IS NULL, NULL, aiConfidence), aiReason = IF(aiAt IS NULL, NULL, aiReason),
+          score = VALUES(score), reasons = VALUES(reasons), verdict = VALUES(verdict), signals = VALUES(signals), seenAt = VALUES(seenAt),
           status = IF(status = 'obsolete', 'pending', status)`);
       saved += values.length;
     }
@@ -339,15 +416,26 @@ export async function refreshSuggestions(db: any, o: { deadlineAt: number }): Pr
     SET s.status = 'obsolete'
     WHERE s.status = 'pending' AND (a.status IS NULL OR a.status <> 'active' OR b.status IS NULL OR b.status <> 'active')`);
   const obsolete = Number((Array.isArray(obs) ? obs[0] : obs)?.affectedRows ?? 0);
-  return { pairs: allPairs.length, saved, obsolete, ms: Date.now() - t0 };
+  // só com a corrida completa se sabe que uma pendente "desapareceu" (parar no prazo não a torna obsoleta)
+  let stale = 0;
+  if (complete && runStart) {
+    const st: any = await db.execute(sql`UPDATE crm_merge_suggestions SET status = 'obsolete' WHERE status = 'pending' AND (seenAt IS NULL OR seenAt < ${runStart})`);
+    stale = Number((Array.isArray(st) ? st[0] : st)?.affectedRows ?? 0);
+  }
+  return { pairs: allPairs.length, saved, obsolete, stale, complete, ms: Date.now() - t0 };
 }
 
-export async function loadSides(db: any, ids: number[]): Promise<Map<number, SuggestionSide>> {
-  const out = new Map<number, SuggestionSide>();
+export type LoadedSide = IdentitySide & { bookings: number };
+
+export async function loadSides(db: any, ids: number[]): Promise<Map<number, LoadedSide>> {
+  const out = new Map<number, LoadedSide>();
   if (!ids.length) return out;
   for (const part of chunks(ids, 800)) {
-    for (const c of rowsOf(await db.execute(sql`SELECT id, displayName, nif FROM crm_clients WHERE id IN (${inList(part)})`))) {
-      out.set(Number(c.id), { id: Number(c.id), name: c.displayName ?? null, emails: [], phones: [], plates: [], nif: c.nif || null });
+    for (const c of rowsOf(await db.execute(sql`SELECT id, displayName, nif, kind, isPro, bookings FROM crm_clients WHERE id IN (${inList(part)})`))) {
+      out.set(Number(c.id), {
+        id: Number(c.id), name: c.displayName ?? null, emails: [], phones: [], plates: [], nif: c.nif || null,
+        kind: c.kind ?? null, isPro: Number(c.isPro ?? 0) === 1, bookings: Number(c.bookings ?? 0),
+      });
     }
     for (const e of rowsOf(await db.execute(sql`SELECT clientId, email FROM crm_client_emails WHERE generic = 0 AND clientId IN (${inList(part)})`))) out.get(Number(e.clientId))?.emails.push(String(e.email));
     for (const p of rowsOf(await db.execute(sql`SELECT clientId, phone FROM crm_client_phones WHERE clientId IN (${inList(part)})`))) out.get(Number(p.clientId))?.phones.push(String(p.phone));
@@ -356,44 +444,155 @@ export async function loadSides(db: any, ids: number[]): Promise<Map<number, Sug
   return out;
 }
 
-
-/**
- * Junta sozinho as sugestões óbvias (shared/crmIdentity.ts autoMergeOk): o
- * mesmo nome e o mesmo telefone, email ou NIF. Fica a ficha com mais reservas.
- * Cada fusão fica em "Fusões recentes" (reason "automático") e separa-se lá.
- * Corre até ao prazo; o que sobrar fica para a próxima corrida (o trabalho
- * devolve "não acabei" e o agendador repete no tick seguinte).
- */
-export async function autoMergeConfident(db: any, o: { deadlineAt: number; userId: number; limit?: number }): Promise<{ checked: number; merged: number; skipped: number; errors: number; stoppedAtDeadline: boolean }> {
-  const { autoMergeOk } = await import("../../shared/crmIdentity");
-  const rows = rowsOf(await db.execute(sql`SELECT s.clientA, s.clientB FROM crm_merge_suggestions s
-    JOIN crm_clients a ON a.id = s.clientA AND a.status = 'active'
-    JOIN crm_clients b ON b.id = s.clientB AND b.status = 'active'
-    WHERE s.status = 'pending' AND (FIND_IN_SET('same_phone', s.reasons) OR FIND_IN_SET('same_email', s.reasons) OR FIND_IN_SET('same_nif', s.reasons))
-    ORDER BY s.score DESC, s.id LIMIT ${Math.max(1, Math.min(5000, o.limit ?? 2000))}`));
-  const out = { checked: rows.length, merged: 0, skipped: 0, errors: 0, stoppedAtDeadline: false };
-  if (!rows.length) return out;
-  const ids = [...new Set(rows.flatMap((r) => [Number(r.clientA), Number(r.clientB)]))];
-  const sides = await loadSides(db, ids);
-  const meta = new Map<number, { kind: string | null; bookings: number }>();
-  for (const part of chunks(ids, 800)) {
-    for (const r of rowsOf(await db.execute(sql`SELECT id, kind, bookings FROM crm_clients WHERE id IN (${inList(part)})`))) meta.set(Number(r.id), { kind: r.kind ?? null, bookings: Number(r.bookings ?? 0) });
+/** Em quantas fichas ATIVAS está cada email/telefone/matrícula que os pares têm em comum. */
+async function loadSharedCounts(db: any, pairs: [IdentitySide, IdentitySide][]): Promise<SharedCounts> {
+  const vals = { email: new Set<string>(), phone: new Set<string>(), plate: new Set<string>() };
+  for (const [a, b] of pairs) {
+    a.emails.filter((v) => b.emails.includes(v)).forEach((v) => vals.email.add(v));
+    a.phones.filter((v) => b.phones.includes(v)).forEach((v) => vals.phone.add(v));
+    a.plates.filter((v) => b.plates.includes(v)).forEach((v) => vals.plate.add(v));
   }
-  const gone = new Set<number>();
-  for (const r of rows) {
-    if (Date.now() > o.deadlineAt - 3_000) { out.stoppedAtDeadline = true; break; }
-    const a = Number(r.clientA), b = Number(r.clientB);
-    if (gone.has(a) || gone.has(b)) { out.skipped++; continue; }
-    const sa = sides.get(a), sb = sides.get(b);
-    if (!sa || !sb || !autoMergeOk(sa, sb, { kindA: meta.get(a)?.kind, kindB: meta.get(b)?.kind })) { out.skipped++; continue; }
-    const [survivorId, mergedId] = (meta.get(a)?.bookings ?? 0) >= (meta.get(b)?.bookings ?? 0) ? [a, b] : [b, a];
-    try {
-      await mergeClients(db, { survivorId, mergedId, userId: o.userId, reason: "automático: mesmo nome e mesmo telefone/email/NIF" });
-      gone.add(mergedId);
-      out.merged++;
-    } catch {
-      out.errors++;
+  const out: SharedCounts = new Map();
+  const q = {
+    email: (l: any) => sql`SELECT x.email AS v, COUNT(DISTINCT x.clientId) AS n FROM crm_client_emails x JOIN crm_clients c ON c.id = x.clientId AND c.status = 'active' WHERE x.email IN (${l}) GROUP BY x.email`,
+    phone: (l: any) => sql`SELECT x.phone AS v, COUNT(DISTINCT x.clientId) AS n FROM crm_client_phones x JOIN crm_clients c ON c.id = x.clientId AND c.status = 'active' WHERE x.phone IN (${l}) GROUP BY x.phone`,
+    plate: (l: any) => sql`SELECT x.plate AS v, COUNT(DISTINCT x.clientId) AS n FROM crm_client_vehicles x JOIN crm_clients c ON c.id = x.clientId AND c.status = 'active' WHERE x.plate IN (${l}) GROUP BY x.plate`,
+  };
+  for (const kind of ["email", "phone", "plate"] as const) {
+    for (const part of chunks([...vals[kind]], 500)) {
+      for (const r of rowsOf(await db.execute(q[kind](inList(part))))) out.set(`${kind}|${r.v}`, Number(r.n));
     }
   }
   return out;
+}
+
+/** A IA só junta sozinha com esta certeza (0–100); abaixo, o parecer fica à vista em Rever fichas. */
+export const AI_MERGE_MIN_CONFIDENCE = 85;
+/** Teto de pares que vão à IA por corrida (custo) e por pedido. */
+export const AI_PAIRS_PER_RUN = 60;
+const AI_PAIRS_PER_CALL = 15;
+
+export interface AutoMergeResult {
+  checked: number; merged: number; mergedByAi: number; aiChecked: number; skipped: number; errors: number;
+  stoppedAtDeadline: boolean; aiError?: string;
+}
+
+/**
+ * Junta sozinho (21c): primeiro as regras do dono (shared/crmIdentity.ts
+ * identityVerdict — mesmo nome + email/telefone/matrícula; nome diferente só
+ * com email E telefone; nunca empresas, Pro, NIF pessoais diferentes, dados em
+ * mais de 2 fichas); depois as DÚVIDAS vão à IA (AI_CRM_IDENTITY, desligada
+ * por omissão), que só junta com certeza ≥ 85 %. O resto fica em Rever fichas.
+ * Fica a ficha com mais reservas. Cada junção fica em "Juntas recentemente"
+ * (origem "auto" ou "ai") e no registo de cada ficha, e separa-se lá.
+ * Corre até ao prazo; o que sobrar fica para a próxima corrida.
+ */
+export async function autoMergeConfident(db: any, o: { deadlineAt: number; userId: number; limit?: number; useAi?: boolean }): Promise<AutoMergeResult> {
+  const rows = rowsOf(await db.execute(sql`SELECT s.id, s.clientA, s.clientB, s.aiAt FROM crm_merge_suggestions s
+    JOIN crm_clients a ON a.id = s.clientA AND a.status = 'active'
+    JOIN crm_clients b ON b.id = s.clientB AND b.status = 'active'
+    WHERE s.status = 'pending'
+    ORDER BY s.score DESC, s.id LIMIT ${Math.max(1, Math.min(5000, o.limit ?? 2000))}`));
+  const out: AutoMergeResult = { checked: rows.length, merged: 0, mergedByAi: 0, aiChecked: 0, skipped: 0, errors: 0, stoppedAtDeadline: false };
+  if (!rows.length) return out;
+  const ids = [...new Set(rows.flatMap((r) => [Number(r.clientA), Number(r.clientB)]))];
+  const sides = await loadSides(db, ids);
+  const pairOf = (r: any) => [sides.get(Number(r.clientA)), sides.get(Number(r.clientB))] as const;
+  const counts = await loadSharedCounts(db, rows.map(pairOf).filter((p): p is [LoadedSide, LoadedSide] => !!p[0] && !!p[1]));
+  const fichasWith = fichasWithFrom(counts);
+  const { IDENTITY_RULE_LABELS } = await import("../../shared/crmIdentity");
+
+  const gone = new Set<number>();
+  const doubts: { id: number; a: LoadedSide; b: LoadedSide; v: IdentityVerdict }[] = [];
+  const doMerge = async (sid: number, a: LoadedSide, b: LoadedSide, source: MergeSource, reason: string): Promise<boolean> => {
+    const [keep, drop] = a.bookings >= b.bookings ? [a, b] : [b, a];
+    try {
+      const r = await mergeClients(db, { survivorId: keep.id, mergedId: drop.id, userId: o.userId, reason: reason.slice(0, 255), suggestionId: sid, source });
+      gone.add(drop.id);
+      await logAutoMerge(o.userId, keep.id, drop.id, r.eventId, reason, source);
+      return true;
+    } catch {
+      out.errors++;
+      return false;
+    }
+  };
+
+  for (const r of rows) {
+    if (Date.now() > o.deadlineAt - 3_000) { out.stoppedAtDeadline = true; break; }
+    const a = Number(r.clientA), b = Number(r.clientB);
+    const [sa, sb] = pairOf(r);
+    if (gone.has(a) || gone.has(b) || !sa || !sb) { out.skipped++; continue; }
+    const v = identityVerdict(sa, sb, fichasWith);
+    if (v.verdict === "same" && v.rule) {
+      if (await doMerge(Number(r.id), sa, sb, "auto", `automático: ${IDENTITY_RULE_LABELS[v.rule]}`)) out.merged++;
+      continue;
+    }
+    out.skipped++;
+    if (v.verdict === "doubt" && !r.aiAt) doubts.push({ id: Number(r.id), a: sa, b: sb, v });
+  }
+
+  // ── dúvidas → IA (só factos e o 1.º nome; nunca contactos) ──
+  if (o.useAi === false || !doubts.length || out.stoppedAtDeadline) return out;
+  const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
+  if (!(await aiFeatureAvailableFresh("crm_identity"))) return out;
+  const { runAi } = await import("../_core/ai/run");
+  const { aiErrorCode } = await import("../_core/ai/errors");
+  const { CRM_IDENTITY_SYSTEM, crmIdentityInput, crmIdentitySchema } = await import("../_core/ai/prompts/crmIdentity");
+  const { identityFactsForAi } = await import("../../shared/crmIdentity");
+  for (const part of chunks(doubts.slice(0, AI_PAIRS_PER_RUN), AI_PAIRS_PER_CALL)) {
+    if (Date.now() > o.deadlineAt - 25_000) { out.stoppedAtDeadline = true; break; }
+    const live = part.filter((d) => !gone.has(d.a.id) && !gone.has(d.b.id));
+    if (!live.length) continue;
+    let results: { id: number; verdict: "same" | "different" | "unsure"; confidence: number; reason: string }[];
+    try {
+      const r = await runAi({
+        feature: "crm_identity",
+        system: CRM_IDENTITY_SYSTEM,
+        input: crmIdentityInput(live.map((d) => {
+          const f = identityFactsForAi(d.a, d.b, fichasWith);
+          return { id: d.id, a: { ...f.a, bookings: d.a.bookings }, b: { ...f.b, bookings: d.b.bookings }, facts: f.facts };
+        })),
+        schema: crmIdentitySchema,
+        maxTokens: 1200,
+        timeoutMs: 20_000,
+        userId: o.userId || null,
+        entity: "crm_merge_suggestion",
+        entityId: live[0].id,
+      });
+      results = r.output.results ?? [];
+    } catch (err) {
+      out.aiError = aiErrorCode(err);
+      if (["disabled", "not_configured", "budget"].includes(out.aiError)) break;
+      continue;
+    }
+    const byId = new Map(live.map((d) => [d.id, d]));
+    for (const res of results) {
+      const d = byId.get(Number(res.id));
+      if (!d) continue; // a IA não inventa pares
+      byId.delete(d.id);
+      const raw = Number(res.confidence);
+      const conf = Math.round(Math.max(0, Math.min(100, raw > 0 && raw <= 1 ? raw * 100 : raw)));
+      const verdict = res.verdict === "same" || res.verdict === "different" ? res.verdict : "unsure";
+      const reason = String(res.reason ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+      out.aiChecked++;
+      await db.execute(sql`UPDATE crm_merge_suggestions SET aiVerdict = ${verdict === "different" ? "diff" : verdict}, aiConfidence = ${conf}, aiReason = ${reason || null}, aiAt = UTC_TIMESTAMP()
+        WHERE id = ${d.id} AND status = 'pending'`);
+      if (verdict === "same" && conf >= AI_MERGE_MIN_CONFIDENCE && !gone.has(d.a.id) && !gone.has(d.b.id)) {
+        if (await doMerge(d.id, d.a, d.b, "ai", `IA (${conf} %): ${reason || "a mesma pessoa"}`)) { out.mergedByAi++; out.skipped--; }
+      }
+    }
+  }
+  return out;
+}
+
+/** Registo em CADA ficha (21c): quem/o quê juntou, mesmo quando foi a madrugada (userId 0, origem cron). */
+async function logAutoMerge(userId: number, survivorId: number, mergedId: number, eventId: number, reason: string, source: MergeSource) {
+  try {
+    const { logCrm } = await import("./edit");
+    const src = userId > 0 ? "ui" : "cron";
+    await logCrm(userId, survivorId, "crm_merge", { mergedId, eventId, reason, by: source }, src);
+    await logCrm(userId, mergedId, "crm_merged_into", { survivorId, eventId, reason, by: source }, src);
+  } catch (e: any) {
+    console.warn("[crm] registo da junção automática falhou:", String(e?.message ?? e).slice(0, 120));
+  }
 }

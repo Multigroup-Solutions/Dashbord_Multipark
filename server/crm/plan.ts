@@ -9,7 +9,7 @@
  * serem gravadas).
  */
 import {
-  decideLink, emailKey, isGenericEmail, nameKey, nifKey, phoneKey, plateKey,
+  decideLink, emailKey, isGenericEmail, isPersonalEmail, nameKey, namesMatch, nifKey, phoneKey, plateKey,
   type Candidate, type LinkRule, type Observation,
 } from "../../shared/crmIdentity";
 
@@ -72,7 +72,7 @@ export interface BatchPlan {
   vehicles: { clientId: number; plate: string; plateDisplay: string; brand: string | null; model: string | null; color: string | null; vehicleType: string | null; seenAt: string | null }[];
   /** fichas existentes tocadas (para completar dados em falta e recalcular métricas) */
   touched: ClientTouch[];
-  stats: { rows: number; kept: number; linked: number; created: number; genericEmails: number; noIdentity: number };
+  stats: { rows: number; kept: number; linked: number; created: number; genericEmails: number; noIdentity: number; keptOtherName: number };
 }
 
 const clean = (s: string | null | undefined, max = 255) => {
@@ -89,16 +89,18 @@ export function fullName(first: string | null, last: string | null): string | nu
  * @param generic emails genéricos (balcão, agregadores, domínios da casa)
  * @param existingLinks reserva já ligada → ficha (não se volta a decidir)
  * @param candidates fichas existentes que partilham identificadores com o lote
+ * @param keptNames nomes das fichas (pessoas) das reservas já ligadas que não vêm nas candidatas
  */
 export function planBatch(
   rows: BookingRow[],
   generic: Set<string>,
   existingLinks: Map<string, number>,
   candidates: ExistingClient[],
+  keptNames: Map<number, string[]> = new Map(),
 ): BatchPlan {
   const plan: BatchPlan = {
     newClients: [], links: [], emails: [], phones: [], vehicles: [], touched: [],
-    stats: { rows: rows.length, kept: 0, linked: 0, created: 0, genericEmails: 0, noIdentity: 0 },
+    stats: { rows: rows.length, kept: 0, linked: 0, created: 0, genericEmails: 0, noIdentity: 0, keptOtherName: 0 },
   };
   const byId = new Map<number, ExistingClient>();
   const byEmail = new Map<string, Set<number>>();
@@ -125,23 +127,31 @@ export function planBatch(
   for (const r of rows) {
     const name = fullName(r.firstName, r.lastName) ?? "";
     const email = emailKey(r.email);
+    // genérico GUARDADO (balcão/agregador/casa) ≠ não serve para ligar (também info@, reservas@ de empresas — 21c)
     const emailGeneric = !!email && (generic.has(email) || isGenericEmail(email));
     if (emailGeneric) plan.stats.genericEmails++;
-    const o: Observation = { email, emailGeneric, phone: phoneKey(r.phone), plate: plateKey(r.plate), name };
+    const o: Observation = { email, emailGeneric: emailGeneric || (!!email && !isPersonalEmail(email)), phone: phoneKey(r.phone), plate: plateKey(r.plate), name, nif: nifKey(r.nif) };
 
     let clientId: number;
     let rule: LinkRule | "new" | "kept";
+    /** reserva já ligada cujo nome agora é de outra pessoa: fica onde está, mas não leva os contactos para lá (21c) */
+    let otherName = false;
     const kept = existingLinks.get(r.externalId);
     if (kept) {
       clientId = kept;
       rule = "kept";
       plan.stats.kept++;
+      const names = byId.get(kept)?.names ?? keptNames.get(kept) ?? [];
+      if (name && names.length && !names.some((n) => namesMatch(n, name))) { otherName = true; plan.stats.keptOtherName++; }
     } else {
       const ids = new Set<number>();
       if (o.email && !o.emailGeneric) byEmail.get(o.email)?.forEach((id) => ids.add(id));
       if (o.phone) byPhone.get(o.phone)?.forEach((id) => ids.add(id));
       if (o.plate) byPlate.get(o.plate)?.forEach((id) => ids.add(id));
-      const d = decideLink(o, [...ids].map((id) => byId.get(id)!).filter(Boolean));
+      // email/telefone/matrícula em mais de 2 fichas (MAX_AUTO_SHARED) não liga sozinho (família, empresa, balcão)
+      const d = decideLink(o, [...ids].map((id) => byId.get(id)!).filter(Boolean), {
+        email: o.email ? byEmail.get(o.email)?.size : 0, phone: o.phone ? byPhone.get(o.phone)?.size : 0, plate: o.plate ? byPlate.get(o.plate)?.size : 0,
+      });
       if (d.clientId != null) {
         clientId = d.clientId;
         rule = d.rule!;
@@ -155,7 +165,7 @@ export function planBatch(
         const nc: NewClient = {
           tempId: temp, syncKey: `bk:${r.externalId}`.slice(0, 160),
           displayName: clean(name), firstName: clean(r.firstName, 128), lastName: clean(r.lastName, 128),
-          primaryEmail: o.email && !o.emailGeneric ? o.email : null, primaryPhone: o.phone || null,
+          primaryEmail: o.email && !emailGeneric ? o.email : null, primaryPhone: o.phone || null,
           nif: nifKey(r.nif) || null, isPro: r.pro,
           originPartnerId: clean(r.partnerId, 128), originPartnerName: clean(r.partnerName), originChannel: clean(r.origin, 64),
           seenAt: r.seenAt,
@@ -165,6 +175,13 @@ export function planBatch(
       }
     }
     plan.links.push({ bookingExternalId: r.externalId, clientId, rule });
+    if (otherName) {
+      // só a data da última vez (métricas); nome, NIF e contactos não passam para a ficha de outra pessoa
+      const t = touched.get(clientId) ?? { clientId, displayName: null, firstName: null, lastName: null, nif: null, isPro: false, seenAt: null };
+      if (r.seenAt && String(r.seenAt) > String(t.seenAt ?? "")) t.seenAt = r.seenAt;
+      touched.set(clientId, t);
+      continue;
+    }
 
     // identificadores que a reserva traz → ficha (e ficam candidatos no resto do lote)
     const c = byId.get(clientId);
@@ -175,8 +192,8 @@ export function planBatch(
     const k = (x: string) => `${clientId}|${x}`;
     if (o.email && !seenKeys.email.has(k(o.email))) {
       seenKeys.email.add(k(o.email));
-      plan.emails.push({ clientId, email: o.email, generic: o.emailGeneric, seenAt: r.seenAt });
-      if (c && !o.emailGeneric && !c.emails.includes(o.email)) { c.emails.push(o.email); add(byEmail, o.email, clientId); }
+      plan.emails.push({ clientId, email: o.email, generic: emailGeneric, seenAt: r.seenAt });
+      if (c && !emailGeneric && !c.emails.includes(o.email)) { c.emails.push(o.email); add(byEmail, o.email, clientId); }
     }
     if (o.phone && !seenKeys.phone.has(k(o.phone))) {
       seenKeys.phone.add(k(o.phone));

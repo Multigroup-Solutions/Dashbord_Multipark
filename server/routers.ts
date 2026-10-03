@@ -5738,7 +5738,7 @@ export const appRouter = router({
       const db = await crmDb();
       const { filterOptions, ruleFieldsFor } = await import("./crm/queries");
       const canSeeTotals = await canSeeFinanceTotals(ctx.user);
-      return { ...(await filterOptions(db)), ruleFields: ruleFieldsFor(canSeeTotals), canSeeTotals, canMerge: canMergeCrm(ctx.user) };
+      return { ...(await filterOptions(db)), ruleFields: ruleFieldsFor(canSeeTotals), canSeeTotals, canMerge: canMergeCrm(ctx.user), canEdit: canAccess(ctx.user, "clientes", "edit") };
     }),
     get: protectedProcedure
       .input(z.object({ id: z.number().int().positive() }))
@@ -5964,7 +5964,8 @@ export const appRouter = router({
         return r.rows.filter((x) => x.id !== input.excludeId).map((x) => ({ id: x.id, name: x.displayName, email: x.primaryEmail, isPro: x.isPro, kind: x.kind }));
       }),
     merge: protectedProcedure
-      .input(z.object({ survivorId: z.number().int(), mergedId: z.number().int(), reason: z.string().max(255).nullable().optional() }))
+      // 21c: suggestionId = a sugestão que se aceita (tem de continuar pendente); a origem é sempre "ui" (o servidor decide)
+      .input(z.object({ survivorId: z.number().int(), mergedId: z.number().int(), reason: z.string().max(255).nullable().optional(), suggestionId: z.number().int().optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "edit");
         if (!canMergeCrm(ctx.user)) throw new TRPCError({ code: "FORBIDDEN", message: "Juntar fichas: backoffice, administração." });
@@ -5974,7 +5975,7 @@ export const appRouter = router({
         const { mergeClients } = await import("./crm/merge");
         const { logCrm } = await import("./crm/edit");
         try {
-          const r = await mergeClients(db, { ...input, userId: ctx.user.id });
+          const r = await mergeClients(db, { ...input, userId: ctx.user.id, source: "ui" });
           // 21b: a junção já ficou gravada — um registo que falhe não pode dizer "erro" a quem juntou
           await Promise.all([
             logCrm(ctx.user.id, input.survivorId, "crm_merge", { mergedId: input.mergedId, eventId: r.eventId, reason: input.reason ?? null }),
@@ -6013,30 +6014,70 @@ export const appRouter = router({
         if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Sugestão não encontrada." });
         await crmAssertInScope(Number(s.clientA), Number(s.clientB));
         const { dismissSuggestion } = await import("./crm/edit");
-        await dismissSuggestion(await crmDb(), ctx.user.id, input.id);
+        try { await dismissSuggestion(await crmDb(), ctx.user.id, input.id); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
         return { ok: true };
       }),
-    /** Juntar AGORA as sugestões óbvias (mesmo nome + telefone/email/NIF). Admin; o resto fica para a cron. */
+    /** Desfazer "não é a mesma pessoa" (21c): quem edita, como recusar. */
+    undismissSuggestion: protectedProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        const { sql } = await import("drizzle-orm");
+        const s = await crmRow(sql`SELECT clientA, clientB FROM crm_merge_suggestions WHERE id = ${input.id}`);
+        if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Sugestão não encontrada." });
+        await crmAssertInScope(Number(s.clientA), Number(s.clientB));
+        const { undismissSuggestion } = await import("./crm/edit");
+        try { return await undismissSuggestion(await crmDb(), ctx.user.id, input.id); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
+      }),
+    /**
+     * Juntar AGORA (21c): as regras do dono e, se a IA estiver ligada, as dúvidas.
+     * Só o super admin e só com a junção automática (CRM_AUTO_MERGE) ligada — o botão
+     * não pode fazer o que o interruptor desligou.
+     */
     autoMergeNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "clientes", "edit");
-      if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador corre a junção automática." });
+      if (String(ctx.user.role) !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin corre a junção automática." });
+      const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+      await ensureFeatureFlagOverrides();
+      if (!isFeatureEnabled("CRM_AUTO_MERGE", { defaultEnabled: automationFlagDefault("CRM_AUTO_MERGE") })) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A junção automática está desligada (Definições → Automações → CRM_AUTO_MERGE)." });
+      }
       const db = await crmDb();
       const { autoMergeConfident } = await import("./crm/merge");
       const r = await autoMergeConfident(db, { deadlineAt: Date.now() + 40_000, userId: ctx.user.id });
-      await logActivity({ userId: ctx.user.id, action: "crm_auto_merge", entity: "crm", entityId: 0, details: `Junção automática à mão: ${r.merged} fichas juntas (${r.checked} vistas, ${r.skipped} ficaram para rever)` });
+      await logActivity({ userId: ctx.user.id, action: "crm_auto_merge", entity: "crm", entityId: 0, details: `Junção automática à mão: ${r.merged + r.mergedByAi} fichas juntas (${r.merged} pelas regras, ${r.mergedByAi} pela IA; ${r.checked} vistas, ${r.skipped} ficaram para rever)` });
       return r;
     }),
     review: protectedProcedure
-      .input(z.object({ tab: z.enum(["suggestions", "generic", "noEmail", "merges"]), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(), minScore: z.number().int().min(0).max(100).optional() }))
+      .input(z.object({
+        tab: z.enum(["suggestions", "dismissed", "generic", "noEmail", "merges"]),
+        offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(), minScore: z.number().int().min(0).max(100).optional(),
+        source: z.enum(["all", "ui", "auto", "ai"]).optional(),
+      }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "view");
         const db = await crmDb();
         const r = await import("./crm/review");
         const counts = await r.reviewCounts(db);
-        if (input.tab === "suggestions") return { tab: "suggestions" as const, counts, suggestions: await r.listSuggestions(db, input) };
-        if (input.tab === "generic") return { tab: "generic" as const, counts, generic: await r.genericEmailClients(db, input) };
-        if (input.tab === "noEmail") return { tab: "noEmail" as const, counts, upcoming: await r.upcomingWithoutEmail(db, { days: 3 }) };
-        return { tab: "merges" as const, counts, merges: await r.recentMerges(db, input) };
+        const canAutoMerge = String(ctx.user.role) === "super_admin";
+        if (input.tab === "suggestions") return { tab: "suggestions" as const, counts, canAutoMerge, suggestions: await r.listSuggestions(db, input) };
+        if (input.tab === "dismissed") return { tab: "dismissed" as const, counts, canAutoMerge, dismissed: await r.listDismissed(db, input) };
+        if (input.tab === "generic") return { tab: "generic" as const, counts, canAutoMerge, generic: await r.genericEmailClients(db, input) };
+        if (input.tab === "noEmail") return { tab: "noEmail" as const, counts, canAutoMerge, upcoming: await r.upcomingWithoutEmail(db, { days: 3 }) };
+        return { tab: "merges" as const, counts, canAutoMerge, merges: await r.recentMerges(db, input) };
+      }),
+    /** Email de balcão → o verdadeiro (ou nenhum), numa só transação (21c). */
+    replaceGenericEmail: protectedProcedure
+      .input(z.object({ clientId: z.number().int(), email: z.string().max(320).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "clientes", "edit");
+        await crmAssertInScope(input.clientId);
+        await crmAssertActive(input.clientId);
+        const { replaceGenericEmail } = await import("./crm/edit");
+        try { return await replaceGenericEmail(await crmDb(), ctx.user.id, input.clientId, { email: input.email }); }
+        catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
       }),
     findEmail: protectedProcedure
       .input(z.object({ clientId: z.number().int() }))

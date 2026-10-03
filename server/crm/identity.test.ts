@@ -40,11 +40,16 @@ describe("crm — normalização", () => {
   });
 });
 
-describe("crm — ligar sozinho", () => {
-  it("email + telefone, email + nome, email + matrícula ligam", () => {
-    expect(decideLink(obs(), [cand()])).toEqual({ clientId: 1, rule: "email+phone" });
-    expect(decideLink(obs({ phone: "" }), [cand()]).rule).toBe("email+name");
-    expect(decideLink(obs({ phone: "", name: "Outro Nome" }), [cand()]).rule).toBe("email+plate");
+describe("crm — ligar sozinho (regras do dono, 21c)", () => {
+  it("mesmo nome + email, telefone ou matrícula ligam", () => {
+    expect(decideLink(obs(), [cand()])).toEqual({ clientId: 1, rule: "email+name" });
+    expect(decideLink(obs({ email: "" }), [cand()]).rule).toBe("phone+name");
+    expect(decideLink(obs({ email: "", phone: "" }), [cand()]).rule).toBe("plate+name");
+  });
+  it("nome diferente: só com o mesmo email E o mesmo telefone", () => {
+    expect(decideLink(obs({ name: "Alice Costa" }), [cand()]).rule).toBe("email+phone");
+    expect(decideLink(obs({ name: "Alice Costa", phone: "" }), [cand()]).clientId).toBeNull();
+    expect(decideLink(obs({ name: "Alice Costa", email: "" }), [cand()]).clientId).toBeNull();
   });
   it("o email sozinho não chega", () => {
     expect(decideLink(obs({ phone: "+351936000000", plate: "ZZ99ZZ", name: "Rui Costa" }), [cand()]).clientId).toBeNull();
@@ -52,14 +57,13 @@ describe("crm — ligar sozinho", () => {
   it("nunca liga só pelo nome", () => {
     expect(decideLink(obs({ email: "", phone: "", plate: "" }), [cand()]).clientId).toBeNull();
   });
-  it("email genérico não conta; sem email liga com telefone + nome ou telefone + matrícula", () => {
+  it("email genérico não conta; telefone + nome liga, telefone + matrícula com outro nome não", () => {
     const o = obs({ email: "reservas@agregador.com", emailGeneric: true });
     expect(decideLink(o, [cand({ emails: ["reservas@agregador.com"] })]).rule).toBe("phone+name");
-    expect(decideLink(obs({ email: "", name: "Outro" }), [cand()]).rule).toBe("phone+plate");
-    expect(decideLink(obs({ email: "", plate: "", name: "Outro" }), [cand()]).clientId).toBeNull();
+    expect(decideLink(obs({ email: "", name: "Outro Nome" }), [cand()]).clientId).toBeNull();
   });
-  it("com email próprio diferente, telefone + nome não liga sozinho (fica sugestão)", () => {
-    expect(decideLink(obs({ email: "outra@exemplo.pt" }), [cand()]).clientId).toBeNull();
+  it("com outro email próprio, o mesmo nome + telefone liga (regra do dono)", () => {
+    expect(decideLink(obs({ email: "outra@exemplo.pt" }), [cand()]).rule).toBe("phone+name");
   });
   it("várias candidatas: mais sinais iguais, depois a mais recente", () => {
     const a = cand({ id: 1, plates: [], lastSeen: "2026-01-01" });

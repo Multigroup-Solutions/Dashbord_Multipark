@@ -12,9 +12,9 @@ const rowsOf = (res: unknown): any[] => {
 };
 const insertId = (res: any) => Number((Array.isArray(res) ? res[0] : res)?.insertId ?? 0);
 
-export async function logCrm(userId: number, clientId: number | null, action: string, details: unknown) {
+export async function logCrm(userId: number, clientId: number | null, action: string, details: unknown, source?: string) {
   const { logActivity } = await import("../db");
-  await logActivity({ userId, action: action.slice(0, 64), entity: "crm_client", entityId: clientId ?? undefined, details: JSON.stringify(details).slice(0, 60_000) } as any);
+  await logActivity({ userId, action: action.slice(0, 64), entity: "crm_client", entityId: clientId ?? undefined, details: JSON.stringify(details).slice(0, 60_000), ...(source ? { source } : {}) } as any);
 }
 
 /** Campos que a ficha deixa editar (o resto vem das reservas ou é calculado). */
@@ -192,21 +192,54 @@ export type RemovableKind = keyof typeof REMOVABLE;
  * (a carga das reservas não a volta a pôr). Antes era um DELETE sem rasto.
  */
 async function archiveAndRemove(db: any, userId: number, clientId: number, kind: RemovableKind, itemId: number, reason?: string | null): Promise<{ value: string }> {
+  let value = "";
+  await db.transaction(async (tx: any) => { value = await archiveRowTx(tx, userId, clientId, kind, itemId, reason); });
+  return { value };
+}
+
+/** O mesmo, dentro de uma transação que já está aberta. Devolve o valor retirado. */
+async function archiveRowTx(tx: any, userId: number, clientId: number, kind: RemovableKind, itemId: number, reason?: string | null): Promise<string> {
   const def = REMOVABLE[kind];
   const t = sql.raw(def.table);
-  let value = "";
+  const [row] = rowsOf(await tx.execute(sql`SELECT * FROM ${t} WHERE id = ${itemId} AND clientId = ${clientId} FOR UPDATE`));
+  if (!row) throw new Error(kind === "email" ? "Email não encontrado." : kind === "phone" ? "Telefone não encontrado." : "Carro não encontrado.");
+  const value = String(row[def.key]);
+  const { toSqlValue } = await import("./merge");
+  const json = JSON.stringify(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, toSqlValue(v)])));
+  await tx.execute(sql`INSERT INTO crm_removed_items (clientId, kind, value, rowJson, reason, removedBy, removedAt)
+    VALUES (${clientId}, ${kind}, ${value}, ${json}, ${reason ? String(reason).slice(0, 255) : null}, ${userId || null}, UTC_TIMESTAMP())`);
+  await tx.execute(sql`DELETE FROM ${t} WHERE id = ${itemId} AND clientId = ${clientId}`);
+  await tx.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy) VALUES (${clientId}, ${def.block}, ${value}, ${userId || null})`);
+  return value;
+}
+
+/**
+ * Email de balcão/agregador → o verdadeiro (ou nenhum), numa SÓ transação
+ * (21c; antes eram vários pedidos e uma falha a meio deixava a ficha a meio).
+ * Só saem os emails marcados como genéricos; ficam em "Retirados".
+ */
+export async function replaceGenericEmail(db: any, userId: number, clientId: number, o: { email?: string | null }) {
+  const email = o.email ? emailKey(o.email) : "";
+  if (o.email && !email) throw new Error("Email inválido.");
+  const removed: string[] = [];
   await db.transaction(async (tx: any) => {
-    const [row] = rowsOf(await tx.execute(sql`SELECT * FROM ${t} WHERE id = ${itemId} AND clientId = ${clientId} FOR UPDATE`));
-    if (!row) throw new Error(kind === "email" ? "Email não encontrado." : kind === "phone" ? "Telefone não encontrado." : "Carro não encontrado.");
-    value = String(row[def.key]);
-    const { toSqlValue } = await import("./merge");
-    const json = JSON.stringify(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, toSqlValue(v)])));
-    await tx.execute(sql`INSERT INTO crm_removed_items (clientId, kind, value, rowJson, reason, removedBy, removedAt)
-      VALUES (${clientId}, ${kind}, ${value}, ${json}, ${reason ? String(reason).slice(0, 255) : null}, ${userId || null}, UTC_TIMESTAMP())`);
-    await tx.execute(sql`DELETE FROM ${t} WHERE id = ${itemId} AND clientId = ${clientId}`);
-    await tx.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy) VALUES (${clientId}, ${def.block}, ${value}, ${userId || null})`);
+    const generic = rowsOf(await tx.execute(sql`SELECT id, email FROM crm_client_emails WHERE clientId = ${clientId} AND generic = 1 FOR UPDATE`));
+    if (!email && !generic.length) throw new Error("Esta ficha já não tem email de balcão.");
+    if (email) {
+      await tx.execute(sql`UPDATE crm_client_emails SET isPrimary = 0 WHERE clientId = ${clientId}`);
+      await tx.execute(sql`INSERT INTO crm_client_emails (clientId, email, isPrimary, verified, source, firstSeenAt, lastSeenAt)
+        VALUES (${clientId}, ${email}, 1, 1, 'manual', UTC_TIMESTAMP(), UTC_TIMESTAMP())
+        ON DUPLICATE KEY UPDATE isPrimary = 1, generic = 0, verified = 1`);
+      await tx.execute(sql`DELETE FROM crm_blocked_identifiers WHERE clientId = ${clientId} AND kind = 'email' AND value = ${email}`);
+    }
+    for (const g of generic) {
+      if (String(g.email) === email) continue;
+      removed.push(await archiveRowTx(tx, userId, clientId, "email", Number(g.id), "email de balcão/agregador"));
+    }
   });
-  return { value };
+  await refreshPrimary(db, clientId);
+  await logCrm(userId, clientId, "crm_email_replace_generic", { email: email || null, removed });
+  return { email: email || null, removed: removed.length };
 }
 
 /** Repõe na ficha um email/telefone/carro retirado (tal como estava, sem ser o principal). */
@@ -280,11 +313,44 @@ export async function removeRelation(db: any, userId: number, relationId: number
 
 // ─── Sugestões ──────────────────────────────────────────────────────────────
 
+/**
+ * "Não é a mesma pessoa" (21c): só uma sugestão PENDENTE (quem chegar depois
+ * de outra pessoa ter juntado ou recusado recebe o aviso, não muda nada);
+ * fica no registo das DUAS fichas e em Rever fichas → Recusadas (Desfazer).
+ */
 export async function dismissSuggestion(db: any, userId: number, suggestionId: number) {
-  const [s] = rowsOf(await db.execute(sql`SELECT clientA, clientB FROM crm_merge_suggestions WHERE id = ${suggestionId}`));
-  if (!s) throw new Error("Sugestão não encontrada.");
-  await db.execute(sql`UPDATE crm_merge_suggestions SET status = 'dismissed', decidedBy = ${userId}, decidedAt = UTC_TIMESTAMP() WHERE id = ${suggestionId}`);
-  await logCrm(userId, Number(s.clientA), "crm_suggestion_dismiss", { other: Number(s.clientB) });
+  let pair = { a: 0, b: 0 };
+  await db.transaction(async (tx: any) => {
+    const [s] = rowsOf(await tx.execute(sql`SELECT clientA, clientB, status FROM crm_merge_suggestions WHERE id = ${suggestionId} FOR UPDATE`));
+    if (!s) throw new Error("Sugestão não encontrada.");
+    if (s.status !== "pending") throw new Error(s.status === "dismissed" ? "Esta sugestão já foi recusada." : "Esta sugestão já foi decidida (as fichas foram juntas ou uma delas já não existe).");
+    await tx.execute(sql`UPDATE crm_merge_suggestions SET status = 'dismissed', decidedBy = ${userId}, decidedAt = UTC_TIMESTAMP() WHERE id = ${suggestionId}`);
+    pair = { a: Number(s.clientA), b: Number(s.clientB) };
+  });
+  try {
+    await logCrm(userId, pair.a, "crm_suggestion_dismiss", { other: pair.b, suggestionId });
+    await logCrm(userId, pair.b, "crm_suggestion_dismiss", { other: pair.a, suggestionId });
+  } catch (e: any) { console.warn("[crm] registo da recusa falhou:", String(e?.message ?? e).slice(0, 120)); }
+}
+
+/** Desfazer "não é a mesma pessoa" (21c): volta a pendente se as duas fichas ainda estiverem ativas. */
+export async function undismissSuggestion(db: any, userId: number, suggestionId: number): Promise<{ status: "pending" | "obsolete" }> {
+  let pair = { a: 0, b: 0 };
+  let status: "pending" | "obsolete" = "pending";
+  await db.transaction(async (tx: any) => {
+    const [s] = rowsOf(await tx.execute(sql`SELECT s.clientA, s.clientB, s.status, a.status AS sa, b.status AS sb FROM crm_merge_suggestions s
+      LEFT JOIN crm_clients a ON a.id = s.clientA LEFT JOIN crm_clients b ON b.id = s.clientB WHERE s.id = ${suggestionId} FOR UPDATE`));
+    if (!s) throw new Error("Sugestão não encontrada.");
+    if (s.status !== "dismissed") throw new Error("Esta sugestão já não está recusada.");
+    status = s.sa === "active" && s.sb === "active" ? "pending" : "obsolete";
+    await tx.execute(sql`UPDATE crm_merge_suggestions SET status = ${status}, decidedBy = NULL, decidedAt = NULL WHERE id = ${suggestionId}`);
+    pair = { a: Number(s.clientA), b: Number(s.clientB) };
+  });
+  try {
+    await logCrm(userId, pair.a, "crm_suggestion_undismiss", { other: pair.b, suggestionId, status });
+    await logCrm(userId, pair.b, "crm_suggestion_undismiss", { other: pair.a, suggestionId, status });
+  } catch (e: any) { console.warn("[crm] registo de desfazer a recusa falhou:", String(e?.message ?? e).slice(0, 120)); }
+  return { status };
 }
 
 // ─── Filtros guardados ──────────────────────────────────────────────────────

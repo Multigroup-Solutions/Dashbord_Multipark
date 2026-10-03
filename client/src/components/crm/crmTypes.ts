@@ -13,7 +13,9 @@ type Review = Out["review"];
 export type CrmSuggestions = Extract<Review, { tab: "suggestions" }>["suggestions"];
 export type CrmGenericEmails = Extract<Review, { tab: "generic" }>["generic"];
 export type CrmUpcomingNoEmail = Extract<Review, { tab: "noEmail" }>["upcoming"][number];
-export type CrmMergeEvent = Extract<Review, { tab: "merges" }>["merges"][number];
+export type CrmMerges = Extract<Review, { tab: "merges" }>["merges"];
+export type CrmMergeEvent = CrmMerges["rows"][number];
+export type CrmDismissed = Extract<Review, { tab: "dismissed" }>["dismissed"];
 
 export type CrmProList = Out["proList"];
 export type CrmProListRow = CrmProList["rows"][number];
