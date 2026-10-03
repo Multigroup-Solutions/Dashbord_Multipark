@@ -2,7 +2,7 @@
 modulo: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
-palavras: whatsapp, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, arquivar, ficheiro, documento, imagem, pesquisa
+palavras: whatsapp, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, arquivar, ficheiro, documento, imagem, pesquisa
 ---
 # WhatsApp
 
@@ -52,7 +52,14 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - **Responsável**: uma pessoa ou um **grupo de cidade** (**Grupo Lisboa**, **Grupo Porto**, **Grupo Faro**). As pessoas da lista são só quem pode responder no WhatsApp **e** vê a cidade dessa conversa. Atribuída a um grupo, os avisos de atraso vão à equipa dessa cidade e quem responder primeiro fica com ela. Quem responde a uma conversa sem responsável também fica com ela.
 - **Marcar como não lida** para retomar mais tarde.
 - Liga a conversa a uma reserva ou cliente no painel lateral. Com a Multipark em baixo, o painel diz "indisponível" (não "nenhuma reserva").
-- Contactos que pediram STOP ficam marcados "Não quer mensagens".
+- Contactos que pediram STOP ficam marcados "Não quer mensagens". O aviso diz de onde veio: **pediu STOP**, **carregou em «Parar promoções»** (o botão das promoções da Multipark, ou escrito) ou **parou as promoções no WhatsApp** (na própria app). Os três valem o mesmo: nada de templates nem envios em massa. Volta com **INICIAR** (ou "Retomar promoções" na app).
+- **Partilhado com o site da Multipark** (be-multipark): quem carrega em «Parar promoções» numa mensagem da Multipark também fica bloqueado aqui. O STOP escrito aqui e o "Parar promoções" da app chegam também ao site da Multipark (o dashboard reencaminha-lhe os eventos), que trata do lado dele.
+
+**A triagem propõe o caso**
+- Quando a triagem por IA acha que a conversa de um cliente é uma **reclamação** ou um **perdido/achado**, aparece por cima das mensagens: "A triagem acha que isto é uma reclamação" com **Criar reclamação** (ou **Criar perdido**) e **Não é**.
+- Nada é criado sozinho. **Criar** abre o caso com o nome, o telefone, o email e a reserva ligados à conversa e com as últimas mensagens do cliente; depois liga a reserva e avisa a equipa, como um caso criado à mão. Fica o link **Abrir** na conversa.
+- Um caso por conversa. **Não é** faz a proposta desaparecer desta conversa.
+- **Criar** precisa de poder editar Reclamações (ou Perdidos e Achados); **Não é**, de poder responder no WhatsApp.
 
 **Ficheiros e localizações recebidos**
 - Imagens, áudios, vídeos e documentos ficam guardados até 16 MB. Se não for possível guardar, a mensagem diz porquê ("demasiado grande", "a descarregar") — pede ao contacto para reenviar ou mandar por email.

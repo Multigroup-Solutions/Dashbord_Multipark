@@ -73,6 +73,8 @@ import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
 import { ConversationListItem } from "@/components/whatsapp/ConversationListItem";
 import { InboxListHeader } from "@/components/whatsapp/InboxListHeader";
 import { MessageThread } from "@/components/whatsapp/MessageThread";
+import { CaseProposalBar } from "@/components/whatsapp/CaseProposalBar";
+import { OPT_OUT_SOURCE_LABEL, type OptOutSource } from "@shared/whatsappOptOut";
 import { windowCountdown } from "@/components/whatsapp/inboxFormat";
 import type { InboxMessage } from "@/components/whatsapp/inboxTypes";
 import { can } from "@shared/access";
@@ -613,7 +615,7 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
       >
         <BellOff className="h-3.5 w-3.5 shrink-0" />
         <span className="min-w-0">
-          <strong>Não quer mensagens</strong> — templates bloqueados; texto livre só com confirmação. Volta se responder INICIAR.
+          <strong>Não quer mensagens</strong>{t.optOutSource && t.optOutSource in OPT_OUT_SOURCE_LABEL ? ` (${OPT_OUT_SOURCE_LABEL[t.optOutSource as OptOutSource]})` : ""} — templates bloqueados; texto livre só com confirmação. Volta se responder INICIAR.
         </span>
       </div>
     ) : null;
@@ -1033,6 +1035,7 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
             </div>
           )}
 
+          {t && t.conversationId === selectedId && <CaseProposalBar t={t} />}
           <MessageThread
             conversationId={selectedId}
             messages={t?.messages ?? EMPTY_MESSAGES}
