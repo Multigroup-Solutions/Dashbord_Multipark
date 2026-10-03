@@ -24,7 +24,8 @@ import { and, asc, eq, gte, lte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from "./extraRates";
 import { multiparkBookings, extrasDiaAssignments, employees, projects, users } from "../drizzle/schema";
-import { DEFAULT_CREW_RULES } from "../shared/appSettings";
+import { DEFAULT_CREW_RULES, DEFAULT_TIMES_PERCENTILE } from "../shared/appSettings";
+import { PRESSURE_CITY_GROUP, describeMeasuredCrewRule, effectiveCrewRule, type CyclePercentile, type MeasuredBandInfo } from "../shared/extrasPressure";
 import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, describeCrewRule, extrasNeededFor, type CrewRule } from "../shared/extrasSchedule";
 import { lisbonDayOf, lisbonWallTimeUtcMs } from "../shared/lisbonDay";
 import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
@@ -123,6 +124,39 @@ export async function loadCrewRule(city: ExtraCity): Promise<CrewRule> {
     map = await getSetting("extras.crewRules");
   } catch { /* sem BD → omissões */ }
   return map?.[city] ?? DEFAULT_CREW_RULES[city];
+}
+
+export interface CapacityRule {
+  /** Regra que a previsão/escala usa. */
+  rule: CrewRule;
+  /** A tabela (máximo) das Definições. */
+  tableRule: CrewRule;
+  /** 26c: com "Escala com os tempos medidos" ligado — percentil e faixas (medido/tabela). */
+  measured: null | { percentile: CyclePercentile; bands: MeasuredBandInfo[]; usedAny: boolean };
+}
+
+/**
+ * 26c (fase 2 da capacidade aprendida): com `extras.useMeasuredTimes` ligado na
+ * cidade, o tempo por carro MEDIDO nas horas cheias (percentil da cidade, ≥ 30
+ * serviços), nunca acima da tabela; desligado (por omissão) ou sem medição, a
+ * tabela — como até aqui. Nunca lança.
+ */
+export async function loadCapacityRule(city: ExtraCity): Promise<CapacityRule> {
+  const tableRule = await loadCrewRule(city);
+  let on = false;
+  let pct: CyclePercentile = DEFAULT_TIMES_PERCENTILE[city] as CyclePercentile;
+  try {
+    const { getSetting } = await import("./appSettings");
+    const [use, pcts] = await Promise.all([getSetting("extras.useMeasuredTimes"), getSetting("extras.timesPercentile")]);
+    on = (use as any)?.[city] === true;
+    const p = (pcts as any)?.[city];
+    if (p === 50 || p === 60 || p === 75 || p === 85 || p === 90) pct = p;
+  } catch { /* sem BD → tabela */ }
+  if (!on) return { rule: tableRule, tableRule, measured: null };
+  const { loadLatestCrewRows } = await import("./extrasPressure");
+  const rows = (await loadLatestCrewRows()).filter((r) => r.group === PRESSURE_CITY_GROUP[city]);
+  const eff = effectiveCrewRule(tableRule, rows, pct);
+  return { rule: eff.rule, tableRule, measured: { percentile: pct, bands: eff.bands, usedAny: eff.usedAny } };
 }
 
 export function cityLabel(city: ExtraCity): string {
@@ -328,7 +362,11 @@ export interface ExtrasDiaForecast {
   cityId: ExtraCity;
   /** Regra de capacidade usada nesta previsão (tempo por carro conforme as pessoas no turno, D12) e o texto dela. */
   crewRule: CrewRule;
+  /** 26c: a tabela (máximo) das Definições; igual a crewRule sem os tempos medidos. */
+  crewRuleTable: CrewRule;
   crewRuleText: string;
+  /** 26c: tempos medidos em uso (null = só a tabela). */
+  measuredTimes: CapacityRule["measured"];
   source: "db";
   /** De onde vieram as reservas: BD da Multipark ao vivo, ou a nossa cópia (recurso). */
   bookingSource: BookingSource;
@@ -1160,7 +1198,9 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   // Capacidade da CIDADE (D12): tempo por carro de cada condutor conforme as
   // pessoas no turno (TL incluído; conduzem os extras). driversNeeded = extras
   // precisos (sem o TL). Num bloco de 20 min conta a procura ×3 (por hora).
-  const crewRule = await loadCrewRule(city);
+  // 26c: com "Escala com os tempos medidos" ligado, os medidos (nunca acima da tabela).
+  const capacity = await loadCapacityRule(city);
+  const crewRule = capacity.rule;
   for (const row of hourly) {
     let hourWeighted = 0;
     for (const s of row.slots) {
@@ -1241,7 +1281,9 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     city: cityLabel(city),
     cityId: city,
     crewRule,
-    crewRuleText: describeCrewRule(crewRule),
+    crewRuleTable: capacity.tableRule,
+    crewRuleText: capacity.measured ? describeMeasuredCrewRule(capacity.measured.bands, capacity.measured.percentile, crewRule.minCrew) : describeCrewRule(crewRule),
+    measuredTimes: capacity.measured,
     source: "db",
     bookingSource: live.ok ? "multipark-db" : "copy",
     bookingSourceNotice: live.ok ? null : live.notice,

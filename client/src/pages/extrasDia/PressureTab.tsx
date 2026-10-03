@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Flame, Gauge, Timer, TrafficCone } from "lucide-react";
 import {
-  MIN_SAMPLE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, isRushHour, loadComparison, pressureSummary,
+  CREW_MEASURE_MIN_SAMPLES, MIN_SAMPLE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, isRushHour, loadComparison, pressureSummary,
   slotCycleAt, slotLoadPerDay, tightReason, tightThresholds, type CrewMeasureBand, type CyclePercentile, type PressureCrewRow,
   type PressureLoadRow, type PressureSlot,
 } from "@shared/extrasPressure";
@@ -51,7 +51,7 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
   const loadRows = useMemo(() => loadComparison(loads), [loads]);
   const loadText = useMemo(() => describeLoadEffect(loads), [loads]);
   // 22d: só nas cidades (todas as marcas) há tempos por condutor.
-  const cityInfo = (q.data?.cities ?? {})[group] as { percentile: CyclePercentile; bands: CrewMeasureBand[] } | undefined;
+  const cityInfo = (q.data?.cities ?? {})[group] as { percentile: CyclePercentile; bands: CrewMeasureBand[]; useMeasured?: boolean } | undefined;
   const pct: CyclePercentile = cityInfo?.percentile ?? 75;
   const crewRows = useMemo(() => (q.data?.crew ?? []).filter((c) => c.group === group) as PressureCrewRow[], [q.data, group]);
   const metricShown: Metric = !cityInfo && (metric === "cycle" || metric === "drive" || metric === "crew") ? "load" : metric;
@@ -182,7 +182,7 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
         </CardContent>
       </Card>
 
-      {cityInfo && <CrewCard bands={cityInfo.bands} rows={crewRows} pct={pct} where={where} />}
+      {cityInfo && <CrewCard bands={cityInfo.bands} rows={crewRows} pct={pct} where={where} useMeasured={!!cityInfo.useMeasured} />}
 
       <Card>
         <CardHeader>
@@ -240,7 +240,7 @@ const METRIC_HELP: Record<Metric, string> = {
  * trabalhar (TL incluído) — horas cheias (cada pessoa teve pelo menos um
  * serviço) e horas calmas — ao lado do máximo da tabela (Definições, D12).
  */
-function CrewCard({ bands, rows, pct, where }: { bands: CrewMeasureBand[]; rows: PressureCrewRow[]; pct: CyclePercentile; where: string }) {
+function CrewCard({ bands, rows, pct, where, useMeasured }: { bands: CrewMeasureBand[]; rows: PressureCrewRow[]; pct: CyclePercentile; where: string; useMeasured: boolean }) {
   const cell = (r: PressureCrewRow | undefined) => {
     if (!r || r.n === 0) return <span className="text-muted-foreground">—</span>;
     const v = cycleAt(r, pct);
@@ -285,7 +285,10 @@ function CrewCard({ bands, rows, pct, where }: { bands: CrewMeasureBand[]; rows:
         </div>
         <p className="text-xs text-muted-foreground mt-2">
           Máximo = a tabela das Definições (tempo por carro conforme as pessoas no turno). Horas cheias = cada pessoa teve pelo menos um serviço começado nessa hora; é aí que se vê a capacidade. Nas horas calmas o intervalo inclui esperar por trabalho.
-          A cinzento: menos de {MIN_SAMPLE} serviços. Por agora só se mede: a escala continua a usar a tabela máxima.
+          A cinzento: menos de {MIN_SAMPLE} serviços.{" "}
+          {useMeasured
+            ? <>A escala usa o valor das horas cheias, quando há pelo menos {CREW_MEASURE_MIN_SAMPLES} serviços, e nunca acima do máximo (Definições → Parâmetros → Escala com os tempos medidos).</>
+            : <>Por agora só se mede: a escala continua a usar a tabela máxima. Para a escala usar estes tempos (nunca acima do máximo), liga em Definições → Parâmetros → Escala com os tempos medidos.</>}
         </p>
       </CardContent>
     </Card>

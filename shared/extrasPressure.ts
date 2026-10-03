@@ -192,6 +192,68 @@ export function crewMeasureBands(rule: { bands: ReadonlyArray<{ upTo: number | n
   return out;
 }
 
+// ─── 26c: fase 2 — a escala com os tempos medidos ───────────────────────────
+
+/** Serviços medidos (horas cheias) que um escalão precisa para a escala usar o valor medido. */
+export const CREW_MEASURE_MIN_SAMPLES = 30;
+
+/** Grupo-cidade da Pressão de cada cidade do Extras-dia. */
+export const PRESSURE_CITY_GROUP = { lisbon: "cidade_lisboa", porto: "cidade_porto", faro: "cidade_faro" } as const;
+
+export interface MeasuredBandInfo {
+  label: string;
+  min: number;
+  max: number | null;
+  /** Máximo da tabela (Definições, D12). */
+  tableMinutes: number;
+  /** Valor medido (percentil da cidade, horas cheias) ou null sem amostra suficiente. */
+  measured: number | null;
+  n: number;
+  /** O que a escala usa: min(medido, tabela) ou a tabela. */
+  used: number;
+  source: "medido" | "tabela";
+}
+
+/**
+ * Regra efetiva da escala com os tempos medidos (26c): em cada faixa da tabela,
+ * o tempo medido nas HORAS CHEIAS (nas calmas o intervalo inclui esperar por
+ * trabalho) com o percentil da cidade, só com ≥ `minN` serviços, e nunca acima
+ * do máximo da tabela. A faixa casa pelo rótulo ("3–4"), não pelo número
+ * guardado (a tabela pode ter mudado desde a medição). PURA.
+ */
+export function effectiveCrewRule<R extends { minCrew: number; bands: ReadonlyArray<{ upTo: number | null; minutes: number }> }>(
+  rule: R,
+  crew: ReadonlyArray<PressureCrewRow>,
+  pct: CyclePercentile,
+  minN: number = CREW_MEASURE_MIN_SAMPLES,
+): { rule: R; bands: MeasuredBandInfo[]; usedAny: boolean } {
+  const bands = rule.bands.map((b) => ({ ...b }));
+  const info: MeasuredBandInfo[] = [];
+  let lo = 2;
+  let usedAny = false;
+  rule.bands.forEach((b, i) => {
+    if (b.upTo !== null && b.upTo < lo) return;
+    const label = b.upTo === null ? `${lo}+` : lo === b.upTo ? `${lo}` : `${lo}–${b.upTo}`;
+    const row = crew.find((r) => r.busy && r.bandLabel === label);
+    const raw = row && row.n >= minN ? cycleAt(row, pct) : null;
+    const measured = raw != null && Number.isFinite(raw) && raw > 0 ? Math.max(5, Math.round(raw)) : null;
+    const used = measured != null ? Math.min(b.minutes, measured) : b.minutes;
+    if (measured != null) usedAny = true;
+    bands[i] = { ...b, minutes: used };
+    info.push({ label, min: lo, max: b.upTo, tableMinutes: b.minutes, measured, n: row?.n ?? 0, used, source: measured != null ? "medido" : "tabela" });
+    if (b.upTo !== null) lo = b.upTo + 1;
+  });
+  return { rule: { ...rule, bands } as R, bands: info, usedAny };
+}
+
+/** "Tempo por carro, medido p75 (nunca acima da tabela): 2 → 62 min (máx. 75) · 3–4 → 60 min (tabela) …". PURA. */
+export function describeMeasuredCrewRule(info: ReadonlyArray<MeasuredBandInfo>, pct: CyclePercentile, minCrew: number): string {
+  const parts = info
+    .filter((b) => b.max === null || b.max >= Math.max(2, minCrew))
+    .map((b) => `${b.label} → ${b.used} min ${b.source === "medido" ? `(máx. ${b.tableMinutes})` : "(tabela)"}`);
+  return `Tempo por carro, medido p${pct} (pessoas com o TL${minCrew > 2 ? `, mínimo ${minCrew}` : ""}; nunca acima da tabela): ${parts.join(" · ")}`;
+}
+
 /** Escalão de um número de pessoas. PURA. */
 export function crewBandOf(bands: CrewMeasureBand[], people: number): CrewMeasureBand {
   return bands.find((b) => people >= b.min && (b.max === null || people <= b.max)) ?? bands[0];

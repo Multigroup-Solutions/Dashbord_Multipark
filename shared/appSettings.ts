@@ -157,6 +157,11 @@ const percentileChoice = z.union([z.literal(50), z.literal(60), z.literal(75), z
 export const timesPercentileSchema = z.object({ lisbon: percentileChoice, porto: percentileChoice, faro: percentileChoice }, { error: "Indica Lisboa, Porto e Faro." });
 export type TimesPercentileMap = z.infer<typeof timesPercentileSchema>;
 export const DEFAULT_TIMES_PERCENTILE: TimesPercentileMap = { lisbon: 75, porto: 60, faro: 60 };
+// 26c (fase 2 da capacidade aprendida): a escala usa os tempos medidos, nunca
+// acima da tabela. Desligado por omissão (por cidade).
+export const useMeasuredTimesSchema = z.object({ lisbon: z.boolean(), porto: z.boolean(), faro: z.boolean() }, { error: "Indica Lisboa, Porto e Faro (true ou false)." });
+export type UseMeasuredTimesMap = z.infer<typeof useMeasuredTimesSchema>;
+export const DEFAULT_USE_MEASURED_TIMES: UseMeasuredTimesMap = { lisbon: false, porto: false, faro: false };
 
 export const DEFAULT_CREW_RULES: CrewRulesMap = {
   lisbon: { minCrew: 2, bands: [{ upTo: 2, minutes: 75 }, { upTo: 4, minutes: 60 }, { upTo: 6, minutes: 45 }, { upTo: null, minutes: 30 }] },
@@ -411,6 +416,15 @@ export const SETTINGS = {
     description: "Que valor do tempo por carro medido se usa em cada cidade: 75 = em 3 de cada 4 vezes foi mais rápido do que isto (mais prudente); 60 = um pouco acima do meio. Valores: 50, 60, 75, 85 ou 90. JSON: {\"lisbon\": 75, \"porto\": 60, \"faro\": 60}.",
     schema: timesPercentileSchema,
     defaultValue: DEFAULT_TIMES_PERCENTILE,
+    wiring: "live",
+  }),
+  "extras.useMeasuredTimes": def({
+    key: "extras.useMeasuredTimes",
+    group: "extras",
+    label: "Escala com os tempos medidos (por cidade)",
+    description: "Ligado: a previsão, a escala automática e a estimativa do Extras-dia usam o tempo por carro MEDIDO nas horas cheias (percentil da cidade), nunca acima do máximo da tabela; com menos de 30 serviços medidos num escalão usa a tabela. Desligado: só a tabela, como até aqui. JSON: {\"lisbon\": false, \"porto\": false, \"faro\": false}.",
+    schema: useMeasuredTimesSchema,
+    defaultValue: DEFAULT_USE_MEASURED_TIMES,
     wiring: "live",
   }),
   "extras.autoProposeAt": def({
