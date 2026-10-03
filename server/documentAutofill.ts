@@ -66,6 +66,9 @@ export function validDate(raw: string | null | undefined): string | null {
 
 export interface FillPlan { patch: Record<string, string>; filled: string[] }
 
+/** O que a UI mostra quando o IBAN lido ficou como pedido ao RH (26b). */
+export const IBAN_REQUESTED_LABEL = "IBAN (pedido ao RH)";
+
 const LABEL: Record<string, string> = { nif: "NIF", birthDate: "data de nascimento", nationality: "nacionalidade", address: "morada", nib: "IBAN" };
 
 /**
@@ -135,7 +138,7 @@ export async function extractDocument(mimeType: string, base64: string, ctx: { u
  * Lê o documento e preenche os campos vazios da ficha. Devolve os campos
  * preenchidos (para a UI avisar) e os dados lidos do documento.
  */
-export async function autofillFromDocument(opts: { employeeId: number; docType: string; mimeType: string; base64: string; userId: number }): Promise<{ filled: string[]; extracted: ExtractedDoc | null; skipped?: string }> {
+export async function autofillFromDocument(opts: { employeeId: number; docType: string; mimeType: string; base64: string; userId: number; ibanDirect?: boolean }): Promise<{ filled: string[]; extracted: ExtractedDoc | null; skipped?: string; ibanRequested?: boolean }> {
   if (!(AUTOFILL_DOC_TYPES as readonly string[]).includes(opts.docType)) return { filled: [], extracted: null, skipped: "tipo de documento" };
   if (!(await llmConfigured())) return { filled: [], extracted: null, skipped: "IA desligada ou não configurada" };
   if (!/^image\/(jpeg|png|webp|gif)$/.test(opts.mimeType) && opts.mimeType !== "application/pdf") return { filled: [], extracted: null, skipped: "formato" };
@@ -158,12 +161,29 @@ export async function autofillFromDocument(opts: { employeeId: number; docType: 
     opts.docType,
     extracted,
   );
-  if (plan.filled.length) {
+  // 26b (D7 + D49): o IBAN lido só entra na hora para quem o pode mudar na
+  // hora (back office, supervisor, admin, super admin — nunca na própria
+  // ficha); para os outros fica um PEDIDO ao RH, como no formulário.
+  let ibanRequested = false;
+  if (plan.patch.nib && !opts.ibanDirect) {
+    const iban = plan.patch.nib;
+    delete plan.patch.nib;
+    plan.filled = plan.filled.filter((f) => f !== LABEL.nib);
+    try {
+      const { createBankChangeRequest } = await import("./rhBankChange");
+      await createBankChangeRequest(opts.employeeId, iban, opts.userId);
+      ibanRequested = true;
+      plan.filled.push(IBAN_REQUESTED_LABEL);
+    } catch (err: any) {
+      console.warn("[documentAutofill] pedido de IBAN falhou:", String(err?.message ?? err).slice(0, 160));
+    }
+  }
+  if (Object.keys(plan.patch).length) {
     const { updateEmployee, logActivity } = await import("./db");
     const data: Record<string, unknown> = { ...plan.patch };
     if (plan.patch.birthDate) data.birthDate = `${plan.patch.birthDate} 00:00:00`;
     await updateEmployee(opts.employeeId, data as any);
-    await logActivity({ userId: opts.userId, action: "update", entity: "employee", entityId: opts.employeeId, details: `IA preencheu a partir do documento (${opts.docType}): ${plan.filled.join(", ")}` });
+    await logActivity({ userId: opts.userId, action: "update", entity: "employee", entityId: opts.employeeId, details: `IA preencheu a partir do documento (${opts.docType}): ${plan.filled.filter((f) => f !== IBAN_REQUESTED_LABEL).join(", ")}` });
   }
-  return { filled: plan.filled, extracted };
+  return { filled: plan.filled, extracted, ...(ibanRequested ? { ibanRequested } : {}) };
 }

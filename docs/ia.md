@@ -84,6 +84,9 @@ Os interruptores estão em Definições → Automações → *Inteligência arti
 Também existem como env (`on`/`off`). O valor escolhido na página sobrepõe-se ao
 da env.
 
+**Onde corre cada uma, página a página** (quando, quem vê, que dados, o que
+faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
+
 | Interruptor | Funcionalidade (`feature`) | Nível |
 |---|---|---|
 | `AI_ENABLED` | todas (interruptor geral) | — |
@@ -92,8 +95,8 @@ da env.
 | `AI_RADIO` | `radio_transcription` + `radio_summary` | lite |
 | `AI_HANDOVER_SUMMARY` | `handover_summary`: 5 pontos da passagem de turno | lite |
 | `AI_WHATSAPP_ASSIST` | `whatsapp_summary` + `whatsapp_reply` | lite |
-| `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais | fast |
-| `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH | lite. **Desligado por omissão** até decisão sobre o RGPD. |
+| `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais e da base de conhecimento (texto com `redactPii`; o PDF anexo vai inteiro) | fast (manual) / lite (base) |
+| `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH (só campos vazios; o IBAN só entra na hora para quem o pode mudar na hora — os outros ficam com pedido ao RH, D49) | lite. **Desligado por omissão** até decisão sobre o RGPD. |
 | `AI_HR_EMAIL_ATTACHMENTS` | `hr_email_attachments`: anexos dos emails do RH (CV, documentos) → candidato (só campos vazios) + resumo para quem entrevista | lite. **Desligado por omissão**. Corre no varrimento de 15 em 15 min (2 anexos por vez), só emails dos últimos 14 dias, cada anexo uma vez (`rh_attachment_reads`). NIF/BI-CC/carta só o RH vê. |
 | `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz) | lite |
 | `AI_COMPLAINT_TRIAGE` | `complaint_triage`: triagem das reclamações por email | lite |
@@ -110,6 +113,12 @@ da env.
 | `AI_EVALUATION_EXPLAIN` | `evaluation_explain`: explicação da avaliação | lite |
 | `AI_HANDOVER_REPEATS` | `handover_repeats`: pendentes repetidos e resumo semanal da passagem | lite |
 | `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar) | lite |
+| `AI_MAIL_ROUTING` | `mail_routing`: separar os emails novos das caixas gerais pelas caixas do tema (só move; nunca responde) | lite. **Desligado por omissão.** |
+| `AI_MAIL_DRAFT` | `mail_reply`: "Rascunho IA" na Comunicação (fica no editor) | lite |
+| `AI_WEB_INSIGHT` | `web_insight`: resumo semanal do Web & SEO | lite |
+| `AI_PAGESPEED_EXPLAIN` | `pagespeed_explain`: o que corrigir primeiro na PageSpeed | lite |
+| `AI_GBP_POSTS` | `gbp_post_draft`: rascunho de publicações do Google Business | lite |
+| `AI_KNOWLEDGE` | `knowledge_extract` + `knowledge_embed`: índice da base de conhecimento (PDFs sem Drive, embeddings) | lite / embed |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
@@ -140,7 +149,7 @@ ao cliente passa por uma pessoa.
     sugestão com os botões Aceitar e Rejeitar (Manter e Desfazer para as que
     se aplicaram sozinhas).
 - **Críticas Google** (`server/reviewAutoDraft.ts`). No fim do sync do Google
-  Business Profile (a cada 10 min), no email criticas@ e no cron `ai-comms`,
+  Business Profile (em pausa; só manual), no email criticas@ e no cron `ai-comms`,
   cada crítica nova recebe um rascunho. O rascunho usa o prompt central
   `draftReviewReply` com o sentimento e o contexto da reclamação ou reserva
   ligada, que serve só para o tom e nunca é citado.
@@ -168,7 +177,9 @@ ao cliente passa por uma pessoa.
     humano.
   - Sem IA, ficam só as pontuações do pré-filtro.
 
-Cron: `/api/cron/ai-comms` (`.github/workflows/ai-comms.yml`, a cada 15 min).
+Cron: `/api/cron/ai-comms`, agendado pelo `/api/cron/tick` a cada 15 min
+(`server/cronSchedule.ts`; o `.github/workflows/ai-comms.yml` ficou só para
+corridas manuais).
 Cada passo tem um lote pequeno (3 a 8 casos) e um prazo abaixo dos 60 s. O
 passo salta sem erro quando o interruptor está desligado, quando o orçamento
 se esgotou ou quando não há fornecedor. Migração: 0123.
@@ -180,8 +191,8 @@ automação continua com um texto fixo feito no código (e não faz pedidos).
 Código em `server/aiOps/`, prompts em `server/_core/ai/prompts/ops.ts`,
 tabelas na migração 0125.
 
-- **Briefing diário por cidade** (`/api/cron/ops-briefing`, 06:32 e 07:32 UTC;
-  corre a partir das 07h de Lisboa, idempotente): reservas do dia por hora e
+- **Briefing diário por cidade** (`/api/cron/ops-briefing`, agendado pelo
+  `/api/cron/tick` uma vez por dia a partir das 07:30 de Lisboa, idempotente): reservas do dia por hora e
   pico, extras escalados vs. necessários (previsão do Extras-Dia, só leitura),
   reclamações/ocorrências com prazo hoje, pendentes da passagem de turno (e os
   que se repetem), anomalias e alertas de marketing. Guardado em
@@ -362,7 +373,6 @@ resultado). Não está no menu geral.
 | `AI_THINKING_LEVEL` | Raciocínio dos Gemini 3.x |
 | `AI_MONTHLY_BUDGET_EUR` | Orçamento (a página Definições ganha-lhe) |
 | `AI_TRAINING_TUTOR_PER_MINUTE`, `AI_TRAINING_TUTOR_PER_DAY` | Limites do tutor da Formação (Definições ganha) |
-| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_ASSISTANT` | Interruptores |
-| `AI_ENABLED`, `AI_EXPENSE_OCR`, `AI_REVIEW_DRAFTS`, `AI_RADIO`, `AI_HANDOVER_SUMMARY`, `AI_WHATSAPP_ASSIST`, `AI_QUIZ`, `AI_HR_AUTOFILL`, `AI_OPS_BRIEFING`, `AI_WEEKLY_REPORTS`, `AI_ANOMALY_EXPLAIN`, `AI_AVAILABILITY_CLASSIFY`, `AI_LEAD_SCORING`, `AI_EVALUATION_EXPLAIN`, `AI_HANDOVER_REPEATS`, `AI_TASKS_FROM_TEXT` | Interruptores |
+| `AI_ENABLED` e todos os `AI_*` da tabela da secção 3 (`AI_EXPENSE_OCR` … `AI_KNOWLEDGE`) | Interruptores (a página Definições ganha) |
 | `LLM_API_URL`, `LLM_API_KEY`, `LLM_MODEL` | Fornecedor antigo |
 | `OPENAI_API_KEY` | Whisper (só se definida) |

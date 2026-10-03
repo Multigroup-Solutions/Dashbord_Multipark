@@ -444,7 +444,11 @@ export async function generateQuizDrafts(manualId: number, count: number, userId
   const { runAi } = await import("./_core/ai/run");
   const { aiTrpcError } = await import("./_core/ai/trpcError");
   const { QUIZ_SYSTEM, quizInstruction, quizResponseSchema } = await import("./_core/ai/prompts/quiz");
-  parts.unshift({ type: "text", text: quizInstruction(m.title, text, n) });
+  // 26b (D7): o texto vai sem dados pessoais, como no quiz da base de
+  // conhecimento (redactPii — os marcadores são tirados das perguntas).
+  const { redactPii } = await import("./_core/ai/pii");
+  const red = redactPii(text);
+  parts.unshift({ type: "text", text: quizInstruction(m.title, red.text, n) });
   let drafts: DraftQuestion[];
   try {
     const r = await runAi({
@@ -459,7 +463,11 @@ export async function generateQuizDrafts(manualId: number, count: number, userId
       entity: "training_manual",
       entityId: m.id,
     });
-    drafts = filterDraftQuestions(r.output.questions).slice(0, n);
+    drafts = filterDraftQuestions(r.output.questions.map((q) => ({
+      ...q,
+      question: red.strip(q.question), optionA: red.strip(q.optionA), optionB: red.strip(q.optionB),
+      optionC: red.strip(q.optionC), optionD: red.strip(q.optionD), explanation: q.explanation ? red.strip(q.explanation) : q.explanation,
+    }))).slice(0, n);
   } catch (err) {
     throw aiTrpcError(err);
   }
