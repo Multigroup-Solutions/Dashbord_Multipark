@@ -4,6 +4,7 @@
  * débito, pagamentos a crédito; os meses pagos são os que a Multipark
  * registou. Nada se paga aqui — "Registar pagamento" abre a Multipark.
  */
+import { csvCell } from "@shared/csv";
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
@@ -66,7 +67,9 @@ export function ProAccountSection({ a, onLinkPerson }: { a: CrmProAccount; onLin
 
   const exportCsv = () => {
     const f = (v: number | null) => (v == null ? "" : v.toFixed(2).replace(".", ","));
-    const q = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    // texto vindo da Multipark (nome de quem viajou, parque…): com a proteção contra fórmulas do Excel;
+    // os números são nossos (formatados acima) e ficam como estão
+    const q = (v: unknown) => csvCell(v ?? "");
     const lines = [["Data", "Movimento", "Referência", "Quem viajou", "Matrícula", "Parque", "Débito", "Crédito", "Saldo"].join(";")];
     for (const r of [...rows].reverse()) {
       lines.push([q(r.entryAt), q(KIND_LABEL[r.kind] ?? r.kind), q(r.bookingCode ?? r.mpPeriodKey ?? ""), q(r.travelerName), q(r.plate), q(r.parkName),

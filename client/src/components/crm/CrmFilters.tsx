@@ -38,8 +38,10 @@ export function SelButton({ children, active, className, ...rest }: React.Button
 }
 
 /** Grupo de filtro com escolha múltipla e pesquisa (listas longas: parques, parceiros). */
-export function FilterGroup({ label, options, value, onChange }: {
+export function FilterGroup({ label, options, value, onChange, countLabel }: {
   label: string; options: Opt[]; value: string[] | undefined; onChange: (v: string[]) => void;
+  /** o que conta o número de cada opção (ex.: "reservas") — diz-se no topo da lista */
+  countLabel?: string;
 }) {
   const [q, setQ] = useState("");
   const sel = new Set(value ?? []);
@@ -67,6 +69,7 @@ export function FilterGroup({ label, options, value, onChange }: {
         {options.length > 8 && (
           <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Procurar ${label.toLowerCase()}…`} className="mb-2 h-8" />
         )}
+        {countLabel && options.some((o) => o.n != null) && <p className="px-2 pb-1 text-right text-[11px] text-muted-foreground">n.º de {countLabel}</p>}
         <div className="max-h-72 space-y-0.5 overflow-y-auto">
           {shown.length === 0 && <p className="px-2 py-3 text-xs text-muted-foreground">Nada a mostrar.</p>}
           {shown.map((o) => (
@@ -119,10 +122,10 @@ export function RulesEditor({ fields, initial, onApply, onCancel, onSave }: {
 
   return (
     <div className="flex flex-col gap-2.5 rounded-[10px] border border-dashed border-[#b8c7e6] bg-muted p-3.5 dark:border-border">
-      <div className="flex items-center gap-2 text-[13px]">
+      <div className="flex flex-wrap items-center gap-2 text-[13px]">
         <span className="font-bold">Mostrar clientes que cumprem</span>
         <Select value={match} onValueChange={(v) => setMatch(v as "all" | "any")}>
-          <SelectTrigger className="h-[30px] w-44 bg-card"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-[30px] w-44 max-w-full bg-card"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">todas as regras</SelectItem>
             <SelectItem value="any">pelo menos uma regra</SelectItem>
@@ -137,16 +140,16 @@ export function RulesEditor({ fields, initial, onApply, onCancel, onSave }: {
         return (
           <div key={i} className="flex flex-wrap items-center gap-2">
             <Select value={r.field} onValueChange={(v) => { const t = typeOf(v); set(i, { field: v, op: OPS_BY_TYPE[t][0].id, value: "" }); }}>
-              <SelectTrigger className="h-[34px] w-[250px] bg-card"><SelectValue placeholder="Campo" /></SelectTrigger>
+              <SelectTrigger className="h-[34px] w-full bg-card sm:w-[250px]"><SelectValue placeholder="Campo" /></SelectTrigger>
               <SelectContent>{fields.map((f) => <SelectItem key={f.id} value={f.id}>{f.label}</SelectItem>)}</SelectContent>
             </Select>
             <Select value={r.op} onValueChange={(v) => set(i, { op: v as RuleOp })}>
-              <SelectTrigger className="h-[34px] w-[170px] bg-card"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-[34px] w-[calc(100%-42px)] bg-card sm:w-[170px]"><SelectValue /></SelectTrigger>
               <SelectContent>{ops.map((o) => <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>)}</SelectContent>
             </Select>
             {needsValue && (
               <Input
-                className="h-[34px] w-[220px] bg-card font-bold"
+                className="h-[34px] w-full bg-card font-bold sm:w-[220px]"
                 type={isDays || type === "number" ? "number" : type === "date" ? "date" : "text"}
                 value={String(r.value ?? "")}
                 placeholder={isDays ? "dias" : type === "text" ? "valor (ex.: vermelho)" : ""}
@@ -181,14 +184,15 @@ function normValue(r: CrmRule, type: RuleType): string | number | null {
 // ─── Filtros guardados ──────────────────────────────────────────────────────
 
 export function SavedFiltersMenu<T>({ current, onApply, saveRequest, onSaveHandled }: {
-  current: T; onApply: (payload: T) => void;
+  current: T; onApply: (payload: T, meta: { dropped: number }) => void;
   /** pedido para guardar vindo do editor de regras */
   saveRequest?: boolean; onSaveHandled?: () => void;
 }) {
   const utils = trpc.useUtils();
   const list = trpc.crm.savedFilters.useQuery(undefined, { staleTime: 60_000 });
-  const save = trpc.crm.saveFilter.useMutation({ onSuccess: () => { utils.crm.savedFilters.invalidate(); toast.success("Filtro guardado"); } });
-  const del = trpc.crm.deleteFilter.useMutation({ onSuccess: () => utils.crm.savedFilters.invalidate() });
+  const save = trpc.crm.saveFilter.useMutation({ onSuccess: () => { utils.crm.savedFilters.invalidate(); toast.success("Filtro guardado"); }, onError: (e) => toast.error(e.message) });
+  const del = trpc.crm.deleteFilter.useMutation({ onSuccess: () => { utils.crm.savedFilters.invalidate(); toast.success("Filtro apagado"); }, onError: (e) => toast.error(e.message) });
+  const [confirmDel, setConfirmDel] = useState<{ id: number; name: string; shared: boolean } | null>(null);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [shared, setShared] = useState(false);
@@ -206,24 +210,34 @@ export function SavedFiltersMenu<T>({ current, onApply, saveRequest, onSaveHandl
           {(list.data ?? []).map((f) => (
             <div key={f.id} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted">
               <button type="button" className="min-w-0 flex-1 truncate text-left text-[13px] font-medium"
-                onClick={() => { onApply(f.payload as T); setOpen(false); onSaveHandled?.(); }}>
+                onClick={() => { onApply(f.payload as T, { dropped: f.dropped ?? 0 }); setOpen(false); onSaveHandled?.(); }}>
                 {f.isDefault && <Star className="mr-1 inline h-3 w-3 fill-amber-400 text-amber-400" />}
                 {f.name}
                 {!f.mine && <span className="ml-1 text-xs text-muted-foreground">· de {f.ownerName ?? "outro"}</span>}
                 {f.mine && f.shared && <span className="ml-1 text-xs text-muted-foreground">· partilhado</span>}
               </button>
               {f.mine && (
-                <button type="button" aria-label="Apagar filtro" className="opacity-50 hover:opacity-100" onClick={() => del.mutate({ id: f.id })}>
+                <button type="button" aria-label={`Apagar o filtro ${f.name}`} className="opacity-50 hover:opacity-100" onClick={() => setConfirmDel({ id: f.id, name: f.name, shared: f.shared })}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
           ))}
         </div>
+        {confirmDel && (
+          <div role="alertdialog" aria-label="Apagar filtro" className="mt-2 space-y-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">
+            <p>Apagar «{confirmDel.name}»?{confirmDel.shared ? " Está partilhado: desaparece também para a equipa." : ""}</p>
+            <div className="flex justify-end gap-2">
+              <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setConfirmDel(null)}>Cancelar</Button>
+              <Button type="button" size="sm" variant="destructive" className="h-7" disabled={del.isPending}
+                onClick={() => del.mutate({ id: confirmDel.id }, { onSettled: () => setConfirmDel(null) })}>Apagar</Button>
+            </div>
+          </div>
+        )}
         <div className={cn("mt-2 space-y-2 border-t pt-2", saving && "rounded-md bg-secondary/60 p-2")}>
           <Label className="text-xs">Guardar o filtro atual</Label>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (ex.: Pro de Lisboa sem email)" className="h-8" autoFocus={saving} />
-          <div className="flex items-center justify-between text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <label className="flex items-center gap-2"><Switch checked={shared} onCheckedChange={setShared} />Partilhar com a equipa</label>
             <label className="flex items-center gap-2"><Switch checked={isDefault} onCheckedChange={setIsDefault} />Abrir com este</label>
           </div>

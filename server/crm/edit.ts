@@ -225,18 +225,28 @@ export async function dismissSuggestion(db: any, userId: number, suggestionId: n
 // ─── Filtros guardados ──────────────────────────────────────────────────────
 
 export async function listSavedFilters(db: any, userId: number) {
+  const { sanitizeSavedView } = await import("../../shared/crmFilters");
   return rowsOf(await db.execute(sql`SELECT f.id, f.userId, f.name, f.payloadJson, f.shared, f.isDefault, u.name AS ownerName
     FROM crm_saved_filters f LEFT JOIN users u ON u.id = f.userId
-    WHERE f.userId = ${userId} OR f.shared = 1 ORDER BY f.userId = ${userId} DESC, f.name`)).map((f) => ({
-    id: Number(f.id), name: String(f.name), shared: Number(f.shared) === 1, isDefault: Number(f.isDefault) === 1 && Number(f.userId) === userId,
-    mine: Number(f.userId) === userId, ownerName: f.ownerName ?? null, payload: safeJson(f.payloadJson),
-  }));
+    WHERE f.userId = ${userId} OR f.shared = 1 ORDER BY f.userId = ${userId} DESC, f.name`)).map((f) => {
+    // 21a: um filtro antigo com valores que deixaram de existir aplica o que ainda vale e diz quantos caíram
+    const { view, dropped } = sanitizeSavedView(safeJson(f.payloadJson));
+    return {
+      id: Number(f.id), name: String(f.name), shared: Number(f.shared) === 1, isDefault: Number(f.isDefault) === 1 && Number(f.userId) === userId,
+      mine: Number(f.userId) === userId, ownerName: f.ownerName ?? null, payload: view, dropped,
+    };
+  });
 }
 
 function safeJson(s: unknown) { try { return JSON.parse(String(s ?? "{}")); } catch { return {}; } }
 
 export async function saveFilter(db: any, userId: number, o: { id?: number; name: string; payload: unknown; shared: boolean; isDefault: boolean }) {
-  const payload = JSON.stringify(o.payload ?? {}).slice(0, 60_000);
+  const { savedViewSchema, SAVED_VIEW_MAX_CHARS } = await import("../../shared/crmFilters");
+  // 21a: valida-se ao guardar; nunca se corta o JSON a meio (cortado ficava inválido e abria "sem filtro")
+  const parsed = savedViewSchema.safeParse(o.payload ?? {});
+  if (!parsed.success) throw new Error("O filtro tem valores inválidos e não foi guardado.");
+  const payload = JSON.stringify(parsed.data);
+  if (payload.length > SAVED_VIEW_MAX_CHARS) throw new Error("O filtro é grande demais para guardar. Tira alguns valores (parques, parceiros) e tenta de novo.");
   if (o.isDefault) await db.execute(sql`UPDATE crm_saved_filters SET isDefault = 0 WHERE userId = ${userId}`);
   if (o.id) {
     await db.execute(sql`UPDATE crm_saved_filters SET name = ${o.name.slice(0, 128)}, payloadJson = ${payload}, shared = ${o.shared ? 1 : 0}, isDefault = ${o.isDefault ? 1 : 0}
@@ -249,5 +259,11 @@ export async function saveFilter(db: any, userId: number, o: { id?: number; name
 }
 
 export async function deleteFilter(db: any, userId: number, id: number) {
+  // Preferência da pessoa (não é um dado de negócio): sai, mas fica no registo — com o nome
+  // e se era partilhado, porque um partilhado desaparece também aos outros.
+  const [f] = rowsOf(await db.execute(sql`SELECT name, shared FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId}`));
+  if (!f) throw new Error("Filtro não encontrado.");
   await db.execute(sql`DELETE FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId}`);
+  const { logActivity } = await import("../db");
+  await logActivity({ userId, action: "crm_filter_delete", entity: "crm_filter", entityId: id, details: JSON.stringify({ name: String(f.name), shared: Number(f.shared) === 1 }) } as any);
 }

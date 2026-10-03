@@ -24,6 +24,8 @@ interface ReportDef {
   load(call: ProcedureCall, input: any, deadlineAt: number): Promise<SheetTab[]>;
 }
 
+/** Exportação de clientes: até 25 páginas × 200 = 5 000 linhas por folha. */
+export const EXPORT_CLIENT_PAGES = 25;
 const r2 = (v: unknown) => Math.round((Number(v ?? 0) || 0) * 100) / 100;
 const tabOf = (name: string, header: SheetCell[], rows: SheetCell[][]): SheetTab => ({ name, rows: [header, ...rows] });
 
@@ -76,24 +78,41 @@ export const SHEET_REPORTS: Record<SheetExportReport, ReportDef> = {
     },
   },
   clientes: {
-    // Fichas do CRM (fase 2 — o "CRM leve" antigo saiu), no âmbito de cidade de quem exporta.
+    // Fichas do CRM, no âmbito de cidade de quem exporta. 21a: exatamente o conjunto da
+    // lista (todos os filtros, a pesquisa no campo escolhido e a ordem) — antes só ia o
+    // texto livre e um segmento, e o corte às 5 000 não era avisado.
     async load(call, input, deadlineAt) {
       const rows: SheetCell[][] = [];
       let totals = false;
-      const segment = input.segment && input.segment !== "all" && input.segment !== "shared" ? [input.segment] : undefined;
-      const search = input.search?.trim() ? { text: input.search.trim(), field: "all" as const } : null;
-      // Até 25 páginas × 200 (5 000 clientes) e sempre dentro do prazo.
-      for (let page = 0; page < 25 && Date.now() < deadlineAt - 20_000; page++) {
-        const res = await call("crm.list", { tab: "clients", search, groups: segment ? { segment } : undefined, sort: "lastVisit", dir: "desc", offset: page * 200, limit: 200 });
+      let total = 0;
+      const base = input.query
+        ? { ...input.query, tab: "clients" as const }
+        : {
+          tab: "clients" as const,
+          search: input.search?.trim() ? { text: input.search.trim(), field: "all" as const } : null,
+          groups: input.segment && input.segment !== "all" && input.segment !== "shared" ? { segment: [input.segment] } : undefined,
+          sort: "lastVisit" as const, dir: "desc" as const,
+        };
+      let warnings: string[] = [];
+      let stopped = false;
+      for (let page = 0; page < EXPORT_CLIENT_PAGES; page++) {
+        if (Date.now() > deadlineAt - 20_000) { stopped = true; break; }
+        const res = await call("crm.list", { ...base, offset: page * 200, limit: 200, includeContacts: true });
         totals = !!res.canSeeTotals;
+        total = Number(res.total ?? 0);
+        if (page === 0) warnings = Array.isArray(res.warnings) ? res.warnings : [];
         for (const c of res.rows ?? []) {
           const avg = c.totalSpent != null && c.completed ? c.totalSpent / c.completed : null;
-          rows.push([c.id, c.displayName, c.primaryEmail, c.primaryPhone, c.bookings, c.completed, c.upcoming, c.cancelled, ...(totals ? [c.totalSpent == null ? null : r2(c.totalSpent), avg == null ? null : r2(avg)] : []), c.firstVisit, c.lastVisit]);
+          rows.push([c.id, c.displayName, c.kind === "company" ? "Empresa" : "Pessoa", c.primaryEmail, c.primaryPhone, c.bookings, c.completed, c.upcoming, c.cancelled, ...(totals ? [c.totalSpent == null ? null : r2(c.totalSpent), avg == null ? null : r2(avg)] : []), c.firstVisit, c.lastVisit]);
         }
         if (!res.rows?.length || res.rows.length < 200) break;
       }
-      const header: SheetCell[] = ["N.º cliente", "Nome", "Email", "Telefone", "Reservas", "Estadias", "Futuras", "Canceladas", ...(totals ? ["Gasto total", "Gasto médio"] : []), "Primeira estadia", "Última estadia"];
-      return [tabOf("Clientes", header, rows)];
+      const header: SheetCell[] = ["N.º cliente", "Nome", "Tipo", "Email", "Telefone", "Reservas", "Estadias", "Futuras", "Canceladas", ...(totals ? ["Gasto total", "Gasto médio"] : []), "Primeira estadia", "Última estadia"];
+      const tab = tabOf("Clientes", header, rows);
+      const notes = [...warnings];
+      if (rows.length < total) notes.unshift(`Incompleta: ${rows.length.toLocaleString("pt-PT")} de ${total.toLocaleString("pt-PT")} clientes${stopped ? " (acabou o tempo)" : ` (máximo ${(EXPORT_CLIENT_PAGES * 200).toLocaleString("pt-PT")} por folha)`}.`);
+      if (notes.length) tab.note = notes.join(" ");
+      return [tab];
     },
   },
   avaliacoes: {

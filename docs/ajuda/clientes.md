@@ -19,12 +19,20 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - Tudo o resto fica como **sugestão para juntar**, para uma pessoa decidir.
 
 **Lista** (menu **Suporte → Clientes**)
-1. Na barra de pesquisa escreve e escolhe **onde procurar** (nome, email, telefone, matrícula, NIF, n.º de cliente, n.º de reserva, cor ou modelo do carro, notas). Cada opção mostra quantos clientes encontra.
-2. Filtra por **Segmento**, **Cidade**, **Região**, **País**, **Parque**, **País do cliente** (pelo telefone), **Canal de origem**, **Parceiro**, **Pro ou particular** e **Avisos**. Vários valores no mesmo filtro = um **ou** outro; filtros diferentes = todos ao mesmo tempo.
+1. Na barra de pesquisa escreve e escolhe **onde procurar** (nome, email, telefone, matrícula, NIF, n.º de cliente, n.º de reserva, cor ou modelo do carro, notas). Cada opção mostra quantos clientes encontra. Em **Qualquer campo**, um número também procura o **n.º de reserva**.
+2. Filtra por **Segmento**, **Cidade**, **Região**, **País**, **Parque**, **País do cliente** (pelo telefone), **Canal de origem**, **Parceiro**, **Pro ou particular**, **Pessoa ou empresa** e **Avisos**. Vários valores no mesmo filtro = um **ou** outro; filtros diferentes = todos ao mesmo tempo.
+   - O número ao lado de cada cidade, parque, canal e parceiro são **reservas** (não clientes); o do país do cliente são clientes.
+   - Se a Multipark não responder, esses quatro filtros ficam vazios com um aviso; os outros funcionam.
 3. **+ Regra** para casos específicos, ex.: *Carro › Cor é vermelho* + *Reserva › Data de saída no dia 10/09/2026* + *Ligações › Tem familiar cliente: sim*. Escolhe se tem de cumprir **todas** ou **pelo menos uma**.
+   - **Nos últimos N dias** acaba hoje (não apanha datas futuras).
+   - Nas reservas, **não é** quer dizer *nenhuma reserva é* (como nos carros): "Estado não é Cancelada" = clientes sem nenhuma reserva cancelada.
+   - Uma regra das reservas que apanhe mais de 50 000 reservas mostra um aviso de **resultado incompleto**: junta outra regra (por exemplo, datas).
 4. **Filtros guardados**: guarda o filtro com um nome, partilha-o com a equipa ou escolhe **Abrir com este** para ser o teu filtro de arranque.
-5. Escolhe a **ordem**, quantos mostrar por página e **Cartões** ou **Lista**.
+   - Se uma parte de um filtro guardado deixou de existir (ou não se aplica à tua conta, como o gasto para quem não vê totais), aplica-se o resto e aparece um aviso.
+   - Apagar um filtro pede confirmação (um partilhado desaparece também para a equipa) e fica no registo.
+5. Escolhe a **ordem**, quantos mostrar por página e **Cartões** ou **Lista**. **Limpar tudo** volta à vista inicial (também a ordem).
 6. Separador **Pro**: clientes Pro e empresas.
+7. Se a lista não carregar, aparece o erro com **Tentar de novo** (nunca "0 clientes").
 
 **Ficha**
 - No cabeçalho, **Ligar**, **WhatsApp** e **Email** (o telefone e o email principais primeiro; com vários, escolhes qual). Ver "Ligar, WhatsApp e email a partir das fichas" na ajuda da Comunicação.
@@ -37,7 +45,7 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 **O cliente nas outras páginas**
 - O **Histórico do cliente** (Reclamações, Perdidos & Achados, Críticas, WhatsApp) encontra a ficha pelo email, telefone ou matrícula e mostra as reservas dela (lidas ao vivo), as reclamações, os perdidos e as críticas — também pelos outros emails, telefones e carros da ficha. **Abrir ficha de cliente** vai direto à ficha.
 - Os emails recebidos ligam-se sozinhos ao cliente quando o email (ou o telefone no texto) está numa ficha. O **Drive**, as **reuniões** e as **sugestões de destinatários** usam as fichas.
-- **Exportar para Google Sheets** (na lista): as fichas com a pesquisa escrita e o segmento escolhido.
+- **Exportar para Google Sheets** (na lista, só a administração): **exatamente** o que a lista mostra — a pesquisa no campo escolhido, todos os filtros e regras, e a ordem —, com o telefone e o tipo (pessoa/empresa). Até 5 000 clientes por folha: acima disso a folha diz **"Incompleta: N de M clientes"**.
 - Se a base da Multipark não responder, o histórico diz que as reservas estão indisponíveis (em vez de mostrar zero).
 
 **Clientes Pro e conta corrente** (separador **Pro**)

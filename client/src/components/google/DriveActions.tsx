@@ -69,7 +69,7 @@ export function ExportToSheetsButton({ input, disabled, size = "sm" }: { input: 
   const st = useDriveReady();
   const exp = trpc.googleDrive.sheets.export.useMutation({
     onSuccess: (r) => {
-      openLinkToast(r.partial ? `Folha criada (incompleta — o relatório é grande): ${r.name}` : `Folha criada no teu Drive: ${r.name}`, r.url);
+      openLinkToast(r.partial ? `Folha criada (incompleta${r.note ? `: ${r.note}` : " — o relatório é grande"}): ${r.name}` : `Folha criada no teu Drive: ${r.name}`, r.url);
     },
     onError: (e) => toast.error(e.message),
   });
