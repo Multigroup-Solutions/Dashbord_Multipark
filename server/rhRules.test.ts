@@ -187,9 +187,9 @@ describe("rhAccess — dados pessoais vs contratuais", () => {
   });
 
   it("employeeAccess resume o que o cliente pode mostrar", () => {
-    expect(employeeAccess(extra, { id: 70, projectId: null })).toEqual({ isOwn: true, canEditPersonal: true, canEditContract: false, canViewSensitive: true, canViewDocuments: true, isRh: false });
-    expect(employeeAccess(tl, driverOutside)).toEqual({ isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false, isRh: false });
-    expect(employeeAccess(admin, driverOutside)).toEqual({ isOwn: false, canEditPersonal: true, canEditContract: true, canViewSensitive: true, canViewDocuments: true, isRh: true });
+    expect(employeeAccess(extra, { id: 70, projectId: null })).toEqual({ isOwn: true, canEditPersonal: true, canEditContract: false, canViewSensitive: true, canViewDocuments: true, isRh: false, canChangeIban: false, canApproveIban: false });
+    expect(employeeAccess(tl, driverOutside)).toEqual({ isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false });
+    expect(employeeAccess(admin, driverOutside)).toEqual({ isOwn: false, canEditPersonal: true, canEditContract: true, canViewSensitive: true, canViewDocuments: true, isRh: true, canChangeIban: true, canApproveIban: true });
   });
 });
 

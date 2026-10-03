@@ -104,6 +104,30 @@ export function isRhFor(v: RhViewer, e: EmployeeRef): boolean {
   return isNationalRole(v.role) && canEditPersonal(v, e);
 }
 
+/**
+ * D49 (Jorge, 3 out 2026): quem muda o IBAN de OUTRA pessoa NA HORA — back
+ * office, supervisor e admin (nas fichas cujos dados pessoais pode editar) e
+ * o super admin (também o próprio). Front office e team leader não: deixam um
+ * pedido, como o próprio no Perfil.
+ */
+const IBAN_DIRECT_ROLES: ReadonlySet<string> = new Set(["backoffice", "supervisor", "admin"]);
+export function canChangeIbanDirectly(v: RhViewer, e: EmployeeRef): boolean {
+  if (v.role === "super_admin") return true;
+  if (isOwn(v, e.id)) return false;
+  return IBAN_DIRECT_ROLES.has(v.role) && canEditPersonal(v, e);
+}
+
+/**
+ * D49: aprovar/recusar os pedidos de IBAN — o RH que muda na hora: back
+ * office e admin (e o super admin). Front office não (aprovar é mudar).
+ */
+const IBAN_APPROVER_ROLES: ReadonlySet<string> = new Set(["backoffice", "admin"]);
+export function canApproveIbanRequests(v: RhViewer, e: EmployeeRef): boolean {
+  if (v.role === "super_admin") return true;
+  if (isOwn(v, e.id)) return false;
+  return IBAN_APPROVER_ROLES.has(v.role) && canEditPersonal(v, e);
+}
+
 /** Pode editar o CONTRATUAL (posto, centro, contrato, salário, conta, ativo)? admin+, nunca acima de si. */
 export function canEditContract(v: RhViewer, e: EmployeeRef): boolean {
   if (rank(v.role) < RANK.admin) return false;
@@ -201,8 +225,12 @@ export function employeeAccess(v: RhViewer, e: EmployeeRef) {
     canEditContract: canEditContract(v, e),
     canViewSensitive: canViewSensitive(v, e),
     canViewDocuments: canViewDocuments(v, e),
-    /** 19c: RH desta ficha — muda o IBAN sem pedido, aprova pedidos e mexe no "Não enviar". */
+    /** 19c: RH desta ficha — mexe no "Não enviar". */
     isRh: isRhFor(v, e),
+    /** D49: muda o IBAN desta ficha na hora (sem pedido). */
+    canChangeIban: canChangeIbanDirectly(v, e),
+    /** D49: aprova/recusa pedidos de IBAN desta ficha. */
+    canApproveIban: canApproveIbanRequests(v, e),
   };
 }
 export type EmployeeAccess = ReturnType<typeof employeeAccess>;

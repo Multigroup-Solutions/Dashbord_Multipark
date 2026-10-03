@@ -11,7 +11,7 @@ import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
 import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
-import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor } from "./rhAccess";
+import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
 import { importExtrasFromCsv } from "./extrasImport";
@@ -499,13 +499,14 @@ export const rhRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "Foto inválida: carrega a fotografia de novo." });
         }
       }
-      // 19c (decisão do Jorge): o IBAN só muda logo quando é o RH da ficha;
-      // o próprio, o team leader ou o supervisor deixam um PEDIDO (o antigo
-      // mantém-se até o RH aprovar). Validado (mod 97); registos mascarados.
+      // D49 (Jorge, 3 out 2026): o IBAN de outra pessoa muda logo com back
+      // office, supervisor, admin e super admin; o próprio, o front office e o
+      // team leader deixam um PEDIDO (o antigo mantém-se até o RH aprovar).
+      // Validado (mod 97); registos mascarados.
       const current = (await getEmployeeById(input.id))?.employee ?? null;
       const { nibChangeAction, createBankChangeRequest, supersedePendingForEmployee } = await import("./rhBankChange");
       const { maskIban } = await import("../shared/iban");
-      const nibAct = nibChangeAction(current?.nib ?? null, input.nib, isRhFor(viewer, ref));
+      const nibAct = nibChangeAction(current?.nib ?? null, input.nib, canChangeIbanDirectly(viewer, ref));
       if (nibAct.kind === "error") throw new TRPCError({ code: "BAD_REQUEST", message: nibAct.message });
       const { id, birthDate, contractStart, contractEnd, nib: _nib, ...rest } = input;
       const data: any = { ...rest };
@@ -609,7 +610,7 @@ export const rhRouter = router({
         if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
         await assertEmployeeWriteScope(viewer, ref);
         const { bankChangeForEmployee } = await import("./rhBankChange");
-        const canDecide = isRhFor(viewer, ref);
+        const canDecide = canApproveIbanRequests(viewer, ref);
         const v = await bankChangeForEmployee(input.employeeId, canDecide);
         return { request: v, canDecide };
       }),
@@ -621,7 +622,7 @@ export const rhRouter = router({
       const allowed = new Set<number>();
       for (const r of rows) {
         const ref = await rhEmployeeRef(r.employeeId);
-        if (!ref || !isRhFor(viewer, ref)) continue;
+        if (!ref || !canApproveIbanRequests(viewer, ref)) continue;
         try { await assertEmployeeWriteScope(viewer, ref); allowed.add(r.employeeId); } catch { /* outra cidade */ }
       }
       return hydrateBankChanges(rows.filter((r) => allowed.has(r.employeeId)), () => false);
@@ -638,7 +639,7 @@ export const rhRouter = router({
         if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido não encontrado." });
         const viewer = await rhViewer(ctx.user);
         const ref = await rhEmployeeRefOrThrow(req.employeeId);
-        if (!isRhFor(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Só o RH aprova ou recusa pedidos de IBAN (e nunca o da própria ficha)." });
+        if (!canApproveIbanRequests(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Só o back office ou um administrador aprova ou recusa pedidos de IBAN (e nunca o da própria ficha)." });
         // quatro olhos: quem pediu não aprova o próprio pedido (exceto o super admin)
         if (input.approve && req.requestedById === ctx.user.id && ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Quem fez o pedido não o pode aprovar." });
         await assertEmployeeWriteScope(viewer, ref);

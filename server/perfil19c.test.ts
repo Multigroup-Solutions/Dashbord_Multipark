@@ -44,10 +44,11 @@ describe("19c IBAN", () => {
   });
   it("rh.update usa o pedido; aprovar exige RH, nunca a própria ficha nem quem pediu", () => {
     const r = read("server/rhRouter.ts");
-    expect(r).toMatch(/nibChangeAction\(current\?\.nib \?\? null, input\.nib, isRhFor\(viewer, ref\)\)/);
+    // D49 (lote 25b): quem muda na hora passou a ser canChangeIbanDirectly (ver pessoas25b.test).
+    expect(r).toMatch(/nibChangeAction\(current\?\.nib \?\? null, input\.nib, canChangeIbanDirectly\(viewer, ref\)\)/);
     expect(r).toMatch(/createBankChangeRequest\(id, nibAct\.value, ctx\.user\.id\)/);
     expect(r).toMatch(/Quem fez o pedido não o pode aprovar/);
-    expect(r).toMatch(/Só o RH aprova ou recusa pedidos de IBAN/);
+    expect(r).toMatch(/Só o back office ou um administrador aprova ou recusa pedidos de IBAN/);
     const svc = read("server/rhBankChange.ts");
     expect(svc).toMatch(/encryptSecret\(value\)/);            // o IBAN novo fica cifrado até à aprovação
     expect(svc).not.toMatch(/\.delete\(/);                    // nada se apaga
