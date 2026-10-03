@@ -269,16 +269,19 @@ export async function applyContactSwap(
         stale.push(item.id);
         continue;
       }
+      // 20c: o registo diz o que trocou, sem guardar o telefone/NIF por inteiro.
+      const { maskSensitive } = await import("../shared/logMask");
       await tx.insert(activityLogs).values({
         userId: 0,
+        source: "system",
         action: CONTACT_SWAP_ACTION,
         entity: "employees",
         entityId: item.id,
-        details: JSON.stringify({
+        details: maskSensitive(JSON.stringify({
           before: { phone: item.phone.raw, nif: item.nif.raw },
           after: { phone: newPhone, nif: newNif },
           kinds: { phone: item.phone.kind, nif: item.nif.kind },
-        }),
+        })),
       });
       applied.push(item.id);
     }

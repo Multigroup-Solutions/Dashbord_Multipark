@@ -15,7 +15,7 @@
  *     alcance igual ou mais estreito e só ações que ele próprio tem.
  */
 import {
-  ACCESS_RANK, MODULES, canGrantPermissionsTo, grantFor, normalizeGrant, roleGrantFor, roleRank, can,
+  ACCESS_RANK, MODULES, ROLE_ONLY_MODULES, canGrantPermissionsTo, grantFor, normalizeGrant, roleGrantFor, roleRank, can,
   type Access, type AccessOverrides, type Action, type Grant, type ModuleId, type ModuleOverride,
 } from "./access";
 
@@ -63,6 +63,7 @@ export function overrideChangeError(
   const who = overrideTargetError(actor, target);
   if (who) return who;
   if (!MODULES.some(m => m.id === module)) return "Módulo desconhecido.";
+  if (ROLE_ONLY_MODULES.includes(module)) return "Os Logs são só do super admin — não se dão por pessoa.";
   if (SUPER_ADMIN_ONLY_MODULES.includes(module) && actor!.role !== "super_admin") {
     return "Só o super admin dá ou retira este módulo.";
   }

@@ -230,11 +230,14 @@ export async function findOrCreateExtraByEmail(
     userId: user?.id ?? null,
     projectId: hints?.projectId ?? null,
     isActive: 1,
+    // 20c: o "criada pelo site" fica na ficha (antes só nos logs, que expiram).
+    autoCreatedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
   });
   const id = Number((result as any)[0]?.insertId ?? (result as any).insertId);
 
   await logActivity({
     userId: 0,
+    source: "site",
     action: "employee_autocreate",
     entity: "employees",
     entityId: id,
@@ -287,7 +290,8 @@ async function backfillEmployeeContacts(
  * uma tabela/coluna em falta não pode partir o login.
  */
 const USER_REF_COLUMNS: Array<[table: string, column: string]> = [
-  ["activity_logs", "userId"],
+  // 20c: activity_logs NÃO entra — o registo fica com quem fez de facto
+  // (a conta antiga fica desativada, não apagada, e continua a ter nome).
   ["app_notifications", "userId"],
   ["complaint_messages", "authorId"],
   ["complaint_photos", "uploadedById"],
@@ -382,18 +386,15 @@ export async function adoptPlaceholderAccountByEmail(
         .set({ userId: oauthRow.id })
         .where(eq(employees.userId, placeholder.id));
     } catch { /* best-effort — não pode partir o login */ }
-    // Histórico re-apontado antes do delete (colunas que referenciam users.id).
+    // Referências de trabalho re-apontadas (os logs não: ficam com quem fez).
     await reassignUserReferences(db, placeholder.id, oauthRow.id);
-    try {
-      await db.execute(sql`DELETE FROM users WHERE id = ${placeholder.id}`);
-    } catch {
-      // Se o delete falhar, cai no comportamento antigo (desativada e marcada)
-      // para nunca partir o login.
-      await db
-        .update(users)
-        .set({ isActive: 0, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
-        .where(eq(users.id, placeholder.id));
-    }
+    // 20c: desativar em vez de apagar ("nada de DELETE"): a conta antiga fica
+    // marcada e SEM email — continua a não haver duas contas com o mesmo email
+    // (decisão de 4 ago 2026) e os registos antigos mantêm o nome de quem fez.
+    await db
+      .update(users)
+      .set({ isActive: 0, email: null, loginMethod: `merged_into_${oauthRow.id}`.slice(0, 64) })
+      .where(eq(users.id, placeholder.id));
     await logActivity({
       userId: oauthRow.id,
       action: "account_merge",
@@ -416,7 +417,14 @@ export async function adoptPlaceholderAccountByEmail(
  *
  * Devolve os ids das fichas ligadas. Nunca re-liga uma ficha que já tem conta.
  */
-export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmail: string): Promise<number[]> {
+/**
+ * `by` (20c): quem fez a ligação — a pessoa no ecrã (actorId) ou, sem ela,
+ * o sistema (0, com a origem). Antes o registo ficava em nome da conta ligada.
+ */
+export interface LinkActor { actorId?: number | null; source?: "ui" | "cron" | "system" | "site" }
+const actorOf = (by?: LinkActor) => ({ userId: by?.actorId ?? 0, source: by?.source ?? (by?.actorId ? "ui" : "system") });
+
+export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmail: string, by?: LinkActor): Promise<number[]> {
   const email = normalizeEmail(rawEmail);
   if (!email || !userId) return [];
   const rows = await db
@@ -441,7 +449,7 @@ export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmai
       try {
         const { addAccountAlias } = await import("./employeeAliases");
         await addAccountAlias(owned[0].id, userId);
-        await logActivity({ userId, action: "account_link", entity: "employee", entityId: owned[0].id, details: `Conta #${userId} <${email}> junta à ficha #${owned[0].id} ${owned[0].fullName} como conta extra` });
+        await logActivity({ ...actorOf(by), action: "account_link", entity: "employee", entityId: owned[0].id, details: `Conta #${userId} <${email}> junta à ficha #${owned[0].id} ${owned[0].fullName} como conta extra` });
         linked.push(owned[0].id);
       } catch { /* conta já é principal de outra ficha */ }
     }
@@ -450,7 +458,7 @@ export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmai
     await db.update(employees).set({ userId }).where(and(eq(employees.id, r.id), isNull(employees.userId)));
     linked.push(r.id);
     await logActivity({
-      userId,
+      ...actorOf(by),
       action: "account_link",
       entity: "employee",
       entityId: r.id,
@@ -470,6 +478,7 @@ export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmai
 export async function ensureUserForEmployee(
   db: Db,
   employee: { id: number; fullName: string; email: string | null; position: string; userId: number | null },
+  by?: LinkActor,
 ): Promise<{ userId: number | null; created: boolean }> {
   if (employee.userId) return { userId: employee.userId, created: false };
   const email = normalizeEmail(employee.email);
@@ -485,7 +494,7 @@ export async function ensureUserForEmployee(
     if (taken[0]) return { userId: null, created: false };
     await db.update(employees).set({ userId: existing.id }).where(eq(employees.id, employee.id));
     await logActivity({
-      userId: existing.id,
+      ...actorOf(by),
       action: "account_link",
       entity: "employee",
       entityId: employee.id,
@@ -507,7 +516,7 @@ export async function ensureUserForEmployee(
   const userId = Number((res as any)[0]?.insertId ?? (res as any).insertId);
   await db.update(employees).set({ userId }).where(eq(employees.id, employee.id));
   await logActivity({
-    userId,
+    ...actorOf(by),
     action: "user_autocreate",
     entity: "user",
     entityId: userId,

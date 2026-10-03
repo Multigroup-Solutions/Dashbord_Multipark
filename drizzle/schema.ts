@@ -9,11 +9,14 @@ export const activityLogs = mysqlTable("activity_logs", {
 	entityId: int(),
 	details: text(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// 0410: origem (ui, cron, api_key, site, system…); null = registos antigos.
+	source: varchar({ length: 16 }),
 },
 (table) => [
 	// Migração 0095: página de Logs (datas/entidade) + retenção por data.
 	index("idx_activity_logs_createdAt").on(table.createdAt),
 	index("idx_activity_logs_entity_createdAt").on(table.entity, table.createdAt),
+	index("idx_activity_logs_source_createdAt").on(table.source, table.createdAt),
 ]);
 
 export const annualReports = mysqlTable("annual_reports", {
@@ -556,6 +559,9 @@ export const employees = mysqlTable("employees", {
 	// "Não enviar" (0370, 17g): sem WhatsApp automáticos/em massa; sem emails automáticos.
 	noAutoWhatsapp: tinyint().default(0).notNull(),
 	noAutoEmail: tinyint().default(0).notNull(),
+	// 0410: marcadores que viviam só nos logs (cidade já pedida; ficha criada pelo site).
+	cityRequestedAt: timestamp({ mode: 'string' }),
+	autoCreatedAt: timestamp({ mode: 'string' }),
 	nif: varchar({ length: 20 }),
 	nib: varchar({ length: 30 }),
 	address: text(),

@@ -210,11 +210,15 @@ describe("applyContactSwap", () => {
     expect(calls.updates[0].params).toEqual(["+351912345678", NIF_1, 1, NIF_1, "912345678"]);
     expect(calls.logs).toHaveLength(1);
     expect(calls.logs[0]).toMatchObject({ userId: 0, action: CONTACT_SWAP_ACTION, entity: "employees", entityId: 1 });
-    expect(JSON.parse(String(calls.logs[0].details))).toEqual({
-      before: { phone: NIF_1, nif: "912345678" },
-      after: { phone: "+351912345678", nif: NIF_1 },
+    // 20c: o registo diz o que trocou, mas sem o telefone/NIF por inteiro (máscara central).
+    const logged = JSON.parse(String(calls.logs[0].details));
+    expect(logged).toEqual({
+      before: { phone: "•••789", nif: "•••678" },
+      after: { phone: "•••678", nif: "•••789" },
       kinds: { phone: "nif", nif: "phone" },
     });
+    expect(String(calls.logs[0].details)).not.toContain(NIF_1);
+    expect(String(calls.logs[0].details)).not.toContain("912345678");
   });
 
   it("linha alterada entre leitura e escrita (0 affectedRows) fica em stale e sem log", async () => {

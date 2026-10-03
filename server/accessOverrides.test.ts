@@ -135,7 +135,9 @@ describe("guardas: quem pode dar o quê", () => {
     for (const m of SUPER_ADMIN_ONLY_MODULES) {
       expect(overrideChangeError(adm, target, m, { access: "national", actions: ["view"] }, null)).toMatch(/super admin/);
       expect(overrideChangeError(adm, target, m, { access: "none", actions: [] }, null)).toMatch(/super admin/);
-      expect(overrideChangeError(sa, target, m, { access: "national", actions: ["view"] }, null)).toBeNull();
+      // 20c: os Logs nem o super admin os dá por pessoa (só do papel super admin).
+      if (m === "logs") expect(overrideChangeError(sa, target, m, { access: "national", actions: ["view"] }, null)).toMatch(/não se dão por pessoa/);
+      else expect(overrideChangeError(sa, target, m, { access: "national", actions: ["view"] }, null)).toBeNull();
     }
     // Admin com override de Marketing continua sem o poder dar.
     const admMk = { ...adm, accessOverrides: { marketing: { access: "national", actions: ["view"] } } as AccessOverrides };

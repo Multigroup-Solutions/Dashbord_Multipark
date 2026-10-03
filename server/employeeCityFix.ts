@@ -65,8 +65,6 @@ export async function fixMissingEmployeeCities(o: { nowMs?: number } = {}): Prom
   const { resolveEmployeeCities } = await import("./employeeCity");
   const fromAddress = await resolveEmployeeCities(emps.map((e) => ({ id: Number(e.id), projectId: null, address: e.address ?? null })));
 
-  const { getSystemUserId } = await import("./db");
-  const systemUser = await getSystemUserId();
   const stillOpen: OpenEmployee[] = [];
   for (const e of emps) {
     const id = Number(e.id);
@@ -76,8 +74,9 @@ export async function fixMissingEmployeeCities(o: { nowMs?: number } = {}): Prom
     if (city && node) {
       await d.execute(sql`UPDATE employees SET projectId = ${node} WHERE id = ${id} AND projectId IS NULL`);
       if (viaAgent) rep.fromAgent++; else rep.fromAddress++;
-      await d.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details)
-        VALUES (${systemUser}, 'employee_city_auto', 'employee', ${id}, ${`Cidade ${CITY_LABELS[city]} definida automaticamente (${viaAgent ? "onde o agente da Multipark trabalha" : "candidatura/morada"})`})`).catch(() => undefined);
+      // 20c: autor 0 + origem "cron" (antes aparecia como o primeiro super admin).
+      await d.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details, source)
+        VALUES (0, 'employee_city_auto', 'employee', ${id}, ${`Cidade ${CITY_LABELS[city]} definida automaticamente (${viaAgent ? "onde o agente da Multipark trabalha" : "candidatura/morada"})`}, 'cron')`).catch(() => undefined);
     } else {
       stillOpen.push({ id, fullName: String(e.fullName), position: e.position ?? null, email: e.email ?? null, personalEmail: e.personalEmail ?? null });
     }
@@ -113,8 +112,10 @@ async function askCityEnabled(): Promise<boolean> {
  * enviar" da ficha. Uma falha de envio não fica registada → tenta na próxima hora.
  */
 export async function askExtraCity(d: Db, e: OpenEmployee): Promise<CityAskOutcome> {
-  const before = rowsOf(await d.execute(sql`SELECT 1 AS x FROM activity_logs WHERE action = 'extra_city_requested' AND entity = 'employee' AND entityId = ${e.id} LIMIT 1`))[0];
-  if (before) return { email: "no_contact", whatsapp: "no_contact", previously: true };
+  // 20c: o "já se pediu" vive na ficha (employees.cityRequestedAt), não nos
+  // logs — com a retenção dos logs voltava a pedir passados 24 meses.
+  const before = rowsOf(await d.execute(sql`SELECT cityRequestedAt FROM employees WHERE id = ${e.id} LIMIT 1`))[0];
+  if (before?.cityRequestedAt) return { email: "no_contact", whatsapp: "no_contact", previously: true };
   const { cityRequestMessage } = await import("../shared/extrasCityRequest");
   const msg = cityRequestMessage(e.fullName);
   const out: CityAskOutcome = { email: "no_contact", whatsapp: "no_contact" };
@@ -143,9 +144,9 @@ export async function askExtraCity(d: Db, e: OpenEmployee): Promise<CityAskOutco
   // Regista (= não volta a pedir) quando saiu por algum lado ou quando não há
   // por onde pedir; uma falha de envio deixa tentar outra vez na próxima hora.
   if (out.email !== "failed" && out.whatsapp !== "failed") {
-    const { getSystemUserId } = await import("./db");
-    await d.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details)
-      VALUES (${await getSystemUserId()}, 'extra_city_requested', 'employee', ${e.id}, ${`Pedida a cidade: email ${out.email}, WhatsApp ${out.whatsapp}`})`).catch(() => undefined);
+    await d.execute(sql`UPDATE employees SET cityRequestedAt = UTC_TIMESTAMP() WHERE id = ${e.id} AND cityRequestedAt IS NULL`).catch(() => undefined);
+    await d.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details, source)
+      VALUES (0, 'extra_city_requested', 'employee', ${e.id}, ${`Pedida a cidade: email ${out.email}, WhatsApp ${out.whatsapp}`}, 'cron')`).catch(() => undefined);
   }
   return out;
 }

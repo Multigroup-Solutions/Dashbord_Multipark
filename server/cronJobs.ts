@@ -185,11 +185,12 @@ export async function crmAutoMergeCron(o: { deadlineAt: number }): Promise<CronJ
     const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
     await ensureFeatureFlagOverrides();
     if (!isFeatureEnabled("CRM_AUTO_MERGE", { defaultEnabled: automationFlagDefault("CRM_AUTO_MERGE") })) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "CRM_AUTO_MERGE desligado" }, done: true };
-    const { getDb, getSystemUserId } = await import("./db");
+    const { getDb } = await import("./db");
     const db = await getDb();
     if (!db) return { httpStatus: 503, body: { ok: false, error: "BD indisponível" } };
     const { autoMergeConfident, refreshSuggestions } = await import("./crm/merge");
-    const r = await autoMergeConfident(db, { deadlineAt: o.deadlineAt - 15_000, userId: await getSystemUserId() });
+    // 20c: fusão automática = autor 0 (o motivo "automático: …" fica na fusão), não o 1.º super admin.
+    const r = await autoMergeConfident(db, { deadlineAt: o.deadlineAt - 15_000, userId: 0 });
     const s = r.merged && Date.now() < o.deadlineAt - 12_000 ? await refreshSuggestions(db, { deadlineAt: o.deadlineAt - 2_000 }) : null;
     // parou no prazo → "não acabei": o agendador repete no tick seguinte (1×/dia não chega para um atraso)
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r, suggestions: s }, done: !r.stoppedAtDeadline };
@@ -209,9 +210,8 @@ export async function partnerMpSyncCron(): Promise<CronJobRun> {
     const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
     await ensureFeatureFlagOverrides();
     if (!isFeatureEnabled("PARTNER_MP_SYNC", { defaultEnabled: automationFlagDefault("PARTNER_MP_SYNC") })) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "PARTNER_MP_SYNC desligado" }, done: true };
-    const { getSystemUserId } = await import("./db");
     const { applyPartnerSync } = await import("./partnerMultiparkSync");
-    const r = await applyPartnerSync({ userId: await getSystemUserId() });
+    const r = await applyPartnerSync({ userId: 0 });
     if (!r.available) return { httpStatus: 503, body: { ok: false, error: r.reason ?? "Multipark indisponível" } };
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
   } catch (err) {

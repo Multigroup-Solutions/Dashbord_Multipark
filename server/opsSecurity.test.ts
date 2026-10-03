@@ -144,8 +144,8 @@ describe("isFeatureEnabled", () => {
 });
 
 describe("retenção do activity_logs", () => {
-  it("corte a 12 meses em UTC", () => {
-    expect(activityLogCutoff(new Date("2026-09-24T03:30:00Z"))).toBe("2025-09-24 03:30:00");
+  it("corte a 24 meses em UTC (20c, decisão do Jorge)", () => {
+    expect(activityLogCutoff(new Date("2026-09-24T03:30:00Z"))).toBe("2024-09-24 03:30:00");
   });
   it("lotes: para quando um lote vem incompleto", async () => {
     const remaining = [5000, 5000, 1200];

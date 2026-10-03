@@ -684,7 +684,8 @@ const nowMysql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
 async function log(db: Db, action: string, entity: string, entityId: number | null, details: string) {
   try {
-    await db.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details) VALUES (0, ${action}, ${entity}, ${entityId}, ${details.slice(0, 2000)})`);
+    const { maskSensitive } = await import("../shared/logMask");
+    await db.execute(sql`INSERT INTO activity_logs (userId, action, entity, entityId, details, source) VALUES (0, ${action}, ${entity}, ${entityId}, ${maskSensitive(details.slice(0, 2000))}, 'cron')`);
   } catch { /* o log nunca pode impedir a reconciliação */ }
 }
 
@@ -745,14 +746,11 @@ export async function applyReconcile(db: Db, plan: ReconcilePlan): Promise<Apply
             await db.execute(sql.raw(`UPDATE \`${table}\` SET \`${column}\` = ${Number(m.keepUserId)} WHERE \`${column}\` = ${Number(loser)}`));
           } catch { /* tabela/coluna pode não existir */ }
         }
-        try {
-          await db.execute(sql`DELETE FROM users WHERE id = ${loser}`);
-          removed.push(loser);
-        } catch {
-          await db.execute(sql`UPDATE users SET isActive = 0, loginMethod = ${`merged_into_${m.keepUserId}`.slice(0, 64)} WHERE id = ${loser}`);
-          deactivated.push(loser);
-        }
-        await log(db, "account_merge", "user", m.keepUserId, `[Reconciliação] Utilizador duplicado <${m.email}>: #${loser} fundido em #${m.keepUserId} (referências re-apontadas)`);
+        // 20c: desativar (sem email) em vez de apagar — os logs antigos
+        // mantêm o autor e não ficam duas contas com o mesmo email.
+        await db.execute(sql`UPDATE users SET isActive = 0, email = NULL, loginMethod = ${`merged_into_${m.keepUserId}`.slice(0, 64)} WHERE id = ${loser}`);
+        deactivated.push(loser);
+        await log(db, "account_merge", "user", m.keepUserId, `[Reconciliação] Utilizador duplicado <${m.email}>: #${loser} fundido em #${m.keepUserId} (referências re-apontadas; #${loser} desativada, registos antigos ficam com ela)`);
       } catch (err) {
         out.errors.push({ ref: `merge_users ${m.email} #${loser}`, error: String((err as Error)?.message ?? err) });
       }
@@ -765,7 +763,8 @@ export async function applyReconcile(db: Db, plan: ReconcilePlan): Promise<Apply
 
 /** Colunas que apontam para users.id (espelho de `identity.ts`; fichas NÃO entram). */
 export const USER_REF_COLUMNS: Array<[table: string, column: string]> = [
-  ["activity_logs", "userId"],
+  // 20c: activity_logs NÃO entra — o registo fica com quem fez de facto
+  // (a conta antiga fica desativada, não apagada, e continua a ter nome).
   ["app_notifications", "userId"],
   ["complaint_messages", "authorId"],
   ["complaint_photos", "uploadedById"],

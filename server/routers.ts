@@ -95,7 +95,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
-import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
+import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
@@ -1065,7 +1065,9 @@ export const appRouter = router({
             message: `Não é possível apagar definitivamente: ${[totalChildren ? `${totalChildren} sub-nó(s)` : null, ...used].filter(Boolean).join("; ")}. Usa "Desativar".` });
         }
         await deleteProject(input.id);
-        await logActivity({ userId: ctx.user.id, action: "delete", entity: "project", entityId: input.id });
+        // 20c: o registo diz o quê (nome, nível, de onde) — antes ficava só "#id".
+        await logActivity({ userId: ctx.user.id, action: "delete", entity: "project", entityId: input.id,
+          details: `Nó «${node.name}» (${node.level}${node.parentId ? `, dentro de #${node.parentId}` : ""}) apagado — sem sub-nós nem referências` });
         return { success: true };
       }),
     // Move project to another parent
@@ -1230,9 +1232,13 @@ export const appRouter = router({
     list: protectedProcedure
       .input(z.object({
         limit: z.number().int().min(1).max(2000).optional(),
-        entity: z.string().optional(),
-        action: z.string().optional(),
-        userId: z.number().optional(),
+        entity: z.string().max(200).optional(),
+        action: z.string().max(64).optional(),
+        userId: z.number().int().positive().optional(),
+        // 20c: só as ações automáticas (autor 0), um registo (#id) e a origem.
+        systemOnly: z.boolean().optional(),
+        entityId: z.number().int().optional(),
+        source: z.string().max(16).optional(),
         // Dias de Lisboa (YYYY-MM-DD), inclusivos; convertidos para UTC.
         from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -1245,6 +1251,9 @@ export const appRouter = router({
           entity: input?.entity,
           action: input?.action,
           userId: input?.userId,
+          systemOnly: input?.systemOnly,
+          entityId: input?.entityId,
+          source: input?.source,
           from: input?.from ? lisbonDayRangeUtc(input.from).start : undefined,
           to: input?.to ? lisbonDayRangeUtc(input.to).end : undefined,
           search: input?.search,
@@ -1254,6 +1263,12 @@ export const appRouter = router({
       requireAccess(ctx.user, "logs", "view");
       const { getActivityLogEntities } = await import("./db");
       return getActivityLogEntities();
+    }),
+    /** 20c: todas as ações e as pessoas que aparecem no registo (filtros). */
+    filterOptions: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "logs", "view");
+      const { getActivityLogFilterOptions } = await import("./db");
+      return getActivityLogFilterOptions();
     }),
   }),
 
@@ -3784,11 +3799,17 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    // 20c: "Eliminar" passa a ARQUIVAR (nada de DELETE): a parceria, as faturas,
+    // as transações e os aliases ficam; volta com "Repor" nas arquivadas.
+    delete: protectedProcedure.input(z.object({ id: z.number(), reason: z.string().trim().max(200).optional() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "parcerias", "manage");
-      await deletePartnership(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "partnership", entityId: input.id });
-      return { success: true };
+      const p = (await getPartnerships({ includeArchived: true })).find((x: any) => x.id === input.id) as any;
+      if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Parceria não encontrada." });
+      if (p.archivedAt) return { success: true, alreadyArchived: true };
+      const reason = (input.reason || "Arquivada no ecrã das Parcerias").slice(0, 200);
+      await updatePartnership(input.id, { archivedAt: new Date().toISOString().slice(0, 19).replace("T", " "), archivedReason: reason } as any);
+      await logActivity({ userId: ctx.user.id, action: "archive", entity: "partnership", entityId: input.id, details: `Parceria «${p.name}» arquivada: ${reason}` });
+      return { success: true, alreadyArchived: false };
     }),
 
     // Sumário de faturação por parceiro: reservas, receita e valor a faturar
@@ -4315,7 +4336,7 @@ export const appRouter = router({
         if (input.email && (ins as any)?.id) {
           try {
             const { ensureUserForEmployee } = await import("./identity");
-            await ensureUserForEmployee(db as any, { id: (ins as any).id, fullName: input.agentName, email: input.email, position: "extra", userId: null });
+            await ensureUserForEmployee(db as any, { id: (ins as any).id, fullName: input.agentName, email: input.email, position: "extra", userId: null }, { actorId: ctx.user.id });
           } catch (err) { console.warn("[createEmployeeFromAgent] utilizador:", err); }
         }
         return { id: (ins as any)?.id };
@@ -4882,7 +4903,7 @@ export const appRouter = router({
         const found = await getEmployeeById(input.employeeId);
         if (!db || !found) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada" });
         const { ensureUserForEmployee } = await import("./identity");
-        const r = await ensureUserForEmployee(db as any, { id: input.employeeId, fullName: found.employee.fullName, email: found.employee.email, position: String(found.employee.position ?? ""), userId: found.employee.userId ?? null });
+        const r = await ensureUserForEmployee(db as any, { id: input.employeeId, fullName: found.employee.fullName, email: found.employee.email, position: String(found.employee.position ?? ""), userId: found.employee.userId ?? null }, { actorId: ctx.user.id });
         if (!r.userId) throw new TRPCError({ code: "BAD_REQUEST", message: "Não deu para ligar: sem email válido, ou o utilizador com esse email já está noutra ficha ativa." });
         return r;
       }),

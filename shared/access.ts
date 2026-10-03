@@ -345,8 +345,15 @@ export function roleGrantFor(role: string | null | undefined, module: ModuleId):
   return isRole(role) ? MATRIX[module][role] : NONE;
 }
 
+/**
+ * Módulos que NÃO se dão por pessoa (20c): os Logs são só do super admin —
+ * um override antigo que os desse a outra conta deixa de valer.
+ */
+export const ROLE_ONLY_MODULES: readonly ModuleId[] = ["logs"];
+
 /** Override ativo da pessoa neste módulo (ou null). */
 export function activeOverride(user: UserLike, module: ModuleId, today?: string): ModuleOverride | null {
+  if (ROLE_ONLY_MODULES.includes(module)) return null;
   const o = overridesOf(user)?.[module];
   return o && overrideActive(o, today) ? o : null;
 }
