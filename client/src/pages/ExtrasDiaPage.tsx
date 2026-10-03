@@ -69,7 +69,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
-import { describeGap } from "@shared/extrasSchedule";
+import { assignmentWhoLine, describeGap } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
@@ -150,7 +150,6 @@ const SHIFTS: { id: ShiftId; label: string; defaultStart: number; defaultEnd: nu
 
 const fmtEur = (n: number) =>
   n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
-const fmtCph = (n: number) => String(n).replace(".", ",");
 
 const fmtHour = (h: number) => {
   if (h < 24) return `${String(h).padStart(2, "0")}h`;
@@ -268,8 +267,8 @@ export default function ExtrasDiaPage() {
           </p>
           {data && (
             <p className="text-xs mt-1">
-              <Badge variant="outline" className="font-normal" title="Definições → Parâmetros → Extras-dia">
-                {fmtCph(data.carsPerHourPerDriver)} carros/hora por condutor
+              <Badge variant="outline" className="h-auto whitespace-normal font-normal" title="Definições → Parâmetros → Extras-dia">
+                {data.crewRuleText}
               </Badge>
             </p>
           )}
@@ -482,7 +481,7 @@ export default function ExtrasDiaPage() {
           </Card>
 
           {/* Proposta automática + confirmação + avisos */}
-          <SchedulePanel targetDate={data.targetDate} carsPerHour={data.carsPerHourPerDriver} />
+          <SchedulePanel targetDate={data.targetDate} />
 
           {/* Equipa do dia (real) — vem antes da estimativa */}
           {SHIFTS.map(s => (
@@ -508,7 +507,7 @@ export default function ExtrasDiaPage() {
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     <Users className="h-4 w-4" />
-                    Estimativa de referência ({fmtCph(data.carsPerHourPerDriver)} carros/hora por condutor · turnos 3–12h)
+                    Estimativa de referência (extras além do TL · turnos 3–12h)
                   </CardTitle>
                   {actuals.count > 0 && (
                     <p className="text-xs text-muted-foreground">
@@ -606,7 +605,7 @@ const SCHEDULE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   confirmed: { label: "Escala confirmada", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
 };
 
-function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPerHour: number }) {
+function SchedulePanel({ targetDate }: { targetDate: string }) {
   const utils = trpc.useUtils();
   const city = useContext(ExtrasCityContext);
   const { canEdit } = useContext(ExtrasAccessContext);
@@ -670,7 +669,7 @@ function SchedulePanel({ targetDate, carsPerHour }: { targetDate: string; carsPe
               {held && <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-200">envio automático suspenso</Badge>}
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
-              {fmtCph(carsPerHour)} carros/hora por condutor · pico de {d?.neededPeak ?? "—"} condutor(es) ·{" "}
+              Pico de {d?.neededPeak ?? "—"} extra(s) além do TL ·{" "}
               {d ? `${d.availableCount} extra(s) disponíveis, ${d.noAnswerCount} sem resposta` : "…"}
             </p>
             {d && (
@@ -1302,6 +1301,11 @@ function AssignmentRow({
     cost: number | null;
     status?: "proposed" | "confirmed";
     proposalReason?: string | null;
+    source?: string;
+    createdByName?: string | null;
+    updatedByName?: string | null;
+    createdById?: number | null;
+    updatedById?: number | null;
   };
   onSave: (payload: AssignmentFormValues) => void;
   onDelete: () => void;
@@ -1345,6 +1349,7 @@ function AssignmentRow({
               {a.proposalReason}
             </div>
           )}
+          {assignmentWhoLine(a) && <div className="text-[11px] text-muted-foreground mt-0.5 break-words">{assignmentWhoLine(a)}</div>}
           {/* No telemóvel as colunas do nível e das horas pagas escondem-se: vão aqui. */}
           <div className="sm:hidden text-[11px] text-muted-foreground mt-0.5">
             {levels.find(l => l.id === a.level)?.label} · {a.hoursBilled}h pagas{a.sentHomeHour != null ? ` · p/ casa ${fmtHour(a.sentHomeHour)}` : ""}{costs && a.cost != null ? ` · ${fmtEur(a.cost)}` : ""}

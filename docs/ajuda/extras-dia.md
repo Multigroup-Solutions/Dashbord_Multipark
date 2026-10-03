@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: tempo por carro, minutos por carro, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -16,7 +16,11 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - As compras online ainda por pagar **contam**, porque vão ser recolhidas na mesma.
    - Se a BD da Multipark não responder, a página usa a cópia local das reservas e mostra um aviso amarelo; os números podem estar desatualizados.
    - Se a leitura vier **cortada no limite**, aparece "Previsão incompleta". Com a previsão incompleta (cortada ou só da cópia), a proposta automática e os avisos de falta de gente ficam parados.
-5. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, nos últimos 60 dias, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo.
+5. **Quantos extras por hora** (regra do dono, 3 out): conta o **tempo que cada condutor leva por carro**, que depende de quantas pessoas estão no turno, **com o TL incluído** (2 pessoas = TL + 1 extra). Quem conduz são os extras; o TL vai buscá-los. Por omissão:
+   - **Lisboa**: 2 pessoas → 75 min por carro; 3–4 → 60 min; 5–6 → 45 min; 7 ou mais → 30 min.
+   - **Porto e Faro**: no mínimo 2 extras + o TL; com 3 pessoas → 30 min por carro (2 condutores × 2 carros = 4 carros por hora).
+   - Os números da previsão e da escala automática são **extras além do TL**. A regra muda-se em Definições → Parâmetros ("Tempo por carro conforme as pessoas no turno").
+6. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, nos últimos 60 dias, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo.
 
 **Separador "Pressão"** (quando é que aperta)
 1. Em cima, escolhe o separador **Pressão** (o separador **Dia** é a previsão de sempre).

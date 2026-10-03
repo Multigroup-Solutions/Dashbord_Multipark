@@ -2,7 +2,9 @@
  * Escala automática do Extras-dia — regras PURAS (sem BD nem rede), partilhadas
  * entre o servidor (server/extrasSchedule.ts) e os testes.
  *
- *  - capacidade por cidade: condutores precisos numa hora = ⌈carros ÷ carros/hora⌉;
+ *  - capacidade por cidade (D12, Jorge 3 out): tempo por carro de cada condutor
+ *    conforme as pessoas no turno (TL incluído; conduzem os extras) → extras
+ *    precisos numa hora;
  *  - janela de disponibilidade de um extra no dia operacional (03h → 03h);
  *  - ordenação dos candidatos (cobertura, avaliação, custo, equidade,
  *    fiabilidade) com a explicação ("porquê") de cada escolha;
@@ -31,7 +33,67 @@ export function carsPerHourFor(map: Partial<Record<string, number>> | null | und
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : FALLBACK_CARS_PER_HOUR;
 }
 
-/** Condutores precisos para `cars` carros numa hora. */
+// ─── Capacidade por equipa (D12) ────────────────────────────────────────────
+
+export interface CrewBand { upTo: number | null; minutes: number }
+export interface CrewRule { minCrew: number; bands: CrewBand[] }
+/** Teto de pessoas num turno (segurança do ciclo). */
+export const MAX_CREW = 60;
+
+/** Minutos por carro de cada condutor com `people` pessoas no turno (TL incluído). PURA. */
+export function minutesPerCar(rule: CrewRule, people: number): number {
+  for (const b of rule.bands) if (b.upTo === null || people <= b.upTo) return b.minutes;
+  return rule.bands[rule.bands.length - 1]?.minutes ?? 60;
+}
+
+/** Carros/hora de uma equipa de `people` pessoas: conduzem people − 1 (o TL vai buscar os extras). PURA. */
+export function crewCarsPerHour(rule: CrewRule, people: number): number {
+  const drivers = Math.max(0, people - 1);
+  const min = minutesPerCar(rule, people);
+  return min > 0 ? (drivers * 60) / min : 0;
+}
+
+/**
+ * Extras precisos (sem contar o TL) para `cars` carros numa hora: a equipa
+ * mais pequena (≥ minCrew) que despacha esses carros, menos o TL. PURA.
+ */
+export function extrasNeededFor(cars: number, rule: CrewRule): number {
+  if (!(cars > 0)) return 0;
+  const start = Math.max(2, rule.minCrew);
+  for (let people = start; people <= MAX_CREW; people++) {
+    // −1e-9: 4 carros com 3 pessoas a 30 min tem de dar 3, não 4, por vírgula flutuante
+    if (crewCarsPerHour(rule, people) >= cars - 1e-9) return people - 1;
+  }
+  return MAX_CREW - 1;
+}
+
+/** "Tempo por carro (pessoas com o TL): 2 → 75 min · 3–4 → 60 min · 5–6 → 45 min · 7+ → 30 min". PURA. */
+export function describeCrewRule(rule: CrewRule): string {
+  const parts: string[] = [];
+  let lo = Math.max(2, rule.minCrew);
+  for (const b of rule.bands) {
+    if (b.upTo !== null && b.upTo < lo) continue;
+    const label = b.upTo === null ? `${lo}+` : lo === b.upTo ? `${lo}` : `${lo}–${b.upTo}`;
+    parts.push(`${label} → ${b.minutes} min`);
+    if (b.upTo === null) break;
+    lo = b.upTo + 1;
+  }
+  return `Tempo por carro (pessoas com o TL${rule.minCrew > 2 ? `, mínimo ${rule.minCrew}` : ""}): ${parts.join(" · ")}`;
+}
+
+/**
+ * D14: quem pôs e quem alterou por último uma linha da escala, em texto curto
+ * ("proposta automática · alterado por Rita", "posto por Rui"). null → nada a mostrar. PURA.
+ */
+export function assignmentWhoLine(a: { source?: string; createdByName?: string | null; updatedByName?: string | null; createdById?: number | null; updatedById?: number | null }): string | null {
+  const parts: string[] = [];
+  if (a.source === "auto") parts.push("proposta automática");
+  else if (a.createdByName) parts.push(`posto por ${a.createdByName}`);
+  if (a.updatedByName && (a.source === "auto" || a.updatedById !== a.createdById)) parts.push(`alterado por ${a.updatedByName}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** (Antigo) Condutores precisos para `cars` carros numa hora com carros/hora fixos. */
 export function driversNeededFor(cars: number, carsPerHour: number): number {
   if (!(cars > 0)) return 0;
   const cph = carsPerHour > 0 ? carsPerHour : FALLBACK_CARS_PER_HOUR;
@@ -425,7 +487,8 @@ export function describeGap(g: Gap): string {
 export interface ProposalSummary {
   date: string;
   city: string;
-  carsPerHour: number;
+  /** describeCrewRule da cidade */
+  capacityText: string;
   peakDrivers: number;
   peakHour: number | null;
   picks: { personName: string; startHour: number; endHour: number; hourlyRate: number }[];
@@ -445,7 +508,7 @@ export function explainProposal(p: ProposalSummary): string {
   const city = CITY_LABELS_PT[p.city] ?? p.city;
   const parts: string[] = [];
   parts.push(`Proposta para ${fmtDayPt(p.date)} em ${city}: ${p.picks.length} condutor(es) propostos (${hours}h, ${fmtNum(cost, 2)} €)${p.keptCount ? ` além de ${p.keptCount} já escalado(s)` : ""}.`);
-  parts.push(`Capacidade ${fmtNum(p.carsPerHour, p.carsPerHour % 1 ? 1 : 0)} carros/hora por condutor; pico de ${p.peakDrivers} condutor(es)${p.peakHour != null ? ` às ${hh(p.peakHour)}` : ""}.`);
+  parts.push(`${p.capacityText}; pico de ${p.peakDrivers} extra(s) além do TL${p.peakHour != null ? ` às ${hh(p.peakHour)}` : ""}.`);
   if (p.gaps.length) parts.push(`Atenção: ${p.gaps.map(describeGap).join("; ")}.`);
   else if (p.peakDrivers > 0) parts.push("Todas as horas previstas ficam cobertas.");
   else parts.push("Sem operações previstas — não são precisos condutores.");

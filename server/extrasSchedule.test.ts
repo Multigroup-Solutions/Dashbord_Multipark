@@ -3,17 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  FALLBACK_CARS_PER_HOUR,
   MAX_SHIFT_HOURS,
   MIN_SHIFT_HOURS,
   availabilityWindow,
   bestBlock,
   canAutoConfirm,
-  carsPerHourFor,
+  crewCarsPerHour,
+  describeCrewRule,
   describeGap,
-  driversNeededFor,
   explainProposal,
+  extrasNeededFor,
   lisbonNow,
+  minutesPerCar,
   notificationDone,
   pendingScheduleNotifications,
   planSchedule,
@@ -27,7 +28,7 @@ import {
   type NotifyLogRow,
   type ScheduleCandidate,
 } from "../shared/extrasSchedule";
-import { DEFAULT_CARS_PER_HOUR, SETTINGS, cronOutcome, hhmmToMinutes, validateSetting } from "../shared/appSettings";
+import { DEFAULT_CREW_RULES, SETTINGS, cronOutcome, hhmmToMinutes, validateSetting } from "../shared/appSettings";
 import { MIGRATION_0115_STATEMENTS } from "./migrations/migration_0115";
 
 // ─── Mocks (só para os testes de idempotência com BD simulada) ──────────────
@@ -63,45 +64,52 @@ const needArr = (spec: Record<number, number>) => Array.from({ length: 27 }, (_,
 
 // ─── 1. Capacidade por cidade ───────────────────────────────────────────────
 
-describe("capacidade por cidade (carros/hora por condutor)", () => {
-  it("omissões: Lisboa 2, Porto 3, Faro 3", () => {
-    expect(DEFAULT_CARS_PER_HOUR).toEqual({ lisbon: 2, porto: 3, faro: 3 });
-    expect(SETTINGS["extras.carsPerHourPerDriver"].defaultValue).toEqual({ lisbon: 2, porto: 3, faro: 3 });
+describe("capacidade por equipa (D12, Jorge 3 out): tempo por carro conforme as pessoas, TL incluído", () => {
+  const lx = DEFAULT_CREW_RULES.lisbon, po = DEFAULT_CREW_RULES.porto;
+  it("omissões: Lisboa 2→75 · 3–4→60 · 5–6→45 · 7+→30; Porto/Faro 2→45 · 3+→30, mínimo 2 extras + TL", () => {
+    expect([2, 3, 4, 5, 6, 7, 12].map((n) => minutesPerCar(lx, n))).toEqual([75, 60, 60, 45, 45, 30, 30]);
+    expect([2, 3, 5].map((n) => minutesPerCar(po, n))).toEqual([45, 30, 30]);
+    expect(po.minCrew).toBe(3);
+    expect(DEFAULT_CREW_RULES.faro).toEqual(po);
+    expect(SETTINGS["extras.crewRules"].defaultValue).toEqual(DEFAULT_CREW_RULES);
   });
-  it("Lisboa (2) pede mais condutores do que o Porto (3) para os mesmos carros", () => {
-    const cars = 6;
-    const lx = driversNeededFor(cars, carsPerHourFor(DEFAULT_CARS_PER_HOUR, "lisbon"));
-    const po = driversNeededFor(cars, carsPerHourFor(DEFAULT_CARS_PER_HOUR, "porto"));
-    expect(lx).toBe(3);
-    expect(po).toBe(2);
-    expect(lx).toBeGreaterThan(po);
-    expect(driversNeededFor(7, 2)).toBe(4);
-    expect(driversNeededFor(0, 2)).toBe(0);
-    expect(driversNeededFor(4.5, 1.5)).toBe(3); // sem erro de vírgula flutuante
+  it("conduzem as pessoas menos o TL: Faro com 3 = 2 condutores × 2 carros/h = 4 carros/h", () => {
+    expect(crewCarsPerHour(po, 3)).toBe(4);
+    expect(crewCarsPerHour(lx, 2)).toBeCloseTo(0.8);
+    expect(crewCarsPerHour(lx, 3)).toBe(2);
+    expect(crewCarsPerHour(lx, 7)).toBe(12);
   });
-  it("fallback 3 carros/hora quando a definição falta ou é inválida", () => {
-    expect(carsPerHourFor(null, "lisbon")).toBe(FALLBACK_CARS_PER_HOUR);
-    expect(carsPerHourFor({ lisbon: 0 }, "lisbon")).toBe(FALLBACK_CARS_PER_HOUR);
-    expect(carsPerHourFor({ porto: 2.5 }, "porto")).toBe(2.5);
+  it("extras precisos (sem o TL) = a equipa mais pequena que chega, menos o TL", () => {
+    expect(extrasNeededFor(0, lx)).toBe(0);
+    expect(extrasNeededFor(0.5, lx)).toBe(1);
+    expect(extrasNeededFor(2, lx)).toBe(2);
+    expect(extrasNeededFor(4, lx)).toBe(4);
+    expect(extrasNeededFor(6, lx)).toBe(5);
+    expect(extrasNeededFor(7, lx)).toBe(6);
+    // Porto/Faro: com trabalho, nunca menos de 2 extras (+ TL)
+    expect(extrasNeededFor(1, po)).toBe(2);
+    expect(extrasNeededFor(4, po)).toBe(2);
+    expect(extrasNeededFor(5, po)).toBe(3);
   });
-  it("a previsão/sugestão de turnos usa a capacidade da cidade", async () => {
-    const { suggestShifts, loadCarsPerHour } = await import("./extrasDia");
+  it("texto da regra", () => {
+    expect(describeCrewRule(lx)).toBe("Tempo por carro (pessoas com o TL): 2 → 75 min · 3–4 → 60 min · 5–6 → 45 min · 7+ → 30 min");
+    expect(describeCrewRule(po)).toBe("Tempo por carro (pessoas com o TL, mínimo 3): 3+ → 30 min");
+  });
+  it("a previsão/sugestão de turnos usa a regra da cidade (e o valor editado em Definições)", async () => {
+    const { suggestShifts, loadCrewRule } = await import("./extrasDia");
     const hourly = needArr({ 8: 6, 9: 6 });
-    const lx = suggestShifts(hourly, "junior", undefined, await loadCarsPerHour("lisbon"));
-    const po = suggestShifts(hourly, "junior", undefined, await loadCarsPerHour("porto"));
-    expect(lx.peakDrivers).toBe(3);
-    expect(po.peakDrivers).toBe(2);
-    expect(lx.totalDriverHours).toBeGreaterThan(po.totalDriverHours);
-    // valor editado em Definições → Parâmetros
-    settingsMock.values.set("extras.carsPerHourPerDriver", { lisbon: 1, porto: 3, faro: 3 });
-    expect(await loadCarsPerHour("lisbon")).toBe(1);
-    expect(suggestShifts(hourly, "junior", undefined, await loadCarsPerHour("lisbon")).peakDrivers).toBe(6);
+    expect(suggestShifts(hourly, "junior", undefined, await loadCrewRule("lisbon")).peakDrivers).toBe(5);
+    expect(suggestShifts(hourly, "junior", undefined, await loadCrewRule("porto")).peakDrivers).toBe(3);
+    settingsMock.values.set("extras.crewRules", { ...DEFAULT_CREW_RULES, lisbon: { minCrew: 2, bands: [{ upTo: null, minutes: 60 }] } });
+    expect(await loadCrewRule("lisbon")).toEqual({ minCrew: 2, bands: [{ upTo: null, minutes: 60 }] });
+    expect(suggestShifts(hourly, "junior", undefined, await loadCrewRule("lisbon")).peakDrivers).toBe(6);
     settingsMock.values.clear();
   });
-  it("a definição valida com zod (mapa por cidade)", () => {
-    expect(validateSetting("extras.carsPerHourPerDriver", { lisbon: 2, porto: 3, faro: 3 }).ok).toBe(true);
-    expect(validateSetting("extras.carsPerHourPerDriver", { lisbon: 2, porto: 3 }).ok).toBe(false);
-    expect(validateSetting("extras.carsPerHourPerDriver", { lisbon: 0, porto: 3, faro: 3 }).ok).toBe(false);
+  it("a definição valida com zod", () => {
+    expect(validateSetting("extras.crewRules", DEFAULT_CREW_RULES).ok).toBe(true);
+    expect(validateSetting("extras.crewRules", { lisbon: lx, porto: po }).ok).toBe(false);
+    expect(validateSetting("extras.crewRules", { ...DEFAULT_CREW_RULES, lisbon: { minCrew: 2, bands: [{ upTo: 2, minutes: 75 }] } }).ok).toBe(false);
+    expect(validateSetting("extras.crewRules", { ...DEFAULT_CREW_RULES, lisbon: { minCrew: 2, bands: [{ upTo: 4, minutes: 60 }, { upTo: 2, minutes: 75 }, { upTo: null, minutes: 30 }] } }).ok).toBe(false);
     expect(validateSetting("extras.autoProposeAt", "14:00").ok).toBe(true);
     expect(validateSetting("extras.autoProposeAt", "25:00").ok).toBe(false);
     expect(validateSetting("extras.autoConfirm", false)).toEqual({ ok: true, value: false });
@@ -243,11 +251,11 @@ describe("proposta e buracos", () => {
   });
   it("explainProposal: texto determinístico (gancho para a IA)", () => {
     const t = explainProposal({
-      date: "2026-09-25", city: "lisbon", carsPerHour: 2, peakDrivers: 3, peakHour: 8,
+      date: "2026-09-25", city: "lisbon", capacityText: describeCrewRule(DEFAULT_CREW_RULES.lisbon), peakDrivers: 3, peakHour: 8,
       picks: [{ personName: "Ana", startHour: 8, endHour: 11, hourlyRate: 4.5 }], keptCount: 1,
       gaps: [{ fromHour: 14, toHour: 17, missing: 2 }],
     });
-    expect(t).toBe("Proposta para sexta 25/09 em Lisboa: 1 condutor(es) propostos (3h, 13,50 €) além de 1 já escalado(s). Capacidade 2 carros/hora por condutor; pico de 3 condutor(es) às 08h. Atenção: faltam 2 condutores entre 14h–17h.");
+    expect(t).toBe("Proposta para sexta 25/09 em Lisboa: 1 condutor(es) propostos (3h, 13,50 €) além de 1 já escalado(s). Tempo por carro (pessoas com o TL): 2 → 75 min · 3–4 → 60 min · 5–6 → 45 min · 7+ → 30 min; pico de 3 extra(s) além do TL às 08h. Atenção: faltam 2 condutores entre 14h–17h.");
   });
   it("texto do aviso: dia, horas, cidade e ponto de encontro", () => {
     expect(scheduleMessageText({ date: "2026-09-25", city: "porto", spans: [{ startHour: 15, endHour: 27 }], meetingPoint: " Portão A " }))

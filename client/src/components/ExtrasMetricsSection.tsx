@@ -102,15 +102,16 @@ export function ExtrasMetricsSection() {
                 value={nextWeek ? pct(nextWeek.responded, nextWeek.total) : "—"}
                 sub={nextWeek ? `${nextWeek.responded} de ${nextWeek.total} extras` : undefined}
               />
+              {/* 22b: sem permissão para ver custos → "—" (não "0 €") */}
               <Tile
                 label="Custo previsto (escala)"
-                value={eur(m.cost.planned)}
+                value={"costHidden" in m && m.costHidden ? "—" : eur(m.cost.planned)}
                 sub={`${m.cost.plannedHours}h escaladas`}
               />
               <Tile
                 label="Custo pago (ponto)"
-                value={eur(m.cost.paid)}
-                sub={`${m.cost.paidHours}h de ponto · ${m.cost.planned > 0 ? `${m.cost.paid >= m.cost.planned ? "+" : ""}${Math.round(((m.cost.paid - m.cost.planned) / m.cost.planned) * 100)}% vs previsto` : "sem escala"}`}
+                value={"costHidden" in m && m.costHidden ? "—" : eur(m.cost.paid)}
+                sub={"costHidden" in m && m.costHidden ? `${m.cost.paidHours}h de ponto · sem acesso aos custos` : `${m.cost.paidHours}h de ponto · ${m.cost.planned > 0 ? `${m.cost.paid >= m.cost.planned ? "+" : ""}${Math.round(((m.cost.paid - m.cost.planned) / m.cost.planned) * 100)}% vs previsto` : "sem escala"}`}
               />
               <Tile
                 label="Candidatura → 1.º turno"

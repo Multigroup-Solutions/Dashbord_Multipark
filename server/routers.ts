@@ -3456,14 +3456,16 @@ export const appRouter = router({
         details: `${handoverDate} ${shift} ${city}` + (result.changed.length ? ` — alterado: ${result.changed.join(", ")}` : " — sem alterações"),
       });
       // Resumo automático, IA, pendentes, notificação e email — nunca falham a gravação.
-      let automation: Awaited<ReturnType<typeof import("./shiftHandoverAutomation").afterHandoverSave>> | null = null;
+      // 22b (D7, Jorge 3 out): DEPOIS de responder — gravar deixa de esperar pela IA e pelo
+      // email (no Vercel o waitUntil mantém a função viva até acabar).
+      const work = import("./shiftHandoverAutomation")
+        .then((m) => m.afterHandoverSave({ key: { handoverDate, shift, city }, mode: result.mode, userId: ctx.user.id, userName: ctx.user.name ?? null }))
+        .catch((err: any) => { console.warn("[handover] automação:", String(err?.message ?? err).slice(0, 200)); });
       try {
-        const { afterHandoverSave } = await import("./shiftHandoverAutomation");
-        automation = await afterHandoverSave({ key: { handoverDate, shift, city }, mode: result.mode, userId: ctx.user.id, userName: ctx.user.name ?? null });
-      } catch (err: any) {
-        console.warn("[handover] automação:", String(err?.message ?? err).slice(0, 200));
-      }
-      return { success: true, mode: result.mode, automation };
+        const { waitUntil } = await import("@vercel/functions");
+        waitUntil(work);
+      } catch { /* fora do Vercel a promessa continua sozinha */ }
+      return { success: true, mode: result.mode, automationPending: true as const };
     }),
 
     // Resumo automático do turno (rascunho) — só leitura, dentro da cidade.
