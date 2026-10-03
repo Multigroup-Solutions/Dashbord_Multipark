@@ -114,13 +114,13 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-base flex items-center gap-2"><Gauge className="h-4 w-4" />Dia da semana × hora</CardTitle>
           <div className="flex flex-wrap gap-1">
-            <Button size="sm" variant={metricShown === "load" ? "default" : "outline"} onClick={() => setMetric("load")}>Carros/hora</Button>
-            <Button size="sm" variant={metricShown === "delivery" ? "default" : "outline"} onClick={() => setMetric("delivery")}>Entrega p75</Button>
+            <Button size="sm" variant={metricShown === "load" ? "selected" : "outline"} onClick={() => setMetric("load")}>Carros/hora</Button>
+            <Button size="sm" variant={metricShown === "delivery" ? "selected" : "outline"} onClick={() => setMetric("delivery")}>Entrega p75</Button>
             {cityInfo && (
               <>
-                <Button size="sm" variant={metricShown === "cycle" ? "default" : "outline"} onClick={() => setMetric("cycle")}>Por carro p{pct}</Button>
-                <Button size="sm" variant={metricShown === "drive" ? "default" : "outline"} onClick={() => setMetric("drive")}>Na estrada p75</Button>
-                <Button size="sm" variant={metricShown === "crew" ? "default" : "outline"} onClick={() => setMetric("crew")}>Pessoas</Button>
+                <Button size="sm" variant={metricShown === "cycle" ? "selected" : "outline"} onClick={() => setMetric("cycle")}>Por carro p{pct}</Button>
+                <Button size="sm" variant={metricShown === "drive" ? "selected" : "outline"} onClick={() => setMetric("drive")}>Na estrada p75</Button>
+                <Button size="sm" variant={metricShown === "crew" ? "selected" : "outline"} onClick={() => setMetric("crew")}>Pessoas</Button>
               </>
             )}
           </div>

@@ -131,9 +131,9 @@ export function AgentListCompareCard() {
         {results.length > 0 && (
           <>
             <div className="flex flex-wrap gap-2 items-center">
-              <Button size="sm" variant={filter ? "outline" : "default"} onClick={() => setFilter(null)}>Todos ({visible.length})</Button>
+              <Button size="sm" variant={filter ? "outline" : "selected"} onClick={() => setFilter(null)}>Todos ({visible.length})</Button>
               {ORDER.filter((s) => counts[s]).map((s) => (
-                <Button key={s} size="sm" variant={filter === s ? "default" : "outline"} onClick={() => setFilter(s)}>{STATUS[s].label} ({counts[s]})</Button>
+                <Button key={s} size="sm" variant={filter === s ? "selected" : "outline"} onClick={() => setFilter(s)}>{STATUS[s].label} ({counts[s]})</Button>
               ))}
               {safe.length > 0 && (
                 <Button size="sm" onClick={linkAllSafe} disabled={busyAll}>

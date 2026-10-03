@@ -268,14 +268,14 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
               </SelectContent>
             </Select>
           )}
-          <Button size="sm" variant={awaiting ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setAwaiting((x) => !x)}><AlarmClock className="h-3.5 w-3.5 mr-1" />Por responder</Button>
-          <Button size="sm" variant={unread ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setUnread((x) => !x)}>Não lidas</Button>
-          <Button size="sm" variant={showAutomatic ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setShowAutomatic((x) => !x)}
+          <Button size="sm" variant={awaiting ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => setAwaiting((x) => !x)}><AlarmClock className="h-3.5 w-3.5 mr-1" />Por responder</Button>
+          <Button size="sm" variant={unread ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => setUnread((x) => !x)}>Não lidas</Button>
+          <Button size="sm" variant={showAutomatic ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => setShowAutomatic((x) => !x)}
             title="Notificações automáticas de reserva: escondidas por omissão; a pesquisa encontra-as sempre.">
             <Bot className="h-3.5 w-3.5 mr-1" />Mostrar automáticos
           </Button>
           {overview.data?.isSuperAdmin && (
-            <Button size="sm" variant={archived ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => { setArchived((x) => !x); if (!archived) setStatus("all"); }}
+            <Button size="sm" variant={archived ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => { setArchived((x) => !x); if (!archived) setStatus("all"); }}
               title="Emails com mais de 5 anos e sem ligação a nenhum registo: não se apagam, ficam aqui e só tu os vês.">
               <Archive className="h-3.5 w-3.5 mr-1" />Arquivo (+5 anos)
             </Button>

@@ -509,21 +509,21 @@ export default function TasksPage() {
         </div>
         <div className="flex gap-2 items-center flex-wrap">
           <div className="flex border rounded-lg overflow-hidden">
-            <Button variant={viewMode === "mine" ? "default" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("mine")} title="As minhas tarefas">
+            <Button variant={viewMode === "mine" ? "selected" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("mine")} title="As minhas tarefas">
               <User className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">As minhas</span>
             </Button>
             {canEdit && (
               <>
-                <Button variant={viewMode === "kanban" ? "default" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("kanban")} title="Quadro">
+                <Button variant={viewMode === "kanban" ? "selected" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("kanban")} title="Quadro">
                   <LayoutGrid className="h-4 w-4" />
                 </Button>
-                <Button variant={viewMode === "list" ? "default" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("list")} title="Lista">
+                <Button variant={viewMode === "list" ? "selected" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("list")} title="Lista">
                   <List className="h-4 w-4" />
                 </Button>
               </>
             )}
             {canTemplates && (
-              <Button variant={viewMode === "templates" ? "default" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("templates")} title="Checklists recorrentes">
+              <Button variant={viewMode === "templates" ? "selected" : "ghost"} size="sm" className="rounded-none h-9" onClick={() => setViewMode("templates")} title="Checklists recorrentes">
                 <Repeat className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Checklists</span>
               </Button>
             )}

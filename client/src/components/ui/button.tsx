@@ -9,15 +9,20 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // Jorge, 3 out 2026: no modo claro TODOS os botões são brancos com borda
+        // azul; azul cheio só o que está escolhido (`selected`) e ao carregar.
+        // Modo escuro como antes.
+        default:
+          "border border-primary bg-white text-primary shadow-xs hover:bg-primary/10 dark:border-transparent dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90",
+        /** O botão escolhido num grupo (filtro, vista, opção ligada): azul cheio. */
+        selected:
+          "border border-primary bg-primary text-primary-foreground shadow-xs hover:bg-primary/90",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
-        // Jorge, 3 out 2026: botões de contorno brancos com borda azul (como as
-        // pesquisas); os principais continuam azuis cheios. Modo escuro igual.
         outline:
           "border border-primary bg-white shadow-xs hover:bg-accent dark:bg-transparent dark:border-input dark:hover:bg-input/50",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+          "border border-primary bg-white text-secondary-foreground shadow-xs hover:bg-accent dark:border-transparent dark:bg-secondary dark:hover:bg-secondary/80",
         ghost:
           "hover:bg-accent dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
@@ -49,11 +54,13 @@ function Button({
     asChild?: boolean;
   }) {
   const Comp = asChild ? Slot : "button";
+  // Botão com cor própria (ex.: o verde do WhatsApp): fica com a cor, sem a borda azul.
+  const ownColor = (!variant || variant === "default") && /\bbg-(?!white\b|transparent\b)[a-z]+-\d/.test(String(className ?? ""));
 
   return (
     <Comp
       data-slot="button"
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={cn(buttonVariants({ variant, size, className }), ownColor && "border-transparent")}
       {...props}
     />
   );

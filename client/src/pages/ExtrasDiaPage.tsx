@@ -2543,7 +2543,7 @@ export function AvailabilitySection() {
                 <Button
                   key={key}
                   size="sm"
-                  variant={cityFilter === key ? "default" : "outline"}
+                  variant={cityFilter === key ? "selected" : "outline"}
                   className="h-7 text-xs"
                   onClick={() => changeCityFilter(key)}
                 >
@@ -2900,7 +2900,7 @@ export function AvailabilitySection() {
                         key={h.day}
                         type="button"
                         size="sm"
-                        variant={waParam2 === h.label ? "default" : "outline"}
+                        variant={waParam2 === h.label ? "selected" : "outline"}
                         className="h-7 text-xs"
                         onClick={() => setWaParam2(h.label)}
                       >

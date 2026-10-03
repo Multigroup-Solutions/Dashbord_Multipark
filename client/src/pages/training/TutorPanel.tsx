@@ -237,7 +237,7 @@ export function TutorQuestionsCard() {
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
         <CardTitle className="text-base flex items-center gap-2"><GraduationCap className="w-5 h-5 text-primary" />Perguntas ao tutor</CardTitle>
         <div className="flex gap-1">
-          {[30, 90, 365].map((d) => <Button key={d} size="sm" variant={days === d ? "default" : "outline"} onClick={() => setDays(d)}>{d} dias</Button>)}
+          {[30, 90, 365].map((d) => <Button key={d} size="sm" variant={days === d ? "selected" : "outline"} onClick={() => setDays(d)}>{d} dias</Button>)}
         </div>
       </CardHeader>
       <CardContent className="space-y-2">

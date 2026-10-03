@@ -176,7 +176,7 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
             <CardTitle>Gerir perguntas ({adminQuestions.length}{drafts ? ` · ${drafts} rascunho(s)` : ""})</CardTitle>
             <div className="flex gap-2">
-              {drafts > 0 && <Button size="sm" variant={onlyDrafts ? "default" : "outline"} onClick={() => setOnlyDrafts((v) => !v)}>Só rascunhos</Button>}
+              {drafts > 0 && <Button size="sm" variant={onlyDrafts ? "selected" : "outline"} onClick={() => setOnlyDrafts((v) => !v)}>Só rascunhos</Button>}
               <Button size="sm" onClick={() => setEditing({ id: null, value: emptyQuestion() })}><Plus className="w-4 h-4 mr-1" />Nova pergunta</Button>
             </div>
           </CardHeader>

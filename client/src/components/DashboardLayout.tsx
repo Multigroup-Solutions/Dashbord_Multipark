@@ -785,7 +785,7 @@ function DashboardLayoutContent({
             <Popover>
               <PopoverTrigger asChild>
                 <Button
-                  variant={filters.cityId !== null || filters.brandId !== null ? "default" : "outline"}
+                  variant={filters.cityId !== null || filters.brandId !== null ? "selected" : "outline"}
                   size="icon"
                   className="md:hidden h-9 w-9"
                   title="Cidade e marca"

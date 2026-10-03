@@ -162,7 +162,7 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
             </Button>
           )}
           {canManage && (
-            <Button variant={showArchived ? "default" : "outline"} onClick={() => setShowArchived((v) => !v)}>
+            <Button variant={showArchived ? "selected" : "outline"} onClick={() => setShowArchived((v) => !v)}>
               <Archive className="w-4 h-4 mr-2" /> {showArchived ? "A ver arquivados" : "Arquivados"}
             </Button>
           )}

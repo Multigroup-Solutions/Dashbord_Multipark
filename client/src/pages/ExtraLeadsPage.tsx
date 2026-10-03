@@ -479,7 +479,7 @@ function LeadsTab() {
             <Button
               key={a}
               size="sm"
-              variant={attentionFilter === a ? "default" : "outline"}
+              variant={attentionFilter === a ? "selected" : "outline"}
               className="h-7 text-xs"
               disabled={attentionCounts[a] === 0 && attentionFilter !== a}
               onClick={() => { setAttentionFilter(attentionFilter === a ? null : a); setStatusFilter("all"); clearSelection(); }}
@@ -539,7 +539,7 @@ function LeadsTab() {
               <div className="flex items-center gap-1 flex-wrap">
                 <Button
                   size="sm"
-                  variant={showArchived ? "default" : "outline"}
+                  variant={showArchived ? "selected" : "outline"}
                   className="h-8 text-xs"
                   aria-pressed={showArchived}
                   title="Leads arquivados (podem ser repostos)"
@@ -551,7 +551,7 @@ function LeadsTab() {
                   <Button
                     key={s}
                     size="sm"
-                    variant={statusFilter === s ? "default" : "outline"}
+                    variant={statusFilter === s ? "selected" : "outline"}
                     className="h-8 text-xs"
                     onClick={() => { setStatusFilter(s); setSelectedIds(new Set()); }}
                   >

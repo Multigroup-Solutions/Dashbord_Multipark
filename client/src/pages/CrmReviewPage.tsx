@@ -371,7 +371,7 @@ function Merges({ data, source, setSource, setOffset, canMerge, refetch }: {
       {confirmUi}
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quem juntou">
         {filters.map((f) => (
-          <Button key={f.id} size="sm" variant={source === f.id ? "default" : "outline"} className="h-[30px]" aria-pressed={source === f.id} onClick={() => setSource(f.id)}>{f.label}</Button>
+          <Button key={f.id} size="sm" variant={source === f.id ? "selected" : "outline"} className="h-[30px]" aria-pressed={source === f.id} onClick={() => setSource(f.id)}>{f.label}</Button>
         ))}
       </div>
       {!data.rows.length ? <Empty text={source === "all" ? "Nenhuma ficha foi junta." : "Nenhuma ficha foi junta desta forma."} /> : (

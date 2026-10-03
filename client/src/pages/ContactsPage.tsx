@@ -126,9 +126,9 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
         <Input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder="Nome, email, telefone ou matrícula…" className="pl-9 h-11" />
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <Button size="sm" variant={all ? "default" : "outline"} className="h-8" onClick={() => setKind("all")}>Todos</Button>
+        <Button size="sm" variant={all ? "selected" : "outline"} className="h-8" onClick={() => setKind("all")}>Todos</Button>
         {kinds.map((k) => (
-          <Button key={k} size="sm" variant={kind === k ? "default" : "outline"} className="h-8" onClick={() => setKind(k)}>{CONTACT_KIND_LABELS[k]}</Button>
+          <Button key={k} size="sm" variant={kind === k ? "selected" : "outline"} className="h-8" onClick={() => setKind(k)}>{CONTACT_KIND_LABELS[k]}</Button>
         ))}
       </div>
 

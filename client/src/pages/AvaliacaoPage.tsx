@@ -225,8 +225,8 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-md border p-0.5">
-          <Button size="sm" variant={view === "totals" ? "default" : "ghost"} className="h-8" onClick={() => setView("totals")}>Totais</Button>
-          <Button size="sm" variant={view === "perHour" ? "default" : "ghost"} className="h-8" onClick={() => setView("perHour")}>Por hora</Button>
+          <Button size="sm" variant={view === "totals" ? "selected" : "ghost"} className="h-8" onClick={() => setView("totals")}>Totais</Button>
+          <Button size="sm" variant={view === "perHour" ? "selected" : "ghost"} className="h-8" onClick={() => setView("perHour")}>Por hora</Button>
         </div>
         <div className="ml-auto flex flex-wrap justify-end gap-2">
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={rows.length === 0}><Download className="w-4 h-4 mr-1" /> CSV</Button>
@@ -450,7 +450,7 @@ function DisputesView() {
         <CardTitle className="text-base">Contestações</CardTitle>
         <div className="ml-auto inline-flex flex-wrap rounded-md border p-0.5">
           {(["open", "accepted", "rejected"] as const).map((s) => (
-            <Button key={s} size="sm" variant={status === s ? "default" : "ghost"} className="h-8" onClick={() => setStatus(s)}>
+            <Button key={s} size="sm" variant={status === s ? "selected" : "ghost"} className="h-8" onClick={() => setStatus(s)}>
               {s === "open" ? "Em análise" : s === "accepted" ? "Aceites" : "Recusadas"}
             </Button>
           ))}

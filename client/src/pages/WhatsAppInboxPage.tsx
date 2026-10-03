@@ -856,7 +856,7 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
   const contextButton = t && (
     <Button
       size="sm"
-      variant={linked ? "secondary" : "ghost"}
+      variant={linked ? "selected" : "ghost"}
       className="h-8 px-2 text-xs shrink-0"
       title={
         t.linkedBookingRef

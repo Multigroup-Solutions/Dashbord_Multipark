@@ -185,7 +185,7 @@ export default function ApiKeysPage() {
                         <Label>Validade</Label>
                         <div className="flex flex-wrap gap-2 mt-1">
                           {EXPIRY_OPTIONS.map((o) => (
-                            <Button key={o.value} type="button" size="sm" variant={expiry === o.value ? "default" : "outline"} onClick={() => setExpiry(o.value)}>
+                            <Button key={o.value} type="button" size="sm" variant={expiry === o.value ? "selected" : "outline"} onClick={() => setExpiry(o.value)}>
                               {o.label}
                             </Button>
                           ))}
