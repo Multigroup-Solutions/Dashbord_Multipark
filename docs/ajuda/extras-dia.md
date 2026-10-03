@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: tempo por carro, minutos por carro, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -20,15 +20,31 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Lisboa**: 2 pessoas → 75 min por carro; 3–4 → 60 min; 5–6 → 45 min; 7 ou mais → 30 min.
    - **Porto e Faro**: no mínimo 2 extras + o TL; com 3 pessoas → 30 min por carro (2 condutores × 2 carros = 4 carros por hora).
    - Os números da previsão e da escala automática são **extras além do TL**. A regra muda-se em Definições → Parâmetros ("Tempo por carro conforme as pessoas no turno").
-6. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, nos últimos 60 dias, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo.
+6. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, desde abril de 2026, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo.
 
 **Separador "Pressão"** (quando é que aperta)
 1. Em cima, escolhe o separador **Pressão** (o separador **Dia** é a previsão de sempre).
 2. Escolhe o grupo de parques: a cidade toda (todas as marcas), uma marca + cidade (ex.: Airpark Lisboa) ou o Marketplace.
 3. **Onde aperta**: frases curtas com os blocos mais apertados, por exemplo "sextas 17–20h em Lisboa: 42 saídas/h, entrega p75 28 min".
-4. **Dia da semana × hora**: mapa de calor. Alterna entre **Carros/hora** (chegadas + saídas concluídas, média por dia) e **Entrega p75** (minutos entre o pedido do cliente e o carro entregue; 75 % das entregas demoram menos do que isto). Contorno laranja = hora apertada. Passa o rato por uma célula para ver volume, carros em simultâneo, mediana/p75/p90 da entrega e o tempo de recolha.
-5. **Carga × tempo de entrega**: tabela que compara o tempo de entrega consoante os carros tratados nessa hora, separando horas de ponta (07–10h e 17–20h, aproximação do trânsito) do resto do dia.
-6. Os dados são dos últimos 60 dias e são recalculados todos os dias a partir das 04:45 (tarefa automática **Extras-Dia: pressão**), sem os **Parques que a operação não faz** (uma mudança nessa lista só conta a partir do cálculo seguinte). Isto é a base do futuro cálculo automático de extras — por agora é só informação.
+4. **Dia da semana × hora**: mapa de calor.
+   - **Carros/hora**: chegadas + saídas concluídas, média por dia.
+   - **Entrega p75**: minutos entre o pedido do cliente e o carro entregue; 75 % das entregas demoram menos do que isto.
+   - Na cidade toda há mais três:
+     - **Por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas.
+     - **Na estrada**: do início da entrega até entregue.
+     - **Pessoas**: quantas pessoas diferentes trabalharam nessa hora, com o TL.
+   - Contorno laranja = hora apertada. Passa o rato por uma célula para ver tudo: volume, carros em simultâneo, entrega, recolha, por carro, na estrada, recolhido → no parque e pessoas.
+5. **Tempo por carro, por condutor** (só na cidade toda): tabela por número de pessoas a trabalhar (os escalões da tabela de máximos das Definições).
+   - **Horas cheias**: cada pessoa teve pelo menos um serviço nessa hora. É aqui que se vê a capacidade.
+   - **Horas calmas**: o intervalo inclui esperar por trabalho.
+   - Ao lado aparece o **máximo** da tabela, para comparar.
+   - O valor é o p75 em Lisboa e o p60 no Porto e em Faro: em 75 % (ou 60 %) das vezes foi isto ou menos. Muda-se em Definições → Parâmetros → **Percentil do tempo por carro, por cidade**.
+   - A cinzento: menos de 5 serviços, pouco fiável.
+6. **Carga × tempo de entrega**: tabela que compara o tempo de entrega consoante os carros tratados nessa hora, separando horas de ponta (07–10h e 17–20h, aproximação do trânsito) do resto do dia.
+7. Os dados vêm da BD da Multipark **desde 3 de abril de 2026** e a janela **cresce todos os dias**: nunca se deita fora o que já foi medido, para no próximo ano haver o ano inteiro. O dia de início muda-se em Definições → Parâmetros → **Tempos medidos desde**.
+   - O recálculo é diário a partir das 04:45 (tarefa automática **Extras-Dia: pressão**).
+   - Ficam de fora os **Parques que a operação não faz**; uma mudança nessa lista só conta a partir do cálculo seguinte.
+   - Por agora **só se mede**: a escala e a previsão continuam a usar a tabela de máximos. Isto é a base do cálculo automático de extras.
 
 **Escalar a equipa** (Team Leader, Supervisor e acima)
 1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar** e escolhe a pessoa e as horas de início e de fim.
