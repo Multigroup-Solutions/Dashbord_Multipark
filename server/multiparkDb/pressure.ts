@@ -4,7 +4,8 @@
  * (server/extrasPressure.ts), que guarda o resultado na NOSSA BD
  * (ops_pressure_stats). Regras em shared/extrasPressure.ts.
  *
- * Janela: os últimos PRESSURE_WINDOW_DAYS (60) dias de Lisboa até ontem.
+ * Janela: desde `extras.timesSince` (22d: 3 abr 2026, 6 meses para trás) até
+ * ontem — cresce todos os dias e nunca deita fora o que já mediu.
  * Pedaços ("chunks"): um por grupo de parques — cada cidade (todas as marcas
  * nossas), cada marca + cidade nossa, e o Marketplace (os outros todos). Cada
  * pedaço são 2 leituras sobre só os parques do grupo (índices
@@ -41,8 +42,9 @@ import { OUR_PARK_BRANDS, OUR_PARK_BRAND_LABELS, OUR_PARK_CITIES, MARKETPLACE_GR
 import { CITY_LABELS } from "../../shared/city";
 import { addDays, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 import {
-  LOAD_BUCKETS, MAX_DELIVERY_MINUTES, MAX_PICKUP_MINUTES, PRESSURE_WINDOW_DAYS, RUSH_HOURS, cityGroupKey, isoWeekday,
-  type PressureLoadRow, type PressureSlot,
+  LOAD_BUCKETS, MAX_CYCLE_MINUTES, MAX_DELIVERY_MINUTES, MAX_PICKUP_MINUTES, MAX_TO_PARK_MINUTES, PRESSURE_SINCE_DEFAULT, PRESSURE_WINDOW_DAYS,
+  RUSH_HOURS, cityGroupKey, isoWeekday,
+  type CrewMeasureBand, type PressureCrewRow, type PressureLoadRow, type PressureSlot,
 } from "../../shared/extrasPressure";
 
 // ─── Janela ─────────────────────────────────────────────────────────────────
@@ -73,12 +75,27 @@ export function pressureWindow(endDay: string, days = PRESSURE_WINDOW_DAYS): Pre
   return { startDay, endDay, start: r.start, end: r.end, wideStart: sqlTs(r.startMs - 86_400_000), wideEnd: sqlTs(r.endMs + 86_400_000), weekdayDays };
 }
 
+/**
+ * 22d: janela desde `since` (inclusive) até `endDay` — a que acumula. Um
+ * `since` depois do fim (ou inválido) cai na janela antiga de 60 dias. PURA.
+ */
+export function pressureWindowSince(since: string | null | undefined, endDay: string): PressureWindow {
+  const s = since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : PRESSURE_SINCE_DEFAULT;
+  if (s > endDay) return pressureWindow(endDay);
+  const days = Math.round((Date.parse(`${endDay}T12:00:00Z`) - Date.parse(`${s}T12:00:00Z`)) / 86_400_000) + 1;
+  return pressureWindow(endDay, days);
+}
+
 // ─── Pedaços (grupos de parques) ────────────────────────────────────────────
 
 export interface PressureChunk {
   key: string;
   label: string;
   parkIds: string[];
+  /** 22d: "driver" = as leituras por condutor da cidade (passo próprio, depois dos grupos). */
+  kind?: "group" | "driver";
+  /** Cidade do passo "driver" (lisboa/porto/faro). */
+  city?: string;
 }
 
 /**
@@ -102,6 +119,11 @@ export function buildPressureChunks(parks: Array<Pick<DayPark, "id" | "key" | "o
   }
   const others = parks.filter((p) => !p.ours).map((p) => p.id);
   if (others.length) out.push({ key: MARKETPLACE_GROUP_KEY, label: MARKETPLACE_GROUP_LABEL, parkIds: others });
+  // 22d: por condutor, só nas cidades, no fim (as células da cidade já existem).
+  for (const city of OUR_PARK_CITIES) {
+    const ids = ours.filter((p) => p.city === city).map((p) => p.id);
+    if (ids.length) out.push({ key: cityGroupKey(city), label: `${CITY_LABELS[city]} (condutores)`, parkIds: ids, kind: "driver", city });
+  }
   return out;
 }
 
@@ -267,6 +289,143 @@ export function buildPressureLoadSql(w: PressureWindow, parkIds: string[]): { sq
   return { sql, params: p.values };
 }
 
+// ─── 22d: por condutor (só nas cidades) ─────────────────────────────────────
+
+const JOB_START_TYPES = ["CHECKING_OUT", "CHECKING_IN"];
+const DRIVER_TYPES = ["CHECKING_IN", "CHECK_IN", "MOVEMENT", "CHECKING_OUT", "CHECK_OUT"];
+
+/**
+ * CTEs dos serviços por condutor (sem o WITH):
+ *   ha   ações da History nas reservas do grupo (janela ±1 dia);
+ *   crew pessoas diferentes com ações em cada hora de Lisboa;
+ *   js   início de cada serviço (1.º início da entrega / da recolha de cada
+ *        reserva) e quem o começou;
+ *   ph/mv entregue, recolhido e 1.º movimento depois de recolhido;
+ *   jb   por serviço: intervalo até ao serviço seguinte do mesmo condutor,
+ *        na estrada (entregas) e até ao parque (recolhas);
+ *   jw   os da janela, com as durações dentro dos limites (fora → NULL);
+ *   hj   serviços começados em cada hora. PURA.
+ */
+export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: string[]): string {
+  if (!parkIds.length) throw new Error("Sem parques.");
+  const parks = parkIds.map((id) => p.add(id)).join(", ");
+  const ws = p.add(w.wideStart);
+  const we = p.add(w.wideEnd);
+  const s = p.add(w.start);
+  const e = p.add(w.end);
+  const mins = (a: string, b: string) => `extract(epoch from (${b} - ${a})) / 60.0`;
+  return [
+    `bk AS (`,
+    `  SELECT b."id" AS id FROM "Booking" b`,
+    `  WHERE b."parkId" IN (${parks}) AND b."status"::text <> 'CANCELLED'`,
+    `    AND ((b."checkInDate" >= ${ws}::timestamp AND b."checkInDate" < ${we}::timestamp) OR (b."checkOutDate" >= ${ws}::timestamp AND b."checkOutDate" < ${we}::timestamp))`,
+    `),`,
+    `ha AS (`,
+    `  SELECT h."bookingId" AS bid, h."changeType"::text AS ct, h."actionTime" AS at, h."userId" AS uid`,
+    `  FROM "History" h`,
+    `  WHERE h."actionTime" >= ${ws}::timestamp AND h."actionTime" < ${we}::timestamp`,
+    `    AND h."changeType"::text IN (${inList(DRIVER_TYPES)})`,
+    `    AND h."bookingId" IN (SELECT bk.id FROM bk)`,
+    `),`,
+    `crew AS (SELECT date_trunc('hour', ${L("ha.at")}) AS hr_at, count(DISTINCT ha.uid) AS n FROM ha WHERE ha.uid IS NOT NULL AND ha.uid <> '' GROUP BY 1),`,
+    `js AS (`,
+    `  SELECT DISTINCT ON (ha.bid, ha.ct) ha.bid, ha.ct, ha.at, ha.uid FROM ha`,
+    `  WHERE ha.ct IN (${inList(JOB_START_TYPES)}) AND ha.uid IS NOT NULL AND ha.uid <> ''`,
+    `  ORDER BY ha.bid, ha.ct, ha.at`,
+    `),`,
+    `ph AS (`,
+    `  SELECT ha.bid, min(ha.at) FILTER (WHERE ha.ct = 'CHECK_OUT') AS co_done, min(ha.at) FILTER (WHERE ha.ct = 'CHECK_IN') AS ci_done`,
+    `  FROM ha GROUP BY ha.bid`,
+    `),`,
+    `mv AS (`,
+    `  SELECT ha.bid, min(ha.at) AS mv_at FROM ha JOIN ph ON ph.bid = ha.bid`,
+    `  WHERE ha.ct = 'MOVEMENT' AND ph.ci_done IS NOT NULL AND ha.at > ph.ci_done GROUP BY ha.bid`,
+    `),`,
+    `jb AS (`,
+    `  SELECT js.at, date_trunc('hour', ${L("js.at")}) AS hr_at,`,
+    `    ${mins("js.at", "lead(js.at) OVER (PARTITION BY js.uid ORDER BY js.at, js.bid)")} AS gap,`,
+    `    CASE WHEN js.ct = 'CHECKING_OUT' AND ph.co_done >= js.at THEN ${mins("js.at", "ph.co_done")} END AS drive,`,
+    `    CASE WHEN js.ct = 'CHECKING_IN' THEN ${mins("ph.ci_done", "mv.mv_at")} END AS to_park`,
+    `  FROM js LEFT JOIN ph ON ph.bid = js.bid LEFT JOIN mv ON mv.bid = js.bid`,
+    `),`,
+    `jw AS (`,
+    `  SELECT jb.hr_at,`,
+    `    CASE WHEN jb.gap > 0 AND jb.gap <= ${MAX_CYCLE_MINUTES} THEN jb.gap END AS cycle,`,
+    `    CASE WHEN jb.drive > 0 AND jb.drive <= ${MAX_DELIVERY_MINUTES} THEN jb.drive END AS drive,`,
+    `    CASE WHEN jb.to_park > 0 AND jb.to_park <= ${MAX_TO_PARK_MINUTES} THEN jb.to_park END AS to_park`,
+    `  FROM jb WHERE jb.at >= ${s}::timestamp AND jb.at < ${e}::timestamp`,
+    `),`,
+    `hj AS (SELECT jw.hr_at, count(*) AS jobs FROM jw GROUP BY 1)`,
+  ].join("\n");
+}
+
+/**
+ * Leitura 3 (cidades) — por (dia da semana, hora de Lisboa do início do
+ * serviço): condutor por carro (p50/60/75/85/90), na estrada, até ao parque e
+ * pessoas por hora (média das horas com movimento). PURA.
+ */
+export function buildPressureDriverSlotsSql(w: PressureWindow, parkIds: string[]): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const base = pressureDriverCtes(p, w, parkIds);
+  const s = p.add(w.start);
+  const e = p.add(w.end);
+  const pct = (q: number, col: string) => `percentile_cont(${q}) WITHIN GROUP (ORDER BY ${col})`;
+  const sql = [
+    `WITH ${base},`,
+    `dj AS (`,
+    `  SELECT ${wdSql("jw.hr_at")} AS wd, ${hrSql("jw.hr_at")} AS hr,`,
+    `    count(jw.cycle) AS cy_n, ${pct(0.5, "jw.cycle")} AS cy_p50, ${pct(0.6, "jw.cycle")} AS cy_p60, ${pct(0.75, "jw.cycle")} AS cy_p75, ${pct(0.85, "jw.cycle")} AS cy_p85, ${pct(0.9, "jw.cycle")} AS cy_p90,`,
+    `    count(jw.drive) AS dr_n, ${pct(0.5, "jw.drive")} AS dr_p50, ${pct(0.75, "jw.drive")} AS dr_p75, ${pct(0.9, "jw.drive")} AS dr_p90,`,
+    `    count(jw.to_park) AS tp_n, ${pct(0.5, "jw.to_park")} AS tp_p50, ${pct(0.75, "jw.to_park")} AS tp_p75`,
+    `  FROM jw GROUP BY 1, 2`,
+    `),`,
+    `cr AS (`,
+    `  SELECT ${wdSql("crew.hr_at")} AS wd, ${hrSql("crew.hr_at")} AS hr, avg(crew.n) AS crew_avg FROM crew`,
+    `  WHERE crew.hr_at >= date_trunc('hour', ${L(`${s}::timestamp`)}) AND crew.hr_at < ${L(`${e}::timestamp`)}`,
+    `  GROUP BY 1, 2`,
+    `)`,
+    `SELECT COALESCE(dj.wd, cr.wd) AS wd, COALESCE(dj.hr, cr.hr) AS hr,`,
+    `  COALESCE(dj.cy_n, 0) AS cy_n, dj.cy_p50, dj.cy_p60, dj.cy_p75, dj.cy_p85, dj.cy_p90,`,
+    `  COALESCE(dj.dr_n, 0) AS dr_n, dj.dr_p50, dj.dr_p75, dj.dr_p90,`,
+    `  COALESCE(dj.tp_n, 0) AS tp_n, dj.tp_p50, dj.tp_p75, cr.crew_avg`,
+    `FROM dj FULL OUTER JOIN cr ON cr.wd = dj.wd AND cr.hr = dj.hr`,
+    `ORDER BY 1, 2`,
+    `LIMIT 200`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+/** CASE do escalão de pessoas (os da regra da cidade; constantes nossas). PURA. */
+export function crewBandCase(col: string, bands: CrewMeasureBand[]): string {
+  const whens = bands
+    .filter((b) => b.index > 0)
+    .map((b) => `WHEN ${col} >= ${Number(b.min)}${b.max === null ? "" : ` AND ${col} <= ${Number(b.max)}`} THEN ${Number(b.index)}`)
+    .join(" ");
+  return `CASE ${whens} ELSE 0 END`;
+}
+
+/**
+ * Leitura 4 (cidades) — condutor por carro por escalão de pessoas × hora cheia
+ * (serviços começados nessa hora ≥ pessoas nessa hora). PURA.
+ */
+export function buildPressureCrewSql(w: PressureWindow, parkIds: string[], bands: CrewMeasureBand[]): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const base = pressureDriverCtes(p, w, parkIds);
+  const pct = (q: number) => `percentile_cont(${q}) WITHIN GROUP (ORDER BY jw.cycle)`;
+  const sql = [
+    `WITH ${base}`,
+    `SELECT ${crewBandCase("COALESCE(crew.n, 0)", bands)} AS band,`,
+    `  (COALESCE(hj.jobs, 0) >= GREATEST(COALESCE(crew.n, 1), 1)) AS busy,`,
+    `  count(*) AS n, ${pct(0.5)} AS p50, ${pct(0.6)} AS p60, ${pct(0.75)} AS p75, ${pct(0.85)} AS p85, ${pct(0.9)} AS p90`,
+    `FROM jw LEFT JOIN crew ON crew.hr_at = jw.hr_at LEFT JOIN hj ON hj.hr_at = jw.hr_at`,
+    `WHERE jw.cycle IS NOT NULL`,
+    `GROUP BY 1, 2`,
+    `ORDER BY 1, 2`,
+    `LIMIT 50`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
 // ─── Mapeadores ─────────────────────────────────────────────────────────────
 
 const num = (v: unknown): number | null => {
@@ -317,5 +476,33 @@ export function mapPressureLoadRow(group: string, r: Record<string, unknown>): P
     deliveryP50: r1(r.p50),
     deliveryP75: r1(r.p75),
     deliveryP90: r1(r.p90),
+  };
+}
+
+/** Linha da leitura 3 → campos por condutor de uma célula. PURA. */
+export function mapPressureDriverRow(r: Record<string, unknown>): ({ weekday: number; hour: number } & Required<Pick<PressureSlot,
+  "cycleN" | "cycleP50" | "cycleP60" | "cycleP75" | "cycleP85" | "cycleP90" | "driveN" | "driveP50" | "driveP75" | "driveP90" | "toParkN" | "toParkP50" | "toParkP75" | "crewAvg">>) | null {
+  const weekday = int(r.wd);
+  const hour = int(r.hr);
+  if (weekday < 1 || weekday > 7 || hour < 0 || hour > 23) return null;
+  const crew = num(r.crew_avg);
+  return {
+    weekday, hour,
+    cycleN: int(r.cy_n), cycleP50: r1(r.cy_p50), cycleP60: r1(r.cy_p60), cycleP75: r1(r.cy_p75), cycleP85: r1(r.cy_p85), cycleP90: r1(r.cy_p90),
+    driveN: int(r.dr_n), driveP50: r1(r.dr_p50), driveP75: r1(r.dr_p75), driveP90: r1(r.dr_p90),
+    toParkN: int(r.tp_n), toParkP50: r1(r.tp_p50), toParkP75: r1(r.tp_p75),
+    crewAvg: crew == null ? null : Math.round(crew * 10) / 10,
+  };
+}
+
+/** Linha da leitura 4 → escalão de pessoas × hora cheia. PURA. */
+export function mapPressureCrewRow(group: string, bands: CrewMeasureBand[], r: Record<string, unknown>): PressureCrewRow | null {
+  const band = int(r.band);
+  const def = bands.find((b) => b.index === band);
+  if (!def) return null;
+  return {
+    group, band, bandLabel: def.label,
+    busy: r.busy === true || r.busy === "t" || r.busy === 1 || r.busy === "true",
+    n: int(r.n), p50: r1(r.p50), p60: r1(r.p60), p75: r1(r.p75), p85: r1(r.p85), p90: r1(r.p90),
   };
 }

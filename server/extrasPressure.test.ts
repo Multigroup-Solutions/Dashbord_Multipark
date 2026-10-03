@@ -61,9 +61,13 @@ describe("pressão — janela e pedaços", () => {
   });
   it("pedaços: cidades, marca + cidade, Marketplace (sem grupos vazios)", () => {
     const chunks = buildPressureChunks(mapParks(PARK_ROWS));
-    expect(chunks.map((c) => c.key)).toEqual(["cidade_lisboa", "cidade_porto", "airpark_lisboa", "redpark_lisboa", "skypark_porto", "marketplace"]);
+    // 22d: no fim, as leituras por condutor de cada cidade (passos próprios)
+    expect(chunks.map((c) => `${c.key}${c.kind === "driver" ? ":condutores" : ""}`)).toEqual([
+      "cidade_lisboa", "cidade_porto", "airpark_lisboa", "redpark_lisboa", "skypark_porto", "marketplace", "cidade_lisboa:condutores", "cidade_porto:condutores",
+    ]);
     expect(chunks[0].parkIds.sort()).toEqual(["p1", "p2"]);
-    expect(chunks.at(-1)!.parkIds).toEqual(["p4"]);
+    expect(chunks[5].parkIds).toEqual(["p4"]);
+    expect(chunks[6]).toMatchObject({ kind: "driver", city: "lisboa" });
   });
   it("SQL das células: só leitura, parametrizado, percentis no Postgres", () => {
     const w = pressureWindow("2026-09-26");
@@ -103,16 +107,20 @@ describe("pressão — janela e pedaços", () => {
 function memStore() {
   const groups: string[] = [];
   const finished: string[] = [];
+  const drivers: Array<{ key: string; slots: number; crew: number }> = [];
   const store: PressureStore = {
     async replaceGroup(_w, chunk) { groups.push(chunk.key); },
+    async upsertDriver(_w, chunk, _win, d, c) { drivers.push({ key: chunk.key, slots: d.length, crew: c.length }); },
     async finish(w) { finished.push(w); },
   };
-  return { store, groups, finished };
+  return { store, groups, finished, drivers };
 }
 
 function answer(sql: string) {
   if (sql.includes('FROM "Park"')) return PARK_ROWS;
   if (sql.includes("AS lb")) return [{ lb: 2, rush: false, n: 6, p50: 12, p75: 18, p90: 25 }];
+  if (sql.includes("AS busy")) return [{ band: 2, busy: true, n: 40, p50: 35, p60: 38, p75: 44, p85: 50, p90: 55 }];
+  if (sql.includes("AS cy_n")) return [{ wd: 5, hr: 18, cy_n: 30, cy_p50: 35, cy_p60: 38, cy_p75: 44, cy_p85: 50, cy_p90: 55, dr_n: 12, dr_p50: 20, dr_p75: 25, dr_p90: 31, tp_n: 9, tp_p50: 8, tp_p75: 11, crew_avg: 3.4 }];
   return [{ wd: 5, hr: 18, ci_done: 3, co_done: 9, ci_started: 3, co_started: 9, conc_sum: 20, conc_max: 5, del_n: 9, del_p50: 15, del_p75: 22, del_p90: 30, pik_n: 3, pik_p50: 8, pik_p75: 10 }];
 }
 
@@ -128,10 +136,11 @@ describe("pressão — cursor e retoma", () => {
     const q = vi.fn(async (sql: string) => answer(sql));
     const m = memStore();
     const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
-    expect(r).toMatchObject({ ok: true, done: true, chunks: 6, nextIndex: 6, cursor: null });
+    expect(r).toMatchObject({ ok: true, done: true, chunks: 8, nextIndex: 8, cursor: null });
     expect(m.groups).toEqual(["cidade_lisboa", "cidade_porto", "airpark_lisboa", "redpark_lisboa", "skypark_porto", "marketplace"]);
+    expect(m.drivers).toEqual([{ key: "cidade_lisboa", slots: 1, crew: 1 }, { key: "cidade_porto", slots: 1, crew: 1 }]);
     expect(m.finished).toEqual(["2026-09-26"]);
-    expect(q).toHaveBeenCalledTimes(1 + 6 * 2);
+    expect(q).toHaveBeenCalledTimes(1 + 8 * 2);
   });
   it("sem tempo: para, devolve o cursor e retoma no pedaço seguinte", async () => {
     const q = vi.fn(async (sql: string) => answer(sql));
@@ -161,15 +170,16 @@ describe("pressão — cursor e retoma", () => {
     const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
     expect(r.ok).toBe(false);
     expect(r.done).toBe(true);
-    expect(r.failed.map((f) => f.group)).toEqual(["cidade_porto", "skypark_porto"]);
+    expect(r.failed.map((f) => f.group)).toEqual(["cidade_porto", "skypark_porto", "cidade_porto"]);
     expect(r.error).toContain("demorou demasiado");
     expect(m.groups).toHaveLength(4);
+    expect(m.drivers.map((d) => d.key)).toEqual(["cidade_lisboa"]);
   });
   it("parques que a operação não faz: ficam fora de todos os pedaços", async () => {
     const q = vi.fn(async (sql: string) => answer(sql));
     const m = memStore();
     const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true, excludedParkIds: ["p3"] });
-    expect(r).toMatchObject({ ok: true, done: true, chunks: 4 });
+    expect(r).toMatchObject({ ok: true, done: true, chunks: 5 });
     expect(m.groups).toEqual(["cidade_lisboa", "airpark_lisboa", "redpark_lisboa", "marketplace"]);
     expect(q.mock.calls.every(([, params]) => !(params ?? []).includes("p3"))).toBe(true);
   });

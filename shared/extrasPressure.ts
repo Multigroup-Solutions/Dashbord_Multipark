@@ -3,7 +3,9 @@
  * servidor (trabalho `extras-pressure`, server/extrasPressure.ts) e cliente
  * (separador "Pressão" e a dica "hora apertada" na escala). PURO.
  *
- * Base: os últimos 60 dias da BD da Multipark, por grupo de parques
+ * Base: a BD da Multipark desde PRESSURE_SINCE_DEFAULT (22d, Jorge 3 out: 6 meses
+ * para trás e daí para a frente SEMPRE a acumular, para no próximo ano haver o
+ * ano inteiro; Definições → extras.timesSince), por grupo de parques
  * (marca + cidade, ou a cidade toda, ou o Marketplace) × dia da semana ×
  * hora de Lisboa. Métricas por (dia da semana, hora):
  *   - volume: check-ins/check-outs começados e concluídos nessa hora (total
@@ -14,10 +16,31 @@
  * E a relação carga (carros nessa hora) × tempo de entrega, separada por
  * horas de ponta (07–10h e 17–20h) e resto do dia — tabela, sem modelos.
  *
+ * 22d (fase 1 da capacidade aprendida) — nas cidades, também por condutor:
+ *   - condutor por carro: do início de um serviço (início da entrega ou da
+ *     recolha) ao início do serviço seguinte do MESMO condutor (inclui o
+ *     regresso, o trânsito e as esperas; ≤ MAX_CYCLE_MINUTES);
+ *   - na estrada: início da entrega → entregue;
+ *   - até ao parque: recolhido → 1.º movimento (levar ao parque);
+ *   - pessoas: agentes diferentes com ações nessa hora (TL incluído);
+ *   - por escalão de equipa (os da tabela máxima, D12) × "hora cheia" (cada
+ *     pessoa teve pelo menos um serviço começado nessa hora — nas horas calmas
+ *     o intervalo inclui espera por trabalho e não mede a capacidade).
+ *
  * Isto é a base do futuro algoritmo dos extras — por agora só se mostra.
  */
 
+/** (Antigo) janela fixa; agora é desde `extras.timesSince` (omissão abaixo). */
 export const PRESSURE_WINDOW_DAYS = 60;
+/** 22d: a medição começa aqui (6 meses antes de 3 out 2026) e nunca encolhe. */
+export const PRESSURE_SINCE_DEFAULT = "2026-04-03";
+/** Intervalo máximo entre dois serviços seguidos do mesmo condutor (acima = pausa, não conta). */
+export const MAX_CYCLE_MINUTES = 120;
+/** Recolhido → no parque: acima disto é lixo de dados. */
+export const MAX_TO_PARK_MINUTES = 120;
+/** Percentis guardados para o "condutor por carro" (o usado escolhe-se por cidade). */
+export const CYCLE_PERCENTILES = [50, 60, 75, 85, 90] as const;
+export type CyclePercentile = (typeof CYCLE_PERCENTILES)[number];
 
 /** Horas de ponta (proxy do trânsito): [início, fim) em horas de Lisboa. */
 export const RUSH_HOURS: ReadonlyArray<readonly [number, number]> = [[7, 10], [17, 20]];
@@ -103,6 +126,75 @@ export interface PressureSlot {
   pickupN: number;
   pickupP50: number | null;
   pickupP75: number | null;
+  /** 22d — só nas cidades (os outros grupos ficam a 0/null). */
+  cycleN?: number;
+  cycleP50?: number | null;
+  cycleP60?: number | null;
+  cycleP75?: number | null;
+  cycleP85?: number | null;
+  cycleP90?: number | null;
+  driveN?: number;
+  driveP50?: number | null;
+  driveP75?: number | null;
+  driveP90?: number | null;
+  toParkN?: number;
+  toParkP50?: number | null;
+  toParkP75?: number | null;
+  /** Pessoas (agentes diferentes) por hora com movimento, média. */
+  crewAvg?: number | null;
+}
+
+/** 22d — condutor por carro por escalão de pessoas × hora cheia (só cidades). */
+export interface PressureCrewRow {
+  group: string;
+  /** Índice do escalão (crewMeasureBands): 0 = 1 pessoa. */
+  band: number;
+  bandLabel: string;
+  /** Hora cheia: cada pessoa teve pelo menos um serviço começado nessa hora. */
+  busy: boolean;
+  n: number;
+  p50: number | null;
+  p60: number | null;
+  p75: number | null;
+  p85: number | null;
+  p90: number | null;
+}
+
+/** Percentil guardado de uma linha/célula do condutor por carro. PURA. */
+export function cycleAt(r: { p50?: number | null; p60?: number | null; p75?: number | null; p85?: number | null; p90?: number | null }, p: CyclePercentile): number | null {
+  const v = p === 50 ? r.p50 : p === 60 ? r.p60 : p === 75 ? r.p75 : p === 85 ? r.p85 : r.p90;
+  return v ?? null;
+}
+
+/** Célula → percentil do condutor por carro. PURA. */
+export function slotCycleAt(s: PressureSlot, p: CyclePercentile): number | null {
+  return cycleAt({ p50: s.cycleP50, p60: s.cycleP60, p75: s.cycleP75, p85: s.cycleP85, p90: s.cycleP90 }, p);
+}
+
+export interface CrewMeasureBand { index: number; label: string; min: number; max: number | null; maxMinutes: number | null }
+
+/**
+ * Escalões de pessoas para MEDIR, a partir da regra de uma cidade (D12): "1"
+ * (índice 0, fora da tabela) e depois as faixas da regra a começar em 2 (mesmo
+ * no Porto/Faro, onde o mínimo é 3 — mede-se o que aconteceu). `maxMinutes` =
+ * o máximo da tabela para comparar. PURA.
+ */
+export function crewMeasureBands(rule: { bands: ReadonlyArray<{ upTo: number | null; minutes: number }> }): CrewMeasureBand[] {
+  const out: CrewMeasureBand[] = [{ index: 0, label: "1", min: 1, max: 1, maxMinutes: null }];
+  let lo = 2;
+  for (const b of rule.bands) {
+    if (b.upTo !== null && b.upTo < lo) continue;
+    const label = b.upTo === null ? `${lo}+` : lo === b.upTo ? `${lo}` : `${lo}–${b.upTo}`;
+    out.push({ index: out.length, label, min: lo, max: b.upTo, maxMinutes: b.minutes });
+    if (b.upTo === null) break;
+    lo = b.upTo + 1;
+  }
+  return out;
+}
+
+/** Escalão de um número de pessoas. PURA. */
+export function crewBandOf(bands: CrewMeasureBand[], people: number): CrewMeasureBand {
+  return bands.find((b) => people >= b.min && (b.max === null || people <= b.max)) ?? bands[0];
 }
 
 export interface PressureLoadRow {

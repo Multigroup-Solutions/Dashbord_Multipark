@@ -1,7 +1,9 @@
 /**
  * Extras-Dia → separador "Pressão": quando é que a operação aperta.
- * Dados: trabalho diário `extras-pressure` (60 dias da BD da Multipark,
- * guardados em ops_pressure_stats). Regras: shared/extrasPressure.ts.
+ * Dados: trabalho diário `extras-pressure` (BD da Multipark desde
+ * extras.timesSince — 22d: acumula —, guardados em ops_pressure_stats).
+ * 22d: nas cidades também o tempo por carro de cada condutor, comparado com a
+ * tabela máxima (D12). Regras: shared/extrasPressure.ts.
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -9,18 +11,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Flame, Gauge, TrafficCone } from "lucide-react";
+import { Flame, Gauge, Timer, TrafficCone } from "lucide-react";
 import {
-  MIN_SAMPLE, WEEKDAY_SHORT, describeLoadEffect, extraCityGroupKey, isRushHour, loadComparison, pressureSummary,
-  slotLoadPerDay, tightReason, tightThresholds, type PressureLoadRow, type PressureSlot,
+  MIN_SAMPLE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, isRushHour, loadComparison, pressureSummary,
+  slotCycleAt, slotLoadPerDay, tightReason, tightThresholds, type CrewMeasureBand, type CyclePercentile, type PressureCrewRow,
+  type PressureLoadRow, type PressureSlot,
 } from "@shared/extrasPressure";
 
-type Metric = "load" | "delivery";
+type Metric = "load" | "delivery" | "cycle" | "drive" | "crew";
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
 const fmt1 = (n: number | null | undefined) => (n == null ? "—" : String(Math.round(n * 10) / 10).replace(".", ","));
 const fmt0 = (n: number | null | undefined) => (n == null ? "—" : String(Math.round(n)));
 const ddmm = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : "—");
+const ddmmyyyy = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : "—");
 
 /** Célula do mapa: um só tom (azul), mais escuro = mais valor. */
 function cellStyle(v: number | null, max: number): React.CSSProperties {
@@ -46,10 +50,18 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
   const summary = useMemo(() => pressureSummary(slots, where), [slots, where]);
   const loadRows = useMemo(() => loadComparison(loads), [loads]);
   const loadText = useMemo(() => describeLoadEffect(loads), [loads]);
+  // 22d: só nas cidades (todas as marcas) há tempos por condutor.
+  const cityInfo = (q.data?.cities ?? {})[group] as { percentile: CyclePercentile; bands: CrewMeasureBand[] } | undefined;
+  const pct: CyclePercentile = cityInfo?.percentile ?? 75;
+  const crewRows = useMemo(() => (q.data?.crew ?? []).filter((c) => c.group === group) as PressureCrewRow[], [q.data, group]);
+  const metricShown: Metric = !cityInfo && (metric === "cycle" || metric === "drive" || metric === "crew") ? "load" : metric;
 
   const value = (s: PressureSlot | undefined): number | null => {
     if (!s) return null;
-    if (metric === "load") return slotLoadPerDay(s);
+    if (metricShown === "load") return slotLoadPerDay(s);
+    if (metricShown === "cycle") return (s.cycleN ?? 0) >= MIN_SAMPLE ? slotCycleAt(s, pct) : null;
+    if (metricShown === "drive") return (s.driveN ?? 0) >= MIN_SAMPLE ? s.driveP75 ?? null : null;
+    if (metricShown === "crew") return s.crewAvg ?? null;
     return s.deliveryN >= MIN_SAMPLE ? s.deliveryP75 : null;
   };
   const max = Math.max(0, ...slots.map((s) => value(s) ?? 0));
@@ -60,7 +72,7 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
     return (
       <Card>
         <CardContent className="py-6 text-sm text-muted-foreground">
-          Ainda não há dados de pressão. O cálculo corre todos os dias a partir das 04:45 (trabalho <code>extras-pressure</code>, 60 dias da BD da Multipark);
+          Ainda não há dados de pressão. O cálculo corre todos os dias a partir das 04:45 (trabalho <code>extras-pressure</code>, BD da Multipark desde abril de 2026);
           um super admin pode corrê-lo já em <code>/api/cron/extras-pressure</code>.
         </CardContent>
       </Card>
@@ -71,7 +83,7 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <p className="text-xs text-muted-foreground">
-          Últimos {q.data.windowDays} dias ({ddmm(q.data.windowStart)} a {ddmm(q.data.windowEnd)}) da BD da Multipark, por hora de Lisboa.
+          Desde {ddmmyyyy(q.data.windowStart)} até {ddmm(q.data.windowEnd)} ({q.data.windowDays} dias, a janela cresce todos os dias) da BD da Multipark, por hora de Lisboa.
           {q.data.computedAt && <> Calculado em {q.data.computedAt.slice(0, 16)} UTC.</>}
         </p>
         <Select value={group} onValueChange={setPicked}>
@@ -101,9 +113,16 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-base flex items-center gap-2"><Gauge className="h-4 w-4" />Dia da semana × hora</CardTitle>
-          <div className="flex gap-1">
-            <Button size="sm" variant={metric === "load" ? "default" : "outline"} onClick={() => setMetric("load")}>Carros/hora</Button>
-            <Button size="sm" variant={metric === "delivery" ? "default" : "outline"} onClick={() => setMetric("delivery")}>Entrega p75 (min)</Button>
+          <div className="flex flex-wrap gap-1">
+            <Button size="sm" variant={metricShown === "load" ? "default" : "outline"} onClick={() => setMetric("load")}>Carros/hora</Button>
+            <Button size="sm" variant={metricShown === "delivery" ? "default" : "outline"} onClick={() => setMetric("delivery")}>Entrega p75</Button>
+            {cityInfo && (
+              <>
+                <Button size="sm" variant={metricShown === "cycle" ? "default" : "outline"} onClick={() => setMetric("cycle")}>Por carro p{pct}</Button>
+                <Button size="sm" variant={metricShown === "drive" ? "default" : "outline"} onClick={() => setMetric("drive")}>Na estrada p75</Button>
+                <Button size="sm" variant={metricShown === "crew" ? "default" : "outline"} onClick={() => setMetric("crew")}>Pessoas</Button>
+              </>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -133,6 +152,10 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
                             `Em simultâneo: média ${fmt1(s.concurrencyAvg)}, máx. ${fmt0(s.concurrencyMax)}`,
                             `Entrega (n=${s.deliveryN}): mediana ${fmt0(s.deliveryP50)} · p75 ${fmt0(s.deliveryP75)} · p90 ${fmt0(s.deliveryP90)} min`,
                             `Recolha (n=${s.pickupN}): mediana ${fmt0(s.pickupP50)} · p75 ${fmt0(s.pickupP75)} min`,
+                            cityInfo && (s.cycleN ?? 0) > 0 ? `Por carro, por condutor (n=${s.cycleN}): mediana ${fmt0(s.cycleP50)} · p${pct} ${fmt0(slotCycleAt(s, pct))} min` : "",
+                            cityInfo && (s.driveN ?? 0) > 0 ? `Na estrada (n=${s.driveN}): mediana ${fmt0(s.driveP50)} · p75 ${fmt0(s.driveP75)} min` : "",
+                            cityInfo && (s.toParkN ?? 0) > 0 ? `Recolhido → no parque (n=${s.toParkN}): mediana ${fmt0(s.toParkP50)} · p75 ${fmt0(s.toParkP75)} min` : "",
+                            cityInfo && s.crewAvg != null ? `Pessoas a trabalhar (média): ${fmt1(s.crewAvg)}` : "",
                             tight ? "Hora apertada (top 20 %)" : "",
                           ].filter(Boolean).join("\n")
                         : `${WEEKDAY_SHORT[wd]} ${String(h).padStart(2, "0")}h — sem movimento`;
@@ -143,7 +166,7 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
                           className={`h-7 w-8 text-center rounded-sm tabular-nums ${v == null ? "bg-muted/40 text-muted-foreground/60" : ""} ${tight ? "ring-2 ring-orange-500 ring-inset" : ""}`}
                           style={cellStyle(v, max)}
                         >
-                          {v == null ? "" : metric === "load" ? fmt1(v) : fmt0(v)}
+                          {v == null ? "" : metricShown === "load" || metricShown === "crew" ? fmt1(v) : fmt0(v)}
                         </td>
                       );
                     })}
@@ -153,11 +176,13 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
             </table>
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            Mais escuro = {metric === "load" ? "mais carros por hora (chegadas + saídas concluídas, média por dia)" : "entrega mais lenta (p75 do pedido do cliente até ao carro entregue; só com ≥ 5 entregas)"}.
+            Mais escuro = {METRIC_HELP[metricShown].replace("{p}", String(pct))}.
             Contorno laranja = hora apertada. Horas a âmbar = horas de ponta (07–10h, 17–20h). Passa o rato por uma célula para o detalhe.
           </p>
         </CardContent>
       </Card>
+
+      {cityInfo && <CrewCard bands={cityInfo.bands} rows={crewRows} pct={pct} where={where} />}
 
       <Card>
         <CardHeader>
@@ -202,6 +227,71 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
   );
 }
 
+const METRIC_HELP: Record<Metric, string> = {
+  load: "mais carros por hora (chegadas + saídas concluídas, média por dia)",
+  delivery: "entrega mais lenta (p75 do pedido do cliente até ao carro entregue; só com ≥ 5 entregas)",
+  cycle: "mais minutos por carro de cada condutor (p{p} do início de um serviço ao início do seguinte do mesmo condutor; só com ≥ 5)",
+  drive: "mais tempo na estrada (p75 do início da entrega até entregue; só com ≥ 5)",
+  crew: "mais pessoas a trabalhar nessa hora (agentes diferentes com ações, TL incluído; média)",
+};
+
+/**
+ * 22d: tempo por carro de cada condutor, medido, por número de pessoas a
+ * trabalhar (TL incluído) — horas cheias (cada pessoa teve pelo menos um
+ * serviço) e horas calmas — ao lado do máximo da tabela (Definições, D12).
+ */
+function CrewCard({ bands, rows, pct, where }: { bands: CrewMeasureBand[]; rows: PressureCrewRow[]; pct: CyclePercentile; where: string }) {
+  const cell = (r: PressureCrewRow | undefined) => {
+    if (!r || r.n === 0) return <span className="text-muted-foreground">—</span>;
+    const v = cycleAt(r, pct);
+    return (
+      <span className={`block ${r.n < MIN_SAMPLE ? "text-muted-foreground" : ""}`}>
+        <span className="font-medium tabular-nums">{fmt0(v)}</span><span className="text-[11px]"> min</span>
+        <span className="block text-[11px] text-muted-foreground tabular-nums">n={r.n}</span>
+      </span>
+    );
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2"><Timer className="h-4 w-4" />Tempo por carro, por condutor{where ? ` — ${where}` : ""}</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Do início de um serviço (início da entrega ou da recolha) ao início do serviço seguinte do mesmo condutor: inclui o regresso, o trânsito e as esperas.
+          Valor p{pct}: em {pct === 50 ? "metade" : `${pct} %`} das vezes foi isto ou menos. Pessoas = agentes diferentes a trabalhar nessa hora, com o TL.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs uppercase text-muted-foreground">
+                <th className="text-left py-2 px-1 sm:px-2">Pessoas</th>
+                <th className="text-right py-2 px-1 sm:px-2">Horas cheias</th>
+                <th className="text-right py-2 px-1 sm:px-2">Horas calmas</th>
+                <th className="text-right py-2 px-1 sm:px-2" title="Máximo da tabela (Definições → Tempo por carro conforme as pessoas no turno)">Máximo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bands.map((b) => (
+                <tr key={b.index} className="border-b">
+                  <td className="py-1.5 px-1 sm:px-2">{b.label}</td>
+                  <td className="py-1.5 px-1 sm:px-2 text-right">{cell(rows.find((r) => r.band === b.index && r.busy))}</td>
+                  <td className="py-1.5 px-1 sm:px-2 text-right">{cell(rows.find((r) => r.band === b.index && !r.busy))}</td>
+                  <td className="py-1.5 px-1 sm:px-2 text-right tabular-nums">{b.maxMinutes == null ? <span className="text-muted-foreground">—</span> : <>{b.maxMinutes}<span className="text-[11px]"> min</span></>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          Máximo = a tabela das Definições (tempo por carro conforme as pessoas no turno). Horas cheias = cada pessoa teve pelo menos um serviço começado nessa hora; é aí que se vê a capacidade. Nas horas calmas o intervalo inclui esperar por trabalho.
+          A cinzento: menos de {MIN_SAMPLE} serviços. Por agora só se mede: a escala continua a usar a tabela máxima.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function FragmentCells({ row }: { row: PressureLoadRow | null }) {
   const weak = !row || row.deliveryN < MIN_SAMPLE;
   const cls = `py-1.5 px-2 text-right tabular-nums ${weak ? "text-muted-foreground" : ""}`;
@@ -219,7 +309,7 @@ function FragmentCells({ row }: { row: PressureLoadRow | null }) {
 export function TightHourBadge({ reason }: { reason: { load: boolean; delivery: boolean } }) {
   const why = [reason.load ? "muitos carros" : "", reason.delivery ? "entregas lentas" : ""].filter(Boolean).join(" e ");
   return (
-    <Badge variant="outline" className="ml-2 h-5 py-0 text-[10px] border-orange-300 text-orange-700" title={`Nos últimos 60 dias esta hora está no top 20 % (${why}).`}>
+    <Badge variant="outline" className="ml-2 h-5 py-0 text-[10px] border-orange-300 text-orange-700" title={`Desde abril de 2026 esta hora está no top 20 % (${why}).`}>
       hora apertada
     </Badge>
   );
