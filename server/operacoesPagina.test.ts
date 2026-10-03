@@ -100,7 +100,7 @@ describe("listas por período: quantas são dos parques nossos (o número do Das
   });
 });
 
-describe("Reservas do dia: pendentes fora das contas, à distância de um clique", () => {
+describe("Reservas do dia: as compras por pagar CONTAM (D6, Jorge 3 out) e veem-se à parte", () => {
   const day = { startMs: Date.parse("2026-10-01T23:00:00Z"), endMs: Date.parse("2026-10-02T23:00:00Z") };
   const mk = (id: string, status: string, o: Partial<DayBooking> = {}): DayBooking => ({
     id, code: id, status, checkIn: "2026-10-02T08:00:00.000Z", checkOut: "2026-10-09T08:00:00.000Z",
@@ -109,30 +109,31 @@ describe("Reservas do dia: pendentes fora das contas, à distância de um clique
   } as DayBooking);
   const rows = toDayMovements([mk("a", "BOOKED"), mk("b", "PENDING"), mk("c", "CANCELLED"), mk("d", "CHECKED_IN")], day.startMs, day.endMs);
 
-  it("countsForDay: só canceladas e pendentes ficam de fora", () => {
-    expect(countsForDay("PENDING")).toBe(false);
+  it("countsForDay: só as canceladas ficam de fora", () => {
+    expect(countsForDay("PENDING")).toBe(true);
     expect(countsForDay("CANCELLED")).toBe(false);
     expect(countsForDay("BOOKED")).toBe(true);
     expect(countsForDay("CHECKED_OUT")).toBe(true);
   });
 
-  it("contadores: a pendente não conta como entrada; aparece à parte", () => {
+  it("contadores: a por pagar conta como entrada (por fazer) e conta-se também à parte", () => {
     const s = summarizeDay(rows);
-    expect(s).toMatchObject({ entradas: 2, entradasPorFazer: 1, canceladas: 1, pendentes: 1 });
-    expect(s.groups[0]).toMatchObject({ entradas: 2 });
+    expect(s).toMatchObject({ entradas: 3, entradasPorFazer: 2, canceladas: 1, pendentes: 1 });
+    expect(s.groups[0]).toMatchObject({ entradas: 3 });
   });
 
-  it("lista por omissão = o que os contadores contam; 'Pendente' e 'Todas' mostram-nas", () => {
-    expect(filterMovements(rows, {}).map((m) => m.booking.id)).toEqual(["a", "d"]);
+  it("lista por omissão = o que os contadores contam; 'Pendente' mostra só essas, 'Todas' mostra tudo", () => {
+    expect(filterMovements(rows, {}).map((m) => m.booking.id)).toEqual(["a", "b", "d"]);
     expect(filterMovements(rows, { state: "PENDING" }).map((m) => m.booking.id)).toEqual(["b"]);
     expect(filterMovements(rows, { state: "todas" })).toHaveLength(4);
   });
 
-  it("a página mostra o atalho para as compras por acabar", () => {
+  it("a página mostra o atalho para as compras por pagar", () => {
     const page = src("client/src/components/operacoes/ReservasDoDia.tsx");
     expect(page).toContain("summary.pendentes > 0");
     expect(page).toContain(`setState(state === "PENDING" ? "ativas" : "PENDING")`);
-    expect(page).toContain("Sem canceladas nem pendentes");
+    expect(page).toContain("compras online por pagar");
+    expect(page).toContain("Sem canceladas</SelectItem>");
   });
 });
 

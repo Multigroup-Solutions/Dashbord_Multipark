@@ -70,6 +70,8 @@ export interface OpsListInput {
   search?: string;
   limit?: number;
   offset?: number;
+  /** Contas operacionais: as compras online por pagar entram (até serem recolhidas/canceladas — D6). */
+  includePending?: boolean;
 }
 
 // ─── Período → limites UTC ──────────────────────────────────────────────────
@@ -110,6 +112,7 @@ interface SourceSpec {
   state?: string;
   search?: string;
   channel?: BookingChannel | "";
+  includePending?: boolean;
 }
 
 const inList = (p: ParamList, values: readonly string[]) => values.map((v) => p.add(v)).join(", ");
@@ -178,8 +181,8 @@ export function buildSource(spec: SourceSpec, p: ParamList, startTs: string, end
   ] : []);
   const common = (hasCx: boolean): string[] => {
     const out = [`b."parkId" IN (${inList(p, spec.parkIds)})`];
-    // Compras online por acabar nunca contam (nos cancelados o estado já é CANCELLED).
-    if (spec.kind !== "cancelados") out.push(`b."status"::text <> ${p.add("PENDING")}`);
+    // Compras online por acabar: fora, salvo nas contas operacionais (D6, Jorge 3 out) — nos cancelados o estado já é CANCELLED.
+    if (spec.kind !== "cancelados" && !spec.includePending) out.push(`b."status"::text <> ${p.add("PENDING")}`);
     const st = statePredicate(spec.kind, spec.state, p, hasCx);
     if (st) out.push(st);
     if (withChannel && spec.channel) out.push(channelPredicate(spec.channel, spec.ourParkIds, p));
@@ -472,6 +475,7 @@ export async function getMultiparkOpsList(input: OpsListInput, cities?: string[]
       state: input.state,
       search: input.search?.trim() || undefined,
       channel: input.channel || "",
+      includePending: !!input.includePending,
     };
     const agg = buildOpsAggSql(spec, bounds);
     const list = buildOpsListSql(spec, bounds, limit, offset);

@@ -110,8 +110,11 @@ const EMPTY_STATS: BookingStats = {
   receitaHoje: 0, receitaMes: 0, receitaPeriodo: 0, byCity: [], byDay: [], byBrand: [],
 };
 
-/** Painel (Dashboard, Financeiro, Operações, MCP). */
-export async function liveBookingStats(filters?: { from?: string; to?: string; projectId?: number }, nowMs = Date.now()): Promise<BookingStats> {
+/**
+ * Painel (Dashboard, Financeiro, MCP). `includePending`: só para as contas
+ * operacionais (liveOpsBookingCounts) — no dinheiro as compras por pagar nunca entram.
+ */
+export async function liveBookingStats(filters?: { from?: string; to?: string; projectId?: number }, nowMs = Date.now(), o: { includePending?: boolean } = {}): Promise<BookingStats> {
   const { lisbonDayOf } = await import("../shared/lisbonDay");
   const today = lisbonDayOf(nowMs);
   const monthStart = `${today.slice(0, 7)}-01`;
@@ -124,18 +127,45 @@ export async function liveBookingStats(filters?: { from?: string; to?: string; p
   const range = lisbonDayRangeUtc(from, to);
   const { readOpsCounts, readBookingTotal } = await import("./multiparkDb/opsCounts");
   const [rows, total] = await Promise.all([
-    readOpsCounts({ events: ["created", "checkin", "checkout", "cancelled"], start: range.start, end: range.end, parkIds }),
+    readOpsCounts({ events: ["created", "checkin", "checkout", "cancelled"], start: range.start, end: range.end, parkIds, includePending: o.includePending }),
     readBookingTotal(parkIds),
   ]);
   return summarizeBookingStats(rows, { total, today, monthStart, periodFrom, periodTo, parkInfo });
 }
 
+/** Só contagens (sem receita) — o painel de Operações não precisa dos totais financeiros (22a, D5). */
+export interface OpsBookingCounts {
+  total: number; reservasHoje: number; checkinHoje: number; checkoutHoje: number; canceladosHoje: number;
+  reservasMes: number; checkinMes: number; checkoutMes: number; canceladosMes: number;
+  byCity: { name: string; bookings: number }[];
+  byDay: { date: string; reservas: number; checkins: number; checkouts: number; cancelados: number }[];
+}
+
+/** Painel → só contagens (tira a receita). PURA. */
+export function countsOnly(s: BookingStats): OpsBookingCounts {
+  return {
+    total: s.total, reservasHoje: s.reservasHoje, checkinHoje: s.checkinHoje, checkoutHoje: s.checkoutHoje, canceladosHoje: s.canceladosHoje,
+    reservasMes: s.reservasMes, checkinMes: s.checkinMes, checkoutMes: s.checkoutMes, canceladosMes: s.canceladosMes,
+    byCity: s.byCity.map(({ name, bookings }) => ({ name, bookings })),
+    byDay: s.byDay.map(({ date, reservas, checkins, checkouts, cancelados }) => ({ date, reservas, checkins, checkouts, cancelados })),
+  };
+}
+
+/**
+ * Painel de Operações (/operacoes-dashboard): só contagens, COM as compras
+ * online por pagar (contam até a Multipark as passar a recolhidas ou
+ * canceladas — Jorge, 3 out, D6), como as Reservas do dia e a Passagem.
+ */
+export async function liveOpsBookingCounts(filters?: { from?: string; to?: string; projectId?: number }, nowMs = Date.now()): Promise<OpsBookingCounts> {
+  return countsOnly(await liveBookingStats(filters, nowMs, { includePending: true }));
+}
+
 /** Resumo de Operações por acontecimento. */
-export async function liveOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }): Promise<{ actions: Record<string, OpsAction> }> {
+export async function liveOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }, o: { includePending?: boolean } = {}): Promise<{ actions: Record<string, OpsAction> }> {
   const { parkIds, parkInfo } = await liveParkScope(filters.projectId);
   if (!parkIds.length) return { actions: summarizeOpsActions([], parkInfo) };
   const range = lisbonDayRangeUtc(filters.startDate, filters.endDate);
   const { readOpsCounts, OPS_EVENTS } = await import("./multiparkDb/opsCounts");
-  const rows = await readOpsCounts({ events: OPS_EVENTS, start: range.start, end: range.end, parkIds });
+  const rows = await readOpsCounts({ events: OPS_EVENTS, start: range.start, end: range.end, parkIds, includePending: o.includePending });
   return { actions: summarizeOpsActions(rows, parkInfo) };
 }

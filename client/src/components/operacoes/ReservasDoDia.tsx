@@ -146,9 +146,9 @@ export default function ReservasDoDia() {
               onClick={() => setState(state === "PENDING" ? "ativas" : "PENDING")}
               aria-pressed={state === "PENDING"}
               className={`text-xs rounded-md border px-2 py-1 transition-colors ${state === "PENDING" ? "bg-primary/10 ring-1 ring-primary" : "bg-background hover:bg-muted"} text-muted-foreground`}
-              title="Compras online que o cliente não acabou (estado Pendente). Não contam nas entradas nem nas saídas."
+              title="Compras online que o cliente ainda não pagou (estado Pendente). Contam nas entradas e saídas até a Multipark as passar a recolhidas ou canceladas."
             >
-              + {summary.pendentes} {summary.pendentes === 1 ? "compra online por acabar" : "compras online por acabar"} (fora das contas){state === "PENDING" ? " — a mostrar" : " — ver"}
+              Destas, {summary.pendentes} {summary.pendentes === 1 ? "é compra online por pagar" : "são compras online por pagar"}{state === "PENDING" ? " — a mostrar só essas" : " — ver"}
             </button>
           )}
           <div className="flex flex-wrap gap-1.5">
@@ -203,7 +203,7 @@ export default function ReservasDoDia() {
           <Select value={state} onValueChange={setState}>
             <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="ativas">Sem canceladas nem pendentes</SelectItem>
+              <SelectItem value="ativas">Sem canceladas</SelectItem>
               <SelectItem value="todas">Todas</SelectItem>
               {BOOKING_STATUSES.map((s) => <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>)}
             </SelectContent>

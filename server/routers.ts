@@ -4074,6 +4074,20 @@ export const appRouter = router({
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
+    // Painel de Operações (22a, D5): SÓ contagens — basta o módulo dos painéis,
+    // sem a permissão dos totais financeiros. Com as compras por pagar (D6).
+    opsBookingCounts: protectedProcedure
+      .input(z.object({
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        projectId: z.number().optional(),
+      }).optional())
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "dashboards", "view");
+        const { liveOpsBookingCounts } = await import("./opsStatsLive");
+        return liveOpsBookingCounts(input ?? undefined);
+      }),
+
     // "Reservas do dia" (operacional): entradas e saídas de UM dia de Lisboa,
     // lidas AO VIVO da BD da Multipark (só leitura), de todos os parques das
     // cidades do utilizador MENOS os "Parques que a operação não faz"
@@ -4115,7 +4129,8 @@ export const appRouter = router({
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getMultiparkOpsList } = await import("./multiparkDb/opsLists");
         const state = opsListsShared.isOpsListState(input.kind, input.state) ? input.state : "all";
-        const r = await getMultiparkOpsList({ ...input, state }, scopedCityNames());
+        // D6 (Jorge, 3 out): as compras online por pagar contam nas listas operacionais até serem recolhidas/canceladas
+        const r = await getMultiparkOpsList({ ...input, state, includePending: true }, scopedCityNames());
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         return { available: true as const, ...r.data };
       }),
@@ -4355,7 +4370,8 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getOperationsSummary } = await import("./db");
-        return getOperationsSummary(input);
+        // D6: contas operacionais — as compras por pagar entram (até serem recolhidas/canceladas)
+        return getOperationsSummary(input, { includePending: true });
       }),
   }),
 
