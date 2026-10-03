@@ -2,7 +2,7 @@
 modulo: ocorrencias
 titulo: Ocorrências
 rotas: /ocorrencias
-palavras: ocorrência, ocorrências, incidente, vidro aberto, carro aberto, acidente, foi um acidente, confirmar acidente, quem conduzia, desfazer acidente, menos 6000, atraso, prioridade, multipark, app multipark, resolver, resolvida, parque, matrícula, reserva, ocorrência antiga, csv, indisponível, tentar de novo
+palavras: ocorrência, ocorrências, parques tratados, parques que a operação não faz, incidente, vidro aberto, carro aberto, acidente, foi um acidente, confirmar acidente, quem conduzia, desfazer acidente, menos 6000, atraso, prioridade, multipark, app multipark, resolver, resolvida, parque, matrícula, reserva, ocorrência antiga, csv, indisponível, tentar de novo
 ---
 # Ocorrências
 
@@ -12,6 +12,10 @@ As ocorrências registadas pelos agentes na **app Multipark** (vidro aberto, aci
 - Menu **Suporte → Ocorrências**.
 - Filtra por estado (abertas / resolvidas), prioridade, parque, tipo e datas, ou pesquisa pelo **n.º da reserva** ou pela **matrícula**. Clicar num tipo do quadro "Por tipo" também filtra.
 - Cada ocorrência mostra o parque, a matrícula, a reserva, quem a registou, o mapa (quando tem GPS) e se tem anexo. Abre-a para ver as notas todas.
+- **Parques tratados:** por baixo do título aparece quantos parques as Ocorrências tratam e quantos ficam de fora. Carrega para ver a lista por cidade.
+  - Ficam de fora os **Parques que a operação não faz** (Definições). As ocorrências desses parques não aparecem na lista, nas contagens nem no painel de Suporte.
+  - As **Reclamações** e as **Críticas** continuam a vir de todos os parques.
+- As datas são **dias de calendário** (00h–24h de Lisboa).
 - Aparecem 50 de cada vez: **Carregar mais** traz as seguintes (até 200; depois, refina os filtros).
 - **CSV** exporta as que estão na lista e diz quantas leva ("50 de 1240"): para levar mais, carrega mais ou refina os filtros. As datas vêm na hora de Lisboa.
 

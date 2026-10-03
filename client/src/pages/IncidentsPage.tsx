@@ -134,6 +134,8 @@ export default function IncidentsPage() {
           </Button>
         </div>
 
+        <ParksHandledNote projectId={globalFilters.projectId} />
+
         {q.isError && (
           <QueryErrorNote error={q.error} what="as ocorrências" onRetry={() => q.refetch()} retrying={q.isFetching} />
         )}
@@ -399,6 +401,49 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * 23a (D16): os parques que as Ocorrências tratam e os que ficam de fora
+ * ("Parques que a operação não faz", Definições). As Reclamações e as Críticas
+ * vêm de todos os parques.
+ */
+function ParksHandledNote({ projectId }: { projectId?: number }) {
+  const [open, setOpen] = useState(false);
+  const q = trpc.incidents.parksHandled.useQuery(projectId !== undefined ? { projectId } : undefined, { staleTime: 10 * 60_000, retry: false });
+  const d = q.data;
+  if (q.isLoading || q.error || !d) return null;
+  if (!d.available) return <p className="text-xs text-muted-foreground">Lista dos parques indisponível: {d.reason}</p>;
+  const byCity = (list: typeof d.handled) => {
+    const m = new Map<string, string[]>();
+    for (const p of list) { const c = p.city ?? "Sem cidade"; m.set(c, [...(m.get(c) ?? []), p.name]); }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt"));
+  };
+  return (
+    <div className="text-xs text-muted-foreground">
+      <button type="button" className="underline-offset-2 hover:underline text-left" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        {d.handled.length} parque{d.handled.length === 1 ? "" : "s"} tratado{d.handled.length === 1 ? "" : "s"}
+        {d.excluded.length > 0 ? ` · ${d.excluded.length} fora (a operação não os faz)` : ""} — {open ? "esconder" : "ver lista"}
+      </button>
+      {open && (
+        <div className="mt-2 grid gap-3 sm:grid-cols-2 rounded-md border p-3 text-foreground">
+          <div className="min-w-0">
+            <p className="font-medium mb-1">Tratados</p>
+            {byCity(d.handled).map(([city, names]) => (
+              <p key={city} className="break-words"><span className="text-muted-foreground">{city}:</span> {names.join(", ")}</p>
+            ))}
+          </div>
+          <div className="min-w-0">
+            <p className="font-medium mb-1">Fora (Definições → Parques que a operação não faz)</p>
+            {d.excluded.length === 0 ? <p className="text-muted-foreground">Nenhum.</p> : byCity(d.excluded).map(([city, names]) => (
+              <p key={city} className="break-words"><span className="text-muted-foreground">{city}:</span> {names.join(", ")}</p>
+            ))}
+            <p className="text-muted-foreground mt-2">As ocorrências destes parques não aparecem aqui nem nas contagens. As reclamações e as críticas vêm de todos.</p>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

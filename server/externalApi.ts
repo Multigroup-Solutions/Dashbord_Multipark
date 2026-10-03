@@ -13,11 +13,6 @@ import {
   createSpeedAlert,
   createVehicleMovement,
   createRadioTranscription,
-  createGoogleReview,
-  createIncident,
-  getReviewBySourceEmailId,
-  getIncidentBySourceEmailId,
-  updateGoogleReview,
 } from "./db";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -226,7 +221,7 @@ export function createExternalApiRouter(): Router {
     res.json({
       title: "Dashboard Multipark External API",
       version: "1.0",
-      auth: "Header X-API-Key required on all endpoints. Capabilities: device (all of the routes below), reports:ops (GET /vehicles), pii (GET /employees), complaints:write (POST /gmail-import). Limit: 240 requests/minute per key (429 + Retry-After).",
+      auth: "Header X-API-Key required on all endpoints. Capabilities: device (all of the routes below), reports:ops (GET /vehicles), pii (GET /employees), complaints:write (POST /gmail-import — descontinuado, 410). Limit: 240 requests/minute per key (429 + Retry-After).",
       endpoints: [
         {
           method: "GET", path: "/api/external/vehicles",
@@ -260,100 +255,17 @@ export function createExternalApiRouter(): Router {
         },
         {
           method: "POST", path: "/api/external/gmail-import",
-          description: "Importar ocorrências e críticas já lidas do Gmail (tarefa agendada externa)",
-          body: "{ occurrences?: [{ sourceEmailId?, incidentType?, severity?, description, vehiclePlate?, ... }], reviews?: [{ sourceEmailId?, reviewerName, rating, reviewText?, aiResponse? }] }",
-          response: "{ success, reviewsImported, reviewsSkipped, incidentsImported, incidentsSkipped, details, errors }",
-          notes: "Não duplica: o mesmo sourceEmailId é ignorado. Capacidade complaints:write (ou device).",
+          description: "DESCONTINUADO (410): as críticas chegam pela sincronização do Gmail e as ocorrências vêm da app Multipark.",
         },
       ],
     });
   });
 
-  // ─── GMAIL IMPORT (receives pre-parsed data from external scheduled task) ─
-  r.post("/gmail-import", async (req: Request, res: Response) => {
-    try {
-      const importStarted = Date.now();
-      const { occurrences, reviews } = req.body;
-      const result = { reviewsImported: 0, reviewsSkipped: 0, incidentsImported: 0, incidentsSkipped: 0, details: [] as string[], errors: [] as string[] };
-
-      // Import occurrences
-      if (Array.isArray(occurrences)) {
-        for (const occ of occurrences) {
-          try {
-            if (occ.sourceEmailId) {
-              const existing = await getIncidentBySourceEmailId(occ.sourceEmailId);
-              if (existing) { result.incidentsSkipped++; continue; }
-            }
-            const now = new Date();
-            const weekNum = Math.ceil((now.getDate() + new Date(now.getFullYear(), now.getMonth(), 1).getDay()) / 7);
-            await createIncident({
-              incidentType: occ.incidentType || "outro",
-              severity: occ.severity || "medium",
-              description: occ.description || "",
-              vehiclePlate: occ.vehiclePlate || undefined,
-              status: "open",
-              weekNumber: weekNum,
-              yearNumber: now.getFullYear(),
-              sourceEmailId: occ.sourceEmailId || undefined,
-              aiClassification: occ.aiClassification || undefined,
-              gpsLatitude: occ.gpsLatitude || undefined,
-              gpsLongitude: occ.gpsLongitude || undefined,
-              reservationLink: occ.reservationLink || undefined,
-              importedAt: now.toISOString().slice(0, 19).replace("T", " "),
-            });
-            result.incidentsImported++;
-            result.details.push(`Ocorr\u00eancia: ${occ.description?.substring(0, 60) || "sem descri\u00e7\u00e3o"}`);
-          } catch (e: any) {
-            console.error("[GmailImport] ocorrência falhou:", occ?.sourceEmailId ?? "", e);
-            result.errors.push(`Erro ocorr\u00eancia${occ?.sourceEmailId ? ` (${String(occ.sourceEmailId).slice(0, 80)})` : ""}: não foi gravada`);
-          }
-        }
-      }
-
-      // Import reviews
-      if (Array.isArray(reviews)) {
-        for (const rev of reviews) {
-          try {
-            if (rev.sourceEmailId) {
-              const existing = await getReviewBySourceEmailId(rev.sourceEmailId);
-              if (existing) { result.reviewsSkipped++; continue; }
-            }
-            const id = await createGoogleReview({
-              reviewerName: rev.reviewerName || "An\u00f3nimo",
-              // Sem estrelas = 0 ("sem estrelas"), nunca 5 (inflacionava a média).
-              rating: Number(rev.rating) || 0,
-              reviewText: rev.reviewText || "",
-              reviewDate: new Date().toISOString().slice(0, 19).replace("T", " "),
-              status: "pending_response",
-              sourceEmailId: rev.sourceEmailId || undefined,
-              importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
-            });
-            // Generate AI response if we have LLM access
-            if (id && rev.aiResponse) {
-              await updateGoogleReview(id, { aiResponse: rev.aiResponse, status: "ai_responded" });
-            } else if (id && Date.now() - importStarted < 30_000) {
-              // Rascunho IA best-effort, dentro de um orçamento de tempo (60 s do Vercel).
-              try {
-                const { draftReviewReply } = await import("./_core/ai/reviewReply");
-                const aiText = await draftReviewReply({ rating: Number(rev.rating) || 0, reviewerName: rev.reviewerName, reviewText: rev.reviewText || "" }, { reviewId: id, timeoutMs: 12_000 });
-                if (aiText) await updateGoogleReview(id, { aiResponse: aiText, status: "ai_responded" });
-              } catch { /* IA opcional */ }
-            }
-            result.reviewsImported++;
-            result.details.push(`Cr\u00edtica: ${rev.rating}\u2605 de ${rev.reviewerName}`);
-          } catch (e: any) {
-            console.error("[GmailImport] crítica falhou:", rev?.sourceEmailId ?? "", e);
-            result.errors.push(`Erro review${rev?.sourceEmailId ? ` (${String(rev.sourceEmailId).slice(0, 80)})` : ""}: não foi gravada`);
-          }
-        }
-      }
-
-      await logApiKeyAction(req, { action: "import", entity: "gmail_import", asKeyEvent: true,
-        details: `Gmail import: ${result.incidentsImported} ocorrências, ${result.reviewsImported} críticas (${result.errors.length} erros)` });
-      res.json({ success: true, ...result });
-    } catch (err: any) {
-      apiInternalError(res, "external POST /gmail-import", err, { success: false });
-    }
+  // ─── GMAIL IMPORT — DESCONTINUADO (23a, D18: Jorge, 3 out) ─────────────────
+  // As críticas chegam pela sincronização do Gmail (server/jobs/emailInboundSync.ts)
+  // e as ocorrências vêm da app Multipark. Nada se grava aqui: 410.
+  r.post("/gmail-import", (_req: Request, res: Response) => {
+    res.status(410).json({ success: false, error: "Descontinuado: as críticas chegam pela sincronização do Gmail e as ocorrências vêm da app Multipark. Nada foi gravado." });
   });
 
   return r;

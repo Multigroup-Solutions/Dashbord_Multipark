@@ -2918,7 +2918,10 @@ export const appRouter = router({
       requireAccess(ctx.user, "ocorrencias", "view");
       const { listMultiparkOccurrences, getMultiparkOccurrenceStats } = await import("./multiparkDb/read");
       const { projectId: _p, limit, offset, ...filters } = input ?? {};
-      const f = { ...filters, cities: scopedCityNames() };
+      // 23a (D16): sem os "Parques que a operação não faz" (Definições).
+      const { getSetting } = await import("./appSettings");
+      const excludedParkIds = (await getSetting("operations.excludedParks").catch(() => null)) ?? [];
+      const f = { ...filters, cities: scopedCityNames(), excludedParkIds };
       const list = await listMultiparkOccurrences({ ...f, limit, offset });
       if (!list.available) return { available: false as const, reason: list.reason, code: list.code };
       const stats = await getMultiparkOccurrenceStats(f);
@@ -2930,6 +2933,28 @@ export const appRouter = router({
         ...list.data,
         accidentIds: [...accidents],
         stats: stats.available ? stats.data : null,
+      };
+    }),
+
+    // 23a (D16): os parques que as Ocorrências tratam (âmbito de cidade) e os
+    // que ficam de fora ("Parques que a operação não faz", Definições).
+    parksHandled: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
+      requireAccess(ctx.user, "ocorrencias", "view");
+      const { buildParksSql, mapParks } = await import("./multiparkDb/dayBookings");
+      const { safeMultiparkRead } = await import("./multiparkDb/read");
+      const { multiparkDbQuery } = await import("./multiparkDb/client");
+      const { getSetting } = await import("./appSettings");
+      const excluded = new Set((await getSetting("operations.excludedParks").catch(() => null)) ?? []);
+      const r = await safeMultiparkRead("parques (ocorrências)", async () => {
+        const q = buildParksSql();
+        return mapParks(await multiparkDbQuery(q.sql, q.params), scopedCityNames());
+      });
+      if (!r.available) return { available: false as const, reason: r.reason };
+      const row = (p: (typeof r.data)[number]) => ({ id: p.id, name: p.name, city: p.cityName, ours: p.ours });
+      return {
+        available: true as const,
+        handled: r.data.filter((p) => !excluded.has(p.id)).map(row),
+        excluded: r.data.filter((p) => excluded.has(p.id)).map(row),
       };
     }),
 

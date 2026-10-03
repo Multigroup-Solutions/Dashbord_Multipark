@@ -161,10 +161,12 @@ describe("As contas batem com a página", () => {
     expect(fn).toContain('await import("../shared/reviewParks")');
     expect(fn).toContain("all.filter(isReviewConverted).length");
   });
-  it("sem estrelas nunca vira 5★ na importação externa", () => {
+  it("a importação externa antiga do Gmail está desligada (23a, D18): 410, nada se grava", () => {
     const ext = src("server/externalApi.ts");
     expect(ext).not.toContain("rev.rating || 5");
-    expect(ext).toContain("rating: Number(rev.rating) || 0,");
+    const handler = ext.split('r.post("/gmail-import"')[1].split("\n  });")[0];
+    expect(handler).toContain("res.status(410)");
+    expect(handler).not.toMatch(/createGoogleReview|createIncident/);
   });
   it("a importação do Google não apaga o texto da resposta quando o cliente edita", () => {
     const svc = src("server/integrations/googleBusiness/service.ts");
