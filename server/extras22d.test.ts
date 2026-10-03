@@ -71,7 +71,9 @@ describe("leituras por condutor (BD da Multipark, só leitura)", () => {
     const { sql, params } = buildPressureDriverSlotsSql(w, ["p1", "p2"]);
     expect(() => assertReadOnlySql(sql)).not.toThrow();
     expect(sql).toContain('b."parkId" IN ($1, $2)');
-    expect(sql).toContain("lead(js.at) OVER (PARTITION BY js.uid ORDER BY js.at, js.bid)");
+    // mesmo condutor (26d: a janela tem nome — vizinhos para o par entrega + recolha)
+    expect(sql).toContain("WINDOW wu AS (PARTITION BY js.uid ORDER BY js.at, js.bid)");
+    expect(sql).toContain("lead(js.at) OVER wu AS n1_at");
     expect(sql).toContain("DISTINCT ON (ha.bid, ha.ct)");
     expect(sql).toContain(`jb.gap <= ${MAX_CYCLE_MINUTES}`);
     for (const q of ["0.5", "0.6", "0.75", "0.85", "0.9"]) expect(sql).toContain(`percentile_cont(${q}) WITHIN GROUP (ORDER BY jw.cycle)`);

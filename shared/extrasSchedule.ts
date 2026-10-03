@@ -81,6 +81,65 @@ export function describeCrewRule(rule: CrewRule): string {
   return `Tempo por carro (pessoas com o TL${rule.minCrew > 2 ? `, mínimo ${rule.minCrew}` : ""}): ${parts.join(" · ")}`;
 }
 
+// ─── Recolha pelo meio de uma entrega (26d, regra do Jorge) ─────────────────
+//
+// O condutor leva o carro do parque ao aeroporto (entrega = check-out) e tinha
+// de voltar a pé/de shuttle; se houver uma recolha (check-in) aí, volta ao
+// parque com esse carro: a recolha "pelo meio" não lhe custa um carro a mais
+// ("não só faz como facilita"). Conta-se só uma recolha por entrega, no mesmo
+// terminal, entre 10 min antes e 30 min depois da hora da entrega.
+
+/** Uma recolha conta como "pelo meio" se for até isto ANTES da hora da entrega… */
+export const PICKUP_PAIR_BEFORE_MIN = 10;
+/** …ou até isto DEPOIS (na medição: depois de o carro ser entregue). */
+export const PICKUP_PAIR_AFTER_MIN = 30;
+
+/** Onde se faz o serviço: T2 à parte; "Outro" (morada, hotel…) nunca emparelha; o resto é o T1 da cidade. PURA. */
+export function pairTerminal(cls: string): "t1" | "t2" | null {
+  if (cls === "t2") return "t2";
+  if (cls === "other") return null;
+  return "t1";
+}
+
+export interface PairService { at: number; terminal: "t1" | "t2" | null }
+
+/**
+ * Que recolhas ficam "pelo meio" de uma entrega (índices em `pickups`). Guloso
+ * e determinístico: entregas por ordem de hora; cada uma fica com a recolha
+ * livre mais cedo dentro da janela, no mesmo terminal. `at` em minutos do dia
+ * operacional. PURA.
+ */
+/** Linha da previsão sobre as recolhas pelo meio (null = nada a dizer). PURA. */
+export function describePickupPairing(p: { on: boolean; pairs: number; peakWith: number; peakWithout: number } | null | undefined): string | null {
+  if (!p || p.pairs <= 0) return null;
+  const n = p.pairs === 1 ? "1 recolha é" : `${p.pairs} recolhas são`;
+  const ex = (v: number) => `${v} ${v === 1 ? "extra" : "extras"}`;
+  if (p.on) {
+    return `${n} pelo meio de uma entrega e não conta${p.pairs === 1 ? "" : "m"} como carro` +
+      (p.peakWith !== p.peakWithout ? ` (pico: ${ex(p.peakWith)}; sem esta regra seriam ${ex(p.peakWithout)}).` : ".");
+  }
+  return `${n} pelo meio de uma entrega.` +
+    (p.peakWith !== p.peakWithout
+      ? ` Com a regra ligada (Definições → Parâmetros → Recolha pelo meio de uma entrega) o pico passava de ${ex(p.peakWithout)} para ${ex(p.peakWith)}.`
+      : " Com a regra ligada o pico não mudava.");
+}
+
+export function pairPickupsWithDeliveries(
+  deliveries: ReadonlyArray<PairService>,
+  pickups: ReadonlyArray<PairService>,
+  before: number = PICKUP_PAIR_BEFORE_MIN,
+  after: number = PICKUP_PAIR_AFTER_MIN,
+): Set<number> {
+  const paired = new Set<number>();
+  const order = pickups.map((p, i) => ({ ...p, i })).filter((p) => p.terminal).sort((a, b) => a.at - b.at || a.i - b.i);
+  const dels = deliveries.filter((d) => d.terminal).slice().sort((a, b) => a.at - b.at);
+  for (const d of dels) {
+    const hit = order.find((p) => !paired.has(p.i) && p.terminal === d.terminal && p.at >= d.at - before && p.at <= d.at + after);
+    if (hit) paired.add(hit.i);
+  }
+  return paired;
+}
+
 /**
  * D14: quem pôs e quem alterou por último uma linha da escala, em texto curto
  * ("proposta automática · alterado por Rita", "posto por Rui"). null → nada a mostrar. PURA.

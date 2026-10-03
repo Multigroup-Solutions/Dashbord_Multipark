@@ -162,6 +162,12 @@ export const DEFAULT_TIMES_PERCENTILE: TimesPercentileMap = { lisbon: 75, porto:
 export const useMeasuredTimesSchema = z.object({ lisbon: z.boolean(), porto: z.boolean(), faro: z.boolean() }, { error: "Indica Lisboa, Porto e Faro (true ou false)." });
 export type UseMeasuredTimesMap = z.infer<typeof useMeasuredTimesSchema>;
 export const DEFAULT_USE_MEASURED_TIMES: UseMeasuredTimesMap = { lisbon: false, porto: false, faro: false };
+// 26d (regra do Jorge): a recolha feita pelo meio de uma entrega (mesmo
+// terminal, −10/+30 min) não conta como carro na previsão. Por cidade;
+// desligado por omissão (mexe no número de extras que se chamam).
+export const pairPickupsSchema = useMeasuredTimesSchema;
+export type PairPickupsMap = UseMeasuredTimesMap;
+export const DEFAULT_PAIR_PICKUPS: PairPickupsMap = { lisbon: false, porto: false, faro: false };
 
 export const DEFAULT_CREW_RULES: CrewRulesMap = {
   lisbon: { minCrew: 2, bands: [{ upTo: 2, minutes: 75 }, { upTo: 4, minutes: 60 }, { upTo: 6, minutes: 45 }, { upTo: null, minutes: 30 }] },
@@ -425,6 +431,15 @@ export const SETTINGS = {
     description: "Ligado: a previsão, a escala automática e a estimativa do Extras-dia usam o tempo por carro MEDIDO nas horas cheias (percentil da cidade), nunca acima do máximo da tabela; com menos de 30 serviços medidos num escalão usa a tabela. Desligado: só a tabela, como até aqui. JSON: {\"lisbon\": false, \"porto\": false, \"faro\": false}.",
     schema: useMeasuredTimesSchema,
     defaultValue: DEFAULT_USE_MEASURED_TIMES,
+    wiring: "live",
+  }),
+  "extras.pairPickups": def({
+    key: "extras.pairPickups",
+    group: "extras",
+    label: "Recolha pelo meio de uma entrega (por cidade)",
+    description: "Ligado: na previsão, na escala automática e na estimativa do Extras-dia, uma recolha no mesmo terminal entre 10 min antes e 30 min depois de uma entrega não conta como carro (o condutor volta ao parque com ela; no T2 conta só a meia extra). Uma recolha por entrega; \"Outro\" (morada, hotel) nunca conta. Desligado: cada recolha conta como um carro, como até aqui. JSON: {\"lisbon\": false, \"porto\": false, \"faro\": false}.",
+    schema: pairPickupsSchema,
+    defaultValue: DEFAULT_PAIR_PICKUPS,
     wiring: "live",
   }),
   "extras.autoProposeAt": def({

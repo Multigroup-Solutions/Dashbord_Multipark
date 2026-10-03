@@ -19,7 +19,9 @@
  * 22d (fase 1 da capacidade aprendida) — nas cidades, também por condutor:
  *   - condutor por carro: do início de um serviço (início da entrega ou da
  *     recolha) ao início do serviço seguinte do MESMO condutor (inclui o
- *     regresso, o trânsito e as esperas; ≤ MAX_CYCLE_MINUTES);
+ *     regresso, o trânsito e as esperas; ≤ MAX_CYCLE_MINUTES). 26d: uma
+ *     entrega com recolha pelo meio (a recolha começa até 30 min depois de
+ *     entregar) é UM serviço — até ao início do serviço a seguir à recolha;
  *   - na estrada: início da entrega → entregue;
  *   - até ao parque: recolhido → 1.º movimento (levar ao parque);
  *   - pessoas: agentes diferentes com ações nessa hora (TL incluído);
