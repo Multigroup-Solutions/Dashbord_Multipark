@@ -25,13 +25,21 @@ export const TOPIC_BOX_SEEDS = [
 ] as const;
 
 /**
+ * D40 (Jorge, 3 out 2026): os cancelamentos têm caixa própria (antes iam para
+ * Alterações). Criada pela migração 0455 — fica fora de TOPIC_BOX_SEEDS porque
+ * a 0365 já correu (uma vez) com essa lista.
+ */
+export const CANCELLATIONS_BOX = { key: "cancelamentos", label: "Cancelamentos", module: "reservas_operacoes", cityRule: "linked", sortOrder: 14 } as const;
+
+/**
  * Para onde a IA pode mandar uma conversa (email ou WhatsApp), com a
  * descrição que vai no pedido à IA. Só as que existirem e estiverem ativas.
  */
 export const ROUTING_TARGETS: ReadonlyArray<{ key: string; hint: string }> = [
   { key: "rh", hint: "recursos humanos: candidaturas, condutores/extras, colaboradores, escalas, disponibilidade, salários" },
   { key: "reservas", hint: "reservas novas, preços, disponibilidade de lugares, como funciona o serviço" },
-  { key: "alteracoes", hint: "alterar ou cancelar uma reserva existente: datas, horas, voo, matrícula" },
+  { key: "alteracoes", hint: "alterar uma reserva existente: datas, horas, voo, matrícula (não é cancelar)" },
+  { key: "cancelamentos", hint: "cancelar uma reserva existente, ou o reembolso de uma reserva cancelada" },
   { key: "servicos_extra", hint: "serviços extra: lavagem, carregamento elétrico, inspeção, outros serviços ao carro" },
   { key: "reclamacoes", hint: "reclamações: danos, atrasos, mau serviço, cliente insatisfeito" },
   { key: "perdidos", hint: "objetos perdidos ou esquecidos no carro ou no shuttle" },
@@ -43,7 +51,7 @@ export const ROUTING_TARGETS: ReadonlyArray<{ key: string; hint: string }> = [
 export const INTENT_BOX: Record<WhatsappIntent, string> = {
   reserva: "reservas",
   alteracao: "alteracoes",
-  cancelamento: "alteracoes",
+  cancelamento: "cancelamentos",
   perdido_achado: "perdidos",
   reclamacao: "reclamacoes",
   recrutamento: "rh",

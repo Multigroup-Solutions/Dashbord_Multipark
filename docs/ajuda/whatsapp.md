@@ -42,7 +42,7 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Link da candidatura a um lead que responde — só com a **resposta automática aos leads** ligada (Definições → Automações; desligada por omissão).
 
 **Caixas por tema**
-- Cada conversa fica numa caixa: **Recursos Humanos**, **Reservas**, **Alterações**, **Serviços extra**, **Reclamações**, **Perdidos e Achados**, **Parcerias**, **Faturação**… ou **Geral** (ainda por separar). São as mesmas caixas do email.
+- Cada conversa fica numa caixa: **Recursos Humanos**, **Reservas**, **Alterações**, **Cancelamentos**, **Serviços extra**, **Reclamações**, **Perdidos e Achados**, **Parcerias**, **Faturação**… ou **Geral** (ainda por separar). São as mesmas caixas do email.
 - Colaboradores e candidatos vão sozinhos para **Recursos Humanos**. Os clientes vão para a caixa que a **IA** escolhe pela conversa (com a triagem por IA ligada).
 - Escolhe **Todas as caixas** ou uma caixa no topo da lista. Na conversa, o seletor da caixa **move-a** — e a IA deixa de a mudar.
 - Só vês as caixas do teu módulo (ex.: RH, Reclamações) e, como sempre, a tua cidade e as conversas sem cidade.

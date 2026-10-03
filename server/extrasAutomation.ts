@@ -325,17 +325,30 @@ export async function sendAvailabilityRequest(weekStart: string, employeeIds: nu
   return out;
 }
 
-/** Quinta: pedido a todos os extras ativos para a semana seguinte. */
-export async function runWeeklyRequest(weekStart: string): Promise<RequestRunResult> {
-  return sendAvailabilityRequest(weekStart, null, null);
+/**
+ * Quem recebe o pedido automático: só extras COM cidade (D43, Jorge, 3 out
+ * 2026 — sem cidade não entram na escala; o RH trata primeiro da cidade, ver
+ * employeeCityFix). `onlyPending` = o lembrete, só a quem ainda não respondeu. PURA.
+ */
+export function availabilityRequestTargets(
+  extras: readonly { employeeId: number; city: string | null; responded: boolean }[],
+  onlyPending: boolean,
+): number[] {
+  return extras.filter((e) => e.city != null && (!onlyPending || !e.responded)).map((e) => e.employeeId);
 }
 
-/** Sábado: lembrete só a quem ainda não respondeu para essa semana. */
+/** Quinta: pedido aos extras ativos COM cidade para a semana seguinte. */
+export async function runWeeklyRequest(weekStart: string): Promise<RequestRunResult> {
+  const { getWeekOverview } = await import("./extrasAvailability");
+  const ov = await getWeekOverview(weekStart);
+  return sendAvailabilityRequest(weekStart, availabilityRequestTargets(ov.extras, false), null);
+}
+
+/** Sábado: lembrete só a quem (com cidade) ainda não respondeu para essa semana. */
 export async function runReminder(weekStart: string): Promise<RequestRunResult> {
   const { getWeekOverview } = await import("./extrasAvailability");
   const ov = await getWeekOverview(weekStart);
-  const pending = ov.extras.filter((e) => !e.responded).map((e) => e.employeeId);
-  return sendAvailabilityRequest(weekStart, pending, "Lembrete: ainda não indicaste a tua disponibilidade", "availability_reminder");
+  return sendAvailabilityRequest(weekStart, availabilityRequestTargets(ov.extras, true), "Lembrete: ainda não indicaste a tua disponibilidade", "availability_reminder");
 }
 
 // ─── 7. Aviso de escala por WhatsApp ────────────────────────────────────────

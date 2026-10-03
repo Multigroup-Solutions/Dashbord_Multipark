@@ -71,7 +71,8 @@ describe("Botões nas fichas", () => {
     expect(src("client/src/pages/CrmClientPage.tsx")).toContain("<ContactActions");
     const bf = src("client/src/pages/BookingFilePage.tsx");
     expect(bf).toContain("{!b.client.anonymized && (");
-    expect(bf).toContain('<ContactActions className="col-span-2" phones={[b.client.phone]} emails={[b.client.email]} mailbox="reservas" />');
+    // D41 (Jorge, 3 out 2026): o email ao cliente sai pela caixa info.
+    expect(bf).toContain('<ContactActions className="col-span-2" phones={[b.client.phone]} emails={[b.client.email]} mailbox="info" />');
     expect(src("client/src/pages/HRPage.tsx")).toContain('<ContactActions phones={[emp.phone, emp.personalPhone]} emails={[emp.email, emp.personalEmail]} employeeId={emp.id} mailbox="rh" />');
   });
   it("Comunicação: ?novo= abre Nova mensagem com o destinatário, numa caixa onde a pessoa pode escrever", () => {
