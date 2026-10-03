@@ -126,3 +126,31 @@ export function looksLikeTestAgent(name: string | null | undefined, email?: stri
   const words = matchWords(text);
   return words.some((w) => /^(teste?s?|tests?|testing|demo|dummy|fake|qa|sandbox)\d*$/.test(w)) || /\b(teste?|test|demo)\b/i.test(String(email ?? "").split("@")[0].replace(/[._-]/g, " "));
 }
+
+/** IDs dos agentes da Multipark ligados a uma ficha (principal + extra), sem ir à Multipark. */
+export async function agentIdsOfEmployee(employeeId: number): Promise<{ fullName: string | null; agentUserIds: string[] }> {
+  const d = await database();
+  const e = rowsOf(await d.execute(sql`SELECT fullName, multiparkAgentUserId FROM employees WHERE id = ${employeeId} LIMIT 1`))[0];
+  if (!e) return { fullName: null, agentUserIds: [] };
+  const extra = rowsOf(await d.execute(sql`SELECT agentUserId FROM employee_agents WHERE employeeId = ${employeeId}`).catch(() => [[]]));
+  const ids = [e.multiparkAgentUserId, ...extra.map((a) => a.agentUserId)].filter((x) => x != null && String(x).trim()).map(String);
+  return { fullName: e.fullName ?? null, agentUserIds: Array.from(new Set(ids)) };
+}
+
+/**
+ * Fichas com pelo menos um agente da Multipark ligado (para escolher "a pessoa"
+ * em vez de escrever o nome — D27). `projectIds` = âmbito de cidade (undefined = todas).
+ */
+export async function employeesWithAgents(projectIds?: readonly number[]): Promise<Array<{ id: number; fullName: string; isActive: boolean; agents: number }>> {
+  const d = await database();
+  const rows = rowsOf(await d.execute(sql`SELECT e.id, e.fullName, e.isActive, e.projectId,
+      (CASE WHEN e.multiparkAgentUserId IS NULL OR e.multiparkAgentUserId = '' THEN 0 ELSE 1 END)
+        + (SELECT COUNT(*) FROM employee_agents a WHERE a.employeeId = e.id) AS agents
+    FROM employees e
+    WHERE (e.multiparkAgentUserId IS NOT NULL AND e.multiparkAgentUserId <> '') OR EXISTS (SELECT 1 FROM employee_agents a WHERE a.employeeId = e.id)
+    ORDER BY e.isActive DESC, e.fullName ASC LIMIT 3000`));
+  const allowed = projectIds ? new Set(projectIds) : null;
+  return rows
+    .filter((r) => !allowed || (r.projectId != null && allowed.has(Number(r.projectId))))
+    .map((r) => ({ id: Number(r.id), fullName: String(r.fullName ?? ""), isActive: Number(r.isActive) === 1, agents: Number(r.agents ?? 0) }));
+}

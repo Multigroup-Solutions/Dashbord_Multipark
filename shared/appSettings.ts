@@ -263,10 +263,11 @@ export const SETTINGS = {
     key: "sla.lostFoundDays",
     group: "sla",
     label: "Prazo dos perdidos e achados (dias)",
-    description: "Referência do prazo dos perdidos e achados. Por agora só fica registado.",
+    description: "Dias desde o registo até um perdido aberto ficar em atraso (quando o caso não tem prazo próprio na Atribuição): conta para o \"Em atraso\" do painel, para os lembretes diários e para a cor do \"Parado há N dias\" (âmbar a ~3/7 do prazo, vermelho no prazo).",
     schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(1, "Mínimo 1 dia.").max(90, "Máximo 90 dias."),
     defaultValue: 7,
-    wiring: "store",
+    // D24 (Jorge, 3 out 2026): passou a mandar no prazo dos Perdidos.
+    wiring: "live",
   }),
   "sync.webhookStaleHours": def({
     key: "sync.webhookStaleHours",

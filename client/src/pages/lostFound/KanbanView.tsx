@@ -23,6 +23,8 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
+import { lostAgeTone } from "@shared/caseRules";
+import { MarkReturnedDialog } from "./ReturnPanel";
 import BookingSearchField from "@/components/BookingSearchField";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
 import CaseAssignmentCard from "@/components/CaseAssignmentCard";
@@ -72,6 +74,11 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   const dashboard = dashboardQ.data;
   const updateMut = trpc.lostFound.update.useMutation();
   const utils = trpc.useUtils();
+  // D24: prazo das Definições (cor do "Parado há N dias"); sem resposta → 7.
+  const slaQ = trpc.lostFound.slaDays.useQuery(undefined, { staleTime: 10 * 60_000 });
+  const slaDays = slaQ.data?.days ?? 7;
+  // D22: "Devolvido" abre a janela do método e da data em vez de mover logo.
+  const [returning, setReturning] = useState<any | null>(null);
 
   const grouped = useMemo(() => {
     const map: Record<string, any[]> = {};
@@ -98,6 +105,10 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   // Optimistic: o cartão muda de coluna imediatamente; rollback se o servidor
   // recusar (mesmo padrão do kanban das Tarefas).
   const moveCard = async (id: number, newStatus: string) => {
+    if (newStatus === "returned") {
+      const card = (items as any[]).find((x) => x.id === id);
+      if (card && card.status !== "returned") { setReturning(card); return; }
+    }
     await utils.lostFound.list.cancel(queryInput);
     const prev = utils.lostFound.list.getData(queryInput);
     utils.lostFound.list.setData(queryInput, (old: any) =>
@@ -120,6 +131,7 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
 
   return (
     <div className="space-y-6">
+      {returning && <MarkReturnedDialog item={returning} onClose={() => setReturning(null)} />}
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -278,6 +290,7 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
                         item={item}
                         onSelect={() => onSelect(item.id)}
                         onMove={moveCard}
+                        slaDays={slaDays}
                         currentStatus={status}
                         // Convertidos não se movem (o servidor recusa); sem edição, só se vê.
                         canMove={canEdit && item.status !== "converted"}
@@ -297,16 +310,16 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   );
 }
 
-export function ItemCard({ item, onSelect, onMove, currentStatus, canMove }: any) {
+export function ItemCard({ item, onSelect, onMove, currentStatus, canMove, slaDays = 7 }: any) {
   const colIdx = KANBAN_COLUMNS.indexOf(currentStatus);
   const canMoveLeft = canMove && colIdx > 0;
   const canMoveRight = canMove && colIdx < KANBAN_COLUMNS.length - 1;
   const TypeIcon = TYPE_CONFIG[item.itemType]?.icon || Package;
 
-  const ageDays = (item.status !== "returned" && item.status !== "closed" && item.status !== "converted")
-    ? Math.floor((Date.now() - new Date(String(item.createdAt).replace(" ", "T") + "Z").getTime()) / 86400000)
-    : 0;
-  const stale = ageDays >= 7;
+  // D24: atraso pelo prazo (Atribuição, senão Definições → sla.lostFoundDays).
+  const age = lostAgeTone(item, Date.now(), slaDays);
+  const ageDays = age?.days ?? 0;
+  const stale = age?.tone === "late";
 
   return (
     <Card
@@ -330,7 +343,7 @@ export function ItemCard({ item, onSelect, onMove, currentStatus, canMove }: any
             <span className="font-medium text-sm leading-snug line-clamp-2 break-words" title={item.description ?? undefined}>{item.description}</span>
           </div>
         </div>
-        {ageDays >= 3 && (
+        {age && age.tone !== "ok" && (
           <div className={`flex items-center gap-1 text-xs font-medium ${stale ? "text-red-600" : "text-amber-700"}`}>
             <Clock className="w-3 h-3 shrink-0" /> Parado há {ageDays} dias
           </div>

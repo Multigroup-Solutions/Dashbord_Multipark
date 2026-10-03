@@ -34,7 +34,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 
 **Condutores e Agentes** (team leader e acima)
 - **Condutores**: entregas (CHECK_OUT) por agente da Multipark nas tuas cidades, em dias de Lisboa.
-- **Agentes**: ações de um agente no período. Se o período tiver ações a mais, diz "pelo menos" e mostra as mais recentes.
+- **Agentes**: escolhe a **pessoa (ficha)** e vês as ações no período de **todos** os agentes da Multipark ligados a ela (RH → Ligações). Já não se escreve o nome: homónimos e grafias diferentes davam o histórico de outra pessoa. Só aparecem fichas com agente ligado; uma ficha sem agente diz isso. Se o período tiver ações a mais, diz "pelo menos" e mostra as mais recentes.
 
 **Quando a leitura falha**
 - Lista, números, parques, crítica, condutores e agentes mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem avaliações" ou "sem dados".

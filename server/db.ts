@@ -5914,6 +5914,8 @@ export async function getAgentHistoryFromDb(opts: {
   endDate: string;
   agentName?: string;
   userId?: string;
+  /** Vários agentes da mesma ficha (D27). */
+  userIds?: readonly string[];
 }): Promise<{
   total: number;
   truncated?: boolean;
@@ -5948,7 +5950,8 @@ export async function getAgentHistoryFromDb(opts: {
     history: [],
   };
   if (!db) return empty;
-  if (!opts.agentName && !opts.userId) return empty;
+  const ids = Array.from(new Set([...(opts.userIds ?? []), ...(opts.userId ? [opts.userId] : [])].filter(Boolean)));
+  if (!opts.agentName && !ids.length) return empty;
 
   // AO VIVO da BD da Multipark ("History"): dias de Lisboa; só as cidades do utilizador.
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
@@ -5956,7 +5959,7 @@ export async function getAgentHistoryFromDb(opts: {
   const range = lisbonDayRangeUtc(opts.startDate, opts.endDate);
   const live = await readLiveHistory({
     from: range.start, to: range.end, cities: scopedCityNamesLive(), limit: AGENT_HISTORY_LIMIT,
-    ...(opts.userId ? { userIds: [opts.userId] } : { agentName: { contains: opts.agentName! } }),
+    ...(ids.length ? { userIds: ids } : { agentName: { contains: opts.agentName! } }),
   });
   const rows = live.map((r) => ({
     id: r.historyId, changeType: r.changeType, actionTime: r.actionTime, remarks: r.remarks, agentName: r.agentName,
@@ -5992,7 +5995,7 @@ export async function getAgentHistoryFromDb(opts: {
     truncated: history.length >= AGENT_HISTORY_LIMIT,
     period: { startDate: opts.startDate, endDate: opts.endDate },
     agentName: first?.agentName ?? opts.agentName ?? "",
-    agentUserId: first?.agentUserId ?? opts.userId ?? "",
+    agentUserId: first?.agentUserId ?? ids[0] ?? "",
     history,
   };
 }

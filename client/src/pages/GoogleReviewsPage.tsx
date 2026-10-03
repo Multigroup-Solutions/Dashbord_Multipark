@@ -31,6 +31,7 @@ import {
 import BookingSearchField from "@/components/BookingSearchField";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
 import GoogleBusinessConnection from "@/components/GoogleBusinessConnection";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 const RATING_COLORS: Record<number, string> = {
   1: "text-red-500",
@@ -1024,20 +1025,22 @@ function CheckoutDriversPanel() {
 function AgentPerformancePanel() {
   const [startDate, setStartDate] = useState(() => lisbonMonthToDate().start);
   const [endDate, setEndDate] = useState(() => lisbonMonthToDate().end);
-  const [agentName, setAgentName] = useState("");
-  const [searchAgent, setSearchAgent] = useState("");
+  // D27: escolhe-se a FICHA (os agentes da Multipark ligados a ela), não um nome escrito.
+  const [employeeId, setEmployeeId] = useState("");
+  const peopleQ = trpc.reviews.agentPeople.useQuery();
+  const people = peopleQ.data ?? [];
+  const personOptions = useMemo(
+    () => people.map((p) => ({ value: String(p.id), label: `${p.fullName}${p.isActive ? "" : " (inativa)"}${p.agents > 1 ? ` · ${p.agents} agentes` : ""}` })),
+    [people],
+  );
+  const chosen = people.find((p) => String(p.id) === employeeId);
 
   const historyQ = trpc.reviews.agentHistory.useQuery(
-    { startDate, endDate, agentName: searchAgent || undefined },
-    { enabled: !!startDate && !!endDate && startDate <= endDate && !!searchAgent }
+    { startDate, endDate, employeeId: Number(employeeId) },
+    { enabled: !!startDate && !!endDate && startDate <= endDate && !!employeeId }
   );
   const { data } = historyQ;
   const isLoading = historyQ.isFetching && !data;
-
-  const handleSearch = () => {
-    if (!agentName.trim()) return;
-    setSearchAgent(agentName.trim());
-  };
 
   const actionStats = (data?.history || []).reduce((acc: Record<string, number>, h: any) => {
     acc[h.changeType] = (acc[h.changeType] || 0) + 1;
@@ -1063,26 +1066,37 @@ function AgentPerformancePanel() {
               <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-40" />
             </div>
             <div className="flex-1 min-w-[200px]">
-              <Label className="text-xs">Nome do Agente</Label>
-              <div className="flex gap-2">
-                <Input value={agentName} onChange={e => setAgentName(e.target.value)} placeholder="Ex: João Silva" onKeyDown={e => e.key === "Enter" && handleSearch()} />
-                <Button onClick={handleSearch} disabled={isLoading || !agentName.trim()}>
-                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                </Button>
+              <Label className="text-xs">Pessoa (ficha)</Label>
+              <div className="flex gap-2 items-center">
+                <SearchableSelect
+                  value={employeeId}
+                  onChange={setEmployeeId}
+                  options={personOptions}
+                  placeholder={peopleQ.isLoading ? "A carregar…" : "Escolher pessoa…"}
+                  searchPlaceholder="Procurar pela ficha…"
+                  emptyText="Nenhuma ficha com agente da Multipark ligado"
+                  className="w-full"
+                  disabled={peopleQ.isLoading || !!peopleQ.error}
+                />
+                {isLoading && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
               </div>
             </div>
           </div>
 
-          {!searchAgent ? (
-            <p className="text-sm text-muted-foreground">Introduz o nome de um agente para ver a performance.</p>
+          {peopleQ.error ? (
+            <QueryErrorNote error={peopleQ.error} onRetry={() => peopleQ.refetch()} retrying={peopleQ.isFetching} what="as fichas com agente" />
+          ) : !employeeId ? (
+            <p className="text-sm text-muted-foreground">Escolhe uma pessoa: contam as ações de todos os agentes da Multipark ligados à ficha dela (RH → Ligações). Só aparecem fichas com agente ligado.</p>
           ) : startDate > endDate ? (
             <p className="text-sm text-muted-foreground">A data "De" tem de ser antes de "Até".</p>
           ) : historyQ.error ? (
             <QueryErrorNote error={historyQ.error} onRetry={() => historyQ.refetch()} retrying={historyQ.isFetching} what="as ações do agente (BD da Multipark)" />
           ) : isLoading ? (
             <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" /></div>
+          ) : data?.noAgent ? (
+            <p className="text-sm text-muted-foreground">A ficha de {data.agentName} não tem nenhum agente da Multipark ligado — liga-o em RH → Ligações.</p>
           ) : !data?.history?.length ? (
-            <p className="text-sm text-muted-foreground">Sem ações encontradas para "{searchAgent}" no período.</p>
+            <p className="text-sm text-muted-foreground">Sem ações de {chosen?.fullName ?? data?.agentName ?? "esta pessoa"} no período.</p>
           ) : (
             <div className="space-y-4">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

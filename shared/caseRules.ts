@@ -114,6 +114,56 @@ export function parseUtc(s: string | null | undefined): number | null {
 export const DEFAULT_INCIDENT_SLA_HOURS = 48;
 export const DEFAULT_LOST_SLA_DAYS = 7;
 
+/** D24 (Jorge, 3 out 2026): o prazo dos Perdidos vem de Definições → sla.lostFoundDays (1–90). PURA. */
+export function lostSlaDays(v: unknown): number {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= 90 ? n : DEFAULT_LOST_SLA_DAYS;
+}
+
+/**
+ * Cor do "Parado há N dias" de um perdido aberto: vermelho no prazo (o da
+ * Atribuição, senão N dias desde o registo), âmbar a ~3/7 do prazo (3 dias
+ * com 7). Fechados → null. PURA.
+ */
+export function lostAgeTone(
+  item: { status?: string | null; createdAt?: string | null; dueDate?: string | null },
+  nowMs: number,
+  slaDays: number,
+): { days: number; tone: "late" | "warn" | "ok" } | null {
+  if (isLostClosed(item.status)) return null;
+  const created = parseUtc(item.createdAt ?? null);
+  if (created == null) return null;
+  const days = Math.max(0, Math.floor((nowMs - created) / 86_400_000));
+  const sla = lostSlaDays(slaDays);
+  const due = parseUtc(item.dueDate ?? null);
+  const late = due != null ? nowMs > due : days >= sla;
+  const warnAt = Math.max(1, Math.round((sla * 3) / 7));
+  return { days, tone: late ? "late" : days >= warnAt ? "warn" : "ok" };
+}
+
+/** D22 (Jorge, 3 out 2026): "Devolvido" obriga a dizer como e quando. */
+export const LOST_RETURN_METHODS = ["em_maos", "correio", "entrega", "outro"] as const;
+export const LOST_RETURN_METHOD_LABEL: Record<string, string> = {
+  em_maos: "Em mãos (no parque)",
+  correio: "Correio / transportadora",
+  entrega: "Entrega ao domicílio",
+  outro: "Outro",
+};
+export const isLostReturnMethod = (v: unknown): boolean => (LOST_RETURN_METHODS as readonly string[]).includes(String(v ?? ""));
+
+/**
+ * Erro (texto para a pessoa) se o caso fica "Devolvido" sem método ou sem
+ * data válida (até ~1 dia no futuro, por fusos); null se está bem. PURA.
+ */
+export function lostReturnedError(after: { status?: string | null; returnMethod?: string | null; returnedAt?: string | null }, nowMs: number): string | null {
+  if (after.status !== "returned") return null;
+  if (!String(after.returnMethod ?? "").trim()) return "Para marcar como Devolvido, diz como foi devolvido.";
+  const t = parseUtc(after.returnedAt ?? null);
+  if (t == null) return "Para marcar como Devolvido, diz a data da devolução.";
+  if (t > nowMs + 36 * 3_600_000) return "A data da devolução não pode ser no futuro.";
+  return null;
+}
+
 export function incidentSlaHours(env: Record<string, string | undefined> = process.env): number {
   const n = Number(env.INCIDENT_SLA_HOURS);
   return Number.isFinite(n) && n > 0 ? Math.min(n, 24 * 30) : DEFAULT_INCIDENT_SLA_HOURS;
