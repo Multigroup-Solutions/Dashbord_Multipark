@@ -111,7 +111,7 @@ describe("hub: cartões por fornecedor", () => {
     // BD Multipark (só leitura): tem Testar (só super_admin); sem a env → não configurada.
     expect(list.find((i) => i.id === "multipark_db")).toMatchObject({ testable: true, configured: false, missing: ["DATABASE_URL_MULTIPARK"] });
     expect(list.find((i) => i.id === "google_ads")?.links.map((l) => l.href)).toContain("/integracoes/google-ads");
-    expect(list.find((i) => i.id === "google_business")?.links.map((l) => l.href)).toContain("/criticas#google-business");
+    expect(list.find((i) => i.id === "google_business")?.links.map((l) => l.href)).toContain("/integracoes#google-business");
     // CrUX precisa de chave (a da PageSpeed serve) e tem Testar.
     expect(list.find((i) => i.id === "crux")).toMatchObject({ testable: true, configured: false, missing: ["GOOGLE_PAGESPEED_API_KEY ou GOOGLE_CRUX_API_KEY"] });
     expect(integrationStatusesFromEnv({ GOOGLE_PAGESPEED_API_KEY: "k" }).find((i) => i.id === "crux")?.configured).toBe(true);

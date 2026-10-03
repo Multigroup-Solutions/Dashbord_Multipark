@@ -199,9 +199,13 @@ describe("Críticas de email: parque do perfil Google", () => {
 
 describe("Página: erro ≠ vazio, permissões, datas de Lisboa", () => {
   const page = src("client/src/pages/GoogleReviewsPage.tsx");
+  // 23e (Jorge, 3 out 2026): Condutores e Agentes passaram para Pessoas → Condutores e agentes.
+  const people = src("client/src/pages/CondutoresAgentesPage.tsx");
   it("lista, números, parques, crítica, condutores e agentes dizem quando falham", () => {
-    for (const what of ['what="as críticas"', 'what="os números das críticas"', 'what="a crítica"', 'what="o ranking (BD da Multipark)"', 'what="as ações do agente (BD da Multipark)"', 'what="as críticas por parque"'])
+    for (const what of ['what="as críticas"', 'what="os números das críticas"', 'what="a crítica"', 'what="as críticas por parque"'])
       expect(page).toContain(what);
+    for (const what of ['what="o ranking (BD da Multipark)"', 'what="as ações do agente (BD da Multipark)"'])
+      expect(people).toContain(what);
   });
   it("ações só para quem edita; CSV só para quem exporta; sem o histórico sem âmbito", () => {
     expect(page).toContain('can(user as any, "criticas", "edit")');
@@ -212,8 +216,8 @@ describe("Página: erro ≠ vazio, permissões, datas de Lisboa", () => {
     expect(page).not.toMatch(/[^.]confirm\(`|!confirm\(/);
   });
   it("início do mês e hoje em dias de Lisboa (não no fuso do browser)", () => {
-    expect(page).toContain("const today = lisbonDayOf(new Date());");
-    expect(page).not.toContain("today.toISOString().slice(0, 10)");
+    expect(people).toContain("const today = lisbonDayOf(new Date());");
+    expect(people).not.toContain("today.toISOString().slice(0, 10)");
   });
   it("ajuda das Críticas existe e explica 'Já publiquei no Google'", () => {
     const doc = src("docs/ajuda/criticas.md");

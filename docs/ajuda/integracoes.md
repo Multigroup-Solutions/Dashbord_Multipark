@@ -9,6 +9,7 @@ palavras: integrações, integracoes, ligações, testar ligação, estado desco
 Página **Integrações** (menu Sistema): um cartão por ligação externa — Google Ads, Meta, Google Business, WhatsApp, Gmail, Google Tarefas/Calendário/Contactos/Drive, Analytics, Search Console, PageSpeed, Zello, IA, BD Multipark, armazenamento.
 
 **Quem vê**: só **administradores e super admin** (desde out 2026). Os outros papéis deixaram de ver a página (viam erros de todo o país e corriam testes com custo).
+- **Ligação Google Business Profile** (conta, perfis e importar avaliações): no fundo desta página — antes estava no topo das Críticas. Só aparece a admin/super admin com todas as cidades.
 - **Ligar e desligar o Google Ads e o Google Business**: só o **super admin**. Ao desligar, a autorização é **revogada na Google**; os dados recolhidos e a escolha das contas/perfis ficam.
 - O teste da **BD Multipark** é só do super admin.
 

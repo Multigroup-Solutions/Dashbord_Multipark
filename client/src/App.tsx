@@ -26,6 +26,7 @@ import ProfilePage from "./pages/ProfilePage";
 import DefinicoesPage from "./pages/DefinicoesPage";
 import ComplaintsPage from "./pages/ComplaintsPage";
 import GoogleReviewsPage from "./pages/GoogleReviewsPage";
+import CondutoresAgentesPage from "./pages/CondutoresAgentesPage";
 import TrainingPage from "./pages/TrainingPage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
 import LostFoundPage from "./pages/LostFoundPage";
@@ -214,6 +215,9 @@ function Router() {
       </Route>
       <Route path="/avaliacao">
         {() => (<DashboardLayout><AvaliacaoPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/pessoas/condutores-agentes">
+        {() => (<DashboardLayout><CondutoresAgentesPage /></DashboardLayout>)}
       </Route>
       <Route path="/faturacao">
         {() => (<DashboardLayout><InvoicesPage /></DashboardLayout>)}
