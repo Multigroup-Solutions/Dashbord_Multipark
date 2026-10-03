@@ -4576,10 +4576,10 @@ export async function buildPartnerByCampaignMap() {
 /** Resumo agregado das operações (dashboard): contagens/somas por ação e
  *  distribuição por cidade/parque, calculado no SQL — substitui puxar até
  *  4×5.000 reservas completas só para contar. */
-export async function getOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }) {
+export async function getOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }, o: { includePending?: boolean } = {}) {
   // Ao vivo na BD da Multipark (reservas ao vivo, parte B): contagens por dia × parque.
   const { liveOperationsSummary } = await import("./opsStatsLive");
-  return liveOperationsSummary(filters);
+  return liveOperationsSummary(filters, o);
 }
 
 export async function searchBookingByRef(search: string) {

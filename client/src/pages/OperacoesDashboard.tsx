@@ -118,7 +118,8 @@ export default function OperacoesDashboard() {
 
   // ── Queries ──
 
-  const bk = trpc.multipark.bookingStats.useQuery(
+  // 22a (D5): só contagens — basta o módulo dos painéis, sem os totais financeiros
+  const bk = trpc.multipark.opsBookingCounts.useQuery(
     { from: filters.from, to: filters.to, projectId: filters.projectId },
     { retry: retryTransient },
   );

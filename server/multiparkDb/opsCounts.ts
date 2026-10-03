@@ -5,7 +5,9 @@
  * sobre a cópia `multipark_bookings` (29 set 2026, reservas ao vivo parte B).
  *
  * Valor = soma das linhas "BookingPricing" (senão o "bookingPrice"), como a
- * cópia. As compras online por acabar (PENDING) nunca contam.
+ * cópia. As compras online por acabar (PENDING) não contam no dinheiro; nas
+ * contas OPERACIONAIS (`includePending`, Jorge 3 out — D6) contam até a
+ * Multipark as passar a recolhidas ou canceladas.
  * Regras de read.ts: SQL parametrizado, construtor PURO, LIMIT sempre.
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
@@ -27,10 +29,10 @@ export interface OpsCountRow { event: OpsEvent; day: string; parkId: string; cou
 const lisbonDay = (col: string) => `to_char((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon', 'YYYY-MM-DD')`;
 
 /** Um acontecimento: SELECT de (event, id, day, park_id, price). PURA. */
-function eventSelect(e: OpsEvent, p: ParamList, start: string, end: string, parks: string): string {
+function eventSelect(e: OpsEvent, p: ParamList, start: string, end: string, parks: string, includePending = false): string {
   const range = (col: string) => `${col} >= ${p.add(start)}::timestamp AND ${col} < ${p.add(end)}::timestamp`;
-  const notPending = `b."status"::text <> 'PENDING'`;
-  const notCancelled = `b."status"::text NOT IN ('CANCELLED', 'PENDING')`;
+  const notPending = includePending ? `TRUE` : `b."status"::text <> 'PENDING'`;
+  const notCancelled = includePending ? `b."status"::text <> 'CANCELLED'` : `b."status"::text NOT IN ('CANCELLED', 'PENDING')`;
   const sel = (col: string) => `SELECT '${e}'::text AS event, b."id" AS id, ${lisbonDay(col)} AS day, b."parkId" AS park_id, b."bookingPrice" AS price FROM "Booking" b`;
   switch (e) {
     case "created": return `${sel(`b."createdAt"`)} WHERE ${parks} AND ${notCancelled} AND ${range(`b."createdAt"`)}`;
@@ -45,12 +47,12 @@ function eventSelect(e: OpsEvent, p: ParamList, start: string, end: string, park
 }
 
 /** Contagens por acontecimento × dia × parque em [start, end) UTC. PURA. */
-export function buildOpsCountsSql(o: { events: readonly OpsEvent[]; start: string; end: string; parkIds: readonly string[] }): { sql: string; params: SqlParam[] } {
+export function buildOpsCountsSql(o: { events: readonly OpsEvent[]; start: string; end: string; parkIds: readonly string[]; includePending?: boolean }): { sql: string; params: SqlParam[] } {
   if (!o.parkIds.length) throw new Error("Sem parques.");
   if (!o.events.length) throw new Error("Sem acontecimentos.");
   const p = new ParamList();
   const parks = `b."parkId" IN (${o.parkIds.map((id) => p.add(id)).join(", ")})`;
-  const parts = [...new Set(o.events)].map((e) => eventSelect(e, p, o.start, o.end, parks));
+  const parts = [...new Set(o.events)].map((e) => eventSelect(e, p, o.start, o.end, parks, !!o.includePending));
   const sql = [
     `WITH d AS (${parts.join("\n  UNION ALL\n  ")}),`,
     `bp AS (SELECT y."bookingId" AS id, SUM(y."total") AS total FROM "BookingPricing" y WHERE y."bookingId" IN (SELECT DISTINCT d.id FROM d) GROUP BY y."bookingId")`,
@@ -72,7 +74,7 @@ export function mapOpsCountRow(r: Record<string, unknown>): OpsCountRow {
 }
 
 /** Lança se a BD da Multipark falhar (quem chama mostra o erro). */
-export async function readOpsCounts(o: { events: readonly OpsEvent[]; start: string; end: string; parkIds: readonly string[] }, query: Query = multiparkDbQuery): Promise<OpsCountRow[]> {
+export async function readOpsCounts(o: { events: readonly OpsEvent[]; start: string; end: string; parkIds: readonly string[]; includePending?: boolean }, query: Query = multiparkDbQuery): Promise<OpsCountRow[]> {
   if (!o.parkIds.length) return [];
   const { sql, params } = buildOpsCountsSql(o);
   return (await query<Record<string, unknown>>(sql, params)).map(mapOpsCountRow);

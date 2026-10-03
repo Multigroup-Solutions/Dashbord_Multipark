@@ -13,7 +13,7 @@ Quatro listas por **período**, nas **Operações → Reservas & Operações**, 
 - **Recolhas**: reservas com **recolha (check-in)** no período, sem as canceladas.
 - **Entregas**: reservas com **entrega (check-out)** no período, sem as canceladas.
 - **Cancelados**: reservas **canceladas** no período, pela **data do cancelamento**. Cada linha mostra também as datas de recolha e entrega da reserva, o **motivo** (e as observações), o **reembolso** (não, pedido ou reembolsado, com o valor) e **quem cancelou** (o último movimento de cancelamento da reserva). As canceladas sem registo de cancelamento na Multipark aparecem pela última alteração da reserva, com **≈** (data aproximada).
-- As **compras online por acabar** (reserva "Pendente": o cliente não acabou a compra) não entram em nenhuma lista — como no Dashboard das Operações, na Faturação, no CRM e nos Serviços.
+- As **compras online por pagar** (reserva "Pendente": o cliente começou a compra no site e ainda não pagou) **contam** nas listas e nos números, como nas Reservas do dia, na Passagem de turno e no Extras Dia: o carro vem na mesma. Saem sozinhas quando a Multipark as passa a recolhidas ou canceladas. Na Faturação e no Financeiro continuam de fora.
 
 **O período**
 - Abre **em hoje** (hora de Lisboa) — ou no período do Dashboard, quando se chega lá a partir de um cartão.
@@ -41,7 +41,7 @@ Quatro listas por **período**, nas **Operações → Reservas & Operações**, 
 **Se aparecer "indisponíveis" ou "Erro a carregar"**, a base de dados da Multipark não respondeu: não há números (nunca aparecem zeros a fingir). Carrega em **Atualizar** daqui a pouco.
 
 **O Dashboard (primeira aba)**
-- Cartões **Reservas criadas**, **Recolhas**, **Entregas** e **Cancelamentos no período**, a percentagem de cancelamento e os gráficos por cidade ou parque. Conta só os **parques nossos** e nunca as compras online por acabar.
+- Cartões **Reservas criadas**, **Recolhas**, **Entregas** e **Cancelamentos no período**, a percentagem de cancelamento e os gráficos por cidade ou parque. Conta só os **parques nossos**, com as compras online por pagar. Basta ter acesso aos painéis: não é preciso ver os totais financeiros (o painel só mostra contagens).
 - Se a Multipark não responder, aparece **"Não foi possível ler as reservas da Multipark"** com **Tentar de novo**, em vez de cartões a zero. Enquanto carrega, os cartões mostram **…**.
 
 Cada pessoa só vê os parques das suas cidades.

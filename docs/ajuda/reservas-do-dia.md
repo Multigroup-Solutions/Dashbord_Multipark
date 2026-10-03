@@ -35,7 +35,7 @@ Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **u
 
 **Contadores e filtros**
 - No topo: **entradas**, **saídas** (com as que ainda estão por fazer), **canceladas** e as entradas/saídas de cada parque. Clicar num contador filtra.
-- As **compras online por acabar** (estado **Pendente**: o cliente começou a compra no site e não a acabou) **não contam** nas entradas nem nas saídas, como no Dashboard, na Faturação, no CRM e nos Serviços. Quando há alguma, aparece por baixo dos contadores **"+ N compras online por acabar (fora das contas)"**: clicar mostra-as (e clicar de novo volta à lista normal).
+- As **compras online por pagar** (estado **Pendente**: o cliente começou a compra no site e ainda não pagou) **contam** nas entradas e nas saídas: o carro vem na mesma. Saem sozinhas quando a Multipark as passa a recolhidas ou canceladas. Quando há alguma, aparece por baixo dos contadores **"Destas, N são compras online por pagar"**: clicar mostra só essas (e clicar de novo volta à lista normal). Na Faturação e no Financeiro continuam de fora.
 - Filtros: **Entradas / Saídas / Todas**, **parque**, **estado** (por omissão **sem canceladas nem pendentes**; "Todas" mostra tudo) e **pesquisa** pelo n.º da reserva, matrícula ou nome do cliente.
 
 **Se aparecer "Reservas indisponíveis" ou "Erro a carregar as reservas"**, a base de dados da Multipark não respondeu. Carrega em **Atualizar** daqui a pouco.

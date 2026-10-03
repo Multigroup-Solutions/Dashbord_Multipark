@@ -207,19 +207,21 @@ export function toDayMovements(bookings: DayBooking[], startMs: number, endMs: n
 // ─── Filtros e contagens (na página; o dia inteiro já está carregado) ───────
 
 /**
- * Fora das contas do dia: canceladas e compras online por acabar (PENDING) —
- * a mesma regra do Dashboard das Operações, da Faturação, do CRM e dos
- * Serviços. Continuam à vista com o filtro de estado ("Todas" ou o estado).
+ * Fora das contas do dia: só as canceladas. As compras online por pagar
+ * (PENDING) CONTAM (Jorge, 3 out — D6): o carro vem na mesma; saem sozinhas
+ * quando a Multipark as passa a recolhidas ou canceladas (lidas ao vivo).
+ * Igual à Passagem de turno, ao Extras Dia e ao painel de Operações. No
+ * dinheiro (Faturação, Financeiro) continuam de fora.
  */
 export function countsForDay(status: string | null | undefined): boolean {
-  return status !== "CANCELLED" && status !== "PENDING";
+  return status !== "CANCELLED";
 }
 
 export interface DayFilters {
   kind?: "todas" | MovementKind;
   /** Park.id ou "" (todos). */
   parkId?: string;
-  /** "ativas" (sem canceladas nem pendentes), "todas" ou um estado. */
+  /** "ativas" (sem canceladas; as por pagar contam), "todas" ou um estado. */
   state?: string;
   search?: string;
 }
@@ -257,7 +259,7 @@ export interface DaySummary {
   saidas: number;
   /** Reservas canceladas (distintas) com movimento previsto no dia. */
   canceladas: number;
-  /** Compras online por acabar (PENDING, distintas) com movimento previsto no dia. */
+  /** Das que contam: compras online por pagar (PENDING, distintas) com movimento previsto no dia. */
   pendentes: number;
   /** Por fazer (das que contam). */
   entradasPorFazer: number;
@@ -266,7 +268,7 @@ export interface DaySummary {
   groups: DayGroupCount[];
 }
 
-/** Contagens do dia (canceladas e pendentes não contam como entradas/saídas). PURA. */
+/** Contagens do dia (as canceladas não contam; as por pagar contam e contam-se à parte também). PURA. */
 export function summarizeDay(rows: DayMovement[]): DaySummary {
   const groups = new Map<string, DayGroupCount>();
   const cancelled = new Set<string>();
@@ -274,7 +276,7 @@ export function summarizeDay(rows: DayMovement[]): DaySummary {
   let entradas = 0, saidas = 0, entradasPorFazer = 0, saidasPorFazer = 0;
   for (const m of rows) {
     if (m.booking.status === "CANCELLED") { cancelled.add(m.booking.id); continue; }
-    if (m.booking.status === "PENDING") { pending.add(m.booking.id); continue; }
+    if (m.booking.status === "PENDING") pending.add(m.booking.id);
     const b = m.booking;
     let g = groups.get(b.groupKey);
     if (!g) groups.set(b.groupKey, (g = { key: b.groupKey, label: b.groupLabel, ours: b.ours, order: b.groupOrder, entradas: 0, saidas: 0 }));
