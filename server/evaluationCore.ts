@@ -270,6 +270,8 @@ export interface EngineComplaint {
 }
 
 export interface EngineSpeedAlert { id?: number; employeeId: number | null; createdAt: string }
+/** Acidente confirmado pelo TL (evaluation_accidents ativo, D15): conta no dia operacional da ocorrência. */
+export interface EngineConfirmedAccident { employeeId: number; day: string }
 export interface EnginePenalty { employeeId: number; points: number; reason: string; relatedId: number | null; createdAt: string }
 
 export interface EngineInput {
@@ -289,6 +291,8 @@ export interface EngineInput {
   complaints: EngineComplaint[];
   speedAlerts: EngineSpeedAlert[];
   penalties: EnginePenalty[];
+  /** Acidentes confirmados (ocorrências Multipark + quem conduzia). */
+  confirmedAccidents?: EngineConfirmedAccident[];
   /**
    * Reclamações confirmadas e alertas de velocidade a que as penalizações do
    * período apontam, de QUALQUER data ("empregado|id"): já contam no dia deles
@@ -460,6 +464,14 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
       m.incidentsAgainst += 1;
       if (incidentIsAccident(i)) m.accidents += 1;
     }
+  }
+
+  // ── Acidentes confirmados pelo TL nas ocorrências da app Multipark (D15)
+  for (const a of input.confirmedAccidents ?? []) {
+    if (!a.employeeId || !inRange(a.day, startDay, endDay)) continue;
+    const m = row(a.employeeId, a.day).metrics;
+    m.incidentsAgainst += 1;
+    m.accidents += 1;
   }
 
   // ── Reclamações confirmadas (uma por reclamação e colaborador)

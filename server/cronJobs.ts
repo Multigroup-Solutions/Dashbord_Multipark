@@ -366,7 +366,7 @@ export function parseDailyOpsCursor(raw: string | null | undefined): DailyOpsCur
 const noonUtc = (day: string) => new Date(`${day}T12:00:00Z`);
 
 /**
- * Manutenção diária (despesas, avaliação semanal, tarefas, ponto, possíveis
+ * Manutenção diária (despesas, tarefas, ponto, possíveis
  * faltas, retenções) e
  * recolha GPS FINAL do Zello, TUDO dentro de
  * `deadlineAt`: cada passo só arranca com tempo (≥ 8 s) e os que ficarem de
@@ -416,20 +416,9 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const r = await generateRecurringExpensesForMonth(y, m, null);
         if (r.created > 0) console.log(`[daily-ops] recorrentes ${r.period}: ${r.created} lançada(s), ${r.skipped} já existiam`);
       });
-      // Segunda-feira (Lisboa): gera automaticamente a avaliação da semana ANTERIOR
-      await step("weekly-evaluation", "avaliação semanal", async () => {
-        const lisbonNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Lisbon" }));
-        if (lisbonNow.getDay() !== 1) return;
-        const prev = new Date(lisbonNow); prev.setDate(prev.getDate() - 7);
-        const d = new Date(Date.UTC(prev.getFullYear(), prev.getMonth(), prev.getDate()));
-        const dayNum = d.getUTCDay() || 7;
-        d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-        const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-        const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-        const { generateWeeklyEvaluation } = await import("./db");
-        const r = await generateWeeklyEvaluation(week, d.getUTCFullYear());
-        console.log(`[daily-ops] avaliação semanal S${week} gerada (${r.length} condutores)`);
-      });
+      // (22c, D10 — Jorge 3 out) A avaliação semanal ANTIGA (performance_evaluations)
+      // já não se gera: a avaliação é a das 4 semanas (evaluation-recompute). As
+      // semanas já gravadas ficam como histórico.
       // Tarefas (rede de segurança do extras-auto horário): checklists do dia
       // + avisos de atraso/conclusão. Idempotente.
       await step("tasks", "tarefas", async () => {

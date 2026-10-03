@@ -21,6 +21,7 @@ import {
   MapPin, Download, ExternalLink, Search, Paperclip, Info, Lock, RefreshCw, Archive,
 } from "lucide-react";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+import { AccidentConfirmPanel } from "@/components/AccidentConfirmPanel";
 
 /**
  * Ocorrências = as da app Multipark, lidas AO VIVO da BD deles ("Occurrence",
@@ -92,6 +93,7 @@ export default function IncidentsPage() {
   const q = trpc.incidents.multipark.useQuery(input, { enabled: canView, staleTime: 60_000, placeholderData: keepPreviousData });
   const data = q.data;
   const rows: MpOccurrence[] = data?.available ? (data.rows as MpOccurrence[]) : [];
+  const confirmedAccidents = new Set<string>(data?.available ? data.accidentIds ?? [] : []);
   const stats = data?.available ? data.stats : null;
   /** Total com os filtros (das contagens); null se as contagens falharam. */
   const total = stats ? stats.total : null;
@@ -256,7 +258,7 @@ export default function IncidentsPage() {
           </Card>
         ) : (
           <div className="space-y-2">
-            {rows.map(o => <OccurrenceCard key={o.id} occ={o} onOpen={() => setDetailId(o.id)} />)}
+            {rows.map(o => <OccurrenceCard key={o.id} occ={o} accidentConfirmed={confirmedAccidents.has(o.id)} onOpen={() => setDetailId(o.id)} />)}
             {data.hasMore && (
               <div className="flex justify-center pt-2">
                 <Button variant="outline" size="sm" disabled={q.isFetching || limit >= MAX_ROWS} onClick={() => setLimit(l => Math.min(l + PAGE, MAX_ROWS))}>
@@ -287,7 +289,7 @@ function ResolveButton({ size = "sm" }: { size?: "sm" | "default" }) {
   );
 }
 
-function OccurrenceCard({ occ, onOpen }: { occ: MpOccurrence; onOpen: () => void }) {
+function OccurrenceCard({ occ, accidentConfirmed, onOpen }: { occ: MpOccurrence; accidentConfirmed?: boolean; onOpen: () => void }) {
   return (
     <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={onOpen}>
       <CardContent className="p-4">
@@ -295,7 +297,7 @@ function OccurrenceCard({ occ, onOpen }: { occ: MpOccurrence; onOpen: () => void
           <div className="flex-1 min-w-0 space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-medium">{occ.title}</span>
-              {isAccident(occ) && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
+              {accidentConfirmed ? <Badge className="bg-red-700 text-white">Acidente confirmado</Badge> : isAccident(occ) && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
               <Badge className={occ.resolved ? RESOLVED_BADGE : OPEN_BADGE}>{occ.resolved ? "Resolvida" : "Aberta"}</Badge>
               {occ.priority && <Badge className={PRIORITY[occ.priority]?.color}>{PRIORITY[occ.priority]?.label}</Badge>}
             </div>
@@ -334,7 +336,8 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
   const occ: MpOccurrence | null = data?.available ? (data.occurrence as MpOccurrence | null) : null;
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-2xl">
+      {/* flex (não grid): com scroll, a grelha encolhia o título com etiquetas e sobrepunha as Notas */}
+      <DialogContent className="sm:max-w-2xl flex flex-col [&>*]:shrink-0">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 flex-wrap">
             {occ ? occ.title : "Ocorrência"}
@@ -383,6 +386,8 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
                 <span>Resolver aqui ainda não é possível: {RESOLVE_PENDING_HINT} Quando for resolvida lá, aparece resolvida aqui.</span>
               </div>
             )}
+            {/* 22c (D15): acidente = −6000 na avaliação, depois de o TL confirmar quem conduzia */}
+            <AccidentConfirmPanel occurrenceId={occ.id} />
           </div>
         )}
         <DialogFooter className="flex-wrap gap-2">

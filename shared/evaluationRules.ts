@@ -9,7 +9,10 @@
  *   −10  por cada excesso de velocidade
  *   −5   por cada atraso
  *   −20  por cada reclamação confirmada
- *   −600 por cada acidente ou dano/risco
+ *   −6000 por cada acidente (D15, Jorge 3 out: era −600) — ocorrência da app
+ *        Multipark que um team leader (ou acima) confirmou como acidente e
+ *        disse quem conduzia (server/evaluationAccidents.ts); as antigas
+ *        `incidents` de dano com envolvimento confirmado contam igual
  * Os totais podem ser negativos. A normalização por hora é uma vista
  * secundária (não entra na pontuação).
  *
@@ -35,8 +38,8 @@ export const EVALUATION_POINTS = {
   delay: -5,
   /** Reclamação confirmada (com pontos aplicados) em que o colaborador foi associado. */
   confirmedComplaint: -20,
-  /** Acidente ou dano/risco (ocorrência com envolvimento confirmado). */
-  accidentOrDamage: -600,
+  /** Acidente confirmado pelo TL (ocorrência Multipark) ou dano com envolvimento confirmado (antigas). D15: −6000. */
+  accidentOrDamage: -6000,
 } as const;
 
 /** Minutos de tolerância antes de uma entrada contar como atraso (0 = qualquer minuto). */
@@ -54,6 +57,14 @@ export const LATE_SERVICE_MAX_MINUTES = 600;
 
 /** Tipos de ocorrência (incidents.incidentType) que contam como acidente/dano/risco. */
 export const DAMAGE_INCIDENT_TYPES: readonly string[] = ["dano"];
+
+/**
+ * Ocorrência da app Multipark que PARECE um acidente (tipo ou notas). Só serve
+ * para destacar o pedido de confirmação ao TL — o que conta é a confirmação. PURA.
+ */
+export function looksLikeAccident(o: { title?: string | null; remarks?: string | null }): boolean {
+  return /acidente|sinistro|colis[aã]o|colidiu|embat|bateu|choque|capot|amolgad|risco|riscad|dano/i.test(`${o.title ?? ""} ${o.remarks ?? ""}`);
+}
 
 /** Posições que entram no ranking individual (como até aqui). */
 export const RANKING_POSITIONS = ["driver", "senior_driver", "extra"] as const;

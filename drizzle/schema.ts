@@ -1788,6 +1788,37 @@ export const employeeMetricAdjustments = mysqlTable("employee_metric_adjustments
 	index("idx_ema_day").on(table.day),
 ]);
 
+// Acidentes confirmados (migração 0425, D15): ocorrência da app Multipark que
+// um team leader (ou acima) confirmou como acidente, com quem conduzia. Nunca
+// se apaga: "Desfazer" marca voidedAt e põe activeKey a NULL.
+export const evaluationAccidents = mysqlTable("evaluation_accidents", {
+	id: int().autoincrement().primaryKey(),
+	occurrenceId: varchar({ length: 64 }).notNull(),
+	activeKey: varchar({ length: 64 }),
+	employeeId: int().notNull(),
+	day: varchar({ length: 10 }).notNull(),
+	occurredAt: datetime({ mode: 'string' }),
+	title: varchar({ length: 200 }),
+	bookingId: varchar({ length: 64 }),
+	bookingCode: varchar({ length: 64 }),
+	plate: varchar({ length: 32 }),
+	parkCity: varchar({ length: 64 }),
+	note: varchar({ length: 500 }),
+	confirmedById: int().notNull(),
+	confirmedByName: varchar({ length: 128 }),
+	confirmedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	voidedAt: datetime({ mode: 'string' }),
+	voidedById: int(),
+	voidedByName: varchar({ length: 128 }),
+	voidReason: varchar({ length: 255 }),
+},
+(table) => [
+	uniqueIndex("uq_eval_accidents_active").on(table.activeKey),
+	index("idx_eval_accidents_occ").on(table.occurrenceId),
+	index("idx_eval_accidents_day").on(table.day),
+	index("idx_eval_accidents_emp_day").on(table.employeeId, table.day),
+]);
+
 // Contestações do colaborador a um dia/métrica; o gestor aceita (com ajuste
 // opcional) ou recusa.
 export const employeeMetricDisputes = mysqlTable("employee_metric_disputes", {

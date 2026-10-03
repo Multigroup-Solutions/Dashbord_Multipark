@@ -12,14 +12,14 @@ import { Link } from "wouter";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
 import { UniDateNav } from "@/components/DateRangeNav";
-import { fmtPTTime } from "@/lib/lisbonTime";
+import { fmtPTDateTime, fmtPTTime } from "@/lib/lisbonTime";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, ChevronRight, Download, MapPin, Pencil, Check, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Download, MapPin, Pencil, Check, X, RefreshCw } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -78,6 +78,16 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
   const assignments = assignmentsQ.data ?? [];
   const evaluationQ = trpc.multipark.dayEvaluation.useQuery({ date, projectId });
   const evaluation = evaluationQ.data;
+  // D11: abrir o dia só mostra o guardado; recalcular é este botão (quem gere) ou a madrugada.
+  const utils = trpc.useUtils();
+  const recompute = trpc.evaluation.recompute.useMutation({
+    onSuccess: (r) => {
+      if (r.skipped) toast.warning(r.notice ?? "BD da Multipark indisponível: nada foi recalculado.");
+      else toast.success("Dia recalculado.");
+      void utils.multipark.dayEvaluation.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const exportCsv = () => {
     if (!evaluation) return;
@@ -128,8 +138,25 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
 
       <MovementSourceNotice notice={evaluation?.notice} />
 
+      {evaluation && evaluation.totals.people > 0 && (
+        <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
+          {evaluation.notComputed ? (
+            <span className="text-amber-800">Este dia ainda não foi calculado. O cálculo corre de madrugada{isSupervisor ? " ou recalcula já" : ""}.</span>
+          ) : (
+            <span>
+              Pontos guardados{evaluation.computedAt ? ` · calculado ${fmtPTDateTime(`${evaluation.computedAt.replace(" ", "T")}Z`)}` : ""}. Abrir o dia não recalcula: o cálculo corre de madrugada (últimas 4 semanas){isSupervisor ? " ou no botão" : ""}.
+            </span>
+          )}
+          {isSupervisor && date <= operationalDayOf(Date.now()) && (
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={recompute.isPending} onClick={() => recompute.mutate({ from: date, to: date })}>
+              <RefreshCw className={`w-3 h-3 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> {recompute.isPending ? "A recalcular…" : "Recalcular este dia"}
+            </Button>
+          )}
+        </div>
+      )}
+
       {(assignmentsQ.isLoading || evaluationQ.isLoading) && (
-        <p className="text-sm text-muted-foreground">A calcular o dia...</p>
+        <p className="text-sm text-muted-foreground">A carregar o dia...</p>
       )}
       {evaluationQ.error && <QueryErrorNote error={evaluationQ.error} onRetry={() => evaluationQ.refetch()} retrying={evaluationQ.isFetching} what="a avaliação do dia" />}
       {assignmentsQ.error && <QueryErrorNote error={assignmentsQ.error} onRetry={() => assignmentsQ.refetch()} retrying={assignmentsQ.isFetching} what="a escala do dia" />}
