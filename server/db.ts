@@ -440,7 +440,9 @@ export async function summarizeExpenses(where?: SQL) {
   const db = await getDb();
   const empty = { total: 0, count: 0, cancelledTotal: 0, cancelledCount: 0, byCategory: [] as Array<{ categoryId: number | null; total: number; count: number }> };
   if (!db) return empty;
-  const live = where ? and(where, sql`${expenses.status} <> 'cancelled'`) : sql`${expenses.status} <> 'cancelled'`;
+  // D4: sem `where`, as eliminadas também ficam de fora.
+  if (!where) where = isNull(expenses.deletedAt);
+  const live = and(where, sql`${expenses.status} <> 'cancelled'`);
   const cancelled = where ? and(where, eq(expenses.status, "cancelled")) : eq(expenses.status, "cancelled");
   const [tot] = await db
     .select({ total: sql<string>`COALESCE(SUM(${expenses.amount}), 0)`, count: sql<number>`COUNT(*)` })
@@ -511,7 +513,8 @@ export async function findPossibleDuplicateExpense(input: {
   }
   if (input.invoiceImageKey) conds.push(eq(expenses.invoiceImageKey, input.invoiceImageKey));
   if (!conds.length) return null;
-  let where: SQL = and(or(...conds), projectScope(expenses.projectId)) as SQL;
+  // D4: uma despesa eliminada já não conta como duplicada.
+  let where: SQL = and(or(...conds), projectScope(expenses.projectId), isNull(expenses.deletedAt)) as SQL;
   if (input.excludeId) where = and(where, sql`${expenses.id} <> ${input.excludeId}`) as SQL;
   const rows = await db
     .select({ id: expenses.id, supplier: expenses.supplier, amount: expenses.amount, expenseDate: expenses.expenseDate, documentNumber: expenses.documentNumber, status: expenses.status, insertedById: expenses.insertedById, projectId: expenses.projectId })
@@ -533,7 +536,8 @@ export async function categoryExists(id: number): Promise<boolean> {
   return r.length > 0;
 }
 
-export async function getExpenseById(id: number) {
+/** D4: por omissão uma despesa eliminada não existe; `includeDeleted` só para o super admin. */
+export async function getExpenseById(id: number, opts: { includeDeleted?: boolean } = {}) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db
@@ -548,7 +552,7 @@ export async function getExpenseById(id: number) {
     .leftJoin(projects, eq(expenses.projectId, projects.id))
     .leftJoin(users, eq(expenses.insertedById, users.id))
     .leftJoin(buyerEmployees, eq(expenses.buyerId, buyerEmployees.id))
-    .where(and(eq(expenses.id, id), projectScope(expenses.projectId)))
+    .where(and(eq(expenses.id, id), projectScope(expenses.projectId), ...(opts.includeDeleted ? [] : [isNull(expenses.deletedAt)])))
     .limit(1);
   return result[0];
 }
@@ -566,10 +570,21 @@ export async function updateExpense(id: number, data: Partial<InsertExpense>) {
   await db.update(expenses).set(data).where(eq(expenses.id, id));
 }
 
-export async function deleteExpense(id: number) {
+/**
+ * D4 (Jorge, 3 out 2026): "Eliminar" esconde a despesa (deletedAt) — sai das
+ * listas, totais e da Faturação, mas fica guardada com a fatura (o super
+ * admin vê-a em "Eliminadas" e pode repor). Nunca DELETE.
+ */
+export async function softDeleteExpense(id: number, userId: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.delete(expenses).where(eq(expenses.id, id));
+  await db.update(expenses).set({ deletedAt: sql`CURRENT_TIMESTAMP`, deletedById: userId } as any).where(and(eq(expenses.id, id), isNull(expenses.deletedAt)));
+}
+
+export async function restoreExpense(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(expenses).set({ deletedAt: null, deletedById: null } as any).where(eq(expenses.id, id));
 }
 
 // ─── DASHBOARD STATS ──────────────────────────────────────────────────────────
@@ -584,7 +599,7 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
   // janela tem fim (despesas com data futura não entram em "este ano").
   const w = expenseStatsWindows(lisbonToday());
   const inWindow = (win: { start: string; end: string }) => and(gte(expenses.expenseDate, win.start), lt(expenses.expenseDate, win.end));
-  const live = ne(expenses.status, "cancelled");
+  const live = and(ne(expenses.status, "cancelled"), isNull(expenses.deletedAt)) as SQL;
   // alcance de cidade + o centro escolhido no filtro do painel
   const scope = await projectFilterConds(expenses.projectId, opts.projectId);
 
@@ -649,15 +664,15 @@ export async function getExpenseStats(opts: { projectId?: number } = {}) {
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, eq(expenses.status, "pending"))),
+        .where(and(...scope, isNull(expenses.deletedAt), eq(expenses.status, "pending"))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, eq(expenses.status, "overdue"))),
+        .where(and(...scope, isNull(expenses.deletedAt), eq(expenses.status, "overdue"))),
       db
         .select({ total: sql<string>`COALESCE(SUM(amount), 0)`, count: sql<number>`COUNT(*)` })
         .from(expenses)
-        .where(and(...scope, eq(expenses.status, "paid"), inWindow(w.year))),
+        .where(and(...scope, isNull(expenses.deletedAt), eq(expenses.status, "paid"), inWindow(w.year))),
     ]);
 
   // Monthly trend (last 6 months)
@@ -708,6 +723,7 @@ export async function getUpcomingPayments(daysAhead = 7, opts: { projectId?: num
     .where(
       and(
         eq(expenses.status, "pending"),
+        isNull(expenses.deletedAt),
         ...scope,
         gte(expenses.paymentDueDate, `${today} 00:00:00`),
         lte(expenses.paymentDueDate, `${end.toISOString().slice(0, 10)} 23:59:59`)
@@ -724,7 +740,7 @@ export async function getOverdueExpenses() {
     .select({ expense: expenses, insertedBy: users })
     .from(expenses)
     .leftJoin(users, eq(expenses.insertedById, users.id))
-    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
+    .where(and(projectScope(expenses.projectId), isNull(expenses.deletedAt), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
 }
 
 export async function markOverdueExpenses() {
@@ -735,7 +751,7 @@ export async function markOverdueExpenses() {
   await db
     .update(expenses)
     .set({ status: "overdue" })
-    .where(and(projectScope(expenses.projectId), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
+    .where(and(projectScope(expenses.projectId), isNull(expenses.deletedAt), eq(expenses.status, "pending"), lt(expenses.paymentDueDate, `${today} 00:00:00`)));
 }
 
 // ─── ACTIVITY LOGS ────────────────────────────────────────────────────────────

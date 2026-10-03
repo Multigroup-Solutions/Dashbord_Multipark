@@ -344,7 +344,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const collectedRows = byDayProject(liveCollected);
 
   // ─── 3. Despesas (data da despesa, não canceladas) — contadas UMA vez ─────
-  const expConds: SQL[] = [sql`${expenses.status} <> 'cancelled'`, gte(expenses.expenseDate, fromStr), lte(expenses.expenseDate, toStr)];
+  // D4: as eliminadas (deletedAt) nunca contam.
+  const expConds: SQL[] = [sql`${expenses.status} <> 'cancelled'`, sql`${expenses.deletedAt} IS NULL`, gte(expenses.expenseDate, fromStr), lte(expenses.expenseDate, toStr)];
   if (projectIds) expConds.push(inArray(expenses.projectId, projectIds));
   const expDayExpr = sql<string>`DATE(${expenses.expenseDate})`;
   // IVA da linha: autoliquidação → 0; taxa da categoria; senão a normal do dia.
@@ -361,7 +362,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .groupBy(expDayExpr, expenses.projectId, projects.name, expenseCategories.id, expenseCategories.name);
 
   // Pendentes com vencimento no período — INFORMAÇÃO (dívida), não custo.
-  const pendConds: SQL[] = [inArray(expenses.status, ["pending", "overdue"]), isNotNull(expenses.paymentDueDate), gte(expenses.paymentDueDate, fromStr), lte(expenses.paymentDueDate, toStr)];
+  const pendConds: SQL[] = [inArray(expenses.status, ["pending", "overdue"]), sql`${expenses.deletedAt} IS NULL`, isNotNull(expenses.paymentDueDate), gte(expenses.paymentDueDate, fromStr), lte(expenses.paymentDueDate, toStr)];
   if (projectIds) pendConds.push(inArray(expenses.projectId, projectIds));
   const pendingRows = await db
     .select({ projectId: expenses.projectId, projectName: projects.name, categoryName: expenseCategories.name, supplier: expenses.supplier, count: sql<number>`COUNT(*)`, totalAmount: sql<number>`COALESCE(SUM(${expenses.amount}), 0)` })

@@ -14,7 +14,7 @@
  * perfil; um filtro visual nunca alarga o acesso — só o restringe.
  */
 import { projectScope, scopedProjectIds } from './cityScope';
-import { and, eq, gte, inArray, like, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, like, lte, or, sql, type SQL } from "drizzle-orm";
 import { expenses } from "../drizzle/schema";
 import { dayBounds } from "../shared/expensePeriods";
 
@@ -114,11 +114,20 @@ export interface ExpenseListFilters {
   status?: string;
   search?: string;
   excludeCancelled?: boolean;
+  /** D4: só as eliminadas (super admin). */
+  deleted?: boolean;
 }
+
+/**
+ * D4 (Jorge, 3 out 2026): despesa eliminada = desaparece de todo o lado
+ * (listas, totais, Faturação, exportações), mas a linha fica guardada.
+ */
+export const expenseNotDeleted: SQL = isNull(expenses.deletedAt);
 
 /** Traduz filtros + visibilidade em condições drizzle (AND). */
 export function expenseConditions(filters: ExpenseListFilters, vis: ExpenseVisibility): SQL[] {
-  const c: SQL[] = [projectScope(expenses.projectId)];
+  // `deleted`: só as eliminadas (o super admin, a pedido); sem ele, nunca aparecem.
+  const c: SQL[] = [projectScope(expenses.projectId), filters.deleted ? isNotNull(expenses.deletedAt) : expenseNotDeleted];
   const { start, end } = dayBounds(filters.startDate, filters.endDate);
   if (start) c.push(gte(expenses.expenseDate, start));
   if (end) c.push(lte(expenses.expenseDate, end));
