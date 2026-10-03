@@ -105,6 +105,8 @@ export interface ApiKeyRow {
   lastUsedAt: string | null;
   createdById: number | null;
   revokedAt?: string | null;
+  /** D53: quem a criou continua ativo (conta junta → a conta que ficou). `false` = a chave não funciona. */
+  creatorActive?: boolean;
 }
 
 export type ApiKeyCheck =
@@ -126,7 +128,42 @@ export async function checkPresentedKey(
   const row = await lookupByHash(hashApiKey(key));
   if (!row || !row.active || row.revokedAt) return { ok: false, status: 403, error: INVALID_KEY_ERROR };
   if (isApiKeyExpired(row.expiresAt, now)) return { ok: false, status: 403, error: INVALID_KEY_ERROR };
+  // D53 (Jorge, 3 out 2026): a chave de quem ficou inativo deixa de funcionar.
+  if (row.creatorActive === false) return { ok: false, status: 403, error: INVALID_KEY_ERROR };
   return { ok: true, key: row };
+}
+
+export interface ApiKeyCreatorRow { isActive: unknown; loginMethod?: string | null }
+
+/**
+ * D53: quem criou a chave continua ativo? Uma conta junta a outra fica
+ * desativada com `merged_into_<id>` — aí conta a conta que ficou (a chave
+ * não morre por se juntarem as contas). Conta que não existe = inativa.
+ */
+export async function creatorStillActive(createdById: number, load: (id: number) => Promise<ApiKeyCreatorRow | null>): Promise<boolean> {
+  let id = createdById;
+  const seen = new Set<number>();
+  while (!seen.has(id) && seen.size < 5) {
+    seen.add(id);
+    const u = await load(id);
+    if (!u) return false;
+    if (u.isActive === true || Number(u.isActive) === 1) return true;
+    const m = /^merged_into_(\d+)$/.exec(String(u.loginMethod ?? ""));
+    if (!m) return false;
+    id = Number(m[1]);
+  }
+  return false;
+}
+
+/** Leitor de contas para `creatorStillActive` (BD). */
+export async function loadApiKeyCreator(id: number): Promise<ApiKeyCreatorRow | null> {
+  const { getDb } = await import("./db");
+  const { users } = await import("../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const [u] = await db.select({ isActive: users.isActive, loginMethod: users.loginMethod }).from(users).where(eq(users.id, id)).limit(1);
+  return u ?? null;
 }
 
 // ─── Limite por chave ─────────────────────────────────────────────────────────
@@ -174,7 +211,10 @@ async function lookupByHashDb(hash: string): Promise<ApiKeyRow | null> {
     .from(apiKeys)
     .where(eq(apiKeys.keyHash, hash))
     .limit(1);
-  return (rows[0] as ApiKeyRow | undefined) ?? null;
+  const row = (rows[0] as ApiKeyRow | undefined) ?? null;
+  // Chaves antigas sem autor (createdById vazio) continuam como estavam.
+  if (row && row.active && !row.revokedAt && row.createdById != null) row.creatorActive = await creatorStillActive(row.createdById, loadApiKeyCreator);
+  return row;
 }
 
 async function touchLastUsed(id: number): Promise<void> {

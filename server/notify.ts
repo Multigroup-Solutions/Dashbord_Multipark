@@ -17,8 +17,8 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { appNotifications } from "../drizzle/schema";
 import {
   dedupeMinutesFor, entityKeyOf, kindDef, kindFilterValues, notifyCityOf, parseNotificationPrefs, parseRouting,
-  resolveRecipients, canReceiveKind,
-  type NotificationKindId, type NotificationRouting, type NotifyCity, type RoutedRecipient, type RoutingCandidate,
+  resolveRecipients, canReceiveKind, NOTIFICATION_KIND_DEFS,
+  type NotificationKindDef, type NotificationKindId, type NotificationRouting, type NotifyCity, type RoutedRecipient, type RoutingCandidate,
 } from "../shared/notificationRouting";
 
 export interface NotifyInput {
@@ -59,6 +59,8 @@ export interface NotifyDeps {
   insert(rows: NotifyRow[]): Promise<void>;
   emailOf(userId: number): string | null;
   sendEmail(to: string, subject: string, text: string, html: string): Promise<boolean>;
+  /** D50: interruptor ligado? (sem isto = desligado). */
+  flagOn?(name: string): Promise<boolean>;
 }
 
 const ids = (list: readonly (number | null | undefined)[] | undefined): number[] =>
@@ -80,6 +82,8 @@ export async function notifyWith(deps: NotifyDeps, input: NotifyInput): Promise<
     if (!city && projectId != null) city = await deps.cityOfProject(projectId).catch(() => null);
     out.city = city;
     const [candidates, routing] = await Promise.all([deps.loadCandidates(), deps.loadRouting()]);
+    // D50: tipo obrigatório só com o interruptor ligado (lido fresco; falha = desligado).
+    const forceMandatory = def.mandatoryFlag && deps.flagOn ? await deps.flagOn(def.mandatoryFlag).catch(() => false) : false;
     const routed: RoutedRecipient[] = resolveRecipients({
       kind: def.kind,
       city,
@@ -87,6 +91,7 @@ export async function notifyWith(deps: NotifyDeps, input: NotifyInput): Promise<
       alsoUserIds: ids(input.alsoUserIds),
       filter: input.recipientFilter,
       noCityToAll: input.noCityToAll,
+      forceMandatory,
     }, candidates, routing);
     if (!routed.length) return out;
 
@@ -261,11 +266,27 @@ const dbDeps: NotifyDeps = {
     })));
   },
   emailOf: (userId) => candCache?.emails.get(userId) ?? null,
+  async flagOn(name) {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    return isFeatureEnabled(name, { defaultEnabled: automationFlagDefault(name) });
+  },
   async sendEmail(to, subject, text, html) {
     const { sendEmail } = await import("./mail/systemMail");
     return sendEmail({ to, subject, text, html, fromName: "Dashboard Multipark", auto: { kind: "notification" } });
   },
 };
+
+/** D50: tipos que estão obrigatórios agora por causa do interruptor. Falha a ler = nenhum. */
+export async function forcedMandatoryKinds(): Promise<string[]> {
+  const kinds = NOTIFICATION_KIND_DEFS.filter((d) => (d as NotificationKindDef).mandatoryFlag);
+  const out: string[] = [];
+  for (const d of kinds) {
+    const flag = (d as NotificationKindDef).mandatoryFlag!;
+    if (await dbDeps.flagOn!(flag).catch(() => false)) out.push(d.kind);
+  }
+  return out;
+}
 
 /** Envia uma notificação pelas regras de roteamento. Nunca lança. */
 export async function notify(input: NotifyInput): Promise<NotifyResult> {

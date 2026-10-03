@@ -15,6 +15,8 @@ import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { can } from "@shared/access";
 import { LOG_SOURCES, LOG_SOURCE_LABELS, type LogSource } from "@shared/logMask";
 import { csvLine, groupLogEntities, logActionLabel } from "@shared/logsView";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CashLogsTab } from "@/components/CashLogsTab";
 
 const ACTION_STYLE: Record<string, { icon: any; color: string }> = {
   create: { icon: Plus, color: "text-green-600" },
@@ -120,7 +122,18 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="space-y-4 max-w-7xl mx-auto w-full">
+    <div className="max-w-7xl mx-auto w-full">
+    {/* D59: separador Caixa — a história guardada nas tabelas da caixa. */}
+    <Tabs defaultValue="atividade" className="space-y-4">
+      <TabsList>
+        <TabsTrigger value="atividade">Atividade</TabsTrigger>
+        <TabsTrigger value="caixa">Caixa</TabsTrigger>
+      </TabsList>
+      <TabsContent value="caixa">
+        <CashLogsTab people={optionsQ.data?.people ?? []} />
+      </TabsContent>
+      <TabsContent value="atividade">
+    <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Registo das ações na plataforma (retenção: 24 meses; o histórico do CRM e das permissões fica sempre) · {logs.length} entradas{logs.length >= limit ? ` (limite ${limit} — afina os filtros)` : ""}
       </p>
@@ -266,6 +279,9 @@ export default function LogsPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+      </TabsContent>
+    </Tabs>
     </div>
   );
 }

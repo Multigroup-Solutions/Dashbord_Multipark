@@ -55,11 +55,20 @@ export const apiKeysRouter = router({
       requireAccess(ctx.user, "api_keys", "manage");
       const { getApiKeys } = await import("./db");
       const rows = await getApiKeys({ includeRevoked: input?.includeRevoked === true });
-      return rows.map((k) => ({
+      // D53: a chave de quem ficou inativo não funciona — a lista diz porquê.
+      const { creatorStillActive, loadApiKeyCreator } = await import("./apiKeyAuth");
+      // Falha a ler a conta = desconhecido (null): a lista mostra-se na mesma.
+      const cache = new Map<number, Promise<boolean | null>>();
+      const creatorActive = (id: number) => {
+        if (!cache.has(id)) cache.set(id, creatorStillActive(id, loadApiKeyCreator).catch(() => null));
+        return cache.get(id)!;
+      };
+      return Promise.all(rows.map(async (k) => ({
         ...k,
         capabilities: API_KEY_CAPABILITIES.filter((c) => capabilitiesFor(k.permissions).has(c)),
         legacy: isLegacyPermissions(k.permissions),
-      }));
+        creatorActive: k.createdById == null ? true : await creatorActive(k.createdById),
+      })));
     }),
 
   create: protectedProcedure.input(z.object({

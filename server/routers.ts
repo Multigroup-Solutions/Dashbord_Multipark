@@ -1240,6 +1240,29 @@ export const appRouter = router({
       const { getActivityLogFilterOptions } = await import("./db");
       return getActivityLogFilterOptions();
     }),
+    /** D59: separador "Caixa" — a história guardada nas tabelas da caixa (só leitura). */
+    cash: protectedProcedure
+      .input(z.object({
+        limit: z.number().int().min(1).max(2000).optional(),
+        kind: z.enum(["case", "count", "mb_receipt", "mb_day", "viva", "monthly"]).optional(),
+        userId: z.number().int().positive().optional(),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        search: z.string().max(200).optional(),
+      }).optional())
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "logs", "view");
+        const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
+        const { listCashLogs } = await import("./cashLogs");
+        return listCashLogs({
+          limit: input?.limit ?? 500,
+          kind: input?.kind,
+          userId: input?.userId,
+          from: input?.from ? lisbonDayRangeUtc(input.from).start : undefined,
+          to: input?.to ? lisbonDayRangeUtc(input.to).end : undefined,
+          search: input?.search,
+        });
+      }),
   }),
 
   // ── RH ───────────────────────────────────────────────────────────────────────────────────────
@@ -2119,7 +2142,9 @@ export const appRouter = router({
         receivableKinds(ctx.user.id),
         getSetting("notifications.routing"),
       ]);
-      return { ...parseNotificationPrefs(raw), kinds, routing: parseRouting(routing) };
+      // D50: tipos que o interruptor tornou obrigatórios agora (o ecrã mostra-os trancados).
+      const { forcedMandatoryKinds } = await import("./notify");
+      return { ...parseNotificationPrefs(raw), kinds, routing: parseRouting(routing), forcedMandatory: await forcedMandatoryKinds() };
     }),
     // 19c: `change` grava SÓ o interruptor mexido, por cima do que está na BD
     // (com duas abas abertas a segunda já não desfaz a primeira); o objeto

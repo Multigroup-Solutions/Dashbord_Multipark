@@ -1,6 +1,6 @@
 import { AUTH_DENIED_PARAM, AUTH_DENIED_VALUE, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { normalizeEmail } from "@shared/email";
-import { safeReturnPath } from "@shared/loginReturn";
+import { googlePromptFor, safeReturnPath } from "@shared/loginReturn";
 import type { Express, Request, Response, CookieOptions } from "express";
 import crypto from "node:crypto";
 import * as db from "../db";
@@ -219,7 +219,8 @@ export function registerOAuthRoutes(app: Express) {
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", scope);
     url.searchParams.set("access_type", "offline");
-    url.searchParams.set("prompt", "consent");
+    // D61: num PDA (pda=1) a Google pede sempre para escolher a conta.
+    url.searchParams.set("prompt", googlePromptFor(req.query.pda));
     url.searchParams.set("state", state);
 
     res.redirect(302, url.toString());

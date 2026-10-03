@@ -2,7 +2,7 @@
 modulo: marketing
 titulo: Google Business Profile (perfis Google: desempenho, horários, publicações)
 rotas: /marketing/web
-palavras: google business, google business profile, business profile, gbp, google my business, perfil google, perfis google, maps, google maps, impressões, chamadas, direções, pedidos de direções, cliques no site, pesquisas, horário, horários especiais, feriados, publicações, novidades, ofertas, eventos, quota 0, pedir acesso, api do business profile, testar, performance api
+palavras: push, notificações push, google business, google business profile, business profile, gbp, google my business, perfil google, perfis google, maps, google maps, impressões, chamadas, direções, pedidos de direções, cliques no site, pesquisas, horário, horários especiais, feriados, publicações, novidades, ofertas, eventos, quota 0, pedir acesso, api do business profile, testar, performance api
 ---
 # Google Business Profile (perfis Google: desempenho, horários, publicações)
 
@@ -66,5 +66,7 @@ Em **Integrações → Google Business Profile → Testar** (ou "Testar APIs" no
 Depois do Testar ficar todo com ✓, carrega em **Atualizar agora** (a recolha automática está **em pausa** até a Google aprovar o acesso à API; depois volta ao agendador): a 1.ª recolha traz ~6 meses de desempenho; depois relê só os últimos 5 dias, 1×/dia.
 
 **Variáveis no Vercel** (já existentes): `GOOGLE_BUSINESS_CLIENT_ID` e `GOOGLE_BUSINESS_CLIENT_SECRET` (se faltarem usa-se o cliente do Google Ads), `INTEGRATIONS_ENCRYPTION_KEY` (cifra do token). Nada de novo é preciso para o Google Business.
+
+**Push** (avisos da Google quando chega uma crítica): interruptor **Google Business: notificações push** em Definições → Automações (ligado por omissão). Desligado, os avisos da Google são ignorados e as críticas chegam na recolha agendada.
 
 **Desligar** (só super admin, pede confirmação): revoga a autorização na Google e pára a importação das críticas e o desempenho em todos os parques. A **escolha dos perfis fica guardada** — ao voltar a ligar com a mesma conta, volta tudo como estava (com outra conta Google, a escolha é limpa). Ligar, desligar e mudar a associação de um perfil ficam nos Logs.

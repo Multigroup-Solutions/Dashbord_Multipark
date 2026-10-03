@@ -222,7 +222,8 @@ function NotificationPrefsCard() {
         <div key={g} className="border-t border-border">
           <div className="px-3.5 pt-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{NOTIFICATION_GROUP_LABELS[g]}</div>
           {items.map((k) => {
-            const locked = "mandatory" in k && !!k.mandatory;
+            // D50: também as que o interruptor "Avisos críticos obrigatórios" tornou obrigatórias.
+            const locked = ("mandatory" in k && !!k.mandatory) || (data?.forcedMandatory ?? []).includes(k.kind);
             const hasEmail = (k.channels as readonly string[]).includes("email");
             const appOn = locked ? true : !muted.has(k.kind);
             return (

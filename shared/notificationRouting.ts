@@ -77,12 +77,21 @@ export interface NotificationKindDef {
   personal: boolean;
   /** Não se pode silenciar (pede ação/confirmação). */
   mandatory?: boolean;
+  /**
+   * D50: passa a obrigatória SÓ com este interruptor ligado (desligado = cada
+   * um escolhe, como antes). O que a pessoa silenciou fica guardado: desligar
+   * o interruptor devolve-lhe a escolha.
+   */
+  mandatoryFlag?: string;
   channels: readonly NotificationChannel[];
   /** Email ligado por omissão (só se `channels` tiver email). */
   emailDefault?: boolean;
   /** Janela de deduplicação (min): 1 notificação por pessoa × tipo × registo. */
   dedupeMinutes?: number;
 }
+
+/** D50 (Jorge, 3 out 2026): interruptor que torna obrigatórias as ocorrências críticas e o "a trabalhar sem PDA/Zello". */
+export const CRITICAL_ALERTS_MANDATORY_FLAG = "NOTIFY_CRITICAL_MANDATORY";
 
 const IN_APP = ["in_app"] as const;
 const WITH_EMAIL = ["in_app", "email"] as const;
@@ -104,7 +113,7 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "google_reviews_alert", group: "suporte", label: "Críticas Google: alertas", description: "Média de estrelas dos últimos 7 dias a cair e críticas Google sem resposta há demasiado tempo (por perfil da tua cidade).",
     module: "criticas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
   K({ kind: "incident_critical", group: "suporte", label: "Ocorrência crítica", description: "Ocorrências registadas com gravidade crítica.",
-    module: "ocorrencias", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true }),
+    module: "ocorrencias", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, mandatoryFlag: CRITICAL_ALERTS_MANDATORY_FLAG }),
   K({ kind: "incident_sla", group: "suporte", label: "Ocorrências fora do prazo", description: "Já não é enviado (as ocorrências vêm da app Multipark).",
     module: "ocorrencias", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 12 * 60 }),
   K({ kind: "lost_found_new", group: "suporte", label: "Perdido novo", description: "Perdidos e achados registados na tua cidade.",
@@ -139,7 +148,7 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "gps_alert", group: "operacoes", label: "GPS desligado", description: "Condutores com o GPS desligado no Zello.",
     module: "historico_diario", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "ops_presence", group: "operacoes", label: "A trabalhar sem PDA ou Zello", description: "Alguém do operacional com o ponto aberto sem PDA ou com o Zello desligado, ou com movimentos na Multipark sem ponto aberto. Vai ao team leader de serviço na cidade e ao supervisor.",
-    module: "pdas", action: "view", roles: [], cityScoped: true, personal: true, channels: IN_APP, dedupeMinutes: 60 }),
+    module: "pdas", action: "view", roles: [], cityScoped: true, personal: true, channels: IN_APP, dedupeMinutes: 60, mandatoryFlag: CRITICAL_ALERTS_MANDATORY_FLAG }),
   K({ kind: "driver_daily_report", group: "operacoes", label: "Relatório diário dos motoristas", description: "Resumo da recolha automática do histórico GPS.",
     module: "historico_diario", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),
   K({ kind: "anomaly_bookings", group: "operacoes", label: "Anomalias nas reservas", description: "Quedas/picos fora do normal nas reservas (só críticas).",
@@ -417,6 +426,8 @@ export interface RouteInput {
    * Jorge, 2 out 2026). Sem isto, só quem vê o país todo.
    */
   noCityToAll?: boolean;
+  /** D50: o interruptor do tipo (`mandatoryFlag`) está ligado → chega mesmo a quem o silenciou. */
+  forceMandatory?: boolean;
 }
 
 export interface RoutedRecipient { userId: number; email: boolean; reason: "role" | "override" | "personal" | "assignee" }
@@ -479,8 +490,9 @@ export function resolveRecipients(input: RouteInput, candidates: readonly Routin
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const out = new Map<number, RoutedRecipient>();
   const emailOk = (c: RoutingCandidate) => !!c.email && EMAIL_RE.test(c.email) && wantsEmail(c.prefs, d.kind, routing);
+  const forced = !!input.forceMandatory && !!d.mandatoryFlag;
   const add = (c: RoutingCandidate, reason: RoutedRecipient["reason"]) => {
-    if (!c.isActive || out.has(c.id) || !wantsNotification(c.prefs, d.kind)) return;
+    if (!c.isActive || out.has(c.id) || (!forced && !wantsNotification(c.prefs, d.kind))) return;
     out.set(c.id, { userId: c.id, email: emailOk(c), reason });
   };
 
@@ -540,7 +552,7 @@ export function entityKeyOf(input: { entity?: { type: string; id: string | numbe
 
 export interface RoutingTableRow {
   kind: string; label: string; group: NotificationGroup; module: ModuleId; action: Action;
-  personal: boolean; mandatory: boolean; cityScoped: boolean; email: boolean; emailDefault: boolean;
+  personal: boolean; mandatory: boolean; mandatoryFlag: string | null; cityScoped: boolean; email: boolean; emailDefault: boolean;
   roles: Role[]; defaultRoles: Role[]; allowedRoles: Role[];
 }
 
@@ -550,7 +562,7 @@ export function routingTable(routing: NotificationRouting = EMPTY_ROUTING): Rout
     const d = d0 as NotificationKindDef;
     return {
       kind: d.kind, label: d.label, group: d.group, module: d.module, action: d.action,
-      personal: d.personal, mandatory: !!d.mandatory, cityScoped: d.cityScoped,
+      personal: d.personal, mandatory: !!d.mandatory, mandatoryFlag: d.mandatoryFlag ?? null, cityScoped: d.cityScoped,
       email: d.channels.includes("email"), emailDefault: effectiveEmailDefault(d.kind, routing),
       roles: effectiveRoles(d.kind, routing), defaultRoles: d.personal ? [] : defaultRoles(d),
       allowedRoles: d.personal ? [] : ROLES.filter((r) => roleGrantFor(r, d.module).actions.includes(d.action)),

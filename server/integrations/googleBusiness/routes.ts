@@ -8,6 +8,15 @@ import { consumeState, database, finishOAuth, saveConnection, startOAuth } from 
 import { notificationLocation, safeError } from './domain';
 import { refreshLocations, syncReviews } from './service';
 
+/** D52: interruptor GBP_PUSH (lido fresco; falha a ler = como por omissão). */
+async function gbpPushOn(): Promise<boolean> {
+  try {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import('../../_core/featureFlags'), import('../../../shared/appSettings')]);
+    await ensureFeatureFlagOverrides();
+    return isFeatureEnabled('GBP_PUSH', { defaultEnabled: automationFlagDefault('GBP_PUSH') });
+  } catch { return true; }
+}
+
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 /** 19d (decisão do Jorge): ligar o Google Business é só do super admin (publica respostas e muda horários no Google). */
 export async function authorizedAdmin(req: Request) {
@@ -78,6 +87,9 @@ export function registerGoogleBusinessRoutes(app: Express, afterReceive?: () => 
   app.post('/api/integrations/google-business/webhook', async (req, res) => {
     try { await verifyPush(req.headers.authorization); }
     catch { res.status(401).json({ error: 'Unauthorized' }); return; }
+    // D52: interruptor do push (ligado por omissão). Desligado: confirma à Google
+    // (sem repetições) e não marca nada — as críticas chegam na recolha agendada.
+    if (!(await gbpPushOn())) { res.status(204).end(); return; }
     let location: string | null;
     try {
       const body = req.body;

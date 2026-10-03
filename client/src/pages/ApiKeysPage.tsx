@@ -228,7 +228,8 @@ export default function ApiKeysPage() {
               {keys.map((k) => {
                 const expired = isExpired(k.expiresAt);
                 const revoked = !!k.revokedAt;
-                const working = !!k.active && !expired && !revoked;
+                const creatorGone = k.creatorActive === false;
+                const working = !!k.active && !expired && !revoked && !creatorGone;
                 return (
                 <Card key={k.id} className={revoked ? "opacity-70" : undefined}>
                   <CardContent className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3 py-4">
@@ -247,6 +248,9 @@ export default function ApiKeysPage() {
                           {" · "}Último uso: {k.lastUsedAt ? fmtPTDateTime(k.lastUsedAt) : "nunca"}
                           {" · "}{k.expiresAt ? `${expired ? "Expirou" : "Válida até"}: ${fmtPTDate(k.expiresAt)}` : "Sem expiração"}
                         </p>
+                        {creatorGone && !revoked && (
+                          <p className="text-xs text-red-700 dark:text-red-300 break-words">Não funciona: quem a criou já não está ativo. Cria uma chave nova com uma conta ativa e revoga esta.</p>
+                        )}
                         {revoked && (
                           <p className="text-xs text-red-700 dark:text-red-300 break-words">Revogada em {fmtPTDateTime(k.revokedAt)}{k.revokeReason ? `: ${k.revokeReason}` : ""}</p>
                         )}
@@ -259,6 +263,7 @@ export default function ApiKeysPage() {
                       ) : (
                         <>
                           {expired && <Badge variant="destructive">Expirada</Badge>}
+                          {creatorGone && <Badge variant="destructive">Criador inativo</Badge>}
                           <Badge variant={k.active ? "default" : "secondary"}>{k.active ? "Ativa" : "Inativa"}</Badge>
                           <Switch checked={!!k.active} disabled={toggleMut.isPending} onCheckedChange={(v) => toggleMut.mutate({ id: k.id, active: v })} aria-label={k.active ? `Desativar ${k.name}` : `Ativar ${k.name}`} />
                           <Button variant="outline" size="sm" onClick={() => setEditing({ id: k.id, name: k.name, caps: k.capabilities, legacy: k.legacy })}>

@@ -2,7 +2,7 @@
 modulo: logs
 titulo: Logs (registo de atividade)
 rotas: /logs
-palavras: logs, registo, registo de atividade, quem fez, quem mudou, histórico, auditoria, sistema, automático, origem, api key, agendador, retenção, 24 meses, csv, exportar, apagou, arquivou, máscara, nif, iban, telefone
+palavras: separador caixa, logs da caixa, talões, contagens, viva wallet, logs, registo, registo de atividade, quem fez, quem mudou, histórico, auditoria, sistema, automático, origem, api key, agendador, retenção, 24 meses, csv, exportar, apagou, arquivou, máscara, nif, iban, telefone
 ---
 # Logs
 
@@ -14,6 +14,8 @@ Página **Logs** (menu Sistema): o registo do que se faz na plataforma — quem,
 - Registos antigos não têm origem (filtro "Sem origem").
 
 **Filtros**: pesquisa livre (detalhes, ação, entidade, pessoa), datas, **Quem** (uma pessoa ou "Só automático"), **Origem**, **Entidade** (os nomes repetidos, como employee/employees, contam como um), **Registo #** e **Ação** (todas as que existem). Carregar no **#número** de uma linha mostra só a história desse registo. **Limpar** tira todos os filtros.
+
+**Separador Caixa**: a história da caixa, como fica guardada na própria caixa — passos dos casos (abertos, reabertos, resolvidos, notas), contagens gravadas, talões de multibanco juntados/tirados, multibanco do dia confirmado, extratos da Viva Wallet importados e recebimentos do fim do mês. Filtros por tipo, pessoa, datas e texto; CSV. Só leitura: nada se muda daqui.
 
 **Dados sensíveis**: os detalhes nunca guardam o IBAN, o NIF, o telefone, o cartão ou um segredo por inteiro — ficam só os últimos dígitos (ex.: `PT50 •••0154`, `NIF •••6789`, `•••678`). Os emails ficam (identificam as contas).
 

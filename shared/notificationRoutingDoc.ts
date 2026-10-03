@@ -18,7 +18,7 @@ export const KIND_SOURCES: Record<string, string> = {
   google_business_alert: "Recolha do Google Business Profile (/api/cron/google-business), 1×/dia depois da atualização: impressões ou chamadas da semana a cair face à anterior, perfil sem controlo (suspenso/por verificar), fechado, alterado pela Google ou com edições pendentes (limiares em Marketing → Web & SEO → Google Business → Configurar).",
   google_reviews_alert: "Recolha do Google Business Profile (/api/cron/google-business), 1×/dia: média de estrelas dos últimos 7 dias abaixo da dos 90 dias anteriores e críticas Google sem resposta há mais de N horas (por perfil; vai à cidade do perfil).",
   google_account_reauth: "A autorização da tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada — 1× por mudança de estado.",
-  incident_critical: "Ocorrência criada com gravidade crítica.",
+  incident_critical: "Ocorrência criada com gravidade crítica. D50: obrigatória com o interruptor NOTIFY_CRITICAL_MANDATORY ligado (desligado por omissão).",
   incident_sla: "Já não é enviado: as ocorrências vêm da app Multipark e as antigas do dashboard deixaram de ter lembretes (P3 16a).",
   lost_found_new: "Perdido registado.",
   lost_found_sla: "Cron horário: perdidos fora do prazo — o da Atribuição, senão os dias de Definições → Prazo dos perdidos e achados (7 por omissão) — 1×/dia, resumo por cidade + responsável.",
@@ -33,6 +33,7 @@ export const KIND_SOURCES: Record<string, string> = {
   driver_daily_report: "Fim da recolha diária do histórico GPS.",
   anomaly_bookings: "Deteção diária de anomalias nas reservas (só críticas).",
   task: "Tarefas: atraso, conclusão, comentários (criador, responsáveis, gestores da hierarquia). Nas automáticas (checklists, serviços, disponibilidade, fichas sem cidade) só os responsáveis, e só com \"Avisos de atraso das tarefas automáticas\" ligado.",
+  ops_presence: "Verificação da presença operacional (só com OPS_PRESENCE_ALERTS ligado): ponto aberto sem PDA ou com o Zello desligado, ou movimentos na Multipark sem ponto. D50: obrigatória com o interruptor NOTIFY_CRITICAL_MANDATORY ligado (desligado por omissão).",
   task_assigned: "Tarefas (criar, criar a partir de texto, editar): quem passou agora a responsável de uma tarefa feita por uma pessoa — nunca quem a atribuiu; as automáticas e as do Google não avisam. Interruptor TASK_ASSIGNED_NOTIFY (desligado por omissão).",
   task_overdue_city: "Cron horário (extras-auto): tarefas automáticas que passaram o prazo, um resumo por cidade ao supervisor — só com \"Avisos de atraso das tarefas automáticas\" ligado (desligado por omissão).",
   rh_docs_missing: "Regra documental dos extras: 14 dias com documentos obrigatórios em falta (1.º aviso).",
@@ -50,7 +51,7 @@ export const KIND_SOURCES: Record<string, string> = {
   anomaly_expenses: "Deteção diária de anomalias nas despesas (só críticas).",
   payroll_ready: "Folha de ordenados gerada (com o link do PDF).",
   marketing_alert: "Deteção diária de anomalias no gasto/ROAS do marketing (só críticas).",
-  integration_alert: "Ligação (Google Ads, Meta, Google Business, WhatsApp) passa a precisar de religação ou fica em erro.",
+  integration_alert: "Ligação (Google Ads, Meta, Google Business, WhatsApp) passa a precisar de religação ou fica em erro. D51: também quando alguém desliga o Google Business ou o Google Ads (menos a quem desligou), com o interruptor INTEGRATION_DISCONNECT_NOTIFY (desligado por omissão).",
   cron_stale: "Cron parado há mais do dobro do intervalo.",
   sync_alert: "Sem webhooks Multipark / webhooks retomados / reservas por sincronizar.",
   ai_budget: "Gasto da IA chega ao orçamento do mês.",
@@ -95,7 +96,7 @@ export function renderNotificacoesDoc(): string {
       const who = r.personal ? "Pessoal" : r.roles.map((x) => ROLE_LABELS[x]).join(", ");
       const email = r.email ? (r.emailDefault ? "sim (ligado)" : "sim (desligado)") : "—";
       const scope = r.personal ? "a pessoa" : r.cityScoped ? "por cidade" : "nacional";
-      out.push(`| ${r.label} | \`${r.kind}\` | ${moduleLabel(r.module)} (${r.action}) | ${scope} | ${who} | ${email} | ${r.mandatory ? "sim" : "não"} | ${KIND_SOURCES[r.kind] ?? ""} |`);
+      out.push(`| ${r.label} | \`${r.kind}\` | ${moduleLabel(r.module)} (${r.action}) | ${scope} | ${who} | ${email} | ${r.mandatory ? "sim" : r.mandatoryFlag ? "com interruptor" : "não"} | ${KIND_SOURCES[r.kind] ?? ""} |`);
     }
     out.push("");
   }

@@ -33,7 +33,7 @@ import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
-import { AUTOMATION_FLAGS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, SETTINGS, validateSetting, type RateEntry } from "@shared/appSettings";
+import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, SETTINGS, validateSetting, type RateEntry } from "@shared/appSettings";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
 
@@ -102,6 +102,7 @@ const HEALTH: Record<string, { label: string; cls: string }> = {
   ok: { label: "OK", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
   failed: { label: "Falhou", cls: "bg-red-100 text-red-800 border-red-200" },
   stale: { label: "Parado", cls: "bg-amber-100 text-amber-900 border-amber-200" },
+  skipping: { label: "Salta há dias", cls: "bg-amber-100 text-amber-900 border-amber-200" },
   never: { label: "Sem registo", cls: "bg-muted text-secondary-foreground" },
   running: { label: "A correr", cls: "bg-blue-100 text-blue-800 border-blue-200" },
   unscheduled: { label: "Sem agenda", cls: "bg-muted text-secondary-foreground" },
@@ -133,7 +134,7 @@ function SystemStatusCard() {
   const [open, setOpen] = useState<string | null>(null);
   const crons = q.data?.crons ?? [];
   const now = q.data?.now ?? Date.now();
-  const problems = crons.filter((c) => c.health === "failed" || c.health === "stale").length;
+  const problems = crons.filter((c) => c.health === "failed" || c.health === "stale" || c.health === "skipping").length;
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -147,14 +148,14 @@ function SystemStatusCard() {
               : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Tudo a correr</Badge>}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Última corrida de cada cron (agendador /api/cron/tick, chamado pelo cron-job.org de 5 em 5 min; ou à mão). "Parado" = sem corridas há mais de 2× o intervalo esperado (mínimo 30 min).
+          Última corrida de cada cron (agendador /api/cron/tick, chamado pelo cron-job.org de 5 em 5 min; ou à mão). "Parado" = sem corridas há mais de 2× o intervalo esperado (mínimo 30 min). "Salta há dias" = corre mas salta há mais de {CRON_SKIP_PROBLEM_DAYS} dias por falta de configuração ou ligação (interruptor desligado não conta).
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
         {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o estado dos crons" />}
         {crons.map((c) => {
           const h = HEALTH[c.health] ?? HEALTH.never;
-          const bad = c.health === "failed" || c.health === "stale";
+          const bad = c.health === "failed" || c.health === "stale" || c.health === "skipping";
           return (
             <div key={c.name} className={`rounded-lg border p-3 ${bad ? "border-red-300 bg-red-50/60 dark:bg-red-950/20" : "border-border"}`}>
               <button type="button" className="w-full text-left" onClick={() => setOpen(open === c.name ? null : c.name)}>
@@ -176,6 +177,9 @@ function SystemStatusCard() {
                 )}
                 {c.last && c.last.ok === true && c.last.error && (
                   <p className="mt-2 text-xs text-amber-800 dark:text-amber-300 break-words"><AlertTriangle className="inline h-3 w-3 mr-1" />{c.last.error}</p>
+                )}
+                {c.health === "skipping" && (
+                  <p className="mt-2 text-xs text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />Corre mas não faz o trabalho há mais de {CRON_SKIP_PROBLEM_DAYS} dias: falta configuração ou ligação (ver a nota acima). Ligar ou configurar resolve; se for de propósito, desliga o interruptor.</p>
                 )}
                 {c.health === "stale" && (
                   <p className="mt-2 text-xs text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />Sem corridas há mais de {c.staleAfterMinutes} min — {c.workflow === "tick" || c.workflow === "cron-job.org" ? "verificar o agendador (cron-job.org → /api/cron/tick; ver Ajuda → Agendador)" : `corre só à mão (${c.workflow})`}.</p>
