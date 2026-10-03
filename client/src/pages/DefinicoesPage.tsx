@@ -766,7 +766,7 @@ function SecurityCard({ isSuperAdmin }: { isSuperAdmin: boolean }) {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2"><KeyRound className="h-4 w-4" />Validade das API keys</CardTitle>
-          <p className="text-xs text-muted-foreground">Chaves guardadas só como hash; aqui muda-se a data de expiração. Criar/apagar chaves: página API Keys.</p>
+          <p className="text-xs text-muted-foreground">Chaves guardadas só como hash; aqui muda-se a data de expiração (a chave funciona até ao fim desse dia, hora de Lisboa). Criar, mudar capacidades ou revogar: página API Keys.</p>
         </CardHeader>
         <CardContent className="space-y-2">
           {keys.data && !keys.data.visible && <p className="text-sm text-muted-foreground">Só o super admin gere as API keys.</p>}

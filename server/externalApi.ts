@@ -6,7 +6,7 @@ import { Router, Request, Response } from "express";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { vehicles } from "../drizzle/schema";
-import { apiKeyMiddleware, logApiKeyAction } from "./apiKeyAuth";
+import { apiInternalError, apiKeyMiddleware, logApiKeyAction } from "./apiKeyAuth";
 import {
   getVehicles,
   getAllEmployees,
@@ -29,8 +29,32 @@ async function getDb() {
 }
 
 // ─── API KEY MIDDLEWARE ──────────────────────────────────────────────────────
-// Autenticação por hash + scopes (GET=read, escrita=write; chaves "device"
-// cobrem ambos) — ver server/apiKeyAuth.ts.
+// Autenticação por hash + capacidades (leituras: relatórios/dados pessoais ou
+// dispositivo; escritas: dispositivo; Gmail: reclamações ou dispositivo) —
+// ver server/apiKeyAuth.ts (externalRequiredCaps).
+
+/**
+ * O servidor vai descarregar o áudio: só http(s) e nunca um endereço interno
+ * (localhost, rede privada, metadados da cloud). PURA.
+ */
+export function radioAudioUrlError(raw: unknown): string | null {
+  const v = String(raw ?? "").trim();
+  if (!v) return "audioUrl is required";
+  if (v.length > 2048) return "audioUrl too long";
+  let u: URL;
+  try { u = new URL(v); } catch { return "audioUrl must be a valid http(s) URL"; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "audioUrl must be a valid http(s) URL";
+  if (u.username || u.password) return "audioUrl must not carry credentials";
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const privateHost =
+    host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") ||
+    /^(0|10|127)\./.test(host) || /^169\.254\./.test(host) || /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+    host === "::1" || host === "::" || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host) || host.startsWith("::ffff:") ||
+    (!host.includes(".") && !host.includes(":"));
+  if (privateHost) return "audioUrl must be a public address";
+  return null;
+}
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 
@@ -44,7 +68,7 @@ export function createExternalApiRouter(): Router {
       const list = await getVehicles();
       res.json({ success: true, data: list.map((v: any) => ({ id: v.id, plate: v.plate, brand: v.brand, model: v.model, status: v.status, projectId: v.projectId })) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      apiInternalError(res, "external GET /vehicles", e);
     }
   });
 
@@ -54,7 +78,7 @@ export function createExternalApiRouter(): Router {
       const list = await getAllEmployees();
       res.json({ success: true, data: list.map((e: any) => ({ id: e.employee.id, fullName: e.employee.fullName, position: e.employee.position, status: e.employee.status })) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      apiInternalError(res, "external GET /employees", e);
     }
   });
 
@@ -107,7 +131,7 @@ export function createExternalApiRouter(): Router {
 
       res.json({ success: true, id, message: "Speed alert registered and team notified" });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      apiInternalError(res, "external POST /speed-alert", e);
     }
   });
 
@@ -149,7 +173,7 @@ export function createExternalApiRouter(): Router {
 
       res.json({ success: true, id, message: "Vehicle movement registered" });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      apiInternalError(res, "external POST /vehicle-movement", e);
     }
   });
 
@@ -159,8 +183,9 @@ export function createExternalApiRouter(): Router {
     try {
       const { audioUrl, employeeId, vehicleId, duration } = req.body;
 
-      if (!audioUrl) {
-        res.status(400).json({ error: "audioUrl is required" });
+      const urlError = radioAudioUrlError(audioUrl);
+      if (urlError) {
+        res.status(400).json({ error: urlError });
         return;
       }
 
@@ -192,7 +217,7 @@ export function createExternalApiRouter(): Router {
 
       res.json({ success: true, id, transcription: result.transcription, summary: summaryText });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      apiInternalError(res, "external POST /radio-upload", e);
     }
   });
 
@@ -201,7 +226,7 @@ export function createExternalApiRouter(): Router {
     res.json({
       title: "Dashboard Multipark External API",
       version: "1.0",
-      auth: "Header X-API-Key required on all endpoints. Scopes: GET = read; POST = write (device keys: both).",
+      auth: "Header X-API-Key required on all endpoints. Capabilities: device (all of the routes below), reports:ops (GET /vehicles), pii (GET /employees), complaints:write (POST /gmail-import). Limit: 240 requests/minute per key (429 + Retry-After).",
       endpoints: [
         {
           method: "GET", path: "/api/external/vehicles",
@@ -218,7 +243,7 @@ export function createExternalApiRouter(): Router {
           description: "Registar alerta de velocidade (ex: GPS Zilo)",
           body: "{ vehicleId? | plate?, speed, speedLimit, latitude?, longitude?, roadName?, employeeId? }",
           response: "{ success, id }",
-          notes: "Pode enviar vehicleId ou plate. Notifica automaticamente o Super Admin.",
+          notes: "Pode enviar vehicleId ou plate. Avisa as chefias da cidade do condutor (aviso speed_alert).",
         },
         {
           method: "POST", path: "/api/external/vehicle-movement",
@@ -231,7 +256,14 @@ export function createExternalApiRouter(): Router {
           description: "Enviar áudio de rádio para transcrição automática",
           body: "{ audioUrl, employeeId?, vehicleId?, duration? }",
           response: "{ success, id, transcription, summary }",
-          notes: "O áudio é transcrito via Whisper e resumido com IA.",
+          notes: "audioUrl tem de ser um endereço http(s) público. O áudio é transcrito e resumido com IA.",
+        },
+        {
+          method: "POST", path: "/api/external/gmail-import",
+          description: "Importar ocorrências e críticas já lidas do Gmail (tarefa agendada externa)",
+          body: "{ occurrences?: [{ sourceEmailId?, incidentType?, severity?, description, vehiclePlate?, ... }], reviews?: [{ sourceEmailId?, reviewerName, rating, reviewText?, aiResponse? }] }",
+          response: "{ success, reviewsImported, reviewsSkipped, incidentsImported, incidentsSkipped, details, errors }",
+          notes: "Não duplica: o mesmo sourceEmailId é ignorado. Capacidade complaints:write (ou device).",
         },
       ],
     });
@@ -272,7 +304,8 @@ export function createExternalApiRouter(): Router {
             result.incidentsImported++;
             result.details.push(`Ocorr\u00eancia: ${occ.description?.substring(0, 60) || "sem descri\u00e7\u00e3o"}`);
           } catch (e: any) {
-            result.errors.push(`Erro ocorr\u00eancia: ${e.message}`);
+            console.error("[GmailImport] ocorrência falhou:", occ?.sourceEmailId ?? "", e);
+            result.errors.push(`Erro ocorr\u00eancia${occ?.sourceEmailId ? ` (${String(occ.sourceEmailId).slice(0, 80)})` : ""}: não foi gravada`);
           }
         }
       }
@@ -309,7 +342,8 @@ export function createExternalApiRouter(): Router {
             result.reviewsImported++;
             result.details.push(`Cr\u00edtica: ${rev.rating}\u2605 de ${rev.reviewerName}`);
           } catch (e: any) {
-            result.errors.push(`Erro review: ${e.message}`);
+            console.error("[GmailImport] crítica falhou:", rev?.sourceEmailId ?? "", e);
+            result.errors.push(`Erro review${rev?.sourceEmailId ? ` (${String(rev.sourceEmailId).slice(0, 80)})` : ""}: não foi gravada`);
           }
         }
       }
@@ -318,8 +352,7 @@ export function createExternalApiRouter(): Router {
         details: `Gmail import: ${result.incidentsImported} ocorrências, ${result.reviewsImported} críticas (${result.errors.length} erros)` });
       res.json({ success: true, ...result });
     } catch (err: any) {
-      console.error("[GmailImport] Error:", err);
-      res.status(500).json({ success: false, error: err.message });
+      apiInternalError(res, "external POST /gmail-import", err, { success: false });
     }
   });
 

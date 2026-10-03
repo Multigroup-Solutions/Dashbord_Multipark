@@ -45,6 +45,10 @@ export const apiKeys = mysqlTable("api_keys", {
 	lastUsedAt: timestamp({ mode: 'string' }),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// 0405: revogar em vez de apagar (nunca volta a funcionar).
+	revokedAt: timestamp({ mode: 'string' }),
+	revokedById: int(),
+	revokeReason: varchar({ length: 255 }),
 },
 (table) => [
 	index("api_keys_apiKey_unique").on(table.apiKey),

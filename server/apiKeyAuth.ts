@@ -1,27 +1,29 @@
 /**
- * API keys (X-API-Key) — autenticação, scopes e auditoria partilhados por
- * /api/external (dispositivos) e /api/v1 (MCP).
+ * API keys (X-API-Key) — autenticação, capacidades e auditoria partilhados por
+ * /api/external (dispositivos) e /api/v1 (MCP, site, relatórios).
  *
  * Armazenamento (migração 0095): nunca em claro. Guarda-se o SHA-256 (hex) da
  * chave em `keyHash` (índice UNIQUE → lookup direto) e os 9 primeiros
  * caracteres em `keyPrefix` (ex. "mp_ab12cd") para a UI reconhecer a chave. A
  * chave completa só é mostrada UMA vez, na criação. `expiresAt` opcional.
+ * Revogada (0405) = nunca mais funciona.
  *
- * Scopes (`permissions`, JSON ou lista separada por vírgulas):
- *   - read   → leituras (GET)
- *   - write  → leituras + escritas operacionais (POST/PATCH, syncs)
- *   - admin  → tudo, incluindo destrutivo e /admin/*   (admin ⊃ write ⊃ read)
- *   - device → dispositivos (GPS/rádio): SÓ /api/external (GET + POST);
- *              nenhuma rota da /api/v1. Chaves antigas sem `permissions`
- *              contam como `device` — era o que já faziam, continuam a fazer.
+ * Capacidades (P3 lote 20a, shared/apiKeyCapabilities.ts): cada rota exige uma
+ * (ou uma de várias) — formulários do site, relatórios de operação, caixa,
+ * marketing, dados pessoais, reclamações (escrever), dispositivo, admin.
+ * As chaves antigas (read/write/admin/device/vazio) são lidas como o conjunto
+ * equivalente: continuam a fazer exatamente o que faziam.
  */
 import { createHash, randomBytes } from "crypto";
 import type { NextFunction, Request, Response } from "express";
+import { capabilitiesFor, type ApiKeyCapability } from "../shared/apiKeyCapabilities";
 
-export type Scope = "read" | "write" | "admin" | "device";
+export type { ApiKeyCapability } from "../shared/apiKeyCapabilities";
 
 export const API_KEY_PREFIX_LEN = 9;
 export const LAST_USED_THROTTLE_MS = 5 * 60 * 1000;
+/** Pedidos por minuto por chave (por instância). Acima disto: 429. */
+export const API_KEY_RATE_PER_MIN = 240;
 
 // ─── Chave, hash e prefixo ────────────────────────────────────────────────────
 
@@ -39,47 +41,36 @@ export function apiKeyPrefix(key: string): string {
   return key.slice(0, API_KEY_PREFIX_LEN);
 }
 
-// ─── Scopes ───────────────────────────────────────────────────────────────────
+// ─── Capacidades por rota ─────────────────────────────────────────────────────
 
-export function scopesFor(permissions: string | null | undefined): Set<Scope> {
-  const s = new Set<Scope>();
-  const raw = String(permissions ?? "").trim();
-  let parts: string[] = [];
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      parts = Array.isArray(parsed) ? parsed.map(String) : String(parsed).split(/[,\s]+/);
-    } catch {
-      parts = raw.split(/[,\s]+/);
-    }
-  }
-  const set = new Set(parts.map(p => p.trim().toLowerCase()).filter(Boolean));
-  // Legado: chave sem permissions (ou "[]") = chave de dispositivo.
-  if (set.size === 0) { s.add("device"); return s; }
-  if (set.has("*") || set.has("admin") || set.has("full")) { s.add("read"); s.add("write"); s.add("admin"); }
-  if (set.has("write")) { s.add("read"); s.add("write"); }
-  if (set.has("read")) s.add("read");
-  if (set.has("device")) s.add("device");
-  return s;
-}
-
-/** Scope exigido por um pedido à /api/external: GET/HEAD → read; resto → write; /admin/* → admin. */
-export function externalRequiredScope(method: string, path: string): Scope {
-  if (/^\/admin(\/|$)/.test(path)) return "admin";
+/**
+ * /api/external: o que cada pedido exige (basta UMA das capacidades).
+ * Mantém o que as chaves antigas faziam: leitura (GET) com "read", tudo menos
+ * /admin com "device" ou "write", importação do Gmail com "write"/"device".
+ */
+export function externalRequiredCaps(method: string, path: string): ApiKeyCapability[] | "any" {
+  if (/^\/admin(\/|$)/.test(path)) return ["admin"];
   const m = method.toUpperCase();
-  return m === "GET" || m === "HEAD" || m === "OPTIONS" ? "read" : "write";
+  const read = m === "GET" || m === "HEAD" || m === "OPTIONS";
+  if (read) {
+    if (path === "/docs") return "any";
+    if (path === "/employees") return ["pii", "device"];
+    return ["reports:ops", "device"];
+  }
+  if (path === "/gmail-import") return ["complaints:write", "device"];
+  return ["device"];
 }
 
-/** Pode esta chave fazer este pedido à /api/external? (device cobre read/write, nunca admin) */
-export function externalAllowed(scopes: Set<Scope>, method: string, path: string): boolean {
-  const need = externalRequiredScope(method, path);
-  if (scopes.has(need)) return true;
-  return need !== "admin" && scopes.has("device");
+/** Pode esta chave fazer este pedido à /api/external? */
+export function externalAllowed(caps: Set<ApiKeyCapability>, method: string, path: string): boolean {
+  const need = externalRequiredCaps(method, path);
+  if (need === "any") return caps.size > 0;
+  return need.some((c) => caps.has(c));
 }
 
-/** /api/v1: device não conta; cada rota declara o scope que exige. */
-export function v1Allowed(scopes: Set<Scope>, need: Exclude<Scope, "device">): boolean {
-  return scopes.has(need);
+/** /api/v1: basta uma das capacidades pedidas; "device" nunca abre nada aqui. */
+export function v1Allowed(caps: Set<ApiKeyCapability>, anyOf: readonly ApiKeyCapability[]): boolean {
+  return anyOf.some((c) => c !== "device" && caps.has(c));
 }
 
 // ─── Estado da chave ──────────────────────────────────────────────────────────
@@ -113,11 +104,15 @@ export interface ApiKeyRow {
   expiresAt: string | null;
   lastUsedAt: string | null;
   createdById: number | null;
+  revokedAt?: string | null;
 }
 
 export type ApiKeyCheck =
   | { ok: true; key: ApiKeyRow }
   | { ok: false; status: 401 | 403; error: string };
+
+/** A mesma resposta para chave errada, inativa, revogada ou expirada (não revela qual). */
+export const INVALID_KEY_ERROR = "Invalid or inactive API key";
 
 /** Valida a chave apresentada; `lookupByHash` devolve a linha com esse keyHash (ou null). */
 export async function checkPresentedKey(
@@ -127,11 +122,39 @@ export async function checkPresentedKey(
 ): Promise<ApiKeyCheck> {
   const key = String(presented ?? "").trim();
   if (!key) return { ok: false, status: 401, error: "Missing X-API-Key header" };
-  if (key.length > 200) return { ok: false, status: 403, error: "Invalid or inactive API key" };
+  if (key.length > 200) return { ok: false, status: 403, error: INVALID_KEY_ERROR };
   const row = await lookupByHash(hashApiKey(key));
-  if (!row || !row.active) return { ok: false, status: 403, error: "Invalid or inactive API key" };
-  if (isApiKeyExpired(row.expiresAt, now)) return { ok: false, status: 403, error: "API key expired" };
+  if (!row || !row.active || row.revokedAt) return { ok: false, status: 403, error: INVALID_KEY_ERROR };
+  if (isApiKeyExpired(row.expiresAt, now)) return { ok: false, status: 403, error: INVALID_KEY_ERROR };
   return { ok: true, key: row };
+}
+
+// ─── Limite por chave ─────────────────────────────────────────────────────────
+
+const rateBuckets = new Map<number, { start: number; count: number }>();
+
+/** Janela fixa de 1 minuto por chave. Devolve os segundos a esperar (0 = pode). */
+export function apiKeyRateWait(keyId: number, now = Date.now(), limit = API_KEY_RATE_PER_MIN): number {
+  const b = rateBuckets.get(keyId);
+  if (!b || now - b.start >= 60_000) {
+    rateBuckets.set(keyId, { start: now, count: 1 });
+    if (rateBuckets.size > 5000) rateBuckets.clear();
+    return 0;
+  }
+  b.count += 1;
+  return b.count > limit ? Math.max(1, Math.ceil((b.start + 60_000 - now) / 1000)) : 0;
+}
+
+// ─── Erros sem fuga ───────────────────────────────────────────────────────────
+
+/**
+ * Erro interno para quem chama a API: mensagem genérica + referência; o
+ * detalhe (mensagem, SQL, stack) fica só nos logs do servidor.
+ */
+export function apiInternalError(res: Response, where: string, err: unknown, extra: Record<string, unknown> = {}): void {
+  const ref = randomBytes(4).toString("hex");
+  console.error(`[API ${where}] ref=${ref}`, err);
+  if (!res.headersSent) res.status(500).json({ ...extra, error: `Erro interno (ref ${ref})`, ref });
 }
 
 // ─── BD ───────────────────────────────────────────────────────────────────────
@@ -146,6 +169,7 @@ async function lookupByHashDb(hash: string): Promise<ApiKeyRow | null> {
     .select({
       id: apiKeys.id, name: apiKeys.name, keyPrefix: apiKeys.keyPrefix, permissions: apiKeys.permissions,
       active: apiKeys.active, expiresAt: apiKeys.expiresAt, lastUsedAt: apiKeys.lastUsedAt, createdById: apiKeys.createdById,
+      revokedAt: apiKeys.revokedAt,
     })
     .from(apiKeys)
     .where(eq(apiKeys.keyHash, hash))
@@ -167,14 +191,16 @@ async function touchLastUsed(id: number): Promise<void> {
 export function getApiKeyInfo(req: Request): ApiKeyRow | undefined {
   return (req as any).apiKeyInfo;
 }
-export function getScopes(req: Request): Set<Scope> {
-  return (req as any).scopes ?? new Set<Scope>();
+export function getCapabilities(req: Request): Set<ApiKeyCapability> {
+  return (req as any).apiKeyCaps ?? new Set<ApiKeyCapability>();
 }
 
+const missingCap = (need: readonly ApiKeyCapability[]) =>
+  `Esta API key não tem a capacidade necessária (${need.join(" ou ")}).`;
+
 /**
- * Autentica o X-API-Key. `surface: "external"` também aplica a matriz de
- * scopes da /api/external (GET=read, escrita=write, /admin=admin; device
- * cobre read+write). Na /api/v1 cada rota usa `requireScope`.
+ * Autentica o X-API-Key, aplica o limite por chave e, na /api/external, a
+ * capacidade exigida pelo pedido. Na /api/v1 cada rota usa `requireCapability`.
  */
 export function apiKeyMiddleware(surface: "external" | "v1") {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -183,54 +209,68 @@ export function apiKeyMiddleware(surface: "external" | "v1") {
       check = await checkPresentedKey(req.headers["x-api-key"] as string | undefined, lookupByHashDb);
     } catch (err) {
       console.error("[ApiKey] lookup falhou:", err);
-      return res.status(500).json({ error: "Database unavailable" });
+      return res.status(503).json({ error: "Serviço indisponível. Tenta daqui a pouco." });
     }
     if (!check.ok) return res.status(check.status).json({ error: check.error });
     const key = check.key;
-    const scopes = scopesFor(key.permissions);
+    const wait = apiKeyRateWait(key.id);
+    if (wait > 0) {
+      res.setHeader("Retry-After", String(wait));
+      return res.status(429).json({ error: `Demasiados pedidos com esta API key. Tenta daqui a ${wait} s.` });
+    }
+    const caps = capabilitiesFor(key.permissions);
     (req as any).apiKeyInfo = key;
-    (req as any).scopes = scopes;
+    (req as any).apiKeyCaps = caps;
     if (shouldTouchLastUsed(key.lastUsedAt)) {
       touchLastUsed(key.id).catch((err) => console.warn("[ApiKey] lastUsedAt:", String(err?.message ?? err).slice(0, 120)));
     }
-    if (surface === "external" && !externalAllowed(scopes, req.method, req.path)) {
-      const need = externalRequiredScope(req.method, req.path);
-      return res.status(403).json({ error: `Esta API key não tem o scope '${need}'. Scopes da chave: [${Array.from(scopes).join(", ") || "nenhum"}].` });
+    if (surface === "external" && !externalAllowed(caps, req.method, req.path)) {
+      const need = externalRequiredCaps(req.method, req.path);
+      return res.status(403).json({ error: missingCap(need === "any" ? [] : need) });
     }
     next();
   };
 }
 
-export function requireScope(scope: Exclude<Scope, "device">) {
+/** /api/v1: a rota exige UMA destas capacidades ("admin" abre tudo). */
+export function requireCapability(...anyOf: Exclude<ApiKeyCapability, "device">[]) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const scopes = getScopes(req);
-    if (!v1Allowed(scopes, scope)) {
-      return res.status(403).json({
-        error: `Esta API key não tem o scope '${scope}'. Scopes da chave: [${Array.from(scopes).join(", ") || "nenhum"}].`,
-      });
-    }
+    if (!v1Allowed(getCapabilities(req), anyOf)) return res.status(403).json({ error: missingCap(anyOf) });
+    next();
+  };
+}
+
+/** /api/v1 sem rota específica (índice): qualquer capacidade da v1 (dispositivo não conta). */
+export function requireAnyV1Capability() {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const caps = getCapabilities(req);
+    if (!Array.from(caps).some((c) => c !== "device")) return res.status(403).json({ error: "Esta API key não tem acesso à /api/v1." });
     next();
   };
 }
 
 // ─── Auditoria ────────────────────────────────────────────────────────────────
 
-/** Etiqueta da chave para os logs: "[API key #3 mp_ab12cd…]". */
-export function apiKeyTag(key: Pick<ApiKeyRow, "id" | "keyPrefix"> | undefined | null): string {
+/** Etiqueta da chave para os logs: "[API key #3 «Site» mp_ab12cd…]". */
+export function apiKeyTag(key: Pick<ApiKeyRow, "id" | "keyPrefix"> & { name?: string | null } | undefined | null): string {
   if (!key) return "[API key ?]";
-  return `[API key #${key.id}${key.keyPrefix ? ` ${key.keyPrefix}…` : ""}]`;
-}
-
-/** Autor do log: quem criou a chave (0 = sistema, quando desconhecido). */
-export function apiKeyActorId(key: Pick<ApiKeyRow, "createdById"> | undefined | null): number {
-  return key?.createdById ?? 0;
+  const name = key.name ? ` «${String(key.name).slice(0, 60)}»` : "";
+  return `[API key #${key.id}${name}${key.keyPrefix ? ` ${key.keyPrefix}…` : ""}]`;
 }
 
 /**
- * Regista uma escrita feita por API key: autor = criador da chave, detalhes
- * com a etiqueta da chave. `asKeyEvent` (ações admin/syncs) regista também
- * com entity 'api_key' + entityId = id da chave, para se filtrar tudo o que
- * uma chave fez.
+ * Autor do que uma chave faz: 0 (sistema/integração) — nunca a pessoa que a
+ * criou (antes as escritas da chave apareciam como feitas por essa pessoa).
+ * A chave fica identificada na etiqueta dos detalhes.
+ */
+export function apiKeyActorId(_key?: unknown): number {
+  return 0;
+}
+
+/**
+ * Regista uma escrita feita por API key: autor = 0 (integração), detalhes com
+ * a etiqueta da chave. `asKeyEvent` (ações admin/syncs) regista com entity
+ * 'api_key' + entityId = id da chave, para se filtrar tudo o que uma chave fez.
  */
 export async function logApiKeyAction(
   req: Request,

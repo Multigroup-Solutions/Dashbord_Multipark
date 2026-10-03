@@ -25,10 +25,10 @@ const adminOnly = protectedProcedure.use(({ ctx, next }) => {
   return next();
 });
 
-async function log(userId: number, action: string, entity: string, details: string) {
+async function log(userId: number, action: string, entity: string, details: string, entityId: number | null = null) {
   try {
     const { logActivity } = await import("./db");
-    await logActivity({ userId, action, entity, entityId: null, details: details.slice(0, 1000) } as any);
+    await logActivity({ userId, action, entity, entityId, details: details.slice(0, 1000) } as any);
   } catch { /* o registo nunca parte a ação */ }
 }
 
@@ -187,15 +187,22 @@ export const settingsRouter = router({
     setApiKeyExpiry: adminOnly
       .input(z.object({
         id: z.number().int().positive(),
-        /** Dia (AAAA-MM-DD, fim do dia UTC) ou null = sem expiração. */
+        /** Dia (AAAA-MM-DD): a chave funciona até ao fim desse dia em Lisboa. null = sem expiração. */
         expiresOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.").nullable(),
       }))
       .mutation(async ({ ctx, input }) => {
         requireSuperAdmin(ctx.user.role);
-        const expiresAt = input.expiresOn ? `${input.expiresOn} 23:59:59` : null;
-        const { setApiKeyExpiry } = await import("./db");
-        await setApiKeyExpiry(input.id, expiresAt);
-        await log(ctx.user.id, "update", "api_key", `Validade da API key #${input.id}: ${input.expiresOn ?? "sem expiração"}`);
+        // 20a: fim do dia em LISBOA (antes 23:59:59 UTC = 00:59 do dia seguinte no verão).
+        const { lisbonEndOfDayUtc, apiKeyLogName } = await import("./apiKeysRouter");
+        const expiresAt = input.expiresOn ? lisbonEndOfDayUtc(input.expiresOn) : null;
+        const { getApiKeyById, setApiKeyExpiry } = await import("./db");
+        const k = await getApiKeyById(input.id);
+        if (!k) throw new TRPCError({ code: "NOT_FOUND", message: "API key não encontrada." });
+        if (k.revokedAt || !(await setApiKeyExpiry(input.id, expiresAt))) {
+          throw new TRPCError({ code: "CONFLICT", message: "Esta API key foi revogada — já não se altera." });
+        }
+        await log(ctx.user.id, "update", "api_key",
+          `Validade da API key ${apiKeyLogName(k)}: ${k.expiresAt ? k.expiresAt.slice(0, 10) : "sem expiração"} → ${input.expiresOn ?? "sem expiração"}`, input.id);
         return { success: true };
       }),
     /** Termina as sessões da própria pessoa noutros dispositivos (este fica). */

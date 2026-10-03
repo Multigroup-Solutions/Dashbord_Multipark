@@ -8,6 +8,7 @@ import {
 import { trainingRouter } from './trainingRouter';
 import { tasksRouter } from './tasksRouter';
 import { settingsRouter } from './settingsRouter';
+import { apiKeysRouter } from './apiKeysRouter';
 import { evaluationRouter } from './evaluationRouter';
 import { assistantRouter } from './assistant/router';
 import { aiOpsRouter } from './aiOps/router';
@@ -94,7 +95,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
-import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getApiKeys, createApiKey, toggleApiKey, deleteApiKey, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
+import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, deletePartnership, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
@@ -1636,54 +1637,8 @@ export const appRouter = router({
     hub: integrationsHubRouter,
   }),
 
-  apiKeys: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "api_keys", "manage");
-      return getApiKeys();
-    }),
-    // A chave completa só sai AQUI, uma vez; na BD fica só o hash + prefixo.
-    create: protectedProcedure.input(z.object({
-      name: z.string().trim().min(1).max(100),
-      permissions: z.array(z.enum(["read", "write", "admin", "device"])).optional(),
-      expiresInDays: z.number().int().min(1).max(3650).optional(),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "api_keys", "manage");
-      const { generateApiKey, hashApiKey, apiKeyPrefix } = await import("./apiKeyAuth");
-      const key = generateApiKey();
-      const perms = input.permissions?.length ? input.permissions : ["device"];
-      const expiresAt = input.expiresInDays
-        ? new Date(Date.now() + input.expiresInDays * 86_400_000).toISOString().slice(0, 19).replace("T", " ")
-        : null;
-      const id = await createApiKey({
-        name: input.name,
-        apiKey: null,
-        keyHash: hashApiKey(key),
-        keyPrefix: apiKeyPrefix(key),
-        expiresAt,
-        permissions: JSON.stringify(perms),
-        active: 1,
-        createdById: ctx.user.id,
-      });
-      await logActivity({ userId: ctx.user.id, action: "create", entity: "api_key", entityId: id,
-        details: `API Key: ${input.name} (${apiKeyPrefix(key)}…, scopes ${perms.join(",")}${expiresAt ? `, expira ${expiresAt.slice(0, 10)}` : ""})` });
-      return { id, key, keyPrefix: apiKeyPrefix(key) };
-    }),
-    toggle: protectedProcedure.input(z.object({
-      id: z.number(),
-      active: z.boolean(),
-    })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "api_keys", "manage");
-      await toggleApiKey(input.id, input.active);
-      await logActivity({ userId: ctx.user.id, action: "update", entity: "api_key", entityId: input.id, details: input.active ? "Ativada" : "Desativada" });
-      return { success: true };
-    }),
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "api_keys", "manage");
-      await deleteApiKey(input.id);
-      await logActivity({ userId: ctx.user.id, action: "delete", entity: "api_key", entityId: input.id, details: "API Key eliminada" });
-      return { success: true };
-    }),
-  }),
+  // P3 lote 20a: capacidades, revogar em vez de apagar — server/apiKeysRouter.ts
+  apiKeys: apiKeysRouter,
 
   // ─── RECLAMAÇÕES ────────────────────────────────────────────────────────────
   complaints: router({

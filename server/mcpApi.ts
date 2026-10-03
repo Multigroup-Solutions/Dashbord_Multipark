@@ -1,20 +1,24 @@
 /**
- * MCP Control API — superfície REST completa para controlar a Dashboard Multipark
- * a partir de um servidor MCP (ou qualquer cliente HTTP).
+ * MCP Control API — superfície REST para controlar a Dashboard Multipark a
+ * partir de um servidor MCP, do site ou de qualquer cliente HTTP.
  *
  * Montado em /api/v1. Autenticação por header X-API-Key (tabela api_keys).
- * Cada chave tem um campo `permissions` que define o scope (ver server/apiKeyAuth.ts):
- *   - "read"           → só leituras
- *   - "read,write"     → leituras + escrita operacional (criar/editar, syncs)
- *   - "admin" ou "*"   → tudo, incluindo operações destrutivas
- * (admin implica write implica read). Chaves "device" (ou sem permissions) não acedem aqui.
+ * Cada rota exige uma CAPACIDADE da chave (P3 lote 20a, ver
+ * shared/apiKeyCapabilities.ts e server/apiKeyAuth.ts): formulários do site,
+ * relatórios de operação, caixa, marketing, dados pessoais, reclamações
+ * (escrever) ou admin. Chaves só de dispositivo não acedem aqui. As chaves
+ * antigas (read/write/admin) mantêm o que faziam.
  *
  * Cobre todos os parques e cidades (PARK_CONFIGS).
  */
 import { Router, Request, Response, NextFunction } from "express";
 import { and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { apiKeyMiddleware, requireScope, logApiKeyAction, apiKeyActorId, getApiKeyInfo } from "./apiKeyAuth";
+import {
+  apiKeyMiddleware, requireCapability, requireAnyV1Capability, logApiKeyAction, apiKeyActorId, getApiKeyInfo,
+  getCapabilities, apiInternalError,
+} from "./apiKeyAuth";
+import { API_KEY_CAPABILITIES } from "../shared/apiKeyCapabilities";
 import { registerMcpReportRoutes } from "./mcpReportsApi";
 import { registerMcpMarketingRoutes } from "./mcpMarketingApi";
 import {
@@ -40,17 +44,15 @@ async function db() {
   return _db;
 }
 
-// ─── AUTH + SCOPES ────────────────────────────────────────────────────────────
+// ─── AUTH + CAPACIDADES ───────────────────────────────────────────────────────
 
-// Autenticação por hash, expiração, lastUsedAt (5 min) e scopes: server/apiKeyAuth.ts.
-// Chaves "device" (dispositivos) não têm acesso a nenhuma rota daqui.
+// Autenticação por hash, expiração, revogação, limite por chave, lastUsedAt
+// (5 min) e capacidades: server/apiKeyAuth.ts.
 
-// helper para apanhar erros sem repetir try/catch
+// helper para apanhar erros sem repetir try/catch. Para fora vai só "Erro
+// interno (ref …)": a mensagem real (SQL, nomes de tabelas) fica nos logs.
 const h = (fn: (req: Request, res: Response) => Promise<any>) =>
-  (req: Request, res: Response) => fn(req, res).catch((e: any) => {
-    console.error("[MCP API]", req.method, req.path, e);
-    res.status(500).json({ error: String(e?.message || "Erro interno").slice(0, 300) });
-  });
+  (req: Request, res: Response) => fn(req, res).catch((e: any) => apiInternalError(res, `v1 ${req.method} ${req.path}`, e));
 
 function parseDate(v: any): Date | undefined {
   if (!v) return undefined;
@@ -64,8 +66,8 @@ export function createMcpApiRouter(): Router {
   const r = Router();
   r.use(apiKeyMiddleware("v1"));
   // Defesa em profundidade: TUDO em /admin/* exige 'admin', mesmo que uma rota
-  // nova se esqueça do requireScope.
-  r.use("/admin", requireScope("admin"));
+  // nova se esqueça do requireCapability.
+  r.use("/admin", requireCapability("admin"));
   // Ficheiros do bucket (ex.: fotos das reclamações) saem com link ASSINADO,
   // como na app — o bucket deixa de ser público (server/storageSign.ts).
   r.use((_req: Request, res: Response, next: NextFunction) => {
@@ -79,31 +81,39 @@ export function createMcpApiRouter(): Router {
     next();
   });
 
-  // Índice / capacidades
-  r.get("/", (req: Request, res: Response) => {
+  // Índice: o que esta chave pode fazer (pede uma capacidade da v1).
+  r.get("/", requireAnyV1Capability(), (req: Request, res: Response) => {
+    const caps = getCapabilities(req);
     res.json({
       service: "Multipark Dashboard MCP Control API",
       version: "1",
-      yourScopes: Array.from((req as any).scopes ?? []),
+      yourCapabilities: API_KEY_CAPABILITIES.filter((c) => caps.has(c)),
       endpoints: {
-        read: [
-          "GET /parks", "GET /bookings", "GET /bookings/stats", "GET /bookings/:externalId",
-          "GET /complaints", "GET /complaints/stats", "GET /complaints/:id",
-          "GET /reviews", "GET /vehicles", "GET /employees", "GET /dashboard/summary",
-          "GET /campaigns", "GET /campaigns/api/:id/daily", "GET /projects",
-          "GET /cash/counts", "GET /cash/counts/:parkId/:day", "GET /cash/cases", "GET /cash/cases/:id",
-          "GET /drivers/daily", "GET /partners/billing", "GET /partners/close", "GET /shift-handovers",
-          "GET /availability-form/context?token=",
+        "site:intake": [
+          "GET /availability-form/context?token=", "POST /availability-form/submit",
+          "POST /driver-applications", "POST /extras-availability/submit-by-email",
         ],
-        write: [
-          "POST /complaints", "PATCH /complaints/:id", "POST /complaints/:id/messages",
-          "POST /reviews",
-          "POST /availability-form/submit",
-          "POST /driver-applications",
-          "POST /extras-availability/submit-by-email",
+        "reports:ops": [
+          "GET /parks", "GET /projects", "GET /vehicles", "GET /bookings/stats", "GET /complaints/stats",
+          "GET /dashboard/summary", "GET /drivers/daily",
+        ],
+        "reports:cash": [
+          "GET /cash/counts", "GET /cash/counts/:parkId/:day", "GET /cash/cases", "GET /cash/cases/:id",
+          "GET /partners/billing", "GET /partners/close", "GET /shift-handovers",
+        ],
+        "reports:marketing": [
+          "GET /campaigns", "GET /campaigns/api/:id/daily", "GET /marketing/stats", "GET /marketing/channels",
+          "GET /marketing/brands", "GET /marketing/campaign-roas", "GET /web/overview", "GET /web/list",
+        ],
+        pii: [
+          "GET /bookings", "GET /bookings/:externalId", "GET /complaints", "GET /complaints/:id",
+          "GET /reviews", "GET /employees", "GET /availability-form/context?token=",
+        ],
+        "complaints:write": [
+          "POST /complaints", "PATCH /complaints/:id", "POST /complaints/:id/messages", "POST /reviews",
         ],
         admin: [
-          "DELETE /complaints/:id", "POST /projects", "POST /admin/migrate-0048", "POST /admin/backfill-projects",
+          "DELETE /complaints/:id (arquiva)", "POST /projects", "POST /admin/migrate-0048", "POST /admin/backfill-projects",
           "POST /admin/merge-duplicate-extras",
         ],
       },
@@ -115,7 +125,7 @@ export function createMcpApiRouter(): Router {
   // app), cada pedido traz um token JWT single-use por extra (auth do utilizador).
   //
   // GET /context NÃO consome o token (o extra pode abrir, fechar e voltar).
-  r.get("/availability-form/context", requireScope("read"), h(async (req, res) => {
+  r.get("/availability-form/context", requireCapability("site:intake", "pii"), h(async (req, res) => {
     const token = String(req.query.token ?? "");
     if (!token) return res.status(400).json({ success: false, error: "Missing token", code: "token_missing" });
     const { getFormContext } = await import("./availabilityForm");
@@ -125,7 +135,7 @@ export function createMcpApiRouter(): Router {
   }));
 
   // POST /submit CONSOME o token (single-use) e escreve a disponibilidade.
-  r.post("/availability-form/submit", requireScope("write"), h(async (req, res) => {
+  r.post("/availability-form/submit", requireCapability("site:intake"), h(async (req, res) => {
     const token = String(req.body?.token ?? "");
     if (!token) return res.status(400).json({ success: false, error: "Missing token", code: "token_missing" });
     const { submitDaysSchema, submitForm } = await import("./availabilityForm");
@@ -141,7 +151,7 @@ export function createMcpApiRouter(): Router {
 
   // ── WEBSITE MULTIDRIVER (intake por email) ──────────────────────────────────
   // Candidatura "Be a Driver": upsert por email (UNIQUE) — nunca duplica.
-  r.post("/driver-applications", requireScope("write"), h(async (req, res) => {
+  r.post("/driver-applications", requireCapability("site:intake"), h(async (req, res) => {
     const { driverApplicationSchema, upsertDriverApplication } = await import("./webIntake");
     const parsed = driverApplicationSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -154,7 +164,7 @@ export function createMcpApiRouter(): Router {
 
   // Disponibilidade semanal submetida no site (email verificado por Google
   // sign-in no site). Auto-cria um extra pendente se o email for desconhecido.
-  r.post("/extras-availability/submit-by-email", requireScope("write"), h(async (req, res) => {
+  r.post("/extras-availability/submit-by-email", requireCapability("site:intake"), h(async (req, res) => {
     const { availabilityByEmailSchema, submitAvailabilityByEmail } = await import("./webIntake");
     const parsed = availabilityByEmailSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -166,7 +176,7 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── PARQUES / CIDADES ───────────────────────────────────────────────────────
-  r.get("/parks", requireScope("read"), h(async (_req, res) => {
+  r.get("/parks", requireCapability("reports:ops"), h(async (_req, res) => {
     const { PARK_CONFIGS } = await import("./multipark");
     const cities = Array.from(new Set(PARK_CONFIGS.map((p: any) => p.city)));
     res.json({
@@ -177,9 +187,9 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── PROJETOS (centros de custos: grupo → cidade → marca → projeto) ──────────
-  r.get("/projects", requireScope("read"), h(async (_req, res) => {
+  r.get("/projects", requireCapability("reports:ops"), h(async (_req, res) => {
     const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
+    if (!d) return res.status(503).json({ error: "Base de dados indisponível" });
     const rows = (r2: any) => (Array.isArray(r2[0]) ? r2[0] : r2) as any[];
     const projects = rows(await d.execute(sql`SELECT id, name, parentId, level, isActive FROM projects ORDER BY parentId, name`));
     res.json({ success: true, count: projects.length, projects });
@@ -187,7 +197,7 @@ export function createMcpApiRouter(): Router {
 
   // Cria um nó da árvore de projetos. Idempotente por (name, parentId):
   // se já existir devolve o existente em vez de duplicar.
-  r.post("/projects", requireScope("admin"), h(async (req, res) => {
+  r.post("/projects", requireCapability("admin"), h(async (req, res) => {
     const b = req.body ?? {};
     const name = String(b.name ?? "").trim();
     const level = String(b.level ?? "project");
@@ -195,7 +205,7 @@ export function createMcpApiRouter(): Router {
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
     if (!["group", "brand", "city", "project"].includes(level)) return res.status(400).json({ error: "level deve ser group|brand|city|project" });
     const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
+    if (!d) return res.status(503).json({ error: "Base de dados indisponível" });
     const rows = (r2: any) => (Array.isArray(r2[0]) ? r2[0] : r2) as any[];
     const existing = rows(await d.execute(sql`SELECT id, name, parentId, level FROM projects WHERE name = ${name} AND ${parentId === null ? sql`parentId IS NULL` : sql`parentId = ${parentId}`} LIMIT 1`))[0];
     if (existing) return res.json({ success: true, created: false, project: existing });
@@ -207,9 +217,9 @@ export function createMcpApiRouter(): Router {
 
   // ── CAMPANHAS (marketing) ─────────────────────────────────────────────────────
   // Lista campanhas lógicas: internal_campaigns + campaigns (ad).
-  r.get("/campaigns", requireScope("read"), h(async (_req, res) => {
+  r.get("/campaigns", requireCapability("reports:marketing"), h(async (_req, res) => {
     const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
+    if (!d) return res.status(503).json({ error: "Base de dados indisponível" });
     const rows = (r2: any) => (Array.isArray(r2[0]) ? r2[0] : r2) as any[];
     const internal = rows(await d.execute(sql`SELECT id, name, projectId, dailyBudget, city, brand, campaignStatus FROM internal_campaigns ORDER BY name`))
       .map((c: any) => ({ ...c, campaignType: "internal" }));
@@ -225,7 +235,7 @@ export function createMcpApiRouter(): Router {
   // Marketing (ad_daily_metrics, APIs Google Ads/Meta). type "api" = id de
   // ad_campaigns (ver GET /campaigns). Os tipos antigos ("internal"/"ad")
   // liam internal_campaign_costs, que já ninguém escreve → 410, como o POST.
-  r.get("/campaigns/:type/:id/daily", requireScope("read"), h(async (req, res) => {
+  r.get("/campaigns/:type/:id/daily", requireCapability("reports:marketing"), h(async (req, res) => {
     const type = String(req.params.type);
     if (type === "internal" || type === "ad") {
       return res.status(410).json({ error: "Descontinuado: o histórico diário vem das APIs Google Ads/Meta. Usa GET /campaigns (campaignType 'api') e /campaigns/api/:id/daily." });
@@ -234,7 +244,7 @@ export function createMcpApiRouter(): Router {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id inválido" });
     const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
+    if (!d) return res.status(503).json({ error: "Base de dados indisponível" });
     const rows = (r2: any) => (Array.isArray(r2[0]) ? r2[0] : r2) as any[];
     const [camp] = rows(await d.execute(sql`SELECT id, provider, accountId, externalId, name FROM ad_campaigns WHERE id = ${id} LIMIT 1`));
     if (!camp) return res.status(404).json({ error: "Campanha não encontrada" });
@@ -257,14 +267,14 @@ export function createMcpApiRouter(): Router {
 
   // Descontinuado (24 set 2026): gravava em internal_campaign_costs, que já
   // ninguém lê — o gasto vem só das APIs (Google Ads / Meta, ad_daily_metrics).
-  r.post("/campaigns/daily", requireScope("write"), (_req: Request, res: Response) => {
+  r.post("/campaigns/daily", requireCapability("reports:marketing"), (_req: Request, res: Response) => {
     res.status(410).json({ error: "Descontinuado: o gasto das campanhas vem das APIs Google Ads/Meta (Marketing). Nada foi gravado." });
   });
 
   // ── RESERVAS (todos os parques/cidades) ──────────────────────────────────────
   // Ao vivo na BD da Multipark (reservas ao vivo, parte B): lista de entradas
   // no período (por omissão, os últimos 30 dias), com pesquisa e filtros.
-  r.get("/bookings", requireScope("read"), h(async (req, res) => {
+  r.get("/bookings", requireCapability("pii"), h(async (req, res) => {
     const q = req.query;
     const { getMultiparkOpsList } = await import("./multiparkDb/opsLists");
     const { lisbonDayOf } = await import("../shared/lisbonDay");
@@ -285,7 +295,7 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true, count: data.length, data });
   }));
 
-  r.get("/bookings/stats", requireScope("read"), h(async (req, res) => {
+  r.get("/bookings/stats", requireCapability("reports:ops"), h(async (req, res) => {
     const q = req.query;
     const stats = await getMultiparkBookingStats({
       from: q.from ? String(q.from) : undefined,
@@ -295,7 +305,7 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true, data: stats });
   }));
 
-  r.get("/bookings/:externalId", requireScope("read"), h(async (req, res) => {
+  r.get("/bookings/:externalId", requireCapability("pii"), h(async (req, res) => {
     const ext = req.params.externalId;
     // Ao vivo da BD da Multipark (ficha da reserva). A cópia local já não é lida.
     const { getBookingFileMain } = await import("./multiparkDb/bookingFile");
@@ -308,7 +318,7 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── RECLAMAÇÕES ───────────────────────────────────────────────────────────────
-  r.get("/complaints", requireScope("read"), h(async (req, res) => {
+  r.get("/complaints", requireCapability("pii"), h(async (req, res) => {
     const q = req.query;
     const list = await getComplaints({
       status: q.status ? String(q.status) : undefined,
@@ -319,12 +329,12 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true, count: list.length, data: list });
   }));
 
-  r.get("/complaints/stats", requireScope("read"), h(async (req, res) => {
+  r.get("/complaints/stats", requireCapability("reports:ops"), h(async (req, res) => {
     const projectId = req.query.projectId ? Number(req.query.projectId) : undefined;
     res.json({ success: true, data: await getComplaintStats(projectId) });
   }));
 
-  r.get("/complaints/:id", requireScope("read"), h(async (req, res) => {
+  r.get("/complaints/:id", requireCapability("pii"), h(async (req, res) => {
     const id = Number(req.params.id);
     const complaint = await getComplaintById(id);
     if (!complaint) return res.status(404).json({ error: "Reclamação não encontrada" });
@@ -334,7 +344,7 @@ export function createMcpApiRouter(): Router {
     });
   }));
 
-  r.post("/complaints", requireScope("write"), h(async (req, res) => {
+  r.post("/complaints", requireCapability("complaints:write"), h(async (req, res) => {
     const b = req.body ?? {};
     if (!b.title) return res.status(400).json({ error: "title é obrigatório" });
     if (!b.type) return res.status(400).json({ error: "type é obrigatório (damage|dirt|delay|overcharge|staff|other)" });
@@ -360,7 +370,7 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true, id });
   }));
 
-  r.patch("/complaints/:id", requireScope("write"), h(async (req, res) => {
+  r.patch("/complaints/:id", requireCapability("complaints:write"), h(async (req, res) => {
     const id = Number(req.params.id);
     const b = req.body ?? {};
     const data: any = {};
@@ -388,7 +398,7 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true });
   }));
 
-  r.post("/complaints/:id/messages", requireScope("write"), h(async (req, res) => {
+  r.post("/complaints/:id/messages", requireCapability("complaints:write"), h(async (req, res) => {
     const complaintId = Number(req.params.id);
     const b = req.body ?? {};
     if (!b.message) return res.status(400).json({ error: "message é obrigatório" });
@@ -404,7 +414,7 @@ export function createMcpApiRouter(): Router {
   }));
 
   // DELETE arquiva (16b): a reclamação, as mensagens e as fotos ficam.
-  r.delete("/complaints/:id", requireScope("admin"), h(async (req, res) => {
+  r.delete("/complaints/:id", requireCapability("admin"), h(async (req, res) => {
     const id = Number(req.params.id);
     const reason = String((req.body ?? {}).reason ?? req.query.reason ?? "Arquivada pela API").slice(0, 255);
     const done = await archiveComplaint(id, apiKeyActorId(getApiKeyInfo(req)) || 0, reason);
@@ -413,7 +423,7 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── GOOGLE REVIEWS ────────────────────────────────────────────────────────────
-  r.get("/reviews", requireScope("read"), h(async (req, res) => {
+  r.get("/reviews", requireCapability("pii"), h(async (req, res) => {
     const q = req.query;
     const list = await getGoogleReviews({
       rating: q.rating ? Number(q.rating) : undefined,
@@ -423,7 +433,7 @@ export function createMcpApiRouter(): Router {
     res.json({ success: true, count: list.length, data: list });
   }));
 
-  r.post("/reviews", requireScope("write"), h(async (req, res) => {
+  r.post("/reviews", requireCapability("complaints:write"), h(async (req, res) => {
     const b = req.body ?? {};
     if (!b.reviewerName || !b.rating) return res.status(400).json({ error: "reviewerName e rating são obrigatórios" });
     const reviewDate = (b.reviewDate ? new Date(b.reviewDate) : new Date()).toISOString().slice(0, 19).replace("T", " ");
@@ -442,22 +452,22 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── VIATURAS / COLABORADORES ──────────────────────────────────────────────────
-  r.get("/vehicles", requireScope("read"), h(async (_req, res) => {
+  r.get("/vehicles", requireCapability("reports:ops"), h(async (_req, res) => {
     const list = await getVehicles();
     res.json({ success: true, count: list.length, data: list.map((v: any) => ({ id: v.id, plate: v.plate, brand: v.brand, model: v.model, status: v.status, projectId: v.projectId })) });
   }));
 
-  r.get("/employees", requireScope("read"), h(async (_req, res) => {
+  r.get("/employees", requireCapability("pii"), h(async (_req, res) => {
     const list = await getAllEmployees();
     res.json({ success: true, count: list.length, data: list.map((e: any) => ({ id: e.employee.id, fullName: e.employee.fullName, position: e.employee.position, projectId: e.employee.projectId })) });
   }));
 
   // ── ADMIN (destrutivo) ──────────────────────────────────────────────────────
   // One-shot, idempotente: colunas de métricas diárias nas campanhas (0048).
-  r.post("/admin/migrate-0048", requireScope("admin"), h(async (req, res) => {
+  r.post("/admin/migrate-0048", requireCapability("admin"), h(async (req, res) => {
     const { MIGRATION_0048_STATEMENTS, IDEMPOTENT_ERROR_CODES_0048 } = await import("./migrations/migration_0048");
     const d = await db();
-    if (!d) return res.status(500).json({ error: "DB unavailable" });
+    if (!d) return res.status(503).json({ error: "Base de dados indisponível" });
     let ok = 0, skipped = 0;
     const errors: string[] = [];
     for (const stmt of MIGRATION_0048_STATEMENTS) {
@@ -479,7 +489,7 @@ export function createMcpApiRouter(): Router {
   // Backfill: associa reservas sem projectId (ou presas num nó intermédio)
   // ao projeto certo com o matcher determinístico partilhado com o sync
   // (shared/projectTree.ts via server/projectAdmin.ts). Idempotente.
-  r.post("/admin/backfill-projects", requireScope("admin"), h(async (req, res) => {
+  r.post("/admin/backfill-projects", requireCapability("admin"), h(async (req, res) => {
     const { backfillBookingProjects } = await import("./projectAdmin");
     const result = await backfillBookingProjects({ includeIntermediate: true });
     await logApiKeyAction(req, { action: "admin_backfill", entity: "multipark_bookings", asKeyEvent: true, details: "[MCP] backfill-projects" });
@@ -489,7 +499,7 @@ export function createMcpApiRouter(): Router {
   // Funde extras duplicados por email (duplicados auto-criados pelo site antes
   // da correção de identidade). DRY-RUN por defeito: body `{ "apply": true }`
   // para escrever. Ver server/mergeDuplicateExtras.ts.
-  r.post("/admin/merge-duplicate-extras", requireScope("admin"), h(async (req, res) => {
+  r.post("/admin/merge-duplicate-extras", requireCapability("admin"), h(async (req, res) => {
     const { mergeDuplicateExtras } = await import("./mergeDuplicateExtras");
     const report = await mergeDuplicateExtras({ apply: req.body?.apply === true });
     await logApiKeyAction(req, { action: "admin_merge", entity: "employees", asKeyEvent: true, details: `[MCP] merge-duplicate-extras (${req.body?.apply === true ? "apply" : "dry-run"})` });
@@ -497,7 +507,7 @@ export function createMcpApiRouter(): Router {
   }));
 
   // ── DASHBOARD SUMMARY (visão cruzada, todos os parques) ──────────────────────
-  r.get("/dashboard/summary", requireScope("read"), h(async (req, res) => {
+  r.get("/dashboard/summary", requireCapability("reports:ops"), h(async (req, res) => {
     const d = await db();
     const q = req.query;
     const from = q.from ? String(q.from) : undefined;

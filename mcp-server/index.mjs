@@ -6,8 +6,9 @@
  * à mão, para não precisar de `npm install`. Basta o Node (>=18, para o fetch).
  *
  * Expõe a Dashboard Multipark como tools MCP, falando com a API REST /api/v1.
- * Cobre todos os parques e cidades. O que cada tool pode fazer depende do
- * scope da API key (read / write / admin) — ver README.
+ * Cobre todos os parques e cidades. O que cada tool pode fazer depende das
+ * capacidades da API key (relatórios, caixa, marketing, dados pessoais,
+ * reclamações…) — ver README.
  *
  * Configuração via variáveis de ambiente:
  *   MULTIPARK_API_URL  (default: https://dashbord-multipark.vercel.app/api/v1)
@@ -148,7 +149,7 @@ const tools = [
   },
   {
     name: "delete_complaint",
-    description: "Apaga uma reclamação (destrutivo — requer scope admin).",
+    description: "Arquiva uma reclamação (não apaga: fica nas arquivadas, com mensagens e fotos). Requer a capacidade admin.",
     inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
     run: (a) => api("DELETE", `/complaints/${a.id}`),
   },

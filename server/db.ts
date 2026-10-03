@@ -1948,15 +1948,31 @@ export async function getVehicleDriverHistory(vehicleId: number) {
 
 // ─── API KEYS ────────────────────────────────────────────────────────────────
 
-/** Lista para a UI: NUNCA devolve a chave nem o hash — só o prefixo e metadados. */
-export async function getApiKeys() {
+/**
+ * Lista para a UI: NUNCA devolve a chave nem o hash — só o prefixo e metadados.
+ * As revogadas (0405) só com `includeRevoked`. Sem BD → erro (≠ "não há chaves").
+ */
+export async function getApiKeys(opts: { includeRevoked?: boolean } = {}) {
   const db = await getDb();
-  if (!db) return [];
-  return db.select({
+  if (!db) throw new Error("Base de dados indisponível");
+  const q = db.select({
     id: apiKeys.id, name: apiKeys.name, keyPrefix: apiKeys.keyPrefix, permissions: apiKeys.permissions,
     active: apiKeys.active, lastUsedAt: apiKeys.lastUsedAt, expiresAt: apiKeys.expiresAt,
     createdById: apiKeys.createdById, createdAt: apiKeys.createdAt,
-  }).from(apiKeys).orderBy(desc(apiKeys.createdAt));
+    revokedAt: apiKeys.revokedAt, revokedById: apiKeys.revokedById, revokeReason: apiKeys.revokeReason,
+  }).from(apiKeys);
+  return (opts.includeRevoked ? q : q.where(sql`${apiKeys.revokedAt} IS NULL`)).orderBy(desc(apiKeys.createdAt));
+}
+
+/** Uma chave (sem a chave nem o hash). */
+export async function getApiKeyById(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
+  const rows = await db.select({
+    id: apiKeys.id, name: apiKeys.name, keyPrefix: apiKeys.keyPrefix, permissions: apiKeys.permissions,
+    active: apiKeys.active, expiresAt: apiKeys.expiresAt, revokedAt: apiKeys.revokedAt,
+  }).from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+  return rows[0] ?? null;
 }
 
 export async function createApiKey(data: Omit<InsertApiKey, "id" | "createdAt">) {
@@ -1966,23 +1982,42 @@ export async function createApiKey(data: Omit<InsertApiKey, "id" | "createdAt">)
   return Number(result[0].insertId);
 }
 
+/** Ativar/desativar (nunca numa revogada). Devolve false se não mudou nada. */
 export async function toggleApiKey(id: number, active: boolean) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  await db.update(apiKeys).set({ active: active ? 1 : 0 }).where(eq(apiKeys.id, id));
+  const r: any = await db.update(apiKeys).set({ active: active ? 1 : 0 }).where(and(eq(apiKeys.id, id), sql`${apiKeys.revokedAt} IS NULL`));
+  return Number(r?.[0]?.affectedRows ?? 0) > 0;
+}
+
+/** Capacidades (JSON). Nunca numa revogada. */
+export async function setApiKeyPermissions(id: number, permissions: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const r: any = await db.update(apiKeys).set({ permissions }).where(and(eq(apiKeys.id, id), sql`${apiKeys.revokedAt} IS NULL`));
+  return Number(r?.[0]?.affectedRows ?? 0) > 0;
 }
 
 /** Validade de uma API key ("YYYY-MM-DD HH:MM:SS" UTC) ou null = sem expiração. */
 export async function setApiKeyExpiry(id: number, expiresAt: string | null) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  await db.update(apiKeys).set({ expiresAt }).where(eq(apiKeys.id, id));
+  const r: any = await db.update(apiKeys).set({ expiresAt }).where(and(eq(apiKeys.id, id), sql`${apiKeys.revokedAt} IS NULL`));
+  return Number(r?.[0]?.affectedRows ?? 0) > 0;
 }
 
-export async function deleteApiKey(id: number) {
+/**
+ * Revogar (0405) em vez de apagar: a linha fica com quem, quando e porquê e
+ * a chave nunca mais funciona (desativada + revokedAt). Idempotente: revogar
+ * uma já revogada não muda nada (devolve false).
+ */
+export async function revokeApiKey(id: number, byUserId: number, reason: string) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  await db.delete(apiKeys).where(eq(apiKeys.id, id));
+  const r: any = await db.update(apiKeys)
+    .set({ active: 0, revokedAt: sql`CURRENT_TIMESTAMP` as any, revokedById: byUserId, revokeReason: reason.slice(0, 255) })
+    .where(and(eq(apiKeys.id, id), sql`${apiKeys.revokedAt} IS NULL`));
+  return Number(r?.[0]?.affectedRows ?? 0) > 0;
 }
 
 // ─── RECLAMAÇÕES ─────────────────────────────────────────────────────────────

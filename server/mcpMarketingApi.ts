@@ -1,7 +1,7 @@
 /**
  * MCP Control API — rotas de MARKETING e WEB (SÓ LEITURA), para a skill `multipark-relatorios`.
  *
- * Montadas por `server/mcpApi.ts` em /api/v1 (X-API-Key, scope "read"). Reutilizam as MESMAS
+ * Montadas por `server/mcpApi.ts` em /api/v1 (X-API-Key, capacidade "reports:marketing"). Reutilizam as MESMAS
  * funções que alimentam os ecrãs "Marketing" e "Web analytics" do Dashboard, para os números
  * do relatório serem iguais aos do ecrã. Nada aqui escreve na BD nem altera campanhas.
  *
@@ -13,7 +13,7 @@
  *   GET /web/list?source=ga|sc&dim&from&to[...]       tabelas: canais, páginas, países, pesquisas, ...
  */
 import type { Router, Request, Response } from "express";
-import { requireScope } from "./apiKeyAuth";
+import { apiInternalError, requireCapability } from "./apiKeyAuth";
 import { parseRange } from "./mcpReportsApi";
 
 type Handler = (fn: (req: Request, res: Response) => Promise<any>) => (req: Request, res: Response) => void;
@@ -70,19 +70,21 @@ export function parseWebQuery(q: Record<string, unknown>, withList: boolean):
 export function registerMcpMarketingRoutes(r: Router, h: Handler): void {
   const bad = (res: Response, error: string) => res.status(400).json({ success: false, error });
   // 19a: erro do servidor (BD da Multipark, Google…) = 500, não 400 ("pedido inválido").
+  // 20a: o 500 leva só uma referência (o detalhe fica nos logs do servidor).
   const failed = (res: Response, e: unknown) => {
     const msg = String((e as any)?.message ?? e).slice(0, 300);
-    res.status(/^(Datas inválidas|Mês inválido)/.test(msg) ? 400 : 500).json({ success: false, error: msg });
+    if (/^(Datas inválidas|Mês inválido)/.test(msg)) return res.status(400).json({ success: false, error: msg });
+    apiInternalError(res, "v1 marketing", e, { success: false });
   };
 
-  r.get("/marketing/stats", requireScope("read"), h(async (req, res) => {
+  r.get("/marketing/stats", requireCapability("reports:marketing"), h(async (req, res) => {
     const f = parseMarketingQuery(req.query);
     if ("error" in f) return bad(res, f.error);
     const { getMarketingStats } = await import("./integrations/googleAds/marketingStats");
     try { res.json({ success: true, from: f.from, to: f.to, data: await getMarketingStats(f) }); } catch (e) { failed(res, e); }
   }));
 
-  r.get("/marketing/channels", requireScope("read"), h(async (req, res) => {
+  r.get("/marketing/channels", requireCapability("reports:marketing"), h(async (req, res) => {
     const f = parseMarketingQuery(req.query);
     if ("error" in f) return bad(res, f.error);
     const { marketingProjectIds } = await import("./marketingSql");
@@ -91,35 +93,35 @@ export function registerMcpMarketingRoutes(r: Router, h: Handler): void {
     const { getDb } = await import("./db");
     try {
       const db = await getDb();
-      if (!db) return res.status(500).json({ success: false, error: "BD indisponível" });
+      if (!db) return res.status(503).json({ success: false, error: "BD indisponível" });
       const projectIds = await marketingProjectIds(f.projectId);
       const ads = await getAdMetrics({ from: f.from, to: f.to, projectIds });
       res.json({ success: true, from: f.from, to: f.to, data: await getChannels(db, { from: f.from, to: f.to, projectIds, adSpend: ads.totals.cost, adConversions: ads.byProviderTotals.google_ads.conversions }) });
     } catch (e) { failed(res, e); }
   }));
 
-  r.get("/marketing/brands", requireScope("read"), h(async (req, res) => {
+  r.get("/marketing/brands", requireCapability("reports:marketing"), h(async (req, res) => {
     const f = parseMarketingQuery(req.query);
     if ("error" in f) return bad(res, f.error);
     const { getSpendAndBookingsByBrand } = await import("./integrations/googleAds/marketingStats");
     try { res.json({ success: true, from: f.from, to: f.to, data: await getSpendAndBookingsByBrand(f) }); } catch (e) { failed(res, e); }
   }));
 
-  r.get("/marketing/campaign-roas", requireScope("read"), h(async (req, res) => {
+  r.get("/marketing/campaign-roas", requireCapability("reports:marketing"), h(async (req, res) => {
     const f = parseMarketingQuery(req.query);
     if ("error" in f) return bad(res, f.error);
     const { getCampaignRoas } = await import("./marketingCampaignRoas");
     try { res.json({ success: true, from: f.from, to: f.to, data: await getCampaignRoas(f) }); } catch (e) { failed(res, e); }
   }));
 
-  r.get("/web/overview", requireScope("read"), h(async (req, res) => {
+  r.get("/web/overview", requireCapability("reports:marketing"), h(async (req, res) => {
     const f = parseWebQuery(req.query, false);
     if ("error" in f) return bad(res, f.error);
     const { webOverview } = await import("./webAnalytics/service");
     try { res.json({ success: true, from: f.from, to: f.to, brand: f.brand, compare: f.compare, data: await webOverview({ from: f.from, to: f.to, brand: f.brand, compare: f.compare }) }); } catch (e) { failed(res, e); }
   }));
 
-  r.get("/web/list", requireScope("read"), h(async (req, res) => {
+  r.get("/web/list", requireCapability("reports:marketing"), h(async (req, res) => {
     const f = parseWebQuery(req.query, true);
     if ("error" in f) return bad(res, f.error);
     const { loadWebAnalyticsConfig } = await import("./webAnalytics/service");

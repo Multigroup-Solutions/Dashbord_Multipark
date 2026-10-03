@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "crypto";
 import {
-  apiKeyPrefix, apiKeyTag, apiKeyActorId, checkPresentedKey, externalAllowed, externalRequiredScope,
-  generateApiKey, hashApiKey, isApiKeyExpired, scopesFor, shouldTouchLastUsed, v1Allowed,
+  apiKeyPrefix, apiKeyTag, apiKeyActorId, checkPresentedKey, externalAllowed, externalRequiredCaps,
+  generateApiKey, hashApiKey, isApiKeyExpired, shouldTouchLastUsed, v1Allowed,
   LAST_USED_THROTTLE_MS, type ApiKeyRow,
 } from "./apiKeyAuth";
+import { capabilitiesFor } from "../shared/apiKeyCapabilities";
 import { isFeatureEnabled, parseSwitch } from "./_core/featureFlags";
 import { activityLogCutoff, buildHealthBody, cronBearerOk, purgeInBatches, syncRangeError } from "./opsRules";
 import { normalizeHourlyRate } from "./extraRates";
@@ -42,7 +43,8 @@ describe("API keys — hash, prefixo e lookup", () => {
     store.set(hashApiKey(key), row({ active: 0 }));
     expect(await checkPresentedKey(key, lookup)).toMatchObject({ ok: false, status: 403 });
     store.set(hashApiKey(key), row({ expiresAt: "2026-01-01 00:00:00" }));
-    expect(await checkPresentedKey(key, lookup, Date.parse("2026-02-01T00:00:00Z"))).toMatchObject({ ok: false, error: "API key expired" });
+    // 20a: expirada = mesma resposta que inválida (não revela que a chave existe)
+    expect(await checkPresentedKey(key, lookup, Date.parse("2026-02-01T00:00:00Z"))).toMatchObject({ ok: false, status: 403, error: "Invalid or inactive API key" });
     expect(await checkPresentedKey(key, lookup, Date.parse("2025-12-01T00:00:00Z"))).toMatchObject({ ok: true });
   });
   it("expiração e lastUsedAt com throttle de 5 min (datas da BD em UTC)", () => {
@@ -54,14 +56,14 @@ describe("API keys — hash, prefixo e lookup", () => {
     expect(shouldTouchLastUsed("2026-09-24 11:58:00", now)).toBe(false);
     expect(shouldTouchLastUsed(new Date(now - LAST_USED_THROTTLE_MS), now)).toBe(true);
   });
-  it("auditoria: etiqueta com id+prefixo e autor = criador da chave (0 = sistema)", () => {
-    expect(apiKeyTag(row())).toBe("[API key #7 mp_abc123…]");
-    expect(apiKeyActorId(row())).toBe(3);
+  it("auditoria: etiqueta com id+nome+prefixo e autor = 0 (a chave, nunca quem a criou)", () => {
+    expect(apiKeyTag(row())).toBe("[API key #7 «k» mp_abc123…]");
+    expect(apiKeyActorId(row())).toBe(0);
     expect(apiKeyActorId(row({ createdById: null }))).toBe(0);
   });
 });
 
-describe("API keys — matriz de scopes", () => {
+describe("API keys — capacidades (legado mantém o que fazia)", () => {
   const cases: Array<[string | null, string, string, boolean]> = [
     // permissions,           método,  caminho,           /api/external permitido?
     ['["read"]', "GET", "/vehicles", true],
@@ -74,21 +76,34 @@ describe("API keys — matriz de scopes", () => {
     [null, "POST", "/vehicle-movement", true], // legado sem permissions = device
     ['["write"]', "POST", "/admin/x", false],
     ['["admin"]', "POST", "/admin/x", true],
+    ['["write"]', "POST", "/gmail-import", true],
+    ['["device"]', "POST", "/gmail-import", true],
+    // novas: só o que foi marcado
+    ['["complaints:write"]', "POST", "/gmail-import", true],
+    ['["complaints:write"]', "POST", "/speed-alert", false],
+    ['["reports:marketing"]', "GET", "/vehicles", false],
+    ['["reports:ops"]', "GET", "/vehicles", true],
+    ['["reports:ops"]', "GET", "/employees", false],
+    ['["pii"]', "GET", "/employees", true],
+    ['["site:intake"]', "GET", "/docs", true],
   ];
   it.each(cases)("external %s %s %s → %s", (perms, method, path, allowed) => {
-    expect(externalAllowed(scopesFor(perms), method, path)).toBe(allowed);
+    expect(externalAllowed(capabilitiesFor(perms), method, path)).toBe(allowed);
   });
-  it("scope exigido: GET=read, escrita=write, /admin=admin", () => {
-    expect(externalRequiredScope("GET", "/vehicles")).toBe("read");
-    expect(externalRequiredScope("PATCH", "/x")).toBe("write");
-    expect(externalRequiredScope("GET", "/admin/y")).toBe("admin");
+  it("capacidade exigida na /api/external", () => {
+    expect(externalRequiredCaps("GET", "/vehicles")).toEqual(["reports:ops", "device"]);
+    expect(externalRequiredCaps("PATCH", "/x")).toEqual(["device"]);
+    expect(externalRequiredCaps("GET", "/admin/y")).toEqual(["admin"]);
+    expect(externalRequiredCaps("GET", "/docs")).toBe("any");
   });
-  it("/api/v1: admin ⊃ write ⊃ read; device não acede a nada", () => {
-    const admin = scopesFor('["admin"]'), write = scopesFor("read,write"), read = scopesFor("read"), device = scopesFor(null);
-    expect([v1Allowed(admin, "admin"), v1Allowed(admin, "write"), v1Allowed(admin, "read")]).toEqual([true, true, true]);
-    expect([v1Allowed(write, "admin"), v1Allowed(write, "write"), v1Allowed(write, "read")]).toEqual([false, true, true]);
-    expect([v1Allowed(read, "admin"), v1Allowed(read, "write"), v1Allowed(read, "read")]).toEqual([false, false, true]);
-    expect([v1Allowed(device, "admin"), v1Allowed(device, "write"), v1Allowed(device, "read")]).toEqual([false, false, false]);
+  it("/api/v1: legado read/write/admin mantém; device não acede a nada; novas só o marcado", () => {
+    const admin = capabilitiesFor('["admin"]'), write = capabilitiesFor("read,write"), read = capabilitiesFor("read"), device = capabilitiesFor(null);
+    expect([v1Allowed(admin, ["admin"]), v1Allowed(admin, ["complaints:write"]), v1Allowed(admin, ["pii"])]).toEqual([true, true, true]);
+    expect([v1Allowed(write, ["admin"]), v1Allowed(write, ["complaints:write"]), v1Allowed(write, ["site:intake"]), v1Allowed(write, ["reports:cash"])]).toEqual([false, true, true, true]);
+    expect([v1Allowed(read, ["admin"]), v1Allowed(read, ["complaints:write"]), v1Allowed(read, ["site:intake"]), v1Allowed(read, ["pii"]), v1Allowed(read, ["reports:marketing"])]).toEqual([false, false, false, true, true]);
+    expect([v1Allowed(device, ["admin"]), v1Allowed(device, ["pii"]), v1Allowed(device, ["reports:ops"])]).toEqual([false, false, false]);
+    const mkt = capabilitiesFor('["reports:marketing"]');
+    expect([v1Allowed(mkt, ["reports:marketing"]), v1Allowed(mkt, ["pii"]), v1Allowed(mkt, ["reports:cash"])]).toEqual([true, false, false]);
   });
 });
 
