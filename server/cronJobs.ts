@@ -601,7 +601,10 @@ export async function extrasPressureCron(o: { deadlineAt: number; cursor?: strin
     const { runExtrasPressure } = await import("./extrasPressure");
     const { getSetting } = await import("./appSettings");
     const excludedParkIds = (await getSetting("operations.excludedParks")) ?? [];
-    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null, excludedParkIds });
+    // 22d: desde quando se mede (acumula) e a tabela máxima por cidade (escalões de pessoas).
+    const since = await getSetting("extras.timesSince").catch(() => null);
+    const crewRules = await getSetting("extras.crewRules").catch(() => null);
+    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null, excludedParkIds, since, crewRules });
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done, cursor: r.cursor };
   } catch (err) {
     console.error("[cron extras-pressure] falhou:", msg(err, 200));

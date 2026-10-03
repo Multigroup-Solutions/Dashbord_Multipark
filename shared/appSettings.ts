@@ -22,6 +22,7 @@ import { DEFAULT_GBP_CONFIG, GBP_SETTING_KEY, gbpConfigSchema } from "./googleBu
 import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema } from "./knowledge";
 import { DEFAULT_SERVICE_TASK_RULES, SERVICE_TASKS_SETTING_KEY, serviceTaskRulesSchema } from "./serviceTasks";
 import { matchKey } from "./textKey";
+import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -148,6 +149,15 @@ const crewRuleSchema = z.object({
   .refine((r) => r.bands.every((b, i) => i === 0 || b.upTo === null || (r.bands[i - 1].upTo ?? 0) < b.upTo), { message: "As linhas vão por ordem crescente de pessoas." });
 export const crewRulesSchema = z.object({ lisbon: crewRuleSchema, porto: crewRuleSchema, faro: crewRuleSchema }, { error: "Indica as regras de Lisboa, Porto e Faro." });
 export type CrewRulesMap = z.infer<typeof crewRulesSchema>;
+// 22d (Jorge, 3 out): medir desde 6 meses atrás e acumular; p75 Lisboa, p60 Porto e Faro.
+const timesSinceSchema = z.string({ error: "Indica o dia (AAAA-MM-DD)." })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Dia no formato AAAA-MM-DD.")
+  .refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && d >= "2025-01-01", "Dia inválido (a partir de 2025).");
+const percentileChoice = z.union([z.literal(50), z.literal(60), z.literal(75), z.literal(85), z.literal(90)], { error: "Percentil: 50, 60, 75, 85 ou 90." });
+export const timesPercentileSchema = z.object({ lisbon: percentileChoice, porto: percentileChoice, faro: percentileChoice }, { error: "Indica Lisboa, Porto e Faro." });
+export type TimesPercentileMap = z.infer<typeof timesPercentileSchema>;
+export const DEFAULT_TIMES_PERCENTILE: TimesPercentileMap = { lisbon: 75, porto: 60, faro: 60 };
+
 export const DEFAULT_CREW_RULES: CrewRulesMap = {
   lisbon: { minCrew: 2, bands: [{ upTo: 2, minutes: 75 }, { upTo: 4, minutes: 60 }, { upTo: 6, minutes: 45 }, { upTo: null, minutes: 30 }] },
   porto: { minCrew: 3, bands: [{ upTo: 2, minutes: 45 }, { upTo: null, minutes: 30 }] },
@@ -382,6 +392,24 @@ export const SETTINGS = {
     description: "Minutos que cada condutor leva por carro, conforme as pessoas no turno com o TL incluído (2 = TL + 1 extra; quem conduz são os extras, o TL vai buscá-los), por cidade, e o mínimo de pessoas quando há trabalho. Define quantos extras a previsão do Extras-dia pede em cada hora e a proposta automática de escala. JSON: {\"lisbon\": {\"minCrew\": 2, \"bands\": [{\"upTo\": 2, \"minutes\": 75}, {\"upTo\": 4, \"minutes\": 60}, {\"upTo\": 6, \"minutes\": 45}, {\"upTo\": null, \"minutes\": 30}]}, \"porto\": {…}, \"faro\": {…}}.",
     schema: crewRulesSchema,
     defaultValue: DEFAULT_CREW_RULES,
+    wiring: "live",
+  }),
+  "extras.timesSince": def({
+    key: "extras.timesSince",
+    group: "extras",
+    label: "Tempos medidos desde",
+    description: "Dia a partir do qual a Pressão do Extras-dia mede os tempos (carros por hora, entregas, recolhas, condutor por carro). A janela vai deste dia até ontem e cresce todos os dias: nunca deita fora o que já mediu, para haver o ano inteiro.",
+    schema: timesSinceSchema,
+    defaultValue: PRESSURE_SINCE_DEFAULT,
+    wiring: "live",
+  }),
+  "extras.timesPercentile": def({
+    key: "extras.timesPercentile",
+    group: "extras",
+    label: "Percentil do tempo por carro, por cidade",
+    description: "Que valor do tempo por carro medido se usa em cada cidade: 75 = em 3 de cada 4 vezes foi mais rápido do que isto (mais prudente); 60 = um pouco acima do meio. Valores: 50, 60, 75, 85 ou 90. JSON: {\"lisbon\": 75, \"porto\": 60, \"faro\": 60}.",
+    schema: timesPercentileSchema,
+    defaultValue: DEFAULT_TIMES_PERCENTILE,
     wiring: "live",
   }),
   "extras.autoProposeAt": def({
