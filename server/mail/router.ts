@@ -261,13 +261,22 @@ export const mailRouter = router({
         } catch { /* registo */ }
         return { ok: true, changed: r.changed.length };
       }),
-    /** Remetente dos emails de sistema (Gmail API) — admin/super_admin. */
+    /** Remetente dos emails de sistema (Gmail API) — só o super admin (20b, decisão do Jorge). */
     setSystemSender: protectedProcedure
       .input(z.object({ email: z.string().trim().toLowerCase().email("Email inválido.").max(320) }))
       .mutation(async ({ ctx, input }) => {
         adminOnly(ctx.user as CtxUser);
+        if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin muda o remetente dos emails de sistema." });
+        const { systemSenderAddress } = await import("./systemMail");
+        const before = await systemSenderAddress().catch(() => null);
         const { setSetting } = await import("../appSettings");
-        await setSetting("mail.systemSender", input.email, ctx.user.id);
+        const r = await setSetting("mail.systemSender", input.email, ctx.user.id);
+        if (r.changed) {
+          try {
+            const { logActivity } = await import("../db");
+            await logActivity({ userId: ctx.user.id, action: "update", entity: "app_setting", entityId: null, details: `Remetente dos emails de sistema: ${before ?? "—"} → ${input.email}` } as any);
+          } catch { /* registo */ }
+        }
         return { ok: true };
       }),
     /** Testa o remetente (delegação + "Enviar como") e envia um email de teste ao próprio. */

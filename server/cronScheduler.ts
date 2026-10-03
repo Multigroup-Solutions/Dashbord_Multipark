@@ -25,6 +25,21 @@ import {
   periodKeyFor, planTick, type DynamicCadence, type JobState, type JobStatus, type PlannedJob, type TickJobSpec,
 } from "./cronSchedule";
 import type { CronJobRun } from "./cronJobs";
+import { scrubSecrets } from "./integrationsStatus";
+
+/**
+ * Motivo de uma corrida que saiu sem fazer o trabalho (`skipped: "…"` ou
+ * `status: "skipped"` no corpo). `null` = fez o trabalho. PURA.
+ * "locked" (outra corrida com o trabalho em mãos) não conta: essa volta a tentar.
+ */
+export function skippedReason(body: unknown): string | null {
+  const b = body && typeof body === "object" ? (body as Record<string, unknown>) : null;
+  if (!b) return null;
+  const reason = typeof b.reason === "string" && b.reason.trim() ? b.reason.trim() : "";
+  if (typeof b.skipped === "string" && b.skipped.trim()) return b.skipped.trim() === "locked" ? null : `${b.skipped.trim()}${reason ? ` — ${reason}` : ""}`.slice(0, 300);
+  if (b.skipped === true || b.status === "skipped") return (reason || "sem motivo indicado").slice(0, 300);
+  return null;
+}
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -123,7 +138,7 @@ function toState(r: any): JobState {
     lastStartedAt: fromMysqlMs(r.lastStartedAt),
     lastFinishedAt: fromMysqlMs(r.lastFinishedAt),
     lastOkAt: fromMysqlMs(r.lastOkAt),
-    lastStatus: (["ok", "error", "partial"].includes(status) ? status : null) as JobStatus | null,
+    lastStatus: (["ok", "error", "partial", "skipped"].includes(status) ? status : null) as JobStatus | null,
     lastError: r.lastError ? String(r.lastError) : null,
     lastDurationMs: r.lastDurationMs == null ? null : Number(r.lastDurationMs),
     resumeCursor: r.resumeCursor ? String(r.resumeCursor) : null,
@@ -170,7 +185,7 @@ async function saveState(st: JobState, owner: string): Promise<void> {
   await db.execute(sql`
     UPDATE cron_job_state SET
       lastStartedAt = ${dt(st.lastStartedAt)}, lastFinishedAt = ${dt(st.lastFinishedAt)}, lastOkAt = ${dt(st.lastOkAt)},
-      lastStatus = ${st.lastStatus}, lastError = ${st.lastError ? st.lastError.slice(0, 1000) : null}, lastDurationMs = ${st.lastDurationMs},
+      lastStatus = ${st.lastStatus}, lastError = ${st.lastError ? scrubSecrets(st.lastError, process.env, 1000) : null}, lastDurationMs = ${st.lastDurationMs},
       resumeCursor = ${st.resumeCursor && st.resumeCursor.length <= 8000 ? st.resumeCursor : null}, periodKey = ${st.periodKey}, attempts = ${st.attempts},
       leaseUntil = NULL, leaseOwner = NULL
      WHERE jobKey = ${st.jobKey} AND leaseOwner = ${owner.slice(0, 40)}`);
@@ -277,7 +292,7 @@ async function runOne(spec: TickJobSpec, plan: TickPlan, owner: string, deadline
   const outcome = cronOutcome(run.httpStatus, run.body);
   const done = run.done ?? run.body?.done !== false;
   const finishedAt = Date.now();
-  const next = applyOutcome(spec, prev, { ok: outcome.ok, done, cursor: run.cursor ?? null, error: outcome.error, startedAt, finishedAt });
+  const next = applyOutcome(spec, prev, { ok: outcome.ok, done, cursor: run.cursor ?? null, error: outcome.error, startedAt, finishedAt, skipped: outcome.ok ? skippedReason(run.body) : null });
   try { await saveState(next, owner); } catch (err: any) {
     console.warn(`[cron tick] ${spec.key}: gravar estado falhou:`, String(err?.message ?? err).slice(0, 160));
   }

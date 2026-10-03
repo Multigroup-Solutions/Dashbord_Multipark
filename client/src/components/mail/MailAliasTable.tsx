@@ -8,6 +8,7 @@
 // "Por classificar" na Comunicação.
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -149,6 +150,9 @@ export function MailAliasTable({ rows, mailboxes, cities, staff, canEdit }: {
 
 export function SystemSenderCard({ current }: { current: string }) {
   const utils = trpc.useUtils();
+  // 20b (Jorge, 2 out 2026): o remetente só o super admin muda; os admins veem e testam.
+  const { user } = useAuth();
+  const isSuper = user?.role === "super_admin";
   const [email, setEmail] = useState(current);
   useEffect(() => setEmail(current), [current]);
   const save = trpc.mail.settings.setSystemSender.useMutation({
@@ -167,14 +171,15 @@ export function SystemSenderCard({ current }: { current: string }) {
           Todos os emails da aplicação saem pela API do Gmail (sem SMTP). Os de sistema (notificações, briefing, escala, tarefas, formação, relatórios) saem desta conta do Workspace — tem de estar na delegação da conta de serviço (gmail.send) — e ficam marcados como automáticos (não aparecem como conversas de clientes). Os emails a clientes saem pelo alias da caixa (reclamacoes@, perdidos@…) quando está em "Enviar email como" na conta de origem.
         </p>
         <div className="flex flex-wrap gap-2 items-center">
-          <Input value={email} onChange={(e) => setEmail(e.target.value.trim().toLowerCase())} className="h-8 w-[260px] text-xs" placeholder="reservas@multipark.pt" />
-          <Button size="sm" variant="outline" disabled={!email || email === current || save.isPending} onClick={() => save.mutate({ email })}>
+          <Input value={email} onChange={(e) => setEmail(e.target.value.trim().toLowerCase())} className="h-8 w-full max-w-[260px] text-xs" placeholder="reservas@multipark.pt" disabled={!isSuper} aria-label="Remetente dos emails de sistema" />
+          <Button size="sm" variant="outline" disabled={!isSuper || !email || email === current || save.isPending} onClick={() => save.mutate({ email })}>
             {save.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}Guardar
           </Button>
           <Button size="sm" variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>
             {test.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Send className="h-4 w-4 mr-1" />}Testar (envia-me um email)
           </Button>
         </div>
+        {!isSuper && <p className="text-xs text-muted-foreground">Só o super admin muda o remetente. Podes testá-lo.</p>}
       </CardContent>
     </Card>
   );

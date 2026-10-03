@@ -4,6 +4,7 @@
 // o endereço do webhook. Os admins veem; só o super admin carrega em
 // "Renovar agora" (o agendador renova sozinho 1×/dia).
 import { trpc } from "@/lib/trpc";
+import { SettingsCardError } from "@/components/SettingsCardError";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,7 @@ export function GooglePushSettings() {
     },
     onError: (e) => toast.error(e.message),
   });
-  if (q.error) return null;
+  if (q.error) return <SettingsCardError title="Google em tempo real (notificações)" error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} />;
   if (q.isLoading || !q.data) return <Card><CardContent className="py-4"><Loader2 className="h-4 w-4 animate-spin" /></CardContent></Card>;
   const d = q.data;
   const isSuper = user?.role === "super_admin";

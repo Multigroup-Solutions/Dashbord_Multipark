@@ -4,7 +4,7 @@
  * gera tarefa e quem é o responsável (opcional). Os team leaders do turno da
  * saída e do anterior entram sempre. Grava a definição "services.taskRules".
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "sonner";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { AlertTriangle, ListChecks, Loader2, Save } from "lucide-react";
 import {
   DEFAULT_SERVICE_TASK_RULES, SERVICE_TASK_CITIES, SERVICE_TASK_CITY_LABELS, SERVICE_TASKS_SETTING_KEY,
@@ -26,19 +27,27 @@ export function ServiceTasksSettings() {
   const catalog = trpc.settings.serviceTasks.catalog.useQuery(undefined, { staleTime: 5 * 60_000 });
   const save = trpc.settings.values.set.useMutation({
     onSuccess: (r) => { utils.settings.values.invalidate(); toast.success(r.changed ? "Guardado." : "Sem alterações."); },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // 20b: outra pessoa gravou entretanto → recarrega (o que estavas a editar fica descartado).
+      if (e.data?.code === "CONFLICT") { setRules(null); utils.settings.values.invalidate(); }
+    },
   });
 
-  const stored = useMemo<ServiceTaskRules>(() => {
-    const row = values.data?.find((s) => s.key === SERVICE_TASKS_SETTING_KEY);
+  const row = values.data?.find((s) => s.key === SERVICE_TASKS_SETTING_KEY);
+  const stored = useMemo<ServiceTaskRules | null>(() => {
+    // 20b: sem leitura NÃO há regras — antes caía nas regras por omissão e quem
+    // gravasse a seguir apagava as verdadeiras.
+    if (!values.data) return null;
     const parsed = serviceTaskRulesSchema.safeParse(row?.isSet ? row.value : DEFAULT_SERVICE_TASK_RULES);
     return parsed.success ? parsed.data : DEFAULT_SERVICE_TASK_RULES;
-  }, [values.data]);
+  }, [values.data, row]);
 
-  const [rules, setRules] = useState<ServiceTaskRules>(stored);
+  // Rascunho = só o que mudaste (null = o que está gravado); uma releitura não apaga o que estás a editar.
+  const [draft, setRules] = useState<ServiceTaskRules | null>(null);
   const [city, setCity] = useState<ServiceTaskCity>("lisbon");
-  useEffect(() => { setRules(stored); }, [stored]);
-  const dirty = JSON.stringify(rules) !== JSON.stringify(stored);
+  const rules = draft ?? stored ?? DEFAULT_SERVICE_TASK_RULES;
+  const dirty = !!draft && !!stored && JSON.stringify(draft) !== JSON.stringify(stored);
 
   // Tipos do catálogo + os que já estão configurados mas saíram do catálogo.
   const types = useMemo(() => {
@@ -56,7 +65,8 @@ export function ServiceTasksSettings() {
   ], [people]);
 
   const setRule = (key: string, patch: { enabled?: boolean; responsibleEmployeeId?: number | null }) => {
-    setRules((prev) => {
+    setRules((prevDraft) => {
+      const prev = prevDraft ?? stored ?? DEFAULT_SERVICE_TASK_RULES;
       const cur = prev[city]?.[key] ?? { enabled: false, responsibleEmployeeId: null };
       return { ...prev, [city]: { ...prev[city], [key]: { ...cur, ...patch } } };
     });
@@ -83,6 +93,8 @@ export function ServiceTasksSettings() {
             </Button>
           ))}
         </div>
+        {values.error && <QueryErrorNote error={values.error} onRetry={() => values.refetch()} retrying={values.isFetching} what="as regras gravadas (não se pode gravar sem as ler)" />}
+        {catalog.error && <QueryErrorNote error={catalog.error} onRetry={() => catalog.refetch()} retrying={catalog.isFetching} what="o catálogo de serviços" />}
         {catalog.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
         {catalog.data && !catalog.data.available && (
           <p className="text-xs text-amber-800"><AlertTriangle className="inline h-3 w-3 mr-1" />Não foi possível ler o catálogo da Multipark: {catalog.data.reason ?? "indisponível"}</p>
@@ -121,10 +133,11 @@ export function ServiceTasksSettings() {
           })}
         </div>
         <div className="flex gap-2">
-          <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate({ key: SERVICE_TASKS_SETTING_KEY, value: rules })}>
+          <Button size="sm" disabled={!dirty || !stored || save.isPending}
+            onClick={() => save.mutate({ key: SERVICE_TASKS_SETTING_KEY, value: rules, expectedUpdatedAt: row?.updatedAt ?? null }, { onSuccess: () => setRules(null) })}>
             {save.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}Guardar
           </Button>
-          {dirty && <Button size="sm" variant="ghost" onClick={() => setRules(stored)}>Descartar</Button>}
+          {dirty && <Button size="sm" variant="ghost" onClick={() => setRules(null)}>Descartar</Button>}
         </div>
       </CardContent>
     </Card>

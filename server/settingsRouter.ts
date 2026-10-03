@@ -1,29 +1,43 @@
 /**
  * Página "Definições" (/definicoes): estado do sistema (crons), interruptores
- * das automações, integrações, definições editáveis (com auditoria) e
- * segurança (API keys, sessões). Tudo admin+ (mesmo guarda das integrações),
- * exceto o que é da própria pessoa (terminar as SUAS sessões) e o que mexe em
- * API keys / sessões de todos (super_admin, como a página de API Keys).
+ * das automações, definições editáveis (com auditoria) e segurança (API keys,
+ * sessões). Acesso pelo módulo "definicoes" da matriz (admin+, com as exceções
+ * por pessoa): ver = view, mudar = edit. Exceto o que é da própria pessoa
+ * (terminar as SUAS sessões) e o que é só do super admin (API keys, sessões de
+ * todos, as definições de SUPER_ADMIN_SETTING_KEYS e os interruptores
+ * marcados superAdminOnly). As integrações vivem no hub /integracoes (19d).
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { protectedProcedure, router } from "./_core/trpc";
 import { getSessionCookieOptions } from "./_core/cookies";
-import { AUTOMATION_FLAGS, SETTING_KEYS, automationFlagSuperAdminOnly, flagSettingKey, isAutomationFlag } from "../shared/appSettings";
+import { requireAccess } from "./_core/access";
+import {
+  AUTOMATION_FLAGS, SETTINGS, SETTING_KEYS, automationFlagSuperAdminOnly, flagSettingKey, isAutomationFlag, settingSuperAdminOnly,
+} from "../shared/appSettings";
 
 const RANK: Record<string, number> = { super_admin: 7, admin: 6 };
-function requireAdmin(role: string) {
-  if ((RANK[role] ?? 0) < RANK.admin) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
-}
 function requireSuperAdmin(role: string) {
   if ((RANK[role] ?? 0) < RANK.super_admin) throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin pode fazer isto." });
 }
 
+/** 20b: pela matriz (com as exceções por pessoa), não só pelo papel. */
 const adminOnly = protectedProcedure.use(({ ctx, next }) => {
-  requireAdmin(ctx.user.role);
+  requireAccess(ctx.user as any, "definicoes", "view");
   return next();
 });
+const canEdit = (user: unknown) => requireAccess(user as any, "definicoes", "edit");
+
+/** Valor curto para os logs (os valores completos ficam no histórico das Definições). */
+function shortValue(v: unknown): string {
+  const t = v == null ? "omissão" : typeof v === "string" ? v : JSON.stringify(v);
+  return t.length > 160 ? `${t.slice(0, 157)}…` : t;
+}
+
+function conflict(err: unknown): never {
+  throw new TRPCError({ code: "CONFLICT", message: String((err as any)?.message ?? err) });
+}
 
 async function log(userId: number, action: string, entity: string, details: string, entityId: number | null = null) {
   try {
@@ -48,7 +62,14 @@ export const settingsRouter = router({
   /** Estado do sistema: última corrida de cada cron, falhas, crons parados. */
   systemStatus: adminOnly.query(async () => {
     const { getCronStatuses } = await import("./cronRuns");
-    return { now: Date.now(), crons: await getCronStatuses() };
+    // 20b: o mail-sync é esperado de 5 em 5 min sem o push do Gmail e de hora
+    // a hora com ele — o "Parado" segue a cadência que está em vigor.
+    const { loadDynamicCadence } = await import("./cronScheduler");
+    const { MAIL_SYNC_MINUTES, MAIL_SYNC_SAFETY_NET_MINUTES } = await import("./cronSchedule");
+    const now = Date.now();
+    const dyn = await loadDynamicCadence(now);
+    const overrides = new Map([["mail-sync", dyn.mailPushHealthy ? MAIL_SYNC_SAFETY_NET_MINUTES : MAIL_SYNC_MINUTES]]);
+    return { now, crons: await getCronStatuses(now, overrides) };
   }),
 
   /**
@@ -86,35 +107,29 @@ export const settingsRouter = router({
       const { listAutomationFlags } = await import("./appSettings");
       return listAutomationFlags();
     }),
-    /** `value: null` remove a sobreposição (volta à env / omissão). */
+    /**
+     * `value: null` remove a sobreposição (volta à env / omissão).
+     * `expectedUpdatedAt` (20b): o que o ecrã leu; se outra pessoa mudou entretanto → CONFLICT.
+     */
     set: adminOnly
-      .input(z.object({ name: z.string().max(64), value: z.boolean().nullable() }))
+      .input(z.object({ name: z.string().max(64), value: z.boolean().nullable(), expectedUpdatedAt: z.string().max(19).nullable().optional() }))
       .mutation(async ({ ctx, input }) => {
+        canEdit(ctx.user);
         if (!isAutomationFlag(input.name)) throw new TRPCError({ code: "BAD_REQUEST", message: "Interruptor desconhecido." });
-        // Ex.: MULTIPARK_SOURCE (fonte das reservas: API ou BD da Multipark).
+        // Ex.: MULTIPARK_SOURCE (fonte das reservas), CRM_AUTO_MERGE (20b).
         if (automationFlagSuperAdminOnly(input.name)) requireSuperAdmin(ctx.user.role);
-        const { setSetting } = await import("./appSettings");
-        const r = await setSetting(flagSettingKey(input.name), input.value, ctx.user.id);
+        const { setSetting, SettingConflictError } = await import("./appSettings");
+        let r: { changed: boolean; value: unknown };
+        try {
+          r = await setSetting(flagSettingKey(input.name), input.value, ctx.user.id, { expectedUpdatedAt: input.expectedUpdatedAt });
+        } catch (err) {
+          if (err instanceof SettingConflictError) conflict(err);
+          throw err;
+        }
         if (r.changed) {
           const label = AUTOMATION_FLAGS.find((f) => f.name === input.name)?.label ?? input.name;
-          await log(ctx.user.id, "update", "app_setting", `${label}: ${input.value == null ? "segue a env" : input.value ? "ligado" : "desligado"}`);
+          await log(ctx.user.id, "update", "app_setting", `${label} (${input.name}): ${input.value == null ? "segue a variável do servidor" : input.value ? "ligado" : "desligado"}`);
         }
-        return r;
-      }),
-  }),
-
-  integrations: router({
-    list: adminOnly.query(async () => {
-      const { listIntegrationStatuses } = await import("./integrationsStatus");
-      return listIntegrationStatuses();
-    }),
-    test: adminOnly
-      .input(z.object({ id: z.string().max(40) }))
-      .mutation(async ({ ctx, input }) => {
-        const { integrationTestSuperAdminOnly, testIntegration } = await import("./integrationsStatus");
-        if (integrationTestSuperAdminOnly(input.id)) requireSuperAdmin(ctx.user.role);
-        const r = await testIntegration(input.id, ctx.user.id);
-        await log(ctx.user.id, "test", "integration", `${input.id}: ${r.ok ? "OK" : "falhou"}`);
         return r;
       }),
   }),
@@ -124,35 +139,38 @@ export const settingsRouter = router({
       const { listSettings } = await import("./appSettings");
       return listSettings();
     }),
-    /** Validação zod no servidor (shared/appSettings); `value: null` repõe a omissão. */
+    /**
+     * Validação zod no servidor (shared/appSettings); `value: null` repõe a omissão.
+     * `expectedUpdatedAt` (20b): o `updatedAt` que o ecrã leu (null = sem valor
+     * gravado); se outra pessoa gravou entretanto → CONFLICT e nada muda.
+     */
     set: adminOnly
-      .input(z.object({ key: z.enum(SETTING_KEYS as [string, ...string[]]), value: z.unknown() }))
+      .input(z.object({ key: z.enum(SETTING_KEYS as [string, ...string[]]), value: z.unknown(), expectedUpdatedAt: z.string().max(19).nullable().optional() }))
       .mutation(async ({ ctx, input }) => {
-        // As regras das notificações são do super_admin (Definições → Notificações).
-        if (input.key === "notifications.routing") requireSuperAdmin(ctx.user.role);
-        // Calendários partilhados (Google): Definições → Comunicação, só super_admin.
-        if (input.key === "google.sharedCalendars") requireSuperAdmin(ctx.user.role);
-        // Web & SEO (GA4/Search Console/PageSpeed): cartão próprio, só super_admin.
-        if (input.key === "marketing.webAnalytics") requireSuperAdmin(ctx.user.role);
-        // Google Business Profile (desempenho, associação dos perfis, alertas): só super_admin.
-        if (input.key === "marketing.googleBusiness") requireSuperAdmin(ctx.user.role);
-        // Contactos e Drive Google (inclui a conta com que correm os relatórios ao vivo): só super_admin.
-        if (input.key === "google.contacts" || input.key === "google.drive") requireSuperAdmin(ctx.user.role);
-        const { setSetting } = await import("./appSettings");
+        canEdit(ctx.user);
+        // Notificações, calendários/contactos/Drive Google, Web & SEO, Google
+        // Business e (20b) o remetente dos emails de sistema: só o super admin.
+        if (settingSuperAdminOnly(input.key)) requireSuperAdmin(ctx.user.role);
+        const { setSetting, SettingConflictError } = await import("./appSettings");
         try {
-          const r = await setSetting(input.key, input.value === undefined ? null : input.value, ctx.user.id);
+          const r = await setSetting(input.key, input.value === undefined ? null : input.value, ctx.user.id, { expectedUpdatedAt: input.expectedUpdatedAt });
           if (input.key === "notifications.routing") (await import("./notify")).invalidateNotifyCache();
-          if (r.changed) await log(ctx.user.id, "update", "app_setting", `${input.key} = ${JSON.stringify(r.value)}`);
+          if (r.changed) {
+            const label = (SETTINGS as Record<string, { label: string }>)[input.key]?.label ?? input.key;
+            await log(ctx.user.id, "update", "app_setting", `${label} (${input.key}): ${shortValue(r.value)}`);
+          }
           return r;
         } catch (err: any) {
+          if (err instanceof SettingConflictError) conflict(err);
+          if (err instanceof TRPCError) throw err;
           throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) });
         }
       }),
     audit: adminOnly
-      .input(z.object({ limit: z.number().int().min(1).max(200).optional() }).optional())
+      .input(z.object({ limit: z.number().int().min(1).max(200).optional(), key: z.string().max(100).nullable().optional() }).optional())
       .query(async ({ input }) => {
         const { listSettingsAudit } = await import("./appSettings");
-        return listSettingsAudit(input?.limit ?? 50);
+        return listSettingsAudit(input?.limit ?? 50, input?.key ?? null);
       }),
     /**
      * Parques da BD da Multipark (ao vivo, todos, sem âmbito de cidade) para

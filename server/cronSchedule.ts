@@ -161,7 +161,7 @@ export const TICK_END_MARGIN_MS = 8_000;
 /** Depois do orçamento, quanto se espera por um trabalho atrasado antes de o largar (< TICK_END_MARGIN_MS). */
 export const TICK_HARD_STOP_GRACE_MS = 3_000;
 
-export type JobStatus = "ok" | "error" | "partial";
+export type JobStatus = "ok" | "error" | "partial" | "skipped";
 
 export interface JobState {
   jobKey: string;
@@ -395,7 +395,11 @@ export function leaseFree(leaseUntil: number | null | undefined, now: number): b
 
 // ─── Resultado → novo estado ────────────────────────────────────────────────
 
-export interface RunOutcome { ok: boolean; done: boolean; cursor: string | null; error: string | null; startedAt: number; finishedAt: number }
+export interface RunOutcome {
+  ok: boolean; done: boolean; cursor: string | null; error: string | null; startedAt: number; finishedAt: number;
+  /** 20b: a corrida saiu sem fazer o trabalho (interruptor desligado, sem configuração…) — motivo. */
+  skipped?: string | null;
+}
 
 /** Campos do estado depois de uma corrida (liberta o lease). PURA. */
 export function applyOutcome(spec: TickJobSpec, prev: JobState | null | undefined, o: RunOutcome): JobState {
@@ -412,7 +416,14 @@ export function applyOutcome(spec: TickJobSpec, prev: JobState | null | undefine
   if (o.ok) {
     st.lastError = null;
     st.attempts = 0;
-    if (o.done) {
+    if (o.done && o.skipped) {
+      // 20b: saltado ≠ feito — o período fica arrumado (não repete de 5 em
+      // 5 min), mas o "Último OK" não avança e o motivo fica à vista.
+      st.lastStatus = "skipped";
+      st.lastError = `saltado: ${o.skipped}`.slice(0, 1000);
+      st.resumeCursor = null;
+      if (periodic) st.periodKey = period;
+    } else if (o.done) {
       st.lastStatus = "ok";
       st.lastOkAt = o.finishedAt;
       st.resumeCursor = null;

@@ -6,6 +6,7 @@
 // seu Perfil).
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -47,8 +48,9 @@ export function NotificationRoutingCard() {
   const groups = useMemo(() => (Object.keys(NOTIFICATION_GROUP_LABELS) as NotificationGroup[])
     .map((g) => ({ g, rows: table.filter((t) => t.group === g) })).filter((x) => x.rows.length), [table]);
 
+  // 20b: o erro primeiro — antes ficava a rodar para sempre (sem dados não há rascunho).
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as regras das notificações" />;
   if (q.isLoading || !draft) return <Loader2 className="h-4 w-4 animate-spin" />;
-  if (q.error) return <p className="text-sm text-destructive">{q.error.message}</p>;
 
   const toggleRole = (kind: string, role: Role, on: boolean) => setDraft((d) => d && ({
     ...d, roles: { ...d.roles, [kind]: on ? [...new Set([...(d.roles[kind] ?? []), role])] : (d.roles[kind] ?? []).filter((r) => r !== role) },

@@ -3,7 +3,11 @@
 // parâmetros (IVA/TSU, SLAs, emails, responsável das disponibilidades) com
 // auditoria, e segurança (validade das API keys, terminar sessões).
 import { useEffect, useMemo, useState } from "react";
+import { useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { can } from "@shared/access";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,7 +33,7 @@ import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
-import { EXCLUDED_PARKS_SETTING_KEY, validateSetting, type RateEntry } from "@shared/appSettings";
+import { AUTOMATION_FLAGS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, SETTINGS, validateSetting, type RateEntry } from "@shared/appSettings";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
 
@@ -37,6 +41,7 @@ const TABS = ["estado", "automacoes", "integracoes", "comunicacao", "parametros"
 type Tab = (typeof TABS)[number];
 
 function useStoredTab(): [Tab, (t: Tab) => void] {
+  const search = useSearch();
   const [tab, setTab] = useState<Tab>(() => {
     try {
       // Link direto (?tab=estado — p. ex. os alertas da sincronização) antes do guardado.
@@ -44,13 +49,19 @@ function useStoredTab(): [Tab, (t: Tab) => void] {
       return (TABS as readonly string[]).includes(v ?? "") ? (v as Tab) : "estado";
     } catch { return "estado"; }
   });
+  // 20b: um link ?tab=… com a página já aberta (ex.: o sino) também muda de separador.
+  useEffect(() => {
+    const v = new URLSearchParams(search).get("tab");
+    if (v && (TABS as readonly string[]).includes(v)) setTab(v as Tab);
+  }, [search]);
   return [tab, (t) => { setTab(t); try { sessionStorage.setItem("mp.definicoes.tab", t); } catch { /* sem storage */ } }];
 }
 
 export default function DefinicoesPage() {
   const { user } = useAuth();
   const [tab, setTab] = useStoredTab();
-  const isAdmin = !!user && ["admin", "super_admin"].includes(user.role);
+  // 20b: pela matriz (módulo "definicoes", com as exceções por pessoa), como o servidor.
+  const isAdmin = !!user && can(user as any, "definicoes", "view");
   if (!user) return null;
   if (!isAdmin) {
     return <div className="p-6 text-sm text-muted-foreground">Sem acesso às Definições.</div>;
@@ -128,16 +139,19 @@ function SystemStatusCard() {
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           Estado do sistema
-          {q.isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : problems > 0
-            ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">{problems} com problemas</Badge>
-            : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Tudo a correr</Badge>}
+          {/* 20b: sem leitura não há "Tudo a correr" */}
+          {q.isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : !q.data
+            ? <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-200">Estado desconhecido</Badge>
+            : problems > 0
+              ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">{problems} com problemas</Badge>
+              : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Tudo a correr</Badge>}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           Última corrida de cada cron (agendador /api/cron/tick, chamado pelo cron-job.org de 5 em 5 min; ou à mão). "Parado" = sem corridas há mais de 2× o intervalo esperado (mínimo 30 min).
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
-        {q.error && <p className="text-sm text-destructive">{q.error.message}</p>}
+        {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o estado dos crons" />}
         {crons.map((c) => {
           const h = HEALTH[c.health] ?? HEALTH.never;
           const bad = c.health === "failed" || c.health === "stale";
@@ -154,7 +168,7 @@ function SystemStatusCard() {
                 <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1 text-xs">
                   <div><span className="text-muted-foreground">Última: </span>{c.last ? `${fmtPTDateTime(c.last.startedAt)} (${ago(c.last.startedAt, now)})` : "—"}</div>
                   <div><span className="text-muted-foreground">Duração: </span>{fmtDuration(c.last?.durationMs)}</div>
-                  <div><span className="text-muted-foreground">Último OK: </span>{c.lastOkAt ? ago(c.lastOkAt, now) : "—"}</div>
+                  <div><span className="text-muted-foreground">Último OK: </span>{c.lastOkAt ? ago(c.lastOkAt, now) : "—"}<span className="sr-only"> (corridas saltadas não contam)</span></div>
                   <div><span className="text-muted-foreground">24 h: </span>{c.runs24h} corridas{c.failures24h ? <span className="text-red-700 font-semibold"> · {c.failures24h} falhas</span> : null}</div>
                 </div>
                 {c.last && c.last.ok === false && c.last.error && (
@@ -201,6 +215,8 @@ const JOB_STATUS: Record<string, { label: string; cls: string }> = {
   ok: { label: "OK", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
   error: { label: "Erro", cls: "bg-red-100 text-red-800 border-red-200" },
   partial: { label: "A meio (retoma)", cls: "bg-blue-100 text-blue-800 border-blue-200" },
+  // 20b: saiu sem fazer o trabalho (interruptor desligado, sem configuração…) — não é "OK".
+  skipped: { label: "Saltado", cls: "bg-amber-100 text-amber-900 border-amber-200" },
 };
 
 function until(ts: number | null | undefined, now: number): string {
@@ -222,16 +238,18 @@ function SchedulerCard() {
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           <Clock className="h-4 w-4" /> Agendador
-          {q.isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : errors > 0
-            ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">{errors} com erro</Badge>
-            : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Sem erros</Badge>}
+          {q.isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : !q.data
+            ? <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-200">Estado desconhecido</Badge>
+            : errors > 0
+              ? <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200">{errors} com erro</Badge>
+              : <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200">Sem erros</Badge>}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          O cron-job.org chama /api/cron/tick de 5 em 5 min; cada tick corre, um a um, os trabalhos que estão na altura (hora de Lisboa). "A meio" = não coube no tempo e continua no tick seguinte. Só leitura.
+          O cron-job.org chama /api/cron/tick de 5 em 5 min; cada tick corre, um a um, os trabalhos que estão na altura (hora de Lisboa). "A meio" = não coube no tempo e continua no tick seguinte. "Saltado" = correu mas não fez o trabalho (ex.: interruptor desligado) — não conta como "Último OK". Só leitura.
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
-        {q.error && <p className="text-sm text-destructive">{q.error.message}</p>}
+        {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o agendador" />}
         {jobs.map((j) => {
           const st = j.lastStatus ? JOB_STATUS[j.lastStatus] : null;
           const bad = j.lastStatus === "error" || j.abandoned;
@@ -253,7 +271,8 @@ function SchedulerCard() {
                 <div><span className="text-muted-foreground">Último OK: </span>{j.lastOkAt ? ago(j.lastOkAt, now) : "—"}</div>
                 <div><span className="text-muted-foreground">Próxima: </span>{j.dueNow ? "no próximo tick" : `${until(j.nextDueAt, now)}${j.nextDueAt ? ` (${fmtPTDateTime(j.nextDueAt)})` : ""}`}</div>
               </div>
-              {j.periodDone && <p className="mt-1 text-xs text-muted-foreground"><CheckCircle2 className="inline h-3 w-3 mr-1 text-emerald-600" />Feito neste período.</p>}
+              {j.periodDone && j.lastStatus !== "skipped" && <p className="mt-1 text-xs text-muted-foreground"><CheckCircle2 className="inline h-3 w-3 mr-1 text-emerald-600" />Feito neste período.</p>}
+              {j.periodDone && j.lastStatus === "skipped" && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />Saltado neste período (não volta a tentar até ao seguinte).</p>}
               {j.attempts > 0 && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">{j.attempts} tentativa(s) falhada(s) neste período (máx. 3, de 30 em 30 min).</p>}
               {j.abandoned && <p className="mt-1 text-xs text-red-700 dark:text-red-300"><XCircle className="inline h-3 w-3 mr-1" />A última corrida não terminou (a função foi terminada a meio).</p>}
               {j.lastError && (
@@ -297,7 +316,7 @@ function AiUsageCard() {
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
-        {q.error && <p className="text-sm text-destructive">{q.error.message}</p>}
+        {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o custo da IA" />}
         {d && (
           <>
             <div className="space-y-1">
@@ -359,26 +378,42 @@ function AiUsageCard() {
 
 // ─── Automações ─────────────────────────────────────────────────────────────
 
+/** De onde vem o estado atual de um interruptor (20b). PURA. */
+function flagSource(f: { override: boolean | null; envValue: boolean | null }): string {
+  if (f.override != null) return "definido aqui";
+  if (f.envValue != null) return "pela variável do servidor";
+  return "por omissão";
+}
+
 function AutomationsCard() {
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  const canEdit = can(user as any, "definicoes", "edit");
   const q = trpc.settings.flags.list.useQuery();
   const setFlag = trpc.settings.flags.set.useMutation({
     onSuccess: () => { utils.settings.flags.list.invalidate(); utils.settings.values.audit.invalidate(); toast.success("Guardado (aplica-se em até 30 s)."); },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // 20b: outra pessoa mudou entretanto → mostra já o valor novo.
+      if (e.data?.code === "CONFLICT") utils.settings.flags.list.invalidate();
+    },
   });
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Automações</CardTitle>
         <p className="text-xs text-muted-foreground">
-          Ligar/desligar cada automação. O que se escolhe aqui sobrepõe-se à variável de ambiente; "Seguir env" volta ao valor do servidor.
+          Ligar/desligar cada automação. O que se escolhe aqui sobrepõe-se à variável do servidor; "Seguir o servidor" volta ao valor da variável (ou à omissão, se não houver).
         </p>
       </CardHeader>
       <CardContent className="divide-y">
         {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-        {q.data?.map((f, i) => (
+        {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as automações" />}
+        {q.data?.map((f, i) => {
+          const locked = !canEdit || (!!f.superAdminOnly && !isSuperAdmin);
+          const send = (value: boolean | null) => setFlag.mutate({ name: f.name, value, expectedUpdatedAt: f.updatedAt ?? null });
+          return (
           <div key={f.name}>
           {f.group === "ia" && q.data?.[i - 1]?.group !== "ia" && (
             <div className="pt-4 pb-1 text-sm font-semibold flex items-center gap-1"><Sparkles className="h-4 w-4" />Inteligência artificial</div>
@@ -387,28 +422,33 @@ function AutomationsCard() {
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold">{f.label}</div>
               <div className="text-xs text-muted-foreground">{f.description}</div>
-              <div className="text-[11px] text-muted-foreground mt-1 font-mono break-all">
-                {f.name} · env: {f.envValue == null ? "—" : f.envValue ? "ligado" : "desligado"}{!f.defaultEnabled && " · desligado por omissão"}{f.superAdminOnly && " · só super admin"}
+              <div className="text-xs mt-1">
+                Agora: <b>{f.effective ? "ligado" : "desligado"}</b> <span className="text-muted-foreground">({flagSource(f)})</span>
+                {f.superAdminOnly && <span className="text-muted-foreground"> · só o super admin muda</span>}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5 font-mono break-all">
+                {f.name} · variável: {f.envValue == null ? "—" : f.envValue ? "ligado" : "desligado"}{!f.defaultEnabled && " · desligado por omissão"}
                 {f.override != null && <> · <span className="text-primary font-semibold">definido aqui</span>{f.updatedByName ? ` por ${f.updatedByName}` : ""}{f.updatedAt ? ` em ${fmtPTDateTime(f.updatedAt)}` : ""}</>}
               </div>
-            </div>
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              <Switch
-                checked={f.effective}
-                disabled={setFlag.isPending || (!!f.superAdminOnly && !isSuperAdmin)}
-                onCheckedChange={(v) => setFlag.mutate({ name: f.name, value: v })}
-                aria-label={f.label}
-              />
               {f.override != null && (
-                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={setFlag.isPending || (!!f.superAdminOnly && !isSuperAdmin)}
-                  onClick={() => setFlag.mutate({ name: f.name, value: null })}>
-                  <RotateCcw className="h-3 w-3 mr-1" />Seguir env
+                <Button variant="ghost" size="sm" className="h-7 px-2 -ml-2 mt-1 text-xs" disabled={setFlag.isPending || locked}
+                  onClick={() => send(null)}>
+                  <RotateCcw className="h-3 w-3 mr-1" />Seguir o servidor
                 </Button>
               )}
             </div>
+            <div className="shrink-0 pt-0.5">
+              <Switch
+                checked={f.effective}
+                disabled={setFlag.isPending || locked}
+                onCheckedChange={(v) => send(v)}
+                aria-label={f.label}
+              />
+            </div>
           </div>
           </div>
-        ))}
+          );
+        })}
       </CardContent>
     </Card>
   );
@@ -463,16 +503,39 @@ const CITY_FIELDS: { id: "lisbon" | "porto" | "faro"; label: string }[] = [
 type SettingItem = {
   key: string; group: string; label: string; description: string; wiring: "live" | "store";
   defaultValue: unknown; value: unknown; isSet: boolean; updatedAt: string | null; updatedByName: string | null;
+  invalid?: boolean; superAdminOnly?: boolean;
 };
+
+/** Nome legível de uma chave do histórico (definição ou interruptor). */
+function auditKeyLabel(key: string): string {
+  if (key.startsWith(FLAG_SETTING_PREFIX)) {
+    const name = key.slice(FLAG_SETTING_PREFIX.length);
+    return AUTOMATION_FLAGS.find((f) => f.name === name)?.label ?? name;
+  }
+  return (SETTINGS as Record<string, { label: string }>)[key]?.label ?? key;
+}
+const AUDIT_ALL = "__all__";
+const AUDIT_KEYS: { value: string; label: string }[] = [
+  ...Object.keys(SETTINGS).map((k) => ({ value: k, label: auditKeyLabel(k) })),
+  ...AUTOMATION_FLAGS.map((f) => ({ value: FLAG_SETTING_PREFIX + f.name, label: `Automação: ${f.label}` })),
+].sort((a, b) => a.label.localeCompare(b.label, "pt"));
 
 function ParametersCard() {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+  const canEdit = can(user as any, "definicoes", "edit");
   const q = trpc.settings.values.list.useQuery();
   const code = trpc.settings.values.codeConstants.useQuery();
-  const audit = trpc.settings.values.audit.useQuery({ limit: 30 });
+  const [auditKey, setAuditKey] = useState<string>(AUDIT_ALL);
+  const audit = trpc.settings.values.audit.useQuery({ limit: 50, key: auditKey === AUDIT_ALL ? null : auditKey });
   const save = trpc.settings.values.set.useMutation({
     onSuccess: (r) => { utils.settings.values.invalidate(); toast.success(r.changed ? "Guardado." : "Sem alterações."); },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // 20b: outra pessoa gravou entretanto → recarrega para se ver o valor novo.
+      if (e.data?.code === "CONFLICT") utils.settings.values.invalidate();
+    },
   });
   const groups = useMemo(() => {
     const m = new Map<string, SettingItem[]>();
@@ -491,26 +554,41 @@ function ParametersCard() {
   return (
     <div className="space-y-4">
       {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+      {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os parâmetros" />}
+      {code.error && <QueryErrorNote error={code.error} onRetry={() => code.refetch()} retrying={code.isFetching} what="o IVA/TSU em vigor nos cálculos" />}
       {groups.map(([group, items]) => (
         <Card key={group}>
           <CardHeader className="pb-2"><CardTitle className="text-base">{GROUP_LABEL[group] ?? group}</CardTitle></CardHeader>
           <CardContent className="space-y-5">
             {items.map((s) => (
               <SettingEditor key={s.key} item={s} saving={save.isPending}
+                locked={!canEdit || (!!s.superAdminOnly && !isSuperAdmin)}
                 codeValue={s.key === "finance.vat" ? code.data?.vatRate : s.key === "finance.tsu" ? code.data?.tsuEmployerRate : undefined}
-                onSave={(value) => save.mutate({ key: s.key, value })} />
+                onSave={(value) => save.mutate({ key: s.key, value, expectedUpdatedAt: s.updatedAt ?? null })} />
             ))}
           </CardContent>
         </Card>
       ))}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">Histórico de alterações</CardTitle></CardHeader>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Histórico de alterações</CardTitle>
+          <div className="pt-1 max-w-sm">
+            <Select value={auditKey} onValueChange={setAuditKey}>
+              <SelectTrigger className="h-8 text-xs" aria-label="Filtrar o histórico"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUDIT_ALL}>Todas as alterações</SelectItem>
+                {AUDIT_KEYS.map((k) => <SelectItem key={k.value} value={k.value}>{k.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardHeader>
         <CardContent>
-          {audit.data?.length === 0 && <p className="text-sm text-muted-foreground">Ainda sem alterações.</p>}
+          {audit.error && <QueryErrorNote error={audit.error} onRetry={() => audit.refetch()} retrying={audit.isFetching} what="o histórico" />}
+          {audit.data?.length === 0 && <p className="text-sm text-muted-foreground">{auditKey === AUDIT_ALL ? "Ainda sem alterações." : "Sem alterações nesta definição."}</p>}
           <div className="space-y-1.5">
             {audit.data?.map((a) => (
               <div key={a.id} className="text-xs border-b pb-1.5 last:border-0">
-                <div><span className="font-semibold">{a.key}</span> · {a.changedByName ?? "—"} · {fmtPTDateTime(a.changedAt)}</div>
+                <div><span className="font-semibold">{auditKeyLabel(a.key)}</span> <span className="font-mono text-muted-foreground">({a.key})</span> · {a.changedByName ?? "—"} · {fmtPTDateTime(a.changedAt)}</div>
                 <div className="text-muted-foreground break-all font-mono">{JSON.stringify(a.oldValue)} → {JSON.stringify(a.newValue)}</div>
               </div>
             ))}
@@ -525,8 +603,17 @@ function pct(rate: number): string {
   return String(Math.round(rate * 10000) / 100).replace(".", ",");
 }
 
-function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem; saving: boolean; onSave: (v: unknown) => void; codeValue?: number }) {
+/** Telefones dos alertas sem PDA/Zello: por cidade + cópia (20b: antes o editor genérico estragava a lista). */
+const PRESENCE_PHONE_FIELDS: { id: "lisbon" | "porto" | "faro" | "copy"; label: string }[] = [
+  { id: "lisbon", label: "Lisboa" },
+  { id: "porto", label: "Porto" },
+  { id: "faro", label: "Faro" },
+  { id: "copy", label: "Cópia (todas as cidades)" },
+];
+
+function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: SettingItem; saving: boolean; onSave: (v: unknown) => void; codeValue?: number; locked?: boolean }) {
   const current = item.isSet ? item.value : item.defaultValue;
+  const isPhones = item.key === "ops.presencePhones";
   const isRate = item.key === "finance.vat" || item.key === "finance.tsu";
   const isZelloList = item.key === "zello.gpsExcludedUsers";
   const isEmails = item.key === "emails.handoverCc" || isZelloList;
@@ -534,11 +621,11 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
-  const isCityMap = !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
+  const isCityMap = !isPhones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
     && CITY_FIELDS.every((c) => c.id in (item.defaultValue as Record<string, unknown>));
   const cityMapNumeric = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "number";
   const isTime = typeof item.defaultValue === "string" && /^\d{2}:\d{2}$/.test(item.defaultValue as string);
-  const isJson = !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
+  const isJson = !isPhones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
@@ -548,7 +635,8 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setError(null);
-    if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
+    if (isPhones) setCityMap(Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, (((current as Record<string, unknown>)?.[c.id] as string[] | undefined) ?? []).join("\n")])));
+    else if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
     else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
     else if (isCityMap) setCityMap(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, String((current as Record<string, unknown>)?.[c.id] ?? "").replace(".", ",")])));
@@ -559,6 +647,7 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
   }, [JSON.stringify(current)]);
 
   const build = (): unknown => {
+    if (isPhones) return Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, (cityMap[c.id] ?? "").split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean)]));
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
@@ -594,7 +683,11 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
           <div className="text-[11px] text-muted-foreground mt-0.5">
             {item.wiring === "live" ? "Em uso pela aplicação." : "Só registado (não altera cálculos)."}
             {item.isSet ? ` Alterado${item.updatedByName ? ` por ${item.updatedByName}` : ""}${item.updatedAt ? ` em ${fmtPTDateTime(item.updatedAt)}` : ""}.` : " A usar o valor por omissão."}
+            {item.superAdminOnly && " Só o super admin muda."}
           </div>
+          {item.invalid && (
+            <div className="text-[11px] mt-0.5 text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />O valor gravado já não é válido — a aplicação está a usar a omissão. Grava de novo para corrigir.</div>
+          )}
           {isRate && inForce && (
             <div className="text-[11px] mt-0.5">
               Em vigor hoje: <b>{pct(inForce.rate)}%</b>
@@ -606,7 +699,17 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
         </div>
       </div>
 
-      {isRate ? (
+      {isPhones ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl">
+          {PRESENCE_PHONE_FIELDS.map((c) => (
+            <label key={c.id} className="text-xs space-y-1">
+              <span className="text-muted-foreground">{c.label}</span>
+              <Textarea rows={2} value={cityMap[c.id] ?? ""} aria-label={`Telefones — ${c.label}`} placeholder="+351912345678 (um por linha)"
+                disabled={locked} onChange={(e) => setCityMap((p) => ({ ...p, [c.id]: e.target.value }))} />
+            </label>
+          ))}
+        </div>
+      ) : isRate ? (
         <div className="space-y-2">
           {rates.map((r, i) => (
             <div key={i} className="flex items-center gap-2 flex-wrap">
@@ -656,9 +759,9 @@ function SettingEditor({ item, saving, onSave, codeValue }: { item: SettingItem;
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex gap-2 flex-wrap">
-        <Button size="sm" onClick={submit} disabled={saving}><Save className="h-4 w-4 mr-1" />Guardar</Button>
+        <Button size="sm" onClick={submit} disabled={saving || locked}><Save className="h-4 w-4 mr-1" />Guardar</Button>
         {item.isSet && (
-          <Button size="sm" variant="ghost" disabled={saving} onClick={() => onSave(null)}>
+          <Button size="sm" variant="ghost" disabled={saving || locked} onClick={() => onSave(null)}>
             <RotateCcw className="h-4 w-4 mr-1" />Repor omissão
           </Button>
         )}
@@ -769,6 +872,7 @@ function SecurityCard({ isSuperAdmin }: { isSuperAdmin: boolean }) {
           <p className="text-xs text-muted-foreground">Chaves guardadas só como hash; aqui muda-se a data de expiração (a chave funciona até ao fim desse dia, hora de Lisboa). Criar, mudar capacidades ou revogar: página API Keys.</p>
         </CardHeader>
         <CardContent className="space-y-2">
+          {keys.error && <QueryErrorNote error={keys.error} onRetry={() => keys.refetch()} retrying={keys.isFetching} what="as API keys" />}
           {keys.data && !keys.data.visible && <p className="text-sm text-muted-foreground">Só o super admin gere as API keys.</p>}
           {keys.data?.visible && keys.data.keys.length === 0 && <p className="text-sm text-muted-foreground">Sem API keys.</p>}
           {keys.data?.visible && keys.data.keys.map((k) => {
