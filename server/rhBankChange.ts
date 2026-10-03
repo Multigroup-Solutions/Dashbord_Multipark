@@ -87,6 +87,8 @@ export async function createBankChangeRequest(employeeId: number, newIban: strin
         kind: "rh_bank_change", title: `IBAN por aprovar: ${found.employee.fullName}`,
         body: `${oldMasked ?? "sem IBAN"} → ${masked}. Confirma com o comprovativo antes de aprovar.`,
         link: `/rh?employeeId=${employeeId}`, employeeId, entity: { type: "bank_change", id },
+        // Quem pediu não aprova o próprio pedido → não precisa do aviso.
+        recipientFilter: (c) => c.id !== requestedById,
       });
     }
   } catch (err) { console.warn("[rhBankChange] aviso ao RH falhou:", String((err as any)?.message ?? err).slice(0, 160)); }

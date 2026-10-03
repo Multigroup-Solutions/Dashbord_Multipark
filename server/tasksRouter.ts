@@ -21,6 +21,7 @@ import { roleRank } from "../shared/access";
 import { assertProjectAccess, scopedProjectIds } from "./cityScope";
 import { getDb, getEmployeeByUserId, getTaskById, getTaskAssignees, logActivity, resolveProjectIds, setTaskAssignees, createTask, updateTask } from "./db";
 import { taskTemplates } from "../drizzle/schema";
+import { newAssigneeIds, notifyTaskAssigned } from "./taskAssignNotify";
 import {
   TASK_SOURCE_LABELS,
   TASK_STATUSES,
@@ -253,6 +254,8 @@ export const tasksRouter = router({
       });
       if (ids.length) await setTaskAssignees(newId, ids);
       await logActivity({ userId: ctx.user.id, action: "create", entity: "task", entityId: newId, details: input.title });
+      // D45: "Nova tarefa para ti" (interruptor TASK_ASSIGNED_NOTIFY; nunca lança).
+      await notifyTaskAssigned({ task: { id: newId, title: input.title, sourceModule: "manual", projectId: input.projectId ?? null, dueDate: input.dueDate ?? null }, employeeIds: ids, byUserId: ctx.user.id, byName: ctx.user.name });
       googleSyncAfter([newId]);
       return { id: newId };
     }),
@@ -316,6 +319,7 @@ export const tasksRouter = router({
         });
         if (t.assigneeId) await setTaskAssignees(id, [t.assigneeId]);
         await logActivity({ userId: ctx.user.id, action: "create", entity: "task", entityId: id, details: `${t.title} (a partir de texto)` });
+        await notifyTaskAssigned({ task: { id, title: t.title, sourceModule: "manual", projectId: input.projectId ?? null, dueDate: t.dueDate ?? null }, employeeIds: [t.assigneeId], byUserId: ctx.user.id, byName: ctx.user.name });
         ids.push(id);
       }
       googleSyncAfter(ids);
@@ -368,6 +372,14 @@ export const tasksRouter = router({
       if (assigneeIds !== undefined) data.assigneeId = assigneeIds[0] ?? null;
       await updateTask(id, data);
       if (assigneeIds !== undefined) await setTaskAssignees(id, assigneeIds);
+      // D45: avisa só quem entrou agora como responsável.
+      const added = newAssigneeIds(assigneeIds ?? (input.assigneeId != null ? [input.assigneeId] : []), prevIds);
+      if (added.length) {
+        await notifyTaskAssigned({
+          task: { id, title: input.title ?? prev.title, sourceModule: prev.sourceModule ?? null, projectId: input.projectId !== undefined ? input.projectId : prev.projectId, dueDate: data.dueDate !== undefined ? data.dueDate : (prev.dueDate as any) },
+          employeeIds: added, byUserId: ctx.user.id, byName: ctx.user.name,
+        });
+      }
       const changed = [
         input.title !== undefined && input.title !== prev.title ? "título" : null,
         description !== undefined && (description.trim() || null) !== (prev.description || null) ? "descrição" : null,

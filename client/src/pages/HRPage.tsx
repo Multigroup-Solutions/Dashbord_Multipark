@@ -474,8 +474,8 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
 // ─── DOCUMENT UPLOAD (MULTI-FILE + CHECKLIST) ───────────────────────────────
 // `access` vem de rh.byId: quem pode mexer nos dados pessoais carrega
 // documentos; apagar é admin (ficha não protegida) ou quem carregou o ficheiro.
-type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canViewSensitive: boolean; canViewDocuments: boolean; isRh?: boolean };
-const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false, isRh: false };
+type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canViewSensitive: boolean; canViewDocuments: boolean; isRh?: boolean; canChangeIban?: boolean; canApproveIban?: boolean };
+const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false };
 
 function DocumentsTab({ employeeId, access }: { employeeId: number; access: EmployeeAccess }) {
   const utils = trpc.useUtils();
@@ -1660,7 +1660,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
               <div>
                 <Label>NIB / IBAN</Label>
                 <Input value={editForm.nib} onChange={e => ef("nib", e.target.value)} placeholder="PT50..." />
-                {!access.isRh && <p className="text-[11px] text-muted-foreground mt-1">Mudar o IBAN fica à espera da aprovação do RH (o atual mantém-se até lá).</p>}
+                {!access.canChangeIban && <p className="text-[11px] text-muted-foreground mt-1">Mudar o IBAN fica à espera da aprovação do RH (back office ou administrador); o atual mantém-se até lá.</p>}
               </div>
               <div className="sm:col-span-2">
                 <Label>Morada</Label>
@@ -2488,8 +2488,8 @@ export default function HRPage() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
-      {/* 19c: pedidos de IBAN por aprovar (front/back office e administradores) */}
-      {isNationalRole(userRole) && <PendingBankChangesCard onOpen={(id) => { setSelectedId(id); setShowUsers(false); setShowPayroll(false); setShowDashboard(false); }} />}
+      {/* D49: pedidos de IBAN por aprovar (back office e administradores) */}
+      {["backoffice", "admin", "super_admin"].includes(userRole) && <PendingBankChangesCard onOpen={(id) => { setSelectedId(id); setShowUsers(false); setShowPayroll(false); setShowDashboard(false); }} />}
       {/* Header com novo colaborador destacado + dropdown de ações */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-muted-foreground text-sm">Gestão de colaboradores, ponto e documentação</p>

@@ -2,7 +2,7 @@
 modulo: tarefas
 titulo: Tarefas
 rotas: /tarefas
-palavras: tarefa, tarefas, as minhas tarefas, quadro, nova tarefa, responsável, prazo, data limite, prioridade, começar, concluir, reabrir, arquivar, eliminar tarefa, checklists recorrentes, comentário, atraso, aviso de atraso, serviço da reserva, lavagem, carregamento elétrico, criar a partir de texto, mostrar antigas
+palavras: nova tarefa para ti, aviso de tarefa nova, tarefa, tarefas, as minhas tarefas, quadro, nova tarefa, responsável, prazo, data limite, prioridade, começar, concluir, reabrir, arquivar, eliminar tarefa, checklists recorrentes, comentário, atraso, aviso de atraso, serviço da reserva, lavagem, carregamento elétrico, criar a partir de texto, mostrar antigas
 ---
 # Tarefas
 
@@ -33,6 +33,11 @@ palavras: tarefa, tarefas, as minhas tarefas, quadro, nova tarefa, responsável,
 1. **Tarefas criadas à mão**: quando passam o prazo avisam no sino quem a criou, os gestores do centro de custos e os responsáveis; quem a criou recebe também email. Quando alguém a conclui, quem a criou é avisado.
 2. **Tarefas automáticas** (checklists, serviços, disponibilidade, fichas sem cidade): com o interruptor **Avisos de atraso das tarefas automáticas** ligado (Definições → Automações; vem ligado). Só avisa as que passaram o prazo há menos de 48 h; as mais antigas ficam marcadas sem aviso. Avisa no sino os responsáveis e o **supervisor da cidade** (um resumo por cidade). Ninguém recebe email.
 3. Os avisos correm de hora a hora mesmo com a automação dos extras desligada; **Verificar agora** (só admin) corre-os já.
+
+**Aviso "Nova tarefa para ti"**
+1. Quando alguém te põe como **responsável** numa tarefa (ao criar, ao criar a partir de texto ou ao editar), recebes no sino **Nova tarefa para ti** com o título, o prazo e quem a atribuiu.
+2. Só para tarefas feitas por pessoas: as automáticas (checklists, serviços, disponibilidade, fichas sem cidade) e as que vêm do Google Tarefas não avisam. Quem já era responsável não é avisado outra vez, e atribuir a ti próprio não te avisa.
+3. Vem **desligado**: liga-se em **Definições → Automações → Tarefas: aviso "Nova tarefa para ti"**. Cada pessoa pode desligá-lo para si no **Perfil → Notificações**.
 
 **Tarefas dos serviços das reservas** (automáticas)
 1. Quando uma reserva tem um serviço extra (ex.: **lavagem**, **carregamento elétrico**) de um tipo ligado em **Definições → Parâmetros → Serviços → tarefas**, aparece sozinha uma tarefa com a origem **Serviço da reserva**.

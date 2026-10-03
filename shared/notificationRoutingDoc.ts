@@ -33,6 +33,7 @@ export const KIND_SOURCES: Record<string, string> = {
   driver_daily_report: "Fim da recolha diária do histórico GPS.",
   anomaly_bookings: "Deteção diária de anomalias nas reservas (só críticas).",
   task: "Tarefas: atraso, conclusão, comentários (criador, responsáveis, gestores da hierarquia). Nas automáticas (checklists, serviços, disponibilidade, fichas sem cidade) só os responsáveis, e só com \"Avisos de atraso das tarefas automáticas\" ligado.",
+  task_assigned: "Tarefas (criar, criar a partir de texto, editar): quem passou agora a responsável de uma tarefa feita por uma pessoa — nunca quem a atribuiu; as automáticas e as do Google não avisam. Interruptor TASK_ASSIGNED_NOTIFY (desligado por omissão).",
   task_overdue_city: "Cron horário (extras-auto): tarefas automáticas que passaram o prazo, um resumo por cidade ao supervisor — só com \"Avisos de atraso das tarefas automáticas\" ligado (desligado por omissão).",
   rh_docs_missing: "Regra documental dos extras: 14 dias com documentos obrigatórios em falta (1.º aviso).",
   my_docs_missing: "Mesmo momento, para a própria pessoa (app + email).",
