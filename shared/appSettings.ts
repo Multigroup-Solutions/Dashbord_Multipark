@@ -649,10 +649,20 @@ export interface AutomationFlag {
   superAdminOnly?: boolean;
   /** Valores próprios da env além de on/off (ex.: X=db → ligado). */
   envAliases?: Record<string, boolean>;
+  /**
+   * Sem valor próprio (nem variável nem "definido aqui"), segue o estado deste
+   * outro interruptor — para separar um interruptor sem mudar o que já estava.
+   */
+  followsFlag?: string;
 }
 
 export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "EXTRAS_AUTOMATION", label: "Automação dos extras", description: "Pedido de disponibilidade à quinta, lembrete ao sábado, aviso de escala e alerta de cobertura (cron horário)." },
+  // D30 (Jorge, 3 out 2026): interruptor próprio. Sem valor próprio segue a
+  // "Automação dos extras" (como era até aqui) — nada muda até alguém o mudar.
+  { name: "EXTRAS_AVAILABILITY_AUTO_REPLY", label: "Extras: resposta automática no WhatsApp", description: "Quando um extra responde pelo WhatsApp ao pedido de disponibilidade (ou carrega Sim/Não no aviso de turno), marca os dias e responde-lhe sozinho. Desligado: a resposta fica na caixa do WhatsApp para uma pessoa tratar. Sem valor próprio, segue a \"Automação dos extras\".", followsFlag: "EXTRAS_AUTOMATION" },
+  // D31 (Jorge, 3 out 2026): era só a variável WHATSAPP_SLA_NOTIFY=off; a variável continua a valer.
+  { name: "WHATSAPP_SLA_NOTIFY", label: "WhatsApp: aviso de conversas por responder", description: "De hora a hora, avisa no sino as conversas do WhatsApp fora do prazo de resposta, as urgentes e as que têm a janela de 24 h a fechar (por cidade e ao responsável). Desligado: a caixa continua a mostrar os atrasos, só não avisa." },
   { name: "LEAD_REMINDERS", label: "Lembretes das leads de extras", description: "Lembretes automáticos às leads que ainda não responderam." },
   // 17e (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão, como as outras.
   { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas (por WhatsApp). Desligado por omissão.", defaultEnabled: false },
@@ -725,6 +735,11 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
 /** Omissão de um interruptor do catálogo (desconhecido → ligado). PURA. */
 export function automationFlagDefault(name: string): boolean {
   return AUTOMATION_FLAGS.find((f) => f.name === name)?.defaultEnabled ?? true;
+}
+
+/** O interruptor que este segue quando não tem valor próprio (ou null). PURA. */
+export function automationFlagFollows(name: string): string | null {
+  return AUTOMATION_FLAGS.find((f) => f.name === name)?.followsFlag ?? null;
 }
 
 /**

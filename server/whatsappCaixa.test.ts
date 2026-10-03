@@ -221,11 +221,13 @@ describe("Ecrã: erro ≠ vazio, Enter no telemóvel, automação com interrupto
     expect(page).toContain("if (isMobile || COARSE_POINTER) return;");
     expect(page).toContain("!e.nativeEvent.isComposing");
   });
-  it("respostas automáticas de disponibilidade respeitam EXTRAS_AUTOMATION (lido fresco no webhook)", () => {
+  it("respostas automáticas de disponibilidade: interruptor próprio que segue EXTRAS_AUTOMATION (lido fresco no webhook)", () => {
     const auto = src("server/extrasAutomation.ts");
+    // D30 (lote 24a): EXTRAS_AVAILABILITY_AUTO_REPLY, que sem valor próprio segue EXTRAS_AUTOMATION.
+    expect(auto).toMatch(/isFeatureEnabled\("EXTRAS_AVAILABILITY_AUTO_REPLY", \{ defaultEnabled: extrasOn \}\)/);
     const fn = auto.slice(auto.indexOf("export async function handleWhatsappReply"));
-    expect(fn.indexOf('isFeatureEnabled("EXTRAS_AUTOMATION")')).toBeGreaterThan(-1);
-    expect(fn.indexOf("await ensureFeatureFlagOverrides();")).toBeLessThan(fn.indexOf("latestRequestFor("));
+    expect(fn.indexOf("if (!availabilityAutoReplyOn()) return { action: \"none\" };")).toBeGreaterThan(-1);
+    expect(fn.indexOf("await ensureFeatureFlagOverridesFresh();")).toBeLessThan(fn.indexOf("latestRequestFor("));
   });
   it("a ajuda não promete 'nada é enviado sozinho' e explica 'sem confirmação'", () => {
     const doc = src("docs/ajuda/whatsapp.md");

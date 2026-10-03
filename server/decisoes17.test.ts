@@ -78,6 +78,7 @@ describe("Respostas automáticas obedecem ao interruptor (o STOP fica sempre)", 
     const c = src("server/complaintsExtended.ts");
     expect(c.indexOf("await ensureFeatureFlagOverrides().catch(() => {});")).toBeGreaterThan(-1);
     expect(c.indexOf("await ensureFeatureFlagOverrides().catch(() => {});")).toBeLessThan(c.indexOf("if (!isComplaintAutoAckEnabled())"));
-    expect(src("server/extrasAutomation.ts")).toContain('if (!isFeatureEnabled("EXTRAS_AUTOMATION", { defaultEnabled: automationFlagDefault("EXTRAS_AUTOMATION") })) return { action: "none" };');
+    // 24a (D30): interruptor próprio, que sem valor próprio segue EXTRAS_AUTOMATION.
+    expect(src("server/extrasAutomation.ts")).toContain('if (!availabilityAutoReplyOn()) return { action: "none" };');
   });
 });

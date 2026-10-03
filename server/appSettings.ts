@@ -147,16 +147,27 @@ export async function listSettings() {
 export async function listAutomationFlags(env: Record<string, string | undefined> = process.env) {
   const rows = await storedRows();
   const { parseSwitch, resolveFeatureFlag } = await import("./_core/featureFlags");
-  return AUTOMATION_FLAGS.map((f) => {
+  const base = (f: (typeof AUTOMATION_FLAGS)[number]) => {
     const row = rows.get(flagSettingKey(f.name));
     const override = typeof row?.value === "boolean" ? row.value : null;
     const envRaw = normalizeFlagEnv(f.name, env[f.name]);
+    return { row, override, envRaw };
+  };
+  // Primeiro os que não seguem ninguém; um "segue X" sem valor próprio fica com o estado de X.
+  const effectiveOf = new Map<string, boolean>();
+  for (const f of AUTOMATION_FLAGS) if (!f.followsFlag) {
+    const b = base(f);
+    effectiveOf.set(f.name, resolveFeatureFlag(b.envRaw, b.override, f.defaultEnabled ?? true));
+  }
+  return AUTOMATION_FLAGS.map((f) => {
+    const { row, override, envRaw } = base(f);
+    const defaultEnabled = f.followsFlag ? (effectiveOf.get(f.followsFlag) ?? true) : (f.defaultEnabled ?? true);
     return {
       ...f,
       envValue: parseSwitch(envRaw),
       override,
-      effective: resolveFeatureFlag(envRaw, override, f.defaultEnabled ?? true),
-      defaultEnabled: f.defaultEnabled ?? true,
+      effective: resolveFeatureFlag(envRaw, override, defaultEnabled),
+      defaultEnabled,
       updatedAt: row?.updatedAt ?? null,
       updatedByName: row?.updatedByName ?? null,
     };

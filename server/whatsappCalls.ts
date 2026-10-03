@@ -288,10 +288,13 @@ export async function applyCallEvents(events: CallWebhookEvent[], deps: CallDeps
         const phone = await toE164(ev.phone);
         if (!phone) continue;
         const conv = ev.direction === "in" ? await repo.ensureConversation(phone, ev.profileName) : null;
-        await repo.insertCall({
+        const insertedLate = await repo.insertCall({
           callId: ev.callId, phoneE164: phone, direction: ev.direction, status: ev.direction === "in" ? "ringing" : "dialing",
           conversationId: conv?.conversationId ?? null, projectId: conv?.projectId ?? null, startedAt: ev.timestamp ?? nowS,
         });
+        // D38 (Jorge, 3 out 2026): uma chamada do cliente renova a janela de 24 h —
+        // também quando o `connect` se perdeu e só chegou o fim.
+        if (insertedLate && conv) await repo.touchConversation(conv.conversationId, { at: ev.timestamp ?? nowS, preview: "📞 Chamada recebida", inbound: true });
         row = await repo.getByCallId(ev.callId);
         if (!row) continue;
       }
