@@ -8,6 +8,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Search } from "lucide-react";
 import { getFilteredHubGroups } from "@/components/DashboardLayout";
 
+const foldText = (v: string) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
 export default function ModulesPage() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
@@ -19,10 +21,11 @@ export default function ModulesPage() {
   const groups = useMemo(() => {
     let all = getFilteredHubGroups(user ?? role);
     if (activeGroup) all = all.filter((g) => g.id === activeGroup);
-    const needle = q.trim().toLowerCase();
+    // 20d: sem acentos nem maiúsculas ("formacao" encontra "Formação").
+    const needle = foldText(q.trim());
     if (needle) {
       all = all
-        .map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(needle)) }))
+        .map((g) => ({ ...g, items: g.items.filter((i) => foldText(i.label).includes(needle)) }))
         .filter((g) => g.items.length > 0);
     }
     return all;

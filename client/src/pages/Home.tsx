@@ -9,10 +9,12 @@ import { ACCESS_DENIED_MSG, AUTH_DENIED_PARAM, AUTH_DENIED_VALUE } from "@shared
 import { Loader2, ShieldAlert } from "lucide-react";
 import { useEffect } from "react";
 import { useLocation } from "wouter";
+import { trpc } from "@/lib/trpc";
 
 export default function Home() {
   const { user, loading, error } = useAuth();
   const [, setLocation] = useLocation();
+  const utils = trpc.useUtils();
 
   // Acesso recusado — MESMA mensagem em todos os casos (conta desativada,
   // desconhecida, ou registada sem acesso). Duas origens possíveis:
@@ -22,14 +24,17 @@ export default function Home() {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get(AUTH_DENIED_PARAM) === AUTH_DENIED_VALUE;
   const accessDenied = deniedByRedirect || error?.message === ACCESS_DENIED_MSG;
+  // 20d: o servidor não respondeu ≠ "não tens sessão" (não manda logo para a Google).
+  const sessionCheckFailed = !!error && error.message !== ACCESS_DENIED_MSG;
 
   useEffect(() => {
     if (!loading && user) {
       // user/extra/condutor vão para a ficha; team leader (sem Dashboards) para as Tarefas
       const role = (user as any).role ?? "user";
-      if (roleRank(role) < roleRank("team_leader")) setLocation("/rh");
-      else if (!can(user as any, "dashboards", "view")) setLocation("/tarefas");
-      else setLocation("/dashboard");
+      // 20d: replace — o "voltar" do browser não regressa a esta página de passagem.
+      if (roleRank(role) < roleRank("team_leader")) setLocation("/rh", { replace: true });
+      else if (!can(user as any, "dashboards", "view")) setLocation("/tarefas", { replace: true });
+      else setLocation("/dashboard", { replace: true });
     }
   }, [user, loading, setLocation]);
 
@@ -62,6 +67,12 @@ export default function Home() {
             >
               <ShieldAlert className="h-5 w-5 shrink-0 mt-0.5" />
               <span>{ACCESS_DENIED_MSG}</span>
+            </div>
+          )}
+          {sessionCheckFailed && !accessDenied && (
+            <div role="alert" className="flex flex-wrap items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900 mb-5">
+              <span className="min-w-0 flex-1">Não foi possível verificar a sessão (o servidor não respondeu). Se já tinhas entrado, tenta de novo antes de voltar a entrar.</span>
+              <Button size="sm" variant="outline" onClick={() => utils.auth.me.invalidate()}>Tentar de novo</Button>
             </div>
           )}
 

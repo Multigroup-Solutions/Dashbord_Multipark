@@ -3,6 +3,8 @@ import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { can, type ModuleId } from "@shared/access";
+import { isForbidden } from "@/lib/queryRetry";
 import { StatValue } from "@/components/StatValue";
 import { Card } from "@/components/ui/card";
 import {
@@ -33,6 +35,8 @@ function KPI({
   value,
   subtitle,
   loading,
+  failed,
+  onRetry,
 }: {
   icon: React.ElementType;
   iconColor: string;
@@ -41,6 +45,9 @@ function KPI({
   value: string;
   subtitle?: string;
   loading?: boolean;
+  /** 20d: a leitura falhou — mostra "—" e "não carregou" (ou "sem acesso"), nunca 0. */
+  failed?: "error" | "forbidden" | null;
+  onRetry?: () => void;
 }) {
   return (
     <Card className="p-4 sm:p-5 gap-0 min-w-0 hover:shadow-md transition-all">
@@ -53,21 +60,30 @@ function KPI({
       <div className="text-[13px] font-medium text-muted-foreground mb-1 truncate" title={label}>{label}</div>
       {loading ? (
         <div className="h-8 w-20 bg-muted rounded animate-pulse" />
+      ) : failed ? (
+        <StatValue value="—" className="text-muted-foreground tracking-[-0.01em]" />
       ) : (
         <StatValue value={value} className="text-foreground tracking-[-0.01em]" />
       )}
-      {subtitle && !loading && (
+      {failed === "forbidden" && !loading ? (
+        <div className="text-xs text-muted-foreground mt-1">Sem acesso</div>
+      ) : failed && !loading ? (
+        <button type="button" onClick={onRetry} role="alert" className="text-xs text-red-700 dark:text-red-300 mt-1 underline text-left">
+          Não carregou · tentar de novo
+        </button>
+      ) : subtitle && !loading && (
         <div className="text-xs text-muted-foreground mt-1 truncate tabular-nums" title={subtitle}>{subtitle}</div>
       )}
     </Card>
   );
 }
 
-const dashboardModules = [
+const dashboardModules: Array<{ icon: React.ElementType; label: string; path: string; module: ModuleId; iconColor: string; iconBg: string; accentColor: string }> = [
   {
     icon: Euro,
     label: "Financeiro",
     path: "/financeiro",
+    module: "financeiro",
     iconColor: "#3B82F6",
     iconBg: "#DBEAFE",
     accentColor: "#3B82F6",
@@ -76,6 +92,7 @@ const dashboardModules = [
     icon: Truck,
     label: "Operações",
     path: "/operacoes-dashboard",
+    module: "dashboards",
     iconColor: "#F59E0B",
     iconBg: "#FEF3C7",
     accentColor: "#F59E0B",
@@ -84,6 +101,7 @@ const dashboardModules = [
     icon: Users,
     label: "Pessoas",
     path: "/pessoas-dashboard",
+    module: "dashboards",
     iconColor: "#8B5CF6",
     iconBg: "#EDE9FE",
     accentColor: "#8B5CF6",
@@ -92,6 +110,7 @@ const dashboardModules = [
     icon: ShieldAlert,
     label: "Suporte",
     path: "/suporte-dashboard",
+    module: "dashboards",
     iconColor: "#EF4444",
     iconBg: "#FEE2E2",
     accentColor: "#EF4444",
@@ -100,6 +119,7 @@ const dashboardModules = [
     icon: Megaphone,
     label: "Marketing",
     path: "/marketing",
+    module: "marketing",
     iconColor: "#EC4899",
     iconBg: "#FCE7F3",
     accentColor: "#EC4899",
@@ -113,11 +133,22 @@ export default function DashboardPage() {
   // expenses.stats é admin-only no servidor — não chamar sem permissão
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
   // ── Queries (dados reais da BD) ──
-  const { data: expStats, isLoading: expLoading } = trpc.expenses.stats.useQuery({ projectId: globalFilters.projectId }, { enabled: isAdmin });
-  const { data: bookingStats, isLoading: bkLoading } = trpc.multipark.bookingStats.useQuery({ projectId: globalFilters.projectId });
-  const { data: complaintStats, isLoading: compLoading } = trpc.complaints.stats.useQuery();
-  const { data: reviewStats, isLoading: revLoading } = trpc.reviews.stats.useQuery();
-  const { data: hrStats, isLoading: hrLoading } = trpc.rh.stats.useQuery();
+  // 20d: erro ≠ 0 — cada cartão diz "não carregou" e deixa tentar de novo.
+  const expQ = trpc.expenses.stats.useQuery({ projectId: globalFilters.projectId }, { enabled: isAdmin });
+  const bkQ = trpc.multipark.bookingStats.useQuery({ projectId: globalFilters.projectId });
+  const compQ = trpc.complaints.stats.useQuery();
+  const revQ = trpc.reviews.stats.useQuery();
+  const hrQ = trpc.rh.stats.useQuery();
+  const { data: expStats, isLoading: expLoading } = expQ;
+  const { data: bookingStats, isLoading: bkLoading } = bkQ;
+  const { data: complaintStats, isLoading: compLoading } = compQ;
+  const { data: reviewStats, isLoading: revLoading } = revQ;
+  const { data: hrStats, isLoading: hrLoading } = hrQ;
+  const failOf = (q: { error: unknown }) => (q.error ? (isForbidden(q.error) ? "forbidden" as const : "error" as const) : null);
+  const bkFailed = failOf(bkQ);
+  const retryBk = () => { bkQ.refetch(); };
+  // 20d: atalhos só para o que a pessoa pode abrir (pela matriz).
+  const modules = dashboardModules.filter((m) => can(user as any, m.module, "view"));
 
   return (
     <div className="space-y-8">
@@ -133,6 +164,8 @@ export default function DashboardPage() {
           value={fmtNum(bookingStats?.reservasHoje ?? 0)}
           subtitle={`${fmtNum(bookingStats?.reservasMes ?? 0)} este mês`}
           loading={bkLoading}
+          failed={bkFailed}
+          onRetry={retryBk}
         />
         <KPI
           icon={Car}
@@ -142,6 +175,8 @@ export default function DashboardPage() {
           value={fmtNum(bookingStats?.checkinHoje ?? 0)}
           subtitle={`${fmtNum(bookingStats?.checkinMes ?? 0)} este mês`}
           loading={bkLoading}
+          failed={bkFailed}
+          onRetry={retryBk}
         />
         <KPI
           icon={CheckCircle2}
@@ -151,6 +186,8 @@ export default function DashboardPage() {
           value={fmtNum(bookingStats?.checkoutHoje ?? 0)}
           subtitle={`${fmtNum(bookingStats?.checkoutMes ?? 0)} este mês`}
           loading={bkLoading}
+          failed={bkFailed}
+          onRetry={retryBk}
         />
         <KPI
           icon={AlertTriangle}
@@ -160,6 +197,8 @@ export default function DashboardPage() {
           value={fmtNum(bookingStats?.canceladosHoje ?? 0)}
           subtitle={`${fmtNum(bookingStats?.canceladosMes ?? 0)} este mês`}
           loading={bkLoading}
+          failed={bkFailed}
+          onRetry={retryBk}
         />
         <KPI
           icon={Euro}
@@ -169,6 +208,8 @@ export default function DashboardPage() {
           value={fmtCurrency(bookingStats?.receitaHoje ?? 0)}
           subtitle={`${fmtCurrency(bookingStats?.receitaMes ?? 0)} este mês`}
           loading={bkLoading}
+          failed={bkFailed}
+          onRetry={retryBk}
         />
       </div>
 
@@ -181,6 +222,8 @@ export default function DashboardPage() {
           value={fmtCurrency(expStats?.monthly?.total ?? 0)}
           subtitle={`${expStats?.monthly?.count ?? 0} registos`}
           loading={isAdmin && expLoading}
+          failed={failOf(expQ)}
+          onRetry={() => { expQ.refetch(); }}
         />
         <KPI
           icon={Clock}
@@ -190,6 +233,8 @@ export default function DashboardPage() {
           value={fmtCurrency(expStats?.pending?.total ?? 0)}
           subtitle={`${expStats?.pending?.count ?? 0} por pagar`}
           loading={isAdmin && expLoading}
+          failed={failOf(expQ)}
+          onRetry={() => { expQ.refetch(); }}
         />
         <KPI
           icon={MessageSquareWarning}
@@ -199,6 +244,8 @@ export default function DashboardPage() {
           value={fmtNum(complaintStats?.total ?? 0)}
           subtitle={`${complaintStats?.overdue ?? 0} em atraso`}
           loading={compLoading}
+          failed={failOf(compQ)}
+          onRetry={() => { compQ.refetch(); }}
         />
         <KPI
           icon={Star}
@@ -208,6 +255,8 @@ export default function DashboardPage() {
           value={`${reviewStats?.avg != null ? Number(reviewStats.avg).toFixed(1).replace(".", ",") : "—"} ★`}
           subtitle={`${reviewStats?.pending ?? 0} pendentes`}
           loading={revLoading}
+          failed={failOf(revQ)}
+          onRetry={() => { revQ.refetch(); }}
         />
         <KPI
           icon={UserCheck}
@@ -217,6 +266,8 @@ export default function DashboardPage() {
           value={fmtNum(hrStats?.totalActive ?? 0)}
           subtitle={`${hrStats?.totalPermanent ?? 0} efetivos · ${hrStats?.totalExtras ?? 0} extras`}
           loading={hrLoading}
+          failed={failOf(hrQ)}
+          onRetry={() => { hrQ.refetch(); }}
         />
       </div>
       </div>
@@ -228,10 +279,10 @@ export default function DashboardPage() {
           <h2 className="m-0 font-display text-xs font-bold tracking-[.12em] text-[#0c1f3f] uppercase">
             Dashboards
           </h2>
-          <span className="text-xs text-muted-foreground">· {dashboardModules.length} atalhos</span>
+          <span className="text-xs text-muted-foreground">· {modules.length} atalhos</span>
         </div>
         <div className="grid grid-cols-2 md:[grid-template-columns:repeat(auto-fill,minmax(190px,1fr))] gap-3 md:gap-3.5">
-          {dashboardModules.map((mod) => (
+          {modules.map((mod) => (
             <button
               key={mod.path}
               type="button"

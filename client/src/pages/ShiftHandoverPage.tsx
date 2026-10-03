@@ -79,7 +79,8 @@ function useHandoverCity(): {
   const { data: access, isLoading, error, refetch, isFetching } = trpc.permissions.myCityAccess.useQuery();
   const allowed = allowedHandoverCities(access);
   const [lastUsed, setLastUsed] = useState<string | null>(() => {
-    try { return localStorage.getItem(LAST_CITY_KEY); } catch { return null; }
+    // 20d: o link do calendário/aviso (?city=porto) manda; senão, a última usada.
+    try { return new URLSearchParams(window.location.search).get("city") || localStorage.getItem(LAST_CITY_KEY); } catch { return null; }
   });
   const city = defaultHandoverCity(allowed, lastUsed);
   const setCity = (c: HandoverCity) => {
@@ -210,10 +211,17 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
   // A cidade do formulário é dele: mudar a cidade noutro separador não deita
   // fora o que está por gravar (só segue a da página quando não há alterações).
   const [city, setCityLocal] = useState<HandoverCity>(cityState.city);
-  // Turno operacional em Lisboa (01:30 → noite do dia anterior)
-  const [date, setDate] = useState(() => operationalShift().date);
-  const [shift, setShift] = useState<HandoverShift>(() => operationalShift().shift);
+  // Turno operacional em Lisboa (01:30 → noite do dia anterior). 20d: o link do
+  // calendário (?date=AAAA-MM-DD) abre esse dia, se não for no futuro.
   const maxDate = maxHandoverDate();
+  const [date, setDate] = useState(() => {
+    try {
+      const d = new URLSearchParams(window.location.search).get("date");
+      if (d && /^\d{4}-\d{2}-\d{2}$/.test(d) && d <= maxDate) return d;
+    } catch { /* sem URL */ }
+    return operationalShift().date;
+  });
+  const [shift, setShift] = useState<HandoverShift>(() => operationalShift().shift);
 
   // Alterações por gravar: os setters "de quem escreve" marcam; os efeitos
   // (carregar o registo, juntar pendentes) usam os *Raw e não contam.

@@ -53,20 +53,61 @@ function getStateCookieOptions(req: Request): CookieOptions {
   };
 }
 
-function renderErrorPage(title: string, message: string, details?: string): string {
-  return `<!doctype html><html lang="pt"><head><meta charset="utf-8"><title>${title}</title>
+/** Texto → HTML seguro (20d: a página de erro nunca interpreta o que vem no pedido). PURA. */
+export function escapeHtml(v: unknown): string {
+  return String(v ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" } as Record<string, string>)[c]);
+}
+
+/** Email nos logs do servidor: "an***@dominio.pt" (20d). PURA. */
+export function maskEmailForLog(email: string | null | undefined): string {
+  const e = String(email ?? "").trim();
+  if (!e) return "sem email";
+  const [user, domain] = e.split("@");
+  if (!domain) return "***";
+  return `${user.slice(0, 2)}***@${domain}`;
+}
+
+/**
+ * Página de erro do login. TUDO é texto escapado (20d: antes o
+ * `error`/`error_description` da query entravam no HTML tal como vinham —
+ * XSS), sem scripts (CSP) e sem detalhes internos.
+ */
+export function renderErrorPage(title: string, message: string, details?: string): string {
+  return `<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title>
 <style>body{font-family:system-ui,-apple-system,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.5rem;color:#1f2937;line-height:1.6}
-h1{color:#dc2626;margin-bottom:.5rem}code{background:#f3f4f6;padding:.15rem .4rem;border-radius:4px;font-size:.9em}
-pre{background:#f3f4f6;padding:1rem;border-radius:6px;overflow-x:auto;font-size:.85em}
+h1{color:#dc2626;margin-bottom:.5rem}
+pre{background:#f3f4f6;padding:1rem;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:.85em}
 a{color:#2563eb}</style></head><body>
-<h1>${title}</h1><p>${message}</p>${details ? `<pre>${details}</pre>` : ""}
+<h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>${details ? `<pre>${escapeHtml(details)}</pre>` : ""}
 <p><a href="/">← Voltar ao início</a></p></body></html>`;
+}
+
+const ERROR_PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+function sendErrorPage(res: Response, status: number, title: string, message: string, details?: string): void {
+  res.status(status)
+    .set("Content-Security-Policy", ERROR_PAGE_CSP)
+    .set("X-Content-Type-Options", "nosniff")
+    .set("Cache-Control", "no-store")
+    .type("html")
+    .send(renderErrorPage(title, message, details));
+}
+
+/** Entradas e recusas no registo de atividade (20d). Nunca parte o login. */
+async function logLogin(entry: { userId: number; action: "login" | "login_denied"; entityId: number | null; details: string }): Promise<void> {
+  try {
+    await db.logActivity({ userId: entry.userId, action: entry.action, entity: "user", entityId: entry.entityId, details: entry.details, source: "ui" } as any);
+  } catch { /* registo */ }
 }
 
 export function registerOAuthRoutes(app: Express) {
   // Endpoint de diagnóstico — mostra o redirect_uri que será enviado à Google
   // para podermos comparar com o que está registado na Cloud Console.
-  app.get("/api/oauth/_diag", (req: Request, res: Response) => {
+  // 20d: só o super admin (antes estava aberto a qualquer pessoa na Internet).
+  app.get("/api/oauth/_diag", async (req: Request, res: Response) => {
+    let allowed = false;
+    try { allowed = (await sdk.authenticateRequest(req))?.role === "super_admin"; } catch { allowed = false; }
+    if (!allowed) { res.status(404).json({ error: "Not found" }); return; }
     res.json({
       origin: getOrigin(req),
       redirectUri: `${getOrigin(req)}/api/oauth/callback`,
@@ -156,13 +197,10 @@ export function registerOAuthRoutes(app: Express) {
 
     if (missing.length > 0) {
       console.error("[OAuth] Login bloqueado — env vars em falta:", missing);
-      res.status(500).type("html").send(
-        renderErrorPage(
-          "Configuração de autenticação incompleta",
-          `As seguintes variáveis de ambiente não estão definidas no servidor: <code>${missing.join("</code>, <code>")}</code>.`,
-          "Adiciona-as em Vercel → Settings → Environment Variables e faz redeploy.\n\nVê o diagnóstico completo em: /api/oauth/_diag"
-        )
-      );
+      sendErrorPage(res, 500,
+        "Configuração de autenticação incompleta",
+        "O servidor ainda não tem tudo o que precisa para o login com a Google.",
+        "Avisa o administrador (falta configuração no servidor).");
       return;
     }
 
@@ -197,14 +235,13 @@ export function registerOAuthRoutes(app: Express) {
         typeof req.query.error_description === "string"
           ? req.query.error_description
           : "(sem descrição)";
-      console.error("[OAuth] Google devolveu erro:", googleError, description);
-      res.status(400).type("html").send(
-        renderErrorPage(
-          "A Google rejeitou o pedido de autenticação",
-          `Código: <code>${googleError}</code>`,
-          `${description}\n\nCausa típica: o redirect_uri enviado não corresponde aos URIs autorizados na Google Cloud Console. Confirma em /api/oauth/_diag qual é o redirect_uri usado.`
-        )
-      );
+      console.error("[OAuth] Google devolveu erro:", googleError.slice(0, 64), description.slice(0, 200));
+      // 20d: só o código, e só se tiver a forma de um código da Google — nunca o texto do pedido.
+      const code = /^[a-z_]{1,64}$/.test(googleError) ? googleError : "desconhecido";
+      sendErrorPage(res, 400,
+        code === "access_denied" ? "Entrada cancelada" : "A Google rejeitou o pedido de autenticação",
+        code === "access_denied" ? "Cancelaste a entrada com a Google." : `Código: ${code}.`,
+        "Tenta de novo a partir da página inicial. Se persistir, avisa o administrador.");
       return;
     }
 
@@ -213,13 +250,10 @@ export function registerOAuthRoutes(app: Express) {
       typeof req.query.state === "string" ? req.query.state : undefined;
 
     if (!code) {
-      res.status(400).type("html").send(
-        renderErrorPage(
-          "Falta o código de autorização",
-          "O callback da Google chegou sem o parâmetro <code>code</code>.",
-          "Tenta de novo a partir de /api/oauth/login. Se persistir, verifica /api/oauth/_diag."
-        )
-      );
+      sendErrorPage(res, 400,
+        "Falta o código de autorização",
+        "A resposta da Google chegou incompleta.",
+        "Tenta de novo a partir da página inicial.");
       return;
     }
 
@@ -235,13 +269,10 @@ export function registerOAuthRoutes(app: Express) {
         hasSaved: !!savedState,
         hasReturned: !!returnedState,
       });
-      res.status(400).type("html").send(
-        renderErrorPage(
-          "Estado OAuth inválido ou expirado",
-          "O cookie de proteção CSRF não foi recebido ou não corresponde ao esperado.",
-          "Causas típicas:\n• Passaram mais de 10 minutos entre clicar em 'Entrar' e voltar da Google\n• O domínio do login é diferente do domínio do callback (ex: preview vs production)\n• Cookies de terceiros bloqueados no browser\n\nFecha a janela, abre nova e tenta de novo a partir de /."
-        )
-      );
+      sendErrorPage(res, 400,
+        "O pedido de entrada expirou",
+        "A proteção do login não confirmou este pedido.",
+        "Causas típicas:\n• Passaram mais de 10 minutos entre clicar em 'Entrar' e voltar da Google\n• Começaste noutro endereço da aplicação\n• O browser bloqueou os cookies\n\nFecha a janela, abre uma nova e tenta de novo a partir da página inicial.");
       return;
     }
 
@@ -252,12 +283,7 @@ export function registerOAuthRoutes(app: Express) {
       const userInfo = await sdk.getUserInfo(tokenResponse.access_token);
 
       if (!userInfo.sub) {
-        res.status(400).type("html").send(
-          renderErrorPage(
-            "Resposta da Google sem identificador",
-            "A Google não devolveu o <code>sub</code> (ID do utilizador)."
-          )
-        );
+        sendErrorPage(res, 400, "Resposta da Google sem identificador", "A Google não devolveu o identificador da conta. Tenta de novo.");
         return;
       }
 
@@ -265,13 +291,11 @@ export function registerOAuthRoutes(app: Express) {
       // fichas por email) — recusa o login.
       if (shouldRejectUnverifiedGoogleEmail(userInfo)) {
         console.warn("[OAuth] Acesso recusado — email Google não verificado");
-        res.status(403).type("html").send(
-          renderErrorPage(
-            "Email Google não verificado",
-            "A Google indica que o email desta conta ainda não foi verificado.",
-            "Verifica o email na tua conta Google e tenta entrar de novo."
-          )
-        );
+        await logLogin({ userId: 0, action: "login_denied", entityId: null, details: `Entrada recusada: email Google não verificado <${maskEmailForLog(userInfo.email)}>` });
+        sendErrorPage(res, 403,
+          "Email Google não verificado",
+          "A Google indica que o email desta conta ainda não foi verificado.",
+          "Verifica o email na tua conta Google e tenta entrar de novo.");
         return;
       }
 
@@ -296,7 +320,8 @@ export function registerOAuthRoutes(app: Express) {
           }
         }
         if (!known) {
-          console.warn(`[OAuth] Acesso recusado <${email || "sem email"}> — conta não registada (modo fechado)`);
+          console.warn(`[OAuth] Acesso recusado <${maskEmailForLog(email)}> — conta não registada (modo fechado)`);
+          await logLogin({ userId: 0, action: "login_denied", entityId: null, details: `Entrada recusada: conta não registada <${maskEmailForLog(email)}>` });
           denyAccess(req, res);
           return;
         }
@@ -324,8 +349,9 @@ export function registerOAuthRoutes(app: Express) {
       const account = await db.getUserByOpenId(openId);
       if (!account || account.isActive !== 1) {
         console.warn(
-          `[OAuth] Acesso recusado <${email || "sem email"}> — ${account ? "conta desativada" : "conta não encontrada"}`,
+          `[OAuth] Acesso recusado <${maskEmailForLog(email)}> — ${account ? "conta desativada" : "conta não encontrada"}`,
         );
+        await logLogin({ userId: 0, action: "login_denied", entityId: account?.id ?? null, details: `Entrada recusada: ${account ? "conta desativada" : "conta não encontrada"} <${maskEmailForLog(email)}>` });
         denyAccess(req, res);
         return;
       }
@@ -336,7 +362,7 @@ export function registerOAuthRoutes(app: Express) {
       if (database && email) {
         try {
           const linked = await linkEmployeesToUserByEmail(database, account.id, email, { actorId: account.id, source: "ui" });
-          if (linked.length) console.log(`[OAuth] <${email}> ligado à(s) ficha(s) #${linked.join(", #")}`);
+          if (linked.length) console.log(`[OAuth] <${maskEmailForLog(email)}> ligado à(s) ficha(s) #${linked.join(", #")}`);
         } catch (err) {
           console.warn("[OAuth] Falha a ligar ficha por email:", String((err as Error)?.message ?? err).slice(0, 160));
         }
@@ -353,18 +379,17 @@ export function registerOAuthRoutes(app: Express) {
         ...cookieOptions,
         maxAge: SESSION_MAX_MS,
       });
+      await logLogin({ userId: account.id, action: "login", entityId: account.id, details: "Entrou com a Google" });
 
       res.redirect(302, takeReturnPath(req, res));
     } catch (error: any) {
-      const msg = error?.message || String(error);
-      console.error("[OAuth] Callback failed", error);
-      res.status(500).type("html").send(
-        renderErrorPage(
-          "Falha ao concluir autenticação",
-          "Ocorreu um erro ao trocar o código por um token ou ao gravar o utilizador.",
-          `${msg}\n\nVerifica:\n• GOOGLE_CLIENT_SECRET está correto no Vercel?\n• DATABASE_URL aponta para uma BD acessível?\n• As tabelas (users) existem? Corre as migrações Drizzle.\n\nDiagnóstico: /api/oauth/_diag · Saúde: /api/health`
-        )
-      );
+      // 20d: o detalhe (mensagens internas, SQL) fica só no log, com uma referência.
+      const ref = crypto.randomBytes(4).toString("hex");
+      console.error(`[OAuth] Callback failed ref=${ref}`, error);
+      sendErrorPage(res, 500,
+        "Não foi possível concluir a entrada",
+        "Ocorreu um erro do nosso lado ao concluir o login. Tenta de novo daqui a pouco.",
+        `Se voltar a acontecer, avisa o administrador com esta referência: ${ref}`);
     }
   });
 }

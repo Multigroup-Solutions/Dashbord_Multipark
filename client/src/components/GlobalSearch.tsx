@@ -23,6 +23,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Kbd } from "@/components/ui/kbd";
 import { useIsMobile } from "@/hooks/useMobile";
 import { trpc } from "@/lib/trpc";
+import { jumpTo } from "@/lib/jumpTo";
 import { cn } from "@/lib/utils";
 import { openAssistantWith } from "@/components/assistant/AssistantWidget";
 import {
@@ -122,7 +123,7 @@ export function GlobalSearch() {
     const [path] = href.split("?");
     // Mesma página com outros parâmetros: recarrega para a página ler o filtro.
     if (path === location.split("?")[0] && href !== location) window.location.assign(href);
-    else navigate(href);
+    else jumpTo(href, navigate);
   };
 
   const select = (item: SearchItem) => {

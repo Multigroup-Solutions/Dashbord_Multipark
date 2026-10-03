@@ -413,7 +413,8 @@ export function shiftEvent(r: ShiftRow, appUrl: string): DesiredEvent {
     key: `shift:${r.id}`, sourceType: "shift", sourceId: String(r.id), version: String(r.version),
     summary: `${tl ? "Team leader" : "Turno"} Multipark — ${cityLabel(r.city)} (${hh(r.startHour)}–${hh(end)})`,
     description: `Turno confirmado na escala de ${cityLabel(r.city)}, ${r.assignmentDate}, das ${hh(r.startHour)} às ${hh(end)}.`,
-    start: timed(startMs), end: timed(endMs), startMs, link: dashboardUrl(appUrl, `/extras-dia?date=${r.assignmentDate}`),
+    // 20d: o extra não abre o Extras Dia — o turno dele vê-se na Disponibilidade; o TL vai à escala do dia.
+    start: timed(startMs), end: timed(endMs), startMs, link: dashboardUrl(appUrl, tl ? `/extras-dia?dia=${r.assignmentDate}` : "/disponibilidade"),
   };
 }
 
@@ -431,7 +432,7 @@ export function cityDayEvent(date: string, city: string, rows: readonly ShiftRow
     summary: `Escala ${cityLabel(city)} — ${list.length} pessoa${list.length === 1 ? "" : "s"}`,
     description: `Escala confirmada de ${cityLabel(city)} (${date}):\n${lines.join("\n")}`,
     start: timed(startMs), end: timed(lisbonLocalTimeUtcMs(date, Math.max(end, start + 1))), startMs,
-    link: dashboardUrl(appUrl, `/extras-dia?date=${date}`), transparent: true,
+    link: dashboardUrl(appUrl, `/extras-dia?dia=${date}`), transparent: true,
   };
 }
 

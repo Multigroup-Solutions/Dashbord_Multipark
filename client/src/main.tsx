@@ -1,5 +1,5 @@
 import { trpc } from "@/lib/trpc";
-import { UNAUTHED_ERR_MSG } from '@shared/const';
+import { AUTH_DENIED_PARAM, AUTH_DENIED_VALUE, UNAUTHED_ERR_MSG } from '@shared/const';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, TRPCClientError } from "@trpc/client";
 import { createRoot } from "react-dom/client";
@@ -10,6 +10,19 @@ import "./index.css";
 
 const queryClient = new QueryClient();
 
+// 20d: versão nova publicada com a app aberta — um pedaço antigo já não existe.
+// Recarrega UMA vez (senão o ErrorBoundary mostra "Há uma versão nova").
+if (typeof window !== "undefined") {
+  window.addEventListener("vite:preloadError", (event) => {
+    try {
+      if (sessionStorage.getItem("mp.reloadedForNewVersion")) return;
+      sessionStorage.setItem("mp.reloadedForNewVersion", "1");
+    } catch { /* sem storage: tenta na mesma */ }
+    event.preventDefault();
+    window.location.reload();
+  });
+}
+
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
@@ -17,6 +30,9 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   const isUnauthorized = error.message === UNAUTHED_ERR_MSG;
 
   if (!isUnauthorized) return;
+  // 20d: acabou de ser recusada a entrada (?auth=denied) — mandar para a
+  // Google outra vez fazia um ciclo (recusado → entrada → 401 → Google…).
+  if (new URLSearchParams(window.location.search).get(AUTH_DENIED_PARAM) === AUTH_DENIED_VALUE) return;
 
   // a sessão caiu: entra e volta à página onde estavas
   window.location.href = getLoginUrl(currentPath());
