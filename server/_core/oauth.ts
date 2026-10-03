@@ -335,7 +335,7 @@ export function registerOAuthRoutes(app: Express) {
       // ficha ficava órfã. Best-effort — nunca pode partir o login.
       if (database && email) {
         try {
-          const linked = await linkEmployeesToUserByEmail(database, account.id, email);
+          const linked = await linkEmployeesToUserByEmail(database, account.id, email, { actorId: account.id, source: "ui" });
           if (linked.length) console.log(`[OAuth] <${email}> ligado à(s) ficha(s) #${linked.join(", #")}`);
         } catch (err) {
           console.warn("[OAuth] Falha a ligar ficha por email:", String((err as Error)?.message ?? err).slice(0, 160));

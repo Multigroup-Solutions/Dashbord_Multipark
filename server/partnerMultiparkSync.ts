@@ -168,7 +168,7 @@ export async function applyPartnerSync(opts: { userId?: number | null; keepIds?:
   const agentsLinked = await linkPartnerAgents(recordOfPartner).catch((e) => { console.warn("[parcerias] agentes:", String(e?.message ?? e).slice(0, 160)); return 0; });
 
   const result = { linked: plan.links.length, created: plan.creates.length, archived, ambiguous: plan.ambiguous.length, agentsLinked, available: true };
-  await logActivity({ userId: opts.userId ?? null, action: "sync", entity: "partnership", details: `Parcerias ← Multipark: ${result.linked} ligadas, ${result.created} criadas, ${result.archived} arquivadas, ${result.ambiguous} à mão, ${result.agentsLinked} agentes` } as any).catch(() => {});
+  await logActivity({ userId: opts.userId ?? 0, source: opts.userId ? "ui" : "cron", action: "sync", entity: "partnership", details: `Parcerias ← Multipark: ${result.linked} ligadas, ${result.created} criadas, ${result.archived} arquivadas, ${result.ambiguous} à mão, ${result.agentsLinked} agentes` } as any).catch(() => {});
   return result;
 }
 

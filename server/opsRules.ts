@@ -26,8 +26,18 @@ export function syncRangeError(startDate: string, endDate: string, maxDays = 31)
 
 // ─── Retenção do activity_logs ────────────────────────────────────────────────
 
-export const ACTIVITY_LOG_RETENTION_MONTHS = 12;
+// 20c (decisão do Jorge, 2 out 2026): 24 meses para tudo.
+export const ACTIVITY_LOG_RETENTION_MONTHS = 24;
 export const ACTIVITY_LOG_PURGE_BATCH = 5000;
+
+/**
+ * O que NUNCA se apaga pela retenção: o histórico de cada ficha de cliente do
+ * CRM e as mudanças de papel/permissões de cada pessoa (são o único
+ * histórico que existe delas). Os marcadores de estado já não dependem dos
+ * logs (0410: cidade pedida e ficha do site vivem na ficha).
+ */
+export const ACTIVITY_LOG_KEEP_ENTITIES = ["crm_client"] as const;
+export const ACTIVITY_LOG_KEEP_ACTIONS = ["update_role", "set_permission", "set_module_access", "account_merge", "users_merge"] as const;
 
 /** Corte "YYYY-MM-DD HH:MM:SS" (UTC): tudo o que for anterior é apagado. */
 export function activityLogCutoff(now: Date = new Date(), months = ACTIVITY_LOG_RETENTION_MONTHS): string {

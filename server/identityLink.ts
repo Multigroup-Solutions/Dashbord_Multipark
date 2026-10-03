@@ -224,7 +224,7 @@ export async function runIdentitySweep(): Promise<SweepReport> {
       SELECT id, fullName, email, position, userId FROM employees
        WHERE isActive = 1 AND userId IS NULL AND email IS NOT NULL AND email <> ''`));
     for (const e of noUser) {
-      const r = await ensureUserForEmployee(db as any, { id: Number(e.id), fullName: String(e.fullName), email: e.email, position: String(e.position ?? ""), userId: null });
+      const r = await ensureUserForEmployee(db as any, { id: Number(e.id), fullName: String(e.fullName), email: e.email, position: String(e.position ?? ""), userId: null }, { source: "cron" });
       if (r.userId) r.created ? rep.usersCreated++ : rep.usersLinked++;
     }
   } catch (err: any) { rep.errors.push(`fichas sem utilizador: ${err?.message ?? err}`); }
@@ -244,7 +244,7 @@ export async function runIdentitySweep(): Promise<SweepReport> {
          WHERE u.isActive = 1 AND u.email IS NOT NULL AND u.email <> ''
            AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.userId = u.id)`));
     }
-    for (const u of orphans) rep.employeesLinkedToUsers += (await linkEmployeesToUserByEmail(db as any, Number(u.id), String(u.email))).length;
+    for (const u of orphans) rep.employeesLinkedToUsers += (await linkEmployeesToUserByEmail(db as any, Number(u.id), String(u.email), { source: "cron" })).length;
   } catch (err: any) { rep.errors.push(`utilizadores sem ficha: ${err?.message ?? err}`); }
 
   // 0. Tirar das fichas os agentes que não são pessoas (sistema, teste, agências, textos de formulário)

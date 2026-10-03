@@ -10,7 +10,7 @@
  * Garantias:
  *   - DRY-RUN por defeito. Só escreve com `apply: true`.
  *   - Só considera perdedores fichas marcadas como AUTO-CRIADAS pelo site
- *     (existe um `activity_logs` com `action='employee_autocreate'` para elas).
+ *     (`employees.autoCreatedAt`, 0410; ou, nas antigas, um `activity_logs` com `action='employee_autocreate'`).
  *     Nunca funde duas fichas criadas por pessoas do backoffice.
  *   - RECUSA fundir (bloqueia e reporta) se o duplicado já tiver vida
  *     operacional: escalas, picagens, faltas ou penalizações. Nesses casos a
@@ -135,8 +135,8 @@ async function loadDuplicateGroups(db: Db): Promise<Map<string, DuplicateCandida
     await db.execute(sql`
       SELECT e.id, e.fullName, e.email, e.phone, e.nif, e.position, e.isActive, e.userId,
              LOWER(TRIM(COALESCE(e.email, u.email))) AS normEmail,
-             EXISTS (SELECT 1 FROM activity_logs al
-                      WHERE al.entity = 'employees' AND al.action = 'employee_autocreate' AND al.entityId = e.id) AS autoCreated,
+             (e.autoCreatedAt IS NOT NULL OR EXISTS (SELECT 1 FROM activity_logs al
+                      WHERE al.entity = 'employees' AND al.action = 'employee_autocreate' AND al.entityId = e.id)) AS autoCreated,
              (SELECT COUNT(*) FROM extras_dia_assignments a WHERE a.employeeId = e.id) AS assignments,
              (SELECT COUNT(*) FROM time_records t WHERE t.employeeId = e.id) AS timeRecords,
              (SELECT COUNT(*) FROM employee_leaves l WHERE l.employeeId = e.id) AS leaves,

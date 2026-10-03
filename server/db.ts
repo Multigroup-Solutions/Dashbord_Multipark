@@ -740,14 +740,32 @@ export async function markOverdueExpenses() {
 
 // ─── ACTIVITY LOGS ────────────────────────────────────────────────────────────
 
+/**
+ * Regista uma ação (20c): os detalhes passam SEMPRE pela máscara central
+ * (IBAN, NIF, telefones, cartões, segredos — shared/logMask.ts) e a origem
+ * fica em `source` (por omissão: "ui" quando há pessoa, "system" com
+ * userId 0). Quem regista o que um automatismo fez usa userId 0 + source
+ * "cron"/"site"/"api_key", nunca o primeiro super admin.
+ */
 export async function logActivity(data: InsertActivityLog) {
   const db = await getDb();
   if (!db) return;
-  await db.insert(activityLogs).values(data);
+  const { maskSensitive } = await import("../shared/logMask");
+  await db.insert(activityLogs).values({
+    ...data,
+    details: maskSensitive(data.details ?? null),
+    source: data.source ?? (Number(data.userId) > 0 ? "ui" : "system"),
+  });
 }
 
 export async function getActivityLogs(limit = 100, filters: {
   entity?: string; action?: string; userId?: number;
+  /** 20c: id do registo (ex.: ficha #123) — com a entidade, a história de uma coisa. */
+  entityId?: number;
+  /** 20c: origem (ui, cron, api_key, site, webhook, system); "unknown" = registos antigos sem origem. */
+  source?: string;
+  /** 20c: só as ações automáticas (userId 0). */
+  systemOnly?: boolean;
   /** "YYYY-MM-DD HH:MM:SS" (UTC), inclusivo. */
   from?: string;
   /** "YYYY-MM-DD HH:MM:SS" (UTC), exclusivo. */
@@ -756,11 +774,20 @@ export async function getActivityLogs(limit = 100, filters: {
   search?: string;
 } = {}) {
   const db = await getDb();
-  if (!db) return [];
+  // 20c: sem BD é erro (a página mostra-o), não "nenhum registo".
+  if (!db) throw new Error("Base de dados indisponível");
   const conds: any[] = [];
-  if (filters.entity) conds.push(eq(activityLogs.entity, filters.entity));
+  // "employee|employees": a mesma coisa registada com dois nomes (20c) — filtra as duas.
+  if (filters.entity) {
+    const ents = filters.entity.split("|").map((x) => x.trim()).filter(Boolean).slice(0, 10);
+    conds.push(ents.length > 1 ? inArray(activityLogs.entity, ents) : eq(activityLogs.entity, ents[0] ?? filters.entity));
+  }
   if (filters.action) conds.push(eq(activityLogs.action, filters.action));
   if (filters.userId) conds.push(eq(activityLogs.userId, filters.userId));
+  if (filters.systemOnly) conds.push(eq(activityLogs.userId, 0));
+  if (filters.entityId != null) conds.push(eq(activityLogs.entityId, filters.entityId));
+  if (filters.source === "unknown") conds.push(isNull(activityLogs.source));
+  else if (filters.source) conds.push(eq(activityLogs.source, filters.source));
   if (filters.from) conds.push(gte(activityLogs.createdAt, filters.from));
   if (filters.to) conds.push(lt(activityLogs.createdAt, filters.to));
   const q = (filters.search ?? "").trim();
@@ -782,25 +809,43 @@ export async function getActivityLogs(limit = 100, filters: {
 /** Entidades distintas presentes no registo (para o filtro da página de Logs). */
 export async function getActivityLogEntities(): Promise<string[]> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) throw new Error("Base de dados indisponível");
   const rows = await db.selectDistinct({ entity: activityLogs.entity }).from(activityLogs).orderBy(asc(activityLogs.entity));
   return rows.map((r) => r.entity).filter(Boolean);
 }
 
 /**
- * Retenção: apaga registos com mais de 12 meses em lotes de 5000
+ * Opções dos filtros da página de Logs (20c): TODAS as ações registadas
+ * (antes só 4 fixas) e as pessoas.
+ */
+export async function getActivityLogFilterOptions(): Promise<{ actions: string[]; people: Array<{ id: number; name: string | null; isActive: number }> }> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível");
+  const actions = (await db.selectDistinct({ action: activityLogs.action }).from(activityLogs).orderBy(asc(activityLogs.action)))
+    .map((r) => r.action).filter(Boolean);
+  // Todas as contas (ativas e desativadas — as fundidas ficam com os registos antigos).
+  const res: any = await db.execute(sql`SELECT u.id, u.name, u.isActive FROM users u ORDER BY u.isActive DESC, u.name`);
+  const rows = (Array.isArray(res) ? res[0] : res) as any[];
+  return { actions, people: (rows ?? []).map((r) => ({ id: Number(r.id), name: r.name ?? null, isActive: Number(r.isActive ?? 1) })) };
+}
+
+/**
+ * Retenção: apaga registos com mais de 24 meses (20c) em lotes de 5000
  * (`DELETE … WHERE createdAt < ? LIMIT n` — sem subquery sobre a própria
- * tabela). Chamado pelo daily-ops; o que não couber no prazo fica para o dia
- * seguinte.
+ * tabela), exceto o histórico que fica sempre (CRM e permissões —
+ * ACTIVITY_LOG_KEEP_*). Chamado pelo daily-ops; o que não couber no prazo
+ * fica para o dia seguinte.
  */
 export async function purgeOldActivityLogs(opts: { deadlineAt?: number; now?: Date } = {}) {
   const db = await getDb();
   if (!db) return { deleted: 0, batches: 0, done: true, cutoff: null as string | null };
-  const { activityLogCutoff, purgeInBatches } = await import("./opsRules");
+  const { activityLogCutoff, purgeInBatches, ACTIVITY_LOG_KEEP_ENTITIES, ACTIVITY_LOG_KEEP_ACTIONS } = await import("./opsRules");
   const { extractAffectedRows } = await import("./availabilityFormToken");
   const cutoff = activityLogCutoff(opts.now ?? new Date());
+  const keepEntities = sql.join(ACTIVITY_LOG_KEEP_ENTITIES.map((e) => sql`${e}`), sql`, `);
+  const keepActions = sql.join(ACTIVITY_LOG_KEEP_ACTIONS.map((a) => sql`${a}`), sql`, `);
   const r = await purgeInBatches(async (limit) => {
-    const res = await db.execute(sql`DELETE FROM activity_logs WHERE createdAt < ${cutoff} LIMIT ${sql.raw(String(Math.max(1, Math.floor(limit))))}`);
+    const res = await db.execute(sql`DELETE FROM activity_logs WHERE createdAt < ${cutoff} AND entity NOT IN (${keepEntities}) AND action NOT IN (${keepActions}) LIMIT ${sql.raw(String(Math.max(1, Math.floor(limit))))}`);
     return extractAffectedRows(res);
   }, { deadlineAt: opts.deadlineAt });
   return { ...r, cutoff };
@@ -3726,13 +3771,7 @@ export async function updatePartnership(id: number, data: any) {
 /** Apaga a parceria e tudo o que a referencia — sobretudo os aliases: o
  * UNIQUE(aliasType, aliasValue) impedia voltar a ligar o partnerId/método de
  * pagamento a outro parceiro, e a sincronização considerava-o "já ligado". */
-export async function deletePartnership(id: number) {
-  const db = await getDb(); if (!db) return;
-  await db.delete(partnerAliases).where(eq(partnerAliases.partnershipId, id));
-  await db.delete(partnershipInvoices).where(eq(partnershipInvoices.partnershipId, id));
-  await db.delete(partnershipTransactions).where(eq(partnershipTransactions.partnershipId, id));
-  await db.delete(partnerships).where(eq(partnerships.id, id));
-}
+// deletePartnership saiu (20c): "Eliminar" arquiva (archivedAt) — nada se apaga.
 
 /** Já existe uma parceria com este nome (sem distinguir maiúsculas/espaços)? */
 export async function partnershipNameExists(name: string, exceptId?: number): Promise<boolean> {

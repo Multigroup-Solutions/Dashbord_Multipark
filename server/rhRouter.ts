@@ -407,7 +407,7 @@ export const rhRouter = router({
           email: input.email,
           position: input.position,
           userId: null,
-        });
+        }, { actorId: ctx.user.id });
         userId = r.userId;
         userCreated = r.created;
       }
@@ -548,7 +548,7 @@ export const rhRouter = router({
           const fresh = await getEmployeeById(id);
           if (db && fresh && !fresh.employee.userId) {
             const { ensureUserForEmployee } = await import("./identity");
-            await ensureUserForEmployee(db as any, { id, fullName: fresh.employee.fullName, email: fresh.employee.email, position: String(fresh.employee.position ?? ""), userId: null });
+            await ensureUserForEmployee(db as any, { id, fullName: fresh.employee.fullName, email: fresh.employee.email, position: String(fresh.employee.position ?? ""), userId: null }, { actorId: ctx.user.id });
           }
         } catch (err) { console.warn("[rh.update] religar utilizador:", err); }
       }

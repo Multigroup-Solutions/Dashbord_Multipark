@@ -31,7 +31,8 @@ function fakeDb(o: { askedBefore?: boolean; conv?: boolean } = {}) {
     writes,
     async execute(q: any) {
       const t = text(q);
-      if (t.includes("FROM activity_logs WHERE action = 'extra_city_requested'")) return [o.askedBefore ? [{ x: 1 }] : []];
+      // 20c: o "já pedida" vive na ficha (employees.cityRequestedAt), não nos logs.
+      if (t.includes("SELECT cityRequestedAt FROM employees")) return [[{ cityRequestedAt: o.askedBefore ? "2026-01-01 10:00:00" : null }]];
       if (t.includes("FROM whatsapp_conversations WHERE employeeId")) return [o.conv === false ? [] : [{ id: 9 }]];
       writes.push(t);
       return [{ insertId: 1 }];

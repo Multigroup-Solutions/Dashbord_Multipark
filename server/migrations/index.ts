@@ -134,6 +134,7 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0395", () => import("./migration_0395").then((m) => step(m.MIGRATION_0395_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0395))],
   ["0400", () => import("./migration_0400").then((m) => step(m.MIGRATION_0400_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0400))],
   ["0405", () => import("./migration_0405").then((m) => step(m.MIGRATION_0405_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0405))],
+  ["0410", () => import("./migration_0410").then((m) => step(m.MIGRATION_0410_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0410))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
@@ -191,5 +192,12 @@ export async function ensureRecentSchema(db: Executor): Promise<void> {
     if (r.status === "applied" && r.messages) console.log(`[Schema ensure] 0230 envios automáticos: ${r.messages} mensagem(ns), ${r.threads} conversa(s) escondida(s)/recalculada(s), ${r.sends} envio(s) na ficha dos extras`);
   } catch (err: any) {
     console.warn("[Schema ensure] 0230 (envios automáticos na Comunicação) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    const { runMigration0410Data } = await import("./migration_0410");
+    const r = await runMigration0410Data(db as any);
+    if (r.status === "applied") console.log("[Schema ensure] 0410 marcadores das fichas copiados dos logs (cidade pedida, ficha do site)");
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0410 (marcadores das fichas) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }

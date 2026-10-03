@@ -282,10 +282,10 @@ export async function logApiKeyAction(
   const details = `${tag} ${entry.details ?? ""}`.trim();
   try {
     if (entry.asKeyEvent) {
-      await logActivity({ userId: apiKeyActorId(key), action: entry.action, entity: "api_key", entityId: key?.id ?? null,
+      await logActivity({ userId: apiKeyActorId(key), source: "api_key", action: entry.action, entity: "api_key", entityId: key?.id ?? null,
         details: `${details} (${entry.entity}${entry.entityId != null ? ` #${entry.entityId}` : ""})` });
     } else {
-      await logActivity({ userId: apiKeyActorId(key), action: entry.action, entity: entry.entity, entityId: entry.entityId ?? null, details });
+      await logActivity({ userId: apiKeyActorId(key), source: "api_key", action: entry.action, entity: entry.entity, entityId: entry.entityId ?? null, details });
     }
   } catch (err) {
     console.warn("[ApiKey] log falhou:", String((err as any)?.message ?? err).slice(0, 160));

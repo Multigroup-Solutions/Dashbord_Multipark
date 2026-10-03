@@ -20,7 +20,7 @@ import {
 import { Fragment, useState, useMemo } from "react";
 import {
   Handshake, Euro, Crown, ArrowRightLeft,
-  Plus, Pencil, Trash2, Settings, AlertTriangle, Wallet, Building2,
+  Plus, Pencil, Archive, Settings, AlertTriangle, Wallet, Building2,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { PartnersLiveTab, ParksLiveTab, ProLiveTab, type PartnershipRecord } from "@/components/partnerships/LiveTabs";
@@ -362,7 +362,11 @@ export default function PartnershipsPage() {
   const { data: analyticsData, isLoading: analyticsLoading } = trpc.partnerships.analytics.useQuery({ from, to, projectId });
   const { data: partnerList = [] } = trpc.partnerships.list.useQuery({ projectId });
   const utils = trpc.useUtils();
-  const deleteMut = trpc.partnerships.delete.useMutation({ onSuccess: () => utils.partnerships.list.invalidate() });
+  // 20c: "Eliminar" arquiva (fica nas arquivadas, com faturas e transações).
+  const deleteMut = trpc.partnerships.delete.useMutation({
+    onSuccess: () => { utils.partnerships.list.invalidate(); utils.partnerships.archived.invalidate(); toast.success("Parceria arquivada — volta com \"Repor\" nas arquivadas."); },
+    onError: (e) => toast.error(e.message),
+  });
   const partners = analyticsData?.partners ?? [];
   const proBookings = analyticsData?.proBookings ?? [];
   const totals = analyticsData?.totals ?? { partnerBookings: 0, partnerRevenue: 0, directBookings: 0, directRevenue: 0, proBookings: 0, proRevenue: 0 };
@@ -791,10 +795,10 @@ export default function PartnershipsPage() {
                       <Button size="sm" variant="ghost" onClick={() => openEdit(p)} aria-label={`Editar ${p.name}`}>
                         <Pencil className="w-4 h-4" />
                       </Button>
-                      <Button size="sm" variant="ghost" className="text-red-600" aria-label={`Eliminar ${p.name}`} onClick={() => {
-                        if (confirm(`Eliminar parceiro "${p.name}"?`)) deleteMut.mutate({ id: p.id });
+                      <Button size="sm" variant="ghost" className="text-red-600" aria-label={`Arquivar ${p.name}`} onClick={() => {
+                        if (confirm(`Arquivar o parceiro "${p.name}"? Sai das listas, mas as faturas e transações ficam; volta com "Repor" nas arquivadas.`)) deleteMut.mutate({ id: p.id });
                       }}>
-                        <Trash2 className="w-4 h-4" />
+                        <Archive className="w-4 h-4" />
                       </Button>
                     </div>
                   </div>
