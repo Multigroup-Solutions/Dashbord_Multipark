@@ -3,6 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { logTrpcServerError } from "./trpcErrorLog";
 import { registerOAuthRoutes } from "./oauth";
 import { registerGoogleBusinessRoutes } from "../integrations/googleBusiness/routes";
 import { registerGoogleAccountRoutes } from "../google/routes";
@@ -104,6 +105,8 @@ async function startServer() {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      // 500 com a causa no log (paridade com o api-entry.ts) — nunca o input.
+      onError: logTrpcServerError,
     })
   );
   // development mode uses Vite, production mode uses static files

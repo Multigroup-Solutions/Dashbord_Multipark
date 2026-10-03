@@ -16,6 +16,7 @@ import { createMultiparkWebhookRouter, retryMultiparkDeliveries } from "../multi
 import { getDeadline, waitUntil } from "@vercel/functions";
 import { deliveryErrorCode } from "../bookingDeliveryQueue";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { logTrpcServerError } from "./trpcErrorLog";
 import { sdk } from "./sdk";
 import { requireSession } from "./requireSession";
 import { cronAuthOk as cronBearerAuthOk } from "../cronAuth";
@@ -103,6 +104,8 @@ try {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      // 500 com a causa no log (caminho, código, mensagem) — nunca o input.
+      onError: logTrpcServerError,
     })
   );
 } catch (err: any) {
