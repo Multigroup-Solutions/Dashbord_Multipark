@@ -309,9 +309,10 @@ function ClientVehicle({ data, scope }: { data: MainFound; scope: { projectId?: 
           <Field label="Telefone">{b.client.phone ?? "—"}</Field>
           <Field label="NIF">{b.client.nif ?? "—"}</Field>
           <Field label="Nome fiscal">{b.client.taxName ?? "—"}</Field>
-          {/* 17f: ligar, WhatsApp e email ao cliente daqui (anonimizado: não). */}
+          {/* 17f: ligar, WhatsApp e email ao cliente daqui (anonimizado: não).
+              D41 (Jorge, 3 out 2026): o email ao cliente sai pela caixa info. */}
           {!b.client.anonymized && (
-            <ContactActions className="col-span-2" phones={[b.client.phone]} emails={[b.client.email]} mailbox="reservas" />
+            <ContactActions className="col-span-2" phones={[b.client.phone]} emails={[b.client.email]} mailbox="info" />
           )}
           {cases.data?.crmEmail && (
             <div className="col-span-2">
@@ -320,10 +321,18 @@ function ClientVehicle({ data, scope }: { data: MainFound; scope: { projectId?: 
               </Link>
             </div>
           )}
+          {/* D42: quem entrega/levanta pelo cliente — com os mesmos botões (ligar, WhatsApp, email). */}
           {data.drivers.length > 0 && (
-            <div className="col-span-2 text-xs">
-              <span className="text-muted-foreground">Outra pessoa entrega/levanta: </span>
-              {data.drivers.map((dr, i) => <span key={i}>{[dr.name, dr.phone, dr.email].filter(Boolean).join(" · ")}{i < data.drivers.length - 1 ? "; " : ""}</span>)}
+            <div className="col-span-2 space-y-1.5 text-xs">
+              <span className="text-muted-foreground">Outra pessoa entrega/levanta:</span>
+              {data.drivers.map((dr, i) => (
+                <div key={i} className="rounded-md border p-2 space-y-1">
+                  <div>{[dr.name, dr.phone, dr.email].filter(Boolean).join(" · ") || "—"}</div>
+                  {!b.client.anonymized && (dr.phone || dr.email) && (
+                    <ContactActions phones={[dr.phone]} emails={[dr.email]} mailbox="info" />
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </CardContent>

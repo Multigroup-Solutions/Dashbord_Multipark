@@ -177,6 +177,8 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
           phones={[...c.phones].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((p) => p.phone)}
           // 21b: sem os emails de balcão/agregador (escrevia-se ao agregador em vez do cliente)
           emails={ownEmails}
+          // D41 (Jorge, 3 out 2026): o email ao cliente sai pela caixa info.
+          mailbox="info"
         />
         {latest && (
           <Button variant="outline" asChild>
