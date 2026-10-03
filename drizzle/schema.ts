@@ -2394,6 +2394,8 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	status: mysqlEnum(['aberto', 'pendente', 'resolvido']).default('aberto').notNull(),
 	/** Responsável pela conversa (users.id). */
 	assignedUserId: int(),
+	// D28 (0440): atribuída a um grupo de cidade (lisboa/porto/faro) em vez de uma pessoa.
+	assignedCityKey: varchar({ length: 16 }),
 	statusChangedAt: timestamp({ mode: 'string' }),
 	resolvedAt: timestamp({ mode: 'string' }),
 	/** 1.ª mensagem recebida ainda sem resposta nossa (SLA); null = respondida. */
@@ -2506,6 +2508,8 @@ export const whatsappQuickReplies = mysqlTable("whatsapp_quick_replies", {
 	id: int().autoincrement().primaryKey(),
 	title: varchar({ length: 80 }).notNull(),
 	body: text().notNull(),
+	// D29 (0440): cidade da resposta (lisboa/porto/faro); NULL = nacional.
+	cityKey: varchar({ length: 16 }),
 	createdById: int(),
 	// "Apagar" arquiva (0350): sai do menu, a linha fica.
 	archivedAt: timestamp({ mode: 'string' }),

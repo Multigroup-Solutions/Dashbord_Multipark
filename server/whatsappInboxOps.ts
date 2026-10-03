@@ -21,7 +21,8 @@ import { conversationVisibleTo, visibilitySql, type ConversationCityFacts } from
 import { ROLES, can } from "../shared/access";
 import { last9Digits } from "./whatsappInbound";
 import { messageDisplayBody, firstNameOf } from "../shared/whatsappTemplate";
-import { parseSlaMinutes, formatWaiting, type ConversationStatus } from "../shared/whatsappConversation";
+import { parseSlaMinutes, formatWaiting, isCityKey, quickReplyEditable, quickReplyVisible, type ConversationStatus } from "../shared/whatsappConversation";
+import type { CityKey } from "../shared/city";
 import { effectiveSlaMinutes } from "../shared/commsAi";
 
 function nowStr(d: Date = new Date()): string {
@@ -124,7 +125,21 @@ export async function assignConversation(conversationId: number, userId: number 
     const ok = (await listAssignees(conversationId)).some((u) => u.id === userId);
     if (!ok) return false;
   }
-  await db.update(whatsappConversations).set({ assignedUserId: userId }).where(eq(whatsappConversations.id, conversationId));
+  // Uma pessoa (ou ninguém) substitui o grupo de cidade (D28).
+  await db.update(whatsappConversations).set({ assignedUserId: userId, assignedCityKey: null }).where(eq(whatsappConversations.id, conversationId));
+  return true;
+}
+
+/**
+ * D28 (Jorge, 3 out 2026): atribui a um GRUPO DE CIDADE (Lisboa, Porto, Faro)
+ * em vez de uma pessoa — quem responder primeiro fica com ela; os avisos de
+ * atraso vão à equipa dessa cidade.
+ */
+export async function assignConversationToCity(conversationId: number, cityKey: CityKey): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  if (!isCityKey(cityKey)) return false;
+  await db.update(whatsappConversations).set({ assignedUserId: null, assignedCityKey: cityKey }).where(eq(whatsappConversations.id, conversationId));
   return true;
 }
 
@@ -208,13 +223,13 @@ export async function setConversationBox(conversationId: number, boxKey: string 
   await db.update(whatsappConversations).set({ boxKey, boxSource: source }).where(eq(whatsappConversations.id, conversationId));
 }
 
-/** Quem responde a uma conversa sem responsável fica com ela. */
+/** Quem responde a uma conversa sem responsável (ou só com o grupo de cidade) fica com ela. */
 export async function claimIfUnassigned(conversationId: number, userId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db
     .update(whatsappConversations)
-    .set({ assignedUserId: userId })
+    .set({ assignedUserId: userId, assignedCityKey: null })
     .where(and(eq(whatsappConversations.id, conversationId), sql`${whatsappConversations.assignedUserId} IS NULL`));
 }
 
@@ -423,31 +438,50 @@ export async function getConversationContext(conversationId: number) {
 
 // ─── Respostas rápidas ──────────────────────────────────────────────────────
 
-/** Respostas rápidas em uso (as arquivadas ficam guardadas mas fora do menu). */
-export async function listQuickReplies() {
+/**
+ * Respostas rápidas em uso (as arquivadas ficam guardadas mas fora do menu).
+ * D29: as nacionais + as da(s) cidade(s) de quem pede (`userCities` null = todas);
+ * `editable` diz se esta pessoa a pode alterar.
+ */
+export async function listQuickReplies(userCities: readonly string[] | null = null) {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
-  return db
-    .select({ id: whatsappQuickReplies.id, title: whatsappQuickReplies.title, body: whatsappQuickReplies.body })
+  const rows = await db
+    .select({ id: whatsappQuickReplies.id, title: whatsappQuickReplies.title, body: whatsappQuickReplies.body, cityKey: whatsappQuickReplies.cityKey })
     .from(whatsappQuickReplies)
     .where(sql`${whatsappQuickReplies.archivedAt} IS NULL`)
     .orderBy(whatsappQuickReplies.title);
+  return rows
+    .filter((r) => quickReplyVisible(r.cityKey, userCities))
+    .map((r) => ({ ...r, cityKey: r.cityKey ?? null, editable: quickReplyEditable(r.cityKey, userCities) }));
 }
 
-/** Cria ou altera. Alterar uma que não existe (ou arquivada) devolve null — não finge que guardou. */
-export async function saveQuickReply(input: { id?: number | null; title: string; body: string }, userId: number): Promise<number | null> {
+export class QuickReplyForbidden extends Error {}
+
+/**
+ * Cria ou altera. Alterar uma que não existe (ou arquivada) devolve null — não
+ * finge que guardou. D29: só na(s) cidade(s) de quem grava (as nacionais, só
+ * quem vê todas) — senão QuickReplyForbidden.
+ */
+export async function saveQuickReply(input: { id?: number | null; title: string; body: string; cityKey?: string | null }, userId: number, userCities: readonly string[] | null = null): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
   const title = input.title.trim().slice(0, 80);
   const body = input.body.trim();
+  const cityKey = isCityKey(input.cityKey) ? input.cityKey : null;
+  if (!quickReplyEditable(cityKey, userCities)) throw new QuickReplyForbidden(cityKey ? "Só podes guardar respostas das tuas cidades." : "As respostas nacionais só as muda quem vê todas as cidades.");
   if (input.id) {
+    const [cur] = await db.select({ cityKey: whatsappQuickReplies.cityKey }).from(whatsappQuickReplies)
+      .where(and(eq(whatsappQuickReplies.id, input.id), sql`${whatsappQuickReplies.archivedAt} IS NULL`)).limit(1);
+    if (!cur) return null;
+    if (!quickReplyEditable(cur.cityKey, userCities)) throw new QuickReplyForbidden("Essa resposta é de outra cidade (ou nacional): não a podes alterar.");
     const [res] = (await db
       .update(whatsappQuickReplies)
-      .set({ title, body })
+      .set({ title, body, cityKey })
       .where(and(eq(whatsappQuickReplies.id, input.id), sql`${whatsappQuickReplies.archivedAt} IS NULL`))) as any;
     return Number(res?.affectedRows ?? 0) > 0 ? input.id : null;
   }
-  const res = await db.insert(whatsappQuickReplies).values({ title, body, createdById: userId });
+  const res = await db.insert(whatsappQuickReplies).values({ title, body, cityKey, createdById: userId });
   return Number((res as any)[0]?.insertId ?? 0) || null;
 }
 
@@ -525,7 +559,7 @@ export async function aiAssist(conversationId: number, mode: AiMode, ctx: { user
 
 // ─── Avisos por cidade (cron horário) ───────────────────────────────────────
 
-interface AlertRow { id: number; projectId: number | null; name: string; urgent?: boolean; assignedUserId?: number | null }
+interface AlertRow { id: number; projectId: number | null; name: string; urgent?: boolean; assignedUserId?: number | null; assignedCityKey?: string | null }
 
 /**
  * Conversas abertas por responder há mais do que o SLA (aviso 1× por período
@@ -558,7 +592,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
   const nameCol = sql<string>`COALESCE(NULLIF(TRIM(e.fullName), ''), NULLIF(TRIM(c.profileName), ''), c.phoneE164)`;
 
   const [overdueRows] = (await db.execute(sql`
-    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.aiUrgency AS aiUrgency, c.assignedUserId AS assignedUserId
+    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.aiUrgency AS aiUrgency, c.assignedUserId AS assignedUserId, c.assignedCityKey AS assignedCityKey
       FROM whatsapp_conversations c LEFT JOIN employees e ON e.id = c.employeeId
      WHERE c.status = 'aberto' AND c.optedOutAt IS NULL AND c.awaitingSince IS NOT NULL
        AND (c.awaitingSince <= ${slaCutoff} OR (c.aiUrgency = 'urgente' AND c.awaitingSince <= ${urgentCutoff}))
@@ -566,7 +600,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
        AND c.slaAlertedAt IS NULL
      ORDER BY c.awaitingSince ASC LIMIT 200`)) as any;
   const [windowRows] = (await db.execute(sql`
-    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.assignedUserId AS assignedUserId
+    SELECT c.id, ${cityCol} AS projectId, ${nameCol} AS name, c.assignedUserId AS assignedUserId, c.assignedCityKey AS assignedCityKey
       FROM whatsapp_conversations c LEFT JOIN employees e ON e.id = c.employeeId
      WHERE c.status <> 'resolvido' AND c.optedOutAt IS NULL AND c.awaitingSince IS NOT NULL
        AND c.lastInboundAt > ${winFrom} AND c.lastInboundAt <= ${winTo}
@@ -574,7 +608,7 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
      ORDER BY c.lastInboundAt ASC LIMIT 200`)) as any;
 
   const norm = (rows: any[]): AlertRow[] =>
-    (rows ?? []).map((r) => ({ id: Number(r.id), projectId: r.projectId == null ? null : Number(r.projectId), name: String(r.name ?? ""), urgent: r.aiUrgency === "urgente", assignedUserId: r.assignedUserId == null ? null : Number(r.assignedUserId) }));
+    (rows ?? []).map((r) => ({ id: Number(r.id), projectId: r.projectId == null ? null : Number(r.projectId), name: String(r.name ?? ""), urgent: r.aiUrgency === "urgente", assignedUserId: r.assignedUserId == null ? null : Number(r.assignedUserId), assignedCityKey: isCityKey(r.assignedCityKey) ? r.assignedCityKey : null }));
   const overdue = norm(overdueRows);
   const closing = norm(windowRows);
   out.overdue = overdue.length;
@@ -587,8 +621,10 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
     const { title, body } = describeAlertGroup(g, sla);
     try {
       // Quem tem o WhatsApp NA CIDADE da conversa (team leader+) + o responsável.
+      // Atribuída a um grupo de cidade (D28): vai à equipa DESSA cidade.
       const r = await notify({
-        kind: "whatsapp_sla", projectId: g.projectId,
+        kind: "whatsapp_sla",
+        ...(g.cityKey ? { city: g.cityKey } : { projectId: g.projectId }),
         alsoUserIds: [...g.overdue, ...g.closing].map((x) => x.assignedUserId),
         title, body, link: "/whatsapp",
         // Conversas sem cidade são de todos (17e): o aviso também.
@@ -611,19 +647,20 @@ export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ ov
   return out;
 }
 
-export interface AlertGroup { projectId: number | null; overdue: AlertRow[]; closing: AlertRow[] }
+export interface AlertGroup { projectId: number | null; overdue: AlertRow[]; closing: AlertRow[]; cityKey?: string | null }
 
 /** Agrupa por cidade (null = sem cidade → só quem vê todas as cidades). PURA. */
 export function groupAlertsByCity(overdue: AlertRow[], closing: AlertRow[]): AlertGroup[] {
   const map = new Map<string, AlertGroup>();
-  const get = (p: number | null) => {
-    const k = String(p);
+  // D28: atribuída a um grupo de cidade → grupo dessa cidade (não a da conversa).
+  const get = (r: AlertRow) => {
+    const k = r.assignedCityKey ? `c:${r.assignedCityKey}` : String(r.projectId);
     let g = map.get(k);
-    if (!g) { g = { projectId: p, overdue: [], closing: [] }; map.set(k, g); }
+    if (!g) { g = r.assignedCityKey ? { projectId: null, cityKey: r.assignedCityKey, overdue: [], closing: [] } : { projectId: r.projectId, overdue: [], closing: [] }; map.set(k, g); }
     return g;
   };
-  for (const r of overdue) get(r.projectId).overdue.push(r);
-  for (const r of closing) get(r.projectId).closing.push(r);
+  for (const r of overdue) get(r).overdue.push(r);
+  for (const r of closing) get(r).closing.push(r);
   return [...map.values()];
 }
 

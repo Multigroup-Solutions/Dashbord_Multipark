@@ -57,8 +57,12 @@ import {
   fillQuickReply,
   formatWaiting,
   matchesInboxFilters,
+  cityGroupLabel,
+  decodeAssignee,
+  encodeAssignee,
   type ConversationStatus,
 } from "@shared/whatsappConversation";
+import { CITY_KEYS } from "@shared/city";
 import { withDraft, type WhatsAppDrafts } from "@shared/whatsappDrafts";
 import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, matchesBoxFilter, type InboxListFilters } from "@shared/whatsappInboxView";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -781,10 +785,14 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
     </Select>
   );
 
+  // D28 (Jorge, 3 out 2026): responsável = uma pessoa OU um grupo de cidade (Lisboa, Porto, Faro).
   const assigneeSelect = t && (
     <Select
-      value={t.assignedUserId != null ? String(t.assignedUserId) : "none"}
-      onValueChange={(v) => assign.mutate({ conversationId: t.conversationId, userId: v === "none" ? null : Number(v) })}
+      value={encodeAssignee(t.assignedUserId, t.assignedCityKey)}
+      onValueChange={(v) => {
+        const choice = decodeAssignee(v);
+        if (choice) assign.mutate({ conversationId: t.conversationId, userId: choice.userId, cityKey: choice.cityKey });
+      }}
       disabled={assign.isPending}
     >
       <SelectTrigger size="sm" className="w-[150px] min-w-0 text-xs" aria-label="Responsável" title="Responsável">
@@ -793,14 +801,17 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="none">Sem responsável</SelectItem>
+        {CITY_KEYS.map((k) => (
+          <SelectItem key={k} value={encodeAssignee(null, k)}>{cityGroupLabel(k)}</SelectItem>
+        ))}
         {assignees.error && <div className="px-2 py-1.5 text-xs text-red-700">Não foi possível carregar a lista.</div>}
         {(assignees.data ?? []).map((u) => (
-          <SelectItem key={u.id} value={String(u.id)}>
+          <SelectItem key={u.id} value={encodeAssignee(u.id, null)}>
             {u.id === user?.id ? `${u.name} (eu)` : u.name}
           </SelectItem>
         ))}
         {t.assignedUserId != null && !(assignees.data ?? []).some((u) => u.id === t.assignedUserId) && (
-          <SelectItem value={String(t.assignedUserId)}>Utilizador #{t.assignedUserId}</SelectItem>
+          <SelectItem value={encodeAssignee(t.assignedUserId, null)}>Utilizador #{t.assignedUserId}</SelectItem>
         )}
       </SelectContent>
     </Select>

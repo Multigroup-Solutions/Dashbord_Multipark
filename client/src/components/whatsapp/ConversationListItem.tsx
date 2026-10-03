@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { AlarmClock, BellOff, Hourglass, Lock, Timer, UserRound, Zap } from "lucide-react";
-import { CONVERSATION_STATUS_LABELS, formatWaiting, type ConversationAlerts } from "@shared/whatsappConversation";
+import { CONVERSATION_STATUS_LABELS, cityGroupLabel, formatWaiting, type ConversationAlerts } from "@shared/whatsappConversation";
 import { WHATSAPP_INTENT_LABELS, isWhatsappIntent } from "@shared/commsAi";
 import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
 import { fmtListTime, windowClosingSoon, windowCountdown } from "@/components/whatsapp/inboxFormat";
@@ -142,13 +142,13 @@ export function ConversationListItem({
             {c.status !== "aberto" && (
               <Tag className="bg-secondary text-secondary-foreground">{CONVERSATION_STATUS_LABELS[c.status]}</Tag>
             )}
-            {c.assignedName && (
+            {(c.assignedName || cityGroupLabel(c.assignedCityKey)) && (
               <span
                 className="ml-auto inline-flex items-center gap-0.5 text-[10px] text-muted-foreground min-w-0 truncate"
-                title={`Responsável: ${c.assignedName}`}
+                title={`Responsável: ${c.assignedName || cityGroupLabel(c.assignedCityKey)}`}
               >
                 <UserRound className="h-2.5 w-2.5 shrink-0" />
-                <span className="truncate">{c.assignedName}</span>
+                <span className="truncate">{c.assignedName || cityGroupLabel(c.assignedCityKey)}</span>
               </span>
             )}
           </div>

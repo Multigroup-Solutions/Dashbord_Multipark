@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
-import { projectScope, bookingHistoryScope, scopedProjectIds, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
+import { projectScope, bookingHistoryScope, scopedProjectIds, scopedCityNamesLive, assertEmployeeAccess, assertProjectAccess, requireGlobalCityAccess, cityScope as cityScopeStore } from './cityScope';
+import { CITY_KEYS, matchCityKey, type CityKey } from "../shared/city";
 import { marketingError, marketingPeriodGuard } from './marketingErrors';
 import {
   INCIDENT_SEVERITIES, INCIDENT_STATUSES, INCIDENT_TYPES, LOST_ITEM_TYPES, LOST_PRIORITIES, LOST_STATUSES,
@@ -163,6 +164,13 @@ function assertStructuralNodeEditable(node: { level: string }) {
   if (scopedProjectIds() !== undefined && (node.level === "group" || node.level === "city")) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Só quem tem acesso a todas as cidades pode alterar grupos e cidades." });
   }
+}
+
+/** Cidades (lisboa/porto/faro) de quem pede, pelo âmbito do pedido; null = vê todas. */
+function userCityKeys(): CityKey[] | null {
+  const names = scopedCityNamesLive();
+  if (names === undefined) return null;
+  return Array.from(new Set(names.map((n) => matchCityKey(n)).filter((k): k is CityKey => !!k)));
 }
 
 // ─── EQUIPA: fichas abaixo de quem vê, na sua cidade (alcance "below_city") ──
@@ -5729,21 +5737,26 @@ export const appRouter = router({
       }),
 
     assign: protectedProcedure
-      .input(z.object({ conversationId: z.number().int().positive(), userId: z.number().int().positive().nullable() }))
+      // D28: uma pessoa OU um grupo de cidade (Lisboa, Porto, Faro); os dois null = sem responsável.
+      .input(z.object({ conversationId: z.number().int().positive(), userId: z.number().int().positive().nullable(), cityKey: z.enum(CITY_KEYS).nullable().optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "edit");
+        if (input.userId != null && input.cityKey) throw new TRPCError({ code: "BAD_REQUEST", message: "Escolhe uma pessoa ou um grupo de cidade, não os dois." });
         const { conversationVisible } = await import("./whatsappInbox");
         if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
-        const { assignConversation } = await import("./whatsappInboxOps");
-        if (!(await assignConversation(input.conversationId, input.userId))) {
+        const { assignConversation, assignConversationToCity } = await import("./whatsappInboxOps");
+        if (input.cityKey) {
+          if (!(await assignConversationToCity(input.conversationId, input.cityKey))) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível atribuir ao grupo." });
+        } else if (!(await assignConversation(input.conversationId, input.userId))) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Essa pessoa não pode responder no WhatsApp ou não vê esta conversa (cidade)." });
         }
+        const { cityGroupLabel } = await import("../shared/whatsappConversation");
         await logActivity({
           userId: ctx.user.id,
           action: "whatsapp_assign",
           entity: "whatsapp_conversation",
           entityId: input.conversationId,
-          details: input.userId ? `Conversa WhatsApp ${input.conversationId} atribuída ao utilizador ${input.userId}` : `Conversa WhatsApp ${input.conversationId} sem responsável`,
+          details: input.cityKey ? `Conversa WhatsApp ${input.conversationId} atribuída ao ${cityGroupLabel(input.cityKey)}` : input.userId ? `Conversa WhatsApp ${input.conversationId} atribuída ao utilizador ${input.userId}` : `Conversa WhatsApp ${input.conversationId} sem responsável`,
         });
         return { success: true };
       }),
@@ -5804,17 +5817,24 @@ export const appRouter = router({
       }),
 
     quickReplies: router({
+      // D29: as nacionais + as das cidades de quem pede; cada um só edita as da(s) sua(s) cidade(s).
       list: protectedProcedure.query(async ({ ctx }) => {
         requireAccess(ctx.user, "whatsapp", "view");
         const { listQuickReplies } = await import("./whatsappInboxOps");
-        return listQuickReplies();
+        return listQuickReplies(userCityKeys());
       }),
       save: protectedProcedure
-        .input(z.object({ id: z.number().int().positive().nullable().optional(), title: z.string().trim().min(1).max(80), body: z.string().trim().min(1).max(4000) }))
+        .input(z.object({ id: z.number().int().positive().nullable().optional(), title: z.string().trim().min(1).max(80), body: z.string().trim().min(1).max(4000), cityKey: z.enum(CITY_KEYS).nullable().optional() }))
         .mutation(async ({ ctx, input }) => {
           requireAccess(ctx.user, "whatsapp", "edit");
-          const { saveQuickReply } = await import("./whatsappInboxOps");
-          const id = await saveQuickReply(input, ctx.user.id);
+          const { saveQuickReply, QuickReplyForbidden } = await import("./whatsappInboxOps");
+          let id: number | null;
+          try {
+            id = await saveQuickReply(input, ctx.user.id, userCityKeys());
+          } catch (e) {
+            if (e instanceof QuickReplyForbidden) throw new TRPCError({ code: "FORBIDDEN", message: e.message });
+            throw e;
+          }
           if (!id) throw new TRPCError({ code: input.id ? "NOT_FOUND" : "INTERNAL_SERVER_ERROR", message: input.id ? "Essa resposta rápida já não existe (foi arquivada?)." : "Não foi possível guardar" });
           return { id };
         }),
