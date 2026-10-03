@@ -10,6 +10,7 @@
  *  - resolvido → fechado. Uma nova mensagem do contacto REABRE (→ aberto).
  */
 import { effectiveSlaMinutes } from "./commsAi";
+import { CITY_KEYS, CITY_LABELS, type CityKey } from "./city";
 
 export const CONVERSATION_STATUSES = ["aberto", "pendente", "resolvido"] as const;
 export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number];
@@ -132,18 +133,61 @@ export type StatusFilter = "active" | ConversationStatus | "all";
 
 /** Filtro de atribuição + estado da lista (em AND). PURA. */
 export function matchesInboxFilters(
-  c: { status: string | null | undefined; assignedUserId: number | null | undefined },
+  c: { status: string | null | undefined; assignedUserId: number | null | undefined; assignedCityKey?: string | null },
   f: { assignee: AssigneeFilter; status: StatusFilter; userId: number | null | undefined },
 ): boolean {
   if (f.assignee === "mine" && (f.userId == null || c.assignedUserId !== f.userId)) return false;
-  if (f.assignee === "unassigned" && c.assignedUserId != null) return false;
+  // Atribuída a um grupo de cidade (D28) já tem responsável.
+  if (f.assignee === "unassigned" && (c.assignedUserId != null || !!c.assignedCityKey)) return false;
   const status = isConversationStatus(c.status) ? c.status : "aberto";
   if (f.status === "all") return true;
   if (f.status === "active") return status !== "resolvido";
   return status === f.status;
 }
 
+// ─── Responsável: pessoa ou grupo de cidade (D28, Jorge 3 out 2026) ─────────
+
+export const isCityKey = (v: unknown): v is CityKey => typeof v === "string" && (CITY_KEYS as readonly string[]).includes(v);
+
+/** Nome do grupo de cidade ("Grupo Lisboa"). PURA. */
+export function cityGroupLabel(cityKey: string | null | undefined): string | null {
+  return isCityKey(cityKey) ? `Grupo ${CITY_LABELS[cityKey]}` : null;
+}
+
+/** Valor do seletor de responsável: "u:12" (pessoa), "c:lisboa" (grupo), "none". PURA. */
+export function encodeAssignee(userId: number | null | undefined, cityKey: string | null | undefined): string {
+  if (userId != null) return `u:${userId}`;
+  if (isCityKey(cityKey)) return `c:${cityKey}`;
+  return "none";
+}
+
+export type AssigneeChoice = { userId: number | null; cityKey: CityKey | null };
+
+/** O contrário de `encodeAssignee`; valor desconhecido → null. PURA. */
+export function decodeAssignee(v: string): AssigneeChoice | null {
+  if (v === "none") return { userId: null, cityKey: null };
+  const m = /^u:(\d+)$/.exec(v);
+  if (m) return { userId: Number(m[1]), cityKey: null };
+  const c = /^c:(\w+)$/.exec(v);
+  if (c && isCityKey(c[1])) return { userId: null, cityKey: c[1] };
+  return null;
+}
+
 // ─── Respostas rápidas ──────────────────────────────────────────────────────
+
+/**
+ * D29 (Jorge, 3 out 2026): respostas rápidas por cidade. `cityKey` null =
+ * nacional; `userCities` null = a pessoa vê todas as cidades. Cada cidade vê as
+ * suas + as nacionais; cada um só edita as da(s) sua(s) cidade(s) (as nacionais,
+ * só quem vê todas). PURAS.
+ */
+export function quickReplyVisible(cityKey: string | null | undefined, userCities: readonly string[] | null): boolean {
+  return cityKey == null || userCities == null || userCities.includes(cityKey);
+}
+export function quickReplyEditable(cityKey: string | null | undefined, userCities: readonly string[] | null): boolean {
+  if (userCities == null) return true;
+  return cityKey != null && userCities.includes(cityKey);
+}
 
 /** Substitui {{nome}} pelo primeiro nome do contacto (ou remove-o, sem nome). PURA. */
 export function fillQuickReply(body: string, firstName: string | null | undefined): string {

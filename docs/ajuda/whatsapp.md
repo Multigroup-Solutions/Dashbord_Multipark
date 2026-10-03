@@ -45,7 +45,7 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 
 **Organizar**
 - Estados: **Aberta** (precisa de atenção), **Pendente** (à espera de algo), **Resolvida**. Se o contacto voltar a escrever, reabre.
-- **Responsável**: a lista só mostra quem pode responder no WhatsApp **e** vê a cidade dessa conversa. Quem responde a uma conversa sem responsável fica com ela.
+- **Responsável**: uma pessoa ou um **grupo de cidade** (**Grupo Lisboa**, **Grupo Porto**, **Grupo Faro**). As pessoas da lista são só quem pode responder no WhatsApp **e** vê a cidade dessa conversa. Atribuída a um grupo, os avisos de atraso vão à equipa dessa cidade e quem responder primeiro fica com ela. Quem responde a uma conversa sem responsável também fica com ela.
 - **Marcar como não lida** para retomar mais tarde.
 - Liga a conversa a uma reserva ou cliente no painel lateral. Com a Multipark em baixo, o painel diz "indisponível" (não "nenhuma reserva").
 - Contactos que pediram STOP ficam marcados "Não quer mensagens".
@@ -63,7 +63,8 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Templates com cabeçalho de imagem, vídeo, documento ou texto com variável são recusados antes de enviar (a Meta recusava cada destinatário).
 
 **Respostas rápidas**
-- Servem a toda a empresa. Criar e editar: quem responde no WhatsApp. **Arquivar** (sai do menu de toda a gente, não se apaga): admin.
+- **Por cidade**: cada cidade vê as suas e as **nacionais**. Cada pessoa só cria e edita as da(s) sua(s) cidade(s). As nacionais só as muda quem vê todas as cidades.
+- Na gestão, cada resposta mostra a cidade (ou "Nacional"). **Arquivar** (sai do menu de toda a gente, não se apaga): admin.
 
 **Quando a leitura falha**
 - Lista, conversa, contexto e respostas rápidas mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "Ainda sem conversas" ou "janela fechada".

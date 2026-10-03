@@ -79,6 +79,8 @@ export interface ConversationRow {
   status: ConversationStatus;
   assignedUserId: number | null;
   assignedName: string | null;
+  /** D28: atribuída a um grupo de cidade (lisboa/porto/faro) em vez de uma pessoa. */
+  assignedCityKey: string | null;
   /** 1.ª mensagem recebida ainda sem resposta (SLA); null = respondida. */
   awaitingSince: string | null;
   linkedBookingRef: string | null;
@@ -348,6 +350,7 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
       status: whatsappConversations.status,
       assignedUserId: whatsappConversations.assignedUserId,
       assignedName: users.name,
+      assignedCityKey: whatsappConversations.assignedCityKey,
       awaitingSince: whatsappConversations.awaitingSince,
       linkedBookingRef: whatsappConversations.linkedBookingRef,
       linkedBookingLabel: whatsappConversations.linkedBookingLabel,
@@ -384,6 +387,7 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
       status: sql<ConversationStatus>`'aberto'`,
       assignedUserId: sql<number | null>`NULL`,
       assignedName: sql<string | null>`NULL`,
+      assignedCityKey: sql<string | null>`NULL`,
       awaitingSince: sql<string | null>`NULL`,
       linkedBookingRef: sql<string | null>`NULL`,
       linkedBookingLabel: sql<string | null>`NULL`,
@@ -435,6 +439,7 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
       status: c.status,
       assignedUserId: c.assignedUserId,
       assignedName: c.assignedName ?? null,
+      assignedCityKey: (c as any).assignedCityKey ?? null,
       awaitingSince: c.awaitingSince,
       linkedBookingRef: c.linkedBookingRef,
       linkedBookingLabel: c.linkedBookingLabel,
@@ -500,6 +505,7 @@ export interface ConversationThread {
   windowExpiresAt: string | null;
   status: ConversationStatus;
   assignedUserId: number | null;
+  assignedCityKey: string | null;
   awaitingSince: string | null;
   unreadCount: number;
   linkedBookingRef: string | null;
@@ -535,6 +541,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
       leadName: leadNameSql,
       status: whatsappConversations.status,
       assignedUserId: whatsappConversations.assignedUserId,
+      assignedCityKey: whatsappConversations.assignedCityKey,
       awaitingSince: whatsappConversations.awaitingSince,
       unreadCount: whatsappConversations.unreadCount,
       linkedBookingRef: whatsappConversations.linkedBookingRef,
@@ -589,6 +596,7 @@ export async function getConversationThread(conversationId: number, limit = 100)
     windowExpiresAt: w.windowExpiresAt,
     status: conv.status,
     assignedUserId: conv.assignedUserId,
+    assignedCityKey: conv.assignedCityKey ?? null,
     awaitingSince: conv.awaitingSince,
     unreadCount: conv.unreadCount,
     linkedBookingRef: conv.linkedBookingRef,
