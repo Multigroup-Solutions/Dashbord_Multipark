@@ -12,6 +12,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cityKeyFromText, matchCityKey } from "@shared/city";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
+import { ViewToggle } from "@/components/ViewToggle";
+import { useViewPref } from "@/hooks/useViewPref";
 
 // ─── Candidaturas de condutores vindas do website multidriver ────────────────
 // Novas candidaturas do formulário "Be a Driver" chegam via /api/v1 e ficam
@@ -30,6 +33,8 @@ const APP_STATUS: Record<string, { label: string; className: string }> = {
 export function CandidaturasSection() {
   const [statusFilter, setStatusFilter] = useState<string>("new");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  // D46: cartões ou lista (por omissão: cartões no telemóvel, lista no PC).
+  const [view, setView] = useViewPref("candidaturas", "auto");
 
   // refetchInterval: candidaturas chegam do site a qualquer hora — o badge
   // "N novas" tem de atualizar com a página aberta, sem reload.
@@ -106,6 +111,55 @@ export function CandidaturasSection() {
     return isNaN(d.getTime()) ? s : d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Lisbon" });
   };
 
+  // D46: as mesmas ações e detalhes na lista e nos cartões.
+  const appActions = (a: any) => (
+    <>
+      {a.status !== "approved" && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950 mr-1"
+          disabled={approve.isPending}
+          onClick={() => openApprove({ id: a.id, fullName: a.fullName, email: a.email, city: a.city ?? null })}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Aprovar
+        </Button>
+      )}
+      {a.status !== "rejected" && a.status !== "approved" && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="border-red-300 text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+          disabled={setStatus.isPending}
+          onClick={() => setStatus.mutate({ id: a.id, status: "rejected" })}
+        >
+          <XCircle className="h-3.5 w-3.5 mr-1" /> Rejeitar
+        </Button>
+      )}
+    </>
+  );
+  const appDetails = (a: any) => {
+    const payload = (a.payload ?? {}) as Record<string, unknown>;
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-xs">
+        {a.nif && <div><span className="text-muted-foreground">NIF:</span> {a.nif}</div>}
+        {a.country && <div><span className="text-muted-foreground">País:</span> {a.country}</div>}
+        {a.drivingExperience && <div><span className="text-muted-foreground">Experiência:</span> {a.drivingExperience}</div>}
+        {a.expectedHourlyRate && <div><span className="text-muted-foreground">€/h esperado:</span> {a.expectedHourlyRate}</div>}
+        {a.howDidYouKnow && <div><span className="text-muted-foreground">Como conheceu:</span> {a.howDidYouKnow}</div>}
+        {a.employeeId && <div><span className="text-muted-foreground">Employee:</span> #{a.employeeId}</div>}
+        {Object.entries(payload)
+          .filter(([, v]) => v != null && v !== "" && (typeof v !== "object" || Array.isArray(v)))
+          .map(([k, v]) => (
+            <div key={k}>
+              <span className="text-muted-foreground">{k}:</span>{" "}
+              {Array.isArray(v) ? v.join(", ") : typeof v === "boolean" ? (v ? "Sim" : "Não") : String(v)}
+            </div>
+          ))}
+      </div>
+    );
+  };
+
   return (
     <Card className="border-emerald-200">
       <CardHeader>
@@ -117,6 +171,8 @@ export function CandidaturasSection() {
               <Badge className="bg-blue-600 text-white hover:bg-blue-600">{pending} nova{pending > 1 ? "s" : ""}</Badge>
             )}
           </CardTitle>
+          <div className="flex items-center gap-2 flex-wrap">
+          <ViewToggle value={view} onChange={setView} />
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-40 h-8 text-xs">
               <SelectValue />
@@ -129,6 +185,7 @@ export function CandidaturasSection() {
               <SelectItem value="all">Todas</SelectItem>
             </SelectContent>
           </Select>
+          </div>
         </div>
       </CardHeader>
       <CardContent>
@@ -139,7 +196,41 @@ export function CandidaturasSection() {
             Sem candidaturas {statusFilter !== "all" ? `com estado "${APP_STATUS[statusFilter]?.label ?? statusFilter}"` : ""}.
           </div>
         )}
-        {apps.length > 0 && (
+        {apps.length > 0 && view === "cards" && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {apps.map((a: any) => {
+              const st = APP_STATUS[a.status] ?? APP_STATUS.new;
+              const expanded = expandedId === a.id;
+              return (
+                <div key={a.id} className="rounded-lg border bg-card p-3 space-y-2">
+                  <div className="flex items-start gap-3">
+                    <ContactAvatar name={a.fullName} className="h-12 w-12 text-base shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium break-words">{a.fullName}</div>
+                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                        <Badge variant="outline" className={st.className}>{st.label}</Badge>
+                        {a.submissionCount > 1 && <span className="text-xs text-muted-foreground">{a.submissionCount}× submetida</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-0.5 text-xs text-muted-foreground">
+                    {a.email && <div className="break-all">{a.email}</div>}
+                    {a.phone && <div>{a.phone}</div>}
+                    <div>{a.city ?? "Sem cidade"} · recebida {fmtWhen(a.lastSubmittedAt)}</div>
+                  </div>
+                  {expanded && <div className="rounded-md bg-muted/30 p-2">{appDetails(a)}</div>}
+                  <div className="flex flex-wrap items-center justify-between gap-1 pt-1 border-t">
+                    <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setExpandedId(expanded ? null : a.id)}>
+                      {expanded ? <ChevronDown className="h-3.5 w-3.5 mr-1" /> : <ChevronRight className="h-3.5 w-3.5 mr-1" />}Detalhes
+                    </Button>
+                    <div className="flex flex-wrap justify-end">{appActions(a)}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {apps.length > 0 && view === "list" && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -158,7 +249,6 @@ export function CandidaturasSection() {
                 {apps.map((a: any) => {
                   const st = APP_STATUS[a.status] ?? APP_STATUS.new;
                   const expanded = expandedId === a.id;
-                  const payload = (a.payload ?? {}) as Record<string, unknown>;
                   return (
                     <Fragment key={a.id}>
                       <tr className="border-b hover:bg-muted/40">
@@ -185,49 +275,13 @@ export function CandidaturasSection() {
                           <Badge variant="outline" className={st.className}>{st.label}</Badge>
                         </td>
                         <td className="py-2 px-2 text-right whitespace-nowrap">
-                          {a.status !== "approved" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950 mr-1"
-                              disabled={approve.isPending}
-                              onClick={() => openApprove({ id: a.id, fullName: a.fullName, email: a.email, city: a.city ?? null })}
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Aprovar
-                            </Button>
-                          )}
-                          {a.status !== "rejected" && a.status !== "approved" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-red-300 text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
-                              disabled={setStatus.isPending}
-                              onClick={() => setStatus.mutate({ id: a.id, status: "rejected" })}
-                            >
-                              <XCircle className="h-3.5 w-3.5 mr-1" /> Rejeitar
-                            </Button>
-                          )}
+                          {appActions(a)}
                         </td>
                       </tr>
                       {expanded && (
                         <tr className="border-b bg-muted/20">
                           <td colSpan={8} className="py-3 px-4">
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-xs">
-                              {a.nif && <div><span className="text-muted-foreground">NIF:</span> {a.nif}</div>}
-                              {a.country && <div><span className="text-muted-foreground">País:</span> {a.country}</div>}
-                              {a.drivingExperience && <div><span className="text-muted-foreground">Experiência:</span> {a.drivingExperience}</div>}
-                              {a.expectedHourlyRate && <div><span className="text-muted-foreground">€/h esperado:</span> {a.expectedHourlyRate}</div>}
-                              {a.howDidYouKnow && <div><span className="text-muted-foreground">Como conheceu:</span> {a.howDidYouKnow}</div>}
-                              {a.employeeId && <div><span className="text-muted-foreground">Employee:</span> #{a.employeeId}</div>}
-                              {Object.entries(payload)
-                                .filter(([, v]) => v != null && v !== "" && (typeof v !== "object" || Array.isArray(v)))
-                                .map(([k, v]) => (
-                                  <div key={k}>
-                                    <span className="text-muted-foreground">{k}:</span>{" "}
-                                    {Array.isArray(v) ? v.join(", ") : typeof v === "boolean" ? (v ? "Sim" : "Não") : String(v)}
-                                  </div>
-                                ))}
-                            </div>
+                            {appDetails(a)}
                           </td>
                         </tr>
                       )}

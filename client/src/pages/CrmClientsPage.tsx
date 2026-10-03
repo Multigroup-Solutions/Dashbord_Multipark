@@ -31,6 +31,7 @@ import { ProAccountsPanel } from "@/components/crm/ProAccountsPanel";
 import { ParksPanel, PartnersPanel } from "@/components/crm/PartnersPanels";
 import { ExportToSheetsButton } from "@/components/google/DriveActions";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { ViewToggle } from "@/components/ViewToggle";
 
 type ViewState = {
   /** clients = fichas; pro = contas Pro (fase 2); partners / parks = parceiros e parques (fase 3, ao vivo) */
@@ -310,14 +311,8 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
         </Select>
         <SelButton aria-label="Página anterior" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - s.limit))}><ChevronLeft className="h-4 w-4" /></SelButton>
         <SelButton aria-label="Página seguinte" disabled={offset + rows.length >= total} onClick={() => setOffset(offset + s.limit)}><ChevronRight className="h-4 w-4" /></SelButton>
-        <div className="flex overflow-hidden rounded-lg border bg-card">
-          {([["cards", "Cartões"], ["list", "Lista"]] as const).map(([v, label]) => (
-            <button key={v} type="button" onClick={() => patch({ view: v })}
-              className={cn("h-[34px] px-3.5 text-[13px]", s.view === v ? "bg-primary font-bold text-primary-foreground" : "font-semibold text-foreground hover:bg-muted")}>
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* D46: o mesmo "Cartões / Lista" de todas as listas de contactos */}
+        <ViewToggle value={s.view} onChange={(v) => patch({ view: v })} />
       </div>
 
       {list.isLoading && <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}

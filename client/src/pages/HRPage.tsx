@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { can, roleRank, seesBeyondOwn, isNationalRole } from "@shared/access";
 import { useSearch, useLocation } from 'wouter';
 import { usePersistedState } from "@/hooks/usePersistedState";
+import { useViewPref } from "@/hooks/useViewPref";
+import { ViewToggle } from "@/components/ViewToggle";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
@@ -2319,6 +2321,8 @@ export default function HRPage() {
   // Separador Colaboradores/Extras/Recrutamento também persiste — voltar de
   // uma ficha de extra mantém-nos nos Extras (bug reportado pelo Jorge)
   const [activeTab, setActiveTab] = usePersistedState<string>("hr.tab", "employees");
+  // D46: cartões (com foto) ou lista — escolha guardada neste aparelho.
+  const [hrView, setHrView] = useViewPref("hr", "cards");
   // O Recrutamento (recursos-humanos@) passou para os Leads de Extras (17g-4).
   useEffect(() => { if (activeTab === "recrutamento") setActiveTab("employees"); }, [activeTab, setActiveTab]);
   const isAdminRole = userRole === "admin" || userRole === "super_admin";
@@ -2486,6 +2490,66 @@ export default function HRPage() {
     </Card>
   );
 
+  /** D46: a mesma ficha em lista (tabela), com a foto. */
+  const docsMissing = (id: number): number | null => {
+    const status = (docStatus as Record<number, { total: number; present: number; missing: string[] }>)[id];
+    return status ? status.total - status.present : null;
+  };
+  const renderTable = (list: Array<{ employee: any }>) => (
+    <div className="overflow-x-auto rounded-lg border bg-card">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-xs uppercase text-muted-foreground">
+            <th className="w-12 py-2 px-2"></th>
+            <th className="text-left py-2 px-2">Nome</th>
+            <th className="text-left py-2 px-2">Posto</th>
+            <th className="text-left py-2 px-2">Email</th>
+            <th className="text-left py-2 px-2">Departamento</th>
+            <th className="text-left py-2 px-2">Conta</th>
+            <th className="text-left py-2 px-2">Documentos</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map(({ employee: emp }) => {
+            const dir = directoryInfoFor(directory, emp.email);
+            const missing = docsMissing(emp.id);
+            return (
+              <tr key={emp.id} className="border-b last:border-0 hover:bg-muted/40 cursor-pointer" onClick={() => setSelectedId(emp.id)}>
+                <td className="py-2 px-2">
+                  <Avatar className="w-9 h-9">
+                    <AvatarImage src={emp.photoUrl ?? dir?.photoUrl ?? undefined} referrerPolicy="no-referrer" />
+                    <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                      {emp.fullName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                </td>
+                <td className="py-2 px-2 min-w-[10rem]">
+                  <button type="button" className="font-medium text-left hover:underline" onClick={(e) => { e.stopPropagation(); setSelectedId(emp.id); }}>{emp.fullName}</button>
+                  {dir?.jobTitle && <div className="text-[11px] text-muted-foreground truncate max-w-[16rem]">{dir.jobTitle}</div>}
+                </td>
+                <td className="py-2 px-2 whitespace-nowrap">
+                  <Badge className={`text-xs ${POSITION_COLORS[emp.position as Position]}`}>
+                    {POSITION_LABELS[emp.position as Position]}{emp.position === "extra" && emp.extraLevel ? ` N${emp.extraLevel}` : ""}
+                  </Badge>
+                </td>
+                <td className="py-2 px-2 max-w-[14rem] truncate text-muted-foreground" title={emp.email ?? undefined}>{emp.email ?? "—"}</td>
+                <td className="py-2 px-2 max-w-[14rem] truncate text-muted-foreground" title={emp.department ?? undefined}>{emp.department ?? "—"}</td>
+                <td className="py-2 px-2 whitespace-nowrap text-xs">
+                  {emp.userId ? <span className="text-blue-700">Conta ativa</span> : <span className="text-orange-700">Sem conta</span>}
+                </td>
+                <td className="py-2 px-2 whitespace-nowrap text-xs">
+                  {missing == null ? <span className="text-muted-foreground">—</span>
+                    : missing === 0 ? <span className="text-green-700">Completos</span>
+                    : <span className="text-orange-700">{missing} em falta</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
       {/* D49: pedidos de IBAN por aprovar (back office e administradores) */}
@@ -2603,6 +2667,7 @@ export default function HRPage() {
         <div className="text-center py-12 text-muted-foreground">A carregar colaboradores...</div>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <div className="flex flex-wrap items-center gap-2">
           <TabsList className="w-full max-w-full justify-start overflow-x-auto sm:w-auto">
             <TabsTrigger value="employees">
               Colaboradores <Badge variant="secondary" className="ml-2">{employeesList.length}</Badge>
@@ -2619,6 +2684,9 @@ export default function HRPage() {
               <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
             )}
           </TabsList>
+          {/* D46: cartões (com foto) ou lista */}
+          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className="sm:ml-auto" />}
+          </div>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground text-sm">
@@ -2626,18 +2694,22 @@ export default function HRPage() {
                 <div><Button size="sm" variant="outline" className="mt-3" onClick={() => setShowCreate(true)}><UserPlus className="w-4 h-4 mr-2" /> Novo colaborador</Button></div>
               </div>
             ) : (
+              hrView === "list" ? renderTable(employeesList) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {employeesList.map(renderCard)}
               </div>
+              )
             )}
           </TabsContent>
           <TabsContent value="extras" className="mt-4">
             {extrasList.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground text-sm">Sem extras nesta categoria</div>
             ) : (
+              hrView === "list" ? renderTable(extrasList) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {extrasList.map(renderCard)}
               </div>
+              )
             )}
           </TabsContent>
           {!isAdminRole && (

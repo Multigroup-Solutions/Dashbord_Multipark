@@ -2,9 +2,11 @@
 modulo: leads_extras
 titulo: Leads de Extras (leads, candidaturas do site e recrutamento)
 rotas: /extras-leads
-palavras: leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop
+palavras: cartões, lista, ver em cartões, ver em lista, foto, leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop
 ---
 # Leads de Extras
+
+**Cartões ou Lista** (botão no topo da lista de leads e das candidaturas): vês as pessoas em **cartões com foto** ou numa **lista** compacta — no telemóvel e no PC. A escolha fica guardada neste aparelho, para esta página.
 
 Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três separadores:
 

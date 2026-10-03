@@ -31,6 +31,9 @@ import {
 import { toast } from "sonner";
 import { AlertTriangle, Archive, ArchiveRestore, Clock, Filter, Mail, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Send, UserPlus, X } from "lucide-react";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
+import { ViewToggle } from "@/components/ViewToggle";
+import { useViewPref } from "@/hooks/useViewPref";
 import { findWhatsAppTemplate, LEAD_RECRUITMENT_TEMPLATE_ID } from "@shared/whatsappTemplate";
 import { RECENT_TEMPLATE_LABEL, broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery } from "@shared/contactSearch";
@@ -74,6 +77,8 @@ const ATTENTION_LABEL: Record<LeadAttention, string> = {
 type LeadRow = {
   id: number;
   fullName: string;
+  /** D46: foto da ficha (só depois de convertido). */
+  photoUrl?: string | null;
   phone: string | null;
   phoneE164: string | null;
   email: string | null;
@@ -141,6 +146,8 @@ function LeadsTab() {
   const [deleteFor, setDeleteFor] = useState<LeadRow | null>(null);
   // 18b: arquivados só com o filtro "Arquivados" (e repõem-se daí).
   const [showArchived, setShowArchived] = useState(false);
+  // D46: cartões ou lista (por omissão: cartões no telemóvel, lista no PC).
+  const [leadsView, setLeadsView] = useViewPref("extra-leads", "auto");
   // 18b: a pessoa já teve ficha desativada → confirmar antes de reativar.
   const [reactivateAsk, setReactivateAsk] = useState<null | { leadId: number; projectId: number; employeeId: number; fullName: string; reason: string; deactivatedAt: string | null }>(null);
 
@@ -335,6 +342,60 @@ function LeadsTab() {
   const f = funnel.data;
   // Cidade de um lead sem acesso ao nó (não devia acontecer: a lista já vem filtrada)
   const cityLabel = (pid: number | null) => (pid == null ? null : cityName.get(pid) ?? `#${pid}`);
+
+  // D46: as mesmas ações e o mesmo estado na lista e nos cartões.
+  const leadActions = (l: LeadRow) => (
+    <>
+      {showArchived ? (
+        <Button size="sm" variant="outline" className="h-8" disabled={restore.isPending} title="Volta à lista com o estado que tinha" onClick={() => restore.mutate({ id: l.id })}>
+          <ArchiveRestore className="h-3.5 w-3.5 mr-1" /> Repor
+        </Button>
+      ) : (<>
+      <Button
+        size="sm"
+        variant="outline"
+        className="border-green-600 text-green-700 hover:bg-green-50 dark:hover:bg-green-950 mr-1 h-8"
+        disabled={!l.phoneE164 || l.status === "converted" || l.status === "declined"}
+        title={!l.phoneE164 ? "Sem telemóvel válido" : l.status === "converted" ? "Já é extra" : l.status === "declined" ? "Sem interesse" : `Enviar “${template.label}”`}
+        onClick={() => openContact([l.id])}
+      >
+        <MessageCircle className="h-3.5 w-3.5" />
+      </Button>
+      {!l.employeeId && l.status !== "declined" && (
+        <Button size="sm" variant="outline" className="h-8 mr-1" title="Converter em extra (cria a ficha)" onClick={() => openConvert(l)}>
+          <UserPlus className="h-3.5 w-3.5 mr-1" /> Converter
+        </Button>
+      )}
+      <Button size="sm" variant="ghost" className="h-8 mr-1" title="Editar" onClick={() => openEdit(l)}>
+        <Pencil className="h-3.5 w-3.5" />
+      </Button>
+      <Button size="sm" variant="ghost" className="h-8 text-red-600 hover:text-red-700" title="Arquivar" aria-label="Arquivar lead" onClick={() => setDeleteFor(l)}>
+        <Archive className="h-3.5 w-3.5" />
+      </Button>
+      </>)}
+    </>
+  );
+  const statusSelect = (l: LeadRow) => {
+    const st = STATUS[l.status] ?? STATUS.new;
+    return (
+      <Select
+        value={l.status}
+        disabled={!!l.employeeId}
+        onValueChange={(v) => update.mutate({ id: l.id, status: v as LeadStatus })}
+      >
+        <SelectTrigger className="h-7 w-36 text-xs border-0 bg-transparent px-1 shadow-none focus:ring-0">
+          <Badge variant="outline" className={st.className}>{st.label}</Badge>
+        </SelectTrigger>
+        <SelectContent>
+          {/* Convertido só pelo botão Converter (cria/liga a ficha) */}
+          {STATUS_ORDER.map((s) => (
+            <SelectItem key={s} value={s} disabled={s === "converted" && l.status !== "converted"}>{STATUS[s].label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  };
+
 
   return (
     <div className="space-y-4">
@@ -560,6 +621,8 @@ function LeadsTab() {
                   </Button>
                 ))}
               </div>
+              {/* D46: cartões (com foto) ou lista */}
+              <ViewToggle value={leadsView} onChange={setLeadsView} className="sm:ml-auto" />
             </div>
           </div>
         </CardHeader>
@@ -627,7 +690,66 @@ function LeadsTab() {
                   : "Ainda não há leads. Adiciona o primeiro com “Novo lead”."}
             </div>
           )}
-          {shown.length > 0 && (
+          {shown.length > 0 && leadsView === "cards" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+              {shown.map((l) => (
+                <div key={l.id} className="rounded-lg border bg-card p-3 space-y-2">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      aria-label={`Selecionar ${l.fullName}`}
+                      checked={selectedIds.has(l.id)}
+                      onChange={(e) =>
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          e.target.checked ? next.add(l.id) : next.delete(l.id);
+                          return next;
+                        })
+                      }
+                    />
+                    <ContactAvatar name={l.fullName} photoUrl={l.photoUrl} className="h-12 w-12 text-base shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium line-clamp-2 break-words" title={l.fullName}>{l.fullName}</div>
+                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                        <Badge variant="outline" className={`text-[11px] px-1.5 py-0 max-w-full ${SOURCE_BADGE[l.source] ?? ""}`} title={LEAD_SOURCE_LABELS[l.source] ?? l.source}>
+                          <span className="truncate">{LEAD_SOURCE_LABELS[l.source] ?? l.source}</span>
+                        </Badge>
+                        {attentionById.get(l.id) && (
+                          <span title={ATTENTION_LABEL[attentionById.get(l.id)!]}><AlertTriangle className="h-3 w-3 text-amber-600" /></span>
+                        )}
+                      </div>
+                    </div>
+                    <LeadScoreCell leadId={l.id} row={scoreById.get(l.id)} canEdit={canEditLeads} />
+                  </div>
+                  <div className="space-y-1 text-xs">
+                    {l.phone && (
+                      <div className="flex items-center gap-1"><Phone className="h-3 w-3 text-muted-foreground" />{l.phone}
+                        {!l.phoneE164 && <Badge variant="outline" className="ml-1 text-[11px] border-amber-300 text-amber-700">inválido</Badge>}
+                      </div>
+                    )}
+                    {l.email && (
+                      <a href={`mailto:${l.email}`} className="flex items-center gap-1 min-w-0 hover:underline" title={l.email}>
+                        <Mail className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="truncate">{l.email}</span>
+                      </a>
+                    )}
+                    {cityLabel(l.projectId) && <div className="flex items-center gap-1"><MapPin className="h-3 w-3 text-muted-foreground" />{cityLabel(l.projectId)}</div>}
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <Clock className="h-3 w-3" />
+                      {l.lastContactedAt ? `${fmtWhen(l.lastContactedAt)} · ${l.contactCount}×` : "nunca contactado"}
+                      {l.lastInboundAt && <span className="text-violet-700 dark:text-violet-300 ml-1">↩ {fmtWhen(l.lastInboundAt)}</span>}
+                    </div>
+                  </div>
+                  {l.notes && <p className="text-xs text-muted-foreground line-clamp-2 break-words" title={l.notes}>{l.notes}</p>}
+                  <div className="flex flex-wrap items-center justify-between gap-1 pt-1 border-t">
+                    {statusSelect(l)}
+                    <div className="flex flex-wrap items-center justify-end">{leadActions(l)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {shown.length > 0 && leadsView === "list" && (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -661,7 +783,6 @@ function LeadsTab() {
                 </thead>
                 <tbody>
                   {shown.map((l) => {
-                    const st = STATUS[l.status] ?? STATUS.new;
                     return (
                       <tr key={l.id} className="border-b hover:bg-muted/40">
                         <td className="py-2 px-2">
@@ -724,21 +845,7 @@ function LeadsTab() {
                         <td className="py-2 px-2">
                           {/* Mudar o estado é uma decisão do backoffice; o envio só muda Novo → Contactado
                               e uma mensagem recebida Novo/Contactado → Respondeu. */}
-                          <Select
-                            value={l.status}
-                            disabled={!!l.employeeId}
-                            onValueChange={(v) => update.mutate({ id: l.id, status: v as LeadStatus })}
-                          >
-                            <SelectTrigger className="h-7 w-36 text-xs border-0 bg-transparent px-1 shadow-none focus:ring-0">
-                              <Badge variant="outline" className={st.className}>{st.label}</Badge>
-                            </SelectTrigger>
-                            <SelectContent>
-                              {/* Convertido só pelo botão Converter (cria/liga a ficha) */}
-                              {STATUS_ORDER.map((s) => (
-                                <SelectItem key={s} value={s} disabled={s === "converted" && l.status !== "converted"}>{STATUS[s].label}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          {statusSelect(l)}
                         </td>
                         <td className="py-2 px-2 whitespace-nowrap text-xs">
                           {l.lastContactedAt ? (
@@ -760,33 +867,7 @@ function LeadsTab() {
                           <span className="block truncate text-muted-foreground" title={l.notes ?? undefined}>{l.notes ?? "—"}</span>
                         </td>
                         <td className="py-2 px-2 text-right whitespace-nowrap">
-                          {showArchived ? (
-                            <Button size="sm" variant="outline" className="h-8" disabled={restore.isPending} title="Volta à lista com o estado que tinha" onClick={() => restore.mutate({ id: l.id })}>
-                              <ArchiveRestore className="h-3.5 w-3.5 mr-1" /> Repor
-                            </Button>
-                          ) : (<>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-green-600 text-green-700 hover:bg-green-50 dark:hover:bg-green-950 mr-1 h-8"
-                            disabled={!l.phoneE164 || l.status === "converted" || l.status === "declined"}
-                            title={!l.phoneE164 ? "Sem telemóvel válido" : l.status === "converted" ? "Já é extra" : l.status === "declined" ? "Sem interesse" : `Enviar “${template.label}”`}
-                            onClick={() => openContact([l.id])}
-                          >
-                            <MessageCircle className="h-3.5 w-3.5" />
-                          </Button>
-                          {!l.employeeId && l.status !== "declined" && (
-                            <Button size="sm" variant="outline" className="h-8 mr-1" title="Converter em extra (cria a ficha)" onClick={() => openConvert(l)}>
-                              <UserPlus className="h-3.5 w-3.5 mr-1" /> Converter
-                            </Button>
-                          )}
-                          <Button size="sm" variant="ghost" className="h-8 mr-1" title="Editar" onClick={() => openEdit(l)}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="sm" variant="ghost" className="h-8 text-red-600 hover:text-red-700" title="Arquivar" aria-label="Arquivar lead" onClick={() => setDeleteFor(l)}>
-                            <Archive className="h-3.5 w-3.5" />
-                          </Button>
-                          </>)}
+                          {leadActions(l)}
                         </td>
                       </tr>
                     );
