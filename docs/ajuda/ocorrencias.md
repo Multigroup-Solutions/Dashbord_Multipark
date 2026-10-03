@@ -25,6 +25,7 @@ As ocorrências registadas pelos agentes na **app Multipark** (vidro aberto, aci
 - A lista sugere quem conduzia: as pessoas das últimas ações nessa reserva nos 3 dias antes da ocorrência, com a última em primeiro. Quem não tem ficha aparece, mas não se escolhe (liga-o à ficha no RH).
 - Escolhe a pessoa, junta uma nota se quiseres e carrega em **Confirmar acidente** e depois em **Sim**. A pessoa fica com **−6000 pontos** na avaliação do dia da ocorrência (dia operacional, 03h–03h).
 - Só conta depois de confirmado. O team leader só confirma acidentes da sua equipa e ninguém confirma um acidente seu.
+- Só contam as ocorrências **a partir de 3 de outubro de 2026**. Numa ocorrência anterior aparece só a explicação e não há botão.
 - Na lista, a ocorrência fica com **Acidente confirmado**.
 - **Desfazer** pede o motivo e tira os pontos. Nada se apaga: a confirmação fica no histórico da ocorrência, com quem a desfez e porquê.
 - Se ninguém mexeu na reserva antes da ocorrência, quem gere a avaliação faz um ajuste em **Avaliação** (Acidentes / danos).

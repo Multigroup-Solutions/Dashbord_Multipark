@@ -51,6 +51,7 @@ import {
   perHourMetrics,
   round2,
   scoreOf,
+  withAccidentCutoff,
   type DayMetrics,
   type PerHourMetrics,
   type Score,
@@ -399,7 +400,8 @@ export async function loadEvaluatedDays(opts: {
   for (const { m, fullName, position } of metricRows) {
     let byType: Record<string, number> = {};
     try { byType = m.actionsByType ? JSON.parse(m.actionsByType) : {}; } catch { byType = {}; }
-    const base = baseFromRow(m);
+    // Acidentes antigos não contam (antes de ACCIDENTS_FROM_DAY), nem guardados de antes.
+    const base = withAccidentCutoff(m.day, baseFromRow(m));
     days.set(`${m.employeeId}|${m.day}`, {
       employeeId: m.employeeId, employeeName: fullName, position: position ?? null, day: m.day, shift: m.shift ?? null,
       city: m.city ?? null, isTeamLeader: m.isTeamLeader === 1, hoursSource: m.hoursSource ?? null, actionsByType: byType,
@@ -423,7 +425,7 @@ export async function loadEvaluatedDays(opts: {
   }
   for (const d of days.values()) {
     if (d.adjustments.length === 0) continue;
-    d.metrics = applyAdjustments(d.base, d.adjustments);
+    d.metrics = withAccidentCutoff(d.day, applyAdjustments(d.base, d.adjustments));
     d.score = scoreOf(d.metrics);
     d.perHour = perHourMetrics(d.metrics, d.score);
   }

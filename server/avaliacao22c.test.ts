@@ -70,7 +70,7 @@ import { MIGRATION_0425_STATEMENTS } from "./migrations/migration_0425";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const occ = (o: Partial<any> = {}) => ({
-  id: "occ-1", title: "Acidente", priority: "HIGH", resolved: false, createdAt: "2026-10-02T21:30:00.000Z", resolvedAt: null,
+  id: "occ-1", title: "Acidente", priority: "HIGH", resolved: false, createdAt: "2026-10-05T21:30:00.000Z", resolvedAt: null,
   createdByUserId: "mp-9", createdByName: "TL", resolvedById: null, resolvedByName: null, remarks: "bateu no pilar", lat: null, lng: null,
   attachment: null, attachmentUrl: null, bookingId: "bk-1", bookingCode: "A123", plate: "AA-00-BB", parkId: "p1", parkName: "Airpark", parkCity: "Lisboa", ...o,
 });
@@ -140,12 +140,13 @@ describe("D15 acidente = −6000 com confirmação do TL", () => {
     expect(EVALUATION_POINTS.accidentOrDamage).toBe(-6000);
     const identity = buildEvaluationIdentity({ employees: [], agentAliases: [], accountAliases: [] });
     const out = computeEmployeeDays({
-      startDay: "2026-10-01", endDay: "2026-10-02", identity, employees: new Map(), actions: [], ponto: [], assignments: [], incidents: [],
+      startDay: "2026-10-01", endDay: "2026-10-05", identity, employees: new Map(), actions: [], ponto: [], assignments: [], incidents: [],
       complaints: [], speedAlerts: [], penalties: [], rate: () => 0, tlWorkingDaysPerMonth: 22,
-      confirmedAccidents: [{ employeeId: 5, day: "2026-10-02" }, { employeeId: 5, day: "2026-09-30" }],
+      // 2 out é antes de 3 out (os antigos não contam); 30 set está fora do intervalo
+      confirmedAccidents: [{ employeeId: 5, day: "2026-10-05" }, { employeeId: 5, day: "2026-10-02" }, { employeeId: 5, day: "2026-09-30" }],
     });
     expect(out.rows).toHaveLength(1);
-    expect(out.rows[0]).toMatchObject({ employeeId: 5, day: "2026-10-02" });
+    expect(out.rows[0]).toMatchObject({ employeeId: 5, day: "2026-10-05" });
     expect(out.rows[0].metrics).toMatchObject({ accidents: 1, incidentsAgainst: 1 });
     expect(scoreOf(out.rows[0].metrics).totalPoints).toBe(-6000);
   });
@@ -182,10 +183,10 @@ describe("D15 acidente = −6000 com confirmação do TL", () => {
 
   it("TL confirma: grava a linha ativa, regista e recalcula esse dia depois de responder", async () => {
     const r = await confirmAccident(tl, occ() as any, { employeeId: 1, note: "  câmara do parque  " });
-    expect(r).toEqual({ id: 7, day: "2026-10-02" });
-    expect(state.inserted[0]).toMatchObject({ occurrenceId: "occ-1", activeKey: "occ-1", employeeId: 1, day: "2026-10-02", note: "câmara do parque", confirmedById: 30, confirmedByName: "Tiago TL" });
+    expect(r).toEqual({ id: 7, day: "2026-10-05" });
+    expect(state.inserted[0]).toMatchObject({ occurrenceId: "occ-1", activeKey: "occ-1", employeeId: 1, day: "2026-10-05", note: "câmara do parque", confirmedById: 30, confirmedByName: "Tiago TL" });
     expect(state.logs[0]).toMatchObject({ action: "create", entity: "evaluation_accident", entityId: 7 });
-    await vi.waitFor(() => expect(state.recomputed).toEqual([["2026-10-02", "2026-10-02"]]));
+    await vi.waitFor(() => expect(state.recomputed).toEqual([["2026-10-05", "2026-10-05"]]));
   });
 
   it("ninguém confirma um acidente seu; o TL só a equipa; condutor não confirma", async () => {
@@ -225,5 +226,33 @@ describe("D15 acidente = −6000 com confirmação do TL", () => {
     expect(page).toContain("<AccidentConfirmPanel occurrenceId={occ.id} />");
     expect(page).toContain("Acidente confirmado");
     expect(src("server/routers.ts")).toContain("accidentIds: [...accidents]");
+  });
+});
+
+describe("Jorge, 3 out: os acidentes antigos não contam — só a partir de agora", () => {
+  it("o dia de corte é 3 out 2026 e zera os acidentes antes dele (também ajustes e dias guardados)", async () => {
+    const { ACCIDENTS_FROM_DAY, withAccidentCutoff } = await import("../shared/evaluationRules");
+    expect(ACCIDENTS_FROM_DAY).toBe("2026-10-03");
+    const m = { ...emptyDayMetrics(), accidents: 1, complaints: 1 };
+    expect(withAccidentCutoff("2026-10-02", m)).toMatchObject({ accidents: 0, complaints: 1 });
+    expect(withAccidentCutoff("2026-10-03", m).accidents).toBe(1);
+    const engine = src("server/evaluationEngine.ts");
+    expect(engine).toContain("const base = withAccidentCutoff(m.day, baseFromRow(m));");
+    expect(engine).toContain("d.metrics = withAccidentCutoff(d.day, applyAdjustments(d.base, d.adjustments));");
+  });
+
+  it("uma ocorrência antes de 3 out não se confirma como acidente (o TL vê porquê)", async () => {
+    await expect(confirmAccident(tl, occ({ createdAt: "2026-10-02T21:30:00.000Z" }) as any, { employeeId: 1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(confirmAccident(tl, occ({ createdAt: "2026-10-02T21:30:00.000Z" }) as any, { employeeId: 1 })).rejects.toThrow("só contam a partir de 03/10/2026");
+    expect(state.inserted).toEqual([]);
+    // 3 out às 01h de Lisboa ainda é o dia operacional 2 out → antes do corte
+    await expect(confirmAccident(tl, occ({ createdAt: "2026-10-03T00:30:00.000Z" }) as any, { employeeId: 1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const panel = src("client/src/components/AccidentConfirmPanel.tsx");
+    expect(panel).toContain("os acidentes só contam na avaliação a partir desse dia");
+    expect(src("server/routers.ts")).toContain("tooOld: day != null && day < ACCIDENTS_FROM_DAY");
+  });
+
+  it("os TL confirmam (decisão mantida)", async () => {
+    await expect(confirmAccident(tl, occ() as any, { employeeId: 2 })).resolves.toMatchObject({ day: "2026-10-05" });
   });
 });

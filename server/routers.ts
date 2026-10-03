@@ -2955,7 +2955,8 @@ export const appRouter = router({
       const [records, canConfirm] = await Promise.all([acc.listAccidentRecords(occ.id), acc.canConfirmAccidents(ctx.user)]);
       let candidates: Awaited<ReturnType<typeof acc.accidentCandidates>> = [];
       let candidatesError: string | null = null;
-      if (canConfirm && occ.bookingId && occ.createdAt) {
+      const tooOldForAccident = (acc.accidentDayOf(occ) ?? "9999") < (await import("../shared/evaluationRules")).ACCIDENTS_FROM_DAY;
+      if (canConfirm && !tooOldForAccident && occ.bookingId && occ.createdAt) {
         try {
           const { readLiveHistory } = await import("./multiparkDb/historyLive");
           const to = new Date(Date.parse(occ.createdAt) + 60_000).toISOString().slice(0, 19).replace("T", " ");
@@ -2968,10 +2969,14 @@ export const appRouter = router({
           candidatesError = "Não foi possível ler os movimentos desta reserva na BD da Multipark.";
         }
       }
-      const { looksLikeAccident } = await import("../shared/evaluationRules");
+      const { looksLikeAccident, ACCIDENTS_FROM_DAY } = await import("../shared/evaluationRules");
+      const day = acc.accidentDayOf(occ);
       return {
         available: true as const,
-        day: acc.accidentDayOf(occ),
+        day,
+        // Os acidentes só contam a partir de ACCIDENTS_FROM_DAY (os antigos não contam).
+        countsFrom: ACCIDENTS_FROM_DAY,
+        tooOld: day != null && day < ACCIDENTS_FROM_DAY,
         looksLikeAccident: looksLikeAccident(occ),
         canConfirm,
         active: records.find((x) => !x.voidedAt) ?? null,

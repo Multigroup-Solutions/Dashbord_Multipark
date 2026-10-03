@@ -9,6 +9,7 @@
  */
 import { incidentCountsAgainstDriver } from "../shared/caseRules";
 import {
+  ACCIDENTS_FROM_DAY,
   DAMAGE_INCIDENT_TYPES,
   DELAY_TOLERANCE_MINUTES,
   LATE_SERVICE_MAX_MINUTES,
@@ -460,15 +461,16 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
     const reporter = identity.user(i.reportedBy);
     if (reporter != null) row(reporter, d).metrics.incidentsReported += 1;
     if (i.employeeId && incidentCountsAgainstDriver(i)) {
-      const m = row(i.employeeId, d).metrics;
-      m.incidentsAgainst += 1;
-      if (incidentIsAccident(i)) m.accidents += 1;
+      // Só informativo: as ocorrências antigas do dashboard já não dão acidente
+      // (os acidentes só contam a partir de ACCIDENTS_FROM_DAY, pelas confirmações do TL).
+      row(i.employeeId, d).metrics.incidentsAgainst += 1;
     }
   }
 
-  // ── Acidentes confirmados pelo TL nas ocorrências da app Multipark (D15)
+  // ── Acidentes confirmados pelo TL nas ocorrências da app Multipark (D15),
+  // só a partir de ACCIDENTS_FROM_DAY (os antigos não contam).
   for (const a of input.confirmedAccidents ?? []) {
-    if (!a.employeeId || !inRange(a.day, startDay, endDay)) continue;
+    if (!a.employeeId || !inRange(a.day, startDay, endDay) || a.day < ACCIDENTS_FROM_DAY) continue;
     const m = row(a.employeeId, a.day).metrics;
     m.incidentsAgainst += 1;
     m.accidents += 1;

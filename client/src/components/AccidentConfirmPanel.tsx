@@ -87,6 +87,16 @@ export function AccidentConfirmPanel({ occurrenceId }: { occurrenceId: string })
     );
   }
 
+  // Os acidentes só contam a partir de 3 out 2026 (os antigos não contam).
+  if (d.tooOld) {
+    return d.looksLikeAccident || d.history.length > 0 ? (
+      <div className="text-xs text-muted-foreground">
+        <p>Ocorrência anterior a {fmtDay(d.countsFrom)}: os acidentes só contam na avaliação a partir desse dia.</p>
+        {history}
+      </div>
+    ) : null;
+  }
+
   if (!d.canConfirm) {
     return d.looksLikeAccident ? (
       <p className="text-xs text-muted-foreground">Se foi um acidente, um team leader confirma aqui quem conduzia ({PTS} pontos na avaliação).</p>
