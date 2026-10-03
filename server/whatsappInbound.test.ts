@@ -124,10 +124,10 @@ describe("parseWebhookPayload — statuses", () => {
 
 describe("parseWebhookPayload — payloads malformados/vazios", () => {
   it("objeto vazio / null / estrutura errada → sem mensagens nem statuses", () => {
-    expect(parseWebhookPayload({})).toEqual({ messages: [], statuses: [], ignored: 0 });
-    expect(parseWebhookPayload(null)).toEqual({ messages: [], statuses: [], ignored: 0 });
-    expect(parseWebhookPayload({ entry: "nope" })).toEqual({ messages: [], statuses: [], ignored: 0 });
-    expect(parseWebhookPayload({ entry: [{ changes: [{}] }] })).toEqual({ messages: [], statuses: [], ignored: 0 });
+    expect(parseWebhookPayload({})).toEqual({ messages: [], statuses: [], preferences: [], ignored: 0 });
+    expect(parseWebhookPayload(null)).toEqual({ messages: [], statuses: [], preferences: [], ignored: 0 });
+    expect(parseWebhookPayload({ entry: "nope" })).toEqual({ messages: [], statuses: [], preferences: [], ignored: 0 });
+    expect(parseWebhookPayload({ entry: [{ changes: [{}] }] })).toEqual({ messages: [], statuses: [], preferences: [], ignored: 0 });
   });
 });
 

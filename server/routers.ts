@@ -5500,6 +5500,36 @@ export const appRouter = router({
         return conversationIdentity(input.conversationId);
       }),
       /**
+       * D34 (Jorge, 3 out 2026): a triagem PROPÕE e uma pessoa cria o caso
+       * (reclamação ou perdido) a partir da conversa. Um caso por conversa.
+       */
+      createCase: protectedProcedure
+        .input(z.object({ conversationId: z.number().int().positive(), kind: z.enum(["complaint", "lost"]) }))
+        .mutation(async ({ ctx, input }) => {
+          requireAccess(ctx.user, "whatsapp", "view");
+          requireAccess(ctx.user, input.kind === "complaint" ? "reclamacoes" : "perdidos", "edit");
+          const { conversationVisible } = await import("./whatsappInbox");
+          if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+          const { createCaseFromConversation, CaseProposalError } = await import("./whatsappCaseProposal");
+          try {
+            return await createCaseFromConversation(input.conversationId, input.kind, ctx.user.id, defaultScopedProjectId());
+          } catch (err: any) {
+            if (err instanceof CaseProposalError) throw new TRPCError({ code: err.code, message: err.message });
+            throw err;
+          }
+        }),
+      /** D34: "Não é" — a proposta de caso desta conversa não volta. */
+      dismissCaseProposal: protectedProcedure
+        .input(z.object({ conversationId: z.number().int().positive() }))
+        .mutation(async ({ ctx, input }) => {
+          requireAccess(ctx.user, "whatsapp", "edit");
+          const { conversationVisible } = await import("./whatsappInbox");
+          if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+          const { dismissCaseProposal } = await import("./whatsappCaseProposal");
+          await dismissCaseProposal(input.conversationId, ctx.user.id);
+          return { ok: true };
+        }),
+      /**
        * "WhatsApp" / "Ligar pelo WhatsApp" nas fichas (17f parte 3): a conversa
        * deste número. Não existe → cria-a (só com edição do WhatsApp) SEM enviar
        * nada. Com a ficha do colaborador, liga-o à conversa se o número for o dele.

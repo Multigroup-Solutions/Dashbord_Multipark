@@ -33,7 +33,7 @@ import {
   mediaKindForMessageType,
   type WhatsAppMediaKind,
 } from "../shared/whatsappMedia";
-import { detectOptIntent, OPT_IN_CONFIRMATION, OPT_OUT_CONFIRMATION, type OptIntent } from "../shared/whatsappOptOut";
+import { detectOptIntent, OPT_IN_CONFIRMATION, OPT_OUT_CONFIRMATION, optOutSourceForText, preferenceIntent, type OptIntent, type OptOutSource } from "../shared/whatsappOptOut";
 import { maskPhone } from "../shared/maskPhone";
 import { downloadMedia } from "./whatsapp";
 import { storagePut } from "./storage";
@@ -89,9 +89,16 @@ export interface ParsedStatusUpdate {
   category: string | null;
 }
 
+/** D35: o cliente parou/retomou as promoções na app do WhatsApp (`user_preferences`). */
+export interface ParsedPreference {
+  from: string; // wa_id (dígitos)
+  intent: OptIntent;
+}
+
 export interface ParsedWebhook {
   messages: ParsedInboundMessage[];
   statuses: ParsedStatusUpdate[];
+  preferences: ParsedPreference[];
   /** Eventos ignorados por serem de OUTRO phone_number_id. */
   ignored: number;
 }
@@ -198,6 +205,7 @@ export function parseInboundMedia(m: any): ParsedInboundMedia | null {
 export function parseWebhookPayload(payload: any, expectedPhoneNumberId?: string | null): ParsedWebhook {
   const messages: ParsedInboundMessage[] = [];
   const statuses: ParsedStatusUpdate[] = [];
+  const preferences: ParsedPreference[] = [];
   let ignored = 0;
   const expected = (expectedPhoneNumberId ?? "").trim() || null;
 
@@ -211,9 +219,15 @@ export function parseWebhookPayload(payload: any, expectedPhoneNumberId?: string
       const phoneNumberId = value?.metadata?.phone_number_id != null ? String(value.metadata.phone_number_id) : null;
       const msgs = Array.isArray(value.messages) ? value.messages : [];
       const sts = Array.isArray(value.statuses) ? value.statuses : [];
+      const prefs = Array.isArray(value.user_preferences) ? value.user_preferences : [];
       if (expected && phoneNumberId && phoneNumberId !== expected) {
-        ignored += msgs.length + sts.length;
+        ignored += msgs.length + sts.length + prefs.length;
         continue;
+      }
+      for (const p of prefs) {
+        const from = typeof p?.wa_id === "string" ? p.wa_id.replace(/\D/g, "") : "";
+        const intent = preferenceIntent(p);
+        if (from && intent) preferences.push({ from, intent });
       }
 
       const profileByWaId = new Map<string, string>();
@@ -271,7 +285,7 @@ export function parseWebhookPayload(payload: any, expectedPhoneNumberId?: string
     }
   }
 
-  return { messages, statuses, ignored };
+  return { messages, statuses, preferences, ignored };
 }
 
 function isMessageStatus(v: unknown): v is MessageStatus {
@@ -541,7 +555,7 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
   // reserva (até ~22 s) ficam no FIM — se a função morrer aos 60 s, o cron
   // re-tenta o ficheiro, mas um STOP perdido já não voltava.
   if (steps.has("opt_out") || steps.has("opt_in")) {
-    await applyOptIntent(db, steps.has("opt_out") ? "opt_out" : "opt_in", w.conversationId, phoneE164);
+    await applyOptIntent(db, steps.has("opt_out") ? "opt_out" : "opt_in", w.conversationId, phoneE164, optOutSourceForText(m.body));
   }
 
   // Resposta de um colaborador a um pedido de disponibilidade / aviso de
@@ -603,18 +617,25 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
  * (só se a janela estiver aberta — está, a pessoa acabou de escrever).
  * INICIAR → limpa. Repetir STOP não volta a responder.
  */
-async function applyOptIntent(db: Db, intent: OptIntent, conversationId: number, phoneE164: string): Promise<void> {
+async function applyOptIntent(
+  db: Db,
+  intent: OptIntent,
+  conversationId: number,
+  phoneE164: string,
+  source: OptOutSource = "stop",
+  opts: { confirm?: boolean } = {},
+): Promise<void> {
   try {
     const now = nowStr();
     const upd =
       intent === "opt_out"
         ? await db
             .update(whatsappConversations)
-            .set({ optedOutAt: now })
+            .set({ optedOutAt: now, optOutSource: source })
             .where(and(eq(whatsappConversations.id, conversationId), isNull(whatsappConversations.optedOutAt)))
         : await db
             .update(whatsappConversations)
-            .set({ optedOutAt: null })
+            .set({ optedOutAt: null, optOutSource: null })
             .where(and(eq(whatsappConversations.id, conversationId), isNotNull(whatsappConversations.optedOutAt)));
     const changed = Number((upd as any)[0]?.affectedRows ?? 0) > 0;
     await db
@@ -627,13 +648,41 @@ async function applyOptIntent(db: Db, intent: OptIntent, conversationId: number,
         ),
       );
     if (!changed) return;
-    console.log(`[WhatsAppWebhook] ${intent === "opt_out" ? "opt-out" : "opt-in"} de ${maskPhone(phoneE164)}`);
+    console.log(`[WhatsAppWebhook] ${intent === "opt_out" ? "opt-out" : "opt-in"} (${source}) de ${maskPhone(phoneE164)}`);
+    // O "Parar promoções" da própria app do WhatsApp já mostra a confirmação ao cliente.
+    if (opts.confirm === false) return;
     const { replyToConversation } = await import("./whatsappInbox");
     await replyToConversation(conversationId, intent === "opt_out" ? OPT_OUT_CONFIRMATION : OPT_IN_CONFIRMATION, null, {
       allowOptedOut: true,
     });
   } catch (err: any) {
     console.warn("[WhatsAppWebhook] opt-out/opt-in falhou:", String(err?.message ?? err).slice(0, 160));
+  }
+}
+
+/**
+ * D35: "Parar promoções" / "Retomar" na própria app do WhatsApp
+ * (`user_preferences`, marketing) conta como STOP / INICIAR — partilhado com o
+ * be-multipark (que recebe o mesmo evento pelo reencaminhamento). Número sem
+ * conversa: fica uma conversa resolvida e sem mensagens, só para o bloqueio
+ * valer se alguém lhe escrever depois. Sem resposta ao cliente (a app da Meta
+ * já confirma). Nunca lança.
+ */
+async function handlePreference(db: Db, p: ParsedPreference): Promise<void> {
+  try {
+    const phoneE164 = normalizePhoneE164(p.from) ?? `+${p.from}`;
+    if (p.intent === "opt_out") {
+      const now = nowStr();
+      await db
+        .insert(whatsappConversations)
+        .values({ phoneE164, status: "resolvido", statusChangedAt: now })
+        .onDuplicateKeyUpdate({ set: { phoneE164: sql`${whatsappConversations.phoneE164}` } });
+    }
+    const [c] = await db.select({ id: whatsappConversations.id }).from(whatsappConversations).where(eq(whatsappConversations.phoneE164, phoneE164)).limit(1);
+    if (!c) return;
+    await applyOptIntent(db, p.intent, c.id, phoneE164, "meta", { confirm: false });
+  } catch (err: any) {
+    console.warn("[WhatsAppWebhook] preferência de marketing falhou:", String(err?.message ?? err).slice(0, 160));
   }
 }
 
@@ -778,7 +827,7 @@ export async function processInboundWebhook(
 ): Promise<{ processed: number; deduped: number; statuses: number; ignored: number; triage: number[] }> {
   const parsed = parseWebhookPayload(payload, process.env.WHATSAPP_PHONE_NUMBER_ID);
   const triage: number[] = [];
-  if (!parsed.messages.length && !parsed.statuses.length) {
+  if (!parsed.messages.length && !parsed.statuses.length && !parsed.preferences.length) {
     return { processed: 0, deduped: 0, statuses: 0, ignored: parsed.ignored, triage };
   }
 
@@ -797,6 +846,8 @@ export async function processInboundWebhook(
   for (const s of parsed.statuses) {
     if (await handleStatus(db, s)) statuses++;
   }
+
+  for (const p of parsed.preferences) await handlePreference(db, p);
 
   return { processed, deduped, statuses, ignored: parsed.ignored, triage };
 }

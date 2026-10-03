@@ -2396,6 +2396,12 @@ export const whatsappConversations = mysqlTable("whatsapp_conversations", {
 	assignedUserId: int(),
 	// D28 (0440): atribuída a um grupo de cidade (lisboa/porto/faro) em vez de uma pessoa.
 	assignedCityKey: varchar({ length: 16 }),
+	// 0450 (D34): caso criado a partir desta conversa (complaint | lost) e "Não é" à proposta.
+	caseKind: varchar({ length: 16 }),
+	caseId: int(),
+	caseProposalDismissedAt: timestamp({ mode: 'string' }),
+	// 0450 (D35): de onde veio o "não quer mensagens" — stop | promocoes (botão/texto) | meta (Parar promoções no WhatsApp).
+	optOutSource: varchar({ length: 16 }),
 	statusChangedAt: timestamp({ mode: 'string' }),
 	resolvedAt: timestamp({ mode: 'string' }),
 	/** 1.ª mensagem recebida ainda sem resposta nossa (SLA); null = respondida. */

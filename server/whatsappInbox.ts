@@ -13,7 +13,7 @@ import { employees, users, whatsappConversations, whatsappMessages } from "../dr
 import { sendTextMessage } from "./whatsapp";
 import { firstNameOf } from "../shared/whatsappTemplate";
 import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, previewFields, reserveOutboundMessage } from "./whatsappStore";
-import type { ConversationStatus } from "../shared/whatsappConversation";
+import { caseProposalKind, type CaseProposalKind, type ConversationStatus } from "../shared/whatsappConversation";
 import { INBOX_LIST_LIMIT } from "../shared/whatsappInboxView";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -513,6 +513,12 @@ export interface ConversationThread {
   linkedClientEmail: string | null;
   aiIntent: string | null;
   aiUrgency: string | null;
+  /** D34: caso que a triagem propõe criar (null = nenhum) e o caso já criado. */
+  caseProposal: CaseProposalKind | null;
+  caseKind: string | null;
+  caseId: number | null;
+  /** D35: de onde veio o "não quer mensagens" (stop | promocoes | meta). */
+  optOutSource: string | null;
   messages: ThreadMessage[];
 }
 
@@ -549,6 +555,10 @@ export async function getConversationThread(conversationId: number, limit = 100)
       linkedClientEmail: whatsappConversations.linkedClientEmail,
       aiIntent: whatsappConversations.aiIntent,
       aiUrgency: whatsappConversations.aiUrgency,
+      caseKind: whatsappConversations.caseKind,
+      caseId: whatsappConversations.caseId,
+      caseProposalDismissedAt: whatsappConversations.caseProposalDismissedAt,
+      optOutSource: whatsappConversations.optOutSource,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -604,6 +614,10 @@ export async function getConversationThread(conversationId: number, limit = 100)
     linkedClientEmail: conv.linkedClientEmail,
     aiIntent: conv.aiIntent ?? null,
     aiUrgency: conv.aiUrgency ?? null,
+    caseProposal: caseProposalKind(conv),
+    caseKind: conv.caseKind ?? null,
+    caseId: conv.caseId ?? null,
+    optOutSource: conv.optOutSource ?? null,
     // Nunca devolve o URL do storage: só se há ficheiro (o link assinado é pedido à parte).
     messages: rows
       .map(({ mediaKey, mediaUrl, mediaAttempts, ...m }) => {

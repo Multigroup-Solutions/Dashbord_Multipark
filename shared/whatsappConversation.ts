@@ -198,3 +198,60 @@ export function fillQuickReply(body: string, firstName: string | null | undefine
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
+
+// ─── D34: a triagem propõe criar o caso (Jorge, 3 out 2026) ────────────────
+
+export const CASE_PROPOSAL_KINDS = ["complaint", "lost"] as const;
+export type CaseProposalKind = (typeof CASE_PROPOSAL_KINDS)[number];
+
+export const CASE_PROPOSAL_LABEL: Record<CaseProposalKind, { noun: string; create: string; link: (id: number) => string }> = {
+  complaint: { noun: "uma reclamação", create: "Criar reclamação", link: (id) => `/reclamacoes?id=${id}` },
+  lost: { noun: "um perdido/achado", create: "Criar perdido", link: (id) => `/perdidos-achados/caso/${id}` },
+};
+
+export const isCaseProposalKind = (v: unknown): v is CaseProposalKind =>
+  typeof v === "string" && (CASE_PROPOSAL_KINDS as readonly string[]).includes(v);
+
+/**
+ * Que caso propor nesta conversa (null = nenhum). PURA.
+ * Só clientes (colaboradores ficam no RH), só reclamação ou perdido/achado,
+ * e nunca depois de criado ou de alguém dizer "Não é".
+ */
+export function caseProposalKind(c: {
+  aiIntent: string | null | undefined;
+  employeeId: number | null | undefined;
+  caseId: number | null | undefined;
+  caseProposalDismissedAt: string | null | undefined;
+}): CaseProposalKind | null {
+  if (c.employeeId != null || c.caseId != null || c.caseProposalDismissedAt) return null;
+  if (c.aiIntent === "reclamacao") return "complaint";
+  if (c.aiIntent === "perdido_achado") return "lost";
+  return null;
+}
+
+/**
+ * Título e descrição do caso a partir das mensagens do CLIENTE (as últimas,
+ * mais recentes no fim). PURA.
+ */
+export function caseDraftFromMessages(
+  msgs: readonly { direction: "in" | "out"; body: string | null | undefined }[],
+  maxChars = 1500,
+): { title: string; description: string } {
+  const lines = msgs
+    .filter((m) => m.direction === "in")
+    .map((m) => String(m.body ?? "").replace(/\s+/g, " ").trim())
+    .filter((t) => t && !/^\[[^\]]*\]$/.test(t));
+  const kept: string[] = [];
+  let total = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (total + lines[i].length > maxChars) break;
+    total += lines[i].length + 1;
+    kept.unshift(lines[i]);
+  }
+  const first = kept[0] ?? "";
+  const title = `WhatsApp: ${first.length > 70 ? `${first.slice(0, 69)}…` : first || "mensagem do cliente"}`;
+  const description = kept.length
+    ? `Mensagens do cliente no WhatsApp:\n${kept.map((t) => `— ${t}`).join("\n")}`
+    : "Criado a partir de uma conversa de WhatsApp (sem texto do cliente).";
+  return { title, description };
+}

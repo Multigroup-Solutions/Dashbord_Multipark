@@ -55,7 +55,24 @@ const OPT_OUT_PHRASES: RegExp[] = [
   /\bnao (?:me )?(?:enviem|mandem|contactem) mais\b/,
 ];
 
-const OPT_IN_WHOLE = new Set(["iniciar", "start", "comecar", "reiniciar"]);
+/**
+ * D35 (Jorge, 3 out 2026): "Parar promoções" — o botão dos templates de
+ * marketing do be-multipark, ou escrito — é um STOP como os outros (partilhado).
+ */
+const PROMO_OUT_WHOLE = new Set([
+  "parar promocoes",
+  "parar as promocoes",
+  "parar promocao",
+  "stop promocoes",
+  "stop promotions",
+  "parar publicidade",
+  "sem promocoes",
+  "nao quero promocoes",
+  "cancelar promocoes",
+]);
+const PROMO_OUT_PHRASE = /\b(?:parar|parem|pare|cancelar|deixar de receber|nao quero(?: receber)?)(?: mais)?(?: as| estas| essas| vossas)? (?:promocoes|publicidade|campanhas)\b/;
+
+const OPT_IN_WHOLE = new Set(["iniciar", "start", "comecar", "reiniciar", "retomar promocoes", "resume promotions"]);
 
 /**
  * Intenção de opt-out/opt-in de uma mensagem recebida; null = mensagem normal.
@@ -65,7 +82,8 @@ export function detectOptIntent(body: string | null | undefined): OptIntent | nu
   const t = normalizeOptText(body);
   if (!t) return null;
   if (OPT_IN_WHOLE.has(t)) return "opt_in";
-  if (OPT_OUT_WHOLE.has(t)) return "opt_out";
+  if (OPT_OUT_WHOLE.has(t) || PROMO_OUT_WHOLE.has(t)) return "opt_out";
+  if (t.length <= 160 && PROMO_OUT_PHRASE.test(t)) return "opt_out";
   // Frases só em mensagens curtas-ish: um texto longo a citar "cancelar a
   // subscrição" de outra coisa é mais provável conversa do que pedido.
   if (t.length <= 160 && OPT_OUT_PHRASES.some((re) => re.test(t))) return "opt_out";
@@ -78,3 +96,31 @@ export const OPT_OUT_CONFIRMATION =
 
 /** Resposta a quem volta a ligar os envios. */
 export const OPT_IN_CONFIRMATION = "Combinado — voltará a receber as nossas mensagens.";
+
+/** De onde veio o "não quer mensagens" (whatsapp_conversations.optOutSource, 0450). */
+export type OptOutSource = "stop" | "promocoes" | "meta";
+
+/** "promocoes" quando o pedido é o "Parar promoções" (botão ou escrito); senão "stop". PURA. */
+export function optOutSourceForText(body: string | null | undefined): Exclude<OptOutSource, "meta"> {
+  const t = normalizeOptText(body);
+  return PROMO_OUT_WHOLE.has(t) || PROMO_OUT_PHRASE.test(t) ? "promocoes" : "stop";
+}
+
+export const OPT_OUT_SOURCE_LABEL: Record<OptOutSource, string> = {
+  stop: "pediu STOP",
+  promocoes: "carregou em «Parar promoções»",
+  meta: "parou as promoções no WhatsApp",
+};
+
+/**
+ * `user_preferences` da Meta (o cliente parou/retomou as mensagens de
+ * marketing na própria app do WhatsApp) → intenção. Só a categoria
+ * `marketing_messages`. PURA.
+ */
+export function preferenceIntent(p: { category?: unknown; value?: unknown }): OptIntent | null {
+  if (String(p?.category ?? "").toLowerCase() !== "marketing_messages") return null;
+  const v = String(p?.value ?? "").toLowerCase();
+  if (v === "stop") return "opt_out";
+  if (v === "resume") return "opt_in";
+  return null;
+}
