@@ -271,7 +271,7 @@ export interface PressureView {
   /** 22d: condutor por carro por escalão de pessoas × hora cheia (cidades). */
   crew: PressureCrewRow[];
   /** 22d: por grupo-cidade — percentil usado e escalões com o máximo da tabela (D12). */
-  cities: Record<string, { city: "lisbon" | "porto" | "faro"; percentile: CyclePercentile; bands: CrewMeasureBand[] }>;
+  cities: Record<string, { city: "lisbon" | "porto" | "faro"; percentile: CyclePercentile; bands: CrewMeasureBand[]; useMeasured?: boolean }>;
 }
 
 const numOrNull = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -315,13 +315,13 @@ export function mapStoredRow(r: Record<string, unknown>): { slot?: PressureSlot;
 }
 
 /** Última janela completa (ou, sem nenhuma completa, a mais recente). `groups` limita (âmbito de cidade). */
-export async function getPressureView(allowedGroups?: (key: string) => boolean, o: { crewRules?: CrewRulesMap | null; percentiles?: TimesPercentileMap | null } = {}): Promise<PressureView> {
+export async function getPressureView(allowedGroups?: (key: string) => boolean, o: { crewRules?: CrewRulesMap | null; percentiles?: TimesPercentileMap | null; useMeasured?: Partial<Record<"lisbon" | "porto" | "faro", boolean>> | null } = {}): Promise<PressureView> {
   const crewRules = o.crewRules ?? DEFAULT_CREW_RULES;
   const percentiles = o.percentiles ?? DEFAULT_TIMES_PERCENTILE;
   const cities: PressureView["cities"] = {};
   for (const [key, city] of [["cidade_lisboa", "lisbon"], ["cidade_porto", "porto"], ["cidade_faro", "faro"]] as const) {
     if (allowedGroups && !allowedGroups(key)) continue;
-    cities[key] = { city, percentile: percentiles[city] as CyclePercentile, bands: crewMeasureBands(crewRules[city] ?? DEFAULT_CREW_RULES[city]) };
+    cities[key] = { city, percentile: percentiles[city] as CyclePercentile, bands: crewMeasureBands(crewRules[city] ?? DEFAULT_CREW_RULES[city]), useMeasured: o.useMeasured?.[city] === true };
   }
   const empty: PressureView = { available: false, windowEnd: null, windowStart: null, windowDays: PRESSURE_WINDOW_DAYS, computedAt: null, groups: [], slots: [], loads: [], crew: [], cities };
   const { getDb } = await import("./db");
@@ -380,4 +380,38 @@ export async function getPressureView(allowedGroups?: (key: string) => boolean, 
     crew,
     cities,
   };
+}
+
+// ─── 26c: escalões medidos para a escala ─────────────────────────────────────
+
+const CREW_ROWS_CACHE_MS = 5 * 60_000;
+let crewRowsCache: { at: number; rows: PressureCrewRow[] } | null = null;
+
+/**
+ * Escalões medidos (kind 'crew', todas as cidades) da última janela completa,
+ * para a escala usar os tempos medidos (26c). Cache de 5 min no processo (a
+ * previsão corre muitas vezes). Falha a ler / sem tabela / sem janela → []
+ * (a escala usa a tabela). Nunca lança.
+ */
+export async function loadLatestCrewRows(): Promise<PressureCrewRow[]> {
+  if (crewRowsCache && Date.now() - crewRowsCache.at < CREW_ROWS_CACHE_MS) return crewRowsCache.rows;
+  let rows: PressureCrewRow[] = [];
+  try {
+    const { getDb } = await import("./db");
+    const db = await getDb();
+    if (db) {
+      const latest = rowsOf(await db.execute(sql`SELECT DATE_FORMAT(windowEnd, '%Y-%m-%d') AS w
+        FROM ops_pressure_stats WHERE parkGroup = ${PRESSURE_DONE_GROUP} ORDER BY windowEnd DESC LIMIT 1`))[0];
+      if (latest?.w) {
+        const raw = rowsOf(await db.execute(sql`SELECT parkGroup, kind, loadBucket, rush, bandLabel, cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90
+          FROM ops_pressure_stats WHERE windowEnd = ${String(latest.w)} AND kind = 'crew' ORDER BY id LIMIT 500`));
+        rows = raw.map((r) => mapStoredRow(r).crew).filter((c): c is PressureCrewRow => !!c);
+      }
+    }
+  } catch (err: any) {
+    console.warn("[extras-pressure] escalões medidos:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+    rows = [];
+  }
+  crewRowsCache = { at: Date.now(), rows };
+  return rows;
 }

@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -44,7 +44,9 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 7. Os dados vêm da BD da Multipark **desde 3 de abril de 2026** e a janela **cresce todos os dias**: nunca se deita fora o que já foi medido, para no próximo ano haver o ano inteiro. O dia de início muda-se em Definições → Parâmetros → **Tempos medidos desde**.
    - O recálculo é diário a partir das 04:45 (tarefa automática **Extras-Dia: pressão**).
    - Ficam de fora os **Parques que a operação não faz**; uma mudança nessa lista só conta a partir do cálculo seguinte.
-   - Por agora **só se mede**: a escala e a previsão continuam a usar a tabela de máximos. Isto é a base do cálculo automático de extras.
+   - **Escala com os tempos medidos** (Definições → Parâmetros, por cidade; **desligado** por omissão): desligado, a escala e a previsão usam só a tabela de máximos, como até aqui.
+   - Ligado numa cidade, a previsão, a escala automática e a estimativa passam a usar o tempo por carro **medido nas horas cheias** (com o percentil da cidade), mas **nunca acima do máximo** da tabela.
+   - Um escalão com menos de 30 serviços medidos continua com o valor da tabela. Na previsão, a linha da capacidade diz em cada escalão se é **medido** (com o máximo ao lado) ou **tabela**.
 
 **Escalar a equipa** (Team Leader, Supervisor e acima)
 1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar** e escolhe a pessoa e as horas de início e de fim.

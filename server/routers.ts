@@ -4816,11 +4816,12 @@ export const appRouter = router({
       const { getSetting } = await import("./appSettings");
       const names = scopedCityNames();
       const keys = names === undefined ? null : names.map((n) => matchCityKey(n)).filter((k): k is NonNullable<typeof k> => !!k);
-      const [crewRules, percentiles] = await Promise.all([
+      const [crewRules, percentiles, useMeasured] = await Promise.all([
         getSetting("extras.crewRules").catch(() => null),
         getSetting("extras.timesPercentile").catch(() => null),
+        getSetting("extras.useMeasuredTimes").catch(() => null),
       ]);
-      return getPressureView((key) => groupAllowedForCities(key, keys), { crewRules, percentiles });
+      return getPressureView((key) => groupAllowedForCities(key, keys), { crewRules, percentiles, useMeasured });
     }),
   }),
 
