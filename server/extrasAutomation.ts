@@ -1085,6 +1085,23 @@ export async function existingFichaFor(db: any, lead: { phoneE164: string | null
   return found ? { ...found, via, redirected } : null;
 }
 
+/**
+ * D39: NIF e números dos documentos do candidato que faltam na ficha. Nunca
+ * substitui o que a ficha já tem. PURA.
+ */
+export function leadIdentityPatch(
+  lead: { nif?: string | null; idDocNumber?: string | null; drivingLicenseNumber?: string | null },
+  emp: { nif: string | null; idDocNumber: string | null; drivingLicenseNumber: string | null } | null,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!emp) return out;
+  const empty = (v: string | null) => v == null || v.trim() === "";
+  if (lead.nif && empty(emp.nif)) out.nif = lead.nif;
+  if (lead.idDocNumber && empty(emp.idDocNumber)) out.idDocNumber = lead.idDocNumber;
+  if (lead.drivingLicenseNumber && empty(emp.drivingLicenseNumber)) out.drivingLicenseNumber = lead.drivingLicenseNumber;
+  return out;
+}
+
 export async function convertLeadToExtra(
   leadId: number, projectId: number, userId: number | null, opts: { confirmReactivate?: boolean } = {},
 ): Promise<ConvertLeadResult> {
@@ -1167,6 +1184,10 @@ export async function convertLeadToExtra(
       if (emp && !emp.phone && lead.phone) patch.phone = lead.phone;
       if (Object.keys(patch).length) await db.update(employees).set(patch as any).where(eq(employees.id, employeeId));
     }
+
+    // D39: o que a IA leu nos anexos do email (NIF, BI/CC, carta) passa para a ficha — só campos vazios.
+    const idPatch = leadIdentityPatch(lead as any, (await db.select({ nif: employees.nif, idDocNumber: employees.idDocNumber, drivingLicenseNumber: employees.drivingLicenseNumber }).from(employees).where(eq(employees.id, employeeId)).limit(1))[0] ?? null);
+    if (Object.keys(idPatch).length) await db.update(employees).set(idPatch as any).where(eq(employees.id, employeeId));
 
     const convertedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
     await db.update(extraLeads).set({ status: "converted", employeeId, projectId, convertedAt }).where(eq(extraLeads.id, leadId));

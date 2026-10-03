@@ -12,3 +12,4 @@ export * from "./assistant";
 export * from "./ops";
 export * from "./mail";
 export * from "./crmIdentity";
+export * from "./hrAttachment";

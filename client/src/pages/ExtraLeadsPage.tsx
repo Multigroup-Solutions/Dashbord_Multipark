@@ -13,6 +13,7 @@
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { LeadAiReadPanel } from "@/components/leads/LeadAiReadPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -85,6 +86,11 @@ type LeadRow = {
   lastInboundAt: string | null;
   createdAt: string;
   employeeId?: number | null;
+  /** D39: lido pela IA nos anexos do email do RH (NIF/números só chegam ao RH). */
+  aiSummary?: string | null;
+  nif?: string | null;
+  idDocNumber?: string | null;
+  drivingLicenseNumber?: string | null;
 };
 
 /** `city` = id do nó de cidade ("" = sem cidade) — só na edição. */
@@ -839,6 +845,7 @@ function LeadsTab() {
               <Label>Notas</Label>
               <Input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} placeholder="Ex.: indicado pelo Rui; disponível fins de semana" maxLength={512} />
             </div>
+            {editing && <LeadAiReadPanel lead={editing} />}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditOpen(false)} disabled={busy}>Cancelar</Button>

@@ -9,6 +9,8 @@ export interface CommsAiSweepReport {
   reviews?: unknown;
   whatsapp?: unknown;
   lostFound?: unknown;
+  /** D39: anexos dos emails do RH (interruptor AI_HR_EMAIL_ATTACHMENTS). */
+  rhAttachments?: unknown;
   errors: string[];
 }
 
@@ -25,5 +27,6 @@ export async function runCommsAiSweep(opts: { deadlineAt?: number } = {}): Promi
   await step("complaints", async () => (await import("./complaintTriage")).triagePendingComplaints({ limit: 3, deadlineAt }));
   await step("reviews", async () => (await import("./reviewAutoDraft")).draftPendingReviewReplies({ limit: 3, deadlineAt }));
   await step("lostFound", async () => (await import("./lostFoundMatch")).runLostFoundMatchSweep({ limit: 3, deadlineAt }));
+  await step("rhAttachments", async () => (await import("./rhAttachmentReader")).runRhAttachmentSweep({ limit: 2, deadlineAt }));
   return report;
 }

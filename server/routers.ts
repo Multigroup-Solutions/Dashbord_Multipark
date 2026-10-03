@@ -5251,10 +5251,30 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "view");
         const { listExtraLeads } = await import("./extraLeads");
         try {
-          return await listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null, source: input?.source ?? null, archived: input?.archived ?? false });
+          const rows = await listExtraLeads({ status: input?.status ?? null, search: input?.search ?? null, source: input?.source ?? null, archived: input?.archived ?? false });
+          // D39: NIF e números dos documentos (lidos pela IA) só o RH vê.
+          const { canSeeLeadIdentity, redactLeadIdentity } = await import("../shared/rhAttachments");
+          return canSeeLeadIdentity(ctx.user.role) ? rows : rows.map(redactLeadIdentity);
         } catch (err: any) {
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: err?.message || "Erro a ler os leads" });
         }
+      }),
+
+    /** D39: anexos do email do RH lidos pela IA para este candidato (o que se leu fica só para o RH). */
+    attachmentReads: protectedProcedure
+      .input(z.object({ leadId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "leads_extras", "view");
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível" });
+        const { extraLeads } = await import("../drizzle/schema");
+        const { eq: eqOp } = await import("drizzle-orm");
+        const [lead] = await db.select({ projectId: extraLeads.projectId }).from(extraLeads).where(eqOp(extraLeads.id, input.leadId)).limit(1);
+        const { assertLeadVisible } = await import("./extraLeads");
+        try { assertLeadVisible(lead); } catch { throw new TRPCError({ code: "NOT_FOUND", message: "Lead não encontrado" }); }
+        const { attachmentReadsForLead } = await import("./rhAttachmentReader");
+        return attachmentReadsForLead(input.leadId);
       }),
 
     // Funil: origem × cidade × semana ISO (new→contacted→replied→converted) +
@@ -5301,7 +5321,9 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "edit");
         const { createExtraLead } = await import("./extraLeads");
         try {
-          return await createExtraLead(input, ctx.user.id);
+          const row = await createExtraLead(input, ctx.user.id);
+          const { canSeeLeadIdentity, redactLeadIdentity } = await import("../shared/rhAttachments");
+          return canSeeLeadIdentity(ctx.user.role) ? row : redactLeadIdentity(row);
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao criar lead" });
         }
@@ -5325,7 +5347,10 @@ export const appRouter = router({
         const { updateExtraLead } = await import("./extraLeads");
         const { id, ...patch } = input;
         try {
-          return await updateExtraLead(id, patch, ctx.user.id);
+          const row = await updateExtraLead(id, patch, ctx.user.id);
+          // D39: NIF e números dos documentos só o RH vê.
+          const { canSeeLeadIdentity, redactLeadIdentity } = await import("../shared/rhAttachments");
+          return canSeeLeadIdentity(ctx.user.role) ? row : redactLeadIdentity(row);
         } catch (err: any) {
           if (err instanceof TRPCError) throw err;
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao atualizar lead" });

@@ -42,7 +42,9 @@ export type AiFlag =
   | "AI_GBP_POSTS"
   | "AI_PAGESPEED_EXPLAIN"
   // Base de conhecimento (manuais do Drive/uploads): índice por embeddings e leitura de PDFs.
-  | "AI_KNOWLEDGE";
+  | "AI_KNOWLEDGE"
+  // D39: anexos dos emails do RH (CV, documentos) → candidato + resumo para quem entrevista.
+  | "AI_HR_EMAIL_ATTACHMENTS";
 
 export interface AiFeatureDef {
   label: string;
@@ -106,6 +108,8 @@ export const AI_FEATURES = {
   // de PDFs sem Drive (lite). Sem IA, a pesquisa cai para FULLTEXT/palavras.
   knowledge_embed: { label: "Base de conhecimento: índice (embeddings)", flag: "AI_KNOWLEDGE", tier: "lite", essential: false },
   knowledge_extract: { label: "Base de conhecimento: ler PDFs", flag: "AI_KNOWLEDGE", tier: "lite", essential: false },
+  // D39 (Jorge, 3 out 2026): todos os anexos dos emails do RH passam pela IA → ficha do candidato + resumo.
+  hr_email_attachments: { label: "RH: ler os anexos dos emails (CV)", flag: "AI_HR_EMAIL_ATTACHMENTS", tier: "lite", essential: false },
   healthcheck: { label: "Teste da ligação", flag: null, tier: "lite", essential: true },
 } as const satisfies Record<string, AiFeatureDef>;
 
