@@ -92,6 +92,7 @@ import {
   previewTemplateBody,
   resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
+import { broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery } from "@shared/contactSearch";
 import { contactPrefsLabel } from "@shared/contactPrefs";
 import {
@@ -2086,12 +2087,14 @@ export function AvailabilitySection() {
     name: string | null;
     phone: string;
     phoneE164: string | null;
-    status: "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone";
+    status: "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone" | "recent_template";
     error?: string;
   };
   const [waResult, setWaResult] = useState<
-    null | { total: number; sent: number; failed: number; invalidPhone: number; optedOut: number; recipients: WaRecipient[] }
+    null | { total: number; sent: number; failed: number; invalidPhone: number; optedOut: number; recentTemplate?: number; recipients: WaRecipient[] }
   >(null);
+  // D32: enviar a várias pessoas passa por um passo "Confirmar".
+  const [waConfirm, setWaConfirm] = useState(false);
 
   // Código único de cada envio (17b): carregar outra vez depois de um corte
   // (60 s da Vercel) retoma a mesma difusão — quem já recebeu não recebe 2×.
@@ -2103,7 +2106,7 @@ export function AvailabilitySection() {
       setWaResult(r);
       if (!v.testPhone) setWaSentReal(true);
       toast.success(
-        `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}${r.optedOut ? `, ${r.optedOut} não querem mensagens` : ""}`,
+        `WhatsApp: ${r.sent} enviados${r.failed ? `, ${r.failed} falhas` : ""}${r.invalidPhone ? `, ${r.invalidPhone} sem número` : ""}${r.optedOut ? `, ${r.optedOut} não querem mensagens` : ""}${r.recentTemplate ? `, ${r.recentTemplate} já o tinham recebido nas últimas 24 h` : ""}`,
       );
       overview.refetch();
     },
@@ -2121,6 +2124,8 @@ export function AvailabilitySection() {
     : shownExtras;
   const waValidCount = waTargets.filter(e => !!e.phoneE164).length;
   const waInvalidCount = waTargets.length - waValidCount;
+  // Mudou o template, o campo ou o alvo → volta a pedir confirmação.
+  useEffect(() => { setWaConfirm(false); }, [waTemplateId, waParam2, waValidCount]);
 
   // Pré-visualização: o texto REAL do template aprovado na Meta (não uma cópia
   // local que possa divergir). Só é pedido com o diálogo aberto; o servidor tem
@@ -2444,7 +2449,7 @@ export function AvailabilitySection() {
           <Button
             variant="outline"
             className="border-green-600 text-green-700 hover:bg-green-50 dark:hover:bg-green-950"
-            onClick={() => { setWaResult(null); setWaSentReal(false); setWaSendKey(globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`); setWaOpen(true); }}
+            onClick={() => { setWaResult(null); setWaSentReal(false); setWaConfirm(false); setWaSendKey(globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`); setWaOpen(true); }}
           >
             <MessageCircle className="h-4 w-4 mr-2" />
             {selectedIds.size > 0 ? `WhatsApp aos ${selectedIds.size} selecionados` : `WhatsApp aos ${shownExtras.length} filtrados`}
@@ -2952,13 +2957,14 @@ export function AvailabilitySection() {
                   <div className="text-sm font-medium">
                     {waResult.sent} enviados · {waResult.failed} falhas · {waResult.invalidPhone} sem número
                     {waResult.optedOut ? ` · ${waResult.optedOut} não querem mensagens` : ""}
+                    {waResult.recentTemplate ? ` · ${waResult.recentTemplate} já o tinham recebido nas últimas 24 h` : ""}
                   </div>
                   <div className="max-h-48 overflow-y-auto text-xs divide-y">
                     {waResult.recipients.map((r, i) => (
                       <div key={i} className="flex items-center gap-2 py-1">
                         {r.status === "sent" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />}
                         {r.status === "failed" && <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />}
-                        {(r.status === "invalid_phone" || r.status === "opted_out" || r.status === "duplicate_phone") && (
+                        {(r.status === "invalid_phone" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template") && (
                           <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
                         )}
                         <span className="flex-1 truncate">
@@ -2973,18 +2979,28 @@ export function AvailabilitySection() {
               )}
             </div>
 
+            {waConfirm && !waSentReal && (
+              <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                {broadcastConfirmText(waTemplate.label, waValidCount)}
+              </div>
+            )}
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setWaOpen(false)} disabled={broadcast.isPending}>
-                Fechar
+              <Button variant="ghost" onClick={() => (waConfirm ? setWaConfirm(false) : setWaOpen(false))} disabled={broadcast.isPending}>
+                {waConfirm && !waSentReal ? "Voltar" : "Fechar"}
               </Button>
               <Button
                 className="bg-green-700 hover:bg-green-800 text-white"
                 disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal}
-                onClick={() => submitBroadcast()}
+                onClick={() => {
+                  // D32: a várias pessoas, primeiro "Confirmar".
+                  if (!waConfirm && needsBroadcastConfirm(waValidCount)) { setWaConfirm(true); return; }
+                  setWaConfirm(false);
+                  submitBroadcast();
+                }}
                 title={waSentReal ? "Já enviado — fecha e abre o diálogo para um envio novo" : undefined}
               >
                 {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <MessageCircle className="h-4 w-4 mr-2" />}
-                {waSentReal ? "Enviado" : `Enviar a ${waValidCount} extra(s)`}
+                {waSentReal ? "Enviado" : waConfirm ? `Confirmar envio a ${waValidCount}` : `Enviar a ${waValidCount} extra(s)`}
               </Button>
             </DialogFooter>
           </DialogContent>

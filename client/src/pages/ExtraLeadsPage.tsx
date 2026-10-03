@@ -31,6 +31,7 @@ import { toast } from "sonner";
 import { AlertTriangle, Archive, ArchiveRestore, Clock, Filter, Mail, MapPin, MessageCircle, Pencil, Phone, Plus, Search, Send, UserPlus, X } from "lucide-react";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { findWhatsAppTemplate, LEAD_RECRUITMENT_TEMPLATE_ID } from "@shared/whatsappTemplate";
+import { RECENT_TEMPLATE_LABEL, broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery } from "@shared/contactSearch";
 import { can } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -263,6 +264,8 @@ function LeadsTab() {
   });
   // Código único deste envio (17b): carregar outra vez (rede/corte a meio) retoma, não duplica.
   const [contactSendKey, setContactSendKey] = useState("");
+  // D32: enviar a vários leads passa por um passo "Confirmar".
+  const [contactConfirm, setContactConfirm] = useState(false);
   const contact = trpc.extraLeads.contact.useMutation({
     onSuccess: (r) => {
       setContactResult(r);
@@ -307,6 +310,7 @@ function LeadsTab() {
   function openContact(ids: number[]) {
     setContactIds(ids);
     setContactResult(null);
+    setContactConfirm(false);
     setContactSendKey(globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
     setContactOpen(true);
   }
@@ -888,12 +892,12 @@ function LeadsTab() {
                       className={
                         r.status === "sent"
                           ? "bg-emerald-100 text-emerald-800"
-                          : r.status === "no_phone" || r.status === "invalid_phone" || r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone"
+                          : r.status === "no_phone" || r.status === "invalid_phone" || r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template"
                             ? "bg-amber-100 text-amber-800"
                             : "bg-red-100 text-red-800"
                       }
                     >
-                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : r.status === "opted_out" ? "não quer mensagens" : r.status === "duplicate_phone" ? "número repetido" : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
+                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : r.status === "opted_out" ? "não quer mensagens" : r.status === "duplicate_phone" ? "número repetido" : r.status === "recent_template" ? RECENT_TEMPLATE_LABEL : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
                     </Badge>
                     <span className="font-medium">{r.fullName}</span>
                     {r.error && <span className="text-muted-foreground break-words">— {r.error}</span>}
@@ -903,18 +907,28 @@ function LeadsTab() {
             </div>
           )}
 
+          {contactConfirm && !contactResult && (
+            <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+              {broadcastConfirmText(template.label, contactWithPhone)}
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setContactOpen(false)} disabled={contact.isPending}>
-              {contactResult ? "Fechar" : "Cancelar"}
+            <Button variant="outline" onClick={() => (contactConfirm && !contactResult ? setContactConfirm(false) : setContactOpen(false))} disabled={contact.isPending}>
+              {contactResult ? "Fechar" : contactConfirm ? "Voltar" : "Cancelar"}
             </Button>
             {!contactResult && (
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white"
                 disabled={contact.isPending || contactWithPhone === 0}
-                onClick={() => contact.mutate({ leadIds: contactIds, templateId: template.id, sendKey: contactSendKey || undefined })}
+                onClick={() => {
+                  // D32: a vários leads, primeiro "Confirmar".
+                  if (!contactConfirm && needsBroadcastConfirm(contactWithPhone)) { setContactConfirm(true); return; }
+                  setContactConfirm(false);
+                  contact.mutate({ leadIds: contactIds, templateId: template.id, sendKey: contactSendKey || undefined });
+                }}
               >
                 {contact.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-                Enviar a {contactWithPhone}
+                {contactConfirm ? `Confirmar envio a ${contactWithPhone}` : `Enviar a ${contactWithPhone}`}
               </Button>
             )}
           </DialogFooter>

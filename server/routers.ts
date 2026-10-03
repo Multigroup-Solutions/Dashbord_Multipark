@@ -5461,6 +5461,8 @@ export const appRouter = router({
             note: input.note ?? null,
             testPhone: input.testPhone ?? null,
             createdById: ctx.user.id,
+            // D32: difusão de uma pessoa — quem recebeu este template há menos de 24 h fica de fora.
+            blockRecentSameTemplate: !input.testPhone,
           });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro no envio WhatsApp" });
@@ -5472,7 +5474,7 @@ export const appRouter = router({
           entityId: summary.broadcastId ?? undefined,
           details: input.testPhone
             ? `WhatsApp TESTE → ${(await import("../shared/maskPhone")).maskPhone(input.testPhone)} (template ${input.templateName})`
-            : `WhatsApp broadcast template ${input.templateName}: ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número`,
+            : `WhatsApp broadcast template ${input.templateName}: ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número${summary.recentTemplate ? `, ${summary.recentTemplate} já o tinham recebido nas últimas 24 h` : ""}`,
         });
         return summary;
       }),

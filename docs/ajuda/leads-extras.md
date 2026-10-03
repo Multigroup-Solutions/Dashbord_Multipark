@@ -11,6 +11,7 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 **Leads**
 - Contactos que ainda não são extras (do site, de email ou criados à mão). Convida-os por WhatsApp com o template "Seja motorista" e acompanha quem responde.
 - Seleciona vários na tabela para mudar o estado ou a cidade de uma vez, ou para enviar o WhatsApp em lote.
+- Enviar a dois leads ou mais pede primeiro **"Confirmar envio a N"**. Quem recebeu o mesmo template nas últimas 24 h (à mão ou no lembrete automático) fica de fora, com "já recebeu (24 h)".
 - O **Funil** mostra os leads das últimas 12 semanas, por origem e por cidade.
 - A faixa **Atenção** mostra os novos sem contacto há mais de 24 h e os contactados sem resposta há mais de 3 dias. Há também um resumo diário no sino, por cidade.
 - Com **Lembretes das leads de extras** ligado (Definições → Automações), os contactados sem resposta recebem 1 lembrete automático. Com **Resposta automática às leads** ligado (vem desligado), quem responde recebe o link da candidatura.
