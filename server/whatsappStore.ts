@@ -23,8 +23,20 @@ export type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 export type DbLike = Pick<Db, "select" | "insert" | "update" | "delete" | "execute">;
 
 export type MessageStatus = "sent" | "delivered" | "read" | "failed";
-/** Estado de uma linha de saída: + 'pending' (a enviar) e 'unknown' (sem confirmação da Meta, 0350). */
-export type OutboundStatus = MessageStatus | "pending" | "unknown";
+/**
+ * Estado de uma linha de saída: + 'pending' (a enviar), 'unknown' (sem
+ * confirmação da Meta, 0350) e 'accepted' (D33, 0445: a Meta aceitou o pedido,
+ * mas ainda não disse que a mensagem saiu — só o webhook 'sent' faz "Enviado").
+ */
+export type OutboundStatus = MessageStatus | "pending" | "unknown" | "accepted";
+
+/** A Meta aceitou o envio (o que antes se gravava logo como 'sent'). */
+export const ACCEPTED_STATUS = "accepted" as const;
+
+/** Estados de saída em que a mensagem saiu (ou foi aceite) e ainda não falhou. PURA. */
+export function isOutboundOk(status: string | null | undefined): boolean {
+  return status === "accepted" || status === "sent" || status === "delivered" || status === "read";
+}
 
 // ─── Puras ──────────────────────────────────────────────────────────────────
 
@@ -62,16 +74,19 @@ export function sqlLaterTs(column: SQLWrapper, ts: string) {
 }
 
 const STATUS_RANK: Record<MessageStatus, number> = { sent: 1, delivered: 2, read: 3, failed: 4 };
+/** Antes de qualquer status da Meta: a enviar / sem resposta (0) e aceite (0.5, D33). */
+const PRE_STATUS_RANK: Record<string, number> = { pending: 0, unknown: 0, accepted: 0.5 };
 
 /**
  * Status a gravar dado o atual e o recebido; null = não mexer. PURA.
  * Não regride (delivered não sobrepõe read); `failed` ganha sempre e é final.
+ * Aceite → enviado → entregue → lido (D33).
  */
 export function nextStatus(current: string | null | undefined, incoming: MessageStatus): MessageStatus | null {
-  const cur = (current ?? "pending") as MessageStatus | "pending";
+  const cur = current ?? "pending";
   if (cur === "failed") return null;
   if (incoming === "failed") return "failed";
-  const curRank = cur === "pending" ? 0 : STATUS_RANK[cur] ?? 0;
+  const curRank = PRE_STATUS_RANK[cur] ?? STATUS_RANK[cur as MessageStatus] ?? 0;
   return STATUS_RANK[incoming] > curRank ? incoming : null;
 }
 
@@ -221,7 +236,8 @@ export interface OutboundRow {
   type: "text" | "template";
   body: string | null;
   templateName?: string | null;
-  status: "sent" | "failed";
+  /** 'accepted' = a Meta aceitou (D33); o webhook passa-a a enviado/entregue/lido. */
+  status: "accepted" | "failed";
   errorDetail?: string | null;
   sentById?: number | null;
   broadcastId?: number | null;
@@ -256,7 +272,7 @@ export async function recordOutboundMessage(db: DbLike, row: OutboundRow): Promi
       lastDirection: p.lastDirection,
       lastType: p.lastType,
       // Resposta enviada → a conversa deixa de estar "por responder" (SLA 0097).
-      ...(row.status === "sent" ? { awaitingSince: null, slaAlertedAt: null } : {}),
+      ...(row.status === "accepted" ? { awaitingSince: null, slaAlertedAt: null } : {}),
     })
     .where(eq(whatsappConversations.id, row.conversationId));
   await reconcilePendingStatus(db, row.waMessageId);
@@ -366,11 +382,12 @@ export async function finishOutboundMessage(
   row: { conversationId: number; type: "text" | "template"; body: string | null; templateName?: string | null },
   res: { ok: true; waMessageId: string } | { ok: false; error: string; uncertain?: boolean; code?: number },
 ): Promise<OutboundStatus> {
-  const status: OutboundStatus = res.ok ? "sent" : res.uncertain ? "unknown" : "failed";
+  // D33: a Meta aceitar o pedido não é "Enviado" — fica 'accepted' até o webhook dizer 'sent'.
+  const status: OutboundStatus = res.ok ? ACCEPTED_STATUS : res.uncertain ? "unknown" : "failed";
   const errorCode = !res.ok && typeof res.code === "number" ? res.code : null;
   await db
     .update(whatsappMessages)
-    .set(res.ok ? { status: "sent", waMessageId: res.waMessageId, errorDetail: null } : { status: status as "unknown" | "failed", errorDetail: res.error, errorCode })
+    .set(res.ok ? { status: ACCEPTED_STATUS, waMessageId: res.waMessageId, errorDetail: null } : { status: status as "unknown" | "failed", errorDetail: res.error, errorCode })
     .where(eq(whatsappMessages.id, id));
   const now = nowStr();
   const p = previewFields({ body: row.body, type: row.type, templateName: row.templateName, direction: "out" });
@@ -381,7 +398,7 @@ export async function finishOutboundMessage(
       lastPreview: p.lastPreview,
       lastDirection: p.lastDirection,
       lastType: p.lastType,
-      ...(status === "sent" ? { awaitingSince: null, slaAlertedAt: null } : {}),
+      ...(res.ok ? { awaitingSince: null, slaAlertedAt: null } : {}),
     })
     .where(eq(whatsappConversations.id, row.conversationId));
   if (res.ok) await reconcilePendingStatus(db, res.waMessageId);

@@ -2,7 +2,7 @@
 modulo: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
-palavras: whatsapp, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, arquivar, ficheiro, documento, imagem, pesquisa
+palavras: whatsapp, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, arquivar, ficheiro, documento, imagem, pesquisa
 ---
 # WhatsApp
 
@@ -25,6 +25,10 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 3. Abre a conversa e escreve a resposta. No computador, **Enter** envia e **Shift+Enter** muda de linha; **no telemóvel, Enter muda de linha** e só o botão verde envia. Há **Respostas rápidas** para textos frequentes.
 4. **Janela de 24 h**: só podes escrever texto livre até 24 h depois da última mensagem do contacto. Com a janela fechada, usa **Enviar template**; o texto livre só volta quando o contacto responder.
 5. **Sugerir resposta com IA** põe uma sugestão na caixa de texto — revê sempre antes de enviar. A IA nunca envia.
+
+**Estado de cada mensagem enviada** (o ícone ao lado da hora; passa o rato para ver o nome)
+- 🕓 **A enviar** → ✓ esbatido **Aceite** (a Meta aceitou o pedido, mas ainda não avisou que saiu) → ✓ **Enviado** → ✓✓ **Entregue** → ✓✓ azul **Lido**. Ou ✗ **Falhou**.
+- "Aceite" não é "Enviado": se ficar muito tempo em Aceite, a Meta ainda não confirmou que a mensagem saiu.
 
 **Mensagem "sem confirmação"**
 - Se a Meta não responder ao envio (rede, prazo), a mensagem fica com ⚠ **"Sem confirmação da Meta: pode ter chegado ao cliente"**. Não aparece como falhada porque pode ter saído.
@@ -59,7 +63,9 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Só com templates aprovados. Quem pediu STOP nunca recebe.
 - Se o envio for cortado a meio (rede, prazo) e carregares outra vez no **mesmo** diálogo, **retoma**: quem já recebeu não recebe outra vez. Depois de um envio completo, o botão fica "Enviado".
 - Uma tabela filtrada sem ninguém não envia a toda a gente — dá "Nenhum destinatário".
-- "Enviado" quer dizer **aceite pela Meta**. Se a Meta disser depois que falhou (ex.: número sem WhatsApp), a contagem da difusão corrige-se e o aviso de escala dessa pessoa passa a "falhou".
+- **Confirmar**: a duas pessoas ou mais, o botão pede primeiro **"Confirmar envio a N"**, com o template e quantas pessoas. **Voltar** cancela.
+- **O mesmo template não volta ao mesmo número antes de 24 h**: quem já o recebeu (de outra difusão ou de um envio automático) fica de fora, com "já recebeu (24 h)". Um envio que falhou de certeza não conta. O envio de teste não tem este limite. Os envios automáticos do Extras-Dia (aviso de escala, disponibilidade, morada e regras) têm as suas próprias regras e podem reenviar (ex.: a escala mudou); o lembrete automático aos leads respeita as 24 h.
+- Na contagem da difusão, "enviados" quer dizer **aceites pela Meta**. Se a Meta disser depois que falhou (ex.: número sem WhatsApp), a contagem da difusão corrige-se e o aviso de escala dessa pessoa passa a "falhou".
 - Templates com cabeçalho de imagem, vídeo, documento ou texto com variável são recusados antes de enviar (a Meta recusava cada destinatário).
 
 **Respostas rápidas**

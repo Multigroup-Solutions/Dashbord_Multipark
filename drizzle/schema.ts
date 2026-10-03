@@ -2463,7 +2463,8 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	/** phone_number_id da Meta que recebeu a mensagem (metadata do webhook, 0094). */
 	phoneNumberId: varchar({ length: 32 }),
 	// 'unknown' (0350): a Meta não respondeu e não se sabe se saiu — reenviar pede confirmação.
-	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed', 'unknown']).default('pending').notNull(),
+	// 'accepted' (0445, D33): a Meta aceitou o pedido; só o webhook 'sent' faz "Enviado".
+	status: mysqlEnum(['pending', 'sent', 'delivered', 'read', 'failed', 'unknown', 'accepted']).default('pending').notNull(),
 	errorDetail: text(),
 	sentById: int(),
 	broadcastId: int(),

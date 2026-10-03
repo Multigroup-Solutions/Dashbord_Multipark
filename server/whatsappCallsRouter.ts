@@ -233,7 +233,7 @@ export const whatsappCallsRouter = router({
           type: windowOpen ? "text" : "template",
           body: windowOpen ? `📞 Pedido de autorização para ligar: ${body}` : "📞 Pedido de autorização para ligar",
           templateName: windowOpen ? null : tplName,
-          status: sent.ok ? "sent" : "failed",
+          status: sent.ok ? "accepted" : "failed",
           errorDetail: sent.ok ? null : sent.error,
           sentById: ctx.user.id,
         }).catch(() => undefined);

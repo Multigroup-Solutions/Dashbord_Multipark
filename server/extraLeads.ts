@@ -420,7 +420,7 @@ export async function contactExtraLeads(opts: {
 
   const sent = results.filter((r) => r.status === "sent").length;
   const noPhone = results.filter((r) => r.status === "no_phone").length;
-  const skipped = results.filter((r) => r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone").length;
+  const skipped = results.filter((r) => r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template").length;
   const failed = results.length - sent - noPhone - skipped;
   await logActivity({
     userId: opts.createdById ?? 0,

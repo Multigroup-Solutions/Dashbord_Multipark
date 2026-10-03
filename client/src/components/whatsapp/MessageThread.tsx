@@ -204,21 +204,41 @@ function SystemPill({ children }: { children: ReactNode }) {
 
 // ─── Ícone de status (só mensagens OUT) ─────────────────────────────────────
 
+/**
+ * D33 (Jorge): a Meta aceitar o pedido é "Aceite"; só o aviso da Meta de que
+ * saiu faz "Enviado". Depois entregue → lido, ou falhou.
+ */
+const OUT_STATUS_LABEL: Record<string, string> = {
+  pending: "A enviar",
+  accepted: "Aceite pela Meta — ainda sem aviso de que saiu",
+  sent: "Enviado",
+  delivered: "Entregue",
+  read: "Lido",
+  failed: "Falhou",
+  unknown: "Sem confirmação",
+};
+
 function StatusIcon({ status }: { status: string }) {
-  switch (status) {
-    case "sent":
-      return <Check className="h-3 w-3" aria-label="Enviado" />;
-    case "delivered":
-      return <CheckCheck className="h-3 w-3" aria-label="Entregue" />;
-    case "read":
-      return <CheckCheck className="h-3 w-3 text-sky-500" aria-label="Lido" />;
-    case "failed":
-      return <XCircle className="h-3 w-3 text-red-500" aria-label="Falhou" />;
-    case "unknown":
-      return <AlertTriangle className="h-3 w-3 text-amber-600" aria-label="Sem confirmação" />;
-    default:
-      return <Clock className="h-3 w-3" aria-label="A enviar" />;
-  }
+  const label = OUT_STATUS_LABEL[status] ?? OUT_STATUS_LABEL.pending;
+  const icon = (() => {
+    switch (status) {
+      case "accepted":
+        return <Check className="h-3 w-3 opacity-40" />;
+      case "sent":
+        return <Check className="h-3 w-3" />;
+      case "delivered":
+        return <CheckCheck className="h-3 w-3" />;
+      case "read":
+        return <CheckCheck className="h-3 w-3 text-sky-500" />;
+      case "failed":
+        return <XCircle className="h-3 w-3 text-red-500" />;
+      case "unknown":
+        return <AlertTriangle className="h-3 w-3 text-amber-600" />;
+      default:
+        return <Clock className="h-3 w-3" />;
+    }
+  })();
+  return <span role="img" aria-label={label} title={label} className="inline-flex">{icon}</span>;
 }
 
 // ─── Bolha ──────────────────────────────────────────────────────────────────

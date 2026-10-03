@@ -11,7 +11,8 @@ export const MIGRATION_0350_NAME = "0350_whatsapp_send_once";
 export const MIGRATION_0350_STATEMENTS: string[] = [
   "ALTER TABLE `whatsapp_messages` ADD COLUMN `clientRequestId` VARCHAR(64) NULL",
   "ALTER TABLE `whatsapp_messages` ADD UNIQUE KEY `uq_whatsapp_messages_client_request` (`clientRequestId`)",
-  "ALTER TABLE `whatsapp_messages` MODIFY COLUMN `status` ENUM('pending','sent','delivered','read','failed','unknown') NOT NULL DEFAULT 'pending'",
+  // Com 'accepted' (0445, D33): este MODIFY corre em cada arranque e não pode encolher o ENUM.
+  "ALTER TABLE `whatsapp_messages` MODIFY COLUMN `status` ENUM('pending','sent','delivered','read','failed','unknown','accepted') NOT NULL DEFAULT 'pending'",
   "ALTER TABLE `whatsapp_quick_replies` ADD COLUMN `archivedAt` TIMESTAMP NULL DEFAULT NULL",
   "ALTER TABLE `whatsapp_quick_replies` ADD COLUMN `archivedById` INT NULL",
 ];

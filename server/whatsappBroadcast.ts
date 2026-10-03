@@ -52,9 +52,14 @@ const BROADCAST_CONCURRENCY = 4;
 
 /**
  * `opted_out` = o número pediu STOP (não se envia); `duplicate_phone` = o mesmo
- * número já estava noutro destinatário deste envio (1 mensagem por número).
+ * número já estava noutro destinatário deste envio (1 mensagem por número);
+ * `recent_template` = já recebeu ESTE template nas últimas 24 h (D32) — não sai outra vez.
  */
-export type RecipientStatus = "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone";
+export type RecipientStatus = "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone" | "recent_template";
+
+/** D32 (Jorge, 3 out 2026): o mesmo template não volta ao mesmo número antes de 24 h. */
+export const RECENT_TEMPLATE_HOURS = 24;
+export const RECENT_TEMPLATE_ERROR = "Já recebeu este template nas últimas 24 h — não foi enviado outra vez.";
 
 /** Destinatário resolvido, ANTES de qualquer envio (pure). */
 export interface ResolvedRecipient {
@@ -86,6 +91,8 @@ export interface BroadcastSummary {
   invalidPhone: number;
   /** Não enviados porque o número pediu STOP. */
   optedOut: number;
+  /** Não enviados porque já tinham recebido este template nas últimas 24 h (D32). */
+  recentTemplate?: number;
   recipients: BroadcastRecipient[];
 }
 
@@ -117,6 +124,12 @@ export interface SendBroadcastOptions {
   note?: string | null;
   testPhone?: string | null; // modo teste: envia SÓ a este número
   createdById?: number | null;
+  /**
+   * D32: difusão feita por uma pessoa — quem recebeu este template nas últimas
+   * 24 h fica de fora. Os envios automáticos (escala, disponibilidade, regras)
+   * têm o seu próprio controlo e podem reenviar (ex.: a escala mudou).
+   */
+  blockRecentSameTemplate?: boolean;
 }
 
 /**
@@ -423,6 +436,8 @@ interface DispatchConfig {
   clientRequestId?: string | null;
   /** Código do envio em massa (17b): cada destinatário fica com `recipientRequestKey`. */
   sendKey?: string | null;
+  /** Números que já receberam este template nas últimas 24 h noutro envio (D32). */
+  recentTemplate?: Set<string>;
 }
 
 /**
@@ -478,6 +493,10 @@ async function dispatchOne(
       if (dup.kind === "sent") return { ...r, status: "sent", waMessageId: dup.waMessageId ?? undefined, resumed: true };
       if (dup.kind === "in_doubt") return { ...r, status: "failed", error: dup.error, resumed: true };
     }
+  }
+  // D32: o mesmo template já lhe chegou nas últimas 24 h (noutro envio) → não sai outra vez.
+  if (r.phoneE164 && cfg.recentTemplate?.has(r.phoneE164)) {
+    return { ...r, status: "recent_template", error: RECENT_TEMPLATE_ERROR };
   }
   // Template sem parâmetros → nenhum valor de body (com ou sem metadados). Sem
   // isto, o modo "sem inspeção" mandava o nome como {{1}} e a Meta recusava.
@@ -686,12 +705,16 @@ export function duplicatePhoneIndexes(list: readonly { phoneE164: string | null 
   });
 }
 
-/** Contagens finais de um envio. PURA. Duplicados não são falha (a pessoa recebeu pelo outro). */
+/**
+ * Contagens finais de um envio. PURA. Duplicados não são falha (a pessoa
+ * recebeu pelo outro), nem quem já tinha recebido o template há menos de 24 h.
+ */
 export function summarize(recipients: readonly BroadcastRecipient[]): {
   sent: number;
   failed: number;
   invalidPhone: number;
   optedOut: number;
+  recentTemplate: number;
   notSent: number;
 } {
   const count = (st: RecipientStatus) => recipients.filter((r) => r.status === st).length;
@@ -699,7 +722,25 @@ export function summarize(recipients: readonly BroadcastRecipient[]): {
   const invalidPhone = count("invalid_phone");
   const optedOut = count("opted_out");
   const failed = count("failed");
-  return { sent, failed, invalidPhone, optedOut, notSent: failed + invalidPhone + optedOut };
+  const recentTemplate = count("recent_template");
+  return { sent, failed, invalidPhone, optedOut, recentTemplate, notSent: failed + invalidPhone + optedOut };
+}
+
+/**
+ * Números que receberam `templateName` nas últimas 24 h noutro envio (D32).
+ * Conta o que pode ter chegado (a enviar, aceite, enviado, entregue, lido, sem
+ * confirmação); um envio que falhou de certeza não bloqueia. As mensagens do
+ * PRÓPRIO envio (retoma, 17b) não contam.
+ */
+async function recentTemplatePhones(db: PreparedSend["db"], templateName: string, broadcastId: number): Promise<Set<string>> {
+  const res = (await db.execute(sql`SELECT DISTINCT c.phoneE164 AS phone
+      FROM whatsapp_messages m JOIN whatsapp_conversations c ON c.id = m.conversationId
+     WHERE m.direction = 'out' AND m.type = 'template' AND m.templateName = ${templateName}
+       AND m.status <> 'failed'
+       AND m.createdAt >= NOW() - INTERVAL ${RECENT_TEMPLATE_HOURS} HOUR
+       AND (m.broadcastId IS NULL OR m.broadcastId <> ${broadcastId})`)) as any;
+  const rows = (Array.isArray(res?.[0]) ? res[0] : res) as Array<{ phone: string | null }>;
+  return new Set(rows.map((r) => r.phone).filter((p): p is string => !!p));
 }
 
 /**
@@ -820,11 +861,13 @@ export async function sendTemplateToContacts(opts: {
     includeFormLink: false,
     weekStart: null,
     sendKey: opts.sendKey ?? null,
+    // D32: aos leads (à mão ou no lembrete automático) o mesmo template não volta antes de 24 h.
+    recentTemplate: await recentTemplatePhones(db, prep.templateName, broadcastId),
   };
   const recipients = await dispatchAll(db, resolved, () => cfg);
   const sum = summarize(recipients);
   await updateBroadcastCounts(db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
-  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients };
+  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recentTemplate: sum.recentTemplate, recipients };
 }
 
 /**
@@ -976,7 +1019,8 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
 
   const { employeesWithNoAuto } = await import("./contactPrefs");
   const noAutoEmployees = await employeesWithNoAuto(resolved.map((r) => r.employeeId).filter((id): id is number => id != null), "whatsapp");
-  const base = { ...baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME), sendKey: opts.sendKey ?? null, noAutoEmployees };
+  const recentTemplate = opts.blockRecentSameTemplate ? await recentTemplatePhones(db, prep.templateName, broadcastId) : undefined;
+  const base = { ...baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME), sendKey: opts.sendKey ?? null, noAutoEmployees, recentTemplate };
   const recipients = await dispatchAll(db, resolved, (r) =>
     r.employeeId != null && perRecipient?.[r.employeeId] ? { ...base, bodyParam2Override: perRecipient[r.employeeId] } : base,
   );
@@ -996,5 +1040,5 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     invalidEmployeeIds: invalidEmployeeIds.length ? invalidEmployeeIds : null,
   });
 
-  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients };
+  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recentTemplate: sum.recentTemplate, recipients };
 }

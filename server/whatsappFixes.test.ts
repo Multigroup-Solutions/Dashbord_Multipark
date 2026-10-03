@@ -287,7 +287,7 @@ describe("dedup de números num envio", () => {
   it("summarize: duplicados não são falha; opt-out conta como não enviado", () => {
     const r = (status: BroadcastRecipient["status"]): BroadcastRecipient => ({ employeeId: 1, name: "x", phone: "1", phoneE164: "+1", status });
     expect(summarize([r("sent"), r("duplicate_phone"), r("opted_out"), r("failed"), r("invalid_phone")])).toEqual({
-      sent: 1, failed: 1, invalidPhone: 1, optedOut: 1, notSent: 3,
+      sent: 1, failed: 1, invalidPhone: 1, optedOut: 1, recentTemplate: 0, notSent: 3,
     });
   });
 });

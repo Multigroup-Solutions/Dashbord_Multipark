@@ -39,6 +39,7 @@ import { downloadMedia } from "./whatsapp";
 import { storagePut } from "./storage";
 import {
   applyStatusToMessage,
+  isOutboundOk,
   laterTimestamp,
   previewFields,
   reconcilePendingStatus,
@@ -752,7 +753,8 @@ async function afterOutboundFailed(db: Db, messageId: number, prevStatus: string
     .where(eq(whatsappMessages.id, messageId))
     .limit(1);
   if (!m?.broadcastId) return;
-  if (prevStatus === "sent" || prevStatus === "delivered" || prevStatus === "read") {
+  // 'accepted' (D33) também contava como enviada na difusão.
+  if (isOutboundOk(prevStatus)) {
     await db.execute(sql`UPDATE whatsapp_broadcasts SET sentCount = GREATEST(sentCount - 1, 0), failedCount = failedCount + 1 WHERE id = ${m.broadcastId}`);
   }
   if (m.employeeId == null) return;
