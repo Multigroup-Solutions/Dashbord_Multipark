@@ -256,10 +256,15 @@ inválida. O detalhe do fornecedor nunca chega ao ecrã. Cada pedido tem um praz
 novas tentativas, com espera exponencial. Uma resposta fora do schema tem uma
 nova tentativa.
 
-## 7. Assistente (chat da equipa)
+## 7. Multis — assistente (chat da equipa)
 
-Botão redondo no canto inferior direito de todas as páginas. Abre um painel
-(folha de baixo no telemóvel, painel lateral no computador) com:
+Chama-se **o Multis** (Jorge, 3 out 2026) e apresenta-se com "Olá! Eu sou o Multis.
+Em que posso ajudar?"; o ícone é o P da Multipark com uma
+estrelinha de IA. Botão redondo no canto inferior direito de todas as páginas.
+No telemóvel abre uma folha de baixo; no computador fica um **painel acoplado à
+direita** (400 px) que encolhe o conteúdo, não bloqueia o resto do ecrã, não
+fecha ao mudar de página e volta à mesma conversa (estado em `localStorage`:
+`mp.multis.open`, `mp.multis.conversationId`). Tem:
 
 - **"Como se usa"**: a ajuda está em `docs/ajuda/*.md`, um ficheiro curto por
   módulo. Depois de mudar um ficheiro, corre `pnpm tsx scripts/gen-ajuda.ts`

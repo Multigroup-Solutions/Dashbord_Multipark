@@ -113,3 +113,9 @@ export function assistantSuggestions(path: string | null | undefined, user: User
 
 /** Limite por omissão da pergunta (o servidor manda o valor em vigor). */
 export const ASSISTANT_DEFAULT_MAX_INPUT = 1000;
+
+/** Nome da IA da equipa (Jorge, 3 out 2026): "Multis" — como "Multi" com um S. */
+export const ASSISTANT_NAME = "Multis";
+
+/** Largura do painel do Multis no computador (fica acoplado à direita). */
+export const MULTIS_PANEL_WIDTH_PX = 400;

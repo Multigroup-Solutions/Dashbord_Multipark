@@ -2,7 +2,7 @@
 modulo: pesquisa_conhecimento
 titulo: Pesquisa global (Ctrl+K) e Base de conhecimento
 rotas: /formacao/conhecimento
-palavras: pesquisa global, ctrl+k, ctrl k, cmd k, paleta, procurar em tudo, pesquisas recentes, perguntar à ia, base de conhecimento, manuais do drive, pasta do drive, procedimentos da empresa, carregar documento, carregar manual, documento duplicado, voltar a incluir, excluir documento, sincronizar pastas, visibilidade do documento, fontes, citações, perguntas a partir de documento
+palavras: pesquisa global, ctrl+k, ctrl k, cmd k, paleta, procurar em tudo, pesquisas recentes, perguntar à ia, perguntar ao multis, base de conhecimento, manuais do drive, pasta do drive, procedimentos da empresa, carregar documento, carregar manual, documento duplicado, voltar a incluir, excluir documento, sincronizar pastas, visibilidade do documento, fontes, citações, perguntas a partir de documento
 ---
 # Pesquisa global (Ctrl+K) e Base de conhecimento
 
@@ -14,7 +14,7 @@ Uma só caixa para procurar em tudo o que podes ver: reservas, clientes e contac
 2. Escreve pelo menos 2 letras: nº de reserva, matrícula (com ou sem hífens), nome, email, telefone, assunto de um email ou o nome de uma página ("nova reclamação", "escala de amanhã").
 3. Usa **↑/↓** para escolher e **Enter** para abrir. **Esc** fecha.
 4. Cada grupo mostra até 5 resultados; **Ver todos** abre a página com a pesquisa já escrita (ex.: Reservas, Tarefas, Emails, WhatsApp, Contactos).
-5. **Perguntar à IA** (no fim da lista) abre o assistente com o que escreveste.
+5. **Perguntar ao Multis** (no fim da lista) abre o Multis (o assistente de IA da equipa) com o que escreveste.
 6. Sem nada escrito aparecem as tuas **pesquisas recentes** (ficam só neste browser; **Limpar pesquisas recentes** apaga-as).
 
 Regras:

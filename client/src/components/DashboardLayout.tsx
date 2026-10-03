@@ -103,6 +103,8 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { trpc } from "@/lib/trpc";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
+import { useMultisState } from "@/components/assistant/multisStore";
+import { MULTIS_PANEL_WIDTH_PX } from "@shared/assistant";
 import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
 import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
 import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
@@ -487,6 +489,9 @@ function DashboardLayoutContent({
     return path === "/comunicacao" ? mailBadgeQ.data.shared : path === "/comunicacao/meu-email" ? mailBadgeQ.data.personal : 0;
   };
   const isMobile = useIsMobile();
+  // Multis acoplado à direita (computador): o conteúdo encolhe para não ficar por baixo dela.
+  const multis = useMultisState();
+  const multisDocked = multis.open && !isMobile;
 
   // Acordeão: um grupo aberto de cada vez. Segue a rota ativa (também quando a
   // navegação vem de fora da sidebar, ex.: notificações/links internos).
@@ -722,7 +727,7 @@ function DashboardLayoutContent({
         />
       </div>
 
-      <SidebarInset>
+      <SidebarInset style={multisDocked ? { marginRight: MULTIS_PANEL_WIDTH_PX } : undefined}>
         {/* Topbar */}
         <div className="flex border-b h-16 items-center justify-between bg-white px-4 lg:px-6 sticky top-0 z-40">
           <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -915,7 +920,7 @@ function DashboardLayoutContent({
         </div>
 
         {/* pb extra: a última linha da página não fica por baixo da tab bar
-            (mobile) nem do botão flutuante do assistente */}
+            (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
           {routeDecision.kind === "no_access" ? (
             <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout} />
@@ -936,7 +941,7 @@ function DashboardLayoutContent({
         </main>
         {/* Tab bar mobile (design Multipark Mobile) — só em ecrãs pequenos */}
         <MobileTabBar />
-        {/* Assistente (chat): botão flutuante em todas as páginas */}
+        {/* Multis (IA): botão flutuante em todas as páginas; no PC fica acoplada à direita */}
         <AssistantWidget />
         {/* Pesquisa global: paleta Ctrl/Cmd+K */}
         <GlobalSearch />
