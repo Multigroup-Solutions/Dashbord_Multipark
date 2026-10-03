@@ -11,7 +11,8 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 **De onde vêm os clientes**
 - As reservas são lidas **ao vivo da base de dados da Multipark**. Contam todos os nossos clientes: reservas nos nossos parques (Airpark, Redpark e Skypark) e as que vendemos noutros parques do marketplace.
 - Na nossa base fica só o CRM: a ficha, os contactos, os carros, que reservas são do cliente e um **resumo** (quantas reservas, quando veio a primeira e a última vez, próxima reserva, cidades, parques, canais e parceiros). As reservas em si não se copiam: na ficha, a lista de reservas é lida na hora e cada uma abre a ficha da reserva.
-- **Contactos**: email, WhatsApp e SMS vêm **ligados por defeito** para quem tem reservas (está nos termos e condições e é preciso para a recolha, a entrega e a fatura). Podem ser desligados na ficha; o que se desliga à mão não volta a ligar.
+- **Contactos**: email, WhatsApp e SMS vêm **ligados por defeito** para quem tem reservas (está nos termos e condições e é preciso para a recolha, a entrega e a fatura). Podem ser desligados na ficha; o que se muda à mão (também "Por saber") não volta a mudar sozinho.
+- O **nome** e o **NIF** mudados à mão também ficam: a carga das reservas já não volta a pôr um NIF que se limpou (por ser de outra pessoa).
 
 **Como uma reserva se liga a uma ficha**
 - Liga-se sozinha só com **email + telefone**, **email + nome** ou **email + matrícula**. Só o email, ou só o nome, **nunca** chega.
@@ -35,11 +36,14 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 7. Se a lista não carregar, aparece o erro com **Tentar de novo** (nunca "0 clientes").
 
 **Ficha**
-- No cabeçalho, **Ligar**, **WhatsApp** e **Email** (o telefone e o email principais primeiro; com vários, escolhes qual). Ver "Ligar, WhatsApp e email a partir das fichas" na ajuda da Comunicação.
+- No cabeçalho, **Ligar**, **WhatsApp** e **Email** (o telefone e o email principais primeiro; com vários, escolhes qual). Os emails de balcão/agregador não aparecem no **Email** (escrevia-se ao agregador em vez do cliente). Ver "Ligar, WhatsApp e email a partir das fichas" na ajuda da Comunicação.
+- **Retirar** um email, telefone ou carro pede confirmação. Sai da ficha mas fica em **Retirados** (com quem retirou, quando e porquê) e tem **Repor**. A carga das reservas não o volta a pôr.
+- Passa o rato por cima de um email ou telefone para ver **de onde veio** (das reservas, à mão, conta Pro) e quando apareceu pela primeira vez.
 - Emails, telefones (com WhatsApp), NIF e faturação, ligações (**trabalha em** uma empresa, **familiar**), origem, zona, língua, sexo e faixa etária, etiquetas e o que aceita receber (email, WhatsApp, SMS).
 - Sem foto do cliente, aparece a **foto do carro**. Carrega na câmara para pôr uma foto.
 - Indicadores: reservas, gasto total, **gasto por mês** (média dos últimos 12 meses), por estadia, última vinda, **parques usados**, reclamações e mensagens. Os valores em euros só aparecem a quem vê totais financeiros.
-- **Linha do tempo** (reservas, cancelamentos, entregas, reclamações, críticas, perdidos e tudo o que foi alterado), **Reservas** com **Abrir na Multipark**, **Emails e WhatsApp**, **Notas** e **Registo** (quem mudou o quê e quando).
+- **Linha do tempo** (reservas, cancelamentos, entregas, reclamações, críticas, perdidos e tudo o que foi alterado), **Reservas** com **Abrir na Multipark**, **Emails e WhatsApp** (de todos os emails próprios da ficha, não só do principal), **Notas** e **Registo** (quem mudou o quê e quando).
+- Se a Multipark não responder, a ficha abre na mesma: **Reservas** diz que não carregaram e os indicadores mostram o último resumo guardado (com a data).
 - **IBAN**: só o backoffice financeiro o vê e o altera; fica guardado cifrado e mostra só os últimos 4 dígitos.
 
 **O cliente nas outras páginas**
@@ -69,6 +73,7 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - **Sem email próprio** (antes "Emails estranhos"; não é preciso fazer nada): fichas cujo email é de balcão, de agregador ou da casa (os domínios das nossas marcas — Multipark, Multivalet, Multibags, Multidriver, Airpark, Redpark, Skypark e Multigroup — nunca contam como cliente). **Procurar na nossa caixa** propõe o email verdadeiro: o super admin procura em todas as caixas de email; os outros só nas caixas que já veem na Comunicação e no próprio email. Sem resultado, **Retirar o email** e a ficha fica com telefone e carro.
 - Quando se **separa** uma junção, as outras sugestões dessa ficha voltam a aparecer.
 - **Reservas sem email**: clientes sem email que chegam nos próximos 3 dias — pedir o email à chegada e acrescentá-lo na ficha.
-- **Juntas recentemente**: **Separar** repõe as duas fichas como estavam (emails, telefones, carros e reservas).
+- **Juntas recentemente**: **Separar** (pede confirmação) repõe as duas fichas como estavam: emails, telefones, carros, reservas, retirados, a **conta Pro**, o "é Pro", as notas e as etiquetas. O que entrou depois da junção fica na ficha que ficou; o que alguém mudou depois (ex.: notas reescritas) não é desfeito.
+- Ao **juntar**, as notas e as etiquetas das duas ficam (as da absorvida com "— Da ficha N.º …"), e o que se tinha retirado à mão da ficha que fica não volta por causa da junção.
 
 Tudo o que se faz nas fichas fica no **registo de ações**.

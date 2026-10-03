@@ -187,8 +187,12 @@ export async function recomputeMetrics(db: any, clientIds: number[]): Promise<vo
     // Consentimentos: ligados por defeito para quem tem reservas (termos e condições
     // e o próprio serviço — recolha, entrega, fatura). Só onde ninguém decidiu (NULL):
     // o que foi desligado à mão fica desligado.
+    // 21b: o "Por saber" escolhido à mão também fica (campo trancado em crm_blocked_identifiers)
+    const lockedConsent = (f: string) => sql`EXISTS (SELECT 1 FROM crm_blocked_identifiers b WHERE b.clientId = crm_clients.id AND b.kind = 'field' AND b.value = ${f})`;
     await db.execute(sql`UPDATE crm_clients SET
-        consentEmail = COALESCE(consentEmail, 1), consentWhatsapp = COALESCE(consentWhatsapp, 1), consentSms = COALESCE(consentSms, 1)
+        consentEmail = IF(consentEmail IS NULL AND NOT ${lockedConsent("consentEmail")}, 1, consentEmail),
+        consentWhatsapp = IF(consentWhatsapp IS NULL AND NOT ${lockedConsent("consentWhatsapp")}, 1, consentWhatsapp),
+        consentSms = IF(consentSms IS NULL AND NOT ${lockedConsent("consentSms")}, 1, consentSms)
       WHERE id IN (${inList(existing)}) AND bookings > 0 AND (consentEmail IS NULL OR consentWhatsapp IS NULL OR consentSms IS NULL)`);
   }
 }
@@ -358,7 +362,17 @@ async function applyCrmRows(db: any, raw: import("../multiparkDb/crmLive").CrmBa
 
   // 2) fichas existentes: completar o que falta (nunca sobrepõe o que já lá está)
   if (plan.touched.length) {
-    for (const part of chunks(plan.touched, 400)) {
+    // 21b: nome e NIF mexidos à mão ficam como a pessoa os deixou (mesmo vazios)
+    const lockedFields = await loadBlocked(db, [...new Set(plan.touched.map((t) => t.clientId).filter((id) => id > 0))]);
+    const locked = (id: number, f: string) => lockedFields.has(`${id}|field|${f}`);
+    const touched = plan.touched.map((t) => ({
+      ...t,
+      displayName: locked(t.clientId, "displayName") ? null : t.displayName,
+      firstName: locked(t.clientId, "firstName") ? null : t.firstName,
+      lastName: locked(t.clientId, "lastName") ? null : t.lastName,
+      nif: locked(t.clientId, "nif") ? null : t.nif,
+    }));
+    for (const part of chunks(touched, 400)) {
       await db.execute(sql`
         INSERT INTO crm_clients (id, displayName, firstName, lastName, nif, isPro, lastSeenAt)
         VALUES ${sql.join(part.map((t) => sql`(${t.clientId}, ${t.displayName}, ${t.firstName}, ${t.lastName}, ${t.nif}, ${t.isPro ? 1 : 0}, ${t.seenAt})`), sql`, `)}

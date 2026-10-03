@@ -32,6 +32,7 @@ import { FindEmailButton } from "@/components/crm/FindEmail";
 import { ContactActions } from "@/components/ContactActions";
 import { ProAccountSection } from "@/components/crm/ProAccountSection";
 import { isCrmFile, type CrmBooking, type CrmFile } from "@/components/crm/crmTypes";
+import { useConfirm } from "@/pages/training/shared";
 
 /** Sistema antigo (Firebase): endereço por confirmar com o Rafael. */
 const FIREBASE_CLIENT_URL: ((c: { email: string | null; phone: string | null }) => string) | null = null;
@@ -77,12 +78,21 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
   const [merge, setMerge] = useState<{ id: number; name: string | null } | null | undefined>(undefined);
   const [ibanOpen, setIbanOpen] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
+  const [confirm, confirmUi] = useConfirm();
+  /** 21b: retirar/separar pedem confirmação (antes era um clique no menu) */
+  const ask = async (title: string, description: string, confirmLabel: string, run: () => void) => {
+    if (await confirm({ title, description, confirmLabel, destructive: true })) run();
+  };
+  const KEPT = "Sai da ficha mas fica guardado em «Retirados», com quem retirou e quando; pode ser reposto. A carga das reservas não o volta a pôr.";
 
   const history = trpc.clients.history.useQuery(
     { clientId: c.id },
     { retry: false, staleTime: 60_000 },
   );
-  const mail = trpc.mail.timeline.useQuery({ type: "client", id: c.primaryEmail ?? "" }, { enabled: !!c.primaryEmail, retry: false, staleTime: 60_000 });
+  // 21b: as mensagens vêm de TODOS os emails próprios da ficha (antes só do principal —
+  // depois de uma junção, as da ficha absorvida desapareciam)
+  const ownEmails = c.emails.filter((e) => !e.generic).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((e) => e.email);
+  const mail = trpc.mail.timeline.useQuery({ type: "client", id: ownEmails[0] ?? "" }, { enabled: !!ownEmails[0], retry: false, staleTime: 60_000 });
   // fase 2: conta corrente Pro (null = a ficha não é uma conta Pro da Multipark)
   const pro = trpc.crm.proAccount.useQuery({ clientId: c.id }, { retry: false, staleTime: 60_000 });
 
@@ -90,6 +100,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
   const removeRel = trpc.crm.relation.useMutation({ onSuccess: reload, onError: (e) => toast.error(e.message) });
   const split = trpc.crm.split.useMutation({ onSuccess: () => { toast.success("Fichas separadas"); reload(); }, onError: (e) => toast.error(e.message) });
   const dismiss = trpc.crm.dismissSuggestion.useMutation({ onSuccess: reload, onError: (e) => toast.error(e.message) });
+  const restore = trpc.crm.contact.useMutation({ onSuccess: () => { toast.success("Reposto na ficha"); reload(); }, onError: (e) => toast.error(e.message) });
 
   const upload = trpc.crm.uploadPhoto.useMutation({ onSuccess: () => { toast.success("Foto guardada"); reload(); }, onError: (e) => toast.error(e.message) });
   const pickPhoto = (vehicleId: number | null) => {
@@ -121,7 +132,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
   const car = c.vehicles[0] ?? null;
 
   const kpis: { label: string; value: string; note: string; onClick?: () => void }[] = [
-    { label: "Reservas", value: num(m.bookings), note: thisYear ? `${thisYear} este ano` : `${num(m.cancelled)} canceladas`, onClick: () => goTab("bookings") },
+    { label: "Reservas", value: num(m.bookings), note: c.bookingsError ? "resumo guardado" : thisYear ? `${thisYear} este ano` : `${num(m.cancelled)} canceladas`, onClick: () => goTab("bookings") },
     ...(c.canSeeTotals ? [
       { label: "Gasto total", value: eur(m.totalSpent), note: m.firstVisit ? `desde ${new Date(utcDate(m.firstVisit)!).getUTCFullYear()}` : "" },
       { label: "Gasto por mês", value: eur(m.spentPerMonth), note: "média 12 meses" },
@@ -164,7 +175,8 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
         {/* 17f: ligar, WhatsApp e email daqui (o principal primeiro). */}
         <ContactActions
           phones={[...c.phones].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((p) => p.phone)}
-          emails={[...c.emails].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((e) => e.email)}
+          // 21b: sem os emails de balcão/agregador (escrevia-se ao agregador em vez do cliente)
+          emails={ownEmails}
         />
         {latest && (
           <Button variant="outline" asChild>
@@ -192,7 +204,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
             ({s.reasons.map((r) => REASON_LABELS[r as SuggestionReason] ?? r).join(", ")} · semelhança {s.score} %).
           </span>
           {c.canMerge && <Button size="sm" variant="outline" className="h-[30px]" onClick={() => setMerge({ id: s.otherId, name: s.otherName })}>Juntar</Button>}
-          {c.canEdit && <Button size="sm" variant="ghost" className="h-[30px]" disabled={dismiss.isPending} onClick={() => dismiss.mutate({ id: s.id })}>Não é a mesma pessoa</Button>}
+          {c.canEdit && <Button size="sm" variant="ghost" className="h-[30px]" disabled={dismiss.isPending} onClick={() => ask("Não é a mesma pessoa?", "A sugestão sai e não volta a aparecer para estas duas fichas.", "Não é a mesma pessoa", () => dismiss.mutate({ id: s.id }))}>Não é a mesma pessoa</Button>}
         </Banner>
       ))}
       {c.alerts.genericEmailOnly && (
@@ -231,9 +243,9 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
             {c.emails.map((e) => (
               <Row key={e.id} menu={c.canEdit ? [
                 ...(!e.isPrimary && !e.generic ? [{ label: "Tornar principal", run: () => contact.mutate({ op: "primaryEmail", clientId: c.id, itemId: e.id }) }] : []),
-                { label: "Retirar", danger: true, run: () => contact.mutate({ op: "removeEmail", clientId: c.id, itemId: e.id, reason: e.generic ? "email de balcão/agregador" : null }) },
+                { label: "Retirar", danger: true, run: () => ask(`Retirar ${e.email}?`, KEPT, "Retirar", () => contact.mutate({ op: "removeEmail", clientId: c.id, itemId: e.id, reason: e.generic ? "email de balcão/agregador" : null })) },
               ] : undefined}>
-                <a href={`mailto:${e.email}`} className={cn("truncate", e.isPrimary ? "font-bold text-foreground" : "text-muted-foreground")}>{e.email}</a>
+                <a href={`mailto:${e.email}`} title={originTitle(e.source, e.firstSeenAt)} className={cn("truncate", e.isPrimary ? "font-bold text-foreground" : "text-muted-foreground")}>{e.email}</a>
                 {e.isPrimary && <Pill className="h-[18px] bg-secondary text-secondary-foreground">principal</Pill>}
                 {e.generic && <Pill className="h-[18px] bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">estranho</Pill>}
               </Row>
@@ -246,9 +258,9 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
               <Row key={p.id} menu={c.canEdit ? [
                 ...(!p.isPrimary ? [{ label: "Tornar principal", run: () => contact.mutate({ op: "primaryPhone", clientId: c.id, itemId: p.id }) }] : []),
                 ...(!p.whatsapp ? [{ label: "Tem WhatsApp", run: () => contact.mutate({ op: "addPhone", clientId: c.id, value: p.phone, whatsapp: true }) }] : []),
-                { label: "Retirar", danger: true, run: () => contact.mutate({ op: "removePhone", clientId: c.id, itemId: p.id }) },
+                { label: "Retirar", danger: true, run: () => ask(`Retirar ${fmtPhone(p.phone)}?`, KEPT, "Retirar", () => contact.mutate({ op: "removePhone", clientId: c.id, itemId: p.id })) },
               ] : undefined}>
-                <a href={`tel:${p.phone}`} className={cn("truncate", p.isPrimary ? "font-bold text-foreground" : "text-muted-foreground")}>{fmtPhone(p.phone)}</a>
+                <a href={`tel:${p.phone}`} title={originTitle(p.source, p.firstSeenAt)} className={cn("truncate", p.isPrimary ? "font-bold text-foreground" : "text-muted-foreground")}>{fmtPhone(p.phone)}</a>
                 {p.whatsapp && <a href={waLink(p.phone)} target="_blank" rel="noreferrer"><Pill className="h-[18px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">WhatsApp</Pill></a>}
                 {p.label && <span className="text-xs text-muted-foreground">({p.label})</span>}
               </Row>
@@ -270,7 +282,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
           <Block title="Ligações" onAdd={c.canEdit ? () => setRelOpen(true) : undefined}>
             {c.relations.length === 0 && <span className="text-muted-foreground">Sem ligações</span>}
             {c.relations.map((r) => (
-              <Row key={r.id} menu={c.canEdit ? [{ label: "Tirar ligação", danger: true, run: () => removeRel.mutate({ op: "remove", relationId: r.id }) }] : undefined}>
+              <Row key={r.id} menu={c.canEdit ? [{ label: "Tirar ligação", danger: true, run: () => ask("Tirar esta ligação?", "As duas fichas deixam de estar ligadas. Fica no registo das duas.", "Tirar", () => removeRel.mutate({ op: "remove", relationId: r.id })) }] : undefined}>
                 <span className="truncate">
                   {relText(r)} <Link href={`/clientes/${r.otherId}`} className="font-bold text-primary hover:underline">{r.otherName ?? `N.º ${r.otherId}`}</Link>
                   {r.label && <span className="text-muted-foreground"> ({r.label})</span>}
@@ -312,6 +324,11 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
       {pro.data && <ProAccountSection a={pro.data} onLinkPerson={c.canEdit ? () => setPersonOpen(true) : undefined} />}
 
       {/* indicadores */}
+      {c.bookingsError && (
+        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          {c.bookingsError}{c.metricsAt ? ` (resumo de ${shortDateTime(c.metricsAt)})` : " (resumo ainda por calcular)"}
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 xl:grid-cols-8">
         {kpis.map((k) => (
           <button key={k.label} type="button" onClick={k.onClick} disabled={!k.onClick}
@@ -323,7 +340,8 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
         ))}
       </div>
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+      {/* uma coluna que nunca passa do ecrã no telemóvel (a barra de separadores esticava a grelha) */}
+      <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         {/* separadores */}
         <div ref={tabsRef} className="scroll-mt-4 rounded-[10px] border bg-card px-[18px] pb-[18px]">
           <div className="flex gap-1 overflow-x-auto border-b">
@@ -335,10 +353,18 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
             ))}
           </div>
           {tab === "timeline" && <Timeline c={c} history={history.data} />}
-          {tab === "bookings" && <BookingsTable bookings={c.bookings} canSeeTotals={c.canSeeTotals} />}
+          {tab === "bookings" && (c.bookingsError
+            ? <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">{c.bookingsError}</p>
+            : <BookingsTable bookings={c.bookings} canSeeTotals={c.canSeeTotals} />)}
           {tab === "comms" && (
-            <div className="pt-3">
-              {c.primaryEmail ? <CommunicationsTimeline type="client" id={c.primaryEmail} compact /> : <p className="py-6 text-sm text-muted-foreground">Sem email: não há mensagens ligadas.</p>}
+            <div className="flex flex-col gap-4 pt-3">
+              {ownEmails.length === 0 && <p className="py-6 text-sm text-muted-foreground">Sem email próprio: não há mensagens ligadas.</p>}
+              {ownEmails.slice(0, 4).map((em) => (
+                <div key={em}>
+                  {ownEmails.length > 1 && <div className="mb-1 text-xs font-bold text-muted-foreground">{em}</div>}
+                  <CommunicationsTimeline type="client" id={em} compact />
+                </div>
+              ))}
             </div>
           )}
           {tab === "notes" && <NotesEditor c={c} onSaved={reload} />}
@@ -368,7 +394,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
                 {c.canEdit && (
                   <RowMenu items={[
                     { label: "Editar", run: () => setVehicle({ id: v.id, plate: v.plate, brand: v.brand, model: v.model, color: v.color, vehicleType: v.vehicleType }) },
-                    { label: "Retirar", danger: true, run: () => contact.mutate({ op: "removeVehicle", clientId: c.id, itemId: v.id }) },
+                    { label: "Retirar", danger: true, run: () => ask(`Retirar o carro ${v.plate}?`, KEPT, "Retirar", () => contact.mutate({ op: "removeVehicle", clientId: c.id, itemId: v.id })) },
                   ]} />
                 )}
               </div>
@@ -412,6 +438,22 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
             {habits.partner && <Habit label="Parceiro habitual" value={habits.partner} />}
           </Card>
 
+          {c.removed.length > 0 && (
+            <Card title={`Retirados (${c.removed.length})`}>
+              <p className="text-xs text-muted-foreground">Saíram da ficha mas ficam guardados. A carga das reservas não os volta a pôr.</p>
+              {c.removed.map((r) => (
+                <div key={r.id} className="flex items-center gap-2 text-[13px]">
+                  <span className="min-w-0 flex-1">
+                    <span className="mr-1 text-xs text-muted-foreground">{r.kind === "email" ? "Email" : r.kind === "phone" ? "Telefone" : "Carro"}</span>
+                    <strong className="break-all">{r.kind === "phone" ? fmtPhone(r.value) : r.value}</strong>
+                    <span className="block text-xs text-muted-foreground">{shortDate(r.removedAt)}{r.byName ? ` · por ${r.byName}` : ""}{r.reason ? ` · ${r.reason}` : ""}</span>
+                  </span>
+                  {c.canEdit && <Button size="sm" variant="outline" className="h-[30px]" disabled={restore.isPending} onClick={() => restore.mutate({ op: "restore", clientId: c.id, itemId: r.id })}>Repor</Button>}
+                </div>
+              ))}
+            </Card>
+          )}
+
           {c.merges.length > 0 && (
             <Card title="Fichas juntas">
               {c.merges.map((e) => (
@@ -420,7 +462,9 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
                     <strong>{e.mergedName ?? `N.º ${e.mergedId}`}</strong> juntou-se a esta ficha
                     <span className="block text-xs text-muted-foreground">{shortDate(e.mergedAt)}{e.byName ? ` · por ${e.byName}` : ""}{e.reason ? ` · ${e.reason}` : ""}</span>
                   </span>
-                  {c.canMerge && <Button size="sm" variant="outline" className="h-[30px]" disabled={split.isPending} onClick={() => split.mutate({ eventId: e.id })}><Undo2 className="h-3.5 w-3.5" />Separar</Button>}
+                  {c.canMerge && <Button size="sm" variant="outline" className="h-[30px]" disabled={split.isPending}
+                    onClick={() => ask(`Separar ${e.mergedName ?? `a ficha N.º ${e.mergedId}`}?`, "As duas fichas voltam a ser separadas, com os emails, telefones, carros, reservas e a conta Pro que cada uma tinha. O que entrou depois da junção fica nesta.", "Separar", () => split.mutate({ eventId: e.id }))}>
+                    <Undo2 className="h-3.5 w-3.5" />Separar</Button>}
                 </div>
               ))}
             </Card>
@@ -436,8 +480,15 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
         onOpenChange={(o) => { if (!o) setMerge(undefined); }}
         onMerged={(sid) => { utils.crm.invalidate(); if (sid !== c.id) navigate(`/clientes/${sid}`); else reload(); }} />
       {c.canSeeTotals && <IbanDialog clientId={c.id} hasIban={c.hasIban} open={ibanOpen} onOpenChange={setIbanOpen} onSaved={reload} />}
+      {confirmUi}
     </div>
   );
+}
+
+/** "Origem: das reservas · visto pela 1.ª vez em 12/03/2024" (título do email/telefone). */
+function originTitle(source: string | null, firstSeenAt: string | null): string {
+  const label = source === "bookings" ? "das reservas" : source === "manual" ? "acrescentado à mão" : source === "multipark_pro" ? "conta Pro da Multipark" : source ?? "—";
+  return `Origem: ${label}${firstSeenAt ? ` · visto pela 1.ª vez em ${shortDate(firstSeenAt)}` : ""}`;
 }
 
 /** Imagem → JPEG com o lado maior ≤ `max` px, em base64 (sem o prefixo data:). */
@@ -555,7 +606,7 @@ function Row({ menu, children }: { menu?: MenuItem[]; children: React.ReactNode 
   return (
     <div className="group flex min-w-0 items-center gap-1.5">
       {children}
-      {menu && menu.length > 0 && <span className="transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:opacity-0"><RowMenu items={menu} /></span>}
+      {menu && menu.length > 0 && <span className="transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:[@media(hover:hover)]:opacity-0"><RowMenu items={menu} /></span>}
     </div>
   );
 }
@@ -600,6 +651,7 @@ const LOG_LABEL: Record<string, string> = {
   crm_client_photo: "Foto do cliente alterada", crm_vehicle_photo: "Foto do carro alterada", crm_iban: "IBAN alterado",
   crm_relation_add: "Ligação acrescentada", crm_relation_remove: "Ligação retirada", crm_suggestion_dismiss: "Sugestão para juntar descartada",
   crm_merge: "Fichas juntas", crm_merged_into: "Esta ficha juntou-se a outra", crm_split: "Fichas separadas",
+  crm_item_restore: "Reposto na ficha",
 };
 
 const FIELD_LABEL: Record<string, string> = {

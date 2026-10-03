@@ -24,6 +24,13 @@ export const EDITABLE = [
 ] as const;
 export type EditableField = (typeof EDITABLE)[number];
 
+/**
+ * Campos que a carga das reservas preenche sozinha quando estão vazios. Mexidos
+ * à mão, ficam "trancados" (crm_blocked_identifiers kind = 'field'): a carga
+ * deixa de os preencher nessa ficha.
+ */
+export const MANUAL_FIELDS = ["displayName", "firstName", "lastName", "nif", "consentEmail", "consentWhatsapp", "consentSms"] as const;
+
 export async function updateClient(db: any, userId: number, id: number, patch: Partial<Record<EditableField, unknown>> & { tags?: string[] }) {
   const [before] = rowsOf(await db.execute(sql`SELECT * FROM crm_clients WHERE id = ${id} AND status = 'active'`));
   if (!before) throw new Error("Ficha não encontrada.");
@@ -48,6 +55,13 @@ export async function updateClient(db: any, userId: number, id: number, patch: P
   // Pro decidido à mão: a carga das reservas deixa de o mudar
   if (changes.isPro) sets.push(sql`proManual = 1`);
   await db.execute(sql`UPDATE crm_clients SET ${sql.join(sets, sql`, `)} WHERE id = ${id}`);
+  // 21b: nome, NIF e consentimentos mexidos à mão ficam assim — a carga das reservas
+  // já não volta a pôr um NIF limpo (era de outra pessoa) nem "Aceita" num "Por saber"
+  const locked = MANUAL_FIELDS.filter((f) => f in changes);
+  if (locked.length) {
+    await db.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy)
+      VALUES ${sql.join(locked.map((f) => sql`(${id}, 'field', ${f}, ${userId || null})`), sql`, `)}`);
+  }
   await logCrm(userId, id, "crm_client_update", changes);
   return { changed: Object.keys(changes).length };
 }
@@ -99,12 +113,9 @@ export async function addEmail(db: any, userId: number, clientId: number, raw: s
 }
 
 export async function removeEmail(db: any, userId: number, clientId: number, emailId: number, reason?: string | null) {
-  const [e] = rowsOf(await db.execute(sql`SELECT email FROM crm_client_emails WHERE id = ${emailId} AND clientId = ${clientId}`));
-  if (!e) throw new Error("Email não encontrado.");
-  await db.execute(sql`DELETE FROM crm_client_emails WHERE id = ${emailId} AND clientId = ${clientId}`);
-  await block(db, userId, clientId, "email", String(e.email));
+  const { value } = await archiveAndRemove(db, userId, clientId, "email", emailId, reason);
   await refreshPrimary(db, clientId);
-  await logCrm(userId, clientId, "crm_email_remove", { email: e.email, reason: reason ?? null });
+  await logCrm(userId, clientId, "crm_email_remove", { email: value, reason: reason ?? null });
 }
 
 export async function setPrimaryEmail(db: any, userId: number, clientId: number, emailId: number) {
@@ -126,13 +137,10 @@ export async function addPhone(db: any, userId: number, clientId: number, raw: s
   await logCrm(userId, clientId, "crm_phone_add", { phone, ...o });
 }
 
-export async function removePhone(db: any, userId: number, clientId: number, phoneId: number) {
-  const [p] = rowsOf(await db.execute(sql`SELECT phone FROM crm_client_phones WHERE id = ${phoneId} AND clientId = ${clientId}`));
-  if (!p) throw new Error("Telefone não encontrado.");
-  await db.execute(sql`DELETE FROM crm_client_phones WHERE id = ${phoneId} AND clientId = ${clientId}`);
-  await block(db, userId, clientId, "phone", String(p.phone));
+export async function removePhone(db: any, userId: number, clientId: number, phoneId: number, reason?: string | null) {
+  const { value } = await archiveAndRemove(db, userId, clientId, "phone", phoneId, reason);
   await refreshPrimary(db, clientId);
-  await logCrm(userId, clientId, "crm_phone_remove", { phone: p.phone });
+  await logCrm(userId, clientId, "crm_phone_remove", { phone: value, reason: reason ?? null });
 }
 
 export async function setPrimaryPhone(db: any, userId: number, clientId: number, phoneId: number, whatsapp?: boolean) {
@@ -164,12 +172,67 @@ export async function upsertVehicle(db: any, userId: number, clientId: number, v
   await logCrm(userId, clientId, v.id ? "crm_vehicle_update" : "crm_vehicle_add", v);
 }
 
-export async function removeVehicle(db: any, userId: number, clientId: number, vehicleId: number) {
-  const [v] = rowsOf(await db.execute(sql`SELECT plateDisplay, plate FROM crm_client_vehicles WHERE id = ${vehicleId} AND clientId = ${clientId}`));
-  if (!v) throw new Error("Carro não encontrado.");
-  await db.execute(sql`DELETE FROM crm_client_vehicles WHERE id = ${vehicleId} AND clientId = ${clientId}`);
-  await block(db, userId, clientId, "plate", String(v.plate));
-  await logCrm(userId, clientId, "crm_vehicle_remove", { plate: v.plateDisplay || v.plate });
+export async function removeVehicle(db: any, userId: number, clientId: number, vehicleId: number, reason?: string | null) {
+  const { value } = await archiveAndRemove(db, userId, clientId, "vehicle", vehicleId, reason);
+  await logCrm(userId, clientId, "crm_vehicle_remove", { plate: value, reason: reason ?? null });
+}
+
+// ─── Retirados (21b): saem da ficha mas ficam guardados e podem ser repostos ──
+
+const REMOVABLE = {
+  email: { table: "crm_client_emails", key: "email", block: "email" as const },
+  phone: { table: "crm_client_phones", key: "phone", block: "phone" as const },
+  vehicle: { table: "crm_client_vehicles", key: "plate", block: "plate" as const },
+};
+export type RemovableKind = keyof typeof REMOVABLE;
+
+/**
+ * Retira uma linha da ficha numa só transação: a linha INTEIRA vai para
+ * crm_removed_items (com quem/quando/porquê), sai da ficha e fica bloqueada
+ * (a carga das reservas não a volta a pôr). Antes era um DELETE sem rasto.
+ */
+async function archiveAndRemove(db: any, userId: number, clientId: number, kind: RemovableKind, itemId: number, reason?: string | null): Promise<{ value: string }> {
+  const def = REMOVABLE[kind];
+  const t = sql.raw(def.table);
+  let value = "";
+  await db.transaction(async (tx: any) => {
+    const [row] = rowsOf(await tx.execute(sql`SELECT * FROM ${t} WHERE id = ${itemId} AND clientId = ${clientId} FOR UPDATE`));
+    if (!row) throw new Error(kind === "email" ? "Email não encontrado." : kind === "phone" ? "Telefone não encontrado." : "Carro não encontrado.");
+    value = String(row[def.key]);
+    const { toSqlValue } = await import("./merge");
+    const json = JSON.stringify(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, toSqlValue(v)])));
+    await tx.execute(sql`INSERT INTO crm_removed_items (clientId, kind, value, rowJson, reason, removedBy, removedAt)
+      VALUES (${clientId}, ${kind}, ${value}, ${json}, ${reason ? String(reason).slice(0, 255) : null}, ${userId || null}, UTC_TIMESTAMP())`);
+    await tx.execute(sql`DELETE FROM ${t} WHERE id = ${itemId} AND clientId = ${clientId}`);
+    await tx.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy) VALUES (${clientId}, ${def.block}, ${value}, ${userId || null})`);
+  });
+  return { value };
+}
+
+/** Repõe na ficha um email/telefone/carro retirado (tal como estava, sem ser o principal). */
+export async function restoreRemoved(db: any, userId: number, clientId: number, removedId: number): Promise<{ kind: RemovableKind; value: string }> {
+  let out: { kind: RemovableKind; value: string } = { kind: "email", value: "" };
+  await db.transaction(async (tx: any) => {
+    const [r] = rowsOf(await tx.execute(sql`SELECT * FROM crm_removed_items WHERE id = ${removedId} AND clientId = ${clientId} AND restoredAt IS NULL FOR UPDATE`));
+    if (!r) throw new Error("Já não está na lista dos retirados.");
+    const kind = String(r.kind) as RemovableKind;
+    const def = REMOVABLE[kind];
+    if (!def) throw new Error("Tipo desconhecido.");
+    let row: Record<string, unknown> = {};
+    try { row = JSON.parse(String(r.rowJson)); } catch { row = {}; }
+    // volta tal e qual (origem, datas, marca/modelo…), nesta ficha, sem ser o principal
+    const { id: _old, ...rest } = row;
+    const cols = { ...rest, clientId, ...(kind === "vehicle" ? {} : { isPrimary: 0 }), [def.key]: String(r.value) } as Record<string, unknown>;
+    const names = Object.keys(cols);
+    await tx.execute(sql`INSERT IGNORE INTO ${sql.raw(def.table)} (${sql.raw(names.map((c) => "`" + c.replace(/`/g, "") + "`").join(", "))})
+      VALUES (${sql.join(names.map((c) => sql`${cols[c] as any}`), sql`, `)})`);
+    await tx.execute(sql`DELETE FROM crm_blocked_identifiers WHERE clientId = ${clientId} AND kind = ${def.block} AND value = ${String(r.value)}`);
+    await tx.execute(sql`UPDATE crm_removed_items SET restoredAt = UTC_TIMESTAMP(), restoredBy = ${userId || null} WHERE id = ${removedId}`);
+    out = { kind, value: String(r.value) };
+  });
+  if (out.kind !== "vehicle") await refreshPrimary(db, clientId);
+  await logCrm(userId, clientId, "crm_item_restore", { kind: out.kind, [out.kind === "vehicle" ? "plate" : out.kind]: out.value });
+  return out;
 }
 
 export async function setPhoto(db: any, userId: number, o: { clientId: number; vehicleId?: number | null; url: string }) {
@@ -210,7 +273,9 @@ export async function removeRelation(db: any, userId: number, relationId: number
   const [r] = rowsOf(await db.execute(sql`SELECT * FROM crm_client_relations WHERE id = ${relationId}`));
   if (!r) throw new Error("Ligação não encontrada.");
   await db.execute(sql`DELETE FROM crm_client_relations WHERE id = ${relationId}`);
-  await logCrm(userId, Number(r.clientId), "crm_relation_remove", { relatedClientId: Number(r.relatedClientId), kind: r.kind });
+  // fica no registo das DUAS fichas (antes só na primeira)
+  await logCrm(userId, Number(r.clientId), "crm_relation_remove", { relatedClientId: Number(r.relatedClientId), kind: r.kind, label: r.label ?? null });
+  await logCrm(userId, Number(r.relatedClientId), "crm_relation_remove", { relatedClientId: Number(r.clientId), kind: r.kind, label: r.label ?? null });
 }
 
 // ─── Sugestões ──────────────────────────────────────────────────────────────

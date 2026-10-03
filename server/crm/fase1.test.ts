@@ -105,7 +105,8 @@ describe("CRM fase 1: sem a cópia, consentimentos e migração", () => {
   });
   it("consentimentos ligados por defeito para quem tem reservas; o que foi desligado à mão fica", () => {
     const src = readFileSync(join(__dirname, "sync.ts"), "utf8");
-    expect(src).toContain("consentEmail = COALESCE(consentEmail, 1)");
+    // 21b: só onde ninguém decidiu — e o "Por saber" escolhido à mão (campo trancado) também fica
+    expect(src).toContain("consentEmail = IF(consentEmail IS NULL AND NOT ${lockedConsent(\"consentEmail\")}, 1, consentEmail)");
     expect(src).toMatch(/bookings > 0 AND \(consentEmail IS NULL/);
   });
   it("migração 0245: só acrescenta colunas do resumo e preenche cityKeys a partir das cidades", () => {

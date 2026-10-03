@@ -492,7 +492,7 @@ export const MULTIPARK_BOOKING_URL = `${MULTIPARK_APP}/agent/booking/`;
 export async function getClientFile(db: any, id: number, opts: { canSeeTotals: boolean; canSeeIban: boolean }) {
   const [c] = rowsOf(await db.execute(sql`SELECT *, ${DT("firstVisit")} AS firstVisitS, ${DT("lastVisit")} AS lastVisitS,
     ${DT("nextCheckIn")} AS nextCheckInS, ${DT("lastSeenAt")} AS lastSeenAtS, DATE_FORMAT(birthDate, '%Y-%m-%d') AS birthDateS,
-    ${DT("createdAt")} AS createdAtS FROM crm_clients WHERE id = ${id}`));
+    ${DT("createdAt")} AS createdAtS, ${DT("metricsAt")} AS metricsAtS FROM crm_clients WHERE id = ${id}`));
   if (!c) return null;
   // junta a outra: segue para a que ficou (essa verifica o âmbito ao abrir)
   if (c.status === "merged") return { redirectTo: Number(c.mergedInto) || null };
@@ -502,8 +502,12 @@ export async function getClientFile(db: any, id: number, opts: { canSeeTotals: b
   }
   const emails = rowsOf(await db.execute(sql`SELECT id, email, isPrimary, generic, verified, source, ${DT("firstSeenAt")} AS firstSeenAt, ${DT("lastSeenAt")} AS lastSeenAt
     FROM crm_client_emails WHERE clientId = ${id} ORDER BY isPrimary DESC, generic ASC, lastSeenAt DESC`));
-  const phones = rowsOf(await db.execute(sql`SELECT id, phone, isPrimary, whatsapp, label, source, ${DT("lastSeenAt")} AS lastSeenAt
+  const phones = rowsOf(await db.execute(sql`SELECT id, phone, isPrimary, whatsapp, label, source, ${DT("firstSeenAt")} AS firstSeenAt, ${DT("lastSeenAt")} AS lastSeenAt
     FROM crm_client_phones WHERE clientId = ${id} ORDER BY isPrimary DESC, lastSeenAt DESC`));
+  // 21b: o que se retirou da ficha (fica guardado, com quem/quando/porquê, e pode ser reposto)
+  const removed = rowsOf(await db.execute(sql`SELECT r.id, r.kind, r.value, r.reason, ${DT("r.removedAt")} AS removedAt, u.name AS byName
+    FROM crm_removed_items r LEFT JOIN users u ON u.id = r.removedBy
+    WHERE r.clientId = ${id} AND r.restoredAt IS NULL ORDER BY r.removedAt DESC LIMIT 50`).catch(() => [[]]));
   const vehicles = rowsOf(await db.execute(sql`SELECT id, plate, plateDisplay, brand, model, color, vehicleType, photoUrl, lastKm, bookings,
     ${DT("firstSeenAt")} AS firstSeenAt, ${DT("lastSeenAt")} AS lastSeenAt FROM crm_client_vehicles WHERE clientId = ${id} ORDER BY bookings DESC, lastSeenAt DESC`));
   const relations = rowsOf(await db.execute(sql`
@@ -518,7 +522,17 @@ export async function getClientFile(db: any, id: number, opts: { canSeeTotals: b
   // Reservas da ficha: as ligações (quem viajou / quem paga) + os factos lidos AO VIVO da Multipark.
   const linkRows = rowsOf(await db.execute(sql`SELECT bookingExternalId, role FROM crm_booking_links WHERE clientId = ${id} LIMIT 2000`));
   const { readCrmBookingFacts } = await import("../multiparkDb/crmLive");
-  const facts = linkRows.length ? await readCrmBookingFacts(linkRows.map((l) => String(l.bookingExternalId))) : [];
+  // 21b: a Multipark em baixo já não deita a ficha abaixo — contactos, notas e registo
+  // continuam acessíveis; as reservas dizem que não carregaram (nunca "sem reservas")
+  let bookingsError: string | null = null;
+  let facts: Awaited<ReturnType<typeof readCrmBookingFacts>> = [];
+  if (linkRows.length) {
+    try { facts = await readCrmBookingFacts(linkRows.map((l) => String(l.bookingExternalId))); }
+    catch (err: any) {
+      console.warn("[crm] reservas da ficha indisponíveis:", String(err?.message ?? err).slice(0, 160));
+      bookingsError = "As reservas não carregaram: a Multipark não respondeu. Os indicadores mostram o último resumo guardado.";
+    }
+  }
   const roleOf = new Map(linkRows.map((l) => [String(l.bookingExternalId), String(l.role)]));
   const scopeCities = scopedCityNamesLive();
   const cityOk = scopeCities === undefined ? () => true : (c: string | null) => !!c && cityAliases(scopeCities).includes(c.trim().toLowerCase());
@@ -575,6 +589,10 @@ export async function getClientFile(db: any, id: number, opts: { canSeeTotals: b
     consentWhatsapp: c.consentWhatsapp == null ? null : Number(c.consentWhatsapp) === 1,
     consentSms: c.consentSms == null ? null : Number(c.consentSms) === 1,
     tags, notes: c.notes ?? null, createdAt: c.createdAtS ?? null,
+    bookingsError,
+    /** quando foi calculado o resumo (indicadores); null = por recalcular */
+    metricsAt: c.metricsAtS ?? null,
+    removed: removed.map((r) => ({ id: Number(r.id), kind: String(r.kind) as "email" | "phone" | "vehicle", value: String(r.value), reason: r.reason ?? null, removedAt: r.removedAt ?? null, byName: r.byName ?? null })),
     metrics: {
       bookings: m.bookings, completed: m.completed, cancelled: m.cancelled, upcoming: m.upcoming,
       totalSpent: money(m.totalSpent), spentPerMonth: opts.canSeeTotals ? Math.round((spent12 / 12) * 100) / 100 : null,
@@ -586,8 +604,8 @@ export async function getClientFile(db: any, id: number, opts: { canSeeTotals: b
     alerts: {
       noEmail: Number(c.noEmail) === 1, genericEmailOnly: Number(c.genericEmailOnly) === 1,
     },
-    emails: emails.map((e) => ({ id: Number(e.id), email: String(e.email), isPrimary: Number(e.isPrimary) === 1, generic: Number(e.generic) === 1, source: e.source ?? null, lastSeenAt: e.lastSeenAt ?? null })),
-    phones: phones.map((p) => ({ id: Number(p.id), phone: String(p.phone), isPrimary: Number(p.isPrimary) === 1, whatsapp: Number(p.whatsapp) === 1, label: p.label ?? null, lastSeenAt: p.lastSeenAt ?? null })),
+    emails: emails.map((e) => ({ id: Number(e.id), email: String(e.email), isPrimary: Number(e.isPrimary) === 1, generic: Number(e.generic) === 1, source: e.source ?? null, firstSeenAt: e.firstSeenAt ?? null, lastSeenAt: e.lastSeenAt ?? null })),
+    phones: phones.map((p) => ({ id: Number(p.id), phone: String(p.phone), isPrimary: Number(p.isPrimary) === 1, whatsapp: Number(p.whatsapp) === 1, label: p.label ?? null, source: p.source ?? null, firstSeenAt: p.firstSeenAt ?? null, lastSeenAt: p.lastSeenAt ?? null })),
     vehicles: vehicles.map((v) => ({ id: Number(v.id), plate: String(v.plateDisplay || v.plate), brand: v.brand ?? null, model: v.model ?? null, color: v.color ?? null, vehicleType: v.vehicleType ?? null, photoUrl: v.photoUrl ?? null, lastKm: v.lastKm == null ? null : Number(v.lastKm), bookings: Number(v.bookings), lastSeenAt: v.lastSeenAt ?? null })),
     relations: relations.map((r) => ({ id: Number(r.id), kind: String(r.kind), label: r.label ?? null, pays: Number(r.pays) === 1, otherId: Number(r.otherId), otherName: r.otherName ?? null, otherPro: Number(r.otherPro) === 1, direction: String(r.direction) })),
     bookings: bookings.map((b) => ({

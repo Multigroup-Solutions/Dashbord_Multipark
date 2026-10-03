@@ -140,6 +140,17 @@ async function crmAssertInScope(...clientIds: number[]): Promise<void> {
   if (clientIds.some((id) => !ok.has(id))) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado" });
 }
 
+/**
+ * 21b: só se escreve numa ficha ATIVA. Uma ficha já junta a outra fica invisível;
+ * escrever nela por API (contacto, foto, IBAN) perdia-se em silêncio.
+ */
+async function crmAssertActive(clientId: number): Promise<void> {
+  const { sql } = await import("drizzle-orm");
+  const r = await crmRow(sql`SELECT status FROM crm_clients WHERE id = ${clientId}`);
+  if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado" });
+  if (r.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "Esta ficha juntou-se a outra: abre a ficha que ficou." });
+}
+
 /** Linha única de um SELECT (ou undefined). */
 async function crmRow(q: import("drizzle-orm").SQL): Promise<any> {
   const r: any = await (await crmDb()).execute(q);
@@ -5774,14 +5785,17 @@ export const appRouter = router({
         z.object({ op: z.literal("removeEmail"), clientId: z.number().int(), itemId: z.number().int(), reason: z.string().max(200).nullable().optional() }),
         z.object({ op: z.literal("primaryEmail"), clientId: z.number().int(), itemId: z.number().int() }),
         z.object({ op: z.literal("addPhone"), clientId: z.number().int(), value: z.string().max(40), primary: z.boolean().optional(), whatsapp: z.boolean().optional(), label: z.string().max(64).nullable().optional() }),
-        z.object({ op: z.literal("removePhone"), clientId: z.number().int(), itemId: z.number().int() }),
+        z.object({ op: z.literal("removePhone"), clientId: z.number().int(), itemId: z.number().int(), reason: z.string().max(200).nullable().optional() }),
         z.object({ op: z.literal("primaryPhone"), clientId: z.number().int(), itemId: z.number().int(), whatsapp: z.boolean().optional() }),
         z.object({ op: z.literal("saveVehicle"), clientId: z.number().int(), itemId: z.number().int().optional(), plate: z.string().max(32), brand: z.string().max(64).nullable().optional(), model: z.string().max(96).nullable().optional(), color: z.string().max(48).nullable().optional(), vehicleType: z.string().max(24).nullable().optional() }),
-        z.object({ op: z.literal("removeVehicle"), clientId: z.number().int(), itemId: z.number().int() }),
+        z.object({ op: z.literal("removeVehicle"), clientId: z.number().int(), itemId: z.number().int(), reason: z.string().max(200).nullable().optional() }),
+        // 21b: repor na ficha um email/telefone/carro retirado (itemId = id em crm_removed_items)
+        z.object({ op: z.literal("restore"), clientId: z.number().int(), itemId: z.number().int() }),
       ]))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "edit");
         await crmAssertInScope(input.clientId);
+        await crmAssertActive(input.clientId);
         const db = await crmDb();
         const e = await import("./crm/edit");
         const u = ctx.user.id;
@@ -5791,10 +5805,11 @@ export const appRouter = router({
             case "removeEmail": await e.removeEmail(db, u, input.clientId, input.itemId, input.reason); break;
             case "primaryEmail": await e.setPrimaryEmail(db, u, input.clientId, input.itemId); break;
             case "addPhone": await e.addPhone(db, u, input.clientId, input.value, { primary: input.primary, whatsapp: input.whatsapp, label: input.label }); break;
-            case "removePhone": await e.removePhone(db, u, input.clientId, input.itemId); break;
+            case "removePhone": await e.removePhone(db, u, input.clientId, input.itemId, input.reason); break;
             case "primaryPhone": await e.setPrimaryPhone(db, u, input.clientId, input.itemId, input.whatsapp); break;
             case "saveVehicle": await e.upsertVehicle(db, u, input.clientId, { id: input.itemId, plate: input.plate, brand: input.brand, model: input.model, color: input.color, vehicleType: input.vehicleType }); break;
-            case "removeVehicle": await e.removeVehicle(db, u, input.clientId, input.itemId); break;
+            case "removeVehicle": await e.removeVehicle(db, u, input.clientId, input.itemId, input.reason); break;
+            case "restore": await e.restoreRemoved(db, u, input.clientId, input.itemId); break;
           }
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) });
@@ -5806,6 +5821,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "clientes", "edit");
         await crmAssertInScope(input.clientId);
+        await crmAssertActive(input.clientId);
         const { storagePut } = await import("./storage");
         const buffer = Buffer.from(input.fileBase64, "base64");
         const ext = input.mimeType.split("/")[1] ?? "jpg";
@@ -5821,6 +5837,7 @@ export const appRouter = router({
         requireAccess(ctx.user, "clientes", "edit");
         if (!(await canSeeFinanceTotals(ctx.user))) throw new TRPCError({ code: "FORBIDDEN", message: "O IBAN é só para o backoffice financeiro." });
         await crmAssertInScope(input.clientId);
+        await crmAssertActive(input.clientId);
         const { setIban } = await import("./crm/edit");
         try { await setIban(await crmDb(), ctx.user.id, input.clientId, input.iban); }
         catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
@@ -5958,8 +5975,11 @@ export const appRouter = router({
         const { logCrm } = await import("./crm/edit");
         try {
           const r = await mergeClients(db, { ...input, userId: ctx.user.id });
-          await logCrm(ctx.user.id, input.survivorId, "crm_merge", { mergedId: input.mergedId, eventId: r.eventId, reason: input.reason ?? null });
-          await logCrm(ctx.user.id, input.mergedId, "crm_merged_into", { survivorId: input.survivorId, eventId: r.eventId });
+          // 21b: a junção já ficou gravada — um registo que falhe não pode dizer "erro" a quem juntou
+          await Promise.all([
+            logCrm(ctx.user.id, input.survivorId, "crm_merge", { mergedId: input.mergedId, eventId: r.eventId, reason: input.reason ?? null }),
+            logCrm(ctx.user.id, input.mergedId, "crm_merged_into", { survivorId: input.survivorId, eventId: r.eventId }),
+          ]).catch((e) => console.warn("[crm] registo da junção falhou:", String(e?.message ?? e).slice(0, 120)));
           return r;
         } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
       }),
@@ -5977,8 +5997,10 @@ export const appRouter = router({
         const { logCrm } = await import("./crm/edit");
         try {
           const r = await splitMerge(db, { eventId: input.eventId, userId: ctx.user.id });
-          await logCrm(ctx.user.id, r.survivorId, "crm_split", { mergedId: r.mergedId, eventId: input.eventId });
-          await logCrm(ctx.user.id, r.mergedId, "crm_split", { survivorId: r.survivorId, eventId: input.eventId });
+          await Promise.all([
+            logCrm(ctx.user.id, r.survivorId, "crm_split", { mergedId: r.mergedId, eventId: input.eventId }),
+            logCrm(ctx.user.id, r.mergedId, "crm_split", { survivorId: r.survivorId, eventId: input.eventId }),
+          ]).catch((e) => console.warn("[crm] registo da separação falhou:", String(e?.message ?? e).slice(0, 120)));
           return r;
         } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
       }),

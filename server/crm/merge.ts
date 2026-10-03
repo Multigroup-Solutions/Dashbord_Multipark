@@ -50,12 +50,37 @@ export const FILLABLE_FIELDS = [
 ] as const;
 
 export interface MergeSnapshot {
-  moved: { emails: number[]; phones: number[]; vehicles: number[]; externalIds: number[]; links: number[]; relations: number[] };
+  moved: {
+    emails: number[]; phones: number[]; vehicles: number[]; externalIds: number[]; links: number[]; relations: number[];
+    /** 21b: retirados da absorvida (histórico dela) e contas Pro que apontavam para ela */
+    removed?: number[]; proAccounts?: number[];
+  };
   /** linhas da absorvida retiradas por já existirem na que fica (repostas ao separar) */
   dropped: { emails: any[]; phones: any[]; vehicles: any[]; relations: any[] };
   /** campos da que fica preenchidos com os da absorvida */
   filled: Record<string, unknown>;
   mergedStatus: string;
+  /** 21b: bloqueios copiados da absorvida para a que fica (saem ao separar) */
+  copiedBlocks?: { kind: string; value: string }[];
+  /** 21b: como estava a que fica (Pro, notas, etiquetas) e como ficou — separar repõe se ninguém mexeu */
+  survivorBefore?: { isPro: number; notes: string | null; tagsJson: string | null };
+  survivorAfter?: { isPro: number; notes: string | null; tagsJson: string | null };
+}
+
+/** Notas das duas fichas juntas, sem perder as da absorvida (21b). PURO. */
+export function mergeNotes(survivor: string | null | undefined, merged: string | null | undefined, mergedId: number): string | null {
+  const a = String(survivor ?? "").trim(), b = String(merged ?? "").trim();
+  if (!b) return a || null;
+  if (!a) return b;
+  if (a.includes(b)) return a;
+  return `${a}\n\n— Da ficha N.º ${mergedId} —\n${b}`.slice(0, 10_000);
+}
+
+/** Etiquetas das duas fichas (sem repetir). PURO. */
+export function mergeTags(survivor: string | null | undefined, merged: string | null | undefined): string | null {
+  const parse = (x: string | null | undefined): string[] => { try { const v = JSON.parse(String(x ?? "[]")); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
+  const all = [...new Set([...parse(survivor), ...parse(merged)].map((t) => t.trim()).filter(Boolean))].slice(0, 40);
+  return all.length ? JSON.stringify(all) : (survivor ?? null);
 }
 
 /** Campos a preencher: os vazios na que fica e cheios na absorvida. PURO. */
@@ -79,12 +104,20 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
     const m = both.find((r) => Number(r.id) === o.mergedId);
     if (!s || !m) throw new Error("Ficha não encontrada.");
     if (s.status !== "active" || m.status !== "active") throw new Error("Só se juntam fichas ativas.");
-    const snap: MergeSnapshot = { moved: { emails: [], phones: [], vehicles: [], externalIds: [], links: [], relations: [] }, dropped: { emails: [], phones: [], vehicles: [], relations: [] }, filled: {}, mergedStatus: String(m.status) };
+    const snap: MergeSnapshot = {
+      moved: { emails: [], phones: [], vehicles: [], externalIds: [], links: [], relations: [], removed: [], proAccounts: [] },
+      dropped: { emails: [], phones: [], vehicles: [], relations: [] }, filled: {}, mergedStatus: String(m.status), copiedBlocks: [],
+      survivorBefore: { isPro: Number(s.isPro ?? 0), notes: s.notes ?? null, tagsJson: s.tagsJson ?? null },
+    };
+    // o que foi retirado à mão da ficha que fica não volta por causa da junção (21b)
+    const survivorBlocks = rowsOf(await tx.execute(sql`SELECT kind, value FROM crm_blocked_identifiers WHERE clientId = ${o.survivorId}`));
+    const blockedIn = (kind: string) => new Set(survivorBlocks.filter((b) => b.kind === kind).map((b) => String(b.value)));
 
-    // emails / telefones / carros: os que a que fica já tem são retirados (e guardados), os outros mudam
+    // emails / telefones / carros: os que a que fica já tem (ou tirou à mão) são retirados (e guardados), os outros mudam
     const moveUnique = async (table: string, key: string, bucket: "emails" | "phones" | "vehicles") => {
       const t = sql.raw(table), k = sql.raw(key);
       const have = new Set(rowsOf(await tx.execute(sql`SELECT ${k} AS v FROM ${t} WHERE clientId = ${o.survivorId}`)).map((r) => String(r.v)));
+      for (const v of blockedIn(bucket === "emails" ? "email" : bucket === "phones" ? "phone" : "plate")) have.add(v);
       const mine = rowsOf(await tx.execute(sql`SELECT * FROM ${t} WHERE clientId = ${o.mergedId}`));
       const dup = mine.filter((r) => have.has(String(r[key])));
       const move = mine.filter((r) => !have.has(String(r[key])));
@@ -107,6 +140,11 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
     if (ext.length) { snap.moved.externalIds = ext; await tx.execute(sql`UPDATE crm_client_external_ids SET clientId = ${o.survivorId} WHERE id IN (${inList(ext)})`); }
     const links = rowsOf(await tx.execute(sql`SELECT id FROM crm_booking_links WHERE clientId = ${o.mergedId}`)).map((r) => Number(r.id));
     if (links.length) { snap.moved.links = links; for (const part of chunks(links, 800)) await tx.execute(sql`UPDATE crm_booking_links SET clientId = ${o.survivorId} WHERE id IN (${inList(part)})`); }
+    // 21b: o histórico dos retirados e as contas Pro da absorvida passam para a que fica (e voltam ao separar)
+    const removed = rowsOf(await tx.execute(sql`SELECT id FROM crm_removed_items WHERE clientId = ${o.mergedId}`)).map((r) => Number(r.id));
+    if (removed.length) { snap.moved.removed = removed; await tx.execute(sql`UPDATE crm_removed_items SET clientId = ${o.survivorId} WHERE id IN (${inList(removed)})`); }
+    const pro = rowsOf(await tx.execute(sql`SELECT id FROM crm_pro_accounts WHERE crmClientId = ${o.mergedId}`)).map((r) => Number(r.id));
+    if (pro.length) { snap.moved.proAccounts = pro; await tx.execute(sql`UPDATE crm_pro_accounts SET crmClientId = ${o.survivorId} WHERE id IN (${inList(pro)})`); }
 
     // ligações (pessoa ↔ empresa, família): a relação entre as duas desaparece; as outras mudam
     const rels = rowsOf(await tx.execute(sql`SELECT * FROM crm_client_relations WHERE clientId = ${o.mergedId} OR relatedClientId = ${o.mergedId}`));
@@ -127,13 +165,22 @@ export async function mergeClients(db: any, o: { survivorId: number; mergedId: n
       }
     }
 
-    // campos vazios da que fica ← absorvida
-    const fill = Object.fromEntries(Object.entries(fieldsToFill(s, m)).map(([k, v]) => [k, toSqlValue(v)]));
+    // campos vazios da que fica ← absorvida (as notas e as etiquetas juntam-se: nada se perde)
+    const fill = Object.fromEntries(Object.entries(fieldsToFill(s, m)).filter(([k]) => k !== "notes").map(([k, v]) => [k, toSqlValue(v)]));
     snap.filled = fill;
     const sets = Object.entries(fill).map(([k, v]) => sql`${sql.raw("`" + k + "`")} = ${v as any}`);
-    if (sets.length) await tx.execute(sql`UPDATE crm_clients SET ${sql.join(sets, sql`, `)} WHERE id = ${o.survivorId}`);
+    const notes = mergeNotes(s.notes, m.notes, o.mergedId);
+    const tags = mergeTags(s.tagsJson, m.tagsJson);
+    sets.push(sql`notes = ${notes}`, sql`tagsJson = ${tags}`);
+    await tx.execute(sql`UPDATE crm_clients SET ${sql.join(sets, sql`, `)} WHERE id = ${o.survivorId}`);
     await tx.execute(sql`UPDATE crm_clients SET isPro = IF(proManual = 1, isPro, GREATEST(isPro, ${Number(m.isPro) ? 1 : 0})) WHERE id = ${o.survivorId}`);
-    // o que foi retirado à mão da absorvida também não volta à que fica
+    const [after] = rowsOf(await tx.execute(sql`SELECT isPro, notes, tagsJson FROM crm_clients WHERE id = ${o.survivorId}`));
+    snap.survivorAfter = { isPro: Number(after?.isPro ?? 0), notes: after?.notes ?? null, tagsJson: after?.tagsJson ?? null };
+    // o que foi retirado à mão da absorvida também não volta à que fica (e ao separar, sai daqui)
+    const have = new Set(survivorBlocks.map((b) => `${b.kind}|${b.value}`));
+    snap.copiedBlocks = rowsOf(await tx.execute(sql`SELECT kind, value FROM crm_blocked_identifiers WHERE clientId = ${o.mergedId}`))
+      .map((b) => ({ kind: String(b.kind), value: String(b.value) }))
+      .filter((b) => !have.has(`${b.kind}|${b.value}`));
     await tx.execute(sql`INSERT IGNORE INTO crm_blocked_identifiers (clientId, kind, value, blockedBy, createdAt)
       SELECT ${o.survivorId}, kind, value, blockedBy, createdAt FROM crm_blocked_identifiers WHERE clientId = ${o.mergedId}`);
     await tx.execute(sql`UPDATE crm_clients SET status = 'merged', mergedInto = ${o.survivorId} WHERE id = ${o.mergedId}`);
@@ -171,6 +218,14 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
     await back("crm_client_vehicles", snap.moved.vehicles);
     await back("crm_client_external_ids", snap.moved.externalIds);
     await back("crm_booking_links", snap.moved.links);
+    await back("crm_removed_items", snap.moved.removed ?? []);
+    // 21b: as contas Pro voltam à ficha de onde vieram — as que a junção mudou e as que o
+    // crm-pro-sync entretanto ligou à que ficou mas cujo cliente da Multipark é da absorvida
+    for (const part of chunks(snap.moved.proAccounts ?? [], 800)) {
+      await tx.execute(sql`UPDATE crm_pro_accounts SET crmClientId = ${m} WHERE crmClientId = ${s} AND id IN (${inList(part)})`);
+    }
+    await tx.execute(sql`UPDATE crm_pro_accounts pa JOIN crm_client_external_ids x ON x.\`system\` = 'multipark_client' AND x.externalId = pa.mpClientId
+      SET pa.crmClientId = ${m} WHERE x.clientId = ${m} AND pa.crmClientId = ${s}`);
     for (const id of snap.moved.relations) {
       await tx.execute(sql`UPDATE crm_client_relations SET
         clientId = IF(clientId = ${s}, ${m}, clientId), relatedClientId = IF(relatedClientId = ${s}, ${m}, relatedClientId)
@@ -192,6 +247,17 @@ export async function splitMerge(db: any, o: { eventId: number; userId: number }
     // campos preenchidos na que fica: só se ainda estiverem como a junção os deixou
     for (const [k, v] of Object.entries(snap.filled ?? {})) {
       await tx.execute(sql`UPDATE crm_clients SET ${sql.raw("`" + k + "`")} = NULL WHERE id = ${s} AND ${sql.raw("`" + k + "`")} <=> ${v as any}`);
+    }
+    // 21b: Pro, notas e etiquetas da que fica voltam ao que eram — se ninguém mexeu depois da junção
+    if (snap.survivorBefore && snap.survivorAfter) {
+      const b = snap.survivorBefore, a = snap.survivorAfter;
+      await tx.execute(sql`UPDATE crm_clients SET isPro = ${b.isPro} WHERE id = ${s} AND proManual = 0 AND isPro = ${a.isPro}`);
+      await tx.execute(sql`UPDATE crm_clients SET notes = ${b.notes} WHERE id = ${s} AND notes <=> ${a.notes}`);
+      await tx.execute(sql`UPDATE crm_clients SET tagsJson = ${b.tagsJson} WHERE id = ${s} AND tagsJson <=> ${a.tagsJson}`);
+    }
+    // bloqueios que vieram da absorvida saem da que fica (continuam na absorvida)
+    for (const blk of snap.copiedBlocks ?? []) {
+      await tx.execute(sql`DELETE FROM crm_blocked_identifiers WHERE clientId = ${s} AND kind = ${blk.kind} AND value = ${blk.value}`);
     }
     await tx.execute(sql`UPDATE crm_clients SET status = 'active', mergedInto = NULL WHERE id = ${m}`);
     await tx.execute(sql`UPDATE crm_merge_events SET undoneAt = UTC_TIMESTAMP(), undoneBy = ${o.userId} WHERE id = ${o.eventId}`);
