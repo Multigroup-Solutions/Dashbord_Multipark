@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
 /**
- * Ícone da Multis: o símbolo da Multipark (o "P") com uma estrelinha de IA
+ * Ícone do Multis: o símbolo da Multipark (o "P") com uma estrelinha de IA
  * no canto. O tamanho vem do `className` (ex.: "h-12 w-12").
  */
 export function MultisIcon({ className, imgClassName }: { className?: string; imgClassName?: string }) {

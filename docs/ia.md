@@ -258,7 +258,8 @@ nova tentativa.
 
 ## 7. Multis — assistente (chat da equipa)
 
-Chama-se **Multis** (Jorge, 3 out 2026); o ícone é o P da Multipark com uma
+Chama-se **o Multis** (Jorge, 3 out 2026) e apresenta-se com "Olá! Eu sou o Multis.
+Em que posso ajudar?"; o ícone é o P da Multipark com uma
 estrelinha de IA. Botão redondo no canto inferior direito de todas as páginas.
 No telemóvel abre uma folha de baixo; no computador fica um **painel acoplado à
 direita** (400 px) que encolhe o conteúdo, não bloqueia o resto do ecrã, não

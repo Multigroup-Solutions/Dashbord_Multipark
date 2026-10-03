@@ -489,7 +489,7 @@ function DashboardLayoutContent({
     return path === "/comunicacao" ? mailBadgeQ.data.shared : path === "/comunicacao/meu-email" ? mailBadgeQ.data.personal : 0;
   };
   const isMobile = useIsMobile();
-  // Multis acoplada à direita (computador): o conteúdo encolhe para não ficar por baixo dela.
+  // Multis acoplado à direita (computador): o conteúdo encolhe para não ficar por baixo dela.
   const multis = useMultisState();
   const multisDocked = multis.open && !isMobile;
 
@@ -920,7 +920,7 @@ function DashboardLayoutContent({
         </div>
 
         {/* pb extra: a última linha da página não fica por baixo da tab bar
-            (mobile) nem do botão flutuante da Multis */}
+            (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
           {routeDecision.kind === "no_access" ? (
             <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout} />

@@ -1,5 +1,5 @@
 /**
- * Multis — a IA da equipa (antes "Assistente"): botão flutuante em todas as
+ * Multis — o assistente de IA da equipa (antes "Assistente"): botão flutuante em todas as
  * páginas (DashboardLayout). No telemóvel abre uma folha de baixo; no
  * computador fica um painel ACOPLADO à direita (Jorge, 3 out 2026): não tapa
  * nem bloqueia o resto do ecrã, não fecha ao mudar de página e, ao voltar,
@@ -35,7 +35,7 @@ const TOOL_LABELS: Record<string, string> = {
   financeiro_totais: "totais financeiros",
 };
 
-/** Evento para abrir a Multis com uma pergunta (ex.: "Perguntar à Multis" na pesquisa global). */
+/** Evento para abrir o Multis com uma pergunta (ex.: "Perguntar ao Multis" na pesquisa global). */
 export const ASSISTANT_ASK_EVENT = "mp:assistant-ask";
 export function openAssistantWith(question: string) {
   window.dispatchEvent(new CustomEvent(ASSISTANT_ASK_EVENT, { detail: { question } }));
@@ -97,7 +97,7 @@ export function AssistantWidget() {
       }
     },
     onError: (err) => {
-      setMessages((prev) => [...prev, { key: `n-${Date.now()}`, role: "notice", content: err.message || `Não foi possível falar com a ${ASSISTANT_NAME}. Tenta outra vez.` }]);
+      setMessages((prev) => [...prev, { key: `n-${Date.now()}`, role: "notice", content: err.message || `Não foi possível falar com o ${ASSISTANT_NAME}. Tenta outra vez.` }]);
     },
   });
 
@@ -197,7 +197,7 @@ export function AssistantWidget() {
         {shown.length === 0 && !history.isLoading && (
           <div className="flex flex-col items-center gap-4 py-6 text-center">
             <MultisIcon className="h-14 w-14" />
-            <p className="text-sm text-muted-foreground">Olá! Sou a {ASSISTANT_NAME}. Em que te posso ajudar?</p>
+            <p className="text-sm text-muted-foreground">Olá! Eu sou o {ASSISTANT_NAME}. Em que posso ajudar?</p>
             {suggestions.length > 0 && !unavailable && (
               <div className="flex w-full flex-col gap-2">
                 {suggestions.map((s) => (
@@ -254,7 +254,7 @@ export function AssistantWidget() {
           )}
           {ask.isPending && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> A {ASSISTANT_NAME} está a pensar…
+              <Loader2 className="h-4 w-4 animate-spin" /> O {ASSISTANT_NAME} está a pensar…
             </div>
           )}
           <div ref={endRef} />
@@ -281,7 +281,7 @@ export function AssistantWidget() {
             placeholder="Escreve a tua pergunta…"
             rows={1}
             className="max-h-32 min-h-10 flex-1 resize-none text-sm"
-            aria-label={`Pergunta à ${ASSISTANT_NAME}`}
+            aria-label={`Pergunta ao ${ASSISTANT_NAME}`}
             disabled={!!unavailable}
           />
           <Button type="submit" size="icon" className="h-10 w-10 shrink-0" disabled={!input.trim() || ask.isPending || tooLong || !!unavailable} aria-label="Enviar">
@@ -310,7 +310,7 @@ export function AssistantWidget() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label={`Abrir a ${ASSISTANT_NAME}`}
+          aria-label={`Abrir o ${ASSISTANT_NAME}`}
           title={`${ASSISTANT_NAME} — perguntas e ajuda`}
           className={cn(
             "fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
@@ -336,7 +336,7 @@ export function AssistantWidget() {
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {actions}
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setOpen(false)} aria-label={`Fechar a ${ASSISTANT_NAME}`} title="Fechar (a conversa fica guardada)">
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setOpen(false)} aria-label={`Fechar o ${ASSISTANT_NAME}`} title="Fechar (a conversa fica guardada)">
                   <X className="h-4 w-4" />
                 </Button>
               </div>

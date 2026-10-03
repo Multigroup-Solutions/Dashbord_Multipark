@@ -232,7 +232,7 @@ export function GlobalSearch() {
             <CommandPrimitive.Group heading="Multis" className="px-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:text-muted-foreground">
               <CommandPrimitive.Item value="ask-ai" onSelect={askAi} className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-sm data-[selected=true]:bg-accent">
                 <Sparkles className="h-4 w-4 text-primary" />
-                <span className="truncate">Perguntar à Multis: «{q.trim()}»</span>
+                <span className="truncate">Perguntar ao Multis: «{q.trim()}»</span>
               </CommandPrimitive.Item>
             </CommandPrimitive.Group>
           </>

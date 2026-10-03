@@ -1,5 +1,5 @@
 /**
- * Estado da Multis que sobrevive à navegação (e a recarregar a página no PC):
+ * Estado do Multis que sobrevive à navegação (e a recarregar a página no PC):
  * aberta/fechada e a conversa em que se estava. O painel do computador fica
  * acoplado à direita e não fecha ao mudar de página.
  */

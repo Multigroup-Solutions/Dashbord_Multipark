@@ -69,9 +69,9 @@ export type ChatTurnResult =
 
 export const CHAT_MESSAGES: Record<Exclude<ChatFailure, "too_long" | "rate_limited" | "error">, string> = {
   empty: "Escreve uma pergunta.",
-  disabled: "A Multis está desligada de momento. Fala com um administrador se precisares dela.",
-  not_configured: "A Multis ainda não está configurada.",
-  budget: "A Multis está temporariamente indisponível (limite de gastos do mês atingido). Tenta mais tarde.",
+  disabled: "O Multis está desligado de momento. Fala com um administrador se precisares dele.",
+  not_configured: "O Multis ainda não está configurado.",
+  budget: "O Multis está temporariamente indisponível (limite de gastos do mês atingido). Tenta mais tarde.",
 };
 
 /** Separador para redigir histórico + pergunta de uma só vez (marcadores coerentes). */

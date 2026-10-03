@@ -21,7 +21,8 @@ describe("Multis", () => {
     const w = src("client/src/components/assistant/AssistantWidget.tsx");
     expect(w).toContain("<MultisIcon");
     expect(w).not.toContain("Sparkles");
-    expect(w).toContain("aria-label={`Abrir a ${ASSISTANT_NAME}`}");
+    expect(w).toContain("aria-label={`Abrir o ${ASSISTANT_NAME}`}");
+    expect(w).toContain("Olá! Eu sou o {ASSISTANT_NAME}. Em que posso ajudar?");
   });
 
   it("computador: painel acoplado (sem bloquear o ecrã), o conteúdo encolhe; telemóvel: folha de baixo", () => {
@@ -51,11 +52,12 @@ describe("Multis", () => {
     expect(p).toContain("responde PRIMEIRO à pergunta");
     expect(p).toContain("passos numerados");
     expect(p).toContain("faz UMA pergunta curta em vez de adivinhar");
-    expect(CHAT_MESSAGES.disabled).toContain("A Multis");
+    expect(CHAT_MESSAGES.disabled).toContain("O Multis");
+    expect(p).toContain("Olá! Eu sou o Multis. Em que posso ajudar?");
   });
 
   it("ajuda própria e nomes nos outros sítios", () => {
     expect(src("docs/ajuda/multis.md")).toContain("painel fixo à direita");
-    expect(src("client/src/components/GlobalSearch.tsx")).toContain("Perguntar à Multis");
+    expect(src("client/src/components/GlobalSearch.tsx")).toContain("Perguntar ao Multis");
   });
 });

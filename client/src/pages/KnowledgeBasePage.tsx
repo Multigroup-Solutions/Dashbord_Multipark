@@ -81,7 +81,7 @@ function VisibilityEditor({ value, onChange }: { value: KbVisibility; onChange: 
           ))}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">Quem não pode ver um documento não o encontra na pesquisa e o tutor e a Multis nunca o usam nas respostas dessa pessoa.</p>
+      <p className="text-xs text-muted-foreground">Quem não pode ver um documento não o encontra na pesquisa e o tutor e o Multis nunca o usam nas respostas dessa pessoa.</p>
     </div>
   );
 }
@@ -115,7 +115,7 @@ function SettingsCard({ config, onSaved }: { config: KnowledgeConfig; onSaved: (
                 <Switch checked={draft.embeddings} onCheckedChange={(v) => setDraft({ ...draft, embeddings: v })} />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm">
-                <span><b>A Multis usa a base</b></span>
+                <span><b>O Multis usa a base</b></span>
                 <Switch checked={draft.useInAssistant} onCheckedChange={(v) => setDraft({ ...draft, useInAssistant: v })} />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm">
@@ -365,7 +365,7 @@ export default function KnowledgeBasePage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="flex items-center gap-2 text-lg font-semibold"><BookOpen className="h-5 w-5" /> Base de conhecimento</h2>
-          <p className="text-sm text-muted-foreground">Manuais e procedimentos que o tutor da formação, a Multis e a pesquisa global usam (sempre com a visibilidade de cada documento).</p>
+          <p className="text-sm text-muted-foreground">Manuais e procedimentos que o tutor da formação, o Multis e a pesquisa global usam (sempre com a visibilidade de cada documento).</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => syncNow.mutate()} disabled={syncNow.isPending}>
