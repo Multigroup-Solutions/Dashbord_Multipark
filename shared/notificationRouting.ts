@@ -165,9 +165,9 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "rh_docs_missing", group: "pessoas", label: "Documentos em falta (RH)", description: "Extras com documentos obrigatórios em falta há 14 dias.",
     module: "rh", action: "view", roles: ["backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   // 19c: pedido de alteração do IBAN (o próprio/um chefe pediu; o RH aprova). Só sai com o interruptor RH_BANK_CHANGE_NOTIFY.
-  // D49 (Jorge, 3 out 2026): os pedidos de IBAN vão para o RH (back office; admin entra sozinho).
+  // D49 (Jorge, 3 out 2026): os pedidos de IBAN vão para o back office e o supervisor da cidade (admin entra sozinho).
   K({ kind: "rh_bank_change", group: "pessoas", label: "IBAN por aprovar", description: "Alguém pediu para mudar o IBAN de uma ficha da tua cidade — confirma com o comprovativo e aprova ou recusa na ficha. Só chega com \"Aviso dos pedidos de IBAN\" ligado nas Definições.",
-    module: "rh", action: "edit", roles: ["backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+    module: "rh", action: "edit", roles: ["backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "my_docs_missing", group: "pessoas", label: "Os teus documentos em falta", description: "Documentos obrigatórios que ainda tens de carregar na tua ficha.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "driver_application", group: "pessoas", label: "Candidaturas", description: "Candidaturas novas \"Be a Driver\" da tua cidade.",

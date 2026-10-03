@@ -48,7 +48,7 @@ describe("19c IBAN", () => {
     expect(r).toMatch(/nibChangeAction\(current\?\.nib \?\? null, input\.nib, canChangeIbanDirectly\(viewer, ref\)\)/);
     expect(r).toMatch(/createBankChangeRequest\(id, nibAct\.value, ctx\.user\.id\)/);
     expect(r).toMatch(/Quem fez o pedido não o pode aprovar/);
-    expect(r).toMatch(/Só o back office ou um administrador aprova ou recusa pedidos de IBAN/);
+    expect(r).toMatch(/Só o back office, o supervisor da cidade ou um administrador aprova ou recusa pedidos de IBAN/);
     const svc = read("server/rhBankChange.ts");
     expect(svc).toMatch(/encryptSecret\(value\)/);            // o IBAN novo fica cifrado até à aprovação
     expect(svc).not.toMatch(/\.delete\(/);                    // nada se apaga
