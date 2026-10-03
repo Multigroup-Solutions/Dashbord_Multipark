@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -31,6 +31,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Entrega p75**: minutos entre o pedido do cliente e o carro entregue; 75 % das entregas demoram menos do que isto.
    - Na cidade toda há mais três:
      - **Por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas.
+     - Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço: vai do início da entrega ao início do serviço a seguir à recolha.
      - **Na estrada**: do início da entrega até entregue.
      - **Pessoas**: quantas pessoas diferentes trabalharam nessa hora, com o TL.
    - Contorno laranja = hora apertada. Passa o rato por uma célula para ver tudo: volume, carros em simultâneo, entrega, recolha, por carro, na estrada, recolhido → no parque e pessoas.
@@ -47,6 +48,12 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Escala com os tempos medidos** (Definições → Parâmetros, por cidade; **desligado** por omissão): desligado, a escala e a previsão usam só a tabela de máximos, como até aqui.
    - Ligado numa cidade, a previsão, a escala automática e a estimativa passam a usar o tempo por carro **medido nas horas cheias** (com o percentil da cidade), mas **nunca acima do máximo** da tabela.
    - Um escalão com menos de 30 serviços medidos continua com o valor da tabela. Na previsão, a linha da capacidade diz em cada escalão se é **medido** (com o máximo ao lado) ou **tabela**.
+
+**Recolha pelo meio de uma entrega**
+1. Quem leva um carro ao aeroporto volta ao parque com o carro de uma recolha, se houver uma aí: essa recolha não lhe custa um carro a mais.
+2. Conta como "pelo meio" a recolha no **mesmo terminal**, entre **10 min antes e 30 min depois** da hora da entrega, e só uma recolha por entrega. As entregas "Outro" (morada, hotel, estação) nunca contam.
+3. Por baixo da linha da capacidade aparece 🔁 com quantas recolhas são pelo meio e quanto muda o pico de extras.
+4. Liga-se por cidade em Definições → Parâmetros → **Recolha pelo meio de uma entrega** (desligado por omissão). Ligado, a previsão, a escala automática e a estimativa deixam de contar essas recolhas como carro (no T2 fica só a meia extra).
 
 **Escalar a equipa** (Team Leader, Supervisor e acima)
 1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar** e escolhe a pessoa e as horas de início e de fim.

@@ -285,6 +285,7 @@ function CrewCard({ bands, rows, pct, where, useMeasured }: { bands: CrewMeasure
         </div>
         <p className="text-xs text-muted-foreground mt-2">
           Máximo = a tabela das Definições (tempo por carro conforme as pessoas no turno). Horas cheias = cada pessoa teve pelo menos um serviço começado nessa hora; é aí que se vê a capacidade. Nas horas calmas o intervalo inclui esperar por trabalho.
+          Uma entrega com recolha pelo meio (a recolha começa até 30 min depois de entregar) conta como um só serviço.
           A cinzento: menos de {MIN_SAMPLE} serviços.{" "}
           {useMeasured
             ? <>A escala usa o valor das horas cheias, quando há pelo menos {CREW_MEASURE_MIN_SAMPLES} serviços, e nunca acima do máximo (Definições → Parâmetros → Escala com os tempos medidos).</>

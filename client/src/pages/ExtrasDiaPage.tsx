@@ -69,7 +69,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
-import { assignmentWhoLine, describeGap } from "@shared/extrasSchedule";
+import { assignmentWhoLine, describeGap, describePickupPairing } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
@@ -272,6 +272,9 @@ export default function ExtrasDiaPage() {
                 {data.crewRuleText}
               </Badge>
             </p>
+          )}
+          {data && describePickupPairing(data.pickupPairing) && (
+            <p className="text-xs text-muted-foreground mt-1">🔁 {describePickupPairing(data.pickupPairing)}</p>
           )}
         </div>
         <div className="space-y-1">

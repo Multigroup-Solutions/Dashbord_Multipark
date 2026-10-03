@@ -26,7 +26,7 @@ import { DEFAULT_EXTRA_RATES, loadExtraRates, rateFor, type ExtraRates } from ".
 import { multiparkBookings, extrasDiaAssignments, employees, projects, users } from "../drizzle/schema";
 import { DEFAULT_CREW_RULES, DEFAULT_TIMES_PERCENTILE } from "../shared/appSettings";
 import { PRESSURE_CITY_GROUP, describeMeasuredCrewRule, effectiveCrewRule, type CyclePercentile, type MeasuredBandInfo } from "../shared/extrasPressure";
-import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, describeCrewRule, extrasNeededFor, type CrewRule } from "../shared/extrasSchedule";
+import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, PICKUP_PAIR_AFTER_MIN, PICKUP_PAIR_BEFORE_MIN, describeCrewRule, extrasNeededFor, pairPickupsWithDeliveries, pairTerminal, type CrewRule } from "../shared/extrasSchedule";
 import { lisbonDayOf, lisbonWallTimeUtcMs } from "../shared/lisbonDay";
 import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
@@ -157,6 +157,14 @@ export async function loadCapacityRule(city: ExtraCity): Promise<CapacityRule> {
   const rows = (await loadLatestCrewRows()).filter((r) => r.group === PRESSURE_CITY_GROUP[city]);
   const eff = effectiveCrewRule(tableRule, rows, pct);
   return { rule: eff.rule, tableRule, measured: { percentile: pct, bands: eff.bands, usedAny: eff.usedAny } };
+}
+
+/** 26d: "Recolha pelo meio de uma entrega" ligado nesta cidade? (Definições; sem BD → não). Nunca lança. */
+export async function loadPairPickups(city: ExtraCity): Promise<boolean> {
+  try {
+    const { getSetting } = await import("./appSettings");
+    return ((await getSetting("extras.pairPickups")) as any)?.[city] === true;
+  } catch { return false; }
 }
 
 export function cityLabel(city: ExtraCity): string {
@@ -367,6 +375,12 @@ export interface ExtrasDiaForecast {
   crewRuleText: string;
   /** 26c: tempos medidos em uso (null = só a tabela). */
   measuredTimes: CapacityRule["measured"];
+  /**
+   * 26d: recolhas feitas pelo meio de uma entrega (mesmo terminal, −10/+30 min).
+   * `on` = a previsão já não as conta como carro; `peakWith`/`peakWithout` =
+   * extras no pico com e sem a regra (para ver o efeito antes de ligar).
+   */
+  pickupPairing: { on: boolean; pairs: number; peakWith: number; peakWithout: number; beforeMin: number; afterMin: number };
   source: "db";
   /** De onde vieram as reservas: BD da Multipark ao vivo, ou a nossa cópia (recurso). */
   bookingSource: BookingSource;
@@ -1149,11 +1163,15 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     return { hour: effectiveHour, minute: hm.minute };
   }
 
+  // 26d: a mesma procura SEM contar as recolhas feitas pelo meio de uma entrega.
+  const weightedPairedBySlot: number[] = Array.from({ length: FORECAST_SLOTS }, () => 0);
+
   function addToSlot(
     startHour: number,
     startMinute: number,
     deliveryType: string | null,
     type: "checkin" | "checkout",
+    pairedPickup = false,
   ) {
     const startSlot = startHour * SLOTS_PER_HOUR + Math.floor(startMinute / SLOT_MINUTES);
     const cls = classifyDeliveryType(deliveryType);
@@ -1163,9 +1181,14 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     if (cls === "t2" && type === "checkin") spread = [1, 0.5];
     else if (cls === "other") spread = [1, 1, 1]; // Outro: aplica em ambos
     else spread = [1];
+    // 26d: recolha pelo meio de uma entrega → não conta como carro (no T2 fica a meia extra).
+    const paired = pairedPickup ? spread.map((v, i) => (i === 0 ? 0 : v)) : spread;
     for (let i = 0; i < spread.length; i++) {
       const s = startSlot + i;
-      if (s >= 0 && s < FORECAST_SLOTS) weightedBySlot[s] += spread[i];
+      if (s >= 0 && s < FORECAST_SLOTS) {
+        weightedBySlot[s] += spread[i];
+        weightedPairedBySlot[s] += paired[i];
+      }
     }
   }
 
@@ -1175,16 +1198,28 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     else if (cls === "other") hourly[hour].hasOther = true;
   }
 
-  for (const r of targetCheckins) {
-    const hm = bookingEffectiveHM(r.checkInTime, r.checkIn);
+  // 26d: que recolhas (check-ins) ficam pelo meio de uma entrega (check-out).
+  const pickupAt = targetCheckins.map((r) => bookingEffectiveHM(r.checkInTime, r.checkIn));
+  const pairedPickups = pairPickupsWithDeliveries(
+    targetCheckouts.flatMap((r) => {
+      const hm = bookingEffectiveHM(r.checkOutTime, r.checkOut);
+      return hm ? [{ at: hm.hour * 60 + hm.minute, terminal: pairTerminal(classifyDeliveryType(r.deliveryType)) }] : [];
+    }),
+    targetCheckins.map((r, i) => {
+      const hm = pickupAt[i];
+      return { at: hm ? hm.hour * 60 + hm.minute : -1e9, terminal: hm ? pairTerminal(classifyDeliveryType(r.deliveryType)) : null };
+    }),
+  );
+  targetCheckins.forEach((r, i) => {
+    const hm = pickupAt[i];
     if (hm) {
       const slot = Math.floor(hm.minute / SLOT_MINUTES);
       hourly[hm.hour].checkins++;
       hourly[hm.hour].slots[slot].checkins++;
-      addToSlot(hm.hour, hm.minute, r.deliveryType, "checkin");
+      addToSlot(hm.hour, hm.minute, r.deliveryType, "checkin", pairedPickups.has(i));
       markHourClass(hm.hour, r.deliveryType, "checkin");
     }
-  }
+  });
   for (const r of targetCheckouts) {
     const hm = bookingEffectiveHM(r.checkOutTime, r.checkOut);
     if (hm) {
@@ -1201,11 +1236,20 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   // 26c: com "Escala com os tempos medidos" ligado, os medidos (nunca acima da tabela).
   const capacity = await loadCapacityRule(city);
   const crewRule = capacity.rule;
+  // 26d: com "Recolha pelo meio de uma entrega" ligado, a procura sem essas recolhas.
+  const pairOn = await loadPairPickups(city);
+  const demandBySlot = pairOn ? weightedPairedBySlot : weightedBySlot;
+  const peakOf = (bySlot: number[]) => Math.max(0, ...hourly.map((row) => extrasNeededFor(row.slots.reduce((acc, s) => acc + bySlot[s.hour * SLOTS_PER_HOUR + s.slot], 0), crewRule)));
+  const pickupPairing = {
+    on: pairOn, pairs: pairedPickups.size,
+    peakWith: peakOf(weightedPairedBySlot), peakWithout: peakOf(weightedBySlot),
+    beforeMin: PICKUP_PAIR_BEFORE_MIN, afterMin: PICKUP_PAIR_AFTER_MIN,
+  };
   for (const row of hourly) {
     let hourWeighted = 0;
     for (const s of row.slots) {
       const idx = s.hour * SLOTS_PER_HOUR + s.slot;
-      s.weightedDemand = weightedBySlot[idx];
+      s.weightedDemand = demandBySlot[idx];
       s.driversNeeded = extrasNeededFor(s.weightedDemand * SLOTS_PER_HOUR, crewRule);
       hourWeighted += s.weightedDemand;
     }
@@ -1284,6 +1328,7 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     crewRuleTable: capacity.tableRule,
     crewRuleText: capacity.measured ? describeMeasuredCrewRule(capacity.measured.bands, capacity.measured.percentile, crewRule.minCrew) : describeCrewRule(crewRule),
     measuredTimes: capacity.measured,
+    pickupPairing,
     source: "db",
     bookingSource: live.ok ? "multipark-db" : "copy",
     bookingSourceNotice: live.ok ? null : live.notice,

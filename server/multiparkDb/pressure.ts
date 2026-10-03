@@ -41,6 +41,7 @@ import { type DayPark } from "./dayBookings";
 import { OUR_PARK_BRANDS, OUR_PARK_BRAND_LABELS, OUR_PARK_CITIES, MARKETPLACE_GROUP_KEY, MARKETPLACE_GROUP_LABEL } from "../../shared/multiparkParks";
 import { CITY_LABELS } from "../../shared/city";
 import { addDays, lisbonDayRangeUtc } from "../../shared/lisbonDay";
+import { PICKUP_PAIR_AFTER_MIN } from "../../shared/extrasSchedule";
 import {
   LOAD_BUCKETS, MAX_CYCLE_MINUTES, MAX_DELIVERY_MINUTES, MAX_PICKUP_MINUTES, MAX_TO_PARK_MINUTES, PRESSURE_SINCE_DEFAULT, PRESSURE_WINDOW_DAYS,
   RUSH_HOURS, cityGroupKey, isoWeekday,
@@ -301,8 +302,12 @@ const DRIVER_TYPES = ["CHECKING_IN", "CHECK_IN", "MOVEMENT", "CHECKING_OUT", "CH
  *   js   início de cada serviço (1.º início da entrega / da recolha de cada
  *        reserva) e quem o começou;
  *   ph/mv entregue, recolhido e 1.º movimento depois de recolhido;
- *   jb   por serviço: intervalo até ao serviço seguinte do mesmo condutor,
- *        na estrada (entregas) e até ao parque (recolhas);
+ *   jo/jp vizinhos de cada serviço do mesmo condutor e o par "entrega +
+ *        recolha pelo meio" (26d: recolha até 30 min depois de entregar);
+ *   jb   por serviço: intervalo até ao serviço seguinte do mesmo condutor
+ *        (no par: da entrega ao serviço a seguir à recolha; a recolha do par
+ *        não tem intervalo próprio), na estrada (entregas) e até ao parque
+ *        (recolhas);
  *   jw   os da janela, com as durações dentro dos limites (fora → NULL);
  *   hj   serviços começados em cada hora. PURA.
  */
@@ -314,6 +319,7 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
   const s = p.add(w.start);
   const e = p.add(w.end);
   const mins = (a: string, b: string) => `extract(epoch from (${b} - ${a})) / 60.0`;
+  const pairAfter = `interval '${Number(PICKUP_PAIR_AFTER_MIN)} minutes'`;
   return [
     `bk AS (`,
     `  SELECT b."id" AS id FROM "Booking" b`,
@@ -341,12 +347,29 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
     `  SELECT ha.bid, min(ha.at) AS mv_at FROM ha JOIN ph ON ph.bid = ha.bid`,
     `  WHERE ha.ct = 'MOVEMENT' AND ph.ci_done IS NOT NULL AND ha.at > ph.ci_done GROUP BY ha.bid`,
     `),`,
+    // 26d (regra do Jorge): uma entrega seguida de uma recolha do MESMO condutor
+    // até PICKUP_PAIR_AFTER_MIN (30) min depois de entregar é UM serviço (volta ao
+    // parque com o carro da recolha): o intervalo da entrega vai até ao início
+    // do serviço a seguir à recolha e a recolha não conta à parte.
+    `jo AS (`,
+    `  SELECT js.bid, js.ct, js.at, js.uid, ph.co_done,`,
+    `    lead(js.at) OVER wu AS n1_at, lead(js.ct) OVER wu AS n1_ct, lead(js.at, 2) OVER wu AS n2_at,`,
+    `    lag(js.at) OVER wu AS p1_at, lag(js.ct) OVER wu AS p1_ct, lag(ph.co_done) OVER wu AS p1_co_done`,
+    `  FROM js LEFT JOIN ph ON ph.bid = js.bid`,
+    `  WINDOW wu AS (PARTITION BY js.uid ORDER BY js.at, js.bid)`,
+    `),`,
+    `jp AS (`,
+    `  SELECT jo.*,`,
+    `    COALESCE(jo.ct = 'CHECKING_OUT' AND jo.n1_ct = 'CHECKING_IN' AND jo.n1_at >= jo.at AND jo.n1_at <= jo.co_done + ${pairAfter}, false) AS pair_next,`,
+    `    COALESCE(jo.ct = 'CHECKING_IN' AND jo.p1_ct = 'CHECKING_OUT' AND jo.at >= jo.p1_at AND jo.at <= jo.p1_co_done + ${pairAfter}, false) AS pair_prev`,
+    `  FROM jo`,
+    `),`,
     `jb AS (`,
-    `  SELECT js.at, date_trunc('hour', ${L("js.at")}) AS hr_at,`,
-    `    ${mins("js.at", "lead(js.at) OVER (PARTITION BY js.uid ORDER BY js.at, js.bid)")} AS gap,`,
-    `    CASE WHEN js.ct = 'CHECKING_OUT' AND ph.co_done >= js.at THEN ${mins("js.at", "ph.co_done")} END AS drive,`,
-    `    CASE WHEN js.ct = 'CHECKING_IN' THEN ${mins("ph.ci_done", "mv.mv_at")} END AS to_park`,
-    `  FROM js LEFT JOIN ph ON ph.bid = js.bid LEFT JOIN mv ON mv.bid = js.bid`,
+    `  SELECT jp.at, date_trunc('hour', ${L("jp.at")}) AS hr_at,`,
+    `    CASE WHEN jp.pair_prev THEN NULL WHEN jp.pair_next THEN ${mins("jp.at", "jp.n2_at")} ELSE ${mins("jp.at", "jp.n1_at")} END AS gap,`,
+    `    CASE WHEN jp.ct = 'CHECKING_OUT' AND jp.co_done >= jp.at THEN ${mins("jp.at", "jp.co_done")} END AS drive,`,
+    `    CASE WHEN jp.ct = 'CHECKING_IN' THEN ${mins("ph.ci_done", "mv.mv_at")} END AS to_park`,
+    `  FROM jp LEFT JOIN ph ON ph.bid = jp.bid LEFT JOIN mv ON mv.bid = jp.bid`,
     `),`,
     `jw AS (`,
     `  SELECT jb.hr_at,`,
