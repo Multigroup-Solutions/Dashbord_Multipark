@@ -16,6 +16,13 @@ export const CALL_STREAM_REOPEN_MS = 30_000;
 /** Uma ligação SSE dura no máximo isto (a função do Vercel tem maxDuration 60 s). */
 export const CALL_STREAM_MAX_MS = 50_000;
 /**
+ * Travão final (lote 24, Jorge: "Task timed out after 60 seconds" no stream):
+ * conta desde que o PEDIDO chega (antes da sessão e do arranque a frio) e
+ * fecha a resposta mesmo que uma leitura da BD ainda esteja pendurada. O
+ * browser volta a ligar-se sozinho (retry).
+ */
+export const CALL_STREAM_HARD_STOP_MS = 55_000;
+/**
  * Intervalo entre verificações dentro do stream. 2 s (17e — era 1 s): a Meta
  * dá 30–60 s para atender; e a leitura é partilhada por processo
  * (`anyIncomingCallCached`), não uma por separador.

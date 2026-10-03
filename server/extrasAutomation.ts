@@ -24,6 +24,7 @@
  * ficam para a corrida seguinte (runStepsWithDeadline).
  */
 import { isFeatureEnabled } from "./_core/featureFlags";
+import { automationFlagDefault } from "../shared/appSettings";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
@@ -753,6 +754,22 @@ async function dayAlreadyMarked(employeeId: number, day: string, shift: string |
   }
 }
 
+/** Sobreposições dos interruptores lidas frescas (o webhook não passa pelo tRPC). */
+async function ensureFeatureFlagOverridesFresh(): Promise<void> {
+  const { ensureFeatureFlagOverrides } = await import("./_core/featureFlags");
+  await ensureFeatureFlagOverrides();
+}
+
+/**
+ * D30 (Jorge, 3 out 2026): a resposta automática à disponibilidade tem
+ * interruptor próprio (EXTRAS_AVAILABILITY_AUTO_REPLY). Sem valor próprio segue
+ * a "Automação dos extras" (EXTRAS_AUTOMATION), como até aqui.
+ */
+export function availabilityAutoReplyOn(): boolean {
+  const extrasOn = isFeatureEnabled("EXTRAS_AUTOMATION", { defaultEnabled: automationFlagDefault("EXTRAS_AUTOMATION") });
+  return isFeatureEnabled("EXTRAS_AVAILABILITY_AUTO_REPLY", { defaultEnabled: extrasOn });
+}
+
 /**
  * Trata a mensagem de um colaborador conhecido que chegou pelo WhatsApp.
  * Idempotente: cada pedido é respondido no máximo 1× (whatsapp_request_answers).
@@ -760,12 +777,11 @@ async function dayAlreadyMarked(employeeId: number, day: string, shift: string |
  */
 export async function handleWhatsappReply(input: { employeeId: number; conversationId: number; body: string }): Promise<WhatsappReplyOutcome> {
   try {
-    // Com a automação desligada não se marca nem se responde sozinho (17a): a
-    // mensagem fica na caixa para uma pessoa. O webhook não passa pelo tRPC,
+    // Resposta automática desligada → não se marca nem se responde sozinho (17a):
+    // a mensagem fica na caixa para uma pessoa. O webhook não passa pelo tRPC,
     // por isso lê-se o interruptor fresco aqui.
-    const [{ ensureFeatureFlagOverrides }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
-    await ensureFeatureFlagOverrides();
-    if (!isFeatureEnabled("EXTRAS_AUTOMATION", { defaultEnabled: automationFlagDefault("EXTRAS_AUTOMATION") })) return { action: "none" };
+    await ensureFeatureFlagOverridesFresh();
+    if (!availabilityAutoReplyOn()) return { action: "none" };
     const pending = await latestRequestFor(input.employeeId);
     if (!pending) return { action: "none" };
     const { classifyAvailabilityReply } = await import("./availabilityReply");
@@ -960,10 +976,9 @@ export async function handleShiftNoticeButton(input: {
     const date = shiftDateFromNote(sent.note);
     if (!date) return false;
 
-    const [{ ensureFeatureFlagOverrides }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
-    await ensureFeatureFlagOverrides();
-    // Automação desligada: a resposta fica na caixa para uma pessoa (como o texto).
-    if (!isFeatureEnabled("EXTRAS_AUTOMATION", { defaultEnabled: automationFlagDefault("EXTRAS_AUTOMATION") })) return true;
+    await ensureFeatureFlagOverridesFresh();
+    // Resposta automática desligada: a resposta fica na caixa para uma pessoa (como o texto).
+    if (!availabilityAutoReplyOn()) return true;
 
     await applyShiftNoticeAnswer({
       employeeId: input.employeeId,

@@ -218,6 +218,20 @@ describe("applyCallEvents", () => {
     const r = await applyCallEvents(parseCallWebhook(terminateIn("wacid.LOST"), "PNID").events, depsWith(repo, fakeApi()));
     expect(repo.calls[0]).toMatchObject({ callId: "wacid.LOST", status: "missed", conversationId: 10 });
     expect(r.missed).toHaveLength(1);
+    // D38 (Jorge, 3 out 2026): a chamada do cliente renova a janela de 24 h — também sem o connect.
+    expect(repo.touched[0]).toMatchObject({ conversationId: 10, preview: "📞 Chamada recebida", inbound: true });
+    // Retry do mesmo terminate não volta a mexer na janela.
+    const before = repo.touched.length;
+    await applyCallEvents(parseCallWebhook(terminateIn("wacid.LOST"), "PNID").events, depsWith(repo, fakeApi()));
+    expect(repo.touched.length).toBe(before);
+  });
+
+  it("D38: o cliente atende a nossa chamada → a janela de 24 h renova", async () => {
+    const repo = fakeRepo();
+    const deps = depsWith(repo, fakeApi());
+    await repo.upsertOutbound({ callId: "wacid.OUT9", phoneE164: "+351912345678", direction: "out", status: "dialing", startedAt: toDbUtc(T0), startedByUserId: 7, conversationId: 10 });
+    await applyCallEvents(parseCallWebhook(statusOut("wacid.OUT9", "ACCEPTED"), "PNID").events, deps);
+    expect(repo.touched).toEqual([expect.objectContaining({ conversationId: 10, preview: "📞 Chamada efetuada", inbound: true })]);
   });
 
   it("chamada nossa: resposta SDP antes da linha (upsert), RINGING → ACCEPTED → callbacks devolvidos", async () => {

@@ -28,7 +28,7 @@ import { requireAccess } from "./_core/access";
 import { scopedProjectIds } from "./cityScope";
 import type { User } from "../drizzle/schema";
 import {
-  CALL_STREAM_MAX_DB_ERRORS, CALL_STREAM_MAX_MS, CALL_STREAM_PATH, CALL_STREAM_PING_MS, CALL_STREAM_RETRY_MS, CALL_STREAM_TICK_MS,
+  CALL_STREAM_HARD_STOP_MS, CALL_STREAM_MAX_DB_ERRORS, CALL_STREAM_MAX_MS, CALL_STREAM_PATH, CALL_STREAM_PING_MS, CALL_STREAM_RETRY_MS, CALL_STREAM_TICK_MS,
   diffRinging, formatSseEvent, ringingIds,
 } from "../shared/whatsappCallSignal";
 
@@ -80,6 +80,8 @@ async function resolveStreamScope(req: Request, res: Response): Promise<CallScop
 }
 
 export async function handleCallStream(req: Request, res: Response): Promise<void> {
+  // Prazo contado desde a chegada do pedido (a sessão e o arranque a frio também gastam tempo).
+  const startedAt = Date.now();
   const auth = await resolveStreamScope(req, res);
   if ("status" in auth) {
     res.status(auth.status).end();
@@ -103,6 +105,13 @@ export async function handleCallStream(req: Request, res: Response): Promise<voi
   // `res` (não `req`): em Node recente o "close" do pedido dispara logo que o
   // corpo (vazio) do GET é lido; o da resposta é o que diz "o browser saiu".
   res.on("close", () => { closed = true; });
+  // Travão: aos 55 s desde a chegada fecha-se a resposta, mesmo com uma leitura
+  // da BD pendurada (antes passava dos 60 s do Vercel e dava "Task timed out").
+  const hardStop = setTimeout(() => {
+    if (closed) return;
+    closed = true;
+    res.end();
+  }, Math.max(0, startedAt + CALL_STREAM_HARD_STOP_MS - Date.now()));
   const write = (chunk: string): void => {
     if (!closed) res.write(chunk);
   };
@@ -110,7 +119,7 @@ export async function handleCallStream(req: Request, res: Response): Promise<voi
 
   const { anyIncomingCallCached, listIncomingCalls } = await import("./whatsappCallsQueries");
   const { sweepStaleCallsThrottled } = await import("./whatsappCalls");
-  const endAt = Date.now() + CALL_STREAM_MAX_MS;
+  const endAt = startedAt + CALL_STREAM_MAX_MS;
   let lastPing = Date.now();
   let prev = new Set<number>();
   let dbErrors = 0;
@@ -134,9 +143,14 @@ export async function handleCallStream(req: Request, res: Response): Promise<voi
       write(": ping\n\n");
       lastPing = Date.now();
     }
-    await new Promise((r) => setTimeout(r, CALL_STREAM_TICK_MS));
+    // Nunca dorme para lá do prazo.
+    await new Promise((r) => setTimeout(r, Math.max(0, Math.min(CALL_STREAM_TICK_MS, endAt - Date.now()))));
   }
-  if (!closed) res.end();
+  clearTimeout(hardStop);
+  if (!closed) {
+    closed = true;
+    res.end();
+  }
 }
 
 /** Monta a rota nos dois entrypoints (Railway `index.ts` e Vercel `api-entry.ts`). */

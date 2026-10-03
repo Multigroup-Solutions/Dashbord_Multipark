@@ -532,11 +532,14 @@ interface AlertRow { id: number; projectId: number | null; name: string; urgent?
  * sem resposta — `slaAlertedAt`, limpo quando sai uma resposta) e com a janela
  * de 24h a fechar (<2h, aviso 1× por mensagem recebida — `windowAlertedAt`).
  * Uma notificação por cidade (quem tem a cidade no seu âmbito + quem vê todas).
- * WHATSAPP_SLA_NOTIFY=off desliga.
+ * Interruptor WHATSAPP_SLA_NOTIFY (Definições → Automações; a variável também desliga).
  */
 export async function runWhatsappSlaAlerts(now: Date = new Date()): Promise<{ overdue: number; windowClosing: number; notifications: number }> {
   const out = { overdue: 0, windowClosing: 0, notifications: 0 };
-  if (String(process.env.WHATSAPP_SLA_NOTIFY ?? "").trim().toLowerCase() === "off") return out;
+  // D31: interruptor nas Definições (a variável WHATSAPP_SLA_NOTIFY continua a valer por baixo).
+  const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+  await ensureFeatureFlagOverrides();
+  if (!isFeatureEnabled("WHATSAPP_SLA_NOTIFY", { defaultEnabled: automationFlagDefault("WHATSAPP_SLA_NOTIFY") })) return out;
   const db = await getDb();
   if (!db) return out;
   const sla = slaMinutes();

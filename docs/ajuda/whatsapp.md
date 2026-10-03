@@ -33,7 +33,8 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 
 **Respostas automáticas (sem uma pessoa)**
 - Confirmação do **STOP** / **INICIAR** (sempre).
-- Resposta a pedidos de disponibilidade dos extras ("Obrigado, fica confirmado") — só com a automação dos extras ligada.
+- Resposta a pedidos de disponibilidade dos extras ("Obrigado, fica confirmado") e o Sim/Não do aviso de turno — só com **"Extras: resposta automática no WhatsApp"** ligado (Definições → Automações). Sem valor próprio segue a **Automação dos extras**. Desligado: a resposta fica na caixa para uma pessoa.
+- **Aviso de conversas por responder** (sino, de hora a hora): interruptor **"WhatsApp: aviso de conversas por responder"** nas Definições → Automações. Desligado, a caixa continua a mostrar os atrasos; só não avisa.
 - Link da candidatura a um lead que responde — só com a **resposta automática aos leads** ligada (Definições → Automações; desligada por omissão).
 
 **Caixas por tema**

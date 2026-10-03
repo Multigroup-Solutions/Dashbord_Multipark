@@ -379,9 +379,11 @@ function AiUsageCard() {
 // ─── Automações ─────────────────────────────────────────────────────────────
 
 /** De onde vem o estado atual de um interruptor (20b). PURA. */
-function flagSource(f: { override: boolean | null; envValue: boolean | null }): string {
+function flagSource(f: { override: boolean | null; envValue: boolean | null; followsFlag?: string }, followedLabel?: string): string {
   if (f.override != null) return "definido aqui";
   if (f.envValue != null) return "pela variável do servidor";
+  // D30: sem valor próprio, segue outro interruptor.
+  if (f.followsFlag) return `segue "${followedLabel ?? f.followsFlag}"`;
   return "por omissão";
 }
 
@@ -423,7 +425,7 @@ function AutomationsCard() {
               <div className="text-sm font-semibold">{f.label}</div>
               <div className="text-xs text-muted-foreground">{f.description}</div>
               <div className="text-xs mt-1">
-                Agora: <b>{f.effective ? "ligado" : "desligado"}</b> <span className="text-muted-foreground">({flagSource(f)})</span>
+                Agora: <b>{f.effective ? "ligado" : "desligado"}</b> <span className="text-muted-foreground">({flagSource(f, f.followsFlag ? q.data?.find((x) => x.name === f.followsFlag)?.label : undefined)})</span>
                 {f.superAdminOnly && <span className="text-muted-foreground"> · só o super admin muda</span>}
               </div>
               <div className="text-[11px] text-muted-foreground mt-0.5 font-mono break-all">
