@@ -25,7 +25,7 @@ const SENSITIVE_KEY = /^(?:[a-z]*?(?:phone|telefone|telemovel|mobile|whatsapp)|n
  */
 export function maskSensitive(text: string | null | undefined): string | null {
   if (text == null) return null;
-  let s = String(text);
+  let s = maskNestedSensitive(String(text));
   // JSON: "chave": "valor" ou "chave": 123
   s = s.replace(/("([A-Za-z_]+)"\s*:\s*)("((?:[^"\\]|\\.)*)"|-?\d[\d.]*)/g, (all, pre: string, key: string, _v: string, inner: string | undefined) => {
     if (!SENSITIVE_KEY.test(key)) return all;
@@ -50,6 +50,40 @@ export function maskSensitive(text: string | null | undefined): string | null {
   s = s.replace(/(?<![\w•])(?:\+|00)\d{1,3}[\s-]?\d(?:[\s-]?\d){6,12}(?!\d)/g, (m) => tail(m, 3));
   s = s.replace(/(?<![\w•+])9[1236]\d(?:[\s-]?\d){6}(?!\d)/g, (m) => tail(m, 3));
   return s;
+}
+
+/**
+ * 21b: chave sensível com um OBJETO por valor — o "antes → depois" das fichas
+ * ({"nif":{"from":"123456789","to":null}}): a expressão de cima só via
+ * "chave": valor e o NIF ficava por inteiro. Lê o JSON, mascara tudo o que está
+ * debaixo dessas chaves e volta a escrever; texto que não é JSON fica igual.
+ */
+function maskNestedSensitive(text: string): string {
+  const t = text.trim();
+  if (!t.startsWith("{") && !t.startsWith("[")) return text;
+  let root: unknown;
+  try { root = JSON.parse(t); } catch { return text; }
+  let changed = false;
+  const maskAll = (v: unknown, secret: boolean): unknown => {
+    if (v == null) return v;
+    if (Array.isArray(v)) return v.map((x) => maskAll(x, secret));
+    if (typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, maskAll(x, secret)]));
+    const str = String(v);
+    if (secret) { changed = true; return MASK; }
+    if ((str.match(/\d/g) ?? []).length < 5) return v;
+    changed = true;
+    return tail(str, 3);
+  };
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (!v || typeof v !== "object") return v;
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => {
+      if (x && typeof x === "object" && SENSITIVE_KEY.test(k)) return [k, maskAll(x, /password|pass|secret|token|apikey|api_key/i.test(k))];
+      return [k, walk(x)];
+    }));
+  };
+  const out = walk(root);
+  return changed ? JSON.stringify(out) : text;
 }
 
 /** Origens de um registo de atividade (coluna `source`, 0410). */

@@ -3769,6 +3769,26 @@ export const crmBlockedIdentifiers = mysqlTable("crm_blocked_identifiers", {
 	uniqueIndex("uq_crm_blocked").on(table.clientId, table.kind, table.value),
 ]);
 
+/**
+ * CRM — o que se retirou de uma ficha (email, telefone, carro), inteiro, com
+ * quem/quando/porquê; pode ser reposto (P3 lote 21b, migração 0415).
+ */
+export const crmRemovedItems = mysqlTable("crm_removed_items", {
+	id: int().autoincrement().primaryKey(),
+	clientId: int().notNull(),
+	kind: varchar({ length: 16 }).notNull(), // email | phone | vehicle
+	value: varchar({ length: 320 }).notNull(),
+	rowJson: longtext().notNull(),
+	reason: varchar({ length: 255 }),
+	removedBy: int(),
+	removedAt: datetime({ mode: 'string' }).notNull(),
+	restoredAt: datetime({ mode: 'string' }),
+	restoredBy: int(),
+},
+(table) => [
+	index("idx_crm_removed_client").on(table.clientId, table.removedAt),
+]);
+
 // ─── CRM fase 2: clientes Pro com conta corrente — migração 0220 ────────────
 // Alimentado pela BD da Multipark (só leitura). Regras: shared/crmPro.ts.
 
