@@ -43,8 +43,14 @@ export interface LiveHistoryFilters {
 }
 
 const ts = (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI:SS')`;
-/** Matrícula da reserva normalizada (só letras e números, maiúsculas). */
-const PLATE_NORM = `upper(regexp_replace(coalesce(v."licensePlate", ''), '[^A-Za-z0-9]', '', 'g'))`;
+/**
+ * Matrícula da reserva normalizada (só letras e números, maiúsculas). SEM
+ * coalesce: a condição fica estrita (reserva sem carro = NULL, nunca entra) e o
+ * Postgres pode trocar os LEFT JOIN por JOIN e filtrar primeiro as viaturas
+ * (~65 mil) — com coalesce juntava o histórico todo (~280 mil linhas) às
+ * reservas e viaturas antes de filtrar (complaints.vehicleAgents, out 2026).
+ */
+const PLATE_NORM = `upper(regexp_replace(v."licensePlate", '[^A-Za-z0-9]', '', 'g'))`;
 
 function ids(p: ParamList, list: string[] | undefined, col: string): string | null {
   if (list === undefined) return null;
@@ -52,13 +58,29 @@ function ids(p: ParamList, list: string[] | undefined, col: string): string | nu
   return clean.length ? `${col} IN (${clean.map((x) => p.add(x)).join(", ")})` : "FALSE";
 }
 
+/**
+ * Matrícula exata ou "contém". Sem letras nem números ("--", "—") não identifica
+ * carro nenhum → FALSE (antes `= ''` apanhava todas as linhas sem viatura e
+ * mostrava agentes de outras reservas). PURA.
+ */
+function plateCondition(plate: LiveHistoryFilters["plate"], p: ParamList): string | null {
+  if (plate?.exact != null) {
+    const n = normalizePlate(plate.exact);
+    return n ? `${PLATE_NORM} = ${p.add(n)}` : "FALSE";
+  }
+  if (plate?.contains != null) {
+    const n = normalizePlate(plate.contains);
+    return n ? `${PLATE_NORM} LIKE ${p.add(likeContains(n))}` : "FALSE";
+  }
+  return null;
+}
+
 /** Condições (WHERE) dos filtros. PURA. */
 function whereOf(f: LiveHistoryFilters, p: ParamList): string {
   const c: string[] = [];
   const b = ids(p, f.bookingIds, `h."bookingId"`); if (b) c.push(b);
   const u = ids(p, f.userIds, `h."userId"`); if (u) c.push(u);
-  if (f.plate?.exact) c.push(`${PLATE_NORM} = ${p.add(normalizePlate(f.plate.exact))}`);
-  else if (f.plate?.contains) c.push(`${PLATE_NORM} LIKE ${p.add(likeContains(normalizePlate(f.plate.contains)))}`);
+  const plate = plateCondition(f.plate, p); if (plate) c.push(plate);
   if (f.agentName?.exact) c.push(`lower(trim(h."agentName")) = ${p.add(f.agentName.exact.trim().toLowerCase())}`);
   else if (f.agentName?.contains) c.push(`h."agentName" ILIKE ${p.add(likeContains(f.agentName.contains.trim()))}`);
   if (f.from) c.push(`h."actionTime" >= ${p.add(f.from)}::timestamp`);
