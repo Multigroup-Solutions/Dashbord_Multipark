@@ -121,7 +121,8 @@ export function canChangeIbanDirectly(v: RhViewer, e: EmployeeRef): boolean {
  * D49: aprovar/recusar os pedidos de IBAN — o RH que muda na hora: back
  * office e admin (e o super admin). Front office não (aprovar é mudar).
  */
-const IBAN_APPROVER_ROLES: ReadonlySet<string> = new Set(["backoffice", "admin"]);
+// D49 + Jorge (3 out 2026): o supervisor também aprova (só nas suas cidades — canEditPersonal).
+const IBAN_APPROVER_ROLES: ReadonlySet<string> = new Set(["backoffice", "supervisor", "admin"]);
 export function canApproveIbanRequests(v: RhViewer, e: EmployeeRef): boolean {
   if (v.role === "super_admin") return true;
   if (isOwn(v, e.id)) return false;

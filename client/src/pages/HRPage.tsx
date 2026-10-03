@@ -2553,7 +2553,7 @@ export default function HRPage() {
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
       {/* D49: pedidos de IBAN por aprovar (back office e administradores) */}
-      {["backoffice", "admin", "super_admin"].includes(userRole) && <PendingBankChangesCard onOpen={(id) => { setSelectedId(id); setShowUsers(false); setShowPayroll(false); setShowDashboard(false); }} />}
+      {["backoffice", "supervisor", "admin", "super_admin"].includes(userRole) && <PendingBankChangesCard onOpen={(id) => { setSelectedId(id); setShowUsers(false); setShowPayroll(false); setShowDashboard(false); }} />}
       {/* Header com novo colaborador destacado + dropdown de ações */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-muted-foreground text-sm">Gestão de colaboradores, ponto e documentação</p>

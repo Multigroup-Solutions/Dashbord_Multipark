@@ -639,7 +639,7 @@ export const rhRouter = router({
         if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido não encontrado." });
         const viewer = await rhViewer(ctx.user);
         const ref = await rhEmployeeRefOrThrow(req.employeeId);
-        if (!canApproveIbanRequests(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Só o back office ou um administrador aprova ou recusa pedidos de IBAN (e nunca o da própria ficha)." });
+        if (!canApproveIbanRequests(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Só o back office, o supervisor da cidade ou um administrador aprova ou recusa pedidos de IBAN (e nunca o da própria ficha)." });
         // quatro olhos: quem pediu não aprova o próprio pedido (exceto o super admin)
         if (input.approve && req.requestedById === ctx.user.id && ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Quem fez o pedido não o pode aprovar." });
         await assertEmployeeWriteScope(viewer, ref);

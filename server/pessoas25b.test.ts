@@ -30,19 +30,20 @@ describe("D49 — IBAN na hora", () => {
     for (const r of ["backoffice", "supervisor", "admin"]) expect(canChangeIbanDirectly(viewer(r), own)).toBe(false);
     expect(canChangeIbanDirectly(viewer("super_admin"), own)).toBe(true);
   });
-  it("aprovam pedidos: back office, admin e super admin — nunca o da própria ficha", () => {
-    for (const r of ["backoffice", "admin", "super_admin"]) expect(canApproveIbanRequests(viewer(r), other)).toBe(true);
-    for (const r of ["frontoffice", "supervisor", "team_leader"]) expect(canApproveIbanRequests(viewer(r), other)).toBe(false);
+  it("aprovam pedidos: back office, supervisor (da sua cidade), admin e super admin — nunca o da própria ficha", () => {
+    for (const r of ["backoffice", "supervisor", "admin", "super_admin"]) expect(canApproveIbanRequests(viewer(r), other)).toBe(true);
+    for (const r of ["frontoffice", "team_leader"]) expect(canApproveIbanRequests(viewer(r), other)).toBe(false);
+    expect(canApproveIbanRequests(viewer("supervisor", { scopeProjectIds: [9] }), other)).toBe(false);
     expect(canApproveIbanRequests(viewer("backoffice"), own)).toBe(false);
-    expect(employeeAccess(viewer("supervisor"), other)).toMatchObject({ canChangeIban: true, canApproveIban: false });
+    expect(employeeAccess(viewer("supervisor"), other)).toMatchObject({ canChangeIban: true, canApproveIban: true });
     expect(employeeAccess(viewer("frontoffice"), other)).toMatchObject({ canChangeIban: false, canApproveIban: false });
   });
   it("servidor e ecrã usam as regras novas; o aviso vai ao back office e não a quem pediu", () => {
     const r = src("server/rhRouter.ts");
     expect(r).toContain("canChangeIbanDirectly(viewer, ref)");
     expect(r.match(/canApproveIbanRequests\(/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(src("client/src/pages/HRPage.tsx")).toContain('["backoffice", "admin", "super_admin"].includes(userRole)');
-    expect(kindDef("rh_bank_change")?.roles).toEqual(["backoffice"]);
+    expect(src("client/src/pages/HRPage.tsx")).toContain('["backoffice", "supervisor", "admin", "super_admin"].includes(userRole)');
+    expect(kindDef("rh_bank_change")?.roles).toEqual(["backoffice", "supervisor"]);
     expect(src("server/rhBankChange.ts")).toContain("recipientFilter: (c) => c.id !== requestedById");
   });
 });
