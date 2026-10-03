@@ -107,6 +107,12 @@ export interface ExtraLeadRow {
   /** 0380 — arquivado (sai da lista, do funil, dos envios e dos lembretes). */
   archivedAt?: string | null;
   archivedById?: number | null;
+  /** 0460 (D39): lido pela IA nos anexos do email do RH. NIF e números só o RH vê (a lista tira-os aos outros). */
+  nif?: string | null;
+  idDocNumber?: string | null;
+  drivingLicenseNumber?: string | null;
+  aiSummary?: string | null;
+  aiReadAt?: string | null;
   createdById: number | null;
   createdAt: string;
   updatedAt: string;

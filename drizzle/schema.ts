@@ -563,6 +563,9 @@ export const employees = mysqlTable("employees", {
 	cityRequestedAt: timestamp({ mode: 'string' }),
 	autoCreatedAt: timestamp({ mode: 'string' }),
 	nif: varchar({ length: 20 }),
+	// 0460 (D39): n.º do BI/CC e da carta de condução (vêm do candidato, lidos dos anexos pela IA).
+	idDocNumber: varchar({ length: 32 }),
+	drivingLicenseNumber: varchar({ length: 32 }),
 	nib: varchar({ length: 30 }),
 	address: text(),
 	birthDate: timestamp({ mode: 'string' }),
@@ -2672,6 +2675,13 @@ export const extraLeads = mysqlTable("extra_leads", {
 	// 0380 — "Apagar" arquiva (sai da lista, do funil, dos envios e dos lembretes; pode ser reposto).
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedById: int(),
+	// 0460 (D39): lido pela IA nos anexos do email do RH (só campos vazios). NIF/BI-CC/carta só o RH vê.
+	nif: varchar({ length: 16 }),
+	idDocNumber: varchar({ length: 32 }),
+	drivingLicenseNumber: varchar({ length: 32 }),
+	/** Resumo do CV para quem entrevista. */
+	aiSummary: text(),
+	aiReadAt: timestamp({ mode: 'string' }),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -2693,6 +2703,28 @@ export const extraLeadSources = mysqlTable("extra_lead_sources", {
 	outcome: varchar({ length: 16 }).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
+
+// D39 (0460): cada anexo de um email do RH lido pela IA (uma linha por anexo; nunca se repete).
+export const rhAttachmentReads = mysqlTable("rh_attachment_reads", {
+	id: int().autoincrement().primaryKey(),
+	inboundEmailId: int().notNull(),
+	attachmentIndex: int().notNull(),
+	filename: varchar({ length: 255 }),
+	leadId: int(),
+	/** done | failed | skipped */
+	status: varchar({ length: 16 }).notNull(),
+	reason: varchar({ length: 255 }),
+	/** cv | id_card | residence_permit | driving_license | other */
+	docKind: varchar({ length: 24 }),
+	/** O que a IA leu (JSON) — só o RH vê. */
+	extractedJson: text(),
+	summary: text(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_rh_attachment_reads").on(table.inboundEmailId, table.attachmentIndex),
+	index("idx_rh_attachment_reads_lead").on(table.leadId),
+]);
 
 // ─── Tokens do formulário externo de disponibilidades (Fase 4) ──────────────
 // Single-use: cada token é assinado (JWT) com um `jti` que também vive aqui.

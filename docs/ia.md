@@ -94,6 +94,7 @@ da env.
 | `AI_WHATSAPP_ASSIST` | `whatsapp_summary` + `whatsapp_reply` | lite |
 | `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais | fast |
 | `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH | lite. **Desligado por omissão** até decisão sobre o RGPD. |
+| `AI_HR_EMAIL_ATTACHMENTS` | `hr_email_attachments`: anexos dos emails do RH (CV, documentos) → candidato (só campos vazios) + resumo para quem entrevista | lite. **Desligado por omissão**. Corre no varrimento de 15 em 15 min (2 anexos por vez), só emails dos últimos 14 dias, cada anexo uma vez (`rh_attachment_reads`). NIF/BI-CC/carta só o RH vê. |
 | `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz) | lite |
 | `AI_COMPLAINT_TRIAGE` | `complaint_triage`: triagem das reclamações por email | lite |
 | `AI_REVIEW_AUTO_DRAFTS` | `review_auto_draft`: rascunho automático para cada crítica nova | lite |

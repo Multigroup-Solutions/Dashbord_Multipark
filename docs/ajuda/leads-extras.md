@@ -11,6 +11,8 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 **Leads**
 - Contactos que ainda não são extras (do site, de email ou criados à mão). Convida-os por WhatsApp com o template "Seja motorista" e acompanha quem responde.
 - Seleciona vários na tabela para mudar o estado ou a cidade de uma vez, ou para enviar o WhatsApp em lote.
+- **Anexos do email lidos pela IA** (com o interruptor **"IA: anexos dos emails do RH (CV)"** ligado em Definições → Automações; desligado por omissão): os anexos dos emails de candidatura (CV em PDF, imagem ou Word .docx, documentos) são lidos uma vez. No candidato ficam **só os campos vazios**: NIF, n.º do BI/CC, n.º da carta, a cidade **só quando é certa**, telefone/email (outros contactos vão para as notas). Abre o candidato (**Editar**) para ver **"Lido pela IA"**: o **resumo do CV** para quem entrevista e cada anexo (lido, não lido e porquê, ou falhou).
+- **NIF e números dos documentos só o RH vê** (front office, back office, administrador). Ao converter em extra passam para a ficha, só se lá estiverem vazios.
 - Enviar a dois leads ou mais pede primeiro **"Confirmar envio a N"**. Quem recebeu o mesmo template nas últimas 24 h (à mão ou no lembrete automático) fica de fora, com "já recebeu (24 h)".
 - O **Funil** mostra os leads das últimas 12 semanas, por origem e por cidade.
 - A faixa **Atenção** mostra os novos sem contacto há mais de 24 h e os contactados sem resposta há mais de 3 dias. Há também um resumo diário no sino, por cidade.
