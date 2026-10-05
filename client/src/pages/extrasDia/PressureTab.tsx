@@ -232,7 +232,7 @@ const METRIC_HELP: Record<Metric, string> = {
   delivery: "entrega mais lenta (p75 do pedido do cliente até ao carro entregue; só com ≥ 5 entregas)",
   cycle: "mais minutos por carro de cada condutor (p{p} do início de um serviço ao início do seguinte do mesmo condutor; só com ≥ 5)",
   drive: "mais tempo na estrada (p75 do início da entrega até entregue; só com ≥ 5)",
-  crew: "mais pessoas a trabalhar nessa hora (agentes diferentes com ações, TL incluído; média)",
+  crew: "mais pessoas a trabalhar nessa hora (agentes diferentes com ações + o TL, mesmo sem ações; média)",
 };
 
 /**
@@ -257,7 +257,7 @@ function CrewCard({ bands, rows, pct, where, useMeasured }: { bands: CrewMeasure
         <CardTitle className="text-base flex items-center gap-2"><Timer className="h-4 w-4" />Tempo por carro, por condutor{where ? ` — ${where}` : ""}</CardTitle>
         <p className="text-xs text-muted-foreground">
           Do início de um serviço (início da entrega ou da recolha) ao início do serviço seguinte do mesmo condutor: inclui o regresso, o trânsito e as esperas.
-          Valor p{pct}: em {pct === 50 ? "metade" : `${pct} %`} das vezes foi isto ou menos. Pessoas = agentes diferentes a trabalhar nessa hora, com o TL.
+          Valor p{pct}: em {pct === 50 ? "metade" : `${pct} %`} das vezes foi isto ou menos. Pessoas = agentes diferentes a trabalhar nessa hora, sempre com o TL (se não carregou em nada nessa hora, junta-se 1).
         </p>
       </CardHeader>
       <CardContent>
