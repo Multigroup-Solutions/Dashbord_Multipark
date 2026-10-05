@@ -3,6 +3,7 @@ import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { openInMultipark } from "@/lib/multiparkLinks";
+import { retryTransient } from "@/lib/queryRetry";
 import { fileHref } from "@/lib/fileHref";
 import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
@@ -63,7 +64,8 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
   const { data: messages = [] } = messagesQ;
   const vehicleAgentsQ = trpc.lostFound.vehicleAgents.useQuery(
     { plate: item?.vehiclePlate || "", currentBookingRef: item?.bookingRef || undefined },
-    { enabled: seesMore && !!item?.vehiclePlate }
+    // 27c: leitura pesada da BD da Multipark — falha passageira repete só 2 vezes.
+    { enabled: seesMore && !!item?.vehiclePlate, retry: retryTransient }
   );
   const { data: vehicleAgents = [] } = vehicleAgentsQ;
   const timelineQ = trpc.lostFound.bookingTimeline.useQuery(
