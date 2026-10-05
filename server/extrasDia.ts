@@ -331,19 +331,29 @@ export interface HourlyRow {
   checkouts: number;
   driversNeeded: number;
   hasT2: boolean; // alguma reserva com Terminal 2
-  hasOther: boolean; // alguma reserva fora de T1/T2/VIP (Partidas, Oriente, Rossio, Faro, ...)
+  hasOther: boolean; // alguma reserva fora do aeroporto (27a: Lisboa Oriente/Sete Rios/Rossio/Entrecampos; Faro estação)
   slots: Slot20Row[]; // 3 slots per hour
 }
 
 export type DeliveryClass = "t1" | "t2" | "vip" | "other" | "unknown";
 
-export function classifyDeliveryType(dt: string | null | undefined): DeliveryClass {
-  if (!dt) return "unknown";
-  const x = dt.toLowerCase();
-  if (x.includes("terminal 1")) return "t1";
-  if (x.includes("terminal 2")) return "t2";
-  if (x === "vip" || x.endsWith(" vip")) return "vip";
-  return "other";
+/**
+ * Onde é a entrega/recolha (27a, Jorge 5 out 2026): só são "Outro" (60 min)
+ * as que NÃO são no aeroporto —
+ *   - Lisboa: Oriente, Sete Rios, Rossio e Entrecampos; o resto, diga o que
+ *     disser, é T1 ou T2 ("Terminal 2"/"T2" → T2; VIP fica à parte, pesa como o T1);
+ *   - Porto: tudo no aeroporto;
+ *   - Faro: só a estação de comboios é fora.
+ * Sem tipo → "unknown" (pesa como o T1). PURA.
+ */
+export function classifyDeliveryType(dt: string | null | undefined, city: ExtraCity): DeliveryClass {
+  if (!dt || !String(dt).trim()) return "unknown";
+  const x = String(dt).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (city === "lisbon" && /oriente|sete\s*-?\s*rios|rossio|entre\s*-?\s*campos/.test(x)) return "other";
+  if (city === "faro" && /estac|comboio|ferrovia|railway|train/.test(x)) return "other";
+  if (city !== "porto" && /terminal\s*2|\bt\s*2\b/.test(x)) return "t2";
+  if (x === "vip" || /\bvip\b/.test(x)) return "vip";
+  return "t1";
 }
 
 export interface Slot20Row {
@@ -1174,7 +1184,7 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
     pairedPickup = false,
   ) {
     const startSlot = startHour * SLOTS_PER_HOUR + Math.floor(startMinute / SLOT_MINUTES);
-    const cls = classifyDeliveryType(deliveryType);
+    const cls = classifyDeliveryType(deliveryType, city);
     // Regra: T2 só conta como 30min (1.5 slots) em CHECK-IN.
     // Em check-out, T2 trata-se como T1 (20min normal).
     let spread: number[];
@@ -1193,7 +1203,7 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   }
 
   function markHourClass(hour: number, deliveryType: string | null, type: "checkin" | "checkout") {
-    const cls = classifyDeliveryType(deliveryType);
+    const cls = classifyDeliveryType(deliveryType, city);
     if (cls === "t2" && type === "checkin") hourly[hour].hasT2 = true;
     else if (cls === "other") hourly[hour].hasOther = true;
   }
@@ -1203,11 +1213,11 @@ export async function getExtrasDiaForecast(baseDateInput?: string, city: ExtraCi
   const pairedPickups = pairPickupsWithDeliveries(
     targetCheckouts.flatMap((r) => {
       const hm = bookingEffectiveHM(r.checkOutTime, r.checkOut);
-      return hm ? [{ at: hm.hour * 60 + hm.minute, terminal: pairTerminal(classifyDeliveryType(r.deliveryType)) }] : [];
+      return hm ? [{ at: hm.hour * 60 + hm.minute, terminal: pairTerminal(classifyDeliveryType(r.deliveryType, city)) }] : [];
     }),
     targetCheckins.map((r, i) => {
       const hm = pickupAt[i];
-      return { at: hm ? hm.hour * 60 + hm.minute : -1e9, terminal: hm ? pairTerminal(classifyDeliveryType(r.deliveryType)) : null };
+      return { at: hm ? hm.hour * 60 + hm.minute : -1e9, terminal: hm ? pairTerminal(classifyDeliveryType(r.deliveryType, city)) : null };
     }),
   );
   targetCheckins.forEach((r, i) => {

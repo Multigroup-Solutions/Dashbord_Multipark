@@ -409,7 +409,7 @@ export default function ExtrasDiaPage() {
                 <span className="inline-block w-3 h-3 rounded-sm bg-yellow-100 border border-yellow-300 align-text-bottom mx-1"></span>
                 hora com Terminal 2 (30min/reserva) ·
                 <span className="inline-block w-3 h-3 rounded-sm bg-red-100 border border-red-300 align-text-bottom mx-1"></span>
-                hora com Outro (60min/reserva — Partidas, Oriente, Rossio, etc.)
+                hora com serviço fora do aeroporto (60min/reserva — Lisboa: Oriente, Sete Rios, Rossio, Entrecampos; Faro: estação)
               </p>
             </CardHeader>
             <CardContent>
@@ -1627,7 +1627,7 @@ function SlotRow({
         <td className="py-1 px-2 text-right text-xs text-muted-foreground">
           {slot.driversNeeded || ""}
           {slot.weightedDemand > total && total > 0 && (
-            <span className="ml-1 text-amber-700" title="Procura aumentada por T2/Outro">⚠</span>
+            <span className="ml-1 text-amber-700" title="Procura aumentada por T2 / fora do aeroporto">⚠</span>
           )}
         </td>
       </tr>
