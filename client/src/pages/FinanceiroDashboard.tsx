@@ -398,7 +398,7 @@ export default function FinanceiroDashboard() {
             <StatCard
               title={fin?.isCurrentPeriod ? "Custos s/ IVA (até hoje)" : "Custos s/ IVA"}
               value={custosPeriodo}
-              subtitle="despesas + pessoal + TSU + equipa do dia + comissões, no mesmo período"
+              subtitle="despesas (com a TSU paga) + salários + equipa do dia + comissões, no mesmo período"
               icon={TrendingDown}
               className="lg:col-span-2"
               iconBg="bg-red-100"

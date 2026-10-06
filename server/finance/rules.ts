@@ -302,9 +302,21 @@ export interface MarginResult {
   marginPct: number | null;
 }
 /**
- * receita s/IVA − despesas s/IVA − pessoal (base+provisões+variável) − TSU −
+ * 29b (Jorge, 6 out 2026): "os ordenados entram como estão, mas sem as contas
+ * da TSU, que são colocadas nas despesas quando são pagas". A TSU patronal
+ * continua a ser CALCULADA (mostra-se como estimativa), mas não soma aos
+ * custos: entra pelas Despesas (categoria TSU / Segurança Social) quando é
+ * paga. Senão contava duas vezes.
+ */
+export const EMPLOYER_TSU_IN_COSTS = false;
+/** A parte da TSU patronal que soma aos custos (0 com a regra de hoje). PURA. */
+export const countedEmployerTax = (employerTax: number): number => (EMPLOYER_TSU_IN_COSTS ? employerTax : 0);
+
+/**
+ * receita s/IVA − despesas s/IVA − pessoal (base+provisões+variável) −
  * equipa do dia − comissões (venda + operacional). Comissões são CUSTO (nunca
- * deduzidas à receita); marketing NÃO entra (já está nas despesas).
+ * deduzidas à receita); marketing NÃO entra (já está nas despesas); a TSU
+ * patronal só entra pelas Despesas (ver EMPLOYER_TSU_IN_COSTS).
  */
 export function computeMargin(i: MarginInput): MarginResult {
   const vat = i.vatRate ?? FINANCE_PARAMS.vatRate;
@@ -312,7 +324,7 @@ export function computeMargin(i: MarginInput): MarginResult {
   // Líquido real (IVA por categoria) quando o motor o traz; senão, taxa normal
   const expensesNet = i.expensesNet ?? netOfVat(i.expensesGross, vat);
   const salaries = i.salariesBase + i.salariesProvisions + i.salariesVariable;
-  const personnel = salaries + i.employerTax;
+  const personnel = salaries + countedEmployerTax(i.employerTax);
   const commissions = i.salesCommissions + i.operationalCommissions;
   const totalCostsNet = expensesNet + personnel + i.extrasDia + commissions;
   const totalCostsGross = i.expensesGross + personnel + i.extrasDia + commissions;

@@ -52,6 +52,7 @@ import { aggregateExtrasCost, loadExtrasCostRows } from "./extrasCost";
 import { getDb, resolveProjectIds, getPayrollData } from "../db";
 import { matchCityKey } from "../../shared/city";
 import { lisbonDayOf, lisbonDayRangeUtc, lisbonDaySql } from "../../shared/lisbonDay";
+import { isTsuCategory } from "../../shared/financeCategories";
 import * as R from "./rules";
 import { resolveFinanceRates, rateCaseSql, type FinanceRates, type RatePeriod } from "./rates";
 import { loadPartnerIndex, operatedLeavesByPartner, partnerForCampaign, withMarketplacePartner } from "./partners";
@@ -200,6 +201,8 @@ export interface FinanceResult {
     payrollVariableMonths: string[];     // meses com variável do RH aplicado
     /** null = não calculado (só com includeMarketingCoverage) */
     marketingExcluded: { adSpend: number; marketingExpenses: number } | null;
+    /** 29b: categorias de TSU/Segurança Social marcadas "excluir da margem" (a TSU ficava sem contar) */
+    tsuCategoriesExcluded?: Array<{ name: string; total: number }>;
     isCurrentPeriod: boolean;
   };
 }
@@ -494,6 +497,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   }
   out.quality.expensesWithoutProject = expensesWithoutProject;
   out.quality.excludedExpenses = { ...excluded, categories: Array.from(excludedCats, ([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total) };
+  // 29b: a TSU entra pelas Despesas — uma categoria de TSU/Segurança Social "fora da margem" deixava-a sem contar
+  out.quality.tsuCategoriesExcluded = out.quality.excludedExpenses.categories.filter((c) => isTsuCategory(c.name));
   const expensesPending = pendingRows.reduce((s, r) => s + num(r.totalAmount), 0);
 
   // Equipa do dia — REAL (ponto) até hoje; a ESCALA (previsto) nos dias futuros
@@ -620,7 +625,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
       const b = d.base * effShare, p = d.provisions * effShare;
       // TSU com a taxa do dia sobre base + provisões (13.º/14.º pagam TSU)
       const dayTax = R.employerTaxFor(b + p, rates.tsuOn(d.day));
-      if (!isPast(d.day)) { addTo(futureCostByDay, d.day, b + p + dayTax); continue; }
+      if (!isPast(d.day)) { addTo(futureCostByDay, d.day, b + p + R.countedEmployerTax(dayTax)); continue; }
       base += b; prov += p; days++; tax += dayTax;
       addTo(salariesByDay, d.day, b + p);
       employerTax += dayTax;
@@ -754,7 +759,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   fold(futureCostByDay, "costForecast");
   for (const p of buckets.values()) {
     p.partners = p.salesCommissions + p.operationalCommissions;
-    p.totalCost = p.expensesNet + p.salaries + p.employerTax + p.partners + p.extrasCost;
+    p.totalCost = p.expensesNet + p.salaries + R.countedEmployerTax(p.employerTax) + p.partners + p.extrasCost;
     p.margin = p.producedNet - p.totalCost;
     p.marginForecast = p.producedNet + p.revenueForecastNet - p.totalCost - p.costForecast;
   }
@@ -766,7 +771,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .sort((a, b) => b.cost - a.cost);
   if (salariesUnallocated > 0) salariesByProjectRows.push({ projectId: null, projectName: "Por atribuir", cost: salariesUnallocated });
   const costsByProject = Array.from(costByProject.values()).map((c) => ({
-    ...c, total: c.expensesNet + c.salaries + c.employerTax + c.extras + c.salesCommissions + c.operationalCommissions,
+    ...c, total: c.expensesNet + c.salaries + R.countedEmployerTax(c.employerTax) + c.extras + c.salesCommissions + c.operationalCommissions,
   })).sort((a, b) => b.total - a.total);
   out.details = {
     deliveries: Array.from(delivByProject.values()).sort((a, b) => b.totalRevenue - a.totalRevenue),
@@ -803,7 +808,8 @@ export function monthlyRowsFromTimeseries(result: FinanceResult) {
     const produced = p?.produced ?? 0, expensesGross = p?.expenses ?? 0;
     // Sem IVA já vêm dia a dia do motor (taxa em vigor em cada dia)
     const revenueNet = p?.producedNet ?? 0, expensesNet = p?.expensesNet ?? 0;
-    const salaries = p?.salaries ?? 0, employerTax = p?.employerTax ?? 0, partners = p?.partners ?? 0, extras = p?.extrasCost ?? 0;
+    // 29b: só a TSU que soma aos custos (hoje 0 — entra pelas Despesas quando é paga)
+    const salaries = p?.salaries ?? 0, employerTax = R.countedEmployerTax(p?.employerTax ?? 0), partners = p?.partners ?? 0, extras = p?.extrasCost ?? 0;
     const totalCosts = expensesNet + salaries + employerTax + partners + extras;
     const forecastRevenueNoVat = p?.revenueForecastNet ?? 0, forecastCosts = p?.costForecast ?? 0;
     return {

@@ -125,7 +125,8 @@ describe("parceiros e comissões", () => {
 });
 
 describe("computeMargin — a fórmula", () => {
-  it("receita s/IVA − despesas s/IVA − pessoal − TSU − extras − comissões", () => {
+  // 29b (Jorge, 6 out 2026): a TSU patronal entra pelas Despesas quando é paga — não soma aqui
+  it("receita s/IVA − despesas s/IVA − pessoal − extras − comissões (TSU fora: vem nas despesas)", () => {
     const r = computeMargin({
       revenueGross: 1230, expensesGross: 123,
       salariesBase: 100, salariesProvisions: 10, salariesVariable: 5, employerTax: 25,
@@ -134,11 +135,11 @@ describe("computeMargin — a fórmula", () => {
     expect(r.revenueNet).toBeCloseTo(1000, 6);
     expect(r.expensesNet).toBeCloseTo(100, 6);
     expect(r.salaries).toBeCloseTo(115, 6);
-    expect(r.personnel).toBeCloseTo(140, 6);
+    expect(r.personnel).toBeCloseTo(115, 6);
     expect(r.commissions).toBeCloseTo(10, 6);
-    expect(r.totalCostsNet).toBeCloseTo(270, 6);
-    expect(r.margin).toBeCloseTo(730, 6);
-    expect(r.marginPct).toBeCloseTo(73, 6);
+    expect(r.totalCostsNet).toBeCloseTo(245, 6);
+    expect(r.margin).toBeCloseTo(755, 6);
+    expect(r.marginPct).toBeCloseTo(75.5, 6);
     expect(r.vatToPay).toBeCloseTo(230 - 23, 6);
   });
   it("comissão entra UMA vez (custo), nunca deduzida à receita", () => {
