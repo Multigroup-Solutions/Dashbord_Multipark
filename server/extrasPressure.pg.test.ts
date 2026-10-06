@@ -68,23 +68,32 @@ describe.skipIf(!URL)("Pressão por condutor num Postgres real (PRESSURE_PG_URL)
   const w = pressureWindowSince("2026-09-01", "2026-09-10");
 
   it("por hora: condutor por carro, na estrada, até ao parque e pessoas", async () => {
-    const b = buildPressureDriverSlotsSql(w, ["P1"]);
+    // 27b: a Ana (A) é TL; sábado (C e D) não há TL a agir → +1 nas pessoas
+    const b = buildPressureDriverSlotsSql(w, ["P1"], ["A"]);
     const rows = (await q(b.sql, b.params)).map(mapPressureDriverRow);
     // 17h de Lisboa: A 16:00→16:40 e B 16:10→16:50 (40 min); 2 pessoas. 26d: a entrega
     // das 16:40 (entregue 17:05) + a recolha das 17:20 são UM serviço, sem serviço a seguir → fora.
     expect(rows).toContainEqual(expect.objectContaining({ weekday: 5, hour: 17, cycleN: 2, cycleP50: 40, driveN: 4, driveP50: 22.5, crewAvg: 2 }));
     // 26d, sábado 19h: C entrega + recolha pelo meio = 70 min até ao serviço seguinte; D sem par = 60
-    expect(rows).toContainEqual(expect.objectContaining({ weekday: 6, hour: 19, cycleN: 2, cycleP50: 65 }));
+    expect(rows).toContainEqual(expect.objectContaining({ weekday: 6, hour: 19, cycleN: 2, cycleP50: 65, crewAvg: 3 }));
     // 18h: a recolha (recolhido 17:30 → no parque 17:45 = 15 min); sem serviço seguinte
     expect(rows).toContainEqual(expect.objectContaining({ weekday: 5, hour: 18, cycleN: 0, toParkN: 1, toParkP50: 15 }));
   });
 
   it("por escalão de pessoas × hora cheia", async () => {
     const bands = crewMeasureBands(DEFAULT_CREW_RULES.lisbon);
-    const b = buildPressureCrewSql(w, ["P1"], bands);
+    const b = buildPressureCrewSql(w, ["P1"], bands, ["A"]);
     const rows = (await q(b.sql, b.params)).map((r) => mapPressureCrewRow("cidade_lisboa", bands, r));
-    // sexta (40, 40) + sábado (70 do par, 60 sem par)
-    expect(rows).toEqual([{ group: "cidade_lisboa", band: 1, bandLabel: "2", busy: true, n: 4, p50: 50, p60: 56, p75: 62.5, p85: 65.5, p90: 67 }]);
+    // 27b: sexta a Ana (TL) agiu → 2 pessoas (40, 40); sábado o TL não agiu → C + D + TL = 3 (70 do par, 60 sem par).
+    // Hora cheia pelos que agiram (3 serviços ≥ 2 pessoas).
+    expect(rows).toEqual([
+      { group: "cidade_lisboa", band: 1, bandLabel: "2", busy: true, n: 2, p50: 40, p60: 40, p75: 40, p85: 40, p90: 40 },
+      { group: "cidade_lisboa", band: 2, bandLabel: "3–4", busy: true, n: 2, p50: 65, p60: 66, p75: 67.5, p85: 68.5, p90: 69 },
+    ]);
+    // sem TL conhecido → +1 em todas as horas (sexta passa a 3)
+    const b0 = buildPressureCrewSql(w, ["P1"], bands, []);
+    const rows0 = (await q(b0.sql, b0.params)).map((r) => mapPressureCrewRow("cidade_lisboa", bands, r));
+    expect(rows0.map((r) => [r?.bandLabel, r?.n])).toEqual([["3–4", 4]]);
   });
 
   it("as leituras antigas continuam a correr com a janela nova", async () => {

@@ -86,7 +86,8 @@ describe("leituras por condutor (BD da Multipark, só leitura)", () => {
   it("escalões: hora cheia = serviços começados ≥ pessoas", () => {
     const { sql } = buildPressureCrewSql(w, ["p1"], crewMeasureBands(DEFAULT_CREW_RULES.lisbon));
     expect(() => assertReadOnlySql(sql)).not.toThrow();
-    expect(sql).toContain("(COALESCE(hj.jobs, 0) >= GREATEST(COALESCE(crew.n, 1), 1)) AS busy");
+    // 27b: hora cheia pelos que agiram (o TL entra no escalão mesmo sem ações)
+    expect(sql).toContain("(COALESCE(hj.jobs, 0) >= GREATEST(COALESCE(crew.agents, 1), 1)) AS busy");
     expect(sql).toContain("WHERE jw.cycle IS NOT NULL");
   });
   it("linhas → células e escalões", () => {

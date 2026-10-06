@@ -37,7 +37,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
      - **Por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas.
      - Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço: vai do início da entrega ao início do serviço a seguir à recolha.
      - **Na estrada**: do início da entrega até entregue.
-     - **Pessoas**: quantas pessoas diferentes trabalharam nessa hora, com o TL.
+     - **Pessoas**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL**: o TL é o primeiro condutor, por isso, se nessa hora não carregou em nenhum botão na app, junta-se 1. São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.
    - Contorno laranja = hora apertada. Passa o rato por uma célula para ver tudo: volume, carros em simultâneo, entrega, recolha, por carro, na estrada, recolhido → no parque e pessoas.
 5. **Tempo por carro, por condutor** (só na cidade toda): tabela por número de pessoas a trabalhar (os escalões da tabela de máximos das Definições).
    - **Horas cheias**: cada pessoa teve pelo menos um serviço nessa hora. É aqui que se vê a capacidade.

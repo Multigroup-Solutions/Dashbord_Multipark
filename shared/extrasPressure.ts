@@ -24,7 +24,8 @@
  *     entregar) é UM serviço — até ao início do serviço a seguir à recolha;
  *   - na estrada: início da entrega → entregue;
  *   - até ao parque: recolhido → 1.º movimento (levar ao parque);
- *   - pessoas: agentes diferentes com ações nessa hora (TL incluído);
+ *   - pessoas: agentes diferentes com ações nessa hora, sempre com o TL (27b:
+ *     se nenhum TL agiu nessa hora, +1; "hora cheia" conta só os que agiram);
  *   - por escalão de equipa (os da tabela máxima, D12) × "hora cheia" (cada
  *     pessoa teve pelo menos um serviço começado nessa hora — nas horas calmas
  *     o intervalo inclui espera por trabalho e não mede a capacidade).

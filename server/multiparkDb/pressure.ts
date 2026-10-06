@@ -298,7 +298,10 @@ const DRIVER_TYPES = ["CHECKING_IN", "CHECK_IN", "MOVEMENT", "CHECKING_OUT", "CH
 /**
  * CTEs dos serviços por condutor (sem o WITH):
  *   ha   ações da History nas reservas do grupo (janela ±1 dia);
- *   crew pessoas diferentes com ações em cada hora de Lisboa;
+ *   crew pessoas diferentes com ações em cada hora de Lisboa (`agents`) e as
+ *        pessoas do turno (`n`): 27b (Jorge, 5 out) — o TL é o primeiro
+ *        condutor e conta sempre; se nenhum TL (`tlAgentIds`) agiu nessa
+ *        hora, junta-se 1;
  *   js   início de cada serviço (1.º início da entrega / da recolha de cada
  *        reserva) e quem o começou;
  *   ph/mv entregue, recolhido e 1.º movimento depois de recolhido;
@@ -311,7 +314,7 @@ const DRIVER_TYPES = ["CHECKING_IN", "CHECK_IN", "MOVEMENT", "CHECKING_OUT", "CH
  *   jw   os da janela, com as durações dentro dos limites (fora → NULL);
  *   hj   serviços começados em cada hora. PURA.
  */
-export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: string[]): string {
+export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: string[], tlAgentIds: readonly string[] = []): string {
   if (!parkIds.length) throw new Error("Sem parques.");
   const parks = parkIds.map((id) => p.add(id)).join(", ");
   const ws = p.add(w.wideStart);
@@ -320,6 +323,8 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
   const e = p.add(w.end);
   const mins = (a: string, b: string) => `extract(epoch from (${b} - ${a})) / 60.0`;
   const pairAfter = `interval '${Number(PICKUP_PAIR_AFTER_MIN)} minutes'`;
+  const tls = [...new Set(tlAgentIds.map((x) => String(x ?? "").trim()).filter(Boolean))];
+  const tlIn = tls.length ? `ha.uid IN (${tls.map((x) => p.add(x)).join(", ")})` : "FALSE";
   return [
     `bk AS (`,
     `  SELECT b."id" AS id FROM "Booking" b`,
@@ -333,7 +338,9 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
     `    AND h."changeType"::text IN (${inList(DRIVER_TYPES)})`,
     `    AND h."bookingId" IN (SELECT bk.id FROM bk)`,
     `),`,
-    `crew AS (SELECT date_trunc('hour', ${L("ha.at")}) AS hr_at, count(DISTINCT ha.uid) AS n FROM ha WHERE ha.uid IS NOT NULL AND ha.uid <> '' GROUP BY 1),`,
+    `crew AS (SELECT date_trunc('hour', ${L("ha.at")}) AS hr_at, count(DISTINCT ha.uid) AS agents,`,
+    `  count(DISTINCT ha.uid) + CASE WHEN bool_or(${tlIn}) THEN 0 ELSE 1 END AS n`,
+    `  FROM ha WHERE ha.uid IS NOT NULL AND ha.uid <> '' GROUP BY 1),`,
     `js AS (`,
     `  SELECT DISTINCT ON (ha.bid, ha.ct) ha.bid, ha.ct, ha.at, ha.uid FROM ha`,
     `  WHERE ha.ct IN (${inList(JOB_START_TYPES)}) AND ha.uid IS NOT NULL AND ha.uid <> ''`,
@@ -387,9 +394,9 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
  * serviço): condutor por carro (p50/60/75/85/90), na estrada, até ao parque e
  * pessoas por hora (média das horas com movimento). PURA.
  */
-export function buildPressureDriverSlotsSql(w: PressureWindow, parkIds: string[]): { sql: string; params: SqlParam[] } {
+export function buildPressureDriverSlotsSql(w: PressureWindow, parkIds: string[], tlAgentIds: readonly string[] = []): { sql: string; params: SqlParam[] } {
   const p = new ParamList();
-  const base = pressureDriverCtes(p, w, parkIds);
+  const base = pressureDriverCtes(p, w, parkIds, tlAgentIds);
   const s = p.add(w.start);
   const e = p.add(w.end);
   const pct = (q: number, col: string) => `percentile_cont(${q}) WITHIN GROUP (ORDER BY ${col})`;
@@ -429,16 +436,17 @@ export function crewBandCase(col: string, bands: CrewMeasureBand[]): string {
 
 /**
  * Leitura 4 (cidades) — condutor por carro por escalão de pessoas × hora cheia
- * (serviços começados nessa hora ≥ pessoas nessa hora). PURA.
+ * (serviços começados nessa hora ≥ pessoas que agiram nessa hora; 27b: o
+ * escalão conta o TL mesmo sem ações). PURA.
  */
-export function buildPressureCrewSql(w: PressureWindow, parkIds: string[], bands: CrewMeasureBand[]): { sql: string; params: SqlParam[] } {
+export function buildPressureCrewSql(w: PressureWindow, parkIds: string[], bands: CrewMeasureBand[], tlAgentIds: readonly string[] = []): { sql: string; params: SqlParam[] } {
   const p = new ParamList();
-  const base = pressureDriverCtes(p, w, parkIds);
+  const base = pressureDriverCtes(p, w, parkIds, tlAgentIds);
   const pct = (q: number) => `percentile_cont(${q}) WITHIN GROUP (ORDER BY jw.cycle)`;
   const sql = [
     `WITH ${base}`,
     `SELECT ${crewBandCase("COALESCE(crew.n, 0)", bands)} AS band,`,
-    `  (COALESCE(hj.jobs, 0) >= GREATEST(COALESCE(crew.n, 1), 1)) AS busy,`,
+    `  (COALESCE(hj.jobs, 0) >= GREATEST(COALESCE(crew.agents, 1), 1)) AS busy,`,
     `  count(*) AS n, ${pct(0.5)} AS p50, ${pct(0.6)} AS p60, ${pct(0.75)} AS p75, ${pct(0.85)} AS p85, ${pct(0.9)} AS p90`,
     `FROM jw LEFT JOIN crew ON crew.hr_at = jw.hr_at LEFT JOIN hj ON hj.hr_at = jw.hr_at`,
     `WHERE jw.cycle IS NOT NULL`,

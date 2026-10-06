@@ -186,6 +186,8 @@ export async function runExtrasPressure(o: {
   since?: string | null;
   /** 22d: tabela máxima por cidade (D12) — dá os escalões de pessoas. */
   crewRules?: CrewRulesMap | null;
+  /** 27b: agentes da Multipark dos TL (omissão: lidos da nossa BD). */
+  teamLeaderAgentIds?: readonly string[] | null;
 }): Promise<PressureRunResult> {
   const t0 = Date.now();
   const now = o.now ?? t0;
@@ -210,6 +212,8 @@ export async function runExtrasPressure(o: {
   }
   let i = parsePressureCursor(o.cursor, windowEnd);
   const out: PressureRunResult = { ...base, chunks: chunks.length, nextIndex: i };
+  // 27b: o TL conta sempre nas pessoas do turno (junta-se 1 se nenhum TL agiu nessa hora).
+  const tlIds = o.teamLeaderAgentIds !== undefined ? [...(o.teamLeaderAgentIds ?? [])] : await loadTeamLeaderAgentIds();
   const computedAt = utcNow();
   while (i < chunks.length) {
     if (o.deadlineAt - Date.now() < PRESSURE_CHUNK_MIN_MS) break;
@@ -217,9 +221,9 @@ export async function runExtrasPressure(o: {
     try {
       if (chunk.kind === "driver") {
         const bands: CrewMeasureBand[] = crewMeasureBands(crewRules[extraCityOf(chunk.city)] ?? DEFAULT_CREW_RULES[extraCityOf(chunk.city)]);
-        const d = buildPressureDriverSlotsSql(w, chunk.parkIds);
+        const d = buildPressureDriverSlotsSql(w, chunk.parkIds, tlIds);
         const drivers = (await query(d.sql, d.params)).map(mapPressureDriverRow).filter((x): x is DriverRow => !!x);
-        const k = buildPressureCrewSql(w, chunk.parkIds, bands);
+        const k = buildPressureCrewSql(w, chunk.parkIds, bands, tlIds);
         const crew = (await query(k.sql, k.params)).map((r) => mapPressureCrewRow(chunk.key, bands, r)).filter((x): x is PressureCrewRow => !!x);
         await store.upsertDriver(windowEnd, chunk, w, drivers, crew, computedAt);
         out.processed.push(`${chunk.key}:condutores`);
@@ -380,6 +384,30 @@ export async function getPressureView(allowedGroups?: (key: string) => boolean, 
     crew,
     cities,
   };
+}
+
+// ─── 27b: quem são os TL na Multipark ────────────────────────────────────────
+
+/**
+ * Agentes da Multipark dos colaboradores com posto Team Leader: o da ficha
+ * (`multiparkAgentUserId`) e os ligados (`employee_agents`). Duas leituras
+ * simples (sem UNION entre collations). Só leitura; falha → [] (cada hora
+ * leva +1). Nunca lança.
+ */
+export async function loadTeamLeaderAgentIds(): Promise<string[]> {
+  try {
+    const { getDb } = await import("./db");
+    const db = await getDb();
+    if (!db) return [];
+    const linked = rowsOf(await db.execute(sql`SELECT ea.agentUserId AS id FROM employee_agents ea
+      JOIN employees e ON e.id = ea.employeeId WHERE e.position = 'team_leader'`));
+    const own = rowsOf(await db.execute(sql`SELECT multiparkAgentUserId AS id FROM employees
+      WHERE position = 'team_leader' AND multiparkAgentUserId IS NOT NULL AND multiparkAgentUserId <> ''`));
+    return [...new Set([...linked, ...own].map((r) => String(r.id ?? "").trim()).filter(Boolean))];
+  } catch (err: any) {
+    console.warn("[extras-pressure] TL:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+    return [];
+  }
 }
 
 // ─── 26c: escalões medidos para a escala ─────────────────────────────────────
