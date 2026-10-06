@@ -338,8 +338,10 @@ describe("leitura (com a BD simulada)", () => {
     queryMock
       .mockResolvedValueOnce([
         { id: "p1", name: "Airpark", city: "Lisboa" },
-        { id: "p5", name: "Top-Parking", city: "Lisboa" },
+        { id: "p5", name: "Boardingpark", city: "Lisboa" },
         { id: "p6", name: "Parque Não Operado", city: "Lisboa" },
+        // 28a: na lista dos que não operamos (pelo nome) — fica sempre fora
+        { id: "p7", name: "Top-Parking", city: "Lisboa" },
       ])
       .mockResolvedValueOnce([ROW, { ...ROW, id: "cm5", park_id: "p5" }]);
     const r = await getMultiparkDayBookings("2026-09-27", undefined, ["p6"]);
@@ -349,9 +351,9 @@ describe("leitura (com a BD simulada)", () => {
     expect(queryMock.mock.calls[1][1].slice(0, 2)).toEqual(["p1", "p5"]);
     expect(queryMock.mock.calls[1][0]).toContain(`b."parkId" IN ($1, $2)`);
     expect(r.data.parks.map((p) => p.id)).toEqual(["p1", "p5"]);
-    expect(r.data.parks.map((p) => p.groupLabel)).toEqual(["Airpark Lisboa", "Top-Parking"]);
-    expect(r.data.excludedParks).toBe(1);
-    expect(r.data.movements.map((m) => m.booking.groupLabel)).toEqual(["Airpark Lisboa", "Top-Parking"]);
+    expect(r.data.parks.map((p) => p.groupLabel)).toEqual(["Airpark Lisboa", "Boardingpark"]);
+    expect(r.data.excludedParks).toBe(2);
+    expect(r.data.movements.map((m) => m.booking.groupLabel)).toEqual(["Airpark Lisboa", "Boardingpark"]);
   });
   it("todos os parques excluídos → lista vazia sem ler as reservas", async () => {
     process.env[ENV] = "postgres://ro:x@db.example.com:5432/mp";

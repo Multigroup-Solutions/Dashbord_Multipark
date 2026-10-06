@@ -178,11 +178,14 @@ export const settingsRouter = router({
      */
     multiparkParks: adminOnly.query(async () => {
       const { getMultiparkParkClassification } = await import("./multiparkDb/dayBookings");
+      const { isNotOperatedByName, unmatchedNotOperatedNames } = await import("../shared/multiparkParks");
       const r = await getMultiparkParkClassification(undefined);
       if (!r.available) return { available: false as const, reason: r.reason };
       return {
         available: true as const,
-        parks: r.data.parks.map((p) => ({ id: p.id, name: p.name, cityName: p.cityName, status: p.status, groupLabel: p.groupLabel, groupOrder: p.groupOrder, ours: p.ours })),
+        // 28a: `notOperated` = fora pela lista de nomes do Jorge (não se desmarca aqui).
+        parks: r.data.parks.map((p) => ({ id: p.id, name: p.name, cityName: p.cityName, status: p.status, groupLabel: p.groupLabel, groupOrder: p.groupOrder, ours: p.ours, notOperated: isNotOperatedByName(p.name) })),
+        unmatchedNotOperated: unmatchedNotOperatedNames(r.data.parks.map((p) => p.name)),
       };
     }),
     /** IVA/TSU em vigor HOJE nos cálculos (Definições; sem nada gravado = constantes do código). */

@@ -302,7 +302,7 @@ export const SETTINGS = {
     key: EXCLUDED_PARKS_SETTING_KEY,
     group: "operacao",
     label: "Parques que a operação não faz",
-    description: "Parques da BD da Multipark cujas entradas e saídas a operação NÃO faz: saem de Operações → Reservas do dia, da previsão e dos blocos dos Extras do dia, da Pressão, do estado ao vivo da Passagem de turno e das Ocorrências (lista, contagens, Suporte). As Reclamações e as Críticas vêm de todos os parques. Vazio = todos os parques.",
+    description: "Parques da BD da Multipark cujas entradas e saídas a operação NÃO faz: saem de Operações → Reservas do dia, da previsão e dos blocos dos Extras do dia, da Pressão, do estado ao vivo da Passagem de turno e das Ocorrências (lista, contagens, Suporte). As Reclamações e as Críticas vêm de todos os parques. Além destes, ficam SEMPRE fora os parques que não operamos (lista do dono, pelo nome: Top Parking, Check-in Park, Prime Park, …), marcados aqui como \"não operado\". Vazio = só a lista dos não operados.",
     schema: parkIdListSchema,
     defaultValue: [],
     wiring: "live",

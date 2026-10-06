@@ -29,6 +29,7 @@
  *   do parque (recolha/entrega), seja qual for o canal.
  */
 import { matchCityKey, CITY_LABELS, type CityKey } from "./city";
+import { matchKey, matchWords } from "./textKey";
 
 // ─── Parques ────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,45 @@ export const OUR_PARK_BRAND_LABELS: Record<OurParkBrand, string> = {
 
 /** Cidades dos parques nossos, pela ordem em que aparecem. */
 export const OUR_PARK_CITIES: readonly CityKey[] = ["lisboa", "porto", "faro"];
+
+// ─── Parques que NÃO são operados por nós (Jorge, 6 out 2026) ───────────────
+// "Estes não são operados por nós. Todos os outros que estão na plataforma são
+// operados por nós." Casam pelo NOME EXATO (só letras e números, sem acentos —
+// `matchKey`), nunca por "contém": "Top Park" ≠ "Top Parking", "Easy Parking" ≠
+// "Easy Park Estacionamento". Um nome com a cidade ("Top Parking Porto") também
+// casa (2.ª tentativa sem as palavras de cidade). Ficam fora da operação
+// (Reservas do dia, Extras-Dia, Pressão, Passagem de turno, Ocorrências), além
+// dos escolhidos em Definições → "Parques que a operação não faz".
+export const NOT_OPERATED_PARK_NAMES = [
+  "Top Parking", "Elite Park and Detail", "Easy Park Estacionamento", "Prime Park", "Check-in Park",
+  "Estacionamento Quinta do Lamberg", "Top Park", "Aeroporto Park", "Airport Villa Parking", "Boeing Park",
+  "Bruno Miguel Gomes Taboada", "Deluxe Park", "Easy Parking", "Fast Park", "Go Park", "Green Parking",
+  "Guard Park", "Jet Park", "Jorge Taboada", "K Meetings", "Low Cost Parking", "Orange Parking",
+  "Park and Fly", "Parking Terminal 1", "Ricardo Maria", "Smart Park",
+] as const;
+const NOT_OPERATED_KEYS = new Set<string>(NOT_OPERATED_PARK_NAMES.map((n) => matchKey(n)));
+const PARK_CITY_WORDS = new Set(["lisboa", "lisbon", "porto", "oporto", "faro", "algarve"]);
+
+/** O parque está na lista dos que NÃO operamos (nome exato, com ou sem a cidade). PURA. */
+export function isNotOperatedByName(name: string | null | undefined): boolean {
+  const k = matchKey(name);
+  if (!k) return false;
+  if (NOT_OPERATED_KEYS.has(k)) return true;
+  const noCity = matchWords(name).filter((w) => !PARK_CITY_WORDS.has(w)).join("");
+  return noCity.length > 0 && noCity !== k && NOT_OPERATED_KEYS.has(noCity);
+}
+
+/** Nomes da lista sem nenhum parque com esse nome (para avisar nas Definições). PURA. */
+export function unmatchedNotOperatedNames(parkNames: readonly (string | null | undefined)[]): string[] {
+  const hit = new Set<string>();
+  for (const n of parkNames) {
+    const k = matchKey(n);
+    const noCity = matchWords(n).filter((w) => !PARK_CITY_WORDS.has(w)).join("");
+    if (NOT_OPERATED_KEYS.has(k)) hit.add(k);
+    else if (NOT_OPERATED_KEYS.has(noCity)) hit.add(noCity);
+  }
+  return NOT_OPERATED_PARK_NAMES.filter((n) => !hit.has(matchKey(n)));
+}
 
 export const MARKETPLACE_GROUP_KEY = "marketplace";
 export const MARKETPLACE_GROUP_LABEL = "Marketplace";

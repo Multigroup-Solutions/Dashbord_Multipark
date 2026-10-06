@@ -40,7 +40,7 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
-import { classifyPark, type ParkClassification } from "../../shared/multiparkParks";
+import { classifyPark, isNotOperatedByName, type ParkClassification } from "../../shared/multiparkParks";
 import { OTHER_PARK_GROUP_ORDER, excludeParks, operationalParkGroup, toDayMovements, type DayBooking, type DayMovement } from "../../shared/reservasDoDia";
 import { addDays, lisbonMidnightUtcMs } from "../../shared/lisbonDay";
 
@@ -354,6 +354,25 @@ export async function getMultiparkDayBookings(day: string, cities?: string[], ex
  * "Classificação dos parques": todos os parques do âmbito com a classificação
  * calculada (para o Jorge confirmar). Uma leitura leve da tabela "Park".
  */
+// 28a: ids dos parques que NÃO operamos pelo nome (lista do Jorge), para os
+// filtros que só aceitam ids (SQL das Ocorrências). Cache de 10 min no processo.
+const NOT_OPERATED_IDS_CACHE_MS = 10 * 60_000;
+let notOperatedIdsCache: { at: number; ids: string[] } | null = null;
+
+/** Ids dos parques fora pela lista de nomes. Só leitura; falha → [] (fica só a lista por id). Nunca lança. */
+export async function getNotOperatedParkIds(query: Query = multiparkDbQuery): Promise<string[]> {
+  if (notOperatedIdsCache && Date.now() - notOperatedIdsCache.at < NOT_OPERATED_IDS_CACHE_MS) return notOperatedIdsCache.ids;
+  try {
+    const ps = buildParksSql();
+    const ids = mapParks(await query(ps.sql, ps.params)).filter((p) => isNotOperatedByName(p.name)).map((p) => p.id);
+    notOperatedIdsCache = { at: Date.now(), ids };
+    return ids;
+  } catch (err: any) {
+    console.warn("[multiparkDb] parques não operados:", String(err?.message ?? err).slice(0, 160));
+    return [];
+  }
+}
+
 export async function getMultiparkParkClassification(cities?: string[], query: Query = multiparkDbQuery): Promise<MultiparkRead<{ parks: DayParkOut[] }>> {
   return safeMultiparkRead("classificação dos parques", async () => {
     const ps = buildParksSql();

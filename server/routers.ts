@@ -2967,9 +2967,12 @@ export const appRouter = router({
       requireAccess(ctx.user, "ocorrencias", "view");
       const { listMultiparkOccurrences, getMultiparkOccurrenceStats } = await import("./multiparkDb/read");
       const { projectId: _p, limit, offset, ...filters } = input ?? {};
-      // 23a (D16): sem os "Parques que a operação não faz" (Definições).
+      // 23a (D16): sem os "Parques que a operação não faz" (Definições) e, 28a,
+      // sem os que não operamos pelo nome (lista do Jorge; o SQL só aceita ids).
       const { getSetting } = await import("./appSettings");
-      const excludedParkIds = (await getSetting("operations.excludedParks").catch(() => null)) ?? [];
+      const { getNotOperatedParkIds } = await import("./multiparkDb/dayBookings");
+      const settingIds = (await getSetting("operations.excludedParks").catch(() => null)) ?? [];
+      const excludedParkIds = [...new Set([...settingIds, ...(await getNotOperatedParkIds())])];
       const f = { ...filters, cities: scopedCityNames(), excludedParkIds };
       const list = await listMultiparkOccurrences({ ...f, limit, offset });
       if (!list.available) return { available: false as const, reason: list.reason, code: list.code };
@@ -3000,10 +3003,12 @@ export const appRouter = router({
       });
       if (!r.available) return { available: false as const, reason: r.reason };
       const row = (p: (typeof r.data)[number]) => ({ id: p.id, name: p.name, city: p.cityName, ours: p.ours });
+      // 28a: também os que não operamos pelo nome (lista do Jorge).
+      const { isParkExcluded } = await import("../shared/reservasDoDia");
       return {
         available: true as const,
-        handled: r.data.filter((p) => !excluded.has(p.id)).map(row),
-        excluded: r.data.filter((p) => excluded.has(p.id)).map(row),
+        handled: r.data.filter((p) => !isParkExcluded(p, excluded)).map(row),
+        excluded: r.data.filter((p) => isParkExcluded(p, excluded)).map(row),
       };
     }),
 
