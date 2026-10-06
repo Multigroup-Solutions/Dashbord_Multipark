@@ -159,7 +159,7 @@ export type TimesPercentileMap = z.infer<typeof timesPercentileSchema>;
 export const DEFAULT_TIMES_PERCENTILE: TimesPercentileMap = { lisbon: 75, porto: 60, faro: 60 };
 // 26c (fase 2 da capacidade aprendida): a escala usa os tempos medidos, nunca
 // acima da tabela. Desligado por omissão (por cidade).
-export const useMeasuredTimesSchema = z.object({ lisbon: z.boolean(), porto: z.boolean(), faro: z.boolean() }, { error: "Indica Lisboa, Porto e Faro (true ou false)." });
+export const useMeasuredTimesSchema = z.object({ lisbon: z.boolean(), porto: z.boolean(), faro: z.boolean() }, { error: "Indica, para Lisboa, Porto e Faro, se fica ligado ou desligado." });
 export type UseMeasuredTimesMap = z.infer<typeof useMeasuredTimesSchema>;
 export const DEFAULT_USE_MEASURED_TIMES: UseMeasuredTimesMap = { lisbon: false, porto: false, faro: false };
 // 26d (regra do Jorge): a recolha feita pelo meio de uma entrega (mesmo
@@ -191,8 +191,20 @@ export const meetingPointMapSchema = z.object({
   faro: z.string().trim().max(200, "Máximo 200 caracteres."),
 });
 
-/** Telefones para o WhatsApp (ex.: "+351912345678"). */
-const phoneListSchema = z.array(z.string().trim().regex(/^\+?[0-9][0-9 ]{7,19}$/, "Telefone inválido (ex.: +351912345678).")).max(20, "Máximo 20 números.");
+/**
+ * Quem recebe o WhatsApp: um telefone (ex.: "+351912345678") ou, 38a (Jorge:
+ * "devia dar para pôr o nome do RH, que já tem os contactos"), uma pessoa do
+ * RH como "ficha:<id>" — o telefone vem da ficha na hora de enviar.
+ */
+export const PRESENCE_FICHA_PREFIX = "ficha:";
+const PRESENCE_PHONE_RE = /^\+?[0-9][0-9 ]{7,19}$/;
+const PRESENCE_FICHA_RE = /^ficha:[1-9][0-9]{0,9}$/;
+/** "ficha:12" → 12; um telefone → null. PURA. */
+export function presenceFichaId(entry: string): number | null {
+  const v = String(entry ?? "").trim();
+  return PRESENCE_FICHA_RE.test(v) ? Number(v.slice(PRESENCE_FICHA_PREFIX.length)) : null;
+}
+const phoneListSchema = z.array(z.string().trim().refine((v) => PRESENCE_PHONE_RE.test(v) || PRESENCE_FICHA_RE.test(v), "Telefone inválido (ex.: +351912345678).")).max(20, "Máximo 20 pessoas ou números.");
 
 /** Alertas sem PDA/Zello: administradores por cidade + cópia (recebem o WhatsApp). */
 export const presencePhonesSchema = z.object({
@@ -329,7 +341,7 @@ export const SETTINGS = {
     key: "ops.presencePhones",
     group: "operacao",
     label: "Alertas sem PDA/Zello: WhatsApp dos administradores",
-    description: "Telefones que recebem o WhatsApp quando um alerta \"a trabalhar sem PDA ou Zello ligado\" fica sem resposta: os administradores de cada cidade e a cópia para todas as cidades. Um número por linha (ex.: +351912345678).",
+    description: "Quem recebe o WhatsApp quando um alerta \"a trabalhar sem PDA ou Zello ligado\" fica sem resposta: os administradores de cada cidade e a cópia para todas as cidades. Escolhe as pessoas do RH (o telefone vem da ficha, por isso fica sempre atualizado); para alguém que não está no RH, escreve o número em \"Outros números\".",
     schema: presencePhonesSchema,
     defaultValue: { lisbon: [], porto: [], faro: [], copy: [] },
     wiring: "live",
@@ -428,7 +440,7 @@ export const SETTINGS = {
     key: "extras.useMeasuredTimes",
     group: "extras",
     label: "Escala com os tempos medidos (por cidade)",
-    description: "Ligado: a previsão, a escala automática e a estimativa do Extras-dia usam o tempo por carro MEDIDO nas horas cheias (percentil da cidade), nunca acima do máximo da tabela; com menos de 30 serviços medidos num escalão usa a tabela. Desligado: só a tabela, como até aqui. JSON: {\"lisbon\": false, \"porto\": false, \"faro\": false}.",
+    description: "Ligado: o Extras-dia calcula quantos extras são precisos com o tempo por carro que a equipa REALMENTE fez nas horas cheias (medido), em vez da tabela de máximos. Se a equipa foi mais rápida do que a tabela, pede menos extras; se foi mais lenta, fica a tabela (nunca pede mais do que a tabela pediria). Num escalão com menos de 30 serviços medidos continua a usar a tabela. Desligado: só a tabela, como até aqui. Liga cidade a cidade.",
     schema: useMeasuredTimesSchema,
     defaultValue: DEFAULT_USE_MEASURED_TIMES,
     wiring: "live",
@@ -437,7 +449,7 @@ export const SETTINGS = {
     key: "extras.pairPickups",
     group: "extras",
     label: "Recolha pelo meio de uma entrega (por cidade)",
-    description: "Ligado: na previsão, na escala automática e na estimativa do Extras-dia, uma recolha no mesmo terminal entre 10 min antes e 30 min depois de uma entrega não conta como carro (o condutor volta ao parque com ela; no T2 conta só a meia extra). Uma recolha por entrega; \"Outro\" (morada, hotel) nunca conta. Desligado: cada recolha conta como um carro, como até aqui. JSON: {\"lisbon\": false, \"porto\": false, \"faro\": false}.",
+    description: "Ligado: quem leva um carro ao aeroporto e volta ao parque com o carro de uma recolha não conta essa recolha como um carro a mais. Vale para a recolha no mesmo terminal, entre 10 min antes e 30 min depois da entrega (uma por entrega; no T2 conta só a meia extra; moradas e hotéis nunca contam). Resultado: a previsão e a escala pedem menos extras nas horas com entregas e recolhas juntas. Desligado: cada recolha conta como um carro, como até aqui. Liga cidade a cidade.",
     schema: pairPickupsSchema,
     defaultValue: DEFAULT_PAIR_PICKUPS,
     wiring: "live",
