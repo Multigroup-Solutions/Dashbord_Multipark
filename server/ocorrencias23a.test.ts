@@ -31,9 +31,11 @@ describe("D16 parques que a operação não faz", () => {
     const list = routes.split("multipark: protectedProcedure.input(z.object({\n      projectId")[1].split("multiparkById:")[0];
     expect(list).toContain('getSetting("operations.excludedParks")');
     expect(list).toContain("excludedParkIds };");
+    // 28a: mais os que não operamos pelo nome (o SQL só aceita ids)
+    expect(list).toContain("...(await getNotOperatedParkIds())");
     const parks = routes.split("parksHandled: protectedProcedure")[1].split("multiparkById:")[0];
     expect(parks).toContain('requireAccess(ctx.user, "ocorrencias", "view")');
-    expect(parks).toContain("handled: r.data.filter((p) => !excluded.has(p.id))");
+    expect(parks).toContain("handled: r.data.filter((p) => !isParkExcluded(p, excluded))");
     expect(parks).toContain("scopedCityNames()");
     expect(src("client/src/pages/IncidentsPage.tsx")).toContain("<ParksHandledNote");
   });

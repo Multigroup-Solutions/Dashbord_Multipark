@@ -12,6 +12,7 @@
  * Definições). O canal Direto / Parceiro / Marketplace é da contabilidade e NÃO
  * entra aqui (vive em shared/multiparkParks.ts, usado pela ficha da reserva).
  */
+import { isNotOperatedByName } from "./multiparkParks";
 
 // ─── Estados e fases ────────────────────────────────────────────────────────
 
@@ -300,9 +301,19 @@ export function groupMovements(rows: DayMovement[]): DayGroupSection[] {
   return [...out.values()].sort(compareGroups);
 }
 
-/** Tira os parques que a operação não faz (Definições). PURA. */
-export function excludeParks<T extends { id: string }>(parks: T[], excludedIds: readonly string[] | null | undefined): T[] {
-  if (!excludedIds?.length) return parks;
-  const ex = new Set(excludedIds);
-  return parks.filter((p) => !ex.has(p.id));
+/**
+ * Tira os parques que a operação não faz: os escolhidos em Definições (por id)
+ * E os que não operamos pelo nome (28a, lista do Jorge — `isNotOperatedByName`).
+ * Nada a tirar → o mesmo array. PURA.
+ */
+export function excludeParks<T extends { id: string; name?: string | null }>(parks: T[], excludedIds: readonly string[] | null | undefined): T[] {
+  const ex = new Set(excludedIds ?? []);
+  const out = parks.filter((p) => !ex.has(p.id) && !isNotOperatedByName(p.name));
+  return out.length === parks.length ? parks : out;
+}
+
+/** Fica fora da operação? (Definições por id OU lista por nome). PURA. */
+export function isParkExcluded(p: { id: string; name?: string | null }, excludedIds: ReadonlySet<string> | readonly string[] | null | undefined): boolean {
+  const ex = excludedIds instanceof Set ? excludedIds : new Set(excludedIds ?? []);
+  return ex.has(p.id) || isNotOperatedByName(p.name);
 }

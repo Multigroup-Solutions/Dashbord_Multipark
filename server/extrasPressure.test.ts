@@ -37,7 +37,7 @@ const PARK_ROWS = [
   { id: "p1", name: "Airpark Lisboa", city: "Lisboa", firebase_brand: null, listing_type: "ON_PLATFORM", status: "ACTIVE" },
   { id: "p2", name: "Redpark Lisboa", city: "Lisboa", firebase_brand: null, listing_type: "ON_PLATFORM", status: "ACTIVE" },
   { id: "p3", name: "Skypark Porto", city: "Porto", firebase_brand: null, listing_type: "ON_PLATFORM", status: "ACTIVE" },
-  { id: "p4", name: "Top Parking", city: "Lisboa", firebase_brand: null, listing_type: "DIRECTORY", status: "ACTIVE" },
+  { id: "p4", name: "Boardingpark", city: "Lisboa", firebase_brand: null, listing_type: "DIRECTORY", status: "ACTIVE" },
 ];
 
 const slot = (weekday: number, hour: number, patch: Partial<PressureSlot> = {}): PressureSlot => ({

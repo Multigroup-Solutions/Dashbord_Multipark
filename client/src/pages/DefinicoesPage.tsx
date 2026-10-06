@@ -792,6 +792,8 @@ function ParkPicker({ selected, onChange }: { selected: string[]; onChange: (ids
     .sort((a, b) => a.groupOrder - b.groupOrder || a.groupLabel.localeCompare(b.groupLabel, "pt") || a.name.localeCompare(b.name, "pt"))
     .filter((p) => !f || `${p.name} ${p.cityName ?? ""} ${p.groupLabel}`.toLowerCase().includes(f));
   const missing = selected.filter((id) => !known.has(id));
+  const byName = parks.filter((p) => p.notOperated).length;
+  const unmatched = q.data?.available ? q.data.unmatchedNotOperated : [];
   const toggle = (id: string, on: boolean) => onChange(on ? [...selected.filter((x) => x !== id), id] : selected.filter((x) => x !== id));
   return (
     <div className="space-y-2 max-w-2xl">
@@ -802,20 +804,26 @@ function ParkPicker({ selected, onChange }: { selected: string[]; onChange: (ids
         <>
           <div className="flex items-center gap-2 flex-wrap">
             <Input className="max-w-xs h-8" placeholder="Filtrar parques" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filtrar parques" />
-            <span className="text-xs text-muted-foreground">{selected.length} {selected.length === 1 ? "parque escolhido" : "parques escolhidos"} de {parks.length}</span>
+            <span className="text-xs text-muted-foreground">{selected.length} {selected.length === 1 ? "parque escolhido" : "parques escolhidos"} de {parks.length}{byName > 0 ? ` · mais ${byName} fora pela lista dos que não operamos` : ""}</span>
           </div>
           <div className="border rounded-md max-h-72 overflow-y-auto divide-y">
             {rows.map((p) => (
-              <label key={p.id} className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/40">
-                <Checkbox checked={sel.has(p.id)} onCheckedChange={(v) => toggle(p.id, v === true)} aria-label={p.name} />
+              <label key={p.id} className={`flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-muted/40 ${p.notOperated ? "opacity-70" : "cursor-pointer"}`}>
+                <Checkbox checked={p.notOperated || sel.has(p.id)} disabled={p.notOperated} onCheckedChange={(v) => toggle(p.id, v === true)} aria-label={p.name} />
                 <span className="min-w-0 flex-1 truncate">{p.name}{p.cityName && !p.name.toLowerCase().includes(p.cityName.toLowerCase()) ? ` · ${p.cityName}` : ""}</span>
                 {p.ours && <Badge variant="outline" className="text-[10px]">{p.groupLabel}</Badge>}
+                {p.notOperated && <Badge variant="secondary" className="text-[10px]" title="Na lista dos parques que não operamos (fica sempre fora)">não operado</Badge>}
                 {p.status && p.status !== "ACTIVE" && <span className="text-[11px] text-muted-foreground">{p.status === "INACTIVE" ? "inativo" : p.status === "PENDING" ? "pendente" : p.status}</span>}
               </label>
             ))}
             {rows.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">Nenhum parque com este filtro.</p>}
           </div>
         </>
+      )}
+      {unmatched.length > 0 && (
+        <p className="text-xs text-amber-800">
+          <AlertTriangle className="inline h-3 w-3 mr-1" />Da lista dos que não operamos, sem parque com este nome na BD da Multipark: {unmatched.join(", ")}.
+        </p>
       )}
       {missing.length > 0 && (
         <div className="text-xs space-y-1">
