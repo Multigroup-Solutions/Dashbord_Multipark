@@ -20,12 +20,12 @@ import {
 import { Fragment, useState, useMemo } from "react";
 import {
   Handshake, Euro, Crown, ArrowRightLeft,
-  Plus, Pencil, Archive, Settings, AlertTriangle, Wallet, Building2,
+  Plus, Pencil, Archive, Settings, AlertTriangle, Wallet, Building2, Link2,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { PartnersLiveTab, ParksLiveTab, ProLiveTab, type PartnershipRecord } from "@/components/partnerships/LiveTabs";
 import { PARTNER_TYPES, PARTNER_CATEGORIES, getPartnerType, partnerCategoryOf, parsePartnerConfig, serializePartnerConfig, partnerFormFields } from "@shared/partnerTypes";
-import { isPartnerUnconfigured, monthBoundsOf } from "@shared/partnerRules";
+import { isAwaitingMultiparkLink, isPartnerUnconfigured, monthBoundsOf } from "@shared/partnerRules";
 import { lisbonToday } from "@shared/expensePeriods";
 import { toast } from "sonner";
 import { MultiparkSyncCard } from "@/components/partnerships/MultiparkSyncCard";
@@ -398,6 +398,12 @@ export default function PartnershipsPage() {
   // Fila "Por configurar": parceiros que nenhum admin gravou (ex.: criados
   // pela sincronização automática com 0% e sem avença).
   const unconfigured = useMemo(() => (partnerList as any[]).filter(isPartnerUnconfigured), [partnerList]);
+  // 29a: Pros, avenças, agências e agregadores ainda sem ligação — resolvem-se com "Ligar à Multipark" → Aplicar
+  const awaitingLink = useMemo(() => (partnerList as any[]).filter(isAwaitingMultiparkLink), [partnerList]);
+  // 29a: registos inativos fora da lista, salvo se pedires
+  const [showInactiveRecords, setShowInactiveRecords] = useState(false);
+  const recordList = useMemo(() => (showInactiveRecords ? (partnerList as any[]) : (partnerList as any[]).filter((p: any) => p.partnerStatus !== "inactive")), [partnerList, showInactiveRecords]);
+  const inactiveRecords = useMemo(() => (partnerList as any[]).filter((p: any) => p.partnerStatus === "inactive").length, [partnerList]);
   // Juntar registos (o mesmo parceiro em vários registos)
   const [mergeSel, setMergeSel] = useState<Set<number>>(new Set());
   const [mergeOpen, setMergeOpen] = useState(false);
@@ -675,6 +681,17 @@ export default function PartnershipsPage() {
 
           <MultiparkSyncCard />
 
+          {awaitingLink.length > 0 && (
+            <p role="status" className="flex items-start gap-2 rounded-md border border-sky-300 bg-sky-50/60 dark:bg-sky-950/20 px-3 py-2 text-xs">
+              <Link2 className="w-4 h-4 shrink-0 text-sky-700" />
+              <span>
+                <b>{awaitingLink.length} registo(s)</b> de Pros, avenças, agências ou agregadores ainda não estão ligados à Multipark (vêm da antiga sincronização).
+                Não precisas de os configurar à mão: carrega em <b>Ver o que muda</b> → <b>Aplicar</b> e ficam ligados (o tipo, a taxa e a avença passam a vir de lá);
+                os que já não existem na Multipark são arquivados, nunca apagados. Depois liga <b>Definições → Automações → "Parcerias: manter ligadas à Multipark todos os dias"</b>.
+              </span>
+            </p>
+          )}
+
           {mergeSel.size > 0 && (
             <div className="sticky top-2 z-10 flex flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 dark:bg-sky-950/40 p-2 text-sm shadow">
               <span className="flex-1">{mergeSel.size} registo(s) selecionado(s) — o mesmo parceiro? Junta-os num só (as reservas vão com eles).</span>
@@ -697,8 +714,8 @@ export default function PartnershipsPage() {
                 <h3 className="font-semibold text-sm">Por configurar ({unconfigured.length})</h3>
               </div>
               <p className="text-xs text-muted-foreground mb-3">
-                Registos sem dados gravados (ex.: criados pela antiga sincronização automática). Até serem configurados, a comissão conta como
-                "taxa em falta" nas finanças. Confirma o tipo, a comissão (mesmo que seja 0%) ou a avença.
+                Registos só nossos (hotéis, empresas, outros — não existem na Multipark) sem dados gravados. Até serem configurados, a comissão conta como
+                "taxa em falta" nas finanças. Confirma o tipo e a comissão (mesmo que seja 0%).
               </p>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {unconfigured.map((p: any) => (
@@ -719,11 +736,11 @@ export default function PartnershipsPage() {
 
           {/* Segmentação por CATEGORIA (Prós | Agências | Empresas | Agregadores | Operacional) */}
           {partnerList.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {[{ id: "all", label: "Todos" }, ...PARTNER_CATEGORIES.map(c => ({ id: c.id, label: c.label }))].map(t => {
                 const count = t.id === "all"
-                  ? partnerList.length
-                  : (partnerList as any[]).filter((p: any) => partnerCategoryOf(p.partnerType) === t.id).length;
+                  ? recordList.length
+                  : recordList.filter((p: any) => partnerCategoryOf(p.partnerType) === t.id).length;
                 if (t.id !== "all" && count === 0) return null;
                 return (
                   <button
@@ -735,6 +752,11 @@ export default function PartnershipsPage() {
                   </button>
                 );
               })}
+              {inactiveRecords > 0 && (
+                <button type="button" onClick={() => setShowInactiveRecords((v) => !v)} className="ml-1 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                  {showInactiveRecords ? "Esconder inativos" : `Mostrar inativos (${inactiveRecords})`}
+                </button>
+              )}
             </div>
           )}
 
@@ -744,7 +766,7 @@ export default function PartnershipsPage() {
             </Card>
           ) : (
             <div className="grid gap-3">
-              {(partnerList as any[]).filter((p: any) => mgmtType === "all" || partnerCategoryOf(p.partnerType) === mgmtType).map((p: any) => (
+              {recordList.filter((p: any) => mgmtType === "all" || partnerCategoryOf(p.partnerType) === mgmtType).map((p: any) => (
                 <Card key={p.id} className={`p-4 ${mergeSel.has(p.id) ? "ring-2 ring-sky-500" : ""}`}>
                   <div className="flex items-start justify-between gap-2">
                     <input type="checkbox" aria-label={`Selecionar ${p.name} para juntar`} checked={mergeSel.has(p.id)} onChange={() => toggleMerge(p.id)} className="mt-1 shrink-0" />

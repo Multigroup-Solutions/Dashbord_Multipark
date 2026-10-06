@@ -38,14 +38,44 @@ export function partnerFeeForPeriod(partnerType: string, monthlyFee: number | nu
   return Math.round(fee * monthsCovered(from, to) * 100) / 100;
 }
 
+/** Tipos sem comissão de venda: o Pro tem desconto, a avença paga uma mensalidade. */
+export const NO_COMMISSION_TYPES: ReadonlySet<string> = new Set(["cliente_pro", "avenca_mensal", "avenca_anual"]);
+/** Tipos que vêm da Multipark (mesma lista que shared/partnerMultiparkSync.ts SYNCED_TYPES). */
+const MULTIPARK_TYPES: ReadonlySet<string> = new Set(["agregador", "agencia_viagem", "cliente_pro", "avenca_mensal", "avenca_anual"]);
+
+type PartnerRecordState = {
+  configuredAt?: string | Date | null; partnerType?: string | null; partnerStatus?: string | null;
+  multiparkPartnerId?: string | null; multiparkKind?: string | null;
+};
+
+/** Registo preso a um parceiro/Pro/avença da Multipark (o tipo e a taxa vêm de lá). PURA. */
+export function isLinkedToMultipark(p: PartnerRecordState): boolean {
+  return !!(p.multiparkPartnerId && String(p.multiparkPartnerId).trim()) || ["partner", "pro", "plan"].includes(String(p.multiparkKind ?? ""));
+}
+
 /**
  * Um parceiro está "por configurar" enquanto nenhum admin o gravou no ecrã
  * (configuredAt NULL). Os parceiros criados pela sincronização automática
  * nascem com 0% e sem avença — sem esta marca não se distinguia um 0%
  * confirmado de uma taxa nunca preenchida.
+ *
+ * 29a (Jorge, 6 out: "porque é que isto continua a aparecer se tudo está na
+ * Multipark?"): NÃO pedem configuração os ligados à Multipark (lá manda ela),
+ * os inativos, nem os tipos que vêm da Multipark (Pros, avenças, agências,
+ * agregadores — esses ligam-se em "Ligar à Multipark", ver
+ * isAwaitingMultiparkLink). Fica só o que é nosso (hotel, empresa, outro…).
  */
-export function isPartnerUnconfigured(p: { configuredAt?: string | Date | null }): boolean {
-  return p.configuredAt == null;
+export function isPartnerUnconfigured(p: PartnerRecordState): boolean {
+  if (p.configuredAt != null) return false;
+  if (isLinkedToMultipark(p)) return false;
+  if (p.partnerStatus === "inactive") return false;
+  if (p.partnerType && MULTIPARK_TYPES.has(p.partnerType)) return false;
+  return true;
+}
+
+/** 29a: registo de um tipo da Multipark ainda por ligar (resolve-se com "Ligar à Multipark" → Aplicar). PURA. */
+export function isAwaitingMultiparkLink(p: PartnerRecordState): boolean {
+  return !isLinkedToMultipark(p) && p.multiparkKind !== "own" && p.partnerStatus !== "inactive" && !!p.partnerType && MULTIPARK_TYPES.has(p.partnerType);
 }
 
 /**

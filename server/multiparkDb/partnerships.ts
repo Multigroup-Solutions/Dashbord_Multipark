@@ -143,6 +143,10 @@ const TYPE_ORDER: LivePartnerType[] = ["AGGREGATOR", "AGENCY", "PARTNER"];
 export interface LiveTotals { bookings: number; value: number | null; ours: number | null; missing: number }
 export interface LivePartnerPark {
   partnerId: string; parkId: string; parkName: string; city: string | null; active: boolean;
+  /** 29a: marca do parque (airpark|redpark|skypark) — a tab mostra por marca */
+  brand: string | null;
+  /** 29a: o parque não está INATIVO na Multipark ("Park".status) */
+  parkActive: boolean;
   feeType: string | null; feePct: number | null; feeFixed: number | null;
 }
 export interface LivePartner {
@@ -168,7 +172,7 @@ function addTotals(t: LiveTotals, bookings: unknown, value: unknown, ours: unkno
  * Linhas "Partner" (já com totais) → uma empresa por userId, só nos parques
  * dados (os NOSSOS no âmbito de cidade). PURA.
  */
-export function groupLivePartners(rows: Row[], parks: Array<Pick<DayPark, "id" | "name" | "cityName">>): LivePartner[] {
+export function groupLivePartners(rows: Row[], parks: Array<Pick<DayPark, "id" | "name" | "cityName"> & Partial<Pick<DayPark, "brand" | "status">>>): LivePartner[] {
   const parkOf = new Map(parks.map((p) => [p.id, p]));
   const out = new Map<string, LivePartner & { types: Map<LivePartnerType, number> }>();
   for (const r of rows) {
@@ -186,7 +190,11 @@ export function groupLivePartners(rows: Row[], parks: Array<Pick<DayPark, "id" |
     if (!g.name) g.name = str(r.name) ?? "";
     const active = bool(r.active);
     if (active) g.active = true;
-    g.parks.push({ partnerId, parkId, parkName: park.name, city: park.cityName, active, feeType: str(r.fee_type), feePct: num(r.fee_pct), feeFixed: num(r.fee_fixed) });
+    g.parks.push({
+      partnerId, parkId, parkName: park.name, city: park.cityName, active, brand: park.brand ?? null,
+      parkActive: String(park.status ?? "").toUpperCase() !== "INACTIVE",
+      feeType: str(r.fee_type), feePct: num(r.fee_pct), feeFixed: num(r.fee_fixed),
+    });
     addTotals(g.thisMonth, r.m_bookings, r.m_value, r.m_ours, r.m_missing);
     addTotals(g.last12, r.y_bookings, r.y_value, r.y_ours, r.y_missing);
   }
