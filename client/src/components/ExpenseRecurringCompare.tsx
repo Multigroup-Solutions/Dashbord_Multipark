@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { Trash2 } from "lucide-react";
+import { Paperclip, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { comparePeriods, lisbonToday } from "@shared/expensePeriods";
 import { parseExpenseAmount } from "@shared/expenseAmount";
@@ -16,20 +16,38 @@ import { useGlobalFilters } from '@/contexts/GlobalFiltersContext';
 const fmtEur = (v: any) => parseFloat(String(v || 0)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 
 // ─── DESPESAS RECORRENTES (modelos) ───────────────────────────────────────────
-export function RecurringExpensesDialog({ open, onClose, categories, projects }: { open: boolean; onClose: () => void; categories: any[]; projects: any[] }) {
+const EMPTY_MODEL = { description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" };
+const dayPt = (d: string) => d ? d.slice(0, 10).split("-").reverse().slice(0, 2).join("/") : "";
+
+/**
+ * 29b (Jorge, 6 out 2026: "lança automática mas deve aparecer como uma despesa
+ * e pedir para se anexar a fatura para depois ir para a contabilista"): cada
+ * modelo lança a despesa NO SEU DIA; um modelo novo lança logo a deste mês se
+ * o dia já passou; cada linha diz o que aconteceu este mês e se falta a fatura.
+ */
+export function RecurringExpensesDialog({ open, onClose, categories, projects, onAttach }: { open: boolean; onClose: () => void; categories: any[]; projects: any[]; onAttach?: (expenseId: number) => void }) {
   const { projectId } = useGlobalFilters();
   const utils = trpc.useUtils();
   const { data: list = [], error: listError } = trpc.expenses.recurring.list.useQuery({ projectId }, { enabled: open });
-  const [f, setF] = useState<any>({ description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" });
-  const refresh = () => utils.expenses.recurring.list.invalidate();
-  const create = trpc.expenses.recurring.create.useMutation({ onSuccess: () => { setF({ description: "", supplier: "", amount: "", dayOfMonth: "1", categoryId: "", projectId: "" }); refresh(); toast.success("Modelo criado"); }, onError: (e) => toast.error(e.message) });
-  const update = trpc.expenses.recurring.update.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
+  const [f, setF] = useState<any>(EMPTY_MODEL);
+  const [editing, setEditing] = useState<number | null>(null);
+  const refresh = () => { utils.expenses.recurring.list.invalidate(); utils.expenses.list.invalidate(); utils.expenses.missingInvoiceSummary.invalidate(); };
+  const launchedMsg = (r: { launched?: boolean }) => r.launched ? " — a deste mês já foi lançada e espera a fatura" : "";
+  const create = trpc.expenses.recurring.create.useMutation({ onSuccess: (r) => { setF(EMPTY_MODEL); refresh(); toast.success(`Modelo criado${launchedMsg(r)}`); }, onError: (e) => toast.error(e.message) });
+  const update = trpc.expenses.recurring.update.useMutation({ onSuccess: (r) => { refresh(); if (r.launched) toast.success("A despesa deste mês foi lançada e espera a fatura"); }, onError: (e) => toast.error(e.message) });
   const remove = trpc.expenses.recurring.remove.useMutation({ onSuccess: () => { refresh(); toast.success("Modelo removido (desativado; as despesas já lançadas ficam)"); }, onError: (e) => toast.error(e.message) });
   // Mesma regra do servidor: "1.234,56", "450,00" e "450.5" valem; lixo avisa aqui em vez de um erro técnico
   const addModel = () => {
     const amount = parseExpenseAmount(f.amount);
     if (!amount) { toast.error("Valor inválido", { description: "Usa um número positivo com até 2 casas (ex.: 450,00)." }); return; }
-    create.mutate({ description: f.description || undefined, supplier: f.supplier || undefined, amount: Number(amount), dayOfMonth: Number(f.dayOfMonth) || 1, categoryId: f.categoryId ? Number(f.categoryId) : undefined, projectId: Number(f.projectId) });
+    const body = { description: f.description || undefined, supplier: f.supplier || undefined, amount: Number(amount), dayOfMonth: Number(f.dayOfMonth) || 1, projectId: Number(f.projectId) };
+    if (editing != null) {
+      update.mutate({ id: editing, ...body, categoryId: f.categoryId ? Number(f.categoryId) : null }, { onSuccess: () => { setEditing(null); setF(EMPTY_MODEL); toast.success("Modelo guardado (as despesas já lançadas ficam como estão)"); } });
+    } else create.mutate({ ...body, categoryId: f.categoryId ? Number(f.categoryId) : undefined });
+  };
+  const startEdit = (r: any) => {
+    setEditing(r.id);
+    setF({ description: r.description ?? "", supplier: r.supplier ?? "", amount: String(r.amount ?? "").replace(".", ","), dayOfMonth: String(r.dayOfMonth ?? 1), categoryId: r.categoryId ? String(r.categoryId) : "", projectId: r.projectId ? String(r.projectId) : "" });
   };
   const projOpts = projects.map((p: any) => ({ value: String(p.id), label: p.name }));
 
@@ -37,7 +55,10 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>Despesas recorrentes (fixas do mês)</DialogTitle></DialogHeader>
-        <p className="text-xs text-muted-foreground -mt-2">Cada modelo gera uma despesa por mês (no dia indicado), lançada automaticamente pelo processo diário. Confirmas/pagas depois na lista normal.</p>
+        <p className="text-xs text-muted-foreground -mt-2">
+          Cada modelo lança <b>uma despesa por mês, no dia indicado</b> (pelo processo diário, de madrugada). Um modelo novo lança logo a deste mês se o dia já passou.
+          A despesa aparece na lista com <b>"Falta a fatura"</b> até anexares a fatura — é com ela que segue para a contabilista. Confirmas/pagas na lista normal.
+        </p>
         <div className="grid grid-cols-2 gap-2 border rounded p-3 bg-muted/30">
           <div className="col-span-2"><Label className="text-xs">Descrição</Label><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="ex: Renda escritório" /></div>
           <div><Label className="text-xs">Fornecedor</Label><Input value={f.supplier} onChange={(e) => setF({ ...f, supplier: e.target.value })} /></div>
@@ -50,8 +71,9 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
           <div className="col-span-2"><Label className="text-xs">Centro de custos *</Label>
             <SearchableSelect className="w-full" value={f.projectId} onChange={(v) => setF({ ...f, projectId: v })} options={projOpts} placeholder="Escolher centro de custos" />
           </div>
-          <div className="col-span-2 flex justify-end">
-            <Button size="sm" disabled={!f.amount || !f.projectId || create.isPending} onClick={addModel}>+ Adicionar modelo</Button>
+          <div className="col-span-2 flex justify-end gap-2">
+            {editing != null && <Button size="sm" variant="ghost" onClick={() => { setEditing(null); setF(EMPTY_MODEL); }}>Cancelar</Button>}
+            <Button size="sm" disabled={!f.amount || !f.projectId || create.isPending || update.isPending} onClick={addModel}>{editing != null ? "Guardar modelo" : "+ Adicionar modelo"}</Button>
           </div>
         </div>
         <div className="space-y-1.5 max-h-72 overflow-y-auto">
@@ -60,7 +82,18 @@ export function RecurringExpensesDialog({ open, onClose, categories, projects }:
               <div className="flex-1 min-w-0">
                 <div className="font-medium truncate">{r.description || r.supplier || "-"}</div>
                 <div className="text-[11px] text-muted-foreground">{fmtEur(r.amount)} - dia {r.dayOfMonth}{r.projectId ? " - " + (projects.find((p: any) => p.id === r.projectId)?.name ?? r.projectId) : ""}</div>
+                {r.active && r.thisMonth && (
+                  <div className="text-[11px] mt-0.5">
+                    {r.thisMonth.expense
+                      ? (r.thisMonth.expense.hasInvoice
+                        ? <span className="text-emerald-700 dark:text-emerald-400">Este mês: lançada a {dayPt(r.thisMonth.expense.expenseDate)} · com fatura</span>
+                        : <span className="text-amber-700 dark:text-amber-400">Este mês: lançada a {dayPt(r.thisMonth.expense.expenseDate)} · <b>falta a fatura</b>
+                          {onAttach && <button type="button" className="ml-1 inline-flex items-center gap-0.5 underline" onClick={() => onAttach(r.thisMonth.expense.id)}><Paperclip className="h-3 w-3" />Anexar</button>}</span>)
+                      : <span className="text-muted-foreground">Este mês: lança a {dayPt(r.thisMonth.launchDate)}</span>}
+                  </div>
+                )}
               </div>
+              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Editar o modelo" aria-label="Editar modelo recorrente" onClick={() => startEdit(r)}><Pencil className="h-4 w-4" /></Button>
               <label className="flex items-center gap-1 text-[11px] cursor-pointer select-none"><input type="checkbox" checked={!!r.active} onChange={(e) => update.mutate({ id: r.id, active: e.target.checked })} /> ativo</label>
               <Button size="sm" variant="ghost" className="text-red-600 h-7 w-7 p-0" title="Remover (desativa e sai da lista; as despesas já lançadas ficam)" aria-label="Remover modelo recorrente" onClick={() => { if (confirm("Remover este modelo recorrente? Deixa de lançar despesas e sai da lista; as despesas já lançadas ficam como estão.")) remove.mutate({ id: r.id }); }}><Trash2 className="h-4 w-4" /></Button>
             </div>

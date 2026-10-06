@@ -34,6 +34,8 @@ interface ExpenseListInput {
   deleted?: boolean;
   startDate?: string; endDate?: string; projectId?: number; categoryId?: number;
   userId?: number; status?: string; search?: string;
+  /** 29b: só as que ainda não têm a fatura anexada */
+  missingInvoice?: boolean;
 }
 
 /** Filtros do pedido + visibilidade do utilizador → WHERE (lista, Excel, totais). */
@@ -46,6 +48,7 @@ async function expenseWhereFor(user: { id: number; role: string }, input?: Expen
     userId: input?.userId || undefined,
     status: input?.status || undefined,
     search: input?.search?.trim() || undefined,
+    missingInvoice: input?.missingInvoice === true || undefined,
     // D4: as eliminadas só aparecem ao super admin, quando as pede.
     deleted: input?.deleted === true && user.role === "super_admin",
   };
@@ -69,6 +72,8 @@ const EXPENSE_LIST_INPUT = z.object({
   userId: z.number().optional(),
   status: z.string().optional(),
   search: z.string().optional(),
+  /** 29b: só as que ainda não têm a fatura anexada */
+  missingInvoice: z.boolean().optional(),
 }).optional();
 
 /** Campos cuja alteração muda o valor financeiro (invalidam uma aprovação). */
@@ -627,6 +632,14 @@ export const expensesRouter = router({
       wsSummary["!cols"] = [{ wch: 20 }, { wch: 30 }];
       XLSX.utils.book_append_sheet(wb, wsSummary, "Resumo");
 
+      // 29b: para a contabilista — as que ainda não têm a fatura (canceladas fora)
+      const missing = data.filter((r, i) => r["Comprovativo"] === "Não" && rows[i].expense.status !== "cancelled")
+        .map((r) => ({ "ID": r["ID"], "Data": r["Data"], "Fornecedor": r["Fornecedor"], "Descrição": r["Descrição"], "Valor (€)": r["Valor (€)"], "Centro de custos": r["Centro de custos"] }));
+      if (missing.length) {
+        const wsMissing = XLSX.utils.json_to_sheet(missing);
+        XLSX.utils.book_append_sheet(wb, wsMissing, "Sem fatura");
+      }
+
       const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
       const base64 = Buffer.from(buffer).toString("base64");
 
@@ -683,6 +696,18 @@ export const expensesRouter = router({
       return summarizeExpenses(where);
     }),
 
+  // 29b: faturas em falta no mês (Lisboa) — o aviso "Falta a fatura" no topo da lista
+  missingInvoiceSummary: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "despesas", "manage");
+    const month = lisbonToday().slice(0, 7);
+    const [y, m] = month.split("-").map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const range = { startDate: `${month}-01`, endDate: `${month}-${String(last).padStart(2, "0")}` };
+    const { where } = await expenseWhereFor(ctx.user, { ...range, projectId: input?.projectId, missingInvoice: true });
+    const { countMissingInvoices } = await import("./expenseRecurringStatus");
+    return { month, ...range, ...(await countMissingInvoices(where)) };
+  }),
+
   // ── Despesas recorrentes (modelos) ──
   recurring: router({
     list: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
@@ -694,7 +719,10 @@ export const expensesRouter = router({
       const db = await getDb(); if (!db) return [];
       const { and: andOp, isNull: isNullOp } = await import("drizzle-orm");
       // D4: os removidos ficam guardados mas saem da lista.
-      return db.select().from(recurringExpenses).where(andOp(projectScope(recurringExpenses.projectId), isNullOp(recurringExpenses.removedAt))).orderBy(desc(recurringExpenses.active));
+      const models = await db.select().from(recurringExpenses).where(andOp(projectScope(recurringExpenses.projectId), isNullOp(recurringExpenses.removedAt))).orderBy(desc(recurringExpenses.active));
+      // 29b: o estado deste mês de cada modelo (lançada? com fatura?) e o dia em que lança
+      const { recurringMonthStatus } = await import("./expenseRecurringStatus");
+      return recurringMonthStatus(models as any[]);
     }),
     create: protectedProcedure
       .input(z.object({ description: z.string().optional(), supplier: z.string().optional(), amount: z.number(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().optional(), projectId: z.number(), dayOfMonth: z.number().min(1).max(28).optional(), notes: z.string().optional() }))
@@ -707,8 +735,13 @@ export const expensesRouter = router({
         const { getDb } = await import("./db");
         const { recurringExpenses } = await import("../drizzle/schema");
         const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
-        await db.insert(recurringExpenses).values({ description: input.description ?? null, supplier: input.supplier ?? null, amount: amountNorm, paymentMethod: input.paymentMethod ?? "transfer", categoryId: input.categoryId ?? null, projectId: input.projectId, dayOfMonth: input.dayOfMonth ?? 1, notes: input.notes ?? null, createdById: ctx.user.id } as any);
-        return { success: true };
+        const res: any = await db.insert(recurringExpenses).values({ description: input.description ?? null, supplier: input.supplier ?? null, amount: amountNorm, paymentMethod: input.paymentMethod ?? "transfer", categoryId: input.categoryId ?? null, projectId: input.projectId, dayOfMonth: input.dayOfMonth ?? 1, notes: input.notes ?? null, createdById: ctx.user.id } as any);
+        const newId = Number((Array.isArray(res) ? res[0] : res)?.insertId ?? 0) || null;
+        await logActivity({ userId: ctx.user.id, action: "create", entity: "recurring_expense", entityId: newId ?? undefined, details: `Despesa fixa criada: ${input.description || input.supplier || "—"} · ${amountNorm} € · dia ${input.dayOfMonth ?? 1}` });
+        // 29b: se o dia deste mês já passou, a despesa deste mês lança já (não espera pelo mês que vem)
+        const { launchThisMonthNow } = await import("./expenseRecurring");
+        const launched = newId ? await launchThisMonthNow(newId, ctx.user.id) : 0;
+        return { success: true, id: newId, launched: launched > 0 };
       }),
     update: protectedProcedure
       .input(z.object({ id: z.number(), description: z.string().optional(), supplier: z.string().optional(), amount: z.number().optional(), paymentMethod: z.enum(["cash", "card", "transfer", "check", "other"]).optional(), categoryId: z.number().nullable().optional(), projectId: z.number().optional(), dayOfMonth: z.number().min(1).max(28).optional(), active: z.boolean().optional(), notes: z.string().optional() }))
@@ -728,7 +761,14 @@ export const expensesRouter = router({
         if (rest.projectId !== undefined && !(await projectExists(rest.projectId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos inexistente" });
         if (active !== undefined) patch.active = active ? 1 : 0;
         await db.update(recurringExpenses).set(patch).where(eq(recurringExpenses.id, id));
-        return { success: true };
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "recurring_expense", entityId: id, details: `Despesa fixa #${id} alterada: ${Object.keys(patch).join(", ")}` });
+        // 29b: reativado ou com outro dia → se o dia deste mês já passou e ainda não foi lançada, lança já
+        let launched = 0;
+        if (active === true || rest.dayOfMonth !== undefined) {
+          const { launchThisMonthNow } = await import("./expenseRecurring");
+          launched = await launchThisMonthNow(id, ctx.user.id);
+        }
+        return { success: true, launched: launched > 0 };
       }),
     remove: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "despesas", "manage");

@@ -4,15 +4,18 @@
  * Antes corria ao ABRIR a página (qualquer admin) com um "select depois
  * insert" sem proteção — duas abas ou página+cron lançavam a renda duas vezes.
  * Agora:
- *   - corre no cron diário (/api/cron/daily-ops) e, opcionalmente, à mão pelo
- *     botão "Lançar as deste mês" do diálogo de recorrentes;
+ *   - corre no cron diário (/api/cron/daily-ops); 29b (Jorge, 6 out 2026:
+ *     "lança automática mas deve aparecer como uma despesa e pedir para anexar
+ *     a fatura"): cada modelo lança NO SEU DIA (upToDay = hoje), o mês
+ *     anterior apanha o que tenha ficado por lançar, e um modelo novo (ou
+ *     reativado) lança logo a deste mês se o dia já passou;
  *   - lock nomeado do MySQL (GET_LOCK) serializa gerações concorrentes;
  *   - `recurringPeriod` "YYYY-MM" + UNIQUE (recurringTemplateId, recurringPeriod)
  *     garante uma ocorrência por modelo/mês mesmo que o lock falhe (ER_DUP_ENTRY
  *     é tratado como "já existia").
  */
 import { projectScope } from './cityScope';
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { expenses, recurringExpenses } from "../drizzle/schema";
 import { getDb, getSuperAdmins } from "./db";
 import { recordExpenseEvent } from "./db";
@@ -28,6 +31,29 @@ export function periodOf(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
+export interface RecurringGenerationOptions {
+  /** só os modelos cujo dia (limitado ao último do mês) já chegou: dia ≤ upToDay */
+  upToDay?: number;
+  /** só estes modelos (ex.: o que acabou de ser criado) */
+  templateIds?: number[];
+  /** só modelos criados antes disto ("YYYY-MM-DD HH:MM:SS") — o mês anterior não lança modelos novos */
+  createdBefore?: string;
+}
+
+/** Dia em que o modelo lança no mês (1–28, nunca depois do último dia). PURA. */
+export function launchDayOf(dayOfMonth: number, year: number, month: number): number {
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return Math.max(1, Math.min(Number(dayOfMonth) || 1, lastDay));
+}
+
+/** O modelo entra nesta geração? PURA. */
+export function templateDue(t: { id: number; dayOfMonth: number; createdAt?: string | null }, year: number, month: number, o: RecurringGenerationOptions = {}): boolean {
+  if (o.templateIds && !o.templateIds.includes(t.id)) return false;
+  if (o.upToDay != null && launchDayOf(t.dayOfMonth, year, month) > o.upToDay) return false;
+  if (o.createdBefore && t.createdAt && String(t.createdAt) >= o.createdBefore) return false;
+  return true;
+}
+
 /**
  * @param actorUserId quem fica como "inserido por". Sem ator (cron) usa o
  *   criador do modelo e, em último caso, o primeiro super_admin.
@@ -36,6 +62,7 @@ export async function generateRecurringExpensesForMonth(
   year: number,
   month: number,
   actorUserId?: number | null,
+  opts: RecurringGenerationOptions = {},
 ): Promise<RecurringGenerationResult> {
   const db = await getDb();
   const period = periodOf(year, month);
@@ -51,7 +78,8 @@ export async function generateRecurringExpensesForMonth(
   let created = 0;
   let skipped = 0;
   try {
-    const templates = await tx.select().from(recurringExpenses).where(and(eq(recurringExpenses.active, 1), projectScope(recurringExpenses.projectId)));
+    const all = await tx.select().from(recurringExpenses).where(and(eq(recurringExpenses.active, 1), isNull(recurringExpenses.removedAt), projectScope(recurringExpenses.projectId)));
+    const templates = all.filter((t: any) => templateDue(t, year, month, opts));
     if (templates.length === 0) return { period, created, skipped, lockAcquired: lockOk };
 
     let fallbackUser: number | null = actorUserId ?? null;
@@ -59,8 +87,6 @@ export async function generateRecurringExpensesForMonth(
       const admins = await getSuperAdmins();
       fallbackUser = admins[0]?.id ?? null;
     }
-    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-
     for (const t of templates) {
       const existing = await tx
         .select({ id: expenses.id })
@@ -71,7 +97,7 @@ export async function generateRecurringExpensesForMonth(
 
       const insertedById = actorUserId ?? t.createdById ?? fallbackUser;
       if (insertedById == null) { skipped++; continue; }
-      const day = Math.min(t.dayOfMonth, lastDay);
+      const day = launchDayOf(t.dayOfMonth, year, month);
       try {
         const res = await tx.insert(expenses).values({
           supplier: t.supplier,
@@ -109,4 +135,21 @@ export async function generateRecurringExpensesForMonth(
   }
   return { period, created, skipped, lockAcquired: lockOk };
   });
+}
+
+/**
+ * 29b: o modelo acabado de criar (ou reativado / com outro dia) lança a deste
+ * mês JÁ se o dia já passou — não espera pelo cron de amanhã nem pelo mês que
+ * vem. Nunca lança duas vezes (mesma proteção do cron). Devolve quantas lançou.
+ */
+export async function launchThisMonthNow(templateId: number, actorUserId: number | null): Promise<number> {
+  const { lisbonToday } = await import("../shared/expensePeriods");
+  const [y, m, d] = lisbonToday().split("-").map(Number);
+  try {
+    const r = await generateRecurringExpensesForMonth(y, m, actorUserId, { templateIds: [templateId], upToDay: d });
+    return r.created;
+  } catch (e: any) {
+    console.warn("[recorrentes] lançar já:", String(e?.message ?? e).slice(0, 160));
+    return 0;
+  }
 }

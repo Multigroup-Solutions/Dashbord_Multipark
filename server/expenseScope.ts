@@ -116,6 +116,8 @@ export interface ExpenseListFilters {
   excludeCancelled?: boolean;
   /** D4: só as eliminadas (super admin). */
   deleted?: boolean;
+  /** 29b: só as que ainda não têm a fatura anexada (e não canceladas) */
+  missingInvoice?: boolean;
 }
 
 /**
@@ -140,6 +142,9 @@ export function expenseConditions(filters: ExpenseListFilters, vis: ExpenseVisib
   if (filters.userId) c.push(eq(expenses.insertedById, filters.userId));
   if (filters.status) c.push(eq(expenses.status, filters.status as any));
   else if (filters.excludeCancelled) c.push(sql`${expenses.status} <> 'cancelled'`);
+  if (filters.missingInvoice) {
+    c.push(sql`COALESCE(${expenses.invoiceImageKey}, '') = '' AND COALESCE(${expenses.invoiceImageUrl}, '') = '' AND ${expenses.status} <> 'cancelled'`);
+  }
   if (filters.search) {
     const term = `%${filters.search.trim()}%`;
     c.push(or(like(expenses.supplier, term), like(expenses.description, term), like(expenses.documentNumber, term)) as SQL);

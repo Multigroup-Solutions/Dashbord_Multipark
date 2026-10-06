@@ -69,6 +69,7 @@ import {
   MoreHorizontal,
   Percent,
   ArchiveRestore,
+  Paperclip,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
@@ -260,6 +261,8 @@ export default function ExpensesPage() {
   // D4 (Jorge, 3 out 2026): eliminada = desaparece de todo o lado, mas fica
   // guardada — o super admin vê-as aqui, a pedido, e pode repor.
   const [showDeleted, setShowDeleted] = useState(false);
+  // 29b: "Sem fatura" — as que ainda pedem a fatura (é com ela que seguem para a contabilista)
+  const [missingInvoice, setMissingInvoice] = useState(false);
 
   // Queries
   const { data: expensesList, isLoading, isError, error: listError, refetch: refetchList } = trpc.expenses.list.useQuery({
@@ -271,7 +274,10 @@ export default function ExpensesPage() {
     userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
     startDate: effectiveStartDate || undefined,
     endDate: effectiveEndDate || undefined,
+    missingInvoice: missingInvoice || undefined,
   });
+  // 29b: faturas em falta este mês (aviso no topo) — só quem gere as despesas
+  const { data: missingSummary } = trpc.expenses.missingInvoiceSummary.useQuery({ projectId: projectFilterId }, { enabled: can(user, "despesas", "manage"), retry: false });
   // Totais, comparar e resumo: só quando o servidor diz que se podem ver
   const { data: access } = trpc.expenses.access.useQuery();
   const showTotals = access?.canSeeTotals ?? false;
@@ -352,6 +358,7 @@ export default function ExpensesPage() {
       userId: (filterUser && filterUser !== "all") ? parseInt(filterUser) : undefined,
       startDate: effectiveStartDate || undefined,
       endDate: effectiveEndDate || undefined,
+      missingInvoice: missingInvoice || undefined,
     });
   };
 
@@ -363,12 +370,13 @@ export default function ExpensesPage() {
     setFilterCategory("");
     setFilterUser("");
     setAllHistory(false);
+    setMissingInvoice(false);
     applyQuickRange("week");
   };
 
   const defaultWeek = quickRangeDates("week");
   const hasFilters = Boolean(
-    search || filterStatus || filterCategory || filterUser || allHistory ||
+    search || filterStatus || filterCategory || filterUser || allHistory || missingInvoice ||
     startDate !== defaultWeek.start || endDate !== defaultWeek.end
   );
 
@@ -376,7 +384,7 @@ export default function ExpensesPage() {
   const [showCompare, setShowCompare] = useState(false);
   const [showVat, setShowVat] = useState(false);
   // As recorrentes deixaram de ser lançadas ao abrir a página: corre no cron
-  // diário (/api/cron/daily-ops) e, à mão, no diálogo "Recorrentes".
+  // diário (/api/cron/daily-ops), no dia de cada modelo (29b); um modelo novo lança logo a deste mês.
 
   return (
     <div className="space-y-6">
@@ -453,7 +461,21 @@ export default function ExpensesPage() {
 
       {shownTab === "resumo" && <ExpenseDashboard />}
       <CategoryVatDialog open={showVat} onClose={() => setShowVat(false)} categories={categories ?? []} />
-      <RecurringExpensesDialog open={showRecurring} onClose={() => setShowRecurring(false)} categories={categories ?? []} projects={projectsList ?? []} />
+      <RecurringExpensesDialog open={showRecurring} onClose={() => setShowRecurring(false)} categories={categories ?? []} projects={projectsList ?? []}
+        onAttach={(id) => { setShowRecurring(false); setEditId(id); setShowForm(true); }} />
+
+      {/* 29b: faturas em falta este mês — as fixas lançam sozinhas e ficam à espera da fatura */}
+      {shownTab === "lista" && canManage && (missingSummary?.total ?? 0) > 0 && !missingInvoice && (
+        <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          <Paperclip className="h-4 w-4 shrink-0" />
+          <span className="flex-1 min-w-[12rem]">
+            <b>Faltam {missingSummary!.total} fatura(s)</b> nas despesas deste mês{missingSummary!.recurring > 0 ? ` (${missingSummary!.recurring} de despesas fixas)` : ""}. Anexa-as para seguirem para a contabilista.
+          </span>
+          <Button size="sm" variant="outline" className="h-7" onClick={() => {
+            setAllHistory(false); setQuickRange("custom"); setStartDate(missingSummary!.startDate); setEndDate(missingSummary!.endDate); setMissingInvoice(true);
+          }}>Ver as que faltam</Button>
+        </div>
+      )}
       <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={projectFilterId} />
 
       {/* KPI Cards — "—" enquanto carrega ou em erro; nunca um 0 enganador */}
@@ -550,6 +572,10 @@ export default function ExpensesPage() {
               <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
                 <Switch checked={allHistory} onCheckedChange={setAllHistory} aria-label="Pesquisar em todo o histórico" />
                 Todo o histórico
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none" title="Só as que ainda não têm a fatura anexada (canceladas fora)">
+                <Switch checked={missingInvoice} onCheckedChange={setMissingInvoice} aria-label="Só as despesas sem fatura" />
+                Sem fatura
               </label>
               {canDelete && (
                 <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none" title="Só o super admin: as despesas eliminadas (não contam em lado nenhum)">
@@ -652,6 +678,11 @@ export default function ExpensesPage() {
                           {expense.description && (
                             <div className="text-xs text-muted-foreground truncate max-w-[14rem]" title={expense.description}>{expense.description}</div>
                           )}
+                          {!expense.invoiceImageUrl && !expense.invoiceImageKey && expense.status !== "cancelled" && (
+                            <span className="mt-0.5 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-300" title="Anexa a fatura para seguir para a contabilista">
+                              Falta a fatura{expense.recurringTemplateId ? " · fixa" : ""}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell className="whitespace-normal min-w-[8rem] max-w-[12rem]">
                           {category ? (
@@ -687,6 +718,11 @@ export default function ExpensesPage() {
                             {(expense.invoiceImageUrl || expense.invoiceImageKey) && (
                               <Button variant="ghost" size="icon" className="h-8 w-8" title="Ver comprovativo" aria-label="Ver comprovativo" onClick={() => openDocument(expense.id)}>
                                 <Eye className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {!expense.invoiceImageUrl && !expense.invoiceImageKey && expense.status !== "cancelled" && canManage && !showDeleted && (
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-amber-700" title="Anexar a fatura" aria-label="Anexar a fatura" onClick={() => { setEditId(expense.id); setShowForm(true); }}>
+                                <Paperclip className="h-3.5 w-3.5" />
                               </Button>
                             )}
                             {showDeleted && canDelete && (
