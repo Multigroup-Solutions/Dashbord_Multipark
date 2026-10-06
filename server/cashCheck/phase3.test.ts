@@ -60,8 +60,9 @@ describe("caixa fase 3: contagem (R24)", () => {
 
 describe("caixa fase 3: alertas e auditoria nossa", () => {
   it("dois tipos de notificação na Faturação, por cidade; o grave vai por email", () => {
-    expect(kindDef("cash_case_alert")).toMatchObject({ module: "faturacao", cityScoped: true, emailDefault: true });
-    expect(kindDef("cash_daily_digest")).toMatchObject({ module: "faturacao", cityScoped: true });
+    // 29c: a Caixa tem módulo próprio
+    expect(kindDef("cash_case_alert")).toMatchObject({ module: "caixa", cityScoped: true, emailDefault: true });
+    expect(kindDef("cash_daily_digest")).toMatchObject({ module: "caixa", cityScoped: true });
     expect(read("docs/notificacoes.md")).toContain("cash_case_alert");
     const sweep = read("server/cashSweep.ts");
     expect(sweep).toContain("flushCaseAlerts");
@@ -76,8 +77,9 @@ describe("caixa fase 3: alertas e auditoria nossa", () => {
   });
   it("só quem gere a Faturação muda os casos; a contagem pede editar", () => {
     const r = read("server/cashCheckRouter.ts");
-    expect(r).toMatch(/canAccess\(user as any, "faturacao", "manage"\)/);
-    expect(r).toMatch(/requireAccess\(ctx\.user, "faturacao", "edit"\)/);
+    // 29c: Caixa → gerir/editar (ou, como antes, Faturação → gerir/editar)
+    expect(r).toContain(`return canCash(user as any, "manage");`);
+    expect(r).toContain(`requireAccess(ctx.user, cashModuleFor(ctx.user, "edit"), "edit");`);
   });
 });
 

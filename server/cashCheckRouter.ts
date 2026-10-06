@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess } from "./_core/access";
 import { scopedCityNames } from "./bookingFileRouter";
-import { cashCheckAllowed } from "./cashCheck/access";
+import { canCash, cashCheckAllowed, cashModuleFor } from "./cashCheck/access";
 import {
   compareBooking, eraRows, memoryMoments, worstSeverity, severityRank, expectedAmount, paidAmount,
   MONEY_HISTORY_FIELDS, type Divergence, type LiveFinance,
@@ -39,9 +39,9 @@ async function permissionOverrides(userId: number): Promise<Record<string, strin
   }
 }
 
-/** Porta: Faturação (ver) + totais financeiros. */
+/** Porta: Caixa (ver — módulo "caixa" ou, para quem já tinha, "faturacao") + totais financeiros. */
 export async function requireCashCheck(user: { id: number; role: string }) {
-  requireAccess(user, "faturacao", "view");
+  requireAccess(user, cashModuleFor(user, "view"), "view");
   if (!cashCheckAllowed(user, await permissionOverrides(user.id))) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
   }
@@ -422,7 +422,7 @@ export const cashCheckRouter = router({
     projectId: z.number().optional(),
   })).mutation(async ({ ctx, input }) => {
     await requireCashCheck(ctx.user);
-    requireAccess(ctx.user, "faturacao", "edit");
+    requireAccess(ctx.user, cashModuleFor(ctx.user, "edit"), "edit");
     const { saveCount } = await import("./cashCheck/caseQueries");
     const r = await saveCount({ ...input, userId: ctx.user.id });
     if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
@@ -456,7 +456,7 @@ export const cashCheckRouter = router({
     projectId: z.number().optional(),
   })).mutation(async ({ ctx, input }) => {
     await requireCashCheck(ctx.user);
-    requireAccess(ctx.user, "faturacao", "edit");
+    requireAccess(ctx.user, cashModuleFor(ctx.user, "edit"), "edit");
     const { addMbReceipt } = await import("./cashExternal");
     const r = await addMbReceipt({ ...input, userId: ctx.user.id });
     if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
@@ -465,7 +465,7 @@ export const cashCheckRouter = router({
 
   removeMbReceipt: protectedProcedure.input(z.object({ id: z.number().int().positive(), projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
     await requireCashCheck(ctx.user);
-    requireAccess(ctx.user, "faturacao", "edit");
+    requireAccess(ctx.user, cashModuleFor(ctx.user, "edit"), "edit");
     const { removeMbReceipt } = await import("./cashExternal");
     const r = await removeMbReceipt({ id: input.id, userId: ctx.user.id });
     if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
@@ -474,7 +474,7 @@ export const cashCheckRouter = router({
 
   confirmMbDay: protectedProcedure.input(z.object({ parkId: z.string().trim().min(1).max(128), day: DAY, projectId: z.number().optional() })).mutation(async ({ ctx, input }) => {
     await requireCashCheck(ctx.user);
-    requireAccess(ctx.user, "faturacao", "edit");
+    requireAccess(ctx.user, cashModuleFor(ctx.user, "edit"), "edit");
     const { confirmMbDay } = await import("./cashExternal");
     const r = await confirmMbDay({ parkId: input.parkId, day: input.day, userId: ctx.user.id });
     if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
@@ -569,8 +569,7 @@ export const cashCheckRouter = router({
   }),
 });
 
-/** Fechar/reabrir casos: Faturação → gerir (o papel de conferência de caixa). */
+/** Fechar/reabrir casos: Caixa → gerir (o papel de conferência de caixa; ou Faturação → gerir, como antes). */
 async function canManageCases(user: { id: number; role: string; accessOverrides?: unknown }): Promise<boolean> {
-  const { canAccess } = await import("./_core/access");
-  return canAccess(user as any, "faturacao", "manage");
+  return canCash(user as any, "manage");
 }

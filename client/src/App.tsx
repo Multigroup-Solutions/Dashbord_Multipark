@@ -40,6 +40,7 @@ import ServicesPage from "./pages/ServicesPage";
 import IncidentsPage from "./pages/IncidentsPage";
 import AvaliacaoPage from "./pages/AvaliacaoPage";
 import InvoicesPage from "./pages/InvoicesPage";
+import CaixaPage from "./pages/CaixaPage";
 import PartnershipsPage from "./pages/PartnershipsPage";
 import PartnerTypePage from "./pages/PartnerTypePage";
 import BillingDiagnosePage from "./pages/BillingDiagnosePage";
@@ -221,6 +222,9 @@ function Router() {
       </Route>
       <Route path="/faturacao">
         {() => (<DashboardLayout><InvoicesPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/caixa">
+        {() => (<DashboardLayout><CaixaPage /></DashboardLayout>)}
       </Route>
       <Route path="/faturacao/diagnose">
         {() => (<DashboardLayout><BillingDiagnosePage /></DashboardLayout>)}
