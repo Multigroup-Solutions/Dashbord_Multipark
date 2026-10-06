@@ -48,6 +48,8 @@ export function fileAccessRule(rawKey: string): FileRule {
   if (key.startsWith("cash/")) return { kind: "module", modules: ["faturacao"] };
   if (key.startsWith("whatsapp/")) return { kind: "module", modules: ["whatsapp"] };
   if (key.startsWith("driver-history/")) return { kind: "module", modules: ["historico_diario", "atividade_diaria"] };
+  // 34a: áudio das provas do rádio
+  if (key.startsWith("radio/")) return { kind: "module", modules: ["radio"] };
   // knowledge/ (visibilidade por documento), uploads/ e inbound/ (várias
   // funcionalidades) e o resto: só admin+ — os ecrãs usam links assinados.
   return { kind: "admin" };

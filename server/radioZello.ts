@@ -30,6 +30,8 @@ export interface RadioSearchRow extends RadioMessage {
   position: (GpsPoint & { deltaS: number }) | null;
   actions: Array<MpAction & { deltaS: number }>;
   aiTranscription: { id: number; text: string; summary: string | null } | null;
+  /** 34a: prova ativa desta mensagem (se já foi guardada) */
+  evidenceId: number | null;
 }
 
 export async function searchZelloRadio(o: {
@@ -150,11 +152,16 @@ export async function searchZelloRadio(o: {
     }
   }
 
+  // 34a: mensagens já guardadas como prova
+  const { activeEvidenceByMessage } = await import("./radioEvidence");
+  const evidence = await activeEvidenceByMessage(rows.map((r) => r.m.id));
+
   const out: RadioSearchRow[] = rows.map(({ m, person }) => ({
     ...m, person,
     position: nearestPoint(gps.get(m.sender) ?? [], m.at),
     actions: person ? actionsNear(actions, new Set(emps.get(person.employeeId)?.agentIds ?? []), m.at) : [],
     aiTranscription: ai.get(m.id) ?? null,
+    evidenceId: evidence.get(m.id) ?? null,
   }));
   return { available: true as const, messages: out, hasMore, total, nextStart: (o.start ?? 0) + RADIO_PAGE, notices };
 }
