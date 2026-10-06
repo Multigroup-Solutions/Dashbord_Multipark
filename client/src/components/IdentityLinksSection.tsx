@@ -13,6 +13,7 @@ import { AlertTriangle, Link2, Loader2, RefreshCw, UserPlus } from "lucide-react
 import { toast } from "sonner";
 import { PersonIdentityCard } from "./PersonIdentityCard";
 import { AgentListCompareCard } from "./AgentListCompareCard";
+import { AgentCrossCheckCard } from "./AgentCrossCheckCard";
 import { useAuth } from "@/_core/hooks/useAuth";
 
 const dm = (s: string | null) => (s ? `${String(s).slice(8, 10)}/${String(s).slice(5, 7)}` : "—");
@@ -97,6 +98,9 @@ export function IdentityLinksSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 31a: todos os agentes da Multipark × fichas, utilizadores, parcerias, Zello e escala */}
+      <AgentCrossCheckCard employeeOptions={empOptions} />
 
       <PersonIdentityCard employeeOptions={empOptions} orphanUsers={d.usersWithoutEmployee} canMerge={canMerge} />
 
