@@ -91,8 +91,20 @@ describe("37a — pontos e ranking", () => {
 });
 
 // ─── Juntar as fontes (BD simulada) ──────────────────────────────────────────
-const h = vi.hoisted(() => ({ texts: [] as string[] }));
+const h = vi.hoisted(() => ({ texts: [] as string[], mp: [] as Array<{ sql: string; params: unknown[] }> }));
 vi.mock("./dayActivity", () => ({ speedThreshold: async () => 100 }));
+// 37c: a Multipark simulada (só leitura) — cobranças e créditos de parceiros com o autor, voos de regresso
+vi.mock("./multiparkDb/read", async (orig) => ({ ...(await orig<typeof import("./multiparkDb/read")>()), safeMultiparkRead: async (_l: string, fn: () => Promise<unknown>) => ({ available: true, data: await fn() }) }));
+vi.mock("./multiparkDb/client", async (orig) => ({
+  ...(await orig<typeof import("./multiparkDb/client")>()),
+  multiparkDbQuery: async (q: string, params: unknown[] = []) => {
+    h.mp.push({ sql: q, params });
+    if (/FROM "EntitySettlement"/.test(q)) return [{ user_id: "agB", day: "2026-10-05", n: "2" }];
+    if (/FROM "PartnerCreditEntry"/.test(q)) return [{ user_id: "agB2", day: "2026-10-06", n: 1 }, { user_id: "desconhecido", day: "2026-10-06", n: 9 }];
+    if (/FROM "History"/.test(q)) return [{ user_id: "agB", day: "2026-10-05", n: 1 }];
+    return [];
+  },
+}));
 vi.mock("./db", () => ({
   getDb: async () => ({
     execute: async (q: any) => {
@@ -105,6 +117,9 @@ vi.mock("./db", () => ({
         { id: 3, fullName: "Velho Inativo", position: "driver", contractType: "permanent", isActive: 0, userId: null, photoUrl: null, role: null },
       ]];
       if (/FROM employee_accounts/.test(text)) return [[{ employeeId: 2, userId: 22 }]];
+      // 37c: a Bea tem dois agentes na Multipark (o principal e um ligado em RH → Ligações)
+      if (/multiparkAgentUserId FROM employees/.test(text)) return [[{ id: 2, multiparkAgentUserId: "agB" }]];
+      if (/FROM employee_agents/.test(text)) return [[{ employeeId: 2, agentUserId: "agB2" }]];
       if (/FROM employee_day_metrics/.test(text)) return [[
         { employeeId: 1, day: "2026-10-05", hoursWorked: 8, scheduledHours: 0, actions: 12, recolhas: 5, entregas: 4, movements: 3, parkingMoves: 1, cancels: 0, otherActions: 0, weightedActions: 0, speedingEvents: 0, delays: 1, lateServices: 0, complaints: 0, accidents: 0, incidentsReported: 2, incidentsAgainst: 0, penaltyPoints: 0, actionsByType: JSON.stringify({ CHECKING_IN: 6, CHECKING_OUT: 5, CREATED: 0 }) },
         { employeeId: 2, day: "2026-10-05", hoursWorked: 7, scheduledHours: 0, actions: 3, recolhas: 0, entregas: 0, movements: 0, parkingMoves: 0, cancels: 0, otherActions: 3, weightedActions: 0, speedingEvents: 0, delays: 0, lateServices: 0, complaints: 0, accidents: 0, incidentsReported: 0, incidentsAgainst: 0, penaltyPoints: 0, actionsByType: JSON.stringify({ CREATED: 2, UPDATE: 1 }) },
@@ -145,7 +160,10 @@ describe("37a — juntar as fontes por pessoa", () => {
     expect(r.people[0].totals).toMatchObject({ callsAnswered: 3, emails: 4, created: 2, updated: 1, hours: 7 });
     expect(r.people[0].series.callsAnswered).toEqual([3, 0, 0, 0, 0, 0, 0]); // dia operacional 5 out (segunda)
     expect(r.people[0].totals).toMatchObject({ crmUpdates: 3, lostFound: 1, partnerClosings: 2 });
-    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1 + 3 * 1 + 1 * 2 + 2 * 3);
+    // 37c: cobranças (2) + créditos (1) dos dois agentes da Bea; o agente sem ficha não conta; voo de regresso 1
+    expect(r.people[0].totals).toMatchObject({ partnerCharges: 3, returnFlights: 1 });
+    expect(r.people[0].series.callsAnswered).toHaveLength(7);
+    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1 + 3 * 1 + 1 * 2 + 2 * 3 + 3 * 3 + 1 * 1);
     expect(r.notes.join(" ")).toMatch(/Não deu para ler: .*correções de caixa/);
   });
 });
@@ -187,3 +205,41 @@ describe("37b — mais coisas no apanhado", () => {
   });
 });
 
+describe("37c — quem regista as cobranças de parceiros (vem da Multipark)", () => {
+  it("acertos marcados por um agente (parceiros e Pro) e créditos de parceiro, pelo autor; só leitura com parâmetros", async () => {
+    const { buildPartnerChargesSql } = await import("./multiparkDb/perfPartnerCharges");
+    const s = buildPartnerChargesSql("settlements", { userIds: ["a1", "a1", " a2 "], from: "2026-10-01 02:00:00", to: "2026-11-01 03:00:00" });
+    expect(s.sql).toContain(`SELECT s."recordedByUserId" AS user_id`);
+    expect(s.sql).toContain(`FROM "EntitySettlement" s`);
+    expect(s.sql).toContain(`s."entityType"::text IN ($5, $6)`);
+    expect(s.sql).toContain(`s."source"::text = $7`);
+    expect(s.params).toEqual(["a1", "a2", "2026-10-01 02:00:00", "2026-11-01 03:00:00", "PARTNER", "PRO_CLIENT", "AGENT", 50000]);
+    const c = buildPartnerChargesSql("credits", { userIds: ["a1"], from: "2026-10-01 02:00:00", to: "2026-11-01 03:00:00" });
+    expect(c.sql).toContain(`SELECT s."createdByUserId" AS user_id`);
+    expect(c.sql).toContain(`FROM "PartnerCreditEntry" s`);
+    expect(c.sql).not.toContain("entityType");
+    expect(c.params).toEqual(["a1", "2026-10-01 02:00:00", "2026-11-01 03:00:00", 50000]);
+    for (const q of [s.sql, c.sql]) {
+      expect(q).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b/);
+      expect(q).toMatch(/LIMIT \$\d+$/);
+      expect(q).toContain(`s."createdAt" >= `); // pela hora do registo, em dia operacional
+    }
+    expect(() => buildPartnerChargesSql("credits", { userIds: [], from: "x", to: "y" })).toThrow(/Sem agentes/);
+  });
+
+  it("entra nas abas do escritório e da supervisão com peso, e já não diz que falta o autor", () => {
+    expect(PERF_METRICS.partnerCharges).toMatchObject({ label: "Cobranças de parceiros", source: "multipark" });
+    for (const g of ["office", "supervision"] as const) {
+      expect(GROUP_VIEW[g].columns).toContain("partnerCharges");
+      expect(GROUP_VIEW[g].weights.partnerCharges).toBe(3);
+    }
+    expect(GROUP_VIEW.drivers.columns).not.toContain("partnerCharges");
+    expect(src("server/peoplePerformance.ts")).not.toMatch(/não guarda quem as regista/);
+    expect(src("docs/ajuda/condutores-agentes.md")).not.toMatch(/quando a dashboard guardar quem as regista/);
+  });
+
+  it("a Multipark só foi lida (nada escrito)", () => {
+    expect(h.mp.length).toBeGreaterThan(0);
+    for (const q of h.mp) expect(q.sql).toMatch(/^SELECT /);
+  });
+});

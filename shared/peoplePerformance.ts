@@ -129,7 +129,9 @@ export type PerfMetric =
   | "expenses" | "expensesApproved" | "cashCounts" | "cashCorrections"
   | "tasksDone" | "leadsActions" | "handovers" | "tlDays" | "teamPeople"
   // 37b (Jorge, 6 out 2026): "há mais: contas de parceiros, faturação e cobrança de parceiros, o extra dia, a atualização do CRM, perdidos e achados, pedido de voo de regresso, alteração da reserva"
-  | "partnerAccounts" | "partnerClosings" | "extrasDia" | "crmUpdates" | "lostFound" | "returnFlights";
+  | "partnerAccounts" | "partnerClosings" | "extrasDia" | "crmUpdates" | "lostFound" | "returnFlights"
+  // 37c (Jorge, 6 out 2026): "guarda quem regista as cobranças de parceiros" — o autor vem da Multipark
+  | "partnerCharges";
 
 export interface PerfMetricDef {
   key: PerfMetric;
@@ -187,6 +189,7 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   crmUpdates: { key: "crmUpdates", label: "Atualizações do CRM", source: "dashboard" },
   lostFound: { key: "lostFound", label: "Perdidos e achados", source: "dashboard" },
   returnFlights: { key: "returnFlights", label: "Voos de regresso registados", source: "multipark" },
+  partnerCharges: { key: "partnerCharges", label: "Cobranças de parceiros", source: "multipark" },
 };
 
 export type PerfTotals = Record<PerfMetric, number>;
@@ -211,15 +214,15 @@ export function addTotals(a: PerfTotals, b: Partial<PerfTotals>): PerfTotals {
 export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfMetric[]; chart: PerfMetric[]; weights: Partial<Record<PerfMetric, number>> }> = {
   office: {
     cards: ["hours", "callsAnswered", "emails", "waMessages", "created", "updated", "complaintMsgs", "reviewsReplied"],
-    columns: ["hours", "callsAnswered", "callsMade", "emails", "waMessages", "created", "updated", "returnFlights", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "expenses", "cashCorrections", "tasksDone", "leadsActions"],
+    columns: ["hours", "callsAnswered", "callsMade", "emails", "waMessages", "created", "updated", "returnFlights", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "expenses", "cashCorrections", "tasksDone", "leadsActions"],
     chart: ["callsAnswered", "emails", "created", "updated"],
-    weights: { callsAnswered: 2, callsMade: 1, callbacks: 1, emails: 2, waMessages: 0.5, created: 3, updated: 1, returnFlights: 1, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, expenses: 1, expensesApproved: 1, cashCorrections: 2, cashCounts: 1, tasksDone: 1, leadsActions: 1 },
+    weights: { callsAnswered: 2, callsMade: 1, callbacks: 1, emails: 2, waMessages: 0.5, created: 3, updated: 1, returnFlights: 1, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, expenses: 1, expensesApproved: 1, cashCorrections: 2, cashCounts: 1, tasksDone: 1, leadsActions: 1 },
   },
   supervision: {
     cards: ["hours", "leadsActions", "created", "updated", "cashCorrections", "complaintsClosed", "tasksDone", "callsAnswered"],
-    columns: ["hours", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
+    columns: ["hours", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
     chart: ["leadsActions", "created", "cashCorrections", "complaintsClosed"],
-    weights: { leadsActions: 2, extrasDia: 1, created: 3, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, emails: 2, waMessages: 0.5, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, expenses: 1, expensesApproved: 2, cashCounts: 2, cashCorrections: 2, handovers: 2, tasksDone: 1 },
+    weights: { leadsActions: 2, extrasDia: 1, created: 3, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, emails: 2, waMessages: 0.5, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, expenses: 1, expensesApproved: 2, cashCounts: 2, cashCorrections: 2, handovers: 2, tasksDone: 1 },
   },
   teamleaders: {
     cards: ["hours", "recolhas", "entregas", "checkingIn", "checkingOut", "callsAnswered", "tlDays", "teamPeople"],
