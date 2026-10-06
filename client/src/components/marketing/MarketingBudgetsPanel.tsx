@@ -43,6 +43,8 @@ export default function MarketingBudgetsPanel() {
   const [month, setMonth] = useState(lisbonMonth());
   const utils = trpc.useUtils();
   const listQ = trpc.marketing.budgets.list.useQuery({ month, projectId });
+  // 29e: a regra do dono (20 % da faturação do mês anterior) — o estado dela
+  const ruleQ = trpc.marketing.budgets.rule.useQuery({ month }, { retry: false });
   const { data: rows = [], isLoading } = listQ;
   const { data: projects = [] } = trpc.projects.list.useQuery();
   const refresh = () => { utils.marketing.budgets.list.invalidate(); utils.marketing.alerts.invalidate(); };
@@ -71,6 +73,7 @@ export default function MarketingBudgetsPanel() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-xs text-muted-foreground max-w-2xl">
           Gasto até ontem (Google Ads + Meta, a mesma fonte do Dashboard; nacional repartido pelas cidades) contra o esperado pelos dias completos do mês. Hoje não conta — está a meio. Acima de 110 % ou abaixo de 80 % do esperado aparece um alerta.
+          <br /><b>Regra 20 %</b>: o orçamento do <b>Google Ads</b> de cada marca/cidade = 20 % da faturação sem IVA do mês anterior dessa marca/cidade, sem as reservas do Marketplace. O <b>Marketplace</b> = 20 % do que lhe ficou (comissões). Um orçamento posto à mão para a mesma marca/cidade no Google Ads manda.
         </p>
         <div className="flex items-center gap-1">
           <Button size="icon" variant="ghost" aria-label="Mês anterior" onClick={() => setMonth((m) => shiftMonth(m, -1))}><ChevronLeft className="w-4 h-4" /></Button>
@@ -78,6 +81,10 @@ export default function MarketingBudgetsPanel() {
           <Button size="icon" variant="ghost" aria-label="Mês seguinte" onClick={() => setMonth((m) => shiftMonth(m, 1))}><ChevronRight className="w-4 h-4" /></Button>
         </div>
       </div>
+
+      {ruleQ.data && (ruleQ.data.ok
+        ? <p className="text-xs text-muted-foreground" role="status">Regra 20 % sobre {monthLabel(ruleQ.data.baseMonth)}: {ruleQ.data.count} marca(s)/cidade(s), {eur(ruleQ.data.total)} no Google Ads.</p>
+        : <p className="text-xs text-amber-700" role="status">Não deu para calcular a regra 20 % ({ruleQ.data.reason}) — a BD da Multipark não respondeu; aparecem só os orçamentos postos à mão.</p>)}
 
       {isAdmin && (
         <Card>
@@ -145,7 +152,10 @@ export default function MarketingBudgetsPanel() {
                   const mark = Math.min(100, r.amount > 0 ? (r.pacing.expected / r.amount) * 100 : 0);
                   return (
                     <tr key={r.id} className="border-b last:border-0">
-                      <td className="px-4 py-2 font-medium min-w-[9rem]">{r.label}{r.notes && <div className="text-[11px] text-muted-foreground font-normal">{r.notes}</div>}
+                      <td className="px-4 py-2 font-medium min-w-[9rem]">{r.label}
+                        {r.source === "regra" && <Badge variant="outline" className="ml-1 text-[10px] border-sky-300 text-sky-700">Regra 20 %</Badge>}
+                        {r.notes && <div className="text-[11px] text-muted-foreground font-normal">{r.notes}</div>}
+                        {r.source === "manual" && r.ruleAmount != null && Math.abs(r.ruleAmount - r.amount) >= 1 && <div className="text-[11px] text-amber-700 font-normal">Posto à mão — a regra 20 % dava {eur(r.ruleAmount)}</div>}
                         {r.partialScope && <div className="text-[11px] text-muted-foreground font-normal">Só a parte das tuas cidades — o ritmo compara-se com o orçamento inteiro, por isso não aparece.</div>}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{eur(r.amount)}</td>
                       <td className="px-4 py-2 text-right tabular-nums">{eur(r.spentToDate)}</td>
@@ -162,7 +172,7 @@ export default function MarketingBudgetsPanel() {
                       <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{eur(r.pacing.projected)}</td>
                       {isAdmin && (
                         <td className="px-2 py-2 text-right">
-                          <Button size="icon" variant="ghost" title="Arquivar" aria-label={`Arquivar orçamento ${r.label}`} onClick={() => { if (confirm(`Arquivar o orçamento de ${r.label}? Sai da lista e dos alertas; fica no registo. Definir o mesmo orçamento outra vez repõe-no.`)) remove.mutate({ id: r.id }); }}><Archive className="w-4 h-4" /></Button>
+                          {r.source === "manual" && <Button size="icon" variant="ghost" title="Arquivar" aria-label={`Arquivar orçamento ${r.label}`} onClick={() => { if (confirm(`Arquivar o orçamento de ${r.label}? Sai da lista e dos alertas; fica no registo. Definir o mesmo orçamento outra vez repõe-no.`)) remove.mutate({ id: r.id }); }}><Archive className="w-4 h-4" /></Button>}
                         </td>
                       )}
                     </tr>

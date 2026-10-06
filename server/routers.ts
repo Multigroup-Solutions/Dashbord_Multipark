@@ -1621,6 +1621,13 @@ export const appRouter = router({
         if (b) await logActivity({ userId: ctx.user.id, action: "archive", entity: "marketing_budgets", entityId: b.projectId, details: `Orçamento ${b.month} ${b.provider}: ${b.amount} € arquivado` });
         return { success: true };
       }),
+      // 29e: a regra do dono (20 % da faturação do mês anterior; Marketplace 20 % do que lhe fica) — só leitura
+      rule: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "marketing", "view");
+        const { computeRuleBudgets } = await import("./marketingBudgetRule");
+        const r = await computeRuleBudgets(input.month);
+        return r.ok ? { ok: true as const, baseMonth: r.baseMonth, count: r.rows.length, total: Math.round(r.rows.reduce((s, x) => s + x.amount, 0) * 100) / 100 } : { ok: false as const, baseMonth: r.baseMonth, reason: r.reason };
+      }),
       copyFromPrevious: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "marketing", "manage");
         const { copyBudgets } = await import("./marketingBudgets");

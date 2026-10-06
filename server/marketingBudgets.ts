@@ -27,6 +27,15 @@ export interface BudgetWithPacing {
    * não se compara com o orçamento inteiro (dava "abaixo do orçamento" falso).
    */
   partialScope: boolean;
+  /**
+   * 29e: "regra" = orçamento do Google Ads calculado pela regra do dono (20 %
+   * da faturação do mês anterior da marca/cidade, sem Marketplace; Marketplace
+   * 20 % do que lhe fica) — não está gravado; "manual" = posto à mão (manda).
+   */
+  source: "manual" | "regra";
+  /** o que a regra dava para esta marca/cidade (Google Ads), quando se aplica */
+  ruleAmount: number | null;
+  ruleBase: number | null;
 }
 
 function lisbonToday(): string {
@@ -65,8 +74,21 @@ export async function listBudgetsWithPacing(opts: { month: string; projectId?: n
   const spendTo = today > to ? to : addDays(today, -1);
   const { getAdMetrics } = await import("./integrations/googleAds/adMetrics");
   const cache = new Map<string, Awaited<ReturnType<typeof getAdMetrics>> | null>();
+  // 29e: a regra (20 % da faturação do mês anterior) — falha da Multipark não esconde os orçamentos à mão
+  const { computeRuleBudgets } = await import("./marketingBudgetRule");
+  const rule = await computeRuleBudgets(opts.month).catch(() => null);
+  const ruleRows = rule && rule.ok ? rule.rows : [];
+  const ruleBy = new Map(ruleRows.map((r) => [r.projectId, r]));
+  type Src = { id: number; month: string; projectId: number; provider: string; amount: string | number; notes: string | null; source: "manual" | "regra" };
+  const stored: Src[] = rows.map((b) => ({ id: b.id, month: b.month, projectId: b.projectId, provider: b.provider, amount: b.amount, notes: b.notes ?? null, source: "manual" as const }));
+  const manualGoogle = new Set(stored.filter((b) => b.provider === "google_ads").map((b) => b.projectId));
+  for (const r of ruleRows) {
+    if (manualGoogle.has(r.projectId)) continue; // um orçamento à mão para a mesma marca/cidade (Google Ads) manda
+    stored.push({ id: -r.projectId, month: opts.month, projectId: r.projectId, provider: "google_ads", amount: r.amount,
+      notes: `Regra: ${r.pct} % de ${r.base.toFixed(2)} € (${r.kind === "marketplace" ? "o que ficou ao Marketplace" : "faturação sem IVA, sem Marketplace"} em ${rule && rule.ok ? rule.baseMonth : "mês anterior"})`, source: "regra" });
+  }
   const out: BudgetWithPacing[] = [];
-  for (const b of rows) {
+  for (const b of stored) {
     const allIds = await resolveProjectIds(b.projectId);
     let ids = allIds;
     if (allowed) ids = ids.filter((id) => allowed.includes(id));
@@ -80,6 +102,9 @@ export async function listBudgetsWithPacing(opts: { month: string; projectId?: n
     const amount = Number(b.amount);
     out.push({
       id: b.id, month: b.month, projectId: b.projectId, provider: b.provider, amount, notes: b.notes ?? null,
+      source: b.source,
+      ruleAmount: b.provider === "google_ads" ? ruleBy.get(b.projectId)?.amount ?? null : null,
+      ruleBase: b.provider === "google_ads" ? ruleBy.get(b.projectId)?.base ?? null : null,
       label: `${label(b.projectId)}${PROVIDER_LABEL[b.provider] ?? ""}`,
       spentToDate: spent, spentMonth: spent,
       // Parte do orçamento: sem ritmo (o "esperado" seria o do orçamento inteiro).
