@@ -4522,7 +4522,7 @@ export const appRouter = router({
 
     // Cria um funcionário-extra a partir de um agente órfão (aba RH)
     createEmployeeFromAgent: protectedProcedure
-      .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional(), projectId: z.number().optional() }))
+      .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional(), projectId: z.number().optional(), agentUserId: z.string().trim().min(1).max(128).optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
         const { getDb } = await import("./db");
@@ -4548,7 +4548,16 @@ export const appRouter = router({
         // Lisboa por nome literal; a ficha aparece na fila "sem centro".
         void projects; void and;
         const { agentIdForName } = await import("./identityLink");
-        const agentId = await agentIdForName(input.agentName);
+        // 31a: do cruzamento vem o id exato do agente (o nome pode ser de mais de um)
+        const agentId = input.agentUserId ?? await agentIdForName(input.agentName);
+        if (input.agentUserId) {
+          const { isSystemAgentId } = await import("../shared/agentIdentity");
+          if (isSystemAgentId(input.agentUserId)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esse agente é do sistema da Multipark: não é uma pessoa." });
+          const { listAgentAliases } = await import("./employeeAliases");
+          const holder = (await db.select({ id: employees.id, fullName: employees.fullName }).from(employees).where(eq(employees.multiparkAgentUserId, input.agentUserId)).limit(1))[0]
+            ?? (await listAgentAliases()).find((a) => a.agentUserId === input.agentUserId);
+          if (holder) throw new TRPCError({ code: "BAD_REQUEST", message: "Esse agente já está ligado a uma ficha: liga-o em vez de criar outra." });
+        }
         const [ins] = await db.insert(employees).values({
           fullName: input.agentName,
           email: input.email ?? null,
@@ -5121,6 +5130,16 @@ export const appRouter = router({
       requireAccess(ctx.user, "rh", "manage");
       const { getLinksOverview } = await import("./identityScreen");
       return getLinksOverview();
+    }),
+    /**
+     * 31a: todos os agentes da Multipark × fichas, utilizadores, parcerias, Zello e escala — onde está
+     * cada um, os que estão em lado nenhum (com o agente/pessoa provável e o porquê) e os utilizadores
+     * sem agente. Só leitura; `nonce` > 0 força uma leitura nova (senão 5 min em memória).
+     */
+    agentCrossCheck: protectedProcedure.input(z.object({ nonce: z.number().int().min(0).optional() }).optional()).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "rh", "manage");
+      const { loadAgentCrossCheck } = await import("./agentCrossCheck");
+      return loadAgentCrossCheck({ refresh: (input?.nonce ?? 0) > 0 });
     }),
     reconcileNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "rh", "manage");

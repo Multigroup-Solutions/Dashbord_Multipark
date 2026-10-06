@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar
+palavras: cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes
 ---
 # RH e ponto
 
@@ -44,6 +44,23 @@ palavras: cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar
 ## Ligações (fichas, contas de login e agentes da Multipark)
 
 Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas, as contas de login e os agentes da Multipark. A ligação automática corre de hora a hora; aqui ficam os casos para decidir à mão. Para ligar ou procurar, só contam letras e números: acentos, maiúsculas, apóstrofos e traços não contam ("João d'Almeida-Sá" = "JOAO DALMEIDA SA").
+
+**Agentes da Multipark × pessoas (todos os agentes, um a um)**
+A regra é que **cada agente é um utilizador e cada utilizador tem um agente**. Este cartão mostra todos os agentes da Multipark (lidos ao vivo) e onde está cada um:
+- **Ficha**: funcionário, extra ou condutor. Se a ficha não tiver utilizador aparece em **Agente sem utilizador**, com o botão **Criar utilizador**.
+- **Parceria**: agência, agregador ou parceiro. Pode estar ligado cá, ou ser pela empresa na Multipark (dono, membro ou agente gerido pelo parceiro). Em **Parceiros por ligar** ficam os que ainda não estão ligados à parceria, com **Ligar o agente à parceria**. Se o parceiro ainda nem tem parceria cá, usa Parcerias → Ligar à Multipark → Aplicar.
+- **Ignorado** ou **Fora** (sistema, script, teste).
+- **Em lado nenhum**: aparece com a pessoa provável e o porquê, em pontos:
+  - mesmo email;
+  - nome igual ou parecido ("Bruno Meireles" = "Bruno Filipe Meireles Silva");
+  - mesma cidade (ou cidade diferente, que tira pontos);
+  - **Zello**: estava no Zello nos mesmos dias em que mexeu na Multipark (últimos 60 dias). O telefone entra por aqui: uma conta do Zello sem ficha com o telefone de uma ficha conta como essa pessoa;
+  - **escala dos Extras**: estava na escala nesses dias, mesmo que ainda sem ficha.
+
+  Carrega em **Ligar** na sugestão certa, escolhe outra ficha, **Criar ficha** (com utilizador se o agente tiver email) ou **Ignorar**.
+- **Utilizadores sem agente**: os logins sem agente da Multipark, com o agente provável e **Ligar**. Se não houver nenhum provável, cria-se o agente na Multipark (convite com o email dele) e volta-se a cruzar.
+
+Nada se liga sozinho: cada botão faz uma ligação e fica nos Logs. **Cruzar de novo** lê tudo outra vez (senão guarda 5 minutos). **CSV** descarrega tudo, com a sugestão e o porquê. Por omissão escondem-se os agentes inativos sem ações nos últimos 180 dias (**mostrar inativos sem ações**).
 
 **Uma pessoa: contas e agentes**
 1. Escolhe a ficha. Vês as **contas de login** (principal e extra) e os **agentes da Multipark** (principal e extra). Uma pessoa pode ter vários agentes (emails antigos e novos).
