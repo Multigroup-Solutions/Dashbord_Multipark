@@ -11,6 +11,8 @@
  *  - o que cada conta fez na dashboard (chamadas, WhatsApp, emails,
  *    reclamações, críticas Google, despesas, caixa, correções de caixa,
  *    tarefas, leads, passagens de turno);
+ *  - a Multipark ao vivo, por agente: voos de regresso e cobranças de
+ *    parceiros (quem as registou fica guardado na Multipark);
  *  - a escala (dias como team leader e quantas pessoas tinha).
  * As contas ligam-se à ficha por employees.userId e employee_accounts.
  */
@@ -21,6 +23,7 @@ import {
 } from "../shared/peoplePerformance";
 import { applyAdjustments, emptyDayMetrics, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
 import { operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
+import type { MultiparkRead } from "./multiparkDb/read";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -194,7 +197,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (failed.length) notes.push(`Não deu para ler: ${failed.sort().join(", ")}.`);
   }
 
-  // ── 37b: voos de regresso registados na Multipark (alterações ao voo), por agente ──
+  // ── Multipark ao vivo, por agente: voos de regresso (37b) e cobranças de parceiros (37c) ──
   if (ids.length && o.group !== "drivers") {
     const idList = sql.join(ids.map((x) => sql`${x}`), sql`, `);
     const agentToEmp = new Map<string, number>();
@@ -205,10 +208,20 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
       if (!agentToEmp.has(String(a.agentUserId))) agentToEmp.set(String(a.agentUserId), Number(a.employeeId));
     }
     if (agentToEmp.size) {
-      const [{ readReturnFlights }, { safeMultiparkRead }] = await Promise.all([import("./multiparkDb/perfReturnFlights"), import("./multiparkDb/read")]);
-      const rf = await safeMultiparkRead("desempenho (voos de regresso)", () => readReturnFlights({ userIds: [...agentToEmp.keys()], fromMs: range.startMs, toMs: range.endMs }));
-      if (rf.available) for (const x of rf.data) { const emp = agentToEmp.get(x.userId); if (emp != null) put(emp, x.day, { returnFlights: x.n }); }
-      else notes.push(`Voos de regresso: a Multipark não respondeu (${rf.reason}).`);
+      const [{ readReturnFlights }, { readPartnerCharges }, { safeMultiparkRead }] = await Promise.all([
+        import("./multiparkDb/perfReturnFlights"), import("./multiparkDb/perfPartnerCharges"), import("./multiparkDb/read"),
+      ]);
+      const win = { userIds: [...agentToEmp.keys()], fromMs: range.startMs, toMs: range.endMs };
+      const reads: Array<[string, PerfMetric, Promise<MultiparkRead<Array<{ userId: string; day: string; n: number }>>>]> = [
+        ["Voos de regresso", "returnFlights", safeMultiparkRead("desempenho (voos de regresso)", () => readReturnFlights(win))],
+        ["Cobranças de parceiros", "partnerCharges", safeMultiparkRead("desempenho (cobranças de parceiros)", () => readPartnerCharges("settlements", win))],
+        ["Créditos de parceiros", "partnerCharges", safeMultiparkRead("desempenho (créditos de parceiros)", () => readPartnerCharges("credits", win))],
+      ];
+      for (const [label, key, pending] of reads) {
+        const res = await pending;
+        if (res.available) for (const x of res.data) { const emp = agentToEmp.get(x.userId); if (emp != null) put(emp, x.day, { [key]: x.n }); }
+        else notes.push(`${label}: a Multipark não respondeu (${res.reason}).`);
+      }
     }
   }
 
@@ -265,7 +278,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   groupTotals.hours = Math.round(groupTotals.hours * 10) / 10;
   groupTotals.km = Math.round(groupTotals.km * 10) / 10;
   groupTotals.evalPoints = Math.round(groupTotals.evalPoints * 10) / 10;
-  notes.push("Telefonemas da central: ainda não há ligação (entram quando houver). Emails contam só os enviados pela dashboard. Cobranças de parceiros: a dashboard ainda não guarda quem as regista (entram os fechos de mês).");
+  notes.push("Telefonemas da central: ainda não há ligação (entram quando houver). Emails contam só os enviados pela dashboard.");
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
     people: out, groupTotals, groupSeries, speedLimit, notes };
 }
