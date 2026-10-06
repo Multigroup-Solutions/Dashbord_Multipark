@@ -2,7 +2,7 @@
 modulo: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
-palavras: ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
+palavras: ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
 ---
 # Marketing
 
@@ -28,6 +28,9 @@ As reservas (quantas, valor, de onde vieram, cliente novo ou não e se vieram de
 - Período máximo: 400 dias. Se o histórico for maior do que o limite de leitura, aparece um erro em vez de números cortados.
 
 **Orçamentos**
+- **Regra 20 %** (Jorge, 6 out 2026): o orçamento do **Google Ads** de cada marca/cidade é **20 % da faturação do mês anterior** dessa marca/cidade (reservas concluídas, **sem IVA**, **sem as do Marketplace**). Ex.: Airpark Lisboa em outubro = 20 % da faturação da Airpark Lisboa em setembro.
+- **Marketplace**: 20 % do que lhe **ficou** no mês anterior (comissões dos parques de terceiros + os 20 % das reservas dos nossos parques que vieram pelo Marketplace). Numa reserva de 100 € ficam ~20 € (sem IVA um pouco menos) e o orçamento é 20 % disso.
+- As linhas da regra aparecem com a etiqueta **Regra 20 %** e a base usada; não se arquivam (são calculadas). Um orçamento **posto à mão** para a mesma marca/cidade no Google Ads **manda** — e a linha diz quanto a regra dava. Se a base da Multipark não responder, aparecem só os postos à mão (com aviso).
 - Gasto do dia 1 até **ontem** (hoje está a meio) contra o esperado pelos dias completos. Acima de **110 %** ou abaixo de **80 %** do esperado (a partir do 4.º dia) aparece um alerta.
 - **Arquivar** (antes "Apagar") tira o orçamento da lista e dos alertas, mas fica no registo. Definir o mesmo orçamento outra vez repõe-no. Mudar um valor fica registado (antes → depois).
 - Quem só vê parte das cidades de um orçamento (ex.: "Marca (todas as cidades)" visto por quem só tem Lisboa) vê o gasto dessa parte, sem ritmo.
