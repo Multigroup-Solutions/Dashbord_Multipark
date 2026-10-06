@@ -178,15 +178,31 @@ export async function publishReply(reviewId: number, comment: string, userId: nu
   if (!review.name || !reviewPattern.test(review.name)) {
     throw new Error('Esta crítica veio por email e não está ligada ao Google. Responde diretamente no perfil Google, ou espera que a importação pela API a associe.');
   }
-  const client = new BusinessClient(await accessToken());
-  const published = await client.reply(review.name, text);
+  // 33a: Google direto quando ligado; senão pela Windsor (chave + interruptor GBP_WINDSOR_REPLY).
+  const w = await import('./windsor');
+  const conn = await connection();
+  const channel = w.replyChannel({ oauthConnected: !!conn?.refreshTokenEnc && conn.status === 'connected',
+    windsorConfigured: w.windsorConfigured(), windsorReplyOn: w.windsorConfigured() && await w.windsorFlagOn('GBP_WINDSOR_REPLY') });
+  if (channel === 'none') {
+    throw new Error(w.windsorConfigured()
+      ? 'A Google não está ligada diretamente e a resposta pela Windsor está desligada (Definições → Automações → GBP_WINDSOR_REPLY).'
+      : 'Google Business Profile desligado: liga a conta Google ou a Windsor para publicar daqui.');
+  }
+  let published: { comment?: string; updateTime?: string };
+  if (channel === 'google') {
+    const client = new BusinessClient(await accessToken());
+    published = await client.reply(review.name, text);
+  } else {
+    await w.replyViaWindsor(review.name, text);
+    published = { comment: text };
+  }
   const at = published.updateTime && Number.isFinite(Date.parse(published.updateTime))
     ? new Date(published.updateTime).toISOString().slice(0, 19).replace('T', ' ') : now();
   await db.update(googleReviews).set({
     googleReply: published.comment || text, aiResponse: text, aiResponseApproved: 1, respondedAt: at, respondedBy: userId,
     status: review.complaintId ? 'converted_complaint' : 'manually_responded',
   }).where(eq(googleReviews.id, reviewId));
-  return { publishedAt: at };
+  return { publishedAt: at, channel };
 }
 
 export async function pendingReviews() {

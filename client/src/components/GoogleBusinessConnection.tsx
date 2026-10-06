@@ -58,8 +58,18 @@ function ConnectionPanel() {
     onSuccess: r => { r.revoked ? toast.success('Google Business desligado e autorização revogada na Google. Os perfis escolhidos ficam guardados.') : toast.warning('Google Business desligado', { description: 'Não foi possível revogar a autorização na Google — tira-a em myaccount.google.com → Segurança.' }); refresh(); },
     onError: e => toast.error(e.message) });
   const reconcile = trpc.integrations.googleBusiness.reconcile.useMutation({ onSuccess: refresh, onError: e => toast.error(e.message) });
+  // 33a: pela Windsor (segundo canal)
+  const discoverWindsor = trpc.integrations.googleBusiness.discoverWindsor.useMutation({
+    onSuccess: d => { toast.success(`${d.found} perfis encontrados pela Windsor.`); refresh(); }, onError: e => { toast.error(e.message); refresh(); } });
+  const syncWindsor = trpc.integrations.googleBusiness.syncWindsor.useMutation({ onSuccess: d => {
+    if (!d.ok) toast.error(d.errors[0] || 'A recolha pela Windsor encontrou um erro. Consulta o estado de cada perfil.');
+    else toast.success(`${d.imported} avaliações importadas/atualizadas pela Windsor; ${d.pending} por conciliar.${d.done ? '' : ' O resto vem na próxima recolha.'}`);
+    refresh();
+  }, onError: e => { toast.error(e.message); refresh(); } });
   const data = query.data;
-  const busy = discover.isPending || sync.isPending || disconnect.isPending;
+  const busy = discover.isPending || sync.isPending || disconnect.isPending || discoverWindsor.isPending || syncWindsor.isPending;
+  const w = data?.windsor;
+  const oauthOn = data?.status === 'connected';
   return <Card id="google-business">
     <CardHeader><CardTitle className="flex flex-wrap justify-between gap-2 text-base">Ligação Google Business Profile
       <Badge variant={data?.status === 'connected' ? 'default' : 'secondary'} className={query.error || data?.status === 'error' || data?.status === 'reauth_required' ? 'bg-amber-100 text-amber-900 border-amber-300' : undefined}>{query.error ? 'Estado desconhecido' : data?.status === 'connected' ? 'Conta autorizada' : data?.status === 'reauth_required' ? 'Reautorizar conta' : data?.status === 'error' ? 'Erro' : 'Desligado'}</Badge>
@@ -77,7 +87,27 @@ function ConnectionPanel() {
         {isSuper && data?.status === 'connected' && <Button variant="ghost" disabled={busy} onClick={() => { if (confirm('Desligar o Google Business? A importação das críticas e o desempenho dos perfis param em todos os parques e a autorização é revogada na Google. Os perfis escolhidos ficam guardados para quando voltares a ligar.')) disconnect.mutate(); }}>Desligar</Button>}
       </div>
       {!isSuper && <p className="text-xs text-muted-foreground">Ligar e desligar a conta Google é só com o super admin.</p>}
+      {w && <div className="rounded border p-3 space-y-2" data-testid="gbp-windsor">
+        <div className="flex flex-wrap justify-between gap-2"><strong className="text-sm">Pela Windsor</strong>
+          <Badge variant={w.configured ? 'default' : 'secondary'}>{w.configured ? 'Chave configurada' : 'Sem chave'}</Badge></div>
+        <p className="text-sm text-muted-foreground">Sem a conta Google ligada aqui, os perfis e as avaliações podem vir pela Windsor e as respostas saem por lá. Com a Google ligada diretamente, vai tudo pela Google.</p>
+        {!w.configured && <p className="text-sm">Falta pôr a chave da Windsor (<code>WINDSOR_API_KEY</code>) nas variáveis da Vercel.</p>}
+        {w.configured && <ul className="text-sm list-disc pl-5 space-y-0.5">
+          <li>Importar sozinho (recolha agendada): <strong>{w.syncOn ? 'ligado' : 'desligado'}</strong> — interruptor GBP_WINDSOR_SYNC</li>
+          <li>Publicar respostas pela Windsor: <strong>{w.replyOn ? 'ligado' : 'desligado'}</strong> — interruptor GBP_WINDSOR_REPLY</li>
+          {oauthOn && <li>A Google está ligada diretamente: a Windsor fica de lado.</li>}
+        </ul>}
+        {w.lastRun && <p className={`text-xs ${w.lastRun.ok ? 'text-muted-foreground' : 'text-destructive'}`}>
+          Última {w.lastRun.kind === 'discover' ? 'procura de perfis' : 'recolha'}: {w.lastRun.at} UTC{w.lastRun.kind === 'sync' && w.lastRun.ok ? ` · ${w.lastRun.imported} importadas, ${w.lastRun.pending} por conciliar` : ''}{w.lastRun.error ? ` · ${w.lastRun.error}` : ''}
+        </p>}
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={busy || !w.configured} onClick={() => discoverWindsor.mutate()}>{discoverWindsor.isPending ? 'A procurar…' : 'Ir buscar os perfis à Windsor'}</Button>
+          <Button size="sm" variant="outline" disabled={busy || !w.configured || oauthOn || !data?.locations.some(l => l.selected && l.available)} onClick={() => syncWindsor.mutate()}>{syncWindsor.isPending ? 'A importar…' : 'Importar avaliações pela Windsor'}</Button>
+        </div>
+        {w.configured && !data?.locations.some(l => l.selected && l.available) && <p className="text-xs text-muted-foreground">Depois de ir buscar os perfis, associa cada um ao parque e marca "Importar avaliações".</p>}
+      </div>}
       {data?.status === 'connected' && !data.locations.length && <p className="text-sm">Ainda sem perfis disponíveis. Confirma a aprovação da API pela Google e carrega em Atualizar perfis.</p>}
+      {!!data?.locations.length && <h3 className="font-medium text-sm">Perfis</h3>}
       {data?.locations.map(l => <LocationRow key={`${l.id}-${l.projectId}-${l.selected}`} location={l} projects={parks} onSaved={refresh} />)}
       {!!data?.pending.length && <div className="space-y-3"><h3 className="font-medium">Possíveis avaliações já recebidas por email</h3>
         <p className="text-sm text-muted-foreground">Escolhe a crítica existente ou importa como uma avaliação diferente. Estes casos aguardam a tua decisão para evitar duplicados.</p>

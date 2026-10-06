@@ -2,7 +2,7 @@
 modulo: integracoes
 titulo: Integrações (estado das ligações externas)
 rotas: /integracoes
-palavras: aviso ao desligar, integração desligada, integrações, integracoes, ligações, testar ligação, estado desconhecido, sem problemas conhecidos, reautorização, religar, chave de cifra, google business, google ads, meta, whatsapp, gmail, zello, ia, gemini, drive, armazenamento, s3, base de dados, bd multipark, quem pode testar, limite de testes
+palavras: windsor, aviso ao desligar, integração desligada, integrações, integracoes, ligações, testar ligação, estado desconhecido, sem problemas conhecidos, reautorização, religar, chave de cifra, google business, google ads, meta, whatsapp, gmail, zello, ia, gemini, drive, armazenamento, s3, base de dados, bd multipark, quem pode testar, limite de testes
 ---
 # Integrações
 
@@ -10,6 +10,7 @@ Página **Integrações** (menu Sistema): um cartão por ligação externa — G
 
 **Quem vê**: só **administradores e super admin** (desde out 2026). Os outros papéis deixaram de ver a página (viam erros de todo o país e corriam testes com custo).
 - **Ligação Google Business Profile** (conta, perfis e importar avaliações): no fundo desta página — antes estava no topo das Críticas. Só aparece a admin/super admin com todas as cidades.
+- **Google Business pela Windsor** (dentro do cartão do Google Business): com a chave `WINDSOR_API_KEY` na Vercel, **Ir buscar os perfis à Windsor** traz os perfis (associa cada um ao parque e marca "Importar avaliações") e **Importar avaliações pela Windsor** traz as avaliações. Só serve quando a conta Google não está ligada diretamente. A recolha sozinha e a publicação das respostas têm interruptores próprios (vêm desligados); a publicação precisa também das ações de escrita ativas na equipa da Windsor.
 - **Ligar e desligar o Google Ads e o Google Business**: só o **super admin**. Ao desligar, a autorização é **revogada na Google**; os dados recolhidos e a escolha das contas/perfis ficam. Com o interruptor **Aviso quando desligam uma integração** ligado (Definições → Automações; vem desligado), os administradores e o super admin recebem no sino "Google … foi desligado" (menos quem desligou).
 - O teste da **BD Multipark** é só do super admin.
 

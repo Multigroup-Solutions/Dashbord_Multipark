@@ -66,7 +66,16 @@ export function registerGoogleBusinessRoutes(app: Express, afterReceive?: () => 
     if (!cronAuthOk(req.headers.authorization)) { res.status(401).json({ error: 'Unauthorized' }); return; }
     const started = Date.now();
     try {
-      const reviews = await syncReviews(started + 35_000);
+      let reviews: any = await syncReviews(started + 35_000);
+      // 33a: sem a Google ligada diretamente, as avaliações vêm pela Windsor (interruptor GBP_WINDSOR_SYNC)
+      if (reviews?.skipped === 'disconnected' || reviews?.skipped === 'reauth_required') {
+        try {
+          const { syncReviewsFromWindsor } = await import('./windsor');
+          const w = await syncReviewsFromWindsor({ deadline: started + 35_000 });
+          if (!w.skipped) reviews = { ...reviews, skipped: undefined, reason: undefined, ok: w.ok, done: w.done, imported: w.imported, pending: w.pending, errors: w.errors, aiDrafted: w.aiDrafted, via: 'windsor' };
+          else reviews = { ...reviews, windsor: w.skipped };
+        } catch (error) { reviews = { ...reviews, windsor: 'error', windsorError: safeError(error) }; }
+      }
       // Desempenho/pesquisas/estado dos perfis (Performance API) com o tempo
       // que sobrar (prazo total 50 s — maxDuration 60 s). Um erro de
       // configuração (quota 0, API por ativar) fica no diagnóstico da UI e do

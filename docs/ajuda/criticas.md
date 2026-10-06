@@ -2,7 +2,7 @@
 modulo: criticas
 titulo: Críticas Google
 rotas: /criticas
-palavras: críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail
+palavras: críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---
 # Críticas Google
 
@@ -10,12 +10,13 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 
 **De onde vêm**
 - **Pela API do Google** (perfis ligados em Integrações): ficam no parque escolhido para o perfil e a resposta publica-se daqui.
+- **Pela Windsor** (quando a conta Google não está ligada diretamente): os mesmos perfis e avaliações chegam pela Windsor e entram aqui da mesma maneira (1–3★ → Reclamação). Interruptor **Críticas: importar do Google Business pela Windsor** (Definições → Automações; vem desligado). A 1.ª vez traz até 3 anos; depois os últimos 60 dias.
 - **Por email** (criticas@): o parque vem do título do perfil Google no email. Sem correspondência exata fica em **Sem parque** (nunca adivinha).
 - **Importar Review** (à mão): 4–5★ ganham um rascunho da IA; 1–3★ abrem logo uma Reclamação. O aviso diz o que aconteceu de facto (se a IA ou a reclamação falharam, diz).
 
 **Responder (respondida = publicada)**
 - A IA só prepara rascunhos; **publica sempre uma pessoa**. Guardar um texto é rascunho, não conta como respondida.
-- **Ligada ao Google**: **Aprovar e publicar** (pede confirmação; fica visível para todos).
+- **Ligada ao Google**: **Aprovar e publicar** (pede confirmação; fica visível para todos). Sai pela Google quando a conta está ligada; senão pela Windsor, com o interruptor **Críticas: publicar respostas no Google pela Windsor** ligado (vem desligado). Sem nenhum dos dois, o aviso diz o que falta — publica no perfil Google e marca **Já publiquei no Google**.
 - **Veio por email**: **Aprovar** (o texto está bom) → publica-o no perfil Google → **Já publiquei no Google**. Se marcaste por engano, **Desfazer** (o texto fica).
 - Depois de marcada como publicada, o texto fica como foi enviado: para o mudar, primeiro **Desfazer**.
 - Se o cliente mudar o texto ou as estrelas no Google, o rascunho volta a "por aprovar" (não é apagado; **Regenerar** faz outro).
