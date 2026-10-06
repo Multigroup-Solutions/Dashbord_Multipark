@@ -2346,7 +2346,7 @@ export const appRouter = router({
       const { safeError } = await import("./integrations/googleBusiness/domain");
       try {
         const result = await publishReply(input.id, input.comment, ctx.user.id);
-        await logActivity({ userId: ctx.user.id, action: "review_reply_published", entity: "google_review", entityId: input.id, details: "Resposta publicada no Google" });
+        await logActivity({ userId: ctx.user.id, action: "review_reply_published", entity: "google_review", entityId: input.id, details: `Resposta publicada no Google${result.channel === "windsor" ? " (pela Windsor)" : ""}` });
         return result;
       } catch (error) {
         throw new TRPCError({ code: "BAD_REQUEST", message: safeError(error) });

@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./oauth', () => ({ database: vi.fn(), accessToken: vi.fn(), connection: vi.fn(), saveConnection: vi.fn() }));
-import { accessToken, database } from './oauth';
+// 33a: interruptores da Windsor (lidos frescos)
+const flags = vi.hoisted(() => ({ on: new Set<string>() }));
+vi.mock('../../_core/featureFlags', () => ({ ensureFeatureFlagOverrides: async () => {}, isFeatureEnabled: (n: string) => flags.on.has(n) }));
+import { accessToken, connection, database } from './oauth';
 import { publishReply } from './service';
 import { BusinessClient, REPLY_MAX_LENGTH } from './client';
 
@@ -16,10 +19,11 @@ beforeEach(() => {
   };
   vi.mocked(database).mockResolvedValue(db);
   vi.mocked(accessToken).mockResolvedValue('ya29.token-de-teste');
+  vi.mocked(connection).mockResolvedValue({ refreshTokenEnc: 'enc', status: 'connected' } as any);
   fetchMock = vi.fn(async () => new Response(JSON.stringify({ comment: 'Obrigado!', updateTime: '2026-09-16T10:00:00Z' }), { status: 200 }));
   vi.stubGlobal('fetch', fetchMock);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); flags.on.clear(); });
 
 describe('publicar resposta no Google', () => {
   it('faz PUT …/reviews/{id}/reply com o texto e só depois grava na BD', async () => {
@@ -59,5 +63,35 @@ describe('publicar resposta no Google', () => {
     const client = new BusinessClient('t');
     expect(() => client.reply('accounts/1/locations/2/reviews/../x', 'Olá')).toThrow(/inválida/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('33a — publicar pela Windsor quando a Google não está ligada diretamente', () => {
+  beforeEach(() => {
+    vi.mocked(connection).mockResolvedValue({ refreshTokenEnc: null, status: 'disconnected' } as any);
+    vi.stubEnv('WINDSOR_API_KEY', 'wsk_teste_1234567890');
+    vi.mocked(accessToken).mockClear();
+  });
+  it('com o interruptor ligado: POST reply_to_review na Windsor e só depois grava', async () => {
+    flags.on.add('GBP_WINDSOR_REPLY');
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ result: 'ok' }), { status: 200 }));
+    const r = await publishReply(5, 'Obrigado!', 42);
+    expect(r.channel).toBe('windsor');
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toMatch(/^https:\/\/connectors\.windsor\.ai\/google_my_business\/actions\?/);
+    expect(JSON.parse(String(init.body))).toEqual({ account: 'locations/456', action: 'reply_to_review', params: { review_id: 'AbC_-9', comment: 'Obrigado!' } });
+    expect(accessToken).not.toHaveBeenCalled();
+    expect(updates).toEqual([expect.objectContaining({ googleReply: 'Obrigado!', aiResponseApproved: 1, respondedBy: 42, status: 'manually_responded' })]);
+  });
+  it('com o interruptor desligado: recusa e diz porquê, sem chamar ninguém nem gravar', async () => {
+    await expect(publishReply(5, 'Olá', 42)).rejects.toThrow(/GBP_WINDSOR_REPLY/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+  });
+  it('se a Windsor recusar (ações de escrita desligadas na equipa), nada é gravado', async () => {
+    flags.on.add('GBP_WINDSOR_REPLY');
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'write actions disabled' }), { status: 403 }));
+    await expect(publishReply(5, 'Olá', 42)).rejects.toThrow(/ações de escrita/);
+    expect(updates).toEqual([]);
   });
 });

@@ -8,6 +8,13 @@ import { connection, disconnect, saveConnection } from './oauth';
 import { locations, mapLocation, pendingReviews, refreshLocations, resolvePending, syncReviews } from './service';
 import { safeError } from './domain';
 
+/** 33a: estado da Windsor para o painel (sem a chave). */
+async function windsorStatus() {
+  const w = await import('./windsor');
+  const [syncOn, replyOn, lastRun] = await Promise.all([w.windsorFlagOn('GBP_WINDSOR_SYNC'), w.windsorFlagOn('GBP_WINDSOR_REPLY'), w.windsorLastRun()]);
+  return { configured: w.windsorConfigured(), syncOn, replyOn, lastRun };
+}
+
 const admin = protectedProcedure.use(async ({ ctx, next }) => {
   // Ligação à conta Google: gestão de Integrações (admin+ — shared/access.ts).
   if (!can(ctx.user, 'integracoes', 'manage')) throw new TRPCError({ code: 'FORBIDDEN' });
@@ -21,7 +28,31 @@ export const googleBusinessRouter = router({
       connectedAt: conn?.connectedAt || null, lastCheckedAt: conn?.lastCheckedAt || null,
       lastError: conn?.lastError || null, configured: !!(c.clientId && c.clientSecret),
       redirectUri: c.redirectUri, pushConfigured: !!(c.pushAudience && c.pushEmail && c.subscription),
-      locations: await locations(), pending: await pendingReviews() };
+      locations: await locations(), pending: await pendingReviews(), windsor: await windsorStatus() };
+  }),
+  // 33a: Google Business pela Windsor (segundo canal; mesmas tabelas e ecrã)
+  discoverWindsor: admin.mutation(async ({ ctx }) => {
+    const w = await import('./windsor');
+    if (!w.windsorConfigured()) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Falta a chave da Windsor (WINDSOR_API_KEY) na Vercel.' });
+    try {
+      const r = await w.refreshLocationsFromWindsor();
+      try {
+        const { logActivity } = await import('../../db');
+        await logActivity({ userId: ctx.user.id, action: 'discover', entity: 'google_business_locations', details: `Perfis Google pela Windsor: ${r.found} encontrados` });
+      } catch { /* registo */ }
+      return r;
+    } catch (error) { throw new TRPCError({ code: 'BAD_REQUEST', message: w.windsorError(error) }); }
+  }),
+  syncWindsor: admin.mutation(async ({ ctx }) => {
+    const w = await import('./windsor');
+    const r = await w.syncReviewsFromWindsor({ manual: true });
+    if (r.skipped === 'not_configured' || r.skipped === 'oauth') throw new TRPCError({ code: 'BAD_REQUEST', message: r.reason ?? 'Recolha pela Windsor indisponível.' });
+    if (r.skipped === 'busy') throw new TRPCError({ code: 'CONFLICT', message: 'Já há uma recolha pela Windsor a correr. Tenta daqui a 1–2 minutos.' });
+    try {
+      const { logActivity } = await import('../../db');
+      await logActivity({ userId: ctx.user.id, action: 'sync', entity: 'google_reviews', details: `Críticas pela Windsor: ${r.imported} importadas/atualizadas, ${r.pending} por conciliar${r.errors.length ? ` · erro: ${r.errors[0]}` : ''}` });
+    } catch { /* registo */ }
+    return r;
   }),
   discover: admin.mutation(async () => {
     try { return await refreshLocations(); }
