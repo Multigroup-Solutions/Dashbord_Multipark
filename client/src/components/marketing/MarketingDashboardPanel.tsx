@@ -23,7 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, CircleAlert, Euro, MousePointerClick, Receipt, ShoppingCart, Target, TrendingUp } from "lucide-react";
-import { adResultsMeasure, attributionHealth, type AttributionQuality } from "@shared/marketingAttribution";
+import { attributionHealth, type AttributionQuality } from "@shared/marketingAttribution";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import FitAmount from "@/components/finance/FitAmount";
@@ -101,10 +101,8 @@ export default function MarketingDashboardPanel() {
   const q: AttributionQuality = st?.attributionQuality ?? { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
   const hasAttribution = !!st?.attributionQuality;
   const health = attributionHealth(q, st?.spend ?? 0, st?.conversionsGoogle ?? null);
-  // Resultados dos anúncios: as conversões das plataformas (Google + Meta) quando medem mais do que as reservas que conseguimos ligar.
+  // 28c (Jorge, 6 out): as duas medidas lado a lado — conversões que as plataformas contam (Google + Meta) e reservas reais "via net" (tudo o que não é parceiro).
   const platformConversions = st?.conversionsPlatforms ?? st?.conversionsGoogle ?? 0;
-  const results = adResultsMeasure(st?.bookingsAttributed ?? 0, platformConversions);
-  const costPerResult = results.value > 0 ? (st?.spend ?? 0) / results.value : null;
   const HealthIcon = health.level === "ok" ? CheckCircle2 : health.level === "critical" ? CircleAlert : AlertTriangle;
   const healthCls = health.level === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
     : health.level === "critical" ? "border-rose-200 bg-rose-50 text-rose-900 dark:bg-rose-950/30 dark:text-rose-200"
@@ -154,9 +152,12 @@ export default function MarketingDashboardPanel() {
             <Kpi icon={Euro} label="Gasto Meta" value={eur(st.spendMeta)} compact={eurCompact(st.spendMeta)}
               hint={metaWarning ?? (st.spendOther > 0 ? `+ ${eur(st.spendOther)} de outras plataformas (importações antigas)` : "Facebook + Instagram")} warn={!!metaWarning} />
             <Kpi icon={Euro} label="Gasto total em anúncios" value={eur(st.spend)} compact={eurCompact(st.spend)} hint={st.budgetEstimate > 0 ? `orçamento Google × dias: ${eur(st.budgetEstimate)} (indicador, não gasto)` : "Google + Meta + outros"} />
-            <Kpi icon={MousePointerClick} label="Conversões dos anúncios" value={num(Math.round(results.value))}
-              hint={noBookings ? "contadas pelas plataformas · reservas indisponíveis" : results.source === "google" ? `contadas pelas plataformas · só ligámos ${num(st.bookingsAttributed)} reservas (${pct(st.bookingsAttributed, Math.round(platformConversions))})` : `reservas ligadas pelo link · as plataformas contam ${num(Math.round(platformConversions))}`} />
-            <Kpi icon={Target} label="Custo por conversão" value={eur(costPerResult, 2)} hint={`por reserva ligada: ${eur(st.costPerAttributedBooking, 2)} · global: ${eur(st.adCostPerBooking, 2)}/reserva`} />
+            <Kpi icon={MousePointerClick} label="Conversões (Google + Meta)" value={num(Math.round(platformConversions))}
+              hint={`contadas pelas plataformas · Google ${num(Math.round(st.conversionsGoogle ?? 0))} · Meta ${num(Math.round(st.conversionsMeta ?? 0))}`} />
+            <Kpi icon={Target} label="Custo por conversão" value={eur(st.costPerConversionPlatforms, 2)}
+              hint={noBookings ? "gasto ÷ conversões das plataformas · reservas indisponíveis" : `por reserva via net: ${eur(st.costPerWebBooking, 2)} · por reserva ligada: ${eur(st.costPerAttributedBooking, 2)}`} />
+            <Kpi icon={ShoppingCart} label="Reservas via net" value={num(st.bookingsWeb)} warn={noBookings}
+              hint={noBookings ? "indisponíveis (BD da Multipark)" : `tudo o que não é parceiro · ${eur(st.revenueWeb)} · com link de origem ${num(st.webWithLink)} (${pct(st.webWithLink, st.bookingsWeb)}) · ligadas aos anúncios ${num(st.bookingsAttributed)}`} />
             <Kpi icon={TrendingUp} label="ROAS (s/ IVA)" value={roas(st.roasAttributedNet)}
               hint={`reservas ligadas, receita sem IVA ÷ gasto · todas as reservas: ${roas(st.roasTotalNet)}`} />
             <Kpi icon={TrendingUp} label="ROAS Google (reportado)" value={roas(st.roasGoogle)} hint="valor de conversão que a Google reporta ÷ gasto do Google Ads" />

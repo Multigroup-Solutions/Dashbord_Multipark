@@ -55,7 +55,7 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
     `WITH d AS (`,
     `  SELECT b."id" AS id, b."createdAt" AS created_at, b."parkId" AS park_id, b."status"::text AS status, b."origin"::text AS origin,`,
     `    NULLIF(trim(b."originUrl"), '') AS origin_url, b."partnerId" AS partner_id, NULLIF(b."paymentMethod", '') AS pm, b."campaignId" AS campaign_id,`,
-    `    b."bookingPrice" AS price, ${em} AS em`,
+    `    b."bookingPrice" AS price, ${em} AS em, NULLIF(b."paymentSource"::text, '') AS pay_src`,
     `  FROM "Booking" b`,
     `  ${clientOf("b", "c")}`,
     `  WHERE b."parkId" IN (${parks}) AND b."status"::text <> 'CANCELLED'`,
@@ -71,7 +71,7 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
     `  WHERE x."parkId" IN (${parks}) AND x."status"::text <> 'CANCELLED' AND lower(trim(c2."email")) IN (SELECT d.em FROM d WHERE d.em IS NOT NULL)`,
     `  GROUP BY 1)`,
     `SELECT d.id, ${ts("d.created_at")} AS created_at, ${lisbonDay("d.created_at")} AS day, d.park_id, d.status, d.origin, d.origin_url,`,
-    `  d.partner_id, NULLIF(pa."name", '') AS partner_name, COALESCE(d.pm, bp.pm) AS payment_method,`,
+    `  d.partner_id, NULLIF(pa."name", '') AS partner_name, COALESCE(d.pm, bp.pm) AS payment_method, d.pay_src AS payment_source,`,
     `  NULLIF(ca."name", '') AS campaign_name, NULLIF(ca."discountCode", '') AS discount_code, COALESCE(bp.total, d.price) AS total,`,
     `  (d.em IS NOT NULL) AS has_email, (d.em IS NULL OR fb.first_at IS NULL OR d.created_at <= fb.first_at) AS new_client`,
     `FROM d`,
@@ -137,6 +137,8 @@ export interface MarketingBookingRow {
   partnerId: string | null;
   partnerName: string | null;
   paymentMethod: string | null;
+  /** 28c: "PaymentSource" (agregador que cobrou: PARKVIA, PARKOS…) — para o canal */
+  paymentSource?: string | null;
   campaignName: string | null;
   discountCode: string | null;
   total: number;
@@ -168,7 +170,7 @@ export function mapMarketingBookingRow(r: Record<string, unknown>): MarketingBoo
   return {
     id: String(r.id ?? ""), createdAt: String(r.created_at ?? ""), day: String(r.day ?? "").slice(0, 10), parkId: String(r.park_id ?? ""),
     status: txt(r.status), origin: txt(r.origin), originUrl: txt(r.origin_url), partnerId: txt(r.partner_id), partnerName: txt(r.partner_name),
-    paymentMethod: txt(r.payment_method), campaignName: txt(r.campaign_name), discountCode: txt(r.discount_code), total: money(r.total),
+    paymentMethod: txt(r.payment_method), paymentSource: txt(r.payment_source), campaignName: txt(r.campaign_name), discountCode: txt(r.discount_code), total: money(r.total),
     hasEmail: bool(r.has_email), newClient: r.new_client == null ? true : bool(r.new_client),
   };
 }

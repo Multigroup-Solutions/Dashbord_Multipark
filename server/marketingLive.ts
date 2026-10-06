@@ -14,6 +14,7 @@
 import { attributionFromUrl, type AdAttribution } from "./integrations/googleAds/attribution";
 import { campaignOf, loadLiveContext, type LiveContext } from "./finance/liveBookings";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
+import { classifyBookingChannel } from "../shared/multiparkParks";
 import type { MarketingBookingRow, MarketingClientRow } from "./multiparkDb/marketingBookings";
 
 export interface MarketingBooking {
@@ -28,6 +29,12 @@ export interface MarketingBooking {
   origin: string | null;
   /** reserva de um parceiro da Multipark (partnerId/nome) */
   hasPartner: boolean;
+  /**
+   * 28c (Jorge, 6 out): "via net" — tudo o que NÃO é parceiro (canal Direto ou
+   * Marketplace de classifyBookingChannel: sem partnerId, sem origem de
+   * parceiro, sem agregador a cobrar). É o que os anúncios podem trazer.
+   */
+  viaNet: boolean;
   hasOriginUrl: boolean;
   /** gclid / gbraid / wbraid no link */
   hasClickId: boolean;
@@ -50,6 +57,7 @@ export function toMarketingBooking(r: MarketingBookingRow, ctx: LiveContext): Ma
   return {
     id: r.id, createdAt: r.createdAt, day: r.day, projectId: ctx.ourParks.get(r.parkId) ?? null, parkId: r.parkId, status: r.status, origin: r.origin,
     hasPartner: !!(r.partnerId || (r.partnerName && !/unknown/i.test(r.partnerName))),
+    viaNet: classifyBookingChannel({ parkOurs: true, origin: r.origin, paymentSource: r.paymentSource ?? null, partnerId: r.partnerId, partnerName: r.partnerName }).channel !== "parceiro",
     hasOriginUrl: !!r.originUrl, hasClickId: !!(a.gclid || a.gbraid || a.wbraid),
     adAttribution: a.adAttribution, adCampaignExternalId: a.adCampaignExternalId, utmCampaign: a.utmCampaign,
     campaign: campaignOf(r, ctx.aliases), campaignName: r.campaignName, total: r.total, hasEmail: r.hasEmail, newClient: r.newClient,

@@ -34,6 +34,6 @@ Aqui liga-se o Google Ads, escolhem-se as contas a recolher e vê-se o históric
 - **Estado desconhecido**: a página não conseguiu ler o estado; aparece "Tentar de novo" (nunca fica verde por engano).
 - **Chave de cifra**: ao definir a `INTEGRATIONS_ENCRYPTION_KEY` depois de já haver ligações, os tokens antigos continuam a abrir (chave antiga) e passam para a nova sozinhos.
 
-**Conversões**: o "ROAS Google (reportado)" e as conversões da Google no Marketing são **só do Google Ads** (antes misturavam a Meta). "Conversões dos anúncios" junta as duas plataformas.
+**Conversões**: o "ROAS Google (reportado)" e as conversões da Google no Marketing são **só do Google Ads** (antes misturavam a Meta). "Conversões (Google + Meta)" junta as duas plataformas (cada uma também aparece à parte).
 
 **Meta Ads**: configura-se com variáveis no servidor (META_ACCESS_TOKEN, META_AD_ACCOUNT_IDS). As contas aparecem depois da primeira recolha.

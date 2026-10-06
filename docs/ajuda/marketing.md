@@ -2,7 +2,7 @@
 modulo: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
-palavras: ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento
+palavras: ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
 ---
 # Marketing
 
@@ -38,7 +38,12 @@ As reservas (quantas, valor, de onde vieram, cliente novo ou não e se vieram de
 
 **Aviso vermelho no topo**: a recolha do Google Ads ou da Meta falhou, pede nova autorização ou está parada há mais de 26 h — abre **Integrações → Google Ads** (o link só aparece a quem pode abrir as Integrações; os outros avisam o administrador). Se o próprio aviso não se conseguir ler, aparece um erro com "Tentar de novo" (nunca fica tudo "verde" por engano).
 
-**Conversões**: o **ROAS Google (reportado)** e as "conversões contadas pela Google" são só do Google Ads. **Conversões dos anúncios** e a coluna "Conversões" nos Anúncios juntam o que cada plataforma (Google e Meta) conta. Uma conta de anúncios que deixou de ser recolhida continua a contar com o gasto que já tinha.
+**Conversões e reservas, lado a lado** (Dashboard, Anúncios por marca e por marca/cidade):
+- **Conversões (Google + Meta)**: o que cada plataforma conta (Google à parte, Meta à parte). **Custo por conversão** = gasto ÷ essas conversões.
+- **Reservas via net**: reservas reais da Multipark que **não são de parceiros** (site, telefone, Marketplace) — é o que os anúncios podem trazer. Não contam as de parceiros (com parceiro na reserva, origem de parceiro ou cobradas por um agregador como Parkos/Parkvia). Ao lado: o valor e o custo por reserva via net.
+- **Com link**: das reservas via net, quantas trazem o **link de origem**. Sem link não há como saber de que anúncio veio a reserva.
+- **Ligadas**: as que trazem a prova do clique no link (gclid/gbraid/wbraid do Google, fbclid da Meta, utm pago). Se uma marca tem conversões mas **0 ligadas**, o mais provável é o site dessa marca não guardar o link (ou o gclid) na reserva — vê a coluna "Com link".
+- O **ROAS Google (reportado)** e as "conversões contadas pela Google" são só do Google Ads. Uma conta de anúncios que deixou de ser recolhida continua a contar com o gasto que já tinha.
 
 **Email semanal** (segunda a partir das 8h, para os endereços em MARKETING_REPORT_EMAILS): desliga-se em Definições → Automações → **Email semanal de marketing**. Se a base da Multipark falhar, o email diz que as reservas estão indisponíveis.
 
