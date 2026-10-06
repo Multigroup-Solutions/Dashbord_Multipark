@@ -204,6 +204,64 @@ export const operationalRouter = router({
       await logActivity({ userId: ctx.user.id, action: "create", entity: "radio_transcription", entityId: id, details: "Transcrição de rádio" });
       return { id, transcription: transcriptionText, summary: summaryText };
     }),
+
+    // ─── 32a: gravações do Zello × GPS × Multipark ─────────────────────────
+    /** Utilizadores e canais do Zello para os filtros. */
+    zelloOptions: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "radio", "view");
+      const { isZelloConfigured } = await import("./zello");
+      if (!isZelloConfigured()) return { configured: false as const, users: [], channels: [] };
+      const [users, channels] = await Promise.all([getZelloUsers().catch(() => []), getZelloChannels().catch(() => [])]);
+      return {
+        configured: true as const,
+        users: users.map((u) => ({ username: u.name, fullName: u.fullName || u.name })).sort((a, b) => a.fullName.localeCompare(b.fullName, "pt")),
+        channels: channels.map((c) => c.name).sort((a, b) => a.localeCompare(b, "pt")),
+      };
+    }),
+    /** Mensagens de voz do Zello num intervalo (máx. 24 h), com quem falou, GPS e ações na Multipark. */
+    zelloSearch: protectedProcedure.input(z.object({
+      day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      from: z.string().regex(/^\d{2}:\d{2}$/),
+      to: z.string().regex(/^\d{2}:\d{2}$/),
+      user: z.string().trim().min(1).max(128).optional(),
+      channel: z.string().trim().min(1).max(128).optional(),
+      includeReceived: z.boolean().optional(),
+      start: z.number().int().min(0).max(100_000).optional(),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "view");
+      const { radioRange } = await import("../shared/radioCross");
+      const range = radioRange(input.day, input.from, input.to);
+      if ("error" in range) throw new TRPCError({ code: "BAD_REQUEST", message: range.error });
+      const [{ searchZelloRadio }, { scopedProjectIds }] = await Promise.all([import("./radioZello"), import("./cityScope")]);
+      return searchZelloRadio({ ...range, user: input.user ?? null, channel: input.channel ?? null, includeReceived: input.includeReceived, start: input.start, scopeProjectIds: scopedProjectIds() });
+    }),
+    /** Link temporário do áudio (MP3) de uma mensagem do Zello; "a preparar" enquanto o Zello o converte. */
+    zelloMedia: protectedProcedure.input(z.object({ key: z.string().trim().regex(/^[A-Za-z0-9_.-]{4,200}$/) })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "view");
+      const { zelloMediaUrl } = await import("./radioZello");
+      try {
+        return await zelloMediaUrl(input.key);
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_GATEWAY", message: `O Zello não deu o áudio: ${String((err as Error)?.message ?? err).slice(0, 120)}` });
+      }
+    }),
+    /** Transcreve com a IA uma mensagem que o Zello não transcreveu (fica ligada a ela; não se paga duas vezes). */
+    zelloTranscribe: protectedProcedure.input(z.object({
+      messageId: z.number().int().positive(),
+      mediaKey: z.string().trim().regex(/^[A-Za-z0-9_.-]{4,200}$/),
+      durationS: z.number().min(0).max(24 * 3600).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "edit");
+      const [{ transcribeZelloMessage }, { aiTrpcError }] = await Promise.all([import("./radioZello"), import("./_core/ai/trpcError")]);
+      let r: Awaited<ReturnType<typeof transcribeZelloMessage>>;
+      try {
+        r = await transcribeZelloMessage({ messageId: input.messageId, mediaKey: input.mediaKey, durationS: input.durationS ?? null, userId: ctx.user.id });
+      } catch (err) {
+        throw aiTrpcError(err);
+      }
+      if (!("pending" in r) && !r.reused) await logActivity({ userId: ctx.user.id, action: "create", entity: "radio_transcription", entityId: r.id, details: `Transcrição (IA) da mensagem ${input.messageId} do Zello` });
+      return r;
+    }),
   }),
 
   // ─── ZELLO INTEGRATION ──────────────────────────────────────────────

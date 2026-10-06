@@ -1922,6 +1922,8 @@ export const radioTranscriptions = mysqlTable("radio_transcriptions", {
 	transcribedAt: timestamp({ mode: 'string' }),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// 0480 (32a): mensagem do histórico do Zello que esta transcrição (IA) descreve
+	zelloMessageId: bigint({ mode: 'number' }),
 });
 
 export const schedules = mysqlTable("schedules", {

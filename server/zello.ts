@@ -352,3 +352,63 @@ export async function summarizeZelloShift(
     points: pts.length,
   };
 }
+
+// ─── Histórico de mensagens (Rádio, 32a) ────────────────────────────────────
+
+/** POST autenticado (form), com nova sessão se a atual expirou (code 301). */
+async function zelloPost(path: string, form: Record<string, string>): Promise<any> {
+  const call = async (sid: string) => {
+    const res = await fetchWithTimeout(`${BASE_URL}/${path}?sid=${sid}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(form).toString(),
+    });
+    return res.json();
+  };
+  let data = await call(await authenticate());
+  if (data?.code === "301") { currentSid = null; sidExpiresAt = 0; data = await call(await authenticate()); }
+  return data;
+}
+
+export interface ZelloHistoryFilter {
+  startTs: number; endTs: number;
+  sender?: string; recipient?: string; viaChannel?: string;
+  type?: "voice" | "image" | "call_alert";
+  max?: number; start?: number;
+}
+
+/**
+ * history/getmetadata: mensagens guardadas no Zello (voz, imagem, alerta)
+ * entre start_ts e end_ts (segundos), mais antigas primeiro. Traz a
+ * transcrição do Zello quando a rede a tem ligada.
+ */
+export async function getZelloHistoryMetadata(f: ZelloHistoryFilter): Promise<{ messages: any[]; total: number | null }> {
+  if (!isZelloConfigured()) throw new Error("Zello não configurado");
+  const form: Record<string, string> = {
+    start_ts: String(Math.floor(f.startTs)), end_ts: String(Math.floor(f.endTs)),
+    max: String(Math.max(1, Math.min(f.max ?? 100, 500))), start: String(Math.max(0, f.start ?? 0)),
+    sort: "ts", sort_order: "asc",
+  };
+  if (f.sender) form.sender = f.sender;
+  if (f.recipient) form.recipient = f.recipient;
+  if (f.viaChannel) form.via_channel = f.viaChannel;
+  if (f.type) form.type = f.type;
+  const data = await zelloPost("history/getmetadata", form);
+  if (data?.status !== "OK") throw new Error(`Zello history/getmetadata falhou: ${data?.status ?? "?"}`);
+  const total = Number(data.total ?? data.count);
+  return { messages: Array.isArray(data.messages) ? data.messages : [], total: Number.isFinite(total) ? total : null };
+}
+
+/**
+ * history/getmedia: link temporário do áudio (MP3) ou da imagem. Enquanto o
+ * Zello o prepara devolve "Waiting"/"Working" com o progresso.
+ */
+export async function getZelloMedia(key: string): Promise<{ ready: boolean; url: string | null; progress: number | null; expires: number | null; status: string }> {
+  if (!isZelloConfigured()) throw new Error("Zello não configurado");
+  const data = await zelloGet(`history/getmedia/key/${encodeURIComponent(key)}`);
+  const status = String(data?.status ?? "?");
+  if (status !== "OK" && status !== "Waiting" && status !== "Working") throw new Error(`Zello history/getmedia falhou: ${status}`);
+  const url = typeof data?.url === "string" && /^https:\/\//.test(data.url) ? data.url : null;
+  return { ready: status === "OK" && !!url, url, progress: data?.progress == null ? null : Number(data.progress), expires: data?.expires == null ? null : Number(data.expires), status };
+}
+
