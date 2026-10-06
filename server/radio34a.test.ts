@@ -120,7 +120,7 @@ describe("34a — BD, rotas, ficheiros e ecrã", () => {
     expect(s).not.toMatch(/DELETE FROM radio_evidence/);
     expect(s).toContain("SET archivedAt = UTC_TIMESTAMP(), archivedById = ${userId}, archiveReason");
     // o áudio só do Zello e para o prefixo radio/
-    expect(s).toContain(`if (!/(^|\\.)zellowork\\.com$/.test(host)) throw new Error("O áudio não veio do Zello.");`);
+    expect(s).toContain("await downloadZelloMedia(media.url, AUDIO_MAX_BYTES)");
     expect(s).toContain("storagePut(`radio/evidence/${id}-${row.zelloMessageId}.${ext}`");
   });
 
@@ -130,9 +130,9 @@ describe("34a — BD, rotas, ficheiros e ecrã", () => {
 
   it("rotas: guardar/juntar áudio = editar; ver = ver; arquivar = gerir; todas com o âmbito de cidade", () => {
     const r = src("server/operationalRouter.ts");
-    expect(r).toMatch(/evidenceSave: protectedProcedure[\s\S]{0,500}requireAccess\(ctx\.user, "radio", "edit"\)/);
+    expect(r).toMatch(/evidenceSave: protectedProcedure[\s\S]{0,500}requireAccess\(ctx\.user, "radio", "edit"\)[\s\S]{0,300}canSaveEvidence\(ctx\.user\.role\)/);
     expect(r).toMatch(/evidenceList: protectedProcedure[\s\S]{0,300}requireAccess\(ctx\.user, "radio", "view"\)/);
-    expect(r).toMatch(/evidenceAttachAudio: protectedProcedure[\s\S]{0,200}requireAccess\(ctx\.user, "radio", "edit"\)[\s\S]{0,300}getRadioEvidence\(input\.id, scopedProjectIds\(\)\)/);
+    expect(r).toMatch(/evidenceAttachAudio: protectedProcedure[\s\S]{0,200}requireAccess\(ctx\.user, "radio", "edit"\)[\s\S]{0,700}getRadioEvidence\(input\.id, scopedProjectIds\(\)\)/);
     expect(r).toMatch(/evidenceAudioUrl: protectedProcedure[\s\S]{0,200}requireAccess\(ctx\.user, "radio", "view"\)[\s\S]{0,400}getRadioEvidence\(input\.id, scopedProjectIds\(\)\)/);
     expect(r).toMatch(/evidenceArchive: protectedProcedure[\s\S]{0,200}requireAccess\(ctx\.user, "radio", "manage"\)/);
     expect(r).toContain("picks: z.array(z.object({");

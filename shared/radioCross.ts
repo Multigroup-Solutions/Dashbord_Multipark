@@ -113,3 +113,27 @@ export function fmtDelta(s: number): string {
   const a = Math.abs(s);
   return a < 90 ? `${sign}${a} s` : `${sign}${Math.round(a / 60)} min`;
 }
+
+// ─── 36a: o áudio vem pelo nosso servidor ───────────────────────────────────
+/** Áudio de uma mensagem até isto (a resposta da Vercel tem limite). */
+export const RADIO_AUDIO_MAX_BYTES = 3 * 1024 * 1024;
+
+/**
+ * Que áudio é isto, pelos primeiros bytes (o Zello nem sempre manda o tipo
+ * certo). null = não é áudio (ex.: uma página de erro). PURA.
+ */
+export function sniffAudioMime(b: Uint8Array): string | null {
+  if (b.length < 4) return null;
+  const s4 = String.fromCharCode(b[0], b[1], b[2], b[3]);
+  if (s4.startsWith("ID3")) return "audio/mpeg";
+  if (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) return "audio/mpeg";
+  if (s4 === "OggS") return "audio/ogg";
+  if (s4 === "RIFF") return "audio/wav";
+  if (s4 === "#!AM") return "audio/amr";
+  if (b.length >= 8 && String.fromCharCode(b[4], b[5], b[6], b[7]) === "ftyp") return "audio/mp4";
+  return null;
+}
+
+/** O browser consegue tocar isto? (AMR não; o resto sim nos browsers atuais). PURA. */
+export const browserPlayable = (mime: string) => mime !== "audio/amr";
+

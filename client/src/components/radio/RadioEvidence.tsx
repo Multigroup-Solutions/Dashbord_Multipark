@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
-import { evidenceText, EVIDENCE_NOTES_MAX, EVIDENCE_REFERENCE_MAX, EVIDENCE_SITUATION_MAX, type EvidenceRecord } from "@shared/radioEvidence";
+import { canSaveEvidence, evidenceText, EVIDENCE_NOTES_MAX, EVIDENCE_REFERENCE_MAX, EVIDENCE_SITUATION_MAX, type EvidenceRecord } from "@shared/radioEvidence";
 import { changeLabel, fmtDelta } from "@shared/radioCross";
 import { retryTransient } from "@/lib/queryRetry";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -99,7 +99,8 @@ export function printEvidence(items: EvidenceRecord[]) {
 
 export function RadioEvidenceList() {
   const { user } = useAuth();
-  const canEdit = !!user && can(user as any, "radio", "edit");
+  // 36a: juntar o áudio = quem pode guardar provas (supervisor, backoffice, admin, super admin)
+  const canEdit = !!user && can(user as any, "radio", "edit") && canSaveEvidence((user as any).role);
   const canManage = !!user && can(user as any, "radio", "manage");
   const [text, setText] = useState("");
   const [q, setQ] = useState("");
