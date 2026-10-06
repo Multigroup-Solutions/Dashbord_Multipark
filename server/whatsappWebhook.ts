@@ -172,8 +172,13 @@ export function createWhatsappWebhookRouter(): Router {
         const alreadyForwarded = req.headers["x-multipark-forward-secret"] != null;
         const work = import("./whatsappWebhookForward")
           // Já reencaminhado (17b) → não sai outra vez. Tudo o resto segue, também
-          // números internos (decisão 2026-10-06: o multipark mostra qualquer mensagem).
-          .then((m) => (!alreadyForwarded ? m.forwardWhatsappWebhook(rawBody, signature) : "skipped"))
+          // números internos (decisão 2026-10-06: o multipark mostra qualquer
+          // mensagem) — mas MARCADOS, para nunca caírem no inbox de um parque.
+          .then(async (m) =>
+            !alreadyForwarded
+              ? m.forwardWhatsappWebhook(rawBody, signature, undefined, undefined, await m.findInternalSenders(payload))
+              : "skipped",
+          )
           .catch(() => {});
         try {
           const { waitUntil } = await import("@vercel/functions");

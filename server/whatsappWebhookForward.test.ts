@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   FORWARD_SECRET_HEADER,
+  findInternalSenders,
   forwardWhatsappWebhook,
+  inboundSenders,
+  INTERNAL_SENDERS_HEADER,
   readWebhookForwardConfig,
 } from "./whatsappWebhookForward";
 
@@ -44,6 +47,13 @@ describe("forwardWhatsappWebhook", () => {
     expect(init.headers["x-hub-signature-256"]).toBe("sha256=abc");
     expect(init.headers[FORWARD_SECRET_HEADER]).toBe("fwd-secret");
     expect(Buffer.from(init.body).equals(raw)).toBe(true);
+    expect(init.headers[INTERNAL_SENDERS_HEADER]).toBeUndefined();
+  });
+
+  it("marca os remetentes internos num cabeçalho próprio", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await forwardWhatsappWebhook(raw, "sha256=abc", config, fetchImpl as any, ["351912000111", "351934000222"]);
+    expect(fetchImpl.mock.calls[0][1].headers[INTERNAL_SENDERS_HEADER]).toBe("351912000111,351934000222");
   });
 
   it("resposta não-2xx do be → 'failed', sem atirar", async () => {
@@ -59,5 +69,38 @@ describe("forwardWhatsappWebhook", () => {
     await expect(forwardWhatsappWebhook(raw, "sha256=abc", config, fetchImpl as any)).resolves.toBe("failed");
     expect(spy.mock.calls.flat().join(" ")).not.toContain("fwd-secret");
     spy.mockRestore();
+  });
+});
+
+const inbound = (...froms: string[]) => ({
+  object: "whatsapp_business_account",
+  entry: [{ id: "1", changes: [{ field: "messages", value: { messages: froms.map((from, i) => ({ from, id: `wamid.${i}`, type: "text" })) } }] }],
+});
+const STAFF = "+351912000111";
+const lookup = (internal: string[]) => vi.fn(async (e164: string) => internal.includes(e164));
+
+describe("findInternalSenders (marca, nunca retém)", () => {
+  it("devolve só os remetentes internos, em dígitos como a Meta", async () => {
+    expect(await findInternalSenders(inbound("351912000111", "351934000222", "351912000111"), lookup([STAFF]))).toEqual(["351912000111"]);
+  });
+
+  it("sem mensagens recebidas (estados, templates) não consulta a BD", async () => {
+    const l = lookup([STAFF]);
+    expect(await findInternalSenders({ entry: [{ changes: [{ field: "messages", value: { statuses: [{ id: "w" }] } }] }] }, l)).toEqual([]);
+    expect(l).not.toHaveBeenCalled();
+  });
+
+  it("falha na consulta → [] sem atirar", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = vi.fn(async () => {
+      throw new Error("db down");
+    });
+    expect(await findInternalSenders(inbound("351912000111"), failing)).toEqual([]);
+    spy.mockRestore();
+  });
+
+  it("inboundSenders tolera payloads estranhos", () => {
+    expect(inboundSenders({})).toEqual([]);
+    expect(inboundSenders({ entry: [{ changes: [{ value: { messages: [{ from: "+351 912" }, {}] } }] }] })).toEqual(["351912"]);
   });
 });
