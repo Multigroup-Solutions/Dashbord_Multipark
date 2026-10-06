@@ -8,7 +8,28 @@
  */
 import { partnerAliases, partnerships } from "../../drizzle/schema";
 import { parsePartnerConfig } from "../../shared/partnerTypes";
+import { MARKETPLACE_CAMPAIGN, MARKETPLACE_COMMISSION } from "../../shared/marketplace";
 import * as R from "./rules";
+
+/**
+ * 28b (Jorge, 6 out 2026): o Marketplace como parceiro de VENDA — fica com
+ * 20 % das reservas dos parques nossos que vêm pela campanha dele, "igual que
+ * dos outros parceiros" (base sem IVA). Só entra no índice quando as Parcerias
+ * não têm um registo "Marketplace" (esse, se existir, manda).
+ */
+export const MARKETPLACE_PARTNER: R.PartnerLite = {
+  id: -1, name: MARKETPLACE_CAMPAIGN, campaignKey: "marketplace", commissionRate: MARKETPLACE_COMMISSION * 100,
+  partnerType: "agregador", commissionBase: "net", updatedAt: "", configuredAt: "2026-10-06",
+};
+
+/** Índice com o Marketplace (se ainda não tiver). PURA. */
+export function withMarketplacePartner(index: R.PartnerIndex): R.PartnerIndex {
+  const key = MARKETPLACE_CAMPAIGN.trim().toLowerCase();
+  if (index.byKey.has(key)) return index;
+  const byKey = new Map(index.byKey);
+  byKey.set(key, MARKETPLACE_PARTNER);
+  return { ...index, byKey };
+}
 
 export interface PartnerRow extends R.PartnerLite {
   notes: string | null;

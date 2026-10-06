@@ -17,6 +17,7 @@ import type { FinanceAggKind, FinanceAggRow, MultiparkParkRow } from "../multipa
 import { classifyPark } from "../../shared/multiparkParks";
 import { createParkMatcher } from "../../shared/projectTree";
 import { bookingCampaignFallback } from "../../shared/partnerRules";
+import { MARKETPLACE_CAMPAIGN } from "../../shared/marketplace";
 
 export interface LiveBookingAgg {
   day: string;
@@ -56,8 +57,14 @@ export function buildOurParks(parks: MultiparkParkRow[], matcher: (i: { parkName
   return out;
 }
 
-/** Campanha (parceiro) de um agregado — a regra da cópia. PURA. */
-export function campaignOf(r: Pick<FinanceAggRow, "partnerId" | "paymentMethod" | "partnerName" | "discountCode" | "campaignName">, aliases: Map<string, string>): string | null {
+/**
+ * Campanha (parceiro) de um agregado — a regra da cópia. 28b: veio pela
+ * campanha do Marketplace (`origin = 'MARKETPLACE'`) → "Marketplace", que ganha
+ * ao parceiro (como no canal da reserva, classifyBookingChannel) — nunca duas
+ * comissões pela mesma reserva. PURA.
+ */
+export function campaignOf(r: Pick<FinanceAggRow, "partnerId" | "paymentMethod" | "partnerName" | "discountCode" | "campaignName"> & { marketplace?: boolean }, aliases: Map<string, string>): string | null {
+  if (r.marketplace) return MARKETPLACE_CAMPAIGN;
   if (r.partnerId) {
     const hit = aliases.get(`multipark_partner_id:${r.partnerId.trim().toLowerCase()}`);
     if (hit) return hit;

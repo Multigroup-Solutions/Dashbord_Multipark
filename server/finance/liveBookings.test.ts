@@ -57,7 +57,8 @@ describe("financeiro ao vivo: SQL na BD da Multipark", () => {
   });
   it("mapeia a linha (números arredondados ao cêntimo, vazios a null)", async () => {
     const raw = { day: "2026-08-10", park_id: "pA", partner_id: "", partner_name: null, payment_method: "MB Way", campaign_name: "Verão", discount_code: "", n: "3", total: "150.004", parking: 120, delivery: 30, extras: null, paid: "100", remaining: "50", owing_n: "1", status: "CHECKED_OUT", pro: "t", discount: "5" };
-    expect(mapFinanceAggRow(raw)).toEqual({ day: "2026-08-10", parkId: "pA", partnerId: null, partnerName: null, paymentMethod: "MB Way", campaignName: "Verão", discountCode: null, count: 3, total: 150, parking: 120, delivery: 30, extras: 0, paid: 100, remaining: 50, owingCount: 1, status: "CHECKED_OUT", pro: true, discount: 5 });
+    expect(mapFinanceAggRow(raw)).toEqual({ day: "2026-08-10", parkId: "pA", partnerId: null, partnerName: null, paymentMethod: "MB Way", campaignName: "Verão", discountCode: null, count: 3, total: 150, parking: 120, delivery: 30, extras: 0, paid: 100, remaining: 50, owingCount: 1, status: "CHECKED_OUT", pro: true, discount: 5, marketplace: false });
+    expect(mapFinanceAggRow({ ...raw, mkt: "t" }).marketplace).toBe(true); // 28b
     const query = vi.fn(async () => [raw]) as any;
     expect(await readFinanceAgg({ kind: "delivered", ...range, parkIds: ["pA"] }, query)).toHaveLength(1);
   });

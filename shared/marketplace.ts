@@ -8,6 +8,14 @@
 /** A nossa parte do valor das reservas de um parque de terceiros (0–1). */
 export const MARKETPLACE_COMMISSION = 0.2;
 
+/**
+ * 28b (Jorge, 6 out 2026): uma reserva num parque NOSSO que vem pela
+ * campanha do Marketplace (a Multipark marca-a com `Booking.origin =
+ * 'MARKETPLACE'`, ou a campanha chama-se "Marketplace") paga ao Marketplace
+ * 20 % — "igual que dos outros parceiros". Nome da campanha nas contas.
+ */
+export const MARKETPLACE_CAMPAIGN = "Marketplace";
+
 const cents = (n: number) => Math.round(n * 100) / 100;
 
 /** Valor → { nossa parte, parte do parque }. `rate` por omissão = MARKETPLACE_COMMISSION. PURA. */
