@@ -11,6 +11,8 @@
  *  4. agentes por ligar → pelo email (trabalho ou pessoal) — autoAttachAgentsByEmail
  *  5. agentes por ligar → pelo nome ("primeiro + último" ou completo), só se único
  *     dos dois lados
+ *  6. (31b) o resto dos agentes com o email de UMA só ficha ativa, pelo cruzamento
+ *     Agentes × pessoas (server/agentCrossCheck.ts) — interruptor AGENT_EMAIL_AUTOLINK
  * Tudo conservador: nada é sobrescrito; os casos ambíguos ficam para o ecrã
  * de Ligações (Fase 4).
  *
@@ -145,7 +147,7 @@ async function logLink(action: string, entityId: number, details: string) {
   } catch { /* segue */ }
 }
 
-export interface SweepReport { nonPersonAgentsRemoved?: number; usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; agentAliases: number; errors: string[]; agentsSource?: "multipark" | "copia"; agentsNotice?: string | null }
+export interface SweepReport { nonPersonAgentsRemoved?: number; agentsByEmailCross?: number; usersLinked: number; usersCreated: number; employeesLinkedToUsers: number; agentIdsFilled: number; agentsByEmail: number; agentsByName: number; agentAliases: number; errors: string[]; agentsSource?: "multipark" | "copia"; agentsNotice?: string | null }
 
 export interface AgentEmailSeen { agentUserId: string; agentName: string | null; agentEmail: string }
 
@@ -321,6 +323,13 @@ export async function runIdentitySweep(): Promise<SweepReport> {
       rep.agentsByName++;
     }
   } catch (err: any) { rep.errors.push(`agentes por nome: ${err?.message ?? err}`); }
+
+  // 6. (31b) Cruzamento Agentes × pessoas: o resto dos agentes com o email de UMA só ficha ativa
+  //    (agentes inativos, email pessoal ou do utilizador, ficha que já tem agente → extra)
+  try {
+    const { autoLinkAgentsByEmail } = await import("./agentCrossCheck");
+    rep.agentsByEmailCross = await autoLinkAgentsByEmail();
+  } catch (err: any) { rep.errors.push(`agentes por email (cruzamento): ${err?.message ?? err}`); }
 
   return rep;
 }

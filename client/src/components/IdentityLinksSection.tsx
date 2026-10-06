@@ -54,12 +54,13 @@ export function IdentityLinksSection() {
   const refresh = () => {
     utils.identityLinks.overview.invalidate();
     utils.multipark.unlinkedAgents.invalidate();
+    utils.identityLinks.agentCrossCheck.invalidate();
   };
   const onErr = (e: { message: string }) => toast.error(e.message);
   const reconcile = trpc.identityLinks.reconcileNow.useMutation({
     onSuccess: (r) => {
       refresh();
-      const n = r.usersLinked + r.usersCreated + r.employeesLinkedToUsers + r.agentIdsFilled + r.agentsByEmail + r.agentsByName + r.agentAliases;
+      const n = r.usersLinked + r.usersCreated + r.employeesLinkedToUsers + r.agentIdsFilled + r.agentsByEmail + r.agentsByName + r.agentAliases + (r.agentsByEmailCross ?? 0);
       const cleaned = r.nonPersonAgentsRemoved ?? 0;
       toast.success([
         n ? `${n} ligação(ões) feitas automaticamente.` : "Nada de novo para ligar automaticamente.",
