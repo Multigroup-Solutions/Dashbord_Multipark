@@ -3,6 +3,8 @@
  * separadores "Condutores" e "Agentes" saíram das Críticas para aqui ("é para
  * nós; depois fazemos outra coisa"). Mesmos dados e as mesmas regras de acesso
  * de antes (módulo Críticas, team leader ou acima, nas tuas cidades).
+ * 37a: aba "Desempenho" (tudo o que cada pessoa fez, por posto, com
+ * ranking) — escondida, só o super admin.
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -17,7 +19,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { Car, Loader2, Users } from "lucide-react";
+import { BarChart3, Car, Loader2, Users } from "lucide-react";
+import { PeoplePerformancePanel } from "@/components/people/PeoplePerformancePanel";
 
 function lisbonMonthToDate(): { start: string; end: string } {
   const today = lisbonDayOf(new Date());
@@ -29,6 +32,8 @@ export default function CondutoresAgentesPage() {
   const [tab, setTab] = useState("drivers");
   if (!user) return null;
   if (!can(user as any, "criticas", "view")) return <div className="p-6 text-sm text-muted-foreground">Sem acesso a esta página.</div>;
+  // 37a: o desempenho por pessoa é só do super admin (o servidor também confirma)
+  const isSuper = (user as any).role === "super_admin";
   return (
     <div className="space-y-4">
       <p className="text-muted-foreground">Entregas por condutor e ações de cada agente da Multipark, nas tuas cidades (lidas ao vivo).</p>
@@ -36,9 +41,11 @@ export default function CondutoresAgentesPage() {
         <TabsList className="max-w-full justify-start overflow-x-auto">
           <TabsTrigger value="drivers"><Car className="w-4 h-4 mr-1" /> Condutores</TabsTrigger>
           <TabsTrigger value="agents"><Users className="w-4 h-4 mr-1" /> Agentes</TabsTrigger>
+          {isSuper && <TabsTrigger value="performance"><BarChart3 className="w-4 h-4 mr-1" /> Desempenho</TabsTrigger>}
         </TabsList>
         <TabsContent value="drivers" className="mt-4"><CheckoutDriversPanel /></TabsContent>
         <TabsContent value="agents" className="mt-4"><AgentPerformancePanel /></TabsContent>
+        {isSuper && <TabsContent value="performance" className="mt-4"><PeoplePerformancePanel /></TabsContent>}
       </Tabs>
     </div>
   );

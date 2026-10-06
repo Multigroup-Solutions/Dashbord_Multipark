@@ -115,6 +115,24 @@ function scopedCityNames(): string[] | undefined {
 export const LIVE_MOVEMENTS_MAX_DAYS = 62;
 
 export const evaluationRouter = router({
+  /**
+   * 37a: desempenho por pessoa (abas por posto, dia/semana/mês/ano, ranking).
+   * Só o super admin — pelo papel, não pela matriz (nenhuma permissão por
+   * utilizador abre isto a mais ninguém).
+   */
+  peoplePerformance: protectedProcedure.input(z.object({
+    period: z.enum(["day", "week", "month", "year"]),
+    anchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    group: z.enum(["office", "supervision", "teamleaders", "drivers"]),
+  })).query(async ({ ctx, input }) => {
+    if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin vê o desempenho por pessoa." });
+    const { loadPeoplePerformance } = await import("./peoplePerformance");
+    try {
+      return await loadPeoplePerformance(input);
+    } catch (err) {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: String((err as Error)?.message ?? err).slice(0, 200) });
+    }
+  }),
   /** Ranking do período (soma dos dias) — quem vê outras pessoas, âmbito de cidade (team leader: a equipa). */
   ranking: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
     requireOthers(ctx.user);
