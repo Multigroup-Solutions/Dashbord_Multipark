@@ -1,6 +1,7 @@
 /**
  * CRM fase 2 — separador "Pro" da lista de clientes: as contas Pro (da BD da
  * Multipark) com a conta corrente resumida. Em dívida primeiro.
+ * 35a (Jorge, 6 out 2026): em cartões ou lista, como os Clientes.
  */
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
@@ -9,7 +10,9 @@ import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { ExternalLink, Loader2, Search } from "lucide-react";
 import { monthLabel } from "@shared/crmPro";
-import { ClientAvatar, Pill, eur, num, shortDate, shortDateTime } from "./crmUi";
+import { CARD_BOX, CARD_GRID, CardKpi, ClientAvatar, Pill, eur, num, shortDate, shortDateTime } from "./crmUi";
+import { ViewToggle } from "@/components/ViewToggle";
+import { useViewPref } from "@/hooks/useViewPref";
 
 /** `onShowProFichas`: abre a lista de fichas marcadas Pro (também as sem conta na Multipark). */
 export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => void }) {
@@ -17,6 +20,7 @@ export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => 
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
   const [onlyDue, setOnlyDue] = useState(false);
+  const [view, setView] = useViewPref("crm-pro", "cards");
   useEffect(() => { const t = setTimeout(() => setSearch(text.trim()), 300); return () => clearTimeout(t); }, [text]);
   const q = trpc.crm.proList.useQuery({ search: search || null, onlyDue }, { placeholderData: (p) => p });
   const rows = q.data?.rows ?? [];
@@ -35,6 +39,7 @@ export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => 
           <strong>{num(rows.length)} {q.data?.legacyMode ? (rows.length === 1 ? "Pro antigo" : "Pro antigos") : rows.length === 1 ? "conta" : "contas"}</strong>
           {withDue > 0 && <span className="text-muted-foreground"> · {num(withDue)} com dívida{totalDue != null ? ` (${eur(totalDue, 2)})` : ""}</span>}
         </div>
+        <ViewToggle value={view} onChange={setView} className="ml-auto" />
       </div>
       {q.data?.legacyMode ? (
         <p className="text-xs text-amber-800 dark:text-amber-200">Pro antigos (antes de abril de 2026, sem cliente Pro nos parques da Multipark): guardados só para comparar — não entram na lista Pro nem nos totais.</p>
@@ -50,7 +55,45 @@ export function ProAccountsPanel({ onShowProFichas }: { onShowProFichas?: () => 
         </div>
       )}
 
-      {rows.length > 0 && (
+      {rows.length > 0 && view === "cards" && (
+        <div className={CARD_GRID}>
+          {rows.map((r) => {
+            const s = r.summary;
+            const body = (
+              <>
+                <div className="flex items-center gap-2.5">
+                  <ClientAvatar name={r.name} photoUrl={r.photoUrl} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-bold">{r.name ?? "Sem nome"}</div>
+                    <div className="truncate text-[11px] text-muted-foreground">{[r.email, r.nif ? `NIF ${r.nif}` : null].filter(Boolean).join(" · ") || "—"}</div>
+                  </div>
+                  {r.legacy ? <Pill className="bg-muted text-muted-foreground" title="Tem reservas Pro ou cobranças online, mas hoje não é Pro em nenhum parque na Multipark">Pro antigo</Pill>
+                    : !r.active && <Pill className="bg-muted text-muted-foreground">desativado</Pill>}
+                </div>
+                <div className="rounded-lg bg-muted p-2 text-xs">
+                  {r.hasDue
+                    ? <span><strong className="text-amber-800 dark:text-amber-200">{eur(s.due, 2)} em dívida</strong>{s.oldestDue ? <span className="text-muted-foreground"> · desde {monthLabel(s.oldestDue)}</span> : null}</span>
+                    : <Pill className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">em dia</Pill>}
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 text-xs">
+                  <CardKpi label="Este mês" value={eur(s.currentMonthDebit, 2)} />
+                  <CardKpi label="Reservas" value={num(s.currentMonthBookings)} />
+                  <CardKpi label="Pago no ano" value={eur(s.paidThisYear, 2)} />
+                </div>
+                <div className="flex justify-between gap-2 text-xs text-muted-foreground">
+                  <span className="truncate" title={r.parks.map((p) => p.name).filter(Boolean).join(", ")}>{r.parks.map((p) => p.name).filter(Boolean).join(", ") || "—"}</span>
+                  <span className="shrink-0">{s.lastPaidAt ? `pago ${shortDate(s.lastPaidAt)}` : "sem pagamentos"}</span>
+                </div>
+                <a href={r.multiparkUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 self-start text-xs font-semibold text-primary hover:underline">Multipark<ExternalLink className="h-3 w-3" /></a>
+              </>
+            );
+            return r.crmClientId
+              ? <div key={r.id} role="link" tabIndex={0} onClick={() => navigate(`/clientes/${r.crmClientId}`)} onKeyDown={(e) => { if (e.key === "Enter") navigate(`/clientes/${r.crmClientId}`); }} className={cn(CARD_BOX, "cursor-pointer")}>{body}</div>
+              : <div key={r.id} className={CARD_BOX}>{body}</div>;
+          })}
+        </div>
+      )}
+      {rows.length > 0 && view === "list" && (
         <div className="overflow-x-auto rounded-[10px] border bg-card">
           <table className="w-full min-w-[900px] text-[13px]">
             <thead>

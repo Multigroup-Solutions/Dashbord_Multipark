@@ -220,3 +220,20 @@ export function fmtPhone(p: string | null | undefined): string {
 
 /** Link de WhatsApp para um número E.164. */
 export const waLink = (p: string) => `https://wa.me/${p.replace(/\D/g, "")}`;
+
+// ─── Cartões (35a: todos os separadores do CRM em cartões ou lista) ─────────
+/** Número pequeno de um cartão: rótulo em cima, valor em baixo. */
+export function CardKpi({ label, value, className }: { label: string; value: ReactNode; className?: string }) {
+  return (
+    <div className={className}>
+      <div className="text-[10px] font-bold uppercase text-muted-foreground">{label}</div>
+      <div className="font-bold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+/** Grelha dos cartões — a mesma dos Clientes. */
+export const CARD_GRID = "grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4";
+/** Caixa de um cartão clicável — a mesma dos Clientes. */
+export const CARD_BOX = "flex flex-col gap-2.5 rounded-[10px] border bg-card p-3.5 text-left text-foreground transition-shadow hover:shadow-[0_6px_20px_rgba(12,31,63,.08)]";
+

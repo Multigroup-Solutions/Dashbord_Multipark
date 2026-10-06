@@ -58,6 +58,8 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - **Exportar para Google Sheets** (na lista, só a administração): **exatamente** o que a lista mostra — a pesquisa no campo escolhido, todos os filtros e regras, e a ordem —, com o telefone e o tipo (pessoa/empresa). Até 5 000 clientes por folha: acima disso a folha diz **"Incompleta: N de M clientes"**.
 - Se a base da Multipark não responder, o histórico diz que as reservas estão indisponíveis (em vez de mostrar zero).
 
+**Cartões ou lista em todos os separadores**: **Clientes**, **Pro**, **Agregadores e agências** e **Parcerias** têm o botão **Cartões / Lista**. A escolha fica guardada neste aparelho, separador a separador (por omissão, cartões).
+
 **Clientes Pro e conta corrente** (separador **Pro**)
 - Os Pro pagam no fim do mês. As contas e os valores vêm da BD da Multipark e atualizam-se sozinhos de 30 em 30 minutos: reservas Pro a débito, pagamentos a crédito.
 - A lista mostra quem tem **saldo em dívida** (meses já acabados por pagar) primeiro, o que já gastou **este mês** e o **pago este ano**. Carrega numa conta para abrir a ficha.
