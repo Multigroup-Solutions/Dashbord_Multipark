@@ -1,6 +1,7 @@
 /**
  * CRM fase 3 — separadores "Agregadores e agências" e "Parcerias (nós
  * agregamos)" da lista de clientes, lidos ao vivo da BD da Multipark.
+ * 35a (Jorge, 6 out 2026): em cartões ou lista, como os Clientes.
  */
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
@@ -8,7 +9,9 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Loader2, Search } from "lucide-react";
 import { monthLabel } from "@shared/crmPro";
-import { Pill, eur, num } from "./crmUi";
+import { CARD_BOX, CARD_GRID, CardKpi, ClientAvatar, Pill, eur, num } from "./crmUi";
+import { ViewToggle } from "@/components/ViewToggle";
+import { useViewPref } from "@/hooks/useViewPref";
 
 const TYPE_LABEL: Record<string, string> = { AGGREGATOR: "Agregador", AGENCY: "Agência", PARTNER: "Parceiro" };
 const TYPE_CLASS: Record<string, string> = {
@@ -48,6 +51,7 @@ export function PartnersPanel() {
   const [text, setText] = useState("");
   const search = useDebounced(text);
   const [type, setType] = useState<"" | "AGGREGATOR" | "AGENCY" | "PARTNER">("");
+  const [view, setView] = useViewPref("crm-partners", "cards");
   const q = trpc.crm.partnersList.useQuery({ search: search || null, type: type || null }, { placeholderData: (p) => p, retry: false });
   const d = q.data;
   const rows = d && d.available ? d.rows : [];
@@ -61,9 +65,38 @@ export function PartnersPanel() {
           ))}
         </div>
         {d?.available && <span className="text-[13px]"><strong>{num(rows.length)}</strong> parceiros nos nossos parques</span>}
+        <ViewToggle value={view} onChange={setView} className="ml-auto" />
       </SearchBox>
       <State loading={q.isLoading} error={q.error?.message} unavailable={d && !d.available ? d.reason : null} empty={!!d?.available && !rows.length} emptyText="Nenhum parceiro com este filtro." />
-      {rows.length > 0 && (
+      {rows.length > 0 && view === "cards" && (
+        <div className={CARD_GRID}>
+          {rows.map((r) => (
+            <button key={r.userId} type="button" onClick={() => navigate(`/clientes/parceiros/${encodeURIComponent(r.userId)}`)} className={CARD_BOX}>
+              <div className="flex w-full items-center gap-2.5">
+                <ClientAvatar name={r.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-bold">{r.name}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{r.taxNumber ? `NIF ${r.taxNumber}` : r.lastMonth ? `última entrada em ${monthLabel(r.lastMonth)}` : "—"}</div>
+                </div>
+                <Pill className={TYPE_CLASS[r.type]}>{TYPE_LABEL[r.type] ?? r.type}</Pill>
+                {!r.active && <Pill className="bg-muted text-muted-foreground">inativo</Pill>}
+              </div>
+              <div className="w-full rounded-lg bg-muted p-2 text-xs">
+                <span className="text-muted-foreground">Ficam com </span><strong>{r.fees.length ? `${r.fees.join(" / ")} %` : "—"}</strong>
+                {r.partnership && <span className="text-muted-foreground"> · nas Parcerias: {r.partnership.name}</span>}
+              </div>
+              <div className="grid w-full grid-cols-4 gap-1.5 text-xs">
+                <CardKpi label="Este mês" value={num(r.thisMonth.bookings)} />
+                <CardKpi label="12 meses" value={num(r.last12.bookings)} />
+                <CardKpi label="Valor 12 m" value={eur(r.last12.value)} />
+                <CardKpi label="Nosso 12 m" value={eur(r.last12.ours)} />
+              </div>
+              <div className="w-full truncate text-xs text-muted-foreground" title={r.parks.map((p) => p.name).join(", ")}>{r.parks.map((p) => p.name).join(", ") || "—"}</div>
+            </button>
+          ))}
+        </div>
+      )}
+      {rows.length > 0 && view === "list" && (
         <div className="overflow-x-auto rounded-[10px] border bg-card">
           <table className="w-full min-w-[980px] text-[13px]">
             <thead>
@@ -102,6 +135,7 @@ export function ParksPanel() {
   const [, navigate] = useLocation();
   const [text, setText] = useState("");
   const search = useDebounced(text);
+  const [view, setView] = useViewPref("crm-parks", "cards");
   const q = trpc.crm.parksList.useQuery({ search: search || null }, { placeholderData: (p) => p, retry: false });
   const d = q.data;
   const rows = d && d.available ? d.rows : [];
@@ -109,9 +143,37 @@ export function ParksPanel() {
     <div className="flex flex-col gap-3.5">
       <SearchBox value={text} onChange={setText} placeholder="Procurar parque (nome, empresa, cidade)…">
         {d?.available && <span className="text-[13px]"><strong>{num(rows.length)}</strong> parques que não são nossos</span>}
+        <ViewToggle value={view} onChange={setView} className="ml-auto" />
       </SearchBox>
       <State loading={q.isLoading} error={q.error?.message} unavailable={d && !d.available ? d.reason : null} empty={!!d?.available && !rows.length} emptyText="Nenhum parque com este filtro." />
-      {rows.length > 0 && (
+      {rows.length > 0 && view === "cards" && (
+        <div className={CARD_GRID}>
+          {rows.map((r) => (
+            <button key={r.id} type="button" onClick={() => navigate(`/clientes/parques/${encodeURIComponent(r.id)}`)} className={CARD_BOX}>
+              <div className="flex w-full items-center gap-2.5">
+                <ClientAvatar name={r.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-bold">{r.name}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{r.companyName ?? "—"}</div>
+                </div>
+                {r.status && r.status !== "ACTIVE" && <Pill className="bg-muted text-muted-foreground">{r.status === "PENDING" ? "pendente" : "inativo"}</Pill>}
+                {r.hasNotes && <Pill className="bg-secondary text-secondary-foreground">notas</Pill>}
+              </div>
+              <div className="w-full rounded-lg bg-muted p-2 text-xs">
+                <div><strong>{[r.city, r.country].filter(Boolean).join(", ") || "—"}</strong></div>
+                <div className="truncate text-muted-foreground">{[r.email, r.phone].filter(Boolean).join(" · ") || "sem contacto"}</div>
+              </div>
+              <div className="grid w-full grid-cols-4 gap-1.5 text-xs">
+                <CardKpi label="Este mês" value={num(r.thisMonth.bookings)} />
+                <CardKpi label="12 meses" value={num(r.last12.bookings)} />
+                <CardKpi label="Valor 12 m" value={eur(r.last12.value)} />
+                <CardKpi label="Comissão 12 m" value={eur(r.last12.commission)} />
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {rows.length > 0 && view === "list" && (
         <div className="overflow-x-auto rounded-[10px] border bg-card">
           <table className="w-full min-w-[900px] text-[13px]">
             <thead>
