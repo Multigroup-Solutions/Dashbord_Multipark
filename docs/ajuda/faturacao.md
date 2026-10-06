@@ -2,7 +2,7 @@
 modulo: faturacao
 titulo: Faturação
 rotas: /faturacao, /financeiro, /anual
-palavras: preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, no-shows, financeiro, anual, totais
+palavras: preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, marketing, anúncios, período de consumo, no-shows, financeiro, anual, totais
 ---
 # Faturação
 
@@ -14,7 +14,7 @@ As reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao v
 1. Menu **Financeiro → Faturação**. Escolhe o período e, se quiseres, a marca/projeto.
 2. Separadores:
    - **Realizado**: receita (com e sem IVA), entregues, comissões, custos e margem realizada até hoje.
-   - **Custos detalhados**: despesas, salários, **equipa do dia**, parceiros. A **TSU patronal** não é calculada nos custos: entra pelas **Despesas** quando é paga (categoria TSU / Segurança Social — essa categoria tem de contar na margem; se estiver "fora da margem" aparece um aviso). A estimativa da TSU aparece só como informação. A equipa do dia conta as horas do **ponto** × tarifa do nível (até hoje), por nível e com o total igual ao cartão "Equipa do dia"; a escala do Extras Dia do período aparece só como referência (não soma — num período em curso, a escala dos dias que faltam entra no Fecho previsto).
+   - **Custos detalhados**: despesas, salários, **equipa do dia**, parceiros. O **marketing** (anúncios Google Ads / Meta) entra nas despesas **por projeto**: o **gasto das plataformas** até chegar a fatura; nos dias do **período de consumo** de uma fatura do Google/Meta, a **fatura** (repartida pelos dias e projetos na proporção do gasto). As faturas do Google/Meta não contam na data da fatura (senão o mesmo gasto contava duas vezes); uma fatura sem período de consumo não conta e aparece um aviso. A **TSU patronal** não é calculada nos custos: entra pelas **Despesas** quando é paga (categoria TSU / Segurança Social — essa categoria tem de contar na margem; se estiver "fora da margem" aparece um aviso). A estimativa da TSU aparece só como informação. A equipa do dia conta as horas do **ponto** × tarifa do nível (até hoje), por nível e com o total igual ao cartão "Equipa do dia"; a escala do Extras Dia do período aparece só como referência (não soma — num período em curso, a escala dos dias que faltam entra no Fecho previsto).
    - **Previsão**: **Fecho previsto** = realizado + receita esperada − custos do período inteiro. Num período já terminado não há previsão.
    - A **Caixa** e a **Correção de caixa** passaram para o seu item do menu: **Financeiro → Caixa** (ver a ajuda "Caixa"). Os links antigos (/faturacao?tab=cash-check) vão lá ter sozinhos.
 3. Os valores de margem são sem IVA. Despesas já contadas pelo RH/ponto não entram duas vezes.

@@ -17,6 +17,8 @@ As reservas (quantas, valor, de onde vieram, cliente novo ou não e se vieram de
 - **Orçamentos**: orçamento mensal por marca/cidade e o ritmo do gasto.
 - **Web & SEO**: tráfego dos sites (Google Analytics 4), pesquisa Google (Search Console) e velocidade (PageSpeed) — ver a ajuda "Web & SEO".
 
+Na **Faturação** os anúncios entram como despesa de marketing por projeto: o gasto das plataformas até chegar a fatura do Google/Meta; nos dias do período de consumo dela, a fatura.
+
 **Custo total de marketing** = gasto dos anúncios (Google + Meta, vindo das plataformas) + **outras despesas de marketing** (Despesas da categoria «Marketing»). As **faturas do Google e da Meta** lançadas nas Despesas **não se somam outra vez** — o gasto delas já está nos anúncios; o valor aparece à parte, só como informação.
 
 **Quando a base da Multipark não responde**: o gasto aparece na mesma (é nosso) e as reservas, o ROAS e o custo por reserva ficam "—" com o aviso "Reservas da Multipark indisponíveis" — nunca 0. Os alertas de atribuição e de campanhas sem resultados ficam suspensos até voltar; os das recolhas continuam.

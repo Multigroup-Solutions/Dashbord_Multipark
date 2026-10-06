@@ -3,6 +3,8 @@ import FitAmount from "@/components/finance/FitAmount";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { can, scopeFor } from "@shared/access";
+import { isAdPlatformInvoice } from "@shared/marketingRules";
+import { ExpenseAdCostsCard } from "@/components/ExpenseAdCostsCard";
 import { trpc } from "@/lib/trpc";
 import { compressImage } from "@/lib/compressImage";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -504,6 +506,9 @@ export default function ExpensesPage() {
         ))}
       </div>
       )}
+
+      {/* 29f: anúncios do período (o que entra como despesa de marketing na Faturação) */}
+      {showTotals && shownTab === "lista" && !allHistory && <ExpenseAdCostsCard startDate={effectiveStartDate} endDate={effectiveEndDate} projectId={projectFilterId} />}
 
       {/* Filters */}
       {shownTab === "lista" && (
@@ -1010,6 +1015,9 @@ interface FormData {
   documentNumber: string;
   paidBy: string;      // "" | company | employee
   paidAt: string;      // AAAA-MM-DD (só com estado "paid")
+  /** 29f: período de consumo (faturas do Google/Meta) */
+  consumptionFrom: string;
+  consumptionTo: string;
 }
 
 function ExpenseFormModal({
@@ -1056,6 +1064,8 @@ function ExpenseFormModal({
     documentNumber: "",
     paidBy: "",
     paidAt: "",
+    consumptionFrom: "",
+    consumptionTo: "",
   });
 
   // Load existing data when editing
@@ -1091,6 +1101,8 @@ function ExpenseFormModal({
       documentNumber: (e as any).documentNumber ?? "",
       paidBy: (e as any).paidBy ?? "",
       paidAt: e.paidAt ? format(parseDbDate(e.paidAt), "yyyy-MM-dd") : "",
+      consumptionFrom: (e as any).consumptionFrom ? String((e as any).consumptionFrom).slice(0, 10) : "",
+      consumptionTo: (e as any).consumptionTo ? String((e as any).consumptionTo).slice(0, 10) : "",
     });
     // Documento gravado: abre-se pela URL assinada (a pública pode não abrir)
     if (e.invoiceImageUrl || e.invoiceImageKey) setPreviewUrl(`key:${e.invoiceImageKey || e.invoiceImageUrl}`);
@@ -1267,6 +1279,8 @@ function ExpenseFormModal({
         supplierNif: orNull(form.supplierNif),
         documentNumber: orNull(form.documentNumber),
         paidBy: paidBy ?? null,
+        consumptionFrom: orNull(form.consumptionFrom),
+        consumptionTo: orNull(form.consumptionTo),
         // Se trocou a fatura, envia a nova (o servidor grava e SÓ DEPOIS apaga a antiga).
         invoiceImageUrl: form.invoiceImageUrl || null,
         invoiceImageKey: form.invoiceImageKey || null,
@@ -1287,6 +1301,8 @@ function ExpenseFormModal({
         supplierNif: sanitize(form.supplierNif),
         documentNumber: sanitize(form.documentNumber),
         paidBy,
+        consumptionFrom: form.consumptionFrom || undefined,
+        consumptionTo: form.consumptionTo || undefined,
         invoiceImageUrl: form.invoiceImageUrl || undefined,
         invoiceImageKey: form.invoiceImageKey || undefined,
         extractedByAi: form.extractedByAi,
@@ -1456,6 +1472,18 @@ function ExpenseFormModal({
                 onChange={(e) => set("supplierNif", e.target.value)}
               />
             </div>
+            {/* 29f: fatura do Google/Meta → período de consumo (substitui o gasto dos anúncios nesses dias na Faturação) */}
+            {isAdPlatformInvoice(form.supplier, form.supplierNif) && (
+              <div className="space-y-1.5 sm:col-span-2 rounded-md border border-sky-200 bg-sky-50/50 p-2 dark:bg-sky-950/20">
+                <Label>Período de consumo (fatura de anúncios)</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input type="date" className="w-40" value={form.consumptionFrom} onChange={(e) => set("consumptionFrom", e.target.value)} aria-label="Consumo de" />
+                  <span className="text-xs text-muted-foreground">até</span>
+                  <Input type="date" className="w-40" value={form.consumptionTo} onChange={(e) => set("consumptionTo", e.target.value)} aria-label="Consumo até" />
+                </div>
+                <p className="text-[11px] text-muted-foreground">Nesses dias a Faturação troca o gasto dos anúncios (Google Ads / Meta) pelo valor desta fatura. Sem período, a fatura não conta — fica o gasto das plataformas.</p>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>Nº do documento</Label>
               <Input

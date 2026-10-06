@@ -2,7 +2,7 @@
 modulo: despesas
 titulo: Despesas
 rotas: /despesas, /despesas/dashboard
-palavras: despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, falta a fatura, sem fatura, anexar fatura, contabilista
+palavras: despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista
 ---
 # Despesas
 
@@ -44,3 +44,9 @@ Registo de faturas e despesas da empresa.
 Quem vê o quê: condutores só as próprias despesas; team leaders as suas e as da equipa (sem totais); supervisores as suas e as do seu centro de custos; frontoffice, backoffice e admin todas. Com a restrição de totais financeiros, cada pessoa só vê as que registou.
 
 Se aparecer **"Não foi possível carregar"**, é uma falha (base de dados ou permissão), não "zero despesas": usa **Tentar de novo**.
+
+**Faturas do Google / Meta (anúncios)**
+- Quando o fornecedor é o Google ou a Meta (pelo nome ou pelo NIF), o formulário pede o **período de consumo** (de / até) — a fatura costuma cobrir os 60 a 90 dias anteriores.
+- Na **Faturação**, nesses dias, o gasto dos anúncios (Google Ads / Meta) é **trocado pelo valor da fatura**. Até a fatura chegar, conta o gasto das plataformas.
+- Sem período, a fatura **não conta** (fica o gasto) e aparece um aviso — abre-a e indica o período.
+- No topo da lista aparece **"Anúncios no período"**: o que entra como despesa de marketing por projeto (fatura ou gasto à espera da fatura).

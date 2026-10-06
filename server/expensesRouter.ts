@@ -13,6 +13,7 @@ import { storagePut } from "./storage";
 import { resolveExpenseVisibility, expenseConditions, whereAll, canSeeExpense, canSeeAggregates, type ExpenseListFilters, type ExpenseVisibility } from "./expenseScope";
 import { parseExpenseAmount } from "../shared/expenseAmount";
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
+import { validConsumptionPeriod } from "../shared/adInvoices";
 import { expenseTotals } from "../shared/expenseTotals";
 import { getAllCategories, listExpenses, summarizeExpenses, recordExpenseEvent, getExpenseEvents, findPossibleDuplicateExpense, projectExists, categoryExists, resolveProjectIds, getExpenseById, createExpense, updateExpense, softDeleteExpense, restoreExpense, getExpenseStats, getUpcomingPayments, getOverdueExpenses, markOverdueExpenses, logActivity, getEmployeeById, getEmployeeByUserId } from "./db";
 import { requireRole, isPermissionDenied, requireFinanceTotals } from "./routerGuards";
@@ -75,6 +76,14 @@ const EXPENSE_LIST_INPUT = z.object({
   /** 29b: só as que ainda não têm a fatura anexada */
   missingInvoice: z.boolean().optional(),
 }).optional();
+
+/** 29f: período de consumo — os dois ou nenhum; de ≤ até; no máximo 1 ano. */
+function consumptionPeriodOrBadRequest(from: string | null | undefined, to: string | null | undefined): { consumptionFrom: string | null; consumptionTo: string | null } {
+  const f = cleanText(from) ?? null, t = cleanText(to) ?? null;
+  if (!f && !t) return { consumptionFrom: null, consumptionTo: null };
+  if (!validConsumptionPeriod(f, t)) throw new TRPCError({ code: "BAD_REQUEST", message: "Período de consumo inválido — indica o primeiro e o último dia (até 1 ano)." });
+  return { consumptionFrom: f, consumptionTo: t };
+}
 
 /** Campos cuja alteração muda o valor financeiro (invalidam uma aprovação). */
 /** O comprador de uma despesa tem de existir e ser das cidades de quem lança. */
@@ -232,6 +241,9 @@ export const expensesRouter = router({
         supplierNif: z.string().optional(),
         documentNumber: z.string().optional(),
         paidBy: z.enum(["company", "employee"]).optional(),
+        // 29f: período de consumo (faturas do Google/Meta) — substitui o gasto dos anúncios nesses dias
+        consumptionFrom: z.string().nullable().optional(),
+        consumptionTo: z.string().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -277,7 +289,8 @@ export const expensesRouter = router({
         paidBy,
         status: "pending",
         approvalStatus: "legacy",
-      });
+        ...consumptionPeriodOrBadRequest(input.consumptionFrom, input.consumptionTo),
+      } as any);
       const newId = Number((created as any)?.[0]?.insertId ?? 0) || null;
       if (newId) {
         await recordExpenseEvent({
@@ -332,6 +345,9 @@ export const expensesRouter = router({
         supplierNif: z.string().nullable().optional(),
         documentNumber: z.string().nullable().optional(),
         paidBy: z.enum(["company", "employee"]).nullable().optional(),
+        // 29f: período de consumo (faturas do Google/Meta); null = limpar
+        consumptionFrom: z.string().nullable().optional(),
+        consumptionTo: z.string().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -354,6 +370,7 @@ export const expensesRouter = router({
         if (v !== undefined) patch[k] = v;
       }
       if (input.paymentMethod !== undefined) patch.paymentMethod = input.paymentMethod;
+      if (input.consumptionFrom !== undefined || input.consumptionTo !== undefined) Object.assign(patch, consumptionPeriodOrBadRequest(input.consumptionFrom, input.consumptionTo));
       if (input.buyerId !== undefined) { await assertExpenseBuyer(input.buyerId); patch.buyerId = input.buyerId; }
       if (input.paidBy !== undefined) patch.paidBy = input.paidBy;
       if (input.categoryId !== undefined) {
@@ -695,6 +712,41 @@ export const expensesRouter = router({
       }
       return summarizeExpenses(where);
     }),
+
+  // 29f: anúncios (Google Ads / Meta) do período, por projeto — o que entra como despesa de
+  // marketing na Faturação: gasto das plataformas até chegar a fatura; no período de consumo, a fatura.
+  adCosts: protectedProcedure.input(z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
+    const { vis } = await expenseWhereFor(ctx.user, input);
+    if (!canSeeAggregates(vis)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para ver totais financeiros." });
+    if (input.startDate > input.endDate) throw new TRPCError({ code: "BAD_REQUEST", message: "Período inválido" });
+    const { getDb, getProjects } = await import("./db");
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível" });
+    const projectIds = input.projectId ? await resolveProjectIds(input.projectId) : null;
+    const { loadAdCosts } = await import("./finance/adCosts");
+    const ad = await loadAdCosts(db, { from: input.startDate, to: input.endDate, projectIds });
+    const names = new Map(((await getProjects()) as any[]).map((p) => [p.id, p]));
+    const label = (id: number | null) => {
+      if (id == null) return "Por atribuir";
+      const p: any = names.get(id); if (!p) return `#${id}`;
+      const parent: any = p.parentId != null ? names.get(p.parentId) : null;
+      return p.level === "brand" && parent ? `${p.name} ${parent.name}` : p.name;
+    };
+    const by = new Map<string, { projectId: number | null; label: string; provider: string; platform: number; invoice: number }>();
+    for (const r of ad.rows) {
+      const k = `${r.projectId ?? ""}|${r.provider}`;
+      const e = by.get(k) ?? { projectId: r.projectId, label: label(r.projectId), provider: r.provider, platform: 0, invoice: 0 };
+      if (r.source === "fatura") e.invoice += r.cost; else e.platform += r.cost;
+      by.set(k, e);
+    }
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    return {
+      totals: { platform: r2(ad.totals.platform), invoice: r2(ad.totals.invoice) },
+      rows: [...by.values()].map((x) => ({ ...x, platform: r2(x.platform), invoice: r2(x.invoice) })).sort((a, b) => (b.platform + b.invoice) - (a.platform + a.invoice)),
+      invoicesWithoutPeriod: ad.invoicesWithoutPeriod,
+    };
+  }),
 
   // 29b: faturas em falta no mês (Lisboa) — o aviso "Falta a fatura" no topo da lista
   missingInvoiceSummary: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {

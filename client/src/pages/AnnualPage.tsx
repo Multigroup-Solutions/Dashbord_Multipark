@@ -436,7 +436,7 @@ export default function AnnualPage() {
             <Card className="p-3 gap-1">
               <div className="flex items-center gap-1 mb-1">
                 <Megaphone className="w-4 h-4 text-pink-600" />
-                <span className="text-xs text-muted-foreground" title="Despesas s/IVA + comissões + ordenados + equipa do dia. A TSU entra pelas Despesas quando é paga (nos meses importados do histórico vinha calculada). Marketing já está nas despesas (não se soma outra vez).">Custos s/IVA</span>
+                <span className="text-xs text-muted-foreground" title="Despesas s/IVA + comissões + ordenados + equipa do dia. A TSU entra pelas Despesas quando é paga (nos meses importados do histórico vinha calculada). Marketing = anúncios por projeto: o gasto das plataformas até chegar a fatura do Google/Meta; no período de consumo da fatura, a fatura.">Custos s/IVA</span>
               </div>
               <FitAmount value={totals.totalCosts} className="text-base sm:text-lg font-bold text-pink-700 dark:text-pink-400" />
               {showCompare && <DeltaBadge curr={totals.totalCosts} prev={totalsCompare.totalCosts} invert />}

@@ -315,7 +315,7 @@ export const countedEmployerTax = (employerTax: number): number => (EMPLOYER_TSU
 /**
  * receita s/IVA − despesas s/IVA − pessoal (base+provisões+variável) −
  * equipa do dia − comissões (venda + operacional). Comissões são CUSTO (nunca
- * deduzidas à receita); marketing NÃO entra (já está nas despesas); a TSU
+ * deduzidas à receita); o marketing (anúncios — 29f) vem nas despesas; a TSU
  * patronal só entra pelas Despesas (ver EMPLOYER_TSU_IN_COSTS).
  */
 export function computeMargin(i: MarginInput): MarginResult {

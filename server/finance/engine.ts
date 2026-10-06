@@ -23,8 +23,11 @@
  *   - comissões (venda + operacional) são CUSTO, sobre o valor SEM IVA (ou
  *     com IVA se o parceiro tiver commissionBase 'gross'); a de venda NÃO se
  *     cobra quando o parceiro é operacional e já opera o centro da reserva;
- *   - marketing NÃO entra (as faturas do Google já estão nas despesas) — a
- *     cobertura (`quality.marketingExcluded`) só se calcula a pedido;
+ *   - marketing (29f, Jorge 6 out 2026): os ANÚNCIOS entram nas despesas por
+ *     dia × projeto — o gasto das plataformas (Google Ads / Meta) até chegar a
+ *     fatura; nos dias do período de consumo de uma fatura do Google/Meta, a
+ *     fatura (./adCosts.ts). As faturas do Google/Meta não contam na data da
+ *     fatura (senão contavam duas vezes); sem período, ficam num aviso;
  *   - pessoal: histórico salarial por mês, mês completo = salário mensal,
  *     início/fim de contrato, inativos sem fim de contrato contam até à data
  *     de desativação/última atualização (e ficam num aviso), extras excluídos
@@ -53,6 +56,8 @@ import { getDb, resolveProjectIds, getPayrollData } from "../db";
 import { matchCityKey } from "../../shared/city";
 import { lisbonDayOf, lisbonDayRangeUtc, lisbonDaySql } from "../../shared/lisbonDay";
 import { isTsuCategory } from "../../shared/financeCategories";
+import { adCostCategory } from "../../shared/adInvoices";
+import { loadAdCosts, notAdInvoiceSql } from "./adCosts";
 import * as R from "./rules";
 import { resolveFinanceRates, rateCaseSql, type FinanceRates, type RatePeriod } from "./rates";
 import { loadPartnerIndex, operatedLeavesByPartner, partnerForCampaign, withMarketplacePartner } from "./partners";
@@ -201,6 +206,8 @@ export interface FinanceResult {
     payrollVariableMonths: string[];     // meses com variável do RH aplicado
     /** null = não calculado (só com includeMarketingCoverage) */
     marketingExcluded: { adSpend: number; marketingExpenses: number } | null;
+    /** 29f: anúncios nas despesas — gasto das plataformas vs faturas; faturas do Google/Meta sem período (não contam) */
+    adCosts?: { platform: number; invoice: number; invoicesWithoutPeriod: Array<{ id: number; supplier: string | null; amount: number; day: string }>; error?: string };
     /** 29b: categorias de TSU/Segurança Social marcadas "excluir da margem" (a TSU ficava sem contar) */
     tsuCategoriesExcluded?: Array<{ name: string; total: number }>;
     isCurrentPeriod: boolean;
@@ -350,6 +357,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   // D4: as eliminadas (deletedAt) nunca contam.
   const expConds: SQL[] = [sql`${expenses.status} <> 'cancelled'`, sql`${expenses.deletedAt} IS NULL`, gte(expenses.expenseDate, fromStr), lte(expenses.expenseDate, toStr)];
   if (projectIds) expConds.push(inArray(expenses.projectId, projectIds));
+  // 29f: as faturas do Google/Meta contam pelo período de consumo (./adCosts.ts), não na data da fatura
+  expConds.push(notAdInvoiceSql());
   const expDayExpr = sql<string>`DATE(${expenses.expenseDate})`;
   // IVA da linha: autoliquidação → 0; taxa da categoria; senão a normal do dia.
   const expVat = sql`(CASE WHEN COALESCE(${expenseCategories.reverseCharge}, 0) = 1 THEN 0 ELSE COALESCE(${expenseCategories.vatRate} / 100, ${rateCaseSql(expDayExpr, fr.vatPeriods, R.FINANCE_PARAMS.vatRate)}) END)`;
@@ -363,6 +372,20 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
     .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
     .where(and(...expConds))
     .groupBy(expDayExpr, expenses.projectId, projects.name, expenseCategories.id, expenseCategories.name);
+
+  // 29f (Jorge, 6 out 2026): marketing = gasto dos anúncios por projeto até chegar a fatura;
+  // nos dias do período de consumo de uma fatura do Google/Meta, a fatura. Entra como despesa
+  // (autoliquidação: sem IVA) por dia × projeto — as mesmas contas das outras despesas.
+  try {
+    const ad = await loadAdCosts(db, { from, to, projectIds: projectIds ?? null });
+    for (const r of ad.rows) {
+      (expenseRows as any[]).push({ day: r.date, projectId: r.projectId, projectName: projectNameOf(r.projectId) ?? (r.projectId == null ? null : `#${r.projectId}`), categoryId: null, categoryName: adCostCategory(r),
+        excluded: 0, count: 1, totalAmount: r.cost, totalNet: r.cost });
+    }
+    out.quality.adCosts = { platform: ad.totals.platform, invoice: ad.totals.invoice, invoicesWithoutPeriod: ad.invoicesWithoutPeriod };
+  } catch (err: any) {
+    out.quality.adCosts = { platform: 0, invoice: 0, invoicesWithoutPeriod: [], error: String(err?.message ?? err).slice(0, 200) };
+  }
 
   // Pendentes com vencimento no período — INFORMAÇÃO (dívida), não custo.
   const pendConds: SQL[] = [inArray(expenses.status, ["pending", "overdue"]), sql`${expenses.deletedAt} IS NULL`, isNotNull(expenses.paymentDueDate), gte(expenses.paymentDueDate, fromStr), lte(expenses.paymentDueDate, toStr)];

@@ -745,6 +745,9 @@ export const expenses = mysqlTable("expenses", {
 	deletedAt: timestamp({ mode: 'string' }),
 	// 0470 (29d): despesa do turno lançada na Passagem de turno — "shift:<dia>:<turno>:<cidade>"
 	cashSource: varchar({ length: 64 }),
+	// 0475 (29f): período de consumo da fatura do Google/Meta (substitui o gasto dos anúncios nesses dias)
+	consumptionFrom: date({ mode: 'string' }),
+	consumptionTo: date({ mode: 'string' }),
 	deletedById: int(),
 	categoryId: int(),
 	projectId: int(),
