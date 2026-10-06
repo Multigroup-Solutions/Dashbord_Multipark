@@ -8,6 +8,7 @@
  * campos diferentes… Este módulo é a única fonte das fórmulas; o motor
  * (engine.ts) só vai buscar dados e chama isto.
  */
+import { NO_COMMISSION_TYPES } from "../../shared/partnerRules";
 
 // ─── Parâmetros (um só sítio; antes: literais 0.23/1.23/0.2375 espalhados) ───
 export interface FinanceParams {
@@ -235,7 +236,8 @@ export function commissionFor(
   if (partner.commissionRate == null) return { commission: 0, status: "rate_missing", base };
   // 0% só é "confirmado" se alguém configurou o parceiro; um 0% vindo da
   // sincronização automática (configuredAt NULL) é taxa em falta.
-  if (partner.commissionRate === 0) return { commission: 0, status: partner.configuredAt === null ? "rate_missing" : "rate_zero", base };
+  // 29a: Pro (desconto) e avença (mensalidade) não têm comissão de venda — 0% é o certo.
+  if (partner.commissionRate === 0) return { commission: 0, status: partner.configuredAt === null && !NO_COMMISSION_TYPES.has(String(partner.partnerType ?? "")) ? "rate_missing" : "rate_zero", base };
   return { commission: base * (partner.commissionRate / 100), status: "ok", base };
 }
 

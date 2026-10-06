@@ -2,14 +2,14 @@
 modulo: parcerias
 titulo: Parcerias (parceiros, parques, Pró e avenças)
 rotas: /parcerias, /parcerias/tipo/:tipo
-palavras: marketplace 20, campanha do marketplace, parcerias, parceiros, parceiro, agregador, agregadores, agência, agências, agência de viagens, parkos, parclick, parkvia, looking4parking, comissão, taxa, percentagem, valor devido, nosso, parques, parque, terceiros, marketplace, comissão gravada, taxa do parque, pro, pró, avença, avenças, contrato, acordo, notas, contacto, registo, faturação de parceiros
+palavras: marketplace 20, campanha do marketplace, parcerias, parceiros, parceiro, agregador, agregadores, agência, agências, agência de viagens, parkos, parclick, parkvia, looking4parking, comissão, taxa, percentagem, valor devido, nosso, parques, parque, terceiros, marketplace, comissão gravada, taxa do parque, pro, pró, avença, avenças, contrato, acordo, notas, contacto, registo, faturação de parceiros, marcas, inativos, mostrar inativos, por configurar, ligar à multipark
 ---
 # Parcerias
 
 Menu **Financeiro → Parcerias**. Os parceiros, os parques e as reservas vêm **ao vivo da BD da Multipark** (só leitura). Os **nossos registos** (contrato, notas, contactos) ficam na nossa BD.
 
 **Separadores**
-- **Parceiros** — agências de viagens e agregadores dos **nossos** parques. Por parceiro: tipo, parques e a **taxa** de cada um (percentagem ou valor fixo, como está na Multipark), reservas, valor e **nosso** (o valor devido gravado na reserva — o parceiro fica com o resto), **este mês** e **últimos 12 meses**. O mês é o da **entrada do carro** (hora de Lisboa); canceladas e pendentes não contam. "*n* sem devido" = reservas sem o valor devido gravado na Multipark.
+- **Parceiros** — agências de viagens e agregadores dos **nossos** parques. Por parceiro: tipo, **marcas** (Airpark, Redpark, Skypark — quem é parceiro de uma marca é-o nas três cidades) e a **taxa** (percentagem ou valor fixo, como está na Multipark; se as cidades tiverem taxas diferentes aparece o intervalo, com um *, e a taxa de cada cidade na dica), reservas, valor e **nosso** (o valor devido gravado na reserva — o parceiro fica com o resto), **este mês** e **últimos 12 meses**. O mês é o da **entrada do carro** (hora de Lisboa); canceladas e pendentes não contam. "*n* sem devido" = reservas sem o valor devido gravado na Multipark.
   - **Ficha no CRM** abre a página do parceiro em Clientes (detalhe mensal e últimas reservas).
   - **Registo**: liga o parceiro a um registo nosso (**Ligar a registo…**), cria um novo já preenchido (**Criar**), edita-o (lápis) ou desliga-o. A ligação é só pelo **ID do parceiro na Multipark** — nada de nomes nem "aliases".
 - **Parques** — **Nossos** (reservas do mês, quantas vieram de parceiros, valor) e **Terceiros (marketplace)**: parques de outros em que **nós somos o marketplace**. Só contam as reservas que nós lhes levámos; o **nosso** é a **comissão gravada em cada reserva na Multipark** (cada parque tem a sua taxa — 25 %, menos nos parques de rua…) e o parque fica com o resto. A coluna **Taxa** mostra a nossa taxa efetiva no mês. **Ficha no CRM** abre a página do parque.
@@ -23,7 +23,9 @@ Menu **Financeiro → Parcerias**. Os parceiros, os parques e as reservas vêm *
   - **Faturas** = as emitidas das reservas + as **mensais** do parceiro (os agregadores e agências faturam-se uma vez por mês, por isso uma reserva sem fatura própria não é diferença).
   - Avisos (sino e email) de diferenças **novas**: liga em Definições → Automações "Parceiros: avisar diferenças no fecho do mês".
 - **Análise** — reservas e receita por campanha no período.
-- **Registos** — os nossos registos: acordo de faturação (contrato), comissão, NIF, **notas** e **contacto** (nome, email, telefone — só para quem tem contacto). **Por configurar** = registos sem dados gravados.
+- **Registos** — os nossos registos: acordo de faturação (contrato), comissão, NIF, **notas** e **contacto** (nome, email, telefone — só para quem tem contacto). **Por configurar** = registos **só nossos** (hotéis, empresas, outros) sem dados gravados. Pros, avenças, agências e agregadores **não** se configuram à mão: ligam-se em **Ligar à Multipark** (o tipo, a taxa e a avença vêm de lá) — enquanto não estiverem ligados aparece um aviso com o número deles.
+
+**Inativos**: parceiros inativos (ou só em parques inativos), parques inativos na Multipark, Pros e avenças inativos e registos inativos **não aparecem** nas listas. "Mostrar inativos (*n*)" volta a mostrá-los. Os números do mês e dos 12 meses não mudam (as reservas que houve contam na mesma).
 
 **Juntar registos** (o mesmo parceiro separado em vários registos)
 1. Em **Registos** (ou na fila **Por configurar**), marca a caixa dos registos que são o mesmo parceiro (ex.: "Pro Cabopol" e "Blocotelha", da mesma agência, com o mesmo email).

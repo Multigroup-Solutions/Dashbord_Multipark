@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { AlertTriangle, ChevronDown, ChevronRight, ExternalLink, Link2, Loader2, Pencil, Plus, Unlink } from "lucide-react";
 import { getPartnerType } from "@shared/partnerTypes";
+import { brandsOfParkNames, isLivePartnerActive, partnerBrandFees } from "@shared/partnerBrands";
 import { toast } from "sonner";
 
 type Out = inferRouterOutputs<AppRouter>["partnerships"];
@@ -56,11 +57,14 @@ function Loading() {
   return <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
 }
 
-function feeText(p: { feeType: string | null; feePct: number | null; feeFixed: number | null }): string | null {
-  if (p.feeType === "FIXED" && p.feeFixed != null) return eur(p.feeFixed);
-  if (p.feePct != null) return `${p.feePct.toLocaleString("pt-PT")} %`;
-  if (p.feeFixed != null) return eur(p.feeFixed);
-  return null;
+/** 29a: os inativos ficam escondidos; este botão volta a mostrá-los. */
+function InactiveToggle({ count, show, onToggle, what }: { count: number; show: boolean; onToggle: () => void; what: string }) {
+  if (count === 0) return null;
+  return (
+    <button type="button" onClick={onToggle} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+      {show ? `Esconder ${what} inativos` : `Mostrar ${what} inativos (${count})`}
+    </button>
+  );
 }
 
 // ─── Parceiros ──────────────────────────────────────────────────────────────
@@ -73,6 +77,7 @@ export function PartnersLiveTab({ records, onEdit, onCreate }: {
   const q = trpc.partnerships.live.useQuery(undefined, { retry: false, staleTime: 60_000 });
   const [type, setType] = useState<"all" | "AGGREGATOR" | "AGENCY" | "PARTNER">("all");
   const [search, setSearch] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
 
   if (q.isLoading) return <Loading />;
   if (q.error) return <p role="alert" className="text-sm text-destructive">{q.error.message}</p>;
@@ -88,9 +93,12 @@ export function PartnersLiveTab({ records, onEdit, onCreate }: {
   }
 
   const t = search.trim().toLowerCase();
-  const rows = d.partners.filter((p) => (type === "all" || p.type === type) && (!t || p.name.toLowerCase().includes(t)));
-  const counts = { all: d.partners.length, AGGREGATOR: 0, AGENCY: 0, PARTNER: 0 } as Record<string, number>;
-  for (const p of d.partners) counts[p.type] = (counts[p.type] ?? 0) + 1;
+  // 29a: parceiros inativos (ou só em parques inativos) fora da lista, salvo se pedires
+  const inactiveCount = d.partners.filter((p) => !isLivePartnerActive(p)).length;
+  const visible = showInactive ? d.partners : d.partners.filter((p) => isLivePartnerActive(p));
+  const rows = visible.filter((p) => (type === "all" || p.type === type) && (!t || p.name.toLowerCase().includes(t)));
+  const counts = { all: visible.length, AGGREGATOR: 0, AGENCY: 0, PARTNER: 0 } as Record<string, number>;
+  for (const p of visible) counts[p.type] = (counts[p.type] ?? 0) + 1;
 
   return (
     <div className="space-y-3">
@@ -105,6 +113,7 @@ export function PartnersLiveTab({ records, onEdit, onCreate }: {
             {k === "all" ? "Todos" : TYPE_LABEL[k]} <span className="opacity-80 tabular-nums">{counts[k] ?? 0}</span>
           </button>
         ) : null)}
+        <InactiveToggle count={inactiveCount} show={showInactive} onToggle={() => setShowInactive((v) => !v)} what="parceiros" />
         <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Procurar parceiro…" className="h-8 w-full sm:ml-auto sm:w-56" aria-label="Procurar parceiro" />
       </div>
       {rows.length === 0 ? (
@@ -116,7 +125,7 @@ export function PartnersLiveTab({ records, onEdit, onCreate }: {
               <thead>
                 <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                   <th className="p-2">Parceiro</th>
-                  <th className="p-2">Parques · taxa</th>
+                  <th className="p-2" title="Quem é parceiro de uma marca é parceiro nas três cidades; a taxa de cada cidade está na dica">Marcas · taxa</th>
                   <th className="p-2 text-right" colSpan={3}>Este mês ({monthLabel(d.periods.thisMonth)})</th>
                   <th className="p-2 text-right" colSpan={3}>Últimos 12 meses</th>
                   <th className="p-2">Registo</th>
@@ -129,7 +138,7 @@ export function PartnersLiveTab({ records, onEdit, onCreate }: {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((p) => <PartnerRow key={p.userId} p={p} records={records} onEdit={onEdit} onCreate={onCreate} />)}
+                {rows.map((p) => <PartnerRow key={p.userId} p={p} records={records} onEdit={onEdit} onCreate={onCreate} showInactive={showInactive} />)}
               </tbody>
             </table>
           </div>
@@ -139,8 +148,8 @@ export function PartnersLiveTab({ records, onEdit, onCreate }: {
   );
 }
 
-function PartnerRow({ p, records, onEdit, onCreate }: {
-  p: LivePartnerRow; records: PartnershipRecord[];
+function PartnerRow({ p, records, onEdit, onCreate, showInactive }: {
+  p: LivePartnerRow; records: PartnershipRecord[]; showInactive: boolean;
   onEdit: (record: PartnershipRecord) => void;
   onCreate: (prefill: { name: string; partnerType: string; multiparkPartnerId: string }) => void;
 }) {
@@ -159,17 +168,19 @@ function PartnerRow({ p, records, onEdit, onCreate }: {
         <span className="font-medium break-words">{p.name}</span>
         <div className="mt-0.5 flex flex-wrap items-center gap-1">
           <Badge variant="outline" className="text-[11px]">{TYPE_LABEL[p.type] ?? p.type}</Badge>
-          {!p.active && <Badge variant="secondary" className="text-[11px]">Inativo</Badge>}
+          {!isLivePartnerActive(p) && <Badge variant="secondary" className="text-[11px]">Inativo</Badge>}
           <a href={`/clientes/parceiros/${encodeURIComponent(p.userId)}`} className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline">
             Ficha no CRM <ExternalLink className="h-3 w-3" />
           </a>
         </div>
       </td>
       <td className="p-2 min-w-[10rem]">
+        {/* 29a: por marca (não por cidade); a taxa de cada cidade fica na dica quando difere */}
         <ul className="space-y-0.5 text-xs">
-          {p.parks.map((x) => (
-            <li key={x.partnerId} className={x.active ? "" : "text-muted-foreground line-through"}>
-              {x.parkName}{feeText(x) ? <span className="text-muted-foreground"> · {feeText(x)}</span> : null}
+          {partnerBrandFees(p.parks).filter((b) => showInactive || b.active || !isLivePartnerActive(p)).map((b) => (
+            <li key={b.brand} className={b.active ? "" : "text-muted-foreground line-through"} title={b.detail ?? undefined}>
+              {b.brand}{b.fee ? <span className="text-muted-foreground"> · {b.fee}</span> : null}
+              {b.detail && <span className="ml-0.5 text-[10px] text-amber-700 dark:text-amber-400" aria-label={`Taxas por cidade: ${b.detail}`}>*</span>}
             </li>
           ))}
         </ul>
@@ -237,6 +248,7 @@ function RecordsFallback({ records, onEdit }: { records: PartnershipRecord[]; on
 
 export function ParksLiveTab() {
   const q = trpc.partnerships.live.useQuery(undefined, { retry: false, staleTime: 60_000 });
+  const [showInactive, setShowInactive] = useState(false);
   if (q.isLoading) return <Loading />;
   if (q.error) return <p role="alert" className="text-sm text-destructive">{q.error.message}</p>;
   const d = q.data;
@@ -248,12 +260,21 @@ export function ParksLiveTab() {
     );
   }
   const month = monthLabel(d.periods.thisMonth);
+  // 29a: parques INATIVOS na Multipark fora da lista, salvo se pedires
+  const inactive = (p: { status: string | null }) => String(p.status ?? "").toUpperCase() === "INACTIVE";
+  const oursAll = d.parks.ours, thirdAll = d.parks.third;
+  const ours = showInactive ? oursAll : oursAll.filter((p) => !inactive(p));
+  const third = showInactive ? thirdAll : thirdAll.filter((p) => !inactive(p));
+  const inactiveCount = oursAll.filter(inactive).length + thirdAll.filter(inactive).length;
   return (
     <Tabs defaultValue="ours" className="space-y-3">
-      <TabsList>
-        <TabsTrigger value="ours">Nossos <span className="ml-1 opacity-70 tabular-nums">{d.parks.ours.length}</span></TabsTrigger>
-        <TabsTrigger value="third">Terceiros (marketplace) <span className="ml-1 opacity-70 tabular-nums">{d.parks.third.length}</span></TabsTrigger>
-      </TabsList>
+      <div className="flex flex-wrap items-center gap-2">
+        <TabsList>
+          <TabsTrigger value="ours">Nossos <span className="ml-1 opacity-70 tabular-nums">{ours.length}</span></TabsTrigger>
+          <TabsTrigger value="third">Terceiros (marketplace) <span className="ml-1 opacity-70 tabular-nums">{third.length}</span></TabsTrigger>
+        </TabsList>
+        <InactiveToggle count={inactiveCount} show={showInactive} onToggle={() => setShowInactive((v) => !v)} what="parques" />
+      </div>
       <TabsContent value="ours">
         <Card className="p-0">
           <div className="overflow-x-auto">
@@ -267,7 +288,7 @@ export function ParksLiveTab() {
                 </tr>
               </thead>
               <tbody>
-                {d.parks.ours.map((p) => (
+                {ours.map((p) => (
                   <tr key={p.id} className="border-b hover:bg-muted/40">
                     <td className="p-2 font-medium">{p.label}<span className="block text-[11px] font-normal text-muted-foreground">{p.name}</span></td>
                     <td className="p-2 text-muted-foreground">{p.city ?? "—"}</td>
@@ -276,7 +297,7 @@ export function ParksLiveTab() {
                     <td className="p-2 text-right tabular-nums">{eur(p.value)}</td>
                   </tr>
                 ))}
-                {d.parks.ours.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">Sem parques nossos no teu âmbito.</td></tr>}
+                {ours.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">Sem parques nossos no teu âmbito.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -299,7 +320,7 @@ export function ParksLiveTab() {
                 </tr>
               </thead>
               <tbody>
-                {d.parks.third.map((p) => (
+                {third.map((p) => (
                   <tr key={p.id} className="border-b hover:bg-muted/40">
                     <td className="p-2 min-w-[10rem]">
                       <span className="font-medium break-words">{p.name}</span>
@@ -316,7 +337,7 @@ export function ParksLiveTab() {
                     <td className="p-2 text-right tabular-nums text-muted-foreground">{p.rate == null ? "—" : `${String(p.rate).replace(".", ",")} %`}</td>
                   </tr>
                 ))}
-                {d.parks.third.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Sem parques de terceiros no teu âmbito.</td></tr>}
+                {third.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Sem parques de terceiros no teu âmbito.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -331,6 +352,7 @@ export function ParksLiveTab() {
 export function ProLiveTab() {
   const q = trpc.partnerships.proLive.useQuery(undefined, { retry: false, staleTime: 60_000 });
   const [open, setOpen] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
   if (q.isLoading) return <Loading />;
   if (q.error) return <p role="alert" className="text-sm text-destructive">{q.error.message}</p>;
   const d = q.data;
@@ -341,7 +363,9 @@ export function ProLiveTab() {
       </p>
     );
   }
-  const rows: ProOk["rows"] = d.rows;
+  // 29a: Pros e avenças inativos (e as contas sem registo) fora da lista, salvo se pedires
+  const inactiveCount = d.rows.filter((r) => !r.active).length;
+  const rows: ProOk["rows"] = showInactive ? d.rows : d.rows.filter((r) => r.active);
   const month = monthLabel(d.periods.thisMonth);
   return (
     <div className="space-y-3">
@@ -349,6 +373,7 @@ export function ProLiveTab() {
         <strong>Só informativo</strong> (não é contabilidade): reservas dos clientes Pro e das avenças, a <strong>entrar</strong> (mês da entrada)
         e a <strong>sair</strong> (mês da saída), em Lisboa. A conta corrente dos Pro está no CRM (Clientes › Pro).
       </p>
+      <InactiveToggle count={inactiveCount} show={showInactive} onToggle={() => setShowInactive((v) => !v)} what="Pros e avenças" />
       {rows.length === 0 ? (
         <Card className="p-8 text-center text-sm text-muted-foreground">Sem clientes Pro nem avenças no teu âmbito.</Card>
       ) : (
@@ -387,7 +412,7 @@ export function ProLiveTab() {
                               </Link>
                             )}
                           </div>
-                          {r.parks.length > 0 && <p className="pl-4 text-[11px] text-muted-foreground">{r.parks.join(" · ")}</p>}
+                          {r.parks.length > 0 && <p className="pl-4 text-[11px] text-muted-foreground" title={r.parks.join(" · ")}>{brandsOfParkNames(r.parks).join(" · ")}</p>}
                         </td>
                         <td className="p-2 text-right tabular-nums">{int(r.thisMonth.inBookings)}</td>
                         <td className="p-2 text-right tabular-nums">{eur(r.thisMonth.inValue)}</td>
