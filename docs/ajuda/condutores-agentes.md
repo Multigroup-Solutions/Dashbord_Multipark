@@ -2,7 +2,7 @@
 modulo: criticas
 titulo: Condutores e agentes
 rotas: /pessoas/condutores-agentes
-palavras: condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, quem registou
+palavras: condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou
 ---
 # Condutores e agentes
 
@@ -22,7 +22,10 @@ Em **Pessoas → Condutores e agentes** (team leader e acima, nas tuas cidades).
   - **Multipark**, pela avaliação diária: recolhas, entregas, movimentos, "pôs em recolha/entrega", reservas criadas e alteradas, ocorrências.
   - **Zello**: km, velocidade máxima, dias acima do limite.
   - **Dashboard**: horas (ponto ou escala), chamadas atendidas e feitas, WhatsApp, emails enviados pela dashboard, respostas e fecho de reclamações, críticas Google respondidas, despesas lançadas e aprovadas, contagens e correções de caixa, tarefas, leads, passagens de turno, contas de parceiros, fechos de mês dos parceiros, extras do dia escalados, atualizações do CRM, perdidos e achados, dias como team leader e quantas pessoas tinha.
-  - Também da **Multipark**: voos de regresso registados (as alterações à reserva que mexem no voo de regresso) e **cobranças de parceiros**. As cobranças contam os pagamentos de parceiros e de clientes Pro que um agente marcou e os créditos de parceiro lançados. A Multipark guarda sempre quem os registou, e é por aí que se sabe de quem são.
+  - Também da **Multipark**: voos de regresso registados (as alterações à reserva que mexem no voo de regresso) e as cobranças, em duas colunas:
+    - **Cobranças de parceiros**: os pagamentos de parceiros que um agente marcou e os créditos de parceiro lançados.
+    - **Cobranças de Pro e avenças**: os pagamentos de clientes Pro e de avenças que um agente marcou.
+    - A Multipark guarda sempre quem as registou, e é por aí que se sabe de quem são.
 - No topo, os números do grupo e a **evolução**: por dia na semana e no mês, por mês no ano. A seguir, o **ranking**, por **pontos** ou por **pontos por hora**. O "por hora" só aparece com 4 h ou mais no período.
   - **Pontos**: a soma ponderada do que a aba mede. Nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação, e os dias acima do limite descontam.
   - **Nota**: 100 para o melhor.

@@ -11,8 +11,9 @@
  *  - o que cada conta fez na dashboard (chamadas, WhatsApp, emails,
  *    reclamações, críticas Google, despesas, caixa, correções de caixa,
  *    tarefas, leads, passagens de turno);
- *  - a Multipark ao vivo, por agente: voos de regresso e cobranças de
- *    parceiros (quem as registou fica guardado na Multipark);
+ *  - a Multipark ao vivo, por agente: voos de regresso, cobranças de
+ *    parceiros e cobranças de Pro e avenças (quem as registou fica guardado
+ *    na Multipark);
  *  - a escala (dias como team leader e quantas pessoas tinha).
  * As contas ligam-se à ficha por employees.userId e employee_accounts.
  */
@@ -212,14 +213,16 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
         import("./multiparkDb/perfReturnFlights"), import("./multiparkDb/perfPartnerCharges"), import("./multiparkDb/read"),
       ]);
       const win = { userIds: [...agentToEmp.keys()], fromMs: range.startMs, toMs: range.endMs };
-      const reads: Array<[string, PerfMetric, Promise<MultiparkRead<Array<{ userId: string; day: string; n: number }>>>]> = [
+      // cada linha conta na coluna da leitura, ou na que traz (cobranças: parceiros vs Pro e avenças)
+      type Row = { userId: string; day: string; n: number; metric?: PerfMetric };
+      const reads: Array<[string, PerfMetric, Promise<MultiparkRead<Row[]>>]> = [
         ["Voos de regresso", "returnFlights", safeMultiparkRead("desempenho (voos de regresso)", () => readReturnFlights(win))],
-        ["Cobranças de parceiros", "partnerCharges", safeMultiparkRead("desempenho (cobranças de parceiros)", () => readPartnerCharges("settlements", win))],
+        ["Cobranças de parceiros, Pro e avenças", "partnerCharges", safeMultiparkRead("desempenho (cobranças)", () => readPartnerCharges("settlements", win))],
         ["Créditos de parceiros", "partnerCharges", safeMultiparkRead("desempenho (créditos de parceiros)", () => readPartnerCharges("credits", win))],
       ];
       for (const [label, key, pending] of reads) {
         const res = await pending;
-        if (res.available) for (const x of res.data) { const emp = agentToEmp.get(x.userId); if (emp != null) put(emp, x.day, { [key]: x.n }); }
+        if (res.available) for (const x of res.data) { const emp = agentToEmp.get(x.userId); if (emp != null) put(emp, x.day, { [x.metric ?? key]: x.n }); }
         else notes.push(`${label}: a Multipark não respondeu (${res.reason}).`);
       }
     }
