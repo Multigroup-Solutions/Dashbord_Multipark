@@ -13,7 +13,7 @@ import { sql } from "drizzle-orm";
 import { matchCityKey } from "../shared/city";
 import { searchText } from "../shared/textKey";
 import { cleanAgentName, isNonPersonAgentName, isScriptAgentName, isSystemAgentId } from "../shared/agentIdentity";
-import { crossCheckAgents, crossCheckSummary, type CityKey, type XAgent, type XInput, type XPerson, type XUser, type XZelloAccount } from "../shared/agentCrossCheck";
+import { crossCheckAgents, crossCheckSummary, planEmailAutoLinks, type CityKey, type XAgent, type XInput, type XPerson, type XUser, type XZelloAccount } from "../shared/agentCrossCheck";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -35,7 +35,34 @@ export async function loadAgentCrossCheck(opts: { refresh?: boolean } = {}) {
   return data;
 }
 
-async function build() {
+/**
+ * 31b — passo da reconciliação de hora a hora: os agentes em lado nenhum com
+ * o email de UMA só ficha ativa ligam-se sozinhos (Jorge: "sim"). Interruptor
+ * AGENT_EMAIL_AUTOLINK (ligado). Cada ligação fica nos Logs.
+ */
+export async function autoLinkAgentsByEmail(): Promise<number> {
+  const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+  await ensureFeatureFlagOverrides();
+  if (!isFeatureEnabled("AGENT_EMAIL_AUTOLINK", { defaultEnabled: automationFlagDefault("AGENT_EMAIL_AUTOLINK") })) return 0;
+  const r = await build({ light: true });
+  if (!r.available) return 0;
+  const plan = planEmailAutoLinks(r.agents, r.persons);
+  if (!plan.length) return 0;
+  const [{ linkAgentToEmployee }, { logActivity }] = await Promise.all([import("./identityScreen"), import("./db")]);
+  let n = 0;
+  for (const l of plan) {
+    try {
+      const name = await linkAgentToEmployee(l.agentUserId, l.employeeId, l.agentName);
+      await logActivity({ userId: 0, source: "cron", action: "agent_attach", entity: "employee", entityId: l.employeeId, details: `[Ligações] agente Multipark ${l.agentUserId} "${name}" <${l.email}> ligado sozinho à ficha (mesmo email, cruzamento Agentes × pessoas)` } as any).catch(() => {});
+      n++;
+    } catch (err) { console.warn("[agentes × pessoas] ligar pelo email:", String((err as Error)?.message ?? err).slice(0, 160)); }
+  }
+  if (n) cache = null;
+  return n;
+}
+
+/** `light`: sem a API do Zello nem os dias de cada agente (o passo automático só usa o email). */
+async function build(opts: { light?: boolean } = {}) {
   const [{ listLiveAgents }, { readAgentRegistry, readAgentDays }, { safeMultiparkRead }, { getDb, listAgentPartners, listIgnoredAgents }, { listAgentAliases }, { looksLikeTestAgent }, { loadCityTrees, cityOfProject }] = await Promise.all([
     import("./multiparkDb/activityLive"), import("./multiparkDb/agentRegistry"), import("./multiparkDb/read"), import("./db"),
     import("./employeeAliases"), import("./personIdentity"), import("./aiOps/cities"),
@@ -113,7 +140,7 @@ async function build() {
     const s = zelloDays.get(u) ?? new Set<string>(); s.add(String(r.d)); zelloDays.set(u, s);
     if (!zelloSeen.has(u)) zelloSeen.set(u, { username: u, fullName: r.displayName ? String(r.displayName) : null, email: null, phone: null, employeeId: r.employeeId == null ? null : Number(r.employeeId) });
   }
-  try {
+  if (!opts.light) try {
     const { getZelloUsers } = await import("./zello");
     for (const z of await getZelloUsers()) {
       const prev = zelloSeen.get(z.name);
@@ -133,7 +160,7 @@ async function build() {
 
   // ── Dias com ações na Multipark, só dos que (ainda) não estão em lado nenhum ──
   const linkedIds = new Set(persons.flatMap((p) => p.agentIds));
-  const needDays = [...byId.values()].filter((a) => !a.excluded && !a.mpPartner && !linkedIds.has(a.userId) && a.total > 0).map((a) => a.userId);
+  const needDays = opts.light ? [] : [...byId.values()].filter((a) => !a.excluded && !a.mpPartner && !linkedIds.has(a.userId) && a.total > 0).map((a) => a.userId);
   const daysRead = needDays.length ? await safeMultiparkRead("agentes (dias)", () => readAgentDays(needDays)) : { available: true as const, data: new Map<string, Set<string>>() };
   const agentDays = daysRead.available ? daysRead.data : new Map<string, Set<string>>();
 
@@ -149,5 +176,7 @@ async function build() {
     summary: crossCheckSummary(r),
     agents: r.agents.sort((a, b) => b.total - a.total || String(a.name ?? "").localeCompare(String(b.name ?? ""), "pt")),
     users: r.users,
+    /** fichas usadas no cruzamento (só para o passo automático; o ecrã não as usa) */
+    persons: opts.light ? persons : [],
   };
 }

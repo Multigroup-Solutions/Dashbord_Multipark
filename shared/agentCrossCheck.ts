@@ -297,3 +297,29 @@ export function crossCheckSummary(r: { agents: XAgentRow[]; users: XUserRow[] })
     usersWithoutAgent: r.users.length,
   };
 }
+
+/**
+ * 31b — Jorge (6 out): "as sugestões com o mesmo email ligam-se sozinhas".
+ * Agentes em lado nenhum (pessoas, não empresas) cujo email é o de UMA só
+ * ficha ativa. Um email partilhado por mais de 2 agentes (caixa comum) não
+ * conta. Se a ficha já tem agente, o novo entra como agente extra; se está
+ * ligada só pelo nome antigo a outro agente, não se toca (fica para o ecrã). PURA.
+ */
+export function planEmailAutoLinks(rows: readonly XAgentRow[], persons: readonly XPerson[]): Array<{ agentUserId: string; agentName: string | null; employeeId: number; email: string }> {
+  const agentsPerEmail = new Map<string, number>();
+  for (const a of rows) { const e = a.email ? emailKey(a.email) : ""; if (e) agentsPerEmail.set(e, (agentsPerEmail.get(e) ?? 0) + 1); }
+  const out: Array<{ agentUserId: string; agentName: string | null; employeeId: number; email: string }> = [];
+  for (const a of rows) {
+    if (a.place.kind !== "nenhum" || a.excluded || a.partnerLike) continue;
+    const e = a.email ? emailKey(a.email) : "";
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) || (agentsPerEmail.get(e) ?? 0) > 2) continue;
+    const hits = persons.filter((p) => p.active && p.emails.some((x) => emailKey(x) === e));
+    if (hits.length !== 1) continue;
+    // ficha ligada só pelo nome antigo a OUTRO agente: a ligação nova apagava-a — fica para o ecrã
+    const h = hits[0];
+    if (!h.agentIds.length && h.legacyAgentName && searchText(cleanAgentName(h.legacyAgentName)) !== searchText(cleanAgentName(a.name))) continue;
+    out.push({ agentUserId: a.userId, agentName: a.name, employeeId: h.employeeId, email: e });
+  }
+  return out;
+}
+

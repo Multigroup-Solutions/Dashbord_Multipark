@@ -60,7 +60,7 @@ A regra é que **cada agente é um utilizador e cada utilizador tem um agente**.
   Carrega em **Ligar** na sugestão certa, escolhe outra ficha, **Criar ficha** (com utilizador se o agente tiver email) ou **Ignorar**.
 - **Utilizadores sem agente**: os logins sem agente da Multipark, com o agente provável e **Ligar**. Se não houver nenhum provável, cria-se o agente na Multipark (convite com o email dele) e volta-se a cruzar.
 
-Nada se liga sozinho: cada botão faz uma ligação e fica nos Logs. **Cruzar de novo** lê tudo outra vez (senão guarda 5 minutos). **CSV** descarrega tudo, com a sugestão e o porquê. Por omissão escondem-se os agentes inativos sem ações nos últimos 180 dias (**mostrar inativos sem ações**).
+**Mesmo email liga sozinho**: de hora a hora, na reconciliação, um agente em lado nenhum com o email de **uma só** ficha ativa (email de trabalho, pessoal ou do utilizador) liga-se a essa ficha. Se a ficha já tinha agente, entra como agente extra. Ficam para decidires aqui os emails partilhados por mais de 2 agentes e as fichas ligadas só pelo nome a outro agente. Desliga-se em Definições → Automações → **Agentes: ligar sozinho pelo mesmo email**. O resto (nome, Zello, escala) nunca se liga sozinho: cada botão faz uma ligação e fica nos Logs. **Cruzar de novo** lê tudo outra vez (senão guarda 5 minutos). **CSV** descarrega tudo, com a sugestão e o porquê. Por omissão escondem-se os agentes inativos sem ações nos últimos 180 dias (**mostrar inativos sem ações**).
 
 **Uma pessoa: contas e agentes**
 1. Escolhe a ficha. Vês as **contas de login** (principal e extra) e os **agentes da Multipark** (principal e extra). Uma pessoa pode ter vários agentes (emails antigos e novos).
