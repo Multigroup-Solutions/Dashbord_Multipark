@@ -99,8 +99,12 @@ vi.mock("./multiparkDb/client", async (orig) => ({
   ...(await orig<typeof import("./multiparkDb/client")>()),
   multiparkDbQuery: async (q: string, params: unknown[] = []) => {
     h.mp.push({ sql: q, params });
-    if (/FROM "EntitySettlement"/.test(q)) return [{ user_id: "agB", day: "2026-10-05", n: "2" }];
-    if (/FROM "PartnerCreditEntry"/.test(q)) return [{ user_id: "agB2", day: "2026-10-06", n: 1 }, { user_id: "desconhecido", day: "2026-10-06", n: 9 }];
+    if (/FROM "EntitySettlement"/.test(q)) return [
+      { user_id: "agB", day: "2026-10-05", entity_type: "PARTNER", n: "2" },
+      { user_id: "agB2", day: "2026-10-05", entity_type: "PRO_CLIENT", n: 1 },
+      { user_id: "agB", day: "2026-10-06", entity_type: "CLIENT_PLAN", n: "2" },
+    ];
+    if (/FROM "PartnerCreditEntry"/.test(q)) return [{ user_id: "agB2", day: "2026-10-06", entity_type: "PARTNER", n: 1 }, { user_id: "desconhecido", day: "2026-10-06", entity_type: "PARTNER", n: 9 }];
     if (/FROM "History"/.test(q)) return [{ user_id: "agB", day: "2026-10-05", n: 1 }];
     return [];
   },
@@ -160,10 +164,11 @@ describe("37a — juntar as fontes por pessoa", () => {
     expect(r.people[0].totals).toMatchObject({ callsAnswered: 3, emails: 4, created: 2, updated: 1, hours: 7 });
     expect(r.people[0].series.callsAnswered).toEqual([3, 0, 0, 0, 0, 0, 0]); // dia operacional 5 out (segunda)
     expect(r.people[0].totals).toMatchObject({ crmUpdates: 3, lostFound: 1, partnerClosings: 2 });
-    // 37c: cobranças (2) + créditos (1) dos dois agentes da Bea; o agente sem ficha não conta; voo de regresso 1
-    expect(r.people[0].totals).toMatchObject({ partnerCharges: 3, returnFlights: 1 });
+    // 37c: cobranças de parceiros (2) + créditos (1) dos dois agentes da Bea; o agente sem ficha não conta; voo de regresso 1
+    // 37d: Pro (1) e avenças (2) noutra coluna
+    expect(r.people[0].totals).toMatchObject({ partnerCharges: 3, proPlanCharges: 3, returnFlights: 1 });
     expect(r.people[0].series.callsAnswered).toHaveLength(7);
-    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1 + 3 * 1 + 1 * 2 + 2 * 3 + 3 * 3 + 1 * 1);
+    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1 + 3 * 1 + 1 * 2 + 2 * 3 + 3 * 3 + 3 * 3 + 1 * 1);
     expect(r.notes.join(" ")).toMatch(/Não deu para ler: .*correções de caixa/);
   });
 });
@@ -211,13 +216,15 @@ describe("37c — quem regista as cobranças de parceiros (vem da Multipark)", (
     const s = buildPartnerChargesSql("settlements", { userIds: ["a1", "a1", " a2 "], from: "2026-10-01 02:00:00", to: "2026-11-01 03:00:00" });
     expect(s.sql).toContain(`SELECT s."recordedByUserId" AS user_id`);
     expect(s.sql).toContain(`FROM "EntitySettlement" s`);
-    expect(s.sql).toContain(`s."entityType"::text IN ($5, $6)`);
-    expect(s.sql).toContain(`s."source"::text = $7`);
-    expect(s.params).toEqual(["a1", "a2", "2026-10-01 02:00:00", "2026-11-01 03:00:00", "PARTNER", "PRO_CLIENT", "AGENT", 50000]);
+    expect(s.sql).toContain(`s."entityType"::text IN ($5, $6, $7)`);
+    expect(s.sql).toContain(`s."source"::text = $8`);
+    expect(s.sql).toContain(`s."entityType"::text AS entity_type`);
+    expect(s.params).toEqual(["a1", "a2", "2026-10-01 02:00:00", "2026-11-01 03:00:00", "PARTNER", "PRO_CLIENT", "CLIENT_PLAN", "AGENT", 50000]);
     const c = buildPartnerChargesSql("credits", { userIds: ["a1"], from: "2026-10-01 02:00:00", to: "2026-11-01 03:00:00" });
     expect(c.sql).toContain(`SELECT s."createdByUserId" AS user_id`);
     expect(c.sql).toContain(`FROM "PartnerCreditEntry" s`);
     expect(c.sql).not.toContain("entityType");
+    expect(c.sql).toContain(`'PARTNER' AS entity_type`);
     expect(c.params).toEqual(["a1", "2026-10-01 02:00:00", "2026-11-01 03:00:00", 50000]);
     for (const q of [s.sql, c.sql]) {
       expect(q).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b/);
@@ -227,13 +234,31 @@ describe("37c — quem regista as cobranças de parceiros (vem da Multipark)", (
     expect(() => buildPartnerChargesSql("credits", { userIds: [], from: "x", to: "y" })).toThrow(/Sem agentes/);
   });
 
+  it("37d: parceiros numa coluna, Pro e avenças noutra; o resto (ex.: reservas) não conta", async () => {
+    const { readPartnerCharges, SETTLEMENT_METRIC } = await import("./multiparkDb/perfPartnerCharges");
+    expect(SETTLEMENT_METRIC).toEqual({ PARTNER: "partnerCharges", PRO_CLIENT: "proPlanCharges", CLIENT_PLAN: "proPlanCharges" });
+    const rows = await readPartnerCharges("settlements", { userIds: ["a1"], fromMs: Date.UTC(2026, 9, 1), toMs: Date.UTC(2026, 9, 2) }, async () => [
+      { user_id: "a1", day: "2026-10-01", entity_type: "PARTNER", n: "4" },
+      { user_id: "a1", day: "2026-10-01", entity_type: "CLIENT_PLAN", n: 1 },
+      { user_id: "a1", day: "2026-10-01", entity_type: "BOOKING", n: 7 },
+    ] as any);
+    expect(rows).toEqual([
+      { userId: "a1", day: "2026-10-01", n: 4, metric: "partnerCharges" },
+      { userId: "a1", day: "2026-10-01", n: 1, metric: "proPlanCharges" },
+    ]);
+  });
+
   it("entra nas abas do escritório e da supervisão com peso, e já não diz que falta o autor", () => {
     expect(PERF_METRICS.partnerCharges).toMatchObject({ label: "Cobranças de parceiros", source: "multipark" });
+    expect(PERF_METRICS.proPlanCharges).toMatchObject({ label: "Cobranças de Pro e avenças", source: "multipark" });
     for (const g of ["office", "supervision"] as const) {
-      expect(GROUP_VIEW[g].columns).toContain("partnerCharges");
-      expect(GROUP_VIEW[g].weights.partnerCharges).toBe(3);
+      for (const k of ["partnerCharges", "proPlanCharges"] as const) {
+        expect(GROUP_VIEW[g].columns).toContain(k);
+        expect(GROUP_VIEW[g].weights[k]).toBe(3);
+      }
     }
     expect(GROUP_VIEW.drivers.columns).not.toContain("partnerCharges");
+    expect(GROUP_VIEW.drivers.columns).not.toContain("proPlanCharges");
     expect(src("server/peoplePerformance.ts")).not.toMatch(/não guarda quem as regista/);
     expect(src("docs/ajuda/condutores-agentes.md")).not.toMatch(/quando a dashboard guardar quem as regista/);
   });
