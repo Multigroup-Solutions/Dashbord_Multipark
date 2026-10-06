@@ -10,6 +10,9 @@
  *   - por condutor: saídas, valor, se entregou o dinheiro ao líder
  *     (driverValidated), se a caixa foi fechada (cashierClosed) e por quem;
  *   - a correção do dia: "dia certo / não certo" com motivo (fica registado).
+ *
+ * 30a: o "dia" da caixa é o dia operacional — de D 03:00 a D+1 03:00 (Lisboa),
+ * porque a caixa fecha no fim do turno da noite (shared/cashDayWindow.ts).
  */
 import { sql } from "drizzle-orm";
 import { methodKind } from "./cashCheck/externalRules";
@@ -152,16 +155,16 @@ const utcNow = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
 /** Caixa por dia (todas as cidades no âmbito). Nunca lança por falta da Multipark: devolve { available:false }. */
 export async function loadCashDay(day: string, cities: string[] | undefined) {
-  const [{ readCashDay }, { buildParksSql, mapParks }, { multiparkDbQuery }, { safeMultiparkRead }, { lisbonDayRangeUtc }, { getSetting }, { shiftExpensesByCity }, { getDb }] = await Promise.all([
+  const [{ readCashDay }, { buildParksSql, mapParks }, { multiparkDbQuery }, { safeMultiparkRead }, { cashDayRangeUtc, isCashDayClosed, cashDayWindowLabel, cashDayClosesAtLabel }, { getSetting }, { shiftExpensesByCity }, { getDb }] = await Promise.all([
     import("./multiparkDb/cashDay"), import("./multiparkDb/dayBookings"), import("./multiparkDb/client"), import("./multiparkDb/read"),
-    import("../shared/lisbonDay"), import("./appSettings"), import("./shiftExpenses"), import("./db"),
+    import("../shared/cashDayWindow"), import("./appSettings"), import("./shiftExpenses"), import("./db"),
   ]);
   const excluded: string[] = ((await getSetting("operations.excludedParks")) as string[] | null) ?? [];
   const r = await safeMultiparkRead("caixa do dia", async () => {
     const all = mapParks(await multiparkDbQuery(buildParksSql().sql), cities);
     const parks = all.filter((p) => isOperatedPark(p, excluded)).map((p) => ({ id: p.id, name: p.label || p.name, city: cityOfParkName(p.cityName) }))
       .filter((p): p is { id: string; name: string; city: HandoverCity } => !!p.city);
-    const range = lisbonDayRangeUtc(day);
+    const range = cashDayRangeUtc(day); // 30a: day 03:00 → day+1 03:00 (fecho da caixa no fim do turno da noite)
     const live = await readCashDay({ parkIds: parks.map((p) => p.id), start: range.start, end: range.end });
     return { parks, ...live };
   });
@@ -176,7 +179,7 @@ export async function loadCashDay(day: string, cities: string[] | undefined) {
     counts: counts.map((c) => ({ parkId: String(c.parkId), counted: Number(c.countedAmount ?? 0), expenses: Number(c.expensesCash ?? 0) })),
     reviews: reviews.map((x) => ({ city: String(x.city), status: String(x.status), reason: x.reason ?? null, byName: x.byName ?? null, at: x.at ?? null })),
   });
-  return { available: true as const, day, cities: board };
+  return { available: true as const, day, window: cashDayWindowLabel(day), closed: isCashDayClosed(day), closesAt: cashDayClosesAtLabel(day), cities: board };
 }
 
 /** Grava a correção do dia de uma cidade (o estado atual + uma linha no registo, nunca se apaga). */

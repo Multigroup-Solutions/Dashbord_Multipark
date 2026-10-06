@@ -427,6 +427,7 @@ export const cashCheckRouter = router({
     const { scopedCityNamesLive } = await import("./cityScope");
     const board = await loadCashDay(input.day, scopedCityNamesLive());
     if (!board.available) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `BD da Multipark sem resposta: ${board.reason}` });
+    if (!board.closed) throw new TRPCError({ code: "BAD_REQUEST", message: `A caixa de ${input.day} só fecha ${board.closesAt} (fim do turno da noite): a correção do dia faz-se depois.` });
     const c = board.cities.find((x) => x.city === input.city);
     if (!c) throw new TRPCError({ code: "FORBIDDEN", message: "Esta cidade não está no teu âmbito." });
     const problem = dayReviewProblem({ status: input.status, reason: input.reason, difference: c.difference });

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calculator, Loader2, Plus, Trash2 } from "lucide-react";
 import CashMbDay from "./CashMbDay";
+import { cashDayWindowLabel, currentCashDay } from "@shared/cashDayWindow";
 
 /**
  * Faturação → Correção de caixa → "Contagem" (R24): por parque e dia,
@@ -16,9 +17,6 @@ import CashMbDay from "./CashMbDay";
  */
 
 const eur = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR" }));
-function lisbonToday(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-}
 
 export default function CashCountPanel({ projectId }: { projectId?: number }) {
   const scope = projectId !== undefined ? { projectId } : {};
@@ -26,7 +24,8 @@ export default function CashCountPanel({ projectId }: { projectId?: number }) {
   const parksQ = trpc.cashCheck.parks.useQuery(projectId !== undefined ? { projectId } : undefined, { staleTime: 10 * 60_000, retry: false });
   const parks = useMemo(() => (parksQ.data?.available ? parksQ.data.parks.filter((p) => p.ours) : []), [parksQ.data]);
   const [parkId, setParkId] = useState<string>("");
-  const [day, setDay] = useState(lisbonToday());
+  // 30a: a caixa em curso (antes das 03:00 ainda é a do dia anterior)
+  const [day, setDay] = useState(() => currentCashDay());
   useEffect(() => { if (!parkId && parks[0]) setParkId(parks[0].id); }, [parks, parkId]);
   const q = trpc.cashCheck.countDay.useQuery({ parkId, day, ...scope }, { enabled: !!parkId, retry: false });
   const [counted, setCounted] = useState("");
@@ -55,7 +54,7 @@ export default function CashCountPanel({ projectId }: { projectId?: number }) {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base flex items-center gap-2"><Calculator className="h-4 w-4 text-primary" /> Contagem da caixa</CardTitle>
-        <p className="text-xs text-muted-foreground">Recebido em dinheiro no dia (pagamentos registados na Multipark) − gastos pagos da caixa = esperado. Grava o que contaste; se não bater, abre um caso crítico.</p>
+        <p className="text-xs text-muted-foreground">Recebido em dinheiro no dia da caixa (pagamentos registados na Multipark{/^\d{4}-\d{2}-\d{2}$/.test(day) ? `, ${cashDayWindowLabel(day)}` : ""}) − gastos pagos da caixa = esperado. Grava o que contaste; se não bater, abre um caso crítico.</p>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <div className="flex flex-wrap gap-2">

@@ -250,8 +250,8 @@ async function fileUrl(key: string | null, url: string | null): Promise<string |
 type Fail = { ok: false; code: "BAD_REQUEST" | "FORBIDDEN" | "NOT_FOUND" | "INTERNAL_SERVER_ERROR"; message: string };
 
 async function mbPaymentsOf(parkId: string, day: string): Promise<RecordedPayment[]> {
-  const [{ lisbonDayRangeUtc }, live, { methodKind }] = await Promise.all([import("../shared/lisbonDay"), import("./multiparkDb/cashExternal"), import("./cashCheck/externalRules")]);
-  const r = lisbonDayRangeUtc(day);
+  const [{ cashDayRangeUtc }, live, { methodKind }] = await Promise.all([import("../shared/cashDayWindow"), import("./multiparkDb/cashExternal"), import("./cashCheck/externalRules")]);
+  const r = cashDayRangeUtc(day); // 30a: talões do dia da caixa (03:00 → 03:00)
   return (await live.readPaymentsInWindow({ parkIds: [parkId], start: r.start, end: r.end })).filter((p) => methodKind(p.method) === "card" && p.amount > 0);
 }
 
