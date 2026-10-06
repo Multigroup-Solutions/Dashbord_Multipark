@@ -14,11 +14,16 @@
  *   - avenças por plano ("ClientPlan".id): só contagem (a avença é o preço do plano);
  *   - MARKETPLACE (parques de terceiros em que vendemos): por parque, a
  *     COMISSÃO GRAVADA em cada reserva ("commissionAmount") — acabou o 80/20
- *     fixo: cada parque tem a sua (25 %, menos nos parques de rua…).
+ *     fixo: cada parque tem a sua (25 %, menos nos parques de rua…);
+ *   - 28b (Jorge, 6 out): MARKETPLACE nos parques NOSSOS — reservas com
+ *     `origin = 'MARKETPLACE'`: o Marketplace fica com 20 % (sem IVA, como os
+ *     outros parceiros; MARKETPLACE_COMMISSION).
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, safeMultiparkRead, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks } from "./dayBookings";
+import { MARKETPLACE_COMMISSION } from "../../shared/marketplace";
+import { netOfVat } from "../finance/rules";
 
 type Row = Record<string, unknown>;
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -33,7 +38,7 @@ const OURS = `COALESCE(b."partnerAmountDue", CASE
 const OUR_SALE = `(b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0)`;
 
 /**
- * Uma só leitura (UNION ALL) com `kind` = partner | pro | plan | market.
+ * Uma só leitura (UNION ALL) com `kind` = partner | pro | plan | market | market_own.
  * `ourParks` = os nossos (parceiros, Pro, avenças); `thirdParks` = marketplace. PURA.
  */
 export function buildPartnerBillingSql(o: { ourParks: readonly string[]; thirdParks: readonly string[]; start: string; end: string }): { sql: string; params: SqlParam[] } {
@@ -55,6 +60,10 @@ export function buildPartnerBillingSql(o: { ourParks: readonly string[]; thirdPa
       [`SELECT 'plan' AS kind, b."clientPlanId" AS key, NULL AS name, count(*) AS n,`,
         `  SUM(b."bookingPrice") AS value, NULL::numeric AS ours, 0 AS missing, NULL::numeric AS commission`,
         `  FROM "Booking" b WHERE ${where} AND b."clientPlanId" IS NOT NULL GROUP BY 2`].join("\n"),
+      // 28b: parques nossos, reserva vinda pelo Marketplace → 20 % para o Marketplace.
+      [`SELECT 'market_own' AS kind, b."parkId" AS key, NULL AS name, count(*) AS n,`,
+        `  SUM(b."bookingPrice") AS value, NULL::numeric AS ours, 0 AS missing, NULL::numeric AS commission`,
+        `  FROM "Booking" b WHERE ${where} AND b."origin"::text = 'MARKETPLACE' GROUP BY 2`].join("\n"),
     );
   }
   if (o.thirdParks.length) {
@@ -68,7 +77,11 @@ export function buildPartnerBillingSql(o: { ourParks: readonly string[]; thirdPa
 }
 
 export interface BillingStats { n: number; value: number; ours: number | null; missing: number; name: string | null }
-export interface MarketplaceBilling { parkId: string; parkName: string; city: string | null; bookings: number; value: number; commission: number; missing: number; rate: number | null }
+export interface MarketplaceBilling {
+  parkId: string; parkName: string; city: string | null; bookings: number; value: number; commission: number; missing: number; rate: number | null;
+  /** 28b: parque NOSSO (reserva vinda pelo Marketplace; 20 % sem IVA). */
+  own?: boolean;
+}
 export interface PartnerBillingLive {
   partners: Map<string, BillingStats>;
   pros: Map<string, BillingStats>;
@@ -90,13 +103,18 @@ export function mapPartnerBilling(rows: Row[], parkName: Map<string, { name: str
     if (kind === "partner") out.partners.set(key, st);
     else if (kind === "pro") out.pros.set(key, st);
     else if (kind === "plan") out.plans.set(key, st);
+    else if (kind === "market_own") {
+      const park = parkName.get(key);
+      const commission = round2(netOfVat(st.value) * MARKETPLACE_COMMISSION);
+      out.marketplace.push({ parkId: key, parkName: park?.name ?? key, city: park?.city ?? null, bookings: st.n, value: st.value, commission, missing: 0, rate: MARKETPLACE_COMMISSION * 100, own: true });
+    }
     else if (kind === "market") {
       const park = parkName.get(key);
       const commission = round2(num(r.commission));
       out.marketplace.push({ parkId: key, parkName: park?.name ?? key, city: park?.city ?? null, bookings: st.n, value: st.value, commission, missing: st.missing, rate: st.value > 0 ? Math.round((commission / st.value) * 1000) / 10 : null });
     }
   }
-  out.marketplace.sort((a, b) => b.commission - a.commission || a.parkName.localeCompare(b.parkName, "pt"));
+  out.marketplace.sort((a, b) => Number(!!a.own) - Number(!!b.own) || b.commission - a.commission || a.parkName.localeCompare(b.parkName, "pt"));
   return out;
 }
 

@@ -987,21 +987,26 @@ function InvoicingSummaryTab({
 /** Marketplace: a comissão gravada na Multipark por parque de terceiros (saídas do período). */
 function MarketplaceBillingCard({ from, to }: { from: string; to: string }) {
   const { data, isLoading } = trpc.partnerships.invoicingMarketplace.useQuery({ from, to });
-  const rows = data?.rows ?? [];
+  const all = data?.rows ?? [];
+  // 28b: as reservas dos parques NOSSOS vindas pelo Marketplace (20 % sem IVA) à parte.
+  const rows = all.filter((r) => !r.own);
+  const ownRows = all.filter((r) => r.own);
   const total = rows.reduce((a, r) => ({ n: a.n + r.bookings, v: a.v + r.value, c: a.c + r.commission }), { n: 0, v: 0, c: 0 });
+  const ownTotal = ownRows.reduce((a, r) => ({ n: a.n + r.bookings, v: a.v + r.value, c: a.c + r.commission }), { n: 0, v: 0, c: 0 });
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Marketplace (parques de terceiros)</CardTitle>
+        <CardTitle className="text-base">Marketplace</CardTitle>
         <p className="text-xs text-muted-foreground">
           Reservas que nós levámos a parques de outros, com saída no período. O <strong>nosso</strong> é a <strong>comissão gravada em cada reserva na Multipark</strong>
           (cada parque tem a sua taxa); o parque fica com o resto. Não entra no total de cima.
+          {" "}Por baixo, as reservas dos <strong>parques nossos</strong> que vieram pela campanha do Marketplace: o Marketplace fica com <strong>20 %</strong> (sem IVA), como os outros parceiros.
         </p>
       </CardHeader>
       <CardContent>
         {isLoading ? <p className="text-sm text-muted-foreground text-center py-6">A carregar...</p>
           : data && !data.available ? <p className="text-sm text-amber-700">A Multipark não respondeu: {data.reason}</p>
-          : rows.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">Sem reservas de marketplace no período.</p>
+          : all.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">Sem reservas de marketplace no período.</p>
           : (
             <div className="overflow-x-auto">
               <table className={`w-full text-sm ${STICKY_FIRST_COL}`}>
@@ -1039,6 +1044,45 @@ function MarketplaceBillingCard({ from, to }: { from: string; to: string }) {
                   </tr>
                 </tfoot>
               </table>
+              {ownRows.length > 0 && (
+                <table className={`w-full text-sm mt-4 ${STICKY_FIRST_COL}`} aria-label="Parques nossos vindos pelo Marketplace">
+                  <thead>
+                    <tr className="border-b text-left text-xs uppercase text-muted-foreground">
+                      <th className="p-2">Parque nosso (via Marketplace)</th><th className="p-2">Cidade</th>
+                      <th className="p-2 text-right">Reservas</th><th className="p-2 text-right">Valor</th>
+                      <th className="p-2 text-right">Parque</th><th className="p-2 text-right">Marketplace (20 % s/ IVA)</th><th className="p-2 text-right">Taxa</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ownRows.map((r) => (
+                      <tr key={`own-${r.parkId}`} className="border-b">
+                        <td className="p-2 font-medium min-w-[10rem] break-words">{r.parkName}</td>
+                        <td className="p-2 text-muted-foreground">{r.city ?? "—"}</td>
+                        <td className="p-2 text-right tabular-nums">{r.bookings}</td>
+                        <td className="p-2 text-right tabular-nums">{fmt(r.value)}</td>
+                        <td className="p-2 text-right tabular-nums">{fmt(Math.round((r.value - r.commission) * 100) / 100)}</td>
+                        <td className="p-2 text-right tabular-nums font-medium text-blue-700">{fmt(r.commission)}</td>
+                        <td className="p-2 text-right tabular-nums text-muted-foreground">20 %</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-muted/50 font-bold border-t-2">
+                      <td className="p-2" colSpan={2}>TOTAL parques nossos</td>
+                      <td className="p-2 text-right tabular-nums">{ownTotal.n}</td>
+                      <td className="p-2 text-right tabular-nums">{fmt(ownTotal.v)}</td>
+                      <td className="p-2 text-right tabular-nums">{fmt(Math.round((ownTotal.v - ownTotal.c) * 100) / 100)}</td>
+                      <td className="p-2 text-right tabular-nums text-blue-700">{fmt(ownTotal.c)}</td>
+                      <td />
+                    </tr>
+                    <tr className="font-bold">
+                      <td className="p-2" colSpan={5}>TOTAL do Marketplace</td>
+                      <td className="p-2 text-right tabular-nums text-blue-700">{fmt(Math.round((total.c + ownTotal.c) * 100) / 100)}</td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
             </div>
           )}
       </CardContent>

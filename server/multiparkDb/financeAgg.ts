@@ -62,6 +62,8 @@ export interface FinanceAggRow {
   status: string | null;
   pro: boolean;
   discount: number;
+  /** 28b: `Booking.origin = 'MARKETPLACE'` (veio pela campanha do Marketplace). */
+  marketplace: boolean;
 }
 
 const lisbonDay = (col: string) => `to_char((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon', 'YYYY-MM-DD')`;
@@ -133,7 +135,8 @@ export function buildFinanceAggSql(spec: FinanceAggSpec): { sql: string; params:
     `WITH d AS (`,
     `  SELECT b."id" AS id, ${lisbonDay(dayCol)} AS day, b."parkId" AS park_id, b."partnerId" AS partner_id,`,
     `    NULLIF(b."paymentMethod", '') AS pm, b."campaignId" AS campaign_id, b."bookingPrice" AS price, b."parkingPrice" AS parking, b."deliveryPrice" AS delivery,`,
-    `    b."status"::text AS status, COALESCE(b."pro", false) AS pro, COALESCE(b."discountApplied", b."discountAmount", 0) AS discount`,
+    `    b."status"::text AS status, COALESCE(b."pro", false) AS pro, COALESCE(b."discountApplied", b."discountAmount", 0) AS discount,`,
+    `    COALESCE(b."origin"::text = 'MARKETPLACE', false) AS mkt`,
     `  FROM "Booking" b`,
     joinCancel ? `  ${joinCancel}` : "",
     `  WHERE ${conds.join("\n    AND ")}`,
@@ -142,7 +145,7 @@ export function buildFinanceAggSql(spec: FinanceAggSpec): { sql: string; params:
     `  FROM "BookingPricing" y WHERE y."bookingId" IN (SELECT d.id FROM d) GROUP BY y."bookingId"),`,
     `ex AS (SELECT e."bookingId" AS id, SUM(e."price") AS total FROM "BookingExtraService" e WHERE e."bookingId" IN (SELECT d.id FROM d) GROUP BY e."bookingId")`,
     `SELECT d.day, d.park_id, d.partner_id, NULLIF(pa."name", '') AS partner_name, COALESCE(d.pm, bp.pm) AS payment_method,`,
-    `  NULLIF(ca."name", '') AS campaign_name, NULLIF(ca."discountCode", '') AS discount_code, d.status, d.pro,`,
+    `  NULLIF(ca."name", '') AS campaign_name, NULLIF(ca."discountCode", '') AS discount_code, d.status, d.pro, d.mkt,`,
     `  count(*) AS n, SUM(COALESCE(bp.total, d.price)) AS total, SUM(d.parking) AS parking, SUM(d.delivery) AS delivery,`,
     `  SUM(ex.total) AS extras, SUM(bp.paid) AS paid, SUM(GREATEST(COALESCE(bp.total, d.price) - COALESCE(bp.paid, 0), 0)) AS remaining,`,
     `  count(*) FILTER (WHERE COALESCE(bp.total, d.price) - COALESCE(bp.paid, 0) > 0.005) AS owing_n,`,
@@ -153,7 +156,7 @@ export function buildFinanceAggSql(spec: FinanceAggSpec): { sql: string; params:
     `LEFT JOIN "Partner" pa ON pa."id" = d.partner_id`,
     `LEFT JOIN "Campaign" ca ON ca."id" = d.campaign_id`,
     paidOnly ? `WHERE COALESCE(bp.paid, 0) > 0` : "",
-    `GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9`,
+    `GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10`,
     `ORDER BY 1, 2`,
     `LIMIT ${lim}`,
   ].filter(Boolean).join("\n");
@@ -184,6 +187,7 @@ export function mapFinanceAggRow(r: Record<string, unknown>): FinanceAggRow {
     status: s(r.status),
     pro: r.pro === true || r.pro === "t" || r.pro === 1 || r.pro === "true",
     discount: n(r.discount),
+    marketplace: r.mkt === true || r.mkt === "t" || r.mkt === 1 || r.mkt === "true",
   };
 }
 

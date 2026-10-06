@@ -54,7 +54,7 @@ import { matchCityKey } from "../../shared/city";
 import { lisbonDayOf, lisbonDayRangeUtc, lisbonDaySql } from "../../shared/lisbonDay";
 import * as R from "./rules";
 import { resolveFinanceRates, rateCaseSql, type FinanceRates, type RatePeriod } from "./rates";
-import { loadPartnerIndex, operatedLeavesByPartner, partnerForCampaign } from "./partners";
+import { loadPartnerIndex, operatedLeavesByPartner, partnerForCampaign, withMarketplacePartner } from "./partners";
 import { groupAgg, loadLiveBookingAgg, sumOf, type LiveBookingAgg } from "./liveBookings";
 import { financeProjectIds } from "./scope";
 
@@ -379,7 +379,9 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const extrasCostRows = await loadExtrasCostRows(db, { from, to, projectIds, cities, pontoRange: { start: utc.start, endExclusive: utc.end } });
 
   // ─── 5. Parceiros: UMA regra de correspondência (./partners.ts) ───────────
-  const { partners: partnerRows, index: partnerIndex } = await loadPartnerIndex(db);
+  const { partners: partnerRows, index: rawPartnerIndex } = await loadPartnerIndex(db);
+  // 28b: reservas dos parques nossos vindas pelo Marketplace → 20 % para o Marketplace.
+  const partnerIndex = withMarketplacePartner(rawPartnerIndex);
   const operatedLeaves = await operatedLeavesByPartner(partnerRows, resolveProjectIds, projectSet);
 
   // ─── 6. Pessoal: colaboradores + histórico salarial ───────────────────────
