@@ -14,15 +14,24 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Eye, Plus, Radio } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ZelloRadioSearch } from "@/components/radio/ZelloRadioSearch";
 
 // Transcrições de rádio (Zello): saiu da "Actividade Diária" para um ecrã
 // próprio (/radio) — o Jorge usa-o para rever comunicações. A lista respeita a
 // cidade (do condutor ou, sem condutor, de quem transcreveu).
+// 32a: separador "Gravações do Zello" — as mensagens vêm do histórico do Zello
+// (intervalo / utilizador / canal), cruzadas com o GPS e a Multipark.
 export default function RadioPage() {
   return (
-    <div>
-      <RadioTab />
-    </div>
+    <Tabs defaultValue="zello" className="mt-4">
+      <TabsList>
+        <TabsTrigger value="zello">Gravações do Zello</TabsTrigger>
+        <TabsTrigger value="transcricoes">Transcrições</TabsTrigger>
+      </TabsList>
+      <TabsContent value="zello" className="mt-4"><ZelloRadioSearch /></TabsContent>
+      <TabsContent value="transcricoes"><RadioTab /></TabsContent>
+    </Tabs>
   );
 }
 
