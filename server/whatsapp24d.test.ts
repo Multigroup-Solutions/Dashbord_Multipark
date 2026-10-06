@@ -10,7 +10,6 @@ import { describe, expect, it } from "vitest";
 import { caseDraftFromMessages, caseProposalKind, CASE_PROPOSAL_LABEL } from "../shared/whatsappConversation";
 import { detectOptIntent, optOutSourceForText, preferenceIntent } from "../shared/whatsappOptOut";
 import { parseWebhookPayload } from "./whatsappInbound";
-import { classifyForwardPayload } from "./whatsappWebhookForward";
 import { MIGRATION_0450_STATEMENTS } from "./migrations/migration_0450";
 import { SCHEMA_MIGRATION_IDS } from "./migrations";
 
@@ -114,8 +113,6 @@ describe("D35 — Parar promoções = STOP, partilhado", () => {
     const parsed = parseWebhookPayload(payload, "PN1");
     expect(parsed.preferences).toEqual([{ from: "351912345678", intent: "opt_out" }]);
     expect(parseWebhookPayload(payload, "OUTRO").preferences).toEqual([]);
-    // e continua a seguir para o be-multipark (evento que não é `messages`)
-    expect(classifyForwardPayload(payload)).toEqual({ kind: "forward", reason: "non_message_event" });
   });
 
   it("webhook: grava a origem; a preferência da app não responde ao cliente; número novo fica numa conversa resolvida", () => {

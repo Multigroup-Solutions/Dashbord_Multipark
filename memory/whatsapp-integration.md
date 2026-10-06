@@ -794,3 +794,7 @@ Os dois erros do broadcast 8 resolvem-se do lado da Meta, não no código:
 - Segue SEMPRE: qualquer `statuses`, qualquer evento que não seja `messages` (templates, chamadas…), payload misto (o raw body vai inteiro ou não vai — editar partia a assinatura), payload estranho, e erro na consulta à BD (fail-open: no be um número desconhecido cai em "não atribuídas", só admins).
 - `classifyForwardPayload` (PURA) separa a decisão da consulta; corre depois do 200, nunca atrasa a Meta.
 **Notes**: vitest `server/whatsappWebhookForward.test.ts` 13/13, `server/whatsappWebhook*` 13/13; tsc limpo. O inbox da dashboard NÃO mudou (continua a ver mensagens de clientes). Lado be: `be-multipark/memory/whatsapp-booking-messaging.md`.
+
+### 2026-10-06 — Forward SEM filtro: o multipark recebe TODAS as mensagens (substitui o filtro de 10-02)
+- Decisão do utilizador: o inbox do multipark tem de mostrar QUALQUER mensagem recebida, incluindo colaboradores/extras. Removidos `shouldForwardWebhook`, `classifyForwardPayload`, `isInternalPhone` e a cache de números internos; `whatsappWebhook.ts` só mantém a proteção `alreadyForwarded` (laço 17b). O inbox da dashboard NÃO muda.
+- Diagnóstico do mesmo dia: o be respondia 401 (segredo do forward diferente) — corrigido nas envs; depois os testes com o telemóvel do Rafael (= `employees` id 14) não chegavam por causa deste filtro.

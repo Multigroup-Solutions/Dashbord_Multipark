@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  classifyForwardPayload,
   FORWARD_SECRET_HEADER,
   forwardWhatsappWebhook,
   readWebhookForwardConfig,
-  shouldForwardWebhook,
 } from "./whatsappWebhookForward";
 
 const config = { url: "https://api.example.com/api/v1/webhooks/whatsapp", sharedSecret: "fwd-secret" };
@@ -25,66 +23,6 @@ describe("readWebhookForwardConfig", () => {
       url: config.url,
       sharedSecret: "s",
     });
-  });
-});
-
-const inbound = (...froms: string[]) => ({
-  object: "whatsapp_business_account",
-  entry: [{ id: "1", changes: [{ field: "messages", value: { messages: froms.map((from, i) => ({ from, id: `wamid.${i}`, type: "text" })) } }] }],
-});
-const STAFF = "+351912000111";
-const lookup = (internal: string[]) => vi.fn(async (e164: string) => internal.includes(e164));
-
-describe("classifyForwardPayload", () => {
-  it("statuses, eventos de template e payloads estranhos seguem sempre", () => {
-    expect(classifyForwardPayload({}).kind).toBe("forward");
-    expect(
-      classifyForwardPayload({ entry: [{ changes: [{ field: "messages", value: { statuses: [{ id: "w", status: "read" }] } }] }] }),
-    ).toEqual({ kind: "forward", reason: "statuses" });
-    expect(classifyForwardPayload({ entry: [{ changes: [{ field: "message_template_status_update", value: {} }] }] })).toEqual({
-      kind: "forward",
-      reason: "non_message_event",
-    });
-    expect(classifyForwardPayload({ entry: [{ changes: [{ field: "messages", value: {} }] }] })).toEqual({ kind: "forward", reason: "no_inbound" });
-  });
-
-  it("só mensagens recebidas → lista de remetentes (sem duplicados)", () => {
-    expect(classifyForwardPayload(inbound("351912000111", "351912000111"))).toEqual({ kind: "inbound_only", senders: ["351912000111"] });
-  });
-});
-
-describe("shouldForwardWebhook", () => {
-  it("NÃO segue quando todos os remetentes são números internos", async () => {
-    expect(await shouldForwardWebhook(inbound("351912000111"), lookup([STAFF]))).toBe(false);
-  });
-
-  it("segue quando algum remetente é cliente / desconhecido (payload misto vai inteiro)", async () => {
-    expect(await shouldForwardWebhook(inbound("351912000111", "351934000222"), lookup([STAFF]))).toBe(true);
-    expect(await shouldForwardWebhook(inbound("351934000222"), lookup([STAFF]))).toBe(true);
-  });
-
-  it("estados de mensagens seguem mesmo com remetente interno no mesmo evento", async () => {
-    const payload = {
-      entry: [{ changes: [{ field: "messages", value: { messages: [{ from: "351912000111", id: "w1" }], statuses: [{ id: "w2", status: "delivered" }] } }] }],
-    };
-    const l = lookup([STAFF]);
-    expect(await shouldForwardWebhook(payload, l)).toBe(true);
-    expect(l).not.toHaveBeenCalled();
-  });
-
-  it("normaliza o 'from' da Meta para E.164 antes de comparar", async () => {
-    const l = lookup([STAFF]);
-    await shouldForwardWebhook(inbound("351912000111"), l);
-    expect(l).toHaveBeenCalledWith(STAFF);
-  });
-
-  it("falha na consulta → segue (fail-open), sem atirar", async () => {
-    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const failing = vi.fn(async () => {
-      throw new Error("db down");
-    });
-    expect(await shouldForwardWebhook(inbound("351912000111"), failing)).toBe(true);
-    spy.mockRestore();
   });
 });
 
