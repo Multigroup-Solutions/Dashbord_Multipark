@@ -288,3 +288,18 @@
   background-color: #ffffff;
   border-color: var(--primary);
 }
+
+/* 37a — Desempenho por pessoa: 4 séries por gráfico (paleta validada; o
+   modo escuro tem os seus próprios passos, não é uma inversão). */
+.perf-viz {
+  --perf-1: #2a78d6;
+  --perf-2: #eb6834;
+  --perf-3: #1baf7a;
+  --perf-4: #eda100;
+}
+.dark .perf-viz {
+  --perf-1: #3987e5;
+  --perf-2: #d95926;
+  --perf-3: #199e70;
+  --perf-4: #c98500;
+}
