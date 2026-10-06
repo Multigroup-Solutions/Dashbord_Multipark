@@ -72,10 +72,11 @@ describe("exportação — conteúdo", () => {
 });
 
 describe("categorias: flags por omissão (sem maiúsculas nem acentos)", () => {
-  it("RH, salários, TSU/Segurança Social e extras ficam fora da margem", () => {
-    for (const n of ["Salários", "SALARIOS", "Recursos Humanos", "RH", "TSU", "Segurança Social", "Extras"]) {
+  it("RH, salários e extras ficam fora da margem; TSU/Segurança Social CONTAM (29b: a TSU entra pelas Despesas)", () => {
+    for (const n of ["Salários", "SALARIOS", "Recursos Humanos", "RH", "Extras"]) {
       expect(defaultCategoryFlags(n).excludeFromMargin).toBe(true);
     }
+    for (const n of ["TSU", "Segurança Social", "TSU Patronal"]) expect(defaultCategoryFlags(n).excludeFromMargin).toBe(false);
     for (const n of ["Rendas", "TI", "TRHotel", "Combustível"]) expect(defaultCategoryFlags(n).excludeFromMargin).toBe(false);
   });
   it("Marketing / Publicidade (Google/Meta) em autoliquidação", () => {

@@ -8,7 +8,7 @@
  */
 import { getFinancialHistory } from "../db";
 import { computeFinance, monthlyRowsFromTimeseries, type FinanceResult } from "./engine";
-import { daysBetweenInclusive, monthsOverlapping } from "./rules";
+import { countedEmployerTax, daysBetweenInclusive, monthsOverlapping } from "./rules";
 import { loadFinanceRates } from "./rates";
 
 export async function getBillingData(filters: {
@@ -60,8 +60,8 @@ export function billingPayload(r: FinanceResult, filters: { from: string; to: st
       produced: p.produced, producedNet: p.producedNet, producedCount: p.producedCount,
       collected: p.collected,
       expenses: p.expenses, expensesNet: p.expensesNet,
-      // "Salários" do gráfico inclui TSU para a pilha somar o custo total
-      salaries: p.salaries + p.employerTax, salariesOnly: p.salaries, employerTax: p.employerTax,
+      // "Salários" do gráfico = o que soma ao custo (29b: a TSU entra pelas Despesas quando é paga)
+      salaries: p.salaries + countedEmployerTax(p.employerTax), salariesOnly: p.salaries, employerTax: p.employerTax,
       partners: p.partners, extrasCost: p.extrasCost,
       revenueForecast: p.revenueForecast, revenueForecastNet: p.revenueForecastNet, costForecast: p.costForecast,
       totalCost: p.totalCost, margin: p.margin, marginForecast: p.marginForecast,

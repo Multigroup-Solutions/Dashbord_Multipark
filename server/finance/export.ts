@@ -28,7 +28,7 @@ export function billingExportSheets(data: any, meta: { from: string; to: string;
     ["Recolhidos (c/ IVA)", r2(s.collected)], ["Recolhidos (nº)", s.collectedCount ?? 0],
     ["Entregues (c/ IVA)", r2(s.produced)], ["Entregues (s/ IVA)", r2(s.producedNoVat)], ["Entregues (nº)", s.producedCount ?? 0],
     ["Despesas (c/ IVA)", r2(s.expensesPaid)], ["Despesas (s/ IVA)", r2(s.expensesPaidNoVat)],
-    ["Salários (base + provisões + variável)", r2(s.salariesCost)], ["TSU patronal", r2(s.employerTax)],
+    ["Salários (base + provisões + variável)", r2(s.salariesCost)], ["TSU patronal estimada (não soma: entra pelas Despesas quando é paga)", r2(s.employerTax)],
     ["Equipa do dia", r2(s.extrasDiaCost)], ["Comissões de venda", r2(s.salesCommissions)], ["Comissões operacionais", r2(s.operationalCommissions)],
     ["Custos (s/ IVA)", r2(s.totalCostsNoVat)], ["Margem (s/ IVA)", r2(s.marginNet)], ["Margem %", s.marginPct == null ? null : r2(s.marginPct)],
     ["Despesas a pagar (informativo)", r2(s.expensesPending)],

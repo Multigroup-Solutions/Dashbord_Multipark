@@ -79,11 +79,12 @@ describe("projectCostsReport", () => {
     const r = await projectCostsReport({ year: 2026, month: 8, today: "2026-10-02" });
     expect(state.financeCalls).toEqual([{ from: "2026-08-01", to: "2026-08-31", today: "2026-10-02", granularity: "month" }]);
     const byId = new Map(r.rows.map((x) => [x.id, x]));
-    expect(byId.get(10)).toMatchObject({ expenses: 100, expensesGross: 123, salaries: 3000, employerTax: 712.5, personnel: 3712.5, commissions: 16, totalCost: 3828.5 });
-    expect(byId.get(11)).toMatchObject({ personnel: 1500 + 356.25 + 48, commissions: 30, isActive: false });
+    expect(byId.get(10)).toMatchObject({ expenses: 100, expensesGross: 123, salaries: 3000, employerTax: 712.5, personnel: 3000, // 29b: TSU fora (entra pelas Despesas)
+      commissions: 16, totalCost: 3828.5 });
+    expect(byId.get(11)).toMatchObject({ personnel: 1500 + 48, commissions: 30, isActive: false });
     expect(byId.get(100)).toMatchObject({ budgetAnnual: 120000, budget: 10000, managerName: "Gestora", totalCost: 200 });
-    expect(r.unallocated).toMatchObject({ salaries: 500, personnel: 618.75, totalCost: 618.75 });
-    expect(r.totals).toEqual({ expenses: 300, personnel: 5000 + 1187.5 + 48, commissions: 46, totalCost: 6581.5 });
+    expect(r.unallocated).toMatchObject({ salaries: 500, personnel: 500, totalCost: 618.75 });
+    expect(r.totals).toEqual({ expenses: 300, personnel: 5000 + 48, commissions: 46, totalCost: 6581.5 });
     // a tabela (nós + Por atribuir) soma o total da Faturação
     expect(r.rows.reduce((s, x) => s + x.totalCost, 0) + r.unallocated.totalCost).toBeCloseTo(r.totals.totalCost, 6);
   });

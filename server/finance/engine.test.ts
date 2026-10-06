@@ -199,8 +199,10 @@ describe("pessoal", () => {
     expect(r.quality.isCurrentPeriod).toBe(true);
     // Realizado até hoje: 15 de 31 dias de salário
     expect(r.costs.salariesBase).toBeCloseTo(3100 * 15 / 31, 6);
-    const perDay = (3100 / 31) * (1 + 2 / 12) * (1 + 0.2375);
+    // 29b: sem TSU patronal nos custos (entra pelas Despesas quando é paga); continua estimada à parte
+    const perDay = (3100 / 31) * (1 + 2 / 12);
     expect(r.margin.margin).toBeCloseTo(1000 - perDay * 15, 6);
+    expect(r.costs.employerTax).toBeCloseTo(perDay * 0.2375 * 15, 6);
     // Fecho previsto: receita esperada (2583 c/ IVA = 2100 s/ IVA) + custos dos 31 dias
     expect(r.forecast.revenue).toBeCloseTo(2583, 6);
     expect(r.forecast.revenueNet).toBeCloseTo(2100, 6);

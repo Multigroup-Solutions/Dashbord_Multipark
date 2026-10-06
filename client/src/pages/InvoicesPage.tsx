@@ -183,7 +183,7 @@ export default function InvoicesPage() {
           {current && (
             <p className="text-xs text-muted-foreground">
               <strong>Realizado até hoje ({summary.asOf})</strong>: receita entregue e custos até hoje — salários, provisões,
-              TSU, equipa do dia e despesas cortados em hoje.
+              equipa do dia e despesas cortados em hoje. A TSU patronal entra pelas Despesas quando é paga.
             </p>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -205,7 +205,7 @@ export default function InvoicesPage() {
               icon={<Receipt className="w-4 h-4 text-red-600" />}
               label={current ? "Custos até hoje (s/ IVA)" : "Custos (s/ IVA)"}
               amount={summary.totalCostsNoVat}
-              hint={`Despesas s/IVA + pessoal + TSU + equipa-dia + comissões · c/ IVA: ${fmt(summary.totalCostsGross)} · por pagar (não soma): ${fmt(summary.expensesPending ?? 0)}`}
+              hint={`Despesas s/IVA (com a TSU paga) + salários + equipa-dia + comissões · c/ IVA: ${fmt(summary.totalCostsGross)} · por pagar (não soma): ${fmt(summary.expensesPending ?? 0)}`}
               color="text-red-700"
             />
             <KpiCard
@@ -241,7 +241,7 @@ export default function InvoicesPage() {
             <KpiSmall icon={<Truck className="w-3.5 h-3.5 text-teal-600" />} label="Serviços extra (nas entregas)" amount={deliveries.reduce((s2: number, d: any) => s2 + Number(d.extrasRevenue ?? 0), 0)} />
             <KpiSmall icon={<Receipt className="w-3.5 h-3.5 text-red-500" />} label="Despesas inseridas" amount={summary.expensesPaid} />
             <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-amber-500" />} label="Equipa do dia" amount={summary.extrasDiaCost} />
-            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários + TSU" amount={(summary.salariesCost ?? 0) + (summary.employerTax ?? 0)} />
+            <KpiSmall icon={<UsersIcon className="w-3.5 h-3.5 text-blue-500" />} label="Salários" amount={summary.salariesCost ?? 0} />
             <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-rose-500" />} label="Comissão venda" amount={summary.salesCommissions ?? 0} />
             <KpiSmall icon={<Handshake className="w-3.5 h-3.5 text-cyan-500" />} label="Parceiros op." amount={summary.operationalCommissions ?? 0} />
           </div>
@@ -271,7 +271,7 @@ export default function InvoicesPage() {
                     <Legend iconSize={10} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                     <Bar dataKey="produced" name="Entregues (s/ IVA)" fill="var(--chart-2)" radius={[3, 3, 0, 0]} />
                     <Bar dataKey="expenses" name="Despesas (s/ IVA)" stackId="cost" fill="var(--chart-4)" />
-                    <Bar dataKey="salaries" name="Salários + TSU" stackId="cost" fill="var(--chart-1)" />
+                    <Bar dataKey="salaries" name="Salários" stackId="cost" fill="var(--chart-1)" />
                     <Bar dataKey="partners" name="Parceiros" stackId="cost" fill="var(--destructive)" />
                     <Bar dataKey="extrasCost" name="Equipa-dia" stackId="cost" fill="var(--chart-3)" radius={[3, 3, 0, 0]} />
                     <Line dataKey="collected" name="Recolhidos" stroke="var(--chart-5)" strokeWidth={2} dot={false} />
@@ -406,7 +406,7 @@ export default function InvoicesPage() {
                       <AlertTriangle className="w-4 h-4 text-amber-600" /> Despesas excluídas da margem
                     </CardTitle>
                     <p className="text-xs text-muted-foreground">
-                      Categorias marcadas "excluir da margem" (Despesas → Categorias, IVA e margem): o custo já entra pelos salários + TSU
+                      Categorias marcadas "excluir da margem" (Despesas → Categorias, IVA e margem): o custo já entra pelos salários
                       ou pelo ponto dos extras. NÃO somam aos custos acima.
                     </p>
                   </CardHeader>
@@ -481,7 +481,7 @@ export default function InvoicesPage() {
                     do próprio mês, respeitando início e fim de contrato. Inclui provisões de subsídios ({fmt(summary.salariesProvisions ?? 0)})
                     e variável do ponto — horas extra, noturnas, fim de semana e alimentação ({fmt(summary.salariesVariable ?? 0)}).
                     Quem está num nível superior (Grupo / Cidade / Marca) é rateado pelas marcas folhas; sem centro fica "Por atribuir".
-                    TSU patronal ({(summary.tsuEmployerRate * 100).toFixed(2)}%) sobre base + provisões de 13.º/14.º + variável tributável: {fmt(summary.employerTax ?? 0)}.
+                    TSU patronal estimada ({(summary.tsuEmployerRate * 100).toFixed(2)}%) sobre base + provisões de 13.º/14.º + variável tributável: {fmt(summary.employerTax ?? 0)} — <strong>não soma aqui</strong>: entra pelas Despesas quando é paga.
                     {current && " No período em curso só conta até hoje."}
                   </p>
                 </CardHeader>
@@ -784,6 +784,7 @@ function QualityWarnings({ quality }: { quality: any }) {
   if (inact.length > 0) items.push({ key: "inact", text: <>Inativos sem data de fim de contrato ({inact.length}) — contam até à desativação/última atualização: {inact.map((e: any) => `${e.fullName} (até ${e.assumedEnd ?? "?"})`).join(", ")}</> });
   const cov = quality.salesCommissionsCoveredByOperational;
   if (cov?.count > 0) items.push({ key: "cov", text: <>Comissão de venda não cobrada em {cov.count} reserva(s) ({fmt(cov.revenueGross)}): o parceiro é operacional e já opera esse centro</> });
+  if ((quality.tsuCategoriesExcluded ?? []).length > 0) items.push({ key: "tsu", text: <>A TSU entra pelas Despesas quando é paga, mas a categoria <strong>{quality.tsuCategoriesExcluded.map((c: any) => c.name).join(", ")}</strong> está "fora da margem" ({fmt(quality.tsuCategoriesExcluded.reduce((s: number, c: any) => s + c.total, 0))} sem contar). Tira o visto em Despesas → Categorias, IVA e margem.</> });
   if ((quality.partnersRateMissing ?? []).length > 0) items.push({ key: "rate", text: <>Parceiros sem taxa de comissão: {quality.partnersRateMissing.join(", ")}</> });
   if ((quality.partnerConflicts ?? []).length > 0) items.push({ key: "conf", text: <>Campanhas ligadas a mais do que um parceiro: {quality.partnerConflicts.map((c: any) => c.key).join(", ")}</> });
   if (items.length === 0) return null;

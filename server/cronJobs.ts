@@ -410,10 +410,16 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         await markOverdueExpenses();
       });
       await step("recurring", "recorrentes", async () => {
+        // 29b: cada modelo lança no SEU dia (não o mês inteiro no dia 1); o mês
+        // anterior apanha o que tenha ficado por lançar (cron parado), só com os
+        // modelos que já existiam nesse mês. Idempotente (UNIQUE modelo/mês).
         const { generateRecurringExpensesForMonth } = await import("./expenseRecurring");
         const { lisbonToday } = await import("../shared/expensePeriods");
-        const [y, m] = lisbonToday().split("-").map(Number);
-        const r = await generateRecurringExpensesForMonth(y, m, null);
+        const [y, m, d] = lisbonToday().split("-").map(Number);
+        const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1;
+        const prev = await generateRecurringExpensesForMonth(py, pm, null, { createdBefore: `${y}-${String(m).padStart(2, "0")}-01 00:00:00` });
+        const r = await generateRecurringExpensesForMonth(y, m, null, { upToDay: d });
+        if (prev.created > 0) console.log(`[daily-ops] recorrentes ${prev.period} (atrasadas): ${prev.created} lançada(s)`);
         if (r.created > 0) console.log(`[daily-ops] recorrentes ${r.period}: ${r.created} lançada(s), ${r.skipped} já existiam`);
       });
       // (22c, D10 — Jorge 3 out) A avaliação semanal ANTIGA (performance_evaluations)

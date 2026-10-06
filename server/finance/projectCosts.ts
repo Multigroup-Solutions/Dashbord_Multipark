@@ -20,6 +20,7 @@ import { getDb, getProjects } from "../db";
 import { scopedProjectIds } from "../cityScope";
 import { lisbonToday } from "../../shared/expensePeriods";
 import { computeFinance, type ProjectCost } from "./engine";
+import { countedEmployerTax } from "./rules";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -57,7 +58,7 @@ export function costFields(c: ProjectCost): Pick<ProjectCostRow, "expenses" | "e
   return {
     expenses: c.expensesNet, expensesGross: c.expenses,
     salaries: c.salaries, employerTax: c.employerTax, extras: c.extras,
-    personnel: c.salaries + c.employerTax + c.extras,
+    personnel: c.salaries + countedEmployerTax(c.employerTax) + c.extras,
     commissions: c.salesCommissions + c.operationalCommissions,
     totalCost: c.total,
   };
@@ -110,7 +111,7 @@ export async function projectCostsReport(input: { year?: number; month?: number 
     /** totais do período = os da Faturação (mesmo alcance) */
     totals: {
       expenses: finance.costs.expensesNet,
-      personnel: finance.costs.salaries + finance.costs.employerTax + finance.costs.extrasDia,
+      personnel: finance.costs.salaries + countedEmployerTax(finance.costs.employerTax) + finance.costs.extrasDia,
       commissions: finance.costs.salesCommissions + finance.costs.operationalCommissions,
       totalCost: finance.costs.totalNet,
     },
