@@ -9,6 +9,7 @@ import {
 import { trainingRouter } from './trainingRouter';
 import { tasksRouter } from './tasksRouter';
 import { settingsRouter } from './settingsRouter';
+import { centralRouter } from "./centralRouter";
 import { apiKeysRouter } from './apiKeysRouter';
 import { evaluationRouter } from './evaluationRouter';
 import { assistantRouter } from './assistant/router';
@@ -1130,6 +1131,8 @@ export const appRouter = router({
   search: searchRouter,
   knowledge: knowledgeRouter,
   settings: settingsRouter,
+  // 39a: central Vodafone (consola One Net como "Sugar CRM") — só super admin.
+  central: centralRouter,
 
   // ── AVALIAÇÃO (motor único: individual + "A minha avaliação") ────────────────
   evaluation: evaluationRouter,

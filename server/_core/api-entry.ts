@@ -10,6 +10,8 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
+import { createCentralSugarRouter } from "../centralSugar";
+import { CENTRAL_SUGAR_BASE_PATH } from "../../shared/centralSugar";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { registerWhatsappCallStreamRoute } from "../whatsappCallStream";
 import { createMultiparkWebhookRouter, retryMultiparkDeliveries } from "../multiparkWebhook";
@@ -61,6 +63,8 @@ try {
   registerMailRoutes(app, { defer: (p) => waitUntil(p) });
   app.use("/api/external", createExternalApiRouter());
   app.use("/api/v1", createMcpApiRouter());
+  // 39a: a central Vodafone (One Net Attendant Console) fala com a dashboard como se fosse um Sugar CRM.
+  app.use(CENTRAL_SUGAR_BASE_PATH, createCentralSugarRouter());
   // Toque das chamadas do WhatsApp por SSE (GET, sessão por cookie).
   registerWhatsappCallStreamRoute(app);
 
