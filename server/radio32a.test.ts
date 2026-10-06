@@ -90,7 +90,9 @@ describe("32a — a pesquisa no Zello", () => {
     const s = src("server/radioZello.ts");
     expect(s).toContain("FROM pda_checkins c LEFT JOIN pdas p ON p.id = c.pdaId");
     expect(s).toContain("SELECT id, zelloUsername FROM employees WHERE zelloUsername IN");
-    expect(s).toContain(`if (!/(^|\\.)zellowork\\.com$/.test(host)) throw new Error("O áudio não veio do Zello.");`);
+    // 36a: o áudio é descarregado pelo servidor (só links do Zello) e vai à IA já em bytes
+    expect(s).toContain("const { bytes, mime } = await downloadZelloMedia(media.url);");
+    expect(src("server/zello.ts")).toContain(`if (!/(^|\\.)zellowork\\.com$/.test(u.hostname)) throw new Error("O áudio não veio do Zello.");`);
     expect(s).toContain("WHERE zelloMessageId = ${o.messageId}");
     expect(src("server/migrations/migration_0480.ts")).not.toMatch(/DROP|DELETE|UPDATE /);
   });

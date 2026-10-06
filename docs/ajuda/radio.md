@@ -19,14 +19,14 @@ As mensagens de voz vêm **diretamente do histórico do Zello**, cruzadas com o 
 Cada mensagem mostra:
 - **Hora, quem falou e para onde** (canal ou pessoa) e a duração.
 - **Quem falou**: os PDAs são partilhados, por isso conta a pessoa com **check-in nesse PDA a essa hora**. Sem check-in, conta a ficha que tem esse Zello. Sem nenhum dos dois, fica **por identificar**.
-- **Ouvir**: o áudio vem do Zello. Às vezes o Zello demora uns segundos a prepará-lo.
+- **Ouvir**: o áudio vem do Zello, passando pela app (assim toca no telemóvel e no PC). Às vezes o Zello demora uns segundos a prepará-lo. Se não der, aparece o motivo em vermelho.
 - **Transcrição**: a do Zello, quando a rede a tem ligada ("pode ter erros" se o Zello o disser). Sem ela, **Transcrever (IA)** (team leaders, supervisores e administração). A transcrição fica guardada e não se paga duas vezes.
 - **Posição e velocidade** nessa hora, pelo ponto GPS do Zello mais perto (até 5 minutos), com **ver no mapa**.
 - **Multipark**: o que essa pessoa fez **10 minutos antes e depois** (entradas, saídas, movimentos), com matrícula, reserva e parque. Conta pelos agentes ligados à ficha (RH → Ligações).
 
 Quem só vê a sua cidade só vê as mensagens de pessoas dessa cidade. As de outras cidades, ou de quem não se sabe quem é, ficam de fora e aparece um aviso.
 
-**Guardar como prova** (team leaders, supervisores e administração)
+**Guardar como prova** (supervisores, backoffice e administração)
 - Numa mensagem, **Guardar como prova**. Para guardar várias juntas, marca o quadrado de cada uma (até 10) e carrega em **Guardar como prova** na barra de cima.
 - Diz a **situação** (obrigatória, ex.: "dano no carro da reserva X"). Podes juntar uma **referência** (reserva, matrícula, ocorrência) e **notas**.
 - Fica guardado como estava nesse momento: quem falou, a hora, a transcrição, a posição e a velocidade, e o que fez na Multipark à volta da hora. A app volta a ler a mensagem no Zello (não se guarda o que está no ecrã) e põe-lhe um **selo** para se ver que não mudou.
@@ -38,7 +38,7 @@ Quem só vê a sua cidade só vê as mensagens de pessoas dessa cidade. As de ou
 As mensagens guardadas como prova, das mais recentes para as mais antigas.
 - **Procurar** pela situação, referência, pessoa, utilizador do Zello, transcrição ou notas.
 - **Imprimir** uma prova, ou **Imprimir / PDF** para todas as que estão na lista (no browser, escolhe "Guardar como PDF").
-- **Ouvir** o áudio guardado ou **Juntar o áudio**, se ainda faltar.
+- **Ouvir** o áudio guardado ou **Juntar o áudio**, se ainda faltar (supervisores, backoffice e administração).
 - **Arquivar** (só administração) pede o motivo. A prova sai da lista, mas nunca se apaga (**mostrar arquivadas**).
 - Quem só vê a sua cidade só vê as provas de pessoas dessa cidade.
 

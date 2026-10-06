@@ -124,19 +124,12 @@ export async function attachEvidenceAudio(id: number): Promise<{ status: "saved"
       await note(`O Zello ainda estava a preparar o áudio${media.progress != null ? ` (${media.progress}%)` : ""} — tenta "Juntar o áudio" outra vez.`);
       return { status: "pending", progress: media.progress };
     }
-    const host = new URL(media.url).hostname;
-    if (!/(^|\.)zellowork\.com$/.test(host)) throw new Error("O áudio não veio do Zello.");
-    const { fetchWithTimeout } = await import("./_core/fetchWithTimeout");
-    const res = await fetchWithTimeout(media.url, { timeoutMs: 20_000 });
-    if (!res.ok) throw new Error(`O Zello não deu o ficheiro (erro ${res.status}).`);
-    const type = (res.headers.get("content-type") || "audio/mpeg").split(";")[0].trim();
-    if (!/^audio\//.test(type) && type !== "application/octet-stream") throw new Error("O Zello não devolveu um áudio.");
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (!buf.length) throw new Error("O áudio veio vazio.");
-    if (buf.length > AUDIO_MAX_BYTES) throw new Error("O áudio é grande demais.");
+    // 36a: descarregado pelo servidor (só links do Zello; com a sessão se for preciso; confirma que é áudio)
+    const { downloadZelloMedia } = await import("./zello");
+    const { bytes: buf, mime: type } = await downloadZelloMedia(media.url, AUDIO_MAX_BYTES);
     const { storagePut } = await import("./storage");
-    const ext = type === "audio/ogg" ? "ogg" : type === "audio/wav" || type === "audio/x-wav" ? "wav" : "mp3";
-    const stored = await storagePut(`radio/evidence/${id}-${row.zelloMessageId}.${ext}`, buf, /^audio\//.test(type) ? type : "audio/mpeg");
+    const ext = type === "audio/ogg" ? "ogg" : type === "audio/wav" ? "wav" : type === "audio/amr" ? "amr" : type === "audio/mp4" ? "m4a" : "mp3";
+    const stored = await storagePut(`radio/evidence/${id}-${row.zelloMessageId}.${ext}`, buf, type);
     await d.execute(sql`UPDATE radio_evidence SET audioKey = ${stored.key}, audioUrl = ${stored.url}, audioSavedAt = UTC_TIMESTAMP(), audioNote = NULL
       WHERE id = ${id} AND audioKey IS NULL`);
     return { status: "saved" };

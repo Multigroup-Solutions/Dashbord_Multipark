@@ -7,7 +7,7 @@
  * Multipark à volta da hora (entradas, saídas, movimentos).
  * 34a: escolhem-se mensagens e guardam-se como prova (separador Provas).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FileText, Loader2, MapPin, Mic, Play, Search, Sparkles, Truck } from "lucide-react";
 import { EvidenceSaveDialog, type EvidencePick } from "./RadioEvidence";
-import { EVIDENCE_MAX_PER_SAVE } from "@shared/radioEvidence";
+import { EVIDENCE_MAX_PER_SAVE, canSaveEvidence } from "@shared/radioEvidence";
 
 const ALL = "__all__";
 const hms = (ms: number) => new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(ms));
@@ -40,7 +40,8 @@ export function ZelloRadioSearch() {
   const [starts, setStarts] = useState<number[]>([0]);
   // 34a: mensagens escolhidas para guardar como prova
   const { user: me } = useAuth();
-  const canSave = !!me && can(me as any, "radio", "edit");
+  // 36a: guardar provas só supervisor, backoffice, admin e super admin
+  const canSave = !!me && can(me as any, "radio", "edit") && canSaveEvidence((me as any).role);
   const [picked, setPicked] = useState<Map<number, EvidencePick>>(new Map());
   const [saving, setSaving] = useState<EvidencePick[] | null>(null);
   const toggle = (p: EvidencePick) => setPicked((cur) => {
@@ -132,7 +133,10 @@ function MessageCard({ m, sel }: { m: any; sel: Sel }) {
   const utils = trpc.useUtils();
   const [audio, setAudio] = useState<string | null>(null);
   const [preparing, setPreparing] = useState<string | null>(null);
-  const media = trpc.operational.radio.zelloMedia.useMutation();
+  const [audioError, setAudioError] = useState<string | null>(null);
+  // 36a: o áudio vem pelo nosso servidor (o link do Zello no browser ficava a "0 segundos")
+  const media = trpc.operational.radio.zelloAudio.useMutation();
+  useEffect(() => () => { if (audio) URL.revokeObjectURL(audio); }, [audio]);
   const transcribe = trpc.operational.radio.zelloTranscribe.useMutation({
     onSuccess: (r) => {
       if ("pending" in r) toast.message("O Zello ainda está a preparar o áudio — tenta daqui a uns segundos.");
@@ -142,12 +146,21 @@ function MessageCard({ m, sel }: { m: any; sel: Sel }) {
   });
 
   async function play() {
+    setAudioError(null);
     for (let i = 0; i < 10; i++) {
       try {
         const r = await media.mutateAsync({ key: m.mediaKey });
-        if (r.ready && r.url) { setAudio(r.url); setPreparing(null); return; }
+        if (r.ready) {
+          setPreparing(null);
+          if (!r.playable) { setAudioError(`O Zello deu o áudio num formato que o browser não toca (${r.mime}).`); return; }
+          const bin = atob(r.base64);
+          const buf = new Uint8Array(bin.length);
+          for (let j = 0; j < bin.length; j++) buf[j] = bin.charCodeAt(j);
+          setAudio(URL.createObjectURL(new Blob([buf], { type: r.mime })));
+          return;
+        }
         setPreparing(`O Zello está a preparar o áudio${r.progress != null ? ` (${r.progress}%)` : ""}…`);
-      } catch (e: any) { toast.error(e?.message ?? "Sem áudio."); setPreparing(null); return; }
+      } catch (e: any) { setAudioError(e?.message ?? "Sem áudio."); setPreparing(null); return; }
       await new Promise((res) => setTimeout(res, 2000));
     }
     setPreparing("O áudio ainda não ficou pronto — tenta outra vez.");
@@ -168,12 +181,13 @@ function MessageCard({ m, sel }: { m: any; sel: Sel }) {
           {m.recipient && <span className="text-xs text-muted-foreground">→ {m.recipientType === "channel" ? `canal ${m.recipient}` : m.recipient}</span>}
           {m.durationS != null && <span className="text-xs text-muted-foreground">{m.durationS} s</span>}
           {m.mediaKey && (audio
-            ? <audio controls autoPlay src={audio} className="h-8" />
+            ? <audio controls autoPlay src={audio} className="h-8" onError={() => setAudioError("O browser não conseguiu tocar este áudio.")} />
             : <Button size="sm" variant="outline" onClick={play} disabled={media.isPending || !!preparing}><Play className="mr-1 h-3.5 w-3.5" /> Ouvir</Button>)}
           {m.evidenceId ? <Badge variant="secondary" title="Já guardada (separador Provas)"><FileText className="mr-1 h-3 w-3" /> Prova #{m.evidenceId}</Badge>
             : sel && <Button size="sm" variant="ghost" onClick={() => sel.saveOne({ id: m.id, at: m.at, sender: m.sender })}><FileText className="mr-1 h-3.5 w-3.5" /> Guardar como prova</Button>}
         </div>
         {preparing && !audio && <p className="text-xs text-muted-foreground">{preparing}</p>}
+        {audioError && <p role="alert" className="text-xs text-destructive">{audioError}</p>}
 
         {text ? (
           <p className="text-sm whitespace-pre-wrap break-words">

@@ -31,6 +31,8 @@ const NO_SPEECH = /^\(?sem fala\)?\.?$/i;
 
 export interface TranscribeOptions {
   audioUrl: string;
+  /** 36a: o áudio já descarregado (ex.: do Zello, que pede a sessão) — não se volta a ir ao URL. */
+  audio?: { data: Buffer; mimeType: string };
   language?: string;
   userId?: number | null;
   entity?: string | null;
@@ -117,7 +119,8 @@ export async function transcribeAudio(opts: TranscribeOptions): Promise<Transcri
   const whisperAvailable = !!String(env.OPENAI_API_KEY ?? "").trim();
   if (!useGemini && !whisperAvailable) throw new AiNotConfiguredError();
 
-  const audio = await downloadAudio(opts.audioUrl);
+  if (opts.audio && opts.audio.data.length > MAX_AUDIO_BYTES) throw new AiUnsupportedInputError("size");
+  const audio = opts.audio ?? await downloadAudio(opts.audioUrl);
 
   if (useGemini) {
     const t0 = Date.now();

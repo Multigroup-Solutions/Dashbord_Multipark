@@ -33,8 +33,8 @@ export async function summarizeRadio(transcription: string, ctx: { userId?: numb
 }
 
 /** Lança AiError se a transcrição falhar (a UI mostra `userMessage`). */
-export async function transcribeAndSummarizeRadio(audioUrl: string, ctx: { userId?: number | null } = {}): Promise<{ transcription: string; summary: string }> {
-  const t = await transcribeAudio({ audioUrl, language: "pt", userId: ctx.userId ?? null, entity: "radio_transcription" });
+export async function transcribeAndSummarizeRadio(audioUrl: string, ctx: { userId?: number | null } = {}, audio?: { data: Buffer; mimeType: string }): Promise<{ transcription: string; summary: string }> {
+  const t = await transcribeAudio({ audioUrl, ...(audio ? { audio } : {}), language: "pt", userId: ctx.userId ?? null, entity: "radio_transcription" });
   const summary = await summarizeRadio(t.text, ctx);
   return { transcription: t.text, summary };
 }

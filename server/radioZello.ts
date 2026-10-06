@@ -173,6 +173,19 @@ export async function zelloMediaUrl(key: string) {
 }
 
 /**
+ * 36a: o áudio de uma mensagem, descarregado pelo servidor (o browser a abrir
+ * o link do Zello ficava a "0 segundos"). "A preparar" enquanto o Zello o
+ * converte; depois os bytes em base64 com o tipo verdadeiro.
+ */
+export async function zelloAudio(key: string): Promise<{ ready: false; progress: number | null } | { ready: true; mime: string; base64: string; bytes: number; playable: boolean }> {
+  const [{ getZelloMedia, downloadZelloMedia }, { RADIO_AUDIO_MAX_BYTES, browserPlayable }] = await Promise.all([import("./zello"), import("../shared/radioCross")]);
+  const media = await getZelloMedia(key);
+  if (!media.ready || !media.url) return { ready: false, progress: media.progress };
+  const { bytes, mime } = await downloadZelloMedia(media.url, RADIO_AUDIO_MAX_BYTES);
+  return { ready: true, mime, base64: bytes.toString("base64"), bytes: bytes.length, playable: browserPlayable(mime) };
+}
+
+/**
  * Transcreve com a IA uma mensagem do Zello que o Zello não transcreveu; fica
  * gravada ligada à mensagem (não se paga duas vezes). O áudio vem do próprio
  * Zello (link pedido aqui, nunca um endereço vindo do browser).
@@ -185,10 +198,11 @@ export async function transcribeZelloMessage(o: { messageId: number; mediaKey: s
   if (existing) return { id: Number(existing.id), transcription: String(existing.transcription ?? ""), summary: existing.summary ?? null, reused: true };
   const media = await zelloMediaUrl(o.mediaKey);
   if (!media.ready || !media.url) return { pending: true as const, progress: media.progress };
-  const host = new URL(media.url).hostname;
-  if (!/(^|\.)zellowork\.com$/.test(host)) throw new Error("O áudio não veio do Zello.");
+  // 36a: o servidor descarrega (com a sessão do Zello se for preciso) e confirma que é áudio
+  const { downloadZelloMedia } = await import("./zello");
+  const { bytes, mime } = await downloadZelloMedia(media.url);
   const { transcribeAndSummarizeRadio } = await import("./radioAi");
-  const { transcription, summary } = await transcribeAndSummarizeRadio(media.url, { userId: o.userId });
+  const { transcription, summary } = await transcribeAndSummarizeRadio(media.url, { userId: o.userId }, { data: bytes, mimeType: mime });
   const id = await createRadioTranscription({
     audioUrl: null, transcription, summary, employeeId: null, vehicleId: null,
     duration: o.durationS == null ? null : Math.round(o.durationS),

@@ -235,14 +235,18 @@ export const operationalRouter = router({
       const [{ searchZelloRadio }, { scopedProjectIds }] = await Promise.all([import("./radioZello"), import("./cityScope")]);
       return searchZelloRadio({ ...range, user: input.user ?? null, channel: input.channel ?? null, includeReceived: input.includeReceived, start: input.start, scopeProjectIds: scopedProjectIds() });
     }),
-    /** Link temporário do áudio (MP3) de uma mensagem do Zello; "a preparar" enquanto o Zello o converte. */
-    zelloMedia: protectedProcedure.input(z.object({ key: z.string().trim().regex(/^[A-Za-z0-9_.-]{4,200}$/) })).mutation(async ({ ctx, input }) => {
+    /**
+     * 36a: o áudio de uma mensagem do Zello, descarregado pelo servidor (o link
+     * do Zello aberto no browser ficava a "0 segundos"); "a preparar"
+     * enquanto o Zello o converte.
+     */
+    zelloAudio: protectedProcedure.input(z.object({ key: z.string().trim().regex(/^[A-Za-z0-9_.-]{4,200}$/) })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "radio", "view");
-      const { zelloMediaUrl } = await import("./radioZello");
+      const { zelloAudio } = await import("./radioZello");
       try {
-        return await zelloMediaUrl(input.key);
+        return await zelloAudio(input.key);
       } catch (err) {
-        throw new TRPCError({ code: "BAD_GATEWAY", message: `O Zello não deu o áudio: ${String((err as Error)?.message ?? err).slice(0, 120)}` });
+        throw new TRPCError({ code: "BAD_GATEWAY", message: `O Zello não deu o áudio: ${String((err as Error)?.message ?? err).replace(/sid=[^&\s]+/g, "sid=…").slice(0, 160)}` });
       }
     }),
     /** Transcreve com a IA uma mensagem que o Zello não transcreveu (fica ligada a ela; não se paga duas vezes). */
@@ -276,6 +280,9 @@ export const operationalRouter = router({
       notes: z.string().max(4000).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "radio", "edit");
+      // 36a: só supervisor, backoffice, admin e super admin
+      const { canSaveEvidence } = await import("../shared/radioEvidence");
+      if (!canSaveEvidence(ctx.user.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Guardar provas é só para supervisores, backoffice e administração." });
       const now = Date.now();
       if (input.picks.some((p) => p.at > now + 60_000 || p.at < now - 400 * 86_400_000)) throw new TRPCError({ code: "BAD_REQUEST", message: "Mensagem fora do histórico do Zello." });
       const [{ saveRadioEvidence }, { scopedProjectIds }] = await Promise.all([import("./radioEvidence"), import("./cityScope")]);
@@ -301,6 +308,8 @@ export const operationalRouter = router({
     /** Junta o áudio do Zello à prova (o Zello pode ainda estar a converter → "pending"). */
     evidenceAttachAudio: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "radio", "edit");
+      const { canSaveEvidence } = await import("../shared/radioEvidence");
+      if (!canSaveEvidence(ctx.user.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Juntar o áudio às provas é só para supervisores, backoffice e administração." });
       const [{ getRadioEvidence, attachEvidenceAudio }, { scopedProjectIds }] = await Promise.all([import("./radioEvidence"), import("./cityScope")]);
       const e = await getRadioEvidence(input.id, scopedProjectIds());
       if (!e) throw new TRPCError({ code: "NOT_FOUND", message: "Prova não encontrada." });

@@ -400,6 +400,32 @@ export async function getZelloHistoryMetadata(f: ZelloHistoryFilter): Promise<{ 
 }
 
 /**
+ * 36a: descarrega pelo servidor o ficheiro de um link do getmedia. O browser
+ * a abrir o link diretamente ficava a "0 segundos" (o Zello pode pedir a
+ * sessão). Tenta sem e, se o Zello recusar ou não vier áudio, com a sessão.
+ * Só links do Zello; confirma pelos primeiros bytes que é mesmo áudio.
+ */
+export async function downloadZelloMedia(url: string, maxBytes = 8 * 1024 * 1024): Promise<{ bytes: Buffer; mime: string }> {
+  const { sniffAudioMime } = await import("../shared/radioCross");
+  const u = new URL(url);
+  if (!/(^|\.)zellowork\.com$/.test(u.hostname)) throw new Error("O áudio não veio do Zello.");
+  const get = async (withSid: boolean) => {
+    const target = new URL(u.toString());
+    if (withSid) target.searchParams.set("sid", await authenticate());
+    const res = await fetchWithTimeout(target.toString(), { redirect: "follow", timeoutMs: 20_000 });
+    const bytes = res.ok ? Buffer.from(await res.arrayBuffer()) : Buffer.alloc(0);
+    return { status: res.status, bytes, mime: res.ok ? sniffAudioMime(bytes) : null };
+  };
+  let r = await get(false);
+  if (!r.mime) r = await get(true);
+  if (r.status < 200 || r.status >= 300) throw new Error(`O Zello não deu o áudio (erro ${r.status}).`);
+  if (!r.bytes.length) throw new Error("O áudio veio vazio do Zello.");
+  if (!r.mime) throw new Error("O Zello não devolveu um áudio (veio outra coisa no lugar do ficheiro).");
+  if (r.bytes.length > maxBytes) throw new Error("O áudio é grande demais.");
+  return { bytes: r.bytes, mime: r.mime };
+}
+
+/**
  * history/getmedia: link temporário do áudio (MP3) ou da imagem. Enquanto o
  * Zello o prepara devolve "Waiting"/"Working" com o progresso.
  */
@@ -408,7 +434,7 @@ export async function getZelloMedia(key: string): Promise<{ ready: boolean; url:
   const data = await zelloGet(`history/getmedia/key/${encodeURIComponent(key)}`);
   const status = String(data?.status ?? "?");
   if (status !== "OK" && status !== "Waiting" && status !== "Working") throw new Error(`Zello history/getmedia falhou: ${status}`);
-  const url = typeof data?.url === "string" && /^https:\/\//.test(data.url) ? data.url : null;
+  const url = typeof data?.url === "string" && /^https?:\/\//.test(data.url) ? data.url : null;
   return { ready: status === "OK" && !!url, url, progress: data?.progress == null ? null : Number(data.progress), expires: data?.expires == null ? null : Number(data.expires), status };
 }
 

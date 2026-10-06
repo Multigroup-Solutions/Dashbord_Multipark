@@ -11,6 +11,15 @@
  * apaga; arquiva-se com motivo. Regras PURAS.
  */
 
+/**
+ * 36a (Jorge, 6 out 2026): guardar provas (e juntar-lhes o áudio) é "só para
+ * supervisor, backoffice, admin e super admin". Arquivar continua só da
+ * administração (gerir o Rádio).
+ */
+export const EVIDENCE_SAVE_ROLES = ["supervisor", "backoffice", "admin", "super_admin"] as const;
+/** Este papel pode guardar provas? PURA. */
+export const canSaveEvidence = (role: string | null | undefined) => (EVIDENCE_SAVE_ROLES as readonly string[]).includes(String(role ?? ""));
+
 /** No máximo isto de mensagens de uma vez (cada uma volta a ser lida no Zello). */
 export const EVIDENCE_MAX_PER_SAVE = 10;
 export const EVIDENCE_SITUATION_MAX = 200;
