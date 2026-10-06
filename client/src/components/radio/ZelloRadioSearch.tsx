@@ -5,6 +5,7 @@
  * transcreve-se com a IA — e cruza cada uma com a posição e a velocidade de
  * quem falou nessa hora (GPS do Zello) e com o que essa pessoa fez na
  * Multipark à volta da hora (entradas, saídas, movimentos).
+ * 34a: escolhem-se mensagens e guardam-se como prova (separador Provas).
  */
 import { useState } from "react";
 import { toast } from "sonner";
@@ -19,7 +20,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, MapPin, Mic, Play, Search, Sparkles, Truck } from "lucide-react";
+import { FileText, Loader2, MapPin, Mic, Play, Search, Sparkles, Truck } from "lucide-react";
+import { EvidenceSaveDialog, type EvidencePick } from "./RadioEvidence";
+import { EVIDENCE_MAX_PER_SAVE } from "@shared/radioEvidence";
 
 const ALL = "__all__";
 const hms = (ms: number) => new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(ms));
@@ -35,6 +38,19 @@ export function ZelloRadioSearch() {
   const [received, setReceived] = useState(false);
   const [params, setParams] = useState<Params | null>(null);
   const [starts, setStarts] = useState<number[]>([0]);
+  // 34a: mensagens escolhidas para guardar como prova
+  const { user: me } = useAuth();
+  const canSave = !!me && can(me as any, "radio", "edit");
+  const [picked, setPicked] = useState<Map<number, EvidencePick>>(new Map());
+  const [saving, setSaving] = useState<EvidencePick[] | null>(null);
+  const toggle = (p: EvidencePick) => setPicked((cur) => {
+    const next = new Map(cur);
+    if (next.has(p.id)) next.delete(p.id);
+    else if (next.size >= EVIDENCE_MAX_PER_SAVE) { toast.error(`No máximo ${EVIDENCE_MAX_PER_SAVE} mensagens de cada vez.`); return cur; }
+    else next.set(p.id, p);
+    return next;
+  });
+  const sel = canSave ? { picked, toggle, saveOne: (p: EvidencePick) => setSaving([p]) } : null;
 
   const search = () => {
     setStarts([0]);
@@ -77,12 +93,22 @@ export function ZelloRadioSearch() {
           <p className="text-xs text-muted-foreground">Hora de Lisboa, no máximo 24 horas de cada vez ("até" antes do "de" = dia seguinte, como no turno da noite). Para cada mensagem: quem falou (pelo PDA ou pela ficha), a posição e a velocidade nessa hora (GPS do Zello) e o que fez na Multipark 10 minutos antes e depois.</p>
         </CardContent>
       </Card>
-      {params && starts.map((s, i) => <ResultPage key={`${JSON.stringify(params)}-${s}`} params={params} start={s} last={i === starts.length - 1} onMore={(n) => setStarts((x) => [...x, n])} />)}
+      {canSave && picked.size > 0 && (
+        <div className="sticky top-2 z-10 flex flex-wrap items-center gap-2 rounded-md border bg-background p-2 shadow-sm">
+          <span className="text-sm"><b>{picked.size}</b> mensage{picked.size === 1 ? "m escolhida" : "ns escolhidas"}</span>
+          <Button size="sm" onClick={() => setSaving([...picked.values()])}><FileText className="mr-1 h-4 w-4" /> Guardar como prova</Button>
+          <Button size="sm" variant="ghost" onClick={() => setPicked(new Map())}>Limpar</Button>
+        </div>
+      )}
+      {params && starts.map((s, i) => <ResultPage key={`${JSON.stringify(params)}-${s}`} params={params} start={s} last={i === starts.length - 1} onMore={(n) => setStarts((x) => [...x, n])} sel={sel} />)}
+      {saving && <EvidenceSaveDialog picks={saving} onClose={() => setSaving(null)} onSaved={() => { setSaving(null); setPicked(new Map()); }} />}
     </div>
   );
 }
 
-function ResultPage({ params, start, last, onMore }: { params: Params; start: number; last: boolean; onMore: (next: number) => void }) {
+type Sel = { picked: Map<number, EvidencePick>; toggle: (p: EvidencePick) => void; saveOne: (p: EvidencePick) => void } | null;
+
+function ResultPage({ params, start, last, onMore, sel }: { params: Params; start: number; last: boolean; onMore: (next: number) => void; sel: Sel }) {
   const q = trpc.operational.radio.zelloSearch.useQuery({ ...params, start }, { retry: false, staleTime: 5 * 60_000 });
   if (q.isLoading) return <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
   if (q.error) return <p role="alert" className="text-sm text-destructive">{q.error.message}</p>;
@@ -93,14 +119,14 @@ function ResultPage({ params, start, last, onMore }: { params: Params; start: nu
     <div className="space-y-3">
       {d.notices.map((n, i) => <p key={i} role="status" className="text-xs text-amber-800">{n}</p>)}
       {d.messages.length === 0 && start === 0 ? <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">Sem mensagens de voz nesse intervalo.</CardContent></Card>
-        : d.messages.map((m) => <MessageCard key={m.id} m={m} />)}
+        : d.messages.map((m) => <MessageCard key={m.id} m={m} sel={sel} />)}
       {last && d.hasMore && <Button variant="outline" onClick={() => onMore(d.nextStart)}>Ver mais</Button>}
     </div>
   );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function MessageCard({ m }: { m: any }) {
+function MessageCard({ m, sel }: { m: any; sel: Sel }) {
   const { user } = useAuth();
   const canTranscribe = !!user && can(user as any, "radio", "edit") && seesBeyondOwn(user as any, "radio");
   const utils = trpc.useUtils();
@@ -133,6 +159,7 @@ function MessageCard({ m }: { m: any }) {
     <Card>
       <CardContent className="p-4 space-y-2">
         <div className="flex flex-wrap items-center gap-2 text-sm">
+          {sel && !m.evidenceId && <input type="checkbox" aria-label="Escolher para guardar como prova" checked={sel.picked.has(m.id)} onChange={() => sel.toggle({ id: m.id, at: m.at, sender: m.sender })} />}
           <Mic className="h-4 w-4 text-primary" aria-hidden />
           <b className="tabular-nums">{hms(m.at)}</b>
           <span className="font-medium">{who}</span>
@@ -143,6 +170,8 @@ function MessageCard({ m }: { m: any }) {
           {m.mediaKey && (audio
             ? <audio controls autoPlay src={audio} className="h-8" />
             : <Button size="sm" variant="outline" onClick={play} disabled={media.isPending || !!preparing}><Play className="mr-1 h-3.5 w-3.5" /> Ouvir</Button>)}
+          {m.evidenceId ? <Badge variant="secondary" title="Já guardada (separador Provas)"><FileText className="mr-1 h-3 w-3" /> Prova #{m.evidenceId}</Badge>
+            : sel && <Button size="sm" variant="ghost" onClick={() => sel.saveOne({ id: m.id, at: m.at, sender: m.sender })}><FileText className="mr-1 h-3.5 w-3.5" /> Guardar como prova</Button>}
         </div>
         {preparing && !audio && <p className="text-xs text-muted-foreground">{preparing}</p>}
 

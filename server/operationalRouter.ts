@@ -262,6 +262,76 @@ export const operationalRouter = router({
       if (!("pending" in r) && !r.reused) await logActivity({ userId: ctx.user.id, action: "create", entity: "radio_transcription", entityId: r.id, details: `Transcrição (IA) da mensagem ${input.messageId} do Zello` });
       return r;
     }),
+
+    // ─── 34a: provas (mensagens guardadas com a transcrição e o histórico) ──
+    /** Guarda mensagens do Zello como prova: o servidor volta a lê-las (nada vem do browser). */
+    evidenceSave: protectedProcedure.input(z.object({
+      picks: z.array(z.object({
+        id: z.number().int().positive(),
+        at: z.number().int().positive(),
+        sender: z.string().trim().min(1).max(128),
+      })).min(1).max(10),
+      situation: z.string().max(400),
+      reference: z.string().max(200).optional(),
+      notes: z.string().max(4000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "edit");
+      const now = Date.now();
+      if (input.picks.some((p) => p.at > now + 60_000 || p.at < now - 400 * 86_400_000)) throw new TRPCError({ code: "BAD_REQUEST", message: "Mensagem fora do histórico do Zello." });
+      const [{ saveRadioEvidence }, { scopedProjectIds }] = await Promise.all([import("./radioEvidence"), import("./cityScope")]);
+      let r: Awaited<ReturnType<typeof saveRadioEvidence>>;
+      try {
+        r = await saveRadioEvidence({ picks: input.picks, input: { situation: input.situation, reference: input.reference, notes: input.notes }, userId: ctx.user.id, scopeProjectIds: scopedProjectIds() });
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: String((err as Error)?.message ?? err).slice(0, 200) });
+      }
+      for (const s of r.saved) await logActivity({ userId: ctx.user.id, action: "create", entity: "radio_evidence", entityId: s.id, details: `Prova do rádio: mensagem ${s.messageId} do Zello — ${input.situation.trim().slice(0, 120)}` });
+      return r;
+    }),
+    /** Provas guardadas (as mais recentes primeiro), com o âmbito de cidade. */
+    evidenceList: protectedProcedure.input(z.object({
+      q: z.string().trim().max(100).optional(),
+      includeArchived: z.boolean().optional(),
+      cursor: z.number().int().positive().nullish(),
+    }).optional()).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "view");
+      const [{ listRadioEvidence }, { scopedProjectIds }] = await Promise.all([import("./radioEvidence"), import("./cityScope")]);
+      return listRadioEvidence({ q: input?.q ?? null, includeArchived: input?.includeArchived, beforeId: input?.cursor ?? null, scopeProjectIds: scopedProjectIds() });
+    }),
+    /** Junta o áudio do Zello à prova (o Zello pode ainda estar a converter → "pending"). */
+    evidenceAttachAudio: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "edit");
+      const [{ getRadioEvidence, attachEvidenceAudio }, { scopedProjectIds }] = await Promise.all([import("./radioEvidence"), import("./cityScope")]);
+      const e = await getRadioEvidence(input.id, scopedProjectIds());
+      if (!e) throw new TRPCError({ code: "NOT_FOUND", message: "Prova não encontrada." });
+      try {
+        return await attachEvidenceAudio(input.id);
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_GATEWAY", message: String((err as Error)?.message ?? err).slice(0, 200) });
+      }
+    }),
+    /** Link (temporário) para ouvir o áudio guardado da prova. */
+    evidenceAudioUrl: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "view");
+      const [{ getRadioEvidence }, { scopedProjectIds }, { signedFileUrl }] = await Promise.all([import("./radioEvidence"), import("./cityScope"), import("./caseOps")]);
+      const e = await getRadioEvidence(input.id, scopedProjectIds());
+      if (!e) throw new TRPCError({ code: "NOT_FOUND", message: "Prova não encontrada." });
+      return { url: e.audioKey ? await signedFileUrl(e.audioKey, e.audioUrl) : null };
+    }),
+    /** Arquivar (nunca apagar), com motivo. */
+    evidenceArchive: protectedProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().max(400) })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "radio", "manage");
+      const [{ getRadioEvidence, archiveRadioEvidence }, { scopedProjectIds }] = await Promise.all([import("./radioEvidence"), import("./cityScope")]);
+      const e = await getRadioEvidence(input.id, scopedProjectIds());
+      if (!e) throw new TRPCError({ code: "NOT_FOUND", message: "Prova não encontrada." });
+      try {
+        await archiveRadioEvidence(input.id, ctx.user.id, input.reason);
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: String((err as Error)?.message ?? err).slice(0, 200) });
+      }
+      await logActivity({ userId: ctx.user.id, action: "archive", entity: "radio_evidence", entityId: input.id, details: `Prova do rádio arquivada: ${input.reason.trim().slice(0, 150)}` });
+      return { ok: true };
+    }),
   }),
 
   // ─── ZELLO INTEGRATION ──────────────────────────────────────────────
