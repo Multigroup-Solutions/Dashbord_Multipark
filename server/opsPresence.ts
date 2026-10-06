@@ -22,6 +22,7 @@ import {
   type OpenPresenceAlert, type PresenceKind, type PresenceMovement, type PresencePerson, type ZelloStatus,
 } from "../shared/opsPresence";
 import { NOTIFY_CITY_LABELS, notifyCityOf, type NotifyCity } from "../shared/notificationRouting";
+import { presenceFichaId } from "../shared/appSettings";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -260,12 +261,21 @@ export async function runOpsPresence(opts: { now?: number } = {}): Promise<Prese
   const [tplName, tplLang] = tpl.split("|");
   const { normalizePhoneE164 } = await import("../shared/phone");
   const { sendTemplateMessage } = await import("./whatsapp");
+  // 38a: as pessoas escolhidas do RH ("ficha:<id>") → telefone da ficha (o de trabalho, senão o pessoal)
+  const fichaIds = [...new Set(Object.values(phones).flat().map((x) => presenceFichaId(String(x))).filter((x): x is number => x != null))];
+  const fichaPhones = new Map<number, string | null>();
+  if (fichaIds.length) {
+    for (const r of rowsOf(await db.execute(sql`SELECT id, isActive, noAutoWhatsapp, COALESCE(NULLIF(phone, ''), NULLIF(personalPhone, '')) AS phone
+        FROM employees WHERE id IN (${sql.join(fichaIds.map((id) => sql`${id}`), sql`, `)})`).catch(() => [[]]))) {
+      fichaPhones.set(Number(r.id), Number(r.isActive) === 1 && Number(r.noAutoWhatsapp) !== 1 && r.phone ? String(r.phone) : null);
+    }
+  }
 
   for (const a of still) {
     if (a.notifiedAt == null) continue; // ainda não foi ao sino → espera pela próxima volta
     if (!dueForEscalation({ openedAt: a.notifiedAt, acknowledgedAt: a.acknowledgedAt, escalatedAt: a.escalatedAt, resolvedAt: null }, now, minutes)) continue;
     const city = notifyCityOf(a.city);
-    const list = Array.from(new Set([...(city ? phones[city] ?? [] : []), ...(phones.copy ?? [])].map((x) => normalizePhoneE164(String(x))).filter((x): x is string => !!x)));
+    const { phones: list, missing } = resolvePresenceRecipients([...(city ? phones[city] ?? [] : []), ...(phones.copy ?? [])], fichaPhones, normalizePhoneE164);
     const p = personBy.get(a.employeeId);
     const cityLabel = city ? NOTIFY_CITY_LABELS[city] : "sem cidade";
     const line = presenceOneLine(a.kind, p?.name ?? `ficha ${a.employeeId}`, null, `${a.detail ?? ""} Sem resposta do team leader há ${minutes} min.`);
@@ -275,11 +285,34 @@ export async function runOpsPresence(opts: { now?: number } = {}): Promise<Prese
       const r = await sendTemplateMessage(to, tplName, tplLang || "pt_PT", [{ type: "body", parameters: [{ type: "text", text: cityLabel }, { type: "text", text: line }] }]).catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e) }));
       if (r.ok) ok++; else lastErr = String((r as any).error ?? "").slice(0, 120);
     }
-    const result = list.length ? `WhatsApp: ${ok}/${list.length}${lastErr ? ` (${lastErr})` : ""}` : "WhatsApp: sem números em Definições";
+    const noPhone = missing.length ? ` · ${missing.length} pessoa(s) do RH sem envio (sem telefone na ficha, inativa ou "Não enviar")` : "";
+    const result = (list.length ? `WhatsApp: ${ok}/${list.length}${lastErr ? ` (${lastErr})` : ""}` : "WhatsApp: sem números em Definições") + noPhone;
     await db.execute(sql`UPDATE ops_presence_alerts SET escalatedAt = ${utcStamp(now)}, escalationResult = ${result.slice(0, 255)} WHERE id = ${a.id}`);
     if (ok) out.escalated++;
   }
   return out;
+}
+
+/**
+ * 38a: quem recebe o WhatsApp dos alertas. Cada entrada é um telefone ou
+ * "ficha:<id>" (o telefone vem da ficha; inativa, sem telefone ou com "Não
+ * enviar" → não recebe e conta em `missing`). Sem repetidos. PURA.
+ */
+export function resolvePresenceRecipients(
+  entries: readonly string[],
+  fichaPhones: ReadonlyMap<number, string | null>,
+  normalize: (raw: string) => string | null,
+): { phones: string[]; missing: number[] } {
+  const phones = new Set<string>();
+  const missing = new Set<number>();
+  for (const raw of entries) {
+    const id = presenceFichaId(String(raw));
+    const tel = id != null ? fichaPhones.get(id) ?? null : String(raw);
+    const e164 = tel ? normalize(tel) : null;
+    if (e164) phones.add(e164);
+    else if (id != null) missing.add(id);
+  }
+  return { phones: [...phones], missing: [...missing] };
 }
 
 export interface PresenceAlertView {

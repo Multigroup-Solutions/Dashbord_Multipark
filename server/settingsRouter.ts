@@ -188,6 +188,28 @@ export const settingsRouter = router({
         unmatchedNotOperated: unmatchedNotOperatedNames(r.data.parks.map((p) => p.name)),
       };
     }),
+    /**
+     * 38a: pessoas do RH para os alertas sem PDA/Zello. O telefone vem da
+     * ficha; aqui só se mostra o fim do número (••• 678) e se recebe ou não.
+     */
+    presencePeople: adminOnly.query(async () => {
+      const { getDb } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível." });
+      const res: any = await db.execute(sql`SELECT id, fullName, position, isActive, noAutoWhatsapp,
+          COALESCE(NULLIF(phone, ''), NULLIF(personalPhone, '')) AS phone
+        FROM employees ORDER BY isActive DESC, fullName LIMIT 5000`);
+      const rows: any[] = Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : res?.rows ?? [];
+      return rows.map((r) => {
+        const digits = String(r.phone ?? "").replace(/\D/g, "");
+        return {
+          id: Number(r.id), name: String(r.fullName ?? ""), position: r.position ? String(r.position) : null,
+          active: Number(r.isActive) === 1, noAutoWhatsapp: Number(r.noAutoWhatsapp) === 1,
+          phoneTail: digits.length >= 3 ? digits.slice(-3) : null,
+        };
+      });
+    }),
     /** IVA/TSU em vigor HOJE nos cálculos (Definições; sem nada gravado = constantes do código). */
     codeConstants: adminOnly.query(async () => {
       const { financeRatesAt, lisbonTodayIso } = await import("./finance/rates");

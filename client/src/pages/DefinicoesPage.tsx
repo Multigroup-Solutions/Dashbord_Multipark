@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import {
   Activity, AlertTriangle, Bell, CheckCircle2, Clock, KeyRound, Loader2, LogOut, Plug, Plus, RotateCcw,
-  Mail, Save, ShieldCheck, SlidersHorizontal, Sparkles, ToggleLeft, Trash2, XCircle,
+  Mail, Save, ShieldCheck, SlidersHorizontal, Sparkles, ToggleLeft, Trash2, X, XCircle,
 } from "lucide-react";
 import { MailboxesSettings } from "@/components/mail/MailboxesSettings";
 import { SharedCalendarsSettings } from "@/components/google/SharedCalendarsSettings";
@@ -33,7 +33,8 @@ import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
-import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, SETTINGS, validateSetting, type RateEntry } from "@shared/appSettings";
+import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, PRESENCE_FICHA_PREFIX, SETTINGS, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
 
@@ -630,21 +631,33 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const isCityMap = !isPhones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
     && CITY_FIELDS.every((c) => c.id in (item.defaultValue as Record<string, unknown>));
   const cityMapNumeric = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "number";
+  // 38a: ligado/desligado por cidade → interruptores (antes eram caixas de texto e "true" escrito não gravava)
+  const cityMapBool = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "boolean";
   const isTime = typeof item.defaultValue === "string" && /^\d{2}:\d{2}$/.test(item.defaultValue as string);
   const isJson = !isPhones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
+  const [cityBools, setCityBools] = useState<Record<string, boolean>>({});
+  // 38a: alertas sem PDA/Zello — pessoas do RH por cidade (o telefone vem da ficha)
+  const [fichaSel, setFichaSel] = useState<Record<string, number[]>>({});
+  const people = trpc.settings.values.presencePeople.useQuery(undefined, { enabled: isPhones, staleTime: 60_000 });
+  const personById = useMemo(() => new Map((people.data ?? []).map((p) => [p.id, p])), [people.data]);
   const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setError(null);
-    if (isPhones) setCityMap(Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, (((current as Record<string, unknown>)?.[c.id] as string[] | undefined) ?? []).join("\n")])));
+    if (isPhones) {
+      const of = (id: string) => (((current as Record<string, unknown>)?.[id] as string[] | undefined) ?? []);
+      setFichaSel(Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, of(c.id).map(presenceFichaId).filter((x): x is number => x != null)])));
+      setCityMap(Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, of(c.id).filter((x) => presenceFichaId(x) == null).join("\n")])));
+    }
     else if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
     else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
+    else if (cityMapBool) setCityBools(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, (current as Record<string, unknown>)?.[c.id] === true])));
     else if (isCityMap) setCityMap(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, String((current as Record<string, unknown>)?.[c.id] ?? "").replace(".", ",")])));
     else if (isBool) setBool(!!current);
     else if (isJson) setText(current && Object.keys(current as object).length ? JSON.stringify(current, null, 2) : "");
@@ -653,10 +666,14 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   }, [JSON.stringify(current)]);
 
   const build = (): unknown => {
-    if (isPhones) return Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, (cityMap[c.id] ?? "").split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean)]));
+    if (isPhones) return Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, [
+      ...(fichaSel[c.id] ?? []).map((id) => `${PRESENCE_FICHA_PREFIX}${id}`),
+      ...(cityMap[c.id] ?? "").split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean),
+    ]]));
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
+    if (cityMapBool) return Object.fromEntries(CITY_FIELDS.map((c) => [c.id, cityBools[c.id] === true]));
     if (isCityMap) return Object.fromEntries(CITY_FIELDS.map((c) => {
       const raw = (cityMap[c.id] ?? "").trim();
       return [c.id, cityMapNumeric ? (raw === "" ? NaN : Number(raw.replace(",", "."))) : raw];
@@ -706,14 +723,39 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
       </div>
 
       {isPhones ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl">
-          {PRESENCE_PHONE_FIELDS.map((c) => (
-            <label key={c.id} className="text-xs space-y-1">
-              <span className="text-muted-foreground">{c.label}</span>
-              <Textarea rows={2} value={cityMap[c.id] ?? ""} aria-label={`Telefones — ${c.label}`} placeholder="+351912345678 (um por linha)"
-                disabled={locked} onChange={(e) => setCityMap((p) => ({ ...p, [c.id]: e.target.value }))} />
-            </label>
-          ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-3xl">
+          {people.isError && <p className="sm:col-span-2 text-xs text-destructive">Não foi possível carregar as pessoas do RH. <button type="button" className="underline" onClick={() => people.refetch()}>Tentar de novo</button></p>}
+          {PRESENCE_PHONE_FIELDS.map((c) => {
+            const chosen = fichaSel[c.id] ?? [];
+            const options = (people.data ?? []).filter((p) => p.active && !chosen.includes(p.id))
+              .map((p) => ({ value: String(p.id), label: `${p.name}${p.phoneTail ? ` · ••• ${p.phoneTail}` : " · sem telefone"}` }));
+            return (
+              <div key={c.id} className="rounded-md border p-2 space-y-2">
+                <div className="text-xs font-medium">{c.label}</div>
+                {chosen.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {chosen.map((id) => {
+                      const p = personById.get(id);
+                      const warn = !p ? null : !p.active ? "ficha inativa — não recebe" : p.noAutoWhatsapp ? "tem \"Não enviar\" — não recebe" : !p.phoneTail ? "sem telefone na ficha — não recebe" : null;
+                      return (
+                        <span key={id} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${warn ? "border-amber-400 text-amber-800 dark:text-amber-300" : ""}`}>
+                          {p?.name ?? `Ficha ${id}`}
+                          <span className="text-muted-foreground">{warn ?? (p?.phoneTail ? `••• ${p.phoneTail}` : "")}</span>
+                          <button type="button" className="ml-0.5 rounded hover:bg-muted" aria-label={`Tirar ${p?.name ?? `ficha ${id}`}`} disabled={locked}
+                            onClick={() => setFichaSel((prev) => ({ ...prev, [c.id]: (prev[c.id] ?? []).filter((x) => x !== id) }))}><X className="h-3 w-3" /></button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+                <SearchableSelect value="" options={options} disabled={locked || people.isLoading} className="w-full h-8 text-xs"
+                  placeholder={people.isLoading ? "A carregar o RH…" : "+ Juntar pessoa do RH"} searchPlaceholder="Procurar pelo nome…" emptyText="Ninguém com esse nome"
+                  onChange={(v) => { const id = Number(v); if (id) setFichaSel((prev) => ({ ...prev, [c.id]: [...(prev[c.id] ?? []).filter((x) => x !== id), id] })); }} />
+                <Textarea rows={1} value={cityMap[c.id] ?? ""} aria-label={`Outros números — ${c.label}`} placeholder="Outros números, fora do RH (um por linha)"
+                  disabled={locked} className="text-xs" onChange={(e) => setCityMap((p) => ({ ...p, [c.id]: e.target.value }))} />
+              </div>
+            );
+          })}
         </div>
       ) : isRate ? (
         <div className="space-y-2">
@@ -739,6 +781,17 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
         <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={isZelloList ? "um utilizador Zello por linha (vazio = ninguém excluído)" : "um email por linha"} />
       ) : isParkList ? (
         <ParkPicker selected={parkSel} onChange={setParkSel} />
+      ) : cityMapBool ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-2xl">
+          {CITY_FIELDS.map((c) => (
+            <label key={c.id} className="flex items-center gap-2 text-sm rounded-md border px-3 py-2">
+              <Switch checked={cityBools[c.id] === true} disabled={locked} aria-label={`${item.label} — ${c.label}`}
+                onCheckedChange={(v) => setCityBools((p) => ({ ...p, [c.id]: v }))} />
+              <span className="font-medium">{c.label}</span>
+              <span className="text-xs text-muted-foreground ml-auto">{cityBools[c.id] ? "Ligado" : "Desligado"}</span>
+            </label>
+          ))}
+        </div>
       ) : isCityMap ? (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-2xl">
           {CITY_FIELDS.map((c) => (
