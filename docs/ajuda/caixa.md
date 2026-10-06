@@ -2,7 +2,7 @@
 modulo: caixa
 titulo: Caixa
 rotas: /caixa
-palavras: caixa por dia, quem fechou, quem entregou, despesas do turno, dia certo, dia não certo, caixa, dinheiro, recebido, por cobrar, no-shows, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos, contagem, fecho de caixa
+palavras: caixa por dia, 03:00, dia da caixa, quem fechou, quem entregou, despesas do turno, dia certo, dia não certo, caixa, dinheiro, recebido, por cobrar, no-shows, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos, contagem, fecho de caixa
 ---
 # Caixa
 
@@ -11,12 +11,13 @@ palavras: caixa por dia, quem fechou, quem entregou, despesas do turno, dia cert
 As reservas e os pagamentos são lidos **ao vivo da base de dados da Multipark**, só dos parques que operamos.
 
 **Separadores**
-- **Por dia** (abre aqui; por omissão ontem): a caixa de cada dia **por cidade**, só nos parques que operamos.
-  - **Recebido** no dia por método (dinheiro, multibanco/TPA, online/Stripe, MB Way…), pelos pagamentos registados na Multipark nesse dia (hora de Lisboa).
+- **Por dia** (abre aqui; por omissão a última caixa já fechada): a caixa de cada dia **por cidade**, só nos parques que operamos.
+  - **O dia da caixa vai das 03:00 às 03:00 do dia seguinte** (hora de Lisboa): a caixa fecha no fim do turno da noite, em n+1. O que se recebe às 01:30 de dia 7 ainda conta na caixa de dia 6. Enquanto não passar das 03:00 do dia seguinte, o dia aparece **Em curso**.
+  - **Recebido** no dia por método (dinheiro, multibanco/TPA, online/Stripe, MB Way…), pelos pagamentos registados na Multipark nesse dia da caixa (03:00 → 03:00).
   - **Despesas do turno**: as que o team leader lançou na **Passagem de turno** (ver abaixo). Abatem ao dinheiro.
   - **Tem de estar em dinheiro** = recebido em dinheiro − despesas do turno − gastos escritos na contagem. **Contado** = soma das contagens dos parques; **Diferença** = contado − tem de estar ("—" enquanto nenhum parque estiver contado).
   - **Por condutor** (quem fez a saída): saídas, valor, em dinheiro, se **entregou o dinheiro ao líder** e se a **caixa foi fechada** (e por quem). Quem tem dinheiro por entregar aparece primeiro.
-  - **Correção do dia**: **Dia certo** ou **Dia não certo**, com o motivo (o que mudou, se está correto ou não). "Não certo" pede sempre motivo; "certo" com diferença também. Cada gravação fica no **Histórico** (quem, quando, esperado e contado). Precisa de Caixa → editar.
+  - **Correção do dia**: **Dia certo** ou **Dia não certo**, com o motivo (o que mudou, se está correto ou não). "Não certo" pede sempre motivo; "certo" com diferença também. Só se faz depois de a caixa fechar (03:00 do dia seguinte). Cada gravação fica no **Histórico** (quem, quando, esperado e contado). Precisa de Caixa → editar.
 - **Resumo**: o dinheiro no período — recebido (por método de pagamento), por cobrar, no-shows pré-pagos e canceladas com pagamento (só informativo). As despesas a pagar estão na **Previsão** da Faturação.
 - **Correção de caixa**: casos da varredura automática, contagem da caixa por parque e dia, multibanco do dia (talões), confirmar pagamentos (Stripe, Viva, fim do mês), preços iniciais e o **Comparar** era / é.
 
@@ -28,13 +29,13 @@ As reservas e os pagamentos são lidos **ao vivo da base de dados da Multipark**
 5. Avisos: os casos graves (preço zerado, pago ≠ esperado, caixa fechada com divergência ou reaberta, reembolso por explicar, dinheiro do condutor por entregar, contagem ≠ esperado) mandam logo um aviso **Caixa: casos graves** (sino e email); todas as manhãs, depois do fecho do dia, chega o **Caixa: resumo diário** com o que falta explicar por cidade.
 
 **Contagem da caixa**
-1. Em **Contagem da caixa** escolhe o parque e o dia. Aparece o **recebido em dinheiro** nesse dia (pagamentos em dinheiro registados na Multipark).
+1. Em **Contagem da caixa** escolhe o parque e o dia. Aparece o **recebido em dinheiro** nesse dia da caixa, das 03:00 às 03:00 do dia seguinte (pagamentos em dinheiro registados na Multipark). Por omissão abre a caixa em curso (antes das 03:00 ainda é a do dia anterior).
 2. Acrescenta os **gastos pagos da caixa** (descrição, valor e n.º do recibo, se houver) e escreve o **valor contado**. O ecrã mostra o **esperado** (recebido − gastos) e a **diferença**.
 3. **Gravar contagem** (precisa de Caixa → editar). Se não bater (tolerância de 1 cêntimo), abre um caso **crítico** "Contagem ≠ esperado"; quando voltares a gravar e bater, resolve-se sozinho. Cada gravação fica registada (quem, quando, quanto).
 
 **Confirmar pagamentos (online, multibanco e fim do mês)**
 1. **Online (Stripe)**: todos os dias (a partir das 07:00), as saídas de ontem e anteontem pagas online são confirmadas na própria Multipark: tem de lá estar o pagamento Stripe (id de pagamento na reserva ou numa fatura, ou um link de pagamento pago). Se não estiver, abre caso "Pago online sem pagamento Stripe na Multipark".
-2. **Multibanco (talão)**: em **Contagem da caixa**, escolhe o parque e o dia. Em **Multibanco do dia** aparecem os pagamentos por multibanco registados na Multipark. Para cada talão: escreve o valor, tira a **foto do talão** (no telemóvel abre a câmara) e carrega em **Juntar talão**. O talão liga-se sozinho ao pagamento com o mesmo valor (ou à reserva que escolheres). No fim carrega em **Confirmar multibanco do dia**: fica registado quem confirmou; o que ficar sem talão, ou talões sem pagamento, abre um caso "Multibanco sem talão". Tirar um talão não apaga (fica registado quem e quando). Precisa de Caixa → editar.
+2. **Multibanco (talão)**: em **Contagem da caixa**, escolhe o parque e o dia. Em **Multibanco do dia** aparecem os pagamentos por multibanco registados na Multipark nesse dia da caixa (03:00 → 03:00). Para cada talão: escreve o valor, tira a **foto do talão** (no telemóvel abre a câmara) e carrega em **Juntar talão**. O talão liga-se sozinho ao pagamento com o mesmo valor (ou à reserva que escolheres). No fim carrega em **Confirmar multibanco do dia**: fica registado quem confirmou; o que ficar sem talão, ou talões sem pagamento, abre um caso "Multibanco sem talão". Tirar um talão não apaga (fica registado quem e quando). Precisa de Caixa → editar.
 3. **Viva Wallet (CSV)**: em **Confirmar pagamentos**, importa o extrato exportado da Viva Wallet (colunas Date, Time, Amount, Channel). Cada pagamento por multibanco procura uma transação do terminal com o mesmo valor, no mesmo dia ou no seguinte; os que não aparecem abrem caso. Os links de pagamento (Smart Checkout) não contam para o multibanco. Precisa de Caixa → gerir.
 4. **Fim do mês (Pro, agentes, agregadores)**: escolhe o mês. Aparece por cliente Pro e por parceiro o **devido do mês** na Multipark, contando as reservas que **saíram** nesse mês (uma reserva que entrou no mês passado e saiu neste conta neste; uma que entra neste e sai no próximo conta no próximo). Parceiros: soma do devido pelo parceiro; Pro: preço das reservas. Ao lado aparece o que está **em atraso** dos 12 meses anteriores (ainda por pagar na Multipark): um pagamento pode trazer meses em atraso, e só é diferença se passar o devido do mês mais o que está em atraso, ou se não chegar ao devido do mês. Carrega em **Registar recebido**: valor, data, nota e o comprovativo (foto ou PDF). Se o recebido não bater com o devido, abre caso "Recebimento mensal ≠ devido". Precisa de Caixa → gerir.
 5. **Cruzamentos automáticos** (Stripe, Viva Wallet, InvoiceExpress): estão **desligados** por omissão e confirma-se à mão. Liga-se em **Definições → Automações** (só super admin), depois de pôr as chaves só de leitura na Vercel: `STRIPE_READ_KEY` (restrita, `rk_`), `VIVA_MERCHANT_ID` + `VIVA_API_KEY`, `INVOICEXPRESS_ACCOUNT` + `INVOICEXPRESS_API_KEY`. O cartão mostra se cada um está ligado e se tem chave.

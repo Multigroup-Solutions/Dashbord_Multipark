@@ -211,8 +211,8 @@ export async function parkInScope(parkId: string): Promise<{ ok: true; projectId
 }
 
 async function receivedCash(parkId: string, day: string): Promise<{ amount: number; count: number }> {
-  const [{ lisbonDayRangeUtc }, { readCashReceived }] = await Promise.all([import("../../shared/lisbonDay"), import("../multiparkDb/cashSweep")]);
-  const r = lisbonDayRangeUtc(day);
+  const [{ cashDayRangeUtc }, { readCashReceived }] = await Promise.all([import("../../shared/cashDayWindow"), import("../multiparkDb/cashSweep")]);
+  const r = cashDayRangeUtc(day); // 30a: a caixa do dia vai das 03:00 às 03:00 do dia seguinte
   return (await readCashReceived({ parkIds: [parkId], start: r.start, end: r.end })).get(parkId) ?? { amount: 0, count: 0 };
 }
 
