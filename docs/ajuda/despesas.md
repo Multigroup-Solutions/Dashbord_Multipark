@@ -2,7 +2,7 @@
 modulo: despesas
 titulo: Despesas
 rotas: /despesas, /despesas/dashboard
-palavras: despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista
+palavras: despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista
 ---
 # Despesas
 
@@ -24,7 +24,7 @@ Registo de faturas e despesas da empresa.
 - Na linha: **Marcar como paga** (fica paga hoje), **Editar** (valores, datas, estado, data de pagamento) e, só o super admin, **Eliminar**.
 - **Eliminar** (só o super admin): a despesa desaparece das listas, dos totais, da Faturação e das exportações, mas **fica guardada** com a fatura. O super admin vê-as ligando **Eliminadas** nos filtros e pode **Repor**. Uma despesa recorrente eliminada não volta a ser lançada nesse mês.
 - Só o super admin pode tirar o "pago" a uma despesa já paga.
-- Em **Mais ações** (⋯): **Comparar períodos**, **Exportar Excel**, **Despesas recorrentes** (modelos lançados todos os meses, no dia de cada um) e **Categorias, IVA e margem**.
+- Em **Mais ações** (⋯): **Comparar períodos**, **Exportar Excel**, **Para a contabilista (ZIP do mês)**, **Despesas recorrentes** (modelos lançados todos os meses, no dia de cada um) e **Categorias, IVA e margem**.
 - **Remover** um modelo recorrente desativa-o e tira-o da lista: deixa de lançar despesas, e as que já lançou ficam como estão. Para só pausar, tira o visto em **ativo**.
 
 **Despesas fixas (recorrentes)**
@@ -37,6 +37,15 @@ Registo de faturas e despesas da empresa.
 - Qualquer despesa sem fatura (não cancelada) mostra **"Falta a fatura"** e o botão 📎 para a anexar (abre a edição).
 - No topo aparece **"Faltam N fatura(s) nas despesas deste mês"** com **Ver as que faltam**; o filtro **Sem fatura** mostra só essas.
 - O **Exportar Excel** traz uma folha **"Sem fatura"** com as que ainda faltam — é a lista para fechar com a contabilista.
+
+**Para a contabilista (ZIP do mês)**
+1. Em **Mais ações** (⋯) → **Para a contabilista (ZIP do mês)**, escolhe o **mês** (por omissão o mês passado) e carrega em **Gerar ZIP**.
+2. Sai o ficheiro **contabilidade-AAAA-MM.zip** com:
+   - a pasta **faturas/** com o ficheiro de cada fatura do mês (pela **data da fatura**, sem as canceladas), com nome que se lê: data, fornecedor, nº do documento, valor e o nº da despesa (ex.: `2026-09-03_Google-Ireland-Limited_FT-123_1100.00EUR_#7.pdf`);
+   - a folha **faturas-AAAA-MM.xlsx** só com as datas e o que identifica cada fatura: data da fatura, data de pagamento, fornecedor, NIF, nº do documento, valor e o nome do ficheiro. As despesas do mês **sem fatura** aparecem na folha **"Sem fatura"**.
+3. Nada é enviado sozinho: descarregas e mandas tu à contabilista. Respeita o filtro de centro de custos que tiveres escolhido.
+4. Uma fatura com mais de 3 MB, ou que não se consiga ler, fica de fora e aparece em **FALTAM-NO-ZIP.txt** (abre-se pela despesa na app).
+5. Precisa de Despesas → exportar e de ver os totais. Fica registado em Logs quem exportou que mês.
 - Separador **Resumo**: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos próximos 7 dias. Despesas com data futura não entram nos totais do mês nem do ano.
 
 **Exportar e comparar**: supervisores, frontoffice, backoffice e admin — com os mesmos filtros e o mesmo alcance da lista.

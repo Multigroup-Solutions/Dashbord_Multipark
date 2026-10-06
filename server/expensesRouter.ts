@@ -664,6 +664,51 @@ export const expensesRouter = router({
       return { base64, filename: `despesas-${lisbonToday()}.xlsx`, count: data.length };
     }),
 
+  // ── 30b: EXPORT PARA A CONTABILISTA (a pedido) ───────────────────────────
+  /** Faturas de um mês (data da fatura): a lista dos ficheiros a juntar e a folha com as datas. O ZIP monta-se no browser. */
+  accountantExport: protectedProcedure
+    .input(z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), projectId: z.number().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "despesas", "export");
+      const { monthDays, buildAccountantExport } = await import("../shared/accountantExport");
+      const { start, end } = monthDays(input.month);
+      const { vis, where } = await expenseWhereFor(ctx.user, { startDate: start, endDate: end, projectId: input.projectId });
+      if (!canSeeAggregates(vis)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para exportar as faturas de todos." });
+      const rows = (await listExpenses(where)).filter((r) => r.expense.status !== "cancelled");
+      const built = buildAccountantExport(rows.map((r) => ({
+        id: r.expense.id, expenseDate: r.expense.expenseDate, paidAt: r.expense.paidAt ?? null,
+        supplier: r.expense.supplier ?? null, supplierNif: r.expense.supplierNif ?? null, documentNumber: r.expense.documentNumber ?? null,
+        description: r.expense.description ?? null, amount: parseFloat(String(r.expense.amount ?? 0)),
+        fileKey: r.expense.invoiceImageKey ?? null, fileUrl: r.expense.invoiceImageUrl ?? null,
+      })));
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(built.sheet.length ? built.sheet : [{ "Data da fatura": "", "Data de pagamento": "", "Fornecedor": "Sem faturas neste mês", "NIF": "", "Nº documento": "", "Valor (€)": 0, "Ficheiro": "" }]);
+      ws["!cols"] = [{ wch: 14 }, { wch: 17 }, { wch: 34 }, { wch: 14 }, { wch: 20 }, { wch: 11 }, { wch: 70 }];
+      XLSX.utils.book_append_sheet(wb, ws, "Faturas");
+      if (built.missing.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(built.missing), "Sem fatura");
+      const sheetBase64 = Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" })).toString("base64");
+      await logActivity({ userId: ctx.user.id, action: "export", entity: "expense", details: `Export para a contabilista: ${input.month} — ${built.files.length} fatura(s), ${built.missing.length} sem fatura` }).catch(() => {});
+      return { month: input.month, zipName: `contabilidade-${input.month}.zip`, sheetName: `faturas-${input.month}.xlsx`, sheetBase64, files: built.files, missing: built.missing.length, total: built.total };
+    }),
+
+  /** Um ficheiro de fatura (base64) para o ZIP da contabilista — mesma visibilidade da lista. */
+  accountantExportFile: protectedProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "despesas", "export");
+      const vis = await expenseVisibilityFor(ctx.user);
+      const row = await getExpenseById(input.id);
+      if (!row || !canSeeAggregates(vis) || !canSeeExpense(vis, { insertedById: row.expense.insertedById, projectId: row.expense.projectId ?? null })) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Despesa não encontrada." });
+      }
+      const key = row.expense.invoiceImageKey || row.expense.invoiceImageUrl;
+      if (!key) throw new TRPCError({ code: "NOT_FOUND", message: "Esta despesa não tem fatura." });
+      const [{ fetchStoredBytes }, { ACCOUNTANT_FILE_MAX_BYTES }] = await Promise.all([import("./google/driveService"), import("../shared/accountantExport")]);
+      const bytes = await fetchStoredBytes(key, row.expense.invoiceImageUrl ?? null);
+      if (bytes.length > ACCOUNTANT_FILE_MAX_BYTES) return { tooLarge: true as const, size: bytes.length };
+      return { tooLarge: false as const, size: bytes.length, base64: bytes.toString("base64") };
+    }),
+
   // ── CHECK OVERDUE ────────────────────────────────────────────────────────
   checkOverdue: protectedProcedure.mutation(async ({ ctx }) => {
     requireRole(ctx.user.role, "super_admin");

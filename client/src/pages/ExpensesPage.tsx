@@ -43,6 +43,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RecurringExpensesDialog, CompareExpensesDialog, CategoryVatDialog } from "@/components/ExpenseRecurringCompare";
+import { AccountantExportDialog } from "@/components/ExpenseAccountantExport";
 import ExpenseDashboard from "./ExpenseDashboard";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -72,6 +73,7 @@ import {
   Percent,
   ArchiveRestore,
   Paperclip,
+  FileArchive,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
@@ -383,6 +385,7 @@ export default function ExpensesPage() {
   );
 
   const [showRecurring, setShowRecurring] = useState(false);
+  const [showAccountant, setShowAccountant] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [showVat, setShowVat] = useState(false);
   // As recorrentes deixaram de ser lançadas ao abrir a página: corre no cron
@@ -436,6 +439,12 @@ export default function ExpensesPage() {
                     <FileDown className="h-4 w-4 mr-2" /> Exportar Excel
                   </DropdownMenuItem>
                 )}
+                {/* 30b: ZIP do mês com as faturas e as datas, a pedido */}
+                {canExport && showTotals && (
+                  <DropdownMenuItem onClick={() => setShowAccountant(true)}>
+                    <FileArchive className="h-4 w-4 mr-2" /> Para a contabilista (ZIP do mês)
+                  </DropdownMenuItem>
+                )}
                 {canManage && (
                   <DropdownMenuItem onClick={() => setShowRecurring(true)}>
                     <Repeat className="h-4 w-4 mr-2" /> Despesas recorrentes
@@ -478,6 +487,7 @@ export default function ExpensesPage() {
           }}>Ver as que faltam</Button>
         </div>
       )}
+      <AccountantExportDialog open={showAccountant} onClose={() => setShowAccountant(false)} projectId={projectFilterId} />
       <CompareExpensesDialog open={showCompare} onClose={() => setShowCompare(false)} categories={categories ?? []} projectId={projectFilterId} />
 
       {/* KPI Cards — "—" enquanto carrega ou em erro; nunca um 0 enganador */}
