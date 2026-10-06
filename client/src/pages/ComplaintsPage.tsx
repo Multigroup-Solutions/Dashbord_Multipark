@@ -17,6 +17,7 @@ import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useConfirm } from "./training/shared";
 import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
+import { retryTransient } from "@/lib/queryRetry";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
@@ -489,7 +490,10 @@ const CHANGE_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
 };
 
 function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () => void }) {
-  const detailQ = trpc.complaints.getById.useQuery({ id });
+  // 27c (Jorge, 5 out): na ficha, uma falha passageira repete só 2 vezes e
+  // sem permissão / pedido inválido não repete (antes: 3 repetições por
+  // omissão — 4 leituras pesadas da BD da Multipark por cada abertura).
+  const detailQ = trpc.complaints.getById.useQuery({ id }, { retry: retryTransient });
   const { data, isLoading } = detailQ;
   // Quem só vê os próprios casos não lê a reserva, a viatura nem os condutores
   // (as rotas recusam): os separadores ficam escondidos em vez de darem erro (16b).
@@ -498,24 +502,24 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const canManage = can(user, "reclamacoes", "manage");
   const vehicleHistoryQ = trpc.complaints.vehicleHistory.useQuery(
     { vehicleId: data?.complaint?.vehicleId ?? 0 },
-    { enabled: seesMore && !!data?.complaint?.vehicleId }
+    { enabled: seesMore && !!data?.complaint?.vehicleId, retry: retryTransient }
   );
   const vehicleHistory = vehicleHistoryQ.data;
   const timelineQ = trpc.complaints.bookingTimeline.useQuery(
     { bookingId: data?.complaint?.reservationRef || "" },
-    { enabled: seesMore && !!data?.complaint?.reservationRef }
+    { enabled: seesMore && !!data?.complaint?.reservationRef, retry: retryTransient }
   );
   const { data: apiTimeline, isLoading: timelineLoading } = timelineQ;
   // Dossier completo da reserva ligada (detalhe + extras) — automático, sem
   // passos manuais.
   const dossierQ = trpc.complaints.bookingDossier.useQuery(
     { reservationRef: data?.complaint?.reservationRef || "" },
-    { enabled: seesMore && !!data?.complaint?.reservationRef }
+    { enabled: seesMore && !!data?.complaint?.reservationRef, retry: retryTransient }
   );
   const dossier = dossierQ.data;
   const vehicleAgentsQ = trpc.complaints.vehicleAgents.useQuery(
     { plate: data?.complaint?.vehiclePlate || "", currentBookingRef: data?.complaint?.reservationRef || undefined },
-    { enabled: seesMore && !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2 }
+    { enabled: seesMore && !!data?.complaint?.vehiclePlate && (data?.complaint?.vehiclePlate?.length ?? 0) >= 2, retry: retryTransient }
   );
   const vehicleAgents = vehicleAgentsQ.data;
   const [confirm, confirmUi] = useConfirm();
@@ -1287,7 +1291,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
 function ReservationPreview({ bookingId }: { bookingId: string }) {
   const q = trpc.complaints.bookingTimeline.useQuery(
     { bookingId },
-    { enabled: bookingId.length >= 4 }
+    { enabled: bookingId.length >= 4, retry: retryTransient }
   );
   const { data, isLoading } = q;
 
@@ -1627,8 +1631,8 @@ function DutyDriversPanel({
   onPenaltyChange: (v: number) => Promise<void>;
 }) {
   const utils = trpc.useUtils();
-  const candidatesQ = trpc.complaints.findDriversOnDuty.useQuery({ complaintId }, { enabled: canEdit });
-  const attachedQ = trpc.complaints.listAttachedDrivers.useQuery({ complaintId });
+  const candidatesQ = trpc.complaints.findDriversOnDuty.useQuery({ complaintId }, { enabled: canEdit, retry: retryTransient });
+  const attachedQ = trpc.complaints.listAttachedDrivers.useQuery({ complaintId }, { retry: retryTransient });
   const penaltyConfigQ = trpc.complaints.listPenaltyConfig.useQuery();
   const [confirm, confirmUi] = useConfirm();
   const attachMut = trpc.complaints.attachDriver.useMutation({
