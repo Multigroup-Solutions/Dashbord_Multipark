@@ -3,13 +3,15 @@
  * por cidade, só nos parques que operamos — recebido por método, despesas do
  * turno (Passagem de turno), esperado vs contado, quem entregou o dinheiro e
  * quem fechou a caixa, e a correção do dia ("dia certo / não certo" com motivo).
+ * 30a: o dia da caixa vai das 03:00 às 03:00 do dia seguinte (fim do turno da noite).
  */
 import { useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
-import { addDays, lisbonDayOf } from "@shared/lisbonDay";
+import { addDays } from "@shared/lisbonDay";
+import { CASH_DAY_CLOSE_HOUR, lastClosedCashDay } from "@shared/cashDayWindow";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,8 +24,8 @@ const eur = (v: number | null | undefined) => (v == null ? "—" : new Intl.Numb
 export default function CashDayBoard({ projectId }: { projectId?: number }) {
   const { user } = useAuth();
   const canEdit = can(user as any, "caixa", "edit") || can(user as any, "faturacao", "edit");
-  // Por omissão: ontem (o dia já fechado), em Lisboa
-  const [day, setDay] = useState(() => addDays(lisbonDayOf(new Date()), -1));
+  // Por omissão: a última caixa já fechada (30a: a caixa fecha às 03:00 do dia seguinte)
+  const [day, setDay] = useState(() => lastClosedCashDay());
   const q = trpc.cashCheck.dayBoard.useQuery({ day, projectId }, { retry: false });
 
   return (
@@ -32,7 +34,10 @@ export default function CashDayBoard({ projectId }: { projectId?: number }) {
         <Button size="icon" variant="outline" aria-label="Dia anterior" onClick={() => setDay((d) => addDays(d, -1))}><ChevronLeft className="h-4 w-4" /></Button>
         <Input type="date" value={day} onChange={(e) => e.target.value && setDay(e.target.value)} className="h-9 w-40" aria-label="Dia" />
         <Button size="icon" variant="outline" aria-label="Dia seguinte" onClick={() => setDay((d) => addDays(d, 1))}><ChevronRight className="h-4 w-4" /></Button>
-        <p className="text-xs text-muted-foreground">Dia de Lisboa (00:00–24:00). Só os parques que operamos.</p>
+        <p className="text-xs text-muted-foreground">
+          Dia da caixa: {q.data?.available ? q.data.window : `${String(CASH_DAY_CLOSE_HOUR).padStart(2, "0")}:00 → ${String(CASH_DAY_CLOSE_HOUR).padStart(2, "0")}:00 do dia seguinte`} (fecha no fim do turno da noite). Só os parques que operamos.
+        </p>
+        {q.data?.available && !q.data.closed && <Badge variant="outline" className="border-amber-300 text-amber-800">Em curso — fecha {q.data.closesAt}</Badge>}
       </div>
       {q.isLoading ? (
         <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
@@ -43,14 +48,14 @@ export default function CashDayBoard({ projectId }: { projectId?: number }) {
       ) : q.data.cities.length === 0 ? (
         <Card className="p-8 text-center text-sm text-muted-foreground">Sem parques operados no teu âmbito.</Card>
       ) : (
-        q.data.cities.map((c) => <CityCard key={c.city} c={c} day={day} canEdit={canEdit} />)
+        q.data.cities.map((c) => <CityCard key={c.city} c={c} day={day} canEdit={canEdit} closed={q.data.available && q.data.closed} closesAt={q.data.available ? q.data.closesAt : ""} />)
       )}
     </div>
   );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function CityCard({ c, day, canEdit }: { c: any; day: string; canEdit: boolean }) {
+function CityCard({ c, day, canEdit, closed, closesAt }: { c: any; day: string; canEdit: boolean; closed: boolean; closesAt: string }) {
   const utils = trpc.useUtils();
   const [reason, setReason] = useState("");
   const [showLog, setShowLog] = useState(false);
@@ -70,7 +75,7 @@ function CityCard({ c, day, canEdit }: { c: any; day: string; canEdit: boolean }
           {c.label}
           {rv?.status === "ok" && <Badge className="bg-emerald-600"><CheckCircle2 className="mr-1 h-3 w-3" />Dia certo</Badge>}
           {rv?.status === "not_ok" && <Badge variant="destructive"><CircleAlert className="mr-1 h-3 w-3" />Dia não certo</Badge>}
-          {!rv && <Badge variant="outline">Por rever</Badge>}
+          {!rv && <Badge variant="outline">{closed ? "Por rever" : "Em curso"}</Badge>}
           {rv && <span className="text-xs font-normal text-muted-foreground">{rv.byName ?? "—"} · {rv.at ?? ""}{rv.reason ? ` — ${rv.reason}` : ""}</span>}
         </CardTitle>
       </CardHeader>
@@ -124,9 +129,10 @@ function CityCard({ c, day, canEdit }: { c: any; day: string; canEdit: boolean }
         {canEdit && (
           <div className="space-y-2 rounded-md border bg-muted/30 p-2">
             <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder={diff != null && Math.abs(diff) >= 0.01 ? "Há diferença: diz o motivo (o que mudou, se está correto ou não…)" : "Motivo / nota (obrigatório se não estiver certo)"} aria-label={`Motivo — ${c.label}`} />
+            {!closed && <p className="text-xs text-amber-800">A caixa deste dia só fecha {closesAt} (fim do turno da noite): a correção do dia faz-se depois.</p>}
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" disabled={review.isPending} onClick={() => review.mutate({ day, city: c.city, status: "ok", reason: reason || undefined })}><CheckCircle2 className="mr-1 h-4 w-4" />Dia certo</Button>
-              <Button size="sm" variant="destructive" disabled={review.isPending} onClick={() => review.mutate({ day, city: c.city, status: "not_ok", reason: reason || undefined })}><CircleAlert className="mr-1 h-4 w-4" />Dia não certo</Button>
+              <Button size="sm" disabled={review.isPending || !closed} onClick={() => review.mutate({ day, city: c.city, status: "ok", reason: reason || undefined })}><CheckCircle2 className="mr-1 h-4 w-4" />Dia certo</Button>
+              <Button size="sm" variant="destructive" disabled={review.isPending || !closed} onClick={() => review.mutate({ day, city: c.city, status: "not_ok", reason: reason || undefined })}><CircleAlert className="mr-1 h-4 w-4" />Dia não certo</Button>
               <Button size="sm" variant="ghost" onClick={() => setShowLog((v) => !v)}>{showLog ? "Esconder histórico" : "Histórico"}</Button>
             </div>
             {showLog && (
