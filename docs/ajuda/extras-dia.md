@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -20,6 +20,10 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Lisboa**: 2 pessoas → 75 min por carro; 3–4 → 60 min; 5–6 → 45 min; 7 ou mais → 30 min.
    - **Porto e Faro**: no mínimo 2 extras + o TL; com 3 pessoas → 30 min por carro (2 condutores × 2 carros = 4 carros por hora).
    - Os números da previsão e da escala automática são **extras além do TL**. A regra muda-se em Definições → Parâmetros ("Tempo por carro conforme as pessoas no turno").
+   - **Onde é cada serviço** (regra do dono, 5 out): no aeroporto cada reserva pesa um bloco de 20 min, e o **T2** pesa 30 min nas recolhas. Só são **fora do aeroporto** (60 min por reserva, linha a vermelho):
+     - **Lisboa:** Oriente, Sete Rios, Rossio e Entrecampos. Tudo o resto é T1 ou T2, diga o tipo de entrega o que disser.
+     - **Porto:** nada; é tudo no aeroporto.
+     - **Faro:** só a estação de comboios.
 6. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, desde abril de 2026, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo.
 
 **Separador "Pressão"** (quando é que aperta)
@@ -51,7 +55,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 
 **Recolha pelo meio de uma entrega**
 1. Quem leva um carro ao aeroporto volta ao parque com o carro de uma recolha, se houver uma aí: essa recolha não lhe custa um carro a mais.
-2. Conta como "pelo meio" a recolha no **mesmo terminal**, entre **10 min antes e 30 min depois** da hora da entrega, e só uma recolha por entrega. As entregas "Outro" (morada, hotel, estação) nunca contam.
+2. Conta como "pelo meio" a recolha no **mesmo terminal**, entre **10 min antes e 30 min depois** da hora da entrega, e só uma recolha por entrega. As entregas fora do aeroporto (as estações) nunca contam.
 3. Por baixo da linha da capacidade aparece 🔁 com quantas recolhas são pelo meio e quanto muda o pico de extras.
 4. Liga-se por cidade em Definições → Parâmetros → **Recolha pelo meio de uma entrega** (desligado por omissão). Ligado, a previsão, a escala automática e a estimativa deixam de contar essas recolhas como carro (no T2 fica só a meia extra).
 
