@@ -59,6 +59,8 @@ export interface AdMetricsResult {
   byDay: Array<{ date: string; source: "api" | "legacy"; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number }>;
   /** dia × nó; projectId null = sem cidade / nacional por atribuir. Σ = totals.cost */
   byDayProject: Array<{ date: string; projectId: number | null; cost: number }>;
+  /** 29f: o mesmo, por fornecedor (a fatura do Google substitui só o gasto do Google). Σ = totals.cost */
+  byDayProjectProvider: Array<{ date: string; projectId: number | null; provider: SpendProvider; cost: number }>;
   byCampaign: AdCampaignRow[];
   /** gasto NACIONAL repartido pelas cidades da marca (uma entrada por campanha × nó marca-cidade) */
   nationalShares: Array<{ key: string; accountId: number; projectId: number; cost: number; impressions: number; clicks: number; conversions: number; conversionValue: number }>;
@@ -103,7 +105,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   const today = f.today ?? lisbonToday();
   const empty: AdMetricsResult = {
     totals: { ...emptyTotals(), ...derivedRatios(emptyTotals()) }, byProvider: { google_ads: 0, meta: 0, other: 0 },
-    byProviderTotals: { google_ads: withRatios(emptyTotals()), meta: withRatios(emptyTotals()), other: withRatios(emptyTotals()) }, byDay: [], byDayProject: [], byCampaign: [], nationalShares: [],
+    byProviderTotals: { google_ads: withRatios(emptyTotals()), meta: withRatios(emptyTotals()), other: withRatios(emptyTotals()) }, byDay: [], byDayProject: [], byDayProjectProvider: [], byCampaign: [], nationalShares: [],
     coverage: coverageFor(f.from, f.to, new Set(), new Set(), null, today), meta: { lastDataDay: null, hasDataInPeriod: false }, budgetEstimate: 0, unmappedCampaigns: 0, apiConnected: false, currencyExcluded: [],
   };
   if (f.projectIds?.length === 0) return empty;
@@ -186,11 +188,15 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
   const legacyDays = new Set<string>();
   const byDayMap = new Map<string, AdMetricsResult["byDay"][number]>();
   const byDayProject = new Map<string, { date: string; projectId: number | null; cost: number }>();
-  const addDayProject = (date: string, projectId: number | null, cost: number) => {
+  const byDayProjectProvider = new Map<string, { date: string; projectId: number | null; provider: SpendProvider; cost: number }>();
+  const addDayProject = (date: string, projectId: number | null, cost: number, provider: SpendProvider) => {
     if (!cost) return;
     const k = `${date}|${projectId ?? ""}`;
     const e = byDayProject.get(k) ?? { date, projectId, cost: 0 };
     e.cost += cost; byDayProject.set(k, e);
+    const kp = `${k}|${provider}`;
+    const ep = byDayProjectProvider.get(kp) ?? { date, projectId, provider, cost: 0 };
+    ep.cost += cost; byDayProjectProvider.set(kp, ep);
   };
   const byCampaignMap = new Map<string, AdCampaignRow>();
   const byProvider: Record<SpendProvider, number> = { google_ads: 0, meta: 0, other: 0 };
@@ -216,12 +222,12 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
         const e = nationalShareMap.get(k) ?? { key: `api:${r.accountId}:${r.campaignExternalId}`, accountId: r.accountId, projectId: s.projectId, cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
         e.cost += microsToAmount(full.costMicros) * s.fraction; e.impressions += full.impressions * s.fraction; e.clicks += full.clicks * s.fraction; e.conversions += full.conversions * s.fraction; e.conversionValue += microsToAmount(full.conversionValueMicros) * s.fraction;
         nationalShareMap.set(k, e);
-        addDayProject(day, s.projectId, microsToAmount(full.costMicros) * s.fraction);
+        addDayProject(day, s.projectId, microsToAmount(full.costMicros) * s.fraction, provider);
       }
       // marca sem cidades na árvore → o nacional fica por atribuir (só sem filtro)
-      if (!shares.length && !filterSet) addDayProject(day, null, microsToAmount(full.costMicros));
+      if (!shares.length && !filterSet) addDayProject(day, null, microsToAmount(full.costMicros), provider);
     } else {
-      addDayProject(day, r.projectId != null ? Number(r.projectId) : null, microsToAmount(t.costMicros));
+      addDayProject(day, r.projectId != null ? Number(r.projectId) : null, microsToAmount(t.costMicros), provider);
     }
     const d = byDayMap.get(day) ?? { date: day, source: "api" as const, cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
     d.cost += microsToAmount(t.costMicros); d.impressions += t.impressions; d.clicks += t.clicks; d.conversions += t.conversions; d.conversionValue += microsToAmount(t.conversionValueMicros);
@@ -250,7 +256,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     totals = addTotals(totals, t);
     providerTotals[provider] = addTotals(providerTotals[provider], t);
     byProvider[provider] += spend;
-    addDayProject(day, r.projectId != null ? Number(r.projectId) : null, spend);
+    addDayProject(day, r.projectId != null ? Number(r.projectId) : null, spend, provider);
     const d = byDayMap.get(day) ?? { date: day, source: "legacy" as const, cost: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
     d.cost += spend; d.impressions += t.impressions; d.clicks += t.clicks; d.conversions += t.conversions; d.conversionValue += Number(r.conversionValue ?? 0);
     byDayMap.set(day, d);
@@ -295,6 +301,7 @@ export async function getAdMetrics(f: AdMetricsFilters): Promise<AdMetricsResult
     byProviderTotals: { google_ads: withRatios(providerTotals.google_ads), meta: withRatios(providerTotals.meta), other: withRatios(providerTotals.other) },
     byDay: Array.from(byDayMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
     byDayProject: Array.from(byDayProject.values()).sort((a, b) => a.date.localeCompare(b.date)),
+    byDayProjectProvider: Array.from(byDayProjectProvider.values()).sort((a, b) => a.date.localeCompare(b.date)),
     byCampaign: Array.from(byCampaignMap.values()).sort((a, b) => b.cost - a.cost),
     nationalShares: Array.from(nationalShareMap.values()),
     coverage,

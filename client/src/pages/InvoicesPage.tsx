@@ -466,8 +466,8 @@ export default function InvoicesPage() {
                 </CardContent>
               </Card>
 
-              {/* (Marketing saiu da Faturação: as faturas do Google entram pelas
-                  Despesas normais — o detalhe vê-se no módulo Marketing.) */}
+              {/* 29f: os anúncios (Google Ads / Meta) entram nas despesas por projeto — o gasto das
+                  plataformas até chegar a fatura; nos dias do período de consumo, a fatura. */}
 
               {/* Salários por projeto (rateados ao dia) */}
               <Card>
@@ -769,6 +769,9 @@ function QualityWarnings({ quality }: { quality: any }) {
   const cov = quality.salesCommissionsCoveredByOperational;
   if (cov?.count > 0) items.push({ key: "cov", text: <>Comissão de venda não cobrada em {cov.count} reserva(s) ({fmt(cov.revenueGross)}): o parceiro é operacional e já opera esse centro</> });
   if ((quality.tsuCategoriesExcluded ?? []).length > 0) items.push({ key: "tsu", text: <>A TSU entra pelas Despesas quando é paga, mas a categoria <strong>{quality.tsuCategoriesExcluded.map((c: any) => c.name).join(", ")}</strong> está "fora da margem" ({fmt(quality.tsuCategoriesExcluded.reduce((s: number, c: any) => s + c.total, 0))} sem contar). Tira o visto em Despesas → Categorias, IVA e margem.</> });
+  const ad = quality.adCosts;
+  if (ad?.error) items.push({ key: "aderr", text: <>Não deu para ler o gasto dos anúncios ({ad.error}) — o marketing pode estar a menos.</> });
+  if ((ad?.invoicesWithoutPeriod ?? []).length > 0) items.push({ key: "adnp", text: <>Faturas do Google/Meta <strong>sem período de consumo</strong> ({ad.invoicesWithoutPeriod.length}, {fmt(ad.invoicesWithoutPeriod.reduce((s: number, x: any) => s + x.amount, 0))}) não contam — conta o gasto das plataformas. Indica o período (de/até) na despesa para a fatura o substituir.</> });
   if ((quality.partnersRateMissing ?? []).length > 0) items.push({ key: "rate", text: <>Parceiros sem taxa de comissão: {quality.partnersRateMissing.join(", ")}</> });
   if ((quality.partnerConflicts ?? []).length > 0) items.push({ key: "conf", text: <>Campanhas ligadas a mais do que um parceiro: {quality.partnerConflicts.map((c: any) => c.key).join(", ")}</> });
   if (items.length === 0) return null;

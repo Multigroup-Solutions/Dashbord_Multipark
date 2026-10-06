@@ -255,13 +255,15 @@ describe("pessoal", () => {
 
 // ─── 5. Qualidade ────────────────────────────────────────────────────────────
 describe("qualidade", () => {
-  it("reservas sem centro (valor e contagem) e marketing só a pedido", async () => {
+  it("reservas sem centro (valor e contagem); a cobertura antiga de marketing só a pedido", async () => {
     live.delivered = [agg({ count: 3, total: 300 }), agg({ projectId: 10, total: 100 })];
     fakeDb = makeFakeDb({}).db;
     const r = await computeFinance({ from: "2026-08-01", to: "2026-08-31", today: "2026-09-10", rates: DEFAULT_FINANCE_RATES });
     expect(r.quality.bookingsWithoutProject).toEqual({ count: 3, total: 300 });
     expect(r.quality.marketingExcluded).toBeNull();
-    expect(adMetrics).not.toHaveBeenCalled();
+    // 29f (Jorge, 6 out 2026): os anúncios passaram a ser custo — o gasto das plataformas lê-se sempre
+    expect(adMetrics).toHaveBeenCalled();
+    expect(r.quality.adCosts).toMatchObject({ platform: 0, invoice: 0, invoicesWithoutPeriod: [] });
     fakeDb = makeFakeDb({}).db;
     const withMkt = await computeFinance({ from: "2026-08-01", to: "2026-08-31", today: "2026-09-10", rates: DEFAULT_FINANCE_RATES, includeMarketingCoverage: true });
     expect(withMkt.quality.marketingExcluded).toEqual({ adSpend: 50, marketingExpenses: 7 });
