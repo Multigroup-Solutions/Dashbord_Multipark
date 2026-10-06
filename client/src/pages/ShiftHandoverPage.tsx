@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { trpc } from "@/lib/trpc";
 import { UniDateNav } from "@/components/DateRangeNav";
+import { ShiftExpensesCard } from "@/components/ShiftExpensesCard";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -490,8 +491,11 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {NumInput({ k: "frontPouchValue", label: "Valor bolsa do front (€)", decimal: true })}
             {cityFields.terminalPouch && NumInput({ k: "terminalPouchValue", label: "Valor bolsa terminal (€)", decimal: true })}
-            {NumInput({ k: "ticketsExpensesPaid", label: "Tickets/despesas pagos no dia (€)", decimal: true })}
           </div>
+          {/* 29d: as despesas do turno lançam-se aqui, uma a uma, com o talão — entram nas Despesas e abatem à caixa do dia.
+              O total vai para "Tickets/despesas pagos" da passagem. */}
+          <ShiftExpensesCard date={date} shift={shift} city={city} canEdit={canEdit}
+            onTotal={(t) => setF((prev) => (t > 0 && prev.ticketsExpensesPaid !== String(t) ? { ...prev, ticketsExpensesPaid: String(t) } : prev))} />
 
           {/* Material */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Material</p>

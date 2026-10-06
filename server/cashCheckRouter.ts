@@ -404,6 +404,45 @@ export const cashCheckRouter = router({
     return { success: true };
   }),
 
+  // ─── 29d: Caixa por dia (por cidade, só os parques que operamos) ──────────
+
+  /** Recebido por método, despesas do turno, esperado/contado, condutores (entregou / fechou) e a correção do dia. */
+  dayBoard: protectedProcedure.input(z.object({ day: DAY, projectId: z.number().optional() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { loadCashDay } = await import("./cashDay");
+    const { scopedCityNamesLive } = await import("./cityScope");
+    return loadCashDay(input.day, scopedCityNamesLive());
+  }),
+
+  /** "Dia certo / não certo" de uma cidade, com motivo (precisa de Caixa → editar). Fica registado. */
+  dayReview: protectedProcedure.input(z.object({
+    day: DAY,
+    city: z.enum(["lisbon", "porto", "faro"]),
+    status: z.enum(["ok", "not_ok"]),
+    reason: z.string().trim().max(2000).optional(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    requireAccess(ctx.user, cashModuleFor(ctx.user, "edit"), "edit");
+    const { loadCashDay, dayReviewProblem, saveCashDayReview, CASH_DAY_CITY_LABEL } = await import("./cashDay");
+    const { scopedCityNamesLive } = await import("./cityScope");
+    const board = await loadCashDay(input.day, scopedCityNamesLive());
+    if (!board.available) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `BD da Multipark sem resposta: ${board.reason}` });
+    const c = board.cities.find((x) => x.city === input.city);
+    if (!c) throw new TRPCError({ code: "FORBIDDEN", message: "Esta cidade não está no teu âmbito." });
+    const problem = dayReviewProblem({ status: input.status, reason: input.reason, difference: c.difference });
+    if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
+    await saveCashDayReview({ day: input.day, city: input.city, status: input.status, reason: input.reason ?? null, expected: c.expectedCash, counted: c.counted, userId: ctx.user.id });
+    const { logActivity } = await import("./db");
+    await logActivity({ userId: ctx.user.id, action: "update", entity: "cash_day", details: `Caixa ${input.day} ${CASH_DAY_CITY_LABEL[input.city]}: ${input.status === "ok" ? "dia certo" : "dia NÃO certo"}${input.reason ? ` — ${input.reason.slice(0, 200)}` : ""} (esperado ${c.expectedCash} €, contado ${c.counted ?? "—"} €)` }).catch(() => {});
+    return { ok: true };
+  }),
+
+  dayReviewLog: protectedProcedure.input(z.object({ day: DAY, city: z.enum(["lisbon", "porto", "faro"]) })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { cashDayReviewLog } = await import("./cashDay");
+    return cashDayReviewLog(input.day, input.city);
+  }),
+
   // ─── Fase 3: contagem da caixa (R24) ─────────────────────────────────────
 
   /** Parque + dia: recebido em dinheiro (Multipark ao vivo), gastos pagos da caixa e a contagem gravada. */

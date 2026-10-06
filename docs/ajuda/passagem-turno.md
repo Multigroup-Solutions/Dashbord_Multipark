@@ -53,3 +53,5 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
 - Quem só consulta vê a passagem, mas não grava, não gera o resumo nem confirma.
 - No telemóvel, o **Histórico** mostra um cartão por passagem.
 - A supervisão vê o **Resumo do dia** (entregas lentas, recolhas atrasadas, reclamações do dia). Num dia com movimentos a mais aparece o aviso de que os tempos são só de uma parte do dia.
+
+**Despesas do turno** (em Valores): lança cada despesa paga com o dinheiro da caixa — descrição, valor e foto do talão. Entra logo nas **Despesas** (paga, dinheiro, centro da cidade) e abate à **caixa do dia** (Financeiro → Caixa → Por dia). **Anular** deixa-a cancelada (nunca se apaga).

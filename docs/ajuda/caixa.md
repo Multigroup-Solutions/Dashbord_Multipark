@@ -2,7 +2,7 @@
 modulo: caixa
 titulo: Caixa
 rotas: /caixa
-palavras: caixa, dinheiro, recebido, por cobrar, no-shows, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos, contagem, fecho de caixa
+palavras: caixa por dia, quem fechou, quem entregou, despesas do turno, dia certo, dia não certo, caixa, dinheiro, recebido, por cobrar, no-shows, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos, contagem, fecho de caixa
 ---
 # Caixa
 
@@ -11,6 +11,12 @@ palavras: caixa, dinheiro, recebido, por cobrar, no-shows, correção de caixa, 
 As reservas e os pagamentos são lidos **ao vivo da base de dados da Multipark**, só dos parques que operamos.
 
 **Separadores**
+- **Por dia** (abre aqui; por omissão ontem): a caixa de cada dia **por cidade**, só nos parques que operamos.
+  - **Recebido** no dia por método (dinheiro, multibanco/TPA, online/Stripe, MB Way…), pelos pagamentos registados na Multipark nesse dia (hora de Lisboa).
+  - **Despesas do turno**: as que o team leader lançou na **Passagem de turno** (ver abaixo). Abatem ao dinheiro.
+  - **Tem de estar em dinheiro** = recebido em dinheiro − despesas do turno − gastos escritos na contagem. **Contado** = soma das contagens dos parques; **Diferença** = contado − tem de estar ("—" enquanto nenhum parque estiver contado).
+  - **Por condutor** (quem fez a saída): saídas, valor, em dinheiro, se **entregou o dinheiro ao líder** e se a **caixa foi fechada** (e por quem). Quem tem dinheiro por entregar aparece primeiro.
+  - **Correção do dia**: **Dia certo** ou **Dia não certo**, com o motivo (o que mudou, se está correto ou não). "Não certo" pede sempre motivo; "certo" com diferença também. Cada gravação fica no **Histórico** (quem, quando, esperado e contado). Precisa de Caixa → editar.
 - **Resumo**: o dinheiro no período — recebido (por método de pagamento), por cobrar, no-shows pré-pagos e canceladas com pagamento (só informativo). As despesas a pagar estão na **Previsão** da Faturação.
 - **Correção de caixa**: casos da varredura automática, contagem da caixa por parque e dia, multibanco do dia (talões), confirmar pagamentos (Stripe, Viva, fim do mês), preços iniciais e o **Comparar** era / é.
 
@@ -54,3 +60,8 @@ As reservas e os pagamentos são lidos **ao vivo da base de dados da Multipark**
 4. São comparadas até 200 saídas de cada vez. Se houver mais, carrega em **Comparar as seguintes**.
 
 O botão **Comparar** é só leitura. Além dele, desde 29 set 2026 há uma **varredura automática** (trabalho `cash-sweep`, de 3 em 3 horas, e `cash-close` todas as manhãs para as saídas de ontem e anteontem): vê as reservas dos nossos parques que mudaram, as que estão dentro e as que saíram nas últimas 48 h, guarda um retrato do dinheiro sempre que muda (assim há "era" mesmo quando não chega webhook) e abre **casos** com as mesmas regras e mais estas: desconto ou campanha depois do check-in, reembolso por explicar, mudou de dia ou de parque depois do fecho, reserva desaparecida, pro ou avença marcado tarde, valores do parceiro mudados, serviço feito sem cobrança, sem fatura (48 h depois de sair paga, para quem pediu fatura com NIF; as outras fazem-se no fim do mês e só contam passado o fecho do mês + 48 h), fatura ≠ pago, pagamento online com disputa ou link falhado, crédito usado, caixa ou validação reaberta, dinheiro do condutor por entregar (o condutor entrega ao líder no próprio dia — validação do condutor até às 6 h da manhã seguinte — e o líder entrega ao back office no dia seguinte — dinheiro conferido até ao fim desse dia; a tolerância é sempre 0,01 €), permissões de dinheiro de um agente mudadas e parque sem webhooks com movimento. Um caso resolve-se sozinho quando a Multipark deixa de ter a divergência e reabre se ela voltar. O "era" é a memória do webhook, que o dashboard guarda desde 28 set 2026 e **nunca reescreve nem apaga**: em cada webhook (criação, alteração, entrada, saída…) lê a reserva toda na base de dados da Multipark e guarda uma linha nova. Reservas sem webhooks guardados usam, no Comparar, a cópia antiga como "era" (marcada "cópia antiga"). Vê quem tem a Caixa (ou a Faturação) e pode ver os totais financeiros.
+
+**Despesas do turno (Passagem de turno)**
+1. Na **Passagem de turno**, em **Valores**, o cartão **Despesas do turno**: escreve a descrição e o valor, tira a **foto do talão** e carrega em **Lançar**.
+2. A despesa entra **logo nas Despesas** (paga, em dinheiro, no centro de custos da cidade, com o talão) e **abate à caixa do dia** (Caixa → Por dia).
+3. O total vai para "Tickets/despesas pagos" da passagem. **Anular** deixa a despesa cancelada (sai da caixa e dos totais, fica no histórico) — só quem a lançou ou quem gere a passagem de turno.

@@ -3690,6 +3690,58 @@ export const appRouter = router({
       return { aiSummary: text, saved: savedId != null };
     }),
 
+    // 29d (Jorge, 6 out 2026): despesas do turno — entram DIRETAS nas Despesas
+    // (pagas, dinheiro, centro da cidade, talão como fatura) e na caixa do dia.
+    expenses: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(HANDOVER_CITIES),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_turno", "view");
+      const { listShiftExpenses, shiftExpensesTotal } = await import("./shiftExpenses");
+      const rows = await listShiftExpenses({ day: input.date, shift: input.shift, city: input.city, includeCancelled: true });
+      return { rows, total: shiftExpensesTotal(rows) };
+    }),
+    addExpense: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      shift: z.enum(["morning", "night"]),
+      city: z.enum(HANDOVER_CITIES),
+      description: z.string().trim().min(2).max(255),
+      amount: z.number().finite().min(0.01).max(100_000),
+      invoiceKey: z.string().max(500).nullable().optional(),
+      invoiceUrl: z.string().max(2000).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_turno", "edit");
+      if (input.date > maxHandoverDate()) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível lançar despesas para depois de amanhã." });
+      const { addShiftExpense } = await import("./shiftExpenses");
+      try {
+        return await addShiftExpense({ day: input.date, shift: input.shift, city: input.city, description: input.description, amount: Math.round(input.amount * 100) / 100, invoiceKey: input.invoiceKey ?? null, invoiceUrl: input.invoiceUrl ?? null, user: { id: ctx.user.id, name: ctx.user.name ?? null } });
+      } catch (e: any) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e).slice(0, 200) });
+      }
+    }),
+    // Foto do talão (mesmo sítio que as faturas das Despesas: invoices/<userId>/…)
+    uploadReceipt: protectedProcedure.input(z.object({
+      fileName: z.string().max(200),
+      fileBase64: z.string().max(14_000_000),
+      mimeType: z.string().max(100),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_turno", "edit");
+      if (!/^(image\/|application\/pdf$)/.test(input.mimeType)) throw new TRPCError({ code: "BAD_REQUEST", message: "O talão tem de ser uma foto ou um PDF." });
+      const suffix = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+      const safeName = input.fileName.replace(/[^\w.\-]+/g, "_").slice(0, 120) || "talao";
+      const key = `invoices/${ctx.user.id}/${suffix}-${safeName}`;
+      const { url } = await storagePut(key, Buffer.from(input.fileBase64, "base64"), input.mimeType);
+      return { url, key };
+    }),
+    cancelExpense: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_turno", "edit");
+      const { cancelShiftExpense } = await import("./shiftExpenses");
+      const r = await cancelShiftExpense({ id: input.id, user: { id: ctx.user.id }, canManage: canAccess(ctx.user as any, "passagem_turno", "manage") });
+      if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+      return r;
+    }),
+
     // "Recebi" — o team leader que entra confirma (nunca o autor).
     ack: protectedProcedure.input(z.object({
       id: z.number().int().positive(),

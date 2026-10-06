@@ -743,6 +743,8 @@ export const expenses = mysqlTable("expenses", {
 	status: mysqlEnum(['pending','paid','overdue','cancelled']).default('pending').notNull(),
 	// 0465 (D4): "Eliminar" esconde a despesa de todo o lado mas fica guardada (só o super admin a vê, a pedido).
 	deletedAt: timestamp({ mode: 'string' }),
+	// 0470 (29d): despesa do turno lançada na Passagem de turno — "shift:<dia>:<turno>:<cidade>"
+	cashSource: varchar({ length: 64 }),
 	deletedById: int(),
 	categoryId: int(),
 	projectId: int(),
