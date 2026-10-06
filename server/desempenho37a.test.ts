@@ -115,6 +115,11 @@ vi.mock("./db", () => ({
       // chamadas atendidas pela conta extra da Bea, às 01h UTC de 6 out = 02h Lisboa → dia operacional 5 out
       if (/FROM whatsapp_calls/.test(text) && /answeredByUserId/.test(text)) return [[{ u: 22, h: "2026-10-06 01", n: 3 }]];
       if (/FROM mail_messages/.test(text)) return [[{ u: 12, h: "2026-10-05 10", n: 4 }]];
+      // 37b: CRM por duas fontes (registo + junções) somam; perdidos e achados; fecho de mês de parceiros
+      if (/FROM activity_logs/.test(text) && /crm_client/.test(text)) return [[{ u: 12, h: "2026-10-05 11", n: 2 }]];
+      if (/FROM crm_merge_events/.test(text)) return [[{ u: 12, h: "2026-10-05 12", n: 1 }]];
+      if (/FROM lost_found_messages/.test(text)) return [[{ u: 12, h: "2026-10-05 13", n: 1 }]];
+      if (/FROM partner_month_closes/.test(text)) return [[{ u: 12, h: "2026-10-05 14", n: 2 }]];
       if (/FROM cash_day_review_log/.test(text)) throw new Error("tabela em falta");
       if (/FROM extras_dia_assignments/.test(text)) return [[]];
       return [[]];
@@ -139,7 +144,8 @@ describe("37a — juntar as fontes por pessoa", () => {
     expect(r.people.map((p) => p.name)).toEqual(["Bea Front"]);
     expect(r.people[0].totals).toMatchObject({ callsAnswered: 3, emails: 4, created: 2, updated: 1, hours: 7 });
     expect(r.people[0].series.callsAnswered).toEqual([3, 0, 0, 0, 0, 0, 0]); // dia operacional 5 out (segunda)
-    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1);
+    expect(r.people[0].totals).toMatchObject({ crmUpdates: 3, lostFound: 1, partnerClosings: 2 });
+    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1 + 3 * 1 + 1 * 2 + 2 * 3);
     expect(r.notes.join(" ")).toMatch(/Não deu para ler: .*correções de caixa/);
   });
 });
@@ -156,3 +162,28 @@ describe("37a — só o super admin", () => {
     expect(src("server/peoplePerformance.ts")).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b\s+(INTO|\w+\s+SET|FROM)/);
   });
 });
+
+describe("37b — mais coisas no apanhado", () => {
+  it("voos de regresso: alterações à reserva que mexem no voo, por agente e dia operacional; só leitura com parâmetros", async () => {
+    const { buildReturnFlightsSql } = await import("./multiparkDb/perfReturnFlights");
+    const q = buildReturnFlightsSql({ userIds: ["a1", "a1", "a2"], from: "2026-10-01 02:00:00", to: "2026-11-01 03:00:00" });
+    expect(q.sql).toContain(`h."modifiedFields" ILIKE '%returnFlight%'`);
+    expect(q.sql).toContain(`h."changeType"::text = 'UPDATE'`);
+    expect(q.sql).not.toMatch(/\b(INSERT|DELETE)\b/);
+    expect(q.params).toEqual(["a1", "a2", "2026-10-01 02:00:00", "2026-11-01 03:00:00", 50000]);
+    expect(() => buildReturnFlightsSql({ userIds: [], from: "x", to: "y" })).toThrow(/Sem agentes/);
+  });
+
+  it("as novas métricas existem e entram nas abas do escritório, supervisão e team leaders", () => {
+    for (const k of ["partnerAccounts", "partnerClosings", "extrasDia", "crmUpdates", "lostFound", "returnFlights"] as const) {
+      expect(PERF_METRICS[k]).toBeTruthy();
+    }
+    expect(GROUP_VIEW.office.columns).toEqual(expect.arrayContaining(["returnFlights", "crmUpdates", "lostFound", "partnerAccounts", "partnerClosings"]));
+    expect(GROUP_VIEW.supervision.columns).toEqual(expect.arrayContaining(["extrasDia", "partnerClosings", "crmUpdates", "lostFound"]));
+    expect(GROUP_VIEW.teamleaders.columns).toEqual(expect.arrayContaining(["extrasDia", "returnFlights", "updated", "lostFound"]));
+    const s = src("server/peoplePerformance.ts");
+    expect(s).toContain("sql`partner_month_closes`, sql`closedBy`, sql`closedAt`");
+    expect(s).toContain("sql`extras_dia_assignments`, sql`createdById`, sql`createdAt`");
+  });
+});
+

@@ -54,6 +54,17 @@ function userSources(start: string, end: string): Array<{ key: PerfMetric; label
     src("leadsActions", "leads", sql`activity_logs`, sql`userId`, sql`createdAt`,
       sql`entity IN ('extra_lead', 'extra_leads') AND action IN ('extra_lead_status', 'extra_lead_contact', 'extra_lead_convert', 'extra_lead_city')`),
     src("handovers", "passagens de turno", sql`shift_handovers`, sql`filledById`, sql`createdAt`),
+    // 37b: contas e fecho de mês dos parceiros, extras do dia, CRM, perdidos e achados
+    src("partnerAccounts", "contas de parceiros", sql`activity_logs`, sql`userId`, sql`createdAt`,
+      sql`entity IN ('partnership', 'agent_partner') AND action <> 'sync'`),
+    src("partnerClosings", "fechos de parceiros", sql`partner_month_closes`, sql`closedBy`, sql`closedAt`),
+    src("extrasDia", "extras do dia", sql`extras_dia_assignments`, sql`createdById`, sql`createdAt`),
+    src("crmUpdates", "CRM", sql`activity_logs`, sql`userId`, sql`createdAt`,
+      sql`entity IN ('crm_client', 'crm_contact', 'crm', 'crm_merge_suggestion')`),
+    src("crmUpdates", "CRM (junções)", sql`crm_merge_events`, sql`mergedBy`, sql`mergedAt`),
+    src("lostFound", "perdidos e achados", sql`activity_logs`, sql`userId`, sql`createdAt`,
+      sql`entity IN ('lost_found', 'lost_found_driver', 'lost_found_return_photo')`),
+    src("lostFound", "perdidos e achados (mensagens)", sql`lost_found_messages`, sql`userId`, sql`createdAt`),
   ];
 }
 
@@ -183,6 +194,24 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (failed.length) notes.push(`Não deu para ler: ${failed.sort().join(", ")}.`);
   }
 
+  // ── 37b: voos de regresso registados na Multipark (alterações ao voo), por agente ──
+  if (ids.length && o.group !== "drivers") {
+    const idList = sql.join(ids.map((x) => sql`${x}`), sql`, `);
+    const agentToEmp = new Map<string, number>();
+    for (const e of rowsOf(await db.execute(sql`SELECT id, multiparkAgentUserId FROM employees WHERE id IN (${idList}) AND multiparkAgentUserId IS NOT NULL`).catch(() => [[]]))) {
+      agentToEmp.set(String(e.multiparkAgentUserId), Number(e.id));
+    }
+    for (const a of rowsOf(await db.execute(sql`SELECT employeeId, agentUserId FROM employee_agents WHERE employeeId IN (${idList})`).catch(() => [[]]))) {
+      if (!agentToEmp.has(String(a.agentUserId))) agentToEmp.set(String(a.agentUserId), Number(a.employeeId));
+    }
+    if (agentToEmp.size) {
+      const [{ readReturnFlights }, { safeMultiparkRead }] = await Promise.all([import("./multiparkDb/perfReturnFlights"), import("./multiparkDb/read")]);
+      const rf = await safeMultiparkRead("desempenho (voos de regresso)", () => readReturnFlights({ userIds: [...agentToEmp.keys()], fromMs: range.startMs, toMs: range.endMs }));
+      if (rf.available) for (const x of rf.data) { const emp = agentToEmp.get(x.userId); if (emp != null) put(emp, x.day, { returnFlights: x.n }); }
+      else notes.push(`Voos de regresso: a Multipark não respondeu (${rf.reason}).`);
+    }
+  }
+
   // ── Escala: dias como team leader e quantas pessoas tinha ──
   try {
     const asg = rowsOf(await db.execute(sql`SELECT DATE_FORMAT(assignmentDate, '%Y-%m-%d') AS day, city, shift, employeeId, isTeamLeader
@@ -236,7 +265,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   groupTotals.hours = Math.round(groupTotals.hours * 10) / 10;
   groupTotals.km = Math.round(groupTotals.km * 10) / 10;
   groupTotals.evalPoints = Math.round(groupTotals.evalPoints * 10) / 10;
-  notes.push("Telefonemas da central: ainda não há ligação (entram quando houver). Emails contam só os enviados pela dashboard.");
+  notes.push("Telefonemas da central: ainda não há ligação (entram quando houver). Emails contam só os enviados pela dashboard. Cobranças de parceiros: a dashboard ainda não guarda quem as regista (entram os fechos de mês).");
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
     people: out, groupTotals, groupSeries, speedLimit, notes };
 }
