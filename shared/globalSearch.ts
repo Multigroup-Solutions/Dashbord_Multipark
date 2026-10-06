@@ -173,6 +173,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "despesas", label: "Despesas", path: "/despesas", modules: ["despesas"], keywords: ["despesas", "faturas", "recibos"], kind: "page" },
   { id: "parcerias", label: "Parcerias", path: "/parcerias", modules: ["parcerias"], keywords: ["parcerias", "parceiros", "agencias"], kind: "page" },
   { id: "faturacao", label: "Faturação", path: "/faturacao", modules: ["faturacao"], keywords: ["faturacao", "faturas"], kind: "page" },
+  { id: "caixa", label: "Caixa", path: "/caixa", modules: ["caixa", "faturacao"], keywords: ["caixa", "correcao de caixa", "fecho de caixa", "dinheiro", "multibanco", "stripe"], kind: "page" },
   { id: "marketing", label: "Marketing", path: "/marketing", modules: ["marketing"], keywords: ["marketing", "anuncios", "google ads", "seo"], kind: "page" },
   { id: "dashboards", label: "Dashboards", path: "/dashboards", modules: ["dashboards"], keywords: ["dashboards", "graficos", "kpi"], kind: "page" },
   { id: "financeiro", label: "Financeiro", path: "/financeiro", modules: ["financeiro"], keywords: ["financeiro", "receita", "margem"], kind: "page" },

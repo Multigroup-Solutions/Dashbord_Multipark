@@ -3482,7 +3482,9 @@ export const appRouter = router({
       to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       projectId: z.number().optional(),
     })).query(async ({ ctx, input }) => {
-      await requireFinanceTotals(ctx.user, "faturacao", "view");
+      // 29c: a Caixa tem módulo próprio (quem já tinha a Faturação continua a ver)
+      const { cashModuleFor } = await import("./cashCheck/access");
+      await requireFinanceTotals(ctx.user, cashModuleFor(ctx.user, "view"), "view");
       const { computeCash } = await import("./finance/cash");
       return computeCash(input);
     }),

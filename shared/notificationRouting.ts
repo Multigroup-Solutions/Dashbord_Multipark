@@ -198,11 +198,11 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "rh_salarios", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
 
   K({ kind: "cash_case_alert", group: "financeiro", label: "Caixa: casos graves", description: "Correção de caixa: preço zerado, pago ≠ esperado, caixa fechada com divergência ou reaberta, reembolso por explicar, dinheiro do condutor por entregar e contagem ≠ esperado (1 aviso por caso).",
-    module: "faturacao", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true }),
+    module: "caixa", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "partner_close_alert", group: "financeiro", label: "Parceiros: diferenças no fecho do mês", description: "A comparação diária do fecho do mês de parceiros encontrou diferenças NOVAS entre a Multipark e a nossa memória do webhook (reservas que não chegaram, valores ou devido diferentes, sem fatura…).",
     module: "parcerias", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "cash_daily_digest", group: "financeiro", label: "Caixa: resumo diário", description: "Casos da Correção de caixa por explicar (por cidade), depois do fecho do dia.",
-    module: "faturacao", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 12 * 60 }),
+    module: "caixa", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 12 * 60 }),
 
   // ── Marketing ──
   K({ kind: "marketing_alert", group: "marketing", label: "Alertas de marketing", description: "Gasto ou ROAS fora do normal (só críticos).",

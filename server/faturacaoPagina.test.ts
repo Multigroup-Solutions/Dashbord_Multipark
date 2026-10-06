@@ -9,8 +9,9 @@ describe("Faturação — página", () => {
   it("erro ≠ a carregar: falha da BD da Multipark ou falta de permissão mostra o porquê (antes rodava para sempre)", () => {
     const src = page();
     expect(src).toMatch(/error && !summary \? \(\s*\/\/[^\n]*\n\s*<LoadError message=\{error\.message\}/);
-    expect(src).toContain("if (error && !cash) return <LoadError");
     expect(src).toContain("function LoadError(");
+    // 29c: a Caixa passou para /caixa (CaixaPage) com o mesmo cuidado
+    expect(readFileSync(resolve(import.meta.dirname, "..", "client/src/pages/CaixaPage.tsx"), "utf8")).toContain("if (error && !cash) return <LoadError");
     // sem permissão não se repete o pedido; falha passageira tenta mais 2 vezes
     expect(src).toMatch(/count < 2 && !\["FORBIDDEN", "UNAUTHORIZED", "BAD_REQUEST"\]/);
   });

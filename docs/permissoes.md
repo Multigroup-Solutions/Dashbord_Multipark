@@ -68,6 +68,7 @@
 | Financeiro (totais e dashboards) | — | — | — | — | — | — | — | nacional VEXG | nacional VEXG |
 | Anual | — | — | — | — | — | — | — | — | nacional VEXG |
 | Faturação | — | — | — | — | — | — | — | — | nacional VEXG |
+| Caixa (por dia e correção) | — | — | — | — | — | — | — | — | nacional VEXG |
 | **Dashboards** |  |  |  |  |  |  |  |  |  |
 | Dashboards (sem Faturação) | — | — | — | — | — | — | — | nacional V | nacional V |
 | **Sistema** |  |  |  |  |  |  |  |  |  |

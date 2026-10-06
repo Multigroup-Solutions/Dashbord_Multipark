@@ -73,7 +73,7 @@ export type ModuleId =
   | "disponibilidade_extras" | "whatsapp" | "clientes" | "contactos" | "comunicacao"
   | "reclamacoes" | "criticas" | "ocorrencias" | "perdidos"
   | "utilizadores" | "permissoes" | "sincronizacao" | "integracoes"
-  | "marketing" | "logs" | "financeiro" | "faturacao" | "dashboards" | "anual" | "projetos"
+  | "marketing" | "logs" | "financeiro" | "faturacao" | "caixa" | "dashboards" | "anual" | "projetos"
   | "api_keys" | "definicoes" | "manutencao";
 
 export interface ModuleDef { id: ModuleId; label: string; group: string }
@@ -113,6 +113,7 @@ export const MODULES: readonly ModuleDef[] = [
   { id: "financeiro", label: "Financeiro (totais e dashboards)", group: "Financeiro" },
   { id: "anual", label: "Anual", group: "Financeiro" },
   { id: "faturacao", label: "Faturação", group: "Financeiro" },
+  { id: "caixa", label: "Caixa (por dia e correção)", group: "Financeiro" },
   { id: "dashboards", label: "Dashboards (sem Faturação)", group: "Dashboards" },
   { id: "utilizadores", label: "Utilizadores", group: "Sistema" },
   { id: "permissoes", label: "Permissões", group: "Sistema" },
@@ -275,6 +276,10 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
   projetos: same("national:vem", ...TOP),
   definicoes: same("national:vem", ...TOP),
   faturacao: { super_admin: "national:vexm" },
+  // 29c (Jorge, 6 out 2026): "uma coisa é faturação, outra coisa é caixa" — a Caixa tem
+  // o seu item no menu e módulo próprio, para se dar a quem faz a correção de caixa sem
+  // abrir a Faturação. Quem já tem a Faturação continua com a Caixa (server/cashCheck/access.ts).
+  caixa: { super_admin: "national:vexm" },
   api_keys: { super_admin: "national:vem" },
   manutencao: { super_admin: "national:vem" },
 };

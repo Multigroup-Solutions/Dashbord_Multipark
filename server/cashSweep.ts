@@ -221,7 +221,7 @@ export async function sendCaseAlerts(d: Db, nowDb: string, list: readonly CaseAl
       await notify({
         kind: "cash_case_alert", projectId: a.meta.projectId,
         title: `Caixa: ${a.finding.label} (${subject})`, body: a.finding.detail.slice(0, 500),
-        link: `/faturacao?tab=cash-check&case=${a.caseId}`, entity: { type: "cash_case", id: a.caseId },
+        link: `/caixa?tab=correcao&case=${a.caseId}`, entity: { type: "cash_case", id: a.caseId },
       });
       await d.execute(sql`UPDATE cash_cases SET alertedAt = ${nowDb} WHERE id = ${a.caseId}`);
       sent++;
@@ -236,7 +236,7 @@ export async function sendCaseAlerts(d: Db, nowDb: string, list: readonly CaseAl
       await notify({
         kind: "cash_case_alert", title: `Caixa: mais ${rest} caso${rest === 1 ? "" : "s"} novo${rest === 1 ? "" : "s"} por ver`,
         body: `Esta varredura abriu ${list.length} casos graves; os primeiros ${ALERTS_PER_RUN} foram avisados um a um. Vê os restantes em Faturação → Correção de caixa.`,
-        link: "/faturacao?tab=cash-check", entity: { type: "cash_case_batch", id: nowDb },
+        link: "/caixa?tab=correcao", entity: { type: "cash_case_batch", id: nowDb },
       });
       for (const a of list.slice(ALERTS_PER_RUN)) await d.execute(sql`UPDATE cash_cases SET alertedAt = ${nowDb} WHERE id = ${a.caseId}`);
       sent++;
@@ -261,7 +261,7 @@ export async function sendDailyDigest(d: Db): Promise<number> {
       await notify({
         kind: "cash_daily_digest", projectId: r.projectId == null ? null : Number(r.projectId),
         title: `Caixa: ${n} caso(s) por explicar`, body: `${crit} crítico(s), ${high} grave(s). Faturação → Correção de caixa.`,
-        link: "/faturacao?tab=cash-check", entity: { type: "cash_digest", id: `${r.projectId ?? "all"}` },
+        link: "/caixa?tab=correcao", entity: { type: "cash_digest", id: `${r.projectId ?? "all"}` },
       });
       sent++;
     } catch (err) {

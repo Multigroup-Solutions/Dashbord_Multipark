@@ -62,6 +62,7 @@ import {
   Truck,
   Radio,
   Megaphone,
+  Wallet,
   ParkingCircle,
   Wrench,
   MessageSquareWarning,
@@ -164,6 +165,8 @@ export const menuGroups: MenuGroup[] = [
     items: [
       { icon: Receipt, label: "Despesas", path: "/despesas", module: "despesas" },
       { icon: FileText, label: "Faturação", path: "/faturacao", module: "faturacao" },
+      // 29c: "uma coisa é faturação, outra coisa é caixa" — item próprio (módulo caixa; quem tem a Faturação também vê)
+      { icon: Wallet, label: "Caixa", path: "/caixa", anyOf: ["caixa", "faturacao"] },
       { icon: Handshake, label: "Parcerias", path: "/parcerias", module: "parcerias" },
       { icon: FolderTree, label: "Projetos", path: "/projetos", module: "projetos" },
       { icon: Megaphone, label: "Marketing", path: "/marketing", module: "marketing" },

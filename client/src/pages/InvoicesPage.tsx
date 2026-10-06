@@ -1,4 +1,4 @@
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,17 +7,12 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   Euro, TrendingUp, TrendingDown, Receipt, Truck, CalendarClock,
-  Building2, FolderTree, Users as UsersIcon, Handshake, LogIn, AlertTriangle, Wallet, Target,
+  Building2, FolderTree, Users as UsersIcon, Handshake, LogIn, AlertTriangle, Target,
 } from "lucide-react";
 import FinanceExportButtons from "@/components/FinanceExportButtons";
-import CashCorrectionPanel from "@/components/cashCheck/CashCorrectionPanel";
-import CashCasesPanel from "@/components/cashCheck/CashCasesPanel";
-import CashCountPanel from "@/components/cashCheck/CashCountPanel";
-import CashExternalPanel from "@/components/cashCheck/CashExternalPanel";
-import { InitialPricesPanel } from "@/components/cashCheck/InitialPricesPanel";
 import FitAmount from "@/components/finance/FitAmount";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { AXIS_TICK, CHART_TOOLTIP_STYLE, CHART_TOOLTIP_ITEM, eurAxis } from "@/lib/financeFormat";
@@ -56,11 +51,17 @@ export default function InvoicesPage() {
   }, [filters.cityId, filters.brandId]);
 
   const { data, isLoading, error, refetch, isFetching } = trpc.invoices.billing.useQuery({ from, to, projectId, granularity }, { retry: retryTransient });
-  // O alerta "Caixa: casos graves" abre /faturacao?tab=cash-check&case=N.
-  const [tab, setTab] = useState(() => {
-    try { return new URLSearchParams(window.location.search).get("tab") === "cash-check" ? "cash-check" : "real"; } catch { return "real"; }
-  });
-  const { data: cash, isLoading: cashLoading, error: cashError, refetch: refetchCash } = trpc.invoices.cash.useQuery({ from, to, projectId }, { enabled: tab === "cash", retry: retryTransient });
+  // 29c: a Caixa saiu para o seu item do menu (/caixa). Os links antigos
+  // (/faturacao?tab=cash-check&case=N, nos avisos já enviados) vão lá ter.
+  const [, navigate] = useLocation();
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const t = q.get("tab");
+      if (t === "cash-check" || t === "cash") navigate(`/caixa?tab=${t === "cash" ? "resumo" : "correcao"}${q.get("case") ? `&case=${q.get("case")}` : ""}`, { replace: true });
+    } catch { /* sem window */ }
+  }, [navigate]);
+  const [tab, setTab] = useState("real");
 
   const summary = data?.summary as any;
   const timeseries = data?.timeseries ?? [];
@@ -290,8 +291,6 @@ export default function InvoicesPage() {
               <TabsTrigger value="real">Realizado</TabsTrigger>
               <TabsTrigger value="costs">Custos detalhados</TabsTrigger>
               <TabsTrigger value="forecast">Previsão</TabsTrigger>
-              <TabsTrigger value="cash">Caixa</TabsTrigger>
-              <TabsTrigger value="cash-check">Correção de caixa</TabsTrigger>
             </TabsList>
 
             <TabsContent value="real" className="space-y-4">
@@ -707,21 +706,6 @@ export default function InvoicesPage() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="cash" className="space-y-4">
-              <CashPanel cash={cash} loading={cashLoading} error={cashError?.message ?? null} onRetry={() => refetchCash()} />
-            </TabsContent>
-
-            <TabsContent value="cash-check" className="space-y-4">
-              {tab === "cash-check" && (
-                <div className="space-y-4">
-                  <CashCasesPanel projectId={projectId} />
-                  <CashCountPanel projectId={projectId} />
-                  <CashExternalPanel projectId={projectId} />
-                  <InitialPricesPanel projectId={projectId} />
-                  <CashCorrectionPanel projectId={projectId} />
-                </div>
-              )}
-            </TabsContent>
           </Tabs>
         </>
       )}
@@ -798,34 +782,3 @@ function QualityWarnings({ quality }: { quality: any }) {
   );
 }
 
-/** Caixa: o dinheiro (recebido / por cobrar / no-shows pré-pagos). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function CashPanel({ cash, loading, error, onRetry }: { cash: any; loading: boolean; error: string | null; onRetry: () => void }) {
-  if (error && !cash) return <LoadError message={error} onRetry={onRetry} />;
-  if (loading || !cash) return <p className="text-sm text-muted-foreground text-center py-6">A carregar…</p>;
-  return (
-    <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-        <KpiCard icon={<Wallet className="w-4 h-4 text-emerald-600" />} label="Recebido" amount={cash.received.total} hint={`${cash.received.count} reservas entregues · data: ${cash.dateBasis}`} color="text-emerald-700" />
-        <KpiCard icon={<Receipt className="w-4 h-4 text-orange-600" />} label="Por cobrar" amount={cash.toCollect.total} hint={`${cash.toCollect.count} reservas entregues com valor em falta`} color="text-orange-700" />
-        <KpiCard icon={<CalendarClock className="w-4 h-4 text-sky-600" />} label="No-shows pré-pagos" amount={cash.prepaidNoShows.total} hint={`${cash.prepaidNoShows.count} reservas pagas com check-in passado que nunca entraram`} color="text-sky-700" />
-        <KpiCard icon={<AlertTriangle className="w-4 h-4 text-muted-foreground" />} label="Canceladas com pagamento" amount={cash.cancelledPaid.total} hint={`${cash.cancelledPaid.count} canceladas no período — informativo, NÃO é receita (sem dados de taxa/reembolso)`} />
-      </div>
-      <Card>
-        <CardHeader><CardTitle className="text-base">Recebido por método de pagamento</CardTitle></CardHeader>
-        <CardContent>
-          {cash.received.byMethod.length === 0 ? <p className="text-sm text-muted-foreground text-center py-4">Sem recebimentos no período</p> : (
-            <div className="space-y-1">
-              {cash.received.byMethod.map((m: any) => (
-                <div key={m.method} className="flex justify-between gap-3 text-sm py-1 border-b last:border-0"><span className="min-w-0 break-words">{m.method} <span className="text-xs text-muted-foreground">({m.count})</span></span><span className="tabular-nums font-medium shrink-0">{fmt(m.total)}</span></div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      <p className="text-[11px] text-muted-foreground">
-        Dados que faltam na sincronização Multipark: {cash.missing.join(" · ")}. As taxas de cancelamento só entram como receita quando existirem na base de dados.
-      </p>
-    </>
-  );
-}

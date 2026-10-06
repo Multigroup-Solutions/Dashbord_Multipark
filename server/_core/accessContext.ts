@@ -111,8 +111,10 @@ const PATH_MODULE: Array<[string, ModuleId]> = [
   ["users.", "utilizadores"],
   ["permissions.", "permissoes"],
   ["marketing.", "marketing"],
+  // 29c: a Caixa tem módulo próprio (antes de "invoices." — a 1.ª que bate ganha)
+  ["invoices.cash", "caixa"],
   ["invoices.", "faturacao"],
-  ["cashCheck.", "faturacao"],
+  ["cashCheck.", "caixa"],
   ["annual.", "anual"],
 ];
 

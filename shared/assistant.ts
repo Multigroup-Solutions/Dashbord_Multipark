@@ -68,6 +68,10 @@ const BY_PATH: Array<{ prefix: string; items: AssistantSuggestion[] }> = [
     { text: "O que é o \"fecho previsto\"?" },
     { text: "Qual foi o valor das reservas este mês?", module: "financeiro" },
   ] },
+  { prefix: "/caixa", items: [
+    { text: "Como faço a correção de caixa do dia?" },
+    { text: "Como anexo o comprovativo do multibanco?" },
+  ] },
   { prefix: "/financeiro", items: [
     { text: "Qual foi o valor das reservas este mês?", module: "financeiro" },
   ] },
