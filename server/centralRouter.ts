@@ -1,0 +1,90 @@
+/**
+ * Lote 39a — Central Vodafone (Integrações): os acessos da consola, por
+ * pessoa, e o que ela já mandou. Só o super admin. O segredo de cada acesso
+ * só se mostra quando se cria; revoga-se (nunca se apaga).
+ */
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
+import { sql } from "drizzle-orm";
+import { protectedProcedure, router } from "./_core/trpc";
+import { getDb, logActivity } from "./db";
+import { generateCentralSecret, hashCentralSecret } from "./centralSugar";
+import { CENTRAL_SUGAR_BASE_PATH, CENTRAL_SUGAR_FLAG, normalizeCentralUsername } from "../shared/centralSugar";
+import { ENV } from "./_core/env";
+
+const superOnly = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin gere a central." });
+  return next({ ctx });
+});
+const rowsOf = (res: unknown): any[] => {
+  const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
+  return Array.isArray(r) ? r : [];
+};
+async function dbOrThrow() {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível." });
+  return db;
+}
+const utc = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+const iso = (v: unknown) => (v ? `${String(v).replace(" ", "T").slice(0, 19)}Z` : null);
+
+export const centralRouter = router({
+  status: superOnly.query(async () => {
+    const db = await dbOrThrow();
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    const enabled = isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
+    const accounts = rowsOf(await db.execute(sql`SELECT a.id, a.username, a.label, a.userId, u.name AS userName, a.createdAt, a.lastUsedAt, a.revokedAt
+        FROM central_accounts a LEFT JOIN users u ON u.id = a.userId ORDER BY a.revokedAt IS NOT NULL, a.username LIMIT 200`));
+    const calls = rowsOf(await db.execute(sql`SELECT c.id, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.subject, c.source, u.name AS userName
+        FROM central_calls c LEFT JOIN users u ON u.id = c.userId ORDER BY c.startedAt DESC LIMIT 30`));
+    const requests = rowsOf(await db.execute(sql`SELECT id, at, method, path, status, accountId, note, bodyJson FROM central_requests ORDER BY id DESC LIMIT 40`));
+    return {
+      enabled, hasSecret: !!ENV.cookieSecret, basePath: CENTRAL_SUGAR_BASE_PATH,
+      accounts: accounts.map((a) => ({ id: Number(a.id), username: String(a.username), label: a.label ? String(a.label) : null, userId: Number(a.userId),
+        userName: a.userName ? String(a.userName) : null, createdAt: iso(a.createdAt), lastUsedAt: iso(a.lastUsedAt), revokedAt: iso(a.revokedAt) })),
+      calls: calls.map((c) => ({ id: Number(c.id), direction: c.direction === "out" ? "out" as const : "in" as const, held: Number(c.held) === 1, startedAt: iso(c.startedAt),
+        durationS: c.durationS == null ? null : Number(c.durationS), phone: c.phone ? String(c.phone) : null, subject: c.subject ? String(c.subject) : null,
+        source: String(c.source), userName: c.userName ? String(c.userName) : null })),
+      requests: requests.map((q) => ({ id: Number(q.id), at: iso(q.at), method: String(q.method), path: String(q.path), status: Number(q.status),
+        accountId: q.accountId == null ? null : Number(q.accountId), note: q.note ? String(q.note) : null, body: q.bodyJson ? String(q.bodyJson) : null })),
+    };
+  }),
+
+  /** Contas da dashboard para dar acesso (ativas). */
+  users: superOnly.query(async () => {
+    const db = await dbOrThrow();
+    return rowsOf(await db.execute(sql`SELECT id, name, email, role FROM users WHERE isActive = 1 ORDER BY name LIMIT 2000`))
+      .map((u) => ({ id: Number(u.id), name: String(u.name ?? u.email ?? `#${u.id}`), email: u.email ? String(u.email) : null, role: String(u.role) }));
+  }),
+
+  /** Cria o acesso de uma pessoa; devolve o segredo UMA vez. */
+  createAccount: superOnly
+    .input(z.object({ userId: z.number().int().positive(), username: z.string().max(60), label: z.string().max(200).nullable().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const username = normalizeCentralUsername(input.username);
+      if (!username) throw new TRPCError({ code: "BAD_REQUEST", message: "Utilizador: 3 a 60 caracteres, só letras minúsculas, números, ponto, hífen e _." });
+      const db = await dbOrThrow();
+      const u = rowsOf(await db.execute(sql`SELECT id, name FROM users WHERE id = ${input.userId} AND isActive = 1 LIMIT 1`))[0];
+      if (!u) throw new TRPCError({ code: "BAD_REQUEST", message: "Essa conta não existe ou está desativada." });
+      const taken = rowsOf(await db.execute(sql`SELECT id FROM central_accounts WHERE username = ${username} LIMIT 1`))[0];
+      if (taken) throw new TRPCError({ code: "CONFLICT", message: "Já existe um acesso com esse utilizador (mesmo revogado). Escolhe outro." });
+      const secret = generateCentralSecret();
+      await db.execute(sql`INSERT INTO central_accounts (username, secretHash, userId, label, createdById, createdAt)
+          VALUES (${username}, ${hashCentralSecret(secret)}, ${input.userId}, ${input.label?.trim() || null}, ${ctx.user.id}, ${utc(Date.now())})`);
+      await logActivity({ userId: ctx.user.id, action: "create", entity: "central_account", details: `Acesso da central "${username}" para ${String(u.name ?? `#${u.id}`)}` }).catch(() => null);
+      return { username, secret };
+    }),
+
+  revokeAccount: superOnly
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await dbOrThrow();
+      const a = rowsOf(await db.execute(sql`SELECT id, username, revokedAt FROM central_accounts WHERE id = ${input.id} LIMIT 1`))[0];
+      if (!a) throw new TRPCError({ code: "NOT_FOUND", message: "Acesso não encontrado." });
+      if (a.revokedAt) return { ok: true, already: true };
+      await db.execute(sql`UPDATE central_accounts SET revokedAt = ${utc(Date.now())}, revokedById = ${ctx.user.id} WHERE id = ${input.id} AND revokedAt IS NULL`);
+      await logActivity({ userId: ctx.user.id, action: "revoke", entity: "central_account", entityId: input.id, details: `Acesso da central "${String(a.username)}" revogado` }).catch(() => null);
+      return { ok: true, already: false };
+    }),
+});

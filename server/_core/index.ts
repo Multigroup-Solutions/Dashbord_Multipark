@@ -13,6 +13,8 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { createExternalApiRouter } from "../externalApi";
 import { createMcpApiRouter } from "../mcpApi";
+import { createCentralSugarRouter } from "../centralSugar";
+import { CENTRAL_SUGAR_BASE_PATH } from "../../shared/centralSugar";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { registerWhatsappCallStreamRoute } from "../whatsappCallStream";
 import { createMultiparkWebhookRouter } from "../multiparkWebhook";
@@ -73,6 +75,8 @@ async function startServer() {
   app.use("/api/external", createExternalApiRouter());
   // MCP Control API (X-API-Key) — paridade com o api-entry.ts (Vercel)
   app.use("/api/v1", createMcpApiRouter());
+  // 39a: central Vodafone como "Sugar CRM" (paridade com o api-entry.ts).
+  app.use(CENTRAL_SUGAR_BASE_PATH, createCentralSugarRouter());
   // Toque das chamadas do WhatsApp por SSE (paridade com o api-entry.ts).
   registerWhatsappCallStreamRoute(app);
 

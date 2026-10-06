@@ -2,7 +2,7 @@
 modulo: integracoes
 titulo: Integrações (estado das ligações externas)
 rotas: /integracoes
-palavras: windsor, aviso ao desligar, integração desligada, integrações, integracoes, ligações, testar ligação, estado desconhecido, sem problemas conhecidos, reautorização, religar, chave de cifra, google business, google ads, meta, whatsapp, gmail, zello, ia, gemini, drive, armazenamento, s3, base de dados, bd multipark, quem pode testar, limite de testes
+palavras: central vodafone, one net, attendant console, consola, sugar crm, telefonemas, chamadas da central, windsor, aviso ao desligar, integração desligada, integrações, integracoes, ligações, testar ligação, estado desconhecido, sem problemas conhecidos, reautorização, religar, chave de cifra, google business, google ads, meta, whatsapp, gmail, zello, ia, gemini, drive, armazenamento, s3, base de dados, bd multipark, quem pode testar, limite de testes
 ---
 # Integrações
 
@@ -28,3 +28,13 @@ Página **Integrações** (menu Sistema): um cartão por ligação externa — G
 - Um teste da **Meta** com o token recusado marca a ligação como "Reautorização necessária".
 
 **Avisos aos administradores**: quando uma ligação passa a precisar de religar ou dá erro, ou um cron para, os administradores recebem um aviso (uma vez por mudança). O detalhe vai sem segredos.
+
+**Central Vodafone (consola One Net)** (só o super admin)
+- A consola da Vodafone (One Net Attendant Console) só regista chamadas num CRM conhecido. A dashboard faz de **Sugar CRM**: cada chamada que a consola regista fica na dashboard em nome de quem atendeu ou fez, e conta no **Desempenho** (Pessoas → Condutores e agentes).
+- **Ligar**:
+  1. Liga o interruptor **Central Vodafone: receber as chamadas da consola** (Definições → Automações; vem desligado). Desligado, a dashboard responde "desligada" e só regista que a consola tentou.
+  2. Aqui, no cartão **Central Vodafone**, cria um **acesso por pessoa**: escolhe a conta da dashboard e o utilizador (ex.: ana.silva). A palavra-passe aparece **só uma vez**; escreve-a logo na consola dessa pessoa.
+  3. Na consola: **Ligar a um servidor CRM → Sugar CRM**. Descrição "Dashboard", **Ativar CRM** e **Registar chamadas do histórico** ligados. No **Server URL**, cola o endereço do cartão. Quando pedir, usa o utilizador e a palavra-passe da pessoa desse computador.
+- **Revogar** um acesso: a consola dessa pessoa deixa logo de registar. As chamadas que já registou ficam. Não se desfaz: cria-se outro acesso.
+- O cartão mostra as **últimas chamadas** e **o que a consola pediu** (sem palavras-passe). Serve para ver se a consola está a chegar e o que manda.
+- Por agora, a pesquisa de clientes pelo número não devolve nada (a consola não mostra o cliente); só se registam as chamadas.
