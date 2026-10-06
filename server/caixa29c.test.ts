@@ -73,7 +73,7 @@ describe("29c — menu e páginas", () => {
     expect(inv).toContain("navigate(`/caixa?tab=");
     expect(caixaTabFrom("?tab=cash-check&case=4")).toBe("correcao");
     expect(caixaTabFrom("?tab=correcao")).toBe("correcao");
-    expect(caixaTabFrom("")).toBe("resumo");
+    expect(caixaTabFrom("")).toBe("dia"); // 29d: abre na caixa do dia
     const page = src("client/src/pages/CaixaPage.tsx");
     for (const p of ["CashCasesPanel", "CashCountPanel", "CashExternalPanel", "InitialPricesPanel", "CashCorrectionPanel"]) expect(page).toContain(`<${p} projectId={projectId} />`);
     expect(src("client/src/App.tsx")).toContain(`<Route path="/caixa">`);

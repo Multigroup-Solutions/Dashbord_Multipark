@@ -3,6 +3,9 @@
  * coisa é caixa" — a Caixa saiu dos separadores da Faturação para o seu item
  * no menu, com permissão própria (módulo "caixa"; quem já tinha a Faturação
  * continua a ver). Separadores:
+ *   - Por dia (29d): a caixa de cada dia por cidade — recebido por método,
+ *     despesas do turno, esperado vs contado, quem entregou e quem fechou, e a
+ *     correção do dia (certo / não certo, com motivo);
  *   - Resumo: recebido / por cobrar / no-shows pré-pagos no período;
  *   - Correção de caixa: casos, contagem por parque e dia, multibanco,
  *     externos (Stripe/Viva/InvoiceExpress), preços iniciais e era/é.
@@ -19,6 +22,7 @@ import CashCasesPanel from "@/components/cashCheck/CashCasesPanel";
 import CashCountPanel from "@/components/cashCheck/CashCountPanel";
 import CashExternalPanel from "@/components/cashCheck/CashExternalPanel";
 import { InitialPricesPanel } from "@/components/cashCheck/InitialPricesPanel";
+import CashDayBoard from "@/components/cashCheck/CashDayBoard";
 import FitAmount from "@/components/finance/FitAmount";
 import { TABS_SCROLL } from "@/components/finance/layoutClasses";
 import DateRangeNav, { type DateGran, rangeFor } from "@/components/DateRangeNav";
@@ -41,7 +45,7 @@ export default function CaixaPage() {
   const [to, setTo] = useState(initialMonth.end);
   const [gran, setGran] = useState<DateGran>("month");
   const [tab, setTab] = useState<CaixaTab>(() => {
-    try { return caixaTabFrom(window.location.search); } catch { return "resumo"; }
+    try { return caixaTabFrom(window.location.search); } catch { return "dia"; }
   });
   const projectId = useMemo(() => {
     if (filters.brandId !== null) return filters.brandId;
@@ -58,9 +62,14 @@ export default function CaixaPage() {
       </p>
       <Tabs value={tab} onValueChange={(v) => setTab(v as CaixaTab)} className="space-y-4">
         <TabsList className={TABS_SCROLL}>
+          <TabsTrigger value="dia">Por dia</TabsTrigger>
           <TabsTrigger value="resumo">Resumo</TabsTrigger>
           <TabsTrigger value="correcao">Correção de caixa</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="dia" className="space-y-4">
+          {tab === "dia" && <CashDayBoard projectId={projectId} />}
+        </TabsContent>
 
         <TabsContent value="resumo" className="space-y-4">
           <DateRangeNav start={from} end={to} gran={gran} onChange={(s, e, g) => { setFrom(s); setTo(e); setGran(g); }} />
