@@ -72,6 +72,8 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   const vat = await vatRateForPeriod(f.from, f.to);
 
   let bookingsTotal = 0, bookingsAttributed = 0, bookingsGoogle = 0, bookingsMeta = 0, revenueTotal = 0, revenueAttributed = 0;
+  // 28c: "via net" = tudo o que não é parceiro (o que os anúncios podem trazer); com link = traz o link de origem
+  let bookingsWeb = 0, revenueWeb = 0, webWithLink = 0;
   let bookingsByDay: Array<{ date: string; total: number; attributed: number }> = [];
   /** reservas ligadas por ID externo da campanha (Google ou Meta) */
   const attributedByCampaign: Record<string, number> = {};
@@ -91,6 +93,7 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     const paid = PAID.includes(b.adAttribution);
     bookingsTotal++; revenueTotal += b.total;
     if (paid) { bookingsAttributed++; revenueAttributed += b.total; }
+    if (b.viaNet) { bookingsWeb++; revenueWeb += b.total; if (b.hasOriginUrl) webWithLink++; }
     if (b.adAttribution === "google_paid") bookingsGoogle++;
     if (b.adAttribution === "meta_paid") bookingsMeta++;
     const d = byDay.get(b.day) ?? { total: 0, attributed: 0 };
@@ -137,11 +140,18 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     roasGoogle: ads.byProviderTotals.google_ads.roasGoogle,
     /** conversões contadas pelas plataformas (Google + Meta + importações antigas) */
     conversionsPlatforms: ads.totals.conversions,
+    /** 28c: conversões da Meta (as do Google estão em conversionsGoogle) */
+    conversionsMeta: ads.byProviderTotals.meta.conversions,
+    /** 28c: gasto ÷ conversões das plataformas */
+    costPerConversionPlatforms: ratio(spend, ads.totals.conversions),
     // Reservas reais (Multipark), pela data de criação — null se a BD da Multipark não respondeu
     bookingsError,
     bookingsTotal: bk(bookingsTotal), bookingsAttributed: bk(bookingsAttributed), bookingsUnattributed: bk(bookingsUnattributed),
     bookingsGoogle: bk(bookingsGoogle), bookingsMeta: bk(bookingsMeta),
     revenueTotal: bk(revenueTotal), revenueAttributed: bk(revenueAttributed),
+    /** 28c: reservas "via net" (não parceiros) e o valor; quantas trazem o link de origem */
+    bookingsWeb: bk(bookingsWeb), revenueWeb: bk(revenueWeb), webWithLink: bk(webWithLink),
+    costPerWebBooking: bookingsError ? null : ratio(spend, bookingsWeb),
     vatRate: vat,
     costPerAttributedBooking: bookingsError ? null : ratio(spend, bookingsAttributed),
     /** ROAS das reservas ligadas, sem IVA */
@@ -182,6 +192,16 @@ export interface BrandRow {
   revenue: number;
   /** valor das reservas que vieram pelos anúncios (gclid/fbclid/utm pago) */
   revenueAttributed: number;
+  /** 28c: conversões por plataforma, valor de conversão, impressões e cliques das campanhas da marca */
+  conversionsGoogle: number;
+  conversionsMeta: number;
+  conversionValue: number;
+  impressions: number;
+  clicks: number;
+  /** 28c: reservas "via net" (não parceiros), o valor e quantas trazem o link de origem */
+  bookingsWeb: number;
+  revenueWeb: number;
+  webWithLink: number;
   /** ROAS s/ IVA de todas as reservas da marca ÷ gasto */
   roasNet: number | null;
 }
@@ -197,7 +217,7 @@ export interface BrandRow {
 export async function getSpendAndBookingsByBrand(f: { from: string; to: string; projectId?: number }, preloadedAds?: AdMetricsResult) {
   if (!ISO.test(f.from) || !ISO.test(f.to)) throw new Error("Datas inválidas (AAAA-MM-DD)");
   const db = await getDb();
-  type CityRow = { projectId: number; spend: number; bookings: number; attributed: number; revenue: number; revenueAttributed: number };
+  type CityRow = { projectId: number; spend: number; bookings: number; attributed: number; revenue: number; revenueAttributed: number; bookingsWeb: number; revenueWeb: number; webWithLink: number };
   if (!db) throw new Error("Base de dados indisponível");
   const projectIds = await marketingProjectIds(f.projectId);
   const vat = await vatRateForPeriod(f.from, f.to);
@@ -212,22 +232,24 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
 
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts), somadas por centro.
   const { loadMarketingBookings } = await import("../../marketingLive");
-  const byProject = new Map<number | null, { projectId: number | null; n: number; attributed: number; rev: number; revAttributed: number }>();
+  const byProject = new Map<number | null, { projectId: number | null; n: number; attributed: number; rev: number; revAttributed: number; web: number; revWeb: number; webLink: number }>();
   // 19a: Multipark em baixo → gasto por marca na mesma; reservas "indisponíveis".
   let bookingsError: string | null = null;
   const live = await loadMarketingBookings(f.from, f.to, projectIds).catch((err: any) => { bookingsError = String(err?.message ?? err).slice(0, 300); return []; });
   for (const b of live) {
-    const r = byProject.get(b.projectId) ?? { projectId: b.projectId, n: 0, attributed: 0, rev: 0, revAttributed: 0 };
+    const r = byProject.get(b.projectId) ?? { projectId: b.projectId, n: 0, attributed: 0, rev: 0, revAttributed: 0, web: 0, revWeb: 0, webLink: 0 };
     const paid = b.adAttribution === "google_paid" || b.adAttribution === "meta_paid";
     r.n++; r.rev += b.total;
     if (paid) { r.attributed++; r.revAttributed += b.total; }
+    if (b.viaNet) { r.web++; r.revWeb += b.total; if (b.hasOriginUrl) r.webLink++; }
     byProject.set(b.projectId, r);
   }
   const bookingRows = [...byProject.values()];
 
   const key = (name: string) => name.trim().toLowerCase();
   const brands = new Map<string, BrandRow>();
-  const newRow = (brand: string, mapped: boolean): BrandRow => ({ brand, mapped, accounts: [], spend: 0, spendGoogle: 0, spendMeta: 0, conversions: 0, bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0, roasNet: null });
+  const newRow = (brand: string, mapped: boolean): BrandRow => ({ brand, mapped, accounts: [], spend: 0, spendGoogle: 0, spendMeta: 0, conversions: 0, bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0, roasNet: null,
+    conversionsGoogle: 0, conversionsMeta: 0, conversionValue: 0, impressions: 0, clicks: 0, bookingsWeb: 0, revenueWeb: 0, webWithLink: 0 });
   if (!projectIds) {
     // sem âmbito: todas as contas aparecem (mesmo sem gasto no período)
     for (const a of accounts) {
@@ -256,6 +278,9 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     if (c.provider === "google_ads") row.spendGoogle += c.cost;
     if (c.provider === "meta") row.spendMeta += c.cost;
     row.conversions += c.conversions;
+    if (c.provider === "google_ads") row.conversionsGoogle += c.conversions;
+    if (c.provider === "meta") row.conversionsMeta += c.conversions;
+    row.conversionValue += c.conversionValue; row.impressions += c.impressions; row.clicks += c.clicks;
     brands.set(k, row);
   }
   // Nó marca (debaixo da cidade) de um projeto
@@ -267,7 +292,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     return node ? node.id : null;
   };
   const byBrandCity = new Map<number, CityRow>();
-  const cityRow = (node: number) => { const c = byBrandCity.get(node) ?? { projectId: node, spend: 0, bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0 }; byBrandCity.set(node, c); return c; };
+  const cityRow = (node: number) => { const c = byBrandCity.get(node) ?? { projectId: node, spend: 0, bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0, bookingsWeb: 0, revenueWeb: 0, webWithLink: 0 }; byBrandCity.set(node, c); return c; };
   let unassignedSpend = 0;
   for (const d of ads.byDayProject) {
     const node = brandNodeOf(d.projectId);
@@ -281,11 +306,13 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     const k = key(brand);
     const row = brands.get(k) ?? newRow(brand, true);
     row.bookings += Number(r.n); row.attributed += Number(r.attributed ?? 0); row.revenue += Number(r.rev); row.revenueAttributed += Number(r.revAttributed ?? 0);
+    row.bookingsWeb += r.web; row.revenueWeb += r.revWeb; row.webWithLink += r.webLink;
     brands.set(k, row);
     const node = brandNodeOf(r.projectId ?? null);
     if (node != null) {
       const c = cityRow(node);
       c.bookings += Number(r.n); c.attributed += Number(r.attributed ?? 0); c.revenue += Number(r.rev); c.revenueAttributed += Number(r.revAttributed ?? 0);
+      c.bookingsWeb += r.web; c.revenueWeb += r.revWeb; c.webWithLink += r.webLink;
     }
   }
   for (const b of brands.values()) b.roasNet = bookingsError ? null : roasNetOfVat(b.revenue, b.spend, vat);
