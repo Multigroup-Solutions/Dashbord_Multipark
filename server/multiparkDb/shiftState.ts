@@ -312,7 +312,7 @@ export interface LiveHours { parkName: string | null; day: string; openTime: str
 /** 44b: tipos de lugar (Booking.parkingType / allocation). */
 export type LiveSpotType = "uncovered" | "covered" | "indoor" | "vip" | "unknown";
 export const LIVE_SPOT_TYPE_LABELS: Record<LiveSpotType, string> = {
-  uncovered: "Descoberto", covered: "Coberto", indoor: "Interior", vip: "VIP", unknown: "Sem tipo",
+  uncovered: "Descoberto", covered: "Toldo", indoor: "Interior", vip: "VIP", unknown: "Sem tipo",
 };
 const SPOT_TYPE_ORDER: LiveSpotType[] = ["uncovered", "covered", "indoor", "vip", "unknown"];
 

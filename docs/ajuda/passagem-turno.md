@@ -2,7 +2,7 @@
 modulo: passagem_turno
 titulo: Passagem de turno
 rotas: /passagem-turno
-palavras: mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
+palavras: mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
 ---
 # Passagem de turno
 
@@ -26,18 +26,18 @@ Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
 - Num turno antigo (nem o atual nem o que acabou agora), a passagem nova herda só os pendentes da anterior: o "ao vivo" é de agora, não desse turno.
 
 **Resumo automático** (no topo de **Preencher**)
-- As recolhas e entregas do próximo turno (com voo e valor a pagar), as entregas pendentes e os carros p/ coberto vêm **ao vivo da BD da Multipark**. Reclamações, perdidos e ocorrências já não aparecem aqui. As compras online ainda por pagar também contam: vão ser recolhidas na mesma.
+- As recolhas e entregas do próximo turno (com voo e valor a pagar), as entregas pendentes e os carros p/ toldo vêm **ao vivo da BD da Multipark**. Reclamações, perdidos e ocorrências já não aparecem aqui. As compras online ainda por pagar também contam: vão ser recolhidas na mesma.
 - A equipa mostra **(por confirmar)** em quem ainda está só proposto na escala.
 - Se a BD da Multipark não responder, aparece um aviso a laranja e o resumo usa as cópias do dashboard. O resto da passagem funciona igual.
 - Uma parte que não se consegue ler mostra **erro** em vez do número. Não é 0, e no email e no resumo IA aparece como "sem dados (falhou a leitura)".
 
 **Estado do parque (ao vivo)**
 Separador com o estado atual dos parques da cidade, lido diretamente da BD da Multipark (só leitura). Não entram os **Parques que a operação não faz** das Definições; o mesmo vale para o resumo da passagem.
-- **Carros no parque por tipo de lugar**: Descoberto, Coberto, Interior e VIP (a cidade já está escolhida em cima). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado.
+- **Carros no parque por tipo de lugar**: Descoberto, Toldo (o antigo "coberto"), Interior e VIP (a cidade já está escolhida em cima). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado.
   - Por baixo do número aparecem as **garagens** onde esses carros estão, em cada parque (ex.: "Airpark: COBERTO 29 · PD 3").
-  - Se a garagem não bate com o tipo, o carro está **mal arrumado** e a garagem aparece **a vermelho com ⚠**. As garagens são: **PD**, **PD FORA** e **CENTRAL** para descobertos; **COBERTO** e **CENTRAL COBERTO** para indoor e cobertos.
+  - Se a garagem não bate com o tipo, o carro está **mal arrumado** e a garagem aparece **a vermelho com ⚠**. As garagens são: **PD**, **PD FORA** e **CENTRAL** para descobertos; **COBERTO** e **CENTRAL COBERTO** para indoor e toldos.
     - **Vermelho**: indoor (ou VIP) fora de uma garagem coberta, ou descoberto numa garagem coberta.
-    - **Amarelo**: coberto numa garagem descoberta. Passa para a coberta quando houver lugar ("se der").
+    - **Amarelo**: toldo numa garagem descoberta. Passa para a coberta quando houver lugar ("se der").
     - Garagem com outro nome, ou carro sem tipo: fica sem cor (não se adivinha).
   - **Mal arrumados** (por baixo) lista esses carros, com matrícula, garagem, lugar e parque, para se irem buscar.
   - **Ver por parque e garagem** abre a divisão antiga.

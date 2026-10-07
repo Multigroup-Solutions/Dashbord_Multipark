@@ -56,8 +56,9 @@ export function isOpsListState(kind: OpsListKind, state: string | null | undefin
 /** Estados em que o carro já entrou no parque (recolha feita). */
 export const ENTERED_STATUSES = ["CHECKED_IN", "MOVING", "PENDING_CHECKOUT", "CHECKING_OUT", "CHECKED_OUT"] as const;
 
+/** Pauta do Rafael (7 out 2026): o produto "coberto" chama-se TOLDO (o carro fica sob toldo). */
 export const PARKING_TYPE_LABELS: Record<string, string> = {
-  COVERED: "Coberto",
+  COVERED: "Toldo",
   UNCOVERED: "Descoberto",
   INDOOR: "Interior",
   VIP: "VIP",

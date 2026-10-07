@@ -63,7 +63,9 @@ export function ExtrasMetricsSection() {
   const metrics = trpc.extrasDia.metrics.useQuery({ days });
   const outlook = trpc.extrasDia.coverageOutlook.useQuery({ city: activeCity, days: 7 });
 
-  const canDeactivate = ["admin", "super_admin"].includes(user?.role ?? "");
+  // Pauta do Rafael (Jorge, 7 out 2026): o supervisor ativa e desativa os extras, como o
+  // back office e o admin. O servidor (rh.setActive → canManageEmployee) limita à cidade.
+  const canDeactivate = ["admin", "super_admin", "supervisor", "backoffice"].includes(user?.role ?? "");
   const [deactivate, setDeactivate] = useState<{ id: number; name: string } | null>(null);
   const setActive = trpc.rh.setActive.useMutation({
     onSuccess: () => {
