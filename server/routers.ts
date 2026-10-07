@@ -5270,6 +5270,8 @@ export const appRouter = router({
         const { setApplicationStatus } = await import("./webIntake");
         try { await setApplicationStatus(input.id, input.status, ctx.user.id, input.notes); }
         catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err?.message || "Erro ao mudar o estado" }); }
+        // Rejeitada → o lead fica "Sem interesse" → a tarefa da candidatura fecha já (0545).
+        await (await import("./leadTasks")).afterLeadChange();
         return { success: true };
       }),
 
@@ -5305,11 +5307,15 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { approveApplication } = await import("./webIntake");
+        let result: Awaited<ReturnType<typeof approveApplication>>;
         try {
-          return await approveApplication(input.id, ctx.user.id, { projectId: input.projectId, confirmReactivate: input.confirmReactivate });
+          result = await approveApplication(input.id, ctx.user.id, { projectId: input.projectId, confirmReactivate: input.confirmReactivate });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao aprovar" });
         }
+        // Aprovada → o lead fica Convertido → a tarefa da candidatura fecha já (0545).
+        await (await import("./leadTasks")).afterLeadChange();
+        return result;
       }),
   }),
 
@@ -5657,12 +5663,15 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
         const { bulkUpdateExtraLeads } = await import("./extraLeads");
+        let result: Awaited<ReturnType<typeof bulkUpdateExtraLeads>>;
         try {
-          return await bulkUpdateExtraLeads(input, ctx.user.id);
+          result = await bulkUpdateExtraLeads(input, ctx.user.id);
         } catch (err: any) {
           if (err instanceof TRPCError) throw err;
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao atualizar leads" });
         }
+        await (await import("./leadTasks")).afterLeadChange(input.leadIds);
+        return result;
       }),
 
     create: protectedProcedure
@@ -5705,6 +5714,8 @@ export const appRouter = router({
         const { id, ...patch } = input;
         try {
           const row = await updateExtraLead(id, patch, ctx.user.id);
+          // "Sem interesse" → a tarefa da candidatura fecha já (0545).
+          if (patch.status) await (await import("./leadTasks")).afterLeadChange([id]);
           // D39: NIF e números dos documentos só o RH vê.
           const { canSeeLeadIdentity, redactLeadIdentity } = await import("../shared/rhAttachments");
           return canSeeLeadIdentity(ctx.user.role) ? row : redactLeadIdentity(row);
@@ -5724,11 +5735,15 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { convertLeadToExtra } = await import("./extrasAutomation");
+        let result: Awaited<ReturnType<typeof convertLeadToExtra>>;
         try {
-          return await convertLeadToExtra(input.id, input.projectId, ctx.user.id, { confirmReactivate: input.confirmReactivate });
+          result = await convertLeadToExtra(input.id, input.projectId, ctx.user.id, { confirmReactivate: input.confirmReactivate });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao converter" });
         }
+        // Convertido → a tarefa da candidatura fecha já (0545).
+        if (result.ok) await (await import("./leadTasks")).afterLeadChange([input.id]);
+        return result;
       }),
 
     // "Apagar" = arquivar (0380); `restore` repõe.
@@ -5739,6 +5754,8 @@ export const appRouter = router({
         const { archiveExtraLead } = await import("./extraLeads");
         try { await archiveExtraLead(input.id, ctx.user.id); }
         catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao arquivar" }); }
+        // Arquivado → a tarefa da candidatura fecha já (0545).
+        await (await import("./leadTasks")).afterLeadChange([input.id]);
         return { success: true };
       }),
     restore: protectedProcedure

@@ -114,7 +114,8 @@ describe("Avisos de atraso: quem é avisado", () => {
     expect(overdueAudience({ sourceModule: "manual", createdById: 3, projectId: 1 }, [9, 3], true)).toEqual({ managers: [3, 9], emailCreator: true, assignees: true, citySupervisors: false });
     expect(overdueAudience({ sourceModule: "rh", createdById: 1, projectId: null }, [9], true)).toEqual({ managers: [], emailCreator: false, assignees: true, citySupervisors: false });
     expect(overdueAudience({ sourceModule: "availability", createdById: 1, projectId: 4 }, [9], false)).toEqual({ managers: [], emailCreator: false, assignees: false, citySupervisors: false });
-    expect([...AUTOMATIC_TASK_SOURCES]).toEqual(["availability", "template", "service", "rh"]);
+    // 0545: + "lead" (candidaturas de condutores, Jorge 7 out 2026).
+    expect([...AUTOMATIC_TASK_SOURCES]).toEqual(["availability", "template", "service", "rh", "lead"]);
     expect(isAutomaticTask({ sourceModule: "google_tasks" })).toBe(false);
   });
   it("tipo de notificação do supervisor: só supervisores, por cidade, no sino", () => {

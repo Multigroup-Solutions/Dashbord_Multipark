@@ -129,7 +129,7 @@ export function teamTaskAccess(
 // ─── Tarefas automáticas (geradas pelo sistema) ─────────────────────────────
 
 /** Origens das tarefas que o sistema cria sozinho (o "criador" é o utilizador de sistema). */
-export const AUTOMATIC_TASK_SOURCES = ["availability", "template", "service", "rh"] as const;
+export const AUTOMATIC_TASK_SOURCES = ["availability", "template", "service", "rh", "lead"] as const;
 
 export function isAutomaticTask(t: { sourceModule?: string | null }): boolean {
   return (AUTOMATIC_TASK_SOURCES as readonly string[]).includes(String(t.sourceModule ?? ""));

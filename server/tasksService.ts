@@ -770,6 +770,13 @@ export async function runTaskAutomation(now: Date = new Date()): Promise<Record<
     if (g.failed) errors.push(`checklists: ${g.errors.slice(0, 3).join("; ")}`);
   } catch (e: any) { errors.push(`checklists: ${String(e?.message ?? e).slice(0, 200)}`); }
   try {
+    // 0545: uma tarefa por candidatura nova; fecha as das já tratadas (rede de segurança dos ganchos).
+    const { syncLeadTasks } = await import("./leadTasks");
+    const l = await syncLeadTasks(now);
+    out.leadTasks = { created: l.created, closed: l.closed, skipped: l.skipped, failed: l.failed };
+    if (l.failed) errors.push(`candidaturas: ${l.errors.slice(0, 3).join("; ")}`);
+  } catch (e: any) { errors.push(`candidaturas: ${String(e?.message ?? e).slice(0, 200)}`); }
+  try {
     const r = await runTaskNotifications(now);
     out.notifications = { overdue: r.overdue, completed: r.completed, silenced: r.silenced };
   } catch (e: any) { errors.push(`avisos: ${String(e?.message ?? e).slice(0, 200)}`); }
