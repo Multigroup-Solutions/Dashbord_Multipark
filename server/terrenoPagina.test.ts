@@ -194,9 +194,12 @@ describe("erro ≠ vazio nas páginas de terreno", () => {
     const panel = src("client/src/components/OpsPresencePanel.tsx");
     expect(panel).toContain("{!isLoading && !failed && open.length === 0");
     const live = src("client/src/components/ZelloLiveTab.tsx");
-    expect(live).toContain("m.bindTooltip(escapeHtml(name)");
-    expect(live).toContain("`<b>${escapeHtml(name)}</b><br/>`");
-    expect(live).not.toMatch(/`<b>\$\{name\}<\/b>/);
+    expect(live).toContain("<ZelloGoogleMap drivers={mapDrivers} />");
+    const map = src("client/src/components/maps/ZelloGoogleMap.tsx");
+    expect(map).toContain("label.textContent = driver.name");
+    expect(map).toContain("title.textContent = driver.name");
+    expect(map).toContain("row.textContent = line");
+    expect(map).not.toMatch(/\.innerHTML\s*=/);
     expect(live).toContain(`what={locQ.data ?`);
   });
   it("Rádio e Serviços", () => {
