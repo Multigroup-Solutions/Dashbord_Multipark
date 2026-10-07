@@ -2,7 +2,7 @@
 modulo: criticas
 titulo: Condutores e agentes
 rotas: /pessoas/condutores-agentes
-palavras: km, quilómetros, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou
+palavras: km, quilómetros, km sem movimentos, pontos da equipa, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou
 ---
 # Condutores e agentes
 
@@ -37,7 +37,17 @@ Em **Pessoas → Condutores e agentes** (team leader e acima, nas tuas cidades).
 - No topo, os números do grupo e a **evolução**: por dia na semana e no mês, por mês no ano. A seguir, o **ranking**, por **pontos** ou por **pontos por hora**. O "por hora" só aparece com 4 h ou mais no período.
   - **Pontos**: a soma ponderada do que a aba mede. Nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação, e os dias acima do limite descontam.
   - **Nota**: 100 para o melhor.
-- Carrega numa pessoa para ver a evolução dela e todos os números.
+- Na tabela, o **nome** abre a ficha no RH; o resto da linha abre o **detalhe** (a evolução dela e todos os números). Todos os cabeçalhos ordenam (um clique sobe, outro desce, o terceiro volta ao ranking).
+- **Cidade e marca**: o filtro do topo. Com uma cidade escolhida, cada dia conta na cidade onde a pessoa trabalhou (a escala ou a avaliação do dia). Quem tem a ficha noutra cidade entra só com os dias que fez nesta. A marca conta como a cidade dela.
+- **Condutores e extras**: quem não fez nada no período não aparece. **km sem movimentos** quer dizer que a pessoa tem km do Zello mas nenhum movimento na Multipark: o utilizador do Zello/PDA e o agente da Multipark não estão na mesma ficha. Carrega no aviso para abrir as **Ligações** e juntar.
+- **Team leaders pela escala**: quem tem posto de condutor ou extra mas foi team leader em pelo menos metade dos dias escalados do período aparece nos Team leaders, com a etiqueta "TL pela escala".
+- **A equipa**, nas abas Team leaders e Supervisão:
+  - **Team leader**: o turno dele na escala (mesmo dia, cidade e turno, sem ele).
+  - **Supervisor**: todos os escalados das cidades da conta dele, team leaders incluídos. Dois supervisores da mesma cidade partilham a equipa.
+  - Para cada um mostra: dias com equipa, pessoas·dia, movimentos da equipa (recolhas, entregas e movimentos), custo da equipa (como na Atividade do dia), quem mexeu carros sem o Zello ligado, horas paradas (GPS), movimentos por pessoa·dia e € por movimento.
+  - No supervisor mostra também as **extras a menos / a mais**: as horas·pessoa abaixo ou acima da previsão do Extras Dia. Só aparece com **Dia** ou **Semana**, porque a previsão é lida ao vivo, dia a dia.
+  - **Pontos da equipa**: contam-se por dia e por pessoa da equipa, para uma equipa maior não ganhar só por ser maior. Cada movimento dá +1, cada pessoa que mexeu carros sem Zello −20 e cada hora parada −2, sempre a dividir pelo número de pessoas da equipa. Somam-se aos pontos do TL (que é avaliado também como condutor) e do supervisor.
+- **Como se contam os pontos desta aba**: a tabela de baixo mostra quanto vale cada coisa, os pontos da avaliação (recolha +3, movimento +2…) e os da equipa.
 - Os telefonemas da central contam quando a consola da Vodafone os regista na dashboard (Integrações → Central Vodafone). As chamadas internas (com colegas do RH ou de extensões) não contam, exceto as do supervisor a ligar aos extras (a chamar o pessoal). As chamadas do WhatsApp contam sempre. Os emails mandados diretamente no Gmail ainda não têm autor.
 
 **Quando a leitura falha**

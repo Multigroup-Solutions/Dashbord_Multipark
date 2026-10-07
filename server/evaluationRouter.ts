@@ -135,11 +135,13 @@ export const evaluationRouter = router({
     period: z.enum(["day", "week", "month", "year"]),
     anchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     group: z.enum(["office", "supervision", "teamleaders", "drivers"]),
+    /** 42c: filtro do topo (cidade ou marca → a cidade dela; o middleware estreita o âmbito) */
+    projectId: z.number().int().optional(),
   })).query(async ({ ctx, input }) => {
     if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin vê o desempenho por pessoa." });
     const { loadPeoplePerformance } = await import("./peoplePerformance");
     try {
-      return await loadPeoplePerformance(input);
+      return await loadPeoplePerformance({ period: input.period, anchor: input.anchor, group: input.group });
     } catch (err) {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: String((err as Error)?.message ?? err).slice(0, 200) });
     }
