@@ -67,7 +67,7 @@ function CarLine({ c }: { c: LiveCar }) {
       {c.parkName ? <span className="text-muted-foreground"> · {c.parkName}</span> : null}
       {c.checkOut ? ` · saída ${fmtPTDateTime(c.checkOut)}` : ""}
       {c.returnFlight ? ` · ✈ ${c.returnFlight}${c.returnFlightEta ? ` (ETA ${fmtPTTime(c.returnFlightEta)})` : ""}` : ""}
-      {c.covered ? " · coberto" : ""}
+      {c.covered ? " · toldo" : ""}
       {c.overdue ? <span className="text-red-700"> · passou a hora de saída</span> : null}
     </p>
   );
@@ -80,7 +80,7 @@ function UpcomingLine({ u }: { u: LiveUpcoming }) {
       {u.flight ? ` · ✈ ${u.flight}${u.flightEta ? ` (ETA ${fmtPTTime(u.flightEta)})` : ""}` : ""}
       {u.parkName ? <span className="text-muted-foreground"> · {u.parkName}</span> : null}
       {place(u) ? ` · ${place(u)}` : ""}
-      {u.covered ? " · coberto" : ""}
+      {u.covered ? " · toldo" : ""}
       {u.kind === "checkout" && (u.toPay ?? 0) > 0 ? <span className="text-amber-700"> · a pagar {eur(u.toPay)}</span> : null}
     </p>
   );
@@ -181,7 +181,7 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
               ))}
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground">Só os carros parados no parque (as operações em curso estão em baixo). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado. Por baixo, em que garagem de cada parque estão. A vermelho (⚠) o que está mal arrumado: indoor fora de uma garagem coberta, ou descoberto numa coberta (COBERTO, CENTRAL COBERTO). A amarelo, cobertos numa garagem descoberta (PD, PD FORA, CENTRAL): passam para a coberta se der.</p>
+          <p className="text-[11px] text-muted-foreground">Só os carros parados no parque (as operações em curso estão em baixo). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado. Por baixo, em que garagem de cada parque estão. A vermelho (⚠) o que está mal arrumado: indoor fora de uma garagem coberta, ou descoberto numa coberta (COBERTO, CENTRAL COBERTO). A amarelo, toldos numa garagem descoberta (PD, PD FORA, CENTRAL): passam para a coberta se der.</p>
           <MisplacedCars cars={d.inPark.cars} />
           {d.inPark.byPark.length > 0 && (
             <details className="text-xs">
@@ -258,14 +258,14 @@ function MisplacedCars({ cars }: { cars: LiveCar[] }) {
   return (
     <details className="text-xs" open={bad > 0}>
       <summary className="cursor-pointer select-none font-semibold text-rose-700 dark:text-rose-300">
-        Mal arrumados: {bad}{rows.length > bad ? ` · ${rows.length - bad} cobertos numa descoberta` : ""}
+        Mal arrumados: {bad}{rows.length > bad ? ` · ${rows.length - bad} toldos numa descoberta` : ""}
       </summary>
       <ul className="mt-1.5 space-y-1">
         {rows.map(({ c, fit }) => (
           <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <Badge variant="outline" className={fit === "bad" ? "border-rose-400 text-rose-700 dark:text-rose-300" : "border-amber-400 text-amber-700 dark:text-amber-300"}>{fit === "bad" ? "mal arrumado" : "se der, coberta"}</Badge>
             <span className="font-medium">{c.plate ?? c.code ?? "—"}</span>
-            <span className="text-muted-foreground">{({ uncovered: "Descoberto", covered: "Coberto", indoor: "Interior", vip: "VIP", unknown: "Sem tipo" } as const)[c.spotType]} em {c.garage}{c.spot ? ` · lugar ${c.spot}` : ""}{c.parkName ? ` · ${c.parkName}` : ""}</span>
+            <span className="text-muted-foreground">{({ uncovered: "Descoberto", covered: "Toldo", indoor: "Interior", vip: "VIP", unknown: "Sem tipo" } as const)[c.spotType]} em {c.garage}{c.spot ? ` · lugar ${c.spot}` : ""}{c.parkName ? ` · ${c.parkName}` : ""}</span>
           </li>
         ))}
       </ul>

@@ -70,7 +70,7 @@ describe("44b — Estado do parque ao vivo por tipo de lugar", () => {
     const out = summarizeBySpotType([car("uncovered", "Airpark"), car("uncovered", "Airpark"), car("uncovered", "Redpark"), car("covered", "Airpark"), car("covered", "Airpark", "moving")]);
     expect(out).toMatchObject([
       { type: "uncovered", label: "Descoberto", total: 3, byPark: [{ parkName: "Airpark", count: 2 }, { parkName: "Redpark", count: 1 }] },
-      { type: "covered", label: "Coberto", total: 1, byPark: [{ parkName: "Airpark", count: 1 }] },
+      { type: "covered", label: "Toldo", total: 1, byPark: [{ parkName: "Airpark", count: 1 }] },
     ]);
   });
   it("o ecrã mostra por tipo (e por parque/garagem só a pedido)", () => {

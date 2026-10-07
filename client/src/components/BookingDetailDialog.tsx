@@ -7,6 +7,7 @@ import { openInMultipark } from "@/lib/multiparkLinks";
 import { ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import { normalizeEmail } from "@shared/email";
+import { PARKING_TYPE_LABELS } from "@shared/opsLists";
 
 // Detalhe completo de uma reserva (partilhado: folhas de Operações, Serviços…).
 // Mostra tudo o que a BD já tem — cliente, carro, voos, pagamento, origem,
@@ -66,7 +67,7 @@ export default function BookingDetailDialog({ booking: b, onClose }: { booking: 
               <Badge className={statusCfg?.color || "bg-gray-100 text-gray-800"}>{statusCfg?.label || b.status}</Badge>
             </span>
           </CardTitle>
-          <p className="text-xs text-muted-foreground">{b.parkName} {b.city} · {b.parkingType ?? ""} {b.vehicleType ? `· ${VEHICLE_LABELS[b.vehicleType] ?? b.vehicleType}` : ""}</p>
+          <p className="text-xs text-muted-foreground">{b.parkName} {b.city} · {b.parkingType ? (PARKING_TYPE_LABELS[b.parkingType] ?? b.parkingType) : ""} {b.vehicleType ? `· ${VEHICLE_LABELS[b.vehicleType] ?? b.vehicleType}` : ""}</p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1">
