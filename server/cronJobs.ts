@@ -598,8 +598,8 @@ export async function extrasAutoCron(o: { deadlineAt: number; from?: string | nu
 }
 
 /**
- * "Pressão" do Extras-Dia: 60 dias da BD Multipark agregados por grupo de
- * parques (um grupo de cada vez; `cursor` retoma no grupo seguinte). Sem
+ * "Pressão" do Extras-Dia: o histórico da BD Multipark (acumula desde abril)
+ * agregado por grupo de parques (um grupo de cada vez; `cursor` retoma no grupo seguinte). Sem
  * DATABASE_URL_MULTIPARK → nota (ok, saltado); grupos que falham → vermelho.
  */
 export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {

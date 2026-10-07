@@ -311,7 +311,7 @@ app.get("/api/cron/cash-external", async (req, res) => {
   sendCronRun(res, await cashExternalCron({ deadlineAt: manualDeadline() }));
 });
 
-// "Pressão" do Extras-Dia (60 dias da BD Multipark → ops_pressure_stats).
+// "Pressão" do Extras-Dia (desde extras.timesSince, acumula; BD Multipark → ops_pressure_stats).
 // ?cursor=… retoma no grupo seguinte (vem na resposta quando done:false).
 app.get("/api/cron/extras-pressure", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
