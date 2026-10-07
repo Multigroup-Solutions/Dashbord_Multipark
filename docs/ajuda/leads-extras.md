@@ -2,7 +2,7 @@
 modulo: leads_extras
 titulo: Leads de Extras (leads, candidaturas do site e recrutamento)
 rotas: /extras-leads
-palavras: lixo, por tratar, prontas, pronta, repor, desfazer, não é candidatura, mailer-daemon, delivery status, cartões, lista, ver em cartões, ver em lista, foto, leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop
+palavras: novo lead, cidade do lead, cidade obrigatória, sem cidade, tarefa da candidatura, candidatura de condutor, lixo, por tratar, prontas, pronta, repor, desfazer, não é candidatura, mailer-daemon, delivery status, cartões, lista, ver em cartões, ver em lista, foto, leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop
 ---
 # Leads de Extras
 
@@ -12,7 +12,9 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 
 **Leads**
 - Contactos que ainda não são extras (do site, de email ou criados à mão). Convida-os por WhatsApp com o template "Seja motorista" e acompanha quem responde.
+- **Novo lead**: nome, **Cidade \*** (a cidade em que o extra vai trabalhar), telemóvel ou email e notas. A cidade é obrigatória: se só tens uma cidade já vem escolhida; só quem vê todas as cidades pode escolher **Sem cidade** (o lead fica visível a todas). Só podes escolher as tuas cidades.
 - Seleciona vários na tabela para mudar o estado ou a cidade de uma vez, ou para enviar o WhatsApp em lote.
+- **Tarefa da candidatura**: cada candidatura nova (do site ou do email de recrutamento) cria uma tarefa **Candidatura de condutor** nas Tarefas, para os supervisores da cidade, com prazo de 24 h. Fecha sozinha quando o lead é convertido, fica Sem interesse ou é arquivado. O link da tarefa abre aqui só esse lead (**Ver todos** volta à lista).
 - **Anexos do email lidos pela IA** (com o interruptor **"IA: anexos dos emails do RH (CV)"** ligado em Definições → Automações; desligado por omissão): os anexos dos emails de candidatura (CV em PDF, imagem ou Word .docx, documentos) são lidos uma vez. No candidato ficam **só os campos vazios**: NIF, n.º do BI/CC, n.º da carta, a cidade **só quando é certa**, telefone/email (outros contactos vão para as notas). Abre o candidato (**Editar**) para ver **"Lido pela IA"**: o **resumo do CV** para quem entrevista e cada anexo (lido, não lido e porquê, ou falhou).
 - **NIF e números dos documentos só o RH vê** (front office, back office, administrador). Ao converter em extra passam para a ficha, só se lá estiverem vazios.
 - Enviar a dois leads ou mais pede primeiro **"Confirmar envio a N"**. Quem recebeu o mesmo template nas últimas 24 h (à mão ou no lembrete automático) fica de fora, com "já recebeu (24 h)".
@@ -20,7 +22,7 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 - A faixa **Atenção** mostra os novos sem contacto há mais de 24 h e os contactados sem resposta há mais de 3 dias. Há também um resumo diário no sino, por cidade.
 - Com **Lembretes das leads de extras** ligado (Definições → Automações), os contactados sem resposta recebem 1 lembrete automático. Com **Resposta automática às leads** ligado (vem desligado), quem responde recebe o link da candidatura.
 - Quem responde **STOP** (ou "parar") deixa de receber mensagens.
-- **Converter** um lead cria (ou liga) a ficha de extra na cidade que escolheres:
+- **Converter** um lead cria (ou liga) a ficha de extra na cidade que escolheres (vem já escolhida a cidade do lead, se for uma das tuas; podes mudar):
   - se a pessoa já tem ficha ativa, o lead liga-se a ela;
   - se já teve ficha **desativada**, aparece o motivo da saída e só se reativa se confirmares;
   - quem saiu por **roubo** ou **despedimento** não se reativa a partir de um lead (fala com o RH);
