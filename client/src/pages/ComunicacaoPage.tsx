@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useIsMobile } from "@/hooks/useMobile";
+import { useSidebar } from "@/components/ui/sidebar";
 import { toast } from "sonner";
 import { AlarmClock, Archive, Bot, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, Star, UserRound } from "lucide-react";
 import {
@@ -32,6 +33,17 @@ const ME = "me";
 
 export default function ComunicacaoPage({ personal = false }: { personal?: boolean }) {
   const isMobile = useIsMobile();
+  // Lote 45 (Jorge: "empurrar isto mais para a esquerda… isto ficar maior"): no PC o menu
+  // recolhe ao entrar nas caixas e volta como estava ao sair (abre-se à mão quando se quiser).
+  const sidebar = useSidebar();
+  const sidebarWasOpen = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (sidebar.isMobile) return;
+    sidebarWasOpen.current = sidebar.open;
+    if (sidebar.open) sidebar.setOpen(false);
+    return () => { if (sidebarWasOpen.current) sidebar.setOpen(true); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebar.isMobile]);
   const [location, navigate] = useLocation();
   const search = useSearch();
   const params = useMemo(() => new URLSearchParams(search), [search]);

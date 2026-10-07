@@ -14,6 +14,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
    - As caixas que são **tuas** (o endereço está em teu nome ou da tua função) têm o ícone de pessoa.
    - **Caixa inicial**: carrega na **estrela ★** ao lado de uma caixa e é essa que abre quando entras. Sem estrela, abre a primeira que é tua (ou a primeira da lista). Cada pessoa tem a sua.
    - Aqui só há email. O WhatsApp tem a entrada dele: **Comunicação → WhatsApp**.
+   - No PC, o **menu do lado recolhe** quando entras nas caixas, para os emails terem o ecrã todo; abre-o no botão do menu quando precisares e, ao sair, volta como estava.
    - No telemóvel, a caixa escolhe-se na lista do topo.
    - **Trabalha sempre daqui:** o que envias pelo dashboard fica registado na conversa e ligado ao cliente — também do **O meu email** (uma mensagem nova para um cliente fica no separador **Comunicações** da ficha dele).
 2. Filtra por estado (Aberta, Pendente, Resolvida), responsável, marca, **Por responder** ou **Não lidas**, e pesquisa por assunto, nome ou email.

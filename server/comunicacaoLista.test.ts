@@ -94,6 +94,11 @@ describe("Caixas de email (lote 45, Jorge 7 out 2026: \"é só de email\")", () 
 });
 
 describe("Menu", () => {
+  it("no PC o menu recolhe nas caixas e volta como estava ao sair", () => {
+    const page = src("client/src/pages/ComunicacaoPage.tsx");
+    expect(page).toContain("if (sidebar.open) sidebar.setOpen(false);");
+    expect(page).toContain("return () => { if (sidebarWasOpen.current) sidebar.setOpen(true); };");
+  });
   it("o WhatsApp está na Comunicação; as caixas são só de email", () => {
     const layout = src("client/src/components/DashboardLayout.tsx");
     const comms = layout.indexOf('label: "Comunicação"');
@@ -102,6 +107,11 @@ describe("Menu", () => {
     expect(waItem).toBeGreaterThan(comms);
     expect(waItem).toBeLessThan(layout.indexOf('label: "Sistema"'));
     expect(layout).toContain('label: "Caixas de email", path: "/comunicacao"');
+    // Ordem do lote 45: Caixas de email → O meu email → WhatsApp.
+    const boxes = layout.indexOf('label: "Caixas de email", path: "/comunicacao"');
+    const mine = layout.indexOf('label: "O meu email", path: "/comunicacao/meu-email"');
+    expect(boxes).toBeLessThan(mine);
+    expect(mine).toBeLessThan(waItem);
     expect(src("docs/ajuda/whatsapp.md")).toContain("Menu **Comunicação → WhatsApp**");
   });
 });

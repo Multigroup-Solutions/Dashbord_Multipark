@@ -223,11 +223,12 @@ export const menuGroups: MenuGroup[] = [
       // Caixas partilhadas: matriz (comunicacao) + regra de cada caixa no servidor.
       // Lote 45 (Jorge, 7 out 2026): "é só de email" — o WhatsApp tem a entrada dele; as caixas
       // ficam à esquerda como no Gmail, com o "O meu email" na mesma lista.
+      // Ordem (Jorge, lote 45): Caixas de email → O meu email → WhatsApp.
       { icon: Inbox, label: "Caixas de email", path: "/comunicacao", module: "comunicacao" },
-      // 17f (Jorge): o WhatsApp passa para a Comunicação.
-      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
       // O próprio email: qualquer pessoa (a ficha é de todos); liga a conta Google na página.
       { icon: MailIcon, label: "O meu email", path: "/comunicacao/meu-email", anyOf: ["ficha"] },
+      // 17f (Jorge): o WhatsApp passa para a Comunicação.
+      { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
     ],
   },
   {
