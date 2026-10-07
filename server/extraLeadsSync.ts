@@ -434,6 +434,16 @@ export async function rejectApplicationForLead(
 }
 
 /**
+ * O UPDATE de markLeadConvertedForApplication ainda muda alguma coisa neste
+ * lead? Já convertido para esta ficha e com tudo preenchido → não (voltar a
+ * aprovar a candidatura, ou aprovar depois do «Converter», não é outra
+ * conversão). PURA — a mesma condição vai no WHERE.
+ */
+export function leadConversionPending(lead: { status: string | null; employeeId: number | null; convertedAt: string | null; projectId: number | null; sourceRef: string | null }): boolean {
+  return lead.status !== "converted" || lead.employeeId == null || lead.convertedAt == null || lead.projectId == null || lead.sourceRef == null;
+}
+
+/**
  * Candidatura aprovada → o lead correspondente fica Convertido e ligado à
  * ficha. Não mexe num lead já ligado a outra ficha. Best-effort.
  */
@@ -450,7 +460,12 @@ export async function markLeadConvertedForApplication(
     if (!app) return null;
     const lead = await findLeadForApplication(db, app);
     if (!lead || (lead.employeeId != null && lead.employeeId !== employeeId)) return null;
+    if (!leadConversionPending(lead)) return null;
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    // A condição de "muda alguma coisa" vai também no WHERE: com o FOUND_ROWS
+    // do mysql2 (ligado por omissão) um UPDATE que encontra a linha mas não a
+    // muda conta como 1 — duas aprovações ao mesmo tempo registavam as duas
+    // "convertido pela aprovação".
     const upd = await db
       .update(extraLeads)
       .set({
@@ -460,7 +475,11 @@ export async function markLeadConvertedForApplication(
         projectId: sql`COALESCE(${extraLeads.projectId}, ${projectId})`,
         sourceRef: sql`COALESCE(${extraLeads.sourceRef}, ${`application:${applicationId}`})`,
       } as any)
-      .where(and(eq(extraLeads.id, lead.id), or(isNull(extraLeads.employeeId), eq(extraLeads.employeeId, employeeId))));
+      .where(and(
+        eq(extraLeads.id, lead.id),
+        or(isNull(extraLeads.employeeId), eq(extraLeads.employeeId, employeeId)),
+        sql`(${extraLeads.status} <> 'converted' OR ${extraLeads.employeeId} IS NULL OR ${extraLeads.convertedAt} IS NULL OR ${extraLeads.projectId} IS NULL OR ${extraLeads.sourceRef} IS NULL)`,
+      ));
     if (extractAffectedRows(upd) === 0) return null;
     await logActivity({
       userId: userId ?? 0,
