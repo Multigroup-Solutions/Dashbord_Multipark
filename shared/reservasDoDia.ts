@@ -12,7 +12,8 @@
  * Definições). O canal Direto / Parceiro / Marketplace é da contabilidade e NÃO
  * entra aqui (vive em shared/multiparkParks.ts, usado pela ficha da reserva).
  */
-import { isNotOperatedByName } from "./multiparkParks";
+import { classifyBookingChannel, isNotOperatedByName, OUR_PARK_BRAND_LABELS, OUR_PARK_BRANDS, type OurParkBrand } from "./multiparkParks";
+import { CITY_LABELS, type CityKey } from "./city";
 
 // ─── Estados e fases ────────────────────────────────────────────────────────
 
@@ -120,6 +121,9 @@ export interface DayBooking {
   parkId: string;
   parkName: string | null;
   parkCity: string | null;
+  /** 42d: cidade do parque (classificação: a cidade do parque ou, sem ela, o nome) e marca nossa. */
+  cityKey?: CityKey | null;
+  brand?: OurParkBrand | null;
   /** Grupo operacional (operationalParkGroup). */
   groupKey: string;
   groupLabel: string;
@@ -222,6 +226,9 @@ export interface DayFilters {
   kind?: "todas" | MovementKind;
   /** Park.id ou "" (todos). */
   parkId?: string;
+  /** 42d: cidade ("" = todas) e hora de Lisboa (0–23; null = todas). */
+  city?: CityKey | "";
+  hour?: number | null;
   /** "ativas" (sem canceladas; as por pagar contam), "todas" ou um estado. */
   state?: string;
   search?: string;
@@ -241,6 +248,8 @@ export function filterMovements(rows: DayMovement[], f: DayFilters): DayMovement
     const b = m.booking;
     if (f.kind && f.kind !== "todas" && m.kind !== f.kind) return false;
     if (f.parkId && b.parkId !== f.parkId) return false;
+    if (f.city && b.cityKey !== f.city) return false;
+    if (f.hour != null && lisbonClockHour(m.at) !== f.hour) return false;
     if (state === "ativas" && !countsForDay(b.status)) return false;
     if (state !== "ativas" && state !== "todas" && b.status !== state) return false;
     if (q) {
@@ -316,4 +325,94 @@ export function excludeParks<T extends { id: string; name?: string | null }>(par
 export function isParkExcluded(p: { id: string; name?: string | null }, excludedIds: ReadonlySet<string> | readonly string[] | null | undefined): boolean {
   const ex = excludedIds instanceof Set ? excludedIds : new Set(excludedIds ?? []);
   return ex.has(p.id) || isNotOperatedByName(p.name);
+}
+
+// ─── 42d: por cidade, por hora e por marca (Marketplace à parte) ────────────
+// Jorge, 7 out 2026: "reservas do dia… separa isto por cidade… por hora, o que
+// vai sair, o que vai entrar… os parques que não são nossos também têm que
+// estar aqui… Marketplace também pode ser Airpark, Redpark ou Skypark".
+
+export const DAY_CITIES: readonly CityKey[] = ["lisboa", "porto", "faro"];
+
+const LISBON_HOUR = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Lisbon", hour: "2-digit", hourCycle: "h23" });
+/** Hora do relógio de Lisboa (0–23) de um instante ISO. PURA. */
+export function lisbonClockHour(iso: string): number {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? Number(LISBON_HOUR.format(t)) % 24 : -1;
+}
+
+/** Balde da reserva: a marca nossa (diretas e parceiros) ou Marketplace. */
+export type DayBucket = OurParkBrand | "marketplace";
+export const DAY_BUCKETS: readonly DayBucket[] = [...OUR_PARK_BRANDS, "marketplace"];
+export const DAY_BUCKET_LABELS: Record<DayBucket, string> = { ...OUR_PARK_BRAND_LABELS, marketplace: "Marketplace" };
+
+/**
+ * Marketplace = os parques que não são nossos (Travelparking, Boardingpark…)
+ * E as reservas das nossas marcas que vieram pelo Marketplace (origem
+ * MARKETPLACE) — a regra do canal (classifyBookingChannel). O resto conta na
+ * marca do parque. PURA.
+ */
+export function dayBucketOf(b: Pick<DayBooking, "ours" | "brand" | "origin" | "paymentSource" | "partnerId">): DayBucket {
+  const ch = classifyBookingChannel({ parkOurs: b.ours, origin: b.origin, paymentSource: b.paymentSource, partnerId: b.partnerId }).channel;
+  return ch === "marketplace" || !b.brand ? "marketplace" : b.brand;
+}
+
+export interface InOut { entradas: number; saidas: number; entradasPorFazer: number; saidasPorFazer: number }
+export interface CityDay extends InOut {
+  city: CityKey | null;
+  label: string;
+  byBucket: Record<DayBucket, InOut>;
+  /** Dentro do Marketplace: cada parque (os de terceiros pelo nome; os nossos "Airpark (pelo Marketplace)"). */
+  marketplaceParks: Array<InOut & { name: string }>;
+  /** 24 horas de Lisboa (0–23), o que entra e o que sai em cada uma. */
+  hours: Array<InOut & { hour: number }>;
+}
+
+const emptyInOut = (): InOut => ({ entradas: 0, saidas: 0, entradasPorFazer: 0, saidasPorFazer: 0 });
+const addMove = (x: InOut, m: DayMovement) => {
+  if (m.kind === "entrada") { x.entradas++; if (!m.done) x.entradasPorFazer++; }
+  else { x.saidas++; if (!m.done) x.saidasPorFazer++; }
+};
+
+/**
+ * Movimentos do dia → uma linha por cidade (Lisboa, Porto, Faro, e "Sem
+ * cidade" se houver), com as marcas, o Marketplace por parque e as 24 horas.
+ * As canceladas não contam (countsForDay). PURA.
+ */
+export function summarizeByCity(rows: DayMovement[]): CityDay[] {
+  const out = new Map<string, CityDay>();
+  const get = (city: CityKey | null) => {
+    const k = city ?? "";
+    let c = out.get(k);
+    if (!c) {
+      c = {
+        city, label: city ? CITY_LABELS[city] : "Sem cidade", ...emptyInOut(),
+        byBucket: Object.fromEntries(DAY_BUCKETS.map((b) => [b, emptyInOut()])) as Record<DayBucket, InOut>,
+        marketplaceParks: [], hours: Array.from({ length: 24 }, (_, hour) => ({ hour, ...emptyInOut() })),
+      };
+      out.set(k, c);
+    }
+    return c;
+  };
+  const parks = new Map<string, InOut & { name: string }>();
+  for (const m of rows) {
+    const b = m.booking;
+    if (!countsForDay(b.status)) continue;
+    const c = get(b.cityKey ?? null);
+    addMove(c, m);
+    const bucket = dayBucketOf(b);
+    addMove(c.byBucket[bucket], m);
+    const h = lisbonClockHour(m.at);
+    if (h >= 0) addMove(c.hours[h], m);
+    if (bucket === "marketplace") {
+      const name = b.ours ? `${b.parkName ?? b.groupLabel} (pelo Marketplace)` : (b.parkName ?? b.groupLabel);
+      const k = `${b.cityKey ?? ""}|${name}`;
+      let p = parks.get(k);
+      if (!p) { p = { name, ...emptyInOut() }; parks.set(k, p); c.marketplaceParks.push(p); }
+      addMove(p, m);
+    }
+  }
+  for (const c of out.values()) c.marketplaceParks.sort((a, b) => b.entradas + b.saidas - (a.entradas + a.saidas) || a.name.localeCompare(b.name, "pt"));
+  const order = (c: CityDay) => (c.city ? DAY_CITIES.indexOf(c.city) : 99);
+  return [...out.values()].sort((a, b) => order(a) - order(b));
 }
