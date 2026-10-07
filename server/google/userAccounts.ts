@@ -22,7 +22,7 @@ import {
   type GoogleFeature,
 } from "../../shared/mail";
 import {
-  GOOGLE_USER_PROVIDER, consentUrl, googleErrorMessage, isAuthRevokedError, newOAuthClient, userAuthClient, workspaceConfig,
+  GOOGLE_USER_PROVIDER, consentUrl, googleErrorMessage, googleRevokedReason, isAuthRevokedError, newOAuthClient, userAuthClient, workspaceConfig,
 } from "./workspace";
 import type { OAuth2Client, TokenPayload } from "google-auth-library";
 
@@ -178,7 +178,9 @@ export async function userGoogleAuth(userId: number, feature: GoogleFeature = "g
     await client.getAccessToken();
   } catch (err) {
     if (isAuthRevokedError(err)) {
-      await setGoogleAccountStatus(userId, "reauth_required", "A autorização expirou ou foi revogada. Volta a ligar a conta.");
+      const why = googleRevokedReason(err);
+      console.warn(`[GoogleAccount] utilizador ${userId}: reautorização necessária — ${why}`);
+      await setGoogleAccountStatus(userId, "reauth_required", why);
       throw new Error("A autorização da conta Google expirou — volta a ligar no Perfil.");
     }
     await setGoogleAccountStatus(userId, "error", googleErrorMessage(err)).catch(() => {});

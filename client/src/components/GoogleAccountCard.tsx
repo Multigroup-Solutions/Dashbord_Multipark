@@ -71,7 +71,7 @@ export function GoogleAccountCard({ compact = false, returnTo }: { compact?: boo
       )}
       {needsReauth && (
         <p className="text-xs text-amber-800 dark:text-amber-200">
-          A autorização expirou ou foi revogada — o teu email, as tarefas e o calendário Google estão parados. {s?.lastError ?? ""}
+          O teu email, as tarefas e o calendário Google estão parados até voltares a ligar. {s?.lastError || "A autorização expirou ou foi revogada."}
         </p>
       )}
       {s && !s.configured && (
