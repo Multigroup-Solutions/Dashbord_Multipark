@@ -1,9 +1,9 @@
 // Mapa ao vivo do Zello (pedido Jorge): posições/velocidades de todos os
 // condutores em tempo real (polling 30s), alertas visuais e ecrã de ligação
-// Zello↔funcionário. Leaflet + OpenStreetMap — sem chave de API.
-import { useEffect, useMemo, useRef, useState } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+// Zello↔funcionário. Google Maps com marcadores e trânsito.
+import { useMemo } from "react";
+import { ZelloGoogleMap } from "@/components/maps/ZelloGoogleMap";
+import { hasValidMapPosition, type ZelloMapPosition } from "@shared/zelloMap";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,23 +14,11 @@ import { Satellite, Gauge, Battery, WifiOff, Link as LinkIcon, RefreshCw } from 
 import { fmtPTTime } from "@/lib/lisbonTime";
 import { retryTransient } from "@/lib/queryRetry";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
-// Tooltip/popup do Leaflet são HTML e os nomes vêm do Zello e das fichas:
-// sem escapar, um nome com "<img onerror=…>" corria no browser.
-import { escapeHtml } from "@shared/caseRules";
-
 const SPEED_ALERT_KMH = 130;
 const BATTERY_ALERT = 15;
 const OFFLINE_ALERT_S = 3600;
 
-type LiveLoc = {
-  username: string;
-  displayName: string;
-  latitude: number;
-  longitude: number;
-  speed: number;
-  batteryLevel: number;
-  lastReportDelay: number;
-};
+type LiveLoc = ZelloMapPosition;
 
 function markerColor(l: LiveLoc): string {
   if (l.lastReportDelay > OFFLINE_ALERT_S) return "#94a3b8"; // offline — cinza
@@ -72,7 +60,7 @@ export function ZelloLiveTab() {
   const realName = (l: { username: string; displayName: string }) =>
     mapByZello.get(l.username.toLowerCase())?.fullName || l.displayName || l.username;
 
-  const live = (locations as LiveLoc[]).filter((l) => l.latitude !== 0 || l.longitude !== 0);
+  const live = (locations as LiveLoc[]).filter(hasValidMapPosition);
   const alerts = useMemo(() => {
     const out: { key: string; icon: any; text: string; color: string }[] = [];
     for (const l of live) {
@@ -87,50 +75,13 @@ export function ZelloLiveTab() {
     return out;
   }, [live, mapByZello]);
 
-  // ── Leaflet ──
-  const mapDiv = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const layerRef = useRef<L.LayerGroup | null>(null);
-  const didFitRef = useRef(false);
-
-  useEffect(() => {
-    if (!mapDiv.current || mapRef.current) return;
-    const map = L.map(mapDiv.current).setView([38.77, -9.13], 9); // Lisboa por defeito
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; OpenStreetMap',
-      maxZoom: 19,
-    }).addTo(map);
-    layerRef.current = L.layerGroup().addTo(map);
-    mapRef.current = map;
-    return () => { map.remove(); mapRef.current = null; layerRef.current = null; };
-  }, []);
-
-  useEffect(() => {
-    const layer = layerRef.current, map = mapRef.current;
-    if (!layer || !map) return;
-    layer.clearLayers();
-    for (const l of live) {
-      const name = realName(l);
-      const m = L.circleMarker([l.latitude, l.longitude], {
-        radius: 9, weight: 2, color: "#ffffff", fillColor: markerColor(l), fillOpacity: 0.95,
-      });
-      const resolved = mapByZello.get(l.username.toLowerCase());
-      m.bindTooltip(escapeHtml(name), { permanent: true, direction: "top", offset: [0, -8], className: "zello-tooltip" });
-      m.bindPopup(
-        `<b>${escapeHtml(name)}</b><br/>` +
-        `${resolved?.source === "pda" ? `via check-in de hoje no PDA ${escapeHtml(String(resolved.pdaName ?? ""))}<br/>` : ""}` +
-        `${l.displayName !== name ? `Zello: ${escapeHtml(String(l.displayName ?? ""))}<br/>` : ""}` +
-        `Velocidade: ${Math.round(l.speed)} km/h<br/>` +
-        `${l.batteryLevel > 0 ? `Bateria: ${l.batteryLevel}%<br/>` : ""}` +
-        `${l.lastReportDelay > 60 ? `Último report há ${Math.round(l.lastReportDelay / 60)} min` : "A reportar agora"}`
-      );
-      m.addTo(layer);
-    }
-    if (!didFitRef.current && live.length > 0) {
-      didFitRef.current = true;
-      map.fitBounds(L.latLngBounds(live.map((l) => [l.latitude, l.longitude] as [number, number])), { padding: [40, 40], maxZoom: 13 });
-    }
-  }, [live, mapByZello]);
+  const mapDrivers = live.map((l) => {
+    const resolved = mapByZello.get(l.username.toLowerCase());
+    return {
+      ...l, name: realName(l), color: markerColor(l),
+      pdaName: resolved?.source === "pda" ? resolved.pdaName ?? "" : undefined,
+    };
+  });
 
   // ── Ligação Zello ↔ funcionário ──
   const mapMutation = trpc.operational.zello.mapUserToEmployee.useMutation({
@@ -181,7 +132,7 @@ export function ZelloLiveTab() {
 
       <Card>
         <CardContent className="p-0 overflow-hidden rounded-lg">
-          <div ref={mapDiv} className="w-full h-[360px] sm:h-[520px] z-0" />
+          <ZelloGoogleMap drivers={mapDrivers} />
         </CardContent>
       </Card>
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
