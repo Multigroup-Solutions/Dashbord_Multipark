@@ -70,42 +70,38 @@ describe("Quem é: uma linha a partir do RH e do CRM", () => {
   });
 });
 
-describe("Lista única na Comunicação", () => {
+describe("Caixas de email (lote 45, Jorge 7 out 2026: \"é só de email\")", () => {
   const page = src("client/src/pages/ComunicacaoPage.tsx");
-  it("o WhatsApp da caixa entra na lista (Info = Geral) só para quem tem o WhatsApp", () => {
-    expect(page).toContain('const waBox = mailbox === GENERAL_BOX_KEY ? "geral" : mailbox;');
-    expect(page).toContain("const canWa = !personal && !!overview.data?.canWhatsapp && !!mailbox && mailbox !== MAIL_TRIAGE_KEY && !archived;");
-    expect(src("server/mail/router.ts")).toContain('canWhatsapp: can(v as any, "whatsapp", "view")');
+  it("já não mistura o WhatsApp: a lista é só de email e o WhatsApp tem a página dele", () => {
+    expect(page).not.toMatch(/whatsapp\.conversations\.list/);
+    expect(page).not.toMatch(/WhatsAppInboxPage/);
+    expect(page).not.toMatch(/canWa/);
+    // a página do WhatsApp continua a poder ser embutida noutros sítios
+    expect(src("client/src/pages/WhatsAppInboxPage.tsx")).toContain("const embedded = embeddedConversationId !== undefined;");
   });
-  it("uma lista só, pela última mensagem; marca escolhida = só email", () => {
-    expect(page).toContain(".sort((a, b) => String(b.at ?? \"\").localeCompare(String(a.at ?? \"\")))");
-    expect(page).toContain('const waConvs = canWa && page === 1 && brand === "all"');
+  it("as caixas à esquerda, umas por baixo das outras, com o O meu email na mesma lista", () => {
+    expect(page).toContain('aria-label="Caixas de email"');
+    expect(page).toContain('boxButton(ME, "O meu email"');
+    expect(page).toMatch(/boxes\.map\(\(b\) => boxButton\(b\.key, b\.label, b\.unread/);
+    expect(page).toContain('<div className="w-52 xl:w-60 shrink-0 min-h-0">{boxesColumn}</div>');
   });
-  it("erro do WhatsApp aparece como erro, não como lista vazia", () => {
-    expect(page).toContain('what="as conversas de WhatsApp"');
-    expect(page).toContain("!(canWa && (wa.isLoading || wa.error)) && rows.length === 0");
-  });
-  it("a conversa de WhatsApp abre ali (?w=), com o ecrã do WhatsApp embutido", () => {
-    expect(page).toContain('p.set("w", String(id));');
-    expect(page).toContain("<WhatsAppInboxPage embeddedConversationId={selectedWa} onEmbeddedClose={close}");
-    const wa = src("client/src/pages/WhatsAppInboxPage.tsx");
-    expect(wa).toContain("const embedded = embeddedConversationId !== undefined;");
-    // Embutida: sem a lista própria (a da Comunicação chega) e sem os atalhos de teclado da página.
-    expect(wa).toContain("enabled: !embedded,");
-    expect(wa).toContain("if (embedded) return;");
-    expect(wa).toContain("trpc.whatsapp.conversations.identity.useQuery(");
+  it("cada um entra pela sua caixa: link → escolhida (★) → a primeira que é dele → a primeira", () => {
+    expect(page).toContain("pickInitialMailbox({ home: overview.data.homeBox ?? null, boxes, triage: !!triage })");
+    expect(page).toContain("trpc.mail.setHomeBox.useMutation");
+    expect(src("server/mail/router.ts")).toContain("setHomeBox: protectedProcedure");
+    expect(src("server/mail/inbox.ts")).toContain("mine: mailboxIsMine(m.addresses, viewer),");
   });
 });
 
 describe("Menu", () => {
-  it("o WhatsApp passa para a Comunicação; as caixas dizem que têm email e WhatsApp", () => {
+  it("o WhatsApp está na Comunicação; as caixas são só de email", () => {
     const layout = src("client/src/components/DashboardLayout.tsx");
     const comms = layout.indexOf('label: "Comunicação"');
     const waItem = layout.indexOf('label: "WhatsApp", path: "/whatsapp"');
     expect(comms).toBeGreaterThan(0);
     expect(waItem).toBeGreaterThan(comms);
     expect(waItem).toBeLessThan(layout.indexOf('label: "Sistema"'));
-    expect(layout).toContain('label: "Caixas (email e WhatsApp)", path: "/comunicacao"');
+    expect(layout).toContain('label: "Caixas de email", path: "/comunicacao"');
     expect(src("docs/ajuda/whatsapp.md")).toContain("Menu **Comunicação → WhatsApp**");
   });
 });

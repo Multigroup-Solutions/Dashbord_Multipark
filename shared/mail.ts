@@ -1001,3 +1001,31 @@ export function isAllowedWorkspaceIdentity(
 export function parseDomainList(raw: string | null | undefined): string[] {
   return Array.from(new Set(String(raw ?? "").split(/[\s,;]+/).map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean)));
 }
+
+// ─── Lote 45: por onde cada pessoa entra ────────────────────────────────────
+
+/** A caixa é "da pessoa" quando um endereço a tem (ou ao papel dela) como responsável. PURA. */
+export function mailboxIsMine(addresses: ReadonlyArray<{ owner?: string | null; active?: boolean }>, viewer: { id: number; role?: string | null }): boolean {
+  return addresses.some((a) => a.active !== false && !!a.owner && (a.owner === `user:${viewer.id}` || (!!viewer.role && a.owner === `role:${viewer.role}`)));
+}
+
+/**
+ * Caixa aberta ao entrar na Comunicação (Jorge, 7 out 2026: "não começava
+ * pelas reclamações, cada um começava pela sua"): a do link; senão a que a
+ * pessoa escolheu como inicial; senão a primeira que é dela; senão a primeira
+ * que vê; sem caixas partilhadas, o próprio email. PURA.
+ */
+export function pickInitialMailbox(o: {
+  fromUrl?: string | null;
+  home?: string | null;
+  boxes: ReadonlyArray<{ key: string; mine?: boolean }>;
+  triage?: boolean;
+}): string {
+  const keys = new Set(o.boxes.map((b) => b.key));
+  const ok = (k: string | null | undefined): k is string => !!k && (k === "me" || keys.has(k) || (k === MAIL_TRIAGE_KEY && !!o.triage));
+  if (ok(o.fromUrl)) return o.fromUrl;
+  if (ok(o.home)) return o.home;
+  const mine = o.boxes.find((b) => b.mine);
+  if (mine) return mine.key;
+  return o.boxes[0]?.key ?? "me";
+}

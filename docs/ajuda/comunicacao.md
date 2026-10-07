@@ -2,17 +2,20 @@
 modulo: comunicacao
 titulo: Comunicação (email)
 rotas: /comunicacao, /comunicacao/meu-email
-palavras: ligar, telefonar, enviar email, enviar whatsapp, ficha do cliente, ficha da reserva, ficha do colaborador, email, emails, gmail, lista única, whatsapp na comunicação, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
+palavras: caixas de email, caixa inicial, estrela, como no gmail, ligar, telefonar, enviar email, enviar whatsapp, ficha do cliente, ficha da reserva, ficha do colaborador, email, emails, gmail, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
 ---
 # Comunicação (email)
 
 Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard. Todo o email entra e sai pela API do Gmail; cada email é separado pelo alias a que foi enviado (tabela em Definições → Comunicação — ver a ajuda "Email por alias").
 
-**Caixas (email e WhatsApp)** (menu **Comunicação → Caixas (email e WhatsApp)**)
-1. Escolhe a caixa (ex.: Reclamações, Info, Comercial). Só vês as caixas do teu módulo; algumas caixas (ex.: admin@) são só para a administração.
-   - A lista junta os **emails e as conversas de WhatsApp** dessa caixa, das mais recentes para as mais antigas. As de WhatsApp têm a etiqueta verde **WhatsApp**; na caixa **Info** aparecem as conversas de WhatsApp ainda sem caixa (Geral).
-   - Abrir uma conversa de WhatsApp abre-a ali mesmo, com tudo o que tens no menu **Comunicação → WhatsApp** (responder, templates, estado, responsável, ligar).
-   - Com uma **marca** escolhida só aparecem emails (o WhatsApp não tem marca). Para ver mais de 300 conversas de WhatsApp, usa o menu **WhatsApp**.
+**Caixas de email** (menu **Comunicação → Caixas de email**)
+1. As caixas ficam à esquerda, **umas por baixo das outras, como no Gmail**: carregas numa e a lista muda logo ao lado, sem sair da página. Cada caixa mostra quantos emails tem **por ler**. Só vês as caixas do teu módulo; algumas (ex.: admin@) são só para a administração.
+   - **O meu email** está na mesma lista (em **Pessoal**), por baixo das caixas da empresa.
+   - As caixas que são **tuas** (o endereço está em teu nome ou da tua função) têm o ícone de pessoa.
+   - **Caixa inicial**: carrega na **estrela ★** ao lado de uma caixa e é essa que abre quando entras. Sem estrela, abre a primeira que é tua (ou a primeira da lista). Cada pessoa tem a sua.
+   - Aqui só há email. O WhatsApp tem a entrada dele: **Comunicação → WhatsApp**.
+   - No telemóvel, a caixa escolhe-se na lista do topo.
+   - **Trabalha sempre daqui:** o que envias pelo dashboard fica registado na conversa e ligado ao cliente — também do **O meu email** (uma mensagem nova para um cliente fica no separador **Comunicações** da ficha dele).
 2. Filtra por estado (Aberta, Pendente, Resolvida), responsável, marca, **Por responder** ou **Não lidas**, e pesquisa por assunto, nome ou email.
 3. Abre a conversa: **Responder**, **Responder a todos** ou **Reencaminhar**. O email sai pelo endereço (alias) a que o cliente escreveu, com a assinatura da marca. Se o alias não estiver configurado como "Enviar email como" no Gmail, aparece um erro a explicar o que falta.
    - Carregar duas vezes em **Enviar**, ou carregar outra vez depois de um erro, **nunca manda dois emails** ao cliente.
@@ -25,7 +28,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 7. **Notificações automáticas de reserva** (os emails "Nova Reserva" que o sistema Multipark manda para a caixa "Reservas (geral)", ~4000 por mês): ficam guardadas, mas **escondidas** nas listas. Carrega em **Mostrar automáticos** para as ver (aparecem com a etiqueta "Automático"). A **pesquisa** encontra-as sempre. Não contam como por ler nem geram avisos.
 8. **Emails que a aplicação envia sozinha** (pedidos e lembretes de disponibilidade aos extras — "Disponibilidade — semana de…", "Lembrete: ainda não indicaste a tua disponibilidade" —, avisos de escala, turnos cancelados, lembretes de formação, notificações e relatórios): também ficam **escondidos** como automáticos, mesmo quando saem por recursos-humanos@. Não aparecem como conversas abertas, não contam como por ler, por responder nem abertas, e não ficam para atribuir. **Se a pessoa responder**, a conversa passa a normal e aparece na caixa (quem respondeu foi uma pessoa). Os envios a um extra ficam na ficha dele: **Recursos Humanos → abre o colaborador → Comunicações automáticas** (data, tipo, assunto e estado *Enviado*/*Respondido*; o assunto abre a conversa). Os que já estavam na caixa antes desta mudança foram limpos uma vez, automaticamente.
 
-**Caixas por tema (email e WhatsApp)**
+**Caixas por tema**
 - As caixas são as mesmas do WhatsApp: além das que já havia (Reclamações, Perdidos, Críticas, Ocorrências, RH, Info, Comercial…) há **Alterações**, **Cancelamentos**, **Serviços extra**, **Parcerias** e **Faturação** — caixas "por tema", sem endereço próprio. Os pedidos para **cancelar** uma reserva (ou o reembolso de uma cancelada) vão para **Cancelamentos**; mudar datas, horas, voo ou matrícula fica em **Alterações**.
 - Os emails novos que chegam ao **info@** (caixa geral) vão para a caixa do tema pela **IA** — com **"IA: separar os emails pelas caixas"** ligado em Definições → Automações (desligado por omissão). A conversa mostra **"veio de Info (IA)"**. A IA não cria reclamações nem perdidos sozinha — só move.
 - **Mover para…** (na conversa) muda a caixa à mão; depois disso a IA não volta a mexer. Quem não vê a caixa nova deixa de ver a conversa.
@@ -48,7 +51,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 **Caixas (super admin)**
 - Uma caixa já não se apaga: **Desativar** tira-a das listas e da sincronização, e as conversas ficam guardadas (o super admin continua a vê-las). Para voltar: **Editar → Ativa**.
 
-**O meu email** (menu **Comunicação → O meu email**)
+**O meu email** (menu **Comunicação → O meu email**, ou **O meu email** na lista das caixas)
 1. Carrega em **Ligar a minha conta Google** (também no Perfil). Só contas do Workspace da empresa.
 2. Os teus emails aparecem em poucos minutos. Na caixa, vês tu e o **super admin**, que consegue consultar o email pessoal de todos — só em **O meu email → escolher a pessoa**; nunca aparece na caixa geral nem nas pesquisas — mas não envia em nome de ninguém. Os emails trocados com um cliente ficam também no separador **Comunicações** da ficha desse cliente, visíveis a quem tem acesso aos Clientes.
    - **Atualizar** diz se a leitura falhou (por exemplo "a ligação ao Google expirou"), em vez de "Sem emails novos".
