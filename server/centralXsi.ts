@@ -10,7 +10,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { fetchWithTimeout } from "./_core/fetchWithTimeout";
 import {
-  XSI_ACTIONS_PATH, last9, normalizeXsiBase, normalizeXsiUserId, parseXsiCallLogs, parseXsiDirectory, parseXsiProfile,
+  XSI_ACTIONS_PATH, last9, xsiBodyKind, normalizeXsiBase, normalizeXsiUserId, parseXsiCallLogs, parseXsiDirectory, parseXsiProfile,
   type XsiCallLog, type XsiDirectoryEntry,
 } from "../shared/centralXsi";
 
@@ -100,6 +100,22 @@ export function xsiStatusNote(status: number, error?: string | null): string {
 
 interface XsiResult { status: number; body: string; ms: number; error: string | null }
 
+/** 40a.1: só conta como resposta do Xsi um 2xx com XML (a página do escudo anti-robôs também vem com 200). */
+export function xsiResultOk(r: { status: number; body: string }): boolean {
+  return r.status >= 200 && r.status < 300 && xsiBodyKind(r.body) === "xml";
+}
+/** Explicação do resultado, incluindo "200 mas página web" (escudo anti-robôs ou endereço que não é o Xsi). PURA. */
+export function xsiResultNote(r: { status: number; body: string; error: string | null }): string {
+  if (r.status >= 200 && r.status < 300) {
+    const k = xsiBodyKind(r.body);
+    if (k === "shield") return `barrado pela proteção anti-robôs da Vodafone (${r.status} com página de verificação) — a Vodafone tem de autorizar o servidor da dashboard`;
+    if (k === "html") return `respondeu com uma página web (${r.status}), não com o Xsi — endereço errado ou caminho diferente`;
+    if (k === "empty") return `resposta vazia (${r.status})`;
+    if (k === "other") return `resposta que não é XML (${r.status})`;
+  }
+  return xsiStatusNote(r.status, r.error);
+}
+
 /** Um pedido ao Xsi com autenticação básica; fica no registo da central (sem a palavra-passe). */
 async function xsiGet(c: XsiCreds, path: string, label: string): Promise<XsiResult> {
   const url = `${c.baseUrl}${XSI_ACTIONS_PATH}${path}`;
@@ -119,7 +135,7 @@ async function xsiGet(c: XsiCreds, path: string, label: string): Promise<XsiResu
     const db = await getDb();
     await db?.execute(sql`INSERT INTO central_requests (at, method, path, status, accountId, note, bodyJson)
         VALUES (${utc(Date.now())}, ${"XSI GET"}, ${`${XSI_ACTIONS_PATH}${path}`.slice(0, 255)}, ${res.status}, ${null},
-                ${`Xsi · ${label} · ${xsiStatusNote(res.status, res.error)} · ${res.ms} ms`.slice(0, 255)},
+                ${`Xsi · ${label} · ${xsiResultNote(res)} · ${res.ms} ms`.slice(0, 255)},
                 ${JSON.stringify({ response: res.body.slice(0, 4000) || null, error: res.error })})`);
   } catch { /* o registo nunca trava o teste */ }
   return res;
@@ -160,7 +176,7 @@ export async function testXsi(): Promise<XsiTestResult> {
   const c = await loadCreds();
   if ("error" in c) return { ...empty, error: c.error };
   const u = `/user/${encodeURIComponent(c.readUserId)}`;
-  const step = (name: string, r: XsiResult): XsiTestStep => ({ step: name, status: r.status, ok: r.status >= 200 && r.status < 300, note: xsiStatusNote(r.status, r.error), ms: r.ms });
+  const step = (name: string, r: XsiResult): XsiTestStep => ({ step: name, status: r.status, ok: xsiResultOk(r), note: xsiResultNote(r), ms: r.ms });
   const prof = await xsiGet(c, `${u}/profile`, "perfil");
   const steps = [step("Perfil do utilizador", prof)];
   if (!steps[0].ok) {
@@ -176,14 +192,14 @@ export async function testXsi(): Promise<XsiTestResult> {
   // alguns servidores recusam os parâmetros de paginação: tenta sem eles
   const dir = dir0.status === 400 ? await xsiGet(c, `${u}/directories/Enterprise`, "diretório da empresa (sem paginação)") : dir0;
   steps.push(step("Diretório da empresa", dir), step("Registos de chamadas", logs), step("Registos completos (com durações)", enh));
-  const parsedDir = dir.status === 200 ? parseXsiDirectory(dir.body) : null;
+  const parsedDir = xsiResultOk(dir) ? parseXsiDirectory(dir.body) : null;
   const entries = parsedDir ? await matchDirectory(parsedDir.entries) : [];
-  const parsedLogs = logs.status === 200 ? parseXsiCallLogs(logs.body) : null;
+  const parsedLogs = xsiResultOk(logs) ? parseXsiCallLogs(logs.body) : null;
   return finish({
     ok: true, at, steps, error: null, profile: parseXsiProfile(prof.body),
     directory: parsedDir ? { total: parsedDir.total, count: entries.length, matched: entries.filter((e) => e.employeeId != null).length, entries } : null,
     callLogs: parsedLogs ? { count: parsedLogs.length, sample: parsedLogs.slice(0, 10) } : null,
-    enhancedCallLogs: enh.status === 200 ? true : enh.status === 404 || enh.status === 403 ? false : null,
+    enhancedCallLogs: xsiResultOk(enh) ? true : enh.status === 404 || enh.status === 403 ? false : null,
   });
 }
 

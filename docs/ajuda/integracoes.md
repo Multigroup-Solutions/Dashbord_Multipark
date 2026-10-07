@@ -53,7 +53,7 @@ O Xsi é a ligação direta à plataforma da Vodafone. Ao contrário da consola,
 2. **Utilizador** e **palavra-passe** do Xsi. A palavra-passe fica guardada **cifrada** e nunca volta a aparecer. Para a mudar, escreve a nova e guarda.
 3. **Utilizador a ler** (opcional): só se a Vodafone te deu um administrador. Põe aqui o utilizador One Net de uma pessoa para o teste.
 4. **Testar ligação**: lê o perfil, o diretório da empresa e os registos de chamadas. Não muda nada na Vodafone. Mostra:
-   - cada passo, com a explicação se falhar ("utilizador ou palavra-passe errados", "o IP da dashboard não está autorizado"…);
+   - cada passo, com a explicação se falhar ("utilizador ou palavra-passe errados", "o IP da dashboard não está autorizado", "barrado pela proteção anti-robôs da Vodafone"…). Este último quer dizer que o servidor da Vodafone mostrou uma página de verificação em vez de responder; a Vodafone tem de autorizar o servidor da dashboard;
    - o diretório da One Net, cruzado com as fichas do RH pelo telefone. Quem aparece "sem ficha no RH com este número" precisa do número certo na ficha.
    - O que o Xsi respondeu fica em "Ver o que a consola pediu e o que o Xsi respondeu".
 
