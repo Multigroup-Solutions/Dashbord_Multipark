@@ -1517,7 +1517,29 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "marketing", "view");
         const { computeAlertsFor } = await import("./marketingAlertsService");
-        return computeAlertsFor(input?.projectId);
+        const { hiddenAlerts } = await import("./alertDismissals");
+        const { lisbonToday } = await import("../shared/expensePeriods");
+        const month = lisbonToday().slice(0, 7);
+        // Os tirados valem para toda a gente (Jorge, 7 out 2026). Se a leitura falhar,
+        // os alertas aparecem todos e o ecrã diz porquê (erro ≠ "nada tirado").
+        const [r, hidden] = await Promise.all([
+          computeAlertsFor(input?.projectId),
+          hiddenAlerts("marketing", input?.projectId, month).then((h) => ({ map: h, error: null as string | null }))
+            .catch((e: any) => ({ map: {} as Record<string, string>, error: String(e?.message ?? e).slice(0, 160) })),
+        ]);
+        return { ...r, month, hidden: hidden.map, hiddenError: hidden.error };
+      }),
+    /** Tirar um alerta da lista (para todos, até ao fim do mês) ou repô-lo. */
+    dismissAlert: protectedProcedure
+      .input(z.object({ projectId: z.number().optional(), key: z.string().min(1).max(191), restore: z.boolean().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "marketing", "view");
+        const { setAlertHidden } = await import("./alertDismissals");
+        const { lisbonToday } = await import("../shared/expensePeriods");
+        const changed = await setAlertHidden("marketing", input.projectId, input.key, lisbonToday().slice(0, 7), ctx.user.id, !input.restore);
+        if (!changed) throw new TRPCError({ code: "NOT_FOUND", message: "Este alerta já está na lista." });
+        await logActivity({ userId: ctx.user.id, action: input.restore ? "alert_restored" : "alert_dismissed", entity: "marketing_alert", details: `${input.key}${input.projectId ? ` · projeto ${input.projectId}` : ""}` });
+        return { ok: true as const };
       }),
     // Canais e clientes (Jorge, 24 set 2026): reservas e custo por canal de
     // aquisição + ligação ao CRM (canal de entrada de cada cliente).
@@ -4493,6 +4515,36 @@ export const appRouter = router({
       const { listAgentPartners } = await import("./db");
       return listAgentPartners();
     }),
+
+    /**
+     * Jorge (7 out 2026): nos Parceiros/Agências, "liga o agente Multipark
+     * àquele parceiro" — os agentes (pessoas que marcam pelo portal da agência)
+     * ligados a esta parceria, para a ficha do parceiro no CRM.
+     */
+    partnerAgents: protectedProcedure
+      .input(z.object({ partnershipId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "parcerias", "view");
+        const { listAgentPartners } = await import("./db");
+        return (await listAgentPartners()).filter((a) => a.partnershipId === input.partnershipId)
+          .map((a) => ({ agentName: a.agentName }))
+          .sort((a, b) => a.agentName.localeCompare(b.agentName, "pt"));
+      }),
+    /** Procurar agentes da Multipark para ligar a um parceiro (com a parceria em que já estão). */
+    searchAgentsForPartner: protectedProcedure
+      .input(z.object({ q: z.string().trim().min(2).max(120) }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "parcerias", "manage");
+        const [{ searchAgents }, { listAgentPartners }] = await Promise.all([import("./personIdentity"), import("./db")]);
+        const [hits, links] = await Promise.all([searchAgents(input.q, 20), listAgentPartners()]);
+        const byName = new Map(links.map((l) => [l.agentName, l]));
+        return hits.filter((h) => !!h.agentName).map((h) => ({
+          agentUserId: h.agentUserId, agentName: h.agentName as string, email: h.email, active: h.active,
+          employeeName: h.employeeName,
+          partnershipId: byName.get(h.agentName as string)?.partnershipId ?? null,
+          partnerName: byName.get(h.agentName as string)?.partnerName ?? null,
+        }));
+      }),
 
     // "Não é funcionário": marca um agente como teste/integração — sai da
     // lista de agentes por ligar (reversível)

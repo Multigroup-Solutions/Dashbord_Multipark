@@ -191,8 +191,11 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
   rh: {
     // 41c (Jorge, 7 out 2026): o supervisor faz tudo no RH da SUA cidade — as
     // regras finas (só abaixo dele, sem dinheiro nem identidade) em server/rhAccess.ts.
+    // Jorge (7 out 2026): "o backoffice não está acima do supervisor, está na mesma
+    // posição… põe para gerir a nível nacional mas sem ordenados" — as mesmas regras
+    // do supervisor, em todas as cidades (rh_salarios continua só admin+).
     team_leader: "below_city:ve", supervisor: "city:vem",
-    ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
+    frontoffice: "national:ve", backoffice: "national:vem", ...same("national:vexm", ...TOP),
   },
   rh_salarios: same("national:vexm", ...TOP),
   leads_extras: {

@@ -2,7 +2,7 @@
 modulo: clientes
 titulo: Clientes (CRM: fichas, filtros, juntar e separar)
 rotas: /clientes, /clientes/rever
-palavras: mesma pessoa, recusadas, não é a mesma pessoa, ia nas dúvidas, telefonar ao cliente, escrever email ao cliente, consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
+palavras: ligar agente, agente da multipark, agentes do parceiro, mesma pessoa, recusadas, não é a mesma pessoa, ia nas dúvidas, telefonar ao cliente, escrever email ao cliente, consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
 ---
 # Clientes (CRM)
 
@@ -71,6 +71,7 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - Os parceiros que trabalham nos nossos parques, lidos ao vivo da Multipark: tipo, percentagem que ficam em cada parque, reservas deste mês e dos últimos 12, valor e o que é **nosso** (o que fica depois da percentagem deles).
 - **Agregadores**: cobram o cliente e ficam com a percentagem deles; no fim do mês mandamos-lhes o extrato e faturamos o que é nosso. **Agências**: a percentagem é nossa e vão pagando. As reservas contam pelo **mês de entrada** do carro.
 - Na página do parceiro: mês a mês, últimas reservas (com **Abrir na Multipark**), clientes que vieram por eles, dados fiscais e o cartão **No CRM** (ligação ao registo nas Parcerias, contacto e notas).
+- Cartão **Agentes da Multipark** (quem vê as Parcerias): os agentes (as pessoas que marcam pelo portal da agência) ligados a este parceiro. **Ligar agente** (quem gere as Parcerias) procura o agente pelo nome ou email e liga-o; se já estava noutro parceiro, pergunta antes de o passar. O **X** tira-o deste parceiro. Não mexe nos clientes. Só dá depois de o parceiro estar ligado a um registo das Parcerias (cartão **No CRM**).
 
 **Parcerias (nós agregamos)** (separador na lista de clientes)
 - Os parques que não são nossos, em que levamos clientes pelo marketplace e ficamos com uma comissão: dono, contactos, reservas e a nossa comissão, mês a mês.

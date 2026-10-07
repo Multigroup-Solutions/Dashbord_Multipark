@@ -79,9 +79,13 @@ describe("matriz de acessos — papéis do dono", () => {
     }
     expect(sees("backoffice", "integracoes")).toBe(false);   // 19d (Jorge): hub só admin e super_admin
     expect(sees("frontoffice", "permissoes")).toBe(false);
-    for (const m of MODULES.map(x => x.id).filter(id => id !== "permissoes")) {
+    // Jorge (7 out 2026): o back office gere o RH nacional (sem ordenados); o front office continua a ver e editar.
+    for (const m of MODULES.map(x => x.id).filter(id => id !== "permissoes" && id !== "rh")) {
       expect(MATRIX[m].frontoffice).toEqual(MATRIX[m].backoffice);
     }
+    expect(can("backoffice", "rh", "manage")).toBe(true);
+    expect(can("frontoffice", "rh", "manage")).toBe(false);
+    expect(sees("backoffice", "rh_salarios")).toBe(false);
   });
 
   it("admin: backoffice + Financeiro (sem Faturação) e Dashboards; sem Marketing, Logs, Faturação nem Anual", () => {
@@ -113,8 +117,6 @@ describe("matriz de acessos — papéis do dono", () => {
       for (let i = 1; i < chain.length; i++) {
         const lower = MATRIX[m.id][chain[i - 1]], upper = MATRIX[m.id][chain[i]];
         if (lower.access === "none") continue;
-        // 41c (Jorge, 7 out 2026): o supervisor GERE o RH da sua cidade; o back office (nacional) continua a ver e editar, sem gerir.
-        if (m.id === "rh" && chain[i - 1] === "supervisor" && chain[i] === "backoffice") continue;
         // Marketing/Logs/Faturação/Anual: correção explícita do dono (admin fica sem eles).
         for (const a of lower.actions) expect({ m: m.id, role: chain[i], has: upper.actions.includes(a) }).toEqual({ m: m.id, role: chain[i], has: true });
       }
