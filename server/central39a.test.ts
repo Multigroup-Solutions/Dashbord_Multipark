@@ -11,7 +11,8 @@ import express from "express";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  callContactRef, contactRedirect, extractPhone, flattenNameValueList, normalizeCentralUsername, parseContactRef, parseSugarCall, parseSugarDate, redactForLog, sugarSearchPhone,
+  callContactRef, contactRedirect, extractPhone, flattenNameValueList, normalizeCentralUsername, parseContactRef, parseSugarCall, parseSugarDate, phoneFromSearchNote,
+  redactForLog, searchNote, sugarSearchPhone,
 } from "../shared/centralSugar";
 
 const h = vi.hoisted(() => ({ enabled: true, enableOnRefresh: false, forced: 0, stored: undefined as boolean | undefined, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
@@ -39,6 +40,13 @@ vi.mock("./db", () => ({
       if (/FROM employees/.test(sql) && /REGEXP_REPLACE/.test(sql)) return [params.includes("934000000") ? [{ id: 7, fullName: "Rui Condutor", position: "driver", email: null }] : []];
       if (/FROM crm_client_phones cp JOIN crm_clients c/.test(sql)) return [params[0] === "+351913225918" ? [{ id: 55, displayName: "Maria Cliente", primaryEmail: "maria@ex.pt", isPro: 1, bookings: 12 }] : []];
       if (/SELECT phone FROM crm_client_phones WHERE clientId/.test(sql)) return [params[0] === 55 ? [{ phone: "+351913225918" }] : []];
+      // 39e: a última pesquisa desta conta que deu o contacto (o LIKE sobre a nota do registo)
+      if (/SELECT note FROM central_requests/.test(sql)) {
+        const [acc, , like] = params as [number, string, string];
+        const re = new RegExp(`^${String(like).split("%").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+        const hit = h.queries.filter((x) => /INSERT INTO central_requests/.test(x.sql) && x.params[4] === acc && re.test(String(x.params[5]))).at(-1);
+        return [hit ? [{ note: hit.params[5] }] : []];
+      }
       return [[]];
     },
   }),
@@ -104,6 +112,26 @@ describe("39d — regras de quem liga", () => {
     expect(contactRedirect("#Contacts/emp-7")).toBe("/rh");
     expect(contactRedirect("#Contacts/tel-351913225918")).toBe("/clientes?q=%2B351913225918");
     expect(contactRedirect("#Calls/1")).toBe("/");
+  });
+});
+
+describe("39e — o número e a duração da chamada", () => {
+  it("o número sai da nota da pesquisa que deu esse contacto", () => {
+    const n = searchNote("935625800", "emp-1", "Jorge Tabuada");
+    expect(n).toBe("pesquisa 935625800 → emp-1 Jorge Tabuada");
+    expect(phoneFromSearchNote(n, "emp-1")).toBe("935625800");
+    expect(phoneFromSearchNote(searchNote("+351913225918", "crm-55", "Maria"), "crm-55")).toBe("+351913225918");
+    expect(phoneFromSearchNote(n, "emp-12")).toBeNull(); // outro contacto
+    expect(phoneFromSearchNote("sem tratamento (resposta vazia)", "emp-1")).toBeNull();
+    expect(phoneFromSearchNote(n, "x-1")).toBeNull();
+  });
+
+  it("a consola manda só minutos: \"0\" é menos de 1 min (0), sem campo continua sem dado", () => {
+    const now = Date.UTC(2026, 9, 7);
+    expect(parseSugarCall({ direction: "Outbound", status: "Held", duration_minutes: "0" }, now).durationS).toBe(0);
+    expect(parseSugarCall({ direction: "Outbound", status: "Held", duration_hours: "1", duration_minutes: "5" }, now).durationS).toBe(3900);
+    expect(parseSugarCall({ direction: "Outbound", status: "Held", duration_minutes: "" }, now).durationS).toBeNull();
+    expect(parseSugarCall({ direction: "Outbound", status: "Held" }, now).durationS).toBeNull();
   });
 });
 
@@ -225,6 +253,31 @@ describe("39a — a porta Sugar (HTTP)", () => {
     expect(ins[10]).toBe("tel-351210000001"); // contactRef
   });
 
+  it("39e: a chamada da consola (só com o contacto) fica com o número da pesquisa — o pedido real de 7 out 01:48", async () => {
+    const tok = await (await post("/rest/v10/oauth2/token", { grant_type: "password", username: "ana.silva", password: SECRET, client_id: "sugar", platform: "apicalls" })).json();
+    const auth = { "OAuth-Token": tok.access_token };
+    const fields = "id,full_name,title,department,phone_home,phone_work,phone_mobile,phone_other,phone_fax,email1";
+    const found = await (await post("/rest/v10/Contacts/filter", { fields, max_num: 1, q: "*934000000*" }, auth)).json();
+    expect(found.records[0]).toMatchObject({ id: "emp-7", full_name: "Rui Condutor" });
+    expect(logged().some((x) => x.params.includes("pesquisa 934000000 → emp-7 Rui Condutor"))).toBe(true);
+    const r = await post("/rest/v10/Calls", {
+      assigned_user_id: "u12", contact_id: "emp-7", date_start: "2026-10-07T00:48:05Z", description: "Descrição da chamada OC", direction: "Outbound",
+      duration_minutes: "0", name: "Chamada OC", parent_id: "emp-7", parent_type: "Contacts", status: "Held",
+    }, auth);
+    expect(r.status).toBe(200);
+    const [, accountId, userId, direction, held, startedAt, durationS, phone, subject, , contactRef] = h.calls.at(-1)!;
+    expect({ accountId, userId, direction, held, startedAt, durationS, phone, subject, contactRef }).toEqual({
+      accountId: 7, userId: 12, direction: "out", held: 1, startedAt: "2026-10-07 00:48:05", durationS: 0, phone: "+351934000000", subject: "Chamada OC", contactRef: "emp-7",
+    });
+    const look = h.queries.find((x) => /SELECT note FROM central_requests/.test(x.sql))!;
+    expect(look.sql).toMatch(/accountId = \? AND at >= \? AND note LIKE \?/);
+    expect(look.params[2]).toBe("pesquisa % → emp-7 %");
+    // contacto que esta conta nunca pesquisou: fica sem número (não se inventa)
+    await post("/rest/v10/Calls", { direction: "Inbound", status: "Held", parent_type: "Contacts", parent_id: "crm-99" }, auth);
+    expect(h.calls.at(-1)![7]).toBeNull();
+    expect(h.calls.at(-1)![10]).toBe("crm-99");
+  });
+
   it("39d: abrir o contacto na consola ({Server URL}/#Contacts/…) dá uma página que manda para a ficha", async () => {
     const r = await fetch(`${url}/`);
     expect(r.status).toBe(200);
@@ -283,5 +336,20 @@ describe("39a — ligações no resto da dashboard", () => {
     expect(s).toContain("src(\"callsAnswered\", \"chamadas da central (atendidas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1`)");
     expect(s).toContain("src(\"callsMade\", \"chamadas da central (feitas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out'`)");
     expect(s).not.toContain("ainda não há ligação");
+  });
+
+  it("39e: as últimas chamadas mostram com quem foi (ficha do RH, cliente ou contacto), lido por lotes", () => {
+    const r = src("server/centralRouter.ts");
+    expect(r).toContain("SELECT c.id, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.subject, c.contactRef, c.source, u.name AS userName");
+    expect(r).toContain("SELECT id, fullName FROM employees WHERE id IN (${list(ids.emp)})");
+    expect(r).toContain("SELECT id, displayName, firstName, lastName FROM crm_clients WHERE id IN (${list(ids.crm)})");
+    expect(r).toContain("SELECT id, name FROM crm_contacts WHERE id IN (${list(ids.ct)})");
+    expect(r).toContain("contact: c.contactRef ? contacts.get(String(c.contactRef)) ?? null : null");
+    const card = src("client/src/components/central/CentralVodafoneCard.tsx");
+    expect(card).toContain('s === 0 ? "menos de 1 min"');
+    expect(card).toContain('{c.contact.href ? <Link href={c.contact.href} className="underline">{c.contact.name}</Link> : <span>{c.contact.name}</span>}');
+    expect(card).toContain('{c.direction === "out" ? "ligou a" : "chamada de"}');
+    // sem número, a ficha não aparece duas vezes; sem ficha, o número; sem nada, o texto da consola
+    expect(card).toContain('<span>{c.phone ?? (c.contact?.kind === "Sem ficha" ? c.contact.name : c.contact ? "" : c.subject ?? "")}</span>');
   });
 });

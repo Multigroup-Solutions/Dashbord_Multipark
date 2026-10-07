@@ -4,6 +4,7 @@
  * segredo só aparece ao criar), as últimas chamadas e o que a consola pediu.
  */
 import { useMemo, useState } from "react";
+import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +21,8 @@ import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { Copy, KeyRound, PhoneCall, PhoneIncoming, PhoneMissed, PhoneOutgoing } from "lucide-react";
 
 const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => toast.success("Copiado."), () => toast.error("Não deu para copiar."));
-const dur = (s: number | null) => (s == null ? "" : s >= 60 ? `${Math.floor(s / 60)} min ${s % 60 ? `${s % 60} s` : ""}` : `${s} s`);
+// 39e: a consola manda a duração em minutos — 0 é "menos de 1 min", não "0 s"
+const dur = (s: number | null) => (s == null ? "" : s === 0 ? "menos de 1 min" : s >= 60 ? `${Math.floor(s / 60)} min ${s % 60 ? `${s % 60} s` : ""}` : `${s} s`);
 
 export function CentralVodafoneCard() {
   const utils = trpc.useUtils();
@@ -128,11 +130,19 @@ export function CentralVodafoneCard() {
           <div className="divide-y rounded-md border max-h-64 overflow-auto">
             {(q.data?.calls ?? []).length === 0 && <div className="p-2 text-xs text-muted-foreground">Ainda nenhuma.</div>}
             {(q.data?.calls ?? []).map((c) => (
-              <div key={c.id} className="flex flex-wrap items-center gap-2 p-2 text-xs">
+              <div key={c.id} className="flex flex-wrap items-center gap-2 p-2 text-xs" title={c.subject ?? undefined}>
                 {!c.held ? <PhoneMissed className="h-3.5 w-3.5 text-destructive" /> : c.direction === "out" ? <PhoneOutgoing className="h-3.5 w-3.5" /> : <PhoneIncoming className="h-3.5 w-3.5" />}
                 <span>{c.startedAt ? fmtPTDateTime(c.startedAt) : ""}</span>
                 <span className="font-medium">{c.userName ?? "?"}</span>
-                <span>{c.phone ?? c.subject ?? ""}</span>
+                <span className="text-muted-foreground">{c.direction === "out" ? "ligou a" : "chamada de"}</span>
+                {/* 39e: com quem foi (a ficha que a consola escolheu); sem ficha, o número; sem nada, o texto da consola */}
+                {c.contact && c.contact.kind !== "Sem ficha" ? (
+                  <>
+                    {c.contact.href ? <Link href={c.contact.href} className="underline">{c.contact.name}</Link> : <span>{c.contact.name}</span>}
+                    <Badge variant="outline" className="h-4 px-1 text-[10px]">{c.contact.kind}</Badge>
+                  </>
+                ) : null}
+                <span>{c.phone ?? (c.contact?.kind === "Sem ficha" ? c.contact.name : c.contact ? "" : c.subject ?? "")}</span>
                 <span className="text-muted-foreground">{dur(c.durationS)}{!c.held ? " · não atendida" : ""}</span>
               </div>
             ))}

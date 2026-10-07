@@ -88,7 +88,9 @@ export function parseSugarCall(fields: Record<string, unknown>, now: number): Ce
   const h = Number(f.duration_hours ?? 0) || 0;
   const m = Number(f.duration_minutes ?? 0) || 0;
   const secs = Number(f.duration_seconds ?? f.duration ?? NaN);
-  const durationS = Number.isFinite(secs) && secs > 0 ? Math.round(secs) : h || m ? h * 3600 + m * 60 : null;
+  // 39e: a consola manda só minutos ("duration_minutes": "0" = menos de 1 min); 0 é duração, não "sem dado"
+  const hasMinutes = [f.duration_hours, f.duration_minutes].some((v) => v != null && String(v).trim() !== "" && Number.isFinite(Number(v)));
+  const durationS = Number.isFinite(secs) && secs > 0 ? Math.round(secs) : h || m || hasMinutes ? h * 3600 + m * 60 : null;
   const startedAtMs = parseSugarDate(f.date_start) ?? parseSugarDate(f.date_entered) ?? now;
   const phone = extractPhone(f.phone, f.phone_number, f.phone_work, f.phone_mobile, f.number, subject, description);
   return {
@@ -156,4 +158,25 @@ export function contactRedirect(hash: string): string {
   if (ref.kind === "emp") return "/rh";
   if (ref.kind === "tel") return `/clientes?q=${encodeURIComponent(`+${ref.id}`)}`;
   return "/clientes";
+}
+
+// ─── 39e: o número da chamada ───────────────────────────────────────────────
+
+/** A nota que fica no registo de cada pesquisa da consola (e de onde se tira o número da chamada). PURA. */
+export function searchNote(phone: string, ref: string, name: string): string {
+  return `pesquisa ${phone} → ${ref} ${name}`;
+}
+
+/**
+ * O POST /Calls da consola só traz o contacto (`contact_id: "emp-1"`), sem o
+ * número: o número é o da última pesquisa desta conta que deu esse contacto.
+ * Lê o número de uma nota de `searchNote`; outra nota → null. PURA.
+ */
+export function phoneFromSearchNote(note: unknown, ref: string): string | null {
+  const s = String(note ?? "");
+  const head = "pesquisa ";
+  const mid = ` → ${ref} `;
+  if (!s.startsWith(head) || !parseContactRef(ref)) return null;
+  const i = s.indexOf(mid, head.length);
+  return i > head.length ? extractPhone(s.slice(head.length, i)) : null;
 }
