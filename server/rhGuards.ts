@@ -5,28 +5,35 @@
  * Regras puras em server/rhAccess.ts.
  */
 import { TRPCError } from "@trpc/server";
-import { scopedProjectIds, assertEmployeeAccess } from './cityScope';
+import { scopedProjectIds, assertEmployeeAccess, cityScope } from './cityScope';
 import { requireAccess } from "./_core/access";
-import { canViewDocuments, canViewTimeAndSchedule, canEditPersonal, isOwn, CENTER_SCOPED_ROLES, type RhViewer, type EmployeeRef, isRhAdmin, canReadEmployeeRecord } from "./rhAccess";
+import { canViewDocuments, canViewTimeAndSchedule, canEditPersonal, isOwn, CENTER_SCOPED_ROLES, type RhViewer, type EmployeeRef, isRhAdmin, canReadEmployeeRecord, canManageEmployee } from "./rhAccess";
 import { getUserById, resolveProjectIds, getEmployeeById, getEmployeeByUserId } from "./db";
 
 // ─── RH: quem está a ver (permissões por finalidade — server/rhAccess.ts) ────
 export async function rhViewer(user: { id: number; role: string }): Promise<RhViewer> {
   const me = await getEmployeeByUserId(user.id);
   let scope: number[] | null = null;
-  // supervisor, team_leader e frontoffice mexem nas fichas do SEU centro de
-  // custos (com descendentes) — o centro da ficha, não a cidade inteira.
-  if ((CENTER_SCOPED_ROLES as readonly string[]).includes(user.role)) {
+  let scopeAll = false;
+  // 41c: o supervisor gere a SUA CIDADE (as cidades do pedido: centro de
+  // custos + permissões de cidade); fora de um pedido (sem âmbito), o centro
+  // da ficha dele, como antes. O team leader fica no centro da ficha.
+  const access = user.role === "supervisor" ? cityScope.getStore() : undefined;
+  if (access) {
+    if (access.all) scopeAll = true;
+    else scope = access.projectIds;
+  } else if ((CENTER_SCOPED_ROLES as readonly string[]).includes(user.role)) {
     const pid = me?.employee?.projectId ?? null;
     scope = pid != null ? await resolveProjectIds(pid) : [];
   }
-  return { id: user.id, role: user.role, employeeId: me?.employee?.id ?? null, scopeProjectIds: scope };
+  return { id: user.id, role: user.role, employeeId: me?.employee?.id ?? null, scopeProjectIds: scope, ...(scopeAll ? { scopeAll } : {}) };
 }
 /** Referência da ficha COM o role da conta associada (para proteger fichas de admin/super_admin). */
 export async function rhEmployeeRef(employeeId: number): Promise<EmployeeRef | null> {
   const e = await getEmployeeById(employeeId);
   if (!e) return null;
-  return { id: e.employee.id, projectId: e.employee.projectId ?? null, role: await employeeAccountRole(e.employee.userId ?? null) };
+  // 41c: o posto conta para quem não tem conta (o supervisor gere de team leader para baixo).
+  return { id: e.employee.id, projectId: e.employee.projectId ?? null, role: await employeeAccountRole(e.employee.userId ?? null), position: e.employee.position ?? null };
 }
 export async function employeeAccountRole(userId: number | null): Promise<string | null> {
   if (userId == null) return null;
@@ -79,4 +86,65 @@ export async function assertCanUploadDocuments(user: { id: number; role: string 
   const ref = await rhEmployeeRefOrThrow(employeeId);
   if (!canEditPersonal(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para carregar documentos nesta ficha" });
   await assertEmployeeWriteScope(viewer, ref);
+}
+
+/**
+ * 41c: gerir a ficha (horário, ausências, ponto, ativar/desativar): o módulo
+ * RH com "gerir", a ficha na cidade de quem pede, e canManageEmployee
+ * (admin+, ou o supervisor nas fichas de quem está abaixo dele).
+ */
+export async function assertCanManageEmployee(user: { id: number; role: string }, employeeId: number, message = "Sem permissão para gerir esta ficha."): Promise<void> {
+  requireAccess(user as any, "rh", "manage");
+  await assertEmployeeAccess(employeeId);
+  const viewer = await rhViewer(user);
+  const ref = await rhEmployeeRefOrThrow(employeeId);
+  if (!canManageEmployee(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message });
+}
+
+/**
+ * 41c: o que mexe em TODAS as cidades (varrimentos de identidade, listas de
+ * todos os agentes, configuração geral, faltas de todo o país) fica com quem
+ * gere o RH de todas as cidades — o supervisor gere a dele.
+ */
+export const NATIONAL_ONLY_MESSAGE = "Isto mexe em todas as cidades: é com quem gere o RH de todas as cidades (administrador).";
+export function requireNationalRhManage(user: { id: number; role: string }): void {
+  requireAccess(user as any, "rh", "manage");
+  if (scopedProjectIds() !== undefined) throw new TRPCError({ code: "FORBIDDEN", message: NATIONAL_ONLY_MESSAGE });
+}
+
+/**
+ * 41c: ligar/soltar um agente da Multipark tira-o a quem o tinha. Com âmbito
+ * de cidade, só se quem o tem (ficha principal ou agente extra) for da tua
+ * cidade — senão pede-se a um administrador.
+ */
+export async function assertAgentHoldersInScope(agent: { agentUserId?: string | null; agentName?: string | null }): Promise<void> {
+  const allowed = scopedProjectIds();
+  if (allowed === undefined) return;
+  const { getDb } = await import("./db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+  const id = agent.agentUserId?.trim() || null, name = agent.agentName?.trim() || null;
+  if (!id && !name) return;
+  const rows = ((await db.execute(sql`
+    SELECT e.id, e.projectId FROM employees e
+     WHERE (${id} IS NOT NULL AND e.multiparkAgentUserId = ${id}) OR (${name} IS NOT NULL AND e.multiparkAgentName = ${name})
+    UNION
+    SELECT e.id, e.projectId FROM employee_agents a JOIN employees e ON e.id = a.employeeId
+     WHERE ${id} IS NOT NULL AND a.agentUserId = ${id}
+     LIMIT 20`)) as any)[0] as Array<{ id: number; projectId: number | null }> ?? [];
+  if (rows.some((r) => r.projectId == null || !allowed.includes(Number(r.projectId)))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Este agente está ligado a uma ficha de outra cidade: pede a um administrador." });
+  }
+}
+
+/** 41c: a ficha de um registo (ponto, ausência, penalização) — para o âmbito de cidade nas escritas por id. */
+export async function employeeIdOfRecord(table: "time_records" | "employee_leaves" | "employee_penalties", id: number): Promise<number | null> {
+  const { getDb } = await import("./db");
+  const { sql } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+  const rows = ((await db.execute(sql`SELECT employeeId FROM ${sql.raw(`\`${table}\``)} WHERE id = ${id} LIMIT 1`)) as any)[0] as Array<{ employeeId: number | null }> ?? [];
+  const v = rows[0]?.employeeId;
+  return v == null ? null : Number(v);
 }

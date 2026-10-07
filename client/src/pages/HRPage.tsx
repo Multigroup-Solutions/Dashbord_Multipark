@@ -203,9 +203,15 @@ function multiparkNameOf(full: string): string {
   return `${parts[0]} ${parts[parts.length - 1]}`;
 }
 
+/** 41c: postos que o supervisor dá (abaixo dele) — o servidor confirma. */
+const SUPERVISOR_POSITIONS: Position[] = ["team_leader", "senior_driver", "driver", "extra"];
+
 function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const utils = trpc.useUtils();
-  const { data: allUsers = [] } = trpc.users.list.useQuery();
+  const { user: me } = useAuth();
+  // 41c: o supervisor cria fichas na sua cidade, sem salário/subsídio nem conta escolhida à mão (admin+ faz tudo).
+  const isAdminCreate = roleRank(me?.role ?? "") >= roleRank("admin");
+  const { data: allUsers = [] } = trpc.users.list.useQuery(undefined, { enabled: isAdminCreate });
   const { data: projectsList = [] } = trpc.projects.list.useQuery();
   const [form, setForm] = useState({
     fullName: "", email: "", multiparkAgentName: "",
@@ -303,9 +309,9 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
                   contractType: form.contractType,
                   contractStart: form.contractStart || undefined,
                   contractEnd: form.contractType === "fixed_term" ? form.contractEnd || undefined : undefined,
-                  monthlySalary: form.monthlySalary || undefined,
-                  mealAllowancePerDay: form.mealAllowancePerDay || undefined,
-                  userId: form.userId ?? undefined,
+                  monthlySalary: isAdminCreate ? form.monthlySalary || undefined : undefined,
+                  mealAllowancePerDay: isAdminCreate ? form.mealAllowancePerDay || undefined : undefined,
+                  userId: isAdminCreate ? form.userId ?? undefined : undefined,
                 })}
               >
                 {create.isPending ? "A criar..." : "Confirmar e criar"}
@@ -364,7 +370,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
             <Select value={form.position} onValueChange={v => set("position", v)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {(Object.entries(POSITION_LABELS) as [Position, string][]).map(([k, v]) => (
+                {(Object.entries(POSITION_LABELS) as [Position, string][]).filter(([k]) => isAdminCreate || SUPERVISOR_POSITIONS.includes(k)).map(([k, v]) => (
                   <SelectItem key={k} value={k}>{v}</SelectItem>
                 ))}
               </SelectContent>
@@ -432,7 +438,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
               <Input type="date" value={form.contractEnd} onChange={e => set("contractEnd", e.target.value)} />
             </div>
           )}
-          {form.position !== "extra" && (
+          {form.position !== "extra" && isAdminCreate && (
             <>
               <div>
                 <Label>Salário Mensal (€)</Label>
@@ -444,7 +450,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             </>
           )}
-          <div className="sm:col-span-2">
+          {isAdminCreate && <div className="sm:col-span-2">
             <Label>Utilizador Associado</Label>
             <Select value={form.userId ? String(form.userId) : "none"} onValueChange={v => setForm(f => ({ ...f, userId: v === "none" ? null : parseInt(v) }))}>
               <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
@@ -456,7 +462,7 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground mt-1">Liga este colaborador a um utilizador da plataforma (para picar ponto, etc.)</p>
-          </div>
+          </div>}
         </div>
         <DialogFooter className="mt-4">
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
@@ -476,13 +482,16 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
 // ─── DOCUMENT UPLOAD (MULTI-FILE + CHECKLIST) ───────────────────────────────
 // `access` vem de rh.byId: quem pode mexer nos dados pessoais carrega
 // documentos; apagar é admin (ficha não protegida) ou quem carregou o ficheiro.
-type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canViewSensitive: boolean; canViewDocuments: boolean; isRh?: boolean; canChangeIban?: boolean; canApproveIban?: boolean };
-const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false };
+type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canManage?: boolean; canViewSensitive: boolean; canViewDocuments: boolean; isRh?: boolean; canChangeIban?: boolean; canApproveIban?: boolean };
+const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canManage: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false };
 
 function DocumentsTab({ employeeId, access }: { employeeId: number; access: EmployeeAccess }) {
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const canUpload = access.canEditPersonal;
+  // 41c: na própria ficha cada um carrega os SEUS documentos; contrato, anexos, termo e seguro são do RH (o servidor confirma).
+  const SELF_TYPES: DocType[] = ["id_card", "residence_permit", "driving_license", "nib_proof", "address_proof", "photo", "other"];
+  const canUploadType = (t: DocType) => canUpload && (!access.isOwn || access.canEditContract || SELF_TYPES.includes(t));
   const canDeleteDoc = (uploadedById: number | null | undefined) => access.canEditContract || (access.canEditPersonal && uploadedById != null && uploadedById === user?.id);
   const openDoc = useOpenEmployeeDoc();
   const { data: docs = [] } = trpc.rh.documents.list.useQuery({ employeeId }, { enabled: access.canViewDocuments });
@@ -635,7 +644,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                 <div className="flex items-center gap-2">
                   {uploading && uploadingCategory === type ? (
                     <div className="animate-spin w-4 h-4 border-2 border-primary border-t-transparent rounded-full" />
-                  ) : canUpload ? (
+                  ) : canUploadType(type) ? (
                     <Button size="sm" variant="ghost" className="h-7" onClick={(e) => { e.stopPropagation(); triggerUpload(type); }}>
                       <Upload className="w-3 h-3 mr-1" /> Carregar
                     </Button>
@@ -649,7 +658,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                     <div className="text-center py-6 text-muted-foreground">
                       <FileText className="w-8 h-8 mx-auto mb-2 opacity-30" />
                       <p className="text-xs">Sem documentos nesta categoria</p>
-                      {canUpload && (
+                      {canUploadType(type) && (
                         <Button size="sm" variant="outline" className="mt-2" onClick={() => triggerUpload(type)}>
                           <Upload className="w-3 h-3 mr-1" /> Carregar ficheiros
                         </Button>
@@ -1348,6 +1357,8 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       address: emp.address ?? "",
       birthDate: emp.birthDate ? new Date(emp.birthDate).toISOString().split("T")[0] : "",
       nationality: emp.nationality ?? "",
+      idDocNumber: (emp as any).idDocNumber ?? "",
+      drivingLicenseNumber: (emp as any).drivingLicenseNumber ?? "",
       position: emp.position ?? "driver",
       extraLevel: emp.extraLevel ?? 1,
       department: emp.department ?? "",
@@ -1382,7 +1393,11 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       address: editForm.address || undefined,
       birthDate: editForm.birthDate || undefined,
       nationality: editForm.nationality || undefined,
+      // 41c: n.º do documento e da carta (null limpa)
+      idDocNumber: (editForm as any).idDocNumber?.trim() || null,
+      drivingLicenseNumber: (editForm as any).drivingLicenseNumber?.trim() || null,
     } : {};
+    // 41c: o supervisor da cidade manda posto, centro e contrato (sem dinheiro, email de trabalho nem conta).
     const contract = access.canEditContract ? {
       email: editForm.email || undefined,
       position: editForm.position || undefined,
@@ -1395,10 +1410,18 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       monthlySalary: editForm.monthlySalary || undefined,
       mealAllowancePerDay: editForm.mealAllowancePerDay || undefined,
       userId: editForm.userId,
+    } : access.canManage ? {
+      position: editForm.position || undefined,
+      extraLevel: editForm.position === "extra" ? editForm.extraLevel : undefined,
+      department: editForm.department || undefined,
+      projectId: editForm.projectId != null ? Number(editForm.projectId) : undefined,
+      contractType: editForm.contractType || undefined,
+      contractStart: editForm.contractStart || undefined,
+      contractEnd: editForm.contractType === "fixed_term" ? editForm.contractEnd || undefined : undefined,
     } : {};
     updateEmployee.mutate({ id: employeeId, ...personal, ...contract });
   };
-  const canEdit = access.canEditPersonal || access.canEditContract;
+  const canEdit = access.canEditPersonal || access.canEditContract || !!access.canManage;
 
   const ef = (k: string, v: any) => setEditForm(f => ({ ...f, [k]: v }));
 
@@ -1433,7 +1456,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
         {!editing && (
           <ContactActions phones={[emp.phone, emp.personalPhone]} emails={[emp.email, emp.personalEmail]} employeeId={emp.id} mailbox="rh" />
         )}
-        {!editing && access.canEditContract && (
+        {!editing && (access.canEditContract || access.canManage) && (
           <Button
             variant={emp.isActive ? "outline" : "default"}
             disabled={setActive.isPending}
@@ -1468,7 +1491,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
         {!editing ? (
           canEdit && (
             <Button variant="outline" onClick={startEditing}>
-              <Pencil className="w-4 h-4 mr-2" /> {access.canEditContract ? "Editar" : access.isOwn ? "Editar os meus dados" : "Editar dados pessoais"}
+              <Pencil className="w-4 h-4 mr-2" /> {access.canEditContract || access.canManage ? "Editar" : access.isOwn ? "Editar os meus dados" : "Editar dados pessoais"}
             </Button>
           )
         ) : (
@@ -1693,18 +1716,31 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 <Label>Nacionalidade</Label>
                 <Input value={editForm.nationality} onChange={e => ef("nationality", e.target.value)} />
               </div>
-              {!access.canEditContract && (
+              <div>
+                <Label>N.º do documento de identificação</Label>
+                <Input value={(editForm as any).idDocNumber ?? ""} onChange={e => ef("idDocNumber", e.target.value)} maxLength={32} placeholder="CC / BI / passaporte" />
+              </div>
+              <div>
+                <Label>N.º da carta de condução</Label>
+                <Input value={(editForm as any).drivingLicenseNumber ?? ""} onChange={e => ef("drivingLicenseNumber", e.target.value)} maxLength={32} />
+              </div>
+              {!access.canEditContract && !access.canManage && (
                 <p className="sm:col-span-2 text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
                   Posto, centro de custos, contrato, salário e conta associada só podem ser alterados pelos RH (admin).
                 </p>
               )}
-              {access.canEditContract && (<>
+              {!access.canEditContract && access.canManage && (
+                <p className="sm:col-span-2 text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
+                  Como supervisor da cidade mudas o posto (até team leader), o centro de custos e o contrato. O salário, o subsídio e a conta associada são com um administrador.
+                </p>
+              )}
+              {(access.canEditContract || access.canManage) && (<>
               <div>
                 <Label>Posto *</Label>
                 <Select value={editForm.position} onValueChange={v => ef("position", v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {(Object.entries(POSITION_LABELS) as [Position, string][]).map(([k, v]) => (
+                    {(Object.entries(POSITION_LABELS) as [Position, string][]).filter(([k]) => access.canEditContract || SUPERVISOR_POSITIONS.includes(k) || k === editForm.position).map(([k, v]) => (
                       <SelectItem key={k} value={k}>{v}</SelectItem>
                     ))}
                   </SelectContent>
@@ -1774,7 +1810,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   <Input type="date" value={editForm.contractEnd} onChange={e => ef("contractEnd", e.target.value)} />
                 </div>
               )}
-              {editForm.position !== "extra" && (
+              {editForm.position !== "extra" && access.canEditContract && (
                 <>
                   <div>
                     <Label>Salário Mensal (€)</Label>
@@ -1786,7 +1822,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                   </div>
                 </>
               )}
-              <div className="sm:col-span-2">
+              {access.canEditContract && <div className="sm:col-span-2">
                 <Label>Utilizador Associado</Label>
                 <Select value={editForm.userId ? String(editForm.userId) : "none"} onValueChange={v => ef("userId", v === "none" ? null : parseInt(v))}>
                   <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
@@ -1797,7 +1833,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </div>}
               </>)}
             </div>
           </CardContent>
@@ -2321,7 +2357,12 @@ export default function HRPage() {
   const [, navigate] = useLocation();
   const { user } = useAuth();
   const userRole = user?.role ?? "user";
-  const isExtra = userRole === "extra" || userRole === "user";
+  // 41c: quem não vê a lista do RH (extra, condutor, conta sem posto…) abre
+  // logo a SUA ficha — antes o condutor caía numa lista vazia/com erro.
+  const isExtra = userRole === "extra" || userRole === "user" || !can(user as any, "rh", "view");
+  // 41c: o supervisor gere o RH da cidade (cria, importa) — os botões aparecem a quem tem "gerir".
+  const canManageRh = can(user as any, "rh", "manage");
+  const canSalaries = can(user as any, "rh_salarios", "view");
 
   // Extra users: show only their own profile
   const { data: myEmployee } = trpc.rh.me.useQuery(undefined, { enabled: isExtra });
@@ -2575,9 +2616,11 @@ export default function HRPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-muted-foreground text-sm">Gestão de colaboradores, ponto e documentação</p>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button onClick={() => setShowCreate(true)} size="sm">
-            <UserPlus className="w-4 h-4 mr-2" /> Novo Colaborador
-          </Button>
+          {canManageRh && (
+            <Button onClick={() => setShowCreate(true)} size="sm">
+              <UserPlus className="w-4 h-4 mr-2" /> Novo Colaborador
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">
@@ -2593,18 +2636,27 @@ export default function HRPage() {
               <DropdownMenuItem onClick={exportEmployeesCSV}>
                 <Download className="w-4 h-4 mr-2" /> Exportar lista (CSV)
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowPayroll(true)}>
-                <Wallet className="w-4 h-4 mr-2" /> Folha de Ordenados
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowRates(true)}>
-                <Euro className="w-4 h-4 mr-2" /> Taxas Extra
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowImport(true)}>
-                <Upload className="w-4 h-4 mr-2" /> Importar Extras (CSV)
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowUsers(true)}>
-                <Shield className="w-4 h-4 mr-2" /> Utilizadores e Permissões
-              </DropdownMenuItem>
+              {/* 41c: só o que o servidor deixa a quem vê (antes apareciam a todos e davam "sem permissão") */}
+              {canSalaries && (
+                <DropdownMenuItem onClick={() => setShowPayroll(true)}>
+                  <Wallet className="w-4 h-4 mr-2" /> Folha de Ordenados
+                </DropdownMenuItem>
+              )}
+              {canSalaries && (
+                <DropdownMenuItem onClick={() => setShowRates(true)}>
+                  <Euro className="w-4 h-4 mr-2" /> Taxas Extra
+                </DropdownMenuItem>
+              )}
+              {canManageRh && (
+                <DropdownMenuItem onClick={() => setShowImport(true)}>
+                  <Upload className="w-4 h-4 mr-2" /> Importar Extras (CSV)
+                </DropdownMenuItem>
+              )}
+              {can(user as any, "utilizadores", "view") && (
+                <DropdownMenuItem onClick={() => setShowUsers(true)}>
+                  <Shield className="w-4 h-4 mr-2" /> Utilizadores e Permissões
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

@@ -189,7 +189,9 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
     ...same("national:v", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },
   rh: {
-    team_leader: "below_city:ve", supervisor: "city:ve",
+    // 41c (Jorge, 7 out 2026): o supervisor faz tudo no RH da SUA cidade — as
+    // regras finas (só abaixo dele, sem dinheiro nem identidade) em server/rhAccess.ts.
+    team_leader: "below_city:ve", supervisor: "city:vem",
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },
   rh_salarios: same("national:vexm", ...TOP),
