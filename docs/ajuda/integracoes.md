@@ -35,7 +35,8 @@ Página **Integrações** (menu Sistema): um cartão por ligação externa — G
   1. Liga o interruptor **Central Vodafone: receber as chamadas da consola** (Definições → Automações; vem desligado). Desligado, a dashboard responde "desligada" e só regista que a consola tentou.
   2. Aqui, no cartão **Central Vodafone**, cria um **acesso por pessoa**: escolhe a conta da dashboard e o utilizador (ex.: ana.silva). A palavra-passe aparece **só uma vez**; escreve-a logo na consola dessa pessoa.
   3. Na consola: **Ligar a um servidor CRM → Sugar CRM**. Descrição "Dashboard", **Ativar CRM** e **Registar chamadas do histórico** ligados. No **Server URL**, cola o endereço do cartão. Quando pedir, usa o utilizador e a palavra-passe da pessoa desse computador.
-- **Revogar** um acesso: a consola dessa pessoa deixa logo de registar. As chamadas que já registou ficam. Não se desfaz: cria-se outro acesso.
+- **Revogar** um acesso: a consola dessa pessoa deixa logo de registar. As chamadas que já registou ficam. O acesso revogado mostra quando e por quem.
+- **Reativar** (num acesso revogado, por exemplo por engano): a consola volta a entrar com a **mesma palavra-passe** que já tem, sem mexer nela. Só se a conta da pessoa estiver ativa. Fica no histórico quem revogou e quem reativou.
 - O cartão mostra as **últimas chamadas** e **o que a consola pediu e o que o Xsi respondeu** (sem palavras-passe). Serve para ver se a consola está a chegar e o que manda.
 - **Quem está a ligar**: quando entra uma chamada, a consola pergunta o número à dashboard. A dashboard procura primeiro nas fichas do **RH** (a equipa a ligar), depois nas fichas do **CRM** (a com mais reservas, com "Cliente" ou "Cliente Pro" e o número de reservas) e por fim nos contactos do CRM. Se não encontrar, responde "Sem ficha (+351…)" para a consola ter onde registar a chamada.
 - A chamada fica ligada a esse contacto. Abrir o contacto na consola leva à ficha do cliente na dashboard.
