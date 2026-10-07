@@ -38,7 +38,7 @@ describe("Pessoas → Condutores e agentes", () => {
     expect(p).toMatch(/<TabsTrigger value="drivers">/);
     expect(p).toMatch(/<TabsTrigger value="agents">/);
     expect(p).toMatch(/function CheckoutDriversPanel\(\)/);
-    expect(p).toMatch(/function AgentPerformancePanel\(\)/);
+    expect(p).toMatch(/function AgentPerformancePanel\(/); // 41a: aceita a ficha vinda do URL
     expect(p).toMatch(/can\(user as any, "criticas", "view"\)/);
     expect(src("client/src/App.tsx")).toMatch(/<Route path="\/pessoas\/condutores-agentes">\s*\{\(\) => \(<DashboardLayout><CondutoresAgentesPage \/><\/DashboardLayout>\)\}/);
     const layout = src("client/src/components/DashboardLayout.tsx");

@@ -5,6 +5,8 @@
  * de antes (módulo Críticas, team leader ou acima, nas tuas cidades).
  * 37a: aba "Desempenho" (tudo o que cada pessoa fez, por posto, com
  * ranking) — escondida, só o super admin.
+ * 41a: "?ficha=<id>" abre logo os Agentes com essa pessoa escolhida (o botão
+ * "Abrir agente" da ficha do RH e da lista de Utilizadores).
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -22,6 +24,13 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { BarChart3, Car, Loader2, Users } from "lucide-react";
 import { PeoplePerformancePanel } from "@/components/people/PeoplePerformancePanel";
 
+/** 41a: a ficha pedida no URL (?ficha=123), ou "". */
+function fichaFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  const v = new URLSearchParams(window.location.search).get("ficha") ?? "";
+  return /^\d{1,9}$/.test(v) ? v : "";
+}
+
 function lisbonMonthToDate(): { start: string; end: string } {
   const today = lisbonDayOf(new Date());
   return { start: `${today.slice(0, 8)}01`, end: today };
@@ -29,7 +38,8 @@ function lisbonMonthToDate(): { start: string; end: string } {
 
 export default function CondutoresAgentesPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState("drivers");
+  const [initialFicha] = useState(fichaFromUrl);
+  const [tab, setTab] = useState(() => (initialFicha ? "agents" : "drivers"));
   if (!user) return null;
   if (!can(user as any, "criticas", "view")) return <div className="p-6 text-sm text-muted-foreground">Sem acesso a esta página.</div>;
   // 37a: o desempenho por pessoa é só do super admin (o servidor também confirma)
@@ -44,7 +54,7 @@ export default function CondutoresAgentesPage() {
           {isSuper && <TabsTrigger value="performance"><BarChart3 className="w-4 h-4 mr-1" /> Desempenho</TabsTrigger>}
         </TabsList>
         <TabsContent value="drivers" className="mt-4"><CheckoutDriversPanel /></TabsContent>
-        <TabsContent value="agents" className="mt-4"><AgentPerformancePanel /></TabsContent>
+        <TabsContent value="agents" className="mt-4"><AgentPerformancePanel initialEmployeeId={initialFicha} /></TabsContent>
         {isSuper && <TabsContent value="performance" className="mt-4"><PeoplePerformancePanel /></TabsContent>}
       </Tabs>
     </div>
@@ -119,11 +129,11 @@ function CheckoutDriversPanel() {
 
 // ─── AGENT PERFORMANCE PANEL ─────────────────────────────────────────────────
 
-function AgentPerformancePanel() {
+function AgentPerformancePanel({ initialEmployeeId = "" }: { initialEmployeeId?: string }) {
   const [startDate, setStartDate] = useState(() => lisbonMonthToDate().start);
   const [endDate, setEndDate] = useState(() => lisbonMonthToDate().end);
   // D27: escolhe-se a FICHA (os agentes da Multipark ligados a ela), não um nome escrito.
-  const [employeeId, setEmployeeId] = useState("");
+  const [employeeId, setEmployeeId] = useState(initialEmployeeId);
   const peopleQ = trpc.reviews.agentPeople.useQuery();
   const people = peopleQ.data ?? [];
   const personOptions = useMemo(

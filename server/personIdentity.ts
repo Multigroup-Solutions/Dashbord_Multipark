@@ -120,6 +120,97 @@ export async function detachAgent(employeeId: number, agentUserId: string): Prom
   await d.execute(sql`DELETE FROM employee_agents WHERE agentUserId = ${agentUserId} AND employeeId = ${employeeId}`);
 }
 
+/**
+ * 41a: separar uma conta de login da ficha (principal ou extra). A conta não é
+ * apagada nem desativada — só deixa de estar ligada. Se era a principal e havia
+ * contas extra, a primeira extra passa a principal (como nos agentes).
+ */
+export async function detachAccount(employeeId: number, userId: number): Promise<"principal" | "extra"> {
+  const d = await database();
+  const e = rowsOf(await d.execute(sql`SELECT userId FROM employees WHERE id = ${employeeId} LIMIT 1`))[0];
+  if (!e) throw new Error("Ficha não encontrada.");
+  if (Number(e.userId ?? 0) === userId) {
+    const next = rowsOf(await d.execute(sql`SELECT userId FROM employee_accounts WHERE employeeId = ${employeeId} ORDER BY userId LIMIT 1`))[0];
+    if (next) {
+      await d.execute(sql`UPDATE employees SET userId = ${Number(next.userId)} WHERE id = ${employeeId}`);
+      await d.execute(sql`DELETE FROM employee_accounts WHERE userId = ${Number(next.userId)}`);
+    } else {
+      await d.execute(sql`UPDATE employees SET userId = NULL WHERE id = ${employeeId}`);
+    }
+    return "principal";
+  }
+  const alias = rowsOf(await d.execute(sql`SELECT userId FROM employee_accounts WHERE userId = ${userId} AND employeeId = ${employeeId} LIMIT 1`))[0];
+  if (!alias) throw new Error("Essa conta não está ligada a esta ficha.");
+  await d.execute(sql`DELETE FROM employee_accounts WHERE userId = ${userId} AND employeeId = ${employeeId}`);
+  return "extra";
+}
+
+/** 41a: o endereço do agente na Multipark a partir do modelo das Definições ({id}). PURA. */
+/**
+ * 41a: a conta e a ficha andam juntas ("inativamos a estrutura dos dois
+ * lados"). Fichas onde esta conta é a PRINCIPAL e que mudam com ela: ao
+ * desativar, as ativas que não têm outra conta ativa (se a pessoa ainda entra
+ * por uma conta extra, a ficha fica); ao reativar, as inativas. Os agentes da
+ * Multipark e as ligações ficam sempre como estão. Só leitura.
+ */
+export async function employeesFollowingAccount(userId: number, isActive: boolean): Promise<Array<{ id: number; fullName: string }>> {
+  const d = await database();
+  const rows = rowsOf(await d.execute(sql`SELECT e.id, e.fullName FROM employees e
+      WHERE e.userId = ${userId} AND e.isActive = ${isActive ? 0 : 1}
+        ${isActive ? sql`` : sql`AND NOT EXISTS (SELECT 1 FROM employee_accounts a JOIN users u ON u.id = a.userId
+          WHERE a.employeeId = e.id AND a.userId <> ${userId} AND u.isActive = 1)`}`).catch(() => [[]]));
+  return rows.map((r) => ({ id: Number(r.id), fullName: String(r.fullName ?? "") }));
+}
+
+/** 41a: contas extra ATIVAS de uma ficha (para desativarem com ela). Só leitura. */
+export async function activeExtraAccounts(employeeId: number): Promise<number[]> {
+  const d = await database();
+  const rows = rowsOf(await d.execute(sql`SELECT a.userId FROM employee_accounts a JOIN users u ON u.id = a.userId
+      WHERE a.employeeId = ${employeeId} AND u.isActive = 1`).catch(() => [[]]));
+  return rows.map((r) => Number(r.userId)).filter((n) => n > 0);
+}
+
+/**
+ * 41a: fichas ativas para a sugestão de suspensão — o último login de todas
+ * as contas da ficha e o papel mais alto (admin+ não se bloqueiam). Só as que
+ * ainda não estão bloqueadas à mão. Só leitura.
+ */
+export async function suspendRows(): Promise<import("../shared/suspendSuggest").SuspendRow[]> {
+  const d = await database();
+  const rows = rowsOf(await d.execute(sql`SELECT e.id, e.fullName, e.position, e.projectId, p.name AS projectName,
+        DATE_FORMAT(e.createdAt, '%Y-%m-%d') AS createdAt,
+        DATE_FORMAT(GREATEST(COALESCE(u.lastSignedIn, '1970-01-01'), COALESCE((SELECT MAX(xu.lastSignedIn) FROM employee_accounts xa JOIN users xu ON xu.id = xa.userId WHERE xa.employeeId = e.id), '1970-01-01')), '%Y-%m-%d') AS lastLogin,
+        u.role AS role
+      FROM employees e LEFT JOIN users u ON u.id = e.userId LEFT JOIN projects p ON p.id = e.projectId
+      WHERE e.isActive = 1 AND COALESCE(e.blockedManually, 0) = 0`));
+  return rows.map((r) => ({
+    employeeId: Number(r.id), fullName: String(r.fullName ?? ""), position: r.position ? String(r.position) : null,
+    projectName: r.projectName ? String(r.projectName) : null, createdAt: r.createdAt ? String(r.createdAt) : null,
+    lastLogin: r.lastLogin && r.lastLogin !== "1970-01-01" ? String(r.lastLogin) : null,
+    topRole: r.role ? String(r.role) : null,
+    projectId: r.projectId == null ? null : Number(r.projectId),
+  }));
+}
+
+/** 41a: suspender = bloqueio manual (reversível com "Desbloquear" no RH). Não desativa nada. */
+export async function suspendEmployee(employeeId: number, reason: string): Promise<boolean> {
+  const d = await database();
+  const r = rowsOf(await d.execute(sql`SELECT id, userId, isActive, blockedManually FROM employees WHERE id = ${employeeId} LIMIT 1`))[0];
+  if (!r || Number(r.isActive) !== 1 || Number(r.blockedManually) === 1) return false;
+  await d.execute(sql`UPDATE employees SET blockedManually = 1, loginBlockedReason = ${reason.slice(0, 200)} WHERE id = ${employeeId}`);
+  const { recomputeLoginBlocked } = await import("./rhService");
+  await recomputeLoginBlocked(employeeId);
+  const { invalidateLoginBlock } = await import("./loginBlock");
+  invalidateLoginBlock(r.userId == null ? undefined : Number(r.userId));
+  return true;
+}
+
+export function multiparkAgentUrl(template: string | null | undefined, agentUserId: string | null | undefined): string | null {
+  const t = String(template ?? "").trim();
+  if (!t || !agentUserId || !t.includes("{id}") || !/^https:\/\//.test(t)) return null;
+  return t.split("{id}").join(encodeURIComponent(String(agentUserId)));
+}
+
 /** Agentes de teste (saem da lista dos "por ligar"; não saem da Multipark). PURA. */
 export function looksLikeTestAgent(name: string | null | undefined, email?: string | null): boolean {
   const text = `${name ?? ""} ${email ?? ""}`;
