@@ -100,10 +100,12 @@ describe("Escala: nada se perde", () => {
     expect(fn).toContain("...(input.notes !== undefined ? { notes: input.notes } : {})");
     expect(fn).toContain("updatedById: input.updatedById ?? null");
   });
-  it("'Suspender' sem proposta é 'hold' e o cron volta a propor esse dia", () => {
+  it("'Suspender' sem proposta é 'hold' e marca o dia como mexido à mão (o cron já não propõe nele — 7 out 2026)", () => {
     const sched = src("server/extrasSchedule.ts");
     expect(sched).toMatch(/VALUES \(\$\{date\}, \$\{city\}, 'hold', \$\{hold \? 1 : 0\}\)/);
-    expect(sched).toContain("status = IF(status = 'hold', 'proposing', status)");
+    expect(sched).toContain(`await markScheduleManual(date, city, userId, hold ? "suspendeu" : "retomou")`);
+    // A reserva do cron já não "retoma" um dia suspenso.
+    expect(sched).not.toContain("status = IF(status = 'hold', 'proposing', status)");
   });
 });
 

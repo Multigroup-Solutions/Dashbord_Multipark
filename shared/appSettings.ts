@@ -504,7 +504,7 @@ export const SETTINGS = {
     key: "extras.autoProposeAt",
     group: "extras",
     label: "Hora da proposta automática de escala",
-    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (uma vez por dia e cidade; não substitui uma escala já proposta ou confirmada).",
+    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (só a primeira proposta de cada dia e cidade: não substitui uma escala já proposta ou confirmada, e num dia mexido à mão já não mexe).",
     schema: hhmmSchema,
     defaultValue: "14:00",
     wiring: "live",

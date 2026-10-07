@@ -528,6 +528,8 @@ export interface ProposalSummary {
   picks: { personName: string; startHour: number; endHour: number; hourlyRate: number }[];
   keptCount: number;
   gaps: Gap[];
+  /** Tirados à mão deste dia que a proposta deixou de fora. */
+  removedOutCount?: number;
 }
 
 /**
@@ -546,6 +548,8 @@ export function explainProposal(p: ProposalSummary): string {
   if (p.gaps.length) parts.push(`Atenção: ${p.gaps.map(describeGap).join("; ")}.`);
   else if (p.peakDrivers > 0) parts.push("Todas as horas previstas ficam cobertas.");
   else parts.push("Sem operações previstas — não são precisos condutores.");
+  const out = removedOutText(p.removedOutCount ?? 0);
+  if (out) parts.push(`${out[0].toUpperCase()}${out.slice(1)}.`);
   return parts.join(" ");
 }
 
@@ -593,6 +597,80 @@ export function scheduleDue(now: LisbonNow, s: ScheduleSettings): { proposeDates
 /** Pode confirmar automaticamente? Só propostas por confirmar e sem "suspender". */
 export function canAutoConfirm(state: { status: string; holdAuto: boolean } | null): boolean {
   return !!state && state.status === "proposed" && !state.holdAuto;
+}
+
+// ─── A mão humana manda (Jorge, 7 out 2026) ─────────────────────────────────
+// "Ele faz a primeira coisa até alguém ver; se é retirado ou é colocado outro,
+// o sistema já não muda." O cron só faz a PRIMEIRA proposta de um dia/cidade
+// intocado. Qualquer mudança de uma pessoa nos condutores desse dia (pôr,
+// tirar, mudar horas, mandar para casa, preencher, refazer, confirmar,
+// suspender) marca o dia como "mexido à mão" e o cron nunca mais propõe nele.
+// Quem foi tirado à mão de um dia não volta a ser proposto para esse dia.
+
+/** O que a pessoa fez por último no dia (fica em extras_dia_schedules.manualWhat). */
+export type ManualWhat =
+  | "pôs" | "alterou" | "mandou para casa" | "tirou" | "preencheu"
+  | "refez a proposta" | "confirmou" | "suspendeu" | "retomou";
+
+/** Última mudança feita à mão no dia/cidade (null = intocado). */
+export interface ManualTouch { atUnix: number; byId: number | null; byName: string | null; what: string | null }
+
+export const MANUAL_DAY_REASON = "mexido à mão — a proposta automática já não muda este dia";
+
+/**
+ * Esta mudança marca o dia como "mexido à mão"? Só a dos CONDUTORES: a
+ * proposta nunca mexe no TL, por isso pôr ou mudar o TL (que se faz muitas
+ * vezes com dias de antecedência) não trava a proposta dos condutores. PURA.
+ */
+export function marksManualDay(row: { isTeamLeader?: boolean | number | null }): boolean {
+  return !row.isTeamLeader;
+}
+
+/**
+ * O cron pode fazer a PRIMEIRA proposta deste dia/cidade? null = pode; senão
+ * o motivo. Nunca num dia mexido à mão (marca no estado, condutores postos ou
+ * alterados à mão, condutores tirados à mão — as duas últimas apanham também
+ * o que foi feito antes da marca existir). Com estado (proposta, escala,
+ * suspensão) também não: a primeira proposta já foi feita ou alguém travou. PURA.
+ */
+export function autoProposeBlockedReason(input: {
+  state: { status: string; manual?: ManualTouch | null } | null;
+  /** Linhas de condutores (sem TL) postas ou alteradas à mão neste dia/cidade. */
+  manualRows: number;
+  /** Condutores tirados à mão deste dia/cidade (arquivo, 'removida'). */
+  removedByHand: number;
+}): string | null {
+  if (input.state?.manual || input.manualRows > 0 || input.removedByHand > 0) return MANUAL_DAY_REASON;
+  if (input.state) return input.state.status === "hold" ? "suspenso à mão" : "já tem proposta ou escala";
+  return null;
+}
+
+/**
+ * Tirados à mão que ficam de fora da proposta/preenchimento: os que não estão
+ * agora no dia (quem foi posto outra vez à mão está lá e conta como escalado). PURA.
+ */
+export function removedByHandOut(removedIds: Iterable<number>, inDay: ReadonlySet<number>): number[] {
+  return Array.from(new Set(removedIds)).filter((id) => !inDay.has(id));
+}
+
+/** "2 tirados à mão ficam de fora" (null com 0). PURA. */
+export function removedOutText(n: number): string | null {
+  if (!n || n <= 0) return null;
+  return n === 1 ? "1 tirado à mão fica de fora" : `${n} tirados à mão ficam de fora`;
+}
+
+/**
+ * Selo do dia: "Mexido à mão por Márcia às 15:42 — a proposta automática já
+ * não muda este dia" (hora de Lisboa; noutro dia leva a data). PURA.
+ */
+export function manualTouchLabel(t: ManualTouch, now: Date = new Date()): string {
+  const at = new Date(t.atUnix * 1000);
+  const fmt = (d: Date, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", ...o }).format(d);
+  const time = fmt(at, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const sameDay = fmt(at, { year: "numeric", month: "2-digit", day: "2-digit" }) === fmt(now, { year: "numeric", month: "2-digit", day: "2-digit" });
+  const when = sameDay ? `às ${time}` : `a ${fmt(at, { day: "2-digit", month: "2-digit" })} às ${time}`;
+  const who = t.byName?.trim() ? ` por ${t.byName.trim()}` : "";
+  return `Mexido à mão${who} ${when} — a proposta automática já não muda este dia`;
 }
 
 // ─── Deduplicação dos avisos ────────────────────────────────────────────────
