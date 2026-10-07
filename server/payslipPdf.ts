@@ -133,8 +133,22 @@ export async function generatePayslipPdf(year: number, month: number, employeeId
     // TODAS as componentes que o cálculo soma aparecem aqui — as linhas têm
     // de reconciliar com o total (auditoria RH set 2026).
     if (emp.isExtra) {
-      rows.push(["Pagamento por Horas (Extra)", `${fmt(emp.extraPayment)} €`]);
-      rows.push([`  ${fmt(emp.totalHours)}h × ${fmt(emp.hourlyRate)}€/h`, "", false]);
+      // Terminal (aeroporto): linha própria, paga ao nível seguinte. As duas
+      // linhas somam o "Pagamento por Horas" do cálculo (extraPayment).
+      const terminalHours = emp.terminalHours ?? 0;
+      if (terminalHours > 0) {
+        const normalHours = Math.round((emp.totalHours - terminalHours) * 100) / 100;
+        rows.push(["Pagamento por Horas (Extra)", `${fmt(Math.round((emp.extraPayment - emp.terminalPayment) * 100) / 100)} €`]);
+        rows.push([`  ${fmt(normalHours)}h × ${fmt(emp.hourlyRate)}€/h`, "", false]);
+        rows.push(["Horas terminal", `${fmt(emp.terminalPayment)} €`]);
+        rows.push([`  ${fmt(terminalHours)}h × ${fmt(emp.terminalHourlyRate)}€/h (aeroporto, nível seguinte)`, "", false]);
+      } else {
+        rows.push(["Pagamento por Horas (Extra)", `${fmt(emp.extraPayment)} €`]);
+        rows.push([`  ${fmt(emp.totalHours)}h × ${fmt(emp.hourlyRate)}€/h`, "", false]);
+      }
+      if ((emp.terminalPendingHours ?? 0) > 0) {
+        rows.push([`  ${fmt(emp.terminalPendingHours)}h de terminal por confirmar — pagas como normais`, "", false]);
+      }
     } else {
       rows.push(["Salário Base", `${fmt(emp.baseSalary)} €`]);
       if ((emp as any).contractDays != null && (emp as any).daysInMonth != null && (emp as any).contractDays < (emp as any).daysInMonth) {

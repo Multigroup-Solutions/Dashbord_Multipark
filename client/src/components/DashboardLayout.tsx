@@ -458,11 +458,22 @@ function DashboardLayoutContent({
     setPontoMode(null);
   };
   const quickCheckIn = trpc.rh.timeRecords.checkIn.useMutation({
-    onSuccess: () => { toast.success("Entrada registada!"); pontoDone(); },
+    onSuccess: (d) => {
+      toast.success("Entrada registada!");
+      // Terminal no ponto (aeroporto) — só vem preenchido com o interruptor ligado
+      if (d?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
+      if (d?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
+      pontoDone();
+    },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
   });
   const quickCheckOut = trpc.rh.timeRecords.checkOut.useMutation({
-    onSuccess: (d) => { toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`); pontoDone(); },
+    onSuccess: (d) => {
+      toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`);
+      if (d?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
+      if (d?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
+      pontoDone();
+    },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
   });
   const submitPonto = (base64: string, mimeType: string) => {
@@ -891,6 +902,9 @@ function DashboardLayoutContent({
                       {pontoStatus === "in"
                         ? `Em serviço desde ${fmtPTTime(pontoQ.data?.since)}`
                         : "Fora de serviço"}
+                      {pontoStatus === "in" && pontoQ.data?.terminal && (
+                        <span className="ml-1 inline-flex items-center rounded-full border border-sky-300 bg-sky-100 px-1.5 py-0 text-[10px] font-medium text-sky-800 dark:bg-sky-950 dark:text-sky-200">Terminal</span>
+                      )}
                     </p>
                   )}
                 </div>

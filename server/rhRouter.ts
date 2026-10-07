@@ -1213,14 +1213,28 @@ export const rhRouter = router({
     // qualquer role pode consultar o seu — não expõe registos de terceiros.
     myStatus: protectedProcedure.query(async ({ ctx }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null };
+      if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null, terminal: false };
       const records = await getTimeRecords(me.employee.id);
       const last = records[0];
+      // Troço de terminal aberto (entrada no aeroporto) — só com o interruptor ligado.
+      let terminal = false;
+      if (last?.type === "check_in" && last.terminalStatus === "start") {
+        const { pontoTerminalEnabled } = await import("./pontoTerminal");
+        terminal = await pontoTerminalEnabled();
+      }
       return {
         employeeId: me.employee.id as number | null,
         status: (last?.type === "check_in" ? "in" : "out") as "in" | "out" | null,
         since: (last?.recordedAt ?? null) as string | null,
+        terminal,
       };
+    }),
+
+    // Interruptor "Terminal no ponto (aeroporto)": os ecrãs só mostram o
+    // terminal (chips, botões confirmar/desmarcar) com ele ligado.
+    terminalEnabled: protectedProcedure.query(async () => {
+      const { pontoTerminalEnabled } = await import("./pontoTerminal");
+      return { enabled: await pontoTerminalEnabled() };
     }),
 
     list: protectedProcedure
@@ -1251,6 +1265,31 @@ export const rhRouter = router({
         await reviewTimeRecord(input.id, input.decision, ctx.user.id, input.note ?? null, input.correctedHours ?? null);
         await logActivity({ userId: ctx.user.id, action: "review", entity: "time_record", entityId: input.id, details: `${input.decision}${input.correctedHours != null ? ` (${input.correctedHours}h)` : ""}${input.note ? ` — ${input.note}` : ""}` });
         return { success: true };
+      }),
+
+    // Terminal à mão (quem revê o ponto desta ficha): confirma ou desmarca o
+    // troço de terminal de uma SAÍDA, com motivo. Não apaga nada: muda o estado
+    // e regista quem, quando e porquê (também no registo de atividade).
+    setTerminal: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), terminal: z.boolean(), note: z.string().trim().min(3, "Escreve o motivo (mín. 3 letras).").max(255) }))
+      .mutation(async ({ ctx, input }) => {
+        const { pontoTerminalEnabled, isExtraEmployee } = await import("./pontoTerminal");
+        if (!(await pontoTerminalEnabled())) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal no ponto está desligado (Definições → Automações → \"Terminal no ponto (aeroporto)\")." });
+        }
+        const empId = await employeeIdOfRecord("time_records", input.id);
+        if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Registo de ponto não encontrado" });
+        await assertCanManageEmployee(ctx.user, empId, "Sem permissão para rever o ponto desta pessoa.");
+        const { setTimeRecordTerminal } = await import("./rhService");
+        const emp = await getEmployeeById(empId);
+        if (!isExtraEmployee(emp?.employee)) throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal é só para extras." });
+        const r = await setTimeRecordTerminal(input.id, input.terminal, ctx.user.id, input.note);
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+        await logActivity({
+          userId: ctx.user.id, action: input.terminal ? "terminal_confirm" : "terminal_unmark", entity: "time_record", entityId: input.id,
+          details: `${input.terminal ? "Terminal confirmado" : "Terminal desmarcado"} (antes: ${r.previous ?? "normal"}) — ${input.note}`,
+        });
+        return { success: true, terminalStatus: r.status };
       }),
 
     checkIn: protectedProcedure
@@ -1297,8 +1336,17 @@ export const rhRouter = router({
         const missingAgentWarning = !empForPonto.employee.multiparkAgentName
           ? "Falta ligar o agente Multipark a este colaborador — pede à administração para o associar na ficha."
           : null;
+        // Terminal (aeroporto), interruptor PONTO_TERMINAL: entrada de um extra
+        // no aeroporto da cidade dele abre um troço de terminal (desligado → nada).
+        const { evaluateCheckInTerminal } = await import("./pontoTerminal");
+        const terminalIn = await evaluateCheckInTerminal({
+          employee: empForPonto.employee,
+          latitude: input.latitude, longitude: input.longitude,
+          prev: last ? { type: last.type, recordedAt: last.recordedAt, terminalStatus: last.terminalStatus ?? null } : null,
+        });
         // Geofence do centro de custos (se configurado): fora do raio fica marcado.
-        const geoNoteIn = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+        // No aeroporto (terminal ligado) não se marca: é sítio de trabalho do extra.
+        const geoNoteIn = terminalIn.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         let photoUrl: string | null = null;
         let photoKey: string | null = null;
         if (input.photoBase64 && input.mimeType) {
@@ -1323,11 +1371,13 @@ export const rhRouter = router({
             longitude: input.longitude ?? null,
             locationName: input.locationName ?? null,
             notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
+            ...(terminalIn.atAirport != null ? { atAirport: terminalIn.atAirport } : {}),
+            ...(terminalIn.terminalStatus ? { terminalStatus: terminalIn.terminalStatus } : {}),
           });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
-        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}` });
+        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}${terminalIn.terminal === "start" ? " · terminal (aeroporto)" : terminalIn.terminal === "return" ? " · regresso do terminal" : ""}` });
         // Ponto→PDA automático: se o check-in veio do browser de um PDA
         // registado, liga já a pessoa ao PDA/Zello (e troca quem lá estava).
         let pdaAttached: { pdaName: string; zelloUsername: string | null; replacedName: string | null } | null = null;
@@ -1344,7 +1394,7 @@ export const rhRouter = router({
             console.warn("[pda] ponto→PDA automático (check-in) falhou:", err);
           }
         }
-        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached };
+        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached, terminal: terminalIn.terminal };
       }),
 
     checkOut: protectedProcedure
@@ -1400,9 +1450,21 @@ export const rhRouter = router({
         } else {
           hoursWorked = diff.toFixed(2);
         }
+        // Terminal (aeroporto), interruptor PONTO_TERMINAL: se a entrada aberta
+        // abriu um troço de terminal, a saída no aeroporto fecha-o como terminal;
+        // fora ou sem GPS fica "por confirmar" (não paga terminal até o RH ver).
+        const { evaluateCheckOutTerminal } = await import("./pontoTerminal");
+        const empForOut = last.terminalStatus ? await getEmployeeById(input.employeeId) : null;
+        const terminalOut: import("./pontoTerminal").PontoTerminalEval = empForOut
+          ? await evaluateCheckOutTerminal({ employee: empForOut.employee, latitude: input.latitude, longitude: input.longitude, openCheckInStatus: last.terminalStatus })
+          : { atAirport: null, terminalStatus: null, terminal: null };
+        // Saída esquecida (cortada às 12 h): o GPS desta saída não diz nada do
+        // troço → fica sempre "por confirmar" (o RH decide).
+        if (autoNote && terminalOut.terminalStatus === "auto") { terminalOut.terminalStatus = "pending"; terminalOut.terminal = "pending"; }
         // Geofence: se o centro de custos do colaborador tem raio definido e o
         // check-out veio com GPS fora dele, fica marcado (permitido, mas visível).
-        const geoNote = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+        // No aeroporto (fim de um troço de terminal) não se marca.
+        const geoNote = terminalOut.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         const finalNotes = [autoNote, geoNote, input.notes].filter(Boolean).join(" · ") || null;
         // Snapshot Zello do turno (pedido Jorge): no check-out, vai buscar ao
         // Zello o que o condutor fez entre a entrada e a saída — km,
@@ -1436,6 +1498,8 @@ export const rhRouter = router({
             hoursWorked,
             notes: finalNotes,
             reviewStatus: autoNote ? "suspicious" : "ok",
+            ...(terminalOut.atAirport != null ? { atAirport: terminalOut.atAirport } : {}),
+            ...(terminalOut.terminalStatus ? { terminalStatus: terminalOut.terminalStatus } : {}),
             ...(zello ? {
               zelloKm: String(zello.km),
               zelloAvgSpeed: String(zello.avgSpeed),
@@ -1456,8 +1520,8 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
         }
-        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}` });
-        return { success: true, hoursWorked, zello };
+        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalOut.terminal === "auto" ? " · troço de terminal" : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}` });
+        return { success: true, hoursWorked, zello, terminal: terminalOut.terminal === "auto" || terminalOut.terminal === "pending" ? terminalOut.terminal : null };
       }),
 
     // ── Geofence por centro de custos (raio de picagem) ───────────────────
