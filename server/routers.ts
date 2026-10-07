@@ -4365,7 +4365,8 @@ export const appRouter = router({
     // (Definições → operations.excludedParks). Nunca lança por falta de BD —
     // devolve { available:false, reason }.
     reservasDoDia: protectedProcedure
-      .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      // 42d: projectId = filtro do topo (cidade; a marca vale a cidade dela) — o middleware estreita o âmbito
+      .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().int().optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getMultiparkDayBookings } = await import("./multiparkDb/dayBookings");

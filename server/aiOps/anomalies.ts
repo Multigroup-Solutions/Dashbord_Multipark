@@ -322,22 +322,47 @@ export async function runAnomalyDetection(day: string, cap: AiCallCap): Promise<
 export interface AnomalyView {
   id: number; day: string; domain: AnomalyDomain; kind: string; cityKey: string | null; subject: string;
   value: number; expected: number | null; zScore: number | null; severity: Severity; detail: string; explanation: string | null; refIds: string | null;
+  /** 42d: tirado da lista (só vem com `dismissed: true`) */
+  dismissedAt?: string | null;
 }
 
-/** Últimas anomalias de um domínio, no âmbito de cidade do pedido (nacionais só a quem vê todas). */
-export async function listAnomalies(domain: AnomalyDomain, opts: { days?: number; cityKey?: OpsCity | null; limit?: number; today: string }): Promise<AnomalyView[]> {
+/** O âmbito de cidade de um alerta (nacionais só a quem vê todas). */
+const anomalyScope = () => sql`(${projectScope(sql`projectId`)} OR (projectId IS NULL AND ${projectScope(sql`NULL`)}))`;
+
+/**
+ * Últimas anomalias de um domínio, no âmbito de cidade do pedido (nacionais só a quem vê todas).
+ * 42d: as tiradas da lista ficam de fora; `dismissed: true` devolve só essas (para "Repor").
+ */
+export async function listAnomalies(domain: AnomalyDomain, opts: { days?: number; cityKey?: OpsCity | null; limit?: number; today: string; dismissed?: boolean }): Promise<AnomalyView[]> {
   const db = await getDb();
   if (!db) return [];
   const since = addDays(opts.today, -(opts.days ?? 14));
   const rows = rowsOf(await db.execute(sql`
-    SELECT id, day, domain, kind, cityKey, subject, value, expected, zScore, severity, detail, explanation, refIds
+    SELECT id, day, domain, kind, cityKey, subject, value, expected, zScore, severity, detail, explanation, refIds, dismissedAt
       FROM ops_anomalies
      WHERE domain = ${domain} AND day >= ${since}
-       AND (${projectScope(sql`projectId`)} OR (projectId IS NULL AND ${projectScope(sql`NULL`)}))
+       AND ${anomalyScope()}
+       AND ${opts.dismissed ? sql`dismissedAt IS NOT NULL` : sql`dismissedAt IS NULL`}
        ${opts.cityKey ? sql`AND cityKey = ${opts.cityKey}` : sql``}
      ORDER BY day DESC, FIELD(severity, 'critical', 'warning'), id DESC
      LIMIT ${Math.min(200, opts.limit ?? 50)}`));
   return rows.map(toView);
+}
+
+/**
+ * 42d: tirar um alerta da lista (ou repô-lo). Nada se apaga: fica quem tirou e
+ * quando. Só alertas do domínio e do âmbito de cidade de quem pede → devolve
+ * quantos mudaram (0 = não existe ou não é teu).
+ */
+export async function setAnomalyDismissed(id: number, domain: AnomalyDomain, userId: number, dismissed: boolean): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const res: any = await db.execute(sql`
+    UPDATE ops_anomalies SET dismissedAt = ${dismissed ? sql`UTC_TIMESTAMP()` : sql`NULL`}, dismissedById = ${dismissed ? userId : null}
+     WHERE id = ${id} AND domain = ${domain} AND ${anomalyScope()}
+       AND ${dismissed ? sql`dismissedAt IS NULL` : sql`dismissedAt IS NOT NULL`}`);
+  const r = Array.isArray(res) ? res[0] : res;
+  return Number(r?.affectedRows ?? 0) || 0;
 }
 
 export function toView(r: any): AnomalyView {
@@ -345,5 +370,6 @@ export function toView(r: any): AnomalyView {
     id: Number(r.id), day: String(r.day), domain: r.domain, kind: String(r.kind), cityKey: r.cityKey ?? null, subject: String(r.subject),
     value: Number(r.value ?? 0), expected: r.expected == null ? null : Number(r.expected), zScore: r.zScore == null ? null : Number(r.zScore),
     severity: r.severity === "critical" ? "critical" : "warning", detail: String(r.detail), explanation: r.explanation ?? null, refIds: r.refIds ?? null,
+    ...(r.dismissedAt != null ? { dismissedAt: String(r.dismissedAt) } : {}),
   };
 }

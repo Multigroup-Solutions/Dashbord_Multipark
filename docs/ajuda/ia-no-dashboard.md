@@ -22,7 +22,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 **Sozinha (automática)**
 1. **Passagem de turno:** resumo para o turno seguinte sempre que se grava; à segunda-feira, o resumo da semana.
 2. **Briefing do dia** (Dashboard e Tarefas): um parágrafo por cidade a partir das 07:30, também por email às chefias.
-3. **Alertas** em Operações, Despesas e Marketing: uma linha a explicar cada anomalia.
+3. **Alertas** em Operações, Despesas e Marketing: uma linha a explicar cada anomalia. Nas Reservas ficam ao lado do Dashboard (no telemóvel, por cima). Carrega no título para os encolher. O **✕** tira um alerta da lista para toda a gente; nada se apaga, e em **Tirados** dá para o **Repor**.
 4. **Avaliação:** a explicação aparece ao abrir. Só se refaz quando os números mudam.
 5. **Críticas:** rascunho automático para as críticas novas, que fica por aprovar.
 6. **Reclamações:** sugestões de tipo, prioridade, SLA e reserva, com um rascunho de resposta.
