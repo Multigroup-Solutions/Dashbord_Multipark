@@ -1,5 +1,9 @@
 /**
- * Templates WhatsApp usados na página de disponibilidade — catálogo + helpers PUROS.
+ * Mensagens WhatsApp aos motoristas extra — catálogo + helpers PUROS.
+ *
+ * O NOME e a LÍNGUA de cada template dependem da cidade e vêm SEMPRE do registo
+ * `shared/driverTemplates.ts` (fonte única). Este catálogo só diz que mensagens
+ * existem e como a UI as pede.
  *
  * Partilhado entre o cliente (seletor e pré-visualização em ExtrasDiaPage) e o
  * servidor (montagem dos componentes do template). Ter isto num só sítio evita o
@@ -11,30 +15,24 @@
  *   2º parâmetro = valor partilhado      → texto único, escrito no dialog, igual para todos
  *
  * "1º/2º" é semântico, não posicional: quando o template usa parâmetros NOMEADOS,
- * os papéis são resolvidos pelos nomes declarados em `roles` (ver
- * `resolveBodyParamRoles`), para o nome do extra não ir parar ao campo do dia só
- * porque a Meta devolveu os parâmetros por outra ordem.
+ * os papéis são resolvidos pelos nomes declarados no registo por cidade
+ * (`shared/driverTemplates.ts`, ver `resolveBodyParamRoles`), para o nome do
+ * extra não ir parar ao campo do dia só porque a Meta devolveu os parâmetros
+ * por outra ordem.
  */
+import {
+  DEFAULT_PARAMS,
+  driverTemplate,
+  findDriverTemplateByName,
+  type City,
+  type DriverMessage,
+  type DriverTemplateParams,
+  type ResolvedDriverTemplate,
+} from "./driverTemplates";
 
 /**
- * Templates de EQUIPA (UTILITY, pt_PT — aprovados 2026-10-02; substituem
- * `disponibilidade_extras` e `aviso_de_trabalho`, que eram pt_BR e arriscavam
- * ser tratados como MARKETING → 131049).
- */
-export const AVAILABILITY_TEMPLATE_NAME = "driver_availability";
-export const SHIFT_NOTICE_TEMPLATE_NAME = "driver_shift_notice";
-export const TEAM_TEMPLATE_LANGUAGE = "pt_PT";
-
-/**
- * Código de língua Meta por omissão (templates escritos à mão no dialog e os
- * que ainda só existem em pt_BR: `seja_motorista`, `morada_e_regras`).
- * `pt_PT` ≠ `pt_BR` ≠ `pt` — a Meta trata-os como traduções DISTINTAS e
- * devolve 132001 se o template não estiver aprovado exatamente nesta.
- */
-export const DEFAULT_TEMPLATE_LANGUAGE = "pt_BR";
-
-/**
- * Respostas rápidas do `driver_shift_notice`. Chegam ao webhook como mensagem
+ * Respostas rápidas do aviso de turno (`driver_shift_notice` em Lisboa; o do
+ * Porto também, se tiver os mesmos botões). Chegam ao webhook como mensagem
  * de tipo `button` com `context.id` = wamid do aviso (é isso que liga a
  * resposta ao turno).
  */
@@ -70,12 +68,7 @@ export const NEUTRAL_RECIPIENT_NAME = "colega";
  * Só se aplica a templates com parâmetros NOMEADOS; nos posicionais o papel é
  * dado pela ordem (1º = nome, 2º = valor partilhado).
  */
-export interface TemplateBodyRoles {
-  /** Parâmetro que recebe o NOME do destinatário. */
-  recipient: string;
-  /** Parâmetro que recebe o valor único escrito no dialog. */
-  shared: string;
-}
+export type TemplateBodyRoles = DriverTemplateParams;
 
 /** Como a UI deve pedir o valor partilhado (2º parâmetro). */
 export interface SharedParamSpec {
@@ -92,10 +85,8 @@ export interface SharedParamSpec {
 export interface WhatsAppTemplateDef {
   /** Id interno estável (a UI guarda isto, não o nome da Meta). */
   id: string;
-  /** Nome EXATO aprovado no WhatsApp Manager. */
-  name: string;
-  /** Código de língua Meta da tradução aprovada. */
-  language: string;
+  /** Mensagem do registo por cidade (nome e língua: `templateForCity`). */
+  message: DriverMessage;
   /** Etiqueta curta para o seletor. */
   label: string;
   /** O que a mensagem faz — mostrado por baixo do seletor. */
@@ -105,8 +96,6 @@ export interface WhatsAppTemplateDef {
    * (nem nome, nem campo): o envio não manda componente `body` nenhum.
    */
   sharedParam: SharedParamSpec | null;
-  /** Papéis dos parâmetros; `null` = template sem parâmetros de body. */
-  roles: TemplateBodyRoles | null;
   /**
    * Mensagem de EQUIPA (automática, para extras): se a Meta a reter por limite
    * de marketing (131049) tem direito a UMA nova tentativa passadas 24 h
@@ -115,30 +104,33 @@ export interface WhatsAppTemplateDef {
   teamRetry?: boolean;
 }
 
-/** O template é uma mensagem de equipa com direito a 1 nova tentativa após 131049? PURA. */
+/** O template (de qualquer cidade) é uma mensagem de equipa com direito a 1 nova tentativa após 131049? PURA. */
 export function isTeamRetryTemplate(name: string | null | undefined): boolean {
   if (!name) return false;
-  return WHATSAPP_TEMPLATES.some((t) => t.name === name && t.teamRetry === true);
+  return findWhatsAppTemplateByName(name)?.def.teamRetry === true;
+}
+
+/** O template `name` é a mensagem `message` nalguma cidade do registo? PURA. */
+export function isDriverMessageTemplate(name: string | null | undefined, message: DriverMessage): boolean {
+  return !!name && findDriverTemplateByName(name)?.message === message;
 }
 
 /** Templates sem parâmetros de body não levam `components.body` (a Meta responde 132000 se levarem). */
-export function templateHasBodyParams(def: Pick<WhatsAppTemplateDef, "roles">): boolean {
-  return def.roles !== null;
+export function templateHasBodyParams(def: Pick<WhatsAppTemplateDef, "message">): boolean {
+  return DEFAULT_PARAMS[def.message] !== null;
 }
 
 /**
- * Templates que a página de disponibilidade pode enviar.
- *
- * Acrescentar aqui um template APROVADO na Meta é tudo o que é preciso: o envio
- * lê os metadados reais (server/whatsappTemplateMeta.ts) e adapta-se ao formato,
- * contagem de parâmetros e botão URL. Só os PAPÉIS dos parâmetros é que a Meta
- * não sabe — é o que este catálogo declara.
+ * Mensagens que a dashboard pode enviar aos motoristas. Acrescentar uma
+ * cidade não mexe aqui (é só uma entrada no registo); uma MENSAGEM nova é uma
+ * entrada aqui + uma por cidade no registo. O envio lê os metadados reais
+ * (server/whatsappTemplateMeta.ts) e adapta-se ao formato, contagem de
+ * parâmetros e botão URL.
  */
 export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
   {
     id: "disponibilidade",
-    name: AVAILABILITY_TEMPLATE_NAME,
-    language: TEAM_TEMPLATE_LANGUAGE,
+    message: "AVAILABILITY",
     label: "Pedido de disponibilidade",
     description: "Pede ao extra que indique a disponibilidade da semana.",
     sharedParam: {
@@ -146,13 +138,11 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
       placeholder: "ex: semana de 12 a 19 de agosto",
       kind: "week",
     },
-    roles: { recipient: "customer_name", shared: "week_date" },
     teamRetry: true,
   },
   {
     id: "aviso_trabalho",
-    name: SHIFT_NOTICE_TEMPLATE_NAME,
-    language: TEAM_TEMPLATE_LANGUAGE,
+    message: "WORK_NOTICE",
     label: "Aviso de trabalho",
     description: "Avisa o extra de que tem trabalho num dia concreto.",
     sharedParam: {
@@ -160,34 +150,44 @@ export const WHATSAPP_TEMPLATES: readonly WhatsAppTemplateDef[] = [
       placeholder: "ex: Sexta 22/08",
       kind: "day",
     },
-    roles: { recipient: "customer_name", shared: "day" },
+    teamRetry: true,
+  },
+  {
+    id: "turno_confirmado",
+    message: "CONFIRMED_SHIFT",
+    label: "Turno confirmado",
+    description: "Confirma o turno a quem aceitou o aviso de trabalho. Sai sozinho quando o extra aceita; aqui é para reenviar.",
+    sharedParam: {
+      label: "Turno",
+      placeholder: "ex: Sexta 22/08",
+      kind: "day",
+    },
     teamRetry: true,
   },
   // Dois templates SEM parâmetros (Jorge, 2026-09-17): o texto é fixo na Meta,
   // por isso não há nome nem campo do diálogo a preencher.
   {
     id: "seja_motorista",
-    name: "seja_motorista",
-    language: DEFAULT_TEMPLATE_LANGUAGE,
+    message: "RECRUITMENT",
     label: "Seja motorista (recrutamento)",
     description: "Convida um contacto a tornar-se extra/motorista da Multipark. Sem campos a preencher.",
     sharedParam: null,
-    roles: null,
   },
   {
     id: "morada_regras",
-    name: "morada_e_regras",
-    language: DEFAULT_TEMPLATE_LANGUAGE,
+    message: "ADDRESS_RULES",
     label: "Morada e regras",
     description: "Envia a morada e as regras a quem vem trabalhar. Sem campos a preencher.",
     sharedParam: null,
-    roles: null,
     teamRetry: true,
   },
 ] as const;
 
 /** Template usado na página de leads de extras (contactos que ainda não são extras). */
 export const LEAD_RECRUITMENT_TEMPLATE_ID = "seja_motorista";
+
+/** Confirmação enviada quando o extra aceita o aviso de trabalho. */
+export const CONFIRMED_SHIFT_TEMPLATE_ID = "turno_confirmado";
 
 /** Template pré-selecionado no dialog (o fluxo original). */
 export const DEFAULT_WHATSAPP_TEMPLATE_ID = "disponibilidade";
@@ -196,21 +196,23 @@ export function findWhatsAppTemplate(id: string): WhatsAppTemplateDef | undefine
   return WHATSAPP_TEMPLATES.find((t) => t.id === id);
 }
 
+/** Nome, língua e parâmetros do template desta mensagem nesta cidade (do registo); null = a cidade não o tem. */
+export function templateForCity(def: Pick<WhatsAppTemplateDef, "message">, city: City): ResolvedDriverTemplate | null {
+  return driverTemplate(city, def.message);
+}
+
 /**
- * Definição a partir do nome+língua que vieram no pedido — é assim que o
- * SERVIDOR descobre os papéis sem confiar em nada que o cliente mande.
- * A língua é opcional: um template com o mesmo nome noutra tradução mantém os
- * mesmos parâmetros.
+ * Mensagem + cidade a partir do NOME do template: é assim que o SERVIDOR
+ * descobre a língua e os papéis sem confiar em nada que o cliente mande.
+ * undefined para templates fora do registo (ex.: alertas operacionais).
  */
 export function findWhatsAppTemplateByName(
   name: string,
-  language?: string | null,
-): WhatsAppTemplateDef | undefined {
-  const sameName = WHATSAPP_TEMPLATES.filter((t) => t.name === name);
-  if (!sameName.length) return undefined;
-  if (!language) return sameName[0];
-  const lang = language.toLowerCase();
-  return sameName.find((t) => t.language.toLowerCase() === lang) ?? sameName[0];
+): { def: WhatsAppTemplateDef; tpl: ResolvedDriverTemplate } | undefined {
+  const tpl = findDriverTemplateByName(name);
+  if (!tpl) return undefined;
+  const def = WHATSAPP_TEMPLATES.find((t) => t.message === tpl.message);
+  return def ? { def, tpl } : undefined;
 }
 
 // ─── Papéis dos parâmetros do body ──────────────────────────────────────────

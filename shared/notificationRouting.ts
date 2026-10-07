@@ -137,7 +137,7 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "servicos", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, dedupeMinutes: 12 * 60 }),
   K({ kind: "extras_gap", group: "operacoes", label: "Faltam condutores", description: "Horas sem condutores suficientes na escala (proposta e véspera).",
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
-  K({ kind: "extras_schedule_reply", group: "operacoes", label: "Respostas ao aviso de escala", description: "Extra que não pode ir ao turno ou resposta por rever.",
+  K({ kind: "extras_schedule_reply", group: "operacoes", label: "Respostas ao aviso de escala", description: "Extra que não pode ir ao turno, pede para alterar o turno ou resposta por rever.",
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "handover", group: "operacoes", label: "A tua passagem de turno", description: "Passagem entregue para ti (pede \"Recebi\") e lembretes do teu turno.",
     module: "passagem_turno", action: "view", roles: [], cityScoped: true, personal: true, mandatory: true, channels: IN_APP }),

@@ -27,6 +27,9 @@ import { normalizeEmail, isPlausibleEmail } from "../shared/email";
 import { normalizePhoneE164, normalizePhoneForStorage } from "../shared/phone";
 import { findWhatsAppTemplate, templateHasBodyParams } from "../shared/whatsappTemplate";
 import { sendTemplateToContacts, type BroadcastRecipient } from "./whatsappBroadcast";
+import { driverCityFrom, driverCityLabel, hasDriverTemplate, isDriverCity, type City } from "../shared/driverTemplates";
+import { resolveCitiesForProjectIds } from "./employeeCity";
+import type { CityKey } from "../shared/city";
 import { findActiveEmployeeByPhoneE164 } from "./extrasAvailability";
 import { aggregateFunnel, EXTRA_LEADS_LIST_LIMIT, LEAD_STATUSES, manualStatusError, type FunnelLeadRow, type FunnelResult } from "../shared/extraLeadsFunnel";
 
@@ -340,8 +343,10 @@ export async function restoreExtraLead(id: number, userId: number | null): Promi
 export interface LeadContactResult {
   leadId: number;
   fullName: string;
-  status: BroadcastRecipient["status"] | "no_phone" | "skipped";
+  status: BroadcastRecipient["status"] | "no_phone" | "skipped" | "no_city";
   error?: string;
+  /** Cidade do template usado. */
+  city?: City;
 }
 
 export interface ContactLeadsSummary {
@@ -350,18 +355,27 @@ export interface ContactLeadsSummary {
   sent: number;
   failed: number;
   noPhone: number;
+  /** Leads sem cidade: não receberam nada (nunca se assume Lisboa). */
+  noCity: number;
   results: LeadContactResult[];
 }
 
 /**
- * Envia um template do catálogo aos leads indicados. Só templates SEM
- * parâmetros (o lead não tem ficha → não há campo de diálogo nem token de
- * formulário). Leads sem telemóvel ficam registados como `no_phone`, sem chamada.
+ * Envia um template do catálogo aos leads indicados, com o template da CIDADE de
+ * cada lead (registo shared/driverTemplates.ts). Só templates SEM parâmetros (o
+ * lead não tem ficha → não há campo de diálogo nem token de formulário). Leads
+ * sem telemóvel ficam `no_phone`, sem chamada.
+ *
+ * Cidade: `cityByLead` (escolhida no diálogo) manda; sem mapa (lembrete
+ * automático) usa-se a cidade do próprio lead (`projectId`). Lead sem cidade →
+ * `no_city`, sem envio: nunca se assume Lisboa.
  */
 export async function contactExtraLeads(opts: {
   leadIds: number[];
   templateId: string;
   createdById: number | null;
+  /** Cidade por lead, decidida no diálogo. Ausente = cidade do próprio lead. */
+  cityByLead?: Record<number, City> | null;
   /** Nota do broadcast/atividade (ex.: "lembrete automático"). */
   note?: string;
   /** Código único do envio (do ecrã, 17b): carregar outra vez retoma, não duplica. */
@@ -372,7 +386,7 @@ export async function contactExtraLeads(opts: {
   const def = findWhatsAppTemplate(opts.templateId);
   if (!def) throw new Error(`Template desconhecido: ${opts.templateId}`);
   if (templateHasBodyParams(def)) {
-    throw new Error(`O template “${def.label}” precisa de parâmetros — aos leads só se enviam templates sem campos.`);
+    throw new Error(`O template “${def.label}” precisa de parâmetros. Aos leads só se enviam templates sem campos.`);
   }
   const ids = [...new Set(opts.leadIds)].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) throw new Error("Nenhum lead selecionado.");
@@ -402,50 +416,77 @@ export async function contactExtraLeads(opts: {
     return false;
   });
 
+  // Cidade de cada lead: a do diálogo, senão a do próprio lead.
+  const ownCity = opts.cityByLead ? new Map<number, CityKey | null>() : await resolveCitiesForProjectIds(contactable.map((l) => l.projectId));
+  const groups = new Map<City, ExtraLeadRow[]>();
+  for (const l of contactable) {
+    const city = opts.cityByLead
+      ? opts.cityByLead[l.id] ?? null
+      : driverCityFrom(l.projectId != null ? ownCity.get(l.projectId) ?? null : null);
+    if (!city || !isDriverCity(city)) {
+      results.push({ leadId: l.id, fullName: l.fullName, status: "no_city", error: "Sem cidade: atribui uma cidade ao lead" });
+      continue;
+    }
+    if (!hasDriverTemplate(city, def.message)) {
+      results.push({ leadId: l.id, fullName: l.fullName, status: "no_city", error: `${driverCityLabel(city)} ainda não tem template de "${def.label}"` });
+      continue;
+    }
+    groups.set(city, [...(groups.get(city) ?? []), l]);
+  }
+
   let broadcastId: number | null = null;
-  if (contactable.length) {
-    const summary = await sendTemplateToContacts({
-      templateName: def.name,
-      languageCode: def.language,
-      contacts: contactable.map((l) => ({ name: l.fullName, phone: l.phoneE164! })),
+  if (groups.size) {
+    const sentByCity = await sendTemplateToContacts({
+      templateId: def.id,
+      groups: Array.from(groups.entries()).map(([city, list]) => ({
+        city,
+        contacts: list.map((l) => ({ name: l.fullName, phone: l.phoneE164! })),
+      })),
       note: `${opts.note ?? "leads de extras"} (${contactable.length})`,
       createdById: opts.createdById,
       sendKey: opts.sendKey ?? null,
     });
-    broadcastId = summary.broadcastId;
+    broadcastId = sentByCity[0]?.summary.broadcastId ?? null;
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
-    for (let i = 0; i < contactable.length; i++) {
-      const lead = contactable[i];
-      const r = summary.recipients[i];
-      results.push({ leadId: lead.id, fullName: lead.fullName, status: r.status, error: r.error });
-      if (r.status === "sent") {
-        await db
-          .update(extraLeads)
-          .set({
-            lastContactedAt: now,
-            firstContactedAt: sql`COALESCE(${extraLeads.firstContactedAt}, ${now})`,
-            // Retoma de um envio cortado (17b): já contado da 1.ª vez.
-            ...(r.resumed ? {} : { contactCount: sql`${extraLeads.contactCount} + 1` }),
-            // Só o 1º contacto muda o estado; um lead já convertido/recusado
-            // que volte a receber o template mantém o que o backoffice decidiu.
-            ...(lead.status === "new" ? { status: "contacted" as const } : {}),
-          })
-          .where(eq(extraLeads.id, lead.id));
+    for (const { city, summary } of sentByCity) {
+      const list = groups.get(city)!;
+      for (let i = 0; i < list.length; i++) {
+        const lead = list[i];
+        const r = summary.recipients[i];
+        results.push({ leadId: lead.id, fullName: lead.fullName, status: r.status, error: r.error, city });
+        if (r.status === "sent") {
+          await db
+            .update(extraLeads)
+            .set({
+              lastContactedAt: now,
+              firstContactedAt: sql`COALESCE(${extraLeads.firstContactedAt}, ${now})`,
+              // Retoma de um envio cortado (17b): já contado da 1.ª vez.
+              ...(r.resumed ? {} : { contactCount: sql`${extraLeads.contactCount} + 1` }),
+              // Só o 1º contacto muda o estado; um lead já convertido/recusado
+              // que volte a receber o template mantém o que o backoffice decidiu.
+              ...(lead.status === "new" ? { status: "contacted" as const } : {}),
+            })
+            .where(eq(extraLeads.id, lead.id));
+        }
       }
     }
   }
 
   const sent = results.filter((r) => r.status === "sent").length;
   const noPhone = results.filter((r) => r.status === "no_phone").length;
+  const noCity = results.filter((r) => r.status === "no_city").length;
   const skipped = results.filter((r) => r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template").length;
-  const failed = results.length - sent - noPhone - skipped;
+  const failed = results.length - sent - noPhone - noCity - skipped;
+  const perCity = Array.from(groups.entries()).map(([city, list]) => `${driverCityLabel(city)} ${list.length}`).join(", ");
   await logActivity({
     userId: opts.createdById ?? 0,
     action: "extra_lead_contact",
     entity: "extra_leads",
-    details: `${opts.note ? `[${opts.note}] ` : ""}WhatsApp “${def.name}” a ${results.length} lead(s): ${sent} enviados, ${failed} falhas, ${noPhone} sem telemóvel`,
+    details:
+      `${opts.note ? `[${opts.note}] ` : ""}WhatsApp “${def.label}”${perCity ? ` (${perCity})` : ""} a ${results.length} lead(s): ` +
+      `${sent} enviados, ${failed} falhas, ${noPhone} sem telemóvel${noCity ? `, ${noCity} sem cidade` : ""}`,
   });
-  return { broadcastId, total: results.length, sent, failed, noPhone, results };
+  return { broadcastId, total: results.length, sent, failed, noPhone, noCity, results };
 }
 
 // ─── Ações em lote ──────────────────────────────────────────────────────────

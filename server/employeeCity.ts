@@ -151,3 +151,16 @@ export async function resolveCitiesForEmployeeIds(ids: number[]): Promise<Map<nu
     .where(inArray(employees.id, ids));
   return resolveEmployeeCities(rows);
 }
+
+/**
+ * Cidade de cada nó de `projects` (centro de custos de um lead, de um turno…),
+ * pela mesma subida na árvore usada para os colaboradores. Uma query.
+ */
+export async function resolveCitiesForProjectIds(ids: (number | null | undefined)[]): Promise<Map<number, CityKey | null>> {
+  const out = new Map<number, CityKey | null>();
+  const wanted = Array.from(new Set(ids.filter((id): id is number => id != null)));
+  if (wanted.length === 0) return out;
+  const index = await loadProjectIndex();
+  for (const id of wanted) out.set(id, resolveCityFromProjects(index, id));
+  return out;
+}

@@ -2,7 +2,7 @@
 modulo: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
-palavras: whatsapp, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, arquivar, ficheiro, documento, imagem, pesquisa
+palavras: whatsapp, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
 ---
 # WhatsApp
 
@@ -34,6 +34,13 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Se a Meta não responder ao envio (rede, prazo), a mensagem fica com ⚠ **"Sem confirmação da Meta: pode ter chegado ao cliente"**. Não aparece como falhada porque pode ter saído.
 - Confirma com o cliente (ou espera pela resposta dele) antes de escrever outra vez — assim não recebe a mesma mensagem duas vezes.
 - Carregar duas vezes em Enviar, ou a rede cair a meio, nunca manda a mesma mensagem duas vezes.
+
+**Templates por cidade (motoristas extra)**
+- Recrutamento, morada e regras, aviso de trabalho, turno confirmado e pedido de disponibilidade têm uma versão por cidade (Lisboa e Porto). Ao enviar (aqui, em Disponibilidade ou em Leads de Extras) escolhes a **Cidade do template**.
+- Por defeito vem a cidade do motorista (ou do turno, ou do lead); sem ela, a tua. Se nenhuma existir tens de escolher: nunca se assume Lisboa.
+- Num envio a várias pessoas, **Cidade de cada motorista** separa por cidade e mostra quantos vão em cada uma. Quem não tem cidade só segue depois de lhe escolheres uma.
+- A pré-visualização mostra o texto final de cada cidade (morada, telefone, valor à hora). Uma cidade aparece **indisponível** enquanto o template dela não estiver aprovado na Meta.
+- Quando um extra confirma o aviso de trabalho, recebe sozinho o **turno confirmado** da cidade do turno. Se carregar em **Preciso de alterar**, o turno fica **alteração pedida** na Escala e a equipa é avisada.
 
 **Respostas automáticas (sem uma pessoa)**
 - Confirmação do **STOP** / **INICIAR** (sempre).

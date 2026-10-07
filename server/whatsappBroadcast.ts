@@ -26,11 +26,10 @@ import { sendTemplateMessage } from "./whatsapp";
 import { runConcurrent } from "./_core/concurrency";
 import { issueAvailabilityFormToken } from "./availabilityFormToken";
 import {
-  DEFAULT_TEMPLATE_LANGUAGE,
   NEUTRAL_RECIPIENT_NAME,
   UNKNOWN_RECIPIENT_NAME,
   findWhatsAppTemplate,
-  findWhatsAppTemplateByName,
+  templateForCity,
   templateHasBodyParams,
   firstNameOf,
   isTeamRetryTemplate,
@@ -40,6 +39,7 @@ import {
   sanitizeTemplateParam,
   type TemplateBodyRoles,
 } from "../shared/whatsappTemplate";
+import { DRIVER_CITIES, driverCityLabel, isDriverCity, type City } from "../shared/driverTemplates";
 import {
   buildBodyComponent,
   describeLookupFailure,
@@ -76,6 +76,8 @@ export interface BroadcastRecipient extends ResolvedRecipient {
   waMessageId?: string;
   /** Já tinha sido enviado por este mesmo envio (retoma, 17b): não saiu outra vez. */
   resumed?: true;
+  /** Cidade do template usado (registo por cidade, 0530). */
+  city?: City;
 }
 
 /** Código da mensagem de UM destinatário dentro de um envio em massa (≤ 64). PURA. */
@@ -94,11 +96,30 @@ export interface BroadcastSummary {
   /** Não enviados porque já tinham recebido este template nas últimas 24 h (D32). */
   recentTemplate?: number;
   recipients: BroadcastRecipient[];
+  /** Uma difusão por cidade (lote com várias cidades). */
+  byCity?: CityBroadcast[];
+}
+
+export interface CityBroadcast {
+  city: City;
+  templateName: string;
+  languageCode: string;
+  broadcastId: number;
+  total: number;
+  sent: number;
+  notSent: number;
 }
 
 export interface SendBroadcastOptions {
-  templateName: string;
-  languageCode?: string;
+  /** Id do catálogo (`WHATSAPP_TEMPLATES`); nome e língua vêm do registo por cidade. */
+  templateId: string;
+  /**
+   * Cidade de CADA destinatário (modo normal). Só recebe quem estiver aqui:
+   * nunca se assume Lisboa. Um lote com várias cidades dá uma difusão por cidade.
+   */
+  cityByEmployee?: Record<number, City> | null;
+  /** Cidade do template no modo teste. */
+  testCity?: City | null;
   /**
    * Valor partilhado do {{2}} do body (ex.: "semana de 11/08" ou "sexta à
    * noite"). O {{1}} NUNCA vem daqui — é sempre o nome do destinatário,
@@ -117,7 +138,6 @@ export interface SendBroadcastOptions {
    * a Meta rejeitar o envio inteiro (132000/100).
    */
   includeFormLink?: boolean;
-  employeeIds?: number[] | null; // subset; null → todos os extras ativos; [] → ninguém
   /** Código único do envio (do ecrã, 17b): carregar outra vez retoma, não duplica. */
   sendKey?: string | null;
   weekStart?: string | null; // YYYY-MM-DD (contexto; obrigatório p/ includeFormLink)
@@ -239,6 +259,8 @@ async function insertBroadcast(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   data: {
     templateName: string;
+    city: City;
+    languageCode: string;
     note: string | null;
     createdById: number | null;
     weekStart: string | null;
@@ -248,6 +270,8 @@ async function insertBroadcast(
 ): Promise<number> {
   const result = await db.insert(whatsappBroadcasts).values({
     templateName: data.templateName,
+    city: data.city,
+    languageCode: data.languageCode,
     note: data.note,
     createdById: data.createdById,
     weekStart: data.weekStart,
@@ -355,6 +379,7 @@ async function sendOne(
   cfg: {
     templateName: string;
     languageCode: string;
+    city: City;
     components?: unknown[];
     /** Texto enviado, já substituído (ver `renderOutboundBody`). */
     body: string;
@@ -381,6 +406,7 @@ async function sendOne(
     clientRequestId: cfg.clientRequestId ?? null,
     language: cfg.languageCode,
     category: cfg.category ?? null,
+    city: cfg.city,
     sendPayload: cfg.sendPayload ?? null,
   });
   if (!reserved.reserved) {
@@ -409,6 +435,7 @@ async function sendOne(
 interface DispatchConfig {
   templateName: string;
   languageCode: string;
+  city: City;
   bodyParam2: string | null;
   /** Metadados do template quando a inspeção correu bem; null = modo antigo. */
   analysis: TemplateAnalysis | null;
@@ -526,6 +553,7 @@ async function dispatchOne(
   return sendOne(db, r, {
     templateName: cfg.templateName,
     languageCode: cfg.languageCode,
+    city: cfg.city,
     components: buildComponents({ analysis: cfg.analysis, values: params, roles: cfg.roles, buttonToken }),
     body: renderOutboundBody({
       templateName: cfg.templateName,
@@ -590,6 +618,10 @@ async function updateBroadcastCounts(
  */
 /** Tudo o que um envio precisa de saber ANTES de tocar num destinatário. */
 interface PreparedSend {
+  /** Cidade do template (registo por cidade). */
+  city: City;
+  /** Etiqueta da mensagem no catálogo (para mensagens de erro). */
+  label: string;
   templateName: string;
   languageCode: string;
   bodyParam2: string | null;
@@ -611,10 +643,13 @@ interface PreparedSend {
  * Validação de env, catálogo e metadados — partilhada pelo broadcast aos extras
  * e pelo envio a contactos soltos (leads). Falha CEDO com mensagem clara, antes
  * de gastar uma única chamada de envio e antes de criar a linha do broadcast.
+ *
+ * O nome e a LÍNGUA vêm SEMPRE do registo por cidade (shared/driverTemplates.ts):
+ * nada que o cliente mande decide a língua do envio (132001).
  */
 async function prepareSend(opts: {
-  templateName: string;
-  languageCode?: string | null;
+  templateId: string;
+  city: City;
   bodyParam2?: string | null;
   weekStart?: string | null;
   includeFormLink?: boolean;
@@ -628,18 +663,19 @@ async function prepareSend(opts: {
     );
   }
 
-  const templateName = opts.templateName.trim();
-  if (!templateName) throw new Error("Nome do template em falta.");
-  const languageCode = (opts.languageCode || DEFAULT_TEMPLATE_LANGUAGE).trim();
-  const bodyParam2 = opts.bodyParam2?.trim() || null;
+  const def = findWhatsAppTemplate(opts.templateId);
+  if (!def) throw new Error(`Mensagem desconhecida: ${opts.templateId}`);
+  if (!isDriverCity(opts.city)) throw new Error(`Cidade sem templates de WhatsApp: ${String(opts.city)}`);
+  const tpl = templateForCity(def, opts.city);
+  if (!tpl) throw new Error(`${driverCityLabel(opts.city)} ainda não tem template de "${def.label}".`);
+  const { name: templateName, language: languageCode, city } = tpl;
+  // Papéis dos parâmetros vêm do registo do SERVIDOR, nunca do cliente.
+  // `params: null` = template SEM parâmetros de body.
+  const roles = tpl.params;
+  const noBodyParams = !templateHasBodyParams(def);
+  // Templates sem campo do diálogo nunca levam {{2}}, mesmo que a UI mande um.
+  const bodyParam2 = def.sharedParam ? opts.bodyParam2?.trim() || null : null;
   const weekStart = opts.weekStart ?? null;
-  // Papéis dos parâmetros vêm do catálogo do SERVIDOR (pelo nome do template),
-  // nunca do cliente. Template fora do catálogo (ex.: nome escrito à mão no
-  // dialog do inbox) → null = mapeamento por posição, como sempre foi.
-  // Template do catálogo com `roles: null` = SEM parâmetros de body.
-  const def = findWhatsAppTemplateByName(templateName, languageCode);
-  const roles = def?.roles ?? null;
-  const noBodyParams = !!def && !templateHasBodyParams(def);
 
   // ── Inspeção do template (uma vez por broadcast) ───────────────────────────
   // O envio ADAPTA-SE ao template: parâmetros nomeados vs posicionais, quantos
@@ -652,7 +688,7 @@ async function prepareSend(opts: {
   let includeFormLink = opts.includeFormLink === true;
 
   if (meta.available) {
-    if (!meta.lookup.ok) throw new Error(describeLookupFailure(meta.lookup, templateName, languageCode));
+    if (!meta.lookup.ok) throw new Error(`${driverCityLabel(city)}: ${describeLookupFailure(meta.lookup, templateName, languageCode)}`);
     analysis = meta.lookup.analysis;
     // Os metadados MANDAM sobre a checkbox: o template ou tem botão dinâmico
     // (e então precisa mesmo do token) ou não tem (e mandá-lo rebentava o envio).
@@ -660,7 +696,7 @@ async function prepareSend(opts: {
     if (noBodyParams && analysis.paramCount > 0) {
       throw new Error(
         `O template "${templateName}" está declarado no catálogo como SEM parâmetros, mas na Meta tem ` +
-          `${analysis.paramCount}. Corrige o catálogo (shared/whatsappTemplate.ts) ou o template no WhatsApp Manager.`,
+          `${analysis.paramCount}. Corrige o registo (shared/driverTemplates.ts) ou o template no WhatsApp Manager.`,
       );
     }
     const problem = validateTemplateUsage(analysis, {
@@ -668,7 +704,7 @@ async function prepareSend(opts: {
       hasWeekStart: !!weekStart,
       roles,
     });
-    if (problem) throw new Error(problem);
+    if (problem) throw new Error(`${driverCityLabel(city)}: ${problem}`);
   } else {
     metaUnavailableReason = meta.reason;
     console.warn(
@@ -686,7 +722,7 @@ async function prepareSend(opts: {
 
   const optedOut = await optedOutPhones(db);
   const unreachable = await unreachablePhones(db);
-  return { templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db, optedOut, unreachable };
+  return { city, label: def.label, templateName, languageCode, bodyParam2, weekStart, roles, noBodyParams, analysis, metaUnavailableReason, includeFormLink, db, optedOut, unreachable };
 }
 
 /**
@@ -792,6 +828,7 @@ function baseDispatch(prep: PreparedSend, broadcastId: number, sentById: number 
   return {
     templateName: prep.templateName,
     languageCode: prep.languageCode,
+    city: prep.city,
     bodyParam2: prep.bodyParam2,
     analysis: prep.analysis,
     roles: prep.roles,
@@ -807,67 +844,110 @@ function baseDispatch(prep: PreparedSend, broadcastId: number, sentById: number 
   };
 }
 
+/** Cidades por ordem do registo, sem repetições. PURA. */
+export function orderedCities(cities: Iterable<City>): City[] {
+  const set = new Set(cities);
+  return DRIVER_CITIES.filter((c) => set.has(c));
+}
+
 /**
- * Envia um template a contactos SEM ficha (leads de extras). Mesmo caminho de
- * envio dos extras (`dispatchOne`) — inspeção do template, conversa no inbox
- * (sem employeeId), linha em whatsapp_messages e broadcast auditável — mas sem
- * campo do diálogo nem link do formulário: um contacto sem ficha não tem token.
- * A ordem de `recipients` na resposta é a ordem de `contacts`, para o chamador
- * associar cada resultado ao seu lead.
+ * Código de envio (`sendKey`, ≤ 40) de UMA cidade dentro de um envio por
+ * cidades. Determinístico: carregar outra vez retoma cada cidade (17b). PURA.
+ */
+export function citySendKey(sendKey: string | null | undefined, city: City): string | null {
+  if (!sendKey) return null;
+  return `${sendKey.slice(0, 33)}:${city.slice(0, 6)}`;
+}
+
+/**
+ * Prepara (e valida) o template de CADA cidade antes de enviar a quem quer que
+ * seja: num lote Lisboa + Porto com o template do Porto por aprovar não sai
+ * nada, em vez de metade do lote seguir e a outra metade falhar.
+ */
+async function prepareCities(
+  cities: City[],
+  base: Omit<Parameters<typeof prepareSend>[0], "city">,
+): Promise<Map<City, PreparedSend>> {
+  const out = new Map<City, PreparedSend>();
+  for (const city of cities) out.set(city, await prepareSend({ ...base, city }));
+  return out;
+}
+
+/**
+ * Envia um template a contactos SEM ficha (leads de extras), agrupados por
+ * cidade (uma difusão por cidade). Mesmo caminho de envio dos extras
+ * (`dispatchOne`): inspeção do template, conversa no inbox (sem employeeId),
+ * linha em whatsapp_messages e difusão auditável. Sem campo do diálogo nem
+ * link do formulário: um contacto sem ficha não tem token.
+ * Em cada grupo, a ordem de `recipients` é a ordem de `contacts`, para o
+ * chamador associar cada resultado ao seu lead.
  */
 export async function sendTemplateToContacts(opts: {
-  templateName: string;
-  languageCode?: string | null;
-  contacts: ContactRecipient[];
+  templateId: string;
+  groups: { city: City; contacts: ContactRecipient[] }[];
   note?: string | null;
   createdById?: number | null;
   /** Código único do envio (do ecrã, 17b): carregar outra vez retoma, não duplica. */
   sendKey?: string | null;
-}): Promise<BroadcastSummary> {
-  const prep = await prepareSend({ templateName: opts.templateName, languageCode: opts.languageCode });
-  if (prep.includeFormLink) {
-    throw new Error(
-      `O template "${prep.templateName}" tem um botão com link dinâmico, que precisa do token pessoal de um ` +
-        `colaborador — não pode ser enviado a contactos sem ficha.`,
-    );
+}): Promise<{ city: City; summary: BroadcastSummary }[]> {
+  const groups = opts.groups.filter((g) => g.contacts.length > 0);
+  const preps = await prepareCities(orderedCities(groups.map((g) => g.city)), { templateId: opts.templateId });
+  for (const prep of Array.from(preps.values())) {
+    if (prep.includeFormLink) {
+      throw new Error(
+        `O template "${prep.templateName}" tem um botão com link dinâmico, que precisa do token pessoal de um ` +
+          `colaborador — não pode ser enviado a contactos sem ficha.`,
+      );
+    }
+    if (prep.roles && !prep.noBodyParams && prep.analysis && resolveBodyParamRoles(prep.analysis.paramNames, prep.analysis.paramCount, prep.roles).includes("shared")) {
+      throw new Error(`O template "${prep.templateName}" precisa do campo do diálogo, que o envio a contactos não tem.`);
+    }
   }
-  if (prep.roles && !prep.noBodyParams && prep.analysis && resolveBodyParamRoles(prep.analysis.paramNames, prep.analysis.paramCount, prep.roles).includes("shared")) {
-    throw new Error(`O template "${prep.templateName}" precisa do campo do diálogo, que o envio a contactos não tem.`);
-  }
-  const { db } = prep;
 
-  const resolved: ResolvedRecipient[] = opts.contacts.map((c) => {
-    const raw = (c.phone ?? "").trim();
-    return {
-      employeeId: null,
-      name: c.name?.trim() || null,
-      phone: raw,
-      phoneE164: raw ? normalizePhoneE164(raw) : null,
+  const out: { city: City; summary: BroadcastSummary }[] = [];
+  for (const g of groups) {
+    const prep = preps.get(g.city)!;
+    const { db } = prep;
+    const sendKey = citySendKey(opts.sendKey, g.city);
+    const resolved: ResolvedRecipient[] = g.contacts.map((c) => {
+      const raw = (c.phone ?? "").trim();
+      return {
+        employeeId: null,
+        name: c.name?.trim() || null,
+        phone: raw,
+        phoneE164: raw ? normalizePhoneE164(raw) : null,
+      };
+    });
+
+    const { id: broadcastId } = await openBroadcast(db, {
+      templateName: prep.templateName,
+      city: prep.city,
+      languageCode: prep.languageCode,
+      note: `[LEADS] ${opts.note ?? ""}`.trim(),
+      createdById: opts.createdById ?? null,
+      weekStart: null,
+      totalCount: resolved.length,
+      sendKey,
+    });
+
+    const cfg: DispatchConfig = {
+      ...baseDispatch(prep, broadcastId, opts.createdById ?? null, NEUTRAL_RECIPIENT_NAME),
+      bodyParam2: null,
+      includeFormLink: false,
+      weekStart: null,
+      sendKey,
+      // D32: aos leads (à mão ou no lembrete automático) o mesmo template não volta antes de 24 h.
+      recentTemplate: await recentTemplatePhones(db, prep.templateName, broadcastId),
     };
-  });
-
-  const { id: broadcastId } = await openBroadcast(db, {
-    templateName: prep.templateName,
-    note: `[LEADS] ${opts.note ?? ""}`.trim(),
-    createdById: opts.createdById ?? null,
-    weekStart: null,
-    totalCount: resolved.length,
-    sendKey: opts.sendKey ?? null,
-  });
-
-  const cfg: DispatchConfig = {
-    ...baseDispatch(prep, broadcastId, opts.createdById ?? null, NEUTRAL_RECIPIENT_NAME),
-    bodyParam2: null,
-    includeFormLink: false,
-    weekStart: null,
-    sendKey: opts.sendKey ?? null,
-    // D32: aos leads (à mão ou no lembrete automático) o mesmo template não volta antes de 24 h.
-    recentTemplate: await recentTemplatePhones(db, prep.templateName, broadcastId),
-  };
-  const recipients = await dispatchAll(db, resolved, () => cfg);
-  const sum = summarize(recipients);
-  await updateBroadcastCounts(db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
-  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recentTemplate: sum.recentTemplate, recipients };
+    const recipients = (await dispatchAll(db, resolved, () => cfg)).map((r) => ({ ...r, city: g.city }));
+    const sum = summarize(recipients);
+    await updateBroadcastCounts(db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
+    out.push({
+      city: g.city,
+      summary: { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recentTemplate: sum.recentTemplate, recipients },
+    });
+  }
+  return out;
 }
 
 /**
@@ -879,6 +959,8 @@ export async function sendTemplateToContacts(opts: {
 export async function sendTemplateToConversation(opts: {
   conversationId: number;
   templateId: string;
+  /** Cidade escolhida no diálogo (obrigatória: nunca se assume Lisboa). */
+  city: City;
   bodyParam2?: string | null;
   weekStart?: string | null;
   createdById: number | null;
@@ -924,9 +1006,9 @@ export async function sendTemplateToConversation(opts: {
   if (conv.optedOutAt) throw new Error("Este contacto pediu para não receber mensagens (STOP) — não é possível enviar templates.");
 
   const prep = await prepareSend({
-    templateName: def.name,
-    languageCode: def.language,
-    bodyParam2: def.sharedParam ? (opts.bodyParam2 ?? null) : null,
+    templateId: def.id,
+    city: opts.city,
+    bodyParam2: opts.bodyParam2 ?? null,
     weekStart: opts.weekStart ?? null,
   });
   if (prep.includeFormLink && conv.employeeId == null) {
@@ -934,6 +1016,8 @@ export async function sendTemplateToConversation(opts: {
   }
   const broadcastId = await insertBroadcast(prep.db, {
     templateName: prep.templateName,
+    city: prep.city,
+    languageCode: prep.languageCode,
     note: `[INBOX] conversa ${conv.id}`,
     createdById: opts.createdById,
     weekStart: prep.weekStart,
@@ -950,22 +1034,42 @@ export async function sendTemplateToConversation(opts: {
   );
   const sum = summarize([r]);
   await updateBroadcastCounts(prep.db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
-  return { broadcastId, total: 1, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients: [r] };
+  return { broadcastId, total: 1, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients: [{ ...r, city: prep.city }] };
 }
 
+/**
+ * Envio de um template aos motoristas extra, AGRUPADO POR CIDADE.
+ *
+ * Cada destinatário recebe o template da SUA cidade (`cityByEmployee`, decidido
+ * no diálogo ou pelo job a partir da cidade do motorista/turno). Um lote com
+ * Lisboa + Porto dá uma difusão por cidade, todas validadas antes de sair
+ * qualquer mensagem. Quem não estiver no mapa não recebe nada.
+ *
+ * Modo teste (`testPhone` + `testCity`): um número, o template dessa cidade.
+ */
 export async function sendBroadcast(opts: SendBroadcastOptions): Promise<BroadcastSummary> {
   const perRecipient = opts.bodyParam2ByEmployee ?? null;
-  const prep = await prepareSend({ ...opts, perRecipientParam2: !!perRecipient && Object.keys(perRecipient).length > 0 });
-  const { db } = prep;
   const sentById = opts.createdById ?? null;
+  const base = {
+    templateId: opts.templateId,
+    bodyParam2: opts.bodyParam2,
+    weekStart: opts.weekStart,
+    includeFormLink: opts.includeFormLink,
+    perRecipientParam2: !!perRecipient && Object.keys(perRecipient).length > 0,
+  };
 
   // ── MODO TESTE: 1 número, não toca nos extras ──────────────────────────────
   if (opts.testPhone) {
+    if (!opts.testCity) throw new Error("Escolhe a cidade do template a testar.");
+    const prep = await prepareSend({ ...base, city: opts.testCity });
+    const { db } = prep;
     const rawTest = opts.testPhone.trim();
     const phoneE164 = normalizePhoneE164(rawTest);
     const note = `[TESTE] ${opts.note ?? ""}`.trim();
     const broadcastId = await insertBroadcast(db, {
       templateName: prep.templateName,
+      city: prep.city,
+      languageCode: prep.languageCode,
       note,
       createdById: sentById,
       weekStart: prep.weekStart,
@@ -982,7 +1086,7 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
         invalidPhone: 1,
         optedOut: 0,
         recipients: [
-          { employeeId: null, name: UNKNOWN_RECIPIENT_NAME, phone: rawTest, phoneE164: null, status: "invalid_phone", error: "Número de teste inválido" },
+          { employeeId: null, name: UNKNOWN_RECIPIENT_NAME, phone: rawTest, phoneE164: null, status: "invalid_phone", error: "Número de teste inválido", city: prep.city },
         ],
       };
     }
@@ -998,47 +1102,92 @@ export async function sendBroadcast(opts: SendBroadcastOptions): Promise<Broadca
     );
     const sum = summarize([recipient]);
     await updateBroadcastCounts(db, broadcastId, { sentCount: sum.sent, failedCount: sum.notSent });
-    return { broadcastId, total: 1, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients: [recipient] };
+    return { broadcastId, total: 1, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recipients: [{ ...recipient, city: prep.city }] };
   }
 
   // ── MODO NORMAL ────────────────────────────────────────────────────────────
+  const cityByEmployee = opts.cityByEmployee ?? {};
+  const employeeIds = Object.keys(cityByEmployee).map(Number).filter((id) => Number.isInteger(id) && id > 0);
+  if (!employeeIds.length) throw new Error("Nenhum destinatário com cidade atribuída.");
+  for (const id of employeeIds) {
+    if (!isDriverCity(cityByEmployee[id])) throw new Error(`Cidade inválida para o colaborador ${id}.`);
+  }
   // Só EXTRAS ativos (Jorge, 2 out 2026: disponibilidade e escala nunca vão
   // a funcionários). Um id de outra função pedido à mão fica de fora.
   const pool = await listActiveExtras();
-  const resolved = resolveRecipients(pool, opts.employeeIds ?? null);
+  const resolved = resolveRecipients(pool, employeeIds);
   if (!resolved.length) throw new Error("Nenhum destinatário para este envio.");
-
-  const { id: broadcastId } = await openBroadcast(db, {
-    templateName: prep.templateName,
-    note: opts.note ?? null,
-    createdById: sentById,
-    weekStart: prep.weekStart,
-    totalCount: resolved.length,
-    sendKey: opts.sendKey ?? null,
-  });
+  const preps = await prepareCities(orderedCities(resolved.map((r) => cityByEmployee[r.employeeId!])), base);
+  const db = Array.from(preps.values())[0].db;
 
   const { employeesWithNoAuto } = await import("./contactPrefs");
   const noAutoEmployees = await employeesWithNoAuto(resolved.map((r) => r.employeeId).filter((id): id is number => id != null), "whatsapp");
-  const recentTemplate = opts.blockRecentSameTemplate ? await recentTemplatePhones(db, prep.templateName, broadcastId) : undefined;
-  const base = { ...baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME), sendKey: opts.sendKey ?? null, noAutoEmployees, recentTemplate };
-  const recipients = await dispatchAll(db, resolved, (r) =>
-    r.employeeId != null && perRecipient?.[r.employeeId] ? { ...base, bodyParam2Override: perRecipient[r.employeeId] } : base,
-  );
-  const sum = summarize(recipients);
 
-  // Decisão 2 (Jorge): guarda a lista de extras (com employeeId) que falharam
-  // por número inválido/ausente, para mais tarde "mostrar extras com número
-  // inválido" e corrigir na origem. Não gera linha em whatsapp_messages.
-  const invalidEmployeeIds = recipients
-    .filter((r) => r.status === "invalid_phone" && r.employeeId != null)
-    .map((r) => r.employeeId as number);
-
-  // failedCount na BD = tudo o que não foi enviado (falhas de API + inválidos + STOP).
-  await updateBroadcastCounts(db, broadcastId, {
-    sentCount: sum.sent,
-    failedCount: sum.notSent,
-    invalidEmployeeIds: invalidEmployeeIds.length ? invalidEmployeeIds : null,
+  // Dedup GLOBAL por número (antes de partir por cidade): o mesmo número em
+  // duas fichas de cidades diferentes recebe uma só mensagem.
+  const dup = duplicatePhoneIndexes(resolved);
+  const recipients: BroadcastRecipient[] = new Array(resolved.length);
+  resolved.forEach((r, i) => {
+    if (dup[i] >= 0) {
+      const other = resolved[dup[i]];
+      recipients[i] = {
+        ...r,
+        status: "duplicate_phone",
+        error: `Mesmo número de ${other.name ?? "outro destinatário"} — enviado só uma vez.`,
+        city: cityByEmployee[r.employeeId!],
+      };
+    }
   });
 
-  return { broadcastId, total: resolved.length, sent: sum.sent, failed: sum.failed, invalidPhone: sum.invalidPhone, optedOut: sum.optedOut, recentTemplate: sum.recentTemplate, recipients };
+  const byCity: CityBroadcast[] = [];
+  for (const [city, prep] of Array.from(preps.entries())) {
+    const idx = resolved.map((_, i) => i).filter((i) => !recipients[i] && cityByEmployee[resolved[i].employeeId!] === city);
+    const group = idx.map((i) => resolved[i]);
+    const sendKey = citySendKey(opts.sendKey, city);
+    const { id: broadcastId } = await openBroadcast(db, {
+      templateName: prep.templateName,
+      city,
+      languageCode: prep.languageCode,
+      note: opts.note ?? null,
+      createdById: sentById,
+      weekStart: prep.weekStart,
+      totalCount: group.length,
+      sendKey,
+    });
+    const recentTemplate = opts.blockRecentSameTemplate ? await recentTemplatePhones(db, prep.templateName, broadcastId) : undefined;
+    const cfg = { ...baseDispatch(prep, broadcastId, sentById, NEUTRAL_RECIPIENT_NAME), sendKey, noAutoEmployees, recentTemplate };
+    const sent = await dispatchAll(db, group, (r) =>
+      r.employeeId != null && perRecipient?.[r.employeeId] ? { ...cfg, bodyParam2Override: perRecipient[r.employeeId] } : cfg,
+    );
+    sent.forEach((r, k) => {
+      recipients[idx[k]] = { ...r, city };
+    });
+    const sum = summarize(sent);
+    // Decisão 2 (Jorge): guarda a lista de extras (com employeeId) que falharam
+    // por número inválido/ausente, para mais tarde "mostrar extras com número
+    // inválido" e corrigir na origem. Não gera linha em whatsapp_messages.
+    const invalidEmployeeIds = sent
+      .filter((r) => r.status === "invalid_phone" && r.employeeId != null)
+      .map((r) => r.employeeId as number);
+    // failedCount na BD = tudo o que não foi enviado (falhas de API + inválidos + STOP).
+    await updateBroadcastCounts(db, broadcastId, {
+      sentCount: sum.sent,
+      failedCount: sum.notSent,
+      invalidEmployeeIds: invalidEmployeeIds.length ? invalidEmployeeIds : null,
+    });
+    byCity.push({ city, templateName: prep.templateName, languageCode: prep.languageCode, broadcastId, total: group.length, sent: sum.sent, notSent: sum.notSent });
+  }
+
+  const sum = summarize(recipients);
+  return {
+    broadcastId: byCity[0]?.broadcastId ?? null,
+    total: resolved.length,
+    sent: sum.sent,
+    failed: sum.failed,
+    invalidPhone: sum.invalidPhone,
+    optedOut: sum.optedOut,
+    recentTemplate: sum.recentTemplate,
+    recipients,
+    byCity,
+  };
 }

@@ -82,10 +82,9 @@ import {
   DEFAULT_WHATSAPP_TEMPLATE_ID,
   WHATSAPP_TEMPLATES,
   findWhatsAppTemplate,
-  previewTemplateBody,
-  resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
+import { DriverCityPanel, useDriverCity, type DriverCityRecipient } from "@/components/whatsapp/DriverCityPanel";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -461,19 +460,21 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
 
   // ── Template: catálogo + pré-visualização com o nome REAL do contacto ──
   const tplDef = findWhatsAppTemplate(tplId) ?? WHATSAPP_TEMPLATES[0];
-  const templatePreview = trpc.whatsapp.templatePreview.useQuery(
-    { templateName: tplDef.name, languageCode: tplDef.language },
-    { enabled: tplOpen, staleTime: 5 * 60_000, retry: false },
-  );
   const tplRecipientName = t?.recipientFirstName ?? "colega";
-  const tplPreviewText = useMemo(() => {
-    const p = templatePreview.data;
-    if (!p?.ok) return null;
-    // MESMOS papéis que o envio usa — o preview não pode contar outra história.
-    const slots = resolveBodyParamRoles(p.paramNames, p.paramCount, tplDef.roles);
-    return previewTemplateBody(p.bodyText, slots, { recipient: tplRecipientName, shared: tplParam2 });
-  }, [templatePreview.data, tplDef, tplRecipientName, tplParam2]);
-  const tplNeedsWeek = !!(templatePreview.data?.ok && templatePreview.data.hasDynamicUrlButton);
+  // Cidade do template: a do colaborador/lead desta conversa; sem ela, a do
+  // utilizador; senão fica por escolher (registo shared/driverTemplates.ts).
+  const recipientCity = trpc.whatsapp.recipientCity.useQuery(
+    { conversationId: t?.conversationId ?? 0 },
+    { enabled: tplOpen && !!t, staleTime: 60_000, retry: false },
+  );
+  const tplCityRecipients = useMemo<DriverCityRecipient[]>(
+    () => (t && recipientCity.isFetched ? [{ id: t.conversationId, city: recipientCity.data?.city ?? null, name: tplRecipientName }] : []),
+    [t?.conversationId, recipientCity.isFetched, recipientCity.data?.city, tplRecipientName],
+  );
+  const tplCity = useDriverCity({ templateId: tplDef.id, open: tplOpen, recipients: tplCityRecipients });
+  const tplChosenCity = tplCity.plan.groups[0]?.city ?? null;
+  const tplCityPreview = tplCity.previews.find((p) => p.city === tplChosenCity);
+  const tplNeedsWeek = !!(tplCityPreview?.ok && tplCityPreview.hasDynamicUrlButton);
   const tplMissing =
     (!!tplDef.sharedParam && !tplParam2.trim()) || (tplNeedsWeek && !/^\d{4}-\d{2}-\d{2}$/.test(tplWeekStart));
 
@@ -1099,22 +1100,11 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
                 <p className="text-[11px] text-muted-foreground">O botão do template leva o link pessoal do formulário desta semana.</p>
               </div>
             )}
-            <div className="space-y-1">
-              <Label className="text-xs">Pré-visualização (para {tplRecipientName})</Label>
-              {templatePreview.isLoading ? (
-                <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
-              ) : tplPreviewText ? (
-                <div className="rounded-md bg-[#d9fdd3] dark:bg-[#005c4b] text-zinc-900 dark:text-zinc-50 p-2.5 text-[13px] leading-[1.4] whitespace-pre-wrap max-h-64 overflow-y-auto">
-                  {tplPreviewText}
-                </div>
-              ) : (
-                <p className="text-xs text-amber-600">
-                  {templatePreview.data && !templatePreview.data.ok
-                    ? templatePreview.data.reason
-                    : "Pré-visualização indisponível — o envio continua a funcionar."}
-                </p>
-              )}
-            </div>
+            {recipientCity.isFetched ? (
+              <DriverCityPanel state={tplCity} sharedValue={tplParam2} />
+            ) : (
+              <p className="text-xs text-muted-foreground">A ver a cidade do contacto…</p>
+            )}
           </div>
 
           <DialogFooter>
@@ -1123,12 +1113,15 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
             </Button>
             <Button
               className="bg-green-700 hover:bg-green-800 text-white"
-              disabled={!t || t.optedOut || tplMissing || sendTemplate.isPending}
+              disabled={!t || t.optedOut || tplMissing || !tplChosenCity || !!tplCity.blockReason || sendTemplate.isPending}
+              title={tplCity.blockReason ?? undefined}
               onClick={() =>
                 t &&
+                tplChosenCity &&
                 sendTemplate.mutate({
                   conversationId: t.conversationId,
                   templateId: tplDef.id,
+                  city: tplChosenCity,
                   bodyParam2: tplDef.sharedParam ? tplParam2.trim() || null : null,
                   weekStart: tplNeedsWeek ? tplWeekStart : null,
                   clientRequestId: tplReqId,

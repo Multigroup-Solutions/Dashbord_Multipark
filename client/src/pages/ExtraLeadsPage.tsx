@@ -35,6 +35,8 @@ import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
 import { ViewToggle } from "@/components/ViewToggle";
 import { useViewPref } from "@/hooks/useViewPref";
 import { findWhatsAppTemplate, LEAD_RECRUITMENT_TEMPLATE_ID } from "@shared/whatsappTemplate";
+import { driverCityFrom, driverCityLabel, type City } from "@shared/driverTemplates";
+import { DriverCityPanel, planEntries, useDriverCity, type DriverCityRecipient } from "@/components/whatsapp/DriverCityPanel";
 import { RECENT_TEMPLATE_LABEL, broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery } from "@shared/contactSearch";
 import { can } from "@shared/access";
@@ -139,8 +141,8 @@ function LeadsTab() {
   const [contactOpen, setContactOpen] = useState(false);
   const [contactIds, setContactIds] = useState<number[]>([]);
   const [contactResult, setContactResult] = useState<null | {
-    total: number; sent: number; failed: number; noPhone: number;
-    results: { leadId: number; fullName: string; status: string; error?: string }[];
+    total: number; sent: number; failed: number; noPhone: number; noCity: number;
+    results: { leadId: number; fullName: string; status: string; error?: string; city?: City }[];
   }>(null);
 
   const [deleteFor, setDeleteFor] = useState<LeadRow | null>(null);
@@ -290,11 +292,6 @@ function LeadsTab() {
     onError: (e) => toast.error(e.message),
   });
 
-  // Texto REAL do template aprovado na Meta — só pedido com o diálogo aberto.
-  const preview = trpc.whatsapp.templatePreview.useQuery(
-    { templateName: template.name, languageCode: template.language },
-    { enabled: contactOpen, staleTime: 5 * 60_000, retry: false },
-  );
 
   function openCreate() {
     setEditing(null);
@@ -342,6 +339,18 @@ function LeadsTab() {
   const f = funnel.data;
   // Cidade de um lead sem acesso ao nó (não devia acontecer: a lista já vem filtrada)
   const cityLabel = (pid: number | null) => (pid == null ? null : cityName.get(pid) ?? `#${pid}`);
+  // Cidade do template por lead (registo shared/driverTemplates.ts): a do lead;
+  // sem ela, a do utilizador; senão por escolher. Só contam os que têm telemóvel.
+  const contactCityKey = contactTargets.map((l) => `${l.id}:${l.projectId ?? ""}`).join(",");
+  const contactCityRecipients = useMemo<DriverCityRecipient[]>(
+    () =>
+      contactTargets
+        .filter((l) => !!l.phoneE164)
+        .map((l) => ({ id: l.id, city: driverCityFrom(cityLabel(l.projectId)), name: l.fullName.split(" ")[0] })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contactCityKey, cityName],
+  );
+  const contactCity = useDriverCity({ templateId: template.id, open: contactOpen, recipients: contactCityRecipients });
 
   // D46: as mesmas ações e o mesmo estado na lista e nos cartões.
   const leadActions = (l: LeadRow) => (
@@ -946,31 +955,19 @@ function LeadsTab() {
               {contactTargets.length === 1
                 ? `Para ${contactTargets[0]?.fullName} (${contactTargets[0]?.phone ?? "sem telemóvel"}).`
                 : `Para ${contactWithPhone} lead${contactWithPhone === 1 ? "" : "s"} com telemóvel${contactTargets.length !== contactWithPhone ? ` (${contactTargets.length - contactWithPhone} sem telemóvel ficam de fora)` : ""}.`}
-              {" "}Template sem campos a preencher — o texto é o aprovado na Meta.
+              {" "}Template sem campos a preencher: o texto é o aprovado na Meta para a cidade de cada lead.
             </DialogDescription>
           </DialogHeader>
 
           {!contactResult ? (
-            <div className="space-y-1">
-              <Label className="text-xs">Pré-visualização</Label>
-              {preview.isLoading ? (
-                <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
-              ) : preview.data?.ok ? (
-                <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap">
-                  {preview.data.bodyText}
-                </div>
-              ) : (
-                <p className="text-xs text-amber-700">
-                  Sem pré-visualização: {preview.data && !preview.data.ok ? preview.data.reason : preview.error?.message ?? "template não inspecionado"}. O envio segue com o formato assumido.
-                </p>
-              )}
-            </div>
+            <DriverCityPanel state={contactCity} sharedValue="" noun="lead(s)" />
           ) : (
             <div className="space-y-2">
               <div className="text-sm">
                 <span className="text-emerald-700 font-medium">{contactResult.sent} enviados</span>
                 {contactResult.failed > 0 && <> · <span className="text-red-700 font-medium">{contactResult.failed} falhas</span></>}
                 {contactResult.noPhone > 0 && <> · <span className="text-amber-700">{contactResult.noPhone} sem telemóvel</span></>}
+                {contactResult.noCity > 0 && <> · <span className="text-amber-700">{contactResult.noCity} sem cidade</span></>}
               </div>
               <ul className="max-h-56 overflow-y-auto text-xs space-y-1">
                 {contactResult.results.map((r) => (
@@ -980,15 +977,16 @@ function LeadsTab() {
                       className={
                         r.status === "sent"
                           ? "bg-emerald-100 text-emerald-800"
-                          : r.status === "no_phone" || r.status === "invalid_phone" || r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template"
+                          : r.status === "no_phone" || r.status === "no_city" || r.status === "invalid_phone" || r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template"
                             ? "bg-amber-100 text-amber-800"
                             : "bg-red-100 text-red-800"
                       }
                     >
-                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : r.status === "opted_out" ? "não quer mensagens" : r.status === "duplicate_phone" ? "número repetido" : r.status === "recent_template" ? RECENT_TEMPLATE_LABEL : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
+                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "no_city" ? "sem cidade" : r.status === "invalid_phone" ? "número inválido" : r.status === "opted_out" ? "não quer mensagens" : r.status === "duplicate_phone" ? "número repetido" : r.status === "recent_template" ? RECENT_TEMPLATE_LABEL : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
                     </Badge>
                     <span className="font-medium">{r.fullName}</span>
-                    {r.error && <span className="text-muted-foreground break-words">— {r.error}</span>}
+                    {r.city && <span className="text-muted-foreground">{driverCityLabel(r.city)}</span>}
+                    {r.error && <span className="text-muted-foreground break-words">: {r.error}</span>}
                   </li>
                 ))}
               </ul>
@@ -1007,12 +1005,18 @@ function LeadsTab() {
             {!contactResult && (
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white"
-                disabled={contact.isPending || contactWithPhone === 0}
+                disabled={contact.isPending || contactWithPhone === 0 || !!contactCity.blockReason}
+                title={contactCity.blockReason ?? undefined}
                 onClick={() => {
                   // D32: a vários leads, primeiro "Confirmar".
                   if (!contactConfirm && needsBroadcastConfirm(contactWithPhone)) { setContactConfirm(true); return; }
                   setContactConfirm(false);
-                  contact.mutate({ leadIds: contactIds, templateId: template.id, sendKey: contactSendKey || undefined });
+                  contact.mutate({
+                    leadIds: contactIds,
+                    templateId: template.id,
+                    cities: planEntries(contactCity.plan).map((e) => ({ leadId: e.id, city: e.city })),
+                    sendKey: contactSendKey || undefined,
+                  });
                 }}
               >
                 {contact.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}

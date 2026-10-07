@@ -26,7 +26,7 @@
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { whatsappBroadcasts, whatsappConversations, whatsappMessages } from "../drizzle/schema";
-import { AVAILABILITY_TEMPLATE_NAME, isTeamRetryTemplate } from "../shared/whatsappTemplate";
+import { isDriverMessageTemplate, isTeamRetryTemplate } from "../shared/whatsappTemplate";
 import { lisbonMidnightUtcMs } from "../shared/lisbonDay";
 import { maskPhone } from "../shared/maskPhone";
 import type { Db, MessageStatus } from "./whatsappStore";
@@ -60,9 +60,9 @@ export function nextUndeliverableState(current: { undeliverableCount: number; un
   return { undeliverableCount, markUnreachable: !current.unreachableAt && undeliverableCount >= UNREACHABLE_AFTER };
 }
 
-const SHIFT_NOTE_RE = /^(Aviso de escala|Morada e regras \(1\.º turno\)) (\d{4}-\d{2}-\d{2})/;
+const SHIFT_NOTE_RE = /^(Aviso de escala|Morada e regras \(1\.º turno\)|Turno confirmado) (\d{4}-\d{2}-\d{2})/;
 
-/** Dia do turno pela nota da difusão de equipa (aviso de escala / morada e regras). PURA. */
+/** Dia do turno pela nota da difusão de equipa (aviso de escala / morada e regras / turno confirmado). PURA. */
 export function shiftDateFromNote(note: string | null | undefined): string | null {
   const m = String(note ?? "").match(SHIFT_NOTE_RE);
   return m ? m[2] : null;
@@ -105,7 +105,8 @@ export type FallbackChannel = "schedule_email" | "availability_email" | "none";
 export function fallbackChannelFor(m: { templateName: string | null; note: string | null; employeeId: number | null }): FallbackChannel {
   if (m.employeeId == null) return "none";
   if (/^Aviso de escala \d{4}-\d{2}-\d{2}/.test(m.note ?? "")) return "schedule_email";
-  if (m.templateName === AVAILABILITY_TEMPLATE_NAME) return "availability_email";
+  // Pedido de disponibilidade de QUALQUER cidade (registo shared/driverTemplates.ts).
+  if (isDriverMessageTemplate(m.templateName, "AVAILABILITY")) return "availability_email";
   return "none";
 }
 

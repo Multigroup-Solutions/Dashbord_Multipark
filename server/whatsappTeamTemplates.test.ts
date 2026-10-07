@@ -1,28 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
-  AVAILABILITY_TEMPLATE_NAME,
-  SHIFT_NOTICE_TEMPLATE_NAME,
-  TEAM_TEMPLATE_LANGUAGE,
   findWhatsAppTemplate,
   shiftNoticeButtonAction,
+  templateForCity,
 } from "../shared/whatsappTemplate";
 import { analyzeTemplateEntry, templateFreeText, toWhatsAppBold } from "./whatsappTemplateMeta";
 import { parseWebhookPayload } from "./whatsappInbound";
 
 describe("templates de equipa (Fase 2)", () => {
-  it("driver_shift_notice e driver_availability, UTILITY em pt_PT, com os parâmetros nomeados", () => {
-    const aviso = findWhatsAppTemplate("aviso_trabalho")!;
-    const disp = findWhatsAppTemplate("disponibilidade")!;
-    expect([aviso.name, aviso.language]).toEqual([SHIFT_NOTICE_TEMPLATE_NAME, "pt_PT"]);
-    expect([disp.name, disp.language]).toEqual([AVAILABILITY_TEMPLATE_NAME, "pt_PT"]);
-    expect(TEAM_TEMPLATE_LANGUAGE).toBe("pt_PT");
-    expect(aviso.roles).toEqual({ recipient: "customer_name", shared: "day" });
-    expect(disp.roles).toEqual({ recipient: "customer_name", shared: "week_date" });
+  it("Lisboa: driver_shift_notice e driver_availability, UTILITY em pt_PT, com os parâmetros nomeados", () => {
+    const aviso = templateForCity(findWhatsAppTemplate("aviso_trabalho")!, "LISBOA")!;
+    const disp = templateForCity(findWhatsAppTemplate("disponibilidade")!, "LISBOA")!;
+    expect([aviso.name, aviso.language]).toEqual(["driver_shift_notice", "pt_PT"]);
+    expect([disp.name, disp.language]).toEqual(["driver_availability", "pt_PT"]);
+    expect(aviso.params).toEqual({ recipient: "customer_name", shared: "day" });
+    expect(disp.params).toEqual({ recipient: "customer_name", shared: "week_date" });
   });
 
-  it("morada_e_regras e seja_motorista continuam no catálogo (recurso / sem mudança)", () => {
-    expect(findWhatsAppTemplate("morada_regras")?.name).toBe("morada_e_regras");
-    expect(findWhatsAppTemplate("seja_motorista")?.name).toBe("seja_motorista");
+  it("Lisboa: morada_e_regras e seja_motorista continuam no registo (recurso / sem mudança)", () => {
+    expect(templateForCity(findWhatsAppTemplate("morada_regras")!, "LISBOA")!.name).toBe("morada_e_regras");
+    expect(templateForCity(findWhatsAppTemplate("seja_motorista")!, "LISBOA")!.name).toBe("seja_motorista");
   });
 });
 

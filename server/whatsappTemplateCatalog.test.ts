@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { DRIVER_CITIES } from "../shared/driverTemplates";
 import {
   WHATSAPP_TEMPLATES,
   findWhatsAppTemplate,
   findWhatsAppTemplateByName,
+  templateForCity,
   messageDisplayBody,
   orderBodyValues,
   previewTemplateBody,
@@ -45,37 +47,41 @@ const AVAILABILITY_ENTRY = {
   ],
 };
 
-const workNoticeDef = findWhatsAppTemplate("aviso_trabalho")!;
-const availabilityDef = findWhatsAppTemplate("disponibilidade")!;
+// Papéis vêm do registo por cidade (shared/driverTemplates.ts); Lisboa = produção.
+const workNoticeDef = { roles: templateForCity(findWhatsAppTemplate("aviso_trabalho")!, "LISBOA")!.params };
+const availabilityDef = { roles: templateForCity(findWhatsAppTemplate("disponibilidade")!, "LISBOA")!.params };
 
 describe("catálogo de templates", () => {
-  it("tem ids únicos e nomes/línguas preenchidos", () => {
+  it("tem ids únicos e, em cada cidade, nome/língua preenchidos", () => {
     const ids = WHATSAPP_TEMPLATES.map(t => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const t of WHATSAPP_TEMPLATES) {
-      expect(t.name.length).toBeGreaterThan(0);
-      expect(t.language.length).toBeGreaterThan(0);
-      // Templates SEM parâmetros (seja_motorista, morada_e_regras) têm roles e
-      // sharedParam a null — os dois juntos, nunca só um.
-      if (t.roles === null) {
-        expect(t.sharedParam).toBeNull();
-      } else {
-        expect(t.sharedParam).not.toBeNull();
-        expect(t.roles.recipient).not.toBe(t.roles.shared);
+      for (const city of DRIVER_CITIES) {
+        const tpl = templateForCity(t, city);
+        if (!tpl) continue; // cidade sem esta mensagem (Faro: só os genéricos)
+        expect(tpl.name.length).toBeGreaterThan(0);
+        expect(tpl.language).toMatch(/^pt_(PT|BR)$/);
+        // Sem parâmetros (seja_motorista, morada_e_regras) → params e
+        // sharedParam a null, os dois juntos, nunca só um.
+        if (tpl.params === null) {
+          expect(t.sharedParam).toBeNull();
+        } else {
+          expect(t.sharedParam).not.toBeNull();
+          expect(tpl.params.recipient).not.toBe(tpl.params.shared);
+        }
       }
     }
   });
 
-  it("encontra a definição pelo nome (é assim que o servidor descobre os papéis)", () => {
-    expect(findWhatsAppTemplateByName("driver_shift_notice", "pt_PT")?.id).toBe("aviso_trabalho");
-    expect(findWhatsAppTemplateByName("driver_availability", "pt_PT")?.id).toBe("disponibilidade");
-    // Língua diferente da aprovada: continua a ser o mesmo template (mesmos parâmetros).
-    expect(findWhatsAppTemplateByName("driver_shift_notice", "pt_BR")?.id).toBe("aviso_trabalho");
-    // Os nomes antigos (pt_BR) saíram do catálogo (Fase 2, 2 out 2026).
-    expect(findWhatsAppTemplateByName("aviso_de_trabalho", "pt_BR")).toBeUndefined();
-    expect(findWhatsAppTemplateByName("disponibilidade_extras", "pt_BR")).toBeUndefined();
-    // Template fora do catálogo (nome escrito à mão no inbox) → sem papéis.
-    expect(findWhatsAppTemplateByName("qualquer_outro", "pt_BR")).toBeUndefined();
+  it("encontra mensagem + cidade pelo nome (é assim que o servidor descobre língua e papéis)", () => {
+    expect(findWhatsAppTemplateByName("driver_shift_notice")?.def.id).toBe("aviso_trabalho");
+    expect(findWhatsAppTemplateByName("driver_availability")?.def.id).toBe("disponibilidade");
+    expect(findWhatsAppTemplateByName("aviso_de_trabalho_porto")?.tpl).toMatchObject({ city: "PORTO", language: "pt_PT" });
+    // Os nomes antigos (pt_BR) saíram do registo (Fase 2, 2 out 2026).
+    expect(findWhatsAppTemplateByName("aviso_de_trabalho")).toBeUndefined();
+    expect(findWhatsAppTemplateByName("disponibilidade_extras")).toBeUndefined();
+    // Template fora do registo → sem papéis.
+    expect(findWhatsAppTemplateByName("qualquer_outro")).toBeUndefined();
   });
 });
 

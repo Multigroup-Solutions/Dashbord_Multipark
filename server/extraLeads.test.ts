@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { manualStatusError, normalizeLeadInput } from "./extraLeads";
-import { findWhatsAppTemplate, templateHasBodyParams, LEAD_RECRUITMENT_TEMPLATE_ID } from "../shared/whatsappTemplate";
+import { findWhatsAppTemplate, templateForCity, templateHasBodyParams, LEAD_RECRUITMENT_TEMPLATE_ID } from "../shared/whatsappTemplate";
 
 describe("normalizeLeadInput", () => {
   it("aceita nome + telemóvel (email opcional) e normaliza o número", () => {
@@ -56,12 +56,13 @@ describe("catálogo — templates sem parâmetros", () => {
     for (const id of ["seja_motorista", "morada_regras"]) {
       const def = findWhatsAppTemplate(id);
       expect(def, id).toBeDefined();
-      expect(def!.roles).toBeNull();
+      expect(templateForCity(def!, "LISBOA")!.params).toBeNull();
       expect(def!.sharedParam).toBeNull();
       expect(templateHasBodyParams(def!)).toBe(false);
     }
-    expect(findWhatsAppTemplate("seja_motorista")!.name).toBe("seja_motorista");
-    expect(findWhatsAppTemplate("morada_regras")!.name).toBe("morada_e_regras");
+    expect(templateForCity(findWhatsAppTemplate("seja_motorista")!, "LISBOA")!.name).toBe("seja_motorista");
+    expect(templateForCity(findWhatsAppTemplate("morada_regras")!, "LISBOA")!.name).toBe("morada_e_regras");
+    expect(templateForCity(findWhatsAppTemplate("seja_motorista")!, "PORTO")!.name).toBe("seja_motorista_porto");
   });
 
   it("os templates antigos continuam com parâmetros", () => {

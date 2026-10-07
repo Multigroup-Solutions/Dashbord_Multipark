@@ -43,7 +43,8 @@ describe("Pedidos e avisos só a extras", () => {
     const wa = fnBody("server/extrasAutomation.ts", "export async function notifyAssignments", 6000);
     expect(wa).toContain("const extrasSet = await extraIdsAmong(Array.from(byEmp.keys()));");
     expect(wa).toContain('if (!extrasSet.has(empId)) outcome.set(empId, { status: "no_contact", error: NOT_EXTRA_NO_NOTICE });');
-    expect(wa).toContain("employeeIds: toNotify,");
+    // Por cidade do turno (2026-10-07): só os extras (`toNotify`) entram no mapa de cidades.
+    expect(wa).toContain("for (const empId of toNotify) {");
     const em = fnBody("server/extrasSchedule.ts", "export async function sendScheduleEmails", 3000);
     expect(em).toContain('extra: String(r.position ?? "") === "extra" && Number(r.isActive) === 1,');
     expect(em).toContain('finishNotification(a, "scheduled", "email", "no_contact", NOT_EXTRA_NO_NOTICE)');

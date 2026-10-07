@@ -90,6 +90,10 @@ import {
   NOT_MONDAY_MESSAGE,
 } from "./extrasAvailability";
 import { sendBroadcast } from "./whatsappBroadcast";
+import { isDriverCity, type City } from "../shared/driverTemplates";
+
+/** Cidade do registo de templates dos motoristas (LISBOA, PORTO…). */
+const driverCitySchema = z.custom<City>((v) => isDriverCity(v), "Cidade sem templates de WhatsApp");
 import { describeLookupFailure, getTemplateMeta } from "./whatsappTemplateMeta";
 import {
   listConversations,
@@ -5758,6 +5762,9 @@ export const appRouter = router({
         z.object({
           leadIds: z.array(z.number().int().positive()).min(1).max(200),
           templateId: z.string().min(1).max(64),
+          // Cidade do template de CADA lead, decidida no diálogo. Lead sem
+          // entrada aqui não recebe nada (nunca se assume Lisboa).
+          cities: z.array(z.object({ leadId: z.number().int().positive(), city: driverCitySchema })).min(1).max(200),
           /** Código único do envio (17b): carregar outra vez retoma, não duplica. */
           sendKey: z.string().min(8).max(40).optional(),
         }),
@@ -5766,7 +5773,8 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "edit");
         const { contactExtraLeads } = await import("./extraLeads");
         try {
-          return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, createdById: ctx.user.id, sendKey: input.sendKey ?? null });
+          const cityByLead = Object.fromEntries(input.cities.map((c) => [c.leadId, c.city])) as Record<number, City>;
+          return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, cityByLead, createdById: ctx.user.id, sendKey: input.sendKey ?? null });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao enviar WhatsApp aos leads" });
         }
@@ -5780,31 +5788,56 @@ export const appRouter = router({
     // — quem os substitui é o cliente, com os MESMOS papéis que o envio usa
     // (shared/whatsappTemplate.ts), para o preview não poder divergir do envio.
     // Nunca lança por falta de metadados: `ok:false` + motivo legível.
+    //
+    // Devolve UMA entrada por cidade do registo (shared/driverTemplates.ts),
+    // com o estado na Meta: a UI só deixa escolher uma cidade cujo template
+    // esteja APPROVED (`approved`). Sem inspeção possível (`inspected:false`)
+    // a cidade fica escolhível com aviso; o envio valida de novo.
     templatePreview: protectedProcedure
-      .input(
-        z.object({
-          templateName: z.string().min(1).max(128),
-          languageCode: z.string().min(2).max(12),
-        }),
-      )
+      .input(z.object({ templateId: z.string().min(1).max(64) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
-        const meta = await getTemplateMeta(input.templateName, input.languageCode);
-        if (!meta.available) return { ok: false as const, reason: meta.reason };
-        if (!meta.lookup.ok) {
-          return {
-            ok: false as const,
-            reason: describeLookupFailure(meta.lookup, input.templateName, input.languageCode),
-          };
-        }
-        const a = meta.lookup.analysis;
-        return {
-          ok: true as const,
-          bodyText: a.bodyText,
-          paramNames: a.paramNames,
-          paramCount: a.paramCount,
-          hasDynamicUrlButton: a.hasDynamicUrlButton,
-        };
+        const { findWhatsAppTemplate, templateForCity } = await import("../shared/whatsappTemplate");
+        const { citiesWithTemplate } = await import("../shared/driverTemplates");
+        const def = findWhatsAppTemplate(input.templateId);
+        if (!def) throw new TRPCError({ code: "BAD_REQUEST", message: "Mensagem desconhecida" });
+        // Só as cidades que TÊM template para esta mensagem (Faro não tem morada, por ex.).
+        const cities = await Promise.all(
+          citiesWithTemplate(def.message).map(async (city) => {
+            const tpl = templateForCity(def, city)!;
+            const base = { city, templateName: tpl.name, languageCode: tpl.language, params: tpl.params };
+            const meta = await getTemplateMeta(tpl.name, tpl.language);
+            if (!meta.available) return { ...base, ok: false as const, inspected: false, approved: false, reason: meta.reason };
+            if (!meta.lookup.ok) {
+              return { ...base, ok: false as const, inspected: true, approved: false, reason: describeLookupFailure(meta.lookup, tpl.name, tpl.language) };
+            }
+            const a = meta.lookup.analysis;
+            return {
+              ...base,
+              ok: true as const,
+              inspected: true,
+              approved: true,
+              bodyText: a.bodyText,
+              // Cabeçalho, corpo, rodapé e links dos botões (morada, telefone, valor à hora).
+              fullText: (a.freeText ?? a.bodyText).trim(),
+              paramNames: a.paramNames,
+              paramCount: a.paramCount,
+              hasDynamicUrlButton: a.hasDynamicUrlButton,
+            };
+          }),
+        );
+        return { cities };
+      }),
+
+    // Cidade por defeito do template para uma conversa do inbox: a da ficha do
+    // colaborador, senão a do lead com esse número. null = escolher no diálogo.
+    recipientCity: protectedProcedure
+      .input(z.object({ conversationId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "whatsapp", "view");
+        const { conversationVisible, conversationDriverCity } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        return conversationDriverCity(input.conversationId);
       }),
 
     // Envia um template WhatsApp em massa (ou a 1 número, em modo teste).
@@ -5814,13 +5847,16 @@ export const appRouter = router({
     sendBroadcast: protectedProcedure
       .input(
         z.object({
-          templateName: z.string().min(1).max(128),
-          languageCode: z.string().min(2).max(12).optional(),
+          // Mensagem do catálogo; o nome e a LÍNGUA do template vêm do registo
+          // por cidade no servidor, nunca do cliente.
+          templateId: z.string().min(1).max(64),
+          // Cidade do template de CADA destinatário (decidida no diálogo).
+          cities: z.array(z.object({ employeeId: z.number().int().positive(), city: driverCitySchema })).max(2000).optional(),
+          testCity: driverCitySchema.nullable().optional(),
           // {{1}} é SEMPRE o nome do destinatário (resolvido no servidor, por
           // destinatário); só o {{2}} vem da UI e é igual para todos.
           bodyParam2: z.string().max(512).nullable().optional(),
           includeFormLink: z.boolean().optional(),
-          employeeIds: z.array(z.number()).nullable().optional(),
           weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
           note: z.string().max(500).nullable().optional(),
           testPhone: z.string().min(3).max(30).nullable().optional(),
@@ -5834,11 +5870,11 @@ export const appRouter = router({
         try {
           summary = await sendBroadcast({
             sendKey: input.testPhone ? null : input.sendKey ?? null,
-            templateName: input.templateName,
-            languageCode: input.languageCode,
+            templateId: input.templateId,
+            cityByEmployee: Object.fromEntries((input.cities ?? []).map((c) => [c.employeeId, c.city])) as Record<number, City>,
+            testCity: input.testCity ?? null,
             bodyParam2: input.bodyParam2 ?? null,
             includeFormLink: input.includeFormLink === true,
-            employeeIds: input.employeeIds ?? null,
             weekStart: input.weekStart ?? null,
             note: input.note ?? null,
             testPhone: input.testPhone ?? null,
@@ -5855,8 +5891,8 @@ export const appRouter = router({
           entity: "whatsapp_broadcast",
           entityId: summary.broadcastId ?? undefined,
           details: input.testPhone
-            ? `WhatsApp TESTE → ${(await import("../shared/maskPhone")).maskPhone(input.testPhone)} (template ${input.templateName})`
-            : `WhatsApp broadcast template ${input.templateName}: ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número${summary.recentTemplate ? `, ${summary.recentTemplate} já o tinham recebido nas últimas 24 h` : ""}`,
+            ? `WhatsApp TESTE → ${(await import("../shared/maskPhone")).maskPhone(input.testPhone)} (${input.templateId}, ${input.testCity ?? "?"})`
+            : `WhatsApp broadcast ${input.templateId} (${(summary.byCity ?? []).map((c) => `${c.city} ${c.templateName}/${c.languageCode}: ${c.sent}/${c.total}`).join(", ")}): ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número${summary.recentTemplate ? `, ${summary.recentTemplate} já o tinham recebido nas últimas 24 h` : ""}`,
         });
         return summary;
       }),
@@ -6011,6 +6047,7 @@ export const appRouter = router({
         z.object({
           conversationId: z.number().int().positive(),
           templateId: z.string().min(1).max(64),
+          city: driverCitySchema,
           bodyParam2: z.string().max(512).nullable().optional(),
           weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
           /** Código único do envio (17a): repetir o pedido não reenvia. */
@@ -6027,6 +6064,7 @@ export const appRouter = router({
           summary = await sendTemplateToConversation({
             conversationId: input.conversationId,
             templateId: input.templateId,
+            city: input.city,
             bodyParam2: input.bodyParam2 ?? null,
             weekStart: input.weekStart ?? null,
             createdById: ctx.user.id,
@@ -6040,7 +6078,7 @@ export const appRouter = router({
           action: "whatsapp_template",
           entity: "whatsapp_conversation",
           entityId: input.conversationId,
-          details: `Template WhatsApp ${input.templateId} (conversa ${input.conversationId}): ${summary.sent ? "enviado" : "falhou"}`,
+          details: `Template WhatsApp ${input.templateId} ${input.city} (conversa ${input.conversationId}): ${summary.sent ? "enviado" : "falhou"}`,
         });
         return summary;
       }),

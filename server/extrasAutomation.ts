@@ -28,6 +28,7 @@ import { automationFlagDefault } from "../shared/appSettings";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
+import { driverCityFrom, hasDriverTemplate, type City, type DriverMessage } from "../shared/driverTemplates";
 import { availabilityWindow } from "../shared/extrasSchedule";
 
 // ─── Relógio de Lisboa (puro) ───────────────────────────────────────────────
@@ -224,6 +225,7 @@ async function ensureTables(): Promise<void> {
     \`sentAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     \`confirmedAt\` TIMESTAMP NULL,
     \`declinedAt\` TIMESTAMP NULL,
+    \`changeRequestedAt\` TIMESTAMP NULL,
     PRIMARY KEY (\`id\`),
     UNIQUE KEY \`edn_assignment\` (\`assignmentId\`),
     KEY \`edn_emp_date\` (\`employeeId\`, \`assignmentDate\`)
@@ -291,7 +293,40 @@ export function userSeesProject(access: { all: boolean; projectIds: number[] }, 
 
 // ─── 5. Pedido de disponibilidade automático + lembrete ─────────────────────
 
-export interface RequestRunResult { emailSent: number; whatsappSent: number; targets: number }
+export interface RequestRunResult {
+  emailSent: number;
+  whatsappSent: number;
+  targets: number;
+  /** Extras sem cidade com templates: não recebem o WhatsApp (nunca se assume Lisboa). */
+  whatsappNoCity?: number;
+}
+
+/**
+ * Cidade do registo de templates para cada extra (ficha → candidatura →
+ * morada, `server/employeeCity.ts`). Os que não têm cidade, ou cuja cidade não
+ * tem template para `message`, vêm em `noCity`.
+ */
+async function driverCitiesForEmployees(ids: number[], message: DriverMessage): Promise<{ cityByEmployee: Record<number, City>; noCity: number[] }> {
+  const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
+  const cities = await resolveCitiesForEmployeeIds(ids);
+  const cityByEmployee: Record<number, City> = {};
+  const noCity: number[] = [];
+  for (const id of ids) {
+    const city = driverCityFrom(cities.get(id)?.city ?? null);
+    if (city && hasDriverTemplate(city, message)) cityByEmployee[id] = city;
+    else noCity.push(id);
+  }
+  return { cityByEmployee, noCity };
+}
+
+/** Parte um mapa id → cidade em sub-mapas por cidade (jobs: uma chamada por cidade). PURA. */
+export function splitByCity(cityByEmployee: Record<number, City>): [City, Record<number, City>][] {
+  const out = new Map<City, Record<number, City>>();
+  for (const [id, city] of Object.entries(cityByEmployee)) {
+    out.set(city, { ...(out.get(city) ?? {}), [Number(id)]: city });
+  }
+  return Array.from(out.entries());
+}
 
 export async function sendAvailabilityRequest(weekStart: string, employeeIds: number[] | null, note: string | null, autoKind: "availability_request" | "availability_reminder" = "availability_request"): Promise<RequestRunResult> {
   const { sendWeeklyAvailabilityRequest } = await import("./extrasAvailability");
@@ -304,21 +339,36 @@ export async function sendAvailabilityRequest(weekStart: string, employeeIds: nu
 
   if (process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID) {
     const { sendBroadcast } = await import("./whatsappBroadcast");
-    const { AVAILABILITY_TEMPLATE_NAME, TEAM_TEMPLATE_LANGUAGE } = await import("../shared/whatsappTemplate");
+    const { DEFAULT_WHATSAPP_TEMPLATE_ID } = await import("../shared/whatsappTemplate");
     const { getSystemUserId } = await import("./db");
-    const wa = await sendBroadcast({
-      templateName: AVAILABILITY_TEMPLATE_NAME,
-      languageCode: TEAM_TEMPLATE_LANGUAGE,
-      bodyParam2: fmtWeek(weekStart),
-      employeeIds,
-      weekStart,
-      note: note ?? "Pedido automático de disponibilidade",
-      createdById: await getSystemUserId(),
-    });
-    out.whatsappSent = wa.sent;
-    for (const r of wa.recipients) {
-      if (r.status === "sent" && r.employeeId != null) {
-        try { await logWhatsappRequest(r.employeeId, "week", { weekStart }); } catch { /* segue */ }
+    // Template da cidade de CADA extra (registo shared/driverTemplates.ts).
+    const { listActiveExtras } = await import("./extrasAvailability");
+    const ids = employeeIds ?? (await listActiveExtras()).map((e) => e.id);
+    const { cityByEmployee, noCity } = await driverCitiesForEmployees(ids, "AVAILABILITY");
+    out.whatsappNoCity = noCity.length;
+    if (noCity.length) {
+      console.warn(`[extras-auto] pedido de disponibilidade ${weekStart}: ${noCity.length} extra(s) sem cidade com templates ficaram sem WhatsApp`);
+    }
+    const createdById = await getSystemUserId();
+    // Uma chamada por cidade: um template do Porto por aprovar não trava Lisboa.
+    for (const [city, sub] of splitByCity(cityByEmployee)) {
+      try {
+        const wa = await sendBroadcast({
+          templateId: DEFAULT_WHATSAPP_TEMPLATE_ID,
+          cityByEmployee: sub,
+          bodyParam2: fmtWeek(weekStart),
+          weekStart,
+          note: note ?? "Pedido automático de disponibilidade",
+          createdById,
+        });
+        out.whatsappSent += wa.sent;
+        for (const r of wa.recipients) {
+          if (r.status === "sent" && r.employeeId != null) {
+            try { await logWhatsappRequest(r.employeeId, "week", { weekStart }); } catch { /* segue */ }
+          }
+        }
+      } catch (err) {
+        console.warn(`[extras-auto] pedido de disponibilidade ${weekStart} (${city}) falhou:`, err);
       }
     }
   }
@@ -357,6 +407,8 @@ export interface NoticeRow {
   assignmentId: number; status: string; sentAt: string; confirmedAt: string | null; declinedAt: string | null; error: string | null;
   /** O aviso foi de uma versão ANTERIOR da linha (mudaram as horas/pessoa depois): já não vale. */
   outdated: boolean;
+  /** Carregou em "Preciso de alterar" no turno_confirmado (0530). */
+  changeRequestedAt: string | null;
 }
 
 export async function listNotices(date: string, city: string | null = null): Promise<NoticeRow[]> {
@@ -366,7 +418,7 @@ export async function listNotices(date: string, city: string | null = null): Pro
   const byCity = city ? sql` AND a.city = ${city}` : sql``;
   // Desatualizado: a linha mudou (versão > 1) e a versão ATUAL não tem aviso enviado.
   const [rows] = (await db.execute(sql`
-    SELECT n.assignmentId, n.status, n.sentAt, n.confirmedAt, n.declinedAt, n.error,
+    SELECT n.assignmentId, n.status, n.sentAt, n.confirmedAt, n.declinedAt, n.changeRequestedAt, n.error,
       (a.version > 1 AND NOT EXISTS (SELECT 1 FROM extras_dia_notifications x
         WHERE x.assignmentId = n.assignmentId AND x.version = a.version AND x.kind = 'scheduled' AND x.status = 'sent')) AS outdated
       FROM \`extras_dia_notices\` n
@@ -378,6 +430,7 @@ export async function listNotices(date: string, city: string | null = null): Pro
     sentAt: String(r.sentAt),
     confirmedAt: r.confirmedAt ? String(r.confirmedAt) : null,
     declinedAt: r.declinedAt ? String(r.declinedAt) : null,
+    changeRequestedAt: r.changeRequestedAt ? String(r.changeRequestedAt) : null,
     error: r.error ? String(r.error) : null,
     outdated: Number(r.outdated ?? 0) === 1,
   }));
@@ -471,9 +524,11 @@ export async function notifyAssignments(
   if (!pending.length) return res;
 
   const { sendBroadcast } = await import("./whatsappBroadcast");
-  const { findWhatsAppTemplate } = await import("../shared/whatsappTemplate");
+  const { findWhatsAppTemplate, templateForCity } = await import("../shared/whatsappTemplate");
   const aviso = findWhatsAppTemplate("aviso_trabalho")!;
   const regras = findWhatsAppTemplate("morada_regras")!;
+  // Template da cidade do TURNO (é onde a pessoa vai trabalhar: a morada e as
+  // regras têm de ser as desse sítio). Cidade sem templates → não se envia.
   const { getSystemUserId } = await import("./db");
   const by = opts.createdById ?? (await getSystemUserId());
   const settings = await sched.loadScheduleSettings();
@@ -487,13 +542,7 @@ export async function notifyAssignments(
   }
   const texts: Record<number, string> = {};
   for (const [empId, list] of Array.from(byEmp.entries())) {
-    const city = list[0].city;
-    texts[empId] = scheduleMessageText({
-      date,
-      city,
-      spans: list.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })),
-      meetingPoint: (settings.meetingPoints as Record<string, string>)[city] ?? null,
-    });
+    texts[empId] = shiftText(date, list, settings.meetingPoints as Record<string, string>, scheduleMessageText);
   }
 
   const outcome = new Map<number, { status: string; error: string | null }>();
@@ -505,13 +554,20 @@ export async function notifyAssignments(
   for (const empId of Array.from(byEmp.keys())) {
     if (!extrasSet.has(empId)) outcome.set(empId, { status: "no_contact", error: NOT_EXTRA_NO_NOTICE });
   }
-  if (toNotify.length) {
+  const cityByEmployee: Record<number, City> = {};
+  for (const empId of toNotify) {
+    const shiftCity = byEmp.get(empId)![0].city;
+    const city = driverCityFrom(shiftCity);
+    if (city && hasDriverTemplate(city, "WORK_NOTICE")) cityByEmployee[empId] = city;
+    else outcome.set(empId, { status: "failed", error: `Sem template de aviso de WhatsApp para a cidade do turno (${shiftCity}).` });
+  }
+  // Uma chamada por cidade: um template do Porto por aprovar não trava Lisboa.
+  for (const [, sub] of splitByCity(cityByEmployee)) {
     try {
       const r = await sendBroadcast({
-        templateName: aviso.name,
-        languageCode: aviso.language,
+        templateId: aviso.id,
+        cityByEmployee: sub,
         bodyParam2ByEmployee: texts,
-        employeeIds: toNotify,
         note: `Aviso de escala ${date}`,
         createdById: by,
       });
@@ -521,7 +577,7 @@ export async function notifyAssignments(
       }
     } catch (err: any) {
       const error = String(err?.message ?? err);
-      for (const empId of toNotify) outcome.set(empId, { status: "failed", error });
+      for (const empId of Object.keys(sub).map(Number)) outcome.set(empId, { status: "failed", error });
     }
   }
 
@@ -535,7 +591,8 @@ export async function notifyAssignments(
         INSERT INTO \`extras_dia_notices\` (assignmentId, employeeId, assignmentDate, status, error)
         VALUES (${a.id}, ${empId}, ${date}, ${o.status === "sent" ? "sent" : "failed"}, ${o.error ? o.error.slice(0, 300) : null})
         ON DUPLICATE KEY UPDATE status = VALUES(status), error = VALUES(error), sentAt = CURRENT_TIMESTAMP,
-          confirmedAt = IF(VALUES(status) = 'sent', NULL, confirmedAt), declinedAt = IF(VALUES(status) = 'sent', NULL, declinedAt)`);
+          confirmedAt = IF(VALUES(status) = 'sent', NULL, confirmedAt), declinedAt = IF(VALUES(status) = 'sent', NULL, declinedAt),
+          changeRequestedAt = IF(VALUES(status) = 'sent', NULL, changeRequestedAt)`);
       if (o.status === "sent") res.sent++;
       else if (o.status === "opted_out") res.optedOut++;
       else res.failed++;
@@ -553,28 +610,38 @@ export async function notifyAssignments(
        WHERE employeeId IN (${sql.join(sentEmployees.map((id) => sql`${id}`), sql`, `)})`)) as any;
     const already = new Set(((prev as any[]) ?? []).map((r) => Number(r.employeeId)));
     const firstTimers = sentEmployees.filter((id) => !already.has(id));
-    if (firstTimers.length) {
+    // Morada e regras da cidade do turno (cada cidade tem a sua morada).
+    // Cidade sem morada própria (Faro, por agora): não recebe a de outra cidade.
+    const rulesCities: Record<number, City> = {};
+    for (const id of firstTimers) if (cityByEmployee[id] && hasDriverTemplate(cityByEmployee[id], "ADDRESS_RULES")) rulesCities[id] = cityByEmployee[id];
+    for (const [city, sub] of splitByCity(rulesCities)) {
+      const ids = Object.keys(sub).map(Number);
+      const tpl = templateForCity(regras, city)!;
       // Janela de 24 h aberta → o MESMO conteúdo em texto livre (sem template);
-      // fechada → o template `morada_e_regras` fica como recurso.
-      const viaText = await sendRulesAsFreeText(firstTimers, regras.name, regras.language);
+      // fechada → o template de morada e regras da cidade fica como recurso.
+      const viaText = await sendRulesAsFreeText(ids, tpl.name, tpl.language);
       for (const empId of Array.from(viaText)) {
         await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${empId})`);
         res.rulesSent++;
       }
-      const viaTemplate = firstTimers.filter((id) => !viaText.has(id));
-      if (viaTemplate.length) {
-        try {
-          // A data na nota liga a mensagem ao turno (nova tentativa após 131049, 0375).
-          const r = await sendBroadcast({ templateName: regras.name, languageCode: regras.language, employeeIds: viaTemplate, note: `Morada e regras (1.º turno) ${date}`, createdById: by });
-          for (const rec of r.recipients) {
-            if (rec.status === "sent" && rec.employeeId != null) {
-              await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${rec.employeeId})`);
-              res.rulesSent++;
-            }
+      const viaTemplate = ids.filter((id) => !viaText.has(id));
+      if (!viaTemplate.length) continue;
+      try {
+        // A data na nota liga a mensagem ao turno (nova tentativa após 131049, 0375).
+        const r = await sendBroadcast({
+          templateId: regras.id,
+          cityByEmployee: Object.fromEntries(viaTemplate.map((id) => [id, city])),
+          note: `Morada e regras (1.º turno) ${date}`,
+          createdById: by,
+        });
+        for (const rec of r.recipients) {
+          if (rec.status === "sent" && rec.employeeId != null) {
+            await db.execute(sql`INSERT IGNORE INTO \`extras_rules_sent\` (employeeId) VALUES (${rec.employeeId})`);
+            res.rulesSent++;
           }
-        } catch (err) {
-          console.warn("[extras-auto] morada e regras falhou:", err);
         }
+      } catch (err) {
+        console.warn(`[extras-auto] morada e regras (${city}) falhou:`, err);
       }
     }
   }
@@ -588,6 +655,109 @@ export async function notifyAssignments(
     });
   } catch { /* registo é best-effort */ }
   return res;
+}
+
+/**
+ * Texto do turno de UMA pessoa num dia (dia, horas, cidade, ponto de
+ * encontro). É o MESMO no {{day}} do aviso e no {{shift}} do turno_confirmado.
+ * Quem tem dois turnos no dia recebe os dois horários.
+ */
+function shiftText(
+  date: string,
+  list: { city: string; startHour: number; endHour: number; sentHomeHour: number | null }[],
+  meetingPoints: Record<string, string>,
+  render: typeof import("../shared/extrasSchedule").scheduleMessageText,
+): string {
+  const city = list[0].city;
+  return render({
+    date,
+    city,
+    spans: list.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })),
+    meetingPoint: meetingPoints[city] ?? null,
+  });
+}
+
+/**
+ * O extra aceitou o aviso de trabalho → envia o turno_confirmado da cidade do
+ * turno, com o mesmo texto do aviso no {{shift}}. Devolve o texto enviado, ou
+ * null se não foi possível (sem turno confirmado, cidade sem templates,
+ * template por aprovar, falha de envio): quem chama responde então com o
+ * texto livre de sempre. Nunca lança.
+ */
+async function sendShiftConfirmation(employeeId: number, date: string): Promise<string | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const { extrasDiaAssignments } = await import("../drizzle/schema");
+    const { and, eq } = await import("drizzle-orm");
+    const list = await db
+      .select()
+      .from(extrasDiaAssignments)
+      .where(and(eq(extrasDiaAssignments.assignmentDate, date), eq(extrasDiaAssignments.employeeId, employeeId), eq(extrasDiaAssignments.status, "confirmed")));
+    if (!list.length) return null;
+    const city = driverCityFrom(list[0].city);
+    // Cidade sem turno_confirmado (Faro, por agora) → fica a resposta de texto.
+    if (!city || !hasDriverTemplate(city, "CONFIRMED_SHIFT")) return null;
+    const sched = await import("./extrasSchedule");
+    const { scheduleMessageText } = await import("../shared/extrasSchedule");
+    const settings = await sched.loadScheduleSettings();
+    const text = shiftText(date, list, settings.meetingPoints as Record<string, string>, scheduleMessageText);
+    const { sendBroadcast } = await import("./whatsappBroadcast");
+    const { CONFIRMED_SHIFT_TEMPLATE_ID } = await import("../shared/whatsappTemplate");
+    const { getSystemUserId } = await import("./db");
+    const r = await sendBroadcast({
+      templateId: CONFIRMED_SHIFT_TEMPLATE_ID,
+      cityByEmployee: { [employeeId]: city },
+      bodyParam2ByEmployee: { [employeeId]: text },
+      // A data na nota liga a mensagem ao turno (botão "Preciso de alterar", nova tentativa).
+      note: `Turno confirmado ${date}`,
+      createdById: await getSystemUserId(),
+    });
+    const rec = r.recipients[0];
+    if (rec?.status === "sent") return text;
+    console.warn(`[extras-auto] turno_confirmado ${date} (${city}) não enviado a ${employeeId}: ${rec?.error ?? rec?.status ?? "sem destinatário"}`);
+    return null;
+  } catch (err) {
+    console.warn("[extras-auto] turno_confirmado falhou:", String((err as any)?.message ?? err).slice(0, 160));
+    return null;
+  }
+}
+
+/** Texto do botão de resposta rápida do turno_confirmado. */
+export const SHIFT_CHANGE_REQUEST_LABEL = "Preciso de alterar";
+
+/** A mensagem é o botão "Preciso de alterar"? (sem acentos, maiúsculas nem espaços a mais). PURA. */
+export function isShiftChangeRequest(body: string | null | undefined): boolean {
+  const fold = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  return fold(String(body ?? "")) === fold(SHIFT_CHANGE_REQUEST_LABEL);
+}
+
+/**
+ * Botão "Preciso de alterar" do turno_confirmado: marca o turno como
+ * "alteração pedida" (só a 1.ª carga conta), avisa a equipa e responde.
+ */
+async function applyShiftChangeRequest(employeeId: number, conversationId: number, date: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await ensureTables();
+  const upd = await db.execute(sql`
+    UPDATE \`extras_dia_notices\` SET changeRequestedAt = CURRENT_TIMESTAMP
+     WHERE employeeId = ${employeeId} AND assignmentDate = ${date} AND changeRequestedAt IS NULL`);
+  if (extractAffectedRows(upd) === 0) return; // já tinha pedido (ou o turno mudou entretanto)
+  const { employees } = await import("../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+  const [emp] = await db.select({ fullName: employees.fullName, projectId: employees.projectId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+  const { notify } = await import("./notify");
+  await notify({
+    kind: "extras_schedule_reply",
+    projectId: emp?.projectId ?? null,
+    title: `${emp?.fullName ?? `#${employeeId}`} pediu para alterar o turno de ${date}`,
+    body: `Carregou em "Preciso de alterar" na confirmação do turno por WhatsApp. Fala com a pessoa no inbox.`,
+    link: "/extras-dia",
+    entity: { type: "extras_notice", id: `${employeeId}:${date}` },
+  });
+  const { replyToConversation } = await import("./whatsappInbox");
+  await replyToConversation(conversationId, "Obrigado por avisares. A equipa vai falar contigo para ajustar o turno.", null);
 }
 
 // ─── 8. Escala sugerida + cobertura ─────────────────────────────────────────
@@ -917,6 +1087,10 @@ async function applyShiftNoticeAnswer(input: {
 
   const { replyToConversation } = await import("./whatsappInbox");
   if (input.action === "confirmed") {
+    // Aceitou a proposta (aviso de trabalho) → turno_confirmado da cidade do
+    // turno, com o mesmo texto. Sem template possível, a resposta de sempre.
+    const confirmed = await sendShiftConfirmation(input.employeeId, input.date);
+    if (confirmed) return { action: input.action, reply: confirmed };
     const reply = "Obrigado! Fica confirmado ✅ Até lá.";
     await replyToConversation(input.conversationId, reply, null);
     return { action: input.action, reply };
@@ -973,9 +1147,10 @@ export async function handleShiftNoticeButton(input: {
   payload: string | null;
 }): Promise<boolean> {
   try {
-    const { SHIFT_NOTICE_TEMPLATE_NAME, shiftNoticeButtonAction } = await import("../shared/whatsappTemplate");
+    const { isDriverMessageTemplate, shiftNoticeButtonAction } = await import("../shared/whatsappTemplate");
     const action = shiftNoticeButtonAction(input.payload) ?? shiftNoticeButtonAction(input.text);
-    if (!action) return false;
+    const changeRequest = !action && (isShiftChangeRequest(input.payload) || isShiftChangeRequest(input.text));
+    if (!action && !changeRequest) return false;
     const db = await getDb();
     if (!db) return false;
     const [rows] = (await db.execute(sql`
@@ -983,8 +1158,10 @@ export async function handleShiftNoticeButton(input: {
         FROM whatsapp_messages m LEFT JOIN whatsapp_broadcasts b ON b.id = m.broadcastId
        WHERE m.waMessageId = ${input.contextId} AND m.direction = 'out' LIMIT 1`)) as any;
     const sent = (rows as any[])?.[0];
-    // Só um aviso de turno NOSSO, enviado a ESTA conversa.
-    if (!sent || String(sent.templateName) !== SHIFT_NOTICE_TEMPLATE_NAME || Number(sent.conversationId) !== input.conversationId) return false;
+    // Só um aviso de turno (ou turno_confirmado) NOSSO, de qualquer cidade, enviado a ESTA conversa.
+    const templateName = sent ? String(sent.templateName) : null;
+    const expected = changeRequest ? "CONFIRMED_SHIFT" : "WORK_NOTICE";
+    if (!sent || !isDriverMessageTemplate(templateName, expected) || Number(sent.conversationId) !== input.conversationId) return false;
     const { shiftDateFromNote } = await import("./whatsappFailurePolicy");
     const date = shiftDateFromNote(sent.note);
     if (!date) return false;
@@ -993,11 +1170,16 @@ export async function handleShiftNoticeButton(input: {
     // Resposta automática desligada: a resposta fica na caixa para uma pessoa (como o texto).
     if (!availabilityAutoReplyOn()) return true;
 
+    if (changeRequest) {
+      await applyShiftChangeRequest(input.employeeId, input.conversationId, date);
+      return true;
+    }
+
     await applyShiftNoticeAnswer({
       employeeId: input.employeeId,
       conversationId: input.conversationId,
       date,
-      action,
+      action: action!,
       requestId: await assignmentRequestFor(input.employeeId, date),
       via: "botão",
     });

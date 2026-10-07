@@ -2482,6 +2482,8 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	type: mysqlEnum(['text', 'template', 'image', 'audio', 'document', 'video']).notNull(),
 	body: text(),
 	templateName: varchar({ length: 128 }),
+	// 0530 — cidade do registo de templates dos motoristas (LISBOA/PORTO). NULL = fora do registo.
+	city: varchar({ length: 16 }),
 	// Media recebida (imagem/áudio enviados pela pessoa) — migração 0065.
 	// `mediaId` é o id da Meta (permite re-tentar o download); `mediaUrl`/`mediaKey`
 	// apontam para o storage da app (server/storage.ts).
@@ -2567,6 +2569,9 @@ export const whatsappPendingStatuses = mysqlTable("whatsapp_pending_statuses", {
 export const whatsappBroadcasts = mysqlTable("whatsapp_broadcasts", {
 	id: int().autoincrement().primaryKey(),
 	templateName: varchar({ length: 128 }).notNull(),
+	// 0530 — cidade e língua do template; um lote com várias cidades gera uma difusão por cidade.
+	city: varchar({ length: 16 }),
+	languageCode: varchar({ length: 16 }),
 	note: text(),
 	createdById: int(),
 	weekStart: date({ mode: 'string' }),

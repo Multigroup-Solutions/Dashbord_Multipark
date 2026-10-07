@@ -90,11 +90,11 @@ import {
   WHATSAPP_TEMPLATES,
   findWhatsAppTemplate,
   firstNameOf,
-  previewTemplateBody,
-  resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery, nameMatchScore } from "@shared/contactSearch";
+import { driverCityFrom, driverCityLabel, type City } from "@shared/driverTemplates";
+import { DriverCityPanel, planEntries, useDriverCity, type DriverCityRecipient } from "@/components/whatsapp/DriverCityPanel";
 import { contactPrefsLabel } from "@shared/contactPrefs";
 import {
   AVAILABILITY_PAGE_SIZE,
@@ -1267,10 +1267,11 @@ function AssignmentForm({
   );
 }
 
-function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null; outdated?: boolean } | null }) {
+function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; changeRequestedAt?: string | null; error: string | null; outdated?: boolean } | null }) {
   if (!notice) return null;
   // Mudaram as horas/pessoa depois do aviso: o que foi dito já não vale.
   if (notice.outdated) return <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-800" title="O aviso foi das horas antigas — avisa outra vez">aviso desatualizado</Badge>;
+  if (notice.changeRequestedAt) return <Badge className="bg-amber-500 text-[11px]" title="Carregou em Preciso de alterar na confirmação do turno">alteração pedida</Badge>;
   if (notice.declinedAt) return <Badge variant="destructive" className="text-[11px]" title="Respondeu que não pode">✗ não pode</Badge>;
   if (notice.confirmedAt) return <Badge className="bg-emerald-700 text-[11px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>;
   if (notice.status === "sent") return <Badge variant="secondary" className="text-[11px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>;
@@ -1284,7 +1285,7 @@ function AssignmentRow({
   onDelete,
   busy,
 }: {
-  notice?: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null; outdated?: boolean } | null;
+  notice?: { status: string; confirmedAt: string | null; declinedAt: string | null; changeRequestedAt?: string | null; error: string | null; outdated?: boolean } | null;
   assignment: {
     id: number;
     assignmentDate: string;
@@ -2108,6 +2109,7 @@ export function AvailabilitySection() {
     phoneE164: string | null;
     status: "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone" | "recent_template";
     error?: string;
+    city?: City;
   };
   const [waResult, setWaResult] = useState<
     null | { total: number; sent: number; failed: number; invalidPhone: number; optedOut: number; recentTemplate?: number; recipients: WaRecipient[] }
@@ -2146,23 +2148,16 @@ export function AvailabilitySection() {
   // Mudou o template, o campo ou o alvo → volta a pedir confirmação.
   useEffect(() => { setWaConfirm(false); }, [waTemplateId, waParam2, waValidCount]);
 
-  // Pré-visualização: o texto REAL do template aprovado na Meta (não uma cópia
-  // local que possa divergir). Só é pedido com o diálogo aberto; o servidor tem
-  // cache de 5 min por template.
-  const templatePreview = trpc.whatsapp.templatePreview.useQuery(
-    { templateName: waTemplate.name, languageCode: waTemplate.language },
-    { enabled: waOpen, staleTime: 5 * 60_000, retry: false },
+  // Cidade do template de cada destinatário (registo shared/driverTemplates.ts):
+  // a do extra; sem ela, a do utilizador; senão fica por escolher. A
+  // pré-visualização do texto REAL aprovado na Meta, por cidade, vive no painel.
+  const waCityKey = waTargets.map(e => `${e.employeeId}:${e.city ?? ""}`).join(",");
+  const waCityRecipients = useMemo<DriverCityRecipient[]>(
+    () => waTargets.map(e => ({ id: e.employeeId, city: driverCityFrom(e.city), name: firstNameOf(e.fullName) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [waCityKey],
   );
-
-  // Nome de exemplo = o do 1º destinatário do alvo (é mesmo o que ele vai ver).
-  const waPreviewName = firstNameOf(waTargets[0]?.fullName) ?? "Nome";
-  const waPreviewText = useMemo(() => {
-    const p = templatePreview.data;
-    if (!p?.ok) return null;
-    // MESMOS papéis que o envio usa — o preview não pode contar outra história.
-    const slots = resolveBodyParamRoles(p.paramNames, p.paramCount, waTemplate.roles);
-    return previewTemplateBody(p.bodyText, slots, { recipient: waPreviewName, shared: waParam2 });
-  }, [templatePreview.data, waTemplate, waPreviewName, waParam2]);
+  const waCity = useDriverCity({ templateId: waTemplate.id, open: waOpen, recipients: waCityRecipients });
 
   // Só falta o campo quando o template TEM campo — os sem parâmetros (ex.:
   // "Morada e regras") nunca preenchem `waParam2` e têm de poder ser enviados.
@@ -2175,19 +2170,25 @@ export function AvailabilitySection() {
       toast.error(`Preenche o campo “${waTemplate.sharedParam.label}”.`);
       return;
     }
+    if (testPhone && !waCity.testCity) {
+      toast.error("Escolhe a cidade do template a testar.");
+      return;
+    }
+    if (!testPhone && waCity.blockReason) {
+      toast.error(waCity.blockReason);
+      return;
+    }
     setWaResult(null);
     // Invariante mantida (Decisão 1 do Jorge): "a todos" = o conjunto MOSTRADO
-    // na tabela — o que envio é o que vejo. Envio de teste ignora o alvo.
-    const targetIds = selectedIds.size > 0
-      ? Array.from(selectedIds)
-      : shownExtras.map(e => e.employeeId);
+    // na tabela (o que envio é o que vejo). O alvo é `waTargets`, já agrupado
+    // por cidade no painel. Envio de teste ignora o alvo.
     broadcast.mutate({
-      templateName: waTemplate.name,
-      languageCode: waTemplate.language,
+      templateId: waTemplate.id,
       bodyParam2: bodyParam2 || null,
       // O botão com link do formulário é detetado pelos metadados do template
-      // na Meta (server/whatsappTemplateMeta.ts) — sem override manual na UI.
-      employeeIds: testPhone ? undefined : targetIds,
+      // na Meta (server/whatsappTemplateMeta.ts), sem override manual na UI.
+      cities: testPhone ? undefined : planEntries(waCity.plan).map(e => ({ employeeId: e.id, city: e.city })),
+      testCity: testPhone ? waCity.testCity : undefined,
       weekStart: effectiveWeek || null,
       note: note.trim() || null,
       testPhone: testPhone ? testPhone.trim() : undefined,
@@ -2948,24 +2949,10 @@ export function AvailabilitySection() {
               </div>
               )}
 
-              {/* Pré-visualização do texto REAL aprovado na Meta, já com o nome
-                  do 1º destinatário e o campo acima substituídos. */}
-              <div className="space-y-1">
-                <Label className="text-xs">Pré-visualização</Label>
-                {templatePreview.isLoading ? (
-                  <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
-                ) : waPreviewText ? (
-                  <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap">
-                    {waPreviewText}
-                  </div>
-                ) : (
-                  <p className="text-xs text-amber-700">
-                    {templatePreview.data && !templatePreview.data.ok
-                      ? templatePreview.data.reason
-                      : "Pré-visualização indisponível — o envio continua a funcionar."}
-                  </p>
-                )}
-              </div>
+              {/* Cidade do template (por defeito a de cada extra), contagens por
+                  cidade e o texto REAL aprovado na Meta de cada cidade, já com o
+                  nome do 1.º destinatário e o campo acima substituídos. */}
+              <DriverCityPanel state={waCity} sharedValue={waParam2} noun="motorista(s)" />
 
               <div className="space-y-1">
                 <Label className="text-xs">Número de teste</Label>
@@ -2978,11 +2965,11 @@ export function AvailabilitySection() {
                   <Button
                     variant="outline"
                     className="shrink-0"
-                    disabled={waMissingParam || !waTestPhone.trim() || broadcast.isPending}
+                    disabled={waMissingParam || !waTestPhone.trim() || !waCity.testCity || broadcast.isPending}
                     onClick={() => submitBroadcast(waTestPhone)}
                   >
                     {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-                    Enviar teste
+                    Enviar teste{waCity.testCity ? ` (${driverCityLabel(waCity.testCity)})` : ""}
                   </Button>
                 </div>
               </div>
@@ -3006,6 +2993,7 @@ export function AvailabilitySection() {
                         <span className="flex-1 truncate">
                           {r.name || r.phone}
                           {r.phoneE164 ? <span className="text-muted-foreground"> · {r.phoneE164}</span> : null}
+                          {r.city ? <span className="text-muted-foreground"> · {driverCityLabel(r.city)}</span> : null}
                         </span>
                         {r.error && <span className="text-red-500 truncate max-w-[45%]">{r.error}</span>}
                       </div>
@@ -3026,7 +3014,7 @@ export function AvailabilitySection() {
               </Button>
               <Button
                 className="bg-green-700 hover:bg-green-800 text-white"
-                disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal}
+                disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal || !!waCity.blockReason}
                 onClick={() => {
                   // D32: a várias pessoas, primeiro "Confirmar".
                   if (!waConfirm && needsBroadcastConfirm(waValidCount)) { setWaConfirm(true); return; }

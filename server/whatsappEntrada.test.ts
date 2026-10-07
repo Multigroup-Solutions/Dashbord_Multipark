@@ -47,7 +47,7 @@ describe("Envio em massa: retomar sem duplicar", () => {
   it("o ecrã manda um código por diálogo e não deixa enviar 2× depois do resultado", () => {
     const page = src("client/src/pages/ExtrasDiaPage.tsx");
     expect(page).toContain("sendKey: testPhone ? undefined : waSendKey,");
-    expect(page).toContain("disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal}");
+    expect(page).toContain("disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal || !!waCity.blockReason}");
     expect(src("client/src/pages/ExtraLeadsPage.tsx")).toContain("sendKey: contactSendKey || undefined");
     const r = src("server/routers.ts");
     expect(r).toContain("sendKey: input.testPhone ? null : input.sendKey ?? null,");
