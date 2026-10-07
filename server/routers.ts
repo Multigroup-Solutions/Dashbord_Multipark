@@ -107,6 +107,7 @@ import { crmQuerySchema } from "../shared/crmFilters";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
 import { rhViewer } from "./rhGuards";
+import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { expensesRouter } from "./expensesRouter";
 import { rhRouter } from "./rhRouter";
 import { operationalRouter } from "./operationalRouter";
@@ -5087,7 +5088,8 @@ export const appRouter = router({
         const viewer = await rhViewer(ctx.user);
         const person = await getEmployeeById(input.employeeId);
         if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-        await assertEmployeeAccess(input.employeeId);
+        // Lote 46: a disponibilidade da PRÓPRIA ficha abre mesmo sem cidade.
+        if (viewer.employeeId !== input.employeeId) await assertEmployeeAccess(input.employeeId);
         if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
         return getMyWeek(input.employeeId, input.weekStart);
       }),
@@ -5101,12 +5103,8 @@ export const appRouter = router({
       .input(z.object({ weekStart: weekStartSchema }))
       .query(async ({ ctx, input }) => {
         const emp = await getEmployeeByUserId(ctx.user.id);
-        if (!emp) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "A tua conta não está associada a um colaborador. Fala com o backoffice.",
-          });
-        }
+        // Lote 46: diz QUAL é a conta Google e o que fazer (pôr o email na ficha).
+        if (!emp) throw new TRPCError({ code: "FORBIDDEN", message: noLinkedRecordMessage(ctx.user.email) });
         return getMyWeek(emp.employee.id, input.weekStart);
       }),
 
@@ -5128,12 +5126,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = await getEmployeeByUserId(ctx.user.id);
-        if (!emp) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "A tua conta não está associada a um colaborador. Fala com o backoffice.",
-          });
-        }
+        // Lote 46: diz QUAL é a conta Google e o que fazer (pôr o email na ficha).
+        if (!emp) throw new TRPCError({ code: "FORBIDDEN", message: noLinkedRecordMessage(ctx.user.email) });
         const r = await setMyAvailability(emp.employee.id, input.weekStart, input.days, ctx.user.id);
         // Fica registado quem mudou e o que estava antes (a semana é substituída).
         await logActivity({

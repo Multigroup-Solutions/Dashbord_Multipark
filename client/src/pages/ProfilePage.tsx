@@ -4,7 +4,8 @@ import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { useState } from "react";
-import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail, Camera, MonitorX, Loader2 } from "lucide-react";
+import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail, Camera, MonitorX, Loader2, CalendarCheck } from "lucide-react";
+import { noLinkedRecordMessage } from "@shared/ownAccess";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
@@ -59,6 +60,8 @@ export default function ProfilePage() {
     // 19c: leitura falhada ou sem ficha ≠ "picar entrada"
     { icon: Clock, label: "O meu ponto", note: myStatusQ.error ? "estado indisponível" : myStatusQ.isLoading ? "…" : !myStatus?.employeeId ? "sem ficha" : myStatus.status === "in" ? "entrada aberta" : "picar entrada", action: () => openMyEmployee("timerecords") },
     { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => openMyEmployee() },
+    // Lote 46: a disponibilidade de cada um, à mão (os extras procuravam-na no Extras Dia).
+    { icon: CalendarCheck, label: "A minha disponibilidade", note: "semana", action: () => navigate("/disponibilidade") },
     ...(can(user, "permissoes", "manage")
       ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
       : []),
@@ -96,9 +99,14 @@ export default function ProfilePage() {
       )}
       {employee && <ProfilePhotoPrompt open={photoOpen} onOpenChange={setPhotoOpen} />}
 
-      {cityAccess?.missingCostCenter && (
+      {/* Lote 46: conta sem ficha ≠ ficha sem cidade — cada um diz o que pedir ao RH. */}
+      {employee === null ? (
+        <div role="status" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200 [overflow-wrap:anywhere]">
+          <strong>A tua conta não está ligada a nenhuma ficha.</strong> {noLinkedRecordMessage(user?.email)}
+        </div>
+      ) : cityAccess?.missingCostCenter && (
         <div role="status" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
-          <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição.
+          <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição. Pede ao RH para pôr a tua cidade na ficha — entretanto abres na mesma a tua ficha e a tua disponibilidade.
         </div>
       )}
       {/* PDA ligado (check-in aberto) */}
