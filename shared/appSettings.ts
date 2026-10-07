@@ -892,7 +892,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (60 dias da BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
-  { name: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", intervalMinutes: 1440, workflow: "tick" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "tick" },

@@ -69,6 +69,13 @@ function cityCondition(cities: string[] | undefined, params: ParamList, col = `p
   return aliases.length ? `lower(trim(${col})) IN (${aliases.map((c) => params.add(c)).join(", ")})` : `FALSE`;
 }
 
+/** 42a: só estes parques (Park.id) — o filtro de marca. undefined = todos; [] = nenhum. */
+function parkCondition(parkIds: string[] | undefined, params: ParamList, col = `p."id"`): string | null {
+  if (parkIds === undefined) return null;
+  const clean = Array.from(new Set(parkIds.map((s) => String(s ?? "").trim()).filter(Boolean)));
+  return clean.length ? `${col} IN (${clean.map((id) => params.add(id)).join(", ")})` : `FALSE`;
+}
+
 function idList(ids: string[] | undefined, params: ParamList, col: string): string | null {
   if (ids === undefined) return null;
   const clean = Array.from(new Set(ids.map((s) => String(s ?? "").trim()).filter(Boolean))).slice(0, MAX_AGENT_IDS);
@@ -240,6 +247,8 @@ export interface AggregateFilters {
   byDay: boolean;
   /** Âmbito de cidade (Park.city). undefined = todas; [] = nenhuma. */
   cities?: string[];
+  /** 42a: só estes parques (filtro de marca). undefined = todos. */
+  parkIds?: string[];
   /** Só estes agentes (History.userId). */
   userIds?: string[];
 }
@@ -257,6 +266,8 @@ export function buildAgentHistoryAggSql(f: AggregateFilters): { sql: string; par
   if (ids) conds.push(ids);
   const city = cityCondition(f.cities, params);
   if (city) conds.push(city);
+  const park = parkCondition(f.parkIds, params);
+  if (park) conds.push(park);
   const dayCol = f.byDay ? `, ${opDaySql(`h."actionTime"`)} AS day` : `, NULL AS day`;
   const perType = MOVEMENT_CHANGE_TYPES.map((t) => `count(*) FILTER (WHERE h."changeType"::text = '${t}') AS ${typeAlias(t)}`);
   const sql = [
@@ -291,6 +302,8 @@ export function buildAgentBookingPhasesSql(f: AggregateFilters): { sql: string; 
   if (ids) outer.push(ids);
   const city = cityCondition(f.cities, params);
   if (city) outer.push(city);
+  const park = parkCondition(f.parkIds, params);
+  if (park) outer.push(park);
   const sql = [
     `SELECT x.user_id${f.byDay ? `, ${opDaySql("x.at")} AS day` : `, NULL AS day`},`,
     `       count(*) FILTER (WHERE x.kind = 'in') AS check_ins,`,
@@ -324,6 +337,8 @@ export function buildAgentOccurrenceAggSql(f: AggregateFilters): { sql: string; 
   if (ids) outer.push(ids);
   const city = cityCondition(f.cities, params);
   if (city) outer.push(city);
+  const park = parkCondition(f.parkIds, params);
+  if (park) outer.push(park);
   const sql = [
     `SELECT x.user_id, max(x.agent_name) AS agent_name${f.byDay ? `, ${opDaySql("x.at")} AS day` : `, NULL AS day`},`,
     `       count(*) FILTER (WHERE x.kind = 'created') AS created,`,
@@ -360,6 +375,8 @@ export function buildAgentReviewAggSql(f: AggregateFilters): { sql: string; para
   if (ids) conds.push(ids);
   const city = cityCondition(f.cities, params);
   if (city) conds.push(city);
+  const park = parkCondition(f.parkIds, params);
+  if (park) conds.push(park);
   const sql = [
     `SELECT d.user_id${f.byDay ? `, ${opDaySql(`r."createdAt"`)} AS day` : `, NULL AS day`},`,
     `       count(*) AS reviews, avg(r."rating") AS avg_rating, count(*) FILTER (WHERE r."rating" <= 3) AS low_reviews`,
@@ -557,13 +574,14 @@ export interface AgentSummaryOptions {
   endDay?: string;
   byDay?: boolean;
   cities?: string[];
+  parkIds?: string[];
   userIds?: string[];
 }
 
 /** Agregados vivos por agente (× dia). Quatro leituras curtas. Nunca lança. */
 export async function getAgentMovementSummaries(opts: AgentSummaryOptions, query: Query = multiparkDbQuery): Promise<MultiparkRead<AgentMovementSummary[]>> {
   return safeMultiparkRead("avaliação (agregados)", async () => {
-    const f: AggregateFilters = { window: movementWindow(opts.startDay, opts.endDay ?? opts.startDay), byDay: !!opts.byDay, cities: opts.cities, userIds: opts.userIds };
+    const f: AggregateFilters = { window: movementWindow(opts.startDay, opts.endDay ?? opts.startDay), byDay: !!opts.byDay, cities: opts.cities, parkIds: opts.parkIds, userIds: opts.userIds };
     const run = async (b: { sql: string; params: SqlParam[] }) => query(b.sql, b.params);
     const history = await run(buildAgentHistoryAggSql(f));
     const phases = await run(buildAgentBookingPhasesSql(f));
