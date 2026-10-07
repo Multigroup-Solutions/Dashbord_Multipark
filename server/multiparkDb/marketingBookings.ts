@@ -31,7 +31,17 @@ export interface MarketingReadSpec {
   parkIds: string[];
   /** Domínios de email da casa (não contam como cliente). */
   internalDomains: readonly string[];
+  /**
+   * Marketplace (Jorge, 7 out 2026): parques de TERCEIROS — só as reservas que
+   * nós vendemos (origin MARKETPLACE ou com comissão nossa, OUR_SALE).
+   */
+  marketplaceParkIds?: string[];
+  /** Parques nossos de que só interessam as reservas vindas pelo Marketplace (multipark.pt). */
+  marketplaceOnlyParkIds?: string[];
 }
+
+/** Venda nossa num parque de terceiros (a mesma regra da faturação do Marketplace, partnerBilling.ts). */
+export const MARKETPLACE_OUR_SALE = `(b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0)`;
 
 const lisbonDay = (col: string) => `to_char((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon', 'YYYY-MM-DD')`;
 const ts = (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI:SS')`;
@@ -44,9 +54,21 @@ function emailExpr(p: ParamList, c: string, domains: readonly string[]): string 
 
 /** Reservas criadas no período (sem canceladas). PURA. */
 export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: string; params: SqlParam[] } {
-  if (!spec.parkIds.length) throw new Error("Sem parques.");
+  const third = spec.marketplaceParkIds ?? [];
+  const mkOnly = spec.marketplaceOnlyParkIds ?? [];
+  if (!spec.parkIds.length && !third.length && !mkOnly.length) throw new Error("Sem parques.");
   const p = new ParamList();
-  const parks = spec.parkIds.map((id) => p.add(id)).join(", ");
+  const list = (ids: string[]) => ids.map((id) => p.add(id)).join(", ");
+  // Que reservas entram: as dos parques nossos; nos de terceiros só as vendidas
+  // por nós; nos "só Marketplace" só as que vieram pelo Marketplace.
+  const conds = [
+    spec.parkIds.length ? `b."parkId" IN (${list(spec.parkIds)})` : null,
+    third.length ? `(b."parkId" IN (${list(third)}) AND ${MARKETPLACE_OUR_SALE})` : null,
+    mkOnly.length ? `(b."parkId" IN (${list(mkOnly)}) AND b."origin"::text = 'MARKETPLACE')` : null,
+  ].filter(Boolean) as string[];
+  const which = conds.length === 1 ? conds[0] : `(${conds.join(" OR ")})`;
+  const allParks = [...new Set([...spec.parkIds, ...third, ...mkOnly])];
+  const parks = list(allParks);
   const s = p.add(spec.start);
   const e = p.add(spec.end);
   const em = emailExpr(p, "c", spec.internalDomains);
@@ -55,10 +77,10 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
     `WITH d AS (`,
     `  SELECT b."id" AS id, b."createdAt" AS created_at, b."parkId" AS park_id, b."status"::text AS status, b."origin"::text AS origin,`,
     `    NULLIF(trim(b."originUrl"), '') AS origin_url, b."partnerId" AS partner_id, NULLIF(b."paymentMethod", '') AS pm, b."campaignId" AS campaign_id,`,
-    `    b."bookingPrice" AS price, ${em} AS em, NULLIF(b."paymentSource"::text, '') AS pay_src`,
+    `    b."bookingPrice" AS price, ${em} AS em, NULLIF(b."paymentSource"::text, '') AS pay_src, b."commissionAmount" AS commission`,
     `  FROM "Booking" b`,
     `  ${clientOf("b", "c")}`,
-    `  WHERE b."parkId" IN (${parks}) AND b."status"::text <> 'CANCELLED'`,
+    `  WHERE ${which} AND b."status"::text <> 'CANCELLED'`,
     `    AND b."createdAt" >= ${s}::timestamp AND b."createdAt" < ${e}::timestamp`,
     `  ORDER BY b."createdAt", b."id"`,
     `  LIMIT ${lim}`,
@@ -73,7 +95,7 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
     `SELECT d.id, ${ts("d.created_at")} AS created_at, ${lisbonDay("d.created_at")} AS day, d.park_id, d.status, d.origin, d.origin_url,`,
     `  d.partner_id, NULLIF(pa."name", '') AS partner_name, COALESCE(d.pm, bp.pm) AS payment_method, d.pay_src AS payment_source,`,
     `  NULLIF(ca."name", '') AS campaign_name, NULLIF(ca."discountCode", '') AS discount_code, COALESCE(bp.total, d.price) AS total,`,
-    `  (d.em IS NOT NULL) AS has_email, (d.em IS NULL OR fb.first_at IS NULL OR d.created_at <= fb.first_at) AS new_client`,
+    `  (d.em IS NOT NULL) AS has_email, (d.em IS NULL OR fb.first_at IS NULL OR d.created_at <= fb.first_at) AS new_client, d.commission`,
     `FROM d`,
     `LEFT JOIN bp ON bp.id = d.id`,
     `LEFT JOIN fb ON fb.em = d.em`,
@@ -144,6 +166,8 @@ export interface MarketingBookingRow {
   total: number;
   hasEmail: boolean;
   newClient: boolean;
+  /** comissão nossa (vendas do Marketplace em parques de terceiros); null se não houver */
+  commission?: number | null;
 }
 
 export interface MarketingClientRow {
@@ -172,6 +196,7 @@ export function mapMarketingBookingRow(r: Record<string, unknown>): MarketingBoo
     status: txt(r.status), origin: txt(r.origin), originUrl: txt(r.origin_url), partnerId: txt(r.partner_id), partnerName: txt(r.partner_name),
     paymentMethod: txt(r.payment_method), paymentSource: txt(r.payment_source), campaignName: txt(r.campaign_name), discountCode: txt(r.discount_code), total: money(r.total),
     hasEmail: bool(r.has_email), newClient: r.new_client == null ? true : bool(r.new_client),
+    commission: r.commission == null ? null : money(r.commission),
   };
 }
 

@@ -220,6 +220,7 @@ function BrandSummary({ data }: { data: any }) {
           <p className="text-xs text-muted-foreground mt-1">
             Marca = a escolhida em cada campanha (uma campanha da conta Multipark.pt marcada como Airpark Faro conta na Airpark); sem escolha, a marca da conta (Multipark.pt e Multipark SA são a marca Marketplace).
             {" "}<b>Conversões</b> = as que cada plataforma conta (Google Ads, Meta). <b>Reservas via net</b> = reservas Multipark reais da marca que <b>não</b> são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas — é o que os anúncios podem trazer.
+            {" "}<b>Marketplace</b>: as vendas pelo multipark.pt (nos parques de terceiros e nos nossos) contam em "Marketplace &lt;cidade&gt;", onde estão as campanhas "Multipark - &lt;Cidade&gt; - PT" — já não na marca do parque.
             {" "}<b>Com link</b> = das via net, quantas trazem o link de origem; <b>Ligadas</b> = as que trazem a prova do clique (gclid/fbclid/utm pago). Sem link, não há como ligar a reserva ao anúncio — é o site que tem de o guardar.
             {" "}ROAS s/ IVA = valor via net sem IVA (taxa do período: {vatPct}) ÷ gasto. Com âmbito de cidade, o gasto é o imputado a essas cidades (nacional pela sua parte).
           </p>
@@ -413,7 +414,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                 <th className="text-right px-4 py-2 font-medium" title="Conversões contadas pela plataforma da campanha (Google Ads ou Meta)">Conversões</th>
                 <th className="text-right px-4 py-2 font-medium">Custo/conv.</th>
                 <th className="text-right px-4 py-2 font-medium">Valor conv.</th>
-                <th className="text-right px-4 py-2 font-medium border-l" title="Reservas Multipark reais da marca nessa cidade que NÃO são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas">Reservas via net</th>
+                <th className="text-right px-4 py-2 font-medium border-l" title="Reservas Multipark reais da marca nessa cidade que NÃO são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas. Marketplace: as vendas pelo multipark.pt nessa cidade (parques de terceiros e nossos)">Reservas via net</th>
                 <th className="text-right px-4 py-2 font-medium">Valor via net</th>
                 <th className="text-right px-4 py-2 font-medium" title="Das reservas via net, quantas trazem o link de origem — sem ele não se consegue ligar a reserva ao anúncio">Com link</th>
                 <th className="text-right px-4 py-2 font-medium" title="Reservas com gclid/fbclid/utm pago no URL de origem. Na linha da campanha: ligadas a essa campanha. Fica abaixo das conversões quando o clique se perde.">Ligadas</th>
