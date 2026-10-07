@@ -53,7 +53,19 @@ const requireUser = t.middleware(async opts => {
     // Bloqueio de login da ficha (docs/faltas/manual) — no servidor, não só na UI.
     const { loginBlockFor } = await import('../loginBlock');
     const blocked = await loginBlockFor(ctx.user!);
-    if (blocked) throw new TRPCError({ code: "FORBIDDEN", message: blocked });
+    if (blocked) {
+      // 41c: bloqueado ainda abre a SUA ficha e carrega os documentos (senão nunca saía do bloqueio).
+      const { blockedSelfPathKind, ownRecordEmployeeId } = await import('../cityAccess');
+      const kind = blockedSelfPathKind(opts.path);
+      let allowed = kind === 'self';
+      if (kind === 'own') {
+        const target = ownRecordEmployeeId(opts.path, await opts.getRawInput());
+        const { getEmployeeByUserId } = await import('../db');
+        const mine = target != null ? (await getEmployeeByUserId(ctx.user!.id))?.employee?.id ?? null : null;
+        allowed = target != null && mine === target;
+      }
+      if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: blocked });
+    }
 
     // Acesso efetivo = papel + overrides de módulo (shared/access.ts).
     const { getUserModuleOverrides } = await import('../db');

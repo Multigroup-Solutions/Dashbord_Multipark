@@ -4268,6 +4268,10 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
+        // 41c: só fichas da cidade de quem liga, e sem tirar o agente a outra cidade
+        await assertEmployeeAccess(input.employeeId);
+        const { assertAgentHoldersInScope } = await import("./rhGuards");
+        await assertAgentHoldersInScope({ agentUserId: input.multiparkAgentUserId ?? null, agentName: input.multiparkAgentName ?? null });
         const { getDb } = await import("./db");
         const db = await getDb(); if (!db) return { success: false };
         const { employees } = await import("../drizzle/schema");
@@ -4312,6 +4316,9 @@ export const appRouter = router({
       .input(z.object({ agentName: z.string().min(1), employeeId: z.number().nullable() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
+        // 41c: com âmbito de cidade, só fichas e agentes da cidade
+        if (input.employeeId != null) await assertEmployeeAccess(input.employeeId);
+        { const { assertAgentHoldersInScope } = await import("./rhGuards"); await assertAgentHoldersInScope({ agentName: input.agentName }); }
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
         const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
@@ -4492,7 +4499,8 @@ export const appRouter = router({
     ignoreAgent: protectedProcedure
       .input(z.object({ agentName: z.string().min(1).max(256), ignored: z.boolean() }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        // 41c: marca o agente para todas as cidades
+        (await import("./rhGuards")).requireNationalRhManage(ctx.user);
         const { setAgentIgnored } = await import("./db");
         await setAgentIgnored(input.agentName, input.ignored);
         await logActivity({ userId: ctx.user.id, action: input.ignored ? "ignore" : "unignore", entity: "agent", details: input.agentName });
@@ -4605,6 +4613,12 @@ export const appRouter = router({
       .input(z.object({ agentName: z.string().min(1).max(256), email: z.string().email().optional(), projectId: z.number().optional(), agentUserId: z.string().trim().min(1).max(128).optional() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
+        // 41c: com âmbito de cidade, a ficha nasce num centro da cidade e o agente não é tirado a outra cidade
+        if (scopedProjectIds() !== undefined) {
+          if (input.projectId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Escolhe o centro de custos (da tua cidade) para a ficha nova." });
+          assertProjectAccess(input.projectId);
+        }
+        { const { assertAgentHoldersInScope } = await import("./rhGuards"); await assertAgentHoldersInScope({ agentUserId: input.agentUserId ?? null, agentName: input.agentName }); }
         const { getDb } = await import("./db");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
@@ -5251,7 +5265,7 @@ export const appRouter = router({
   // ── LIGAÇÕES funcionário ↔ utilizador ↔ agente Multipark (Fase 4) ────────
   identityLinks: router({
     overview: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "rh", "manage");
+      (await import("./rhGuards")).requireNationalRhManage(ctx.user); // 41c: todas as cidades
       const { getLinksOverview } = await import("./identityScreen");
       return getLinksOverview();
     }),
@@ -5261,12 +5275,12 @@ export const appRouter = router({
      * sem agente. Só leitura; `nonce` > 0 força uma leitura nova (senão 5 min em memória).
      */
     agentCrossCheck: protectedProcedure.input(z.object({ nonce: z.number().int().min(0).optional() }).optional()).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "rh", "manage");
+      (await import("./rhGuards")).requireNationalRhManage(ctx.user); // 41c: todas as cidades
       const { loadAgentCrossCheck } = await import("./agentCrossCheck");
       return loadAgentCrossCheck({ refresh: (input?.nonce ?? 0) > 0 });
     }),
     reconcileNow: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAccess(ctx.user, "rh", "manage");
+      (await import("./rhGuards")).requireNationalRhManage(ctx.user); // 41c: todas as cidades
       const { runIdentitySweep } = await import("./identityLink");
       const r = await runIdentitySweep();
       await logActivity({ userId: ctx.user.id, action: "identity_sweep", entity: "employees", details: JSON.stringify(r).slice(0, 500) });
@@ -5326,7 +5340,7 @@ export const appRouter = router({
     removeAccountAlias: protectedProcedure
       .input(z.object({ userId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        (await import("./rhGuards")).requireNationalRhManage(ctx.user); // 41c: sem ficha no pedido → só quem gere todas as cidades (na ficha: detachAccount)
         const { removeAccountAlias } = await import("./employeeAliases");
         await removeAccountAlias(input.userId);
         await logActivity({ userId: ctx.user.id, action: "account_unlink", entity: "user", entityId: input.userId, details: "Conta extra separada da ficha (ecrã Ligações)" });
@@ -5335,7 +5349,7 @@ export const appRouter = router({
     removeAgentAlias: protectedProcedure
       .input(z.object({ agentUserId: z.string().min(1).max(128) }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        (await import("./rhGuards")).requireNationalRhManage(ctx.user); // 41c: sem ficha no pedido → só quem gere todas as cidades (na ficha: detachAgent)
         const { removeAgentAlias } = await import("./employeeAliases");
         await removeAgentAlias(input.agentUserId);
         await logActivity({ userId: ctx.user.id, action: "agent_detach", entity: "employee", details: `Agente extra ${input.agentUserId} separado (ecrã Ligações)` });
@@ -5504,6 +5518,8 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
         await assertEmployeeAccess(input.employeeId);
+        // 41c: ligar tira o agente a quem o tinha — só se for da cidade de quem liga
+        { const { assertAgentHoldersInScope } = await import("./rhGuards"); await assertAgentHoldersInScope({ agentUserId: input.agentUserId }); }
         const { linkAgentToEmployee } = await import("./identityScreen");
         const agentName = await linkAgentToEmployee(input.agentUserId, input.employeeId, input.agentName ?? null);
         await logActivity({ userId: ctx.user.id, action: "agent_attach", entity: "employee", entityId: input.employeeId, details: `Agente Multipark ${input.agentUserId} "${agentName}" ligado (ecrã Ligações)` });
@@ -5515,7 +5531,7 @@ export const appRouter = router({
       // folha "Agentes" do xlsx, já lida no browser (linhas cabeçalho → valor)
       z.object({ sheet: z.array(z.record(z.string().max(64), z.union([z.string().max(2000), z.number(), z.boolean(), z.null()]))).min(1).max(5000) }),
     ])).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "rh", "manage");
+      (await import("./rhGuards")).requireNationalRhManage(ctx.user); // 41c: lista de todos os agentes
       const { parseAgentListCsv, parseAgentSheetRows } = await import("../shared/multiparkExports");
       const parsed = "csv" in input ? parseAgentListCsv(input.csv) : parseAgentSheetRows(input.sheet);
       if (parsed.errors.length) throw new TRPCError({ code: "BAD_REQUEST", message: parsed.errors.join(" ") });

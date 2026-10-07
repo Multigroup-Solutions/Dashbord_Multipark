@@ -279,6 +279,9 @@ export async function listSuspiciousTimeRecords(opts: { employeeId?: number; lim
   if (!db) return [];
   const conds: any[] = [eq(timeRecords.reviewStatus, "suspicious")];
   if (opts.employeeId) conds.push(eq(timeRecords.employeeId, opts.employeeId));
+  // 41c: só as das cidades de quem vê (antes vinham as do país todo)
+  const { projectScope } = await import("./cityScope");
+  conds.push(projectScope(employees.projectId));
   return db.select({ record: timeRecords, employee: { id: employees.id, fullName: employees.fullName } })
     .from(timeRecords).leftJoin(employees, eq(employees.id, timeRecords.employeeId))
     .where(and(...conds)).orderBy(desc(timeRecords.recordedAt)).limit(opts.limit ?? 200);

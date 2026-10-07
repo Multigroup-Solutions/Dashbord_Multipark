@@ -24,7 +24,23 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
   'rh.byId': 'id', 'rh.update': 'id',
   'rh.documents.list': 'employeeId', 'rh.documents.upload': 'employeeId', 'rh.documents.checklist': 'employeeId',
   'rh.bankChange.forEmployee': 'employeeId',
+  // 41c: o que a ficha usa de facto (o ecrã carrega pelo uploadBatch; foto, ponto, horário, ausências e pontos)
+  'rh.documents.uploadBatch': 'employeeId', 'rh.uploadPhoto': 'employeeId',
+  'rh.timeRecords.list': 'employeeId', 'rh.schedules.list': 'employeeId', 'rh.leaves.list': 'employeeId', 'rh.penalties.list': 'employeeId',
 };
+
+/**
+ * 41c: com o acesso BLOQUEADO (documentos em falta, faltas…), a pessoa ainda
+ * abre a SUA ficha e carrega os documentos — senão nunca saía do bloqueio.
+ * Só estes caminhos, e só para a própria ficha (ou caminhos sem ficha que
+ * são de cada um).
+ */
+const BLOCKED_SELF_PATHS = new Set(['rh.me', 'rh.byId', 'rh.documents.list', 'rh.documents.checklist', 'rh.documents.upload', 'rh.documents.uploadBatch', 'rh.uploadMyPhoto', 'permissions.mine', 'permissions.myCityAccess']);
+/** 'own' = precisa que a ficha do pedido seja a da pessoa; 'self' = não tem ficha no pedido (é sempre a da pessoa). PURA. */
+export function blockedSelfPathKind(path: string): 'own' | 'self' | null {
+  if (!BLOCKED_SELF_PATHS.has(path)) return null;
+  return OWN_RECORD_PATHS[path] ? 'own' : 'self';
+}
 export function ownRecordEmployeeId(path: string, input: unknown): number | null {
   const field = OWN_RECORD_PATHS[path];
   if (!field || !input || typeof input !== 'object') return null;

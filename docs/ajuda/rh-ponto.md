@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
+palavras: supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
 ---
 # RH e ponto
 
@@ -19,6 +19,24 @@ palavras: possíveis faltas, marcar falta, libertar, faltas em massa, falta a ex
 - O **NIF** e o **IBAN** aparecem escondidos (PT50 •••• 1234); carrega em **mostrar** para os ver por extenso.
 - **Mudar o IBAN**: o **back office**, o **supervisor**, o **administrador** e o **super admin** mudam na hora o IBAN da ficha de outra pessoa (validado e registado). O teu próprio IBAN, ou o de outra pessoa se fores do front office ou team leader, fica como **pedido** à espera de aprovação do RH — o IBAN atual mantém-se até ser aprovado. O IBAN é validado (número de controlo) e o pedido fica registado (mascarado). Carrega também o **Comprovativo NIB** nos Documentos. Sem centro de custos atribuído, consegues na mesma abrir a tua ficha, pôr a foto e carregar documentos.
 - Carrega documentos (CC, carta de condução, comprovativo de morada, NIB…) no separador **Documentos**. Documentos em falta podem bloquear o acesso.
+- **Os teus dados**: em **Editar os meus dados** mudas o nome, os telefones, o NIF, a morada, a data de nascimento, a nacionalidade, o **n.º do documento de identificação** e o **n.º da carta de condução**. O IBAN fica como pedido (ver abaixo).
+- **Os teus documentos**: carregas o CC/BI, o título de residência, a carta, o comprovativo do IBAN, o de morada, a fotografia e "Outro". O contrato, os anexos, o termo de responsabilidade e o seguro são carregados pelo RH. Até 10 ficheiros de 10 MB de cada vez.
+- **Acesso bloqueado** (ex.: documentos em falta): no ecrã de bloqueio aparece **Carregar os teus documentos**, com o que falta. Carregas daí sem precisares de entrar no resto da app; depois o RH revê e liberta o acesso.
+- Quem não vê a lista do RH (extra, condutor…) entra em **Recursos Humanos** e abre logo a sua ficha.
+
+**O supervisor no RH da sua cidade**
+- O supervisor vê e gere as fichas de **toda a sua cidade** (antes era só o centro de custos da ficha dele), de quem está **abaixo dele** (team leader, condutores e extras):
+  - **Novo Colaborador** e **Importar Extras**, com postos até team leader;
+  - **Editar**: dados pessoais, posto (até team leader), centro de custos (da cidade), tipo e datas do contrato;
+  - **Desativar / Reativar** (com o motivo);
+  - **Horário**, **férias e baixas**, revisão das **picagens suspeitas**, **geofences** dos centros da cidade;
+  - pontos, faltas e desbloqueio, só das pessoas da sua cidade;
+  - ligar e separar o **agente da Multipark** e as contas, desde que o agente não esteja numa ficha de outra cidade.
+- Ficam com o administrador:
+  - o **salário**, o subsídio de alimentação e a folha de ordenados;
+  - o **email de trabalho** e a **conta associada** à mão;
+  - fichas de outros supervisores e de quem está acima;
+  - o que mexe em **todas as cidades** (varrimento das ligações, lista de todos os agentes, "Não é funcionário", processar faltas do país).
 
 **Gestão** (Team Leader e acima, na sua cidade)
 - **Pessoas → Recursos Humanos** lista os colaboradores (separadores Colaboradores, Extras, Agentes). Os emails de **recrutamento** (recursos-humanos@) passaram para os **Leads de Extras**.

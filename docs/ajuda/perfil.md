@@ -29,3 +29,5 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 - Perdeste o telemóvel ou entraste num PDA partilhado? Carrega em **Terminar sessões noutros aparelhos**: todas as outras sessões fecham (este aparelho continua ligado). **Sair** só fecha este aparelho.
 
 **Sem centro de custos**: consegues na mesma pôr a foto, abrir a tua ficha, carregar documentos, ver o PDA e terminar sessões.
+
+**Acesso bloqueado** (ex.: documentos em falta): no ecrã de bloqueio carregas os teus documentos em **Carregar os teus documentos**. O RH revê e liberta o acesso.
