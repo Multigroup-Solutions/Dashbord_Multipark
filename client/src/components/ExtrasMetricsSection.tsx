@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DeactivationDialog } from "@/components/DeactivationDialog";
 import { BarChart3, Loader2, UserX } from "lucide-react";
 import { toast } from "sonner";
+import { paidVsPlanned, PONTO_MIN_SHARE } from "@shared/extrasMetricsRules";
 
 const CITIES = [
   { id: "lisbon", label: "Lisboa" },
@@ -28,15 +29,27 @@ const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 const WEEKDAY = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
 const wd = (iso: string) => WEEKDAY[new Date(`${iso}T12:00:00Z`).getUTCDay()];
 
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Tile({ label, value, sub, help, warn }: { label: string; value: string; sub?: string; help?: string; warn?: string }) {
   return (
-    <div className="rounded-lg border p-3">
+    <div className="rounded-lg border p-3" title={help}>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="text-xl font-semibold tabular-nums">{value}</div>
       {sub && <div className="text-xs text-muted-foreground mt-0.5">{sub}</div>}
+      {warn && <div className="text-xs text-amber-700 mt-1">{warn}</div>}
     </div>
   );
 }
+
+/** 44c (Jorge: "explicar o que é"): o que quer dizer cada número, em português simples. */
+const HELP = {
+  responded: "Dos extras ativos das tuas cidades, quantos já responderam ao pedido de disponibilidade da próxima semana.",
+  planned: "Horas escaladas no Extras Dia neste período × tarifa do nível de cada extra. Os team leaders não contam (o salário já os paga). Inclui o dia de hoje e as escalas ainda por confirmar.",
+  paid: "Horas do ponto dos extras (check-outs aprovados, ou ok sem [SUSPEITO]) × tarifa do nível. É a mesma conta da Faturação. Compara-se com a escala até ontem.",
+  firstShift: "Dias, em mediana, entre a candidatura aprovada (últimos 180 dias) e o primeiro check-in no ponto.",
+  coverage: "Por dia: horas-condutor que a previsão diz serem precisas (pelas reservas de entrega e recolha) contra as horas já escaladas (sem team leader).",
+  noShows: "Faltas ao Extras Dia no período: estava escalado e não apareceu. As \"por rever\" são as possíveis faltas que o RH ainda tem de validar.",
+  stale: "Extras ativos sem trabalho (ponto, escala ou movimentos na Multipark) há mais de 90 dias. Quem nunca trabalhou conta desde que a ficha foi criada.",
+} as const;
 
 export function ExtrasMetricsSection() {
   const { user } = useAuth();
@@ -64,6 +77,17 @@ export function ExtrasMetricsSection() {
   const m = metrics.data;
   const nextWeek = m?.responseRate[m.responseRate.length - 1];
   const noShowTotal = useMemo(() => (m?.noShows ?? []).reduce((s, n) => s + n.confirmed, 0), [m]);
+  const costHidden = !!m && "costHidden" in m && !!m.costHidden;
+  // 44c: o pago compara-se com a escala até ontem; com pouco ponto picado, a diferença é ponto em falta (não poupança).
+  const vs = m ? paidVsPlanned(m.cost) : null;
+  const paidSub = !m ? undefined
+    : costHidden ? `${m.cost.paidHours}h de ponto · sem acesso aos custos`
+    : vs?.kind === "no_schedule" ? `${m.cost.paidHours}h de ponto · sem escala até ontem`
+    : vs?.kind === "diff" ? `${m.cost.paidHours}h de ponto · ${vs.pct >= 0 ? "+" : ""}${vs.pct}% vs escala até ontem`
+    : `${m.cost.paidHours}h de ponto de ${m.cost.plannedPastHours}h escaladas até ontem`;
+  const paidWarn = vs?.kind === "missing_ponto"
+    ? `Só ${Math.round(vs.share * 100)}% das horas escaladas foram picadas (menos de ${Math.round(PONTO_MIN_SHARE * 100)}%): a diferença é ponto em falta, não poupança.`
+    : undefined;
 
   return (
     <Card>
@@ -101,24 +125,42 @@ export function ExtrasMetricsSection() {
                 label="Responderam (próxima semana)"
                 value={nextWeek ? pct(nextWeek.responded, nextWeek.total) : "—"}
                 sub={nextWeek ? `${nextWeek.responded} de ${nextWeek.total} extras` : undefined}
+                help={HELP.responded}
               />
               {/* 22b: sem permissão para ver custos → "—" (não "0 €") */}
               <Tile
                 label="Custo previsto (escala)"
-                value={"costHidden" in m && m.costHidden ? "—" : eur(m.cost.planned)}
-                sub={`${m.cost.plannedHours}h escaladas`}
+                value={costHidden ? "—" : eur(m.cost.planned)}
+                sub={`${m.cost.plannedHours}h escaladas (com hoje)`}
+                help={HELP.planned}
               />
               <Tile
                 label="Custo pago (ponto)"
-                value={"costHidden" in m && m.costHidden ? "—" : eur(m.cost.paid)}
-                sub={"costHidden" in m && m.costHidden ? `${m.cost.paidHours}h de ponto · sem acesso aos custos` : `${m.cost.paidHours}h de ponto · ${m.cost.planned > 0 ? `${m.cost.paid >= m.cost.planned ? "+" : ""}${Math.round(((m.cost.paid - m.cost.planned) / m.cost.planned) * 100)}% vs previsto` : "sem escala"}`}
+                value={costHidden ? "—" : eur(m.cost.paid)}
+                sub={paidSub}
+                warn={paidWarn}
+                help={HELP.paid}
               />
               <Tile
                 label="Candidatura → 1.º turno"
                 value={m.timeToFirstShift.medianDays != null ? `${Math.round(m.timeToFirstShift.medianDays)} dias` : "—"}
                 sub={`mediana · ${m.timeToFirstShift.worked} de ${m.timeToFirstShift.approved} aprovados já trabalharam`}
+                help={HELP.firstShift}
               />
             </div>
+
+            <details className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <summary className="cursor-pointer select-none text-muted-foreground">O que quer dizer cada número?</summary>
+              <dl className="mt-2 space-y-1.5 text-xs">
+                <div><dt className="inline font-medium">Responderam: </dt><dd className="inline text-muted-foreground">{HELP.responded}</dd></div>
+                <div><dt className="inline font-medium">Custo previsto: </dt><dd className="inline text-muted-foreground">{HELP.planned}</dd></div>
+                <div><dt className="inline font-medium">Custo pago: </dt><dd className="inline text-muted-foreground">{HELP.paid} Se os extras não picam o ponto, o pago fica muito abaixo do previsto. Isso não é poupança: é ponto em falta, e o aviso a amarelo diz quanto.</dd></div>
+                <div><dt className="inline font-medium">Candidatura → 1.º turno: </dt><dd className="inline text-muted-foreground">{HELP.firstShift}</dd></div>
+                <div><dt className="inline font-medium">Cobertura dos próximos 7 dias: </dt><dd className="inline text-muted-foreground">{HELP.coverage}</dd></div>
+                <div><dt className="inline font-medium">Faltas por extra: </dt><dd className="inline text-muted-foreground">{HELP.noShows}</dd></div>
+                <div><dt className="inline font-medium">Parados há mais de 90 dias: </dt><dd className="inline text-muted-foreground">{HELP.stale}</dd></div>
+              </dl>
+            </details>
 
             <div className="grid gap-5 lg:grid-cols-2">
               <div>

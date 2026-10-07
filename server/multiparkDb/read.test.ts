@@ -141,7 +141,7 @@ describe("ocorrências — mapeamento da linha", () => {
   });
   it("contagens (bigint do pg vem em texto)", () => {
     expect(mapOccurrenceStatsRow({ total: "10", open: "4", resolved: "6", high: "2", high_open: "1", medium: "5", low: "3" }))
-      .toEqual({ total: 10, open: 4, resolved: 6, high: 2, highOpen: 1, medium: 5, low: 3 });
+      .toEqual({ total: 10, open: 4, autoClosed: 0, resolved: 6, high: 2, highOpen: 1, medium: 5, low: 3 });
     expect(mapOccurrenceStatsRow(undefined).total).toBe(0);
   });
 });

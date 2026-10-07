@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareForReply, groupReviewsByPark, isReviewPending, NO_PARK_KEY, type ReviewLike } from "../shared/reviewParks";
+import { compareForReply, groupReviewsByPark, isReviewPending, TRASH_KEY, TRASH_LABEL, type ReviewLike } from "../shared/reviewParks";
 
 const r = (p: Partial<ReviewLike> & { id: number }): ReviewLike => ({
   projectId: 1, rating: 5, status: "pending_response", respondedAt: null, reviewDate: "2026-09-01 10:00:00", ...p,
@@ -33,20 +33,20 @@ describe("críticas por parque", () => {
       r({ id: 4, projectId: 2, rating: 4 }),
       r({ id: 5, projectId: 2, rating: 4 }),
       r({ id: 6, projectId: null, rating: 3 }),
-      r({ id: 7, projectId: 99, rating: 2 }), // projeto desconhecido → sem parque
+      r({ id: 7, projectId: 99, rating: 2 }), // projeto desconhecido, sem marca → lixo (44c)
     ], projects);
     expect(groups.map((g) => [g.key, g.name, g.total, g.pending, g.responded, g.complaints, g.avg])).toEqual([
       ["2", "Airpark Porto", 2, 2, 0, 0, 4],
       ["1", "Airpark Lisboa", 3, 1, 1, 1, 3],
-      [NO_PARK_KEY, "Sem parque", 2, 2, 0, 0, 2.5],
+      [TRASH_KEY, TRASH_LABEL, 2, 2, 0, 0, 2.5],
     ]);
   });
 
-  it("empate em pendentes desempata por nome; sem parque fica sempre no fim", () => {
+  it("empate em pendentes desempata por nome; o lixo fica sempre no fim", () => {
     const groups = groupReviewsByPark([
       r({ id: 1, projectId: 3 }), r({ id: 2, projectId: 1 }), r({ id: 3, projectId: null }), r({ id: 4, projectId: null }),
     ], projects);
-    expect(groups.map((g) => g.name)).toEqual(["Airpark Lisboa", "Redpark Faro", "Sem parque"]);
+    expect(groups.map((g) => g.name)).toEqual(["Airpark Lisboa", "Redpark Faro", TRASH_LABEL]);
   });
 
   it("lista vazia dá zero grupos", () => {

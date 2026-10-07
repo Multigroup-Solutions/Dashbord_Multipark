@@ -2,7 +2,7 @@
 modulo: contactos
 titulo: Contactos (pesquisa, diretório e Google Contactos)
 rotas: /contactos, /perfil
-palavras: cartões, lista, ver em cartões, ver em lista, foto, contactos, contacto, pesquisa, procurar, cliente, lead, parceiro, fornecedor, colaborador, diretório, directorio, telefone, telemóvel, quem liga, identificação de chamadas, google contactos, people, grupo multipark, serviço, sugestões, criar cliente, criar lead
+palavras: palavras soltas, nome e apelido, crm vazio, diretório vazio, não foi possível ler, cartões, lista, ver em cartões, ver em lista, foto, contactos, contacto, pesquisa, procurar, cliente, lead, parceiro, fornecedor, colaborador, diretório, directorio, telefone, telemóvel, quem liga, identificação de chamadas, google contactos, people, grupo multipark, serviço, sugestões, criar cliente, criar lead
 ---
 # Contactos
 
@@ -12,10 +12,15 @@ Uma só pesquisa para clientes, contactos do CRM, leads de extras, parceiros, fo
 
 **Pesquisa** (menu **Suporte → Contactos**)
 1. Escreve pelo menos 2 letras (nome, email, telefone ou matrícula). Aparecem os primeiros resultados de cada tipo.
+   - As palavras procuram-se **soltas e por qualquer ordem**: "joao silva" encontra "João Pedro Silva" e "Silva, João".
 2. Carrega num tipo (ex.: **Cliente**, **Parceiro**) ou em **Ver todos** para percorrer só esse tipo — a lista vai carregando à medida que desces.
 3. Só aparecem os tipos dos módulos que vês (ex.: fornecedores só com as Despesas da cidade) e só na tua cidade. O telefone encontra-se escrito de qualquer forma (+351, 00351, com espaços).
 4. Abre um contacto para ver as **reservas**, **reclamações**, **WhatsApp** e **emails** ligados (pelo email ou pelo telefone) e as comunicações do cliente.
-5. **Clientes** são as fichas do CRM (com o n.º de cliente): quem vê os Contactos vê o nome, o email e o telefone para poder ligar ao cliente. As reservas da ficha só aparecem a quem vê Clientes ou as Reservas, e só as das tuas cidades. Procura também pelo n.º de cliente ou pela matrícula.
+5. **Quando um tipo vem vazio**, a página diz porquê:
+   - **"Não foi possível ler esta lista agora"** (a vermelho): a leitura falhou. Não quer dizer que não haja ninguém; tenta de novo daqui a pouco. Os outros tipos estão completos.
+   - **Contacto CRM** vazio: ainda não há contactos comerciais (leads B2B). Os clientes das reservas estão no tipo **Cliente**.
+   - **Diretório** vazio: o diretório da empresa não está ligado (Definições → Comunicação → Contactos Google) ou ainda não foi lido do Google (**Atualizar agora**).
+6. **Clientes** são as fichas do CRM (com o n.º de cliente): quem vê os Contactos vê o nome, o email e o telefone para poder ligar ao cliente. As reservas da ficha só aparecem a quem vê Clientes ou as Reservas, e só as das tuas cidades. Procura também pelo n.º de cliente ou pela matrícula.
 
 **Diretório**
 - Pessoas do Google Workspace da empresa: foto, cargo, departamento, telefone e email. É atualizado uma vez por dia.

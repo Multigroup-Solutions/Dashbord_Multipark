@@ -2332,6 +2332,18 @@ export const appRouter = router({
       await logActivity({ userId: ctx.user.id, action: "update", entity: "google_review", entityId: input.id, details: what });
       return { success: true };
     }),
+    // 44c: escolher o parque (ou a marca) de uma crítica — tirar do lixo à mão. Fica no registo.
+    setPark: protectedProcedure.input(z.object({ id: z.number().int().positive(), projectId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "criticas", "edit");
+      const review = await getGoogleReviewById(input.id); // âmbito de cidade
+      if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      assertProjectAccess(input.projectId);
+      const project = await getProjectById(input.projectId);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Parque não encontrado" });
+      await updateGoogleReview(input.id, { projectId: input.projectId } as any);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "google_review", entityId: input.id, details: `Parque: ${(project as any).name ?? input.projectId}${review.projectId ? ` (antes #${review.projectId})` : " (estava sem parque)"}` });
+      return { success: true };
+    }),
     generateResponse: protectedProcedure.input(z.object({
       id: z.number(),
     })).mutation(async ({ ctx, input }) => {
@@ -3013,20 +3025,27 @@ export const appRouter = router({
       type: z.string().max(200).optional(),
       priority: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
       resolved: z.boolean().optional(),
+      // 44c: open = por resolver e não fechada sozinha; auto_closed = médias
+      // fechadas sozinhas ao fim de 3 dias (só cá; lá continuam por resolver).
+      status: z.enum(["open", "resolved", "auto_closed"]).optional(),
       search: z.string().max(100).optional(),
       limit: z.number().int().min(1).max(200).optional(),
       offset: z.number().int().min(0).max(5000).optional(),
     }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "ocorrencias", "view");
       const { listMultiparkOccurrences, getMultiparkOccurrenceStats } = await import("./multiparkDb/read");
-      const { projectId: _p, limit, offset, ...filters } = input ?? {};
+      const { isOccurrenceAutoClosed, occurrenceAutoCloseCutoff } = await import("../shared/occurrenceAutoClose");
+      const { projectId: _p, limit, offset, resolved, status: statusIn, ...filters } = input ?? {};
+      // `resolved:false` (o assistente, ligações antigas) = abertas a sério.
+      const status = statusIn ?? (resolved === true ? "resolved" as const : resolved === false ? "open" as const : undefined);
+      const now = Date.now();
       // 23a (D16): sem os "Parques que a operação não faz" (Definições) e, 28a,
       // sem os que não operamos pelo nome (lista do Jorge; o SQL só aceita ids).
       const { getSetting } = await import("./appSettings");
       const { getNotOperatedParkIds } = await import("./multiparkDb/dayBookings");
       const settingIds = (await getSetting("operations.excludedParks").catch(() => null)) ?? [];
       const excludedParkIds = [...new Set([...settingIds, ...(await getNotOperatedParkIds())])];
-      const f = { ...filters, cities: scopedCityNames(), excludedParkIds };
+      const f = { ...filters, status, autoCloseBefore: occurrenceAutoCloseCutoff(now), cities: scopedCityNames(), excludedParkIds };
       const list = await listMultiparkOccurrences({ ...f, limit, offset });
       if (!list.available) return { available: false as const, reason: list.reason, code: list.code };
       const stats = await getMultiparkOccurrenceStats(f);
@@ -3036,6 +3055,7 @@ export const appRouter = router({
       return {
         available: true as const,
         ...list.data,
+        rows: list.data.rows.map((o) => ({ ...o, autoClosed: isOccurrenceAutoClosed(o, now) })),
         accidentIds: [...accidents],
         stats: stats.available ? stats.data : null,
       };
@@ -3070,7 +3090,8 @@ export const appRouter = router({
       const { getMultiparkOccurrence } = await import("./multiparkDb/read");
       const r = await getMultiparkOccurrence(input.id, scopedCityNames());
       if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
-      return { available: true as const, occurrence: r.data };
+      const { isOccurrenceAutoClosed } = await import("../shared/occurrenceAutoClose");
+      return { available: true as const, occurrence: r.data && { ...r.data, autoClosed: isOccurrenceAutoClosed(r.data, Date.now()) } };
     }),
 
     // 22c (D15, Jorge 3 out): acidente = −6000 na avaliação, só depois de um
@@ -4928,7 +4949,7 @@ export const appRouter = router({
         const { getExtrasMetrics } = await import("./extrasMetrics");
         const m = await getExtrasMetrics(input?.days ?? 30);
         // Custos só para quem os vê (as horas ficam).
-        return (await extrasCostViewFor(ctx.user)).costs ? m : { ...m, cost: { ...m.cost, planned: 0, paid: 0 }, costHidden: true as const };
+        return (await extrasCostViewFor(ctx.user)).costs ? m : { ...m, cost: { ...m.cost, planned: 0, paid: 0, plannedPast: 0 }, costHidden: true as const };
       }),
 
     coverageOutlook: protectedProcedure

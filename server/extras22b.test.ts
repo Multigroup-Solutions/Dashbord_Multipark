@@ -80,6 +80,6 @@ describe("D13 custo das métricas = Faturação", () => {
     expect(cost).toContain("aggregateExtrasCost(costRows");
     expect(cost).not.toContain("time_records");
     expect(cost).not.toContain("extras_dia_assignments");
-    expect(src("client/src/components/ExtrasMetricsSection.tsx")).toContain('m.costHidden ? "—"');
+    expect(src("client/src/components/ExtrasMetricsSection.tsx")).toContain('costHidden ? "—"');
   });
 });

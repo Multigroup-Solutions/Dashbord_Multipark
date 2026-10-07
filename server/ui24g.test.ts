@@ -36,7 +36,7 @@ describe("botões brancos; o escolhido azul", () => {
       });
     }
     // Exceções de propósito: destaque de uma ação (não é escolha).
-    expect(offenders.sort()).toEqual(["client/src/components/CameraCapture.tsx:115", "client/src/pages/GoogleReviewsPage.tsx:809"]);
+    expect(offenders.sort()).toEqual(["client/src/components/CameraCapture.tsx:115", "client/src/pages/GoogleReviewsPage.tsx:848"]);
     expect(src("client/src/pages/TasksPage.tsx")).toContain('variant={viewMode === "kanban" ? "selected" : "ghost"}');
     expect(src("client/src/pages/HRPage.tsx")).toContain('variant={d.isWorkDay ? "selected" : "outline"}');
   });

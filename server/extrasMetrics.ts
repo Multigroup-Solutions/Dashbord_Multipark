@@ -77,7 +77,11 @@ export function extrasCityKeys(names: readonly string[]): string[] {
 export interface ExtrasMetrics {
   period: { from: string; to: string };
   responseRate: { weekStart: string; total: number; responded: number }[];
-  cost: { planned: number; paid: number; plannedHours: number; paidHours: number };
+  /**
+   * planned/plannedHours: escala do período (inclui hoje); plannedPast*: só até
+   * ontem — é com esta que se compara o pago (44c: o ponto de hoje ainda falta).
+   */
+  cost: { planned: number; paid: number; plannedHours: number; paidHours: number; plannedPast: number; plannedPastHours: number };
   noShows: { employeeId: number; fullName: string; pending: number; confirmed: number }[];
   timeToFirstShift: { approved: number; worked: number; medianDays: number | null };
   stale: StaleExtra[];
@@ -89,7 +93,7 @@ export async function getExtrasMetrics(days = 30): Promise<ExtrasMetrics> {
   const out: ExtrasMetrics = {
     period: { from, to },
     responseRate: [],
-    cost: { planned: 0, paid: 0, plannedHours: 0, paidHours: 0 },
+    cost: { planned: 0, paid: 0, plannedHours: 0, paidHours: 0, plannedPast: 0, plannedPastHours: 0 },
     noShows: [],
     timeToFirstShift: { approved: 0, worked: 0, medianDays: null },
     stale: [],
@@ -123,6 +127,11 @@ export async function getExtrasMetrics(days = 30): Promise<ExtrasMetrics> {
   const agg = aggregateExtrasCost(costRows, rates, { dayOfRecord: (v) => (v ? lisbonDayOf(v) : ""), cityOfProject: () => null });
   for (const l of agg.plannedByLevel.values()) { out.cost.plannedHours += l.hours; out.cost.planned += l.cost; }
   for (const l of agg.realByLevel.values()) { out.cost.paidHours += l.hours; out.cost.paid += l.cost; }
+  // 44c: a escala até ontem (a de hoje ainda não foi picada) — base da comparação com o pago.
+  const past = aggregateExtrasCost({ assignments: costRows.assignments.filter((a) => a.date < to), ponto: [] }, rates, { dayOfRecord: () => "", cityOfProject: () => null });
+  for (const l of past.plannedByLevel.values()) { out.cost.plannedPastHours += l.hours; out.cost.plannedPast += l.cost; }
+  out.cost.plannedPast = Math.round(out.cost.plannedPast * 100) / 100;
+  out.cost.plannedPastHours = Math.round(out.cost.plannedPastHours * 10) / 10;
   out.cost.planned = Math.round(out.cost.planned * 100) / 100;
   out.cost.paid = Math.round(out.cost.paid * 100) / 100;
   out.cost.plannedHours = Math.round(out.cost.plannedHours * 10) / 10;

@@ -35,7 +35,13 @@ export interface ContactItem {
   photoUrl: string | null;
 }
 
-export interface KindPage { kind: ContactKind; items: ContactItem[]; hasMore: boolean; nextCursor: number | null }
+export interface KindPage {
+  kind: ContactKind; items: ContactItem[]; hasMore: boolean; nextCursor: number | null;
+  /** 44c: a leitura deste tipo falhou — não é "nenhum resultado". */
+  error?: string | null;
+  /** 44c: sem resultados porque a fonte está vazia ou por ligar (diz porquê). */
+  note?: string | null;
+}
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -44,11 +50,19 @@ const rowsOf = (res: unknown): any[] => {
 const inList = (xs: readonly (string | number)[]) => sql.join(xs.map((x) => sql`${x}`), sql`, `);
 const s = (v: unknown) => (v == null || v === "" ? null : String(v));
 
+/** Cada palavra tem de aparecer numa das colunas (por qualquer ordem). 44c. */
+function wordsCond(likes: readonly string[], cols: readonly SQL[]): SQL | null {
+  if (!likes.length || !cols.length) return null;
+  return sql`(${sql.join(likes.map((lk) => sql`(${sql.join(cols.map((c) => sql`LOWER(${c}) LIKE ${lk}`), sql` OR `)})`), sql` AND `)})`;
+}
+
 /** Condição de texto/telefone/email sobre as colunas dadas (vazia = tudo). */
 function matchCond(q: ParsedContactQuery, text: SQL[], phones: SQL[], emails: SQL[] = []): SQL {
   if (!q.text && !q.digits) return sql`1 = 1`;
   const parts: SQL[] = [];
-  for (const c of [...text, ...emails]) parts.push(sql`LOWER(${c}) LIKE ${q.like}`);
+  // 44c: "joao silva" encontra "João Pedro Silva" (antes só a expressão inteira, colada).
+  const words = wordsCond(q.likes?.length ? q.likes : [q.like], [...text, ...emails]);
+  if (words) parts.push(words);
   if (q.phoneNeedle) for (const c of phones) parts.push(sql`REGEXP_REPLACE(COALESCE(${c}, ''), '[^0-9]', '') LIKE ${`%${q.phoneNeedle}%`}`);
   return parts.length ? sql`(${sql.join(parts, sql` OR `)})` : sql`1 = 0`;
 }
@@ -63,7 +77,7 @@ async function searchClients(d: Db, k: KindQuery): Promise<ContactItem[]> {
   const q = k.q;
   const parts: SQL[] = [];
   if (q.text || q.digits) {
-    parts.push(sql`LOWER(c.displayName) LIKE ${q.like}`);
+    parts.push(wordsCond(q.likes?.length ? q.likes : [q.like], [sql`c.displayName`]) ?? sql`LOWER(c.displayName) LIKE ${q.like}`);
     parts.push(sql`c.id IN (SELECT ce.clientId FROM crm_client_emails ce WHERE ce.email LIKE ${q.like})`);
     if (q.phoneNeedle) parts.push(sql`c.id IN (SELECT cp.clientId FROM crm_client_phones cp WHERE cp.phone LIKE ${`%${q.phoneNeedle}%`})`);
     const plate = k.raw.replace(/[\s.\-_/]/g, "").toUpperCase();
@@ -198,12 +212,45 @@ export async function searchContacts(d: Db, viewer: ContactViewer, input: { q?: 
       groups.push({ kind: k.kind, items, hasMore, nextCursor: hasMore ? offset + limit : null });
     } catch (err: any) {
       if (err instanceof TRPCError) throw err;
-      // Uma fonte em falta (ex.: tabela ainda por criar) não parte a pesquisa toda.
-      groups.push({ kind: k.kind, items: [], hasMore: false, nextCursor: null });
+      // Uma fonte em falta não parte a pesquisa toda — mas diz-se que falhou (44c: antes parecia "nenhum").
+      console.warn(`[contacts] pesquisa ${k.kind}:`, String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+      groups.push({ kind: k.kind, items: [], hasMore: false, nextCursor: null, error: "Não foi possível ler esta lista agora. Tenta de novo daqui a pouco." });
     }
+  }
+  // 44c: sem resultados num tipo cuja fonte está vazia ou por ligar → explica porquê.
+  for (const g of groups) {
+    if (g.items.length || g.error || offset > 0) continue;
+    const why = await emptySourceNote(d, g.kind).catch(() => null);
+    if (why) g.note = why;
   }
   return { kinds, groups };
 }
+
+/**
+ * 44c: porque é que um tipo vem vazio, quando a culpa é da fonte (e não da
+ * pesquisa). Só para o CRM comercial e o Diretório, que podem estar vazios
+ * por natureza. null = a fonte tem dados (então é mesmo "nenhum encontrado").
+ */
+export async function emptySourceNote(d: Db, kind: ContactKind): Promise<string | null> {
+  if (kind === "crm") {
+    const n = Number(rowsOf(await d.execute(sql`SELECT COUNT(*) AS n FROM crm_contacts`))[0]?.n ?? 0);
+    return n === 0 ? EMPTY_SOURCE_NOTES.crm : null;
+  }
+  if (kind === "directory") {
+    const { loadContactsConfig } = await import("./google/contactsService");
+    const cfg = await loadContactsConfig();
+    if (!cfg.directory.enabled) return EMPTY_SOURCE_NOTES.directoryOff;
+    const n = Number(rowsOf(await d.execute(sql`SELECT COUNT(*) AS n FROM google_directory_people WHERE deletedAt IS NULL`))[0]?.n ?? 0);
+    return n === 0 ? EMPTY_SOURCE_NOTES.directoryEmpty : null;
+  }
+  return null;
+}
+
+export const EMPTY_SOURCE_NOTES = {
+  crm: "Ainda não há contactos comerciais (leads B2B) no CRM. Os clientes das reservas estão no tipo \"Cliente\".",
+  directoryOff: "O diretório da empresa não está ligado. Liga-se em Definições → Comunicação → Contactos Google (Google Workspace).",
+  directoryEmpty: "O diretório ainda não foi lido do Google. No separador Diretório, um admin pode carregar em \"Atualizar agora\".",
+} as const;
 
 // ─── Ficha ──────────────────────────────────────────────────────────────────
 

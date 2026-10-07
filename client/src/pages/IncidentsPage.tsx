@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { AccidentConfirmPanel } from "@/components/AccidentConfirmPanel";
+import { OCCURRENCE_AUTO_CLOSE_DAYS, occurrenceAutoClosedAt } from "@shared/occurrenceAutoClose";
 
 /**
  * Ocorrências = as da app Multipark, lidas AO VIVO da BD deles ("Occurrence",
@@ -37,6 +38,10 @@ const PRIORITY: Record<string, { label: string; color: string }> = {
 };
 const OPEN_BADGE = "bg-red-100 text-red-800";
 const RESOLVED_BADGE = "bg-green-100 text-green-800";
+const AUTO_CLOSED_BADGE = "bg-slate-100 text-slate-700";
+/** 44c: médias sem dinheiro, danos nem reclamação fecham sozinhas cá (lá continuam por resolver). */
+const AUTO_CLOSED_LABEL = `Fechada (${OCCURRENCE_AUTO_CLOSE_DAYS} dias)`;
+const AUTO_CLOSED_HINT = `Média, sem dinheiro, danos nem reclamação: fecha sozinha no dashboard ao fim de ${OCCURRENCE_AUTO_CLOSE_DAYS} dias. Na app Multipark continua por resolver.`;
 const PAGE = 50;
 const MAX_ROWS = 200;
 /** Ainda não há endpoint da Multipark para resolver ocorrências (ver docs/multipark-db/plano-duas-bd.md, secção D). */
@@ -47,7 +52,16 @@ type MpOccurrence = {
   createdAt: string | null; resolvedAt: string | null; createdByName: string | null; resolvedByName: string | null;
   remarks: string | null; lat: number | null; lng: number | null; attachment: string | null; attachmentUrl: string | null;
   bookingId: string | null; bookingCode: string | null; plate: string | null; parkName: string | null; parkCity: string | null;
+  /** 44c: fechada sozinha cá (média, 3 dias, sem dinheiro/danos/reclamação). */
+  autoClosed?: boolean;
 };
+
+/** Estado como se mostra: resolvida (na app), fechada sozinha (cá) ou aberta. */
+function stateBadge(o: MpOccurrence): { label: string; className: string; title?: string } {
+  if (o.resolved) return { label: "Resolvida", className: RESOLVED_BADGE };
+  if (o.autoClosed) return { label: AUTO_CLOSED_LABEL, className: AUTO_CLOSED_BADGE, title: AUTO_CLOSED_HINT };
+  return { label: "Aberta", className: OPEN_BADGE };
+}
 
 const isAccident = (o: MpOccurrence) => /acidente|sinistro|colis[aã]o|colidiu|embat|bateu|choque|capot/i.test(`${o.title} ${o.remarks ?? ""}`);
 
@@ -64,7 +78,7 @@ export default function IncidentsPage() {
     const n = Number(new URLSearchParams(window.location.search).get("id"));
     return Number.isInteger(n) && n > 0 ? n : null;
   });
-  const [status, setStatus] = useState<"all" | "open" | "resolved">("all");
+  const [status, setStatus] = useState<"all" | "open" | "resolved" | "auto_closed">("all");
   const [priority, setPriority] = useState<"all" | "LOW" | "MEDIUM" | "HIGH">("all");
   const [park, setPark] = useState("all");
   const [type, setType] = useState("all");
@@ -81,7 +95,7 @@ export default function IncidentsPage() {
   const input = useMemo(() => {
     const i: any = { limit };
     if (globalFilters.projectId !== undefined) i.projectId = globalFilters.projectId;
-    if (status !== "all") i.resolved = status === "resolved";
+    if (status !== "all") i.status = status;
     if (priority !== "all") i.priority = priority;
     if (park !== "all") i.parkId = park;
     if (type !== "all") i.type = type;
@@ -104,7 +118,7 @@ export default function IncidentsPage() {
   const exportCsv = () => {
     const headers = ["ID", "Data", "Tipo", "Estado", "Prioridade", "Matrícula", "Reserva", "Parque", "Cidade", "Criada por", "Notas", "Resolvida por", "Resolvida em"];
     const lines = rows.map(o => [
-      o.id, csvDateTime(o.createdAt), o.title, o.resolved ? "Resolvida" : "Aberta", o.priority ? PRIORITY[o.priority]?.label : "",
+      o.id, csvDateTime(o.createdAt), o.title, o.resolved ? "Resolvida" : o.autoClosed ? `Fechada sozinha (${OCCURRENCE_AUTO_CLOSE_DAYS} dias)` : "Aberta", o.priority ? PRIORITY[o.priority]?.label : "",
       o.plate, o.bookingCode ?? o.bookingId, o.parkName, o.parkCity, o.createdByName, (o.remarks ?? "").replace(/[\n\r]+/g, " "), o.resolvedByName, csvDateTime(o.resolvedAt),
     ]);
     const blob = new Blob(["﻿" + toCsv(headers, lines)], { type: "text/csv;charset=utf-8;" });
@@ -171,6 +185,12 @@ export default function IncidentsPage() {
             <Card className="p-3">
               <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4 text-red-600" /><span className="text-xs text-muted-foreground">Abertas</span></div>
               <p className="text-xl font-bold mt-1 text-red-600">{stats.open}</p>
+              {stats.autoClosed > 0 && (
+                <button type="button" className="text-[11px] text-muted-foreground hover:underline text-left" title={AUTO_CLOSED_HINT}
+                  onClick={() => setStatus(status === "auto_closed" ? "all" : "auto_closed")}>
+                  + {stats.autoClosed} fechada{stats.autoClosed === 1 ? "" : "s"} sozinha{stats.autoClosed === 1 ? "" : "s"} ({OCCURRENCE_AUTO_CLOSE_DAYS} dias)
+                </button>
+              )}
             </Card>
             <Card className="p-3">
               <div className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-green-600" /><span className="text-xs text-muted-foreground">Resolvidas</span></div>
@@ -204,11 +224,12 @@ export default function IncidentsPage() {
           <div className="flex items-center gap-2">
             <Label>Estado:</Label>
             <Select value={status} onValueChange={(v) => setStatus(v as any)}>
-              <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>
                 <SelectItem value="open">Abertas</SelectItem>
                 <SelectItem value="resolved">Resolvidas</SelectItem>
+                <SelectItem value="auto_closed">Fechadas sozinhas ({OCCURRENCE_AUTO_CLOSE_DAYS} dias)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -291,6 +312,11 @@ function ResolveButton({ size = "sm" }: { size?: "sm" | "default" }) {
   );
 }
 
+function StateBadge({ occ }: { occ: MpOccurrence }) {
+  const b = stateBadge(occ);
+  return <Badge className={b.className} title={b.title}>{b.label}</Badge>;
+}
+
 function OccurrenceCard({ occ, accidentConfirmed, onOpen }: { occ: MpOccurrence; accidentConfirmed?: boolean; onOpen: () => void }) {
   return (
     <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={onOpen}>
@@ -300,7 +326,7 @@ function OccurrenceCard({ occ, accidentConfirmed, onOpen }: { occ: MpOccurrence;
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-medium">{occ.title}</span>
               {accidentConfirmed ? <Badge className="bg-red-700 text-white">Acidente confirmado</Badge> : isAccident(occ) && <Badge className="bg-red-600 text-white">⚠ Acidente</Badge>}
-              <Badge className={occ.resolved ? RESOLVED_BADGE : OPEN_BADGE}>{occ.resolved ? "Resolvida" : "Aberta"}</Badge>
+              <StateBadge occ={occ} />
               {occ.priority && <Badge className={PRIORITY[occ.priority]?.color}>{PRIORITY[occ.priority]?.label}</Badge>}
             </div>
             {occ.remarks && <p className="text-sm text-muted-foreground line-clamp-3 break-words">{occ.remarks}</p>}
@@ -325,7 +351,7 @@ function OccurrenceCard({ occ, accidentConfirmed, onOpen }: { occ: MpOccurrence;
                 <ExternalLink className="w-3 h-3 mr-1" /> Ver na Multipark
               </Button>
             )}
-            {!occ.resolved && <ResolveButton />}
+            {!occ.resolved && !occ.autoClosed && <ResolveButton />}
           </div>
         </div>
       </CardContent>
@@ -343,7 +369,7 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 flex-wrap">
             {occ ? occ.title : "Ocorrência"}
-            {occ && <Badge className={occ.resolved ? RESOLVED_BADGE : OPEN_BADGE}>{occ.resolved ? "Resolvida" : "Aberta"}</Badge>}
+            {occ && <StateBadge occ={occ} />}
             {occ?.priority && <Badge className={PRIORITY[occ.priority]?.color}>{PRIORITY[occ.priority]?.label}</Badge>}
           </DialogTitle>
         </DialogHeader>
@@ -382,7 +408,15 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
                 <span><Paperclip className="w-3 h-3 inline mr-1" />Tem anexo — abrir na app Multipark</span>
               ) : null}
             </div>
-            {!occ.resolved && (
+            {occ.autoClosed && (
+              <div className="rounded border bg-muted/50 p-3 text-xs text-muted-foreground flex items-start gap-2">
+                <Archive className="w-4 h-4 shrink-0" />
+                <span>
+                  Fechada sozinha{occurrenceAutoClosedAt(occ.createdAt) ? ` a ${fmtPTDateTime(occurrenceAutoClosedAt(occ.createdAt)!)}` : ""}: {AUTO_CLOSED_HINT}
+                </span>
+              </div>
+            )}
+            {!occ.resolved && !occ.autoClosed && (
               <div className="rounded border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900 flex items-start gap-2">
                 <Lock className="w-4 h-4 shrink-0" />
                 <span>Resolver aqui ainda não é possível: {RESOLVE_PENDING_HINT} Quando for resolvida lá, aparece resolvida aqui.</span>
@@ -396,7 +430,7 @@ function OccurrenceDialog({ id, projectId, onClose }: { id: string; projectId?: 
           {occ?.bookingId && (
             <Button size="sm" variant="outline" onClick={() => openInMultipark(occ.bookingId)}><ExternalLink className="w-4 h-4 mr-1" /> Ver reserva na Multipark</Button>
           )}
-          {occ && !occ.resolved && <ResolveButton />}
+          {occ && !occ.resolved && !occ.autoClosed && <ResolveButton />}
           <Button size="sm" onClick={onClose}>Fechar</Button>
         </DialogFooter>
       </DialogContent>

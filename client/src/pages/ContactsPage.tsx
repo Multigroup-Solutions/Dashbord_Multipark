@@ -149,6 +149,9 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
     { enabled: !all, getNextPageParam: (last) => last.groups[0]?.nextCursor ?? undefined, initialCursor: 0 },
   );
   const oneItems = useMemo(() => (oneQ.data?.pages ?? []).flatMap((p) => p.groups[0]?.items ?? []) as Item[], [oneQ.data]);
+  // 44c: leitura falhada ≠ "nenhum"; fonte vazia (CRM comercial, Diretório) diz porquê.
+  const oneFirst = oneQ.data?.pages?.[0]?.groups?.[0] as { error?: string | null; note?: string | null } | undefined;
+  const allFailed = (allQ.data?.groups ?? []).filter((g) => (g as { error?: string | null }).error).map((g) => CONTACT_KIND_LABELS[g.kind as ContactKind]);
   const [view, setView] = useViewPref("contacts", "list");
 
   return (
@@ -172,6 +175,7 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
         <div className="space-y-3">
           {allQ.isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           {allQ.data && allQ.data.groups.every((g) => !g.items.length) && <p className="text-sm text-muted-foreground">Nenhum contacto encontrado.</p>}
+          {allFailed.length > 0 && <p className="text-sm text-red-700 dark:text-red-300">Não foi possível ler agora: {allFailed.join(", ")}. Os outros tipos estão completos.</p>}
           {(allQ.data?.groups ?? []).filter((g) => g.items.length).map((g) => (
             <Card key={g.kind}>
               <CardContent className="p-2">
@@ -190,7 +194,11 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
           <CardContent className="p-2">
             {oneQ.isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground m-2" />}
             {oneQ.error && <p className="text-sm text-red-700 p-2">{oneQ.error.message}</p>}
-            {!oneQ.isLoading && !oneItems.length && !oneQ.error && <p className="text-sm text-muted-foreground p-2">Nenhum contacto encontrado.</p>}
+            {!oneQ.isLoading && !oneItems.length && !oneQ.error && (
+              oneFirst?.error ? <p className="text-sm text-red-700 dark:text-red-300 p-2">{oneFirst.error}</p>
+                : oneFirst?.note ? <p className="text-sm text-muted-foreground p-2">{oneFirst.note}</p>
+                  : <p className="text-sm text-muted-foreground p-2">Nenhum contacto encontrado.</p>
+            )}
             <ContactItems items={oneItems} view={view} onOpen={onOpen} />
             <LoadMore hasMore={!!oneQ.hasNextPage} loading={oneQ.isFetchingNextPage} onMore={() => oneQ.fetchNextPage()} />
           </CardContent>

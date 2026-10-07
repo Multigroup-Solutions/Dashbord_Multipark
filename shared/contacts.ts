@@ -535,6 +535,11 @@ export interface ParsedContactQuery {
   text: string;
   /** LIKE seguro (%, _ e \ escapados). */
   like: string;
+  /**
+   * 44c: um LIKE por palavra (no máximo 5) — cada palavra tem de aparecer,
+   * por qualquer ordem: "joao silva" encontra "João Pedro Silva".
+   */
+  likes: string[];
   digits: string;
   /** Para telefones: os últimos 9 dígitos (sem indicativo) quando há 9+. */
   phoneNeedle: string;
@@ -546,9 +551,12 @@ export function parseContactQuery(raw: string | null | undefined): ParsedContact
   const s = String(raw ?? "").trim().slice(0, 120);
   const text = normalizeSearchText(s);
   const digits = s.replace(/\D+/g, "").replace(/^00/, "");
+  const esc = (x: string) => x.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const words = s.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 5);
   return {
     text,
-    like: `%${s.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`,
+    like: `%${esc(s.toLowerCase())}%`,
+    likes: words.map((w) => `%${esc(w)}%`),
     digits,
     phoneNeedle: digits.length >= 9 ? digits.slice(-9) : digits.length >= 3 ? digits : "",
     email: emailKey(s),

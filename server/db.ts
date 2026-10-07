@@ -2272,7 +2272,24 @@ export async function getGoogleReviews(filters?: { rating?: number; status?: str
   if (filters?.status) conditions.push(eq(googleReviews.status, filters.status as any));
   if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
   const where = conditions.length > 0 ? and(...conditions) : undefined;
-  return db.select().from(googleReviews).where(where).orderBy(desc(googleReviews.createdAt));
+  return withReviewLocationTitles(await db.select().from(googleReviews).where(where).orderBy(desc(googleReviews.createdAt)));
+}
+
+/**
+ * 44c: título do perfil Google de cada crítica (para achar a marca das que
+ * não têm parque — shared/reviewParks.ts). Falha → sem título (nunca parte a lista).
+ */
+async function withReviewLocationTitles<T extends { googleLocationId: number | null }>(rows: T[]): Promise<Array<T & { locationTitle: string | null }>> {
+  const ids = [...new Set(rows.map((r) => r.googleLocationId).filter((x): x is number => x != null))];
+  const titles = new Map<number, string>();
+  if (ids.length) {
+    try {
+      const db = await getDb();
+      const [res] = (await db!.execute(sql`SELECT id, title FROM google_business_locations WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`)) as any;
+      for (const r of (res as any[]) ?? []) if (r.title) titles.set(Number(r.id), String(r.title));
+    } catch { /* sem títulos */ }
+  }
+  return rows.map((r) => ({ ...r, locationTitle: r.googleLocationId != null ? titles.get(r.googleLocationId) ?? null : null }));
 }
 
 export async function getGoogleReviewById(id: number) {
@@ -2290,7 +2307,10 @@ export async function getGoogleReviewStats(filters?: { projectId?: number }) {
   const db = await getDb(); if (!db) return { total: 0, avg: 0, star1: 0, star2: 0, star3: 0, star4: 0, star5: 0, unrated: 0, pending: 0, responded: 0, complaints: 0 };
   const conditions = [projectScope(googleReviews.projectId)];
   if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
-  const all = await db.select().from(googleReviews).where(and(...conditions));
+  // 44c: o lixo (sem parque nem marca) não conta nos números.
+  const { isTrashReview } = await import("../shared/reviewParks");
+  const projectNodes = (await getProjects()) as any[];
+  const all = (await withReviewLocationTitles(await db.select().from(googleReviews).where(and(...conditions)))).filter((r) => !isTrashReview(r as any, projectNodes));
   const total = all.length;
   // Média só sobre críticas COM estrelas (rating 0 = classificação desconhecida,
   // ex. importadas por email antes do parser — não pode puxar a média para baixo).
