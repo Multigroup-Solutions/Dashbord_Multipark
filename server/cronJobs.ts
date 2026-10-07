@@ -437,6 +437,17 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const r = await autoCloseStaleCheckIns();
         if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
       });
+      // Terminal no ponto (interruptor PONTO_TERMINAL; desligado → nada): os
+      // troços "por confirmar" dos últimos 7 dias voltam a ler a Multipark (só
+      // leitura) — terminal até à última recolha/entrega feita pelo extra no
+      // troço ("partial"). Sem ações → ficam para o RH. Nada se apaga.
+      await step("terminal-pending", "terminal por confirmar", async () => {
+        const { retryPendingTerminalShifts } = await import("./pontoTerminal");
+        const r = await retryPendingTerminalShifts({ deadlineAt: cap(15_000) });
+        if (!r.skipped && r.pending > 0) {
+          console.log(`[daily-ops] terminal por confirmar: ${r.resolved} de ${r.pending} até à última recolha/entrega (${r.noActions} sem ações, ${r.noAgent} sem agente ligado${r.deferred ? `, ${r.deferred} para amanhã` : ""}${r.readFailed ? " — Multipark não lida" : ""})`);
+        }
+      });
       // RH: "possíveis faltas" de ontem (pendentes de validação; não
       // bloqueiam). A regra documental passou para o trabalho semanal
       // rh-docs-weekly (segunda-feira, rhDocsWeeklyCron).

@@ -2200,9 +2200,12 @@ export const timeRecords = mysqlTable("time_records", {
 	locationName: varchar({ length: 256 }),
 	// 0555 — terminal no ponto (aeroporto), shared/pontoTerminal.ts:
 	// atAirport 1/0/NULL (GPS no aeroporto da cidade do extra); terminalStatus
-	// na entrada "start", na saída "auto" | "pending" | "confirmed" | "rejected"
+	// na entrada "start", na saída "auto" | "pending" | "partial" | "confirmed" | "rejected"
 	atAirport: tinyint(),
 	terminalStatus: varchar({ length: 16 }),
+	// 0575 — "partial": o terminal conta até à última recolha/entrega do extra
+	// na Multipark dentro do troço (UTC); o resto da saída é hora normal
+	terminalUntil: datetime({ mode: 'string' }),
 	terminalReviewedById: int(),
 	terminalReviewedAt: timestamp({ mode: 'string' }),
 	terminalNote: varchar({ length: 255 }),

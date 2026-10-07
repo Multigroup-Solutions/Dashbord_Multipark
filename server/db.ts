@@ -3974,7 +3974,7 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   if (!db) return { closed: 0 };
   // Último registo de cada colaborador; se for check_in com >16h, fecha.
   const [rows] = await db.execute(sql`
-    SELECT t.id, t.employeeId, t.recordedAt
+    SELECT t.id, t.employeeId, t.recordedAt, t.terminalStatus
     FROM time_records t
     JOIN (
       SELECT employeeId, MAX(recordedAt) AS lastAt
@@ -3982,15 +3982,25 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
     ) last ON last.employeeId = t.employeeId AND last.lastAt = t.recordedAt
     WHERE t.type = 'check_in' AND t.recordedAt < DATE_SUB(NOW(), INTERVAL 16 HOUR)
   `) as any;
+  // Terminal no ponto (interruptor PONTO_TERMINAL): a entrada aberta era de
+  // terminal → a saída esquecida fica "por confirmar" (o trabalho diário tenta
+  // logo a seguir "até à última recolha/entrega"; senão decide o RH).
+  let terminalOn: boolean | null = null;
   let closed = 0;
   for (const r of rows as any[]) {
     const outAt = new Date(new Date(r.recordedAt).getTime() + 12 * 3600000);
+    let terminalStatus: "pending" | null = null;
+    if (r.terminalStatus === "start") {
+      if (terminalOn === null) terminalOn = await (await import("./pontoTerminal")).pontoTerminalEnabled();
+      if (terminalOn) terminalStatus = "pending";
+    }
     await db.insert(timeRecords).values({
       employeeId: Number(r.employeeId),
       type: "check_out",
       recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
       hoursWorked: "12.00",
       notes: "[SUSPEITO] check-out automático — entrada aberta há mais de 16h, cortado a 12h",
+      ...(terminalStatus ? { terminalStatus } : {}),
     } as any);
     closed++;
   }

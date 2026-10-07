@@ -15,9 +15,11 @@
  *  - extras: taxa por nível; nível sem taxa → aviso (não cai em silêncio para
  *    a mais baixa);
  *  - extras, terminal (aeroporto, interruptor PONTO_TERMINAL): os troços de
- *    terminal pagam à taxa do nível SEGUINTE (shared/pontoTerminal.ts); os
- *    "por confirmar" pagam como normais até o RH confirmar. Desligado → igual
- *    a antes;
+ *    terminal pagam à taxa do nível SEGUINTE (shared/pontoTerminal.ts); o
+ *    "partial" (saída fora do aeroporto) divide-se — terminal até à última
+ *    recolha/entrega, o resto normal (terminalSplitOfShift, a mesma do custo
+ *    dos extras); os "por confirmar" pagam como normais até o RH confirmar.
+ *    Desligado → igual a antes;
  *  - IRS/TSU do trabalhador: ESTIMATIVA rotulada (não é apuramento fiscal).
  */
 import { countableShifts, type Shift } from "./shifts";
@@ -168,7 +170,7 @@ export function computeEmployeeMonth(inp: EmployeeMonthInput): EmployeeMonthResu
       warnings.push(`nível de extra ${level} sem taxa configurada — 0 € (configurar em Taxas Extra)`);
       hourlyRate = 0;
     } else hourlyRate = own;
-    // Terminal (aeroporto): troços pagos ao nível seguinte. Desligado → tudo normal.
+    // Terminal (aeroporto): troços (ou a parte "partial") pagos ao nível seguinte. Desligado → tudo normal.
     const split = splitTerminalHours(countable, !!inp.terminalEnabled);
     terminalHours = split.terminalHours;
     terminalPendingHours = split.pendingHours;

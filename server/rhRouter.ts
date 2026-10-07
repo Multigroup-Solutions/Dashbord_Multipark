@@ -1531,9 +1531,11 @@ export const rhRouter = router({
         // Inserção ATÓMICA (linha do colaborador bloqueada) + estado de
         // revisão: um check-out cortado a 12h nasce "suspicious" e não paga
         // até ser aprovado.
+        const outAtDb = outAt.toISOString().slice(0, 19).replace("T", " ");
+        let outRecordId = 0;
         try {
-          await insertTimeRecordAtomic(input.employeeId, "check_out", {
-            recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
+          ({ id: outRecordId } = await insertTimeRecordAtomic(input.employeeId, "check_out", {
+            recordedAt: outAtDb,
             photoUrl,
             photoKey,
             latitude: input.latitude ?? null,
@@ -1551,9 +1553,23 @@ export const rhRouter = router({
               zelloOfflineMinutes: zello.offlineMinutes,
               zelloOnlineMinutes: zello.onlineMinutes,
             } : {}),
-          });
+          }));
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+        }
+        // Terminal fechado FORA do aeroporto (ou sem GPS / esquecido), Jorge 7 out
+        // 2026: conta até à ÚLTIMA recolha/entrega dele na Multipark dentro do
+        // troço ("partial"). O registo já está gravado como "pending": tenta-se
+        // já (teto curto) e, se a Multipark não responder ou não houver ações,
+        // fica "pending" — o trabalho diário repete e o RH decide.
+        let terminalPartial: { until: string; label: string } | null = null;
+        if (terminalOut.terminalStatus === "pending" && outRecordId > 0) {
+          const { resolvePendingAtCheckout } = await import("./pontoTerminal");
+          const res = await resolvePendingAtCheckout({ recordId: outRecordId, employeeId: input.employeeId, inAt: String(last.recordedAt), outAt: outAtDb });
+          if (res.status === "partial") {
+            const { terminalPartialLabel } = await import("../shared/pontoTerminal");
+            terminalPartial = { until: res.terminalUntil, label: terminalPartialLabel(res.terminalUntil) };
+          }
         }
         // Fecha o check-in de PDA da pessoa (o aparelho fica livre para o
         // próximo turno — quando outro picar o ponto, a app troca sozinha)
@@ -1564,8 +1580,9 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
         }
-        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalOut.terminal === "auto" ? " · troço de terminal" : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}` });
-        return { success: true, hoursWorked, zello, terminal: terminalOut.terminal === "auto" || terminalOut.terminal === "pending" ? terminalOut.terminal : null };
+        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalOut.terminal === "auto" ? " · troço de terminal" : terminalPartial ? ` · ${terminalPartial.label.toLowerCase()}` : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}` });
+        const terminalResult: "auto" | "pending" | "partial" | null = terminalPartial ? "partial" : terminalOut.terminal === "auto" || terminalOut.terminal === "pending" ? terminalOut.terminal : null;
+        return { success: true, hoursWorked, zello, terminal: terminalResult, terminalUntil: terminalPartial?.until ?? null, terminalLabel: terminalPartial?.label ?? null };
       }),
 
     // ── Geofence por centro de custos (raio de picagem) ───────────────────
