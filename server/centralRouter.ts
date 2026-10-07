@@ -102,6 +102,32 @@ export const centralRouter = router({
       return { username, secret };
     }),
 
+  // ── 40a: Xsi da One Net ──
+  /** Configuração do Xsi e o último "Testar" (nunca a palavra-passe). */
+  xsiStatus: superOnly.query(async () => {
+    const { xsiConfigView } = await import("./centralXsi");
+    const { encryptionKeyInfo } = await import("./integrations/googleAds/crypto");
+    let keySource: "env" | "derived" | "none" | "invalid" = "none";
+    try { keySource = encryptionKeyInfo().source; } catch { keySource = "invalid"; }
+    return { ...(await xsiConfigView()), keySource };
+  }),
+
+  xsiSave: superOnly
+    .input(z.object({ baseUrl: z.string().max(300), userId: z.string().max(120), readUserId: z.string().max(120).nullable().optional(), password: z.string().max(200).nullable().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const { saveXsiConfig } = await import("./centralXsi");
+      const r = await saveXsiConfig(input, ctx.user.id);
+      if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "central_xsi", details: `Xsi da One Net configurado${input.password ? " (palavra-passe nova)" : ""}` }).catch(() => null);
+      return { ok: true };
+    }),
+
+  /** Lê o perfil, o diretório e os registos de chamadas no Xsi; não escreve nada lá. */
+  xsiTest: superOnly.mutation(async () => {
+    const { testXsi } = await import("./centralXsi");
+    return testXsi();
+  }),
+
   revokeAccount: superOnly
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {

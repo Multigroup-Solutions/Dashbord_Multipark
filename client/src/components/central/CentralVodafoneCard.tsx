@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { Copy, KeyRound, PhoneCall, PhoneIncoming, PhoneMissed, PhoneOutgoing } from "lucide-react";
+import { CentralXsiSection } from "./CentralXsiSection";
 
 const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => toast.success("Copiado."), () => toast.error("Não deu para copiar."));
 // 39e: a consola manda a duração em minutos — 0 é "menos de 1 min", não "0 s"
@@ -125,6 +126,9 @@ export function CentralVodafoneCard() {
           </div>
         </div>
 
+        {/* 40a: Xsi da One Net (todas as linhas, telemóveis incluídos) */}
+        <CentralXsiSection />
+
         <div className="space-y-1">
           <div className="text-xs font-medium">Últimas chamadas registadas</div>
           <div className="text-[11px] text-muted-foreground">As internas (Equipa e Interna) ficam registadas mas não contam no Desempenho, exceto o supervisor a ligar aos extras.</div>
@@ -152,7 +156,7 @@ export function CentralVodafoneCard() {
 
         <div className="space-y-1">
           <Button size="sm" variant="ghost" className="h-7 px-0 text-xs underline" onClick={() => setShowRequests((v) => !v)}>
-            {showRequests ? "Esconder" : "Ver"} o que a consola pediu ({q.data?.requests.length ?? 0})
+            {showRequests ? "Esconder" : "Ver"} o que a consola pediu e o que o Xsi respondeu ({q.data?.requests.length ?? 0})
           </Button>
           {showRequests && (
             <div className="divide-y rounded-md border max-h-80 overflow-auto font-mono text-[11px]">
