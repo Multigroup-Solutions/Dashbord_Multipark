@@ -51,6 +51,8 @@ import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
 import ComunicacaoPage from "./pages/ComunicacaoPage";
+import CentralPage from "./pages/CentralPage";
+import DrivePage from "./pages/DrivePage";
 import ExtraLeadsPage from "./pages/ExtraLeadsPage";
 import ProjectCostsDashboard from "./pages/ProjectCostsDashboard";
 import DashboardPage from "./pages/DashboardPage";
@@ -284,6 +286,13 @@ function Router() {
       </Route>
       <Route path="/comunicacao">
         {() => (<DashboardLayout><ComunicacaoPage key="partilhadas" /></DashboardLayout>)}
+      </Route>
+      {/* Lote 45: Central (as minhas chamadas) e Drive (atalhos) na Comunicação */}
+      <Route path="/central">
+        {() => (<DashboardLayout><CentralPage /></DashboardLayout>)}
+      </Route>
+      <Route path="/drive">
+        {() => (<DashboardLayout><DrivePage /></DashboardLayout>)}
       </Route>
       <Route path="/passagem-turno">
         {() => (<DashboardLayout><ShiftHandoverPage /></DashboardLayout>)}

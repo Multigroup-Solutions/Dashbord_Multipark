@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Search } from "lucide-react";
-import { getFilteredHubGroups } from "@/components/DashboardLayout";
+import { getFilteredHubGroups, openMenuItem } from "@/components/DashboardLayout";
 
 const foldText = (v: string) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
@@ -59,7 +59,7 @@ export default function ModulesPage() {
               <button
                 key={m.path + m.label}
                 type="button"
-                onClick={() => navigate(m.path)}
+                onClick={() => openMenuItem(m, navigate)}
                 className="group flex flex-col items-start gap-3 bg-white border border-slate-200 rounded-[14px] p-4 md:p-[18px] text-left shadow-[0_1px_2px_rgba(12,31,63,0.05)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_rgba(12,31,63,0.10)] hover:border-primary cursor-pointer"
               >
                 <span className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">

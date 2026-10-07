@@ -199,3 +199,25 @@ export function sugarSearchQuery(input: unknown): SugarSearch | null {
   if (t.replace(/[^\p{L}]/gu, "").length >= 3 && !/\d{7,}/.test(t)) return { kind: "name", text: t.slice(0, 60) };
   return null;
 }
+
+// ─── Lote 45: as minhas chamadas ────────────────────────────────────────────
+
+/** Recebidas, feitas e tempo total (internas à parte). PURA. */
+export function centralCallTotals(calls: ReadonlyArray<{ direction: "in" | "out"; durationS: number | null; contact?: { kind?: string } | null }>): { in: number; out: number; internal: number; durationS: number } {
+  const t = { in: 0, out: 0, internal: 0, durationS: 0 };
+  for (const c of calls) {
+    if (c.direction === "out") t.out++; else t.in++;
+    if (c.contact?.kind === "Interna") t.internal++;
+    t.durationS += Math.max(0, Number(c.durationS ?? 0) || 0);
+  }
+  return t;
+}
+
+/** "menos de 1 min", "3 min", "1 h 05 min" (a consola só manda minutos). PURA. */
+export function formatCallDuration(s: number | null | undefined): string {
+  if (s == null || !Number.isFinite(s)) return "—";
+  if (s < 60) return "menos de 1 min";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
