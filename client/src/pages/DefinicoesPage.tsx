@@ -210,6 +210,11 @@ function SystemStatusCard() {
             </div>
           );
         })}
+              {(q.data?.retired?.length ?? 0) > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            Retirados (já não correm; histórico guardado, fora da lista e dos alertas): {q.data!.retired.join(", ")}.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
