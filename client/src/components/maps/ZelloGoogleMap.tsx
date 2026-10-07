@@ -172,7 +172,7 @@ export function ZelloGoogleMap({ drivers }: { drivers: DriverMapPosition[] }) {
         <span className="text-xs text-muted-foreground">Google Maps · GPS Zello</span>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" disabled={!map || status !== "ready" || !drivers.length} onClick={() => map && fitDrivers(map, drivers)}>Ver todos</Button>
-          <Button size="sm" variant={traffic ? "secondary" : "outline"} aria-pressed={traffic} disabled={!map || status !== "ready"} onClick={() => setTraffic((v) => !v)}>Trânsito</Button>
+          <Button size="sm" variant={traffic ? "selected" : "outline"} aria-pressed={traffic} disabled={!map || status !== "ready"} onClick={() => setTraffic((v) => !v)}>Trânsito</Button>
         </div>
       </div>
       <div className="relative">
