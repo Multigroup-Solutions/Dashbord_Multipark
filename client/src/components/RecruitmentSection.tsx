@@ -5,6 +5,13 @@
  * gestão da página Disponibilidade. Melhorias sobre a versão original (que só
  * permitia responder): abrir o email completo, ver/descarregar anexos
  * recebidos, notas internas por candidato e anexos na resposta.
+ *
+ * 41d (Jorge, 7 out 2026: "ver o que não é recrutamento e mandar para o lixo…
+ * não conseguimos tirar nada daí, fica aí para sempre"): três separadores —
+ * Por tratar, Prontas e Lixo. O que não é candidatura (avisos de entrega,
+ * respostas automáticas, no-reply…) vai sozinho para o Lixo. "Pronta" e
+ * "Lixo" tiram da lista; responder marca como pronta; tudo tem "Desfazer" e
+ * "Repor". Nada se apaga.
  */
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -14,7 +21,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Mail, Users, Phone, Calendar, Paperclip, StickyNote, X, Loader2, Eye } from "lucide-react";
+import { Mail, Users, Phone, Calendar, Paperclip, StickyNote, X, Loader2, Eye, CheckCircle2, Trash2, RotateCcw } from "lucide-react";
+import { RECRUITMENT_STATE_LABELS, type RecruitmentState } from "@shared/recruitmentEmails";
 import { toast } from "sonner";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -43,7 +51,11 @@ function fmtSize(bytes?: number): string {
 
 export function RecruitmentSection() {
   const q = trpc.rh.recruitmentEmails.useQuery();
-  const emails = q.data ?? [];
+  const allEmails = q.data ?? [];
+  const [tab, setTab] = useState<RecruitmentState>("open");
+  const counts = { open: 0, done: 0, trash: 0 } as Record<RecruitmentState, number>;
+  for (const e of allEmails as any[]) counts[(e.state ?? "open") as RecruitmentState]++;
+  const emails = (allEmails as any[]).filter((e) => (e.state ?? "open") === tab);
   const { isLoading, refetch } = q;
   const { user } = useAuth();
   // 18b: o botão só aparece a quem o servidor deixa (antes dava "Acesso não autorizado").
@@ -60,12 +72,33 @@ export function RecruitmentSection() {
   const [uploading, setUploading] = useState(false);
   const [notesDraft, setNotesDraft] = useState("");
 
+  const canEdit = !!user && can(user as any, "leads_extras", "edit");
+  const setState = trpc.rh.setRecruitmentState.useMutation({
+    onSuccess: () => refetch(),
+    onError: (e) => toast.error(e.message || "Não deu para mudar"),
+  });
+  /** Muda de sítio e dá "Desfazer" (volta ao sítio de onde saiu). */
+  const move = (e: any, state: RecruitmentState) => {
+    const from: RecruitmentState = e.state ?? "open";
+    setState.mutate({ ids: [e.id], state }, {
+      onSuccess: () => {
+        const msg = state === "done" ? "Marcado como pronto — saiu de Por tratar." : state === "trash" ? "Foi para o Lixo." : "Voltou a Por tratar.";
+        toast.success(msg, { action: { label: "Desfazer", onClick: () => setState.mutate({ ids: [e.id], state: from }) } });
+      },
+    });
+  };
+
   const reply = trpc.rh.replyRecruitment.useMutation({
-    onSuccess: (r: any) => {
-      toast.success(r?.inviteLink ? "Resposta enviada com link de registo" : "Resposta enviada");
+    onSuccess: (r: any, vars) => {
+      const sent = r?.inviteLink ? "Resposta enviada com link de registo" : "Resposta enviada";
+      const id = vars.emailId;
+      if (r?.markedDone && id) {
+        toast.success(`${sent} — o email passou a Pronto.`, { action: { label: "Desfazer", onClick: () => setState.mutate({ ids: [id], state: "open" }) } });
+      } else toast.success(sent);
       setReplyFor(null);
       setReplyBody("");
       setReplyFiles([]);
+      refetch();
     },
     onError: (e) => toast.error(e.message || "Falha ao enviar"),
   });
@@ -133,7 +166,7 @@ export function RecruitmentSection() {
 
   if (isLoading) return <div className="text-center py-12 text-muted-foreground">A carregar emails de recrutamento...</div>;
   if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os emails de recrutamento" />;
-  if (!emails.length)
+  if (!allEmails.length)
     return (
       <div className="text-center py-12 text-muted-foreground">
         <Mail className="w-12 h-12 mx-auto mb-3 opacity-30" />
@@ -149,14 +182,29 @@ export function RecruitmentSection() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{emails.length} email(s) recebido(s)</p>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div role="tablist" aria-label="Emails de recrutamento" className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-sm">
+          {(["open", "done", "trash"] as RecruitmentState[]).map((k) => (
+            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+              className={`rounded-md px-3 py-1.5 ${tab === k ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+              {RECRUITMENT_STATE_LABELS[k]} <span className="tabular-nums text-muted-foreground">{counts[k]}</span>
+            </button>
+          ))}
+        </div>
         {canSync && (
           <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
             <Mail className="w-4 h-4 mr-2" />{sync.isPending ? "A sincronizar…" : "Sincronizar emails"}
           </Button>
         )}
       </div>
+      {tab === "trash" && emails.length > 0 && (
+        <p className="text-xs text-muted-foreground">O que não é candidatura (avisos de entrega, respostas automáticas, remetentes "no-reply", respostas à disponibilidade) vem para aqui sozinho. Nada se apaga: <b>Repor</b> devolve-o a Por tratar.</p>
+      )}
+      {!emails.length && (
+        <div className="text-center py-10 text-sm text-muted-foreground">
+          {tab === "open" ? "Nada por tratar. 👌" : tab === "done" ? "Ainda não há emails prontos." : "O lixo está vazio."}
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3">
         {emails.map((e: any) => {
           const atts = parseAttachments(e.attachmentsJson);
@@ -174,6 +222,7 @@ export function RecruitmentSection() {
                       {e.notes && (
                         <Badge variant="outline" className="gap-1 border-amber-300 text-amber-700"><StickyNote className="w-3 h-3" />notas</Badge>
                       )}
+                      {e.autoTrash && <Badge variant="outline" className="text-muted-foreground" title="Não parece uma candidatura: veio para o lixo sozinho. Repor devolve-o.">não é candidatura</Badge>}
                     </div>
                     <div className="text-sm text-muted-foreground mt-1 flex items-center gap-3 flex-wrap">
                       <span className="flex items-center gap-1"><Users className="w-3 h-3" />{e.clientName || e.fromName || "Desconhecido"}</span>
@@ -187,9 +236,12 @@ export function RecruitmentSection() {
                     <Button size="sm" variant="outline" onClick={(ev) => { ev.stopPropagation(); openDetail(e); }}>
                       <Eye className="w-4 h-4 mr-1" />Abrir
                     </Button>
-                    <Button size="sm" onClick={(ev) => { ev.stopPropagation(); openReply(e); }} disabled={!(e.clientEmail || e.fromEmail)}>
-                      <Mail className="w-4 h-4 mr-1" />Responder
-                    </Button>
+                    {tab !== "trash" && (
+                      <Button size="sm" onClick={(ev) => { ev.stopPropagation(); openReply(e); }} disabled={!(e.clientEmail || e.fromEmail)}>
+                        <Mail className="w-4 h-4 mr-1" />Responder
+                      </Button>
+                    )}
+                    {canEdit && <StateButtons e={e} onMove={move} busy={setState.isPending} />}
                   </div>
                 </div>
               </CardContent>
@@ -255,7 +307,8 @@ export function RecruitmentSection() {
               </div>
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="flex-wrap gap-2">
+            {canEdit && detail && <StateButtons e={detail} onMove={(e, st) => { setDetail(null); move(e, st); }} busy={setState.isPending} inline />}
             <Button variant="outline" onClick={() => setDetail(null)}>Fechar</Button>
             <Button onClick={() => { const d = detail; setDetail(null); openReply(d); }} disabled={!(detail?.clientEmail || detail?.fromEmail)}>
               <Mail className="w-4 h-4 mr-2" />Responder
@@ -308,6 +361,7 @@ export function RecruitmentSection() {
             <Button
               onClick={() => reply.mutate({
                 to: replyTo, subject: replySubject, body: replyBody, fromAlias: replyFor?.alias,
+                emailId: typeof replyFor?.id === "number" ? replyFor.id : undefined,
                 includeRegisterLink: canInvite && includeLink,
                 candidateName: replyFor?.clientName || replyFor?.fromName || undefined,
                 origin: window.location.origin,
@@ -319,6 +373,31 @@ export function RecruitmentSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/** 41d: Pronta / Lixo / Repor — o que faz sentido em cada separador. */
+function StateButtons({ e, onMove, busy, inline }: { e: any; onMove: (e: any, state: RecruitmentState) => void; busy: boolean; inline?: boolean }) {
+  const state: RecruitmentState = e.state ?? "open";
+  const stop = (fn: () => void) => (ev: React.MouseEvent) => { ev.stopPropagation(); fn(); };
+  return (
+    <div className={inline ? "flex flex-wrap gap-2 mr-auto" : "flex flex-col gap-1"}>
+      {state === "open" && (
+        <Button size="sm" variant="outline" disabled={busy} onClick={stop(() => onMove(e, "done"))} title="Já tratei: sai de Por tratar (Repor devolve-o)">
+          <CheckCircle2 className="w-4 h-4 mr-1" />Pronta
+        </Button>
+      )}
+      {state !== "trash" && (
+        <Button size="sm" variant="ghost" className="text-muted-foreground" disabled={busy} onClick={stop(() => onMove(e, "trash"))} title="Não é candidatura: vai para o Lixo (nada se apaga)">
+          <Trash2 className="w-4 h-4 mr-1" />Lixo
+        </Button>
+      )}
+      {state !== "open" && (
+        <Button size="sm" variant="outline" disabled={busy} onClick={stop(() => onMove(e, "open"))} title="Volta a Por tratar">
+          <RotateCcw className="w-4 h-4 mr-1" />Repor
+        </Button>
+      )}
     </div>
   );
 }
