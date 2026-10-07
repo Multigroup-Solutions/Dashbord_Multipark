@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { fmtPTDate, fmtPTDateTime, fmtPTTime } from "@/lib/lisbonTime";
 import type { HandoverCity } from "@shared/shiftHandover";
+import { GARAGE_FIT_LABEL, garageFit } from "@shared/garageFit";
 import type { LiveCar, LivePhase, LiveUpcoming, ShiftState } from "../../../server/multiparkDb/shiftState";
 
 // ─── "Estado do parque (ao vivo)" — separador da Passagem de turno ──────────
@@ -156,18 +157,32 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
                 <div key={t.type} className="border rounded-lg p-2.5">
                   <p className="text-xs text-muted-foreground">{t.label}</p>
                   <p className="text-2xl font-semibold tabular-nums leading-tight">{t.total}</p>
-                  {/* 44e (Jorge): as garagens em vez das marcas — para ver o que está mal arrumado (ex.: coberto na PD) */}
+                  {(t.misplaced > 0 || t.warned > 0) && (
+                    <p className="flex items-center gap-1 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                      <AlertTriangle className="h-3 w-3" />{t.misplaced > 0 ? `${t.misplaced} mal arrumado${t.misplaced > 1 ? "s" : ""}` : ""}{t.misplaced > 0 && t.warned > 0 ? " · " : ""}{t.warned > 0 ? <span className="text-amber-700 dark:text-amber-300">{t.warned} a passar p/ coberta</span> : null}
+                    </p>
+                  )}
+                  {/* 44e (Jorge): as garagens em vez das marcas; a vermelho as que não servem para este tipo (shared/garageFit.ts) */}
                   {(t.byParkGarage ?? []).map((p) => (
                     <p key={p.parkName} className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
                       {(t.byParkGarage ?? []).length > 1 && <span className="font-medium text-foreground/70">{p.parkName.replace(/\s*-\s*(Lisboa|Porto|Faro)$/i, "")}: </span>}
-                      {p.garages.map((g) => `${g.garage} ${g.count}`).join(" · ")}
+                      {p.garages.map((g, i) => (
+                        <span key={g.garage}>
+                          {i > 0 && " · "}
+                          <span className={g.fit === "bad" ? "font-semibold text-rose-700 dark:text-rose-300" : g.fit === "warn" ? "font-semibold text-amber-700 dark:text-amber-300" : undefined}
+                            title={g.fit === "bad" || g.fit === "warn" ? GARAGE_FIT_LABEL[g.fit] : undefined}>
+                            {g.fit === "bad" ? "⚠ " : ""}{g.garage} {g.count}
+                          </span>
+                        </span>
+                      ))}
                     </p>
                   ))}
                 </div>
               ))}
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground">Só os carros parados no parque (as operações em curso estão em baixo). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado. Por baixo, em que garagem de cada parque estão: se a garagem não bate com o tipo (ex.: um coberto na PD), está mal arrumado.</p>
+          <p className="text-[11px] text-muted-foreground">Só os carros parados no parque (as operações em curso estão em baixo). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado. Por baixo, em que garagem de cada parque estão. A vermelho (⚠) o que está mal arrumado: indoor fora de uma garagem coberta, ou descoberto numa coberta (COBERTO, CENTRAL COBERTO). A amarelo, cobertos numa garagem descoberta (PD, PD FORA, CENTRAL): passam para a coberta se der.</p>
+          <MisplacedCars cars={d.inPark.cars} />
           {d.inPark.byPark.length > 0 && (
             <details className="text-xs">
               <summary className="cursor-pointer select-none text-muted-foreground">Ver por parque e garagem</summary>
@@ -229,5 +244,31 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
         {d.blocks == null && <p className="text-xs text-muted-foreground">Não foi possível ler os bloqueios de disponibilidade.</p>}
       </div>
     </>
+  );
+}
+
+/** Lista dos carros mal arrumados (garagem × tipo de lugar), para se irem buscar. */
+function MisplacedCars({ cars }: { cars: LiveCar[] }) {
+  const rows = cars.filter((c) => c.phase === "in_park")
+    .map((c) => ({ c, fit: garageFit(c.spotType, c.garage) }))
+    .filter((x) => x.fit === "bad" || x.fit === "warn")
+    .sort((a, b) => (a.fit === b.fit ? 0 : a.fit === "bad" ? -1 : 1) || String(a.c.garage).localeCompare(String(b.c.garage), "pt"));
+  if (!rows.length) return null;
+  const bad = rows.filter((x) => x.fit === "bad").length;
+  return (
+    <details className="text-xs" open={bad > 0}>
+      <summary className="cursor-pointer select-none font-semibold text-rose-700 dark:text-rose-300">
+        Mal arrumados: {bad}{rows.length > bad ? ` · ${rows.length - bad} cobertos numa descoberta` : ""}
+      </summary>
+      <ul className="mt-1.5 space-y-1">
+        {rows.map(({ c, fit }) => (
+          <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <Badge variant="outline" className={fit === "bad" ? "border-rose-400 text-rose-700 dark:text-rose-300" : "border-amber-400 text-amber-700 dark:text-amber-300"}>{fit === "bad" ? "mal arrumado" : "se der, coberta"}</Badge>
+            <span className="font-medium">{c.plate ?? c.code ?? "—"}</span>
+            <span className="text-muted-foreground">{({ uncovered: "Descoberto", covered: "Coberto", indoor: "Interior", vip: "VIP", unknown: "Sem tipo" } as const)[c.spotType]} em {c.garage}{c.spot ? ` · lugar ${c.spot}` : ""}{c.parkName ? ` · ${c.parkName}` : ""}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }

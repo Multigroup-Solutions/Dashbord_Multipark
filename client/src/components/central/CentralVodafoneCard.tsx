@@ -41,6 +41,10 @@ export function CentralVodafoneCard() {
     onSuccess: () => { toast.success("Acesso revogado."); utils.central.status.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  const reactivate = trpc.central.reactivateAccount.useMutation({
+    onSuccess: () => { toast.success("Acesso reativado: a consola volta a entrar com a palavra-passe que já tem."); utils.central.status.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
   const serverUrl = `${typeof window !== "undefined" ? window.location.origin : ""}${q.data?.basePath ?? "/api/central/sugar"}`;
   const userOptions = useMemo(() => (users.data ?? []).map((u) => ({ value: String(u.id), label: `${u.name}${u.email ? ` · ${u.email}` : ""}` })), [users.data]);
   const suggest = (id: string) => {
@@ -106,13 +110,31 @@ export function CentralVodafoneCard() {
                 <code className="font-medium">{a.username}</code>
                 <span>{a.userName ?? `conta #${a.userId}`}</span>
                 <span className="text-muted-foreground">{a.lastUsedAt ? `usado ${fmtPTDateTime(a.lastUsedAt)}` : "nunca usado"}</span>
-                {a.revokedAt ? <Badge variant="outline">revogado</Badge> : (
+                {a.revokedAt ? (
+                  <>
+                    <Badge variant="outline" title={`Revogado ${fmtPTDateTime(a.revokedAt)}${a.revokedByName ? ` por ${a.revokedByName}` : ""}`}>revogado</Badge>
+                    <span className="text-muted-foreground">{fmtPTDateTime(a.revokedAt)}{a.revokedByName ? ` · por ${a.revokedByName}` : ""}</span>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild><Button size="sm" variant="outline" className="ml-auto h-7" disabled={reactivate.isPending}>Reativar</Button></AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Reativar o acesso "{a.username}"?</AlertDialogTitle>
+                          <AlertDialogDescription>A consola dessa pessoa volta a registar chamadas com a mesma palavra-passe que já tem configurada. Fica registado quem reativou.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => reactivate.mutate({ id: a.id })}>Reativar</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </>
+                ) : (
                   <AlertDialog>
                     <AlertDialogTrigger asChild><Button size="sm" variant="ghost" className="ml-auto h-7 text-destructive">Revogar</Button></AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
                         <AlertDialogTitle>Revogar o acesso "{a.username}"?</AlertDialogTitle>
-                        <AlertDialogDescription>A consola dessa pessoa deixa logo de registar chamadas. As chamadas que já registou ficam. Não se desfaz: cria-se outro acesso.</AlertDialogDescription>
+                        <AlertDialogDescription>A consola dessa pessoa deixa logo de registar chamadas. As chamadas que já registou ficam. Se foi engano, dá para Reativar (com a mesma palavra-passe).</AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
                         <AlertDialogCancel>Cancelar</AlertDialogCancel>

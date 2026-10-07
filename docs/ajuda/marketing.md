@@ -42,7 +42,7 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 **Alertas** (independentes do período): campanhas com ≥ 50 € em 14 dias sem conversões nem reservas ligadas, ritmo do mês, orçamentos e recolhas.
 - Ficam **de lado**, à direita do Painel (no telemóvel, por cima). Carrega no título para os encolher e voltar a abrir.
 - Aparecem os 4 primeiros. **Ver todos** mostra o resto.
-- O **X** tira um alerta da tua lista até ao fim do mês. Só sai para ti; nada se apaga. Volta sozinho no mês seguinte, ou antes em **Tirados → Repor**.
+- O **X** tira um alerta da lista **para toda a gente** até ao fim do mês, como nas Reservas. Fica guardado quem tirou e quando; nada se apaga. Volta sozinho no mês seguinte, ou antes em **Tirados → Repor**. Com uma marca escolhida em cima, tirar vale só para essa marca.
 - Um alerta de orçamento tirado não volta só porque a percentagem mudou. Volta se passar de "acima" para "abaixo" do orçamento, ou o contrário.
 
 **Aviso vermelho no topo**: a recolha do Google Ads ou da Meta falhou, pede nova autorização ou está parada há mais de 26 h — abre **Integrações → Google Ads** (o link só aparece a quem pode abrir as Integrações; os outros avisam o administrador). Se o próprio aviso não se conseguir ler, aparece um erro com "Tentar de novo" (nunca fica tudo "verde" por engano).

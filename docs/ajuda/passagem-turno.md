@@ -35,7 +35,11 @@ Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
 Separador com o estado atual dos parques da cidade, lido diretamente da BD da Multipark (só leitura). Não entram os **Parques que a operação não faz** das Definições; o mesmo vale para o resumo da passagem.
 - **Carros no parque por tipo de lugar**: Descoberto, Coberto, Interior e VIP (a cidade já está escolhida em cima). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado.
   - Por baixo do número aparecem as **garagens** onde esses carros estão, em cada parque (ex.: "Airpark: COBERTO 29 · PD 3").
-  - Se a garagem não bate com o tipo, o carro está **mal arrumado** (ex.: um coberto na PD).
+  - Se a garagem não bate com o tipo, o carro está **mal arrumado** e a garagem aparece **a vermelho com ⚠**. As garagens são: **PD**, **PD FORA** e **CENTRAL** para descobertos; **COBERTO** e **CENTRAL COBERTO** para indoor e cobertos.
+    - **Vermelho**: indoor (ou VIP) fora de uma garagem coberta, ou descoberto numa garagem coberta.
+    - **Amarelo**: coberto numa garagem descoberta. Passa para a coberta quando houver lugar ("se der").
+    - Garagem com outro nome, ou carro sem tipo: fica sem cor (não se adivinha).
+  - **Mal arrumados** (por baixo) lista esses carros, com matrícula, garagem, lugar e parque, para se irem buscar.
   - **Ver por parque e garagem** abre a divisão antiga.
 - **Pendentes que se arrastam** e **Resumo da semana** contam só os pendentes da passagem: PDAs ainda com check-in e notas do team leader. Ocorrências, reclamações e perdidos não são da passagem e já não aparecem aqui. Os resumos de semanas anteriores, que ainda falavam deles, deixam de se mostrar; o próximo sai na segunda-feira.
 - Os que já passaram a hora de saída.
