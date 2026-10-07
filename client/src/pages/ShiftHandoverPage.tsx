@@ -313,7 +313,7 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
     if (loading || !draft || draftQ.isFetching || carriedKey === formKey) return;
     if (recent) {
       setOpenItemsRaw((cur) => mergeCarryOver({ previous: [], draft: draft.carryOver as OpenItem[], current: cur, currentSince: since }));
-      // Carros p/ coberto: pré-preenchido com o número automático (continua editável).
+      // Carros p/ toldo: pré-preenchido com o número automático (continua editável).
       if (draft.coveredCars && !(draft.failed ?? []).includes("covered cars")) {
         setFRaw((prev) => (prev.carsForCovered === "" ? { ...prev, carsForCovered: String(draft.coveredCars!.count) } : prev));
       }
@@ -481,7 +481,7 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
           {/* Operação */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Operação</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {cityFields.coveredCars && NumInput({ k: "carsForCovered", label: "Carros p/ coberto" })}
+            {cityFields.coveredCars && NumInput({ k: "carsForCovered", label: "Carros p/ toldo" })}
             <div><Label className="text-xs" htmlFor="ho-chargedUntil">Carregamentos feitos até (dia)</Label><Input id="ho-chargedUntil" type="date" value={f.chargedUntilDate} onChange={(e) => setF({ ...f, chargedUntilDate: e.target.value })} /></div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -732,7 +732,7 @@ function HandoverHistory({ cityState, userId, canEdit }: { cityState: CityState;
                       <span>Caixa check-out <YN v={h.checkoutCashDone} /></span>
                       <span>Bolsa front: {h.frontPouchValue != null ? `${Number(h.frontPouchValue).toFixed(2).replace(".", ",")} €` : "—"}</span>
                       <span>PDAs 100% <YN v={h.pdasCharged} /></span>
-                      {h.carsForCovered != null && <span>Coberto: {h.carsForCovered}</span>}
+                      {h.carsForCovered != null && <span>Toldo: {h.carsForCovered}</span>}
                       {clothingCell(h) && <span className="col-span-2 break-words">Fardamento: {clothingCell(h)}</span>}
                     </div>
                     {items.length > 0 && <p className={`text-xs ${open.length ? "text-amber-700" : "text-muted-foreground"}`}>Pendentes: {open.length} abertos / {items.length}</p>}
@@ -749,7 +749,7 @@ function HandoverHistory({ cityState, userId, canEdit }: { cityState: CityState;
                   <th className="p-2">Dia</th>
                   <th className="p-2">Turno</th>
                   <th className="p-2">Cidade</th>
-                  <th className="p-2 text-right">Coberto</th>
+                  <th className="p-2 text-right">Toldo</th>
                   <th className="p-2 text-center">Cofre</th>
                   <th className="p-2 text-center">Caixa de check-out</th>
                   <th className="p-2 text-right">Bolsa front</th>

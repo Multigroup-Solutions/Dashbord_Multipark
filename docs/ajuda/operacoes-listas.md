@@ -2,7 +2,7 @@
 modulo: reservas_operacoes
 titulo: Reservas, Recolhas, Entregas e Cancelados (listas por período)
 rotas: /operacoes
-palavras: dashboard das operações, número diferente, pendentes, compras por acabar, reservas criadas, lista de reservas por período, recolhas, entregas, cancelados, canceladas, cancelamentos, cancelamento, motivo do cancelamento, reembolso, quem cancelou, período, comparar, período anterior, por parque, canal, direto, parceiro, marketplace, falta pagar, csv, multipark
+palavras: dashboard das operações, número diferente, pendentes, compras por acabar, reservas criadas, lista de reservas por período, recolhas, entregas, cancelados, canceladas, cancelamentos, cancelamento, motivo do cancelamento, reembolso, quem cancelou, período, comparar, período anterior, por parque, canal, direto, parceiro, marketplace, falta pagar, csv, multipark, toldo, toldos, coberto, tipo de lugar
 ---
 # Reservas, Recolhas, Entregas e Cancelados
 
@@ -13,6 +13,7 @@ Quatro listas por **período**, nas **Operações → Reservas & Operações**, 
 - **Recolhas**: reservas com **recolha (check-in)** no período, sem as canceladas.
 - **Entregas**: reservas com **entrega (check-out)** no período, sem as canceladas.
 - **Cancelados**: reservas **canceladas** no período, pela **data do cancelamento**. Cada linha mostra também as datas de recolha e entrega da reserva, o **motivo** (e as observações), o **reembolso** (não, pedido ou reembolsado, com o valor) e **quem cancelou** (o último movimento de cancelamento da reserva). As canceladas sem registo de cancelamento na Multipark aparecem pela última alteração da reserva, com **≈** (data aproximada).
+- O tipo de lugar **Toldo** é o antigo "coberto" (o carro fica sob toldo); Descoberto, Interior e VIP ficam iguais. Na Multipark o produto continua a chamar-se COVERED.
 - As **compras online por pagar** (reserva "Pendente": o cliente começou a compra no site e ainda não pagou) **contam** nas listas e nos números, como nas Reservas do dia, na Passagem de turno e no Extras Dia: o carro vem na mesma. Saem sozinhas quando a Multipark as passa a recolhidas ou canceladas. Na Faturação e no Financeiro continuam de fora.
 
 **O período**
