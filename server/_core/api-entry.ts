@@ -347,6 +347,15 @@ app.get("/api/cron/rh-docs-weekly", async (req, res) => {
   sendCronRun(res, await rhDocsWeeklyCron());
 });
 
+// RH — pedir os documentos em falta aos extras (tick: segunda a partir das 10:00;
+// interruptor EXTRAS_DOCS_REQUEST). ?cursor=N retoma depois da ficha N.
+app.get("/api/cron/rh-docs-request", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { rhDocsRequestCron, sendCronRun } = await import("../cronJobs");
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : null;
+  sendCronRun(res, await rhDocsRequestCron({ deadlineAt: manualDeadline(), cursor }));
+});
+
 // Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7
 // dias; done:false + nextOffset → repetir com ?offsetDays=N.
 app.get("/api/cron/evaluation-recompute", async (req, res) => {

@@ -577,6 +577,21 @@ export async function rhDocsWeeklyCron(): Promise<CronJobRun> {
   } catch (err) { return fail(err); }
 }
 
+/**
+ * RH — pedir os documentos em falta aos extras ativos (WhatsApp + email), à
+ * segunda a partir das 10:00 de Lisboa (trabalho rh-docs-request). Interruptor
+ * EXTRAS_DOCS_REQUEST (desligado por omissão). Retomável: o cursor é a última
+ * ficha tratada; cada pessoa tem 1 pedido por semana ISO (chave única).
+ */
+export async function rhDocsRequestCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {
+  try {
+    const { runDocsRequestAuto } = await import("./rhDocsRequest");
+    const after = o.cursor && /^\d{1,10}$/.test(o.cursor) ? Number(o.cursor) : 0;
+    const r = await runDocsRequestAuto({ deadlineAt: o.deadlineAt - 3_000, afterId: after });
+    return { httpStatus: 200, body: { ok: r.errors.length === 0, ranAt: ranAt(), ...r }, done: r.done, cursor: r.done ? null : String(r.lastId ?? after) };
+  } catch (err) { return fail(err); }
+}
+
 /** Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7 dias. */
 export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDays: number }): Promise<CronJobRun> {
   try {

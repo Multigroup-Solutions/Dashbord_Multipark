@@ -25,6 +25,7 @@ import { DocStatusBadge, LicenceBadge } from "@/components/rh/RhBadges";
 import { LicencePanel } from "@/components/rh/LicencePanel";
 import { RejectDocumentDialog } from "@/components/rh/RejectDocumentDialog";
 import { EmployeeNotesPanel } from "@/components/rh/EmployeeNotesPanel";
+import { DocsRequestBulkDialog, DocsRequestCard } from "@/components/rh/DocsRequestDialog";
 import { licenceRelevant, LICENCE_STATUS_LABELS, LICENCE_STATUSES, type LicenceStatus } from "@shared/drivingLicence";
 import { docsSummaryLabel, type DocsSummary as DocsSummaryView } from "@shared/employeeDocuments";
 
@@ -497,7 +498,7 @@ const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEdi
 /** Carta da ficha (rh.byId): estado + data de emissão + validação do RH. */
 type LicenceInfo = { status: LicenceStatus | null; issuedAt: string | null; validatedAt: string | null };
 
-function DocumentsTab({ employeeId, access, licence }: { employeeId: number; access: EmployeeAccess; licence?: LicenceInfo }) {
+function DocumentsTab({ employeeId, access, licence, extraName }: { employeeId: number; access: EmployeeAccess; licence?: LicenceInfo; /** Ficha de um extra: nome (para o pedido de documentos em falta). */ extraName?: string | null }) {
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const canUpload = access.canEditPersonal;
@@ -614,6 +615,11 @@ function DocumentsTab({ employeeId, access, licence }: { employeeId: number; acc
         <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
           {pendingDocs} documento{pendingDocs > 1 ? "s" : ""} por validar — abre a categoria e carrega em "Validar" ou "Recusar".
         </p>
+      )}
+
+      {/* Pauta do Rafael (7 out 2026): pedir ao extra os documentos em falta (WhatsApp/email) */}
+      {canValidate && extraName && !access.isOwn && (
+        <DocsRequestCard employeeId={employeeId} name={extraName} missingCount={totalMandatory - completedCount} />
       )}
 
       {/* Checklist de documentos obrigatórios */}
@@ -2030,7 +2036,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           {access.canViewNotes && <TabsTrigger value="notes"><NotebookPen className="w-4 h-4 mr-2" />Notas internas</TabsTrigger>}
         </TabsList>
         <TabsContent value="documents" className="mt-4">
-          <DocumentsTab employeeId={employeeId} access={access}
+          <DocumentsTab employeeId={employeeId} access={access} extraName={emp.position === "extra" ? emp.fullName : null}
             licence={licenceRelevant(emp.position, (data as any).licence) || access.canValidateDocuments
               ? { status: (data as any).licence ?? null, issuedAt: (emp as any).drivingLicenseIssuedAt ?? null, validatedAt: (emp as any).drivingLicenseValidatedAt ?? null }
               : undefined} />
@@ -2583,6 +2589,9 @@ export default function HRPage() {
   // Para admins, os agentes por ligar vivem no separador Ligações
   useEffect(() => { if (isAdminRole && activeTab === "agentes") setActiveTab("ligacoes"); }, [isAdminRole, activeTab, setActiveTab]);
   const [showPayroll, setShowPayroll] = useState(false);
+  // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras (em grupo).
+  const [showDocsRequest, setShowDocsRequest] = useState(false);
+  const canRequestDocs = can(user as any, "rh", "edit");
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
@@ -2975,8 +2984,13 @@ export default function HRPage() {
               <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
             )}
           </TabsList>
+          {activeTab === "extras" && canRequestDocs && filterActive !== "inactive" && (
+            <Button size="sm" variant="outline" className="sm:ml-auto" onClick={() => setShowDocsRequest(true)}>
+              <FileText className="w-4 h-4 mr-2" /> Pedir documentos em falta
+            </Button>
+          )}
           {/* D46: cartões (com foto) ou lista */}
-          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className="sm:ml-auto" />}
+          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className={activeTab === "extras" && canRequestDocs && filterActive !== "inactive" ? "" : "sm:ml-auto"} />}
           </div>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (
@@ -3019,6 +3033,7 @@ export default function HRPage() {
       <CreateEmployeeDialog open={showCreate} onClose={() => setShowCreate(false)} />
       <ImportExtrasDialog open={showImport} onClose={() => setShowImport(false)} />
       <ExtraRatesDialog open={showRates} onClose={() => setShowRates(false)} />
+      {showDocsRequest && <DocsRequestBulkDialog open={showDocsRequest} onOpenChange={setShowDocsRequest} projectId={globalFilters.projectId ?? null} />}
     </div>
   );
 }

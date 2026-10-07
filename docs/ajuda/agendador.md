@@ -48,6 +48,7 @@ Pronto. Não é preciso mais nada no GitHub.
 | GPS do Zello — recolha provisória do próprio dia | 1×/dia entre as 23:15 e as 23:55 (se falhar, fica para a final) |
 | Manutenção diária + recolha GPS do Zello final (D-2) | 1×/dia a partir das 04:30 |
 | RH — regra documental dos extras (documentos em falta) | 1×/semana, segunda a partir das 04:45 |
+| RH — pedir os documentos em falta aos extras ativos (WhatsApp e email; 1 pedido a cada 7 dias por pessoa, no máximo 4 automáticos). **Desligado por omissão**: interruptor em Definições → Automações ("Pedir documentos em falta aos extras"). À mão: `/api/cron/rh-docs-request` (trabalho `rh-docs-request`) | 1×/semana, segunda a partir das 10:00 (se não couber, continua no tick seguinte) |
 | Extras-Dia: pressão (BD da Multipark desde 3 abr 2026, a janela cresce todos os dias; por grupo de parques × dia da semana × hora e, nas cidades, o tempo por carro de cada condutor; guarda o resultado na nossa BD para o separador **Pressão**) | 1×/dia a partir das 04:45 (um grupo de cada vez; se não couber, continua no tick seguinte). À mão: `/api/cron/extras-pressure` |
 | Briefing diário e relatórios de segunda | 1×/dia a partir das 07:30 |
 | Avaliação (último mês, 31 dias; lê os movimentos em tempo real da BD da Multipark) | 1×/dia, depois da manutenção diária (o mais tardar às 06:00) |
