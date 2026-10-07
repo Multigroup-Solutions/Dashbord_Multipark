@@ -45,7 +45,7 @@ const STATUS_PT: Record<string, string> = {
   CONFIRMED: "Confirmada", CHECKED_IN: "Check-in", CHECKING_IN: "A entrar",
   MOVING: "Em movimento", CHECKED_OUT: "Check-out", CHECKING_OUT: "A sair",
   PENDING_CHECKOUT: "Pend. check-out", CANCELLED: "Cancelada", COMPLETED: "Concluída",
-  UNCOVERED: "Descoberto", COVERED: "Coberto", DAY: "por dia",
+  UNCOVERED: "Descoberto", COVERED: "Toldo", DAY: "por dia",
 };
 
 // Campos técnicos que nunca interessam ao utilizador

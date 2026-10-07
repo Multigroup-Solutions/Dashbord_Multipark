@@ -48,4 +48,4 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - **Candidatura → 1.º turno:** dias, em mediana, entre a candidatura aprovada (últimos 180 dias) e o primeiro check-in no ponto.
 - **Cobertura dos próximos 7 dias:** por dia, as horas-condutor que a previsão diz serem precisas (pelas entregas e recolhas) contra as horas já escaladas.
 - **Faltas por extra:** faltas ao Extras Dia no período, confirmadas e por rever (as possíveis faltas que o RH ainda tem de validar).
-- **Parados há mais de 90 dias:** extras ativos sem trabalho (ponto, escala ou movimentos na Multipark) há mais de 90 dias. Quem nunca trabalhou conta desde que a ficha foi criada. Admins podem **Desativar** daqui.
+- **Parados há mais de 90 dias:** extras ativos sem trabalho (ponto, escala ou movimentos na Multipark) há mais de 90 dias. Quem nunca trabalhou conta desde que a ficha foi criada. O supervisor (na sua cidade), o back office e os admins podem **Desativar** daqui.

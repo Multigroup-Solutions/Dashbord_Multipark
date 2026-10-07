@@ -38,5 +38,5 @@ export function garageFit(spotType: string, garage: string | null | undefined): 
 
 export const GARAGE_FIT_LABEL: Record<Exclude<GarageFit, "ok" | "unknown">, string> = {
   bad: "mal arrumado",
-  warn: "coberto numa garagem descoberta (passa para a coberta se der)",
+  warn: "toldo numa garagem descoberta (passa para a coberta se der)",
 };
