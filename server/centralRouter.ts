@@ -58,8 +58,8 @@ export const centralRouter = router({
     const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
     await ensureFeatureFlagOverrides();
     const enabled = isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
-    const accounts = rowsOf(await db.execute(sql`SELECT a.id, a.username, a.label, a.userId, u.name AS userName, a.createdAt, a.lastUsedAt, a.revokedAt
-        FROM central_accounts a LEFT JOIN users u ON u.id = a.userId ORDER BY a.revokedAt IS NOT NULL, a.username LIMIT 200`));
+    const accounts = rowsOf(await db.execute(sql`SELECT a.id, a.username, a.label, a.userId, u.name AS userName, a.createdAt, a.lastUsedAt, a.revokedAt, rb.name AS revokedByName
+        FROM central_accounts a LEFT JOIN users u ON u.id = a.userId LEFT JOIN users rb ON rb.id = a.revokedById ORDER BY a.revokedAt IS NOT NULL, a.username LIMIT 200`));
     const calls = rowsOf(await db.execute(sql`SELECT c.id, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.subject, c.contactRef, c.source, u.name AS userName
         FROM central_calls c LEFT JOIN users u ON u.id = c.userId ORDER BY c.startedAt DESC LIMIT 30`));
     const contacts = await callContacts(db, calls.map((c) => (c.contactRef ? String(c.contactRef) : null)));
@@ -67,7 +67,8 @@ export const centralRouter = router({
     return {
       enabled, hasSecret: !!ENV.cookieSecret, basePath: CENTRAL_SUGAR_BASE_PATH,
       accounts: accounts.map((a) => ({ id: Number(a.id), username: String(a.username), label: a.label ? String(a.label) : null, userId: Number(a.userId),
-        userName: a.userName ? String(a.userName) : null, createdAt: iso(a.createdAt), lastUsedAt: iso(a.lastUsedAt), revokedAt: iso(a.revokedAt) })),
+        userName: a.userName ? String(a.userName) : null, createdAt: iso(a.createdAt), lastUsedAt: iso(a.lastUsedAt), revokedAt: iso(a.revokedAt),
+        revokedByName: a.revokedByName ? String(a.revokedByName) : null })),
       calls: calls.map((c) => ({ id: Number(c.id), direction: c.direction === "out" ? "out" as const : "in" as const, held: Number(c.held) === 1, startedAt: iso(c.startedAt),
         durationS: c.durationS == null ? null : Number(c.durationS), phone: c.phone ? String(c.phone) : null, subject: c.subject ? String(c.subject) : null,
         source: String(c.source), userName: c.userName ? String(c.userName) : null,
@@ -137,6 +138,27 @@ export const centralRouter = router({
       if (a.revokedAt) return { ok: true, already: true };
       await db.execute(sql`UPDATE central_accounts SET revokedAt = ${utc(Date.now())}, revokedById = ${ctx.user.id} WHERE id = ${input.id} AND revokedAt IS NULL`);
       await logActivity({ userId: ctx.user.id, action: "revoke", entity: "central_account", entityId: input.id, details: `Acesso da central "${String(a.username)}" revogado` }).catch(() => null);
+      return { ok: true, already: false };
+    }),
+
+  /**
+   * Jorge (7 out 2026: "não me deixa entrar, diz que o acesso está revogado"):
+   * um acesso revogado por engano volta a funcionar com a MESMA palavra-passe
+   * que a consola já tem. Só se a conta da pessoa estiver ativa; a revogação
+   * antiga (quem e quando) fica no histórico.
+   */
+  reactivateAccount: superOnly
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await dbOrThrow();
+      const a = rowsOf(await db.execute(sql`SELECT a.id, a.username, a.revokedAt, a.revokedById, u.isActive FROM central_accounts a
+          LEFT JOIN users u ON u.id = a.userId WHERE a.id = ${input.id} LIMIT 1`))[0];
+      if (!a) throw new TRPCError({ code: "NOT_FOUND", message: "Acesso não encontrado." });
+      if (!a.revokedAt) return { ok: true, already: true };
+      if (Number(a.isActive) !== 1) throw new TRPCError({ code: "BAD_REQUEST", message: "A conta dessa pessoa está desativada: reativa primeiro a conta." });
+      await db.execute(sql`UPDATE central_accounts SET revokedAt = NULL, revokedById = NULL WHERE id = ${input.id} AND revokedAt IS NOT NULL`);
+      await logActivity({ userId: ctx.user.id, action: "reactivate", entity: "central_account", entityId: input.id,
+        details: `Acesso da central "${String(a.username)}" reativado (estava revogado desde ${iso(a.revokedAt) ?? "?"}${a.revokedById ? ` por #${Number(a.revokedById)}` : ""})` }).catch(() => null);
       return { ok: true, already: false };
     }),
 });
