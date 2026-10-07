@@ -177,10 +177,12 @@ describe("D61 — PDA escolhe a conta Google", () => {
     expect(loginUrlForDevice(loginUrlWithReturn(), true)).toBe("/api/oauth/login?pda=1");
     expect(loginUrlForDevice(loginUrlWithReturn("/rh"), true)).toBe("/api/oauth/login?next=%2Frh&pda=1");
     expect(loginUrlForDevice(loginUrlWithReturn("/rh"), false)).toBe("/api/oauth/login?next=%2Frh");
+    // 2026-10-07: sem consent forçado (levava a "Cancelar" → access_denied nos PDA).
     expect(googlePromptFor("1")).toBe("select_account");
     expect(googlePromptFor(undefined)).toBeNull();
     expect(googlePromptFor(["1"])).toBeNull();
     expect(src("server/_core/oauth.ts")).toContain("const prompt = googlePromptFor(req.query.pda);");
+    expect(src("server/_core/oauth.ts")).not.toContain('"access_type", "offline"');
   });
   it("7 out 2026: o login não pede acesso offline nem consentimento (não gasta os tokens da ligação do Gmail)", () => {
     const o = src("server/_core/oauth.ts");

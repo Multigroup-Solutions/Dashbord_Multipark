@@ -52,6 +52,23 @@ check-in; fardamento com tamanhos na passagem de turno).
 
 ## Changelog
 
+### 2026-10-07 — Login a partir do QR do PDA falhava (Google access_denied + 400 "pedido expirou")
+**Type**: fix
+**Scope**: `server/_core/oauthState.ts` (NOVO, puro), `server/_core/oauth.ts`, `shared/loginReturn.ts` (`googlePromptFor`),
+`client/src/pages/PdaRegisterPage.tsx`, testes `server/_core/oauthState.test.ts` (NOVO) + `server/sistema25c.test.ts`.
+**Diagnóstico (logs Vercel prod, projeto `dashbord-multipark`)**: `[OAuth] Google devolveu erro: access_denied` e
+`[OAuth] State inválido { hasSaved:false }`. O QR é lido por uma app de leitura que abre o link no browser DELA; a Google
+acaba noutro browser → os cookies `app_oauth_state`/`app_oauth_next` ficam no primeiro → 400 e o destino perde-se.
+O login também forçava `consent` (ecrã com Cancelar em cada login) + `access_type=offline` (refresh token nunca usado).
+**What**:
+- `state` ASSINADO (HMAC JWT_SECRET, 10 min) com o destino (`?next=`, validado por `safeReturnPath`); o callback aceita-o
+  SEM cookie; com cookie tem de bater certo (`checkCallbackState`). Redirect final = destino do state, senão o do cookie.
+- `googlePromptFor`: PDA → `select_account`, resto → sem prompt; sai `access_type=offline`.
+- `PdaRegisterPage` pede sempre login de PDA (`pda=1`, D61) e limpa o QR pendente ao registar.
+- Páginas de erro com link "Tentar de novo" (mesmo destino, href escapado); `access_denied` explica cancelado / conta sem acesso.
+**Trade-off**: sem cookie perde-se a ligação state↔browser (login CSRF teórico com um callback fresco < 10 min). Aceite para
+o caso do PDA; reverter = exigir o cookie em `checkCallbackState`.
+
 ### 2026-09-09 — Pesquisa + foto obrigatória no check-in; fardamento com tamanhos
 **Type**: feature
 **Scope**: `client/src/pages/OperationalPage.tsx` (CheckinDialog),
