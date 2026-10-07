@@ -24,6 +24,7 @@ import { taskTemplates } from "../drizzle/schema";
 import { newAssigneeIds, notifyTaskAssigned } from "./taskAssignNotify";
 import {
   TASK_SOURCE_LABELS,
+  TASK_SOURCE_MODULES,
   TASK_STATUSES,
   TEMPLATE_SHIFTS,
   canChangeTaskStatus,
@@ -35,6 +36,7 @@ import {
   teamTaskAccess,
   type TaskSourceModule,
 } from "../shared/taskRules";
+import { TASK_BOOKING_FILTERS, TASK_DUE_FILTERS, TASK_PRIORITIES, TASK_SEARCH_MAX } from "../shared/taskFilters";
 import {
   TEMPLATE_ASSIGNEE_ROLES,
   addTaskComment,
@@ -47,8 +49,10 @@ import {
   notAssignable,
   parseEmployeeIds,
   runTaskNotifications,
+  taskFacets,
   taskStats,
   teamFilterFor,
+  type TaskListFilters,
 } from "./tasksService";
 
 type Viewer = { id: number; role: string; accessOverrides?: any };
@@ -143,14 +147,48 @@ export async function loadTaskFor(ctx: { user: Viewer }, id: number) {
   return { task, employeeId, view };
 }
 
+/** Facetas + pesquisa (shared/taskFilters.ts): combinam-se com E; dentro de cada uma, OU. */
+const facetsInput = z.object({
+  sources: z.array(z.enum(TASK_SOURCE_MODULES)).max(TASK_SOURCE_MODULES.length).optional(),
+  statuses: z.array(z.enum(TASK_STATUSES)).max(TASK_STATUSES.length).optional(),
+  priorities: z.array(z.enum(TASK_PRIORITIES)).max(TASK_PRIORITIES.length).optional(),
+  due: z.array(z.enum(TASK_DUE_FILTERS)).max(TASK_DUE_FILTERS.length).optional(),
+  bookingStatuses: z.array(z.enum(TASK_BOOKING_FILTERS)).max(TASK_BOOKING_FILTERS.length).optional(),
+  q: z.string().max(TASK_SEARCH_MAX).optional(),
+}).optional();
+
 const listInput = z.object({
   projectId: z.number().optional(),
   assigneeId: z.number().optional(),
+  /** Só as sem responsável (quem edita). */
+  unassigned: z.boolean().optional(),
   status: z.enum(TASK_STATUSES).optional(),
   mine: z.boolean().optional(),
   showOld: z.boolean().optional(),
   focusId: z.number().int().positive().optional(),
+  filters: facetsInput,
 }).optional();
+type ListInput = z.infer<typeof listInput>;
+
+/**
+ * Filtros da lista/contadores: extra (e "As minhas") → só as tarefas da
+ * própria ficha; quem edita → responsável escolhido (ou sem responsável) e,
+ * se for team leader, só as da equipa.
+ */
+async function listFiltersFor(u: Viewer, input: ListInput): Promise<TaskListFilters> {
+  const f: TaskListFilters = { projectId: input?.projectId, status: input?.status, showOld: input?.showOld, focusId: input?.focusId, filters: input?.filters };
+  if (!canEditTasks(u) || input?.mine) {
+    const me = await myEmployeeId(u.id);
+    if (me == null) throw new TRPCError({ code: "PRECONDITION_FAILED", message: NO_EMPLOYEE_MSG });
+    f.employeeId = me;
+  } else {
+    if (input?.assigneeId) f.employeeId = input.assigneeId;
+    else if (input?.unassigned) f.unassigned = true;
+    const team = await teamFilterFor(u);
+    if (team) f.team = team;
+  }
+  return f;
+}
 
 const templateInput = z.object({
   title: z.string().trim().min(1).max(256),
@@ -171,18 +209,16 @@ export const tasksRouter = router({
     .query(async ({ ctx, input }) => {
       const u = viewerOf(ctx);
       requireAccess(u, "tarefas", "view", { allowOwn: true });
-      const f = { projectId: input?.projectId, status: input?.status, showOld: input?.showOld, focusId: input?.focusId } as any;
-      // extra: só vê as tarefas atribuídas a si (filtro em SQL)
-      if (!canEditTasks(u) || input?.mine) {
-        const me = await myEmployeeId(u.id);
-        if (me == null) throw new TRPCError({ code: "PRECONDITION_FAILED", message: NO_EMPLOYEE_MSG });
-        f.employeeId = me;
-      } else {
-        if (input?.assigneeId) f.employeeId = input.assigneeId;
-        const team = await teamFilterFor(u);
-        if (team) f.team = team;
-      }
-      return listTasks(f);
+      // extra: só vê as tarefas atribuídas a si (filtro em SQL); team leader: só as da equipa
+      return listTasks(await listFiltersFor(u, input));
+    }),
+  /** Contadores por opção dos filtros (cada faceta com as outras aplicadas) — a mesma base da lista. */
+  facets: protectedProcedure
+    .input(listInput)
+    .query(async ({ ctx, input }) => {
+      const u = viewerOf(ctx);
+      requireAccess(u, "tarefas", "view", { allowOwn: true });
+      return taskFacets(await listFiltersFor(u, input));
     }),
   getById: protectedProcedure
     .input(z.object({ id: z.number() }))

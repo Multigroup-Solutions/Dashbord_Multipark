@@ -2038,6 +2038,10 @@ export const tasks = mysqlTable("tasks", {
 	// 0376 — "Eliminar" arquiva (os geradores continuam a ver a linha e não a recriam).
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedById: int(),
+	// 0545 — reserva da tarefa (multipark_bookings.externalId; serviços) para o
+	// filtro "estado da reserva", e chave única só das tarefas de candidatura.
+	bookingRef: varchar({ length: 128 }),
+	leadSourceKey: varchar({ length: 128 }).generatedAlwaysAs(sql`IF(\`sourceModule\` = 'lead', \`sourceKey\`, NULL)`, { mode: "stored" }),
 });
 
 // 0091 — checklists recorrentes por turno/cidade

@@ -158,6 +158,7 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0515", () => import("./migration_0515").then((m) => step(m.MIGRATION_0515_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0515))],
   ["0520", () => import("./migration_0520").then((m) => step(m.MIGRATION_0520_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0520))],
   ["0525", () => import("./migration_0525").then((m) => step(m.MIGRATION_0525_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0525))],
+  ["0545", () => import("./migration_0545").then((m) => step(m.MIGRATION_0545_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0545))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
@@ -222,5 +223,11 @@ export async function ensureRecentSchema(db: Executor): Promise<void> {
     if (r.status === "applied") console.log("[Schema ensure] 0410 marcadores das fichas copiados dos logs (cidade pedida, ficha do site)");
   } catch (err: any) {
     console.warn("[Schema ensure] 0410 (marcadores das fichas) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    const { runMigration0545Collation } = await import("./migration_0545");
+    if (await runMigration0545Collation(db as any)) console.log("[Schema ensure] 0545 tasks.bookingRef: collation igual à de multipark_bookings.externalId");
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0545 (collation de tasks.bookingRef) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }
