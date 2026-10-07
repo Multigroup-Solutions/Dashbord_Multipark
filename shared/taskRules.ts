@@ -313,6 +313,27 @@ export function templateOccurrencesFor(templates: TaskTemplateLike[], day: strin
   return out;
 }
 
+/**
+ * "Gerar hoje" nas Checklists (Jorge, 7 out 2026: "aparece acesso negado para
+ * alguns users"): quem GERE as checklists (`tarefas:manage`, com as exceções
+ * por pessoa) — supervisor na sua cidade, front/back office, admin+. Team
+ * leaders não. O MESMO predicado no botão e no servidor (antes o servidor
+ * pedia ainda o papel admin e recusava supervisores e o front/back office).
+ */
+export function canGenerateChecklists(user: TaskUserLike): boolean {
+  return seesBeyondOwn(user, "tarefas") && can(user, "tarefas", "manage");
+}
+
+/**
+ * Modelos que quem pede pode gerar: com o âmbito de cidades (`scope`, ids dos
+ * projetos) só os modelos dessas cidades — os sem cidade são de todas e ficam
+ * para quem vê todas as cidades (`scope` undefined). PURA.
+ */
+export function templatesInScope<T extends { cityProjectId: number | null }>(templates: readonly T[], scope: readonly number[] | undefined): T[] {
+  if (scope === undefined) return [...templates];
+  return templates.filter((t) => t.cityProjectId != null && scope.includes(t.cityProjectId));
+}
+
 /** Dia operacional de Lisboa (antes das 03h ainda conta o dia anterior). */
 export function operationalDayOf(nowMs: number): string {
   return lisbonDayOf(nowMs - OPERATIONAL_DAY_START_HOUR * 3_600_000);

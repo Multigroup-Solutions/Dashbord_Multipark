@@ -35,6 +35,7 @@ import {
   taskDeadlineMs,
   templateOccurrenceKey,
   templateOccurrencesFor,
+  templatesInScope,
   type TaskSourceModule,
   type TemplateShift,
 } from "../shared/taskRules";
@@ -551,11 +552,18 @@ export const TEMPLATE_ASSIGNEE_ROLE_LABELS: Record<(typeof TEMPLATE_ASSIGNEE_ROL
  * hora a hora — a 1.ª corrida do dia cria, as seguintes não fazem nada (e
  * apanham modelos novos). Responsáveis: ids fixos e/ou a escala do turno.
  */
-export async function generateTemplateTasks(now: Date = new Date()): Promise<{ date: string; created: number; skipped: number; failed: number; errors: string[] }> {
+export async function generateTemplateTasks(
+  now: Date = new Date(),
+  opts: { projectIds?: readonly number[] } = {},
+): Promise<{ date: string; created: number; skipped: number; failed: number; errors: string[] }> {
   const db = await requireDb();
   const day = operationalDayOf(now.getTime());
   const out = { date: day, created: 0, skipped: 0, failed: 0, errors: [] as string[] };
-  const templates = await db.select().from(taskTemplates).where(and(eq(taskTemplates.active, 1), sql`${taskTemplates.archivedAt} IS NULL`));
+  // "Gerar hoje" de quem só vê algumas cidades: só os modelos dessas (o cron vê todos).
+  const templates = templatesInScope(
+    await db.select().from(taskTemplates).where(and(eq(taskTemplates.active, 1), sql`${taskTemplates.archivedAt} IS NULL`)),
+    opts.projectIds,
+  );
   if (!templates.length) return out;
   // Arquivadas incluídas: uma checklist arquivada hoje não volta a nascer.
   const existing = await db.select({ templateId: tasks.templateId, templateShift: tasks.templateShift }).from(tasks)

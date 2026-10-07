@@ -35,6 +35,7 @@ import {
   COST_CENTRE_ALL_HINT,
   COST_CENTRE_ALL_LABEL,
   canEditTasks,
+  canGenerateChecklists,
   costCentreTriggerLabel,
   isTaskOverdue,
   taskSourceLink,
@@ -176,6 +177,8 @@ export default function TasksPage() {
   const canEdit = !!user && canEditTasks(user as any);
   const isAdmin = !!user && ["super_admin", "admin"].includes(user.role);
   const canTemplates = !!user && can(user as any, "tarefas", "manage");
+  // "Gerar hoje": o MESMO predicado do servidor (antes: só admin pelo papel).
+  const canGenerate = !!user && canGenerateChecklists(user as any);
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => (user && canEditTasks(user as any) ? "kanban" : "mine"));
   // O utilizador pode chegar depois do 1.º render — extras ficam em "As minhas".
@@ -589,7 +592,7 @@ export default function TasksPage() {
           projectId={filterProject !== "all" ? parseInt(filterProject) : null} onCreated={invalidate} />
       )}
 
-      {viewMode === "templates" && canTemplates && <TaskTemplatesPanel projects={projects as any[]} canGenerate={isAdmin} />}
+      {viewMode === "templates" && canTemplates && <TaskTemplatesPanel projects={projects as any[]} canGenerate={canGenerate} />}
 
       {viewMode !== "templates" && listError}
       {viewMode !== "templates" && truncated && (

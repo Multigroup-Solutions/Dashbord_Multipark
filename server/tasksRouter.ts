@@ -28,6 +28,7 @@ import {
   TEMPLATE_SHIFTS,
   canChangeTaskStatus,
   canEditTasks,
+  canGenerateChecklists,
   dueDateFromDay,
   isAutomaticTask,
   taskUpdateSideEffects,
@@ -515,12 +516,25 @@ export const tasksRouter = router({
         await logActivity({ userId: ctx.user.id, action: "archive", entity: "task_template", entityId: input.id, details: prev.title });
         return { success: true };
       }),
-    /** Gera já as tarefas de hoje (idempotente) — o cron horário faz o mesmo. */
+    /**
+     * "Gerar hoje": gera já as tarefas de hoje (idempotente) — o cron horário
+     * faz o mesmo. Quem gere as checklists (`canGenerateChecklists`, o mesmo
+     * predicado do botão; antes pedia ainda admin e dava "Acesso não
+     * autorizado" a supervisores e ao front/back office), só para os modelos
+     * das suas cidades (os sem cidade só com acesso a todas). Fica no registo.
+     */
     generateNow: protectedProcedure.mutation(async ({ ctx }) => {
-      requireAccess(ctx.user, "tarefas", "manage");
-      requireRole(ctx.user.role, "admin");
+      const u = viewerOf(ctx);
+      if (!canGenerateChecklists(u)) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
+      requireAccess(u, "tarefas", "manage");
+      const scope = scopedProjectIds();
       const { generateTemplateTasks } = await import("./tasksService");
-      return generateTemplateTasks(new Date());
+      const r = await generateTemplateTasks(new Date(), { projectIds: scope });
+      await logActivity({
+        userId: ctx.user.id, action: "task_templates_generate_now", entity: "task_template",
+        details: `Gerar hoje (${r.date}, ${scope === undefined ? "todas as cidades" : "as minhas cidades"}): ${r.created} criada(s), ${r.skipped} já existia(m), ${r.failed} falhada(s)`,
+      });
+      return r;
     }),
   }),
 });
