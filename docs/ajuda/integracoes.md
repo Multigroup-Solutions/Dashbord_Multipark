@@ -2,7 +2,7 @@
 modulo: integracoes
 titulo: Integrações (estado das ligações externas)
 rotas: /integracoes
-palavras: central vodafone, one net, attendant console, consola, sugar crm, telefonemas, chamadas da central, windsor, aviso ao desligar, integração desligada, integrações, integracoes, ligações, testar ligação, estado desconhecido, sem problemas conhecidos, reautorização, religar, chave de cifra, google business, google ads, meta, whatsapp, gmail, zello, ia, gemini, drive, armazenamento, s3, base de dados, bd multipark, quem pode testar, limite de testes
+palavras: central vodafone, tocar no dashboard, quem está a ligar, +351, click to call, one net, attendant console, consola, sugar crm, telefonemas, chamadas da central, windsor, aviso ao desligar, integração desligada, integrações, integracoes, ligações, testar ligação, estado desconhecido, sem problemas conhecidos, reautorização, religar, chave de cifra, google business, google ads, meta, whatsapp, gmail, zello, ia, gemini, drive, armazenamento, s3, base de dados, bd multipark, quem pode testar, limite de testes
 ---
 # Integrações
 
@@ -44,6 +44,12 @@ Página **Integrações** (menu Sistema): um cartão por ligação externa — G
 - **Chamadas internas**: a consola só regista uma chamada quando a pesquisa encontra um contacto. Quem liga de uma extensão (por exemplo, o 410) aparece como "Extensão 410" e a chamada fica registada como **Interna**.
 - **Procurar pelo nome na consola**: na pesquisa de contactos da consola, escreve 3 ou mais letras do nome. Aparecem as fichas do **RH** (com o telefone de trabalho) e os clientes do **CRM** (com o telefone principal). A partir daí ligas pela consola. Quem não tem telefone não aparece.
 - **Botões "Ligar" da dashboard**: abrem um link `tel:`, que o Windows entrega ao programa escolhido para "TEL" (por exemplo, a Ligação ao Telemóvel). Para ligar pela consola, escolhe a Attendant Console em Definições → Aplicações → Aplicações predefinidas → "TEL". A consola **não pode estar a correr como administrador** (Propriedades do atalho → Compatibilidade): se estiver, cada clique abre uma consola nova, pede o login e não liga.
+  - O número vai como a central o marca: os de Portugal **sem o +351** (só os 9 dígitos) e os de fora com **00** (ex.: 0034…). Com o "+351" a consola não fazia a chamada.
+- **Tocar no dashboard** (interruptor **Central Vodafone: tocar no dashboard**, em Definições → Automações; vem desligado): quando entra uma chamada na consola de uma pessoa, o dashboard dela mostra, em qualquer página, **quem está a ligar** (nome, Cliente ou Equipa, reservas) com **Abrir ficha**, e toca até 25 s.
+  - Só para quem tem um acesso da consola ativo, e só com o "receber as chamadas da consola" ligado (o toque vem da pesquisa que a consola faz à dashboard).
+  - **Silenciar** cala esta chamada; **Sem som neste browser** deixa só o aviso. **Avisar fora do separador** pede ao Windows para mostrar a chamada também com o dashboard escondido.
+  - As chamadas que fazes pelos botões **Ligar** da dashboard não tocam: o aviso diz "a ligar".
+  - Atender e desligar continua a ser **na consola**. Atender a partir da dashboard só com o Xsi, quando a Vodafone der o endereço certo.
 - **Desempenho**: as chamadas registadas pela consola contam para quem atendeu ou ligou. As internas (com colegas do RH ou de extensões) ficam registadas, mas não contam, exceto as do supervisor a ligar aos extras.
 
 ### Xsi da One Net (todas as linhas, telemóveis incluídos)

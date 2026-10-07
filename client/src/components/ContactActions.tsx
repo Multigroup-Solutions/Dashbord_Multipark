@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { can } from "@shared/access";
 import { composeEmailHref, contactEmails, contactPhones, whatsappConversationHref, type ContactPhone } from "@shared/contactActions";
+import { telHref } from "@shared/phone";
 
 const fmt = (p: ContactPhone) => {
   const m = p.e164?.match(/^\+351(\d{3})(\d{3})(\d{3})$/);
@@ -73,10 +74,11 @@ export function ContactActions({
   );
 
   // "Ligar": pelo telemóvel (tel:) sempre; pelo WhatsApp só com o interruptor das chamadas.
+  // Lote 45: o tel: leva o número como a central o marca (PT sem +351; estrangeiro com 00).
   const callButton = ph.length > 0 && (
     ph.length === 1 && !callsOn ? (
       <Button size="sm" variant="outline" className={btn} asChild>
-        <a href={`tel:${ph[0].e164 ?? ph[0].raw}`} title={`Ligar ${fmt(ph[0])}`}><Phone className="h-4 w-4" />Ligar</a>
+        <a href={telHref(ph[0].e164 ?? ph[0].raw)} title={`Ligar ${fmt(ph[0])}`}><Phone className="h-4 w-4" />Ligar</a>
       </Button>
     ) : (
       <DropdownMenu>
@@ -94,7 +96,7 @@ export function ContactActions({
           <DropdownMenuLabel className="text-xs">Pelo telemóvel</DropdownMenuLabel>
           {ph.map((p) => (
             <DropdownMenuItem key={`t${p.raw}`} asChild>
-              <a href={`tel:${p.e164 ?? p.raw}`}>{fmt(p)}</a>
+              <a href={telHref(p.e164 ?? p.raw)}>{fmt(p)}</a>
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>
