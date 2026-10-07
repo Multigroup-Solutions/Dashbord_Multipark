@@ -15,8 +15,15 @@
  *   Fichas de admin/super_admin ficam fora do alcance de quem está abaixo.
  *
  * CONTRATUAL (posto, centro, tipo/datas de contrato, salário, subsídio,
- * conta associada, ativo/inativo, email de trabalho): só admin+ — e um admin
+ * conta associada, ativo/inativo, email de trabalho): admin+ — e um admin
  * não toca na ficha de um super_admin.
+ *
+ * 41c (Jorge, 7 out 2026: "o supervisor tem que ter permissões para fazer
+ * tudo no RH da cidade dele"): o supervisor vê e gere as fichas da SUA CIDADE
+ * (não só do centro da ficha dele) de quem está abaixo dele — ativar e
+ * desativar, posto (até team leader), centro (da cidade), tipo e datas de
+ * contrato. O dinheiro (salário, subsídio) e a identidade (email de trabalho,
+ * conta associada) continuam só admin+.
  */
 export type RhRole = string;
 
@@ -30,6 +37,8 @@ export interface RhViewer {
   employeeId: number | null;
   /** centros (com descendentes) que supervisor/team_leader/frontoffice gerem */
   scopeProjectIds: number[] | null;
+  /** 41c: o supervisor com todas as cidades (permissão "todas as cidades"). */
+  scopeAll?: boolean;
 }
 
 export interface EmployeeRef {
@@ -66,7 +75,14 @@ export function isOwn(v: RhViewer, employeeId: number): boolean {
 }
 
 function inScope(v: RhViewer, e: EmployeeRef): boolean {
-  return e.projectId != null && (v.scopeProjectIds ?? []).includes(e.projectId);
+  return inScopeProject(v, e.projectId);
+}
+
+/** O centro de custos está no âmbito de quem vê? PURA. */
+export function inScopeProject(v: RhViewer, projectId: number | null | undefined): boolean {
+  if (projectId == null) return false;
+  if (v.scopeAll) return true;
+  return (v.scopeProjectIds ?? []).includes(projectId);
 }
 
 /** A ficha é de alguém admin+ com mais poder do que quem está a ver? */
@@ -135,6 +151,78 @@ export function canEditContract(v: RhViewer, e: EmployeeRef): boolean {
   return !isProtectedTarget(v, e);
 }
 
+/** 41c: postos que o supervisor dá (abaixo dele). */
+export const SUPERVISOR_ASSIGNABLE_POSITIONS = ["team_leader", "senior_driver", "driver", "extra"] as const;
+/** 41c: campos contratuais que o supervisor muda (sem dinheiro nem identidade). */
+export const SUPERVISOR_CONTRACT_FIELDS = ["position", "extraLevel", "department", "projectId", "contractType", "contractStart", "contractEnd", "isActive"] as const;
+
+/** A ficha é de alguém abaixo de um supervisor? Conta pelo papel; sem conta, pelo posto. */
+function belowSupervisor(e: EmployeeRef): boolean {
+  if (e.role) return rank(e.role) >= 0 && rank(e.role) < RANK.supervisor;
+  return e.position == null || (SUPERVISOR_ASSIGNABLE_POSITIONS as readonly string[]).includes(e.position);
+}
+
+/**
+ * 41c: GERIR a ficha (ativar/desativar, posto, centro, contrato sem dinheiro,
+ * horário, ausências, revisão do ponto): admin+ (não protegido), ou o
+ * supervisor nas fichas da sua cidade de quem está abaixo dele — nunca a dele.
+ */
+export function canManageEmployee(v: RhViewer, e: EmployeeRef): boolean {
+  if (canEditContract(v, e)) return true;
+  return v.role === "supervisor" && !isOwn(v, e.id) && inScope(v, e) && belowSupervisor(e);
+}
+
+/**
+ * 41c: erro (PT-PT) ao mudar estes campos contratuais nesta ficha, ou null.
+ * admin+: tudo. Supervisor: só SUPERVISOR_CONTRACT_FIELDS, postos abaixo
+ * dele e centros da sua cidade. PURA.
+ */
+export function contractEditError(v: RhViewer, e: EmployeeRef, sent: Record<string, unknown>): string | null {
+  const keys = (CONTRACT_FIELDS as readonly string[]).filter((k) => sent[k] !== undefined);
+  if (!keys.length || canEditContract(v, e)) return null;
+  if (!canManageEmployee(v, e)) return "Só admin pode alterar dados contratuais (posto, centro, contrato, salário, conta).";
+  if (keys.some((k) => !(SUPERVISOR_CONTRACT_FIELDS as readonly string[]).includes(k))) {
+    return "O salário, o subsídio de alimentação, o email de trabalho e a conta associada só um administrador muda.";
+  }
+  if (sent.position !== undefined && !(SUPERVISOR_ASSIGNABLE_POSITIONS as readonly unknown[]).includes(sent.position)) {
+    return "O supervisor só dá postos abaixo dele: team leader, condutor sénior, condutor ou extra.";
+  }
+  if (sent.projectId !== undefined && !(typeof sent.projectId === "number" && inScopeProject(v, sent.projectId))) {
+    return "Esse centro de custos não é da tua cidade.";
+  }
+  return null;
+}
+
+/**
+ * 41c: criar uma ficha — admin+ tudo; o supervisor cria na sua cidade, com
+ * posto abaixo dele, sem salário/subsídio nem conta escolhida à mão. PURA.
+ */
+export function createEmployeeError(v: RhViewer, input: { position: string; projectId: number | null; monthlySalary?: unknown; mealAllowancePerDay?: unknown; userId?: unknown }): string | null {
+  if (rank(v.role) >= RANK.admin) return null;
+  if (v.role !== "supervisor") return "Só um administrador ou o supervisor da cidade cria fichas.";
+  if (!(SUPERVISOR_ASSIGNABLE_POSITIONS as readonly string[]).includes(input.position)) {
+    return "O supervisor só cria fichas abaixo dele: team leader, condutor sénior, condutor ou extra.";
+  }
+  if (input.monthlySalary != null && input.monthlySalary !== "" || input.mealAllowancePerDay != null && input.mealAllowancePerDay !== "") {
+    return "O salário e o subsídio de alimentação só um administrador põe.";
+  }
+  if (input.userId != null) return "Ligar a ficha a uma conta escolhida à mão é com um administrador (a conta liga-se sozinha pelo email).";
+  if (!inScopeProject(v, input.projectId)) return "Esse centro de custos não é da tua cidade.";
+  return null;
+}
+
+/**
+ * 41c: o que o próprio carrega na sua ficha — os documentos dele. Contrato,
+ * anexos, termo de responsabilidade e seguro são do RH (contam para a lista
+ * obrigatória). PURA.
+ */
+export const SELF_UPLOAD_DOC_TYPES = ["id_card", "residence_permit", "driving_license", "nib_proof", "address_proof", "photo", "other"] as const;
+export function selfUploadDocTypeError(v: RhViewer, e: EmployeeRef, docType: string): string | null {
+  if (!isOwn(v, e.id) || rank(v.role) >= RANK.admin) return null;
+  return (SELF_UPLOAD_DOC_TYPES as readonly string[]).includes(docType) ? null
+    : "Esse documento (contrato, anexo, termo ou seguro) é o RH que o carrega na tua ficha.";
+}
+
 /** Pode ver dados SENSÍVEIS de gestão (salário, subsídio, bloqueio, desativação)? admin+ (não protegido) ou o próprio. */
 export function canViewSensitive(v: RhViewer, e: EmployeeRef): boolean {
   if (isOwn(v, e.id)) return true;
@@ -186,7 +274,7 @@ export function canReadEmployeeRecord(
 }
 
 /** Campos da ficha que são DADOS PESSOAIS (o próprio e os gestores do centro editam). */
-export const PERSONAL_FIELDS = ["fullName", "phone", "personalEmail", "personalPhone", "nif", "nib", "address", "birthDate", "nationality", "photoUrl", "photoKey"] as const;
+export const PERSONAL_FIELDS = ["fullName", "phone", "personalEmail", "personalPhone", "nif", "nib", "address", "birthDate", "nationality", "photoUrl", "photoKey", "idDocNumber", "drivingLicenseNumber"] as const;
 /** Campos CONTRATUAIS / de gestão (só admin+). */
 export const CONTRACT_FIELDS = ["email", "position", "extraLevel", "department", "projectId", "contractType", "contractStart", "contractEnd", "monthlySalary", "mealAllowancePerDay", "userId", "isActive"] as const;
 
@@ -224,6 +312,8 @@ export function employeeAccess(v: RhViewer, e: EmployeeRef) {
     isOwn: isOwn(v, e.id),
     canEditPersonal: canEditPersonal(v, e),
     canEditContract: canEditContract(v, e),
+    /** 41c: ativar/desativar, posto, centro e contrato sem dinheiro (admin+ ou supervisor da cidade). */
+    canManage: canManageEmployee(v, e),
     canViewSensitive: canViewSensitive(v, e),
     canViewDocuments: canViewDocuments(v, e),
     /** 19c: RH desta ficha — mexe no "Não enviar". */

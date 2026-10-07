@@ -48,7 +48,9 @@ describe("Google Drive — rotas e permissões", () => {
   });
 
   it("importar de uma folha exige gerir o módulo de destino", async () => {
-    await expect(caller("supervisor").googleDrive.sheets.readCsv({ link: "1AbCdEfGhIjKlMnOp", purpose: "extras" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("team_leader").googleDrive.sheets.readCsv({ link: "1AbCdEfGhIjKlMnOp", purpose: "extras" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // 41c: o supervisor gere o RH da cidade (importa extras) — passa a permissão e pára na falta da conta Google
+    await expect(caller("supervisor").googleDrive.sheets.readCsv({ link: "1AbCdEfGhIjKlMnOp", purpose: "extras" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     // Anual: só o super admin gere
     await expect(caller("admin").googleDrive.sheets.readCsv({ link: "1AbCdEfGhIjKlMnOp", purpose: "financial_history" })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller("admin").googleDrive.sheets.readCsv({ link: "1AbCdEfGhIjKlMnOp", purpose: "extras" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });

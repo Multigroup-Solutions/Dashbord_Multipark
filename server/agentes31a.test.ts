@@ -126,7 +126,8 @@ describe("31a — leitura da Multipark e servidor", () => {
 
   it("rota só para quem gere o RH; o cruzamento só lê; criar ficha liga ao id exato do agente", () => {
     const r = src("server/routers.ts");
-    expect(r).toMatch(/agentCrossCheck: protectedProcedure[\s\S]{0,200}requireAccess\(ctx\.user, "rh", "manage"\)/);
+    // 41c: o cruzamento é de todas as cidades — com quem gere o RH de todas
+    expect(r).toMatch(/agentCrossCheck: protectedProcedure[\s\S]{0,200}requireNationalRhManage\(ctx\.user\)/);
     expect(r).toContain("const agentId = input.agentUserId ?? await agentIdForName(input.agentName);");
     expect(r).toContain("Esse agente já está ligado a uma ficha");
     expect(src("server/agentCrossCheck.ts")).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b|\.insert\(|\.update\(|\.delete\(/);

@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { BlockedOwnDocuments } from "@/components/BlockedOwnDocuments";
 import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -360,6 +361,8 @@ export default function DashboardLayout({
           <p className="text-xs text-muted-foreground border-t pt-3">
             Para libertar o acesso, fala com um supervisor ou administrador.
           </p>
+          {/* 41c: bloqueado por documentos? Carrega-os daqui (só a tua ficha). */}
+          <BlockedOwnDocuments />
           {/* 20d: sem isto não havia como sair (ex.: PDA partilhado) */}
           <Button variant="outline" onClick={() => { logout().finally(() => { window.location.href = "/"; }); }}>Sair</Button>
         </div>

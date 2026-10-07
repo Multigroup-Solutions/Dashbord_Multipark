@@ -11,16 +11,25 @@ import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
 import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
-import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests } from "./rhAccess";
+import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
 import { importExtrasFromCsv } from "./extrasImport";
 import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
+
+/** 41c: ~10 MB por documento (base64 ≈ 4/3 do ficheiro). */
+const DOC_MAX_BASE64_CHARS = 14_000_000;
+
+/** 41c: na própria ficha, cada um carrega os SEUS documentos (contrato, anexos, termo e seguro são do RH). */
+async function assertSelfUploadDocType(user: { id: number; role: string }, employeeId: number, docType: string): Promise<void> {
+  const err = selfUploadDocTypeError(await rhViewer(user), await rhEmployeeRefOrThrow(employeeId), docType);
+  if (err) throw new TRPCError({ code: "FORBIDDEN", message: err });
+}
 import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, deleteEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 import { ROLE_HIERARCHY, requireRole, resolveDeactivationOrThrow } from "./routerGuards";
-import { rhViewer, rhEmployeeRef, employeeAccountRole, rhEmployeeRefOrThrow, assertEmployeeWriteScope, assertOwnOrScopedEmployee, assertCanViewDocuments, assertCanViewTimeRecords, assertCanUploadDocuments } from "./rhGuards";
+import { rhViewer, rhEmployeeRef, employeeAccountRole, rhEmployeeRefOrThrow, assertEmployeeWriteScope, assertOwnOrScopedEmployee, assertCanViewDocuments, assertCanViewTimeRecords, assertCanUploadDocuments, assertCanManageEmployee, requireNationalRhManage, employeeIdOfRecord } from "./rhGuards";
 
 /**
  * 19c: grava a foto de perfil VALIDADA (tipo pelos primeiros bytes, ≤ 4 MB,
@@ -118,8 +127,37 @@ export const rhRouter = router({
     const { getDb, listInboundEmailsByAlias } = await import("./db");
     // Erro ≠ vazio (18b): sem BD diz-se, em vez de "não há emails".
     if (!(await getDb())) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível" });
-    return listInboundEmailsByAlias("recursos-humanos", 200);
+    // 41d: cada email diz onde está (por tratar / pronta / lixo) e se foi para o lixo sozinho.
+    const { recruitmentStateOf } = await import("../shared/recruitmentEmails");
+    const rows = await listInboundEmailsByAlias("recursos-humanos", 300);
+    return rows.map((e: any) => { const s = recruitmentStateOf(e); return { ...e, state: s.state, autoTrash: s.auto }; });
   }),
+
+  /**
+   * 41d: mudar um ou vários emails de sítio — "Pronta", "Lixo" ou "Repor" (por
+   * tratar). Nada se apaga; fica registado quem e quando. Só emails de
+   * recrutamento.
+   */
+  setRecruitmentState: protectedProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(300), state: z.enum(["open", "done", "trash"]) }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "leads_extras", "edit");
+      const { getDb } = await import("./db");
+      const { and, eq, inArray } = await import("drizzle-orm");
+      const database = await getDb();
+      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+      const { inboundEmails } = await import("../drizzle/schema");
+      const ids = Array.from(new Set(input.ids));
+      const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+      const res: any = await database.update(inboundEmails)
+        .set({ recruitmentState: input.state, recruitmentStateAt: now, recruitmentStateById: ctx.user.id })
+        .where(and(inArray(inboundEmails.id, ids), eq(inboundEmails.alias, "recursos-humanos")));
+      const changed = Number(res?.[0]?.affectedRows ?? res?.affectedRows ?? 0);
+      if (!changed) throw new TRPCError({ code: "NOT_FOUND", message: "Email de recrutamento não encontrado." });
+      const label = input.state === "done" ? "pronta(s)" : input.state === "trash" ? "no lixo" : "repostos (por tratar)";
+      await logActivity({ userId: ctx.user.id, action: "recruitment_state", entity: "inbound_emails", entityId: ids.length === 1 ? ids[0] : undefined, details: `${changed} email(s) ${label} · ids ${ids.slice(0, 60).join(",")}`.slice(0, 1000) });
+      return { changed };
+    }),
 
   // Notas internas do backoffice sobre um email/candidato de recrutamento.
   setRecruitmentNotes: protectedProcedure
@@ -148,6 +186,8 @@ export const rhRouter = router({
       fromAlias: z.enum(["criticas", "reclamacoes", "perdidos", "recursos-humanos"]).optional(),
       // Inclui link de registo: cria conta para o candidato e gera /convite/:token.
       includeRegisterLink: z.boolean().optional(),
+      // 41d: o email respondido passa a "Pronta" (sai da lista; "Repor" devolve-o).
+      emailId: z.number().int().positive().optional(),
       candidateName: z.string().optional(),
       origin: z.string().url().optional(),
       // Ficheiros já enviados para /api/upload — o servidor descarrega-os
@@ -207,7 +247,23 @@ export const rhRouter = router({
         details: `Resposta a ${input.to}: ${input.subject.slice(0, 80)}${inviteLink ? " (+link registo)" : ""}${emailAttachments.length ? ` (+${emailAttachments.length} anexo${emailAttachments.length > 1 ? "s" : ""})` : ""}`,
       });
       if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Envio de email (Gmail) não configurado ou falhou o envio" });
-      return { ok, inviteLink };
+      // 41d: respondido = pronto (sai de "Por tratar"; "Repor" devolve-o). Falhar aqui não desfaz o envio.
+      let markedDone = false;
+      if (input.emailId) {
+        try {
+          const { getDb } = await import("./db");
+          const { and, eq } = await import("drizzle-orm");
+          const { inboundEmails } = await import("../drizzle/schema");
+          const database = await getDb();
+          if (database) {
+            const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+            const r: any = await database.update(inboundEmails).set({ recruitmentState: "done", recruitmentStateAt: now, recruitmentStateById: ctx.user.id })
+              .where(and(eq(inboundEmails.id, input.emailId), eq(inboundEmails.alias, "recursos-humanos")));
+            markedDone = Number(r?.[0]?.affectedRows ?? r?.affectedRows ?? 0) > 0;
+          }
+        } catch (err) { console.warn("[recrutamento] marcar como pronta falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
+      }
+      return { ok, inviteLink, markedDone };
     }),
 
   // Resumo do mês actual para o próprio colaborador: horas + valor a receber.
@@ -396,6 +452,12 @@ export const rhRouter = router({
       if (projectId == null) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Centro de custos obrigatório — escolhe um, ou preenche a morada para o sistema inferir a cidade." });
       }
+      // 41c: o supervisor cria fichas na sua cidade, de team leader para baixo, sem salário nem conta à mão.
+      {
+        const createErr = createEmployeeError(await rhViewer(ctx.user), { position: input.position, projectId, monthlySalary: input.monthlySalary, mealAllowancePerDay: input.mealAllowancePerDay, userId: input.userId });
+        if (createErr) throw new TRPCError({ code: "FORBIDDEN", message: createErr });
+        assertProjectAccess(projectId);
+      }
 
       // Regra do Jorge (2026-09-10): quem tem email válido tem utilizador com
       // ESSE email. Se o userId não vier explícito, depois de criar a ficha
@@ -482,6 +544,9 @@ export const rhRouter = router({
       nationality: z.string().optional(),
       photoUrl: z.string().optional(),
       photoKey: z.string().optional(),
+      // 41c: n.º do documento de identificação e da carta (o próprio também muda).
+      idDocNumber: z.string().trim().max(32).nullable().optional(),
+      drivingLicenseNumber: z.string().trim().max(32).nullable().optional(),
       position: z.enum(["director","supervisor","team_leader","backoffice","frontoffice","senior_driver","driver","extra"]).optional(),
       extraLevel: z.number().min(1).max(5).optional(),
       department: z.string().optional(),
@@ -501,9 +566,10 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const ref = await rhEmployeeRefOrThrow(input.id);
       const sent = (keys: readonly string[]) => keys.some((k) => (input as any)[k] !== undefined);
-      if (sent(CONTRACT_FIELDS) && !canEditContract(viewer, ref)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Só admin pode alterar dados contratuais (posto, centro, contrato, salário, conta)." });
-      }
+      // 41c: admin+ muda tudo; o supervisor da cidade muda posto (até team
+      // leader), centro (da cidade), contrato e ativo — sem dinheiro nem conta.
+      const contractErr = sent(CONTRACT_FIELDS) ? contractEditError(viewer, ref, input as Record<string, unknown>) : null;
+      if (contractErr) throw new TRPCError({ code: "FORBIDDEN", message: contractErr });
       if (sent(PERSONAL_FIELDS) && !canEditPersonal(viewer, ref)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar os dados desta ficha." });
       }
@@ -696,7 +762,8 @@ export const rhRouter = router({
       await assertEmployeeAccess(input.id);
       const found = await getEmployeeById(input.id);
       if (!found) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
-      if (!canEditContract(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.id))) {
+      // 41c: admin+, ou o supervisor nas fichas da sua cidade de quem está abaixo dele.
+      if (!canManageEmployee(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.id))) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar o estado desta ficha." });
       }
       const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
@@ -795,13 +862,15 @@ export const rhRouter = router({
       .input(z.object({
         employeeId: z.number(),
         docType: z.enum(["id_card","residence_permit","driving_license","nib_proof","address_proof","contract","extra_contract","contract_annex","responsibility_term","work_accident_insurance","photo","other"]),
-        label: z.string().optional(),
-        fileBase64: z.string(),
-        mimeType: z.string(),
-        fileName: z.string(),
+        label: z.string().max(255).optional(),
+        // 41c: limites (antes sem tamanho máximo)
+        fileBase64: z.string().max(DOC_MAX_BASE64_CHARS),
+        mimeType: z.string().max(100),
+        fileName: z.string().max(200),
       }))
       .mutation(async ({ ctx, input }) => {
         await assertCanUploadDocuments(ctx.user, input.employeeId);
+        await assertSelfUploadDocType(ctx.user, input.employeeId, input.docType);
         const { storagePut } = await import("./storage");
         const buffer = Buffer.from(input.fileBase64, "base64");
         const key = `employees/${input.employeeId}/docs/${input.docType}-${Date.now()}-${input.fileName}`;
@@ -831,15 +900,17 @@ export const rhRouter = router({
       .input(z.object({
         employeeId: z.number(),
         docType: z.enum(["id_card","residence_permit","driving_license","nib_proof","address_proof","contract","extra_contract","contract_annex","responsibility_term","work_accident_insurance","photo","other"]),
+        // 41c: até 10 ficheiros de até ~10 MB cada (antes sem limites)
         files: z.array(z.object({
-          fileBase64: z.string(),
-          mimeType: z.string(),
-          fileName: z.string(),
-          label: z.string().optional(),
-        })),
+          fileBase64: z.string().max(DOC_MAX_BASE64_CHARS),
+          mimeType: z.string().max(100),
+          fileName: z.string().max(200),
+          label: z.string().max(255).optional(),
+        })).min(1).max(10),
       }))
       .mutation(async ({ ctx, input }) => {
         await assertCanUploadDocuments(ctx.user, input.employeeId);
+        await assertSelfUploadDocType(ctx.user, input.employeeId, input.docType);
         const { storagePut } = await import("./storage");
         const results: { url: string; key: string }[] = [];
         for (const file of input.files) {
@@ -934,7 +1005,8 @@ export const rhRouter = router({
         isWorkDay: z.boolean(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        // 41c: gerir a ficha (admin+ ou supervisor da cidade), nunca de outra cidade.
+        await assertCanManageEmployee(ctx.user, input.employeeId);
         await upsertSchedule({ ...input, isWorkDay: input.isWorkDay ? 1 : 0 });
         return { success: true };
       }),
@@ -942,7 +1014,7 @@ export const rhRouter = router({
     delete: protectedProcedure
       .input(z.object({ employeeId: z.number(), weekday: z.number().min(0).max(6) }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        await assertCanManageEmployee(ctx.user, input.employeeId);
         await deleteSchedule(input.employeeId, input.weekday);
         return { success: true };
       }),
@@ -985,7 +1057,10 @@ export const rhRouter = router({
     review: protectedProcedure
       .input(z.object({ id: z.number(), decision: z.enum(["approved", "rejected"]), note: z.string().max(255).optional(), correctedHours: z.number().min(0).max(24).optional() }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        // 41c: só picagens de fichas que quem revê gere (da sua cidade).
+        const empId = await employeeIdOfRecord("time_records", input.id);
+        if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Registo de ponto não encontrado" });
+        await assertCanManageEmployee(ctx.user, empId, "Sem permissão para rever o ponto desta pessoa.");
         await reviewTimeRecord(input.id, input.decision, ctx.user.id, input.note ?? null, input.correctedHours ?? null);
         await logActivity({ userId: ctx.user.id, action: "review", entity: "time_record", entityId: input.id, details: `${input.decision}${input.correctedHours != null ? ` (${input.correctedHours}h)` : ""}${input.note ? ` — ${input.note}` : ""}` });
         return { success: true };
@@ -1201,12 +1276,16 @@ export const rhRouter = router({
     // ── Geofence por centro de custos (raio de picagem) ───────────────────
     geofences: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "rh", "manage");
-      return listProjectGeofences();
+      // 41c: só os centros das cidades de quem vê
+      const allowed = scopedProjectIds();
+      const all = await listProjectGeofences();
+      return allowed === undefined ? all : all.filter((g) => allowed.includes(g.projectId));
     }),
     setGeofence: protectedProcedure
       .input(z.object({ projectId: z.number(), lat: z.number(), lng: z.number(), radiusM: z.number().min(50).max(50000) }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
+        assertProjectAccess(input.projectId);
         await setProjectGeofence(input.projectId, input.lat, input.lng, input.radiusM);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "project_geofence", entityId: input.projectId });
         return { success: true };
@@ -1215,6 +1294,7 @@ export const rhRouter = router({
       .input(z.object({ projectId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
+        assertProjectAccess(input.projectId);
         await deleteProjectGeofence(input.projectId);
         return { success: true };
       }),
@@ -1222,7 +1302,8 @@ export const rhRouter = router({
     monthlyHours: protectedProcedure
       .input(z.object({ employeeId: z.number(), year: z.number(), month: z.number() }))
       .query(async ({ ctx, input }) => {
-        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
+        // 41c: horas (sem valores) — o supervisor da cidade também vê
+        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "supervisor");
         return getMonthlyHours(input.employeeId, input.year, input.month);
       }),
   }),
@@ -1365,7 +1446,8 @@ export const rhRouter = router({
     list: protectedProcedure
       .input(z.object({ employeeId: z.number(), year: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "admin");
+        // 41c: férias e baixas — o supervisor da cidade também vê
+        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "supervisor");
         return getEmployeeLeaves(input.employeeId, input.year);
       }),
     create: protectedProcedure
@@ -1377,7 +1459,7 @@ export const rhRouter = router({
         notes: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        await assertCanManageEmployee(ctx.user, input.employeeId);
         await createEmployeeLeave({ ...input, createdById: ctx.user.id });
         await logActivity({ userId: ctx.user.id, action: "create", entity: "employee_leave", entityId: input.employeeId, details: `${input.leaveType} ${input.fromDate}→${input.toDate}` });
         return { success: true };
@@ -1385,7 +1467,9 @@ export const rhRouter = router({
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        const empId = await employeeIdOfRecord("employee_leaves", input.id);
+        if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Ausência não encontrada" });
+        await assertCanManageEmployee(ctx.user, empId);
         await deleteEmployeeLeave(input.id);
         return { success: true };
       }),
@@ -1411,6 +1495,10 @@ export const rhRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "edit");
+        // 41c: só pontos de fichas da cidade de quem limpa
+        const empId = await employeeIdOfRecord("employee_penalties", input.id);
+        if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Penalização não encontrada" });
+        await assertEmployeeAccess(empId);
         await clearPenalty(input.id, ctx.user.id);
         await logActivity({ userId: ctx.user.id, action: "clear", entity: "employee_penalty", entityId: input.id });
         return { success: true };
@@ -1419,7 +1507,8 @@ export const rhRouter = router({
     processNoShows: protectedProcedure
       .input(z.object({ date: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "rh", "manage");
+        // 41c: corre para todas as cidades — com quem gere o RH de todas
+        requireNationalRhManage(ctx.user);
         const report = await detectExtraDiaNoShows(input.date);
         await logActivity({ userId: ctx.user.id, action: "process_noshows", entity: "extras_dia", details: `${input.date}: ${report.created} possíveis faltas (fora: ${report.skipped.proposed} propostos, ${report.skipped.sent_home} mandados para casa, ${report.skipped.multipark} com movimentos)` });
         return report;
@@ -1469,6 +1558,8 @@ export const rhRouter = router({
     .input(z.object({ employeeId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "rh", "edit");
+      // 41c: desbloquear só quem é da cidade de quem desbloqueia
+      await assertEmployeeAccess(input.employeeId);
       await unblockEmployeeLogin(input.employeeId, ctx.user.id);
       return { success: true };
     }),

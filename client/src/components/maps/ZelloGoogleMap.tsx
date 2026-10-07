@@ -181,7 +181,7 @@ export function ZelloGoogleMap({ drivers, fitSignal = 0 }: { drivers: DriverMapP
         </div>
       </div>
       <div className="relative">
-        <div ref={divRef} className="w-full h-[360px] sm:h-[520px]" aria-label="Mapa das posições dos condutores" />
+        <div ref={divRef} className="w-full h-[440px] sm:h-[680px]" aria-label="Mapa das posições dos condutores" />
         {(!API_KEY || !MAP_ID || status !== "ready") && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted px-6 text-center text-sm" role="status">
             <p>{!API_KEY || !MAP_ID

@@ -2370,6 +2370,10 @@ export const inboundEmails = mysqlTable("inbound_emails", {
 	gmThreadId: varchar({ length: 64 }),                   // X-GM-THRID (thread do Gmail) p/ agrupar respostas
 	headerRefs: text(),                                    // In-Reply-To + References (message-ids) p/ threading
 	notes: text(),                                         // notas internas do backoffice sobre o candidato/email (migration 0061)
+	// 0510 (41d): recrutamento — NULL/'open' por tratar, 'done' pronta, 'trash' lixo (nada se apaga)
+	recruitmentState: varchar({ length: 12 }),
+	recruitmentStateAt: datetime({ mode: 'string' }),
+	recruitmentStateById: int(),
 	status: mysqlEnum(['processed', 'skipped', 'error', 'processing']).default('processed').notNull(), // processing = Message-ID reservado, reclamação a ser criada (migration 0085)
 	errorMsg: varchar({ length: 500 }),
 	receivedAt: timestamp({ mode: 'string' }),
