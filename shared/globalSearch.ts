@@ -163,7 +163,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "criticas", label: "Críticas Google", path: "/criticas", modules: ["criticas"], keywords: ["criticas", "reviews", "google"], kind: "page" },
   { id: "ocorrencias", label: "Ocorrências", path: "/ocorrencias", modules: ["ocorrencias"], keywords: ["ocorrencias", "danos", "incidentes"], kind: "page" },
   { id: "perdidos", label: "Perdidos e Achados", path: "/perdidos-achados", modules: ["perdidos"], keywords: ["perdidos", "achados", "objetos"], kind: "page" },
-  { id: "comunicacao", label: "Caixas partilhadas (email)", path: "/comunicacao", modules: ["comunicacao"], keywords: ["email", "caixas", "comunicacao", "gmail"], kind: "page" },
+  { id: "comunicacao", label: "Caixas de email", path: "/comunicacao", modules: ["comunicacao"], keywords: ["email", "caixas", "caixas de email", "comunicacao", "gmail"], kind: "page" },
   { id: "meu-email", label: "O meu email", path: "/comunicacao/meu-email", modules: ["ficha"], keywords: ["meu email", "gmail", "email"], kind: "page" },
   { id: "rh", label: "Recursos Humanos", path: "/rh", modules: ["rh", "ficha"], keywords: ["rh", "ficha", "recursos humanos", "ponto", "documentos"], kind: "page" },
   { id: "leads", label: "Leads de Extras", path: "/extras-leads", modules: ["leads_extras"], keywords: ["leads", "candidaturas", "recrutamento"], kind: "page" },

@@ -230,7 +230,7 @@ describe("Erro ≠ vazio e horas de Lisboa", () => {
   it("caixas, lista, conversa, comunicações e triagem mostram o erro; o menu mostra '?'", () => {
     const page = src("client/src/pages/ComunicacaoPage.tsx");
     expect(page).toContain('what="as caixas de email"');
-    expect(page).toContain("!list.isLoading && !list.error && !(canWa && (wa.isLoading || wa.error)) && rows.length === 0"); // 17f: lista única (email + WhatsApp)
+    expect(page).toContain("enabled && !list.isLoading && !list.error && threads.length === 0"); // lote 45: só email
     expect(src("client/src/components/mail/MailThreadView.tsx")).toContain('what="a conversa"');
     expect(src("client/src/components/mail/CommunicationsTimeline.tsx")).toContain('what="as comunicações"');
     expect(src("client/src/components/mail/TriagePanel.tsx")).toContain('what="as caixas para classificar"');

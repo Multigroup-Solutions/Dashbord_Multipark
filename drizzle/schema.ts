@@ -2319,6 +2319,8 @@ export const users = mysqlTable("users", {
 	sessionVersion: int().default(0).notNull(),
 	// 0098 — preferências de notificação ({ muted: string[] }).
 	notificationPrefs: json(),
+	// 0525 — caixa de email por onde a pessoa entra na Comunicação (chave ou "me"; NULL = automática).
+	mailHomeBox: varchar({ length: 64 }),
 },
 (table) => [
 	uniqueIndex("users_openId_unique").on(table.openId),
