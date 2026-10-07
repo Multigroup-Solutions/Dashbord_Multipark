@@ -501,8 +501,10 @@ export async function generateEmployeePdf(
   const key = `employees/${o.employeeId}/docs/gerado-${Date.now()}.pdf`;
   const url = await store.put(key, pdf);
   const docType = o.template.templateType === "contrato_trabalho" ? "contract" : "other";
+  // 0530: o que o RH gera entra já validado (não fica "por validar").
   const employeeDocumentId = await store.createDoc({
     employeeId: o.employeeId, docType, label: sanitizeDriveName(`${o.name}.pdf`, 250), fileUrl: url, fileKey: key, mimeType: GOOGLE_MIME.pdf, uploadedById: user.id,
+    status: "validated", validatedById: user.id, validatedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
   });
   return { replaced, employeeDocumentId };
 }

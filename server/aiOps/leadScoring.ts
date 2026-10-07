@@ -18,6 +18,8 @@ import { LEAD_FIRST_CONTACT_SYSTEM, LEAD_SUMMARY_SYSTEM } from "../_core/ai/prom
 import { firstName } from "../_core/ai/pii";
 import { AiCallCap, oneLine, tryAi } from "./aiCall";
 import { cityOfProject, loadCityTrees, OPS_CITY_LABELS, opsCityOf } from "./cities";
+import { fullYearsBetween, isCalendarDay, licenceIssueDateFromPayload } from "../../shared/drivingLicence";
+import { lisbonDayOf } from "../../shared/lisbonDay";
 
 const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
 
@@ -132,12 +134,16 @@ function pickPayload(payload: unknown, re: RegExp): string | null {
   return null;
 }
 
-/** Anos de carta a partir de um número ou de uma data/ano. PURA. */
-export function licenceYearsFrom(v: string | null, nowYear: number): number | null {
-  if (!v) return null;
-  const year = v.match(/\b(19[5-9]\d|20\d\d)\b/);
-  if (year) return Math.max(0, nowYear - Number(year[1]));
-  return parseYears(v);
+/**
+ * Anos COMPLETOS de carta a partir da DATA DE EMISSÃO ("YYYY-MM-DD"), no dia
+ * de Lisboa `today`. Antes lia-se a 1.ª chave com "carta" no payload — o
+ * N.º da carta — e o número virava "anos" (Jorge, 7 out 2026). Sem data, sem
+ * dados. PURA.
+ */
+export function licenceYearsFromIssueDate(issuedAt: string | null | undefined, today: string): number | null {
+  if (!isCalendarDay(issuedAt ?? null) || !isCalendarDay(today)) return null;
+  const years = fullYearsBetween(issuedAt as string, today);
+  return years < 0 ? null : years;
 }
 
 async function loadLeadInputs(leadIds: number[]): Promise<Map<number, LeadScoreInput & { firstName: string; projectId: number | null }>> {
@@ -147,6 +153,7 @@ async function loadLeadInputs(leadIds: number[]): Promise<Map<number, LeadScoreI
   const ids = sql.join(leadIds.map((id) => sql`${id}`), sql`, `);
   const leads = rowsOf(await db.execute(sql`
     SELECT id, fullName, status, sourceRef, projectId,
+           DATE_FORMAT(drivingLicenseIssuedAt, '%Y-%m-%d') AS drivingLicenseIssuedAt,
            DATE_FORMAT(firstContactedAt, '%Y-%m-%d %H:%i:%s') AS firstContactedAt,
            DATE_FORMAT(lastInboundAt, '%Y-%m-%d %H:%i:%s') AS lastInboundAt
       FROM extra_leads WHERE id IN (${ids})`));
@@ -155,7 +162,7 @@ async function loadLeadInputs(leadIds: number[]): Promise<Map<number, LeadScoreI
     SELECT id, city, drivingExperience, payload FROM driver_applications WHERE id IN (${sql.join(appIds.map((id) => sql`${id}`), sql`, `)})`)) : [];
   const appById = new Map(apps.map((a) => [Number(a.id), a]));
   const trees = await loadCityTrees();
-  const nowYear = new Date().getUTCFullYear();
+  const today = lisbonDayOf(new Date());
   for (const l of leads) {
     const appId = Number(String(l.sourceRef ?? "").match(/^application:(\d+)$/)?.[1] ?? 0);
     const app = appId ? appById.get(appId) : undefined;
@@ -168,7 +175,8 @@ async function loadLeadInputs(leadIds: number[]): Promise<Map<number, LeadScoreI
       availabilityText: pickPayload(payload, /dispon|availab/i),
       city: cityOfProject(projectId, trees)?.city ?? opsCityOf(app?.city ?? null),
       experienceText: (app?.drivingExperience as string | null) ?? pickPayload(payload, /experi/i),
-      licenceYears: licenceYearsFrom(pickPayload(payload, /licen|carta|driving.?licen/i), nowYear),
+      // Só a DATA DE EMISSÃO (do lead ou da candidatura) — nunca o n.º da carta nem a validade.
+      licenceYears: licenceYearsFromIssueDate(l.drivingLicenseIssuedAt ?? licenceIssueDateFromPayload(payload), today),
       firstContactedAt: l.firstContactedAt ?? null,
       lastInboundAt: l.lastInboundAt ?? null,
       status: String(l.status),

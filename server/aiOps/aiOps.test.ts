@@ -42,7 +42,7 @@ import {
   viewerPerms,
 } from "./briefing";
 import { AUTO_APPLY_CONFIDENCE, classifyUnclearAvailability, decideAiAvailability, requestDays } from "./availabilityAi";
-import { availabilityDays, computeLeadScore, LEAD_SCORE_FIELDS, licenceYearsFrom, parseYears, summaryFallback } from "./leadScoring";
+import { availabilityDays, computeLeadScore, LEAD_SCORE_FIELDS, licenceYearsFromIssueDate, parseYears, summaryFallback } from "./leadScoring";
 import { aggregateHandoverWeek, detectRepeatedItems, textSimilarity } from "./handoverRepeats";
 import { opsCronOutcome, runOpsBriefingCron, lisbonClockOf } from "./cron";
 import { explanationFacts, explanationFallback } from "./evaluationExplain";
@@ -330,8 +330,12 @@ describe("pontuação das leads", () => {
     expect(parseYears("menos de 1 ano")).toBe(0);
     expect(availabilityDays("Fins de semana")).toBe(2);
     expect(availabilityDays("full-time")).toBe(7);
-    expect(licenceYearsFrom("2015-06-01", 2026)).toBe(11);
-    expect(licenceYearsFrom("3 anos", 2026)).toBe(3);
+    // Jorge (7 out 2026): anos de carta só pela DATA DE EMISSÃO (anos completos), nunca pelo n.º da carta.
+    expect(licenceYearsFromIssueDate("2015-06-01", "2026-10-07")).toBe(11);
+    expect(licenceYearsFromIssueDate("2023-10-08", "2026-10-07")).toBe(2);
+    expect(licenceYearsFromIssueDate("2023-10-07", "2026-10-07")).toBe(3);
+    expect(licenceYearsFromIssueDate(null, "2026-10-07")).toBeNull();
+    expect(licenceYearsFromIssueDate("L-1234567 8", "2026-10-07")).toBeNull();
   });
   it("nunca usa atributos protegidos (a função nem os recebe)", () => {
     const input: any = { availabilityText: "sábado", city: "faro", experienceText: "1 ano", licenceYears: 2, firstContactedAt: null, lastInboundAt: null, status: "new" };

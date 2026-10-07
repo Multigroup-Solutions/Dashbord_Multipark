@@ -69,6 +69,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
 import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
+import { LicenceWarning } from "./extrasDia/LicenceWarning";
+import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
 import { assignmentWhoLine, describeGap, describePickupPairing } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
@@ -1162,6 +1164,7 @@ function AssignmentForm({
               if (full) setLevel(full.suggestedLevel);
             }}
           />
+          <LicenceWarning status={[...candidates, ...(others ?? [])].find(x => x.id === employeeId)?.licence} name={personName} />
           {pickedOther && (
             <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs space-y-1">
               <div><strong>{pickedOther.fullName}</strong> ainda não pode ser Team Leader na escala.</div>
@@ -1341,6 +1344,7 @@ function AssignmentRow({
               </button>
             ) : a.personName}
             <NoticeBadge notice={notice} />
+            {a.employeeId != null && <QuickNoteButton employeeId={a.employeeId} name={a.personName} workDate={a.assignmentDate} assignmentId={a.id} />}
             {a.status === "proposed" && (
               <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-700" title="Proposta automática — ainda por confirmar">proposta</Badge>
             )}

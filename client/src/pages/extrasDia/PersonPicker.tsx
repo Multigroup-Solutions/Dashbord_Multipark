@@ -16,6 +16,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { matchesContactQuery, sortByNameMatch } from "@shared/contactSearch";
+import type { LicenceStatus } from "@shared/drivingLicence";
+import { LicenceBadge } from "@/components/rh/RhBadges";
 
 type CityId = "lisbon" | "porto" | "faro";
 const CITY_NAMES: Record<CityId, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
@@ -30,6 +32,8 @@ export interface PickerCandidate {
   /** Cidade derivada da ficha; null = sem cidade; undefined = não se sabe (leitura falhou). */
   city?: CityId | null;
   hasAccount?: boolean;
+  /** Jorge, 7 out 2026: estado da carta (só se mostra quando NÃO está validada). */
+  licence?: LicenceStatus;
 }
 
 interface Section { key: string; label: string; rows: Array<{ c: PickerCandidate; other: boolean }>; disabled?: boolean }
@@ -80,6 +84,7 @@ export function CandidateLabel({ c }: { c: PickerCandidate }) {
       {c.trainingUnknown && (
         <span className="ml-1 shrink-0 rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-700" title="Não foi possível verificar a formação agora — ao guardar volta a ser verificada">Formação por verificar</span>
       )}
+      {c.licence && c.licence !== "validated" && <LicenceBadge status={c.licence} className="ml-1 px-1 py-0 text-[11px]" />}
     </span>
   );
 }

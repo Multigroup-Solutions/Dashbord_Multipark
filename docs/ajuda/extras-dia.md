@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: 24 horas, das 03h às 03h, permitir ser TL, pesquisar pessoa, ficha do RH, p75 explicado, dados de uma janela anterior, fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: carta < 3 anos, carta pendente de validação, sem carta, aviso da carta, notas internas, nota interna, trabalhou mal, 24 horas, das 03h às 03h, permitir ser TL, pesquisar pessoa, ficha do RH, p75 explicado, dados de uma janela anterior, fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -72,6 +72,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - O turno tem no mínimo 3 h e no máximo 12 h.
    - O início é a partir das 03h; da 0h às 3h é a noite do dia anterior (24h–27h).
    - A mesma pessoa não pode ficar a horas sobrepostas no mesmo dia, nem noutra cidade.
+   - **Carta**: na lista aparece "Carta < 3 anos", "Carta pendente de validação" ou "Sem carta" quando a carta não está validada. Ao escolher essa pessoa aparece um **aviso** — podes escalar na mesma (não bloqueia). A carta valida-se no RH (ver a ajuda "RH e ponto").
 2. Ou usa **Preencher com disponíveis**: escala quem marcou disponibilidade, pelos turnos que a previsão sugere. Lê a disponibilidade da mesma forma que a proposta automática.
    - A proposta automática e o **Preencher com disponíveis** só usam **extras da cidade da escala**. Quem não tem cidade na ficha, é de outra cidade ou é funcionário (condutor, TL, frontoffice…) nunca entra sozinho.
    - **Quem não tem cidade não pode ser escalado**, nem à mão: define primeiro a cidade na ficha (Recursos Humanos).
@@ -101,6 +102,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 
 **Notas**
 - "Formação em falta" = a pessoa ainda não concluiu a formação obrigatória.
+- **Notas internas** (team leader e acima): o ícone do caderno na linha da pessoa abre as notas internas dela e deixa escrever uma nova, já com o dia da escala (ex.: "trabalhou mal neste dia"). Ficam na ficha do RH; a pessoa nunca as vê.
 - O **Custo escalado (estimativa)** e as horas pagas atualizam-se à medida que escalas.
 - Se uma leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**, nunca "nenhum condutor escalado".
 - No telemóvel, o nível, as horas pagas e o custo de cada pessoa aparecem por baixo do nome.

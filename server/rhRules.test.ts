@@ -158,10 +158,11 @@ describe("rhAccess — dados pessoais vs contratuais", () => {
     expect(canEditPersonal(superAdmin, driverOutside)).toBe(true);
   });
 
-  it("apagar documentos: admin+, ou quem carregou e ainda mexe na ficha", () => {
+  it("apagar (arquivar) documentos: admin+ e o RH da ficha, ou quem carregou e ainda mexe na ficha", () => {
     expect(canDeleteDocument(admin, driverInCenter, 99)).toBe(true);
     expect(canDeleteDocument(back, driverInCenter, back.id)).toBe(true);
-    expect(canDeleteDocument(back, driverInCenter, 99)).toBe(false);
+    // Jorge (7 out 2026): o back office é o RH desta ficha — substitui (arquiva) o que outros carregaram.
+    expect(canDeleteDocument(back, driverInCenter, 99)).toBe(true);
     expect(canDeleteDocument(tl, driverOutside, tl.id)).toBe(false);   // fora do centro
     expect(canDeleteDocument(extra, { id: 70, projectId: null }, extra.id)).toBe(true);
     expect(canDeleteDocument(extra, { id: 70, projectId: null }, 2)).toBe(false);
@@ -187,9 +188,9 @@ describe("rhAccess — dados pessoais vs contratuais", () => {
   });
 
   it("employeeAccess resume o que o cliente pode mostrar", () => {
-    expect(employeeAccess(extra, { id: 70, projectId: null })).toEqual({ isOwn: true, canEditPersonal: true, canEditContract: false, canManage: false, canViewSensitive: true, canViewDocuments: true, isRh: false, canChangeIban: false, canApproveIban: false });
-    expect(employeeAccess(tl, driverOutside)).toEqual({ isOwn: false, canEditPersonal: false, canEditContract: false, canManage: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false });
-    expect(employeeAccess(admin, driverOutside)).toEqual({ isOwn: false, canEditPersonal: true, canEditContract: true, canManage: true, canViewSensitive: true, canViewDocuments: true, isRh: true, canChangeIban: true, canApproveIban: true });
+    expect(employeeAccess(extra, { id: 70, projectId: null })).toEqual({ isOwn: true, canEditPersonal: true, canEditContract: false, canManage: false, canViewSensitive: true, canViewDocuments: true, isRh: false, canChangeIban: false, canApproveIban: false, canValidateDocuments: false, canViewNotes: false });
+    expect(employeeAccess(tl, driverOutside)).toEqual({ isOwn: false, canEditPersonal: false, canEditContract: false, canManage: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false, canValidateDocuments: false, canViewNotes: false });
+    expect(employeeAccess(admin, driverOutside)).toEqual({ isOwn: false, canEditPersonal: true, canEditContract: true, canManage: true, canViewSensitive: true, canViewDocuments: true, isRh: true, canChangeIban: true, canApproveIban: true, canValidateDocuments: true, canViewNotes: true });
   });
 });
 

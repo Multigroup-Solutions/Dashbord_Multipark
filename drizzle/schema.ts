@@ -544,7 +544,41 @@ export const employeeDocuments = mysqlTable("employee_documents", {
 	mimeType: varchar({ length: 128 }),
 	uploadedById: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
-});
+	// 0530 (Jorge, 7 out 2026): pendente (entregue pela pessoa/TL) → validado
+	// ou recusado pelo RH; o que o RH carrega entra validado. Apagar = arquivar.
+	status: mysqlEnum(['pending','validated','rejected']).default('pending').notNull(),
+	validatedById: int(),
+	validatedAt: datetime({ mode: 'string' }),
+	rejectedReason: varchar({ length: 300 }),
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_employee_documents_emp_type_status").on(table.employeeId, table.docType, table.status),
+]);
+
+// 0535 (Jorge, 7 out 2026): notas internas da ficha — team leader e acima, no
+// âmbito de cada um; a própria pessoa nunca as vê (server/rhAccess.ts).
+export const employeeNotes = mysqlTable("employee_notes", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	body: text().notNull(),
+	/** general | performance | conduct | praise (shared/employeeNotes.ts) */
+	kind: varchar({ length: 16 }).default('general').notNull(),
+	/** Dia de trabalho a que se refere ("YYYY-MM-DD"), opcional. */
+	workDate: varchar({ length: 10 }),
+	/** Linha da escala do Extras-dia (extras_dia_assignments.id), opcional. */
+	assignmentId: int(),
+	authorId: int().notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	editedAt: timestamp({ mode: 'string' }),
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_employee_notes_emp_created").on(table.employeeId, table.createdAt),
+	index("idx_employee_notes_assignment").on(table.assignmentId),
+]);
 
 export const employees = mysqlTable("employees", {
 	id: int().autoincrement().primaryKey(),
@@ -566,6 +600,11 @@ export const employees = mysqlTable("employees", {
 	// 0460 (D39): n.º do BI/CC e da carta de condução (vêm do candidato, lidos dos anexos pela IA).
 	idDocNumber: varchar({ length: 32 }),
 	drivingLicenseNumber: varchar({ length: 32 }),
+	// 0530: data de emissão da carta (validada pelo RH ou vinda da candidatura)
+	// e a validação do RH — "Carta validada" em shared/drivingLicence.ts.
+	drivingLicenseIssuedAt: date({ mode: 'string' }),
+	drivingLicenseValidatedAt: datetime({ mode: 'string' }),
+	drivingLicenseValidatedById: int(),
 	nib: varchar({ length: 30 }),
 	address: text(),
 	birthDate: timestamp({ mode: 'string' }),
@@ -2702,6 +2741,8 @@ export const extraLeads = mysqlTable("extra_leads", {
 	nif: varchar({ length: 16 }),
 	idDocNumber: varchar({ length: 32 }),
 	drivingLicenseNumber: varchar({ length: 32 }),
+	/** 0530: data de emissão da carta declarada na candidatura (passa para a ficha ao converter). */
+	drivingLicenseIssuedAt: date({ mode: 'string' }),
 	/** Resumo do CV para quem entrevista. */
 	aiSummary: text(),
 	aiReadAt: timestamp({ mode: 'string' }),
