@@ -194,6 +194,7 @@ export const AUTO_MAIL_KIND_LABELS: Record<string, string> = {
   schedule_notice: "Aviso de escala",
   schedule_cancel: "Turno cancelado",
   training_reminder: "Lembrete de formação",
+  docs_request: "Pedido de documentos em falta",
   task_notice: "Aviso de tarefa",
   handover: "Passagem de turno",
   report: "Relatório",

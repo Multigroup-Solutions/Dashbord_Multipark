@@ -63,7 +63,7 @@ palavras: filtros, filtrar tarefas, limpar filtros, estado da reserva, candidatu
 
 **Tarefas de candidatura** (automáticas, origem **Candidatura de condutor**)
 1. Cada candidatura nova que entra nos **Leads de Extras** (formulário "Be a Driver" do site ou email para a recursos-humanos@) cria **uma** tarefa "Candidatura de condutor: nome", com o contacto, a cidade e as notas. Os leads criados à mão não criam tarefa.
-2. **Responsável**: quem criou o lead (se tiver ficha); nas candidaturas, os **supervisores da cidade** do lead. Sem cidade (ou sem supervisor), fica sem responsável, na lista de tarefas.
+2. **Responsável**: quem criou o lead (se tiver ficha); nas candidaturas, a pessoa do **recrutamento** (Definições → Parâmetros → "Responsável pelo recrutamento e pelas fichas sem cidade") e os **supervisores da cidade** do lead. Um lead **sem cidade** fica com a pessoa do recrutamento. As tarefas de candidatura que tinham ficado sem ninguém passam também para ela.
 3. **Prazo**: 24 h depois de a candidatura entrar (o tempo para o 1.º contacto).
 4. O chip da origem abre o lead nos Leads de Extras.
 5. **Fecha sozinha** (com um comentário a dizer porquê) quando o lead é **convertido em extra**, fica **Sem interesse** (também ao rejeitar a candidatura do site) ou é **arquivado**. Nunca nasce outra para o mesmo lead, mesmo que arquives a tarefa.

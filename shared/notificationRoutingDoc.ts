@@ -103,7 +103,7 @@ export function renderNotificacoesDoc(): string {
   }
   out.push("## O que continua fora do sino");
   out.push("");
-  out.push("- Avisos **ao próprio** por WhatsApp/email que já existiam: escala dos extras (aviso de trabalho), pedidos de disponibilidade, lembrete de formação por email, email da tarefa ao criador.");
+  out.push("- Avisos **ao próprio** por WhatsApp/email que já existiam: escala dos extras (aviso de trabalho), pedidos de disponibilidade, pedido de documentos em falta aos extras (WhatsApp e email, à mão ou à segunda com o interruptor EXTRAS_DOCS_REQUEST), lembrete de formação por email, email da tarefa ao criador.");
   out.push("- Relatórios por email com destinatários próprios (já por cidade/módulo): briefing diário, relatórios semanais, email da passagem de turno.");
   out.push("- `system.notifyOwner` (ferramenta manual de admin que envia um email ao OWNER_EMAIL).");
   out.push("");

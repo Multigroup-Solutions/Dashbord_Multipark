@@ -557,6 +557,36 @@ export const employeeDocuments = mysqlTable("employee_documents", {
 	index("idx_employee_documents_emp_type_status").on(table.employeeId, table.docType, table.status),
 ]);
 
+// 0560 (pauta do Rafael, 7 out 2026): pedidos de documentos em falta aos
+// extras (WhatsApp/email, à mão ou automático). Uma linha por pedido a uma
+// pessoa; requestKey único (o mesmo clique ou a mesma semana não reenvia).
+// Estados por canal: sending | sent | unknown | failed | skipped (NULL = não
+// pedido). Nada se apaga. Regras em shared/docsRequest.ts.
+export const employeeDocsRequests = mysqlTable("employee_docs_requests", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	/** manual | auto */
+	mode: varchar({ length: 8 }).default('manual').notNull(),
+	/** Quem pediu (null = pedido automático). */
+	requestedById: int(),
+	requestKey: varchar({ length: 96 }).notNull(),
+	/** Tipos pedidos, separados por vírgulas (ex.: "photo,driving_license"). */
+	docTypes: varchar({ length: 255 }).notNull(),
+	/** A lista tal como seguiu ({{2}} do WhatsApp). */
+	docsText: varchar({ length: 700 }),
+	whatsappStatus: varchar({ length: 16 }),
+	whatsappDetail: varchar({ length: 300 }),
+	templateName: varchar({ length: 120 }),
+	emailStatus: varchar({ length: 16 }),
+	emailDetail: varchar({ length: 300 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	finishedAt: timestamp({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_employee_docs_requests_key").on(table.requestKey),
+	index("idx_employee_docs_requests_emp_created").on(table.employeeId, table.createdAt),
+]);
+
 // 0535 (Jorge, 7 out 2026): notas internas da ficha — team leader e acima, no
 // âmbito de cada um; a própria pessoa nunca as vê (server/rhAccess.ts).
 export const employeeNotes = mysqlTable("employee_notes", {
