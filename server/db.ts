@@ -5204,6 +5204,17 @@ export async function getDailyDriverHistoryByDate(dateStr: string) {
   return withEmployeeNames(db, rows);
 }
 
+/** 43a: uma linha do histórico (no âmbito de quem pede) — para o mapa das velocidades. */
+export async function getDailyDriverHistoryRow(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(dailyDriverHistory)
+    .where(and(historyScope(), eq(dailyDriverHistory.id, id))).limit(1);
+  if (!row) return null;
+  const [named] = await withEmployeeNames(db, [row]);
+  return named ?? row;
+}
+
 export async function getDailyDriverHistoryByUser(username: string, limit = 30) {
   const db = await getDb();
   if (!db) return [];
