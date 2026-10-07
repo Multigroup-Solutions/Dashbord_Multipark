@@ -2141,6 +2141,14 @@ export const timeRecords = mysqlTable("time_records", {
 	latitude: decimal({ precision: 10, scale: 7 }),
 	longitude: decimal({ precision: 10, scale: 7 }),
 	locationName: varchar({ length: 256 }),
+	// 0555 — terminal no ponto (aeroporto), shared/pontoTerminal.ts:
+	// atAirport 1/0/NULL (GPS no aeroporto da cidade do extra); terminalStatus
+	// na entrada "start", na saída "auto" | "pending" | "confirmed" | "rejected"
+	atAirport: tinyint(),
+	terminalStatus: varchar({ length: 16 }),
+	terminalReviewedById: int(),
+	terminalReviewedAt: timestamp({ mode: 'string' }),
+	terminalNote: varchar({ length: 255 }),
 	hoursWorked: decimal({ precision: 6, scale: 2 }),
 	notes: text(),
 	// Snapshot do Zello preenchido automaticamente no check-out (km/velocidades

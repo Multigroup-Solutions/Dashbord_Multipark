@@ -74,8 +74,10 @@ import {
   Upload, Trash2, Eye, ChevronLeft, Camera, MapPin,
   Euro, Building2, Phone, Mail, CreditCard, Shield,
   CheckCircle2, XCircle, AlertTriangle, Image, FolderOpen, Plus, Pencil, Save, X,
-  Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3, NotebookPen
+  Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3, NotebookPen, Plane
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { TERMINAL_STATUS_LABELS, type TerminalStatus } from "@shared/pontoTerminal";
 import { ContactActions } from "@/components/ContactActions";
 import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
@@ -783,8 +785,37 @@ function DocumentsTab({ employeeId, access, licence }: { employeeId: number; acc
 // (extraído para componente partilhado — também usado no atalho de ponto do avatar)
 
 // ─── TIME RECORDS TAB ─────────────────────────────────────────────────────────
-function TimeRecordsTab({ employeeId }: { employeeId: number }) {
+/** Etiqueta do terminal (aeroporto) num registo de ponto. */
+function TerminalBadge({ status }: { status: string | null | undefined }) {
+  if (!status || !(status in TERMINAL_STATUS_LABELS)) return null;
+  const label = TERMINAL_STATUS_LABELS[status as TerminalStatus];
+  const cls = status === "pending"
+    ? "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-200"
+    : status === "rejected"
+      ? "bg-muted text-muted-foreground border-border line-through"
+      : "bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-950 dark:text-sky-200";
+  return (
+    <span className={`ml-2 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border ${cls}`}>
+      <Plane className="w-3 h-3" />{label}{status === "pending" ? " — não paga terminal" : ""}
+    </span>
+  );
+}
+
+function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { employeeId: number; canManage?: boolean; isExtra?: boolean }) {
   const utils = trpc.useUtils();
+  // Terminal no ponto (aeroporto): só com o interruptor ligado e só nos extras.
+  const terminalQ = trpc.rh.timeRecords.terminalEnabled.useQuery(undefined, { staleTime: 60_000 });
+  const terminalOn = !!terminalQ.data?.enabled && isExtra;
+  const [terminalEdit, setTerminalEdit] = useState<{ id: number; terminal: boolean } | null>(null);
+  const [terminalNote, setTerminalNote] = useState("");
+  const setTerminal = trpc.rh.timeRecords.setTerminal.useMutation({
+    onSuccess: (_d, v) => {
+      utils.rh.timeRecords.list.invalidate();
+      toast.success(v.terminal ? "Troço marcado como terminal" : "Terminal desmarcado");
+      setTerminalEdit(null); setTerminalNote("");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const now = new Date();
   const [year] = useState(now.getFullYear());
   const [month] = useState(now.getMonth() + 1);
@@ -813,6 +844,8 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
       }
       if (data?.warning) toast.warning(data.warning, { duration: 10000 });
       if (data?.outsideGeofence) toast.warning("Atenção: check-in dado FORA do raio do local de trabalho — ficou marcado.", { duration: 10000 });
+      if (data?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
+      if (data?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
@@ -830,10 +863,15 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
           { duration: 10000 }
         );
       }
+      if (data?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
+      if (data?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Troço de terminal aberto (última picagem = entrada no aeroporto)
+  const openTerminal = terminalOn && records[0]?.type === "check_in" && records[0]?.terminalStatus === "start" ? records[0] : null;
 
   const submitWithPhoto = (base64: string, mimeType: string) => {
     const doSubmit = (lat: number, lng: number) => {
@@ -898,6 +936,13 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
         </Card>
       )}
 
+      {openTerminal && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-950/40 px-3 py-2 text-sm">
+          <Badge className="bg-sky-600 hover:bg-sky-600 text-white gap-1"><Plane className="w-3 h-3" />Terminal</Badge>
+          <span>Estás no terminal desde {fmtPTDateTime(openTerminal.recordedAt)}. Antes de saíres do aeroporto, dá saída + entrada para voltares a extra normal.</span>
+        </div>
+      )}
+
       {/* Buttons */}
       {!cameraMode && (
         <div className="flex flex-wrap gap-3">
@@ -959,7 +1004,14 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                       {reviewStatus === "rejected" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
                       {reviewStatus === "approved" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
                       {!reviewStatus && isFlagged && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
+                      {terminalOn && <TerminalBadge status={r.terminalStatus} />}
                     </p>
+                    {terminalOn && canManage && r.type === "check_out" && r.terminalStatus === "pending" && (
+                      <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                        <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>Confirmar terminal</Button>
+                        <Button size="sm" variant="ghost" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: false }); }}>Desmarcar</Button>
+                      </div>
+                    )}
                     {canReview && (
                       <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={reviewRecord.isPending} onClick={() => { const h = prompt("Horas corrigidas (deixa vazio para manter):"); const n = h && h.trim() ? Number(h.replace(",", ".")) : undefined; reviewRecord.mutate({ id: r.id, decision: "approved", correctedHours: Number.isFinite(n as number) ? n : undefined }); }}>Aprovar</Button>
@@ -1038,6 +1090,29 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                       Horas trabalhadas: <span className="font-semibold text-foreground">{parseFloat(String(r.hoursWorked)).toFixed(2)}h</span>
                     </div>
                   )}
+                  {terminalOn && r.type === "check_out" && (
+                    <div className="text-xs text-muted-foreground space-y-1" onClick={(e) => e.stopPropagation()}>
+                      <p>
+                        Terminal (aeroporto): <span className="font-medium text-foreground">{r.terminalStatus ? TERMINAL_STATUS_LABELS[r.terminalStatus as TerminalStatus] ?? r.terminalStatus : "não (troço normal)"}</span>
+                        {r.terminalNote && <> · motivo: {r.terminalNote}</>}
+                        {r.terminalReviewedAt && <> · {fmtPTDateTime(r.terminalReviewedAt)}</>}
+                      </p>
+                      {canManage && (
+                        <div className="flex gap-1">
+                          {r.terminalStatus !== "auto" && r.terminalStatus !== "confirmed" && (
+                            <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>
+                              <Plane className="w-3 h-3 mr-1" />{r.terminalStatus === "pending" ? "Confirmar terminal" : "Marcar como terminal"}
+                            </Button>
+                          )}
+                          {r.terminalStatus && r.terminalStatus !== "rejected" && (
+                            <Button size="sm" variant="ghost" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: false }); }}>
+                              Desmarcar terminal
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {(r as any).zelloKm != null && (
                     <div className="text-xs text-muted-foreground space-y-0.5">
                       <p className="font-medium text-foreground">Turno no Zello (automático)</p>
@@ -1059,6 +1134,33 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
         })}
         {records.length === 0 && <p className="text-center text-muted-foreground py-8">Sem registos de ponto</p>}
       </div>
+
+      {terminalEdit && (
+        <Dialog open onOpenChange={(o) => { if (!o) setTerminalEdit(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{terminalEdit.terminal ? "Marcar este troço como terminal" : "Desmarcar o terminal deste troço"}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              {terminalEdit.terminal
+                ? "As horas deste troço passam a pagar à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master)."
+                : "As horas deste troço passam a pagar à taxa normal do extra."}
+              {" "}Fica registado quem mudou e porquê.
+            </p>
+            <div className="space-y-1">
+              <Label htmlFor="terminal-note">Motivo</Label>
+              <Textarea id="terminal-note" rows={3} value={terminalNote} onChange={(e) => setTerminalNote(e.target.value)} placeholder="ex.: confirmado com o TL — esteve no terminal das 14h às 18h" />
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setTerminalEdit(null)}>Cancelar</Button>
+              <Button disabled={setTerminal.isPending || terminalNote.trim().length < 3}
+                onClick={() => setTerminal.mutate({ id: terminalEdit.id, terminal: terminalEdit.terminal, note: terminalNote.trim() })}>
+                {terminalEdit.terminal ? "Marcar terminal" : "Desmarcar"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -1933,7 +2035,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
               ? { status: (data as any).licence ?? null, issuedAt: (emp as any).drivingLicenseIssuedAt ?? null, validatedAt: (emp as any).drivingLicenseValidatedAt ?? null }
               : undefined} />
         </TabsContent>
-        <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} /></TabsContent>
+        <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} canManage={!!access.canManage} isExtra={emp.position === "extra" || (emp as any).contractType === "extra"} /></TabsContent>
         <TabsContent value="schedules" className="mt-4"><SchedulesTab employeeId={employeeId} /></TabsContent>
         {access.canViewNotes && <TabsContent value="notes" className="mt-4"><EmployeeNotesPanel employeeId={employeeId} /></TabsContent>}
       </Tabs>
@@ -2071,10 +2173,13 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
   const fmt = (v: number) => v.toLocaleString("pt-PT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const exportPayrollCSV = () => {
-    const headers = ["Nome","Posto","Departamento","NIF","NIB","Horas","Dias","Salário Base","Pag. Extra","H.Extra","Pag. H.Extra","H.Noturnas","Pag. Noturnas","H.FDS","Pag. FDS","Prov. 13º","Prov. 14º","Sub. Alim.","Total"];
+    // Terminal (aeroporto): colunas só quando há horas de terminal no mês (desligado = CSV igual).
+    const withTerminal = sorted.some((r: any) => (r.terminalHours ?? 0) > 0);
+    const headers = ["Nome","Posto","Departamento","NIF","NIB","Horas","Dias","Salário Base","Pag. Extra", ...(withTerminal ? ["H.Terminal","Pag. Terminal (incl.)"] : []),"H.Extra","Pag. H.Extra","H.Noturnas","Pag. Noturnas","H.FDS","Pag. FDS","Prov. 13º","Prov. 14º","Sub. Alim.","Total"];
     const rows = sorted.map((r: any) => [
       r.fullName, r.position, r.department ?? "", r.nif ?? "", r.nib ?? "",
       r.totalHours, r.daysWorked, fmt(r.baseSalary), fmt(r.extraPayment),
+      ...(withTerminal ? [r.terminalHours ?? 0, fmt(r.terminalPayment ?? 0)] : []),
       r.overtimeHours, fmt(r.overtimePayment),
       r.nightHours ?? 0, fmt(r.nightPayment ?? 0),
       r.weekendHours ?? 0, fmt(r.weekendPayment ?? 0),
@@ -2361,7 +2466,19 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
                       <td className="px-3 py-2 text-right tabular-nums">{fmt(r.totalHours)}h</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.daysWorked}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.baseSalary) + "€"}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? fmt(r.extraPayment) + "€" : "—"}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {r.isExtra ? fmt(r.extraPayment) + "€" : "—"}
+                        {r.isExtra && (r.terminalHours ?? 0) > 0 && (
+                          <div className="text-[11px] text-sky-700 dark:text-sky-300 whitespace-nowrap" title="Horas de terminal (aeroporto), pagas à taxa do nível seguinte — já incluídas no valor">
+                            incl. {fmt(r.terminalHours)}h terminal × {fmt(r.terminalHourlyRate ?? 0)}€
+                          </div>
+                        )}
+                        {r.isExtra && (r.terminalPendingHours ?? 0) > 0 && (
+                          <div className="text-[11px] text-amber-700 whitespace-nowrap" title="Terminal por confirmar: pagas como normais até o RH confirmar na ficha → Ponto">
+                            {fmt(r.terminalPendingHours)}h terminal por confirmar
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.overtimeHours) + "h"}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.overtimePayment) + "€"}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.nightPayment ?? 0) + "€"}</td>

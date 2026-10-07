@@ -14,9 +14,14 @@
  *    individual quando existe; senão 176 h);
  *  - extras: taxa por nível; nível sem taxa → aviso (não cai em silêncio para
  *    a mais baixa);
+ *  - extras, terminal (aeroporto, interruptor PONTO_TERMINAL): os troços de
+ *    terminal pagam à taxa do nível SEGUINTE (shared/pontoTerminal.ts); os
+ *    "por confirmar" pagam como normais até o RH confirmar. Desligado → igual
+ *    a antes;
  *  - IRS/TSU do trabalhador: ESTIMATIVA rotulada (não é apuramento fiscal).
  */
 import { countableShifts, type Shift } from "./shifts";
+import { normalizeExtraLevel, splitTerminalHours, terminalLevelOf } from "../../shared/pontoTerminal";
 
 export const PAYROLL_PARAMS = {
   standardMonthlyHours: 176,
@@ -48,6 +53,8 @@ export interface EmployeeMonthInput {
   /** taxas dos extras: por nível numérico e por nome */
   extraRateByLevel: Map<number, number>;
   extraRateByName: Map<string, number>;
+  /** interruptor PONTO_TERMINAL (omissão: desligado = como antes) */
+  terminalEnabled?: boolean;
 }
 
 export interface EmployeeMonthResult {
@@ -62,6 +69,10 @@ export interface EmployeeMonthResult {
   suspiciousHours: number; suspiciousShifts: number; openShifts: number;
   // componentes
   baseSalary: number; extraPayment: number; overtimePayment: number; nightPayment: number; weekendPayment: number;
+  /** extras: horas de terminal (aeroporto) pagas ao nível seguinte — já incluídas em totalHours e extraPayment */
+  terminalHours: number; terminalHourlyRate: number; terminalPayment: number;
+  /** extras: horas de terminal por confirmar (pagas como normais até o RH confirmar) */
+  terminalPendingHours: number;
   thirteenthProvision: number; fourteenthProvision: number; mealAllowance: number; mealAllowancePerDay: number;
   totalPayment: number;
   hourlyRate: number;
@@ -144,19 +155,36 @@ export function computeEmployeeMonth(inp: EmployeeMonthInput): EmployeeMonthResu
   const mealPerDay = num(inp.snapshot?.mealAllowancePerDay ?? e.mealAllowancePerDay);
 
   let baseSalary = 0, extraPayment = 0, overtimeHours = 0, overtimePayment = 0, nightPayment = 0, weekendPayment = 0;
+  let terminalHours = 0, terminalHourlyRate = 0, terminalPayment = 0, terminalPendingHours = 0;
   let thirteenth = 0, fourteenth = 0, mealAllowance = 0, hourlyRate = 0, expectedHours = 0;
 
   if (!inContract) {
     warnings.push("sem vínculo neste mês (contrato fora do período)");
   } else if (isExtra) {
     const level = e.extraLevel ?? 1;
-    const byLevel = inp.extraRateByLevel.get(level);
-    const byName = inp.extraRateByName.get(NAME_BY_LEVEL[level] ?? "");
-    if (byLevel == null && byName == null) {
+    const rateOf = (lv: number): number | undefined => inp.extraRateByLevel.get(lv) ?? inp.extraRateByName.get(NAME_BY_LEVEL[lv] ?? "");
+    const own = rateOf(level);
+    if (own == null) {
       warnings.push(`nível de extra ${level} sem taxa configurada — 0 € (configurar em Taxas Extra)`);
       hourlyRate = 0;
-    } else hourlyRate = byLevel ?? byName ?? 0;
-    extraPayment = r2(totalHours * hourlyRate);
+    } else hourlyRate = own;
+    // Terminal (aeroporto): troços pagos ao nível seguinte. Desligado → tudo normal.
+    const split = splitTerminalHours(countable, !!inp.terminalEnabled);
+    terminalHours = split.terminalHours;
+    terminalPendingHours = split.pendingHours;
+    if (terminalHours > 0) {
+      const tLevel = terminalLevelOf(level);
+      const tRate = tLevel === normalizeExtraLevel(level) ? hourlyRate : rateOf(tLevel);
+      if (tRate == null) {
+        // sem taxa do nível seguinte: paga à taxa dele (nunca a mais sem taxa definida)
+        warnings.push(`nível de extra ${tLevel} sem taxa configurada — ${terminalHours} h de terminal pagas à taxa do nível ${level} (configurar em Taxas Extra)`);
+        terminalHourlyRate = hourlyRate;
+      } else terminalHourlyRate = tRate;
+      terminalPayment = r2(terminalHours * terminalHourlyRate);
+    }
+    if (terminalPendingHours > 0) warnings.push(`${terminalPendingHours} h de terminal por confirmar (pagas como normais até o RH confirmar)`);
+    extraPayment = r2(r2(totalHours - terminalHours) * hourlyRate) + terminalPayment;
+    extraPayment = r2(extraPayment);
   } else {
     const contractShare = contractDays / dim;
     const unpaidShare = unpaidSet.size / dim;
@@ -194,7 +222,9 @@ export function computeEmployeeMonth(inp: EmployeeMonthInput): EmployeeMonthResu
     contractDays, daysInMonth: dim, inContract, unpaidDays: unpaidSet.size, leaveDays: leaveDaysSet.size,
     totalHours, daysWorked: daysWorkedSet.size, normalHours, nightHours, weekendHours, overtimeHours, expectedHours,
     suspiciousHours, suspiciousShifts: suspicious.length, openShifts: open.length,
-    baseSalary, extraPayment, overtimePayment, nightPayment, weekendPayment, thirteenthProvision: thirteenth, fourteenthProvision: fourteenth,
+    baseSalary, extraPayment, overtimePayment, nightPayment, weekendPayment,
+    terminalHours, terminalHourlyRate, terminalPayment, terminalPendingHours,
+    thirteenthProvision: thirteenth, fourteenthProvision: fourteenth,
     mealAllowance, mealAllowancePerDay: mealPerDay, totalPayment, hourlyRate,
     tsuEmployee, irsEstimate, netEstimate, warnings,
   };

@@ -2,7 +2,7 @@
 modulo: definicoes
 titulo: Definições
 rotas: /definicoes
-palavras: salta há dias, cron saltado, avisos críticos obrigatórios, definições, definicoes, configuração, automações, interruptores, parâmetros, iva, tsu, sla, prazos, emails, integrações, segurança, sessões, api keys, inteligência artificial, ia, orçamento da ia, assistente, calendário, escala da cidade, passagem de turno, google calendar, serviços, tarefas dos serviços, lavagem, carregamento elétrico, estado desconhecido, saltado, último ok, parado, alguém mudou isto entretanto, histórico de alterações, remetente, juntar fichas, telefones dos alertas, sem pda
+palavras: aeroportos, terminal no ponto, salta há dias, cron saltado, avisos críticos obrigatórios, definições, definicoes, configuração, automações, interruptores, parâmetros, iva, tsu, sla, prazos, emails, integrações, segurança, sessões, api keys, inteligência artificial, ia, orçamento da ia, assistente, calendário, escala da cidade, passagem de turno, google calendar, serviços, tarefas dos serviços, lavagem, carregamento elétrico, estado desconhecido, saltado, último ok, parado, alguém mudou isto entretanto, histórico de alterações, remetente, juntar fichas, telefones dos alertas, sem pda
 ---
 # Definições
 
@@ -23,6 +23,7 @@ Separadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador ce
   - **Serviços → tarefas** no topo: por cidade e tipo de serviço extra, **Gera tarefa** e um responsável opcional. Se as regras gravadas não carregarem, não se pode gravar (antes apareciam as regras por omissão e gravar apagava as verdadeiras).
   - IVA e TSU com data de efeito, prazos (SLA), destinatários de email, disponibilidades, IA, contas Zello excluídas do GPS, parques que a operação não faz.
   - **Alertas sem PDA/Zello**: os telefones por cidade e a **cópia** (todas as cidades), um número por linha.
+  - **Aeroportos (terminal no ponto)** (no cartão Extras-dia): latitude, longitude e raio (metros) do aeroporto de Lisboa, Porto e Faro. Só conta com o interruptor **"Terminal no ponto (aeroporto)"** ligado (Automações; desligado por omissão). Ver a ajuda "RH e ponto".
   - Um valor gravado que já não é válido fica assinalado (a aplicação usa a omissão até se gravar de novo).
 - **Notificações**: quem recebe cada aviso (só o super admin muda).
 - **Segurança**: validade das API keys (até ao fim do dia escolhido, hora de Lisboa) e **Terminar sessões**.
