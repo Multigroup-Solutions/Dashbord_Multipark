@@ -778,7 +778,14 @@ async function applyShiftChangeRequest(employeeId: number, conversationId: numbe
 type CityId = "lisbon" | "porto" | "faro";
 const CITY_KEY_TO_EXTRA: Record<string, CityId> = { lisboa: "lisbon", porto: "porto", faro: "faro" };
 
-export interface AutofillResult { created: AutofillPick[]; unfilled: { startHour: number; endHour: number }[]; suggested: number; existing: number }
+export interface AutofillResult {
+  created: AutofillPick[];
+  unfilled: { startHour: number; endHour: number }[];
+  suggested: number;
+  existing: number;
+  /** Tirados à mão deste dia que ficaram de fora (não voltam por automatismo). */
+  removedOut: number;
+}
 
 export async function autofillShift(input: { date: string; city: CityId; shift: ShiftKey; createdById?: number | null }): Promise<AutofillResult> {
   const { getExtrasDiaForecast, listAssignments, listDriverCandidates, upsertAssignment } = await import("./extrasDia");
@@ -794,6 +801,12 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
   const all = await listAssignments(input.date);
   const sameCity = (await listAssignments(input.date, input.city)).filter((a) => a.shift === input.shift && !a.isTeamLeader);
   const alreadyAssigned = new Set(all.map((a) => a.employeeId).filter((x): x is number => x != null));
+  // Quem foi tirado à mão deste dia também não volta (Jorge, 7 out 2026: a mão
+  // humana manda). Quem foi posto outra vez à mão já está em alreadyAssigned.
+  const { loadRemovedByHand } = await import("./extrasSchedule");
+  const { removedByHandOut } = await import("../shared/extrasSchedule");
+  const removedOut = removedByHandOut(await loadRemovedByHand(input.date), alreadyAssigned);
+  for (const id of removedOut) alreadyAssigned.add(id);
 
   // Quem tem formação obrigatória por concluir não entra no preenchimento automático.
   const { employeesMissingTraining } = await import("./trainingPaths");
@@ -836,9 +849,11 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
       endHour: p.endHour,
       notes: "preenchido automaticamente (disponibilidade)",
       createdById: input.createdById ?? null,
+      // Carregado por uma pessoa: o dia fica "mexido à mão" (o cron já não propõe nele).
+      manualWhat: "preencheu",
     });
   }
-  return { created: plan.picks, unfilled: plan.unfilled, suggested: suggested.length, existing: sameCity.length };
+  return { created: plan.picks, unfilled: plan.unfilled, suggested: suggested.length, existing: sameCity.length, removedOut: removedOut.length };
 }
 
 /** Horas com falta de gente num dia/cidade (previsão vs escalados). */

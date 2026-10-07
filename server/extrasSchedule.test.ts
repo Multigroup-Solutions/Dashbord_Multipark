@@ -367,10 +367,12 @@ describe("idempotência de propor e confirmar (BD simulada)", () => {
   beforeEach(() => { dbState.affected = []; dbState.executed = []; });
   it("o cron não propõe um dia que já tem proposta/escala (reserva falha → nada muda)", async () => {
     const { proposeSchedule } = await import("./extrasSchedule");
-    dbState.affected = [0]; // INSERT IGNORE do estado não inseriu
+    dbState.affected = [0, 0, 0]; // estado e sinais de mão: vazios; INSERT IGNORE do estado não inseriu
     const r = await proposeSchedule({ date: "2026-09-25", city: "lisbon", by: "auto", userId: null });
     expect(r.status).toBe("skipped");
-    expect(dbState.executed.length).toBe(1); // só a tentativa de reserva
+    // Só leituras (estado, sinais de mão) e a tentativa de reserva — nada escrito, nada proposto.
+    expect(dbState.executed.length).toBe(3);
+    expect(dbState.executed.at(-1)).toContain("INSERT IGNORE INTO extras_dia_schedules");
   });
   it("confirmar automaticamente outra vez não reconfirma nem reenvia", async () => {
     const { confirmSchedule } = await import("./extrasSchedule");

@@ -64,6 +64,7 @@ import {
   Sparkles,
   PauseCircle,
   BellOff,
+  Hand,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -74,7 +75,7 @@ import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
 import { StaffingBanner, StaffingGapList } from "./extrasDia/StaffingIndicator";
 import { NotifyShiftDialog } from "./extrasDia/NotifyShiftDialog";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
-import { assignmentWhoLine, describeGap, describePickupPairing } from "@shared/extrasSchedule";
+import { assignmentWhoLine, describeGap, describePickupPairing, manualTouchLabel, removedOutText } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
@@ -625,7 +626,7 @@ export default function ExtrasDiaPage() {
 
 const SCHEDULE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   none: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
-  // Só suspenso (sem proposta): a proposta automática ainda corre.
+  // Sem proposta (só suspenso ou só mexido à mão): a proposta automática já não corre neste dia.
   hold: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
   proposing: { label: "A propor…", cls: "bg-muted text-muted-foreground" },
   proposed: { label: "Proposta por confirmar", cls: "bg-violet-100 text-violet-800 border-violet-200" },
@@ -651,8 +652,10 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
   const propose = trpc.extrasDia.propose.useMutation({
     onSuccess: (r) => {
       refresh();
-      if (r.gaps.length) toast.warning(`${r.proposed} condutor(es) propostos — ${r.gaps.map(describeGap).join("; ")}.`);
-      else toast.success(r.proposed ? `${r.proposed} condutor(es) propostos. Revê e confirma.` : "Nada a propor — a previsão já está coberta.");
+      const out = removedOutText(r.removedOut ?? 0);
+      const tail = out ? ` (${out})` : "";
+      if (r.gaps.length) toast.warning(`${r.proposed} condutor(es) propostos — ${r.gaps.map(describeGap).join("; ")}.${tail}`);
+      else toast.success(r.proposed ? `${r.proposed} condutor(es) propostos. Revê e confirma.${tail}` : `Nada a propor — a previsão já está coberta.${tail}`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -698,6 +701,12 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
               <Badge variant="outline" className={st.cls}>{st.label}</Badge>
               {held && <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-200">envio automático suspenso</Badge>}
             </CardTitle>
+            {d?.state?.manual && (
+              <p className="text-[11px] text-muted-foreground mt-1 flex items-start gap-1" title={d.state.manual.what ? `Última mudança à mão: ${d.state.manual.what}` : undefined}>
+                <Hand className="h-3 w-3 mt-0.5 shrink-0" />
+                <span>{manualTouchLabel(d.state.manual)}</span>
+              </p>
+            )}
             <p className="text-xs text-muted-foreground mt-1">
               Pico de {d?.neededPeak ?? "—"} extra(s) além do TL ·{" "}
               {d ? `${d.availableCount} extra(s) disponíveis, ${d.noAnswerCount} sem resposta` : "…"}
@@ -712,7 +721,7 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
           </div>
           {canEdit && <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" disabled={busy || !targetDate} onClick={() => propose.mutate({ date: targetDate, city })}
-              title="Preenche as horas em falta com os extras disponíveis (substitui só a proposta automática anterior; não mexe no que está confirmado nem em quem foi posto à mão)">
+              title="Preenche as horas em falta com os extras disponíveis (substitui só a proposta automática anterior; não mexe no que está confirmado nem em quem foi posto à mão; quem foi tirado à mão deste dia fica de fora)">
               <Wand2 className="h-4 w-4 mr-1" />{propose.isPending ? "A propor…" : "Proposta automática"}
             </Button>
             <Button size="sm" disabled={busy || !targetDate || rows === 0 || pastDay}
@@ -863,9 +872,11 @@ function TeamSection({
       utils.extrasDia.coverage.invalidate();
       utils.extrasDia.staffing.invalidate();
       utils.extrasDia.schedule.invalidate();
-      if (r.created.length === 0 && r.unfilled.length === 0) toast.info("A escala já cobre a previsão deste turno.");
-      else if (r.unfilled.length === 0) toast.success(`${r.created.length} extra(s) escalado(s) com base na disponibilidade.`);
-      else toast.warning(`${r.created.length} escalado(s); faltam ${r.unfilled.length} turno(s) sem ninguém disponível.`);
+      const out = removedOutText(r.removedOut ?? 0);
+      const tail = out ? ` (${out})` : "";
+      if (r.created.length === 0 && r.unfilled.length === 0) toast.info(`A escala já cobre a previsão deste turno.${tail}`);
+      else if (r.unfilled.length === 0) toast.success(`${r.created.length} extra(s) escalado(s) com base na disponibilidade.${tail}`);
+      else toast.warning(`${r.created.length} escalado(s); faltam ${r.unfilled.length} turno(s) sem ninguém disponível.${tail}`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -946,7 +957,7 @@ function TeamSection({
             {canEdit && <Button
               size="sm"
               variant="outline"
-              title="Escala quem disse que está disponível, pelos turnos que a previsão sugere"
+              title="Escala quem disse que está disponível, pelos turnos que a previsão sugere (quem foi tirado à mão deste dia fica de fora)"
               disabled={autofill.isPending || pastDay}
               onClick={() => autofill.mutate({ date: targetDate, city, shift })}
             >
