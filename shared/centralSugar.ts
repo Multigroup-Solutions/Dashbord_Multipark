@@ -117,3 +117,43 @@ export function redactForLog(body: unknown): string | null {
   const s = JSON.stringify(walk(body, 0));
   return s.length > 4000 ? `${s.slice(0, 4000)}…` : s;
 }
+
+// ─── 39d: quem está a ligar (pesquisa da consola) ───────────────────────────
+
+/**
+ * O telefone que a consola procura: `q: "*+351913225918*"` (POST
+ * /Contacts/filter) ou dentro do `filter` (GET ?filter[0][phone_work]=…). PURA.
+ */
+export function sugarSearchPhone(input: unknown): string | null {
+  if (input == null) return null;
+  return extractPhone(typeof input === "string" ? input : JSON.stringify(input));
+}
+
+/** Contactos que a dashboard dá à consola: ficha do CRM, contacto do CRM, ficha do RH ou só o número. */
+export type CentralContactKind = "crm" | "ct" | "emp" | "tel";
+/** "crm-123" → { kind: "crm", id: "123" }; "tel-351913225918" → número. Inválido → null. PURA. */
+export function parseContactRef(raw: unknown): { kind: CentralContactKind; id: string } | null {
+  const m = /^(crm|ct|emp|tel)-(\d{1,20})$/.exec(String(raw ?? "").trim());
+  return m ? { kind: m[1] as CentralContactKind, id: m[2] } : null;
+}
+
+/** A que contacto a consola ligou a chamada (parent_id, contact_id ou a lista contacts). PURA. */
+export function callContactRef(fields: Record<string, unknown>): string | null {
+  const f = Object.fromEntries(Object.entries(fields ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+  const contacts = Array.isArray(f.contacts) ? f.contacts : Array.isArray((f.contacts as any)?.add) ? (f.contacts as any).add : [];
+  for (const c of [f.parent_id, f.contact_id, ...contacts.map((x: any) => (x && typeof x === "object" ? x.id : x))]) {
+    if (parseContactRef(c)) return String(c).trim();
+  }
+  return null;
+}
+
+/** Para onde a página do "Sugar" manda quem abre um contacto na consola (#Contacts/crm-123). PURA. */
+export function contactRedirect(hash: string): string {
+  const m = /^#?\/?(?:Contacts|Leads|Accounts)\/((?:crm|ct|emp|tel)-\d+)/.exec(String(hash ?? ""));
+  const ref = m ? parseContactRef(m[1]) : null;
+  if (!ref) return "/";
+  if (ref.kind === "crm") return `/clientes/${ref.id}`;
+  if (ref.kind === "emp") return "/rh";
+  if (ref.kind === "tel") return `/clientes?q=${encodeURIComponent(`+${ref.id}`)}`;
+  return "/clientes";
+}
