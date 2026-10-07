@@ -99,6 +99,7 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },
   // Pressão do Extras-Dia: desde a data das Definições (extras.timesSince; acumula) da BD Multipark, por grupo de parques (retomável por grupo).
+  // 47c: da Multipark lê-se só o dia que falta (um dia × grupo; guardado em ops_pressure_days) e juntam-se os dias.
   { key: "extras-pressure", runName: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", cadence: { kind: "daily", from: "04:45" }, priority: 101, minMs: 15 * S, maxMs: 45 * S },
   { key: "rh-docs-weekly", runName: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "04:45" }, priority: 102, minMs: 15 * S, maxMs: 45 * S },
   // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras (interruptor

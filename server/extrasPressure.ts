@@ -1,13 +1,19 @@
 /**
  * "Pressão" do Extras-Dia — o script que corre (trabalho `extras-pressure` do
  * agendador, diário a partir das 04:45 de Lisboa; à mão em
- * /api/cron/extras-pressure). Lê a BD da Multipark desde `extras.timesSince`
- * (22d: 3 abr 2026; a janela cresce e nunca encolhe) — e, nas cidades, os
- * tempos por condutor (passos "driver", no fim)
- * (agregação no Postgres, server/multiparkDb/pressure.ts), um pedaço (grupo
- * de parques) de cada vez, e guarda o resultado na NOSSA BD
- * (ops_pressure_stats, migração 0235). Retomável: o cursor diz a janela
- * (dia final) e o próximo pedaço; um pedaço só arranca com tempo.
+ * /api/cron/extras-pressure). A janela vai desde `extras.timesSince` (22d:
+ * 3 abr 2026; cresce e nunca encolhe) — e, nas cidades, os tempos por
+ * condutor (passos "driver", no fim) — um pedaço (grupo de parques) de cada
+ * vez, e o resultado vai para a NOSSA BD (ops_pressure_stats, migração 0235).
+ *
+ * 47c (decisão do Jorge, 7 out 2026): a BD da Multipark lê-se UM DIA × GRUPO
+ * de cada vez e só os dias que ainda não estão guardados (ops_pressure_days,
+ * migração 0570; normalmente só ontem). Cada pedaço: 1) lê os dias em falta,
+ * guardando cada um; 2) junta todos os dias da janela (server/pressureDays.ts)
+ * e escreve as células como antes. Antes lia a janela inteira de cada vez e
+ * em Lisboa passou dos 40 s (4 noites a falhar).
+ * Retomável: o cursor diz a janela (dia final) e o pedaço; um pedaço a meio
+ * continua no tick seguinte (os dias já guardados não se voltam a ler).
  *
  * Os "Parques que a operação não faz" (Definições → operations.excludedParks,
  * passados pelo cron) ficam fora de todos os grupos.
@@ -21,10 +27,14 @@ import { describeReadFailure } from "./multiparkDb/read";
 import { buildParksSql, mapParks } from "./multiparkDb/dayBookings";
 import { excludeParks } from "../shared/reservasDoDia";
 import {
-  buildPressureChunks, buildPressureCrewSql, buildPressureDriverSlotsSql, buildPressureLoadSql, buildPressureSlotsSql,
-  mapPressureCrewRow, mapPressureDriverRow, mapPressureLoadRow, mapPressureSlotRow, pressureWindowSince,
+  buildPressureChunks, buildPressureDaySql, buildPressureDriverDaySql,
+  mapPressureCrewRow, mapPressureDriverRow, mapPressureLoadRow, mapPressureSlotRow, pressureWindow, pressureWindowSince,
   type PressureChunk, type PressureWindow,
 } from "./multiparkDb/pressure";
+import {
+  combineDriverDays, combineGroupDays, dayEvents, driverDayPayloads, groupDayPayloads, missingPressureDays, parseDayPayload, pressureDaySig, windowDayList,
+  type DriverDayPayload, type GroupDayPayload, type PressureDayPart, type PressureReprocess, type StoredDayMeta,
+} from "./pressureDays";
 import { addDays, lisbonDayOf } from "../shared/lisbonDay";
 import {
   PRESSURE_SINCE_DEFAULT, PRESSURE_WINDOW_DAYS, crewMeasureBands,
@@ -40,24 +50,26 @@ const windowDaysOf = (w: PressureWindow) => Object.values(w.weekdayDays).reduce(
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
 
-/** Um pedaço só arranca com pelo menos isto até ao prazo (2 leituras ≤ 15 s cada, normalmente < 2 s). */
-export const PRESSURE_CHUNK_MIN_MS = 12_000;
 /**
- * 44a: as cidades inteiras (e os condutores) são as leituras pesadas — desde
- * abril, Lisboa passava dos 15 s e falhava todas as noites ("statement
- * timeout"): só arrancam com pelo menos isto de tempo e cada leitura pode ir
- * até ao que falta (no máximo 40 s, multiparkDb/client.ts).
+ * Uma leitura (um dia × grupo; normalmente < 2 s) só arranca com pelo menos
+ * isto até ao prazo. 47c: já não há pedaços "pesados" — a leitura de um dia
+ * não cresce com a janela (antes, a cidade inteira desde abril precisava de
+ * 25 s e mesmo assim passou dos 40 s em Lisboa).
  */
-export const PRESSURE_HEAVY_CHUNK_MIN_MS = 25_000;
+export const PRESSURE_CHUNK_MIN_MS = 12_000;
+/** Juntar os dias guardados (só a nossa BD) e escrever as células: arranca com pelo menos isto. */
+export const PRESSURE_COMBINE_MIN_MS = 6_000;
+/**
+ * 47c: uma corrida só começa leituras novas nos primeiros 20 s. O agendador
+ * põe primeiro as tarefas "a retomar" e o preenchimento inicial (desde abril,
+ * dia a dia) dura horas: sem este teto ficava com o tick inteiro e o Gmail,
+ * os PDAs/Zello e a caixa paravam. Assim sobram ~25 s por tick para os outros.
+ */
+export const PRESSURE_RUN_READS_MS = 20_000;
 
 /** Leitura com o tempo que falta até ao prazo (folga de 2 s), entre 15 s e o teto. PURA quanto ao relógio dado. */
 export function pressureQueryTimeout(deadlineAt: number, now: number): number {
   return Math.max(15_000, Math.min(40_000, deadlineAt - now - 2_000));
-}
-
-/** Pedaço pesado? (a cidade inteira ou os condutores da cidade). PURA. */
-export function isHeavyPressureChunk(chunk: { key: string; kind?: string }): boolean {
-  return chunk.kind === "driver" || chunk.key.startsWith("cidade_");
 }
 /** Janelas guardadas para trás (as mais antigas apagam-se). */
 export const PRESSURE_KEEP_DAYS = 14;
@@ -66,7 +78,7 @@ export const PRESSURE_DONE_GROUP = "_done";
 
 // ─── Cursor ─────────────────────────────────────────────────────────────────
 
-export interface PressureCursor { w: string; i: number }
+export interface PressureCursor { w: string; i: number; rp?: PressureReprocess }
 
 /** Cursor → próximo pedaço (só vale para a mesma janela; outra janela = do início). PURA. */
 export function parsePressureCursor(raw: string | null | undefined, windowEnd: string): number {
@@ -78,8 +90,35 @@ export function parsePressureCursor(raw: string | null | undefined, windowEnd: s
   return 0;
 }
 
-export function formatPressureCursor(windowEnd: string, nextIndex: number): string {
-  return JSON.stringify({ w: windowEnd, i: nextIndex } satisfies PressureCursor);
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TS_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/** 47c: o pedido de reprocessar à mão que vem no cursor (só para a mesma janela). PURA. */
+export function parsePressureReprocess(raw: string | null | undefined, windowEnd: string): PressureReprocess | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    const rp = v?.rp;
+    if (v?.w === windowEnd && rp && DAY_RE.test(rp.from) && DAY_RE.test(rp.to) && TS_RE.test(rp.before) && rp.from <= rp.to) return { from: rp.from, to: rp.to, before: rp.before };
+  } catch { /* sem pedido */ }
+  return null;
+}
+
+/**
+ * 47c: "?reprocessar=AAAA-MM-DD" ou "AAAA-MM-DD..AAAA-MM-DD" (dias de Lisboa)
+ * → os dias guardados desse intervalo antes de agora voltam a ler-se. PURA.
+ */
+export function parseReprocessParam(raw: unknown, nowUtc: string): PressureReprocess | null {
+  const m = /^(\d{4}-\d{2}-\d{2})(?:\.\.(\d{4}-\d{2}-\d{2}))?$/.exec(String(raw ?? "").trim());
+  if (!m || !TS_RE.test(nowUtc)) return null;
+  const from = m[1];
+  const to = m[2] ?? m[1];
+  if (Number.isNaN(Date.parse(`${from}T12:00:00Z`)) || Number.isNaN(Date.parse(`${to}T12:00:00Z`)) || from > to) return null;
+  return { from, to, before: nowUtc };
+}
+
+export function formatPressureCursor(windowEnd: string, nextIndex: number, reprocess?: PressureReprocess | null): string {
+  return JSON.stringify({ w: windowEnd, i: nextIndex, ...(reprocess ? { rp: reprocess } : {}) } satisfies PressureCursor);
 }
 
 /** Janela por omissão: acaba ontem (Lisboa). PURA. */
@@ -164,6 +203,39 @@ export const mysqlPressureStore: PressureStore = {
   },
 };
 
+// ─── 47c: dias guardados (ops_pressure_days) ────────────────────────────────
+
+export interface PressureDaysStore {
+  /** Assinatura e hora de cálculo dos dias guardados de um grupo/parte, entre dois dias (inclusive). */
+  meta(group: string, part: PressureDayPart, from: string, to: string): Promise<Map<string, StoredDayMeta>>;
+  /** Guarda (substitui) um dia. */
+  save(group: string, part: PressureDayPart, day: string, payload: GroupDayPayload | DriverDayPayload, sig: string, readEnd: string, computedAt: string): Promise<void>;
+  /** Os dias guardados com esta assinatura, entre dois dias (inclusive), por ordem. */
+  load(group: string, part: PressureDayPart, from: string, to: string, sig: string): Promise<Array<{ day: string; payload: unknown }>>;
+}
+
+export const mysqlPressureDaysStore: PressureDaysStore = {
+  async meta(group, part, from, to) {
+    const db = await dashboardDb();
+    const rows = rowsOf(await db.execute(sql`SELECT DATE_FORMAT(day, '%Y-%m-%d') AS d, sig, DATE_FORMAT(computedAt, '%Y-%m-%d %H:%i:%s') AS c
+      FROM ops_pressure_days WHERE parkGroup = ${group} AND part = ${part} AND day BETWEEN ${from} AND ${to} LIMIT 20000`));
+    return new Map(rows.map((r) => [String(r.d), { sig: String(r.sig ?? ""), computedAt: String(r.c ?? "") }]));
+  },
+  async save(group, part, day, payload, sig, readEnd, computedAt) {
+    const db = await dashboardDb();
+    // Estatística derivada: um dia substitui-se a si próprio (chave única), nunca se apaga.
+    await db.execute(sql`INSERT INTO ops_pressure_days (parkGroup, part, day, sig, readEnd, events, payload, computedAt)
+      VALUES (${group}, ${part}, ${day}, ${sig}, ${readEnd}, ${dayEvents(payload)}, ${JSON.stringify(payload)}, ${computedAt})
+      ON DUPLICATE KEY UPDATE sig = VALUES(sig), readEnd = VALUES(readEnd), events = VALUES(events), payload = VALUES(payload), computedAt = VALUES(computedAt)`);
+  },
+  async load(group, part, from, to, sig) {
+    const db = await dashboardDb();
+    const rows = rowsOf(await db.execute(sql`SELECT DATE_FORMAT(day, '%Y-%m-%d') AS d, payload
+      FROM ops_pressure_days WHERE parkGroup = ${group} AND part = ${part} AND day BETWEEN ${from} AND ${to} AND sig = ${sig} ORDER BY day LIMIT 20000`));
+    return rows.map((r) => ({ day: String(r.d), payload: r.payload }));
+  },
+};
+
 // ─── Corrida ────────────────────────────────────────────────────────────────
 
 export interface PressureRunResult {
@@ -180,14 +252,20 @@ export interface PressureRunResult {
   cursor: string | null;
   slots: number;
   loadRows: number;
+  /** 47c: dias × grupo lidos da Multipark nesta corrida (normalmente 1 por pedaço). */
+  daysRead: number;
   ms: number;
 }
 
 /**
- * Corre os pedaços a partir do cursor até acabarem ou faltar tempo. Um pedaço
- * que falha (ex.: tempo esgotado na BD da Multipark) fica registado e segue-se
- * para o seguinte — a janela fica completa na mesma, com esse grupo em falta,
- * e a corrida sai vermelha. Nunca lança por causa da BD da Multipark.
+ * Corre os pedaços a partir do cursor até acabarem ou faltar tempo. Em cada
+ * pedaço: lê da Multipark os dias em falta (um de cada vez, guardando cada
+ * um) e depois junta os dias da janela e escreve as células. Um pedaço que
+ * falha (ex.: tempo esgotado na BD da Multipark) fica registado e segue-se
+ * para o seguinte — a janela fica completa na mesma, com esse grupo em falta
+ * (a página mostra-o com a janela anterior), e a corrida sai vermelha. Os
+ * dias já lidos ficam guardados (a tentativa seguinte só lê o que falta).
+ * Nunca lança por causa da BD da Multipark.
  */
 export async function runExtrasPressure(o: {
   deadlineAt: number;
@@ -196,6 +274,10 @@ export async function runExtrasPressure(o: {
   windowEnd?: string;
   query?: Query;
   store?: PressureStore;
+  /** 47c: onde ficam os dias (omissão: ops_pressure_days). */
+  days?: PressureDaysStore;
+  /** 47c: reprocessar à mão (vem também no cursor, para as chamadas seguintes). */
+  reprocess?: PressureReprocess | null;
   isConfigured?: () => boolean;
   /** "Parques que a operação não faz" (Definições): ficam fora de todos os grupos. */
   excludedParkIds?: readonly string[];
@@ -205,17 +287,24 @@ export async function runExtrasPressure(o: {
   crewRules?: CrewRulesMap | null;
   /** 27b: agentes da Multipark dos TL (omissão: lidos da nossa BD). */
   teamLeaderAgentIds?: readonly string[] | null;
+  /** 47c: só começa leituras novas até este tempo depois do início (omissão PRESSURE_RUN_READS_MS). */
+  readBudgetMs?: number;
 }): Promise<PressureRunResult> {
   const t0 = Date.now();
+  const readsUntil = t0 + (o.readBudgetMs ?? PRESSURE_RUN_READS_MS);
   const now = o.now ?? t0;
   const windowEnd = o.windowEnd ?? defaultWindowEnd(now);
   const w: PressureWindow = pressureWindowSince(o.since ?? PRESSURE_SINCE_DEFAULT, windowEnd);
   const windowDays = windowDaysOf(w);
+  const allDays = windowDayList(w);
   const crewRules = o.crewRules ?? DEFAULT_CREW_RULES;
-  // 44a: sem leitura injetada (testes), cada leitura leva o tempo que falta até ao prazo
-  const query: Query = o.query ?? (<T,>(sqlText: string, params?: SqlParam[]) => multiparkDbQuery<T>(sqlText, params ?? [], { timeoutMs: pressureQueryTimeout(o.deadlineAt, Date.now()) }));
+  // 44a: sem leitura injetada (testes), cada leitura leva o tempo que falta até ao prazo;
+  // 47c: e é "analítica" (sem nested loops nem JIT no Postgres — multiparkDb/client.ts).
+  const query: Query = o.query ?? (<T,>(sqlText: string, params?: SqlParam[]) => multiparkDbQuery<T>(sqlText, params ?? [], { timeoutMs: pressureQueryTimeout(o.deadlineAt, Date.now()), analytics: true }));
   const store = o.store ?? mysqlPressureStore;
-  const base: PressureRunResult = { ok: true, done: true, windowEnd, windowStart: w.startDay, chunks: 0, processed: [], failed: [], nextIndex: 0, cursor: null, slots: 0, loadRows: 0, ms: 0 };
+  const days = o.days ?? mysqlPressureDaysStore;
+  const reprocess = o.reprocess ?? parsePressureReprocess(o.cursor, windowEnd);
+  const base: PressureRunResult = { ok: true, done: true, windowEnd, windowStart: w.startDay, chunks: 0, processed: [], failed: [], nextIndex: 0, cursor: null, slots: 0, loadRows: 0, daysRead: 0, ms: 0 };
   const configured = o.isConfigured ?? (() => !!String(process.env.DATABASE_URL_MULTIPARK ?? "").trim());
   if (!configured()) return { ...base, skipped: "DATABASE_URL_MULTIPARK não está definida neste ambiente.", ms: Date.now() - t0 };
 
@@ -226,7 +315,7 @@ export async function runExtrasPressure(o: {
   } catch (err) {
     const f = describeReadFailure(err);
     console.warn("[extras-pressure] parques:", redactSecrets(err).slice(0, 200));
-    return { ...base, ok: false, done: false, error: f.reason, cursor: formatPressureCursor(windowEnd, parsePressureCursor(o.cursor, windowEnd)), ms: Date.now() - t0 };
+    return { ...base, ok: false, done: false, error: f.reason, cursor: formatPressureCursor(windowEnd, parsePressureCursor(o.cursor, windowEnd), reprocess), ms: Date.now() - t0 };
   }
   let i = parsePressureCursor(o.cursor, windowEnd);
   const out: PressureRunResult = { ...base, chunks: chunks.length, nextIndex: i };
@@ -235,32 +324,52 @@ export async function runExtrasPressure(o: {
   const computedAt = utcNow();
   while (i < chunks.length) {
     const chunk = chunks[i];
-    if (o.deadlineAt - Date.now() < (isHeavyPressureChunk(chunk) ? PRESSURE_HEAVY_CHUNK_MIN_MS : PRESSURE_CHUNK_MIN_MS)) break;
+    const part: PressureDayPart = chunk.kind === "driver" ? "driver" : "group";
+    const sig = pressureDaySig(chunk.parkIds);
+    const label = chunk.kind === "driver" ? `${chunk.key}:condutores` : chunk.key;
+    // Sem tempo nem para juntar os dias: fica para o tick seguinte.
+    if (o.deadlineAt - Date.now() < PRESSURE_COMBINE_MIN_MS) break;
+    let paused = false;
     try {
-      if (chunk.kind === "driver") {
-        const bands: CrewMeasureBand[] = crewMeasureBands(crewRules[extraCityOf(chunk.city)] ?? DEFAULT_CREW_RULES[extraCityOf(chunk.city)]);
-        const d = buildPressureDriverSlotsSql(w, chunk.parkIds, tlIds);
-        const drivers = (await query(d.sql, d.params)).map(mapPressureDriverRow).filter((x): x is DriverRow => !!x);
-        const k = buildPressureCrewSql(w, chunk.parkIds, bands, tlIds);
-        const crew = (await query(k.sql, k.params)).map((r) => mapPressureCrewRow(chunk.key, bands, r)).filter((x): x is PressureCrewRow => !!x);
-        await store.upsertDriver(windowEnd, chunk, w, drivers, crew, computedAt);
-        out.processed.push(`${chunk.key}:condutores`);
-        i++;
-        continue;
+      // 1) Os dias em falta: um dia × grupo por leitura, cada um guardado logo.
+      const missing = missingPressureDays(allDays, await days.meta(chunk.key, part, w.startDay, w.endDay), sig, reprocess);
+      for (const day of missing) {
+        if (o.deadlineAt - Date.now() < PRESSURE_CHUNK_MIN_MS || Date.now() > readsUntil) { paused = true; break; }
+        const r = pressureWindow(day, 1);
+        const q = part === "driver" ? buildPressureDriverDaySql(w, r, chunk.parkIds) : buildPressureDaySql(w, r, chunk.parkIds);
+        const rows = await query(q.sql, q.params);
+        const payload = part === "driver" ? driverDayPayloads(rows, [day]).get(day)! : groupDayPayloads(rows, [day]).get(day)!;
+        await days.save(chunk.key, part, day, payload, sig, windowEnd, utcNow());
+        out.daysRead++;
       }
-      const a = buildPressureSlotsSql(w, chunk.parkIds);
-      const slots = (await query(a.sql, a.params)).map((r) => mapPressureSlotRow(chunk.key, w, r)).filter((x): x is PressureSlot => !!x);
-      const b = buildPressureLoadSql(w, chunk.parkIds);
-      const loads = (await query(b.sql, b.params)).map((r) => mapPressureLoadRow(chunk.key, r)).filter((x): x is PressureLoadRow => !!x);
-      await store.replaceGroup(windowEnd, chunk, slots, loads, computedAt, windowDays);
-      out.processed.push(chunk.key);
-      out.slots += slots.length;
-      out.loadRows += loads.length;
+      // 2) Juntar todos os dias da janela e escrever as células (como antes).
+      if (!paused && o.deadlineAt - Date.now() < PRESSURE_COMBINE_MIN_MS) paused = true;
+      if (!paused) {
+        const stored = await days.load(chunk.key, part, w.startDay, w.endDay, sig);
+        if (stored.length < allDays.length) throw new Error(`faltam ${allDays.length - stored.length} dia(s) guardados.`);
+        if (part === "driver") {
+          const bands: CrewMeasureBand[] = crewMeasureBands(crewRules[extraCityOf(chunk.city)] ?? DEFAULT_CREW_RULES[extraCityOf(chunk.city)]);
+          const c = combineDriverDays(stored.map((d) => ({ day: d.day, payload: parseDayPayload<DriverDayPayload>(d.payload) })), tlIds, bands);
+          const drivers = c.driverRows.map(mapPressureDriverRow).filter((x): x is DriverRow => !!x);
+          const crew = c.crewRows.map((r) => mapPressureCrewRow(chunk.key, bands, r)).filter((x): x is PressureCrewRow => !!x);
+          await store.upsertDriver(windowEnd, chunk, w, drivers, crew, computedAt);
+        } else {
+          const c = combineGroupDays(stored.map((d) => ({ day: d.day, payload: parseDayPayload<GroupDayPayload>(d.payload) })));
+          const slots = c.slotRows.map((r) => mapPressureSlotRow(chunk.key, w, r)).filter((x): x is PressureSlot => !!x);
+          const loads = c.loadRows.map((r) => mapPressureLoadRow(chunk.key, r)).filter((x): x is PressureLoadRow => !!x);
+          await store.replaceGroup(windowEnd, chunk, slots, loads, computedAt, windowDays);
+          out.slots += slots.length;
+          out.loadRows += loads.length;
+        }
+        out.processed.push(label);
+      }
     } catch (err) {
       const msg = err && (err as any).name === "MultiparkDbError" ? describeReadFailure(err).reason : redactSecrets(err).slice(0, 200);
-      console.warn(`[extras-pressure] ${chunk.key}:`, redactSecrets(err).slice(0, 200));
+      console.warn(`[extras-pressure] ${label}:`, redactSecrets(err).slice(0, 200));
       out.failed.push({ group: chunk.key, error: msg });
     }
+    // Sem tempo a meio do pedaço: fica para o tick seguinte (os dias lidos já estão guardados).
+    if (paused) break;
     i++;
   }
   out.nextIndex = i;
@@ -269,7 +378,7 @@ export async function runExtrasPressure(o: {
     await store.finish(windowEnd, computedAt, windowDays);
     out.cursor = null;
   } else {
-    out.cursor = formatPressureCursor(windowEnd, i);
+    out.cursor = formatPressureCursor(windowEnd, i, reprocess);
   }
   if (out.failed.length) {
     out.ok = false;

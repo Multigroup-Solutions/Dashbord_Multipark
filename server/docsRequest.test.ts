@@ -376,7 +376,9 @@ describe("permissões e âmbito", () => {
 
 describe("registo (migração 0560) e envio", () => {
   it("tabela com chave única do pedido, registada no fim e espelhada no schema; nada se apaga", () => {
-    expect(SCHEMA_MIGRATION_IDS[SCHEMA_MIGRATION_IDS.length - 1]).toBe("0560");
+    // registada (a ordem e o "no fim" vê-os server/migrations/index.test.ts; 47c acrescentou a 0570 depois)
+    expect(SCHEMA_MIGRATION_IDS).toContain("0560");
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0560")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0555"));
     const sql = MIGRATION_0560_STATEMENTS.join("\n");
     expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS `employee_docs_requests`/);
     expect(sql).toMatch(/UNIQUE KEY `uq_employee_docs_requests_key` \(`requestKey`\)/);

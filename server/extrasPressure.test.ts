@@ -18,8 +18,9 @@ import {
 } from "./multiparkDb/extrasBookings";
 import { mapParks } from "./multiparkDb/dayBookings";
 import {
-  PRESSURE_CHUNK_MIN_MS, PRESSURE_HEAVY_CHUNK_MIN_MS, defaultWindowEnd, formatPressureCursor, mapStoredRow, parsePressureCursor, runExtrasPressure, type PressureStore,
+  PRESSURE_CHUNK_MIN_MS, defaultWindowEnd, formatPressureCursor, mapStoredRow, parsePressureCursor, runExtrasPressure, type PressureDaysStore, type PressureStore,
 } from "./extrasPressure";
+import { lisbonDayOf } from "../shared/lisbonDay";
 import { filterRowsByField, liveToBookingRow, lisbonWallToUtcMs } from "./extrasDia";
 import {
   LOAD_BUCKETS, describeLoadEffect, describeTightBlock, groupAllowedForCities, isRushHour, isoWeekday, loadBucketOf, loadComparison, percentile,
@@ -113,15 +114,38 @@ function memStore() {
     async upsertDriver(_w, chunk, _win, d, c) { drivers.push({ key: chunk.key, slots: d.length, crew: c.length }); },
     async finish(w) { finished.push(w); },
   };
-  return { store, groups, finished, drivers };
+  // 47c: os dias guardados (ops_pressure_days) em memória.
+  const rows = new Map<string, { sig: string; computedAt: string; payload: unknown }>();
+  const days: PressureDaysStore = {
+    async meta(group, part, from, to) {
+      const out = new Map<string, { sig: string; computedAt: string }>();
+      for (const [k, v] of Array.from(rows)) {
+        const [g, pt, d] = k.split("|");
+        if (g === group && pt === part && d >= from && d <= to) out.set(d, { sig: v.sig, computedAt: v.computedAt });
+      }
+      return out;
+    },
+    async save(group, part, day, payload, sig, _readEnd, computedAt) { rows.set(`${group}|${part}|${day}`, { sig, computedAt, payload: JSON.parse(JSON.stringify(payload)) }); },
+    async load(group, part, from, to, sig) {
+      return Array.from(rows).map(([k, v]) => ({ k: k.split("|"), v }))
+        .filter(({ k, v }) => k[0] === group && k[1] === part && k[2] >= from && k[2] <= to && v.sig === sig)
+        .map(({ k, v }) => ({ day: k[2], payload: v.payload })).sort((a, b) => a.day.localeCompare(b.day));
+    },
+  };
+  return { store, days, groups, finished, drivers, rows };
 }
 
-function answer(sql: string) {
+/** O dia de Lisboa pedido a uma leitura de um dia (os 2 últimos parâmetros são o início e o fim do dia). */
+const dayOfRead = (params: unknown[]) => lisbonDayOf(Date.parse(`${String(params[params.length - 2]).replace(" ", "T")}Z`));
+
+function answer(sql: string, params: unknown[] = []) {
   if (sql.includes('FROM "Park"')) return PARK_ROWS;
-  if (sql.includes("AS lb")) return [{ lb: 2, rush: false, n: 6, p50: 12, p75: 18, p90: 25 }];
-  if (sql.includes("AS busy")) return [{ band: 2, busy: true, n: 40, p50: 35, p60: 38, p75: 44, p85: 50, p90: 55 }];
-  if (sql.includes("AS cy_n")) return [{ wd: 5, hr: 18, cy_n: 30, cy_p50: 35, cy_p60: 38, cy_p75: 44, cy_p85: 50, cy_p90: 55, dr_n: 12, dr_p50: 20, dr_p75: 25, dr_p90: 31, tp_n: 9, tp_p50: 8, tp_p75: 11, crew_avg: 3.4 }];
-  return [{ wd: 5, hr: 18, ci_done: 3, co_done: 9, ci_started: 3, co_started: 9, conc_sum: 20, conc_max: 5, del_n: 9, del_p50: 15, del_p75: 22, del_p90: 30, pik_n: 3, pik_p50: 8, pik_p75: 10 }];
+  const d = dayOfRead(params);
+  if (sql.includes("AS jobs")) return [{ d, hr: 18, jobs: 3, cy: "2100000,2400000", dr: "1200000", tp: "480000", uids: ["A", "B"] }];
+  return [
+    { part: "h", d, hr: 18, hk: null, ci_done: 3, co_done: 9, ci_started: 3, co_started: 9, del_ms: "900000,1320000", pik_ms: "480000", n: null },
+    { part: "c", d, hr: null, hk: `${d} 18`, n: 5 },
+  ];
 }
 
 describe("pressão — cursor e retoma", () => {
@@ -132,43 +156,61 @@ describe("pressão — cursor e retoma", () => {
     expect(parsePressureCursor("lixo", "2026-09-26")).toBe(0);
     expect(parsePressureCursor(null, "2026-09-26")).toBe(0);
   });
-  it("corre todos os pedaços e marca a janela como completa", async () => {
-    const q = vi.fn(async (sql: string) => answer(sql));
+  it("corre todos os pedaços, um dia × grupo por leitura, e marca a janela como completa", async () => {
+    const q = vi.fn(async (sql: string, params: unknown[]) => answer(sql, params));
     const m = memStore();
-    const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
-    expect(r).toMatchObject({ ok: true, done: true, chunks: 8, nextIndex: 8, cursor: null });
+    const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, days: m.days, isConfigured: () => true, teamLeaderAgentIds: [] });
+    const nDays = 177; // 3 abr → 26 set
+    expect(r).toMatchObject({ ok: true, done: true, chunks: 8, nextIndex: 8, cursor: null, daysRead: 8 * nDays });
     expect(m.groups).toEqual(["cidade_lisboa", "cidade_porto", "airpark_lisboa", "redpark_lisboa", "skypark_porto", "marketplace"]);
-    expect(m.drivers).toEqual([{ key: "cidade_lisboa", slots: 1, crew: 1 }, { key: "cidade_porto", slots: 1, crew: 1 }]);
+    // as 18h de cada dia da semana (7 células) e um escalão de pessoas
+    expect(m.drivers).toEqual([{ key: "cidade_lisboa", slots: 7, crew: 1 }, { key: "cidade_porto", slots: 7, crew: 1 }]);
     expect(m.finished).toEqual(["2026-09-26"]);
-    expect(q).toHaveBeenCalledTimes(1 + 8 * 2);
+    expect(q).toHaveBeenCalledTimes(1 + 8 * nDays);
   });
-  it("sem tempo: para, devolve o cursor e retoma no pedaço seguinte", async () => {
-    const q = vi.fn(async (sql: string) => answer(sql));
+  it("sem tempo: para a meio do pedaço, devolve o cursor e retoma sem voltar a ler os dias guardados", async () => {
+    const q = vi.fn(async (sql: string, params: unknown[]) => answer(sql, params));
     const m = memStore();
     let now = 0;
     const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
-      // cada leitura "gasta" 5 s; prazo = 35 s → parques (5 s) + 1.º pedaço (10 s) cabem; o 2.º já não
-      // (44a: as cidades são pesadas e só arrancam com ≥ 25 s; sobram 20 s)
-      q.mockImplementation(async (sql: string) => { now += 5_000; return answer(sql); });
-      const r1 = await runExtrasPressure({ deadlineAt: PRESSURE_HEAVY_CHUNK_MIN_MS + 10_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
-      expect(r1.done).toBe(false);
-      expect(r1.processed).toEqual(["cidade_lisboa"]);
-      expect(parsePressureCursor(r1.cursor, "2026-09-26")).toBe(1);
+      // cada leitura "gasta" 5 s; prazo = 12 s + 4 leituras (menos 1 ms) → parques + 3 dias do 1.º pedaço
+      q.mockImplementation(async (sql: string, params: unknown[]) => { now += 5_000; return answer(sql, params); });
+      const base = { windowEnd: "2026-09-26", since: "2026-09-20", query: q as any, store: m.store, days: m.days, isConfigured: () => true, teamLeaderAgentIds: [] };
+      const r1 = await runExtrasPressure({ ...base, deadlineAt: PRESSURE_CHUNK_MIN_MS + 4 * 5_000 - 1 });
+      expect(r1).toMatchObject({ done: false, processed: [], failed: [], daysRead: 3 });
+      expect(parsePressureCursor(r1.cursor, "2026-09-26")).toBe(0);
       now = 0;
-      const r2 = await runExtrasPressure({ deadlineAt: 10_000_000, cursor: r1.cursor, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
+      const r2 = await runExtrasPressure({ ...base, deadlineAt: 10_000_000, cursor: r1.cursor, readBudgetMs: 10_000_000 });
       expect(r2.done).toBe(true);
-      expect(r2.processed[0]).toBe("cidade_porto");
+      expect(r2.processed[0]).toBe("cidade_lisboa");
+      // o 1.º pedaço só leu os 4 dias que faltavam (7 no total, nenhum repetido)
+      expect(r2.daysRead).toBe(4 + 7 * 7);
       expect(m.finished).toEqual(["2026-09-26"]);
     } finally { spy.mockRestore(); }
+  });
+  it("noite seguinte: só lê o dia novo de cada grupo; repetir a mesma noite não lê nada da Multipark", async () => {
+    const q = vi.fn(async (sql: string, params: unknown[]) => answer(sql, params));
+    const m = memStore();
+    const base = { since: "2026-09-01", query: q as any, store: m.store, days: m.days, isConfigured: () => true, teamLeaderAgentIds: [] };
+    await runExtrasPressure({ ...base, deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26" });
+    q.mockClear();
+    const r = await runExtrasPressure({ ...base, deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-27" });
+    expect(r).toMatchObject({ ok: true, done: true, daysRead: 8 });
+    const reads = q.mock.calls.filter(([sql]) => !String(sql).includes('FROM "Park"'));
+    expect(reads.map(([, params]) => dayOfRead(params as unknown[]))).toEqual(Array(8).fill("2026-09-27"));
+    q.mockClear();
+    const again = await runExtrasPressure({ ...base, deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-27" });
+    expect(again).toMatchObject({ ok: true, done: true, daysRead: 0 });
+    expect(q).toHaveBeenCalledTimes(1); // só os parques
   });
   it("um pedaço que falha não para os outros; a corrida fica vermelha", async () => {
     const q = vi.fn(async (sql: string, params: any[]) => {
       if (!sql.includes('FROM "Park"') && params.includes("p3")) throw new MultiparkDbError("canceling statement due to statement timeout", "QUERY_FAILED");
-      return answer(sql);
+      return answer(sql, params);
     });
     const m = memStore();
-    const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
+    const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", since: "2026-09-20", query: q as any, store: m.store, days: m.days, isConfigured: () => true, teamLeaderAgentIds: [] });
     expect(r.ok).toBe(false);
     expect(r.done).toBe(true);
     expect(r.failed.map((f) => f.group)).toEqual(["cidade_porto", "skypark_porto", "cidade_porto"]);
@@ -177,9 +219,9 @@ describe("pressão — cursor e retoma", () => {
     expect(m.drivers.map((d) => d.key)).toEqual(["cidade_lisboa"]);
   });
   it("parques que a operação não faz: ficam fora de todos os pedaços", async () => {
-    const q = vi.fn(async (sql: string) => answer(sql));
+    const q = vi.fn(async (sql: string, params: unknown[]) => answer(sql, params));
     const m = memStore();
-    const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true, excludedParkIds: ["p3"] });
+    const r = await runExtrasPressure({ deadlineAt: Date.now() + 60_000, windowEnd: "2026-09-26", since: "2026-09-20", query: q as any, store: m.store, days: m.days, isConfigured: () => true, excludedParkIds: ["p3"], teamLeaderAgentIds: [] });
     expect(r).toMatchObject({ ok: true, done: true, chunks: 5 });
     expect(m.groups).toEqual(["cidade_lisboa", "airpark_lisboa", "redpark_lisboa", "marketplace"]);
     expect(q.mock.calls.every(([, params]) => !(params ?? []).includes("p3"))).toBe(true);
