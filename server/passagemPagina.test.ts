@@ -135,10 +135,11 @@ describe("Leitura falhada ≠ 0 (email, IA, notificação)", () => {
   } as HandoverDraftCounts;
 
   it("draftKeyLines diz 'sem dados' em vez de 0", () => {
-    const lines = draftKeyLines(counts, unavailableCounts(["complaints", "speed"]));
-    expect(lines.find((l) => l.startsWith("Reclamações"))).toBe("Reclamações novas no turno: sem dados (falhou a leitura) · abertas: sem dados (falhou a leitura)");
+    const lines = draftKeyLines(counts, unavailableCounts(["pending deliveries", "speed"]));
+    expect(lines.find((l) => l.startsWith("Entregas pendentes"))).toBe("Entregas pendentes (sem check-out): sem dados (falhou a leitura)");
     expect(lines.find((l) => l.startsWith("Alertas"))).toBe("Alertas de velocidade/GPS no turno: sem dados (falhou a leitura)/0");
-    expect(lines.find((l) => l.startsWith("Perdidos"))).toBe("Perdidos e achados abertos: 1");
+    // 44b: reclamações, perdidos e ocorrências saíram da passagem de turno
+    expect(lines.find((l) => l.startsWith("Reclamações") || l.startsWith("Perdidos") || l.startsWith("Ocorrências"))).toBeUndefined();
   });
 
   it("o email ao turno seguinte também", () => {
@@ -176,18 +177,20 @@ describe("Lista de pendentes: o que herdas resolve-se, não se apaga; o limite n
 
   it("mergeCarryOver respeita o mesmo limite", () => {
     const previous = [note("herdada", { since: "2026-10-01 night" })];
-    const draft = Array.from({ length: OPEN_ITEMS_MAX + 5 }, (_, i) => ent("lost_found", i, { since: cur }));
+    const draft = Array.from({ length: OPEN_ITEMS_MAX + 5 }, (_, i) => ent("pda", i, { since: cur }));
     const out = mergeCarryOver({ previous, draft, currentSince: cur });
     expect(out).toHaveLength(OPEN_ITEMS_MAX);
     expect(out.some((i) => i.text === "herdada")).toBe(true);
   });
 
-  it("ocorrência guardada com o id da nossa cópia não se fecha só porque agora a leitura é ao vivo", () => {
+  it("um pendente que o rascunho não consegue verificar não se fecha só por não aparecer", () => {
+    // 44b: as ocorrências já não passam de turno; a regra vale para os PDAs
     const out = mergeCarryOver({
-      previous: [ent("incident", 12, { since: "2026-10-01 night" })], draft: [],
-      isCheckable: (i) => i.kind !== "incident" || typeof i.refId === "string", nowIso: "2026-10-02T08:00:00Z",
+      previous: [ent("pda", 12, { since: "2026-10-01 night" }), ent("incident", 13, { since: "2026-10-01 night" })], draft: [],
+      isCheckable: (i) => i.kind !== "pda", nowIso: "2026-10-02T08:00:00Z",
     });
-    expect(out[0].resolved).toBe(false);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ kind: "pda", resolved: false });
   });
 
   it("linha das notas editada: o pendente antigo deste turno sai, o novo entra; os herdados ficam", () => {

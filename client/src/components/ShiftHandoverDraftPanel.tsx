@@ -121,15 +121,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
         <Section title="Entregas pendentes (sem check-out)" count={c.pendingDeliveries} failed={bad("pending deliveries")} link="/operacoes" linkLabel="operações" tone="bad">
           {draft.pendingDeliveries.map((b) => <p key={b.externalId}>{b.since} · {b.bookingNumber ?? b.externalId} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}</p>)}
         </Section>
-        <Section title={`Reclamações (novas no turno: ${n(c.complaintsNew, "complaints")})`} count={c.complaintsOpen} failed={bad("complaints")} link="/reclamacoes" linkLabel="reclamações" tone="warn">
-          {draft.complaints.map((x) => <p key={x.id}>{x.isNew ? "🆕 " : ""}#{x.id} {x.title} <span className="text-muted-foreground">({x.status})</span></p>)}
-        </Section>
-        <Section title="Perdidos e achados abertos" count={c.lostFoundOpen} failed={bad("lost&found")} link="/perdidos-achados" linkLabel="perdidos e achados" tone="warn">
-          {draft.lostFound.map((x) => <p key={x.id}>#{x.id} {x.clientName} — {x.description.slice(0, 100)} <span className="text-muted-foreground">({x.status})</span></p>)}
-        </Section>
-        <Section title="Ocorrências abertas" count={c.incidentsOpen} failed={bad("incidents")} link="/ocorrencias" linkLabel="ocorrências" tone="warn">
-          {draft.incidents.map((x) => <p key={x.id}>{typeof x.id === "number" ? `#${x.id}` : "•"}{x.plate ? ` ${x.plate}` : ""} — {x.description.slice(0, 100)} <span className="text-muted-foreground">({x.severity})</span></p>)}
-        </Section>
+        {/* 44b (Jorge, 7 out 2026): reclamações, perdidos e ocorrências saíram da passagem de turno — têm as páginas deles. */}
         <Section title="WhatsApp por ler" count={c.whatsappUnread} failed={bad("whatsapp")} link="/whatsapp" linkLabel="WhatsApp" tone="warn">
           {draft.whatsapp.map((x) => <p key={x.id}>{x.name} · {x.unreadCount} por ler</p>)}
         </Section>

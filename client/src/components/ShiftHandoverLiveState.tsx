@@ -137,27 +137,48 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
         <Kpi label="Operações em curso" value={d.inProgress.length} tone={d.inProgress.length ? "warn" : undefined} />
         <Kpi label={`Recolhas / entregas (${hours} h)`} value={`${checkinsLeft} / ${checkoutsLeft}`} />
         <Kpi label="Passou a hora de saída" value={d.inPark.overdue} tone={d.inPark.overdue ? "bad" : undefined} />
-        <Kpi label="Ocorrências por resolver" value={d.occurrences.list.length} tone={d.occurrences.list.length ? "warn" : undefined} />
         <Kpi label="Caixa por fechar (turno)" value={d.cash.notCashierClosed} tone={d.cash.notCashierClosed ? "bad" : undefined} />
         <Kpi label="Validação de caixa / condutor em falta" value={`${d.cash.notCashValidated} / ${d.cash.notDriverValidated}`} />
         <Kpi label={`Bloqueios ${fmtPTDate(`${d.blocksDay}T12:00:00Z`)}`} value={d.blocks == null ? "—" : d.blocks.length} tone={d.blocks?.length ? "warn" : undefined} />
       </div>
 
-      {(d.inPark.truncated || d.upcoming.truncated || d.occurrences.truncated || d.cash.truncated) && (
+      {(d.inPark.truncated || d.upcoming.truncated || d.cash.truncated) && (
         <p className="text-xs text-amber-700">Algumas listas foram cortadas no limite de linhas.</p>
       )}
 
+      {/* 44b (Jorge, 7 out 2026): por tipo de lugar em vez de por parque — a cidade já está escolhida em cima. */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm">Carros no parque por garagem</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
-          {d.inPark.byPark.length === 0 ? <p className="text-sm text-muted-foreground">Sem carros no parque.</p> : d.inPark.byPark.map((p) => (
-            <div key={p.parkId} className="border rounded-lg p-2.5">
-              <p className="text-sm font-medium">{p.parkName} <span className="text-muted-foreground tabular-nums">· {p.total}</span></p>
-              <div className="flex flex-wrap gap-1.5 mt-1">
-                {p.garages.map((g) => <Badge key={g.garage} variant="outline" className="text-xs">{g.garage}: {g.count}</Badge>)}
-              </div>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Carros no parque por tipo de lugar</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          {(d.inPark.byType ?? []).length === 0 ? <p className="text-sm text-muted-foreground">Sem carros no parque.</p> : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              {d.inPark.byType.map((t) => (
+                <div key={t.type} className="border rounded-lg p-2.5">
+                  <p className="text-xs text-muted-foreground">{t.label}</p>
+                  <p className="text-2xl font-semibold tabular-nums leading-tight">{t.total}</p>
+                  {t.byPark.length > 1 && (
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{t.byPark.map((p) => `${p.parkName} ${p.count}`).join(" · ")}</p>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+          <p className="text-[11px] text-muted-foreground">Só os carros parados no parque (as operações em curso estão em baixo). O tipo é o do lugar onde o carro está; sem lugar, o do produto reservado.</p>
+          {d.inPark.byPark.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer select-none text-muted-foreground">Ver por parque e garagem</summary>
+              <div className="space-y-2 mt-2">
+                {d.inPark.byPark.map((p) => (
+                  <div key={p.parkId} className="border rounded-lg p-2.5">
+                    <p className="text-sm font-medium">{p.parkName} <span className="text-muted-foreground tabular-nums">· {p.total}</span></p>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {p.garages.map((g) => <Badge key={g.garage} variant="outline" className="text-xs">{g.garage}: {g.count}</Badge>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </CardContent>
       </Card>
 
@@ -176,17 +197,7 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
         <Section title={`Próximas recolhas (${hours} h)`} count={d.upcoming.checkins.length}>
           {d.upcoming.checkins.map((u) => <UpcomingLine key={u.id} u={u} />)}
         </Section>
-        <Section title="Ocorrências por resolver" count={d.occurrences.list.length} tone="warn">
-          {d.occurrences.list.map((o) => (
-            <p key={o.id}>
-              {o.createdAt ? fmtPTDateTime(o.createdAt) : "—"} · <b>{o.title}</b>{o.priority ? ` (${o.priority})` : ""}
-              {o.plate ? ` · ${o.plate}` : ""}{o.bookingCode ? ` · reserva ${o.bookingCode}` : ""}
-              {o.parkName ? <span className="text-muted-foreground"> · {o.parkName}</span> : null}
-              {o.agentName ? <span className="text-muted-foreground"> · {o.agentName}</span> : null}
-              {o.remarks ? <span className="text-muted-foreground"> — {o.remarks.slice(0, 140)}</span> : null}
-            </p>
-          ))}
-        </Section>
+        {/* 44b: ocorrências saíram da passagem de turno (Jorge: "sou eu que estou a tratar") — estão na página Ocorrências. */}
         <Section title={`Caixa do turno por fechar/validar (desde ${fmtPTTime(d.cashWindow.start)})`} count={d.cash.total} tone="bad">
           {d.cash.list.map((c) => (
             <p key={c.id}>

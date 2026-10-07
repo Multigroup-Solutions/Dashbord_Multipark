@@ -111,11 +111,11 @@ describe("Passagem de turno sem a Multipark: ocorrências = sem dados, não os #
     expect(d!.incidents).toEqual([]);
   });
 
-  it("uma ocorrência pendente da passagem anterior continua aberta (não se dá como resolvida por ausência)", async () => {
+  it("44b: uma ocorrência pendente da passagem anterior já não passa de turno (nem se dá como resolvida)", async () => {
+    // Jorge, 7 out 2026: ocorrências e reclamações saíram da passagem de turno; a passagem antiga fica como estava.
     state.previousOpenItems = [{ key: openItemKey("incident", 41), kind: "incident", text: "Ocorrência #41", resolved: false, since: "2026-10-01 night" }];
     const d = await buildHandoverDraft(key, Date.UTC(2026, 9, 2, 9, 0));
-    const it41 = d!.carryOver.find((i) => i.key === openItemKey("incident", 41));
-    expect(it41?.resolved).toBe(false);
+    expect(d!.carryOver.find((i) => i.key === openItemKey("incident", 41))).toBeUndefined();
   });
 
   it("o aviso do painel já não diz que as ocorrências vêm das cópias", () => {
