@@ -5,6 +5,7 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { seesBeyondOwn } from "@shared/access";
+import { PARKING_TYPE_LABELS } from "@shared/opsLists";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { multiparkBookingUrl } from "@/lib/multiparkLinks";
@@ -462,7 +463,7 @@ function LocationSection({ data }: { data: MainFound }) {
         {!l ? <p className="col-span-2 text-xs text-muted-foreground">Sem dados de lugar.</p> : (
           <>
             <Field label="N.º">{l.code ?? "—"}</Field>
-            <Field label="Alocação">{l.allocation ? [l.allocation.name, l.allocation.parkingType].filter(Boolean).join(" · ") : "—"}</Field>
+            <Field label="Alocação">{l.allocation ? [l.allocation.name, l.allocation.parkingType ? (PARKING_TYPE_LABELS[l.allocation.parkingType] ?? l.allocation.parkingType) : null].filter(Boolean).join(" · ") : "—"}</Field>
             <Field label="Garagem">
               {l.garage ? (l.garage.mapLink ? <a href={l.garage.mapLink} target="_blank" rel="noopener noreferrer" className="text-primary underline">{l.garage.name ?? "Garagem"}</a> : l.garage.name ?? "—") : "—"}
             </Field>

@@ -79,7 +79,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
           <p role="alert" className="text-[11px] text-red-700 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" aria-hidden />Há partes que não se conseguiram ler (marcadas com "erro"): os números delas não são 0. Os pendentes desses tipos ficam como estavam.</p>
         )}
         {draft.source && !draft.source.live && (
-          <p className="text-[11px] text-amber-700">Sem BD da Multipark ao vivo ({draft.source.reason ?? "indisponível"}) — reservas, entregas pendentes e coberto vêm das cópias do dashboard; as ocorrências ficam sem dados (só existem na Multipark).</p>
+          <p className="text-[11px] text-amber-700">Sem BD da Multipark ao vivo ({draft.source.reason ?? "indisponível"}) — reservas, entregas pendentes e toldos vêm das cópias do dashboard; as ocorrências ficam sem dados (só existem na Multipark).</p>
         )}
         {draft.liveSummary && (
           <p className="text-[11px] text-muted-foreground">
@@ -104,7 +104,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
               </div>
             ))}
           </div>
-          {draft.coveredCheckinsNext > 0 && <p className="text-muted-foreground">Recolhas com lugar coberto: {draft.coveredCheckinsNext}</p>}
+          {draft.coveredCheckinsNext > 0 && <p className="text-muted-foreground">Recolhas com toldo: {draft.coveredCheckinsNext}</p>}
           {draft.checkouts.length > 0 && <p className="font-medium mt-1">Entregas{c.toCollectEur > 0 ? ` — a cobrar ${eur(c.toCollectEur)}` : ""}</p>}
           {draft.checkouts.map((b) => (
             <p key={`o${b.externalId}`}>{b.time} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}{b.flight ? ` · ✈ ${b.flight}` : ""}{(b.remainingToPay ?? 0) > 0 ? <span className="text-amber-700"> · a pagar {eur(b.remainingToPay)}</span> : ""}</p>
@@ -114,8 +114,8 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
             <p key={`i${b.externalId}`}>{b.time} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}{b.flight ? ` · ✈ ${b.flight}` : ""}</p>
           ))}
         </Section>
-        <Section title="Carros p/ coberto (no parque, ainda sem movimento)" count={draft.coveredCars?.count ?? 0} failed={bad("covered cars")} link="/operacoes" linkLabel="operações" tone="warn">
-          <p className="text-muted-foreground">Reservas de lugar coberto com check-in feito e sem movimento registado depois da receção.</p>
+        <Section title="Carros p/ toldo (no parque, ainda sem movimento)" count={draft.coveredCars?.count ?? 0} failed={bad("covered cars")} link="/operacoes" linkLabel="operações" tone="warn">
+          <p className="text-muted-foreground">Reservas com toldo com check-in feito e sem movimento registado depois da receção.</p>
           {(draft.coveredCars?.list ?? []).map((b) => <p key={`cv${b.externalId}`}>{b.plate ?? "sem matrícula"} · {b.bookingNumber ?? b.externalId}{b.park ? ` · ${b.park}` : ""} · check-in {b.checkIn}</p>)}
         </Section>
         <Section title="Entregas pendentes (sem check-out)" count={c.pendingDeliveries} failed={bad("pending deliveries")} link="/operacoes" linkLabel="operações" tone="bad">
