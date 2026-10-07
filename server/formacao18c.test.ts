@@ -64,7 +64,8 @@ describe("Escala: leitura falhada não deixa escalar", () => {
   });
   it("seletor da escala: 'Formação por verificar' em vez de esconder o aviso", () => {
     expect(src("server/routers.ts")).toContain("trainingUnknown: missing == null");
-    expect(src("client/src/pages/ExtrasDiaPage.tsx")).toContain("Formação por verificar");
+    // 44a: o seletor passou para extrasDia/PersonPicker.tsx
+    expect(src("client/src/pages/extrasDia/PersonPicker.tsx")).toContain("Formação por verificar");
   });
   it("verificação ao escalar à mão: refresh falhado = erro, não 'por concluir'", () => {
     expect(src("server/trainingPaths.ts")).toContain("Não foi possível verificar a formação (");

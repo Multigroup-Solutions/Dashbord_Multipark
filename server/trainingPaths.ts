@@ -402,6 +402,14 @@ export async function employeesMissingTraining(employeeIds: number[]): Promise<S
 }
 
 /** Pessoa atualmente numa linha da escala (para só verificar trocas). */
+/** 44a: quem está numa linha da escala (ficha + nome), para a regra "só do RH". */
+export async function escalaAssignmentPerson(assignmentId: number): Promise<{ employeeId: number | null; personName: string } | null> {
+  const d = await db();
+  const { extrasDiaAssignments } = await import("../drizzle/schema");
+  const [row] = await d.select({ employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName }).from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, assignmentId)).limit(1);
+  return row ? { employeeId: row.employeeId ?? null, personName: String(row.personName ?? "") } : null;
+}
+
 export async function escalaAssignmentEmployeeId(assignmentId: number): Promise<number | null> {
   const d = await db();
   const { extrasDiaAssignments } = await import("../drizzle/schema");

@@ -11,6 +11,7 @@
  * hora (entradas, saídas, movimentos — com reserva, matrícula e parque).
  * Só lê. Quem só vê a sua cidade só vê quem é dessa cidade.
  */
+import { zelloKey } from "../shared/zelloKey";
 import { sql } from "drizzle-orm";
 import { holderAt, mapZelloMessage, nearestPoint, actionsNear, type GpsPoint, type MpAction, type RadioMessage } from "../shared/radioCross";
 
@@ -73,12 +74,14 @@ export async function searchZelloRadio(o: {
         FROM pda_checkins c LEFT JOIN pdas p ON p.id = c.pdaId
        WHERE COALESCE(p.zelloUsername, c.zelloUsername) IN (${list}) AND c.employeeId IS NOT NULL
          AND c.checkinAt < ${mysqlTs(o.toMs)} AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${mysqlTs(o.fromMs)})`).catch(() => [[]]))) {
-      const l = intervals.get(String(r.zu)) ?? [];
+      const k = zelloKey(r.zu); // 43b: chave em minúsculas (a BD compara sem maiúsculas, o Map não)
+      const l = intervals.get(k) ?? [];
       l.push({ employeeId: Number(r.employeeId), start: toMs(r.checkinAt), end: r.checkoutAt ? toMs(r.checkoutAt) : Date.now() });
-      intervals.set(String(r.zu), l);
+      intervals.set(k, l);
     }
     for (const r of rowsOf(await db.execute(sql`SELECT id, zelloUsername FROM employees WHERE zelloUsername IN (${list}) ORDER BY isActive DESC, id`))) {
-      if (!byZello.has(String(r.zelloUsername))) byZello.set(String(r.zelloUsername), Number(r.id));
+      const k = zelloKey(r.zelloUsername);
+      if (!byZello.has(k)) byZello.set(k, Number(r.id));
     }
     const ids = [...new Set([...[...intervals.values()].flat().map((i) => i.employeeId), ...byZello.values()])];
     if (ids.length) {
@@ -94,8 +97,8 @@ export async function searchZelloRadio(o: {
     }
   }
   const personOf = (m: RadioMessage): RadioPerson | null => {
-    const pda = holderAt(intervals.get(m.sender), m.at);
-    const id = pda ?? byZello.get(m.sender) ?? null;
+    const pda = holderAt(intervals.get(zelloKey(m.sender)), m.at);
+    const id = pda ?? byZello.get(zelloKey(m.sender)) ?? null;
     const e = id != null ? emps.get(id) : undefined;
     return e && id != null ? { employeeId: id, name: e.name, projectId: e.projectId, via: pda != null ? "pda" : "ficha" } : null;
   };

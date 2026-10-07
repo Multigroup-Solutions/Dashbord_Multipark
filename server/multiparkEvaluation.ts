@@ -12,7 +12,7 @@
  *  - Por turno e total do dia.
  *
  * Abrir o dia SÓ MOSTRA o que está guardado (22c, D11 — Jorge 3 out): não
- * recalcula nem grava. Recalcula o cron da madrugada (4 semanas) ou o botão
+ * recalcula nem grava. Recalcula o cron da madrugada (último mês) ou o botão
  * Recalcular de quem gere a Avaliação.
  *
  * Fontes (plano-duas-bd.md, B5): os MOVIMENTOS (quem mexeu em que reserva,
@@ -21,6 +21,7 @@
  * (Zello), o ponto e a escala vêm da nossa BD. Sem a BD da Multipark, o dia
  * calcula-se na mesma com a cópia local e a página mostra o aviso.
  */
+import { teamScore } from "../shared/evaluationTeam";
 import { listAssignments } from "./extrasDia";
 import { agentKeyOf, loadEvaluationIdentity, shortNameOf } from "./evaluationIdentity";
 import { currentOperationalDay, loadEvaluatedDays } from "./evaluationEngine";
@@ -80,6 +81,10 @@ export interface PersonEvaluation {
     totalCost: number;
     costPerAction: number;
     byType: Record<string, number>;
+    /** 42a: o TL como TL — pontos da equipa (soma) e média por pessoa */
+    totalPoints: number;
+    avgPoints: number;
+    avgActions: number;
   };
 }
 
@@ -113,6 +118,9 @@ export interface DayEvaluation {
     totalCost: number;
     byType: Record<string, number>;
     costPerAction: number;
+    /** 42a: a equipa do dia (o supervisor) — pontos (soma) e média por pessoa */
+    totalPoints: number;
+    avgPoints: number;
   };
 }
 
@@ -123,7 +131,7 @@ const addByType = (into: Record<string, number>, from: Record<string, number>) =
 export async function evaluateDay(date: string, opts: { cities?: string[] } = {}): Promise<DayEvaluation> {
   const assignments = await listAssignments(date);
   if (assignments.length === 0) {
-    return { date, source: "guardado", computedAt: null, notComputed: false, notice: null, shifts: [], totals: { people: 0, totalActions: 0, weightedActions: 0, totalCost: 0, byType: {}, costPerAction: 0 } };
+    return { date, source: "guardado", computedAt: null, notComputed: false, notice: null, shifts: [], totals: { people: 0, totalActions: 0, weightedActions: 0, totalCost: 0, byType: {}, costPerAction: 0, totalPoints: 0, avgPoints: 0 } };
   }
 
   // Mesma identidade do motor: a linha da escala sem ficha liga-se pelo nome completo
@@ -234,9 +242,11 @@ export async function evaluateDay(date: string, opts: { cities?: string[] } = {}
       const cost = drivers.reduce((s, d) => s + d.cost, 0);
       const byType: Record<string, number> = {};
       for (const d of drivers) addByType(byType, d.byType);
+      const team = teamScore(drivers);
       tl.teamAggregate = {
         drivers: drivers.length, totalActions: acts, weightedActions: round2(drivers.reduce((s, d) => s + d.weightedActions, 0)),
         totalCost: round2(cost), costPerAction: acts > 0 ? round2(cost / acts) : 0, byType,
+        totalPoints: team.points, avgPoints: team.avgPoints, avgActions: team.avgActions,
       };
     }
     const totalActions = shiftPeople.reduce((s, p) => s + p.totalActions, 0);
@@ -251,6 +261,7 @@ export async function evaluateDay(date: string, opts: { cities?: string[] } = {}
   });
 
   const dayActions = people.reduce((s, p) => s + p.totalActions, 0);
+  const dayTeam = teamScore(people);
   const dayCost = round2(people.reduce((s, p) => s + p.cost, 0));
   const dayByType: Record<string, number> = {};
   for (const p of people) addByType(dayByType, p.byType);
@@ -268,6 +279,8 @@ export async function evaluateDay(date: string, opts: { cities?: string[] } = {}
       totalCost: dayCost,
       byType: dayByType,
       costPerAction: dayActions > 0 ? round2(dayCost / dayActions) : 0,
+      totalPoints: dayTeam.points,
+      avgPoints: dayTeam.avgPoints,
     },
   };
 }

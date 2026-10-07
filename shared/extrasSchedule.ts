@@ -691,3 +691,21 @@ export function scheduleCronOk(report: { errors: readonly string[] }): boolean {
 export function noCityScheduleMessage(name: string): string {
   return `${name.trim() || "Esta pessoa"} não tem cidade na ficha: não pode ser escalado(a). Define a cidade primeiro (Recursos Humanos → ficha).`;
 }
+
+/** 44a: ninguém entra na escala sem ficha no RH (Jorge, 7 out 2026). */
+export const NO_HR_RECORD_MESSAGE = "Só entra na escala quem está registado no RH: escolhe a pessoa da lista (escreve o nome para procurar). Se não aparece, cria primeiro a ficha em Recursos Humanos.";
+
+/**
+ * 44a: a linha precisa de ficha do RH? Nova linha ou troca de pessoa → sim.
+ * Uma linha antiga sem ficha (de antes desta regra) ainda se edita (horas,
+ * "mandar para casa") desde que não mude de pessoa. Devolve a mensagem de
+ * recusa, ou null se pode. PURA.
+ */
+export function hrRecordRefusal(
+  input: { id?: number | null; employeeId?: number | null; personName: string },
+  existing: { employeeId: number | null; personName: string } | null,
+): string | null {
+  if (input.employeeId) return null;
+  if (input.id && existing && existing.employeeId == null && existing.personName.trim() === input.personName.trim()) return null;
+  return NO_HR_RECORD_MESSAGE;
+}

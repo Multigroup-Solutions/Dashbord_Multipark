@@ -351,7 +351,24 @@ export const operationalRouter = router({
         getZelloUsers(), import("./zello"), import("../shared/appSettings"),
       ]);
       const excluded = await loadZelloGpsExclusions();
-      return users.map((u) => ({ ...u, gpsExcluded: isZelloGpsExcluded(u.name, excluded) }));
+      // 43b: de que PDA é cada Zello (TODOS os PDAs, não só os da cidade — senão um PDA de
+      // outra cidade aparecia como telemóvel pessoal) e quem é o dono fixo
+      const { getDb } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const { zelloKey } = await import("../shared/zelloKey");
+      const db = await getDb();
+      const pdaBy = new Map<string, { id: number; name: string }>();
+      const ownerBy = new Map<string, { employeeId: number; name: string }>();
+      if (db) {
+        const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
+        for (const p of rowsOf(await db.execute(sql`SELECT id, name, zelloUsername FROM pdas WHERE status <> 'inactive' AND zelloUsername IS NOT NULL`).catch(() => [[]]))) {
+          const k = zelloKey(p.zelloUsername); if (k && !pdaBy.has(k)) pdaBy.set(k, { id: Number(p.id), name: String(p.name ?? "PDA") });
+        }
+        for (const e of rowsOf(await db.execute(sql`SELECT id, fullName, zelloUsername FROM employees WHERE zelloUsername IS NOT NULL ORDER BY isActive DESC, id`).catch(() => [[]]))) {
+          const k = zelloKey(e.zelloUsername); if (k && !ownerBy.has(k)) ownerBy.set(k, { employeeId: Number(e.id), name: String(e.fullName ?? "") });
+        }
+      }
+      return users.map((u) => ({ ...u, gpsExcluded: isZelloGpsExcluded(u.name, excluded), pda: pdaBy.get(zelloKey(u.name)) ?? null, owner: ownerBy.get(zelloKey(u.name)) ?? null }));
     }),
     // Resolução Zello→pessoa para o mapa ao vivo: check-ins de PDA ativos
     // primeiro (os "Extra NNN" vivem nos PDAs e cada dia é uma pessoa
@@ -364,10 +381,16 @@ export const operationalRouter = router({
     // Anexa (ou desanexa) um utilizador Zello a um colaborador — PERSISTENTE,
     // como o mapping de agentes Multipark. Único: limpa o username de quem o
     // tivesse. O GPS passa a mostrar o colaborador em vez de "extra600".
+    // 43b: também num Zello de PDA — é o DONO do PDA (fica com o GPS quando
+    // ninguém fez check-in); o check-in do dia continua a ganhar.
     mapUserToEmployee: protectedProcedure
       .input(z.object({ zelloUsername: z.string().min(1), employeeId: z.number().nullable() }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "atividade_diaria", "edit");
+        if (input.employeeId != null) {
+          const { assertEmployeeAccess } = await import("./cityScope");
+          await assertEmployeeAccess(input.employeeId); // só pessoas das tuas cidades
+        }
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
         const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB not available" });
@@ -543,6 +566,12 @@ export const operationalRouter = router({
       requireAccess(ctx.user, "historico_diario", "view");
       return getDailyDriverStats(input.date);
     }),
+    /** 43a: o trajeto de uma linha, lido do GeoJSON do Zello no servidor, para o mapa das velocidades. */
+    track: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "historico_diario", "view");
+      const { loadDriverTrack } = await import("./driverTrack");
+      return loadDriverTrack(input.id);
+    }),
     /**
      * Recolha manual de um dia (só admin — abrange todas as cidades). Prazo de
      * 45 s (a função morre aos 60 s): devolve `done:false` e a UI volta a
@@ -620,6 +649,18 @@ export const operationalRouter = router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "pdas", "view");
       return listPdas();
+    }),
+    /** 43b: o Zello de cada PDA bate certo com a lista do Zello? ("mede e põe o nome") */
+    zelloCheck: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "pdas", "view");
+      const { checkPdaZello } = await import("../shared/pdaZelloMatch");
+      const pdas = (await listPdas()) as any[];
+      let users: { name: string }[] = [];
+      try { users = await getZelloUsers(); } catch (err) {
+        return { available: false as const, reason: `O Zello não respondeu: ${String((err as Error)?.message ?? err).slice(0, 120)}` };
+      }
+      if (!users.length) return { available: false as const, reason: "O Zello não está configurado." };
+      return { available: true as const, checks: checkPdaZello(pdas.filter((p) => p.status !== "inactive").map((p) => ({ id: Number(p.id), name: String(p.name ?? ""), zelloUsername: p.zelloUsername ?? null })), users) };
     }),
     // PDA ligado AGORA ao próprio utilizador (check-in aberto) — para o Perfil.
     mine: protectedProcedure.query(async ({ ctx }) => {
@@ -830,7 +871,8 @@ export const operationalRouter = router({
         // aqui — os utilizadores Zello dos PDAs mudam de mãos todos os dias,
         // e a resolução Zello→pessoa passou a ser dinâmica pelo check-in do
         // PDA (getZelloLiveMappings / resolveZelloUsernameForShift). A
-        // ligação fixa na ficha fica só para telemóveis pessoais.
+        // ligação fixa na ficha é para telemóveis pessoais e (43b) para o
+        // DONO de um PDA, escolhido no Ao Vivo — o check-in continua a ganhar.
         await logActivity({ userId: ctx.user.id, action: "create", entity: "pda_checkin", entityId: id, details: `Check-in PDA #${input.pdaId}` });
         return { id };
       }),

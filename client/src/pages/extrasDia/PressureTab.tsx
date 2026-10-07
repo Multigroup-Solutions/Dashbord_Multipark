@@ -9,9 +9,8 @@ import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Flame, Gauge, Timer, TrafficCone } from "lucide-react";
+import { AlertTriangle, Flame, Gauge, Timer, TrafficCone } from "lucide-react";
 import {
   CREW_MEASURE_MIN_SAMPLES, MIN_SAMPLE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, isRushHour, loadComparison, pressureSummary,
   slotCycleAt, slotLoadPerDay, tightReason, tightThresholds, type CrewMeasureBand, type CyclePercentile, type PressureCrewRow,
@@ -26,16 +25,39 @@ const fmt0 = (n: number | null | undefined) => (n == null ? "—" : String(Math.
 const ddmm = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : "—");
 const ddmmyyyy = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : "—");
 
-/** Célula do mapa: um só tom (azul), mais escuro = mais valor. */
+/**
+ * 44a: rampa ordinal de um só tom (validada: clara → escura). Quatro degraus
+ * em vez de transparência contínua — os números estão escritos na célula.
+ */
+const RAMP = ["#86b6ef", "#5598e7", "#256abf", "#104281"] as const;
+const rampIndex = (v: number, max: number) => Math.min(RAMP.length - 1, Math.floor((v / max) * RAMP.length - 1e-9));
 function cellStyle(v: number | null, max: number): React.CSSProperties {
   if (v == null || v <= 0 || max <= 0) return {};
-  const a = 0.08 + 0.82 * Math.min(1, v / max);
-  return { backgroundColor: `rgba(37, 99, 235, ${a.toFixed(3)})`, color: a > 0.5 ? "white" : undefined };
+  const i = rampIndex(v, max);
+  return { backgroundColor: RAMP[i], color: i >= 2 ? "#ffffff" : "#0f172a" };
 }
+
+/** 44a: as métricas, com nome claro e o que querem dizer. */
+const METRICS: Array<{ key: Metric; label: string; short: string; city?: boolean }> = [
+  { key: "load", label: "Carros por hora", short: "chegadas + saídas feitas" },
+  { key: "delivery", label: "Tempo de entrega", short: "do pedido ao carro entregue" },
+  { key: "cycle", label: "Tempo por carro", short: "de cada condutor", city: true },
+  { key: "drive", label: "Na estrada", short: "do início da entrega a entregue", city: true },
+  { key: "crew", label: "Pessoas a trabalhar", short: "média, com o TL", city: true },
+];
+
+const METRIC_HELP: Record<Metric, string> = {
+  load: "Quantos carros se tratam nessa hora, em média por dia (chegadas + saídas concluídas). Mais escuro = mais carros.",
+  delivery: "Minutos desde o cliente pedir o carro até o ter na mão. Mostra-se o p75: em 3 de cada 4 entregas demorou isto ou menos. Mais escuro = entregas mais lentas.",
+  cycle: "Minutos entre o início de um serviço e o início do seguinte do mesmo condutor (inclui voltar, trânsito e esperas). Mostra-se o p{p}: em {p} % das vezes foi isto ou menos. Mais escuro = cada carro come mais tempo.",
+  drive: "Minutos desde que o condutor arranca com a entrega até entregar. Mostra-se o p75: em 3 de cada 4 entregas foi isto ou menos. Mais escuro = mais tempo na estrada.",
+  crew: "Pessoas diferentes a fazer serviços nessa hora, sempre a contar o team leader (média por dia). Mais escuro = mais gente.",
+};
 
 export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
   const q = trpc.extrasDia.pressure.useQuery(undefined, { staleTime: 10 * 60_000 });
   const [metric, setMetric] = useState<Metric>("load");
+  const [cellKey, setCellKey] = useState<string | null>(null);
   const cityKey = extraCityGroupKey(city);
   const groups = q.data?.groups ?? [];
   const [picked, setPicked] = useState<string | null>(null);
@@ -55,6 +77,7 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
   const pct: CyclePercentile = cityInfo?.percentile ?? 75;
   const crewRows = useMemo(() => (q.data?.crew ?? []).filter((c) => c.group === group) as PressureCrewRow[], [q.data, group]);
   const metricShown: Metric = !cityInfo && (metric === "cycle" || metric === "drive" || metric === "crew") ? "load" : metric;
+  const stale = q.data?.stale?.[group];
 
   const value = (s: PressureSlot | undefined): number | null => {
     if (!s) return null;
@@ -65,6 +88,30 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
     return s.deliveryN >= MIN_SAMPLE ? s.deliveryP75 : null;
   };
   const max = Math.max(0, ...slots.map((s) => value(s) ?? 0));
+  const unit = metricShown === "load" ? " carros" : metricShown === "crew" ? " pessoas" : " min";
+  const fmtV = (v: number) => (metricShown === "load" || metricShown === "crew" ? fmt1(v) : fmt0(v));
+
+  const detail = (wd: number, h: number): string[] => {
+    const s = byKey.get(`${wd}:${h}`);
+    const head = `${WEEKDAY_SHORT[wd]} ${String(h).padStart(2, "0")}h`;
+    if (!s) return [`${head} — sem movimento`];
+    const tight = tightReason(s, thresholds);
+    return [
+      head,
+      `Carros/hora (média por dia): ${fmt1(slotLoadPerDay(s))} — ${fmt1(s.checkinsDone / Math.max(1, s.days))} chegadas, ${fmt1(s.checkoutsDone / Math.max(1, s.days))} saídas`,
+      `Pedidos de entrega: ${fmt1(s.checkoutsStarted / Math.max(1, s.days))}/dia · recolhas começadas ${fmt1(s.checkinsStarted / Math.max(1, s.days))}/dia`,
+      `Em simultâneo: média ${fmt1(s.concurrencyAvg)}, máx. ${fmt0(s.concurrencyMax)}`,
+      `Entrega (n=${s.deliveryN}): mediana ${fmt0(s.deliveryP50)} · p75 ${fmt0(s.deliveryP75)} · p90 ${fmt0(s.deliveryP90)} min`,
+      `Recolha (n=${s.pickupN}): mediana ${fmt0(s.pickupP50)} · p75 ${fmt0(s.pickupP75)} min`,
+      cityInfo && (s.cycleN ?? 0) > 0 ? `Por carro, por condutor (n=${s.cycleN}): mediana ${fmt0(s.cycleP50)} · p${pct} ${fmt0(slotCycleAt(s, pct))} min` : "",
+      cityInfo && (s.driveN ?? 0) > 0 ? `Na estrada (n=${s.driveN}): mediana ${fmt0(s.driveP50)} · p75 ${fmt0(s.driveP75)} min` : "",
+      cityInfo && (s.toParkN ?? 0) > 0 ? `Recolhido → no parque (n=${s.toParkN}): mediana ${fmt0(s.toParkP50)} · p75 ${fmt0(s.toParkP75)} min` : "",
+      cityInfo && s.crewAvg != null ? `Pessoas a trabalhar (média): ${fmt1(s.crewAvg)}` : "",
+      tight ? `Hora apertada (top 20 %: ${[tight.load ? "muitos carros" : "", tight.delivery ? "entregas lentas" : ""].filter(Boolean).join(" e ")})` : "",
+    ].filter(Boolean);
+  };
+  const [selWd, selH] = (cellKey ?? "").split(":").map(Number);
+  const selected = cellKey ? detail(selWd, selH) : null;
 
   if (q.isLoading) return <div className="text-sm text-muted-foreground">A carregar a pressão…</div>;
   if (q.error) return <div className="text-sm text-red-600">Erro: {q.error.message}</div>;
@@ -79,20 +126,142 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
     );
   }
 
+  const legend = max > 0
+    ? RAMP.map((c, i) => ({ c, from: (max * i) / RAMP.length, to: (max * (i + 1)) / RAMP.length }))
+    : [];
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <p className="text-xs text-muted-foreground">
-          Desde {ddmmyyyy(q.data.windowStart)} até {ddmm(q.data.windowEnd)} ({q.data.windowDays} dias, a janela cresce todos os dias) da BD da Multipark, por hora de Lisboa.
-          {q.data.computedAt && <> Calculado em {q.data.computedAt.slice(0, 16)} UTC.</>}
-        </p>
-        <Select value={group} onValueChange={setPicked}>
-          <SelectTrigger className="w-64 h-9"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {groups.map((g) => <SelectItem key={g.key} value={g.key}>{g.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
+      {/* 44a: em cima, o que se está a ver — grupo e métrica, com botões grandes. */}
+      <Card>
+        <CardContent className="pt-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Select value={group} onValueChange={(v) => { setPicked(v); setCellKey(null); }}>
+              <SelectTrigger className="w-64 h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {groups.map((g) => <SelectItem key={g.key} value={g.key}>{g.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Desde {ddmmyyyy(q.data.windowStart)} até {ddmm(q.data.windowEnd)} ({q.data.windowDays} dias), por hora de Lisboa.
+              {q.data.computedAt && <> Calculado em {q.data.computedAt.slice(0, 16)} UTC.</>}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2" role="radiogroup" aria-label="O que mostrar no mapa">
+            {METRICS.filter((m) => !m.city || cityInfo).map((m) => {
+              const on = metricShown === m.key;
+              return (
+                <button
+                  key={m.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setMetric(m.key)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors ${on ? "border-blue-600 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-600" : "hover:bg-muted/60"}`}
+                >
+                  <span className="block text-sm font-medium">{m.label}</span>
+                  <span className="block text-[11px] text-muted-foreground">{m.key === "cycle" ? `${m.short} (p${pct})` : m.short}</span>
+                </button>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {stale && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm">
+          <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-700 shrink-0" />
+          <span>
+            {stale.part === "all"
+              ? <>O último cálculo falhou em <strong>{where}</strong>: mostro os dados até {ddmm(stale.w)}.</>
+              : <>O último cálculo dos tempos por condutor falhou em <strong>{where}</strong>: esses tempos são até {ddmm(stale.w)}.</>}
+            {" "}Volta a tentar na próxima corrida (todos os dias a partir das 04:45).
+          </span>
+        </div>
+      )}
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Gauge className="h-4 w-4" />{METRICS.find((m) => m.key === metricShown)?.label} — dia da semana × hora{where ? ` — ${where}` : ""}
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">{METRIC_HELP[metricShown].replaceAll("{p}", String(pct))}</p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] table-fixed text-xs sm:text-sm border-separate" style={{ borderSpacing: 3 }}>
+              <thead>
+                <tr>
+                  <th className="w-12"></th>
+                  {HOURS.map((h) => (
+                    <th key={h} className={`font-mono font-normal text-[11px] ${isRushHour(h) ? "text-amber-700 font-semibold" : "text-muted-foreground"}`}>{String(h).padStart(2, "0")}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {WEEKDAYS.map((wd) => (
+                  <tr key={wd}>
+                    <td className="pr-1 text-sm font-medium text-muted-foreground">{WEEKDAY_SHORT[wd]}</td>
+                    {HOURS.map((h) => {
+                      const key = `${wd}:${h}`;
+                      const s = byKey.get(key);
+                      const v = value(s);
+                      const tight = tightReason(s, thresholds);
+                      return (
+                        <td
+                          key={h}
+                          title={detail(wd, h).join("\n")}
+                          onClick={() => setCellKey(cellKey === key ? null : key)}
+                          className={`h-12 md:h-14 text-center rounded tabular-nums cursor-pointer ${v == null ? "bg-muted/40 text-muted-foreground/60" : ""} ${tight ? "ring-2 ring-orange-500 ring-inset" : ""} ${cellKey === key ? "outline outline-2 outline-offset-1 outline-foreground" : ""}`}
+                          style={cellStyle(v, max)}
+                        >
+                          {v == null ? "" : fmtV(v)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+            {legend.length > 0 && (
+              <span className="flex items-center gap-1">
+                {legend.map((l, i) => (
+                  <span key={i} className="flex items-center gap-1">
+                    <span className="inline-block h-3 w-5 rounded-sm" style={{ backgroundColor: l.c }} />
+                    <span className="tabular-nums">{i === 0 ? "até" : ""} {fmtV(l.to)}{i === legend.length - 1 ? unit : ""}</span>
+                  </span>
+                ))}
+              </span>
+            )}
+            <span className="flex items-center gap-1"><span className="inline-block h-3 w-5 rounded-sm bg-muted/40 border" /> sem dados (sem movimento ou menos de {MIN_SAMPLE} casos)</span>
+            <span className="flex items-center gap-1"><span className="inline-block h-3 w-5 rounded-sm ring-2 ring-orange-500 ring-inset" /> hora apertada (top 20 %)</span>
+            <span><span className="font-mono text-amber-700 font-semibold">07</span> = hora de ponta (07–10h, 17–20h)</span>
+          </div>
+
+          {selected ? (
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <strong>{selected[0]}</strong>
+                <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setCellKey(null)}>fechar</button>
+              </div>
+              <ul className="mt-1 space-y-0.5 text-xs">{selected.slice(1).map((l, i) => <li key={i}>{l}</li>)}</ul>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Carrega numa célula (ou passa o rato) para ver o detalhe dessa hora.</p>
+          )}
+
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer select-none">O que é o p75 (e o p{pct})?</summary>
+            <p className="mt-1">
+              Ordena-se todos os casos dessa hora do mais rápido ao mais lento. O p75 é o valor a 75 % do caminho: em 3 de cada 4 vezes demorou isso ou menos, e só 1 em 4 demorou mais.
+              Usa-se em vez da média para os dias maus contarem sem que um caso raro (um carro que ficou preso duas horas) estrague tudo. A mediana (p50) é o caso do meio.
+            </p>
+          </details>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -106,78 +275,6 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
           )}
           <p className="text-xs text-muted-foreground pt-1">
             "Apertada" = hora no top 20 % do grupo em carros/hora (≥ {fmt1(thresholds.load)}) ou em tempo de entrega p75 (≥ {fmt0(thresholds.deliveryP75)} min).
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-          <CardTitle className="text-base flex items-center gap-2"><Gauge className="h-4 w-4" />Dia da semana × hora</CardTitle>
-          <div className="flex flex-wrap gap-1">
-            <Button size="sm" variant={metricShown === "load" ? "selected" : "outline"} onClick={() => setMetric("load")}>Carros/hora</Button>
-            <Button size="sm" variant={metricShown === "delivery" ? "selected" : "outline"} onClick={() => setMetric("delivery")}>Entrega p75</Button>
-            {cityInfo && (
-              <>
-                <Button size="sm" variant={metricShown === "cycle" ? "selected" : "outline"} onClick={() => setMetric("cycle")}>Por carro p{pct}</Button>
-                <Button size="sm" variant={metricShown === "drive" ? "selected" : "outline"} onClick={() => setMetric("drive")}>Na estrada p75</Button>
-                <Button size="sm" variant={metricShown === "crew" ? "selected" : "outline"} onClick={() => setMetric("crew")}>Pessoas</Button>
-              </>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="text-[11px] border-separate" style={{ borderSpacing: 2 }}>
-              <thead>
-                <tr>
-                  <th className="w-10"></th>
-                  {HOURS.map((h) => (
-                    <th key={h} className={`font-mono font-normal w-8 ${isRushHour(h) ? "text-amber-700" : "text-muted-foreground"}`}>{String(h).padStart(2, "0")}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {WEEKDAYS.map((wd) => (
-                  <tr key={wd}>
-                    <td className="pr-1 text-muted-foreground">{WEEKDAY_SHORT[wd]}</td>
-                    {HOURS.map((h) => {
-                      const s = byKey.get(`${wd}:${h}`);
-                      const v = value(s);
-                      const tight = tightReason(s, thresholds);
-                      const tip = s
-                        ? [
-                            `${WEEKDAY_SHORT[wd]} ${String(h).padStart(2, "0")}h`,
-                            `Carros/hora (média por dia): ${fmt1(slotLoadPerDay(s))} — ${fmt1(s.checkinsDone / Math.max(1, s.days))} chegadas, ${fmt1(s.checkoutsDone / Math.max(1, s.days))} saídas`,
-                            `Pedidos de entrega: ${fmt1(s.checkoutsStarted / Math.max(1, s.days))}/dia · recolhas começadas ${fmt1(s.checkinsStarted / Math.max(1, s.days))}/dia`,
-                            `Em simultâneo: média ${fmt1(s.concurrencyAvg)}, máx. ${fmt0(s.concurrencyMax)}`,
-                            `Entrega (n=${s.deliveryN}): mediana ${fmt0(s.deliveryP50)} · p75 ${fmt0(s.deliveryP75)} · p90 ${fmt0(s.deliveryP90)} min`,
-                            `Recolha (n=${s.pickupN}): mediana ${fmt0(s.pickupP50)} · p75 ${fmt0(s.pickupP75)} min`,
-                            cityInfo && (s.cycleN ?? 0) > 0 ? `Por carro, por condutor (n=${s.cycleN}): mediana ${fmt0(s.cycleP50)} · p${pct} ${fmt0(slotCycleAt(s, pct))} min` : "",
-                            cityInfo && (s.driveN ?? 0) > 0 ? `Na estrada (n=${s.driveN}): mediana ${fmt0(s.driveP50)} · p75 ${fmt0(s.driveP75)} min` : "",
-                            cityInfo && (s.toParkN ?? 0) > 0 ? `Recolhido → no parque (n=${s.toParkN}): mediana ${fmt0(s.toParkP50)} · p75 ${fmt0(s.toParkP75)} min` : "",
-                            cityInfo && s.crewAvg != null ? `Pessoas a trabalhar (média): ${fmt1(s.crewAvg)}` : "",
-                            tight ? "Hora apertada (top 20 %)" : "",
-                          ].filter(Boolean).join("\n")
-                        : `${WEEKDAY_SHORT[wd]} ${String(h).padStart(2, "0")}h — sem movimento`;
-                      return (
-                        <td
-                          key={h}
-                          title={tip}
-                          className={`h-7 w-8 text-center rounded-sm tabular-nums ${v == null ? "bg-muted/40 text-muted-foreground/60" : ""} ${tight ? "ring-2 ring-orange-500 ring-inset" : ""}`}
-                          style={cellStyle(v, max)}
-                        >
-                          {v == null ? "" : metricShown === "load" || metricShown === "crew" ? fmt1(v) : fmt0(v)}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-xs text-muted-foreground mt-2">
-            Mais escuro = {METRIC_HELP[metricShown].replace("{p}", String(pct))}.
-            Contorno laranja = hora apertada. Horas a âmbar = horas de ponta (07–10h, 17–20h). Passa o rato por uma célula para o detalhe.
           </p>
         </CardContent>
       </Card>
@@ -226,14 +323,6 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
     </div>
   );
 }
-
-const METRIC_HELP: Record<Metric, string> = {
-  load: "mais carros por hora (chegadas + saídas concluídas, média por dia)",
-  delivery: "entrega mais lenta (p75 do pedido do cliente até ao carro entregue; só com ≥ 5 entregas)",
-  cycle: "mais minutos por carro de cada condutor (p{p} do início de um serviço ao início do seguinte do mesmo condutor; só com ≥ 5)",
-  drive: "mais tempo na estrada (p75 do início da entrega até entregue; só com ≥ 5)",
-  crew: "mais pessoas a trabalhar nessa hora (agentes diferentes com ações + o TL, mesmo sem ações; média)",
-};
 
 /**
  * 22d: tempo por carro de cada condutor, medido, por número de pessoas a

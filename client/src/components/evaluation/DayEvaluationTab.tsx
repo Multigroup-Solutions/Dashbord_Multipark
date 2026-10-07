@@ -3,7 +3,7 @@
  *
  * Escala do /extras-dia × movimentos lidos AO VIVO da BD da Multipark (quem
  * mexeu em que reserva, quando e em que fase), com as mesmas regras e números
- * do separador "4 semanas". O GPS (onde deixaram os carros / por onde
+ * do separador "Mês". O GPS (onde deixaram os carros / por onde
  * andaram) continua a vir do Zello, na nossa BD. Tudo é calculado ao abrir o
  * dia — não há nada para ir buscar à mão.
  */
@@ -25,6 +25,8 @@ import { can } from "@shared/access";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { operationalDayOf } from "@shared/lisbonDay";
+import { COVERAGE_VERDICT_LABELS, hoursLabel } from "@shared/evaluationTeam";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { MOVEMENT_PHASE_LABELS, movementLabel, movementPhase } from "@shared/multiparkMovements";
 import {
   EvaluationDrawer,
@@ -144,7 +146,7 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
             <span className="text-amber-800">Este dia ainda não foi calculado. O cálculo corre de madrugada{isSupervisor ? " ou recalcula já" : ""}.</span>
           ) : (
             <span>
-              Pontos guardados{evaluation.computedAt ? ` · calculado ${fmtPTDateTime(`${evaluation.computedAt.replace(" ", "T")}Z`)}` : ""}. Abrir o dia não recalcula: o cálculo corre de madrugada (últimas 4 semanas){isSupervisor ? " ou no botão" : ""}.
+              Pontos guardados{evaluation.computedAt ? ` · calculado ${fmtPTDateTime(`${evaluation.computedAt.replace(" ", "T")}Z`)}` : ""}. Abrir o dia não recalcula: o cálculo corre de madrugada (último mês){isSupervisor ? " ou no botão" : ""}.
             </span>
           )}
           {isSupervisor && date <= operationalDayOf(Date.now()) && (
@@ -173,9 +175,15 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
         <Card className="bg-gradient-to-br from-purple-50 to-blue-50 border-purple-200">
           <CardHeader>
             <CardTitle className="text-base">Equipa do dia · {evaluation.totals.people} pessoas</CardTitle>
+            <p className="text-xs text-muted-foreground">É a avaliação do supervisor: o que a equipa toda fez no dia e se tinha a gente certa (em baixo, por cidade).</p>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+              <div className="min-w-0">
+                <div className="text-xs text-muted-foreground">Pontos da equipa</div>
+                <div className={`text-xl md:text-2xl font-bold tabular-nums truncate ${ptsClass(evaluation.totals.totalPoints)}`}>{fmtPts(evaluation.totals.totalPoints)}</div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">média {fmtNum(evaluation.totals.avgPoints, 1)} por pessoa</div>
+              </div>
               <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">Ações ponderadas (pts)</div>
                 <div className="text-xl md:text-2xl font-bold tabular-nums truncate">{fmtNum(evaluation.totals.weightedActions, 1)}</div>
@@ -211,6 +219,8 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
         </Card>
       )}
 
+      {evaluation && evaluation.totals.people > 0 && <DayTeamSupervision date={date} projectId={projectId} />}
+
       {evaluation?.shifts.map((s) => (
         s.drivers > 0 ? (
           <ShiftSection key={s.shift} shiftEval={s} date={date} assignments={assignments} onScore={setScoreOf} />
@@ -224,7 +234,7 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
         </Card>
       )}
 
-      {/* Detalhe: com ficha → o mesmo detalhe das 4 semanas; sem ficha → só as ações */}
+      {/* Detalhe: com ficha → o mesmo detalhe do mês; sem ficha → só as ações */}
       <EvaluationDrawer
         employeeId={scoreOf?.employeeId ?? null}
         employeeName={scoreOf?.name ?? ""}
@@ -248,6 +258,41 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
           )}
         </SheetContent>
       </Sheet>
+    </div>
+  );
+}
+
+/**
+ * 42a: a supervisão do dia, por cidade — supervisores, team leaders,
+ * condutores escalados e se a escala bateu com a previsão (extras a mais /
+ * a menos, hora a hora).
+ */
+function DayTeamSupervision({ date, projectId }: { date: string; projectId?: number }) {
+  const q = trpc.multipark.dayTeam.useQuery({ date, projectId }, { staleTime: 5 * 60_000, retry: false });
+  if (q.isLoading) return <p className="text-xs text-muted-foreground">A ver a supervisão e a previsão do dia…</p>;
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="a supervisão do dia" />;
+  if (!q.data?.length) return null;
+  const tone = (v: string) => v === "a_menos" ? "bg-red-50 text-red-800 border-red-200" : v === "a_mais" ? "bg-amber-50 text-amber-900 border-amber-200" : v === "certo" ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-muted text-muted-foreground";
+  return (
+    <div className="grid gap-2 md:grid-cols-3">
+      {q.data.map((c) => (
+        <Card key={c.city} className="p-3 text-xs space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-sm">{c.label}</span>
+            {c.coverage && <Badge variant="outline" className={`text-[11px] ${tone(c.coverage.verdict)}`}>{COVERAGE_VERDICT_LABELS[c.coverage.verdict]}</Badge>}
+          </div>
+          <p><span className="text-muted-foreground">Supervisão:</span> {c.supervisors.length ? c.supervisors.join(", ") : <span className="text-amber-700">sem supervisor com esta cidade</span>}</p>
+          <p><span className="text-muted-foreground">Team leaders:</span> {c.teamLeaders.length ? c.teamLeaders.join(", ") : "—"} · <span className="text-muted-foreground">condutores:</span> {c.drivers}</p>
+          {c.coverage && c.coverage.verdict !== "sem_previsao" && (
+            <p className="text-muted-foreground">
+              Previsão {c.coverage.neededPersonHours} h·pessoa · escalados {c.coverage.scheduledPersonHours} h·pessoa
+              {c.coverage.shortPersonHours > 0 && <span className="text-red-700"> · faltaram {c.coverage.shortPersonHours} h·pessoa ({hoursLabel(c.coverage.shortHours)})</span>}
+              {c.coverage.overPersonHours > 0 && <span className="text-amber-800"> · sobraram {c.coverage.overPersonHours} h·pessoa ({hoursLabel(c.coverage.overHours)})</span>}
+            </p>
+          )}
+          {c.notice && <p className="text-amber-700">{c.notice}</p>}
+        </Card>
+      ))}
     </div>
   );
 }
@@ -309,6 +354,7 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
   const { user } = useAuth();
   // Ligar o nome do agente à ficha pede "gerir RH" (o servidor exige o mesmo).
   const canMapAgent = !!user && can(user as any, "rh", "manage");
+  const openEmployee = useOpenEmployee();
   const [expanded, setExpanded] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState("");
@@ -345,7 +391,9 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
             </Button>
             <div className="min-w-0">
               <div className="font-semibold flex flex-wrap items-center gap-2">
-                <span className="truncate" title={assignment.personName}>{assignment.personName}</span>
+                {assignment.employeeId != null
+                  ? <button type="button" className="truncate text-left hover:underline" title="Abrir a ficha" onClick={() => openEmployee(assignment.employeeId)}>{assignment.personName}</button>
+                  : <span className="truncate" title={assignment.personName}>{assignment.personName}</span>}
                 {assignment.isTeamLeader && <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[11px]">TL</Badge>}
                 {assignment.shift && <Badge variant="outline" className="text-[11px]">{assignment.shift === "morning" ? "Manhã" : "Noite"}</Badge>}
                 {!assignment.isTeamLeader && assignment.level && <Badge variant="secondary" className="text-[11px]">{assignment.level}</Badge>}
@@ -406,7 +454,7 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
                 onClick={() => onScore({ employeeId: metrics.employeeId ?? null, name: assignment.personName, person: metrics })}
               >
                 <div className="text-lg font-bold leading-none tabular-nums">{fmtPts(metrics.totalPoints)}</div>
-                <div className="text-[11px] text-muted-foreground">pontos{metrics.hasAdjustments ? " · ajust." : ""}</div>
+                <div className="text-[11px] text-muted-foreground">{assignment.isTeamLeader ? "como condutor" : "pontos"}{metrics.hasAdjustments ? " · ajust." : ""}</div>
               </button>
             )}
           </div>
@@ -423,8 +471,10 @@ function AgentCard({ assignment, date, metrics, onScore }: { assignment: any; da
 
         {assignment.isTeamLeader && metrics?.teamAggregate && metrics.teamAggregate.drivers > 0 && (
           <div className="ml-9 mt-2 rounded-md border border-amber-300 bg-amber-100/40 p-2 text-xs">
-            <div className="font-semibold text-amber-900 mb-1">Equipa ({metrics.teamAggregate.drivers} condutores)</div>
+            <div className="font-semibold text-amber-900 mb-1">Como team leader — a equipa ({metrics.teamAggregate.drivers} condutores)</div>
             <div className="flex flex-wrap gap-3">
+              <span className={ptsClass(metrics.teamAggregate.totalPoints)}><strong>{fmtPts(metrics.teamAggregate.totalPoints)}</strong> pts da equipa</span>
+              <span>média <strong>{fmtNum(metrics.teamAggregate.avgPoints, 1)}</strong> pts · {fmtNum(metrics.teamAggregate.avgActions, 1)} ações por pessoa</span>
               <span><strong>{metrics.teamAggregate.totalActions}</strong> ações</span>
               <span>custo {fmtEur(metrics.teamAggregate.totalCost)}</span>
               {metrics.teamAggregate.totalActions > 0 && <span>{fmtEur(metrics.teamAggregate.costPerAction)}/ação</span>}

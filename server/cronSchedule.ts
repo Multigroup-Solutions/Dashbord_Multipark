@@ -98,11 +98,11 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },
-  // Pressão do Extras-Dia: 60 dias da BD Multipark agregados por grupo de parques (retomável por grupo).
-  { key: "extras-pressure", runName: "extras-pressure", label: "Extras-Dia: pressão (60 dias da BD Multipark)", cadence: { kind: "daily", from: "04:45" }, priority: 101, minMs: 15 * S, maxMs: 45 * S },
+  // Pressão do Extras-Dia: desde a data das Definições (extras.timesSince; acumula) da BD Multipark, por grupo de parques (retomável por grupo).
+  { key: "extras-pressure", runName: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", cadence: { kind: "daily", from: "04:45" }, priority: 101, minMs: 15 * S, maxMs: 45 * S },
   { key: "rh-docs-weekly", runName: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "04:45" }, priority: 102, minMs: 15 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },
-  { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
+  { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads", runName: "google-ads", label: "Google Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 120, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads-monthly", runName: "google-ads", label: "Google Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 121, minMs: 15 * S, maxMs: 45 * S },
   // 19b: conversões atrasadas — a Google acerta-as até semanas depois do clique.

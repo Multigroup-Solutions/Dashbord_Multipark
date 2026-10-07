@@ -34,6 +34,21 @@ export const MULTIPARK_DB_ENV = "DATABASE_URL_MULTIPARK";
 export const MULTIPARK_DB_POOL_MAX = 2;
 export const MULTIPARK_DB_CONNECT_TIMEOUT_MS = 5_000;
 export const MULTIPARK_DB_STATEMENT_TIMEOUT_MS = 15_000;
+/**
+ * 44a: teto para uma leitura pedida com mais tempo (cálculos noturnos, ex.: a
+ * Pressão do Extras Dia, que acumula desde abril e passou dos 15 s em Lisboa).
+ * Nunca acima disto: a função da Vercel morre aos 60 s.
+ */
+export const MULTIPARK_DB_LONG_TIMEOUT_MAX_MS = 40_000;
+
+/** O tempo-limite de uma leitura: o normal, ou o pedido entre 1 s e o teto. PURA. */
+export function statementTimeoutFor(opts?: { timeoutMs?: number }): number {
+  const t = Number(opts?.timeoutMs);
+  if (!Number.isFinite(t) || t <= 0) return MULTIPARK_DB_STATEMENT_TIMEOUT_MS;
+  return Math.round(Math.min(MULTIPARK_DB_LONG_TIMEOUT_MAX_MS, Math.max(1_000, t)));
+}
+
+export interface QueryOptions { timeoutMs?: number }
 export const MULTIPARK_DB_IDLE_TIMEOUT_MS = 10_000;
 
 // ─── Regras puras (testadas em server/multiparkDb/multiparkDb.test.ts) ──────
@@ -228,7 +243,7 @@ export interface MultiparkDbClient {
    * Uma leitura (passa pela guarda) dentro de uma transação só de leitura.
    * Parâmetros: `$1, $2…` no Postgres, `?` no MySQL (ver `placeholder`).
    */
-  query<T = Record<string, unknown>>(sql: string, params?: SqlParam[]): Promise<T[]>;
+  query<T = Record<string, unknown>>(sql: string, params?: SqlParam[], opts?: QueryOptions): Promise<T[]>;
   /** Estado da sessão: a transação corrente é só de leitura? (para o teste de ligação) */
   readOnlyCheck(): Promise<boolean>;
   close(): Promise<void>;
@@ -264,8 +279,8 @@ export async function closeMultiparkDb(): Promise<void> {
 }
 
 /** Atalho: uma leitura na BD Multipark. */
-export async function multiparkDbQuery<T = Record<string, unknown>>(sql: string, params: SqlParam[] = []): Promise<T[]> {
-  return (await getMultiparkDb()).query<T>(sql, params);
+export async function multiparkDbQuery<T = Record<string, unknown>>(sql: string, params: SqlParam[] = [], opts?: QueryOptions): Promise<T[]> {
+  return (await getMultiparkDb()).query<T>(sql, params, opts);
 }
 
 async function openClient(url: string): Promise<MultiparkDbClient> {
@@ -291,7 +306,7 @@ async function openPostgres(url: string, ssl: SslChoice): Promise<MultiparkDbCli
   pool.on("error", (err: unknown) => console.warn("[multiparkDb] ligação da pool falhou:", redactSecrets(err).slice(0, 160)));
   const ready = new WeakSet<object>();
 
-  async function withReadOnly<T>(fn: (client: any) => Promise<T>): Promise<T> {
+  async function withReadOnly<T>(fn: (client: any) => Promise<T>, timeoutMs: number = MULTIPARK_DB_STATEMENT_TIMEOUT_MS): Promise<T> {
     let client: any;
     try { client = await pool.connect(); } catch (err) { throw wrapDriverError(err, "CONNECT_FAILED"); }
     let broken: unknown = undefined;
@@ -303,7 +318,7 @@ async function openPostgres(url: string, ssl: SslChoice): Promise<MultiparkDbCli
         ready.add(client);
       }
       await client.query("BEGIN READ ONLY");
-      await client.query(`SET LOCAL statement_timeout = ${MULTIPARK_DB_STATEMENT_TIMEOUT_MS}`);
+      await client.query(`SET LOCAL statement_timeout = ${timeoutMs}`);
       return await fn(client);
     } catch (err) {
       if (!(err instanceof MultiparkDbError) && isConnectionError(err)) broken = err;
@@ -318,9 +333,11 @@ async function openPostgres(url: string, ssl: SslChoice): Promise<MultiparkDbCli
 
   return {
     engine: "postgres",
-    async query<T>(sql: string, params: SqlParam[] = []): Promise<T[]> {
+    async query<T>(sql: string, params: SqlParam[] = [], opts?: QueryOptions): Promise<T[]> {
       assertReadOnlySql(sql);
-      return withReadOnly(async (c) => (await c.query(sql, params)).rows as T[]);
+      const t = statementTimeoutFor(opts);
+      // 44a: o tempo pedido vale no servidor (statement_timeout) e no driver (query_timeout)
+      return withReadOnly(async (c) => (await c.query({ text: sql, values: params, query_timeout: t + 2_000 })).rows as T[], t);
     },
     async readOnlyCheck() {
       return withReadOnly(async (c) => String((await c.query("SHOW transaction_read_only")).rows?.[0]?.transaction_read_only ?? "").toLowerCase() === "on");
@@ -379,10 +396,10 @@ async function openMysql(url: string, ssl: SslChoice): Promise<MultiparkDbClient
 
   return {
     engine: "mysql",
-    async query<T>(sql: string, params: SqlParam[] = []): Promise<T[]> {
+    async query<T>(sql: string, params: SqlParam[] = [], opts?: QueryOptions): Promise<T[]> {
       assertReadOnlySql(sql);
       return withReadOnly(async (c) => {
-        const [rows] = await c.query({ sql, values: params, timeout: MULTIPARK_DB_STATEMENT_TIMEOUT_MS + 2_000 });
+        const [rows] = await c.query({ sql, values: params, timeout: statementTimeoutFor(opts) + 2_000 });
         return rows as T[];
       });
     },

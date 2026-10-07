@@ -15,7 +15,6 @@ import TasksPage from "./pages/TasksPage";
 import MarketingPage from "./pages/MarketingPage";
 import ShiftHandoverPage from "./pages/ShiftHandoverPage";
 import OperationalPage from "./pages/OperationalPage";
-import RadioPage from "./pages/RadioPage";
 import PdaRegisterPage from "./pages/PdaRegisterPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
 import IntegrationsGoogleAdsPage from "./pages/IntegrationsGoogleAdsPage";
@@ -169,8 +168,9 @@ function Router() {
       <Route path="/operacional">
         {() => (<DashboardLayout><OperationalPage /></DashboardLayout>)}
       </Route>
+      {/* 43b: o Rádio passou para dentro da Atividade diária */}
       <Route path="/radio">
-        {() => (<DashboardLayout><RadioPage /></DashboardLayout>)}
+        {() => <Redirect to="/operacional?tab=radio" replace />}
       </Route>
       <Route path="/reclamacoes">
         {() => (<DashboardLayout><ComplaintsPage /></DashboardLayout>)}

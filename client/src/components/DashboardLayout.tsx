@@ -60,7 +60,6 @@ import {
   GraduationCap,
   BookOpen,
   Truck,
-  Radio,
   Megaphone,
   Wallet,
   ParkingCircle,
@@ -182,7 +181,7 @@ export const menuGroups: MenuGroup[] = [
       { icon: GraduationCap, label: "Formação", path: "/formacao", module: "formacao" },
       // Base de conhecimento (manuais do Drive/carregados): gestão admin/super_admin.
       { icon: BookOpen, label: "Base de conhecimento", path: "/formacao/conhecimento", module: "definicoes" },
-      // Avaliação: separadores "Dia" (avaliacao_operacional) e "4 semanas";
+      // Avaliação: separadores "Dia" (avaliacao_operacional) e "Mês";
       // extra/condutor veem a própria avaliação — filtrado no servidor
       { icon: Trophy, label: "Avaliação", path: "/avaliacao", anyOf: ["avaliacao", "avaliacao_operacional"] },
       // Jorge, 3 out 2026: saíram das Críticas (mesmo acesso: módulo Críticas, team leader+).
@@ -195,8 +194,7 @@ export const menuGroups: MenuGroup[] = [
     items: [
       { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", module: "reservas_operacoes" },
       { icon: Wrench, label: "Serviços", path: "/servicos", module: "servicos" },
-      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario"] },
-      { icon: Radio, label: "Rádio", path: "/radio", module: "radio" },
+      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario", "radio"] },
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
       { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },

@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: 24 horas, das 03h às 03h, permitir ser TL, pesquisar pessoa, ficha do RH, p75 explicado, dados de uma janela anterior, fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -24,21 +24,27 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
      - **Lisboa:** Oriente, Sete Rios, Rossio e Entrecampos. Tudo o resto é T1 ou T2, diga o tipo de entrega o que disser.
      - **Porto:** nada; é tudo no aeroporto.
      - **Faro:** só a estação de comboios.
-6. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, desde abril de 2026, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo.
+6. A tabela **Por hora** mostra sempre as **24 horas do dia operacional (das 03h às 03h)**, mesmo as que não têm chegadas nem saídas, separadas em **Manhã (03h–15h)** e **Noite (15h–03h)**.
+   - A barra ao lado do total mostra a carga dessa hora: verde = chegadas, laranja = saídas, à escala da hora mais cheia do dia.
+   - **Condutores** = extras precisos nessa hora, **além do team leader**. Passa o rato pelo cabeçalho para ver a regra das pessoas por turno.
+   - Carrega numa hora para ver os blocos de 20 min; num bloco, para ver as reservas.
+7. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, desde abril de 2026, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo.
 
 **Separador "Pressão"** (quando é que aperta)
 1. Em cima, escolhe o separador **Pressão** (o separador **Dia** é a previsão de sempre).
-2. Escolhe o grupo de parques: a cidade toda (todas as marcas), uma marca + cidade (ex.: Airpark Lisboa) ou o Marketplace.
-3. **Onde aperta**: frases curtas com os blocos mais apertados, por exemplo "sextas 17–20h em Lisboa: 42 saídas/h, entrega p75 28 min".
-4. **Dia da semana × hora**: mapa de calor.
-   - **Carros/hora**: chegadas + saídas concluídas, média por dia.
-   - **Entrega p75**: minutos entre o pedido do cliente e o carro entregue; 75 % das entregas demoram menos do que isto.
+2. Logo em cima escolhe o **grupo de parques** (a cidade toda, uma marca + cidade como Airpark Lisboa, ou o Marketplace) e **o que queres ver no mapa**, nos botões grandes:
+   - **Carros por hora**: chegadas + saídas concluídas nessa hora, média por dia.
+   - **Tempo de entrega**: minutos desde o cliente pedir o carro até o ter na mão.
    - Na cidade toda há mais três:
-     - **Por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas.
-     - Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço: vai do início da entrega ao início do serviço a seguir à recolha.
+     - **Tempo por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas. Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço.
      - **Na estrada**: do início da entrega até entregue.
-     - **Pessoas**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL**: o TL é o primeiro condutor, por isso, se nessa hora não carregou em nenhum botão na app, junta-se 1. São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.
-   - Contorno laranja = hora apertada. Passa o rato por uma célula para ver tudo: volume, carros em simultâneo, entrega, recolha, por carro, na estrada, recolhido → no parque e pessoas.
+     - **Pessoas a trabalhar**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL** (se nessa hora não carregou em nenhum botão na app, junta-se 1). São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.
+3. **O mapa (dia da semana × hora)** ocupa quase o ecrã. Por cima diz em palavras o que a cor quer dizer; por baixo há a legenda (os 4 tons de azul com os valores, cinzento = sem dados, contorno laranja = hora apertada, horas a âmbar = horas de ponta).
+   - **Carrega numa célula** (ou passa o rato) para ver o detalhe dessa hora: volume, carros em simultâneo, entrega, recolha, por carro, na estrada, recolhido → no parque e pessoas.
+   - **O que é o p75?** Ordenam-se os casos dessa hora do mais rápido ao mais lento: o p75 é o valor a 75 % do caminho. Em 3 de cada 4 vezes demorou isso ou menos; só 1 em 4 demorou mais. Usa-se em vez da média para os dias maus contarem sem que um caso raro estrague tudo.
+   - Uma célula **cinzenta** não tem dados: sem movimento nessa hora, ou menos de 5 casos (pouco fiável).
+   - Se o último cálculo de um grupo falhou, aparece um aviso amarelo e o mapa mostra os dados do dia anterior que correu bem (em vez de ficar vazio).
+4. **Onde aperta**: frases curtas com os blocos mais apertados, por exemplo "sextas 17–20h em Lisboa: 42 saídas/h, entrega p75 28 min".
 5. **Tempo por carro, por condutor** (só na cidade toda): tabela por número de pessoas a trabalhar (os escalões da tabela de máximos das Definições).
    - **Horas cheias**: cada pessoa teve pelo menos um serviço nessa hora. É aqui que se vê a capacidade.
    - **Horas calmas**: o intervalo inclui esperar por trabalho.
@@ -60,7 +66,9 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 4. Liga-se por cidade em Definições → Parâmetros → **Recolha pelo meio de uma entrega** (desligado por omissão). Ligado, a previsão, a escala automática e a estimativa deixam de contar essas recolhas como carro (no T2 fica só a meia extra).
 
 **Escalar a equipa** (Team Leader, Supervisor e acima)
-1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar** e escolhe a pessoa e as horas de início e de fim.
+1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar**, **escreve o nome** da pessoa e escolhe-a da lista do RH; depois as horas de início e de fim.
+   - **Só entra na escala quem está registado no RH.** Já não se escreve um nome à mão: se a pessoa não aparece, cria primeiro a ficha em Recursos Humanos.
+   - A lista põe primeiro quem começa pelo que escreveste. Está dividida: a cidade da escala, outras cidades, e no fim quem não tem cidade na ficha (não se pode escolher).
    - O turno tem no mínimo 3 h e no máximo 12 h.
    - O início é a partir das 03h; da 0h às 3h é a noite do dia anterior (24h–27h).
    - A mesma pessoa não pode ficar a horas sobrepostas no mesmo dia, nem noutra cidade.
@@ -69,6 +77,9 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Quem não tem cidade não pode ser escalado**, nem à mão: define primeiro a cidade na ficha (Recursos Humanos).
    - Um **funcionário** só entra na escala posto à mão e **não recebe avisos** (nem de trabalho, nem de turno cancelado, nem por email). Na lista para escolher, os extras aparecem antes dos funcionários.
 3. Define o **Team Leader** do turno (tem de vir do RH).
+   - Na lista aparecem primeiro quem já pode ser TL e, a seguir, o resto do RH ("ainda sem permissão de TL").
+   - Para pôr um extra a fazer de TL, escolhe-o e carrega em **Permitir ser TL**: dá-lhe a permissão "Pode ser Team Leader na escala" ali mesmo, sem ires às Permissões (só para quem gere as Permissões; fica no registo de atividade).
+   - A permissão é da **conta** do dashboard: se a pessoa não tem conta, muda o posto no RH para Team Leader ou cria-lhe a conta.
 4. Carrega em **Avisar este turno** para enviar o aviso de trabalho a quem desse turno está confirmado e ainda não foi avisado.
    - Ao lado de cada pessoa aparece o estado: avisado, ✓ confirmou, ✗ não pode.
    - **Aviso desatualizado** quer dizer que as horas mudaram depois do aviso; avisa outra vez.

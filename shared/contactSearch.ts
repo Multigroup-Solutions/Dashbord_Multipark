@@ -41,3 +41,33 @@ export function matchesContactQuery(query: string, contact: SearchableContact): 
     return tokDigits.length > 0 && phoneDigits.includes(tokDigits);
   });
 }
+
+/**
+ * 44a: relevância de um nome para a pesquisa — serve para ORDENAR (o filtro
+ * continua a ser `matchesContactQuery`). Jorge: "começa sempre com o A e o B"
+ * — quem começa pelo que se escreveu tem de vir primeiro.
+ *   3 = o nome começa pela pesquisa ("ana s" → "Ana Silva");
+ *   2 = cada palavra da pesquisa começa uma palavra do nome ("sil ana" → "Ana Rita Silva");
+ *   1 = aparece no meio ("ana" → "Mariana");
+ *   0 = não bate.
+ * Pesquisa vazia → 1 (tudo igual, fica a ordem que já havia). PURA.
+ */
+export function nameMatchScore(query: string, name: string | null | undefined): number {
+  const q = normalizeSearchText(query);
+  if (!q) return 1;
+  const n = normalizeSearchText(name);
+  if (!n) return 0;
+  if (n.startsWith(q)) return 3;
+  const words = n.split(" ");
+  if (q.split(" ").every((t) => words.some((w) => w.startsWith(t)))) return 2;
+  return matchesContactQuery(query, { name }) ? 1 : 0;
+}
+
+/** Ordena por relevância (estável: empates mantêm a ordem de entrada). PURA. */
+export function sortByNameMatch<T>(query: string, rows: readonly T[], nameOf: (r: T) => string | null | undefined): T[] {
+  if (!normalizeSearchText(query)) return rows.slice();
+  return rows
+    .map((r, i) => ({ r, i, s: nameMatchScore(query, nameOf(r)) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map((x) => x.r);
+}

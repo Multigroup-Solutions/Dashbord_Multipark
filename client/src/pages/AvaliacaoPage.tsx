@@ -3,15 +3,16 @@
  *  - "Dia" (antiga Avaliação operacional): a escala do Extras Dia × os
  *    movimentos lidos AO VIVO da BD da Multipark, por pessoa, com a lista de
  *    movimentos e o GPS do Zello (components/evaluation/DayEvaluationTab);
- *  - "4 semanas" (antiga Avaliação individual): ranking do período sobre o
+ *  - "Mês" (antes "4 semanas"; 42a): ranking do período sobre o
  *    motor único (employee_day_metrics + ajustes + contestações), o resumo
  *    vivo dos movimentos por pessoa e "Recalcular".
  * Mais "A minha avaliação" e "Contestações" (gestão).
  *
- * O motor lê os movimentos da BD da Multipark sozinho (cron diário das
- * últimas 4 semanas e ao abrir um dia) — não há botões para ir buscar
+ * O motor lê os movimentos da BD da Multipark sozinho (cron diário do
+ * último mês e ao abrir um dia) — não há botões para ir buscar
  * histórico. O âmbito de cidade é aplicado no servidor.
- * Rotas: /avaliacao?tab=dia|semanas|minha|contestacoes (/avaliacao-operacional
+ * 42a: o filtro de cidade/marca do topo chega ao ranking e aos movimentos.
+ * Rotas: /avaliacao?tab=dia|mes|minha|contestacoes (tab=semanas → mes) (/avaliacao-operacional
  * redireciona para ?tab=dia).
  */
 import EvaluationExplanation from "@/components/aiOps/EvaluationExplanation";
@@ -25,12 +26,13 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Award, Clock, Download, RefreshCw, Trophy, Zap } from "lucide-react";
-import DateRangeNav, { type DateGran } from "@/components/DateRangeNav";
+import DateRangeNav, { rangeFor, type DateGran } from "@/components/DateRangeNav";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { can, scopeFor } from "@shared/access";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
-import { addDays, operationalDayOf } from "@shared/lisbonDay";
-import { RECOMPUTE_WINDOW_DAYS } from "@shared/evaluationRules";
+import { Th, useTableSort } from "@/components/SortableTable";
+import { operationalDayOf } from "@shared/lisbonDay";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import DayEvaluationTab, { MovementSourceNotice } from "@/components/evaluation/DayEvaluationTab";
 import {
@@ -46,12 +48,11 @@ import {
 } from "@/components/evaluation/EvaluationBreakdown";
 
 type View = "totals" | "perHour";
-type TabKey = "dia" | "semanas" | "minha" | "contestacoes";
+type TabKey = "dia" | "mes" | "minha" | "contestacoes";
 
-/** As últimas 4 semanas (a janela do recálculo automático), até hoje. */
-function lastFourWeeks(): { start: string; end: string; gran: DateGran } {
-  const today = operationalDayOf(Date.now());
-  return { start: addDays(today, -(RECOMPUTE_WINDOW_DAYS - 1)), end: today, gran: "custom" };
+/** 42a: o mês do dia operacional de hoje (o recálculo automático cobre o último mês). */
+function thisMonth(): { start: string; end: string; gran: DateGran } {
+  return { ...rangeFor("month", new Date(`${operationalDayOf(Date.now())}T12:00:00`)), gran: "month" };
 }
 
 export default function AvaliacaoPage() {
@@ -64,11 +65,12 @@ export default function AvaliacaoPage() {
   const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const allowed: TabKey[] = [
     ...(canDay ? ["dia" as const] : []),
-    ...(canRank ? ["semanas" as const] : []),
+    ...(canRank ? ["mes" as const] : []),
     "minha",
     ...(isSupervisor ? ["contestacoes" as const] : []),
   ];
-  const asked = params.get("tab") as TabKey | null;
+  const askedRaw = params.get("tab");
+  const asked = (askedRaw === "semanas" ? "mes" : askedRaw) as TabKey | null;
   const [tab, setTabState] = useState<TabKey>(asked && allowed.includes(asked) ? asked : allowed[0]);
   const setTab = (t: string) => {
     setTabState(t as TabKey);
@@ -80,11 +82,11 @@ export default function AvaliacaoPage() {
     } catch { /* sem URL (testes) */ }
   };
 
-  const [range, setRange] = useState(lastFourWeeks);
+  const [range, setRange] = useState(thisMonth);
   const hasRange = !!range.start && !!range.end;
   const periodNav = (
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" variant="outline" onClick={() => setRange(lastFourWeeks())}>Últimas 4 semanas</Button>
+      <Button size="sm" variant="outline" onClick={() => setRange(thisMonth())}>Este mês</Button>
       <DateRangeNav start={range.start} end={range.end} gran={range.gran} showAll={false}
         onChange={(s, e, g) => setRange({ start: s, end: e, gran: g })} />
     </div>
@@ -102,7 +104,7 @@ export default function AvaliacaoPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
           {canDay && <TabsTrigger value="dia">Dia</TabsTrigger>}
-          {canRank && <TabsTrigger value="semanas">4 semanas</TabsTrigger>}
+          {canRank && <TabsTrigger value="mes">Mês</TabsTrigger>}
           <TabsTrigger value="minha">A minha avaliação</TabsTrigger>
           {isSupervisor && <TabsTrigger value="contestacoes">Contestações</TabsTrigger>}
         </TabsList>
@@ -112,9 +114,9 @@ export default function AvaliacaoPage() {
           </TabsContent>
         )}
         {canRank && (
-          <TabsContent value="semanas" className="mt-4 space-y-4">
+          <TabsContent value="mes" className="mt-4 space-y-4">
             {periodNav}
-            {hasRange && tab === "semanas" && <RankingView from={range.start} to={range.end} isSupervisor={isSupervisor} />}
+            {hasRange && tab === "mes" && <RankingView from={range.start} to={range.end} isSupervisor={isSupervisor} />}
             <Card>
               <CardHeader><CardTitle className="text-base">Sistema de pontos</CardTitle></CardHeader>
               <CardContent><RulesLegend /></CardContent>
@@ -137,12 +139,13 @@ export default function AvaliacaoPage() {
 
 // ─── Ranking ─────────────────────────────────────────────────────────────────
 
-type SortKey = "points" | "pointsPerHour" | "actions" | "actionsPerHour" | "hours" | "name";
+type SortKey = "points" | "pointsPerHour" | "actions" | "actionsPerHour" | "hours" | "name" | "recEnt" | "movs" | "delays" | "incidents" | "weightedPerHour";
 
 function RankingView({ from, to, isSupervisor }: { from: string; to: string; isSupervisor: boolean }) {
   const utils = trpc.useUtils();
   const openEmployee = useOpenEmployee();
-  const q = trpc.evaluation.ranking.useQuery({ from, to });
+  const { projectId } = useGlobalFilters();
+  const q = trpc.evaluation.ranking.useQuery({ from, to, projectId });
   const recompute = trpc.evaluation.recompute.useMutation({
     onSuccess: (r) => {
       if (r.skipped && r.days === 0) {
@@ -176,6 +179,11 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         case "actions": return r.metrics.actions;
         case "actionsPerHour": return r.perHour.actionsPerHour ?? -Infinity;
         case "hours": return r.perHour.hours;
+        case "recEnt": return r.metrics.recolhas + r.metrics.entregas;
+        case "movs": return r.metrics.movements;
+        case "delays": return r.metrics.delays;
+        case "incidents": return r.metrics.speedingEvents + r.metrics.complaints + r.metrics.accidents;
+        case "weightedPerHour": return r.perHour.weightedPerHour ?? -Infinity;
       }
     };
     return [...rows].sort((a, b) => {
@@ -247,7 +255,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         <Card className="p-10 text-center">
           <Trophy className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
           <p className="text-muted-foreground">Sem dias calculados neste período.</p>
-          <p className="text-xs text-muted-foreground mt-1">O recálculo automático corre todos os dias (últimas 4 semanas){isSupervisor ? "; para outro período usa Recalcular." : "."}</p>
+          <p className="text-xs text-muted-foreground mt-1">O recálculo automático corre todos os dias (último mês){isSupervisor ? "; para outro período usa Recalcular." : "."}</p>
         </Card>
       ) : (
         <Card>
@@ -263,17 +271,17 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
                       <>
                         {th("hours", "Horas")}
                         {th("actions", "Ações")}
-                        <th className="p-2 text-right" title="Recolhas + entregas">Rec/Ent</th>
-                        <th className="p-2 text-right" title="Movimentos (dos quais levar ao parque)">Movs</th>
-                        <th className="p-2 text-right">Atrasos</th>
-                        <th className="p-2 text-right" title="Velocidade · Reclamações · Acidentes">Vel/Recl/Acid</th>
+                        {th("recEnt", "Rec/Ent")}
+                        {th("movs", "Movs")}
+                        {th("delays", "Atrasos")}
+                        {th("incidents", "Vel/Recl/Acid")}
                         {th("points", "Pontos")}
                       </>
                     ) : (
                       <>
                         {th("hours", "Horas")}
                         {th("actionsPerHour", "Ações/h")}
-                        <th className="p-2 text-right">Pts ações/h</th>
+                        {th("weightedPerHour", "Pts ações/h")}
                         {th("pointsPerHour", "Pontos/h")}
                         {th("points", "Pontos")}
                       </>
@@ -327,11 +335,94 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         </Card>
       )}
 
+      <TeamsCard from={from} to={to} />
+
       <LiveMovementsCard from={from} to={to} />
 
       <EvaluationDrawer employeeId={drawer?.id ?? null} employeeName={drawer?.name ?? ""} from={from} to={to}
         canAdjust={isSupervisor} onOpenChange={(o) => !o && setDrawer(null)} />
     </div>
+  );
+}
+
+// ─── 42a: as equipas do mês (o TL como TL; a cidade = o supervisor) ──────────
+
+function TeamsCard({ from, to }: { from: string; to: string }) {
+  const { projectId } = useGlobalFilters();
+  const openEmployee = useOpenEmployee();
+  const q = trpc.evaluation.teams.useQuery({ from, to, projectId }, { refetchOnWindowFocus: false });
+  const leaders = q.data?.leaders ?? [];
+  const cities = q.data?.cities ?? [];
+  const tl = useTableSort(leaders, "avgTeamPoints", -1);
+  const ct = useTableSort(cities, "label", 1);
+  if (q.isLoading) return null;
+  if (q.error) return <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as equipas" />;
+  if (!leaders.length && !cities.length) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Equipas — team leaders e supervisão</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          O team leader é avaliado de duas maneiras: como condutor (no ranking de cima, com as ações dele) e aqui como TL — os pontos da equipa nos dias em que foi TL (mesmo dia, cidade e turno). A supervisão é a equipa da cidade (sem os TL). Média = pontos por pessoa e por dia.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4 px-2 sm:px-6">
+        {cities.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
+              <thead><tr className="border-b text-left">
+                <Th k="label" label="Cidade (supervisão)" sortKey={ct.sortKey} sortDir={ct.sortDir} onToggle={ct.toggle} />
+                <Th k="days" label="Dias" align="right" sortKey={ct.sortKey} sortDir={ct.sortDir} onToggle={ct.toggle} />
+                <Th k="personDays" label="Pessoas·dia" align="right" sortKey={ct.sortKey} sortDir={ct.sortDir} onToggle={ct.toggle} />
+                <Th k="actions" label="Ações" align="right" sortKey={ct.sortKey} sortDir={ct.sortDir} onToggle={ct.toggle} />
+                <Th k="points" label="Pontos" align="right" sortKey={ct.sortKey} sortDir={ct.sortDir} onToggle={ct.toggle} />
+                <Th k="avgPoints" label="Média" align="right" sortKey={ct.sortKey} sortDir={ct.sortDir} onToggle={ct.toggle} />
+              </tr></thead>
+              <tbody>
+                {(ct.sorted as typeof cities).map((c) => (
+                  <tr key={c.city} className="border-b">
+                    <td className="p-2"><span className="font-medium">{c.label}</span><span className="block text-[11px] text-muted-foreground">{c.supervisors.length ? c.supervisors.join(", ") : "sem supervisor com esta cidade"}</span></td>
+                    <td className="p-2 text-right tabular-nums">{c.days}</td>
+                    <td className="p-2 text-right tabular-nums">{c.personDays}</td>
+                    <td className="p-2 text-right tabular-nums">{c.actions}</td>
+                    <td className={`p-2 text-right tabular-nums font-semibold ${ptsClass(c.points)}`}>{fmtPts(c.points)}</td>
+                    <td className="p-2 text-right tabular-nums">{fmtNum(c.avgPoints, 1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {leaders.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
+              <thead><tr className="border-b text-left">
+                <Th k="employeeName" label="Team leader" sortKey={tl.sortKey} sortDir={tl.sortDir} onToggle={tl.toggle} />
+                <Th k="tlDays" label="Dias como TL" align="right" sortKey={tl.sortKey} sortDir={tl.sortDir} onToggle={tl.toggle} />
+                <Th k="ownPoints" label="Pontos (como condutor)" align="right" sortKey={tl.sortKey} sortDir={tl.sortDir} onToggle={tl.toggle} />
+                <Th k="teamPersonDays" label="Equipa (pessoas·dia)" align="right" sortKey={tl.sortKey} sortDir={tl.sortDir} onToggle={tl.toggle} />
+                <Th k="teamActions" label="Ações da equipa" align="right" sortKey={tl.sortKey} sortDir={tl.sortDir} onToggle={tl.toggle} />
+                <Th k="teamPoints" label="Pontos da equipa" align="right" sortKey={tl.sortKey} sortDir={tl.sortDir} onToggle={tl.toggle} />
+                <Th k="avgTeamPoints" label="Média da equipa" align="right" sortKey={tl.sortKey} sortDir={tl.sortDir} onToggle={tl.toggle} />
+              </tr></thead>
+              <tbody>
+                {(tl.sorted as typeof leaders).map((r) => (
+                  <tr key={r.employeeId} className="border-b">
+                    <td className="p-2 font-medium"><button type="button" className="hover:underline text-left" title="Abrir ficha" onClick={() => openEmployee(r.employeeId)}>{r.employeeName}</button></td>
+                    <td className="p-2 text-right tabular-nums">{r.tlDays}</td>
+                    <td className={`p-2 text-right tabular-nums ${ptsClass(r.ownPoints)}`}>{fmtPts(r.ownPoints)}</td>
+                    <td className="p-2 text-right tabular-nums">{r.teamPersonDays}</td>
+                    <td className="p-2 text-right tabular-nums">{r.teamActions}</td>
+                    <td className={`p-2 text-right tabular-nums font-semibold ${ptsClass(r.teamPoints)}`}>{fmtPts(r.teamPoints)}</td>
+                    <td className="p-2 text-right tabular-nums">{fmtNum(r.avgTeamPoints, 1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -345,7 +436,8 @@ function LiveMovementsCard({ from, to }: { from: string; to: string }) {
     const d = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
     return d > LIVE_MAX_DAYS;
   }, [from, to]);
-  const q = trpc.evaluation.liveMovements.useQuery({ from, to }, { enabled: !tooLong, refetchOnWindowFocus: false });
+  const { projectId } = useGlobalFilters();
+  const q = trpc.evaluation.liveMovements.useQuery({ from, to, projectId }, { enabled: !tooLong, refetchOnWindowFocus: false });
   const d = q.data;
   return (
     <Card>

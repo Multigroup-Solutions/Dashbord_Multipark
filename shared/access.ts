@@ -82,7 +82,7 @@ export const MODULES: readonly ModuleDef[] = [
   { id: "ficha", label: "Minha ficha", group: "Pessoal" },
   { id: "formacao", label: "Formação", group: "Pessoas" },
   { id: "disponibilidade", label: "Disponibilidade (própria)", group: "Pessoal" },
-  { id: "avaliacao", label: "Avaliação (4 semanas e própria)", group: "Pessoas" },
+  { id: "avaliacao", label: "Avaliação (mês e própria)", group: "Pessoas" },
   { id: "avaliacao_operacional", label: "Avaliação — Dia", group: "Pessoas" },
   { id: "rh", label: "Recursos Humanos", group: "Pessoas" },
   { id: "rh_salarios", label: "RH — ordenados e processamento", group: "Pessoas" },

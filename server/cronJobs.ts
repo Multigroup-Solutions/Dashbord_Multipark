@@ -577,7 +577,7 @@ export async function rhDocsWeeklyCron(): Promise<CronJobRun> {
   } catch (err) { return fail(err); }
 }
 
-/** Avaliação (motor único): recalcula as últimas 4 semanas em fatias de 7 dias. */
+/** Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7 dias. */
 export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDays: number }): Promise<CronJobRun> {
   try {
     const { runEvaluationRecompute } = await import("./evaluationEngine");
@@ -598,8 +598,8 @@ export async function extrasAutoCron(o: { deadlineAt: number; from?: string | nu
 }
 
 /**
- * "Pressão" do Extras-Dia: 60 dias da BD Multipark agregados por grupo de
- * parques (um grupo de cada vez; `cursor` retoma no grupo seguinte). Sem
+ * "Pressão" do Extras-Dia: o histórico da BD Multipark (acumula desde abril)
+ * agregado por grupo de parques (um grupo de cada vez; `cursor` retoma no grupo seguinte). Sem
  * DATABASE_URL_MULTIPARK → nota (ok, saltado); grupos que falham → vermelho.
  */
 export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {

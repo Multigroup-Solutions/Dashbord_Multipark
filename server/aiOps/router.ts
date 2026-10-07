@@ -34,6 +34,19 @@ async function visibleLeadIds(ids: number[]): Promise<number[]> {
   return rows.filter((r) => { try { assertLeadVisible({ projectId: r.projectId == null ? null : Number(r.projectId) }); return true; } catch { return false; } }).map((r) => Number(r.id));
 }
 
+/** Quem vê os alertas de cada página (o mesmo para os ler e para os tirar). */
+function canSeeAnomalies(user: any, domain: "bookings" | "expenses" | "marketing"): boolean {
+  if (domain === "bookings") requireAccess(user, "reservas_operacoes", "view");
+  if (domain === "marketing") requireAccess(user, "marketing", "view");
+  if (domain === "expenses") {
+    requireAccess(user, "despesas", "view", { allowOwn: true });
+    // Só quem vê as despesas da cidade (ou nacionais) vê as anomalias.
+    const s = scopeFor(withOverrides(user as any), "despesas");
+    if (s !== "city" && s !== "national") return false;
+  }
+  return true;
+}
+
 const leadIdsInput = z.object({ leadIds: z.array(z.number().int().positive()).min(1).max(200) });
 
 export const aiOpsRouter = router({
@@ -46,18 +59,27 @@ export const aiOpsRouter = router({
 
   /** "Alertas" de uma página: anomalias recentes do domínio, no âmbito de cidade. */
   anomalies: protectedProcedure
-    .input(z.object({ domain: z.enum(["bookings", "expenses", "marketing"]), days: z.number().int().min(1).max(60).optional() }))
+    .input(z.object({ domain: z.enum(["bookings", "expenses", "marketing"]), days: z.number().int().min(1).max(60).optional(), dismissed: z.boolean().optional() }))
     .query(async ({ ctx, input }) => {
-      if (input.domain === "bookings") requireAccess(ctx.user, "reservas_operacoes", "view");
-      if (input.domain === "marketing") requireAccess(ctx.user, "marketing", "view");
-      if (input.domain === "expenses") {
-        requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
-        // Só quem vê as despesas da cidade (ou nacionais) vê as anomalias.
-        const s = scopeFor(withOverrides(ctx.user as any), "despesas");
-        if (s !== "city" && s !== "national") return [];
-      }
+      if (!canSeeAnomalies(ctx.user, input.domain)) return [];
       const { listAnomalies } = await import("./anomalies");
-      return listAnomalies(input.domain, { days: input.days, today: lisbonDayOf(Date.now()) });
+      return listAnomalies(input.domain, { days: input.days, today: lisbonDayOf(Date.now()), dismissed: input.dismissed });
+    }),
+
+  /**
+   * 42d (Jorge, 7 out 2026: "estes alertas… dar para retirar"): tirar um alerta
+   * da lista, ou repô-lo. Quem o vê pode tirá-lo (para toda a gente); fica
+   * guardado com quem e quando, e regista-se no histórico.
+   */
+  dismissAnomaly: protectedProcedure
+    .input(z.object({ id: z.number().int().positive(), domain: z.enum(["bookings", "expenses", "marketing"]), restore: z.boolean().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!canSeeAnomalies(ctx.user, input.domain)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem acesso a estes alertas." });
+      const { setAnomalyDismissed } = await import("./anomalies");
+      const changed = await setAnomalyDismissed(input.id, input.domain, ctx.user.id, !input.restore);
+      if (!changed) throw new TRPCError({ code: "NOT_FOUND", message: input.restore ? "Este alerta já está na lista." : "Este alerta já foi tirado ou não está no teu acesso." });
+      await logActivity({ userId: ctx.user.id, action: input.restore ? "anomaly_restored" : "anomaly_dismissed", entity: "ops_anomaly", entityId: input.id, details: input.domain });
+      return { ok: true as const };
     }),
 
   /** Pendentes que se repetem entre passagens (código) + último resumo semanal da cidade. */

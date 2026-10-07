@@ -59,10 +59,10 @@ const fmtEur = (v: number | string | null | undefined) => {
   return n.toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 };
 
-/** Alertas de reservas por parque/canal (anomalias) — só a quem vê Reservas & Operações. */
+/** Alertas de reservas por parque/canal (anomalias) — só a quem vê Reservas & Operações. 42d: pequenos e de lado. */
 function BookingAlerts() {
   const { user } = useAuth();
-  return <AnomalyAlerts domain="bookings" enabled={!!user && can(user as any, "reservas_operacoes", "view")} />;
+  return <AnomalyAlerts domain="bookings" className="lg:sticky lg:top-4" enabled={!!user && can(user as any, "reservas_operacoes", "view")} />;
 }
 
 const OPERACOES_TABS = ["dashboard", "dia", ...OPS_LIST_KINDS];
@@ -125,9 +125,12 @@ export default function OperacoesPage() {
           <TabsTrigger value="cancelados"><XCircle className="w-4 h-4 mr-1" />{OPS_LIST_LABELS.cancelados}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="dashboard" className="mt-4 space-y-4">
-          <BookingAlerts />
-          <OperacoesDashboard onJump={jumpToList} />
+        <TabsContent value="dashboard" className="mt-4">
+          {/* 42d: os alertas ficam de lado (no telemóvel, por cima e encolhíveis) */}
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start">
+            <div className="min-w-0"><OperacoesDashboard onJump={jumpToList} /></div>
+            <aside className="order-first min-w-0 lg:order-last"><BookingAlerts /></aside>
+          </div>
         </TabsContent>
         <TabsContent value="dia" className="mt-4">
           <ReservasDoDia />

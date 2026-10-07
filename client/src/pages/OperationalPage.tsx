@@ -18,13 +18,17 @@ import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { ZelloLiveTab } from "@/components/ZelloLiveTab";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
+import RadioPage from "@/pages/RadioPage";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { lisbonToday } from "@shared/expensePeriods";
-import { addDays, daysInRange } from "@shared/lisbonDay";
+import { addDays, daysInRange, zelloLatestDay } from "@shared/lisbonDay";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { PDA_ZELLO_LABELS } from "@shared/pdaZelloMatch";
+import { SpeedTrackMap } from "@/components/maps/SpeedTrackMap";
 import {
   Plus, Trash2, Eye, Gauge, ArrowUpDown, Satellite, Users, Settings,
-  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw,
+  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -73,7 +77,7 @@ export default function OperationalPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, e os PDAs. As transcrições de rádio estão em Operações → Rádio.</p>
+        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, os PDAs e o rádio.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
@@ -81,11 +85,13 @@ export default function OperationalPage() {
           {has("live") && <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>}
           {has("history") && <TabsTrigger value="history"><Gauge className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>}
           {has("pdas") && <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>}
+          {has("radio") && <TabsTrigger value="radio"><Radio className="w-4 h-4 mr-1" />Rádio</TabsTrigger>}
         </TabsList>
         {has("dia") && <TabsContent value="dia"><DayActivityTab onOpenSpeedHistory={has("history") ? openSpeedHistory : undefined} /></TabsContent>}
         {has("live") && <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>}
         {has("history") && <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>}
         {has("pdas") && <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>}
+        {has("radio") && <TabsContent value="radio">{tab === "radio" && <RadioPage />}</TabsContent>}
       </Tabs>
     </div>
   );
@@ -134,7 +140,12 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
   );
   const { data, isLoading } = activityQ;
   const totals = data?.totals;
-  const people = (data?.people ?? []) as any[];
+  const allPeople = (data?.people ?? []) as any[];
+  // 43a: escolher a pessoa (o nome abre a ficha; o resto da linha, o dia dela)
+  const [who, setWho] = usePersistedState<string>("operacional.dia.who", "");
+  const people = useMemo(() => (who ? allPeople.filter((p) => p.key === who) : allPeople), [allPeople, who]);
+  const whoOptions = useMemo(() => [...allPeople].sort((a, b) => String(a.name).localeCompare(String(b.name), "pt")).map((p) => ({ value: String(p.key), label: String(p.name) })), [allPeople]);
+  const openEmployee = useOpenEmployee();
   const canSeeCost = !!data?.canSeeCost;
   const daySort = useTableSort(people);
   const dailySort = useTableSort((data?.daily ?? []) as any[]);
@@ -246,9 +257,15 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Quem fez o quê — {single ? startDate : `${startDate} → ${endDate}`}</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle className="text-base">Quem fez o quê — {single ? startDate : `${startDate} → ${endDate}`}</CardTitle>
+            <div className="ml-auto flex items-center gap-1.5">
+              <div className="w-56"><SearchableSelect options={whoOptions} value={who} onChange={setWho} placeholder="Todas as pessoas" /></div>
+              {who && <Button size="sm" variant="ghost" onClick={() => setWho("")}>Todas</Button>}
+            </div>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Clica numa pessoa para ver o dia dela. As ações contam no dia do TURNO (a noite que passa a meia-noite fica no dia em que começou).
+            Clica no <b>nome</b> para abrir a ficha da pessoa; no resto da linha para ver o dia dela. As ações contam no dia do TURNO (a noite que passa a meia-noite fica no dia em que começou).
             O GPS de um PDA partilhado vai para quem o tinha em cada momento. 🤝 = parceiro/agência · ⚠ = agente por ligar (RH → Agentes) · 📡 = km do PDA sem ninguém com login.
           </p>
         </CardHeader>
@@ -291,7 +308,10 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
                     >
                       <td className="p-2 font-medium min-w-[11rem]" title={kind.title}>
                         {kind.icon && <span aria-hidden>{kind.icon} </span>}
-                        {pers.name}
+                        {pers.employeeId != null ? (
+                          <button type="button" className="font-medium text-primary hover:underline" title="Abrir a ficha no RH"
+                            onClick={(e) => { e.stopPropagation(); openEmployee(pers.employeeId); }}>{pers.name}</button>
+                        ) : pers.name}
                         {kind.label && <span className="ml-1 text-[11px] font-normal text-muted-foreground">({kind.label})</span>}
                         {pers.isTeamLeader && <Badge className="ml-1 bg-amber-100 text-amber-800 border-amber-300 text-[11px] px-1.5 py-0">TL</Badge>}
                       </td>
@@ -320,7 +340,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
                     </tr>
                     );
                   })}
-                  {people.length === 0 && <tr><td colSpan={16} className="p-6 text-center text-muted-foreground">Sem atividade registada neste período.</td></tr>}
+                  {people.length === 0 && <tr><td colSpan={16} className="p-6 text-center text-muted-foreground">{who ? "Esta pessoa não tem atividade neste período." : "Sem atividade registada neste período."}</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -467,8 +487,11 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
   const { projectId } = useGlobalFilters();
   // Recolher / re-dividir: a mesma permissão do servidor (gerir o Histórico diário).
   const isAdmin = useCan("historico_diario", "manage");
-  const [selectedDate, setSelectedDate] = usePersistedState("operacional.hist.date", addDays(lisbonToday(), -1));
+  // 43a: abre no último dia que o Zello já dá (D-2); "ontem" ainda não vem e dava "0 motoristas"
+  const [selectedDate, setSelectedDate] = usePersistedState("operacional.hist.date", zelloLatestDay(Date.now()));
   const utils = trpc.useUtils();
+  const openEmployee = useOpenEmployee();
+  const [trackId, setTrackId] = useState<number | null>(null);
 
   const historyQ = trpc.operational.driverHistory.byDate.useQuery({ date: selectedDate, projectId }, { retry: retryTransient });
   const { data: history, isLoading } = historyQ;
@@ -521,10 +544,12 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
         </div>
         {isAdmin && (
           <>
-            <Button variant="outline" onClick={() => run("collect")} disabled={!!running}>
+            <Button variant="outline" onClick={() => run("collect")} disabled={!!running}
+              title="Vai buscar agora ao Zello o GPS deste dia (km, velocidades, trajeto) de todos os utilizadores. O Zello só dá um dia completo 2 dias depois; o de hoje fica provisório. A recolha automática faz isto de madrugada.">
               {running === "collect" ? "A recolher…" : "Recolher Dados"}
             </Button>
-            <Button variant="outline" onClick={() => run("resplit")} disabled={!!running} title="Depois de corrigir check-ins de PDA">
+            <Button variant="outline" onClick={() => run("resplit")} disabled={!!running}
+              title="Volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa depois de corrigir um check-in de PDA; não volta ao Zello nem muda as velocidades.">
               <RefreshCw className="w-4 h-4 mr-1" />{running === "resplit" ? "A dividir…" : "Forçar re-divisão"}
             </Button>
           </>
@@ -584,7 +609,7 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
             GPS de {selectedDate}
             {history && <Badge variant="outline">{history.length} registos</Badge>}
           </CardTitle>
-          <p className="text-xs text-muted-foreground">Clica numa linha para ver o histórico de velocidade dessa pessoa. PDA partilhado: aparecem todas as pessoas que o tiveram e os km sem ninguém com login.</p>
+          <p className="text-xs text-muted-foreground">Clica no <b>nome</b> para abrir a ficha; no resto da linha para ver o histórico de velocidade dessa pessoa; em <b>Trajeto</b> para ver o dia no mapa, pintado pela velocidade. PDA partilhado: aparecem todas as pessoas que o tiveram e os km sem ninguém com login.</p>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -622,11 +647,16 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
                       onClick={() => onSpeedTarget(h.resolvedEmployeeId != null ? { employeeId: h.resolvedEmployeeId } : { zelloUsername: h.zelloUsername })}
                     >
                       <td className="p-2 font-medium">
-                        {h.employeeName || h.displayName || h.zelloUsername}
+                        {h.resolvedEmployeeId != null ? (
+                          <button type="button" className="font-medium text-primary hover:underline" title="Abrir a ficha no RH"
+                            onClick={(e) => { e.stopPropagation(); openEmployee(h.resolvedEmployeeId); }}>{h.employeeName || h.displayName || h.zelloUsername}</button>
+                        ) : (h.employeeName || h.displayName || h.zelloUsername)}
                         <p className="text-xs text-muted-foreground font-normal">
                           {h.displayName || h.zelloUsername}
                           {h.shares?.length > 1 && ` · ${h.shares.map((s: any) => `${s.name.split(" ")[0]} ${s.km.toFixed(1)} km`).join(", ")}`}
-                          {h.leftoverKm > 0.05 && <span className="text-amber-700"> · {h.leftoverKm.toFixed(1)} km sem login</span>}
+                          {h.leftoverKm > 0.05 && (h.leftoverOwnerName
+                            ? <span> · {h.leftoverKm.toFixed(1)} km do dono ({h.leftoverOwnerName})</span>
+                            : <span className="text-amber-700"> · {h.leftoverKm.toFixed(1)} km sem login</span>)}
                         </p>
                       </td>
                       <td className="p-2 text-right font-mono">{parseFloat(h.totalKm || "0").toFixed(1)}</td>
@@ -646,8 +676,8 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
                       <td className="p-2 text-right text-muted-foreground">{h.gpsPointsCount || 0}</td>
                       <td className="p-2" onClick={(e) => e.stopPropagation()}>
                         {h.geoJsonUrl && (
-                          <Button size="sm" variant="outline" asChild>
-                            <a href={h.geoJsonUrl} target="_blank" rel="noopener" title="Trajeto (GeoJSON)"><Route className="w-3 h-3" /></a>
+                          <Button size="sm" variant="outline" onClick={() => setTrackId(h.id)} title="Ver o trajeto no mapa, pintado pela velocidade">
+                            <Route className="w-3 h-3 mr-1" />Trajeto
                           </Button>
                         )}
                       </td>
@@ -659,7 +689,48 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
           )}
         </CardContent>
       </Card>
+      {trackId != null && <TrackDialog id={trackId} onClose={() => setTrackId(null)} />}
     </div>
+  );
+}
+
+/** 43a: o trajeto do dia no mapa, pintado pela velocidade, e a velocidade ao longo do dia. */
+function TrackDialog({ id, onClose }: { id: number; onClose: () => void }) {
+  const q = trpc.operational.driverHistory.track.useQuery({ id }, { retry: retryTransient, staleTime: 10 * 60_000 });
+  const t = q.data?.ok ? q.data.track : null;
+  const chart = useMemo(() => (t?.points ?? []).map((p) => ({ t: fmtPTTime(p.ts * 1000), v: p.speed })), [t]);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
+        <DialogHeader><DialogTitle>Trajeto{t ? ` — ${t.name} · ${t.date}` : ""}</DialogTitle></DialogHeader>
+        {q.isLoading ? <p className="py-10 text-center text-sm text-muted-foreground">A ler o trajeto…</p>
+          : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o trajeto" />
+          : q.data && !q.data.ok ? <p className="py-6 text-center text-sm text-muted-foreground">{q.data.reason}</p>
+          : t ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2 text-sm">
+                <Badge variant="outline">{t.total.toLocaleString("pt-PT")} pontos GPS{t.points.length < t.total ? ` (mapa com ${t.points.length.toLocaleString("pt-PT")})` : ""}</Badge>
+                <Badge variant="outline" className={t.threshold != null && t.maxSpeed > t.threshold ? "border-red-300 text-red-700" : ""}>máxima {Math.round(t.maxSpeed)} km/h{t.maxAt ? ` às ${fmtPTTime(t.maxAt * 1000)}` : ""}</Badge>
+                {t.threshold != null && <Badge variant="outline">limite {Math.round(t.threshold)} km/h</Badge>}
+              </div>
+              <SpeedTrackMap points={t.points} threshold={t.threshold} maxAt={t.maxAt} />
+              {chart.length > 1 && (
+                <ResponsiveContainer width="100%" height={180}>
+                  <LineChart data={chart} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.4} />
+                    <XAxis dataKey="t" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={40} />
+                    <YAxis tick={{ fontSize: 11 }} width={40} unit="" />
+                    <Tooltip formatter={(v: number) => [`${v} km/h`, "velocidade"]} />
+                    {t.threshold != null && <ReferenceLine y={t.threshold} stroke="#dc2626" strokeDasharray="4 4" />}
+                    <Line type="monotone" dataKey="v" name="Velocidade" stroke="#256abf" strokeWidth={2} dot={false} isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+              <p className="text-xs text-muted-foreground">Velocidade ao longo do dia (km/h); a linha vermelha é o limite dos excessos.</p>
+            </div>
+          ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -863,6 +934,13 @@ function PdasTab() {
     onSuccess: () => { utils.operational.pdas.list.invalidate(); toast.success("PDA retirado (passou a Inativo; o histórico fica)."); },
     onError: (e) => toast.error(e.message),
   });
+  // 43b: o Zello de cada PDA bate certo com o Zello? (e corrigir com um clique)
+  const zelloCheckQ = trpc.operational.pdas.zelloCheck.useQuery(undefined, { retry: false, staleTime: 5 * 60_000 });
+  const zelloCheckBy = useMemo(() => new Map(((zelloCheckQ.data?.available ? zelloCheckQ.data.checks : []) ?? []).map((c) => [c.pdaId, c])), [zelloCheckQ.data]);
+  const fixZelloMut = trpc.operational.pdas.update.useMutation({
+    onSuccess: () => { utils.operational.pdas.list.invalidate(); utils.operational.pdas.zelloCheck.invalidate(); toast.success("Zello do PDA corrigido."); },
+    onError: (e) => toast.error(e.message),
+  });
 
   const PDA_STATUS_LABELS: Record<string, string> = { active: "Ativo", inactive: "Inativo", maintenance: "Manutenção", lost: "Perdido" };
   const PDA_STATUS_COLORS: Record<string, string> = { active: "bg-green-100 text-green-800", inactive: "bg-gray-100 text-gray-800", maintenance: "bg-amber-100 text-amber-800", lost: "bg-red-100 text-red-800" };
@@ -875,8 +953,10 @@ function PdasTab() {
   }, [activeCheckins]);
 
   return (
-    <div className="space-y-4 mt-4">
-      <OpsPresencePanel />
+    // 43b: os alertas "a trabalhar sem PDA/Zello" ficam pequenos e de lado (no telemóvel, por cima)
+    <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+    <aside className="order-first min-w-0 lg:order-last lg:sticky lg:top-4"><OpsPresencePanel /></aside>
+    <div className="min-w-0 space-y-4">
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
@@ -948,6 +1028,22 @@ function PdasTab() {
                   </div>
 
                   <div className="text-sm space-y-1 text-muted-foreground">
+                    {(() => {
+                      const zc = zelloCheckBy.get(pda.id);
+                      const bad = zc && zc.status !== "ok";
+                      return (
+                        <div className={bad ? "rounded border border-amber-300 bg-amber-50 p-1.5 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200" : ""}>
+                          <p>Zello: <span className="font-medium text-foreground">{pda.zelloUsername || "—"}</span>{zc && <span className="ml-1 text-xs">· {PDA_ZELLO_LABELS[zc.status]}</span>}</p>
+                          {bad && <p className="text-xs">{zc!.detail}</p>}
+                          {bad && zc!.suggestion && canManage && zc!.status !== "duplicado" && (
+                            <Button size="sm" variant="outline" className="mt-1 h-7 px-2 text-xs" disabled={fixZelloMut.isPending}
+                              onClick={() => fixZelloMut.mutate({ id: pda.id, data: { zelloUsername: zc!.suggestion } })}>
+                              Corrigir para {zc!.suggestion}
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {pda.model && <p>Modelo: {pda.model}</p>}
                     {pda.phoneNumber && <p>Nº: {pda.phoneNumber}</p>}
                     {pda.simDataPlan && <p>Plano: {pda.simDataPlan}</p>}
@@ -1004,6 +1100,7 @@ function PdasTab() {
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
       {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} pdaName={pdaList?.find((p: any) => p.id === viewPda)?.name ?? null} onClose={() => setViewPda(null)} />}
       {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
+    </div>
     </div>
   );
 }
@@ -1234,8 +1331,9 @@ function PdaHistoryDialog({ pdaId, pdaName, onClose }: { pdaId: number; pdaName:
                         : c.mobileDataMbStart != null ? `Início: ${c.mobileDataMbStart} MB` : "-"}
                     </td>
                     <td className="p-2">
-                      <Badge variant={c.status === "checked_in" ? "default" : "secondary"}>
-                        {c.status === "checked_in" ? "Em uso" : "Devolvido"}
+                      {/* 43b: a coluna chama-se checkinStatus (antes lia c.status e dizia sempre "Devolvido") */}
+                      <Badge variant={(c.checkinStatus ?? c.status) === "checked_in" ? "default" : "secondary"}>
+                        {(c.checkinStatus ?? c.status) === "checked_in" ? "Em uso" : "Devolvido"}
                       </Badge>
                     </td>
                   </tr>

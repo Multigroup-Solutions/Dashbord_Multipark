@@ -2411,6 +2411,24 @@ export const appRouter = router({
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
 
+    /**
+     * 42b: Condutores (só quem recolheu, entregou ou moveu carros) e Agentes
+     * (todos), uma linha por pessoa, com recolhas, entregas, movimentos, as
+     * outras ações e os km do GPS. Filtro de cidade e marca do topo. Ao vivo.
+     */
+    movementPeople: protectedProcedure.input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      projectId: z.number().int().optional(),
+      drivers: z.boolean().default(false),
+    }).refine((r) => r.startDate <= r.endDate, "Intervalo inválido")).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "criticas", "view");
+      const days = (Date.parse(`${input.endDate}T00:00:00Z`) - Date.parse(`${input.startDate}T00:00:00Z`)) / 86_400_000 + 1;
+      if (days > 62) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 62 dias de cada vez." });
+      const { loadMovementPeople, brandParkIdsFor } = await import("./movementPeople");
+      return loadMovementPeople({ from: input.startDate, to: input.endDate, cities: scopedCityNamesLive(), parkIds: await brandParkIdsFor(input.projectId), drivers: input.drivers });
+    }),
+
     // Agent performance history (DB local — alimentada pelo sync da API Multipark)
     // D27 (Jorge, 3 out 2026): o agente escolhe-se pela FICHA (os agentes da
     // Multipark ligados a ela), nunca por nome escrito — homónimos e grafias
@@ -2423,9 +2441,17 @@ export const appRouter = router({
     agentHistory: protectedProcedure.input(z.object({
       startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      employeeId: z.number().int().positive(),
-    })).query(async ({ ctx, input }) => {
+      employeeId: z.number().int().positive().optional(),
+      /** 42b: agente sem ficha (as ações dele, só nas cidades de quem vê) */
+      agentUserIds: z.array(z.string().min(1).max(128)).min(1).max(10).optional(),
+      agentName: z.string().max(200).optional(),
+    }).refine((r) => r.employeeId != null || (r.agentUserIds?.length ?? 0) > 0, "Escolhe a pessoa.")).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "view");
+      if (input.employeeId == null) {
+        const { getAgentHistoryFromDb } = await import("./db");
+        const r = await getAgentHistoryFromDb({ startDate: input.startDate, endDate: input.endDate, userIds: input.agentUserIds! });
+        return { ...r, agentName: input.agentName || r.agentName, noAgent: false as const };
+      }
       await assertEmployeeAccess(input.employeeId);
       const { agentIdsOfEmployee } = await import("./personIdentity");
       const who = await agentIdsOfEmployee(input.employeeId);
@@ -4199,6 +4225,18 @@ export const appRouter = router({
         // ponto e escala da nossa BD. Sem BD deles: cópia local + aviso.
         return evaluateDay(input.date, { cities: scopedCityNames() });
       }),
+    /**
+     * 42a: a equipa do dia por cidade (o supervisor): supervisores da cidade,
+     * team leaders, condutores escalados e extras a mais / a menos face à
+     * previsão (a mesma do Extras Dia). Só leitura.
+     */
+    dayTeam: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "avaliacao_operacional", "view");
+        const { dayTeamByCity } = await import("./evaluationTeamDay");
+        return dayTeamByCity(input.date);
+      }),
 
     // Set multipark mapping para um empregado (nome curto + userId)
     setMultiparkAgentMapping: protectedProcedure
@@ -4327,7 +4365,8 @@ export const appRouter = router({
     // (Definições → operations.excludedParks). Nunca lança por falta de BD —
     // devolve { available:false, reason }.
     reservasDoDia: protectedProcedure
-      .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+      // 42d: projectId = filtro do topo (cidade; a marca vale a cidade dela) — o middleware estreita o âmbito
+      .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().int().optional() }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getMultiparkDayBookings } = await import("./multiparkDb/dayBookings");
@@ -4643,7 +4682,17 @@ export const appRouter = router({
       }).optional())
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
-        const list = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        const listed = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        // 44a: cidade (a derivada, a mesma da Disponibilidade) para o seletor pôr primeiro a da escala
+        // e marcar quem não a tem (o servidor recusa). Falha → sem cidade conhecida (undefined).
+        let cities: Map<number, { city: string | null }> | null = null;
+        try {
+          const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
+          cities = await resolveCitiesForEmployeeIds(listed.map((c) => c.id));
+        } catch (err: any) { console.warn("[extras-dia] cidade dos candidatos:", String(err?.message ?? err).slice(0, 160)); }
+        // A cidade derivada usa "lisboa"; a escala usa "lisbon".
+        const toEscala = (k: string | null | undefined) => (k === "lisboa" ? "lisbon" : k === "porto" || k === "faro" ? k : null) as "lisbon" | "porto" | "faro" | null;
+        const list = listed.map((c) => ({ ...c, city: cities ? toEscala(cities.get(c.id)?.city) : undefined }));
         // Badge "Formação em falta" no seletor da escala (server/trainingPaths.ts).
         // Leitura falhada → "por verificar" em todos (18c: antes o badge sumia
         // e parecia que ninguém tinha formação em falta).
@@ -4652,6 +4701,34 @@ export const appRouter = router({
         try { missing = await employeesMissingTraining(list.map(c => c.id)); }
         catch (err: any) { console.warn("[Training] verificação da formação falhou:", String(err?.message ?? err).slice(0, 160)); }
         return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null }));
+      }),
+
+    // 44a (Jorge: "quando solto um extra para ser team leader tenho que o soltar em todo lado"):
+    // dar a permissão "Pode ser Team Leader na escala" daqui mesmo, sem ir às Permissões.
+    // As mesmas regras da página Permissões; fica no registo de atividade.
+    allowTeamLeader: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "extras_dia", "edit");
+        if (!canTouchPermission(ctx.user, "extras_dia.team_leader")) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Não podes dar a permissão de Team Leader. Pede a quem gere as Permissões." });
+        }
+        await assertEmployeeAccess(input.employeeId);
+        const person = await getEmployeeById(input.employeeId);
+        if (!person || !Number(person.employee.isActive)) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha do RH não encontrada (ou inativa)." });
+        const userId = person.employee.userId;
+        const name = person.employee.fullName;
+        if (!userId) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${name} não tem conta no dashboard e a permissão de TL é da conta. Cria a conta em Utilizadores (a partir da ficha) ou muda o posto no RH para Team Leader.` });
+        }
+        if (userId === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes alterar as tuas próprias permissões." });
+        const target = await getUserById(userId);
+        if (!target || !canGrantPermissionsTo(ctx.user, target.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes gerir as permissões desta conta." });
+        if (!(await userInCityScope(userId))) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
+        const { setUserPermission } = await import("./db");
+        await setUserPermission(userId, "extras_dia.team_leader", "grant", ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: userId, details: `extras_dia.team_leader = grant (Extras-Dia, ${name})` });
+        return { success: true, name };
       }),
 
     assignments: protectedProcedure
@@ -4708,7 +4785,13 @@ export const appRouter = router({
           });
         }
         // Só verifica quando a pessoa entra na escala (nova linha ou troca de pessoa).
-        const { checkEscalaEligibility, escalaAssignmentEmployeeId } = await import("./trainingPaths");
+        const { checkEscalaEligibility, escalaAssignmentEmployeeId, escalaAssignmentPerson } = await import("./trainingPaths");
+        // 44a: sem ficha no RH não se entra (nome livre acabou; linhas antigas só mudam de horas).
+        if (!input.employeeId) {
+          const { hrRecordRefusal } = await import("../shared/extrasSchedule");
+          const refusal = hrRecordRefusal(input, input.id ? await escalaAssignmentPerson(input.id) : null);
+          if (refusal) throw new TRPCError({ code: "BAD_REQUEST", message: refusal }); // não é o "forçar sem formação"
+        }
         if (input.employeeId && (!input.id || (await escalaAssignmentEmployeeId(input.id)) !== input.employeeId)) {
           // Sem cidade não se escala (2 out 2026) — nem à mão. A cidade é a derivada (a mesma da Disponibilidade).
           const { resolveCitiesForEmployeeIds } = await import("./employeeCity");

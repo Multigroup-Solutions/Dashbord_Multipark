@@ -48,7 +48,8 @@ function popupContent(driver: DriverMapPosition) {
   return container;
 }
 
-export function ZelloGoogleMap({ drivers }: { drivers: DriverMapPosition[] }) {
+/** 43a: `fitSignal` muda → volta a enquadrar todos (o botão Atualizar do Ao Vivo). */
+export function ZelloGoogleMap({ drivers, fitSignal = 0 }: { drivers: DriverMapPosition[]; fitSignal?: number }) {
   const divRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -125,6 +126,10 @@ export function ZelloGoogleMap({ drivers }: { drivers: DriverMapPosition[] }) {
     if (!map) return;
     trafficRef.current?.setMap(traffic ? map : null);
   }, [map, traffic]);
+
+  useEffect(() => {
+    if (map && fitSignal && driversRef.current.length) fitDrivers(map, driversRef.current);
+  }, [map, fitSignal]);
 
   useEffect(() => {
     if (!map) return;

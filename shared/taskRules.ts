@@ -235,8 +235,14 @@ export function availabilityTaskTitle(name: string | null | undefined): string {
   return `Disponibilidade a confirmar: ${(name ?? "").trim() || "sem nome"}`.slice(0, 256);
 }
 
-/** Destinatário configurável (AVAILABILITY_TASK_ASSIGNEE_EMAIL); fallback = RH histórico. */
-export const DEFAULT_AVAILABILITY_TASK_ASSIGNEE_EMAIL = "kamilafagundes@multipark.pt";
+/**
+ * Destinatário configurável (Definições → availability.assigneeEmail, ou a env
+ * AVAILABILITY_TASK_ASSIGNEE_EMAIL). 43c (Jorge, 7 out 2026: "vê se isto da
+ * disponibilidade ainda está com a Kamila… para retirarmos isto daqui"): já não
+ * há ninguém escrito no código — sem nada configurado, a tarefa fica sem
+ * responsável (na lista de Tarefas da cidade da pessoa).
+ */
+export const DEFAULT_AVAILABILITY_TASK_ASSIGNEE_EMAIL = "";
 export function availabilityTaskAssigneeEmail(env: Record<string, string | undefined>): string {
   const v = (env.AVAILABILITY_TASK_ASSIGNEE_EMAIL ?? "").trim();
   return v || DEFAULT_AVAILABILITY_TASK_ASSIGNEE_EMAIL;
