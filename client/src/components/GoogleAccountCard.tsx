@@ -35,12 +35,13 @@ export function useGoogleOAuthReturnToast(onDone?: () => void) {
   }, []);
 }
 
-export function googleConnectHref(returnTo?: string): string {
+export function googleConnectHref(returnTo?: string, features: readonly GoogleFeature[] = ["gmail"]): string {
   const back = returnTo ?? `${window.location.pathname}`;
-  return `/api/google-account/oauth/start?features=gmail&returnTo=${encodeURIComponent(back)}`;
+  return `/api/google-account/oauth/start?features=${(features.length ? features : ["gmail"]).join(",")}&returnTo=${encodeURIComponent(back)}`;
 }
 
-export function GoogleAccountCard({ compact = false, returnTo }: { compact?: boolean; returnTo?: string }) {
+/** `features`: o que pedir ao ligar (por omissão só o Gmail; a página Calendário pede também o Calendário). */
+export function GoogleAccountCard({ compact = false, returnTo, features }: { compact?: boolean; returnTo?: string; features?: readonly GoogleFeature[] }) {
   const utils = trpc.useUtils();
   const q = trpc.googleAccount.status.useQuery(undefined, { staleTime: 30_000 });
   const disconnect = trpc.googleAccount.disconnect.useMutation({
@@ -85,7 +86,7 @@ export function GoogleAccountCard({ compact = false, returnTo }: { compact?: boo
       <div className="flex flex-wrap gap-2">
         {s?.configured && !s.readError && (!s.connected || needsReauth) && (
           <Button asChild size="sm">
-            <a href={googleConnectHref(returnTo)}><Link2 className="h-4 w-4 mr-1" />{needsReauth ? "Voltar a ligar" : "Ligar a minha conta Google"}</a>
+            <a href={googleConnectHref(returnTo, features)}><Link2 className="h-4 w-4 mr-1" />{needsReauth ? "Voltar a ligar" : "Ligar a minha conta Google"}</a>
           </Button>
         )}
         {s?.connected && (
