@@ -377,8 +377,8 @@ export const SETTINGS = {
   "rh.missingCityAssignee": def({
     key: "rh.missingCityAssignee",
     group: "operacao",
-    label: "Responsável pelas fichas sem cidade",
-    description: "Nome ou email da pessoa que recebe a tarefa (e o email) quando uma ficha ativa não tem cidade e o dashboard não a consegue descobrir pelo agente da Multipark, pela candidatura ou pela morada.",
+    label: "Responsável pelo recrutamento e pelas fichas sem cidade",
+    description: "Nome ou email da pessoa do recrutamento. Recebe a tarefa de cada candidatura de condutor (com os supervisores da cidade do lead; um lead sem cidade fica só com ela) e a tarefa (e o email) quando uma ficha ativa não tem cidade e o dashboard não a consegue descobrir pelo agente da Multipark, pela candidatura ou pela morada.",
     schema: z.string().trim().min(2, "Indica um nome ou email.").max(320),
     defaultValue: "Márcia Nunes",
     wiring: "live",

@@ -49,6 +49,42 @@ async function ownerEmployeeId(db: Db, userId: number | null): Promise<number | 
   return e?.id ?? null;
 }
 
+/**
+ * Ficha ativa da pessoa do recrutamento (a mesma definição das fichas sem
+ * cidade, "rh.missingCityAssignee"). Sem ninguém → null (nunca lança).
+ */
+async function recruiterEmployeeId(): Promise<number | null> {
+  try {
+    const [{ findEmployeeByEmailOrName }, { getSetting }, { MISSING_CITY_ASSIGNEE_DEFAULT }] = await Promise.all([
+      import("./db"), import("./appSettings"), import("./employeeCityFix"),
+    ]);
+    let who = MISSING_CITY_ASSIGNEE_DEFAULT;
+    try { who = (await getSetting("rh.missingCityAssignee")) || who; } catch { /* omissão */ }
+    const e = await findEmployeeByEmailOrName(String(who));
+    return e && Number(e.isActive) === 1 ? Number(e.id) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tarefas de candidatura ABERTAS sem nenhum responsável (as criadas antes de
+ * haver a pessoa do recrutamento, p.ex. leads sem cidade): passam a ser dela.
+ * Só acrescenta (nunca tira ninguém). Idempotente; devolve quantas.
+ */
+async function assignOrphanLeadTasks(db: Db, recruiter: number | null): Promise<number> {
+  if (recruiter == null) return 0;
+  const orphans = await db.select({ id: tasks.id }).from(tasks).where(and(
+    sql`${tasks.sourceModule} = ${LEAD_TASK_SOURCE}`, sql`${tasks.taskStatus} <> 'done'`, sql`${tasks.archivedAt} IS NULL`,
+    sql`NOT EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.taskId = ${tasks.id})`,
+  )).limit(LEAD_TASKS_BATCH);
+  for (const t of orphans) {
+    await db.execute(sql`INSERT IGNORE INTO task_assignees (taskId, employeeId) VALUES (${t.id}, ${recruiter})`);
+    await db.update(tasks).set({ assigneeId: recruiter }).where(and(eq(tasks.id, t.id), sql`${tasks.assigneeId} IS NULL`));
+  }
+  return orphans.length;
+}
+
 /** Fichas ativas dos supervisores (conta ativa) da cidade do lead e dos seus descendentes. */
 async function citySupervisorEmployeeIds(db: Db, cityProjectId: number | null): Promise<number[]> {
   if (cityProjectId == null) return [];
@@ -110,6 +146,10 @@ export async function syncLeadTasks(now: Date = new Date(), opts: { leadIds?: re
   if (!db) return out;
   const nowMs = now.getTime();
   out.closed = await closeResolvedLeadTasks(opts);
+  const recruiter = await recruiterEmployeeId();
+  try { await assignOrphanLeadTasks(db, recruiter); } catch (err: any) {
+    out.errors.push(`sem responsável: ${String(err?.message ?? err).slice(0, 120)}`);
+  }
 
   const conds: SQL[] = [
     inArray(extraLeads.source, [...LEAD_TASK_LEAD_SOURCES]),
@@ -139,7 +179,7 @@ export async function syncLeadTasks(now: Date = new Date(), opts: { leadIds?: re
         if (!supervisorsBy.has(lead.projectId)) supervisorsBy.set(lead.projectId, await citySupervisorEmployeeIds(db, lead.projectId));
         supervisors = supervisorsBy.get(lead.projectId)!;
       }
-      const ids = leadTaskAssignees({ ownerEmployeeId: owner, supervisorEmployeeIds: supervisors });
+      const ids = leadTaskAssignees({ ownerEmployeeId: owner, supervisorEmployeeIds: supervisors, recruiterEmployeeId: recruiter });
       const [res] = await db.insert(tasks).values({
         title: leadTaskTitle(lead.fullName),
         description: leadTaskDescription(lead, lead.projectId != null ? cityNames.get(lead.projectId) ?? null : null),

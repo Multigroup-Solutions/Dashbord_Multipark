@@ -107,12 +107,17 @@ export function leadTaskDueMs(createdAt: string): number {
 }
 
 /**
- * Responsáveis: quem criou o lead (ficha ativa), senão os supervisores da
- * cidade. Sem repetidos, no máximo `LEAD_TASK_MAX_ASSIGNEES`.
+ * Responsáveis: quem criou o lead (ficha ativa); senão a pessoa do
+ * recrutamento (Definições → "Responsável pelo recrutamento e pelas fichas
+ * sem cidade" — Jorge, 7 out 2026: é uma supervisora sem cidade) e os
+ * supervisores da cidade do lead. Um lead sem cidade fica só com a do
+ * recrutamento (antes ficava sem ninguém). Sem repetidos, no máximo
+ * `LEAD_TASK_MAX_ASSIGNEES`; a do recrutamento primeiro.
  */
-export function leadTaskAssignees(input: { ownerEmployeeId: number | null; supervisorEmployeeIds: readonly number[] }): number[] {
+export function leadTaskAssignees(input: { ownerEmployeeId: number | null; supervisorEmployeeIds: readonly number[]; recruiterEmployeeId?: number | null }): number[] {
   if (input.ownerEmployeeId != null && input.ownerEmployeeId > 0) return [input.ownerEmployeeId];
-  return [...new Set(input.supervisorEmployeeIds.filter((x) => Number.isSafeInteger(x) && x > 0))].slice(0, LEAD_TASK_MAX_ASSIGNEES);
+  const ids = [input.recruiterEmployeeId ?? null, ...input.supervisorEmployeeIds];
+  return [...new Set(ids.filter((x): x is number => x != null && Number.isSafeInteger(x) && x > 0))].slice(0, LEAD_TASK_MAX_ASSIGNEES);
 }
 
 /** Comentário deixado na tarefa quando fecha sozinha. */

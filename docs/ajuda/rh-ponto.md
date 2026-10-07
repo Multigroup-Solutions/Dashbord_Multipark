@@ -82,6 +82,7 @@ palavras: pedir documentos, pedir documentos em falta, documentos em falta, pedi
 - Também se escrevem a partir da linha da escala no **Extras-dia** (ícone do caderno), já com o dia.
 
 **O supervisor no RH da sua cidade**
+- Um supervisor **com todas as cidades** (ex.: quem trata do recrutamento, sem cidade na ficha) vê e gere também as **fichas sem cidade**. O supervisor de uma só cidade continua a ver só a dele.
 - O supervisor vê e gere as fichas de **toda a sua cidade** (antes era só o centro de custos da ficha dele), de quem está **abaixo dele** (team leader, condutores e extras):
   - **Novo Colaborador** e **Importar Extras**, com postos até team leader;
   - **Editar**: dados pessoais, posto (até team leader), centro de custos (da cidade), tipo e datas do contrato;
