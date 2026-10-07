@@ -11,12 +11,16 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeft, Loader2 } from "lucide-react";
 import { Pill, eur, monthYear, num } from "@/components/crm/crmUi";
 import { Card, CrmNotesCard, Kpi, MonthsTable, RecentTable, TopClients } from "@/components/crm/PartnerBlocks";
+import { PartnerAgentsCard } from "@/components/crm/PartnerAgentsCard";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
 
 export const PARTNER_TYPE_LABEL: Record<string, string> = { AGGREGATOR: "Agregador", AGENCY: "Agência", PARTNER: "Parceiro" };
 
 export default function CrmPartnerPage() {
   const { id } = useParams<{ id: string }>();
   const q = trpc.crm.partner.useQuery({ userId: id ?? "" }, { enabled: !!id, retry: false });
+  const { user } = useAuth();
 
   if (q.isLoading) return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
   if (q.error) return <Back message={q.error.message} />;
@@ -69,6 +73,7 @@ export default function CrmPartnerPage() {
             {p.taxAddress && <div className="text-[13px] text-muted-foreground">{p.taxAddress}</div>}
           </Card>
           <CrmNotesCard kind="partner" mpId={p.userId} link={d.link} canEdit={d.canEdit} partnership={d.partnership} partnerships={d.partnerships} partnershipOff={d.partnershipOff} onSaved={() => q.refetch()} />
+          {can(user, "parcerias", "view") && <PartnerAgentsCard partnership={d.partnership ? { id: d.partnership.id, name: d.partnership.name } : null} canManage={can(user, "parcerias", "manage")} />}
           <Card title="Clientes que vieram por eles"><TopClients rows={d.topClients} /></Card>
         </div>
       </div>

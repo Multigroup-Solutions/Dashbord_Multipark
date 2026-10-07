@@ -24,6 +24,10 @@
  * desativar, posto (até team leader), centro (da cidade), tipo e datas de
  * contrato. O dinheiro (salário, subsídio) e a identidade (email de trabalho,
  * conta associada) continuam só admin+.
+ *
+ * Jorge (7 out 2026): o back office está na MESMA posição do supervisor e gere
+ * o RH a nível nacional, sem ordenados — as mesmas regras do supervisor, em
+ * todas as cidades (RH_MANAGER_ROLES).
  */
 export type RhRole = string;
 
@@ -151,7 +155,18 @@ export function canEditContract(v: RhViewer, e: EmployeeRef): boolean {
   return !isProtectedTarget(v, e);
 }
 
-/** 41c: postos que o supervisor dá (abaixo dele). */
+/**
+ * Quem gere fichas abaixo do supervisor sem ser admin: o supervisor (na sua
+ * cidade) e o back office (em todas — Jorge, 7 out 2026: "na mesma posição").
+ */
+export const RH_MANAGER_ROLES = ["supervisor", "backoffice"] as const;
+const isRhManager = (role: string) => (RH_MANAGER_ROLES as readonly string[]).includes(role);
+/** O centro de custos serve a quem gere? Back office: todos; supervisor: os da cidade. PURA. */
+function managerProjectOk(v: RhViewer, projectId: number | null | undefined): boolean {
+  return v.role === "backoffice" ? true : inScopeProject(v, projectId);
+}
+
+/** 41c: postos que o supervisor (e o back office) dão (abaixo do supervisor). */
 export const SUPERVISOR_ASSIGNABLE_POSITIONS = ["team_leader", "senior_driver", "driver", "extra"] as const;
 /** 41c: campos contratuais que o supervisor muda (sem dinheiro nem identidade). */
 export const SUPERVISOR_CONTRACT_FIELDS = ["position", "extraLevel", "department", "projectId", "contractType", "contractStart", "contractEnd", "isActive"] as const;
@@ -169,7 +184,7 @@ function belowSupervisor(e: EmployeeRef): boolean {
  */
 export function canManageEmployee(v: RhViewer, e: EmployeeRef): boolean {
   if (canEditContract(v, e)) return true;
-  return v.role === "supervisor" && !isOwn(v, e.id) && inScope(v, e) && belowSupervisor(e);
+  return isRhManager(v.role) && !isOwn(v, e.id) && (v.role === "backoffice" || inScope(v, e)) && belowSupervisor(e);
 }
 
 /**
@@ -185,9 +200,9 @@ export function contractEditError(v: RhViewer, e: EmployeeRef, sent: Record<stri
     return "O salário, o subsídio de alimentação, o email de trabalho e a conta associada só um administrador muda.";
   }
   if (sent.position !== undefined && !(SUPERVISOR_ASSIGNABLE_POSITIONS as readonly unknown[]).includes(sent.position)) {
-    return "O supervisor só dá postos abaixo dele: team leader, condutor sénior, condutor ou extra.";
+    return "Só se dão postos abaixo do supervisor: team leader, condutor sénior, condutor ou extra.";
   }
-  if (sent.projectId !== undefined && !(typeof sent.projectId === "number" && inScopeProject(v, sent.projectId))) {
+  if (sent.projectId !== undefined && !(typeof sent.projectId === "number" && managerProjectOk(v, sent.projectId))) {
     return "Esse centro de custos não é da tua cidade.";
   }
   return null;
@@ -199,15 +214,15 @@ export function contractEditError(v: RhViewer, e: EmployeeRef, sent: Record<stri
  */
 export function createEmployeeError(v: RhViewer, input: { position: string; projectId: number | null; monthlySalary?: unknown; mealAllowancePerDay?: unknown; userId?: unknown }): string | null {
   if (rank(v.role) >= RANK.admin) return null;
-  if (v.role !== "supervisor") return "Só um administrador ou o supervisor da cidade cria fichas.";
+  if (!isRhManager(v.role)) return "Só um administrador, o back office ou o supervisor da cidade cria fichas.";
   if (!(SUPERVISOR_ASSIGNABLE_POSITIONS as readonly string[]).includes(input.position)) {
-    return "O supervisor só cria fichas abaixo dele: team leader, condutor sénior, condutor ou extra.";
+    return "Só se criam fichas abaixo do supervisor: team leader, condutor sénior, condutor ou extra.";
   }
   if (input.monthlySalary != null && input.monthlySalary !== "" || input.mealAllowancePerDay != null && input.mealAllowancePerDay !== "") {
     return "O salário e o subsídio de alimentação só um administrador põe.";
   }
   if (input.userId != null) return "Ligar a ficha a uma conta escolhida à mão é com um administrador (a conta liga-se sozinha pelo email).";
-  if (!inScopeProject(v, input.projectId)) return "Esse centro de custos não é da tua cidade.";
+  if (!managerProjectOk(v, input.projectId)) return "Esse centro de custos não é da tua cidade.";
   return null;
 }
 
