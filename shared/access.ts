@@ -70,7 +70,7 @@ export type ModuleId =
   | "servicos" | "historico_diario" | "pdas" | "tarefas" | "despesas"
   | "reservas_operacoes" | "extras_dia" | "parcerias" | "rh" | "rh_salarios"
   | "leads_extras" | "atividade_diaria" | "radio" | "passagem_turno" | "passagem_resumo_dia"
-  | "disponibilidade_extras" | "whatsapp" | "clientes" | "contactos" | "comunicacao"
+  | "disponibilidade_extras" | "whatsapp" | "clientes" | "contactos" | "comunicacao" | "central"
   | "reclamacoes" | "criticas" | "ocorrencias" | "perdidos"
   | "utilizadores" | "permissoes" | "sincronizacao" | "integracoes"
   | "marketing" | "logs" | "financeiro" | "faturacao" | "caixa" | "dashboards" | "anual" | "projetos"
@@ -102,6 +102,7 @@ export const MODULES: readonly ModuleDef[] = [
   { id: "clientes", label: "Clientes", group: "Suporte" },
   { id: "contactos", label: "Contactos (pesquisa unificada e diretório)", group: "Suporte" },
   { id: "comunicacao", label: "Comunicação (caixas de email partilhadas)", group: "Suporte" },
+  { id: "central", label: "Central Vodafone (chamadas)", group: "Suporte" },
   { id: "reclamacoes", label: "Reclamações", group: "Suporte" },
   { id: "criticas", label: "Críticas Google", group: "Suporte" },
   { id: "ocorrencias", label: "Ocorrências", group: "Suporte" },
@@ -240,6 +241,12 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
   comunicacao: {
     ...same("city:ve", "team_leader", "supervisor"),
     ...same("national:ve", ...NAT_OPS), ...same("national:vem", ...TOP),
+  },
+  // Lote 45 (Jorge, 7 out 2026): "cada um vê as SUAS chamadas (nós vemos todas)".
+  // As chamadas são as que a consola de cada pessoa regista (central_calls.userId).
+  central: {
+    ...same("own:v", "team_leader", "supervisor", ...NAT_OPS),
+    ...same("national:v", ...TOP),
   },
   // D19 (Jorge, 3 out 2026): condutores e extras não veem reclamações — nem
   // as em que estão envolvidos (notas internas e contactos do cliente). Só a

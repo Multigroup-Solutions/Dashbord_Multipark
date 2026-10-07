@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm";
 import { protectedProcedure, router } from "./_core/trpc";
 import { getDb, logActivity } from "./db";
 import { generateCentralSecret, hashCentralSecret } from "./centralSugar";
-import { CENTRAL_SUGAR_BASE_PATH, CENTRAL_SUGAR_FLAG, normalizeCentralUsername, parseContactRef } from "../shared/centralSugar";
+import { CENTRAL_SUGAR_BASE_PATH, CENTRAL_SUGAR_FLAG, centralCallTotals, normalizeCentralUsername, parseContactRef } from "../shared/centralSugar";
 import { ENV } from "./_core/env";
 
 const superOnly = protectedProcedure.use(({ ctx, next }) => {
@@ -77,6 +77,43 @@ export const centralRouter = router({
         accountId: q.accountId == null ? null : Number(q.accountId), note: q.note ? String(q.note) : null, body: q.bodyJson ? String(q.bodyJson) : null })),
     };
   }),
+
+  /**
+   * Lote 45 (Jorge: "cada um vê as SUAS chamadas, nós vemos todas"): as chamadas
+   * que a consola registou. Módulo "central": alcance "own" → só as da pessoa;
+   * "national" (admin, super admin) → todas, com filtro por pessoa. Só lê.
+   */
+  myCalls: protectedProcedure
+    .input(z.object({
+      days: z.number().int().min(1).max(366).default(7),
+      direction: z.enum(["in", "out"]).nullish(),
+      userId: z.number().int().positive().nullish(),
+    }).default({ days: 7 }))
+    .query(async ({ ctx, input }) => {
+      const { requireAccess } = await import("./_core/access");
+      // "own" → só as da própria pessoa; "national" (admin, super admin) → todas.
+      const seesAll = requireAccess(ctx.user, "central", "view", { allowOwn: true }) === "national";
+      const db = await dbOrThrow();
+      const who = seesAll ? (input.userId ?? null) : ctx.user.id;
+      const since = utc(Date.now() - input.days * 86_400_000);
+      const calls = rowsOf(await db.execute(sql`SELECT c.id, c.userId, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.contactRef, u.name AS userName
+          FROM central_calls c LEFT JOIN users u ON u.id = c.userId
+          WHERE c.startedAt >= ${since} ${who != null ? sql`AND c.userId = ${who}` : sql``} ${input.direction ? sql`AND c.direction = ${input.direction}` : sql``}
+          ORDER BY c.startedAt DESC LIMIT 500`));
+      const contacts = await callContacts(db, calls.map((c) => (c.contactRef ? String(c.contactRef) : null)));
+      const hasAccount = rowsOf(await db.execute(sql`SELECT 1 AS x FROM central_accounts WHERE userId = ${ctx.user.id} AND revokedAt IS NULL LIMIT 1`)).length > 0;
+      const people = seesAll
+        ? rowsOf(await db.execute(sql`SELECT DISTINCT a.userId, u.name FROM central_accounts a LEFT JOIN users u ON u.id = a.userId ORDER BY u.name LIMIT 200`))
+          .map((p) => ({ userId: Number(p.userId), name: String(p.name ?? `#${p.userId}`) }))
+        : [];
+      const rows = calls.map((c) => ({
+        id: Number(c.id), userId: Number(c.userId), userName: c.userName ? String(c.userName) : null,
+        direction: c.direction === "out" ? "out" as const : "in" as const, held: Number(c.held) === 1, startedAt: iso(c.startedAt),
+        durationS: c.durationS == null ? null : Number(c.durationS), phone: c.phone ? String(c.phone) : null,
+        contact: c.contactRef ? contacts.get(String(c.contactRef)) ?? null : null,
+      }));
+      return { seesAll, hasAccount, people, calls: rows, truncated: calls.length >= 500, totals: centralCallTotals(rows) };
+    }),
 
   /** Contas da dashboard para dar acesso (ativas). */
   users: superOnly.query(async () => {

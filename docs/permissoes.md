@@ -56,6 +56,7 @@
 | Clientes | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Contactos (pesquisa unificada e diretório) | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Comunicação (caixas de email partilhadas) | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |
+| Central Vodafone (chamadas) | — | — | — | próprio V | próprio V | próprio V | próprio V | nacional V | nacional V |
 | Reclamações | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Críticas Google | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Ocorrências | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
