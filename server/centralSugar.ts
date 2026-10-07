@@ -101,7 +101,16 @@ async function logRequest(req: Request, status: number, accountId: number | null
     if (!db) return;
     const path = String(req.originalUrl || req.url).split("?")[0].slice(0, 255);
     const query = req.query && Object.keys(req.query).length ? { query: req.query } : {};
-    const body = redactForLog({ ...query, ...(req.body && typeof req.body === "object" ? { body: req.body } : {}) });
+    // 39b: quem pediu (programa e formato) e se trazia token — nunca o valor do token
+    const hdr = req.headers;
+    const client = {
+      client: {
+        ...(hdr["user-agent"] ? { userAgent: String(hdr["user-agent"]).slice(0, 200) } : {}),
+        ...(hdr["content-type"] ? { contentType: String(hdr["content-type"]).slice(0, 100) } : {}),
+        withCredentials: !!(hdr["oauth-token"] || hdr.authorization),
+      },
+    };
+    const body = redactForLog({ ...client, ...query, ...(req.body && typeof req.body === "object" && Object.keys(req.body).length ? { body: req.body } : {}) });
     await db.execute(sql`INSERT INTO central_requests (at, method, path, status, accountId, note, bodyJson)
         VALUES (${utc(Date.now())}, ${req.method.slice(0, 8)}, ${path}, ${status}, ${accountId}, ${note ? note.slice(0, 255) : null}, ${body})`);
   } catch { /* o registo nunca trava a consola */ }
@@ -147,8 +156,13 @@ function fail(req: Request) {
 
 async function centralEnabled(): Promise<boolean> {
   const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+  const read = () => isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
   await ensureFeatureFlagOverrides();
-  return isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
+  if (read()) return true;
+  // 39b: desligado na cache (30 s por instância) → confirma na BD antes de recusar,
+  // para quem acabou de ligar o interruptor não levar com "desligada"
+  await ensureFeatureFlagOverrides(true);
+  return read();
 }
 
 /** Login com utilizador + segredo (texto, ou md5 na v4_1). */
@@ -197,7 +211,7 @@ export function createCentralSugarRouter(): Router {
     } else {
       acc = await login(b.username, b.password, false);
     }
-    if (!acc) { fail(req); await logRequest(req, 401, null, `login falhado (${String(b.grant_type ?? "password")})`); return res.status(401).json({ error: "need_login", error_message: "Utilizador ou palavra-passe errados." }); }
+    if (!acc) { fail(req); await logRequest(req, 401, null, `login falhado (${String(b.grant_type ?? "password")})`); return res.status(401).json({ error: "need_login", error_message: "You must specify a valid username and password." }); }
     const now = Date.now();
     await touch(acc.id);
     await logRequest(req, 200, acc.id, `login ${acc.username}`);
@@ -212,7 +226,9 @@ export function createCentralSugarRouter(): Router {
     const raw = String(req.headers["oauth-token"] ?? "") || String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
     const id = key && raw ? verifyCentralToken(raw, "a", Date.now(), key) : null;
     const acc = id ? await accountById(id) : null;
-    if (!acc) { await logRequest(req, 401, null, "sem token válido"); return res.status(401).json({ error: "invalid_grant", error_message: "Sessão inválida ou expirada." }); }
+    // 39b: as mesmas respostas de um Sugar verdadeiro (sem token → need_login; token mau/expirado → invalid_grant)
+    if (!acc && !raw) { await logRequest(req, 401, null, "sem token (precisa de login)"); return res.status(401).json({ error: "need_login", error_message: "No valid authentication for user." }); }
+    if (!acc) { await logRequest(req, 401, null, "token inválido ou expirado"); return res.status(401).json({ error: "invalid_grant", error_message: "The access token provided is invalid." }); }
     req.centralAccount = acc;
     next();
   };

@@ -12,10 +12,14 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractPhone, flattenNameValueList, normalizeCentralUsername, parseSugarCall, parseSugarDate, redactForLog } from "../shared/centralSugar";
 
-const h = vi.hoisted(() => ({ enabled: true, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
+const h = vi.hoisted(() => ({ enabled: true, enableOnRefresh: false, forced: 0, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
 const dialect = new MySqlDialect();
 vi.mock("./_core/env", () => ({ ENV: { cookieSecret: "segredo-so-para-testes" } }));
-vi.mock("./_core/featureFlags", () => ({ ensureFeatureFlagOverrides: async () => undefined, isFeatureEnabled: () => h.enabled }));
+vi.mock("./_core/featureFlags", () => ({
+  // 39b: com "force" relê a BD (aqui: o interruptor acabou de ser ligado noutra instância)
+  ensureFeatureFlagOverrides: async (force?: boolean) => { if (force) { h.forced++; if (h.enableOnRefresh) h.enabled = true; } },
+  isFeatureEnabled: () => h.enabled,
+}));
 const SECRET = "SegredoDaConsola123";
 const md5 = (s: string) => createHash("md5").update(s).digest("hex");
 const STORED = createHash("sha256").update(md5(SECRET)).digest("hex");
@@ -81,7 +85,7 @@ describe("39a — a porta Sugar (HTTP)", () => {
   let server: Server;
   let url: string;
   beforeEach(async () => {
-    h.enabled = true; h.queries.length = 0; h.calls.length = 0;
+    h.enabled = true; h.enableOnRefresh = false; h.forced = 0; h.queries.length = 0; h.calls.length = 0;
     server = createServer(express().use("/api/central/sugar", createCentralSugarRouter()));
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/central/sugar`;
@@ -101,6 +105,28 @@ describe("39a — a porta Sugar (HTTP)", () => {
     expect(h.calls).toHaveLength(0);
     expect(logged()).toHaveLength(1);
     expect(JSON.stringify(logged()[0].params)).not.toContain(SECRET);
+  });
+
+  it("39b: acabado de ligar — a cache dizia desligado, a porta confirma na BD e deixa passar", async () => {
+    h.enabled = false; h.enableOnRefresh = true;
+    const r = await fetch(`${url}/rest/v10/ping`, { headers: { "User-Agent": "OneNetConsole/1.0" } });
+    expect(h.forced).toBe(1);
+    // sem token: a mesma resposta de um Sugar verdadeiro
+    expect(r.status).toBe(401);
+    expect(await r.json()).toEqual({ error: "need_login", error_message: "No valid authentication for user." });
+    const last = logged().at(-1)!;
+    expect(last.params).toContain("sem token (precisa de login)");
+    expect(String(last.params.find((p) => typeof p === "string" && p.startsWith("{")))).toContain('"userAgent":"OneNetConsole/1.0"');
+    expect(String(last.params.find((p) => typeof p === "string" && p.startsWith("{")))).toContain('"withCredentials":false');
+  });
+
+  it("39b: token mau → invalid_grant; o registo diz que trazia token mas nunca o guarda", async () => {
+    const r = await fetch(`${url}/rest/v10/me`, { headers: { "OAuth-Token": "c1.7.a.9999999999999.x.assinatura-falsa" } });
+    expect(r.status).toBe(401);
+    expect((await r.json()).error).toBe("invalid_grant");
+    const body = String(logged().at(-1)!.params.find((p) => typeof p === "string" && p.startsWith("{")));
+    expect(body).toContain('"withCredentials":true');
+    expect(body).not.toContain("assinatura-falsa");
   });
 
   it("v10: login, /me e uma chamada registada em nome da pessoa; palavra-passe errada → 401", async () => {
