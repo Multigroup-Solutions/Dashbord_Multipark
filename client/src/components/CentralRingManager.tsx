@@ -177,8 +177,9 @@ export function CentralRingManager({ enabled }: { enabled: boolean }) {
   const { ring: r, mine } = card;
   const close = () => { setClosedId(r.id); setCard(null); };
   const canAskOsAlerts = typeof Notification !== "undefined" && Notification.permission === "default";
+  // Ao meio, em cima (Jorge: "pop-up ao meio"), para se ver logo onde quer que se esteja.
   return (
-    <div className="fixed z-[60] right-3 top-16 w-[min(360px,calc(100vw-24px))]" aria-live="assertive">
+    <div className="fixed z-[60] left-1/2 -translate-x-1/2 top-16 w-[min(400px,calc(100vw-24px))]" aria-live="assertive">
       <div className="rounded-xl border bg-background shadow-lg p-3 space-y-2" role="alert">
         <div className="flex items-start gap-2">
           <div className={`mt-0.5 rounded-full p-2 ${mine ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}>
