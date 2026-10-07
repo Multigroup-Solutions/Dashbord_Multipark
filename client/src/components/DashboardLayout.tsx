@@ -240,7 +240,7 @@ export const menuGroups: MenuGroup[] = [
       // Caixas partilhadas: matriz (comunicacao) + regra de cada caixa no servidor.
       // Lote 45 (Jorge, 7 out 2026): "é só de email" — o WhatsApp tem a entrada dele; as caixas
       // ficam à esquerda como no Gmail, com o "O meu email" na mesma lista.
-      // Ordem (Jorge, lote 45): Caixas de email → O meu email → Drive → WhatsApp → Central → Tarefas.
+      // Ordem (Jorge, lote 45): Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas.
       { icon: Inbox, label: "Caixas de email", path: "/comunicacao", module: "comunicacao" },
       // O próprio email: qualquer pessoa (a ficha é de todos); liga a conta Google na página.
       { icon: MailIcon, label: "O meu email", path: "/comunicacao/meu-email", anyOf: ["ficha"] },
@@ -250,6 +250,8 @@ export const menuGroups: MenuGroup[] = [
       { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
       // Lote 45: as chamadas da consola — cada um as suas; admin e super admin todas.
       { icon: PhoneCall, label: "Central", path: "/central", module: "central" },
+      // Lote 45e (Jorge: opção "b"): a agenda Google da própria pessoa, como no Google Calendar.
+      { icon: CalendarDays, label: "Calendário", path: "/calendario", anyOf: ["ficha"] },
       // Lote 45: as Tarefas também aqui (continuam nas Operações).
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
     ],

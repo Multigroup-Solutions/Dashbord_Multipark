@@ -137,13 +137,38 @@ export interface CalendarApiLike {
 }
 
 export interface WatchChannelRequest { id: string; address: string; token: string; ttlSeconds: number }
+
+/**
+ * Leitura para a página Calendário (45e): os calendários que a pessoa vê e os
+ * eventos de um intervalo (instâncias já expandidas, por hora de início).
+ */
+export interface CalendarListEntryRead {
+  id: string;
+  summary: string;
+  summaryOverride: string | null;
+  description: string | null;
+  backgroundColor: string | null;
+  primary: boolean;
+  selected: boolean;
+  hidden: boolean;
+  accessRole: string | null;
+}
+export interface CalendarReadApiLike {
+  /** calendarList.list sem acesso mínimo (inclui os partilhados com a pessoa). */
+  listVisibleCalendars(): Promise<CalendarListEntryRead[]>;
+  /** events.list de [timeMin, timeMax) com singleEvents/orderBy startTime, até `maxPages` páginas de 250. */
+  listEventsInRange(calendarId: string, p: { timeMin: string; timeMax: string; maxPages?: number }): Promise<{ items: calendar_v3.Schema$Event[]; truncated: boolean }>;
+}
+
+/** Só os campos que a página usa (menos dados da Google). */
+const RANGE_EVENT_FIELDS = "items(id,status,summary,description,location,start,end,htmlLink,hangoutLink,conferenceData(entryPoints(entryPointType,uri)),colorId,visibility,eventType,attendees(self,responseStatus)),nextPageToken";
 export interface WatchChannelResponse { resourceId: string; expiration: number | null }
 
 export function calendarFor(auth: OAuth2Client | JWT): calendar_v3.Calendar {
   return calendarFactory({ version: "v3", auth, timeout: GOOGLE_API_TIMEOUT_MS, fetchImplementation: timedFetch() } as any);
 }
 
-export function wrapCalendar(c: calendar_v3.Calendar, retry: RetryOptions): CalendarApiLike {
+export function wrapCalendar(c: calendar_v3.Calendar, retry: RetryOptions): CalendarApiLike & CalendarReadApiLike {
   const r = <T>(fn: () => Promise<T>) => withGoogleRetry(fn, retry);
   return {
     async listCalendars() {
@@ -156,6 +181,38 @@ export function wrapCalendar(c: calendar_v3.Calendar, retry: RetryOptions): Cale
         if (!pageToken) break;
       }
       return out;
+    },
+    async listVisibleCalendars() {
+      const out: CalendarListEntryRead[] = [];
+      let pageToken: string | undefined;
+      for (let i = 0; i < 4; i++) {
+        const res = await r(() => c.calendarList.list({ maxResults: 250, showDeleted: false, showHidden: false, ...(pageToken ? { pageToken } : {}) }));
+        for (const x of res.data.items ?? []) {
+          if (!x.id) continue;
+          out.push({
+            id: x.id, summary: String(x.summary ?? ""), summaryOverride: x.summaryOverride ?? null, description: x.description ?? null,
+            backgroundColor: x.backgroundColor ?? null, primary: !!x.primary, selected: !!x.selected, hidden: !!x.hidden, accessRole: x.accessRole ?? null,
+          });
+        }
+        pageToken = res.data.nextPageToken ?? undefined;
+        if (!pageToken) break;
+      }
+      return out;
+    },
+    async listEventsInRange(calendarId, p) {
+      const items: calendar_v3.Schema$Event[] = [];
+      const maxPages = Math.max(1, Math.min(p.maxPages ?? 4, 10));
+      let pageToken: string | undefined;
+      for (let i = 0; i < maxPages; i++) {
+        const res = await r(() => c.events.list({
+          calendarId, timeMin: p.timeMin, timeMax: p.timeMax, singleEvents: true, orderBy: "startTime", showDeleted: false,
+          maxResults: 250, timeZone: "Europe/Lisbon", fields: RANGE_EVENT_FIELDS, ...(pageToken ? { pageToken } : {}),
+        }));
+        items.push(...(res.data.items ?? []));
+        pageToken = res.data.nextPageToken ?? undefined;
+        if (!pageToken) return { items, truncated: false };
+      }
+      return { items, truncated: true };
     },
     async insertCalendar(body) {
       const res = await r(() => c.calendars.insert({ requestBody: body }));
