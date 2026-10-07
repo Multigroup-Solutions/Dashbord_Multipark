@@ -177,10 +177,16 @@ describe("D61 — PDA escolhe a conta Google", () => {
     expect(loginUrlForDevice(loginUrlWithReturn(), true)).toBe("/api/oauth/login?pda=1");
     expect(loginUrlForDevice(loginUrlWithReturn("/rh"), true)).toBe("/api/oauth/login?next=%2Frh&pda=1");
     expect(loginUrlForDevice(loginUrlWithReturn("/rh"), false)).toBe("/api/oauth/login?next=%2Frh");
-    expect(googlePromptFor("1")).toBe("consent select_account");
-    expect(googlePromptFor(undefined)).toBe("consent");
-    expect(googlePromptFor(["1"])).toBe("consent");
-    expect(src("server/_core/oauth.ts")).toContain('url.searchParams.set("prompt", googlePromptFor(req.query.pda));');
+    expect(googlePromptFor("1")).toBe("select_account");
+    expect(googlePromptFor(undefined)).toBeNull();
+    expect(googlePromptFor(["1"])).toBeNull();
+    expect(src("server/_core/oauth.ts")).toContain("const prompt = googlePromptFor(req.query.pda);");
+  });
+  it("7 out 2026: o login não pede acesso offline nem consentimento (não gasta os tokens da ligação do Gmail)", () => {
+    const o = src("server/_core/oauth.ts");
+    const login = o.slice(o.indexOf('const scope = "openid email profile";'), o.indexOf("res.redirect(302, url.toString());"));
+    expect(login).not.toContain('searchParams.set("access_type"');
+    expect(login).not.toContain('"consent"');
     expect(src("client/src/const.ts")).toContain("loginUrlForDevice(loginUrlWithReturn(returnTo), !!getPdaToken())");
   });
 });
