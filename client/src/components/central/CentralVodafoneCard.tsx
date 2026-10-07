@@ -142,7 +142,7 @@ export function CentralVodafoneCard() {
                     <Badge variant="outline" className="h-4 px-1 text-[10px]">{c.contact.kind}</Badge>
                   </>
                 ) : null}
-                <span>{c.phone ?? (c.contact?.kind === "Sem ficha" ? c.contact.name : c.contact ? "" : c.subject ?? "")}</span>
+                <span>{c.contact?.kind === "Interna" ? "" : c.phone ?? (c.contact?.kind === "Sem ficha" ? c.contact.name : c.contact ? "" : c.subject ?? "")}</span>
                 <span className="text-muted-foreground">{dur(c.durationS)}{!c.held ? " · não atendida" : ""}</span>
               </div>
             ))}

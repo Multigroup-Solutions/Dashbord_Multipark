@@ -12,7 +12,7 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   callContactRef, contactRedirect, extractPhone, flattenNameValueList, normalizeCentralUsername, parseContactRef, parseSugarCall, parseSugarDate, phoneFromSearchNote,
-  redactForLog, searchNote, sugarSearchPhone,
+  redactForLog, searchNote, sugarSearchPhone, sugarSearchQuery,
 } from "../shared/centralSugar";
 
 const h = vi.hoisted(() => ({ enabled: true, enableOnRefresh: false, forced: 0, stored: undefined as boolean | undefined, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
@@ -40,6 +40,12 @@ vi.mock("./db", () => ({
       if (/FROM employees/.test(sql) && /REGEXP_REPLACE/.test(sql)) return [params.includes("934000000") ? [{ id: 7, fullName: "Rui Condutor", position: "driver", email: null }] : []];
       if (/FROM crm_client_phones cp JOIN crm_clients c/.test(sql)) return [params[0] === "+351913225918" ? [{ id: 55, displayName: "Maria Cliente", primaryEmail: "maria@ex.pt", isPro: 1, bookings: 12 }] : []];
       if (/SELECT phone FROM crm_client_phones WHERE clientId/.test(sql)) return [params[0] === 55 ? [{ phone: "+351913225918" }] : []];
+      // 39f: pesquisa por nome — fichas do RH (telefone de trabalho) e clientes do CRM (telefone principal)
+      if (/FROM employees/.test(sql) && /fullName LIKE \?/.test(sql)) return [params.includes("%rui%") ? [{ id: 7, fullName: "Rui Condutor", position: "driver", email: null, phone: "934000000" }] : []];
+      if (/FROM crm_clients c WHERE c\.status = 'active' AND \(c\.displayName LIKE \?/.test(sql)) return [params.includes("%rui%") ? [
+        { id: 55, displayName: "Maria Rui", firstName: null, lastName: null, primaryEmail: null, isPro: 0, bookings: 3, phone: "+351913225918" },
+        { id: 56, displayName: "Rui Sem Telefone", firstName: null, lastName: null, primaryEmail: null, isPro: 0, bookings: 1, phone: null },
+      ] : []];
       // 39e: a última pesquisa desta conta que deu o contacto (o LIKE sobre a nota do registo)
       if (/SELECT note FROM central_requests/.test(sql)) {
         const [acc, , like] = params as [number, string, string];
@@ -132,6 +138,21 @@ describe("39e — o número e a duração da chamada", () => {
     expect(parseSugarCall({ direction: "Outbound", status: "Held", duration_hours: "1", duration_minutes: "5" }, now).durationS).toBe(3900);
     expect(parseSugarCall({ direction: "Outbound", status: "Held", duration_minutes: "" }, now).durationS).toBeNull();
     expect(parseSugarCall({ direction: "Outbound", status: "Held" }, now).durationS).toBeNull();
+  });
+});
+
+describe("39f — extensões internas e pesquisa por nome", () => {
+  it("o que a consola procura: número, extensão (2 a 6 dígitos) ou nome (3+ letras)", () => {
+    expect(sugarSearchQuery({ max_num: 1, q: "*+351913225918*" })).toEqual({ kind: "phone", phone: "+351913225918" });
+    expect(sugarSearchQuery({ max_num: 1, q: "*410*" })).toEqual({ kind: "ext", ext: "410" });
+    expect(sugarSearchQuery({ q: "*Maria  Silva*" })).toEqual({ kind: "name", text: "Maria Silva" });
+    expect(sugarSearchQuery({ q: "*ma*" })).toBeNull(); // curto demais
+    expect(sugarSearchQuery({ q: "*1234567*" })).toBeNull(); // nem número completo nem extensão
+    expect(sugarSearchQuery({ q: "*4*" })).toBeNull();
+    expect(sugarSearchQuery({ max_num: 1 })).toBeNull();
+    expect(parseContactRef("ext-410")).toEqual({ kind: "ext", id: "410" });
+    expect(callContactRef({ contact_id: "ext-410", parent_id: "ext-410" })).toBe("ext-410");
+    expect(contactRedirect("#Contacts/ext-410")).toBe("/");
   });
 });
 
@@ -278,6 +299,35 @@ describe("39a — a porta Sugar (HTTP)", () => {
     expect(h.calls.at(-1)![10]).toBe("crm-99");
   });
 
+  it("39f: quem liga do 410 aparece como \"Extensão 410\" e a chamada fica registada com a extensão", async () => {
+    const tok = await (await post("/rest/v10/oauth2/token", { grant_type: "password", username: "ana.silva", password: SECRET, client_id: "sugar", platform: "apicalls" })).json();
+    const auth = { "OAuth-Token": tok.access_token };
+    const r = await (await post("/rest/v10/Contacts/filter", { fields: "id,full_name,title,department,phone_work", max_num: 1, q: "*410*" }, auth)).json();
+    expect(r.records).toHaveLength(1);
+    expect(r.records[0]).toMatchObject({ id: "ext-410", full_name: "Extensão 410", title: "Número interno", phone_work: "410" });
+    expect(logged().some((x) => x.params.includes("pesquisa 410 → ext-410 Extensão 410"))).toBe(true);
+    await post("/rest/v10/Calls", { contact_id: "ext-410", parent_id: "ext-410", parent_type: "Contacts", direction: "Inbound", status: "Held", duration_minutes: "3", name: "Chamada OC" }, auth);
+    const [, , , direction, held, , durationS, phone, , , contactRef] = h.calls.at(-1)!;
+    expect({ direction, held, durationS, phone, contactRef }).toEqual({ direction: "in", held: 1, durationS: 180, phone: "410", contactRef: "ext-410" });
+    // detalhe do contacto
+    expect(await (await fetch(`${url}/rest/v10/Contacts/ext-410`, { headers: auth })).json()).toMatchObject({ id: "ext-410", full_name: "Extensão 410" });
+  });
+
+  it("39f: pesquisa por nome na consola devolve fichas do RH e clientes com telefone (sem telefone não aparece)", async () => {
+    const tok = await (await post("/rest/v10/oauth2/token", { grant_type: "password", username: "ana.silva", password: SECRET, client_id: "sugar", platform: "apicalls" })).json();
+    const auth = { "OAuth-Token": tok.access_token };
+    const r = await (await post("/rest/v10/Contacts/filter", { fields: "id,full_name,phone_work", max_num: 5, q: "*rui*" }, auth)).json();
+    expect(r.records.map((x: any) => [x.id, x.full_name, x.phone_work])).toEqual([["emp-7", "Rui Condutor", "+351934000000"], ["crm-55", "Maria Rui", "+351913225918"]]);
+    expect(logged().some((x) => x.params.includes('pesquisa por nome "rui" → 2 resultados'))).toBe(true);
+    const qs = h.queries.filter((x) => /LIKE \?/.test(x.sql) && /FROM (employees|crm_clients c)/.test(x.sql));
+    expect(qs).toHaveLength(2);
+    for (const x of qs) expect(x.sql).toMatch(/LIMIT 5$/);
+    expect(qs[0].sql).toContain("COALESCE(phone, '') <> ''"); // só o telefone de trabalho da ficha
+    // nada encontrado: lista vazia
+    const none = await (await post("/rest/v10/Contacts/filter", { max_num: 5, q: "*ninguem*" }, auth)).json();
+    expect(none.records).toEqual([]);
+  });
+
   it("39d: abrir o contacto na consola ({Server URL}/#Contacts/…) dá uma página que manda para a ficha", async () => {
     const r = await fetch(`${url}/`);
     expect(r.status).toBe(200);
@@ -350,6 +400,8 @@ describe("39a — ligações no resto da dashboard", () => {
     expect(card).toContain('{c.contact.href ? <Link href={c.contact.href} className="underline">{c.contact.name}</Link> : <span>{c.contact.name}</span>}');
     expect(card).toContain('{c.direction === "out" ? "ligou a" : "chamada de"}');
     // sem número, a ficha não aparece duas vezes; sem ficha, o número; sem nada, o texto da consola
-    expect(card).toContain('<span>{c.phone ?? (c.contact?.kind === "Sem ficha" ? c.contact.name : c.contact ? "" : c.subject ?? "")}</span>');
+    expect(card).toContain('<span>{c.contact?.kind === "Interna" ? "" : c.phone ?? (c.contact?.kind === "Sem ficha" ? c.contact.name : c.contact ? "" : c.subject ?? "")}</span>');
+    // 39f: extensões internas aparecem como "Interna"
+    expect(r).toContain('else if (p.kind === "ext") out.set(String(r), { name: `Extensão ${p.id}`, kind: "Interna", href: null });');
   });
 });
