@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { loginUrlForDevice, loginUrlWithReturn } from "@shared/loginReturn";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Download, Loader2, Smartphone, XCircle } from "lucide-react";
@@ -44,11 +44,16 @@ export default function PdaRegisterPage() {
   useEffect(() => {
     if (loading) return;
     if (!user) {
-      // guarda o QR para continuar depois de entrar
+      // guarda o QR para continuar depois de entrar. O destino também vai no
+      // state assinado do login, por isso o registo continua mesmo que a Google
+      // acabe noutro browser (QR lido por uma app de leitura). Isto É um PDA:
+      // a Google pede sempre a conta (D61), mesmo antes de haver token.
       setPendingQr(window.location.search);
-      window.location.href = getLoginUrl(`${window.location.pathname}${window.location.search}`);
+      window.location.href = loginUrlForDevice(loginUrlWithReturn(`${window.location.pathname}${window.location.search}`), true);
       return;
     }
+    // Já estamos no registo: o QR pendente deixa de ser preciso.
+    setPendingQr(null);
     if (!pdaId || !code) { setState({ ok: false, message: "QR incompleto." }); return; }
     if (!register.isPending && !state) register.mutate({ pdaId, code });
     // eslint-disable-next-line react-hooks/exhaustive-deps

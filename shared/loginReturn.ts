@@ -52,7 +52,11 @@ export function loginUrlForDevice(url: string, isPda: boolean): string {
   return `${url}${url.includes("?") ? "&" : "?"}pda=1`;
 }
 
-/** `prompt` do pedido à Google: num PDA, escolher a conta. PURA. */
-export function googlePromptFor(pdaParam: unknown): string {
-  return pdaParam === "1" ? "consent select_account" : "consent";
+/**
+ * `prompt` do pedido à Google: num PDA, escolher a conta; fora dele, nenhum
+ * (null). Já não força `consent`: o ecrã de consentimento em cada login
+ * levava a "Cancelar" → access_denied, e o login só lê a identidade. PURA.
+ */
+export function googlePromptFor(pdaParam: unknown): string | null {
+  return pdaParam === "1" ? "select_account" : null;
 }

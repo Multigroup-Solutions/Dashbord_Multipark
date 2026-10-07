@@ -1,6 +1,6 @@
 import { AUTH_DENIED_PARAM, AUTH_DENIED_VALUE, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { normalizeEmail } from "@shared/email";
-import { googlePromptFor, safeReturnPath } from "@shared/loginReturn";
+import { googlePromptFor, loginUrlWithReturn, safeReturnPath } from "@shared/loginReturn";
 import type { Express, Request, Response, CookieOptions } from "express";
 import crypto from "node:crypto";
 import * as db from "../db";
@@ -8,6 +8,7 @@ import { adoptPlaceholderAccountByEmail, linkEmployeesToUserByEmail } from "../i
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 import { shouldRejectUnverifiedGoogleEmail } from "./googleIdentity";
+import { OAUTH_STATE_MAX_MS, checkCallbackState, createOAuthState, peekReturnTo } from "./oauthState";
 
 // 30 dias é o novo default (em vez de 1 ano) — reduz janela de exposição
 // caso uma cookie seja intercetada. O nome da env é opcional.
@@ -17,7 +18,6 @@ export const SESSION_MAX_MS = (() => {
 })();
 
 const OAUTH_STATE_COOKIE = "app_oauth_state";
-const OAUTH_STATE_MAX_MS = 10 * 60 * 1000; // 10 minutos para concluir o login
 /** Para onde voltar depois do login (`/api/oauth/login?next=…`, validado em shared/loginReturn.ts). */
 const OAUTH_NEXT_COOKIE = "app_oauth_next";
 
@@ -72,25 +72,26 @@ export function maskEmailForLog(email: string | null | undefined): string {
  * `error`/`error_description` da query entravam no HTML tal como vinham —
  * XSS), sem scripts (CSP) e sem detalhes internos.
  */
-export function renderErrorPage(title: string, message: string, details?: string): string {
+export function renderErrorPage(title: string, message: string, details?: string, retryHref?: string | null): string {
   return `<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title>
 <style>body{font-family:system-ui,-apple-system,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.5rem;color:#1f2937;line-height:1.6}
 h1{color:#dc2626;margin-bottom:.5rem}
 pre{background:#f3f4f6;padding:1rem;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:.85em}
 a{color:#2563eb}</style></head><body>
 <h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>${details ? `<pre>${escapeHtml(details)}</pre>` : ""}
+${retryHref ? `<p><a href="${escapeHtml(retryHref)}"><b>Tentar de novo</b></a></p>` : ""}
 <p><a href="/">← Voltar ao início</a></p></body></html>`;
 }
 
 const ERROR_PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
-function sendErrorPage(res: Response, status: number, title: string, message: string, details?: string): void {
+function sendErrorPage(res: Response, status: number, title: string, message: string, details?: string, retryHref?: string | null): void {
   res.status(status)
     .set("Content-Security-Policy", ERROR_PAGE_CSP)
     .set("X-Content-Type-Options", "nosniff")
     .set("Cache-Control", "no-store")
     .type("html")
-    .send(renderErrorPage(title, message, details));
+    .send(renderErrorPage(title, message, details, retryHref));
 }
 
 /** Entradas e recusas no registo de atividade (20d). Nunca parte o login. */
@@ -204,8 +205,9 @@ export function registerOAuthRoutes(app: Express) {
       return;
     }
 
-    // Gera state aleatório e guarda em cookie httpOnly para validar no callback
-    const state = crypto.randomBytes(32).toString("base64url");
+    // State ASSINADO com o destino (vale sozinho no callback, ver oauthState.ts)
+    // + cookie httpOnly com o mesmo valor (quando volta, tem de bater certo).
+    const state = createOAuthState(jwtSecret!, { returnTo: safeReturnPath((req.query as any)?.next) });
     res.cookie(OAUTH_STATE_COOKIE, state, getStateCookieOptions(req));
     // Regresso depois do login (ex.: o convite): só caminhos desta app.
     rememberReturnPath(req, res);
@@ -218,9 +220,12 @@ export function registerOAuthRoutes(app: Express) {
     url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", scope);
-    url.searchParams.set("access_type", "offline");
+    // Sem access_type=offline nem consent forçado: o login só lê a identidade
+    // uma vez (o refresh token nunca foi usado) e o ecrã de consentimento em
+    // cada login levava a "Cancelar" → access_denied (PDA, 2026-10-07).
     // D61: num PDA (pda=1) a Google pede sempre para escolher a conta.
-    url.searchParams.set("prompt", googlePromptFor(req.query.pda));
+    const prompt = googlePromptFor(req.query.pda);
+    if (prompt) url.searchParams.set("prompt", prompt);
     url.searchParams.set("state", state);
 
     res.redirect(302, url.toString());
@@ -236,13 +241,24 @@ export function registerOAuthRoutes(app: Express) {
         typeof req.query.error_description === "string"
           ? req.query.error_description
           : "(sem descrição)";
-      console.error("[OAuth] Google devolveu erro:", googleError.slice(0, 64), description.slice(0, 200));
       // 20d: só o código, e só se tiver a forma de um código da Google — nunca o texto do pedido.
       const code = /^[a-z_]{1,64}$/.test(googleError) ? googleError : "desconhecido";
-      sendErrorPage(res, 400,
-        code === "access_denied" ? "Entrada cancelada" : "A Google rejeitou o pedido de autenticação",
-        code === "access_denied" ? "Cancelaste a entrada com a Google." : `Código: ${code}.`,
-        "Tenta de novo a partir da página inicial. Se persistir, avisa o administrador.");
+      // access_denied = cancelado ou conta sem acesso: aviso, não erro de configuração.
+      (code === "access_denied" ? console.warn : console.error)("[OAuth] Google devolveu erro:", googleError.slice(0, 64), description.slice(0, 200));
+      const retry = loginUrlWithReturn(peekReturnTo(typeof req.query.state === "string" ? req.query.state : null));
+      if (code === "access_denied") {
+        sendErrorPage(res, 400,
+          "Entrada cancelada",
+          "O login com a Google foi cancelado, ou esta conta Google não tem acesso ao dashboard.",
+          "• No ecrã da Google escolhe a conta da empresa e carrega em Continuar (não em Cancelar).\n• Se a conta certa não aparecer, escolhe Usar outra conta.\n• Se continuar a falhar com a conta certa, avisa o administrador.",
+          retry);
+      } else {
+        sendErrorPage(res, 400,
+          "A Google rejeitou o pedido de autenticação",
+          `Código: ${code}.`,
+          "Tenta de novo. Se persistir, avisa o administrador.",
+          retry);
+      }
       return;
     }
 
@@ -254,7 +270,8 @@ export function registerOAuthRoutes(app: Express) {
       sendErrorPage(res, 400,
         "Falta o código de autorização",
         "A resposta da Google chegou incompleta.",
-        "Tenta de novo a partir da página inicial.");
+        undefined,
+        loginUrlWithReturn(peekReturnTo(returnedState)));
       return;
     }
 
@@ -265,16 +282,26 @@ export function registerOAuthRoutes(app: Express) {
       ...getSessionCookieOptions(req),
     });
 
-    if (!savedState || !returnedState || !safeEquals(savedState, returnedState)) {
+    // State assinado: vale sem cookie (login acabou noutro browser, ex.: QR
+    // lido por uma app de leitura no PDA); com cookie, tem de bater certo.
+    const stateCheck = checkCallbackState({ secret: process.env.JWT_SECRET ?? "", returned: returnedState, saved: savedState });
+    if (!stateCheck.ok) {
       console.error("[OAuth] State inválido:", {
+        reason: stateCheck.reason,
         hasSaved: !!savedState,
         hasReturned: !!returnedState,
       });
       sendErrorPage(res, 400,
         "O pedido de entrada expirou",
         "A proteção do login não confirmou este pedido.",
-        "Causas típicas:\n• Passaram mais de 10 minutos entre clicar em 'Entrar' e voltar da Google\n• Começaste noutro endereço da aplicação\n• O browser bloqueou os cookies\n\nFecha a janela, abre uma nova e tenta de novo a partir da página inicial.");
+        stateCheck.reason === "expired"
+          ? "Passaram mais de 10 minutos entre começar o login e voltar da Google."
+          : "Começa o login outra vez.",
+        loginUrlWithReturn(peekReturnTo(returnedState)));
       return;
+    }
+    if (!stateCheck.cookieMatched) {
+      console.warn("[OAuth] State assinado aceite sem cookie (login terminou noutro browser)");
     }
 
     try {
@@ -382,7 +409,10 @@ export function registerOAuthRoutes(app: Express) {
       });
       await logLogin({ userId: account.id, action: "login", entityId: account.id, details: "Entrou com a Google" });
 
-      res.redirect(302, takeReturnPath(req, res));
+      // Destino do state assinado (sobrevive à mudança de browser); senão o do
+      // cookie. takeReturnPath corre sempre, para limpar o cookie.
+      const cookieReturn = takeReturnPath(req, res);
+      res.redirect(302, stateCheck.returnTo ?? cookieReturn);
     } catch (error: any) {
       // 20d: o detalhe (mensagens internas, SQL) fica só no log, com uma referência.
       const ref = crypto.randomBytes(4).toString("hex");
