@@ -53,7 +53,9 @@ describe("Pedidos e avisos só a extras", () => {
 
 describe("Escala: sem cidade não; funcionários só à mão", () => {
   it("proposta automática e 'pedir a quem não respondeu': só extras da cidade (sem cidade fica de fora)", () => {
-    const cands = fnBody("server/extrasSchedule.ts", "export async function loadScheduleCandidates", 1800);
+    // (a escolha de quem pode entrar passou para loadEligibleExtras — a mesma lista do indicador de pessoal, pedido 7)
+    const cands = fnBody("server/extrasSchedule.ts", "export async function loadEligibleExtras", 1800);
+    expect(fnBody("server/extrasSchedule.ts", "export async function loadScheduleCandidates", 400)).toContain("await loadEligibleExtras(date, city)");
     expect(cands).toContain('if ((c.position ?? "").toLowerCase() !== "extra") return false;');
     expect(cands).toContain("return (cities.get(c.id)?.city ?? null) === cityKey;");
     expect(fnBody("server/extrasSchedule.ts", "export async function noAnswerTargets", 1200)).toContain("return noAnswer.filter((c) => cities.get(c.id)?.city === cityKey).map((c) => c.id);");

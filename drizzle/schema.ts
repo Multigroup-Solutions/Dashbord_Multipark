@@ -1019,6 +1019,24 @@ export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
 	index("idx_edn_date_city").on(table.assignmentDate, table.city),
 ]);
 
+// 0540 — notas internas do dia de trabalho (Extras-dia → Pressão): várias por
+// (cidade, dia de calendário); hora operacional opcional (3–26); arquivar, nunca apagar.
+export const extrasDayNotes = mysqlTable("extras_day_notes", {
+	id: int().autoincrement().primaryKey(),
+	city: varchar({ length: 16 }).notNull(), // lisbon|porto|faro
+	workDate: varchar({ length: 10 }).notNull(),
+	hour: tinyint(),
+	body: text().notNull(),
+	authorId: int().notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	editedAt: timestamp({ mode: 'string' }),
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_extras_day_notes_city_date").on(table.city, table.workDate),
+]);
+
 // Passagem de turno (team leaders) — 1 registo por (dia, turno, cidade).
 // Criada pela migration 0087 (antes nascia em db.ts). `createdBy*` = autor
 // original; `filledBy*` = último a editar; `version` = lock otimista.

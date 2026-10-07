@@ -45,9 +45,15 @@ describe("dayWindows", () => {
     expect(dayWindows(day("x", { morning: true, night: true, fromHour: 9, toHour: 13 }))).toEqual([{ from: 9, to: 13 }]);
     expect(dayWindows(day("x", { fromHour: 22, toHour: 6 }))).toEqual([{ from: 22, to: 30 }]);
   });
-  it("com só uma das horas, valem os turnos (uma hora sozinha não é janela)", () => {
+  it("com só uma das horas e turnos marcados, valem os turnos", () => {
     expect(dayWindows(day("x", { morning: true, fromHour: 9, toHour: null }))).toEqual([{ from: 3, to: 15 }]);
-    expect(dayWindows(day("x", { fromHour: 9, toHour: null }))).toEqual([]);
+  });
+  // Pedido 7 (7 out 2026): uma leitura só. A escala lia "só o início" como janela
+  // aberta e a grelha ignorava-a — divergiam. Agora as duas dizem o mesmo.
+  it("uma hora sozinha sem turnos é uma janela aberta (a partir das X até às 03h; das 03h até às Y)", () => {
+    expect(dayWindows(day("x", { fromHour: 9, toHour: null }))).toEqual([{ from: 9, to: 27 }]);
+    expect(dayWindows(day("x", { fromHour: null, toHour: 14 }))).toEqual([{ from: 3, to: 14 }]);
+    expect(dayWindows(day("x", { fromHour: null, toHour: 2 }))).toEqual([{ from: 3, to: 26 }]);
   });
 });
 

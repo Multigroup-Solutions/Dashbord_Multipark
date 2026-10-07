@@ -106,6 +106,7 @@ import { rhViewer } from "./rhGuards";
 import { expensesRouter } from "./expensesRouter";
 import { rhRouter } from "./rhRouter";
 import { operationalRouter } from "./operationalRouter";
+import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
 
 /** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
@@ -5035,25 +5036,9 @@ export const appRouter = router({
         return listNotices(input.date, input.city ?? null);
       }),
 
-    notify: protectedProcedure
-      .input(z.object({
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        city: z.enum(["lisbon", "porto", "faro"]),
-        // O botão é de um turno: só avisa esse turno (antes avisava o dia todo).
-        shift: z.enum(["morning", "night"]).optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "extras_dia", "edit");
-        const { notifyAssignments } = await import("./extrasAutomation");
-        const { PAST_DAY_MESSAGE } = await import("./extrasSchedule");
-        const { lisbonNow } = await import("../shared/extrasSchedule");
-        if (input.date < lisbonNow().date) throw new TRPCError({ code: "BAD_REQUEST", message: PAST_DAY_MESSAGE });
-        try {
-          return await notifyAssignments(input.date, { city: input.city, shift: input.shift ?? null, createdById: ctx.user.id });
-        } catch (err: any) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao avisar" });
-        }
-      }),
+    // Frente B (7 out 2026): indicador de pessoal, "Avisar este turno" (pré-visualização +
+    // envio por WhatsApp/email) e notas do dia — server/extrasDiaShiftRouter.ts.
+    ...extrasDiaShiftProcedures,
 
     bookingsInSlot: protectedProcedure
       .input(

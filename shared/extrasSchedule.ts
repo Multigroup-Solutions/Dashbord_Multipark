@@ -14,6 +14,7 @@
  *
  * Determinístico: os mesmos dados dão sempre a mesma proposta.
  */
+import { describeWindows, type HourWindow } from "./availabilityWindow";
 
 // ─── Limites ────────────────────────────────────────────────────────────────
 
@@ -192,42 +193,15 @@ export function scheduleMessageText(opts: {
   return parts.join(" · ").replace(/\s+/g, " ").slice(0, 400);
 }
 
-// ─── Disponibilidade → janela ──────────────────────────────────────────────
+// ─── Disponibilidade → janelas ─────────────────────────────────────────────
+//
+// A leitura da disponibilidade é UMA só, em shared/availabilityWindow.ts
+// (`operationalDayWindows`, semântica de calendário — pedido 7, 7 out 2026):
+// a escala recebe as janelas do dia operacional já calculadas. Antes havia
+// aqui uma segunda leitura ("horas < 03h = madrugada seguinte") que divergia
+// da grelha: quem marcava "terça 00h–03h" não contava para a noite de segunda.
 
-export interface AvailabilityLike {
-  status: string;
-  morning: boolean;
-  night: boolean;
-  fromHour: number | null;
-  toHour: number | null;
-}
-
-/**
- * Janela [from, to) em horas do dia operacional (3–27) em que o extra disse
- * que pode; null = não está disponível. Horas soltas (0–23) antes das 03h
- * são da madrugada seguinte; um fim ≤ início atravessa a meia-noite.
- */
-export function availabilityWindow(a: AvailabilityLike | null | undefined): { from: number; to: number } | null {
-  if (!a || a.status !== "available") return null;
-  let from: number;
-  let to: number;
-  if (a.fromHour != null || a.toHour != null) {
-    from = a.fromHour != null ? (a.fromHour < DAY_START_HOUR ? a.fromHour + 24 : a.fromHour) : DAY_START_HOUR;
-    to = a.toHour != null ? a.toHour : DAY_END_HOUR;
-    if (a.toHour != null && to <= from) to += 24;
-  } else if (a.morning && a.night) {
-    from = DAY_START_HOUR; to = DAY_END_HOUR;
-  } else if (a.morning) {
-    from = DAY_START_HOUR; to = 15;
-  } else if (a.night) {
-    from = 15; to = DAY_END_HOUR;
-  } else {
-    return null;
-  }
-  from = Math.max(DAY_START_HOUR, from);
-  to = Math.min(DAY_END_HOUR, to);
-  return to > from ? { from, to } : null;
-}
+export type { HourWindow };
 
 // ─── Candidatos e ordenação ─────────────────────────────────────────────────
 
@@ -239,8 +213,8 @@ export interface ScheduleCandidate {
   level: LevelId;
   levelLabel: string;
   hourlyRate: number;
-  /** Janela em que pode (availabilityWindow); null = não entra. */
-  window: { from: number; to: number } | null;
+  /** Janelas do dia operacional em que pode (operationalDayWindows); vazio = não entra. */
+  windows: readonly HourWindow[];
   /** Pontos médios por dia trabalhado (avaliação, últimas 4 semanas); null = sem dados. */
   evalScore: number | null;
   /** Dias escalados nos últimos 14 dias (equidade). */
@@ -270,18 +244,15 @@ export interface Block {
 }
 
 /**
- * Melhor bloco contínuo para um candidato: dentro da janela, a cobrir as horas
- * com falta (remaining > 0), com MIN ≤ duração ≤ MAX. null = não ajuda.
+ * Melhor bloco contínuo para um candidato: dentro de UMA das janelas, a cobrir
+ * as horas com falta (remaining > 0), com MIN ≤ duração ≤ MAX. null = não ajuda.
  */
 export function bestBlock(
-  window: { from: number; to: number },
+  windows: HourWindow | readonly HourWindow[],
   remaining: readonly number[],
   minH = MIN_SHIFT_HOURS,
   maxH = MAX_SHIFT_HOURS,
 ): Block | null {
-  const from = Math.max(DAY_START_HOUR, window.from);
-  const to = Math.min(DAY_END_HOUR, window.to, remaining.length);
-  if (to - from < minH) return null;
   const demand = (h: number) => ((remaining[h] ?? 0) > 0 ? 1 : 0);
   // Todos os blocos [s, s+L) com MIN ≤ L ≤ MAX dentro da janela; valor =
   // horas em falta cobertas − IDLE_PENALTY × horas pagas sem falta. Assim um
@@ -290,22 +261,27 @@ export function bestBlock(
   // Empates: mais horas cobertas, mais curto, a começar numa hora com falta,
   // mais cedo.
   let best: (Block & { value: number; onDemand: number }) | null = null;
-  for (let s = from; s + minH <= to; s++) {
-    let covered = 0;
-    for (let h = s; h < s + minH - 1; h++) covered += demand(h);
-    for (let L = minH; L <= maxH && s + L <= to; L++) {
-      covered += demand(s + L - 1);
-      if (covered === 0) continue;
-      const value = covered - IDLE_PENALTY * (L - covered);
-      if (
-        !best ||
-        value > best.value + 1e-9 ||
-        (Math.abs(value - best.value) <= 1e-9 && (covered > best.coveredHours ||
-          (covered === best.coveredHours && (L < best.endHour - best.startHour ||
-            (L === best.endHour - best.startHour && (demand(s) > best.onDemand ||
-              (demand(s) === best.onDemand && s < best.startHour)))))))
-      ) {
-        best = { startHour: s, endHour: s + L, coveredHours: covered, value, onDemand: demand(s) };
+  const list: readonly HourWindow[] = Array.isArray(windows) ? windows : [windows as HourWindow];
+  for (const window of list) {
+    const from = Math.max(DAY_START_HOUR, window.from);
+    const to = Math.min(DAY_END_HOUR, window.to, remaining.length);
+    for (let s = from; s + minH <= to; s++) {
+      let covered = 0;
+      for (let h = s; h < s + minH - 1; h++) covered += demand(h);
+      for (let L = minH; L <= maxH && s + L <= to; L++) {
+        covered += demand(s + L - 1);
+        if (covered === 0) continue;
+        const value = covered - IDLE_PENALTY * (L - covered);
+        if (
+          !best ||
+          value > best.value + 1e-9 ||
+          (Math.abs(value - best.value) <= 1e-9 && (covered > best.coveredHours ||
+            (covered === best.coveredHours && (L < best.endHour - best.startHour ||
+              (L === best.endHour - best.startHour && (demand(s) > best.onDemand ||
+                (demand(s) === best.onDemand && s < best.startHour)))))))
+        ) {
+          best = { startHour: s, endHour: s + L, coveredHours: covered, value, onDemand: demand(s) };
+        }
       }
     }
   }
@@ -341,8 +317,8 @@ export function rankCandidates(
   const demandHours = remaining.reduce((n, r, h) => n + (h >= DAY_START_HOUR && r > 0 ? 1 : 0), 0);
   const withBlock: { candidate: ScheduleCandidate; block: Block }[] = [];
   for (const c of candidates) {
-    if (!c.window) continue;
-    const block = bestBlock(c.window, remaining, minH, maxH);
+    if (!c.windows.length) continue;
+    const block = bestBlock(c.windows, remaining, minH, maxH);
     if (block) withBlock.push({ candidate: c, block });
   }
   if (!withBlock.length) return [];
@@ -386,9 +362,8 @@ const fmtNum = (n: number, d = 1) => n.toFixed(d).replace(".", ",");
 export function buildReason(r: RankedCandidate, ctx: { evalRank?: number | null; evalCount?: number } = {}): string {
   const c = r.candidate;
   const parts: string[] = [];
-  const win = c.window;
   parts.push(
-    `${win ? `disponível ${hh(win.from)}–${hh(win.to)}` : "disponível"}; cobre ${r.block.coveredHours}h com falta de gente (${hh(r.block.startHour)}–${hh(r.block.endHour)})`,
+    `${c.windows.length ? `disponível ${describeWindows(c.windows)}` : "disponível"}; cobre ${r.block.coveredHours}h com falta de gente (${hh(r.block.startHour)}–${hh(r.block.endHour)})`,
   );
   if (c.evalScore == null) parts.push("sem avaliação recente");
   else parts.push(`avaliação ${fmtNum(c.evalScore)} pts/dia${ctx.evalRank && ctx.evalCount ? ` (${ctx.evalRank}.º de ${ctx.evalCount})` : ""}`);
@@ -494,19 +469,19 @@ export function extendPicksIntoGaps(
   candidates: readonly ScheduleCandidate[],
   maxH = MAX_SHIFT_HOURS,
 ): void {
-  const windowOf = new Map(candidates.map((c) => [c.id, c.window]));
+  const windowsOf = new Map(candidates.map((c) => [c.id, c.windows]));
   const unfixable = new Set<number>();
   for (let guard = 0; guard < 500; guard++) {
     const h = remaining.findIndex((r, i) => i >= DAY_START_HOUR && r > 0 && !unfixable.has(i));
     if (h < 0) break;
     let best: { p: ProposalPick; start: number; end: number; added: number } | null = null;
     for (const p of picks) {
-      const w = windowOf.get(p.employeeId);
-      if (!w || h < w.from || h >= w.to) continue;
       if (h >= p.startHour && h < p.endHour) continue;
       const start = Math.min(p.startHour, h);
       const end = Math.max(p.endHour, h + 1);
       if (end - start > maxH) continue;
+      // O turno alargado tem de caber inteiro numa janela da pessoa.
+      if (!(windowsOf.get(p.employeeId) ?? []).some((w) => w.from <= start && end <= w.to)) continue;
       const added = end - start - (p.endHour - p.startHour);
       if (!best || added < best.added) best = { p, start, end, added };
     }

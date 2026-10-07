@@ -24,7 +24,6 @@ import { extractAffectedRows } from "./availabilityFormToken";
 import {
   CITY_LABELS_PT,
   addDaysIso,
-  availabilityWindow,
   canAutoConfirm,
   describeGap,
   explainProposal,
@@ -219,17 +218,23 @@ async function loadHistory(ids: number[], date: string): Promise<{
   return out;
 }
 
+type DriverCandidateRow = Awaited<ReturnType<typeof import("./extrasDia").listDriverCandidates>>[number];
+
+/** Janelas do dia operacional (já calculadas em getAvailabilityForDay: lê D−1, D e D+1). */
+export const candidateWindows = (c: { availability?: { windows?: readonly { from: number; to: number }[] } | null }) => c.availability?.windows ?? [];
+
 /**
- * Extras disponíveis para o dia/cidade, com o que a ordenação precisa. Fora:
- * formação obrigatória por concluir, ficha de outra cidade ou SEM cidade, sem
- * disponibilidade, e quem não é extra (funcionários só à mão).
+ * Extras que PODEM entrar na escala do dia/cidade: disponíveis no dia
+ * operacional, extras (funcionários só à mão), da cidade da escala (sem cidade
+ * não) e com a formação obrigatória concluída. A mesma lista serve a proposta
+ * automática e o "disponíveis por escalar" do indicador de pessoal.
  */
-export async function loadScheduleCandidates(date: string, city: ScheduleCity): Promise<ScheduleCandidate[]> {
+export async function loadEligibleExtras(date: string, city: ScheduleCity): Promise<DriverCandidateRow[]> {
   const db = await getDb();
   if (!db) return [];
-  const { listDriverCandidates, DRIVER_LEVELS } = await import("./extrasDia");
+  const { listDriverCandidates } = await import("./extrasDia");
   const all = await listDriverCandidates(date);
-  const available = all.filter((c) => availabilityWindow(c.availability ?? null) != null);
+  const available = all.filter((c) => candidateWindows(c).length > 0);
   if (!available.length) return [];
 
   const { employeesMissingTraining } = await import("./trainingPaths");
@@ -239,13 +244,22 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
   const cityKey = city === "lisbon" ? "lisboa" : city;
   // Proposta automática: só EXTRAS e só da cidade da escala (Jorge, 2 out 2026:
   // funcionários só à mão; quem não tem cidade não se escala).
-  const pool = available.filter((c) => {
+  return available.filter((c) => {
     if (untrained.has(c.id)) return false;
     if ((c.position ?? "").toLowerCase() !== "extra") return false;
     return (cities.get(c.id)?.city ?? null) === cityKey;
   });
-  if (!pool.length) return [];
+}
 
+/**
+ * Extras disponíveis para o dia/cidade, com o que a ordenação precisa. Fora:
+ * formação obrigatória por concluir, ficha de outra cidade ou SEM cidade, sem
+ * disponibilidade, e quem não é extra (funcionários só à mão).
+ */
+export async function loadScheduleCandidates(date: string, city: ScheduleCity): Promise<ScheduleCandidate[]> {
+  const pool = await loadEligibleExtras(date, city);
+  if (!pool.length) return [];
+  const { DRIVER_LEVELS } = await import("./extrasDia");
   const { loadExtraRates, rateFor } = await import("./extraRates");
   const rates = await loadExtraRates();
   const hist = await loadHistory(pool.map((c) => c.id), date);
@@ -255,7 +269,7 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
     level: c.suggestedLevel,
     levelLabel: DRIVER_LEVELS.find((l) => l.id === c.suggestedLevel)?.label ?? c.suggestedLevel,
     hourlyRate: rateFor(rates, c.suggestedLevel),
-    window: availabilityWindow(c.availability ?? null),
+    windows: candidateWindows(c),
     evalScore: hist.evalScore.get(c.id) ?? null,
     recentDays: hist.recentDays.get(c.id) ?? 0,
     noShows: hist.noShows.get(c.id) ?? 0,
@@ -591,28 +605,35 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
 
-/** Email "estás escalado" a quem tem email na ficha (1 por pessoa e versão). */
+/**
+ * Email "Aviso de trabalho" (1 por pessoa e versão da linha). Vai para o email
+ * de trabalho ou, sem ele, para o pessoal (os extras usam o pessoal — antes
+ * ficavam "sem email na ficha"). `shift` limita a um turno ("Avisar este turno").
+ */
 export async function sendScheduleEmails(
   date: string,
   city: ScheduleCity,
   /** `employeeIds`: só estas pessoas (alternativa de um WhatsApp não entregue, 0375). */
-  opts: { respectHold?: boolean; employeeIds?: readonly number[] } = {},
+  opts: { respectHold?: boolean; employeeIds?: readonly number[]; shift?: "morning" | "night" | null } = {},
 ): Promise<NotifySummary["email"]> {
   const db = await getDb();
   const out = { sent: 0, failed: 0, noEmail: 0, skipped: 0 };
   if (!db) return out;
   if (opts.respectHold && (await heldCities(date)).has(city)) return out;
   const only = opts.employeeIds ? new Set(opts.employeeIds) : null;
-  const rows = (await loadDayRows(date)).filter((r) => r.city === city && (!only || (r.employeeId != null && only.has(r.employeeId))));
+  const rows = (await loadDayRows(date)).filter((r) =>
+    r.city === city && (!opts.shift || r.shift === opts.shift) && (!only || (r.employeeId != null && only.has(r.employeeId))));
   const log = await loadNotifyLog(rows.map((r) => r.id));
   const pending = pendingScheduleNotifications(rows, log, "email");
   out.skipped = rows.filter((r) => r.status === "confirmed" && r.employeeId != null).length - pending.length;
   if (!pending.length) return out;
 
   const empIds = Array.from(new Set(pending.map((r) => r.employeeId as number)));
-  const res = await db.execute(sql`SELECT id, fullName, email, position, isActive, noAutoEmail FROM employees WHERE id IN (${inList(empIds)})`);
+  const res = await db.execute(sql`SELECT id, fullName, email, personalEmail, position, isActive, noAutoEmail FROM employees WHERE id IN (${inList(empIds)})`);
+  const { noticeEmailAddress, noticeSpans, shiftNoticeEmailLines, shiftNoticeSubject } = await import("../shared/shiftNotice");
   const people = new Map(rowsOf(res).map((r) => [Number(r.id), {
-    fullName: String(r.fullName ?? ""), email: r.email ? String(r.email).trim() : "",
+    fullName: String(r.fullName ?? ""),
+    email: noticeEmailAddress({ email: r.email ? String(r.email) : null, personalEmail: r.personalEmail ? String(r.personalEmail) : null }) ?? "",
     // Só EXTRAS ativos recebem o email da escala (Jorge, 2 out 2026).
     extra: String(r.position ?? "") === "extra" && Number(r.isActive) === 1,
     noAutoEmail: Number(r.noAutoEmail ?? 0) === 1,
@@ -638,18 +659,21 @@ export async function sendScheduleEmails(
       out.skipped += claimed.length;
       continue;
     }
-    if (!p?.email || !/@/.test(p.email)) {
-      for (const a of claimed) await finishNotification(a, "scheduled", "email", "no_contact", "sem email na ficha");
+    if (!p?.email) {
+      for (const a of claimed) await finishNotification(a, "scheduled", "email", "no_contact", "sem email (de trabalho nem pessoal) na ficha");
       out.noEmail += claimed.length;
       continue;
     }
-    const text = scheduleMessageText({ date, city, spans: claimed.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })), meetingPoint: settings.meetingPoints[city] });
+    // Todas as horas confirmadas da pessoa nesta seleção (o mesmo texto da pré-visualização).
+    const spans = noticeSpans(rows.filter((a) => a.employeeId === empId && a.status === "confirmed"));
+    const text = scheduleMessageText({ date, city, spans, meetingPoint: settings.meetingPoints[city] });
     const first = p.fullName.split(/\s+/)[0] || "olá";
+    const lines = shiftNoticeEmailLines(first, text);
     const ok = await sendEmail({
       to: p.email,
-      subject: `Escala Multipark — ${text.split(" · ")[0]}`,
-      text: `Olá ${first},\n\nEstás escalado(a): ${text}.\n\nSe não puderes ir, avisa-nos o quanto antes (responde a este email ou pelo WhatsApp).\n\nObrigado,\nMultipark`,
-      html: `<p>Olá ${esc(first)},</p><p>Estás escalado(a): <strong>${esc(text)}</strong>.</p><p>Se não puderes ir, avisa-nos o quanto antes (responde a este email ou pelo WhatsApp).</p><p>Obrigado,<br/>Multipark</p>`,
+      subject: shiftNoticeSubject(date, spans),
+      text: lines.join("\n\n"),
+      html: lines.map((l) => `<p>${esc(l).replace(/\n/g, "<br/>").replace(esc(text), `<strong>${esc(text)}</strong>`)}</p>`).join(""),
       auto: { kind: "schedule_notice", employeeId: empId },
     } as any);
     for (const a of claimed) await finishNotification(a, "scheduled", "email", ok ? "sent" : "failed", ok ? null : "falhou o envio do email");
@@ -748,7 +772,7 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
   const out: RemoveResult["notified"] = { whatsapp: null, email: null };
   if (!db || row.employeeId == null) return out;
   const text = scheduleMessageText({ date: row.assignmentDate, city: row.city, spans: [{ startHour: row.startHour, endHour: row.endHour }], meetingPoint: null });
-  const empRes = await db.execute(sql`SELECT fullName, email, position, noAutoWhatsapp, noAutoEmail FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
+  const empRes = await db.execute(sql`SELECT fullName, email, personalEmail, position, noAutoWhatsapp, noAutoEmail FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
   const emp = rowsOf(empRes)[0];
   // Funcionário posto à mão na escala: nunca foi avisado, também não é avisado da saída.
   if (String(emp?.position ?? "") !== "extra") return out;
@@ -779,7 +803,9 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
     await finishNotification(row, "removed", "whatsapp", status, detail);
     out.whatsapp = status;
   }
-  const email = emp?.email ? String(emp.email).trim() : "";
+  // Trabalho ou, sem ele, o pessoal (o mesmo do aviso de trabalho).
+  const { noticeEmailAddress } = await import("../shared/shiftNotice");
+  const email = noticeEmailAddress({ email: emp?.email ? String(emp.email) : null, personalEmail: emp?.personalEmail ? String(emp.personalEmail) : null }) ?? "";
   if ((await emailConfigured()) && (await claimNotification(row, "removed", "email"))) {
     if (Number(emp?.noAutoEmail ?? 0) === 1) {
       const { NO_AUTO_EMAIL_ERROR } = await import("../shared/contactPrefs");
@@ -896,7 +922,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     proposedCount: mine.filter((r) => r.status === "proposed").length,
     confirmedCount: mine.filter((r) => r.status !== "proposed").length,
     noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
-    availableCount: cands.filter((c) => availabilityWindow(c.availability ?? null) != null).length,
+    availableCount: cands.filter((c) => candidateWindows(c).length > 0).length,
     notifications,
     settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead },
   };

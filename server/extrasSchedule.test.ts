@@ -5,7 +5,6 @@ import { resolve } from "node:path";
 import {
   MAX_SHIFT_HOURS,
   MIN_SHIFT_HOURS,
-  availabilityWindow,
   bestBlock,
   canAutoConfirm,
   crewCarsPerHour,
@@ -29,6 +28,7 @@ import {
   type ScheduleCandidate,
 } from "../shared/extrasSchedule";
 import { DEFAULT_CREW_RULES, SETTINGS, cronOutcome, hhmmToMinutes, validateSetting } from "../shared/appSettings";
+import { operationalDayWindows, type AvailabilityDayLike } from "../shared/availabilityWindow";
 import { MIGRATION_0115_STATEMENTS } from "./migrations/migration_0115";
 
 // ─── Mocks (só para os testes de idempotência com BD simulada) ──────────────
@@ -53,7 +53,7 @@ const cand = (over: Partial<ScheduleCandidate> & { id: number }): ScheduleCandid
   level: "junior",
   levelLabel: "Júnior",
   hourlyRate: 4.5,
-  window: { from: 3, to: 15 },
+  windows: [{ from: 3, to: 15 }],
   evalScore: null,
   recentDays: 0,
   noShows: 0,
@@ -120,19 +120,30 @@ describe("capacidade por equipa (D12, Jorge 3 out): tempo por carro conforme as 
 
 // ─── 2. Disponibilidade, ordenação e proposta ───────────────────────────────
 
-describe("janela de disponibilidade", () => {
-  const base = { status: "available", morning: false, night: false, fromHour: null, toHour: null };
-  it("turnos e horas (madrugada = dia seguinte)", () => {
-    expect(availabilityWindow({ ...base, morning: true })).toEqual({ from: 3, to: 15 });
-    expect(availabilityWindow({ ...base, night: true })).toEqual({ from: 15, to: 27 });
-    expect(availabilityWindow({ ...base, morning: true, night: true })).toEqual({ from: 3, to: 27 });
-    expect(availabilityWindow({ ...base, fromHour: 7, toHour: 12 })).toEqual({ from: 7, to: 12 });
-    expect(availabilityWindow({ ...base, fromHour: 22, toHour: 2 })).toEqual({ from: 22, to: 26 });
+// Pedido 7 (7 out 2026, opção B): a escala lê a disponibilidade com a MESMA
+// semântica de calendário da grelha (operationalDayWindows). Antes havia aqui
+// availabilityWindow(linha) com "horas < 03h = madrugada SEGUINTE": "02h–10h"
+// virava {26, 27} e "terça 00h–03h" não contava para a noite de segunda — por
+// isso estes casos mudaram de propósito (ver server/extrasDiaFrenteB.test.ts).
+describe("janela de disponibilidade (dia operacional, semântica de calendário)", () => {
+  const row = (day: string, o: Partial<AvailabilityDayLike> = {}): AvailabilityDayLike =>
+    ({ day, morning: false, night: false, fromHour: null, toHour: null, ...o });
+  const D = "2026-10-05"; // segunda
+  it("turnos e horas do próprio dia", () => {
+    expect(operationalDayWindows([row(D, { morning: true })], D)).toEqual([{ from: 3, to: 15 }]);
+    expect(operationalDayWindows([row(D, { night: true })], D)).toEqual([{ from: 15, to: 27 }]);
+    expect(operationalDayWindows([row(D, { morning: true, night: true })], D)).toEqual([{ from: 3, to: 27 }]);
+    expect(operationalDayWindows([row(D, { fromHour: 7, toHour: 12 })], D)).toEqual([{ from: 7, to: 12 }]);
+    expect(operationalDayWindows([row(D, { fromHour: 22, toHour: 2 })], D)).toEqual([{ from: 22, to: 26 }]);
   });
-  it("sem disponibilidade → null", () => {
-    expect(availabilityWindow({ ...base, status: "no_response", morning: true })).toBeNull();
-    expect(availabilityWindow({ ...base, status: "unavailable" })).toBeNull();
-    expect(availabilityWindow(null)).toBeNull();
+  it("a madrugada marcada no dia seguinte é deste dia operacional; '02h–10h' não encolhe para 1h", () => {
+    expect(operationalDayWindows([row("2026-10-06", { fromHour: 0, toHour: 3 })], D)).toEqual([{ from: 24, to: 27 }]);
+    expect(operationalDayWindows([row(D, { fromHour: 2, toHour: 10 })], D)).toEqual([{ from: 3, to: 10 }]);
+    expect(operationalDayWindows([row(D, { fromHour: 2, toHour: 10 })], "2026-10-04")).toEqual([{ from: 26, to: 27 }]);
+  });
+  it("sem nada marcado → sem janelas", () => {
+    expect(operationalDayWindows([], D)).toEqual([]);
+    expect(operationalDayWindows([row(D)], D)).toEqual([]);
   });
 });
 
@@ -160,7 +171,7 @@ describe("turno mínimo e máximo", () => {
     const plan = planSchedule({
       needed: needArr({ 6: 2, 7: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 2, 13: 1, 14: 2, 15: 2, 16: 2, 17: 1, 18: 1, 19: 1, 20: 1, 21: 1 }),
       existing: [],
-      candidates: [1, 2, 3, 4, 5].map((id) => cand({ id, window: { from: 3, to: 27 } })),
+      candidates: [1, 2, 3, 4, 5].map((id) => cand({ id, windows: [{ from: 3, to: 27 }] })),
     });
     for (const p of plan.picks) {
       expect(p.endHour - p.startHour).toBeGreaterThanOrEqual(MIN_SHIFT_HOURS);
@@ -189,8 +200,8 @@ describe("ordenação dos candidatos", () => {
   });
   it("cobertura pesa mais: quem cobre as horas em falta passa à frente", () => {
     const r = rankCandidates([
-      cand({ id: 1, evalScore: 40, window: { from: 10, to: 13 } }), // só cobre 1h
-      cand({ id: 2, evalScore: 10, window: { from: 7, to: 15 } }), // cobre 3h
+      cand({ id: 1, evalScore: 40, windows: [{ from: 10, to: 13 }] }), // só cobre 1h
+      cand({ id: 2, evalScore: 10, windows: [{ from: 7, to: 15 }] }), // cobre 3h
     ], remaining);
     expect(r[0].candidate.id).toBe(2);
   });
@@ -201,7 +212,7 @@ describe("ordenação dos candidatos", () => {
     expect(b.map((x) => x.candidate.id)).toEqual([1, 2]);
   });
   it("sem janela (não disponível) não entra", () => {
-    expect(rankCandidates([cand({ id: 1, window: null })], remaining)).toEqual([]);
+    expect(rankCandidates([cand({ id: 1, windows: [] })], remaining)).toEqual([]);
   });
 });
 
@@ -212,8 +223,8 @@ describe("proposta e buracos", () => {
       existing: [],
       candidates: [
         cand({ id: 1, fullName: "Ana", evalScore: 28 }),
-        cand({ id: 2, fullName: "Bruno", evalScore: 5, window: { from: 7, to: 12 } }),
-        cand({ id: 3, fullName: "Carla", window: { from: 15, to: 27 }, level: "senior", levelLabel: "Sénior", hourlyRate: 5 }),
+        cand({ id: 2, fullName: "Bruno", evalScore: 5, windows: [{ from: 7, to: 12 }] }),
+        cand({ id: 3, fullName: "Carla", windows: [{ from: 15, to: 27 }], level: "senior", levelLabel: "Sénior", hourlyRate: 5 }),
         cand({ id: 4, fullName: "Duarte", evalScore: 15, noShows: 1 }),
       ],
     });

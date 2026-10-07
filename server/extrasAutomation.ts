@@ -28,7 +28,8 @@ import { automationFlagDefault } from "../shared/appSettings";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
-import { availabilityWindow } from "../shared/extrasSchedule";
+import type { HourWindow } from "../shared/availabilityWindow";
+import { NOT_EXTRA_NOTICE_REASON } from "../shared/shiftNotice";
 
 // ─── Relógio de Lisboa (puro) ───────────────────────────────────────────────
 
@@ -133,7 +134,8 @@ export interface AutofillCandidate {
   id: number;
   fullName: string;
   level: "junior" | "senior" | "terminal" | "master";
-  availability: { status: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null } | null;
+  /** Janelas do dia operacional (operationalDayWindows); vazio = não pode. */
+  windows: readonly HourWindow[];
   /** true = cidade da ficha bate com a da escala; null = ficha sem cidade. */
   cityMatch: boolean | null;
   /** false = funcionário (não extra): só entra na escala à mão (2 out 2026). */
@@ -142,18 +144,20 @@ export interface AutofillCandidate {
 export interface AutofillPick { employeeId: number; personName: string; level: AutofillCandidate["level"]; startHour: number; endHour: number }
 
 /**
- * Janela (horas) em que o extra disse que pode, para este turno; null = não
- * pode. É a MESMA leitura da proposta automática (availabilityWindow: horas
- * que atravessam a meia-noite, só o início, só os turnos), cortada ao turno —
- * antes "Preencher" e a proposta davam respostas diferentes para a mesma pessoa.
+ * Janela (horas) em que o extra pode, para este turno; null = não pode. Usa
+ * as MESMAS janelas do dia operacional da proposta automática e da grelha
+ * (shared/availabilityWindow.ts → operationalDayWindows), cortadas ao turno;
+ * com duas janelas, fica a mais comprida (≥ 3h).
  */
-export function availableWindow(a: AutofillCandidate["availability"], shift: ShiftKey): { from: number; to: number } | null {
-  const w = availabilityWindow(a);
-  if (!w) return null;
+export function availableWindow(windows: readonly HourWindow[], shift: ShiftKey): { from: number; to: number } | null {
   const bounds = shift === "morning" ? { from: 3, to: 15 } : { from: 15, to: 27 };
-  const from = Math.max(bounds.from, w.from);
-  const to = Math.min(bounds.to, w.to);
-  return to - from >= 3 ? { from, to } : null;
+  let best: { from: number; to: number } | null = null;
+  for (const w of windows) {
+    const from = Math.max(bounds.from, w.from);
+    const to = Math.min(bounds.to, w.to);
+    if (to - from >= 3 && (!best || to - from > best.to - best.from)) best = { from, to };
+  }
+  return best;
 }
 
 /**
@@ -176,7 +180,7 @@ export function planAutofill(
     .slice(Math.max(0, existingCount));
   const pool = candidates
     .filter((c) => c.cityMatch === true && c.isExtra !== false && !alreadyAssigned.has(c.id))
-    .map((c) => ({ c, win: availableWindow(c.availability, shift) }))
+    .map((c) => ({ c, win: availableWindow(c.windows, shift) }))
     .filter((x): x is { c: AutofillCandidate; win: { from: number; to: number } } => x.win != null)
     .sort((a, b) => a.c.fullName.localeCompare(b.c.fullName));
 
@@ -423,7 +427,7 @@ async function sendRulesAsFreeText(employeeIds: number[], templateName: string, 
 }
 
 /** Motivo registado quando quem está na escala não é extra (não recebe avisos). */
-export const NOT_EXTRA_NO_NOTICE = "funcionário (não é extra): não recebe avisos de escala";
+export const NOT_EXTRA_NO_NOTICE = NOT_EXTRA_NOTICE_REASON;
 
 /**
  * Avisa por WhatsApp quem está escalado em `date` e ainda não foi avisado
@@ -485,13 +489,16 @@ export async function notifyAssignments(
     const empId = Number(a.employeeId);
     byEmp.set(empId, [...(byEmp.get(empId) ?? []), a]);
   }
+  // O texto leva TODAS as horas confirmadas da pessoa nesta seleção (não só as
+  // linhas por avisar) — é o mesmo texto da pré-visualização (shared/shiftNotice.ts).
+  const { noticeSpans } = await import("../shared/shiftNotice");
   const texts: Record<number, string> = {};
   for (const [empId, list] of Array.from(byEmp.entries())) {
     const city = list[0].city;
     texts[empId] = scheduleMessageText({
       date,
       city,
-      spans: list.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })),
+      spans: noticeSpans(rows.filter((a) => Number(a.employeeId) === empId && a.city === city)),
       meetingPoint: (settings.meetingPoints as Record<string, string>)[city] ?? null,
     });
   }
@@ -632,7 +639,7 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
         id: c.id,
         fullName: c.fullName,
         level: c.suggestedLevel,
-        availability: c.availability ?? null,
+        windows: c.availability?.windows ?? [],
         cityMatch: key ? CITY_KEY_TO_EXTRA[key] === input.city : null,
         isExtra: (c.position ?? "").toLowerCase() === "extra",
       };
