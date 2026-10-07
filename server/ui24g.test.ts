@@ -5,6 +5,7 @@
  * opção ligada) — variante `selected` — e o separador ativo. Modo escuro igual.
  */
 import { globSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -24,7 +25,8 @@ describe("botões brancos; o escolhido azul", () => {
     expect(src("client/src/components/ui/pagination.tsx")).toContain('variant: isActive ? "selected" : "ghost",');
   });
   it("nenhum botão de escolha ficou com 'default'/'secondary' para marcar o escolhido", () => {
-    const files = globSync("client/src/**/*.tsx", { cwd: new URL("..", import.meta.url).pathname });
+    const files = globSync("client/src/**/*.tsx", { cwd: fileURLToPath(new URL("..", import.meta.url)) })
+      .map((file) => file.replaceAll("\\", "/"));
     const offenders: string[] = [];
     for (const f of files) {
       const lines = src(f).split("\n");
