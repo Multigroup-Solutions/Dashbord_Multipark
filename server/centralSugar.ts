@@ -107,6 +107,7 @@ async function logRequest(req: Request, status: number, accountId: number | null
       client: {
         ...(hdr["user-agent"] ? { userAgent: String(hdr["user-agent"]).slice(0, 200) } : {}),
         ...(hdr["content-type"] ? { contentType: String(hdr["content-type"]).slice(0, 100) } : {}),
+        ...(hdr.origin ? { origin: String(hdr.origin).slice(0, 200) } : {}),
         withCredentials: !!(hdr["oauth-token"] || hdr.authorization),
       },
     };
@@ -154,15 +155,26 @@ function fail(req: Request) {
   failures.set(k, f && f.until > now ? { n: f.n + 1, until: f.until } : { n: 1, until: now + FAIL_WINDOW_MS });
 }
 
-async function centralEnabled(): Promise<boolean> {
+/** Ligada? E, se não, porquê (fica na nota do pedido, para se perceber logo). */
+async function centralEnabled(): Promise<{ on: boolean; why: string | null }> {
   const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
   const read = () => isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
   await ensureFeatureFlagOverrides();
-  if (read()) return true;
+  if (read()) return { on: true, why: null };
   // 39b: desligado na cache (30 s por instância) → confirma na BD antes de recusar,
   // para quem acabou de ligar o interruptor não levar com "desligada"
   await ensureFeatureFlagOverrides(true);
-  return read();
+  if (read()) return { on: true, why: null };
+  // 39c: ainda desligado → lê o valor gravado diretamente (é ele que manda) e diz porquê
+  try {
+    const { loadFeatureFlagOverrides } = await import("./appSettings");
+    const stored = (await loadFeatureFlagOverrides()).get(CENTRAL_SUGAR_FLAG);
+    if (stored === true) return { on: true, why: null };
+    const env = process.env[CENTRAL_SUGAR_FLAG];
+    return { on: false, why: stored === false ? "gravado como desligado nas Automações" : `nada gravado nas Automações (por omissão desligado${env ? `; variável do servidor: ${env}` : ""})` };
+  } catch (e: any) {
+    return { on: false, why: `não deu para ler o interruptor: ${String(e?.message ?? e).slice(0, 120)}` };
+  }
 }
 
 /** Login com utilizador + segredo (texto, ou md5 na v4_1). */
@@ -190,11 +202,23 @@ export function createCentralSugarRouter(): Router {
   r.use(express.urlencoded({ limit: "512kb", extended: true }));
 
   // desligado → 503 (o pedido fica registado, para se ver que a consola chegou cá)
+  // 39c: a consola pode falar como um browser ("Mozilla/5.0"): CORS sem cookies (a
+  // autenticação vai no cabeçalho OAuth-Token) e resposta ao preflight antes de tudo
   r.use(async (req: Request, res: Response, next: NextFunction) => {
-    let on = false;
-    try { on = await centralEnabled(); } catch { on = false; }
-    if (on) return next();
-    await logRequest(req, 503, null, "interruptor desligado");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, OAuth-Token, Authorization, X-Requested-With, X-Metadata-Hash, X-Userpref-Hash");
+    res.setHeader("Access-Control-Max-Age", "600");
+    if (req.method !== "OPTIONS") return next();
+    await logRequest(req, 204, null, "preflight (CORS)");
+    res.status(204).end();
+  });
+
+  r.use(async (req: Request, res: Response, next: NextFunction) => {
+    let st: { on: boolean; why: string | null } = { on: false, why: null };
+    try { st = await centralEnabled(); } catch { st = { on: false, why: "erro ao ler o interruptor" }; }
+    if (st.on) return next();
+    await logRequest(req, 503, null, `interruptor desligado — ${st.why ?? "?"}`);
     res.status(503).json({ error: "service_unavailable", error_message: "A central da dashboard está desligada (Definições → Automações → Central Vodafone)." });
   });
 

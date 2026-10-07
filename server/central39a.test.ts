@@ -12,9 +12,11 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractPhone, flattenNameValueList, normalizeCentralUsername, parseSugarCall, parseSugarDate, redactForLog } from "../shared/centralSugar";
 
-const h = vi.hoisted(() => ({ enabled: true, enableOnRefresh: false, forced: 0, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
+const h = vi.hoisted(() => ({ enabled: true, enableOnRefresh: false, forced: 0, stored: undefined as boolean | undefined, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
 const dialect = new MySqlDialect();
 vi.mock("./_core/env", () => ({ ENV: { cookieSecret: "segredo-so-para-testes" } }));
+// 39c: o valor gravado nas Automações (lido direto quando a cache diz "desligado")
+vi.mock("./appSettings", () => ({ loadFeatureFlagOverrides: async () => new Map(h.stored === undefined ? [] : [["CENTRAL_SUGAR", h.stored]]) }));
 vi.mock("./_core/featureFlags", () => ({
   // 39b: com "force" relê a BD (aqui: o interruptor acabou de ser ligado noutra instância)
   ensureFeatureFlagOverrides: async (force?: boolean) => { if (force) { h.forced++; if (h.enableOnRefresh) h.enabled = true; } },
@@ -85,7 +87,7 @@ describe("39a — a porta Sugar (HTTP)", () => {
   let server: Server;
   let url: string;
   beforeEach(async () => {
-    h.enabled = true; h.enableOnRefresh = false; h.forced = 0; h.queries.length = 0; h.calls.length = 0;
+    h.enabled = true; h.enableOnRefresh = false; h.forced = 0; h.stored = undefined; h.queries.length = 0; h.calls.length = 0;
     server = createServer(express().use("/api/central/sugar", createCentralSugarRouter()));
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/central/sugar`;
@@ -105,6 +107,29 @@ describe("39a — a porta Sugar (HTTP)", () => {
     expect(h.calls).toHaveLength(0);
     expect(logged()).toHaveLength(1);
     expect(JSON.stringify(logged()[0].params)).not.toContain(SECRET);
+  });
+
+  it("39c: desligada diz porquê (nada gravado / gravado desligado); gravado ligado manda mesmo com a cache a dizer não", async () => {
+    h.enabled = false;
+    expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(503);
+    expect(logged().at(-1)!.params).toContain("interruptor desligado — nada gravado nas Automações (por omissão desligado)");
+    h.stored = false;
+    expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(503);
+    expect(logged().at(-1)!.params).toContain("interruptor desligado — gravado como desligado nas Automações");
+    h.stored = true;
+    expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(401); // passou o interruptor; falta o login
+  });
+
+  it("39c: CORS — preflight responde 204 com os cabeçalhos; as respostas levam Allow-Origin; regista a origem", async () => {
+    const pre = await fetch(`${url}/rest/v10/oauth2/token`, { method: "OPTIONS", headers: { Origin: "https://consola.exemplo", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type, oauth-token" } });
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("access-control-allow-origin")).toBe("*");
+    expect(pre.headers.get("access-control-allow-headers")).toMatch(/OAuth-Token/);
+    expect(pre.headers.get("access-control-allow-methods")).toMatch(/POST/);
+    expect(logged().at(-1)!.params).toContain("preflight (CORS)");
+    const r = await fetch(`${url}/rest/v10/ping`, { headers: { Origin: "https://consola.exemplo" } });
+    expect(r.headers.get("access-control-allow-origin")).toBe("*");
+    expect(String(logged().at(-1)!.params.find((p) => typeof p === "string" && p.startsWith("{")))).toContain('"origin":"https://consola.exemplo"');
   });
 
   it("39b: acabado de ligar — a cache dizia desligado, a porta confirma na BD e deixa passar", async () => {
