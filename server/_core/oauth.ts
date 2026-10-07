@@ -218,9 +218,10 @@ export function registerOAuthRoutes(app: Express) {
     url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", scope);
-    url.searchParams.set("access_type", "offline");
-    // D61: num PDA (pda=1) a Google pede sempre para escolher a conta.
-    url.searchParams.set("prompt", googlePromptFor(req.query.pda));
+    // Sem access_type=offline nem prompt=consent: o login não guarda tokens da
+    // Google (ver googlePromptFor). D61: num PDA (pda=1) pede para escolher a conta.
+    const prompt = googlePromptFor(req.query.pda);
+    if (prompt) url.searchParams.set("prompt", prompt);
     url.searchParams.set("state", state);
 
     res.redirect(302, url.toString());
