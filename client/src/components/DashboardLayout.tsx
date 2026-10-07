@@ -92,6 +92,8 @@ import {
   X,
   Mail as MailIcon,
   Inbox,
+  HardDrive,
+  PhoneCall,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -117,6 +119,9 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { PAGE_RELOAD_EVENT, jumpTo } from "@/lib/jumpTo";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 
+/** Lote 45: o "Drive" do menu abre o Google Drive da pessoa (a conta Google com que está no browser). */
+export const GOOGLE_DRIVE_URL = "https://drive.google.com/drive/my-drive";
+
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
 export type AccessSubject = string | { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
 
@@ -130,7 +135,18 @@ export type MenuItem = {
   anyOf?: ModuleId[];
   /** Só aparece a quem vê mais do que os próprios casos no módulo (a página não tem vista "só meus"). */
   beyondOwn?: boolean;
+  /** Lote 45: abre este endereço num separador novo (ex.: o Google Drive) em vez de navegar. */
+  external?: string;
 };
+
+/** Abre um item do menu: navega, ou abre o endereço externo num separador novo. */
+export function openMenuItem(item: Pick<MenuItem, "path" | "external">, navigate: (path: string) => void): void {
+  if (item.external) {
+    window.open(item.external, "_blank", "noopener,noreferrer");
+    return;
+  }
+  navigate(item.path);
+}
 
 export type MenuGroup = {
   label: string;
@@ -224,12 +240,20 @@ export const menuGroups: MenuGroup[] = [
       // Caixas partilhadas: matriz (comunicacao) + regra de cada caixa no servidor.
       // Lote 45 (Jorge, 7 out 2026): "é só de email" — o WhatsApp tem a entrada dele; as caixas
       // ficam à esquerda como no Gmail, com o "O meu email" na mesma lista.
-      // Ordem (Jorge, lote 45): Caixas de email → O meu email → WhatsApp.
+      // Ordem (Jorge, lote 45): Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas.
       { icon: Inbox, label: "Caixas de email", path: "/comunicacao", module: "comunicacao" },
       // O próprio email: qualquer pessoa (a ficha é de todos); liga a conta Google na página.
       { icon: MailIcon, label: "O meu email", path: "/comunicacao/meu-email", anyOf: ["ficha"] },
+      // Lote 45 (Jorge: opção "a"): o Google Drive da pessoa num separador ao lado.
+      { icon: HardDrive, label: "Drive", path: "/drive", anyOf: ["ficha"], external: GOOGLE_DRIVE_URL },
       // 17f (Jorge): o WhatsApp passa para a Comunicação.
       { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
+      // Lote 45: as chamadas da consola — cada um as suas; admin e super admin todas.
+      { icon: PhoneCall, label: "Central", path: "/central", module: "central" },
+      // Lote 45e (Jorge: opção "b"): a agenda Google da própria pessoa, como no Google Calendar.
+      { icon: CalendarDays, label: "Calendário", path: "/calendario", anyOf: ["ficha"] },
+      // Lote 45: as Tarefas também aqui (continuam nas Operações).
+      { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
     ],
   },
   {
@@ -683,7 +707,7 @@ function DashboardLayoutContent({
                               <SidebarMenuItem key={item.path}>
                                 <SidebarMenuButton
                                   isActive={isActive}
-                                  onClick={() => navigate(item.path)}
+                                  onClick={() => openMenuItem(item, navigate)}
                                   tooltip={item.label}
                                   className="h-9 rounded-lg transition-all font-normal data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground data-[active=true]:font-semibold hover:data-[active=true]:!bg-primary"
                                 >

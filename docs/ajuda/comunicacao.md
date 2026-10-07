@@ -29,6 +29,12 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 7. **Notificações automáticas de reserva** (os emails "Nova Reserva" que o sistema Multipark manda para a caixa "Reservas (geral)", ~4000 por mês): ficam guardadas, mas **escondidas** nas listas. Carrega em **Mostrar automáticos** para as ver (aparecem com a etiqueta "Automático"). A **pesquisa** encontra-as sempre. Não contam como por ler nem geram avisos.
 8. **Emails que a aplicação envia sozinha** (pedidos e lembretes de disponibilidade aos extras — "Disponibilidade — semana de…", "Lembrete: ainda não indicaste a tua disponibilidade" —, avisos de escala, turnos cancelados, lembretes de formação, notificações e relatórios): também ficam **escondidos** como automáticos, mesmo quando saem por recursos-humanos@. Não aparecem como conversas abertas, não contam como por ler, por responder nem abertas, e não ficam para atribuir. **Se a pessoa responder**, a conversa passa a normal e aparece na caixa (quem respondeu foi uma pessoa). Os envios a um extra ficam na ficha dele: **Recursos Humanos → abre o colaborador → Comunicações automáticas** (data, tipo, assunto e estado *Enviado*/*Respondido*; o assunto abre a conversa). Os que já estavam na caixa antes desta mudança foram limpos uma vez, automaticamente.
 
+**O resto da Comunicação** (menu, por esta ordem)
+- **Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas.**
+- **Drive** abre o **Google Drive** num separador ao lado, com a conta Google com que estás no browser. Os ficheiros ligados a uma ficha continuam no separador Drive dessa ficha.
+- **Central**: as chamadas da consola da Vodafone. Cada um vê as suas; admin e super admin veem as de todos (ver a ajuda "Central").
+- **Tarefas**: as mesmas Tarefas das Operações, também aqui.
+
 **Caixas por tema**
 - As caixas são as mesmas do WhatsApp: além das que já havia (Reclamações, Perdidos, Críticas, Ocorrências, RH, Info, Comercial…) há **Alterações**, **Cancelamentos**, **Serviços extra**, **Parcerias** e **Faturação** — caixas "por tema", sem endereço próprio. Os pedidos para **cancelar** uma reserva (ou o reembolso de uma cancelada) vão para **Cancelamentos**; mudar datas, horas, voo ou matrícula fica em **Alterações**.
 - Os emails novos que chegam ao **info@** (caixa geral) vão para a caixa do tema pela **IA** — com **"IA: separar os emails pelas caixas"** ligado em Definições → Automações (desligado por omissão). A conversa mostra **"veio de Info (IA)"**. A IA não cria reclamações nem perdidos sozinha — só move.
