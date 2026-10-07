@@ -6,10 +6,10 @@ palavras: trajeto, mapa das velocidades, geojson, recolher dados, forçar re-div
 ---
 # Actividade Diária
 
-Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, os km e as velocidades do GPS (Zello) e os PDAs. As transcrições de rádio estão em **Operações → Rádio**.
+Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, os km e as velocidades do GPS (Zello), os PDAs e o **Rádio** (gravações do Zello, provas e transcrições), que passou a ser um separador daqui.
 
 **Que abas vês**
-- Só aparecem as abas a que a tua conta tem acesso. **Atividade do Dia** e **Ao Vivo** pedem a Actividade Diária; **Histórico Diário**, o Histórico diário (GPS); **PDAs**, os PDAs.
+- Só aparecem as abas a que a tua conta tem acesso. **Atividade do Dia** e **Ao Vivo** pedem a Actividade Diária; **Histórico Diário**, o Histórico diário (GPS); **PDAs**, os PDAs; **Rádio**, o Rádio.
 - **Condutores e extras** veem só **O meu histórico de velocidade**: os km e as velocidades deles, dia a dia, nos últimos 30 ou 90 dias.
 
 **Atividade do Dia**
@@ -45,7 +45,8 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, os km
 - **Utilizadores Zello ↔ Pessoas**: os PDAs ligam-se pelo check-in do dia; o seletor fixo é só para telemóveis pessoais.
 
 **PDAs**
-- Os PDAs da cidade, quem está com cada um e desde quando, e os alertas **A trabalhar sem PDA ou Zello ligado**.
+- Os PDAs da cidade, quem está com cada um e desde quando.
+- Os alertas **Sem PDA ou Zello** (ponto aberto sem PDA, Zello desligado, movimentos sem ponto) ficam pequenos, ao lado (no telemóvel, por cima). Carrega no título para os encolher. **Visto** marca que trataste; **+ nota** abre a caixa para escreveres porquê.
 - **Novo PDA**, **editar** e **QR** para quem edita PDAs. O olho abre o **histórico** do PDA (os últimos 100 check-ins).
 - **Retirar** (o caixote, só administração) passa o PDA a **Inativo**. Nunca se apaga: o histórico de quem o teve e o GPS partido por pessoa ficam.
 

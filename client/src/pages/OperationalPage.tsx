@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { ZelloLiveTab } from "@/components/ZelloLiveTab";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
+import RadioPage from "@/pages/RadioPage";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { lisbonToday } from "@shared/expensePeriods";
@@ -26,7 +27,7 @@ import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { SpeedTrackMap } from "@/components/maps/SpeedTrackMap";
 import {
   Plus, Trash2, Eye, Gauge, ArrowUpDown, Satellite, Users, Settings,
-  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw,
+  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -75,7 +76,7 @@ export default function OperationalPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, e os PDAs. As transcrições de rádio estão em Operações → Rádio.</p>
+        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, os PDAs e o rádio.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
@@ -83,11 +84,13 @@ export default function OperationalPage() {
           {has("live") && <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>}
           {has("history") && <TabsTrigger value="history"><Gauge className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>}
           {has("pdas") && <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>}
+          {has("radio") && <TabsTrigger value="radio"><Radio className="w-4 h-4 mr-1" />Rádio</TabsTrigger>}
         </TabsList>
         {has("dia") && <TabsContent value="dia"><DayActivityTab onOpenSpeedHistory={has("history") ? openSpeedHistory : undefined} /></TabsContent>}
         {has("live") && <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>}
         {has("history") && <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>}
         {has("pdas") && <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>}
+        {has("radio") && <TabsContent value="radio">{tab === "radio" && <RadioPage />}</TabsContent>}
       </Tabs>
     </div>
   );
@@ -940,8 +943,10 @@ function PdasTab() {
   }, [activeCheckins]);
 
   return (
-    <div className="space-y-4 mt-4">
-      <OpsPresencePanel />
+    // 43b: os alertas "a trabalhar sem PDA/Zello" ficam pequenos e de lado (no telemóvel, por cima)
+    <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+    <aside className="order-first min-w-0 lg:order-last lg:sticky lg:top-4"><OpsPresencePanel /></aside>
+    <div className="min-w-0 space-y-4">
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
@@ -1069,6 +1074,7 @@ function PdasTab() {
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
       {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} pdaName={pdaList?.find((p: any) => p.id === viewPda)?.name ?? null} onClose={() => setViewPda(null)} />}
       {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
+    </div>
     </div>
   );
 }
