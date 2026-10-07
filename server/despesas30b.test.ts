@@ -47,9 +47,9 @@ describe("30b — o que vai no ZIP e na folha", () => {
     ]);
     expect(r.files.map((f) => f.id)).toEqual([3, 2]);
     expect(r.files[0].name.startsWith("faturas/2026-09-05_Galp_")).toBe(true);
-    expect(r.sheet[1]).toEqual({ "Data da fatura": "20/09/2026", "Data de pagamento": "25/09/2026", "Fornecedor": "EDP", "NIF": "503504564", "Nº documento": "F1", "Valor (€)": 80, "Ficheiro": r.files[1].name });
+    expect(r.sheet[1]).toEqual({ "Data da fatura": "20/09/2026", "Data de pagamento": "25/09/2026", "Fornecedor": "EDP", "NIF": "503504564", "Nº documento": "F1", "Valor (€)": 80, "Ficheiro": r.files[1].name, "Tipo": "Fatura" });
     expect(Object.keys(r.sheet[0])).not.toContain("Categoria");
-    expect(r.missing).toEqual([{ "Data": "02/09/2026", "Fornecedor": "Renda", "Nº documento": "", "Valor (€)": 1000, "ID": 1 }]);
+    expect(r.missing).toEqual([{ "Data": "02/09/2026", "Fornecedor": "Renda", "Nº documento": "", "Valor (€)": 1000, "ID": 1, "Tipo": "Fatura" }]);
     expect(r.total).toBe(120.26);
   });
 });

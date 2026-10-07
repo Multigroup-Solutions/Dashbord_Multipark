@@ -64,8 +64,9 @@ describe("29b — 'Falta a fatura'", () => {
   it("lista, aviso no topo, botão para anexar e o diálogo com o estado do mês", () => {
     const page = src("client/src/pages/ExpensesPage.tsx");
     expect(page).toContain("missingInvoice: missingInvoice || undefined,");
-    expect(page).toContain("Falta a fatura{expense.recurringTemplateId ? \" · fixa\" : \"\"}");
-    expect(page).toContain('aria-label="Anexar a fatura"');
+    // notas de crédito (7 out 2026): a NC diz "Falta a nota de crédito"; a fatura continua "Falta a fatura · fixa"
+    expect(page).toContain("`Falta a fatura${expense.recurringTemplateId ? \" · fixa\" : \"\"}`");
+    expect(page).toContain('aria-label="Anexar o documento"');
     expect(page).toContain("trpc.expenses.missingInvoiceSummary.useQuery");
     const dlg = src("client/src/components/ExpenseRecurringCompare.tsx");
     expect(dlg).toContain("falta a fatura");

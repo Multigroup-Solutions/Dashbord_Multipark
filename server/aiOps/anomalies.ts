@@ -134,7 +134,7 @@ export async function detectExpenseAnomalies(day: string, trees: CityTree[]): Pr
     SELECT id, DATE_FORMAT(expenseDate, '%Y-%m-%d') AS day, amount, supplier, supplierNif, documentNumber, categoryId, projectId
       FROM expenses
      WHERE expenseDate >= ${`${from} 00:00:00`} AND expenseDate < ${`${addDays(day, 1)} 00:00:00`}
-       AND status <> 'cancelled' AND deletedAt IS NULL
+       AND status <> 'cancelled' AND deletedAt IS NULL AND amount > 0
      ORDER BY expenseDate, id
      LIMIT 8000`));
   const list: ExpenseLite[] = rows.map((x) => ({
