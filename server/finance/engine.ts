@@ -403,6 +403,8 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   const extraRatesLive = await loadExtraRates();
   out.params = { ...out.params, extrasDiaRates: extraRatesLive };
   const extrasCostRows = await loadExtrasCostRows(db, { from, to, projectIds, cities, pontoRange: { start: utc.start, endExclusive: utc.end } });
+  // Terminal no ponto (aeroporto): troço pago ao nível seguinte — interruptor PONTO_TERMINAL.
+  const extrasTerminal = await (await import("../pontoTerminal")).pontoTerminalEnabled();
 
   // ─── 5. Parceiros: UMA regra de correspondência (./partners.ts) ───────────
   const { partners: partnerRows, index: rawPartnerIndex } = await loadPartnerIndex(db);
@@ -526,7 +528,7 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
 
   // Equipa do dia — REAL (ponto) até hoje; a ESCALA (previsto) nos dias futuros
   // vai para o Fecho previsto.
-  const extrasAgg = aggregateExtrasCost(extrasCostRows, extraRatesLive, { dayOfRecord: (v) => (v ? lisbonDayOf(v) : ""), cityOfProject: () => null });
+  const extrasAgg = aggregateExtrasCost(extrasCostRows, extraRatesLive, { dayOfRecord: (v) => (v ? lisbonDayOf(v) : ""), cityOfProject: () => null, terminal: extrasTerminal });
   out.quality.extrasDiaTeamLeaderShifts = extrasAgg.teamLeaderShifts;
   for (const [d, v] of extrasAgg.realByDay) if (isPast(d)) addTo(extrasByDay, d, v);
   for (const r of extrasAgg.realByDayProject.values()) if (isPast(r.day)) costAt(r.projectId, "extras", r.cost);

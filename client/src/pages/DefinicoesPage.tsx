@@ -33,7 +33,8 @@ import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
-import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, PRESENCE_FICHA_PREFIX, SETTINGS, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
+import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
+import { AIRPORT_LABELS, type AirportCityId } from "@shared/pontoTerminal";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
@@ -621,6 +622,8 @@ const PRESENCE_PHONE_FIELDS: { id: "lisbon" | "porto" | "faro" | "copy"; label: 
 function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: SettingItem; saving: boolean; onSave: (v: unknown) => void; codeValue?: number; locked?: boolean }) {
   const current = item.isSet ? item.value : item.defaultValue;
   const isPhones = item.key === "ops.presencePhones";
+  // Aeroportos do terminal no ponto: lat/lng/raio por cidade (o editor por cidade genérico só tem um campo).
+  const isAirports = item.key === TERMINAL_AIRPORTS_SETTING_KEY;
   const isRate = item.key === "finance.vat" || item.key === "finance.tsu";
   const isZelloList = item.key === "zello.gpsExcludedUsers";
   const isEmails = item.key === "emails.handoverCc" || isZelloList;
@@ -628,13 +631,13 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
-  const isCityMap = !isPhones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
+  const isCityMap = !isPhones && !isAirports && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
     && CITY_FIELDS.every((c) => c.id in (item.defaultValue as Record<string, unknown>));
   const cityMapNumeric = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "number";
   // 38a: ligado/desligado por cidade → interruptores (antes eram caixas de texto e "true" escrito não gravava)
   const cityMapBool = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "boolean";
   const isTime = typeof item.defaultValue === "string" && /^\d{2}:\d{2}$/.test(item.defaultValue as string);
-  const isJson = !isPhones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
+  const isJson = !isPhones && !isAirports && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
@@ -643,6 +646,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const [fichaSel, setFichaSel] = useState<Record<string, number[]>>({});
   const people = trpc.settings.values.presencePeople.useQuery(undefined, { enabled: isPhones, staleTime: 60_000 });
   const personById = useMemo(() => new Map((people.data ?? []).map((p) => [p.id, p])), [people.data]);
+  const [airports, setAirports] = useState<Record<string, { lat: string; lng: string; radiusM: string }>>({});
   const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
@@ -653,6 +657,11 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
       const of = (id: string) => (((current as Record<string, unknown>)?.[id] as string[] | undefined) ?? []);
       setFichaSel(Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, of(c.id).map(presenceFichaId).filter((x): x is number => x != null)])));
       setCityMap(Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, of(c.id).filter((x) => presenceFichaId(x) == null).join("\n")])));
+    }
+    else if (isAirports) {
+      const cur = (current ?? {}) as Record<string, { lat?: number; lng?: number; radiusM?: number } | undefined>;
+      const txt = (v: number | undefined) => (v == null ? "" : String(v).replace(".", ","));
+      setAirports(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, { lat: txt(cur[c.id]?.lat), lng: txt(cur[c.id]?.lng), radiusM: txt(cur[c.id]?.radiusM) }])));
     }
     else if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
@@ -670,6 +679,10 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
       ...(fichaSel[c.id] ?? []).map((id) => `${PRESENCE_FICHA_PREFIX}${id}`),
       ...(cityMap[c.id] ?? "").split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean),
     ]]));
+    if (isAirports) {
+      const n = (v: string | undefined) => { const t = String(v ?? "").trim().replace(",", "."); return t === "" ? NaN : Number(t); };
+      return Object.fromEntries(CITY_FIELDS.map((c) => [c.id, { lat: n(airports[c.id]?.lat), lng: n(airports[c.id]?.lng), radiusM: n(airports[c.id]?.radiusM) }]));
+    }
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
@@ -756,6 +769,22 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
               </div>
             );
           })}
+        </div>
+      ) : isAirports ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-3xl">
+          {CITY_FIELDS.map((c) => (
+            <div key={c.id} className="rounded-md border p-2 space-y-1.5">
+              <div className="text-xs font-medium">{AIRPORT_LABELS[c.id as AirportCityId] ?? c.label}</div>
+              {(["lat", "lng", "radiusM"] as const).map((f) => (
+                <label key={f} className="flex items-center gap-2 text-xs">
+                  <span className="w-16 text-muted-foreground">{f === "lat" ? "Latitude" : f === "lng" ? "Longitude" : "Raio (m)"}</span>
+                  <Input className="h-8 text-xs" inputMode="decimal" disabled={locked} aria-label={`${c.label} — ${f === "lat" ? "latitude" : f === "lng" ? "longitude" : "raio em metros"}`}
+                    value={airports[c.id]?.[f] ?? ""}
+                    onChange={(e) => setAirports((p) => ({ ...p, [c.id]: { ...(p[c.id] ?? { lat: "", lng: "", radiusM: "" }), [f]: e.target.value } }))} />
+                </label>
+              ))}
+            </div>
+          ))}
         </div>
       ) : isRate ? (
         <div className="space-y-2">

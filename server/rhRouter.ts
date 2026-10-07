@@ -14,6 +14,7 @@ import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_
 import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
+import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { importExtrasFromCsv } from "./extrasImport";
 import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
 import { DOC_REJECT_REASON_MAX, DOC_TYPE_LABELS } from "../shared/employeeDocuments";
@@ -125,7 +126,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       const { listAutoSendsForEmployee } = await import("./mail/autoSends");
       return listAutoSendsForEmployee(input.employeeId, 30);
@@ -136,7 +138,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       if (!person.employee.userId) return null;
       const account = await getUserById(person.employee.userId);
@@ -161,7 +164,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       const { getDb } = await import('./db');
       const { sql } = await import('drizzle-orm');
@@ -180,6 +184,41 @@ export const rhRouter = router({
       }
       // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo Críticas)
       return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
+    }),
+  /**
+   * Lote 46 (Jorge, 7 out 2026): com que conta(s) Google a pessoa entra
+   * (principal + extra, último login) e, sem nenhuma, os emails da ficha com
+   * que tem de entrar e as contas SEM ficha que parecem ser dela — estas só
+   * para quem gere o RH de todas as cidades (uma conta sem ficha não tem
+   * cidade; ligar faz-se em "Ligações"). Só leitura; nunca junta sozinho.
+   */
+  loginLinks: protectedProcedure
+    .input(z.object({ employeeId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const viewer = await rhViewer(ctx.user);
+      const person = await getEmployeeById(input.employeeId);
+      if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
+      const own = isOwn(viewer, input.employeeId);
+      if (!own) {
+        requireAccess(ctx.user, "rh", "view");
+        await assertEmployeeAccess(input.employeeId);
+      }
+      if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
+      const e = person.employee as { fullName: string; email?: string | null; personalEmail?: string | null; position?: string | null };
+      const fichaEmails = Array.from(new Set([e.email, e.personalEmail].map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean)));
+      const { listEmployeeLogins, orphanLoginCandidates } = await import('./personIdentity');
+      const logins = await listEmployeeLogins(input.employeeId);
+      const canLink = !own && canAccess(ctx.user, 'rh', 'manage');
+      const national = scopedProjectIds() === undefined;
+      const candidates = canLink && national && !logins.some((l) => l.isActive)
+        ? await orphanLoginCandidates({ fullName: e.fullName, emails: fichaEmails })
+        : [];
+      const warnings: string[] = [];
+      const principal = logins.find((l) => l.principal && l.isActive) ?? null;
+      if (principal?.role === 'user' && ['extra', 'driver', 'senior_driver'].includes(String(e.position ?? ''))) {
+        warnings.push('A conta está como "Utilizador": abre a própria ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Se é extra, muda o papel para Extra em Utilizadores.');
+      }
+      return { fichaEmails, logins, candidates, canLink, national, warnings };
     }),
   // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -339,7 +378,7 @@ export const rhRouter = router({
       let employeeId = input?.employeeId;
       if (!employeeId) {
         const me = await getEmployeeByUserId(ctx.user.id);
-        if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
+        if (!me) throw new TRPCError({ code: "NOT_FOUND", message: noLinkedRecordMessage(ctx.user.email) });
         employeeId = me.employee.id;
       }
       // Restringe: salários de outros são só para admin+ DA MESMA cidade;
@@ -898,7 +937,7 @@ export const rhRouter = router({
     .input(z.object({ fileBase64: z.string().max(PHOTO_MAX_BASE64_CHARS), mimeType: z.string().max(100) }))
     .mutation(async ({ ctx, input }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "A tua conta não está associada a um colaborador." });
+      if (!me) throw new TRPCError({ code: "FORBIDDEN", message: noLinkedRecordMessage(ctx.user.email) });
       return savePhoto(me.employee.id, input.fileBase64, ctx.user.id);
     }),
 
@@ -1218,14 +1257,28 @@ export const rhRouter = router({
     // qualquer role pode consultar o seu — não expõe registos de terceiros.
     myStatus: protectedProcedure.query(async ({ ctx }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null };
+      if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null, terminal: false };
       const records = await getTimeRecords(me.employee.id);
       const last = records[0];
+      // Troço de terminal aberto (entrada no aeroporto) — só com o interruptor ligado.
+      let terminal = false;
+      if (last?.type === "check_in" && last.terminalStatus === "start") {
+        const { pontoTerminalEnabled } = await import("./pontoTerminal");
+        terminal = await pontoTerminalEnabled();
+      }
       return {
         employeeId: me.employee.id as number | null,
         status: (last?.type === "check_in" ? "in" : "out") as "in" | "out" | null,
         since: (last?.recordedAt ?? null) as string | null,
+        terminal,
       };
+    }),
+
+    // Interruptor "Terminal no ponto (aeroporto)": os ecrãs só mostram o
+    // terminal (chips, botões confirmar/desmarcar) com ele ligado.
+    terminalEnabled: protectedProcedure.query(async () => {
+      const { pontoTerminalEnabled } = await import("./pontoTerminal");
+      return { enabled: await pontoTerminalEnabled() };
     }),
 
     list: protectedProcedure
@@ -1256,6 +1309,31 @@ export const rhRouter = router({
         await reviewTimeRecord(input.id, input.decision, ctx.user.id, input.note ?? null, input.correctedHours ?? null);
         await logActivity({ userId: ctx.user.id, action: "review", entity: "time_record", entityId: input.id, details: `${input.decision}${input.correctedHours != null ? ` (${input.correctedHours}h)` : ""}${input.note ? ` — ${input.note}` : ""}` });
         return { success: true };
+      }),
+
+    // Terminal à mão (quem revê o ponto desta ficha): confirma ou desmarca o
+    // troço de terminal de uma SAÍDA, com motivo. Não apaga nada: muda o estado
+    // e regista quem, quando e porquê (também no registo de atividade).
+    setTerminal: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), terminal: z.boolean(), note: z.string().trim().min(3, "Escreve o motivo (mín. 3 letras).").max(255) }))
+      .mutation(async ({ ctx, input }) => {
+        const { pontoTerminalEnabled, isExtraEmployee } = await import("./pontoTerminal");
+        if (!(await pontoTerminalEnabled())) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal no ponto está desligado (Definições → Automações → \"Terminal no ponto (aeroporto)\")." });
+        }
+        const empId = await employeeIdOfRecord("time_records", input.id);
+        if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Registo de ponto não encontrado" });
+        await assertCanManageEmployee(ctx.user, empId, "Sem permissão para rever o ponto desta pessoa.");
+        const { setTimeRecordTerminal } = await import("./rhService");
+        const emp = await getEmployeeById(empId);
+        if (!isExtraEmployee(emp?.employee)) throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal é só para extras." });
+        const r = await setTimeRecordTerminal(input.id, input.terminal, ctx.user.id, input.note);
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+        await logActivity({
+          userId: ctx.user.id, action: input.terminal ? "terminal_confirm" : "terminal_unmark", entity: "time_record", entityId: input.id,
+          details: `${input.terminal ? "Terminal confirmado" : "Terminal desmarcado"} (antes: ${r.previous ?? "normal"}) — ${input.note}`,
+        });
+        return { success: true, terminalStatus: r.status };
       }),
 
     checkIn: protectedProcedure
@@ -1302,8 +1380,17 @@ export const rhRouter = router({
         const missingAgentWarning = !empForPonto.employee.multiparkAgentName
           ? "Falta ligar o agente Multipark a este colaborador — pede à administração para o associar na ficha."
           : null;
+        // Terminal (aeroporto), interruptor PONTO_TERMINAL: entrada de um extra
+        // no aeroporto da cidade dele abre um troço de terminal (desligado → nada).
+        const { evaluateCheckInTerminal } = await import("./pontoTerminal");
+        const terminalIn = await evaluateCheckInTerminal({
+          employee: empForPonto.employee,
+          latitude: input.latitude, longitude: input.longitude,
+          prev: last ? { type: last.type, recordedAt: last.recordedAt, terminalStatus: last.terminalStatus ?? null } : null,
+        });
         // Geofence do centro de custos (se configurado): fora do raio fica marcado.
-        const geoNoteIn = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+        // No aeroporto (terminal ligado) não se marca: é sítio de trabalho do extra.
+        const geoNoteIn = terminalIn.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         let photoUrl: string | null = null;
         let photoKey: string | null = null;
         if (input.photoBase64 && input.mimeType) {
@@ -1328,11 +1415,13 @@ export const rhRouter = router({
             longitude: input.longitude ?? null,
             locationName: input.locationName ?? null,
             notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
+            ...(terminalIn.atAirport != null ? { atAirport: terminalIn.atAirport } : {}),
+            ...(terminalIn.terminalStatus ? { terminalStatus: terminalIn.terminalStatus } : {}),
           });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
-        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}` });
+        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}${terminalIn.terminal === "start" ? " · terminal (aeroporto)" : terminalIn.terminal === "return" ? " · regresso do terminal" : ""}` });
         // Ponto→PDA automático: se o check-in veio do browser de um PDA
         // registado, liga já a pessoa ao PDA/Zello (e troca quem lá estava).
         let pdaAttached: { pdaName: string; zelloUsername: string | null; replacedName: string | null } | null = null;
@@ -1349,7 +1438,7 @@ export const rhRouter = router({
             console.warn("[pda] ponto→PDA automático (check-in) falhou:", err);
           }
         }
-        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached };
+        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached, terminal: terminalIn.terminal };
       }),
 
     checkOut: protectedProcedure
@@ -1405,9 +1494,21 @@ export const rhRouter = router({
         } else {
           hoursWorked = diff.toFixed(2);
         }
+        // Terminal (aeroporto), interruptor PONTO_TERMINAL: se a entrada aberta
+        // abriu um troço de terminal, a saída no aeroporto fecha-o como terminal;
+        // fora ou sem GPS fica "por confirmar" (não paga terminal até o RH ver).
+        const { evaluateCheckOutTerminal } = await import("./pontoTerminal");
+        const empForOut = last.terminalStatus ? await getEmployeeById(input.employeeId) : null;
+        const terminalOut: import("./pontoTerminal").PontoTerminalEval = empForOut
+          ? await evaluateCheckOutTerminal({ employee: empForOut.employee, latitude: input.latitude, longitude: input.longitude, openCheckInStatus: last.terminalStatus })
+          : { atAirport: null, terminalStatus: null, terminal: null };
+        // Saída esquecida (cortada às 12 h): o GPS desta saída não diz nada do
+        // troço → fica sempre "por confirmar" (o RH decide).
+        if (autoNote && terminalOut.terminalStatus === "auto") { terminalOut.terminalStatus = "pending"; terminalOut.terminal = "pending"; }
         // Geofence: se o centro de custos do colaborador tem raio definido e o
         // check-out veio com GPS fora dele, fica marcado (permitido, mas visível).
-        const geoNote = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+        // No aeroporto (fim de um troço de terminal) não se marca.
+        const geoNote = terminalOut.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         const finalNotes = [autoNote, geoNote, input.notes].filter(Boolean).join(" · ") || null;
         // Snapshot Zello do turno (pedido Jorge): no check-out, vai buscar ao
         // Zello o que o condutor fez entre a entrada e a saída — km,
@@ -1441,6 +1542,8 @@ export const rhRouter = router({
             hoursWorked,
             notes: finalNotes,
             reviewStatus: autoNote ? "suspicious" : "ok",
+            ...(terminalOut.atAirport != null ? { atAirport: terminalOut.atAirport } : {}),
+            ...(terminalOut.terminalStatus ? { terminalStatus: terminalOut.terminalStatus } : {}),
             ...(zello ? {
               zelloKm: String(zello.km),
               zelloAvgSpeed: String(zello.avgSpeed),
@@ -1461,8 +1564,8 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
         }
-        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}` });
-        return { success: true, hoursWorked, zello };
+        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalOut.terminal === "auto" ? " · troço de terminal" : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}` });
+        return { success: true, hoursWorked, zello, terminal: terminalOut.terminal === "auto" || terminalOut.terminal === "pending" ? terminalOut.terminal : null };
       }),
 
     // ── Geofence por centro de custos (raio de picagem) ───────────────────

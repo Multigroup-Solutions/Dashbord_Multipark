@@ -17,6 +17,8 @@ import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState as DaySta
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { isForbidden } from "@/lib/queryRetry";
 import { availabilityWeekFrom } from "@shared/availabilityWeek";
+import { NoCityNotice, NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
 // Semana a mostrar: a do link (?week=, levada à segunda-feira) ou a PRÓXIMA
 // semana de Lisboa — calculada aqui (antes vinha do servidor e, se essa
@@ -65,6 +67,8 @@ export default function DisponibilidadePage() {
     );
   }
 
+  // Lote 46: conta Google sem ficha → diz qual é a conta e o que fazer (sem ir ao servidor).
+  if ((user as any)?.employee === null) return <NoLinkedRecordNotice email={user?.email} />;
   return <MyAvailability />;
 }
 
@@ -125,6 +129,8 @@ function HubSection({
 /** "N novas" no cabeçalho das candidaturas, mesmo com a secção fechada. */
 function MyAvailability() {
   const weekStart = useWeekParam();
+  // Lote 46: ficha sem cidade → grava na mesma; só se avisa o que pedir ao RH.
+  const { missingCostCenter } = useGlobalFilters();
 
   const myWeek = trpc.extrasAvailability.myWeek.useQuery({ weekStart });
 
@@ -171,11 +177,11 @@ function MyAvailability() {
 
   if (myWeek.error) {
     return (
-      <div className="max-w-md mx-auto py-12 px-4">
+      <div className="max-w-md mx-auto py-12 px-4 space-y-3">
         <Card>
           <CardContent className="py-10 text-center space-y-3">
             <div className="text-4xl">🔒</div>
-            <p className="text-muted-foreground">{myWeek.error.message}</p>
+            <p className="text-muted-foreground [overflow-wrap:anywhere]">{myWeek.error.message}</p>
           </CardContent>
         </Card>
       </div>
@@ -186,6 +192,7 @@ function MyAvailability() {
 
   return (
     <div className="max-w-2xl mx-auto py-6 px-4 space-y-4">
+      {missingCostCenter && <NoCityNotice />}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

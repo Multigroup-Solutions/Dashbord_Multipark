@@ -74,18 +74,21 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
   for (const l of leaves) { if (!leavesByEmp.has(l.employeeId)) leavesByEmp.set(l.employeeId, []); leavesByEmp.get(l.employeeId)!.push(l); }
 
   const scheds = await db.select().from(schedules).where(inArray(schedules.employeeId, empIds));
+  // Terminal no ponto (aeroporto): interruptor PONTO_TERMINAL (desligado → como antes)
+  const { pontoTerminalEnabled } = await import("../pontoTerminal");
+  const terminalEnabled = await pontoTerminalEnabled();
   const schedByEmp = new Map<number, typeof scheds>();
   for (const s of scheds) { if (!schedByEmp.has(s.employeeId)) schedByEmp.set(s.employeeId, []); schedByEmp.get(s.employeeId)!.push(s); }
 
   const out: PayrollRow[] = [];
   for (const { employee: e, project } of emps) {
-    const { shifts } = pairShifts((recordsByEmp.get(e.id) ?? []).map((r) => ({ id: r.id, type: r.type, recordedAt: r.recordedAt, hoursWorked: r.hoursWorked, notes: r.notes, reviewStatus: (r as any).reviewStatus ?? null })));
+    const { shifts } = pairShifts((recordsByEmp.get(e.id) ?? []).map((r) => ({ id: r.id, type: r.type, recordedAt: r.recordedAt, hoursWorked: r.hoursWorked, notes: r.notes, reviewStatus: (r as any).reviewStatus ?? null, terminalStatus: r.terminalStatus ?? null })));
     // só turnos que COMEÇAM no mês pedido
     const monthShifts = shifts.filter((s) => s.day >= monthFirst && s.day <= monthLast);
     const res = computeEmployeeMonth({
       employee: { id: e.id, fullName: e.fullName, position: e.position, extraLevel: e.extraLevel, contractStart: e.contractStart, contractEnd: e.contractEnd, isActive: e.isActive, monthlySalary: e.monthlySalary, mealAllowancePerDay: e.mealAllowancePerDay },
       year, month, snapshot: snapshotByEmp.get(e.id) ?? null, shifts: monthShifts,
-      leaves: leavesByEmp.get(e.id) ?? [], schedules: schedByEmp.get(e.id) ?? [], extraRateByLevel, extraRateByName,
+      leaves: leavesByEmp.get(e.id) ?? [], schedules: schedByEmp.get(e.id) ?? [], extraRateByLevel, extraRateByName, terminalEnabled,
     });
     // fichas sem vínculo no mês e sem qualquer valor não entram na folha
     if (!res.inContract && res.totalHours === 0 && res.suspiciousHours === 0 && res.openShifts === 0) continue;

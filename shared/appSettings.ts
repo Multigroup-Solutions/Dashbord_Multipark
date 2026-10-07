@@ -23,6 +23,7 @@ import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema 
 import { DEFAULT_SERVICE_TASK_RULES, SERVICE_TASKS_SETTING_KEY, serviceTaskRulesSchema } from "./serviceTasks";
 import { matchKey } from "./textKey";
 import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
+import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
@@ -184,6 +185,19 @@ export const carsPerHourMapSchema = z.object({
 }, { error: "Indica os carros/hora de Lisboa, Porto e Faro." });
 export type CarsPerHourMap = z.infer<typeof carsPerHourMapSchema>;
 export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro: 3 };
+
+/**
+ * Aeroportos do terminal no ponto (Jorge, 7 out 2026): centro (lat/lng) e raio
+ * por cidade. Entrada/saída do ponto de um extra com GPS dentro do raio do
+ * aeroporto da cidade dele = troço de terminal (shared/pontoTerminal.ts).
+ */
+const airportFenceSchema = z.object({
+  lat: z.number({ error: "Indica a latitude (ex.: 38.7742)." }).min(-90, "Latitude entre -90 e 90.").max(90, "Latitude entre -90 e 90."),
+  lng: z.number({ error: "Indica a longitude (ex.: -9.1342)." }).min(-180, "Longitude entre -180 e 180.").max(180, "Longitude entre -180 e 180."),
+  radiusM: z.number({ error: "Indica o raio em metros." }).int("Raio em metros inteiros.").min(100, "Raio mínimo: 100 m.").max(10000, "Raio máximo: 10 000 m."),
+});
+export const terminalAirportsSchema = z.object({ lisbon: airportFenceSchema, porto: airportFenceSchema, faro: airportFenceSchema }, { error: "Indica os aeroportos de Lisboa, Porto e Faro." });
+export const TERMINAL_AIRPORTS_SETTING_KEY = "ponto.terminalAirports" as const;
 
 /**
  * Template do WhatsApp do pedido de documentos em falta, por cidade:
@@ -531,6 +545,15 @@ export const SETTINGS = {
     defaultValue: { lisbon: "", porto: "", faro: "" },
     wiring: "live",
   }),
+  [TERMINAL_AIRPORTS_SETTING_KEY]: def({
+    key: TERMINAL_AIRPORTS_SETTING_KEY,
+    group: "extras",
+    label: "Aeroportos (terminal no ponto)",
+    description: "Centro e raio do aeroporto de cada cidade. Com o interruptor \"Terminal no ponto (aeroporto)\" ligado (Definições → Automações), a entrada de um extra com GPS dentro deste raio (aeroporto da cidade dele) abre um troço de terminal, pago à taxa do nível seguinte. A saída fora do raio ou sem GPS deixa o troço \"por confirmar\" até o RH ver.",
+    schema: terminalAirportsSchema,
+    defaultValue: DEFAULT_TERMINAL_AIRPORTS,
+    wiring: "live",
+  }),
   "rh.docsRequestTemplates": def({
     key: "rh.docsRequestTemplates",
     group: "extras",
@@ -783,6 +806,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
+  // Pauta do Rafael (Jorge, 7 out 2026): mexe no dinheiro (ordenado e custos) → desligado por omissão.
+  { name: "PONTO_TERMINAL", label: "Terminal no ponto (aeroporto)", description: "O extra que dá saída + entrada no aeroporto da cidade dele (GPS dentro do raio, Definições → Parâmetros → Extras-dia → \"Aeroportos (terminal no ponto)\") conta esse troço como terminal: paga à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master; o master fica master), no ordenado, no recibo e no custo dos extras. Antes de sair do aeroporto volta a dar saída + entrada e passa a extra normal. Saída fora do aeroporto ou sem GPS deixa o troço \"por confirmar\" (não paga terminal) até o RH o confirmar na ficha → Ponto. Desligado: nada muda no ordenado nem nos ecrãs.", defaultEnabled: false },
   { name: "ZELLO_PDA_NAMES", label: "Zello: nome de quem tem o PDA no mapa", description: "Quando alguém faz login num PDA (registado pelo QR), o nome da conta Zello desse PDA passa a \"PDA 12 · Rui Santos\"; no logout volta a \"PDA 12\". Assim o mapa do Zello mostra quem está com cada PDA. Escreve no Zello (só o nome). Desligado por omissão até testar com um PDA.", defaultEnabled: false },
   // 20b (Jorge, 2 out 2026): mexe em fichas de clientes sozinho → só o super admin o liga/desliga.
   { name: "CRM_AUTO_MERGE", label: "CRM: juntar sozinho as fichas óbvias", description: "Todas as madrugadas (depois das sugestões das 05:15; se não acabar, continua) o CRM junta sozinho as fichas com o mesmo 1.º e último nome e um dado igual (email, telefone ou matrícula), ou com o mesmo email E telefone mesmo com outro nome. Nunca empresas, clientes Pro, emails genéricos (info@, reservas@…), dados em mais de 2 fichas nem NIF pessoais diferentes. Fica a ficha com mais reservas; cada junção aparece em Rever fichas → Juntas recentemente e pode ser separada. As dúvidas só vão à IA com \"IA: fichas de clientes duvidosas\" ligado.", defaultEnabled: true, superAdminOnly: true },
