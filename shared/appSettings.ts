@@ -23,6 +23,7 @@ import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema 
 import { DEFAULT_SERVICE_TASK_RULES, SERVICE_TASKS_SETTING_KEY, serviceTaskRulesSchema } from "./serviceTasks";
 import { matchKey } from "./textKey";
 import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
+import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -183,6 +184,19 @@ export const carsPerHourMapSchema = z.object({
 }, { error: "Indica os carros/hora de Lisboa, Porto e Faro." });
 export type CarsPerHourMap = z.infer<typeof carsPerHourMapSchema>;
 export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro: 3 };
+
+/**
+ * Template do WhatsApp do pedido de documentos em falta, por cidade:
+ * "nome_do_modelo|pt_PT" ou vazio (= por configurar: só email). Pauta do
+ * Rafael, 7 out 2026 — regras em shared/docsRequest.ts.
+ */
+const docsTemplateValue = z.string().trim().max(540, "Máximo 540 caracteres.")
+  .refine((v) => v === "" || DOCS_TEMPLATE_PATTERN.test(v), "Formato: nome_do_modelo|pt_PT (ou vazio para não usar o WhatsApp nesta cidade).");
+export const docsRequestTemplatesSchema = z.object({
+  lisbon: docsTemplateValue,
+  porto: docsTemplateValue,
+  faro: docsTemplateValue,
+}, { error: "Indica o template de Lisboa, Porto e Faro (ou deixa vazio)." });
 
 /** Ponto de encontro por cidade (vai no aviso de escala); vazio = não se indica. */
 export const meetingPointMapSchema = z.object({
@@ -517,6 +531,15 @@ export const SETTINGS = {
     defaultValue: { lisbon: "", porto: "", faro: "" },
     wiring: "live",
   }),
+  "rh.docsRequestTemplates": def({
+    key: "rh.docsRequestTemplates",
+    group: "extras",
+    label: "Pedido de documentos em falta: template do WhatsApp",
+    description: "Nome exato do template aprovado pela Meta e língua, separados por \"|\" (ex.: documentos_em_falta|pt_PT), para cada cidade. O template tem dois campos: {{1}} = primeiro nome, {{2}} = os documentos em falta numa linha (ex.: \"Fotografia, Carta de Condução (recusado: ilegível)\"); o resto do texto (onde carregar, responder com fotografia) fica fixo no template. Vazio = essa cidade só recebe o pedido por email.",
+    schema: docsRequestTemplatesSchema,
+    defaultValue: { lisbon: "", porto: "", faro: "" },
+    wiring: "live",
+  }),
   "ai.trainingTutorLimits": def({
     key: "ai.trainingTutorLimits",
     group: "ia",
@@ -727,6 +750,9 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas (por WhatsApp). Desligado por omissão.", defaultEnabled: false },
   // 17g-3 (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão.
   { name: "EXTRAS_ASK_CITY", label: "Pedir a cidade aos extras sem cidade", description: "Quando um extra chega sem cidade, pede-lha uma vez por email (pela recursos-humanos@) e por WhatsApp se a conversa estiver aberta. A tarefa para quem trata das fichas sem cidade cria-se sempre. Desligado por omissão.", defaultEnabled: false },
+  // Pauta do Rafael (7 out 2026): escreve aos extras → desligado por omissão. O botão
+  // "Pedir documentos em falta" (ficha e lista do RH) funciona sem isto.
+  { name: "EXTRAS_DOCS_REQUEST", label: "Pedir documentos em falta aos extras", description: "À segunda a partir das 10:00 (Lisboa): pede por WhatsApp (template da cidade em Definições → Parâmetros, Extras-dia) e por email aos extras ativos os documentos obrigatórios em falta ou recusados. No máximo 1 pedido por pessoa a cada 7 dias (contam também os feitos à mão) e 4 pedidos automáticos por pessoa — depois só à mão. Respeita \"Não enviar WhatsApp/email\" e o STOP. Desligado por omissão.", defaultEnabled: false },
   // 19a: o email semanal de marketing tinha só a variável MARKETING_WEEKLY=off (invisível nas Definições).
   { name: "MARKETING_WEEKLY", label: "Email semanal de marketing", description: "À segunda a partir das 8h: gasto, reservas e ROAS da semana por marca e cidade, para os endereços em MARKETING_REPORT_EMAILS." },
   // D20 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
@@ -894,6 +920,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
+  { name: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", intervalMinutes: 1440, workflow: "tick" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },

@@ -18,6 +18,7 @@ import { importExtrasFromCsv } from "./extrasImport";
 import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
 import { DOC_REJECT_REASON_MAX, DOC_TYPE_LABELS } from "../shared/employeeDocuments";
 import { NOTE_BODY_MAX, NOTE_EDIT_WINDOW_MS, NOTE_KINDS, NOTE_KIND_LABELS } from "../shared/employeeNotes";
+import { docsRequestRouter } from "./rhDocsRequestRouter";
 
 /** 41c: ~10 MB por documento (base64 ≈ 4/3 do ficheiro). */
 const DOC_MAX_BASE64_CHARS = 14_000_000;
@@ -1080,6 +1081,10 @@ export const rhRouter = router({
         return { success: true };
       }),
   }),
+
+  // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras
+  // (WhatsApp/email), na ficha ou em grupo — server/rhDocsRequestRouter.ts.
+  docsRequest: docsRequestRouter,
 
   // Jorge (7 out 2026): o RH valida a carta com a data de emissão (lida na
   // carta). "Carta validada" = validada e com 3 anos completos; com menos

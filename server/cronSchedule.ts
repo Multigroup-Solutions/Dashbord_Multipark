@@ -101,6 +101,9 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // Pressão do Extras-Dia: desde a data das Definições (extras.timesSince; acumula) da BD Multipark, por grupo de parques (retomável por grupo).
   { key: "extras-pressure", runName: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", cadence: { kind: "daily", from: "04:45" }, priority: 101, minMs: 15 * S, maxMs: 45 * S },
   { key: "rh-docs-weekly", runName: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "04:45" }, priority: 102, minMs: 15 * S, maxMs: 45 * S },
+  // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras (interruptor
+  // EXTRAS_DOCS_REQUEST, desligado por omissão). De manhã, não de madrugada: escreve a pessoas.
+  { key: "rh-docs-request", runName: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "10:00" }, priority: 103, minMs: 15 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },
   { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads", runName: "google-ads", label: "Google Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 120, minMs: 15 * S, maxMs: 45 * S },
