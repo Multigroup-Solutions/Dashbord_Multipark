@@ -1022,6 +1022,10 @@ export const extrasDiaSchedules = mysqlTable("extras_dia_schedules", {
 	confirmedById: int(),
 	gapsJson: text(),
 	summary: varchar({ length: 1000 }),
+	// 0565 — última mudança feita por uma pessoa (com isto o cron já não mexe no dia).
+	manualAt: timestamp({ mode: 'string' }),
+	manualById: int(),
+	manualWhat: varchar({ length: 32 }),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
