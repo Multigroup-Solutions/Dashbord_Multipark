@@ -4199,6 +4199,18 @@ export const appRouter = router({
         // ponto e escala da nossa BD. Sem BD deles: cópia local + aviso.
         return evaluateDay(input.date, { cities: scopedCityNames() });
       }),
+    /**
+     * 42a: a equipa do dia por cidade (o supervisor): supervisores da cidade,
+     * team leaders, condutores escalados e extras a mais / a menos face à
+     * previsão (a mesma do Extras Dia). Só leitura.
+     */
+    dayTeam: protectedProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), projectId: z.number().optional() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "avaliacao_operacional", "view");
+        const { dayTeamByCity } = await import("./evaluationTeamDay");
+        return dayTeamByCity(input.date);
+      }),
 
     // Set multipark mapping para um empregado (nome curto + userId)
     setMultiparkAgentMapping: protectedProcedure

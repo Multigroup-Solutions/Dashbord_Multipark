@@ -82,6 +82,30 @@ const daySchema = z.string().refine(isIsoDay, "Data inválida (AAAA-MM-DD)");
 const MAX_DAYS = 400;
 const rangeSchema = z.object({ from: daySchema, to: daySchema }).refine((r) => r.from <= r.to, "Intervalo inválido")
   .refine((r) => daysInRange(r.from, r.to).length < MAX_DAYS, "Intervalo demasiado grande");
+/** 42a: o período + o filtro de cidade/marca do topo (o middleware estreita a cidade). */
+const filteredRangeSchema = z.object({ from: daySchema, to: daySchema, projectId: z.number().int().optional() })
+  .refine((r) => r.from <= r.to, "Intervalo inválido")
+  .refine((r) => daysInRange(r.from, r.to).length < MAX_DAYS, "Intervalo demasiado grande");
+
+/**
+ * 42a: a marca escolhida no topo → os parques dela (os movimentos vivos
+ * filtram por Park.id). Cidade ou nada escolhido → undefined (já vem pela cidade).
+ */
+async function brandParkIds(projectId: number | undefined): Promise<string[] | undefined> {
+  if (!projectId) return undefined;
+  if (projectId > 0) {
+    const { getDb } = await import("./db");
+    const { sql } = await import("drizzle-orm");
+    const db = await getDb();
+    if (!db) return undefined;
+    const [rows] = await db.execute(sql`SELECT level FROM projects WHERE id = ${projectId} LIMIT 1`) as any;
+    const level = String((rows as any[])?.[0]?.level ?? "");
+    if (level !== "brand" && level !== "project") return undefined;
+  }
+  const { liveParkScope } = await import("./opsStatsLive");
+  return (await liveParkScope(projectId)).parkIds;
+}
+
 const metricSchema = z.string().refine((m) => (METRIC_KEYS as string[]).includes(m), "Métrica inválida");
 
 async function myEmployee(userId: number): Promise<{ id: number; fullName: string } | null> {
@@ -134,9 +158,9 @@ export const evaluationRouter = router({
     }
   }),
   /** Ranking do período (soma dos dias) — quem vê outras pessoas, âmbito de cidade (team leader: a equipa). */
-  ranking: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
+  ranking: protectedProcedure.input(filteredRangeSchema).query(async ({ ctx, input }) => {
     requireOthers(ctx.user);
-    const days = await loadEvaluatedDays({ startDay: input.from, endDay: input.to, rankingOnly: true });
+    const days = await loadEvaluatedDays({ startDay: input.from, endDay: input.to, rankingOnly: true, dayCityAware: true });
     const team = await evaluationTeamIds(ctx.user);
     const byEmp = new Map<number, EvaluatedDay[]>();
     for (const d of days) {
@@ -165,18 +189,37 @@ export const evaluationRouter = router({
   }),
 
   /**
+   * 42a: o mês "como equipa" — cada TL pelo que a equipa dele fez nos dias em
+   * que foi TL, e cada cidade (o supervisor) pela média da equipa. Os mesmos
+   * dias guardados do ranking; team leader só vê a equipa dele.
+   */
+  teams: protectedProcedure.input(filteredRangeSchema).query(async ({ ctx, input }) => {
+    requireOthers(ctx.user);
+    const days = await loadEvaluatedDays({ startDay: input.from, endDay: input.to, dayCityAware: true });
+    const team = await evaluationTeamIds(ctx.user);
+    const { teamLeaderTotals, cityTeamTotals } = await import("../shared/evaluationTeam");
+    const rows = days.map((d) => ({ employeeId: d.employeeId, employeeName: d.employeeName, day: d.day, city: d.city, shift: d.shift, isTeamLeader: d.isTeamLeader, points: d.score.totalPoints, actions: d.metrics.actions }));
+    const leaders = teamLeaderTotals(rows).filter((r) => !team || team.has(r.employeeId));
+    const cities = team ? [] : cityTeamTotals(rows);
+    const { supervisorsByCity } = await import("./evaluationTeamDay");
+    const sup = await supervisorsByCity(cities.map((c) => c.city));
+    const LABEL: Record<string, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
+    return { leaders, cities: cities.map((c) => ({ ...c, label: LABEL[c.city] ?? c.city, supervisors: sup.get(c.city) ?? [] })) };
+  }),
+
+  /**
    * Movimentos do período lidos AO VIVO da BD da Multipark, por pessoa (as
    * várias contas de agente de uma ficha somam): fases, reservas, check-ins
    * e check-outs assinados, ocorrências e avaliações dos clientes. Âmbito de
    * cidade pelo parque (Park.city). Nunca lança por falta de BD.
    */
-  liveMovements: protectedProcedure.input(rangeSchema).query(async ({ ctx, input }) => {
+  liveMovements: protectedProcedure.input(filteredRangeSchema).query(async ({ ctx, input }) => {
     requireOthers(ctx.user);
     if (daysInRange(input.from, input.to).length > LIVE_MOVEMENTS_MAX_DAYS) {
       throw new TRPCError({ code: "BAD_REQUEST", message: `No máximo ${LIVE_MOVEMENTS_MAX_DAYS} dias.` });
     }
     const { getAgentMovementSummaries, sumAgentSummaries } = await import("./multiparkDb/movements");
-    const r = await getAgentMovementSummaries({ startDay: input.from, endDay: input.to, byDay: false, cities: scopedCityNames() });
+    const r = await getAgentMovementSummaries({ startDay: input.from, endDay: input.to, byDay: false, cities: scopedCityNames(), parkIds: await brandParkIds(input.projectId) });
     if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
     const { loadEvaluationIdentity } = await import("./evaluationIdentity");
     const { identity } = await loadEvaluationIdentity();
@@ -264,7 +307,7 @@ export const evaluationRouter = router({
     if (days.length > 93) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 93 dias de cada vez." });
     // Cada fatia de 7 dias lê os movimentos AO VIVO da BD da Multipark (uma
     // consulta agregada). Para caber na função (60 s), pára a tempo e diz até
-    // onde chegou — o cron diário faz o resto das 4 semanas.
+    // onde chegou — o cron diário faz o resto do mês.
     const deadline = Date.now() + 40_000;
     let written = 0, removed = 0, doneDays = 0;
     let source: "multipark" | "copia" = "multipark";
