@@ -28,6 +28,7 @@ import { normalizePhoneE164 } from "../shared/phone";
 import { cityKeyFromText, matchCityKey } from "../shared/city";
 import { canAutoMarkReplied, isAutomatedSender, matchExistingLead } from "../shared/extraLeadsFunnel";
 import { normalizeLeadInput } from "./extraLeads";
+import { licenceIssueDateFromPayload } from "../shared/drivingLicence";
 import { extractAffectedRows } from "./availabilityFormToken";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -114,6 +115,8 @@ export interface LeadCandidate {
   email: string | null;
   projectId: number | null;
   note: string;
+  /** 0530: data de emissão da carta declarada na candidatura ("YYYY-MM-DD"). */
+  drivingLicenseIssuedAt?: string | null;
 }
 
 export type IngestOutcome = "created" | "merged" | "employee" | "invalid" | "seen";
@@ -148,9 +151,10 @@ async function ingestCandidate(db: Db, ctx: SyncContext, cand: LeadCandidate): P
     const notes = appendSourceNote(existing.notes, tag);
     // Voltou a candidatar-se depois de o lead ter sido arquivado (0380) → sai do arquivo.
     const unarchive = existing.archivedAt ? { archivedAt: null, archivedById: null } : {};
+    const licence = cand.drivingLicenseIssuedAt ? { drivingLicenseIssuedAt: sql`COALESCE(${extraLeads.drivingLicenseIssuedAt}, ${cand.drivingLicenseIssuedAt})` } : {};
     await db
       .update(extraLeads)
-      .set({ notes, sourceRef: sql`COALESCE(${extraLeads.sourceRef}, ${cand.sourceRef})`, ...unarchive } as any)
+      .set({ notes, sourceRef: sql`COALESCE(${extraLeads.sourceRef}, ${cand.sourceRef})`, ...unarchive, ...licence } as any)
       .where(eq(extraLeads.id, existing.id));
     if (existing.archivedAt) {
       await logActivity({ userId: 0, action: "extra_lead_restore", entity: "extra_leads", entityId: existing.id, details: `Lead reposto: voltou a candidatar-se (${tag})` });
@@ -169,6 +173,7 @@ async function ingestCandidate(db: Db, ctx: SyncContext, cand: LeadCandidate): P
       source: cand.source,
       sourceRef: cand.sourceRef,
       projectId: cand.projectId,
+      drivingLicenseIssuedAt: cand.drivingLicenseIssuedAt ?? null,
       createdById: null,
     });
     id = Number((res as any)[0]?.insertId ?? (res as any).insertId);
@@ -207,6 +212,8 @@ async function applicationCandidate(app: ApplicationRow, projects: { id: number;
     email: app.email,
     projectId: cityProjectIdFromText(app.city, projects),
     note: bits.join(" · "),
+    // Jorge (7 out 2026): "Data de Emissão da Carta", quando o site a enviar.
+    drivingLicenseIssuedAt: licenceIssueDateFromPayload(app.payload),
   };
 }
 

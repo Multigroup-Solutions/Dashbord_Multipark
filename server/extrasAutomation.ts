@@ -1090,15 +1090,17 @@ export async function existingFichaFor(db: any, lead: { phoneE164: string | null
  * substitui o que a ficha já tem. PURA.
  */
 export function leadIdentityPatch(
-  lead: { nif?: string | null; idDocNumber?: string | null; drivingLicenseNumber?: string | null },
-  emp: { nif: string | null; idDocNumber: string | null; drivingLicenseNumber: string | null } | null,
+  lead: { nif?: string | null; idDocNumber?: string | null; drivingLicenseNumber?: string | null; drivingLicenseIssuedAt?: string | null },
+  emp: { nif: string | null; idDocNumber: string | null; drivingLicenseNumber: string | null; drivingLicenseIssuedAt?: string | null } | null,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   if (!emp) return out;
-  const empty = (v: string | null) => v == null || v.trim() === "";
+  const empty = (v: string | null | undefined) => v == null || v.trim() === "";
   if (lead.nif && empty(emp.nif)) out.nif = lead.nif;
   if (lead.idDocNumber && empty(emp.idDocNumber)) out.idDocNumber = lead.idDocNumber;
   if (lead.drivingLicenseNumber && empty(emp.drivingLicenseNumber)) out.drivingLicenseNumber = lead.drivingLicenseNumber;
+  // 0530: data de emissão da carta declarada (fica "pendente de validação" até o RH a ver).
+  if (lead.drivingLicenseIssuedAt && empty(emp.drivingLicenseIssuedAt)) out.drivingLicenseIssuedAt = lead.drivingLicenseIssuedAt;
   return out;
 }
 
@@ -1186,7 +1188,7 @@ export async function convertLeadToExtra(
     }
 
     // D39: o que a IA leu nos anexos do email (NIF, BI/CC, carta) passa para a ficha — só campos vazios.
-    const idPatch = leadIdentityPatch(lead as any, (await db.select({ nif: employees.nif, idDocNumber: employees.idDocNumber, drivingLicenseNumber: employees.drivingLicenseNumber }).from(employees).where(eq(employees.id, employeeId)).limit(1))[0] ?? null);
+    const idPatch = leadIdentityPatch(lead as any, (await db.select({ nif: employees.nif, idDocNumber: employees.idDocNumber, drivingLicenseNumber: employees.drivingLicenseNumber, drivingLicenseIssuedAt: employees.drivingLicenseIssuedAt }).from(employees).where(eq(employees.id, employeeId)).limit(1))[0] ?? null);
     if (Object.keys(idPatch).length) await db.update(employees).set(idPatch as any).where(eq(employees.id, employeeId));
 
     const convertedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
