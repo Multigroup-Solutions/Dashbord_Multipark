@@ -485,7 +485,8 @@ function DashboardLayoutContent({
     onSuccess: (d) => {
       toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`);
       if (d?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
-      if (d?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
+      if (d?.terminal === "partial") toast.success(`${d.terminalLabel ?? "Terminal até à última recolha/entrega"}. Daí até à saída conta como hora normal.`, { duration: 10000 });
+      if (d?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS) e ainda não há recolhas/entregas tuas no troço. Não paga terminal até o RH confirmar.", { duration: 10000 });
       pontoDone();
     },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },

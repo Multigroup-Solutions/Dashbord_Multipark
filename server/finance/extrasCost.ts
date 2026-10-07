@@ -10,19 +10,27 @@
  *     (saída antecipada respeitada) × tarifa; cidade = a da escala;
  *     team leaders EXCLUÍDOS (o salário mensal já os paga);
  *   - o que "conta": real até hoje, previsto só nos dias futuros;
- *   - terminal (aeroporto, interruptor PONTO_TERMINAL, `opts.terminal`): o
- *     troço de terminal paga à taxa do nível SEGUINTE — a mesma regra do
- *     ordenado (shared/pontoTerminal.ts payLevelForShift). Desligado → igual.
+ *   - terminal (aeroporto, interruptor PONTO_TERMINAL, `opts.terminal`): as
+ *     horas de terminal do troço pagam à taxa do nível SEGUINTE e o resto à
+ *     dele — a mesma regra do ordenado (shared/pontoTerminal.ts
+ *     terminalSplitOfShift): troço todo terminal, ou "partial" (saída fora do
+ *     aeroporto) só da entrada até à última recolha/entrega. Desligado → igual.
  */
 import { and, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { employees, extrasDiaAssignments, timeRecords } from "../../drizzle/schema";
 import { rateFor, type ExtraRates } from "../extraRates";
 import { matchCityKey, type CityKey } from "../../shared/city";
 import * as R from "./rules";
-import { normalizeExtraLevel, payLevelForShift } from "../../shared/pontoTerminal";
+import { normalizeExtraLevel, terminalLevelOf, terminalSplitOfShift } from "../../shared/pontoTerminal";
 
 export interface ExtrasAssignmentRow { date: string; city: string | null; level: string | null; isTeamLeader: number | boolean | null; startHour: number; endHour: number; sentHomeHour: number | null }
-export interface ExtrasPontoRow { recordedAt: string | null; hours: unknown; level: number | null; employeeId: number; projectId: number | null; terminalStatus?: string | null }
+export interface ExtrasPontoRow {
+  recordedAt: string | null; hours: unknown; level: number | null; employeeId: number; projectId: number | null; terminalStatus?: string | null;
+  /** 0575 — "partial": o terminal conta até aqui (UTC) */
+  terminalUntil?: string | null;
+  /** "partial": a entrada do troço (UTC), lida só nesses */
+  shiftInAt?: string | null;
+}
 
 export interface ExtrasCostQuery {
   from: string; to: string;
@@ -56,8 +64,11 @@ export async function loadExtrasCostRows(db: any, q: ExtrasCostQuery): Promise<{
     ),
   ];
   if (q.projectIds) pontoConds.push(q.projectIds.length ? inArray(employees.projectId, q.projectIds) : sql`1 = 0`);
+  // "partial" (terminal até à última recolha/entrega): precisa da entrada do
+  // troço — a última entrada antes desta saída (só nesses registos).
+  const shiftInAt = sql<string | null>`CASE WHEN ${timeRecords.terminalStatus} = 'partial' THEN (SELECT DATE_FORMAT(MAX(ti.recordedAt), '%Y-%m-%d %H:%i:%s') FROM time_records ti WHERE ti.employeeId = ${timeRecords.employeeId} AND ti.type = 'check_in' AND ti.recordedAt < ${timeRecords.recordedAt}) END`;
   const ponto = await db
-    .select({ recordedAt: timeRecords.recordedAt, hours: timeRecords.hoursWorked, level: employees.extraLevel, employeeId: timeRecords.employeeId, projectId: employees.projectId, terminalStatus: timeRecords.terminalStatus })
+    .select({ recordedAt: timeRecords.recordedAt, hours: timeRecords.hoursWorked, level: employees.extraLevel, employeeId: timeRecords.employeeId, projectId: employees.projectId, terminalStatus: timeRecords.terminalStatus, terminalUntil: timeRecords.terminalUntil, shiftInAt })
     .from(timeRecords)
     .innerJoin(employees, eq(employees.id, timeRecords.employeeId))
     .where(and(...pontoConds));
@@ -105,9 +116,12 @@ export function aggregateExtrasCost(
     const hours = Number(r.hours ?? 0) || 0;
     if (hours <= 0) continue;
     const lvName = LEVEL_BY_NUMBER[Number(r.level ?? 1)] ?? "junior";
-    // terminal: o troço paga ao nível seguinte (mesma regra do ordenado); senão o dele
-    const payLevel = payLevelForShift(r.level ?? 1, { terminalStatus: r.terminalStatus, enabled: !!opts.terminal });
-    const cost = hours * rateFor(rates, payLevel === normalizeExtraLevel(r.level ?? 1) ? lvName : LEVEL_BY_NUMBER[payLevel]);
+    // terminal: as horas de terminal do troço pagam ao nível seguinte e o resto
+    // ao dele (mesma regra do ordenado: terminalSplitOfShift; "partial" divide-se)
+    const part = terminalSplitOfShift({ hours, terminalStatus: r.terminalStatus, terminalUntil: r.terminalUntil, inAt: r.shiftInAt }, !!opts.terminal);
+    const tLevel = terminalLevelOf(r.level ?? 1);
+    const tName = tLevel === normalizeExtraLevel(r.level ?? 1) ? lvName : LEVEL_BY_NUMBER[tLevel];
+    const cost = part.normalHours * rateFor(rates, lvName) + (part.terminalHours > 0 ? part.terminalHours * rateFor(rates, tName) : 0);
     const day = opts.dayOfRecord(r.recordedAt);
     if (cost) {
       realByDay.set(day, (realByDay.get(day) ?? 0) + cost);

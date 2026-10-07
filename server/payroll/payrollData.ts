@@ -82,7 +82,7 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
 
   const out: PayrollRow[] = [];
   for (const { employee: e, project } of emps) {
-    const { shifts } = pairShifts((recordsByEmp.get(e.id) ?? []).map((r) => ({ id: r.id, type: r.type, recordedAt: r.recordedAt, hoursWorked: r.hoursWorked, notes: r.notes, reviewStatus: (r as any).reviewStatus ?? null, terminalStatus: r.terminalStatus ?? null })));
+    const { shifts } = pairShifts((recordsByEmp.get(e.id) ?? []).map((r) => ({ id: r.id, type: r.type, recordedAt: r.recordedAt, hoursWorked: r.hoursWorked, notes: r.notes, reviewStatus: (r as any).reviewStatus ?? null, terminalStatus: r.terminalStatus ?? null, terminalUntil: r.terminalUntil ?? null })));
     // só turnos que COMEÇAM no mês pedido
     const monthShifts = shifts.filter((s) => s.day >= monthFirst && s.day <= monthLast);
     const res = computeEmployeeMonth({

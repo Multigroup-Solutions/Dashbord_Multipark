@@ -217,7 +217,9 @@ describe("custo dos extras (Finanças / Métricas): a mesma regra", () => {
     expect(aggregateExtrasCost(rows, rates, opts()).realByDay.get("2026-10-07")).toBe(expected);
   });
   it("o ordenado e o custo usam a mesma função (shared/pontoTerminal)", () => {
-    expect(src("server/finance/extrasCost.ts")).toContain("payLevelForShift(");
+    // 7 out 2026 ("partial"): troço a troço pela mesma regra das horas
+    expect(src("server/finance/extrasCost.ts")).toContain("terminalSplitOfShift(");
+    expect(src("shared/pontoTerminal.ts")).toMatch(/export function splitTerminalHours[\s\S]*terminalSplitOfShift\(/);
     expect(src("server/payroll/compute.ts")).toContain("splitTerminalHours(");
     expect(src("server/payroll/compute.ts")).toContain("terminalLevelOf(");
     expect(src("server/finance/engine.ts")).toContain("terminal: extrasTerminal");

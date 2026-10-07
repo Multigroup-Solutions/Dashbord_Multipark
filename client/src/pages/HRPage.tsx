@@ -78,7 +78,7 @@ import {
   Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3, NotebookPen, Plane
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
-import { TERMINAL_STATUS_LABELS, type TerminalStatus } from "@shared/pontoTerminal";
+import { TERMINAL_STATUS_LABELS, lisbonClock, terminalStatusLabel } from "@shared/pontoTerminal";
 import { ContactActions } from "@/components/ContactActions";
 import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
@@ -791,10 +791,10 @@ function DocumentsTab({ employeeId, access, licence, extraName }: { employeeId: 
 // (extraído para componente partilhado — também usado no atalho de ponto do avatar)
 
 // ─── TIME RECORDS TAB ─────────────────────────────────────────────────────────
-/** Etiqueta do terminal (aeroporto) num registo de ponto. */
-function TerminalBadge({ status }: { status: string | null | undefined }) {
+/** Etiqueta do terminal (aeroporto) num registo de ponto ("partial" leva a hora: "Terminal até 14:32 (última recolha/entrega)"). */
+function TerminalBadge({ status, until }: { status: string | null | undefined; until?: string | null }) {
   if (!status || !(status in TERMINAL_STATUS_LABELS)) return null;
-  const label = TERMINAL_STATUS_LABELS[status as TerminalStatus];
+  const label = terminalStatusLabel(status, until);
   const cls = status === "pending"
     ? "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-200"
     : status === "rejected"
@@ -870,7 +870,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
         );
       }
       if (data?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
-      if (data?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
+      if (data?.terminal === "partial") toast.success(`${data.terminalLabel ?? "Terminal até à última recolha/entrega"}. Daí até à saída conta como hora normal.`, { duration: 10000 });
+      if (data?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS) e ainda não há recolhas/entregas tuas no troço. Não paga terminal até o RH confirmar.", { duration: 10000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
@@ -1010,7 +1011,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                       {reviewStatus === "rejected" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
                       {reviewStatus === "approved" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
                       {!reviewStatus && isFlagged && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
-                      {terminalOn && <TerminalBadge status={r.terminalStatus} />}
+                      {terminalOn && <TerminalBadge status={r.terminalStatus} until={r.terminalUntil} />}
                     </p>
                     {terminalOn && canManage && r.type === "check_out" && r.terminalStatus === "pending" && (
                       <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
@@ -1099,7 +1100,9 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                   {terminalOn && r.type === "check_out" && (
                     <div className="text-xs text-muted-foreground space-y-1" onClick={(e) => e.stopPropagation()}>
                       <p>
-                        Terminal (aeroporto): <span className="font-medium text-foreground">{r.terminalStatus ? TERMINAL_STATUS_LABELS[r.terminalStatus as TerminalStatus] ?? r.terminalStatus : "não (troço normal)"}</span>
+                        Terminal (aeroporto): <span className="font-medium text-foreground">{r.terminalStatus ? terminalStatusLabel(r.terminalStatus, r.terminalUntil) : "não (troço normal)"}</span>
+                        {r.terminalStatus === "partial" && <> · daí até à saída conta como hora normal</>}
+                        {r.terminalUntil && r.terminalStatus !== "partial" && <> · antes: até {lisbonClock(r.terminalUntil)} (última recolha/entrega)</>}
                         {r.terminalNote && <> · motivo: {r.terminalNote}</>}
                         {r.terminalReviewedAt && <> · {fmtPTDateTime(r.terminalReviewedAt)}</>}
                       </p>
@@ -1107,7 +1110,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                         <div className="flex gap-1">
                           {r.terminalStatus !== "auto" && r.terminalStatus !== "confirmed" && (
                             <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>
-                              <Plane className="w-3 h-3 mr-1" />{r.terminalStatus === "pending" ? "Confirmar terminal" : "Marcar como terminal"}
+                              <Plane className="w-3 h-3 mr-1" />{r.terminalStatus === "pending" ? "Confirmar terminal" : r.terminalStatus === "partial" ? "Confirmar o troço todo" : "Marcar como terminal"}
                             </Button>
                           )}
                           {r.terminalStatus && r.terminalStatus !== "rejected" && (
@@ -1149,8 +1152,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
             </DialogHeader>
             <p className="text-sm text-muted-foreground">
               {terminalEdit.terminal
-                ? "As horas deste troço passam a pagar à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master)."
-                : "As horas deste troço passam a pagar à taxa normal do extra."}
+                ? "As horas deste troço TODO passam a pagar à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master) — mesmo que antes contasse só até à última recolha/entrega."
+                : "As horas deste troço passam todas a pagar à taxa normal do extra (nenhuma de terminal)."}
               {" "}Fica registado quem mudou e porquê.
             </p>
             <div className="space-y-1">

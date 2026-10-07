@@ -682,3 +682,105 @@ export async function getAgentDayMovements(
     return { rows: rows.slice(0, limit).map(mapAgentMovementRow), truncated: rows.length > limit };
   });
 }
+
+// ─── 4. Recolhas e entregas de agentes num intervalo (terminal no ponto) ─────
+//
+// Jorge, 7 out 2026: o troço de terminal fechado fora do aeroporto conta até à
+// ÚLTIMA recolha ou entrega feita pelo extra (shared/pontoTerminal.ts
+// resolveTerminalByLastService). As mesmas definições desta página:
+//   recolha = ação CHECK_IN da History, entrega = ação CHECK_OUT (os
+//   `recolhas`/`entregas` dos agregados acima), feita POR ELE — History.userId
+//   é um dos agentes dele — ou assinada a ele na reserva
+//   (Booking.checkInDriverId / checkOutDriverId, como buildAgentBookingPhasesSql).
+// O instante é o da ação na History (UTC, sem fuso). Os agentes vêm da ligação
+// explícita da ficha (por ID, nunca por nome).
+
+/** Teto das linhas de recolhas/entregas numa leitura (7 dias × agentes do terminal). */
+export const SERVICE_INSTANTS_LIMIT = 5_000;
+
+export interface AgentServiceInstantsFilters {
+  /** agentes (History.userId / Booking.check*DriverId) */
+  userIds: string[];
+  /** "YYYY-MM-DD HH:MM:SS" UTC, inclusive dos dois lados */
+  from: string;
+  to: string;
+  limit?: number;
+}
+
+/** Recolhas (CHECK_IN) e entregas (CHECK_OUT) dos agentes no intervalo, as mais recentes primeiro. PURA. */
+export function buildAgentServiceInstantsSql(f: AgentServiceInstantsFilters): { sql: string; params: SqlParam[] } {
+  const params = new ParamList();
+  const from = params.add(f.from);
+  const to = params.add(f.to);
+  const clean = Array.from(new Set(f.userIds.map((s) => String(s ?? "").trim()).filter(Boolean))).slice(0, MAX_AGENT_IDS);
+  // a mesma lista de $n nas três colunas (o Postgres aceita repetir marcadores)
+  const ids = clean.length ? clean.map((id) => params.add(id)).join(", ") : null;
+  const limit = Math.min(Math.max(Math.floor(Number(f.limit ?? SERVICE_INSTANTS_LIMIT)) || SERVICE_INSTANTS_LIMIT, 1), SERVICE_INSTANTS_LIMIT);
+  const who = ids
+    ? `(h."userId" IN (${ids})` +
+      ` OR (h."changeType"::text = 'CHECK_IN' AND b."checkInDriverId" IN (${ids}))` +
+      ` OR (h."changeType"::text = 'CHECK_OUT' AND b."checkOutDriverId" IN (${ids})))`
+    : "FALSE";
+  const sql = [
+    `SELECT h."id" AS id, ${ts(`h."actionTime"`)} AS action_time, upper(h."changeType"::text) AS change_type,`,
+    `       h."userId" AS user_id,`,
+    `       CASE WHEN h."changeType"::text = 'CHECK_IN' THEN b."checkInDriverId" ELSE b."checkOutDriverId" END AS driver_id,`,
+    `       NULLIF(b."allocation", '') AS booking_code`,
+    `  FROM "History" h`,
+    `  LEFT JOIN "Booking" b ON b."id" = h."bookingId"`,
+    ` WHERE h."actionTime" >= ${from}::timestamp AND h."actionTime" <= ${to}::timestamp`,
+    `   AND h."changeType"::text IN ('CHECK_IN', 'CHECK_OUT')`,
+    `   AND ${who}`,
+    ` ORDER BY h."actionTime" DESC, h."id" DESC`,
+    ` LIMIT ${params.add(limit + 1)}`,
+  ].join("\n");
+  return { sql, params: params.values };
+}
+
+export interface AgentServiceInstant {
+  /** UTC "YYYY-MM-DD HH:MM:SS" */
+  at: string;
+  /** "CHECK_IN" (recolha) | "CHECK_OUT" (entrega) */
+  kind: string;
+  /** quem registou a ação (History.userId) */
+  agentUserId: string | null;
+  /** quem ficou assinado na reserva (checkInDriverId / checkOutDriverId) */
+  driverId: string | null;
+  bookingCode: string | null;
+}
+
+/** Linha → recolha/entrega (sem instante → null). PURA. */
+export function mapAgentServiceInstantRow(r: Record<string, unknown>): AgentServiceInstant | null {
+  const at = str(r.action_time);
+  if (!at) return null;
+  return {
+    at: at.slice(0, 19),
+    kind: String(r.change_type ?? "").toUpperCase(),
+    agentUserId: str(r.user_id),
+    driverId: str(r.driver_id),
+    bookingCode: str(r.booking_code),
+  };
+}
+
+/** A ação é de algum destes agentes (registou-a ou ficou assinado)? PURA. */
+export function serviceInstantBelongsTo(a: Pick<AgentServiceInstant, "agentUserId" | "driverId">, agentIds: ReadonlySet<string>): boolean {
+  return (!!a.agentUserId && agentIds.has(a.agentUserId)) || (!!a.driverId && agentIds.has(a.driverId));
+}
+
+/**
+ * Recolhas e entregas dos agentes no intervalo [from, to] (UTC). Nunca lança.
+ * `truncated` = havia mais do que o teto (as mais antigas ficaram de fora).
+ */
+export async function getAgentServiceInstants(
+  f: AgentServiceInstantsFilters,
+  query: Query = multiparkDbQuery,
+): Promise<MultiparkRead<{ rows: AgentServiceInstant[]; truncated: boolean }>> {
+  return safeMultiparkRead("terminal no ponto (recolhas/entregas)", async () => {
+    if (!f.userIds.some((x) => String(x ?? "").trim())) return { rows: [], truncated: false };
+    const limit = Math.min(Math.max(Math.floor(Number(f.limit ?? SERVICE_INSTANTS_LIMIT)) || SERVICE_INSTANTS_LIMIT, 1), SERVICE_INSTANTS_LIMIT);
+    const { sql, params } = buildAgentServiceInstantsSql({ ...f, limit });
+    const raw = await query(sql, params);
+    const rows = raw.slice(0, limit).map(mapAgentServiceInstantRow).filter((x): x is AgentServiceInstant => !!x);
+    return { rows, truncated: raw.length > limit };
+  });
+}
