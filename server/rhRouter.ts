@@ -127,8 +127,37 @@ export const rhRouter = router({
     const { getDb, listInboundEmailsByAlias } = await import("./db");
     // Erro ≠ vazio (18b): sem BD diz-se, em vez de "não há emails".
     if (!(await getDb())) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível" });
-    return listInboundEmailsByAlias("recursos-humanos", 200);
+    // 41d: cada email diz onde está (por tratar / pronta / lixo) e se foi para o lixo sozinho.
+    const { recruitmentStateOf } = await import("../shared/recruitmentEmails");
+    const rows = await listInboundEmailsByAlias("recursos-humanos", 300);
+    return rows.map((e: any) => { const s = recruitmentStateOf(e); return { ...e, state: s.state, autoTrash: s.auto }; });
   }),
+
+  /**
+   * 41d: mudar um ou vários emails de sítio — "Pronta", "Lixo" ou "Repor" (por
+   * tratar). Nada se apaga; fica registado quem e quando. Só emails de
+   * recrutamento.
+   */
+  setRecruitmentState: protectedProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(300), state: z.enum(["open", "done", "trash"]) }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "leads_extras", "edit");
+      const { getDb } = await import("./db");
+      const { and, eq, inArray } = await import("drizzle-orm");
+      const database = await getDb();
+      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+      const { inboundEmails } = await import("../drizzle/schema");
+      const ids = Array.from(new Set(input.ids));
+      const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+      const res: any = await database.update(inboundEmails)
+        .set({ recruitmentState: input.state, recruitmentStateAt: now, recruitmentStateById: ctx.user.id })
+        .where(and(inArray(inboundEmails.id, ids), eq(inboundEmails.alias, "recursos-humanos")));
+      const changed = Number(res?.[0]?.affectedRows ?? res?.affectedRows ?? 0);
+      if (!changed) throw new TRPCError({ code: "NOT_FOUND", message: "Email de recrutamento não encontrado." });
+      const label = input.state === "done" ? "pronta(s)" : input.state === "trash" ? "no lixo" : "repostos (por tratar)";
+      await logActivity({ userId: ctx.user.id, action: "recruitment_state", entity: "inbound_emails", entityId: ids.length === 1 ? ids[0] : undefined, details: `${changed} email(s) ${label} · ids ${ids.slice(0, 60).join(",")}`.slice(0, 1000) });
+      return { changed };
+    }),
 
   // Notas internas do backoffice sobre um email/candidato de recrutamento.
   setRecruitmentNotes: protectedProcedure
@@ -157,6 +186,8 @@ export const rhRouter = router({
       fromAlias: z.enum(["criticas", "reclamacoes", "perdidos", "recursos-humanos"]).optional(),
       // Inclui link de registo: cria conta para o candidato e gera /convite/:token.
       includeRegisterLink: z.boolean().optional(),
+      // 41d: o email respondido passa a "Pronta" (sai da lista; "Repor" devolve-o).
+      emailId: z.number().int().positive().optional(),
       candidateName: z.string().optional(),
       origin: z.string().url().optional(),
       // Ficheiros já enviados para /api/upload — o servidor descarrega-os
@@ -216,7 +247,23 @@ export const rhRouter = router({
         details: `Resposta a ${input.to}: ${input.subject.slice(0, 80)}${inviteLink ? " (+link registo)" : ""}${emailAttachments.length ? ` (+${emailAttachments.length} anexo${emailAttachments.length > 1 ? "s" : ""})` : ""}`,
       });
       if (!ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Envio de email (Gmail) não configurado ou falhou o envio" });
-      return { ok, inviteLink };
+      // 41d: respondido = pronto (sai de "Por tratar"; "Repor" devolve-o). Falhar aqui não desfaz o envio.
+      let markedDone = false;
+      if (input.emailId) {
+        try {
+          const { getDb } = await import("./db");
+          const { and, eq } = await import("drizzle-orm");
+          const { inboundEmails } = await import("../drizzle/schema");
+          const database = await getDb();
+          if (database) {
+            const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+            const r: any = await database.update(inboundEmails).set({ recruitmentState: "done", recruitmentStateAt: now, recruitmentStateById: ctx.user.id })
+              .where(and(eq(inboundEmails.id, input.emailId), eq(inboundEmails.alias, "recursos-humanos")));
+            markedDone = Number(r?.[0]?.affectedRows ?? r?.affectedRows ?? 0) > 0;
+          }
+        } catch (err) { console.warn("[recrutamento] marcar como pronta falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
+      }
+      return { ok, inviteLink, markedDone };
     }),
 
   // Resumo do mês actual para o próprio colaborador: horas + valor a receber.

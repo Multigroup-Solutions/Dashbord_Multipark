@@ -327,7 +327,12 @@ export function liveSpotTypeOf(parkingType: unknown, code: string | null): LiveS
   return "unknown";
 }
 
-export interface SpotTypeCount { type: LiveSpotType; label: string; total: number; byPark: Array<{ parkName: string; count: number }> }
+export interface SpotTypeCount {
+  type: LiveSpotType; label: string; total: number;
+  byPark: Array<{ parkName: string; count: number }>;
+  /** 44e (Jorge, 7 out 2026: "em vez das marcas, as garagens, para vermos o que está mal arrumado"): em cada parque, as garagens onde estão. */
+  byParkGarage: Array<{ parkName: string; total: number; garages: Array<{ garage: string; count: number }> }>;
+}
 
 /**
  * 44b (Jorge, 7 out 2026: "dividido só por cobertos, descobertos… do que por
@@ -336,18 +341,26 @@ export interface SpotTypeCount { type: LiveSpotType; label: string; total: numbe
  * Só os tipos com carros. PURA.
  */
 export function summarizeBySpotType(cars: LiveCar[]): SpotTypeCount[] {
-  const by = new Map<LiveSpotType, Map<string, number>>();
+  const by = new Map<LiveSpotType, Map<string, Map<string, number>>>();
   for (const c of cars) {
     if (c.phase !== "in_park") continue;
-    const m = by.get(c.spotType) ?? new Map<string, number>();
+    const parks = by.get(c.spotType) ?? new Map<string, Map<string, number>>();
     const park = c.parkName ?? "?";
-    m.set(park, (m.get(park) ?? 0) + 1);
-    by.set(c.spotType, m);
+    const garages = parks.get(park) ?? new Map<string, number>();
+    const garage = c.garage ?? "Sem garagem";
+    garages.set(garage, (garages.get(garage) ?? 0) + 1);
+    parks.set(park, garages);
+    by.set(c.spotType, parks);
   }
+  const byCount = <T extends { count?: number; total?: number }>(a: T, b: T) => ((b.count ?? b.total ?? 0) - (a.count ?? a.total ?? 0));
   return SPOT_TYPE_ORDER.filter((t) => by.has(t)).map((type) => {
-    const m = by.get(type)!;
-    const byPark = [...m.entries()].map(([parkName, count]) => ({ parkName, count })).sort((a, b) => b.count - a.count || a.parkName.localeCompare(b.parkName, "pt"));
-    return { type, label: LIVE_SPOT_TYPE_LABELS[type], total: byPark.reduce((s, x) => s + x.count, 0), byPark };
+    const parks = by.get(type)!;
+    const byParkGarage = [...parks.entries()].map(([parkName, g]) => {
+      const garages = [...g.entries()].map(([garage, count]) => ({ garage, count })).sort((a, b) => byCount(a, b) || a.garage.localeCompare(b.garage, "pt"));
+      return { parkName, total: garages.reduce((s, x) => s + x.count, 0), garages };
+    }).sort((a, b) => byCount(a, b) || a.parkName.localeCompare(b.parkName, "pt"));
+    const byPark = byParkGarage.map((p) => ({ parkName: p.parkName, count: p.total }));
+    return { type, label: LIVE_SPOT_TYPE_LABELS[type], total: byPark.reduce((s, x) => s + x.count, 0), byPark, byParkGarage };
   });
 }
 

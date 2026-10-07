@@ -22,7 +22,9 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, CheckCircle2, CircleAlert, Euro, MousePointerClick, Receipt, ShoppingCart, Target, TrendingUp } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Euro, MousePointerClick, Receipt, RotateCcw, ShoppingCart, Target, TrendingUp, X } from "lucide-react";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { marketingAlertKey, splitHiddenAlerts } from "@shared/marketingAlerts";
 import { attributionHealth, type AttributionQuality } from "@shared/marketingAttribution";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
@@ -125,10 +127,14 @@ export default function MarketingDashboardPanel() {
         <DateRangeNav start={from} end={to} gran="month" showAll={false} onChange={(s, e) => { setFrom(s); setTo(e); }} />
       </div>
 
-      {alertsQ.error
-        ? <QueryErrorNote error={alertsQ.error} onRetry={() => alertsQ.refetch()} retrying={alertsQ.isFetching} what="os alertas do marketing" />
-        : <AlertsCard alerts={alertsData?.alerts} windowFrom={alertsData?.windowFrom} />}
-
+      {/* Jorge (7 out 2026): os alertas ficam de lado, pequenos e dispensáveis, como nas Reservas (no telemóvel, por cima e encolhíveis) */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+      <aside className="order-first min-w-0 lg:order-last lg:sticky lg:top-4">
+        {alertsQ.error
+          ? <QueryErrorNote error={alertsQ.error} onRetry={() => alertsQ.refetch()} retrying={alertsQ.isFetching} what="os alertas do marketing" />
+          : <AlertsCard alerts={alertsData?.alerts} windowFrom={alertsData?.windowFrom} />}
+      </aside>
+      <div className="min-w-0 space-y-4">
       {error && <QueryErrorNote error={error} onRetry={() => dashQ.refetch()} retrying={dashQ.isFetching} what="o dashboard de marketing" />}
       {isLoading && <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>}
 
@@ -241,49 +247,111 @@ export default function MarketingDashboardPanel() {
           </div>
         </>
       )}
+      </div>
+      </div>
     </div>
   );
 }
 
-/** Alertas (independentes do período escolhido: últimos 14 dias e mês corrente). Nunca só cor: ícone + texto. */
-export function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "critical" | "warning"; code: string; title: string; detail: string; link?: string; linkLabel?: string; items?: string[] }>; windowFrom?: string }) {
+/**
+ * Alertas (independentes do período escolhido: últimos 14 dias e mês corrente). Nunca só cor: ícone + texto.
+ * Jorge (7 out 2026, "põe de lado como o outro"): de lado, pequenos, encolhem com um clique e cada um sai da
+ * lista com o X (para ti, até ao fim do mês; volta em "Tirados → Repor"), como os das Reservas.
+ */
+const ALERTS_PAGE = 4;
+const HIDDEN_KEY = "mp.marketing.alerts.hidden";
+function readHidden(): Record<string, string> {
+  try { const v = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+}
+export function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "critical" | "warning"; code: string; key?: string; title: string; detail: string; link?: string; linkLabel?: string; items?: string[] }>; windowFrom?: string }) {
   const { user } = useAuth();
   // 19b: links para Integrações só para quem as abre (senão era um link morto)
   const canOpenIntegrations = can(user, "integracoes", "view");
+  const [collapsed, setCollapsed] = usePersistedState("alerts.marketing.collapsed", false);
+  const [all, setAll] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
+  const [hiddenMap, setHiddenMap] = useState<Record<string, string>>(readHidden);
+  const month = lisbonDay().slice(0, 7);
+  const setHidden = (key: string, hide: boolean) => {
+    const next = { ...hiddenMap };
+    if (hide) next[key] = month; else delete next[key];
+    // limpa os de meses passados (voltaram sozinhos)
+    for (const k of Object.keys(next)) if (next[k] !== month) delete next[k];
+    setHiddenMap(next);
+    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(next)); } catch { /* privado/quota: fica só nesta página */ }
+  };
   if (!alerts) return null;
-  if (!alerts.length) {
+  const { shown: list, hidden } = splitHiddenAlerts(alerts, hiddenMap, month);
+  if (!list.length && !hidden.length) {
     return (
       <div className="rounded-md border border-emerald-200 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200 px-3 py-2 text-xs flex items-center gap-2" role="status">
-        <CheckCircle2 className="w-4 h-4" /> Sem alertas: campanhas com resultados, ritmo do mês normal e todas as campanhas associadas.
+        <CheckCircle2 className="w-4 h-4 shrink-0" /> Sem alertas: campanhas com resultados, ritmo do mês normal e todas as campanhas associadas.
       </div>
     );
   }
+  const critical = list.filter((a) => a.level === "critical").length;
+  const visible = all ? list : list.slice(0, ALERTS_PAGE);
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-600" /> Alertas ({alerts.length})</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {alerts.map((raw, i) => {
-          const a = raw.link?.startsWith("/integracoes") && !canOpenIntegrations ? { ...raw, link: undefined, linkLabel: undefined } : raw;
-          const critical = a.level === "critical";
-          const Icon = critical ? CircleAlert : AlertTriangle;
-          const body = (
-            <div className={`rounded-md border px-3 py-2 text-sm ${critical ? "border-rose-200 bg-rose-50 text-rose-900 dark:bg-rose-950/30 dark:text-rose-200" : "border-amber-200 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"}`}>
-              <div className="flex items-center gap-2 font-medium"><Icon className="w-4 h-4 shrink-0" /><span className="sr-only">{critical ? "Crítico:" : "Atenção:"}</span>{a.title}</div>
-              <p className="text-xs mt-0.5">{a.detail}</p>
-              {a.items && a.items.length > 0 && (
-                <ul className="text-xs mt-1 list-disc pl-5 space-y-0.5">{a.items.map((it) => <li key={it}>{it}</li>)}</ul>
-              )}
-              {a.linkLabel && a.link && (
-                <Link href={a.link} className="inline-flex items-center gap-1 mt-1.5 text-xs font-semibold underline">{a.linkLabel}</Link>
-              )}
-            </div>
-          );
-          return a.link && !a.linkLabel ? <Link key={`${a.code}-${i}`} href={a.link} className="block hover:opacity-90">{body}</Link> : <div key={`${a.code}-${i}`}>{body}</div>;
-        })}
-        {windowFrom && <p className="text-[11px] text-muted-foreground">Campanhas: últimos 14 dias (desde {windowFrom.slice(8, 10)}/{windowFrom.slice(5, 7)}). Ritmo: mês corrente até ontem vs mês passado.</p>}
-      </CardContent>
+    <Card className="space-y-2 border-amber-300 bg-amber-50/40 p-3 text-xs dark:bg-amber-950/10">
+      <button type="button" className="flex w-full items-center gap-1.5 text-left" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}>
+        {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        <AlertTriangle className="h-3.5 w-3.5 text-amber-700" />
+        <span className="text-sm font-semibold">Alertas</span>
+        <span className="text-muted-foreground">{list.length}{critical ? ` · ${critical} crítico${critical > 1 ? "s" : ""}` : ""}</span>
+      </button>
+      {!collapsed && (
+        <>
+          <ul className="space-y-1.5">
+            {visible.map((raw) => {
+              const a = raw.link?.startsWith("/integracoes") && !canOpenIntegrations ? { ...raw, link: undefined, linkLabel: undefined } : raw;
+              const isCritical = a.level === "critical";
+              const Icon = isCritical ? CircleAlert : AlertTriangle;
+              const k = marketingAlertKey(a);
+              return (
+                <li key={k} className="flex gap-1.5 break-words">
+                  <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${isCritical ? "text-rose-700" : "text-amber-700"}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium leading-snug"><span className="sr-only">{isCritical ? "Crítico:" : "Atenção:"}</span>
+                      {a.link ? <Link href={a.link} className="hover:underline">{a.title}</Link> : a.title}
+                    </div>
+                    <div className="mt-0.5 leading-snug text-muted-foreground">{a.detail}</div>
+                    {a.items && a.items.length > 0 && (
+                      <ul className="mt-0.5 list-disc pl-4 text-muted-foreground">{a.items.slice(0, 5).map((it) => <li key={it}>{it}</li>)}{a.items.length > 5 && <li>…e mais {a.items.length - 5}</li>}</ul>
+                    )}
+                    {a.linkLabel && a.link && <Link href={a.link} className="mt-0.5 inline-flex font-semibold underline">{a.linkLabel}</Link>}
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Tirar da lista (para ti, até ao fim do mês; volta em Tirados → Repor)"
+                    aria-label="Tirar da lista" onClick={() => setHidden(k, true)}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </li>
+              );
+            })}
+            {!list.length && <li className="text-muted-foreground">Sem alertas na lista.</li>}
+          </ul>
+          <div className="flex flex-wrap items-center gap-1">
+            {list.length > ALERTS_PAGE && (
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setAll((v) => !v)}>{all ? "Mostrar menos" : `Ver todos (${list.length})`}</Button>
+            )}
+            {hidden.length > 0 && (
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setShowHidden((v) => !v)}>{showHidden ? "Esconder tirados" : `Tirados (${hidden.length})`}</Button>
+            )}
+          </div>
+          {showHidden && hidden.length > 0 && (
+            <ul className="space-y-1 border-t pt-1.5">
+              {hidden.map((a) => (
+                <li key={marketingAlertKey(a)} className="flex items-start gap-1.5 text-muted-foreground">
+                  <span className="min-w-0 flex-1 break-words">{a.title}</span>
+                  <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1.5 text-xs" onClick={() => setHidden(marketingAlertKey(a), false)}>
+                    <RotateCcw className="mr-1 h-3 w-3" />Repor
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {windowFrom && <p className="text-[11px] text-muted-foreground">Campanhas: últimos 14 dias (desde {windowFrom.slice(8, 10)}/{windowFrom.slice(5, 7)}). Ritmo: mês corrente até ontem vs mês passado.</p>}
+        </>
+      )}
     </Card>
   );
 }
