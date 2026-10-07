@@ -36,17 +36,15 @@ export function ZelloLiveTab() {
   const { data: locations = [], isFetching, refetch, dataUpdatedAt } = locQ;
   const usersQ = trpc.operational.zello.users.useQuery();
   const mappingsQ = trpc.operational.zello.mappings.useQuery(undefined, { refetchInterval: 60_000 });
-  const pdasQ = trpc.operational.pdas.list.useQuery();
   const zelloUsers = usersQ.data ?? [];
   const mappings = mappingsQ.data ?? [];
-  const pdas = pdasQ.data ?? [];
   const { data: employees = [] } = trpc.rh.list.useQuery({ isActive: true });
   const [fitSignal, setFitSignal] = useState(0);
   const [openAlert, setOpenAlert] = useState<string | null>(null);
-  const refreshing = isFetching || usersQ.isFetching || mappingsQ.isFetching || pdasQ.isFetching;
-  /** Atualizar: tudo de novo e o mapa volta a mostrar toda a gente. */
+  const refreshing = isFetching || usersQ.isFetching || mappingsQ.isFetching;
+  /** Atualizar: tudo de novo (posições, utilizadores e PDAs do Zello, ligações) e o mapa volta a mostrar toda a gente. */
   const refreshAll = async () => {
-    await Promise.all([refetch(), usersQ.refetch(), mappingsQ.refetch(), pdasQ.refetch()]);
+    await Promise.all([refetch(), usersQ.refetch(), mappingsQ.refetch()]);
     setFitSignal((n) => n + 1);
   };
 
@@ -61,15 +59,16 @@ export function ZelloLiveTab() {
     return m;
   }, [mappings]);
 
-  // Utilizadores Zello que pertencem a PDAs (ligação é o check-in diário do
-  // PDA, não a ficha)
+  // Utilizadores Zello que pertencem a PDAs (o check-in do dia manda; o dono
+  // fixo fica com o GPS quando ninguém fez check-in). 43b: vem do servidor,
+  // com TODOS os PDAs — um PDA de outra cidade já não parece telemóvel pessoal.
   const pdaByZello = useMemo(() => {
     const m = new Map<string, { pdaName: string }>();
-    for (const p of pdas as any[]) {
-      if (p.zelloUsername) m.set(String(p.zelloUsername).toLowerCase(), { pdaName: p.name });
+    for (const u of zelloUsers as any[]) {
+      if (u.pda) m.set(String(u.name).toLowerCase(), { pdaName: u.pda.name });
     }
     return m;
-  }, [pdas]);
+  }, [zelloUsers]);
 
   const realName = (l: { username: string; displayName: string }) =>
     mapByZello.get(l.username.toLowerCase())?.fullName || l.displayName || l.username;
@@ -103,6 +102,7 @@ export function ZelloLiveTab() {
   const mapMutation = trpc.operational.zello.mapUserToEmployee.useMutation({
     onSuccess: () => {
       utils.operational.zello.mappings.invalidate();
+      utils.operational.zello.users.invalidate();
       toast.success("Ligação guardada!");
     },
     onError: (e) => toast.error(e.message),
@@ -168,8 +168,8 @@ export function ZelloLiveTab() {
             {unmappedCount > 0 && <Badge variant="secondary">{unmappedCount} por ligar</Badge>}
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            Os utilizadores instalados em <b>PDAs</b> mudam de mãos todos os dias — a ligação vem do
-            check-in do PDA (aba PDAs) e é automática. O seletor fixo é só para telemóveis pessoais.
+            Nos <b>PDAs</b> manda o check-in do dia (aba PDAs). Se o PDA é de uma pessoa, escolhe-a como <b>dono</b>:
+            fica com o GPS sempre que ninguém fez check-in nele. Nos telemóveis pessoais, escolhe a pessoa.
           </p>
         </CardHeader>
         <CardContent>
@@ -199,7 +199,7 @@ export function ZelloLiveTab() {
                       </p>
                     </div>
                     {isPda ? (
-                      <div className="shrink-0 text-right">
+                      <div className="flex w-full shrink-0 flex-col items-end gap-1 sm:w-52">
                         {hasToday ? (
                           <Badge variant="outline" className="gap-1 border-green-300 bg-green-50 text-green-800">
                             hoje: {linked!.fullName}
@@ -209,6 +209,14 @@ export function ZelloLiveTab() {
                             sem check-in de PDA hoje
                           </Badge>
                         )}
+                        <div className="w-full">
+                          <SearchableSelect
+                            options={employeeOptions}
+                            value={u.owner ? String(u.owner.employeeId) : ""}
+                            onChange={(v: string) => mapMutation.mutate({ zelloUsername: u.name, employeeId: v ? Number(v) : null })}
+                            placeholder="— dono do PDA (fixo) —"
+                          />
+                        </div>
                       </div>
                     ) : (
                       <div className="w-full sm:w-52 shrink-0">

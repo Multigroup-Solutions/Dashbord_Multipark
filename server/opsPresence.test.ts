@@ -38,9 +38,10 @@ describe("Zello ligado", () => {
 
 describe("evaluatePresence", () => {
   it("ponto aberto sem PDA → alerta, mas só depois da tolerância", () => {
-    const early = evaluatePresence({ now: NOW, people: [person({ pdaName: null, clockOpenSince: NOW - (CLOCK_GRACE_MINUTES - 1) * MIN })], movements: [], locations: zello({}) });
+    // 43b: sem PDA e sem Zello fixo (com o Zello fixo já não é "sem PDA")
+    const early = evaluatePresence({ now: NOW, people: [person({ pdaName: null, zelloUsername: null, clockOpenSince: NOW - (CLOCK_GRACE_MINUTES - 1) * MIN })], movements: [], locations: zello({}) });
     expect(early).toEqual([]);
-    const late = evaluatePresence({ now: NOW, people: [person({ pdaName: null, clockOpenSince: NOW - (CLOCK_GRACE_MINUTES + 1) * MIN })], movements: [], locations: zello({}) });
+    const late = evaluatePresence({ now: NOW, people: [person({ pdaName: null, zelloUsername: null, clockOpenSince: NOW - (CLOCK_GRACE_MINUTES + 1) * MIN })], movements: [], locations: zello({}) });
     expect(late.map((p) => p.kind)).toEqual(["clock_no_pda"]);
   });
 
@@ -81,7 +82,7 @@ describe("evaluatePresence", () => {
 
 describe("diffPresenceAlerts", () => {
   it("abre os novos, mantém os que continuam e fecha os resolvidos", () => {
-    const people = [person({ pdaName: null }), person({ employeeId: 2, pdaName: "PDA 3", zelloUsername: "pda3" })];
+    const people = [person({ pdaName: null, zelloUsername: null }), person({ employeeId: 2, pdaName: "PDA 3", zelloUsername: "pda3" })];
     const problems = evaluatePresence({ now: NOW, people, movements: [], locations: zello({ pda3: 5 }) });
     const d = diffPresenceAlerts({
       now: NOW, people, problems, locations: zello({ pda3: 5 }),
