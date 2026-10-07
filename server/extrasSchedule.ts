@@ -24,7 +24,6 @@ import { extractAffectedRows } from "./availabilityFormToken";
 import {
   CITY_LABELS_PT,
   addDaysIso,
-  availabilityWindow,
   canAutoConfirm,
   describeGap,
   explainProposal,
@@ -219,17 +218,23 @@ async function loadHistory(ids: number[], date: string): Promise<{
   return out;
 }
 
+type DriverCandidateRow = Awaited<ReturnType<typeof import("./extrasDia").listDriverCandidates>>[number];
+
+/** Janelas do dia operacional (já calculadas em getAvailabilityForDay: lê D−1, D e D+1). */
+export const candidateWindows = (c: { availability?: { windows?: readonly { from: number; to: number }[] } | null }) => c.availability?.windows ?? [];
+
 /**
- * Extras disponíveis para o dia/cidade, com o que a ordenação precisa. Fora:
- * formação obrigatória por concluir, ficha de outra cidade ou SEM cidade, sem
- * disponibilidade, e quem não é extra (funcionários só à mão).
+ * Extras que PODEM entrar na escala do dia/cidade: disponíveis no dia
+ * operacional, extras (funcionários só à mão), da cidade da escala (sem cidade
+ * não) e com a formação obrigatória concluída. A mesma lista serve a proposta
+ * automática e o "disponíveis por escalar" do indicador de pessoal.
  */
-export async function loadScheduleCandidates(date: string, city: ScheduleCity): Promise<ScheduleCandidate[]> {
+export async function loadEligibleExtras(date: string, city: ScheduleCity): Promise<DriverCandidateRow[]> {
   const db = await getDb();
   if (!db) return [];
-  const { listDriverCandidates, DRIVER_LEVELS } = await import("./extrasDia");
+  const { listDriverCandidates } = await import("./extrasDia");
   const all = await listDriverCandidates(date);
-  const available = all.filter((c) => availabilityWindow(c.availability ?? null) != null);
+  const available = all.filter((c) => candidateWindows(c).length > 0);
   if (!available.length) return [];
 
   const { employeesMissingTraining } = await import("./trainingPaths");
@@ -239,13 +244,22 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
   const cityKey = city === "lisbon" ? "lisboa" : city;
   // Proposta automática: só EXTRAS e só da cidade da escala (Jorge, 2 out 2026:
   // funcionários só à mão; quem não tem cidade não se escala).
-  const pool = available.filter((c) => {
+  return available.filter((c) => {
     if (untrained.has(c.id)) return false;
     if ((c.position ?? "").toLowerCase() !== "extra") return false;
     return (cities.get(c.id)?.city ?? null) === cityKey;
   });
-  if (!pool.length) return [];
+}
 
+/**
+ * Extras disponíveis para o dia/cidade, com o que a ordenação precisa. Fora:
+ * formação obrigatória por concluir, ficha de outra cidade ou SEM cidade, sem
+ * disponibilidade, e quem não é extra (funcionários só à mão).
+ */
+export async function loadScheduleCandidates(date: string, city: ScheduleCity): Promise<ScheduleCandidate[]> {
+  const pool = await loadEligibleExtras(date, city);
+  if (!pool.length) return [];
+  const { DRIVER_LEVELS } = await import("./extrasDia");
   const { loadExtraRates, rateFor } = await import("./extraRates");
   const rates = await loadExtraRates();
   const hist = await loadHistory(pool.map((c) => c.id), date);
@@ -255,7 +269,7 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
     level: c.suggestedLevel,
     levelLabel: DRIVER_LEVELS.find((l) => l.id === c.suggestedLevel)?.label ?? c.suggestedLevel,
     hourlyRate: rateFor(rates, c.suggestedLevel),
-    window: availabilityWindow(c.availability ?? null),
+    windows: candidateWindows(c),
     evalScore: hist.evalScore.get(c.id) ?? null,
     recentDays: hist.recentDays.get(c.id) ?? 0,
     noShows: hist.noShows.get(c.id) ?? 0,
@@ -896,7 +910,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     proposedCount: mine.filter((r) => r.status === "proposed").length,
     confirmedCount: mine.filter((r) => r.status !== "proposed").length,
     noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
-    availableCount: cands.filter((c) => availabilityWindow(c.availability ?? null) != null).length,
+    availableCount: cands.filter((c) => candidateWindows(c).length > 0).length,
     notifications,
     settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead },
   };

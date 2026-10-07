@@ -45,6 +45,7 @@ import { availableWindow } from "./extrasAutomation";
 import { extrasCostView, maskAssignmentCost, stripEuros } from "../shared/extrasCostView";
 import { lisbonNow } from "../shared/extrasSchedule";
 import { addDays } from "../shared/lisbonDay";
+import { operationalDayWindows } from "../shared/availabilityWindow";
 import { sql } from "drizzle-orm";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -190,7 +191,9 @@ describe("Previsão incompleta e disponibilidade", () => {
     expect(src("server/extrasDia.ts")).toContain("${multiparkBookings.status} != 'CANCELLED'");
   });
   it("'Preencher' lê a disponibilidade como a proposta (meia-noite e só o início)", () => {
-    const avail = (o: any) => ({ status: "available", morning: false, night: false, fromHour: null, toHour: null, ...o });
+    // A mesma leitura única (operationalDayWindows) da proposta e da grelha — pedido 7.
+    const D = "2026-10-05";
+    const avail = (o: any) => operationalDayWindows([{ day: D, morning: false, night: false, fromHour: null, toHour: null, ...o }], D);
     expect(availableWindow(avail({ fromHour: 18, toHour: 2 }), "night")).toEqual({ from: 18, to: 26 });
     expect(availableWindow(avail({ fromHour: 10 }), "morning")).toEqual({ from: 10, to: 15 });
     expect(availableWindow(avail({ morning: true }), "night")).toBeNull();

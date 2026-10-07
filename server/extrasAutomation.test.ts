@@ -3,6 +3,7 @@ import {
   addDaysIso, availableWindow, coverageGaps, describeGaps, dueTasks, fmtWeek, fmtWorkDay, lisbonClock, planAutofill,
   type AutofillCandidate,
 } from "./extrasAutomation";
+import { operationalDayWindows, type AvailabilityDayLike } from "../shared/availabilityWindow";
 
 describe("relógio de Lisboa e horários", () => {
   it("converte UTC para a hora de Lisboa (verão = UTC+1)", () => {
@@ -52,16 +53,21 @@ describe("cobertura", () => {
 });
 
 describe("preencher a escala com disponíveis", () => {
-  const cand = (id: number, name: string, availability: AutofillCandidate["availability"], cityMatch: boolean | null = true): AutofillCandidate =>
-    ({ id, fullName: name, level: "junior", availability, cityMatch });
-  const yes = (o: Partial<NonNullable<AutofillCandidate["availability"]>> = {}) => ({ status: "available", morning: true, night: false, fromHour: null, toHour: null, ...o });
+  // As janelas vêm da leitura única da disponibilidade (operationalDayWindows, pedido 7).
+  const DAY = "2026-10-05";
+  const cand = (id: number, name: string, windows: AutofillCandidate["windows"], cityMatch: boolean | null = true): AutofillCandidate =>
+    ({ id, fullName: name, level: "junior", windows, cityMatch });
+  const yes = (o: Partial<Omit<AvailabilityDayLike, "day">> = {}) =>
+    operationalDayWindows([{ day: DAY, morning: true, night: false, fromHour: null, toHour: null, ...o }], DAY);
 
   it("janela disponível por turno e horas", () => {
     expect(availableWindow(yes(), "morning")).toEqual({ from: 3, to: 15 });
     expect(availableWindow(yes(), "night")).toBeNull();
     expect(availableWindow(yes({ morning: false, fromHour: 10, toHour: 20 }), "morning")).toEqual({ from: 10, to: 15 });
     expect(availableWindow(yes({ fromHour: 13, toHour: 20 }), "morning")).toBeNull(); // só 2h no turno
-    expect(availableWindow({ ...yes(), status: "no_response" }, "morning")).toBeNull();
+    expect(availableWindow([], "morning")).toBeNull(); // sem resposta / não pode
+    // duas janelas no turno → a mais comprida
+    expect(availableWindow([{ from: 3, to: 6 }, { from: 9, to: 15 }], "morning")).toEqual({ from: 9, to: 15 });
   });
 
   it("já escalados cobrem os turnos maiores; só extras da cidade (sem cidade, outra cidade ou funcionário nunca)", () => {

@@ -1017,7 +1017,8 @@ export interface DriverCandidate {
   /** 44a: tem conta no dashboard (a permissão de TL é da conta). */
   hasAccount: boolean;
   // Preenchido quando se passa uma data: disponibilidade declarada pelo extra
-  // para esse dia (alimenta a escala do Extras-Dia). null = não aplicável.
+  // para esse dia OPERACIONAL (03h → 03h; `windows` já inclui a madrugada
+  // marcada no dia seguinte) — alimenta a escala do Extras-Dia. null = não aplicável.
   availability?: import("./extrasAvailability").DayAvailability | null;
 }
 
@@ -1086,7 +1087,7 @@ export async function listDriverCandidates(date?: string, opts?: { forTeamLeader
     suggestedLevel: suggestLevel(r.position, r.extraLevel),
     photoUrl: r.photoUrl ?? null,
     hasAccount: r.userId != null,
-    availability: availMap ? (availMap.get(r.id) ?? { status: "no_response", morning: false, night: false, fromHour: null, toHour: null, note: null }) : null,
+    availability: availMap ? (availMap.get(r.id) ?? { status: "no_response", morning: false, night: false, fromHour: null, toHour: null, note: null, windows: [], hours: "" }) : null,
   }));
 }
 

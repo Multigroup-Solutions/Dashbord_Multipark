@@ -81,6 +81,7 @@ import {
 } from "@shared/city";
 import {
   HOUR_OPTIONS,
+  availabilityCellDisplay,
   formatHourWindow,
   isAvailableOnDay,
   matchesAvailabilityWindow,
@@ -2285,20 +2286,23 @@ export function AvailabilitySection() {
             title={d.note ? `${d.note} — clicar para editar` : "Editar disponibilidade"}
             onClick={() => openAvailabilityEditor(ex)}
           >
-            {(d.morning || d.night || d.fromHour != null) ? (
-              <span className="inline-flex flex-col items-center leading-tight">
-                <span className="inline-flex gap-0.5 justify-center items-center">
-                  {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
-                  {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
-                  {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
-                </span>
-                {(d.fromHour != null || d.toHour != null) && (
-                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                    {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
+            {(d.morning || d.night || d.fromHour != null || d.toHour != null) ? (() => {
+              // Pedido 7: com horas, mostram-se as horas reais (o slot do site "18H-01H"
+              // aparecia com a lua de "Noite 15h–03h" e parecia cobrir até às 03h).
+              const cell = availabilityCellDisplay(d);
+              return (
+                <span className="inline-flex flex-col items-center leading-tight">
+                  <span className="inline-flex gap-0.5 justify-center items-center">
+                    {cell.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
+                    {cell.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
+                    {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
                   </span>
-                )}
-              </span>
-            ) : (
+                  {cell.hours && (
+                    <span className="text-[11px] text-muted-foreground whitespace-nowrap">{cell.hours}</span>
+                  )}
+                </span>
+              );
+            })() : (
               <span className="text-muted-foreground/50" aria-hidden>·</span>
             )}
           </button>
@@ -2807,7 +2811,7 @@ export function AvailabilitySection() {
               })}
             </div>
             <div className="text-xs text-muted-foreground">
-              <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · horas = janela indicada pela pessoa · ✱ tem nota (passa o rato por cima) · totais = nº disponíveis por turno
+              <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · horas = janela exata indicada pela pessoa (manda sobre os turnos; "00h–03h" é a madrugada desse dia, ou seja a noite do dia anterior) · ✱ tem nota (passa o rato por cima) · totais = nº disponíveis por turno
             </div>
           </div>
         )}
