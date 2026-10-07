@@ -264,6 +264,32 @@ export function canValidateDocuments(v: RhViewer, e: EmployeeRef): boolean {
   return isRhFor(v, e) || canManageEmployee(v, e);
 }
 
+/**
+ * Pauta do Rafael (7 out 2026): quem PEDE os documentos em falta a um extra
+ * (WhatsApp/email, na ficha ou em grupo na lista) — quem os valida
+ * (canValidateDocuments: o RH da ficha, nunca a própria) e só a extras. O
+ * âmbito de cidade do pedido aplica-se à parte (assertEmployeeAccess / lista
+ * filtrada pelas cidades). PURA.
+ */
+export function canRequestDocuments(v: RhViewer, e: EmployeeRef): boolean {
+  return e.position === "extra" && canValidateDocuments(v, e);
+}
+
+/**
+ * Envio em grupo (lista do RH): só as fichas no âmbito de cidade do pedido
+ * (`scopedIds` undefined = todas as cidades; uma ficha sem centro só entra
+ * para quem vê todas) e a quem quem pede pode pedir documentos. PURA.
+ */
+export function docsRequestableRows<T extends { id: number; projectId: number | null; accountRole: string | null; position: string | null }>(
+  v: RhViewer,
+  rows: readonly T[],
+  scopedIds: readonly number[] | undefined,
+): T[] {
+  return rows.filter((r) =>
+    (scopedIds === undefined || (r.projectId != null && scopedIds.includes(r.projectId)))
+    && canRequestDocuments(v, { id: r.id, projectId: r.projectId, role: r.accountRole, position: r.position }));
+}
+
 /** Estado com que entra um ficheiro novo: o que o RH carrega já vem validado; o resto fica pendente. PURA. */
 export function initialDocumentStatus(v: RhViewer, e: EmployeeRef): "pending" | "validated" {
   return canValidateDocuments(v, e) ? "validated" : "pending";

@@ -312,7 +312,7 @@ async function openBroadcast(
  * null continua a significar "aguarda primeira resposta" (a Fase 3 depende disto).
  * Devolve o id da conversa.
  */
-async function upsertConversation(
+export async function upsertConversation(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   phoneE164: string,
   employeeId: number | null,
