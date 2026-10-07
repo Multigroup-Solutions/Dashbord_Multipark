@@ -131,7 +131,15 @@ describe("Avisos: só o turno do botão, nunca para dias passados", () => {
   });
   it("o botão de um turno avisa só esse turno", async () => {
     const future = addDays(lisbonNow().date, 2);
-    await caller("supervisor").extrasDia.notify({ date: future, city: "porto", shift: "night" });
+    // (o WhatsApp só é chamado com o WhatsApp configurado — pedido 8: o email não depende dele)
+    const env = { t: process.env.WHATSAPP_TOKEN, p: process.env.WHATSAPP_PHONE_NUMBER_ID };
+    process.env.WHATSAPP_TOKEN = "t"; process.env.WHATSAPP_PHONE_NUMBER_ID = "p";
+    try {
+      await caller("supervisor").extrasDia.notify({ date: future, city: "porto", shift: "night", channels: ["whatsapp"] });
+    } finally {
+      if (env.t === undefined) delete process.env.WHATSAPP_TOKEN; else process.env.WHATSAPP_TOKEN = env.t;
+      if (env.p === undefined) delete process.env.WHATSAPP_PHONE_NUMBER_ID; else process.env.WHATSAPP_PHONE_NUMBER_ID = env.p;
+    }
     expect(state.notified[0]).toMatchObject({ date: future, city: "porto", shift: "night" });
   });
   it("os avisos vêm só da cidade pedida e marcam os de horas antigas", () => {
@@ -216,10 +224,14 @@ describe("Ecrã do Extras Dia", () => {
   });
   it("remover pergunta antes; avisar é por turno; erros com 'Tentar de novo'", () => {
     expect(page).toContain("Tirar ${a.personName} da escala?");
-    expect(page).toContain("notify.mutate({ date: targetDate, city, shift })");
-    for (const what of ["a previsão", "o estado da escala", "a equipa deste turno", "a falta de gente por hora", "os avisos enviados", "as reservas deste intervalo"]) {
+    // Pedido 8: o botão abre a pré-visualização do turno; o envio é do turno, pelos canais escolhidos.
+    expect(page).toContain("<NotifyShiftDialog open={notifyOpen} onOpenChange={setNotifyOpen} date={targetDate} city={city} shift={shift}");
+    expect(src("client/src/pages/extrasDia/NotifyShiftDialog.tsx")).toContain("send.mutate({ date, city, shift, channels })");
+    for (const what of ["a previsão", "o estado da escala", "a equipa deste turno", "os avisos enviados", "as reservas deste intervalo"]) {
       expect(page).toContain(`what="${what}"`);
     }
+    // Pedido 7: a falta de gente por hora passou para o indicador (escalados vs disponíveis por escalar).
+    expect(src("client/src/pages/extrasDia/StaffingIndicator.tsx")).toContain('what="a falta de gente por hora"');
   });
   it("custo da escala é uma estimativa (o extra recebe pelo ponto) e o hoje é o de Lisboa", () => {
     expect(page).toContain(`"Custo escalado (estimativa)"`);

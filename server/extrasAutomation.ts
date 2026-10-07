@@ -29,6 +29,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
 import type { HourWindow } from "../shared/availabilityWindow";
+import { NOT_EXTRA_NOTICE_REASON } from "../shared/shiftNotice";
 
 // ─── Relógio de Lisboa (puro) ───────────────────────────────────────────────
 
@@ -426,7 +427,7 @@ async function sendRulesAsFreeText(employeeIds: number[], templateName: string, 
 }
 
 /** Motivo registado quando quem está na escala não é extra (não recebe avisos). */
-export const NOT_EXTRA_NO_NOTICE = "funcionário (não é extra): não recebe avisos de escala";
+export const NOT_EXTRA_NO_NOTICE = NOT_EXTRA_NOTICE_REASON;
 
 /**
  * Avisa por WhatsApp quem está escalado em `date` e ainda não foi avisado
@@ -488,13 +489,16 @@ export async function notifyAssignments(
     const empId = Number(a.employeeId);
     byEmp.set(empId, [...(byEmp.get(empId) ?? []), a]);
   }
+  // O texto leva TODAS as horas confirmadas da pessoa nesta seleção (não só as
+  // linhas por avisar) — é o mesmo texto da pré-visualização (shared/shiftNotice.ts).
+  const { noticeSpans } = await import("../shared/shiftNotice");
   const texts: Record<number, string> = {};
   for (const [empId, list] of Array.from(byEmp.entries())) {
     const city = list[0].city;
     texts[empId] = scheduleMessageText({
       date,
       city,
-      spans: list.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })),
+      spans: noticeSpans(rows.filter((a) => Number(a.employeeId) === empId && a.city === city)),
       meetingPoint: (settings.meetingPoints as Record<string, string>)[city] ?? null,
     });
   }
