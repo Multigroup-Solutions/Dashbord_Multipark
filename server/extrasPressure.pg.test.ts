@@ -103,3 +103,140 @@ describe.skipIf(!URL)("Pressão por condutor num Postgres real (PRESSURE_PG_URL)
     await expect(q(l.sql, l.params)).resolves.toBeDefined();
   });
 });
+
+// ─── 47c: dia a dia + juntar = janela inteira (Postgres a sério) ─────────────
+
+/**
+ * Prova do lote 47c: as leituras de UM dia (buildPressureDaySql /
+ * buildPressureDriverDaySql), guardadas por dia e juntadas
+ * (server/pressureDays.ts), dão EXATAMENTE as mesmas células, cargas, tempos
+ * por condutor e escalões que as leituras antigas da janela inteira — com
+ * dados aleatórios (semente fixa) com enums como na Multipark, ações repetidas,
+ * reservas longas com movimentos a meio, ações perto da meia-noite, sem
+ * colunas do Booking (só History) e a mudança da hora de 25 out. As leituras
+ * novas correm como em produção (sem nested loops nem JIT).
+ */
+describe.skipIf(!URL)("47c — dia a dia + juntar = leitura da janela inteira (PRESSURE_PG_URL)", () => {
+  const EQ = `pressure_eq_${process.pid}`;
+  let client: any;
+  const q = async (x: { sql: string; params: unknown[] }) => (await client.query(x.sql, x.params)).rows as Record<string, unknown>[];
+  const since = "2026-10-12";
+  const end = "2026-11-03";
+  const parks = ["G1", "G2"];
+  const tl = ["A"];
+
+  beforeAll(async () => {
+    const pg = (await import("pg")).default;
+    client = new pg.Client({ connectionString: URL });
+    await client.connect();
+    let seed = 4747;
+    const rnd = () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const pick = <T,>(xs: T[]) => xs[Math.floor(rnd() * xs.length)];
+    const MIN = 60_000;
+    const ts = (ms: number) => `'${new Date(ms).toISOString().replace("T", " ").replace("Z", "")}'`;
+    const NOW = Date.parse("2026-11-05T03:00:00Z");
+    const bookings: string[] = [];
+    const history: string[] = [];
+    let hid = 0;
+    const act = (bid: string, ct: string, at: number, uid: string) => history.push(`('h${++hid}', '${rnd() < 0.03 ? "" : uid}', '${ct}', '${bid}', ${ts(at)})`);
+    for (let day = Date.parse("2026-10-05T00:00:00Z"), k = 0; day < Date.parse("2026-11-08T00:00:00Z"); day += 86_400_000) {
+      for (let j = 0; j < 26; j++, k++) {
+        const id = `b${k}`;
+        const park = pick(["G1", "G1", "G2", "X1"]);
+        const ciDate = day + Math.floor(rnd() * 24 * 60) * MIN + Math.floor(rnd() * 60_000);
+        const long = rnd() < 0.1;
+        const coDate = ciDate + (long ? 15 + rnd() * 15 : rnd() * 6) * 86_400_000;
+        const ci = ciDate + Math.floor(rnd() * 40 * MIN);
+        const co = coDate + Math.floor(rnd() * 50 * MIN);
+        const status = rnd() < 0.05 ? "CANCELLED" : co < NOW ? "CHECKED_OUT" : ci < NOW ? "CHECKED_IN" : "BOOKED";
+        const checkingInAt = status !== "BOOKED" && rnd() < 0.6 ? ci - (3 + rnd() * 27) * MIN : null;
+        const out = status === "CHECKED_OUT" || (status === "CANCELLED" && co < NOW);
+        const pendingAt = out && rnd() < 0.5 ? co - (10 + rnd() * 60) * MIN : null;
+        const checkingOutAt = out && rnd() < 0.6 ? co - (5 + rnd() * 35) * MIN : null;
+        const arrivedAt = out && rnd() < 0.4 ? co - rnd() * 6 * MIN : null;
+        const n = (x: number | null) => (x == null ? "NULL" : ts(Math.round(x)));
+        bookings.push(`('${id}', '${park}', '${status}', ${ts(ci)}, ${ts(co)}, ${ts(ciDate)}, ${ts(coDate)}, ${n(checkingInAt)}, ${n(pendingAt)}, ${n(checkingOutAt)}, ${n(arrivedAt)})`);
+        if (status === "BOOKED") continue;
+        const d1 = pick(["A", "B", "C", "D", "E", "F"]);
+        const d2 = pick(["A", "B", "C", "D", "E", "F"]);
+        if (rnd() < 0.85) act(id, "CHECKING_IN", Math.round(checkingInAt ?? ci - (5 + rnd() * 20) * MIN), d1);
+        if (rnd() < 0.88) act(id, "CHECK_IN", ci, d1);
+        if (rnd() < 0.04) act(id, "CHECK_IN", ci + (2 + rnd()) * 86_400_000, d1); // repetida dias depois
+        if (rnd() < 0.8) act(id, "MOVEMENT", Math.round(ci + (5 + rnd() * 55) * MIN), pick(["A", "B", "C", "D", "E", "F"]));
+        if (long) act(id, "MOVEMENT", Math.round(ci + rnd() * (co - ci)), pick(["B", "C", "D"])); // a meio de uma estadia longa
+        if (!out) continue;
+        if (rnd() < 0.7) act(id, "PENDING_CHECKOUT", Math.round(pendingAt ?? co - (20 + rnd() * 50) * MIN), "cliente");
+        if (rnd() < 0.85) {
+          const at = Math.round(checkingOutAt ?? co - (5 + rnd() * 35) * MIN);
+          act(id, "CHECKING_OUT", at, d2);
+          if (rnd() < 0.08) act(id, "CHECKING_OUT", at + 3 * MIN, d2); // repetida logo a seguir
+        }
+        if (rnd() < 0.9) act(id, "CHECK_OUT", co, d2);
+      }
+    }
+    await client.query(`CREATE SCHEMA ${EQ}; SET search_path TO ${EQ}`);
+    await client.query(`
+      CREATE TYPE "BookingStatus" AS ENUM ('BOOKED','CHECKING_IN','CHECKED_IN','CHECKING_OUT','CHECKED_OUT','MOVING','CANCELLED','PENDING','PENDING_CHECKOUT');
+      CREATE TYPE "ChangeType" AS ENUM ('CREATED','UPDATE','CHECKING_IN','CHECK_IN','MOVEMENT','PENDING_CHECKOUT','CHECKING_OUT','CHECK_OUT','CANCEL');
+      CREATE TABLE "Booking" (id text PRIMARY KEY, "parkId" text NOT NULL, status "BookingStatus" NOT NULL, "checkIn" timestamp(3) NOT NULL, "checkOut" timestamp(3) NOT NULL,
+        "checkInDate" timestamp(3) NOT NULL, "checkOutDate" timestamp(3) NOT NULL, "checkingInAt" timestamp(3), "pendingCheckoutAt" timestamp(3),
+        "checkingOutAt" timestamp(3), "arrivedAtDeliveryAt" timestamp(3));
+      CREATE INDEX ON "Booking" ("parkId", "checkInDate"); CREATE INDEX ON "Booking" ("parkId", "checkOutDate");
+      CREATE TABLE "History" (id text PRIMARY KEY, "userId" text NOT NULL, "changeType" "ChangeType" NOT NULL, "bookingId" text NOT NULL, "actionTime" timestamp(3) NOT NULL);
+    `);
+    await client.query(`INSERT INTO "Booking" VALUES ${bookings.join(", ")}`);
+    await client.query(`INSERT INTO "History" ("id", "userId", "changeType", "bookingId", "actionTime") VALUES ${history.join(", ")}`);
+    await client.query("ANALYZE");
+  }, 60_000);
+  afterAll(async () => {
+    if (!client) return;
+    await client.query(`DROP SCHEMA IF EXISTS ${EQ} CASCADE`).catch(() => {});
+    await client.end();
+  });
+
+  it("células, carga × entrega, tempos por condutor e escalões: iguais aos da janela inteira", async () => {
+    const { combineDriverDays, combineGroupDays, driverDayPayloads, groupDayPayloads, windowDayList } = await import("./pressureDays");
+    const { buildPressureDaySql, buildPressureDriverDaySql, pressureWindow, mapPressureLoadRow, mapPressureSlotRow } = await import("./multiparkDb/pressure");
+    const w = pressureWindowSince(since, end);
+    const bands = crewMeasureBands(DEFAULT_CREW_RULES.lisbon);
+    // antes: a janela inteira de uma vez
+    const oldSlots = (await q(buildPressureSlotsSql(w, parks))).map((r) => mapPressureSlotRow("g", w, r));
+    const oldLoads = (await q(buildPressureLoadSql(w, parks))).map((r) => mapPressureLoadRow("g", r)).filter(Boolean);
+    const oldDrivers = (await q(buildPressureDriverSlotsSql(w, parks, tl))).map(mapPressureDriverRow);
+    const oldCrew = (await q(buildPressureCrewSql(w, parks, bands, tl))).map((r) => mapPressureCrewRow("g", bands, r)).filter(Boolean);
+    expect(oldSlots.length).toBeGreaterThan(100);
+    expect(oldCrew.length).toBeGreaterThan(1);
+    // agora: um dia de cada vez (como em produção: sem nested loops nem JIT), guardado em JSON e juntado
+    await client.query("SET enable_nestloop = off");
+    await client.query("SET jit = off");
+    const gd: Array<{ day: string; payload: any }> = [];
+    const dd: Array<{ day: string; payload: any }> = [];
+    for (const day of windowDayList(w)) {
+      const r = pressureWindow(day, 1);
+      gd.push({ day, payload: JSON.parse(JSON.stringify(groupDayPayloads(await q(buildPressureDaySql(w, r, parks)), [day]).get(day))) });
+      dd.push({ day, payload: JSON.parse(JSON.stringify(driverDayPayloads(await q(buildPressureDriverDaySql(w, r, parks)), [day]).get(day))) });
+    }
+    await client.query("RESET enable_nestloop");
+    await client.query("RESET jit");
+    const g = combineGroupDays(gd);
+    const d = combineDriverDays(dd, tl, bands);
+    expect(g.slotRows.map((r) => mapPressureSlotRow("g", w, r))).toEqual(oldSlots);
+    expect(g.loadRows.map((r) => mapPressureLoadRow("g", r)).filter(Boolean)).toEqual(oldLoads);
+    expect(d.driverRows.map(mapPressureDriverRow)).toEqual(oldDrivers);
+    expect(d.crewRows.map((r) => mapPressureCrewRow("g", bands, r)).filter(Boolean)).toEqual(oldCrew);
+  }, 120_000);
+
+  it("a leitura analítica do cliente (SET LOCAL sem nested loops/JIT) corre num Postgres só de leitura", async () => {
+    const { multiparkDbQuery, closeMultiparkDb } = await import("./multiparkDb/client");
+    const saved = process.env.DATABASE_URL_MULTIPARK;
+    process.env.DATABASE_URL_MULTIPARK = URL;
+    try {
+      expect((await multiparkDbQuery<{ enable_nestloop: string }>("SHOW enable_nestloop", [], { analytics: true }))[0].enable_nestloop).toBe("off");
+      expect((await multiparkDbQuery<{ jit: string }>("SHOW jit", [], { analytics: true }))[0].jit).toBe("off");
+      expect((await multiparkDbQuery<{ enable_nestloop: string }>("SHOW enable_nestloop"))[0].enable_nestloop).toBe("on");
+    } finally {
+      await closeMultiparkDb();
+      if (saved === undefined) delete process.env.DATABASE_URL_MULTIPARK; else process.env.DATABASE_URL_MULTIPARK = saved;
+    }
+  });
+});

@@ -587,6 +587,29 @@ export const employeeDocsRequests = mysqlTable("employee_docs_requests", {
 	index("idx_employee_docs_requests_emp_created").on(table.employeeId, table.createdAt),
 ]);
 
+// 0570 (47c, 7 out 2026): "Pressão" do Extras-Dia guardada por dia — um dia
+// de Lisboa × grupo de parques × parte ('group' | 'driver'), payload JSON
+// (server/pressureDays.ts). Lido da Multipark uma vez; o trabalho
+// extras-pressure junta os dias e escreve o ops_pressure_stats de sempre.
+// Estatística derivada: substitui-se por (grupo, parte, dia); nunca se apaga.
+export const opsPressureDays = mysqlTable("ops_pressure_days", {
+	id: int().autoincrement().primaryKey(),
+	parkGroup: varchar({ length: 40 }).notNull(),
+	/** group | driver */
+	part: varchar({ length: 8 }).notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	/** Versão do cálculo + parques do grupo (outra assinatura = volta a ler-se). */
+	sig: varchar({ length: 64 }).notNull(),
+	/** Último dia da janela da leitura que o calculou. */
+	readEnd: date({ mode: 'string' }).notNull(),
+	events: int().default(0).notNull(),
+	payload: mediumtext().notNull(),
+	computedAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ops_pressure_day").on(table.parkGroup, table.part, table.day),
+]);
+
 // 0535 (Jorge, 7 out 2026): notas internas da ficha — team leader e acima, no
 // âmbito de cada um; a própria pessoa nunca as vê (server/rhAccess.ts).
 export const employeeNotes = mysqlTable("employee_notes", {

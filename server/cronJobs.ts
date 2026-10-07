@@ -616,8 +616,10 @@ export async function extrasAutoCron(o: { deadlineAt: number; from?: string | nu
  * "Pressão" do Extras-Dia: o histórico da BD Multipark (acumula desde abril)
  * agregado por grupo de parques (um grupo de cada vez; `cursor` retoma no grupo seguinte). Sem
  * DATABASE_URL_MULTIPARK → nota (ok, saltado); grupos que falham → vermelho.
+ * 47c: da Multipark lê-se só os dias que faltam (um dia × grupo por leitura);
+ * `reprocess` (só à mão) volta a ler os dias guardados desse intervalo.
  */
-export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {
+export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null; reprocess?: import("./pressureDays").PressureReprocess | null }): Promise<CronJobRun> {
   try {
     const { runExtrasPressure } = await import("./extrasPressure");
     const { getSetting } = await import("./appSettings");
@@ -625,7 +627,7 @@ export async function extrasPressureCron(o: { deadlineAt: number; cursor?: strin
     // 22d: desde quando se mede (acumula) e a tabela máxima por cidade (escalões de pessoas).
     const since = await getSetting("extras.timesSince").catch(() => null);
     const crewRules = await getSetting("extras.crewRules").catch(() => null);
-    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null, excludedParkIds, since, crewRules });
+    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null, excludedParkIds, since, crewRules, reprocess: o.reprocess ?? null });
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done, cursor: r.cursor };
   } catch (err) {
     console.error("[cron extras-pressure] falhou:", msg(err, 200));

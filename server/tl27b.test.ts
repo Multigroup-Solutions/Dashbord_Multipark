@@ -58,8 +58,8 @@ describe("27b — o TL conta sempre nas pessoas", () => {
   it("o trabalho diário passa os TL às duas leituras; textos dizem que o TL conta sempre", () => {
     const job = src("server/extrasPressure.ts");
     expect(job).toContain("const tlIds = o.teamLeaderAgentIds !== undefined ? [...(o.teamLeaderAgentIds ?? [])] : await loadTeamLeaderAgentIds();");
-    expect(job).toContain("buildPressureDriverSlotsSql(w, chunk.parkIds, tlIds)");
-    expect(job).toContain("buildPressureCrewSql(w, chunk.parkIds, bands, tlIds)");
+    // 47c: os dias guardados levam quem agiu em cada hora; o TL aplica-se ao juntar (lista de hoje)
+    expect(job).toContain("combineDriverDays(stored.map((d) => ({ day: d.day, payload: parseDayPayload<DriverDayPayload>(d.payload) })), tlIds, bands)");
     expect(src("client/src/pages/extrasDia/PressureTab.tsx")).toContain("sempre com o TL (se não carregou em nada nessa hora, junta-se 1)");
     expect(src("docs/ajuda/extras-dia.md")).toContain("**sempre com o TL**");
   });
