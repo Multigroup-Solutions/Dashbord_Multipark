@@ -385,8 +385,12 @@ describe("39a — ligações no resto da dashboard", () => {
     const s = src("server/peoplePerformance.ts");
     expect(s).toContain("const CENTRAL_EXTERNAL_ONLY = sql`(contactRef IS NULL OR (contactRef NOT LIKE 'emp-%' AND contactRef NOT LIKE 'ext-%'))`;");
     expect(s).toContain("src(\"callsAnswered\", \"chamadas da central (atendidas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}`)");
-    expect(s).toContain("src(\"callsMade\", \"chamadas da central (feitas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND ${CENTRAL_EXTERNAL_ONLY}`)");
-    expect(s).toContain("sem as chamadas internas (colegas e extensões)");
+    // das internas só conta o supervisor a ligar aos extras
+    expect(s).toContain("src(\"callsMade\", \"chamadas da central (feitas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND (${CENTRAL_EXTERNAL_ONLY} OR ${CENTRAL_SUPERVISOR_TO_EXTRA})`)");
+    expect(s).toContain("AND EXISTS (SELECT 1 FROM employees x WHERE x.id = CAST(SUBSTRING(central_calls.contactRef, 5) AS UNSIGNED) AND (x.position = 'extra' OR x.contractType = 'extra'))");
+    expect(s).toContain("AND (EXISTS (SELECT 1 FROM users su WHERE su.id = central_calls.userId AND su.role = 'supervisor')");
+    expect(s).toContain("OR EXISTS (SELECT 1 FROM employees se WHERE se.userId = central_calls.userId AND se.position = 'supervisor')))");
+    expect(s).toContain("sem as chamadas internas (colegas e extensões) — das internas só contam as do supervisor a ligar aos extras —");
     // as do WhatsApp continuam iguais
     expect(s).toContain("src(\"callsMade\", \"chamadas feitas\", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`)");
     expect(s).not.toContain("ainda não há ligação");

@@ -32,8 +32,17 @@ const rowsOf = (res: unknown): any[] => {
 };
 const dayStr = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? "").slice(0, 10));
 
-/** 39g: só as chamadas da central com clientes e números de fora (sem colegas nem extensões). */
+/** 39g: chamadas da central com clientes e números de fora (sem colegas do RH nem extensões). */
 const CENTRAL_EXTERNAL_ONLY = sql`(contactRef IS NULL OR (contactRef NOT LIKE 'emp-%' AND contactRef NOT LIKE 'ext-%'))`;
+/**
+ * 39g: das internas só conta o supervisor a ligar aos extras (a chamar o
+ * pessoal): a ficha do outro lado é extra (posto ou contrato) e quem liga é
+ * supervisor (papel da conta ou posto da ficha). Jorge, 7 out 2026.
+ */
+const CENTRAL_SUPERVISOR_TO_EXTRA = sql`(central_calls.contactRef LIKE 'emp-%'
+  AND EXISTS (SELECT 1 FROM employees x WHERE x.id = CAST(SUBSTRING(central_calls.contactRef, 5) AS UNSIGNED) AND (x.position = 'extra' OR x.contractType = 'extra'))
+  AND (EXISTS (SELECT 1 FROM users su WHERE su.id = central_calls.userId AND su.role = 'supervisor')
+    OR EXISTS (SELECT 1 FROM employees se WHERE se.userId = central_calls.userId AND se.position = 'supervisor')))`;
 
 /** Contas da dashboard → contagens por hora UTC (agrupadas no SQL). */
 function userSources(start: string, end: string): Array<{ key: PerfMetric; label: string; q: SQL }> {
@@ -49,9 +58,9 @@ function userSources(start: string, end: string): Array<{ key: PerfMetric; label
     src("callsMade", "chamadas feitas", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`),
     src("callbacks", "devoluções de chamada", sql`whatsapp_calls`, sql`callbackByUserId`, sql`callbackDoneAt`),
     // 39a: telefonemas da central Vodafone, registados pela consola (como "Sugar CRM")
-    // 39g: as internas — colegas do RH (emp-) e extensões (ext-) — não contam (Jorge, 7 out 2026)
+    // 39g: as internas — colegas do RH (emp-) e extensões (ext-) — não contam, exceto o supervisor a ligar aos extras
     src("callsAnswered", "chamadas da central (atendidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}`),
-    src("callsMade", "chamadas da central (feitas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND ${CENTRAL_EXTERNAL_ONLY}`),
+    src("callsMade", "chamadas da central (feitas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND (${CENTRAL_EXTERNAL_ONLY} OR ${CENTRAL_SUPERVISOR_TO_EXTRA})`),
     src("waMessages", "mensagens WhatsApp", sql`whatsapp_messages`, sql`sentById`, sql`createdAt`, sql`direction = 'out'`),
     src("emails", "emails", sql`mail_messages`, sql`sentById`, sql`COALESCE(sentAt, createdAt)`, sql`direction = 'out' AND automated = 0`),
     src("complaintMsgs", "respostas em reclamações", sql`complaint_messages`, sql`authorId`, sql`createdAt`, sql`isInternal = 0`),
@@ -288,7 +297,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   groupTotals.hours = Math.round(groupTotals.hours * 10) / 10;
   groupTotals.km = Math.round(groupTotals.km * 10) / 10;
   groupTotals.evalPoints = Math.round(groupTotals.evalPoints * 10) / 10;
-  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões), mais as chamadas do WhatsApp. Emails contam só os enviados pela dashboard.");
+  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões) — das internas só contam as do supervisor a ligar aos extras —, mais as chamadas do WhatsApp. Emails contam só os enviados pela dashboard.");
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
     people: out, groupTotals, groupSeries, speedLimit, notes };
 }
