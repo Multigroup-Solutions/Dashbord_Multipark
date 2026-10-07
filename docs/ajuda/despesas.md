@@ -2,7 +2,7 @@
 modulo: despesas
 titulo: Despesas
 rotas: /despesas, /despesas/dashboard
-palavras: despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista
+palavras: nota de crédito, notas de crédito, nc, devolução, reembolso, abatida, por receber, despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista
 ---
 # Despesas
 
@@ -37,6 +37,16 @@ Registo de faturas e despesas da empresa.
 - Qualquer despesa sem fatura (não cancelada) mostra **"Falta a fatura"** e o botão 📎 para a anexar (abre a edição).
 - No topo aparece **"Faltam N fatura(s) nas despesas deste mês"** com **Ver as que faltam**; o filtro **Sem fatura** mostra só essas.
 - O **Exportar Excel** traz uma folha **"Sem fatura"** com as que ainda faltam — é a lista para fechar com a contabilista.
+
+**Notas de crédito**
+- Quando uma fatura (já paga ou não) tem uma **nota de crédito** do fornecedor (ex.: devolveram parte das peças): na linha da fatura, botão **Nota de crédito** (ícone da folha com o menos) — também no detalhe da fatura.
+- Pões o **valor** (positivo), a **data** e o **n.º da NC**, o **motivo**, o **estado** e juntas o **PDF/fotografia** da NC.
+  - **Por receber**: o fornecedor ainda devolve o dinheiro. **Recebida**: o dinheiro já voltou. **Abatida**: descontada noutra fatura do mesmo fornecedor.
+- A NC fica como **documento próprio**, ligado à fatura, com valor **negativo** (a verde) e o selo "Nota de crédito · fatura …". A fatura **não muda**: mostra por baixo do valor "NC −X € · líquido Y €".
+- Nunca passa do que falta creditar na fatura (somando todas as NC dela). Uma NC não leva outra NC; faturas canceladas ou eliminadas não levam NC.
+- Nos totais (lista, Financeiro, Anual, custos por projeto) a NC **desconta no mês da data da NC**. Não entra nos pagamentos pendentes nem em atraso.
+- Para mudar o valor, a data, o n.º, o estado ou o documento de uma NC: **Editar** na própria NC (quem gere as despesas, ou quem a lançou). Eliminar é como nas outras despesas (fica guardada).
+- Para a contabilista, a NC vai no ZIP com **NC_** no início do nome do ficheiro e "Nota de crédito" na coluna **Tipo** da folha.
 
 **Para a contabilista (ZIP do mês)**
 1. Em **Mais ações** (⋯) → **Para a contabilista (ZIP do mês)**, escolhe o **mês** (por omissão o mês passado) e carrega em **Gerar ZIP**.

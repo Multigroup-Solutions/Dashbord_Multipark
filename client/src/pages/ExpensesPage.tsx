@@ -74,7 +74,10 @@ import {
   ArchiveRestore,
   Paperclip,
   FileArchive,
+  FileMinus,
 } from "lucide-react";
+import { CreditNoteDialog, type CreditNoteTarget } from "@/components/CreditNoteDialog";
+import { CREDIT_NOTE_STATE_LABELS, type CreditNoteState } from "@shared/creditNotes";
 import { toast } from "sonner";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns";
 import { pt } from "date-fns/locale";
@@ -138,6 +141,17 @@ const PAYMENT_LABELS: Record<string, string> = {
   check: "Cheque",
   other: "Outro",
 };
+
+/** Estado da nota de crédito (por receber / recebida / abatida) — ícone + texto, nunca só cor. */
+function CreditNoteStateBadge({ state }: { state: string | null | undefined }) {
+  const label = CREDIT_NOTE_STATE_LABELS[(state ?? "to_receive") as CreditNoteState] ?? "Nota de crédito";
+  const done = state === "received" || state === "offset";
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${done ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300" : "border-sky-300 bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:text-sky-300"}`}>
+      {done ? <CheckCircle2 className="h-3 w-3" /> : <Clock className="h-3 w-3" />}NC · {label}
+    </span>
+  );
+}
 
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
@@ -236,6 +250,8 @@ export default function ExpensesPage() {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [detailExpense, setDetailExpense] = useState<any>(null);
+  // Notas de crédito (Jorge, 7 out 2026): lançar a partir da fatura; mudar na própria NC.
+  const [creditTarget, setCreditTarget] = useState<CreditNoteTarget | null>(null);
 
   // Quick date range helpers
   const applyQuickRange = (range: string) => {
@@ -262,6 +278,22 @@ export default function ExpensesPage() {
   // Exportar é uma ação própria (supervisor, front/backoffice e admin+), não "gerir"
   const canExport = can(user, "despesas", "export");
   const canDelete = role === "super_admin";
+  const canCredit = can(user, "despesas", "edit");
+  const openCreditNote = (row: any) => {
+    const e = row.expense;
+    if (e.creditNoteOfId != null) {
+      setCreditTarget({ creditNote: { id: e.id, amount: e.amount, expenseDate: e.expenseDate, documentNumber: e.documentNumber ?? null, notes: e.notes ?? null,
+        creditNoteState: e.creditNoteState ?? null, hasDocument: !!(e.invoiceImageKey || e.invoiceImageUrl) } });
+    } else {
+      setCreditTarget({ invoice: { id: e.id, supplier: e.supplier ?? null, documentNumber: e.documentNumber ?? null, amount: e.amount, credited: row.creditNote?.credited ?? 0 } });
+    }
+  };
+  const canChangeCreditNote = (e: any) => e.creditNoteOfId != null && (canManage || e.insertedById === user?.id);
+  const canAddCreditNote = (row: any) => {
+    const e = row.expense;
+    return canCredit && !showDeleted && e.creditNoteOfId == null && e.status !== "cancelled" && Number(e.amount) > 0
+      && Number(e.amount) - (row.creditNote?.credited ?? 0) > 0.004;
+  };
   // D4 (Jorge, 3 out 2026): eliminada = desaparece de todo o lado, mas fica
   // guardada — o super admin vê-as aqui, a pedido, e pode repor.
   const [showDeleted, setShowDeleted] = useState(false);
@@ -654,8 +686,8 @@ export default function ExpensesPage() {
                           </div>
                         </div>
                         <div className="text-right shrink-0">
-                          <div className="font-semibold tabular-nums">{fmtEur(expense.amount)}</div>
-                          <div className="mt-1"><StatusBadge status={expense.status} /></div>
+                          <div className={`font-semibold tabular-nums ${expense.creditNoteOfId != null ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{fmtEur(expense.amount)}</div>
+                          <div className="mt-1">{expense.creditNoteOfId != null ? <CreditNoteStateBadge state={expense.creditNoteState} /> : <StatusBadge status={expense.status} />}</div>
                         </div>
                       </div>
                     </button>
@@ -693,9 +725,15 @@ export default function ExpensesPage() {
                           {expense.description && (
                             <div className="text-xs text-muted-foreground truncate max-w-[14rem]" title={expense.description}>{expense.description}</div>
                           )}
+                          {expense.creditNoteOfId != null && (
+                            <span className="mt-0.5 mr-1 inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
+                              title={row.creditOf ? `Nota de crédito da fatura ${row.creditOf.documentNumber ?? `#${row.creditOf.id}`} (${fmtEur(row.creditOf.amount)})` : "Nota de crédito"}>
+                              <FileMinus className="h-3 w-3" />Nota de crédito{row.creditOf ? ` · fatura ${row.creditOf.documentNumber ?? `#${row.creditOf.id}`}` : ""}
+                            </span>
+                          )}
                           {!expense.invoiceImageUrl && !expense.invoiceImageKey && expense.status !== "cancelled" && (
-                            <span className="mt-0.5 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-300" title="Anexa a fatura para seguir para a contabilista">
-                              Falta a fatura{expense.recurringTemplateId ? " · fixa" : ""}
+                            <span className="mt-0.5 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-300" title="Anexa o documento para seguir para a contabilista">
+                              {expense.creditNoteOfId != null ? "Falta a nota de crédito" : `Falta a fatura${expense.recurringTemplateId ? " · fixa" : ""}`}
                             </span>
                           )}
                         </TableCell>
@@ -722,10 +760,15 @@ export default function ExpensesPage() {
                           {buyer?.fullName ?? "—"}
                         </TableCell>
                         <TableCell className="text-right font-semibold tabular-nums">
-                          {fmtEur(expense.amount)}
+                          <span className={expense.creditNoteOfId != null ? "text-emerald-700 dark:text-emerald-400" : undefined}>{fmtEur(expense.amount)}</span>
+                          {row.creditNote && row.creditNote.credited > 0 && (
+                            <div className="text-[11px] font-normal text-emerald-700 dark:text-emerald-400" title={`${row.creditNote.count} nota(s) de crédito`}>
+                              NC −{fmtEur(row.creditNote.credited)} · líquido {fmtEur(row.creditNote.net)}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>
-                          <StatusBadge status={expense.status} />
+                          {expense.creditNoteOfId != null ? <CreditNoteStateBadge state={expense.creditNoteState} /> : <StatusBadge status={expense.status} />}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{insertedBy?.name ?? "—"}</TableCell>
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
@@ -735,8 +778,9 @@ export default function ExpensesPage() {
                                 <Eye className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {!expense.invoiceImageUrl && !expense.invoiceImageKey && expense.status !== "cancelled" && canManage && !showDeleted && (
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-amber-700" title="Anexar a fatura" aria-label="Anexar a fatura" onClick={() => { setEditId(expense.id); setShowForm(true); }}>
+                            {!expense.invoiceImageUrl && !expense.invoiceImageKey && expense.status !== "cancelled" && (expense.creditNoteOfId != null ? canChangeCreditNote(expense) : canManage) && !showDeleted && (
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-amber-700" title={expense.creditNoteOfId != null ? "Juntar a nota de crédito" : "Anexar a fatura"} aria-label="Anexar o documento"
+                                onClick={() => { if (expense.creditNoteOfId != null) openCreditNote(row); else { setEditId(expense.id); setShowForm(true); } }}>
                                 <Paperclip className="h-3.5 w-3.5" />
                               </Button>
                             )}
@@ -753,7 +797,12 @@ export default function ExpensesPage() {
                                 <ArchiveRestore className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {!showDeleted && canManage && expense.status !== "paid" && expense.status !== "cancelled" && (
+                            {canAddCreditNote(row) && (
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-700" title="Nota de crédito desta fatura" aria-label="Lançar nota de crédito" onClick={() => openCreditNote(row)}>
+                                <FileMinus className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {!showDeleted && canManage && expense.creditNoteOfId == null && expense.status !== "paid" && expense.status !== "cancelled" && (
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -765,14 +814,14 @@ export default function ExpensesPage() {
                                 <CheckCircle2 className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {canManage && !showDeleted && (
+                            {(expense.creditNoteOfId != null ? canChangeCreditNote(expense) : canManage) && !showDeleted && (
                               <Button
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8"
-                                title="Editar"
+                                title={expense.creditNoteOfId != null ? "Mudar a nota de crédito" : "Editar"}
                                 aria-label="Editar despesa"
-                                onClick={() => { setEditId(expense.id); setShowForm(true); }}
+                                onClick={() => { if (expense.creditNoteOfId != null) openCreditNote(row); else { setEditId(expense.id); setShowForm(true); } }}
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
@@ -811,8 +860,12 @@ export default function ExpensesPage() {
       <ExpenseDetailSheet
         data={detailExpense}
         onClose={() => setDetailExpense(null)}
-        onEdit={canManage ? (id) => { setDetailExpense(null); setEditId(id); setShowForm(true); } : undefined}
+        onEdit={(detailExpense?.expense?.creditNoteOfId != null ? canChangeCreditNote(detailExpense.expense) : canManage)
+          ? (id) => { const row = detailExpense; setDetailExpense(null); if (row?.expense?.creditNoteOfId != null) openCreditNote(row); else { setEditId(id); setShowForm(true); } }
+          : undefined}
+        onCreditNote={detailExpense && canAddCreditNote(detailExpense) ? () => { const row = detailExpense; setDetailExpense(null); openCreditNote(row); } : undefined}
       />
+      <CreditNoteDialog target={creditTarget} onClose={() => setCreditTarget(null)} />
 
       {/* Form Modal */}
       {showForm && (
@@ -839,17 +892,19 @@ function ExpenseDetailSheet({
   data,
   onClose,
   onEdit,
+  onCreditNote,
 }: {
   data: any;
   onClose: () => void;
   onEdit?: (id: number) => void;
+  onCreditNote?: () => void;
 }) {
   if (!data) return null;
   return (
     <Sheet open={!!data} onOpenChange={() => onClose()}>
       {/* w-full no telemóvel (ecrã inteiro), sm:max-w-xl no PC; corpo com padding próprio */}
       <SheetContent className="w-full sm:w-[560px] sm:max-w-xl overflow-y-auto">
-        <ExpenseDetailBody data={data} onClose={onClose} onEdit={onEdit} />
+        <ExpenseDetailBody data={data} onClose={onClose} onEdit={onEdit} onCreditNote={onCreditNote} />
       </SheetContent>
     </Sheet>
   );
@@ -858,9 +913,10 @@ function ExpenseDetailSheet({
 const EVENT_LABELS: Record<string, string> = {
   created: "Criada", updated: "Editada", status: "Estado alterado", paid: "Marcada como paga",
   document: "Comprovativo alterado", deleted: "Eliminada", approved: "Aprovada", returned: "Devolvida", submitted: "Submetida",
+  credit_note: "Nota de crédito lançada",
 };
 
-function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () => void; onEdit?: (id: number) => void }) {
+function ExpenseDetailBody({ data, onClose, onEdit, onCreditNote }: { data: any; onClose: () => void; onEdit?: (id: number) => void; onCreditNote?: () => void }) {
   const { expense, category, project, insertedBy, buyer } = data;
   const hasDoc = Boolean(expense.invoiceImageUrl || expense.invoiceImageKey);
   // URL de leitura pedida ao servidor (assinada, com a permissão do detalhe).
@@ -882,9 +938,23 @@ function ExpenseDetailBody({ data, onClose, onEdit }: { data: any; onClose: () =
       <div className="space-y-6 px-4 pb-6 sm:px-6">
         {/* Status + Amount */}
         <div className="flex items-center justify-between">
-          <StatusBadge status={expense.status} />
-          <span className="text-2xl font-bold">{fmtEur(expense.amount)}</span>
+          {expense.creditNoteOfId != null ? <CreditNoteStateBadge state={expense.creditNoteState} /> : <StatusBadge status={expense.status} />}
+          <span className={`text-2xl font-bold ${expense.creditNoteOfId != null ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{fmtEur(expense.amount)}</span>
         </div>
+        {/* Notas de crédito (Jorge, 7 out 2026): a NC diz de que fatura é; a fatura diz quanto foi creditado */}
+        {expense.creditNoteOfId != null && (
+          <p className="flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            <FileMinus className="h-3.5 w-3.5 shrink-0" />
+            Nota de crédito da fatura {data.creditOf ? `${data.creditOf.documentNumber ?? `#${data.creditOf.id}`} (${fmtEur(data.creditOf.amount)})` : `#${expense.creditNoteOfId}`}. Desconta nos totais no mês da data da NC.
+          </p>
+        )}
+        {expense.creditNoteOfId == null && (data.creditNote?.credited > 0 || onCreditNote) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            <FileMinus className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1">{data.creditNote?.credited > 0 ? `Notas de crédito: −${fmtEur(data.creditNote.credited)} (${data.creditNote.count}) · líquido ${fmtEur(data.creditNote.net)}` : "Sem notas de crédito."}</span>
+            {onCreditNote && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onCreditNote}>Nota de crédito</Button>}
+          </div>
+        )}
 
         {/* Comprovativo: imagem ou PDF (antes um PDF era metido num <img> e não abria) */}
         {hasDoc && (

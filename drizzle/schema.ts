@@ -768,11 +768,15 @@ export const expenses = mysqlTable("expenses", {
 	approvedById: int(),
 	returnReason: text(),
 	recurringPeriod: varchar({ length: 7 }),             // "YYYY-MM" (único por modelo)
+	// 0520: nota de crédito (valor NEGATIVO) da fatura `creditNoteOfId`; estado do reembolso
+	creditNoteOfId: int(),
+	creditNoteState: varchar({ length: 12 }),            // to_receive | received | offset
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	index("idx_expenses_date").on(table.expenseDate),
+	index("idx_expenses_credit_note_of").on(table.creditNoteOfId),
 	index("idx_expenses_project").on(table.projectId),
 	index("idx_expenses_status").on(table.status),
 	uniqueIndex("uq_expenses_recurring_period").on(table.recurringTemplateId, table.recurringPeriod),

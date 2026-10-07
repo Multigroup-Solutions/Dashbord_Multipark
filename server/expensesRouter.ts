@@ -15,6 +15,8 @@ import { parseExpenseAmount } from "../shared/expenseAmount";
 import { dayToMysql, lisbonToday } from "../shared/expensePeriods";
 import { validConsumptionPeriod } from "../shared/adInvoices";
 import { expenseTotals } from "../shared/expenseTotals";
+import { CREDIT_NOTE_STATES, creditNoteError } from "../shared/creditNotes";
+import { can } from "../shared/access";
 import { getAllCategories, listExpenses, summarizeExpenses, recordExpenseEvent, getExpenseEvents, findPossibleDuplicateExpense, projectExists, categoryExists, resolveProjectIds, getExpenseById, createExpense, updateExpense, softDeleteExpense, restoreExpense, getExpenseStats, getUpcomingPayments, getOverdueExpenses, markOverdueExpenses, logActivity, getEmployeeById, getEmployeeByUserId } from "./db";
 import { requireRole, isPermissionDenied, requireFinanceTotals } from "./routerGuards";
 
@@ -138,7 +140,10 @@ export const expensesRouter = router({
       requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
       const { vis, where } = await expenseWhereFor(ctx.user, input);
       if (vis.kind === "none") return [];
-      return listExpenses(where);
+      const rows = await listExpenses(where);
+      // Notas de crédito (Jorge, 7 out 2026): creditado/líquido nas faturas, a fatura de origem nas NC.
+      const { withCreditNoteInfo } = await import("./expenseCreditNotes");
+      return withCreditNoteInfo(rows as any[]) as Promise<Array<(typeof rows)[number] & { creditNote: { credited: number; count: number; net: number } | null; creditOf: { id: number; supplier: string | null; documentNumber: string | null; expenseDate: string | null; amount: string } | null }>>;
     }),
 
   byId: protectedProcedure
@@ -359,6 +364,10 @@ export const expensesRouter = router({
       if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Despesa não encontrada" });
       const cur = current.expense;
       const { id } = input;
+      // Nota de crédito: o valor (negativo), o estado e as datas mudam-se no botão da NC.
+      if (cur.creditNoteOfId != null && (["amount", "status", "paidAt", "paymentDueDate", "consumptionFrom", "consumptionTo"] as const).some((k) => input[k] !== undefined)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "É uma nota de crédito: o valor e o estado mudam-se no botão da nota de crédito." });
+      }
 
       if (input.status && input.status !== "paid" && cur.status === "paid" && ctx.user.role !== "super_admin") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin pode retirar um pagamento já registado" });
@@ -680,10 +689,11 @@ export const expensesRouter = router({
         supplier: r.expense.supplier ?? null, supplierNif: r.expense.supplierNif ?? null, documentNumber: r.expense.documentNumber ?? null,
         description: r.expense.description ?? null, amount: parseFloat(String(r.expense.amount ?? 0)),
         fileKey: r.expense.invoiceImageKey ?? null, fileUrl: r.expense.invoiceImageUrl ?? null,
+        creditNote: r.expense.creditNoteOfId != null,
       })));
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(built.sheet.length ? built.sheet : [{ "Data da fatura": "", "Data de pagamento": "", "Fornecedor": "Sem faturas neste mês", "NIF": "", "Nº documento": "", "Valor (€)": 0, "Ficheiro": "" }]);
-      ws["!cols"] = [{ wch: 14 }, { wch: 17 }, { wch: 34 }, { wch: 14 }, { wch: 20 }, { wch: 11 }, { wch: 70 }];
+      ws["!cols"] = [{ wch: 14 }, { wch: 17 }, { wch: 34 }, { wch: 14 }, { wch: 20 }, { wch: 11 }, { wch: 70 }, { wch: 16 }];
       XLSX.utils.book_append_sheet(wb, ws, "Faturas");
       if (built.missing.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(built.missing), "Sem fatura");
       const sheetBase64 = Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" })).toString("base64");
@@ -806,6 +816,135 @@ export const expensesRouter = router({
   }),
 
   // ── Despesas recorrentes (modelos) ──
+  /**
+   * Notas de crédito (Jorge, 7 out 2026): documento próprio (n.º, data, PDF)
+   * ligado à fatura, gravado com valor NEGATIVO no mês da data da NC. Nunca
+   * passa do que falta creditar na fatura; a fatura não é reescrita.
+   */
+  creditNote: router({
+    create: protectedProcedure
+      .input(z.object({
+        invoiceId: z.number().int().positive(),
+        amount: z.string(),
+        date: z.string(),
+        documentNumber: z.string().max(64).nullable().optional(),
+        reason: z.string().max(500).nullable().optional(),
+        state: z.enum(CREDIT_NOTE_STATES),
+        invoiceImageUrl: z.string().optional(),
+        invoiceImageKey: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "despesas", "edit", { allowOwn: true });
+        assertOwnInvoiceKey(ctx.user.id, input.invoiceImageKey, input.invoiceImageUrl);
+        const row = await getExpenseById(input.invoiceId);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Fatura não encontrada." });
+        const vis = await expenseVisibilityFor(ctx.user);
+        if (!canSeeExpense(vis, { insertedById: row.expense.insertedById, projectId: row.expense.projectId ?? null })) throw new TRPCError({ code: "FORBIDDEN" });
+        const inv = row.expense;
+        const positive = parseExpenseAmount(input.amount);
+        const { otherCredited } = await import("./expenseCreditNotes");
+        const err = creditNoteError(inv as any, positive, await otherCredited(inv.id));
+        if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+        const date = dayOrBadRequest(input.date, "Data da nota de crédito");
+        const doc = cleanText(input.documentNumber) ?? null;
+        const reason = cleanText(input.reason) ?? null;
+        const created = await createExpense({
+          supplier: inv.supplier ?? null,
+          description: `Nota de crédito${doc ? ` ${doc}` : ""} da fatura ${inv.documentNumber ?? `#${inv.id}`}${reason ? ` — ${reason}` : ""}`.slice(0, 1000),
+          amount: `-${positive}`,
+          currency: "EUR",
+          paymentMethod: inv.paymentMethod ?? null,
+          expenseDate: date,
+          paymentDueDate: null,
+          categoryId: inv.categoryId ?? null,
+          projectId: inv.projectId ?? null,
+          buyerId: inv.buyerId ?? null,
+          insertedById: ctx.user.id,
+          invoiceImageUrl: input.invoiceImageUrl ?? null,
+          invoiceImageKey: input.invoiceImageKey ?? null,
+          extractedByAi: 0,
+          notes: reason,
+          supplierNif: inv.supplierNif ?? null,
+          documentNumber: doc,
+          paidBy: inv.paidBy ?? null,
+          // A NC não entra nos pagamentos pendentes/atrasados: o reembolso segue no creditNoteState.
+          status: "paid",
+          paidAt: date,
+          approvalStatus: "legacy",
+          creditNoteOfId: inv.id,
+          creditNoteState: input.state,
+        } as any);
+        const newId = Number((created as any)?.[0]?.insertId ?? 0) || null;
+        if (newId) {
+          await recordExpenseEvent({ expenseId: newId, type: "created", userId: ctx.user.id, after: { creditNoteOf: inv.id, amount: `-${positive}`, date: input.date, documentNumber: doc, state: input.state } });
+          await recordExpenseEvent({ expenseId: inv.id, type: "credit_note", userId: ctx.user.id, after: { creditNoteId: newId, amount: `-${positive}`, documentNumber: doc } });
+        }
+        await logActivity({ userId: ctx.user.id, action: "create", entity: "expense", entityId: newId ?? undefined,
+          details: `Nota de crédito de ${positive}€ na fatura #${inv.id} (${inv.supplier ?? "sem fornecedor"})` });
+        return { success: true, id: newId };
+      }),
+
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        amount: z.string().optional(),
+        date: z.string().optional(),
+        documentNumber: z.string().max(64).nullable().optional(),
+        reason: z.string().max(500).nullable().optional(),
+        state: z.enum(CREDIT_NOTE_STATES).optional(),
+        invoiceImageUrl: z.string().nullable().optional(),
+        invoiceImageKey: z.string().nullable().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "despesas", "edit", { allowOwn: true });
+        const row = await getExpenseById(input.id);
+        if (!row || row.expense.creditNoteOfId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Nota de crédito não encontrada." });
+        const nc = row.expense;
+        // Quem gere as despesas muda qualquer NC; os outros só as que lançaram.
+        if (!can(ctx.user as any, "despesas", "manage") && nc.insertedById !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Só quem lançou a nota de crédito (ou quem gere as despesas) a pode mudar." });
+        }
+        const patch: Record<string, any> = {};
+        if (input.amount !== undefined) {
+          const inv = await getExpenseById(nc.creditNoteOfId!);
+          if (!inv) throw new TRPCError({ code: "BAD_REQUEST", message: "A fatura desta nota de crédito já não existe." });
+          const positive = parseExpenseAmount(input.amount);
+          const { otherCredited } = await import("./expenseCreditNotes");
+          const err = creditNoteError(inv.expense as any, positive, await otherCredited(inv.expense.id, nc.id));
+          if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+          patch.amount = `-${positive}`;
+        }
+        if (input.date !== undefined) { patch.expenseDate = dayOrBadRequest(input.date, "Data da nota de crédito"); patch.paidAt = patch.expenseDate; }
+        if (input.documentNumber !== undefined) patch.documentNumber = cleanText(input.documentNumber) ?? null;
+        if (input.reason !== undefined) patch.notes = cleanText(input.reason) ?? null;
+        if (input.state !== undefined) patch.creditNoteState = input.state;
+        let oldDocToDelete: string | null = null;
+        if (input.invoiceImageKey !== undefined || input.invoiceImageUrl !== undefined) {
+          const sameDoc = (input.invoiceImageKey ?? null) === (nc.invoiceImageKey ?? null) && (input.invoiceImageUrl ?? null) === (nc.invoiceImageUrl ?? null);
+          if (!sameDoc) assertOwnInvoiceKey(ctx.user.id, input.invoiceImageKey, input.invoiceImageUrl);
+          patch.invoiceImageKey = input.invoiceImageKey ?? null;
+          patch.invoiceImageUrl = input.invoiceImageUrl ?? null;
+          const oldRef = nc.invoiceImageKey || nc.invoiceImageUrl || null;
+          const newRef = patch.invoiceImageKey || patch.invoiceImageUrl || null;
+          if (oldRef && oldRef !== newRef) oldDocToDelete = oldRef;
+        }
+        const changed: Record<string, { before: unknown; after: unknown }> = {};
+        for (const [k, v] of Object.entries(patch)) {
+          const before = (nc as any)[k] ?? null;
+          if (String(before) !== String(v ?? null)) changed[k] = { before, after: v ?? null };
+        }
+        if (!Object.keys(changed).length) return { success: true, changed: 0 };
+        await updateExpense(nc.id, patch);
+        if (oldDocToDelete) {
+          try { const { storageDelete } = await import("./storage"); await storageDelete(oldDocToDelete); } catch { /* órfão no storage é preferível a link morto */ }
+        }
+        await recordExpenseEvent({ expenseId: nc.id, type: "creditNoteState" in changed && Object.keys(changed).length === 1 ? "status" : "updated", userId: ctx.user.id,
+          before: Object.fromEntries(Object.entries(changed).map(([k, v]) => [k, v.before])), after: Object.fromEntries(Object.entries(changed).map(([k, v]) => [k, v.after])) });
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "expense", entityId: nc.id, details: `Nota de crédito #${nc.id} atualizada (${Object.keys(changed).join(", ")})` });
+        return { success: true, changed: Object.keys(changed).length };
+      }),
+  }),
+
   recurring: router({
     list: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx }) => {
       // Fornecedores e valores fixos: só quem gere as despesas

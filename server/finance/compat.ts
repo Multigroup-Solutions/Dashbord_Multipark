@@ -127,7 +127,8 @@ export async function getAnnualBreakdown(year: number, projectId?: number) {
       for (const mo of months) {
         const h = histByMonth.get(mo.month);
         if (!h) continue;
-        const hasReal = mo.revenueWithVat > 0 || mo.expensesWithVat > 0 || mo.salaries > 0 || mo.extrasDiaCost > 0;
+        // Notas de crédito: um mês pode ter despesas líquidas ≤ 0 e mesmo assim ter dados reais.
+        const hasReal = mo.revenueWithVat > 0 || mo.expensesWithVat !== 0 || mo.salaries > 0 || mo.extrasDiaCost > 0;
         if (hasReal) continue;
         const end = monthEnd.get(mo.month) ?? `${year}-12-31`;
         const vat = rates.vatOn(end), tsu = rates.tsuOn(end);

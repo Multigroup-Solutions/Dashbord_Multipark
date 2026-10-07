@@ -53,6 +53,8 @@ export interface AccountantExpense {
   amount: number;
   fileKey: string | null;
   fileUrl: string | null;
+  /** Nota de crédito (valor negativo) — vai com "NC_" no nome e "Nota de crédito" na folha. */
+  creditNote?: boolean;
 }
 
 /** "2026-09-03_Google-Ireland-Limited_FT-2026-123_1100.00EUR_#7.pdf". PURA. */
@@ -60,7 +62,7 @@ export function accountantFileName(e: AccountantExpense): string {
   const day = String(e.expenseDate ?? "").slice(0, 10) || "sem-data";
   const who = slug(e.supplier, 40) || slug(e.description, 40) || "sem-fornecedor";
   const doc = slug(e.documentNumber, 30);
-  return `${day}_${who}${doc ? `_${doc}` : ""}_${e.amount.toFixed(2)}EUR_#${e.id}.${fileExtOf(e.fileKey || e.fileUrl)}`;
+  return `${e.creditNote ? "NC_" : ""}${day}_${who}${doc ? `_${doc}` : ""}_${e.amount.toFixed(2)}EUR_#${e.id}.${fileExtOf(e.fileKey || e.fileUrl)}`;
 }
 
 const dmy = (s: string | null | undefined) => (s ? String(s).slice(0, 10).split("-").reverse().join("/") : "");
@@ -81,6 +83,7 @@ export function buildAccountantExport(rows: readonly AccountantExpense[]) {
     "Nº documento": e.documentNumber ?? "",
     "Valor (€)": Math.round(e.amount * 100) / 100,
     "Ficheiro": files[i].name,
+    "Tipo": e.creditNote ? "Nota de crédito" : "Fatura",
   }));
   const missing = sorted.filter((e) => !(e.fileKey || e.fileUrl)).map((e) => ({
     "Data": dmy(e.expenseDate),
@@ -88,6 +91,7 @@ export function buildAccountantExport(rows: readonly AccountantExpense[]) {
     "Nº documento": e.documentNumber ?? "",
     "Valor (€)": Math.round(e.amount * 100) / 100,
     "ID": e.id,
+    "Tipo": e.creditNote ? "Nota de crédito" : "Fatura",
   }));
   return { files, sheet, missing, total: Math.round(withFile.reduce((s, e) => s + e.amount, 0) * 100) / 100 };
 }
