@@ -28,7 +28,11 @@ export const PACE_MAX_RATIO = 1.2;
 export const PACE_MIN_DAYS = 5;
 
 export type AlertLevel = "critical" | "warning";
-export interface MarketingAlert { level: AlertLevel; code: string; title: string; detail: string; link?: string; linkLabel?: string; items?: string[] }
+export interface MarketingAlert {
+  level: AlertLevel; code: string; title: string; detail: string; link?: string; linkLabel?: string; items?: string[];
+  /** Identifica o alerta entre dias (o título muda com as percentagens): por omissão o `code`. */
+  key?: string;
+}
 
 export interface SyncHealth {
   provider: "google_ads" | "meta";
@@ -142,6 +146,7 @@ export function computeMarketingAlerts(i: AlertsInput): MarketingAlert[] {
     const pct = Math.round((b.pacing.ratio ?? 0) * 100);
     out.push({
       level: "warning", code: b.pacing.status === "over" ? "budget_over" : "budget_under",
+      key: `${b.pacing.status === "over" ? "budget_over" : "budget_under"}:${b.label}`,
       title: b.pacing.status === "over" ? `${b.label}: gasto acima do orçamento (${pct}% do esperado)` : `${b.label}: gasto abaixo do orçamento (${pct}% do esperado)`,
       detail: `${eur(b.spentToDate)} até ontem contra ${eur(b.pacing.expected)} esperados (orçamento ${eur(b.amount)}/mês); a este ritmo fecha em ~${eur(b.pacing.projected ?? 0)}.`,
       link: "/marketing/orcamentos",
@@ -158,4 +163,19 @@ export function computeMarketingAlerts(i: AlertsInput): MarketingAlert[] {
   }
 
   return out.sort((a, b) => (a.level === b.level ? 0 : a.level === "critical" ? -1 : 1));
+}
+
+/** Chave estável de um alerta (entre dias). PURA. */
+export const marketingAlertKey = (a: Pick<MarketingAlert, "key" | "code">): string => a.key ?? a.code;
+
+/**
+ * Jorge (7 out 2026, "põe de lado como o outro"): cada pessoa tira alertas da
+ * lista; um alerta tirado fica escondido até ao fim do mês em que foi tirado
+ * (`hidden`: chave → "AAAA-MM") e volta sozinho no mês seguinte. Nada se
+ * apaga — os tirados ficam em "Tirados", com "Repor". PURA.
+ */
+export function splitHiddenAlerts<T extends Pick<MarketingAlert, "key" | "code">>(alerts: readonly T[], hidden: Record<string, string>, month: string): { shown: T[]; hidden: T[] } {
+  const shown: T[] = [], out: T[] = [];
+  for (const a of alerts) (hidden[marketingAlertKey(a)] === month ? out : shown).push(a);
+  return { shown, hidden: out };
 }

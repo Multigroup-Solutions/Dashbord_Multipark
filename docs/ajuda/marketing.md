@@ -2,7 +2,7 @@
 modulo: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
-palavras: ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
+palavras: alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
 ---
 # Marketing
 
@@ -40,6 +40,10 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 **Anúncios → ligações utm/código**: ligar um utm_campaign ou código de desconto a uma campanha fica registado; se já estava noutra campanha, passa para esta e o registo diz de onde saiu. **Retirar** uma ligação arquiva-a (fica no registo).
 
 **Alertas** (independentes do período): campanhas com ≥ 50 € em 14 dias sem conversões nem reservas ligadas, ritmo do mês, orçamentos e recolhas.
+- Ficam **de lado**, à direita do Painel (no telemóvel, por cima). Carrega no título para os encolher e voltar a abrir.
+- Aparecem os 4 primeiros. **Ver todos** mostra o resto.
+- O **X** tira um alerta da tua lista até ao fim do mês. Só sai para ti; nada se apaga. Volta sozinho no mês seguinte, ou antes em **Tirados → Repor**.
+- Um alerta de orçamento tirado não volta só porque a percentagem mudou. Volta se passar de "acima" para "abaixo" do orçamento, ou o contrário.
 
 **Aviso vermelho no topo**: a recolha do Google Ads ou da Meta falhou, pede nova autorização ou está parada há mais de 26 h — abre **Integrações → Google Ads** (o link só aparece a quem pode abrir as Integrações; os outros avisam o administrador). Se o próprio aviso não se conseguir ler, aparece um erro com "Tentar de novo" (nunca fica tudo "verde" por engano).
 
