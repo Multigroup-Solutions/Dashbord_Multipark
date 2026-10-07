@@ -170,6 +170,22 @@ export function isAuthRevokedError(err: unknown): boolean {
   return /invalid_grant|unauthorized_client|invalid_client/.test(code) || /invalid_grant|unauthorized_client|invalid_client/.test(msg);
 }
 
+/**
+ * Porquê a Google recusou renovar o acesso, em português e com o código dela —
+ * antes guardava-se só "expirou ou foi revogada" e não se sabia a causa. PURA.
+ */
+export function googleRevokedReason(err: unknown): string {
+  const e = err as any;
+  const code = String(e?.response?.data?.error ?? "");
+  const desc = String(e?.response?.data?.error_description ?? e?.message ?? "");
+  const all = `${code} ${desc}`;
+  const detail = (desc || code).replace(/ya29\.[\w.-]+/g, "ya29…").replace(/1\/\/[\w.-]+/g, "1//…").slice(0, 160);
+  if (/unauthorized_client/.test(all)) return `O token foi emitido para outro cliente OAuth (mudou o GOOGLE_*_CLIENT_ID do servidor). Google: ${detail}`;
+  if (/invalid_client/.test(all)) return `O cliente OAuth do servidor foi apagado ou o segredo mudou. Google: ${detail}`;
+  if (/invalid_grant/.test(all)) return `A Google revogou o token: palavra-passe mudada, acesso retirado em myaccount.google.com/permissions, política do Workspace ou app OAuth em modo de teste (7 dias). Google: ${detail}`;
+  return `A Google recusou renovar o acesso. Google: ${detail}`;
+}
+
 /** HTTP status de um erro do gaxios (ou null). PURA. */
 export function httpStatusOf(err: unknown): number | null {
   const e = err as any;
