@@ -181,7 +181,7 @@ export const menuGroups: MenuGroup[] = [
       { icon: GraduationCap, label: "Formação", path: "/formacao", module: "formacao" },
       // Base de conhecimento (manuais do Drive/carregados): gestão admin/super_admin.
       { icon: BookOpen, label: "Base de conhecimento", path: "/formacao/conhecimento", module: "definicoes" },
-      // Avaliação: separadores "Dia" (avaliacao_operacional) e "4 semanas";
+      // Avaliação: separadores "Dia" (avaliacao_operacional) e "Mês";
       // extra/condutor veem a própria avaliação — filtrado no servidor
       { icon: Trophy, label: "Avaliação", path: "/avaliacao", anyOf: ["avaliacao", "avaliacao_operacional"] },
       // Jorge, 3 out 2026: saíram das Críticas (mesmo acesso: módulo Críticas, team leader+).

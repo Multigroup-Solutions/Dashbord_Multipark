@@ -2,7 +2,7 @@
 modulo: reservas_operacoes
 titulo: Reservas do dia (entradas e saídas)
 rotas: /operacoes
-palavras: parques não operados, não operado, parques que não operamos, top parking, check-in park, lista de reservas, lista do dia, entradas e saídas, movimentos do dia, entradas, saídas, recolhas, entregas, check-in, check-out, parque, parques, airpark, redpark, skypark, outros parques, parques que a operação não faz, excluir parque, firebaseBrand, voo, eta, lugar, garagem, cancelada, pendente, compra por acabar, multipark
+palavras: por cidade, por hora, o que entra, o que sai, marketplace, travelparking, boardingpark, parques não operados, não operado, parques que não operamos, top parking, check-in park, lista de reservas, lista do dia, entradas e saídas, movimentos do dia, entradas, saídas, recolhas, entregas, check-in, check-out, parque, parques, airpark, redpark, skypark, outros parques, parques que a operação não faz, excluir parque, firebaseBrand, voo, eta, lugar, garagem, cancelada, pendente, compra por acabar, multipark
 ---
 # Reservas do dia
 
@@ -26,7 +26,15 @@ Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **u
 - A lista é só da **operação**: estão as entradas e saídas de **todos os parques** da base de dados da Multipark (das tuas cidades), porque a operação recolhe e entrega os carros de todos.
 - A exceção são os **Parques que a operação não faz**: um admin escolhe-os em **Definições → Parâmetros → Operação (GPS / Zello / parques)** (a lista de parques é lida da Multipark na hora). Esses parques não aparecem aqui (nem na previsão e nos blocos do Extras-Dia, nem no estado ao vivo da Passagem de turno). Quando há parques de fora, aparece uma nota por cima da lista.
 - Além desses, ficam **sempre de fora os parques que não operamos** (lista do dono, pelo nome exato): Top Parking (Lisboa e Porto), Elite Park and Detail, Easy Park Estacionamento, Prime Park, Check-in Park, Estacionamento Quinta do Lamberg, Top Park, Aeroporto Park, Airport Villa Parking, Boeing Park, Bruno Miguel Gomes Taboada, Deluxe Park, Easy Parking, Fast Park, Go Park, Green Parking, Guard Park, Jet Park, Jorge Taboada, K Meetings, Low Cost Parking, Orange Parking, Park and Fly, Parking Terminal 1, Ricardo Maria e Smart Park. Nas Definições aparecem marcados como **não operado** e não se desmarcam; se algum nome da lista não existir na BD da Multipark, aparece um aviso.
-- A divisão Direto / Parceiro / Marketplace é da **contabilidade** e não aparece nesta lista.
+- A divisão Direto / Parceiro é da **contabilidade** e não aparece nesta lista. O **Marketplace** aparece por cidade (ver abaixo).
+
+**Por cidade, por hora e por marca**
+- Por cima da lista há um botão por **cidade** (Lisboa, Porto, Faro) com as entradas e saídas de cada uma. **Todas** mostra as três. Escolher uma cidade muda os contadores e a lista para essa cidade. O filtro de cidade e marca do topo da página também conta.
+- Cada cidade tem um cartão:
+  - **Por marca**: Airpark, Redpark, Skypark e **Marketplace**, cada um com o que entra (↓) e o que sai (↑).
+  - O **Marketplace** junta os **parques que não são nossos** (Travelparking, Boardingpark, Parkdirect…) e as **reservas das nossas marcas que vieram pelo Marketplace** (por exemplo "Airpark (pelo Marketplace)"). Por baixo aparece cada parque do Marketplace com os seus números.
+  - **As 24 horas**: uma linha com o que **entra** e outra com o que **sai** em cada hora (hora de Lisboa). Quanto mais escuro, mais carros. Carregar numa hora mostra só os movimentos dessa hora na lista; carregar outra vez (ou no ✕ ao lado das cidades) tira o filtro.
+- A cidade de cada parque é a que está gravada no parque na Multipark. Se estiver vazia, é a que vem no nome (por exemplo "Boardingpark Porto").
 
 **Grupos: um por parque**
 - Cada parque tem o seu bloco, com o nome no cabeçalho e as contagens de entradas e saídas.
@@ -35,7 +43,7 @@ Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **u
 - Depois todos os **outros parques**, cada um no seu bloco com o nome do parque, por ordem alfabética.
 
 **Contadores e filtros**
-- No topo: **entradas**, **saídas** (com as que ainda estão por fazer), **canceladas** e as entradas/saídas de cada parque. Clicar num contador filtra.
+- No topo: **entradas**, **saídas** (com as que ainda estão por fazer) e **canceladas**, da cidade escolhida. Clicar num contador filtra.
 - As **compras online por pagar** (estado **Pendente**: o cliente começou a compra no site e ainda não pagou) **contam** nas entradas e nas saídas: o carro vem na mesma. Saem sozinhas quando a Multipark as passa a recolhidas ou canceladas. Quando há alguma, aparece por baixo dos contadores **"Destas, N são compras online por pagar"**: clicar mostra só essas (e clicar de novo volta à lista normal). Na Faturação e no Financeiro continuam de fora.
 - Filtros: **Entradas / Saídas / Todas**, **parque**, **estado** (por omissão **sem canceladas nem pendentes**; "Todas" mostra tudo) e **pesquisa** pelo n.º da reserva, matrícula ou nome do cliente.
 

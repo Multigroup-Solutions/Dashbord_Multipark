@@ -169,7 +169,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "leads", label: "Leads de Extras", path: "/extras-leads", modules: ["leads_extras"], keywords: ["leads", "candidaturas", "recrutamento"], kind: "page" },
   { id: "formacao", label: "Formação", path: "/formacao", modules: ["formacao"], keywords: ["formacao", "manuais", "quiz", "tutor"], kind: "page" },
   { id: "conhecimento", label: "Base de conhecimento", path: "/formacao/conhecimento", modules: ["formacao"], action: "manage", keywords: ["base de conhecimento", "manuais", "procedimentos", "drive", "documentos"], kind: "page" },
-  { id: "avaliacao", label: "Avaliação", path: "/avaliacao", modules: ["avaliacao", "avaliacao_operacional"], keywords: ["avaliacao", "pontuacao", "ranking", "avaliacao operacional", "movimentos", "4 semanas"], kind: "page" },
+  { id: "avaliacao", label: "Avaliação", path: "/avaliacao", modules: ["avaliacao", "avaliacao_operacional"], keywords: ["avaliacao", "pontuacao", "ranking", "avaliacao operacional", "movimentos", "mês", "mensal", "4 semanas"], kind: "page" },
   { id: "despesas", label: "Despesas", path: "/despesas", modules: ["despesas"], keywords: ["despesas", "faturas", "recibos"], kind: "page" },
   { id: "parcerias", label: "Parcerias", path: "/parcerias", modules: ["parcerias"], keywords: ["parcerias", "parceiros", "agencias"], kind: "page" },
   { id: "faturacao", label: "Faturação", path: "/faturacao", modules: ["faturacao"], keywords: ["faturacao", "faturas"], kind: "page" },
