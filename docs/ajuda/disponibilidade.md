@@ -2,7 +2,7 @@
 modulo: disponibilidade
 titulo: Disponibilidade
 rotas: /disponibilidade
-palavras: só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
+palavras: pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
 ---
 # Disponibilidade
 
@@ -22,7 +22,8 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 **Gestão** (backoffice e acima)
 - A mesma página mostra a matriz das disponibilidades **só dos extras** (função "extra"), por cidade. Os funcionários não aparecem aqui.
 - Com uma **cidade escolhida em cima** (o botão do pino), só aparece essa cidade. Com "todas", escolhes nos botões Lisboa / Porto / Faro / Sem cidade.
-- A lista vem por esta ordem: **disponíveis primeiro**, depois **sem resposta**, depois **indisponíveis** (e por nome). Carregar no título de uma coluna reordena.
+- A lista vem por esta ordem: **disponíveis primeiro**, depois **sem resposta**, depois **indisponíveis** (e por nome), com uma linha a separar cada estado. Carregar no título de uma coluna reordena.
+- **Pesquisar**: escreve parte do nome (ou do número). Quem **começa** pelo que escreveste vem primeiro ("ana" → Ana Sousa antes de Mariana Costa).
 - Daqui envias o pedido de disponibilidade por email/WhatsApp e vês as **Métricas dos extras**. As **Candidaturas do site** e o **Recrutamento** estão nos **Leads de Extras**.
 - O pedido vai para os extras escolhidos na tabela; sem escolha, para todos os extras ativos. **Nunca vai para funcionários** (nem o pedido, nem os avisos de escala).
 - O **pedido automático** (quinta) e o **lembrete** (sábado, só a quem não respondeu) vão só aos extras **com cidade**. Quem está em "Sem cidade" não recebe: primeiro o RH define a cidade na ficha (há uma tarefa para isso). Enviar à mão, escolhendo na tabela, continua possível.

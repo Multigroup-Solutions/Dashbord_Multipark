@@ -42,6 +42,23 @@ type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => 
 
 /** Um pedaço só arranca com pelo menos isto até ao prazo (2 leituras ≤ 15 s cada, normalmente < 2 s). */
 export const PRESSURE_CHUNK_MIN_MS = 12_000;
+/**
+ * 44a: as cidades inteiras (e os condutores) são as leituras pesadas — desde
+ * abril, Lisboa passava dos 15 s e falhava todas as noites ("statement
+ * timeout"): só arrancam com pelo menos isto de tempo e cada leitura pode ir
+ * até ao que falta (no máximo 40 s, multiparkDb/client.ts).
+ */
+export const PRESSURE_HEAVY_CHUNK_MIN_MS = 25_000;
+
+/** Leitura com o tempo que falta até ao prazo (folga de 2 s), entre 15 s e o teto. PURA quanto ao relógio dado. */
+export function pressureQueryTimeout(deadlineAt: number, now: number): number {
+  return Math.max(15_000, Math.min(40_000, deadlineAt - now - 2_000));
+}
+
+/** Pedaço pesado? (a cidade inteira ou os condutores da cidade). PURA. */
+export function isHeavyPressureChunk(chunk: { key: string; kind?: string }): boolean {
+  return chunk.kind === "driver" || chunk.key.startsWith("cidade_");
+}
 /** Janelas guardadas para trás (as mais antigas apagam-se). */
 export const PRESSURE_KEEP_DAYS = 14;
 /** Grupo-marca: a janela está completa. */
@@ -195,7 +212,8 @@ export async function runExtrasPressure(o: {
   const w: PressureWindow = pressureWindowSince(o.since ?? PRESSURE_SINCE_DEFAULT, windowEnd);
   const windowDays = windowDaysOf(w);
   const crewRules = o.crewRules ?? DEFAULT_CREW_RULES;
-  const query = o.query ?? multiparkDbQuery;
+  // 44a: sem leitura injetada (testes), cada leitura leva o tempo que falta até ao prazo
+  const query: Query = o.query ?? (<T,>(sqlText: string, params?: SqlParam[]) => multiparkDbQuery<T>(sqlText, params ?? [], { timeoutMs: pressureQueryTimeout(o.deadlineAt, Date.now()) }));
   const store = o.store ?? mysqlPressureStore;
   const base: PressureRunResult = { ok: true, done: true, windowEnd, windowStart: w.startDay, chunks: 0, processed: [], failed: [], nextIndex: 0, cursor: null, slots: 0, loadRows: 0, ms: 0 };
   const configured = o.isConfigured ?? (() => !!String(process.env.DATABASE_URL_MULTIPARK ?? "").trim());
@@ -216,8 +234,8 @@ export async function runExtrasPressure(o: {
   const tlIds = o.teamLeaderAgentIds !== undefined ? [...(o.teamLeaderAgentIds ?? [])] : await loadTeamLeaderAgentIds();
   const computedAt = utcNow();
   while (i < chunks.length) {
-    if (o.deadlineAt - Date.now() < PRESSURE_CHUNK_MIN_MS) break;
     const chunk = chunks[i];
+    if (o.deadlineAt - Date.now() < (isHeavyPressureChunk(chunk) ? PRESSURE_HEAVY_CHUNK_MIN_MS : PRESSURE_CHUNK_MIN_MS)) break;
     try {
       if (chunk.kind === "driver") {
         const bands: CrewMeasureBand[] = crewMeasureBands(crewRules[extraCityOf(chunk.city)] ?? DEFAULT_CREW_RULES[extraCityOf(chunk.city)]);
@@ -276,7 +294,39 @@ export interface PressureView {
   crew: PressureCrewRow[];
   /** 22d: por grupo-cidade — percentil usado e escalões com o máximo da tabela (D12). */
   cities: Record<string, { city: "lisbon" | "porto" | "faro"; percentile: CyclePercentile; bands: CrewMeasureBand[]; useMeasured?: boolean }>;
+  /**
+   * 44a: grupos cujo cálculo falhou na última janela e que se mostram com a
+   * janela anterior que os tem (`w`) — "all" o grupo inteiro, "drivers" só os
+   * tempos por condutor. Sem isto as células ficavam vazias.
+   */
+  stale?: Record<string, { w: string; part: "all" | "drivers" }>;
 }
+
+/**
+ * 44a: o que ir buscar a janelas anteriores. `older` = a janela mais recente
+ * (antes da atual) com células (`slot`) e com escalões de pessoas (`crew`) de
+ * cada grupo. Um grupo que falta inteiro → "all"; uma cidade sem os tempos
+ * por condutor → "drivers". PURA.
+ */
+export function pressureFallbacks(
+  current: { groups: ReadonlySet<string>; withDrivers: ReadonlySet<string> },
+  older: { slot: ReadonlyMap<string, string>; crew: ReadonlyMap<string, string> },
+  cityKeys: readonly string[],
+): Array<{ group: string; w: string; part: "all" | "drivers" }> {
+  const out: Array<{ group: string; w: string; part: "all" | "drivers" }> = [];
+  for (const [group, w] of Array.from(older.slot)) {
+    if (group === PRESSURE_DONE_GROUP || current.groups.has(group)) continue;
+    out.push({ group, w, part: "all" });
+  }
+  for (const group of cityKeys) {
+    if (!current.groups.has(group) || current.withDrivers.has(group)) continue;
+    const w = older.crew.get(group);
+    if (w) out.push({ group, w, part: "drivers" });
+  }
+  return out;
+}
+
+const DRIVER_FIELDS = ["cycleN", "cycleP50", "cycleP60", "cycleP75", "cycleP85", "cycleP90", "driveN", "driveP50", "driveP75", "driveP90", "toParkN", "toParkP50", "toParkP75", "crewAvg"] as const;
 
 const numOrNull = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
@@ -372,6 +422,48 @@ export async function getPressureView(allowedGroups?: (key: string) => boolean, 
     if (m.load) loads.push(m.load);
     if (m.crew) crew.push(m.crew);
   }
+  // 44a: um grupo que falhou na última corrida mostra-se com a janela anterior (marcado).
+  const stale: NonNullable<PressureView["stale"]> = {};
+  try {
+    const older = { slot: new Map<string, string>(), crew: new Map<string, string>() };
+    for (const r of rowsOf(await db.execute(sql`SELECT parkGroup AS g, kind AS k, DATE_FORMAT(MAX(windowEnd), '%Y-%m-%d') AS w
+        FROM ops_pressure_stats WHERE windowEnd < ${windowEnd} AND kind IN ('slot', 'crew') GROUP BY parkGroup, kind`))) {
+      const g = String(r.g ?? "");
+      if (!g || (allowedGroups && !allowedGroups(g))) continue;
+      (r.k === "crew" ? older.crew : older.slot).set(g, String(r.w));
+    }
+    // Um grupo "está" se tem o próprio cálculo (carga ou movimento); só os tempos por condutor não chegam.
+    const present = new Set<string>([...loads.map((l) => l.group), ...slots.filter((x) => x.checkinsDone + x.checkoutsDone + x.deliveryN > 0).map((x) => x.group)]);
+    const withDrivers = new Set<string>([...slots.filter((x) => (x.cycleN ?? 0) > 0).map((x) => x.group), ...crew.map((c) => c.group)]);
+    for (const f of pressureFallbacks({ groups: present, withDrivers }, older, Object.keys(cities))) {
+      const old = rowsOf(await db.execute(sql`SELECT parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
+          checkinsDone, checkoutsDone, checkinsStarted, checkoutsStarted, concurrencyAvg, concurrencyMax,
+          deliveryN, deliveryP50, deliveryP75, deliveryP90, pickupN, pickupP50, pickupP75,
+          cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90, driveN, driveP50, driveP75, driveP90, toParkN, toParkP50, toParkP75, crewAvg, bandLabel
+        FROM ops_pressure_stats WHERE windowEnd = ${f.w} AND parkGroup = ${f.group} AND kind IN ('slot', 'load', 'crew') ORDER BY id LIMIT 5000`));
+      const here = new Map(slots.filter((x) => x.group === f.group).map((x) => [`${x.weekday}:${x.hour}`, x]));
+      const hasCrew = crew.some((c) => c.group === f.group);
+      if (!groups.has(f.group) && old[0]) groups.set(f.group, String(old[0].groupLabel ?? f.group));
+      for (const r of old) {
+        const m = mapStoredRow(r);
+        if (m.crew) { if (f.part === "drivers" || !hasCrew) crew.push(m.crew); continue; }
+        if (m.load) { if (f.part === "all") loads.push(m.load); continue; }
+        if (!m.slot) continue;
+        const target = here.get(`${m.slot.weekday}:${m.slot.hour}`);
+        if (f.part === "drivers") {
+          if (target) for (const k of DRIVER_FIELDS) (target as any)[k] = (m.slot as any)[k];
+        } else if (target) {
+          // Só os tempos por condutor vieram na corrida de hoje: o resto vem da janela anterior.
+          for (const [k, v] of Object.entries(m.slot)) if (!(DRIVER_FIELDS as readonly string[]).includes(k)) (target as any)[k] = v;
+        } else {
+          slots.push(m.slot);
+        }
+      }
+      stale[f.group] = { w: f.w, part: f.part };
+    }
+  } catch (err: any) {
+    console.warn("[extras-pressure] janela anterior:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
   return {
     available: true,
     windowEnd,
@@ -383,6 +475,7 @@ export async function getPressureView(allowedGroups?: (key: string) => boolean, 
     loads,
     crew,
     cities,
+    ...(Object.keys(stale).length ? { stale } : {}),
   };
 }
 

@@ -27,7 +27,7 @@ describe("Lista da disponibilidade", () => {
     const page = src("client/src/pages/ExtrasDiaPage.tsx");
     expect(page).toContain("const cityFilter: CityKey | \"all\" | \"none\" = globalCity ?? pickedCity;");
     expect(page).toContain("? [{ key: globalCity, label: CITY_LABELS[globalCity] }]");
-    expect(page).toContain("return sortByAvailability(list).map(");
+    expect(page).toContain("let sorted = sortByAvailability(list);");
   });
 });
 

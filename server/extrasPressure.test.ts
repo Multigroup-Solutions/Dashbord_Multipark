@@ -18,7 +18,7 @@ import {
 } from "./multiparkDb/extrasBookings";
 import { mapParks } from "./multiparkDb/dayBookings";
 import {
-  PRESSURE_CHUNK_MIN_MS, defaultWindowEnd, formatPressureCursor, mapStoredRow, parsePressureCursor, runExtrasPressure, type PressureStore,
+  PRESSURE_CHUNK_MIN_MS, PRESSURE_HEAVY_CHUNK_MIN_MS, defaultWindowEnd, formatPressureCursor, mapStoredRow, parsePressureCursor, runExtrasPressure, type PressureStore,
 } from "./extrasPressure";
 import { filterRowsByField, liveToBookingRow, lisbonWallToUtcMs } from "./extrasDia";
 import {
@@ -148,9 +148,10 @@ describe("pressão — cursor e retoma", () => {
     let now = 0;
     const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
-      // cada leitura "gasta" 5 s; prazo = 20 s → parques (5 s) + 1.º pedaço (10 s) cabem; o 2.º já não (sobram 5 s < 12 s)
+      // cada leitura "gasta" 5 s; prazo = 35 s → parques (5 s) + 1.º pedaço (10 s) cabem; o 2.º já não
+      // (44a: as cidades são pesadas e só arrancam com ≥ 25 s; sobram 20 s)
       q.mockImplementation(async (sql: string) => { now += 5_000; return answer(sql); });
-      const r1 = await runExtrasPressure({ deadlineAt: PRESSURE_CHUNK_MIN_MS + 8_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
+      const r1 = await runExtrasPressure({ deadlineAt: PRESSURE_HEAVY_CHUNK_MIN_MS + 10_000, windowEnd: "2026-09-26", query: q as any, store: m.store, isConfigured: () => true });
       expect(r1.done).toBe(false);
       expect(r1.processed).toEqual(["cidade_lisboa"]);
       expect(parsePressureCursor(r1.cursor, "2026-09-26")).toBe(1);

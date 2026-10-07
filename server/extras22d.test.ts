@@ -140,8 +140,9 @@ describe("guardar e mostrar", () => {
   });
   it("ecrã: métricas novas nas cidades e o cartão ao lado da tabela máxima (a escala não muda)", () => {
     const tab = src("client/src/pages/extrasDia/PressureTab.tsx");
-    expect(tab).toContain("Por carro p{pct}");
-    expect(tab).toContain("Na estrada p75");
+    // 44a: botões com nomes claros ("Tempo por carro (p{pct})", "Na estrada") e o p75 explicado
+    expect(tab).toContain('m.key === "cycle" ? `${m.short} (p${pct})` : m.short');
+    expect(tab).toContain('label: "Na estrada"');
     expect(tab).toContain("<CrewCard");
     expect(tab).toContain("Máximo = a tabela das Definições");
     expect(tab).toContain("a escala continua a usar a tabela máxima");

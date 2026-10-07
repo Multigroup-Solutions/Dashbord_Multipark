@@ -4643,7 +4643,17 @@ export const appRouter = router({
       }).optional())
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "extras_dia", "view");
-        const list = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        const listed = await listDriverCandidates(input?.date, { forTeamLeader: input?.forTeamLeader });
+        // 44a: cidade (a derivada, a mesma da Disponibilidade) para o seletor pôr primeiro a da escala
+        // e marcar quem não a tem (o servidor recusa). Falha → sem cidade conhecida (undefined).
+        let cities: Map<number, { city: string | null }> | null = null;
+        try {
+          const { resolveCitiesForEmployeeIds } = await import("./employeeCity");
+          cities = await resolveCitiesForEmployeeIds(listed.map((c) => c.id));
+        } catch (err: any) { console.warn("[extras-dia] cidade dos candidatos:", String(err?.message ?? err).slice(0, 160)); }
+        // A cidade derivada usa "lisboa"; a escala usa "lisbon".
+        const toEscala = (k: string | null | undefined) => (k === "lisboa" ? "lisbon" : k === "porto" || k === "faro" ? k : null) as "lisbon" | "porto" | "faro" | null;
+        const list = listed.map((c) => ({ ...c, city: cities ? toEscala(cities.get(c.id)?.city) : undefined }));
         // Badge "Formação em falta" no seletor da escala (server/trainingPaths.ts).
         // Leitura falhada → "por verificar" em todos (18c: antes o badge sumia
         // e parecia que ninguém tinha formação em falta).
@@ -4652,6 +4662,34 @@ export const appRouter = router({
         try { missing = await employeesMissingTraining(list.map(c => c.id)); }
         catch (err: any) { console.warn("[Training] verificação da formação falhou:", String(err?.message ?? err).slice(0, 160)); }
         return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null }));
+      }),
+
+    // 44a (Jorge: "quando solto um extra para ser team leader tenho que o soltar em todo lado"):
+    // dar a permissão "Pode ser Team Leader na escala" daqui mesmo, sem ir às Permissões.
+    // As mesmas regras da página Permissões; fica no registo de atividade.
+    allowTeamLeader: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "extras_dia", "edit");
+        if (!canTouchPermission(ctx.user, "extras_dia.team_leader")) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Não podes dar a permissão de Team Leader. Pede a quem gere as Permissões." });
+        }
+        await assertEmployeeAccess(input.employeeId);
+        const person = await getEmployeeById(input.employeeId);
+        if (!person || !Number(person.employee.isActive)) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha do RH não encontrada (ou inativa)." });
+        const userId = person.employee.userId;
+        const name = person.employee.fullName;
+        if (!userId) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${name} não tem conta no dashboard e a permissão de TL é da conta. Cria a conta em Utilizadores (a partir da ficha) ou muda o posto no RH para Team Leader.` });
+        }
+        if (userId === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes alterar as tuas próprias permissões." });
+        const target = await getUserById(userId);
+        if (!target || !canGrantPermissionsTo(ctx.user, target.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes gerir as permissões desta conta." });
+        if (!(await userInCityScope(userId))) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conta não pertence à tua cidade." });
+        const { setUserPermission } = await import("./db");
+        await setUserPermission(userId, "extras_dia.team_leader", "grant", ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "set_permission", entity: "user", entityId: userId, details: `extras_dia.team_leader = grant (Extras-Dia, ${name})` });
+        return { success: true, name };
       }),
 
     assignments: protectedProcedure
@@ -4708,7 +4746,13 @@ export const appRouter = router({
           });
         }
         // Só verifica quando a pessoa entra na escala (nova linha ou troca de pessoa).
-        const { checkEscalaEligibility, escalaAssignmentEmployeeId } = await import("./trainingPaths");
+        const { checkEscalaEligibility, escalaAssignmentEmployeeId, escalaAssignmentPerson } = await import("./trainingPaths");
+        // 44a: sem ficha no RH não se entra (nome livre acabou; linhas antigas só mudam de horas).
+        if (!input.employeeId) {
+          const { hrRecordRefusal } = await import("../shared/extrasSchedule");
+          const refusal = hrRecordRefusal(input, input.id ? await escalaAssignmentPerson(input.id) : null);
+          if (refusal) throw new TRPCError({ code: "BAD_REQUEST", message: refusal }); // não é o "forçar sem formação"
+        }
         if (input.employeeId && (!input.id || (await escalaAssignmentEmployeeId(input.id)) !== input.employeeId)) {
           // Sem cidade não se escala (2 out 2026) — nem à mão. A cidade é a derivada (a mesma da Disponibilidade).
           const { resolveCitiesForEmployeeIds } = await import("./employeeCity");

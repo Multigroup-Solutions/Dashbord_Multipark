@@ -1,7 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
-import { can } from "@shared/access";
+import { can, canTouchPermission } from "@shared/access";
 import { addDays as addDaysIso, lisbonDayOf } from "@shared/lisbonDay";
 import { atLeast, useConfirm } from "./training/shared";
 import { createContext, useContext } from "react";
@@ -68,6 +68,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
+import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
 import { assignmentWhoLine, describeGap, describePickupPairing } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
@@ -93,11 +94,12 @@ import {
   resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
-import { matchesContactQuery } from "@shared/contactSearch";
+import { matchesContactQuery, nameMatchScore } from "@shared/contactSearch";
 import { contactPrefsLabel } from "@shared/contactPrefs";
 import {
   AVAILABILITY_PAGE_SIZE,
   AVAILABILITY_STATUS_LABELS,
+  availabilityStatus,
   countAvailabilityStatuses,
   defaultOpenGroups,
   groupByCity,
@@ -266,13 +268,6 @@ export default function ExtrasDiaPage() {
           <p className="text-sm text-muted-foreground mt-1">
             Planeamento de chegadas, saídas, lavagens e condutores para o dia seguinte.
           </p>
-          {data && (
-            <p className="text-xs mt-1">
-              <Badge variant="outline" className="h-auto whitespace-normal font-normal" title="Definições → Parâmetros → Extras-dia">
-                {data.crewRuleText}
-              </Badge>
-            </p>
-          )}
           {data && describePickupPairing(data.pickupPairing) && (
             <p className="text-xs text-muted-foreground mt-1">🔁 {describePickupPairing(data.pickupPairing)}</p>
           )}
@@ -405,6 +400,7 @@ export default function ExtrasDiaPage() {
                 Por hora — {fmtDate(data.targetDate)}
               </CardTitle>
               <p className="text-xs text-muted-foreground">
+                As 24 horas do dia operacional (das 03h às 03h). Condutores = extras precisos em cada hora, além do team leader.
                 Clica numa hora para ver os blocos de 20min. Clica num bloco para ver as reservas.
                 <span className="inline-block w-3 h-3 rounded-sm bg-yellow-100 border border-yellow-300 align-text-bottom mx-1"></span>
                 hora com Terminal 2 (30min/reserva) ·
@@ -422,24 +418,37 @@ export default function ExtrasDiaPage() {
                       <th className="text-right py-2 px-2">Chegadas</th>
                       <th className="text-right py-2 px-2">Saídas</th>
                       <th className="text-right py-2 px-2">Total</th>
-                      <th className="text-right py-2 px-2">Condutores</th>
+                      <th className="py-2 px-2 hidden sm:table-cell w-[28%]"><span className="sr-only">Carga</span></th>
+                      <th className="text-right py-2 px-2" title={`Extras precisos nessa hora, além do team leader. ${data.crewRuleText} (Definições → Parâmetros → Extras-dia)`}>Condutores</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.hourly
-                      .filter(h => h.checkins + h.checkouts > 0)
-                      .map(row => (
-                        <HourRow
-                          key={row.hour}
-                          row={row}
-                          targetDate={data.targetDate}
-                          isPeak={peakHour?.hour === row.hour}
-                          tight={tightHours.get(row.hour) ?? null}
-                        />
-                      ))}
+                    {/* 44a (Jorge, 7 out 2026: "passa a ter as 24 horas, mesmo que não haja entregas e recolhas, das 3 às 3") */}
+                    {(() => {
+                      const rows = data.hourly.filter(h => h.hour >= 3 && h.hour < 27);
+                      const maxTotal = Math.max(1, ...rows.map(h => h.checkins + h.checkouts));
+                      return rows.map(row => (
+                        <Fragment key={row.hour}>
+                          {(row.hour === 3 || row.hour === 15) && (
+                            <tr className="bg-muted/40">
+                              <td colSpan={7} className="py-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                {row.hour === 3 ? "Manhã · 03h–15h" : "Noite · 15h–03h"}
+                              </td>
+                            </tr>
+                          )}
+                          <HourRow
+                            row={row}
+                            targetDate={data.targetDate}
+                            isPeak={peakHour?.hour === row.hour}
+                            tight={tightHours.get(row.hour) ?? null}
+                            maxTotal={maxTotal}
+                          />
+                        </Fragment>
+                      ));
+                    })()}
                     {data.hourly.every(h => h.checkins + h.checkouts === 0) && (
                       <tr>
-                        <td colSpan={6} className="py-6 text-center text-muted-foreground">
+                        <td colSpan={7} className="py-6 text-center text-muted-foreground">
                           Sem operações previstas neste dia.
                         </td>
                       </tr>
@@ -800,6 +809,15 @@ function TeamSection({
       throw e;
     }
   };
+  // 44a: dar a permissão de TL daqui mesmo (antes era preciso ir às Permissões).
+  const canAllowTl = canTouchPermission(user ?? null, "extras_dia.team_leader");
+  const allowTl = trpc.extrasDia.allowTeamLeader.useMutation({
+    onSuccess: (r) => {
+      utils.extrasDia.candidates.invalidate();
+      toast.success(`${r.name} já pode ser Team Leader na escala`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const del = trpc.extrasDia.deleteAssignment.useMutation({
     onSuccess: (r) => {
       utils.extrasDia.assignments.invalidate();
@@ -861,6 +879,11 @@ function TeamSection({
   };
   const candidates = useMemo(() => sortCandidates(allCandidates), [allCandidates]);
   const tlCandidates = useMemo(() => sortCandidates(allTlCandidates), [allTlCandidates]);
+  // 44a: no TL também aparece o resto do RH (sem a permissão) — dá-se daqui.
+  const tlOthers = useMemo(() => {
+    const ok = new Set(allTlCandidates.map(c => c.id));
+    return candidates.filter(c => !ok.has(c.id));
+  }, [candidates, allTlCandidates]);
 
   const assignments = allAssignments.filter(a => a.shift === shift);
   const tl = assignments.find(a => a.isTeamLeader);
@@ -980,6 +1003,11 @@ function TeamSection({
               <AssignmentForm
                 targetDate={targetDate}
                 candidates={tlCandidates}
+                others={tlOthers}
+                city={city}
+                canAllowTl={canAllowTl}
+                onAllowTl={(id) => allowTl.mutate({ employeeId: id })}
+                allowingTl={allowTl.isPending}
                 asTeamLeader
                 shift={shift}
                 defaultStart={defaultStart}
@@ -999,6 +1027,7 @@ function TeamSection({
           <AssignmentForm
             targetDate={targetDate}
             candidates={candidates}
+            city={city}
             shift={shift}
             defaultStart={defaultStart}
             defaultEnd={defaultEnd}
@@ -1072,7 +1101,12 @@ interface AssignmentFormValues {
 function AssignmentForm({
   targetDate,
   candidates,
+  others,
+  city,
   asTeamLeader,
+  canAllowTl,
+  onAllowTl,
+  allowingTl,
   shift,
   defaultStart,
   defaultEnd,
@@ -1081,16 +1115,14 @@ function AssignmentForm({
   submitting,
 }: {
   targetDate: string;
-  candidates: {
-    id: number;
-    fullName: string;
-    suggestedLevel: LevelId;
-    photoUrl?: string | null;
-    availability?: { status: "available" | "unavailable" | "no_response"; morning: boolean; night: boolean } | null;
-    trainingMissing?: boolean;
-    trainingUnknown?: boolean;
-  }[];
+  candidates: (PickerCandidate & { suggestedLevel: LevelId })[];
+  /** 44a: só no TL — gente do RH ainda sem a permissão de TL. */
+  others?: (PickerCandidate & { suggestedLevel: LevelId })[];
+  city: ExtraCityId;
   asTeamLeader?: boolean;
+  canAllowTl?: boolean;
+  onAllowTl?: (employeeId: number) => void | Promise<void>;
+  allowingTl?: boolean;
   shift: ShiftId;
   defaultStart: number;
   defaultEnd: number;
@@ -1109,76 +1141,41 @@ function AssignmentForm({
   const span = endHour - startHour;
   const rate = levels.find(l => l.id === level)?.hourlyRate ?? 0;
   const previewCost = Math.max(0, span) * rate;
-  // TL must be linked to an employee (we need monthlySalary). Otherwise need a name.
-  const valid = asTeamLeader
-    ? employeeId != null && span >= 3 && span <= 12
-    : personName.trim().length > 0 && span >= 3 && span <= 12;
+  // 44a: só gente do RH (sem nome livre). No TL, quem ainda não tem a permissão tem de a receber primeiro.
+  const pickedOther = employeeId != null && !candidates.some(c => c.id === employeeId) ? (others ?? []).find(c => c.id === employeeId) ?? null : null;
+  const valid = employeeId != null && !pickedOther && span >= 3 && span <= 12;
 
   return (
     <div className="border rounded-md p-3 bg-muted/30 space-y-3">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs">Empregado (RH)</Label>
-          <Select
-            value={employeeId ? String(employeeId) : "none"}
-            onValueChange={(v) => {
-              if (v === "none") {
-                setEmployeeId(null);
-                return;
-              }
-              const id = parseInt(v, 10);
-              const c = candidates.find(c => c.id === id);
-              if (c) {
-                setEmployeeId(id);
-                setPersonName(c.fullName);
-                setLevel(c.suggestedLevel);
-              }
+        <div className="space-y-1 md:col-span-2">
+          <Label className="text-xs">Pessoa (RH)</Label>
+          <PersonPicker
+            candidates={candidates}
+            others={others}
+            city={city}
+            value={employeeId}
+            onPick={(c) => {
+              const full = [...candidates, ...(others ?? [])].find(x => x.id === c.id);
+              setEmployeeId(c.id);
+              setPersonName(c.fullName);
+              if (full) setLevel(full.suggestedLevel);
             }}
-          >
-            <SelectTrigger><SelectValue placeholder="Escolher..." /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">— Nenhum (escrever nome) —</SelectItem>
-              {candidates.map(c => (
-                <SelectItem key={c.id} value={String(c.id)}>
-                  <span className="flex items-center gap-1.5">
-                    <Avatar className="h-5 w-5">
-                      <AvatarImage src={c.photoUrl ?? undefined} className="object-cover" />
-                      <AvatarFallback className="text-[11px]">{c.fullName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
-                    </Avatar>
-                    {c.availability?.status === "available" && (
-                      <span className="inline-flex gap-0.5">
-                        {c.availability.morning && <Sun className="h-3 w-3 text-amber-500" />}
-                        {c.availability.night && <Moon className="h-3 w-3 text-indigo-500" />}
-                        {!c.availability.morning && !c.availability.night && <CheckCircle2 className="h-3 w-3 text-green-500" />}
-                      </span>
-                    )}
-                    {c.availability?.status === "no_response" && (
-                      <span className="h-2 w-2 inline-block rounded-full bg-muted-foreground/30" title="Sem resposta" />
-                    )}
-                    {c.availability?.status === "unavailable" && (
-                      <span className="text-[11px] text-red-500" title="Disse que não está disponível">✕</span>
-                    )}
-                    <span className={c.availability?.status === "unavailable" ? "text-muted-foreground" : undefined}>{c.fullName}</span>
-                    {c.trainingMissing && (
-                      <span className="ml-1 rounded bg-amber-100 px-1 text-[11px] font-medium text-amber-800" title="Formação obrigatória por concluir">Formação em falta</span>
-                    )}
-                    {c.trainingUnknown && (
-                      <span className="ml-1 rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-700" title="Não foi possível verificar a formação agora — ao guardar volta a ser verificada">Formação por verificar</span>
-                    )}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-1">
-          <Label className="text-xs">Nome</Label>
-          <Input
-            value={personName}
-            onChange={e => setPersonName(e.target.value)}
-            placeholder="Nome da pessoa"
           />
+          {pickedOther && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs space-y-1">
+              <div><strong>{pickedOther.fullName}</strong> ainda não pode ser Team Leader na escala.</div>
+              {pickedOther.hasAccount === false ? (
+                <div className="text-muted-foreground">Não tem conta no dashboard (a permissão é da conta): muda o posto no RH para Team Leader ou cria-lhe a conta em Utilizadores.</div>
+              ) : canAllowTl ? (
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={allowingTl} onClick={() => void onAllowTl?.(pickedOther.id)}>
+                  {allowingTl ? "A dar a permissão…" : "Permitir ser TL"}
+                </Button>
+              ) : (
+                <div className="text-muted-foreground">Pede a quem gere as Permissões ("Pode ser Team Leader na escala").</div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="space-y-1">
@@ -1240,8 +1237,8 @@ function AssignmentForm({
           )}
           {span < 3 && <div className="text-xs text-red-600">Mínimo 3h</div>}
           {span > 12 && <div className="text-xs text-red-600">Máximo 12h</div>}
-          {asTeamLeader && employeeId == null && (
-            <div className="text-xs text-red-600">TL tem de vir de RH (precisa de salário)</div>
+          {employeeId == null && (
+            <div className="text-xs text-muted-foreground">Escolhe a pessoa do RH.</div>
           )}
         </div>
       </div>
@@ -1549,8 +1546,11 @@ function HourRow({
   targetDate,
   isPeak,
   tight,
+  maxTotal,
 }: {
   tight?: TightReason | null;
+  /** 44a: a hora com mais carros do dia (escala da barra). */
+  maxTotal: number;
   row: {
     hour: number;
     checkins: number;
@@ -1583,11 +1583,20 @@ function HourRow({
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </td>
         <td className="py-1.5 px-2 font-mono whitespace-nowrap">{fmtHour(row.hour)}{tight && <TightHourBadge reason={tight} />}</td>
-        <td className="py-1.5 px-2 text-right text-emerald-700">{row.checkins || ""}</td>
-        <td className="py-1.5 px-2 text-right text-orange-700">{row.checkouts || ""}</td>
-        <td className="py-1.5 px-2 text-right font-semibold">{total}</td>
+        <td className="py-1.5 px-2 text-right text-emerald-700 tabular-nums">{row.checkins || ""}</td>
+        <td className="py-1.5 px-2 text-right text-orange-700 tabular-nums">{row.checkouts || ""}</td>
+        <td className={`py-1.5 px-2 text-right tabular-nums ${total ? "font-semibold" : "text-muted-foreground/50"}`}>{total || "·"}</td>
+        <td className="py-1.5 px-2 hidden sm:table-cell" aria-hidden>
+          {/* 44a: barra da carga — chegadas (verde) + saídas (laranja), à escala da hora mais cheia */}
+          {total > 0 && (
+            <div className="flex h-2.5 gap-[2px]" style={{ width: `${Math.max(4, (total / maxTotal) * 100)}%` }}>
+              {row.checkins > 0 && <div className="h-full rounded-l-sm bg-emerald-600" style={{ flexGrow: row.checkins }} />}
+              {row.checkouts > 0 && <div className="h-full rounded-r-sm bg-orange-500" style={{ flexGrow: row.checkouts }} />}
+            </div>
+          )}
+        </td>
         <td className="py-1.5 px-2 text-right">
-          <Badge variant="secondary">{row.driversNeeded}</Badge>
+          {row.driversNeeded ? <Badge variant="secondary" className="tabular-nums">{row.driversNeeded}</Badge> : <span className="text-muted-foreground/50">·</span>}
         </td>
       </tr>
       {expanded && row.slots.map(s => (
@@ -1624,7 +1633,8 @@ function SlotRow({
         <td className="py-1 px-2 text-right text-emerald-700 text-xs">{slot.checkins || ""}</td>
         <td className="py-1 px-2 text-right text-orange-700 text-xs">{slot.checkouts || ""}</td>
         <td className="py-1 px-2 text-right text-xs">{total || ""}</td>
-        <td className="py-1 px-2 text-right text-xs text-muted-foreground">
+        <td className="py-1 px-2 hidden sm:table-cell" />
+        <td className="py-1 px-2 text-right text-xs text-muted-foreground" title="Condutores se este ritmo de 20 min durasse a hora inteira">
           {slot.driversNeeded || ""}
           {slot.weightedDemand > total && total > 0 && (
             <span className="ml-1 text-amber-700" title="Procura aumentada por T2 / fora do aeroporto">⚠</span>
@@ -1633,7 +1643,7 @@ function SlotRow({
       </tr>
       {expanded && hasData && (
         <tr>
-          <td colSpan={6} className="bg-blue-50/30 px-6 py-2">
+          <td colSpan={7} className="bg-blue-50/30 px-6 py-2">
             <SlotBookings targetDate={targetDate} hour={slot.hour} slot={slot.slot} />
           </td>
         </tr>
@@ -1889,7 +1899,13 @@ export function AvailabilitySection() {
     if (windowFilterActive) list = list.filter(matchesWindow);
     if (trimmedSearch) list = list.filter(e => matchesExtraQuery(trimmedSearch, e));
     // Disponíveis → sem resposta → indisponíveis (a ordenação da tabela continua a mandar se a pessoa a escolher).
-    return sortByAvailability(list).map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
+    let sorted = sortByAvailability(list);
+    // 44a (Jorge: "começa sempre com o A e o B"): a pesquisar, quem começa pelo que se escreveu vem primeiro.
+    if (trimmedSearch) {
+      const score = (e: (typeof sorted)[number]) => nameMatchScore(trimmedSearch, e.fullName) || 1; // 0 = bateu pelo número
+      sorted = sorted.map((e, i) => ({ e, i, s: score(e) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.e);
+    }
+    return sorted.map(e => ({ ...e, lastWorked: lastWorked.data?.[e.employeeId] ?? "" }));
   }, [o, cityFilter, statusFilter, onlyNotContacted24h, windowFilterActive, matchesWindow, trimmedSearch, lastWorked.data]);
   // Contagem do universo para o rótulo do filtro de horário (como os de cidade).
   const windowMatchCount = useMemo(
@@ -2737,7 +2753,24 @@ export function AvailabilitySection() {
                             </tr>
                           </thead>
                           <tbody>
-                            {visible.map(renderExtraRow)}
+                            {/* 44a: na ordem por omissão, um separador por estado — senão o alfabeto
+                                recomeçava 3 vezes sem se perceber porquê. */}
+                            {visible.map((ex, i) => {
+                              const st = availabilityStatus(ex);
+                              const divider = !availSort.sortKey && !searching && (i === 0 || availabilityStatus(visible[i - 1]) !== st);
+                              return (
+                                <Fragment key={ex.employeeId}>
+                                  {divider && (
+                                    <tr className="bg-muted/40">
+                                      <td colSpan={5 + o.dayHeaders.length} className="py-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                        {AVAILABILITY_STATUS_LABELS[st]} · {groupCounts[st]}
+                                      </td>
+                                    </tr>
+                                  )}
+                                  {renderExtraRow(ex)}
+                                </Fragment>
+                              );
+                            })}
                             {/* Totais por dia desta secção — 5 células fixas antes
                                 dos dias (seleção, Extra, Últ. trabalho, Cidade,
                                 Telefone), senão ficam desalinhados. */}
