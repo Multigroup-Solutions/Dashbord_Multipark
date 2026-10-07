@@ -237,7 +237,13 @@ export async function onApplicationCreated(applicationId: number): Promise<Inges
     const [app] = await db.select().from(driverApplications).where(eq(driverApplications.id, applicationId)).limit(1);
     if (!app) return null;
     const ctx = await loadSyncContext(db);
-    return (await ingestCandidate(db, ctx, await applicationCandidate(app, await loadProjectNodes()))).outcome;
+    const r = await ingestCandidate(db, ctx, await applicationCandidate(app, await loadProjectNodes()));
+    // 0545: a tarefa "Candidatura de condutor" nasce já (o cron horário é a rede de segurança).
+    if (r.outcome === "created" && r.leadId != null) {
+      const { syncLeadTasks } = await import("./leadTasks");
+      await syncLeadTasks(new Date(), { leadIds: [r.leadId] }).catch((e) => console.warn("[extraLeadsSync] tarefa da candidatura:", String(e).slice(0, 160)));
+    }
+    return r.outcome;
   } catch (err) {
     console.warn("[extraLeadsSync] candidatura → lead falhou:", String(err).slice(0, 200));
     return null;

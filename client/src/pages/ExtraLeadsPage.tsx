@@ -37,7 +37,7 @@ import { useViewPref } from "@/hooks/useViewPref";
 import { findWhatsAppTemplate, LEAD_RECRUITMENT_TEMPLATE_ID } from "@shared/whatsappTemplate";
 import { RECENT_TEMPLATE_LABEL, broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery } from "@shared/contactSearch";
-import { can } from "@shared/access";
+import { can, scopeFor } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LeadScoreCell, { type LeadScoreRow } from "@/components/aiOps/LeadScoreCell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -53,6 +53,7 @@ import {
   type LeadAttention,
   type LeadStatus,
 } from "@shared/extraLeadsFunnel";
+import { LEAD_NO_CITY, defaultConvertCity, defaultNewLeadCity, leadCityToProjectId, newLeadCityError } from "@shared/leadCity";
 
 const STATUS: Record<LeadStatus, { label: string; className: string }> = {
   new: { label: "Novo", className: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300" },
@@ -98,7 +99,11 @@ type LeadRow = {
   drivingLicenseNumber?: string | null;
 };
 
-/** `city` = id do nó de cidade ("" = sem cidade) — só na edição. */
+/**
+ * `city` = id do nó de cidade. Na edição "" = sem cidade; no "Novo lead"
+ * (Jorge, 7 out 2026: "Cidade *") "" = por escolher e "none" = sem cidade
+ * (só para quem vê todas as cidades) — shared/leadCity.ts.
+ */
 type LeadDraft = { fullName: string; phone: string; email: string; notes: string; city: string };
 const EMPTY_DRAFT: LeadDraft = { fullName: "", phone: "", email: "", notes: "", city: "" };
 const NO_CITY = "none";
@@ -163,9 +168,22 @@ function LeadsTab() {
         .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pt")),
     [projects.data],
   );
+  const cityIds = useMemo(() => cityProjects.map((p: any) => Number(p.id)), [cityProjects]);
   function openConvert(l: LeadRow) {
-    setConvertProjectId(cityProjects.length === 1 ? String(cityProjects[0].id) : "");
+    // A cidade do lead já vem escolhida (pode mudar-se); sem ela, a única cidade de quem converte.
+    setConvertProjectId(defaultConvertCity(l, cityIds));
     setConvertFor(l);
+  }
+  // Link de uma tarefa "Candidatura de condutor" (/extras-leads?lead=<id>): mostra só esse lead.
+  const [focusLeadId, setFocusLeadId] = useState<number | null>(() => {
+    const n = Number(new URLSearchParams(window.location.search).get("lead"));
+    return Number.isSafeInteger(n) && n > 0 ? n : null;
+  });
+  function clearFocusLead() {
+    setFocusLeadId(null);
+    const p = new URLSearchParams(window.location.search);
+    p.delete("lead");
+    window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}`);
   }
 
   // Vem tudo e o estado filtra aqui: os contadores dos chips contam sempre
@@ -208,14 +226,16 @@ function LeadsTab() {
   // Filtro local (a lista já vem completa): nome, email ou número, como no inbox.
   const shown = useMemo(
     () =>
-      trimmedSearch
+      focusLeadId != null
+        ? allLeads.filter((l) => l.id === focusLeadId)
+        : trimmedSearch
         ? leads.filter(
             (l) =>
               matchesContactQuery(trimmedSearch, { name: l.fullName, phone: l.phoneE164 ?? l.phone }) ||
               (l.email ?? "").toLowerCase().includes(trimmedSearch.toLowerCase()),
           )
         : leads,
-    [leads, trimmedSearch],
+    [leads, allLeads, trimmedSearch, focusLeadId],
   );
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: bySource.length };
@@ -298,7 +318,8 @@ function LeadsTab() {
 
   function openCreate() {
     setEditing(null);
-    setDraft(EMPTY_DRAFT);
+    // Quem só tem uma cidade já a tem escolhida; os outros escolhem (obrigatório).
+    setDraft({ ...EMPTY_DRAFT, city: defaultNewLeadCity(cityIds) });
     setEditOpen(true);
   }
   function openEdit(l: LeadRow) {
@@ -318,7 +339,11 @@ function LeadsTab() {
     if (editing) {
       const projectId = draft.city ? Number(draft.city) : null;
       update.mutate({ id: editing.id, ...payload, ...(projectId !== editing.projectId ? { projectId } : {}) });
-    } else create.mutate(payload);
+      return;
+    }
+    const cityProblem = newLeadCityError(draft.city, canChooseNoCity);
+    if (cityProblem) { toast.error(cityProblem); return; }
+    create.mutate({ ...payload, projectId: leadCityToProjectId(draft.city) });
   }
   function openContact(ids: number[]) {
     setContactIds(ids);
@@ -334,6 +359,8 @@ function LeadsTab() {
   // Pontuação (critérios explícitos, calculada no servidor) das leads mostradas.
   const { user } = useAuth();
   const canEditLeads = !!user && can(user as any, "leads_extras", "edit");
+  // "Sem cidade" no Novo lead: só quem vê todas as cidades (o servidor diz o mesmo).
+  const canChooseNoCity = !!user && scopeFor(user as any, "leads_extras") === "national";
   const scoreIds = useMemo(() => shown.slice(0, 200).map((l) => l.id), [shown]);
   const scores = trpc.aiOps.leads.scores.useQuery({ leadIds: scoreIds }, { enabled: scoreIds.length > 0, staleTime: 60_000, retry: false });
   const scoreById = useMemo(() => new Map(((scores.data ?? []) as LeadScoreRow[]).map((r) => [r.leadId, r])), [scores.data]);
@@ -556,6 +583,13 @@ function LeadsTab() {
           <span className="text-xs text-amber-900 dark:text-amber-200">
             Com «Lembretes das leads de extras» ligado (Definições → Automações), os contactados sem resposta recebem 1 lembrete automático (máx. {LEAD_SLA.maxSends} envios por lead).
           </span>
+        </div>
+      )}
+
+      {focusLeadId != null && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+          <span>A mostrar só o lead #{focusLeadId} (vindo da tarefa da candidatura){list.isSuccess && shown.length === 0 ? " — não está nesta lista (arquivado ou noutra cidade?)" : ""}.</span>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clearFocusLead}><X className="h-3.5 w-3.5 mr-1" />Ver todos</Button>
         </div>
       )}
 
@@ -887,7 +921,7 @@ function LeadsTab() {
               <UserPlus className="h-5 w-5 text-primary" /> {editing ? "Editar lead" : "Novo lead"}
             </DialogTitle>
             <DialogDescription>
-              Nome obrigatório; telemóvel ou email, pelo menos um. Sem telemóvel válido não recebe WhatsApp.
+              {editing ? "Nome obrigatório" : "Nome e cidade obrigatórios"}; telemóvel ou email, pelo menos um. Sem telemóvel válido não recebe WhatsApp.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -905,6 +939,24 @@ function LeadsTab() {
                 <Input value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="nome@exemplo.pt" inputMode="email" />
               </div>
             </div>
+            {!editing && (
+              <div className="space-y-1">
+                <Label>Cidade *</Label>
+                <Select value={draft.city} onValueChange={(v) => setDraft({ ...draft, city: v })}>
+                  <SelectTrigger className={!draft.city ? "border-amber-400" : undefined} aria-label="Cidade do lead">
+                    <SelectValue placeholder={projects.isLoading ? "A carregar cidades…" : "Escolher cidade..."} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {cityProjects.map((p: any) => (
+                      <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                    ))}
+                    {/* Sem cidade = visível a todas as cidades — só para quem vê todas */}
+                    {canChooseNoCity && <SelectItem value={LEAD_NO_CITY}>Sem cidade (todas)</SelectItem>}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">A cidade em que o extra vai trabalhar: passa para a ficha ao converter.</p>
+              </div>
+            )}
             {editing && (
               <div className="space-y-1">
                 <Label>Cidade</Label>

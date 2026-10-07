@@ -35,13 +35,16 @@ import {
   COST_CENTRE_ALL_HINT,
   COST_CENTRE_ALL_LABEL,
   canEditTasks,
+  canGenerateChecklists,
   costCentreTriggerLabel,
   isTaskOverdue,
   taskSourceLink,
   type TaskSourceModule,
   type TaskStatus,
 } from "@shared/taskRules";
+import { TASK_SEARCH_MAX, activeTaskFilterCount, clearTaskFilters, patchTaskFilters, taskFiltersForServer } from "@shared/taskFilters";
 import { TaskTemplatesPanel } from "@/components/TaskTemplatesPanel";
+import { BookingStatusChip, TaskActiveFilters, TaskFiltersButton, useTaskFilters } from "@/components/tasks/TaskFilters";
 
 const LEVEL_LABEL: Record<string, string> = {
   group: "Grupo", city: "Cidade", brand: "Marca", project: "Projeto",
@@ -104,6 +107,8 @@ type Task = {
   dueDate: string | null; dueHasTime: number; completedAt: string | null;
   createdAt: string; updatedAt: string;
   sourceModule: string | null; sourceId: number | null; sourceKey: string | null;
+  /** 0545: reserva ligada (serviços) e o seu estado na Multipark. */
+  bookingRef: string | null; bookingStatus: string | null;
   commentsCount: number;
 };
 function normalizeTask(t: any): Task {
@@ -114,6 +119,8 @@ function normalizeTask(t: any): Task {
     status: t.taskStatus ?? t.status ?? "todo",
     priority: t.taskPriority ?? t.priority ?? "medium",
     dueHasTime: Number(t.dueHasTime ?? 0),
+    bookingRef: t.bookingRef ?? null,
+    bookingStatus: t.bookingStatus ?? null,
     commentsCount: Number(t.commentsCount ?? 0),
   } as Task;
 }
@@ -163,7 +170,9 @@ function SourceChip({ t }: { t: Task }) {
       {label}{t.sourceId && t.sourceModule !== "template" && t.sourceModule !== "availability" ? ` #${t.sourceId}` : ""}
     </Badge>
   );
-  return href ? <Link href={href} onClick={(e) => e.stopPropagation()}>{chip}</Link> : chip;
+  const linked = href ? <Link href={href} onClick={(e) => e.stopPropagation()}>{chip}</Link> : chip;
+  // Tarefa de uma reserva: o estado da reserva (como na Multipark) ao lado da origem.
+  return t.bookingRef ? <>{linked}<BookingStatusChip status={t.bookingStatus} /></> : linked;
 }
 
 type ViewMode = "mine" | "kanban" | "list" | "templates";
@@ -176,14 +185,26 @@ export default function TasksPage() {
   const canEdit = !!user && canEditTasks(user as any);
   const isAdmin = !!user && ["super_admin", "admin"].includes(user.role);
   const canTemplates = !!user && can(user as any, "tarefas", "manage");
+  // "Gerar hoje": o MESMO predicado do servidor (antes: só admin pelo papel).
+  const canGenerate = !!user && canGenerateChecklists(user as any);
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => (user && canEditTasks(user as any) ? "kanban" : "mine"));
   // O utilizador pode chegar depois do 1.º render — extras ficam em "As minhas".
   useEffect(() => { if (user && !canEdit && viewMode !== "mine") setViewMode("mine"); }, [user, canEdit, viewMode]);
 
-  const [filterProject, setFilterProject] = useState<string>("all");
-  // ?q= (pesquisa global → "ver todos") pré-preenche a pesquisa.
-  const [searchTerm, setSearchTerm] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
+  // Filtros (shared/taskFilters.ts): no servidor, combináveis, guardados por
+  // utilizador neste aparelho. ?q= (pesquisa global → "ver todos") pré-preenche a pesquisa.
+  const [initialQ] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, TASK_SEARCH_MAX));
+  const [filters, setFilters] = useTaskFilters(user?.id, initialQ || undefined);
+  const [searchInput, setSearchInput] = useState(filters.q);
+  useEffect(() => { setSearchInput(filters.q); }, [filters.q]);
+  // A pesquisa vai ao servidor 300 ms depois de parar de escrever.
+  useEffect(() => {
+    if (searchInput === filters.q) return;
+    const t = setTimeout(() => setFilters(patchTaskFilters(filters, { q: searchInput })), 300);
+    return () => clearTimeout(t);
+  }, [searchInput, filters, setFilters]);
+  const filterProject = canEdit && filters.projectId != null ? String(filters.projectId) : "all";
   const [showOld, setShowOld] = useState(false);
   const [focusId] = useState<number | null>(() => {
     const n = Number(new URLSearchParams(window.location.search).get("focus"));
@@ -191,17 +212,32 @@ export default function TasksPage() {
   });
   const [detailId, setDetailId] = useState<number | null>(focusId);
 
-  const listInput = {
-    projectId: filterProject !== "all" ? parseInt(filterProject) : undefined,
-    mine: viewMode === "mine" ? true : undefined,
+  const mine = viewMode === "mine";
+  const serverFilters = taskFiltersForServer(canEdit ? filters : { ...filters, projectId: null }, { mine });
+  const baseInput = {
+    ...serverFilters,
+    mine: mine ? true : undefined,
     showOld: showOld || undefined,
-    focusId: focusId ?? undefined,
   };
-  const listQ = trpc.tasks.list.useQuery(listInput, { enabled: viewMode !== "templates" });
+  const listInput = { ...baseInput, focusId: focusId ?? undefined };
+  const listQ = trpc.tasks.list.useQuery(listInput, { enabled: viewMode !== "templates", placeholderData: (p) => p });
+  const facetsQ = trpc.tasks.facets.useQuery(baseInput, { enabled: viewMode !== "templates" && !!user, placeholderData: (p) => p, retry: false });
   const rawTasks = listQ.data ?? [];
   const isLoading = listQ.isLoading;
   const truncated = rawTasks.length >= TASK_LIST_LIMIT;
   const { data: projects = [] } = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
+  // Responsáveis para o filtro (quem edita, fora de "As minhas"), no centro de custos escolhido.
+  const filterPeopleQ = trpc.tasks.assignable.useQuery(
+    { projectId: filters.projectId },
+    { enabled: canEdit && !mine && viewMode !== "templates", staleTime: 5 * 60_000 },
+  );
+  const hasFilters = activeTaskFilterCount(canEdit ? filters : { ...filters, projectId: null }, { ignoreAssignee: mine }) > 0;
+  const filterProps = {
+    filters: canEdit ? filters : { ...filters, projectId: null }, onChange: setFilters, counts: facetsQ.data?.counts, countsLoading: facetsQ.isFetching,
+    resultCount: rawTasks.length, mine,
+    assignees: canEdit && !mine ? ((filterPeopleQ.data ?? []) as Array<{ id: number; fullName: string }>) : undefined,
+    projectName: (id: number) => (projects as any[]).find((p: any) => p.id === id)?.name as string | undefined,
+  };
 
   // ?new=1 (atalho "Nova tarefa" da pesquisa global) abre logo o formulário.
   const [showCreate, setShowCreate] = useState(() => canEdit && new URLSearchParams(window.location.search).get("new") === "1");
@@ -282,15 +318,8 @@ export default function TasksPage() {
   }
 
   const allTasks = useMemo(() => (rawTasks as any[]).map(normalizeTask), [rawTasks]);
-  const filteredTasks = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase();
-    if (!q) return allTasks;
-    return allTasks.filter(x =>
-      x.title.toLowerCase().includes(q) ||
-      (x.description ?? "").toLowerCase().includes(q) ||
-      x.assignees.some(a => a.fullName.toLowerCase().includes(q)),
-    );
-  }, [allTasks, searchTerm]);
+  // Os filtros (pesquisa incluída) já vêm aplicados pelo servidor.
+  const filteredTasks = allTasks;
 
   const grouped = useMemo(() => {
     const map: Record<string, Task[]> = {};
@@ -532,10 +561,11 @@ export default function TasksPage() {
             <>
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Pesquisar tarefa..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-8 h-9 w-48 sm:w-56" />
+                <Input placeholder="Pesquisar tarefa, nº ou pessoa..." value={searchInput} maxLength={TASK_SEARCH_MAX} onChange={(e) => setSearchInput(e.target.value)} className="pl-8 h-9 w-48 sm:w-56" aria-label="Pesquisar tarefas" />
               </div>
+              <TaskFiltersButton {...filterProps} />
               {canEdit && (
-                <Select value={filterProject} onValueChange={setFilterProject}>
+                <Select value={filterProject} onValueChange={(v) => setFilters(patchTaskFilters(filters, { projectId: v === "all" ? null : Number(v) }))}>
                   <SelectTrigger
                     className="w-full min-w-0 sm:w-56"
                     aria-label="Centro de custos"
@@ -589,8 +619,9 @@ export default function TasksPage() {
           projectId={filterProject !== "all" ? parseInt(filterProject) : null} onCreated={invalidate} />
       )}
 
-      {viewMode === "templates" && canTemplates && <TaskTemplatesPanel projects={projects as any[]} canGenerate={isAdmin} />}
+      {viewMode === "templates" && canTemplates && <TaskTemplatesPanel projects={projects as any[]} canGenerate={canGenerate} />}
 
+      {viewMode !== "templates" && <TaskActiveFilters {...filterProps} />}
       {viewMode !== "templates" && listError}
       {viewMode !== "templates" && truncated && (
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
@@ -626,7 +657,11 @@ export default function TasksPage() {
       ) : (
         <div className="space-y-3 max-w-2xl">
           {myOpen.length === 0 && (
-            <Card><CardContent className="py-10 text-center text-muted-foreground"><CheckCircle2 className="h-10 w-10 mx-auto mb-2 text-emerald-500/60" />Sem tarefas por fazer.</CardContent></Card>
+            <Card><CardContent className="py-10 text-center text-muted-foreground">
+              <CheckCircle2 className="h-10 w-10 mx-auto mb-2 text-emerald-500/60" />
+              {hasFilters ? "Nenhuma tarefa por fazer com estes filtros." : "Sem tarefas por fazer."}
+              {hasFilters && <div><Button variant="link" size="sm" onClick={() => setFilters(clearTaskFilters())}>Limpar filtros</Button></div>}
+            </CardContent></Card>
           )}
           {myOpen.map((t) => <MyTaskCard key={t.id} task={t} />)}
           {myDone.length > 0 && (
@@ -676,7 +711,8 @@ export default function TasksPage() {
             ) : filteredTasks.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <ListTodo className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                <p className="text-muted-foreground font-medium">Sem tarefas</p>
+                <p className="text-muted-foreground font-medium">{hasFilters ? "Nenhuma tarefa com estes filtros" : "Sem tarefas"}</p>
+                {hasFilters && <Button variant="link" size="sm" onClick={() => setFilters(clearTaskFilters())}>Limpar filtros</Button>}
               </div>
             ) : (
               <div className="overflow-x-auto">
