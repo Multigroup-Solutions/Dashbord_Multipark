@@ -22,8 +22,8 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { ENV } from "./_core/env";
 import {
-  CENTRAL_SUGAR_FLAG, callContactRef, flattenNameValueList, normalizeCentralUsername, parseContactRef, parseSugarCall, redactForLog,
-  sugarSearchPhone, type CentralCall,
+  CENTRAL_SUGAR_FLAG, callContactRef, flattenNameValueList, normalizeCentralUsername, parseContactRef, parseSugarCall, phoneFromSearchNote,
+  redactForLog, searchNote, sugarSearchPhone, type CentralCall,
 } from "../shared/centralSugar";
 import { phoneKey } from "../shared/crmIdentity";
 
@@ -31,6 +31,8 @@ const ACCESS_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const FAIL_WINDOW_MS = 10 * 60 * 1000;
 const FAIL_MAX = 10;
+/** 39e: até quanto tempo depois da pesquisa a chamada ainda vai buscar o número a ela. */
+const SEARCH_PHONE_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -130,6 +132,11 @@ async function saveCall(acc: Account, call: CentralCall, source: "sugar_v10" | "
   const contactRef = raw && typeof raw === "object" ? callContactRef(raw as Record<string, unknown>) : null;
   const ref = parseContactRef(contactRef);
   if (!call.phone && ref?.kind === "tel") call = { ...call, phone: `+${ref.id}` };
+  // 39e: a consola manda só o contacto (contact_id "emp-1"); o número é o da última pesquisa desta conta que o deu
+  if (!call.phone && ref && contactRef) {
+    const p = await phoneFromLastSearch(acc.id, contactRef).catch(() => null);
+    if (p) call = { ...call, phone: p };
+  }
   if (externalId) {
     const ex = rowsOf(await db.execute(sql`SELECT id FROM central_calls WHERE externalId = ${externalId} AND accountId = ${acc.id} LIMIT 1`))[0];
     if (ex) {
@@ -146,6 +153,17 @@ async function saveCall(acc: Account, call: CentralCall, source: "sugar_v10" | "
       VALUES (${id}, ${acc.id}, ${acc.userId}, ${call.direction}, ${call.held ? 1 : 0}, ${utc(call.startedAtMs)}, ${call.durationS}, ${call.phone},
               ${call.subject}, ${call.description}, ${contactRef}, ${source}, ${rawJson}, ${utc(Date.now())})`);
   return id;
+}
+
+/** 39e: o número que a consola procurou e que deu este contacto (última pesquisa da conta, últimas 6 h). */
+async function phoneFromLastSearch(accountId: number, ref: string): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const row = rowsOf(await db.execute(sql`SELECT note FROM central_requests
+      WHERE accountId = ${accountId} AND at >= ${utc(Date.now() - SEARCH_PHONE_WINDOW_MS)} AND note LIKE ${`pesquisa % → ${ref} %`}
+      ORDER BY id DESC LIMIT 1`))[0];
+  const raw = row ? phoneFromSearchNote(row.note, ref) : null;
+  return raw ? phoneKey(raw) || raw : null;
 }
 
 // ─── 39d: quem está a ligar ─────────────────────────────────────────────────
@@ -406,7 +424,7 @@ export function createCentralSugarRouter(): Router {
   const search = async (req: Authed, res: Response, module: string) => {
     const phone = sugarSearchPhone({ ...(req.query as object), ...((req.body ?? {}) as object) });
     const found = phone ? await lookupCaller(phone) : null;
-    await logRequest(req, 200, req.centralAccount!.id, found ? `pesquisa ${phone} → ${found.id} ${found.name}` : `pesquisa sem número (resposta vazia)`);
+    await logRequest(req, 200, req.centralAccount!.id, found && phone ? searchNote(phone, found.id, found.name) : `pesquisa sem número (resposta vazia)`);
     const mod = module.toLowerCase() === "accounts" ? "Accounts" : module.toLowerCase() === "leads" ? "Leads" : "Contacts";
     res.json({ next_offset: -1, records: found ? [sugarContact(found, mod)] : [] });
   };

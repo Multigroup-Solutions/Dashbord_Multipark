@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm";
 import { protectedProcedure, router } from "./_core/trpc";
 import { getDb, logActivity } from "./db";
 import { generateCentralSecret, hashCentralSecret } from "./centralSugar";
-import { CENTRAL_SUGAR_BASE_PATH, CENTRAL_SUGAR_FLAG, normalizeCentralUsername } from "../shared/centralSugar";
+import { CENTRAL_SUGAR_BASE_PATH, CENTRAL_SUGAR_FLAG, normalizeCentralUsername, parseContactRef } from "../shared/centralSugar";
 import { ENV } from "./_core/env";
 
 const superOnly = protectedProcedure.use(({ ctx, next }) => {
@@ -28,6 +28,29 @@ async function dbOrThrow() {
 const utc = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 const iso = (v: unknown) => (v ? `${String(v).replace(" ", "T").slice(0, 19)}Z` : null);
 
+type Db = Awaited<ReturnType<typeof dbOrThrow>>;
+interface CallContact { name: string; kind: "Equipa" | "Cliente" | "Contacto" | "Sem ficha"; href: string | null }
+/** 39e: com quem foi cada chamada (ficha do RH, cliente ou contacto do CRM), lido por lotes. */
+async function callContacts(db: Db, refs: Array<string | null>): Promise<Map<string, CallContact>> {
+  const out = new Map<string, CallContact>();
+  const ids = { emp: new Set<number>(), crm: new Set<number>(), ct: new Set<number>() };
+  for (const r of refs) {
+    const p = parseContactRef(r);
+    if (!p) continue;
+    if (p.kind === "tel") out.set(String(r), { name: `+${p.id}`, kind: "Sem ficha", href: null });
+    else ids[p.kind].add(Number(p.id));
+  }
+  const list = (s: Set<number>) => sql.join([...s].map((n) => sql`${n}`), sql`, `);
+  const read = async (q: ReturnType<typeof sql>) => rowsOf(await db.execute(q).catch(() => [[]]));
+  if (ids.emp.size) for (const e of await read(sql`SELECT id, fullName FROM employees WHERE id IN (${list(ids.emp)})`))
+    out.set(`emp-${e.id}`, { name: String(e.fullName ?? `Ficha #${e.id}`), kind: "Equipa", href: "/rh" });
+  if (ids.crm.size) for (const c of await read(sql`SELECT id, displayName, firstName, lastName FROM crm_clients WHERE id IN (${list(ids.crm)})`))
+    out.set(`crm-${c.id}`, { name: String(c.displayName || `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || `Cliente #${c.id}`), kind: "Cliente", href: `/clientes/${c.id}` });
+  if (ids.ct.size) for (const c of await read(sql`SELECT id, name FROM crm_contacts WHERE id IN (${list(ids.ct)})`))
+    out.set(`ct-${c.id}`, { name: String(c.name ?? `Contacto #${c.id}`), kind: "Contacto", href: "/clientes" });
+  return out;
+}
+
 export const centralRouter = router({
   status: superOnly.query(async () => {
     const db = await dbOrThrow();
@@ -36,8 +59,9 @@ export const centralRouter = router({
     const enabled = isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
     const accounts = rowsOf(await db.execute(sql`SELECT a.id, a.username, a.label, a.userId, u.name AS userName, a.createdAt, a.lastUsedAt, a.revokedAt
         FROM central_accounts a LEFT JOIN users u ON u.id = a.userId ORDER BY a.revokedAt IS NOT NULL, a.username LIMIT 200`));
-    const calls = rowsOf(await db.execute(sql`SELECT c.id, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.subject, c.source, u.name AS userName
+    const calls = rowsOf(await db.execute(sql`SELECT c.id, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.subject, c.contactRef, c.source, u.name AS userName
         FROM central_calls c LEFT JOIN users u ON u.id = c.userId ORDER BY c.startedAt DESC LIMIT 30`));
+    const contacts = await callContacts(db, calls.map((c) => (c.contactRef ? String(c.contactRef) : null)));
     const requests = rowsOf(await db.execute(sql`SELECT id, at, method, path, status, accountId, note, bodyJson FROM central_requests ORDER BY id DESC LIMIT 40`));
     return {
       enabled, hasSecret: !!ENV.cookieSecret, basePath: CENTRAL_SUGAR_BASE_PATH,
@@ -45,7 +69,8 @@ export const centralRouter = router({
         userName: a.userName ? String(a.userName) : null, createdAt: iso(a.createdAt), lastUsedAt: iso(a.lastUsedAt), revokedAt: iso(a.revokedAt) })),
       calls: calls.map((c) => ({ id: Number(c.id), direction: c.direction === "out" ? "out" as const : "in" as const, held: Number(c.held) === 1, startedAt: iso(c.startedAt),
         durationS: c.durationS == null ? null : Number(c.durationS), phone: c.phone ? String(c.phone) : null, subject: c.subject ? String(c.subject) : null,
-        source: String(c.source), userName: c.userName ? String(c.userName) : null })),
+        source: String(c.source), userName: c.userName ? String(c.userName) : null,
+        contact: c.contactRef ? contacts.get(String(c.contactRef)) ?? null : null })),
       requests: requests.map((q) => ({ id: Number(q.id), at: iso(q.at), method: String(q.method), path: String(q.path), status: Number(q.status),
         accountId: q.accountId == null ? null : Number(q.accountId), note: q.note ? String(q.note) : null, body: q.bodyJson ? String(q.bodyJson) : null })),
     };
