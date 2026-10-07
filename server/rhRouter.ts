@@ -1381,13 +1381,39 @@ export const rhRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "rh", "manage");
         const report = await detectExtraDiaNoShows(input.date);
-        await logActivity({ userId: ctx.user.id, action: "process_noshows", entity: "extras_dia", details: `${input.date}: ${report.created} possíveis faltas` });
+        await logActivity({ userId: ctx.user.id, action: "process_noshows", entity: "extras_dia", details: `${input.date}: ${report.created} possíveis faltas (fora: ${report.skipped.proposed} propostos, ${report.skipped.sent_home} mandados para casa, ${report.skipped.multipark} com movimentos)` });
         return report;
       }),
+    // 41b: só as das cidades de quem vê, com o total real
     pending: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "rh", "edit");
       return listPendingPenalties();
     }),
+    /**
+     * 41b: "marcar falta a todos" / "libertar todos" — a mesma regra de cada
+     * uma (supervisor+, quem propôs não confirma, só da cidade); as que não
+     * passam ficam por validar e vêm contadas.
+     */
+    reviewMany: protectedProcedure
+      .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(200), decision: z.enum(["confirmed", "dismissed"]), note: z.string().max(200).optional() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "edit");
+        let done = 0, failed = 0, blocked = 0;
+        let firstError: string | null = null;
+        for (const id of Array.from(new Set(input.ids))) {
+          try {
+            const r = await reviewPenalty(id, input.decision, ctx.user, input.note ?? null);
+            done++;
+            if (r.blocked) blocked++;
+          } catch (err: any) {
+            failed++;
+            firstError = firstError ?? String(err?.message ?? err);
+          }
+        }
+        await logActivity({ userId: ctx.user.id, action: input.decision === "confirmed" ? "confirm_penalty" : "dismiss_penalty", entity: "employee_penalty",
+          details: `Em massa: ${done} ${input.decision === "confirmed" ? "faltas confirmadas" : "libertadas"}${failed ? ` · ${failed} não deu` : ""}${blocked ? ` · ${blocked} com acesso bloqueado` : ""}${input.note ? ` — ${input.note}` : ""} · ids ${input.ids.slice(0, 60).join(",")}`.slice(0, 1000) });
+        return { done, failed, blocked, firstError };
+      }),
     review: protectedProcedure
       .input(z.object({ id: z.number(), decision: z.enum(["confirmed", "dismissed"]), note: z.string().max(200).optional() }))
       .mutation(async ({ ctx, input }) => {

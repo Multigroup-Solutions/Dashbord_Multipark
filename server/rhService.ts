@@ -143,28 +143,78 @@ export function noShowWindow(dateStr: string, startHour: number, endHour?: numbe
 }
 
 /**
+ * 41b: o que NÃO é uma possível falta. PURA.
+ *  - turno só proposto (escala automática por confirmar) — ninguém foi chamado;
+ *  - mandado para casa (sentHomeHour) — esteve lá;
+ *  - picou o ponto no turno;
+ *  - mexeu em carros na Multipark nesse dia (trabalhou sem picar o ponto).
+ */
+export type NoShowSkip = "proposed" | "sent_home" | "check_in" | "multipark";
+export function noShowSkipReason(r: { status?: string | null; sentHomeHour?: number | null; hasCheckIn: boolean; multiparkMoves: number }): NoShowSkip | null {
+  if (r.status != null && r.status !== "confirmed") return "proposed";
+  if (r.sentHomeHour != null) return "sent_home";
+  if (r.hasCheckIn) return "check_in";
+  if (r.multiparkMoves > 0) return "multipark";
+  return null;
+}
+
+export interface NoShowReport { scanned: number; created: number; alreadyPending: number; skipped: Record<NoShowSkip, number>; multiparkRead: boolean }
+
+/**
  * Extras escalados num dia sem check-in dentro da janela do turno → penalização PENDENTE
  * (não conta pontos, não bloqueia). Idempotente (UNIQUE employeeId+reason+relatedId).
+ * 41b: fora os turnos só propostos, os mandados para casa e quem trabalhou na
+ * Multipark nesse dia operacional (movimentos dos agentes da ficha, ao vivo).
  */
-export async function detectExtraDiaNoShows(dateStr: string): Promise<{ scanned: number; created: number; alreadyPending: number }> {
+export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowReport> {
+  const skipped: Record<NoShowSkip, number> = { proposed: 0, sent_home: 0, check_in: 0, multipark: 0 };
   const db = await getDb();
-  if (!db) return { scanned: 0, created: 0, alreadyPending: 0 };
-  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city })
+  if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false };
+  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city, status: extrasDiaAssignments.status, sentHomeHour: extrasDiaAssignments.sentHomeHour })
     .from(extrasDiaAssignments)
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), eq(extrasDiaAssignments.isTeamLeader, 0), isNotNull(extrasDiaAssignments.employeeId)));
-  let created = 0, alreadyPending = 0;
+  const candidates: typeof rows = [];
   for (const r of rows) {
     if (r.employeeId == null) continue;
+    const early = noShowSkipReason({ status: r.status, sentHomeHour: r.sentHomeHour, hasCheckIn: false, multiparkMoves: 0 });
+    if (early) { skipped[early]++; continue; }
     // check-in dentro da janela DESTE turno (antes: 00h–24h do dia, o que dava
     // falta falsa nos turnos da madrugada — startHour 24–26)
     const { from, to } = noShowWindow(dateStr, Number(r.startHour), r.endHour == null ? null : Number(r.endHour));
     const [ci] = await db.select({ id: timeRecords.id }).from(timeRecords)
       .where(and(eq(timeRecords.employeeId, r.employeeId), eq(timeRecords.type, "check_in"), gte(timeRecords.recordedAt, toMysqlDateTime(from)), lte(timeRecords.recordedAt, toMysqlDateTime(to)))).limit(1);
-    if (ci) continue;
+    if (ci) { skipped.check_in++; continue; }
+    candidates.push(r);
+  }
+  // Movimentos na Multipark nesse dia operacional (só leitura). Sem BD → como antes, com nota.
+  const movesByEmployee = new Map<number, number>();
+  let multiparkRead = candidates.length === 0;
+  if (candidates.length) {
+    try {
+      const { agentIdsOfEmployee } = await import("./personIdentity");
+      const agentsOf = new Map<number, string[]>();
+      for (const id of new Set(candidates.map((c) => Number(c.employeeId)))) agentsOf.set(id, (await agentIdsOfEmployee(id)).agentUserIds);
+      const allIds = Array.from(new Set(Array.from(agentsOf.values()).flat()));
+      if (!allIds.length) multiparkRead = true;
+      else {
+        const { getAgentMovementSummaries } = await import("./multiparkDb/movements");
+        const live = await getAgentMovementSummaries({ startDay: dateStr, endDay: dateStr, byDay: false, userIds: allIds });
+        if (live.available) {
+          multiparkRead = true;
+          const byAgent = new Map(live.data.map((s) => [s.agentUserId, s.total]));
+          for (const [emp, ids] of agentsOf) movesByEmployee.set(emp, ids.reduce((n, id) => n + (byAgent.get(id) ?? 0), 0));
+        }
+      }
+    } catch { /* sem identidade/Multipark: fica como antes */ }
+  }
+  let created = 0, alreadyPending = 0;
+  for (const r of candidates) {
+    if (r.employeeId == null) continue;
+    if (noShowSkipReason({ status: r.status, sentHomeHour: r.sentHomeHour, hasCheckIn: false, multiparkMoves: movesByEmployee.get(r.employeeId) ?? 0 })) { skipped.multipark++; continue; }
     try {
       await db.insert(employeePenalties).values({
         employeeId: r.employeeId, reason: "no_show_extra_dia", severity: "penalty", points: 1, relatedId: r.id, status: "pending",
-        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno; confirmar com a operação`,
+        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
       });
       created++;
     } catch (err: any) {
@@ -172,15 +222,23 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<{ scanned:
       throw err;
     }
   }
-  return { scanned: rows.length, created, alreadyPending };
+  return { scanned: rows.length, created, alreadyPending, skipped, multiparkRead };
 }
 
-export async function listPendingPenalties(limit = 100) {
+/**
+ * Possíveis faltas por validar, das cidades de quem vê (41b), com o TOTAL real
+ * (antes o "(N)" parava nos 100 da lista).
+ */
+export async function listPendingPenalties(limit = 200) {
   const db = await getDb();
-  if (!db) return [];
-  return db.select({ penalty: employeePenalties, employee: { id: employees.id, fullName: employees.fullName, phone: employees.phone, projectId: employees.projectId } })
+  if (!db) return { items: [], total: 0 };
+  const { projectScope } = await import("./cityScope");
+  const where = and(eq(employeePenalties.status, "pending"), projectScope(employees.projectId));
+  const [agg] = await db.select({ n: sql<number>`COUNT(*)` }).from(employeePenalties).leftJoin(employees, eq(employees.id, employeePenalties.employeeId)).where(where);
+  const items = await db.select({ penalty: employeePenalties, employee: { id: employees.id, fullName: employees.fullName, phone: employees.phone, projectId: employees.projectId } })
     .from(employeePenalties).leftJoin(employees, eq(employees.id, employeePenalties.employeeId))
-    .where(eq(employeePenalties.status, "pending")).orderBy(desc(employeePenalties.createdAt)).limit(limit);
+    .where(where).orderBy(desc(employeePenalties.createdAt)).limit(limit);
+  return { items, total: Number(agg?.n ?? 0) };
 }
 
 /** Pontos ABERTOS e CONFIRMADOS por colaborador (pendentes não contam). */

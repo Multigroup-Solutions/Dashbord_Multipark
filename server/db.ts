@@ -1290,6 +1290,38 @@ export async function checkExtraDocsCompliance(employeeId: number): Promise<{
  *  Devolve uma linha por colaborador activo. Não filtra por projecto
  *  (filtragem em client se necessário).
  */
+/** 41b: o que cada pessoa fez no mês, pela avaliação diária (Multipark + ponto + escala). */
+export interface MonthWorkMetrics {
+  /** ações na Multipark (todas) e as principais */
+  actions: number; recolhas: number; entregas: number; movements: number;
+  /** dias com ações na Multipark */
+  daysWithActions: number;
+  /** horas do ponto e, sem ponto, as da escala */
+  hoursPonto: number; hoursEscala: number;
+}
+
+export async function monthWorkMetrics(employeeIds: number[], year: number, month: number): Promise<Map<number, MonthWorkMetrics>> {
+  const out = new Map<number, MonthWorkMetrics>();
+  const db = await getDb();
+  if (!db || !employeeIds.length) return out;
+  const mm = String(month).padStart(2, "0");
+  const from = `${year}-${mm}-01`, to = `${year}-${mm}-31`;
+  const ids = sql.join(Array.from(new Set(employeeIds)).map((i) => sql`${i}`), sql`, `);
+  const [rows] = await db.execute(sql`SELECT employeeId,
+      SUM(actions) AS actions, SUM(recolhas) AS recolhas, SUM(entregas) AS entregas, SUM(movements + parkingMoves) AS movements,
+      SUM(CASE WHEN actions > 0 THEN 1 ELSE 0 END) AS daysWithActions,
+      SUM(hoursWorked) AS hoursPonto, SUM(CASE WHEN hoursWorked > 0 THEN 0 ELSE scheduledHours END) AS hoursEscala
+    FROM employee_day_metrics WHERE day >= ${from} AND day <= ${to} AND employeeId IN (${ids}) GROUP BY employeeId`) as any;
+  const r2 = (v: unknown) => Math.round((Number(v) || 0) * 100) / 100;
+  for (const r of (rows as any[]) ?? []) {
+    out.set(Number(r.employeeId), {
+      actions: Number(r.actions) || 0, recolhas: Number(r.recolhas) || 0, entregas: Number(r.entregas) || 0, movements: Number(r.movements) || 0,
+      daysWithActions: Number(r.daysWithActions) || 0, hoursPonto: r2(r.hoursPonto), hoursEscala: r2(r.hoursEscala),
+    });
+  }
+  return out;
+}
+
 export async function getRhDashboardSummary(year: number, month: number, monthsLookback: number = 3) {
   const db = await getDb();
   if (!db) return [];
@@ -1316,6 +1348,9 @@ export async function getRhDashboardSummary(year: number, month: number, monthsL
   // Pagamentos CONFIRMADOS (fechos aprovados/pagos) — o que "recebido" deve significar
   const { paidTotalsLookback } = await import("./rhService");
   const paidMap = await paidTotalsLookback(currentPayroll.map((r: any) => r.employeeId), lookback);
+  // 41b: movimentos da Multipark e horas do mês, pela avaliação diária
+  // (employee_day_metrics, recalculada todas as noites — o dia de hoje ainda não entra)
+  const monthMetrics = await monthWorkMetrics(currentPayroll.map((r: any) => Number(r.employeeId)), year, month).catch(() => new Map<number, MonthWorkMetrics>());
 
   // Agrega
   const out: any[] = [];
@@ -1350,6 +1385,7 @@ export async function getRhDashboardSummary(year: number, month: number, monthsL
         totalPayment: row.totalPayment,
         netEstimate: row.netEstimate,
       },
+      work: monthMetrics.get(empId) ?? null,
       history,
       // "Recebido" = APURADO nos meses anteriores (estimativa); pago/aprovado vêm dos fechos
       totalReceivedLookback: Math.round(totalReceived * 100) / 100,
