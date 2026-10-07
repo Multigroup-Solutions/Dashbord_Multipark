@@ -1,6 +1,6 @@
 # Google Maps no GPS/Zello
 
-O mapa em Operações → Zello usa a Maps JavaScript API, com marcadores avançados,
+O mapa em Operações → Actividade Diária → Ao Vivo usa a Maps JavaScript API, com marcadores avançados,
 nomes dos condutores, detalhes do reporte, satélite, Street View, ecrã inteiro,
 trânsito e o botão **Ver todos**. Os dados continuam a vir do Zello a cada 30 segundos.
 A ligação do check-in diário do PDA tem precedência sobre a ligação fixa.
