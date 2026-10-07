@@ -77,44 +77,19 @@ export default function GoogleReviewsPage() {
   // dashboard, ranking nem agentes (isso é da equipa).
   const beyondOwn = seesBeyondOwn(user as any, "criticas");
   const canEdit = can(user as any, "criticas", "edit");
-  // Sincronizar o Gmail = admin com todas as cidades (a mesma regra do servidor).
-  const isAdmin = roleRank(user?.role) >= roleRank("admin");
-  const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery(undefined, { enabled: isAdmin });
-  const canSync = isAdmin && !!cityAccess?.all;
   const [tab, setTab] = useState(() => (beyondOwn ? "dashboard" : "list"));
-  const [showCreate, setShowCreate] = useState(false);
   // ?id=N abre logo a crítica (links a partir da ficha do cliente no CRM).
   const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
-  const [syncResult, setSyncResult] = useState<any>(null);
-  const utils = trpc.useUtils();
-  const syncGmail = trpc.reviews.syncFromGmail.useMutation({
-    onSuccess: (data) => {
-      setSyncResult(data);
-      utils.reviews.list.invalidate();
-      utils.reviews.stats.invalidate();
-      if (!data.configured) toast.info(data.message);
-      else if (data.ok) toast.success(data.message);
-      else toast.warning(data.message);
-    },
-    onError: (err) => toast.error("Erro no sync: " + err.message),
-  });
 
   return (
     <>
       <div className="space-y-6">
-        {/* Jorge, 3 out 2026: a ligação ao Google Business Profile passou para Integrações. */}
+        {/* Jorge, 3 out 2026: a ligação ao Google Business Profile passou para Integrações.
+            Lote 45 (Jorge, 7 out 2026): sem "Sincronizar Gmail" nem "Importar Review" no topo — não faziam nada
+            (as críticas entram sozinhas pela API do Google, pela Windsor e por email). */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <p className="text-muted-foreground">Avaliações do Google e respostas (a IA só prepara; publica sempre uma pessoa)</p>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {canSync && (
-              <Button variant="outline" onClick={() => syncGmail.mutate()} disabled={syncGmail.isPending}>
-                {syncGmail.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Mail className="w-4 h-4 mr-2" />}
-                {syncGmail.isPending ? "A sincronizar..." : "Sincronizar Gmail"}
-              </Button>
-            )}
-            {canEdit && <Button onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-2" /> Importar Review</Button>}
           </div>
         </div>
 
@@ -131,9 +106,7 @@ export default function GoogleReviewsPage() {
         </Tabs>
       </div>
 
-      {showCreate && <CreateReviewDialog onClose={() => setShowCreate(false)} />}
       {selectedId && <ReviewDetailDialog id={selectedId} onClose={() => setSelectedId(null)} />}
-      {syncResult && <GmailSyncResultDialog result={syncResult} onClose={() => setSyncResult(null)} />}
     </>
   );
 }
@@ -478,143 +451,6 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
   );
 }
 
-// ─── CREATE REVIEW DIALOG ─────────────────────────────────────────────────────
-
-function CreateReviewDialog({ onClose }: { onClose: () => void }) {
-  const { data: projs = [] } = trpc.projects.list.useQuery();
-  const createMut = trpc.reviews.create.useMutation();
-  const utils = trpc.useUtils();
-
-  const [form, setForm] = useState({
-    reviewerName: "", reviewerEmail: "", rating: 5,
-    reviewText: "", reviewDate: "", projectId: "", vehiclePlate: "",
-    bookingRef: "",
-  });
-
-  const handleSubmit = async () => {
-    if (!form.reviewerName.trim()) { toast.error("Nome do reviewer obrigatório"); return; }
-    try {
-      const r = await createMut.mutateAsync({
-        reviewerName: form.reviewerName,
-        reviewerEmail: form.reviewerEmail || undefined,
-        rating: form.rating,
-        reviewText: form.reviewText || undefined,
-        reviewDate: form.reviewDate || undefined,
-        projectId: form.projectId ? Number(form.projectId) : undefined,
-        vehiclePlate: form.vehiclePlate || undefined,
-      });
-      utils.reviews.list.invalidate();
-      utils.reviews.stats.invalidate();
-      // O toast diz o que aconteceu de facto (a IA e a reclamação podem falhar).
-      if (form.rating >= 4) {
-        if (r.aiDrafted) toast.success("Review importada, com rascunho de resposta (por aprovar).");
-        else toast.warning("Review importada. O rascunho da IA não saiu: usa \"Gerar com IA\" ou escreve à mão.");
-      } else if (r.complaintId) {
-        utils.complaints.list.invalidate();
-        toast.success(`Review importada e Reclamação #${r.complaintId} aberta.`);
-      } else {
-        toast.warning("Review importada, mas a reclamação não foi criada: abre a crítica e carrega em \"Criar Reclamação\".");
-      }
-      onClose();
-    } catch (e: any) { toast.error(e?.message ? `Erro ao importar: ${e.message}` : "Erro ao importar review"); }
-  };
-
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Importar Avaliação Google</DialogTitle></DialogHeader>
-        <div className="space-y-4">
-          <BookingSearchField
-            accent="violet"
-            hint="Opcional — escolhe a reserva e o nome/email/matrícula são preenchidos automaticamente"
-            onSelect={(b) => {
-              const fullName = [b.clientFirstName, b.clientLastName].filter(Boolean).join(" ");
-              setForm(f => ({
-                ...f,
-                bookingRef: b.externalId || b.bookingNumber || f.bookingRef,
-                reviewerName: f.reviewerName || fullName,
-                reviewerEmail: f.reviewerEmail || b.clientEmail || "",
-                vehiclePlate: f.vehiclePlate || b.licensePlate || "",
-                projectId: f.projectId || (b.projectId ? String(b.projectId) : ""),
-              }));
-            }}
-          />
-          {form.bookingRef && (
-            <div className="p-2 rounded border bg-muted text-xs flex items-center justify-between">
-              <span className="font-mono">Reserva: {form.bookingRef}</span>
-              <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setForm(f => ({ ...f, bookingRef: "" }))}>limpar</button>
-            </div>
-          )}
-          <div>
-            <Label>Nome do Reviewer *</Label>
-            <Input value={form.reviewerName} onChange={e => setForm(f => ({ ...f, reviewerName: e.target.value }))} />
-          </div>
-          <div>
-            <Label>Email (opcional)</Label>
-            <Input type="email" value={form.reviewerEmail} onChange={e => setForm(f => ({ ...f, reviewerEmail: e.target.value }))} />
-          </div>
-          <div>
-            <Label>Classificação *</Label>
-            <div className="flex gap-2 mt-1">
-              {[1, 2, 3, 4, 5].map(r => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => setForm(f => ({ ...f, rating: r }))}
-                  className="p-1 transition-transform hover:scale-110"
-                >
-                  <Star className={`w-8 h-8 ${r <= form.rating ? "fill-amber-400 text-amber-400" : "text-gray-300"}`} />
-                </button>
-              ))}
-            </div>
-            {form.rating >= 4 && (
-              <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                <Bot className="w-3 h-3" /> A IA prepara um rascunho (publica sempre uma pessoa)
-              </p>
-            )}
-            {form.rating <= 3 && (
-              <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" /> Será convertida em reclamação automaticamente
-              </p>
-            )}
-          </div>
-          <div>
-            <Label>Texto da Avaliação</Label>
-            <Textarea value={form.reviewText} onChange={e => setForm(f => ({ ...f, reviewText: e.target.value }))} rows={3} placeholder="O que o cliente escreveu..." />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <Label>Data</Label>
-              <Input type="date" value={form.reviewDate} onChange={e => setForm(f => ({ ...f, reviewDate: e.target.value }))} />
-            </div>
-            <div>
-              <Label>Matrícula</Label>
-              <Input value={form.vehiclePlate} onChange={e => setForm(f => ({ ...f, vehiclePlate: e.target.value }))} placeholder="XX-XX-XX" />
-            </div>
-          </div>
-          <div>
-            <Label>Projeto</Label>
-            <Select value={form.projectId} onValueChange={v => setForm(f => ({ ...f, projectId: v }))}>
-              <SelectTrigger><SelectValue placeholder="Selecionar projeto" /></SelectTrigger>
-              <SelectContent>
-                {projs.map((p: any) => (
-                  <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={createMut.isPending}>
-            {createMut.isPending ? "A processar..." : "Importar Review"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── REVIEW DETAIL DIALOG ─────────────────────────────────────────────────────
 
 function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
@@ -926,57 +762,6 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             </Button>
           )}
           <Button variant="outline" onClick={onClose}>Fechar</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-
-// ─── GMAIL SYNC RESULT DIALOG ────────────────────────────────────────────────
-function GmailSyncResultDialog({ result, onClose }: { result: { ok: boolean; configured: boolean; done: boolean; emailsStored?: number; recordsCreated?: number; errors?: string[]; message: string }; onClose: () => void }) {
-  return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Mail className="w-5 h-5" /> Resultado da Sincronização Gmail
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <p className="text-sm">{result.message}</p>
-          {result.configured && (
-            <div className="grid grid-cols-2 gap-3">
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <div className="text-2xl font-bold text-blue-500">{result.emailsStored ?? 0}</div>
-                  <div className="text-sm text-muted-foreground">Emails novos</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <div className="text-2xl font-bold text-green-500">{result.recordsCreated ?? 0}</div>
-                  <div className="text-sm text-muted-foreground">Registos criados</div>
-                  <div className="text-[11px] text-muted-foreground">críticas, reclamações e perdidos</div>
-                </CardContent>
-              </Card>
-            </div>
-          )}
-          {!!result.errors?.length && (
-            <div>
-              <h4 className="font-medium mb-2 text-red-500">Erros:</h4>
-              <div className="max-h-40 overflow-y-auto space-y-1">
-                {result.errors.map((e: string, i: number) => (
-                  <div key={i} className="text-sm flex items-start gap-2 text-red-500 break-words">
-                    <XCircle className="w-3 h-3 mt-0.5 shrink-0" /> {e}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        <DialogFooter>
-          <Button onClick={onClose}>Fechar</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

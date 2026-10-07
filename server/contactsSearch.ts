@@ -16,7 +16,7 @@ import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
   CONTACT_SEARCH_PAGE, CONTACT_SEARCH_PREVIEW, contactKindsFor, contactRef, emailKey, parseContactQuery, phoneKey, uniqueStrings,
-  type ContactKind, type ParsedContactQuery,
+  type ContactHas, type ContactKind, type ContactSort, type ParsedContactQuery,
 } from "../shared/contacts";
 import { can, grantFor, rolesBelow, type Access, type AccessOverrides } from "../shared/access";
 import { partnerScope, projectScope, scopedProjectIds } from "./cityScope";
@@ -69,7 +69,20 @@ function matchCond(q: ParsedContactQuery, text: SQL[], phones: SQL[], emails: SQ
 
 // ─── Um tipo ────────────────────────────────────────────────────────────────
 
-interface KindQuery { q: ParsedContactQuery; raw: string; offset: number; limit: number; access: Access; viewer: ContactViewer }
+interface KindQuery { q: ParsedContactQuery; raw: string; offset: number; limit: number; access: Access; viewer: ContactViewer; sort?: ContactSort; has?: ContactHas | null }
+
+/** Lote 45: "Com email" / "Com telefone" (sem a coluna no tipo → nenhum). */
+function hasCond(k: KindQuery, email: SQL | null, phone: SQL | null): SQL {
+  if (k.has === "email") return email ? sql`COALESCE(${email}, '') <> ''` : sql`1 = 0`;
+  if (k.has === "phone") return phone ? sql`COALESCE(${phone}, '') <> ''` : sql`1 = 0`;
+  return sql`1 = 1`;
+}
+/** Lote 45: ordem pelo nome (A–Z / Z–A) ou a natural de cada tipo. */
+function orderBy(k: KindQuery, natural: SQL, name: SQL, tie: SQL): SQL {
+  if (k.sort === "name_asc") return sql`${name} ASC, ${tie}`;
+  if (k.sort === "name_desc") return sql`${name} DESC, ${tie}`;
+  return natural;
+}
 
 /** Fichas do CRM (fase 2): nome, emails, telefones, matrículas e n.º de cliente, no âmbito de cidade. */
 async function searchClients(d: Db, k: KindQuery): Promise<ContactItem[]> {
@@ -87,8 +100,8 @@ async function searchClients(d: Db, k: KindQuery): Promise<ContactItem[]> {
   const match = parts.length ? sql`(${sql.join(parts, sql` OR `)})` : sql`1 = 1`;
   const rows = rowsOf(await d.execute(sql`SELECT c.id, c.displayName, c.primaryEmail, c.primaryPhone, c.photoUrl, c.bookings, c.upcoming,
       DATE_FORMAT(c.lastVisit, '%Y-%m-%d') AS lastVisit
-    FROM crm_clients c WHERE c.status = 'active' AND ${match} AND ${clientVisibleSql(sql`c.id`)}
-    ORDER BY c.lastVisit DESC, c.id DESC LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+    FROM crm_clients c WHERE c.status = 'active' AND ${match} AND ${clientVisibleSql(sql`c.id`)} AND ${hasCond(k, sql`c.primaryEmail`, sql`c.primaryPhone`)}
+    ORDER BY ${orderBy(k, sql`c.lastVisit DESC, c.id DESC`, sql`c.displayName`, sql`c.id`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("client", r.id), kind: "client", id: String(r.id), name: s(r.displayName) ?? s(r.primaryEmail) ?? `Cliente n.º ${r.id}`,
     subtitle: `N.º ${r.id} · ${Number(r.bookings)} reserva(s)${r.lastVisit ? ` · última ${r.lastVisit}` : ""}${Number(r.upcoming) ? ` · ${Number(r.upcoming)} futura(s)` : ""}`,
@@ -99,7 +112,8 @@ async function searchClients(d: Db, k: KindQuery): Promise<ContactItem[]> {
 async function searchCrm(d: Db, k: KindQuery) {
   const rows = rowsOf(await d.execute(sql`SELECT c.id, c.kind, c.name, c.email, c.phone, c.phoneE164, c.company FROM crm_contacts c
     WHERE ${projectScope(sql`c.projectId`)} AND ${matchCond(k.q, [sql`c.name`, sql`c.company`], [sql`c.phoneE164`, sql`c.phone`], [sql`c.email`])}
-    ORDER BY c.updatedAt DESC, c.id DESC LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+      AND ${hasCond(k, sql`c.email`, sql`COALESCE(c.phoneE164, c.phone)`)}
+    ORDER BY ${orderBy(k, sql`c.updatedAt DESC, c.id DESC`, sql`c.name`, sql`c.id`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("crm", r.id), kind: "crm", id: String(r.id), name: String(r.name),
     subtitle: [r.kind === "lead" ? "Lead comercial" : "Cliente (CRM)", s(r.company)].filter(Boolean).join(" · "),
@@ -112,7 +126,8 @@ async function searchLeads(d: Db, k: KindQuery) {
   const scope = ids === undefined ? sql`1 = 1` : ids.length ? sql`(l.projectId IS NULL OR l.projectId IN (${inList(ids)}))` : sql`l.projectId IS NULL`;
   const rows = rowsOf(await d.execute(sql`SELECT l.id, l.fullName, l.email, l.phone, l.phoneE164, l.status FROM extra_leads l
     WHERE ${scope} AND ${matchCond(k.q, [sql`l.fullName`], [sql`l.phoneE164`, sql`l.phone`], [sql`l.email`])}
-    ORDER BY l.createdAt DESC, l.id DESC LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+      AND ${hasCond(k, sql`l.email`, sql`COALESCE(l.phoneE164, l.phone)`)}
+    ORDER BY ${orderBy(k, sql`l.createdAt DESC, l.id DESC`, sql`l.fullName`, sql`l.id`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("lead", r.id), kind: "lead", id: String(r.id), name: String(r.fullName), subtitle: `Lead de extra · ${String(r.status)}`,
     email: s(r.email), phone: s(r.phoneE164 ?? r.phone), photoUrl: null,
@@ -122,7 +137,8 @@ async function searchLeads(d: Db, k: KindQuery) {
 async function searchPartners(d: Db, k: KindQuery) {
   const rows = rowsOf(await d.execute(sql`SELECT p.id, p.name, p.contactName, p.contactEmail, p.contactPhone, p.partnerType, p.partnerStatus FROM partnerships p
     WHERE ${partnerScope(sql`p.id`)} AND ${matchCond(k.q, [sql`p.name`, sql`p.contactName`], [sql`p.contactPhone`], [sql`p.contactEmail`])}
-    ORDER BY (p.partnerStatus = 'active') DESC, p.name LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+      AND ${hasCond(k, sql`p.contactEmail`, sql`p.contactPhone`)}
+    ORDER BY ${orderBy(k, sql`(p.partnerStatus = 'active') DESC, p.name`, sql`p.name`, sql`p.id`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("partner", r.id), kind: "partner", id: String(r.id), name: String(r.name),
     subtitle: [s(r.contactName), String(r.partnerStatus) === "active" ? null : "inativo"].filter(Boolean).join(" · ") || null,
@@ -135,7 +151,8 @@ async function searchSuppliers(d: Db, k: KindQuery) {
   const rows = rowsOf(await d.execute(sql`SELECT e.supplier AS name, MAX(e.supplierNif) AS nif, COUNT(*) AS n, MAX(e.expenseDate) AS lastAt FROM expenses e
     WHERE e.supplier IS NOT NULL AND e.supplier <> '' AND e.deletedAt IS NULL AND ${projectScope(sql`e.projectId`)}
       AND ${k.q.text || k.q.digits ? sql`(LOWER(e.supplier) LIKE ${k.q.like}${k.q.digits.length >= 3 ? sql` OR e.supplierNif LIKE ${`%${k.q.digits}%`}` : sql``})` : sql`1 = 1`}
-    GROUP BY e.supplier ORDER BY lastAt DESC LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+      AND ${hasCond(k, null, null)}
+    GROUP BY e.supplier ORDER BY ${orderBy(k, sql`lastAt DESC`, sql`e.supplier`, sql`lastAt DESC`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("supplier", String(r.name)), kind: "supplier", id: String(r.name), name: String(r.name),
     subtitle: `${r.nif ? `NIF ${r.nif} · ` : ""}${Number(r.n)} despesa(s)`, email: null, phone: null, photoUrl: null,
@@ -153,7 +170,8 @@ async function searchEmployees(d: Db, k: KindQuery) {
     LEFT JOIN google_directory_people g ON g.employeeId = e.id AND g.deletedAt IS NULL
     WHERE e.isActive = 1 AND ${projectScope(sql`e.projectId`)} AND ${team}
       AND ${matchCond(k.q, [sql`e.fullName`], [sql`e.phone`], [sql`e.email`])}
-    ORDER BY e.fullName LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+      AND ${hasCond(k, sql`e.email`, sql`e.phone`)}
+    ORDER BY ${orderBy(k, sql`e.fullName`, sql`e.fullName`, sql`e.id`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("employee", r.id), kind: "employee", id: String(r.id), name: String(r.fullName),
     subtitle: s(r.jobTitle) ?? s(r.position), email: s(r.email), phone: s(r.phone), photoUrl: s(r.dirPhoto) ?? s(r.photoUrl),
@@ -163,7 +181,8 @@ async function searchEmployees(d: Db, k: KindQuery) {
 async function searchDirectory(d: Db, k: KindQuery) {
   const rows = rowsOf(await d.execute(sql`SELECT g.id, g.displayName, g.primaryEmail, g.phoneE164, g.phoneRaw, g.jobTitle, g.department, g.photoUrl FROM google_directory_people g
     WHERE g.deletedAt IS NULL AND ${matchCond(k.q, [sql`g.displayName`, sql`g.jobTitle`, sql`g.department`], [sql`g.phoneE164`, sql`g.phoneRaw`], [sql`g.primaryEmail`])}
-    ORDER BY g.displayName LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+      AND ${hasCond(k, sql`g.primaryEmail`, sql`COALESCE(g.phoneE164, g.phoneRaw)`)}
+    ORDER BY ${orderBy(k, sql`g.displayName`, sql`g.displayName`, sql`g.id`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("directory", r.id), kind: "directory", id: String(r.id), name: String(r.displayName),
     subtitle: [s(r.jobTitle), s(r.department)].filter(Boolean).join(" · ") || null, email: s(r.primaryEmail), phone: s(r.phoneE164 ?? r.phoneRaw), photoUrl: s(r.photoUrl),
@@ -173,7 +192,8 @@ async function searchDirectory(d: Db, k: KindQuery) {
 async function searchGoogle(d: Db, k: KindQuery) {
   const rows = rowsOf(await d.execute(sql`SELECT c.id, c.displayName, c.primaryEmail, c.primaryPhone, c.source FROM google_user_contacts c
     WHERE c.userId = ${k.viewer.id} AND ${matchCond(k.q, [sql`c.displayName`, sql`c.emailsJson`], [sql`c.phonesJson`], [sql`c.primaryEmail`])}
-    ORDER BY c.displayName LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
+      AND ${hasCond(k, sql`c.primaryEmail`, sql`c.primaryPhone`)}
+    ORDER BY ${orderBy(k, sql`c.displayName`, sql`c.displayName`, sql`c.id`)} LIMIT ${k.limit + 1} OFFSET ${k.offset}`));
   return rows.map((r): ContactItem => ({
     ref: contactRef("google", r.id), kind: "google", id: String(r.id), name: s(r.displayName) ?? s(r.primaryEmail) ?? s(r.primaryPhone) ?? "(sem nome)",
     subtitle: r.source === "other" ? "Outros contactos" : "Os meus contactos", email: s(r.primaryEmail), phone: s(r.primaryPhone), photoUrl: null,
@@ -190,7 +210,7 @@ export function searchableKinds(viewer: ContactViewer): Array<{ kind: ContactKin
   return contactKindsFor(viewer).filter((k) => k.kind !== "supplier" || k.access === "city" || k.access === "national");
 }
 
-export async function searchContacts(d: Db, viewer: ContactViewer, input: { q?: string | null; kind?: ContactKind | "all"; cursor?: number | null; limit?: number | null }): Promise<{ kinds: ContactKind[]; groups: KindPage[] }> {
+export async function searchContacts(d: Db, viewer: ContactViewer, input: { q?: string | null; kind?: ContactKind | "all"; cursor?: number | null; limit?: number | null; sort?: ContactSort | null; has?: ContactHas | null }): Promise<{ kinds: ContactKind[]; groups: KindPage[] }> {
   const allowed = searchableKinds(viewer);
   if (!allowed.length) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
   const raw = String(input.q ?? "").trim().slice(0, 120);
@@ -206,7 +226,7 @@ export async function searchContacts(d: Db, viewer: ContactViewer, input: { q?: 
   const groups: KindPage[] = [];
   for (const k of want) {
     try {
-      const r = await SEARCHERS[k.kind](d, { q, raw, offset, limit, access: k.access, viewer });
+      const r = await SEARCHERS[k.kind](d, { q, raw, offset, limit, access: k.access, viewer, sort: input.sort ?? "recent", has: input.has ?? null });
       const items = Array.isArray(r) ? r.slice(0, limit) : r.items;
       const hasMore = Array.isArray(r) ? r.length > limit : r.hasMore;
       groups.push({ kind: k.kind, items, hasMore, nextCursor: hasMore ? offset + limit : null });

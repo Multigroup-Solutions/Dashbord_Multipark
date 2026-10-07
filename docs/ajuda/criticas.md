@@ -12,7 +12,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - **Pela API do Google** (perfis ligados em Integrações): ficam no parque escolhido para o perfil e a resposta publica-se daqui.
 - **Pela Windsor** (quando a conta Google não está ligada diretamente): os mesmos perfis e avaliações chegam pela Windsor e entram aqui da mesma maneira (1–3★ → Reclamação). Interruptor **Críticas: importar do Google Business pela Windsor** (Definições → Automações; vem desligado). A 1.ª vez traz até 3 anos; depois os últimos 60 dias.
 - **Por email** (criticas@): o parque vem do título do perfil Google no email. Sem correspondência exata não se adivinha o parque (ver **Parque, marca ou lixo**).
-- **Importar Review** (à mão): 4–5★ ganham um rascunho da IA; 1–3★ abrem logo uma Reclamação. O aviso diz o que aconteceu de facto (se a IA ou a reclamação falharam, diz).
+- Entram **sozinhas** por estes caminhos: no topo já não há "Sincronizar Gmail" nem "Importar Review" (não faziam nada).
 
 **Parque, marca ou lixo** (já não há "Sem parque")
 - Cada crítica fica no **parque** dela.
@@ -55,4 +55,3 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - Condutores e extras **não veem** as Críticas — nem as em que estão envolvidos. Só a partir de team leader.
 - Responder, aprovar, dispensar, converter e importar: team leader e acima, nas suas cidades.
 - **CSV** (leva emails dos clientes): só quem pode exportar.
-- **Sincronizar Gmail**: admin com todas as cidades.

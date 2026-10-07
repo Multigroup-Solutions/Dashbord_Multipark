@@ -252,7 +252,6 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
               <Archive className="w-4 h-4 mr-2" /> {showArchived ? "A ver arquivadas" : "Arquivadas"}
             </Button>
           )}
-          <SyncEmailsButton />
           {canEdit && <Button onClick={onNew}><Plus className="w-4 h-4 mr-2" /> Nova Reclamação</Button>}
         </div>
       </div>
@@ -1934,27 +1933,7 @@ function SendClientEmailButton({
   );
 }
 
-// ─── SYNC EMAILS (manual) ─────────────────────────────────────────────────────
-// Corre já a sincronização do Gmail (a mesma do agendador/push) — isto é o "já".
-function SyncEmailsButton() {
-  const { user } = useAuth();
-  const utils = trpc.useUtils();
-  const syncMut = trpc.admin.runEmailInbound.useMutation({
-    onSuccess: (r: any) => {
-      utils.complaints.invalidate();
-      toast.success(`Emails sincronizados: ${r.stored ?? 0} novos, ${r.created} registo(s) criados${r.errors?.length ? `, ${r.errors.length} erros` : ""}${r.partial ? " — parcial, carregue outra vez para continuar" : ""}`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const role = (user as any)?.role ?? "user";
-  if (!can(user as any, "sincronizacao", "edit")) return null;
-  return (
-    <Button variant="outline" onClick={() => syncMut.mutate()} disabled={syncMut.isPending}>
-      <RefreshCw className={`w-4 h-4 mr-2 ${syncMut.isPending ? "animate-spin" : ""}`} />
-      {syncMut.isPending ? "A sincronizar…" : "Sincronizar emails"}
-    </Button>
-  );
-}
+// Lote 45 (Jorge, 7 out 2026): sem "Sincronizar emails" — os emails para reclamacoes@ já entram sozinhos.
 
 // ─── PICKER DE RESERVA (diálogo Editar) ──────────────────────────────────────
 // Procura AO VIVO na Multipark por matrícula / email / telefone / nome / nº de
