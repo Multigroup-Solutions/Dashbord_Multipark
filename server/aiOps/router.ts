@@ -91,8 +91,10 @@ export const aiOpsRouter = router({
       const { repeatedItemsFor } = await import("./handoverRepeats");
       const r = await repeatedItemsFor(input.city);
       const db = await getDb();
+      const { HANDOVER_WEEK_NARRATIVE_FROM } = await import("./handoverRepeats");
+      // 44e: os resumos de antes da regra "só PDAs e notas" falavam das ocorrências — não se mostram.
       const week = db ? rowsOf(await db.execute(sql`
-        SELECT weekStart, narrative, data FROM ai_weekly_reports WHERE kind = ${`handover:${input.city}`} ORDER BY weekStart DESC LIMIT 1`))[0] : null;
+        SELECT weekStart, narrative, data FROM ai_weekly_reports WHERE kind = ${`handover:${input.city}`} AND weekStart >= ${HANDOVER_WEEK_NARRATIVE_FROM} ORDER BY weekStart DESC LIMIT 1`))[0] : null;
       let weekData: any = null;
       try { weekData = week ? JSON.parse(String(week.data)) : null; } catch { weekData = null; }
       return {

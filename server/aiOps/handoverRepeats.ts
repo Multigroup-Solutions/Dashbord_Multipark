@@ -5,7 +5,18 @@
  */
 import { sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { parseOpenItems, type OpenItem } from "../../shared/shiftHandoverAuto";
+import { isHandoverItem, parseOpenItems, type OpenItem } from "../../shared/shiftHandoverAuto";
+
+/**
+ * 44b/44e (Jorge, 7 out 2026: "tirares estes pendentes todos daqui, que não são
+ * eles que vão tratar"): só contam os pendentes da passagem — PDAs com check-in
+ * e notas do TL. Ocorrências, reclamações, perdidos e entregas gravados em
+ * passagens antigas ficam na BD, mas não se repetem nem entram no resumo.
+ */
+export const handoverOnlyItems = (raw: unknown): OpenItem[] => parseOpenItems(raw as any).filter(isHandoverItem);
+
+/** Resumos semanais gravados antes desta regra falavam das ocorrências: não se mostram. */
+export const HANDOVER_WEEK_NARRATIVE_FROM = "2026-10-05";
 import { HANDOVER_REPEATS_SYSTEM, HANDOVER_WEEKLY_SYSTEM } from "../_core/ai/prompts/ops";
 import { AiCallCap, tryAi } from "./aiCall";
 import { OPS_CITY_LABELS, type OpsCity } from "./cities";
@@ -102,7 +113,7 @@ export async function loadHandoverSnapshots(city: OpsCity, n = 8, untilDay?: str
      WHERE city = ${city} ${untilDay ? sql`AND handoverDate <= ${untilDay}` : sql``}
      ORDER BY handoverDate DESC, FIELD(shift, 'night', 'morning')
      LIMIT ${n}`));
-  return rows.map((r) => ({ date: String(r.handoverDate), shift: String(r.shift), items: parseOpenItems(r.openItems) }));
+  return rows.map((r) => ({ date: String(r.handoverDate), shift: String(r.shift), items: handoverOnlyItems(r.openItems) }));
 }
 
 export async function repeatedItemsFor(city: OpsCity): Promise<{ latest: HandoverSnapshot | null; pending: OpenItem[]; repeated: RepeatedItem[] }> {
@@ -173,7 +184,7 @@ export async function buildHandoverWeek(city: OpsCity, from: string, to: string)
   return aggregateHandoverWeek({
     city, from, to,
     shiftsWithScale: scale.map((r) => ({ date: String(r.assignmentDate), shift: String(r.shift) })),
-    handovers: hs.map((r) => ({ date: String(r.handoverDate), shift: String(r.shift), acked: r.ackAt != null, items: parseOpenItems(r.openItems) })),
+    handovers: hs.map((r) => ({ date: String(r.handoverDate), shift: String(r.shift), acked: r.ackAt != null, items: handoverOnlyItems(r.openItems) })),
     repeated: detectRepeatedItems(snaps),
   });
 }
@@ -182,7 +193,7 @@ export function handoverWeekFacts(d: HandoverWeekData): string[] {
   return [
     `Cidade: ${OPS_CITY_LABELS[d.city]}. Semana ${d.from} a ${d.to}.`,
     `Passagens preenchidas: ${d.filled} de ${d.expectedShifts} turnos com escala; confirmadas ("Recebi"): ${d.acknowledged}.`,
-    `Pendentes resolvidos na semana: ${d.resolvedItems}. Pendentes em aberto na última passagem: ${d.pendingOpen}.`,
+    `Pendentes da passagem (só PDAs com check-in e notas do team leader; ocorrências e reclamações não são da passagem) resolvidos na semana: ${d.resolvedItems}. Em aberto na última passagem: ${d.pendingOpen}.`,
     ...(d.repeated.length ? [`Pendentes que se repetem: ${d.repeated.slice(0, 8).map((r) => `${r.text.slice(0, 120)} (${r.count} passagens)`).join(" | ")}`] : ["Sem pendentes repetidos."]),
   ];
 }

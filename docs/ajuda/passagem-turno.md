@@ -2,7 +2,7 @@
 modulo: passagem_turno
 titulo: Passagem de turno
 rotas: /passagem-turno
-palavras: tipo de lugar, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
+palavras: mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
 ---
 # Passagem de turno
 
@@ -33,7 +33,11 @@ Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
 
 **Estado do parque (ao vivo)**
 Separador com o estado atual dos parques da cidade, lido diretamente da BD da Multipark (só leitura). Não entram os **Parques que a operação não faz** das Definições; o mesmo vale para o resumo da passagem.
-- **Carros no parque por tipo de lugar**: Descoberto, Coberto, Interior e VIP (a cidade já está escolhida em cima). Em cada tipo aparece também quantos estão em cada parque. O tipo é o do lugar onde o carro está; sem lugar, o do produto reservado. **Ver por parque e garagem** abre a divisão antiga.
+- **Carros no parque por tipo de lugar**: Descoberto, Coberto, Interior e VIP (a cidade já está escolhida em cima). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado.
+  - Por baixo do número aparecem as **garagens** onde esses carros estão, em cada parque (ex.: "Airpark: COBERTO 29 · PD 3").
+  - Se a garagem não bate com o tipo, o carro está **mal arrumado** (ex.: um coberto na PD).
+  - **Ver por parque e garagem** abre a divisão antiga.
+- **Pendentes que se arrastam** e **Resumo da semana** contam só os pendentes da passagem: PDAs ainda com check-in e notas do team leader. Ocorrências, reclamações e perdidos não são da passagem e já não aparecem aqui. Os resumos de semanas anteriores, que ainda falavam deles, deixam de se mostrar; o próximo sai na segunda-feira.
 - Os que já passaram a hora de saída.
 - **Operações em curso**: a fazer check-in, em movimento, entrega pendente, à espera das malas, no local de entrega, a fazer check-out.
 - **Próximas entregas e recolhas** (4, 8, 12 ou 24 h) com voo e ETA do voo.
