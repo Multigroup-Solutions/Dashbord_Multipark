@@ -14,7 +14,7 @@
  * do PDA não continuava.
  */
 import crypto from "node:crypto";
-import { safeReturnPath } from "@shared/loginReturn";
+import { loginUrlForDevice, loginUrlWithReturn, safeReturnPath } from "@shared/loginReturn";
 
 export const OAUTH_STATE_MAX_MS = 10 * 60 * 1000; // 10 minutos para concluir o login
 
@@ -22,13 +22,17 @@ function sign(secret: string, payload: string): string {
   return crypto.createHmac("sha256", secret).update(`oauth-state.${payload}`).digest("base64url");
 }
 
-/** Cria o state: `<payload base64url>.<assinatura>`. */
-export function createOAuthState(secret: string, opts: { returnTo?: string | null; now?: number } = {}): string {
+/**
+ * Cria o state: `<payload base64url>.<assinatura>`. `pda` = o login começou
+ * num PDA (`pda=1`): o "Tentar de novo" volta a pedir a conta (D61).
+ */
+export function createOAuthState(secret: string, opts: { returnTo?: string | null; pda?: boolean; now?: number } = {}): string {
   const payload = Buffer.from(
     JSON.stringify({
       n: crypto.randomBytes(16).toString("base64url"),
       t: opts.now ?? Date.now(),
       r: safeReturnPath(opts.returnTo) ?? undefined,
+      p: opts.pda ? 1 : undefined,
     }),
   ).toString("base64url");
   return `${payload}.${sign(secret, payload)}`;
@@ -89,10 +93,27 @@ export function checkCallbackState(opts: {
  * login cria um state novo e o destino volta a ser validado). PURA.
  */
 export function peekReturnTo(state: string | null | undefined): string | null {
+  return safeReturnPath(peekPayload(state)?.r);
+}
+
+/** O login deste state começou num PDA? Mesmas condições do `peekReturnTo`. PURA. */
+export function peekIsPda(state: string | null | undefined): boolean {
+  return peekPayload(state)?.p === 1;
+}
+
+/**
+ * Link do "Tentar de novo": o mesmo destino e, se o login começou num PDA,
+ * outra vez com `pda=1` — senão a Google entrava com a conta de quem usou o
+ * PDA antes, sem perguntar (D61). PURA.
+ */
+export function retryLoginUrl(state: string | null | undefined): string {
+  return loginUrlForDevice(loginUrlWithReturn(peekReturnTo(state)), peekIsPda(state));
+}
+
+function peekPayload(state: string | null | undefined): any {
   if (!state) return null;
-  const payload = state.split(".")[0];
   try {
-    return safeReturnPath(JSON.parse(Buffer.from(payload, "base64url").toString("utf8"))?.r);
+    return JSON.parse(Buffer.from(state.split(".")[0], "base64url").toString("utf8"));
   } catch {
     return null;
   }

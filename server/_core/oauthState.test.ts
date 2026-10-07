@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OAUTH_STATE_MAX_MS, checkCallbackState, createOAuthState, peekReturnTo, verifyOAuthState } from "./oauthState";
+import { OAUTH_STATE_MAX_MS, checkCallbackState, createOAuthState, peekIsPda, peekReturnTo, retryLoginUrl, verifyOAuthState } from "./oauthState";
 import { escapeHtml, renderErrorPage } from "./oauth";
 import { loginUrlWithReturn } from "../../shared/loginReturn";
 
@@ -68,6 +68,18 @@ describe("página de erro do login", () => {
     expect(peekReturnTo(createOAuthState(SECRET, { returnTo: PDA_PATH }))).toBe(PDA_PATH);
     expect(peekReturnTo("lixo")).toBeNull();
     expect(peekReturnTo(null)).toBeNull();
+  });
+
+  it("Tentar de novo num PDA volta a pedir a conta (pda=1, D61); fora do PDA não", () => {
+    const pda = createOAuthState(SECRET, { returnTo: PDA_PATH, pda: true });
+    const pc = createOAuthState(SECRET, { returnTo: "/rh" });
+    expect(peekIsPda(pda)).toBe(true);
+    expect(peekIsPda(pc)).toBe(false);
+    expect(peekIsPda("lixo")).toBe(false);
+    expect(retryLoginUrl(pda)).toBe(`${loginUrlWithReturn(PDA_PATH)}&pda=1`);
+    expect(retryLoginUrl(createOAuthState(SECRET, { pda: true }))).toBe("/api/oauth/login?pda=1");
+    expect(retryLoginUrl(pc)).toBe(loginUrlWithReturn("/rh"));
+    expect(retryLoginUrl(null)).toBe("/api/oauth/login");
   });
 
   it("o destino só entra no state se for um caminho seguro desta app", () => {
