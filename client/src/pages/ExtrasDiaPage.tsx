@@ -234,6 +234,9 @@ export default function ExtrasDiaPage() {
     { enabled: !!targetDate },
   );
   const assignments = assignmentsQ.data ?? [];
+  // Pedido 4 (7 out 2026): quantas notas internas tem o dia (escrevem-se no separador Pressão).
+  const dayNotesQ = trpc.extrasDia.dayNotes.list.useQuery({ city, from: targetDate, to: targetDate }, { enabled: !!targetDate });
+  const dayNotesCount = dayNotesQ.data?.length ?? 0;
 
   const actuals = useMemo(() => {
     const cost = assignments.reduce((s, a) => s + (a.cost ?? 0), 0);
@@ -294,7 +297,7 @@ export default function ExtrasDiaPage() {
         </TabsList>
       </Tabs>
 
-      {tab === "pressao" && <PressureTab city={city} />}
+      {tab === "pressao" && <PressureTab city={city} targetDate={targetDate || addDaysIso(baseDate, 1)} canEdit={access.canEdit} />}
 
       {tab === "dia" && isLoading && (
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>
@@ -314,6 +317,12 @@ export default function ExtrasDiaPage() {
             )}
             <span className="ml-2">
               · Parques: <strong>{data.parksQueried.length}</strong>
+            </span>
+            <span className="ml-2">
+              ·{" "}
+              <button type="button" className="underline-offset-2 hover:underline" onClick={() => setTab("pressao")} title="Notas internas deste dia de trabalho (separador Pressão)">
+                Notas do dia: <strong>{dayNotesCount}</strong>
+              </button>
             </span>
           </div>
 
