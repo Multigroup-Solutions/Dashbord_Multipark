@@ -18,7 +18,7 @@ import type { NextFunction, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { cronAuthOk } from "./cronAuth";
-import { CRON_JOBS, cronHealth, cronNameFromPath, cronOutcome, cronSkipProblem, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
+import { CRON_JOBS, cronHealth, cronNameFromPath, cronOutcome, cronSkipProblem, isRetiredCron, staleThresholdMinutes, type CronHealth } from "../shared/appSettings";
 import { scrubSecrets } from "./integrationsStatus";
 
 /** "YYYY-MM-DD HH:MM:SS.mmm" (UTC) — DATETIME(3). */
@@ -199,6 +199,20 @@ const RUN_COLUMNS = sql`id, DATE_FORMAT(startedAt, '%Y-%m-%d %H:%i:%s.%f') AS st
  * muda em tempo real (ex.: mail-sync de 5 em 5 min sem o push do Gmail, de
  * hora a hora com ele) — o "Parado" passa a ser medido pelo que está em vigor.
  */
+/** Nomes dos trabalhos retirados com histórico (para a nota da página). Nunca lança. */
+export async function getRetiredCronNames(now = Date.now()): Promise<string[]> {
+  try {
+    const db = await getDb();
+    if (!db) return [];
+    const known = new Set(CRON_JOBS.map((j) => j.name));
+    const res = await db.execute(sql`SELECT name, DATE_FORMAT(MAX(startedAt), '%Y-%m-%d %H:%i:%s.%f') AS lastAt FROM cron_runs GROUP BY name`);
+    return rowsOf(res).map((r) => ({ name: String(r.name), lastAt: fromMysqlMs(r.lastAt) }))
+      .filter((r) => isRetiredCron(known.has(r.name), r.lastAt, now)).map((r) => r.name).sort();
+  } catch {
+    return [];
+  }
+}
+
 export async function getCronStatuses(now = Date.now(), intervalOverrides: ReadonlyMap<string, number> = new Map()): Promise<CronStatus[]> {
   const db = await getDb();
   // 20b: sem BD é erro — antes [] e a página dizia "Tudo a correr".
@@ -217,11 +231,15 @@ export async function getCronStatuses(now = Date.now(), intervalOverrides: Reado
       FROM cron_runs WHERE ok = 1 AND (error IS NULL OR error NOT LIKE 'saltado:%') GROUP BY name`);
   // Nomes + 1.ª corrida registada (D57: "saltado há dias" sem nenhum OK desde o início).
   const namesRes = await db.execute(sql`
-    SELECT name, DATE_FORMAT(MIN(startedAt), '%Y-%m-%d %H:%i:%s.%f') AS firstAt FROM cron_runs GROUP BY name`);
+    SELECT name, DATE_FORMAT(MIN(startedAt), '%Y-%m-%d %H:%i:%s.%f') AS firstAt,
+           DATE_FORMAT(MAX(startedAt), '%Y-%m-%d %H:%i:%s.%f') AS lastAt FROM cron_runs GROUP BY name`);
   const agg = new Map(rowsOf(aggRes).map((r) => [String(r.name), { runs: Number(r.runs), failures: Number(r.failures ?? 0) }]));
   const lastOk = new Map(rowsOf(okRes).map((r) => [String(r.name), fromMysqlMs(r.lastOkAt)]));
   const firstAt = new Map(rowsOf(namesRes).map((r) => [String(r.name), fromMysqlMs(r.firstAt)]));
-  const names = Array.from(new Set([...known.keys(), ...firstAt.keys()]));
+  const lastAt = new Map(rowsOf(namesRes).map((r) => [String(r.name), fromMysqlMs(r.lastAt)]));
+  // Trabalhos retirados (fora de CRON_JOBS e sem corridas há dias) não entram: nem na lista, nem nos alertas.
+  const names = Array.from(new Set([...known.keys(), ...firstAt.keys()]))
+    .filter((n) => !isRetiredCron(known.has(n), lastAt.get(n) ?? null, now));
 
   return Promise.all(names.map(async (name) => {
     const job = known.get(name);

@@ -61,7 +61,7 @@ async function reissueSessionCookie(ctx: { req: any; res: any; user: { openId: s
 export const settingsRouter = router({
   /** Estado do sistema: última corrida de cada cron, falhas, crons parados. */
   systemStatus: adminOnly.query(async () => {
-    const { getCronStatuses } = await import("./cronRuns");
+    const { getCronStatuses, getRetiredCronNames } = await import("./cronRuns");
     // 20b: o mail-sync é esperado de 5 em 5 min sem o push do Gmail e de hora
     // a hora com ele — o "Parado" segue a cadência que está em vigor.
     const { loadDynamicCadence } = await import("./cronScheduler");
@@ -69,7 +69,8 @@ export const settingsRouter = router({
     const now = Date.now();
     const dyn = await loadDynamicCadence(now);
     const overrides = new Map([["mail-sync", dyn.mailPushHealthy ? MAIL_SYNC_SAFETY_NET_MINUTES : MAIL_SYNC_MINUTES]]);
-    return { now, crons: await getCronStatuses(now, overrides) };
+    const [crons, retired] = await Promise.all([getCronStatuses(now, overrides), getRetiredCronNames(now)]);
+    return { now, crons, retired };
   }),
 
   /**
