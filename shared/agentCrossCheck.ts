@@ -66,6 +66,11 @@ export interface XInput {
   agents: XAgent[];
   persons: XPerson[];
   users: XUser[];
+  /**
+   * 41a: contas DESATIVADAS — o agente continua preso à conta e à ficha (não
+   * aparece como "sem utilizador"), mas não entram na lista de quem não tem agente.
+   */
+  inactiveUsers?: XUser[];
   partnerships: XPartnership[];
   /** agent_partner_map: chave do nome do agente → parceria */
   partnerByAgentName: Map<string, number>;
@@ -183,8 +188,9 @@ export function crossCheckAgents(i: XInput): { agents: XAgentRow[]; users: XUser
     const k = searchText(cleanAgentName(p.legacyAgentName));
     if (k) byLegacyName.set(k, [...(byLegacyName.get(k) ?? []), p]);
   }
-  const userIds = new Set(i.users.map((u) => u.id));
-  const hasUser = (p: XPerson) => (p.userId != null && userIds.has(p.userId)) || i.users.some((u) => u.employeeId === p.employeeId);
+  const allUsers = [...i.users, ...(i.inactiveUsers ?? [])];
+  const userIds = new Set(allUsers.map((u) => u.id));
+  const hasUser = (p: XPerson) => (p.userId != null && userIds.has(p.userId)) || allUsers.some((u) => u.employeeId === p.employeeId);
   const partnershipByMp = new Map(i.partnerships.filter((p) => p.multiparkPartnerId).map((p) => [String(p.multiparkPartnerId), p]));
   const partnershipById = new Map(i.partnerships.map((p) => [p.id, p]));
   const personById = new Map(i.persons.map((p) => [p.employeeId, p]));

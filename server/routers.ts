@@ -759,7 +759,24 @@ export const appRouter = router({
             ? `Utilizador desativado — ${deactivation.summary}`
             : "Utilizador ativado",
         });
-         return { success: true };
+        // 41a: a ficha acompanha a conta principal (o agente da Multipark e as
+        // ligações ficam). Só as fichas da cidade de quem mexe; uma falha aqui
+        // não desfaz a conta (fica registado).
+        const followed: string[] = [];
+        try {
+          const { employeesFollowingAccount } = await import("./personIdentity");
+          const { updateEmployee, deactivationColumns } = await import("./db");
+          for (const e of await employeesFollowingAccount(input.userId, input.isActive)) {
+            try { await assertEmployeeAccess(e.id); } catch { continue; }
+            await updateEmployee(e.id, { isActive: input.isActive ? 1 : 0, ...deactivationColumns(input.isActive, meta) });
+            await logActivity({ userId: ctx.user.id, action: input.isActive ? "activate" : "deactivate", entity: "employee", entityId: e.id,
+              details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${e.fullName} com a conta #${input.userId}${deactivation ? ` — ${deactivation.summary}` : ""}` });
+            followed.push(e.fullName);
+          }
+        } catch (err: any) {
+          console.warn(`[users.toggleActive] ficha não acompanhou a conta #${input.userId}: ${err?.message ?? err}`);
+        }
+        return { success: true, employees: followed };
       }),
     sendInvite: protectedProcedure
       .input(z.object({
@@ -5237,6 +5254,60 @@ export const appRouter = router({
         requireAccess(ctx.user, "rh", "manage");
         const { searchAgents } = await import("./personIdentity");
         return searchAgents(input.q);
+      }),
+    /** 41a: separar uma conta de login da ficha (a conta fica, só deixa de estar ligada). */
+    detachAccount: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive(), userId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        await assertEmployeeAccess(input.employeeId);
+        if (input.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Não podes separar a tua própria conta da tua ficha." });
+        const { detachAccount } = await import("./personIdentity");
+        let mode: "principal" | "extra";
+        try { mode = await detachAccount(input.employeeId, input.userId); } catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message }); }
+        await logActivity({ userId: ctx.user.id, action: "account_unlink", entity: "employee", entityId: input.employeeId, details: `Conta #${input.userId} (${mode}) separada da ficha (Ligações)` });
+        return { success: true, mode };
+      }),
+    /**
+     * 41a: quem tem a ficha ativa mas não trabalha (agente, ponto, extras) nem
+     * entra na app há mais de "rh.suspendAfterDays" dias — para suspender
+     * (bloqueio manual, reversível). Só as fichas da cidade de quem vê.
+     */
+    suspendSuggestions: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "rh", "manage");
+      const { getSetting } = await import("./appSettings");
+      const days = Number(await getSetting("rh.suspendAfterDays").catch(() => 180));
+      if (!(days > 0)) return { days: 0, items: [] };
+      const { suspendRows } = await import("./personIdentity");
+      const { getLastWorkedMap } = await import("./db");
+      const { pickSuspendCandidates } = await import("../shared/suspendSuggest");
+      const { lisbonDayOf } = await import("../shared/lisbonDay");
+      const allowed = scopedProjectIds();
+      const rows = (await suspendRows()).filter((r) => !allowed || (r.projectId != null && allowed.includes(r.projectId)));
+      const lastWorked = await getLastWorkedMap().catch(() => ({} as Record<number, string>));
+      return { days, items: pickSuspendCandidates(rows, lastWorked, lisbonDayOf(new Date()), days).slice(0, 200) };
+    }),
+    /** 41a: suspender = bloqueio manual do acesso (desbloqueia-se no RH). Não desativa nem solta nada. */
+    suspend: protectedProcedure
+      .input(z.object({ employeeIds: z.array(z.number().int().positive()).min(1).max(200), why: z.enum(["inatividade", "manual"]).default("inatividade") }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        const { suspendEmployee } = await import("./personIdentity");
+        const { inactivityReason, SUSPEND_REASON_MANUAL } = await import("../shared/suspendSuggest");
+        const { getSetting } = await import("./appSettings");
+        const days = Number(await getSetting("rh.suspendAfterDays").catch(() => 180)) || 180;
+        const reason = input.why === "manual" ? SUSPEND_REASON_MANUAL : inactivityReason(days);
+        const me = await getEmployeeByUserId(ctx.user.id).catch(() => null);
+        let done = 0;
+        for (const id of [...new Set(input.employeeIds)]) {
+          try { await assertEmployeeAccess(id); } catch { continue; }
+          if (me?.employee.id === id) continue;
+          if (await suspendEmployee(id, reason)) {
+            done++;
+            await logActivity({ userId: ctx.user.id, action: "suspend", entity: "employee", entityId: id, details: `${reason}${input.why === "manual" ? " (ficha do RH)" : " (sugestão dos Utilizadores)"} — acesso bloqueado até desbloquear no RH` });
+          }
+        }
+        return { suspended: done };
       }),
     /** Retirar um agente da ficha (principal ou extra). */
     detachAgent: protectedProcedure

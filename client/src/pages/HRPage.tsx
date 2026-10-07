@@ -1290,11 +1290,22 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
   // Desativar abre o pop-up que pede motivo + notas (opcionais); reativar é
   // uma confirmação simples — não há nada a perguntar.
   const [showDeactivate, setShowDeactivate] = useState(false);
+  // 41a: suspender = tirar o acesso por uns tempos (bloqueio manual); desbloqueia-se no RH
+  const { user: detailUser } = useAuth();
+  const canSuspend = can(detailUser as any, "rh", "manage");
+  const suspend = trpc.identityLinks.suspend.useMutation({
+    onSuccess: (r) => {
+      utils.rh.byId.invalidate({ id: employeeId });
+      utils.identityLinks.suspendSuggestions.invalidate();
+      r.suspended ? toast.success("Suspenso: fica sem acesso até desbloquear. A ficha, a conta e o agente ficam ligados.") : toast.info("Nada mudou (já estava suspenso ou inativo).");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const setActive = trpc.rh.setActive.useMutation({
     onSuccess: (r) => {
       utils.rh.byId.invalidate({ id: employeeId });
       utils.rh.list.invalidate();
-      const scope = r.cascadedUser ? " (colaborador + login)" : "";
+      const scope = r.cascadedUser ? ((r as any).extraAccounts ? ` (colaborador + login + ${(r as any).extraAccounts} conta(s) extra)` : " (colaborador + login)") : "";
       toast.success(r.reasonLabel ? `Desativado${scope} — ${r.reasonLabel}` : `Estado alterado${scope}`);
       setShowDeactivate(false);
     },
@@ -1437,6 +1448,12 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           >
             {emp.isActive ? <X className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
             {emp.isActive ? "Desativar" : "Reativar"}
+          </Button>
+        )}
+        {!editing && canSuspend && emp.isActive && !(emp as any).blockedManually && (
+          <Button variant="outline" disabled={suspend.isPending} title="Tira o acesso à app até alguém desbloquear. Não desativa a ficha nem solta a conta ou o agente."
+            onClick={() => { if (confirm(`Suspender ${emp.fullName}? Fica sem acesso à app até alguém desbloquear (a ficha, a conta e o agente ficam como estão).`)) suspend.mutate({ employeeIds: [employeeId], why: "manual" }); }}>
+            Suspender
           </Button>
         )}
         <DeactivationDialog
@@ -1787,7 +1804,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
         </Card>
       )}
 
-      <EmployeeAccessAvailability employeeId={employeeId} />
+      <EmployeeAccessAvailability employeeId={employeeId} employeeName={emp.fullName} />
       <EmployeeAutoMail employeeId={employeeId} />
 
       {/* Tabs */}
