@@ -577,7 +577,7 @@ export async function rhDocsWeeklyCron(): Promise<CronJobRun> {
   } catch (err) { return fail(err); }
 }
 
-/** Avaliação (motor único): recalcula as últimas 4 semanas em fatias de 7 dias. */
+/** Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7 dias. */
 export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDays: number }): Promise<CronJobRun> {
   try {
     const { runEvaluationRecompute } = await import("./evaluationEngine");

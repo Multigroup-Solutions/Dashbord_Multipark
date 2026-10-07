@@ -5084,19 +5084,44 @@ export async function pdaIntervalsForDay(dateStr: string): Promise<Map<string, {
   if (!db) return out;
   const { startMs: dayStart, endMs: dayEnd } = lisbonDayRangeUtc(dateStr);
   const [rows] = await db.execute(sql`
-    SELECT zelloUsername AS zello, employeeId, checkinAt, checkoutAt FROM pda_checkins
-     WHERE zelloUsername IS NOT NULL AND employeeId IS NOT NULL
-       AND checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
-       AND (checkoutAt IS NULL OR checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
+    SELECT ${CHECKIN_ZELLO} AS zello, c.employeeId, c.checkinAt, c.checkoutAt
+      FROM pda_checkins c LEFT JOIN pdas p ON p.id = c.pdaId
+     WHERE ${CHECKIN_ZELLO} IS NOT NULL AND c.employeeId IS NOT NULL
+       AND c.checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
+       AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
   const toMs = (v: any) => (v instanceof Date ? v.getTime() : Date.parse(String(v).replace(" ", "T") + "Z"));
+  const { zelloKey } = await import("../shared/zelloKey");
   for (const r of (rows as any[]) ?? []) {
     const start = Math.max(toMs(r.checkinAt), dayStart);
     const end = Math.min(r.checkoutAt ? toMs(r.checkoutAt) : Date.now(), dayEnd);
     if (end <= start) continue;
-    const list = out.get(String(r.zello)) ?? [];
+    const k = zelloKey(r.zello);
+    const list = out.get(k) ?? [];
     list.push({ employeeId: Number(r.employeeId), start, end });
-    out.set(String(r.zello), list);
+    out.set(k, list);
   }
+  return out;
+}
+
+/**
+ * 43b: o Zello de um check-in de PDA — o que ficou gravado no check-in (a
+ * fotografia) e, sem ele (check-in feito quando o PDA ainda não tinha Zello),
+ * o Zello do PDA. Antes só a fotografia: esses check-ins nunca partiam o GPS.
+ */
+const CHECKIN_ZELLO = sql.raw("COALESCE(NULLIF(c.zelloUsername, ''), NULLIF(p.zelloUsername, ''))");
+
+/**
+ * 43b: o DONO de cada utilizador Zello — a ficha com esse Zello fixo
+ * (`employees.zelloUsername`, chave em minúsculas). Num PDA, o dono fica com o
+ * GPS fora dos check-ins (Jorge: "se é deles, é para ficar ligado").
+ */
+export async function fixedZelloOwners(): Promise<Map<string, number>> {
+  const db = await getDb();
+  const out = new Map<string, number>();
+  if (!db) return out;
+  const { zelloKey } = await import("../shared/zelloKey");
+  const fixed = await db.select({ id: employees.id, zello: employees.zelloUsername }).from(employees).where(isNotNull(employees.zelloUsername));
+  for (const e of fixed) { const k = zelloKey(e.zello); if (k && !out.has(k)) out.set(k, e.id); }
   return out;
 }
 
@@ -5111,18 +5136,19 @@ export async function saveDriverShares(historyId: number, zello: string, day: st
   }
 }
 
+/** Chave = zelloKey (minúsculas): quem lê usa `holders.get(zelloKey(nome))`. */
 export async function resolveZelloHoldersForDay(dateStr: string): Promise<Map<string, number>> {
   const db = await getDb();
   const out = new Map<string, number>();
   if (!db) return out;
   const { startMs: dayStart, endMs: dayEnd } = lisbonDayRangeUtc(dateStr);
-  const fixed = await db.select({ id: employees.id, zello: employees.zelloUsername }).from(employees).where(isNotNull(employees.zelloUsername));
-  for (const e of fixed) if (e.zello && !out.has(e.zello)) out.set(e.zello, e.id);
+  for (const [k, id] of await fixedZelloOwners()) out.set(k, id); // 43b: chave em minúsculas
   const [rows] = await db.execute(sql`
-    SELECT zelloUsername AS zello, employeeId, checkinAt, checkoutAt FROM pda_checkins
-     WHERE zelloUsername IS NOT NULL AND employeeId IS NOT NULL
-       AND checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
-       AND (checkoutAt IS NULL OR checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
+    SELECT ${CHECKIN_ZELLO} AS zello, c.employeeId, c.checkinAt, c.checkoutAt
+      FROM pda_checkins c LEFT JOIN pdas p ON p.id = c.pdaId
+     WHERE ${CHECKIN_ZELLO} IS NOT NULL AND c.employeeId IS NOT NULL
+       AND c.checkinAt < ${toMysqlDateTime(new Date(dayEnd))}
+       AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${toMysqlDateTime(new Date(dayStart))})`) as any;
   const toMs = (v: any) => (v instanceof Date ? v.getTime() : Date.parse(String(v).replace(" ", "T") + "Z"));
   const { holdersForDay } = await import("./zelloGps");
   const byDay = holdersForDay(
@@ -5154,7 +5180,7 @@ export async function createDailyDriverHistory(data: InsertDailyDriverHistory) {
 async function withEmployeeNames<T extends { id: number; zelloUsername: string; employeeId: number | null; totalKm?: string | null }>(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   rows: T[],
-): Promise<(T & { employeeName: string | null; resolvedEmployeeId: number | null; shares: { employeeId: number; name: string; km: number; minutes: number; movingMinutes: number | null }[]; leftoverKm: number })[]> {
+): Promise<(T & { employeeName: string | null; resolvedEmployeeId: number | null; shares: { employeeId: number; name: string; km: number; minutes: number; movingMinutes: number | null }[]; leftoverKm: number; leftoverOwnerName: string | null })[]> {
   if (rows.length === 0) return [];
   const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
   const ids = rows.map((r) => Number(r.id));
@@ -5165,7 +5191,8 @@ async function withEmployeeNames<T extends { id: number; zelloUsername: string; 
   const persistent = zellos.length
     ? await db.select({ id: employees.id, zello: employees.zelloUsername }).from(employees).where(inArray(employees.zelloUsername, zellos))
     : [];
-  const byZello = new Map(persistent.map((e) => [e.zello!, e.id]));
+  const { zelloKey } = await import("../shared/zelloKey");
+  const byZello = new Map(persistent.map((e) => [zelloKey(e.zello), e.id]));
   const empIds = [...new Set([
     ...rows.map((r) => r.employeeId).filter((x): x is number => x != null),
     ...shareRows.map((s) => Number(s.employeeId)),
@@ -5184,10 +5211,13 @@ async function withEmployeeNames<T extends { id: number; zelloUsername: string; 
   }
   return rows.map((r) => {
     const shares = (sharesBy.get(Number(r.id)) ?? []).sort((a, b) => b.km - a.km);
-    const id = shares[0]?.employeeId ?? r.employeeId ?? byZello.get(r.zelloUsername) ?? null;
+    const owner = byZello.get(zelloKey(r.zelloUsername)) ?? null;
+    const id = shares[0]?.employeeId ?? r.employeeId ?? owner;
     const employeeName = shares.length ? shares.map((s) => s.name).join(" + ") : (id != null ? nameOf.get(id) ?? null : null);
     const leftoverKm = shares.length ? Math.max(0, Math.round((Number(r.totalKm ?? 0) - shares.reduce((a, s) => a + s.km, 0)) * 100) / 100) : 0;
-    return { ...r, resolvedEmployeeId: id, employeeName, shares, leftoverKm };
+    // 43b: o resto (fora dos check-ins) é do dono do PDA, quando o tem
+    const leftoverOwnerName = leftoverKm > 0 && owner != null ? nameOf.get(owner) ?? null : null;
+    return { ...r, resolvedEmployeeId: id, employeeName, shares, leftoverKm, leftoverOwnerName };
   });
 }
 
@@ -5202,6 +5232,17 @@ export async function getDailyDriverHistoryByDate(dateStr: string) {
     .where(and(historyScope(), historyDayIs(dateStr)))
     .orderBy(desc(dailyDriverHistory.totalKm));
   return withEmployeeNames(db, rows);
+}
+
+/** 43a: uma linha do histórico (no âmbito de quem pede) — para o mapa das velocidades. */
+export async function getDailyDriverHistoryRow(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(dailyDriverHistory)
+    .where(and(historyScope(), eq(dailyDriverHistory.id, id))).limit(1);
+  if (!row) return null;
+  const [named] = await withEmployeeNames(db, [row]);
+  return named ?? row;
 }
 
 export async function getDailyDriverHistoryByUser(username: string, limit = 30) {
@@ -5279,24 +5320,6 @@ export async function createPdaCheckin(data: InsertPdaCheckin) {
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(pdaCheckins).values(data);
   return result.insertId;
-}
-
-/**
- * Anexa o utilizador Zello ao funcionário no ato do check-in — mas só a
- * PREENCHER lacuna: nunca substitui um anexo existente do próprio nem rouba
- * um Zello já anexado a outro colaborador (para esses casos existe o
- * `mapUserToEmployee` explícito). O check-in em si guarda sempre o par
- * temporal (quem levou que Zello naquele dia), que tem prioridade na exibição.
- */
-export async function attachZelloToEmployeeIfUnset(employeeId: number, zelloUsername: string): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
-  const [emp] = await db.select({ zello: employees.zelloUsername }).from(employees).where(eq(employees.id, employeeId)).limit(1);
-  if (!emp || emp.zello) return false;
-  const holder = await db.select({ id: employees.id }).from(employees).where(eq(employees.zelloUsername, zelloUsername)).limit(1);
-  if (holder.length > 0) return false;
-  await db.update(employees).set({ zelloUsername }).where(eq(employees.id, employeeId));
-  return true;
 }
 
 /**

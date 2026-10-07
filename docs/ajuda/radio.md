@@ -1,12 +1,12 @@
 ---
 modulo: radio
 titulo: Rádio (gravações do Zello e transcrições)
-rotas: /radio
+rotas: /radio, /operacional
 palavras: prova, provas, guardar como prova, provas do rádio, selo, arquivar prova, rádio, radio, transcrição, transcrições, áudio, zello, comunicações, resumo, condutor, viatura, transcrever, transcrição automática, mais antigas, gravações, gravação, ouvir, mensagens de voz, intervalo, hora, utilizador do zello, canal, gps, velocidade, posição, mapa, cruzar, movimentos da multipark, check-in, check-out, pda
 ---
 # Rádio
 
-Menu **Operações → Rádio**. Tem três separadores: **Gravações do Zello** (abre aqui), **Provas** e **Transcrições**.
+Menu **Operações → Actividade Diária**, separador **Rádio** (o antigo endereço /radio vai lá ter). Tem três separadores: **Gravações do Zello** (abre aqui), **Provas** e **Transcrições**.
 
 ## Gravações do Zello
 

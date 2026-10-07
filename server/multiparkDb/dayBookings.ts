@@ -123,10 +123,12 @@ export function mapParks(rows: Array<Record<string, unknown>>, cities?: string[]
     const id = str(r.id);
     if (!id) continue;
     const cityName = str(r.city);
-    if (allowed && !allowed.has(String(cityName ?? "").trim().toLowerCase())) continue;
     const name = str(r.name) ?? id;
     const firebaseBrand = str(r.firebase_brand);
-    out.push({ id, name, cityName, firebaseBrand, status: str(r.status), ...classifyPark({ name, city: cityName, firebaseBrand, listingType: str(r.listing_type) }) });
+    const cls = classifyPark({ name, city: cityName, firebaseBrand, listingType: str(r.listing_type) });
+    // 42d: a cidade gravada no parque; sem ela (ou escrita de outra maneira), a da classificação (que lê o nome)
+    if (allowed && !allowed.has(String(cityName ?? "").trim().toLowerCase()) && !(cls.city && allowed.has(cls.city))) continue;
+    out.push({ id, name, cityName, firebaseBrand, status: str(r.status), ...cls });
   }
   return out.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "pt"));
 }
@@ -237,7 +239,7 @@ export function buildDayBookingsSql(bounds: DayBounds, parkIds: string[], limit 
 export type DayBookingRow = Record<string, unknown>;
 
 /** Linha → reserva (com o grupo operacional do parque). PURA. */
-export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "id" | "name" | "cityName" | "key" | "label" | "ours" | "order"> | undefined): DayBooking {
+export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "id" | "name" | "cityName" | "key" | "label" | "ours" | "order"> & Partial<Pick<DayPark, "city" | "brand">> | undefined): DayBooking {
   const price = num(r.price);
   const paid = num(r.paid);
   const parkId = String(r.park_id ?? "");
@@ -257,6 +259,8 @@ export function mapDayBookingRow(r: DayBookingRow, park: Pick<DayPark, "id" | "n
     parkId,
     parkName: park?.name ?? null,
     parkCity: park?.cityName ?? null,
+    cityKey: park?.city ?? null,
+    brand: park?.brand ?? null,
     groupKey: group.key,
     groupLabel: group.label,
     groupOrder: group.order,

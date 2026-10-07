@@ -200,11 +200,12 @@ describe("Críticas de email: parque do perfil Google", () => {
 describe("Página: erro ≠ vazio, permissões, datas de Lisboa", () => {
   const page = src("client/src/pages/GoogleReviewsPage.tsx");
   // 23e (Jorge, 3 out 2026): Condutores e Agentes passaram para Pessoas → Condutores e agentes.
-  const people = src("client/src/pages/CondutoresAgentesPage.tsx");
+  // 42b: as listas dos Condutores e dos Agentes vivem em components/people/MovementPeoplePanel.tsx
+  const people = src("client/src/pages/CondutoresAgentesPage.tsx") + src("client/src/components/people/MovementPeoplePanel.tsx");
   it("lista, números, parques, crítica, condutores e agentes dizem quando falham", () => {
     for (const what of ['what="as críticas"', 'what="os números das críticas"', 'what="a crítica"', 'what="as críticas por parque"'])
       expect(page).toContain(what);
-    for (const what of ['what="o ranking (BD da Multipark)"', 'what="as ações do agente (BD da Multipark)"'])
+    for (const what of ['what="os movimentos (BD da Multipark)"', 'what="os movimentos"'])
       expect(people).toContain(what);
   });
   it("ações só para quem edita; CSV só para quem exporta; sem o histórico sem âmbito", () => {

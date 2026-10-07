@@ -58,11 +58,21 @@ async function loadPeople(db: any): Promise<PersonRow[]> {
     WHERE c.checkin_status = 'checked_in' AND c.employeeId IS NOT NULL
     ORDER BY c.checkinAt DESC`));
   const accountRows = rowsOf(await db.execute(sql`SELECT employeeId, userId FROM employee_accounts`).catch(() => [[]]));
+  // 43b: os PDAs pelo Zello (para o dono de um PDA sem check-in) e quem tem cada Zello agora
+  const { zelloKey } = await import("../shared/zelloKey");
+  const pdaNameByZello = new Map<string, string>();
+  for (const r of rowsOf(await db.execute(sql`SELECT name, zelloUsername FROM pdas WHERE status = 'active' AND zelloUsername IS NOT NULL`).catch(() => [[]]))) {
+    const k = zelloKey(r.zelloUsername);
+    if (k && !pdaNameByZello.has(k)) pdaNameByZello.set(k, String(r.name ?? "PDA"));
+  }
+  const inUseBy = new Map<string, number>();
 
   const pdaBy = new Map<number, { pdaName: string; zello: string | null }>();
   for (const r of pdaRows) {
     const id = Number(r.employeeId);
     if (!pdaBy.has(id)) pdaBy.set(id, { pdaName: String(r.pdaName ?? "PDA"), zello: r.zello ? String(r.zello) : null });
+    const k = zelloKey(r.zello);
+    if (k && !inUseBy.has(k)) inUseBy.set(k, id);
   }
   const accountsBy = new Map<number, number[]>();
   for (const r of accountRows) {
@@ -80,7 +90,14 @@ async function loadPeople(db: any): Promise<PersonRow[]> {
   return rows.map((r) => {
     const id = Number(r.id);
     const pda = pdaBy.get(id) ?? null;
-    const zello = pda?.zello ?? (r.zelloUsername ? String(r.zelloUsername) : null);
+    const fixed = r.zelloUsername ? String(r.zelloUsername) : null;
+    let zello = pda?.zello ?? fixed;
+    let pdaName = pda?.pdaName ?? null;
+    if (!pda && fixed) {
+      const holder = inUseBy.get(zelloKey(fixed));
+      if (holder != null && holder !== id) zello = null; // o aparelho dele está agora com outra pessoa
+      else pdaName = pdaNameByZello.get(zelloKey(fixed)) ?? null; // dono de um PDA, sem check-in
+    }
     const city = notifyCityOf((cities.get(id) as any)?.city ?? null);
     return {
       employeeId: id,
@@ -88,7 +105,7 @@ async function loadPeople(db: any): Promise<PersonRow[]> {
       position: r.position ? String(r.position) : null,
       city,
       clockOpenSince: String(r.lastType ?? "") === "check_in" ? dbMs(r.lastAt) : null,
-      pdaName: pda?.pdaName ?? null,
+      pdaName,
       zelloUsername: zello,
       zelloExcluded: zello ? isZelloGpsExcluded(zello, excluded) : false,
       userIds: Array.from(new Set([r.userId == null ? null : Number(r.userId), ...(accountsBy.get(id) ?? [])].filter((x): x is number => typeof x === "number" && x > 0))),

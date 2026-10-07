@@ -102,7 +102,7 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "extras-pressure", runName: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", cadence: { kind: "daily", from: "04:45" }, priority: 101, minMs: 15 * S, maxMs: 45 * S },
   { key: "rh-docs-weekly", runName: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "04:45" }, priority: 102, minMs: 15 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },
-  { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo das 4 semanas)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
+  { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads", runName: "google-ads", label: "Google Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 120, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads-monthly", runName: "google-ads", label: "Google Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 121, minMs: 15 * S, maxMs: 45 * S },
   // 19b: conversões atrasadas — a Google acerta-as até semanas depois do clique.

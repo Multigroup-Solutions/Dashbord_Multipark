@@ -10,6 +10,7 @@
  * `accuracy` (metros) — pontos imprecisos não entram nos km nem na velocidade
  * calculada entre pontos (o GPS parado a "tremer" gerava picos).
  */
+import { zelloKey } from "../shared/zelloKey";
 
 /** Velocidade de um report do Zello, em km/h. */
 export function zelloSpeedKmh(props: Record<string, any> | null | undefined): number {
@@ -58,9 +59,10 @@ export function holdersForDay(
     const from = Math.max(c.start, dayStart);
     const to = Math.min(c.end ?? now, dayEnd);
     if (to <= from) continue;
-    const byEmp = acc.get(c.zello) ?? new Map<number, number>();
+    const k = zelloKey(c.zello); // 43b: a mesma chave em todo o lado
+    const byEmp = acc.get(k) ?? new Map<number, number>();
     byEmp.set(c.employeeId, (byEmp.get(c.employeeId) ?? 0) + (to - from));
-    acc.set(c.zello, byEmp);
+    acc.set(k, byEmp);
   }
   const out = new Map<string, number>();
   for (const [zello, byEmp] of acc) {
@@ -109,11 +111,12 @@ export function gpsPointsFromGeoJson(data: any): GpsPoint[] {
  * troca de pessoa não entram em nenhuma parte — ficam no "resto" do dia
  * (linha do dia − soma das partes, ver `leftoverFromShares`).
  */
-export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], threshold: number): HolderShare[] {
+export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], threshold: number, fallbackEmployeeId: number | null = null): HolderShare[] {
+  // 43b: fora dos check-ins o PDA é do DONO (o Zello fixo da ficha), quando o tem — "se é deles, é para ficar ligado"
   const holderAt = (tsSec: number): number | null => {
     const ms = tsSec * 1000;
     for (const i of intervals) if (ms >= i.start && ms < i.end) return i.employeeId;
-    return null;
+    return fallbackEmployeeId;
   };
   const acc = new Map<number, { minutesS: number; movingS: number; km: number; max: number; sum: number; n: number; viol: number; points: number }>();
   const get = (id: number) => {

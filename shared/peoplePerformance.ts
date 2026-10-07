@@ -133,7 +133,9 @@ export type PerfMetric =
   // 37c (Jorge, 6 out 2026): "guarda quem regista as cobranças de parceiros" — o autor vem da Multipark
   | "partnerCharges"
   // 37d (Jorge, 6 out 2026): "os Pro ficam numa coluna à parte junto com as avenças"
-  | "proPlanCharges";
+  | "proPlanCharges"
+  // 42c (Jorge, 7 out 2026): a equipa do TL (o turno dele) e do supervisor (a cidade) — "os movimentos da equipa e quanto é que a equipa gastou… extras a mais, extras a menos… se a equipa não anda com o Zello… não mexe… está muito tempo parada"
+  | "teamDays" | "teamPersonDays" | "teamActions" | "teamCost" | "teamNoZello" | "teamHoursStopped" | "teamShortHours" | "teamOverHours" | "teamPoints";
 
 export interface PerfMetricDef {
   key: PerfMetric;
@@ -193,6 +195,15 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   returnFlights: { key: "returnFlights", label: "Voos de regresso registados", source: "multipark" },
   partnerCharges: { key: "partnerCharges", label: "Cobranças de parceiros", source: "multipark" },
   proPlanCharges: { key: "proPlanCharges", label: "Cobranças de Pro e avenças", source: "multipark" },
+  teamDays: { key: "teamDays", label: "Dias com equipa", source: "dashboard" },
+  teamPersonDays: { key: "teamPersonDays", label: "Pessoas·dia da equipa", source: "dashboard" },
+  teamActions: { key: "teamActions", label: "Movimentos da equipa", source: "avaliação" },
+  teamCost: { key: "teamCost", label: "Custo da equipa", source: "dashboard" },
+  teamNoZello: { key: "teamNoZello", label: "Equipa a mexer sem Zello", source: "zello", bad: true },
+  teamHoursStopped: { key: "teamHoursStopped", label: "Horas paradas da equipa", source: "zello", bad: true },
+  teamShortHours: { key: "teamShortHours", label: "Extras a menos (h·pessoa)", source: "dashboard", bad: true },
+  teamOverHours: { key: "teamOverHours", label: "Extras a mais (h·pessoa)", source: "dashboard", bad: true },
+  teamPoints: { key: "teamPoints", label: "Pontos da equipa", source: "avaliação" },
 };
 
 export type PerfTotals = Record<PerfMetric, number>;
@@ -223,15 +234,15 @@ export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfM
   },
   supervision: {
     cards: ["hours", "leadsActions", "created", "updated", "cashCorrections", "complaintsClosed", "tasksDone", "callsAnswered"],
-    columns: ["hours", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
+    columns: ["hours", "teamPoints", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
     chart: ["leadsActions", "created", "cashCorrections", "complaintsClosed"],
-    weights: { leadsActions: 2, extrasDia: 1, created: 3, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, emails: 2, waMessages: 0.5, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, proPlanCharges: 3, expenses: 1, expensesApproved: 2, cashCounts: 2, cashCorrections: 2, handovers: 2, tasksDone: 1 },
+    weights: { teamPoints: 1, leadsActions: 2, extrasDia: 1, created: 3, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, emails: 2, waMessages: 0.5, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, proPlanCharges: 3, expenses: 1, expensesApproved: 2, cashCounts: 2, cashCorrections: 2, handovers: 2, tasksDone: 1 },
   },
   teamleaders: {
     cards: ["hours", "recolhas", "entregas", "checkingIn", "checkingOut", "callsAnswered", "tlDays", "teamPeople"],
-    columns: ["hours", "evalPoints", "recolhas", "entregas", "movements", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
+    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
     chart: ["recolhas", "entregas", "checkingIn", "checkingOut"],
-    weights: { evalPoints: 1, checkingIn: 1, checkingOut: 1, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, waMessages: 0.5, cashCounts: 3, handovers: 3, extrasDia: 1, lostFound: 2, occurrences: 1 },
+    weights: { evalPoints: 1, teamPoints: 1, checkingIn: 1, checkingOut: 1, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, waMessages: 0.5, cashCounts: 3, handovers: 3, extrasDia: 1, lostFound: 2, occurrences: 1 },
   },
   drivers: {
     cards: ["hours", "recolhas", "entregas", "movements", "km", "overLimitDays", "occurrences", "evalPoints"],
@@ -246,6 +257,49 @@ export function workPoints(group: PerfGroup, t: PerfTotals): number {
   let s = 0;
   for (const [k, w] of Object.entries(GROUP_VIEW[group].weights) as Array<[PerfMetric, number]>) s += (t[k] ?? 0) * w;
   return Math.round(s * 10) / 10;
+}
+
+// ─── 42c: a equipa do TL e do supervisor ────────────────────────────────────
+
+/** Abas com equipa: o TL (o turno dele na escala) e o supervisor (a cidade inteira, TL incluídos). */
+export const TEAM_GROUPS: ReadonlyArray<PerfGroup> = ["teamleaders", "supervision"];
+
+/** Colunas da tabela "A equipa" (TL e supervisão). */
+export const TEAM_COLUMNS: PerfMetric[] = ["teamDays", "teamPersonDays", "teamActions", "teamCost", "teamNoZello", "teamHoursStopped", "teamShortHours", "teamOverHours", "teamPoints"];
+
+/**
+ * Pontos da equipa num dia, POR PESSOA da equipa (o tamanho da equipa não
+ * conta — Lisboa não ganha ao Porto só por ser maior): cada movimento
+ * (recolha, entrega ou movimento) por pessoa +1; cada pessoa que mexeu
+ * carros sem o Zello ligado −20 a dividir pela equipa (a equipa toda sem
+ * Zello apaga um dia normal); cada hora parada por pessoa −2. Propostos
+ * (Jorge decide os pesos).
+ */
+export const TEAM_POINT_WEIGHTS = { actionsPerPerson: 1, noZelloPerPerson: -20, stoppedHoursPerPerson: -2 } as const;
+
+export interface TeamDay { people: number; actions: number; noZello: number; hoursStopped: number }
+
+/** Pontos da equipa num dia (0 sem gente). PURA. */
+export function teamDayPoints(t: TeamDay): number {
+  if (!(t.people > 0)) return 0;
+  const w = TEAM_POINT_WEIGHTS;
+  const v = (t.actions / t.people) * w.actionsPerPerson + (t.noZello / t.people) * w.noZelloPerPerson + (t.hoursStopped / t.people) * w.stoppedHoursPerPerson;
+  return Math.round(v * 10) / 10;
+}
+
+/**
+ * 42c: a aba pela ESCALA do período — quem tem posto de condutor/extra mas
+ * foi team leader em pelo menos metade dos dias em que esteve escalado conta
+ * como team leader (ex.: um extra que passou a chefe de turno). PURA.
+ */
+export function rosterGroup(base: PerfGroup | null, roster: { days: number; tlDays: number } | undefined): PerfGroup | null {
+  if (base === "drivers" && roster && roster.tlDays > 0 && roster.tlDays * 2 >= roster.days) return "teamleaders";
+  return base;
+}
+
+/** 42c: "tem km e nenhum movimento" — o Zello/PDA e o agente da Multipark não estão na mesma ficha. PURA. */
+export function kmWithoutMoves(t: Pick<PerfTotals, "km" | "recolhas" | "entregas" | "movements">): boolean {
+  return t.km > 0 && t.recolhas + t.entregas + t.movements === 0;
 }
 
 /** Abaixo disto de horas no período não há "por hora" (dá números absurdos). */

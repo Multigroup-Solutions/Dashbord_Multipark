@@ -433,8 +433,9 @@ export async function closeTasksForSource(module: TaskSourceModule | string, id:
 /**
  * Resposta de disponibilidade que precisa de decisão humana: UMA tarefa por
  * pessoa × semana ("Disponibilidade a confirmar: <nome>"). Respostas seguintes
- * da mesma semana entram como comentário. Responsável: env
- * AVAILABILITY_TASK_ASSIGNEE_EMAIL (fallback: RH histórico).
+ * da mesma semana entram como comentário. Responsável: Definições
+ * (availability.assigneeEmail) → env AVAILABILITY_TASK_ASSIGNEE_EMAIL; sem
+ * nenhum, fica sem responsável (43c: já não vai para a Kamila por omissão).
  */
 export async function upsertAvailabilityTask(input: {
   employeeId: number;
@@ -475,7 +476,7 @@ export async function upsertAvailabilityTask(input: {
       const { getSetting } = await import("./appSettings");
       ownerEmail = (await getSetting("availability.assigneeEmail")) || ownerEmail;
     } catch { /* fica a env/omissão */ }
-    const owner = await findEmployeeByEmailOrName(ownerEmail);
+    const owner = ownerEmail ? await findEmployeeByEmailOrName(ownerEmail) : null;
     if (owner && taskId) {
       await db.insert(taskAssignees).values({ taskId, employeeId: owner.id });
       await db.update(tasks).set({ assigneeId: owner.id }).where(eq(tasks.id, taskId));

@@ -350,6 +350,10 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
       }
     } catch { /* sem partes */ }
   }
+  // 43b: o dono de cada Zello (ficha com esse Zello fixo) fica com o que o PDA fez fora dos check-ins
+  const { fixedZelloOwners } = await import("./db");
+  const { zelloKey } = await import("../shared/zelloKey");
+  const owners = await fixedZelloOwners().catch(() => new Map<string, number>());
   const gpsDays = new Set<string>();
   for (const g of gpsRows) {
     const day = String(g.day);
@@ -365,6 +369,13 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
       // B1: o que o PDA fez sem ninguém com login não pode desaparecer dos totais
       const rest = leftoverFromShares(whole, [sums]);
       if (!rest) continue;
+      const owner = owners.get(zelloKey(zello));
+      if (owner != null) {
+        const p = personForEmployee(owner, g.displayName);
+        addZello(p, zello);
+        addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations }, day);
+        continue;
+      }
       const key = `gpsu:${zello}`;
       const p = get(key, () => blank(key, `${g.displayName || zello} — sem login no PDA`, "sem_login", null));
       addZello(p, zello);
@@ -491,11 +502,12 @@ export async function getPersonDay(date: string, key: string) {
         FROM daily_driver_history h
        WHERE h.zelloUsername = ${ref} AND DATE(h.date) = ${date}
          AND ${gpsRowOwnScope(sql`h.employeeId`, sql`h.zelloUsername`)}`));
+    // 43b: o Zello do check-in ou, sem ele, o do PDA
     const pda = rowsOf(await db.execute(sql`
-      SELECT p.name AS pdaName, c.zelloUsername, c.checkinAt, c.checkoutAt, e.fullName AS employeeName
+      SELECT p.name AS pdaName, COALESCE(NULLIF(c.zelloUsername, ''), p.zelloUsername) AS zelloUsername, c.checkinAt, c.checkoutAt, e.fullName AS employeeName
         FROM pda_checkins c JOIN pdas p ON p.id = c.pdaId LEFT JOIN employees e ON e.id = c.employeeId
-       WHERE c.zelloUsername = ${ref} AND c.checkinAt < ${range.end} AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${range.start})
-         AND ${gpsRowOwnScope(sql`NULL`, sql`c.zelloUsername`)} ORDER BY c.checkinAt`));
+       WHERE COALESCE(NULLIF(c.zelloUsername, ''), p.zelloUsername) = ${ref} AND c.checkinAt < ${range.end} AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${range.start})
+         AND ${gpsRowOwnScope(sql`NULL`, sql`COALESCE(NULLIF(c.zelloUsername, ''), p.zelloUsername)`)} ORDER BY c.checkinAt`));
     return { ...empty, name: gps[0]?.displayName ?? ref, gps: gps.map(normGps), pda };
   }
   return empty;

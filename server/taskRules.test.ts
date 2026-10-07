@@ -90,7 +90,8 @@ describe("disponibilidade a confirmar — 1 tarefa por pessoa × semana", () => 
   it("título e responsável configurável", () => {
     expect(availabilityTaskTitle("Ana Silva")).toBe("Disponibilidade a confirmar: Ana Silva");
     expect(availabilityTaskAssigneeEmail({ AVAILABILITY_TASK_ASSIGNEE_EMAIL: " rh@multipark.pt " })).toBe("rh@multipark.pt");
-    expect(availabilityTaskAssigneeEmail({})).toBe("kamilafagundes@multipark.pt");
+    // 43c: ninguém escrito no código (antes: a Kamila)
+    expect(availabilityTaskAssigneeEmail({})).toBe("");
   });
   it("link para a origem", () => {
     expect(taskSourceLink("availability", 42, "availability:42:2026-09-21")).toBe("/extras-dia?date=2026-09-21");

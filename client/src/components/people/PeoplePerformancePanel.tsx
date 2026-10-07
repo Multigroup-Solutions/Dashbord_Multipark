@@ -5,14 +5,26 @@
  * confirma o papel; a aba nem aparece aos outros).
  *
  * Regras em shared/peoplePerformance.ts; dados em server/peoplePerformance.ts.
+ *
+ * 42c (Jorge, 7 out 2026): cidade e marca do topo; o nome abre a ficha e o
+ * resto da linha o detalhe; todos os cabeçalhos ordenam; "Como se contam os
+ * pontos" (a tabela dos pesos); a equipa do TL e do supervisor (movimentos,
+ * custo, sem Zello, horas paradas, extras a mais/a menos); "km sem
+ * movimentos" com as Ligações à mão.
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import {
   GROUP_VIEW, PERF_GROUPS, PERF_METRICS, PERF_PERIODS, periodTitle, rankPeople, shiftAnchor, MIN_HOURS_FOR_RATE,
+  TEAM_COLUMNS, TEAM_GROUPS, TEAM_POINT_WEIGHTS,
   type PerfGroup, type PerfMetric, type PerfPeriod, type RankMode,
 } from "@shared/peoplePerformance";
+import { EVALUATION_POINTS, EVALUATION_RULES } from "@shared/evaluationRules";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { useTableSort, Th } from "@/components/SortableTable";
+import { PersonLinksDialog } from "@/components/PersonLinksDialog";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,13 +33,21 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChevronLeft, ChevronRight, Loader2, Medal } from "lucide-react";
+import { ChevronLeft, ChevronRight, Link2, Loader2, Medal } from "lucide-react";
 
 const SERIES = ["var(--perf-1)", "var(--perf-2)", "var(--perf-3)", "var(--perf-4)"];
 const nf = new Intl.NumberFormat("pt-PT", { maximumFractionDigits: 1 });
-const fmt = (k: PerfMetric, v: number) => (k === "km" ? `${nf.format(v)} km` : k === "maxSpeed" ? (v ? `${Math.round(v)} km/h` : "—") : k === "hours" ? `${nf.format(v)} h` : nf.format(v));
+const eur = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+const HOUR_METRICS: ReadonlySet<PerfMetric> = new Set(["hours", "teamHoursStopped", "teamShortHours", "teamOverHours"]);
+const fmt = (k: PerfMetric, v: number) => (k === "km" ? `${nf.format(v)} km` : k === "maxSpeed" ? (v ? `${Math.round(v)} km/h` : "—")
+  : k === "teamCost" ? eur.format(v) : HOUR_METRICS.has(k) ? `${nf.format(v)} h` : nf.format(v));
+const signed = (n: number) => (n > 0 ? `+${nf.format(n)}` : nf.format(n));
 
-type Person = { employeeId: number; name: string; position: string | null; role: string | null; active: boolean; photoUrl: string | null; totals: Record<PerfMetric, number>; points: number; perHour: number | null; series: Partial<Record<PerfMetric, number[]>> };
+type Person = {
+  employeeId: number; name: string; position: string | null; role: string | null; active: boolean; photoUrl: string | null;
+  totals: Record<PerfMetric, number>; points: number; perHour: number | null; series: Partial<Record<PerfMetric, number[]>>;
+  kmNoMoves?: boolean; byRoster?: boolean;
+};
 
 export function PeoplePerformancePanel() {
   const [period, setPeriod] = useState<PerfPeriod>("month");
@@ -35,10 +55,28 @@ export function PeoplePerformancePanel() {
   const [group, setGroup] = useState<PerfGroup>("drivers");
   const [mode, setMode] = useState<RankMode>("perHour");
   const [open, setOpen] = useState<Person | null>(null);
-  const q = trpc.evaluation.peoplePerformance.useQuery({ period, anchor, group }, { retry: false, staleTime: 5 * 60_000, placeholderData: (p) => p });
+  const [links, setLinks] = useState<Person | null>(null);
+  const { projectId } = useGlobalFilters();
+  const openEmployee = useOpenEmployee();
+  const q = trpc.evaluation.peoplePerformance.useQuery({ period, anchor, group, projectId: projectId ?? undefined }, { retry: false, staleTime: 5 * 60_000, placeholderData: (p) => p });
   const d = q.data;
   const view = GROUP_VIEW[group];
   const ranked = useMemo(() => (d ? rankPeople(d.people as Person[], mode) : []), [d, mode]);
+  const { sorted, sortKey, sortDir, toggle } = useTableSort(ranked);
+  /** o nome abre a ficha; o resto da linha, o detalhe */
+  const nameCell = (r: Person) => (
+    <>
+      <button type="button" className="font-semibold text-primary hover:underline" title="Abrir a ficha no RH"
+        onClick={(e) => { e.stopPropagation(); openEmployee(r.employeeId); }}>{r.name}</button>
+      {!r.active && <Badge variant="outline" className="ml-1">inativo</Badge>}
+      {r.byRoster && <Badge variant="outline" className="ml-1" title="Posto de condutor ou extra, mas foi team leader em pelo menos metade dos dias escalados">TL pela escala</Badge>}
+      {r.kmNoMoves && (
+        <button type="button" className="ml-1 inline-flex items-center gap-0.5 rounded border border-amber-500 px-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300"
+          title="Tem km do Zello e nenhum movimento na Multipark: o utilizador do Zello/PDA e o agente da Multipark não estão na mesma ficha. Clica para ver as ligações."
+          onClick={(e) => { e.stopPropagation(); setLinks(r); }}><Link2 className="h-3 w-3" /> km sem movimentos</button>
+      )}
+    </>
+  );
   const chartData = useMemo(() => d ? d.buckets.map((_, i) => Object.fromEntries([["label", d.bucketLabels[i]], ...view.chart.map((k) => [k, d.groupSeries[k]?.[i] ?? 0])])) : [], [d, view]);
   const top = ranked.filter((r) => (mode === "perHour" ? r.perHour != null : r.points !== 0)).slice(0, 15);
 
@@ -55,6 +93,7 @@ export function PeoplePerformancePanel() {
           <Button size="sm" variant="outline" aria-label="Seguinte" onClick={() => setAnchor((a) => shiftAnchor(period, a, 1))}><ChevronRight className="h-4 w-4" /></Button>
           <span className="text-sm font-semibold">{periodTitle(period, anchor)}</span>
           {q.isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          <span className="text-xs text-muted-foreground">Cidade e marca: o filtro do topo.</span>
           <div role="group" aria-label="Ordenar o ranking" className="ml-auto inline-flex items-center gap-1 text-xs">
             <span className="text-muted-foreground">Ranking por</span>
             <Button size="sm" variant={mode === "perHour" ? "selected" : "outline"} onClick={() => setMode("perHour")}>pontos por hora</Button>
@@ -120,32 +159,32 @@ export function PeoplePerformancePanel() {
             </Card>
           </div>
 
-          {/* tabela: toda a gente, todas as colunas da aba */}
+          {/* tabela: toda a gente, todas as colunas da aba (42c: todos os cabeçalhos ordenam) */}
           <Card>
             <CardHeader className="pb-1"><CardTitle className="text-base">Toda a gente ({ranked.length})</CardTitle></CardHeader>
             <CardContent className="overflow-x-auto p-0">
               <table className="w-full min-w-[900px] text-[13px]">
                 <thead>
                   <tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground">
-                    <th className="sticky left-0 bg-muted px-3 py-2">#</th>
-                    <th className="sticky left-8 bg-muted px-3 py-2">Pessoa</th>
-                    <th className="px-2 py-2 text-right">Nota</th>
-                    <th className="px-2 py-2 text-right">Pontos</th>
-                    <th className="px-2 py-2 text-right">Por hora</th>
-                    {view.columns.map((k) => <th key={k} className="px-2 py-2 text-right" title={`${PERF_METRICS[k].label} (${PERF_METRICS[k].source})`}>{PERF_METRICS[k].label}</th>)}
+                    <Th k="rank" label="#" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="sticky left-0 bg-muted px-3" />
+                    <Th k="name" label="Pessoa" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="sticky left-8 bg-muted px-3" />
+                    <Th k="grade" label="Nota" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
+                    <Th k="points" label="Pontos" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
+                    <Th k="perHour" label="Por hora" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
+                    {view.columns.map((k) => <Th key={k} k={`totals.${k}`} label={<span title={`${PERF_METRICS[k].label} (${PERF_METRICS[k].source})`}>{PERF_METRICS[k].label}</span>} sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />)}
                   </tr>
                 </thead>
                 <tbody>
-                  {ranked.map((r) => (
-                    <tr key={r.employeeId} className="cursor-pointer border-t hover:bg-muted/60" onClick={() => setOpen(r)}>
+                  {sorted.map((r) => (
+                    <tr key={r.employeeId} className="cursor-pointer border-t hover:bg-muted/60" onClick={() => setOpen(r)} title="Ver o detalhe">
                       <td className="sticky left-0 bg-card px-3 py-1.5 tabular-nums">{r.rank <= 3 && r.grade > 0 ? <Medal className={`inline h-4 w-4 ${r.rank === 1 ? "text-amber-500" : r.rank === 2 ? "text-slate-400" : "text-amber-700"}`} aria-label={`${r.rank}.º`} /> : r.rank}</td>
-                      <td className="sticky left-8 bg-card px-3 py-1.5"><span className="font-semibold">{r.name}</span>{!r.active && <Badge variant="outline" className="ml-1">inativo</Badge>}</td>
+                      <td className="sticky left-8 bg-card px-3 py-1.5">{nameCell(r)}</td>
                       <td className="px-2 py-1.5 text-right"><GradeBar grade={r.grade} /></td>
                       <td className="px-2 py-1.5 text-right font-semibold tabular-nums">{nf.format(r.points)}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{r.perHour == null ? "—" : nf.format(r.perHour)}</td>
                       {view.columns.map((k) => {
                         const v = r.totals[k] ?? 0;
-                        return <td key={k} className={`px-2 py-1.5 text-right tabular-nums ${PERF_METRICS[k].bad && v > 0 ? "font-semibold text-destructive" : v === 0 ? "text-muted-foreground" : ""}`}>{v === 0 ? "·" : fmt(k, v)}</td>;
+                        return <td key={k} className={`px-2 py-1.5 text-right tabular-nums ${(PERF_METRICS[k].bad && v > 0) || v < 0 ? "font-semibold text-destructive" : v === 0 ? "text-muted-foreground" : ""}`}>{v === 0 ? "·" : fmt(k, v)}</td>;
                       })}
                     </tr>
                   ))}
@@ -153,6 +192,10 @@ export function PeoplePerformancePanel() {
               </table>
             </CardContent>
           </Card>
+
+          {TEAM_GROUPS.includes(group) && <TeamTable group={group} people={ranked} nameCell={nameCell} onOpen={setOpen} />}
+
+          <PointsTable group={group} />
 
           <div className="space-y-1 text-xs text-muted-foreground">
             <p>Pontos = soma ponderada do que a aba mede (nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação). Por hora só com {MIN_HOURS_FOR_RATE} h ou mais (ponto; sem ponto, a escala). Nota = 100 para o melhor.</p>
@@ -162,7 +205,97 @@ export function PeoplePerformancePanel() {
         </>)}
 
       {open && d && <PersonDialog p={open} group={group} labels={d.bucketLabels} onClose={() => setOpen(null)} />}
+      <PersonLinksDialog employeeId={links?.employeeId ?? null} name={links?.name} open={!!links} onOpenChange={(o) => !o && setLinks(null)} />
     </div>
+  );
+}
+
+/** 42c: a equipa de cada TL (o turno dele) ou supervisor (as cidades dele). */
+function TeamTable({ group, people, nameCell, onOpen }: { group: PerfGroup; people: Person[]; nameCell: (r: Person) => React.ReactNode; onOpen: (p: Person) => void }) {
+  const rows = useMemo(() => people.filter((p) => (p.totals.teamDays ?? 0) > 0).map((p) => ({
+    ...p,
+    perPersonDay: p.totals.teamPersonDays > 0 ? Math.round((p.totals.teamActions / p.totals.teamPersonDays) * 10) / 10 : null,
+    costPerMove: p.totals.teamActions > 0 ? Math.round((p.totals.teamCost / p.totals.teamActions) * 100) / 100 : null,
+  })), [people]);
+  const { sorted, sortKey, sortDir, toggle } = useTableSort(rows, "totals.teamPoints", -1);
+  const cols = TEAM_COLUMNS.filter((k) => group === "supervision" || (k !== "teamShortHours" && k !== "teamOverHours"));
+  return (
+    <Card>
+      <CardHeader className="pb-1">
+        <CardTitle className="text-base">A equipa {group === "teamleaders" ? "de cada team leader (o turno dele na escala)" : "de cada supervisor (as cidades dele)"}</CardTitle>
+        <p className="text-xs text-muted-foreground">Movimentos = recolhas + entregas + movimentos da equipa. Custo como na Atividade do dia (horas × taxa do nível; o TL pelo salário). Sem Zello = pessoas que mexeram carros sem GPS nesse dia.{group === "supervision" ? " Extras a menos / a mais = horas·pessoa abaixo / acima da previsão do Extras Dia (só com Dia ou Semana)." : ""}</p>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        {sorted.length === 0 ? <p className="p-4 text-sm text-muted-foreground">Ninguém com equipa na escala neste período.</p> : (
+          <table className="w-full min-w-[900px] text-[13px]">
+            <thead>
+              <tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground">
+                <Th k="name" label="Pessoa" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="sticky left-0 bg-muted px-3" />
+                {cols.map((k) => <Th key={k} k={`totals.${k}`} label={PERF_METRICS[k].label} sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />)}
+                <Th k="perPersonDay" label="Movimentos por pessoa·dia" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
+                <Th k="costPerMove" label="€ por movimento" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr key={r.employeeId} className="cursor-pointer border-t hover:bg-muted/60" onClick={() => onOpen(r)} title="Ver o detalhe">
+                  <td className="sticky left-0 bg-card px-3 py-1.5">{nameCell(r)}</td>
+                  {cols.map((k) => {
+                    const v = r.totals[k] ?? 0;
+                    return <td key={k} className={`px-2 py-1.5 text-right tabular-nums ${(PERF_METRICS[k].bad && v > 0) || v < 0 ? "font-semibold text-destructive" : v === 0 ? "text-muted-foreground" : ""}`}>{v === 0 ? "·" : fmt(k, v)}</td>;
+                  })}
+                  <td className="px-2 py-1.5 text-right tabular-nums">{r.perPersonDay == null ? "—" : nf.format(r.perPersonDay)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{r.costPerMove == null ? "—" : eur.format(r.costPerMove)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 42c: "uma tabela… que pontos é que tem cada coisa" — os pesos desta aba. */
+function PointsTable({ group }: { group: PerfGroup }) {
+  const weights = Object.entries(GROUP_VIEW[group].weights) as Array<[PerfMetric, number]>;
+  const hasEval = weights.some(([k]) => k === "evalPoints");
+  const hasTeam = weights.some(([k]) => k === "teamPoints");
+  const w = TEAM_POINT_WEIGHTS;
+  const row = (label: string, pts: string, note?: string) => (
+    <tr key={label} className="border-t"><td className="px-3 py-1">{label}{note && <span className="ml-1 text-muted-foreground">({note})</span>}</td><td className="px-3 py-1 text-right font-semibold tabular-nums">{pts}</td></tr>
+  );
+  return (
+    <Card>
+      <details open>
+        <summary className="cursor-pointer px-6 py-3 text-base font-semibold">Como se contam os pontos desta aba</summary>
+        <CardContent className="grid gap-4 pt-0 md:grid-cols-2">
+          <table className="w-full text-[13px]">
+            <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">Cada…</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
+            <tbody>{weights.map(([k, v]) => row(PERF_METRICS[k].label, k === "evalPoints" || k === "teamPoints" ? "1 por ponto" : signed(v), PERF_METRICS[k].source))}</tbody>
+          </table>
+          <div className="space-y-4">
+            {hasEval && (
+              <table className="w-full text-[13px]">
+                <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">Pontos da avaliação — cada…</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
+                <tbody>{EVALUATION_RULES.map((r) => row(r.label, signed(EVALUATION_POINTS[r.key])))}</tbody>
+              </table>
+            )}
+            {hasTeam && (
+              <table className="w-full text-[13px]">
+                <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">Pontos da equipa — por dia, por pessoa da equipa</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
+                <tbody>
+                  {row("Movimento da equipa (recolha, entrega ou movimento)", signed(w.actionsPerPerson), "a dividir pela equipa")}
+                  {row("Pessoa que mexeu carros sem Zello", signed(w.noZelloPerPerson), "a dividir pela equipa")}
+                  {row("Hora parada (GPS)", signed(w.stoppedHoursPerPerson), "a dividir pela equipa")}
+                </tbody>
+              </table>
+            )}
+            <p className="text-xs text-muted-foreground">Horas e km não dão pontos. "Por hora" = pontos ÷ horas trabalhadas (com {MIN_HOURS_FOR_RATE} h ou mais). Nota = 100 para o melhor.</p>
+          </div>
+        </CardContent>
+      </details>
+    </Card>
   );
 }
 

@@ -1,7 +1,10 @@
 // Mapa ao vivo do Zello (pedido Jorge): posições/velocidades de todos os
 // condutores em tempo real (polling 30s), alertas visuais e ecrã de ligação
 // Zello↔funcionário. Google Maps com marcadores e trânsito.
-import { useMemo } from "react";
+// 43a (Jorge, 7 out 2026: "o Atualizar não faz nada… isto aqui em cima é só
+// confusão"): Atualizar lê tudo de novo (posições, ligações, PDAs) e volta a
+// enquadrar o mapa; em cima, uma linha só e os alertas contados (abrem a lista).
+import { useMemo, useState } from "react";
 import { ZelloGoogleMap } from "@/components/maps/ZelloGoogleMap";
 import { hasValidMapPosition, type ZelloMapPosition } from "@shared/zelloMap";
 import { trpc } from "@/lib/trpc";
@@ -31,10 +34,19 @@ export function ZelloLiveTab() {
   const utils = trpc.useUtils();
   const locQ = trpc.operational.zello.locations.useQuery(undefined, { refetchInterval: 30_000, retry: retryTransient });
   const { data: locations = [], isFetching, refetch, dataUpdatedAt } = locQ;
-  const { data: zelloUsers = [] } = trpc.operational.zello.users.useQuery();
-  const { data: mappings = [] } = trpc.operational.zello.mappings.useQuery(undefined, { refetchInterval: 60_000 });
-  const { data: pdas = [] } = trpc.operational.pdas.list.useQuery();
+  const usersQ = trpc.operational.zello.users.useQuery();
+  const mappingsQ = trpc.operational.zello.mappings.useQuery(undefined, { refetchInterval: 60_000 });
+  const zelloUsers = usersQ.data ?? [];
+  const mappings = mappingsQ.data ?? [];
   const { data: employees = [] } = trpc.rh.list.useQuery({ isActive: true });
+  const [fitSignal, setFitSignal] = useState(0);
+  const [openAlert, setOpenAlert] = useState<string | null>(null);
+  const refreshing = isFetching || usersQ.isFetching || mappingsQ.isFetching;
+  /** Atualizar: tudo de novo (posições, utilizadores e PDAs do Zello, ligações) e o mapa volta a mostrar toda a gente. */
+  const refreshAll = async () => {
+    await Promise.all([refetch(), usersQ.refetch(), mappingsQ.refetch()]);
+    setFitSignal((n) => n + 1);
+  };
 
   // Resolução Zello→pessoa: o check-in de PDA do DIA ganha à ligação fixa
   // (os "Extra NNN" vivem nos PDAs e cada dia é uma pessoa diferente)
@@ -47,32 +59,35 @@ export function ZelloLiveTab() {
     return m;
   }, [mappings]);
 
-  // Utilizadores Zello que pertencem a PDAs (ligação é o check-in diário do
-  // PDA, não a ficha)
+  // Utilizadores Zello que pertencem a PDAs (o check-in do dia manda; o dono
+  // fixo fica com o GPS quando ninguém fez check-in). 43b: vem do servidor,
+  // com TODOS os PDAs — um PDA de outra cidade já não parece telemóvel pessoal.
   const pdaByZello = useMemo(() => {
     const m = new Map<string, { pdaName: string }>();
-    for (const p of pdas as any[]) {
-      if (p.zelloUsername) m.set(String(p.zelloUsername).toLowerCase(), { pdaName: p.name });
+    for (const u of zelloUsers as any[]) {
+      if (u.pda) m.set(String(u.name).toLowerCase(), { pdaName: u.pda.name });
     }
     return m;
-  }, [pdas]);
+  }, [zelloUsers]);
 
   const realName = (l: { username: string; displayName: string }) =>
     mapByZello.get(l.username.toLowerCase())?.fullName || l.displayName || l.username;
 
   const live = (locations as LiveLoc[]).filter(hasValidMapPosition);
-  const alerts = useMemo(() => {
-    const out: { key: string; icon: any; text: string; color: string }[] = [];
+  // Alertas contados por tipo (a lista de nomes abre ao carregar)
+  const alertGroups = useMemo(() => {
+    const groups = [
+      { key: "speed", icon: Gauge, label: `acima de ${SPEED_ALERT_KMH} km/h`, color: "border-red-300 bg-red-50 text-red-800", items: [] as string[] },
+      { key: "battery", icon: Battery, label: `bateria abaixo de ${BATTERY_ALERT}%`, color: "border-amber-300 bg-amber-50 text-amber-800", items: [] as string[] },
+      { key: "offline", icon: WifiOff, label: "sem reportar há mais de 1 h", color: "border-slate-300 bg-slate-50 text-slate-700", items: [] as string[] },
+    ];
     for (const l of live) {
       const name = realName(l);
-      if (l.speed > SPEED_ALERT_KMH)
-        out.push({ key: `sp-${l.username}`, icon: Gauge, text: `${name} a ${Math.round(l.speed)} km/h`, color: "border-red-300 bg-red-50 text-red-800" });
-      if (l.batteryLevel > 0 && l.batteryLevel < BATTERY_ALERT)
-        out.push({ key: `bat-${l.username}`, icon: Battery, text: `${name} com ${l.batteryLevel}% de bateria`, color: "border-amber-300 bg-amber-50 text-amber-800" });
-      if (l.lastReportDelay > OFFLINE_ALERT_S)
-        out.push({ key: `off-${l.username}`, icon: WifiOff, text: `${name} sem reportar há ${Math.round(l.lastReportDelay / 3600)}h`, color: "border-slate-300 bg-slate-50 text-slate-700" });
+      if (l.speed > SPEED_ALERT_KMH) groups[0].items.push(`${name} a ${Math.round(l.speed)} km/h`);
+      if (l.batteryLevel > 0 && l.batteryLevel < BATTERY_ALERT) groups[1].items.push(`${name} com ${l.batteryLevel}%`);
+      if (l.lastReportDelay > OFFLINE_ALERT_S) groups[2].items.push(`${name} há ${Math.round(l.lastReportDelay / 3600)} h`);
     }
-    return out;
+    return groups.filter((g) => g.items.length);
   }, [live, mapByZello]);
 
   const mapDrivers = live.map((l) => {
@@ -87,6 +102,7 @@ export function ZelloLiveTab() {
   const mapMutation = trpc.operational.zello.mapUserToEmployee.useMutation({
     onSuccess: () => {
       utils.operational.zello.mappings.invalidate();
+      utils.operational.zello.users.invalidate();
       toast.success("Ligação guardada!");
     },
     onError: (e) => toast.error(e.message),
@@ -106,33 +122,34 @@ export function ZelloLiveTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Satellite className="w-4 h-4" />
-          {locQ.error && !locQ.data ? "Sem posições" : `${live.length} condutor(es) com posição`} · atualiza a cada 30s
-          {dataUpdatedAt ? ` · última: ${fmtPTTime(dataUpdatedAt)}` : ""}
-        </div>
-        <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCw className={`w-3.5 h-3.5 mr-1 ${isFetching ? "animate-spin" : ""}`} /> Atualizar
+      <div className="flex flex-wrap items-center gap-2">
+        <Satellite className="h-4 w-4 text-muted-foreground" />
+        <span className="text-sm font-medium">{locQ.error && !locQ.data ? "Sem posições" : `${live.length} no mapa`}</span>
+        <span className="text-xs text-muted-foreground">
+          {dataUpdatedAt ? `atualizado às ${fmtPTTime(dataUpdatedAt)}` : ""} · sozinho a cada 30 s
+        </span>
+        {alertGroups.map((g) => (
+          <button key={g.key} type="button" onClick={() => setOpenAlert(openAlert === g.key ? null : g.key)} aria-expanded={openAlert === g.key}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs ${g.color}`}>
+            <g.icon className="h-3 w-3" /> {g.items.length} {g.label}
+          </button>
+        ))}
+        <Button size="sm" variant="outline" className="ml-auto" onClick={() => void refreshAll()} disabled={refreshing}
+          title="Lê de novo as posições, as ligações Zello ↔ pessoas e os PDAs, e volta a mostrar toda a gente no mapa">
+          <RefreshCw className={`w-3.5 h-3.5 mr-1 ${refreshing ? "animate-spin" : ""}`} /> Atualizar
         </Button>
       </div>
+      {openAlert && (
+        <p className="text-xs text-muted-foreground">{alertGroups.find((g) => g.key === openAlert)?.items.join(" · ")}</p>
+      )}
 
       {locQ.error && (
-        <QueryErrorNote error={locQ.error} onRetry={() => refetch()} retrying={isFetching} what={locQ.data ? "as posições mais recentes (o mapa mostra as últimas que chegaram)" : "as posições do Zello"} />
-      )}
-      {alerts.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {alerts.map((a) => (
-            <Badge key={a.key} variant="outline" className={`gap-1 max-w-full whitespace-normal break-words text-left ${a.color}`}>
-              <a.icon className="w-3 h-3" /> {a.text}
-            </Badge>
-          ))}
-        </div>
+        <QueryErrorNote error={locQ.error} onRetry={() => void refreshAll()} retrying={isFetching} what={locQ.data ? "as posições mais recentes (o mapa mostra as últimas que chegaram)" : "as posições do Zello"} />
       )}
 
       <Card>
         <CardContent className="p-0 overflow-hidden rounded-lg">
-          <ZelloGoogleMap drivers={mapDrivers} />
+          <ZelloGoogleMap drivers={mapDrivers} fitSignal={fitSignal} />
         </CardContent>
       </Card>
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
@@ -151,8 +168,8 @@ export function ZelloLiveTab() {
             {unmappedCount > 0 && <Badge variant="secondary">{unmappedCount} por ligar</Badge>}
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            Os utilizadores instalados em <b>PDAs</b> mudam de mãos todos os dias — a ligação vem do
-            check-in do PDA (aba PDAs) e é automática. O seletor fixo é só para telemóveis pessoais.
+            Nos <b>PDAs</b> manda o check-in do dia (aba PDAs). Se o PDA é de uma pessoa, escolhe-a como <b>dono</b>:
+            fica com o GPS sempre que ninguém fez check-in nele. Nos telemóveis pessoais, escolhe a pessoa.
           </p>
         </CardHeader>
         <CardContent>
@@ -182,7 +199,7 @@ export function ZelloLiveTab() {
                       </p>
                     </div>
                     {isPda ? (
-                      <div className="shrink-0 text-right">
+                      <div className="flex w-full shrink-0 flex-col items-end gap-1 sm:w-52">
                         {hasToday ? (
                           <Badge variant="outline" className="gap-1 border-green-300 bg-green-50 text-green-800">
                             hoje: {linked!.fullName}
@@ -192,6 +209,14 @@ export function ZelloLiveTab() {
                             sem check-in de PDA hoje
                           </Badge>
                         )}
+                        <div className="w-full">
+                          <SearchableSelect
+                            options={employeeOptions}
+                            value={u.owner ? String(u.owner.employeeId) : ""}
+                            onChange={(v: string) => mapMutation.mutate({ zelloUsername: u.name, employeeId: v ? Number(v) : null })}
+                            placeholder="— dono do PDA (fixo) —"
+                          />
+                        </div>
                       </div>
                     ) : (
                       <div className="w-full sm:w-52 shrink-0">

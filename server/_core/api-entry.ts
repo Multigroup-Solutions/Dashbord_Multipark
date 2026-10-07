@@ -345,7 +345,7 @@ app.get("/api/cron/rh-docs-weekly", async (req, res) => {
   sendCronRun(res, await rhDocsWeeklyCron());
 });
 
-// Avaliação (motor único): recalcula as últimas 4 semanas em fatias de 7
+// Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7
 // dias; done:false + nextOffset → repetir com ?offsetDays=N.
 app.get("/api/cron/evaluation-recompute", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
