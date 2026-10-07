@@ -76,7 +76,7 @@ export interface BroadcastRecipient extends ResolvedRecipient {
   waMessageId?: string;
   /** Já tinha sido enviado por este mesmo envio (retoma, 17b): não saiu outra vez. */
   resumed?: true;
-  /** Cidade do template usado (registo por cidade, 0530). */
+  /** Cidade do template usado (registo por cidade, 0550). */
   city?: City;
 }
 

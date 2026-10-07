@@ -12,10 +12,10 @@ import { centralCallTotals, formatCallDuration } from "../shared/centralSugar";
 const src = (p: string) => readFileSync(p, "utf8");
 
 describe("Menu da Comunicação", () => {
-  it("ordem: Caixas de email → O meu email → Drive → WhatsApp → Central → Tarefas", () => {
+  it("ordem: Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas", () => {
     const layout = src("client/src/components/DashboardLayout.tsx");
     const group = layout.slice(layout.indexOf('label: "Comunicação"'), layout.indexOf('label: "Sistema"'));
-    const order = ["Caixas de email", "O meu email", "Drive", "WhatsApp", "Central", "Tarefas"].map((l) => group.indexOf(`label: "${l}"`));
+    const order = ["Caixas de email", "O meu email", "Drive", "WhatsApp", "Central", "Calendário", "Tarefas"].map((l) => group.indexOf(`label: "${l}"`));
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     // As Tarefas continuam também nas Operações.

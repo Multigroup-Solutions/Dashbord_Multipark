@@ -29,7 +29,8 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
 import { driverCityFrom, hasDriverTemplate, type City, type DriverMessage } from "../shared/driverTemplates";
-import { availabilityWindow } from "../shared/extrasSchedule";
+import type { HourWindow } from "../shared/availabilityWindow";
+import { NOT_EXTRA_NOTICE_REASON, noticeSpans } from "../shared/shiftNotice";
 
 // ─── Relógio de Lisboa (puro) ───────────────────────────────────────────────
 
@@ -134,7 +135,8 @@ export interface AutofillCandidate {
   id: number;
   fullName: string;
   level: "junior" | "senior" | "terminal" | "master";
-  availability: { status: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null } | null;
+  /** Janelas do dia operacional (operationalDayWindows); vazio = não pode. */
+  windows: readonly HourWindow[];
   /** true = cidade da ficha bate com a da escala; null = ficha sem cidade. */
   cityMatch: boolean | null;
   /** false = funcionário (não extra): só entra na escala à mão (2 out 2026). */
@@ -143,18 +145,20 @@ export interface AutofillCandidate {
 export interface AutofillPick { employeeId: number; personName: string; level: AutofillCandidate["level"]; startHour: number; endHour: number }
 
 /**
- * Janela (horas) em que o extra disse que pode, para este turno; null = não
- * pode. É a MESMA leitura da proposta automática (availabilityWindow: horas
- * que atravessam a meia-noite, só o início, só os turnos), cortada ao turno —
- * antes "Preencher" e a proposta davam respostas diferentes para a mesma pessoa.
+ * Janela (horas) em que o extra pode, para este turno; null = não pode. Usa
+ * as MESMAS janelas do dia operacional da proposta automática e da grelha
+ * (shared/availabilityWindow.ts → operationalDayWindows), cortadas ao turno;
+ * com duas janelas, fica a mais comprida (≥ 3h).
  */
-export function availableWindow(a: AutofillCandidate["availability"], shift: ShiftKey): { from: number; to: number } | null {
-  const w = availabilityWindow(a);
-  if (!w) return null;
+export function availableWindow(windows: readonly HourWindow[], shift: ShiftKey): { from: number; to: number } | null {
   const bounds = shift === "morning" ? { from: 3, to: 15 } : { from: 15, to: 27 };
-  const from = Math.max(bounds.from, w.from);
-  const to = Math.min(bounds.to, w.to);
-  return to - from >= 3 ? { from, to } : null;
+  let best: { from: number; to: number } | null = null;
+  for (const w of windows) {
+    const from = Math.max(bounds.from, w.from);
+    const to = Math.min(bounds.to, w.to);
+    if (to - from >= 3 && (!best || to - from > best.to - best.from)) best = { from, to };
+  }
+  return best;
 }
 
 /**
@@ -177,7 +181,7 @@ export function planAutofill(
     .slice(Math.max(0, existingCount));
   const pool = candidates
     .filter((c) => c.cityMatch === true && c.isExtra !== false && !alreadyAssigned.has(c.id))
-    .map((c) => ({ c, win: availableWindow(c.availability, shift) }))
+    .map((c) => ({ c, win: availableWindow(c.windows, shift) }))
     .filter((x): x is { c: AutofillCandidate; win: { from: number; to: number } } => x.win != null)
     .sort((a, b) => a.c.fullName.localeCompare(b.c.fullName));
 
@@ -407,7 +411,7 @@ export interface NoticeRow {
   assignmentId: number; status: string; sentAt: string; confirmedAt: string | null; declinedAt: string | null; error: string | null;
   /** O aviso foi de uma versão ANTERIOR da linha (mudaram as horas/pessoa depois): já não vale. */
   outdated: boolean;
-  /** Carregou em "Preciso de alterar" no turno_confirmado (0530). */
+  /** Carregou em "Preciso de alterar" no turno_confirmado (0550). */
   changeRequestedAt: string | null;
 }
 
@@ -476,7 +480,7 @@ async function sendRulesAsFreeText(employeeIds: number[], templateName: string, 
 }
 
 /** Motivo registado quando quem está na escala não é extra (não recebe avisos). */
-export const NOT_EXTRA_NO_NOTICE = "funcionário (não é extra): não recebe avisos de escala";
+export const NOT_EXTRA_NO_NOTICE = NOT_EXTRA_NOTICE_REASON;
 
 /**
  * Avisa por WhatsApp quem está escalado em `date` e ainda não foi avisado
@@ -540,9 +544,18 @@ export async function notifyAssignments(
     const empId = Number(a.employeeId);
     byEmp.set(empId, [...(byEmp.get(empId) ?? []), a]);
   }
+  // O texto leva TODAS as horas confirmadas da pessoa nesta seleção (não só as
+  // linhas por avisar) — é o mesmo texto da pré-visualização (shared/shiftNotice.ts)
+  // e o mesmo que segue no turno_confirmado (`shiftText`).
   const texts: Record<number, string> = {};
   for (const [empId, list] of Array.from(byEmp.entries())) {
-    texts[empId] = shiftText(date, list, settings.meetingPoints as Record<string, string>, scheduleMessageText);
+    const city = list[0].city;
+    texts[empId] = shiftText(
+      date,
+      rows.filter((a) => Number(a.employeeId) === empId && a.city === city),
+      settings.meetingPoints as Record<string, string>,
+      scheduleMessageText,
+    );
   }
 
   const outcome = new Map<number, { status: string; error: string | null }>();
@@ -672,7 +685,7 @@ function shiftText(
   return render({
     date,
     city,
-    spans: list.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })),
+    spans: noticeSpans(list),
     meetingPoint: meetingPoints[city] ?? null,
   });
 }
@@ -802,7 +815,7 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
         id: c.id,
         fullName: c.fullName,
         level: c.suggestedLevel,
-        availability: c.availability ?? null,
+        windows: c.availability?.windows ?? [],
         cityMatch: key ? CITY_KEY_TO_EXTRA[key] === input.city : null,
         isExtra: (c.position ?? "").toLowerCase() === "extra",
       };
@@ -1272,15 +1285,17 @@ export async function existingFichaFor(db: any, lead: { phoneE164: string | null
  * substitui o que a ficha já tem. PURA.
  */
 export function leadIdentityPatch(
-  lead: { nif?: string | null; idDocNumber?: string | null; drivingLicenseNumber?: string | null },
-  emp: { nif: string | null; idDocNumber: string | null; drivingLicenseNumber: string | null } | null,
+  lead: { nif?: string | null; idDocNumber?: string | null; drivingLicenseNumber?: string | null; drivingLicenseIssuedAt?: string | null },
+  emp: { nif: string | null; idDocNumber: string | null; drivingLicenseNumber: string | null; drivingLicenseIssuedAt?: string | null } | null,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   if (!emp) return out;
-  const empty = (v: string | null) => v == null || v.trim() === "";
+  const empty = (v: string | null | undefined) => v == null || v.trim() === "";
   if (lead.nif && empty(emp.nif)) out.nif = lead.nif;
   if (lead.idDocNumber && empty(emp.idDocNumber)) out.idDocNumber = lead.idDocNumber;
   if (lead.drivingLicenseNumber && empty(emp.drivingLicenseNumber)) out.drivingLicenseNumber = lead.drivingLicenseNumber;
+  // 0530: data de emissão da carta declarada (fica "pendente de validação" até o RH a ver).
+  if (lead.drivingLicenseIssuedAt && empty(emp.drivingLicenseIssuedAt)) out.drivingLicenseIssuedAt = lead.drivingLicenseIssuedAt;
   return out;
 }
 
@@ -1368,7 +1383,7 @@ export async function convertLeadToExtra(
     }
 
     // D39: o que a IA leu nos anexos do email (NIF, BI/CC, carta) passa para a ficha — só campos vazios.
-    const idPatch = leadIdentityPatch(lead as any, (await db.select({ nif: employees.nif, idDocNumber: employees.idDocNumber, drivingLicenseNumber: employees.drivingLicenseNumber }).from(employees).where(eq(employees.id, employeeId)).limit(1))[0] ?? null);
+    const idPatch = leadIdentityPatch(lead as any, (await db.select({ nif: employees.nif, idDocNumber: employees.idDocNumber, drivingLicenseNumber: employees.drivingLicenseNumber, drivingLicenseIssuedAt: employees.drivingLicenseIssuedAt }).from(employees).where(eq(employees.id, employeeId)).limit(1))[0] ?? null);
     if (Object.keys(idPatch).length) await db.update(employees).set(idPatch as any).where(eq(employees.id, employeeId));
 
     const convertedAt = new Date().toISOString().slice(0, 19).replace("T", " ");

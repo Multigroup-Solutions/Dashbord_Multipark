@@ -18,7 +18,18 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import { getDb, projectFilterConds } from "./db";
 import { employeeScope, scopedProjectIds } from "./cityScope";
-import { employees, projects, taskAssignees, taskComments, taskTemplates, tasks, users } from "../drizzle/schema";
+import { employees, multiparkBookings, projects, taskAssignees, taskComments, taskTemplates, tasks, users } from "../drizzle/schema";
+import { BOOKING_STATUSES } from "../shared/reservasDoDia";
+import {
+  BOOKING_STATUS_UNKNOWN,
+  TASK_SEARCH_MAX,
+  dueDayRanges,
+  normalizeTaskFilters,
+  taskFacetCounts,
+  type TaskFacet,
+  type TaskFacetCounts,
+  type TaskFacetsInput,
+} from "../shared/taskFilters";
 import {
   TASK_HIDE_DONE_AFTER_DAYS,
   TASK_SOURCE_LABELS,
@@ -35,6 +46,7 @@ import {
   taskDeadlineMs,
   templateOccurrenceKey,
   templateOccurrencesFor,
+  templatesInScope,
   type TaskSourceModule,
   type TemplateShift,
 } from "../shared/taskRules";
@@ -73,6 +85,10 @@ export interface TaskListFilters {
   focusId?: number;
   /** Team leader: só as da equipa (ver `teamTaskAccess`). */
   team?: TeamFilter;
+  /** Só as tarefas sem responsável (filtro "Responsável → Sem responsável"). */
+  unassigned?: boolean;
+  /** Facetas e pesquisa (shared/taskFilters.ts) — combinam-se com E. */
+  filters?: TaskFacetsInput;
 }
 
 /** Team leader: quem é (users.id) e as fichas da equipa (ele incluído). */
@@ -121,11 +137,82 @@ const hideOldDone = (): SQL => {
   return sql`NOT (${tasks.taskStatus} = 'done' AND COALESCE(${tasks.completedAt}, ${tasks.updatedAt}) < ${cutoff})`;
 };
 
+/** Sem responsável: nem na coluna legada nem em task_assignees. */
+export const unassignedCond = (): SQL => sql`(${tasks.assigneeId} IS NULL AND NOT EXISTS (SELECT 1 FROM task_assignees ta_none
+    WHERE ta_none.taskId = ${tasks.id}))`;
+
+const sqlList = (vals: ReadonlyArray<string | number>): SQL => sql.join(vals.map((v) => sql`${v}`), sql`, `);
+
+/**
+ * Pesquisa livre (no servidor): título, descrição, nº da tarefa ("#123") ou
+ * nome de um responsável. Os curingas do LIKE escritos pela pessoa contam
+ * como texto. Vazio → null.
+ */
+export function taskSearchCond(raw: string | null | undefined): SQL | null {
+  const q = String(raw ?? "").trim().slice(0, TASK_SEARCH_MAX);
+  if (!q) return null;
+  const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const id = /^#?(\d{1,9})$/.exec(q);
+  return sql`(${tasks.title} LIKE ${pattern} OR ${tasks.description} LIKE ${pattern}${id ? sql` OR ${tasks.id} = ${Number(id[1])}` : sql``}
+    OR EXISTS (SELECT 1 FROM employees e_q WHERE e_q.fullName LIKE ${pattern}
+      AND (e_q.id = ${tasks.assigneeId} OR e_q.id IN (SELECT ta_q.employeeId FROM task_assignees ta_q WHERE ta_q.taskId = ${tasks.id}))))`;
+}
+
+/** Em atraso (a mesma regra de `isTaskOverdue`): com hora → o instante; só data → antes de hoje (Lisboa). */
+function overdueCond(nowMs: number): SQL {
+  const today = lisbonDayOf(nowMs);
+  const now = mysqlNow(nowMs);
+  return sql`(${tasks.taskStatus} <> 'done' AND ${tasks.dueDate} IS NOT NULL AND (
+    (${tasks.dueHasTime} = 1 AND ${tasks.dueDate} <= ${now})
+    OR (${tasks.dueHasTime} = 0 AND DATE(${tasks.dueDate}) < ${today})))`;
+}
+
+/** Estado da reserva (texto da BD normalizado) — só existe com `multipark_bookings` no JOIN. */
+const bookingStatusExpr = (): SQL => sql`UPPER(TRIM(${multiparkBookings.status}))`;
+
+/**
+ * Condições SQL das facetas ativas (shared/taskFilters.ts — as mesmas regras
+ * de `taskMatchesFacets`). `skip` deixa uma faceta de fora (contadores).
+ * O estado da reserva precisa do LEFT JOIN a `multipark_bookings` (por
+ * `tasks.bookingRef`) e só apanha tarefas ligadas a uma reserva.
+ */
+export function facetConds(input: TaskFacetsInput | undefined, nowMs: number, skip?: TaskFacet): SQL[] {
+  const f = normalizeTaskFilters(input ?? {});
+  const out: SQL[] = [];
+  if (f.sources.length && skip !== "sources") out.push(sql`COALESCE(NULLIF(TRIM(${tasks.sourceModule}), ''), 'manual') IN (${sqlList(f.sources)})`);
+  if (f.statuses.length && skip !== "statuses") out.push(sql`${tasks.taskStatus} IN (${sqlList(f.statuses)})`);
+  if (f.priorities.length && skip !== "priorities") out.push(sql`${tasks.taskPriority} IN (${sqlList(f.priorities)})`);
+  if (f.due.length && skip !== "due") {
+    const ranges = dueDayRanges(nowMs);
+    const parts = f.due.map((d): SQL => {
+      if (d === "overdue") return overdueCond(nowMs);
+      if (d === "none") return sql`${tasks.dueDate} IS NULL`;
+      const r = ranges[d];
+      return sql`((${tasks.dueHasTime} = 0 AND DATE(${tasks.dueDate}) BETWEEN ${r.fromDay} AND ${r.toDay})
+        OR (${tasks.dueHasTime} = 1 AND ${tasks.dueDate} >= ${r.fromUtc} AND ${tasks.dueDate} < ${r.toUtcExcl}))`;
+    });
+    out.push(sql`(${sql.join(parts, sql` OR `)})`);
+  }
+  if (f.bookingStatuses.length && skip !== "bookingStatuses") {
+    const known = f.bookingStatuses.filter((s) => s !== BOOKING_STATUS_UNKNOWN);
+    const parts: SQL[] = [];
+    if (known.length) parts.push(sql`${bookingStatusExpr()} IN (${sqlList(known)})`);
+    if (f.bookingStatuses.includes(BOOKING_STATUS_UNKNOWN)) {
+      parts.push(sql`(${multiparkBookings.status} IS NULL OR ${bookingStatusExpr()} NOT IN (${sqlList(BOOKING_STATUSES)}))`);
+    }
+    out.push(sql`(${tasks.bookingRef} IS NOT NULL AND (${sql.join(parts, sql` OR `)}))`);
+  }
+  const q = taskSearchCond(f.q);
+  if (q) out.push(q);
+  return out;
+}
+
 async function baseConds(f: TaskListFilters): Promise<SQL[]> {
   const conds: SQL[] = await projectFilterConds(tasks.projectId, f.projectId, { allowNull: true });
   conds.push(notArchived());
   if (f.status) conds.push(sql`${tasks.taskStatus} = ${f.status}`);
   if (f.employeeId != null) conds.push(assignedToCond(f.employeeId));
+  else if (f.unassigned) conds.push(unassignedCond());
   if (f.team) conds.push(teamSeeCond(f.team));
   return conds;
 }
@@ -137,17 +224,20 @@ async function requireDb() {
   return db;
 }
 
-export async function listTasks(f: TaskListFilters = {}) {
+export async function listTasks(f: TaskListFilters = {}, nowMs: number = Date.now()) {
   const db = await requireDb();
   const conds = await baseConds(f);
   if (!f.showOld) {
     const hide = hideOldDone();
     conds.push(f.focusId ? sql`(${hide} OR ${tasks.id} = ${f.focusId})` : hide);
   }
+  conds.push(...facetConds(f.filters, nowMs));
   const taskRows = await db
-    .select({ task: tasks, projectName: projects.name })
+    .select({ task: tasks, projectName: projects.name, bookingStatus: multiparkBookings.status })
     .from(tasks)
     .leftJoin(projects, eq(projects.id, tasks.projectId))
+    // 0545: estado da reserva das tarefas ligadas a uma (serviços) — chip + filtro.
+    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, tasks.bookingRef))
     .where(and(...conds))
     .orderBy(desc(tasks.updatedAt), desc(tasks.id))
     .limit(TASK_LIST_LIMIT);
@@ -169,9 +259,37 @@ export async function listTasks(f: TaskListFilters = {}) {
   return taskRows.map((r) => ({
     ...r.task,
     projectName: r.projectName,
+    bookingStatus: r.task.bookingRef ? r.bookingStatus ?? null : null,
     assignees: byTask.get(r.task.id) ?? [],
     commentsCount: comments.get(r.task.id) ?? 0,
   }));
+}
+
+/** Máximo de tarefas lidas para os contadores dos filtros (só colunas leves). */
+export const TASK_FACET_ROW_LIMIT = 10_000;
+
+/**
+ * Contadores dos filtros: a base (âmbito, as minhas/equipa, centro de custos,
+ * responsável, antigas) sem as facetas, lida em colunas leves; cada faceta
+ * conta com as OUTRAS aplicadas (`taskFacetCounts`). A pesquisa entra na base.
+ */
+export async function taskFacets(f: TaskListFilters = {}, nowMs: number = Date.now()): Promise<{ counts: TaskFacetCounts; total: number; truncated: boolean }> {
+  const db = await requireDb();
+  const conds = await baseConds(f);
+  if (!f.showOld) conds.push(hideOldDone());
+  const search = taskSearchCond(f.filters?.q);
+  if (search) conds.push(search);
+  const rows = await db
+    .select({
+      sourceModule: tasks.sourceModule, taskStatus: tasks.taskStatus, taskPriority: tasks.taskPriority,
+      dueDate: tasks.dueDate, dueHasTime: tasks.dueHasTime, bookingRef: tasks.bookingRef, bookingStatus: multiparkBookings.status,
+    })
+    .from(tasks)
+    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, tasks.bookingRef))
+    .where(and(...conds))
+    .limit(TASK_FACET_ROW_LIMIT);
+  const filters = normalizeTaskFilters(f.filters ?? {});
+  return { counts: taskFacetCounts(rows, filters, nowMs), total: rows.length, truncated: rows.length >= TASK_FACET_ROW_LIMIT };
 }
 
 export async function taskStats(f: TaskListFilters = {}) {
@@ -180,11 +298,7 @@ export async function taskStats(f: TaskListFilters = {}) {
   const conds = await baseConds({ ...f, status: undefined });
   // Como a lista: as concluídas antigas só contam com "Mostrar antigas".
   if (!f.showOld) conds.push(hideOldDone());
-  const today = lisbonDayOf(Date.now());
-  const now = mysqlNow();
-  const overdueExpr = sql`(${tasks.taskStatus} <> 'done' AND ${tasks.dueDate} IS NOT NULL AND (
-    (${tasks.dueHasTime} = 1 AND ${tasks.dueDate} <= ${now})
-    OR (${tasks.dueHasTime} = 0 AND DATE(${tasks.dueDate}) < ${today})))`;
+  const overdueExpr = overdueCond(Date.now());
   const rows = await db
     .select({ status: tasks.taskStatus, n: sql<number>`COUNT(*)`, overdue: sql<number>`SUM(CASE WHEN ${overdueExpr} THEN 1 ELSE 0 END)` })
     .from(tasks)
@@ -207,13 +321,18 @@ export async function taskStats(f: TaskListFilters = {}) {
 /** Tarefa + responsáveis. Arquivada = não existe (null). */
 export async function getTaskWithAssignees(id: number) {
   const db = await requireDb();
-  const [t] = await db.select({ task: tasks, projectName: projects.name }).from(tasks)
-    .leftJoin(projects, eq(projects.id, tasks.projectId)).where(and(eq(tasks.id, id), notArchived())).limit(1);
+  const [t] = await db.select({ task: tasks, projectName: projects.name, bookingStatus: multiparkBookings.status }).from(tasks)
+    .leftJoin(projects, eq(projects.id, tasks.projectId))
+    .leftJoin(multiparkBookings, eq(multiparkBookings.externalId, tasks.bookingRef))
+    .where(and(eq(tasks.id, id), notArchived())).limit(1);
   if (!t) return null;
   const a = await db.select({ id: taskAssignees.employeeId, fullName: employees.fullName, userId: employees.userId })
     .from(taskAssignees).innerJoin(employees, eq(employees.id, taskAssignees.employeeId))
     .where(eq(taskAssignees.taskId, id));
-  return { ...t.task, projectName: t.projectName, assignees: a.map((x) => ({ id: x.id, fullName: x.fullName, userId: x.userId })) };
+  return {
+    ...t.task, projectName: t.projectName, bookingStatus: t.task.bookingRef ? t.bookingStatus ?? null : null,
+    assignees: a.map((x) => ({ id: x.id, fullName: x.fullName, userId: x.userId })),
+  };
 }
 
 /** Pessoas que podem ser responsáveis (ativas, no âmbito de cidade; opcionalmente na árvore de um projeto). */
@@ -551,11 +670,18 @@ export const TEMPLATE_ASSIGNEE_ROLE_LABELS: Record<(typeof TEMPLATE_ASSIGNEE_ROL
  * hora a hora — a 1.ª corrida do dia cria, as seguintes não fazem nada (e
  * apanham modelos novos). Responsáveis: ids fixos e/ou a escala do turno.
  */
-export async function generateTemplateTasks(now: Date = new Date()): Promise<{ date: string; created: number; skipped: number; failed: number; errors: string[] }> {
+export async function generateTemplateTasks(
+  now: Date = new Date(),
+  opts: { projectIds?: readonly number[] } = {},
+): Promise<{ date: string; created: number; skipped: number; failed: number; errors: string[] }> {
   const db = await requireDb();
   const day = operationalDayOf(now.getTime());
   const out = { date: day, created: 0, skipped: 0, failed: 0, errors: [] as string[] };
-  const templates = await db.select().from(taskTemplates).where(and(eq(taskTemplates.active, 1), sql`${taskTemplates.archivedAt} IS NULL`));
+  // "Gerar hoje" de quem só vê algumas cidades: só os modelos dessas (o cron vê todos).
+  const templates = templatesInScope(
+    await db.select().from(taskTemplates).where(and(eq(taskTemplates.active, 1), sql`${taskTemplates.archivedAt} IS NULL`)),
+    opts.projectIds,
+  );
   if (!templates.length) return out;
   // Arquivadas incluídas: uma checklist arquivada hoje não volta a nascer.
   const existing = await db.select({ templateId: tasks.templateId, templateShift: tasks.templateShift }).from(tasks)
@@ -643,6 +769,13 @@ export async function runTaskAutomation(now: Date = new Date()): Promise<Record<
     out.templates = g;
     if (g.failed) errors.push(`checklists: ${g.errors.slice(0, 3).join("; ")}`);
   } catch (e: any) { errors.push(`checklists: ${String(e?.message ?? e).slice(0, 200)}`); }
+  try {
+    // 0545: uma tarefa por candidatura nova; fecha as das já tratadas (rede de segurança dos ganchos).
+    const { syncLeadTasks } = await import("./leadTasks");
+    const l = await syncLeadTasks(now);
+    out.leadTasks = { created: l.created, closed: l.closed, skipped: l.skipped, failed: l.failed };
+    if (l.failed) errors.push(`candidaturas: ${l.errors.slice(0, 3).join("; ")}`);
+  } catch (e: any) { errors.push(`candidaturas: ${String(e?.message ?? e).slice(0, 200)}`); }
   try {
     const r = await runTaskNotifications(now);
     out.notifications = { overdue: r.overdue, completed: r.completed, silenced: r.silenced };

@@ -1,26 +1,33 @@
-// Migration 0530 — templates WhatsApp dos motoristas POR CIDADE (Jorge, 7 out
-// 2026). Com um conjunto de templates por cidade (registo em
-// shared/driverTemplates.ts), o registo de envios passa a guardar a CIDADE (a
-// língua já ficava em whatsapp_messages.language, 0375):
-//
-//  - `whatsapp_broadcasts.city` + `languageCode`: um lote com motoristas de
-//    várias cidades gera uma difusão por cidade;
-//  - `whatsapp_messages.city`: por mensagem enviada;
-//  - SEM backfill: os templates antigos iam a extras de TODAS as cidades, por
-//    isso marcar essas linhas como Lisboa seria inventar. NULL = enviado antes
-//    do registo por cidade;
-//  - `extras_dia_notices.changeRequestedAt`: o extra carregou em "Preciso de
-//    alterar" no turno_confirmado. A tabela é criada a pedido em
-//    server/extrasAutomation.ts (ensureTables, já com a coluna); numa BD onde
-//    ainda não existe, o ALTER dá ER_NO_SUCH_TABLE e é ignorado.
-//
-// Idempotente: ADD COLUMN repetido dá ER_DUP_FIELDNAME.
+// Migration 0530 — RH (Frente A, Jorge, 7 out 2026):
+//  - Documentos da ficha com estado: pendente (entregue pela pessoa / team
+//    leader), validado (pelo RH, ou carregado pelo RH) ou recusado (motivo).
+//    Substituir/apagar passa a ARQUIVAR (como as tarefas, 0376).
+//  - Carta de condução: data de emissão e a validação do RH na ficha (e a
+//    data declarada na candidatura, no lead) — "Carta validada" = validada
+//    pelo RH e com 3 anos completos (shared/drivingLicence.ts).
+// Os documentos que já existiam ficam VALIDADOS (uma vez, com marca em
+// `app_notification_maintenance`; não inundar o RH). Só acrescenta;
+// idempotente; nada se apaga.
+
+export const SEED_0530_ID = "0530_employee_documents_validated";
+
+const once = "NOT EXISTS (SELECT 1 FROM `app_notification_maintenance` mk WHERE mk.`id` = '" + SEED_0530_ID + "')";
 
 export const MIGRATION_0530_STATEMENTS: string[] = [
-  "ALTER TABLE `whatsapp_broadcasts` ADD COLUMN `city` VARCHAR(16) NULL AFTER `templateName`",
-  "ALTER TABLE `whatsapp_broadcasts` ADD COLUMN `languageCode` VARCHAR(16) NULL AFTER `city`",
-  "ALTER TABLE `whatsapp_messages` ADD COLUMN `city` VARCHAR(16) NULL AFTER `templateName`",
-  "ALTER TABLE `extras_dia_notices` ADD COLUMN `changeRequestedAt` TIMESTAMP NULL AFTER `declinedAt`",
+  "ALTER TABLE `employee_documents` ADD COLUMN `status` ENUM('pending','validated','rejected') NOT NULL DEFAULT 'pending'",
+  "ALTER TABLE `employee_documents` ADD COLUMN `validatedById` INT NULL",
+  "ALTER TABLE `employee_documents` ADD COLUMN `validatedAt` DATETIME NULL",
+  "ALTER TABLE `employee_documents` ADD COLUMN `rejectedReason` VARCHAR(300) NULL",
+  "ALTER TABLE `employee_documents` ADD COLUMN `archivedAt` TIMESTAMP NULL DEFAULT NULL",
+  "ALTER TABLE `employee_documents` ADD COLUMN `archivedById` INT NULL",
+  "ALTER TABLE `employee_documents` ADD INDEX `idx_employee_documents_emp_type_status` (`employeeId`, `docType`, `status`)",
+  // Backfill: os documentos antigos ficam validados (uma vez; a data é a do carregamento).
+  "UPDATE `employee_documents` SET `status` = 'validated', `validatedAt` = `createdAt` WHERE `status` = 'pending' AND `validatedAt` IS NULL AND " + once,
+  "INSERT IGNORE INTO `app_notification_maintenance` (`id`) VALUES ('" + SEED_0530_ID + "')",
+  "ALTER TABLE `employees` ADD COLUMN `drivingLicenseIssuedAt` DATE NULL",
+  "ALTER TABLE `employees` ADD COLUMN `drivingLicenseValidatedAt` DATETIME NULL",
+  "ALTER TABLE `employees` ADD COLUMN `drivingLicenseValidatedById` INT NULL",
+  "ALTER TABLE `extra_leads` ADD COLUMN `drivingLicenseIssuedAt` DATE NULL",
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0530 = new Set<string>(["ER_DUP_FIELDNAME", "ER_NO_SUCH_TABLE"]);
+export const IDEMPOTENT_ERROR_CODES_0530 = new Set<string>(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);

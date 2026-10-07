@@ -321,7 +321,7 @@ export interface ReserveRow {
   /** 0375: língua e categoria do template enviado. */
   language?: string | null;
   category?: string | null;
-  /** 0530: cidade do registo de templates dos motoristas (LISBOA/PORTO). */
+  /** 0550: cidade do registo de templates dos motoristas (LISBOA/PORTO). */
   city?: string | null;
   /** 0375: JSON para a nova tentativa de uma mensagem de equipa (ver whatsappFailurePolicy). */
   sendPayload?: string | null;

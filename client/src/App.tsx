@@ -51,6 +51,7 @@ import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
 import ComunicacaoPage from "./pages/ComunicacaoPage";
+import CalendarioPage from "./pages/CalendarioPage";
 import CentralPage from "./pages/CentralPage";
 import DrivePage from "./pages/DrivePage";
 import ExtraLeadsPage from "./pages/ExtraLeadsPage";
@@ -143,6 +144,10 @@ function Router() {
             <TasksPage />
           </DashboardLayout>
         )}
+      </Route>
+      {/* 45e: o calendário da própria pessoa (Google Calendar, lido ao vivo) */}
+      <Route path="/calendario">
+        {() => (<DashboardLayout><CalendarioPage /></DashboardLayout>)}
       </Route>
       <Route path="/projetos/custos">
         {() => (

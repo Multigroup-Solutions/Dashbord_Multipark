@@ -32,6 +32,7 @@ import { resolveCitiesForProjectIds } from "./employeeCity";
 import type { CityKey } from "../shared/city";
 import { findActiveEmployeeByPhoneE164 } from "./extrasAvailability";
 import { aggregateFunnel, EXTRA_LEADS_LIST_LIMIT, LEAD_STATUSES, manualStatusError, type FunnelLeadRow, type FunnelResult } from "../shared/extraLeadsFunnel";
+import { resolveNewLeadCity } from "../shared/leadCity";
 
 export const EXTRA_LEAD_STATUSES = LEAD_STATUSES;
 export type ExtraLeadStatus = (typeof EXTRA_LEAD_STATUSES)[number];
@@ -225,12 +226,17 @@ async function findDuplicate(
   return { id: hit.id, fullName: hit.archivedAt ? `${hit.fullName} — está nos Arquivados, repõe-o` : hit.fullName, field: lead.phoneE164 && hit.phoneE164 === lead.phoneE164 ? "telemóvel" : "email" };
 }
 
-export async function createExtraLead(input: LeadInput, createdById: number | null): Promise<ExtraLeadRow> {
+export async function createExtraLead(input: LeadInput & { projectId?: number | null }, createdById: number | null): Promise<ExtraLeadRow> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const parsed = normalizeLeadInput(input);
   if (!parsed.ok) throw new Error(parsed.error);
   const { lead } = parsed;
+  // Cidade escolhida no "Novo lead" (Jorge, 7 out 2026): nas cidades de quem
+  // cria; "Sem cidade" só para quem vê todas. Sem o campo: a cidade de quem cria.
+  const city = resolveNewLeadCity(input.projectId, { scope: scopedProjectIds(), defaultCityId: currentDefaultCityId() });
+  if (!city.ok) throw new Error(city.error);
+  if (input.projectId !== undefined) await assertLeadCity(city.projectId);
 
   const dup = await findDuplicate(db, lead);
   if (dup) throw new Error(dup.id ? `Já existe um lead com este ${dup.field}: ${dup.fullName} (#${dup.id}).` : `Já existe um lead com este ${dup.field} ${dup.fullName}.`);
@@ -241,15 +247,15 @@ export async function createExtraLead(input: LeadInput, createdById: number | nu
     if (emp) throw new Error(`Este número já pertence ao colaborador ${emp.fullName} — não é um lead.`);
   }
 
-  // O lead fica na cidade de quem o cria (null se vê todas as cidades).
-  const result = await db.insert(extraLeads).values({ ...lead, createdById, source: "manual", projectId: currentDefaultCityId() });
+  const result = await db.insert(extraLeads).values({ ...lead, createdById, source: "manual", projectId: city.projectId });
   const id = Number((result as any)[0]?.insertId ?? (result as any).insertId);
+  const cityName = city.projectId == null ? "sem cidade" : ((await getProjects()) as { id: number; name: string }[]).find((p) => p.id === city.projectId)?.name ?? `#${city.projectId}`;
   await logActivity({
     userId: createdById ?? 0,
     action: "extra_lead_create",
     entity: "extra_leads",
     entityId: id,
-    details: `Lead de extra criado: ${lead.fullName}${lead.phone ? ` · ${lead.phone}` : ""}${lead.email ? ` · ${lead.email}` : ""}`,
+    details: `Lead de extra criado: ${lead.fullName}${lead.phone ? ` · ${lead.phone}` : ""}${lead.email ? ` · ${lead.email}` : ""} · cidade: ${cityName}`,
   });
   const [row] = await db.select().from(extraLeads).where(eq(extraLeads.id, id)).limit(1);
   return row as ExtraLeadRow;

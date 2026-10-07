@@ -38,6 +38,7 @@ export const KIND_SOURCES: Record<string, string> = {
   task_overdue_city: "Cron horário (extras-auto): tarefas automáticas que passaram o prazo, um resumo por cidade ao supervisor — só com \"Avisos de atraso das tarefas automáticas\" ligado (desligado por omissão).",
   rh_docs_missing: "Regra documental dos extras: 14 dias com documentos obrigatórios em falta (1.º aviso).",
   my_docs_missing: "Mesmo momento, para a própria pessoa (app + email).",
+  my_doc_rejected: "RH → ficha → Documentos → \"Recusar\" (com motivo): para a própria pessoa (app + email).",
   driver_application: "Candidatura nova \"Be a Driver\" no site.",
   lead_replied: "Lead de extras responde por WhatsApp.",
   leads_waiting: "Resumo diário das leads à espera (por cidade da lead).",

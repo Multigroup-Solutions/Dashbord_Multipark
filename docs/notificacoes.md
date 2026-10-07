@@ -64,6 +64,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Documentos em falta (RH) | `rh_docs_missing` | Recursos Humanos (view) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não | Regra documental dos extras: 14 dias com documentos obrigatórios em falta (1.º aviso). |
 | IBAN por aprovar | `rh_bank_change` | Recursos Humanos (edit) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não |  |
 | Os teus documentos em falta | `my_docs_missing` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | Mesmo momento, para a própria pessoa (app + email). |
+| Documento recusado | `my_doc_rejected` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | RH → ficha → Documentos → "Recusar" (com motivo): para a própria pessoa (app + email). |
 | Candidaturas | `driver_application` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Candidatura nova "Be a Driver" no site. |
 | Lead respondeu | `lead_replied` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Lead de extras responde por WhatsApp. |
 | Leads à espera | `leads_waiting` | Leads de Extras (view) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não | Resumo diário das leads à espera (por cidade da lead). |

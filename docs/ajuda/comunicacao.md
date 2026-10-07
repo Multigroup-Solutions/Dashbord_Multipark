@@ -1,8 +1,8 @@
 ---
 modulo: comunicacao
-titulo: Comunicação (email)
-rotas: /comunicacao, /comunicacao/meu-email
-palavras: caixas de email, caixa inicial, estrela, como no gmail, ligar, telefonar, enviar email, enviar whatsapp, ficha do cliente, ficha da reserva, ficha do colaborador, email, emails, gmail, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
+titulo: Comunicação (email e calendário)
+rotas: /comunicacao, /comunicacao/meu-email, /calendario
+palavras: calendário, agenda, google calendar, a minha agenda, eventos, novo evento, criar evento, reunião, google meet, videochamada, convidados, convite, vista dia, vista semana, vista mês, dia inteiro, calendário multipark, ocupado, mostrar calendário, esconder calendário, ativar calendário, caixas de email, caixa inicial, estrela, como no gmail, ligar, telefonar, enviar email, enviar whatsapp, ficha do cliente, ficha da reserva, ficha do colaborador, email, emails, gmail, caixas por tema, mover para, separar pela ia, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala
 ---
 # Comunicação (email)
 
@@ -30,7 +30,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 8. **Emails que a aplicação envia sozinha** (pedidos e lembretes de disponibilidade aos extras — "Disponibilidade — semana de…", "Lembrete: ainda não indicaste a tua disponibilidade" —, avisos de escala, turnos cancelados, lembretes de formação, notificações e relatórios): também ficam **escondidos** como automáticos, mesmo quando saem por recursos-humanos@. Não aparecem como conversas abertas, não contam como por ler, por responder nem abertas, e não ficam para atribuir. **Se a pessoa responder**, a conversa passa a normal e aparece na caixa (quem respondeu foi uma pessoa). Os envios a um extra ficam na ficha dele: **Recursos Humanos → abre o colaborador → Comunicações automáticas** (data, tipo, assunto e estado *Enviado*/*Respondido*; o assunto abre a conversa). Os que já estavam na caixa antes desta mudança foram limpos uma vez, automaticamente.
 
 **O resto da Comunicação** (menu, por esta ordem)
-- **Caixas de email → O meu email → Drive → WhatsApp → Central → Tarefas.**
+- **Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas.**
 - **Drive** abre o **Google Drive** num separador ao lado, com a conta Google com que estás no browser. Os ficheiros ligados a uma ficha continuam no separador Drive dessa ficha.
 - **Central**: as chamadas da consola da Vodafone. Cada um vê as suas; admin e super admin veem as de todos (ver a ajuda "Central").
 - **Tarefas**: as mesmas Tarefas das Operações, também aqui.
@@ -73,3 +73,14 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 
 **Quando a leitura falha**
 - Caixas, lista, conversa, comunicações de um registo e a classificação mostram **"Não foi possível carregar…"** com **Tentar de novo**. Nunca "Não tens acesso", "Sem conversas" ou "liga a tua conta" por engano. No menu, o contador passa a **?**.
+
+**Calendário** (menu **Comunicação → Calendário**, em /calendario)
+
+A tua agenda do Google Calendar dentro do dashboard, como no Google. É lida **no momento** da tua conta Google @multipark: só tu vês a tua agenda e o dashboard não guarda os teus eventos.
+1. Na primeira vez, carrega em **Ligar a minha conta Google** (já pede o Calendário). Se a conta já estava ligada só para o email, carrega em **Ativar Calendário**. Se aparecer **Voltar a ligar**, a autorização expirou: liga outra vez.
+2. Escolhe a vista em cima à direita: **Dia**, **Semana** (a de omissão) ou **Mês**. No telemóvel: **Dia** ou **Lista** (os próximos 7 dias). **‹** e **›** andam para trás e para a frente; **Hoje** volta a hoje; o mês pequeno à esquerda leva a qualquer dia. Carrega num dia para o ver sozinho (no mês, **+N mais** também).
+3. Na semana e no dia, as horas vão das 00:00 às 24:00 e a página abre nas 07:00 (faz scroll para o resto). A linha vermelha é a hora atual. Os eventos de dia inteiro (e os de 24 horas ou mais) ficam na faixa de cima. Horas sempre de Lisboa.
+4. **Que calendários aparecem:** o teu principal, os que tens visíveis no Google (por exemplo os partilhados por colegas) e o **Multipark** que o dashboard cria com os teus turnos, formação e prazos (marcado "dashboard"). À esquerda (no telemóvel em **Calendários**) há uma caixa por calendário para o mostrar ou esconder; a escolha fica guardada neste computador/telemóvel. Um evento privado de um calendário partilhado aparece só como **Ocupado**.
+5. **Detalhes:** carrega no evento para veres a hora, o local (abre no mapa), a descrição e o calendário. Com videochamada, **Entrar** abre o Google Meet. **Abrir no Google Calendar** abre o evento no Google, para o editar ou apagar (aqui não se editam).
+6. **Novo evento:** carrega em **Novo evento** (no telemóvel **Novo**) ou num espaço vazio da grelha (já vem com essa hora). Título, início e fim (ou **Dia inteiro**; mudar o início leva o fim atrás, com a mesma duração). Opcional: **Convidados** (emails separados por vírgulas, no máximo 20 — recebem o convite por email do Google), **Adicionar videochamada Google Meet**, **Local** e **Descrição**. **Guardar** põe-no no teu calendário principal e aparece logo aqui; fica nos registos de atividade (sem os emails dos convidados).
+7. **Quando não dá:** "**Não foi possível ler o calendário**" quer dizer que a Google não respondeu — não que a agenda está vazia; carrega em **Tentar de novo**. Se só um calendário partilhado falhar, aparece um aviso amarelo com o nome dele e os outros continuam à vista.

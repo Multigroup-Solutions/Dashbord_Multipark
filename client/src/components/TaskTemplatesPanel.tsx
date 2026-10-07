@@ -32,8 +32,10 @@ const maskLabel = (m: number) => (m === ALL_WEEKDAYS_MASK ? "Todos os dias" : WE
 
 /**
  * Gestão das checklists recorrentes (quem tem "gerir" nas Tarefas). As tarefas
- * geram-se de hora a hora (idempotente); "Gerar hoje" só para admin (o servidor
- * exige-o). "Eliminar" arquiva o modelo (18a).
+ * geram-se de hora a hora (idempotente); "Gerar hoje" para quem as gere
+ * (`canGenerateChecklists`, o mesmo predicado do servidor — Jorge, 7 out 2026:
+ * antes dava "acesso negado" a supervisores e ao front/back office), só com os
+ * modelos das cidades de cada um. "Eliminar" arquiva o modelo (18a).
  */
 export function TaskTemplatesPanel({ projects, canGenerate }: { projects: Array<{ id: number; name: string; level: string }>; canGenerate: boolean }) {
   const utils = trpc.useUtils();
@@ -51,6 +53,7 @@ export function TaskTemplatesPanel({ projects, canGenerate }: { projects: Array<
   const gen = trpc.tasks.templates.generateNow.useMutation({
     onSuccess: (r) => {
       if (r.failed) toast.error(`${r.created} criada(s); ${r.failed} falharam (tenta de novo): ${r.errors.slice(0, 2).join("; ")}`);
+      else if (r.created === 0) toast.info(`Nada a gerar para ${r.date}: as tarefas de hoje já existem.`);
       else toast.success(`${r.created} tarefa(s) criada(s) para ${r.date}`);
       utils.tasks.list.invalidate();
     },
@@ -65,7 +68,7 @@ export function TaskTemplatesPanel({ projects, canGenerate }: { projects: Array<
         <p className="text-sm text-muted-foreground">Cada checklist ativa cria uma tarefa por dia (e turno) nos dias escolhidos. Não duplica.</p>
         <div className="flex gap-2">
           {canGenerate && (
-            <Button variant="outline" size="sm" onClick={() => gen.mutate()} disabled={gen.isPending} title="Gera já as tarefas de hoje (o cron faz isto de hora a hora)">
+            <Button variant="outline" size="sm" onClick={() => gen.mutate()} disabled={gen.isPending} title="Gera já as tarefas de hoje das checklists das tuas cidades (o cron faz isto de hora a hora; não duplica)">
               {gen.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Zap className="h-4 w-4 mr-1" />}Gerar hoje
             </Button>
           )}

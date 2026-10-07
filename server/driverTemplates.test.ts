@@ -13,7 +13,7 @@ import {
 import { WHATSAPP_TEMPLATES, templateForCity } from "../shared/whatsappTemplate";
 import { citySendKey, orderedCities } from "./whatsappBroadcast";
 import { isShiftChangeRequest, splitByCity } from "./extrasAutomation";
-import { MIGRATION_0530_STATEMENTS } from "./migrations/migration_0530";
+import { MIGRATION_0550_STATEMENTS } from "./migrations/migration_0550";
 import { fallbackChannelFor, shiftDateFromNote } from "./whatsappFailurePolicy";
 import { findWhatsAppTemplateByName, isDriverMessageTemplate, isTeamRetryTemplate } from "../shared/whatsappTemplate";
 
@@ -176,9 +176,9 @@ describe("botão Preciso de alterar", () => {
   });
 });
 
-describe("migração 0530", () => {
+describe("migração 0550", () => {
   it("acrescenta a cidade aos registos de envio, a língua à difusão e o pedido de alteração", () => {
-    const all = MIGRATION_0530_STATEMENTS.join("\n");
+    const all = MIGRATION_0550_STATEMENTS.join("\n");
     expect(all).toContain("ALTER TABLE `whatsapp_broadcasts` ADD COLUMN `city`");
     expect(all).toContain("ALTER TABLE `whatsapp_broadcasts` ADD COLUMN `languageCode`");
     expect(all).toContain("ALTER TABLE `whatsapp_messages` ADD COLUMN `city`");
@@ -186,7 +186,7 @@ describe("migração 0530", () => {
   });
 
   it("sem backfill: os templates antigos iam a todas as cidades, não se inventa a cidade", () => {
-    expect(MIGRATION_0530_STATEMENTS.some((st) => st.startsWith("UPDATE"))).toBe(false);
+    expect(MIGRATION_0550_STATEMENTS.some((st) => st.startsWith("UPDATE"))).toBe(false);
   });
 });
 

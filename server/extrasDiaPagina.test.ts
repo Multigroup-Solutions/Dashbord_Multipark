@@ -45,6 +45,7 @@ import { availableWindow } from "./extrasAutomation";
 import { extrasCostView, maskAssignmentCost, stripEuros } from "../shared/extrasCostView";
 import { lisbonNow } from "../shared/extrasSchedule";
 import { addDays } from "../shared/lisbonDay";
+import { operationalDayWindows } from "../shared/availabilityWindow";
 import { sql } from "drizzle-orm";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -130,7 +131,15 @@ describe("Avisos: só o turno do botão, nunca para dias passados", () => {
   });
   it("o botão de um turno avisa só esse turno", async () => {
     const future = addDays(lisbonNow().date, 2);
-    await caller("supervisor").extrasDia.notify({ date: future, city: "porto", shift: "night" });
+    // (o WhatsApp só é chamado com o WhatsApp configurado — pedido 8: o email não depende dele)
+    const env = { t: process.env.WHATSAPP_TOKEN, p: process.env.WHATSAPP_PHONE_NUMBER_ID };
+    process.env.WHATSAPP_TOKEN = "t"; process.env.WHATSAPP_PHONE_NUMBER_ID = "p";
+    try {
+      await caller("supervisor").extrasDia.notify({ date: future, city: "porto", shift: "night", channels: ["whatsapp"] });
+    } finally {
+      if (env.t === undefined) delete process.env.WHATSAPP_TOKEN; else process.env.WHATSAPP_TOKEN = env.t;
+      if (env.p === undefined) delete process.env.WHATSAPP_PHONE_NUMBER_ID; else process.env.WHATSAPP_PHONE_NUMBER_ID = env.p;
+    }
     expect(state.notified[0]).toMatchObject({ date: future, city: "porto", shift: "night" });
   });
   it("os avisos vêm só da cidade pedida e marcam os de horas antigas", () => {
@@ -190,7 +199,9 @@ describe("Previsão incompleta e disponibilidade", () => {
     expect(src("server/extrasDia.ts")).toContain("${multiparkBookings.status} != 'CANCELLED'");
   });
   it("'Preencher' lê a disponibilidade como a proposta (meia-noite e só o início)", () => {
-    const avail = (o: any) => ({ status: "available", morning: false, night: false, fromHour: null, toHour: null, ...o });
+    // A mesma leitura única (operationalDayWindows) da proposta e da grelha — pedido 7.
+    const D = "2026-10-05";
+    const avail = (o: any) => operationalDayWindows([{ day: D, morning: false, night: false, fromHour: null, toHour: null, ...o }], D);
     expect(availableWindow(avail({ fromHour: 18, toHour: 2 }), "night")).toEqual({ from: 18, to: 26 });
     expect(availableWindow(avail({ fromHour: 10 }), "morning")).toEqual({ from: 10, to: 15 });
     expect(availableWindow(avail({ morning: true }), "night")).toBeNull();
@@ -213,10 +224,14 @@ describe("Ecrã do Extras Dia", () => {
   });
   it("remover pergunta antes; avisar é por turno; erros com 'Tentar de novo'", () => {
     expect(page).toContain("Tirar ${a.personName} da escala?");
-    expect(page).toContain("notify.mutate({ date: targetDate, city, shift })");
-    for (const what of ["a previsão", "o estado da escala", "a equipa deste turno", "a falta de gente por hora", "os avisos enviados", "as reservas deste intervalo"]) {
+    // Pedido 8: o botão abre a pré-visualização do turno; o envio é do turno, pelos canais escolhidos.
+    expect(page).toContain("<NotifyShiftDialog open={notifyOpen} onOpenChange={setNotifyOpen} date={targetDate} city={city} shift={shift}");
+    expect(src("client/src/pages/extrasDia/NotifyShiftDialog.tsx")).toContain("send.mutate({ date, city, shift, channels })");
+    for (const what of ["a previsão", "o estado da escala", "a equipa deste turno", "os avisos enviados", "as reservas deste intervalo"]) {
       expect(page).toContain(`what="${what}"`);
     }
+    // Pedido 7: a falta de gente por hora passou para o indicador (escalados vs disponíveis por escalar).
+    expect(src("client/src/pages/extrasDia/StaffingIndicator.tsx")).toContain('what="a falta de gente por hora"');
   });
   it("custo da escala é uma estimativa (o extra recebe pelo ponto) e o hoje é o de Lisboa", () => {
     expect(page).toContain(`"Custo escalado (estimativa)"`);

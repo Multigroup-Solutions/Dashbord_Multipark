@@ -5,8 +5,11 @@
  * 22d: nas cidades também o tempo por carro de cada condutor, comparado com a
  * tabela máxima (D12). Regras: shared/extrasPressure.ts.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { addDays } from "@shared/lisbonDay";
+import { CELL_NOTE_DATES, CELL_NOTE_WEEKS, cellToOperational, notesForCell } from "@shared/extrasDayNotes";
+import { DayNoteItem, DayNotesCard } from "./DayNotes";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -54,7 +57,20 @@ const METRIC_HELP: Record<Metric, string> = {
   crew: "Pessoas diferentes a fazer serviços nessa hora, sempre a contar o team leader (média por dia). Mais escuro = mais gente.",
 };
 
-export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
+const WEEKDAY_PLURAL_PT: Record<number, string> = { 1: "segundas", 2: "terças", 3: "quartas", 4: "quintas", 5: "sextas", 6: "sábados", 7: "domingos" };
+
+export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "porto" | "faro"; targetDate: string; canEdit: boolean }) {
+  // Pedido 4 (7 out 2026): notas do dia de trabalho — o dia escolhido começa no dia da escala da página.
+  const [noteDate, setNoteDate] = useState(targetDate);
+  useEffect(() => { if (targetDate) setNoteDate(targetDate); }, [targetDate]);
+  const notesAnchor = targetDate || noteDate;
+  const recentNotesQ = trpc.extrasDia.dayNotes.list.useQuery(
+    { city, from: addDays(notesAnchor, -CELL_NOTE_WEEKS * 7), to: notesAnchor },
+    { enabled: !!notesAnchor, staleTime: 60_000 },
+  );
+  const notesCard = noteDate ? (
+    <DayNotesCard city={city} date={noteDate} defaultDate={targetDate} onDateChange={setNoteDate} canEdit={canEdit} />
+  ) : null;
   const q = trpc.extrasDia.pressure.useQuery(undefined, { staleTime: 10 * 60_000 });
   const [metric, setMetric] = useState<Metric>("load");
   const [cellKey, setCellKey] = useState<string | null>(null);
@@ -112,17 +128,23 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
   };
   const [selWd, selH] = (cellKey ?? "").split(":").map(Number);
   const selected = cellKey ? detail(selWd, selH) : null;
+  // Notas das últimas datas com este dia da semana (e esta hora, se a nota a tiver).
+  const cellNotes = cellKey ? notesForCell(recentNotesQ.data ?? [], selWd, selH) : [];
+  const cellOp = cellKey ? cellToOperational(selWd, selH) : null;
 
-  if (q.isLoading) return <div className="text-sm text-muted-foreground">A carregar a pressão…</div>;
-  if (q.error) return <div className="text-sm text-red-600">Erro: {q.error.message}</div>;
+  if (q.isLoading) return <div className="space-y-4">{notesCard}<div className="text-sm text-muted-foreground">A carregar a pressão…</div></div>;
+  if (q.error) return <div className="space-y-4">{notesCard}<div className="text-sm text-red-600">Erro: {q.error.message}</div></div>;
   if (!q.data?.available || !groups.length) {
     return (
-      <Card>
-        <CardContent className="py-6 text-sm text-muted-foreground">
-          Ainda não há dados de pressão. O cálculo corre todos os dias a partir das 04:45 (trabalho <code>extras-pressure</code>, BD da Multipark desde abril de 2026);
-          um super admin pode corrê-lo já em <code>/api/cron/extras-pressure</code>.
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        {notesCard}
+        <Card>
+          <CardContent className="py-6 text-sm text-muted-foreground">
+            Ainda não há dados de pressão. O cálculo corre todos os dias a partir das 04:45 (trabalho <code>extras-pressure</code>, BD da Multipark desde abril de 2026);
+            um super admin pode corrê-lo já em <code>/api/cron/extras-pressure</code>.
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -167,6 +189,8 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
           </div>
         </CardContent>
       </Card>
+
+      {notesCard}
 
       {stale && (
         <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm">
@@ -248,6 +272,21 @@ export function PressureTab({ city }: { city: "lisbon" | "porto" | "faro" }) {
                 <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setCellKey(null)}>fechar</button>
               </div>
               <ul className="mt-1 space-y-0.5 text-xs">{selected.slice(1).map((l, i) => <li key={i}>{l}</li>)}</ul>
+              {cellOp && (
+                <div className="mt-2 border-t pt-2">
+                  <div className="text-xs font-medium">
+                    Notas das últimas {WEEKDAY_PLURAL_PT[cellOp.weekday]}{selH < 3 ? " (madrugada: noite do dia anterior)" : ""}
+                    <span className="font-normal text-muted-foreground"> · até {CELL_NOTE_DATES} datas, do dia todo ou desta hora</span>
+                  </div>
+                  {recentNotesQ.error ? (
+                    <p className="text-xs text-red-600">Não foi possível ler as notas: {recentNotesQ.error.message}</p>
+                  ) : cellNotes.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Sem notas.</p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">{cellNotes.map((n) => <DayNoteItem key={n.id} note={n} showDate />)}</ul>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">Carrega numa célula (ou passa o rato) para ver o detalhe dessa hora.</p>

@@ -52,12 +52,12 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 ## Changelog
 
 ### 2026-10-07 — Templates POR CIDADE (Lisboa / Porto / Faro) + turno_confirmado + "Preciso de alterar"
-**Type**: feature (**migração 0530**, branch `claude/whatsapp-templates-cidade` a partir do main)
+**Type**: feature (**migração 0550**, branch `claude/whatsapp-templates-cidade` a partir do main)
 **Scope**: `shared/driverTemplates.ts` (NOVO, registo = fonte única), `shared/whatsappTemplate.ts` (catálogo por `message`,
 sem name/language/roles; `templateForCity`, `isDriverMessageTemplate`), `server/whatsappBroadcast.ts`, `server/whatsappStore.ts`,
 `server/whatsappFailurePolicy.ts`, `server/whatsappInbox.ts` (`conversationDriverCity`), `server/extraLeads.ts`,
 `server/extrasAutomation.ts`, `server/employeeCity.ts` (`resolveCitiesForProjectIds`), `server/routers.ts`,
-`server/migrations/migration_0530.ts`, `drizzle/schema.ts`, `client/src/components/whatsapp/DriverCityPanel.tsx` (NOVO),
+`server/migrations/migration_0550.ts`, `drizzle/schema.ts`, `client/src/components/whatsapp/DriverCityPanel.tsx` (NOVO),
 `ExtraLeadsPage` / `ExtrasDiaPage` / `WhatsAppInboxPage`, docs (ajuda + notificações), testes (`driverTemplates.test.ts` NOVO + 6 atualizados).
 **Registo (decisões do Jorge, 2026-10-07)**:
 - LISBOA = produção: `driver_shift_notice` / `driver_availability` (pt_PT, UTILITY), `seja_motorista` / `morada_e_regras` (pt_BR),
@@ -81,7 +81,7 @@ sem name/language/roles; `templateForCity`, `isDriverMessageTemplate`), `server/
   → `extras_dia_notices.changeRequestedAt` + notify `extras_schedule_reply` + resposta; badge "alteração pedida".
 - Regras por nome passaram a valer para todas as cidades: `isTeamRetryTemplate`, email de recurso da disponibilidade,
   botões do aviso (`isDriverMessageTemplate`). `SHIFT_NOTE_RE` aceita "Turno confirmado".
-**Notas**: migração 0530 SEM backfill (os templates antigos iam a todas as cidades: NULL = antes do registo).
+**Notas**: migração 0550 SEM backfill (os templates antigos iam a todas as cidades: NULL = antes do registo).
 Parâmetros do turno_confirmado (`customer_name`/`shift`) ASSUMIDOS; diferentes caem no posicional.
 **Gates**: tsc limpo, vite build OK, suite 4652 passam / 0 falhas.
 **Pendentes**: templates Porto + turno_confirmado APPROVED na Meta; envio real de cada template para número interno (Jorge).
