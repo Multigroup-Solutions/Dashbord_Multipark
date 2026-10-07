@@ -64,13 +64,18 @@ import {
   Sparkles,
   PauseCircle,
   BellOff,
+  Hand,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
 import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
+import { LicenceWarning } from "./extrasDia/LicenceWarning";
+import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
+import { StaffingBanner, StaffingGapList } from "./extrasDia/StaffingIndicator";
+import { NotifyShiftDialog } from "./extrasDia/NotifyShiftDialog";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
-import { assignmentWhoLine, describeGap, describePickupPairing } from "@shared/extrasSchedule";
+import { assignmentWhoLine, describeGap, describePickupPairing, manualTouchLabel, removedOutText } from "@shared/extrasSchedule";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
@@ -81,6 +86,7 @@ import {
 } from "@shared/city";
 import {
   HOUR_OPTIONS,
+  availabilityCellDisplay,
   formatHourWindow,
   isAvailableOnDay,
   matchesAvailabilityWindow,
@@ -90,11 +96,11 @@ import {
   WHATSAPP_TEMPLATES,
   findWhatsAppTemplate,
   firstNameOf,
-  previewTemplateBody,
-  resolveBodyParamRoles,
 } from "@shared/whatsappTemplate";
 import { broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery, nameMatchScore } from "@shared/contactSearch";
+import { driverCityFrom, driverCityLabel, type City } from "@shared/driverTemplates";
+import { DriverCityPanel, planEntries, useDriverCity, type DriverCityRecipient } from "@/components/whatsapp/DriverCityPanel";
 import { contactPrefsLabel } from "@shared/contactPrefs";
 import {
   AVAILABILITY_PAGE_SIZE,
@@ -231,6 +237,9 @@ export default function ExtrasDiaPage() {
     { enabled: !!targetDate },
   );
   const assignments = assignmentsQ.data ?? [];
+  // Pedido 4 (7 out 2026): quantas notas internas tem o dia (escrevem-se no separador Pressão).
+  const dayNotesQ = trpc.extrasDia.dayNotes.list.useQuery({ city, from: targetDate, to: targetDate }, { enabled: !!targetDate });
+  const dayNotesCount = dayNotesQ.data?.length ?? 0;
 
   const actuals = useMemo(() => {
     const cost = assignments.reduce((s, a) => s + (a.cost ?? 0), 0);
@@ -291,7 +300,7 @@ export default function ExtrasDiaPage() {
         </TabsList>
       </Tabs>
 
-      {tab === "pressao" && <PressureTab city={city} />}
+      {tab === "pressao" && <PressureTab city={city} targetDate={targetDate || addDaysIso(baseDate, 1)} canEdit={access.canEdit} />}
 
       {tab === "dia" && isLoading && (
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>
@@ -311,6 +320,12 @@ export default function ExtrasDiaPage() {
             )}
             <span className="ml-2">
               · Parques: <strong>{data.parksQueried.length}</strong>
+            </span>
+            <span className="ml-2">
+              ·{" "}
+              <button type="button" className="underline-offset-2 hover:underline" onClick={() => setTab("pressao")} title="Notas internas deste dia de trabalho (separador Pressão)">
+                Notas do dia: <strong>{dayNotesCount}</strong>
+              </button>
             </span>
           </div>
 
@@ -611,7 +626,7 @@ export default function ExtrasDiaPage() {
 
 const SCHEDULE_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   none: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
-  // Só suspenso (sem proposta): a proposta automática ainda corre.
+  // Sem proposta (só suspenso ou só mexido à mão): a proposta automática já não corre neste dia.
   hold: { label: "Sem proposta", cls: "bg-muted text-muted-foreground" },
   proposing: { label: "A propor…", cls: "bg-muted text-muted-foreground" },
   proposed: { label: "Proposta por confirmar", cls: "bg-violet-100 text-violet-800 border-violet-200" },
@@ -625,17 +640,22 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
   // Dias passados: não se confirma nem se avisa ninguém (o servidor também recusa).
   const pastDay = !!targetDate && targetDate < todayISO();
   const q = trpc.extrasDia.schedule.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
+  // Pedido 7: as faltas dizem se há quem escalar ("faltam escalar 2 às 02h (há 2 disponíveis: …)") ou não.
+  const staffingQ = trpc.extrasDia.staffing.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
   const refresh = () => {
     utils.extrasDia.schedule.invalidate();
     utils.extrasDia.assignments.invalidate();
     utils.extrasDia.coverage.invalidate();
+    utils.extrasDia.staffing.invalidate();
     utils.extrasDia.notices.invalidate();
   };
   const propose = trpc.extrasDia.propose.useMutation({
     onSuccess: (r) => {
       refresh();
-      if (r.gaps.length) toast.warning(`${r.proposed} condutor(es) propostos — ${r.gaps.map(describeGap).join("; ")}.`);
-      else toast.success(r.proposed ? `${r.proposed} condutor(es) propostos. Revê e confirma.` : "Nada a propor — a previsão já está coberta.");
+      const out = removedOutText(r.removedOut ?? 0);
+      const tail = out ? ` (${out})` : "";
+      if (r.gaps.length) toast.warning(`${r.proposed} condutor(es) propostos — ${r.gaps.map(describeGap).join("; ")}.${tail}`);
+      else toast.success(r.proposed ? `${r.proposed} condutor(es) propostos. Revê e confirma.${tail}` : `Nada a propor — a previsão já está coberta.${tail}`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -681,6 +701,12 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
               <Badge variant="outline" className={st.cls}>{st.label}</Badge>
               {held && <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-200">envio automático suspenso</Badge>}
             </CardTitle>
+            {d?.state?.manual && (
+              <p className="text-[11px] text-muted-foreground mt-1 flex items-start gap-1" title={d.state.manual.what ? `Última mudança à mão: ${d.state.manual.what}` : undefined}>
+                <Hand className="h-3 w-3 mt-0.5 shrink-0" />
+                <span>{manualTouchLabel(d.state.manual)}</span>
+              </p>
+            )}
             <p className="text-xs text-muted-foreground mt-1">
               Pico de {d?.neededPeak ?? "—"} extra(s) além do TL ·{" "}
               {d ? `${d.availableCount} extra(s) disponíveis, ${d.noAnswerCount} sem resposta` : "…"}
@@ -695,7 +721,7 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
           </div>
           {canEdit && <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" disabled={busy || !targetDate} onClick={() => propose.mutate({ date: targetDate, city })}
-              title="Preenche as horas em falta com os extras disponíveis (substitui só a proposta automática anterior; não mexe no que está confirmado nem em quem foi posto à mão)">
+              title="Preenche as horas em falta com os extras disponíveis (substitui só a proposta automática anterior; não mexe no que está confirmado nem em quem foi posto à mão; quem foi tirado à mão deste dia fica de fora)">
               <Wand2 className="h-4 w-4 mr-1" />{propose.isPending ? "A propor…" : "Proposta automática"}
             </Button>
             <Button size="sm" disabled={busy || !targetDate || rows === 0 || pastDay}
@@ -718,9 +744,13 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
             <div className="flex items-center gap-2 font-semibold">
               <AlertTriangle className="h-4 w-4 shrink-0" /> Falta de gente
             </div>
-            <ul className="mt-1 space-y-0.5">
-              {d.gaps.map((g, i) => <li key={i}>• {describeGap(g).replace(/^./, (c) => c.toUpperCase())}</li>)}
-            </ul>
+            {staffingQ.data ? (
+              <StaffingGapList gaps={staffingQ.data.gaps} className="mt-1" />
+            ) : (
+              <ul className="mt-1 space-y-0.5">
+                {d.gaps.map((g, i) => <li key={i}>• {describeGap(g).replace(/^./, (c) => c.toUpperCase())}</li>)}
+              </ul>
+            )}
             {canEdit && (
               <Button size="sm" variant="outline" className="mt-2 h-auto min-h-8 max-w-full whitespace-normal text-left py-1.5 bg-white dark:bg-transparent" disabled={ask.isPending || d.noAnswerCount === 0}
                 onClick={() => ask.mutate({ date: targetDate, city })}>
@@ -792,6 +822,7 @@ function TeamSection({
     onSuccess: () => {
       utils.extrasDia.assignments.invalidate();
       utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.staffing.invalidate();
       utils.extrasDia.schedule.invalidate();
       toast.success("Turno guardado");
     },
@@ -822,6 +853,7 @@ function TeamSection({
     onSuccess: (r) => {
       utils.extrasDia.assignments.invalidate();
       utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.staffing.invalidate();
       utils.extrasDia.schedule.invalidate();
       const told = [r.notified?.whatsapp === "sent" ? "WhatsApp" : null, r.notified?.email === "sent" ? "email" : null].filter(Boolean);
       toast.success(told.length ? `Turno removido — a pessoa foi avisada por ${told.join(" e ")}.` : "Turno removido");
@@ -829,36 +861,38 @@ function TeamSection({
     onError: (e) => toast.error(e.message),
   });
 
-  // Automação: horas sem gente suficiente, avisos WhatsApp e preenchimento
-  const coverageQ = trpc.extrasDia.coverage.useQuery({ date: targetDate, city });
+  // Automação: avisos (WhatsApp + email) e preenchimento. A falta de gente por
+  // hora é o StaffingBanner (pedido 7: escalados vs disponíveis por escalar).
   const noticesQ = trpc.extrasDia.notices.useQuery({ date: targetDate, city });
+  // Estado dos avisos por canal e versão (o email não está em `notices`, que é o histórico do WhatsApp).
+  const scheduleQ = trpc.extrasDia.schedule.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
   const autofill = trpc.extrasDia.autofill.useMutation({
     onSuccess: (r) => {
       utils.extrasDia.assignments.invalidate();
       utils.extrasDia.coverage.invalidate();
+      utils.extrasDia.staffing.invalidate();
       utils.extrasDia.schedule.invalidate();
-      if (r.created.length === 0 && r.unfilled.length === 0) toast.info("A escala já cobre a previsão deste turno.");
-      else if (r.unfilled.length === 0) toast.success(`${r.created.length} extra(s) escalado(s) com base na disponibilidade.`);
-      else toast.warning(`${r.created.length} escalado(s); faltam ${r.unfilled.length} turno(s) sem ninguém disponível.`);
+      const out = removedOutText(r.removedOut ?? 0);
+      const tail = out ? ` (${out})` : "";
+      if (r.created.length === 0 && r.unfilled.length === 0) toast.info(`A escala já cobre a previsão deste turno.${tail}`);
+      else if (r.unfilled.length === 0) toast.success(`${r.created.length} extra(s) escalado(s) com base na disponibilidade.${tail}`);
+      else toast.warning(`${r.created.length} escalado(s); faltam ${r.unfilled.length} turno(s) sem ninguém disponível.${tail}`);
     },
     onError: (e) => toast.error(e.message),
   });
-  const notify = trpc.extrasDia.notify.useMutation({
-    onSuccess: (r) => {
-      utils.extrasDia.notices.invalidate();
-      if (r.total === 0) toast.info("Ninguém confirmado neste turno para avisar (as propostas por confirmar não recebem aviso).");
-      else if (r.sent === 0 && r.failed === 0) toast.info("Todos os confirmados deste turno já tinham sido avisados.");
-      else if (r.failed === 0) toast.success(`${r.sent} aviso(s) enviado(s) por WhatsApp${r.rulesSent ? ` · ${r.rulesSent} com morada e regras` : ""}.`);
-      else toast.warning(`${r.sent} enviado(s), ${r.failed} falhado(s) — vê o motivo na linha de cada pessoa.`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  // Pedido 8: "Avisar este turno" abre a pré-visualização (texto de cada pessoa, canais, quem fica de fora).
+  const [notifyOpen, setNotifyOpen] = useState(false);
   const noticeByAssignment = useMemo(
     () => new Map((noticesQ.data ?? []).map((n) => [n.assignmentId, n])),
     [noticesQ.data],
   );
+  const emailNotices = scheduleQ.data?.notifications;
+  const emailNoticeFor = useCallback(
+    (a: { id: number; version?: number }) =>
+      (emailNotices ?? []).find((n) => n.assignmentId === a.id && n.version === (a.version ?? 1) && n.kind === "scheduled" && n.channel === "email") ?? null,
+    [emailNotices],
+  );
   const [shiftFrom, shiftTo] = shift === "morning" ? [3, 15] : [15, 27];
-  const gaps = (coverageQ.data ?? []).filter((g) => g.hour >= shiftFrom && g.hour < shiftTo);
 
   const allAssignments = assignmentsQuery.data ?? [];
   const allCandidates = candidatesQuery.data ?? [];
@@ -923,7 +957,7 @@ function TeamSection({
             {canEdit && <Button
               size="sm"
               variant="outline"
-              title="Escala quem disse que está disponível, pelos turnos que a previsão sugere"
+              title="Escala quem disse que está disponível, pelos turnos que a previsão sugere (quem foi tirado à mão deste dia fica de fora)"
               disabled={autofill.isPending || pastDay}
               onClick={() => autofill.mutate({ date: targetDate, city, shift })}
             >
@@ -932,11 +966,11 @@ function TeamSection({
             {canEdit && <Button
               size="sm"
               variant="outline"
-              title={pastDay ? "Esse dia já passou" : "Envia o aviso de trabalho por WhatsApp a quem deste turno está confirmado e ainda não foi avisado (1.ª vez: também morada e regras)"}
-              disabled={notify.isPending || assignments.length === 0 || pastDay}
-              onClick={() => notify.mutate({ date: targetDate, city, shift })}
+              title={pastDay ? "Esse dia já passou" : "Mostra o aviso de trabalho de cada pessoa (dia e horas dela) e envia por WhatsApp e email a quem deste turno está confirmado e ainda não foi avisado"}
+              disabled={assignments.length === 0 || pastDay}
+              onClick={() => setNotifyOpen(true)}
             >
-              <MessageCircle className="h-4 w-4 mr-1" /> {notify.isPending ? "A avisar…" : "Avisar este turno"}
+              <MessageCircle className="h-4 w-4 mr-1" /> Avisar este turno
             </Button>}
             {canEdit && <Button size="sm" variant="default" onClick={() => setAdding(v => !v)}>
               <Plus className="h-4 w-4 mr-1" /> {adding ? "Cancelar" : "Adicionar"}
@@ -947,23 +981,15 @@ function TeamSection({
       <CardContent className="space-y-3">
         {confirmForceUi}
         {confirmDelUi}
+        {canEdit && (
+          <NotifyShiftDialog open={notifyOpen} onOpenChange={setNotifyOpen} date={targetDate} city={city} shift={shift} shiftLabel={shiftLabel} />
+        )}
         {assignmentsQuery.error && <QueryErrorNote error={assignmentsQuery.error} onRetry={() => assignmentsQuery.refetch()} retrying={assignmentsQuery.isFetching} what="a equipa deste turno" />}
-        {coverageQ.error && <QueryErrorNote error={coverageQ.error} onRetry={() => coverageQ.refetch()} retrying={coverageQ.isFetching} what="a falta de gente por hora" />}
         {noticesQ.error && <QueryErrorNote error={noticesQ.error} onRetry={() => noticesQ.refetch()} retrying={noticesQ.isFetching} what="os avisos enviados" />}
         {(candidatesQuery.error || tlCandidatesQuery.error) && (adding || addingTL) && (
           <QueryErrorNote error={(candidatesQuery.error ?? tlCandidatesQuery.error)!} onRetry={() => { void candidatesQuery.refetch(); void tlCandidatesQuery.refetch(); }} retrying={candidatesQuery.isFetching || tlCandidatesQuery.isFetching} what="a lista de pessoas" />
         )}
-        {gaps.length > 0 && (
-          <div className="rounded-md border border-red-300 bg-red-50/60 p-3 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-200">
-            <div className="flex items-center gap-2 font-medium">
-              <AlertTriangle className="h-4 w-4" /> Faltam condutores em {gaps.length} hora(s) deste turno
-            </div>
-            <div className="mt-1 text-xs">
-              {gaps.slice(0, 8).map((g) => `${fmtHour(g.hour)}: precisas ${g.needed}, tens ${g.have}`).join(" · ")}
-              {gaps.length > 8 ? ` · e mais ${gaps.length - 8}` : ""}
-            </div>
-          </div>
-        )}
+        <StaffingBanner date={targetDate} city={city} fromHour={shiftFrom} toHour={shiftTo} />
         {/* TL banner */}
         <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1071,7 +1097,7 @@ function TeamSection({
                   <AssignmentRow
                     key={a.id}
                     assignment={a}
-                    notice={noticeByAssignment.get(a.id) ?? null}
+                    notice={rowNotice(noticeByAssignment.get(a.id) ?? null, emailNoticeFor(a))}
                     onSave={(payload) => { void saveAssignment({ ...payload, id: a.id, city }).catch(() => {}); }}
                     onDelete={() => void askRemove(a)}
                     busy={upsert.isPending || del.isPending}
@@ -1162,6 +1188,7 @@ function AssignmentForm({
               if (full) setLevel(full.suggestedLevel);
             }}
           />
+          <LicenceWarning status={[...candidates, ...(others ?? [])].find(x => x.id === employeeId)?.licence} name={personName} />
           {pickedOther && (
             <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs space-y-1">
               <div><strong>{pickedOther.fullName}</strong> ainda não pode ser Team Leader na escala.</div>
@@ -1267,14 +1294,54 @@ function AssignmentForm({
   );
 }
 
-function NoticeBadge({ notice }: { notice: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null; outdated?: boolean } | null }) {
+/** Aviso de uma linha: o do WhatsApp (com sim/não) e, à parte, o estado do email desta versão (pedido 8). */
+type RowNotice = {
+  status: string | null;
+  confirmedAt: string | null;
+  declinedAt: string | null;
+  /** Carregou em "Preciso de alterar" no turno_confirmado. */
+  changeRequestedAt?: string | null;
+  error: string | null;
+  outdated?: boolean;
+  email?: { status: string; detail: string | null } | null;
+};
+
+function rowNotice(
+  wa: { status: string; confirmedAt: string | null; declinedAt: string | null; changeRequestedAt?: string | null; error: string | null; outdated?: boolean } | null,
+  email: { status: string; detail: string | null } | null,
+): RowNotice | null {
+  if (!wa && !email) return null;
+  return wa ? { ...wa, email } : { status: null, confirmedAt: null, declinedAt: null, error: null, email };
+}
+
+function EmailNoticeBadge({ email }: { email: { status: string; detail: string | null } }) {
+  if (email.status === "sent") return <Badge variant="secondary" className="gap-1 text-[11px]" title="Aviso de trabalho enviado por email (estas horas)"><Mail className="h-3 w-3" />email</Badge>;
+  if (email.status === "sending") return null;
+  const failed = email.status === "failed";
+  return (
+    <Badge variant="outline" className={`gap-1 text-[11px] ${failed ? "border-red-300 text-red-700" : "text-muted-foreground"}`} title={email.detail ?? (failed ? "Falhou o envio do email" : "Email não enviado")}>
+      <Mail className="h-3 w-3" />{failed ? "email falhou" : "sem email"}
+    </Badge>
+  );
+}
+
+function NoticeBadge({ notice }: { notice: RowNotice | null }) {
   if (!notice) return null;
+  const email = notice.email ? <EmailNoticeBadge email={notice.email} /> : null;
+  if (!notice.status) return email;
   // Mudaram as horas/pessoa depois do aviso: o que foi dito já não vale.
-  if (notice.outdated) return <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-800" title="O aviso foi das horas antigas — avisa outra vez">aviso desatualizado</Badge>;
-  if (notice.declinedAt) return <Badge variant="destructive" className="text-[11px]" title="Respondeu que não pode">✗ não pode</Badge>;
-  if (notice.confirmedAt) return <Badge className="bg-emerald-700 text-[11px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>;
-  if (notice.status === "sent") return <Badge variant="secondary" className="text-[11px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>;
-  return <Badge variant="outline" className="text-[11px] border-red-300 text-red-700" title={notice.error ?? "Falhou o envio"}>aviso falhou</Badge>;
+  const wa = notice.outdated
+    ? <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-800" title="O aviso foi das horas antigas — avisa outra vez">aviso desatualizado</Badge>
+    : notice.changeRequestedAt
+    ? <Badge className="bg-amber-500 text-[11px]" title="Carregou em Preciso de alterar na confirmação do turno">alteração pedida</Badge>
+    : notice.declinedAt
+      ? <Badge variant="destructive" className="text-[11px]" title="Respondeu que não pode">✗ não pode</Badge>
+      : notice.confirmedAt
+        ? <Badge className="bg-emerald-700 text-[11px]" title="Confirmou pelo WhatsApp">✓ confirmou</Badge>
+        : notice.status === "sent"
+          ? <Badge variant="secondary" className="text-[11px]" title="Aviso enviado por WhatsApp — à espera de resposta">avisado</Badge>
+          : <Badge variant="outline" className="text-[11px] border-red-300 text-red-700" title={notice.error ?? "Falhou o envio"}>aviso falhou</Badge>;
+  return <>{wa}{email}</>;
 }
 
 function AssignmentRow({
@@ -1284,7 +1351,7 @@ function AssignmentRow({
   onDelete,
   busy,
 }: {
-  notice?: { status: string; confirmedAt: string | null; declinedAt: string | null; error: string | null; outdated?: boolean } | null;
+  notice?: RowNotice | null;
   assignment: {
     id: number;
     assignmentDate: string;
@@ -1341,6 +1408,7 @@ function AssignmentRow({
               </button>
             ) : a.personName}
             <NoticeBadge notice={notice} />
+            {a.employeeId != null && <QuickNoteButton employeeId={a.employeeId} name={a.personName} workDate={a.assignmentDate} assignmentId={a.id} />}
             {a.status === "proposed" && (
               <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-700" title="Proposta automática — ainda por confirmar">proposta</Badge>
             )}
@@ -2108,6 +2176,7 @@ export function AvailabilitySection() {
     phoneE164: string | null;
     status: "sent" | "failed" | "invalid_phone" | "opted_out" | "duplicate_phone" | "recent_template";
     error?: string;
+    city?: City;
   };
   const [waResult, setWaResult] = useState<
     null | { total: number; sent: number; failed: number; invalidPhone: number; optedOut: number; recentTemplate?: number; recipients: WaRecipient[] }
@@ -2146,23 +2215,16 @@ export function AvailabilitySection() {
   // Mudou o template, o campo ou o alvo → volta a pedir confirmação.
   useEffect(() => { setWaConfirm(false); }, [waTemplateId, waParam2, waValidCount]);
 
-  // Pré-visualização: o texto REAL do template aprovado na Meta (não uma cópia
-  // local que possa divergir). Só é pedido com o diálogo aberto; o servidor tem
-  // cache de 5 min por template.
-  const templatePreview = trpc.whatsapp.templatePreview.useQuery(
-    { templateName: waTemplate.name, languageCode: waTemplate.language },
-    { enabled: waOpen, staleTime: 5 * 60_000, retry: false },
+  // Cidade do template de cada destinatário (registo shared/driverTemplates.ts):
+  // a do extra; sem ela, a do utilizador; senão fica por escolher. A
+  // pré-visualização do texto REAL aprovado na Meta, por cidade, vive no painel.
+  const waCityKey = waTargets.map(e => `${e.employeeId}:${e.city ?? ""}`).join(",");
+  const waCityRecipients = useMemo<DriverCityRecipient[]>(
+    () => waTargets.map(e => ({ id: e.employeeId, city: driverCityFrom(e.city), name: firstNameOf(e.fullName) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [waCityKey],
   );
-
-  // Nome de exemplo = o do 1º destinatário do alvo (é mesmo o que ele vai ver).
-  const waPreviewName = firstNameOf(waTargets[0]?.fullName) ?? "Nome";
-  const waPreviewText = useMemo(() => {
-    const p = templatePreview.data;
-    if (!p?.ok) return null;
-    // MESMOS papéis que o envio usa — o preview não pode contar outra história.
-    const slots = resolveBodyParamRoles(p.paramNames, p.paramCount, waTemplate.roles);
-    return previewTemplateBody(p.bodyText, slots, { recipient: waPreviewName, shared: waParam2 });
-  }, [templatePreview.data, waTemplate, waPreviewName, waParam2]);
+  const waCity = useDriverCity({ templateId: waTemplate.id, open: waOpen, recipients: waCityRecipients });
 
   // Só falta o campo quando o template TEM campo — os sem parâmetros (ex.:
   // "Morada e regras") nunca preenchem `waParam2` e têm de poder ser enviados.
@@ -2175,19 +2237,25 @@ export function AvailabilitySection() {
       toast.error(`Preenche o campo “${waTemplate.sharedParam.label}”.`);
       return;
     }
+    if (testPhone && !waCity.testCity) {
+      toast.error("Escolhe a cidade do template a testar.");
+      return;
+    }
+    if (!testPhone && waCity.blockReason) {
+      toast.error(waCity.blockReason);
+      return;
+    }
     setWaResult(null);
     // Invariante mantida (Decisão 1 do Jorge): "a todos" = o conjunto MOSTRADO
-    // na tabela — o que envio é o que vejo. Envio de teste ignora o alvo.
-    const targetIds = selectedIds.size > 0
-      ? Array.from(selectedIds)
-      : shownExtras.map(e => e.employeeId);
+    // na tabela (o que envio é o que vejo). O alvo é `waTargets`, já agrupado
+    // por cidade no painel. Envio de teste ignora o alvo.
     broadcast.mutate({
-      templateName: waTemplate.name,
-      languageCode: waTemplate.language,
+      templateId: waTemplate.id,
       bodyParam2: bodyParam2 || null,
       // O botão com link do formulário é detetado pelos metadados do template
-      // na Meta (server/whatsappTemplateMeta.ts) — sem override manual na UI.
-      employeeIds: testPhone ? undefined : targetIds,
+      // na Meta (server/whatsappTemplateMeta.ts), sem override manual na UI.
+      cities: testPhone ? undefined : planEntries(waCity.plan).map(e => ({ employeeId: e.id, city: e.city })),
+      testCity: testPhone ? waCity.testCity : undefined,
       weekStart: effectiveWeek || null,
       note: note.trim() || null,
       testPhone: testPhone ? testPhone.trim() : undefined,
@@ -2285,20 +2353,23 @@ export function AvailabilitySection() {
             title={d.note ? `${d.note} — clicar para editar` : "Editar disponibilidade"}
             onClick={() => openAvailabilityEditor(ex)}
           >
-            {(d.morning || d.night || d.fromHour != null) ? (
-              <span className="inline-flex flex-col items-center leading-tight">
-                <span className="inline-flex gap-0.5 justify-center items-center">
-                  {d.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
-                  {d.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
-                  {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
-                </span>
-                {(d.fromHour != null || d.toHour != null) && (
-                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                    {d.fromHour ?? "?"}h–{d.toHour ?? "?"}h
+            {(d.morning || d.night || d.fromHour != null || d.toHour != null) ? (() => {
+              // Pedido 7: com horas, mostram-se as horas reais (o slot do site "18H-01H"
+              // aparecia com a lua de "Noite 15h–03h" e parecia cobrir até às 03h).
+              const cell = availabilityCellDisplay(d);
+              return (
+                <span className="inline-flex flex-col items-center leading-tight">
+                  <span className="inline-flex gap-0.5 justify-center items-center">
+                    {cell.morning && <Sun className="h-3.5 w-3.5 text-amber-500" />}
+                    {cell.night && <Moon className="h-3.5 w-3.5 text-indigo-500" />}
+                    {d.note && <span className="text-muted-foreground text-xs" aria-label="tem nota">✱</span>}
                   </span>
-                )}
-              </span>
-            ) : (
+                  {cell.hours && (
+                    <span className="text-[11px] text-muted-foreground whitespace-nowrap">{cell.hours}</span>
+                  )}
+                </span>
+              );
+            })() : (
               <span className="text-muted-foreground/50" aria-hidden>·</span>
             )}
           </button>
@@ -2807,7 +2878,7 @@ export function AvailabilitySection() {
               })}
             </div>
             <div className="text-xs text-muted-foreground">
-              <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · horas = janela indicada pela pessoa · ✱ tem nota (passa o rato por cima) · totais = nº disponíveis por turno
+              <Sun className="h-3 w-3 inline text-amber-500" /> manhã · <Moon className="h-3 w-3 inline text-indigo-500" /> noite · horas = janela exata indicada pela pessoa (manda sobre os turnos; "00h–03h" é a madrugada desse dia, ou seja a noite do dia anterior) · ✱ tem nota (passa o rato por cima) · totais = nº disponíveis por turno
             </div>
           </div>
         )}
@@ -2948,24 +3019,10 @@ export function AvailabilitySection() {
               </div>
               )}
 
-              {/* Pré-visualização do texto REAL aprovado na Meta, já com o nome
-                  do 1º destinatário e o campo acima substituídos. */}
-              <div className="space-y-1">
-                <Label className="text-xs">Pré-visualização</Label>
-                {templatePreview.isLoading ? (
-                  <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
-                ) : waPreviewText ? (
-                  <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap">
-                    {waPreviewText}
-                  </div>
-                ) : (
-                  <p className="text-xs text-amber-700">
-                    {templatePreview.data && !templatePreview.data.ok
-                      ? templatePreview.data.reason
-                      : "Pré-visualização indisponível — o envio continua a funcionar."}
-                  </p>
-                )}
-              </div>
+              {/* Cidade do template (por defeito a de cada extra), contagens por
+                  cidade e o texto REAL aprovado na Meta de cada cidade, já com o
+                  nome do 1.º destinatário e o campo acima substituídos. */}
+              <DriverCityPanel state={waCity} sharedValue={waParam2} noun="motorista(s)" />
 
               <div className="space-y-1">
                 <Label className="text-xs">Número de teste</Label>
@@ -2978,11 +3035,11 @@ export function AvailabilitySection() {
                   <Button
                     variant="outline"
                     className="shrink-0"
-                    disabled={waMissingParam || !waTestPhone.trim() || broadcast.isPending}
+                    disabled={waMissingParam || !waTestPhone.trim() || !waCity.testCity || broadcast.isPending}
                     onClick={() => submitBroadcast(waTestPhone)}
                   >
                     {broadcast.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-                    Enviar teste
+                    Enviar teste{waCity.testCity ? ` (${driverCityLabel(waCity.testCity)})` : ""}
                   </Button>
                 </div>
               </div>
@@ -3006,6 +3063,7 @@ export function AvailabilitySection() {
                         <span className="flex-1 truncate">
                           {r.name || r.phone}
                           {r.phoneE164 ? <span className="text-muted-foreground"> · {r.phoneE164}</span> : null}
+                          {r.city ? <span className="text-muted-foreground"> · {driverCityLabel(r.city)}</span> : null}
                         </span>
                         {r.error && <span className="text-red-500 truncate max-w-[45%]">{r.error}</span>}
                       </div>
@@ -3026,7 +3084,7 @@ export function AvailabilitySection() {
               </Button>
               <Button
                 className="bg-green-700 hover:bg-green-800 text-white"
-                disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal}
+                disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal || !!waCity.blockReason}
                 onClick={() => {
                   // D32: a várias pessoas, primeiro "Confirmar".
                   if (!waConfirm && needsBroadcastConfirm(waValidCount)) { setWaConfirm(true); return; }

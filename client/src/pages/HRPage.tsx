@@ -8,6 +8,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
+import { NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
 import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
 import { readImageAsJpeg } from "@/components/ProfilePhotoPrompt";
 import { formatIban, ibanError, maskIban, maskNif, sameIban } from "@shared/iban";
@@ -20,6 +21,13 @@ import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
 import { ImportFromSheetButton } from "@/components/google/DriveActions";
 import { toCsv } from "@shared/csv";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+import { DocStatusBadge, LicenceBadge } from "@/components/rh/RhBadges";
+import { LicencePanel } from "@/components/rh/LicencePanel";
+import { RejectDocumentDialog } from "@/components/rh/RejectDocumentDialog";
+import { EmployeeNotesPanel } from "@/components/rh/EmployeeNotesPanel";
+import { DocsRequestBulkDialog, DocsRequestCard } from "@/components/rh/DocsRequestDialog";
+import { licenceRelevant, LICENCE_STATUS_LABELS, LICENCE_STATUSES, type LicenceStatus } from "@shared/drivingLicence";
+import { docsSummaryLabel, type DocsSummary as DocsSummaryView } from "@shared/employeeDocuments";
 
 /**
  * Documentos pessoais deixaram de abrir pela URL pública: pede-se ao servidor
@@ -67,8 +75,10 @@ import {
   Upload, Trash2, Eye, ChevronLeft, Camera, MapPin,
   Euro, Building2, Phone, Mail, CreditCard, Shield,
   CheckCircle2, XCircle, AlertTriangle, Image, FolderOpen, Plus, Pencil, Save, X,
-  Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3
+  Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3, NotebookPen, Plane
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { TERMINAL_STATUS_LABELS, type TerminalStatus } from "@shared/pontoTerminal";
 import { ContactActions } from "@/components/ContactActions";
 import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
@@ -482,17 +492,19 @@ function CreateEmployeeDialog({ open, onClose }: { open: boolean; onClose: () =>
 // ─── DOCUMENT UPLOAD (MULTI-FILE + CHECKLIST) ───────────────────────────────
 // `access` vem de rh.byId: quem pode mexer nos dados pessoais carrega
 // documentos; apagar é admin (ficha não protegida) ou quem carregou o ficheiro.
-type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canManage?: boolean; canViewSensitive: boolean; canViewDocuments: boolean; isRh?: boolean; canChangeIban?: boolean; canApproveIban?: boolean };
-const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canManage: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false };
+type EmployeeAccess = { isOwn: boolean; canEditPersonal: boolean; canEditContract: boolean; canManage?: boolean; canViewSensitive: boolean; canViewDocuments: boolean; isRh?: boolean; canChangeIban?: boolean; canApproveIban?: boolean; canValidateDocuments?: boolean; canViewNotes?: boolean };
+const NO_ACCESS: EmployeeAccess = { isOwn: false, canEditPersonal: false, canEditContract: false, canManage: false, canViewSensitive: false, canViewDocuments: false, isRh: false, canChangeIban: false, canApproveIban: false, canValidateDocuments: false, canViewNotes: false };
 
-function DocumentsTab({ employeeId, access }: { employeeId: number; access: EmployeeAccess }) {
+/** Carta da ficha (rh.byId): estado + data de emissão + validação do RH. */
+type LicenceInfo = { status: LicenceStatus | null; issuedAt: string | null; validatedAt: string | null };
+
+function DocumentsTab({ employeeId, access, licence, extraName }: { employeeId: number; access: EmployeeAccess; licence?: LicenceInfo; /** Ficha de um extra: nome (para o pedido de documentos em falta). */ extraName?: string | null }) {
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const canUpload = access.canEditPersonal;
+  const canValidate = !!access.canValidateDocuments;
   // 41c: na própria ficha cada um carrega os SEUS documentos; contrato, anexos, termo e seguro são do RH (o servidor confirma).
   const SELF_TYPES: DocType[] = ["id_card", "residence_permit", "driving_license", "nib_proof", "address_proof", "photo", "other"];
-  const canUploadType = (t: DocType) => canUpload && (!access.isOwn || access.canEditContract || SELF_TYPES.includes(t));
-  const canDeleteDoc = (uploadedById: number | null | undefined) => access.canEditContract || (access.canEditPersonal && uploadedById != null && uploadedById === user?.id);
   const openDoc = useOpenEmployeeDoc();
   const { data: docs = [] } = trpc.rh.documents.list.useQuery({ employeeId }, { enabled: access.canViewDocuments });
   const { data: checklist = [] } = trpc.rh.documents.checklist.useQuery({ employeeId }, { enabled: access.canViewDocuments });
@@ -500,20 +512,33 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
   const [uploadingCategory, setUploadingCategory] = useState<DocType | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<DocType | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<{ id: number; label: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const activeDocTypeRef = useRef<DocType>("id_card");
+  // Jorge (7 out 2026): depois de VALIDADO só o RH substitui ("Outros" não tranca). O servidor confirma.
+  const lockedType = (t: DocType) => !canValidate && t !== "other" && docs.some((d: any) => d.docType === t && d.status === "validated");
+  const canUploadType = (t: DocType) => canUpload && (!access.isOwn || access.canEditContract || SELF_TYPES.includes(t)) && !lockedType(t);
+  // Retirar (= arquivar): o RH sempre; quem carregou, enquanto não está validado.
+  const canDeleteDoc = (d: { uploadedById: number | null | undefined; status?: string | null }) =>
+    access.canEditContract || canValidate || (d.status !== "validated" && access.canEditPersonal && d.uploadedById != null && d.uploadedById === user?.id);
+  const refreshDocs = () => {
+    utils.rh.documents.list.invalidate({ employeeId });
+    utils.rh.documents.checklist.invalidate({ employeeId });
+    utils.rh.documents.allStatus.invalidate();
+    utils.rh.byId.invalidate({ id: employeeId });
+  };
 
   const uploadBatch = trpc.rh.documents.uploadBatch.useMutation({
     onSuccess: (r) => {
-      utils.rh.documents.list.invalidate({ employeeId });
-      utils.rh.documents.checklist.invalidate({ employeeId });
-      utils.rh.documents.allStatus.invalidate();
+      refreshDocs();
       const filled = (r as any)?.autofill?.filled as string[] | undefined;
+      const pending = (r as any)?.status === "pending";
+      const head = pending ? "Documentos entregues — ficam pendentes de validação pelo RH" : "Documentos carregados";
       if (filled?.length) {
         utils.rh.invalidate();
-        toast.success(`Documentos carregados — a IA preencheu: ${[...new Set(filled)].join(", ")}.`);
+        toast.success(`${head} — a IA preencheu: ${[...new Set(filled)].join(", ")}.`);
       } else {
-        toast.success("Documentos carregados!");
+        toast.success(`${head}.`);
       }
       setUploading(false);
       setUploadingCategory(null);
@@ -522,12 +547,12 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
   });
 
   const del = trpc.rh.documents.delete.useMutation({
-    onSuccess: () => {
-      utils.rh.documents.list.invalidate({ employeeId });
-      utils.rh.documents.checklist.invalidate({ employeeId });
-      utils.rh.documents.allStatus.invalidate();
-      toast.success("Documento eliminado");
-    },
+    onSuccess: () => { refreshDocs(); toast.success("Documento retirado (fica arquivado)."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const validateDoc = trpc.rh.documents.validate.useMutation({
+    onSuccess: () => { refreshDocs(); toast.success("Documento validado."); },
+    onError: (e) => toast.error(e.message),
   });
 
   const handleMultiFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -575,9 +600,27 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
     return <p role="status" className="text-sm text-muted-foreground border rounded-md px-3 py-3 bg-muted/40">Sem permissão para ver os documentos desta ficha — só o próprio, quem gere o seu centro de custos, o backoffice e os RH.</p>;
   }
 
+  const pendingDocs = docs.filter((d: any) => d.status === "pending").length;
+
   return (
     <div className="space-y-5">
       <input ref={fileRef} type="file" className="hidden" accept="image/*,.pdf" multiple onChange={handleMultiFile} />
+
+      {/* Jorge (7 out 2026): carta de condução — estado e validação pelo RH */}
+      {licence && (
+        <LicencePanel employeeId={employeeId} issuedAt={licence.issuedAt} validatedAt={licence.validatedAt} licence={licence.status} canValidate={canValidate} />
+      )}
+
+      {canValidate && pendingDocs > 0 && (
+        <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          {pendingDocs} documento{pendingDocs > 1 ? "s" : ""} por validar — abre a categoria e carrega em "Validar" ou "Recusar".
+        </p>
+      )}
+
+      {/* Pauta do Rafael (7 out 2026): pedir ao extra os documentos em falta (WhatsApp/email) */}
+      {canValidate && extraName && !access.isOwn && (
+        <DocsRequestCard employeeId={employeeId} name={extraName} missingCount={totalMandatory - completedCount} />
+      )}
 
       {/* Checklist de documentos obrigatórios */}
       <Card>
@@ -594,22 +637,27 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
         <CardContent className="space-y-3">
           <Progress value={progressPct} className="h-2" />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {checklist.map((item) => (
+            {checklist.map((item: any) => (
               <div
                 key={item.docType}
-                className={`flex items-center justify-between p-2.5 rounded-lg border transition-colors ${
-                  item.present ? "border-green-200 bg-green-50/50" : "border-orange-200 bg-orange-50/50"
+                className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border transition-colors ${
+                  item.state === "validated" ? "border-green-200 bg-green-50/50 dark:border-green-900 dark:bg-green-950/20"
+                    : item.state === "pending" ? "border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20"
+                    : "border-orange-200 bg-orange-50/50 dark:border-orange-900 dark:bg-orange-950/20"
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  {item.present ? (
+                <div className="flex min-w-0 items-center gap-2">
+                  {item.state === "validated" ? (
                     <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
+                  ) : item.state === "pending" ? (
+                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
                   ) : (
                     <XCircle className="w-4 h-4 text-orange-500 shrink-0" />
                   )}
-                  <span className="text-sm">{DOC_LABELS[item.docType as DocType]}</span>
+                  <span className="text-sm truncate">{DOC_LABELS[item.docType as DocType]}</span>
+                  {(item.state === "pending" || item.state === "rejected") && <DocStatusBadge status={item.state} reason={item.rejectedReason} />}
                 </div>
-                {!item.present && canUpload && (
+                {!item.present && canUploadType(item.docType as DocType) && (
                   <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => triggerUpload(item.docType as DocType)}>
                     <Plus className="w-3 h-3 mr-1" /> Carregar
                   </Button>
@@ -628,6 +676,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
           const isExpanded = expandedCategory === type;
           const isMandatory = MANDATORY_DOC_TYPES.includes(type);
           const hasFiles = typeDocs.length > 0;
+          const typePending = typeDocs.filter((d: any) => d.status === "pending").length;
 
           return (
             <Card key={type} className={`overflow-hidden ${!hasFiles && !isMandatory ? "opacity-60" : ""}`}>
@@ -640,6 +689,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                   <span className="text-sm font-medium">{label}</span>
                   {isMandatory && <Badge variant="outline" className="text-[11px] h-4 px-1">Obrigatório</Badge>}
                   {hasFiles && <Badge variant="secondary" className="text-[11px] h-4 px-1.5">{typeDocs.length}</Badge>}
+                  {typePending > 0 && <Badge variant="outline" className="h-4 px-1.5 text-[11px] border-amber-300 text-amber-800 dark:text-amber-200">{typePending} por validar</Badge>}
                 </div>
                 <div className="flex items-center gap-2">
                   {uploading && uploadingCategory === type ? (
@@ -648,6 +698,8 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                     <Button size="sm" variant="ghost" className="h-7" onClick={(e) => { e.stopPropagation(); triggerUpload(type); }}>
                       <Upload className="w-3 h-3 mr-1" /> Carregar
                     </Button>
+                  ) : lockedType(type) && canUpload ? (
+                    <span className="text-[11px] text-muted-foreground" title="Depois de validado, só o RH substitui este documento">Validado — só o RH substitui</span>
                   ) : null}
                 </div>
               </div>
@@ -670,18 +722,40 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
                         <div key={doc.id} className="group relative border rounded-lg overflow-hidden bg-muted/30">
                           {/* Preview — via URL assinada (permissão da ficha) */}
                           <DocThumb docId={doc.id} mimeType={doc.mimeType} label={doc.label || doc.fileKey?.split("/").pop() || "documento"} onOpen={() => openDoc(doc.id)} />
-                          {/* Info */}
-                          <div className="p-2">
+                          {/* Info + estado (Jorge, 7 out 2026) */}
+                          <div className="p-2 space-y-1">
                             <p className="text-xs font-medium truncate">{doc.label || doc.fileKey?.split("/").pop()}</p>
-                            <p className="text-[11px] text-muted-foreground">{new Date(doc.createdAt).toLocaleDateString("pt-PT")}</p>
+                            <p className="text-[11px] text-muted-foreground">{fmtPTDate(doc.createdAt)}</p>
+                            <DocStatusBadge status={(doc as any).status} reason={(doc as any).rejectedReason} />
+                            {(doc as any).status === "rejected" && (doc as any).rejectedReason && (
+                              <p className="text-[11px] text-red-700 dark:text-red-300 line-clamp-3 break-words">Motivo: {(doc as any).rejectedReason}</p>
+                            )}
+                            {canValidate && (doc as any).status !== "validated" && (
+                              <div className="flex gap-1 pt-0.5">
+                                <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={validateDoc.isPending} onClick={() => validateDoc.mutate({ id: doc.id })}>
+                                  <CheckCircle2 className="w-3 h-3 mr-1" /> Validar
+                                </Button>
+                                {(doc as any).status === "pending" && (
+                                  <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-destructive" onClick={() => setRejecting({ id: doc.id, label: doc.label || DOC_LABELS[type] })}>
+                                    Recusar
+                                  </Button>
+                                )}
+                              </div>
+                            )}
+                            {canValidate && (doc as any).status === "validated" && (
+                              <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-muted-foreground" onClick={() => setRejecting({ id: doc.id, label: doc.label || DOC_LABELS[type] })}>
+                                Recusar
+                              </Button>
+                            )}
                           </div>
                           {/* Actions overlay */}
                           <div className="absolute top-1 right-1 flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                             <Button size="icon" variant="secondary" className="w-6 h-6" aria-label="Abrir documento" onClick={() => openDoc(doc.id)}>
                               <Eye className="w-3 h-3" />
                             </Button>
-                            {canDeleteDoc(doc.uploadedById) && (
-                              <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" aria-label="Eliminar documento" onClick={() => del.mutate({ id: doc.id })}>
+                            {canDeleteDoc(doc as any) && (
+                              <Button size="icon" variant="secondary" className="w-6 h-6 text-destructive" aria-label="Retirar documento (arquivar)" title="Retirar (fica arquivado)"
+                                onClick={() => { if (confirm("Retirar este documento? Fica arquivado (não se apaga).")) del.mutate({ id: doc.id }); }}>
                                 <Trash2 className="w-3 h-3" />
                               </Button>
                             )}
@@ -708,6 +782,7 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
           </DialogContent>
         </Dialog>
       )}
+      {rejecting && <RejectDocumentDialog doc={rejecting} onClose={() => setRejecting(null)} onDone={refreshDocs} />}
     </div>
   );
 }
@@ -716,8 +791,37 @@ function DocumentsTab({ employeeId, access }: { employeeId: number; access: Empl
 // (extraído para componente partilhado — também usado no atalho de ponto do avatar)
 
 // ─── TIME RECORDS TAB ─────────────────────────────────────────────────────────
-function TimeRecordsTab({ employeeId }: { employeeId: number }) {
+/** Etiqueta do terminal (aeroporto) num registo de ponto. */
+function TerminalBadge({ status }: { status: string | null | undefined }) {
+  if (!status || !(status in TERMINAL_STATUS_LABELS)) return null;
+  const label = TERMINAL_STATUS_LABELS[status as TerminalStatus];
+  const cls = status === "pending"
+    ? "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-200"
+    : status === "rejected"
+      ? "bg-muted text-muted-foreground border-border line-through"
+      : "bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-950 dark:text-sky-200";
+  return (
+    <span className={`ml-2 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border ${cls}`}>
+      <Plane className="w-3 h-3" />{label}{status === "pending" ? " — não paga terminal" : ""}
+    </span>
+  );
+}
+
+function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { employeeId: number; canManage?: boolean; isExtra?: boolean }) {
   const utils = trpc.useUtils();
+  // Terminal no ponto (aeroporto): só com o interruptor ligado e só nos extras.
+  const terminalQ = trpc.rh.timeRecords.terminalEnabled.useQuery(undefined, { staleTime: 60_000 });
+  const terminalOn = !!terminalQ.data?.enabled && isExtra;
+  const [terminalEdit, setTerminalEdit] = useState<{ id: number; terminal: boolean } | null>(null);
+  const [terminalNote, setTerminalNote] = useState("");
+  const setTerminal = trpc.rh.timeRecords.setTerminal.useMutation({
+    onSuccess: (_d, v) => {
+      utils.rh.timeRecords.list.invalidate();
+      toast.success(v.terminal ? "Troço marcado como terminal" : "Terminal desmarcado");
+      setTerminalEdit(null); setTerminalNote("");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const now = new Date();
   const [year] = useState(now.getFullYear());
   const [month] = useState(now.getMonth() + 1);
@@ -746,6 +850,8 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
       }
       if (data?.warning) toast.warning(data.warning, { duration: 10000 });
       if (data?.outsideGeofence) toast.warning("Atenção: check-in dado FORA do raio do local de trabalho — ficou marcado.", { duration: 10000 });
+      if (data?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
+      if (data?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
@@ -763,10 +869,15 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
           { duration: 10000 }
         );
       }
+      if (data?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
+      if (data?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Troço de terminal aberto (última picagem = entrada no aeroporto)
+  const openTerminal = terminalOn && records[0]?.type === "check_in" && records[0]?.terminalStatus === "start" ? records[0] : null;
 
   const submitWithPhoto = (base64: string, mimeType: string) => {
     const doSubmit = (lat: number, lng: number) => {
@@ -831,6 +942,13 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
         </Card>
       )}
 
+      {openTerminal && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-950/40 px-3 py-2 text-sm">
+          <Badge className="bg-sky-600 hover:bg-sky-600 text-white gap-1"><Plane className="w-3 h-3" />Terminal</Badge>
+          <span>Estás no terminal desde {fmtPTDateTime(openTerminal.recordedAt)}. Antes de saíres do aeroporto, dá saída + entrada para voltares a extra normal.</span>
+        </div>
+      )}
+
       {/* Buttons */}
       {!cameraMode && (
         <div className="flex flex-wrap gap-3">
@@ -892,7 +1010,14 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                       {reviewStatus === "rejected" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
                       {reviewStatus === "approved" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
                       {!reviewStatus && isFlagged && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
+                      {terminalOn && <TerminalBadge status={r.terminalStatus} />}
                     </p>
+                    {terminalOn && canManage && r.type === "check_out" && r.terminalStatus === "pending" && (
+                      <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                        <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>Confirmar terminal</Button>
+                        <Button size="sm" variant="ghost" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: false }); }}>Desmarcar</Button>
+                      </div>
+                    )}
                     {canReview && (
                       <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={reviewRecord.isPending} onClick={() => { const h = prompt("Horas corrigidas (deixa vazio para manter):"); const n = h && h.trim() ? Number(h.replace(",", ".")) : undefined; reviewRecord.mutate({ id: r.id, decision: "approved", correctedHours: Number.isFinite(n as number) ? n : undefined }); }}>Aprovar</Button>
@@ -971,6 +1096,29 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
                       Horas trabalhadas: <span className="font-semibold text-foreground">{parseFloat(String(r.hoursWorked)).toFixed(2)}h</span>
                     </div>
                   )}
+                  {terminalOn && r.type === "check_out" && (
+                    <div className="text-xs text-muted-foreground space-y-1" onClick={(e) => e.stopPropagation()}>
+                      <p>
+                        Terminal (aeroporto): <span className="font-medium text-foreground">{r.terminalStatus ? TERMINAL_STATUS_LABELS[r.terminalStatus as TerminalStatus] ?? r.terminalStatus : "não (troço normal)"}</span>
+                        {r.terminalNote && <> · motivo: {r.terminalNote}</>}
+                        {r.terminalReviewedAt && <> · {fmtPTDateTime(r.terminalReviewedAt)}</>}
+                      </p>
+                      {canManage && (
+                        <div className="flex gap-1">
+                          {r.terminalStatus !== "auto" && r.terminalStatus !== "confirmed" && (
+                            <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>
+                              <Plane className="w-3 h-3 mr-1" />{r.terminalStatus === "pending" ? "Confirmar terminal" : "Marcar como terminal"}
+                            </Button>
+                          )}
+                          {r.terminalStatus && r.terminalStatus !== "rejected" && (
+                            <Button size="sm" variant="ghost" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: false }); }}>
+                              Desmarcar terminal
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {(r as any).zelloKm != null && (
                     <div className="text-xs text-muted-foreground space-y-0.5">
                       <p className="font-medium text-foreground">Turno no Zello (automático)</p>
@@ -992,6 +1140,33 @@ function TimeRecordsTab({ employeeId }: { employeeId: number }) {
         })}
         {records.length === 0 && <p className="text-center text-muted-foreground py-8">Sem registos de ponto</p>}
       </div>
+
+      {terminalEdit && (
+        <Dialog open onOpenChange={(o) => { if (!o) setTerminalEdit(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{terminalEdit.terminal ? "Marcar este troço como terminal" : "Desmarcar o terminal deste troço"}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              {terminalEdit.terminal
+                ? "As horas deste troço passam a pagar à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master)."
+                : "As horas deste troço passam a pagar à taxa normal do extra."}
+              {" "}Fica registado quem mudou e porquê.
+            </p>
+            <div className="space-y-1">
+              <Label htmlFor="terminal-note">Motivo</Label>
+              <Textarea id="terminal-note" rows={3} value={terminalNote} onChange={(e) => setTerminalNote(e.target.value)} placeholder="ex.: confirmado com o TL — esteve no terminal das 14h às 18h" />
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setTerminalEdit(null)}>Cancelar</Button>
+              <Button disabled={setTerminal.isPending || terminalNote.trim().length < 3}
+                onClick={() => setTerminal.mutate({ id: terminalEdit.id, terminal: terminalEdit.terminal, note: terminalNote.trim() })}>
+                {terminalEdit.terminal ? "Marcar terminal" : "Desmarcar"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -1439,6 +1614,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
         <Badge variant={emp.isActive ? "default" : "secondary"} className={emp.isActive ? "bg-green-600" : "bg-muted text-muted-foreground"}>
           {emp.isActive ? "Ativo" : "Inativo"}
         </Badge>
+        {licenceRelevant(emp.position, (data as any).licence) && <LicenceBadge status={(data as any).licence} />}
         {/* Motivo da desativação actual — as notas e a data ficam no tooltip */}
         {!emp.isActive && emp.deactivationReason && (
           <span
@@ -1852,14 +2028,22 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
         } catch { /* sem sessionStorage */ }
         return "documents";
       })()}>
-        <TabsList className="grid grid-cols-3 w-full">
+        <TabsList className={`grid w-full ${access.canViewNotes ? "grid-cols-2 sm:grid-cols-4 h-auto" : "grid-cols-3"}`}>
           <TabsTrigger value="documents"><FileText className="w-4 h-4 mr-2" />Documentos</TabsTrigger>
           <TabsTrigger value="timerecords"><Clock className="w-4 h-4 mr-2" />Ponto</TabsTrigger>
           <TabsTrigger value="schedules"><Calendar className="w-4 h-4 mr-2" />Horário</TabsTrigger>
+          {/* Jorge (7 out 2026): notas internas — chefia no seu âmbito; nunca na própria ficha */}
+          {access.canViewNotes && <TabsTrigger value="notes"><NotebookPen className="w-4 h-4 mr-2" />Notas internas</TabsTrigger>}
         </TabsList>
-        <TabsContent value="documents" className="mt-4"><DocumentsTab employeeId={employeeId} access={access} /></TabsContent>
-        <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} /></TabsContent>
+        <TabsContent value="documents" className="mt-4">
+          <DocumentsTab employeeId={employeeId} access={access} extraName={emp.position === "extra" ? emp.fullName : null}
+            licence={licenceRelevant(emp.position, (data as any).licence) || access.canValidateDocuments
+              ? { status: (data as any).licence ?? null, issuedAt: (emp as any).drivingLicenseIssuedAt ?? null, validatedAt: (emp as any).drivingLicenseValidatedAt ?? null }
+              : undefined} />
+        </TabsContent>
+        <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} canManage={!!access.canManage} isExtra={emp.position === "extra" || (emp as any).contractType === "extra"} /></TabsContent>
         <TabsContent value="schedules" className="mt-4"><SchedulesTab employeeId={employeeId} /></TabsContent>
+        {access.canViewNotes && <TabsContent value="notes" className="mt-4"><EmployeeNotesPanel employeeId={employeeId} /></TabsContent>}
       </Tabs>
     </div>
   );
@@ -1995,10 +2179,13 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
   const fmt = (v: number) => v.toLocaleString("pt-PT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const exportPayrollCSV = () => {
-    const headers = ["Nome","Posto","Departamento","NIF","NIB","Horas","Dias","Salário Base","Pag. Extra","H.Extra","Pag. H.Extra","H.Noturnas","Pag. Noturnas","H.FDS","Pag. FDS","Prov. 13º","Prov. 14º","Sub. Alim.","Total"];
+    // Terminal (aeroporto): colunas só quando há horas de terminal no mês (desligado = CSV igual).
+    const withTerminal = sorted.some((r: any) => (r.terminalHours ?? 0) > 0);
+    const headers = ["Nome","Posto","Departamento","NIF","NIB","Horas","Dias","Salário Base","Pag. Extra", ...(withTerminal ? ["H.Terminal","Pag. Terminal (incl.)"] : []),"H.Extra","Pag. H.Extra","H.Noturnas","Pag. Noturnas","H.FDS","Pag. FDS","Prov. 13º","Prov. 14º","Sub. Alim.","Total"];
     const rows = sorted.map((r: any) => [
       r.fullName, r.position, r.department ?? "", r.nif ?? "", r.nib ?? "",
       r.totalHours, r.daysWorked, fmt(r.baseSalary), fmt(r.extraPayment),
+      ...(withTerminal ? [r.terminalHours ?? 0, fmt(r.terminalPayment ?? 0)] : []),
       r.overtimeHours, fmt(r.overtimePayment),
       r.nightHours ?? 0, fmt(r.nightPayment ?? 0),
       r.weekendHours ?? 0, fmt(r.weekendPayment ?? 0),
@@ -2285,7 +2472,19 @@ function PayrollPage({ onBack }: { onBack: () => void }) {
                       <td className="px-3 py-2 text-right tabular-nums">{fmt(r.totalHours)}h</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.daysWorked}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.baseSalary) + "€"}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? fmt(r.extraPayment) + "€" : "—"}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {r.isExtra ? fmt(r.extraPayment) + "€" : "—"}
+                        {r.isExtra && (r.terminalHours ?? 0) > 0 && (
+                          <div className="text-[11px] text-sky-700 dark:text-sky-300 whitespace-nowrap" title="Horas de terminal (aeroporto), pagas à taxa do nível seguinte — já incluídas no valor">
+                            incl. {fmt(r.terminalHours)}h terminal × {fmt(r.terminalHourlyRate ?? 0)}€
+                          </div>
+                        )}
+                        {r.isExtra && (r.terminalPendingHours ?? 0) > 0 && (
+                          <div className="text-[11px] text-amber-700 whitespace-nowrap" title="Terminal por confirmar: pagas como normais até o RH confirmar na ficha → Ponto">
+                            {fmt(r.terminalPendingHours)}h terminal por confirmar
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.overtimeHours) + "h"}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.overtimePayment) + "€"}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.isExtra ? "—" : fmt(r.nightPayment ?? 0) + "€"}</td>
@@ -2365,7 +2564,7 @@ export default function HRPage() {
   const canSalaries = can(user as any, "rh_salarios", "view");
 
   // Extra users: show only their own profile
-  const { data: myEmployee } = trpc.rh.me.useQuery(undefined, { enabled: isExtra });
+  const { data: myEmployee, isLoading: myLoading, error: myError, refetch: refetchMe, isFetching: myFetching } = trpc.rh.me.useQuery(undefined, { enabled: isExtra });
 
   // Filtros persistem à navegação (sessionStorage) — voltar de uma ficha ou de
   // outra página mantém pesquisa, posto, conta, ativo/inativo e projeto.
@@ -2376,6 +2575,9 @@ export default function HRPage() {
   const [filterPosition, setFilterPosition] = usePersistedState<string>("hr.position", "all");
   const [filterAccount, setFilterAccount] = usePersistedState<string>("hr.account", "all");
   const [filterActive, setFilterActive] = usePersistedState<string>("hr.active", "active");
+  // Jorge (7 out 2026): estado da carta e "Documentos por validar".
+  const [filterLicence, setFilterLicence] = usePersistedState<string>("hr.licence", "all");
+  const [filterDocs, setFilterDocs] = usePersistedState<string>("hr.docs", "all");
   // Separador Colaboradores/Extras/Recrutamento também persiste — voltar de
   // uma ficha de extra mantém-nos nos Extras (bug reportado pelo Jorge)
   const [activeTab, setActiveTab] = usePersistedState<string>("hr.tab", "employees");
@@ -2387,6 +2589,9 @@ export default function HRPage() {
   // Para admins, os agentes por ligar vivem no separador Ligações
   useEffect(() => { if (isAdminRole && activeTab === "agentes") setActiveTab("ligacoes"); }, [isAdminRole, activeTab, setActiveTab]);
   const [showPayroll, setShowPayroll] = useState(false);
+  // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras (em grupo).
+  const [showDocsRequest, setShowDocsRequest] = useState(false);
+  const canRequestDocs = can(user as any, "rh", "edit");
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
@@ -2414,28 +2619,35 @@ export default function HRPage() {
 
   // Extra users go directly to their profile
   if (isExtra) {
-    if (!myEmployee) {
+    // Lote 46: a carregar ≠ erro ≠ conta sem ficha (antes as três diziam
+    // "o seu perfil ainda não foi criado").
+    if (myLoading) return <div className="p-8 text-center text-muted-foreground">A carregar a tua ficha…</div>;
+    if (myError) {
       return (
-        <div className="flex items-center justify-center min-h-[400px]">
-          <div className="text-center space-y-2">
-            <Users className="w-12 h-12 mx-auto text-muted-foreground" />
-            <p className="text-muted-foreground">O seu perfil de colaborador ainda não foi criado.</p>
-            <p className="text-sm text-muted-foreground">Contacte a administração.</p>
-          </div>
+        <div className="max-w-md mx-auto py-10 px-4">
+          <QueryErrorNote error={myError} onRetry={() => refetchMe()} retrying={myFetching} what="a tua ficha" />
         </div>
       );
     }
-    return <EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => {}} />;
+    if (!myEmployee) return <NoLinkedRecordNotice email={user?.email} />;
+    return <EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => navigate("/perfil")} />;
   }
 
-  const filtered = employees.filter(({ employee: e }) => {
+  const docSummaryOf = (id: number): DocsSummaryView | undefined => (docStatus as Record<number, DocsSummaryView>)[id];
+  const filtered = employees.filter((row) => {
+    const e = row.employee;
     const matchesSearch = e.fullName.toLowerCase().includes(search.toLowerCase()) ||
       (e.email ?? "").toLowerCase().includes(search.toLowerCase()) ||
       (e.department ?? "").toLowerCase().includes(search.toLowerCase());
     const matchesAccount = filterAccount === "all" ? true
       : filterAccount === "with" ? !!e.userId
       : !e.userId;
-    return matchesSearch && matchesAccount;
+    const matchesLicence = filterLicence === "all" || (row as any).licence === filterLicence;
+    const docs = docSummaryOf(e.id);
+    const matchesDocs = filterDocs === "all" ? true
+      : filterDocs === "to_validate" ? (docs?.pendingCount ?? 0) > 0
+      : !!docs && docs.total > docs.present;
+    return matchesSearch && matchesAccount && matchesLicence && matchesDocs;
   });
 
   if (showPayroll) {
@@ -2473,7 +2685,7 @@ export default function HRPage() {
   const employeesList = filtered.filter(({ employee: e }) => e.position !== "extra");
   const extrasList = filtered.filter(({ employee: e }) => e.position === "extra");
 
-  const renderCard = ({ employee: emp }: { employee: any }) => (
+  const renderCard = ({ employee: emp, licence }: { employee: any; licence?: LicenceStatus }) => (
     <Card
       key={emp.id}
       className="cursor-pointer hover:shadow-md transition-shadow"
@@ -2492,10 +2704,13 @@ export default function HRPage() {
             {directoryInfoFor(directory, emp.email)?.jobTitle && (
               <p className="text-[11px] text-muted-foreground truncate" title="Cargo no diretório Google">{directoryInfoFor(directory, emp.email)!.jobTitle}</p>
             )}
-            <Badge className={`text-xs mt-1 ${POSITION_COLORS[emp.position as Position]}`}>
-              {POSITION_LABELS[emp.position as Position]}
-              {emp.position === "extra" && emp.extraLevel ? ` N${emp.extraLevel}` : ""}
-            </Badge>
+            <div className="mt-1 flex flex-wrap gap-1">
+              <Badge className={`text-xs ${POSITION_COLORS[emp.position as Position]}`}>
+                {POSITION_LABELS[emp.position as Position]}
+                {emp.position === "extra" && emp.extraLevel ? ` N${emp.extraLevel}` : ""}
+              </Badge>
+              {licenceRelevant(emp.position, licence) && <LicenceBadge status={licence} />}
+            </div>
           </div>
         </div>
         <div className="mt-3 space-y-1">
@@ -2529,17 +2744,20 @@ export default function HRPage() {
             </p>
           )}
           {(() => {
-            const status = (docStatus as Record<number, { total: number; present: number; missing: string[] }>)[emp.id];
+            const status = docSummaryOf(emp.id);
             if (!status) return null;
             const missing = status.total - status.present;
+            const toValidate = status.pendingCount > 0 && (
+              <span className="ml-1 rounded bg-amber-100 px-1 text-[11px] font-medium text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">{status.pendingCount} por validar</span>
+            );
             if (missing === 0) return (
               <p className="text-xs text-green-700 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 shrink-0" /> Docs completos
+                <CheckCircle2 className="w-3 h-3 shrink-0" /> Docs completos{toValidate}
               </p>
             );
             return (
               <p className="text-xs text-orange-700 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3 shrink-0" /> {missing} doc{missing > 1 ? "s" : ""} em falta
+                <AlertTriangle className="w-3 h-3 shrink-0" /> {missing} doc{missing > 1 ? "s" : ""} em falta{toValidate}
               </p>
             );
           })()}
@@ -2549,11 +2767,7 @@ export default function HRPage() {
   );
 
   /** D46: a mesma ficha em lista (tabela), com a foto. */
-  const docsMissing = (id: number): number | null => {
-    const status = (docStatus as Record<number, { total: number; present: number; missing: string[] }>)[id];
-    return status ? status.total - status.present : null;
-  };
-  const renderTable = (list: Array<{ employee: any }>) => (
+  const renderTable = (list: Array<{ employee: any; licence?: LicenceStatus }>) => (
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-sm">
         <thead>
@@ -2564,13 +2778,14 @@ export default function HRPage() {
             <th className="text-left py-2 px-2">Email</th>
             <th className="text-left py-2 px-2">Departamento</th>
             <th className="text-left py-2 px-2">Conta</th>
+            <th className="text-left py-2 px-2">Carta</th>
             <th className="text-left py-2 px-2">Documentos</th>
           </tr>
         </thead>
         <tbody>
-          {list.map(({ employee: emp }) => {
+          {list.map(({ employee: emp, licence }) => {
             const dir = directoryInfoFor(directory, emp.email);
-            const missing = docsMissing(emp.id);
+            const docs = docSummaryOf(emp.id);
             return (
               <tr key={emp.id} className="border-b last:border-0 hover:bg-muted/40 cursor-pointer" onClick={() => setSelectedId(emp.id)}>
                 <td className="py-2 px-2">
@@ -2595,10 +2810,10 @@ export default function HRPage() {
                 <td className="py-2 px-2 whitespace-nowrap text-xs">
                   {emp.userId ? <span className="text-blue-700">Conta ativa</span> : <span className="text-orange-700">Sem conta</span>}
                 </td>
+                <td className="py-2 px-2 whitespace-nowrap">{licenceRelevant(emp.position, licence) ? <LicenceBadge status={licence} /> : <span className="text-xs text-muted-foreground">—</span>}</td>
                 <td className="py-2 px-2 whitespace-nowrap text-xs">
-                  {missing == null ? <span className="text-muted-foreground">—</span>
-                    : missing === 0 ? <span className="text-green-700">Completos</span>
-                    : <span className="text-orange-700">{missing} em falta</span>}
+                  {!docs ? <span className="text-muted-foreground">—</span>
+                    : <span className={docs.total === docs.present ? (docs.pendingCount ? "text-amber-700 dark:text-amber-300" : "text-green-700") : "text-orange-700"}>{docsSummaryLabel(docs)}</span>}
                 </td>
               </tr>
             );
@@ -2729,6 +2944,22 @@ export default function HRPage() {
             <SelectItem value="inactive">Desativados</SelectItem>
           </SelectContent>
         </Select>
+        {/* Jorge (7 out 2026): carta e documentos por validar */}
+        <Select value={filterLicence} onValueChange={setFilterLicence}>
+          <SelectTrigger className="w-full sm:w-56" aria-label="Filtrar pela carta"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas as cartas</SelectItem>
+            {LICENCE_STATUSES.map((s) => <SelectItem key={s} value={s}>{LICENCE_STATUS_LABELS[s]}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={filterDocs} onValueChange={setFilterDocs}>
+          <SelectTrigger className="w-full sm:w-56" aria-label="Filtrar pelos documentos"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos os documentos</SelectItem>
+            <SelectItem value="to_validate">Documentos por validar</SelectItem>
+            <SelectItem value="missing">Documentos em falta</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Tabs Colaboradores / Extras */}
@@ -2753,8 +2984,13 @@ export default function HRPage() {
               <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
             )}
           </TabsList>
+          {activeTab === "extras" && canRequestDocs && filterActive !== "inactive" && (
+            <Button size="sm" variant="outline" className="sm:ml-auto" onClick={() => setShowDocsRequest(true)}>
+              <FileText className="w-4 h-4 mr-2" /> Pedir documentos em falta
+            </Button>
+          )}
           {/* D46: cartões (com foto) ou lista */}
-          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className="sm:ml-auto" />}
+          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className={activeTab === "extras" && canRequestDocs && filterActive !== "inactive" ? "" : "sm:ml-auto"} />}
           </div>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (
@@ -2797,6 +3033,7 @@ export default function HRPage() {
       <CreateEmployeeDialog open={showCreate} onClose={() => setShowCreate(false)} />
       <ImportExtrasDialog open={showImport} onClose={() => setShowImport(false)} />
       <ExtraRatesDialog open={showRates} onClose={() => setShowRates(false)} />
+      {showDocsRequest && <DocsRequestBulkDialog open={showDocsRequest} onOpenChange={setShowDocsRequest} projectId={globalFilters.projectId ?? null} />}
     </div>
   );
 }

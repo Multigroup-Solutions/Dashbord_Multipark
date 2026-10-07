@@ -37,11 +37,16 @@ export function BlockedOwnDocuments() {
   const checklist = trpc.rh.documents.checklist.useQuery({ employeeId: employeeId ?? 0 }, { enabled: !!employeeId, retry: false });
   const [docType, setDocType] = useState("id_card");
   const upload = trpc.rh.documents.uploadBatch.useMutation({
-    onSuccess: () => { toast.success("Documento carregado. O RH revê e liberta o acesso."); checklist.refetch(); },
+    onSuccess: () => { toast.success("Documento entregue — fica pendente de validação pelo RH."); checklist.refetch(); },
     onError: (e) => toast.error(e.message),
   });
   if (!employeeId) return null;
-  const missing = (checklist.data ?? []).filter((d: any) => !d.present && LABEL[d.docType]).map((d: any) => LABEL[d.docType]);
+  // Jorge (7 out 2026): o que falta, o que já foi entregue (pendente de validação) e o que foi recusado (com motivo).
+  const items = (checklist.data ?? []).filter((d: any) => LABEL[d.docType]) as Array<{ docType: string; present: boolean; state?: string; rejectedReason?: string | null }>;
+  const missing = items.filter((d) => d.state === "missing" || (!d.state && !d.present)).map((d) => LABEL[d.docType]);
+  const pending = items.filter((d) => d.state === "pending").map((d) => LABEL[d.docType]);
+  const rejected = items.filter((d) => d.state === "rejected");
+  const validated = new Set(items.filter((d) => d.state === "validated").map((d) => d.docType));
 
   const onFiles = async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(ev.target.files ?? []).slice(0, 10);
@@ -56,10 +61,24 @@ export function BlockedOwnDocuments() {
     <div className="space-y-2 border-t pt-3 text-left">
       <p className="text-sm font-medium">Carregar os teus documentos</p>
       {missing.length > 0 && <p className="text-xs text-muted-foreground">Faltam: {missing.join(", ")}.</p>}
+      {pending.length > 0 && (
+        <p className="text-xs text-amber-800 dark:text-amber-200">Enviado — pendente de validação: {pending.join(", ")}. Podes voltar a enviar enquanto o RH não valida.</p>
+      )}
+      {rejected.map((d) => (
+        <p key={d.docType} className="text-xs text-red-700 dark:text-red-300">
+          Recusado: {LABEL[d.docType]}{d.rejectedReason ? ` — ${d.rejectedReason}` : ""}. Envia de novo.
+        </p>
+      ))}
       <div className="flex flex-wrap items-center gap-2">
         <Select value={docType} onValueChange={setDocType}>
           <SelectTrigger className="h-9 w-56 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>{SELF_DOCS.map(([k, l]) => <SelectItem key={k} value={k}>{l}</SelectItem>)}</SelectContent>
+          <SelectContent>
+            {SELF_DOCS.map(([k, l]) => (
+              <SelectItem key={k} value={k} disabled={k !== "other" && validated.has(k)}>
+                {l}{k !== "other" && validated.has(k) ? " (validado)" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
         <label className="cursor-pointer">
           <input type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={onFiles} disabled={upload.isPending} />
@@ -68,7 +87,7 @@ export function BlockedOwnDocuments() {
           </Button>
         </label>
       </div>
-      <p className="text-[11px] text-muted-foreground">Fotografia ou PDF, até 10 MB cada. O contrato e o termo de responsabilidade são carregados pelo RH.</p>
+      <p className="text-[11px] text-muted-foreground">Fotografia ou PDF, até 10 MB cada. Fica "pendente de validação" até o RH ver; depois de validado já não se substitui daqui. O contrato e o termo de responsabilidade são carregados pelo RH.</p>
     </div>
   );
 }

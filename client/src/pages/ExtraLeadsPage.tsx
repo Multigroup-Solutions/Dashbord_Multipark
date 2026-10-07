@@ -35,9 +35,11 @@ import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
 import { ViewToggle } from "@/components/ViewToggle";
 import { useViewPref } from "@/hooks/useViewPref";
 import { findWhatsAppTemplate, LEAD_RECRUITMENT_TEMPLATE_ID } from "@shared/whatsappTemplate";
+import { driverCityFrom, driverCityLabel, type City } from "@shared/driverTemplates";
+import { DriverCityPanel, planEntries, useDriverCity, type DriverCityRecipient } from "@/components/whatsapp/DriverCityPanel";
 import { RECENT_TEMPLATE_LABEL, broadcastConfirmText, needsBroadcastConfirm } from "@shared/whatsappBroadcastRules";
 import { matchesContactQuery } from "@shared/contactSearch";
-import { can } from "@shared/access";
+import { can, scopeFor } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LeadScoreCell, { type LeadScoreRow } from "@/components/aiOps/LeadScoreCell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -53,6 +55,7 @@ import {
   type LeadAttention,
   type LeadStatus,
 } from "@shared/extraLeadsFunnel";
+import { LEAD_NO_CITY, defaultConvertCity, defaultNewLeadCity, leadCityToProjectId, newLeadCityError } from "@shared/leadCity";
 
 const STATUS: Record<LeadStatus, { label: string; className: string }> = {
   new: { label: "Novo", className: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300" },
@@ -98,7 +101,11 @@ type LeadRow = {
   drivingLicenseNumber?: string | null;
 };
 
-/** `city` = id do nó de cidade ("" = sem cidade) — só na edição. */
+/**
+ * `city` = id do nó de cidade. Na edição "" = sem cidade; no "Novo lead"
+ * (Jorge, 7 out 2026: "Cidade *") "" = por escolher e "none" = sem cidade
+ * (só para quem vê todas as cidades) — shared/leadCity.ts.
+ */
 type LeadDraft = { fullName: string; phone: string; email: string; notes: string; city: string };
 const EMPTY_DRAFT: LeadDraft = { fullName: "", phone: "", email: "", notes: "", city: "" };
 const NO_CITY = "none";
@@ -139,8 +146,8 @@ function LeadsTab() {
   const [contactOpen, setContactOpen] = useState(false);
   const [contactIds, setContactIds] = useState<number[]>([]);
   const [contactResult, setContactResult] = useState<null | {
-    total: number; sent: number; failed: number; noPhone: number;
-    results: { leadId: number; fullName: string; status: string; error?: string }[];
+    total: number; sent: number; failed: number; noPhone: number; noCity: number;
+    results: { leadId: number; fullName: string; status: string; error?: string; city?: City }[];
   }>(null);
 
   const [deleteFor, setDeleteFor] = useState<LeadRow | null>(null);
@@ -163,9 +170,22 @@ function LeadsTab() {
         .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pt")),
     [projects.data],
   );
+  const cityIds = useMemo(() => cityProjects.map((p: any) => Number(p.id)), [cityProjects]);
   function openConvert(l: LeadRow) {
-    setConvertProjectId(cityProjects.length === 1 ? String(cityProjects[0].id) : "");
+    // A cidade do lead já vem escolhida (pode mudar-se); sem ela, a única cidade de quem converte.
+    setConvertProjectId(defaultConvertCity(l, cityIds));
     setConvertFor(l);
+  }
+  // Link de uma tarefa "Candidatura de condutor" (/extras-leads?lead=<id>): mostra só esse lead.
+  const [focusLeadId, setFocusLeadId] = useState<number | null>(() => {
+    const n = Number(new URLSearchParams(window.location.search).get("lead"));
+    return Number.isSafeInteger(n) && n > 0 ? n : null;
+  });
+  function clearFocusLead() {
+    setFocusLeadId(null);
+    const p = new URLSearchParams(window.location.search);
+    p.delete("lead");
+    window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}`);
   }
 
   // Vem tudo e o estado filtra aqui: os contadores dos chips contam sempre
@@ -208,14 +228,16 @@ function LeadsTab() {
   // Filtro local (a lista já vem completa): nome, email ou número, como no inbox.
   const shown = useMemo(
     () =>
-      trimmedSearch
+      focusLeadId != null
+        ? allLeads.filter((l) => l.id === focusLeadId)
+        : trimmedSearch
         ? leads.filter(
             (l) =>
               matchesContactQuery(trimmedSearch, { name: l.fullName, phone: l.phoneE164 ?? l.phone }) ||
               (l.email ?? "").toLowerCase().includes(trimmedSearch.toLowerCase()),
           )
         : leads,
-    [leads, trimmedSearch],
+    [leads, allLeads, trimmedSearch, focusLeadId],
   );
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: bySource.length };
@@ -290,15 +312,11 @@ function LeadsTab() {
     onError: (e) => toast.error(e.message),
   });
 
-  // Texto REAL do template aprovado na Meta — só pedido com o diálogo aberto.
-  const preview = trpc.whatsapp.templatePreview.useQuery(
-    { templateName: template.name, languageCode: template.language },
-    { enabled: contactOpen, staleTime: 5 * 60_000, retry: false },
-  );
 
   function openCreate() {
     setEditing(null);
-    setDraft(EMPTY_DRAFT);
+    // Quem só tem uma cidade já a tem escolhida; os outros escolhem (obrigatório).
+    setDraft({ ...EMPTY_DRAFT, city: defaultNewLeadCity(cityIds) });
     setEditOpen(true);
   }
   function openEdit(l: LeadRow) {
@@ -318,7 +336,11 @@ function LeadsTab() {
     if (editing) {
       const projectId = draft.city ? Number(draft.city) : null;
       update.mutate({ id: editing.id, ...payload, ...(projectId !== editing.projectId ? { projectId } : {}) });
-    } else create.mutate(payload);
+      return;
+    }
+    const cityProblem = newLeadCityError(draft.city, canChooseNoCity);
+    if (cityProblem) { toast.error(cityProblem); return; }
+    create.mutate({ ...payload, projectId: leadCityToProjectId(draft.city) });
   }
   function openContact(ids: number[]) {
     setContactIds(ids);
@@ -334,6 +356,8 @@ function LeadsTab() {
   // Pontuação (critérios explícitos, calculada no servidor) das leads mostradas.
   const { user } = useAuth();
   const canEditLeads = !!user && can(user as any, "leads_extras", "edit");
+  // "Sem cidade" no Novo lead: só quem vê todas as cidades (o servidor diz o mesmo).
+  const canChooseNoCity = !!user && scopeFor(user as any, "leads_extras") === "national";
   const scoreIds = useMemo(() => shown.slice(0, 200).map((l) => l.id), [shown]);
   const scores = trpc.aiOps.leads.scores.useQuery({ leadIds: scoreIds }, { enabled: scoreIds.length > 0, staleTime: 60_000, retry: false });
   const scoreById = useMemo(() => new Map(((scores.data ?? []) as LeadScoreRow[]).map((r) => [r.leadId, r])), [scores.data]);
@@ -342,6 +366,18 @@ function LeadsTab() {
   const f = funnel.data;
   // Cidade de um lead sem acesso ao nó (não devia acontecer: a lista já vem filtrada)
   const cityLabel = (pid: number | null) => (pid == null ? null : cityName.get(pid) ?? `#${pid}`);
+  // Cidade do template por lead (registo shared/driverTemplates.ts): a do lead;
+  // sem ela, a do utilizador; senão por escolher. Só contam os que têm telemóvel.
+  const contactCityKey = contactTargets.map((l) => `${l.id}:${l.projectId ?? ""}`).join(",");
+  const contactCityRecipients = useMemo<DriverCityRecipient[]>(
+    () =>
+      contactTargets
+        .filter((l) => !!l.phoneE164)
+        .map((l) => ({ id: l.id, city: driverCityFrom(cityLabel(l.projectId)), name: l.fullName.split(" ")[0] })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contactCityKey, cityName],
+  );
+  const contactCity = useDriverCity({ templateId: template.id, open: contactOpen, recipients: contactCityRecipients });
 
   // D46: as mesmas ações e o mesmo estado na lista e nos cartões.
   const leadActions = (l: LeadRow) => (
@@ -556,6 +592,13 @@ function LeadsTab() {
           <span className="text-xs text-amber-900 dark:text-amber-200">
             Com «Lembretes das leads de extras» ligado (Definições → Automações), os contactados sem resposta recebem 1 lembrete automático (máx. {LEAD_SLA.maxSends} envios por lead).
           </span>
+        </div>
+      )}
+
+      {focusLeadId != null && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+          <span>A mostrar só o lead #{focusLeadId} (vindo da tarefa da candidatura){list.isSuccess && shown.length === 0 ? " — não está nesta lista (arquivado ou noutra cidade?)" : ""}.</span>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clearFocusLead}><X className="h-3.5 w-3.5 mr-1" />Ver todos</Button>
         </div>
       )}
 
@@ -887,7 +930,7 @@ function LeadsTab() {
               <UserPlus className="h-5 w-5 text-primary" /> {editing ? "Editar lead" : "Novo lead"}
             </DialogTitle>
             <DialogDescription>
-              Nome obrigatório; telemóvel ou email, pelo menos um. Sem telemóvel válido não recebe WhatsApp.
+              {editing ? "Nome obrigatório" : "Nome e cidade obrigatórios"}; telemóvel ou email, pelo menos um. Sem telemóvel válido não recebe WhatsApp.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -905,6 +948,24 @@ function LeadsTab() {
                 <Input value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="nome@exemplo.pt" inputMode="email" />
               </div>
             </div>
+            {!editing && (
+              <div className="space-y-1">
+                <Label>Cidade *</Label>
+                <Select value={draft.city} onValueChange={(v) => setDraft({ ...draft, city: v })}>
+                  <SelectTrigger className={!draft.city ? "border-amber-400" : undefined} aria-label="Cidade do lead">
+                    <SelectValue placeholder={projects.isLoading ? "A carregar cidades…" : "Escolher cidade..."} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {cityProjects.map((p: any) => (
+                      <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                    ))}
+                    {/* Sem cidade = visível a todas as cidades — só para quem vê todas */}
+                    {canChooseNoCity && <SelectItem value={LEAD_NO_CITY}>Sem cidade (todas)</SelectItem>}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">A cidade em que o extra vai trabalhar: passa para a ficha ao converter.</p>
+              </div>
+            )}
             {editing && (
               <div className="space-y-1">
                 <Label>Cidade</Label>
@@ -946,31 +1007,19 @@ function LeadsTab() {
               {contactTargets.length === 1
                 ? `Para ${contactTargets[0]?.fullName} (${contactTargets[0]?.phone ?? "sem telemóvel"}).`
                 : `Para ${contactWithPhone} lead${contactWithPhone === 1 ? "" : "s"} com telemóvel${contactTargets.length !== contactWithPhone ? ` (${contactTargets.length - contactWithPhone} sem telemóvel ficam de fora)` : ""}.`}
-              {" "}Template sem campos a preencher — o texto é o aprovado na Meta.
+              {" "}Template sem campos a preencher: o texto é o aprovado na Meta para a cidade de cada lead.
             </DialogDescription>
           </DialogHeader>
 
           {!contactResult ? (
-            <div className="space-y-1">
-              <Label className="text-xs">Pré-visualização</Label>
-              {preview.isLoading ? (
-                <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
-              ) : preview.data?.ok ? (
-                <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap">
-                  {preview.data.bodyText}
-                </div>
-              ) : (
-                <p className="text-xs text-amber-700">
-                  Sem pré-visualização: {preview.data && !preview.data.ok ? preview.data.reason : preview.error?.message ?? "template não inspecionado"}. O envio segue com o formato assumido.
-                </p>
-              )}
-            </div>
+            <DriverCityPanel state={contactCity} sharedValue="" noun="lead(s)" />
           ) : (
             <div className="space-y-2">
               <div className="text-sm">
                 <span className="text-emerald-700 font-medium">{contactResult.sent} enviados</span>
                 {contactResult.failed > 0 && <> · <span className="text-red-700 font-medium">{contactResult.failed} falhas</span></>}
                 {contactResult.noPhone > 0 && <> · <span className="text-amber-700">{contactResult.noPhone} sem telemóvel</span></>}
+                {contactResult.noCity > 0 && <> · <span className="text-amber-700">{contactResult.noCity} sem cidade</span></>}
               </div>
               <ul className="max-h-56 overflow-y-auto text-xs space-y-1">
                 {contactResult.results.map((r) => (
@@ -980,15 +1029,16 @@ function LeadsTab() {
                       className={
                         r.status === "sent"
                           ? "bg-emerald-100 text-emerald-800"
-                          : r.status === "no_phone" || r.status === "invalid_phone" || r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template"
+                          : r.status === "no_phone" || r.status === "no_city" || r.status === "invalid_phone" || r.status === "skipped" || r.status === "opted_out" || r.status === "duplicate_phone" || r.status === "recent_template"
                             ? "bg-amber-100 text-amber-800"
                             : "bg-red-100 text-red-800"
                       }
                     >
-                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "invalid_phone" ? "número inválido" : r.status === "opted_out" ? "não quer mensagens" : r.status === "duplicate_phone" ? "número repetido" : r.status === "recent_template" ? RECENT_TEMPLATE_LABEL : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
+                      {r.status === "sent" ? "enviado" : r.status === "no_phone" ? "sem telemóvel" : r.status === "no_city" ? "sem cidade" : r.status === "invalid_phone" ? "número inválido" : r.status === "opted_out" ? "não quer mensagens" : r.status === "duplicate_phone" ? "número repetido" : r.status === "recent_template" ? RECENT_TEMPLATE_LABEL : r.status === "skipped" ? `não enviado (${r.error ?? "estado"})` : "falhou"}
                     </Badge>
                     <span className="font-medium">{r.fullName}</span>
-                    {r.error && <span className="text-muted-foreground break-words">— {r.error}</span>}
+                    {r.city && <span className="text-muted-foreground">{driverCityLabel(r.city)}</span>}
+                    {r.error && <span className="text-muted-foreground break-words">: {r.error}</span>}
                   </li>
                 ))}
               </ul>
@@ -1007,12 +1057,18 @@ function LeadsTab() {
             {!contactResult && (
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white"
-                disabled={contact.isPending || contactWithPhone === 0}
+                disabled={contact.isPending || contactWithPhone === 0 || !!contactCity.blockReason}
+                title={contactCity.blockReason ?? undefined}
                 onClick={() => {
                   // D32: a vários leads, primeiro "Confirmar".
                   if (!contactConfirm && needsBroadcastConfirm(contactWithPhone)) { setContactConfirm(true); return; }
                   setContactConfirm(false);
-                  contact.mutate({ leadIds: contactIds, templateId: template.id, sendKey: contactSendKey || undefined });
+                  contact.mutate({
+                    leadIds: contactIds,
+                    templateId: template.id,
+                    cities: planEntries(contactCity.plan).map((e) => ({ leadId: e.id, city: e.city })),
+                    sendKey: contactSendKey || undefined,
+                  });
                 }}
               >
                 {contact.isPending ? <Clock className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}

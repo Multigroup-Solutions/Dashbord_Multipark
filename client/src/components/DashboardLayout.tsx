@@ -92,6 +92,8 @@ import {
   X,
   Mail as MailIcon,
   Inbox,
+  HardDrive,
+  PhoneCall,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -112,10 +114,14 @@ import { CentralRingManager } from "@/components/CentralRingManager";
 import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
 import { can, roleRank, seesBeyondOwn, type AccessOverrides, type ModuleId } from "@shared/access";
 import { allowedWithoutCostCenter, decideRoute } from "@shared/routeAccess";
+import { noAccessHint, noLinkedRecordMessage } from "@shared/ownAccess";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PAGE_RELOAD_EVENT, jumpTo } from "@/lib/jumpTo";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
+
+/** Lote 45: o "Drive" do menu abre o Google Drive da pessoa (a conta Google com que está no browser). */
+export const GOOGLE_DRIVE_URL = "https://drive.google.com/drive/my-drive";
 
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
 export type AccessSubject = string | { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
@@ -130,7 +136,20 @@ export type MenuItem = {
   anyOf?: ModuleId[];
   /** Só aparece a quem vê mais do que os próprios casos no módulo (a página não tem vista "só meus"). */
   beyondOwn?: boolean;
+  /** Lote 45: abre este endereço num separador novo (ex.: o Google Drive) em vez de navegar. */
+  external?: string;
+  /** Lote 46: nome no menu de quem só vê o que é SEU aqui (ex.: "A minha ficha" em vez de "Recursos Humanos"). */
+  ownLabel?: string;
 };
+
+/** Abre um item do menu: navega, ou abre o endereço externo num separador novo. */
+export function openMenuItem(item: Pick<MenuItem, "path" | "external">, navigate: (path: string) => void): void {
+  if (item.external) {
+    window.open(item.external, "_blank", "noopener,noreferrer");
+    return;
+  }
+  navigate(item.path);
+}
 
 export type MenuGroup = {
   label: string;
@@ -145,9 +164,20 @@ export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module
   return mods.length === 0 || mods.some(m => can(userRole, m, "view"));
 }
 
+/** Lote 46: quem só vê o que é seu neste item (nenhum dos módulos além do "próprio") vê o ownLabel. */
+export function menuLabelFor(userRole: AccessSubject, item: Pick<MenuItem, "label" | "ownLabel" | "module" | "anyOf">): string {
+  if (!item.ownLabel) return item.label;
+  const mods = item.anyOf ?? (item.module ? [item.module] : []);
+  return mods.some(m => seesBeyondOwn(userRole, m)) ? item.label : item.ownLabel;
+}
+
+function visibleItems(userRole: AccessSubject, items: MenuItem[]): MenuItem[] {
+  return items.filter(i => canSeeItem(userRole, i)).map(i => (i.ownLabel ? { ...i, label: menuLabelFor(userRole, i) } : i));
+}
+
 export function getFilteredMenuGroups(userRole: AccessSubject): MenuGroup[] {
   return menuGroups
-    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
+    .map(g => ({ ...g, items: visibleItems(userRole, g.items) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -178,7 +208,7 @@ export const menuGroups: MenuGroup[] = [
     icon: Users,
     items: [
       // RH: quem gere fichas vê a lista; os restantes veem só a própria ficha
-      { icon: UserCheck, label: "Recursos Humanos", path: "/rh", anyOf: ["rh", "ficha"] },
+      { icon: UserCheck, label: "Recursos Humanos", path: "/rh", anyOf: ["rh", "ficha"], ownLabel: "A minha ficha" },
       { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", module: "leads_extras" },
       { icon: GraduationCap, label: "Formação", path: "/formacao", module: "formacao" },
       // Base de conhecimento (manuais do Drive/carregados): gestão admin/super_admin.
@@ -200,7 +230,7 @@ export const menuGroups: MenuGroup[] = [
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
       { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },
-      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", anyOf: ["disponibilidade", "disponibilidade_extras"] },
+      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", anyOf: ["disponibilidade", "disponibilidade_extras"], ownLabel: "A minha disponibilidade" },
     ],
   },
   {
@@ -224,12 +254,20 @@ export const menuGroups: MenuGroup[] = [
       // Caixas partilhadas: matriz (comunicacao) + regra de cada caixa no servidor.
       // Lote 45 (Jorge, 7 out 2026): "é só de email" — o WhatsApp tem a entrada dele; as caixas
       // ficam à esquerda como no Gmail, com o "O meu email" na mesma lista.
-      // Ordem (Jorge, lote 45): Caixas de email → O meu email → WhatsApp.
+      // Ordem (Jorge, lote 45): Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas.
       { icon: Inbox, label: "Caixas de email", path: "/comunicacao", module: "comunicacao" },
       // O próprio email: qualquer pessoa (a ficha é de todos); liga a conta Google na página.
       { icon: MailIcon, label: "O meu email", path: "/comunicacao/meu-email", anyOf: ["ficha"] },
+      // Lote 45 (Jorge: opção "a"): o Google Drive da pessoa num separador ao lado.
+      { icon: HardDrive, label: "Drive", path: "/drive", anyOf: ["ficha"], external: GOOGLE_DRIVE_URL },
       // 17f (Jorge): o WhatsApp passa para a Comunicação.
       { icon: MessageCircle, label: "WhatsApp", path: "/whatsapp", module: "whatsapp" },
+      // Lote 45: as chamadas da consola — cada um as suas; admin e super admin todas.
+      { icon: PhoneCall, label: "Central", path: "/central", module: "central" },
+      // Lote 45e (Jorge: opção "b"): a agenda Google da própria pessoa, como no Google Calendar.
+      { icon: CalendarDays, label: "Calendário", path: "/calendario", anyOf: ["ficha"] },
+      // Lote 45: as Tarefas também aqui (continuam nas Operações).
+      { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
     ],
   },
   {
@@ -274,7 +312,7 @@ export const hubGroups: HubGroup[] = [
 ];
 export function getFilteredHubGroups(userRole: AccessSubject): HubGroup[] {
   return hubGroups
-    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
+    .map(g => ({ ...g, items: visibleItems(userRole, g.items) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -434,11 +472,22 @@ function DashboardLayoutContent({
     setPontoMode(null);
   };
   const quickCheckIn = trpc.rh.timeRecords.checkIn.useMutation({
-    onSuccess: () => { toast.success("Entrada registada!"); pontoDone(); },
+    onSuccess: (d) => {
+      toast.success("Entrada registada!");
+      // Terminal no ponto (aeroporto) — só vem preenchido com o interruptor ligado
+      if (d?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
+      if (d?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
+      pontoDone();
+    },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
   });
   const quickCheckOut = trpc.rh.timeRecords.checkOut.useMutation({
-    onSuccess: (d) => { toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`); pontoDone(); },
+    onSuccess: (d) => {
+      toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`);
+      if (d?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
+      if (d?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
+      pontoDone();
+    },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
   });
   const submitPonto = (base64: string, mimeType: string) => {
@@ -683,7 +732,7 @@ function DashboardLayoutContent({
                               <SidebarMenuItem key={item.path}>
                                 <SidebarMenuButton
                                   isActive={isActive}
-                                  onClick={() => navigate(item.path)}
+                                  onClick={() => openMenuItem(item, navigate)}
                                   tooltip={item.label}
                                   className="h-9 rounded-lg transition-all font-normal data-[active=true]:!bg-primary data-[active=true]:!text-primary-foreground data-[active=true]:font-semibold hover:data-[active=true]:!bg-primary"
                                 >
@@ -867,6 +916,9 @@ function DashboardLayoutContent({
                       {pontoStatus === "in"
                         ? `Em serviço desde ${fmtPTTime(pontoQ.data?.since)}`
                         : "Fora de serviço"}
+                      {pontoStatus === "in" && pontoQ.data?.terminal && (
+                        <span className="ml-1 inline-flex items-center rounded-full border border-sky-300 bg-sky-100 px-1.5 py-0 text-[10px] font-medium text-sky-800 dark:bg-sky-950 dark:text-sky-200">Terminal</span>
+                      )}
                     </p>
                   )}
                 </div>
@@ -930,14 +982,18 @@ function DashboardLayoutContent({
             (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
           {routeDecision.kind === "no_access" ? (
-            <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout} />
+            <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout}
+              hint={noAccessHint(location, new Set(filteredItems.map(i => i.path)))} onHint={(to) => setLocation(to)} />
           ) : filters.isLoading && !allowedWithoutCostCenter(location) ? <p>A verificar o acesso às cidades…</p>
           : filters.accessError && !allowedWithoutCostCenter(location) ? (
             // 20d: falhar a leitura do acesso ≠ "sem centro de custos"
             <QueryErrorNote error={filters.accessError} onRetry={filters.retryAccess} what="o teu acesso às cidades" />
           ) : filters.missingCostCenter && !allowedWithoutCostCenter(location) ? (
             <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
-              <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição. Entretanto, abre o que é teu:
+              {/* Lote 46: conta sem ficha ≠ ficha sem cidade — cada um diz o que pedir ao RH. */}
+              {(user as any)?.employee === null
+                ? <><strong>A tua conta não está ligada a nenhuma ficha.</strong> {noLinkedRecordMessage(user?.email)}</>
+                : <><strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição. Pede ao RH para pôr a tua cidade na ficha.</>} Entretanto, abre o que é teu:
               <span className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
                 <a href="/perfil" className="underline">O meu perfil</a>
                 <a href="/rh" className="underline">A minha ficha</a>
@@ -1089,15 +1145,23 @@ function NotificationsBell() {
 }
 
 /** 20d: ecrã do menu que não é para esta pessoa — diz porquê, em vez de saltar em silêncio. */
-function NoAccessScreen({ onHome, onLogout }: { onHome: () => void; onLogout: () => Promise<void> | void }) {
+function NoAccessScreen({ onHome, onLogout, hint, onHint }: {
+  onHome: () => void;
+  onLogout: () => Promise<void> | void;
+  /** Lote 46: o lado "teu" desta página está noutra (ex.: Extras Dia → a minha disponibilidade). */
+  hint?: { to: string; label: string; text: string } | null;
+  onHint?: (to: string) => void;
+}) {
   return (
     <div role="alert" className="max-w-md mx-auto mt-10 text-center space-y-4 rounded-xl border bg-card p-6">
       <h1 className="text-lg font-semibold">Sem acesso a esta página</h1>
       <p className="text-sm text-muted-foreground">
         A tua conta não tem permissão para abrir esta página. Se achas que devias ter, fala com o teu supervisor ou com a administração.
       </p>
+      {hint && <p className="text-sm">{hint.text}</p>}
       <div className="flex flex-wrap justify-center gap-2">
-        <Button onClick={onHome}>Ir para o início</Button>
+        {hint && onHint && <Button onClick={() => onHint(hint.to)}>{hint.label}</Button>}
+        <Button variant={hint ? "outline" : "default"} onClick={onHome}>Ir para o início</Button>
         <Button variant="outline" onClick={() => { Promise.resolve(onLogout()).finally(() => { window.location.href = "/"; }); }}>Sair</Button>
       </div>
     </div>

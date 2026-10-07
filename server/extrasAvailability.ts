@@ -20,6 +20,7 @@ import { normalizePhoneE164 } from "../shared/phone";
 import { resolveCitiesForEmployeeIds, type CityKey, type CitySource } from "./employeeCity";
 import { addDays } from "../shared/lisbonDay";
 import { currentMondayLisbon, isMondayIso, NOT_MONDAY_MESSAGE } from "../shared/availabilityWeek";
+import { describeWindows, operationalDayWindows, type AvailabilityDayLike, type HourWindow } from "../shared/availabilityWindow";
 
 // ─── Helpers de datas ──────────────────────────────────────────────────────────
 
@@ -517,17 +518,29 @@ export type DayAvailabilityStatus = "available" | "unavailable" | "no_response";
 
 export interface DayAvailability {
   status: DayAvailabilityStatus;
+  /** O que a pessoa marcou no dia de CALENDÁRIO `date` (para mostrar). */
   morning: boolean;
   night: boolean;
   fromHour: number | null;
   toHour: number | null;
   note: string | null;
+  /**
+   * Janelas do dia OPERACIONAL `date` (03h → 03h do dia seguinte, horas
+   * 3–27), lidas com a semântica de calendário partilhada
+   * (shared/availabilityWindow.ts → operationalDayWindows): inclui a
+   * madrugada marcada no dia seguinte. É isto que a escala usa.
+   */
+  windows: HourWindow[];
+  /** "18h–01h", "03h–15h e 20h–03h" — as janelas em texto. */
+  hours: string;
 }
 
 /**
- * Devolve um Map employeeId → disponibilidade para o dia `date` (YYYY-MM-DD).
- *   - available    → marcou turno/horas nesse dia
- *   - unavailable  → respondeu à semana mas não marcou esse dia
+ * Devolve um Map employeeId → disponibilidade para o dia operacional `date`
+ * (YYYY-MM-DD). Lê as linhas de `date` − 1, `date` e `date` + 1 (a madrugada
+ * de D+1 e a ponta de uma noite de D−1 que passe das 03h são do dia D).
+ *   - available    → tem alguma janela no dia operacional
+ *   - unavailable  → respondeu à semana de `date` mas não pode nesse dia
  *   - no_response  → não respondeu (não recebeu/não abriu o link)
  */
 export async function getAvailabilityForDay(date: string): Promise<Map<number, DayAvailability>> {
@@ -535,29 +548,39 @@ export async function getAvailabilityForDay(date: string): Promise<Map<number, D
   const db = await getDb();
   if (!db || !parseIsoDate(date)) return map;
   const weekStart = mondayOf(parseIsoDate(date)!);
+  const around = [addDays(date, -1), date, addDays(date, 1)];
+  // (as semanas destes dias: usa o índice da semana)
+  const weeks = Array.from(new Set(around.map((d) => mondayOf(parseIsoDate(d)!))));
 
-  const rows = await db
-    .select()
-    .from(extrasAvailability)
-    .where(eq(extrasAvailability.weekStart, weekStart));
+  const [weekRows, dayRows] = await Promise.all([
+    db.select({ employeeId: extrasAvailability.employeeId }).from(extrasAvailability).where(eq(extrasAvailability.weekStart, weekStart)),
+    db.select().from(extrasAvailability).where(and(inArray(extrasAvailability.weekStart, weeks), inArray(extrasAvailability.day, around))),
+  ]);
 
-  const respondedWeek = new Set<number>();
-  const dayRow = new Map<number, typeof rows[number]>();
-  for (const r of rows) {
-    respondedWeek.add(r.employeeId);
-    if (r.day === date) dayRow.set(r.employeeId, r);
+  const respondedWeek = new Set<number>(weekRows.map((r) => r.employeeId));
+  const byEmp = new Map<number, AvailabilityDayLike[]>();
+  const calendarRow = new Map<number, typeof dayRows[number]>();
+  for (const r of dayRows) {
+    const list = byEmp.get(r.employeeId) ?? [];
+    list.push({ day: r.day, morning: r.morning === 1, night: r.night === 1, fromHour: r.fromHour ?? null, toHour: r.toHour ?? null });
+    byEmp.set(r.employeeId, list);
+    if (r.day === date) calendarRow.set(r.employeeId, r);
   }
 
-  for (const empId of respondedWeek) {
-    const r = dayRow.get(empId);
-    const available = !!r && (r.morning === 1 || r.night === 1 || r.fromHour != null);
+  const ids = new Set<number>([...Array.from(respondedWeek), ...Array.from(byEmp.keys())]);
+  for (const empId of Array.from(ids)) {
+    const windows = operationalDayWindows(byEmp.get(empId) ?? [], date);
+    if (!windows.length && !respondedWeek.has(empId)) continue; // sem resposta para esta semana
+    const r = calendarRow.get(empId);
     map.set(empId, {
-      status: available ? "available" : "unavailable",
+      status: windows.length ? "available" : "unavailable",
       morning: r?.morning === 1,
       night: r?.night === 1,
       fromHour: r?.fromHour ?? null,
       toHour: r?.toHour ?? null,
       note: r?.note ?? null,
+      windows,
+      hours: describeWindows(windows),
     });
   }
   return map;

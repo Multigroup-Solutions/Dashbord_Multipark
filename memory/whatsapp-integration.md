@@ -4,6 +4,7 @@
 Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashboard-jorge) para: (1) seleção múltipla de extras com contactos, (2) envio em massa de templates WhatsApp, (3) inbox de respostas via webhook Meta, (4) API segura para uma app externa de formulário de disponibilidades. Plano aprovado pelo Jorge em 2026-07-09. Implementação faseada — cada fase é revista antes da seguinte. Este ficheiro tem o plano completo, os 5 ajustes do Jorge, e o changelog por fase.
 
 ## Related
+- `employee-city-derivation.md` — **2026-10-07**: a cidade derivada passa a escolher o TEMPLATE (registo `shared/driverTemplates.ts`).
 - `sync-runners-topology.md` — topologia de execução (Railway `setInterval` vs Vercel/GitHub Actions cron). Relevante porque o webhook e o broadcast correm no processo Railway; o `runConcurrent` reutilizado vem do `multiparkBookingSync.ts`.
 - `profile-photo-upload.md` — **2026-10-01**: a foto da ficha (`employees.photoUrl`) é a fonte do avatar do inbox (lista + cabeçalho da conversa).
 - `employee-city-derivation.md` — **2026-08-04**: a tabela de extras ganhou filtro
@@ -49,6 +50,41 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 5. **Confirmados**: default **+351** na normalização; **nome de template configurável no dialog** (desenvolver com placeholder até os templates estarem APPROVED); **sem fila persistente** → `runConcurrent(4)` + **1 retry**, MAS deixar comentário no código do broadcast a assinalar que um restart do Railway a meio **perde os envios em curso**.
 
 ## Changelog
+
+### 2026-10-07 — Templates POR CIDADE (Lisboa / Porto / Faro) + turno_confirmado + "Preciso de alterar"
+**Type**: feature (**migração 0550**, branch `claude/whatsapp-templates-cidade` a partir do main)
+**Scope**: `shared/driverTemplates.ts` (NOVO, registo = fonte única), `shared/whatsappTemplate.ts` (catálogo por `message`,
+sem name/language/roles; `templateForCity`, `isDriverMessageTemplate`), `server/whatsappBroadcast.ts`, `server/whatsappStore.ts`,
+`server/whatsappFailurePolicy.ts`, `server/whatsappInbox.ts` (`conversationDriverCity`), `server/extraLeads.ts`,
+`server/extrasAutomation.ts`, `server/employeeCity.ts` (`resolveCitiesForProjectIds`), `server/routers.ts`,
+`server/migrations/migration_0550.ts`, `drizzle/schema.ts`, `client/src/components/whatsapp/DriverCityPanel.tsx` (NOVO),
+`ExtraLeadsPage` / `ExtrasDiaPage` / `WhatsAppInboxPage`, docs (ajuda + notificações), testes (`driverTemplates.test.ts` NOVO + 6 atualizados).
+**Registo (decisões do Jorge, 2026-10-07)**:
+- LISBOA = produção: `driver_shift_notice` / `driver_availability` (pt_PT, UTILITY), `seja_motorista` / `morada_e_regras` (pt_BR),
+  `turno_confirmado_lisboa` (pt_PT).
+- PORTO: `seja_motorista_porto`, `morada_e_regras_porto`, `aviso_de_trabalho_porto`, `disponibilidade_extras_porto`,
+  `turno_confirmado_porto`, todos pt_PT. Parâmetros: `customer_name` + `day` / `week_date` / `shift`.
+- FARO: SÓ os genéricos (`driver_shift_notice`, `driver_availability`). Sem recrutamento, morada nem turno confirmado: essas
+  mensagens NÃO vão a Faro (nunca as de Lisboa). Cidade com só algumas mensagens = entrada parcial (`hasDriverTemplate`).
+**What**:
+- Contrato tRPC: `whatsapp.sendBroadcast({templateId, cities:[{employeeId,city}], testCity, sendKey…})`,
+  `whatsapp.sendTemplate` +`city`, `extraLeads.contact` +`cities:[{leadId,city}]`, `whatsapp.templatePreview({templateId})` →
+  `{cities:[…approved, inspected, fullText…]}` (só as cidades com template), NOVO `whatsapp.recipientCity`.
+- Envio: `prepareSend({templateId, city})` (língua SEMPRE do registo); lote misto = uma difusão por cidade, todas validadas antes;
+  `citySendKey` (≤ 40) por cidade mantém a retoma 17b; dedup de número global; `city` em `whatsapp_messages` e
+  `whatsapp_broadcasts` (+ `languageCode`); D32 (24 h), STOP, "não enviar WhatsApp" e 131049 inalterados.
+- UI (`DriverCityPanel`): omissão = cidade do destinatário → do utilizador → por escolher; lote "Cidade de cada motorista" +
+  contagens; cidade com template não APPROVED desativada; pré-visualização por cidade com o texto completo (`freeText`).
+- Jobs: disponibilidade por cidade do extra; aviso + morada pela cidade do TURNO; uma chamada por cidade.
+- `turno_confirmado`: ao "Confirmo" (botão ou texto) → template da cidade do turno com o mesmo texto (`shiftText`), nota
+  "Turno confirmado D"; sem template → resposta de texto antiga. Botão "Preciso de alterar" (por `context.id` do turno_confirmado)
+  → `extras_dia_notices.changeRequestedAt` + notify `extras_schedule_reply` + resposta; badge "alteração pedida".
+- Regras por nome passaram a valer para todas as cidades: `isTeamRetryTemplate`, email de recurso da disponibilidade,
+  botões do aviso (`isDriverMessageTemplate`). `SHIFT_NOTE_RE` aceita "Turno confirmado".
+**Notas**: migração 0550 SEM backfill (os templates antigos iam a todas as cidades: NULL = antes do registo).
+Parâmetros do turno_confirmado (`customer_name`/`shift`) ASSUMIDOS; diferentes caem no posicional.
+**Gates**: tsc limpo, vite build OK, suite 4652 passam / 0 falhas.
+**Pendentes**: templates Porto + turno_confirmado APPROVED na Meta; envio real de cada template para número interno (Jorge).
 
 ### 2026-10-02 — Templates de equipa novos + botões do aviso + morada em texto livre (Fase 2)
 **Type**: feature. Mesma branch `feat/whatsapp-failure-handling`, NÃO enviada.

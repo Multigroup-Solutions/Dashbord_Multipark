@@ -376,6 +376,14 @@ export async function approveApplication(
   if (plan.assign) {
     await db.update(employees).set({ projectId: costCenter.projectId }).where(eq(employees.id, employeeId));
   }
+  // Jorge (7 out 2026): a "Data de Emissão da Carta" declarada no site passa
+  // para a ficha (só se vazia) — "Carta pendente de validação" até o RH a ver.
+  const { licenceIssueDateFromPayload } = await import("../shared/drivingLicence");
+  const declaredIssue = licenceIssueDateFromPayload(app.payload);
+  if (declaredIssue) {
+    await db.update(employees).set({ drivingLicenseIssuedAt: declaredIssue })
+      .where(and(eq(employees.id, employeeId), isNull(employees.drivingLicenseIssuedAt)));
+  }
   const existingProjectName =
     plan.outcome === "kept_existing" ? (projects.find((p) => p.id === existingProjectId)?.name ?? `#${existingProjectId}`) : null;
 

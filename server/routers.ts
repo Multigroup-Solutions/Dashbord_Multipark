@@ -90,6 +90,10 @@ import {
   NOT_MONDAY_MESSAGE,
 } from "./extrasAvailability";
 import { sendBroadcast } from "./whatsappBroadcast";
+import { isDriverCity, type City } from "../shared/driverTemplates";
+
+/** Cidade do registo de templates dos motoristas (LISBOA, PORTO…). */
+const driverCitySchema = z.custom<City>((v) => isDriverCity(v), "Cidade sem templates de WhatsApp");
 import { describeLookupFailure, getTemplateMeta } from "./whatsappTemplateMeta";
 import {
   listConversations,
@@ -103,9 +107,11 @@ import { crmQuerySchema } from "../shared/crmFilters";
 import * as opsListsShared from "../shared/opsLists";
 import { ROLE_HIERARCHY, requireRole, canSeeFinanceTotals, requireFinanceTotals, resolveDeactivationOrThrow } from "./routerGuards";
 import { rhViewer } from "./rhGuards";
+import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { expensesRouter } from "./expensesRouter";
 import { rhRouter } from "./rhRouter";
 import { operationalRouter } from "./operationalRouter";
+import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
 
 /** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
@@ -5035,25 +5041,9 @@ export const appRouter = router({
         return listNotices(input.date, input.city ?? null);
       }),
 
-    notify: protectedProcedure
-      .input(z.object({
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        city: z.enum(["lisbon", "porto", "faro"]),
-        // O botão é de um turno: só avisa esse turno (antes avisava o dia todo).
-        shift: z.enum(["morning", "night"]).optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "extras_dia", "edit");
-        const { notifyAssignments } = await import("./extrasAutomation");
-        const { PAST_DAY_MESSAGE } = await import("./extrasSchedule");
-        const { lisbonNow } = await import("../shared/extrasSchedule");
-        if (input.date < lisbonNow().date) throw new TRPCError({ code: "BAD_REQUEST", message: PAST_DAY_MESSAGE });
-        try {
-          return await notifyAssignments(input.date, { city: input.city, shift: input.shift ?? null, createdById: ctx.user.id });
-        } catch (err: any) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao avisar" });
-        }
-      }),
+    // Frente B (7 out 2026): indicador de pessoal, "Avisar este turno" (pré-visualização +
+    // envio por WhatsApp/email) e notas do dia — server/extrasDiaShiftRouter.ts.
+    ...extrasDiaShiftProcedures,
 
     bookingsInSlot: protectedProcedure
       .input(
@@ -5098,7 +5088,8 @@ export const appRouter = router({
         const viewer = await rhViewer(ctx.user);
         const person = await getEmployeeById(input.employeeId);
         if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-        await assertEmployeeAccess(input.employeeId);
+        // Lote 46: a disponibilidade da PRÓPRIA ficha abre mesmo sem cidade.
+        if (viewer.employeeId !== input.employeeId) await assertEmployeeAccess(input.employeeId);
         if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
         return getMyWeek(input.employeeId, input.weekStart);
       }),
@@ -5112,12 +5103,8 @@ export const appRouter = router({
       .input(z.object({ weekStart: weekStartSchema }))
       .query(async ({ ctx, input }) => {
         const emp = await getEmployeeByUserId(ctx.user.id);
-        if (!emp) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "A tua conta não está associada a um colaborador. Fala com o backoffice.",
-          });
-        }
+        // Lote 46: diz QUAL é a conta Google e o que fazer (pôr o email na ficha).
+        if (!emp) throw new TRPCError({ code: "FORBIDDEN", message: noLinkedRecordMessage(ctx.user.email) });
         return getMyWeek(emp.employee.id, input.weekStart);
       }),
 
@@ -5139,12 +5126,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = await getEmployeeByUserId(ctx.user.id);
-        if (!emp) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "A tua conta não está associada a um colaborador. Fala com o backoffice.",
-          });
-        }
+        // Lote 46: diz QUAL é a conta Google e o que fazer (pôr o email na ficha).
+        if (!emp) throw new TRPCError({ code: "FORBIDDEN", message: noLinkedRecordMessage(ctx.user.email) });
         const r = await setMyAvailability(emp.employee.id, input.weekStart, input.days, ctx.user.id);
         // Fica registado quem mudou e o que estava antes (a semana é substituída).
         await logActivity({
@@ -5270,6 +5253,8 @@ export const appRouter = router({
         const { setApplicationStatus } = await import("./webIntake");
         try { await setApplicationStatus(input.id, input.status, ctx.user.id, input.notes); }
         catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err?.message || "Erro ao mudar o estado" }); }
+        // Rejeitada → o lead fica "Sem interesse" → a tarefa da candidatura fecha já (0545).
+        await (await import("./leadTasks")).afterLeadChange();
         return { success: true };
       }),
 
@@ -5305,11 +5290,15 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { approveApplication } = await import("./webIntake");
+        let result: Awaited<ReturnType<typeof approveApplication>>;
         try {
-          return await approveApplication(input.id, ctx.user.id, { projectId: input.projectId, confirmReactivate: input.confirmReactivate });
+          result = await approveApplication(input.id, ctx.user.id, { projectId: input.projectId, confirmReactivate: input.confirmReactivate });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao aprovar" });
         }
+        // Aprovada → o lead fica Convertido → a tarefa da candidatura fecha já (0545).
+        await (await import("./leadTasks")).afterLeadChange();
+        return result;
       }),
   }),
 
@@ -5657,12 +5646,15 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
         const { bulkUpdateExtraLeads } = await import("./extraLeads");
+        let result: Awaited<ReturnType<typeof bulkUpdateExtraLeads>>;
         try {
-          return await bulkUpdateExtraLeads(input, ctx.user.id);
+          result = await bulkUpdateExtraLeads(input, ctx.user.id);
         } catch (err: any) {
           if (err instanceof TRPCError) throw err;
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao atualizar leads" });
         }
+        await (await import("./leadTasks")).afterLeadChange(input.leadIds);
+        return result;
       }),
 
     create: protectedProcedure
@@ -5672,6 +5664,9 @@ export const appRouter = router({
           phone: z.string().max(32).nullable().optional(),
           email: z.string().max(320).nullable().optional(),
           notes: z.string().max(512).nullable().optional(),
+          // Cidade do extra (Jorge, 7 out 2026): nó level='city' nas cidades de quem
+          // cria; null (sem cidade) só para quem vê todas. Sem o campo: a cidade de quem cria.
+          projectId: z.number().int().positive().nullable().optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -5705,6 +5700,8 @@ export const appRouter = router({
         const { id, ...patch } = input;
         try {
           const row = await updateExtraLead(id, patch, ctx.user.id);
+          // "Sem interesse" → a tarefa da candidatura fecha já (0545).
+          if (patch.status) await (await import("./leadTasks")).afterLeadChange([id]);
           // D39: NIF e números dos documentos só o RH vê.
           const { canSeeLeadIdentity, redactLeadIdentity } = await import("../shared/rhAttachments");
           return canSeeLeadIdentity(ctx.user.role) ? row : redactLeadIdentity(row);
@@ -5724,11 +5721,15 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "edit");
         assertProjectAccess(input.projectId);
         const { convertLeadToExtra } = await import("./extrasAutomation");
+        let result: Awaited<ReturnType<typeof convertLeadToExtra>>;
         try {
-          return await convertLeadToExtra(input.id, input.projectId, ctx.user.id, { confirmReactivate: input.confirmReactivate });
+          result = await convertLeadToExtra(input.id, input.projectId, ctx.user.id, { confirmReactivate: input.confirmReactivate });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao converter" });
         }
+        // Convertido → a tarefa da candidatura fecha já (0545).
+        if (result.ok) await (await import("./leadTasks")).afterLeadChange([input.id]);
+        return result;
       }),
 
     // "Apagar" = arquivar (0380); `restore` repõe.
@@ -5739,6 +5740,8 @@ export const appRouter = router({
         const { archiveExtraLead } = await import("./extraLeads");
         try { await archiveExtraLead(input.id, ctx.user.id); }
         catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao arquivar" }); }
+        // Arquivado → a tarefa da candidatura fecha já (0545).
+        await (await import("./leadTasks")).afterLeadChange([input.id]);
         return { success: true };
       }),
     restore: protectedProcedure
@@ -5758,6 +5761,9 @@ export const appRouter = router({
         z.object({
           leadIds: z.array(z.number().int().positive()).min(1).max(200),
           templateId: z.string().min(1).max(64),
+          // Cidade do template de CADA lead, decidida no diálogo. Lead sem
+          // entrada aqui não recebe nada (nunca se assume Lisboa).
+          cities: z.array(z.object({ leadId: z.number().int().positive(), city: driverCitySchema })).min(1).max(200),
           /** Código único do envio (17b): carregar outra vez retoma, não duplica. */
           sendKey: z.string().min(8).max(40).optional(),
         }),
@@ -5766,7 +5772,8 @@ export const appRouter = router({
         requireAccess(ctx.user, "leads_extras", "edit");
         const { contactExtraLeads } = await import("./extraLeads");
         try {
-          return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, createdById: ctx.user.id, sendKey: input.sendKey ?? null });
+          const cityByLead = Object.fromEntries(input.cities.map((c) => [c.leadId, c.city])) as Record<number, City>;
+          return await contactExtraLeads({ leadIds: input.leadIds, templateId: input.templateId, cityByLead, createdById: ctx.user.id, sendKey: input.sendKey ?? null });
         } catch (err: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message || "Erro ao enviar WhatsApp aos leads" });
         }
@@ -5780,31 +5787,56 @@ export const appRouter = router({
     // — quem os substitui é o cliente, com os MESMOS papéis que o envio usa
     // (shared/whatsappTemplate.ts), para o preview não poder divergir do envio.
     // Nunca lança por falta de metadados: `ok:false` + motivo legível.
+    //
+    // Devolve UMA entrada por cidade do registo (shared/driverTemplates.ts),
+    // com o estado na Meta: a UI só deixa escolher uma cidade cujo template
+    // esteja APPROVED (`approved`). Sem inspeção possível (`inspected:false`)
+    // a cidade fica escolhível com aviso; o envio valida de novo.
     templatePreview: protectedProcedure
-      .input(
-        z.object({
-          templateName: z.string().min(1).max(128),
-          languageCode: z.string().min(2).max(12),
-        }),
-      )
+      .input(z.object({ templateId: z.string().min(1).max(64) }))
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
-        const meta = await getTemplateMeta(input.templateName, input.languageCode);
-        if (!meta.available) return { ok: false as const, reason: meta.reason };
-        if (!meta.lookup.ok) {
-          return {
-            ok: false as const,
-            reason: describeLookupFailure(meta.lookup, input.templateName, input.languageCode),
-          };
-        }
-        const a = meta.lookup.analysis;
-        return {
-          ok: true as const,
-          bodyText: a.bodyText,
-          paramNames: a.paramNames,
-          paramCount: a.paramCount,
-          hasDynamicUrlButton: a.hasDynamicUrlButton,
-        };
+        const { findWhatsAppTemplate, templateForCity } = await import("../shared/whatsappTemplate");
+        const { citiesWithTemplate } = await import("../shared/driverTemplates");
+        const def = findWhatsAppTemplate(input.templateId);
+        if (!def) throw new TRPCError({ code: "BAD_REQUEST", message: "Mensagem desconhecida" });
+        // Só as cidades que TÊM template para esta mensagem (Faro não tem morada, por ex.).
+        const cities = await Promise.all(
+          citiesWithTemplate(def.message).map(async (city) => {
+            const tpl = templateForCity(def, city)!;
+            const base = { city, templateName: tpl.name, languageCode: tpl.language, params: tpl.params };
+            const meta = await getTemplateMeta(tpl.name, tpl.language);
+            if (!meta.available) return { ...base, ok: false as const, inspected: false, approved: false, reason: meta.reason };
+            if (!meta.lookup.ok) {
+              return { ...base, ok: false as const, inspected: true, approved: false, reason: describeLookupFailure(meta.lookup, tpl.name, tpl.language) };
+            }
+            const a = meta.lookup.analysis;
+            return {
+              ...base,
+              ok: true as const,
+              inspected: true,
+              approved: true,
+              bodyText: a.bodyText,
+              // Cabeçalho, corpo, rodapé e links dos botões (morada, telefone, valor à hora).
+              fullText: (a.freeText ?? a.bodyText).trim(),
+              paramNames: a.paramNames,
+              paramCount: a.paramCount,
+              hasDynamicUrlButton: a.hasDynamicUrlButton,
+            };
+          }),
+        );
+        return { cities };
+      }),
+
+    // Cidade por defeito do template para uma conversa do inbox: a da ficha do
+    // colaborador, senão a do lead com esse número. null = escolher no diálogo.
+    recipientCity: protectedProcedure
+      .input(z.object({ conversationId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "whatsapp", "view");
+        const { conversationVisible, conversationDriverCity } = await import("./whatsappInbox");
+        if (!(await conversationVisible(input.conversationId, ctx.user))) throw new TRPCError({ code: "NOT_FOUND", message: "Conversa não encontrada" });
+        return conversationDriverCity(input.conversationId);
       }),
 
     // Envia um template WhatsApp em massa (ou a 1 número, em modo teste).
@@ -5814,13 +5846,16 @@ export const appRouter = router({
     sendBroadcast: protectedProcedure
       .input(
         z.object({
-          templateName: z.string().min(1).max(128),
-          languageCode: z.string().min(2).max(12).optional(),
+          // Mensagem do catálogo; o nome e a LÍNGUA do template vêm do registo
+          // por cidade no servidor, nunca do cliente.
+          templateId: z.string().min(1).max(64),
+          // Cidade do template de CADA destinatário (decidida no diálogo).
+          cities: z.array(z.object({ employeeId: z.number().int().positive(), city: driverCitySchema })).max(2000).optional(),
+          testCity: driverCitySchema.nullable().optional(),
           // {{1}} é SEMPRE o nome do destinatário (resolvido no servidor, por
           // destinatário); só o {{2}} vem da UI e é igual para todos.
           bodyParam2: z.string().max(512).nullable().optional(),
           includeFormLink: z.boolean().optional(),
-          employeeIds: z.array(z.number()).nullable().optional(),
           weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
           note: z.string().max(500).nullable().optional(),
           testPhone: z.string().min(3).max(30).nullable().optional(),
@@ -5834,11 +5869,11 @@ export const appRouter = router({
         try {
           summary = await sendBroadcast({
             sendKey: input.testPhone ? null : input.sendKey ?? null,
-            templateName: input.templateName,
-            languageCode: input.languageCode,
+            templateId: input.templateId,
+            cityByEmployee: Object.fromEntries((input.cities ?? []).map((c) => [c.employeeId, c.city])) as Record<number, City>,
+            testCity: input.testCity ?? null,
             bodyParam2: input.bodyParam2 ?? null,
             includeFormLink: input.includeFormLink === true,
-            employeeIds: input.employeeIds ?? null,
             weekStart: input.weekStart ?? null,
             note: input.note ?? null,
             testPhone: input.testPhone ?? null,
@@ -5855,8 +5890,8 @@ export const appRouter = router({
           entity: "whatsapp_broadcast",
           entityId: summary.broadcastId ?? undefined,
           details: input.testPhone
-            ? `WhatsApp TESTE → ${(await import("../shared/maskPhone")).maskPhone(input.testPhone)} (template ${input.templateName})`
-            : `WhatsApp broadcast template ${input.templateName}: ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número${summary.recentTemplate ? `, ${summary.recentTemplate} já o tinham recebido nas últimas 24 h` : ""}`,
+            ? `WhatsApp TESTE → ${(await import("../shared/maskPhone")).maskPhone(input.testPhone)} (${input.templateId}, ${input.testCity ?? "?"})`
+            : `WhatsApp broadcast ${input.templateId} (${(summary.byCity ?? []).map((c) => `${c.city} ${c.templateName}/${c.languageCode}: ${c.sent}/${c.total}`).join(", ")}): ${summary.sent} enviados, ${summary.failed} falhas, ${summary.invalidPhone} sem número${summary.recentTemplate ? `, ${summary.recentTemplate} já o tinham recebido nas últimas 24 h` : ""}`,
         });
         return summary;
       }),
@@ -6011,6 +6046,7 @@ export const appRouter = router({
         z.object({
           conversationId: z.number().int().positive(),
           templateId: z.string().min(1).max(64),
+          city: driverCitySchema,
           bodyParam2: z.string().max(512).nullable().optional(),
           weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
           /** Código único do envio (17a): repetir o pedido não reenvia. */
@@ -6027,6 +6063,7 @@ export const appRouter = router({
           summary = await sendTemplateToConversation({
             conversationId: input.conversationId,
             templateId: input.templateId,
+            city: input.city,
             bodyParam2: input.bodyParam2 ?? null,
             weekStart: input.weekStart ?? null,
             createdById: ctx.user.id,
@@ -6040,7 +6077,7 @@ export const appRouter = router({
           action: "whatsapp_template",
           entity: "whatsapp_conversation",
           entityId: input.conversationId,
-          details: `Template WhatsApp ${input.templateId} (conversa ${input.conversationId}): ${summary.sent ? "enviado" : "falhou"}`,
+          details: `Template WhatsApp ${input.templateId} ${input.city} (conversa ${input.conversationId}): ${summary.sent ? "enviado" : "falhou"}`,
         });
         return summary;
       }),

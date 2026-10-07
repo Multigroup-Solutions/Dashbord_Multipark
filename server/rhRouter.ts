@@ -11,11 +11,15 @@ import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
 import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
-import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError } from "./rhAccess";
+import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
+import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { importExtrasFromCsv } from "./extrasImport";
 import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
+import { DOC_REJECT_REASON_MAX, DOC_TYPE_LABELS } from "../shared/employeeDocuments";
+import { NOTE_BODY_MAX, NOTE_EDIT_WINDOW_MS, NOTE_KINDS, NOTE_KIND_LABELS } from "../shared/employeeNotes";
+import { docsRequestRouter } from "./rhDocsRequestRouter";
 
 /** 41c: ~10 MB por documento (base64 ≈ 4/3 do ficheiro). */
 const DOC_MAX_BASE64_CHARS = 14_000_000;
@@ -25,7 +29,69 @@ async function assertSelfUploadDocType(user: { id: number; role: string }, emplo
   const err = selfUploadDocTypeError(await rhViewer(user), await rhEmployeeRefOrThrow(employeeId), docType);
   if (err) throw new TRPCError({ code: "FORBIDDEN", message: err });
 }
-import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, deleteEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
+
+/**
+ * Jorge (7 out 2026): entrega a 1.ª vez, volta a entregar enquanto pendente
+ * ou recusado, nunca depois de validado (só o RH substitui). Devolve o estado
+ * e quem valida, para gravar com o ficheiro (o RH carrega já validado).
+ */
+async function documentUploadPlan(user: { id: number; role: string }, employeeId: number, docType: string): Promise<{ status: "pending" | "validated"; validatedById: number | null; validatedAt: string | null }> {
+  const viewer = await rhViewer(user);
+  const ref = await rhEmployeeRefOrThrow(employeeId);
+  const { activeDocStatuses } = await import("./rhDocuments");
+  const err = documentUploadError(viewer, ref, docType, await activeDocStatuses(employeeId, docType));
+  if (err) throw new TRPCError({ code: "FORBIDDEN", message: err });
+  const status = initialDocumentStatus(viewer, ref);
+  return status === "validated"
+    ? { status, validatedById: user.id, validatedAt: new Date().toISOString().slice(0, 19).replace("T", " ") }
+    : { status, validatedById: null, validatedAt: null };
+}
+
+/**
+ * Validar/recusar documentos e a carta: o módulo RH com "editar", a ficha na
+ * cidade de quem pede e canValidateDocuments (o RH da ficha; nunca a própria).
+ */
+async function assertCanValidateDocuments(user: { id: number; role: string }, employeeId: number): Promise<EmployeeRef> {
+  requireAccess(user as any, "rh", "edit");
+  const viewer = await rhViewer(user);
+  const ref = await rhEmployeeRefOrThrow(employeeId);
+  if (!canValidateDocuments(viewer, ref)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: isOwn(viewer, employeeId) ? "Os teus documentos são validados por outra pessoa do RH." : "Só o RH desta ficha valida ou recusa documentos." });
+  }
+  await assertEmployeeAccess(employeeId);
+  return ref;
+}
+
+/** Documento recusado → aviso à própria pessoa (sino + email), com o motivo. Nunca lança. */
+async function notifyDocumentRejected(employeeId: number, docType: string, reason: string): Promise<void> {
+  try {
+    const emp = (await getEmployeeById(employeeId))?.employee;
+    if (!emp?.userId) return;
+    const { notify } = await import("./notify");
+    await notify({
+      kind: "my_doc_rejected", targetUserId: emp.userId,
+      title: `Documento recusado: ${DOC_TYPE_LABELS[docType] ?? docType}`,
+      body: `Motivo: ${reason}. Carrega-o de novo na tua ficha.`, link: "/perfil",
+      entity: { type: "employee_document_rejected", id: `${employeeId}:${docType}:${Date.now()}` },
+    });
+  } catch (err) {
+    console.warn("[documents.reject] aviso à pessoa falhou:", String((err as any)?.message ?? err).slice(0, 160));
+  }
+}
+
+/**
+ * Notas internas: o módulo RH com "ver", a ficha na cidade de quem pede e
+ * canViewInternalNotes (team leader e acima no seu âmbito; NUNCA a própria).
+ */
+async function notesContext(user: { id: number; role: string }, employeeId: number): Promise<{ viewer: Awaited<ReturnType<typeof rhViewer>>; ref: EmployeeRef }> {
+  requireAccess(user as any, "rh", "view");
+  const viewer = await rhViewer(user);
+  const ref = await rhEmployeeRefOrThrow(employeeId);
+  if (!canViewInternalNotes(viewer, ref)) throw new TRPCError({ code: "FORBIDDEN", message: "Sem acesso às notas internas desta ficha." });
+  await assertEmployeeAccess(employeeId);
+  return { viewer, ref };
+}
+import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 import { ROLE_HIERARCHY, requireRole, resolveDeactivationOrThrow } from "./routerGuards";
@@ -60,7 +126,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       const { listAutoSendsForEmployee } = await import("./mail/autoSends");
       return listAutoSendsForEmployee(input.employeeId, 30);
@@ -71,7 +138,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       if (!person.employee.userId) return null;
       const account = await getUserById(person.employee.userId);
@@ -96,7 +164,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       const { getDb } = await import('./db');
       const { sql } = await import('drizzle-orm');
@@ -115,6 +184,41 @@ export const rhRouter = router({
       }
       // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo Críticas)
       return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
+    }),
+  /**
+   * Lote 46 (Jorge, 7 out 2026): com que conta(s) Google a pessoa entra
+   * (principal + extra, último login) e, sem nenhuma, os emails da ficha com
+   * que tem de entrar e as contas SEM ficha que parecem ser dela — estas só
+   * para quem gere o RH de todas as cidades (uma conta sem ficha não tem
+   * cidade; ligar faz-se em "Ligações"). Só leitura; nunca junta sozinho.
+   */
+  loginLinks: protectedProcedure
+    .input(z.object({ employeeId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const viewer = await rhViewer(ctx.user);
+      const person = await getEmployeeById(input.employeeId);
+      if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
+      const own = isOwn(viewer, input.employeeId);
+      if (!own) {
+        requireAccess(ctx.user, "rh", "view");
+        await assertEmployeeAccess(input.employeeId);
+      }
+      if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
+      const e = person.employee as { fullName: string; email?: string | null; personalEmail?: string | null; position?: string | null };
+      const fichaEmails = Array.from(new Set([e.email, e.personalEmail].map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean)));
+      const { listEmployeeLogins, orphanLoginCandidates } = await import('./personIdentity');
+      const logins = await listEmployeeLogins(input.employeeId);
+      const canLink = !own && canAccess(ctx.user, 'rh', 'manage');
+      const national = scopedProjectIds() === undefined;
+      const candidates = canLink && national && !logins.some((l) => l.isActive)
+        ? await orphanLoginCandidates({ fullName: e.fullName, emails: fichaEmails })
+        : [];
+      const warnings: string[] = [];
+      const principal = logins.find((l) => l.principal && l.isActive) ?? null;
+      if (principal?.role === 'user' && ['extra', 'driver', 'senior_driver'].includes(String(e.position ?? ''))) {
+        warnings.push('A conta está como "Utilizador": abre a própria ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Se é extra, muda o papel para Extra em Utilizadores.');
+      }
+      return { fichaEmails, logins, candidates, canLink, national, warnings };
     }),
   // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -274,7 +378,7 @@ export const rhRouter = router({
       let employeeId = input?.employeeId;
       if (!employeeId) {
         const me = await getEmployeeByUserId(ctx.user.id);
-        if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
+        if (!me) throw new TRPCError({ code: "NOT_FOUND", message: noLinkedRecordMessage(ctx.user.email) });
         employeeId = me.employee.id;
       }
       // Restringe: salários de outros são só para admin+ DA MESMA cidade;
@@ -363,7 +467,11 @@ export const rhRouter = router({
       // (também para admins: a ficha de um super_admin fica mascarada a um admin, como no detalhe)
       const roleByUserId = new Map<number, string>();
       for (const u of await getAllUsers()) roleByUserId.set(u.id, u.role);
-      return sanitizeEmployeeRows(viewer, rows as any[], (emp) => (emp.userId != null ? roleByUserId.get(emp.userId) : null));
+      const visible = sanitizeEmployeeRows(viewer, rows as any[], (emp) => (emp.userId != null ? roleByUserId.get(emp.userId) : null));
+      // Jorge (7 out 2026): estado da carta em cada ficha (etiqueta e filtro da lista).
+      const { licenceStatusesOrNull } = await import("./rhDocuments");
+      const licences = await licenceStatusesOrNull(visible.map((r: any) => r.employee));
+      return visible.map((r: any) => ({ ...r, licence: licences?.get(r.employee.id) ?? null }));
     }),
 
   byId: protectedProcedure
@@ -379,8 +487,12 @@ export const rhRouter = router({
       if (!canViewEmployee(viewer, ref)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
       }
-      // `access` diz ao cliente o que este utilizador pode fazer na ficha
-      return { ...result, employee: sanitizeEmployee(viewer, result.employee as any, ref.role), access: employeeAccess(viewer, ref) };
+      // `access` diz ao cliente o que este utilizador pode fazer na ficha;
+      // `licence` = estado da carta (Jorge, 7 out 2026). As notas internas
+      // NUNCA vêm aqui (o próprio também chama o byId) — só em rh.notes.*.
+      const { licenceStatusesOrNull } = await import("./rhDocuments");
+      const licence = (await licenceStatusesOrNull([result.employee]))?.get(result.employee.id) ?? null;
+      return { ...result, employee: sanitizeEmployee(viewer, result.employee as any, ref.role), access: employeeAccess(viewer, ref), licence };
     }),
 
   create: protectedProcedure
@@ -825,7 +937,7 @@ export const rhRouter = router({
     .input(z.object({ fileBase64: z.string().max(PHOTO_MAX_BASE64_CHARS), mimeType: z.string().max(100) }))
     .mutation(async ({ ctx, input }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "A tua conta não está associada a um colaborador." });
+      if (!me) throw new TRPCError({ code: "FORBIDDEN", message: noLinkedRecordMessage(ctx.user.email) });
       return savePhoto(me.employee.id, input.fileBase64, ctx.user.id);
     }),
 
@@ -871,6 +983,7 @@ export const rhRouter = router({
       .mutation(async ({ ctx, input }) => {
         await assertCanUploadDocuments(ctx.user, input.employeeId);
         await assertSelfUploadDocType(ctx.user, input.employeeId, input.docType);
+        const plan = await documentUploadPlan(ctx.user, input.employeeId, input.docType);
         const { storagePut } = await import("./storage");
         const buffer = Buffer.from(input.fileBase64, "base64");
         const key = `employees/${input.employeeId}/docs/${input.docType}-${Date.now()}-${input.fileName}`;
@@ -883,8 +996,9 @@ export const rhRouter = router({
           fileKey: key,
           mimeType: input.mimeType,
           uploadedById: ctx.user.id,
+          ...plan,
         });
-        await logActivity({ userId: ctx.user.id, action: "upload", entity: "employee_document", entityId: input.employeeId, details: `Documento carregado: ${input.docType}` });
+        await logActivity({ userId: ctx.user.id, action: "upload", entity: "employee_document", entityId: input.employeeId, details: `Documento carregado: ${input.docType} (${plan.status === "validated" ? "validado — carregado pelo RH" : "pendente de validação"})` });
         // IA lê o documento e preenche os campos VAZIOS da ficha (best-effort)
         let autofill: { filled: string[] } = { filled: [] };
         try {
@@ -893,7 +1007,7 @@ export const rhRouter = router({
           const r = await autofillFromDocument({ employeeId: input.employeeId, docType: input.docType, mimeType: input.mimeType, base64: input.fileBase64, userId: ctx.user.id, ibanDirect });
           autofill = { filled: r.filled };
         } catch (err) { console.warn("[documents.upload] leitura por IA falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
-        return { url, key, autofill };
+        return { url, key, autofill, status: plan.status };
       }),
 
     uploadBatch: protectedProcedure
@@ -911,6 +1025,8 @@ export const rhRouter = router({
       .mutation(async ({ ctx, input }) => {
         await assertCanUploadDocuments(ctx.user, input.employeeId);
         await assertSelfUploadDocType(ctx.user, input.employeeId, input.docType);
+        // As várias páginas (frente/verso) são UMA entrega: verifica-se uma vez.
+        const plan = await documentUploadPlan(ctx.user, input.employeeId, input.docType);
         const { storagePut } = await import("./storage");
         const results: { url: string; key: string }[] = [];
         for (const file of input.files) {
@@ -925,10 +1041,11 @@ export const rhRouter = router({
             fileKey: key,
             mimeType: file.mimeType,
             uploadedById: ctx.user.id,
+            ...plan,
           });
           results.push({ url, key });
         }
-        await logActivity({ userId: ctx.user.id, action: "upload", entity: "employee_document", entityId: input.employeeId, details: `${input.files.length} documentos carregados: ${input.docType}` });
+        await logActivity({ userId: ctx.user.id, action: "upload", entity: "employee_document", entityId: input.employeeId, details: `${input.files.length} documentos carregados: ${input.docType} (${plan.status === "validated" ? "validados — carregados pelo RH" : "pendentes de validação"})` });
         // IA: lê as páginas (ex.: frente e verso do CC) até preencher o que falta
         const filled: string[] = [];
         try {
@@ -940,7 +1057,7 @@ export const rhRouter = router({
             if (r.skipped || r.ibanRequested) break;
           }
         } catch (err) { console.warn("[documents.uploadBatch] leitura por IA falhou:", String((err as any)?.message ?? err).slice(0, 200)); }
-        return Object.assign(results, { autofill: { filled } });
+        return Object.assign(results, { autofill: { filled }, status: plan.status });
       }),
     checklist: protectedProcedure
       .input(z.object({ employeeId: z.number() }))
@@ -951,35 +1068,149 @@ export const rhRouter = router({
     allStatus: protectedProcedure
       .query(async ({ ctx }) => {
         requireAccess(ctx.user, "rh", "view");
+        const { docsSummary } = await import("../shared/employeeDocuments");
         const map = await getAllEmployeesDocumentStatus();
-        const MANDATORY = ["photo","id_card","driving_license","nib_proof","address_proof","contract","responsibility_term"];
-        const result: Record<number, { total: number; present: number; missing: string[] }> = {};
-        if (map instanceof Map) {
-          map.forEach((types, empId) => {
-            const missing = MANDATORY.filter(t => !types.has(t));
-            result[empId] = { total: MANDATORY.length, present: MANDATORY.length - missing.length, missing };
-          });
-        }
+        // 0530: "Completos" / "N em falta" e, à parte, "N por validar" (ficheiros pendentes).
+        const result: Record<number, ReturnType<typeof docsSummary>> = {};
+        map.forEach((rows, empId) => { result[empId] = docsSummary(rows); });
         return result;
       }),
+    // "Eliminar" = ARQUIVAR (0530): o RH da ficha e admin+ sempre (substituir);
+    // quem carregou e ainda mexe na ficha só enquanto não está validado.
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        // admin+ (ficha não protegida), ou quem carregou o documento e ainda
-        // pode mexer na ficha (o próprio, gestor do centro, backoffice).
-        const { getDb } = await import("./db");
-        const { employeeDocuments } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
-        const [doc] = await db.select().from(employeeDocuments).where(eq(employeeDocuments.id, input.id)).limit(1);
-        if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
+        const { getEmployeeDocumentById } = await import("./rhDocuments");
+        const doc = await getEmployeeDocumentById(input.id);
+        if (!doc || doc.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado (já foi retirado?)" });
         const viewer = await rhViewer(ctx.user);
         const ref = await rhEmployeeRef(doc.employeeId);
-        const allowed = ref ? canDeleteDocument(viewer, ref, doc.uploadedById) : isRhAdmin(viewer);
-        if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para eliminar este documento" });
-        await deleteEmployeeDocument(input.id);
-        await logActivity({ userId: ctx.user.id, action: "delete", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId}` });
+        const allowed = ref ? canDeleteDocument(viewer, ref, doc.uploadedById, doc.status) : isRhAdmin(viewer);
+        if (!allowed) {
+          throw new TRPCError({ code: "FORBIDDEN", message: doc.status === "validated" ? "Este documento já foi validado: só o RH o retira ou substitui." : "Sem permissão para retirar este documento" });
+        }
+        if (ref) await assertEmployeeWriteScope(viewer, ref);
+        await archiveEmployeeDocument(input.id, ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "archive", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId} arquivado (estava ${doc.status})` });
+        return { success: true };
+      }),
+    // Jorge (7 out 2026): o RH valida o que a pessoa entregou.
+    validate: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const { getEmployeeDocumentById, markDocumentValidated } = await import("./rhDocuments");
+        const doc = await getEmployeeDocumentById(input.id);
+        if (!doc || doc.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado (já foi retirado?)" });
+        await assertCanValidateDocuments(ctx.user, doc.employeeId);
+        const changed = await markDocumentValidated(doc.id, ctx.user.id);
+        if (changed) await logActivity({ userId: ctx.user.id, action: "employee_document_validate", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId} validado (estava ${doc.status})` });
+        return { success: true, changed };
+      }),
+    // … ou recusa, com motivo: a pessoa recebe o aviso e volta a carregar.
+    reject: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), reason: z.string().trim().min(3, "Diz porquê (pelo menos 3 letras).").max(DOC_REJECT_REASON_MAX) }))
+      .mutation(async ({ ctx, input }) => {
+        const { getEmployeeDocumentById, markDocumentRejected } = await import("./rhDocuments");
+        const doc = await getEmployeeDocumentById(input.id);
+        if (!doc || doc.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado (já foi retirado?)" });
+        await assertCanValidateDocuments(ctx.user, doc.employeeId);
+        await markDocumentRejected(doc.id, ctx.user.id, input.reason);
+        await logActivity({ userId: ctx.user.id, action: "employee_document_reject", entity: "employee_document", entityId: doc.id, details: `${doc.docType} de #${doc.employeeId} recusado (estava ${doc.status}): ${input.reason}`.slice(0, 1000) });
+        await notifyDocumentRejected(doc.employeeId, doc.docType, input.reason);
+        return { success: true };
+      }),
+  }),
+
+  // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras
+  // (WhatsApp/email), na ficha ou em grupo — server/rhDocsRequestRouter.ts.
+  docsRequest: docsRequestRouter,
+
+  // Jorge (7 out 2026): o RH valida a carta com a data de emissão (lida na
+  // carta). "Carta validada" = validada e com 3 anos completos; com menos
+  // fica "Carta < 3 anos" (aviso ao escalar, nunca bloqueia).
+  validateDrivingLicence: protectedProcedure
+    .input(z.object({ employeeId: z.number().int().positive(), issuedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida") }))
+    .mutation(async ({ ctx, input }) => {
+      const { isCalendarDay, fullYearsBetween, LICENCE_STATUS_LABELS } = await import("../shared/drivingLicence");
+      const { lisbonDayOf } = await import("../shared/lisbonDay");
+      const today = lisbonDayOf(new Date());
+      if (!isCalendarDay(input.issuedAt) || input.issuedAt > today || input.issuedAt < "1940-01-01") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Data de emissão inválida (tem de ser um dia real, até hoje)." });
+      }
+      const ref = await assertCanValidateDocuments(ctx.user, input.employeeId);
+      const { validateDrivingLicenceRecord, licenceStatusMap } = await import("./rhDocuments");
+      const r = await validateDrivingLicenceRecord(ref.id, input.issuedAt, ctx.user.id);
+      const licence = (await licenceStatusMap([ref.id])).get(ref.id) ?? "missing";
+      await logActivity({ userId: ctx.user.id, action: "driving_licence_validate", entity: "employee", entityId: ref.id,
+        details: `Carta validada: emitida a ${input.issuedAt} (${fullYearsBetween(input.issuedAt, today)} anos) → ${LICENCE_STATUS_LABELS[licence]}${r.documentsValidated ? `; ${r.documentsValidated} ficheiro(s) da carta validado(s)` : ""}` });
+      return { success: true, licence, documentsValidated: r.documentsValidated };
+    }),
+
+  // ── NOTAS INTERNAS (Jorge, 7 out 2026) ───────────────────────────────────
+  // Team leader e acima, no âmbito de cada um; a própria pessoa NUNCA as vê.
+  // Os textos não vão para o registo de atividade (só o tipo e o dia).
+  notes: router({
+    list: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const { viewer, ref } = await notesContext(ctx.user, input.employeeId);
+        const { listEmployeeNotes, noteTimestampMs } = await import("./employeeNotes");
+        const now = Date.now();
+        return (await listEmployeeNotes(input.employeeId)).map((n) => ({
+          ...n,
+          canEdit: canEditInternalNote(viewer, ref, { authorId: n.authorId, createdAtMs: noteTimestampMs(n.createdAt) }, now, NOTE_EDIT_WINDOW_MS),
+        }));
+      }),
+    add: protectedProcedure
+      .input(z.object({
+        employeeId: z.number().int().positive(),
+        body: z.string().trim().min(1, "Escreve a nota.").max(NOTE_BODY_MAX),
+        kind: z.enum(NOTE_KINDS).default("general"),
+        workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        assignmentId: z.number().int().positive().nullable().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await notesContext(ctx.user, input.employeeId);
+        const { insertEmployeeNote, assignmentBelongsTo } = await import("./employeeNotes");
+        const { isCalendarDay } = await import("../shared/drivingLicence");
+        let workDate = input.workDate ?? null;
+        if (workDate && !isCalendarDay(workDate)) throw new TRPCError({ code: "BAD_REQUEST", message: "Dia inválido." });
+        if (input.assignmentId != null) {
+          const a = await assignmentBelongsTo(input.assignmentId, input.employeeId);
+          if (!a.ok) throw new TRPCError({ code: "BAD_REQUEST", message: "Essa linha da escala não é desta pessoa." });
+          workDate ??= a.assignmentDate;
+        }
+        const id = await insertEmployeeNote({ employeeId: input.employeeId, body: input.body, kind: input.kind, workDate, assignmentId: input.assignmentId ?? null, authorId: ctx.user.id });
+        await logActivity({ userId: ctx.user.id, action: "employee_note_add", entity: "employee_notes", entityId: id,
+          details: `Nota interna (${NOTE_KIND_LABELS[input.kind]}) na ficha #${input.employeeId}${workDate ? ` — dia ${workDate}` : ""}${input.assignmentId ? ` · escala #${input.assignmentId}` : ""}` });
+        return { id };
+      }),
+    update: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), body: z.string().trim().min(1, "Escreve a nota.").max(NOTE_BODY_MAX), kind: z.enum(NOTE_KINDS) }))
+      .mutation(async ({ ctx, input }) => {
+        const { getEmployeeNote, updateEmployeeNote, noteTimestampMs } = await import("./employeeNotes");
+        const note = await getEmployeeNote(input.id);
+        if (!note || note.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Nota não encontrada." });
+        const { viewer, ref } = await notesContext(ctx.user, note.employeeId);
+        if (!canEditInternalNote(viewer, ref, { authorId: note.authorId, createdAtMs: noteTimestampMs(note.createdAt) }, Date.now(), NOTE_EDIT_WINDOW_MS)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Só quem escreveu a nota (nas primeiras 24 h) ou um administrador a altera." });
+        }
+        await updateEmployeeNote(note.id, { body: input.body, kind: input.kind });
+        await logActivity({ userId: ctx.user.id, action: "employee_note_edit", entity: "employee_notes", entityId: note.id, details: `Nota interna da ficha #${note.employeeId} alterada (${NOTE_KIND_LABELS[input.kind]})` });
+        return { success: true };
+      }),
+    archive: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const { getEmployeeNote, archiveEmployeeNote, noteTimestampMs } = await import("./employeeNotes");
+        const note = await getEmployeeNote(input.id);
+        if (!note || note.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Nota não encontrada." });
+        const { viewer, ref } = await notesContext(ctx.user, note.employeeId);
+        if (!canEditInternalNote(viewer, ref, { authorId: note.authorId, createdAtMs: noteTimestampMs(note.createdAt) }, Date.now(), NOTE_EDIT_WINDOW_MS)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Só quem escreveu a nota (nas primeiras 24 h) ou um administrador a arquiva." });
+        }
+        await archiveEmployeeNote(note.id, ctx.user.id);
+        await logActivity({ userId: ctx.user.id, action: "employee_note_archive", entity: "employee_notes", entityId: note.id, details: `Nota interna da ficha #${note.employeeId} arquivada` });
         return { success: true };
       }),
   }),
@@ -1026,14 +1257,28 @@ export const rhRouter = router({
     // qualquer role pode consultar o seu — não expõe registos de terceiros.
     myStatus: protectedProcedure.query(async ({ ctx }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null };
+      if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null, terminal: false };
       const records = await getTimeRecords(me.employee.id);
       const last = records[0];
+      // Troço de terminal aberto (entrada no aeroporto) — só com o interruptor ligado.
+      let terminal = false;
+      if (last?.type === "check_in" && last.terminalStatus === "start") {
+        const { pontoTerminalEnabled } = await import("./pontoTerminal");
+        terminal = await pontoTerminalEnabled();
+      }
       return {
         employeeId: me.employee.id as number | null,
         status: (last?.type === "check_in" ? "in" : "out") as "in" | "out" | null,
         since: (last?.recordedAt ?? null) as string | null,
+        terminal,
       };
+    }),
+
+    // Interruptor "Terminal no ponto (aeroporto)": os ecrãs só mostram o
+    // terminal (chips, botões confirmar/desmarcar) com ele ligado.
+    terminalEnabled: protectedProcedure.query(async () => {
+      const { pontoTerminalEnabled } = await import("./pontoTerminal");
+      return { enabled: await pontoTerminalEnabled() };
     }),
 
     list: protectedProcedure
@@ -1064,6 +1309,31 @@ export const rhRouter = router({
         await reviewTimeRecord(input.id, input.decision, ctx.user.id, input.note ?? null, input.correctedHours ?? null);
         await logActivity({ userId: ctx.user.id, action: "review", entity: "time_record", entityId: input.id, details: `${input.decision}${input.correctedHours != null ? ` (${input.correctedHours}h)` : ""}${input.note ? ` — ${input.note}` : ""}` });
         return { success: true };
+      }),
+
+    // Terminal à mão (quem revê o ponto desta ficha): confirma ou desmarca o
+    // troço de terminal de uma SAÍDA, com motivo. Não apaga nada: muda o estado
+    // e regista quem, quando e porquê (também no registo de atividade).
+    setTerminal: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), terminal: z.boolean(), note: z.string().trim().min(3, "Escreve o motivo (mín. 3 letras).").max(255) }))
+      .mutation(async ({ ctx, input }) => {
+        const { pontoTerminalEnabled, isExtraEmployee } = await import("./pontoTerminal");
+        if (!(await pontoTerminalEnabled())) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal no ponto está desligado (Definições → Automações → \"Terminal no ponto (aeroporto)\")." });
+        }
+        const empId = await employeeIdOfRecord("time_records", input.id);
+        if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Registo de ponto não encontrado" });
+        await assertCanManageEmployee(ctx.user, empId, "Sem permissão para rever o ponto desta pessoa.");
+        const { setTimeRecordTerminal } = await import("./rhService");
+        const emp = await getEmployeeById(empId);
+        if (!isExtraEmployee(emp?.employee)) throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal é só para extras." });
+        const r = await setTimeRecordTerminal(input.id, input.terminal, ctx.user.id, input.note);
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+        await logActivity({
+          userId: ctx.user.id, action: input.terminal ? "terminal_confirm" : "terminal_unmark", entity: "time_record", entityId: input.id,
+          details: `${input.terminal ? "Terminal confirmado" : "Terminal desmarcado"} (antes: ${r.previous ?? "normal"}) — ${input.note}`,
+        });
+        return { success: true, terminalStatus: r.status };
       }),
 
     checkIn: protectedProcedure
@@ -1110,8 +1380,17 @@ export const rhRouter = router({
         const missingAgentWarning = !empForPonto.employee.multiparkAgentName
           ? "Falta ligar o agente Multipark a este colaborador — pede à administração para o associar na ficha."
           : null;
+        // Terminal (aeroporto), interruptor PONTO_TERMINAL: entrada de um extra
+        // no aeroporto da cidade dele abre um troço de terminal (desligado → nada).
+        const { evaluateCheckInTerminal } = await import("./pontoTerminal");
+        const terminalIn = await evaluateCheckInTerminal({
+          employee: empForPonto.employee,
+          latitude: input.latitude, longitude: input.longitude,
+          prev: last ? { type: last.type, recordedAt: last.recordedAt, terminalStatus: last.terminalStatus ?? null } : null,
+        });
         // Geofence do centro de custos (se configurado): fora do raio fica marcado.
-        const geoNoteIn = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+        // No aeroporto (terminal ligado) não se marca: é sítio de trabalho do extra.
+        const geoNoteIn = terminalIn.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         let photoUrl: string | null = null;
         let photoKey: string | null = null;
         if (input.photoBase64 && input.mimeType) {
@@ -1136,11 +1415,13 @@ export const rhRouter = router({
             longitude: input.longitude ?? null,
             locationName: input.locationName ?? null,
             notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
+            ...(terminalIn.atAirport != null ? { atAirport: terminalIn.atAirport } : {}),
+            ...(terminalIn.terminalStatus ? { terminalStatus: terminalIn.terminalStatus } : {}),
           });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
-        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}` });
+        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}${terminalIn.terminal === "start" ? " · terminal (aeroporto)" : terminalIn.terminal === "return" ? " · regresso do terminal" : ""}` });
         // Ponto→PDA automático: se o check-in veio do browser de um PDA
         // registado, liga já a pessoa ao PDA/Zello (e troca quem lá estava).
         let pdaAttached: { pdaName: string; zelloUsername: string | null; replacedName: string | null } | null = null;
@@ -1157,7 +1438,7 @@ export const rhRouter = router({
             console.warn("[pda] ponto→PDA automático (check-in) falhou:", err);
           }
         }
-        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached };
+        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached, terminal: terminalIn.terminal };
       }),
 
     checkOut: protectedProcedure
@@ -1213,9 +1494,21 @@ export const rhRouter = router({
         } else {
           hoursWorked = diff.toFixed(2);
         }
+        // Terminal (aeroporto), interruptor PONTO_TERMINAL: se a entrada aberta
+        // abriu um troço de terminal, a saída no aeroporto fecha-o como terminal;
+        // fora ou sem GPS fica "por confirmar" (não paga terminal até o RH ver).
+        const { evaluateCheckOutTerminal } = await import("./pontoTerminal");
+        const empForOut = last.terminalStatus ? await getEmployeeById(input.employeeId) : null;
+        const terminalOut: import("./pontoTerminal").PontoTerminalEval = empForOut
+          ? await evaluateCheckOutTerminal({ employee: empForOut.employee, latitude: input.latitude, longitude: input.longitude, openCheckInStatus: last.terminalStatus })
+          : { atAirport: null, terminalStatus: null, terminal: null };
+        // Saída esquecida (cortada às 12 h): o GPS desta saída não diz nada do
+        // troço → fica sempre "por confirmar" (o RH decide).
+        if (autoNote && terminalOut.terminalStatus === "auto") { terminalOut.terminalStatus = "pending"; terminalOut.terminal = "pending"; }
         // Geofence: se o centro de custos do colaborador tem raio definido e o
         // check-out veio com GPS fora dele, fica marcado (permitido, mas visível).
-        const geoNote = await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
+        // No aeroporto (fim de um troço de terminal) não se marca.
+        const geoNote = terminalOut.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         const finalNotes = [autoNote, geoNote, input.notes].filter(Boolean).join(" · ") || null;
         // Snapshot Zello do turno (pedido Jorge): no check-out, vai buscar ao
         // Zello o que o condutor fez entre a entrada e a saída — km,
@@ -1249,6 +1542,8 @@ export const rhRouter = router({
             hoursWorked,
             notes: finalNotes,
             reviewStatus: autoNote ? "suspicious" : "ok",
+            ...(terminalOut.atAirport != null ? { atAirport: terminalOut.atAirport } : {}),
+            ...(terminalOut.terminalStatus ? { terminalStatus: terminalOut.terminalStatus } : {}),
             ...(zello ? {
               zelloKm: String(zello.km),
               zelloAvgSpeed: String(zello.avgSpeed),
@@ -1269,8 +1564,8 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
         }
-        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}` });
-        return { success: true, hoursWorked, zello };
+        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalOut.terminal === "auto" ? " · troço de terminal" : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}` });
+        return { success: true, hoursWorked, zello, terminal: terminalOut.terminal === "auto" || terminalOut.terminal === "pending" ? terminalOut.terminal : null };
       }),
 
     // ── Geofence por centro de custos (raio de picagem) ───────────────────

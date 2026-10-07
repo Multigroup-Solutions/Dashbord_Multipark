@@ -577,6 +577,21 @@ export async function rhDocsWeeklyCron(): Promise<CronJobRun> {
   } catch (err) { return fail(err); }
 }
 
+/**
+ * RH — pedir os documentos em falta aos extras ativos (WhatsApp + email), à
+ * segunda a partir das 10:00 de Lisboa (trabalho rh-docs-request). Interruptor
+ * EXTRAS_DOCS_REQUEST (desligado por omissão). Retomável: o cursor é a última
+ * ficha tratada; cada pessoa tem 1 pedido por semana ISO (chave única).
+ */
+export async function rhDocsRequestCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {
+  try {
+    const { runDocsRequestAuto } = await import("./rhDocsRequest");
+    const after = o.cursor && /^\d{1,10}$/.test(o.cursor) ? Number(o.cursor) : 0;
+    const r = await runDocsRequestAuto({ deadlineAt: o.deadlineAt - 3_000, afterId: after });
+    return { httpStatus: 200, body: { ok: r.errors.length === 0, ranAt: ranAt(), ...r }, done: r.done, cursor: r.done ? null : String(r.lastId ?? after) };
+  } catch (err) { return fail(err); }
+}
+
 /** Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7 dias. */
 export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDays: number }): Promise<CronJobRun> {
   try {
@@ -601,8 +616,10 @@ export async function extrasAutoCron(o: { deadlineAt: number; from?: string | nu
  * "Pressão" do Extras-Dia: o histórico da BD Multipark (acumula desde abril)
  * agregado por grupo de parques (um grupo de cada vez; `cursor` retoma no grupo seguinte). Sem
  * DATABASE_URL_MULTIPARK → nota (ok, saltado); grupos que falham → vermelho.
+ * 47c: da Multipark lê-se só os dias que faltam (um dia × grupo por leitura);
+ * `reprocess` (só à mão) volta a ler os dias guardados desse intervalo.
  */
-export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null }): Promise<CronJobRun> {
+export async function extrasPressureCron(o: { deadlineAt: number; cursor?: string | null; reprocess?: import("./pressureDays").PressureReprocess | null }): Promise<CronJobRun> {
   try {
     const { runExtrasPressure } = await import("./extrasPressure");
     const { getSetting } = await import("./appSettings");
@@ -610,7 +627,7 @@ export async function extrasPressureCron(o: { deadlineAt: number; cursor?: strin
     // 22d: desde quando se mede (acumula) e a tabela máxima por cidade (escalões de pessoas).
     const since = await getSetting("extras.timesSince").catch(() => null);
     const crewRules = await getSetting("extras.crewRules").catch(() => null);
-    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null, excludedParkIds, since, crewRules });
+    const r = await runExtrasPressure({ deadlineAt: o.deadlineAt - 3_000, cursor: o.cursor ?? null, excludedParkIds, since, crewRules, reprocess: o.reprocess ?? null });
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: r.done, cursor: r.cursor };
   } catch (err) {
     console.error("[cron extras-pressure] falhou:", msg(err, 200));

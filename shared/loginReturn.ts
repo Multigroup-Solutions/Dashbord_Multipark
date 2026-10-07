@@ -53,9 +53,13 @@ export function loginUrlForDevice(url: string, isPda: boolean): string {
 }
 
 /**
- * `prompt` do pedido à Google: num PDA, escolher a conta; fora dele, nenhum
- * (null). Já não força `consent`: o ecrã de consentimento em cada login
- * levava a "Cancelar" → access_denied, e o login só lê a identidade. PURA.
+ * `prompt` do pedido à Google: num PDA, escolher a conta; fora disso, nenhum.
+ * 7 out 2026: deixou de pedir "consent" (e o acesso offline) no login. O login
+ * só precisa da identidade; com "consent" + offline a Google emitia um token de
+ * longa duração a CADA entrada e, no mesmo cliente OAuth, guarda no máximo 100
+ * por conta — o mais antigo (o da ligação do Gmail/Calendário) caía sem aviso
+ * e aparecia "Religar"; e nos PDA o ecrã de consentimento levava a
+ * "Cancelar" → access_denied. PURA.
  */
 export function googlePromptFor(pdaParam: unknown): string | null {
   return pdaParam === "1" ? "select_account" : null;

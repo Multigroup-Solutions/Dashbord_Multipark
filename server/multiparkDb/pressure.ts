@@ -7,14 +7,19 @@
  * Janela: desde `extras.timesSince` (22d: 3 abr 2026, 6 meses para trás) até
  * ontem — cresce todos os dias e nunca deita fora o que já mediu.
  * Pedaços ("chunks"): um por grupo de parques — cada cidade (todas as marcas
- * nossas), cada marca + cidade nossa, e o Marketplace (os outros todos). Cada
- * pedaço são 2 leituras sobre só os parques do grupo (índices
- * (parkId, checkInDate/checkOutDate)), com GROUP BY e percentile_cont no
- * Postgres. Porquê por grupo e não por fatias de 10 dias: os percentis não se
- * somam entre fatias — por grupo cada percentil sai exato da janela inteira e
- * cada leitura continua pequena (só os parques do grupo). A "History" ainda
- * não tem índice em actionTime/bookingId: é uma leitura sequencial de
- * ~300 mil linhas por pedaço, bem abaixo dos 15 s.
+ * nossas), cada marca + cidade nossa, e o Marketplace (os outros todos).
+ *
+ * 47c (7 out 2026): o trabalho noturno já não lê a janela inteira. Lisboa
+ * falhou 4 noites ("statement timeout" aos 40 s): as estimativas do Postgres
+ * para as CTEs (e para `"changeType"::text IN (…)`) saem 30–100× abaixo do
+ * real e ele juntava CTEs com nested loops — custo quadrático na janela, a
+ * crescer todos os dias. Agora lê-se UM DIA × grupo (buildPressureDaySql /
+ * buildPressureDriverDaySql, mais abaixo), só os dias que faltam, guardados
+ * por dia na nossa BD e juntados em server/pressureDays.ts (percentis
+ * exatos). As leituras da janela inteira (buildPressureSlotsSql & c.) ficam
+ * como referência: os testes provam que dia a dia + juntar dá o mesmo.
+ * A "History" não tem índice em actionTime/bookingId: cada leitura faz uma
+ * leitura sequencial dela (o custo que fica, igual para qualquer dia).
  *
  * Colunas usadas (docs/multipark-db/schema.md):
  *   Booking: id, parkId, status, checkIn, checkOut, checkInDate, checkOutDate,
@@ -142,14 +147,26 @@ const minutesBetween = (a: string, b: string) => `extract(epoch from (${b} - ${a
  * CTEs comuns (sem o WITH): `bk` reservas do grupo com movimento na janela
  * (±1 dia), `hi` 1.ª ação de cada tipo na History, `ev` os instantes de cada
  * reserva, `dv` entregas e `pk` recolhas válidas. PURA.
+ *
+ * 47c — com `r` (a leitura de um dia, ou de poucos dias): `bk` continua a ser
+ * a janela inteira (índices do Booking, barato), mas `rel` fica só com as
+ * reservas que têm um instante nesse dia (coluna do Booking ou ação da
+ * History) e `hi`/`ev` só tratam essas — com a 1.ª ação de cada tipo
+ * procurada na janela inteira, como antes. Os eventos contam-se só dentro de
+ * `r`. Resultado: o que a leitura da janela inteira dava para esse dia, mas o
+ * trabalho fica do tamanho do dia (antes crescia todos os dias desde abril).
+ * `dv`/`pk` levam também a duração em milissegundos (`ms`, exata).
  */
-export function pressureBaseCtes(p: ParamList, w: PressureWindow, parkIds: string[]): string {
+export function pressureBaseCtes(p: ParamList, w: PressureWindow, parkIds: string[], r?: PressureWindow): string {
   if (!parkIds.length) throw new Error("Sem parques.");
   const parks = parkIds.map((id) => p.add(id)).join(", ");
   const ws = p.add(w.wideStart);
   const we = p.add(w.wideEnd);
-  const s = p.add(w.start);
-  const e = p.add(w.end);
+  const s = p.add(r ? r.start : w.start);
+  const e = p.add(r ? r.end : w.end);
+  const inR = (col: string) => `(${col} >= ${s}::timestamp AND ${col} < ${e}::timestamp)`;
+  const src = r ? "rel" : "bk";
+  const msBetween = (a: string, b: string) => (r ? `, round(extract(epoch from (${b} - ${a})) * 1000)::bigint AS ms` : "");
   return [
     `bk AS (`,
     `  SELECT b."id" AS id, b."status"::text AS st, b."checkIn" AS ci_plan, b."checkOut" AS co_plan,`,
@@ -158,6 +175,18 @@ export function pressureBaseCtes(p: ParamList, w: PressureWindow, parkIds: strin
     `  WHERE b."parkId" IN (${parks}) AND b."status"::text <> 'CANCELLED'`,
     `    AND ((b."checkInDate" >= ${ws}::timestamp AND b."checkInDate" < ${we}::timestamp) OR (b."checkOutDate" >= ${ws}::timestamp AND b."checkOutDate" < ${we}::timestamp))`,
     `),`,
+    ...(r
+      ? [
+          `rel AS (`,
+          `  SELECT bk.id FROM bk`,
+          `  WHERE ${["bk.checking_in_at", "bk.ci_plan", "bk.pending_at", "bk.checking_out_at", "bk.co_plan", "bk.arrived_at"].map(inR).join(" OR ")}`,
+          `  UNION`,
+          `  SELECT h."bookingId" FROM "History" h`,
+          `  WHERE ${inR('h."actionTime"')} AND h."changeType"::text IN (${inList(HISTORY_TYPES)})`,
+          `    AND h."bookingId" IN (SELECT bk.id FROM bk)`,
+          `),`,
+        ]
+      : []),
     `hi AS (`,
     `  SELECT h."bookingId" AS bid,`,
     `    min(h."actionTime") FILTER (WHERE h."changeType"::text = 'CHECKING_IN') AS h_checking_in,`,
@@ -168,7 +197,7 @@ export function pressureBaseCtes(p: ParamList, w: PressureWindow, parkIds: strin
     `  FROM "History" h`,
     `  WHERE h."actionTime" >= ${ws}::timestamp AND h."actionTime" < ${we}::timestamp`,
     `    AND h."changeType"::text IN (${inList(HISTORY_TYPES)})`,
-    `    AND h."bookingId" IN (SELECT bk.id FROM bk)`,
+    `    AND h."bookingId" IN (SELECT ${src}.id FROM ${src})`,
     `  GROUP BY h."bookingId"`,
     `),`,
     `ev AS (`,
@@ -179,16 +208,16 @@ export function pressureBaseCtes(p: ParamList, w: PressureWindow, parkIds: strin
     `    COALESCE(bk.pending_at, hi.h_pending, bk.checking_out_at, hi.h_checking_out) AS co_started,`,
     `    COALESCE(hi.h_check_out, CASE WHEN bk.st = 'CHECKED_OUT' THEN bk.co_plan END) AS co_done,`,
     `    COALESCE(bk.arrived_at, hi.h_check_out, CASE WHEN bk.st = 'CHECKED_OUT' THEN bk.co_plan END) AS delivered`,
-    `  FROM bk LEFT JOIN hi ON hi.bid = bk.id`,
+    `  FROM bk ${r ? "JOIN rel ON rel.id = bk.id " : ""}LEFT JOIN hi ON hi.bid = bk.id`,
     `),`,
     `dv AS (`,
-    `  SELECT ev.co_requested AS req_at, ${minutesBetween("ev.co_requested", "ev.delivered")} AS mins`,
+    `  SELECT ev.co_requested AS req_at, ${minutesBetween("ev.co_requested", "ev.delivered")} AS mins${msBetween("ev.co_requested", "ev.delivered")}`,
     `  FROM ev`,
     `  WHERE ev.co_requested >= ${s}::timestamp AND ev.co_requested < ${e}::timestamp`,
     `    AND ev.delivered > ev.co_requested AND ev.delivered - ev.co_requested <= interval '${MAX_DELIVERY_MINUTES} minutes'`,
     `),`,
     `pk AS (`,
-    `  SELECT ev.ci_started AS begun_at, ${minutesBetween("ev.ci_started", "ev.ci_done")} AS mins`,
+    `  SELECT ev.ci_started AS begun_at, ${minutesBetween("ev.ci_started", "ev.ci_done")} AS mins${msBetween("ev.ci_started", "ev.ci_done")}`,
     `  FROM ev`,
     `  WHERE ev.ci_started >= ${s}::timestamp AND ev.ci_started < ${e}::timestamp`,
     `    AND ev.ci_done > ev.ci_started AND ev.ci_done - ev.ci_started <= interval '${MAX_PICKUP_MINUTES} minutes'`,
@@ -312,31 +341,52 @@ const DRIVER_TYPES = ["CHECKING_IN", "CHECK_IN", "MOVEMENT", "CHECKING_OUT", "CH
  *        não tem intervalo próprio), na estrada (entregas) e até ao parque
  *        (recolhas);
  *   jw   os da janela, com as durações dentro dos limites (fora → NULL);
- *   hj   serviços começados em cada hora. PURA.
+ *   hj   serviços começados em cada hora.
+ * 47c — com `r` (leitura de um dia): `ha` só com as reservas que têm ações
+ * nesse dia ±1 dia (`rel`; os serviços vizinhos do mesmo condutor ficam lá),
+ * com todas as ações delas na janela; `jw` só com os serviços do dia, também
+ * em ms (`cycle_ms`, `drive_ms`, `to_park_ms`). PURA.
  */
-export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: string[], tlAgentIds: readonly string[] = []): string {
+export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: string[], tlAgentIds: readonly string[] = [], r?: PressureWindow): string {
   if (!parkIds.length) throw new Error("Sem parques.");
   const parks = parkIds.map((id) => p.add(id)).join(", ");
   const ws = p.add(w.wideStart);
   const we = p.add(w.wideEnd);
-  const s = p.add(w.start);
-  const e = p.add(w.end);
+  const s = p.add(r ? r.start : w.start);
+  const e = p.add(r ? r.end : w.end);
   const mins = (a: string, b: string) => `extract(epoch from (${b} - ${a})) / 60.0`;
   const pairAfter = `interval '${Number(PICKUP_PAIR_AFTER_MIN)} minutes'`;
   const tls = [...new Set(tlAgentIds.map((x) => String(x ?? "").trim()).filter(Boolean))];
   const tlIn = tls.length ? `ha.uid IN (${tls.map((x) => p.add(x)).join(", ")})` : "FALSE";
+  // 47c: na leitura de um dia, só as reservas com ações nesse dia (±1 dia, para
+  // os serviços vizinhos do mesmo condutor) — com todas as ações delas na janela.
+  const rws = r ? p.add(r.wideStart) : "";
+  const rwe = r ? p.add(r.wideEnd) : "";
+  const okGap = `jb.gap > 0 AND jb.gap <= ${MAX_CYCLE_MINUTES}`;
+  const okDrive = `jb.drive > 0 AND jb.drive <= ${MAX_DELIVERY_MINUTES}`;
+  const okToPark = `jb.to_park > 0 AND jb.to_park <= ${MAX_TO_PARK_MINUTES}`;
   return [
     `bk AS (`,
     `  SELECT b."id" AS id FROM "Booking" b`,
     `  WHERE b."parkId" IN (${parks}) AND b."status"::text <> 'CANCELLED'`,
     `    AND ((b."checkInDate" >= ${ws}::timestamp AND b."checkInDate" < ${we}::timestamp) OR (b."checkOutDate" >= ${ws}::timestamp AND b."checkOutDate" < ${we}::timestamp))`,
     `),`,
+    ...(r
+      ? [
+          `rel AS (`,
+          `  SELECT DISTINCT h."bookingId" AS id FROM "History" h`,
+          `  WHERE h."actionTime" >= ${rws}::timestamp AND h."actionTime" < ${rwe}::timestamp`,
+          `    AND h."changeType"::text IN (${inList(DRIVER_TYPES)})`,
+          `    AND h."bookingId" IN (SELECT bk.id FROM bk)`,
+          `),`,
+        ]
+      : []),
     `ha AS (`,
     `  SELECT h."bookingId" AS bid, h."changeType"::text AS ct, h."actionTime" AS at, h."userId" AS uid`,
     `  FROM "History" h`,
     `  WHERE h."actionTime" >= ${ws}::timestamp AND h."actionTime" < ${we}::timestamp`,
     `    AND h."changeType"::text IN (${inList(DRIVER_TYPES)})`,
-    `    AND h."bookingId" IN (SELECT bk.id FROM bk)`,
+    `    AND h."bookingId" IN (SELECT ${r ? "rel" : "bk"}.id FROM ${r ? "rel" : "bk"})`,
     `),`,
     `crew AS (SELECT date_trunc('hour', ${L("ha.at")}) AS hr_at, count(DISTINCT ha.uid) AS agents,`,
     `  count(DISTINCT ha.uid) + CASE WHEN bool_or(${tlIn}) THEN 0 ELSE 1 END AS n`,
@@ -380,9 +430,13 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
     `),`,
     `jw AS (`,
     `  SELECT jb.hr_at,`,
-    `    CASE WHEN jb.gap > 0 AND jb.gap <= ${MAX_CYCLE_MINUTES} THEN jb.gap END AS cycle,`,
-    `    CASE WHEN jb.drive > 0 AND jb.drive <= ${MAX_DELIVERY_MINUTES} THEN jb.drive END AS drive,`,
-    `    CASE WHEN jb.to_park > 0 AND jb.to_park <= ${MAX_TO_PARK_MINUTES} THEN jb.to_park END AS to_park`,
+    `    CASE WHEN ${okGap} THEN jb.gap END AS cycle,`,
+    `    CASE WHEN ${okDrive} THEN jb.drive END AS drive,`,
+    `    CASE WHEN ${okToPark} THEN jb.to_park END AS to_park${r
+      ? `,\n    CASE WHEN ${okGap} THEN round(jb.gap * 60000)::bigint END AS cycle_ms,` +
+        `\n    CASE WHEN ${okDrive} THEN round(jb.drive * 60000)::bigint END AS drive_ms,` +
+        `\n    CASE WHEN ${okToPark} THEN round(jb.to_park * 60000)::bigint END AS to_park_ms`
+      : ""}`,
     `  FROM jb WHERE jb.at >= ${s}::timestamp AND jb.at < ${e}::timestamp`,
     `),`,
     `hj AS (SELECT jw.hr_at, count(*) AS jobs FROM jw GROUP BY 1)`,
@@ -453,6 +507,98 @@ export function buildPressureCrewSql(w: PressureWindow, parkIds: string[], bands
     `GROUP BY 1, 2`,
     `ORDER BY 1, 2`,
     `LIMIT 50`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+// ─── 47c: leituras de UM dia (guardadas por dia na nossa BD) ────────────────
+//
+// O trabalho noturno já não lê a janela inteira (desde abril) de cada vez: lê
+// só os dias que faltam, um dia × grupo por leitura, e guarda o resultado de
+// cada dia (server/pressureDays.ts, tabela ops_pressure_days). A página
+// continua a ver o mesmo: as células da janela inteira montam-se juntando os
+// dias guardados, com os percentis exatos (as durações guardam-se ao
+// milissegundo). As leituras da janela inteira acima ficam como referência
+// (testes de igualdade).
+
+const dayOf = (col: string) => `to_char(${L(col)}, 'YYYY-MM-DD')`;
+const localHour = (col: string) => `extract(hour from ${L(col)})::int`;
+
+/**
+ * Leitura de um dia (`r` = pressureWindow(dia, 1)) de um grupo de parques:
+ *   part 'h' — por (dia, hora de Lisboa): check-ins/check-outs feitos e
+ *              começados, durações das entregas (pela hora do pedido) e das
+ *              recolhas (pela hora do início), em ms, separadas por vírgulas;
+ *   part 'c' — carros em mãos por hora de relógio (`hk` "AAAA-MM-DD HH",
+ *              pode ser do dia anterior), das operações acabadas no dia `d`.
+ * `w` = a janela inteira (reservas e 1.ª ação de cada tipo). PURA.
+ */
+export function buildPressureDaySql(w: PressureWindow, r: PressureWindow, parkIds: string[]): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const base = pressureBaseCtes(p, w, parkIds, r);
+  const s = p.add(r.start);
+  const e = p.add(r.end);
+  const sql = [
+    `WITH ${base},`,
+    `ops AS (`,
+    `  SELECT ${dayOf("ev.ci_done")} AS pd, ${L("COALESCE(ev.ci_started, ev.ci_done)")} AS op_from, ${L("ev.ci_done")} AS op_to FROM ev`,
+    `   WHERE ev.ci_done >= ${s}::timestamp AND ev.ci_done < ${e}::timestamp AND ev.ci_done - COALESCE(ev.ci_started, ev.ci_done) <= interval '${MAX_PICKUP_MINUTES} minutes' AND ev.ci_done >= COALESCE(ev.ci_started, ev.ci_done)`,
+    `  UNION ALL`,
+    `  SELECT ${dayOf("ev.delivered")}, ${L("COALESCE(ev.co_started, ev.delivered)")}, ${L("COALESCE(ev.co_done, ev.delivered)")} FROM ev`,
+    `   WHERE ev.delivered >= ${s}::timestamp AND ev.delivered < ${e}::timestamp AND COALESCE(ev.co_done, ev.delivered) - COALESCE(ev.co_started, ev.delivered) <= interval '${MAX_DELIVERY_MINUTES} minutes' AND COALESCE(ev.co_done, ev.delivered) >= COALESCE(ev.co_started, ev.delivered)`,
+    `),`,
+    `oh AS (SELECT ops.pd, gs AS hr_at, count(*) AS n FROM ops, generate_series(date_trunc('hour', ops.op_from), date_trunc('hour', ops.op_to), interval '1 hour') AS gs GROUP BY 1, 2),`,
+    `vol AS (`,
+    `  SELECT ${dayOf("xe.at")} AS d, ${localHour("xe.at")} AS hr,`,
+    `    count(*) FILTER (WHERE xe.kind = 'ci_done') AS ci_done, count(*) FILTER (WHERE xe.kind = 'co_done') AS co_done,`,
+    `    count(*) FILTER (WHERE xe.kind = 'ci_started') AS ci_started, count(*) FILTER (WHERE xe.kind = 'co_started') AS co_started`,
+    `  FROM xe GROUP BY 1, 2`,
+    `),`,
+    `del AS (SELECT ${dayOf("dv.req_at")} AS d, ${localHour("dv.req_at")} AS hr, string_agg(dv.ms::text, ',' ORDER BY dv.ms) AS ms FROM dv GROUP BY 1, 2),`,
+    `pik AS (SELECT ${dayOf("pk.begun_at")} AS d, ${localHour("pk.begun_at")} AS hr, string_agg(pk.ms::text, ',' ORDER BY pk.ms) AS ms FROM pk GROUP BY 1, 2),`,
+    `keys AS (SELECT d, hr FROM vol UNION SELECT d, hr FROM del UNION SELECT d, hr FROM pik)`,
+    `SELECT 'h'::text AS part, k.d, k.hr, NULL::text AS hk,`,
+    `  COALESCE(vol.ci_done, 0) AS ci_done, COALESCE(vol.co_done, 0) AS co_done, COALESCE(vol.ci_started, 0) AS ci_started, COALESCE(vol.co_started, 0) AS co_started,`,
+    `  del.ms AS del_ms, pik.ms AS pik_ms, NULL::bigint AS n`,
+    `FROM keys k`,
+    `LEFT JOIN vol ON vol.d = k.d AND vol.hr = k.hr`,
+    `LEFT JOIN del ON del.d = k.d AND del.hr = k.hr`,
+    `LEFT JOIN pik ON pik.d = k.d AND pik.hr = k.hr`,
+    `UNION ALL`,
+    `SELECT 'c'::text, oh.pd, NULL::int, to_char(oh.hr_at, 'YYYY-MM-DD HH24'), NULL::bigint, NULL::bigint, NULL::bigint, NULL::bigint, NULL::text, NULL::text, oh.n FROM oh`,
+    `LIMIT 20000`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+/**
+ * Leitura de um dia (`r`) por condutor de uma cidade, por (dia, hora de
+ * Lisboa): serviços começados (`jobs`), tempo por carro / na estrada / até ao
+ * parque em ms (separados por vírgulas) e as pessoas que agiram nessa hora
+ * (`uids`). O TL e os escalões de pessoas aplicam-se ao juntar os dias (assim
+ * um TL novo ou uma tabela nova contam para a janela toda, como antes). PURA.
+ */
+export function buildPressureDriverDaySql(w: PressureWindow, r: PressureWindow, parkIds: string[]): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const base = pressureDriverCtes(p, w, parkIds, [], r);
+  const s = p.add(r.start);
+  const e = p.add(r.end);
+  const sql = [
+    `WITH ${base},`,
+    `dj AS (`,
+    `  SELECT to_char(jw.hr_at, 'YYYY-MM-DD') AS d, extract(hour from jw.hr_at)::int AS hr, count(*) AS jobs,`,
+    `    string_agg(jw.cycle_ms::text, ',' ORDER BY jw.cycle_ms) AS cy, string_agg(jw.drive_ms::text, ',' ORDER BY jw.drive_ms) AS dr,`,
+    `    string_agg(jw.to_park_ms::text, ',' ORDER BY jw.to_park_ms) AS tp`,
+    `  FROM jw GROUP BY 1, 2`,
+    `),`,
+    `ag AS (`,
+    `  SELECT ${dayOf("ha.at")} AS d, ${localHour("ha.at")} AS hr, array_agg(DISTINCT ha.uid ORDER BY ha.uid) AS uids FROM ha`,
+    `  WHERE ha.uid IS NOT NULL AND ha.uid <> '' AND ha.at >= ${s}::timestamp AND ha.at < ${e}::timestamp`,
+    `  GROUP BY 1, 2`,
+    `)`,
+    `SELECT COALESCE(dj.d, ag.d) AS d, COALESCE(dj.hr, ag.hr) AS hr, COALESCE(dj.jobs, 0) AS jobs, dj.cy, dj.dr, dj.tp, ag.uids`,
+    `FROM dj FULL OUTER JOIN ag ON ag.d = dj.d AND ag.hr = dj.hr`,
+    `LIMIT 5000`,
   ].join("\n");
   return { sql, params: p.values };
 }

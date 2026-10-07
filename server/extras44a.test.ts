@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { MULTIPARK_DB_LONG_TIMEOUT_MAX_MS, statementTimeoutFor } from "./multiparkDb/client";
 import {
-  PRESSURE_CHUNK_MIN_MS, PRESSURE_HEAVY_CHUNK_MIN_MS, isHeavyPressureChunk, pressureFallbacks, pressureQueryTimeout, runExtrasPressure, type PressureStore,
+  PRESSURE_CHUNK_MIN_MS, PRESSURE_COMBINE_MIN_MS, pressureFallbacks, pressureQueryTimeout, runExtrasPressure, type PressureDaysStore, type PressureStore,
 } from "./extrasPressure";
 import { nameMatchScore, sortByNameMatch } from "../shared/contactSearch";
 import { NO_HR_RECORD_MESSAGE, hrRecordRefusal } from "../shared/extrasSchedule";
@@ -30,27 +30,30 @@ describe("44a — Pressão: leituras mais longas e pedaços pesados com tempo", 
     expect(pressureQueryTimeout(100_000, 70_000)).toBe(28_000);
     expect(pressureQueryTimeout(100_000, 95_000)).toBe(15_000);
   });
-  it("as cidades e os condutores são pedaços pesados (precisam de ≥ 25 s); marcas e Marketplace não", () => {
-    expect(PRESSURE_HEAVY_CHUNK_MIN_MS).toBeGreaterThan(PRESSURE_CHUNK_MIN_MS);
-    expect(isHeavyPressureChunk({ key: "cidade_lisboa", label: "", parkIds: [] })).toBe(true);
-    expect(isHeavyPressureChunk({ key: "cidade_porto", label: "", parkIds: [], kind: "driver", city: "porto" } as any)).toBe(true);
-    expect(isHeavyPressureChunk({ key: "airpark_lisboa", label: "", parkIds: [] })).toBe(false);
-    expect(isHeavyPressureChunk({ key: "marketplace", label: "", parkIds: [] })).toBe(false);
+  it("47c: já não há pedaços pesados — cada leitura é de um dia × grupo e só arranca com ≥ 12 s", () => {
+    expect(PRESSURE_CHUNK_MIN_MS).toBe(12_000);
+    expect(PRESSURE_COMBINE_MIN_MS).toBeLessThan(PRESSURE_CHUNK_MIN_MS);
+    const s = src("server/extrasPressure.ts");
+    expect(s).not.toContain("PRESSURE_HEAVY_CHUNK_MIN_MS");
+    expect(s).toContain("if (o.deadlineAt - Date.now() < PRESSURE_CHUNK_MIN_MS || Date.now() > readsUntil) { paused = true; break; }");
   });
-  it("com pouco tempo, um pedaço pesado não arranca (fica para o tick seguinte), em vez de ser cortado pela BD", async () => {
+  it("com pouco tempo, nenhuma leitura arranca (fica para o tick seguinte), em vez de ser cortada pela BD", async () => {
     const parks = [{ id: "p1", name: "Airpark Lisboa", city: "Lisboa", firebase_brand: null, listing_type: "ON_PLATFORM", status: "ACTIVE" }];
     const q = vi.fn(async (sql: string) => (sql.includes('FROM "Park"') ? parks : []));
     const groups: string[] = [];
     const store: PressureStore = { async replaceGroup(_w, c) { groups.push(c.key); }, async upsertDriver() {}, async finish() {} };
-    const r = await runExtrasPressure({ deadlineAt: Date.now() + PRESSURE_HEAVY_CHUNK_MIN_MS - 2_000, windowEnd: "2026-10-06", query: q as any, store, isConfigured: () => true, teamLeaderAgentIds: [] });
+    const days: PressureDaysStore = { async meta() { return new Map(); }, async save() {}, async load() { return []; } };
+    const r = await runExtrasPressure({ deadlineAt: Date.now() + PRESSURE_CHUNK_MIN_MS - 2_000, windowEnd: "2026-10-06", query: q as any, store, days, isConfigured: () => true, teamLeaderAgentIds: [] });
     expect(r.done).toBe(false);
     expect(r.processed).toEqual([]);
     expect(r.failed).toEqual([]);
+    expect(r.daysRead).toBe(0);
+    expect(q).toHaveBeenCalledTimes(1); // só os parques
     expect(groups).toEqual([]);
   });
   it("sem leitura injetada, a corrida passa o tempo-limite à BD da Multipark", () => {
     const s = src("server/extrasPressure.ts");
-    expect(s).toContain("multiparkDbQuery<T>(sqlText, params ?? [], { timeoutMs: pressureQueryTimeout(o.deadlineAt, Date.now()) })");
+    expect(s).toContain("multiparkDbQuery<T>(sqlText, params ?? [], { timeoutMs: pressureQueryTimeout(o.deadlineAt, Date.now()), analytics: true })");
     const c = src("server/multiparkDb/client.ts");
     expect(c).toContain("SET LOCAL statement_timeout = ${timeoutMs}");
   });

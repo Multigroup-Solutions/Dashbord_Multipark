@@ -9,7 +9,7 @@
 import { projectVisible, scopedProjectIds } from "./extrasCityFilter";
 import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
-import { employees, users, whatsappConversations, whatsappMessages } from "../drizzle/schema";
+import { employees, extraLeads, users, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
 import { firstNameOf } from "../shared/whatsappTemplate";
 import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, previewFields, reserveOutboundMessage } from "./whatsappStore";
@@ -237,6 +237,45 @@ export async function assignBoxByRule(conversationId: number): Promise<void> {
   } catch (err: any) {
     console.warn("[WhatsApp caixa] regra falhou:", conversationId, String(err?.message ?? err).slice(0, 160));
   }
+}
+
+/**
+ * Cidade por defeito do template para uma conversa: a da ficha do colaborador
+ * (ficha → candidatura → morada), senão a do lead mais recente com o mesmo
+ * número. `city` null = sem cidade com templates: o diálogo obriga a escolher.
+ * `cityKey` diz qual era (ex.: Faro, ainda sem templates).
+ */
+export async function conversationDriverCity(conversationId: number): Promise<{
+  city: import("../shared/driverTemplates").City | null;
+  cityKey: string | null;
+  source: "employee" | "lead" | null;
+}> {
+  const none = { city: null, cityKey: null, source: null };
+  const db = await getDb();
+  if (!db) return none;
+  const [conv] = await db
+    .select({ employeeId: whatsappConversations.employeeId, phoneE164: whatsappConversations.phoneE164 })
+    .from(whatsappConversations)
+    .where(eq(whatsappConversations.id, conversationId))
+    .limit(1);
+  if (!conv) return none;
+  const { driverCityFrom } = await import("../shared/driverTemplates");
+  const { resolveCitiesForEmployeeIds, resolveCitiesForProjectIds } = await import("./employeeCity");
+  if (conv.employeeId != null) {
+    const key = (await resolveCitiesForEmployeeIds([conv.employeeId])).get(conv.employeeId)?.city ?? null;
+    if (key) return { city: driverCityFrom(key), cityKey: key, source: "employee" };
+  }
+  const [lead] = await db
+    .select({ projectId: extraLeads.projectId })
+    .from(extraLeads)
+    .where(eq(extraLeads.phoneE164, conv.phoneE164))
+    .orderBy(desc(extraLeads.id))
+    .limit(1);
+  if (lead?.projectId != null) {
+    const key = (await resolveCitiesForProjectIds([lead.projectId])).get(lead.projectId) ?? null;
+    if (key) return { city: driverCityFrom(key), cityKey: key, source: "lead" };
+  }
+  return none;
 }
 
 /**

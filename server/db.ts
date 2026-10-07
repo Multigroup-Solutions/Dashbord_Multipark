@@ -1505,10 +1505,13 @@ export async function deleteEmployee(id: number) {
 }
 
 // ─── RH: DOCUMENTS ────────────────────────────────────────────────────────────
+// 0530: cada ficheiro tem estado (pendente/validado/recusado) e "apagar" é
+// arquivar — as leituras só veem os ATIVOS (regras em shared/employeeDocuments.ts).
 export async function getEmployeeDocuments(employeeId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(employeeDocuments).where(eq(employeeDocuments.employeeId, employeeId))
+  return db.select().from(employeeDocuments)
+    .where(and(eq(employeeDocuments.employeeId, employeeId), isNull(employeeDocuments.archivedAt)))
     .orderBy(desc(employeeDocuments.createdAt));
 }
 
@@ -1525,33 +1528,35 @@ export async function createEmployeeDocumentsBatch(docs: InsertEmployeeDocument[
   return db.insert(employeeDocuments).values(docs);
 }
 
-export async function deleteEmployeeDocument(id: number) {
+/** "Apagar" um documento = arquivar (0530): sai das listas e da checklist, o ficheiro fica. */
+export async function archiveEmployeeDocument(id: number, byUserId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.delete(employeeDocuments).where(eq(employeeDocuments.id, id));
+  const r: any = await db.update(employeeDocuments)
+    .set({ archivedAt: sql`CURRENT_TIMESTAMP` as any, archivedById: byUserId })
+    .where(and(eq(employeeDocuments.id, id), isNull(employeeDocuments.archivedAt)));
+  return Number(r?.[0]?.affectedRows ?? r?.affectedRows ?? 0) > 0;
 }
 
+/** Obrigatórios: entregue = validado ou pendente (o recusado volta a faltar). */
 export async function getDocumentChecklistForEmployee(employeeId: number) {
-  const docs = await getEmployeeDocuments(employeeId);
-  const MANDATORY_TYPES = [
-    "photo", "id_card", "driving_license", "nib_proof",
-    "address_proof", "contract", "responsibility_term",
-  ] as const;
-  const existing = new Set(docs.map(d => d.docType));
-  return MANDATORY_TYPES.map(t => ({ docType: t, present: existing.has(t) }));
+  const { docChecklist } = await import("../shared/employeeDocuments");
+  return docChecklist(await getEmployeeDocuments(employeeId));
 }
 
-export async function getAllEmployeesDocumentStatus() {
+/** Ficheiros ATIVOS de todas as fichas (tipo + estado), por ficha — para os resumos da lista. */
+export async function getAllEmployeesDocumentStatus(): Promise<Map<number, Array<{ docType: string; status: string }>>> {
+  const map = new Map<number, Array<{ docType: string; status: string }>>();
   const db = await getDb();
-  if (!db) return [];
+  if (!db) return map;
   const docs = await db.select({
     employeeId: employeeDocuments.employeeId,
     docType: employeeDocuments.docType,
-  }).from(employeeDocuments);
-  const map = new Map<number, Set<string>>();
+    status: employeeDocuments.status,
+  }).from(employeeDocuments).where(isNull(employeeDocuments.archivedAt));
   for (const d of docs) {
-    if (!map.has(d.employeeId)) map.set(d.employeeId, new Set());
-    map.get(d.employeeId)!.add(d.docType);
+    if (!map.has(d.employeeId)) map.set(d.employeeId, []);
+    map.get(d.employeeId)!.push({ docType: d.docType, status: d.status });
   }
   return map;
 }

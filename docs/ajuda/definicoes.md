@@ -2,7 +2,7 @@
 modulo: definicoes
 titulo: Definições
 rotas: /definicoes
-palavras: salta há dias, cron saltado, avisos críticos obrigatórios, definições, definicoes, configuração, automações, interruptores, parâmetros, iva, tsu, sla, prazos, emails, integrações, segurança, sessões, api keys, inteligência artificial, ia, orçamento da ia, assistente, calendário, escala da cidade, passagem de turno, google calendar, serviços, tarefas dos serviços, lavagem, carregamento elétrico, estado desconhecido, saltado, último ok, parado, alguém mudou isto entretanto, histórico de alterações, remetente, juntar fichas, telefones dos alertas, sem pda
+palavras: aeroportos, terminal no ponto, salta há dias, cron saltado, avisos críticos obrigatórios, definições, definicoes, configuração, automações, interruptores, parâmetros, iva, tsu, sla, prazos, emails, integrações, segurança, sessões, api keys, inteligência artificial, ia, orçamento da ia, assistente, calendário, escala da cidade, passagem de turno, google calendar, serviços, tarefas dos serviços, lavagem, carregamento elétrico, estado desconhecido, saltado, último ok, parado, alguém mudou isto entretanto, histórico de alterações, remetente, juntar fichas, telefones dos alertas, sem pda
 ---
 # Definições
 
@@ -14,6 +14,7 @@ Separadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador ce
   - Se a leitura falhar aparece **Estado desconhecido** com "Tentar de novo" — nunca "Tudo a correr" sem dados.
   - **Salta há dias** = o cron corre mas salta há mais de 2 dias por falta de configuração ou de ligação (Zello por configurar, BD da Multipark sem endereço, Google Ads/Business desligado, conta a religar). Conta como problema. Saltar porque um interruptor está desligado, fora de horas ou porque outra corrida está a trabalhar **não** conta.
   - **Parado** = sem corridas há mais de 2× o intervalo esperado. O mail-sync é medido pela cadência em vigor (5 em 5 min sem o push do Gmail, 1×/dia com ele). Um cron parado há mais de 30 dias continua a aparecer como Parado (a última corrida de cada um nunca se apaga).
+  - **Retirados**: um trabalho que já saiu da agenda (ex.: `multipark-db-sync`, retirado a 27 set) e não corre há mais de 7 dias deixa de aparecer na lista e nos alertas; fica só o nome numa nota por baixo. O histórico das corridas fica guardado.
   - **Saltado** (Agendador) = correu mas não fez o trabalho (ex.: interruptor desligado, sem configuração). Não conta como **Último OK**.
   - Os erros mostrados nunca levam segredos (tokens, passwords em endereços).
 - **Automações**: interruptores de cada automação, incluindo a **Inteligência artificial**. Cada um diz o estado **agora** e de onde vem: *definido aqui*, *pela variável do servidor* ou *por omissão*. "Seguir o servidor" tira o que foi definido aqui.
@@ -23,6 +24,7 @@ Separadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador ce
   - **Serviços → tarefas** no topo: por cidade e tipo de serviço extra, **Gera tarefa** e um responsável opcional. Se as regras gravadas não carregarem, não se pode gravar (antes apareciam as regras por omissão e gravar apagava as verdadeiras).
   - IVA e TSU com data de efeito, prazos (SLA), destinatários de email, disponibilidades, IA, contas Zello excluídas do GPS, parques que a operação não faz.
   - **Alertas sem PDA/Zello**: os telefones por cidade e a **cópia** (todas as cidades), um número por linha.
+  - **Aeroportos (terminal no ponto)** (no cartão Extras-dia): latitude, longitude e raio (metros) do aeroporto de Lisboa, Porto e Faro. Só conta com o interruptor **"Terminal no ponto (aeroporto)"** ligado (Automações; desligado por omissão). Ver a ajuda "RH e ponto".
   - Um valor gravado que já não é válido fica assinalado (a aplicação usa a omissão até se gravar de novo).
 - **Notificações**: quem recebe cada aviso (só o super admin muda).
 - **Segurança**: validade das API keys (até ao fim do dia escolhido, hora de Lisboa) e **Terminar sessões**.

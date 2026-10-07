@@ -16,6 +16,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { matchesContactQuery, sortByNameMatch } from "@shared/contactSearch";
+import type { LicenceStatus } from "@shared/drivingLicence";
+import { LicenceBadge } from "@/components/rh/RhBadges";
 
 type CityId = "lisbon" | "porto" | "faro";
 const CITY_NAMES: Record<CityId, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
@@ -24,12 +26,15 @@ export interface PickerCandidate {
   id: number;
   fullName: string;
   photoUrl?: string | null;
-  availability?: { status: "available" | "unavailable" | "no_response"; morning: boolean; night: boolean } | null;
+  /** `hours` = as janelas do dia operacional ("18h–01h"), já com a madrugada marcada no dia seguinte. */
+  availability?: { status: "available" | "unavailable" | "no_response"; morning: boolean; night: boolean; hours?: string } | null;
   trainingMissing?: boolean;
   trainingUnknown?: boolean;
   /** Cidade derivada da ficha; null = sem cidade; undefined = não se sabe (leitura falhou). */
   city?: CityId | null;
   hasAccount?: boolean;
+  /** Jorge, 7 out 2026: estado da carta (só se mostra quando NÃO está validada). */
+  licence?: LicenceStatus;
 }
 
 interface Section { key: string; label: string; rows: Array<{ c: PickerCandidate; other: boolean }>; disabled?: boolean }
@@ -60,13 +65,17 @@ export function CandidateLabel({ c }: { c: PickerCandidate }) {
         <AvatarImage src={c.photoUrl ?? undefined} className="object-cover" />
         <AvatarFallback className="text-[11px]">{c.fullName.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
       </Avatar>
-      {c.availability?.status === "available" && (
+      {c.availability?.status === "available" && (c.availability.hours ? (
+        <span className="shrink-0 rounded bg-emerald-50 px-1 text-[11px] text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300" title="Pode nestas horas (dia de trabalho 03h → 03h)">
+          {c.availability.hours}
+        </span>
+      ) : (
         <span className="inline-flex gap-0.5 shrink-0" title="Disse que está disponível">
           {c.availability.morning && <Sun className="h-3 w-3 text-amber-500" />}
           {c.availability.night && <Moon className="h-3 w-3 text-indigo-500" />}
           {!c.availability.morning && !c.availability.night && <CheckCircle2 className="h-3 w-3 text-green-500" />}
         </span>
-      )}
+      ))}
       {c.availability?.status === "no_response" && (
         <span className="h-2 w-2 inline-block rounded-full bg-muted-foreground/30 shrink-0" title="Sem resposta" />
       )}
@@ -80,6 +89,7 @@ export function CandidateLabel({ c }: { c: PickerCandidate }) {
       {c.trainingUnknown && (
         <span className="ml-1 shrink-0 rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-700" title="Não foi possível verificar a formação agora — ao guardar volta a ser verificada">Formação por verificar</span>
       )}
+      {c.licence && c.licence !== "validated" && <LicenceBadge status={c.licence} className="ml-1 px-1 py-0 text-[11px]" />}
     </span>
   );
 }

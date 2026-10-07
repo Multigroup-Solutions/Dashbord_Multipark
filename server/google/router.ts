@@ -3,8 +3,9 @@
  *  - `googleAccount.sync.*` (caminho pessoal: o próprio, sem âmbito de cidade):
  *    estado, preferências, "Sincronizar agora", livre/ocupado (Disponibilidade);
  *  - `googleCalendar.*`: "Criar reunião" (Meet) a partir de um cliente,
- *    reclamação ou parceria (mesmas permissões de ver o registo) e os
- *    calendários partilhados da escala (admin vê; só o super_admin edita).
+ *    reclamação ou parceria (mesmas permissões de ver o registo), os
+ *    calendários partilhados da escala (admin vê; só o super_admin edita) e
+ *    a página Calendário (45e: a agenda da própria pessoa e "Novo evento").
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -12,6 +13,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { requireAccess } from "../_core/access";
 import { createMeetingSchema, googleSyncPrefsPatchSchema, lisbonLocalToUtcMs, sharedCalendarsConfigSchema, dashboardUrl } from "../../shared/googleSync";
 import { normalizeAddress } from "../../shared/mail";
+import { calendarRangeError, createCalendarEventSchema } from "../../shared/calendarView";
 
 type CtxUser = { id: number; role: string; accessOverrides?: any };
 const adminOnly = (u: CtxUser) => {
@@ -106,6 +108,36 @@ async function meetingTarget(u: CtxUser, type: "client" | "complaint" | "partner
 }
 
 export const googleCalendarRouter = router({
+  /**
+   * Página Calendário (45e): os eventos da agenda Google da PRÓPRIA pessoa
+   * (calendários visíveis + principal + "Multipark"), lidos ao vivo. Erro ≠
+   * vazio: `reason: "error"`.
+   */
+  myEvents: protectedProcedure.input(z.object({ fromDay: day, toDay: day })).query(async ({ ctx, input }) => {
+    const bad = calendarRangeError(input.fromDay, input.toDay);
+    if (bad) throw new TRPCError({ code: "BAD_REQUEST", message: bad });
+    const { myCalendarEvents } = await import("./calendarView");
+    return myCalendarEvents(ctx.user.id, input.fromDay, input.toDay);
+  }),
+  /** "Novo evento" no calendário principal da própria pessoa (convidados e Meet opcionais). */
+  createEvent: protectedProcedure.input(createCalendarEventSchema).mutation(async ({ ctx, input }) => {
+    const { createMyCalendarEvent } = await import("./calendarView");
+    try {
+      const r = await createMyCalendarEvent(ctx.user.id, input);
+      try {
+        const { logActivity } = await import("../db");
+        await logActivity({
+          userId: ctx.user.id, action: "create", entity: "google_calendar_event", entityId: null,
+          details: `Evento "${input.title.slice(0, 120)}" (${input.startDay}${input.allDay ? ", dia inteiro" : ` ${input.startTime ?? ""}`})${r.guests ? ` · ${r.guests} convidado(s)` : ""}${input.withMeet ? " · com Meet" : ""}`,
+        } as any);
+      } catch { /* registo */ }
+      return r;
+    } catch (err: any) {
+      if (err instanceof TRPCError) throw err;
+      const { googleErrorMessage } = await import("./workspace");
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Não foi possível criar o evento: ${googleErrorMessage(err)}` });
+    }
+  }),
   /** Contexto do botão "Criar reunião": o calendário está ligado? há email do cliente? */
   meetingContext: protectedProcedure
     .input(z.object({ entityType: createMeetingSchema.shape.entityType, entityId: z.string().trim().min(1).max(320) }))

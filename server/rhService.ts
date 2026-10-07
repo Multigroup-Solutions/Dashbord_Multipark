@@ -295,6 +295,28 @@ export async function reviewTimeRecord(id: number, decision: "approved" | "rejec
   await db.update(timeRecords).set(patch).where(eq(timeRecords.id, id));
 }
 
+// ─── Ponto: terminal à mão (confirmar / desmarcar) ──────────────────────────
+/**
+ * Marca o troço de uma SAÍDA como terminal ("confirmed") ou desmarca-o
+ * ("rejected"). Nada se apaga: fica o estado, quem, quando e o motivo.
+ */
+export async function setTimeRecordTerminal(id: number, terminal: boolean, reviewerId: number, note: string): Promise<{ ok: true; status: "confirmed" | "rejected"; previous: string | null } | { ok: false; error: string }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB indisponível");
+  const [rec] = await db.select({ id: timeRecords.id, type: timeRecords.type, terminalStatus: timeRecords.terminalStatus })
+    .from(timeRecords).where(eq(timeRecords.id, id)).limit(1);
+  if (!rec) return { ok: false, error: "Registo de ponto não encontrado" };
+  if (rec.type !== "check_out") return { ok: false, error: "O terminal marca-se na saída (o troço só fecha na saída)." };
+  const status = terminal ? "confirmed" as const : "rejected" as const;
+  await db.update(timeRecords).set({
+    terminalStatus: status,
+    terminalReviewedById: reviewerId,
+    terminalReviewedAt: nowMysql(),
+    terminalNote: note.slice(0, 255),
+  }).where(eq(timeRecords.id, id));
+  return { ok: true, status, previous: rec.terminalStatus ?? null };
+}
+
 // ─── Fecho mensal ───────────────────────────────────────────────────────────
 export async function createPayrollRun(year: number, month: number, userId: number, notes?: string | null) {
   const db = await getDb();

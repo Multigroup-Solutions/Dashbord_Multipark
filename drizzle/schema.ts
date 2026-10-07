@@ -544,7 +544,94 @@ export const employeeDocuments = mysqlTable("employee_documents", {
 	mimeType: varchar({ length: 128 }),
 	uploadedById: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
-});
+	// 0530 (Jorge, 7 out 2026): pendente (entregue pela pessoa/TL) → validado
+	// ou recusado pelo RH; o que o RH carrega entra validado. Apagar = arquivar.
+	status: mysqlEnum(['pending','validated','rejected']).default('pending').notNull(),
+	validatedById: int(),
+	validatedAt: datetime({ mode: 'string' }),
+	rejectedReason: varchar({ length: 300 }),
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_employee_documents_emp_type_status").on(table.employeeId, table.docType, table.status),
+]);
+
+// 0560 (pauta do Rafael, 7 out 2026): pedidos de documentos em falta aos
+// extras (WhatsApp/email, à mão ou automático). Uma linha por pedido a uma
+// pessoa; requestKey único (o mesmo clique ou a mesma semana não reenvia).
+// Estados por canal: sending | sent | unknown | failed | skipped (NULL = não
+// pedido). Nada se apaga. Regras em shared/docsRequest.ts.
+export const employeeDocsRequests = mysqlTable("employee_docs_requests", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	/** manual | auto */
+	mode: varchar({ length: 8 }).default('manual').notNull(),
+	/** Quem pediu (null = pedido automático). */
+	requestedById: int(),
+	requestKey: varchar({ length: 96 }).notNull(),
+	/** Tipos pedidos, separados por vírgulas (ex.: "photo,driving_license"). */
+	docTypes: varchar({ length: 255 }).notNull(),
+	/** A lista tal como seguiu ({{2}} do WhatsApp). */
+	docsText: varchar({ length: 700 }),
+	whatsappStatus: varchar({ length: 16 }),
+	whatsappDetail: varchar({ length: 300 }),
+	templateName: varchar({ length: 120 }),
+	emailStatus: varchar({ length: 16 }),
+	emailDetail: varchar({ length: 300 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	finishedAt: timestamp({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_employee_docs_requests_key").on(table.requestKey),
+	index("idx_employee_docs_requests_emp_created").on(table.employeeId, table.createdAt),
+]);
+
+// 0570 (47c, 7 out 2026): "Pressão" do Extras-Dia guardada por dia — um dia
+// de Lisboa × grupo de parques × parte ('group' | 'driver'), payload JSON
+// (server/pressureDays.ts). Lido da Multipark uma vez; o trabalho
+// extras-pressure junta os dias e escreve o ops_pressure_stats de sempre.
+// Estatística derivada: substitui-se por (grupo, parte, dia); nunca se apaga.
+export const opsPressureDays = mysqlTable("ops_pressure_days", {
+	id: int().autoincrement().primaryKey(),
+	parkGroup: varchar({ length: 40 }).notNull(),
+	/** group | driver */
+	part: varchar({ length: 8 }).notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	/** Versão do cálculo + parques do grupo (outra assinatura = volta a ler-se). */
+	sig: varchar({ length: 64 }).notNull(),
+	/** Último dia da janela da leitura que o calculou. */
+	readEnd: date({ mode: 'string' }).notNull(),
+	events: int().default(0).notNull(),
+	payload: mediumtext().notNull(),
+	computedAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ops_pressure_day").on(table.parkGroup, table.part, table.day),
+]);
+
+// 0535 (Jorge, 7 out 2026): notas internas da ficha — team leader e acima, no
+// âmbito de cada um; a própria pessoa nunca as vê (server/rhAccess.ts).
+export const employeeNotes = mysqlTable("employee_notes", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	body: text().notNull(),
+	/** general | performance | conduct | praise (shared/employeeNotes.ts) */
+	kind: varchar({ length: 16 }).default('general').notNull(),
+	/** Dia de trabalho a que se refere ("YYYY-MM-DD"), opcional. */
+	workDate: varchar({ length: 10 }),
+	/** Linha da escala do Extras-dia (extras_dia_assignments.id), opcional. */
+	assignmentId: int(),
+	authorId: int().notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	editedAt: timestamp({ mode: 'string' }),
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_employee_notes_emp_created").on(table.employeeId, table.createdAt),
+	index("idx_employee_notes_assignment").on(table.assignmentId),
+]);
 
 export const employees = mysqlTable("employees", {
 	id: int().autoincrement().primaryKey(),
@@ -566,6 +653,11 @@ export const employees = mysqlTable("employees", {
 	// 0460 (D39): n.º do BI/CC e da carta de condução (vêm do candidato, lidos dos anexos pela IA).
 	idDocNumber: varchar({ length: 32 }),
 	drivingLicenseNumber: varchar({ length: 32 }),
+	// 0530: data de emissão da carta (validada pelo RH ou vinda da candidatura)
+	// e a validação do RH — "Carta validada" em shared/drivingLicence.ts.
+	drivingLicenseIssuedAt: date({ mode: 'string' }),
+	drivingLicenseValidatedAt: datetime({ mode: 'string' }),
+	drivingLicenseValidatedById: int(),
 	nib: varchar({ length: 30 }),
 	address: text(),
 	birthDate: timestamp({ mode: 'string' }),
@@ -953,6 +1045,10 @@ export const extrasDiaSchedules = mysqlTable("extras_dia_schedules", {
 	confirmedById: int(),
 	gapsJson: text(),
 	summary: varchar({ length: 1000 }),
+	// 0565 — última mudança feita por uma pessoa (com isto o cron já não mexe no dia).
+	manualAt: timestamp({ mode: 'string' }),
+	manualById: int(),
+	manualWhat: varchar({ length: 32 }),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
@@ -978,6 +1074,24 @@ export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
 (table) => [
 	uniqueIndex("uq_edn_version").on(table.assignmentId, table.version, table.kind, table.channel),
 	index("idx_edn_date_city").on(table.assignmentDate, table.city),
+]);
+
+// 0540 — notas internas do dia de trabalho (Extras-dia → Pressão): várias por
+// (cidade, dia de calendário); hora operacional opcional (3–26); arquivar, nunca apagar.
+export const extrasDayNotes = mysqlTable("extras_day_notes", {
+	id: int().autoincrement().primaryKey(),
+	city: varchar({ length: 16 }).notNull(), // lisbon|porto|faro
+	workDate: varchar({ length: 10 }).notNull(),
+	hour: tinyint(),
+	body: text().notNull(),
+	authorId: int().notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	editedAt: timestamp({ mode: 'string' }),
+	archivedAt: timestamp({ mode: 'string' }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_extras_day_notes_city_date").on(table.city, table.workDate),
 ]);
 
 // Passagem de turno (team leaders) — 1 registo por (dia, turno, cidade).
@@ -2038,6 +2152,10 @@ export const tasks = mysqlTable("tasks", {
 	// 0376 — "Eliminar" arquiva (os geradores continuam a ver a linha e não a recriam).
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedById: int(),
+	// 0545 — reserva da tarefa (multipark_bookings.externalId; serviços) para o
+	// filtro "estado da reserva", e chave única só das tarefas de candidatura.
+	bookingRef: varchar({ length: 128 }),
+	leadSourceKey: varchar({ length: 128 }).generatedAlwaysAs(sql`IF(\`sourceModule\` = 'lead', \`sourceKey\`, NULL)`, { mode: "stored" }),
 });
 
 // 0091 — checklists recorrentes por turno/cidade
@@ -2080,6 +2198,14 @@ export const timeRecords = mysqlTable("time_records", {
 	latitude: decimal({ precision: 10, scale: 7 }),
 	longitude: decimal({ precision: 10, scale: 7 }),
 	locationName: varchar({ length: 256 }),
+	// 0555 — terminal no ponto (aeroporto), shared/pontoTerminal.ts:
+	// atAirport 1/0/NULL (GPS no aeroporto da cidade do extra); terminalStatus
+	// na entrada "start", na saída "auto" | "pending" | "confirmed" | "rejected"
+	atAirport: tinyint(),
+	terminalStatus: varchar({ length: 16 }),
+	terminalReviewedById: int(),
+	terminalReviewedAt: timestamp({ mode: 'string' }),
+	terminalNote: varchar({ length: 255 }),
 	hoursWorked: decimal({ precision: 6, scale: 2 }),
 	notes: text(),
 	// Snapshot do Zello preenchido automaticamente no check-out (km/velocidades
@@ -2482,6 +2608,8 @@ export const whatsappMessages = mysqlTable("whatsapp_messages", {
 	type: mysqlEnum(['text', 'template', 'image', 'audio', 'document', 'video']).notNull(),
 	body: text(),
 	templateName: varchar({ length: 128 }),
+	// 0550 — cidade do registo de templates dos motoristas (LISBOA/PORTO). NULL = fora do registo.
+	city: varchar({ length: 16 }),
 	// Media recebida (imagem/áudio enviados pela pessoa) — migração 0065.
 	// `mediaId` é o id da Meta (permite re-tentar o download); `mediaUrl`/`mediaKey`
 	// apontam para o storage da app (server/storage.ts).
@@ -2567,6 +2695,9 @@ export const whatsappPendingStatuses = mysqlTable("whatsapp_pending_statuses", {
 export const whatsappBroadcasts = mysqlTable("whatsapp_broadcasts", {
 	id: int().autoincrement().primaryKey(),
 	templateName: varchar({ length: 128 }).notNull(),
+	// 0550 — cidade e língua do template; um lote com várias cidades gera uma difusão por cidade.
+	city: varchar({ length: 16 }),
+	languageCode: varchar({ length: 16 }),
 	note: text(),
 	createdById: int(),
 	weekStart: date({ mode: 'string' }),
@@ -2702,6 +2833,8 @@ export const extraLeads = mysqlTable("extra_leads", {
 	nif: varchar({ length: 16 }),
 	idDocNumber: varchar({ length: 32 }),
 	drivingLicenseNumber: varchar({ length: 32 }),
+	/** 0530: data de emissão da carta declarada na candidatura (passa para a ficha ao converter). */
+	drivingLicenseIssuedAt: date({ mode: 'string' }),
 	/** Resumo do CV para quem entrevista. */
 	aiSummary: text(),
 	aiReadAt: timestamp({ mode: 'string' }),

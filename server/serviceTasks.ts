@@ -46,6 +46,7 @@ import {
   type ServiceTaskRules,
   type TeamLeaderRow,
 } from "../shared/serviceTasks";
+import { taskBookingRef } from "../shared/taskFilters";
 import { isMultiparkDbConfigured, multiparkDbQuery, type SqlParam } from "./multiparkDb/client";
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -314,6 +315,8 @@ export const defaultServiceTasksDeps: ServiceTasksDeps = {
         title: t.title, description: t.description, projectId: t.projectId, assigneeId: t.assigneeIds[0] ?? null,
         createdById: t.createdById, taskStatus: "todo", taskPriority: "high",
         dueDate: mysqlNow(t.dueMs), dueHasTime: 1, sourceModule: SERVICE_TASK_SOURCE, sourceId: null, sourceKey: t.sourceKey,
+        // 0545: a reserva fica na tarefa (filtro e chip do estado da reserva nas Tarefas).
+        bookingRef: taskBookingRef(SERVICE_TASK_SOURCE, t.sourceKey),
       });
     } catch (err) {
       // chave única (migração 0325): outra corrida criou-a no mesmo instante

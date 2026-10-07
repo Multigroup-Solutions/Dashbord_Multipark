@@ -23,6 +23,8 @@ import { DEFAULT_KNOWLEDGE_CONFIG, KNOWLEDGE_SETTING_KEY, knowledgeConfigSchema 
 import { DEFAULT_SERVICE_TASK_RULES, SERVICE_TASKS_SETTING_KEY, serviceTaskRulesSchema } from "./serviceTasks";
 import { matchKey } from "./textKey";
 import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
+import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
+import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -183,6 +185,32 @@ export const carsPerHourMapSchema = z.object({
 }, { error: "Indica os carros/hora de Lisboa, Porto e Faro." });
 export type CarsPerHourMap = z.infer<typeof carsPerHourMapSchema>;
 export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro: 3 };
+
+/**
+ * Aeroportos do terminal no ponto (Jorge, 7 out 2026): centro (lat/lng) e raio
+ * por cidade. Entrada/saída do ponto de um extra com GPS dentro do raio do
+ * aeroporto da cidade dele = troço de terminal (shared/pontoTerminal.ts).
+ */
+const airportFenceSchema = z.object({
+  lat: z.number({ error: "Indica a latitude (ex.: 38.7742)." }).min(-90, "Latitude entre -90 e 90.").max(90, "Latitude entre -90 e 90."),
+  lng: z.number({ error: "Indica a longitude (ex.: -9.1342)." }).min(-180, "Longitude entre -180 e 180.").max(180, "Longitude entre -180 e 180."),
+  radiusM: z.number({ error: "Indica o raio em metros." }).int("Raio em metros inteiros.").min(100, "Raio mínimo: 100 m.").max(10000, "Raio máximo: 10 000 m."),
+});
+export const terminalAirportsSchema = z.object({ lisbon: airportFenceSchema, porto: airportFenceSchema, faro: airportFenceSchema }, { error: "Indica os aeroportos de Lisboa, Porto e Faro." });
+export const TERMINAL_AIRPORTS_SETTING_KEY = "ponto.terminalAirports" as const;
+
+/**
+ * Template do WhatsApp do pedido de documentos em falta, por cidade:
+ * "nome_do_modelo|pt_PT" ou vazio (= por configurar: só email). Pauta do
+ * Rafael, 7 out 2026 — regras em shared/docsRequest.ts.
+ */
+const docsTemplateValue = z.string().trim().max(540, "Máximo 540 caracteres.")
+  .refine((v) => v === "" || DOCS_TEMPLATE_PATTERN.test(v), "Formato: nome_do_modelo|pt_PT (ou vazio para não usar o WhatsApp nesta cidade).");
+export const docsRequestTemplatesSchema = z.object({
+  lisbon: docsTemplateValue,
+  porto: docsTemplateValue,
+  faro: docsTemplateValue,
+}, { error: "Indica o template de Lisboa, Porto e Faro (ou deixa vazio)." });
 
 /** Ponto de encontro por cidade (vai no aviso de escala); vazio = não se indica. */
 export const meetingPointMapSchema = z.object({
@@ -349,8 +377,8 @@ export const SETTINGS = {
   "rh.missingCityAssignee": def({
     key: "rh.missingCityAssignee",
     group: "operacao",
-    label: "Responsável pelas fichas sem cidade",
-    description: "Nome ou email da pessoa que recebe a tarefa (e o email) quando uma ficha ativa não tem cidade e o dashboard não a consegue descobrir pelo agente da Multipark, pela candidatura ou pela morada.",
+    label: "Responsável pelo recrutamento e pelas fichas sem cidade",
+    description: "Nome ou email da pessoa do recrutamento. Recebe a tarefa de cada candidatura de condutor (com os supervisores da cidade do lead; um lead sem cidade fica só com ela) e a tarefa (e o email) quando uma ficha ativa não tem cidade e o dashboard não a consegue descobrir pelo agente da Multipark, pela candidatura ou pela morada.",
     schema: z.string().trim().min(2, "Indica um nome ou email.").max(320),
     defaultValue: "Márcia Nunes",
     wiring: "live",
@@ -476,7 +504,7 @@ export const SETTINGS = {
     key: "extras.autoProposeAt",
     group: "extras",
     label: "Hora da proposta automática de escala",
-    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (uma vez por dia e cidade; não substitui uma escala já proposta ou confirmada).",
+    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (só a primeira proposta de cada dia e cidade: não substitui uma escala já proposta ou confirmada, e num dia mexido à mão já não mexe).",
     schema: hhmmSchema,
     defaultValue: "14:00",
     wiring: "live",
@@ -514,6 +542,24 @@ export const SETTINGS = {
     label: "Ponto de encontro (aviso de escala)",
     description: "Texto curto com o ponto de encontro de cada cidade, incluído no WhatsApp e no email de escala. Vazio = não se indica.",
     schema: meetingPointMapSchema,
+    defaultValue: { lisbon: "", porto: "", faro: "" },
+    wiring: "live",
+  }),
+  [TERMINAL_AIRPORTS_SETTING_KEY]: def({
+    key: TERMINAL_AIRPORTS_SETTING_KEY,
+    group: "extras",
+    label: "Aeroportos (terminal no ponto)",
+    description: "Centro e raio do aeroporto de cada cidade. Com o interruptor \"Terminal no ponto (aeroporto)\" ligado (Definições → Automações), a entrada de um extra com GPS dentro deste raio (aeroporto da cidade dele) abre um troço de terminal, pago à taxa do nível seguinte. A saída fora do raio ou sem GPS deixa o troço \"por confirmar\" até o RH ver.",
+    schema: terminalAirportsSchema,
+    defaultValue: DEFAULT_TERMINAL_AIRPORTS,
+    wiring: "live",
+  }),
+  "rh.docsRequestTemplates": def({
+    key: "rh.docsRequestTemplates",
+    group: "extras",
+    label: "Pedido de documentos em falta: template do WhatsApp",
+    description: "Nome exato do template aprovado pela Meta e língua, separados por \"|\" (ex.: documentos_em_falta|pt_PT), para cada cidade. O template tem dois campos: {{1}} = primeiro nome, {{2}} = os documentos em falta numa linha (ex.: \"Fotografia, Carta de Condução (recusado: ilegível)\"); o resto do texto (onde carregar, responder com fotografia) fica fixo no template. Vazio = essa cidade só recebe o pedido por email.",
+    schema: docsRequestTemplatesSchema,
     defaultValue: { lisbon: "", porto: "", faro: "" },
     wiring: "live",
   }),
@@ -727,6 +773,9 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "LEAD_AUTO_REPLY", label: "Resposta automática às leads", description: "Envia o link da candidatura às leads novas (por WhatsApp). Desligado por omissão.", defaultEnabled: false },
   // 17g-3 (Jorge, 2 out 2026): escreve a gente de fora → desligado por omissão.
   { name: "EXTRAS_ASK_CITY", label: "Pedir a cidade aos extras sem cidade", description: "Quando um extra chega sem cidade, pede-lha uma vez por email (pela recursos-humanos@) e por WhatsApp se a conversa estiver aberta. A tarefa para quem trata das fichas sem cidade cria-se sempre. Desligado por omissão.", defaultEnabled: false },
+  // Pauta do Rafael (7 out 2026): escreve aos extras → desligado por omissão. O botão
+  // "Pedir documentos em falta" (ficha e lista do RH) funciona sem isto.
+  { name: "EXTRAS_DOCS_REQUEST", label: "Pedir documentos em falta aos extras", description: "À segunda a partir das 10:00 (Lisboa): pede por WhatsApp (template da cidade em Definições → Parâmetros, Extras-dia) e por email aos extras ativos os documentos obrigatórios em falta ou recusados. No máximo 1 pedido por pessoa a cada 7 dias (contam também os feitos à mão) e 4 pedidos automáticos por pessoa — depois só à mão. Respeita \"Não enviar WhatsApp/email\" e o STOP. Desligado por omissão.", defaultEnabled: false },
   // 19a: o email semanal de marketing tinha só a variável MARKETING_WEEKLY=off (invisível nas Definições).
   { name: "MARKETING_WEEKLY", label: "Email semanal de marketing", description: "À segunda a partir das 8h: gasto, reservas e ROAS da semana por marca e cidade, para os endereços em MARKETING_REPORT_EMAILS." },
   // D20 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
@@ -757,6 +806,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
+  // Pauta do Rafael (Jorge, 7 out 2026): mexe no dinheiro (ordenado e custos) → desligado por omissão.
+  { name: "PONTO_TERMINAL", label: "Terminal no ponto (aeroporto)", description: "O extra que dá saída + entrada no aeroporto da cidade dele (GPS dentro do raio, Definições → Parâmetros → Extras-dia → \"Aeroportos (terminal no ponto)\") conta esse troço como terminal: paga à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master; o master fica master), no ordenado, no recibo e no custo dos extras. Antes de sair do aeroporto volta a dar saída + entrada e passa a extra normal. Saída fora do aeroporto ou sem GPS deixa o troço \"por confirmar\" (não paga terminal) até o RH o confirmar na ficha → Ponto. Desligado: nada muda no ordenado nem nos ecrãs.", defaultEnabled: false },
   { name: "ZELLO_PDA_NAMES", label: "Zello: nome de quem tem o PDA no mapa", description: "Quando alguém faz login num PDA (registado pelo QR), o nome da conta Zello desse PDA passa a \"PDA 12 · Rui Santos\"; no logout volta a \"PDA 12\". Assim o mapa do Zello mostra quem está com cada PDA. Escreve no Zello (só o nome). Desligado por omissão até testar com um PDA.", defaultEnabled: false },
   // 20b (Jorge, 2 out 2026): mexe em fichas de clientes sozinho → só o super admin o liga/desliga.
   { name: "CRM_AUTO_MERGE", label: "CRM: juntar sozinho as fichas óbvias", description: "Todas as madrugadas (depois das sugestões das 05:15; se não acabar, continua) o CRM junta sozinho as fichas com o mesmo 1.º e último nome e um dado igual (email, telefone ou matrícula), ou com o mesmo email E telefone mesmo com outro nome. Nunca empresas, clientes Pro, emails genéricos (info@, reservas@…), dados em mais de 2 fichas nem NIF pessoais diferentes. Fica a ficha com mais reservas; cada junção aparece em Rever fichas → Juntas recentemente e pode ser separada. As dúvidas só vão à IA com \"IA: fichas de clientes duvidosas\" ligado.", defaultEnabled: true, superAdminOnly: true },
@@ -894,6 +945,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
+  { name: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", intervalMinutes: 1440, workflow: "tick" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
@@ -922,6 +974,19 @@ export function staleThresholdMinutes(intervalMinutes: number): number {
 }
 
 export type CronHealth = "ok" | "failed" | "stale" | "never" | "running" | "unscheduled" | "skipping";
+
+/**
+ * Trabalho RETIRADO (Jorge, 7 out 2026: o `multipark-db-sync`, retirado a
+ * 27 set, continuava a aparecer como "Falhou"): já não está em CRON_JOBS e não
+ * corre há mais de RETIRED_CRON_AFTER_DAYS dias. Sai da lista e dos alertas
+ * (o histórico em cron_runs fica). Um nome desconhecido que correu há pouco
+ * (ex.: corrida à mão) continua a aparecer. PURA.
+ */
+export const RETIRED_CRON_AFTER_DAYS = 7;
+export function isRetiredCron(isKnown: boolean, lastStartedAt: number | null, now: number): boolean {
+  if (isKnown) return false;
+  return lastStartedAt == null || now - lastStartedAt > RETIRED_CRON_AFTER_DAYS * 86_400_000;
+}
 
 export interface CronRunLite {
   startedAt: number;          // epoch ms

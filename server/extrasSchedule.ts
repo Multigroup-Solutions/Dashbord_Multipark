@@ -17,6 +17,12 @@
  * Tudo idempotente: propor duas vezes não duplica (as propostas antigas são
  * substituídas numa transação; o cron só propõe dias sem estado), confirmar
  * duas vezes não reenvia (deduplicação por versão).
+ *
+ * A mão humana manda (Jorge, 7 out 2026): o cron só faz a PRIMEIRA proposta
+ * de um dia/cidade intocado. Qualquer mudança de uma pessoa nos condutores
+ * desse dia marca-o "mexido à mão" (extras_dia_schedules.manualAt, 0565) e o
+ * cron nunca mais propõe nele; quem foi tirado à mão de um dia não volta a ser
+ * proposto para esse dia (nem pela proposta à mão, nem pelo "Preencher").
  */
 import { sql } from "drizzle-orm";
 import { getDb, logActivity } from "./db";
@@ -24,11 +30,17 @@ import { extractAffectedRows } from "./availabilityFormToken";
 import {
   CITY_LABELS_PT,
   addDaysIso,
-  availabilityWindow,
   canAutoConfirm,
   describeGap,
   explainProposal,
+  autoProposeBlockedReason,
+  MANUAL_DAY_REASON,
   lisbonNow,
+  marksManualDay,
+  removedByHandOut,
+  removedOutText,
+  type ManualTouch,
+  type ManualWhat,
   pendingScheduleNotifications,
   planSchedule,
   remainingNeed,
@@ -104,7 +116,8 @@ export async function loadScheduleSettings(): Promise<LoadedScheduleSettings> {
 // ─── Estado da escala por (dia, cidade) ─────────────────────────────────────
 
 export interface ScheduleState {
-  status: "proposing" | "proposed" | "confirmed";
+  /** 'hold' = sem proposta (só suspenso ou só mexido à mão). */
+  status: "proposing" | "proposed" | "confirmed" | "hold";
   holdAuto: boolean;
   proposedAt: string | null;
   proposedBy: string | null;
@@ -112,32 +125,72 @@ export interface ScheduleState {
   confirmedBy: string | null;
   gaps: Gap[];
   summary: string | null;
+  /** Última mudança feita à mão (null = intocado): com ela o cron já não mexe no dia. */
+  manual: ManualTouch | null;
 }
 
 export async function getScheduleState(date: string, city: string): Promise<ScheduleState | null> {
   const db = await getDb();
   if (!db) return null;
+  const cols = sql`s.status, s.holdAuto, DATE_FORMAT(s.proposedAt, '%Y-%m-%d %H:%i:%s') AS proposedAt, s.proposedBy,
+             DATE_FORMAT(s.confirmedAt, '%Y-%m-%d %H:%i:%s') AS confirmedAt, s.confirmedBy, s.gapsJson, s.summary`;
+  let res: unknown;
   try {
-    const res = await db.execute(sql`
-      SELECT status, holdAuto, DATE_FORMAT(proposedAt, '%Y-%m-%d %H:%i:%s') AS proposedAt, proposedBy,
-             DATE_FORMAT(confirmedAt, '%Y-%m-%d %H:%i:%s') AS confirmedAt, confirmedBy, gapsJson, summary
-        FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} LIMIT 1`);
-    const r = rowsOf(res)[0];
-    if (!r) return null;
-    let gaps: Gap[] = [];
-    try { gaps = r.gapsJson ? JSON.parse(String(r.gapsJson)) : []; } catch { gaps = []; }
-    return {
-      status: String(r.status) as ScheduleState["status"],
-      holdAuto: Number(r.holdAuto) === 1,
-      proposedAt: r.proposedAt ? String(r.proposedAt) : null,
-      proposedBy: r.proposedBy ? String(r.proposedBy) : null,
-      confirmedAt: r.confirmedAt ? String(r.confirmedAt) : null,
-      confirmedBy: r.confirmedBy ? String(r.confirmedBy) : null,
-      gaps: Array.isArray(gaps) ? gaps : [],
-      summary: r.summary ? String(r.summary) : null,
-    };
+    res = await db.execute(sql`
+      SELECT ${cols}, UNIX_TIMESTAMP(s.manualAt) AS manualAtUnix, s.manualById, s.manualWhat, u.name AS manualByName
+        FROM extras_dia_schedules s LEFT JOIN users u ON u.id = s.manualById
+       WHERE s.assignmentDate = ${date} AND s.city = ${city} LIMIT 1`);
   } catch {
-    return null; // tabela ainda não existe (migração 0115 por correr)
+    try {
+      // Sem as colunas da 0565 (ainda por aplicar): o estado de antes.
+      res = await db.execute(sql`SELECT ${cols} FROM extras_dia_schedules s WHERE s.assignmentDate = ${date} AND s.city = ${city} LIMIT 1`);
+    } catch {
+      return null; // tabela ainda não existe (migração 0115 por correr)
+    }
+  }
+  const r = rowsOf(res)[0];
+  if (!r) return null;
+  let gaps: Gap[] = [];
+  try { gaps = r.gapsJson ? JSON.parse(String(r.gapsJson)) : []; } catch { gaps = []; }
+  const manualAtUnix = r.manualAtUnix == null ? null : Number(r.manualAtUnix);
+  return {
+    status: String(r.status) as ScheduleState["status"],
+    holdAuto: Number(r.holdAuto) === 1,
+    proposedAt: r.proposedAt ? String(r.proposedAt) : null,
+    proposedBy: r.proposedBy ? String(r.proposedBy) : null,
+    confirmedAt: r.confirmedAt ? String(r.confirmedAt) : null,
+    confirmedBy: r.confirmedBy ? String(r.confirmedBy) : null,
+    gaps: Array.isArray(gaps) ? gaps : [],
+    summary: r.summary ? String(r.summary) : null,
+    manual: manualAtUnix != null && Number.isFinite(manualAtUnix) && manualAtUnix > 0
+      ? {
+        atUnix: manualAtUnix,
+        byId: r.manualById == null ? null : Number(r.manualById),
+        byName: r.manualByName ? String(r.manualByName) : null,
+        what: r.manualWhat ? String(r.manualWhat) : null,
+      }
+      : null,
+  };
+}
+
+/**
+ * Uma pessoa mexeu na escala de (dia, cidade): fica registado quem, quando e
+ * o quê, e a partir daí o cron nunca mais propõe nesse dia/cidade. Sem estado
+ * ainda, nasce 'hold' (sem proposta, sem suspensão). Nunca lança: a mudança da
+ * pessoa já está feita (e o cron também reconhece o dia pelas linhas postas
+ * à mão e pelo arquivo das tiradas).
+ */
+export async function markScheduleManual(date: string, city: string, userId: number | null, what: ManualWhat): Promise<void> {
+  if (!(SCHEDULE_CITIES as string[]).includes(city)) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.execute(sql`
+      INSERT INTO extras_dia_schedules (assignmentDate, city, status, holdAuto, manualAt, manualById, manualWhat)
+      VALUES (${date.slice(0, 10)}, ${city}, 'hold', 0, NOW(), ${userId}, ${what})
+      ON DUPLICATE KEY UPDATE manualAt = NOW(), manualById = VALUES(manualById), manualWhat = VALUES(manualWhat)`);
+  } catch (err: any) {
+    console.warn("[extras-schedule] marca 'mexido à mão' falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }
 
@@ -145,12 +198,13 @@ export async function getScheduleState(date: string, city: string): Promise<Sche
 export async function setScheduleHold(date: string, city: ScheduleCity, hold: boolean, userId: number | null): Promise<{ hold: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
-  // Sem estado ainda: 'hold' (só suspenso) — NÃO é uma proposta. Antes ficava
-  // 'proposed' sem proposta e o cron nunca mais propunha esse dia.
+  // Sem estado ainda: 'hold' (só suspenso) — NÃO é uma proposta.
   await db.execute(sql`
     INSERT INTO extras_dia_schedules (assignmentDate, city, status, holdAuto)
     VALUES (${date}, ${city}, 'hold', ${hold ? 1 : 0})
     ON DUPLICATE KEY UPDATE holdAuto = VALUES(holdAuto)`);
+  // Suspender (ou retomar) é mexer no dia: a proposta automática já não corre nele.
+  await markScheduleManual(date, city, userId, hold ? "suspendeu" : "retomou");
   await logActivity({
     userId: userId ?? 0,
     action: hold ? "extras_schedule_hold" : "extras_schedule_release",
@@ -219,17 +273,23 @@ async function loadHistory(ids: number[], date: string): Promise<{
   return out;
 }
 
+type DriverCandidateRow = Awaited<ReturnType<typeof import("./extrasDia").listDriverCandidates>>[number];
+
+/** Janelas do dia operacional (já calculadas em getAvailabilityForDay: lê D−1, D e D+1). */
+export const candidateWindows = (c: { availability?: { windows?: readonly { from: number; to: number }[] } | null }) => c.availability?.windows ?? [];
+
 /**
- * Extras disponíveis para o dia/cidade, com o que a ordenação precisa. Fora:
- * formação obrigatória por concluir, ficha de outra cidade ou SEM cidade, sem
- * disponibilidade, e quem não é extra (funcionários só à mão).
+ * Extras que PODEM entrar na escala do dia/cidade: disponíveis no dia
+ * operacional, extras (funcionários só à mão), da cidade da escala (sem cidade
+ * não) e com a formação obrigatória concluída. A mesma lista serve a proposta
+ * automática e o "disponíveis por escalar" do indicador de pessoal.
  */
-export async function loadScheduleCandidates(date: string, city: ScheduleCity): Promise<ScheduleCandidate[]> {
+export async function loadEligibleExtras(date: string, city: ScheduleCity): Promise<DriverCandidateRow[]> {
   const db = await getDb();
   if (!db) return [];
-  const { listDriverCandidates, DRIVER_LEVELS } = await import("./extrasDia");
+  const { listDriverCandidates } = await import("./extrasDia");
   const all = await listDriverCandidates(date);
-  const available = all.filter((c) => availabilityWindow(c.availability ?? null) != null);
+  const available = all.filter((c) => candidateWindows(c).length > 0);
   if (!available.length) return [];
 
   const { employeesMissingTraining } = await import("./trainingPaths");
@@ -239,13 +299,22 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
   const cityKey = city === "lisbon" ? "lisboa" : city;
   // Proposta automática: só EXTRAS e só da cidade da escala (Jorge, 2 out 2026:
   // funcionários só à mão; quem não tem cidade não se escala).
-  const pool = available.filter((c) => {
+  return available.filter((c) => {
     if (untrained.has(c.id)) return false;
     if ((c.position ?? "").toLowerCase() !== "extra") return false;
     return (cities.get(c.id)?.city ?? null) === cityKey;
   });
-  if (!pool.length) return [];
+}
 
+/**
+ * Extras disponíveis para o dia/cidade, com o que a ordenação precisa. Fora:
+ * formação obrigatória por concluir, ficha de outra cidade ou SEM cidade, sem
+ * disponibilidade, e quem não é extra (funcionários só à mão).
+ */
+export async function loadScheduleCandidates(date: string, city: ScheduleCity): Promise<ScheduleCandidate[]> {
+  const pool = await loadEligibleExtras(date, city);
+  if (!pool.length) return [];
+  const { DRIVER_LEVELS } = await import("./extrasDia");
   const { loadExtraRates, rateFor } = await import("./extraRates");
   const rates = await loadExtraRates();
   const hist = await loadHistory(pool.map((c) => c.id), date);
@@ -255,7 +324,7 @@ export async function loadScheduleCandidates(date: string, city: ScheduleCity): 
     level: c.suggestedLevel,
     levelLabel: DRIVER_LEVELS.find((l) => l.id === c.suggestedLevel)?.label ?? c.suggestedLevel,
     hourlyRate: rateFor(rates, c.suggestedLevel),
-    window: availabilityWindow(c.availability ?? null),
+    windows: candidateWindows(c),
     evalScore: hist.evalScore.get(c.id) ?? null,
     recentDays: hist.recentDays.get(c.id) ?? 0,
     noShows: hist.noShows.get(c.id) ?? 0,
@@ -278,10 +347,14 @@ export function forecastIncompleteReason(f: { bookingsTruncated?: boolean; booki
   return null;
 }
 
-/** Liberta a reserva do cron (um dia suspenso volta a 'hold' — a suspensão não se perde). */
+/**
+ * Liberta a reserva do cron. Só a reserva "limpa" (sem suspensão nem marca de
+ * mão) sai; um dia suspenso ou mexido à mão entretanto volta a 'hold' — nem a
+ * suspensão nem a marca se perdem.
+ */
 async function releaseAutoClaim(db: { execute: (q: any) => Promise<any> }, date: string, city: string): Promise<void> {
-  await db.execute(sql`DELETE FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 0`);
-  await db.execute(sql`UPDATE extras_dia_schedules SET status = 'hold' WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 1`);
+  await db.execute(sql`DELETE FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing' AND holdAuto = 0 AND manualAt IS NULL`);
+  await db.execute(sql`UPDATE extras_dia_schedules SET status = 'hold' WHERE assignmentDate = ${date} AND city = ${city} AND status = 'proposing'`);
 }
 
 export interface ProposeResult {
@@ -291,6 +364,39 @@ export interface ProposeResult {
   kept: number;
   gaps: Gap[];
   summary: string | null;
+  /** Tirados à mão deste dia que ficaram de fora da proposta. */
+  removedOut: number;
+}
+
+const skippedProposal = (reason: string): ProposeResult => ({ status: "skipped", reason, proposed: 0, kept: 0, gaps: [], summary: null, removedOut: 0 });
+
+/**
+ * Condutores tirados à mão deste dia (arquivo, 'removida'; TL fora). Nenhum
+ * automatismo os volta a propor para este dia. Lança se a leitura falhar —
+ * melhor não propor do que voltar a pôr quem foi tirado.
+ */
+export async function loadRemovedByHand(date: string): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const res = await db.execute(sql`
+    SELECT DISTINCT employeeId FROM extras_dia_assignments_removed
+     WHERE assignmentDate = ${date} AND removedReason = 'removida' AND isTeamLeader = 0 AND employeeId IS NOT NULL`);
+  return rowsOf(res).map((r) => Number(r.employeeId)).filter((id) => Number.isFinite(id) && id > 0);
+}
+
+/**
+ * Sinais de mão humana no dia/cidade que não dependem da marca da 0565 (o que
+ * foi feito antes dela): condutores postos/alterados à mão e tirados à mão.
+ */
+async function manualEvidence(db: { execute: (q: any) => Promise<any> }, date: string, city: string): Promise<{ manualRows: number; removedByHand: number }> {
+  const res = await db.execute(sql`
+    SELECT
+      (SELECT COUNT(*) FROM extras_dia_assignments
+        WHERE assignmentDate = ${date} AND city = ${city} AND isTeamLeader = 0 AND source = 'manual') AS manualRows,
+      (SELECT COUNT(*) FROM extras_dia_assignments_removed
+        WHERE assignmentDate = ${date} AND city = ${city} AND isTeamLeader = 0 AND removedReason = 'removida') AS removedByHand`);
+  const r = rowsOf(res)[0] ?? {};
+  return { manualRows: Number(r.manualRows ?? 0) || 0, removedByHand: Number(r.removedByHand ?? 0) || 0 };
 }
 
 type AssignmentRow = {
@@ -342,9 +448,11 @@ async function loadDayRows(date: string): Promise<AssignmentRow[]> {
 }
 
 /**
- * Proposta automática para (dia, cidade). `by: 'auto'` (cron) só propõe se o
- * dia ainda não tem estado; `by: 'manual'` refaz a proposta (substitui as
- * linhas `proposed` — nunca toca nas confirmadas nem no TL).
+ * Proposta automática para (dia, cidade). `by: 'auto'` (cron) só faz a
+ * PRIMEIRA proposta de um dia intocado (sem estado e sem mão humana);
+ * `by: 'manual'` refaz a proposta (substitui as linhas `proposed` que ela
+ * criou — nunca toca nas confirmadas, nas postas à mão nem no TL) e marca o
+ * dia como mexido à mão. Quem foi tirado à mão deste dia fica sempre de fora.
  */
 export async function proposeSchedule(input: { date: string; city: ScheduleCity; by: "auto" | "manual"; userId: number | null }): Promise<ProposeResult> {
   const db = await getDb();
@@ -352,16 +460,19 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
   const { date, city, by } = input;
 
   if (by === "auto") {
-    // Um dia só "suspenso" (hold, sem proposta) também se propõe; a suspensão
-    // continua (o cron não confirma nem envia).
+    // Mão humana manda: dia mexido à mão (ou já com proposta/escala/suspensão) → o cron não toca.
+    const [state, evidence] = await Promise.all([getScheduleState(date, city), manualEvidence(db, date, city)]);
+    const blocked = autoProposeBlockedReason({ state, ...evidence });
+    if (blocked) return skippedProposal(blocked);
+    // Reserva atómica: só quem INSERE o estado propõe. Antes era um INSERT …
+    // ON DUPLICATE KEY UPDATE: com o FOUND_ROWS do mysql2 (ligado por omissão)
+    // dava sempre 1 linha afetada, e o cron refazia a proposta a cada corrida —
+    // voltava a pôr quem tinha sido tirado e devolvia escalas confirmadas a
+    // "por confirmar". INSERT IGNORE num duplicado dá 0, com ou sem FOUND_ROWS.
     const claim = await db.execute(sql`
-      INSERT INTO extras_dia_schedules (assignmentDate, city, status, proposedBy, proposedAt)
-      VALUES (${date}, ${city}, 'proposing', 'auto', NOW())
-      ON DUPLICATE KEY UPDATE proposedBy = IF(status = 'hold', 'auto', proposedBy), proposedAt = IF(status = 'hold', NOW(), proposedAt),
-        status = IF(status = 'hold', 'proposing', status)`);
-    if (extractAffectedRows(claim) === 0) {
-      return { status: "skipped", reason: "já tem proposta ou escala", proposed: 0, kept: 0, gaps: [], summary: null };
-    }
+      INSERT IGNORE INTO extras_dia_schedules (assignmentDate, city, status, proposedBy, proposedAt)
+      VALUES (${date}, ${city}, 'proposing', 'auto', NOW())`);
+    if (extractAffectedRows(claim) === 0) return skippedProposal("já tem proposta ou escala");
   }
 
   try {
@@ -372,16 +483,19 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
     const incomplete = forecastIncompleteReason(forecast);
     if (incomplete && by === "auto") {
       await releaseAutoClaim(db, date, city);
-      return { status: "skipped", reason: incomplete, proposed: 0, kept: 0, gaps: [], summary: null };
+      return skippedProposal(incomplete);
     }
     const needed = forecast.hourly.map((h) => h.driversNeeded);
-    const dayRows = await loadDayRows(date);
+    const [dayRows, removedIds] = await Promise.all([loadDayRows(date), loadRemovedByHand(date)]);
     // Fica tudo o que a proposta não criou: confirmadas e as postas à mão (mesmo por confirmar).
     const kept = dayRows.filter((r) => r.city === city && r.isTeamLeader === 0 && !replacedByNewProposal(r, city));
     // Quem já está no dia (outra cidade, TL, confirmado ou posto à mão aqui) não entra outra vez.
-    const exclude = new Set(
+    const staying = new Set(
       dayRows.filter((r) => !replacedByNewProposal(r, city) && r.employeeId != null).map((r) => r.employeeId as number),
     );
+    // Quem foi tirado à mão deste dia também não (salvo se foi posto outra vez à mão — está em `staying`).
+    const removedOut = removedByHandOut(removedIds, staying);
+    const exclude = new Set([...Array.from(staying), ...removedOut]);
     const candidates = await loadScheduleCandidates(date, city);
     const plan = planSchedule({ needed, existing: kept, candidates, exclude });
 
@@ -393,14 +507,23 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
       picks: plan.picks.map((p) => ({ personName: p.personName, startHour: p.startHour, endHour: p.endHour, hourlyRate: p.hourlyRate })),
       keptCount: kept.length,
       gaps: plan.gaps,
+      removedOutCount: removedOut.length,
     });
     const summary = incomplete ? `⚠ ${incomplete[0].toUpperCase()}${incomplete.slice(1)}.\n${summaryBody}` : summaryBody;
 
+    let aborted: string | null = null;
     await db.transaction(async (tx) => {
       await tx.execute(sql`
         INSERT IGNORE INTO extras_dia_schedules (assignmentDate, city, status) VALUES (${date}, ${city}, 'proposing')`);
       // Serializa propostas concorrentes do mesmo dia/cidade.
-      await tx.execute(sql`SELECT assignmentDate FROM extras_dia_schedules WHERE assignmentDate = ${date} AND city = ${city} FOR UPDATE`);
+      const lock = rowsOf(await tx.execute(sql`
+        SELECT status, (manualAt IS NOT NULL) AS manual FROM extras_dia_schedules
+         WHERE assignmentDate = ${date} AND city = ${city} FOR UPDATE`))[0];
+      // O cron demorou a ler a previsão e entretanto uma pessoa mexeu no dia → desiste.
+      if (by === "auto" && lock && (Number(lock.manual) === 1 || String(lock.status) !== "proposing")) {
+        aborted = Number(lock.manual) === 1 ? MANUAL_DAY_REASON : "já tem proposta ou escala";
+        return;
+      }
       // Só as linhas da proposta anterior saem — para o arquivo, nunca apagadas de vez.
       await archiveAssignments(tx, sql`assignmentDate = ${date} AND city = ${city} AND status = 'proposed' AND isTeamLeader = 0 AND source = 'auto'`, "substituida", input.userId);
       for (const p of plan.picks) {
@@ -410,18 +533,25 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
           VALUES (${date}, ${city}, ${p.employeeId}, ${p.personName.slice(0, 128)}, ${p.level}, 0, ${p.shift}, ${p.startHour}, ${p.endHour},
                   'proposta automática', 'proposed', 1, ${p.reason.slice(0, 500)}, ${input.userId}, 'auto')`);
       }
+      // Refazer à mão é mexer no dia: a partir daqui o cron já não propõe nele.
+      const manualMark = by === "manual" ? sql`, manualAt = NOW(), manualById = ${input.userId}, manualWhat = ${"refez a proposta" satisfies ManualWhat}` : sql``;
       await tx.execute(sql`
         UPDATE extras_dia_schedules
            SET status = 'proposed', proposedAt = NOW(), proposedBy = ${by}, proposedById = ${input.userId},
-               gapsJson = ${JSON.stringify(plan.gaps)}, summary = ${summary.slice(0, 1000)}
+               gapsJson = ${JSON.stringify(plan.gaps)}, summary = ${summary.slice(0, 1000)}${manualMark}
          WHERE assignmentDate = ${date} AND city = ${city}`);
     });
+    if (aborted) {
+      await releaseAutoClaim(db, date, city);
+      return skippedProposal(aborted);
+    }
 
+    const outText = removedOutText(removedOut.length);
     await logActivity({
       userId: input.userId ?? 0,
       action: "extras_schedule_propose",
       entity: "extras_dia_schedules",
-      details: `${by === "auto" ? "Proposta automática (cron)" : "Proposta automática (manual)"} · ${date} · ${CITY_LABELS_PT[city]} · ${plan.picks.length} proposto(s), ${kept.length} já escalado(s)${plan.gaps.length ? ` · ${plan.gaps.map(describeGap).join("; ")}` : ""}`,
+      details: `${by === "auto" ? "Proposta automática (cron)" : "Proposta automática (manual)"} · ${date} · ${CITY_LABELS_PT[city]} · ${plan.picks.length} proposto(s), ${kept.length} já escalado(s)${outText ? ` · ${outText}` : ""}${plan.gaps.length ? ` · ${plan.gaps.map(describeGap).join("; ")}` : ""}`,
     });
 
     if (by === "auto" && plan.gaps.length) {
@@ -436,7 +566,7 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
         });
       } catch { /* aviso é best-effort */ }
     }
-    return { status: "proposed", proposed: plan.picks.length, kept: kept.length, gaps: plan.gaps, summary };
+    return { status: "proposed", proposed: plan.picks.length, kept: kept.length, gaps: plan.gaps, summary, removedOut: removedOut.length };
   } catch (err) {
     if (by === "auto") {
       // Liberta a reserva para a próxima corrida tentar outra vez.
@@ -493,6 +623,7 @@ export async function confirmSchedule(input: { date: string; city: ScheduleCity;
         VALUES (${date}, ${city}, 'confirmed', NOW(), 'manual', ${input.userId})
         ON DUPLICATE KEY UPDATE status = 'confirmed', confirmedAt = NOW(), confirmedBy = 'manual', confirmedById = VALUES(confirmedById)`);
     });
+    await markScheduleManual(date, city, input.userId, "confirmou");
   }
   if (confirmed > 0) import("./google/pendingSync").then((m) => m.scheduleGoogleShiftSync({ city, date })).catch(() => undefined);
   const notifications = await sendScheduleNotifications(date, city, { userId: input.userId, respectHold: false });
@@ -591,28 +722,35 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
 
-/** Email "estás escalado" a quem tem email na ficha (1 por pessoa e versão). */
+/**
+ * Email "Aviso de trabalho" (1 por pessoa e versão da linha). Vai para o email
+ * de trabalho ou, sem ele, para o pessoal (os extras usam o pessoal — antes
+ * ficavam "sem email na ficha"). `shift` limita a um turno ("Avisar este turno").
+ */
 export async function sendScheduleEmails(
   date: string,
   city: ScheduleCity,
   /** `employeeIds`: só estas pessoas (alternativa de um WhatsApp não entregue, 0375). */
-  opts: { respectHold?: boolean; employeeIds?: readonly number[] } = {},
+  opts: { respectHold?: boolean; employeeIds?: readonly number[]; shift?: "morning" | "night" | null } = {},
 ): Promise<NotifySummary["email"]> {
   const db = await getDb();
   const out = { sent: 0, failed: 0, noEmail: 0, skipped: 0 };
   if (!db) return out;
   if (opts.respectHold && (await heldCities(date)).has(city)) return out;
   const only = opts.employeeIds ? new Set(opts.employeeIds) : null;
-  const rows = (await loadDayRows(date)).filter((r) => r.city === city && (!only || (r.employeeId != null && only.has(r.employeeId))));
+  const rows = (await loadDayRows(date)).filter((r) =>
+    r.city === city && (!opts.shift || r.shift === opts.shift) && (!only || (r.employeeId != null && only.has(r.employeeId))));
   const log = await loadNotifyLog(rows.map((r) => r.id));
   const pending = pendingScheduleNotifications(rows, log, "email");
   out.skipped = rows.filter((r) => r.status === "confirmed" && r.employeeId != null).length - pending.length;
   if (!pending.length) return out;
 
   const empIds = Array.from(new Set(pending.map((r) => r.employeeId as number)));
-  const res = await db.execute(sql`SELECT id, fullName, email, position, isActive, noAutoEmail FROM employees WHERE id IN (${inList(empIds)})`);
+  const res = await db.execute(sql`SELECT id, fullName, email, personalEmail, position, isActive, noAutoEmail FROM employees WHERE id IN (${inList(empIds)})`);
+  const { noticeEmailAddress, noticeSpans, shiftNoticeEmailLines, shiftNoticeSubject } = await import("../shared/shiftNotice");
   const people = new Map(rowsOf(res).map((r) => [Number(r.id), {
-    fullName: String(r.fullName ?? ""), email: r.email ? String(r.email).trim() : "",
+    fullName: String(r.fullName ?? ""),
+    email: noticeEmailAddress({ email: r.email ? String(r.email) : null, personalEmail: r.personalEmail ? String(r.personalEmail) : null }) ?? "",
     // Só EXTRAS ativos recebem o email da escala (Jorge, 2 out 2026).
     extra: String(r.position ?? "") === "extra" && Number(r.isActive) === 1,
     noAutoEmail: Number(r.noAutoEmail ?? 0) === 1,
@@ -638,18 +776,21 @@ export async function sendScheduleEmails(
       out.skipped += claimed.length;
       continue;
     }
-    if (!p?.email || !/@/.test(p.email)) {
-      for (const a of claimed) await finishNotification(a, "scheduled", "email", "no_contact", "sem email na ficha");
+    if (!p?.email) {
+      for (const a of claimed) await finishNotification(a, "scheduled", "email", "no_contact", "sem email (de trabalho nem pessoal) na ficha");
       out.noEmail += claimed.length;
       continue;
     }
-    const text = scheduleMessageText({ date, city, spans: claimed.map((a) => ({ startHour: a.startHour, endHour: a.sentHomeHour ?? a.endHour })), meetingPoint: settings.meetingPoints[city] });
+    // Todas as horas confirmadas da pessoa nesta seleção (o mesmo texto da pré-visualização).
+    const spans = noticeSpans(rows.filter((a) => a.employeeId === empId && a.status === "confirmed"));
+    const text = scheduleMessageText({ date, city, spans, meetingPoint: settings.meetingPoints[city] });
     const first = p.fullName.split(/\s+/)[0] || "olá";
+    const lines = shiftNoticeEmailLines(first, text);
     const ok = await sendEmail({
       to: p.email,
-      subject: `Escala Multipark — ${text.split(" · ")[0]}`,
-      text: `Olá ${first},\n\nEstás escalado(a): ${text}.\n\nSe não puderes ir, avisa-nos o quanto antes (responde a este email ou pelo WhatsApp).\n\nObrigado,\nMultipark`,
-      html: `<p>Olá ${esc(first)},</p><p>Estás escalado(a): <strong>${esc(text)}</strong>.</p><p>Se não puderes ir, avisa-nos o quanto antes (responde a este email ou pelo WhatsApp).</p><p>Obrigado,<br/>Multipark</p>`,
+      subject: shiftNoticeSubject(date, spans),
+      text: lines.join("\n\n"),
+      html: lines.map((l) => `<p>${esc(l).replace(/\n/g, "<br/>").replace(esc(text), `<strong>${esc(text)}</strong>`)}</p>`).join(""),
       auto: { kind: "schedule_notice", employeeId: empId },
     } as any);
     for (const a of claimed) await finishNotification(a, "scheduled", "email", ok ? "sent" : "failed", ok ? null : "falhou o envio do email");
@@ -728,6 +869,9 @@ export async function removeAssignment(id: number, userId: number | null): Promi
   // Para o arquivo (linha inteira + quem + quando), nunca apagada de vez.
   await db.transaction(async (tx) => { await archiveAssignments(tx, sql`id = ${id}`, "removida", userId); });
   out.removed = true;
+  // Tirar um condutor é mexer no dia: o cron já não propõe nele e esta pessoa
+  // não volta a ser proposta para este dia (loadRemovedByHand).
+  if (marksManualDay(row)) await markScheduleManual(row.assignmentDate.slice(0, 10), row.city, userId, "tirou");
   import("./google/pendingSync")
     .then((m) => m.scheduleGoogleShiftSync({ city: row.city, date: row.assignmentDate.slice(0, 10), employeeIds: row.employeeId != null ? [row.employeeId] : [] }))
     .catch(() => undefined);
@@ -748,7 +892,7 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
   const out: RemoveResult["notified"] = { whatsapp: null, email: null };
   if (!db || row.employeeId == null) return out;
   const text = scheduleMessageText({ date: row.assignmentDate, city: row.city, spans: [{ startHour: row.startHour, endHour: row.endHour }], meetingPoint: null });
-  const empRes = await db.execute(sql`SELECT fullName, email, position, noAutoWhatsapp, noAutoEmail FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
+  const empRes = await db.execute(sql`SELECT fullName, email, personalEmail, position, noAutoWhatsapp, noAutoEmail FROM employees WHERE id = ${row.employeeId} LIMIT 1`);
   const emp = rowsOf(empRes)[0];
   // Funcionário posto à mão na escala: nunca foi avisado, também não é avisado da saída.
   if (String(emp?.position ?? "") !== "extra") return out;
@@ -779,7 +923,9 @@ async function notifyRemoval(row: AssignmentRow, userId: number | null): Promise
     await finishNotification(row, "removed", "whatsapp", status, detail);
     out.whatsapp = status;
   }
-  const email = emp?.email ? String(emp.email).trim() : "";
+  // Trabalho ou, sem ele, o pessoal (o mesmo do aviso de trabalho).
+  const { noticeEmailAddress } = await import("../shared/shiftNotice");
+  const email = noticeEmailAddress({ email: emp?.email ? String(emp.email) : null, personalEmail: emp?.personalEmail ? String(emp.personalEmail) : null }) ?? "";
   if ((await emailConfigured()) && (await claimNotification(row, "removed", "email"))) {
     if (Number(emp?.noAutoEmail ?? 0) === 1) {
       const { NO_AUTO_EMAIL_ERROR } = await import("../shared/contactPrefs");
@@ -896,7 +1042,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     proposedCount: mine.filter((r) => r.status === "proposed").length,
     confirmedCount: mine.filter((r) => r.status !== "proposed").length,
     noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
-    availableCount: cands.filter((c) => availabilityWindow(c.availability ?? null) != null).length,
+    availableCount: cands.filter((c) => candidateWindows(c).length > 0).length,
     notifications,
     settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead },
   };
@@ -917,7 +1063,8 @@ export interface ScheduleCronReport {
 /**
  * /api/cron/extras-schedule (de 30 em 30 min, 08h–23h Lisboa):
  *  - a partir de `extras.autoProposeAt`: propõe amanhã … +N para cada cidade
- *    (só dias sem proposta/escala);
+ *    (só a PRIMEIRA proposta de dias intocados — nunca num dia com proposta,
+ *    escala, suspensão ou mexido à mão);
  *  - a partir de `extras.autoConfirmAt` (se `extras.autoConfirm`): confirma a
  *    proposta de amanhã não suspensa e avisa;
  *  - escalas já confirmadas e não suspensas de hoje em diante: envia avisos

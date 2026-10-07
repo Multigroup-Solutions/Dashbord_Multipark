@@ -315,11 +315,16 @@ app.get("/api/cron/cash-external", async (req, res) => {
 
 // "Pressão" do Extras-Dia (desde extras.timesSince, acumula; BD Multipark → ops_pressure_stats).
 // ?cursor=… retoma no grupo seguinte (vem na resposta quando done:false).
+// 47c: ?reprocessar=AAAA-MM-DD (ou AAAA-MM-DD..AAAA-MM-DD) volta a ler da
+// Multipark esses dias já guardados (o pedido segue no cursor das chamadas seguintes).
 app.get("/api/cron/extras-pressure", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { extrasPressureCron, sendCronRun } = await import("../cronJobs");
-  const cursor = typeof req.query?.cursor === "string" ? req.query.cursor.slice(0, 200) : null;
-  sendCronRun(res, await extrasPressureCron({ deadlineAt: manualDeadline(), cursor }));
+  const { parseReprocessParam } = await import("../extrasPressure");
+  const cursor = typeof req.query?.cursor === "string" ? req.query.cursor.slice(0, 400) : null;
+  const reprocess = typeof req.query?.reprocessar === "string" ? parseReprocessParam(req.query.reprocessar, new Date().toISOString().slice(0, 19).replace("T", " ")) : null;
+  if (typeof req.query?.reprocessar === "string" && !reprocess) return res.status(400).json({ error: "reprocessar: usar AAAA-MM-DD ou AAAA-MM-DD..AAAA-MM-DD" });
+  sendCronRun(res, await extrasPressureCron({ deadlineAt: manualDeadline(), cursor, reprocess }));
 });
 
 // Manutenção diária + recolha GPS FINAL do Zello (D-2 e dias
@@ -345,6 +350,15 @@ app.get("/api/cron/rh-docs-weekly", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { rhDocsWeeklyCron, sendCronRun } = await import("../cronJobs");
   sendCronRun(res, await rhDocsWeeklyCron());
+});
+
+// RH — pedir os documentos em falta aos extras (tick: segunda a partir das 10:00;
+// interruptor EXTRAS_DOCS_REQUEST). ?cursor=N retoma depois da ficha N.
+app.get("/api/cron/rh-docs-request", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { rhDocsRequestCron, sendCronRun } = await import("../cronJobs");
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : null;
+  sendCronRun(res, await rhDocsRequestCron({ deadlineAt: manualDeadline(), cursor }));
 });
 
 // Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7

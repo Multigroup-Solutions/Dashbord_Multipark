@@ -822,6 +822,32 @@ export interface UpsertAssignmentInput {
   /** Omissão: 'proposed' se o dia/cidade tem uma proposta por confirmar; senão 'confirmed'. */
   status?: "proposed" | "confirmed";
   proposalReason?: string | null;
+  /** O que fica no selo "Mexido à mão" (omissão: "pôs" numa linha nova, "alterou" numa edição). */
+  manualWhat?: import("../shared/extrasSchedule").ManualWhat;
+}
+
+/**
+ * Mudança à mão nos condutores (pôr, alterar, mandar para casa, preencher) →
+ * o dia/cidade fica "mexido à mão" e o cron já não propõe nele. O TL não conta
+ * (a proposta nunca mexe nele). Nunca lança.
+ */
+async function markManualChange(
+  input: UpsertAssignmentInput,
+  isTL: boolean,
+  days: Array<{ date: string; city: string }>,
+  what: import("../shared/extrasSchedule").ManualWhat,
+): Promise<void> {
+  if ((input.source ?? "manual") !== "manual") return;
+  const { marksManualDay } = await import("../shared/extrasSchedule");
+  if (!marksManualDay({ isTeamLeader: isTL })) return;
+  const { markScheduleManual } = await import("./extrasSchedule");
+  const seen = new Set<string>();
+  for (const d of days) {
+    const key = `${d.date.slice(0, 10)}|${d.city}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await markScheduleManual(d.date, d.city, input.updatedById ?? input.createdById ?? null, what);
+  }
 }
 
 /** A versão sobe quando muda o que foi avisado (pessoa, dia, turno ou horas). PURA. */
@@ -917,6 +943,10 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
       .where(eq(extrasDiaAssignments.id, input.id))
       .limit(1);
     if (!row) return null;
+    await markManualChange(input, isTL, [
+      { date: String(row.assignmentDate), city: String(row.city) },
+      { date: String(prev.assignmentDate), city: String(prev.city) },
+    ], input.manualWhat ?? (prev.sentHomeHour == null && payload.sentHomeHour != null ? "mandou para casa" : "alterou"));
     googleShiftChanged({ city: row.city, date: String(row.assignmentDate), employeeIds: [prev.employeeId, row.employeeId] });
     const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
     return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
@@ -939,6 +969,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     .where(eq(extrasDiaAssignments.id, newId))
     .limit(1);
   if (!row) return null;
+  await markManualChange(input, isTL, [{ date: String(row.assignmentDate), city: String(row.city) }], input.manualWhat ?? "pôs");
   if (status === "confirmed") googleShiftChanged({ city: row.city, date: String(row.assignmentDate), employeeIds: [row.employeeId] });
   const tlCost = row.isTeamLeader === 1 ? await getEmployeeDailyCost(row.employeeId) : undefined;
   return rowToAssignment(row, tlCost, undefined, undefined, undefined, await loadExtraRates());
@@ -1017,8 +1048,11 @@ export interface DriverCandidate {
   /** 44a: tem conta no dashboard (a permissão de TL é da conta). */
   hasAccount: boolean;
   // Preenchido quando se passa uma data: disponibilidade declarada pelo extra
-  // para esse dia (alimenta a escala do Extras-Dia). null = não aplicável.
+  // para esse dia OPERACIONAL (03h → 03h; `windows` já inclui a madrugada
+  // marcada no dia seguinte) — alimenta a escala do Extras-Dia. null = não aplicável.
   availability?: import("./extrasAvailability").DayAvailability | null;
+  /** Jorge, 7 out 2026: estado da carta (etiqueta no seletor + aviso ao escalar; nunca bloqueia). */
+  licence?: import("../shared/drivingLicence").LicenceStatus;
 }
 
 const POSITION_TO_LEVEL: Record<string, DriverLevelId> = {
@@ -1077,8 +1111,10 @@ export async function listDriverCandidates(date?: string, opts?: { forTeamLeader
     const { getAvailabilityForDay } = await import("./extrasAvailability");
     availMap = await getAvailabilityForDay(date);
   }
+  const licences = await (await import("./rhDocuments")).licenceStatusMap(rows.map(r => r.id));
 
   return rows.map(r => ({
+    licence: licences.get(r.id),
     id: r.id,
     fullName: r.fullName,
     position: r.position,
@@ -1086,7 +1122,7 @@ export async function listDriverCandidates(date?: string, opts?: { forTeamLeader
     suggestedLevel: suggestLevel(r.position, r.extraLevel),
     photoUrl: r.photoUrl ?? null,
     hasAccount: r.userId != null,
-    availability: availMap ? (availMap.get(r.id) ?? { status: "no_response", morning: false, night: false, fromHour: null, toHour: null, note: null }) : null,
+    availability: availMap ? (availMap.get(r.id) ?? { status: "no_response", morning: false, night: false, fromHour: null, toHour: null, note: null, windows: [], hours: "" }) : null,
   }));
 }
 

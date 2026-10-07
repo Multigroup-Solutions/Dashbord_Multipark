@@ -137,7 +137,7 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "servicos", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, dedupeMinutes: 12 * 60 }),
   K({ kind: "extras_gap", group: "operacoes", label: "Faltam condutores", description: "Horas sem condutores suficientes na escala (proposta e véspera).",
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
-  K({ kind: "extras_schedule_reply", group: "operacoes", label: "Respostas ao aviso de escala", description: "Extra que não pode ir ao turno ou resposta por rever.",
+  K({ kind: "extras_schedule_reply", group: "operacoes", label: "Respostas ao aviso de escala", description: "Extra que não pode ir ao turno, pede para alterar o turno ou resposta por rever.",
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "handover", group: "operacoes", label: "A tua passagem de turno", description: "Passagem entregue para ti (pede \"Recebi\") e lembretes do teu turno.",
     module: "passagem_turno", action: "view", roles: [], cityScoped: true, personal: true, mandatory: true, channels: IN_APP }),
@@ -169,6 +169,9 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "rh_bank_change", group: "pessoas", label: "IBAN por aprovar", description: "Alguém pediu para mudar o IBAN de uma ficha da tua cidade — confirma com o comprovativo e aprova ou recusa na ficha. Só chega com \"Aviso dos pedidos de IBAN\" ligado nas Definições.",
     module: "rh", action: "edit", roles: ["backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "my_docs_missing", group: "pessoas", label: "Os teus documentos em falta", description: "Documentos obrigatórios que ainda tens de carregar na tua ficha.",
+    module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
+  // Jorge (7 out 2026): o RH recusou um documento que a pessoa entregou — vai o motivo.
+  K({ kind: "my_doc_rejected", group: "pessoas", label: "Documento recusado", description: "O RH recusou um documento que entregaste (com o motivo) — carrega-o de novo na tua ficha.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "driver_application", group: "pessoas", label: "Candidaturas", description: "Candidaturas novas \"Be a Driver\" da tua cidade.",
     module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),

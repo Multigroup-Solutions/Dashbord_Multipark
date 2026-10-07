@@ -321,6 +321,8 @@ export interface ReserveRow {
   /** 0375: língua e categoria do template enviado. */
   language?: string | null;
   category?: string | null;
+  /** 0550: cidade do registo de templates dos motoristas (LISBOA/PORTO). */
+  city?: string | null;
   /** 0375: JSON para a nova tentativa de uma mensagem de equipa (ver whatsappFailurePolicy). */
   sendPayload?: string | null;
 }
@@ -350,6 +352,7 @@ export async function reserveOutboundMessage(db: DbLike, row: ReserveRow): Promi
       clientRequestId: row.clientRequestId ?? null,
       language: row.language ?? null,
       category: row.category ?? null,
+      city: row.city ?? null,
       sendPayload: row.sendPayload ?? null,
       waTimestamp: now,
     });
@@ -366,7 +369,7 @@ export async function reserveOutboundMessage(db: DbLike, row: ReserveRow): Promi
       // Falhou de certeza → este pedido fica com a linha (só um ganha a corrida).
       const upd = await db
         .update(whatsappMessages)
-        .set({ status: "pending", errorDetail: null, type: row.type, body: row.body, templateName: row.templateName ?? null, broadcastId: row.broadcastId ?? null, sentById: row.sentById ?? null, waTimestamp: now })
+        .set({ status: "pending", errorDetail: null, type: row.type, body: row.body, templateName: row.templateName ?? null, city: row.city ?? null, broadcastId: row.broadcastId ?? null, sentById: row.sentById ?? null, waTimestamp: now })
         .where(and(eq(whatsappMessages.id, existing.id), eq(whatsappMessages.status, "failed")));
       if (Number((upd as any)?.[0]?.affectedRows ?? 0) === 1) return { reserved: true, id: existing.id };
       return { reserved: false, existing: { ...existing, status: "pending" } };

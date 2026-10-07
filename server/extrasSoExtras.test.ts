@@ -43,7 +43,8 @@ describe("Pedidos e avisos só a extras", () => {
     const wa = fnBody("server/extrasAutomation.ts", "export async function notifyAssignments", 6000);
     expect(wa).toContain("const extrasSet = await extraIdsAmong(Array.from(byEmp.keys()));");
     expect(wa).toContain('if (!extrasSet.has(empId)) outcome.set(empId, { status: "no_contact", error: NOT_EXTRA_NO_NOTICE });');
-    expect(wa).toContain("employeeIds: toNotify,");
+    // Por cidade do turno (2026-10-07): só os extras (`toNotify`) entram no mapa de cidades.
+    expect(wa).toContain("for (const empId of toNotify) {");
     const em = fnBody("server/extrasSchedule.ts", "export async function sendScheduleEmails", 3000);
     expect(em).toContain('extra: String(r.position ?? "") === "extra" && Number(r.isActive) === 1,');
     expect(em).toContain('finishNotification(a, "scheduled", "email", "no_contact", NOT_EXTRA_NO_NOTICE)');
@@ -53,7 +54,9 @@ describe("Pedidos e avisos só a extras", () => {
 
 describe("Escala: sem cidade não; funcionários só à mão", () => {
   it("proposta automática e 'pedir a quem não respondeu': só extras da cidade (sem cidade fica de fora)", () => {
-    const cands = fnBody("server/extrasSchedule.ts", "export async function loadScheduleCandidates", 1800);
+    // (a escolha de quem pode entrar passou para loadEligibleExtras — a mesma lista do indicador de pessoal, pedido 7)
+    const cands = fnBody("server/extrasSchedule.ts", "export async function loadEligibleExtras", 1800);
+    expect(fnBody("server/extrasSchedule.ts", "export async function loadScheduleCandidates", 400)).toContain("await loadEligibleExtras(date, city)");
     expect(cands).toContain('if ((c.position ?? "").toLowerCase() !== "extra") return false;');
     expect(cands).toContain("return (cities.get(c.id)?.city ?? null) === cityKey;");
     expect(fnBody("server/extrasSchedule.ts", "export async function noAnswerTargets", 1200)).toContain("return noAnswer.filter((c) => cities.get(c.id)?.city === cityKey).map((c) => c.id);");

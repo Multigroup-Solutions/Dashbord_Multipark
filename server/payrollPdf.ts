@@ -201,6 +201,15 @@ export async function generatePayrollPdf(year: number, month: number): Promise<B
     });
     y += 30;
 
+    // Terminal (aeroporto): só quando há horas de terminal no mês (já incluídas na coluna "Extra").
+    const terminalHoursTotal = payroll.reduce((s, r) => s + (r.terminalHours ?? 0), 0);
+    if (terminalHoursTotal > 0) {
+      const terminalPayTotal = payroll.reduce((s, r) => s + (r.terminalPayment ?? 0), 0);
+      doc.fontSize(8).font("Helvetica").fillColor("#555")
+        .text(`Horas terminal (aeroporto, pagas ao nível seguinte): ${fmt(terminalHoursTotal)}h — ${fmt(terminalPayTotal)}€, já incluídas na coluna "Extra".`, startX, y, { width: pageW });
+      y += 16;
+    }
+
     // ─── FOOTER ─────────────────────────────────────────────────────────
     doc.fontSize(8).font("Helvetica").fillColor("#999")
       .text(`Dashboard Multipark | ${payroll.length} colaboradores | ${MONTH_NAMES[month - 1]} ${year}`, startX, y, { align: "center", width: pageW });

@@ -84,8 +84,11 @@ function inScope(v: RhViewer, e: EmployeeRef): boolean {
 
 /** O centro de custos está no âmbito de quem vê? PURA. */
 export function inScopeProject(v: RhViewer, projectId: number | null | undefined): boolean {
-  if (projectId == null) return false;
+  // Jorge (7 out 2026): quem trata do recrutamento e das fichas sem cidade é
+  // uma supervisora SEM cidade (todas as cidades). Quem vê todas as cidades vê
+  // também as fichas sem cidade; o supervisor de UMA cidade continua sem elas.
   if (v.scopeAll) return true;
+  if (projectId == null) return false;
   return (v.scopeProjectIds ?? []).includes(projectId);
 }
 
@@ -249,10 +252,103 @@ export function canViewDocuments(v: RhViewer, e: EmployeeRef): boolean {
   return canEditPersonal(v, e);
 }
 
-/** Pode apagar um documento? admin+ (não protegido), ou quem o carregou e ainda pode mexer na ficha. */
-export function canDeleteDocument(v: RhViewer, e: EmployeeRef, uploadedById: number | null | undefined): boolean {
-  if (canEditContract(v, e)) return true;
+/**
+ * Jorge (7 out 2026): quem VALIDA/RECUSA os documentos e a carta desta ficha
+ * — o RH dela: front office / back office / admin+ (isRhFor) e quem a gere
+ * (supervisor da cidade, back office, admin — canManageEmployee). NUNCA na
+ * própria ficha (nem o super admin: ninguém valida os seus papéis). O team
+ * leader carrega, mas não valida. PURA.
+ */
+export function canValidateDocuments(v: RhViewer, e: EmployeeRef): boolean {
+  if (isOwn(v, e.id)) return false;
+  return isRhFor(v, e) || canManageEmployee(v, e);
+}
+
+/**
+ * Pauta do Rafael (7 out 2026): quem PEDE os documentos em falta a um extra
+ * (WhatsApp/email, na ficha ou em grupo na lista) — quem os valida
+ * (canValidateDocuments: o RH da ficha, nunca a própria) e só a extras. O
+ * âmbito de cidade do pedido aplica-se à parte (assertEmployeeAccess / lista
+ * filtrada pelas cidades). PURA.
+ */
+export function canRequestDocuments(v: RhViewer, e: EmployeeRef): boolean {
+  return e.position === "extra" && canValidateDocuments(v, e);
+}
+
+/**
+ * Envio em grupo (lista do RH): só as fichas no âmbito de cidade do pedido
+ * (`scopedIds` undefined = todas as cidades; uma ficha sem centro só entra
+ * para quem vê todas) e a quem quem pede pode pedir documentos. PURA.
+ */
+export function docsRequestableRows<T extends { id: number; projectId: number | null; accountRole: string | null; position: string | null }>(
+  v: RhViewer,
+  rows: readonly T[],
+  scopedIds: readonly number[] | undefined,
+): T[] {
+  return rows.filter((r) =>
+    (scopedIds === undefined || (r.projectId != null && scopedIds.includes(r.projectId)))
+    && canRequestDocuments(v, { id: r.id, projectId: r.projectId, role: r.accountRole, position: r.position }));
+}
+
+/** Estado com que entra um ficheiro novo: o que o RH carrega já vem validado; o resto fica pendente. PURA. */
+export function initialDocumentStatus(v: RhViewer, e: EmployeeRef): "pending" | "validated" {
+  return canValidateDocuments(v, e) ? "validated" : "pending";
+}
+
+/**
+ * Jorge (7 out 2026): a pessoa entrega os seus documentos a 1.ª vez e pode
+ * voltar a entregar enquanto estão pendentes ou depois de recusados — NUNCA
+ * depois de validados (só o RH substitui). Vale também para quem carrega por
+ * ela sem ser RH (team leader). "Outros" não tranca (são documentos soltos).
+ * `activeStatuses` = estados dos ficheiros ATIVOS desse tipo. Erro (PT-PT) ou null. PURA.
+ */
+export function documentUploadError(v: RhViewer, e: EmployeeRef, docType: string, activeStatuses: readonly string[]): string | null {
+  if (canValidateDocuments(v, e)) return null;
+  if (docType === "other") return null;
+  if (!activeStatuses.includes("validated")) return null;
+  return isOwn(v, e.id)
+    ? "Este documento já foi validado pelo RH e já não o podes substituir. Se mudou (ex.: renovaste-o), pede ao RH para o trocar."
+    : "Este documento já foi validado pelo RH: só o RH o substitui.";
+}
+
+/**
+ * Pode arquivar ("apagar") um documento? Admin+ (não protegido) e o RH da
+ * ficha: sempre (substituir = arquivar). Quem o carregou e ainda mexe na
+ * ficha: só enquanto NÃO está validado. PURA.
+ */
+export function canDeleteDocument(v: RhViewer, e: EmployeeRef, uploadedById: number | null | undefined, status?: string | null): boolean {
+  if (canEditContract(v, e) || canValidateDocuments(v, e)) return true;
+  if (status === "validated") return false;
   return uploadedById != null && uploadedById === v.id && canEditPersonal(v, e);
+}
+
+/**
+ * Jorge (7 out 2026): notas internas — team leader e acima, no âmbito de cada
+ * um (o mesmo de "ver a ficha": TL só quem está abaixo no seu centro,
+ * supervisor a cidade, nacionais e admin tudo), nunca fichas de quem está
+ * acima (admin/super admin protegidos) e NUNCA a própria ficha. PURA.
+ */
+export function canViewInternalNotes(v: RhViewer, e: EmployeeRef): boolean {
+  if (isOwn(v, e.id)) return false;
+  if (rank(v.role) < RANK.team_leader) return false;
+  if (isProtectedTarget(v, e)) return false;
+  return canViewEmployee(v, e);
+}
+/** Escrever = ler (quem lê as notas também as escreve). PURA. */
+export const canWriteInternalNotes = canViewInternalNotes;
+
+/**
+ * Editar/arquivar uma nota: o autor nas primeiras 24 h, ou um administrador
+ * do RH (admin+) — sempre com acesso às notas desta ficha. PURA.
+ */
+export function canEditInternalNote(
+  v: RhViewer, e: EmployeeRef,
+  note: { authorId: number; createdAtMs: number },
+  nowMs: number, windowMs = 24 * 60 * 60 * 1000,
+): boolean {
+  if (!canViewInternalNotes(v, e)) return false;
+  if (isRhAdmin(v)) return true;
+  return note.authorId === v.id && nowMs - note.createdAtMs >= 0 && nowMs - note.createdAtMs <= windowMs;
 }
 
 /** Pode ver horário e registos de ponto? quem vê documentos, ou team_leader
@@ -337,6 +433,10 @@ export function employeeAccess(v: RhViewer, e: EmployeeRef) {
     canChangeIban: canChangeIbanDirectly(v, e),
     /** D49: aprova/recusa pedidos de IBAN desta ficha. */
     canApproveIban: canApproveIbanRequests(v, e),
+    /** Jorge, 7 out 2026: valida/recusa os documentos e a carta desta ficha. */
+    canValidateDocuments: canValidateDocuments(v, e),
+    /** Jorge, 7 out 2026: lê e escreve as notas internas (nunca a própria ficha). */
+    canViewNotes: canViewInternalNotes(v, e),
   };
 }
 export type EmployeeAccess = ReturnType<typeof employeeAccess>;

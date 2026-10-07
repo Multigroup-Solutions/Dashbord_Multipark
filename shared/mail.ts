@@ -194,6 +194,7 @@ export const AUTO_MAIL_KIND_LABELS: Record<string, string> = {
   schedule_notice: "Aviso de escala",
   schedule_cancel: "Turno cancelado",
   training_reminder: "Lembrete de formação",
+  docs_request: "Pedido de documentos em falta",
   task_notice: "Aviso de tarefa",
   handover: "Passagem de turno",
   report: "Relatório",
@@ -923,9 +924,10 @@ export const GOOGLE_FEATURES_ENABLED: readonly GoogleFeature[] = ["gmail", "cale
 export const GOOGLE_FEATURE_SCOPES: Record<GoogleFeature, readonly string[]> = {
   gmail: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
   // Calendário: eventos (turnos, prazos, reuniões com Meet), o calendário
-  // secundário "Multipark" criado pela app, a lista de calendários (para o
-  // reencontrar) e só a disponibilidade (livre/ocupado) — nunca o conteúdo
-  // dos eventos pessoais.
+  // secundário "Multipark" criado pela app, a lista de calendários e a
+  // disponibilidade (livre/ocupado). Desde o lote 45e (7 out 2026) os eventos
+  // também se leem para a página Calendário da PRÓPRIA pessoa (só ela vê os
+  // seus; nada fica guardado no dashboard). Sem âmbitos novos.
   calendar: [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.app.created",

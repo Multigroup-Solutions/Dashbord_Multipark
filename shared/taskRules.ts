@@ -129,7 +129,7 @@ export function teamTaskAccess(
 // ─── Tarefas automáticas (geradas pelo sistema) ─────────────────────────────
 
 /** Origens das tarefas que o sistema cria sozinho (o "criador" é o utilizador de sistema). */
-export const AUTOMATIC_TASK_SOURCES = ["availability", "template", "service", "rh"] as const;
+export const AUTOMATIC_TASK_SOURCES = ["availability", "template", "service", "rh", "lead"] as const;
 
 export function isAutomaticTask(t: { sourceModule?: string | null }): boolean {
   return (AUTOMATIC_TASK_SOURCES as readonly string[]).includes(String(t.sourceModule ?? ""));
@@ -183,10 +183,12 @@ export function taskUpdateSideEffects(
 
 // ─── Origem (link para o registo) ───────────────────────────────────────────
 
-export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template", "google_tasks", "service", "rh"] as const;
+export const TASK_SOURCE_MODULES = ["manual", "availability", "complaint", "incident", "lost_found", "template", "google_tasks", "service", "rh", "lead"] as const;
 export type TaskSourceModule = (typeof TASK_SOURCE_MODULES)[number];
 export const TASK_SOURCE_LABELS: Record<TaskSourceModule, string> = {
   manual: "Manual", availability: "Disponibilidade", complaint: "Reclamação", incident: "Ocorrência", lost_found: "Perdidos e achados", template: "Checklist", google_tasks: "Google Tarefas", service: "Serviço da reserva", rh: "Ficha (RH)",
+  // 0545 (Jorge, 7 out 2026): uma tarefa por candidatura nova (shared/leadTasks.ts).
+  lead: "Candidatura de condutor",
 };
 
 /** Link da origem (null quando não há página própria). */
@@ -207,6 +209,8 @@ export function taskSourceLink(module: string | null | undefined, id: number | n
       const m = /^svc:([^:]+):/.exec(key ?? "");
       return m ? `/reserva/${encodeURIComponent(m[1])}` : "/servicos";
     }
+    // Candidatura de condutor (sourceKey "lead:<id>") → o lead nos Leads de extras.
+    case "lead": return id ? `/extras-leads?lead=${id}` : "/extras-leads";
     default: return null;
   }
 }
@@ -311,6 +315,27 @@ export function templateOccurrencesFor(templates: TaskTemplateLike[], day: strin
     out.push({ templateId: t.id, date: day, shift, dueAtMs: templateDueAtMs(day, shift, t.dueHour), key });
   }
   return out;
+}
+
+/**
+ * "Gerar hoje" nas Checklists (Jorge, 7 out 2026: "aparece acesso negado para
+ * alguns users"): quem GERE as checklists (`tarefas:manage`, com as exceções
+ * por pessoa) — supervisor na sua cidade, front/back office, admin+. Team
+ * leaders não. O MESMO predicado no botão e no servidor (antes o servidor
+ * pedia ainda o papel admin e recusava supervisores e o front/back office).
+ */
+export function canGenerateChecklists(user: TaskUserLike): boolean {
+  return seesBeyondOwn(user, "tarefas") && can(user, "tarefas", "manage");
+}
+
+/**
+ * Modelos que quem pede pode gerar: com o âmbito de cidades (`scope`, ids dos
+ * projetos) só os modelos dessas cidades — os sem cidade são de todas e ficam
+ * para quem vê todas as cidades (`scope` undefined). PURA.
+ */
+export function templatesInScope<T extends { cityProjectId: number | null }>(templates: readonly T[], scope: readonly number[] | undefined): T[] {
+  if (scope === undefined) return [...templates];
+  return templates.filter((t) => t.cityProjectId != null && scope.includes(t.cityProjectId));
 }
 
 /** Dia operacional de Lisboa (antes das 03h ainda conta o dia anterior). */

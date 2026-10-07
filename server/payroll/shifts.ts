@@ -17,6 +17,8 @@ export interface TimeRecordLike {
   hoursWorked?: string | number | null;
   notes?: string | null;
   reviewStatus?: "ok" | "suspicious" | "approved" | "rejected" | null;
+  /** 0555 — terminal (aeroporto): na saída é o estado do troço (shared/pontoTerminal.ts) */
+  terminalStatus?: string | null;
 }
 
 export type ShiftStatus = "ok" | "open" | "suspicious" | "approved" | "rejected";
@@ -33,6 +35,8 @@ export interface Shift {
   split: { normal: number; night: number; weekend: number };
   daysTouched: string[];               // dias de calendário abrangidos (Lisboa)
   notes: string | null;
+  /** estado de terminal do troço (o da SAÍDA); null = normal ou aberto */
+  terminalStatus?: string | null;
 }
 
 const NIGHT_START = 22, NIGHT_END = 7;
@@ -123,6 +127,7 @@ export function pairShifts(records: TimeRecordLike[]): { shifts: Shift[]; orphan
       inId: open.id, outId: r.id, inAt: open.recordedAt, outAt: r.recordedAt, hours: Math.round(hours * 100) / 100,
       status: statusOf(open, r), day, split: { normal: sp.normal, night: sp.night, weekend: sp.weekend }, daysTouched: sp.days,
       notes: [open.notes, r.notes].filter(Boolean).join(" · ") || null,
+      terminalStatus: r.terminalStatus ?? null,
     });
     open = null;
   }

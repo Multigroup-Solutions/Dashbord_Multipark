@@ -31,7 +31,7 @@ describe("templates sem parâmetros (seja_motorista / morada_e_regras)", () => {
   });
 });
 import { analyzeTemplateEntry } from "./whatsappTemplateMeta";
-import { findWhatsAppTemplate } from "../shared/whatsappTemplate";
+import { findWhatsAppTemplate, templateForCity } from "../shared/whatsappTemplate";
 import type { ActiveExtra } from "./extrasAvailability";
 
 function extra(id: number, fullName: string, phone: string | null): ActiveExtra {
@@ -111,7 +111,7 @@ describe("buildBodyParams", () => {
 });
 
 describe("renderOutboundBody (conteúdo gravado na whatsapp_messages.body)", () => {
-  const workNoticeRoles = findWhatsAppTemplate("aviso_trabalho")!.roles;
+  const workNoticeRoles = templateForCity(findWhatsAppTemplate("aviso_trabalho")!, "LISBOA")!.params;
   const analysis = analyzeTemplateEntry({
     name: "aviso_de_trabalho",
     language: "pt_BR",

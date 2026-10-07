@@ -45,7 +45,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Chamada WhatsApp perdida | `whatsapp_missed_call` | WhatsApp (view) | por cidade | Team Leader, Supervisor, Frontoffice, Backoffice, Admin, Super Admin | — | não | Webhook de chamadas do WhatsApp: chamada recebida que ninguém atendeu (terminou a tocar, ou passou o prazo de ~1 min) — 1× por chamada, à cidade da conversa (mesma regra do inbox). |
 | Serviços: tarefas de amanhã | `service_tasks_tomorrow` | Serviços (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | sim (ligado) | não |  |
 | Faltam condutores | `extras_gap` | Extras Dia (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Proposta automática da escala e verificação da véspera com horas sem condutores. |
-| Respostas ao aviso de escala | `extras_schedule_reply` | Extras Dia (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Extra responde "não" ao aviso de escala, ou resposta que o sistema não percebeu. |
+| Respostas ao aviso de escala | `extras_schedule_reply` | Extras Dia (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Extra responde "não" ao aviso de escala, carrega em "Preciso de alterar" na confirmação do turno, ou resposta que o sistema não percebeu. |
 | A tua passagem de turno | `handover` | Passagem de Turno (view) | a pessoa | Pessoal | — | sim | Passagem de turno entregue (team leaders do turno seguinte) e lembrete de passagem em falta (team leaders do turno). |
 | Passagem de turno em falta | `handover_missing` | Passagem de Turno (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Lembrete de passagem de turno em falta (supervisores da cidade). |
 | Excesso de velocidade | `speed_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Alerta de velocidade (API GPS, registo manual, verificação Zello). |
@@ -64,6 +64,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Documentos em falta (RH) | `rh_docs_missing` | Recursos Humanos (view) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não | Regra documental dos extras: 14 dias com documentos obrigatórios em falta (1.º aviso). |
 | IBAN por aprovar | `rh_bank_change` | Recursos Humanos (edit) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não |  |
 | Os teus documentos em falta | `my_docs_missing` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | Mesmo momento, para a própria pessoa (app + email). |
+| Documento recusado | `my_doc_rejected` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | RH → ficha → Documentos → "Recusar" (com motivo): para a própria pessoa (app + email). |
 | Candidaturas | `driver_application` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Candidatura nova "Be a Driver" no site. |
 | Lead respondeu | `lead_replied` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Lead de extras responde por WhatsApp. |
 | Leads à espera | `leads_waiting` | Leads de Extras (view) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não | Resumo diário das leads à espera (por cidade da lead). |
@@ -105,7 +106,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 
 ## O que continua fora do sino
 
-- Avisos **ao próprio** por WhatsApp/email que já existiam: escala dos extras (aviso de trabalho), pedidos de disponibilidade, lembrete de formação por email, email da tarefa ao criador.
+- Avisos **ao próprio** por WhatsApp/email que já existiam: escala dos extras (aviso de trabalho), pedidos de disponibilidade, pedido de documentos em falta aos extras (WhatsApp e email, à mão ou à segunda com o interruptor EXTRAS_DOCS_REQUEST), lembrete de formação por email, email da tarefa ao criador.
 - Relatórios por email com destinatários próprios (já por cidade/módulo): briefing diário, relatórios semanais, email da passagem de turno.
 - `system.notifyOwner` (ferramenta manual de admin que envia um email ao OWNER_EMAIL).
 

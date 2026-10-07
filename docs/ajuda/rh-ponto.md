@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
+palavras: pedir documentos, pedir documentos em falta, documentos em falta, pedido de documentos, último pedido, template documentos, enviar documentos em falta, lembrar documentos, terminal, horas terminal, terminal no ponto, aeroporto, ponto no aeroporto, terminal por confirmar, confirmar terminal, desmarcar terminal, nível seguinte, conta não ligada, entra com a google como, sem conta ligada, email da ficha, contas sem ficha, entraram sem ficha, conta como utilizador, a minha ficha, carta validada, carta pendente de validação, carta < 3 anos, carta com menos de 3 anos, sem carta, validar carta, data de emissão da carta, anos de carta, validar documentos, recusar documento, documento recusado, pendente de validação, documentos por validar, substituir documento, documento validado, notas internas, nota interna, trabalhou mal, back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
 ---
 # RH e ponto
 
@@ -14,6 +14,20 @@ palavras: back office gere rh, backoffice rh nacional, supervisor gere rh, criar
 3. Se deres entrada fora do raio do local de trabalho, fica registado com um aviso.
 4. As tuas horas do mês aparecem na tua ficha (separador **Ponto**).
 
+**Terminal no aeroporto (extras)** — só com o interruptor **"Terminal no ponto (aeroporto)"** ligado (Definições → Automações; desligado por omissão)
+1. Já tens o ponto aberto. Ao **chegar ao aeroporto**, dá **saída + entrada**. Se a entrada for no aeroporto da tua cidade (GPS dentro do raio), aparece o selo **Terminal**: a partir daí contas horas de terminal.
+2. **Antes de saíres do aeroporto**, dá outra vez **saída + entrada**. A saída fecha o troço de terminal e a entrada logo a seguir (até 30 min depois) é o regresso: voltas a extra normal.
+3. As horas de terminal pagam à taxa do **nível seguinte** ao teu: júnior → sénior, sénior → terminal, terminal → master. O master fica master.
+4. Se a saída do troço de terminal **não for no aeroporto** (ou sem GPS), o troço fica **Terminal por confirmar**: paga como hora normal até o RH confirmar.
+5. Só contam os extras e o aeroporto da **cidade da ficha** (Lisboa, Porto ou Faro). No aeroporto não aparece o aviso "fora do raio".
+
+**Terminal: confirmar ou desmarcar** (quem revê o ponto da ficha: supervisor da cidade, back office, administrador)
+- Na ficha → **Ponto**, cada troço mostra **Terminal**, **Terminal (confirmado)**, **Terminal por confirmar** ou **Terminal desmarcado**.
+- Num troço **por confirmar** carrega em **Confirmar terminal** ou **Desmarcar**. Noutra saída, abre o registo e usa **Marcar como terminal** ou **Desmarcar terminal** (ex.: o GPS falhou à entrada).
+- Escreve sempre o **motivo**. Fica registado quem mudou, quando e porquê (também nos Logs). Nada se apaga.
+- Na **folha de ordenados**, a coluna Extra mostra "incl. X h terminal" e as horas por confirmar. No **recibo** aparece a linha **Horas terminal**. O custo dos extras (Faturação e Métricas dos extras) usa a mesma regra.
+- Os aeroportos (centro e raio, 1500 m por omissão) mudam-se em **Definições → Parâmetros → Extras-dia → "Aeroportos (terminal no ponto)"**.
+
 **A tua ficha**
 - Em **Perfil → A minha ficha** (ou **Pessoas → Recursos Humanos**) abres a tua ficha: dados, **Documentos**, **Ponto** e **Horário**. O Perfil em si tem os atalhos, a foto, as notificações e as contas Google (ver a ajuda "Perfil").
 - O **NIF** e o **IBAN** aparecem escondidos (PT50 •••• 1234); carrega em **mostrar** para os ver por extenso.
@@ -21,10 +35,54 @@ palavras: back office gere rh, backoffice rh nacional, supervisor gere rh, criar
 - Carrega documentos (CC, carta de condução, comprovativo de morada, NIB…) no separador **Documentos**. Documentos em falta podem bloquear o acesso.
 - **Os teus dados**: em **Editar os meus dados** mudas o nome, os telefones, o NIF, a morada, a data de nascimento, a nacionalidade, o **n.º do documento de identificação** e o **n.º da carta de condução**. O IBAN fica como pedido (ver abaixo).
 - **Os teus documentos**: carregas o CC/BI, o título de residência, a carta, o comprovativo do IBAN, o de morada, a fotografia e "Outro". O contrato, os anexos, o termo de responsabilidade e o seguro são carregados pelo RH. Até 10 ficheiros de 10 MB de cada vez.
-- **Acesso bloqueado** (ex.: documentos em falta): no ecrã de bloqueio aparece **Carregar os teus documentos**, com o que falta. Carregas daí sem precisares de entrar no resto da app; depois o RH revê e liberta o acesso.
-- Quem não vê a lista do RH (extra, condutor…) entra em **Recursos Humanos** e abre logo a sua ficha.
+  - O que entregas fica **"Pendente de validação"** até o RH ver. Enquanto está pendente (ou se o RH o **recusar**, com o motivo) podes voltar a entregar ou retirar.
+  - Depois de **validado** já não o substituis nem retiras: se mudou (ex.: renovaste o CC), pede ao RH. "Outro" não fica trancado.
+  - Um documento pendente já conta como entregue para o aviso de documentos em falta; um recusado volta a faltar.
+- **Acesso bloqueado** (ex.: documentos em falta): no ecrã de bloqueio aparece **Carregar os teus documentos**, com o que falta, o que já enviaste (**Enviado — pendente de validação**) e o que foi recusado (com o motivo). Carregas daí sem precisares de entrar no resto da app; depois o RH revê e liberta o acesso.
+- Quem não vê a lista do RH (extra, condutor, utilizador…) tem no menu **A minha ficha** (em vez de "Recursos Humanos") e abre logo a sua ficha. Enquanto carrega diz "A carregar a tua ficha…"; se a leitura falhar aparece o erro com **Tentar de novo**.
+- **"A tua conta não está ligada a nenhuma ficha"**: entraste com a Google com um email que não está em nenhuma ficha. A mensagem diz qual é a conta. Sai e entra com o email que deste ao RH (o login é só com a Google e tem de ser sempre o mesmo email), ou pede ao RH para pôr esse email na tua ficha.
+- **Sem cidade (centro de custos)** na ficha: abres na mesma a tua ficha (todos os cartões: conta, ponto, horas, documentos, disponibilidade) e marcas a disponibilidade. O resto pede a cidade: o aviso diz para pedires ao RH a tua cidade.
+- **Readmissão**: se a tua conta ficou na ficha antiga (inativa) e na nova, conta a ficha **ativa** (a cidade vem dela).
+
+**Com que conta Google a pessoa entra** (ficha → cartão **Utilizador e permissões**)
+- **Entra com a Google como**: as contas ligadas à ficha (principal e extra) com o último login. "Ainda não entrou" = a conta existe mas a pessoa nunca entrou com ela.
+- **Sem conta ligada**: diz com que email(s) da ficha a pessoa tem de entrar — a conta liga-se sozinha no primeiro login com esse email. Se entrou com outro email, põe esse email na ficha ou liga a conta em **Ligações (unir / separar)**.
+- **Entraram sem ficha e parecem ser esta pessoa** (só para quem gere o RH de todas as cidades): contas que entraram com a Google, sem ficha, com o mesmo email ou dois nomes em comum. É só uma sugestão: ligar é sempre à mão, em Ligações.
+- Aviso **A conta está como "Utilizador"** numa ficha de extra: abre a ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Muda o papel para Extra em Utilizadores.
+
+**Documentos: validar ou recusar** (o RH da ficha: supervisor da cidade, front office, back office, administrador)
+- Cada documento tem o estado: **Pendente de validação** (âmbar), **Validado** (verde) ou **Recusado** (vermelho, com o motivo). O que o RH carrega (ou gera a partir dos modelos) já entra validado; o que a pessoa ou o team leader carregam fica pendente.
+- Na ficha → **Documentos**, abre a categoria e carrega em **Validar** ou **Recusar** (escolhe ou escreve o motivo). Na recusa a pessoa recebe um aviso no sino e por email, com o motivo.
+- Ninguém valida os seus próprios documentos. O team leader carrega, mas não valida.
+- **Retirar** um documento arquiva-o (não se apaga). O RH retira ou substitui sempre; quem carregou só enquanto não está validado.
+- Na lista: "**N por validar**" em cada pessoa e o filtro **Documentos por validar** (ou **Documentos em falta**).
+
+**Pedir documentos em falta aos extras** (quem valida os documentos: supervisor da cidade, front office, back office, administrador — nas suas cidades)
+- O que se pede: os documentos obrigatórios **em falta** ou **recusados** que a pessoa entrega ela própria (fotografia, CC/BI, carta, comprovativo NIB, comprovativo de morada). Um documento **pendente de validação** já conta como entregue e não se pede. Um recusado vai com o motivo ("Carta de Condução (recusado: ilegível)"). O contrato e o termo de responsabilidade são do RH: aparecem como "a tratar pelo RH" e não se pedem.
+- **Na ficha de um extra** → **Documentos** → **Pedir documentos em falta**. Escolhes os canais (WhatsApp e/ou email) e vês o texto exato antes de enviar: o template do WhatsApp com o nome e a lista, e o email (assunto, para onde vai e o corpo). Carrega em **Enviar pedido**. Por cima do botão fica o **Último pedido: dd/mm por X (WhatsApp, Email)** (ou "automático").
+- **Em grupo**: na lista do RH, separador **Extras** → **Pedir documentos em falta**. A janela mostra quem recebe (abre cada pessoa para ver o texto) e quem fica de fora e porquê: sem telemóvel, sem email, "Não enviar WhatsApp/email", pediu STOP, número sem WhatsApp, ficha sem cidade, template por configurar, ou **já pedido nos últimos 7 dias**. Respeita o filtro de cidade do topo. Se forem muitos e não houver tempo para todos, a janela diz quantos faltam: abre outra vez e envia (quem já recebeu não recebe outra vez).
+- **Cadência**: no máximo **1 pedido por pessoa a cada 7 dias** (contam os à mão e os automáticos). Na ficha podes marcar **Enviar mesmo assim** para passar por cima dos 7 dias (ex.: a pessoa diz que não recebeu). Carregar duas vezes no mesmo botão não envia duas vezes.
+- **WhatsApp**: usa o template da cidade da pessoa, em **Definições → Parâmetros**, secção Extras-dia: **Pedido de documentos em falta: template do WhatsApp** (nome|língua, ex.: `documentos_em_falta|pt_PT`). O template tem dois campos: {{1}} = primeiro nome e {{2}} = a lista dos documentos numa linha; o resto (onde carregar, responder com fotografia) fica escrito no template aprovado pela Meta. Sem template na cidade a pré-visualização diz **template por configurar** e segue só o email. A mensagem fica na conversa do WhatsApp da pessoa (a resposta, com as fotografias, chega à caixa do WhatsApp).
+- **Email**: vai para o email de trabalho ou, sem ele, o pessoal, com a lista e onde carregar (quem tem conta: o link da ficha; quem não tem: responder com uma fotografia de cada um). Fica nas **Comunicações automáticas** da ficha.
+- **Automático** (desligado por omissão): com **Definições → Automações → Pedir documentos em falta aos extras** ligado, à segunda a partir das 10:00 pede-se aos extras ativos com documentos em falta, com as mesmas regras e no máximo **4 pedidos automáticos por pessoa** — depois disso só à mão.
+- Cada pedido fica registado (quem, quando, canal, documentos, à mão ou automático, por quem e o resultado) e no registo de atividade. Nada se apaga.
+
+**Carta de condução**
+- Etiqueta em cada ficha (cabeçalho, cartões e lista): **Carta validada** (verde: o RH validou e a carta tem 3 anos ou mais), **Carta pendente de validação** (âmbar: há carta — documento, número ou data — por validar), **Carta < 3 anos** (cinza) e **Sem carta** (cinza). Filtro **Carta** na lista.
+- O RH carrega em **Validar carta** (ficha → Documentos) e confirma a **data de emissão** (na carta europeia, campo 10 da categoria B). Os ficheiros da carta pendentes ficam validados.
+- Os 3 anos contam no dia do aniversário da emissão (calendário de Lisboa; uma carta de 29/02 faz anos a 28/02). Uma carta validada com menos de 3 anos passa sozinha a **Carta validada** quando fizer 3 anos.
+- **Carta < 3 anos não bloqueia**: no Extras-dia aparece um aviso ao escalar (ver a ajuda "Extras dia").
+- A data de emissão declarada na candidatura do site ("Data de Emissão da Carta", quando o site a enviar) passa para o lead e para a ficha, e fica **pendente** até o RH a confirmar. Os pontos "Anos de carta" dos leads usam só essa data.
+
+**Notas internas** (team leader e acima, no seu âmbito)
+- Na ficha, separador **Notas internas**: notas sobre o trabalho da pessoa (ex.: "trabalhou mal no dia 03/10"), com tipo (Geral, Desempenho, Comportamento, Elogio) e, se quiseres, o dia de trabalho.
+- Quem lê e escreve: o team leader (quem está abaixo dele, no seu centro), o supervisor (a sua cidade), o front office, o back office e o administrador. **A própria pessoa nunca as vê**, nem na sua ficha.
+- Quem escreveu edita ou arquiva a nota nas primeiras **24 horas**; depois, só um administrador. Arquivar não apaga.
+- Só factos de trabalho — nada de saúde ou vida privada (a pessoa pode pedir acesso aos seus dados, RGPD). O texto não vai para o registo de atividade (só o tipo e o dia).
+- Também se escrevem a partir da linha da escala no **Extras-dia** (ícone do caderno), já com o dia.
 
 **O supervisor no RH da sua cidade**
+- Um supervisor **com todas as cidades** (ex.: quem trata do recrutamento, sem cidade na ficha) vê e gere também as **fichas sem cidade**. O supervisor de uma só cidade continua a ver só a dele.
 - O supervisor vê e gere as fichas de **toda a sua cidade** (antes era só o centro de custos da ficha dele), de quem está **abaixo dele** (team leader, condutores e extras):
   - **Novo Colaborador** e **Importar Extras**, com postos até team leader;
   - **Editar**: dados pessoais, posto (até team leader), centro de custos (da cidade), tipo e datas do contrato;

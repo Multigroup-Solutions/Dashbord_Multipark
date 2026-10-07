@@ -25,7 +25,7 @@ export const KIND_SOURCES: Record<string, string> = {
   whatsapp_sla: "Cron: conversas por responder / urgentes / janela de 24h a fechar (resumo por cidade + responsável da conversa). Interruptor WHATSAPP_SLA_NOTIFY nas Definições.",
   whatsapp_missed_call: "Webhook de chamadas do WhatsApp: chamada recebida que ninguém atendeu (terminou a tocar, ou passou o prazo de ~1 min) — 1× por chamada, à cidade da conversa (mesma regra do inbox).",
   extras_gap: "Proposta automática da escala e verificação da véspera com horas sem condutores.",
-  extras_schedule_reply: "Extra responde \"não\" ao aviso de escala, ou resposta que o sistema não percebeu.",
+  extras_schedule_reply: "Extra responde \"não\" ao aviso de escala, carrega em \"Preciso de alterar\" na confirmação do turno, ou resposta que o sistema não percebeu.",
   handover: "Passagem de turno entregue (team leaders do turno seguinte) e lembrete de passagem em falta (team leaders do turno).",
   handover_missing: "Lembrete de passagem de turno em falta (supervisores da cidade).",
   speed_alert: "Alerta de velocidade (API GPS, registo manual, verificação Zello).",
@@ -38,6 +38,7 @@ export const KIND_SOURCES: Record<string, string> = {
   task_overdue_city: "Cron horário (extras-auto): tarefas automáticas que passaram o prazo, um resumo por cidade ao supervisor — só com \"Avisos de atraso das tarefas automáticas\" ligado (desligado por omissão).",
   rh_docs_missing: "Regra documental dos extras: 14 dias com documentos obrigatórios em falta (1.º aviso).",
   my_docs_missing: "Mesmo momento, para a própria pessoa (app + email).",
+  my_doc_rejected: "RH → ficha → Documentos → \"Recusar\" (com motivo): para a própria pessoa (app + email).",
   driver_application: "Candidatura nova \"Be a Driver\" no site.",
   lead_replied: "Lead de extras responde por WhatsApp.",
   leads_waiting: "Resumo diário das leads à espera (por cidade da lead).",
@@ -102,7 +103,7 @@ export function renderNotificacoesDoc(): string {
   }
   out.push("## O que continua fora do sino");
   out.push("");
-  out.push("- Avisos **ao próprio** por WhatsApp/email que já existiam: escala dos extras (aviso de trabalho), pedidos de disponibilidade, lembrete de formação por email, email da tarefa ao criador.");
+  out.push("- Avisos **ao próprio** por WhatsApp/email que já existiam: escala dos extras (aviso de trabalho), pedidos de disponibilidade, pedido de documentos em falta aos extras (WhatsApp e email, à mão ou à segunda com o interruptor EXTRAS_DOCS_REQUEST), lembrete de formação por email, email da tarefa ao criador.");
   out.push("- Relatórios por email com destinatários próprios (já por cidade/módulo): briefing diário, relatórios semanais, email da passagem de turno.");
   out.push("- `system.notifyOwner` (ferramenta manual de admin que envia um email ao OWNER_EMAIL).");
   out.push("");

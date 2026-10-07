@@ -220,10 +220,9 @@ export function registerOAuthRoutes(app: Express) {
     url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", scope);
-    // Sem access_type=offline nem consent forçado: o login só lê a identidade
-    // uma vez (o refresh token nunca foi usado) e o ecrã de consentimento em
-    // cada login levava a "Cancelar" → access_denied (PDA, 2026-10-07).
-    // D61: num PDA (pda=1) a Google pede sempre para escolher a conta.
+    // Sem access_type=offline nem prompt=consent: o login não guarda tokens da
+    // Google (ver googlePromptFor). D61: num PDA (pda=1) pede para escolher a conta.
+    // (PDA, 7 out: o ecrã de consentimento em cada login levava a "Cancelar" → access_denied.)
     const prompt = googlePromptFor(req.query.pda);
     if (prompt) url.searchParams.set("prompt", prompt);
     url.searchParams.set("state", state);

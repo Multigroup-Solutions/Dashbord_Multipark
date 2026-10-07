@@ -48,7 +48,21 @@ export function statementTimeoutFor(opts?: { timeoutMs?: number }): number {
   return Math.round(Math.min(MULTIPARK_DB_LONG_TIMEOUT_MAX_MS, Math.max(1_000, t)));
 }
 
-export interface QueryOptions { timeoutMs?: number }
+export interface QueryOptions {
+  timeoutMs?: number;
+  /**
+   * 47c: leitura analítica (Pressão do Extras-Dia). As estimativas do Postgres
+   * para CTEs e para `"changeType"::text IN (…)` saem até 100× abaixo do real
+   * e ele escolhia "nested loops" entre CTEs (sem índices) — custo quadrático:
+   * Lisboa passou dos 40 s. Com isto a transação desliga os nested loops e o
+   * JIT (o JIT disparava com o custo inflacionado e gastava 2–3 s a compilar).
+   * Só `SET LOCAL` (acaba no ROLLBACK); no MySQL não faz nada.
+   */
+  analytics?: boolean;
+}
+
+/** SET LOCAL de uma leitura analítica (constantes nossas). */
+export const ANALYTICS_SETTINGS: readonly string[] = ["SET LOCAL enable_nestloop = off", "SET LOCAL jit = off"];
 export const MULTIPARK_DB_IDLE_TIMEOUT_MS = 10_000;
 
 // ─── Regras puras (testadas em server/multiparkDb/multiparkDb.test.ts) ──────
@@ -306,7 +320,7 @@ async function openPostgres(url: string, ssl: SslChoice): Promise<MultiparkDbCli
   pool.on("error", (err: unknown) => console.warn("[multiparkDb] ligação da pool falhou:", redactSecrets(err).slice(0, 160)));
   const ready = new WeakSet<object>();
 
-  async function withReadOnly<T>(fn: (client: any) => Promise<T>, timeoutMs: number = MULTIPARK_DB_STATEMENT_TIMEOUT_MS): Promise<T> {
+  async function withReadOnly<T>(fn: (client: any) => Promise<T>, timeoutMs: number = MULTIPARK_DB_STATEMENT_TIMEOUT_MS, settings: readonly string[] = []): Promise<T> {
     let client: any;
     try { client = await pool.connect(); } catch (err) { throw wrapDriverError(err, "CONNECT_FAILED"); }
     let broken: unknown = undefined;
@@ -319,6 +333,7 @@ async function openPostgres(url: string, ssl: SslChoice): Promise<MultiparkDbCli
       }
       await client.query("BEGIN READ ONLY");
       await client.query(`SET LOCAL statement_timeout = ${timeoutMs}`);
+      for (const set of settings) await client.query(set);
       return await fn(client);
     } catch (err) {
       if (!(err instanceof MultiparkDbError) && isConnectionError(err)) broken = err;
@@ -337,7 +352,7 @@ async function openPostgres(url: string, ssl: SslChoice): Promise<MultiparkDbCli
       assertReadOnlySql(sql);
       const t = statementTimeoutFor(opts);
       // 44a: o tempo pedido vale no servidor (statement_timeout) e no driver (query_timeout)
-      return withReadOnly(async (c) => (await c.query({ text: sql, values: params, query_timeout: t + 2_000 })).rows as T[], t);
+      return withReadOnly(async (c) => (await c.query({ text: sql, values: params, query_timeout: t + 2_000 })).rows as T[], t, opts?.analytics ? ANALYTICS_SETTINGS : []);
     },
     async readOnlyCheck() {
       return withReadOnly(async (c) => String((await c.query("SHOW transaction_read_only")).rows?.[0]?.transaction_read_only ?? "").toLowerCase() === "on");
