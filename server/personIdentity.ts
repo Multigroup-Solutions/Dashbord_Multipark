@@ -67,8 +67,12 @@ export async function employeesForAgentIds(ids: readonly string[]): Promise<Map<
   if (!clean.length) return out;
   const d = await database();
   const list = sql.join(clean.map((i) => sql`${i}`), sql`, `);
-  for (const r of rowsOf(await d.execute(sql`SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentUserId FROM employees e WHERE e.multiparkAgentUserId IN (${list})
-    UNION ALL SELECT e.id, e.fullName, a.agentUserId FROM employee_agents a JOIN employees e ON e.id = a.employeeId WHERE a.agentUserId IN (${list})`))) {
+  // Duas leituras em vez de UNION: employees e employee_agents têm colações
+  // diferentes em produção e o UNION rebentava (ER_CANT_AGGREGATE_NCOLLATIONS,
+  // Reclamações/Perdidos sem agentes desde 4 out 2026). O agente principal ganha.
+  const principal = rowsOf(await d.execute(sql`SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentUserId FROM employees e WHERE e.multiparkAgentUserId IN (${list})`));
+  const extra = rowsOf(await d.execute(sql`SELECT e.id, e.fullName, a.agentUserId FROM employee_agents a JOIN employees e ON e.id = a.employeeId WHERE a.agentUserId IN (${list})`));
+  for (const r of [...principal, ...extra]) {
     if (!out.has(String(r.agentUserId))) out.set(String(r.agentUserId), { id: Number(r.id), fullName: String(r.fullName) });
   }
   return out;
@@ -88,14 +92,10 @@ export async function searchAgents(q: string, limit = 30) {
   const { isSystemAgentId } = await import("../shared/agentIdentity");
   agents = agents.filter((a) => !isSystemAgentId(a.agentUserId));
   const hits = agents.filter((a) => textMatches(`${a.agentName ?? ""} ${a.email ?? ""}`, q)).sort((a, b) => b.total - a.total).slice(0, limit);
-  const owners = new Map<string, { id: number; fullName: string }>();
-  if (hits.length) {
-    const ids = hits.map((h) => h.agentUserId);
-    for (const r of rowsOf(await d.execute(sql`SELECT e.id, e.fullName, e.multiparkAgentUserId AS agentUserId FROM employees e WHERE e.multiparkAgentUserId IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
-      UNION ALL SELECT e.id, e.fullName, a.agentUserId FROM employee_agents a JOIN employees e ON e.id = a.employeeId WHERE a.agentUserId IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`).catch(() => [[]]))) {
-      owners.set(String(r.agentUserId), { id: Number(r.id), fullName: String(r.fullName) });
-    }
-  }
+  // A mesma leitura das fichas (sem UNION); falhar não esconde os agentes, só as fichas.
+  const owners = hits.length
+    ? await employeesForAgentIds(hits.map((h) => h.agentUserId)).catch(() => new Map<string, { id: number; fullName: string }>())
+    : new Map<string, { id: number; fullName: string }>();
   return hits.map((a) => ({ ...a, employeeId: owners.get(a.agentUserId)?.id ?? null, employeeName: owners.get(a.agentUserId)?.fullName ?? null, fromCopy: !live.available }));
 }
 
