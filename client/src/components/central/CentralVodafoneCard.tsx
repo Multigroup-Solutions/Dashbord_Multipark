@@ -127,6 +127,7 @@ export function CentralVodafoneCard() {
 
         <div className="space-y-1">
           <div className="text-xs font-medium">Últimas chamadas registadas</div>
+          <div className="text-[11px] text-muted-foreground">As internas (Equipa e Interna) ficam registadas mas não contam no Desempenho.</div>
           <div className="divide-y rounded-md border max-h-64 overflow-auto">
             {(q.data?.calls ?? []).length === 0 && <div className="p-2 text-xs text-muted-foreground">Ainda nenhuma.</div>}
             {(q.data?.calls ?? []).map((c) => (

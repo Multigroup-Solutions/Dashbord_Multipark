@@ -32,6 +32,9 @@ const rowsOf = (res: unknown): any[] => {
 };
 const dayStr = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? "").slice(0, 10));
 
+/** 39g: só as chamadas da central com clientes e números de fora (sem colegas nem extensões). */
+const CENTRAL_EXTERNAL_ONLY = sql`(contactRef IS NULL OR (contactRef NOT LIKE 'emp-%' AND contactRef NOT LIKE 'ext-%'))`;
+
 /** Contas da dashboard → contagens por hora UTC (agrupadas no SQL). */
 function userSources(start: string, end: string): Array<{ key: PerfMetric; label: string; q: SQL }> {
   const hour = (col: SQL) => sql`DATE_FORMAT(${col}, '%Y-%m-%d %H')`;
@@ -46,8 +49,9 @@ function userSources(start: string, end: string): Array<{ key: PerfMetric; label
     src("callsMade", "chamadas feitas", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`),
     src("callbacks", "devoluções de chamada", sql`whatsapp_calls`, sql`callbackByUserId`, sql`callbackDoneAt`),
     // 39a: telefonemas da central Vodafone, registados pela consola (como "Sugar CRM")
-    src("callsAnswered", "chamadas da central (atendidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1`),
-    src("callsMade", "chamadas da central (feitas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out'`),
+    // 39g: as internas — colegas do RH (emp-) e extensões (ext-) — não contam (Jorge, 7 out 2026)
+    src("callsAnswered", "chamadas da central (atendidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}`),
+    src("callsMade", "chamadas da central (feitas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND ${CENTRAL_EXTERNAL_ONLY}`),
     src("waMessages", "mensagens WhatsApp", sql`whatsapp_messages`, sql`sentById`, sql`createdAt`, sql`direction = 'out'`),
     src("emails", "emails", sql`mail_messages`, sql`sentById`, sql`COALESCE(sentAt, createdAt)`, sql`direction = 'out' AND automated = 0`),
     src("complaintMsgs", "respostas em reclamações", sql`complaint_messages`, sql`authorId`, sql`createdAt`, sql`isInternal = 0`),
@@ -284,7 +288,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   groupTotals.hours = Math.round(groupTotals.hours * 10) / 10;
   groupTotals.km = Math.round(groupTotals.km * 10) / 10;
   groupTotals.evalPoints = Math.round(groupTotals.evalPoints * 10) / 10;
-  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), mais as chamadas do WhatsApp. Emails contam só os enviados pela dashboard.");
+  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões), mais as chamadas do WhatsApp. Emails contam só os enviados pela dashboard.");
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
     people: out, groupTotals, groupSeries, speedLimit, notes };
 }

@@ -381,10 +381,14 @@ describe("39a — ligações no resto da dashboard", () => {
     expect(page).toContain('{(user as any).role === "super_admin" && <div id="central-vodafone" className="scroll-mt-20"><CentralVodafoneCard /></div>}');
   });
 
-  it("as chamadas da central contam no Desempenho de quem atendeu ou fez", () => {
+  it("as chamadas da central contam no Desempenho de quem atendeu ou fez — 39g: sem as internas (colegas e extensões)", () => {
     const s = src("server/peoplePerformance.ts");
-    expect(s).toContain("src(\"callsAnswered\", \"chamadas da central (atendidas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1`)");
-    expect(s).toContain("src(\"callsMade\", \"chamadas da central (feitas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out'`)");
+    expect(s).toContain("const CENTRAL_EXTERNAL_ONLY = sql`(contactRef IS NULL OR (contactRef NOT LIKE 'emp-%' AND contactRef NOT LIKE 'ext-%'))`;");
+    expect(s).toContain("src(\"callsAnswered\", \"chamadas da central (atendidas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}`)");
+    expect(s).toContain("src(\"callsMade\", \"chamadas da central (feitas)\", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND ${CENTRAL_EXTERNAL_ONLY}`)");
+    expect(s).toContain("sem as chamadas internas (colegas e extensões)");
+    // as do WhatsApp continuam iguais
+    expect(s).toContain("src(\"callsMade\", \"chamadas feitas\", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`)");
     expect(s).not.toContain("ainda não há ligação");
   });
 

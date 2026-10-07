@@ -30,7 +30,7 @@ Em **Pessoas → Condutores e agentes** (team leader e acima, nas tuas cidades).
   - **Pontos**: a soma ponderada do que a aba mede. Nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação, e os dias acima do limite descontam.
   - **Nota**: 100 para o melhor.
 - Carrega numa pessoa para ver a evolução dela e todos os números.
-- Os telefonemas da central contam quando a consola da Vodafone os regista na dashboard (Integrações → Central Vodafone); as chamadas do WhatsApp contam sempre. Os emails mandados diretamente no Gmail ainda não têm autor.
+- Os telefonemas da central contam quando a consola da Vodafone os regista na dashboard (Integrações → Central Vodafone). As chamadas internas (com colegas do RH ou de extensões) não contam. As chamadas do WhatsApp contam sempre. Os emails mandados diretamente no Gmail ainda não têm autor.
 
 **Quando a leitura falha**
 - Mostra **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem dados".
