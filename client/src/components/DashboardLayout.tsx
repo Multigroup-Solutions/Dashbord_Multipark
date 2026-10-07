@@ -108,6 +108,7 @@ import { useMultisState } from "@/components/assistant/multisStore";
 import { MULTIS_PANEL_WIDTH_PX } from "@shared/assistant";
 import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
 import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
+import { CentralRingManager } from "@/components/CentralRingManager";
 import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
 import { can, roleRank, seesBeyondOwn, type AccessOverrides, type ModuleId } from "@shared/access";
 import { allowedWithoutCostCenter, decideRoute } from "@shared/routeAccess";
@@ -955,6 +956,8 @@ function DashboardLayoutContent({
         <GoogleOnlineSync enabled={!!user} />
         {/* Chamadas de voz do WhatsApp: toque + chamada em curso em qualquer página */}
         <WhatsAppCallManager enabled={!!user && can(user as any, "whatsapp", "edit") && !!callsFlag.data?.enabled} userId={user?.id ?? null} />
+        {/* Lote 45: a Central Vodafone toca aqui (quem tem acesso da consola; interruptor CENTRAL_RING) */}
+        <CentralRingManager enabled={!!user} />
       </SidebarInset>
     </>
   );

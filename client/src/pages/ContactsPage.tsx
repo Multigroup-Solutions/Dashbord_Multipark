@@ -34,6 +34,7 @@ import { GoogleContactsCard } from "@/components/google/GoogleContactsCard";
 import { ViewToggle } from "@/components/ViewToggle";
 import { useViewPref } from "@/hooks/useViewPref";
 import type { ViewMode } from "@shared/viewPref";
+import { telHref } from "@shared/phone";
 
 type Tab = "pesquisa" | "diretorio" | "google";
 const TABS: Tab[] = ["pesquisa", "diretorio", "google"];
@@ -369,7 +370,7 @@ function ContactSheet({ item, onClose }: { item: Item | null; onClose: () => voi
               {d.subtitle && <p className="text-muted-foreground">{d.subtitle}</p>}
               <div className="space-y-1">
                 {d.emails.map((e) => <a key={e} href={`mailto:${e}`} className="flex items-center gap-2 text-primary break-all"><Mail className="h-4 w-4 shrink-0" />{e}</a>)}
-                {d.phones.map((p) => <a key={p} href={`tel:${p}`} className="flex items-center gap-2 text-primary"><Phone className="h-4 w-4 shrink-0" />{p}</a>)}
+                {d.phones.map((p) => <a key={p} href={telHref(p)} className="flex items-center gap-2 text-primary"><Phone className="h-4 w-4 shrink-0" />{p}</a>)}
                 {d.openHref && <Link href={d.openHref} className="inline-flex items-center gap-1 text-xs text-primary underline">Abrir no módulo <ExternalLink className="h-3 w-3" /></Link>}
                 {d.clientId && d.kind !== "client" && <Link href={`/clientes/${d.clientId}`} className="block text-xs text-primary underline">Também é cliente (n.º {d.clientId}) — abrir ficha de cliente</Link>}
               </div>

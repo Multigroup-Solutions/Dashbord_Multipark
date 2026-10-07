@@ -23,6 +23,7 @@ import {
   AlertTriangle, Camera, ChevronLeft, ExternalLink, Loader2, MailX, MoreHorizontal, Pencil, Plus, Trash2, Undo2,
 } from "lucide-react";
 import { REASON_LABELS, type SuggestionReason } from "@shared/crmIdentity";
+import { telHref } from "@shared/phone";
 import {
   ALERT_CLASS, BookingStatusPill, CarGlyph, ClientAvatar, Lbl, Pill, SegmentPill, eur, fmtPhone, monthYear, num, relDays,
   shortDate, shortDateTime, utcDate, waLink,
@@ -262,7 +263,7 @@ function ClientFile({ c, refetch }: { c: FileData; refetch: () => void }) {
                 ...(!p.whatsapp ? [{ label: "Tem WhatsApp", run: () => contact.mutate({ op: "addPhone", clientId: c.id, value: p.phone, whatsapp: true }) }] : []),
                 { label: "Retirar", danger: true, run: () => ask(`Retirar ${fmtPhone(p.phone)}?`, KEPT, "Retirar", () => contact.mutate({ op: "removePhone", clientId: c.id, itemId: p.id })) },
               ] : undefined}>
-                <a href={`tel:${p.phone}`} title={originTitle(p.source, p.firstSeenAt)} className={cn("truncate", p.isPrimary ? "font-bold text-foreground" : "text-muted-foreground")}>{fmtPhone(p.phone)}</a>
+                <a href={telHref(p.phone)} title={originTitle(p.source, p.firstSeenAt)} className={cn("truncate", p.isPrimary ? "font-bold text-foreground" : "text-muted-foreground")}>{fmtPhone(p.phone)}</a>
                 {p.whatsapp && <a href={waLink(p.phone)} target="_blank" rel="noreferrer"><Pill className="h-[18px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">WhatsApp</Pill></a>}
                 {p.label && <span className="text-xs text-muted-foreground">({p.label})</span>}
               </Row>

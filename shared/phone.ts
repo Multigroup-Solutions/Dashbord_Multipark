@@ -96,3 +96,24 @@ export function normalizePhoneForStorage(raw: string | null | undefined, maxLeng
   const cleaned = raw.normalize("NFKC").replace(/\s+/g, " ").trim();
   return cleaned ? cleaned.slice(0, maxLength) : null;
 }
+
+/**
+ * Número para MARCAR (o `tel:` dos botões "Ligar"). Lote 45 (Jorge, 7 out
+ * 2026: "o click to call, quando tem +351, não está a fazer a chamada"): a
+ * consola da Vodafone marca o que recebe e a central não aceita o "+".
+ * Portugal → os 9 dígitos; outro país → "00" + indicativo + número;
+ * extensões e números curtos → só os dígitos. PURA.
+ */
+export function dialNumber(raw: string | null | undefined): string {
+  const s = typeof raw === "string" ? raw.normalize("NFKC").trim() : "";
+  if (!s) return "";
+  const e164 = normalizePhoneE164(s);
+  if (e164) return e164.startsWith("+351") && e164.length === 13 ? e164.slice(4) : "00" + e164.slice(1);
+  return s.replace(/\D/g, "");
+}
+
+/** `tel:` para os botões "Ligar" (ver `dialNumber`); sem número → "". PURA. */
+export function telHref(raw: string | null | undefined): string {
+  const n = dialNumber(raw);
+  return n ? `tel:${n}` : "";
+}

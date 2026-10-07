@@ -37,7 +37,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 
 **Ligar, WhatsApp e email a partir das fichas** (ficha do cliente, da reserva e do colaborador)
 - **WhatsApp** abre a conversa desse número. Se ainda não houver, cria-a **sem enviar nada**: escreves no ecrã do WhatsApp (com um template, porque a janela de 24 h ainda não abriu). Criar uma conversa nova precisa de poder responder no WhatsApp; quem só vê abre as que já existem.
-- **Ligar**: pelo telemóvel (abre o marcador) e, com as chamadas pelo WhatsApp ligadas, também **pelo WhatsApp** (abre a conversa e a chamada).
+- **Ligar**: pelo telemóvel (abre o marcador ou a consola da central — os números de Portugal vão sem o +351) e, com as chamadas pelo WhatsApp ligadas, também **pelo WhatsApp** (abre a conversa e a chamada).
 - **Email** abre **Nova mensagem** aqui na Comunicação já com o destinatário (cliente e reserva: a caixa **info**; colaborador: a caixa RH; se não puderes escrever nela, a primeira onde podes). Quem não tem a Comunicação usa o programa de email do aparelho.
 - Com vários telefones ou emails na ficha, o botão mostra a lista para escolheres.
 

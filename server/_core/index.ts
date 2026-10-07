@@ -17,6 +17,7 @@ import { createCentralSugarRouter } from "../centralSugar";
 import { CENTRAL_SUGAR_BASE_PATH } from "../../shared/centralSugar";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { registerWhatsappCallStreamRoute } from "../whatsappCallStream";
+import { registerCentralRingStreamRoute } from "../centralRing";
 import { createMultiparkWebhookRouter } from "../multiparkWebhook";
 import { seedProjectHierarchy } from "../db";
 import multer from "multer";
@@ -79,6 +80,7 @@ async function startServer() {
   app.use(CENTRAL_SUGAR_BASE_PATH, createCentralSugarRouter());
   // Toque das chamadas do WhatsApp por SSE (paridade com o api-entry.ts).
   registerWhatsappCallStreamRoute(app);
+  registerCentralRingStreamRoute(app);
 
   // File upload endpoint (multer)
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
