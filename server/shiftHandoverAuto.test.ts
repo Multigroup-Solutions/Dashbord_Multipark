@@ -102,6 +102,8 @@ describe("cumprimento", () => {
 describe("pendentes (carry-over)", () => {
   const note = (t: string, extra: Partial<OpenItem> = {}): OpenItem => ({ key: openItemKey("note", t), kind: "note", text: t, resolved: false, ...extra });
   const compl = (id: number, extra: Partial<OpenItem> = {}): OpenItem => ({ key: openItemKey("complaint", id), kind: "complaint", refId: id, text: `#${id}`, resolved: false, ...extra });
+  // 44b: só PDAs e notas passam de turno — os testes do carry-over usam PDAs.
+  const pda = (id: number, extra: Partial<OpenItem> = {}): OpenItem => ({ key: openItemKey("pda", id), kind: "pda", refId: id, text: `PDA ${id}`, resolved: false, ...extra });
 
   it("notas em lista viram pendentes; texto normal não", () => {
     const items = extractNoteItems("Tudo ok\n- Ligar ao cliente do BMW\n* Chave no cofre\n• Rever PDA 3\n[ ] Repor rolos\n-x", "2026-09-24 morning");
@@ -112,26 +114,28 @@ describe("pendentes (carry-over)", () => {
 
   it("anterior por resolver passa; resolvidos não; entidade fechada resolve-se sozinha", () => {
     const merged = mergeCarryOver({
-      previous: [note("Ligar cliente"), note("Feito", { resolved: true }), compl(1), compl(2)],
-      draft: [compl(2), compl(3)],
+      previous: [note("Ligar cliente"), note("Feito", { resolved: true }), pda(1), pda(2), compl(8)],
+      draft: [pda(2), pda(3)],
       nowIso: "2026-09-24T15:00:00.000Z",
     });
     const byKey = Object.fromEntries(merged.map((i) => [i.key, i]));
     expect(byKey[openItemKey("note", "Ligar cliente")].resolved).toBe(false);
     expect(byKey[openItemKey("note", "Feito")]).toBeUndefined();
-    expect(byKey[openItemKey("complaint", 1)]).toMatchObject({ resolved: true, resolvedByName: "sistema" });
-    expect(byKey[openItemKey("complaint", 2)].resolved).toBe(false);
-    expect(byKey[openItemKey("complaint", 3)].resolved).toBe(false);
+    expect(byKey[openItemKey("pda", 1)]).toMatchObject({ resolved: true, resolvedByName: "sistema" });
+    expect(byKey[openItemKey("pda", 2)].resolved).toBe(false);
+    expect(byKey[openItemKey("pda", 3)].resolved).toBe(false);
+    // 44b: uma reclamação herdada já não passa de turno
+    expect(byKey[openItemKey("complaint", 8)]).toBeUndefined();
   });
 
   it("o que está no formulário prevalece (visto do utilizador)", () => {
-    const merged = mergeCarryOver({ previous: [], draft: [compl(5)], current: [compl(5, { resolved: true, resolvedByName: "Ana" })] });
+    const merged = mergeCarryOver({ previous: [], draft: [pda(5)], current: [pda(5, { resolved: true, resolvedByName: "Ana" })] });
     expect(merged).toHaveLength(1);
     expect(merged[0]).toMatchObject({ resolved: true, resolvedByName: "Ana" });
   });
 
   it("gravação: resolvido na BD não reabre por um formulário antigo", () => {
-    const out = mergeStoredOpenItems([compl(1, { resolved: true, resolvedByName: "Rui", resolvedAt: "t" })], [compl(1), note("nova")]);
+    const out = mergeStoredOpenItems([pda(1, { resolved: true, resolvedByName: "Rui", resolvedAt: "t" })], [pda(1), note("nova")]);
     expect(out[0]).toMatchObject({ resolved: true, resolvedByName: "Rui" });
     expect(out[1].resolved).toBe(false);
   });
@@ -143,11 +147,9 @@ describe("pendentes (carry-over)", () => {
   });
 
   it("rascunho → pendentes com chave estável por entidade", () => {
-    const items = draftOpenItems({
-      complaints: [{ id: 7, title: "Risco" }], lostFound: [{ id: 3, clientName: "Ana", description: "Óculos" }],
-      pdas: [{ id: 9, pdaName: "PDA 2", employeeName: "Rui" }], incidents: [], pendingDeliveries: [{ externalId: "ab", bookingNumber: "B1", plate: "AA-00-BB" }],
-    }, "2026-09-24 morning");
-    expect(items.map((i) => i.key)).toEqual(["complaint:7", "lost_found:3", "pda:9", "delivery:ab"]);
+    // 44b: só os PDAs com check-in
+    const items = draftOpenItems({ pdas: [{ id: 9, pdaName: "PDA 2", employeeName: "Rui" }] }, "2026-09-24 morning");
+    expect(items.map((i) => i.key)).toEqual(["pda:9"]);
   });
 });
 

@@ -35,6 +35,7 @@ import {
   complianceStatus,
   compliancePercent,
   draftKeyLines,
+  isHandoverItem,
   nextShiftOf,
   normalizeAiBullets,
   parseOpenItems,
@@ -107,7 +108,8 @@ export function aiPrompt(d: HandoverDraft | null, input: { city: HandoverCity; s
     d?.people.next.length ? `Equipa do turno seguinte: ${d.people.next.map((p) => `${firstName(p.name, "?")}${p.isTeamLeader ? " (TL)" : ""}`).join(", ")}` : "",
     d?.byHour.length ? `Picos (recolhas/entregas por hora): ${d.byHour.filter((h) => h.checkins + h.checkouts > 0).map((h) => `${h.label} ${h.checkins}/${h.checkouts}`).join("; ")}` : "",
     input.notes?.trim() ? `Notas do team leader: ${input.notes.trim().slice(0, 1500)}` : "",
-    input.openItems.filter((i) => !i.resolved).length ? `Pendentes: ${input.openItems.filter((i) => !i.resolved).map((i) => i.text).slice(0, 25).join(" | ")}` : "",
+    // 44b: só os pendentes que passam de turno (PDAs e notas do TL).
+    input.openItems.filter((i) => !i.resolved && isHandoverItem(i)).length ? `Pendentes: ${input.openItems.filter((i) => !i.resolved && isHandoverItem(i)).map((i) => i.text).slice(0, 25).join(" | ")}` : "",
   ];
   return lines.filter(Boolean).join("\n");
 }

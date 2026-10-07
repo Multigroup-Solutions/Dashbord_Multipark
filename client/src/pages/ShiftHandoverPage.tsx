@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { trpc } from "@/lib/trpc";
 import { UniDateNav } from "@/components/DateRangeNav";
@@ -48,6 +48,7 @@ import {
   MATERIAL_EXCEPTION_LABELS,
   SHIFT_LABELS,
   materialExceptionsFor,
+  isHandoverItem,
   mergeCarryOver,
   previousShiftOf,
   shiftSince,
@@ -58,6 +59,7 @@ import {
   type OpenItem,
 } from "@shared/shiftHandoverAuto";
 import { AiSummaryBox, OpenItemsEditor, ShiftHandoverDraftPanel } from "@/components/ShiftHandoverDraftPanel";
+import { fmtHours, stoppedHours, workedHours } from "@shared/dayWorkSummary";
 import HandoverRepeatsCard from "@/components/aiOps/HandoverRepeatsCard";
 import { ShiftHandoverLiveState } from "@/components/ShiftHandoverLiveState";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -288,7 +290,8 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
     setLoaded(existing ?? null);
     setMaterialOkRaw(existing?.materialOk == null ? null : !!existing.materialOk);
     setMaterialExcRaw((existing?.materialExceptions ?? []) as MaterialExceptionItem[]);
-    setOpenItemsRaw((existing?.openItems ?? []) as OpenItem[]);
+    // 44b: só PDAs e notas (os de outros tipos gravados antes ficam na BD, sem aparecer).
+    setOpenItemsRaw(((existing?.openItems ?? []) as OpenItem[]).filter(isHandoverItem));
     setAiText(existing?.aiSummary ?? null);
     setCarriedKey(null);
     setSaveWithoutPrev(false);
@@ -683,7 +686,7 @@ function HandoverHistory({ cityState, userId, canEdit }: { cityState: CityState;
   const YN = ({ v }: { v: any }) => v == null ? <span className="text-muted-foreground">—</span> : v ? <CheckCircle2 className="w-4 h-4 text-green-600 inline" aria-label="Sim" /> : <XCircle className="w-4 h-4 text-red-600 inline" aria-label="Não" />;
   // "Recebi": quem pode preencher, e nunca quem entregou ou editou essa passagem.
   const canAck = (h: any) => canEdit && userId != null && h.createdById !== userId && h.filledById !== userId;
-  const openOf = (h: any) => ((h.openItems ?? []) as OpenItem[]);
+  const openOf = (h: any) => ((h.openItems ?? []) as OpenItem[]).filter(isHandoverItem);
   const author = (h: any) => (
     <>{h.createdByName ?? h.filledByName ?? "—"}{h.filledByName && h.createdByName && h.filledByName !== h.createdByName ? <span className="text-muted-foreground"> (editado por {h.filledByName})</span> : null}</>
   );
@@ -800,7 +803,12 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
   const [date, setDate] = useState(() => operationalShift().date);
   const dashQ = trpc.shiftHandover.supervisorDashboard.useQuery({ date, city });
   const data = dashQ.data;
-  const peopleSort = useTableSort((data?.people ?? []) as any[]);
+  // 44b: horas trabalhadas (ponto; sem ele, Zello ligado) e tempo parado (Zello ligado sem andar).
+  const people = useMemo(() => ((data?.people ?? []) as any[]).map((p) => {
+    const w = workedHours(p);
+    return { ...p, workedH: w.hours, workedSrc: w.source, stoppedH: stoppedHours(p) };
+  }), [data]);
+  const peopleSort = useTableSort(people);
   const complianceQ = trpc.shiftHandover.compliance.useQuery({ date, city });
 
   // Pelo id do funcionário; só sem id se cai no nome (e na cidade).
@@ -870,7 +878,10 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
 
           {/* Condutores do dia */}
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Quem trabalhou — {fmtPTDate(date)}</CardTitle></CardHeader>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Quem trabalhou — {fmtPTDate(date)}</CardTitle>
+              <p className="text-[11px] text-muted-foreground">Horas = as do ponto (com "~" quando não há picagens e é o tempo com o Zello ligado). Parado = com o Zello ligado mas sem andar.</p>
+            </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -882,7 +893,9 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
                       <Th k="checkouts" label="Entregas" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                       <Th k="movements" label="Movs" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                       <Th k="totalActions" label="Total" align="right" className="font-bold" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
+                      <Th k="workedH" label="Horas" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                       <Th k="totalKm" label="Km" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
+                      <Th k="stoppedH" label="Parado" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                     </tr>
                   </thead>
                   <tbody>
@@ -894,7 +907,11 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
                         <td className="p-2 text-right text-blue-700 tabular-nums">{p.checkouts || ""}</td>
                         <td className="p-2 text-right tabular-nums">{p.movements || ""}</td>
                         <td className="p-2 text-right font-bold tabular-nums">{p.totalActions || ""}</td>
+                        <td className="p-2 text-right tabular-nums" title={p.workedSrc === "zello" ? "Sem picagens: tempo com o Zello ligado" : p.workedSrc === "ponto" ? "Horas do ponto" : undefined}>
+                          {fmtHours(p.workedH)}{p.workedSrc === "zello" ? <span className="text-muted-foreground"> ~</span> : null}
+                        </td>
                         <td className="p-2 text-right tabular-nums">{p.totalKm > 0 ? `${p.totalKm} km` : "—"}</td>
+                        <td className="p-2 text-right tabular-nums" title="Com o Zello ligado mas sem andar">{fmtHours(p.stoppedH)}</td>
                       </tr>
                     ))}
                   </tbody>

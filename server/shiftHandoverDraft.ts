@@ -30,6 +30,7 @@ import {
   lisbonHourInShift,
   mergeCarryOver,
   confirmedDraftKinds,
+  isHandoverItem,
   nextShiftOf,
   openItemKey,
   parseOpenItems,
@@ -84,23 +85,18 @@ export function lisbonHHMM(ms: number): string {
   return new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ms));
 }
 
-/** Pendentes que o rascunho consegue confirmar como ainda abertos. */
+/**
+ * Pendentes que o rascunho consegue confirmar como ainda abertos. 44b: só os
+ * PDAs com check-in (reclamações, perdidos, ocorrências e entregas saíram da
+ * passagem de turno — shared/shiftHandoverAuto.ts HANDOVER_ITEM_KINDS).
+ */
 export function draftOpenItems(d: {
-  complaints: Array<{ id: number; title: string }>;
-  lostFound: Array<{ id: number; clientName: string; description: string }>;
   pdas: Array<{ id: number; pdaName: string | null; employeeName: string | null }>;
-  incidents: Array<{ id: number | string; description: string; plate: string | null }>;
-  pendingDeliveries: Array<{ externalId: string; bookingNumber: string | null; plate: string | null }>;
 }, since: string): OpenItem[] {
-  const item = (kind: OpenItem["kind"], refId: number | string, text: string): OpenItem =>
-    ({ key: openItemKey(kind, refId), kind, refId, text: text.slice(0, 300), resolved: false, since });
-  return [
-    ...d.complaints.map((c) => item("complaint", c.id, `#${c.id} ${c.title}`)),
-    ...d.lostFound.map((l) => item("lost_found", l.id, `#${l.id} ${l.clientName} — ${l.description.slice(0, 120)}`)),
-    ...d.incidents.map((i) => item("incident", i.id, `${typeof i.id === "number" ? `#${i.id}` : "Ocorrência"}${i.plate ? ` ${i.plate}` : ""} — ${i.description.slice(0, 120)}`)),
-    ...d.pdas.map((p) => item("pda", p.id, `${p.pdaName ?? "PDA"} com check-in de ${p.employeeName ?? "?"}`)),
-    ...d.pendingDeliveries.map((b) => item("delivery", b.externalId, `Entrega pendente ${b.bookingNumber ?? b.externalId}${b.plate ? ` (${b.plate})` : ""}`)),
-  ];
+  return d.pdas.map((p) => ({
+    key: openItemKey("pda", p.id), kind: "pda" as const, refId: p.id,
+    text: `${p.pdaName ?? "PDA"} com check-in de ${p.employeeName ?? "?"}`.slice(0, 300), resolved: false, since,
+  }));
 }
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -424,7 +420,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
       authorName: r.createdByName ?? r.filledByName ?? null, createdById: r.createdById == null ? null : Number(r.createdById),
       filledById: r.filledById == null ? null : Number(r.filledById),
       notes: r.notes ?? null, aiSummary: r.aiSummary ?? null, ackByName: r.ackByName ?? null, acked: r.ackAt != null,
-      openItems: [...items, ...notesItems].filter((i) => !i.resolved),
+      openItems: [...items, ...notesItems].filter((i) => !i.resolved && isHandoverItem(i)),
       missingShifts: shiftsBetween(ref, cur),
     };
   }, null as HandoverDraft["previous"]);
@@ -463,7 +459,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
   };
 
   const since = shiftSince(cur);
-  const draftItems = draftOpenItems({ complaints: openComplaints, lostFound, pdas, incidents, pendingDeliveries }, since);
+  const draftItems = draftOpenItems({ pdas }, since);
   // Só fecha "pelo sistema" os tipos lidos por inteiro: uma leitura que falhou
   // ou veio cortada pelo LIMIT deixa os pendentes desse tipo como estavam (H01).
   const draftKinds = confirmedDraftKinds({

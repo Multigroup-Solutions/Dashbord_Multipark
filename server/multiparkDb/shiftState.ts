@@ -239,6 +239,8 @@ export interface LiveCar {
   checkOut: string | null;
   /** Lugar coberto (produto COVERED ou allocation 5000–7999). */
   covered: boolean;
+  /** 44b: tipo de lugar — o do lugar onde está (allocation) ou, sem ele, o do produto reservado. */
+  spotType: LiveSpotType;
   movingAt: string | null;
   returnFlight: string | null;
   returnFlightEta: string | null;
@@ -306,6 +308,49 @@ export interface LiveBlock {
 
 export interface LiveHours { parkName: string | null; day: string; openTime: string; closeTime: string }
 
+/** 44b: tipos de lugar (Booking.parkingType / allocation). */
+export type LiveSpotType = "uncovered" | "covered" | "indoor" | "vip" | "unknown";
+export const LIVE_SPOT_TYPE_LABELS: Record<LiveSpotType, string> = {
+  uncovered: "Descoberto", covered: "Coberto", indoor: "Interior", vip: "VIP", unknown: "Sem tipo",
+};
+const SPOT_TYPE_ORDER: LiveSpotType[] = ["uncovered", "covered", "indoor", "vip", "unknown"];
+
+/** Tipo de lugar: o lugar onde está (allocation) manda; sem ele, o produto reservado (parkingType). PURA. */
+export function liveSpotTypeOf(parkingType: unknown, code: string | null): LiveSpotType {
+  const byAllocation = classifyAllocation(code).spotType;
+  if (byAllocation !== "unknown") return byAllocation;
+  const t = String(parkingType ?? "").trim().toUpperCase();
+  if (t === "COVERED") return "covered";
+  if (t === "UNCOVERED") return "uncovered";
+  if (t === "INDOOR") return "indoor";
+  if (t === "VIP") return "vip";
+  return "unknown";
+}
+
+export interface SpotTypeCount { type: LiveSpotType; label: string; total: number; byPark: Array<{ parkName: string; count: number }> }
+
+/**
+ * 44b (Jorge, 7 out 2026: "dividido só por cobertos, descobertos… do que por
+ * parques — fica mais confuso"): carros no parque (fase "No parque") por tipo
+ * de lugar, na cidade escolhida; dentro de cada tipo, quantos em cada parque.
+ * Só os tipos com carros. PURA.
+ */
+export function summarizeBySpotType(cars: LiveCar[]): SpotTypeCount[] {
+  const by = new Map<LiveSpotType, Map<string, number>>();
+  for (const c of cars) {
+    if (c.phase !== "in_park") continue;
+    const m = by.get(c.spotType) ?? new Map<string, number>();
+    const park = c.parkName ?? "?";
+    m.set(park, (m.get(park) ?? 0) + 1);
+    by.set(c.spotType, m);
+  }
+  return SPOT_TYPE_ORDER.filter((t) => by.has(t)).map((type) => {
+    const m = by.get(type)!;
+    const byPark = [...m.entries()].map(([parkName, count]) => ({ parkName, count })).sort((a, b) => b.count - a.count || a.parkName.localeCompare(b.parkName, "pt"));
+    return { type, label: LIVE_SPOT_TYPE_LABELS[type], total: byPark.reduce((s, x) => s + x.count, 0), byPark };
+  });
+}
+
 export interface ParkGarageCount { garage: string; count: number }
 export interface ParkInParkSummary { parkId: string; parkName: string; total: number; garages: ParkGarageCount[] }
 
@@ -329,7 +374,7 @@ export interface ShiftState {
   upcomingWindow: { start: string; end: string };
   cashWindow: { start: string; end: string };
   blocksDay: string;
-  inPark: { total: number; byPark: ParkInParkSummary[]; cars: LiveCar[]; overdue: number; truncated: boolean };
+  inPark: { total: number; byPark: ParkInParkSummary[]; byType: SpotTypeCount[]; cars: LiveCar[]; overdue: number; truncated: boolean };
   /** Operações em curso (tudo o que não é "No parque"). */
   inProgress: LiveCar[];
   upcoming: { checkins: LiveUpcoming[]; checkouts: LiveUpcoming[]; truncated: boolean };
@@ -389,6 +434,7 @@ export function mapLiveCar(r: Row, park: ParkRef | undefined, nowMs: number): Li
     checkIn: toIsoUtc(r.check_in),
     checkOut,
     covered: isCovered(r.parking_type, code),
+    spotType: liveSpotTypeOf(r.parking_type, code),
     movingAt: toIsoUtc(r.moving_at),
     returnFlight: str(r.return_flight),
     returnFlightEta: toIsoUtc(r.return_flight_eta),
@@ -537,7 +583,7 @@ type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => 
 const emptyState = (base: Pick<ShiftState, "generatedAt" | "upcomingWindow" | "cashWindow" | "blocksDay">): ShiftState => ({
   ...base,
   parks: [],
-  inPark: { total: 0, byPark: [], cars: [], overdue: 0, truncated: false },
+  inPark: { total: 0, byPark: [], byType: [], cars: [], overdue: 0, truncated: false },
   inProgress: [],
   upcoming: { checkins: [], checkouts: [], truncated: false },
   occurrences: { list: [], truncated: false },
@@ -592,6 +638,7 @@ export async function getMultiparkShiftState(opts: ShiftStateOptions = {}, query
       inPark: {
         total: cars.length,
         byPark: summarizeInPark(cars, parks),
+        byType: summarizeBySpotType(cars),
         cars,
         overdue: cars.filter((c) => c.overdue).length,
         truncated: inParkRows.length > SHIFT_STATE_IN_PARK_LIMIT,

@@ -165,6 +165,19 @@ export const OPEN_ITEM_LABELS: Record<OpenItemKind, string> = {
 };
 export const OPEN_ITEMS_MAX = 60;
 
+/**
+ * 44b (Jorge, 7 out 2026: "retira todos estes pendentes… ocorrências,
+ * reclamações… e não mandes mais para aqui; podes ter os check-ins dos PDAs e
+ * as coisas que eles têm que pôr"): na passagem de turno só passam os PDAs
+ * ainda com check-in e o que o team leader escreve. Reclamações, perdidos,
+ * ocorrências e entregas têm as páginas deles. Os que já estavam gravados não
+ * se apagam: ficam na passagem antiga, só deixam de passar e de aparecer.
+ */
+export const HANDOVER_ITEM_KINDS: readonly OpenItemKind[] = ["note", "pda"];
+export function isHandoverItem(i: Pick<OpenItem, "kind">): boolean {
+  return HANDOVER_ITEM_KINDS.includes(i.kind);
+}
+
 export interface OpenItem {
   /** Chave estável: `kind:refId` para entidades, `note:<texto normalizado>` para notas. */
   key: string;
@@ -259,14 +272,14 @@ export function mergeCarryOver(input: {
   const checkable = new Set(input.draftKinds ?? ["complaint", "lost_found", "pda", "incident", "delivery"]);
   const byKey = new Map<string, OpenItem>();
   for (const p of input.previous) {
-    if (p.resolved) continue;
+    if (p.resolved || !isHandoverItem(p)) continue; // 44b: só PDAs e notas passam de turno
     const autoResolved = p.kind !== "note" && checkable.has(p.kind) && (input.isCheckable?.(p) ?? true) && !draftKeys.has(p.key);
     byKey.set(p.key, autoResolved
       ? { ...p, resolved: true, resolvedAt: input.nowIso ?? null, resolvedByName: "sistema" }
       : { ...p });
   }
-  for (const d of input.draft) if (!byKey.has(d.key)) byKey.set(d.key, { ...d });
-  for (const c of input.current ?? []) byKey.set(c.key, { ...(byKey.get(c.key) ?? {}), ...c });
+  for (const d of input.draft) if (isHandoverItem(d) && !byKey.has(d.key)) byKey.set(d.key, { ...d });
+  for (const c of input.current ?? []) if (isHandoverItem(c)) byKey.set(c.key, { ...(byKey.get(c.key) ?? {}), ...c });
   return capOpenItems([...byKey.values()], input.currentSince ?? null).items;
 }
 
@@ -291,11 +304,13 @@ export function confirmedDraftKinds(reads: Partial<Record<Exclude<OpenItemKind, 
  */
 export function mergeStoredOpenItems(stored: OpenItem[], incoming: OpenItem[]): OpenItem[] {
   const prev = new Map(stored.map((i) => [i.key, i]));
-  return capOpenItems(incoming).items.map((i) => {
+  const merged = capOpenItems(incoming.filter(isHandoverItem)).items.map((i) => {
     const s = prev.get(i.key);
     if (s?.resolved && !i.resolved) return { ...i, resolved: true, resolvedAt: s.resolvedAt ?? null, resolvedByName: s.resolvedByName ?? null };
     return i;
   });
+  // 44b: os de tipos que já não passam de turno (gravados antes) ficam como estavam — não se apagam.
+  return [...merged, ...stored.filter((i) => !isHandoverItem(i))];
 }
 
 /**
@@ -474,9 +489,7 @@ export function draftKeyLines(c: HandoverDraftCounts, unavailable: ReadonlyArray
     `Recolhas no próximo turno: ${v("checkinsNext")}`,
     `Entregas no próximo turno: ${v("checkoutsNext")}${!na.has("toCollectEur") && c.toCollectEur > 0 ? ` (a cobrar ${eur(c.toCollectEur)})` : ""}`,
     `Entregas pendentes (sem check-out): ${v("pendingDeliveries")}`,
-    `Reclamações novas no turno: ${v("complaintsNew")} · abertas: ${v("complaintsOpen")}`,
-    `Perdidos e achados abertos: ${v("lostFoundOpen")}`,
-    `Ocorrências abertas: ${v("incidentsOpen")}`,
+    // 44b: reclamações, perdidos e ocorrências saíram da passagem de turno (têm as páginas deles).
     `WhatsApp por ler: ${v("whatsappUnread")}`,
     `PDAs ainda com check-in: ${v("pdasCheckedIn")}`,
     `Picagens de entrada sem saída: ${v("clockInsOpen")}`,
@@ -529,7 +542,7 @@ export function buildHandoverEmail(input: {
   const summary = (input.aiSummary ?? "").trim()
     || [input.notes?.trim() ? `Notas: ${input.notes.trim()}` : "", "Sem resumo automático — vê os números abaixo."].filter(Boolean).join("\n");
   const keys = input.counts ? draftKeyLines(input.counts, input.unavailable ?? []) : [];
-  const open = input.openItems.filter((i) => !i.resolved);
+  const open = input.openItems.filter((i) => !i.resolved && isHandoverItem(i));
   const text = [
     `${subject}${input.authorName ? ` (por ${input.authorName})` : ""}`,
     "",
