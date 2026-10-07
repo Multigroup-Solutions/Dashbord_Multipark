@@ -87,23 +87,10 @@ const filteredRangeSchema = z.object({ from: daySchema, to: daySchema, projectId
   .refine((r) => r.from <= r.to, "Intervalo inválido")
   .refine((r) => daysInRange(r.from, r.to).length < MAX_DAYS, "Intervalo demasiado grande");
 
-/**
- * 42a: a marca escolhida no topo → os parques dela (os movimentos vivos
- * filtram por Park.id). Cidade ou nada escolhido → undefined (já vem pela cidade).
- */
+/** 42a: a marca escolhida no topo → os parques dela (server/movementPeople.ts). */
 async function brandParkIds(projectId: number | undefined): Promise<string[] | undefined> {
-  if (!projectId) return undefined;
-  if (projectId > 0) {
-    const { getDb } = await import("./db");
-    const { sql } = await import("drizzle-orm");
-    const db = await getDb();
-    if (!db) return undefined;
-    const [rows] = await db.execute(sql`SELECT level FROM projects WHERE id = ${projectId} LIMIT 1`) as any;
-    const level = String((rows as any[])?.[0]?.level ?? "");
-    if (level !== "brand" && level !== "project") return undefined;
-  }
-  const { liveParkScope } = await import("./opsStatsLive");
-  return (await liveParkScope(projectId)).parkIds;
+  const { brandParkIdsFor } = await import("./movementPeople");
+  return brandParkIdsFor(projectId);
 }
 
 const metricSchema = z.string().refine((m) => (METRIC_KEYS as string[]).includes(m), "Métrica inválida");
