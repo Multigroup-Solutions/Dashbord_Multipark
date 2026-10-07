@@ -108,6 +108,21 @@ export function parseXsiCallLogs(xml: string): XsiCallLog[] {
   return out;
 }
 
+/**
+ * 40a.1: o que veio no corpo. O onenetws.vodafone.pt está atrás de uma
+ * proteção anti-robôs (Imperva/Incapsula) que responde "200" com uma página
+ * HTML a quem não é browser — isso não é o Xsi a responder. PURA.
+ */
+export type XsiBodyKind = "xml" | "shield" | "html" | "empty" | "other";
+export function xsiBodyKind(body: unknown): XsiBodyKind {
+  const s = String(body ?? "").trimStart();
+  if (!s) return "empty";
+  if (/_Incapsula_Resource|incapsula|imperva|cf-browser-verification|captcha/i.test(s.slice(0, 5000))) return "shield";
+  if (/^(<!doctype\s+html|<html[\s>])/i.test(s)) return "html";
+  if (/^<(\?xml|[A-Za-z][\w:.-]*)/.test(s)) return "xml";
+  return "other";
+}
+
 /** Os últimos 9 dígitos (para cruzar números da One Net com as fichas). PURA. */
 export function last9(raw: unknown): string | null {
   const d = String(raw ?? "").replace(/\D/g, "");

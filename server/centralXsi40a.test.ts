@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  decodeXml, last9, normalizeXsiBase, normalizeXsiUserId, parseXsiCallLogs, parseXsiDirectory, parseXsiProfile, xmlBlocks, xmlText,
+  decodeXml, last9, normalizeXsiBase, normalizeXsiUserId, parseXsiCallLogs, parseXsiDirectory, parseXsiProfile, xmlBlocks, xmlText, xsiBodyKind,
 } from "../shared/centralXsi";
 
 // ── BD e Xsi simulados ──
@@ -105,6 +105,15 @@ describe("40a — XML do BroadWorks", () => {
     ]);
   });
 
+  it("40a.1: tipo de corpo — XML, escudo anti-robôs, página web, vazio", () => {
+    expect(xsiBodyKind('<?xml version="1.0"?><Profile/>')).toBe("xml");
+    expect(xsiBodyKind("  <CallLogs xmlns=\"http://schema.broadsoft.com/xsi\"></CallLogs>")).toBe("xml");
+    expect(xsiBodyKind('<html><script src="/_Incapsula_Resource?x=1"></script></html>')).toBe("shield");
+    expect(xsiBodyKind("<!doctype html><html></html>")).toBe("html");
+    expect(xsiBodyKind("")).toBe("empty");
+    expect(xsiBodyKind("{\"a\":1}")).toBe("other");
+  });
+
   it("últimos 9 dígitos para cruzar com as fichas", () => {
     expect(last9("+351 912 345 678")).toBe("912345678");
     expect(last9("410")).toBeNull();
@@ -166,6 +175,21 @@ describe("40a — Testar ligação", () => {
     expect(logged[0].params.slice(1, 4)).toEqual(["XSI GET", "/com.broadsoft.xsi-actions/v2.0/user/351210000000%40onenet.pt/profile", 200]);
     expect(JSON.stringify(h.queries.map((q) => q.params))).not.toContain(PASS);
     expect(h.queries.some((q) => /UPDATE central_xsi_config SET lastTestAt/.test(q.sql))).toBe(true);
+  });
+
+  it("40a.1: a página do escudo anti-robôs (200 + HTML Incapsula) não conta como o Xsi a responder", async () => {
+    // resposta real do onenetws.vodafone.pt a um pedido sem browser (7 out 2026)
+    const SHIELD = `<html style="height:100%"><head><META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW"><meta name="format-detection" content="telephone=no"><script type="text/javascript" src="/_Incapsula_Resource?SWJIYLWA=5074a744e2e3d891814e9a2dace20bd4,719d34d31c8e3a6e6fffd425f7e032f3"></script></head><body></body></html>`;
+    h.respond = () => ({ status: 200, body: SHIELD });
+    const r = await testXsi();
+    expect(r.ok).toBe(false);
+    expect(r.steps).toEqual([expect.objectContaining({ step: "Perfil do utilizador", status: 200, ok: false })]);
+    expect(r.error).toContain("barrado pela proteção anti-robôs da Vodafone");
+    const note = h.queries.find((q) => /INSERT INTO central_requests/.test(q.sql))!.params[5];
+    expect(String(note)).toContain("proteção anti-robôs");
+    // página web sem escudo: endereço errado
+    h.respond = () => ({ status: 200, body: "<!DOCTYPE html><html><body>Olá</body></html>" });
+    expect((await testXsi()).error).toContain("respondeu com uma página web");
   });
 
   it("palavra-passe errada: pára no perfil e explica", async () => {
