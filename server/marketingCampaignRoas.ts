@@ -85,7 +85,7 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
   // campanha de anúncio, utm_campaign ou código ligado a uma campanha.
   const utmSet = new Set(utmKeys), codeSet = new Set(codeKeys);
   const { loadMarketingBookings } = await import("./marketingLive");
-  const bookings: BookingForMatch[] = (await loadMarketingBookings(f.from, f.to, projectIds))
+  const bookings: BookingForMatch[] = (await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }))
     .filter((b) => b.adCampaignExternalId != null || (b.utmCampaign != null && utmSet.has(norm(b.utmCampaign)))
       || (b.campaign != null && codeSet.has(norm(b.campaign))) || (b.campaignName != null && codeSet.has(norm(b.campaignName))))
     .map((b) => ({ id: b.id, adAttribution: b.adAttribution, ext: b.adCampaignExternalId, utmCampaign: b.utmCampaign, code: b.campaign, codeName: b.campaignName, totalPrice: b.total }));

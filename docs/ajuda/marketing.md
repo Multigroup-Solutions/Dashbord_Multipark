@@ -2,7 +2,7 @@
 modulo: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
-palavras: alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
+palavras: reservas do marketplace, marketplace a zero, multipark.pt, parques de terceiros, alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
 ---
 # Marketing
 
@@ -50,6 +50,7 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 **Conversões e reservas, lado a lado** (Dashboard, Anúncios por marca e por marca/cidade):
 - **Conversões (Google + Meta)**: o que cada plataforma conta (Google à parte, Meta à parte). **Custo por conversão** = gasto ÷ essas conversões.
 - **Reservas via net**: reservas reais da Multipark que **não são de parceiros** (site, telefone, Marketplace) — é o que os anúncios podem trazer. Não contam as de parceiros (com parceiro na reserva, origem de parceiro ou cobradas por um agregador como Parkos/Parkvia). Ao lado: o valor e o custo por reserva via net.
+- **Marketplace** (marca das contas Multipark.pt/Multipark SA): as vendas pelo **multipark.pt** contam em **Marketplace <cidade>**, onde estão as campanhas "Multipark - <Cidade> - PT". Entram as dos **parques de terceiros** que nós vendemos (origem Marketplace ou com comissão nossa) e as dos **nossos parques** que vieram pelo multipark.pt (origem Marketplace) — estas saem da linha Airpark/Redpark/Skypark da cidade. Na Faturação, na Caixa e no CRM nada muda.
 - **Com link**: das reservas via net, quantas trazem o **link de origem**. Sem link não há como saber de que anúncio veio a reserva.
 - **Ligadas**: as que trazem a prova do clique no link (gclid/gbraid/wbraid do Google, fbclid da Meta, utm pago). Se uma marca tem conversões mas **0 ligadas**, o mais provável é o site dessa marca não guardar o link (ou o gclid) na reserva — vê a coluna "Com link".
 - O **ROAS Google (reportado)** e as "conversões contadas pela Google" são só do Google Ads. Uma conta de anúncios que deixou de ser recolhida continua a contar com o gasto que já tinha.

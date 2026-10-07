@@ -64,7 +64,7 @@ export async function computeAlertsFor(projectId?: number) {
   // mesma — antes desapareciam todos, exatamente quando havia problemas.
   if (!win.bookingsError) {
     const { loadMarketingBookings } = await import("./marketingLive");
-    for (const b of await loadMarketingBookings(windowFrom, today, projectIds).catch(() => [])) {
+    for (const b of await loadMarketingBookings(windowFrom, today, projectIds, { marketplace: true }).catch(() => [])) {
       if ((b.adAttribution === "google_paid" || b.adAttribution === "meta_paid") && b.adCampaignExternalId) byExt.set(b.adCampaignExternalId, (byExt.get(b.adCampaignExternalId) ?? 0) + 1);
     }
   }

@@ -84,7 +84,8 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   // 19a: a BD da Multipark em baixo não esconde o gasto (que é nosso) — as
   // reservas ficam "indisponíveis" (null), nunca 0.
   let bookingsError: string | null = null;
-  const bookings = await loadMarketingBookings(f.from, f.to, projectIds).catch((err: any) => {
+  // Jorge (7 out 2026): com as vendas do Marketplace (parques de terceiros e multipark.pt).
+  const bookings = await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }).catch((err: any) => {
     bookingsError = String(err?.message ?? err).slice(0, 300);
     return [];
   });
@@ -235,7 +236,8 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   const byProject = new Map<number | null, { projectId: number | null; n: number; attributed: number; rev: number; revAttributed: number; web: number; revWeb: number; webLink: number }>();
   // 19a: Multipark em baixo → gasto por marca na mesma; reservas "indisponíveis".
   let bookingsError: string | null = null;
-  const live = await loadMarketingBookings(f.from, f.to, projectIds).catch((err: any) => { bookingsError = String(err?.message ?? err).slice(0, 300); return []; });
+  // Jorge (7 out 2026: "não encontramos as reservas do Marketplace"): as vendas do Marketplace ficam em "Marketplace <cidade>".
+  const live = await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }).catch((err: any) => { bookingsError = String(err?.message ?? err).slice(0, 300); return []; });
   for (const b of live) {
     const r = byProject.get(b.projectId) ?? { projectId: b.projectId, n: 0, attributed: 0, rev: 0, revAttributed: 0, web: 0, revWeb: 0, webLink: 0 };
     const paid = b.adAttribution === "google_paid" || b.adAttribution === "meta_paid";
