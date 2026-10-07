@@ -21,7 +21,11 @@ import express, { Router, type NextFunction, type Request, type Response } from 
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { ENV } from "./_core/env";
-import { CENTRAL_SUGAR_FLAG, flattenNameValueList, normalizeCentralUsername, parseSugarCall, redactForLog, type CentralCall } from "../shared/centralSugar";
+import {
+  CENTRAL_SUGAR_FLAG, callContactRef, flattenNameValueList, normalizeCentralUsername, parseContactRef, parseSugarCall, redactForLog,
+  sugarSearchPhone, type CentralCall,
+} from "../shared/centralSugar";
+import { phoneKey } from "../shared/crmIdentity";
 
 const ACCESS_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -122,23 +126,97 @@ async function saveCall(acc: Account, call: CentralCall, source: "sugar_v10" | "
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
   const rawJson = redactForLog(raw);
+  // 39d: a que contacto a consola ligou a chamada; "tel-351…" dá o número se a chamada não o trouxer
+  const contactRef = raw && typeof raw === "object" ? callContactRef(raw as Record<string, unknown>) : null;
+  const ref = parseContactRef(contactRef);
+  if (!call.phone && ref?.kind === "tel") call = { ...call, phone: `+${ref.id}` };
   if (externalId) {
     const ex = rowsOf(await db.execute(sql`SELECT id FROM central_calls WHERE externalId = ${externalId} AND accountId = ${acc.id} LIMIT 1`))[0];
     if (ex) {
       await db.execute(sql`UPDATE central_calls SET direction = ${call.direction}, held = ${call.held ? 1 : 0}, startedAt = ${utc(call.startedAtMs)},
           durationS = ${call.durationS}, phone = COALESCE(${call.phone}, phone), subject = COALESCE(${call.subject}, subject),
-          description = COALESCE(${call.description}, description), rawJson = ${rawJson} WHERE id = ${Number(ex.id)}`);
+          description = COALESCE(${call.description}, description), contactRef = COALESCE(${contactRef}, contactRef), rawJson = ${rawJson} WHERE id = ${Number(ex.id)}`);
       return externalId;
     }
   }
   // o id que a consola mandar só se aproveita se for um UUID ainda livre
   let id = externalId && /^[0-9a-f-]{36}$/i.test(externalId) ? externalId.toLowerCase() : randomUUID();
   if (externalId && rowsOf(await db.execute(sql`SELECT 1 AS x FROM central_calls WHERE externalId = ${id} LIMIT 1`)).length) id = randomUUID();
-  await db.execute(sql`INSERT INTO central_calls (externalId, accountId, userId, direction, held, startedAt, durationS, phone, subject, description, source, rawJson, createdAt)
+  await db.execute(sql`INSERT INTO central_calls (externalId, accountId, userId, direction, held, startedAt, durationS, phone, subject, description, contactRef, source, rawJson, createdAt)
       VALUES (${id}, ${acc.id}, ${acc.userId}, ${call.direction}, ${call.held ? 1 : 0}, ${utc(call.startedAtMs)}, ${call.durationS}, ${call.phone},
-              ${call.subject}, ${call.description}, ${source}, ${rawJson}, ${utc(Date.now())})`);
+              ${call.subject}, ${call.description}, ${contactRef}, ${source}, ${rawJson}, ${utc(Date.now())})`);
   return id;
 }
+
+// ─── 39d: quem está a ligar ─────────────────────────────────────────────────
+
+interface FoundContact { id: string; name: string; title: string; department: string; phone: string; email: string | null }
+
+/** Contacto no formato do Sugar (os campos que a consola pede). */
+function sugarContact(c: FoundContact, module = "Contacts") {
+  const [first, ...rest] = c.name.split(" ");
+  return {
+    id: c.id, _module: module, name: c.name, full_name: c.name, first_name: first ?? "", last_name: rest.join(" "),
+    title: c.title, department: c.department, account_name: c.department,
+    phone_work: c.phone, phone_mobile: c.phone, phone_home: "", phone_other: "", phone_fax: "",
+    email1: c.email ?? "", email: c.email ? [{ email_address: c.email, primary_address: true }] : [],
+  };
+}
+
+/**
+ * Quem tem este número: ficha do RH (a equipa a ligar), ficha do CRM (a
+ * com mais reservas), contacto do CRM; sem nada → "Sem ficha (+351…)", para
+ * a consola ter a que ligar a chamada. Só leitura.
+ */
+export async function lookupCaller(rawPhone: string): Promise<FoundContact | null> {
+  const p = phoneKey(rawPhone);
+  const digits = (p || rawPhone).replace(/\D/g, "");
+  if (digits.length < 9) return null;
+  const last9 = digits.slice(-9);
+  const db = await getDb();
+  if (db) {
+    const emp = rowsOf(await db.execute(sql`SELECT id, fullName, position, email FROM employees
+        WHERE isActive = 1 AND (RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', ''), 9) = ${last9}
+                             OR RIGHT(REGEXP_REPLACE(COALESCE(personalPhone, ''), '[^0-9]', ''), 9) = ${last9})
+        ORDER BY id LIMIT 1`).catch(() => [[]]))[0];
+    if (emp) return { id: `emp-${emp.id}`, name: String(emp.fullName), title: `Equipa${emp.position ? ` · ${emp.position}` : ""}`, department: "Recursos Humanos", phone: p || rawPhone, email: emp.email ? String(emp.email) : null };
+    if (p) {
+      const c = rowsOf(await db.execute(sql`SELECT c.id, c.displayName, c.firstName, c.lastName, c.primaryEmail, c.isPro, c.bookings
+          FROM crm_client_phones cp JOIN crm_clients c ON c.id = cp.clientId AND c.status = 'active'
+          WHERE cp.phone = ${p} ORDER BY c.bookings DESC, c.id LIMIT 1`).catch(() => [[]]))[0];
+      if (c) {
+        const name = String(c.displayName || `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || `Cliente #${c.id}`);
+        const n = Number(c.bookings ?? 0);
+        return { id: `crm-${c.id}`, name, title: `${Number(c.isPro) ? "Cliente Pro" : "Cliente"} · ${n} reserva${n === 1 ? "" : "s"}`, department: `CRM #${c.id}`, phone: p, email: c.primaryEmail ? String(c.primaryEmail) : null };
+      }
+      const ct = rowsOf(await db.execute(sql`SELECT id, name, email, company FROM crm_contacts WHERE phoneE164 = ${p} ORDER BY id LIMIT 1`).catch(() => [[]]))[0];
+      if (ct) return { id: `ct-${ct.id}`, name: String(ct.name), title: "Contacto", department: ct.company ? String(ct.company) : "CRM", phone: p, email: ct.email ? String(ct.email) : null };
+    }
+  }
+  return { id: `tel-${digits}`, name: `Sem ficha (${p || rawPhone})`, title: "Número sem ficha na dashboard", department: "", phone: p || rawPhone, email: null };
+}
+
+/** O contacto por id (a consola pode pedir os detalhes do que encontrou). */
+async function contactById(raw: string): Promise<FoundContact | null> {
+  const ref = parseContactRef(raw);
+  if (!ref) return null;
+  const db = await getDb();
+  if (ref.kind === "tel") return lookupCaller(`+${ref.id}`);
+  if (!db) return null;
+  if (ref.kind === "emp") {
+    const e = rowsOf(await db.execute(sql`SELECT phone, personalPhone FROM employees WHERE id = ${Number(ref.id)} LIMIT 1`))[0];
+    const tel = e ? String(e.phone || e.personalPhone || "") : "";
+    return tel ? lookupCaller(tel) : null;
+  }
+  if (ref.kind === "crm") {
+    const ph = rowsOf(await db.execute(sql`SELECT phone FROM crm_client_phones WHERE clientId = ${Number(ref.id)} ORDER BY isPrimary DESC, id LIMIT 1`))[0];
+    return ph ? lookupCaller(String(ph.phone)) : null;
+  }
+  const ct = rowsOf(await db.execute(sql`SELECT phoneE164 FROM crm_contacts WHERE id = ${Number(ref.id)} LIMIT 1`))[0];
+  return ct?.phoneE164 ? lookupCaller(String(ct.phoneE164)) : null;
+}
+
+const SEARCH_MODULES = new Set(["contacts", "leads", "accounts"]);
 
 // ─── Proteções ──────────────────────────────────────────────────────────────
 
@@ -196,6 +274,14 @@ const EMPTY_LIST = { next_offset: -1, records: [] as unknown[] };
 
 type Authed = Request & { centralAccount?: Account };
 
+/** O mesmo que contactRedirect (shared/centralSugar), a correr no browser. */
+const contactRedirectScript = `function(){
+  var m=/^#?\\/?(?:Contacts|Leads|Accounts)\\/((crm|ct|emp|tel)-(\\d+))/.exec(location.hash||"");
+  var to="/";
+  if(m){ if(m[2]==="crm") to="/clientes/"+m[3]; else if(m[2]==="emp") to="/rh"; else if(m[2]==="tel") to="/clientes?q="+encodeURIComponent("+"+m[3]); else to="/clientes"; }
+  location.replace(to);
+}`;
+
 export function createCentralSugarRouter(): Router {
   const r = Router();
   r.use(express.json({ limit: "512kb" }));
@@ -212,6 +298,14 @@ export function createCentralSugarRouter(): Router {
     if (req.method !== "OPTIONS") return next();
     await logRequest(req, 204, null, "preflight (CORS)");
     res.status(204).end();
+  });
+
+  // 39d: "abrir no CRM" na consola abre {Server URL}/#Contacts/<id>: a página manda para a ficha na dashboard
+  r.get(["/", "/index.php"], (_req: Request, res: Response) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(`<!doctype html><html lang="pt"><head><meta charset="utf-8"><title>Dashboard Multipark</title></head><body>
+<p>A abrir na dashboard…</p><script>(${contactRedirectScript})();</script></body></html>`);
   });
 
   r.use(async (req: Request, res: Response, next: NextFunction) => {
@@ -299,11 +393,35 @@ export function createCentralSugarRouter(): Router {
       status: Number(row.held) ? "Held" : "Not Held", date_start: `${String(row.startedAt).replace(" ", "T")}Z`, duration_hours: Math.floor(d / 3600), duration_minutes: Math.floor((d % 3600) / 60) });
   });
   r.post("/rest/:ver/Calls/:id/link/:rel/:relId", auth, async (req: Authed, res) => {
-    await logRequest(req, 200, req.centralAccount!.id, `ligar a ${req.params.rel}`);
+    // 39d: a chamada fica ligada ao contacto (ficha do CRM/RH ou o número)
+    if (parseContactRef(req.params.relId)) {
+      const db = await getDb();
+      await db?.execute(sql`UPDATE central_calls SET contactRef = ${req.params.relId} WHERE externalId = ${req.params.id} AND accountId = ${req.centralAccount!.id}`).catch(() => null);
+    }
+    await logRequest(req, 200, req.centralAccount!.id, `ligar a ${req.params.rel} ${req.params.relId}`);
     res.json({ record: { id: req.params.id, _module: "Calls" }, related_record: { id: req.params.relId } });
   });
 
-  // pesquisas (Contacts, Accounts, Leads, search, globalsearch…): por agora sem resultados — fica registado o que procurou
+  // 39d: "quem é este número?" — POST /Contacts/filter {q: "*+351…*"}, GET /Contacts?filter…, /search, /globalsearch
+  const search = async (req: Authed, res: Response, module: string) => {
+    const phone = sugarSearchPhone({ ...(req.query as object), ...((req.body ?? {}) as object) });
+    const found = phone ? await lookupCaller(phone) : null;
+    await logRequest(req, 200, req.centralAccount!.id, found ? `pesquisa ${phone} → ${found.id} ${found.name}` : `pesquisa sem número (resposta vazia)`);
+    const mod = module.toLowerCase() === "accounts" ? "Accounts" : module.toLowerCase() === "leads" ? "Leads" : "Contacts";
+    res.json({ next_offset: -1, records: found ? [sugarContact(found, mod)] : [] });
+  };
+  r.all("/rest/:ver/:module/filter", auth, async (req: Authed, res, next) => (SEARCH_MODULES.has(req.params.module.toLowerCase()) ? search(req, res, req.params.module) : next()));
+  r.get(["/rest/:ver/search", "/rest/:ver/globalsearch"], auth, async (req: Authed, res) => search(req, res, "Contacts"));
+  r.get("/rest/:ver/:module", auth, async (req: Authed, res, next) => (SEARCH_MODULES.has(req.params.module.toLowerCase()) ? search(req, res, req.params.module) : next()));
+  r.get("/rest/:ver/:module/:id", auth, async (req: Authed, res, next) => {
+    if (!SEARCH_MODULES.has(req.params.module.toLowerCase())) return next();
+    const c = await contactById(req.params.id);
+    await logRequest(req, c ? 200 : 404, req.centralAccount!.id, c ? `contacto ${c.id} ${c.name}` : "contacto não encontrado");
+    if (!c) return res.status(404).json({ error: "not_found", error_message: "Could not find record." });
+    res.json(sugarContact(c, req.params.module));
+  });
+
+  // o resto: sem resultados — fica registado o que pediu
   r.all("/rest/:ver/*", auth, async (req: Authed, res) => {
     await logRequest(req, 200, req.centralAccount!.id, "sem tratamento (resposta vazia)");
     res.json(req.method === "GET" ? EMPTY_LIST : {});

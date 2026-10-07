@@ -37,4 +37,5 @@ Página **Integrações** (menu Sistema): um cartão por ligação externa — G
   3. Na consola: **Ligar a um servidor CRM → Sugar CRM**. Descrição "Dashboard", **Ativar CRM** e **Registar chamadas do histórico** ligados. No **Server URL**, cola o endereço do cartão. Quando pedir, usa o utilizador e a palavra-passe da pessoa desse computador.
 - **Revogar** um acesso: a consola dessa pessoa deixa logo de registar. As chamadas que já registou ficam. Não se desfaz: cria-se outro acesso.
 - O cartão mostra as **últimas chamadas** e **o que a consola pediu** (sem palavras-passe). Serve para ver se a consola está a chegar e o que manda.
-- Por agora, a pesquisa de clientes pelo número não devolve nada (a consola não mostra o cliente); só se registam as chamadas.
+- **Quem está a ligar**: quando entra uma chamada, a consola pergunta o número à dashboard. A dashboard procura primeiro nas fichas do **RH** (a equipa a ligar), depois nas fichas do **CRM** (a com mais reservas, com "Cliente" ou "Cliente Pro" e o número de reservas) e por fim nos contactos do CRM. Se não encontrar, responde "Sem ficha (+351…)" para a consola ter onde registar a chamada.
+- A chamada fica ligada a esse contacto. Abrir o contacto na consola leva à ficha do cliente na dashboard.
