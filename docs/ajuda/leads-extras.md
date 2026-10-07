@@ -2,7 +2,7 @@
 modulo: leads_extras
 titulo: Leads de Extras (leads, candidaturas do site e recrutamento)
 rotas: /extras-leads
-palavras: cartões, lista, ver em cartões, ver em lista, foto, leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop
+palavras: lixo, por tratar, prontas, pronta, repor, desfazer, não é candidatura, mailer-daemon, delivery status, cartões, lista, ver em cartões, ver em lista, foto, leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop
 ---
 # Leads de Extras
 
@@ -35,10 +35,23 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 - **Rejeitar** fecha a candidatura e põe o lead da mesma pessoa em "Sem interesse". E ao contrário: marcar um lead como **Sem interesse** (um a um ou em lote) rejeita a candidatura do site da mesma pessoa, menos se já estiver aprovada.
 - Uma candidatura aprovada já não muda de estado. Para tirar a pessoa, desativa a ficha no RH.
 - A cidade escrita na candidatura também se reconhece pela terra (ex.: "Corroios" é Lisboa, "Gaia" é Porto, "Albufeira" é Faro). Só vês e mexes nas candidaturas das tuas cidades.
-- O filtro em cima mostra Novas, Revistas, Aprovadas, Rejeitadas ou Todas.
+- **Pronta** tira a candidatura das Novas sem a aprovar nem rejeitar (quando já a viste ou já falaste com a pessoa). **Repor** devolve-a às Novas.
+- Cada mudança (Pronta, Rejeitar, Repor) mostra **Desfazer** durante uns segundos. Depois disso usa **Repor**.
+- O filtro em cima mostra Novas, Prontas (vistas), Aprovadas, Rejeitadas ou Todas.
 
 **Recrutamento (email)**
 - Os emails que chegam à **recursos-humanos@**: abre, lê os anexos, escreve notas (ficam registadas) e responde. A resposta sai sempre da recursos-humanos@.
+- Três separadores: **Por tratar**, **Prontas** e **Lixo**, cada um com o número.
+  - **Pronta** tira o email de Por tratar. **Responder** também o marca como pronto sozinho.
+  - **Lixo** é para o que não é candidatura.
+  - **Repor** devolve o email a Por tratar.
+  - Cada ação mostra **Desfazer** durante uns segundos. Nada se apaga e fica registado quem mudou e quando.
+- O que claramente **não é candidatura** vai sozinho para o Lixo, com a etiqueta "não é candidatura":
+  - avisos de entrega (*Delivery Status Notification*, *mailer-daemon*);
+  - respostas automáticas e remetentes "no-reply";
+  - respostas ao pedido de disponibilidade;
+  - newsletters, faturas e alertas de segurança.
+- Um email cujo assunto fala de candidatura, CV, vaga, motorista ou condutor nunca vai para o lixo sozinho. Na dúvida, fica em Por tratar.
 - O **link de registo** (cria a conta do candidato) só aparece a quem gere utilizadores.
 - **Sincronizar emails** vai buscar os novos já (só aparece a quem tem a permissão de sincronização). As candidaturas e os emails também entram nos Leads sozinhos, de hora a hora.
 

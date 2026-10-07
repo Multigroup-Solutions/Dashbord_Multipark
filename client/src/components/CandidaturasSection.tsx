@@ -2,7 +2,7 @@
 // de Extras (P3 lote 17g-4).
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { CheckCircle2, ChevronDown, ChevronRight, Users, XCircle } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, ChevronRight, RotateCcw, Users, XCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,7 @@ import { useViewPref } from "@/hooks/useViewPref";
 
 const APP_STATUS: Record<string, { label: string; className: string }> = {
   new: { label: "Nova", className: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300" },
-  reviewed: { label: "Revista", className: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
+  reviewed: { label: "Pronta", className: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
   approved: { label: "Aprovada", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
   rejected: { label: "Rejeitada", className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
 };
@@ -93,13 +93,26 @@ export function CandidaturasSection() {
     onError: (e) => toast.error(e.message),
   });
   const setStatus = trpc.driverApplications.setStatus.useMutation({
-    onSuccess: (_r, vars) => {
-      if (vars.status === "rejected") toast.success("Candidatura rejeitada (o lead dela fica «Sem interesse»).");
+    onSuccess: () => {
       list.refetch();
       newCount.refetch();
     },
     onError: (e) => toast.error(e.message),
   });
+  /**
+   * 41d (Jorge: "não conseguimos tirar nada daí… não dá para cancelar"): cada
+   * mudança de estado tem "Desfazer" (volta ao estado anterior). "Pronta" tira
+   * das Novas sem aprovar nem rejeitar; "Repor" volta a Nova.
+   */
+  const changeStatus = (a: { id: number; status: string }, status: "new" | "reviewed" | "rejected") => {
+    const from = (a.status === "reviewed" || a.status === "rejected" ? a.status : "new") as "new" | "reviewed" | "rejected";
+    setStatus.mutate({ id: a.id, status }, {
+      onSuccess: () => {
+        const msg = status === "rejected" ? "Candidatura rejeitada (o lead dela fica «Sem interesse»)." : status === "reviewed" ? "Marcada como pronta — saiu das Novas." : "Voltou às Novas.";
+        toast.success(msg, { action: { label: "Desfazer", onClick: () => setStatus.mutate({ id: a.id, status: from }) } });
+      },
+    });
+  };
 
   const apps = list.data ?? [];
   const pending = newCount.data?.length ?? 0;
@@ -131,9 +144,21 @@ export function CandidaturasSection() {
           variant="outline"
           className="border-red-300 text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
           disabled={setStatus.isPending}
-          onClick={() => setStatus.mutate({ id: a.id, status: "rejected" })}
+          onClick={() => changeStatus(a, "rejected")}
         >
           <XCircle className="h-3.5 w-3.5 mr-1" /> Rejeitar
+        </Button>
+      )}
+      {a.status === "new" && (
+        <Button size="sm" variant="outline" className="ml-1" disabled={setStatus.isPending} title="Já vi: sai das Novas sem aprovar nem rejeitar (Repor devolve-a)"
+          onClick={() => changeStatus(a, "reviewed")}>
+          <Check className="h-3.5 w-3.5 mr-1" /> Pronta
+        </Button>
+      )}
+      {(a.status === "reviewed" || a.status === "rejected") && (
+        <Button size="sm" variant="ghost" className="ml-1" disabled={setStatus.isPending} title="Volta às Novas"
+          onClick={() => changeStatus(a, "new")}>
+          <RotateCcw className="h-3.5 w-3.5 mr-1" /> Repor
         </Button>
       )}
     </>
@@ -179,7 +204,7 @@ export function CandidaturasSection() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="new">Novas</SelectItem>
-              <SelectItem value="reviewed">Revistas</SelectItem>
+              <SelectItem value="reviewed">Prontas (vistas)</SelectItem>
               <SelectItem value="approved">Aprovadas</SelectItem>
               <SelectItem value="rejected">Rejeitadas</SelectItem>
               <SelectItem value="all">Todas</SelectItem>
