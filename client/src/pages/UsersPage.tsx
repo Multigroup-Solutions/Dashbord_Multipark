@@ -1,7 +1,10 @@
 import { useState, useEffect } from "react";
 import { keepPreviousData } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
-import { UserEmployeeLinks } from '@/components/UserEmployeeLinks';
+import { UserAgentLinks, UserEmployeeLinks } from '@/components/UserEmployeeLinks';
+import { PersonLinksDialog } from '@/components/PersonLinksDialog';
+import { SuspendSuggestionsDialog } from '@/components/SuspendSuggestionsDialog';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -56,6 +59,7 @@ import {
   MapPin,
   SlidersHorizontal,
   X,
+  Link2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -332,11 +336,13 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const [deactivating, setDeactivating] = useState<{ id: number; name: string } | null>(null);
 
   const toggleActiveMutation = trpc.users.toggleActive.useMutation({
-    onSuccess: (_, vars) => {
+    onSuccess: (r, vars) => {
+      // 41a: a ficha do RH acompanha a conta (o agente da Multipark fica ligado)
+      const withEmp = r?.employees?.length ? ` (e a ficha de ${r.employees.join(", ")})` : "";
       toast.success(
         vars.isActive
-          ? "Utilizador ativado"
-          : `Utilizador desativado — ${deactivationReasonLabel(vars.reason ?? DEFAULT_DEACTIVATION_REASON, vars.reasonOther)}`,
+          ? `Utilizador ativado${withEmp}`
+          : `Utilizador desativado${withEmp} — ${deactivationReasonLabel(vars.reason ?? DEFAULT_DEACTIVATION_REASON, vars.reasonOther)}`,
       );
       refreshUsers();
       setDeactivating(null);
@@ -369,6 +375,9 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [inviteLink, setInviteLink] = useState("");
   const [permUser, setPermUser] = useState<{ id: number; name: string } | null>(null);
+  // 41a: "Ligações" (conta ↔ ficha ↔ agente) a partir da lista — quem gere o RH (admin+)
+  const canLinks = can(currentUser, "rh", "manage");
+  const [linksFor, setLinksFor] = useState<{ userId: number; employeeId: number | null; name: string } | null>(null);
 
   // Link direto (?userId=…[&view=permissions]): a conta é procurada no servidor
   // (com a mesma guarda de cidade) em vez de na lista completa, que já não vem.
@@ -538,6 +547,18 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
           {sendInviteMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
         </Button>
       )}
+      {canLinks && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setLinksFor({ userId: u.id, employeeId: (u.employees.find((e) => e.isActive) ?? u.employees[0])?.id ?? null, name: u.name ?? u.email ?? `#${u.id}` })}
+          className="h-8 w-8 p-0"
+          title="Ligações: ficha do RH e agente da Multipark (unir / separar)"
+          aria-label="Ligações"
+        >
+          <Link2 className="h-3.5 w-3.5" />
+        </Button>
+      )}
       {canGrantPermissionsTo(myRole, u.role) && (
         <Button
           variant="ghost"
@@ -576,7 +597,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const to = Math.min(total, (page + 1) * filters.pageSize);
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="min-w-0 space-y-4 sm:space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
@@ -587,12 +608,16 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
           )}
           <p className="text-sm text-muted-foreground">Criar, editar e gerir utilizadores da plataforma</p>
         </div>
-        {canManageUsers && (
-          <Button onClick={openCreate} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Novo Utilizador
-          </Button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* 41a: sugestão de suspender quem está parado há meses (quem gere o RH) */}
+          <SuspendSuggestionsDialog enabled={canLinks} />
+          {canManageUsers && (
+            <Button onClick={openCreate} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Novo Utilizador
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Resumo — cada número é um atalho para o filtro correspondente */}
@@ -826,6 +851,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       <span className="text-[11px] text-muted-foreground">Último acesso: {lastAccess(u)}</span>
                     </div>
                     {u.employees.length > 0 && <UserEmployeeLinks employees={u.employees} />}
+                    {u.employees.length > 0 && <div className="text-xs text-muted-foreground">Agente: <UserAgentLinks employees={u.employees} /></div>}
                   </div>
                 ))}
               </div>
@@ -833,7 +859,9 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 
               {/* Lista (tabela) */}
               {view === "list" && (
-              <div className="overflow-x-auto">
+              // 41a: sem o segundo invólucro com scroll (a Table já tem um) e
+              // células que quebram linha — a lista não sai pela direita do ecrã
+              <div className="min-w-0">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -841,11 +869,12 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       <TableHead>Nome</TableHead>
                       <TableHead>Email</TableHead>
                       <TableHead>Ficha RH</TableHead>
+                      <TableHead>Agente</TableHead>
                       <TableHead>Role</TableHead>
-                      <TableHead>Departamento</TableHead>
+                      <TableHead className="hidden xl:table-cell">Departamento</TableHead>
                       <TableHead>Estado</TableHead>
                       <TableHead>Último Acesso</TableHead>
-                      <TableHead>Criado em</TableHead>
+                      <TableHead className="hidden xl:table-cell">Criado em</TableHead>
                       <TableHead className="text-right">Ações</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -861,10 +890,11 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                           </Avatar>
                         </TableCell>
                         <TableCell className="font-medium min-w-[160px] max-w-[240px] whitespace-normal">{nameCell(u)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground max-w-[220px] truncate" title={u.email ?? undefined}>{u.email ?? "—"}</TableCell>
-                        <TableCell><UserEmployeeLinks employees={u.employees} /></TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-[200px]" title={u.email ?? undefined}><div className="truncate">{u.email ?? "—"}</div></TableCell>
+                        <TableCell className="min-w-[140px] max-w-[220px] whitespace-normal"><UserEmployeeLinks employees={u.employees} /></TableCell>
+                        <TableCell className="min-w-[110px] max-w-[180px] whitespace-normal"><UserAgentLinks employees={u.employees} /></TableCell>
                         <TableCell>{roleCell(u)}</TableCell>
-                        <TableCell className="text-sm">
+                        <TableCell className="hidden xl:table-cell text-sm">
                           {u.department ? (
                             <Badge variant="secondary" className="text-xs font-normal max-w-[180px]" title={u.department}>
                               <Building2 className="h-3 w-3 mr-1 shrink-0" />
@@ -874,9 +904,9 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                             <span className="text-muted-foreground text-xs">—</span>
                           )}
                         </TableCell>
-                        <TableCell>{statusCell(u)}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{lastAccess(u)}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
+                        <TableCell className="whitespace-normal">{statusCell(u)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground whitespace-normal min-w-[90px]">{lastAccess(u)}</TableCell>
+                        <TableCell className="hidden xl:table-cell text-xs text-muted-foreground">
                           {format(new Date(u.createdAt), "dd MMM yyyy", { locale: pt })}
                         </TableCell>
                         <TableCell className="text-right">{actionsCell(u)}</TableCell>
@@ -953,12 +983,16 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
       {/* Permissões do utilizador */}
       {permUser && <UserPermissionsDialog user={permUser} onClose={() => setPermUser(null)} />}
 
+      {/* 41a: Ligações — a ficha desta conta (contas e agentes); sem ficha, ligar a uma */}
+      <PersonLinksDialog employeeId={linksFor?.employeeId ?? null} name={linksFor?.name} open={!!linksFor?.employeeId} onOpenChange={(o) => !o && setLinksFor(null)} />
+      {linksFor && !linksFor.employeeId && <LinkUserToEmployeeDialog user={linksFor} onClose={() => setLinksFor(null)} onLinked={(employeeId) => setLinksFor({ ...linksFor, employeeId })} />}
+
       {/* Desativar: motivo + notas (opcionais) */}
       <DeactivationDialog
         open={!!deactivating}
         subjectName={deactivating?.name ?? ""}
         subjectKind="utilizador"
-        effectNote="O acesso à plataforma é bloqueado imediatamente."
+        effectNote="O acesso à plataforma é bloqueado imediatamente. A ficha do RH desta pessoa também fica inativa (o agente da Multipark continua ligado). Para só tirar o acesso por uns tempos, usa Suspender."
         pending={toggleActiveMutation.isPending}
         onOpenChange={(v) => { if (!v) setDeactivating(null); }}
         onConfirm={confirmDeactivation}
@@ -1122,6 +1156,38 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
 // Pedido Jorge: "na página dos utilizadores, quais são as permissões que eles
 // têm, poder adicionar ou não". 3 estados por permissão: — (default do role),
 // ✓ dar, ✕ negar.
+/** 41a: conta sem ficha → escolher a ficha do RH a que pertence (fica principal, ou extra se a ficha já tiver conta). */
+function LinkUserToEmployeeDialog({ user, onClose, onLinked }: { user: { userId: number; name: string }; onClose: () => void; onLinked: (employeeId: number) => void }) {
+  const utils = trpc.useUtils();
+  const [emp, setEmp] = useState("");
+  const emps = trpc.multipark.employeesForMapping.useQuery();
+  const options = (emps.data ?? []).map((e: any) => ({ value: String(e.id), label: `${e.fullName}${e.multiparkAgentName ? ` · agente ${e.multiparkAgentName}` : ""}` }));
+  const link = trpc.identityLinks.linkUser.useMutation({
+    onSuccess: (r) => {
+      utils.users.invalidate();
+      toast.success(r.mode === "principal" ? "Conta ligada à ficha (principal)." : "Conta ligada à ficha (extra).");
+      onLinked(Number(emp));
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader><DialogTitle>Ligar {user.name} a uma ficha do RH</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">Esta conta não tem ficha. Escolhe a ficha da pessoa: se a ficha já tiver conta, esta fica como conta extra. Depois podes ligar o agente da Multipark.</p>
+        {emps.error && <p className="text-sm text-destructive">{emps.error.message}</p>}
+        <SearchableSelect value={emp} onChange={setEmp} options={options} placeholder={emps.isLoading ? "A carregar…" : "Escolher ficha ativa…"} searchPlaceholder="Procurar nome…" className="w-full" />
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button disabled={!emp || link.isPending} onClick={() => link.mutate({ employeeId: Number(emp), userId: user.userId })}>
+            {link.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Link2 className="h-4 w-4 mr-1" />}Ligar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function UserPermissionsDialog({ user, onClose }: { user: { id: number; name: string }; onClose: () => void }) {
   const utils = trpc.useUtils();
   const { data: catalog = [] } = trpc.permissions.catalog.useQuery();

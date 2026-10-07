@@ -97,7 +97,9 @@ describe("diretório de utilizadores — filtros SQL", () => {
 
   it("com ficha / sem ficha RH", () => {
     expect(compile(buildUserDirectoryWhere({ employee: "with" }, cityIds)).sql).toContain("EXISTS (SELECT 1 FROM employees dir_link");
-    expect(compile(buildUserDirectoryWhere({ employee: "without" }, cityIds)).sql).toContain("NOT (EXISTS (SELECT 1 FROM employees dir_link");
+    expect(compile(buildUserDirectoryWhere({ employee: "without" }, cityIds)).sql).toContain("NOT ((EXISTS (SELECT 1 FROM employees dir_link");
+    // 41a: a conta extra (employee_accounts) também conta como "com ficha"
+    expect(compile(buildUserDirectoryWhere({ employee: "with" }, cityIds)).sql).toContain("FROM employee_accounts dir_alias JOIN employees dir_alias_emp");
   });
 
   it("o âmbito de cidades do visitante aplica-se sempre, também às subconsultas", () => {

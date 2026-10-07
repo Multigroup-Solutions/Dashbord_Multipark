@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, foto, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes
+palavras: possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
 ---
 # RH e ponto
 
@@ -79,7 +79,15 @@ A regra é que **cada agente é um utilizador e cada utilizador tem um agente**.
 **Uma pessoa: contas e agentes**
 1. Escolhe a ficha. Vês as **contas de login** (principal e extra) e os **agentes da Multipark** (principal e extra). Uma pessoa pode ter vários agentes (emails antigos e novos).
 2. **Anexar agente**: escreve o nome ou o email do agente e carrega em **Anexar**. Se o agente estava noutra ficha, passa para esta. Se a pessoa já tinha agente, este entra como agente extra.
-3. **Retirar**: tira o agente da ficha. Se era o principal e havia extras, o primeiro extra passa a principal.
+3. **Separar** (agente): tira o agente da ficha, depois de confirmares. Se era o principal e havia extras, o primeiro extra passa a principal. Na Multipark não muda nada.
+4. **Ligar conta**: procura uma conta de login (nome ou email) e liga-a a esta ficha — fica principal se a ficha não tiver conta, senão extra. **Separar** (conta): a conta deixa de estar ligada (não é apagada nem desativada); se era a principal e havia uma extra, a extra passa a principal.
+5. O mesmo cartão abre-se da **ficha do RH** (botão **Ligações** no cartão "Utilizador e permissões") e da lista de **Utilizadores** (ícone de corrente).
+
+**Agente da Multipark na ficha**
+- No cartão **Utilizador e permissões** da ficha vês o agente (ou agentes) da Multipark da pessoa.
+- **Abrir agente** vai a Pessoas → Condutores e agentes → Agentes com a pessoa já escolhida (quem tem acesso a essa página).
+- **Abrir na Multipark** abre o agente no backoffice da Multipark. Para isso, em Definições → "Endereço de um agente na Multipark", cola o endereço de um agente e troca o número dele por {id}. Sem isso aparece **Copiar ID**.
+- **Inativar não solta**: desativar a ficha ou a conta deixa o agente ligado; o cruzamento de agentes conta a conta desativada como utilizador (o agente não passa a "sem utilizador") e a ligação de hora a hora não dá o agente de uma ficha inativa a outra pessoa.
 
 **Comparar a lista de agentes da Multipark (xlsx ou CSV)**
 1. Na Multipark exporta os agentes (xlsx) e carrega o ficheiro no cartão **Comparar a lista de agentes da Multipark**. É lida a folha **Agentes** (nome, email, telefone, cargo, estado e ID de utilizador). O CSV antigo (nome_agente;email;cidade) também serve.
