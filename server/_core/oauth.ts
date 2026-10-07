@@ -1,6 +1,6 @@
 import { AUTH_DENIED_PARAM, AUTH_DENIED_VALUE, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { normalizeEmail } from "@shared/email";
-import { googlePromptFor, loginUrlWithReturn, safeReturnPath } from "@shared/loginReturn";
+import { googlePromptFor, safeReturnPath } from "@shared/loginReturn";
 import type { Express, Request, Response, CookieOptions } from "express";
 import crypto from "node:crypto";
 import * as db from "../db";
@@ -8,7 +8,7 @@ import { adoptPlaceholderAccountByEmail, linkEmployeesToUserByEmail } from "../i
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 import { shouldRejectUnverifiedGoogleEmail } from "./googleIdentity";
-import { OAUTH_STATE_MAX_MS, checkCallbackState, createOAuthState, peekReturnTo } from "./oauthState";
+import { OAUTH_STATE_MAX_MS, checkCallbackState, createOAuthState, retryLoginUrl } from "./oauthState";
 
 // 30 dias é o novo default (em vez de 1 ano) — reduz janela de exposição
 // caso uma cookie seja intercetada. O nome da env é opcional.
@@ -207,7 +207,7 @@ export function registerOAuthRoutes(app: Express) {
 
     // State ASSINADO com o destino (vale sozinho no callback, ver oauthState.ts)
     // + cookie httpOnly com o mesmo valor (quando volta, tem de bater certo).
-    const state = createOAuthState(jwtSecret!, { returnTo: safeReturnPath((req.query as any)?.next) });
+    const state = createOAuthState(jwtSecret!, { returnTo: safeReturnPath((req.query as any)?.next), pda: req.query.pda === "1" });
     res.cookie(OAUTH_STATE_COOKIE, state, getStateCookieOptions(req));
     // Regresso depois do login (ex.: o convite): só caminhos desta app.
     rememberReturnPath(req, res);
@@ -244,7 +244,7 @@ export function registerOAuthRoutes(app: Express) {
       const code = /^[a-z_]{1,64}$/.test(googleError) ? googleError : "desconhecido";
       // access_denied = cancelado ou conta sem acesso: aviso, não erro de configuração.
       (code === "access_denied" ? console.warn : console.error)("[OAuth] Google devolveu erro:", googleError.slice(0, 64), description.slice(0, 200));
-      const retry = loginUrlWithReturn(peekReturnTo(typeof req.query.state === "string" ? req.query.state : null));
+      const retry = retryLoginUrl(typeof req.query.state === "string" ? req.query.state : null);
       if (code === "access_denied") {
         sendErrorPage(res, 400,
           "Entrada cancelada",
@@ -270,7 +270,7 @@ export function registerOAuthRoutes(app: Express) {
         "Falta o código de autorização",
         "A resposta da Google chegou incompleta.",
         undefined,
-        loginUrlWithReturn(peekReturnTo(returnedState)));
+        retryLoginUrl(returnedState));
       return;
     }
 
@@ -296,7 +296,7 @@ export function registerOAuthRoutes(app: Express) {
         stateCheck.reason === "expired"
           ? "Passaram mais de 10 minutos entre começar o login e voltar da Google."
           : "Começa o login outra vez.",
-        loginUrlWithReturn(peekReturnTo(returnedState)));
+        retryLoginUrl(returnedState));
       return;
     }
     if (!stateCheck.cookieMatched) {

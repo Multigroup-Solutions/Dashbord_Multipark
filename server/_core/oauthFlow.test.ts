@@ -140,6 +140,16 @@ describe("login pelo QR do PDA (rotas reais)", () => {
     expect(res.status).toBe(400);
     const html = await res.text();
     expect(html).toContain("Entrada cancelada");
-    expect(html).toContain(`/api/oauth/login?next=${encodeURIComponent(PDA_PATH)}`.replace(/&/g, "&amp;"));
+    // no PDA, a repetição volta a pedir a conta (pda=1, D61)
+    expect(html).toContain(`/api/oauth/login?next=${encodeURIComponent(PDA_PATH)}&pda=1`.replace(/&/g, "&amp;"));
+  });
+
+  it("login fora do PDA: Tentar de novo sem pda=1", async () => {
+    const res = await fetch(`${base}/api/oauth/login?next=%2Frh`, { redirect: "manual" });
+    const google = new URL(res.headers.get("location")!);
+    expect(google.searchParams.get("prompt")).toBeNull();
+    const cb = await fetch(`${base}/api/oauth/callback?error=access_denied&state=${encodeURIComponent(google.searchParams.get("state")!)}`, { redirect: "manual" });
+    const html = await cb.text();
+    expect(html).toContain('href="/api/oauth/login?next=%2Frh"');
   });
 });
