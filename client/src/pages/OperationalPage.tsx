@@ -18,15 +18,17 @@ import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { ZelloLiveTab } from "@/components/ZelloLiveTab";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
+import RadioPage from "@/pages/RadioPage";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { lisbonToday } from "@shared/expensePeriods";
 import { addDays, daysInRange, zelloLatestDay } from "@shared/lisbonDay";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { PDA_ZELLO_LABELS } from "@shared/pdaZelloMatch";
 import { SpeedTrackMap } from "@/components/maps/SpeedTrackMap";
 import {
   Plus, Trash2, Eye, Gauge, ArrowUpDown, Satellite, Users, Settings,
-  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw,
+  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -75,7 +77,7 @@ export default function OperationalPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, e os PDAs. As transcrições de rádio estão em Operações → Rádio.</p>
+        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, os PDAs e o rádio.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
@@ -83,11 +85,13 @@ export default function OperationalPage() {
           {has("live") && <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>}
           {has("history") && <TabsTrigger value="history"><Gauge className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>}
           {has("pdas") && <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>}
+          {has("radio") && <TabsTrigger value="radio"><Radio className="w-4 h-4 mr-1" />Rádio</TabsTrigger>}
         </TabsList>
         {has("dia") && <TabsContent value="dia"><DayActivityTab onOpenSpeedHistory={has("history") ? openSpeedHistory : undefined} /></TabsContent>}
         {has("live") && <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>}
         {has("history") && <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>}
         {has("pdas") && <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>}
+        {has("radio") && <TabsContent value="radio">{tab === "radio" && <RadioPage />}</TabsContent>}
       </Tabs>
     </div>
   );
@@ -650,7 +654,9 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
                         <p className="text-xs text-muted-foreground font-normal">
                           {h.displayName || h.zelloUsername}
                           {h.shares?.length > 1 && ` · ${h.shares.map((s: any) => `${s.name.split(" ")[0]} ${s.km.toFixed(1)} km`).join(", ")}`}
-                          {h.leftoverKm > 0.05 && <span className="text-amber-700"> · {h.leftoverKm.toFixed(1)} km sem login</span>}
+                          {h.leftoverKm > 0.05 && (h.leftoverOwnerName
+                            ? <span> · {h.leftoverKm.toFixed(1)} km do dono ({h.leftoverOwnerName})</span>
+                            : <span className="text-amber-700"> · {h.leftoverKm.toFixed(1)} km sem login</span>)}
                         </p>
                       </td>
                       <td className="p-2 text-right font-mono">{parseFloat(h.totalKm || "0").toFixed(1)}</td>
@@ -928,6 +934,13 @@ function PdasTab() {
     onSuccess: () => { utils.operational.pdas.list.invalidate(); toast.success("PDA retirado (passou a Inativo; o histórico fica)."); },
     onError: (e) => toast.error(e.message),
   });
+  // 43b: o Zello de cada PDA bate certo com o Zello? (e corrigir com um clique)
+  const zelloCheckQ = trpc.operational.pdas.zelloCheck.useQuery(undefined, { retry: false, staleTime: 5 * 60_000 });
+  const zelloCheckBy = useMemo(() => new Map(((zelloCheckQ.data?.available ? zelloCheckQ.data.checks : []) ?? []).map((c) => [c.pdaId, c])), [zelloCheckQ.data]);
+  const fixZelloMut = trpc.operational.pdas.update.useMutation({
+    onSuccess: () => { utils.operational.pdas.list.invalidate(); utils.operational.pdas.zelloCheck.invalidate(); toast.success("Zello do PDA corrigido."); },
+    onError: (e) => toast.error(e.message),
+  });
 
   const PDA_STATUS_LABELS: Record<string, string> = { active: "Ativo", inactive: "Inativo", maintenance: "Manutenção", lost: "Perdido" };
   const PDA_STATUS_COLORS: Record<string, string> = { active: "bg-green-100 text-green-800", inactive: "bg-gray-100 text-gray-800", maintenance: "bg-amber-100 text-amber-800", lost: "bg-red-100 text-red-800" };
@@ -940,8 +953,10 @@ function PdasTab() {
   }, [activeCheckins]);
 
   return (
-    <div className="space-y-4 mt-4">
-      <OpsPresencePanel />
+    // 43b: os alertas "a trabalhar sem PDA/Zello" ficam pequenos e de lado (no telemóvel, por cima)
+    <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+    <aside className="order-first min-w-0 lg:order-last lg:sticky lg:top-4"><OpsPresencePanel /></aside>
+    <div className="min-w-0 space-y-4">
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
@@ -1013,6 +1028,22 @@ function PdasTab() {
                   </div>
 
                   <div className="text-sm space-y-1 text-muted-foreground">
+                    {(() => {
+                      const zc = zelloCheckBy.get(pda.id);
+                      const bad = zc && zc.status !== "ok";
+                      return (
+                        <div className={bad ? "rounded border border-amber-300 bg-amber-50 p-1.5 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200" : ""}>
+                          <p>Zello: <span className="font-medium text-foreground">{pda.zelloUsername || "—"}</span>{zc && <span className="ml-1 text-xs">· {PDA_ZELLO_LABELS[zc.status]}</span>}</p>
+                          {bad && <p className="text-xs">{zc!.detail}</p>}
+                          {bad && zc!.suggestion && canManage && zc!.status !== "duplicado" && (
+                            <Button size="sm" variant="outline" className="mt-1 h-7 px-2 text-xs" disabled={fixZelloMut.isPending}
+                              onClick={() => fixZelloMut.mutate({ id: pda.id, data: { zelloUsername: zc!.suggestion } })}>
+                              Corrigir para {zc!.suggestion}
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {pda.model && <p>Modelo: {pda.model}</p>}
                     {pda.phoneNumber && <p>Nº: {pda.phoneNumber}</p>}
                     {pda.simDataPlan && <p>Plano: {pda.simDataPlan}</p>}
@@ -1069,6 +1100,7 @@ function PdasTab() {
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
       {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} pdaName={pdaList?.find((p: any) => p.id === viewPda)?.name ?? null} onClose={() => setViewPda(null)} />}
       {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
+    </div>
     </div>
   );
 }
@@ -1299,8 +1331,9 @@ function PdaHistoryDialog({ pdaId, pdaName, onClose }: { pdaId: number; pdaName:
                         : c.mobileDataMbStart != null ? `Início: ${c.mobileDataMbStart} MB` : "-"}
                     </td>
                     <td className="p-2">
-                      <Badge variant={c.status === "checked_in" ? "default" : "secondary"}>
-                        {c.status === "checked_in" ? "Em uso" : "Devolvido"}
+                      {/* 43b: a coluna chama-se checkinStatus (antes lia c.status e dizia sempre "Devolvido") */}
+                      <Badge variant={(c.checkinStatus ?? c.status) === "checked_in" ? "default" : "secondary"}>
+                        {(c.checkinStatus ?? c.status) === "checked_in" ? "Em uso" : "Devolvido"}
                       </Badge>
                     </td>
                   </tr>

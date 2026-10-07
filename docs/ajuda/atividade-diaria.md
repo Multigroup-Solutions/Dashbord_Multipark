@@ -2,14 +2,14 @@
 modulo: atividade_diaria
 titulo: Actividade Diária (quem fez o quê, GPS e PDAs)
 rotas: /operacional
-palavras: trajeto, mapa das velocidades, geojson, recolher dados, forçar re-divisão, escolher pessoa, actividade diária, atividade diária, atividade do dia, quem fez o quê, recolhas, entregas, movimentações, no horário, fora do horário, escalados, km, quilómetros, gps, zello, velocidade, excessos, histórico de velocidade, ao vivo, mapa, pda, pdas, check-in do pda, retirar pda, agente por ligar, parceiro, pda sem login, ponto
+palavras: dono do pda, zello do pda, nome do zello, trajeto, mapa das velocidades, geojson, recolher dados, forçar re-divisão, escolher pessoa, actividade diária, atividade diária, atividade do dia, quem fez o quê, recolhas, entregas, movimentações, no horário, fora do horário, escalados, km, quilómetros, gps, zello, velocidade, excessos, histórico de velocidade, ao vivo, mapa, pda, pdas, check-in do pda, retirar pda, agente por ligar, parceiro, pda sem login, ponto
 ---
 # Actividade Diária
 
-Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, os km e as velocidades do GPS (Zello) e os PDAs. As transcrições de rádio estão em **Operações → Rádio**.
+Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, os km e as velocidades do GPS (Zello), os PDAs e o **Rádio** (gravações do Zello, provas e transcrições), que passou a ser um separador daqui.
 
 **Que abas vês**
-- Só aparecem as abas a que a tua conta tem acesso. **Atividade do Dia** e **Ao Vivo** pedem a Actividade Diária; **Histórico Diário**, o Histórico diário (GPS); **PDAs**, os PDAs.
+- Só aparecem as abas a que a tua conta tem acesso. **Atividade do Dia** e **Ao Vivo** pedem a Actividade Diária; **Histórico Diário**, o Histórico diário (GPS); **PDAs**, os PDAs; **Rádio**, o Rádio.
 - **Condutores e extras** veem só **O meu histórico de velocidade**: os km e as velocidades deles, dia a dia, nos últimos 30 ou 90 dias.
 
 **Atividade do Dia**
@@ -42,11 +42,18 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, os km
 - Mapa com a posição de cada condutor. Atualiza sozinho a cada 30 segundos.
 - Em cima fica uma linha só: quantos estão no mapa, a hora da última leitura e os alertas contados (acima do limite de velocidade, bateria fraca, sem reportar há mais de 1 h). Carrega num alerta para ver os nomes.
 - **Atualizar** lê tudo de novo (posições, ligações Zello ↔ pessoas e PDAs) e volta a mostrar toda a gente no mapa.
-- **Utilizadores Zello ↔ Pessoas**: os PDAs ligam-se pelo check-in do dia; o seletor fixo é só para telemóveis pessoais.
+- **Utilizadores Zello ↔ Pessoas**:
+  - Nos **PDAs** manda o check-in do dia.
+  - Se o PDA é de uma pessoa, escolhe-a como **dono do PDA**. O dono fica com o GPS sempre que ninguém fez check-in no PDA, também nos km de antes e de depois do check-in de outra pessoa (antes esses km ficavam "sem login").
+  - Nos telemóveis pessoais, escolhe a pessoa.
+  - Um PDA de outra cidade já não aparece como telemóvel pessoal.
 
 **PDAs**
-- Os PDAs da cidade, quem está com cada um e desde quando, e os alertas **A trabalhar sem PDA ou Zello ligado**.
-- **Novo PDA**, **editar** e **QR** para quem edita PDAs. O olho abre o **histórico** do PDA (os últimos 100 check-ins).
+- Os PDAs da cidade, quem está com cada um e desde quando.
+- Cada PDA mostra o seu **Zello** e se bate certo com a lista do Zello: certo, com outras maiúsculas, escrito de outra maneira (por exemplo "extra12" contra "Extra_12"), não existe, sem Zello, ou repetido noutro PDA. Quando há um nome parecido, quem edita PDAs tem **Corrigir para …**. O GPS só se liga à pessoa quando o Zello do PDA é exatamente o do Zello.
+- Os nomes do Zello comparam-se sem ligar a maiúsculas.
+- Os alertas **Sem PDA ou Zello** (ponto aberto sem PDA, Zello desligado, movimentos sem ponto) ficam pequenos, ao lado (no telemóvel, por cima). Carrega no título para os encolher. **Visto** marca que trataste; **+ nota** abre a caixa para escreveres porquê.
+- **Novo PDA**, **editar** e **QR** para quem edita PDAs. O olho abre o **histórico** do PDA (os últimos 100 check-ins, com "Em uso" ou "Devolvido").
 - **Retirar** (o caixote, só administração) passa o PDA a **Inativo**. Nunca se apaga: o histórico de quem o teve e o GPS partido por pessoa ficam.
 
 **Quando a leitura falha**

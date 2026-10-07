@@ -386,7 +386,7 @@ export const SETTINGS = {
     key: "availability.assigneeEmail",
     group: "disponibilidade",
     label: "Responsável pelas disponibilidades a confirmar",
-    description: "Email da pessoa a quem são atribuídas as tarefas \"Disponibilidade a confirmar\". Vazio = usa AVAILABILITY_TASK_ASSIGNEE_EMAIL.",
+    description: "Email da pessoa a quem são atribuídas as tarefas \"Disponibilidade a confirmar\". Vazio = usa AVAILABILITY_TASK_ASSIGNEE_EMAIL; sem nenhum, a tarefa fica sem responsável (na lista de Tarefas da cidade da pessoa).",
     schema: z.union([z.literal(""), emailSchema]),
     defaultValue: "",
     wiring: "live",

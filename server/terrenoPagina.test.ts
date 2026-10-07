@@ -61,9 +61,9 @@ afterEach(() => {
 });
 
 describe("Actividade Diária: abas pelas permissões (as do servidor)", () => {
-  it("team leader e supervisor veem as quatro", () => {
+  it("team leader e supervisor veem as quatro e (43b) o Rádio", () => {
     for (const role of ["team_leader", "supervisor", "admin"]) {
-      expect(operationalAccess({ role } as any)).toEqual({ tabs: ["dia", "live", "history", "pdas"], ownSpeedOnly: false });
+      expect(operationalAccess({ role } as any)).toEqual({ tabs: ["dia", "live", "history", "pdas", "radio"], ownSpeedOnly: false });
     }
   });
   it("condutor e extra: nenhuma aba, só o próprio histórico de velocidade", () => {

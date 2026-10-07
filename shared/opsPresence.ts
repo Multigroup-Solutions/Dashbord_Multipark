@@ -118,14 +118,17 @@ export function evaluatePresence(input: {
   for (const p of people) {
     if (!isOperationalPosition(p.position)) continue;
     if (!clockIsOpen(p.clockOpenSince, now)) continue;
-    if (!p.pdaName) {
+    // 43b: sem PDA mas com o Zello fixo (o telemóvel dele ou o PDA de que é dono) não é "sem PDA"
+    if (!p.pdaName && !p.zelloUsername) {
       if (now - (p.clockOpenSince as number) >= CLOCK_GRACE_MINUTES * 60_000) {
         out.push({ employeeId: p.employeeId, kind: "clock_no_pda", city: p.city, detail: `Ponto aberto às ${hhmmLisbon(p.clockOpenSince as number)} e sem PDA.` });
       }
       continue;
     }
     if (zelloOff(p)) {
-      out.push({ employeeId: p.employeeId, kind: "clock_zello_off", city: p.city, detail: `Tem o ${p.pdaName}, mas o Zello (${p.zelloUsername}) não reporta há mais de ${ZELLO_STALE_SECONDS / 60} min.` });
+      out.push({ employeeId: p.employeeId, kind: "clock_zello_off", city: p.city, detail: p.pdaName
+        ? `Tem o ${p.pdaName}, mas o Zello (${p.zelloUsername}) não reporta há mais de ${ZELLO_STALE_SECONDS / 60} min.`
+        : `O Zello (${p.zelloUsername}) não reporta há mais de ${ZELLO_STALE_SECONDS / 60} min.` });
     }
   }
 

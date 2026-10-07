@@ -247,14 +247,15 @@ export function countSpeedViolations(data: any, threshold: number): number {
  * `afterId` (id da última linha feita) e com prazo.
  */
 export async function resplitDriverDay(day: string, opts: { deadlineAt: number; afterId?: number }): Promise<{ processed: number; done: boolean; nextAfterId: number | null; errors: string[] }> {
-  const { getDb, resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares } = await import("../db");
+  const { getDb, resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares, fixedZelloOwners } = await import("../db");
+  const { zelloKey } = await import("../../shared/zelloKey");
   const { sql } = await import("drizzle-orm");
   const db = await getDb();
   if (!db) return { processed: 0, done: true, nextAfterId: null, errors: ["BD indisponível"] };
   const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
   const speedLimit = await getDefaultSpeedLimit();
   const threshold = speedLimit ? speedLimit.maxSpeed * (1 + speedLimit.tolerancePercent / 100) : 999;
-  const [holders, intervals] = await Promise.all([resolveZelloHoldersForDay(day), pdaIntervalsForDay(day)]);
+  const [holders, intervals, owners] = await Promise.all([resolveZelloHoldersForDay(day), pdaIntervalsForDay(day), fixedZelloOwners()]);
   const rows = rowsOf(await db.execute(sql`
     SELECT id, zelloUsername, geoJsonUrl FROM daily_driver_history
      WHERE DATE(date) = ${day} AND id > ${opts.afterId ?? 0} ORDER BY id`));
@@ -265,17 +266,17 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
     if (Date.now() > opts.deadlineAt) return { processed, done: false, nextAfterId: last, errors };
     const zello = String(r.zelloUsername);
     try {
-      const zi = intervals.get(zello) ?? [];
+      const zi = intervals.get(zelloKey(zello)) ?? [];
       if (r.geoJsonUrl && zi.length) {
         const { storageReadableUrl } = await import("../storageSign");
         const resp = await fetch(await storageReadableUrl(String(r.geoJsonUrl)));
         if (!resp.ok) throw new Error(`GeoJSON HTTP ${resp.status}`);
         const data = await resp.json();
-        await saveDriverShares(Number(r.id), zello, day, splitByHolder(gpsPointsFromGeoJson(data), zi, threshold));
+        await saveDriverShares(Number(r.id), zello, day, splitByHolder(gpsPointsFromGeoJson(data), zi, threshold, owners.get(zelloKey(zello)) ?? null));
       } else if (!zi.length) {
         await saveDriverShares(Number(r.id), zello, day, []); // já ninguém teve o PDA
       } // sem GeoJSON guardado não dá para partir de novo: ficam as partes que havia
-      await db.execute(sql`UPDATE daily_driver_history SET employeeId = ${holders.get(zello) ?? null} WHERE id = ${r.id}`);
+      await db.execute(sql`UPDATE daily_driver_history SET employeeId = ${holders.get(zelloKey(zello)) ?? null} WHERE id = ${r.id}`);
       processed++;
     } catch (err: any) {
       errors.push(`${zello}: ${String(err?.message ?? err).slice(0, 120)}`);
@@ -370,7 +371,9 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     const endTs = Math.min(Math.floor(win.endMs / 1000), Math.floor(Date.now() / 1000)) - 1;
 
     // Quem tinha cada Zello nesse dia (PDA partilhado → quem o teve mais tempo)
-    const { resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares } = await import("../db");
+    const { resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares, fixedZelloOwners } = await import("../db");
+    const { zelloKey } = await import("../../shared/zelloKey");
+    const owners = await fixedZelloOwners();
     const holders = await resolveZelloHoldersForDay(dateStr);
     // Fase 3: intervalos de cada pessoa em cada PDA → GPS partido por pessoa
     const intervals = await pdaIntervalsForDay(dateStr);
@@ -413,7 +416,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
           zelloUsername: user.name,
           displayName: user.fullName || user.name,
           // Antes ficava sempre vazio → km/horas soltos na Atividade do Dia
-          employeeId: holders.get(user.name) ?? null,
+          employeeId: holders.get(zelloKey(user.name)) ?? null,
           metricsVersion: DRIVER_METRICS_VERSION,
           date: `${dateStr} 00:00:00`,
           totalKm: String(metrics.totalKm),
@@ -434,11 +437,11 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
         const prev = existing.get(user.name);
         const historyId = prev ? (await updateDriverHistoryRow(prev.id, row), prev.id) : await createDailyDriverHistory(row);
 
-        const zIntervals = intervals.get(user.name);
+        const zIntervals = intervals.get(zelloKey(user.name));
         if (historyId) {
           try {
             // Substitui as partes (DELETE + INSERT por historyId): sem PDA partilhado, nenhuma.
-            if (zIntervals?.length && historyData?.features) await saveDriverShares(Number(historyId), user.name, dateStr, splitByHolder(gpsPointsFromGeoJson(historyData), zIntervals, threshold));
+            if (zIntervals?.length && historyData?.features) await saveDriverShares(Number(historyId), user.name, dateStr, splitByHolder(gpsPointsFromGeoJson(historyData), zIntervals, threshold, owners.get(zelloKey(user.name)) ?? null));
             else if (prev) await saveDriverShares(Number(historyId), user.name, dateStr, []);
           } catch (err) { console.warn(`[DailyCollection] partes do GPS ${user.name}:`, err); }
         }

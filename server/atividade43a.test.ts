@@ -109,7 +109,8 @@ describe("43a — rotas e ecrãs", () => {
 
   it("Ao Vivo: Atualizar lê posições, ligações e PDAs e volta a enquadrar", () => {
     const z = src("client/src/components/ZelloLiveTab.tsx");
-    expect(z).toContain("await Promise.all([refetch(), usersQ.refetch(), mappingsQ.refetch(), pdasQ.refetch()]);");
+    // 43b: os PDAs de cada Zello vêm com os utilizadores (usersQ)
+    expect(z).toContain("await Promise.all([refetch(), usersQ.refetch(), mappingsQ.refetch()]);");
     expect(z).toContain("setFitSignal((n) => n + 1);");
     expect(z).toContain("<ZelloGoogleMap drivers={mapDrivers} fitSignal={fitSignal} />");
     expect(src("client/src/components/maps/ZelloGoogleMap.tsx")).toMatch(/if \(map && fitSignal && driversRef\.current\.length\) fitDrivers\(map, driversRef\.current\);/);

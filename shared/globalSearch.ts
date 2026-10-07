@@ -155,7 +155,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "passagem", label: "Passagem de Turno", path: "/passagem-turno", modules: ["passagem_turno"], keywords: ["passagem", "turno", "handover"], kind: "page" },
   { id: "disponibilidade", label: "Disponibilidade", path: "/disponibilidade", modules: ["disponibilidade", "disponibilidade_extras"], keywords: ["disponibilidade", "semana"], kind: "page" },
   { id: "whatsapp", label: "WhatsApp", path: "/whatsapp", modules: ["whatsapp"], keywords: ["whatsapp", "mensagens", "conversas"], kind: "page" },
-  { id: "radio", label: "Rádio", path: "/radio", modules: ["radio"], keywords: ["radio", "zello"], kind: "page" },
+  { id: "radio", label: "Rádio (Actividade Diária)", path: "/operacional?tab=radio", modules: ["radio"], keywords: ["radio", "zello"], kind: "page" },
   { id: "clientes", label: "Clientes", path: "/clientes", modules: ["clientes"], keywords: ["clientes", "crm"], kind: "page" },
   { id: "contactos", label: "Contactos", path: "/contactos", modules: ["contactos"], keywords: ["contactos", "telefone", "diretorio"], kind: "page" },
   { id: "reclamacoes", label: "Reclamações", path: "/reclamacoes", modules: ["reclamacoes"], keywords: ["reclamacoes", "queixas"], kind: "page" },
