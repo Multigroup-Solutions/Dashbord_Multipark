@@ -23,7 +23,7 @@ import { getDb } from "./db";
 import { ENV } from "./_core/env";
 import {
   CENTRAL_SUGAR_FLAG, callContactRef, flattenNameValueList, normalizeCentralUsername, parseContactRef, parseSugarCall, phoneFromSearchNote,
-  redactForLog, searchNote, sugarSearchPhone, type CentralCall,
+  redactForLog, searchNote, sugarSearchQuery, type CentralCall,
 } from "../shared/centralSugar";
 import { phoneKey } from "../shared/crmIdentity";
 
@@ -132,6 +132,7 @@ async function saveCall(acc: Account, call: CentralCall, source: "sugar_v10" | "
   const contactRef = raw && typeof raw === "object" ? callContactRef(raw as Record<string, unknown>) : null;
   const ref = parseContactRef(contactRef);
   if (!call.phone && ref?.kind === "tel") call = { ...call, phone: `+${ref.id}` };
+  if (!call.phone && ref?.kind === "ext") call = { ...call, phone: ref.id }; // 39f: a extensão interna é o número
   // 39e: a consola manda só o contacto (contact_id "emp-1"); o número é o da última pesquisa desta conta que o deu
   if (!call.phone && ref && contactRef) {
     const p = await phoneFromLastSearch(acc.id, contactRef).catch(() => null);
@@ -214,12 +215,50 @@ export async function lookupCaller(rawPhone: string): Promise<FoundContact | nul
   return { id: `tel-${digits}`, name: `Sem ficha (${p || rawPhone})`, title: "Número sem ficha na dashboard", department: "", phone: p || rawPhone, email: null };
 }
 
+/** 39f: extensão interna (quem liga do 410): a consola só regista a chamada se a pesquisa der um contacto. */
+function extensionContact(ext: string): FoundContact {
+  return { id: `ext-${ext}`, name: `Extensão ${ext}`, title: "Número interno", department: "Interno", phone: ext, email: null };
+}
+
+const likeOf = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+/**
+ * 39f: pesquisa por nome na consola — fichas do RH ativas (só o telefone de
+ * trabalho) e clientes ativos do CRM (o telefone principal), para se ligar
+ * pela consola. Sem telefone não aparece. Só leitura.
+ */
+export async function searchByName(text: string, max: number): Promise<FoundContact[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const like = likeOf(text);
+  const n = sql.raw(String(Math.max(1, Math.min(20, Math.trunc(max) || 1))));
+  const emps = rowsOf(await db.execute(sql`SELECT id, fullName, position, email, phone FROM employees
+      WHERE isActive = 1 AND fullName LIKE ${like} AND COALESCE(phone, '') <> '' ORDER BY fullName LIMIT ${n}`).catch(() => [[]]));
+  const clis = rowsOf(await db.execute(sql`SELECT c.id, c.displayName, c.firstName, c.lastName, c.primaryEmail, c.isPro, c.bookings,
+        (SELECT cp.phone FROM crm_client_phones cp WHERE cp.clientId = c.id ORDER BY cp.isPrimary DESC, cp.id LIMIT 1) AS phone
+      FROM crm_clients c WHERE c.status = 'active' AND (c.displayName LIKE ${like} OR CONCAT_WS(' ', c.firstName, c.lastName) LIKE ${like})
+      ORDER BY c.bookings DESC, c.id LIMIT ${n}`).catch(() => [[]]));
+  const out: FoundContact[] = [];
+  for (const e of emps) {
+    const p = phoneKey(String(e.phone)) || String(e.phone);
+    out.push({ id: `emp-${e.id}`, name: String(e.fullName), title: `Equipa${e.position ? ` · ${e.position}` : ""}`, department: "Recursos Humanos", phone: p, email: e.email ? String(e.email) : null });
+  }
+  for (const c of clis) {
+    if (!c.phone) continue;
+    const name = String(c.displayName || `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || `Cliente #${c.id}`);
+    const b = Number(c.bookings ?? 0);
+    out.push({ id: `crm-${c.id}`, name, title: `${Number(c.isPro) ? "Cliente Pro" : "Cliente"} · ${b} reserva${b === 1 ? "" : "s"}`, department: `CRM #${c.id}`, phone: phoneKey(String(c.phone)) || String(c.phone), email: c.primaryEmail ? String(c.primaryEmail) : null });
+  }
+  return out.slice(0, Math.max(1, Math.min(20, Math.trunc(max) || 1)));
+}
+
 /** O contacto por id (a consola pode pedir os detalhes do que encontrou). */
 async function contactById(raw: string): Promise<FoundContact | null> {
   const ref = parseContactRef(raw);
   if (!ref) return null;
   const db = await getDb();
   if (ref.kind === "tel") return lookupCaller(`+${ref.id}`);
+  if (ref.kind === "ext") return extensionContact(ref.id);
   if (!db) return null;
   if (ref.kind === "emp") {
     const e = rowsOf(await db.execute(sql`SELECT phone, personalPhone FROM employees WHERE id = ${Number(ref.id)} LIMIT 1`))[0];
@@ -421,12 +460,26 @@ export function createCentralSugarRouter(): Router {
   });
 
   // 39d: "quem é este número?" — POST /Contacts/filter {q: "*+351…*"}, GET /Contacts?filter…, /search, /globalsearch
+  // 39f: extensão interna ("*410*") → "Extensão 410"; nome ("*maria*") → fichas do RH e do CRM com telefone
   const search = async (req: Authed, res: Response, module: string) => {
-    const phone = sugarSearchPhone({ ...(req.query as object), ...((req.body ?? {}) as object) });
-    const found = phone ? await lookupCaller(phone) : null;
-    await logRequest(req, 200, req.centralAccount!.id, found && phone ? searchNote(phone, found.id, found.name) : `pesquisa sem número (resposta vazia)`);
+    const input = { ...(req.query as object), ...((req.body ?? {}) as object) } as Record<string, unknown>;
+    const q = sugarSearchQuery(input);
+    let found: FoundContact[] = [];
+    let note = "pesquisa sem número (resposta vazia)";
+    if (q?.kind === "phone") {
+      const f = await lookupCaller(q.phone);
+      if (f) { found = [f]; note = searchNote(q.phone, f.id, f.name); }
+    } else if (q?.kind === "ext") {
+      const f = extensionContact(q.ext);
+      found = [f];
+      note = searchNote(q.ext, f.id, f.name);
+    } else if (q?.kind === "name") {
+      found = await searchByName(q.text, Number(input.max_num ?? 10)).catch(() => []);
+      note = `pesquisa por nome "${q.text}" → ${found.length} resultado${found.length === 1 ? "" : "s"}`;
+    }
+    await logRequest(req, 200, req.centralAccount!.id, note);
     const mod = module.toLowerCase() === "accounts" ? "Accounts" : module.toLowerCase() === "leads" ? "Leads" : "Contacts";
-    res.json({ next_offset: -1, records: found ? [sugarContact(found, mod)] : [] });
+    res.json({ next_offset: -1, records: found.map((f) => sugarContact(f, mod)) });
   };
   r.all("/rest/:ver/:module/filter", auth, async (req: Authed, res, next) => (SEARCH_MODULES.has(req.params.module.toLowerCase()) ? search(req, res, req.params.module) : next()));
   r.get(["/rest/:ver/search", "/rest/:ver/globalsearch"], auth, async (req: Authed, res) => search(req, res, "Contacts"));

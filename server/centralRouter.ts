@@ -29,7 +29,7 @@ const utc = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T",
 const iso = (v: unknown) => (v ? `${String(v).replace(" ", "T").slice(0, 19)}Z` : null);
 
 type Db = Awaited<ReturnType<typeof dbOrThrow>>;
-interface CallContact { name: string; kind: "Equipa" | "Cliente" | "Contacto" | "Sem ficha"; href: string | null }
+interface CallContact { name: string; kind: "Equipa" | "Cliente" | "Contacto" | "Sem ficha" | "Interna"; href: string | null }
 /** 39e: com quem foi cada chamada (ficha do RH, cliente ou contacto do CRM), lido por lotes. */
 async function callContacts(db: Db, refs: Array<string | null>): Promise<Map<string, CallContact>> {
   const out = new Map<string, CallContact>();
@@ -38,6 +38,7 @@ async function callContacts(db: Db, refs: Array<string | null>): Promise<Map<str
     const p = parseContactRef(r);
     if (!p) continue;
     if (p.kind === "tel") out.set(String(r), { name: `+${p.id}`, kind: "Sem ficha", href: null });
+    else if (p.kind === "ext") out.set(String(r), { name: `Extensão ${p.id}`, kind: "Interna", href: null }); // 39f
     else ids[p.kind].add(Number(p.id));
   }
   const list = (s: Set<number>) => sql.join([...s].map((n) => sql`${n}`), sql`, `);

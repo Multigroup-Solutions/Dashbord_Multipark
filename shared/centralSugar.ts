@@ -131,11 +131,11 @@ export function sugarSearchPhone(input: unknown): string | null {
   return extractPhone(typeof input === "string" ? input : JSON.stringify(input));
 }
 
-/** Contactos que a dashboard dá à consola: ficha do CRM, contacto do CRM, ficha do RH ou só o número. */
-export type CentralContactKind = "crm" | "ct" | "emp" | "tel";
+/** Contactos que a dashboard dá à consola: ficha do CRM, contacto do CRM, ficha do RH, só o número ou (39f) uma extensão interna. */
+export type CentralContactKind = "crm" | "ct" | "emp" | "tel" | "ext";
 /** "crm-123" → { kind: "crm", id: "123" }; "tel-351913225918" → número. Inválido → null. PURA. */
 export function parseContactRef(raw: unknown): { kind: CentralContactKind; id: string } | null {
-  const m = /^(crm|ct|emp|tel)-(\d{1,20})$/.exec(String(raw ?? "").trim());
+  const m = /^(crm|ct|emp|tel|ext)-(\d{1,20})$/.exec(String(raw ?? "").trim());
   return m ? { kind: m[1] as CentralContactKind, id: m[2] } : null;
 }
 
@@ -151,9 +151,9 @@ export function callContactRef(fields: Record<string, unknown>): string | null {
 
 /** Para onde a página do "Sugar" manda quem abre um contacto na consola (#Contacts/crm-123). PURA. */
 export function contactRedirect(hash: string): string {
-  const m = /^#?\/?(?:Contacts|Leads|Accounts)\/((?:crm|ct|emp|tel)-\d+)/.exec(String(hash ?? ""));
+  const m = /^#?\/?(?:Contacts|Leads|Accounts)\/((?:crm|ct|emp|tel|ext)-\d+)/.exec(String(hash ?? ""));
   const ref = m ? parseContactRef(m[1]) : null;
-  if (!ref) return "/";
+  if (!ref || ref.kind === "ext") return "/";
   if (ref.kind === "crm") return `/clientes/${ref.id}`;
   if (ref.kind === "emp") return "/rh";
   if (ref.kind === "tel") return `/clientes?q=${encodeURIComponent(`+${ref.id}`)}`;
@@ -179,4 +179,23 @@ export function phoneFromSearchNote(note: unknown, ref: string): string | null {
   if (!s.startsWith(head) || !parseContactRef(ref)) return null;
   const i = s.indexOf(mid, head.length);
   return i > head.length ? extractPhone(s.slice(head.length, i)) : null;
+}
+
+// ─── 39f: extensões internas e pesquisa por nome ────────────────────────────
+
+/**
+ * O que a consola procura (`q: "*…*"`): um número (9+ dígitos), uma extensão
+ * interna (2 a 6 dígitos, ex.: quem liga do 410) ou um nome (3+ letras,
+ * escrito na pesquisa da consola). A consola só regista a chamada quando a
+ * pesquisa dá um contacto. PURA.
+ */
+export type SugarSearch = { kind: "phone"; phone: string } | { kind: "ext"; ext: string } | { kind: "name"; text: string };
+export function sugarSearchQuery(input: unknown): SugarSearch | null {
+  const phone = sugarSearchPhone(input);
+  if (phone) return { kind: "phone", phone };
+  const q = typeof input === "string" ? input : input && typeof input === "object" ? (input as Record<string, unknown>).q : null;
+  const t = (typeof q === "string" ? q : "").replace(/[*%]/g, " ").replace(/\s+/g, " ").trim();
+  if (/^\d{2,6}$/.test(t)) return { kind: "ext", ext: t };
+  if (t.replace(/[^\p{L}]/gu, "").length >= 3 && !/\d{7,}/.test(t)) return { kind: "name", text: t.slice(0, 60) };
+  return null;
 }
