@@ -1,4 +1,5 @@
-export const MISSING_COST_CENTRE_MESSAGE = 'Sem centro de custos atribuído. O acesso às cidades fica indisponível até à atribuição.';
+// Lote 46: diz o que fazer (pedir a cidade ao RH) e o que abre na mesma.
+export const MISSING_COST_CENTRE_MESSAGE = 'Sem centro de custos (cidade) atribuído: o acesso às cidades fica indisponível até à atribuição. Pede ao RH para pôr a tua cidade na ficha — entretanto abres na mesma a tua ficha e a tua disponibilidade.';
 export interface ProjectNode { id: number; name: string; level: string; parentId: number | null }
 export interface CityAccess { all: boolean; defaultCityId: number | null; cityName?: string; cityNames?: string[]; cityIds: number[]; projectIds: number[]; missingCostCenter: boolean }
 
@@ -27,6 +28,11 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
   // 41c: o que a ficha usa de facto (o ecrã carrega pelo uploadBatch; foto, ponto, horário, ausências e pontos)
   'rh.documents.uploadBatch': 'employeeId', 'rh.uploadPhoto': 'employeeId',
   'rh.timeRecords.list': 'employeeId', 'rh.schedules.list': 'employeeId', 'rh.leaves.list': 'employeeId', 'rh.penalties.list': 'employeeId',
+  // Lote 46: os outros cartões da própria ficha (a conta, o agente, os envios,
+  // as horas do mês e a disponibilidade da semana) — só leituras, só a sua.
+  'rh.accountSummary': 'employeeId', 'rh.agentSummary': 'employeeId', 'rh.autoMail': 'employeeId',
+  'rh.myMonthSummary': 'employeeId', 'rh.timeRecords.monthlyHours': 'employeeId',
+  'extrasAvailability.forEmployee': 'employeeId', 'rh.loginLinks': 'employeeId',
 };
 
 /**
@@ -155,6 +161,19 @@ export function applyRoleScope(access: CityAccess, role: string | null | undefin
     projectIds: projects.map(p => p.id) };
 }
 
+/**
+ * A ficha que dá a cidade à conta. Uma só → essa. Várias → a única ATIVA (lote
+ * 46: numa readmissão a conta fica na ficha antiga, inativa, e na nova — como
+ * em getEmployeeByUserId, conta a ativa; antes caía em "sem centro de custos"
+ * e o extra readmitido só via a ficha). Duas ativas, ou nenhuma → null
+ * (reconciliar no RH). PURA.
+ */
+export function accessEmployee<T extends { isActive?: number | boolean | null }>(people: readonly T[]): T | null {
+  if (people.length === 1) return people[0];
+  const active = people.filter(p => p.isActive === 1 || p.isActive === true);
+  return active.length === 1 ? active[0] : null;
+}
+
 export async function loadCityAccess(userId: number, role?: string | null): Promise<CityAccess> {
   return (await loadCityAccessParts(userId, role)).access;
 }
@@ -171,15 +190,16 @@ export async function loadCityAccessParts(userId: number, role?: string | null):
   const db = await getDb();
   if (!db) throw new Error('Não foi possível verificar o centro de custos. Tenta novamente.');
   const [people, nodes, overrides] = await Promise.all([
-    db.select({ id: employees.id, projectId: employees.projectId }).from(employees).where(or(
+    db.select({ id: employees.id, projectId: employees.projectId, isActive: employees.isActive }).from(employees).where(or(
       eq(employees.userId, userId),
       sql`EXISTS (SELECT 1 FROM employee_accounts ea WHERE ea.employeeId = ${employees.id} AND ea.userId = ${userId})`,
     )),
     db.select({ id: projects.id, name: projects.name, level: projects.level, parentId: projects.parentId }).from(projects),
     getUserPermissionOverrides(userId),
   ]);
-  // Uma conta ligada a várias fichas diferentes exige reconciliação.
-  const base = applyCityPermissions(resolveCityAccess(people.length === 1 ? people[0].projectId : null, nodes), nodes, overrides);
+  // Uma conta ligada a várias fichas ATIVAS exige reconciliação.
+  const chosen = accessEmployee(people);
+  const base = applyCityPermissions(resolveCityAccess(chosen ? chosen.projectId : null, nodes), nodes, overrides);
   const access = applyRoleScope(base, role, nodes);
   const all = access.missingCostCenter ? null : applyRoleScope({ ...base, missingCostCenter: false }, 'super_admin', nodes);
   return { access, base, all };

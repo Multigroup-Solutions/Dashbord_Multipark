@@ -114,6 +114,7 @@ import { CentralRingManager } from "@/components/CentralRingManager";
 import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
 import { can, roleRank, seesBeyondOwn, type AccessOverrides, type ModuleId } from "@shared/access";
 import { allowedWithoutCostCenter, decideRoute } from "@shared/routeAccess";
+import { noAccessHint, noLinkedRecordMessage } from "@shared/ownAccess";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PAGE_RELOAD_EVENT, jumpTo } from "@/lib/jumpTo";
@@ -137,6 +138,8 @@ export type MenuItem = {
   beyondOwn?: boolean;
   /** Lote 45: abre este endereço num separador novo (ex.: o Google Drive) em vez de navegar. */
   external?: string;
+  /** Lote 46: nome no menu de quem só vê o que é SEU aqui (ex.: "A minha ficha" em vez de "Recursos Humanos"). */
+  ownLabel?: string;
 };
 
 /** Abre um item do menu: navega, ou abre o endereço externo num separador novo. */
@@ -161,9 +164,20 @@ export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module
   return mods.length === 0 || mods.some(m => can(userRole, m, "view"));
 }
 
+/** Lote 46: quem só vê o que é seu neste item (nenhum dos módulos além do "próprio") vê o ownLabel. */
+export function menuLabelFor(userRole: AccessSubject, item: Pick<MenuItem, "label" | "ownLabel" | "module" | "anyOf">): string {
+  if (!item.ownLabel) return item.label;
+  const mods = item.anyOf ?? (item.module ? [item.module] : []);
+  return mods.some(m => seesBeyondOwn(userRole, m)) ? item.label : item.ownLabel;
+}
+
+function visibleItems(userRole: AccessSubject, items: MenuItem[]): MenuItem[] {
+  return items.filter(i => canSeeItem(userRole, i)).map(i => (i.ownLabel ? { ...i, label: menuLabelFor(userRole, i) } : i));
+}
+
 export function getFilteredMenuGroups(userRole: AccessSubject): MenuGroup[] {
   return menuGroups
-    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
+    .map(g => ({ ...g, items: visibleItems(userRole, g.items) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -194,7 +208,7 @@ export const menuGroups: MenuGroup[] = [
     icon: Users,
     items: [
       // RH: quem gere fichas vê a lista; os restantes veem só a própria ficha
-      { icon: UserCheck, label: "Recursos Humanos", path: "/rh", anyOf: ["rh", "ficha"] },
+      { icon: UserCheck, label: "Recursos Humanos", path: "/rh", anyOf: ["rh", "ficha"], ownLabel: "A minha ficha" },
       { icon: UserPlus, label: "Leads de Extras", path: "/extras-leads", module: "leads_extras" },
       { icon: GraduationCap, label: "Formação", path: "/formacao", module: "formacao" },
       // Base de conhecimento (manuais do Drive/carregados): gestão admin/super_admin.
@@ -216,7 +230,7 @@ export const menuGroups: MenuGroup[] = [
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
       { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },
-      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", anyOf: ["disponibilidade", "disponibilidade_extras"] },
+      { icon: CalendarCheck, label: "Disponibilidade", path: "/disponibilidade", anyOf: ["disponibilidade", "disponibilidade_extras"], ownLabel: "A minha disponibilidade" },
     ],
   },
   {
@@ -298,7 +312,7 @@ export const hubGroups: HubGroup[] = [
 ];
 export function getFilteredHubGroups(userRole: AccessSubject): HubGroup[] {
   return hubGroups
-    .map(g => ({ ...g, items: g.items.filter(i => canSeeItem(userRole, i)) }))
+    .map(g => ({ ...g, items: visibleItems(userRole, g.items) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -968,14 +982,18 @@ function DashboardLayoutContent({
             (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
           {routeDecision.kind === "no_access" ? (
-            <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout} />
+            <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout}
+              hint={noAccessHint(location, new Set(filteredItems.map(i => i.path)))} onHint={(to) => setLocation(to)} />
           ) : filters.isLoading && !allowedWithoutCostCenter(location) ? <p>A verificar o acesso às cidades…</p>
           : filters.accessError && !allowedWithoutCostCenter(location) ? (
             // 20d: falhar a leitura do acesso ≠ "sem centro de custos"
             <QueryErrorNote error={filters.accessError} onRetry={filters.retryAccess} what="o teu acesso às cidades" />
           ) : filters.missingCostCenter && !allowedWithoutCostCenter(location) ? (
             <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
-              <strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição. Entretanto, abre o que é teu:
+              {/* Lote 46: conta sem ficha ≠ ficha sem cidade — cada um diz o que pedir ao RH. */}
+              {(user as any)?.employee === null
+                ? <><strong>A tua conta não está ligada a nenhuma ficha.</strong> {noLinkedRecordMessage(user?.email)}</>
+                : <><strong>Sem centro de custos atribuído.</strong> O acesso às cidades fica indisponível até à atribuição. Pede ao RH para pôr a tua cidade na ficha.</>} Entretanto, abre o que é teu:
               <span className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
                 <a href="/perfil" className="underline">O meu perfil</a>
                 <a href="/rh" className="underline">A minha ficha</a>
@@ -1127,15 +1145,23 @@ function NotificationsBell() {
 }
 
 /** 20d: ecrã do menu que não é para esta pessoa — diz porquê, em vez de saltar em silêncio. */
-function NoAccessScreen({ onHome, onLogout }: { onHome: () => void; onLogout: () => Promise<void> | void }) {
+function NoAccessScreen({ onHome, onLogout, hint, onHint }: {
+  onHome: () => void;
+  onLogout: () => Promise<void> | void;
+  /** Lote 46: o lado "teu" desta página está noutra (ex.: Extras Dia → a minha disponibilidade). */
+  hint?: { to: string; label: string; text: string } | null;
+  onHint?: (to: string) => void;
+}) {
   return (
     <div role="alert" className="max-w-md mx-auto mt-10 text-center space-y-4 rounded-xl border bg-card p-6">
       <h1 className="text-lg font-semibold">Sem acesso a esta página</h1>
       <p className="text-sm text-muted-foreground">
         A tua conta não tem permissão para abrir esta página. Se achas que devias ter, fala com o teu supervisor ou com a administração.
       </p>
+      {hint && <p className="text-sm">{hint.text}</p>}
       <div className="flex flex-wrap justify-center gap-2">
-        <Button onClick={onHome}>Ir para o início</Button>
+        {hint && onHint && <Button onClick={() => onHint(hint.to)}>{hint.label}</Button>}
+        <Button variant={hint ? "outline" : "default"} onClick={onHome}>Ir para o início</Button>
         <Button variant="outline" onClick={() => { Promise.resolve(onLogout()).finally(() => { window.location.href = "/"; }); }}>Sair</Button>
       </div>
     </div>

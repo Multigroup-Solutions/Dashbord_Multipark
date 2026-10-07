@@ -8,6 +8,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
+import { NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
 import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
 import { readImageAsJpeg } from "@/components/ProfilePhotoPrompt";
 import { formatIban, ibanError, maskIban, maskNif, sameIban } from "@shared/iban";
@@ -2557,7 +2558,7 @@ export default function HRPage() {
   const canSalaries = can(user as any, "rh_salarios", "view");
 
   // Extra users: show only their own profile
-  const { data: myEmployee } = trpc.rh.me.useQuery(undefined, { enabled: isExtra });
+  const { data: myEmployee, isLoading: myLoading, error: myError, refetch: refetchMe, isFetching: myFetching } = trpc.rh.me.useQuery(undefined, { enabled: isExtra });
 
   // Filtros persistem à navegação (sessionStorage) — voltar de uma ficha ou de
   // outra página mantém pesquisa, posto, conta, ativo/inativo e projeto.
@@ -2609,18 +2610,18 @@ export default function HRPage() {
 
   // Extra users go directly to their profile
   if (isExtra) {
-    if (!myEmployee) {
+    // Lote 46: a carregar ≠ erro ≠ conta sem ficha (antes as três diziam
+    // "o seu perfil ainda não foi criado").
+    if (myLoading) return <div className="p-8 text-center text-muted-foreground">A carregar a tua ficha…</div>;
+    if (myError) {
       return (
-        <div className="flex items-center justify-center min-h-[400px]">
-          <div className="text-center space-y-2">
-            <Users className="w-12 h-12 mx-auto text-muted-foreground" />
-            <p className="text-muted-foreground">O seu perfil de colaborador ainda não foi criado.</p>
-            <p className="text-sm text-muted-foreground">Contacte a administração.</p>
-          </div>
+        <div className="max-w-md mx-auto py-10 px-4">
+          <QueryErrorNote error={myError} onRetry={() => refetchMe()} retrying={myFetching} what="a tua ficha" />
         </div>
       );
     }
-    return <EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => {}} />;
+    if (!myEmployee) return <NoLinkedRecordNotice email={user?.email} />;
+    return <EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => navigate("/perfil")} />;
   }
 
   const docSummaryOf = (id: number): DocsSummaryView | undefined => (docStatus as Record<number, DocsSummaryView>)[id];
