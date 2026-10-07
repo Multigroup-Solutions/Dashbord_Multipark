@@ -12,6 +12,8 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 1. Menu **Operações → Disponibilidade** (ou o link que recebes por WhatsApp/email).
 2. A página abre na **próxima semana** (segunda a domingo, dias de Lisboa). O link do email ou do WhatsApp abre a semana desse pedido.
 3. Para cada dia marca **Manhã (03h–15h)** e/ou **Noite (15h–03h)**. Podes também indicar horas e uma nota.
+   - As horas são as **desse dia do calendário**: "das 18h às 03h" na segunda = segunda à noite até às 03h de terça. "Das 00h às 03h" na terça é a madrugada de terça, ou seja, **a noite de segunda** para a escala.
+   - Com as duas horas (das/às), valem as horas e não os turnos. Só uma hora sem turno: "das X" vale até às 03h; "até às Y" vale a partir das 03h.
 4. Carrega em **Guardar disponibilidade**. Se não puderes nenhum dia, usa **Guardar (sem disponibilidade)**.
 5. Podes voltar e alterar enquanto a semana não começar.
 - Cada vez que guardas, a semana é substituída de uma vez (nunca fica a meio).
@@ -32,6 +34,7 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - A semana começa sempre à segunda-feira.
 - Marcar a disponibilidade por alguém também fica registado, com o que estava antes.
 - No Extras-Dia, "Preencher com disponíveis" usa estas marcações.
+- Na matriz, um dia com horas mostra as **horas reais** (ex.: "18h–01h" de um slot do site) em vez do sol/lua. O filtro "disponível das X às Y", a proposta automática e o Extras-Dia leem as marcações da mesma forma (pelo calendário): quem marcou a madrugada de terça conta para a noite de segunda.
 
 **Métricas dos extras** (por baixo, na gestão)
 - O que quer dizer cada número também está no ecrã, em **O que quer dizer cada número?** (e ao passar o rato num quadrado).
