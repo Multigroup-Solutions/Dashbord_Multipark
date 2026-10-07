@@ -14,7 +14,7 @@
  *    Se a BD da Multipark não responder, os movimentos vêm da cópia local
  *    (multipark_booking_history) e o resultado diz `source: "copia"` com o
  *    motivo — nunca rebenta.
- *  - `runEvaluationRecompute`: o cron diário — últimas 4 semanas, em fatias
+ *  - `runEvaluationRecompute`: o cron diário — o último mês (31 dias), em fatias
  *    de 7 dias dentro do prazo (done/nextOffset).
  *  - `loadEvaluatedDays`: lê os dias guardados + ajustes manuais por cima
  *    (nunca gravados no calculado) + pontuação por regra + por hora.
@@ -31,7 +31,8 @@ import {
   employeeMetricDisputes,
   employees,
 } from "../drizzle/schema";
-import { employeeScope } from "./cityScope";
+import { cityScope, employeeScope, scopedProjectIds } from "./cityScope";
+import { matchCityKey } from "../shared/city";
 import {
   complaintIsConfirmed,
   computeEmployeeDays,
@@ -289,7 +290,7 @@ export const RECOMPUTE_SLICE_BUDGET_MS = 25_000;
 type SliceReport = { start: string; end: string; written: number; removed: number; source: MovementSource; notice: string | null };
 
 /**
- * Cron diário: recalcula as últimas 4 semanas (até hoje), em fatias de 7 dias
+ * Cron diário: recalcula o último mês (31 dias, até hoje), em fatias de 7 dias
  * a partir de `offsetDays`, enquanto houver prazo. Cada fatia lê os
  * movimentos AO VIVO da BD da Multipark (uma consulta agregada). done:false +
  * nextOffset → o agendador chama outra vez.
@@ -359,6 +360,19 @@ function adjustmentView(a: any): AdjustmentView {
   };
 }
 
+const ESCALA_CITY: Record<string, string> = { lisboa: "lisbon", porto: "porto", faro: "faro" };
+
+/**
+ * 42a: as cidades da escala (lisbon/porto/faro) do âmbito do pedido —
+ * undefined quando não há filtro (vê tudo o que pode). PURA sobre o contexto.
+ */
+export function scopedDayCities(): string[] | undefined {
+  if (scopedProjectIds() === undefined) return undefined;
+  const a = cityScope.getStore();
+  const names = a?.cityNames ?? (a?.cityName ? [a.cityName] : []);
+  return Array.from(new Set(names.map((n) => matchCityKey(n)).filter((k): k is NonNullable<typeof k> => !!k).map((k) => ESCALA_CITY[k])));
+}
+
 /**
  * Dias avaliados (com ajustes) em [start, end]. Respeita o âmbito de cidade do
  * pedido (employeeScope). `rankingOnly` = só as posições do ranking, ativas.
@@ -367,6 +381,12 @@ export async function loadEvaluatedDays(opts: {
   startDay: string; endDay: string; employeeIds?: number[]; rankingOnly?: boolean; includeVoided?: boolean;
   /** Só quando `employeeIds` já vem de uma fonte com âmbito (ex.: a escala do dia, já filtrada pela cidade). */
   employeeIdsAlreadyScoped?: boolean;
+  /**
+   * 42a: com o filtro de cidade escolhido, conta a cidade ONDE a pessoa
+   * trabalhou nesse dia (escala) — quem é de Lisboa e fez um dia no Porto
+   * entra no Porto; sem escala nesse dia, vale a cidade da ficha.
+   */
+  dayCityAware?: boolean;
 }): Promise<EvaluatedDay[]> {
   const db = await getDb();
   if (!db) return [];
@@ -374,6 +394,11 @@ export async function loadEvaluatedDays(opts: {
   const empFilter = opts.employeeIds ? inArray(employees.id, opts.employeeIds) : undefined;
   const scope = (col: typeof employeeDayMetrics.employeeId | typeof employeeMetricAdjustments.employeeId) =>
     opts.employeeIdsAlreadyScoped && opts.employeeIds ? undefined : employeeScope(col);
+  const dayCities = opts.dayCityAware ? scopedDayCities() : undefined;
+  const metricScope = dayCities === undefined
+    ? scope(employeeDayMetrics.employeeId)
+    : sql`(${dayCities.length ? sql`${employeeDayMetrics.city} IN (${sql.join(dayCities.map((c) => sql`${c}`), sql`, `)})` : sql`1 = 0`}
+        OR (${employeeDayMetrics.city} IS NULL AND ${employeeScope(employeeDayMetrics.employeeId)}))`;
   const rankFilter = opts.rankingOnly
     ? and(eq(employees.isActive, 1), inArray(employees.position, [...RANKING_POSITIONS]))
     : undefined;
@@ -383,7 +408,7 @@ export async function loadEvaluatedDays(opts: {
     .innerJoin(employees, eq(employees.id, employeeDayMetrics.employeeId))
     .where(and(
       gte(employeeDayMetrics.day, opts.startDay), lte(employeeDayMetrics.day, opts.endDay),
-      scope(employeeDayMetrics.employeeId), empFilter, rankFilter,
+      metricScope, empFilter, rankFilter,
     ));
 
   const adjRows = await db.select({ a: employeeMetricAdjustments, fullName: employees.fullName, position: employees.position })

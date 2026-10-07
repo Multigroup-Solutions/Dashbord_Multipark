@@ -3087,6 +3087,9 @@ export const opsAnomalies = mysqlTable("ops_anomalies", {
 	refIds: varchar({ length: 255 }),
 	dedupKey: varchar({ length: 191 }).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// 0505 — tirado da lista (fica guardado; "Repor" volta a mostrar)
+	dismissedAt: datetime({ mode: 'string' }),
+	dismissedById: int(),
 },
 (table) => [
 	uniqueIndex("uq_ops_anomalies_dedup").on(table.dedupKey),

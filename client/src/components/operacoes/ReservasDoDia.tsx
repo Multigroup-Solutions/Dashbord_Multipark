@@ -10,10 +10,12 @@ import BookingDetailDialog from "@/components/BookingDetailDialog";
 import { fmtPTTime } from "@/lib/lisbonTime";
 import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import {
-  BOOKING_STATUSES, BOOKING_STATUS_COLORS, compareGroups, filterMovements, groupMovements, phaseLabel, statusLabel, summarizeDay,
-  type BookingStatus, type DayMovement, type MovementKind,
+  BOOKING_STATUSES, BOOKING_STATUS_COLORS, compareGroups, DAY_BUCKET_LABELS, DAY_BUCKETS, filterMovements, groupMovements, phaseLabel, statusLabel, summarizeByCity, summarizeDay,
+  type BookingStatus, type CityDay, type DayMovement, type MovementKind,
 } from "@shared/reservasDoDia";
 import { ORIGIN_LABELS } from "@shared/multiparkParks";
+import type { CityKey } from "@shared/city";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import {
   ArrowDownToLine, ArrowUpFromLine, CalendarDays, ChevronLeft, ChevronRight, Plane, RefreshCw, Search, XCircle, AlertTriangle,
 } from "lucide-react";
@@ -49,6 +51,12 @@ function seedFromUrl(): { day: string | null; q: string; kind: "todas" | Movemen
  * BD da Multipark. Abre sempre em hoje; os filtros correm aqui (o dia já está
  * todo carregado). Só operação: um bloco por parque (as marcas nossas por
  * marca + cidade primeiro), sem o canal da contabilidade.
+ *
+ * 42d (Jorge, 7 out 2026): por CIDADE (Lisboa, Porto, Faro), com as 24 horas
+ * — o que entra e o que sai em cada uma (carrega numa hora para ver só essa) —
+ * e por marca, com o Marketplace à parte: os parques que não são nossos
+ * (Travelparking, Boardingpark…) e as reservas das nossas marcas que vieram
+ * pelo Marketplace. A cidade e a marca do topo também filtram.
  */
 export default function ReservasDoDia() {
   const [seed] = useState(seedFromUrl);
@@ -58,10 +66,13 @@ export default function ReservasDoDia() {
   const [state, setState] = useState<string>("ativas");
   const [search, setSearch] = useState(seed.q);
   const [open, setOpen] = useState<DayMovement | null>(null);
+  const [city, setCity] = useState<CityKey | "">("");
+  const [hour, setHour] = useState<number | null>(null);
+  const { projectId } = useGlobalFilters();
 
   const isToday = day === todayLisbon();
   const q = trpc.multipark.reservasDoDia.useQuery(
-    { day },
+    { day, projectId: projectId ?? undefined },
     { refetchOnWindowFocus: isToday, refetchInterval: isToday ? 60_000 : false, placeholderData: (prev) => prev },
   );
   const data = q.data?.available ? q.data : null;
@@ -72,8 +83,11 @@ export default function ReservasDoDia() {
     if (parkId && data && !data.parks.some((p) => p.id === parkId)) setParkId("");
   }, [data, parkId]);
 
-  const summary = useMemo(() => summarizeDay(movements), [movements]);
-  const filtered = useMemo(() => filterMovements(movements, { kind, parkId, state, search }), [movements, kind, parkId, state, search]);
+  // 42d: por cidade (os números de cima seguem a cidade escolhida) e por hora
+  const cityDays = useMemo(() => summarizeByCity(movements), [movements]);
+  const cityMoves = useMemo(() => (city ? movements.filter((m) => m.booking.cityKey === city) : movements), [movements, city]);
+  const summary = useMemo(() => summarizeDay(cityMoves), [cityMoves]);
+  const filtered = useMemo(() => filterMovements(movements, { kind, parkId, state, search, city, hour }), [movements, kind, parkId, state, search, city, hour]);
   const sections = useMemo(() => groupMovements(filtered), [filtered]);
 
   // Lista de parques do filtro: agrupada como a página (marcas nossas primeiro).
@@ -151,15 +165,7 @@ export default function ReservasDoDia() {
               Destas, {summary.pendentes} {summary.pendentes === 1 ? "é compra online por pagar" : "são compras online por pagar"}{state === "PENDING" ? " — a mostrar só essas" : " — ver"}
             </button>
           )}
-          <div className="flex flex-wrap gap-1.5">
-            {summary.groups.map((g) => (
-              <Badge key={g.key} variant="outline" className="text-xs py-1 px-2 font-normal">
-                <span className="font-medium mr-1.5">{g.label}</span>
-                <span className="text-emerald-700 tabular-nums">↓{g.entradas}</span>
-                <span className="text-amber-700 tabular-nums ml-1.5">↑{g.saidas}</span>
-              </Badge>
-            ))}
-          </div>
+          <CityBoard cities={cityDays} city={city} onCity={(c) => { setCity(c); setHour(null); }} hour={hour} onHour={setHour} />
         </div>
       )}
 
@@ -281,6 +287,108 @@ export default function ReservasDoDia() {
         />
       )}
     </div>
+  );
+}
+
+/** 42d: escolher a cidade; por cidade, as marcas (Marketplace à parte) e as 24 horas. */
+function CityBoard({ cities, city, onCity, hour, onHour }: { cities: CityDay[]; city: CityKey | ""; onCity: (c: CityKey | "") => void; hour: number | null; onHour: (h: number | null) => void }) {
+  const shown = city ? cities.filter((c) => c.city === city) : cities;
+  const chip = (active: boolean) => `text-xs rounded-md border px-2.5 py-1 transition-colors ${active ? "bg-primary text-primary-foreground border-primary" : "bg-background hover:bg-muted"}`;
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Cidade">
+        <button type="button" className={chip(!city)} aria-pressed={!city} onClick={() => onCity("")}>Todas</button>
+        {cities.filter((c) => c.city).map((c) => (
+          <button key={c.city} type="button" className={chip(city === c.city)} aria-pressed={city === c.city} onClick={() => onCity(city === c.city ? "" : c.city!)}>
+            <span className="font-medium">{c.label}</span>
+            <span className="ml-1.5 tabular-nums">↓{c.entradas}</span>
+            <span className="ml-1 tabular-nums">↑{c.saidas}</span>
+          </button>
+        ))}
+        {hour != null && (
+          <button type="button" className={chip(true)} onClick={() => onHour(null)} title="Tirar o filtro da hora">{String(hour).padStart(2, "0")}h ✕</button>
+        )}
+      </div>
+      {shown.map((c) => <CityCard key={c.city ?? "sem"} c={c} hour={hour} onHour={onHour} />)}
+    </div>
+  );
+}
+
+function CityCard({ c, hour, onHour }: { c: CityDay; hour: number | null; onHour: (h: number | null) => void }) {
+  const maxH = Math.max(1, ...c.hours.map((h) => Math.max(h.entradas, h.saidas)));
+  const shade = (n: number, kind: "in" | "out") => (n === 0 ? "" : kind === "in"
+    ? (n / maxH > 0.66 ? "bg-emerald-200 dark:bg-emerald-900/60" : n / maxH > 0.33 ? "bg-emerald-100 dark:bg-emerald-900/40" : "bg-emerald-50 dark:bg-emerald-950/40")
+    : (n / maxH > 0.66 ? "bg-amber-200 dark:bg-amber-900/60" : n / maxH > 0.33 ? "bg-amber-100 dark:bg-amber-900/40" : "bg-amber-50 dark:bg-amber-950/40"));
+  const mp = c.byBucket.marketplace;
+  return (
+    <Card className="py-0 gap-0 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b bg-muted/40 px-3 py-2 text-sm">
+        <span className="font-semibold">{c.label}</span>
+        <span className="text-xs text-emerald-700 tabular-nums">↓ {c.entradas} entram{c.entradasPorFazer ? ` (${c.entradasPorFazer} por fazer)` : ""}</span>
+        <span className="text-xs text-amber-700 tabular-nums">↑ {c.saidas} saem{c.saidasPorFazer ? ` (${c.saidasPorFazer} por fazer)` : ""}</span>
+      </div>
+      <div className="space-y-2 p-3">
+        {/* marcas e Marketplace */}
+        <div className="flex flex-wrap gap-1.5">
+          {DAY_BUCKETS.map((b) => {
+            const x = c.byBucket[b];
+            if (!x.entradas && !x.saidas) return null;
+            return (
+              <Badge key={b} variant="outline" className={`px-2 py-1 text-xs font-normal ${b === "marketplace" ? "border-violet-300" : ""}`}>
+                <span className="mr-1.5 font-medium">{DAY_BUCKET_LABELS[b]}</span>
+                <span className="tabular-nums text-emerald-700">↓{x.entradas}</span>
+                <span className="ml-1.5 tabular-nums text-amber-700">↑{x.saidas}</span>
+              </Badge>
+            );
+          })}
+        </div>
+        {(mp.entradas > 0 || mp.saidas > 0) && (
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            <span className="font-medium text-foreground">Marketplace:</span>{" "}
+            {c.marketplaceParks.map((p, i) => (
+              <span key={p.name}>{i > 0 && " · "}{p.name} <span className="tabular-nums text-emerald-700">↓{p.entradas}</span> <span className="tabular-nums text-amber-700">↑{p.saidas}</span></span>
+            ))}
+          </p>
+        )}
+        {/* as 24 horas */}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] table-fixed text-center text-[11px]">
+            <thead>
+              <tr className="text-muted-foreground">
+                <th className="w-14 text-left font-medium">Hora</th>
+                {c.hours.map((h) => (
+                  <th key={h.hour} className="font-medium">
+                    <button type="button" className={`w-full rounded tabular-nums hover:bg-muted ${hour === h.hour ? "bg-primary text-primary-foreground" : ""}`} onClick={() => onHour(hour === h.hour ? null : h.hour)} title={`Ver só as ${String(h.hour).padStart(2, "0")}h`}>
+                      {String(h.hour).padStart(2, "0")}
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(["in", "out"] as const).map((k) => (
+                <tr key={k}>
+                  <td className={`text-left font-medium ${k === "in" ? "text-emerald-700" : "text-amber-700"}`}>{k === "in" ? "↓ Entram" : "↑ Saem"}</td>
+                  {c.hours.map((h) => {
+                    const n = k === "in" ? h.entradas : h.saidas;
+                    const left = k === "in" ? h.entradasPorFazer : h.saidasPorFazer;
+                    return (
+                      <td key={h.hour} className="p-0.5">
+                        <button type="button" onClick={() => onHour(hour === h.hour ? null : h.hour)}
+                          className={`w-full rounded py-1 tabular-nums ${shade(n, k)} ${hour === h.hour ? "ring-1 ring-primary" : ""} ${n === 0 ? "text-muted-foreground/50" : "font-semibold"}`}
+                          title={`${String(h.hour).padStart(2, "0")}h: ${n} ${k === "in" ? "entram" : "saem"}${left ? ` (${left} por fazer)` : ""}`}>
+                          {n === 0 ? "·" : n}
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Card>
   );
 }
 

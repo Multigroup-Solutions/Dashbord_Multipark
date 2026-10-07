@@ -16,10 +16,22 @@
  *    na Multipark);
  *  - a escala (dias como team leader e quantas pessoas tinha).
  * As contas ligam-se à ficha por employees.userId e employee_accounts.
+ *
+ * 42c (Jorge, 7 out 2026):
+ *  - cidade e marca do topo (a marca vale a cidade dela): com cidade escolhida
+ *    conta o dia na cidade ONDE a pessoa trabalhou (escala / avaliação do
+ *    dia); quem é de outra cidade só entra com os dias que fez nesta;
+ *  - a aba pela escala: um extra que foi TL em pelo menos metade dos dias
+ *    escalados conta como team leader;
+ *  - condutores e extras sem nada no período saem; "km sem movimentos"
+ *    assinalado (o Zello e o agente não estão na mesma ficha);
+ *  - a EQUIPA do TL (o turno dele) e do supervisor (as cidades dele):
+ *    movimentos, custo, quem mexeu carros sem Zello, horas paradas e, no
+ *    supervisor, extras a mais/a menos face à previsão (dia e semana).
  */
 import { sql, type SQL } from "drizzle-orm";
 import {
-  addTotals, bucketOf, emptyTotals, GROUP_VIEW, groupOf, perfRange, perHourOf, utcHourMs, workPoints,
+  addTotals, bucketOf, emptyTotals, GROUP_VIEW, groupOf, kmWithoutMoves, perfRange, perHourOf, rosterGroup, teamDayPoints, utcHourMs, workPoints,
   type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals,
 } from "../shared/peoplePerformance";
 import { applyAdjustments, emptyDayMetrics, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
@@ -91,6 +103,10 @@ function userSources(start: string, end: string): Array<{ key: PerfMetric; label
 export interface PerfPerson {
   employeeId: number; name: string; position: string | null; role: string | null; active: boolean; photoUrl: string | null;
   totals: PerfTotals; points: number; perHour: number | null;
+  /** 42c: tem km do Zello e nenhum movimento na Multipark (utilizador e agente diferentes) */
+  kmNoMoves: boolean;
+  /** 42c: na aba dos team leaders por ter sido TL na escala (o posto da ficha é outro) */
+  byRoster: boolean;
   /** por balde, só as métricas do gráfico da aba */
   series: Partial<Record<PerfMetric, number[]>>;
 }
@@ -101,8 +117,12 @@ export interface PerfResult {
   groupTotals: PerfTotals;
   groupSeries: Partial<Record<PerfMetric, number[]>>;
   speedLimit: number | null;
+  /** 42c: cidades da escala do filtro (null = todas) */
+  cities: string[] | null;
   notes: string[];
 }
+
+interface RosterRow { day: string; city: string; shift: string; employeeId: number; isTL: boolean; hours: number; level: string | null; startHour: number; endHour: number; sentHomeHour: number | null }
 
 export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: string; group: PerfGroup }): Promise<PerfResult> {
   const { getDb } = await import("./db");
@@ -112,13 +132,77 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   const range = operationalDayRangeUtc(r.from, r.to);
   const notes: string[] = [];
 
+  // ── 42c: cidade do topo (a marca vale a cidade dela) ──
+  const { scopedDayCities } = await import("./evaluationEngine");
+  const { employeeScope, projectScope } = await import("./cityScope");
+  const dayCities = scopedDayCities(); // undefined = sem filtro
+  const inCities = (c: unknown) => dayCities === undefined || dayCities.includes(String(c ?? ""));
+
+  // ── Escala do período (lida primeiro: dá a aba pela escala, os dias noutra cidade e as equipas) ──
+  let roster: RosterRow[] = [];
+  try {
+    roster = rowsOf(await db.execute(sql`SELECT assignmentDate AS day, city, shift, employeeId, isTeamLeader, level, startHour, endHour, sentHomeHour
+        FROM extras_dia_assignments WHERE assignmentDate >= ${r.from} AND assignmentDate <= ${r.to} AND employeeId IS NOT NULL`)).map((a) => {
+      const startHour = Number(a.startHour) || 0, endHour = Number(a.endHour) || 0, sent = a.sentHomeHour == null ? null : Number(a.sentHomeHour);
+      return { day: dayStr(a.day), city: String(a.city ?? ""), shift: String(a.shift ?? ""), employeeId: Number(a.employeeId), isTL: Number(a.isTeamLeader) === 1,
+        level: a.level == null ? null : String(a.level), startHour, endHour, sentHomeHour: sent, hours: Math.max(0, (sent ?? endHour) - startHour) };
+    });
+  } catch { notes.push("Não deu para ler a escala (dias como team leader e equipas)."); }
+  const rosterIn = roster.filter((a) => inCities(a.city));
+  const rosterDays = new Map<number, { days: Set<string>; tl: Set<string> }>();
+  for (const a of roster) {
+    const x = rosterDays.get(a.employeeId) ?? { days: new Set<string>(), tl: new Set<string>() };
+    x.days.add(a.day);
+    if (a.isTL) x.tl.add(a.day);
+    rosterDays.set(a.employeeId, x);
+  }
+  // dias que contam, com cidade escolhida: os da escala nesta cidade e os da avaliação nesta cidade;
+  // dias com escala SÓ noutra cidade não contam
+  const allowedDays = new Map<number, Set<string>>();
+  const otherCityDays = new Map<number, Set<string>>();
+  const addDay = (m: Map<number, Set<string>>, emp: number, day: string) => { const x = m.get(emp) ?? new Set<string>(); x.add(day); m.set(emp, x); };
+  if (dayCities !== undefined) {
+    for (const a of rosterIn) addDay(allowedDays, a.employeeId, a.day);
+    for (const a of roster) if (!inCities(a.city) && !allowedDays.get(a.employeeId)?.has(a.day)) addDay(otherCityDays, a.employeeId, a.day);
+  }
+
   // ── Pessoas da aba ──
-  const emps = rowsOf(await db.execute(sql`SELECT e.id, e.fullName, e.position, e.contractType, e.isActive, e.userId, e.photoUrl, u.role
+  const emps = rowsOf(await db.execute(sql`SELECT e.id, e.fullName, e.position, e.contractType, e.isActive, e.userId, e.photoUrl, u.role,
+      ${dayCities === undefined ? sql`1` : sql`CASE WHEN ${projectScope(sql`e.projectId`)} THEN 1 ELSE 0 END`} AS inScope
       FROM employees e LEFT JOIN users u ON u.id = e.userId`));
-  const people = new Map<number, { name: string; position: string | null; role: string | null; active: boolean; photoUrl: string | null }>();
+  // com cidade escolhida: quem tem avaliação do dia nesta cidade, mesmo com a ficha noutra
+  if (dayCities !== undefined && dayCities.length) {
+    const cityList = sql.join(dayCities.map((c) => sql`${c}`), sql`, `);
+    for (const m of rowsOf(await db.execute(sql`SELECT employeeId, day FROM employee_day_metrics
+        WHERE day >= ${r.from} AND day <= ${r.to} AND city IN (${cityList})`).catch(() => [[]]))) addDay(allowedDays, Number(m.employeeId), dayStr(m.day));
+  }
+  // 42c: cidades de cada supervisor (as do acesso da conta; "todas" = as 3)
+  const supCities = new Map<number, string[]>();
+  if (o.group === "supervision") {
+    const { loadCandidatesFromDb } = await import("./notify");
+    const cand = new Map((await loadCandidatesFromDb().catch(() => [])).map((c) => [c.id, c.cities] as const));
+    const accounts = new Map<number, number[]>();
+    for (const e of emps) if (e.userId != null) accounts.set(Number(e.id), [Number(e.userId)]);
+    for (const a of rowsOf(await db.execute(sql`SELECT employeeId, userId FROM employee_accounts`).catch(() => [[]]))) {
+      accounts.set(Number(a.employeeId), [...(accounts.get(Number(a.employeeId)) ?? []), Number(a.userId)]);
+    }
+    for (const [emp, users] of accounts) {
+      const set = new Set<string>();
+      for (const u of users) { const c = cand.get(u); if (c === "all") ["lisbon", "porto", "faro"].forEach((x) => set.add(x)); else for (const x of c ?? []) set.add(x); }
+      if (set.size) supCities.set(emp, [...set].sort());
+    }
+  }
+  const people = new Map<number, { name: string; position: string | null; role: string | null; active: boolean; photoUrl: string | null; byRoster: boolean; inScope: boolean }>();
   for (const e of emps) {
-    const g = groupOf({ position: e.position ?? null, role: e.role ?? null, contractType: e.contractType ?? null });
-    if (g === o.group) people.set(Number(e.id), { name: String(e.fullName ?? ""), position: e.position ?? null, role: e.role ?? null, active: Number(e.isActive) === 1, photoUrl: e.photoUrl ?? null });
+    const id = Number(e.id);
+    const base = groupOf({ position: e.position ?? null, role: e.role ?? null, contractType: e.contractType ?? null });
+    const rd = rosterDays.get(id);
+    const g = rosterGroup(base, rd ? { days: rd.days.size, tlDays: rd.tl.size } : undefined);
+    if (g !== o.group) continue;
+    // o supervisor que cobre a cidade escolhida conta como desta cidade (o trabalho de escritório não é por cidade)
+    const inScope = Number(e.inScope) === 1 || (o.group === "supervision" && dayCities !== undefined && (supCities.get(id) ?? []).some((c) => inCities(c)));
+    if (dayCities !== undefined && !inScope && !allowedDays.get(id)?.size) continue;
+    people.set(id, { name: String(e.fullName ?? ""), position: e.position ?? null, role: e.role ?? null, active: Number(e.isActive) === 1, photoUrl: e.photoUrl ?? null, byRoster: g !== base, inScope });
   }
   // contas → ficha (a principal e as extra)
   const userToEmp = new Map<number, number>();
@@ -138,7 +222,12 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     return t;
   };
   const put = (emp: number, day: string, part: Partial<PerfTotals>) => {
-    if (!people.has(emp)) return;
+    const p = people.get(emp);
+    if (!p) return;
+    if (dayCities !== undefined) {
+      if (otherCityDays.get(emp)?.has(day)) return; // escalado noutra cidade nesse dia
+      if (!p.inScope && !allowedDays.get(emp)?.has(day)) return; // ficha de outra cidade: só os dias feitos aqui
+    }
     const b = bucketOf(o.period, day, r);
     if (b) addTotals(cell(emp, b), part);
   };
@@ -147,7 +236,10 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   const ids = [...people.keys()];
   if (ids.length) {
     const idList = sql.join(ids.map((x) => sql`${x}`), sql`, `);
-    const mRows = rowsOf(await db.execute(sql`SELECT * FROM employee_day_metrics WHERE day >= ${r.from} AND day <= ${r.to} AND employeeId IN (${idList})`));
+    // 42c: com cidade escolhida, o dia conta na cidade onde a pessoa trabalhou (sem cidade no dia: a da ficha)
+    const metricCity = dayCities === undefined ? sql`1 = 1`
+      : sql`(${dayCities.length ? sql`city IN (${sql.join(dayCities.map((c) => sql`${c}`), sql`, `)})` : sql`1 = 0`} OR (city IS NULL AND ${employeeScope(sql`employee_day_metrics.employeeId`)}))`;
+    const mRows = rowsOf(await db.execute(sql`SELECT * FROM employee_day_metrics WHERE day >= ${r.from} AND day <= ${r.to} AND employeeId IN (${idList}) AND ${metricCity}`));
     const adj = new Map<string, Array<{ metric: string; delta: number }>>();
     for (const a of rowsOf(await db.execute(sql`SELECT employeeId, day, metric, delta FROM employee_metric_adjustments
         WHERE voidedAt IS NULL AND day >= ${r.from} AND day <= ${r.to} AND employeeId IN (${idList})`).catch(() => [[]]))) {
@@ -244,23 +336,26 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     }
   }
 
-  // ── Escala: dias como team leader e quantas pessoas tinha ──
-  try {
-    const asg = rowsOf(await db.execute(sql`SELECT DATE_FORMAT(assignmentDate, '%Y-%m-%d') AS day, city, shift, employeeId, isTeamLeader
-        FROM extras_dia_assignments WHERE assignmentDate >= ${r.from} AND assignmentDate <= ${r.to} AND employeeId IS NOT NULL`));
-    const teams = new Map<string, number>();
-    for (const a of asg) teams.set(`${a.day}|${a.city}|${a.shift}`, (teams.get(`${a.day}|${a.city}|${a.shift}`) ?? 0) + 1);
-    for (const a of asg) {
-      if (Number(a.isTeamLeader) !== 1) continue;
-      const emp = Number(a.employeeId);
-      if (!people.has(emp)) continue;
-      const b = bucketOf(o.period, String(a.day), r);
-      if (!b) continue;
-      addTotals(cell(emp, b), { tlDays: 1 });
-      const k = `${emp}|${b}`;
-      teamSum.set(k, (teamSum.get(k) ?? 0) + Math.max(0, (teams.get(`${a.day}|${a.city}|${a.shift}`) ?? 1) - 1));
+  // ── Escala: dias como team leader e quantas pessoas tinha (na cidade escolhida) ──
+  const teams = new Map<string, number>();
+  for (const a of rosterIn) teams.set(`${a.day}|${a.city}|${a.shift}`, (teams.get(`${a.day}|${a.city}|${a.shift}`) ?? 0) + 1);
+  for (const a of rosterIn) {
+    if (!a.isTL || !people.has(a.employeeId)) continue;
+    const b = bucketOf(o.period, a.day, r);
+    if (!b) continue;
+    addTotals(cell(a.employeeId, b), { tlDays: 1 });
+    const k = `${a.employeeId}|${b}`;
+    teamSum.set(k, (teamSum.get(k) ?? 0) + Math.max(0, (teams.get(`${a.day}|${a.city}|${a.shift}`) ?? 1) - 1));
+  }
+
+  // ── 42c: a equipa do TL (o turno dele) e do supervisor (as cidades dele) ──
+  if ((o.group === "teamleaders" || o.group === "supervision") && rosterIn.length && people.size) {
+    try {
+      await addTeams({ db, group: o.group, period: o.period, roster: rosterIn, people, supCities, put, notes });
+    } catch (err) {
+      notes.push(`Não deu para calcular a equipa: ${String((err as Error)?.message ?? err).slice(0, 160)}.`);
     }
-  } catch { notes.push("Não deu para ler a escala (dias como team leader)."); }
+  }
 
   // ── Totais, séries e pontos ──
   const view = GROUP_VIEW[o.group];
@@ -286,18 +381,168 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     totals.hours = Math.round(totals.hours * 10) / 10;
     totals.km = Math.round(totals.km * 10) / 10;
     totals.evalPoints = Math.round(totals.evalPoints * 10) / 10;
+    totals.teamCost = Math.round(totals.teamCost * 100) / 100;
+    totals.teamHoursStopped = Math.round(totals.teamHoursStopped * 10) / 10;
+    totals.teamPoints = Math.round(totals.teamPoints * 10) / 10;
     const active = Object.entries(totals).some(([k, v]) => k !== "maxSpeed" && v > 0);
-    if (!active && !p.active) continue; // inativos sem nada no período ficam de fora
+    // inativos sem nada no período ficam de fora; 42c: condutores e extras sem nada também ("se não tem nada, não precisa de estar aqui")
+    if (!active && (!p.active || o.group === "drivers")) continue;
     addTotals(groupTotals, { ...totals, teamPeople: 0, maxSpeed: totals.maxSpeed });
     groupTeam += teamTotal;
     const points = workPoints(o.group, totals);
-    out.push({ employeeId: emp, ...p, totals, points, perHour: perHourOf(points, totals.hours), series });
+    const { inScope: _inScope, ...shown } = p;
+    out.push({ employeeId: emp, ...shown, totals, points, perHour: perHourOf(points, totals.hours), series, kmNoMoves: o.group === "drivers" || o.group === "teamleaders" ? kmWithoutMoves(totals) : false });
   }
   groupTotals.teamPeople = groupTotals.tlDays > 0 ? Math.round((groupTeam / groupTotals.tlDays) * 10) / 10 : 0;
   groupTotals.hours = Math.round(groupTotals.hours * 10) / 10;
   groupTotals.km = Math.round(groupTotals.km * 10) / 10;
   groupTotals.evalPoints = Math.round(groupTotals.evalPoints * 10) / 10;
   notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões) — das internas só contam as do supervisor a ligar aos extras —, mais as chamadas do WhatsApp. Emails contam só os enviados pela dashboard.");
+  if (dayCities !== undefined) notes.push("Cidade escolhida: conta o dia na cidade onde a pessoa trabalhou (escala ou avaliação do dia); quem tem a ficha noutra cidade entra só com os dias que fez nesta. A marca conta como a cidade dela (as ações da avaliação não estão separadas por parque).");
+  if (out.some((x) => x.byRoster)) notes.push("Team leaders pela escala: quem tem posto de condutor ou extra mas foi team leader em pelo menos metade dos dias escalados do período conta aqui.");
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
-    people: out, groupTotals, groupSeries, speedLimit, notes };
+    people: out, groupTotals, groupSeries, speedLimit, cities: dayCities ?? null, notes };
+}
+
+/**
+ * 42c: a equipa de cada TL (o turno dele na escala: mesmo dia, cidade e turno,
+ * sem ele) e de cada supervisor (todos os escalados das cidades dele, TL
+ * incluídos), dia a dia: pessoas, movimentos (recolhas + entregas +
+ * movimentos da avaliação do dia), custo (como na Atividade do dia: horas ×
+ * taxa do nível; o TL = salário ÷ dias de trabalho do mês), quem mexeu carros
+ * sem GPS do Zello, horas paradas (GPS) e, no supervisor com dia ou semana, as
+ * horas·pessoa a menos / a mais face à previsão do Extras Dia. Os pontos da
+ * equipa são por pessoa (shared/peoplePerformance.ts → teamDayPoints).
+ */
+async function addTeams(o: {
+  db: any; group: "teamleaders" | "supervision"; period: PerfPeriod; roster: RosterRow[];
+  people: Map<number, unknown>; supCities: Map<number, string[]>;
+  put: (emp: number, day: string, part: Partial<PerfTotals>) => void; notes: string[];
+}): Promise<void> {
+  const { db, roster } = o;
+  const memberIds = Array.from(new Set(roster.map((a) => a.employeeId)));
+  const days = roster.map((a) => a.day).sort();
+  const from = days[0], to = days[days.length - 1];
+  const idList = sql.join(memberIds.map((x) => sql`${x}`), sql`, `);
+
+  // movimentos de cada pessoa por dia (avaliação do dia, já calculada)
+  const actions = new Map<string, number>();
+  for (const m of rowsOf(await db.execute(sql`SELECT employeeId, day, recolhas, entregas, movements FROM employee_day_metrics
+      WHERE day >= ${from} AND day <= ${to} AND employeeId IN (${idList})`).catch(() => [[]]))) {
+    actions.set(`${m.employeeId}|${dayStr(m.day)}`, (Number(m.recolhas) || 0) + (Number(m.entregas) || 0) + (Number(m.movements) || 0));
+  }
+  // GPS de cada pessoa por dia: km e horas paradas (partes do PDA partilhado; sem partes, a linha do dia)
+  const gps = new Map<string, { km: number; stopped: number }>();
+  const addGps = (emp: unknown, day: unknown, km: number, stopped: number) => {
+    const k = `${emp}|${dayStr(day)}`;
+    const g = gps.get(k) ?? { km: 0, stopped: 0 };
+    g.km += km; g.stopped += stopped;
+    gps.set(k, g);
+  };
+  for (const g of rowsOf(await db.execute(sql`SELECT employeeId, day, km, minutes, movingMinutes FROM driver_day_shares
+      WHERE day >= ${from} AND day <= ${to} AND employeeId IN (${idList})`).catch(() => [[]]))) {
+    addGps(g.employeeId, g.day, Number(g.km) || 0, Math.max(0, (Number(g.minutes) || 0) - (Number(g.movingMinutes) || 0)) / 60);
+  }
+  for (const g of rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.totalKm AS km, h.hoursStopped FROM daily_driver_history h
+      WHERE h.employeeId IN (${idList}) AND DATE(h.date) >= ${from} AND DATE(h.date) <= ${to}
+        AND NOT EXISTS (SELECT 1 FROM driver_day_shares s WHERE s.historyId = h.id)`).catch(() => [[]]))) {
+    addGps(g.employeeId, g.day, Number(g.km) || 0, Number(g.hoursStopped) || 0);
+  }
+
+  // custo de cada linha da escala
+  const [{ loadExtraRates, rateFor }, { TL_WORKING_DAYS_PER_MONTH }] = await Promise.all([import("./extraRates"), import("./extrasDia")]);
+  const rates = await loadExtraRates();
+  const tlIds = Array.from(new Set(roster.filter((a) => a.isTL).map((a) => a.employeeId)));
+  const salaries = new Map<number, number>();
+  if (tlIds.length) {
+    for (const e of rowsOf(await db.execute(sql`SELECT id, monthlySalary FROM employees WHERE id IN (${sql.join(tlIds.map((x) => sql`${x}`), sql`, `)})`).catch(() => [[]]))) {
+      salaries.set(Number(e.id), Number(e.monthlySalary ?? 0) || 0);
+    }
+  }
+  const costOf = (a: RosterRow) => {
+    if (a.isTL) { const m = salaries.get(a.employeeId) ?? 0; return m > 0 ? m / TL_WORKING_DAYS_PER_MONTH : 0; }
+    return a.level ? a.hours * rateFor(rates, a.level) : 0;
+  };
+
+  type Unit = { people: number; actions: number; cost: number; noZello: number; hoursStopped: number; short: number; over: number };
+  /** Uma equipa (linhas da escala): os membros contam uma vez por dia. */
+  const unitOf = (rows: RosterRow[], members: RosterRow[]): Unit => {
+    const day = rows[0]?.day ?? "";
+    const ids = Array.from(new Set(members.map((a) => a.employeeId)));
+    let acts = 0, noZello = 0, stopped = 0;
+    for (const id of ids) {
+      const n = actions.get(`${id}|${day}`) ?? 0;
+      const g = gps.get(`${id}|${day}`);
+      acts += n;
+      if (n > 0 && !(g && g.km > 0)) noZello += 1;
+      stopped += g?.stopped ?? 0;
+    }
+    return { people: ids.length, actions: acts, cost: rows.reduce((s, a) => s + costOf(a), 0), noZello, hoursStopped: stopped, short: 0, over: 0 };
+  };
+
+  // por pessoa (TL ou supervisor) e dia: as equipas desse dia somadas
+  const perDay = new Map<string, Unit & { points: number }>();
+  const addUnit = (emp: number, day: string, u: Unit) => {
+    const k = `${emp}|${day}`;
+    const x = perDay.get(k) ?? { people: 0, actions: 0, cost: 0, noZello: 0, hoursStopped: 0, short: 0, over: 0, points: 0 };
+    x.people += u.people; x.actions += u.actions; x.cost += u.cost; x.noZello += u.noZello; x.hoursStopped += u.hoursStopped; x.short += u.short; x.over += u.over;
+    x.points += teamDayPoints({ people: u.people, actions: u.actions, noZello: u.noZello, hoursStopped: u.hoursStopped });
+    perDay.set(k, x);
+  };
+  const byKey = new Map<string, RosterRow[]>();
+  const group = (k: string, a: RosterRow) => byKey.set(k, [...(byKey.get(k) ?? []), a]);
+
+  if (o.group === "teamleaders") {
+    for (const a of roster) group(`${a.day}|${a.city}|${a.shift}`, a);
+    for (const a of roster) {
+      if (!a.isTL || !o.people.has(a.employeeId)) continue;
+      const rows = byKey.get(`${a.day}|${a.city}|${a.shift}`) ?? [];
+      const members = rows.filter((x) => !x.isTL && x.employeeId !== a.employeeId);
+      // o custo da equipa inclui o do TL; os movimentos e o resto são dos outros
+      addUnit(a.employeeId, a.day, { ...unitOf(members, members), cost: members.reduce((s, x) => s + costOf(x), 0) + costOf(a) });
+    }
+  } else {
+    for (const a of roster) group(`${a.day}|${a.city}`, a);
+    // extras a mais / a menos: a previsão do Extras Dia é lida ao vivo, dia a dia — só no dia e na semana
+    const coverage = new Map<string, { short: number; over: number }>();
+    if (o.period === "day" || o.period === "week") {
+      const [{ getExtrasDiaForecast }, { addDaysIso }, { forecastIncompleteReason }, { coverageBalance }] = await Promise.all([
+        import("./extrasDia"), import("./extrasAutomation"), import("./extrasSchedule"), import("../shared/evaluationTeam"),
+      ]);
+      let incomplete = 0;
+      await Promise.all(Array.from(byKey.entries()).map(async ([k, rows]) => {
+        const [day, city] = k.split("|");
+        try {
+          const f = await getExtrasDiaForecast(addDaysIso(day, -1), city as any);
+          if (forecastIncompleteReason(f)) { incomplete += 1; return; }
+          const c = coverageBalance(f.hourly.map((h) => h.driversNeeded), rows.filter((a) => !a.isTL).map((a) => ({ startHour: a.startHour, endHour: a.endHour, sentHomeHour: a.sentHomeHour })));
+          if (c.verdict !== "sem_previsao") coverage.set(k, { short: c.shortPersonHours, over: c.overPersonHours });
+        } catch { incomplete += 1; }
+      }));
+      if (incomplete) o.notes.push(`Extras a mais / a menos: ${incomplete} dia(s) de cidade sem previsão completa ficaram de fora.`);
+    } else {
+      o.notes.push("Extras a mais / a menos: escolhe Dia ou Semana (a previsão é lida ao vivo da Multipark, dia a dia).");
+    }
+    for (const emp of o.people.keys()) {
+      const cities = o.supCities.get(emp) ?? [];
+      for (const [k, rows] of byKey) {
+        const [day, city] = k.split("|");
+        if (!cities.includes(city)) continue;
+        const c = coverage.get(k);
+        addUnit(emp, day, { ...unitOf(rows, rows), short: c?.short ?? 0, over: c?.over ?? 0 });
+      }
+    }
+    const noCity = Array.from(o.people.keys()).filter((e) => !o.supCities.get(e)?.length).length;
+    if (noCity) o.notes.push(`${noCity} pessoa(s) da supervisão sem cidade na conta: sem equipa.`);
+  }
+
+  for (const [k, u] of perDay) {
+    const [emp, day] = k.split("|");
+    o.put(Number(emp), day, {
+      teamDays: 1, teamPersonDays: u.people, teamActions: u.actions, teamCost: Math.round(u.cost * 100) / 100,
+      teamNoZello: u.noZello, teamHoursStopped: Math.round(u.hoursStopped * 10) / 10,
+      teamShortHours: u.short, teamOverHours: u.over, teamPoints: Math.round(u.points * 10) / 10,
+    });
+  }
+  o.notes.push("Equipa: TL = o turno dele na escala (mesmo dia, cidade e turno); supervisor = todos os escalados das cidades da conta (dois supervisores da mesma cidade partilham a equipa). Pontos da equipa por dia, por pessoa: cada movimento +1, quem mexeu carros sem Zello −20, cada hora parada −2.");
 }
