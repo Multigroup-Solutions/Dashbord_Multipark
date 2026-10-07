@@ -14,6 +14,7 @@ import { createCentralSugarRouter } from "../centralSugar";
 import { CENTRAL_SUGAR_BASE_PATH } from "../../shared/centralSugar";
 import { createWhatsappWebhookRouter } from "../whatsappWebhook";
 import { registerWhatsappCallStreamRoute } from "../whatsappCallStream";
+import { registerCentralRingStreamRoute } from "../centralRing";
 import { createMultiparkWebhookRouter, retryMultiparkDeliveries } from "../multiparkWebhook";
 import { getDeadline, waitUntil } from "@vercel/functions";
 import { deliveryErrorCode } from "../bookingDeliveryQueue";
@@ -67,6 +68,7 @@ try {
   app.use(CENTRAL_SUGAR_BASE_PATH, createCentralSugarRouter());
   // Toque das chamadas do WhatsApp por SSE (GET, sessão por cookie).
   registerWhatsappCallStreamRoute(app);
+  registerCentralRingStreamRoute(app);
 
   // Upload multipart (paridade com o index.ts do Railway — os PDAs usam isto
   // p/ a foto de entrada/saída do check-in; sem isto o Vercel dava 404).

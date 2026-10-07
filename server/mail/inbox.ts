@@ -12,7 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
   MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
-  isHrMailThread, mailAttachmentDriveAllowed, extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
+  isHrMailThread, mailAttachmentDriveAllowed, extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, mailboxIsMine, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
   pickFromAddress, type MailLinkType, type MailViewer, type MailThreadStatus,
 } from "../../shared/mail";
 import { can, grantFor } from "../../shared/access";
@@ -173,6 +173,8 @@ export async function visibleMailboxes(viewer: MailViewer) {
       addresses: m.addresses, signatures: m.signatures, canAct: canActOnMailbox(viewer, m), pipeline: m.pipeline,
       // Caixa por tema (sem conta): não se escreve uma mensagem nova daqui (17f).
       canCompose: canActOnMailbox(viewer, m) && m.sourceKind !== "tema",
+      // Lote 45: a caixa é "dela" quando um endereço tem a pessoa (ou o papel dela) como responsável.
+      mine: mailboxIsMine(m.addresses, viewer),
       unread: Number(r.unread ?? 0), awaiting: Number(r.awaiting ?? 0), open: Number(r.open ?? 0),
     });
   }
@@ -733,6 +735,12 @@ export async function sendMail(viewer: MailViewer, input: SendInput): Promise<Se
       await placeNewThread(viewer, mailbox, {
         threadId, messageId: r.messageId, fromEmail: check.email, contactEmail, subject, text, sentAt: p.sentAt, inheritedProjectId: threadRow?.projectId ?? null,
       }).catch((err) => console.warn("[mail] cidade/ligações da conversa nova:", String(err?.message ?? err).slice(0, 160)));
+    } else if (!mailbox && personal && threadId && threadId !== threadRow?.id) {
+      // Lote 45 (Jorge: "se eu mandar um email daqui, mesmo da minha caixa, fica
+      // registado no cliente"): a conversa NOVA do "O meu email" também fica
+      // ligada logo ao cliente/reserva (antes só quando o cliente respondia).
+      await autoLinkNewThread({ threadId, messageId: r.messageId, contactEmail, subject, text, sentAt: p.sentAt })
+        .catch((err) => console.warn("[mail] ligações da conversa nova (pessoal):", String(err?.message ?? err).slice(0, 160)));
     }
     if (reqId && threadId) await finishSendRequest(reqId, { threadId }).catch(() => {});
   } catch (err: any) {
@@ -758,20 +766,26 @@ export async function sendMail(viewer: MailViewer, input: SendInput): Promise<Se
 async function placeNewThread(viewer: MailViewer, mailbox: MailboxRow, t: {
   threadId: number; messageId: number | null; fromEmail: string; contactEmail: string | null; subject: string; text: string; sentAt: string | null; inheritedProjectId: number | null;
 }): Promise<void> {
-  const { addAutoLink, setThreadProjectIfEmpty } = await import("./store");
-  const linkProjects: number[] = [];
-  if (t.contactEmail) {
-    const { proposeLinks } = await import("./autolink");
-    const { dbAutoLinkDeps } = await import("./service");
-    const links = await proposeLinks({ contactEmail: t.contactEmail, contactName: null, subject: t.subject, bodyText: t.text, gmThreadId: null, refs: [], sentAt: t.sentAt }, dbAutoLinkDeps);
-    for (const l of links) {
-      await addAutoLink({ threadId: t.threadId, messageId: t.messageId, entityType: l.entityType, entityId: l.entityId, confidence: l.confidence, reason: l.reason });
-      if (l.projectId != null) linkProjects.push(l.projectId);
-    }
-  }
+  const { setThreadProjectIfEmpty } = await import("./store");
+  const linkProjects = await autoLinkNewThread(t);
   const aliasCity = mailbox.addresses.find((a) => normalizeAddress(a.address) === normalizeAddress(t.fromEmail))?.cityId ?? null;
   const ids = mailboxCityRestricted(viewer, mailbox) ? scopedProjectIds() : undefined;
   await setThreadProjectIfEmpty(t.threadId, newThreadProject({ inherited: t.inheritedProjectId, aliasCity, linkProjects, senderScope: ids }));
+}
+
+/** Ligações automáticas (cliente, reserva…) de uma conversa NOVA criada por um envio; devolve as cidades delas. */
+async function autoLinkNewThread(t: { threadId: number; messageId: number | null; contactEmail: string | null; subject: string; text: string; sentAt: string | null }): Promise<number[]> {
+  const linkProjects: number[] = [];
+  if (!t.contactEmail) return linkProjects;
+  const { addAutoLink } = await import("./store");
+  const { proposeLinks } = await import("./autolink");
+  const { dbAutoLinkDeps } = await import("./service");
+  const links = await proposeLinks({ contactEmail: t.contactEmail, contactName: null, subject: t.subject, bodyText: t.text, gmThreadId: null, refs: [], sentAt: t.sentAt }, dbAutoLinkDeps);
+  for (const l of links) {
+    await addAutoLink({ threadId: t.threadId, messageId: t.messageId, entityType: l.entityType, entityId: l.entityId, confidence: l.confidence, reason: l.reason });
+    if (l.projectId != null) linkProjects.push(l.projectId);
+  }
+  return linkProjects;
 }
 
 /** Cidade da conversa nova (ver placeNewThread). PURA. */

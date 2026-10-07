@@ -8,6 +8,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ExternalLink, Loader2 } from "lucide-react";
 import { Pill, eur, fmtPhone, monthYear, num } from "@/components/crm/crmUi";
+import { telHref } from "@shared/phone";
 import { Card, CrmNotesCard, Kpi, MonthsTable, RecentTable, TopClients } from "@/components/crm/PartnerBlocks";
 
 const STATUS_LABEL: Record<string, string> = { ACTIVE: "ativo", PENDING: "pendente", INACTIVE: "inativo" };
@@ -52,7 +53,7 @@ export default function CrmParkPage() {
             <Row label="Empresa">{p.companyName ?? p.taxName ?? "—"}</Row>
             <Row label="NIF">{p.nif ?? "—"}</Row>
             <Row label="Email">{p.email ? <a href={`mailto:${p.email}`} className="text-primary hover:underline">{p.email}</a> : "—"}</Row>
-            <Row label="Telefone">{p.phone ? <a href={`tel:${p.phone}`} className="text-primary hover:underline">{fmtPhone(p.phone)}</a> : "—"}</Row>
+            <Row label="Telefone">{p.phone ? <a href={telHref(p.phone)} className="text-primary hover:underline">{fmtPhone(p.phone)}</a> : "—"}</Row>
             <Row label="Cidade">{[p.city, p.country].filter(Boolean).join(", ") || "—"}</Row>
             {p.address && <div className="text-[13px] text-muted-foreground">{p.address}</div>}
             {p.totalSpots != null && <Row label="Lugares">{num(p.totalSpots)}</Row>}

@@ -65,7 +65,7 @@ describe("Botões nas fichas", () => {
     expect(ca).toContain('const canMail = !!user && can(user as any, "comunicacao", "view");');
     expect(ca).toContain("const callsOn = canWaEdit && !!callsFlag.data?.enabled;");
     expect(ca).toContain("canMail ? composeEmailHref(e, mailbox) : `mailto:${e}`");
-    expect(ca).toContain("href={`tel:${");
+    expect(ca).toContain("href={telHref(");
   });
   it("cliente (CRM), reserva (não anonimizada) e colaborador (ligado à ficha, caixa RH)", () => {
     expect(src("client/src/pages/CrmClientPage.tsx")).toContain("<ContactActions");

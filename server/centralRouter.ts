@@ -161,4 +161,18 @@ export const centralRouter = router({
         details: `Acesso da central "${String(a.username)}" reativado (estava revogado desde ${iso(a.revokedAt) ?? "?"}${a.revokedById ? ` por #${Number(a.revokedById)}` : ""})` }).catch(() => null);
       return { ok: true, already: false };
     }),
+
+  // ─── Lote 45: a central toca no dashboard (cada pessoa só vê a sua consola) ───
+  /** Liga o toque para esta pessoa? (interruptor CENTRAL_RING + acesso da consola ativo). */
+  ringSetup: protectedProcedure.query(async ({ ctx }) => {
+    const { centralRingEnabled, hasCentralAccount } = await import("./centralRing");
+    if (!(await centralRingEnabled())) return { enabled: false };
+    return { enabled: await hasCentralAccount(ctx.user.id) };
+  }),
+  /** A chamada a tocar na consola desta pessoa (ou null). Só lê. */
+  myRing: protectedProcedure.query(async ({ ctx }) => {
+    const { centralRingEnabled, ringForUser } = await import("./centralRing");
+    if (!(await centralRingEnabled())) return null;
+    return ringForUser(ctx.user.id);
+  }),
 });

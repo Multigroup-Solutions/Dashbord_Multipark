@@ -20,7 +20,7 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Por baixo do número aparece uma linha **quem é**: "Colaborador · Condutor · Lisboa", "Candidato a extra · respondeu" ou "Cliente · 3 reservas (1 por vir) · última 12/09/2026" (carrega para abrir a ficha do cliente). Número sem nada: "Número sem ficha, candidatura nem cliente no CRM".
 
 **Responder**
-1. Menu **Comunicação → WhatsApp** (as mesmas conversas aparecem também em **Comunicação → Caixas (email e WhatsApp)**, junto dos emails da caixa). Filtra por estado, responsável, **Não lidas** ou só conversas com alerta; pesquisa por nome, número ou texto (tecla `/`).
+1. Menu **Comunicação → WhatsApp** (o WhatsApp tem a página dele; as **Caixas de email** são só de email). Filtra por estado, responsável, **Não lidas** ou só conversas com alerta; pesquisa por nome, número ou texto (tecla `/`).
 2. A lista mostra as **300 conversas mais recentes**; a pesquisa procura também nas mais antigas.
 3. Abre a conversa e escreve a resposta. No computador, **Enter** envia e **Shift+Enter** muda de linha; **no telemóvel, Enter muda de linha** e só o botão verde envia. Há **Respostas rápidas** para textos frequentes.
 4. **Janela de 24 h**: só podes escrever texto livre até 24 h depois da última mensagem do contacto. Com a janela fechada, usa **Enviar template**; o texto livre só volta quando o contacto responder.
