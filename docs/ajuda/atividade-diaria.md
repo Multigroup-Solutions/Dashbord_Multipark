@@ -2,7 +2,7 @@
 modulo: atividade_diaria
 titulo: Actividade Diária (quem fez o quê, GPS e PDAs)
 rotas: /operacional
-palavras: actividade diária, atividade diária, atividade do dia, quem fez o quê, recolhas, entregas, movimentações, no horário, fora do horário, escalados, km, quilómetros, gps, zello, velocidade, excessos, histórico de velocidade, ao vivo, mapa, pda, pdas, check-in do pda, retirar pda, agente por ligar, parceiro, pda sem login, ponto
+palavras: trajeto, mapa das velocidades, geojson, recolher dados, forçar re-divisão, escolher pessoa, actividade diária, atividade diária, atividade do dia, quem fez o quê, recolhas, entregas, movimentações, no horário, fora do horário, escalados, km, quilómetros, gps, zello, velocidade, excessos, histórico de velocidade, ao vivo, mapa, pda, pdas, check-in do pda, retirar pda, agente por ligar, parceiro, pda sem login, ponto
 ---
 # Actividade Diária
 
@@ -21,15 +21,27 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, os km
   - **⚠ (agente por ligar)**: agente da Multipark sem ficha ligada (liga-o em **RH → Agentes**);
   - **📡 (PDA sem login)**: km de um PDA sem ninguém com login.
 - As ações contam no dia do **turno**: a noite que passa a meia-noite fica no dia em que começou.
-- Clica numa linha (ou carrega em Enter) para abrir **o dia dessa pessoa**: ações, GPS com o trajeto, PDAs e ponto.
+- Clica no **nome** para abrir a **ficha** da pessoa no RH. Clica no resto da linha (ou carrega em Enter) para abrir **o dia dessa pessoa**: ações, GPS com o trajeto, PDAs e ponto.
+- **Todas as pessoas** (por cima da tabela) escolhe uma pessoa só; **Todas** volta à lista toda.
 
 **Histórico Diário**
 - O GPS de um dia por pessoa: km, horas em movimento e paradas, velocidades, excessos, bateria e trajeto. **Export CSV** descarrega a tabela.
-- **Histórico de velocidade por pessoa**: escolhe a pessoa (ou clica numa linha) para ver a velocidade máxima e a média em movimento dia a dia.
-- A recolha corre de madrugada. Quem gere o Histórico diário tem **Recolher Dados** e **Forçar re-divisão** (depois de corrigir check-ins de PDA).
+- Abre no último dia que o Zello já entrega completo (há 2 dias). **Ontem** ainda não vem do Zello, por isso aparecia vazio.
+- Clica no **nome** para abrir a ficha. Clica no resto da linha para ver o **histórico de velocidade** dessa pessoa: a velocidade máxima e a média em movimento, dia a dia.
+- **Trajeto** abre o dia no **mapa**, pintado pela velocidade:
+  - azul claro é devagar e azul escuro é depressa;
+  - a **vermelho** está o que passou o limite dos excessos;
+  - estão marcados o início, o fim e o ponto da velocidade máxima;
+  - por baixo aparece um gráfico com a velocidade ao longo do dia e a linha do limite;
+  - um dia com muitos pontos é reduzido para o mapa, mas os excessos ficam sempre.
+- A recolha corre de madrugada. Quem gere o Histórico diário tem dois botões:
+  - **Recolher Dados** vai buscar agora ao Zello o GPS do dia escolhido (km, velocidades, trajeto) de todos os utilizadores. O Zello só dá um dia completo 2 dias depois; o de hoje fica provisório.
+  - **Forçar re-divisão** volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa-se depois de corrigir um check-in. Não volta ao Zello nem muda as velocidades.
 
 **Ao Vivo**
-- Mapa com a posição de cada condutor (atualiza a cada 30 segundos), com alertas de velocidade, bateria e falta de reporte.
+- Mapa com a posição de cada condutor. Atualiza sozinho a cada 30 segundos.
+- Em cima fica uma linha só: quantos estão no mapa, a hora da última leitura e os alertas contados (acima do limite de velocidade, bateria fraca, sem reportar há mais de 1 h). Carrega num alerta para ver os nomes.
+- **Atualizar** lê tudo de novo (posições, ligações Zello ↔ pessoas e PDAs) e volta a mostrar toda a gente no mapa.
 - **Utilizadores Zello ↔ Pessoas**: os PDAs ligam-se pelo check-in do dia; o seletor fixo é só para telemóveis pessoais.
 
 **PDAs**

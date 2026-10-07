@@ -194,7 +194,7 @@ describe("erro ≠ vazio nas páginas de terreno", () => {
     const panel = src("client/src/components/OpsPresencePanel.tsx");
     expect(panel).toContain("{!isLoading && !failed && open.length === 0");
     const live = src("client/src/components/ZelloLiveTab.tsx");
-    expect(live).toContain("<ZelloGoogleMap drivers={mapDrivers} />");
+    expect(live).toContain("<ZelloGoogleMap drivers={mapDrivers} fitSignal={fitSignal} />"); // 43a: Atualizar reenquadra
     const map = src("client/src/components/maps/ZelloGoogleMap.tsx");
     expect(map).toContain("label.textContent = driver.name");
     expect(map).toContain("title.textContent = driver.name");

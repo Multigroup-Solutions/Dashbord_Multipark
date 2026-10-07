@@ -543,6 +543,12 @@ export const operationalRouter = router({
       requireAccess(ctx.user, "historico_diario", "view");
       return getDailyDriverStats(input.date);
     }),
+    /** 43a: o trajeto de uma linha, lido do GeoJSON do Zello no servidor, para o mapa das velocidades. */
+    track: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "historico_diario", "view");
+      const { loadDriverTrack } = await import("./driverTrack");
+      return loadDriverTrack(input.id);
+    }),
     /**
      * Recolha manual de um dia (só admin — abrange todas as cidades). Prazo de
      * 45 s (a função morre aos 60 s): devolve `done:false` e a UI volta a
