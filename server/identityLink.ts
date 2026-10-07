@@ -299,7 +299,10 @@ export async function runIdentitySweep(): Promise<SweepReport> {
       SELECT e.id, e.multiparkAgentUserId AS agentId,
              LOWER(TRIM(COALESCE(NULLIF(e.email, ''), u.email))) AS email, LOWER(TRIM(e.personalEmail)) AS personalEmail
         FROM employees e LEFT JOIN users u ON u.id = e.userId WHERE e.isActive = 1`));
-    const linkedIds = new Set(fichas.map((f) => String(f.agentId ?? "").trim()).filter(Boolean));
+    // 41a: o agente principal de uma ficha INATIVA continua dela — não passa a extra de outra
+    const allPrincipal = rowsOf(await db.execute(sql`SELECT multiparkAgentUserId AS agentId FROM employees
+      WHERE multiparkAgentUserId IS NOT NULL AND multiparkAgentUserId <> ''`));
+    const linkedIds = new Set([...fichas, ...allPrincipal].map((f) => String(f.agentId ?? "").trim()).filter(Boolean));
     for (const a of seen) {
       if (linkedIds.has(a.agentUserId) || aliasAgentIds.has(a.agentUserId)) continue;
       const email = a.agentEmail.trim().toLowerCase();

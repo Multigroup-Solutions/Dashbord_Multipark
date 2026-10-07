@@ -1,20 +1,57 @@
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { addDays, format, startOfWeek } from 'date-fns';
-import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Shield } from 'lucide-react';
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Copy, ExternalLink, Link2, Shield, UserRound } from 'lucide-react';
+import { toast } from 'sonner';
 import { trpc } from '@/lib/trpc';
 import { USER_ROLE_LABELS } from '@shared/userAccessSummary';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PersonLinksDialog } from '@/components/PersonLinksDialog';
 
-export function EmployeeAccessAvailability({ employeeId }: { employeeId: number }) {
+/**
+ * 41a: o agente da Multipark desta ficha (principal + extra), dentro do cartão
+ * "Utilizador e permissões": "Abrir agente" (desempenho na dashboard), "Abrir na
+ * Multipark" (com o endereço nas Definições; senão "Copiar ID") e "Ligações"
+ * para unir/separar conta e agente — quem gere o RH.
+ */
+function EmployeeAgentSection({ employeeId, name }: { employeeId: number; name?: string | null }) {
+  const q = trpc.rh.agentSummary.useQuery({ employeeId });
+  const [links, setLinks] = useState(false);
+  const d = q.data;
+  const copy = (id: string) => {
+    navigator.clipboard?.writeText(id).then(() => toast.success('ID do agente copiado.'), () => toast.error('Não deu para copiar.'));
+  };
+  return <div className="space-y-2 border-t pt-3">
+    <p className="flex items-center gap-2 text-sm font-medium"><UserRound className="h-4 w-4" />Agente da Multipark</p>
+    {q.isLoading ? <p className="text-sm text-muted-foreground">A carregar o agente…</p>
+      : q.error ? <p role="alert" className="text-sm text-destructive">{q.error.message}</p>
+      : !d ? null : <>
+        {d.agents.length === 0 ? <p className="text-sm text-amber-700">Sem agente da Multipark ligado.</p>
+          : <ul className="space-y-2">{d.agents.map((a, i) => <li key={a.agentUserId ?? `n${i}`} className="flex flex-wrap items-center gap-2 text-sm">
+            <Badge variant={a.principal ? 'default' : 'secondary'}>{a.principal ? 'principal' : 'extra'}</Badge>
+            <span className="min-w-0 [overflow-wrap:anywhere]">{a.agentName ?? a.agentUserId}</span>
+            {a.agentUserId && <span className="font-mono text-xs text-muted-foreground">#{a.agentUserId}</span>}
+            {a.url ? <Button variant="outline" size="sm" className="h-7" asChild><a href={a.url} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-3.5 w-3.5 mr-1" />Abrir na Multipark</a></Button>
+              : a.agentUserId ? <Button variant="ghost" size="sm" className="h-7" title={d.hasAgentUrl ? undefined : 'Para abrir na Multipark: Definições → Operação → Endereço de um agente na Multipark'} onClick={() => copy(a.agentUserId!)}><Copy className="h-3.5 w-3.5 mr-1" />Copiar ID</Button> : null}
+          </li>)}</ul>}
+        <div className="flex flex-wrap gap-2">
+          {d.canOpenAgent && d.agents.length > 0 && <Button variant="outline" size="sm" asChild><Link href={`/pessoas/condutores-agentes?ficha=${employeeId}`}><ExternalLink className="h-3.5 w-3.5 mr-1.5" />Abrir agente</Link></Button>}
+          {d.canManageLinks && <Button variant="outline" size="sm" onClick={() => setLinks(true)}><Link2 className="h-3.5 w-3.5 mr-1.5" />Ligações (unir / separar)</Button>}
+        </div>
+      </>}
+    <PersonLinksDialog employeeId={employeeId} name={name} open={links} onOpenChange={setLinks} />
+  </div>;
+}
+
+export function EmployeeAccessAvailability({ employeeId, employeeName }: { employeeId: number; employeeName?: string | null }) {
   const [weekStart, setWeekStart] = useState(() => format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'));
   const account = trpc.rh.accountSummary.useQuery({ employeeId });
   const availability = trpc.extrasAvailability.forEmployee.useQuery({ employeeId, weekStart });
   const a = account.data;
   const moveWeek = (days: number) => setWeekStart(format(addDays(new Date(`${weekStart}T12:00:00`), days), 'yyyy-MM-dd'));
-  return <div className="grid gap-4 lg:grid-cols-2">
+  return <div className="grid min-w-0 gap-4 lg:grid-cols-2">
     <Card>
       <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Shield className="h-4 w-4" />Utilizador e permissões</CardTitle></CardHeader>
       <CardContent className="space-y-3">
@@ -37,6 +74,7 @@ export function EmployeeAccessAvailability({ employeeId }: { employeeId: number 
               <ul className="mt-2 space-y-2">{a.permissions.map(p => <li key={p.id} className="flex justify-between gap-3"><span>{p.label}</span><span className="text-xs text-muted-foreground">{p.mode === 'grant' ? 'Concedida' : p.mode === 'deny' ? 'Negada' : !p.enabled ? 'Sem acesso' : p.id.startsWith('city.') ? 'Centro de custos' : 'Pelo perfil'}</span></li>)}</ul>
             </details>
           </>}
+        <EmployeeAgentSection employeeId={employeeId} name={employeeName} />
       </CardContent>
     </Card>
     <Card>

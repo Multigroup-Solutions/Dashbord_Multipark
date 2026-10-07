@@ -14,6 +14,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { getDb, getDocumentChecklistForEmployee, getPayrollData, toMysqlDateTime } from "./db";
 import { employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
+import { manualBlockReason } from "../shared/suspendSuggest";
 
 const nowMysql = () => toMysqlDateTime(new Date());
 
@@ -27,7 +28,8 @@ export async function recomputeLoginBlocked(employeeId: number): Promise<{ block
   const reasons: string[] = [];
   if (e.blockedByPenalties) reasons.push("faltas em extras-dia sem aviso");
   if (e.blockedByDocs) reasons.push("documentos obrigatórios em falta");
-  if (e.blockedManually) reasons.push(e.loginBlockedReason && !/falta|documento/i.test(e.loginBlockedReason) ? e.loginBlockedReason : "bloqueio manual");
+  // 41a: o motivo manual (ex.: suspensão) sai do texto guardado sem os outros motivos nem o sufixo
+  if (e.blockedManually) reasons.push(manualBlockReason(e.loginBlockedReason));
   const blocked = reasons.length > 0;
   await db.update(employees).set({ loginBlocked: blocked ? 1 : 0, loginBlockedReason: blocked ? `${reasons.join(" · ")}. Contacta o supervisor.`.slice(0, 255) : null }).where(eq(employees.id, employeeId));
   return { blocked, reason: blocked ? reasons.join(" · ") : null };

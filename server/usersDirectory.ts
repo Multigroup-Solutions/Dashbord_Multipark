@@ -125,8 +125,11 @@ export function buildUserDirectoryWhere(filters: UserDirectoryFilters, cityIds: 
   }
 
   if (filters.employee) {
-    const linked = sql`EXISTS (SELECT 1 FROM employees dir_link WHERE dir_link.userId = ${users.id}
-      AND ${projectScope(sql`dir_link.projectId`)})`;
+    // 41a: conta extra (employee_accounts) também tem ficha
+    const linked = sql`(EXISTS (SELECT 1 FROM employees dir_link WHERE dir_link.userId = ${users.id}
+      AND ${projectScope(sql`dir_link.projectId`)})
+      OR EXISTS (SELECT 1 FROM employee_accounts dir_alias JOIN employees dir_alias_emp ON dir_alias_emp.id = dir_alias.employeeId
+        WHERE dir_alias.userId = ${users.id} AND ${projectScope(sql`dir_alias_emp.projectId`)}))`;
     conds.push(filters.employee === "with" ? linked : sql`NOT (${linked})`);
   }
 
@@ -167,19 +170,59 @@ async function loadCityProjectIds(db: Db) {
   return cityProjectIdsFrom(rows as ProjectNode[]);
 }
 
-/** Fichas RH ligadas às contas (só as das cidades do visitante). */
+const rowsOf = (res: unknown): any[] => {
+  const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
+  return Array.isArray(r) ? r : [];
+};
+
+/** Um agente da Multipark ligado a uma ficha (o principal fica na ficha; os extra em employee_agents). */
+export type DirectoryAgent = { agentUserId: string | null; agentName: string | null; principal: boolean };
+export type DirectoryEmployee = { id: number; userId: number | null; fullName: string; isActive: number; projectName: string | null; viaAlias: boolean; agents: DirectoryAgent[] };
+
+/**
+ * Fichas RH ligadas às contas (só as das cidades do visitante): a conta
+ * principal da ficha e (41a) as contas extra (employee_accounts), com os
+ * agentes da Multipark de cada ficha (41a: coluna "Agente").
+ */
 async function attachEmployees<T extends { id: number }>(db: Db, accounts: T[]) {
-  if (!accounts.length) return [] as (T & { employees: { id: number; userId: number | null; fullName: string; isActive: number; projectName: string | null }[] })[];
+  if (!accounts.length) return [] as (T & { employees: DirectoryEmployee[] })[];
+  const ids = accounts.map((u) => u.id);
   const links = await db
-    .select({ id: employees.id, userId: employees.userId, fullName: employees.fullName, isActive: employees.isActive, projectName: projects.name })
+    .select({ id: employees.id, userId: employees.userId, fullName: employees.fullName, isActive: employees.isActive, projectName: projects.name,
+      agentUserId: employees.multiparkAgentUserId, agentName: employees.multiparkAgentName })
     .from(employees)
     .leftJoin(projects, eq(projects.id, employees.projectId))
-    .where(and(inArray(employees.userId, accounts.map((u) => u.id)), projectScope(employees.projectId)))
+    .where(and(inArray(employees.userId, ids), projectScope(employees.projectId)))
     .orderBy(desc(employees.isActive), asc(employees.id));
-  const byUser = new Map<number, typeof links>();
-  for (const person of links) {
-    if (person.userId != null) byUser.set(person.userId, [...(byUser.get(person.userId) ?? []), person]);
+  // contas extra da mesma pessoa (tabela só em SQL, migração 0081)
+  const aliasRows = rowsOf(await db.execute(sql`SELECT ea.userId AS aliasUserId, employees.id, employees.fullName, employees.isActive, projects.name AS projectName,
+        employees.multiparkAgentUserId AS agentUserId, employees.multiparkAgentName AS agentName
+      FROM employee_accounts ea JOIN employees ON employees.id = ea.employeeId LEFT JOIN projects ON projects.id = employees.projectId
+      WHERE ea.userId IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)}) AND ${projectScope(employees.projectId)}`).catch(() => [[]]));
+  const empIds = [...new Set([...links.map((l) => l.id), ...aliasRows.map((r) => Number(r.id))])];
+  const extraAgents = new Map<number, DirectoryAgent[]>();
+  if (empIds.length) {
+    for (const r of rowsOf(await db.execute(sql`SELECT employeeId, agentUserId, agentName FROM employee_agents
+        WHERE employeeId IN (${sql.join(empIds.map((i) => sql`${i}`), sql`, `)}) ORDER BY agentUserId`).catch(() => [[]]))) {
+      const k = Number(r.employeeId);
+      extraAgents.set(k, [...(extraAgents.get(k) ?? []), { agentUserId: String(r.agentUserId), agentName: r.agentName ?? null, principal: false }]);
+    }
   }
+  const agentsOf = (id: number, agentUserId: unknown, agentName: unknown): DirectoryAgent[] => [
+    ...(agentUserId || agentName ? [{ agentUserId: agentUserId ? String(agentUserId) : null, agentName: agentName ? String(agentName) : null, principal: true }] : []),
+    ...(extraAgents.get(id) ?? []),
+  ];
+  const byUser = new Map<number, DirectoryEmployee[]>();
+  const push = (userId: number, e: DirectoryEmployee) => byUser.set(userId, [...(byUser.get(userId) ?? []), e]);
+  for (const p of links) {
+    if (p.userId != null) push(p.userId, { id: p.id, userId: p.userId, fullName: p.fullName, isActive: Number(p.isActive), projectName: p.projectName ?? null, viaAlias: false, agents: agentsOf(p.id, p.agentUserId, p.agentName) });
+  }
+  for (const r of aliasRows) {
+    const id = Number(r.id);
+    push(Number(r.aliasUserId), { id, userId: Number(r.aliasUserId), fullName: String(r.fullName), isActive: Number(r.isActive), projectName: r.projectName ?? null, viaAlias: true, agents: agentsOf(id, r.agentUserId, r.agentName) });
+  }
+  // ativas primeiro
+  for (const [k, list] of byUser) byUser.set(k, list.sort((a, b) => b.isActive - a.isActive || a.id - b.id));
   return accounts.map((account) => ({ ...account, employees: byUser.get(account.id) ?? [] }));
 }
 

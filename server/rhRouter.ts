@@ -77,6 +77,36 @@ export const rhRouter = router({
       return { id: account.id, name: account.name, email: account.email, isActive: account.isActive,
         ...userAccessSummary(account.role, overrides, cities), cities, canManage };
     }),
+  /**
+   * 41a: os agentes da Multipark desta ficha (principal + extra), para o cartão
+   * "Utilizador e permissões". Ver: quem vê a ficha; ligar/separar: quem gere o RH.
+   */
+  agentSummary: protectedProcedure
+    .input(z.object({ employeeId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const viewer = await rhViewer(ctx.user);
+      const person = await getEmployeeById(input.employeeId);
+      if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertEmployeeAccess(input.employeeId);
+      if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
+      const { getDb } = await import('./db');
+      const { sql } = await import('drizzle-orm');
+      const db = await getDb();
+      const extra = db ? ((await db.execute(sql`SELECT agentUserId, agentName FROM employee_agents WHERE employeeId = ${input.employeeId} ORDER BY agentUserId`).catch(() => [[]])) as any)[0] ?? [] : [];
+      const { getSetting } = await import('./appSettings');
+      const { multiparkAgentUrl } = await import('./personIdentity');
+      const template = await getSetting('multipark.agentUrl').catch(() => null);
+      const e = person.employee as { multiparkAgentUserId?: string | null; multiparkAgentName?: string | null };
+      const agents: Array<{ agentUserId: string | null; agentName: string | null; principal: boolean; url: string | null }> = [];
+      if (e.multiparkAgentUserId || e.multiparkAgentName) {
+        agents.push({ agentUserId: e.multiparkAgentUserId ?? null, agentName: e.multiparkAgentName ?? null, principal: true, url: multiparkAgentUrl(template, e.multiparkAgentUserId) });
+      }
+      for (const a of extra as Array<{ agentUserId: string; agentName: string | null }>) {
+        agents.push({ agentUserId: String(a.agentUserId), agentName: a.agentName ?? null, principal: false, url: multiparkAgentUrl(template, String(a.agentUserId)) });
+      }
+      // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo Críticas)
+      return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
+    }),
   // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
   me: protectedProcedure.query(async ({ ctx }) => {
     return getEmployeeByUserId(ctx.user.id);
@@ -686,6 +716,16 @@ export const rhRouter = router({
           if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
         }
       }
+      // 41a: as contas EXTRA da pessoa também saem (a mesma guarda; a tua nunca)
+      let extraOff = 0;
+      if (!input.isActive) {
+        const { activeExtraAccounts } = await import("./personIdentity");
+        for (const xid of await activeExtraAccounts(input.id).catch(() => [] as number[])) {
+          if (xid === ctx.user.id || xid === userId) continue;
+          const locked = await guardedAccountChange(xid, (t, n) => superAdminGuard(ctx.user.id, t, null, n), (tx) => toggleUserActive(xid, false, meta, tx));
+          if (!locked) extraOff++;
+        }
+      }
       await updateEmployee(input.id, {
         isActive: input.isActive ? 1 : 0,
         ...deactivationColumns(input.isActive, meta),
@@ -697,9 +737,9 @@ export const rhRouter = router({
         action: input.isActive ? "activate" : "deactivate",
         entity: "employee",
         entityId: input.id,
-        details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${found.employee.fullName}${userId ? " + utilizador" : ""}${deactivation ? ` — ${deactivation.summary}` : ""}`,
+        details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${found.employee.fullName}${userId ? " + utilizador" : ""}${extraOff ? ` + ${extraOff} conta(s) extra` : ""}${deactivation ? ` — ${deactivation.summary}` : ""}`,
       });
-      return { success: true, cascadedUser: !!userId, reasonLabel: deactivation?.label ?? null };
+      return { success: true, cascadedUser: !!userId, extraAccounts: extraOff, reasonLabel: deactivation?.label ?? null };
     }),
 
   uploadPhoto: protectedProcedure

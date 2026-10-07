@@ -127,7 +127,8 @@ describe("users", () => {
   it("toggleActive is accessible to super_admin", async () => {
     const caller = appRouter.createCaller(createCtx({ role: "super_admin" }));
     const result = await caller.users.toggleActive({ userId: 2, isActive: false });
-    expect(result).toEqual({ success: true });
+    // 41a: devolve também as fichas que acompanharam a conta (aqui, sem BD: nenhuma)
+    expect(result).toEqual({ success: true, employees: [] });
   });
 
   it("toggleActive prevents self-deactivation", async () => {
@@ -156,7 +157,7 @@ describe("users", () => {
       reason: "roubou",
       notes: "Faltou dinheiro na caixa",
     });
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, employees: [] });
   });
 
   it("toggleActive rejects a reason outside the vocabulary", async () => {

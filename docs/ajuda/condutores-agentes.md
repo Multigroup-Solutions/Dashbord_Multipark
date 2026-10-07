@@ -14,6 +14,7 @@ Em **Pessoas → Condutores e agentes** (team leader e acima, nas tuas cidades).
 **Agentes**
 - Escolhe a **pessoa (ficha)** e vês as ações no período de **todos** os agentes da Multipark ligados a ela (RH → Ligações). Não se escreve o nome: homónimos e grafias diferentes davam o histórico de outra pessoa.
 - Só aparecem fichas com agente ligado; uma ficha sem agente diz isso.
+- O botão **Abrir agente** da ficha do RH abre esta aba já com a pessoa escolhida.
 - Se o período tiver ações a mais, diz "pelo menos" e mostra as mais recentes.
 
 **Desempenho** (só o super admin; os outros nem veem a aba)

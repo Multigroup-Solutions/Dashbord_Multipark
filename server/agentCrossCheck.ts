@@ -99,7 +99,9 @@ async function build(opts: { light?: boolean } = {}) {
   const emps = rowsOf(await db.execute(sql`SELECT id, fullName, email, personalEmail, phone, personalPhone, projectId, isActive, position, userId, multiparkAgentUserId, multiparkAgentName, zelloUsername FROM employees`));
   const aliases = await listAgentAliases();
   const accRows = rowsOf(await db.execute(sql`SELECT userId, employeeId FROM employee_accounts`).catch(() => [[]]));
-  const userRows = rowsOf(await db.execute(sql`SELECT id, name, email, role FROM users WHERE isActive = 1`));
+  // 41a: as contas desativadas também (o agente não fica "sem utilizador" por a conta estar inativa)
+  const allUserRows = rowsOf(await db.execute(sql`SELECT id, name, email, role, isActive FROM users`));
+  const userRows = allUserRows.filter((u) => Number(u.isActive) === 1);
   const persons: XPerson[] = emps.map((e) => {
     const city = cityOfProject(e.projectId == null ? null : Number(e.projectId), trees);
     return {
@@ -117,7 +119,9 @@ async function build(opts: { light?: boolean } = {}) {
   const empOfUser = new Map<number, number>();
   for (const e of emps) if (e.userId != null && (Number(e.isActive) === 1 || !empOfUser.has(Number(e.userId)))) empOfUser.set(Number(e.userId), Number(e.id));
   for (const a of accRows) if (!empOfUser.has(Number(a.userId))) empOfUser.set(Number(a.userId), Number(a.employeeId));
-  const users: XUser[] = userRows.map((u) => ({ id: Number(u.id), name: u.name ? String(u.name) : null, email: u.email ? String(u.email).toLowerCase() : null, role: String(u.role ?? ""), employeeId: empOfUser.get(Number(u.id)) ?? null }));
+  const toXUser = (u: any): XUser => ({ id: Number(u.id), name: u.name ? String(u.name) : null, email: u.email ? String(u.email).toLowerCase() : null, role: String(u.role ?? ""), employeeId: empOfUser.get(Number(u.id)) ?? null });
+  const users: XUser[] = userRows.map(toXUser);
+  const inactiveUsers: XUser[] = allUserRows.filter((u) => Number(u.isActive) !== 1).map(toXUser);
   // os e-mails dos utilizadores também identificam a ficha
   for (const u of users) {
     const p = u.employeeId != null ? persons.find((x) => x.employeeId === u.employeeId) : undefined;
@@ -165,7 +169,7 @@ async function build(opts: { light?: boolean } = {}) {
   const agentDays = daysRead.available ? daysRead.data : new Map<string, Set<string>>();
 
   const input: XInput = {
-    agents: [...byId.values()], persons, users, partnerships, partnerByAgentName, ignoredAgentNames,
+    agents: [...byId.values()], persons, users, inactiveUsers, partnerships, partnerByAgentName, ignoredAgentNames,
     zello: [...zelloSeen.values()], agentDays, zelloDays, escalaDaysByEmployee, escalaDaysByName,
   };
   const r = crossCheckAgents(input);
