@@ -2411,6 +2411,24 @@ export const appRouter = router({
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
 
+    /**
+     * 42b: Condutores (só quem recolheu, entregou ou moveu carros) e Agentes
+     * (todos), uma linha por pessoa, com recolhas, entregas, movimentos, as
+     * outras ações e os km do GPS. Filtro de cidade e marca do topo. Ao vivo.
+     */
+    movementPeople: protectedProcedure.input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      projectId: z.number().int().optional(),
+      drivers: z.boolean().default(false),
+    }).refine((r) => r.startDate <= r.endDate, "Intervalo inválido")).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "criticas", "view");
+      const days = (Date.parse(`${input.endDate}T00:00:00Z`) - Date.parse(`${input.startDate}T00:00:00Z`)) / 86_400_000 + 1;
+      if (days > 62) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 62 dias de cada vez." });
+      const { loadMovementPeople, brandParkIdsFor } = await import("./movementPeople");
+      return loadMovementPeople({ from: input.startDate, to: input.endDate, cities: scopedCityNamesLive(), parkIds: await brandParkIdsFor(input.projectId), drivers: input.drivers });
+    }),
+
     // Agent performance history (DB local — alimentada pelo sync da API Multipark)
     // D27 (Jorge, 3 out 2026): o agente escolhe-se pela FICHA (os agentes da
     // Multipark ligados a ela), nunca por nome escrito — homónimos e grafias
@@ -2423,9 +2441,17 @@ export const appRouter = router({
     agentHistory: protectedProcedure.input(z.object({
       startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      employeeId: z.number().int().positive(),
-    })).query(async ({ ctx, input }) => {
+      employeeId: z.number().int().positive().optional(),
+      /** 42b: agente sem ficha (as ações dele, só nas cidades de quem vê) */
+      agentUserIds: z.array(z.string().min(1).max(128)).min(1).max(10).optional(),
+      agentName: z.string().max(200).optional(),
+    }).refine((r) => r.employeeId != null || (r.agentUserIds?.length ?? 0) > 0, "Escolhe a pessoa.")).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "view");
+      if (input.employeeId == null) {
+        const { getAgentHistoryFromDb } = await import("./db");
+        const r = await getAgentHistoryFromDb({ startDate: input.startDate, endDate: input.endDate, userIds: input.agentUserIds! });
+        return { ...r, agentName: input.agentName || r.agentName, noAgent: false as const };
+      }
       await assertEmployeeAccess(input.employeeId);
       const { agentIdsOfEmployee } = await import("./personIdentity");
       const who = await agentIdsOfEmployee(input.employeeId);

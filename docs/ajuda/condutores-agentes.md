@@ -2,20 +2,27 @@
 modulo: criticas
 titulo: Condutores e agentes
 rotas: /pessoas/condutores-agentes
-palavras: condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou
+palavras: km, quilómetros, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou
 ---
 # Condutores e agentes
 
 Em **Pessoas → Condutores e agentes** (team leader e acima, nas tuas cidades). Antes estavam nas Críticas.
 
 **Condutores**
-- Entregas (CHECK_OUT) por agente da Multipark nas tuas cidades, em dias de Lisboa, lidas ao vivo. Escolhe o período (De/Até).
+- Uma linha por pessoa com as **recolhas**, **entregas**, **movimentos** e os **km do GPS** (Zello) no período, lidos ao vivo da Multipark. Só aparece quem mexeu em carros. As várias contas de agente da mesma ficha somam.
+- **Cidade e marca**: o filtro do topo da app. A marca filtra pelos parques dela.
+- Escolhe o período (De/Até) e, se quiseres, **um condutor** (ou "Todos").
+- Clicar no **nome** abre a ficha. Clicar num **número** abre esses movimentos (ex.: as entregas desse condutor), com a matrícula, o parque e a hora.
+- Todas as colunas ordenam; em baixo ficam os totais.
 
 **Agentes**
-- Escolhe a **pessoa (ficha)** e vês as ações no período de **todos** os agentes da Multipark ligados a ela (RH → Ligações). Não se escreve o nome: homónimos e grafias diferentes davam o histórico de outra pessoa.
-- Só aparecem fichas com agente ligado; uma ficha sem agente diz isso.
-- O botão **Abrir agente** da ficha do RH abre esta aba já com a pessoa escolhida.
-- Se o período tiver ações a mais, diz "pelo menos" e mostra as mais recentes.
+- A mesma lista, com **todas** as ações de cada agente no período: recolhas, entregas, movimentos, mudanças de lugar, reservas em que mexeu e a última ação. Primeiro a lista, depois o detalhe.
+- Procura por **nome ou código do agente**, ou escolhe a pessoa.
+- Quem não tem ficha aparece com "sem ficha"; os parceiros com "parceiro".
+- O botão **Abrir agente** da ficha do RH abre esta aba já com o detalhe dessa pessoa.
+- Se o período tiver ações a mais, o detalhe diz quantas mostra e pede um período mais curto.
+- **Quem gere o RH**: o ícone de corrente abre as **Ligações** da pessoa (unir/separar conta e agente); num agente sem ficha, o ícone do olho **tira-o da lista** (fica como "não é funcionário", desfaz-se no RH → Agentes; na Multipark não muda nada).
+- No máximo 62 dias de cada vez.
 
 **Desempenho** (só o super admin; os outros nem veem a aba)
 - Tudo o que cada pessoa fez, por **dia, semana, mês ou ano** (setas para andar para trás e para a frente). Há uma aba por posto: **Back e front office**, **Supervisão**, **Team leaders** e **Condutores e extras**. A aba segue o papel da conta (front office, backoffice, supervisor, team leader); quem não tem um destes papéis fica pelo posto da ficha.
