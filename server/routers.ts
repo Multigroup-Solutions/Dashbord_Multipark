@@ -5681,6 +5681,9 @@ export const appRouter = router({
           phone: z.string().max(32).nullable().optional(),
           email: z.string().max(320).nullable().optional(),
           notes: z.string().max(512).nullable().optional(),
+          // Cidade do extra (Jorge, 7 out 2026): nó level='city' nas cidades de quem
+          // cria; null (sem cidade) só para quem vê todas. Sem o campo: a cidade de quem cria.
+          projectId: z.number().int().positive().nullable().optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
