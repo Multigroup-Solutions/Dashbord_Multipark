@@ -504,7 +504,7 @@ export const SETTINGS = {
     key: "extras.autoProposeAt",
     group: "extras",
     label: "Hora da proposta automática de escala",
-    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (uma vez por dia e cidade; não substitui uma escala já proposta ou confirmada).",
+    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (só a primeira proposta de cada dia e cidade: não substitui uma escala já proposta ou confirmada, e num dia mexido à mão já não mexe).",
     schema: hhmmSchema,
     defaultValue: "14:00",
     wiring: "live",
@@ -974,6 +974,19 @@ export function staleThresholdMinutes(intervalMinutes: number): number {
 }
 
 export type CronHealth = "ok" | "failed" | "stale" | "never" | "running" | "unscheduled" | "skipping";
+
+/**
+ * Trabalho RETIRADO (Jorge, 7 out 2026: o `multipark-db-sync`, retirado a
+ * 27 set, continuava a aparecer como "Falhou"): já não está em CRON_JOBS e não
+ * corre há mais de RETIRED_CRON_AFTER_DAYS dias. Sai da lista e dos alertas
+ * (o histórico em cron_runs fica). Um nome desconhecido que correu há pouco
+ * (ex.: corrida à mão) continua a aparecer. PURA.
+ */
+export const RETIRED_CRON_AFTER_DAYS = 7;
+export function isRetiredCron(isKnown: boolean, lastStartedAt: number | null, now: number): boolean {
+  if (isKnown) return false;
+  return lastStartedAt == null || now - lastStartedAt > RETIRED_CRON_AFTER_DAYS * 86_400_000;
+}
 
 export interface CronRunLite {
   startedAt: number;          // epoch ms

@@ -14,6 +14,7 @@ Separadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador ce
   - Se a leitura falhar aparece **Estado desconhecido** com "Tentar de novo" — nunca "Tudo a correr" sem dados.
   - **Salta há dias** = o cron corre mas salta há mais de 2 dias por falta de configuração ou de ligação (Zello por configurar, BD da Multipark sem endereço, Google Ads/Business desligado, conta a religar). Conta como problema. Saltar porque um interruptor está desligado, fora de horas ou porque outra corrida está a trabalhar **não** conta.
   - **Parado** = sem corridas há mais de 2× o intervalo esperado. O mail-sync é medido pela cadência em vigor (5 em 5 min sem o push do Gmail, 1×/dia com ele). Um cron parado há mais de 30 dias continua a aparecer como Parado (a última corrida de cada um nunca se apaga).
+  - **Retirados**: um trabalho que já saiu da agenda (ex.: `multipark-db-sync`, retirado a 27 set) e não corre há mais de 7 dias deixa de aparecer na lista e nos alertas; fica só o nome numa nota por baixo. O histórico das corridas fica guardado.
   - **Saltado** (Agendador) = correu mas não fez o trabalho (ex.: interruptor desligado, sem configuração). Não conta como **Último OK**.
   - Os erros mostrados nunca levam segredos (tokens, passwords em endereços).
 - **Automações**: interruptores de cada automação, incluindo a **Inteligência artificial**. Cada um diz o estado **agora** e de onde vem: *definido aqui*, *pela variável do servidor* ou *por omissão*. "Seguir o servidor" tira o que foi definido aqui.
