@@ -14,6 +14,7 @@ import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_
 import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
+import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { importExtrasFromCsv } from "./extrasImport";
 import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
 import { DOC_REJECT_REASON_MAX, DOC_TYPE_LABELS } from "../shared/employeeDocuments";
@@ -124,7 +125,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       const { listAutoSendsForEmployee } = await import("./mail/autoSends");
       return listAutoSendsForEmployee(input.employeeId, 30);
@@ -135,7 +137,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       if (!person.employee.userId) return null;
       const account = await getUserById(person.employee.userId);
@@ -160,7 +163,8 @@ export const rhRouter = router({
       const viewer = await rhViewer(ctx.user);
       const person = await getEmployeeById(input.employeeId);
       if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
-      await assertEmployeeAccess(input.employeeId);
+      // Lote 46: a própria ficha abre mesmo sem cidade (o âmbito vem vazio).
+      if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
       if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
       const { getDb } = await import('./db');
       const { sql } = await import('drizzle-orm');
@@ -179,6 +183,41 @@ export const rhRouter = router({
       }
       // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo Críticas)
       return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
+    }),
+  /**
+   * Lote 46 (Jorge, 7 out 2026): com que conta(s) Google a pessoa entra
+   * (principal + extra, último login) e, sem nenhuma, os emails da ficha com
+   * que tem de entrar e as contas SEM ficha que parecem ser dela — estas só
+   * para quem gere o RH de todas as cidades (uma conta sem ficha não tem
+   * cidade; ligar faz-se em "Ligações"). Só leitura; nunca junta sozinho.
+   */
+  loginLinks: protectedProcedure
+    .input(z.object({ employeeId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const viewer = await rhViewer(ctx.user);
+      const person = await getEmployeeById(input.employeeId);
+      if (!person) throw new TRPCError({ code: 'NOT_FOUND' });
+      const own = isOwn(viewer, input.employeeId);
+      if (!own) {
+        requireAccess(ctx.user, "rh", "view");
+        await assertEmployeeAccess(input.employeeId);
+      }
+      if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
+      const e = person.employee as { fullName: string; email?: string | null; personalEmail?: string | null; position?: string | null };
+      const fichaEmails = Array.from(new Set([e.email, e.personalEmail].map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean)));
+      const { listEmployeeLogins, orphanLoginCandidates } = await import('./personIdentity');
+      const logins = await listEmployeeLogins(input.employeeId);
+      const canLink = !own && canAccess(ctx.user, 'rh', 'manage');
+      const national = scopedProjectIds() === undefined;
+      const candidates = canLink && national && !logins.some((l) => l.isActive)
+        ? await orphanLoginCandidates({ fullName: e.fullName, emails: fichaEmails })
+        : [];
+      const warnings: string[] = [];
+      const principal = logins.find((l) => l.principal && l.isActive) ?? null;
+      if (principal?.role === 'user' && ['extra', 'driver', 'senior_driver'].includes(String(e.position ?? ''))) {
+        warnings.push('A conta está como "Utilizador": abre a própria ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Se é extra, muda o papel para Extra em Utilizadores.');
+      }
+      return { fichaEmails, logins, candidates, canLink, national, warnings };
     }),
   // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -338,7 +377,7 @@ export const rhRouter = router({
       let employeeId = input?.employeeId;
       if (!employeeId) {
         const me = await getEmployeeByUserId(ctx.user.id);
-        if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Sem ficha de colaborador" });
+        if (!me) throw new TRPCError({ code: "NOT_FOUND", message: noLinkedRecordMessage(ctx.user.email) });
         employeeId = me.employee.id;
       }
       // Restringe: salários de outros são só para admin+ DA MESMA cidade;
@@ -897,7 +936,7 @@ export const rhRouter = router({
     .input(z.object({ fileBase64: z.string().max(PHOTO_MAX_BASE64_CHARS), mimeType: z.string().max(100) }))
     .mutation(async ({ ctx, input }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
-      if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "A tua conta não está associada a um colaborador." });
+      if (!me) throw new TRPCError({ code: "FORBIDDEN", message: noLinkedRecordMessage(ctx.user.email) });
       return savePhoto(me.employee.id, input.fileBase64, ctx.user.id);
     }),
 

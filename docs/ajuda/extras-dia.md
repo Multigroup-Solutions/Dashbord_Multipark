@@ -117,6 +117,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 - Custos e taxas dos extras: quem planeia a escala.
 - Custo do Team Leader: vem do salário, por isso só o vê quem vê salários ou os totais financeiros.
 - O custo da escala é uma **estimativa**: o extra recebe pelas horas de ponto.
+- Os **extras e utilizadores** não abrem o Extras Dia (é a escala de todos). A disponibilidade deles marca-se em **A minha disponibilidade**: se abrirem o Extras Dia, aparece "Sem acesso" com o botão **Abrir a minha disponibilidade**.
 
 **Notas**
 - "Formação em falta" = a pessoa ainda não concluiu a formação obrigatória.

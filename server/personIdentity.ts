@@ -57,6 +57,41 @@ export async function getPersonIdentity(employeeId: number): Promise<PersonIdent
   };
 }
 
+export interface EmployeeLogin { userId: number; name: string | null; email: string | null; role: string; isActive: boolean; principal: boolean; lastSignedIn: string | null; loginMethod: string | null }
+
+/** Lote 46: as contas de login de uma ficha (principal + extra), sem ler a Multipark. */
+export async function listEmployeeLogins(employeeId: number): Promise<EmployeeLogin[]> {
+  const d = await database();
+  const rows = rowsOf(await d.execute(sql`SELECT u.id, u.name, u.email, u.role, u.isActive, u.loginMethod, DATE_FORMAT(u.lastSignedIn, '%Y-%m-%d %H:%i') AS lastSignedIn, 1 AS principal
+      FROM employees e JOIN users u ON u.id = e.userId WHERE e.id = ${employeeId}
+    UNION ALL
+    SELECT u.id, u.name, u.email, u.role, u.isActive, u.loginMethod, DATE_FORMAT(u.lastSignedIn, '%Y-%m-%d %H:%i'), 0 FROM employee_accounts a JOIN users u ON u.id = a.userId WHERE a.employeeId = ${employeeId}`).catch(() => [[]]));
+  return rows.map((u) => ({ userId: Number(u.id), name: u.name ?? null, email: u.email ?? null, role: String(u.role ?? "user"), isActive: Number(u.isActive) === 1,
+    principal: Number(u.principal) === 1, lastSignedIn: u.lastSignedIn ?? null, loginMethod: u.loginMethod ?? null }));
+}
+
+/**
+ * Lote 46: contas que ENTRARAM com a Google e não têm ficha (nem como conta
+ * extra) e que parecem ser a pessoa desta ficha (mesmo email ou dois nomes em
+ * comum — shared/ownAccess.ts). Só sugestões, as mais recentes primeiro.
+ */
+export async function orphanLoginCandidates(ficha: { fullName: string; emails: string[] }, limit = 5): Promise<Array<{ userId: number; name: string | null; email: string | null; lastSignedIn: string | null; reason: string }>> {
+  const d = await database();
+  const rows = rowsOf(await d.execute(sql`SELECT u.id, u.name, u.email, DATE_FORMAT(u.lastSignedIn, '%Y-%m-%d %H:%i') AS lastSignedIn FROM users u
+    WHERE u.isActive = 1 AND u.loginMethod = 'google'
+      AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.userId = u.id)
+      AND NOT EXISTS (SELECT 1 FROM employee_accounts a WHERE a.userId = u.id)
+    ORDER BY u.lastSignedIn DESC LIMIT 1000`).catch(() => [[]]));
+  const { loginCandidateReason } = await import("../shared/ownAccess");
+  const out: Array<{ userId: number; name: string | null; email: string | null; lastSignedIn: string | null; reason: string }> = [];
+  for (const u of rows) {
+    const reason = loginCandidateReason(ficha, { name: u.name ?? null, email: u.email ?? null });
+    if (reason) out.push({ userId: Number(u.id), name: u.name ?? null, email: u.email ?? null, lastSignedIn: u.lastSignedIn ?? null, reason });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /**
  * Ficha de cada agente da Multipark pelo ID (agente principal da ficha ou
  * agente extra) — a ligação explícita, nunca pelo nome. Sem ficha → fora do mapa.

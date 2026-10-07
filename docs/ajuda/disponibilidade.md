@@ -2,14 +2,14 @@
 modulo: disponibilidade
 titulo: Disponibilidade
 rotas: /disponibilidade
-palavras: custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
+palavras: a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
 ---
 # Disponibilidade
 
 Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para escalar no Extras-Dia.
 
 **Marcar a tua disponibilidade** (extras)
-1. Menu **Operações → Disponibilidade** (ou o link que recebes por WhatsApp/email).
+1. Menu **Operações → A minha disponibilidade** (ou **Perfil → A minha disponibilidade**, ou o link que recebes por WhatsApp/email). A disponibilidade **não** se marca no Extras Dia: essa página é a escala da gestão; se a abrires, aparece "Sem acesso" com o botão **Abrir a minha disponibilidade**.
 2. A página abre na **próxima semana** (segunda a domingo, dias de Lisboa). O link do email ou do WhatsApp abre a semana desse pedido.
 3. Para cada dia marca **Manhã (03h–15h)** e/ou **Noite (15h–03h)**. Podes também indicar horas e uma nota.
    - As horas são as **desse dia do calendário**: "das 18h às 03h" na segunda = segunda à noite até às 03h de terça. "Das 00h às 03h" na terça é a madrugada de terça, ou seja, **a noite de segunda** para a escala.
@@ -18,7 +18,9 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 5. Podes voltar e alterar enquanto a semana não começar.
 - Cada vez que guardas, a semana é substituída de uma vez (nunca fica a meio).
 - Fica registado quem mudou e o que estava antes.
-- Funciona mesmo que a tua ficha ainda não tenha centro de custos.
+- Funciona mesmo que a tua ficha ainda não tenha centro de custos: aparece um aviso a dizer para pedires ao RH a tua cidade, mas a disponibilidade grava-se na mesma.
+- **"A tua conta Google … não está ligada a nenhuma ficha"**: entraste com um email que não está na tua ficha. O login é só com a Google e tem de ser **sempre com o mesmo email**. Sai e entra com o email que deste ao RH, ou pede ao RH para pôr na ficha o email que aparece na mensagem. Depois sai e volta a entrar.
+- Na tua ficha (RH), no cartão **Disponibilidade**, o botão **Marcar a minha disponibilidade** abre esta página na semana que estás a ver.
 - Se a leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**.
 
 **Gestão** (backoffice e acima)
