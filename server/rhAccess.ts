@@ -84,8 +84,11 @@ function inScope(v: RhViewer, e: EmployeeRef): boolean {
 
 /** O centro de custos está no âmbito de quem vê? PURA. */
 export function inScopeProject(v: RhViewer, projectId: number | null | undefined): boolean {
-  if (projectId == null) return false;
+  // Jorge (7 out 2026): quem trata do recrutamento e das fichas sem cidade é
+  // uma supervisora SEM cidade (todas as cidades). Quem vê todas as cidades vê
+  // também as fichas sem cidade; o supervisor de UMA cidade continua sem elas.
   if (v.scopeAll) return true;
+  if (projectId == null) return false;
   return (v.scopeProjectIds ?? []).includes(projectId);
 }
 
