@@ -444,7 +444,7 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const { detectExtraDiaNoShows } = await import("./rhService");
         const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() - 86400000));
         const n = await detectExtraDiaNoShows(yesterday);
-        console.log(`[daily-ops] RH: possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas)`);
+        console.log(`[daily-ops] RH: possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas; fora: ${n.skipped.proposed} só propostos, ${n.skipped.sent_home} mandados para casa, ${n.skipped.multipark} com movimentos na Multipark${n.multiparkRead ? "" : " — Multipark não lida"})`);
       });
       // Retenções, em lotes e com prazo curto — o resto fica para o dia seguinte.
       // Fila de notificações Multipark: apaga concluídos com mais de 30 dias.

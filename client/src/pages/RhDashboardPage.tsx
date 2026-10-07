@@ -31,12 +31,11 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
 
   const utils = trpc.useUtils();
   const processNoShows = trpc.rh.penalties.processNoShows.useMutation({
-    onSuccess: (r) => { utils.rh.penalties.pending.invalidate(); toast.success(`${r.created} possível(is) falta(s) registada(s) para validação (${r.alreadyPending} já existiam)`); },
-    onError: (e) => toast.error(e.message),
-  });
-  const { data: pendingPenalties = [] } = trpc.rh.penalties.pending.useQuery();
-  const reviewPenalty = trpc.rh.penalties.review.useMutation({
-    onSuccess: (r) => { utils.rh.penalties.pending.invalidate(); utils.rh.dashboard.invalidate(); toast.success(`Registado · ${r.points} ponto(s) confirmados${r.blocked ? " · acesso bloqueado" : ""}`); },
+    onSuccess: (r) => {
+      utils.rh.penalties.pending.invalidate();
+      const out = r.skipped.proposed + r.skipped.sent_home + r.skipped.multipark;
+      toast.success(`${r.created} possível(is) falta(s) para validar (${r.alreadyPending} já existiam)${out ? ` · ${out} fora (escala só proposta, mandados para casa ou com movimentos na Multipark)` : ""}${r.multiparkRead ? "" : " · Multipark não lida"}`);
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -130,32 +129,6 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
         </div>
       </Card>
 
-      {/* Possíveis faltas por validar — só contam pontos depois de confirmadas */}
-      {pendingPenalties.length > 0 && (
-        <Card className="border-amber-200 bg-amber-50/40">
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm">Possíveis faltas por validar ({pendingPenalties.length})</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 space-y-1">
-            {pendingPenalties.map((row: any) => (
-              <div key={row.penalty.id} className="flex flex-col gap-2 sm:flex-row sm:items-center text-sm border-b last:border-0 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 min-w-0">
-                    <span className="font-medium truncate">{row.employee?.fullName ?? `#${row.penalty.employeeId}`}</span>
-                    <span className="shrink-0 text-xs font-semibold tabular-nums text-amber-800">{Number(row.penalty.points).toLocaleString("pt-PT")} pt</span>
-                  </div>
-                  <p className="text-muted-foreground line-clamp-2 break-words" title={row.penalty.notes ?? undefined}>{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason}{row.penalty.notes ? ` · ${row.penalty.notes}` : ""}</p>
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <Button size="sm" variant="outline" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "confirmed" })}>Confirmar falta</Button>
-                  <Button size="sm" variant="ghost" disabled={reviewPenalty.isPending} onClick={() => reviewPenalty.mutate({ id: row.penalty.id, decision: "dismissed" })}>Justificada / não conta</Button>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground">A carregar...</div>
       ) : (
@@ -184,7 +157,79 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
           </TabsContent>
         </Tabs>
       )}
+
+      {/* 41b: possíveis faltas — em baixo, compacto e com ações em massa */}
+      <PendingNoShowsPanel />
     </div>
+  );
+}
+
+/**
+ * 41b: "Possíveis faltas por validar" — só contam pontos depois de
+ * confirmadas. Fechado por omissão; marcar falta / libertar uma, as
+ * escolhidas ou todas as da lista (a mesma regra de cada uma no servidor).
+ */
+function PendingNoShowsPanel() {
+  const utils = trpc.useUtils();
+  const q = trpc.rh.penalties.pending.useQuery();
+  const items = (q.data?.items ?? []) as any[];
+  const total = q.data?.total ?? 0;
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const refresh = () => { utils.rh.penalties.pending.invalidate(); utils.rh.dashboard.invalidate(); };
+  const reviewOne = trpc.rh.penalties.review.useMutation({
+    onSuccess: (r) => { refresh(); toast.success(`Registado · ${r.points} ponto(s) confirmados${r.blocked ? " · acesso bloqueado" : ""}`); },
+    onError: (e) => toast.error(e.message),
+  });
+  const reviewMany = trpc.rh.penalties.reviewMany.useMutation({
+    onSuccess: (r, v) => {
+      refresh(); setPicked(new Set());
+      const what = v.decision === "confirmed" ? "falta(s) marcada(s)" : "libertada(s)";
+      (r.failed ? toast.warning : toast.success)(`${r.done} ${what}${r.blocked ? ` · ${r.blocked} com acesso bloqueado` : ""}${r.failed ? ` · ${r.failed} não deu (${r.firstError ?? "sem permissão"})` : ""}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  if (!total) return null;
+  const ids = picked.size ? Array.from(picked) : items.map((row) => Number(row.penalty.id));
+  const scope = picked.size ? `as ${picked.size} escolhidas` : `todas (${items.length})`;
+  const bulk = (decision: "confirmed" | "dismissed") => {
+    const verb = decision === "confirmed" ? "Marcar falta a" : "Libertar";
+    if (!confirm(`${verb} ${scope}?${decision === "confirmed" ? " Cada falta confirmada conta 1 ponto; com 3 pontos o acesso fica bloqueado." : " Deixam de contar."}`)) return;
+    reviewMany.mutate({ ids: ids.slice(0, 200), decision });
+  };
+  const toggle = (id: number) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const busy = reviewOne.isPending || reviewMany.isPending;
+  return (
+    <details className="rounded-md border border-amber-200 bg-amber-50/30 text-xs">
+      <summary className="cursor-pointer select-none px-3 py-2 font-medium text-amber-900">
+        Possíveis faltas por validar ({total}){total > items.length ? ` · a mostrar as ${items.length} mais recentes` : ""}
+      </summary>
+      <div className="space-y-2 px-3 pb-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy || !ids.length} onClick={() => bulk("confirmed")}>Marcar falta a {scope}</Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy || !ids.length} onClick={() => bulk("dismissed")}>Libertar {scope}</Button>
+          {picked.size > 0 && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPicked(new Set())}>Limpar escolha</Button>}
+        </div>
+        <div className="max-h-72 overflow-y-auto divide-y rounded border bg-background">
+          {items.map((row) => {
+            const id = Number(row.penalty.id);
+            return (
+              <div key={id} className="flex items-start gap-2 px-2 py-1.5">
+                <input type="checkbox" className="mt-0.5" checked={picked.has(id)} onChange={() => toggle(id)} aria-label={`Escolher ${row.employee?.fullName ?? id}`} />
+                <div className="min-w-0 flex-1">
+                  <span className="font-medium">{row.employee?.fullName ?? `#${row.penalty.employeeId}`}</span>
+                  <span className="ml-1 tabular-nums text-amber-800">{Number(row.penalty.points).toLocaleString("pt-PT")} pt</span>
+                  <p className="text-muted-foreground line-clamp-1 break-words" title={row.penalty.notes ?? undefined}>{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason}{row.penalty.notes ? ` · ${row.penalty.notes}` : ""}</p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={busy} onClick={() => reviewOne.mutate({ id, decision: "confirmed" })}>Falta</Button>
+                  <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy} onClick={() => reviewOne.mutate({ id, decision: "dismissed" })}>Libertar</Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -226,6 +271,7 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Detalhe por colaborador</CardTitle>
+        <p className="text-xs text-muted-foreground">Horas do ponto (sem ponto, as da escala). Movimentos: ações na Multipark no mês, até ontem (passa o rato para ver recolhas, entregas e movimentos).</p>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
@@ -236,6 +282,7 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
                 <Th k="projectName" label="Centro" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="currentMonth.totalHours" label="Horas mês" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="currentMonth.daysWorked" label="Dias" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
+                <Th k="work.actions" label="Movimentos (Multipark)" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="currentMonth.totalPayment" label="Bruto mês" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="currentMonth.netEstimate" label="Líq. est." align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
                 <Th k="totalReceivedLookback" label="Apurado lookback" align="right" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} />
@@ -251,8 +298,15 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
                   <tr key={r.employeeId} className={`border-b hover:bg-muted/30 ${bg}`}>
                     <td className="p-2 font-medium min-w-[160px] max-w-[260px] truncate" title={r.fullName}>{r.fullName}</td>
                     <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={r.projectName ?? r.department ?? undefined}>{r.projectName ?? r.department ?? "—"}</td>
-                    <td className="p-2 text-right tabular-nums whitespace-nowrap">{Number(r.currentMonth.totalHours).toFixed(1)}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap">
+                      {Number(r.currentMonth.totalHours) > 0 || !r.work?.hoursEscala ? Number(r.currentMonth.totalHours).toFixed(1)
+                        : <span className="text-muted-foreground" title="Sem ponto: horas da escala dos Extras">{Number(r.work.hoursEscala).toFixed(1)} (escala)</span>}
+                    </td>
                     <td className="p-2 text-right tabular-nums whitespace-nowrap">{r.currentMonth.daysWorked}</td>
+                    <td className="p-2 text-right tabular-nums whitespace-nowrap"
+                      title={r.work ? `${r.work.recolhas} recolhas · ${r.work.entregas} entregas · ${r.work.movements} movimentos · ${r.work.daysWithActions} dias com ações (até ontem)` : "Sem avaliação guardada neste mês"}>
+                      {r.work ? r.work.actions : "—"}
+                    </td>
                     <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmt(r.currentMonth.totalPayment)}</td>
                     <td className="p-2 text-right tabular-nums whitespace-nowrap text-amber-700">{fmt(r.currentMonth.netEstimate)}</td>
                     <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmt(r.totalReceivedLookback)}</td>
@@ -275,7 +329,7 @@ function DashboardTable({ rows, extra = false }: { rows: any[]; extra?: boolean 
                 );
               })}
               {rows.length === 0 && (
-                <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Sem dados</td></tr>
+                <tr><td colSpan={11} className="p-8 text-center text-muted-foreground">Sem dados</td></tr>
               )}
             </tbody>
           </table>
