@@ -53,8 +53,9 @@ describe("44e — cartões por tipo de lugar com as garagens", () => {
     const covered = out.find((t) => t.type === "covered")!;
     expect(covered.total).toBe(4);
     expect(covered.byParkGarage).toEqual([
-      { parkName: "Airpark - Lisboa", total: 3, garages: [{ garage: "COBERTO", count: 2 }, { garage: "PD", count: 1 }] },
-      { parkName: "Redpark - Lisboa", total: 1, garages: [{ garage: "Sem garagem", count: 1 }] },
+      // respostas 7 out: cada garagem diz se serve para o tipo (shared/garageFit.ts)
+      { parkName: "Airpark - Lisboa", total: 3, garages: [{ garage: "COBERTO", count: 2, fit: "ok" }, { garage: "PD", count: 1, fit: "warn" }] },
+      { parkName: "Redpark - Lisboa", total: 1, garages: [{ garage: "Sem garagem", count: 1, fit: "unknown" }] },
     ]);
     const ui = src("client/src/components/ShiftHandoverLiveState.tsx");
     expect(ui).toContain("t.byParkGarage");

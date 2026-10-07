@@ -40,6 +40,7 @@ import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
 import { excludeParks } from "../../shared/reservasDoDia";
 import { classifyAllocation } from "../spotClassification";
 import { addDays, lisbonDayOf } from "../../shared/lisbonDay";
+import { garageFit, type GarageFit } from "../../shared/garageFit";
 
 export const SHIFT_STATE_IN_PARK_LIMIT = 2000;
 export const SHIFT_STATE_UPCOMING_LIMIT = 1000;
@@ -331,7 +332,9 @@ export interface SpotTypeCount {
   type: LiveSpotType; label: string; total: number;
   byPark: Array<{ parkName: string; count: number }>;
   /** 44e (Jorge, 7 out 2026: "em vez das marcas, as garagens, para vermos o que está mal arrumado"): em cada parque, as garagens onde estão. */
-  byParkGarage: Array<{ parkName: string; total: number; garages: Array<{ garage: string; count: number }> }>;
+  byParkGarage: Array<{ parkName: string; total: number; garages: Array<{ garage: string; count: number; fit: GarageFit }> }>;
+  /** Carros deste tipo numa garagem que não lhe serve (shared/garageFit.ts): vermelho / aviso. */
+  misplaced: number; warned: number;
 }
 
 /**
@@ -356,11 +359,13 @@ export function summarizeBySpotType(cars: LiveCar[]): SpotTypeCount[] {
   return SPOT_TYPE_ORDER.filter((t) => by.has(t)).map((type) => {
     const parks = by.get(type)!;
     const byParkGarage = [...parks.entries()].map(([parkName, g]) => {
-      const garages = [...g.entries()].map(([garage, count]) => ({ garage, count })).sort((a, b) => byCount(a, b) || a.garage.localeCompare(b.garage, "pt"));
+      const garages = [...g.entries()].map(([garage, count]) => ({ garage, count, fit: garage === "Sem garagem" ? "unknown" as GarageFit : garageFit(type, garage) }))
+        .sort((a, b) => byCount(a, b) || a.garage.localeCompare(b.garage, "pt"));
       return { parkName, total: garages.reduce((s, x) => s + x.count, 0), garages };
     }).sort((a, b) => byCount(a, b) || a.parkName.localeCompare(b.parkName, "pt"));
     const byPark = byParkGarage.map((p) => ({ parkName: p.parkName, count: p.total }));
-    return { type, label: LIVE_SPOT_TYPE_LABELS[type], total: byPark.reduce((s, x) => s + x.count, 0), byPark, byParkGarage };
+    const sumFit = (f: GarageFit) => byParkGarage.reduce((s, p) => s + p.garages.filter((g) => g.fit === f).reduce((t, g) => t + g.count, 0), 0);
+    return { type, label: LIVE_SPOT_TYPE_LABELS[type], total: byPark.reduce((s, x) => s + x.count, 0), byPark, byParkGarage, misplaced: sumFit("bad"), warned: sumFit("warn") };
   });
 }
 

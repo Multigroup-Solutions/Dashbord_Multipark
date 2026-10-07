@@ -106,7 +106,7 @@ export async function assertCanManageEmployee(user: { id: number; role: string }
  * todos os agentes, configuração geral, faltas de todo o país) fica com quem
  * gere o RH de todas as cidades — o supervisor gere a dele.
  */
-export const NATIONAL_ONLY_MESSAGE = "Isto mexe em todas as cidades: é com quem gere o RH de todas as cidades (administrador).";
+export const NATIONAL_ONLY_MESSAGE = "Isto mexe em todas as cidades: é com quem gere o RH de todas as cidades (back office ou administrador).";
 export function requireNationalRhManage(user: { id: number; role: string }): void {
   requireAccess(user as any, "rh", "manage");
   if (scopedProjectIds() !== undefined) throw new TRPCError({ code: "FORBIDDEN", message: NATIONAL_ONLY_MESSAGE });

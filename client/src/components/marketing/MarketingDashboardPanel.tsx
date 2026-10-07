@@ -15,6 +15,7 @@
  */
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import DateRangeNav from "@/components/DateRangeNav";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
@@ -132,7 +133,7 @@ export default function MarketingDashboardPanel() {
       <aside className="order-first min-w-0 lg:order-last lg:sticky lg:top-4">
         {alertsQ.error
           ? <QueryErrorNote error={alertsQ.error} onRetry={() => alertsQ.refetch()} retrying={alertsQ.isFetching} what="os alertas do marketing" />
-          : <AlertsCard alerts={alertsData?.alerts} windowFrom={alertsData?.windowFrom} />}
+          : <AlertsCard alerts={alertsData?.alerts} windowFrom={alertsData?.windowFrom} projectId={projectId} hiddenMap={alertsData?.hidden} hiddenError={alertsData?.hiddenError} month={alertsData?.month} />}
       </aside>
       <div className="min-w-0 space-y-4">
       {error && <QueryErrorNote error={error} onRetry={() => dashQ.refetch()} retrying={dashQ.isFetching} what="o dashboard de marketing" />}
@@ -256,29 +257,33 @@ export default function MarketingDashboardPanel() {
 /**
  * Alertas (independentes do período escolhido: últimos 14 dias e mês corrente). Nunca só cor: ícone + texto.
  * Jorge (7 out 2026, "põe de lado como o outro"): de lado, pequenos, encolhem com um clique e cada um sai da
- * lista com o X (para ti, até ao fim do mês; volta em "Tirados → Repor"), como os das Reservas.
+ * lista com o X até ao fim do mês (volta em "Tirados → Repor"), como os das Reservas — e, como lá, para
+ * TODA a gente (Jorge, 7 out 2026: "pode ser para todos"); fica guardado no servidor com quem e quando.
  */
 const ALERTS_PAGE = 4;
-const HIDDEN_KEY = "mp.marketing.alerts.hidden";
-function readHidden(): Record<string, string> {
-  try { const v = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
-}
-export function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "critical" | "warning"; code: string; key?: string; title: string; detail: string; link?: string; linkLabel?: string; items?: string[] }>; windowFrom?: string }) {
+export function AlertsCard({ alerts, windowFrom, projectId, hiddenMap: serverHidden, hiddenError, month: serverMonth }: {
+  alerts?: Array<{ level: "critical" | "warning"; code: string; key?: string; title: string; detail: string; link?: string; linkLabel?: string; items?: string[] }>;
+  windowFrom?: string; projectId?: number; hiddenMap?: Record<string, string>; hiddenError?: string | null; month?: string;
+}) {
   const { user } = useAuth();
   // 19b: links para Integrações só para quem as abre (senão era um link morto)
   const canOpenIntegrations = can(user, "integracoes", "view");
   const [collapsed, setCollapsed] = usePersistedState("alerts.marketing.collapsed", false);
   const [all, setAll] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
-  const [hiddenMap, setHiddenMap] = useState<Record<string, string>>(readHidden);
-  const month = lisbonDay().slice(0, 7);
+  const month = serverMonth ?? lisbonDay().slice(0, 7);
+  // Mudança local enquanto o servidor responde (o X sai logo da lista; um erro repõe-no).
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+  const utils = trpc.useUtils();
+  const dismiss = trpc.marketing.dismissAlert.useMutation({
+    onSettled: () => { utils.marketing.alerts.invalidate().finally(() => setPending({})); },
+    onError: (e) => toast.error(e.message),
+  });
+  const hiddenMap: Record<string, string> = { ...(serverHidden ?? {}) };
+  for (const [k, hide] of Object.entries(pending)) { if (hide) hiddenMap[k] = month; else delete hiddenMap[k]; }
   const setHidden = (key: string, hide: boolean) => {
-    const next = { ...hiddenMap };
-    if (hide) next[key] = month; else delete next[key];
-    // limpa os de meses passados (voltaram sozinhos)
-    for (const k of Object.keys(next)) if (next[k] !== month) delete next[k];
-    setHiddenMap(next);
-    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(next)); } catch { /* privado/quota: fica só nesta página */ }
+    setPending((p) => ({ ...p, [key]: hide }));
+    dismiss.mutate({ key, projectId, restore: !hide });
   };
   if (!alerts) return null;
   const { shown: list, hidden } = splitHiddenAlerts(alerts, hiddenMap, month);
@@ -320,7 +325,7 @@ export function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "cr
                     )}
                     {a.linkLabel && a.link && <Link href={a.link} className="mt-0.5 inline-flex font-semibold underline">{a.linkLabel}</Link>}
                   </div>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Tirar da lista (para ti, até ao fim do mês; volta em Tirados → Repor)"
+                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Tirar da lista para todos até ao fim do mês (volta em Tirados → Repor)"
                     aria-label="Tirar da lista" onClick={() => setHidden(k, true)}>
                     <X className="h-3.5 w-3.5" />
                   </Button>
@@ -349,6 +354,7 @@ export function AlertsCard({ alerts, windowFrom }: { alerts?: Array<{ level: "cr
               ))}
             </ul>
           )}
+          {hiddenError && <p className="text-[11px] text-rose-700 dark:text-rose-300" role="alert">Não deu para ler os alertas tirados ({hiddenError}) — aparecem todos.</p>}
           {windowFrom && <p className="text-[11px] text-muted-foreground">Campanhas: últimos 14 dias (desde {windowFrom.slice(8, 10)}/{windowFrom.slice(5, 7)}). Ritmo: mês corrente até ontem vs mês passado.</p>}
         </>
       )}

@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
+palavras: back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
 ---
 # RH e ponto
 
@@ -37,6 +37,11 @@ palavras: supervisor gere rh, criar ficha supervisor, desativar extra, posto, ce
   - o **email de trabalho** e a **conta associada** à mão;
   - fichas de outros supervisores e de quem está acima;
   - o que mexe em **todas as cidades** (varrimento das ligações, lista de todos os agentes, "Não é funcionário", processar faltas do país).
+
+**O back office no RH (todas as cidades)**
+- O back office está na **mesma posição do supervisor**, mas em **todas as cidades**: faz o mesmo que o supervisor (criar fichas até team leader, editar, desativar/reativar, horário, ausências, picagens, agentes) em qualquer cidade, e também o que mexe em todas as cidades (varrimento das ligações, lista de todos os agentes, "Não é funcionário", processar faltas do país).
+- **Sem ordenados**: o salário, o subsídio de alimentação e a folha de ordenados continuam com o administrador, tal como o email de trabalho e a conta associada à mão. Fichas de supervisores, do back office e de quem está acima ficam com o administrador.
+- O front office continua a ver e a editar os dados das fichas, sem gerir.
 
 **Gestão** (Team Leader e acima, na sua cidade)
 - **Pessoas → Recursos Humanos** lista os colaboradores (separadores Colaboradores, Extras, Agentes). Os emails de **recrutamento** (recursos-humanos@) passaram para os **Leads de Extras**.

@@ -48,7 +48,7 @@ describe("41c — supervisor faz tudo no RH da sua cidade", () => {
     expect(contractEditError(sup, driverInCity, { monthlySalary: "900" })).toMatch(/salário/);
     expect(contractEditError(sup, driverInCity, { userId: 3 })).toMatch(/conta associada/);
     expect(contractEditError(sup, driverInCity, { email: "x@multipark.pt" })).toMatch(/email de trabalho/);
-    expect(contractEditError(sup, driverInCity, { position: "supervisor" })).toMatch(/abaixo dele/);
+    expect(contractEditError(sup, driverInCity, { position: "supervisor" })).toMatch(/abaixo d(ele|o supervisor)/);
     expect(contractEditError(sup, driverInCity, { projectId: 99 })).toMatch(/não é da tua cidade/);
     expect(contractEditError(sup, otherSupervisor, { position: "driver" })).toMatch(/Só admin/);
     expect(contractEditError(admin, driverOtherCity, { monthlySalary: "900", userId: 3 })).toBeNull();
@@ -57,11 +57,11 @@ describe("41c — supervisor faz tudo no RH da sua cidade", () => {
 
   it("criar ficha: o supervisor na cidade, abaixo dele, sem salário nem conta à mão", () => {
     expect(createEmployeeError(sup, { position: "extra", projectId: 11 })).toBeNull();
-    expect(createEmployeeError(sup, { position: "backoffice", projectId: 11 })).toMatch(/abaixo dele/);
+    expect(createEmployeeError(sup, { position: "backoffice", projectId: 11 })).toMatch(/abaixo d(ele|o supervisor)/);
     expect(createEmployeeError(sup, { position: "driver", projectId: 99 })).toMatch(/não é da tua cidade/);
     expect(createEmployeeError(sup, { position: "driver", projectId: 11, monthlySalary: "900" })).toMatch(/salário/);
     expect(createEmployeeError(sup, { position: "driver", projectId: 11, userId: 4 })).toMatch(/conta/);
-    expect(createEmployeeError(tl, { position: "extra", projectId: 10 })).toMatch(/administrador ou o supervisor/);
+    expect(createEmployeeError(tl, { position: "extra", projectId: 10 })).toMatch(/administrador, o back office ou o supervisor/);
     expect(createEmployeeError(admin, { position: "director", projectId: 99, monthlySalary: "3000", userId: 2 })).toBeNull();
   });
 
