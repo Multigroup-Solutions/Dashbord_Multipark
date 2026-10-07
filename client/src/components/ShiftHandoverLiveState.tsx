@@ -156,14 +156,18 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
                 <div key={t.type} className="border rounded-lg p-2.5">
                   <p className="text-xs text-muted-foreground">{t.label}</p>
                   <p className="text-2xl font-semibold tabular-nums leading-tight">{t.total}</p>
-                  {t.byPark.length > 1 && (
-                    <p className="text-[11px] text-muted-foreground mt-0.5">{t.byPark.map((p) => `${p.parkName} ${p.count}`).join(" · ")}</p>
-                  )}
+                  {/* 44e (Jorge): as garagens em vez das marcas — para ver o que está mal arrumado (ex.: coberto na PD) */}
+                  {(t.byParkGarage ?? []).map((p) => (
+                    <p key={p.parkName} className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                      {(t.byParkGarage ?? []).length > 1 && <span className="font-medium text-foreground/70">{p.parkName.replace(/\s*-\s*(Lisboa|Porto|Faro)$/i, "")}: </span>}
+                      {p.garages.map((g) => `${g.garage} ${g.count}`).join(" · ")}
+                    </p>
+                  ))}
                 </div>
               ))}
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground">Só os carros parados no parque (as operações em curso estão em baixo). O tipo é o do lugar onde o carro está; sem lugar, o do produto reservado.</p>
+          <p className="text-[11px] text-muted-foreground">Só os carros parados no parque (as operações em curso estão em baixo). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado. Por baixo, em que garagem de cada parque estão: se a garagem não bate com o tipo (ex.: um coberto na PD), está mal arrumado.</p>
           {d.inPark.byPark.length > 0 && (
             <details className="text-xs">
               <summary className="cursor-pointer select-none text-muted-foreground">Ver por parque e garagem</summary>

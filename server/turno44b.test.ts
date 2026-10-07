@@ -68,7 +68,7 @@ describe("44b — Estado do parque ao vivo por tipo de lugar", () => {
   it("conta só os carros parados, por tipo e, dentro, por parque", () => {
     const car = (spotType: LiveCar["spotType"], parkName: string, phase: LiveCar["phase"] = "in_park") => ({ spotType, parkName, phase }) as LiveCar;
     const out = summarizeBySpotType([car("uncovered", "Airpark"), car("uncovered", "Airpark"), car("uncovered", "Redpark"), car("covered", "Airpark"), car("covered", "Airpark", "moving")]);
-    expect(out).toEqual([
+    expect(out).toMatchObject([
       { type: "uncovered", label: "Descoberto", total: 3, byPark: [{ parkName: "Airpark", count: 2 }, { parkName: "Redpark", count: 1 }] },
       { type: "covered", label: "Coberto", total: 1, byPark: [{ parkName: "Airpark", count: 1 }] },
     ]);
