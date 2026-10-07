@@ -2,7 +2,7 @@
 modulo: disponibilidade
 titulo: Disponibilidade
 rotas: /disponibilidade
-palavras: pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
+palavras: custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
 ---
 # Disponibilidade
 
@@ -32,3 +32,15 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - A semana começa sempre à segunda-feira.
 - Marcar a disponibilidade por alguém também fica registado, com o que estava antes.
 - No Extras-Dia, "Preencher com disponíveis" usa estas marcações.
+
+**Métricas dos extras** (por baixo, na gestão)
+- O que quer dizer cada número também está no ecrã, em **O que quer dizer cada número?** (e ao passar o rato num quadrado).
+- **Responderam (próxima semana):** dos extras ativos das tuas cidades, quantos já responderam ao pedido de disponibilidade da próxima semana.
+- **Custo previsto (escala):** horas escaladas no Extras Dia no período × tarifa do nível. Os team leaders não contam (o salário já os paga). Inclui o dia de hoje e as escalas por confirmar.
+- **Custo pago (ponto):** horas do ponto dos extras (check-outs aprovados, ou ok sem [SUSPEITO]) × tarifa. É a mesma conta da Faturação.
+  - Compara-se com a escala **até ontem**, porque o ponto de hoje ainda falta.
+  - Se as horas picadas forem menos de 60 % das escaladas, aparece um aviso a amarelo e não se mostra a percentagem. Um "−98 %" não era poupança: era ponto que os extras não picaram.
+- **Candidatura → 1.º turno:** dias, em mediana, entre a candidatura aprovada (últimos 180 dias) e o primeiro check-in no ponto.
+- **Cobertura dos próximos 7 dias:** por dia, as horas-condutor que a previsão diz serem precisas (pelas entregas e recolhas) contra as horas já escaladas.
+- **Faltas por extra:** faltas ao Extras Dia no período, confirmadas e por rever (as possíveis faltas que o RH ainda tem de validar).
+- **Parados há mais de 90 dias:** extras ativos sem trabalho (ponto, escala ou movimentos na Multipark) há mais de 90 dias. Quem nunca trabalhou conta desde que a ficha foi criada. Admins podem **Desativar** daqui.

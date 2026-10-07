@@ -225,6 +225,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
           : {
             fonte: "app Multipark (ao vivo)",
             abertas: r.stats ? r.stats.open : "contagem indisponível",
+            fechadasSozinhas3Dias: r.stats ? r.stats.autoClosed : undefined,
             altaPrioridadeAbertas: r.stats ? r.stats.highOpen : "contagem indisponível",
             porTipo: r.stats ? Object.fromEntries((r.stats.byType as any[]).map((g) => [g.label, g.count])) : undefined,
             recentes: (r.rows as any[]).slice(0, 10).map((o) => ({ tipo: String(o.title ?? "").slice(0, 80), prioridade: o.priority, parque: o.parkName, criada: String(o.createdAt ?? "").slice(0, 10) })),

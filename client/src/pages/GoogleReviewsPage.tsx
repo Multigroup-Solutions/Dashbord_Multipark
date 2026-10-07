@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useMemo, useState } from "react";
-import { groupReviewsByPark, isReviewAnswered, isReviewConverted, isReviewPending, NO_PARK_KEY } from "@shared/reviewParks";
+import { groupReviewsByPark, isReviewAnswered, isReviewConverted, isReviewPending, TRASH_KEY } from "@shared/reviewParks";
 import {
   Star, Plus, MessageSquare, Bot, CheckCircle2, AlertTriangle,
   Search, ExternalLink, Sparkles, ThumbsUp, ThumbsDown, Eye,
@@ -40,7 +40,7 @@ const RATING_COLORS: Record<number, string> = {
 };
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  pending_response: { label: "Pendente", color: "bg-yellow-100 text-yellow-800" },
+  pending_response: { label: "Por responder", color: "bg-slate-100 text-slate-800" },
   ai_responded: { label: "Rascunho IA (por enviar)", color: "bg-blue-100 text-blue-800" },
   manually_responded: { label: "Respondido", color: "bg-green-100 text-green-800" },
   converted_complaint: { label: "Reclamação", color: "bg-red-100 text-red-800" },
@@ -151,38 +151,37 @@ function ParkBreakdown({ onOpenPark }: { onOpenPark?: (key: string) => void }) {
   if (reviewsQ.error) return <QueryErrorNote error={reviewsQ.error} onRetry={() => reviewsQ.refetch()} retrying={reviewsQ.isFetching} what="as críticas por parque" />;
   if (projsQ.error) return <QueryErrorNote error={projsQ.error} onRetry={() => projsQ.refetch()} retrying={projsQ.isFetching} what="os parques" />;
   if (groups.length === 0) return null;
+  // 44c (Jorge: "um quadradinho para cada parque com as estrelas e as avaliações"); o lixo não entra.
+  const parks = groups.filter(g => !g.trash);
+  const trash = groups.find(g => g.trash);
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-sm">Por parque</CardTitle></CardHeader>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-xs text-muted-foreground border-b">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">Parque</th>
-                <th className="text-right px-4 py-2 font-medium">Avaliações</th>
-                <th className="text-right px-4 py-2 font-medium">Média</th>
-                <th className="text-right px-4 py-2 font-medium">Por responder</th>
-                <th className="text-right px-4 py-2 font-medium">Respondidas</th>
-                <th className="text-right px-4 py-2 font-medium">Reclamações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map(g => (
-                <tr key={g.key} className={`border-b last:border-0 ${onOpenPark ? "cursor-pointer hover:bg-muted/50" : ""}`} onClick={() => onOpenPark?.(g.key)}>
-                  <td className="px-4 py-2 font-medium">{g.name}</td>
-                  <td className="px-4 py-2 text-right">{g.total}</td>
-                  <td className="px-4 py-2 text-right">{g.avg != null ? g.avg : "—"}</td>
-                  <td className={`px-4 py-2 text-right font-semibold ${g.pending > 0 ? "text-yellow-700" : "text-muted-foreground"}`}>{g.pending}</td>
-                  <td className="px-4 py-2 text-right text-green-700">{g.responded}</td>
-                  <td className="px-4 py-2 text-right text-red-700">{g.complaints}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">Por parque</h3>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+        {parks.map(g => (
+          <Card
+            key={g.key}
+            className={`p-3 gap-1 min-w-0 ${onOpenPark ? "cursor-pointer hover:shadow-md transition-shadow" : ""}`}
+            onClick={() => onOpenPark?.(g.key)}
+          >
+            <p className="text-sm font-medium truncate" title={g.name}>{g.name}</p>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold tabular-nums">{g.avg != null ? String(g.avg).replace(".", ",") : "—"}</span>
+              <span className="text-xs text-muted-foreground">/5</span>
+            </div>
+            <Stars rating={Math.round(g.avg ?? 0)} size="w-3.5 h-3.5" />
+            <p className="text-xs text-muted-foreground tabular-nums">{g.total} {g.total === 1 ? "avaliação" : "avaliações"}</p>
+            <p className="text-xs tabular-nums">
+              {g.pending > 0 ? <span className="font-medium">{g.pending} por responder</span> : <span className="text-green-700">tudo respondido</span>}
+              {g.complaints > 0 && <span className="text-red-700"> · {g.complaints} recl.</span>}
+            </p>
+          </Card>
+        ))}
+      </div>
+      {trash && (
+        <p className="text-xs text-muted-foreground">{trash.total} crítica(s) sem parque nem marca estão no lixo (não contam nos números). Vês-las na lista, no separador do lixo.</p>
+      )}
+    </div>
   );
 }
 
@@ -226,7 +225,7 @@ function ReviewsDashboard() {
         </Card>
         <Card className="p-4 gap-1 min-w-0">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Clock className="w-4 h-4" /> Por responder</div>
-          <p className="text-3xl font-bold mt-1 tabular-nums truncate text-yellow-700" title={String(stats.pending)}>{stats.pending}</p>
+          <p className="text-3xl font-bold mt-1 tabular-nums truncate" title={String(stats.pending)}>{stats.pending}</p>
           <p className="text-xs text-muted-foreground">inclui rascunhos por publicar</p>
         </Card>
         <Card className="p-4 gap-1 min-w-0">
@@ -292,9 +291,9 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
   const globalFilters = useGlobalFilters();
   const [filterRating, setFilterRating] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
-  // Separação por PARQUE (Jorge, 16 set 2026): "Todas" mostra a empresa
-  // inteira agrupada por parque; um parque mostra só o dele.
-  const [park, setPark] = useState<string>("all");
+  // Separação por PARQUE (Jorge, 16 set 2026). 44c: são separadores — abre no
+  // parque com mais por responder; "Todas" continua a existir.
+  const [pickedPark, setPark] = useState<string | null>(null);
 
   const queryInput: any = {
     ...(filterRating !== "all" ? { rating: Number(filterRating) } : {}),
@@ -310,27 +309,44 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
   const projs = projsQ.data ?? [];
   const filtered = filterRating !== "all" || filterStatus !== "all";
   const groups = useMemo(() => groupReviewsByPark(reviews as any[], projs as any[]), [reviews, projs]);
-  const parkName = useMemo(() => new Map(groups.map(g => [g.key, g.name])), [groups]);
-  const visibleGroups = park === "all" ? groups : groups.filter(g => g.key === park);
-  const totalPending = groups.reduce((s, g) => s + g.pending, 0);
+  const parkName = useMemo(() => new Map(groups.flatMap(g => g.reviews.map((r: any) => [r.id, g.name] as const))), [groups]);
+  const park = pickedPark && (pickedPark === "all" || groups.some(g => g.key === pickedPark)) ? pickedPark : groups.find(g => !g.trash)?.key ?? "all";
+  const visibleGroups = park === "all" ? groups.filter(g => !g.trash) : groups.filter(g => g.key === park);
+  const totalPending = groups.filter(g => !g.trash).reduce((s, g) => s + g.pending, 0);
   const visibleReviews = visibleGroups.flatMap(g => g.reviews);
 
   return (
     <div className="space-y-4">
       {/* Parques: a empresa toda, e depois cada parque */}
       {groups.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant={park === "all" ? "selected" : "outline"} onClick={() => setPark("all")}>
-            Todas <span className="ml-1 opacity-80">{reviews.length}</span>
-            {totalPending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{totalPending} por responder</Badge>}
-          </Button>
+        <div className="flex items-end gap-1 overflow-x-auto border-b" role="tablist" aria-label="Parques">
           {groups.map(g => (
-            <Button key={g.key} size="sm" variant={park === g.key ? "selected" : "outline"} onClick={() => setPark(park === g.key ? "all" : g.key)}>
-              {g.name} <span className="ml-1 opacity-80">{g.total}</span>
-              {g.pending > 0 && <Badge className="ml-2 bg-yellow-100 text-yellow-800 text-[11px]">{g.pending}</Badge>}
-            </Button>
+            <button
+              key={g.key}
+              type="button"
+              role="tab"
+              aria-selected={park === g.key}
+              onClick={() => setPark(g.key)}
+              className={`shrink-0 px-3 py-2 text-sm border-b-2 -mb-px whitespace-nowrap ${park === g.key ? "border-blue-600 font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"} ${g.trash ? "ml-auto" : ""}`}
+            >
+              {g.name} <span className="tabular-nums opacity-70">{g.total}</span>
+              {g.pending > 0 && !g.trash && <span className="ml-1.5 inline-flex min-w-5 justify-center rounded-full bg-blue-600 px-1.5 text-[11px] font-medium text-white tabular-nums">{g.pending}</span>}
+            </button>
           ))}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={park === "all"}
+            onClick={() => setPark("all")}
+            className={`shrink-0 px-3 py-2 text-sm border-b-2 -mb-px whitespace-nowrap ${park === "all" ? "border-blue-600 font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          >
+            Todas <span className="tabular-nums opacity-70">{groups.filter(g => !g.trash).reduce((n, g) => n + g.total, 0)}</span>
+            {totalPending > 0 && <span className="ml-1.5 inline-flex min-w-5 justify-center rounded-full bg-blue-600 px-1.5 text-[11px] font-medium text-white tabular-nums">{totalPending}</span>}
+          </button>
         </div>
+      )}
+      {park === TRASH_KEY && (
+        <p className="text-xs text-muted-foreground">Críticas sem parque e sem marca reconhecível (no perfil Google nem no texto). Ficam aqui, não se apagam, e não contam nos números. Se alguma for nossa, abre-a e escolhe o parque.</p>
       )}
 
       {/* Filters */}
@@ -368,7 +384,7 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
             const headers = ["ID","Parque","Data","Nome","Email","Estrelas","Estado","Texto","Resposta","Publicada no Google","Matrícula","Reclamação"];
             const rows = (visibleReviews as any[]).map(r => [
               r.id,
-              parkName.get(r.projectId != null && projs.some((p: any) => p.id === r.projectId) ? String(r.projectId) : NO_PARK_KEY) || "",
+              parkName.get(r.id) || "",
               r.reviewDate ? lisbonDayOf(r.reviewDate) : "",
               r.reviewerName || "",
               r.reviewerEmail || "",
@@ -392,7 +408,7 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
         )}
       </div>
 
-      {projsQ.error && <QueryErrorNote error={projsQ.error} onRetry={() => projsQ.refetch()} retrying={projsQ.isFetching} what="os parques (as críticas aparecem em Sem parque)" />}
+      {projsQ.error && <QueryErrorNote error={projsQ.error} onRetry={() => projsQ.refetch()} retrying={projsQ.isFetching} what="os parques (sem eles as críticas não se separam por parque)" />}
       {listQ.error ? (
         <QueryErrorNote error={listQ.error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="as críticas" />
       ) : isLoading ? (
@@ -416,13 +432,13 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
                   </span>
                 )}
                 {g.pending > 0 ? (
-                  <Badge className="bg-yellow-100 text-yellow-800">{g.pending} por responder</Badge>
+                  <Badge variant="secondary">{g.pending} por responder</Badge>
                 ) : filterStatus === "all" ? (
                   <Badge className="bg-green-100 text-green-800">tudo respondido</Badge>
                 ) : null}
               </div>
               {g.reviews.map((r: any) => (
-                <Card key={r.id} className={`hover:shadow-md transition-shadow cursor-pointer ${isReviewPending(r) ? "border-yellow-200" : ""}`} onClick={() => onSelect(r.id)}>
+                <Card key={r.id} className={`hover:shadow-md transition-shadow cursor-pointer ${isReviewPending(r) ? "border-l-4 border-l-blue-500" : ""}`} onClick={() => onSelect(r.id)}>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
@@ -620,6 +636,13 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
   const generateMut = trpc.reviews.generateResponse.useMutation({ onError: onError("A IA não conseguiu gerar a resposta") });
   const approveMut = trpc.reviews.approveResponse.useMutation({ onError: onError("Não foi possível aprovar") });
   const updateMut = trpc.reviews.update.useMutation({ onError: onError("Não foi possível guardar") });
+  // 44c: escolher o parque (tirar do lixo / corrigir).
+  const projsQ = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
+  const parkOptions = useMemo(() => ((projsQ.data ?? []) as any[]).filter(p => p.level === "park" || p.level === "brand").sort((a, b) => String(a.name).localeCompare(String(b.name), "pt")), [projsQ.data]);
+  const setParkMut = trpc.reviews.setPark.useMutation({
+    onSuccess: () => { refresh(); toast.success("Parque da crítica guardado."); },
+    onError: onError("Não foi possível guardar o parque"),
+  });
   const publishMut = trpc.reviews.publishReply.useMutation({
     onSuccess: () => { refresh(); toast.success("Resposta publicada no Google!"); },
     onError: onError("Não foi possível publicar no Google"),
@@ -732,6 +755,22 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
                 </div>
               </CardContent>
             </Card>
+          )}
+
+          {canEdit && (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Label className="text-xs text-muted-foreground">Parque</Label>
+              <Select
+                value={review.projectId != null && parkOptions.some(p => p.id === review.projectId) ? String(review.projectId) : ""}
+                onValueChange={(v) => setParkMut.mutate({ id, projectId: Number(v) })}
+                disabled={setParkMut.isPending}
+              >
+                <SelectTrigger className="h-8 w-64"><SelectValue placeholder="Sem parque — escolhe" /></SelectTrigger>
+                <SelectContent>
+                  {parkOptions.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}{p.level === "brand" ? " (marca)" : ""}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           )}
 
           <ClientHistoryCard

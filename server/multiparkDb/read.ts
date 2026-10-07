@@ -20,6 +20,7 @@
  *   Agent: userId, parkId, name (recurso quando o nome não vem na ocorrência)
  */
 import { MultiparkDbError, isMultiparkDbConfigured, multiparkDbQuery, redactSecrets, type SqlParam } from "./client";
+import { OCCURRENCE_KEEP_OPEN_PATTERN } from "../../shared/occurrenceAutoClose";
 
 // ─── Resultado com degradação ───────────────────────────────────────────────
 
@@ -123,6 +124,9 @@ function bool(v: unknown): boolean {
 export const OCCURRENCE_PRIORITIES = ["LOW", "MEDIUM", "HIGH"] as const;
 export type OccurrencePriority = (typeof OCCURRENCE_PRIORITIES)[number];
 
+export const OCCURRENCE_STATUSES = ["open", "resolved", "auto_closed"] as const;
+export type OccurrenceStatus = (typeof OCCURRENCE_STATUSES)[number];
+
 export const OCCURRENCE_LIST_DEFAULT_LIMIT = 50;
 export const OCCURRENCE_LIST_MAX_LIMIT = 200;
 export const OCCURRENCE_MAX_OFFSET = 5_000;
@@ -137,6 +141,17 @@ export interface OccurrenceFilters {
   type?: string;
   priority?: OccurrencePriority;
   resolved?: boolean;
+  /**
+   * 44c: estado com o fecho automático (só conta com `autoCloseBefore`):
+   * open = por resolver e não fechada sozinha; auto_closed = fechada sozinha.
+   */
+  status?: OccurrenceStatus;
+  /**
+   * 44c: instante UTC "AAAA-MM-DD HH:MM:SS" (occurrenceAutoCloseCutoff) — as
+   * médias por resolver criadas antes, sem dinheiro/danos/reclamação, contam
+   * como fechadas sozinhas. Sem ele, nada fecha sozinho.
+   */
+  autoCloseBefore?: string;
   /** N.º da reserva (allocation), id da reserva, matrícula, tipo ou notas. */
   search?: string;
   /** Âmbito de cidade do utilizador (Park.city). undefined = todas; [] = nenhuma. */
@@ -234,6 +249,12 @@ export function buildOccurrenceWhere(f: OccurrenceFilters, params: ParamList, li
   if (f.type?.trim()) conds.push(`o."title" = ${params.add(f.type.trim())}`);
   if (f.priority && (OCCURRENCE_PRIORITIES as readonly string[]).includes(f.priority)) conds.push(`o."priority"::text = ${params.add(f.priority)}`);
   if (f.resolved !== undefined) conds.push(`o."resolved" = ${params.add(f.resolved)}`);
+  if (f.status) {
+    const auto = occurrenceAutoClosedCond(f, params);
+    if (f.status === "open") conds.push(`NOT o."resolved" AND NOT ${auto}`);
+    else if (f.status === "resolved") conds.push(`o."resolved"`);
+    else if (f.status === "auto_closed") conds.push(auto);
+  }
   if (f.cities !== undefined) {
     const aliases = cityAliases(f.cities);
     conds.push(aliases.length ? `lower(trim(p."city")) IN (${aliases.map((c) => params.add(c)).join(", ")})` : `FALSE`);
@@ -255,6 +276,19 @@ export function buildOccurrenceWhere(f: OccurrenceFilters, params: ParamList, li
     conds.push(`(${parts.join(" OR ")})`);
   }
   return conds.length ? conds.join(" AND ") : "TRUE";
+}
+
+const UTC_TS_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/**
+ * 44c: condição "fechada sozinha" (a mesma regra de isOccurrenceAutoClosed);
+ * "FALSE" sem `autoCloseBefore` válido. PURA.
+ */
+export function occurrenceAutoClosedCond(f: Pick<OccurrenceFilters, "autoCloseBefore">, params: ParamList): string {
+  if (!f.autoCloseBefore || !UTC_TS_RE.test(f.autoCloseBefore)) return `FALSE`;
+  return `(NOT o."resolved" AND COALESCE(o."priority"::text, 'MEDIUM') = 'MEDIUM'`
+    + ` AND o."createdAt" < ${params.add(f.autoCloseBefore)}::timestamp`
+    + ` AND concat_ws(' ', o."title", o."remarks") !~* ${params.add(OCCURRENCE_KEEP_OPEN_PATTERN)})`;
 }
 
 function nextDay(day: string): string {
@@ -291,9 +325,11 @@ export function buildOccurrenceListSql(opts: OccurrenceListOptions, lisbonMidnig
 export function buildOccurrenceStatsSql(f: OccurrenceFilters, lisbonMidnightUtc: (day: string) => string): { sql: string; params: SqlParam[] } {
   const params = new ParamList();
   const where = buildOccurrenceWhere(f, params, lisbonMidnightUtc);
+  const auto = occurrenceAutoClosedCond(f, params);
   const sql = [
     `SELECT count(*) AS total,`,
-    ` count(*) FILTER (WHERE NOT o."resolved") AS open,`,
+    auto === "FALSE" ? ` count(*) FILTER (WHERE NOT o."resolved") AS open,` : ` count(*) FILTER (WHERE NOT o."resolved" AND NOT ${auto}) AS open,`,
+    ` count(*) FILTER (WHERE ${auto}) AS auto_closed,`,
     ` count(*) FILTER (WHERE o."resolved") AS resolved,`,
     ` count(*) FILTER (WHERE o."priority"::text = 'HIGH') AS high,`,
     ` count(*) FILTER (WHERE o."priority"::text = 'HIGH' AND NOT o."resolved") AS high_open,`,
@@ -364,7 +400,10 @@ export function mapOccurrenceRow(r: OccurrenceRow): MultiparkOccurrence {
 
 export interface OccurrenceStats {
   total: number;
+  /** Por resolver e (44c) não fechadas sozinhas. */
   open: number;
+  /** 44c: médias fechadas sozinhas ao fim de 3 dias (lá continuam por resolver). */
+  autoClosed: number;
   resolved: number;
   high: number;
   highOpen: number;
@@ -375,7 +414,7 @@ export interface OccurrenceStats {
 /** Linha das contagens → números. PURA. */
 export function mapOccurrenceStatsRow(r: Record<string, unknown> | undefined): OccurrenceStats {
   const n = (k: string) => num(r?.[k]) ?? 0;
-  return { total: n("total"), open: n("open"), resolved: n("resolved"), high: n("high"), highOpen: n("high_open"), medium: n("medium"), low: n("low") };
+  return { total: n("total"), open: n("open"), autoClosed: n("auto_closed"), resolved: n("resolved"), high: n("high"), highOpen: n("high_open"), medium: n("medium"), low: n("low") };
 }
 
 export interface OccurrenceGroup { key: string; label: string; city: string | null; count: number }

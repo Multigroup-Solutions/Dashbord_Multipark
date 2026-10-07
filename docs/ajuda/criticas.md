@@ -2,7 +2,7 @@
 modulo: criticas
 titulo: Críticas Google
 rotas: /criticas
-palavras: críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
+palavras: lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---
 # Críticas Google
 
@@ -11,8 +11,21 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 **De onde vêm**
 - **Pela API do Google** (perfis ligados em Integrações): ficam no parque escolhido para o perfil e a resposta publica-se daqui.
 - **Pela Windsor** (quando a conta Google não está ligada diretamente): os mesmos perfis e avaliações chegam pela Windsor e entram aqui da mesma maneira (1–3★ → Reclamação). Interruptor **Críticas: importar do Google Business pela Windsor** (Definições → Automações; vem desligado). A 1.ª vez traz até 3 anos; depois os últimos 60 dias.
-- **Por email** (criticas@): o parque vem do título do perfil Google no email. Sem correspondência exata fica em **Sem parque** (nunca adivinha).
+- **Por email** (criticas@): o parque vem do título do perfil Google no email. Sem correspondência exata não se adivinha o parque (ver **Parque, marca ou lixo**).
 - **Importar Review** (à mão): 4–5★ ganham um rascunho da IA; 1–3★ abrem logo uma Reclamação. O aviso diz o que aconteceu de facto (se a IA ou a reclamação falharam, diz).
+
+**Parque, marca ou lixo** (já não há "Sem parque")
+- Cada crítica fica no **parque** dela.
+- Sem parque, procura-se a **marca** no nome do perfil Google e, se não estiver lá, no texto da crítica. Fica no grupo **"<Marca> (marca)"**.
+- Sem parque nem marca vai para o **Lixo**: um separador à parte, no fim. Não conta nas "por responder" nem na média. Não se apaga e continua a poder ser aberta.
+- Para corrigir, abre a crítica e escolhe o **Parque** certo (ou a marca). Fica registado quem mudou. Só para quem pode editar as Críticas, e só nas suas cidades.
+
+**Dashboard**
+- Um **quadrado por parque** com a média, as estrelas, o n.º de avaliações, as por responder e as reclamações. O lixo aparece só numa nota por baixo.
+
+**Reviews**
+- Um separador por parque. Abre no primeiro parque. **Todas** fica no fim e o **Lixo** à direita.
+- As por responder têm uma barra **azul** à esquerda (já não amarela).
 
 **Responder (respondida = publicada)**
 - A IA só prepara rascunhos; **publica sempre uma pessoa**. Guardar um texto é rascunho, não conta como respondida.
@@ -29,7 +42,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - **Dispensar** tira-a de "por responder" (pede confirmação); **Reabrir** devolve-a.
 
 **Números**
-- **Respondidas** = publicadas no Google. **Por responder** inclui os rascunhos por publicar. Convertidas e dispensadas não contam como por responder.
+- **Respondidas** = publicadas no Google. **Por responder** inclui os rascunhos por publicar. Convertidas, dispensadas e as do lixo não contam como por responder.
 - A média e as percentagens de positivas/negativas contam só as críticas com estrelas.
 - "tudo respondido" só aparece sem filtro de estado.
 

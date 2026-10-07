@@ -67,6 +67,7 @@ export const SHEET_REPORTS: Record<SheetExportReport, ReportDef> = {
           ["Período", `${m.period?.from ?? ""} a ${m.period?.to ?? ""}`],
           ["Custo previsto", r2(m.cost?.planned)], ["Custo pago", r2(m.cost?.paid)],
           ["Horas previstas", r2(m.cost?.plannedHours)], ["Horas pagas", r2(m.cost?.paidHours)],
+          ["Horas previstas até ontem", r2(m.cost?.plannedPastHours)], ["Custo previsto até ontem", r2(m.cost?.plannedPast)],
           ["Aprovados", Number(m.timeToFirstShift?.approved ?? 0)], ["Já trabalharam", Number(m.timeToFirstShift?.worked ?? 0)],
           ["Mediana até ao 1.º turno (dias)", m.timeToFirstShift?.medianDays ?? null],
         ]),
