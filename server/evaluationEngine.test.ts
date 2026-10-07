@@ -107,10 +107,12 @@ describe("cron evaluation-recompute", () => {
   it("lê ao vivo em cada fatia de 7 dias e diz a fonte", async () => {
     const r = await runEvaluationRecompute({ deadlineAt: Date.now() + 600_000, now: new Date("2026-09-25T12:00:00Z"), readLive: liveOk });
     expect(r.done).toBe(true);
-    expect(r.slices).toHaveLength(4);
-    expect(liveOk).toHaveBeenCalledTimes(4);
+    // 42a: o último mês (31 dias) = 5 fatias de 7 dias (a última com 3)
+    expect(r.slices).toHaveLength(5);
+    expect(liveOk).toHaveBeenCalledTimes(5);
     expect(r.slices.every((s) => s.source === "multipark")).toBe(true);
-    expect(liveOk.mock.calls[0]).toEqual(["2026-08-29", "2026-09-04"]);
+    expect(liveOk.mock.calls[0]).toEqual(["2026-08-26", "2026-09-01"]);
+    expect(liveOk.mock.calls[4]).toEqual(["2026-09-23", "2026-09-25"]);
   });
 
   it("sem prazo para outra fatia: pára e devolve de onde continuar", async () => {

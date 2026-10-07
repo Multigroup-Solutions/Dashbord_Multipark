@@ -17,7 +17,7 @@
  * secundária (não entra na pontuação).
  *
  * Mudar um número aqui muda as duas páginas e o recálculo diário (os dias
- * guardados atualizam-se no recálculo seguinte — o cron refaz 4 semanas).
+ * guardados atualizam-se no recálculo seguinte — o cron refaz o último mês).
  *
  * Tudo PURO (sem BD): usado no servidor (motor + routers) e no cliente
  * (legenda, rótulos, detalhe). Testado em server/evaluationRules.test.ts.
@@ -81,8 +81,8 @@ export function looksLikeAccident(o: { title?: string | null; remarks?: string |
 /** Posições que entram no ranking individual (como até aqui). */
 export const RANKING_POSITIONS = ["driver", "senior_driver", "extra"] as const;
 
-/** Dias recalculados todos os dias pelo cron (4 semanas). */
-export const RECOMPUTE_WINDOW_DAYS = 28;
+/** Dias recalculados todos os dias pelo cron: o último mês (42a, Jorge: "um mês em vez de 4 semanas"). */
+export const RECOMPUTE_WINDOW_DAYS = 31;
 
 // ─── Métricas de um dia ──────────────────────────────────────────────────────
 
