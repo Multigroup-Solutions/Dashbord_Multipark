@@ -601,3 +601,18 @@ export function contactsRunSummary(r: { pulled?: number; created?: number; delet
 export const retentionMs = (days: number) => Math.max(0, Math.min(30, Math.floor(days))) * 86_400_000;
 
 export { uniq as uniqueStrings };
+
+// ─── Lote 45: filtros e ordem por cima da lista (como nos Clientes) ─────────
+
+/** Ordem da lista: a natural de cada tipo (mais recentes, ativos primeiro…) ou pelo nome. */
+export const CONTACT_SORTS = ["recent", "name_asc", "name_desc"] as const;
+export type ContactSort = (typeof CONTACT_SORTS)[number];
+export const CONTACT_SORT_LABELS: Record<ContactSort, string> = { recent: "Mais recentes", name_asc: "Nome A–Z", name_desc: "Nome Z–A" };
+/** Só os que têm email / telefone. */
+export const CONTACT_HAS = ["email", "phone"] as const;
+export type ContactHas = (typeof CONTACT_HAS)[number];
+export const CONTACT_HAS_LABELS: Record<ContactHas, string> = { email: "Com email", phone: "Com telefone" };
+/** Clicar no cabeçalho "Nome": A–Z → Z–A → ordem normal. PURA. */
+export function nextNameSort(s: ContactSort): ContactSort {
+  return s === "name_asc" ? "name_desc" : s === "name_desc" ? "recent" : "name_asc";
+}

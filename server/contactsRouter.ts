@@ -14,10 +14,11 @@ import { sql } from "drizzle-orm";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess, withOverrides } from "./_core/access";
 import {
-  CONTACT_KINDS, CREATE_FROM_GOOGLE_AS, CREATE_FROM_GOOGLE_REQUIRES, buildMatchIndex, contactsConfigSchema, emailKey, googleContactsPrefsSchema, googleContactsPrefsPatchSchema, matchContact,
+  CONTACT_HAS, CONTACT_KINDS, CONTACT_SORTS, CREATE_FROM_GOOGLE_AS, CREATE_FROM_GOOGLE_REQUIRES, buildMatchIndex, contactsConfigSchema, emailKey, googleContactsPrefsSchema, googleContactsPrefsPatchSchema, matchContact,
   phoneKey, uniqueStrings, type ContactMatch, type MatchRecord,
 } from "../shared/contacts";
 import { can, grantFor } from "../shared/access";
+import { CONTACT_IMPORT_MAX } from "../shared/contactImport";
 import type { ContactViewer } from "./contactsSearch";
 
 type CtxUser = { id: number; role: string; accessOverrides?: any };
@@ -240,7 +241,81 @@ const settingsRouter = router({
   }),
 });
 
+/**
+ * Lote 45 (Jorge: "importar contactos — importante"): contactos de um ficheiro
+ * (CSV do Google/Outlook/Excel ou vCard, lido no browser) para os contactos do
+ * CRM, como cliente ou lead comercial. Nunca muda nem apaga o que já existe:
+ * o mesmo email ou telefone (no ficheiro ou já no CRM, no âmbito de cidade)
+ * fica de fora e conta como repetido.
+ */
+export async function importCrmContacts(d: { execute: (q: any) => Promise<any> }, viewerId: number, as: "client" | "lead", rows: ReadonlyArray<{ name: string; email?: string | null; phone?: string | null; company?: string | null }>) {
+  const { projectScope, scopedProjectIds, cityScope } = await import("./cityScope");
+  const scoped = scopedProjectIds();
+  const projectId = scoped === undefined ? null : cityScope.getStore()?.defaultCityId ?? scoped[0] ?? null;
+  const seen = new Set<string>();
+  const clean: Array<{ name: string; email: string | null; phone: string | null; raw: string | null; company: string | null }> = [];
+  let invalid = 0;
+  let duplicates = 0;
+  for (const r of rows) {
+    const email = emailKey(r.email ?? "") || null;
+    const phone = phoneKey(r.phone ?? "") || null;
+    const raw = String(r.phone ?? "").trim().slice(0, 32) || null;
+    const name = (String(r.name ?? "").replace(/\s+/g, " ").trim() || (email ? email.split("@")[0] : "") || phone || "").slice(0, 255);
+    if (name.length < 2 || (!email && !phone)) { invalid++; continue; }
+    const keys = [email ? `e:${email}` : null, phone ? `p:${phone}` : null].filter(Boolean) as string[];
+    if (keys.some((k) => seen.has(k))) { duplicates++; continue; }
+    keys.forEach((k) => seen.add(k));
+    clean.push({ name, email, phone, raw, company: String(r.company ?? "").trim().slice(0, 255) || null });
+  }
+  // Já no CRM (no âmbito de cidade de quem importa)?
+  const existing = new Set<string>();
+  const emails = clean.map((c) => c.email).filter(Boolean) as string[];
+  const phones = clean.map((c) => c.phone).filter(Boolean) as string[];
+  for (let i = 0; i < Math.max(emails.length, phones.length); i += 500) {
+    const e = emails.slice(i, i + 500);
+    const p = phones.slice(i, i + 500);
+    const conds = [e.length ? sql`LOWER(TRIM(c.email)) IN (${inList(e)})` : null, p.length ? sql`c.phoneE164 IN (${inList(p)})` : null].filter(Boolean) as any[];
+    if (!conds.length) continue;
+    for (const x of rowsOf(await d.execute(sql`SELECT LOWER(TRIM(c.email)) AS email, c.phoneE164 FROM crm_contacts c WHERE (${sql.join(conds, sql` OR `)}) AND ${projectScope(sql`c.projectId`)}`))) {
+      if (x.email) existing.add(`e:${String(x.email)}`);
+      if (x.phoneE164) existing.add(`p:${String(x.phoneE164)}`);
+    }
+  }
+  const fresh = clean.filter((c) => {
+    const dup = (c.email && existing.has(`e:${c.email}`)) || (c.phone && existing.has(`p:${c.phone}`));
+    if (dup) duplicates++;
+    return !dup;
+  });
+  for (let i = 0; i < fresh.length; i += 200) {
+    const chunk = fresh.slice(i, i + 200);
+    await d.execute(sql`INSERT INTO crm_contacts (kind, name, email, phone, phoneE164, company, projectId, source, createdById) VALUES ${sql.join(
+      chunk.map((c) => sql`(${as}, ${c.name}, ${c.email}, ${c.raw ?? c.phone}, ${c.phone}, ${c.company}, ${projectId}, 'import', ${viewerId})`), sql`, `)}`);
+  }
+  return { created: fresh.length, duplicates, invalid };
+}
+
 export const contactsRouter = router({
+  /** Lote 45: importar contactos de um ficheiro para o CRM (cliente ou lead comercial). */
+  importRows: protectedProcedure
+    .input(z.object({
+      as: z.enum(["client", "lead"]),
+      fileName: z.string().trim().max(200).nullish(),
+      rows: z.array(z.object({
+        name: z.string().max(255), email: z.string().max(320).nullish(), phone: z.string().max(64).nullish(), company: z.string().max(255).nullish(),
+      })).min(1).max(CONTACT_IMPORT_MAX),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "contactos", "view");
+      requireAccess(ctx.user, "clientes", "edit");
+      const d = await database();
+      const r = await importCrmContacts(d, ctx.user.id, input.as, input.rows);
+      try {
+        const { logActivity } = await import("./db");
+        await logActivity({ userId: ctx.user.id, action: "create", entity: "crm_contact", entityId: null,
+          details: `Importação de contactos${input.fileName ? ` (${input.fileName})` : ""} como ${input.as === "lead" ? "lead comercial" : "cliente"}: ${r.created} novos, ${r.duplicates} repetidos, ${r.invalid} sem nome/email/telefone` } as any);
+      } catch { /* registo */ }
+      return r;
+    }),
   /** Tipos que a pessoa pode pesquisar. */
   kinds: protectedProcedure.query(async ({ ctx }) => {
     requireAccess(ctx.user, "contactos", "view");
@@ -248,7 +323,11 @@ export const contactsRouter = router({
     return searchableKinds(viewerOf(ctx.user as CtxUser)).map((k) => k.kind);
   }),
   search: protectedProcedure
-    .input(z.object({ q: z.string().max(120).nullish(), kind: z.union([kindEnum, z.literal("all")]).optional(), cursor: z.number().int().min(0).max(10_000).nullish(), limit: z.number().int().min(5).max(50).nullish() }))
+    .input(z.object({
+      q: z.string().max(120).nullish(), kind: z.union([kindEnum, z.literal("all")]).optional(), cursor: z.number().int().min(0).max(10_000).nullish(), limit: z.number().int().min(5).max(50).nullish(),
+      // Lote 45: filtros e ordem por cima da lista (em todos os tipos).
+      sort: z.enum(CONTACT_SORTS).nullish(), has: z.enum(CONTACT_HAS).nullish(),
+    }))
     .query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "contactos", "view");
       const { searchContacts } = await import("./contactsSearch");

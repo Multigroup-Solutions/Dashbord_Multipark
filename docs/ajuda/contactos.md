@@ -2,11 +2,22 @@
 modulo: contactos
 titulo: Contactos (pesquisa, diretório e Google Contactos)
 rotas: /contactos, /perfil
-palavras: palavras soltas, nome e apelido, crm vazio, diretório vazio, não foi possível ler, cartões, lista, ver em cartões, ver em lista, foto, contactos, contacto, pesquisa, procurar, cliente, lead, parceiro, fornecedor, colaborador, diretório, directorio, telefone, telemóvel, quem liga, identificação de chamadas, google contactos, people, grupo multipark, serviço, sugestões, criar cliente, criar lead
+palavras: importar contactos, importar csv, vcard, vcf, ordenar, nome a-z, com email, com telefone, filtrar contactos, palavras soltas, nome e apelido, crm vazio, diretório vazio, não foi possível ler, cartões, lista, ver em cartões, ver em lista, foto, contactos, contacto, pesquisa, procurar, cliente, lead, parceiro, fornecedor, colaborador, diretório, directorio, telefone, telemóvel, quem liga, identificação de chamadas, google contactos, people, grupo multipark, serviço, sugestões, criar cliente, criar lead
 ---
 # Contactos
 
 **Cartões ou Lista** (botão no topo da lista): vês as pessoas em **cartões com foto** ou numa **lista** compacta — no telemóvel e no PC. A escolha fica guardada neste aparelho, para esta página.
+
+**Filtrar e ordenar por cima** (em todos os tipos, como nos Clientes)
+- **Ordenar**: Mais recentes (a ordem normal de cada tipo), **Nome A–Z** ou **Nome Z–A**. Na **lista**, carregar no cabeçalho **Nome** faz o mesmo (A–Z → Z–A → ordem normal).
+- **Com email** / **Com telefone**: só os contactos que o têm.
+- Filtros e ordem valem para a lista **toda** (não só para o que já carregou).
+- Na lista, cada contacto mostra numa linha o nome, o tipo, o detalhe (empresa, cargo, reservas…), o email e o telefone.
+
+**Importar contactos** (quem pode editar os Clientes)
+1. **Pesquisa → Importar contactos** e escolhe o ficheiro: CSV exportado do **Google Contactos** ou do **Outlook**, um CSV/Excel com as colunas **nome, email, telefone, empresa** (vírgula ou ponto e vírgula), ou um **vCard (.vcf)**. Até 2000 de cada vez.
+2. Vês quantos contactos tem e os primeiros. Escolhe se entram como **Cliente (CRM)** ou **Lead comercial** e carrega em **Importar**.
+3. Ficam nos **Contactos do CRM**, na tua cidade. Um contacto com o mesmo **email ou telefone** de outro que já existe **não entra e não mexe no que existe**. As linhas sem email e sem telefone ficam de fora. No fim dizes quantos entraram, quantos já existiam e quantos ficaram de fora. A importação fica nos Logs.
 
 Uma só pesquisa para clientes, contactos do CRM, leads de extras, parceiros, fornecedores, colaboradores, o diretório da empresa e os teus contactos Google.
 

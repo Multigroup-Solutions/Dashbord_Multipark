@@ -26,9 +26,17 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import {
-  BookUser, Building2, CalendarDays, ChevronDown, ExternalLink, Loader2, Mail, MessageCircle, MessageSquareWarning, Phone, Plus, RefreshCw, Search, Users,
+  ArrowDown, ArrowUp, ArrowUpDown, BookUser, Building2, CalendarDays, ChevronDown, ExternalLink, FileUp, Loader2, Mail, MessageCircle, MessageSquareWarning, Phone, Plus, RefreshCw, Search, Users,
 } from "lucide-react";
-import { CONTACT_KIND_LABELS, CREATE_FROM_GOOGLE_LABELS, type ContactKind } from "@shared/contacts";
+import {
+  CONTACT_HAS, CONTACT_HAS_LABELS, CONTACT_KIND_LABELS, CONTACT_SORT_LABELS, CONTACT_SORTS, CREATE_FROM_GOOGLE_LABELS, nextNameSort,
+  type ContactHas, type ContactKind, type ContactSort,
+} from "@shared/contacts";
+import { CONTACT_IMPORT_MAX, parseContactFile, type ImportRow } from "@shared/contactImport";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
 import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline";
 import { GoogleContactsCard } from "@/components/google/GoogleContactsCard";
 import { ViewToggle } from "@/components/ViewToggle";
@@ -103,8 +111,42 @@ function ContactCard({ it, onOpen }: { it: Item; onOpen: (it: Item) => void }) {
   );
 }
 
+/**
+ * Lote 45 (Jorge: "em lista tem de dar para filtrar e ordenar por cima, como
+ * nos Clientes, em todos os tipos"): a lista é uma tabela com cabeçalho; o
+ * "Nome" ordena (A–Z → Z–A → ordem normal) no servidor, na lista toda.
+ */
+function ContactTable({ items, onOpen, sort, onSort }: { items: Item[]; onOpen: (it: Item) => void; sort?: ContactSort; onSort?: (s: ContactSort) => void }) {
+  const cols = "grid-cols-[2fr_0.9fr_1.6fr_1.6fr_1fr]";
+  const SortIcon = sort === "name_asc" ? ArrowUp : sort === "name_desc" ? ArrowDown : ArrowUpDown;
+  return (
+    <div className="overflow-x-auto rounded-lg border bg-card">
+      <div className="min-w-[760px]">
+        <div className={`grid gap-2 bg-muted px-3 py-2 text-[11px] font-bold uppercase text-muted-foreground ${cols}`}>
+          {onSort && sort ? (
+            <button type="button" onClick={() => onSort(nextNameSort(sort))} className="flex items-center gap-1 text-left uppercase hover:text-foreground" title="Ordenar pelo nome">
+              Nome <SortIcon className="h-3 w-3" />
+            </button>
+          ) : <span>Nome</span>}
+          <span>Tipo</span><span>Detalhe</span><span>Email</span><span>Telefone</span>
+        </div>
+        {items.map((it) => (
+          <div key={it.ref} role="link" tabIndex={0} onClick={() => onOpen(it)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(it); }}
+            className={`grid cursor-pointer items-center gap-2 border-t px-3 py-2 text-[13px] hover:bg-muted/60 ${cols}`}>
+            <span className="flex min-w-0 items-center gap-2"><PersonAvatar name={it.name} photoUrl={it.photoUrl} size="h-7 w-7" /><span className="truncate font-medium">{it.name}</span></span>
+            <span><Badge variant="outline" className={`text-[10.5px] ${KIND_CLASS[it.kind]}`}>{CONTACT_KIND_LABELS[it.kind]}</Badge></span>
+            <span className="truncate text-xs text-muted-foreground">{it.subtitle ?? "—"}</span>
+            <span className="truncate text-xs">{it.email ?? <span className="text-muted-foreground">—</span>}</span>
+            <span className="truncate text-xs">{it.phone ?? <span className="text-muted-foreground">—</span>}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** D46: cartões ou lista, com a mesma escolha em todo o lado. */
-function ContactItems({ items, view, onOpen }: { items: Item[]; view: ViewMode; onOpen: (it: Item) => void }) {
+function ContactItems({ items, view, onOpen, sort, onSort }: { items: Item[]; view: ViewMode; onOpen: (it: Item) => void; sort?: ContactSort; onSort?: (s: ContactSort) => void }) {
   if (view === "cards") {
     return (
       <div className="grid gap-2 p-1 sm:grid-cols-2 xl:grid-cols-3">
@@ -112,7 +154,8 @@ function ContactItems({ items, view, onOpen }: { items: Item[]; view: ViewMode; 
       </div>
     );
   }
-  return <>{items.map((it) => <ContactRow key={it.ref} it={it} onOpen={onOpen} />)}</>;
+  if (!items.length) return null;
+  return <ContactTable items={items} onOpen={onOpen} sort={sort} onSort={onSort} />;
 }
 
 /** Carrega a página seguinte quando o fim da lista fica visível. */
@@ -139,13 +182,19 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
   // ?q= (pesquisa global → "ver todos") pré-preenche a pesquisa.
   const [text, setText] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
   const [kind, setKind] = useState<ContactKind | "all">("all");
+  // Lote 45: filtros e ordem por cima (no servidor: valem para a lista toda, em todos os tipos).
+  const [sort, setSort] = useState<ContactSort>("recent");
+  const [has, setHas] = useState<ContactHas | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const { user } = useAuth();
+  const canImport = can(user as any, "clientes", "edit");
   const q = useDebounced(text.trim());
   const kindsQ = trpc.contacts.kinds.useQuery(undefined, { staleTime: 5 * 60_000 });
   const kinds = (kindsQ.data ?? []) as ContactKind[];
   const all = kind === "all";
-  const allQ = trpc.contacts.search.useQuery({ q, kind: "all" }, { enabled: all && q.length >= 2, placeholderData: (p) => p });
+  const allQ = trpc.contacts.search.useQuery({ q, kind: "all", sort, has }, { enabled: all && q.length >= 2, placeholderData: (p) => p });
   const oneQ = trpc.contacts.search.useInfiniteQuery(
-    { q, kind: all ? "client" : kind, limit: 30 },
+    { q, kind: all ? "client" : kind, limit: 30, sort, has },
     { enabled: !all, getNextPageParam: (last) => last.groups[0]?.nextCursor ?? undefined, initialCursor: 0 },
   );
   const oneItems = useMemo(() => (oneQ.data?.pages ?? []).flatMap((p) => p.groups[0]?.items ?? []) as Item[], [oneQ.data]);
@@ -167,6 +216,19 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
         ))}
         <ViewToggle value={view} onChange={setView} className="ml-auto" />
       </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Select value={sort} onValueChange={(v) => setSort(v as ContactSort)}>
+          <SelectTrigger className="h-8 w-[160px]" aria-label="Ordenar"><SelectValue /></SelectTrigger>
+          <SelectContent>{CONTACT_SORTS.map((x) => <SelectItem key={x} value={x}>{CONTACT_SORT_LABELS[x]}</SelectItem>)}</SelectContent>
+        </Select>
+        {CONTACT_HAS.map((h) => (
+          <Button key={h} size="sm" variant={has === h ? "selected" : "outline"} className="h-8" onClick={() => setHas(has === h ? null : h)}>{CONTACT_HAS_LABELS[h]}</Button>
+        ))}
+        {canImport && (
+          <Button size="sm" variant="outline" className="h-8 ml-auto" onClick={() => setImportOpen(true)}><FileUp className="h-4 w-4 mr-1" />Importar contactos</Button>
+        )}
+      </div>
+      {importOpen && <ImportContactsDialog onClose={() => setImportOpen(false)} />}
 
       {all && q.length < 2 && (
         <p className="text-sm text-muted-foreground">Escreve pelo menos 2 letras para procurar em todos os tipos, ou escolhe um tipo para o percorrer.</p>
@@ -183,7 +245,7 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{CONTACT_KIND_LABELS[g.kind as ContactKind]}</span>
                   {g.hasMore && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setKind(g.kind as ContactKind)}>Ver todos</Button>}
                 </div>
-                <ContactItems items={g.items as Item[]} view={view} onOpen={onOpen} />
+                <ContactItems items={g.items as Item[]} view={view} onOpen={onOpen} sort={sort} onSort={setSort} />
               </CardContent>
             </Card>
           ))}
@@ -199,12 +261,83 @@ function SearchTab({ onOpen }: { onOpen: (it: Item) => void }) {
                 : oneFirst?.note ? <p className="text-sm text-muted-foreground p-2">{oneFirst.note}</p>
                   : <p className="text-sm text-muted-foreground p-2">Nenhum contacto encontrado.</p>
             )}
-            <ContactItems items={oneItems} view={view} onOpen={onOpen} />
+            <ContactItems items={oneItems} view={view} onOpen={onOpen} sort={sort} onSort={setSort} />
             <LoadMore hasMore={!!oneQ.hasNextPage} loading={oneQ.isFetchingNextPage} onMore={() => oneQ.fetchNextPage()} />
           </CardContent>
         </Card>
       )}
     </div>
+  );
+}
+
+// ─── Importar (lote 45) ─────────────────────────────────────────────────────
+
+/** Ficheiro (CSV do Google/Outlook/Excel ou vCard) → contactos do CRM. Lê no browser; o servidor valida e não repete. */
+function ImportContactsDialog({ onClose }: { onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [rows, setRows] = useState<ImportRow[] | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [as, setAs] = useState<"client" | "lead">("client");
+  const imp = trpc.contacts.importRows.useMutation({
+    onSuccess: (r) => {
+      utils.contacts.search.invalidate();
+      toast.success(`${r.created} contacto(s) importado(s)${r.duplicates ? ` · ${r.duplicates} já existiam (não mexi)` : ""}${r.invalid ? ` · ${r.invalid} sem nome, email ou telefone` : ""}.`);
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const onFile = async (f: File | undefined) => {
+    setRows(null); setReadError(null);
+    if (!f) return;
+    setFileName(f.name);
+    if (f.size > 5 * 1024 * 1024) { setReadError("O ficheiro tem mais de 5 MB."); return; }
+    try {
+      const parsed = parseContactFile(await f.text(), f.name);
+      if (!parsed.length) setReadError("Não encontrei contactos neste ficheiro. Usa um CSV com cabeçalho (nome, email, telefone…) ou um vCard (.vcf).");
+      else if (parsed.length > CONTACT_IMPORT_MAX) setReadError(`O ficheiro tem ${parsed.length} contactos; o máximo por vez é ${CONTACT_IMPORT_MAX}. Divide-o em partes.`);
+      else setRows(parsed);
+    } catch {
+      setReadError("Não deu para ler o ficheiro.");
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader><DialogTitle>Importar contactos</DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">CSV exportado do Google Contactos ou do Outlook, um CSV/Excel com as colunas nome, email, telefone e empresa, ou um vCard (.vcf). Os contactos que já existem (mesmo email ou telefone) ficam como estão.</p>
+          <Input type="file" accept=".csv,.txt,.vcf,text/csv,text/vcard" onChange={(e) => onFile(e.target.files?.[0])} />
+          {readError && <p className="text-red-700 dark:text-red-300">{readError}</p>}
+          {rows && (
+            <>
+              <div className="flex items-center gap-2">
+                <span>Entram como</span>
+                <Select value={as} onValueChange={(v) => setAs(v as "client" | "lead")}>
+                  <SelectTrigger className="h-8 w-[180px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="client">Cliente (CRM)</SelectItem>
+                    <SelectItem value="lead">Lead comercial</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <p><b>{rows.length}</b> contacto(s) em {fileName}. Primeiros:</p>
+              <ul className="rounded-md border divide-y text-xs">
+                {rows.slice(0, 5).map((r, i) => (
+                  <li key={i} className="px-2 py-1.5 truncate">{r.name}{r.company ? ` · ${r.company}` : ""}{r.email ? ` · ${r.email}` : ""}{r.phone ? ` · ${r.phone}` : ""}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button disabled={!rows || imp.isPending} onClick={() => rows && imp.mutate({ as, fileName, rows })}>
+            {imp.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <FileUp className="h-4 w-4 mr-1" />}Importar {rows?.length ?? ""}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

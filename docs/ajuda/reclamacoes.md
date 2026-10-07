@@ -13,7 +13,7 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 2. Indica pelo menos um dado do cliente: nº de reserva, matrícula, email, telefone ou nome. Ao gravar, a reserva liga-se sozinha (e completa os dados em falta). No caso, **Ligar reserva automaticamente** volta a tentar.
 3. Escolhe o tipo, a prioridade e o prazo (SLA) e escreve uma descrição breve. **Criar Reclamação**.
 - Quem só vê a sua cidade e não escolhe o projeto: a reclamação fica na cidade dessa pessoa.
-- Os emails para **reclamacoes@** criam reclamações sozinhos (com **Sincronizar emails** corre já). O cliente recebe um aviso de receção com o nº do processo **[REC-n]**, se esse aviso estiver ligado nas Definições.
+- Os emails para **reclamacoes@** criam reclamações sozinhos (já não há botão "Sincronizar emails": entram sem ninguém carregar). O cliente recebe um aviso de receção com o nº do processo **[REC-n]**, se esse aviso estiver ligado nas Definições.
 
 **Tratar**
 - O quadro mostra os estados: Novo → Em Análise → Aguarda Cliente → Resolvido/Fechado. Arrasta ou muda o estado no caso. As convertidas ficam em Fechado e não se movem.
