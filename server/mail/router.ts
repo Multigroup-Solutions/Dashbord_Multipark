@@ -48,9 +48,32 @@ export const mailRouter = router({
         .map((r) => ({ userId: Number(r.userId), name: String(r.name ?? r.email), email: String(r.email) }));
     }
     const { can } = await import("../../shared/access");
-    // 17f: a lista da Comunicação junta as conversas de WhatsApp da caixa (quem tem o WhatsApp).
-    return { ...boxes, google, others, slaHours: await slaHours(), isSuperAdmin: v.role === "super_admin", canWhatsapp: can(v as any, "whatsapp", "view") };
+    // Lote 45: a caixa por onde a pessoa entra (escolhida por ela; NULL = automática).
+    const { db: homeDb, rowsOf: homeRows } = await import("./store");
+    const { sql: homeSql } = await import("drizzle-orm");
+    const homeBox = await homeDb().then(async (d) => {
+      const r = homeRows(await d.execute(homeSql`SELECT mailHomeBox FROM users WHERE id = ${v.id} LIMIT 1`))[0];
+      return r?.mailHomeBox ? String(r.mailHomeBox) : null;
+    }).catch(() => null);
+    return { ...boxes, google, others, homeBox, slaHours: await slaHours(), isSuperAdmin: v.role === "super_admin", canWhatsapp: can(v as any, "whatsapp", "view") };
   }),
+
+  /** Lote 45: a caixa por onde a pessoa entra na Comunicação (uma que vê, "me", ou null = automática). */
+  setHomeBox: protectedProcedure
+    .input(z.object({ key: z.string().trim().min(1).max(64).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const v = viewerOf(ctx.user as CtxUser);
+      if (input.key && input.key !== "me") {
+        const { visibleMailboxes } = await import("./inbox");
+        const boxes = await visibleMailboxes(v);
+        if (!boxes.mailboxes.some((m) => m.key === input.key)) throw new TRPCError({ code: "BAD_REQUEST", message: "Essa caixa não está no teu acesso." });
+      }
+      const { db } = await import("./store");
+      const { sql } = await import("drizzle-orm");
+      const d = await db();
+      await d.execute(sql`UPDATE users SET mailHomeBox = ${input.key} WHERE id = ${v.id}`);
+      return { ok: true as const, key: input.key };
+    }),
 
   badge: protectedProcedure.query(async ({ ctx }) => {
     // Falha = erro (o menu mostra "?"), nunca "0 por ler" (17d).
