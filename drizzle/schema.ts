@@ -1880,6 +1880,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	otherActions: int().default(0).notNull(),
 	weightedActions: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	actionsByType: text(),
+	// 0590 (49e): ações na Multipark por hora de Lisboa, "[n0,…,n23]"; NULL = dia sem ações ou de antes da 0590.
+	actionsByHour: varchar({ length: 255 }),
 	speedingEvents: int().default(0).notNull(),
 	delays: int().default(0).notNull(),
 	lateServices: int().default(0).notNull(),
