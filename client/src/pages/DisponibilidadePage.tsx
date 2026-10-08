@@ -18,6 +18,7 @@ import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { isForbidden } from "@/lib/queryRetry";
 import { availabilityWeekFrom } from "@shared/availabilityWeek";
 import { NoCityNotice, NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
+import { ComeBackCard } from "@/components/ComeBackCard";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
 // Semana a mostrar: a do link (?week=, levada à segunda-feira) ou a PRÓXIMA
@@ -69,7 +70,7 @@ export default function DisponibilidadePage() {
 
   // Lote 46: conta Google sem ficha → diz qual é a conta e o que fazer (sem ir ao servidor).
   if ((user as any)?.employee === null) return <NoLinkedRecordNotice email={user?.email} />;
-  return <MyAvailability />;
+  return <><ComeBackCard /><MyAvailability /></>;
 }
 
 const HUB_OPEN_KEY = "mp.disponibilidade.sections.v1";

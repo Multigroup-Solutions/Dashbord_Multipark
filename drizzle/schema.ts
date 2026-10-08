@@ -699,7 +699,37 @@ export const employees = mysqlTable("employees", {
 	deactivationNotes: text(),
 	deactivatedAt: timestamp({ mode: 'string' }),
 	deactivatedById: int(),
+	// 0585 (49c): a pessoa INATIVA carregou em "Voltei, quero trabalhar" (o RH vê "Quer voltar").
+	comebackRequestedAt: datetime({ mode: 'string' }),
 });
+
+// 0585 (49c): "Liga a tua conta" — conta Google sem ficha diz com que email/
+// telefone se candidatou (kind "link"), ou possível duplicado criado pelo
+// próprio candidato (kind "duplicate"). Código só em hash. Nada se apaga.
+export const accountLinkRequests = mysqlTable("account_link_requests", {
+	id: int().autoincrement().primaryKey(),
+	kind: varchar({ length: 16 }).default('link').notNull(),
+	userId: int().notNull(),
+	googleEmail: varchar({ length: 320 }),
+	claimedEmail: varchar({ length: 320 }),
+	claimedPhone: varchar({ length: 32 }),
+	employeeId: int(),
+	matchedEmployeeId: int(),
+	matchedApplicationId: int(),
+	status: varchar({ length: 16 }).default('pending').notNull(),
+	codeHash: varchar({ length: 128 }),
+	codeExpiresAt: datetime({ mode: 'string' }),
+	attempts: int().default(0).notNull(),
+	note: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	resolvedById: int(),
+	resolvedAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	index("idx_account_link_user").on(table.userId, table.createdAt),
+	index("idx_account_link_status").on(table.status, table.createdAt),
+	index("idx_account_link_employee").on(table.matchedEmployeeId),
+]);
 
 // 0400 (19c): mudar o IBAN é um PEDIDO aprovado pelo RH; o novo fica cifrado
 // até à aprovação (o antigo continua na ficha). Nada se apaga.

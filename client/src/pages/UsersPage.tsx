@@ -992,7 +992,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
         open={!!deactivating}
         subjectName={deactivating?.name ?? ""}
         subjectKind="utilizador"
-        effectNote="O acesso à plataforma é bloqueado imediatamente. A ficha do RH desta pessoa também fica inativa (o agente da Multipark continua ligado). Para só tirar o acesso por uns tempos, usa Suspender."
+        effectNote="A conta desativa-se já e a ficha do RH desta pessoa também fica inativa (o agente da Multipark continua ligado). Uma conta sem ficha no RH fica sempre bloqueada. Com ficha, o que acontece a seguir depende do motivo:"
         pending={toggleActiveMutation.isPending}
         onOpenChange={(v) => { if (!v) setDeactivating(null); }}
         onConfirm={confirmDeactivation}

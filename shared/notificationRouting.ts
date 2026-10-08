@@ -175,6 +175,11 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "driver_application", group: "pessoas", label: "Candidaturas", description: "Candidaturas novas \"Be a Driver\" da tua cidade.",
     module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+  // 49c (Jorge, 8 out 2026): quem entra com outra conta Google e diz quem é; quem estava inativo e quer voltar.
+  K({ kind: "account_link_request", group: "pessoas", label: "Pedidos de ligação de conta", description: "Alguém entrou com uma conta Google sem ficha e diz com que email/telefone se candidatou ou trabalhou connosco (ou um candidato com o mesmo telefone/NIF de outra ficha).",
+    module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+  K({ kind: "employee_comeback", group: "pessoas", label: "Quer voltar", description: "Uma pessoa inativa da tua cidade entrou e carregou em \"Voltei, quero trabalhar\".",
+    module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "lead_replied", group: "pessoas", label: "Lead respondeu", description: "Leads de extras que responderam por WhatsApp.",
     module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "leads_waiting", group: "pessoas", label: "Leads à espera", description: "Resumo diário das leads sem contacto ou sem resposta.",

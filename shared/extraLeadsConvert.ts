@@ -10,7 +10,7 @@
  *    a partir de um lead (fala-se com o RH);
  *  - outro motivo → mostra-se o motivo e só se reativa com confirmação.
  */
-import { DEACTIVATION_REASON_LABELS, deactivationReasonLabel } from "./deactivationReasons";
+import { CANDIDATE_REASON, DEACTIVATION_REASON_LABELS, deactivationReasonLabel } from "./deactivationReasons";
 
 /** Motivos de saída que um lead nunca reativa. */
 export const NEVER_REACTIVATE_FROM_LEAD = ["roubou", "despedido", "ficha_duplicada", "conta_duplicada"] as const;
@@ -40,6 +40,8 @@ export type LeadFichaDecision =
 /** O que fazer com a ficha encontrada (já depois de seguir as juntas). */
 export function leadFichaDecision(f: FichaLike, confirmReactivate: boolean): LeadFichaDecision {
   if (f.isActive) return { kind: "use", reactivate: false };
+  // 49c: a ficha de candidato (feita na app, por aprovar) não é readmissão — ativa-se sem perguntar.
+  if (f.deactivationReason === CANDIDATE_REASON) return { kind: "use", reactivate: true };
   const reason = deactivationReasonLabel(f.deactivationReason, f.deactivationReasonOther) || DEACTIVATION_REASON_LABELS.inatividade;
   if ((NEVER_REACTIVATE_FROM_LEAD as readonly string[]).includes(String(f.deactivationReason ?? ""))) return { kind: "blocked", reason };
   return confirmReactivate ? { kind: "use", reactivate: true } : { kind: "confirm", reason };

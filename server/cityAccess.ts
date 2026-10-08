@@ -12,6 +12,8 @@ export function isPersonalAccessPath(path: string): boolean {
     // 19c: a foto, o PDA, o Drive e terminar as próprias sessões são de cada um
     // (um extra novo sem cidade tirava a foto pedida e recebia "Sem centro de custos").
     'rh.uploadMyPhoto', 'operational.pdas.mine', 'googleDrive.status', 'settings.security.endMySessions',
+    // 49c: quem entra sem ficha liga a conta ("Sou novo" / "Já me candidatei") e quem está inativo diz "Voltei".
+    'accountLink.mine', 'accountLink.startCandidate', 'accountLink.request', 'accountLink.confirmCode', 'rh.comeback',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 

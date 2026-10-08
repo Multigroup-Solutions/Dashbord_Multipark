@@ -2,7 +2,7 @@
 modulo: disponibilidade
 titulo: Disponibilidade
 rotas: /disponibilidade
-palavras: a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
+palavras: voltei, quero trabalhar, bem-vindo de volta, inativo, liga a tua conta, a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
 ---
 # Disponibilidade
 
@@ -19,7 +19,8 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - Cada vez que guardas, a semana é substituída de uma vez (nunca fica a meio).
 - Fica registado quem mudou e o que estava antes.
 - Funciona mesmo que a tua ficha ainda não tenha centro de custos: aparece um aviso a dizer para pedires ao RH a tua cidade, mas a disponibilidade grava-se na mesma.
-- **"A tua conta Google … não está ligada a nenhuma ficha"**: entraste com um email que não está na tua ficha. O login é só com a Google e tem de ser **sempre com o mesmo email**. Sai e entra com o email que deste ao RH, ou pede ao RH para pôr na ficha o email que aparece na mensagem. Depois sai e volta a entrar.
+- **"Liga a tua conta"**: entraste com um email que não está em nenhuma ficha. Escolhe **Sou novo — quero candidatar-me** ou **Já me candidatei / já trabalhei convosco com outro email** (escreves o email ou o telefone que usaste). Também podes sair e entrar com o email que deste ao RH.
+- **Bem-vindo de volta** (ficha inativa): marca os teus dias livres e carrega em **Voltei, quero trabalhar** — o RH vê "Quer voltar" e reativa-te. Até lá não entras na escala.
 - Na tua ficha (RH), no cartão **Disponibilidade**, o botão **Marcar a minha disponibilidade** abre esta página na semana que estás a ver.
 - Se a leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**.
 
