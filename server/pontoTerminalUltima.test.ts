@@ -317,11 +317,11 @@ describe("servidor: na saída e na repetição diária (BD e Multipark simuladas
 });
 
 describe("gravação, agendador, migração: nada se apaga", () => {
-  it("0575 só acrescenta terminalUntil (DATETIME) a time_records e está registada (depois da 0570)", () => {
+  it("0575 só acrescenta terminalUntil (DATETIME) a time_records e está registada a seguir à 0570", () => {
     expect(MIGRATION_0575_STATEMENTS).toEqual(["ALTER TABLE `time_records` ADD COLUMN `terminalUntil` DATETIME NULL AFTER `terminalStatus`"]);
     expect(IDEMPOTENT_ERROR_CODES_0575.has("ER_DUP_FIELDNAME")).toBe(true);
-    // 49e: a 0590 entrou depois — já não é a última, mas continua registada a seguir à 0570
-    expect(SCHEMA_MIGRATION_IDS.indexOf("0575")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0570"));
+    // (registada logo a seguir à 0570; as seguintes acrescentam-se depois)
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0575")).toBe(SCHEMA_MIGRATION_IDS.indexOf("0570") + 1);
     expect(src("drizzle/schema.ts")).toContain("terminalUntil: datetime({ mode: 'string' })");
   });
   it("só UPDATE de quem ainda está pending (nunca por cima do RH) e nunca DELETE", () => {
