@@ -5,6 +5,9 @@
  * link (gclid/fbclid + {campaignid}); sem ele, a campanha do clique (gclid)
  * que o Google Ads identifica (8 out 2026); senão utm_campaign ou código de
  * desconto que o admin liga à campanha aqui. Em baixo, as conversões por ação.
+ * Via net por campanha (8 out 2026): as reservas via net de cada marca/cidade
+ * repartidas pelas campanhas (conversões → cliques → gasto), ao lado das
+ * ligadas; valor e ROAS com os parques de terceiros pela nossa comissão.
  */
 import React, { useMemo, useState } from "react";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
@@ -20,6 +23,7 @@ import { ChevronDown, ChevronRight, Link2, Loader2, Plus, X } from "lucide-react
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { describeMatchCounts, LINKED_EXPLAINER } from "@shared/campaignEvidence";
+import { fmtViaNet, VIA_NET_BASE_LABEL, VIA_NET_SPLIT_EXPLAINER } from "@shared/viaNet";
 
 const EUR = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const EUR0 = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -50,7 +54,10 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
   const [linkType, setLinkType] = useState<"utm_campaign" | "discount_code">("utm_campaign");
   const [linkValue, setLinkValue] = useState("");
   const rows: any[] = data?.rows ?? [];
-  const totals = useMemo(() => rows.reduce((t, r) => ({ cost: t.cost + r.cost, clicks: t.clicks + r.clicks, conversions: t.conversions + r.conversions, bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, revenueNet: t.revenueNet + r.revenueNet }), { cost: 0, clicks: 0, conversions: 0, bookings: 0, revenue: 0, revenueNet: 0 }), [rows]);
+  const totals = useMemo(() => rows.reduce((t, r) => ({ cost: t.cost + r.cost, clicks: t.clicks + r.clicks, conversions: t.conversions + r.conversions, bookings: t.bookings + r.bookings, revenue: t.revenue + r.revenue, revenueNet: t.revenueNet + r.revenueNet,
+    viaNet: t.viaNet + Number(r.viaNetBookings ?? 0), viaNetValue: t.viaNetValue + Number(r.viaNetValue ?? 0) }), { cost: 0, clicks: 0, conversions: 0, bookings: 0, revenue: 0, revenueNet: 0, viaNet: 0, viaNetValue: 0 }), [rows]);
+  const vat = Number(data?.vatRate ?? 0.23);
+  const viaNetTitle = (r: any) => (r.viaNetBookings == null ? "Campanha sem marca/cidade: o via net não se reparte" : `${Math.round(Number(r.viaNetShare ?? 0) * 1000) / 10} % do via net da marca/cidade · repartido pelos ${VIA_NET_BASE_LABEL[r.viaNetBase as keyof typeof VIA_NET_BASE_LABEL] ?? "—"}`);
 
   if (error) return <QueryErrorNote error={error} onRetry={() => roasQ.refetch()} retrying={roasQ.isFetching} what="o ROAS por campanha" />;
   if (isLoading || !data) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
@@ -66,6 +73,10 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
           {data.linkedTotal > 0 && data.linkedByTotal && (
             <p className="text-xs text-muted-foreground mt-1">De onde vieram as ligadas: {describeMatchCounts(data.linkedByTotal)}.</p>
           )}
+          <p className="text-xs text-muted-foreground mt-1">
+            <b>Via net</b> = reservas que não são de parceiros (sem pendentes, clientes Pro nem avenças) de cada marca/cidade, {VIA_NET_SPLIT_EXPLAINER}; as campanhas nacionais entram em cada cidade pela sua parte. "≈" = fração. Ao lado das ligadas, que são as diretas. <b>Valor</b>: parques nossos pelo preço inteiro; parques de terceiros (Marketplace) só pela nossa comissão.
+            {(data.viaNetUnassigned?.bookings ?? 0) > 0 && <> {num(data.viaNetUnassigned.bookings)} reserva(s) via net de marcas/cidades sem campanhas ficam por repartir.</>}
+          </p>
         </CardHeader>
         <CardContent className="p-0 overflow-x-auto">
           {rows.length === 0 ? <p className="text-sm text-muted-foreground p-6 text-center">Sem campanhas com gasto no período.</p> : (
@@ -80,6 +91,9 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
                   <th className="text-right px-4 py-2 font-medium">Valor s/ IVA</th>
                   <th className="text-right px-4 py-2 font-medium">ROAS (s/ IVA)</th>
                   <th className="text-right px-4 py-2 font-medium">CPA</th>
+                  <th className="text-right px-4 py-2 font-medium border-l" title="Reservas via net da marca/cidade repartidas pelas campanhas (conversões; sem conversões, cliques; sem cliques, gasto)">Via net (repartido)</th>
+                  <th className="text-right px-4 py-2 font-medium">Valor via net s/ IVA</th>
+                  <th className="text-right px-4 py-2 font-medium" title="Valor via net sem IVA ÷ gasto">ROAS via net</th>
                 </tr>
               </thead>
               <tbody>
@@ -108,10 +122,13 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
                         <td className="px-4 py-1.5 text-right tabular-nums">{eur(r.revenueNet)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{roasX(r.roasNet)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{eur(r.cpa)}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums border-l" title={viaNetTitle(r)}>{fmtViaNet(r.viaNetBookings)}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums">{r.viaNetValue == null ? "—" : eur(r.viaNetValue / (1 + vat))}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums">{roasX(r.roasViaNetNet)}</td>
                       </tr>
                       {isOpen && (
                         <tr className="border-b bg-muted/20">
-                          <td colSpan={8} className="px-6 py-3 space-y-3">
+                          <td colSpan={11} className="px-6 py-3 space-y-3">
                             <div>
                               <div className="text-xs font-semibold mb-1">Conversões por ação</div>
                               {r.actions?.length ? (
@@ -162,6 +179,9 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
                   <td className="px-4 py-2 text-right tabular-nums">{eur(totals.revenueNet)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{roasX(totals.cost > 0 ? totals.revenueNet / totals.cost : null)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{eur(totals.bookings > 0 ? totals.cost / totals.bookings : null)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums border-l">{fmtViaNet(totals.viaNet)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{eur(totals.viaNetValue / (1 + vat))}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{roasX(totals.cost > 0 ? totals.viaNetValue / (1 + vat) / totals.cost : null)}</td>
                 </tr>
               </tbody>
             </table>

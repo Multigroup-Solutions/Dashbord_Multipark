@@ -7,7 +7,9 @@
  *      com o que o marketing precisa: dia de Lisboa da criação, parque,
  *      origem, link de origem ("originUrl", de onde sai a atribuição
  *      Google/Meta), valor, parceiro/método/campanha, se o cliente tem email
- *      (fora os da casa) e se é a 1.ª reserva desse email (cliente novo);
+ *      (fora os da casa) e se é a 1.ª reserva desse email (cliente novo); e
+ *      (8 out 2026) se é de cliente Pro (`proClientId`/`pro`) ou de avença
+ *      (`clientPlanId`) — como a Faturação de parceiros — para o "via net";
  *   2. CLIENTES (por email, todo o histórico dos parques pedidos): 1.ª
  *      reserva (quando, origem, link, parceiro/campanha), n.º de reservas, n.º
  *      no período e valor realizado — para o "quanto vale um cliente de cada
@@ -84,7 +86,8 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
     `WITH d AS (`,
     `  SELECT b."id" AS id, b."createdAt" AS created_at, b."parkId" AS park_id, b."status"::text AS status, b."origin"::text AS origin,`,
     `    NULLIF(trim(b."originUrl"), '') AS origin_url, b."partnerId" AS partner_id, NULLIF(b."paymentMethod", '') AS pm, b."campaignId" AS campaign_id,`,
-    `    b."bookingPrice" AS price, ${em} AS em, NULLIF(b."paymentSource"::text, '') AS pay_src, b."commissionAmount" AS commission`,
+    `    b."bookingPrice" AS price, ${em} AS em, NULLIF(b."paymentSource"::text, '') AS pay_src, b."commissionAmount" AS commission,`,
+    `    (b."proClientId" IS NOT NULL OR COALESCE(b."pro", false)) AS pro, (b."clientPlanId" IS NOT NULL) AS plan`,
     `  FROM "Booking" b`,
     `  ${clientOf("b", "c")}`,
     `  WHERE ${which} AND b."status"::text <> 'CANCELLED'`,
@@ -102,7 +105,7 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
     `SELECT d.id, ${ts("d.created_at")} AS created_at, ${lisbonDay("d.created_at")} AS day, d.park_id, d.status, d.origin, d.origin_url,`,
     `  d.partner_id, NULLIF(pa."name", '') AS partner_name, COALESCE(d.pm, bp.pm) AS payment_method, d.pay_src AS payment_source,`,
     `  NULLIF(ca."name", '') AS campaign_name, NULLIF(ca."discountCode", '') AS discount_code, COALESCE(bp.total, d.price) AS total,`,
-    `  (d.em IS NOT NULL) AS has_email, (d.em IS NULL OR fb.first_at IS NULL OR d.created_at <= fb.first_at) AS new_client, d.commission`,
+    `  (d.em IS NOT NULL) AS has_email, (d.em IS NULL OR fb.first_at IS NULL OR d.created_at <= fb.first_at) AS new_client, d.commission, d.pro, d.plan`,
     `FROM d`,
     `LEFT JOIN bp ON bp.id = d.id`,
     `LEFT JOIN fb ON fb.em = d.em`,
@@ -181,6 +184,10 @@ export interface MarketingBookingRow {
   newClient: boolean;
   /** comissão gravada (parques de terceiros); null se não houver */
   commission?: number | null;
+  /** 8 out 2026: cliente Pro (`proClientId` ou `pro`) — não conta como via net */
+  pro?: boolean;
+  /** 8 out 2026: avença (`clientPlanId`) — não conta como via net */
+  plan?: boolean;
 }
 
 export interface MarketingClientRow {
@@ -212,6 +219,7 @@ export function mapMarketingBookingRow(r: Record<string, unknown>): MarketingBoo
     paymentMethod: txt(r.payment_method), paymentSource: txt(r.payment_source), campaignName: txt(r.campaign_name), discountCode: txt(r.discount_code), total: money(r.total),
     hasEmail: bool(r.has_email), newClient: r.new_client == null ? true : bool(r.new_client),
     commission: r.commission == null ? null : money(r.commission),
+    pro: bool(r.pro), plan: bool(r.plan),
   };
 }
 

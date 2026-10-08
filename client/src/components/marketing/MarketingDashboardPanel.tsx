@@ -45,6 +45,11 @@ const eur = (v: number | null | undefined, digits = 0) =>
   v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: digits, minimumFractionDigits: digits });
 const num = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("pt-PT"));
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+/** 8 out 2026: quantas ficaram fora do via net ("": nenhuma). */
+const viaNetOutText = (x: { pending?: number; pro?: number; plan?: number } | null | undefined) => {
+  const parts = [x?.pending ? `${x.pending} pendente(s)` : "", x?.pro ? `${x.pro} Pro` : "", x?.plan ? `${x.plan} de avença` : ""].filter(Boolean);
+  return parts.length ? `: ${parts.join(", ")} fora` : "";
+};
 const roas = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(2).replace(".", ",")}×`);
 const shortDay = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 const fmtDay = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
@@ -165,7 +170,7 @@ export default function MarketingDashboardPanel() {
             <Kpi icon={Target} label="Custo por conversão" value={eur(st.costPerConversionPlatforms, 2)}
               hint={noBookings ? "gasto ÷ conversões das plataformas · reservas indisponíveis" : `por reserva via net: ${eur(st.costPerWebBooking, 2)} · por reserva ligada: ${eur(st.costPerAttributedBooking, 2)}`} />
             <Kpi icon={ShoppingCart} label="Reservas via net" value={num(st.bookingsWeb)} warn={noBookings}
-              hint={noBookings ? "indisponíveis (BD da Multipark)" : `tudo o que não é parceiro · ${eur(st.revenueWeb)} · com link de origem ${num(st.webWithLink)} (${pct(st.webWithLink, st.bookingsWeb)}) · ligadas aos anúncios ${num(st.bookingsAttributed)}`} />
+              hint={noBookings ? "indisponíveis (BD da Multipark)" : `tudo o que não é parceiro (sem pendentes, Pro nem avenças${viaNetOutText(st.viaNetExcluded)}) · ${eur(st.revenueWeb)} (terceiros pela nossa comissão) · com link de origem ${num(st.webWithLink)} (${pct(st.webWithLink, st.bookingsWeb)}) · ligadas aos anúncios ${num(st.bookingsAttributed)}`} />
             <Kpi icon={TrendingUp} label="ROAS (s/ IVA)" value={roas(st.roasAttributedNet)}
               hint={`reservas ligadas, receita sem IVA ÷ gasto · todas as reservas: ${roas(st.roasTotalNet)}`} />
             <Kpi icon={TrendingUp} label="ROAS Google (reportado)" value={roas(st.roasGoogle)} hint="valor de conversão que a Google reporta ÷ gasto do Google Ads" />
