@@ -413,6 +413,18 @@ export function registerOAuthRoutes(app: Express) {
         }
       }
 
+      // 49h: quem se candidatou por email (ficha de candidato criada pela IA no
+      // 1.º contacto, ainda sem conta) fica ligado logo ao entrar com esse email.
+      if (email) {
+        try {
+          const { linkCandidateFichaOnLogin } = await import("../accountLink");
+          const cand = await linkCandidateFichaOnLogin(account.id, email);
+          if (cand) console.log(`[OAuth] <${maskEmailForLog(email)}> ligado à ficha de candidato #${cand}`);
+        } catch (err) {
+          console.warn("[OAuth] Falha a ligar a ficha de candidato:", String((err as Error)?.message ?? err).slice(0, 160));
+        }
+      }
+
       const sessionToken = await sdk.createSessionToken(openId, {
         name: userInfo.name || "",
         expiresInMs: SESSION_MAX_MS,

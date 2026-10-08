@@ -15,9 +15,10 @@
  *    whatsapp) com o que a IA leu e a nota "Entrou pela IA".
  * Nunca escreve a ninguém (nem ao candidato). Nunca apaga.
  *
- * A ficha de CANDIDATO (employees isActive=0, motivo `candidato`) está a ser
- * feita noutro ramo (49c): liga-se em `onRecruitmentFirstContact`, no ponto
- * marcado, depois do merge.
+ * Com candidatura (havia email), nasce também a ficha de CANDIDATO (49c:
+ * extra, inativa, motivo `candidato`, sem conta): fica fora das listas e da
+ * escala até ser aprovada, e liga-se sozinha à conta Google com o MESMO email
+ * no 1.º login (server/accountLink.ts `linkCandidateFichaOnLogin`).
  */
 import { sql } from "drizzle-orm";
 import { normalizeEmail, isPlausibleEmail } from "../shared/email";
@@ -39,6 +40,8 @@ export interface FirstContactResult {
   outcome: "invalid" | "employee" | "existing" | "created";
   leadId: number | null;
   applicationId: number | null;
+  /** Ficha de candidato criada (ou já existente com esse email) — só com candidatura. */
+  candidateEmployeeId?: number | null;
   detail?: string;
 }
 
@@ -55,6 +58,11 @@ export interface FirstContactStore {
   log(entry: { action: string; entity: string; entityId: number; details: string }): Promise<void>;
   /** Tarefa "Candidatura de condutor" (a mesma de qualquer lead nova). */
   afterLeadCreated(leadId: number): Promise<void>;
+  /**
+   * Ficha de CANDIDATO para a candidatura (inativa, motivo `candidato`, sem
+   * conta). Já existe ficha com esse email → devolve essa (nunca duplica).
+   */
+  createCandidateEmployee?(row: { applicationId: number; email: string; fullName: string; phone: string | null; projectId: number | null }): Promise<number | null>;
 }
 
 /** Nome para a lead (≥ 2 letras): o lido pela IA, senão um rótulo com o contacto. PURA. */
@@ -126,10 +134,17 @@ export async function onRecruitmentFirstContact(input: FirstContactInput, store?
     await s.log({ action: "driver_application_create", entity: "driver_applications", entityId: applicationId, details: `[IA] Candidatura criada a partir de ${label}: ${fullName}${contact.email ? ` <${contact.email}>` : ""}` });
   }
   await s.log({ action: "extra_lead_import", entity: "extra_leads", entityId: leadId, details: `[IA] ${AI_INTAKE_TAG} (${label}, ${input.sourceRef}): ${fullName}${contact.phone ? ` · ${contact.phone}` : ""}${contact.email ? ` · ${contact.email}` : ""}` });
-  // 49c: a ficha de candidato (employees isActive=0, motivo `candidato`) liga-se AQUI
-  // depois do merge desse ramo — ex.: `await ensureCandidateEmployee(leadId)`.
+  // Ficha de candidato (inativa até ser aprovada) — só com candidatura (email).
+  let candidateEmployeeId: number | null = null;
+  if (applicationId != null && contact.email && s.createCandidateEmployee) {
+    try {
+      candidateEmployeeId = await s.createCandidateEmployee({ applicationId, email: contact.email, fullName, phone: contact.phone, projectId: input.projectId });
+    } catch (err) {
+      console.warn("[recrutamento IA] ficha de candidato:", String((err as any)?.message ?? err).slice(0, 160));
+    }
+  }
   await s.afterLeadCreated(leadId);
-  return { outcome: "created", leadId, applicationId };
+  return { outcome: "created", leadId, applicationId, candidateEmployeeId };
 }
 
 // ─── BD ──────────────────────────────────────────────────────────────────────
@@ -228,6 +243,10 @@ export const dbFirstContactStore: FirstContactStore = {
   async log(entry) {
     const { logActivity } = await import("./db");
     await logActivity({ userId: 0, ...entry }).catch(() => {});
+  },
+  async createCandidateEmployee(row) {
+    const { createCandidateFichaForApplication } = await import("./accountLink");
+    return createCandidateFichaForApplication({ ...row, how: "1.º contacto pela IA" });
   },
   async afterLeadCreated(leadId) {
     try {
