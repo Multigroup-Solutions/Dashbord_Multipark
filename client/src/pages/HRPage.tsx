@@ -9,6 +9,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
 import { NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
+import { ComeBackCard, PersonStateBadge } from "@/components/ComeBackCard";
 import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
 import { readImageAsJpeg } from "@/components/ProfilePhotoPrompt";
 import { formatIban, ibanError, maskIban, maskNif, sameIban } from "@shared/iban";
@@ -1493,7 +1494,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       utils.rh.byId.invalidate({ id: employeeId });
       utils.rh.list.invalidate();
       const scope = r.cascadedUser ? ((r as any).extraAccounts ? ` (colaborador + login + ${(r as any).extraAccounts} conta(s) extra)` : " (colaborador + login)") : "";
-      toast.success(r.reasonLabel ? `Desativado${scope} — ${r.reasonLabel}` : `Estado alterado${scope}`);
+      toast.success(r.reasonLabel ? `Desativado${scope} — ${r.reasonLabel}` : `Estado alterado${scope}${(r as any).promotedRole ? ` · a conta passou a ${(r as any).promotedRole}` : ""}`);
       setShowDeactivate(false);
     },
     onError: (e) => toast.error(e.message),
@@ -1644,12 +1645,16 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 setShowDeactivate(true);
                 return;
               }
-              if (!confirm(`Reativar ${emp.fullName}? Volta a ter acesso e a receber emails.`)) return;
+              // 49c: aprovar o candidato não é readmissão; a conta "utilizador" passa ao papel do posto.
+              const isCandidate = emp.deactivationReason === "candidato";
+              if (!confirm(isCandidate
+                ? `Aprovar ${emp.fullName}? A ficha passa a ativa e a conta da pessoa passa ao papel do posto. Não te esqueças da cidade (centro de custos).`
+                : `Reativar ${emp.fullName}? Volta a ter acesso e a receber emails${(emp as any).comebackRequestedAt ? " (pediu para voltar)" : ""}.`)) return;
               setActive.mutate({ id: employeeId, isActive: true });
             }}
           >
             {emp.isActive ? <X className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-            {emp.isActive ? "Desativar" : "Reativar"}
+            {emp.isActive ? "Desativar" : emp.deactivationReason === "candidato" ? "Aprovar candidato" : "Reativar"}
           </Button>
         )}
         {!editing && canSuspend && emp.isActive && !(emp as any).blockedManually && (
@@ -1662,7 +1667,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           open={showDeactivate}
           subjectName={emp.fullName}
           subjectKind="colaborador"
-          effectNote="O login e as notificações por email ficam imediatamente bloqueados."
+          effectNote="Sai das listas, da escala e dos avisos por email; a conta e as contas extra desativam-se já. O que acontece a seguir depende do motivo:"
           pending={setActive.isPending}
           onOpenChange={setShowDeactivate}
           onConfirm={(values) => setActive.mutate({ id: employeeId, isActive: false, ...values })}
@@ -2612,7 +2617,8 @@ export default function HRPage() {
   // Filtro GLOBAL de cidade/centro (topo da app) aplicado também ao RH
   const globalFilters = useGlobalFilters();
   const { data: employees = [], isLoading } = trpc.rh.list.useQuery({
-    isActive: filterActive === "inactive" ? false : true,
+    // 49c: "Inativos e desativados" e "Candidatos" são as fichas não ativas (separadas abaixo).
+    isActive: filterActive === "inactive" || filterActive === "candidates" ? false : true,
     position: filterPosition !== "all" ? filterPosition : undefined,
     projectId: globalFilters.projectId ?? undefined,
   }, { enabled: !isExtra });
@@ -2633,7 +2639,7 @@ export default function HRPage() {
       );
     }
     if (!myEmployee) return <NoLinkedRecordNotice email={user?.email} />;
-    return <EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => navigate("/perfil")} />;
+    return <><ComeBackCard /><EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => navigate("/perfil")} /></>;
   }
 
   const docSummaryOf = (id: number): DocsSummaryView | undefined => (docStatus as Record<number, DocsSummaryView>)[id];
@@ -2646,6 +2652,9 @@ export default function HRPage() {
       : filterAccount === "with" ? !!e.userId
       : !e.userId;
     const matchesLicence = filterLicence === "all" || (row as any).licence === filterLicence;
+    // 49c: os candidatos (fichas da app, por aprovar) não se misturam com os inativos.
+    const isCandidate = !!(row as any).candidate;
+    if (filterActive === "candidates" ? !isCandidate : filterActive === "inactive" && isCandidate) return false;
     const docs = docSummaryOf(e.id);
     const matchesDocs = filterDocs === "all" ? true
       : filterDocs === "to_validate" ? (docs?.pendingCount ?? 0) > 0
@@ -2688,7 +2697,7 @@ export default function HRPage() {
   const employeesList = filtered.filter(({ employee: e }) => e.position !== "extra");
   const extrasList = filtered.filter(({ employee: e }) => e.position === "extra");
 
-  const renderCard = ({ employee: emp, licence }: { employee: any; licence?: LicenceStatus }) => (
+  const renderCard = ({ employee: emp, licence, candidate }: { employee: any; licence?: LicenceStatus; candidate?: boolean }) => (
     <Card
       key={emp.id}
       className="cursor-pointer hover:shadow-md transition-shadow"
@@ -2713,6 +2722,7 @@ export default function HRPage() {
                 {emp.position === "extra" && emp.extraLevel ? ` N${emp.extraLevel}` : ""}
               </Badge>
               {licenceRelevant(emp.position, licence) && <LicenceBadge status={licence} />}
+              <PersonStateBadge emp={emp} candidate={candidate} />
             </div>
           </div>
         </div>
@@ -2770,7 +2780,7 @@ export default function HRPage() {
   );
 
   /** D46: a mesma ficha em lista (tabela), com a foto. */
-  const renderTable = (list: Array<{ employee: any; licence?: LicenceStatus }>) => (
+  const renderTable = (list: Array<{ employee: any; licence?: LicenceStatus; candidate?: boolean }>) => (
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-sm">
         <thead>
@@ -2786,7 +2796,7 @@ export default function HRPage() {
           </tr>
         </thead>
         <tbody>
-          {list.map(({ employee: emp, licence }) => {
+          {list.map(({ employee: emp, licence, candidate }) => {
             const dir = directoryInfoFor(directory, emp.email);
             const docs = docSummaryOf(emp.id);
             return (
@@ -2801,6 +2811,7 @@ export default function HRPage() {
                 </td>
                 <td className="py-2 px-2 min-w-[10rem]">
                   <button type="button" className="font-medium text-left hover:underline" onClick={(e) => { e.stopPropagation(); setSelectedId(emp.id); }}>{emp.fullName}</button>
+                  <span className="ml-1.5 inline-flex flex-wrap gap-1 align-middle"><PersonStateBadge emp={emp} candidate={candidate} /></span>
                   {dir?.jobTitle && <div className="text-[11px] text-muted-foreground truncate max-w-[16rem]">{dir.jobTitle}</div>}
                 </td>
                 <td className="py-2 px-2 whitespace-nowrap">
@@ -2884,7 +2895,7 @@ export default function HRPage() {
 
       {/* Aviso de dados em falta nos FIXOS (o que trava a folha de ordenados) */}
       {(() => {
-        if (filterActive === "inactive") return null;
+        if (filterActive !== "active") return null;
         const fixosIncompletos = employees
           .filter(({ employee: e }: any) => e.position !== "extra")
           .map(({ employee: e }: any) => {
@@ -2944,7 +2955,8 @@ export default function HRPage() {
           <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="active">Ativos</SelectItem>
-            <SelectItem value="inactive">Desativados</SelectItem>
+            <SelectItem value="inactive">Inativos e desativados</SelectItem>
+            <SelectItem value="candidates">Candidatos (app)</SelectItem>
           </SelectContent>
         </Select>
         {/* Jorge (7 out 2026): carta e documentos por validar */}
@@ -2987,13 +2999,13 @@ export default function HRPage() {
               <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
             )}
           </TabsList>
-          {activeTab === "extras" && canRequestDocs && filterActive !== "inactive" && (
+          {activeTab === "extras" && canRequestDocs && filterActive === "active" && (
             <Button size="sm" variant="outline" className="sm:ml-auto" onClick={() => setShowDocsRequest(true)}>
               <FileText className="w-4 h-4 mr-2" /> Pedir documentos em falta
             </Button>
           )}
           {/* D46: cartões (com foto) ou lista */}
-          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className={activeTab === "extras" && canRequestDocs && filterActive !== "inactive" ? "" : "sm:ml-auto"} />}
+          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className={activeTab === "extras" && canRequestDocs && filterActive === "active" ? "" : "sm:ml-auto"} />}
           </div>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (

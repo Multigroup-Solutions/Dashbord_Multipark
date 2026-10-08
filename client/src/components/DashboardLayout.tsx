@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { currentPath, getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG } from "@shared/const";
+import { isComebackPosition, isInactivitySuspensionText } from "@shared/comeback";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
 import CameraCapture from "@/components/CameraCapture";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -399,9 +400,16 @@ export default function DashboardLayout({
           <p className="text-sm text-muted-foreground">
             {employee.loginBlockedReason ?? "Contacta o teu supervisor."}
           </p>
-          <p className="text-xs text-muted-foreground border-t pt-3">
-            Para libertar o acesso, fala com um supervisor ou administrador.
-          </p>
+          {/* 49c: os "Suspenso: sem atividade" passam a inativos ao voltar a entrar → chegam à ficha e ao "Voltei". */}
+          {isInactivitySuspensionText(employee.loginBlockedReason) && isComebackPosition(employee.position) ? (
+            <p className="text-sm border-t pt-3">
+              Estavas inativo por falta de atividade. <strong>Sai e volta a entrar com a Google</strong>: passas a ver a tua ficha, atualizas os teus dias livres e dizes ao RH que voltaste.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground border-t pt-3">
+              Para libertar o acesso, fala com um supervisor ou administrador.
+            </p>
+          )}
           {/* 41c: bloqueado por documentos? Carrega-os daqui (só a tua ficha). */}
           <BlockedOwnDocuments />
           {/* 20d: sem isto não havia como sair (ex.: PDA partilhado) */}

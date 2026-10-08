@@ -1416,7 +1416,10 @@ export async function convertLeadToExtra(
       details: `Lead convertido em extra: ${lead.fullName} → employee ${employeeId}${how} · ${costCenter.projectName}${lead.notes ? ` · notas do lead: ${lead.notes}` : ""}`.slice(0, 1000),
     });
     if (reactivate) {
-      await logActivity({ userId: userId ?? 0, action: "employee_reactivate", entity: "employee", entityId: employeeId, details: `Reativada ao converter o lead #${leadId} (confirmado por quem converteu)` });
+      await logActivity({ userId: userId ?? 0, action: "employee_reactivate", entity: "employee", entityId: employeeId, details: existing?.deactivationReason === "candidato" ? `Ficha de candidato (app) ativada ao converter o lead #${leadId}` : `Reativada ao converter o lead #${leadId} (confirmado por quem converteu)` });
+      // 49c: a conta "utilizador" (candidato da app / inativo que voltou) passa ao papel do posto.
+      const { promoteRoleAfterActivation } = await import("./employeeActivation");
+      await promoteRoleAfterActivation({ id: userId ?? 0 }, employeeId);
     }
     // Percurso de onboarding por defeito (best-effort — nunca parte a conversão).
     const { autoAssignOnboarding } = await import("./trainingPaths");

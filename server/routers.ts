@@ -37,7 +37,7 @@ import {
 } from "./usersDirectory";
 import { storagePut } from "./storage";
 import { CLOTHING_MAX_ITEMS, CLOTHING_MAX_QTY, CLOTHING_SIZES, CLOTHING_TYPES, normalizeClothingItems } from "../shared/clothing";
-import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
+import { DEACTIVATION_NOTES_MAX, DIALOG_DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
 import { isIsoDay, lisbonToday } from "../shared/expensePeriods";
 import { HANDOVER_CITIES, maxHandoverDate } from "../shared/shiftHandover";
 import { MATERIAL_EXCEPTIONS, OPEN_ITEM_KINDS, OPEN_ITEMS_MAX } from "../shared/shiftHandoverAuto";
@@ -111,6 +111,7 @@ import { rhViewer } from "./rhGuards";
 import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { expensesRouter } from "./expensesRouter";
 import { rhRouter } from "./rhRouter";
+import { accountLinkRouter } from "./accountLinkRouter";
 import { operationalRouter } from "./operationalRouter";
 import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
 import { availabilityPatternProcedures } from "./availabilityPatternRouter";
@@ -734,7 +735,7 @@ export const appRouter = router({
         isActive: z.boolean(),
         // Motivo + notas: OPCIONAIS e só lidos na desativação (sem motivo =
         // `inatividade`). Vocabulário e regra em shared/deactivationReasons.ts.
-        reason: z.enum(DEACTIVATION_REASON_CODES).optional(),
+        reason: z.enum(DIALOG_DEACTIVATION_REASON_CODES).optional(),
         reasonOther: z.string().max(DEACTIVATION_REASON_OTHER_MAX).optional(),
         notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
       }))
@@ -779,6 +780,8 @@ export const appRouter = router({
             await updateEmployee(e.id, { isActive: input.isActive ? 1 : 0, ...deactivationColumns(input.isActive, meta) });
             await logActivity({ userId: ctx.user.id, action: input.isActive ? "activate" : "deactivate", entity: "employee", entityId: e.id,
               details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${e.fullName} com a conta #${input.userId}${deactivation ? ` — ${deactivation.summary}` : ""}` });
+            // 49c: reativar quem voltou / aprovar o candidato → a conta "utilizador" passa ao papel do posto.
+            if (input.isActive) await (await import("./employeeActivation")).promoteRoleAfterActivation(ctx.user, e.id);
             followed.push(e.fullName);
           }
         } catch (err: any) {
@@ -1491,6 +1494,8 @@ export const appRouter = router({
   }),
 
   rh: rhRouter,
+  // 49c: "Liga a tua conta" (conta Google sem ficha) + caixa do RH (pedidos, duplicados, quer voltar, candidatos)
+  accountLink: accountLinkRouter,
 
   // ─── MARKETING ────────────────────────────────────────────────────────────
   marketing: router({
@@ -5467,7 +5472,13 @@ export const appRouter = router({
       const lastWorked = await getLastWorkedMap().catch(() => ({} as Record<number, string>));
       return { days, items: pickSuspendCandidates(rows, lastWorked, lisbonDayOf(new Date()), days).slice(0, 200) };
     }),
-    /** 41a: suspender = bloqueio manual do acesso (desbloqueia-se no RH). Não desativa nem solta nada. */
+    /**
+     * 41a + 49c: "inatividade" (as sugestões dos Utilizadores) = PÔR INATIVO —
+     * a ficha desativa-se com o motivo "Inatividade" (a mesma cascata do RH:
+     * conta e contas extra); a pessoa pode voltar a entrar como utilizador e
+     * dizer "Voltei". "manual" (botão Suspender da ficha) continua a ser o
+     * bloqueio manual do acesso (desbloqueia-se no RH). Nada se solta nem apaga.
+     */
     suspend: protectedProcedure
       .input(z.object({ employeeIds: z.array(z.number().int().positive()).min(1).max(200), why: z.enum(["inatividade", "manual"]).default("inatividade") }))
       .mutation(async ({ ctx, input }) => {
@@ -5478,14 +5489,34 @@ export const appRouter = router({
         const days = Number(await getSetting("rh.suspendAfterDays").catch(() => 180)) || 180;
         const reason = input.why === "manual" ? SUSPEND_REASON_MANUAL : inactivityReason(days);
         const me = await getEmployeeByUserId(ctx.user.id).catch(() => null);
+        const { rhViewer, rhEmployeeRef } = await import("./rhGuards");
+        const { canManageEmployee } = await import("./rhAccess");
+        const { resolveDeactivation } = await import("../shared/deactivationReasons");
+        const { deactivateEmployeeCascade } = await import("./employeeActivation");
+        const viewer = await rhViewer(ctx.user);
         let done = 0;
         for (const id of [...new Set(input.employeeIds)]) {
           try { await assertEmployeeAccess(id); } catch { continue; }
           if (me?.employee.id === id) continue;
-          if (await suspendEmployee(id, reason)) {
-            done++;
-            await logActivity({ userId: ctx.user.id, action: "suspend", entity: "employee", entityId: id, details: `${reason}${input.why === "manual" ? " (ficha do RH)" : " (sugestão dos Utilizadores)"} — acesso bloqueado até desbloquear no RH` });
+          if (input.why === "manual") {
+            if (await suspendEmployee(id, reason)) {
+              done++;
+              await logActivity({ userId: ctx.user.id, action: "suspend", entity: "employee", entityId: id, details: `${reason} (ficha do RH) — acesso bloqueado até desbloquear no RH` });
+            }
+            continue;
           }
+          // 49c: Pôr inativo (só fichas ativas; quem gere a ficha, como no RH)
+          const ref = await rhEmployeeRef(id);
+          if (!ref || !canManageEmployee(viewer, ref)) continue;
+          const found = await getEmployeeById(id);
+          if (!found || Number(found.employee.isActive) !== 1) continue;
+          const deactivation = resolveDeactivation({ reason: "inatividade", notes: `${reason.replace(/^Suspenso:\s*/i, "")} (sugestão dos Utilizadores).` });
+          try {
+            await deactivateEmployeeCascade(ctx.user, id, deactivation, {
+              logDetails: `Inativo por falta de atividade: ${found.employee.fullName} — ${deactivation.summary}. Pode voltar a entrar como utilizador e dizer "Voltei".`,
+            });
+            done++;
+          } catch { /* guarda (último super_admin, a tua) — segue */ }
         }
         return { suspended: done };
       }),

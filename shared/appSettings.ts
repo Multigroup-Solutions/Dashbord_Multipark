@@ -369,8 +369,8 @@ export const SETTINGS = {
   "rh.suspendAfterDays": def({
     key: "rh.suspendAfterDays",
     group: "operacao",
-    label: "Sugerir suspender ao fim de (dias sem atividade)",
-    description: "Na lista de Utilizadores aparece um aviso com as pessoas de ficha ativa que não trabalham (agente da Multipark, ponto, extras) nem entram na app há mais destes dias, para as suspender (fica sem acesso até alguém desbloquear; não desativa nem solta nada). 0 = não sugerir.",
+    label: "Sugerir pôr inativo ao fim de (dias sem atividade)",
+    description: "Na lista de Utilizadores aparece um aviso com as pessoas de ficha ativa que não trabalham (agente da Multipark, ponto, extras) nem entram na app há mais destes dias, para as pôr INATIVAS (motivo \"Inatividade\"): saem das listas, da escala e dos avisos, mas podem voltar a entrar como utilizador e dizer \"Voltei\". A ficha, a conta e o agente ficam ligados. 0 = não sugerir.",
     schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(0, "0 desliga.").max(3650, "Máximo 3650 dias."),
     defaultValue: 180,
     wiring: "live",
@@ -790,6 +790,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "MARKETING_WEEKLY", label: "Email semanal de marketing", description: "À segunda a partir das 8h: gasto, reservas e ROAS da semana por marca e cidade, para os endereços em MARKETING_REPORT_EMAILS." },
   // D20 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
   { name: "COMPLAINT_CLIENT_REPLY_NOTIFY", label: "Reclamações: avisar o responsável quando o cliente responde", description: "Quando o cliente volta a escrever (email) numa reclamação, o responsável recebe no sino \"O cliente respondeu à reclamação #X\" — no máximo 1 aviso por reclamação a cada 30 min, só emails do próprio cliente com menos de 48 h. Sem responsável não avisa ninguém (o caso volta na mesma a \"Em análise\"). Desligado por omissão.", defaultEnabled: false },
+  // 49c (Jorge, 8 out 2026): escreve a gente de fora (código por email) → desligado por omissão.
+  { name: "ACCOUNT_LINK_EMAIL_CODE", label: "Liga a tua conta: código por email", description: "Quem entra com uma conta Google sem ficha e escreve o email ou o telefone com que se candidatou (ou trabalhou connosco) recebe um código de 6 algarismos no email que está nessa ficha/candidatura (pela recursos-humanos@; vale 10 minutos, 5 tentativas) e, ao escrevê-lo, a conta liga-se sozinha. Só quando dá UMA pessoa, extra ou condutor, e não desativada; o resto vai para o RH. Desligado: todos os pedidos vão para o RH (Leads de Extras → Candidaturas e ficha → Utilizador e permissões), com aviso no sino. Desligado por omissão.", defaultEnabled: false },
   // 19c: avisa gente → desligado por omissão. Sem ele, os pedidos aparecem na lista do RH e na ficha.
   { name: "RH_BANK_CHANGE_NOTIFY", label: "Aviso dos pedidos de IBAN", description: "Quando alguém pede para mudar o IBAN de uma ficha, avisa no sino o back office e o supervisor da cidade (e os administradores) para aprovar ou recusar. Desligado por omissão: os pedidos aparecem na mesma no RH (topo da lista) e na ficha.", defaultEnabled: false },
   // D45 (Jorge, 3 out 2026): avisa gente → desligado por omissão.

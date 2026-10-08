@@ -5,6 +5,7 @@ import type { Express, Request, Response, CookieOptions } from "express";
 import crypto from "node:crypto";
 import * as db from "../db";
 import { adoptPlaceholderAccountByEmail, linkEmployeesToUserByEmail } from "../identity";
+import { resolveLoginComeback } from "../comebackLogin";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 import { shouldRejectUnverifiedGoogleEmail } from "./googleIdentity";
@@ -370,10 +371,27 @@ export function registerOAuthRoutes(app: Express) {
         lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
       });
 
+      // 49c (Jorge, 8 out 2026): quem está INATIVO (deixou de vir, pode
+      // voltar) e é extra/condutor volta a entrar como UTILIZADOR — chega à
+      // ficha, às disponibilidades e ao "Voltei". DESATIVADO (roubou,
+      // despedido, segurança…), estrutura ou conta sem ficha: como sempre.
+      // Os "Suspenso: sem atividade" (41a) passam a inativos aqui.
+      let account = await db.getUserByOpenId(openId);
+      if (account) {
+        try {
+          const outcome = await resolveLoginComeback({ id: account.id, role: account.role, isActive: account.isActive, deactivationReason: (account as any).deactivationReason ?? null });
+          if (outcome !== "none") {
+            console.log(`[OAuth] <${maskEmailForLog(email)}> ${outcome === "reactivated" ? "inativo voltou a entrar como utilizador" : "suspensão por inatividade passou a inativo"}`);
+            account = (await db.getUserByOpenId(openId)) ?? account;
+          }
+        } catch (err) {
+          console.warn("[OAuth] Falha a ver se a pessoa pode voltar:", String((err as Error)?.message ?? err).slice(0, 160));
+        }
+      }
+
       // Porta de acesso ÚNICA: conta desativada (ou sem linha em `users`, se a
       // BD estiver indisponível) → sem sessão e com a MESMA mensagem para
       // todos os casos. Nunca distinguir "desconhecido" de "desativado".
-      const account = await db.getUserByOpenId(openId);
       if (!account || account.isActive !== 1) {
         console.warn(
           `[OAuth] Acesso recusado <${maskEmailForLog(email)}> — ${account ? "conta desativada" : "conta não encontrada"}`,

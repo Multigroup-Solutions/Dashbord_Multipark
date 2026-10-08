@@ -37,6 +37,9 @@ export const DEACTIVATION_REASON_CODES = [
   "ficha_duplicada",
   "seguranca",
   "outro",
+  // 49c (Jorge, 8 out 2026): ficha de quem se candidatou pela app e ainda não
+  // foi aprovado. Só do sistema — nunca aparece no diálogo de desativar.
+  "candidato",
 ] as const;
 
 export type DeactivationReasonCode = (typeof DEACTIVATION_REASON_CODES)[number];
@@ -59,13 +62,87 @@ export const DEACTIVATION_REASON_LABELS: Record<DeactivationReasonCode, string> 
   ficha_duplicada: "Ficha duplicada (junta a outra)",
   seguranca: "Segurança (acesso comprometido)",
   outro: "Outro",
+  candidato: "Candidato — por aprovar",
 };
 
-/** Lista pronta a percorrer no `<Select>`. */
+/** Todos os códigos com etiqueta (inclui `candidato`, que é só do sistema). */
 export const DEACTIVATION_REASONS: ReadonlyArray<{ code: DeactivationReasonCode; label: string }> =
   DEACTIVATION_REASON_CODES.map((code) => ({ code, label: DEACTIVATION_REASON_LABELS[code] }));
 
-export const DEFAULT_DEACTIVATION_REASON: DeactivationReasonCode = "inatividade";
+// ─── 49c: DESATIVADO (fica bloqueado) vs INATIVO (pode voltar) ──────────────
+//
+// Jorge (8 out 2026): "os desativados que tirámos são mesmo para tirar → a
+// conta fica bloqueada. Os inativos são pessoas que deixaram de vir/de
+// responder mas que a qualquer momento podem querer voltar → a conta passa a
+// utilizador e entra para dizer 'voltei, tenho estes dias livres'."
+
+/** Ficha de candidato (antes de aprovado) — só o sistema a cria. */
+export const CANDIDATE_REASON = "candidato" as const;
+
+/** Motivos que BLOQUEIAM o login ("desativado — fica bloqueado"). */
+export const BLOCKING_DEACTIVATION_REASONS = [
+  "roubou", "despedido", "trabalha_mal", "comportamento", "faltas", "seguranca", "outro", "conta_duplicada", "ficha_duplicada",
+] as const satisfies readonly DeactivationReasonCode[];
+
+/** Motivos que NÃO bloqueiam ("inativo — pode voltar"); `candidato` incluído. */
+export const COMEBACK_DEACTIVATION_REASONS = [
+  "inatividade", "fora_do_pais", "pedido_proprio", "ausencia_prolongada", "fim_contrato", "mudanca_funcao", "documentos", "candidato",
+] as const satisfies readonly DeactivationReasonCode[];
+
+/** Os motivos que se escolhem à mão (todos menos `candidato`). */
+export type DialogDeactivationReasonCode = Exclude<DeactivationReasonCode, "candidato">;
+
+/** Os códigos que se podem escolher no diálogo e mandar pela API (sem `candidato`). */
+export const DIALOG_DEACTIVATION_REASON_CODES = DEACTIVATION_REASON_CODES.filter(
+  (c): c is DialogDeactivationReasonCode => c !== CANDIDATE_REASON,
+) as [DialogDeactivationReasonCode, ...DialogDeactivationReasonCode[]];
+
+export type DeactivationKind = "inativo" | "desativado" | "candidato";
+
+/**
+ * O que um motivo faz ao login. PURA. Sem motivo (fichas antigas) ou com um
+ * código desconhecido conta como DESATIVADO — na dúvida, bloqueia.
+ */
+export function deactivationKind(reason: string | null | undefined): DeactivationKind {
+  const r = String(reason ?? "").trim();
+  if (r === CANDIDATE_REASON) return "candidato";
+  if ((COMEBACK_DEACTIVATION_REASONS as readonly string[]).includes(r)) return "inativo";
+  return "desativado";
+}
+
+/** O motivo bloqueia o login? (sem motivo / desconhecido = sim). PURA. */
+export function deactivationBlocksLogin(reason: string | null | undefined): boolean {
+  return deactivationKind(reason) === "desativado";
+}
+
+/** Os dois grupos do diálogo de desativar (RH e Utilizadores), com o efeito de cada um. */
+export const DEACTIVATION_REASON_GROUPS: ReadonlyArray<{
+  kind: Exclude<DeactivationKind, "candidato">;
+  title: string;
+  effect: string;
+  reasons: ReadonlyArray<{ code: DialogDeactivationReasonCode; label: string }>;
+}> = [
+  {
+    kind: "inativo",
+    title: "Inativo — pode voltar",
+    effect: "Sai das listas, da escala e dos avisos, mas pode voltar a entrar como utilizador: vê a ficha, atualiza os dados e os dias livres e diz \"Voltei\". O RH decide se reativa.",
+    reasons: COMEBACK_DEACTIVATION_REASONS.filter((c): c is Exclude<typeof c, "candidato"> => c !== CANDIDATE_REASON).map((code) => ({ code, label: DEACTIVATION_REASON_LABELS[code] })),
+  },
+  {
+    kind: "desativado",
+    title: "Desativado — fica bloqueado",
+    effect: "A conta fica bloqueada: a pessoa não volta a entrar na app.",
+    reasons: BLOCKING_DEACTIVATION_REASONS.map((code) => ({ code, label: DEACTIVATION_REASON_LABELS[code] })),
+  },
+];
+
+/** O efeito de um motivo, numa frase (para o diálogo). PURA. */
+export function deactivationEffect(reason: string | null | undefined): string {
+  const kind = deactivationKind(reason);
+  return DEACTIVATION_REASON_GROUPS.find((g) => g.kind === kind)?.effect ?? DEACTIVATION_REASON_GROUPS[1].effect;
+}
+
+export const DEFAULT_DEACTIVATION_REASON = "inatividade" satisfies DeactivationReasonCode;
 export const OTHER_DEACTIVATION_REASON: DeactivationReasonCode = "outro";
 
 /** Limites partilhados pelas colunas, pela validação zod e pelos `maxLength` do formulário. */
@@ -126,6 +203,10 @@ export function resolveDeactivation(input: DeactivationInput = {}): ResolvedDeac
   const reason: DeactivationReasonCode = rawReason ? (rawReason as DeactivationReasonCode) : DEFAULT_DEACTIVATION_REASON;
   if (!isDeactivationReason(reason)) {
     throw new Error(`Motivo de desativação inválido: ${rawReason.slice(0, 48)}`);
+  }
+  // 49c: "Candidato" é só do sistema (a ficha de quem se candidatou pela app).
+  if (reason === CANDIDATE_REASON) {
+    throw new Error("\"Candidato\" não se escolhe à mão: é a ficha de quem se candidatou pela app.");
   }
 
   const otherText = (input.reasonOther ?? "").trim();

@@ -10,7 +10,7 @@ import { protectedProcedure, router } from "./_core/trpc";
 import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
-import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
+import { DEACTIVATION_NOTES_MAX, DIALOG_DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
 import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
@@ -215,14 +215,28 @@ export const rhRouter = router({
         : [];
       const warnings: string[] = [];
       const principal = logins.find((l) => l.principal && l.isActive) ?? null;
-      if (principal?.role === 'user' && ['extra', 'driver', 'senior_driver'].includes(String(e.position ?? ''))) {
+      const fichaActive = Number((person.employee as any).isActive) === 1;
+      if (fichaActive && principal?.role === 'user' && ['extra', 'driver', 'senior_driver'].includes(String(e.position ?? ''))) {
         warnings.push('A conta está como "Utilizador": abre a própria ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Se é extra, muda o papel para Extra em Utilizadores.');
+      }
+      // 49c: inativo/candidato entra como utilizador de propósito; ao reativar/aprovar passa ao papel do posto.
+      if (!fichaActive && principal?.role === 'user') {
+        warnings.push('Ficha não ativa: a pessoa entra como "Utilizador" (vê a ficha, atualiza os dados e os dias livres). Ao reativar ou aprovar, a conta passa sozinha ao papel do posto.');
       }
       return { fichaEmails, logins, candidates, canLink, national, warnings };
     }),
   // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
   me: protectedProcedure.query(async ({ ctx }) => {
     return getEmployeeByUserId(ctx.user.id);
+  }),
+  /**
+   * 49c: "Voltei, quero trabalhar" — quem está INATIVO (motivo que não
+   * bloqueia) avisa o RH (sino aos recrutadores/supervisores da cidade e à
+   * pessoa do recrutamento). Só a própria ficha; sem WhatsApp nem email.
+   */
+  comeback: protectedProcedure.mutation(async ({ ctx }) => {
+    const { requestComeback } = await import("./accountLink");
+    return requestComeback({ id: ctx.user.id, email: ctx.user.email ?? null });
   }),
 
   // ── RECRUTAMENTO (emails recebidos em recursos-humanos@) ───────────────────
@@ -467,11 +481,13 @@ export const rhRouter = router({
       // (também para admins: a ficha de um super_admin fica mascarada a um admin, como no detalhe)
       const roleByUserId = new Map<number, string>();
       for (const u of await getAllUsers()) roleByUserId.set(u.id, u.role);
+      // 49c: "Candidato" é um estado (não o motivo, que é sensível) — calcula-se antes de limpar.
+      const candidateIds = new Set((rows as any[]).filter((r) => !r.employee.isActive && r.employee.deactivationReason === "candidato").map((r) => r.employee.id));
       const visible = sanitizeEmployeeRows(viewer, rows as any[], (emp) => (emp.userId != null ? roleByUserId.get(emp.userId) : null));
       // Jorge (7 out 2026): estado da carta em cada ficha (etiqueta e filtro da lista).
       const { licenceStatusesOrNull } = await import("./rhDocuments");
       const licences = await licenceStatusesOrNull(visible.map((r: any) => r.employee));
-      return visible.map((r: any) => ({ ...r, licence: licences?.get(r.employee.id) ?? null }));
+      return visible.map((r: any) => ({ ...r, licence: licences?.get(r.employee.id) ?? null, candidate: candidateIds.has(r.employee.id) }));
     }),
 
   byId: protectedProcedure
@@ -749,6 +765,14 @@ export const rhRouter = router({
       let nibPending: string | null = null;
       if (nibAct.kind === "apply") await supersedePendingForEmployee(id, ctx.user.id);
       if (nibAct.kind === "request") nibPending = (await createBankChangeRequest(id, nibAct.value, ctx.user.id)).masked;
+      // 49c: o CANDIDATO gravou telefone/NIF iguais aos de outra ficha ou
+      // candidatura → "possível duplicado" para o RH decidir (nunca bloqueia).
+      if (isOwn(viewer, id) && (input.phone !== undefined || input.nif !== undefined)) {
+        try {
+          const { flagCandidateDuplicates } = await import("./accountLink");
+          await flagCandidateDuplicates(id);
+        } catch (err) { console.warn("[rh.update] possíveis duplicados:", String((err as any)?.message ?? err).slice(0, 160)); }
+      }
       // Fase 1: mudou o email → volta a tentar ligar ao utilizador com esse email
       if (input.email !== undefined || input.personalEmail !== undefined) {
         try {
@@ -861,8 +885,9 @@ export const rhRouter = router({
       id: z.number(),
       isActive: z.boolean(),
       // Mesmo contrato de `users.toggleActive`: motivo + notas opcionais, só
-      // lidos na desativação (ver shared/deactivationReasons.ts).
-      reason: z.enum(DEACTIVATION_REASON_CODES).optional(),
+      // lidos na desativação (ver shared/deactivationReasons.ts). "Candidato"
+      // é só do sistema (49c) — não se escolhe aqui.
+      reason: z.enum(DIALOG_DEACTIVATION_REASON_CODES).optional(),
       reasonOther: z.string().max(DEACTIVATION_REASON_OTHER_MAX).optional(),
       notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
     }))
@@ -878,47 +903,19 @@ export const rhRouter = router({
       if (!canManageEmployee(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.id))) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar o estado desta ficha." });
       }
-      const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
-      const meta = deactivation ? { ...deactivation, byUserId: ctx.user.id } : null;
-      // Desativar a ficha desativa a conta: vale a mesma guarda do ecrã Utilizadores
-      // (não te desativas a ti próprio nem tiras o último super_admin).
-      const userId = found.employee.userId;
-      if (!input.isActive && userId) {
-        const acct = await getUserById(userId);
-        const guard = acct ? superAdminGuard(ctx.user.id, acct, null, await countActiveSuperAdmins()) : null;
-        if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
-        if (acct && acct.id === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes desativar a tua própria ficha." });
-        // A conta desativa-se PRIMEIRO, dentro da tranca do último super_admin
-        // (atómico); se a guarda recusar, a ficha fica como estava.
-        if (acct) {
-          const locked = await guardedAccountChange(userId, (t, n) => superAdminGuard(ctx.user.id, t, null, n), (tx) => toggleUserActive(userId, false, meta, tx));
-          if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
-        }
+      // A cascata (conta principal + contas extra, guarda do último
+      // super_admin, a tua nunca) vive em server/employeeActivation.ts — a
+      // mesma do "Pôr inativo" das sugestões (49c).
+      const { activateEmployeeCascade, deactivateEmployeeCascade } = await import("./employeeActivation");
+      if (input.isActive) {
+        // 49c: aprovar um candidato / reativar quem voltou — sem perguntar
+        // readmissão; a conta "utilizador" passa ao papel do posto.
+        const r = await activateEmployeeCascade(ctx.user, input.id);
+        return { success: true, cascadedUser: r.cascadedUser, extraAccounts: 0, reasonLabel: null, promotedRole: r.promotedRole };
       }
-      // 41a: as contas EXTRA da pessoa também saem (a mesma guarda; a tua nunca)
-      let extraOff = 0;
-      if (!input.isActive) {
-        const { activeExtraAccounts } = await import("./personIdentity");
-        for (const xid of await activeExtraAccounts(input.id).catch(() => [] as number[])) {
-          if (xid === ctx.user.id || xid === userId) continue;
-          const locked = await guardedAccountChange(xid, (t, n) => superAdminGuard(ctx.user.id, t, null, n), (tx) => toggleUserActive(xid, false, meta, tx));
-          if (!locked) extraOff++;
-        }
-      }
-      await updateEmployee(input.id, {
-        isActive: input.isActive ? 1 : 0,
-        ...deactivationColumns(input.isActive, meta),
-      });
-      // O motivo segue para a conta: a ficha e o login contam a MESMA história.
-      if (userId && input.isActive) await toggleUserActive(userId, true, meta);
-      await logActivity({
-        userId: ctx.user.id,
-        action: input.isActive ? "activate" : "deactivate",
-        entity: "employee",
-        entityId: input.id,
-        details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${found.employee.fullName}${userId ? " + utilizador" : ""}${extraOff ? ` + ${extraOff} conta(s) extra` : ""}${deactivation ? ` — ${deactivation.summary}` : ""}`,
-      });
-      return { success: true, cascadedUser: !!userId, extraAccounts: extraOff, reasonLabel: deactivation?.label ?? null };
+      const deactivation = resolveDeactivationOrThrow(input);
+      const r = await deactivateEmployeeCascade(ctx.user, input.id, deactivation);
+      return { success: true, cascadedUser: r.cascadedUser, extraAccounts: r.extraAccounts, reasonLabel: deactivation.label, promotedRole: null };
     }),
 
   uploadPhoto: protectedProcedure
@@ -1362,6 +1359,10 @@ export const rhRouter = router({
         if (!empForPonto) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
         if (!empForPonto.employee.userId) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Este colaborador ainda não tem utilizador associado. Associa um utilizador na ficha do colaborador antes de picar o ponto." });
+        }
+        // 49c: quem está inativo (ou é candidato) entra para atualizar a ficha, não para picar o ponto.
+        if ((empForPonto.employee as any).isActive != null && Number((empForPonto.employee as any).isActive) === 0) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "A ficha está inativa: o RH tem de a reativar antes de picares o ponto." });
         }
         if (!empForPonto.employee.photoUrl) {
           throw new TRPCError({ code: "FORBIDDEN", message: "É preciso uma foto de perfil para picar o ponto. Adiciona a foto na ficha do colaborador." });
