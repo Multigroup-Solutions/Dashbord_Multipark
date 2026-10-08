@@ -63,7 +63,8 @@ describe("37a — pontos e ranking", () => {
   it("pontos = soma ponderada da aba; condutores pelos pontos da avaliação, excessos descontam", () => {
     const t = emptyTotals();
     t.callsAnswered = 10; t.emails = 5; t.created = 2; t.updated = 4;
-    expect(workPoints("office", t)).toBe(10 * 2 + 5 * 2 + 2 * 3 + 4 * 1);
+    // pesos de 8 out 2026 (1 ponto ≈ 5 min): atendida 0,5, email 1, reserva criada 2, alteração 0,5
+    expect(workPoints("office", t)).toBe(10 * 0.5 + 5 * 1 + 2 * 2 + 4 * 0.5);
     const d = emptyTotals();
     d.evalPoints = 120; d.overLimitDays = 2; d.occurrences = 3;
     expect(workPoints("drivers", d)).toBe(120 - 20 + 3);
@@ -168,7 +169,11 @@ describe("37a — juntar as fontes por pessoa", () => {
     // 37d: Pro (1) e avenças (2) noutra coluna
     expect(r.people[0].totals).toMatchObject({ partnerCharges: 3, proPlanCharges: 3, returnFlights: 1 });
     expect(r.people[0].series.callsAnswered).toHaveLength(7);
-    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1 + 3 * 1 + 1 * 2 + 2 * 3 + 3 * 3 + 3 * 3 + 1 * 1);
+    expect(r.people[0].totals.callMinutes).toBe(3);
+    // pesos de 8 out 2026: atendidas 3 × 0,5 + minutos 3 × 0,2 + emails 4 × 1 + criadas 2 × 2 + alteração 0,5 + CRM 3 × 0,5
+    // + perdidos 1 × 2 + fechos de parceiros 2 × 6 + cobranças de parceiros 3 × 1 + Pro/avenças 3 × 1 + voo de regresso 0,5
+    expect(r.people[0].points).toBe(32.6);
+    expect(r.people[0].points).toBeCloseTo(3 * 0.5 + 3 * 0.2 + 4 * 1 + 2 * 2 + 0.5 + 3 * 0.5 + 1 * 2 + 2 * 6 + 3 * 1 + 3 * 1 + 0.5, 6);
     expect(r.notes.join(" ")).toMatch(/Não deu para ler: .*correções de caixa/);
   });
 });
@@ -254,7 +259,7 @@ describe("37c — quem regista as cobranças de parceiros (vem da Multipark)", (
     for (const g of ["office", "supervision"] as const) {
       for (const k of ["partnerCharges", "proPlanCharges"] as const) {
         expect(GROUP_VIEW[g].columns).toContain(k);
-        expect(GROUP_VIEW[g].weights[k]).toBe(3);
+        expect(GROUP_VIEW[g].weights[k]).toBe(1); // 8 out 2026: 1 ponto ≈ 5 min (antes 3)
       }
     }
     expect(GROUP_VIEW.drivers.columns).not.toContain("partnerCharges");

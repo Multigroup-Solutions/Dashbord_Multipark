@@ -68,8 +68,10 @@ describe("49e — chamadas da central no desempenho (regra das internas)", () =>
     expect(mins.hourly).toBe(false);
     expect(GROUP_VIEW.office.columns).toEqual(expect.arrayContaining(["callsMissed", "callbacks", "callMinutes"]));
     expect(PERF_METRICS.callsMissed.bad).toBe(true);
-    // sem peso nos pontos (o Jorge decide)
-    for (const g of Object.values(GROUP_VIEW)) { expect(g.weights.callsMissed).toBeUndefined(); expect(g.weights.callMinutes).toBeUndefined(); }
+    // perdidas: aparecem mas não contam (a chamada toca em várias consolas); os minutos, desde 8 out 2026, 0,2 por minuto
+    for (const g of Object.values(GROUP_VIEW)) expect(g.weights.callsMissed).toBeUndefined();
+    for (const g of [GROUP_VIEW.office, GROUP_VIEW.supervision, GROUP_VIEW.teamleaders]) expect(g.weights.callMinutes).toBe(0.2);
+    expect(GROUP_VIEW.drivers.weights.callMinutes).toBeUndefined();
   });
 });
 

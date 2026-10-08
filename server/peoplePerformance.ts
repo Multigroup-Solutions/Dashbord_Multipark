@@ -38,12 +38,18 @@
  *    (employee_day_metrics.actionsByHour, 0590 — nada se relê da History) e a
  *    dashboard das MESMAS contagens por hora UTC, passadas a hora de Lisboa
  *    aqui (sem CONVERT_TZ, que precisa das tabelas de fusos do MySQL).
+ *
+ * Pesos (Jorge, 8 out 2026: "avança com os pesos do ranking"): os pontos usam
+ * os pesos EM VIGOR — as omissões do código com a definição
+ * `perf.rankWeights` por cima (shared → effectiveWeights /
+ * effectiveTeamWeights), lida sem cache a cada pedido; se a leitura falhar,
+ * valem as omissões. Os pontos calculam-se sempre na hora (nada guardado).
  */
 import { sql, type SQL } from "drizzle-orm";
 import {
-  addHours, addTotals, bucketOf, emptyHours, emptyTotals, GROUP_VIEW, groupOf, kmWithoutMoves, lisbonHourOfUtcHour, parseHours, perfRange, perHourOf, rosterGroup,
-  teamDayPoints, utcHourMs, workPoints, CALLBACK_WINDOW_HOURS,
-  type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals,
+  addHours, addTotals, bucketOf, effectiveTeamWeights, effectiveWeights, emptyHours, emptyTotals, GROUP_VIEW, groupOf, kmWithoutMoves, lisbonHourOfUtcHour, parseHours,
+  perfRange, perHourOf, rosterGroup, signedWeight, teamDayPoints, utcHourMs, workPoints, CALLBACK_WINDOW_HOURS, PERF_RANK_WEIGHTS_KEY,
+  type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals, type PerfWeights, type RankWeightOverrides, type TeamPointWeights,
 } from "../shared/peoplePerformance";
 import { applyAdjustments, emptyDayMetrics, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
 import { operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
@@ -180,7 +186,48 @@ export interface PerfResult {
    * `missingDays` = dias·pessoa do período com ações na Multipark mas sem as horas.
    */
   hourly: { since: string | null; missingDays: number };
+  /**
+   * Pesos (8 out 2026): os em vigor nesta aba e na equipa, e o que está
+   * gravado em `perf.rankWeights` (todas as abas) com o `updatedAt` — o
+   * editor do ecrã junta-lhe a aba e grava com esse `updatedAt`.
+   */
+  rankWeights: RankWeightsInfo;
   notes: string[];
+}
+
+export interface RankWeightsInfo {
+  weights: PerfWeights;
+  team: TeamPointWeights;
+  overrides: RankWeightOverrides;
+  updatedAt: string | null;
+  updatedByName: string | null;
+  /** false = não deu para ler o que está gravado (valem as omissões; não se grava por cima às cegas) */
+  readable: boolean;
+}
+
+/**
+ * Pesos em vigor: a definição lida sem cache (o ranking recarrega logo depois
+ * de gravar, em qualquer instância); se falhar, a cache de getSetting; se
+ * também falhar, as omissões do código. Nunca lança.
+ */
+export async function loadRankWeights(group: PerfGroup, notes: string[] = []): Promise<RankWeightsInfo> {
+  let overrides: RankWeightOverrides = {};
+  let meta: { updatedAt: string | null; updatedByName: string | null } = { updatedAt: null, updatedByName: null };
+  let readable = false;
+  try {
+    const { getSetting, getSettingFresh } = await import("./appSettings");
+    const row = await getSettingFresh(PERF_RANK_WEIGHTS_KEY);
+    if (row) {
+      readable = true;
+      overrides = row.value ?? {};
+      meta = { updatedAt: row.updatedAt, updatedByName: row.updatedByName };
+      if (row.invalid) notes.push("Os pesos gravados do ranking já não são válidos: valem as omissões até se gravarem outra vez (Editar pesos).");
+    } else {
+      overrides = (await getSetting(PERF_RANK_WEIGHTS_KEY)) ?? {};
+    }
+  } catch { /* omissões */ }
+  if (!readable) notes.push("Não deu para ler os pesos gravados do ranking agora: os pontos podem estar com as omissões.");
+  return { weights: effectiveWeights(group, overrides), team: effectiveTeamWeights(overrides), overrides, ...meta, readable };
 }
 
 interface RosterRow { day: string; city: string; shift: string; employeeId: number; isTL: boolean; hours: number; level: string | null; startHour: number; endHour: number; sentHomeHour: number | null }
@@ -192,6 +239,8 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   const r = perfRange(o.period, o.anchor);
   const range = operationalDayRangeUtc(r.from, r.to);
   const notes: string[] = [];
+  // 8 out 2026: os pesos em vigor (omissões + Editar pesos)
+  const rankWeights = await loadRankWeights(o.group, notes);
 
   // ── 42c: cidade do topo (a marca vale a cidade dela) ──
   const { scopedDayCities } = await import("./evaluationEngine");
@@ -436,7 +485,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   // ── 42c: a equipa do TL (o turno dele) e do supervisor (as cidades dele) ──
   if ((o.group === "teamleaders" || o.group === "supervision") && rosterIn.length && people.size) {
     try {
-      await addTeams({ db, group: o.group, period: o.period, roster: rosterIn, people, supCities, put, notes });
+      await addTeams({ db, group: o.group, period: o.period, roster: rosterIn, people, supCities, put, notes, teamWeights: rankWeights.team });
     } catch (err) {
       notes.push(`Não deu para calcular a equipa: ${String((err as Error)?.message ?? err).slice(0, 160)}.`);
     }
@@ -476,7 +525,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (!active && (!p.active || o.group === "drivers")) continue;
     addTotals(groupTotals, { ...totals, teamPeople: 0, maxSpeed: totals.maxSpeed });
     groupTeam += teamTotal;
-    const points = workPoints(o.group, totals);
+    const points = workPoints(o.group, totals, rankWeights.weights);
     const { inScope: _inScope, ...shown } = p;
     const hrs = hoursAcc.get(emp) ?? { all: emptyHours(), mp: emptyHours() };
     addHours(groupByHour, hrs.all);
@@ -501,7 +550,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
     people: out, groupTotals, groupSeries, speedLimit, cities: dayCities ?? null,
     groupByHour: groupByHour.map(round1), groupByHourMultipark: groupByHourMultipark.map(round1),
-    hourly: { since: hourlySince, missingDays: hourlyMissingDays }, notes };
+    hourly: { since: hourlySince, missingDays: hourlyMissingDays }, rankWeights, notes };
 }
 
 /**
@@ -512,12 +561,14 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
  * taxa do nível; o TL = salário ÷ dias de trabalho do mês), quem mexeu carros
  * sem GPS do Zello, horas paradas (GPS) e, no supervisor com dia ou semana, as
  * horas·pessoa a menos / a mais face à previsão do Extras Dia. Os pontos da
- * equipa são por pessoa (shared/peoplePerformance.ts → teamDayPoints).
+ * equipa são por pessoa (shared/peoplePerformance.ts → teamDayPoints), com os
+ * pesos em vigor (`teamWeights`).
  */
 async function addTeams(o: {
   db: any; group: "teamleaders" | "supervision"; period: PerfPeriod; roster: RosterRow[];
   people: Map<number, unknown>; supCities: Map<number, string[]>;
   put: (emp: number, day: string, part: Partial<PerfTotals>) => void; notes: string[];
+  teamWeights: TeamPointWeights;
 }): Promise<void> {
   const { db, roster } = o;
   const memberIds = Array.from(new Set(roster.map((a) => a.employeeId)));
@@ -586,7 +637,7 @@ async function addTeams(o: {
     const k = `${emp}|${day}`;
     const x = perDay.get(k) ?? { people: 0, actions: 0, cost: 0, noZello: 0, hoursStopped: 0, short: 0, over: 0, points: 0 };
     x.people += u.people; x.actions += u.actions; x.cost += u.cost; x.noZello += u.noZello; x.hoursStopped += u.hoursStopped; x.short += u.short; x.over += u.over;
-    x.points += teamDayPoints({ people: u.people, actions: u.actions, noZello: u.noZello, hoursStopped: u.hoursStopped });
+    x.points += teamDayPoints({ people: u.people, actions: u.actions, noZello: u.noZello, hoursStopped: u.hoursStopped }, o.teamWeights);
     perDay.set(k, x);
   };
   const byKey = new Map<string, RosterRow[]>();
@@ -644,5 +695,6 @@ async function addTeams(o: {
       teamShortHours: u.short, teamOverHours: u.over, teamPoints: Math.round(u.points * 10) / 10,
     });
   }
-  o.notes.push("Equipa: TL = o turno dele na escala (mesmo dia, cidade e turno); supervisor = todos os escalados das cidades da conta (dois supervisores da mesma cidade partilham a equipa). Pontos da equipa por dia, por pessoa: cada movimento +1, quem mexeu carros sem Zello −20, cada hora parada −2.");
+  const tw = o.teamWeights;
+  o.notes.push(`Equipa: TL = o turno dele na escala (mesmo dia, cidade e turno); supervisor = todos os escalados das cidades da conta (dois supervisores da mesma cidade partilham a equipa). Pontos da equipa por dia, por pessoa: cada movimento ${signedWeight(tw.actionsPerPerson)}, quem mexeu carros sem Zello ${signedWeight(tw.noZelloPerPerson)}, cada hora parada ${signedWeight(tw.stoppedHoursPerPerson)}.`);
 }

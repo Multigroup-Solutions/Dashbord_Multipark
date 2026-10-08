@@ -2,7 +2,7 @@
 modulo: criticas
 titulo: Condutores e agentes
 rotas: /pessoas/condutores-agentes
-palavras: km, quilómetros, km sem movimentos, pontos da equipa, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou, atividade por hora, horas do dia, a que horas trabalha, chamadas perdidas, chamadas devolvidas, minutos ao telefone, emails pessoais
+palavras: km, quilómetros, km sem movimentos, pontos da equipa, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou, atividade por hora, horas do dia, a que horas trabalha, chamadas perdidas, chamadas devolvidas, minutos ao telefone, emails pessoais, pesos, editar pesos, pesos do ranking, pontos do ranking, quanto vale cada coisa, repor omissões, 1 ponto 5 minutos
 ---
 # Condutores e agentes
 
@@ -35,7 +35,7 @@ Em **Pessoas → Condutores e agentes** (team leader e acima, nas tuas cidades).
     - **Cobranças de Pro e avenças**: os pagamentos de clientes Pro e de avenças que um agente marcou.
     - A Multipark guarda sempre quem as registou, e é por aí que se sabe de quem são.
 - No topo, os números do grupo e a **evolução**: por dia na semana e no mês, por mês no ano. A seguir, o **ranking**, por **pontos** ou por **pontos por hora**. O "por hora" só aparece com 4 h ou mais no período.
-  - **Pontos**: a soma ponderada do que a aba mede. Nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação, e os dias acima do limite descontam.
+  - **Pontos**: a soma ponderada do que a aba mede, com os pesos da tabela "Como se contam os pontos desta aba". Nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação, e os dias acima do limite descontam.
   - **Nota**: 100 para o melhor.
 - Na tabela, o **nome** abre a ficha no RH; o resto da linha abre o **detalhe** (a evolução dela e todos os números). Todos os cabeçalhos ordenam (um clique sobe, outro desce, o terceiro volta ao ranking).
 - **Cidade e marca**: o filtro do topo. Com uma cidade escolhida, cada dia conta na cidade onde a pessoa trabalhou (a escala ou a avaliação do dia). Quem tem a ficha noutra cidade entra só com os dias que fez nesta. A marca conta como a cidade dela.
@@ -46,12 +46,22 @@ Em **Pessoas → Condutores e agentes** (team leader e acima, nas tuas cidades).
   - **Supervisor**: todos os escalados das cidades da conta dele, team leaders incluídos. Dois supervisores da mesma cidade partilham a equipa.
   - Para cada um mostra: dias com equipa, pessoas·dia, movimentos da equipa (recolhas, entregas e movimentos), custo da equipa (como na Atividade do dia), quem mexeu carros sem o Zello ligado, horas paradas (GPS), movimentos por pessoa·dia e € por movimento.
   - No supervisor mostra também as **extras a menos / a mais**: as horas·pessoa abaixo ou acima da previsão do Extras Dia. Só aparece com **Dia** ou **Semana**, porque a previsão é lida ao vivo, dia a dia.
-  - **Pontos da equipa**: contam-se por dia e por pessoa da equipa, para uma equipa maior não ganhar só por ser maior. Cada movimento dá +1, cada pessoa que mexeu carros sem Zello −20 e cada hora parada −2, sempre a dividir pelo número de pessoas da equipa. Somam-se aos pontos do TL (que é avaliado também como condutor) e do supervisor.
-- **Como se contam os pontos desta aba**: a tabela de baixo mostra quanto vale cada coisa, os pontos da avaliação (recolha +3, movimento +2…) e os da equipa.
+  - **Pontos da equipa**: contam-se por dia e por pessoa da equipa, para uma equipa maior não ganhar só por ser maior. Por omissão, cada movimento dá +1, cada pessoa que mexeu carros sem Zello −20 e cada hora parada −2, sempre a dividir pelo número de pessoas da equipa (mudam-se em **Editar pesos**). Somam-se aos pontos do TL (que é avaliado também como condutor) e do supervisor.
+- **Como se contam os pontos desta aba**: a tabela de baixo mostra quanto vale cada coisa **agora** (com "alterado" ao lado do que já não é a omissão), os pontos da avaliação (recolha +3, movimento +2…) e os da equipa.
+  - A régua: **1 ponto ≈ 5 minutos de trabalho**, a mesma escala da avaliação (recolha ou entrega 3, movimento 2, levar ao parque 5). Por exemplo: reserva criada 2, email 1, chamada atendida 0,5 mais 0,2 por minuto ao telefone, fecho de mês de um parceiro 6, contagem de caixa 2. Horas e km não dão pontos.
+  - **Mudar os pesos** (sem esperar por uma atualização da app; só o super admin):
+    1. Abre a aba (ex.: **Back e front office**) e, em "Como se contam os pontos desta aba", carrega em **Editar pesos**.
+    2. Cada linha passa a um número: escreve o novo peso (ex.: 0,5). **0 = não conta**; um número negativo desconta. Ao lado fica a omissão do código.
+    3. Para pôr a contar uma coluna da aba que hoje não conta, escolhe-a em "Acrescentar uma coluna que não conta…" e carrega em **Acrescentar**.
+    4. Nas abas **Team leaders** e **Supervisão** mudas também os 3 pontos da equipa (valem para as duas abas).
+    5. Carrega em **Guardar**. O ranking recalcula logo, também para trás (os pontos calculam-se sempre na hora, não ficam guardados).
+    - **Repor omissões da aba** volta a pôr no ecrã os pesos do código dessa aba (e os da equipa); fica gravado quando carregas em **Guardar**. **Cancelar** sai sem gravar.
+    - Pesos entre −10 000 e 10 000, com uma casa decimal no máximo.
+  - Fica registado quem mudou e quando: por baixo do botão e em **Definições → Parâmetros → Histórico de alterações**. Também se mudam em Definições → Parâmetros → **Pessoas (desempenho)** → "Pesos do ranking do Desempenho" (em JSON, para quem preferir).
 - **Telefonemas da central**: contam quando a consola da Vodafone os regista na dashboard (Integrações → Central Vodafone), para quem atendeu ou ligou. As chamadas internas (com colegas do RH ou de extensões) não contam, exceto as do supervisor a ligar aos extras (a chamar o pessoal). As chamadas do WhatsApp contam sempre.
-  - **Perdidas**: recebidas que a pessoa não atendeu. Aparecem a vermelho, mas não tiram pontos.
+  - **Perdidas**: recebidas que a pessoa não atendeu. Aparecem a vermelho, mas não contam nos pontos (a chamada toca em várias consolas).
   - **Devolvidas**: a 1.ª chamada feita para um número (ou contacto) que teve uma perdida nas 24 h anteriores, de quem quer que fosse a perdida. Ligar outra vez à mesma pessoa já não conta como devolvida.
-  - **Minutos ao telefone**: o tempo das atendidas e das feitas (a consola só manda minutos inteiros), mais o das chamadas do WhatsApp. Não dá pontos.
+  - **Minutos ao telefone**: o tempo das atendidas e das feitas (a consola só manda minutos inteiros), mais o das chamadas do WhatsApp. Cada minuto vale 0,2 pontos (por omissão), além do que vale a chamada (0,5).
   - Os telemóveis One Net (Xsi) ainda não entram.
 - **Emails**: contam os enviados pela dashboard e os enviados da **caixa Gmail pessoal** de cada um (O meu email, com o Gmail ligado), cada email uma vez — um email mandado pela dashboard da própria caixa não conta a dobrar. Os enviados diretamente das caixas partilhadas (info@, reservas@…) fora da dashboard não têm autor e não contam.
 - **Atividade por hora do dia**: a que horas cada um trabalha mesmo, na hora de Lisboa.
