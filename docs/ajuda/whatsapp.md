@@ -2,7 +2,7 @@
 modulo: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
-palavras: whatsapp, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
+palavras: whatsapp, movido pela ia, geral, conversa nova, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
 ---
 # WhatsApp
 
@@ -50,7 +50,11 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 
 **Caixas por tema**
 - Cada conversa fica numa caixa: **Recursos Humanos**, **Reservas**, **Alterações**, **Cancelamentos**, **Serviços extra**, **Reclamações**, **Perdidos e Achados**, **Parcerias**, **Faturação**… ou **Geral** (ainda por separar). São as mesmas caixas do email.
-- Colaboradores e candidatos vão sozinhos para **Recursos Humanos**. Os clientes vão para a caixa que a **IA** escolhe pela conversa (com a triagem por IA ligada).
+- Colaboradores e candidatos vão sozinhos para **Recursos Humanos**.
+- **Conversa nova** (a 1.ª mensagem tem menos de 48 h e ainda não tem caixa): a **IA** usa a triagem (intenção) — sem uma segunda leitura — e põe-na na caixa do tema; o que não percebe fica na **Geral**. Interruptor **"IA: separar emails e WhatsApp pelas caixas"** (ligado por omissão; precisa também da triagem por IA).
+- **Conversa que já tem caixa** (ou antiga): fica onde está — a IA não a volta a mudar.
+- Na conversa aparece **"Movido pela IA → caixa (motivo · certeza)"**. Se estiver errado, muda a caixa no seletor: fica "corrigido à mão".
+- Alguém a pedir trabalho pela 1.ª vez entra também nos **Leads de Extras** (lead com o telefone e o nome do perfil). A IA nunca responde.
 - Escolhe **Todas as caixas** ou uma caixa no topo da lista. Na conversa, o seletor da caixa **move-a** — e a IA deixa de a mudar.
 - Só vês as caixas do teu módulo (ex.: RH, Reclamações) e, como sempre, a tua cidade e as conversas sem cidade.
 

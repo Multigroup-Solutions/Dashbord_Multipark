@@ -50,7 +50,7 @@ Página **Integrações** (menu Sistema): um cartão por ligação externa — G
   - **Silenciar** cala esta chamada; **Sem som neste browser** deixa só o aviso. **Avisar fora do separador** pede ao Windows para mostrar a chamada também com o dashboard escondido.
   - As chamadas que fazes pelos botões **Ligar** da dashboard não tocam: o aviso diz "a ligar".
   - Atender e desligar continua a ser **na consola**. Atender a partir da dashboard só com o Xsi, quando a Vodafone der o endereço certo.
-- **Desempenho**: as chamadas registadas pela consola contam para quem atendeu ou ligou. As internas (com colegas do RH ou de extensões) ficam registadas, mas não contam, exceto as do supervisor a ligar aos extras.
+- **Desempenho**: as chamadas registadas pela consola contam para quem atendeu ou ligou: atendidas, feitas, perdidas (recebidas não atendidas), devolvidas (a 1.ª chamada feita para um número com uma perdida nas 24 h anteriores) e os minutos ao telefone. As internas (com colegas do RH ou de extensões) ficam registadas, mas não contam, exceto as do supervisor a ligar aos extras.
 
 ### Xsi da One Net (todas as linhas, telemóveis incluídos)
 

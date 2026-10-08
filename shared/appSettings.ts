@@ -25,6 +25,7 @@ import { matchKey } from "./textKey";
 import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
 import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
+import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -368,8 +369,8 @@ export const SETTINGS = {
   "rh.suspendAfterDays": def({
     key: "rh.suspendAfterDays",
     group: "operacao",
-    label: "Sugerir suspender ao fim de (dias sem atividade)",
-    description: "Na lista de Utilizadores aparece um aviso com as pessoas de ficha ativa que não trabalham (agente da Multipark, ponto, extras) nem entram na app há mais destes dias, para as suspender (fica sem acesso até alguém desbloquear; não desativa nem solta nada). 0 = não sugerir.",
+    label: "Sugerir pôr inativo ao fim de (dias sem atividade)",
+    description: "Na lista de Utilizadores aparece um aviso com as pessoas de ficha ativa que não trabalham (agente da Multipark, ponto, extras) nem entram na app há mais destes dias, para as pôr INATIVAS (motivo \"Inatividade\"): saem das listas, da escala e dos avisos, mas podem voltar a entrar como utilizador e dizer \"Voltei\". A ficha, a conta e o agente ficam ligados. 0 = não sugerir.",
     schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(0, "0 desliga.").max(3650, "Máximo 3650 dias."),
     defaultValue: 180,
     wiring: "live",
@@ -444,6 +445,15 @@ export const SETTINGS = {
     description: "Pedidos por pessoa ao assistente e tamanho máximo da pergunta. JSON: {\"perMinute\": 20, \"perDay\": 200, \"maxInputChars\": 1000}. Acima do limite, a pessoa vê \"Muitos pedidos\" e o tempo de espera.",
     schema: aiAssistantLimitsSchema,
     defaultValue: { ...AI_ASSISTANT_DEFAULT_LIMITS },
+    wiring: "live",
+  }),
+  "ai.commsRouting": def({
+    key: "ai.commsRouting",
+    group: "ia",
+    label: "IA a separar emails e WhatsApp: limiar e teto",
+    description: "minConfidence: abaixo desta certeza (0 a 1) a IA \"não percebeu\" e a conversa vai para o info (no WhatsApp, a Geral). perRun: máximo de emails lidos pela IA em cada sincronização (o resto fica para o varrimento de 15 em 15 min). JSON: {\"minConfidence\": 0.7, \"perRun\": 10}.",
+    schema: commsRoutingSettingsSchema,
+    defaultValue: { ...COMMS_ROUTING_DEFAULTS },
     wiring: "live",
   }),
   "ai.priceOverridesEur": def({
@@ -780,6 +790,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "MARKETING_WEEKLY", label: "Email semanal de marketing", description: "À segunda a partir das 8h: gasto, reservas e ROAS da semana por marca e cidade, para os endereços em MARKETING_REPORT_EMAILS." },
   // D20 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
   { name: "COMPLAINT_CLIENT_REPLY_NOTIFY", label: "Reclamações: avisar o responsável quando o cliente responde", description: "Quando o cliente volta a escrever (email) numa reclamação, o responsável recebe no sino \"O cliente respondeu à reclamação #X\" — no máximo 1 aviso por reclamação a cada 30 min, só emails do próprio cliente com menos de 48 h. Sem responsável não avisa ninguém (o caso volta na mesma a \"Em análise\"). Desligado por omissão.", defaultEnabled: false },
+  // 49c (Jorge, 8 out 2026): escreve a gente de fora (código por email) → desligado por omissão.
+  { name: "ACCOUNT_LINK_EMAIL_CODE", label: "Liga a tua conta: código por email", description: "Quem entra com uma conta Google sem ficha e escreve o email ou o telefone com que se candidatou (ou trabalhou connosco) recebe um código de 6 algarismos no email que está nessa ficha/candidatura (pela recursos-humanos@; vale 10 minutos, 5 tentativas) e, ao escrevê-lo, a conta liga-se sozinha. Só quando dá UMA pessoa, extra ou condutor, e não desativada; o resto vai para o RH. Desligado: todos os pedidos vão para o RH (Leads de Extras → Candidaturas e ficha → Utilizador e permissões), com aviso no sino. Desligado por omissão.", defaultEnabled: false },
   // 19c: avisa gente → desligado por omissão. Sem ele, os pedidos aparecem na lista do RH e na ficha.
   { name: "RH_BANK_CHANGE_NOTIFY", label: "Aviso dos pedidos de IBAN", description: "Quando alguém pede para mudar o IBAN de uma ficha, avisa no sino o back office e o supervisor da cidade (e os administradores) para aprovar ou recusar. Desligado por omissão: os pedidos aparecem na mesma no RH (topo da lista) e na ficha.", defaultEnabled: false },
   // D45 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
@@ -850,7 +862,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação. Os dois só para quem edita as leads.", group: "ia" },
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
-  { name: "AI_MAIL_ROUTING", label: "IA: separar os emails pelas caixas", description: "Os emails novos que chegam a uma caixa geral (info@) vão para a caixa do tema: RH, Reservas, Alterações, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. Só move a conversa (quem vê essa caixa passa a vê-la); nunca responde. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
+  { name: "AI_MAIL_ROUTING", label: "IA: separar emails e WhatsApp pelas caixas", description: "Os emails novos que chegam às caixas partilhadas (info@, reservas@, recursos-humanos@…; nunca as pessoais) e as conversas NOVAS do WhatsApp vão sozinhos para a caixa do tema: RH, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. Ficam por ler. O que a IA não percebe (ou se falhar) vai para o info (no WhatsApp, a Geral). Uma resposta numa conversa que já tem caixa não muda. Recrutamento em 1.º contacto cria a lead e a candidatura. Nunca responde a ninguém; mover à mão corrige.", group: "ia" },
   { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
   { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
   { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },

@@ -45,6 +45,7 @@ import LeadScoreCell, { type LeadScoreRow } from "@/components/aiOps/LeadScoreCe
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CandidaturasSection } from "@/components/CandidaturasSection";
 import { RecruitmentSection } from "@/components/RecruitmentSection";
+import { RecruitmentAiIntake } from "@/components/RecruitmentAiIntake";
 import {
   EXTRA_LEADS_LIST_LIMIT,
   LEAD_SLA,
@@ -1203,7 +1204,7 @@ export default function ExtraLeadsPage() {
         </TabsList>
         <TabsContent value="leads" className="mt-4"><LeadsTab /></TabsContent>
         <TabsContent value="candidaturas" className="mt-4"><CandidaturasSection /></TabsContent>
-        <TabsContent value="recrutamento" className="mt-4"><RecruitmentSection /></TabsContent>
+        <TabsContent value="recrutamento" className="mt-4 space-y-4"><RecruitmentAiIntake /><RecruitmentSection /></TabsContent>
       </Tabs>
     </div>
   );

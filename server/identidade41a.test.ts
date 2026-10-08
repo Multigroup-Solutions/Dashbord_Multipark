@@ -219,10 +219,11 @@ describe("41a: sugerir suspender (não desativar)", () => {
     expect(pi).not.toMatch(/suspendEmployee[\s\S]{0,600}isActive = 0/);
   });
 
-  it("cliente: pop-up nos Utilizadores e Suspender na ficha", () => {
+  it("cliente: pop-up nos Utilizadores (49c: Pôr inativo) e Suspender na ficha", () => {
     const d = read("client/src/components/SuspendSuggestionsDialog.tsx");
     expect(d).toContain("trpc.identityLinks.suspendSuggestions.useQuery");
-    expect(d).toContain("Suspender não é desativar");
+    expect(d).toContain("Inativo não é desativado");
+    expect(d).toContain('why: "inatividade"');
     expect(d).toContain("Agora não");
     expect(read("client/src/pages/UsersPage.tsx")).toContain("<SuspendSuggestionsDialog enabled={canLinks} />");
     expect(read("client/src/pages/HRPage.tsx")).toContain('why: "manual"');
@@ -255,12 +256,15 @@ describe("41a: inativar não solta (conta ↔ ficha ↔ agente)", () => {
     expect(block).toContain("return { success: true, employees: followed }");
     // nada solta o agente nem a conta
     expect(block).not.toMatch(/multiparkAgentUserId\s*=\s*NULL|SET userId = NULL/);
+    // 49c: a cascata do rh.setActive passou para server/employeeActivation.ts (a mesma do "Pôr inativo").
     const rh = read("server/rhRouter.ts");
     const j = rh.indexOf("setActive: protectedProcedure");
     const set = rh.slice(j, rh.indexOf("uploadPhoto: protectedProcedure", j));
-    expect(set).toContain("activeExtraAccounts(input.id)");
-    expect(set).toContain("if (xid === ctx.user.id || xid === userId) continue;");
-    expect(set).toContain("superAdminGuard(ctx.user.id, t, null, n)");
+    expect(set).toContain("deactivateEmployeeCascade(ctx.user, input.id, deactivation)");
+    const cascade = read("server/employeeActivation.ts");
+    expect(cascade).toContain("activeExtraAccounts(employeeId)");
+    expect(cascade).toContain("if (xid === actor.id || xid === userId) continue;");
+    expect(cascade).toContain("superAdminGuard(actor.id, t, null, n)");
   });
 
   it("cruzamento: o agente de uma conta desativada continua 'com utilizador' e a conta não entra na lista de quem não tem agente", () => {

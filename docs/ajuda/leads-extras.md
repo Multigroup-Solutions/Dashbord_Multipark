@@ -2,7 +2,7 @@
 modulo: leads_extras
 titulo: Leads de Extras (leads, candidaturas do site e recrutamento)
 rotas: /extras-leads
-palavras: novo lead, cidade do lead, cidade obrigatória, sem cidade, tarefa da candidatura, candidatura de condutor, lixo, por tratar, prontas, pronta, repor, desfazer, não é candidatura, mailer-daemon, delivery status, cartões, lista, ver em cartões, ver em lista, foto, leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop
+palavras: entraram pela ia, entrou pela ia, candidato criado pela ia, primeiro contacto, info@, whatsapp, novo lead, cidade do lead, cidade obrigatória, sem cidade, tarefa da candidatura, candidatura de condutor, lixo, por tratar, prontas, pronta, repor, desfazer, não é candidatura, mailer-daemon, delivery status, cartões, lista, ver em cartões, ver em lista, foto, leads, lead, leads de extras, candidaturas, candidatura, candidaturas do site, be a driver, aprovar candidatura, rejeitar candidatura, recrutamento, recursos-humanos@, emails de recrutamento, seja motorista, convidar, funil, arquivar lead, arquivados, repor lead, reativar ficha, lembrete automático, stop, entradas pela app, pedido de ligação, diz ser, ligar conta, recusar pedido, possível duplicado, não é a mesma pessoa, quer voltar, reativar, candidatos, candidato por aprovar, sou novo
 ---
 # Leads de Extras
 
@@ -44,6 +44,13 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 - O filtro em cima mostra Novas, Prontas (vistas), Aprovadas, Rejeitadas ou Todas.
 
 **Recrutamento (email)**
+- **Entraram pela IA** (no topo, quando há): a IA separa sozinha os emails das caixas partilhadas e as conversas novas do WhatsApp pelas caixas (ver a ajuda da Comunicação). Quando reconhece alguém a **candidatar-se a trabalhar pela 1.ª vez** (sem ficha, lead nem candidatura com o mesmo email ou telefone):
+  - cria a **lead** (origem Email ou WhatsApp) com o que leu — nome, telefone, email, cidade, carta, disponibilidade — e a nota **"Entrou pela IA"**;
+  - cria a **candidatura** nas Candidaturas do site quando há email (por WhatsApp sem email fica só a lead);
+  - um email de candidatura que chegou ao info@ vai para a caixa do RH e entra também na lista de emails do Recrutamento (e o CV é lido, com o interruptor dos anexos ligado).
+  - Se a pessoa **já é colaborador**, não cria nada; se **já era candidato**, não duplica — só acrescenta "Voltou a escrever" à lead.
+  - A lista mostra os últimos 30 dias: quem, o que se fez (**Candidato criado**, **Já existia — ligado**, **Já é colaborador**), o motivo, **Abrir conversa** e o link para a lead. Se a IA errou, muda a caixa na conversa e, se for preciso, arquiva a lead (nada se apaga).
+  - A IA nunca escreve ao candidato.
 - Os emails que chegam à **recursos-humanos@**: abre, lê os anexos, escreve notas (ficam registadas) e responde. A resposta sai sempre da recursos-humanos@.
 - Três separadores: **Por tratar**, **Prontas** e **Lixo**, cada um com o número.
   - **Pronta** tira o email de Por tratar. **Responder** também o marca como pronto sozinho.
@@ -62,3 +69,10 @@ Tudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três
 Se uma lista não carregar aparece um aviso a vermelho com **Tentar de novo** (não quer dizer que esteja vazia).
 
 Antes as candidaturas estavam na **Disponibilidade** e o recrutamento no separador do **RH**; agora estão só aqui. Um link antigo para `/extras-leads?tab=candidaturas` ou `?tab=recrutamento` abre o separador certo.
+
+**Entradas pela app** (topo de **Candidaturas**, quem trata do recrutamento — 49c)
+- **Pedidos de ligação**: "Pedido de ligação: *email Google* diz ser *email/telefone*". Mostra a ficha ou a candidatura encontrada (só por email ou telefone, nunca pelo nome). **Ligar** liga a conta com as regras das Ligações (sem conta → principal; com a principal desativada → passa a principal; com a principal ativa → conta extra); se a ficha está inativa a conta fica como utilizador; se é uma ficha ativa de extra, a conta passa a extra. Uma ficha **desativada** (motivo que bloqueia) não se liga. Sem correspondência, escreve o n.º da ficha. **Recusar** fecha o pedido (fica registado). Avisa no sino os team leaders, supervisores e back office da cidade e a pessoa do recrutamento (Definições → "Responsável pelo recrutamento…").
+- **Possível duplicado**: o candidato gravou um telefone ou NIF que já está noutra ficha ou candidatura. Não bloqueia nada: abre as duas fichas; se for a mesma pessoa, junta-as em RH → Ligações → **Juntar fichas** e carrega em **Já tratei**; senão **Não é a mesma pessoa**.
+- **Quer voltar**: pessoas inativas que entraram e carregaram em "Voltei, quero trabalhar". **Reativar** põe a ficha ativa e a conta passa ao papel do posto (de utilizador a extra).
+- **Candidatos — por aprovar**: fichas criadas na app ("Sou novo"). A candidatura também aparece na lista abaixo (origem "[App]"); **Aprovar** (com a cidade) ativa a ficha sem perguntar readmissão e a conta passa a extra. Também se aprova na ficha (botão **Aprovar candidato**).
+

@@ -20,7 +20,7 @@ import {
   round2,
   type DayMetrics,
 } from "../shared/evaluationRules";
-import { addDays, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
+import { addDays, lisbonHourOf, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
 import { pontoShiftHours } from "../shared/pontoHours";
 import type { EvaluationIdentity } from "./evaluationIdentity";
 
@@ -190,6 +190,8 @@ export interface ActionCountRow {
   day: string;
   shift: "morning" | "night";
   changeType: string;
+  /** 49e: hora de relógio de Lisboa (0–23); sem ela as ações não entram nas contagens por hora. */
+  hour?: number;
   n: number;
   parkingMoves: number;
   lateDeliveries: number;
@@ -213,11 +215,12 @@ export function actionRowsToCounts(rows: ActionRow[]): ActionCountRow[] {
   const out = new Map<string, ActionCountRow>();
   rows.forEach((a, i) => {
     const slot = operationalSlotOf(a.actionTime);
+    const hour = lisbonHourOf(a.actionTime);
     const type = String(a.changeType ?? "?").toUpperCase();
-    const k = `${a.agentUserId ?? ""}|${a.agentName ?? ""}|${slot.day}|${slot.shift}|${type}`;
+    const k = `${a.agentUserId ?? ""}|${a.agentName ?? ""}|${slot.day}|${slot.shift}|${type}|${hour}`;
     let c = out.get(k);
     if (!c) {
-      c = { agentUserId: a.agentUserId, agentName: a.agentName, day: slot.day, shift: slot.shift, changeType: type, n: 0, parkingMoves: 0, lateDeliveries: 0 };
+      c = { agentUserId: a.agentUserId, agentName: a.agentName, day: slot.day, shift: slot.shift, changeType: type, hour, n: 0, parkingMoves: 0, lateDeliveries: 0 };
       out.set(k, c);
     }
     c.n += 1;
@@ -316,6 +319,8 @@ export interface EmployeeDayRow {
   level: string | null;
   hoursSource: "ponto" | "escala" | null;
   actionsByType: Record<string, number>;
+  /** 49e: ações na Multipark por hora de relógio de Lisboa (24 posições) — a atividade por hora do Desempenho. */
+  actionsByHour?: number[];
   metrics: DayMetrics;
 }
 
@@ -362,7 +367,7 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
       const emp = input.employees.get(employeeId);
       r = {
         employeeId, day, projectId: emp?.projectId ?? null, city: null, shift: null, isTeamLeader: false,
-        level: null, hoursSource: null, actionsByType: {}, metrics: emptyDayMetrics(),
+        level: null, hoursSource: null, actionsByType: {}, actionsByHour: new Array(24).fill(0), metrics: emptyDayMetrics(),
       };
       rows.set(k, r);
     }
@@ -383,6 +388,7 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
       ? (() => {
           const r = row(who.employeeId, a.day);
           r.actionsByType[type] = (r.actionsByType[type] ?? 0) + a.n;
+          if (r.actionsByHour && Number.isInteger(a.hour) && a.hour! >= 0 && a.hour! < 24) r.actionsByHour[a.hour!] += a.n;
           if (a.lateDeliveries > 0) { r.metrics.lateServices += a.lateDeliveries; r.metrics.delays += a.lateDeliveries; }
           return r.metrics;
         })()

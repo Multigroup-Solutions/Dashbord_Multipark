@@ -12,7 +12,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -20,15 +22,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Loader2, UserX } from "lucide-react";
 import {
   DEACTIVATION_NOTES_MAX,
-  DEACTIVATION_REASONS,
+  DEACTIVATION_REASON_GROUPS,
   DEACTIVATION_REASON_OTHER_MAX,
   DEFAULT_DEACTIVATION_REASON,
   OTHER_DEACTIVATION_REASON,
-  type DeactivationReasonCode,
+  deactivationEffect,
+  deactivationKind,
+  type DialogDeactivationReasonCode,
 } from "@shared/deactivationReasons";
 
 export type DeactivationSubmitValues = {
-  reason: DeactivationReasonCode;
+  reason: DialogDeactivationReasonCode;
   /** Só preenchido quando o motivo é "Outro". */
   reasonOther?: string;
   notes?: string;
@@ -63,7 +67,7 @@ export function DeactivationDialog({
   onOpenChange: (open: boolean) => void;
   onConfirm: (values: DeactivationSubmitValues) => void;
 }) {
-  const [reason, setReason] = useState<DeactivationReasonCode>(DEFAULT_DEACTIVATION_REASON);
+  const [reason, setReason] = useState<DialogDeactivationReasonCode>(DEFAULT_DEACTIVATION_REASON);
   const [reasonOther, setReasonOther] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -109,18 +113,33 @@ export function DeactivationDialog({
 
           <div className="space-y-1.5">
             <Label htmlFor="deactivation-reason">Motivo (opcional)</Label>
-            <Select value={reason} onValueChange={(v) => setReason(v as DeactivationReasonCode)}>
+            {/* 49c (Jorge, 8 out 2026): inativo pode voltar; desativado fica bloqueado. */}
+            <Select value={reason} onValueChange={(v) => setReason(v as DialogDeactivationReasonCode)}>
               <SelectTrigger id="deactivation-reason">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {DEACTIVATION_REASONS.map((r) => (
-                  <SelectItem key={r.code} value={r.code}>
-                    {r.label}
-                  </SelectItem>
+                {DEACTIVATION_REASON_GROUPS.map((g) => (
+                  <SelectGroup key={g.kind}>
+                    <SelectLabel className={g.kind === "desativado" ? "text-red-700 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}>{g.title}</SelectLabel>
+                    {g.reasons.map((r) => (
+                      <SelectItem key={r.code} value={r.code}>
+                        {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 ))}
               </SelectContent>
             </Select>
+            <p
+              role="status"
+              className={`text-xs rounded-md border p-2 ${deactivationKind(reason) === "desativado"
+                ? "border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100"
+                : "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100"}`}
+            >
+              <strong>{deactivationKind(reason) === "desativado" ? "Desativado — fica bloqueado." : "Inativo — pode voltar."}</strong>{" "}
+              {deactivationEffect(reason)}
+            </p>
             <p className="text-[11px] text-muted-foreground">
               Por defeito fica “Inatividade”.
             </p>

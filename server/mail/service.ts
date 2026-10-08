@@ -20,6 +20,7 @@
  */
 import { sql } from "drizzle-orm";
 import { aliasPipeline, canSeeMailbox, configuredPipelines, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
+import { emailRoutingEligible } from "../../shared/commsRouting";
 import type { InboundAlias } from "../emailParse";
 import { gmailThreadIdToImap } from "./parse";
 import { syncAccount, type AccountSyncResult, type StoredEvent } from "./sync";
@@ -44,6 +45,8 @@ export interface MailSyncReport {
   errors: string[];
   aiTriaged?: number;
   watchRenewed?: number;
+  /** Emails novos que a IA leu para separar pelas caixas nesta corrida (teto em "ai.commsRouting"). */
+  aiRouted?: number;
 }
 
 /** Só emails recebidos nestes últimos dias criam registos (a importação inicial de 90 d não ressuscita casos antigos). */
@@ -190,17 +193,21 @@ async function notifyAliasOwner(e: StoredEvent, mailbox: MailboxConfig, alias: M
   return true;
 }
 
-export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains: Record<string, string[]>) {
+export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains: Record<string, string[]>, opts: { deadlineAt?: number } = {}) {
   const windowMs = MAIL_PIPELINE_WINDOW_DAYS * 86_400_000;
+  // Teto de emails lidos pela IA para separar, nesta corrida (o resto fica para o varrimento ai-comms).
+  const routingRun: { left: number; deadlineAt?: number; loaded?: boolean } = { left: 0, deadlineAt: opts.deadlineAt };
   return async (e: StoredEvent) => {
     const p = e.parsed;
     const mailbox = e.classification.mailboxKey ? e.account.mailboxes.find((m) => m.key === e.classification.mailboxKey) ?? null : null;
     const alias = e.classification.alias ?? null;
     let routed: { targetModule: string; targetId?: number; existing?: true } | null = null;
+    let pipelineUsed: string | null = null;
     // 1) Pipeline temático — só emails RECEBIDOS (de pessoas), recentes, de caixas partilhadas.
     if (!p.outbound && !e.classification.personal && !p.systemMail) {
       const accountPipelines = [...configuredPipelines(e.account.mailboxes).keys()];
       const pipeline = aliasPipeline(mailbox, alias, p.subject, accountPipelines);
+      pipelineUsed = pipeline;
       const recent = p.sentAt ? Date.now() - Date.parse(p.sentAt.replace(" ", "T") + "Z") <= windowMs : false;
       if (pipeline && recent) {
         try {
@@ -243,11 +250,28 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     const createdCase = !!routed && ["complaint", "lostfound", "review", "incident", "incident_dup"].includes(routed.targetModule);
     const automated = !!(await (await db()).execute(sql`SELECT automated FROM mail_messages WHERE id = ${e.result.messageId ?? 0}`).then((r) => Number(rowsOf(r)[0]?.automated ?? 0)));
     const fresh = !p.outbound && !automated && (e.result.newThread || e.result.reopened);
-    // 2b) Caixa geral (info@): a IA separa a conversa NOVA pela caixa do tema
-    // (17f, interruptor AI_MAIL_ROUTING). O aviso vai a quem vê a caixa nova.
+    // 2b) Caixas PARTILHADAS (Jorge, 8 out 2026): a IA lê a mensagem que ABRE
+    // a conversa e põe-na na caixa do tema, por ler; o que não percebe vai para
+    // o info (interruptor AI_MAIL_ROUTING; regras em shared/commsRouting.ts).
+    // Respostas num fio que já está numa caixa ficam onde estão. O aviso vai a
+    // quem vê a caixa nova.
     let noticeBox: MailboxConfig | null = mailbox;
-    if (fresh && e.result.newThread && mailbox?.aiRoute && !createdCase && !e.classification.personal) {
-      const target = await routeNewThreadByAi(e.result.threadId, mailbox, { subject: p.subject, text: p.text || p.snippet || "" }).catch(() => null);
+    const routable = !!mailbox && !!e.result.messageId && emailRoutingEligible({
+      outbound: p.outbound, personal: e.classification.personal, systemMail: !!p.systemMail, automated, newThread: e.result.newThread,
+      mailboxKey: mailbox.key, pipeline: pipelineUsed, createdCase,
+    });
+    if (routable) {
+      if (!routingRun.loaded) {
+        routingRun.loaded = true;
+        try {
+          const { getSetting } = await import("../appSettings");
+          const { commsRoutingSettings } = await import("../../shared/commsRouting");
+          routingRun.left = commsRoutingSettings(await getSetting("ai.commsRouting")).perRun;
+        } catch { routingRun.left = 10; }
+      }
+      const before = routingRun.left;
+      const target = await routeNewThreadByAi(e.result.threadId, e.result.messageId!, mailbox!, p, routingRun).catch(() => null);
+      if (routingRun.left < before) report.aiRouted = (report.aiRouted ?? 0) + 1;
       if (target) noticeBox = target;
     }
     let ownerNotified = false;
@@ -261,36 +285,30 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
 }
 
 /**
- * IA (lite): para que caixa do tema vai esta conversa nova de uma caixa geral?
- * Move-a (mailboxKey + routedFromKey/routedBy) e devolve a caixa nova; null =
- * fica (IA desligada, sem resposta clara, erro). Nunca responde ao cliente.
+ * IA (lite): para que caixa do tema vai esta conversa nova de uma caixa
+ * partilhada? (server/commsRouting.ts). Devolve a caixa nova quando a moveu;
+ * null = ficou (interruptor desligado, já lida, sem teto nesta corrida, ou a
+ * IA disse a caixa onde já está). Nunca responde ao cliente.
  */
-export async function routeNewThreadByAi(threadId: number, from: MailboxConfig, mail: { subject: string; text: string }): Promise<MailboxRow | null> {
-  const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
-  if (!(await aiFeatureAvailableFresh("mail_routing"))) return null;
+export async function routeNewThreadByAi(
+  threadId: number,
+  messageId: number,
+  from: MailboxConfig,
+  p: Pick<StoredEvent["parsed"], "subject" | "text" | "snippet" | "fromName" | "fromEmail" | "attachments">,
+  run: { left: number; deadlineAt?: number },
+): Promise<MailboxRow | null> {
+  const { routeEmailMessage } = await import("../commsRouting");
+  const d = await db();
+  const t = rowsOf(await d.execute(sql`SELECT projectId FROM mail_threads WHERE id = ${threadId} LIMIT 1`))[0];
+  const res = await routeEmailMessage({
+    threadId, messageId, fromBoxKey: from.key, subject: p.subject ?? "", text: p.text || p.snippet || "",
+    fromName: p.fromName ?? null, fromEmail: p.fromEmail ?? null,
+    attachmentNames: (p.attachments ?? []).filter((a) => !a.inline).map((a) => a.filename).filter(Boolean),
+    projectId: t?.projectId != null ? Number(t.projectId) : null,
+  }, undefined, run);
+  if (res.status !== "moved") return null;
   const { listMailboxes } = await import("./store");
-  const all = await listMailboxes();
-  const { availableTargets, parseRoutingAnswer } = await import("../../shared/commsBoxes");
-  const targets = availableTargets(all).filter((t) => t.key !== from.key);
-  if (!targets.length) return null;
-  const { runAi } = await import("../_core/ai/run");
-  const { redactPii } = await import("../_core/ai/pii");
-  const { MAIL_ROUTING_SYSTEM, mailRoutingInput, mailRoutingSchema } = await import("../_core/ai/prompts/comms");
-  const red = redactPii(`${mail.subject}\n${mail.text}`.slice(0, 3000));
-  try {
-    const r = await runAi({
-      feature: "mail_routing", system: MAIL_ROUTING_SYSTEM, schema: mailRoutingSchema,
-      input: mailRoutingInput({ targets, subject: "", body: red.text }),
-      maxTokens: 400, timeoutMs: 15_000, retries: 1, entity: "mail_thread", entityId: threadId,
-    });
-    const key = parseRoutingAnswer((r.output as any)?.box, targets);
-    if (!key) return null;
-    const moved = await moveThreadToBox(threadId, key, "ai");
-    return moved ? all.find((b) => b.key === key) ?? null : null;
-  } catch (err: any) {
-    console.warn("[mail] separar pela IA falhou:", threadId, String(err?.message ?? err).slice(0, 160));
-    return null;
-  }
+  return (await listMailboxes()).find((b) => b.key === res.boxKey) ?? null;
 }
 
 /**
@@ -443,7 +461,7 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
     try {
       const api = await gmailApiForAccount(acc.key);
       const r = await syncAccount(api, dbSyncStore, acc, {
-        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, workspaceDomains, autoSenders, onStored: makeOnStored(api, report, brandDomains),
+        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, workspaceDomains, autoSenders, onStored: makeOnStored(api, report, brandDomains, { deadlineAt: opts.deadlineAt }),
       });
       report.stored += r.stored;
       if (r.partial) report.done = false;

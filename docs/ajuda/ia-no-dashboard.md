@@ -29,7 +29,9 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 5. **Críticas:** rascunho automático para as críticas novas, que fica por aprovar.
 6. **Reclamações:** sugestões de tipo, prioridade, SLA e reserva, com um rascunho de resposta.
    - Com confiança alta, preenche sozinha os campos vazios. Há sempre **Desfazer**.
-7. **WhatsApp:** etiqueta a intenção e a urgência. A IA separa as conversas novas pelas caixas; as conversas com histórico ficam onde estão.
+7. **WhatsApp:** etiqueta a intenção e a urgência; uma conversa **nova** vai para a caixa do tema (a que já tem caixa fica onde está).
+   - **Email:** os emails novos das caixas partilhadas vão para a caixa do tema, por ler; o que a IA não percebe vai para o info. Na conversa lê-se "Movido pela IA → caixa (motivo)".
+   - Alguém a candidatar-se pela 1.ª vez (email ou WhatsApp) entra nos **Leads de Extras** como lead (e candidatura, se houver email), com a nota "Entrou pela IA".
 8. **Perdidos & Achados:** procura possíveis correspondências.
 9. **Disponibilidade dos extras:** quando a resposta não é clara, a IA interpreta-a.
    - Com confiança alta, marca a disponibilidade e responde por WhatsApp.
@@ -41,8 +43,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - ler os documentos do RH para preencher a ficha (o IBAN fica sempre como pedido ao RH, exceto para quem o pode mudar na hora);
 - ler os CV dos emails do RH;
   - estas duas mandam o ficheiro inteiro, por isso **só correm com a IA em Vertex AI na UE**. Sem isso não correm, mesmo ligadas. Em **Definições → Automações**, ao lado do interruptor, aparece "Só corre com a IA em Vertex AI na UE (hoje: …)". O sítio onde a IA está vê-se também no cartão **IA — custo do mês** ("Gemini (Vertex AI)" ou "Gemini");
-- juntar fichas de clientes;
-- separar os emails pelas caixas.
+- juntar fichas de clientes.
 
 **Dados pessoais**
 - Nos textos, os emails, os telefones, o NIF, o IBAN e as matrículas são tapados antes de irem para a IA.
