@@ -197,7 +197,7 @@ async function activeFicha(db: any, id: number | null): Promise<number | null> {
   return null;
 }
 
-async function resolveFicha(db: any, a: ProAccountOut, current: number | null): Promise<{ clientId: number | null; created: boolean }> {
+export async function resolveFicha(db: any, a: ProAccountOut, current: number | null): Promise<{ clientId: number | null; created: boolean }> {
   // já ligada (segue fusões)
   const cur = await activeFicha(db, current);
   if (cur) return { clientId: cur, created: false };
@@ -221,15 +221,19 @@ async function resolveFicha(db: any, a: ProAccountOut, current: number | null): 
       if (agrees) return { clientId: Number(h.id), created: false };
     }
   }
-  // cria a ficha (idempotente pela syncKey)
+  // cria a ficha (idempotente pela syncKey). INSERT IGNORE e não ON DUPLICATE
+  // KEY UPDATE id = LAST_INSERT_ID(id): com o FOUND_ROWS do mysql2 (ligado por
+  // omissão) um duplicado que não muda nada também dá 1 linha afetada — a ficha
+  // que já existia (corrida ao mesmo tempo, ou ligação perdida) contava como
+  // "criada" e recebia o email e o telefone da conta como principais.
+  // INSERT IGNORE num duplicado dá 0, com ou sem FOUND_ROWS; o id lê-se de volta.
   const kind = looksLikeCompany(a.name, a.taxName) ? "company" : "person";
-  const syncKey = `pro:${a.mpClientId}`;
-  const ins: any = await db.execute(sql`INSERT INTO crm_clients (syncKey, kind, source, displayName, primaryEmail, primaryPhone, nif, taxName, isPro, noEmail, lastSeenAt)
-    VALUES (${cut(syncKey, 160)}, ${kind}, 'multipark_pro', ${cut(a.name, 255) ?? "Cliente Pro"}, ${cut(email || null, 320)}, ${cut(phone || null, 32)}, ${cut(nif || null, 16)}, ${cut(a.taxName, 255)}, ${a.active ? 1 : 0}, ${email ? 0 : 1}, UTC_TIMESTAMP())
-    ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`);
-  const raw = insertId(ins);
-  // 1 = nova; 2 = já existia (ON DUPLICATE) — nesse caso pode ter sido junta a outra
+  const syncKey = cut(`pro:${a.mpClientId}`, 160);
+  const ins: any = await db.execute(sql`INSERT IGNORE INTO crm_clients (syncKey, kind, source, displayName, primaryEmail, primaryPhone, nif, taxName, isPro, noEmail, lastSeenAt)
+    VALUES (${syncKey}, ${kind}, 'multipark_pro', ${cut(a.name, 255) ?? "Cliente Pro"}, ${cut(email || null, 320)}, ${cut(phone || null, 32)}, ${cut(nif || null, 16)}, ${cut(a.taxName, 255)}, ${a.active ? 1 : 0}, ${email ? 0 : 1}, UTC_TIMESTAMP())`);
   const created = Number((Array.isArray(ins) ? ins[0] : ins)?.affectedRows ?? 0) === 1;
+  // já existia: pode ter sido junta a outra (activeFicha segue as fusões)
+  const raw = created ? insertId(ins) : Number(rowsOf(await db.execute(sql`SELECT id FROM crm_clients WHERE syncKey = ${syncKey} LIMIT 1`))[0]?.id ?? 0);
   const id = await activeFicha(db, raw || null);
   if (!id) return { clientId: null, created: false };
   if (created) {

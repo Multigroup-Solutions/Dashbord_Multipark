@@ -2084,7 +2084,11 @@ export async function createApiKey(data: Omit<InsertApiKey, "id" | "createdAt">)
   return Number(result[0].insertId);
 }
 
-/** Ativar/desativar (nunca numa revogada). Devolve false se não mudou nada. */
+/**
+ * Ativar/desativar (nunca numa revogada). Devolve false se a chave não existe
+ * ou foi revogada — gravar o estado que já tinha conta como encontrada (o
+ * mysql2 liga o FOUND_ROWS: as linhas afetadas são as que o WHERE encontra).
+ */
 export async function toggleApiKey(id: number, active: boolean) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
