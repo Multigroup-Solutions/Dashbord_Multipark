@@ -439,6 +439,11 @@ function AutomationsCard() {
                 Agora: <b>{f.effective ? "ligado" : "desligado"}</b> <span className="text-muted-foreground">({flagSource(f, f.followsFlag ? q.data?.find((x) => x.name === f.followsFlag)?.label : undefined)})</span>
                 {f.superAdminOnly && <span className="text-muted-foreground"> · só o super admin muda</span>}
               </div>
+              {f.euVertex && (
+                <p className={`text-xs mt-1 ${f.euVertex.ok ? "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`}>
+                  {f.euVertex.ok ? <CheckCircle2 className="inline h-3 w-3 mr-1" /> : <AlertTriangle className="inline h-3 w-3 mr-1" />}{f.euVertex.text}
+                </p>
+              )}
               <div className="text-[11px] text-muted-foreground mt-0.5 font-mono break-all">
                 {f.name} · variável: {f.envValue == null ? "—" : f.envValue ? "ligado" : "desligado"}{!f.defaultEnabled && " · desligado por omissão"}
                 {f.override != null && <> · <span className="text-primary font-semibold">definido aqui</span>{f.updatedByName ? ` por ${f.updatedByName}` : ""}{f.updatedAt ? ` em ${fmtPTDateTime(f.updatedAt)}` : ""}</>}

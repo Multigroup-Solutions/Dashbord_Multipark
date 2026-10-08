@@ -1,8 +1,10 @@
 /**
  * Passagem de turno — automação à volta da gravação:
- *  - depois de gravar: fotografia do resumo automático, resumo por IA (se
- *    houver LLM), pendentes resolvidos na passagem anterior, notificação e
- *    EMAIL ao(s) team leader(s) do turno seguinte (idempotente por versão);
+ *  - depois de gravar: fotografia do resumo automático, resumo por IA SÓ ao
+ *    entregar (1.ª gravação; Jorge, 8 out 2026 — as edições não chamam a IA,
+ *    o resumo fica "desatualizado" até alguém carregar em "Resumir agora"),
+ *    pendentes resolvidos na passagem anterior, notificação e EMAIL ao(s)
+ *    team leader(s) do turno seguinte (idempotente por versão);
  *  - "Recebi" do team leader que entra;
  *  - lembretes do cron horário (~15:30 / ~03:30) quando falta a passagem;
  *  - cumprimento para o "Resumo do dia".
@@ -31,6 +33,9 @@ import {
   SHIFT_LABELS,
   buildHandoverEmail,
   cashDifference,
+  currentAiSummary,
+  handoverAiOnSave,
+  legacyAiSummaryVersion,
   citiesNeedingReminder,
   complianceStatus,
   compliancePercent,
@@ -147,22 +152,45 @@ export async function generateAiSummary(
   }
 }
 
+/** Grava o resumo IA com a versão para a qual foi feito (sem a coluna 0600, só o texto). */
+async function writeAiSummary(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, id: number, text: string, version: number): Promise<void> {
+  try {
+    await db.execute(buildHandoverMetaUpdate(id, { aiSummary: text, aiSummaryVersion: version })!);
+  } catch (err: any) {
+    if ((err?.code ?? err?.cause?.code) !== "ER_BAD_FIELD_ERROR") throw err;
+    await db.execute(buildHandoverMetaUpdate(id, { aiSummary: text })!);
+  }
+}
+
+export type SummarizeResult =
+  | { ok: true; id: number; aiSummary: string; version: number }
+  | { ok: false; reason: "not_saved" | "locked" | "empty" };
+
 /**
- * Guarda o resumo IA pedido no ecrã, se a passagem já existir — com a mesma
- * regra das 24h da gravação (passado esse prazo só quem pode editar passagens
- * antigas). Devolve o id gravado (null = não gravou).
+ * "Resumir agora" (quem pode editar): resume a passagem GRAVADA — as notas e
+ * os pendentes que estão na BD, não o que está por gravar no ecrã — e guarda
+ * o resumo com a versão. Antes de chamar a IA (paga) vê se a passagem existe e
+ * se ainda se pode mexer (regra das 24h da gravação). Erros da IA sobem
+ * (AiError) para a UI mostrar a mensagem genérica.
  */
-export async function saveHandoverAiSummary(key: { handoverDate: string; shift: HandoverShift; city: HandoverCity }, text: string, opts: { canEditOld: boolean }): Promise<number | null> {
+export async function summarizeSavedHandover(
+  key: { handoverDate: string; shift: HandoverShift; city: HandoverCity },
+  opts: { canEditOld: boolean; userId: number | null },
+): Promise<SummarizeResult> {
   const db = await getDb();
-  if (!db) return null;
+  if (!db) return { ok: false, reason: "not_saved" };
   const row = rowsOf(await db.execute(buildHandoverCurrent(key)))[0];
-  if (!row) return null;
+  if (!row) return { ok: false, reason: "not_saved" };
   const { HANDOVER_EDIT_WINDOW_MINUTES } = await import("../shared/shiftHandover");
-  if (!opts.canEditOld && Number(row.ageMinutes ?? 0) > HANDOVER_EDIT_WINDOW_MINUTES) return null;
-  const q = buildHandoverMetaUpdate(Number(row.id), { aiSummary: text });
-  if (!q) return null;
-  await db.execute(q);
-  return Number(row.id);
+  if (!opts.canEditOld && Number(row.ageMinutes ?? 0) > HANDOVER_EDIT_WINDOW_MINUTES) return { ok: false, reason: "locked" };
+  const ref: ShiftRef = { date: key.handoverDate, shift: key.shift };
+  const draft = await buildHandoverDraft({ date: ref.date, shift: ref.shift, city: key.city }).catch(() => null);
+  const text = await generateAiSummary(draft, { city: key.city, shift: ref, notes: row.notes ?? null, openItems: parseOpenItems(row.openItems) }, { throwOnError: true, userId: opts.userId });
+  if (!text) return { ok: false, reason: "empty" };
+  const id = Number(row.id);
+  const version = Number(row.version ?? 1);
+  await writeAiSummary(db, id, text, version);
+  return { ok: true, id, aiSummary: text, version };
 }
 
 // ─── Depois de gravar ───────────────────────────────────────────────────────
@@ -209,13 +237,25 @@ export async function afterHandoverSave(input: {
     }
   } catch (err: any) { console.warn("[handover] pendentes anteriores:", String(err?.message ?? err).slice(0, 200)); }
 
-  // 2. Resumo automático + IA (nunca bloqueia a gravação)
-  const ai = await generateAiSummary(draft, { city: input.key.city, shift: ref, notes: row.notes ?? null, openItems });
+  // 2. Resumo automático + IA (nunca bloqueia a gravação). A IA só na ENTREGA
+  //    (1.ª gravação): editar depois deixa o resumo desatualizado até alguém
+  //    carregar em "Resumir agora" (Jorge, 8 out 2026 — cada chamada é paga).
+  const ai = handoverAiOnSave(input.mode)
+    ? await generateAiSummary(draft, { city: input.key.city, shift: ref, notes: row.notes ?? null, openItems }, { userId: input.userId })
+    : null;
   out.aiSummary = !!ai;
   try {
-    const q = buildHandoverMetaUpdate(id, { ...(draft ? { autoSummary: draftSnapshot(draft) } : {}), ...(ai ? { aiSummary: ai } : {}) });
+    const q = buildHandoverMetaUpdate(id, draft ? { autoSummary: draftSnapshot(draft) } : {});
     if (q) await db.execute(q);
+    if (ai) await writeAiSummary(db, id, ai, version);
+    else {
+      // Resumo de antes de 8 out 2026 (sem versão) numa edição: era da versão anterior.
+      const legacy = legacyAiSummaryVersion(row);
+      if (legacy != null) await db.execute(buildHandoverMetaUpdate(id, { aiSummaryVersion: legacy })!).catch(() => undefined);
+    }
   } catch (err: any) { console.warn("[handover] guardar resumo:", String(err?.message ?? err).slice(0, 200)); }
+  // O resumo que vai no email: o desta entrega, ou o guardado se ainda está em dia.
+  const summaryNow = ai ?? currentAiSummary({ aiSummary: row.aiSummary, aiSummaryVersion: row.aiSummaryVersion ?? legacyAiSummaryVersion(row), version });
 
   // 3. Team leader(s) do turno seguinte: notificação (1.ª gravação) + email (por versão)
   const next = nextShiftOf(ref);
@@ -253,7 +293,7 @@ export async function afterHandoverSave(input: {
       if ((to.length || cc.length) && extractAffectedRows(await db.execute(buildClaimEmailVersion(id, version))) > 0) {
         const mail = buildHandoverEmail({
           city: input.key.city, shift: ref, authorName: row.createdByName ?? input.userName,
-          aiSummary: ai ?? row.aiSummary ?? null, counts: draft?.counts ?? null, unavailable: draft?.unavailable ?? [], notes: row.notes ?? null,
+          aiSummary: summaryNow, counts: draft?.counts ?? null, unavailable: draft?.unavailable ?? [], notes: row.notes ?? null,
           openItems, link: `${appOrigin()}/passagem-turno`,
         });
         const { sendEmail } = await import("./mail/systemMail");

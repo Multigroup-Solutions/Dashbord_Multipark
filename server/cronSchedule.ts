@@ -55,10 +55,11 @@ const S = 1000;
 export const ZELLO_SAMEDAY_WINDOW = { from: "23:15", until: "23:55" } as const;
 
 /**
- * Tabela dos trabalhos (decisões do Jorge, 26 set 2026). Fora da agenda
- * (ficam só manuais): knowledge-sync (botão "Sincronizar agora" e
- * processamento imediato de cada carregamento) e google-business (em pausa
- * até a Google aprovar o acesso à API).
+ * Tabela dos trabalhos (decisões do Jorge, 26 set 2026). Fora da agenda do
+ * tick: knowledge-sync (botão "Sincronizar agora" e processamento imediato de
+ * cada carregamento; as alterações nas pastas do Drive chegam SOZINHAS pelos
+ * avisos da Google e pela verificação de 4 em 4 h do google-sync) e
+ * google-business (em pausa até a Google aprovar o acesso à API).
  */
 // Reservas (Jorge, 27 set 2026): nada vai buscar reservas à Multipark por
 // iniciativa própria — as páginas leem a BD deles ao vivo (server/multiparkDb).

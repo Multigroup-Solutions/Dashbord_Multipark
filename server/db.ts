@@ -2,7 +2,7 @@ import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerSco
 import { TRPCError } from '@trpc/server';
 import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
 import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
-import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, stampOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
+import { handoverAiSummaryStale, mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, stampOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -4071,6 +4071,8 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
     materialExceptions: parseMaterialExceptions(r.materialExceptions),
     // A fotografia do resumo automático (JSON grande) não vai na lista.
     hasAutoSummary: !!autoSummary,
+    // 0600: resumo IA feito para uma versão anterior (editada depois de entregue).
+    aiSummaryStale: handoverAiSummaryStale(r),
   }));
 }
 

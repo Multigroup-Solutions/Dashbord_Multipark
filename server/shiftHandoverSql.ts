@@ -135,13 +135,13 @@ export function buildHandoverList(opts: { from?: string; to?: string; city?: str
 // ─── Automação (0088) ───────────────────────────────────────────────────────
 
 /** Colunas que o sistema escreve depois da gravação — NÃO mexem na versão (lock). */
-export const HANDOVER_META_COLUMNS = ["autoSummary", "aiSummary", "emailSentVersion"] as const;
+export const HANDOVER_META_COLUMNS = ["autoSummary", "aiSummary", "emailSentVersion", "aiSummaryVersion"] as const;
 export type HandoverMetaColumn = (typeof HANDOVER_META_COLUMNS)[number];
 
 export function buildHandoverMetaUpdate(id: number, patch: Partial<Record<HandoverMetaColumn, string | number | null>>): SQL | null {
   const sets = HANDOVER_META_COLUMNS
     .filter((c) => patch[c] !== undefined)
-    .map((c) => sql`${col(c)} = ${c === "emailSentVersion" ? numOrNull(patch[c]) : cut(patch[c], c === "autoSummary" ? 4_000_000 : 20_000)}`);
+    .map((c) => sql`${col(c)} = ${c === "emailSentVersion" || c === "aiSummaryVersion" ? numOrNull(patch[c]) : cut(patch[c], c === "autoSummary" ? 4_000_000 : 20_000)}`);
   if (!sets.length) return null;
   // `updatedAt` = ele próprio: metadados do sistema não contam como edição.
   return sql`UPDATE \`shift_handovers\` SET ${sql.join(sets, sql`, `)}, \`updatedAt\` = \`updatedAt\` WHERE \`id\` = ${id}`;

@@ -1,6 +1,7 @@
 import OpsBriefingCard from "@/components/aiOps/OpsBriefingCard";
 import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
 import TasksFromTextDialog from "@/components/aiOps/TasksFromTextDialog";
+import { canUseAiTasksFromText } from "@shared/aiLimits";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -602,7 +603,7 @@ export default function TasksPage() {
               {checkNotifMut.isPending ? "A verificar..." : "Verificar agora"}
             </Button>
           )}
-          {canEdit && viewMode !== "templates" && (
+          {canEdit && canUseAiTasksFromText(user?.role) && viewMode !== "templates" && (
             <Button variant="outline" onClick={() => setShowFromText(true)} title="Cola notas ou uma passagem de turno; a IA propõe tarefas e tu confirmas">
               <Sparkles className="h-4 w-4 mr-2" /> <span className="hidden sm:inline">Criar tarefas a partir de texto</span><span className="sm:hidden">A partir de texto</span>
             </Button>
