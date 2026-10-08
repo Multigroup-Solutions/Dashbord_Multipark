@@ -12,7 +12,7 @@
 import { can, roleRank, ROLE_RANK, seesBeyondOwn, type AccessOverrides } from "../../shared/access";
 import type { CityAccess } from "../cityAccess";
 import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/ai/chat/tools";
-import type { HelpDoc } from "../_core/ai/chat/retrieval";
+import { excerptHelp, type HelpDoc } from "../_core/ai/chat/retrieval";
 
 export interface StaffUser {
   id: number;
@@ -128,7 +128,10 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     description: "Abre a ajuda (\"como se usa\") de um módulo da aplicação. Usa quando a ajuda certa não veio em <ajuda>.",
     parameters: {
       type: "object",
-      properties: { modulo: { type: "string", description: "Módulo, como aparece entre parênteses no índice da ajuda (ex.: extras_dia, tarefas)." } },
+      properties: {
+        modulo: { type: "string", description: "Módulo, como aparece entre parênteses no índice da ajuda (ex.: extras_dia, tarefas)." },
+        tema: { type: "string", description: "O que procuras dentro dessa ajuda (palavras da pergunta) — traz a parte certa de uma ajuda longa." },
+      },
       required: ["modulo"],
     },
     available: () => true,
@@ -136,7 +139,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
       const m = String(args.modulo ?? "").trim().toLowerCase();
       const doc = ctx.helpDocs.find((d) => d.module === m || d.file === `${m}.md` || d.title.toLowerCase() === m);
       if (!doc) return { error: "Não há ajuda para esse módulo.", modulos: ctx.helpDocs.map((d) => d.module) };
-      return { titulo: doc.title, ajuda: doc.body.slice(0, 3500) };
+      return { titulo: doc.title, ajuda: excerptHelp(doc.body, 3500, String(args.tema ?? "").slice(0, 300)) };
     },
   },
   {

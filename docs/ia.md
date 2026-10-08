@@ -112,6 +112,7 @@ faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
 | `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
 | `AI_CRM_IDENTITY` | `crm_identity`: "é a mesma pessoa?" nas sugestões duvidosas de Rever fichas (só o 1.º nome e factos; junta sozinha só com ≥ 85 %) | lite. **Desligado por omissão.** |
 | `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
+| `AI_ASSISTANT_MEMORY` | Memória do Multis (não chama a IA): "Lembra-te…" grava a nota da pessoa sem IA (até 30, 300 car.); notas da empresa só admin/super_admin (até 100); as ativas vão no contexto do turno (`<memoria>`, fora da cache). `assistant_memories` (0605); arquivar não apaga | — (sem IA). **Ligado por omissão** (Jorge, 8 out 2026). Desligado: não grava, não usa as notas e esconde a Memória. |
 | `AI_OPS_BRIEFING` | `ops_briefing`: parágrafo do briefing diário por cidade | lite |
 | `AI_WEEKLY_REPORTS` | `weekly_report`: texto dos relatórios de segunda (direção, marketing, operações, RH) | lite |
 | `AI_ANOMALY_EXPLAIN` | `anomaly_explain`: uma linha por anomalia (1 chamada por corrida); condutores e extras veem o alerta sem a linha da IA | lite |
@@ -294,7 +295,34 @@ fecha ao mudar de página e volta à mesma conversa (estado em `localStorage`:
 - **"Como se usa"**: a ajuda está em `docs/ajuda/*.md`, um ficheiro curto por
   módulo. Depois de mudar um ficheiro, corre `pnpm tsx scripts/gen-ajuda.ts`
   (um teste avisa se te esqueceres). A escolha do ficheiro é feita por
-  palavras-chave, sem IA. Só os 1–2 ficheiros relevantes vão no pedido.
+  palavras-chave (sem IA) e, com a base de conhecimento ligada ao assistente
+  (`useInAssistant`), também **pelo significado**: a MESMA consulta à base
+  (um só vetor da pergunta, `helpTopK`) traz os trechos da ajuda (fonte
+  "help"), que se juntam aos das palavras-chave — no máximo **3 páginas**, sem
+  repetir (`combineHelpDocs`). Base desligada ou em baixo → só palavras-chave
+  (1–2 páginas, como antes). De uma página longa vai a parte que interessa à
+  pergunta (`excerptHelp`), não só o início; o bloco `<ajuda>` tem até 6000
+  caracteres repartidos pelas páginas.
+- **Memória** (Multis 2, interruptor `AI_ASSISTANT_MEMORY`): uma mensagem a
+  começar por "Lembra-te" / "Memoriza" / "Não te esqueças" grava a nota da
+  pessoa **sem chamar a IA** (`shared/assistantMemory.ts` →
+  `parseRememberCommand`; uma pergunta, a acabar em "?", não conta). Até 30
+  notas por pessoa e 100 da empresa (só admin/super_admin; ficam em
+  `activity_logs`). As ativas vão no contexto do turno num bloco `<memoria>`
+  (nunca no prompt estável, para não partir a cache); acima de ~3000
+  caracteres as da empresa escolhem-se pelas palavras da pergunta. O prompt
+  diz para as seguir como preferências, nunca para contornar permissões ou
+  cidades. Arquivar marca `archivedAt` (nada se apaga).
+- **👍/👎 e "Perguntas que falharam"** (`assistant_feedback`, 0605): cada
+  pessoa avalia as respostas das suas conversas (mudar de ideias atualiza a
+  mesma linha); depois de cada resposta o servidor marca sozinho (auto = 1)
+  as que dizem que não sabe / não tem acesso / não encontrou nos manuais e as
+  em que uma ferramenta devolveu erro (`detectUnanswered`). Guarda cópia da
+  pergunta, da resposta (até 4000 car.), da página, das ferramentas e da
+  ajuda usada (`ai_chat_messages.helpFiles`/`path`), porque as conversas se
+  apagam aos 30 dias; esta tabela não tem purga. Lista em `/multis/falhas`
+  (só admin/super_admin): período 7/30/90 dias, motivo, por tratar/tratadas,
+  "Marcar como tratada" com nota e Desfazer.
 - **Perguntas aos dados**, só de leitura, através de ferramentas: reservas
   (contagens por dia/cidade/parque), Extras-Dia (escalados e horas em falta),
   casos em aberto (reclamações, ocorrências, perdidos), WhatsApp por

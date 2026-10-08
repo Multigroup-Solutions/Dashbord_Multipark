@@ -7,7 +7,7 @@
  *   history       últimos N turnos + resumo extrativo
  * Ver README.md (secção "Chat") para o chat público.
  */
-export { runChatTurn, CHAT_MESSAGES, type ChatTurnInput, type ChatTurnResult, type ChatFailure, type ChatLimits } from "./engine";
+export { runChatTurn, CHAT_MESSAGES, type ChatTurnInput, type ChatTurnResult, type ChatFailure, type ChatLimits, type ChatKnowledge } from "./engine";
 export * from "./store";
 export * from "./retrieval";
 export * from "./tools";

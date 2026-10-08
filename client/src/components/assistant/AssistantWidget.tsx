@@ -5,12 +5,16 @@
  * nem bloqueia o resto do ecrã, não fecha ao mudar de página e, ao voltar,
  * continua na mesma conversa. A lógica (IA, ferramentas, histórico) está no
  * servidor (`assistant.*`, server/assistant + server/_core/ai/chat).
+ *
+ * Multis 2 (8 out 2026): 👍/👎 em cada resposta (MultisFeedback), separador
+ * Memória (MultisMemoryPanel; escondido com AI_ASSISTANT_MEMORY desligado) e,
+ * para admins, o atalho para "Perguntas que falharam" (/multis/falhas).
  */
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Streamdown } from "streamdown";
 import { aiRehypePlugins } from "@/lib/safeMarkdown";
-import { History, Loader2, Plus, Send, Trash2, User, X } from "lucide-react";
+import { BookMarked, History, Loader2, MessageSquareWarning, Plus, Send, Trash2, User, X } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
@@ -21,8 +25,18 @@ import { cn } from "@/lib/utils";
 import { ASSISTANT_DEFAULT_MAX_INPUT, ASSISTANT_NAME, MULTIS_PANEL_WIDTH_PX } from "@shared/assistant";
 import { MultisIcon } from "./MultisIcon";
 import { setMultisConversation, setMultisOpen, useMultisState } from "./multisStore";
+import { MultisFeedback } from "./MultisFeedback";
+import { MultisMemoryPanel } from "./MultisMemoryPanel";
 
-type Msg = { key: string; role: "user" | "assistant" | "notice"; content: string; tools?: string[] };
+type Msg = {
+  key: string;
+  role: "user" | "assistant" | "notice";
+  content: string;
+  tools?: string[];
+  /** Id da resposta guardada (para o 👍/👎). */
+  id?: number | null;
+  rating?: 1 | -1 | null;
+};
 
 const TOOL_LABELS: Record<string, string> = {
   abrir_ajuda: "ajuda",
@@ -47,7 +61,8 @@ const fmtWhen = (iso: string) => {
 };
 
 export function AssistantWidget() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
+  const [view, setView] = useState<"chat" | "memory">("chat");
   const isMobile = useIsMobile();
   // Aberta/fechada e a conversa ficam guardadas (sobrevivem a mudar de página).
   const { open, conversationId } = useMultisState();
@@ -65,6 +80,7 @@ export function AssistantWidget() {
       const q = String((e as CustomEvent<{ question?: string }>).detail?.question ?? "").trim();
       if (!q) return;
       setOpen(true);
+      setView("chat");
       setPending(q);
     };
     window.addEventListener(ASSISTANT_ASK_EVENT, onAsk);
@@ -82,7 +98,7 @@ export function AssistantWidget() {
   useEffect(() => {
     if (!history.data || fresh) return;
     setConversationId(history.data.conversationId);
-    setMessages(history.data.messages.map((m) => ({ key: `db-${m.id}`, role: m.role, content: m.content, tools: m.tools })));
+    setMessages(history.data.messages.map((m) => ({ key: `db-${m.id}`, role: m.role, content: m.content, tools: m.tools, id: m.id, rating: m.myRating })));
   }, [history.data, fresh]);
 
   const ask = trpc.assistant.ask.useMutation({
@@ -90,8 +106,9 @@ export function AssistantWidget() {
       if (r.ok) {
         setConversationId(r.conversationId);
         setFresh(false);
-        setMessages((prev) => [...prev, { key: `a-${Date.now()}`, role: "assistant", content: r.answer, tools: r.toolsUsed }]);
+        setMessages((prev) => [...prev, { key: `a-${Date.now()}`, role: "assistant", content: r.answer, tools: r.toolsUsed, id: r.messageId, rating: null }]);
         void utils.assistant.conversations.invalidate();
+        if (r.memory === "saved") void utils.assistant.memory.list.invalidate();
       } else {
         setMessages((prev) => [...prev, { key: `n-${Date.now()}`, role: "notice", content: r.message }]);
       }
@@ -147,6 +164,9 @@ export function AssistantWidget() {
   }, [pending, open, status.data]);
 
   const shown = messages;
+  const memoryOn = !!status.data?.memoryEnabled;
+  const canReview = !!status.data?.canReview;
+  const setRating = (key: string, rating: 1 | -1) => setMessages((prev) => prev.map((x) => (x.key === key ? { ...x, rating } : x)));
 
   const actions = (
     <div className="flex shrink-0 items-center gap-1">
@@ -163,7 +183,7 @@ export function AssistantWidget() {
                           <div className="px-2 py-1.5 text-xs text-muted-foreground">Ainda sem conversas.</div>
                         ) : (
                           (conversations.data ?? []).map((c) => (
-                            <DropdownMenuItem key={c.id} onClick={() => openConversation(c.id)} className="flex flex-col items-start gap-0.5">
+                            <DropdownMenuItem key={c.id} onClick={() => { setView("chat"); openConversation(c.id); }} className="flex flex-col items-start gap-0.5">
                               <span className={cn("line-clamp-1 text-sm", c.id === conversationId && "font-semibold")}>{c.title ?? "Conversa"}</span>
                               <span className="text-[11px] text-muted-foreground">{fmtWhen(c.updatedAt)}</span>
                             </DropdownMenuItem>
@@ -177,15 +197,38 @@ export function AssistantWidget() {
                             </DropdownMenuItem>
                           </>
                         )}
+                        {canReview && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => { if (isMobile) setOpen(false); navigate("/multis/falhas"); }}>
+                              <MessageSquareWarning className="mr-2 h-4 w-4" /> Perguntas que falharam
+                            </DropdownMenuItem>
+                          </>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={startNew} aria-label="Nova conversa" title="Nova conversa">
+                    {memoryOn && (
+                      <Button
+                        variant={view === "memory" ? "selected" : "ghost"}
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => setView((v) => (v === "memory" ? "chat" : "memory"))}
+                        aria-label="Memória"
+                        aria-pressed={view === "memory"}
+                        title="Memória — o que o Multis tem de lembrar"
+                      >
+                        <BookMarked className="h-4 w-4" />
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setView("chat"); startNew(); }} aria-label="Nova conversa" title="Nova conversa">
                       <Plus className="h-4 w-4" />
                     </Button>
                   </div>
   );
 
-  const chat = (
+  const chat = view === "memory" && memoryOn ? (
+    <MultisMemoryPanel onBack={() => setView("chat")} />
+  ) : (
     <>
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {unavailable && (
@@ -239,6 +282,7 @@ export function AssistantWidget() {
                           Consultei: {m.tools.map((t) => TOOL_LABELS[t] ?? t).join(", ")}
                         </div>
                       )}
+                      {m.id != null && <MultisFeedback messageId={m.id} rating={m.rating} onRated={(r) => setRating(m.key, r)} />}
                     </>
                   ) : (
                     <p className="whitespace-pre-wrap">{m.content}</p>
