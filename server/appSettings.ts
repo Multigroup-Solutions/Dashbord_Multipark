@@ -77,6 +77,34 @@ export async function getSetting<K extends SettingKey>(key: K): Promise<SettingV
   }
 }
 
+/**
+ * Valor gravado de uma definição lido SEM a cache, com quem e quando a mudou
+ * — para um ecrã que a edita fora das Definições (ex.: os pesos do ranking
+ * no Desempenho) ver logo o que gravou e mandar o `updatedAt` certo ao
+ * gravar (sem pisar ninguém). `value` null = sem valor gravado ou inválido
+ * (`invalid`). Nunca lança: `null` quando não deu para ler.
+ */
+export async function getSettingFresh<K extends SettingKey>(key: K): Promise<{ value: SettingValue<K> | null; invalid: boolean; updatedAt: string | null; updatedByName: string | null } | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const res = await db.execute(sql`
+      SELECT s.\`value\`, DATE_FORMAT(s.updatedAt, '%Y-%m-%d %H:%i:%s') AS updatedAt, u.name AS updatedByName
+        FROM app_settings s LEFT JOIN users u ON u.id = s.updatedById WHERE s.settingKey = ${key} LIMIT 1`);
+    const row = rowsOf(res)[0];
+    if (!row) return { value: null, invalid: false, updatedAt: null, updatedByName: null };
+    const v = validateSetting(key, parseJsonValue(row.value));
+    return {
+      value: v.ok ? (v.value as SettingValue<K>) : null,
+      invalid: !v.ok,
+      updatedAt: row.updatedAt ? String(row.updatedAt) : null,
+      updatedByName: row.updatedByName ? String(row.updatedByName) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Sobreposições dos interruptores das automações (só os do catálogo). */
 export async function loadFeatureFlagOverrides(): Promise<Map<string, boolean>> {
   const db = await getDb();

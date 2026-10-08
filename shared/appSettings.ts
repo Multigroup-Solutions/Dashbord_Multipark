@@ -26,6 +26,7 @@ import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
 import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
+import { PERF_RANK_WEIGHTS_KEY, rankWeightsSchema } from "./peoplePerformance";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -88,7 +89,7 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos" | "pessoas";
 
 // ─── Zello (GPS) ────────────────────────────────────────────────────────────
 
@@ -699,6 +700,16 @@ export const SETTINGS = {
     defaultValue: DEFAULT_SERVICE_TASK_RULES,
     wiring: "live",
   }),
+  // Jorge (8 out 2026): "avança com os pesos do ranking" — mudar os pesos sem deploy.
+  [PERF_RANK_WEIGHTS_KEY]: def({
+    key: PERF_RANK_WEIGHTS_KEY,
+    group: "pessoas",
+    label: "Pesos do ranking do Desempenho",
+    description: "Quanto vale cada coisa nos pontos do ranking de Pessoas → Condutores e agentes → Desempenho, por aba (office, supervision, teamleaders, drivers) e os pontos da equipa (team). Só o que muda face às omissões do código (1 ponto ≈ 5 minutos de trabalho). Um peso 0 = não conta; sem a métrica = a omissão. Pesos entre −10 000 e 10 000, com 1 casa decimal no máximo; horas e km nunca dão pontos. JSON: {\"office\": {\"created\": 3}, \"team\": {\"noZelloPerPerson\": -10}}. Mais fácil no próprio Desempenho: \"Como se contam os pontos desta aba\" → Editar pesos. Vazio = omissões do código. Só o super admin muda.",
+    schema: rankWeightsSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -722,6 +733,8 @@ export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   "google.contacts",
   "google.drive",
   "mail.systemSender",
+  // o Desempenho só o super admin o vê (Jorge, 8 out 2026)
+  PERF_RANK_WEIGHTS_KEY,
 ]);
 export function settingSuperAdminOnly(key: string): boolean {
   return SUPER_ADMIN_SETTING_KEYS.has(key);

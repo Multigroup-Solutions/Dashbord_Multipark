@@ -15,14 +15,19 @@
  * 49e (Jorge, 8 out 2026): chamadas perdidas, devolvidas e minutos ao
  * telefone; emails também da caixa Gmail pessoal; a atividade por hora do dia
  * (grelha pessoa × hora na aba, barras 0–23 h no detalhe).
+ *
+ * Pesos (Jorge, 8 out 2026: "avança com os pesos do ranking"): a tabela
+ * "Como se contam os pontos" mostra os pesos EM VIGOR e tem o Editar pesos
+ * (grava a definição `perf.rankWeights`).
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import {
   GROUP_VIEW, PERF_GROUPS, PERF_METRICS, PERF_PERIODS, periodTitle, rankPeople, shiftAnchor, MIN_HOURS_FOR_RATE,
-  TEAM_COLUMNS, TEAM_GROUPS, TEAM_POINT_WEIGHTS,
-  type PerfGroup, type PerfMetric, type PerfPeriod, type RankMode,
+  TEAM_COLUMNS, TEAM_GROUPS, TEAM_POINT_WEIGHTS, TEAM_WEIGHT_KEYS, TEAM_WEIGHT_LABELS, UNWEIGHTED_METRICS, PERF_RANK_WEIGHTS_KEY,
+  rankWeightSchema, rankWeightsSchema, teamWeightOverridesOf, weightOverridesOf, withTabOverrides,
+  type PerfGroup, type PerfMetric, type PerfPeriod, type RankMode, type RankWeightOverrides, type TeamPointWeights,
 } from "@shared/peoplePerformance";
 import { EVALUATION_POINTS, EVALUATION_RULES } from "@shared/evaluationRules";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
@@ -36,9 +41,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChevronLeft, ChevronRight, Link2, Loader2, Medal } from "lucide-react";
+import { ChevronLeft, ChevronRight, Link2, Loader2, Medal, Pencil, Plus, RotateCcw, Save, X } from "lucide-react";
 
 const SERIES = ["var(--perf-1)", "var(--perf-2)", "var(--perf-3)", "var(--perf-4)"];
 const nf = new Intl.NumberFormat("pt-PT", { maximumFractionDigits: 1 });
@@ -206,7 +214,8 @@ export function PeoplePerformancePanel() {
 
           {TEAM_GROUPS.includes(group) && <TeamTable group={group} people={ranked} nameCell={nameCell} onOpen={setOpen} />}
 
-          <PointsTable group={group} />
+          {/* 8 out 2026: os pesos em vigor e o editor (a aba dos dados que chegaram, não a do separador a carregar) */}
+          <PointsTable key={d.group} group={d.group} rw={d.rankWeights} />
 
           <div className="space-y-1 text-xs text-muted-foreground">
             <p>Pontos = soma ponderada do que a aba mede (nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação). Por hora só com {MIN_HOURS_FOR_RATE} h ou mais (ponto; sem ponto, a escala). Nota = 100 para o melhor.</p>
@@ -268,42 +277,191 @@ function TeamTable({ group, people, nameCell, onOpen }: { group: PerfGroup; peop
   );
 }
 
-/** 42c: "uma tabela… que pontos é que tem cada coisa" — os pesos desta aba. */
-function PointsTable({ group }: { group: PerfGroup }) {
-  const weights = Object.entries(GROUP_VIEW[group].weights) as Array<[PerfMetric, number]>;
-  const hasEval = weights.some(([k]) => k === "evalPoints");
-  const hasTeam = weights.some(([k]) => k === "teamPoints");
-  const w = TEAM_POINT_WEIGHTS;
-  const row = (label: string, pts: string, note?: string) => (
-    <tr key={label} className="border-t"><td className="px-3 py-1">{label}{note && <span className="ml-1 text-muted-foreground">({note})</span>}</td><td className="px-3 py-1 text-right font-semibold tabular-nums">{pts}</td></tr>
+/** Pesos em vigor que o servidor manda com o desempenho (8 out 2026). */
+type RankWeightsView = {
+  weights: Partial<Record<PerfMetric, number>>; team: TeamPointWeights; overrides: RankWeightOverrides;
+  updatedAt: string | null; updatedByName: string | null; readable: boolean;
+};
+
+const weightText = (v: number | undefined) => (v == null ? "" : String(v).replace(".", ","));
+/** Texto do input → número (vírgula ou ponto); vazio ou lixo → null. */
+const weightOf = (txt: string | undefined): number | null => {
+  const t = String(txt ?? "").trim().replace(",", ".");
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * 42c: "uma tabela… que pontos é que tem cada coisa" — os pesos desta aba.
+ * 8 out 2026 (Jorge: "avança com os pesos do ranking"): os pesos em vigor
+ * (omissões + `perf.rankWeights`) e o editor — Editar pesos → cada linha
+ * passa a número (0 = não conta; dá para acrescentar uma coluna da aba que
+ * não conta), mais os 3 da equipa nas abas com equipa; Guardar grava pela
+ * mesma rota das Definições (histórico com quem e quando), Repor omissões da
+ * aba, Cancelar. Ao guardar, o ranking recarrega.
+ */
+function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
+  const utils = trpc.useUtils();
+  const defaults = GROUP_VIEW[group].weights;
+  const showTeam = TEAM_GROUPS.includes(group);
+  const [draft, setDraft] = useState<Record<string, string> | null>(null);
+  const [teamDraft, setTeamDraft] = useState<Record<string, string>>({});
+  const [adding, setAdding] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const editing = draft != null;
+  const stop = () => { setDraft(null); setTeamDraft({}); setAdding(""); setError(null); };
+  const save = trpc.settings.values.set.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.changed ? "Pesos guardados: o ranking já conta com eles." : "Sem alterações.");
+      stop();
+      utils.evaluation.peoplePerformance.invalidate();
+    },
+    onError: (e) => {
+      toast.error(e.message);
+      // outra pessoa gravou entretanto → recarrega (o que estavas a editar fica descartado)
+      if (e.data?.code === "CONFLICT") { stop(); utils.evaluation.peoplePerformance.invalidate(); }
+    },
+  });
+
+  const fill = (w: Partial<Record<PerfMetric, number>>, t: TeamPointWeights) => {
+    setDraft(Object.fromEntries(Object.entries(w).map(([k, v]) => [k, weightText(v)])));
+    setTeamDraft(Object.fromEntries(TEAM_WEIGHT_KEYS.map((k) => [k, weightText(t[k])])));
+    setAdding("");
+    setError(null);
+  };
+  const startEdit = () => fill(rw.weights, rw.team);
+  /** Repor omissões da aba: só no ecrã — fica gravado com Guardar. */
+  const resetDefaults = () => fill(defaults, TEAM_POINT_WEIGHTS);
+
+  const parse = (label: string, txt: string | undefined): number | string => {
+    if (String(txt ?? "").trim() === "") return `${label}: escreve um número (0 = não conta).`;
+    const r = rankWeightSchema.safeParse(weightOf(txt) ?? Number.NaN);
+    return r.success ? r.data : `${label}: ${r.error.issues[0]?.message ?? "peso inválido."}`;
+  };
+  const submit = () => {
+    if (!draft) return;
+    if (!rw.readable) { setError("Não deu para ler os pesos gravados agora: recarrega antes de gravar."); return; }
+    const edited: Partial<Record<PerfMetric, number>> = {};
+    for (const [k, txt] of Object.entries(draft) as Array<[PerfMetric, string]>) {
+      const v = parse(PERF_METRICS[k]?.label ?? k, txt);
+      if (typeof v === "string") { setError(v); return; }
+      edited[k] = v;
+    }
+    let team: Partial<TeamPointWeights> | undefined;
+    if (showTeam) {
+      const t: Partial<TeamPointWeights> = {};
+      for (const k of TEAM_WEIGHT_KEYS) {
+        const v = parse(`Equipa — ${TEAM_WEIGHT_LABELS[k]}`, teamDraft[k]);
+        if (typeof v === "string") { setError(v); return; }
+        t[k] = v;
+      }
+      team = teamWeightOverridesOf(t);
+    }
+    const next = withTabOverrides(rw.overrides, group, weightOverridesOf(group, edited), team);
+    const valid = rankWeightsSchema.safeParse(next);
+    if (!valid.success) { setError(valid.error.issues.map((i) => i.message).join(" ")); return; }
+    setError(null);
+    save.mutate({ key: PERF_RANK_WEIGHTS_KEY, value: next, expectedUpdatedAt: rw.updatedAt });
+  };
+
+  const pointsText = (k: PerfMetric, v: number) => (v === 0 ? "0 (não conta)" : k === "evalPoints" || k === "teamPoints" ? `${nf.format(v)} por ponto` : signed(v));
+  const defaultText = (k: PerfMetric) => (defaults[k] == null ? "não conta" : pointsText(k, defaults[k] as number));
+  const changedBadge = (changed: boolean, def: string) => changed
+    ? <Badge variant="outline" className="ml-1 border-amber-500 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-300" title={`Omissão: ${def}`}>alterado</Badge>
+    : null;
+  const keys = (editing ? Object.keys(draft) : Object.keys(rw.weights)) as PerfMetric[];
+  const shownEval = editing ? (weightOf(draft.evalPoints) ?? 0) !== 0 : (rw.weights.evalPoints ?? 0) !== 0;
+  const addable = editing ? GROUP_VIEW[group].columns.filter((k) => !(k in draft) && !UNWEIGHTED_METRICS.has(k)) : [];
+  const missedOff = GROUP_VIEW[group].columns.includes("callsMissed") && !(rw.weights.callsMissed ?? 0);
+
+  const cell = (k: string, txt: string | undefined, onChange: (v: string) => void, label: string) => (
+    <Input value={txt ?? ""} onChange={(e) => onChange(e.target.value)} inputMode="decimal" aria-label={`Peso: ${label}`}
+      className="ml-auto h-7 w-20 text-right tabular-nums" data-weight={k} />
   );
+  const headRow = (title: string) => (
+    <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">{title}</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
+  );
+  const row = (label: string, pts: React.ReactNode, note?: string, extra?: React.ReactNode) => (
+    <tr key={label} className="border-t"><td className="px-3 py-1">{label}{note && <span className="ml-1 text-muted-foreground">({note})</span>}{extra}</td><td className="px-3 py-1 text-right font-semibold tabular-nums">{pts}</td></tr>
+  );
+
   return (
     <Card>
       <details open>
         <summary className="cursor-pointer px-6 py-3 text-base font-semibold">Como se contam os pontos desta aba</summary>
-        <CardContent className="grid gap-4 pt-0 md:grid-cols-2">
-          <table className="w-full text-[13px]">
-            <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">Cada…</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
-            <tbody>{weights.map(([k, v]) => row(PERF_METRICS[k].label, k === "evalPoints" || k === "teamPoints" ? "1 por ponto" : signed(v), PERF_METRICS[k].source))}</tbody>
-          </table>
-          <div className="space-y-4">
-            {hasEval && (
-              <table className="w-full text-[13px]">
-                <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">Pontos da avaliação — cada…</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
-                <tbody>{EVALUATION_RULES.map((r) => row(r.label, signed(EVALUATION_POINTS[r.key])))}</tbody>
-              </table>
+        <CardContent className="space-y-3 pt-0">
+          <div className="flex flex-wrap items-center gap-2">
+            {!editing ? (
+              <Button size="sm" variant="outline" onClick={startEdit} disabled={!rw.readable}
+                title={rw.readable ? "Mudar quanto vale cada coisa nesta aba (sem deploy)" : "Não deu para ler os pesos gravados agora"}>
+                <Pencil className="mr-1 h-4 w-4" />Editar pesos
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" onClick={submit} disabled={save.isPending}>
+                  {save.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}Guardar
+                </Button>
+                <Button size="sm" variant="outline" onClick={resetDefaults} disabled={save.isPending} title="Põe no ecrã os pesos do código desta aba (e os da equipa); fica gravado com Guardar">
+                  <RotateCcw className="mr-1 h-4 w-4" />Repor omissões da aba
+                </Button>
+                <Button size="sm" variant="ghost" onClick={stop} disabled={save.isPending}><X className="mr-1 h-4 w-4" />Cancelar</Button>
+              </>
             )}
-            {hasTeam && (
+            <span className="text-xs text-muted-foreground">
+              {rw.updatedAt ? `Pesos mudados por ${rw.updatedByName ?? "—"} · ${fmtPTDateTime(rw.updatedAt)} (histórico em Definições → Parâmetros).` : "Pesos por omissão do código."}
+            </span>
+          </div>
+          {editing && <p className="text-xs text-muted-foreground">Escreve quanto vale cada coisa (ex.: 0,5). 0 = não conta; negativo = desconta. Os pontos da equipa valem para os team leaders e para a supervisão.</p>}
+          {error && <p className="text-sm font-semibold text-destructive" role="alert">{error}</p>}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
               <table className="w-full text-[13px]">
-                <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">Pontos da equipa — por dia, por pessoa da equipa</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
-                <tbody>
-                  {row("Movimento da equipa (recolha, entrega ou movimento)", signed(w.actionsPerPerson), "a dividir pela equipa")}
-                  {row("Pessoa que mexeu carros sem Zello", signed(w.noZelloPerPerson), "a dividir pela equipa")}
-                  {row("Hora parada (GPS)", signed(w.stoppedHoursPerPerson), "a dividir pela equipa")}
-                </tbody>
+                {headRow("Cada…")}
+                <tbody>{keys.map((k) => {
+                  const label = PERF_METRICS[k]?.label ?? k;
+                  if (!editing) {
+                    const v = rw.weights[k] ?? 0;
+                    return row(label, pointsText(k, v), PERF_METRICS[k]?.source, changedBadge((defaults[k] ?? 0) !== v, defaultText(k)));
+                  }
+                  const live = weightOf(draft[k]);
+                  return row(label, cell(k, draft[k], (t) => setDraft((d) => ({ ...(d ?? {}), [k]: t })), label), PERF_METRICS[k]?.source,
+                    <>{changedBadge(live != null && (defaults[k] ?? 0) !== live, defaultText(k))}<span className="ml-1 text-[11px] text-muted-foreground">omissão: {defaultText(k)}</span></>);
+                })}</tbody>
               </table>
-            )}
-            <p className="text-xs text-muted-foreground">Horas e km não dão pontos. "Por hora" = pontos ÷ horas trabalhadas (com {MIN_HOURS_FOR_RATE} h ou mais). Nota = 100 para o melhor.</p>
+              {editing && addable.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select value={adding} onValueChange={setAdding}>
+                    <SelectTrigger className="h-8 w-64 text-xs" aria-label="Acrescentar uma coluna da aba que não conta"><SelectValue placeholder="Acrescentar uma coluna que não conta…" /></SelectTrigger>
+                    <SelectContent>{addable.map((k) => <SelectItem key={k} value={k}>{PERF_METRICS[k].label}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Button size="sm" variant="outline" disabled={!adding}
+                    onClick={() => { setDraft((d) => ({ ...(d ?? {}), [adding]: "1" })); setAdding(""); }}><Plus className="mr-1 h-4 w-4" />Acrescentar</Button>
+                </div>
+              )}
+              {missedOff && <p className="text-xs text-muted-foreground">Chamadas perdidas: aparecem mas não contam (a chamada toca em várias consolas).</p>}
+            </div>
+            <div className="space-y-4">
+              {shownEval && (
+                <table className="w-full text-[13px]">
+                  {headRow("Pontos da avaliação — cada…")}
+                  <tbody>{EVALUATION_RULES.map((r) => row(r.label, signed(EVALUATION_POINTS[r.key])))}</tbody>
+                </table>
+              )}
+              {showTeam && (
+                <table className="w-full text-[13px]">
+                  {headRow("Pontos da equipa — por dia, por pessoa da equipa")}
+                  <tbody>{TEAM_WEIGHT_KEYS.map((k) => {
+                    const def = signed(TEAM_POINT_WEIGHTS[k]);
+                    if (!editing) return row(TEAM_WEIGHT_LABELS[k], signed(rw.team[k]), "a dividir pela equipa", changedBadge(rw.team[k] !== TEAM_POINT_WEIGHTS[k], def));
+                    const live = weightOf(teamDraft[k]);
+                    return row(TEAM_WEIGHT_LABELS[k], cell(k, teamDraft[k], (t) => setTeamDraft((d) => ({ ...d, [k]: t })), TEAM_WEIGHT_LABELS[k]), "a dividir pela equipa",
+                      <>{changedBadge(live != null && live !== TEAM_POINT_WEIGHTS[k], def)}<span className="ml-1 text-[11px] text-muted-foreground">omissão: {def}</span></>);
+                  })}</tbody>
+                </table>
+              )}
+              <p className="text-xs text-muted-foreground">1 ponto ≈ 5 minutos de trabalho, a mesma escala da avaliação (recolha ou entrega +3, movimento +2, levar ao parque +5). Horas e km não dão pontos. "Por hora" = pontos ÷ horas trabalhadas (com {MIN_HOURS_FOR_RATE} h ou mais). Nota = 100 para o melhor.</p>
+            </div>
           </div>
         </CardContent>
       </details>
