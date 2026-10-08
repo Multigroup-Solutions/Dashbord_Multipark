@@ -40,6 +40,14 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 
 **Anúncios → ligações utm/código**: ligar um utm_campaign ou código de desconto a uma campanha fica registado; se já estava noutra campanha, passa para esta e o registo diz de onde saiu. **Retirar** uma ligação arquiva-a (fica no registo).
 
+**Reservas ligadas a uma campanha** (ROAS por campanha, coluna **Ligadas** na linha de cada campanha e alerta "campanha sem resultados") — Jorge, 8 out 2026: as campanhas davam **0 ligadas** porque o link da reserva, com o auto-tagging da Google, só traz o **gclid** (sem o ID da campanha). Agora a reserva liga-se, por esta ordem (cada reserva conta uma vez):
+1. **ID da campanha no link** (campaignid / utm_campaign numérico) — ganha sempre;
+2. **gclid → campanha (Google Ads)**: sem ID no link mas com gclid, a campanha **do clique** — de hora a hora a app lê no Google Ads de que campanha é cada clique (estado em **Integrações → Google Ads → Recolha**, "Cliques (gclid → campanha)");
+3. **utm_campaign** ou **código de desconto** ligados à mão à campanha.
+- No ROAS por campanha, por baixo do número aparece quantas vieram **pelo clique (gclid)**; passa o rato por cima para ver de onde veio cada uma. Na linha da campanha (separador da marca), o mesmo no título da célula **Ligadas**.
+- Um gclid que o Google Ads não conhece (clique com mais de 90 dias, conta não recolhida, ou ainda por ler) **não liga** — a reserva fica como estava. gbraid/wbraid (iPhone) também não: a Google não os dá por clique.
+- Se a leitura dos cliques estiver desligada ou a falhar, as reservas com cliques ainda por ler ligam-se só pelo link, como antes.
+
 **Alertas** (independentes do período): campanhas com ≥ 50 € em 14 dias sem conversões nem reservas ligadas, ritmo do mês, orçamentos e recolhas.
 - Ficam **de lado**, à direita do Painel (no telemóvel, por cima). Carrega no título para os encolher e voltar a abrir.
 - Aparecem os 4 primeiros. **Ver todos** mostra o resto.

@@ -757,6 +757,20 @@ export async function googleAdsCron(o: { deadlineAt: number; kind: string }): Pr
   } catch (err) { return { httpStatus: 500, body: { ok: false, done: true, error: msg(err) } }; }
 }
 
+/**
+ * Google Ads: cliques (click_view, gclid → campanha) de hora a hora — hoje,
+ * ontem e, aos poucos, os dias em falta até 90 dias para trás. Interruptor
+ * GOOGLE_ADS_CLICK_SYNC. Fica sempre "feita": o que o prazo cortou segue na
+ * hora seguinte (não retoma de 5 em 5 min à frente dos outros trabalhos).
+ */
+export async function googleAdsClicksCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runGoogleAdsClickSync } = await import("./integrations/googleAds/clicks");
+    const r = await runGoogleAdsClickSync({ deadlineAt: o.deadlineAt });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, done: true }, done: true };
+  } catch (err) { return { httpStatus: 500, body: { ok: false, done: true, error: msg(err) } }; }
+}
+
 /** Meta Ads: mesma cadência do Google Ads; não configurada → ok:true + skipped. */
 export async function metaAdsCron(o: { deadlineAt: number; kind: string }): Promise<CronJobRun> {
   const { normalizeSyncKind } = await import("./integrations/googleAds/metrics");

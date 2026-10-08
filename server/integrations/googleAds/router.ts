@@ -38,6 +38,8 @@ export const googleAdsRouter = router({
       campaignsCount,
       lastSuccessfulSyncAt: await lastSuccessfulSyncAt(),
       stale: await isSyncStale(),
+      // 8 out 2026: leitura dos cliques (gclid → campanha): último dia lido e dias em falta
+      clicks: await (await import("./clicks")).clickSyncStatus(),
     };
   }),
 
@@ -153,6 +155,12 @@ export const googleAdsRouter = router({
     runs: protectedProcedure.input(z.object({ limit: z.number().min(1).max(100).optional() }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "integracoes", "view");
       return listSyncRuns(input?.limit ?? 20);
+    }),
+    // 8 out 2026: ler já os cliques (gclid → campanha) — o mesmo da volta de hora a hora (só leitura na Google).
+    clicks: protectedProcedure.mutation(async ({ ctx }) => {
+      requireAccess(ctx.user, "integracoes", "edit");
+      const { runGoogleAdsClickSync } = await import("./clicks");
+      return runGoogleAdsClickSync({ deadlineAt: Date.now() + 40_000 });
     }),
   }),
 

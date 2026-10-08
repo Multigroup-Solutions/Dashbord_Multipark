@@ -851,6 +851,9 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   // Lote 45 (Jorge, 7 out 2026: "quando a aplicação toca, dê algum input aqui e também toque aqui").
   { name: "CENTRAL_RING", label: "Central Vodafone: tocar no dashboard", description: "Quando entra uma chamada na consola de uma pessoa, o dashboard dessa pessoa toca e mostra quem é (nome, cliente ou equipa, reservas) com o botão para abrir a ficha. Só para quem tem um acesso da consola (Integrações → Central Vodafone) e precisa do \"receber as chamadas da consola\" ligado. As chamadas que a pessoa faz pelos botões \"Ligar\" da dashboard não tocam. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
+  // B1 (Jorge, 8 out 2026: "as campanhas dão 0 reservas ligadas"). Só LÊ da Google e escreve
+  // numa tabela nossa de apoio (google_ads_clicks) → ligado por omissão; desliga-se aqui.
+  { name: "GOOGLE_ADS_CLICK_SYNC", label: "Google Ads: ligar reservas à campanha pelo clique (gclid)", description: "De hora a hora lê do Google Ads de que campanha é cada clique (relatório click_view: hoje, ontem e, aos poucos, os dias em falta até 90 dias para trás — a Google não guarda mais) e guarda-o numa tabela de apoio. Assim uma reserva cujo link só traz o gclid (auto-tagging) fica ligada à campanha no Marketing (ROAS por campanha, Ligadas, alertas). O ID da campanha no link continua a ganhar. Só lê do Google Ads; nada é alterado lá. Desligado: deixa de ler cliques novos (as reservas com cliques já lidos continuam ligadas; as outras só pelo ID no link). Estado em Integrações → Google Ads → Recolha." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
   { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
   { name: "AI_EXPENSE_OCR", label: "IA: leitura de faturas", description: "Extrai fornecedor, valor, datas e NIF das faturas carregadas nas Despesas.", group: "ia" },
@@ -977,6 +980,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", intervalMinutes: 1440, workflow: "tick" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
+  { name: "google-ads-clicks", label: "Google Ads: cliques (gclid → campanha)", intervalMinutes: 60, workflow: "tick" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "tick" },
   { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 1440, workflow: "tick" },

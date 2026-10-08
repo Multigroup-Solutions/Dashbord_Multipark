@@ -112,6 +112,9 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "google-ads-monthly", runName: "google-ads", label: "Google Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 121, minMs: 15 * S, maxMs: 45 * S },
   // 19b: conversões atrasadas — a Google acerta-as até semanas depois do clique.
   { key: "google-ads-recent", runName: "google-ads", label: "Google Ads (últimos 35 dias, conversões atrasadas)", cadence: { kind: "weekly", dow: 7, from: "06:15" }, priority: 124, minMs: 15 * S, maxMs: 45 * S },
+  // B1 (8 out 2026): de que campanha é cada clique (click_view) — liga as reservas só com gclid à campanha.
+  // Hoje e ontem em cada volta + até 10 dias em falta por conta (janela de 90 dias); o resto na hora seguinte.
+  { key: "google-ads-clicks", runName: "google-ads-clicks", label: "Google Ads: cliques (gclid → campanha)", cadence: { kind: "interval", minutes: 60 }, priority: 125, minMs: 15 * S, maxMs: 40 * S },
   { key: "meta-ads", runName: "meta-ads", label: "Meta Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 122, minMs: 15 * S, maxMs: 45 * S },
   { key: "meta-ads-monthly", runName: "meta-ads", label: "Meta Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 123, minMs: 15 * S, maxMs: 45 * S },
   { key: "web-analytics", runName: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", cadence: { kind: "daily", from: "09:00" }, priority: 130, minMs: 20 * S, maxMs: 45 * S },

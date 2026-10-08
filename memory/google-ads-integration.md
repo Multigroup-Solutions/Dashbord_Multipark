@@ -148,3 +148,29 @@ e [níveis de acesso](https://developers.google.com/google-ads/api/docs/api-poli
   `adMetrics.nationalShares` traz a repartição e o filtro de cidade aplica-se
   em JS depois da repartição (uma cidade filtrada inclui a sua fração do
   nacional).
+
+## Atualização de 08/10/2026 — reservas ligadas pelo clique (gclid → campanha)
+
+As campanhas davam 0 reservas "ligadas": com o auto-tagging o link só traz o
+`gclid` e a ligação exigia o ID da campanha no link (`campaignid` /
+`utm_campaign` numérico).
+
+- **Migração 0610**: `google_ads_clicks` (gclid PK, utf8mb4_bin → customerId,
+  campaignId, adGroupId, clickDate, fetchedAt) e `google_ads_click_days`
+  (dias lidos por conta, com quantos cliques). Sem DELETE nem purga.
+- **`gaql.ts`/`client.ts`**: `gaqlClickView(day)` (`click_view`, UM dia por
+  consulta, só os últimos 90 dias) e `fetchClickView`.
+- **`clicks.ts`**: `runGoogleAdsClickSync` — trabalho `google-ads-clicks` do
+  agendador, de hora a hora: hoje e ontem de todas as contas + até 10 dias em
+  falta por conta (do mais recente para trás, à vez por conta);
+  INSERT … ON DUPLICATE KEY UPDATE; 401/403 pára a conta; token recusado →
+  failed; prazo → parcial (fica "feito"; o resto na hora seguinte).
+  Interruptor `GOOGLE_ADS_CLICK_SYNC` (ligado por omissão: só lê da Google).
+  Estado em `integrations.googleAds.status.clicks` (último dia lido, dias em
+  falta) e botão "Ler cliques agora" (`sync.clicks`).
+- **`clickAttribution.ts`**: `withClickCampaigns` — em lote (`WHERE gclid IN`,
+  pedaços de 500): ID no link ganha (evidência `link`); sem ele, gclid
+  conhecido → campanha do clique (evidência `gclid`); desconhecido → nada.
+  Usado em `marketingStats` (`attributedByCampaign` + `attributedByCampaignGclid`),
+  `marketingCampaignRoas` (`matchBookingsToCampaignsBy` → `linkedBy`) e
+  `marketingAlertsService`. Rótulos em `shared/campaignEvidence.ts`.

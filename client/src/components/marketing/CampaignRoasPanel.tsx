@@ -2,8 +2,9 @@
  * ROAS por campanha → reservas (Jorge, 24 set 2026). Por campanha (Google Ads
  * e Meta): gasto, cliques, conversões da plataforma, reservas LIGADAS, valor
  * s/ IVA, ROAS s/ IVA e CPA. Ligação reserva → campanha: ID da campanha no
- * link (gclid/fbclid + {campaignid}); senão utm_campaign ou código de desconto
- * que o admin liga à campanha aqui. Em baixo, as conversões por ação.
+ * link (gclid/fbclid + {campaignid}); sem ele, a campanha do clique (gclid)
+ * que o Google Ads identifica (8 out 2026); senão utm_campaign ou código de
+ * desconto que o admin liga à campanha aqui. Em baixo, as conversões por ação.
  */
 import React, { useMemo, useState } from "react";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
@@ -18,6 +19,7 @@ import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Link2, Loader2, Plus, X } from "lucide-react";
 import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { describeMatchCounts, LINKED_EXPLAINER } from "@shared/campaignEvidence";
 
 const EUR = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const EUR0 = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -59,8 +61,11 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
         <CardHeader>
           <CardTitle>ROAS por campanha</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Reservas ligadas = reservas do período (data de criação, sem canceladas) com o ID da campanha no link de origem (gclid/fbclid + campanha), ou com um utm_campaign / código de desconto ligado à campanha{isAdmin ? " (abre a linha para ligar)" : ""}. Cada reserva conta uma vez. Valor e ROAS sem IVA (÷ {(1 + Number(data.vatRate)).toFixed(2).replace(".", ",")}). CPA = gasto ÷ reservas ligadas.
+            Reservas ligadas = reservas do período (data de criação, sem canceladas) {LINKED_EXPLAINER} (o ID no link ganha), ou com um utm_campaign / código de desconto ligado à campanha{isAdmin ? " (abre a linha para ligar)" : ""}. Cada reserva conta uma vez. Valor e ROAS sem IVA (÷ {(1 + Number(data.vatRate)).toFixed(2).replace(".", ",")}). CPA = gasto ÷ reservas ligadas.
           </p>
+          {data.linkedTotal > 0 && data.linkedByTotal && (
+            <p className="text-xs text-muted-foreground mt-1">De onde vieram as ligadas: {describeMatchCounts(data.linkedByTotal)}.</p>
+          )}
         </CardHeader>
         <CardContent className="p-0 overflow-x-auto">
           {rows.length === 0 ? <p className="text-sm text-muted-foreground p-6 text-center">Sem campanhas com gasto no período.</p> : (
@@ -96,7 +101,10 @@ export default function CampaignRoasPanel({ from, to, projectId }: { from: strin
                         <td className="px-4 py-1.5 text-right tabular-nums">{eur(r.cost)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{num(r.clicks)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{num(r.conversions)}</td>
-                        <td className="px-4 py-1.5 text-right tabular-nums font-semibold">{num(r.bookings)}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums font-semibold" title={r.bookings > 0 ? describeMatchCounts(r.linkedBy) : undefined}>
+                          {num(r.bookings)}
+                          {r.linkedBy?.gclid > 0 && <div className="text-[11px] font-normal text-muted-foreground">{num(r.linkedBy.gclid)} pelo clique (gclid)</div>}
+                        </td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{eur(r.revenueNet)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{roasX(r.roasNet)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{eur(r.cpa)}</td>

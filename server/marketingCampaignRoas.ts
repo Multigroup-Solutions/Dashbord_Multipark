@@ -7,10 +7,13 @@
  *
  * Reserva ligada a uma campanha, por esta ordem (cada reserva conta UMA vez):
  *   1. ID da campanha no link (adCampaignExternalId — gclid/fbclid + ValueTrack
- *      {campaignid} / {{campaign.id}}), do fornecedor da atribuição;
+ *      {campaignid} / {{campaign.id}}), do fornecedor da atribuição; sem ID no
+ *      link mas com gclid, a campanha do CLIQUE no Google Ads (8 out 2026 —
+ *      integrations/googleAds/clickAttribution.ts, evidência "gclid");
  *   2. `utm_campaign` com ligação criada pelo admin (ad_campaign_links);
  *   3. código de desconto (campo `campaign`/`campaignName` da reserva) com
  *      ligação criada pelo admin.
+ * Cada campanha diz de onde vieram as ligadas (`linkedBy`: link / gclid / utm / código).
  * Reservas pela data de criação (dias de Lisboa), sem canceladas.
  * Também devolve as conversões por AÇÃO (ad_conversion_action_metrics).
  */
@@ -20,19 +23,31 @@ import { projectScope } from "./cityScope";
 import { vatRateForPeriod } from "./finance/rates";
 import { netOfVatAmount, roasNetOfVat } from "../shared/marketingRules";
 import { inLisbonDaysSql, marketingProjectIds, notCancelledSql } from "./marketingSql";
+import type { CampaignEvidence, CampaignMatchBy } from "../shared/campaignEvidence";
 
 const rowsOf = <T = any>(r: any): T[] => (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r) as T[];
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
 
 export interface CampaignLinkKey { id: number; adCampaignId: number; keyType: "utm_campaign" | "discount_code"; keyValue: string }
-export interface BookingForMatch { id: number | string; adAttribution: string | null; ext: string | null; utmCampaign: string | null; code: string | null; codeName: string | null; totalPrice: number }
+export interface BookingForMatch {
+  id: number | string; adAttribution: string | null; ext: string | null; utmCampaign: string | null; code: string | null; codeName: string | null; totalPrice: number;
+  /** de onde veio `ext`: ID no link ou gclid → campanha (omissão: link) */
+  via?: CampaignEvidence | null;
+}
 export interface CampaignRef { key: string; provider: string; externalId: string | null; campaignId: number | null }
 
 /**
  * Regra PURA: a que campanha (chave "api:<conta>:<externo>") pertence cada
- * reserva. ID no link > utm_campaign ligado > código de desconto ligado.
+ * reserva. ID no link (ou gclid → campanha) > utm_campaign ligado > código de desconto ligado.
  */
 export function matchBookingsToCampaigns(bookings: BookingForMatch[], campaigns: CampaignRef[], links: CampaignLinkKey[]): Map<string, BookingForMatch[]> {
+  const out = new Map<string, BookingForMatch[]>();
+  for (const [key, list] of matchBookingsToCampaignsBy(bookings, campaigns, links)) out.set(key, list.map((m) => m.booking));
+  return out;
+}
+
+/** O mesmo, com o caminho de cada ligação (link / gclid / utm / código). PURA. */
+export function matchBookingsToCampaignsBy(bookings: BookingForMatch[], campaigns: CampaignRef[], links: CampaignLinkKey[]): Map<string, Array<{ booking: BookingForMatch; by: CampaignMatchBy }>> {
   const byExt = new Map<string, CampaignRef>();
   for (const c of campaigns) if (c.externalId) byExt.set(`${c.provider}:${c.externalId}`, c);
   const byDbId = new Map<number, CampaignRef>();
@@ -43,18 +58,19 @@ export function matchBookingsToCampaigns(bookings: BookingForMatch[], campaigns:
     if (!c) continue;
     (l.keyType === "utm_campaign" ? utm : code).set(norm(l.keyValue), c);
   }
-  const out = new Map<string, BookingForMatch[]>();
+  const out = new Map<string, Array<{ booking: BookingForMatch; by: CampaignMatchBy }>>();
   for (const b of bookings) {
     let hit: CampaignRef | undefined;
+    let by: CampaignMatchBy = b.via === "gclid" ? "gclid" : "link";
     if (b.ext) {
       const providers = b.adAttribution === "meta_paid" ? ["meta"] : b.adAttribution === "google_paid" ? ["google_ads"] : ["google_ads", "meta"];
       for (const p of providers) { hit = byExt.get(`${p}:${b.ext}`); if (hit) break; }
     }
-    if (!hit && b.utmCampaign) hit = utm.get(norm(b.utmCampaign));
-    if (!hit && (b.code || b.codeName)) hit = code.get(norm(b.code)) ?? code.get(norm(b.codeName));
+    if (!hit && b.utmCampaign) { hit = utm.get(norm(b.utmCampaign)); by = "utm"; }
+    if (!hit && (b.code || b.codeName)) { hit = code.get(norm(b.code)) ?? code.get(norm(b.codeName)); by = "code"; }
     if (!hit) continue;
     const list = out.get(hit.key) ?? [];
-    list.push(b); out.set(hit.key, list);
+    list.push({ booking: b, by }); out.set(hit.key, list);
   }
   return out;
 }
@@ -85,11 +101,13 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
   // campanha de anúncio, utm_campaign ou código ligado a uma campanha.
   const utmSet = new Set(utmKeys), codeSet = new Set(codeKeys);
   const { loadMarketingBookings } = await import("./marketingLive");
-  const bookings: BookingForMatch[] = (await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }))
+  // 8 out 2026: sem ID no link, a campanha do clique (gclid) que o Google Ads identifica — em lote.
+  const { withClickCampaigns } = await import("./integrations/googleAds/clickAttribution");
+  const bookings: BookingForMatch[] = (await withClickCampaigns(await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true })))
     .filter((b) => b.adCampaignExternalId != null || (b.utmCampaign != null && utmSet.has(norm(b.utmCampaign)))
       || (b.campaign != null && codeSet.has(norm(b.campaign))) || (b.campaignName != null && codeSet.has(norm(b.campaignName))))
-    .map((b) => ({ id: b.id, adAttribution: b.adAttribution, ext: b.adCampaignExternalId, utmCampaign: b.utmCampaign, code: b.campaign, codeName: b.campaignName, totalPrice: b.total }));
-  const matched = matchBookingsToCampaigns(bookings, apiCampaigns.map((c) => ({ key: c.key, provider: c.provider, externalId: c.externalId, campaignId: c.campaignId })), links);
+    .map((b) => ({ id: b.id, adAttribution: b.adAttribution, ext: b.adCampaignExternalId, via: b.campaignEvidence, utmCampaign: b.utmCampaign, code: b.campaign, codeName: b.campaignName, totalPrice: b.total }));
+  const matched = matchBookingsToCampaignsBy(bookings, apiCampaigns.map((c) => ({ key: c.key, provider: c.provider, externalId: c.externalId, campaignId: c.campaignId })), links);
 
   // Conversões por ação (Google: ação de conversão; Meta: tipo de ação)
   const keySet = new Set(apiCampaigns.map((c) => c.key));
@@ -116,21 +134,25 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
   const linksByCampaign = new Map<number, typeof links>();
   for (const l of links) { const a = linksByCampaign.get(l.adCampaignId) ?? []; a.push(l); linksByCampaign.set(l.adCampaignId, a); }
   let linkedTotal = 0;
+  const linkedByTotal: Record<CampaignMatchBy, number> = { link: 0, gclid: 0, utm: 0, code: 0 };
   const rows = apiCampaigns.map((c) => {
-    const bs = matched.get(c.key) ?? [];
+    const hits = matched.get(c.key) ?? [];
+    const bs = hits.map((m) => m.booking);
+    const linkedBy: Record<CampaignMatchBy, number> = { link: 0, gclid: 0, utm: 0, code: 0 };
+    for (const m of hits) { linkedBy[m.by]++; linkedByTotal[m.by]++; }
     linkedTotal += bs.length;
     const revenue = bs.reduce((t, b) => t + b.totalPrice, 0);
     return {
       key: c.key, campaignId: c.campaignId, name: c.name, provider: c.provider, status: c.status, accountName: c.accountName,
       projectId: c.projectId, national: !!c.national, cost: c.cost, clicks: c.clicks, conversions: c.conversions, conversionValue: c.conversionValue,
-      bookings: bs.length, revenue, revenueNet: netOfVatAmount(revenue, vat), roasNet: roasNetOfVat(revenue, c.cost, vat),
+      bookings: bs.length, linkedBy, revenue, revenueNet: netOfVatAmount(revenue, vat), roasNet: roasNetOfVat(revenue, c.cost, vat),
       cpa: bs.length > 0 ? c.cost / bs.length : null,
       actions: (actionsByCampaign.get(c.key) ?? []).sort((a, b) => b.conversions - a.conversions),
       links: c.campaignId != null ? (linksByCampaign.get(c.campaignId) ?? []).map((l) => ({ id: l.id, keyType: l.keyType, keyValue: l.keyValue })) : [],
     };
   }).sort((a, b) => b.cost - a.cost);
   return {
-    range: { from: f.from, to: f.to }, vatRate: vat, rows, linkedTotal,
+    range: { from: f.from, to: f.to }, vatRate: vat, rows, linkedTotal, linkedByTotal,
     conversionActions: Array.from(actionTotals.values()).sort((a, b) => b.conversions - a.conversions),
   };
 }

@@ -18,6 +18,7 @@ import { Megaphone, BarChart3, CheckCircle2, Loader2, TrendingUp } from "lucide-
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import CampaignRoasPanel from "@/components/marketing/CampaignRoasPanel";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
+import { describeMatchCounts, LINKED_EXPLAINER } from "@shared/campaignEvidence";
 
 /**
  * Marketing → Google Ads (Jorge, 16 set 2026). É UMA das páginas do Marketing
@@ -159,7 +160,7 @@ export default function MarketingGoogleAdsPage() {
         </TabsContent>
         {brandTabs.map((t) => (
           <TabsContent key={t.brand} value={`marca-${t.brand}`} className="mt-4">
-            <AccountCampaigns account={{ id: 0, name: t.brand }} rows={t.rows} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={t.nationalShares} attributedByCampaign={st?.attributedByCampaign ?? {}} bookingsUnavailable={!!(st?.bookingsError || byBrand?.bookingsError)} />
+            <AccountCampaigns account={{ id: 0, name: t.brand }} rows={t.rows} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={t.nationalShares} attributedByCampaign={st?.attributedByCampaign ?? {}} attributedByCampaignGclid={st?.attributedByCampaignGclid ?? {}} bookingsUnavailable={!!(st?.bookingsError || byBrand?.bookingsError)} />
           </TabsContent>
         ))}
       </Tabs>
@@ -299,10 +300,18 @@ function BrandSummary({ data }: { data: any }) {
 type BrandCityStats = { projectId: number; bookings: number; attributed: number; revenue: number; revenueAttributed: number; bookingsWeb?: number; revenueWeb?: number; webWithLink?: number };
 type NationalShare = { key: string; accountId: number; projectId: number; cost: number; clicks: number; conversions: number; conversionValue: number };
 
-function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares, attributedByCampaign, bookingsUnavailable = false }: { account: { id: number; name: string }; rows: any[]; projects: any[]; byBrandCity: BrandCityStats[]; nationalShares: NationalShare[]; attributedByCampaign: Record<string, number>; bookingsUnavailable?: boolean }) {
+function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares, attributedByCampaign, attributedByCampaignGclid = {}, bookingsUnavailable = false }: { account: { id: number; name: string }; rows: any[]; projects: any[]; byBrandCity: BrandCityStats[]; nationalShares: NationalShare[]; attributedByCampaign: Record<string, number>; attributedByCampaignGclid?: Record<string, number>; bookingsUnavailable?: boolean }) {
   const noBk = bookingsUnavailable;
-  // Reservas ligadas (gclid) desta campanha — a chave é "api:<conta>:<ID externo>".
-  const linked = (r: any) => (String(r.key).startsWith("api:") ? attributedByCampaign[String(r.key).split(":").slice(2).join(":")] ?? 0 : null);
+  // Reservas ligadas desta campanha (ID no link ou gclid → campanha) — a chave é "api:<conta>:<ID externo>".
+  const extOf = (r: any) => String(r.key).split(":").slice(2).join(":");
+  const linked = (r: any) => (String(r.key).startsWith("api:") ? attributedByCampaign[extOf(r)] ?? 0 : null);
+  // 8 out 2026: de onde veio a ligação (link / clique gclid), para o título da célula.
+  const linkedTitle = (r: any): string | undefined => {
+    const n = linked(r);
+    if (!n) return undefined;
+    const g = attributedByCampaignGclid[extOf(r)] ?? 0;
+    return describeMatchCounts({ link: n - g, gclid: g });
+  };
   const { user } = useAuth();
   const isAdmin = can(user, "marketing", "manage");
   const utils = trpc.useUtils();
@@ -411,7 +420,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
         <div>
           <CardTitle>{account.name} · {eur(total.cost)} no período</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Campanhas divididas por marca/cidade (a escolhida para a campanha, mesmo que seja outra marca). "Nacional" (Brand, Pmax, Portugal) mostra-se à parte, mas o gasto é repartido pelas cidades da marca na proporção do gasto de cidade. Lado a lado: as <b>conversões</b> que a plataforma conta e as <b>reservas via net</b> reais (tudo o que não é parceiro) dessa marca/cidade. <b>Com link</b> = das via net, quantas trazem o link de origem; <b>Ligadas</b> = com a prova do clique (gclid/fbclid/utm pago).
+            Campanhas divididas por marca/cidade (a escolhida para a campanha, mesmo que seja outra marca). "Nacional" (Brand, Pmax, Portugal) mostra-se à parte, mas o gasto é repartido pelas cidades da marca na proporção do gasto de cidade. Lado a lado: as <b>conversões</b> que a plataforma conta e as <b>reservas via net</b> reais (tudo o que não é parceiro) dessa marca/cidade. <b>Com link</b> = das via net, quantas trazem o link de origem; <b>Ligadas</b> = com a prova do clique (gclid/fbclid/utm pago). Na linha da campanha: as {LINKED_EXPLAINER} (passa o rato por cima do número para ver de onde veio cada uma).
           </p>
         </div>
         {isAdmin && mySuggestions.length > 0 && (
@@ -437,7 +446,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                 <th className="text-right px-4 py-2 font-medium border-l" title="Reservas Multipark reais da marca nessa cidade que NÃO são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas. Marketplace: as vendas pelo multipark.pt nessa cidade (parques de terceiros e nossos)">Reservas via net</th>
                 <th className="text-right px-4 py-2 font-medium">Valor via net</th>
                 <th className="text-right px-4 py-2 font-medium" title="Das reservas via net, quantas trazem o link de origem — sem ele não se consegue ligar a reserva ao anúncio">Com link</th>
-                <th className="text-right px-4 py-2 font-medium" title="Reservas com gclid/fbclid/utm pago no URL de origem. Na linha da campanha: ligadas a essa campanha. Fica abaixo das conversões quando o clique se perde.">Ligadas</th>
+                <th className="text-right px-4 py-2 font-medium" title="Reservas com gclid/fbclid/utm pago no URL de origem. Na linha da campanha: ligadas a essa campanha pelo link (ID da campanha) ou pelo clique (gclid) que o Google Ads identifica. Fica abaixo das conversões quando o clique se perde.">Ligadas</th>
                 <th className="text-right px-4 py-2 font-medium" title="Valor das reservas ligadas aos anúncios">Valor ligadas</th>
               </tr>
             </thead>
@@ -504,7 +513,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                         <td className="px-4 py-1.5 text-right text-muted-foreground border-l">—</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
-                        <td className="px-4 py-1.5 text-right">{noBk || linked(r) == null ? "—" : num(linked(r))}</td>
+                        <td className="px-4 py-1.5 text-right" title={noBk ? undefined : linkedTitle(r)}>{noBk || linked(r) == null ? "—" : num(linked(r))}</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
                       </tr>
                     );
