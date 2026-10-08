@@ -76,8 +76,9 @@ export const AI_FEATURES = {
   complaint_triage: { label: "Reclamações: triagem e rascunho", flag: "AI_COMPLAINT_TRIAGE", tier: "lite", essential: false },
   review_auto_draft: { label: "Críticas: rascunho automático", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
   whatsapp_triage: { label: "WhatsApp: intenção e urgência", flag: "AI_WHATSAPP_TRIAGE", tier: "lite", essential: false },
-  // 17f: separar os emails novos das caixas gerais (info@) pela caixa do tema.
-  mail_routing: { label: "Email: separar pelas caixas", flag: "AI_MAIL_ROUTING", tier: "lite", essential: false },
+  // 17f: separar os emails novos pela caixa do tema. Jorge (8 out 2026): todas as caixas
+  // partilhadas; o WhatsApp usa a intenção da triagem (sem 2.ª chamada) com o mesmo interruptor.
+  mail_routing: { label: "Email e WhatsApp: separar pelas caixas", flag: "AI_MAIL_ROUTING", tier: "lite", essential: false },
   lost_found_match: { label: "Perdidos: correspondências", flag: "AI_LOST_FOUND_MATCH", tier: "lite", essential: false },
   // 21c: dúvidas de "é a mesma pessoa?" em Rever fichas (só factos e o 1.º nome, nunca contactos).
   crm_identity: { label: "Clientes: mesma pessoa?", flag: "AI_CRM_IDENTITY", tier: "lite", essential: false },

@@ -40,11 +40,12 @@ describe("WhatsApp: em que caixa fica a conversa", () => {
     expect(mapWhatsappIntent("parceria")).toBe("parcerias");
     expect(src("server/_core/ai/prompts/comms.ts")).toContain("servicos_extra (lavagem, carregamento, outros serviços ao carro), parcerias");
   });
-  it("a regra corre a cada mensagem e a IA aplica a caixa na triagem", () => {
+  it("a regra corre a cada mensagem e a IA aplica a caixa na triagem (só conversas novas, 49f)", () => {
     expect(src("server/whatsappInbound.ts")).toContain("await assignBoxByRule(w.conversationId);");
     const t = src("server/whatsappTriage.ts");
-    expect(t).toContain("await applyBoxFromIntent(conversationId, intent);");
-    expect(t).toContain("sql`COALESCE(${whatsappConversations.boxSource}, '') <> 'manual'`");
+    expect(t).toContain("await routeAfterTriage(conversationId, { intent, confidence: normalizeConfidence(r.output.confidence), reason: r.output.reason ?? null });");
+    // Jorge (8 out 2026): conversa que já tem caixa fica onde está (nem à mão nem pela IA muda sozinha).
+    expect(src("server/commsRouting.ts")).toContain("WHERE id = ${conversationId} AND boxKey IS NULL AND boxSource IS NULL");
   });
 });
 
@@ -83,12 +84,12 @@ describe("Email: a IA separa as caixas gerais; mover à mão; responder pelo ali
     expect(parseRoutingAnswer("geral", t)).toBeNull();
     expect(parseRoutingAnswer("parcerias", t)).toBeNull();
   });
-  it("só emails NOVOS de caixa geral (aiRoute) e com o interruptor (desligado por omissão); o aviso vai à caixa nova", () => {
+  it("só emails NOVOS das caixas partilhadas e com o interruptor (ligado por omissão desde 8 out 2026); o aviso vai à caixa nova", () => {
     const svc = src("server/mail/service.ts");
-    expect(svc).toContain("if (fresh && e.result.newThread && mailbox?.aiRoute && !createdCase && !e.classification.personal) {");
-    expect(svc).toContain('if (!(await aiFeatureAvailableFresh("mail_routing"))) return null;');
+    expect(svc).toContain("const routable = !!mailbox && !!e.result.messageId && emailRoutingEligible({");
+    expect(src("server/commsRouting.ts")).toContain('return aiFeatureAvailableFresh("mail_routing");');
     expect(svc).toContain("await notifyNewMail(e, noticeBox, projectId)");
-    expect(automationFlagDefault("AI_MAIL_ROUTING")).toBe(false);
+    expect(automationFlagDefault("AI_MAIL_ROUTING")).toBe(true);
   });
   it("a IA nunca muda uma conversa já movida; quem moveu fica registado", () => {
     const svc = src("server/mail/service.ts");

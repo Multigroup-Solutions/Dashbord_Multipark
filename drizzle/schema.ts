@@ -610,6 +610,51 @@ export const opsPressureDays = mysqlTable("ops_pressure_days", {
 	uniqueIndex("uq_ops_pressure_day").on(table.parkGroup, table.part, table.day),
 ]);
 
+// 0595 (lote 41 + Jorge, 8 out 2026): o que a IA decidiu ao separar emails das
+// caixas partilhadas e conversas novas do WhatsApp pelas caixas — uma linha por
+// mensagem/conversa (sourceRef UNIQUE: nunca se classifica duas vezes), com a
+// caixa aplicada (info quando não percebeu ou falhou), o recrutamento em 1.º
+// contacto (lead/candidatura) e quem corrigiu depois. Histórico: nada se apaga.
+export const commsAiRouting = mysqlTable("comms_ai_routing", {
+	id: int().autoincrement().primaryKey(),
+	/** email | whatsapp */
+	channel: varchar({ length: 10 }).notNull(),
+	/** "mail_message:<id>" | "whatsapp_conversation:<id>" */
+	sourceRef: varchar({ length: 64 }).notNull(),
+	threadId: int(),
+	messageId: int(),
+	conversationId: int(),
+	fromBoxKey: varchar({ length: 40 }),
+	/** O que a IA respondeu (null = não percebeu). */
+	aiBoxKey: varchar({ length: 40 }),
+	/** Caixa aplicada (info / Geral quando não percebeu ou falhou). */
+	boxKey: varchar({ length: 40 }),
+	confidence: decimal({ precision: 4, scale: 3 }),
+	reason: varchar({ length: 300 }),
+	/** ai | triage | rule | fallback */
+	via: varchar({ length: 12 }).default('ai').notNull(),
+	/** pending | moved | kept | failed */
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	error: varchar({ length: 200 }),
+	candidateJson: text(),
+	/** created | existing | employee | invalid */
+	recruitOutcome: varchar({ length: 16 }),
+	leadId: int(),
+	applicationId: int(),
+	correctedBoxKey: varchar({ length: 40 }),
+	correctedById: int(),
+	correctedAt: datetime({ mode: 'string' }),
+	decidedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_comms_ai_routing_ref").on(table.sourceRef),
+	index("idx_comms_ai_routing_thread").on(table.threadId),
+	index("idx_comms_ai_routing_conv").on(table.conversationId),
+	index("idx_comms_ai_routing_status").on(table.status, table.createdAt),
+	index("idx_comms_ai_routing_lead").on(table.leadId),
+]);
+
 // 0535 (Jorge, 7 out 2026): notas internas da ficha — team leader e acima, no
 // âmbito de cada um; a própria pessoa nunca as vê (server/rhAccess.ts).
 export const employeeNotes = mysqlTable("employee_notes", {

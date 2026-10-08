@@ -113,7 +113,7 @@ faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
 | `AI_EVALUATION_EXPLAIN` | `evaluation_explain`: explicação da avaliação | lite |
 | `AI_HANDOVER_REPEATS` | `handover_repeats`: pendentes repetidos e resumo semanal da passagem | lite |
 | `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar) | lite |
-| `AI_MAIL_ROUTING` | `mail_routing`: separar os emails novos das caixas gerais pelas caixas do tema (só move; nunca responde) | lite. **Desligado por omissão.** |
+| `AI_MAIL_ROUTING` | `mail_routing`: separar pelas caixas do tema os emails novos de TODAS as caixas partilhadas (nunca as pessoais) e as conversas NOVAS do WhatsApp (estas pela intenção da triagem, sem 2.ª chamada). Não percebeu (abaixo de `ai.commsRouting.minConfidence`, 0,7) ou falhou → info / Geral. Recrutamento em 1.º contacto → lead + candidatura (`server/recruitmentFirstContact.ts`). Uma linha por mensagem/conversa em `comms_ai_routing` (0595). Só move; nunca responde | lite. **Ligado por omissão** (Jorge, 8 out 2026). Teto `ai.commsRouting.perRun` (10) por sincronização; o resto no `ai-comms`. Corpo cortado a 2500 car., sem o histórico citado, com `redactPii`; só o 1.º nome. |
 | `AI_MAIL_DRAFT` | `mail_reply`: "Rascunho IA" na Comunicação (fica no editor) | lite |
 | `AI_WEB_INSIGHT` | `web_insight`: resumo semanal do Web & SEO | lite |
 | `AI_PAGESPEED_EXPLAIN` | `pagespeed_explain`: o que corrigir primeiro na PageSpeed | lite |

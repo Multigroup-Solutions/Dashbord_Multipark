@@ -15,7 +15,8 @@ describe("Leads de Extras: três separadores", () => {
   it("leads, candidaturas do site (com as novas) e recrutamento; ?tab= abre o certo", () => {
     expect(page).toContain('const LEADS_TABS = ["leads", "candidaturas", "recrutamento"] as const;');
     expect(page).toContain('<TabsContent value="candidaturas" className="mt-4"><CandidaturasSection /></TabsContent>');
-    expect(page).toContain('<TabsContent value="recrutamento" className="mt-4"><RecruitmentSection /></TabsContent>');
+    // 49f: "Entraram pela IA" por cima dos emails de recrutamento.
+    expect(page).toMatch(/<TabsContent value="recrutamento" className="mt-4[^"]*">(<\w+ \/>)*<RecruitmentSection \/><\/TabsContent>/);
     expect(page).toContain('trpc.driverApplications.list.useQuery({ status: "new" }');
   });
   it("as candidaturas têm componente próprio (a página dos leads não carrega a Extras Dia)", () => {
