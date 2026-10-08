@@ -277,6 +277,64 @@ export async function createCandidateFicha(c: { fullName: string; email: string;
   return id;
 }
 
+/**
+ * 1.º contacto pela IA (server/recruitmentFirstContact.ts): ficha de CANDIDATO
+ * SEM conta para a candidatura acabada de criar. Já há ficha com esse email
+ * (qualquer estado) → é essa, e a candidatura fica a apontar para ela. Nunca
+ * duplica. A conta liga-se depois, no 1.º login com o MESMO email
+ * (`linkCandidateFichaOnLogin`).
+ */
+export async function createCandidateFichaForApplication(c: { applicationId: number; email: string; fullName: string; phone?: string | null; projectId?: number | null; how: string }): Promise<number | null> {
+  const email = normalizeEmail(c.email);
+  if (!isPlausibleEmail(email)) return null;
+  const d = await database();
+  const [existing] = rowsOf(await d.execute(sql`SELECT id FROM employees
+    WHERE LOWER(TRIM(email)) = ${email} OR LOWER(TRIM(personalEmail)) = ${email} ORDER BY isActive DESC, id DESC LIMIT 1`));
+  let id: number;
+  if (existing) {
+    id = Number(existing.id);
+  } else {
+    const now = nowSql();
+    const res: any = await d.execute(sql`INSERT INTO employees (fullName, email, phone, position, contractType, userId, projectId, isActive,
+        deactivationReason, deactivatedAt, autoCreatedAt)
+      VALUES (${c.fullName.trim().slice(0, 256) || email.split("@")[0]}, ${email}, ${normalizePhoneForStorage(c.phone ?? null)}, 'extra', 'extra', NULL,
+        ${c.projectId ?? null}, 0, ${CANDIDATE_REASON}, ${now}, ${now})`);
+    id = Number((Array.isArray(res) ? res[0] : res)?.insertId ?? 0);
+    if (!id) return null;
+    const { logActivity } = await import("./db");
+    await logActivity({ userId: 0, action: "employee_candidate_create", entity: "employee", entityId: id,
+      details: `Ficha de candidato criada (${c.how}): ${c.fullName} <${email}> — inativa até o RH aprovar; liga-se à conta Google com o mesmo email` } as any).catch(() => {});
+  }
+  await d.execute(sql`UPDATE driver_applications SET employeeId = ${id} WHERE id = ${c.applicationId} AND employeeId IS NULL`);
+  return id;
+}
+
+/**
+ * No login: a conta (sem ficha) cujo email Google é o de uma ficha de
+ * CANDIDATO ainda sem conta fica ligada a ela logo — quem se candidatou por
+ * email não tem de pedir nada. Só email exato (verificado pela Google); só
+ * fichas `candidato` sem conta. Devolve a ficha ligada ou null.
+ */
+export async function linkCandidateFichaOnLogin(userId: number, rawEmail: string | null | undefined): Promise<number | null> {
+  const email = normalizeEmail(rawEmail);
+  if (!isPlausibleEmail(email)) return null;
+  const d = await database();
+  const [mine] = rowsOf(await d.execute(sql`SELECT id FROM employees WHERE userId = ${userId} LIMIT 1`));
+  if (mine) return null;
+  const [f] = rowsOf(await d.execute(sql`SELECT id, fullName FROM employees
+    WHERE userId IS NULL AND isActive = 0 AND deactivationReason = ${CANDIDATE_REASON}
+      AND (LOWER(TRIM(email)) = ${email} OR LOWER(TRIM(personalEmail)) = ${email})
+    ORDER BY id DESC LIMIT 1`));
+  if (!f) return null;
+  const res: any = await d.execute(sql`UPDATE employees SET userId = ${userId} WHERE id = ${Number(f.id)} AND userId IS NULL`);
+  const changed = Number((Array.isArray(res) ? res[0] : res)?.affectedRows ?? 0);
+  if (!changed) return null;
+  const { logActivity } = await import("./db");
+  await logActivity({ userId, action: "account_link", entity: "employee", entityId: Number(f.id),
+    details: `Ficha de candidato #${f.id} ${f.fullName ?? ""} ligada à conta #${userId} <${email}> no 1.º login (mesmo email)` } as any).catch(() => {});
+  return Number(f.id);
+}
+
 /** Candidatura → ficha de candidato (ou a ficha que já existe com esse email). Nunca duplica. */
 export async function linkFromApplication(applicationId: number, user: LinkUser, by: { actor?: { id: number; role: string } | null; how: string }): Promise<number> {
   const d = await database();

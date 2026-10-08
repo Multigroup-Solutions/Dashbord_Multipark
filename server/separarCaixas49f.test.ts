@@ -408,7 +408,7 @@ describe("recrutamento em 1.º contacto", () => {
   it("ninguém conhece a pessoa → candidatura + lead (source email), nota 'Entrou pela IA', origens marcadas, tarefa", async () => {
     const { st, store } = memStore();
     const r = await onRecruitmentFirstContact({ channel: "email", sourceRef: "ai:mail_thread:10", candidate: CAND, projectId: 2, reason: "Envia CV" }, store);
-    expect(r).toEqual({ outcome: "created", leadId: 100, applicationId: 1 });
+    expect(r).toEqual({ outcome: "created", leadId: 100, applicationId: 1, candidateEmployeeId: null });
     expect(st.apps[0]).toMatchObject({ email: "ana@sapo.pt", fullName: "Ana Sousa", phone: "+351912345678", city: "Porto", howDidYouKnow: "Email (IA)", drivingExperience: "5 anos de carta" });
     expect(st.apps[0].payload).toMatchObject({ source: "email", via: "ia", sourceRef: "ai:mail_thread:10" });
     expect(st.leads[0]).toMatchObject({ source: "email", sourceRef: "ai:mail_thread:10", phoneE164: "+351912345678", email: "ana@sapo.pt", projectId: 2 });
@@ -450,9 +450,9 @@ describe("recrutamento em 1.º contacto", () => {
     expect(r.outcome).toBe("existing");
     expect(st.leads).toHaveLength(1);
   });
-  it("lugar marcado para a ficha de candidato do 49c; nunca escreve a ninguém", () => {
+  it("com candidatura cria a ficha de candidato (49h); nunca escreve a ninguém", () => {
     const f = src("server/recruitmentFirstContact.ts");
-    expect(f).toContain("49c: a ficha de candidato (employees isActive=0, motivo `candidato`) liga-se AQUI");
+    expect(f).toContain("s.createCandidateEmployee({ applicationId, email: contact.email");
     expect(f).not.toMatch(/sendEmail|sendTemplate|replyToConversation|notify\(/);
   });
 });
