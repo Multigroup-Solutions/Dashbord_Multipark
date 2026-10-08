@@ -46,7 +46,8 @@
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, likeContains, normalizePlate, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
-import { AGGREGATOR_PAYMENT_SOURCES, PARTNER_ORIGINS, classifyBookingChannel, classifyPark, type BookingChannel } from "../../shared/multiparkParks";
+import { AGGREGATOR_PAYMENT_SOURCES, PARTNER_ORIGINS, classifyBookingChannel, classifyPark, marketplaceOperated, type BookingChannel } from "../../shared/multiparkParks";
+import { marketplaceBookingSql } from "./marketplaceSql";
 import {
   ENTERED_STATUSES, OPS_LIST_MAX_DAYS, previousRange, rangeDays, summarizeOps,
   type OpsAggRow, type OpsListKind, type OpsListRow, type OpsListSummary, type OpsParkInfo,
@@ -119,12 +120,13 @@ const inList = (p: ParamList, values: readonly string[]) => values.map((v) => p.
 
 /**
  * Canal em SQL — as MESMAS regras de classifyBookingChannel (multiparkParks.ts):
- * Marketplace = parque não nosso OU origem MARKETPLACE; Parceiro = parceiro
- * ligado, origem de parceiro ou cobrada por agregador; Direto = o resto. PURA.
+ * Marketplace = a regra única (marketplaceSql.ts: parque não nosso OU origem
+ * MARKETPLACE); Parceiro = parceiro ligado, origem de parceiro ou cobrada por
+ * agregador; Direto = o resto. PURA.
  */
 export function channelPredicate(channel: BookingChannel, ourParkIds: string[], p: ParamList): string {
   const ours = ourParkIds.length ? `b."parkId" IN (${inList(p, ourParkIds)})` : "FALSE";
-  const market = `(NOT (${ours}) OR b."origin"::text = ${p.add("MARKETPLACE")})`;
+  const market = marketplaceBookingSql(ours, p.add("MARKETPLACE"));
   const partner = `(NULLIF(b."partnerId", '') IS NOT NULL OR b."origin"::text IN (${inList(p, PARTNER_ORIGINS)}) OR COALESCE(b."paymentSource"::text, '') IN (${inList(p, AGGREGATOR_PAYMENT_SOURCES)}))`;
   if (channel === "marketplace") return market;
   if (channel === "parceiro") return `(NOT ${market} AND ${partner})`;
@@ -370,8 +372,8 @@ export function buildOpsListSql(spec: SourceSpec, bounds: OpsBounds, limit: numb
   return { sql, params: p.values };
 }
 
-/** Linha → OpsListRow (com o grupo do parque e o canal). PURA. */
-export function mapOpsListRow(kind: OpsListKind, r: Record<string, unknown>, park: Pick<DayPark, "name" | "cityName" | "key" | "label" | "ours"> | undefined): OpsListRow {
+/** Linha → OpsListRow (com o grupo do parque, o canal e se o parque é operado por nós). PURA. */
+export function mapOpsListRow(kind: OpsListKind, r: Record<string, unknown>, park: Pick<DayPark, "name" | "cityName" | "key" | "label" | "ours"> & { id?: string } | undefined, excludedParkIds?: ReadonlySet<string>): OpsListRow {
   const price = num(r.price);
   const paid = num(r.paid);
   const partnerId = str(r.partner_id);
@@ -396,6 +398,7 @@ export function mapOpsListRow(kind: OpsListKind, r: Record<string, unknown>, par
     groupKey: cls.key,
     groupLabel: cls.label,
     ours: cls.ours,
+    operated: marketplaceOperated({ id: String(r.park_id ?? ""), name: cls.name, ours: cls.ours }, excludedParkIds),
     clientName: [str(r.client_first_name), str(r.client_last_name)].filter(Boolean).join(" ") || null,
     clientEmail: str(r.client_email),
     clientPhone: str(r.client_phone),
@@ -454,8 +457,12 @@ export interface OpsListResult {
   aggTruncated: boolean;
 }
 
-/** Uma lista das Operações, só dos parques das cidades `cities` (undefined = todas). */
-export async function getMultiparkOpsList(input: OpsListInput, cities?: string[], query: Query = multiparkDbQuery): Promise<MultiparkRead<OpsListResult>> {
+/**
+ * Uma lista das Operações, só dos parques das cidades `cities` (undefined =
+ * todas). `excludedParkIds` (Definições → "Parques que a operação não faz") só
+ * serve a etiqueta "operado por nós / não operado" — não tira nada da lista.
+ */
+export async function getMultiparkOpsList(input: OpsListInput, cities?: string[], query: Query = multiparkDbQuery, excludedParkIds: readonly string[] = []): Promise<MultiparkRead<OpsListResult>> {
   return safeMultiparkRead(`lista ${input.kind}`, async () => {
     const bounds = opsBounds(input.from, input.to);
     const limit = Math.min(Math.max(Math.floor(input.limit ?? OPS_LIST_PAGE_DEFAULT), 1), OPS_LIST_PAGE_MAX);
@@ -481,10 +488,11 @@ export async function getMultiparkOpsList(input: OpsListInput, cities?: string[]
     const list = buildOpsListSql(spec, bounds, limit, offset);
     const [aggRows, listRows] = await Promise.all([query(agg.sql, agg.params), query(list.sql, list.params)]);
     const byId = new Map(parks.map((p) => [p.id, p]));
+    const excluded = new Set(excludedParkIds);
     return {
       ...base,
       summary: summarizeOps(input.kind, aggRows.map(mapAggRow), parksOut, spec.channel),
-      rows: listRows.slice(0, limit).map((r) => mapOpsListRow(input.kind, r, byId.get(String(r.park_id ?? "")))),
+      rows: listRows.slice(0, limit).map((r) => mapOpsListRow(input.kind, r, byId.get(String(r.park_id ?? "")), excluded)),
       hasMore: listRows.length > limit,
       aggTruncated: aggRows.length >= OPS_AGG_LIMIT,
     };

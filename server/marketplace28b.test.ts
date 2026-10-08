@@ -67,10 +67,10 @@ describe("28b — Parcerias → Faturação: as contas do Marketplace ficam com 
     const live = mapPartnerBilling([
       { kind: "market_own", key: "pk-al", n: 4, value: 246, ours: null, missing: 0, commission: null },
       { kind: "market", key: "pk-x", n: 2, value: 200, ours: null, missing: 0, commission: 50 },
-    ], new Map([["pk-al", { name: "Airpark Lisboa", city: "Lisboa" }], ["pk-x", { name: "Boardingpark", city: "Lisboa" }]]));
+    ], new Map([["pk-al", { name: "Airpark Lisboa", city: "Lisboa", cityKey: "lisboa" as const }], ["pk-x", { name: "Boardingpark", city: "Prior Velho", cityKey: "lisboa" as const }]]));
     expect(live.marketplace).toEqual([
-      { parkId: "pk-x", parkName: "Boardingpark", city: "Lisboa", bookings: 2, value: 200, commission: 50, missing: 0, rate: 25 },
-      { parkId: "pk-al", parkName: "Airpark Lisboa", city: "Lisboa", bookings: 4, value: 246, commission: 40, missing: 0, rate: 20, own: true },
+      { parkId: "pk-x", parkName: "Boardingpark", city: "Prior Velho", cityKey: "lisboa", bookings: 2, value: 200, commission: 50, missing: 0, rate: 25 },
+      { parkId: "pk-al", parkName: "Airpark Lisboa", city: "Lisboa", cityKey: "lisboa", bookings: 4, value: 246, commission: 40, missing: 0, rate: 20, own: true },
     ]);
   });
 

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeft, ExternalLink, Loader2 } from "lucide-react";
 import { Pill, eur, fmtPhone, monthYear, num } from "@/components/crm/crmUi";
 import { telHref } from "@shared/phone";
+import { operatedLabel } from "@shared/marketplace";
 import { Card, CrmNotesCard, Kpi, MonthsTable, RecentTable, TopClients } from "@/components/crm/PartnerBlocks";
 
 const STATUS_LABEL: Record<string, string> = { ACTIVE: "ativo", PENDING: "pendente", INACTIVE: "inativo" };
@@ -31,6 +32,7 @@ export default function CrmParkPage() {
         <Button variant="ghost" asChild><Link href="/clientes"><ChevronLeft className="h-4 w-4" />Clientes</Link></Button>
         <h1 className="font-display text-[22px] font-bold tracking-[-0.02em]">{p.name}</h1>
         <Pill className="bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">Nós agregamos</Pill>
+        <Pill className={p.operated ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200" : "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"}>{operatedLabel(p.operated).toLowerCase()}</Pill>
         {p.status && <Pill className={p.status === "ACTIVE" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200" : "bg-muted text-muted-foreground"}>{STATUS_LABEL[p.status] ?? p.status}</Pill>}
         {p.listingType && <Pill className="bg-muted text-foreground">{LISTING_LABEL[p.listingType] ?? p.listingType}</Pill>}
         {p.createdAt && <Pill className="bg-muted text-foreground">desde {monthYear(p.createdAt)}</Pill>}

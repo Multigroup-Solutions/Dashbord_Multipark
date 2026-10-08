@@ -12,14 +12,17 @@
  *   - Marca: `Park.firebaseBrand` quando preenchido (normalizado: sem acentos,
  *     espaços nem maiúsculas); se vazio, o NOME do parque. Conta como marca
  *     nossa se contiver "airpark", "redpark" ou "skypark".
- *   - Cidade: `Park.city`; só se estiver vazia, o nome do parque.
+ *   - Cidade: `Park.city` (o nome da cidade ou, 8 out 2026, uma terra à
+ *     volta — "Prior Velho", "Moscavide", "Maia"…); só se estiver vazia, o
+ *     nome do parque; por fim a morada (`Park.address`). Ver resolveParkCity.
  *   - "Parque nosso" = marca ∈ {Airpark, Redpark, Skypark} E cidade ∈
  *     {Lisboa, Porto, Faro}. Cada par marca + cidade é um grupo
  *     ("Airpark Lisboa"); todos os outros ficam num só bloco "Marketplace".
  *   - `Park.listingType` (ON_PLATFORM / DIRECTORY) só se mostra; não conta.
  *
  * CANAL DA RESERVA (contabilidade)
- *   - "Marketplace": o parque NÃO é nosso, OU `Booking.origin = 'MARKETPLACE'`.
+ *   - "Marketplace": o parque NÃO é nosso, OU `Booking.origin = 'MARKETPLACE'`
+ *     — a regra única isMarketplaceBooking (shared/marketplace.ts).
  *   - "Parceiro": parque nosso E (`partnerId` preenchido → nome + tipo do
  *     Partner; OU origem PARTNER_API / PARTNER_DASHBOARD; OU, só quando não há
  *     `partnerId`, cobrada por um agregador: paymentSource PARKVIA / PARKOS /
@@ -28,8 +31,9 @@
  *   Operacionalmente, todas as reservas dos parques nossos continuam no grupo
  *   do parque (recolha/entrega), seja qual for o canal.
  */
-import { matchCityKey, CITY_LABELS, type CityKey } from "./city";
+import { matchCityKey, cityKeyFromAddress, cityKeyFromPlace, CITY_LABELS, type CityKey } from "./city";
 import { matchKey, matchWords } from "./textKey";
+import { isMarketplaceBooking } from "./marketplace";
 
 // ─── Parques ────────────────────────────────────────────────────────────────
 
@@ -72,6 +76,20 @@ export function isNotOperatedByName(name: string | null | undefined): boolean {
   return noCity.length > 0 && noCity !== k && NOT_OPERATED_KEYS.has(noCity);
 }
 
+/**
+ * Parque OPERADO por nós? (Jorge, 8 out 2026: "se o parque é operado por nós
+ * temos uma comissão, se não é, temos outra"). Os nossos sempre; os de
+ * terceiros, menos os da lista do dono (isNotOperatedByName) e os escolhidos
+ * em Definições → "Parques que a operação não faz" (`excludedIds`, quando quem
+ * chama os tem). É só uma ETIQUETA — não tira nenhuma reserva de lado. PURA.
+ */
+export function marketplaceOperated(p: { id?: string | null; name?: string | null; ours?: boolean }, excludedIds?: ReadonlySet<string> | readonly string[] | null): boolean {
+  if (p.ours) return true;
+  if (isNotOperatedByName(p.name)) return false;
+  const ex = excludedIds instanceof Set ? excludedIds : new Set(excludedIds ?? []);
+  return !(p.id && ex.has(p.id));
+}
+
 /** Nomes da lista sem nenhum parque com esse nome (para avisar nas Definições). PURA. */
 export function unmatchedNotOperatedNames(parkNames: readonly (string | null | undefined)[]): string[] {
   const hit = new Set<string>();
@@ -102,9 +120,21 @@ export const PARK_STATUS_LABELS: Record<string, string> = {
 export interface ParkInput {
   name?: string | null;
   city?: string | null;
+  /** `Park.address` — último recurso para a cidade. */
+  address?: string | null;
   firebaseBrand?: string | null;
   listingType?: string | null;
 }
+
+/** De onde veio a cidade do parque. */
+export type ParkCitySource = "city" | "place" | "name" | "address";
+
+export const PARK_CITY_SOURCE_LABELS: Record<ParkCitySource, string> = {
+  city: "cidade",
+  place: "terra da cidade",
+  name: "nome",
+  address: "morada",
+};
 
 export interface ParkClassification {
   /** "airpark_lisboa", … ou "marketplace". */
@@ -118,7 +148,7 @@ export interface ParkClassification {
   brandSource: "firebaseBrand" | "name";
   city: CityKey | null;
   /** De onde veio a cidade (null = não reconhecida). */
-  citySource: "city" | "name" | null;
+  citySource: ParkCitySource | null;
   /** ON_PLATFORM / DIRECTORY (só para mostrar). */
   listingType: string | null;
   /** Porquê, em texto curto ("Airpark (firebaseBrand) + Lisboa"). */
@@ -142,23 +172,44 @@ export function ourBrandOf(text: string | null | undefined): OurParkBrand | null
   return OUR_PARK_BRANDS.find((b) => n.includes(b)) ?? null;
 }
 
+/**
+ * Cidade (Lisboa / Porto / Faro) de um parque — o RESOLVEDOR ÚNICO (parque
+ * nosso, Marketing, orçamento do Marketplace, âmbito de cidade):
+ *   1. `Park.city`: o nome da cidade ("Lisboa", "Oporto") ou uma terra à volta
+ *      ("Prior Velho", "Moscavide", "Maia" — CITY_PLACE_KEYWORDS);
+ *   2. só com `city` VAZIA, o nome do parque ("Skypark Faro") — uma cidade
+ *      escrita e de fora das três (ex.: "Madrid") nunca é corrigida pelo nome;
+ *   3. por fim a morada (`Park.address`, a terra mais perto do fim).
+ * PURA.
+ */
+export function resolveParkCity(p: { city?: string | null; name?: string | null; address?: string | null }): { city: CityKey | null; source: ParkCitySource | null } {
+  const cityRaw = clean(p.city);
+  if (cityRaw) {
+    const direct = matchCityKey(cityRaw);
+    if (direct) return { city: direct, source: "city" };
+    const place = cityKeyFromPlace(cityRaw);
+    if (place) return { city: place, source: "place" };
+  } else {
+    const fromName = matchCityKey(p.name);
+    if (fromName) return { city: fromName, source: "name" };
+  }
+  const fromAddress = cityKeyFromAddress(p.address);
+  return fromAddress ? { city: fromAddress, source: "address" } : { city: null, source: null };
+}
+
 /** Grupo de um parque (colunas da tabela "Park"). PURA. */
 export function classifyPark(p: ParkInput): ParkClassification {
   const fb = clean(p.firebaseBrand);
   const brandSource: ParkClassification["brandSource"] = fb ? "firebaseBrand" : "name";
   const brand = fb ? ourBrandOf(fb) : ourBrandOf(p.name);
-  // A cidade do parque manda; o nome só serve quando `city` está vazio.
   const cityRaw = clean(p.city);
-  const fromCity = cityRaw ? matchCityKey(cityRaw) : null;
-  const fromName = cityRaw ? null : matchCityKey(p.name);
-  const city = fromCity ?? fromName;
-  const citySource: ParkClassification["citySource"] = fromCity ? "city" : fromName ? "name" : null;
+  const { city, source: citySource } = resolveParkCity(p);
   const listingType = clean(p.listingType)?.toUpperCase() ?? null;
   const brandTxt = brand
     ? `${OUR_PARK_BRAND_LABELS[brand]} (${brandSource === "firebaseBrand" ? "firebaseBrand" : "nome"})`
     : fb ? `marca "${fb}" não é nossa` : "nome sem marca nossa";
   const cityTxt = city
-    ? `${CITY_LABELS[city]}${citySource === "name" ? " (nome)" : ""}`
+    ? `${CITY_LABELS[city]}${citySource && citySource !== "city" ? ` (${PARK_CITY_SOURCE_LABELS[citySource]}${citySource === "place" && cityRaw ? ` "${cityRaw}"` : ""})` : ""}`
     : cityRaw ? `cidade "${cityRaw}" fora das três` : "sem cidade";
   if (brand && city && OUR_PARK_CITIES.includes(city)) {
     const ci = OUR_PARK_CITIES.indexOf(city);
@@ -262,7 +313,7 @@ export function classifyBookingChannel(b: BookingChannelInput): BookingChannelIn
   const pName = clean(b.partnerName);
   const partnerTxt = b.partnerId ? (partnerTypeLabel ? `${pName ?? "Parceiro"} (${partnerTypeLabel})` : pName ?? "Parceiro") : null;
 
-  if (!b.parkOurs || origin === "MARKETPLACE") {
+  if (isMarketplaceBooking({ parkOurs: b.parkOurs, origin })) {
     const why = !b.parkOurs ? "Parque de terceiros" : "Origem Marketplace";
     return {
       channel: "marketplace",

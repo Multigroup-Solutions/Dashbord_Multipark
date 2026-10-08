@@ -4,7 +4,8 @@
  *
  * Do nosso lado:
  *   - só os NOSSOS parques (Airpark/Redpark/Skypark em Lisboa/Porto/Faro —
- *     shared/multiparkParks.ts). Os do marketplace ficam fora da receita;
+ *     shared/multiparkParks.ts; a cidade pelo resolvedor único, que reconhece
+ *     "Prior Velho", "Maia"…). Os do marketplace ficam fora da receita;
  *   - parque → centro de custos pelo mesmo matcher que a cópia usava
  *     (shared/projectTree.ts createParkMatcher). Parque nosso sem centro →
  *     projectId null ("Por atribuir", aviso de qualidade);
@@ -14,9 +15,9 @@
  *     a mesma regra com que a cópia era gravada.
  */
 import type { FinanceAggKind, FinanceAggRow, MultiparkParkRow } from "../multiparkDb/financeAgg";
-import { classifyPark } from "../../shared/multiparkParks";
+import { classifyPark, marketplaceOperated, resolveParkCity } from "../../shared/multiparkParks";
 import { MARKETPLACE_BRAND, createParkMatcher, isNodeActive, normalizeParkName, type ProjectTreeNode } from "../../shared/projectTree";
-import { matchCityKey } from "../../shared/city";
+import { CITY_LABELS, matchCityKey } from "../../shared/city";
 import { bookingCampaignFallback } from "../../shared/partnerRules";
 import { MARKETPLACE_CAMPAIGN } from "../../shared/marketplace";
 
@@ -48,23 +49,50 @@ export interface LiveContext {
   aliases: Map<string, string>;
   /**
    * Marketing (Jorge, 7 out 2026: "não encontramos as reservas do Marketplace"):
-   * parques de TERCEIROS → nó do Marketplace (o parque debaixo de "Marketplace
-   * <cidade>", senão o próprio nó Marketplace da cidade; null sem nó). Só o
-   * Marketing os lê — a receita, a Caixa e o CRM continuam só com os nossos.
+   * TODOS os parques de TERCEIROS → nó do Marketplace (o parque debaixo de
+   * "Marketplace <cidade>", senão o próprio nó Marketplace da cidade; null =
+   * sem cidade reconhecida ou cidade sem nó Marketplace → "Marketplace (sem
+   * cidade)", com aviso — 8 out 2026, antes ficavam de fora). Só o Marketing
+   * os lê — a receita, a Caixa e o CRM continuam só com os nossos.
    */
   marketplaceParks?: Map<string, number | null>;
+  /** Parques de terceiros: nome, cidade gravada e se são operados por nós (etiqueta da comissão). */
+  marketplaceParkInfo?: Map<string, MarketplaceParkInfo>;
   /** nó "Marketplace" (marca) de cada cidade: "lisboa" | "porto" | "faro" → id */
   marketplaceNodeByCity?: Map<string, number>;
   /** cidade (chave) de cada parque nosso — para pôr no Marketplace o que veio por multipark.pt */
   parkCity?: Map<string, string | null>;
 }
 
+export interface MarketplaceParkInfo { name: string; city: string | null; operated: boolean }
+
+const classify = (p: MultiparkParkRow) => classifyPark({ name: p.name, city: p.city, address: p.address, firebaseBrand: p.firebaseBrand, listingType: p.listingType });
+/**
+ * Cidade para o matcher de centros: a reconhecida (resolveParkCity — "Prior
+ * Velho" → Lisboa), senão a gravada. PURA.
+ */
+const matcherCity = (p: MultiparkParkRow): string | null => {
+  const key = resolveParkCity(p).city;
+  return key ? CITY_LABELS[key] : p.city;
+};
+
 /** Parques → nossos + centro. PURA. */
 export function buildOurParks(parks: MultiparkParkRow[], matcher: (i: { parkName?: string | null; city?: string | null }) => number | undefined): Map<string, number | null> {
   const out = new Map<string, number | null>();
   for (const p of parks) {
-    if (!classifyPark({ name: p.name, city: p.city, firebaseBrand: p.firebaseBrand, listingType: p.listingType }).ours) continue;
-    out.set(p.id, matcher({ parkName: p.name, city: p.city }) ?? null);
+    if (!classify(p).ours) continue;
+    out.set(p.id, matcher({ parkName: p.name, city: matcherCity(p) }) ?? null);
+  }
+  return out;
+}
+
+/** Parques de terceiros → nome, cidade gravada e operado por nós. PURA. */
+export function buildMarketplaceParkInfo(parks: MultiparkParkRow[], excludedParkIds: readonly string[] = []): Map<string, MarketplaceParkInfo> {
+  const ex = new Set(excludedParkIds);
+  const out = new Map<string, MarketplaceParkInfo>();
+  for (const p of parks) {
+    if (classify(p).ours) continue;
+    out.set(p.id, { name: p.name, city: p.city, operated: marketplaceOperated({ id: p.id, name: p.name, ours: false }, ex) });
   }
   return out;
 }
@@ -85,9 +113,10 @@ export function marketplaceNodesByCity(nodes: readonly ProjectTreeNode[]): Map<s
 }
 
 /**
- * Parques de terceiros (não nossos) → nó do Marketplace: o nó do parque se
- * estiver debaixo de um nó Marketplace; senão o nó Marketplace da cidade do
- * parque (ex.: um parque pendurado diretamente na cidade); null sem nada. PURA.
+ * TODOS os parques de terceiros (não nossos) → nó do Marketplace: o nó do
+ * parque se estiver debaixo de um nó Marketplace; senão o nó Marketplace da
+ * cidade do parque (resolveParkCity: cidade, terra à volta, nome, morada);
+ * null sem nada — o parque ENTRA na mesma ("Marketplace (sem cidade)"). PURA.
  */
 export function buildMarketplaceParks(parks: MultiparkParkRow[], matcher: (i: { parkName?: string | null; city?: string | null }) => number | undefined, nodes: readonly ProjectTreeNode[]): Map<string, number | null> {
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -104,10 +133,10 @@ export function buildMarketplaceParks(parks: MultiparkParkRow[], matcher: (i: { 
   };
   const out = new Map<string, number | null>();
   for (const p of parks) {
-    if (classifyPark({ name: p.name, city: p.city, firebaseBrand: p.firebaseBrand, listingType: p.listingType }).ours) continue;
-    const hit = matcher({ parkName: p.name, city: p.city });
+    if (classify(p).ours) continue;
+    const hit = matcher({ parkName: p.name, city: matcherCity(p) });
     if (hit != null && underMarketplace(hit)) { out.set(p.id, hit); continue; }
-    const city = matchCityKey(p.city) ?? matchCityKey(p.name);
+    const city = resolveParkCity(p).city;
     out.set(p.id, city ? byCity.get(city) ?? null : null);
   }
   return out;
@@ -172,20 +201,31 @@ async function loadAliases(): Promise<Map<string, string>> {
   return map;
 }
 
+/** "Parques que a operação não faz" (Definições) — só para a etiqueta "operado / não operado". */
+async function loadExcludedParkIds(): Promise<string[]> {
+  try {
+    const { getSetting } = await import("../appSettings");
+    return ((await getSetting("operations.excludedParks")) as string[] | null) ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export async function loadLiveContext(): Promise<LiveContext> {
   if (ctxCache && Date.now() - ctxCache.at < CTX_TTL_MS) return ctxCache.ctx;
   const [{ readParks }, { getProjects }, { PARK_CONFIGS }] = await Promise.all([
     import("../multiparkDb/financeAgg"), import("../db"), import("../multipark"),
   ]);
-  const [parks, projects, aliases] = await Promise.all([readParks(), getProjects(), loadAliases()]);
+  const [parks, projects, aliases, excludedParkIds] = await Promise.all([readParks(), getProjects(), loadAliases(), loadExcludedParkIds()]);
   const matcher = createParkMatcher(projects as any, PARK_CONFIGS);
   const ourParks = buildOurParks(parks, matcher);
   const parkInfo = new Map(parks.filter((p) => ourParks.has(p.id)).map((p) => [p.id, { name: p.name, city: p.city }]));
   const nodes = projects as unknown as ProjectTreeNode[];
   const marketplaceParks = buildMarketplaceParks(parks, matcher, nodes);
+  const marketplaceParkInfo = buildMarketplaceParkInfo(parks, excludedParkIds);
   const marketplaceNodeByCity = marketplaceNodesByCity(nodes);
-  const parkCity = new Map(parks.filter((p) => ourParks.has(p.id)).map((p) => [p.id, matchCityKey(p.city) ?? matchCityKey(p.name)]));
-  const ctx: LiveContext = { ourParks, parkInfo, aliases, marketplaceParks, marketplaceNodeByCity, parkCity };
+  const parkCity = new Map(parks.filter((p) => ourParks.has(p.id)).map((p) => [p.id, resolveParkCity(p).city]));
+  const ctx: LiveContext = { ourParks, parkInfo, aliases, marketplaceParks, marketplaceParkInfo, marketplaceNodeByCity, parkCity };
   ctxCache = { at: Date.now(), ctx };
   return ctx;
 }
