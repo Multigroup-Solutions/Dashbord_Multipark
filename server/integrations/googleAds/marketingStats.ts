@@ -9,6 +9,10 @@
  *    sem canceladas — a mesma regra e a mesma fronteira das Reservas &
  *    Operações (server/marketingSql.ts).
  *  - "Via anúncios" = adAttribution google_paid OU meta_paid (prova no link).
+ *  - Valor (8 out 2026, shared/viaNet.ts): nas reservas via net, nas ligadas
+ *    e em todos os ROAS, os parques de TERCEIROS valem só a nossa comissão; os
+ *    nossos, o preço inteiro. "Valor das reservas" (revenueTotal) continua o
+ *    preço de todas. Via net = não parceiro, sem pendentes, Pro nem avenças.
  *  - ROAS s/ IVA = receita ÷ (1 + IVA) ÷ gasto, com o IVA das Definições em
  *    vigor no fim do período (finance/rates.ts → vatRateForPeriod). O
  *    ROAS que a Google reporta (valor de conversão ÷ gasto) mostra-se à parte.
@@ -29,8 +33,12 @@ import { isAdPlatformInvoice, roasNetOfVat } from "../../../shared/marketingRule
 import { lisbonDaySql } from "../../../shared/lisbonDay";
 import { vatRateForPeriod } from "../../finance/rates";
 import { inLisbonDaysSql, marketingProjectIds, notCancelledSql } from "../../marketingSql";
+import { brandNodeResolver, splitViaNet, viaNetParticipants, viaNetPools, type CampaignViaNet, type ViaNetExclusion } from "../../../shared/viaNet";
 import { getAdMetrics, API_PROVIDERS, type AdMetricsResult } from "./adMetrics";
 import { getConnection } from "./oauth";
+
+/** Valor da reserva para o Marketing (shared/viaNet.ts); sem ele, o preço. */
+const valueOf = (b: { value?: number; total: number }) => b.value ?? b.total;
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 /** Origens em que a reserva é feita num site (onde o gclid/utm pode chegar) — ver shared/bookingOrigin.ts. */
@@ -72,7 +80,10 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   const conn = await getConnection();
   const vat = await vatRateForPeriod(f.from, f.to);
 
-  let bookingsTotal = 0, bookingsAttributed = 0, bookingsGoogle = 0, bookingsMeta = 0, revenueTotal = 0, revenueAttributed = 0;
+  let bookingsTotal = 0, bookingsAttributed = 0, bookingsGoogle = 0, bookingsMeta = 0, revenueTotal = 0, revenueAttributed = 0, valueTotal = 0;
+  // 8 out 2026: não parceiros que NÃO contam como via net, e terceiros sem comissão (valor 0)
+  const viaNetExcluded: Record<ViaNetExclusion, number> = { pending: 0, pro: 0, plan: 0 };
+  let commissionMissing = 0;
   // 28c: "via net" = tudo o que não é parceiro (o que os anúncios podem trazer); com link = traz o link de origem
   let bookingsWeb = 0, revenueWeb = 0, webWithLink = 0;
   let bookingsByDay: Array<{ date: string; total: number; attributed: number }> = [];
@@ -97,9 +108,10 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   const byDay = new Map<string, { total: number; attributed: number }>();
   for (const b of bookings) {
     const paid = PAID.includes(b.adAttribution);
-    bookingsTotal++; revenueTotal += b.total;
-    if (paid) { bookingsAttributed++; revenueAttributed += b.total; }
-    if (b.viaNet) { bookingsWeb++; revenueWeb += b.total; if (b.hasOriginUrl) webWithLink++; }
+    bookingsTotal++; revenueTotal += b.total; valueTotal += valueOf(b);
+    if (paid) { bookingsAttributed++; revenueAttributed += valueOf(b); }
+    if (b.viaNet) { bookingsWeb++; revenueWeb += valueOf(b); if (b.hasOriginUrl) webWithLink++; if (b.commissionMissing) commissionMissing++; }
+    if (b.viaNetOut) viaNetExcluded[b.viaNetOut]++;
     if (b.adAttribution === "google_paid") bookingsGoogle++;
     if (b.adAttribution === "meta_paid") bookingsMeta++;
     const d = byDay.get(b.day) ?? { total: 0, attributed: 0 };
@@ -161,13 +173,17 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     revenueTotal: bk(revenueTotal), revenueAttributed: bk(revenueAttributed),
     /** 28c: reservas "via net" (não parceiros) e o valor; quantas trazem o link de origem */
     bookingsWeb: bk(bookingsWeb), revenueWeb: bk(revenueWeb), webWithLink: bk(webWithLink),
+    /** 8 out 2026: não parceiros que ficaram fora do via net (pendentes, Pro, avenças) */
+    viaNetExcluded: bk(viaNetExcluded),
+    /** 8 out 2026: via net em parques de terceiros sem comissão gravada nem taxa do parque (valem 0) */
+    viaNetCommissionMissing: bk(commissionMissing),
     costPerWebBooking: bookingsError ? null : ratio(spend, bookingsWeb),
     vatRate: vat,
     costPerAttributedBooking: bookingsError ? null : ratio(spend, bookingsAttributed),
     /** ROAS das reservas ligadas, sem IVA */
     roasAttributedNet: bookingsError ? null : roasNetOfVat(revenueAttributed, spend, vat),
-    /** ROAS global (todas as reservas ÷ gasto), sem IVA — indicador, não atribuição */
-    roasTotalNet: bookingsError ? null : roasNetOfVat(revenueTotal, spend, vat),
+    /** ROAS global (todas as reservas ÷ gasto), sem IVA — indicador, não atribuição; terceiros pela comissão */
+    roasTotalNet: bookingsError ? null : roasNetOfVat(valueTotal, spend, vat),
     adCostPerBooking: bookingsError ? null : ratio(spend, bookingsTotal),      // indicador GLOBAL — não atribui todas as reservas aos anúncios
     // Outros custos de marketing (Despesas, categoria Marketing, SEM as faturas Google/Meta)
     mktExpenses,
@@ -256,9 +272,9 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   for (const b of live) {
     const r = b.projectId == null && b.marketplace ? marketplaceNoCity : byProject.get(b.projectId) ?? emptyAgg(b.projectId);
     const paid = b.adAttribution === "google_paid" || b.adAttribution === "meta_paid";
-    r.n++; r.rev += b.total;
-    if (paid) { r.attributed++; r.revAttributed += b.total; }
-    if (b.viaNet) { r.web++; r.revWeb += b.total; if (b.hasOriginUrl) r.webLink++; }
+    r.n++; r.rev += valueOf(b);
+    if (paid) { r.attributed++; r.revAttributed += valueOf(b); }
+    if (b.viaNet) { r.web++; r.revWeb += valueOf(b); if (b.hasOriginUrl) r.webLink++; }
     if (r !== marketplaceNoCity) byProject.set(b.projectId, r);
   }
   const bookingRows = [...byProject.values()];
@@ -303,13 +319,7 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     brands.set(k, row);
   }
   // Nó marca (debaixo da cidade) de um projeto
-  const byId = new Map(allProjects.map((p) => [p.id, p]));
-  const brandNodeOf = (projectId: number | null): number | null => {
-    if (projectId == null) return null;
-    let node = byId.get(projectId); const seen = new Set<number>();
-    while (node && node.level !== "brand") { if (seen.has(node.id) || node.parentId == null) return null; seen.add(node.id); node = byId.get(node.parentId); }
-    return node ? node.id : null;
-  };
+  const brandNodeOf = brandNodeResolver(allProjects);
   const byBrandCity = new Map<number, CityRow>();
   const cityRow = (node: number) => { const c = byBrandCity.get(node) ?? { projectId: node, spend: 0, bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0, bookingsWeb: 0, revenueWeb: 0, webWithLink: 0 }; byBrandCity.set(node, c); return c; };
   let unassignedSpend = 0;
@@ -343,6 +353,8 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     brands.set(k, row);
   }
   for (const b of brands.values()) b.roasNet = bookingsError ? null : roasNetOfVat(b.revenue, b.spend, vat);
+  // 8 out 2026: o via net de cada marca/cidade repartido pelas campanhas dela (conversões → cliques → gasto)
+  const viaNet = splitViaNet(viaNetPools(live, brandNodeOf).pools, viaNetParticipants(ads.byCampaign.filter((c) => c.source === "api"), ads.nationalShares, brandNodeOf));
   return {
     range: { from: f.from, to: f.to },
     accounts: accounts.map((a) => ({ id: a.id, name: a.name ?? `Conta ${a.id}`, provider: a.provider })),
@@ -353,6 +365,10 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     /** 8 out 2026: todas as reservas do Marketplace (operado / não operado / sem cidade) e os parques sem cidade (aviso) */
     marketplace: bookingsError ? null : marketplace,
     unplacedMarketplaceParks,
+    /** 8 out 2026: via net repartido por campanha (chave "api:<conta>:<externo>") — null sem reservas */
+    viaNetByCampaign: bookingsError ? null : (Object.fromEntries(viaNet.byCampaign) as Record<string, CampaignViaNet>),
+    /** via net de marcas/cidades sem campanhas para o receber */
+    viaNetUnassigned: bookingsError ? null : viaNet.unassigned,
     vatRate: vat,
     bookingsError,
   };

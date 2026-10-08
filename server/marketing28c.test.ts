@@ -44,6 +44,11 @@ describe("28c — reservas 'via net' = tudo o que não é parceiro", () => {
     expect(via({ origin: "PARTNER_API" })).toBe(false);
     expect(via({ paymentSource: "PARKVIA" })).toBe(false);
     expect(via({ paymentSource: "stripe" })).toBe(true);
+    // 8 out 2026 (Jorge, "3 não"): pendentes, clientes Pro e avenças não contam como via net
+    expect(via({ status: "PENDING" })).toBe(false);
+    expect(via({ pro: true })).toBe(false);
+    expect(via({ plan: true })).toBe(false);
+    expect(via({ status: "CHECKED_OUT" })).toBe(true);
   });
 });
 
@@ -84,7 +89,8 @@ describe("28c — números do Marketing: conversões das plataformas e reservas 
     const stats = src("server/integrations/googleAds/marketingStats.ts");
     expect(stats).toContain(`if (c.provider === "meta") row.conversionsMeta += c.conversions;`);
     expect(stats).toContain("row.conversionValue += c.conversionValue; row.impressions += c.impressions; row.clicks += c.clicks;");
-    expect(stats).toContain("if (b.viaNet) { r.web++; r.revWeb += b.total; if (b.hasOriginUrl) r.webLink++; }");
+    // 8 out 2026: o valor via net é o valor para o Marketing (terceiros = a nossa comissão)
+    expect(stats).toContain("if (b.viaNet) { r.web++; r.revWeb += valueOf(b); if (b.hasOriginUrl) r.webLink++; }");
     expect(stats).toContain("c.bookingsWeb += r.web; c.revenueWeb += r.revWeb; c.webWithLink += r.webLink;");
   });
 });

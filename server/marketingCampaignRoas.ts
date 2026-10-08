@@ -14,6 +14,13 @@
  *   3. código de desconto (campo `campaign`/`campaignName` da reserva) com
  *      ligação criada pelo admin.
  * Cada campanha diz de onde vieram as ligadas (`linkedBy`: link / gclid / utm / código).
+ * Via net por campanha (Jorge, 8 out 2026 — shared/viaNet.ts): as reservas
+ * via net de cada marca/cidade (não parceiros, sem pendentes, Pro nem avenças)
+ * repartidas pelas campanhas dela pelas conversões da plataforma (sem
+ * conversões, cliques; sem cliques, gasto); as nacionais pela sua parte em
+ * cada cidade. Ao lado das ligadas, que continuam a ser as diretas.
+ * Valor (ligadas, via net e ROAS): parques nossos = preço inteiro; de
+ * terceiros = só a nossa comissão.
  * Reservas pela data de criação (dias de Lisboa), sem canceladas.
  * Também devolve as conversões por AÇÃO (ad_conversion_action_metrics).
  */
@@ -24,6 +31,7 @@ import { vatRateForPeriod } from "./finance/rates";
 import { netOfVatAmount, roasNetOfVat } from "../shared/marketingRules";
 import { inLisbonDaysSql, marketingProjectIds, notCancelledSql } from "./marketingSql";
 import type { CampaignEvidence, CampaignMatchBy } from "../shared/campaignEvidence";
+import { brandNodeResolver, splitViaNet, viaNetParticipants, viaNetPools } from "../shared/viaNet";
 
 const rowsOf = <T = any>(r: any): T[] => (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r) as T[];
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
@@ -103,11 +111,17 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
   const { loadMarketingBookings } = await import("./marketingLive");
   // 8 out 2026: sem ID no link, a campanha do clique (gclid) que o Google Ads identifica — em lote.
   const { withClickCampaigns } = await import("./integrations/googleAds/clickAttribution");
-  const bookings: BookingForMatch[] = (await withClickCampaigns(await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true })))
+  const all = await withClickCampaigns(await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }));
+  const bookings: BookingForMatch[] = all
     .filter((b) => b.adCampaignExternalId != null || (b.utmCampaign != null && utmSet.has(norm(b.utmCampaign)))
       || (b.campaign != null && codeSet.has(norm(b.campaign))) || (b.campaignName != null && codeSet.has(norm(b.campaignName))))
-    .map((b) => ({ id: b.id, adAttribution: b.adAttribution, ext: b.adCampaignExternalId, via: b.campaignEvidence, utmCampaign: b.utmCampaign, code: b.campaign, codeName: b.campaignName, totalPrice: b.total }));
+    // 8 out 2026: o valor para o Marketing (terceiros = a nossa comissão)
+    .map((b) => ({ id: b.id, adAttribution: b.adAttribution, ext: b.adCampaignExternalId, via: b.campaignEvidence, utmCampaign: b.utmCampaign, code: b.campaign, codeName: b.campaignName, totalPrice: b.value ?? b.total }));
   const matched = matchBookingsToCampaignsBy(bookings, apiCampaigns.map((c) => ({ key: c.key, provider: c.provider, externalId: c.externalId, campaignId: c.campaignId })), links);
+  // Via net de cada marca/cidade repartido pelas campanhas (todas as reservas do período, não só as ligadas)
+  const { getProjects } = await import("./db");
+  const nodeOf = brandNodeResolver((await getProjects()).map((p) => ({ id: p.id, level: String(p.level), parentId: p.parentId ?? null })));
+  const viaNet = splitViaNet(viaNetPools(all, nodeOf).pools, viaNetParticipants(apiCampaigns, ads.nationalShares, nodeOf));
 
   // Conversões por ação (Google: ação de conversão; Meta: tipo de ação)
   const keySet = new Set(apiCampaigns.map((c) => c.key));
@@ -142,17 +156,24 @@ export async function getCampaignRoas(f: { from: string; to: string; projectId?:
     for (const m of hits) { linkedBy[m.by]++; linkedByTotal[m.by]++; }
     linkedTotal += bs.length;
     const revenue = bs.reduce((t, b) => t + b.totalPrice, 0);
+    const vn = viaNet.byCampaign.get(c.key) ?? null;
     return {
       key: c.key, campaignId: c.campaignId, name: c.name, provider: c.provider, status: c.status, accountName: c.accountName,
       projectId: c.projectId, national: !!c.national, cost: c.cost, clicks: c.clicks, conversions: c.conversions, conversionValue: c.conversionValue,
       bookings: bs.length, linkedBy, revenue, revenueNet: netOfVatAmount(revenue, vat), roasNet: roasNetOfVat(revenue, c.cost, vat),
       cpa: bs.length > 0 ? c.cost / bs.length : null,
+      /** via net repartido (null = campanha por associar / sem cidade: não se reparte) */
+      viaNetBookings: vn ? vn.bookings : null, viaNetValue: vn ? vn.value : null,
+      viaNetShare: vn ? vn.share : null, viaNetBase: vn ? vn.base : null,
+      roasViaNetNet: vn ? roasNetOfVat(vn.value, c.cost, vat) : null,
       actions: (actionsByCampaign.get(c.key) ?? []).sort((a, b) => b.conversions - a.conversions),
       links: c.campaignId != null ? (linksByCampaign.get(c.campaignId) ?? []).map((l) => ({ id: l.id, keyType: l.keyType, keyValue: l.keyValue })) : [],
     };
   }).sort((a, b) => b.cost - a.cost);
   return {
     range: { from: f.from, to: f.to }, vatRate: vat, rows, linkedTotal, linkedByTotal,
+    /** via net de marcas/cidades sem campanhas para o receber */
+    viaNetUnassigned: viaNet.unassigned,
     conversionActions: Array.from(actionTotals.values()).sort((a, b) => b.conversions - a.conversions),
   };
 }

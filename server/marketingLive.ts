@@ -30,6 +30,7 @@ import { campaignOf, loadLiveContext, type LiveContext } from "./finance/liveBoo
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
 import { classifyBookingChannel, marketplaceOperated } from "../shared/multiparkParks";
 import { isMarketplaceBooking, MARKETPLACE_ORIGIN } from "../shared/marketplace";
+import { isViaNet, marketingValueOf, thirdParkRates, viaNetExclusion, type ViaNetExclusion } from "../shared/viaNet";
 import type { MarketingBookingRow, MarketingClientRow } from "./multiparkDb/marketingBookings";
 
 export interface MarketingBooking {
@@ -48,8 +49,21 @@ export interface MarketingBooking {
    * 28c (Jorge, 6 out): "via net" — tudo o que NÃO é parceiro (canal Direto ou
    * Marketplace de classifyBookingChannel: sem partnerId, sem origem de
    * parceiro, sem agregador a cobrar). É o que os anúncios podem trazer.
+   * 8 out 2026: sem as pendentes, as de clientes Pro e as de avenças
+   * (shared/viaNet.ts).
    */
   viaNet: boolean;
+  /** Não é parceiro mas não conta como via net: pendente, Pro ou avença (null = conta, ou é parceiro). */
+  viaNetOut?: ViaNetExclusion | null;
+  /** O parque é nosso (Airpark/Redpark/Skypark). */
+  parkOurs?: boolean;
+  /**
+   * 8 out 2026: valor para o Marketing (valor via net, ligadas, ROAS): o preço
+   * inteiro nos parques nossos; a NOSSA comissão nos de terceiros (shared/viaNet.ts).
+   */
+  value?: number;
+  /** Parque de terceiros sem comissão gravada nem taxa do parque no período (valor 0). */
+  commissionMissing?: boolean;
   hasOriginUrl: boolean;
   /** gclid / gbraid / wbraid no link */
   hasClickId: boolean;
@@ -96,10 +110,17 @@ export function toMarketingBooking(r: MarketingBookingRow, ctx: LiveContext, opt
     if (node != null) projectId = node;
   }
   const a = attributionFromUrl(r.originUrl);
+  const channel = classifyBookingChannel({ parkOurs: own, origin: r.origin, paymentSource: r.paymentSource ?? null, partnerId: r.partnerId, partnerName: r.partnerName }).channel;
+  const exclusion = viaNetExclusion({ status: r.status, pro: r.pro, plan: r.plan });
+  // valor de UMA reserva; a taxa dos parques de terceiros sem comissão gravada aplica-se na lista (loadMarketingBookings)
+  const v = marketingValueOf({ parkId: r.parkId, parkOurs: own, total: r.total, commission: third ? r.commission ?? null : null }, new Map());
   return {
     id: r.id, createdAt: r.createdAt, day: r.day, projectId, parkId: r.parkId, status: r.status, origin: r.origin,
     hasPartner: !!(r.partnerId || (r.partnerName && !/unknown/i.test(r.partnerName))),
-    viaNet: classifyBookingChannel({ parkOurs: own, origin: r.origin, paymentSource: r.paymentSource ?? null, partnerId: r.partnerId, partnerName: r.partnerName }).channel !== "parceiro",
+    viaNet: isViaNet(channel, exclusion),
+    viaNetOut: channel !== "parceiro" ? exclusion : null,
+    parkOurs: own,
+    value: v.value, commissionMissing: v.commissionMissing,
     marketplace,
     operated: own || (ctx.marketplaceParkInfo?.get(r.parkId)?.operated ?? marketplaceOperated({ id: r.parkId, ours: false })),
     ...(opts.marketplace ? { commission: third ? r.commission ?? null : null } : {}),
@@ -191,7 +212,15 @@ export async function loadMarketingBookings(from: string, to: string, projectIds
       ...(opts.marketplace ? { marketplaceParkIds: mk.third, marketplaceOnlyParkIds: mk.marketplaceOnly } : {}) });
     // 19a: chegar ao teto = dados cortados → erro (antes contava só um pedaço, sem aviso).
     if (rows.length >= MARKETING_BOOKINGS_LIMIT) throw new Error(`Demasiadas reservas no período (mais de ${MARKETING_BOOKINGS_LIMIT.toLocaleString("pt-PT")}): escolhe um período mais curto.`);
-    const out = rows.map((r) => toMarketingBooking(r, ctx, opts)).filter((b): b is MarketingBooking => !!b);
+    const mapped = rows.map((r) => toMarketingBooking(r, ctx, opts)).filter((b): b is MarketingBooking => !!b);
+    // 8 out 2026: parque de terceiros sem comissão gravada → a taxa do parque no período (Parcerias/Faturação)
+    const inputs = mapped.map((b) => ({ parkId: b.parkId, parkOurs: !!b.parkOurs, total: b.total, commission: b.commission ?? null }));
+    const rates = thirdParkRates(inputs);
+    const out = mapped.map((b, i) => {
+      if (!b.commissionMissing) return b;
+      const v = marketingValueOf(inputs[i], rates);
+      return { ...b, value: v.value, commissionMissing: v.commissionMissing };
+    });
     // Com o Marketplace, uma reserva de um parque nosso pode mudar de nó (→ Marketplace da
     // cidade): fica só se o nó final estiver no âmbito/filtro.
     return opts.marketplace ? out.filter((b) => allowed(b.projectId)) : out;

@@ -19,6 +19,7 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import CampaignRoasPanel from "@/components/marketing/CampaignRoasPanel";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { describeMatchCounts, LINKED_EXPLAINER } from "@shared/campaignEvidence";
+import { fmtViaNet, VIA_NET_BASE_LABEL, VIA_NET_SPLIT_EXPLAINER, type CampaignViaNet } from "@shared/viaNet";
 
 /**
  * Marketing → Google Ads (Jorge, 16 set 2026). É UMA das páginas do Marketing
@@ -160,7 +161,7 @@ export default function MarketingGoogleAdsPage() {
         </TabsContent>
         {brandTabs.map((t) => (
           <TabsContent key={t.brand} value={`marca-${t.brand}`} className="mt-4">
-            <AccountCampaigns account={{ id: 0, name: t.brand }} rows={t.rows} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={t.nationalShares} attributedByCampaign={st?.attributedByCampaign ?? {}} attributedByCampaignGclid={st?.attributedByCampaignGclid ?? {}} bookingsUnavailable={!!(st?.bookingsError || byBrand?.bookingsError)} />
+            <AccountCampaigns account={{ id: 0, name: t.brand }} rows={t.rows} projects={projects as any[]} byBrandCity={byBrand?.byBrandCity ?? []} nationalShares={t.nationalShares} attributedByCampaign={st?.attributedByCampaign ?? {}} attributedByCampaignGclid={st?.attributedByCampaignGclid ?? {}} viaNetByCampaign={byBrand?.viaNetByCampaign ?? null} bookingsUnavailable={!!(st?.bookingsError || byBrand?.bookingsError)} />
           </TabsContent>
         ))}
       </Tabs>
@@ -221,7 +222,7 @@ function BrandSummary({ data }: { data: any }) {
           <CardTitle>Gasto e reservas por marca</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
             Marca = a escolhida em cada campanha (uma campanha da conta Multipark.pt marcada como Airpark Faro conta na Airpark); sem escolha, a marca da conta (Multipark.pt e Multipark SA são a marca Marketplace).
-            {" "}<b>Conversões</b> = as que cada plataforma conta (Google Ads, Meta). <b>Reservas via net</b> = reservas Multipark reais da marca que <b>não</b> são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas — é o que os anúncios podem trazer.
+            {" "}<b>Conversões</b> = as que cada plataforma conta (Google Ads, Meta). <b>Reservas via net</b> = reservas Multipark reais da marca que <b>não</b> são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas, pendentes, clientes Pro nem avenças — é o que os anúncios podem trazer. <b>Valor</b> (via net, ligadas e ROAS): parques nossos pelo preço inteiro; parques de terceiros (Marketplace) só pela nossa comissão.
             {" "}<b>Marketplace</b>: todas as reservas dos parques de terceiros e as dos nossos que vieram pelo multipark.pt contam em "Marketplace &lt;cidade&gt;", onde estão as campanhas "Multipark - &lt;Cidade&gt; - PT" — já não na marca do parque. Parques sem cidade reconhecida entram em "{MARKETPLACE_NO_CITY_LABEL}" (aviso por baixo).
             {" "}<b>Com link</b> = das via net, quantas trazem o link de origem; <b>Ligadas</b> = as que trazem a prova do clique (gclid/fbclid/utm pago). Sem link, não há como ligar a reserva ao anúncio — é o site que tem de o guardar.
             {" "}ROAS s/ IVA = valor via net sem IVA (taxa do período: {vatPct}) ÷ gasto. Com âmbito de cidade, o gasto é o imputado a essas cidades (nacional pela sua parte).
@@ -300,8 +301,15 @@ function BrandSummary({ data }: { data: any }) {
 type BrandCityStats = { projectId: number; bookings: number; attributed: number; revenue: number; revenueAttributed: number; bookingsWeb?: number; revenueWeb?: number; webWithLink?: number };
 type NationalShare = { key: string; accountId: number; projectId: number; cost: number; clicks: number; conversions: number; conversionValue: number };
 
-function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares, attributedByCampaign, attributedByCampaignGclid = {}, bookingsUnavailable = false }: { account: { id: number; name: string }; rows: any[]; projects: any[]; byBrandCity: BrandCityStats[]; nationalShares: NationalShare[]; attributedByCampaign: Record<string, number>; attributedByCampaignGclid?: Record<string, number>; bookingsUnavailable?: boolean }) {
+function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares, attributedByCampaign, attributedByCampaignGclid = {}, viaNetByCampaign = null, bookingsUnavailable = false }: { account: { id: number; name: string }; rows: any[]; projects: any[]; byBrandCity: BrandCityStats[]; nationalShares: NationalShare[]; attributedByCampaign: Record<string, number>; attributedByCampaignGclid?: Record<string, number>; viaNetByCampaign?: Record<string, CampaignViaNet> | null; bookingsUnavailable?: boolean }) {
   const noBk = bookingsUnavailable;
+  // 8 out 2026: via net da marca/cidade repartido por esta campanha (conversões → cliques → gasto)
+  const viaNetOf = (r: any): CampaignViaNet | null => (viaNetByCampaign ? viaNetByCampaign[String(r.key)] ?? null : null);
+  const viaNetTitle = (r: any): string => {
+    const v = viaNetOf(r);
+    if (!v) return r.national || r.projectId != null ? "Sem via net para repartir" : "Campanha por associar: o via net não se reparte";
+    return `${Math.round(v.share * 1000) / 10} % do via net da marca/cidade · repartido pelos ${VIA_NET_BASE_LABEL[v.base]}`;
+  };
   // Reservas ligadas desta campanha (ID no link ou gclid → campanha) — a chave é "api:<conta>:<ID externo>".
   const extOf = (r: any) => String(r.key).split(":").slice(2).join(":");
   const linked = (r: any) => (String(r.key).startsWith("api:") ? attributedByCampaign[extOf(r)] ?? 0 : null);
@@ -420,7 +428,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
         <div>
           <CardTitle>{account.name} · {eur(total.cost)} no período</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Campanhas divididas por marca/cidade (a escolhida para a campanha, mesmo que seja outra marca). "Nacional" (Brand, Pmax, Portugal) mostra-se à parte, mas o gasto é repartido pelas cidades da marca na proporção do gasto de cidade. Lado a lado: as <b>conversões</b> que a plataforma conta e as <b>reservas via net</b> reais (tudo o que não é parceiro) dessa marca/cidade. <b>Com link</b> = das via net, quantas trazem o link de origem; <b>Ligadas</b> = com a prova do clique (gclid/fbclid/utm pago). Na linha da campanha: as {LINKED_EXPLAINER} (passa o rato por cima do número para ver de onde veio cada uma).
+            Campanhas divididas por marca/cidade (a escolhida para a campanha, mesmo que seja outra marca). "Nacional" (Brand, Pmax, Portugal) mostra-se à parte, mas o gasto é repartido pelas cidades da marca na proporção do gasto de cidade. Lado a lado: as <b>conversões</b> que a plataforma conta e as <b>reservas via net</b> reais (tudo o que não é parceiro) dessa marca/cidade. <b>Com link</b> = das via net, quantas trazem o link de origem; <b>Ligadas</b> = com a prova do clique (gclid/fbclid/utm pago). Na linha da campanha: as {LINKED_EXPLAINER} (passa o rato por cima do número para ver de onde veio cada uma); as <b>reservas via net</b> são as da marca/cidade, {VIA_NET_SPLIT_EXPLAINER} ("≈" = fração).
           </p>
         </div>
         {isAdmin && mySuggestions.length > 0 && (
@@ -443,7 +451,7 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                 <th className="text-right px-4 py-2 font-medium" title="Conversões contadas pela plataforma da campanha (Google Ads ou Meta)">Conversões</th>
                 <th className="text-right px-4 py-2 font-medium">Custo/conv.</th>
                 <th className="text-right px-4 py-2 font-medium">Valor conv.</th>
-                <th className="text-right px-4 py-2 font-medium border-l" title="Reservas Multipark reais da marca nessa cidade que NÃO são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas. Marketplace: as vendas pelo multipark.pt nessa cidade (parques de terceiros e nossos)">Reservas via net</th>
+                <th className="text-right px-4 py-2 font-medium border-l" title="Reservas Multipark reais da marca nessa cidade que NÃO são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas, pendentes, clientes Pro nem avenças. Na linha da campanha: o via net da marca/cidade repartido pelas conversões (sem conversões, cliques; sem cliques, gasto). Marketplace: as vendas pelo multipark.pt nessa cidade (parques de terceiros e nossos)">Reservas via net</th>
                 <th className="text-right px-4 py-2 font-medium">Valor via net</th>
                 <th className="text-right px-4 py-2 font-medium" title="Das reservas via net, quantas trazem o link de origem — sem ele não se consegue ligar a reserva ao anúncio">Com link</th>
                 <th className="text-right px-4 py-2 font-medium" title="Reservas com gclid/fbclid/utm pago no URL de origem. Na linha da campanha: ligadas a essa campanha pelo link (ID da campanha) ou pelo clique (gclid) que o Google Ads identifica. Fica abaixo das conversões quando o clique se perde.">Ligadas</th>
@@ -510,9 +518,9 @@ function AccountCampaigns({ account, rows, projects, byBrandCity, nationalShares
                         <td className="px-4 py-1.5 text-right">{Number(r.conversions).toFixed(1)}</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground">{r.conversions > 0 ? eur(r.cost / r.conversions) : "—"}</td>
                         <td className="px-4 py-1.5 text-right">{eur(r.conversionValue)}</td>
-                        <td className="px-4 py-1.5 text-right text-muted-foreground border-l">—</td>
-                        <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
-                        <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
+                        <td className="px-4 py-1.5 text-right border-l" title={noBk ? undefined : viaNetTitle(r)}>{noBk ? "—" : fmtViaNet(viaNetOf(r)?.bookings)}</td>
+                        <td className="px-4 py-1.5 text-right">{noBk || !viaNetOf(r) ? "—" : `${viaNetOf(r)!.share > 0 && viaNetOf(r)!.share < 1 ? "≈ " : ""}${eur(viaNetOf(r)!.value)}`}</td>
+                        <td className="px-4 py-1.5 text-right text-muted-foreground" title="Só por marca/cidade (a linha de cima)">—</td>
                         <td className="px-4 py-1.5 text-right" title={noBk ? undefined : linkedTitle(r)}>{noBk || linked(r) == null ? "—" : num(linked(r))}</td>
                         <td className="px-4 py-1.5 text-right text-muted-foreground">—</td>
                       </tr>

@@ -2,7 +2,7 @@
 modulo: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
-palavras: reservas do marketplace, todas as reservas do marketplace, marketplace sem cidade, parque sem cidade, operado por nós, não operado, prior velho, maia, moscavide, marketplace a zero, multipark.pt, parques de terceiros, alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
+palavras: reservas do marketplace, todas as reservas do marketplace, marketplace sem cidade, parque sem cidade, operado por nós, não operado, prior velho, maia, moscavide, marketplace a zero, multipark.pt, parques de terceiros, alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão, via net por campanha, via net repartido, repartição pelas conversões, pendentes, clientes pro, avenças, comissão do marketplace, valor via net, roas via net, campanha sem resultados
 ---
 # Marketing
 
@@ -48,7 +48,15 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 - Um gclid que o Google Ads não conhece (clique com mais de 90 dias, conta não recolhida, ou ainda por ler) **não liga** — a reserva fica como estava. gbraid/wbraid (iPhone) também não: a Google não os dá por clique.
 - Se a leitura dos cliques estiver desligada ou a falhar, as reservas com cliques ainda por ler ligam-se só pelo link, como antes.
 
-**Alertas** (independentes do período): campanhas com ≥ 50 € em 14 dias sem conversões nem reservas ligadas, ritmo do mês, orçamentos e recolhas.
+**Via net por campanha** (Jorge, 8 out 2026) — no ROAS por campanha e na linha de cada campanha (separador da marca), **ao lado** das ligadas:
+- As reservas via net de cada marca/cidade **repartem-se pelas campanhas dessa marca/cidade em proporção às conversões** que a plataforma conta (Google/Meta) no período. Se nenhuma campanha do grupo teve conversões, **pelos cliques**; se nem cliques, **pelo gasto**. Passa o rato por cima do número para ver a parte e a base usada.
+- As campanhas **nacionais** entram em cada cidade pela parte que já lhes cabe no gasto (a mesma repartição do nacional).
+- Fica com casas decimais ("**≈ 2,5**" = fração de reservas). Campanhas **por associar** não recebem via net ("—"); uma marca/cidade com reservas mas sem campanhas fica **por repartir** (aparece por baixo do ROAS por campanha).
+- As **ligadas** continuam a ser as diretas (link, gclid, utm ou código). O ROAS por campanha mostra os dois: o das ligadas e o **ROAS via net**.
+
+**Valor no Marketing** (valor via net, valor ligadas e todos os ROAS): reservas nos **parques nossos** = **preço inteiro** (também as que vieram pelo Marketplace — a comissão de 20 % é custo à parte); reservas nos **parques de terceiros** = só a **nossa comissão**: a gravada na reserva na Multipark; sem ela, a taxa desse parque no período (comissão ÷ valor das reservas dele com comissão gravada — a mesma conta das Parcerias); sem nenhuma, vale 0 e conta como "comissão em falta". O **Valor das reservas** do Painel continua a ser o preço de todas.
+
+**Alertas** (independentes do período): campanhas com ≥ 50 € em 14 dias **sem reservas via net (repartidas) nem ligadas** (campanha por associar: sem conversões nem ligadas), ritmo do mês, orçamentos e recolhas.
 - Ficam **de lado**, à direita do Painel (no telemóvel, por cima). Carrega no título para os encolher e voltar a abrir.
 - Aparecem os 4 primeiros. **Ver todos** mostra o resto.
 - O **X** tira um alerta da lista **para toda a gente** até ao fim do mês, como nas Reservas. Fica guardado quem tirou e quando; nada se apaga. Volta sozinho no mês seguinte, ou antes em **Tirados → Repor**. Com uma marca escolhida em cima, tirar vale só para essa marca.
@@ -58,7 +66,7 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 
 **Conversões e reservas, lado a lado** (Dashboard, Anúncios por marca e por marca/cidade):
 - **Conversões (Google + Meta)**: o que cada plataforma conta (Google à parte, Meta à parte). **Custo por conversão** = gasto ÷ essas conversões.
-- **Reservas via net**: reservas reais da Multipark que **não são de parceiros** (site, telefone, Marketplace) — é o que os anúncios podem trazer. Não contam as de parceiros (com parceiro na reserva, origem de parceiro ou cobradas por um agregador como Parkos/Parkvia). Ao lado: o valor e o custo por reserva via net.
+- **Reservas via net**: reservas reais da Multipark que **não são de parceiros** (site, telefone, Marketplace) — é o que os anúncios podem trazer. **Não contam** (8 out 2026) as **pendentes** (compra online por acabar), as de **clientes Pro** e as de **avenças** — o Painel diz quantas ficaram de fora. Não contam as de parceiros (com parceiro na reserva, origem de parceiro ou cobradas por um agregador como Parkos/Parkvia). Ao lado: o valor e o custo por reserva via net.
 - **Marketplace** (marca das contas Multipark.pt/Multipark SA): **todas as reservas do Marketplace, de qualquer parque** (Jorge, 8 out 2026) contam em **Marketplace <cidade>**, onde estão as campanhas "Multipark - <Cidade> - PT":
   - **todas** as reservas dos **parques de terceiros**, seja qual for a origem (antes só as com origem Marketplace ou com comissão nossa);
   - as dos **nossos parques** que vieram pelo multipark.pt (origem Marketplace) — estas saem da linha Airpark/Redpark/Skypark da cidade.
