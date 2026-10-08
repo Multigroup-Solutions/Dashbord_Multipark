@@ -18,12 +18,17 @@
  *   - 28b (Jorge, 6 out): MARKETPLACE nos parques NOSSOS — reservas com
  *     `origin = 'MARKETPLACE'`: o Marketplace fica com 20 % (sem IVA, como os
  *     outros parceiros; MARKETPLACE_COMMISSION).
+ *   - 8 out 2026: uma reserva vinda pelo Marketplace que também tem parceiro
+ *     conta SÓ no Marketplace (nunca duas comissões pela mesma reserva — a
+ *     regra que a Faturação já seguia, liveBookings.campaignOf).
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, safeMultiparkRead, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks } from "./dayBookings";
 import { MARKETPLACE_COMMISSION } from "../../shared/marketplace";
 import { netOfVat } from "../finance/rules";
+import type { CityKey } from "../../shared/city";
+import { MARKETPLACE_COMMISSIONED_SQL, MARKETPLACE_ORIGIN_SQL } from "./marketplaceSql";
 
 type Row = Record<string, unknown>;
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -35,7 +40,8 @@ const OURS = `COALESCE(b."partnerAmountDue", CASE
     WHEN b."partnerFeeType"::text = 'PERCENTAGE' AND b."partnerFeeValue" IS NOT NULL THEN ${VALUE} * (1 - b."partnerFeeValue" / 100.0)
     WHEN b."partnerFeeType"::text = 'FIXED' AND b."partnerFeeValue" IS NOT NULL THEN ${VALUE} - b."partnerFeeValue"
   END)`;
-const OUR_SALE = `(b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0)`;
+/** Venda do Marketplace com a nossa comissão (marketplaceSql.ts) — a comissão é por reserva. */
+const OUR_SALE = MARKETPLACE_COMMISSIONED_SQL;
 
 /**
  * Uma só leitura (UNION ALL) com `kind` = partner | pro | plan | market | market_own.
@@ -52,7 +58,8 @@ export function buildPartnerBillingSql(o: { ourParks: readonly string[]; thirdPa
     parts.push(
       [`SELECT 'partner' AS kind, pa."userId" AS key, max(NULLIF(pa."name", '')) AS name, count(*) AS n,`,
         `  SUM(${VALUE}) AS value, SUM(${OURS}) AS ours, count(*) FILTER (WHERE b."partnerAmountDue" IS NULL) AS missing, NULL::numeric AS commission`,
-        `  FROM "Booking" b JOIN "Partner" pa ON pa."id" = b."partnerId" WHERE ${where} GROUP BY pa."userId"`].join("\n"),
+        // vinda pelo Marketplace → conta só em 'market_own' (nunca duas comissões)
+        `  FROM "Booking" b JOIN "Partner" pa ON pa."id" = b."partnerId" WHERE ${where} AND NOT COALESCE(${MARKETPLACE_ORIGIN_SQL}, false) GROUP BY pa."userId"`].join("\n"),
       [`SELECT 'pro' AS kind, COALESCE(pc."clientId", b."clientId") AS key, max(NULLIF(pc."name", '')) AS name, count(*) AS n,`,
         `  SUM(b."bookingPrice") AS value, NULL::numeric AS ours, 0 AS missing, NULL::numeric AS commission`,
         `  FROM "Booking" b LEFT JOIN "ProClient" pc ON pc."id" = b."proClientId"`,
@@ -63,7 +70,7 @@ export function buildPartnerBillingSql(o: { ourParks: readonly string[]; thirdPa
       // 28b: parques nossos, reserva vinda pelo Marketplace → 20 % para o Marketplace.
       [`SELECT 'market_own' AS kind, b."parkId" AS key, NULL AS name, count(*) AS n,`,
         `  SUM(b."bookingPrice") AS value, NULL::numeric AS ours, 0 AS missing, NULL::numeric AS commission`,
-        `  FROM "Booking" b WHERE ${where} AND b."origin"::text = 'MARKETPLACE' GROUP BY 2`].join("\n"),
+        `  FROM "Booking" b WHERE ${where} AND ${MARKETPLACE_ORIGIN_SQL} GROUP BY 2`].join("\n"),
     );
   }
   if (o.thirdParks.length) {
@@ -78,7 +85,10 @@ export function buildPartnerBillingSql(o: { ourParks: readonly string[]; thirdPa
 
 export interface BillingStats { n: number; value: number; ours: number | null; missing: number; name: string | null }
 export interface MarketplaceBilling {
-  parkId: string; parkName: string; city: string | null; bookings: number; value: number; commission: number; missing: number; rate: number | null;
+  parkId: string; parkName: string; city: string | null;
+  /** 8 out 2026: cidade reconhecida do parque (resolveParkCity: cidade, terra à volta, nome, morada) — para o orçamento. */
+  cityKey: CityKey | null;
+  bookings: number; value: number; commission: number; missing: number; rate: number | null;
   /** 28b: parque NOSSO (reserva vinda pelo Marketplace; 20 % sem IVA). */
   own?: boolean;
 }
@@ -93,7 +103,7 @@ const num = (v: unknown): number => { const n = Number(v); return Number.isFinit
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Linhas → mapas por entidade + marketplace por parque. PURA. */
-export function mapPartnerBilling(rows: Row[], parkName: Map<string, { name: string; city: string | null }>): PartnerBillingLive {
+export function mapPartnerBilling(rows: Row[], parkName: Map<string, { name: string; city: string | null; cityKey?: CityKey | null }>): PartnerBillingLive {
   const out: PartnerBillingLive = { partners: new Map(), pros: new Map(), plans: new Map(), marketplace: [] };
   for (const r of rows) {
     const key = String(r.key ?? "").trim();
@@ -106,12 +116,12 @@ export function mapPartnerBilling(rows: Row[], parkName: Map<string, { name: str
     else if (kind === "market_own") {
       const park = parkName.get(key);
       const commission = round2(netOfVat(st.value) * MARKETPLACE_COMMISSION);
-      out.marketplace.push({ parkId: key, parkName: park?.name ?? key, city: park?.city ?? null, bookings: st.n, value: st.value, commission, missing: 0, rate: MARKETPLACE_COMMISSION * 100, own: true });
+      out.marketplace.push({ parkId: key, parkName: park?.name ?? key, city: park?.city ?? null, cityKey: park?.cityKey ?? null, bookings: st.n, value: st.value, commission, missing: 0, rate: MARKETPLACE_COMMISSION * 100, own: true });
     }
     else if (kind === "market") {
       const park = parkName.get(key);
       const commission = round2(num(r.commission));
-      out.marketplace.push({ parkId: key, parkName: park?.name ?? key, city: park?.city ?? null, bookings: st.n, value: st.value, commission, missing: st.missing, rate: st.value > 0 ? Math.round((commission / st.value) * 1000) / 10 : null });
+      out.marketplace.push({ parkId: key, parkName: park?.name ?? key, city: park?.city ?? null, cityKey: park?.cityKey ?? null, bookings: st.n, value: st.value, commission, missing: st.missing, rate: st.value > 0 ? Math.round((commission / st.value) * 1000) / 10 : null });
     }
   }
   out.marketplace.sort((a, b) => Number(!!a.own) - Number(!!b.own) || b.commission - a.commission || a.parkName.localeCompare(b.parkName, "pt"));
@@ -126,6 +136,6 @@ export async function readPartnerBillingLive(o: { start: string; end: string; ci
     const thirdParks = parks.filter((x) => !x.ours).map((x) => x.id);
     if (!ourParks.length && !thirdParks.length) return { partners: new Map(), pros: new Map(), plans: new Map(), marketplace: [] };
     const { sql, params } = buildPartnerBillingSql({ ourParks, thirdParks, start: o.start, end: o.end });
-    return mapPartnerBilling(await query(sql, params), new Map(parks.map((x) => [x.id, { name: x.name, city: x.cityName }])));
+    return mapPartnerBilling(await query(sql, params), new Map(parks.map((x) => [x.id, { name: x.name, city: x.cityName, cityKey: x.city }])));
   });
 }

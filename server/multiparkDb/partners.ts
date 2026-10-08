@@ -21,8 +21,10 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, safeMultiparkRead, type MultiparkRead } from "./read";
-import { classifyPark } from "../../shared/multiparkParks";
+import { classifyPark, marketplaceOperated } from "../../shared/multiparkParks";
 import { lisbonMonth } from "../../shared/crmPro";
+import { MARKETPLACE_COMMISSIONED_SQL } from "./marketplaceSql";
+import type { CityKey } from "../../shared/city";
 
 const ts = (expr: string) => `to_char(${expr}, 'YYYY-MM-DD HH24:MI:SS')`;
 /** Mês (Lisboa) da entrada — a BD grava UTC. */
@@ -40,8 +42,12 @@ const OURS = `COALESCE(b."partnerAmountDue", CASE
     WHEN b."partnerFeeType"::text = 'PERCENTAGE' AND b."partnerFeeValue" IS NOT NULL THEN ${VALUE} * (1 - b."partnerFeeValue" / 100.0)
     WHEN b."partnerFeeType"::text = 'FIXED' AND b."partnerFeeValue" IS NOT NULL THEN ${VALUE} - b."partnerFeeValue"
   END)`;
-/** Reservas que NÓS levámos a um parque que não é nosso (marketplace). */
-export const OUR_SALE = `(b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0)`;
+/**
+ * Reservas que NÓS levámos a um parque que não é nosso (marketplace, com a
+ * nossa comissão) — o fragmento único de marketplaceSql.ts. Aqui serve a
+ * comissão e os "clientes nossos" (CRM, pesquisa), não as listas do Marketplace.
+ */
+export const OUR_SALE = MARKETPLACE_COMMISSIONED_SQL;
 export const PARTNER_ROWS_LIMIT = 5000;
 export const RECENT_LIMIT = 200;
 
@@ -161,26 +167,36 @@ export interface ParkOut {
   id: string; name: string; companyName: string | null; email: string | null; phone: string | null; address: string | null;
   city: string | null; country: string | null; nif: string | null; taxName: string | null; taxAddress: string | null; website: string | null;
   status: string | null; listingType: string | null; ours: boolean; ownerUserId: string | null; createdAt: string | null; totalSpots: number | null;
+  /** 8 out 2026: cidade reconhecida (resolveParkCity — "Prior Velho" → Lisboa); conta para o âmbito de cidade. */
+  cityKey: CityKey | null;
+  /** 8 out 2026: operado por nós (os nossos sempre; os de terceiros fora da lista do dono) — etiqueta da comissão. */
+  operated: boolean;
 }
 
 export function mapParks(rows: Row[]): ParkOut[] {
   return rows.filter((r) => str(r.id)).map((r) => {
     const name = str(r.name) ?? String(r.id);
-    const cls = classifyPark({ name, city: str(r.city), firebaseBrand: str(r.firebase_brand), listingType: str(r.listing_type) });
+    const cls = classifyPark({ name, city: str(r.city), address: str(r.address), firebaseBrand: str(r.firebase_brand), listingType: str(r.listing_type) });
     return {
       id: String(r.id), name, companyName: str(r.company_name), email: str(r.email), phone: str(r.phone), address: str(r.address),
       city: str(r.city), country: str(r.country), nif: str(r.nif), taxName: str(r.tax_name), taxAddress: str(r.tax_address), website: str(r.website),
       status: str(r.status), listingType: str(r.listing_type), ours: cls.ours, ownerUserId: str(r.owner_user_id), createdAt: str(r.created_at),
-      totalSpots: num(r.total_spots),
+      totalSpots: num(r.total_spots), cityKey: cls.city, operated: marketplaceOperated({ id: String(r.id), name, ours: cls.ours }),
     };
   });
 }
 
-/** Cidade dentro do âmbito (undefined = todas; sem cidade só para quem vê todas). PURA. */
-export function inCities(city: string | null | undefined, cities: string[] | undefined): boolean {
+/**
+ * Cidade dentro do âmbito (undefined = todas; sem cidade só para quem vê
+ * todas). `cityKey` = a cidade reconhecida do parque (resolveParkCity), para
+ * um parque com "Prior Velho" na cidade ser visto por quem vê Lisboa. PURA.
+ */
+export function inCities(city: string | null | undefined, cities: string[] | undefined, cityKey?: CityKey | null): boolean {
   if (cities === undefined) return true;
+  const allowed = new Set(cityAliases(cities));
+  if (cityKey && allowed.has(cityKey)) return true;
   if (!city) return false;
-  return new Set(cityAliases(cities)).has(city.trim().toLowerCase());
+  return allowed.has(city.trim().toLowerCase());
 }
 
 export type PartnerKind = "AGGREGATOR" | "AGENCY" | "PARTNER";
@@ -203,7 +219,7 @@ export function groupPartners(rows: Row[], parks: ParkOut[], cities: string[] | 
     const userId = str(r.user_id), partnerId = str(r.partner_id), parkId = str(r.park_id);
     if (!userId || !partnerId || !parkId) continue;
     const park = parkOf.get(parkId);
-    if (!park || !park.ours || !inCities(park.city, cities)) continue;
+    if (!park || !park.ours || !inCities(park.city, cities, park.cityKey)) continue;
     let g = out.get(userId);
     if (!g) {
       g = { userId, name: "", type: "AGENCY", active: false, taxName: null, taxNumber: null, taxAddress: null, parks: [], since: null, types: new Map() };
@@ -323,7 +339,7 @@ export async function readPartnerVisible(userId: string, cities: string[] | unde
 /** Parque (que não é nosso) visível a quem pede? — leitura leve, para autorizar. */
 export async function readParkVisible(parkId: string, cities: string[] | undefined, query: Query = multiparkDbQuery) {
   return safeMultiparkRead("parque (âmbito)", async () =>
-    mapParks(await query(buildParksFullSql().sql)).some((p) => p.id === parkId && !p.ours && inCities(p.city, cities)));
+    mapParks(await query(buildParksFullSql().sql)).some((p) => p.id === parkId && !p.ours && inCities(p.city, cities, p.cityKey)));
 }
 
 export async function readPartnersOverview(cities: string[] | undefined, query: Query = multiparkDbQuery) {
@@ -366,7 +382,7 @@ export async function readParksOverview(cities: string[] | undefined, query: Que
 async function readParksOverviewNow(cities: string[] | undefined, query: Query) {
   return safeMultiparkRead("parques", async () => {
     const all = mapParks(await query(buildParksFullSql().sql));
-    const parks = all.filter((p) => !p.ours && inCities(p.city, cities));
+    const parks = all.filter((p) => !p.ours && inCities(p.city, cities, p.cityKey));
     if (!parks.length) return { parks, months: new Map<string, MonthTotals[]>() };
     const { since } = monthsAgo(12);
     const ms = buildParkMonthsSql(since, parks.map((p) => p.id));
@@ -377,7 +393,7 @@ async function readParksOverviewNow(cities: string[] | undefined, query: Query) 
 
 export async function readParkDetail(parkId: string, cities: string[] | undefined, query: Query = multiparkDbQuery) {
   return safeMultiparkRead("parque", async () => {
-    const park = mapParks(await query(buildParksFullSql().sql)).find((p) => p.id === parkId && !p.ours && inCities(p.city, cities)) ?? null;
+    const park = mapParks(await query(buildParksFullSql().sql)).find((p) => p.id === parkId && !p.ours && inCities(p.city, cities, p.cityKey)) ?? null;
     if (!park) return null;
     const { since } = monthsAgo(24);
     const ms = buildParkMonthsSql(since, [parkId]);

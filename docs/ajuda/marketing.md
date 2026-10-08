@@ -2,13 +2,13 @@
 modulo: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
-palavras: reservas do marketplace, marketplace a zero, multipark.pt, parques de terceiros, alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
+palavras: reservas do marketplace, todas as reservas do marketplace, marketplace sem cidade, parque sem cidade, operado por nós, não operado, prior velho, maia, moscavide, marketplace a zero, multipark.pt, parques de terceiros, alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão
 ---
 # Marketing
 
 Só super admin (ou quem tiver uma exceção de acesso ao Marketing).
 
-As reservas (quantas, valor, de onde vieram, cliente novo ou não e se vieram de um anúncio) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques. A atribuição Google/Meta sai do link de origem da reserva (gclid, fbclid, utm). Os gastos em anúncios vêm do Google Ads e da Meta.
+As reservas (quantas, valor, de onde vieram, cliente novo ou não e se vieram de um anúncio) são lidas **ao vivo da base de dados da Multipark**: as dos nossos parques e **todas as do Marketplace, de qualquer parque** (ver "Marketplace" mais abaixo). A atribuição Google/Meta sai do link de origem da reserva (gclid, fbclid, utm). Os gastos em anúncios vêm do Google Ads e da Meta.
 
 **Separadores**
 - **Dashboard**: visão geral do marketing no período.
@@ -25,13 +25,14 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 
 **Canais e clientes**
 - O grupo **Anúncios (Google + Meta) — clientes novos** junta as reservas de clientes novos nos canais próprios; o custo é o gasto do Google Ads **e** da Meta.
+- O canal **Marketplace (multipark)** tem **todas** as reservas do Marketplace (8 out 2026): todas as dos parques de terceiros, seja qual for a origem, e as dos nossos parques que vieram pelo multipark.pt. Os **clientes** também: quem fez a 1.ª reserva num parque de terceiros entra pelo Marketplace. Antes os parques de terceiros não entravam nos Canais e clientes.
 - **Comissões dos parceiros**: a mesma regra da Faturação — sobre o valor **sem IVA** (salvo parceiros configurados "com IVA"). Um parceiro sem taxa aparece com **"taxa em falta"** e a comissão não é contada (antes contava como 0 %).
 - "Cliente novo" é calculado só nos parques do filtro escolhido: por isso a soma das cidades pode dar mais do que o total nacional.
 - Período máximo: 400 dias. Se o histórico for maior do que o limite de leitura, aparece um erro em vez de números cortados.
 
 **Orçamentos**
 - **Regra 20 %** (Jorge, 6 out 2026): o orçamento do **Google Ads** de cada marca/cidade é **20 % da faturação do mês anterior** dessa marca/cidade (reservas concluídas, **sem IVA**, **sem as do Marketplace**). Ex.: Airpark Lisboa em outubro = 20 % da faturação da Airpark Lisboa em setembro.
-- **Marketplace**: 20 % do que lhe **ficou** no mês anterior (comissões dos parques de terceiros + os 20 % das reservas dos nossos parques que vieram pelo Marketplace). Numa reserva de 100 € ficam ~20 € (sem IVA um pouco menos) e o orçamento é 20 % disso.
+- **Marketplace**: 20 % do que lhe **ficou** no mês anterior (comissões dos parques de terceiros + os 20 % das reservas dos nossos parques que vieram pelo Marketplace). Numa reserva de 100 € ficam ~20 € (sem IVA um pouco menos) e o orçamento é 20 % disso. A cidade de cada parque é a **reconhecida** (Prior Velho e Moscavide → Lisboa, Maia → Porto…); as comissões de parques **sem cidade reconhecida** não dão orçamento a nenhuma cidade e aparecem num aviso com os nomes, para se corrigir a cidade do parque na Multipark.
 - As linhas da regra aparecem com a etiqueta **Regra 20 %** e a base usada; não se arquivam (são calculadas). Um orçamento **posto à mão** para a mesma marca/cidade no Google Ads **manda** — e a linha diz quanto a regra dava. Se a base da Multipark não responder, aparecem só os postos à mão (com aviso).
 - Gasto do dia 1 até **ontem** (hoje está a meio) contra o esperado pelos dias completos. Acima de **110 %** ou abaixo de **80 %** do esperado (a partir do 4.º dia) aparece um alerta.
 - **Arquivar** (antes "Apagar") tira o orçamento da lista e dos alertas, mas fica no registo. Definir o mesmo orçamento outra vez repõe-no. Mudar um valor fica registado (antes → depois).
@@ -50,7 +51,13 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 **Conversões e reservas, lado a lado** (Dashboard, Anúncios por marca e por marca/cidade):
 - **Conversões (Google + Meta)**: o que cada plataforma conta (Google à parte, Meta à parte). **Custo por conversão** = gasto ÷ essas conversões.
 - **Reservas via net**: reservas reais da Multipark que **não são de parceiros** (site, telefone, Marketplace) — é o que os anúncios podem trazer. Não contam as de parceiros (com parceiro na reserva, origem de parceiro ou cobradas por um agregador como Parkos/Parkvia). Ao lado: o valor e o custo por reserva via net.
-- **Marketplace** (marca das contas Multipark.pt/Multipark SA): as vendas pelo **multipark.pt** contam em **Marketplace <cidade>**, onde estão as campanhas "Multipark - <Cidade> - PT". Entram as dos **parques de terceiros** que nós vendemos (origem Marketplace ou com comissão nossa) e as dos **nossos parques** que vieram pelo multipark.pt (origem Marketplace) — estas saem da linha Airpark/Redpark/Skypark da cidade. Na Faturação, na Caixa e no CRM nada muda.
+- **Marketplace** (marca das contas Multipark.pt/Multipark SA): **todas as reservas do Marketplace, de qualquer parque** (Jorge, 8 out 2026) contam em **Marketplace <cidade>**, onde estão as campanhas "Multipark - <Cidade> - PT":
+  - **todas** as reservas dos **parques de terceiros**, seja qual for a origem (antes só as com origem Marketplace ou com comissão nossa);
+  - as dos **nossos parques** que vieram pelo multipark.pt (origem Marketplace) — estas saem da linha Airpark/Redpark/Skypark da cidade.
+  - A cidade do parque é a **reconhecida**: a cidade gravada ou uma terra à volta (Prior Velho, Moscavide, Portela → Lisboa; Maia, Pedras Rubras → Porto; Gambelas → Faro), senão o nome, senão a morada.
+  - Um parque de terceiros **sem cidade reconhecida** (ou numa cidade sem o nó "Marketplace" em Projetos) **entra na mesma**, em **"Marketplace (sem cidade)"**: conta na marca Marketplace e no total, em nenhuma cidade, e o separador Anúncios mostra um **aviso** com o nome e a cidade gravada de cada um — corrige a cidade do parque na Multipark (ou cria o nó). Só quem vê todas as cidades, sem filtro de marca, vê essas reservas.
+  - Cada reserva do Marketplace leva a etiqueta **operado por nós** ou **não operado** (a comissão é diferente): os nossos parques e os de terceiros que operamos são "operado por nós"; os da lista do dono ("estes não são operados por nós") e os de Definições → **Parques que a operação não faz** são "não operado". Por baixo da tabela das marcas: quantas reservas do Marketplace houve no período e quantas de cada.
+  - Na Faturação, na Caixa e no CRM nada muda (lá o Marketplace dos terceiros continua a ser o que tem a nossa comissão).
 - **Com link**: das reservas via net, quantas trazem o **link de origem**. Sem link não há como saber de que anúncio veio a reserva.
 - **Ligadas**: as que trazem a prova do clique no link (gclid/gbraid/wbraid do Google, fbclid da Meta, utm pago). Se uma marca tem conversões mas **0 ligadas**, o mais provável é o site dessa marca não guardar o link (ou o gclid) na reserva — vê a coluna "Com link".
 - O **ROAS Google (reportado)** e as "conversões contadas pela Google" são só do Google Ads. Uma conta de anúncios que deixou de ser recolhida continua a contar com o gasto que já tinha.

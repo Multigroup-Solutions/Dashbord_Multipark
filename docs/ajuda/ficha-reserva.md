@@ -15,7 +15,7 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 - O antigo "Inspecionar reserva" (/multipark/inspect) abre agora esta ficha.
 
 **O que mostra**
-- **Cabeçalho**: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, o **canal** para a contabilidade (**Direto**, **Parceiro · nome do parceiro** com o tipo — agência, agregador ou parceiro — ou **Marketplace**) e a origem (com a comissão do parceiro), a classificação do parque (**Parque nosso · marca + cidade** ou **Parque Marketplace**, e o tipo de listagem), preço (e o preço na criação, se mudou), valor pago e método. Por baixo, a hora de cada fase: a entrar, em movimento, à espera de saída, à espera da bagagem, a sair.
+- **Cabeçalho**: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, o **canal** para a contabilidade (**Direto**, **Parceiro · nome do parceiro** com o tipo — agência, agregador ou parceiro — ou **Marketplace**) e a origem (com a comissão do parceiro), a classificação do parque (**Parque nosso · marca + cidade** ou **Parque Marketplace · operado por nós / não operado**, e o tipo de listagem), preço (e o preço na criação, se mudou), valor pago e método. Por baixo, a hora de cada fase: a entrar, em movimento, à espera de saída, à espera da bagagem, a sair.
 - **Cliente**: nome, email, telefone, NIF e língua, com **Ligar**, **WhatsApp** e **Email** (o email sai pela caixa **info**, se puderes escrever nela). Num cliente anonimizado não aparecem. Se o email existir nos nossos Clientes aparece **Ver ficha do cliente (CRM)**.
 - **Outra pessoa entrega/levanta** (quando a reserva tem): nome, telefone e email dessa pessoa, cada uma com os mesmos botões **Ligar**, **WhatsApp** e **Email**.
 - **Viatura**: matrícula, marca, modelo, cor, km, autonomia e quem fez a entrada e a saída.
@@ -37,4 +37,4 @@ Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados d
 
 Tem acesso quem vê as reservas (Reservas & Operações), e cada um só vê as reservas dos parques das suas cidades. As reclamações e os perdidos só aparecem a quem tem acesso a esses módulos.
 
-Os parques nossos (marca + cidade) são reconhecidos com as mesmas regras que agrupam as **Reservas do dia**. O canal (Direto / Parceiro / Marketplace) é da contabilidade e não aparece na lista Reservas do dia.
+Os parques nossos (marca + cidade) são reconhecidos com as mesmas regras que agrupam as **Reservas do dia**. A cidade do parque é a gravada ou uma terra à volta (Prior Velho, Moscavide → Lisboa; Maia → Porto…); só sem cidade gravada vale o nome do parque, e por fim a morada. O canal (Direto / Parceiro / Marketplace) é da contabilidade e não aparece na lista Reservas do dia.

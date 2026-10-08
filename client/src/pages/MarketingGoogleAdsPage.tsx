@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import DateRangeNav from "@/components/DateRangeNav";
 import { campaignTabBrand } from "@shared/adCampaignMapping";
+import { MARKETPLACE_NO_CITY_LABEL, MARKETPLACE_NOT_OPERATED_LABEL, MARKETPLACE_OPERATED_LABEL, operatedLabel } from "@shared/marketplace";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -220,7 +221,7 @@ function BrandSummary({ data }: { data: any }) {
           <p className="text-xs text-muted-foreground mt-1">
             Marca = a escolhida em cada campanha (uma campanha da conta Multipark.pt marcada como Airpark Faro conta na Airpark); sem escolha, a marca da conta (Multipark.pt e Multipark SA são a marca Marketplace).
             {" "}<b>Conversões</b> = as que cada plataforma conta (Google Ads, Meta). <b>Reservas via net</b> = reservas Multipark reais da marca que <b>não</b> são de parceiros (site, telefone, Marketplace), por data de criação, sem canceladas — é o que os anúncios podem trazer.
-            {" "}<b>Marketplace</b>: as vendas pelo multipark.pt (nos parques de terceiros e nos nossos) contam em "Marketplace &lt;cidade&gt;", onde estão as campanhas "Multipark - &lt;Cidade&gt; - PT" — já não na marca do parque.
+            {" "}<b>Marketplace</b>: todas as reservas dos parques de terceiros e as dos nossos que vieram pelo multipark.pt contam em "Marketplace &lt;cidade&gt;", onde estão as campanhas "Multipark - &lt;Cidade&gt; - PT" — já não na marca do parque. Parques sem cidade reconhecida entram em "{MARKETPLACE_NO_CITY_LABEL}" (aviso por baixo).
             {" "}<b>Com link</b> = das via net, quantas trazem o link de origem; <b>Ligadas</b> = as que trazem a prova do clique (gclid/fbclid/utm pago). Sem link, não há como ligar a reserva ao anúncio — é o site que tem de o guardar.
             {" "}ROAS s/ IVA = valor via net sem IVA (taxa do período: {vatPct}) ÷ gasto. Com âmbito de cidade, o gasto é o imputado a essas cidades (nacional pela sua parte).
           </p>
@@ -265,6 +266,25 @@ function BrandSummary({ data }: { data: any }) {
           </div>
         </CardContent>
       </Card>
+      {!noBk && data.marketplace && data.marketplace.bookings > 0 && (
+        <p className="text-xs text-muted-foreground" role="status">
+          <b>Marketplace</b>: {num(data.marketplace.bookings)} reserva(s) no período, de todos os parques ({eur(data.marketplace.revenue)}) —{" "}
+          {MARKETPLACE_OPERATED_LABEL.toLowerCase()}: {num(data.marketplace.operated.bookings)} ({eur(data.marketplace.operated.revenue)});{" "}
+          {MARKETPLACE_NOT_OPERATED_LABEL.toLowerCase()}: {num(data.marketplace.notOperated.bookings)} ({eur(data.marketplace.notOperated.revenue)}).
+          {data.marketplace.withoutCity.bookings > 0 && <> {num(data.marketplace.withoutCity.bookings)} em "{MARKETPLACE_NO_CITY_LABEL}" (contam na marca Marketplace, em nenhuma cidade).</>}
+        </p>
+      )}
+      {!noBk && (data.unplacedMarketplaceParks?.length ?? 0) > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" role="alert">
+          <p className="font-semibold">Parques do Marketplace sem cidade reconhecida — as reservas entram em "{MARKETPLACE_NO_CITY_LABEL}"</p>
+          <p className="mt-1">Corrige a cidade do parque na Multipark (ou cria o nó "Marketplace" dessa cidade em Projetos) para as reservas irem para a cidade certa:</p>
+          <ul className="mt-1 list-disc pl-5">
+            {data.unplacedMarketplaceParks.map((p: { id: string; name: string; city: string | null; operated: boolean }) => (
+              <li key={p.id}>{p.name} — cidade gravada: {p.city ? `"${p.city}"` : "vazia"} · {operatedLabel(p.operated).toLowerCase()}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {!noBk && data.bookingsWithoutBrand > 0 && (
         <p className="text-xs text-muted-foreground">{num(data.bookingsWithoutBrand)} reserva(s) do período sem parque/marca atribuída — não entram em nenhuma linha.</p>
       )}

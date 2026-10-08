@@ -6,6 +6,7 @@ import type { AppRouter } from "../../../server/routers";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { seesBeyondOwn } from "@shared/access";
 import { PARKING_TYPE_LABELS } from "@shared/opsLists";
+import { operatedLabel } from "@shared/marketplace";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { multiparkBookingUrl } from "@/lib/multiparkLinks";
@@ -261,7 +262,7 @@ function Header({ data, paid }: { data: MainFound; paid: number | null }) {
           {b.pro && <Badge variant="outline">Pro</Badge>}
           <span className="text-sm text-muted-foreground">{b.park.name ?? "—"}{b.park.city ? ` · ${b.park.city}` : ""}</span>
           <Badge variant="outline" className={b.park.ours ? "text-xs font-normal" : "text-xs font-normal border-dashed"} title={b.park.reason}>
-            {b.park.ours ? `Parque nosso · ${b.park.groupLabel}` : "Parque Marketplace"}
+            {b.park.ours ? `Parque nosso · ${b.park.groupLabel}` : `Parque Marketplace · ${operatedLabel(b.park.operated).toLowerCase()}`}
             {b.park.listingType ? ` · ${b.park.listingType === "DIRECTORY" ? "diretório" : b.park.listingType === "ON_PLATFORM" ? "na plataforma" : b.park.listingType}` : ""}
           </Badge>
           <a href={multiparkBookingUrl(b.id)} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 text-xs text-primary underline">
