@@ -610,6 +610,51 @@ export const opsPressureDays = mysqlTable("ops_pressure_days", {
 	uniqueIndex("uq_ops_pressure_day").on(table.parkGroup, table.part, table.day),
 ]);
 
+// 0595 (lote 41 + Jorge, 8 out 2026): o que a IA decidiu ao separar emails das
+// caixas partilhadas e conversas novas do WhatsApp pelas caixas — uma linha por
+// mensagem/conversa (sourceRef UNIQUE: nunca se classifica duas vezes), com a
+// caixa aplicada (info quando não percebeu ou falhou), o recrutamento em 1.º
+// contacto (lead/candidatura) e quem corrigiu depois. Histórico: nada se apaga.
+export const commsAiRouting = mysqlTable("comms_ai_routing", {
+	id: int().autoincrement().primaryKey(),
+	/** email | whatsapp */
+	channel: varchar({ length: 10 }).notNull(),
+	/** "mail_message:<id>" | "whatsapp_conversation:<id>" */
+	sourceRef: varchar({ length: 64 }).notNull(),
+	threadId: int(),
+	messageId: int(),
+	conversationId: int(),
+	fromBoxKey: varchar({ length: 40 }),
+	/** O que a IA respondeu (null = não percebeu). */
+	aiBoxKey: varchar({ length: 40 }),
+	/** Caixa aplicada (info / Geral quando não percebeu ou falhou). */
+	boxKey: varchar({ length: 40 }),
+	confidence: decimal({ precision: 4, scale: 3 }),
+	reason: varchar({ length: 300 }),
+	/** ai | triage | rule | fallback */
+	via: varchar({ length: 12 }).default('ai').notNull(),
+	/** pending | moved | kept | failed */
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	error: varchar({ length: 200 }),
+	candidateJson: text(),
+	/** created | existing | employee | invalid */
+	recruitOutcome: varchar({ length: 16 }),
+	leadId: int(),
+	applicationId: int(),
+	correctedBoxKey: varchar({ length: 40 }),
+	correctedById: int(),
+	correctedAt: datetime({ mode: 'string' }),
+	decidedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_comms_ai_routing_ref").on(table.sourceRef),
+	index("idx_comms_ai_routing_thread").on(table.threadId),
+	index("idx_comms_ai_routing_conv").on(table.conversationId),
+	index("idx_comms_ai_routing_status").on(table.status, table.createdAt),
+	index("idx_comms_ai_routing_lead").on(table.leadId),
+]);
+
 // 0535 (Jorge, 7 out 2026): notas internas da ficha — team leader e acima, no
 // âmbito de cada um; a própria pessoa nunca as vê (server/rhAccess.ts).
 export const employeeNotes = mysqlTable("employee_notes", {
@@ -1201,6 +1246,23 @@ export const extrasAvailability = mysqlTable("extras_availability", {
 	uniqueIndex("extras_availability_emp_day_unique").on(table.employeeId, table.day),
 	index("extras_availability_week_idx").on(table.weekStart),
 	index("extras_availability_emp_idx").on(table.employeeId),
+]);
+
+// 0580 (Jorge, 8 out 2026): dias livres HABITUAIS — um esboço, não datas.
+// Uma linha por ficha; `slots` = JSON em texto (dia da semana → períodos
+// manhã/tarde/noite), regras em shared/availabilityPattern.ts. Gravar
+// substitui a linha; "Limpar" grava a grelha vazia (nunca se apaga).
+export const extrasAvailabilityPattern = mysqlTable("extras_availability_pattern", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	slots: text().notNull(),
+	note: varchar({ length: 300 }),
+	updatedById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("extras_availability_pattern_emp_unique").on(table.employeeId),
 ]);
 
 export const faqs = mysqlTable("faqs", {
@@ -1910,6 +1972,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	otherActions: int().default(0).notNull(),
 	weightedActions: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	actionsByType: text(),
+	// 0590 (49e): ações na Multipark por hora de Lisboa, "[n0,…,n23]"; NULL = dia sem ações ou de antes da 0590.
+	actionsByHour: varchar({ length: 255 }),
 	speedingEvents: int().default(0).notNull(),
 	delays: int().default(0).notNull(),
 	lateServices: int().default(0).notNull(),

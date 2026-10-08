@@ -520,6 +520,8 @@ export async function moveThread(viewer: MailViewer, threadId: number, boxKey: s
   if (!target || !target.active || !canSeeMailbox(viewer, target)) throw bad("Caixa desconhecida.");
   const { moveThreadToBox } = await import("./service");
   if (!(await moveThreadToBox(threadId, target.key, "manual"))) throw bad("A conversa já está nessa caixa.");
+  // Se foi a IA que a separou, fica registado que uma pessoa corrigiu (Jorge, 8 out 2026).
+  await (await import("../commsRouting")).noteManualBoxChange("email", threadId, target.key, viewer.id);
   try {
     const { logActivity } = await import("../db");
     await logActivity({ userId: viewer.id, action: "update", entity: "mail_thread", entityId: threadId, details: `Caixa ${acc.mailbox.key} → ${target.key}` } as any);

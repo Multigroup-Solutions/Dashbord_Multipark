@@ -25,6 +25,7 @@ import { matchKey } from "./textKey";
 import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
 import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
+import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -446,6 +447,15 @@ export const SETTINGS = {
     defaultValue: { ...AI_ASSISTANT_DEFAULT_LIMITS },
     wiring: "live",
   }),
+  "ai.commsRouting": def({
+    key: "ai.commsRouting",
+    group: "ia",
+    label: "IA a separar emails e WhatsApp: limiar e teto",
+    description: "minConfidence: abaixo desta certeza (0 a 1) a IA \"não percebeu\" e a conversa vai para o info (no WhatsApp, a Geral). perRun: máximo de emails lidos pela IA em cada sincronização (o resto fica para o varrimento de 15 em 15 min). JSON: {\"minConfidence\": 0.7, \"perRun\": 10}.",
+    schema: commsRoutingSettingsSchema,
+    defaultValue: { ...COMMS_ROUTING_DEFAULTS },
+    wiring: "live",
+  }),
   "ai.priceOverridesEur": def({
     key: "ai.priceOverridesEur",
     group: "ia",
@@ -852,7 +862,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação.", group: "ia" },
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
-  { name: "AI_MAIL_ROUTING", label: "IA: separar os emails pelas caixas", description: "Os emails novos que chegam a uma caixa geral (info@) vão para a caixa do tema: RH, Reservas, Alterações, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. Só move a conversa (quem vê essa caixa passa a vê-la); nunca responde. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
+  { name: "AI_MAIL_ROUTING", label: "IA: separar emails e WhatsApp pelas caixas", description: "Os emails novos que chegam às caixas partilhadas (info@, reservas@, recursos-humanos@…; nunca as pessoais) e as conversas NOVAS do WhatsApp vão sozinhos para a caixa do tema: RH, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. Ficam por ler. O que a IA não percebe (ou se falhar) vai para o info (no WhatsApp, a Geral). Uma resposta numa conversa que já tem caixa não muda. Recrutamento em 1.º contacto cria a lead e a candidatura. Nunca responde a ninguém; mover à mão corrige.", group: "ia" },
   { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
   { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
   { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },

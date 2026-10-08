@@ -35,6 +35,13 @@ export interface PickerCandidate {
   hasAccount?: boolean;
   /** Jorge, 7 out 2026: estado da carta (só se mostra quando NÃO está validada). */
   licence?: LicenceStatus;
+  /**
+   * Dias livres HABITUAIS (8 out 2026) — só uma dica para quem não respondeu à
+   * semana: `text` = o que costuma ter livre nesse dia da semana ("Qui tarde";
+   * vazio = não costuma), `marked` = marcou algum dia (senão só tem nota),
+   * `morning`/`night` = cobre o turno, `summary` = o resumo todo (no title).
+   */
+  habitual?: { summary: string; text: string; marked?: boolean; morning: boolean; night: boolean } | null;
 }
 
 interface Section { key: string; label: string; rows: Array<{ c: PickerCandidate; other: boolean }>; disabled?: boolean }
@@ -58,7 +65,9 @@ export function pickerSections(
   return sections.filter((s) => s.rows.length > 0);
 }
 
-export function CandidateLabel({ c }: { c: PickerCandidate }) {
+export function CandidateLabel({ c, shift }: { c: PickerCandidate; shift?: "morning" | "night" }) {
+  const habitual = c.availability?.status === "no_response" ? c.habitual ?? null : null;
+  const habitualCovers = habitual ? (shift ? habitual[shift] : !!habitual.text) : false;
   return (
     <span className="flex items-center gap-1.5 min-w-0">
       <Avatar className="h-5 w-5 shrink-0">
@@ -79,6 +88,14 @@ export function CandidateLabel({ c }: { c: PickerCandidate }) {
       {c.availability?.status === "no_response" && (
         <span className="h-2 w-2 inline-block rounded-full bg-muted-foreground/30 shrink-0" title="Sem resposta" />
       )}
+      {habitual && (habitual.text || habitual.summary) && (
+        <span
+          className={`shrink-0 rounded px-1 text-[11px] ${habitualCovers ? "bg-sky-50 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300" : "bg-muted text-muted-foreground"}`}
+          title={`Sem resposta para esta semana. Dias livres habituais (só uma dica): ${habitual.summary || "—"}`}
+        >
+          {habitual.text ? `habitual: ${habitual.text}` : habitual.marked === false ? "habitual: ver nota" : "habitual: não neste dia"}
+        </span>
+      )}
       {c.availability?.status === "unavailable" && (
         <span className="text-[11px] text-red-500 shrink-0" title="Disse que não está disponível">✕</span>
       )}
@@ -98,6 +115,7 @@ export function PersonPicker({
   candidates,
   others = [],
   city,
+  shift,
   value,
   onPick,
 }: {
@@ -105,6 +123,8 @@ export function PersonPicker({
   /** Só no TL: gente do RH que ainda não tem a permissão (pode-se dar daqui). */
   others?: readonly PickerCandidate[];
   city: CityId;
+  /** Turno da escala (para a dica dos dias habituais). */
+  shift?: "morning" | "night";
   value: number | null;
   onPick: (c: PickerCandidate) => void;
 }) {
@@ -117,7 +137,7 @@ export function PersonPicker({
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQuery(""); }}>
       <PopoverTrigger asChild>
         <Button type="button" variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between font-normal">
-          {selected ? <CandidateLabel c={selected} /> : <span className="text-muted-foreground">Escreve o nome (RH)…</span>}
+          {selected ? <CandidateLabel c={selected} shift={shift} /> : <span className="text-muted-foreground">Escreve o nome (RH)…</span>}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -135,7 +155,7 @@ export function PersonPicker({
                     disabled={sec.disabled}
                     onSelect={() => { onPick(c); setOpen(false); setQuery(""); }}
                   >
-                    <CandidateLabel c={c} />
+                    <CandidateLabel c={c} shift={shift} />
                   </CommandItem>
                 ))}
               </CommandGroup>

@@ -85,6 +85,7 @@ import {
 } from "@shared/whatsappTemplate";
 import { matchesContactQuery } from "@shared/contactSearch";
 import { DriverCityPanel, useDriverCity, type DriverCityRecipient } from "@/components/whatsapp/DriverCityPanel";
+import { AiRoutingNote } from "@/components/AiRoutingNote";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -256,7 +257,7 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
   const boxes = trpc.whatsapp.conversations.boxes.useQuery(undefined, { staleTime: 5 * 60_000 });
   const boxLabels = new Map((boxes.data ?? []).map((b) => [b.key, b.label]));
   const setBox = trpc.whatsapp.conversations.setBox.useMutation({
-    onSuccess: () => { toast.success("Conversa movida."); refreshAll(); },
+    onSuccess: () => { toast.success("Conversa movida."); refreshAll(); void utils.commsRouting.note.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   /** Depois de qualquer mudança: lista, conversa aberta e badge do menu. */
@@ -1036,6 +1037,7 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
             </div>
           )}
 
+          {t && t.conversationId === selectedId && <AiRoutingNote channel="whatsapp" id={t.conversationId} />}
           {t && t.conversationId === selectedId && <CaseProposalBar t={t} />}
           <MessageThread
             conversationId={selectedId}
