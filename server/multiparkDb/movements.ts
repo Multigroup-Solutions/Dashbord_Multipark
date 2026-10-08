@@ -56,6 +56,8 @@ export const DETAIL_MAX_LIMIT = 1000;
 export const lisbonLocal = (col: string) => `((${col}) AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon'`;
 /** Dia operacional "YYYY-MM-DD" (antes das 03h conta para o dia anterior). */
 export const opDaySql = (col: string) => `to_char(${lisbonLocal(col)} - interval '${OPERATIONAL_DAY_START_HOUR} hours', 'YYYY-MM-DD')`;
+/** 49e: hora de RELÓGIO de Lisboa (0–23) — a atividade por hora do Desempenho. */
+export const lisbonHourSql = (col: string) => `(extract(hour from ${lisbonLocal(col)}))::int`;
 /** Turno operacional: manhã 03h–15h, noite 15h–03h. */
 export const opShiftSql = (col: string) => {
   const h = `extract(hour from ${lisbonLocal(col)})`;
@@ -103,7 +105,7 @@ export function movementWindow(startDay: string, endDay: string = startDay): Mov
 
 /**
  * Contagens para o motor da avaliação, por (agente, dia operacional, turno,
- * changeType), com as MESMAS regras de evaluationCore.ts:
+ * changeType e — 49e — hora de Lisboa), com as MESMAS regras de evaluationCore.ts:
  *  - "levar ao parque" = MOVEMENT cuja ação anterior da MESMA reserva, entre
  *    recolha/entrega/movimento/cancelamento, foi uma recolha (CHECK_IN);
  *  - entrega atrasada = CHECK_OUT mais de LATE_SERVICE_MINUTES (e menos de
@@ -140,7 +142,7 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
     `  SELECT s.*, min(s.at) FILTER (WHERE s.ct = 'PENDING_CHECKOUT') OVER (PARTITION BY s.booking_id, s.deliveries_before) AS pending_at`,
     `    FROM seq s`,
     `)`,
-    `SELECT x.user_id, max(x.agent_name) AS agent_name, ${opDaySql("x.at")} AS day, ${opShiftSql("x.at")} AS shift, x.ct AS change_type,`,
+    `SELECT x.user_id, max(x.agent_name) AS agent_name, ${opDaySql("x.at")} AS day, ${opShiftSql("x.at")} AS shift, x.ct AS change_type, ${lisbonHourSql("x.at")} AS hour,`,
     `       count(*) AS n,`,
     `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.prev_cat = 'CHECK_IN') AS parking_moves,`,
     `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND x.pending_at IS NOT NULL`,
@@ -148,8 +150,9 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
     `                          AND x.at - x.pending_at < ${lateMax}::int * interval '1 minute') AS late_deliveries`,
     `  FROM seq2 x`,
     ` WHERE x.at >= ${from}::timestamp`,
-    ` GROUP BY x.user_id, 3, 4, x.ct`,
-    ` ORDER BY 3, x.user_id, x.ct`,
+    // 49e: também por hora de Lisboa (a avaliação guarda as ações por hora do dia); nunca há mais linhas do que ações
+    ` GROUP BY x.user_id, 3, 4, x.ct, 6`,
+    ` ORDER BY 3, x.user_id, x.ct, 6`,
     ` LIMIT ${params.add(AGG_ROW_LIMIT * 10)}`,
   ].join("\n");
   return { sql, params: params.values };
@@ -161,6 +164,8 @@ export interface EngineActionCount {
   day: string;
   shift: "morning" | "night";
   changeType: string;
+  /** 49e: hora de relógio de Lisboa (0–23) destas ações; sem ela → não entra nas contagens por hora. */
+  hour?: number;
   n: number;
   parkingMoves: number;
   lateDeliveries: number;
@@ -183,12 +188,14 @@ const numOrNull = (v: unknown): number | null => {
 
 /** Linha → contagem do motor. PURA. */
 export function mapEngineActionCountRow(r: Record<string, unknown>): EngineActionCount {
+  const hour = r.hour == null || r.hour === "" ? NaN : Number(r.hour);
   return {
     agentUserId: str(r.user_id),
     agentName: str(r.agent_name),
     day: String(r.day ?? ""),
     shift: r.shift === "morning" ? "morning" : "night",
     changeType: String(r.change_type ?? "?").toUpperCase(),
+    ...(Number.isInteger(hour) && hour >= 0 && hour <= 23 ? { hour } : {}),
     n: int(r.n),
     parkingMoves: int(r.parking_moves),
     lateDeliveries: int(r.late_deliveries),

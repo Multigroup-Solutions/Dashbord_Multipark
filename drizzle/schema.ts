@@ -1218,6 +1218,23 @@ export const extrasAvailability = mysqlTable("extras_availability", {
 	index("extras_availability_emp_idx").on(table.employeeId),
 ]);
 
+// 0580 (Jorge, 8 out 2026): dias livres HABITUAIS — um esboço, não datas.
+// Uma linha por ficha; `slots` = JSON em texto (dia da semana → períodos
+// manhã/tarde/noite), regras em shared/availabilityPattern.ts. Gravar
+// substitui a linha; "Limpar" grava a grelha vazia (nunca se apaga).
+export const extrasAvailabilityPattern = mysqlTable("extras_availability_pattern", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	slots: text().notNull(),
+	note: varchar({ length: 300 }),
+	updatedById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("extras_availability_pattern_emp_unique").on(table.employeeId),
+]);
+
 export const faqs = mysqlTable("faqs", {
 	id: int().autoincrement().primaryKey(),
 	categoryId: int(),
@@ -1925,6 +1942,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	otherActions: int().default(0).notNull(),
 	weightedActions: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	actionsByType: text(),
+	// 0590 (49e): ações na Multipark por hora de Lisboa, "[n0,…,n23]"; NULL = dia sem ações ou de antes da 0590.
+	actionsByHour: varchar({ length: 255 }),
 	speedingEvents: int().default(0).notNull(),
 	delays: int().default(0).notNull(),
 	lateServices: int().default(0).notNull(),

@@ -296,10 +296,27 @@
   --perf-2: #eb6834;
   --perf-3: #1baf7a;
   --perf-4: #eda100;
+  /* 49e — atividade por hora: uma só cor (azul), 5 níveis do claro ao escuro
+     (validados como rampa ordinal sobre o cartão #ffffff: passo mais claro
+     2,11:1, ΔL ≥ 0,06); 0 = sem ações, quase da cor do cartão. */
+  --perf-heat-0: #e2e8f0;
+  --perf-heat-1: #86b6ef;
+  --perf-heat-2: #5598e7;
+  --perf-heat-3: #2a78d6;
+  --perf-heat-4: #1c5cab;
+  --perf-heat-5: #104281;
 }
 .dark .perf-viz {
   --perf-1: #3987e5;
   --perf-2: #d95926;
   --perf-3: #199e70;
   --perf-4: #c98500;
+  /* no escuro a âncora vira: pouco = escuro (perto do cartão #0c1f3f, passo
+     mais escuro 2,02:1), muito = claro — passos próprios, não uma inversão */
+  --perf-heat-0: #122a4d;
+  --perf-heat-1: #184f95;
+  --perf-heat-2: #256abf;
+  --perf-heat-3: #3987e5;
+  --perf-heat-4: #6da7ec;
+  --perf-heat-5: #9ec5f4;
 }

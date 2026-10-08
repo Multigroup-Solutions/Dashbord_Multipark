@@ -11,6 +11,10 @@
  * pontos" (a tabela dos pesos); a equipa do TL e do supervisor (movimentos,
  * custo, sem Zello, horas paradas, extras a mais/a menos); "km sem
  * movimentos" com as Ligações à mão.
+ *
+ * 49e (Jorge, 8 out 2026): chamadas perdidas, devolvidas e minutos ao
+ * telefone; emails também da caixa Gmail pessoal; a atividade por hora do dia
+ * (grelha pessoa × hora na aba, barras 0–23 h no detalhe).
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -25,6 +29,7 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { PersonLinksDialog } from "@/components/PersonLinksDialog";
+import { HourBars, HourHeatmap, HourlyNote, type HourlyInfo } from "@/components/people/PerformanceHours";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,13 +45,15 @@ const nf = new Intl.NumberFormat("pt-PT", { maximumFractionDigits: 1 });
 const eur = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const HOUR_METRICS: ReadonlySet<PerfMetric> = new Set(["hours", "teamHoursStopped", "teamShortHours", "teamOverHours"]);
 const fmt = (k: PerfMetric, v: number) => (k === "km" ? `${nf.format(v)} km` : k === "maxSpeed" ? (v ? `${Math.round(v)} km/h` : "—")
-  : k === "teamCost" ? eur.format(v) : HOUR_METRICS.has(k) ? `${nf.format(v)} h` : nf.format(v));
+  : k === "teamCost" ? eur.format(v) : HOUR_METRICS.has(k) ? `${nf.format(v)} h` : k === "callMinutes" ? `${nf.format(v)} min` : nf.format(v));
 const signed = (n: number) => (n > 0 ? `+${nf.format(n)}` : nf.format(n));
 
 type Person = {
   employeeId: number; name: string; position: string | null; role: string | null; active: boolean; photoUrl: string | null;
   totals: Record<PerfMetric, number>; points: number; perHour: number | null; series: Partial<Record<PerfMetric, number[]>>;
   kmNoMoves?: boolean; byRoster?: boolean;
+  /** 49e: ações por hora do dia (Lisboa) e a parte da Multipark */
+  byHour?: number[]; byHourMultipark?: number[];
 };
 
 export function PeoplePerformancePanel() {
@@ -159,6 +166,10 @@ export function PeoplePerformancePanel() {
             </Card>
           </div>
 
+          {/* 49e: a que horas cada um trabalha — grelha pessoa × hora */}
+          <HourHeatmap people={ranked} groupByHour={d.groupByHour ?? []} groupByHourMultipark={d.groupByHourMultipark ?? []}
+            hourly={d.hourly ?? { since: null, missingDays: 0 }} from={d.from} onOpen={setOpen} />
+
           {/* tabela: toda a gente, todas as colunas da aba (42c: todos os cabeçalhos ordenam) */}
           <Card>
             <CardHeader className="pb-1"><CardTitle className="text-base">Toda a gente ({ranked.length})</CardTitle></CardHeader>
@@ -200,11 +211,12 @@ export function PeoplePerformancePanel() {
           <div className="space-y-1 text-xs text-muted-foreground">
             <p>Pontos = soma ponderada do que a aba mede (nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação). Por hora só com {MIN_HOURS_FOR_RATE} h ou mais (ponto; sem ponto, a escala). Nota = 100 para o melhor.</p>
             {d.speedLimit != null && <p>Limite de velocidade usado: {Math.round(d.speedLimit)} km/h (com a tolerância).</p>}
+            <p>Emails: contam os enviados pela dashboard e os enviados da caixa Gmail pessoal de cada um (O meu email), cada email uma vez. Os enviados diretamente das caixas partilhadas (info@, reservas@…) fora da dashboard não têm autor e não contam.</p>
             {d.notes.map((n, i) => <p key={i}>{n}</p>)}
           </div>
         </>)}
 
-      {open && d && <PersonDialog p={open} group={group} labels={d.bucketLabels} onClose={() => setOpen(null)} />}
+      {open && d && <PersonDialog p={open} group={group} labels={d.bucketLabels} hourly={d.hourly ?? { since: null, missingDays: 0 }} from={d.from} onClose={() => setOpen(null)} />}
       <PersonLinksDialog employeeId={links?.employeeId ?? null} name={links?.name} open={!!links} onOpenChange={(o) => !o && setLinks(null)} />
     </div>
   );
@@ -308,7 +320,7 @@ function GradeBar({ grade }: { grade: number }) {
   );
 }
 
-function PersonDialog({ p, group, labels, onClose }: { p: Person; group: PerfGroup; labels: string[]; onClose: () => void }) {
+function PersonDialog({ p, group, labels, hourly, from, onClose }: { p: Person; group: PerfGroup; labels: string[]; hourly: HourlyInfo; from: string; onClose: () => void }) {
   const view = GROUP_VIEW[group];
   const data = labels.map((label, i) => Object.fromEntries([["label", label], ...view.chart.map((k) => [k, p.series[k]?.[i] ?? 0])]));
   const shown = (Object.keys(PERF_METRICS) as PerfMetric[]).filter((k) => (p.totals[k] ?? 0) !== 0);
@@ -332,6 +344,9 @@ function PersonDialog({ p, group, labels, onClose }: { p: Person; group: PerfGro
             </LineChart>
           </ResponsiveContainer>
         )}
+        {/* 49e: a que horas trabalha */}
+        <HourBars byHour={p.byHour ?? []} byHourMultipark={p.byHourMultipark ?? []} />
+        <HourlyNote hourly={hourly} from={from} />
         {shown.length === 0 ? <p className="text-sm text-muted-foreground">Nada registado neste período.</p> : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {shown.map((k) => (

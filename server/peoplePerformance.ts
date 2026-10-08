@@ -28,10 +28,21 @@
  *  - a EQUIPA do TL (o turno dele) e do supervisor (as cidades dele):
  *    movimentos, custo, quem mexeu carros sem Zello, horas paradas e, no
  *    supervisor, extras a mais/a menos face à previsão (dia e semana).
+ *
+ * 49e (Jorge, 8 out 2026: "avança com o desempenho"):
+ *  - central Vodafone: também as perdidas, as devolvidas e os minutos ao
+ *    telefone, com a mesma regra das internas (shared → centralCallMetrics);
+ *  - emails: também os enviados da caixa Gmail PESSOAL ligada, cada linha uma
+ *    vez (shared → emailAuthorOf); as partilhadas fora da dashboard não têm autor;
+ *  - atividade por hora do dia (Lisboa): a Multipark vem da avaliação diária
+ *    (employee_day_metrics.actionsByHour, 0590 — nada se relê da History) e a
+ *    dashboard das MESMAS contagens por hora UTC, passadas a hora de Lisboa
+ *    aqui (sem CONVERT_TZ, que precisa das tabelas de fusos do MySQL).
  */
 import { sql, type SQL } from "drizzle-orm";
 import {
-  addTotals, bucketOf, emptyTotals, GROUP_VIEW, groupOf, kmWithoutMoves, perfRange, perHourOf, rosterGroup, teamDayPoints, utcHourMs, workPoints,
+  addHours, addTotals, bucketOf, emptyHours, emptyTotals, GROUP_VIEW, groupOf, kmWithoutMoves, lisbonHourOfUtcHour, parseHours, perfRange, perHourOf, rosterGroup,
+  teamDayPoints, utcHourMs, workPoints, CALLBACK_WINDOW_HOURS,
   type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals,
 } from "../shared/peoplePerformance";
 import { applyAdjustments, emptyDayMetrics, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
@@ -43,6 +54,7 @@ const rowsOf = (res: unknown): any[] => {
   return Array.isArray(r) ? r : [];
 };
 const dayStr = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? "").slice(0, 10));
+const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /** 39g: chamadas da central com clientes e números de fora (sem colegas do RH nem extensões). */
 const CENTRAL_EXTERNAL_ONLY = sql`(contactRef IS NULL OR (contactRef NOT LIKE 'emp-%' AND contactRef NOT LIKE 'ext-%'))`;
@@ -56,15 +68,42 @@ const CENTRAL_SUPERVISOR_TO_EXTRA = sql`(central_calls.contactRef LIKE 'emp-%'
   AND (EXISTS (SELECT 1 FROM users su WHERE su.id = central_calls.userId AND su.role = 'supervisor')
     OR EXISTS (SELECT 1 FROM employees se WHERE se.userId = central_calls.userId AND se.position = 'supervisor')))`;
 
-/** Contas da dashboard → contagens por hora UTC (agrupadas no SQL). */
-function userSources(start: string, end: string): Array<{ key: PerfMetric; label: string; q: SQL }> {
+/** 49e: a mesma pessoa do outro lado — o mesmo contacto da consola ou o mesmo número (últimos 9 algarismos). */
+const sameParty = (x: string) => sql.raw(`((${x}.contactRef IS NOT NULL AND ${x}.contactRef = central_calls.contactRef)
+    OR (${x}.phone IS NOT NULL AND central_calls.phone IS NOT NULL AND RIGHT(${x}.phone, 9) = RIGHT(central_calls.phone, 9)))`);
+/**
+ * 49e: devolução de uma chamada da central — a 1.ª chamada feita para quem
+ * teve uma recebida NÃO atendida nas 24 h anteriores (de quem quer que fosse
+ * a perdida). Ligar outra vez à mesma pessoa já não é devolução.
+ */
+const CENTRAL_RETURNS_MISSED = sql`EXISTS (SELECT 1 FROM central_calls m WHERE m.direction = 'in' AND m.held = 0
+  AND m.startedAt < central_calls.startedAt AND m.startedAt >= central_calls.startedAt - INTERVAL ${sql.raw(String(CALLBACK_WINDOW_HOURS))} HOUR
+  AND ${sameParty("m")}
+  AND NOT EXISTS (SELECT 1 FROM central_calls o WHERE o.direction = 'out' AND o.startedAt > m.startedAt AND o.startedAt < central_calls.startedAt AND ${sameParty("o")}))`;
+
+/**
+ * 49e: o autor de um email enviado (shared/peoplePerformance.ts → emailAuthorOf):
+ * quem o mandou pela dashboard; senão o dono da caixa Gmail PESSOAL ligada
+ * ("user:N", fora das caixas partilhadas). Os enviados diretamente das caixas
+ * partilhadas fora da dashboard não têm autor. Cada linha conta uma vez.
+ */
+const EMAIL_AUTHOR = sql`COALESCE(sentById, CASE WHEN mailboxKey IS NULL AND accountKey LIKE 'user:%' THEN CAST(SUBSTRING(accountKey, 6) AS UNSIGNED) END)`;
+
+/**
+ * Contas da dashboard → contagens por hora UTC (agrupadas no SQL). 49e: a
+ * mesma hora dá a atividade por hora do dia (Lisboa); `hourly: false` = não
+ * é uma ação da pessoa (perdidas, minutos) ou já conta noutra (devoluções da
+ * central = chamadas feitas).
+ */
+export function userSources(start: string, end: string): Array<{ key: PerfMetric; label: string; q: SQL; hourly: boolean }> {
   const hour = (col: SQL) => sql`DATE_FORMAT(${col}, '%Y-%m-%d %H')`;
-  const src = (key: PerfMetric, label: string, table: SQL, userCol: SQL, timeCol: SQL, where: SQL = sql`1 = 1`) => ({
-    key, label,
-    q: sql`SELECT ${userCol} AS u, ${hour(timeCol)} AS h, COUNT(*) AS n FROM ${table}
+  const src = (key: PerfMetric, label: string, table: SQL, userCol: SQL, timeCol: SQL, where: SQL = sql`1 = 1`, opt: { agg?: SQL; hourly?: boolean } = {}) => ({
+    key, label, hourly: opt.hourly !== false,
+    q: sql`SELECT ${userCol} AS u, ${hour(timeCol)} AS h, ${opt.agg ?? sql`COUNT(*)`} AS n FROM ${table}
             WHERE ${userCol} IS NOT NULL AND ${timeCol} >= ${start} AND ${timeCol} < ${end} AND ${where}
             GROUP BY u, h`,
   });
+  const minutes = (col: SQL) => sql`SUM(COALESCE(${col}, 0)) / 60`;
   return [
     src("callsAnswered", "chamadas atendidas", sql`whatsapp_calls`, sql`answeredByUserId`, sql`answeredAt`, sql`direction = 'in' AND status <> 'rejected'`),
     src("callsMade", "chamadas feitas", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`),
@@ -73,8 +112,17 @@ function userSources(start: string, end: string): Array<{ key: PerfMetric; label
     // 39g: as internas — colegas do RH (emp-) e extensões (ext-) — não contam, exceto o supervisor a ligar aos extras
     src("callsAnswered", "chamadas da central (atendidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}`),
     src("callsMade", "chamadas da central (feitas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND (${CENTRAL_EXTERNAL_ONLY} OR ${CENTRAL_SUPERVISOR_TO_EXTRA})`),
+    // 49e: as perdidas (recebidas não atendidas), as devolvidas e o tempo ao telefone — com a mesma regra das internas
+    src("callsMissed", "chamadas da central (perdidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 0 AND ${CENTRAL_EXTERNAL_ONLY}`, { hourly: false }),
+    src("callbacks", "chamadas da central (devolvidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND ${CENTRAL_EXTERNAL_ONLY} AND ${CENTRAL_RETURNS_MISSED}`, { hourly: false }),
+    src("callMinutes", "minutos da central", sql`central_calls`, sql`userId`, sql`startedAt`,
+      sql`((direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}) OR (direction = 'out' AND (${CENTRAL_EXTERNAL_ONLY} OR ${CENTRAL_SUPERVISOR_TO_EXTRA})))`,
+      { agg: minutes(sql`durationS`), hourly: false }),
+    src("callMinutes", "minutos do WhatsApp (atendidas)", sql`whatsapp_calls`, sql`answeredByUserId`, sql`answeredAt`, sql`direction = 'in' AND status <> 'rejected'`, { agg: minutes(sql`durationSec`), hourly: false }),
+    src("callMinutes", "minutos do WhatsApp (feitas)", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`, { agg: minutes(sql`durationSec`), hourly: false }),
     src("waMessages", "mensagens WhatsApp", sql`whatsapp_messages`, sql`sentById`, sql`createdAt`, sql`direction = 'out'`),
-    src("emails", "emails", sql`mail_messages`, sql`sentById`, sql`COALESCE(sentAt, createdAt)`, sql`direction = 'out' AND automated = 0`),
+    // 49e: enviados pela dashboard + enviados da caixa Gmail pessoal ligada (sem contar duas vezes; partilhadas fora da dashboard não têm autor)
+    src("emails", "emails", sql`mail_messages`, EMAIL_AUTHOR, sql`sentAt`, sql`direction = 'out' AND automated = 0`),
     src("complaintMsgs", "respostas em reclamações", sql`complaint_messages`, sql`authorId`, sql`createdAt`, sql`isInternal = 0`),
     src("complaintsClosed", "reclamações fechadas", sql`complaints`, sql`closedById`, sql`closedAt`),
     src("reviewsReplied", "críticas Google", sql`google_reviews`, sql`respondedBy`, sql`respondedAt`),
@@ -109,6 +157,10 @@ export interface PerfPerson {
   byRoster: boolean;
   /** por balde, só as métricas do gráfico da aba */
   series: Partial<Record<PerfMetric, number[]>>;
+  /** 49e: ações por hora do dia (Lisboa, 0–23) no período: Multipark (pela avaliação) + dashboard */
+  byHour: number[];
+  /** 49e: a parte da Multipark de `byHour` */
+  byHourMultipark: number[];
 }
 export interface PerfResult {
   period: PerfPeriod; anchor: string; group: PerfGroup; from: string; to: string;
@@ -119,6 +171,15 @@ export interface PerfResult {
   speedLimit: number | null;
   /** 42c: cidades da escala do filtro (null = todas) */
   cities: string[] | null;
+  /** 49e: ações por hora do dia da aba (soma das pessoas mostradas) */
+  groupByHour: number[];
+  groupByHourMultipark: number[];
+  /**
+   * 49e: a Multipark por hora só existe desde que a avaliação diária a guarda
+   * (`since` = 1.º dia DO PERÍODO com contagens por hora; null = nenhum);
+   * `missingDays` = dias·pessoa do período com ações na Multipark mas sem as horas.
+   */
+  hourly: { since: string | null; missingDays: number };
   notes: string[];
 }
 
@@ -213,6 +274,8 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
 
   // acumuladores: pessoa → balde → totais
   const acc = new Map<number, Map<string, PerfTotals>>();
+  // 49e: pessoa → ações por hora do dia (Lisboa): todas e só as da Multipark
+  const hoursAcc = new Map<number, { all: number[]; mp: number[] }>();
   const teamSum = new Map<string, number>(); // `${emp}|${bucket}` → soma das equipas
   const cell = (emp: number, bucket: string) => {
     let m = acc.get(emp);
@@ -221,16 +284,29 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (!t) { t = emptyTotals(); m.set(bucket, t); }
     return t;
   };
-  const put = (emp: number, day: string, part: Partial<PerfTotals>) => {
+  /** O dia desta pessoa conta (aba, cidade escolhida, período)? Devolve o balde. */
+  const bucketFor = (emp: number, day: string): string | null => {
     const p = people.get(emp);
-    if (!p) return;
+    if (!p) return null;
     if (dayCities !== undefined) {
-      if (otherCityDays.get(emp)?.has(day)) return; // escalado noutra cidade nesse dia
-      if (!p.inScope && !allowedDays.get(emp)?.has(day)) return; // ficha de outra cidade: só os dias feitos aqui
+      if (otherCityDays.get(emp)?.has(day)) return null; // escalado noutra cidade nesse dia
+      if (!p.inScope && !allowedDays.get(emp)?.has(day)) return null; // ficha de outra cidade: só os dias feitos aqui
     }
-    const b = bucketOf(o.period, day, r);
+    return bucketOf(o.period, day, r);
+  };
+  const put = (emp: number, day: string, part: Partial<PerfTotals>) => {
+    const b = bucketFor(emp, day);
     if (b) addTotals(cell(emp, b), part);
   };
+  /** 49e: ações à hora `hour` (Lisboa) do dia operacional `day` — as mesmas regras do `put`. */
+  const putHours = (emp: number, day: string, hours: ReadonlyArray<number>, multipark: boolean) => {
+    if (!bucketFor(emp, day)) return;
+    let h = hoursAcc.get(emp);
+    if (!h) { h = { all: emptyHours(), mp: emptyHours() }; hoursAcc.set(emp, h); }
+    addHours(h.all, hours);
+    if (multipark) addHours(h.mp, hours);
+  };
+  let hourlyMissingDays = 0;
 
   // ── Avaliação diária (Multipark + horas + penalizações), com os ajustes ──
   const ids = [...people.keys()];
@@ -257,6 +333,10 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
       let byType: Record<string, number> = {};
       try { byType = m.actionsByType ? JSON.parse(m.actionsByType) : {}; } catch { byType = {}; }
       const hours = normalisationHours(d);
+      // 49e: as ações da Multipark por hora do dia, guardadas pela avaliação (dias antigos não as têm)
+      const byHour = parseHours(m.actionsByHour);
+      if (byHour) putHours(emp, day, byHour, true);
+      else if (d.actions > 0 && bucketFor(emp, day)) hourlyMissingDays += 1;
       put(emp, day, {
         hours, workDays: hours > 0 || d.actions > 0 ? 1 : 0, evalPoints: scoreOf(d).totalPoints,
         recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, cancels: d.cancels,
@@ -299,7 +379,12 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
           if (emp == null) continue;
           const ms = utcHourMs(String(row.h));
           if (!Number.isFinite(ms)) continue;
-          put(emp, operationalDayOf(ms), { [s.key]: Number(row.n) || 0 });
+          const n = Number(row.n) || 0;
+          const day = operationalDayOf(ms);
+          put(emp, day, { [s.key]: n });
+          // 49e: a hora de Lisboa da hora UTC agrupada (a mudança de hora fica certa: o fuso é aplicado aqui, não no MySQL)
+          const lh = s.hourly && n > 0 ? lisbonHourOfUtcHour(String(row.h)) : null;
+          if (lh != null) { const one = emptyHours(); one[lh] = n; putHours(emp, day, one, false); }
         }
       } catch { failed.push(s.label); }
     }));
@@ -361,6 +446,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   const view = GROUP_VIEW[o.group];
   const groupTotals = emptyTotals();
   const groupSeries: Partial<Record<PerfMetric, number[]>> = Object.fromEntries(view.chart.map((k) => [k, r.buckets.map(() => 0)]));
+  const groupByHour = emptyHours(), groupByHourMultipark = emptyHours();
   const out: PerfPerson[] = [];
   let groupTeam = 0;
   for (const [emp, p] of people) {
@@ -380,6 +466,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     totals.teamPeople = totals.tlDays > 0 ? Math.round((teamTotal / totals.tlDays) * 10) / 10 : 0;
     totals.hours = Math.round(totals.hours * 10) / 10;
     totals.km = Math.round(totals.km * 10) / 10;
+    totals.callMinutes = Math.round(totals.callMinutes);
     totals.evalPoints = Math.round(totals.evalPoints * 10) / 10;
     totals.teamCost = Math.round(totals.teamCost * 100) / 100;
     totals.teamHoursStopped = Math.round(totals.teamHoursStopped * 10) / 10;
@@ -391,17 +478,30 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     groupTeam += teamTotal;
     const points = workPoints(o.group, totals);
     const { inScope: _inScope, ...shown } = p;
-    out.push({ employeeId: emp, ...shown, totals, points, perHour: perHourOf(points, totals.hours), series, kmNoMoves: o.group === "drivers" || o.group === "teamleaders" ? kmWithoutMoves(totals) : false });
+    const hrs = hoursAcc.get(emp) ?? { all: emptyHours(), mp: emptyHours() };
+    addHours(groupByHour, hrs.all);
+    addHours(groupByHourMultipark, hrs.mp);
+    out.push({ employeeId: emp, ...shown, totals, points, perHour: perHourOf(points, totals.hours), series, kmNoMoves: o.group === "drivers" || o.group === "teamleaders" ? kmWithoutMoves(totals) : false,
+      byHour: hrs.all.map(round1), byHourMultipark: hrs.mp.map(round1) });
   }
   groupTotals.teamPeople = groupTotals.tlDays > 0 ? Math.round((groupTeam / groupTotals.tlDays) * 10) / 10 : 0;
   groupTotals.hours = Math.round(groupTotals.hours * 10) / 10;
   groupTotals.km = Math.round(groupTotals.km * 10) / 10;
   groupTotals.evalPoints = Math.round(groupTotals.evalPoints * 10) / 10;
-  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões) — das internas só contam as do supervisor a ligar aos extras —, mais as chamadas do WhatsApp. Emails contam só os enviados pela dashboard.");
+  groupTotals.callMinutes = Math.round(groupTotals.callMinutes);
+  // 49e: desde quando (neste período) a avaliação tem a Multipark por hora — o 1.º dia com as horas
+  let hourlySince: string | null = null;
+  try {
+    const row = rowsOf(await db.execute(sql`SELECT MIN(day) AS d FROM employee_day_metrics WHERE day >= ${r.from} AND day <= ${r.to} AND actionsByHour IS NOT NULL`))[0];
+    hourlySince = row?.d ? dayStr(row.d) : null;
+  } catch { /* coluna ainda por criar (migração 0590) */ }
+  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões) — das internas só contam as do supervisor a ligar aos extras —, mais as chamadas do WhatsApp. Perdidas = recebidas que não atenderam; devolvidas = a 1.ª chamada feita a um número com uma perdida nas 24 h anteriores.");
   if (dayCities !== undefined) notes.push("Cidade escolhida: conta o dia na cidade onde a pessoa trabalhou (escala ou avaliação do dia); quem tem a ficha noutra cidade entra só com os dias que fez nesta. A marca conta como a cidade dela (as ações da avaliação não estão separadas por parque).");
   if (out.some((x) => x.byRoster)) notes.push("Team leaders pela escala: quem tem posto de condutor ou extra mas foi team leader em pelo menos metade dos dias escalados do período conta aqui.");
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
-    people: out, groupTotals, groupSeries, speedLimit, cities: dayCities ?? null, notes };
+    people: out, groupTotals, groupSeries, speedLimit, cities: dayCities ?? null,
+    groupByHour: groupByHour.map(round1), groupByHourMultipark: groupByHourMultipark.map(round1),
+    hourly: { since: hourlySince, missingDays: hourlyMissingDays }, notes };
 }
 
 /**

@@ -2,11 +2,22 @@
 modulo: disponibilidade
 titulo: Disponibilidade
 rotas: /disponibilidade
-palavras: a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
+palavras: dias livres habituais, dias habituais, habitual, esboço da escala, terças à tarde, fins de semana, dias úteis, todos os dias, tenho livre, costumo estar livre, a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
 ---
 # Disponibilidade
 
 Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para escalar no Extras-Dia.
+
+**Os teus dias livres habituais** (extras, candidatos e quem volta)
+Um esboço da tua escala: não são datas, são os dias e as alturas em que **costumas** estar livre (ex.: "terças à tarde, quartas de manhã e todos os fins de semana").
+1. Abre **A minha disponibilidade**. O cartão **Os meus dias livres habituais** está no topo.
+2. Toca nas casas da grelha: um dia (Seg a Dom) × **Manhã** (até às 12h), **Tarde** (12h–19h) ou **Noite** (depois das 19h). Tocar outra vez desmarca.
+3. Atalhos: **Fins de semana**, **Dias úteis** e **Todos os dias** marcam esses dias o dia todo e **somam** ao que já tens (tocar outra vez desfaz). **Limpar** tira tudo.
+4. Se quiseres, escreve uma nota curta (ex.: "não posso em agosto").
+5. Carrega em **Guardar dias habituais**. Por baixo da grelha aparece o resumo (ex.: "Ter tarde · Qua manhã · Sáb e Dom todo o dia") e quando foi atualizado.
+- Funciona mesmo com a ficha **inativa** (candidatos e quem volta) e sem cidade na ficha.
+- É só uma **ajuda para a gestão**: não marca a disponibilidade de nenhuma semana nem te põe em nenhuma escala. A disponibilidade de cada semana continua a marcar-se por baixo, como sempre.
+- Fica registado quem mudou e o que estava antes.
 
 **Marcar a tua disponibilidade** (extras)
 1. Menu **Operações → A minha disponibilidade** (ou **Perfil → A minha disponibilidade**, ou o link que recebes por WhatsApp/email). A disponibilidade **não** se marca no Extras Dia: essa página é a escala da gestão; se a abrires, aparece "Sem acesso" com o botão **Abrir a minha disponibilidade**.
@@ -21,6 +32,7 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - Funciona mesmo que a tua ficha ainda não tenha centro de custos: aparece um aviso a dizer para pedires ao RH a tua cidade, mas a disponibilidade grava-se na mesma.
 - **"A tua conta Google … não está ligada a nenhuma ficha"**: entraste com um email que não está na tua ficha. O login é só com a Google e tem de ser **sempre com o mesmo email**. Sai e entra com o email que deste ao RH, ou pede ao RH para pôr na ficha o email que aparece na mensagem. Depois sai e volta a entrar.
 - Na tua ficha (RH), no cartão **Disponibilidade**, o botão **Marcar a minha disponibilidade** abre esta página na semana que estás a ver.
+- Na ficha (RH), o cartão **Disponibilidade** mostra também os **dias livres habituais** (resumo, nota e quando foram atualizados). A própria pessoa e quem gere a disponibilidade dos extras (team leader e supervisor na sua cidade, front office, back office, administradores) carregam em **Mudar** / **Indicar** para os alterar; quem só vê a ficha não mexe.
 - Se a leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**.
 
 **Gestão** (backoffice e acima)
@@ -35,6 +47,7 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - O link do email é sempre o endereço da app.
 - A semana começa sempre à segunda-feira.
 - Marcar a disponibilidade por alguém também fica registado, com o que estava antes.
+- **Habitual**: na matriz, quem ainda **não respondeu** à semana mostra por baixo do nome os dias livres habituais (ex.: "Habitual: Ter tarde · Fins de semana"; passa o rato para ver a nota). É só uma dica para saberes a quem pedir: não conta como resposta, não entra nos filtros nem nos totais e não muda nenhuma escala.
 - No Extras-Dia, "Preencher com disponíveis" usa estas marcações.
 - Na matriz, um dia com horas mostra as **horas reais** (ex.: "18h–01h" de um slot do site) em vez do sol/lua. O filtro "disponível das X às Y", a proposta automática e o Extras-Dia leem as marcações da mesma forma (pelo calendário): quem marcou a madrugada de terça conta para a noite de segunda.
 

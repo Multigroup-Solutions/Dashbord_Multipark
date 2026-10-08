@@ -113,6 +113,7 @@ import { expensesRouter } from "./expensesRouter";
 import { rhRouter } from "./rhRouter";
 import { operationalRouter } from "./operationalRouter";
 import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
+import { availabilityPatternProcedures } from "./availabilityPatternRouter";
 
 /** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
@@ -4796,7 +4797,21 @@ export const appRouter = router({
         let missing: Set<number> | null = null;
         try { missing = await employeesMissingTraining(list.map(c => c.id)); }
         catch (err: any) { console.warn("[Training] verificação da formação falhou:", String(err?.message ?? err).slice(0, 160)); }
-        return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null }));
+        // Dias livres HABITUAIS (8 out 2026): só uma dica no seletor para quem não
+        // respondeu à semana — "habitual: Qui tarde" (resumo curto no title). Não
+        // entra na escala automática. Leitura falhada → sem dica.
+        let habitual = new Map<number, { summary: string; text: string; marked: boolean; morning: boolean; night: boolean }>();
+        if (input?.date) {
+          const { patternsForEmployees } = await import("./availabilityPattern");
+          const { patternHintFor, summarizePattern } = await import("../shared/availabilityPattern");
+          const patterns = await patternsForEmployees(list.map(c => c.id));
+          habitual = new Map(Array.from(patterns, ([id, p]) => {
+            const hint = patternHintFor(p.slots, input.date!);
+            const summary = summarizePattern(p.slots, { short: true });
+            return [id, { summary: [summary, p.note].filter(Boolean).join(" — "), text: hint?.text ?? "", marked: !!summary, morning: !!hint?.morning, night: !!hint?.night }] as const;
+          }));
+        }
+        return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null, habitual: habitual.get(c.id) ?? null }));
       }),
 
     // 44a (Jorge: "quando solto um extra para ser team leader tenho que o soltar em todo lado"):
@@ -5096,6 +5111,9 @@ export const appRouter = router({
         if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
         return getMyWeek(input.employeeId, input.weekStart);
       }),
+    // Dias livres HABITUAIS (Jorge, 8 out 2026): myPattern/setMyPattern (a própria
+    // pessoa) e patternFor/setPatternFor (RH/supervisor) — server/availabilityPatternRouter.ts.
+    ...availabilityPatternProcedures,
     // Sugestões de semanas (próxima e atual) para o picker.
     weekHints: protectedProcedure.query(() => {
       return { current: mondayOf(), next: nextMonday() };

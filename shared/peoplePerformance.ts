@@ -12,7 +12,7 @@
  * Regras PURAS: grupos (abas), períodos e baldes, catálogo de métricas e o
  * ranking (pontos de trabalho = soma ponderada; por hora quando há horas).
  */
-import { addDays } from "./lisbonDay";
+import { addDays, lisbonHourOf, OPERATIONAL_DAY_START_HOUR } from "./lisbonDay";
 
 // ─── Grupos (abas) ──────────────────────────────────────────────────────────
 
@@ -135,7 +135,9 @@ export type PerfMetric =
   // 37d (Jorge, 6 out 2026): "os Pro ficam numa coluna à parte junto com as avenças"
   | "proPlanCharges"
   // 42c (Jorge, 7 out 2026): a equipa do TL (o turno dele) e do supervisor (a cidade) — "os movimentos da equipa e quanto é que a equipa gastou… extras a mais, extras a menos… se a equipa não anda com o Zello… não mexe… está muito tempo parada"
-  | "teamDays" | "teamPersonDays" | "teamActions" | "teamCost" | "teamNoZello" | "teamHoursStopped" | "teamShortHours" | "teamOverHours" | "teamPoints";
+  | "teamDays" | "teamPersonDays" | "teamActions" | "teamCost" | "teamNoZello" | "teamHoursStopped" | "teamShortHours" | "teamOverHours" | "teamPoints"
+  // 49e (Jorge, 8 out 2026: "avança com o desempenho"): da central Vodafone também as perdidas e o tempo ao telefone
+  | "callsMissed" | "callMinutes";
 
 export interface PerfMetricDef {
   key: PerfMetric;
@@ -204,6 +206,8 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   teamShortHours: { key: "teamShortHours", label: "Extras a menos (h·pessoa)", source: "dashboard", bad: true },
   teamOverHours: { key: "teamOverHours", label: "Extras a mais (h·pessoa)", source: "dashboard", bad: true },
   teamPoints: { key: "teamPoints", label: "Pontos da equipa", source: "avaliação" },
+  callsMissed: { key: "callsMissed", label: "Chamadas perdidas", source: "dashboard", bad: true },
+  callMinutes: { key: "callMinutes", label: "Minutos ao telefone", source: "dashboard" },
 };
 
 export type PerfTotals = Record<PerfMetric, number>;
@@ -228,19 +232,19 @@ export function addTotals(a: PerfTotals, b: Partial<PerfTotals>): PerfTotals {
 export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfMetric[]; chart: PerfMetric[]; weights: Partial<Record<PerfMetric, number>> }> = {
   office: {
     cards: ["hours", "callsAnswered", "emails", "waMessages", "created", "updated", "complaintMsgs", "reviewsReplied"],
-    columns: ["hours", "callsAnswered", "callsMade", "emails", "waMessages", "created", "updated", "returnFlights", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "cashCorrections", "tasksDone", "leadsActions"],
+    columns: ["hours", "callsAnswered", "callsMade", "callbacks", "callsMissed", "callMinutes", "emails", "waMessages", "created", "updated", "returnFlights", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "cashCorrections", "tasksDone", "leadsActions"],
     chart: ["callsAnswered", "emails", "created", "updated"],
     weights: { callsAnswered: 2, callsMade: 1, callbacks: 1, emails: 2, waMessages: 0.5, created: 3, updated: 1, returnFlights: 1, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, proPlanCharges: 3, expenses: 1, expensesApproved: 1, cashCorrections: 2, cashCounts: 1, tasksDone: 1, leadsActions: 1 },
   },
   supervision: {
     cards: ["hours", "leadsActions", "created", "updated", "cashCorrections", "complaintsClosed", "tasksDone", "callsAnswered"],
-    columns: ["hours", "teamPoints", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
+    columns: ["hours", "teamPoints", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
     chart: ["leadsActions", "created", "cashCorrections", "complaintsClosed"],
     weights: { teamPoints: 1, leadsActions: 2, extrasDia: 1, created: 3, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, emails: 2, waMessages: 0.5, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, proPlanCharges: 3, expenses: 1, expensesApproved: 2, cashCounts: 2, cashCorrections: 2, handovers: 2, tasksDone: 1 },
   },
   teamleaders: {
     cards: ["hours", "recolhas", "entregas", "checkingIn", "checkingOut", "callsAnswered", "tlDays", "teamPeople"],
-    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
+    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
     chart: ["recolhas", "entregas", "checkingIn", "checkingOut"],
     weights: { evalPoints: 1, teamPoints: 1, checkingIn: 1, checkingOut: 1, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, waMessages: 0.5, cashCounts: 3, handovers: 3, extrasDia: 1, lostFound: 2, occurrences: 1 },
   },
@@ -334,3 +338,98 @@ export function perHourOf(points: number, hours: number): number | null {
 
 /** Hora UTC "YYYY-MM-DD HH:00:00" → instante (ms). PURA. */
 export const utcHourMs = (h: string) => Date.parse(`${String(h).replace(" ", "T").slice(0, 13)}:00:00Z`);
+
+// ─── 49e: telefonemas da central, emails das caixas pessoais, atividade por hora ──
+
+/**
+ * 39g/49e: uma chamada da central (consola Vodafone) é interna quando a
+ * consola a ligou a um colega do RH ("emp-…") ou a uma extensão ("ext-…").
+ * As internas não contam — exceto o supervisor a ligar a um extra (a chamar
+ * o pessoal). O que cada chamada dá no Desempenho de quem a atendeu ou fez
+ * (o SQL de server/peoplePerformance.ts faz o mesmo, agrupado). PURA.
+ *  - recebida e atendida → atendida (+ minutos);
+ *  - recebida e não atendida → perdida;
+ *  - feita → feita (+ minutos); e devolução quando é a 1.ª chamada feita
+ *    para um número/contacto com uma perdida nas 24 h anteriores.
+ */
+export function centralCallMetrics(c: {
+  direction: "in" | "out"; held: boolean; contactRef: string | null; durationS: number | null;
+  callerIsSupervisor?: boolean; otherIsExtra?: boolean; returnsMissed?: boolean;
+}): Partial<Record<PerfMetric, number>> {
+  const ref = String(c.contactRef ?? "");
+  const internal = /^(emp|ext)-/.test(ref);
+  const minutes = Math.max(0, Number(c.durationS ?? 0) || 0) / 60;
+  if (c.direction === "in") {
+    if (internal) return {};
+    return c.held ? { callsAnswered: 1, callMinutes: minutes } : { callsMissed: 1 };
+  }
+  const supToExtra = ref.startsWith("emp-") && !!c.callerIsSupervisor && !!c.otherIsExtra;
+  if (internal && !supToExtra) return {};
+  return { callsMade: 1, callMinutes: minutes, ...(!internal && c.returnsMissed ? { callbacks: 1 } : {}) };
+}
+
+/** Janela da devolução: liga de volta até 24 h depois da perdida. */
+export const CALLBACK_WINDOW_HOURS = 24;
+
+/**
+ * 49e: de quem é um email enviado. Uma linha de mail_messages conta UMA vez:
+ *  - enviado pela dashboard → quem carregou em Enviar (`sentById`);
+ *  - senão, enviado da caixa Gmail PESSOAL ligada (conta "user:N", fora das
+ *    caixas partilhadas) → o dono dessa conta, N;
+ *  - enviado diretamente de uma caixa partilhada (info@, reservas@…) fora da
+ *    dashboard → sem autor (não conta).
+ * Automáticos e recebidos nunca contam. PURA.
+ */
+export function emailAuthorOf(m: { direction: string; automated: number | null; sentById: number | null; accountKey: string | null; mailboxKey: string | null }): number | null {
+  if (m.direction !== "out" || Number(m.automated ?? 0) !== 0) return null;
+  if (m.sentById != null) return Number(m.sentById);
+  const own = /^user:(\d+)$/.exec(String(m.accountKey ?? ""));
+  return own && m.mailboxKey == null ? Number(own[1]) : null;
+}
+
+export const HOURS_OF_DAY = 24;
+export const emptyHours = (): number[] => new Array(HOURS_OF_DAY).fill(0);
+
+/** Hora de RELÓGIO de Lisboa (0–23) de uma hora UTC agrupada no SQL ("YYYY-MM-DD HH"); inválida → null. PURA. */
+export function lisbonHourOfUtcHour(h: string): number | null {
+  const ms = utcHourMs(h);
+  return Number.isFinite(ms) ? lisbonHourOf(ms) : null;
+}
+
+/** Contagens por hora guardadas pela avaliação ("[0,0,…]", 24 números) → lista; outra coisa → null. PURA. */
+export function parseHours(raw: unknown): number[] | null {
+  if (raw == null || raw === "") return null;
+  let v: unknown = raw;
+  if (typeof raw === "string") { try { v = JSON.parse(raw); } catch { return null; } }
+  if (!Array.isArray(v) || v.length !== HOURS_OF_DAY) return null;
+  return v.map((x) => Math.max(0, Number(x) || 0));
+}
+
+/** Soma b em a (24 horas). Muda `a`. */
+export function addHours(a: number[], b: ReadonlyArray<number>): number[] {
+  for (let i = 0; i < HOURS_OF_DAY; i++) a[i] += Number(b[i] ?? 0) || 0;
+  return a;
+}
+
+/**
+ * Nível de cor de uma célula da grelha pessoa × hora: 0 = vazio; 1…levels
+ * proporcional ao máximo (arredondado para cima: qualquer ação já pinta). PURA.
+ */
+export function heatLevel(v: number, max: number, levels = 5): number {
+  if (!(v > 0) || !(max > 0)) return 0;
+  return Math.min(levels, Math.max(1, Math.ceil((v / max) * levels)));
+}
+
+/**
+ * Primeira e última hora com ações e a hora de pico, contadas pela ordem do
+ * dia operacional (03h → 02h): quem faz a noite aparece "15h → 2h", não
+ * "0h → 23h". Sem ações → nulls. PURA.
+ */
+export function hourSpan(hours: ReadonlyArray<number>): { first: number | null; last: number | null; peak: number | null } {
+  const order = Array.from({ length: HOURS_OF_DAY }, (_, i) => (i + OPERATIONAL_DAY_START_HOUR) % HOURS_OF_DAY);
+  const on = order.filter((h) => (hours[h] ?? 0) > 0);
+  if (!on.length) return { first: null, last: null, peak: null };
+  let peak = on[0];
+  for (const h of on) if (hours[h] > hours[peak]) peak = h;
+  return { first: on[0], last: on[on.length - 1], peak };
+}
