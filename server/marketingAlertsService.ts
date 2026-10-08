@@ -62,9 +62,11 @@ export async function computeAlertsFor(projectId?: number) {
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts). 19a: se a
   // Multipark não responde, os alertas das recolhas (os vermelhos) saem na
   // mesma — antes desapareciam todos, exatamente quando havia problemas.
+  // 8 out 2026: sem ID da campanha no link, a campanha do clique (gclid) que o Google Ads identifica.
   if (!win.bookingsError) {
     const { loadMarketingBookings } = await import("./marketingLive");
-    for (const b of await loadMarketingBookings(windowFrom, today, projectIds, { marketplace: true }).catch(() => [])) {
+    const { withClickCampaigns } = await import("./integrations/googleAds/clickAttribution");
+    for (const b of await withClickCampaigns(await loadMarketingBookings(windowFrom, today, projectIds, { marketplace: true }).catch(() => []))) {
       if ((b.adAttribution === "google_paid" || b.adAttribution === "meta_paid") && b.adCampaignExternalId) byExt.set(b.adCampaignExternalId, (byExt.get(b.adCampaignExternalId) ?? 0) + 1);
     }
   }

@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { fmtPTDateTime } from "@/lib/lisbonTime";
+import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { Plug, PlugZap, RefreshCw, Loader2, AlertTriangle, Unplug, PlayCircle, Link2 } from "lucide-react";
 
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
@@ -52,6 +52,15 @@ export default function IntegrationsGoogleAdsPage() {
       else toast.success(`Recolha concluída: ${r.rowsWritten} linhas${r.warnings.length ? ` · ${r.warnings.length} aviso(s)` : ""}`);
     },
     onError: (e) => toast.error("Erro na recolha", { description: e.message }),
+  });
+  const runClicks = trpc.integrations.googleAds.sync.clicks.useMutation({
+    onSuccess: (r) => {
+      invalidate();
+      if (r.status === "skipped") toast.warning("Leitura dos cliques não correu", { description: r.reason });
+      else if (r.status === "failed") toast.error("Leitura dos cliques falhou", { description: r.reason });
+      else toast.success(`Cliques lidos: ${r.daysRead} dia(s), ${r.clicksWritten} clique(s)${r.missingDays ? ` · faltam ${r.missingDays} dia(s)` : ""}${r.status === "partial" ? " · o resto fica para a próxima volta" : ""}`);
+    },
+    onError: (e) => toast.error("Erro na leitura dos cliques", { description: e.message }),
   });
   const disconnect = trpc.integrations.googleAds.disconnect.useMutation({
     onSuccess: (r) => { invalidate(); r.revoked ? toast.success("Google Ads desligado e autorização revogada na Google") : toast.warning("Google Ads desligado", { description: "Não foi possível revogar a autorização na Google — tira-a em myaccount.google.com → Segurança → Apps de terceiros." }); },
@@ -211,6 +220,25 @@ export default function IntegrationsGoogleAdsPage() {
               </Button>
             ))}
           </div>
+          {s?.clicks && (
+            <div className="rounded-md border px-3 py-2 text-xs space-y-1.5" role="status">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span className="font-medium">Cliques (gclid → campanha)</span>
+                {!s.clicks.enabled && <Badge variant="outline" className="text-[11px]">desligado</Badge>}
+                <span>Último dia lido: {s.clicks.lastDay ? fmtPTDate(s.clicks.lastDay) : "nenhum"}</span>
+                <span className={s.clicks.missingDays > 0 ? "text-amber-700" : undefined}>
+                  Dias em falta: {s.clicks.missingDays} de {s.clicks.windowDays - 1}{s.clicks.oldestMissing ? ` (o mais antigo ${fmtPTDate(s.clicks.oldestMissing)})` : ""}
+                </span>
+                <span>{s.clicks.clicks.toLocaleString("pt-PT")} clique(s) guardados</span>
+                <span>Última leitura: {s.clicks.lastFetchedAt ? fmtPTDateTime(s.clicks.lastFetchedAt) : "nunca"}</span>
+              </div>
+              {s.clicks.error && <p className="text-red-700">{s.clicks.error}</p>}
+              <p className="text-muted-foreground">De hora a hora lê-se no Google Ads de que campanha é cada clique (hoje, ontem e, aos poucos, os dias em falta — a Google só guarda 90 dias). É isto que liga ao anúncio as reservas cujo link só traz o gclid (sem o ID da campanha). Interruptor em Definições → Automações → <b>Google Ads: ligar reservas à campanha pelo clique (gclid)</b>.</p>
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={s.status !== "connected" || !s.clicks.enabled || runClicks.isPending} onClick={() => runClicks.mutate()}>
+                {runClicks.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />} Ler cliques agora
+              </Button>
+            </div>
+          )}
           {runs.error && <QueryErrorNote error={runs.error} onRetry={() => runs.refetch()} retrying={runs.isFetching} what="as recolhas do Google Ads" />}
           {!runs.error && <div className="overflow-x-auto">
             <table className="w-full text-sm">

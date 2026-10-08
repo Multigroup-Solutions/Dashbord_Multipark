@@ -77,6 +77,8 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   let bookingsByDay: Array<{ date: string; total: number; attributed: number }> = [];
   /** reservas ligadas por ID externo da campanha (Google ou Meta) */
   const attributedByCampaign: Record<string, number> = {};
+  /** 8 out 2026: dessas, quantas ligadas pelo CLIQUE (gclid → campanha no Google Ads), sem ID no link */
+  const attributedByCampaignGclid: Record<string, number> = {};
   const attributionQuality = { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no
   // período, sem canceladas, atribuição Google/Meta a partir do link de origem.
@@ -85,10 +87,12 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   // reservas ficam "indisponíveis" (null), nunca 0.
   let bookingsError: string | null = null;
   // Jorge (7 out 2026): com as vendas do Marketplace (parques de terceiros e multipark.pt).
-  const bookings = await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }).catch((err: any) => {
+  // 8 out 2026: sem ID da campanha no link, a campanha do clique (gclid) que o Google Ads identifica — em lote.
+  const { withClickCampaigns } = await import("./clickAttribution");
+  const bookings = await withClickCampaigns(await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }).catch((err: any) => {
     bookingsError = String(err?.message ?? err).slice(0, 300);
     return [];
-  });
+  }));
   const byDay = new Map<string, { total: number; attributed: number }>();
   for (const b of bookings) {
     const paid = PAID.includes(b.adAttribution);
@@ -109,6 +113,7 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
       if (b.adAttribution === "google_paid") attributionQuality.attributed++;
     }
     if (paid && b.adCampaignExternalId) attributedByCampaign[b.adCampaignExternalId] = (attributedByCampaign[b.adCampaignExternalId] ?? 0) + 1;
+    if (paid && b.adCampaignExternalId && b.campaignEvidence === "gclid") attributedByCampaignGclid[b.adCampaignExternalId] = (attributedByCampaignGclid[b.adCampaignExternalId] ?? 0) + 1;
   }
   bookingsByDay = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, v]) => ({ date, ...v }));
   const expensesSplit = await marketingCategoryExpenses(db, f.from, f.to, projectIds);
@@ -171,6 +176,8 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     bookingsByDay,
     attributionQuality: bookingsError ? null : attributionQuality,
     attributedByCampaign,
+    /** das ligadas por campanha, as que vieram pelo clique (gclid → campanha no Google Ads) */
+    attributedByCampaignGclid,
     byCampaign: ads.byCampaign,
     nationalShares: ads.nationalShares,
     /** contas noutra moeda que não entraram nos totais (aviso) */

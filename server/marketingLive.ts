@@ -46,6 +46,8 @@ export interface MarketingBooking {
   hasOriginUrl: boolean;
   /** gclid / gbraid / wbraid no link */
   hasClickId: boolean;
+  /** gclid do link (liga a reserva à campanha pelo clique — integrations/googleAds/clickAttribution.ts) */
+  gclid?: string | null;
   adAttribution: AdAttribution;
   adCampaignExternalId: string | null;
   utmCampaign: string | null;
@@ -87,6 +89,7 @@ export function toMarketingBooking(r: MarketingBookingRow, ctx: LiveContext, opt
     ...(opts.marketplace ? { marketplace: viaMarketplace, commission: third ? r.commission ?? null : null } : {}),
     hasOriginUrl: !!r.originUrl, hasClickId: !!(a.gclid || a.gbraid || a.wbraid),
     adAttribution: a.adAttribution, adCampaignExternalId: a.adCampaignExternalId, utmCampaign: a.utmCampaign,
+    gclid: a.gclid,
     campaign: campaignOf(r, ctx.aliases), campaignName: r.campaignName, total: r.total, hasEmail: r.hasEmail, newClient: r.newClient,
   };
 }

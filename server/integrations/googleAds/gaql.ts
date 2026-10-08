@@ -42,6 +42,31 @@ export function gaqlConversionActions(from: string, to: string): string {
   );
 }
 
+/**
+ * Cliques de UM dia (click_view): gclid → campanha e grupo de anúncios. A
+ * Google só aceita um dia por consulta e só os últimos 90 dias. É o que liga
+ * uma reserva com só o gclid no link (auto-tagging) à campanha.
+ */
+export function gaqlClickView(day: string): string {
+  assertDay(day);
+  return (
+    "SELECT click_view.gclid, campaign.id, ad_group.id, segments.date " +
+    `FROM click_view WHERE segments.date = '${day}'`
+  );
+}
+
+export interface ClickViewRow { gclid: string; campaignId: string; adGroupId: string | null; date: string }
+/** Linha do click_view (camelCase do REST) → clique; sem gclid/campanha/dia ou gclid > 128 → null. PURA. */
+export function parseClickViewRow(r: any): ClickViewRow | null {
+  const raw = r?.clickView?.gclid;
+  const gclid = typeof raw === "string" ? raw.trim() : "";
+  const campaignId = r?.campaign?.id != null ? String(r.campaign.id).trim() : "";
+  const date = r?.segments?.date != null ? String(r.segments.date) : "";
+  if (!gclid || gclid.length > 128 || !/^\d+$/.test(campaignId) || !ISO.test(date)) return null;
+  const ag = r?.adGroup?.id != null ? String(r.adGroup.id).trim() : "";
+  return { gclid, campaignId, adGroupId: /^\d+$/.test(ag) ? ag : null, date };
+}
+
 /** Linha de resultado normalizada a partir do JSON da API (searchStream). */
 export interface CampaignDailyRow {
   campaignId: string; campaignName: string; campaignStatus: string; channelType: string | null;

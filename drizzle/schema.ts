@@ -228,6 +228,33 @@ export const integrationSyncRuns = mysqlTable("integration_sync_runs", {
 	index("idx_integration_sync_runs_provider").on(table.provider, table.startedAt),
 ]);
 
+// 0610 — cliques do Google Ads (click_view): gclid → campanha. É o que liga
+// uma reserva com só o gclid no link (auto-tagging) à campanha. `gclid` é a
+// chave, comparada à letra (utf8mb4_bin). Sem purga.
+export const googleAdsClicks = mysqlTable("google_ads_clicks", {
+	gclid: varchar({ length: 128 }).primaryKey(),
+	customerId: varchar({ length: 32 }).notNull(),
+	campaignId: varchar({ length: 64 }).notNull(),
+	adGroupId: varchar({ length: 64 }),
+	clickDate: date({ mode: 'string' }).notNull(),
+	fetchedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	index("idx_google_ads_clicks_day").on(table.customerId, table.clickDate),
+	index("idx_google_ads_clicks_campaign").on(table.campaignId, table.clickDate),
+]);
+
+// 0610 — dias de cada conta já lidos no click_view (com quantos cliques): os "dias em falta".
+export const googleAdsClickDays = mysqlTable("google_ads_click_days", {
+	customerId: varchar({ length: 32 }).notNull(),
+	clickDate: date({ mode: 'string' }).notNull(),
+	clicks: int().default(0).notNull(),
+	fetchedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	primaryKey({ columns: [table.customerId, table.clickDate] }),
+]);
+
 // ─── Marketing (0093) ─────────────────────────────────────────────────────────
 // Orçamento mensal por nó cidade/marca (provider 'all' = todos os fornecedores).
 export const marketingBudgets = mysqlTable("marketing_budgets", {
