@@ -3,7 +3,7 @@
 // parâmetros (IVA/TSU, SLAs, emails, responsável das disponibilidades) com
 // auditoria, e segurança (validade das API keys, terminar sessões).
 import { useEffect, useMemo, useState } from "react";
-import { useSearch } from "wouter";
+import { Link, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { can } from "@shared/access";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -35,6 +35,7 @@ import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
 import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
 import { AIRPORT_LABELS, type AirportCityId } from "@shared/pontoTerminal";
+import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
@@ -306,6 +307,8 @@ function eur(v: number): string {
 }
 
 function AiUsageCard() {
+  const { user } = useAuth();
+  const isAdminRole = isMultisAdmin(user?.role);
   const q = trpc.settings.aiUsage.useQuery(undefined, { refetchInterval: 5 * 60_000 });
   const d = q.data;
   const pct = d?.pct ?? null;
@@ -324,6 +327,7 @@ function AiUsageCard() {
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           Estimativa pelo registo de cada chamada (tokens × preço do modelo), mês civil {d?.month ?? ""} (UTC). Orçamento e preços em Parâmetros; interruptores em Automações.
+          {isAdminRole && <> <Link href="/multis/falhas" className="text-primary underline">Multis: perguntas que falharam →</Link></>}
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -402,6 +406,7 @@ function AutomationsCard() {
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  const isAdminRole = isMultisAdmin(user?.role);
   const canEdit = can(user as any, "definicoes", "edit");
   const q = trpc.settings.flags.list.useQuery();
   const setFlag = trpc.settings.flags.set.useMutation({
@@ -429,7 +434,10 @@ function AutomationsCard() {
           return (
           <div key={f.name}>
           {f.group === "ia" && q.data?.[i - 1]?.group !== "ia" && (
-            <div className="pt-4 pb-1 text-sm font-semibold flex items-center gap-1"><Sparkles className="h-4 w-4" />Inteligência artificial</div>
+            <div className="pt-4 pb-1 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-semibold flex items-center gap-1"><Sparkles className="h-4 w-4" />Inteligência artificial</span>
+              {isAdminRole && <Link href="/multis/falhas" className="text-xs text-primary underline">Multis: perguntas que falharam →</Link>}
+            </div>
           )}
           <div className="py-3 flex items-start gap-3">
             <div className="flex-1 min-w-0">

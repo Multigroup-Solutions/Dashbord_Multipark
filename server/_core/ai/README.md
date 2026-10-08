@@ -106,15 +106,16 @@ O assistente da equipa (`server/assistant/` + `client/src/components/assistant/`
 
 | Peça | Ficheiro | O quê |
 |---|---|---|
-| Turno | `chat/engine.ts` → `runChatTurn` | pergunta vazia/longa → interruptor → `checkRateLimit` → conversa + histórico → ajuda → `runAi` (cache + ferramentas) → guardar. Nunca lança: `{ ok:false, reason, message }` em PT-PT |
-| Conversas | `chat/store.ts` | `ai_chat_conversations` / `ai_chat_messages` (migração 0130), por `channel` + `ownerKey`; 30 dias (`purgeOldChats` no daily-ops) |
-| Ajuda | `chat/retrieval.ts` | markdown com cabeçalho (`modulo`, `titulo`, `rotas`, `palavras`); escolha por palavras-chave + página aberta (sem IA); índice curto no prompt estável |
-| Ferramentas | `chat/tools.ts` | `ChatTool<Ctx>` = `available(ctx)` (declarada ou não) + `run(args, ctx)` (volta a verificar); `makeToolExecutor` com gancho de auditoria |
+| Turno | `chat/engine.ts` → `runChatTurn` | pergunta vazia/longa → interruptor → `checkRateLimit` → conversa + histórico → base de conhecimento (`knowledge`, opcional; traz também `helpHits`) → ajuda → `memory` (bloco `<memoria>`, opcional) → `runAi` (cache + ferramentas) → guardar (devolve `messageId` e `toolErrors`). Nunca lança: `{ ok:false, reason, message }` em PT-PT |
+| Conversas | `chat/store.ts` | `ai_chat_conversations` / `ai_chat_messages` (migração 0130; `helpFiles`/`path` da resposta na 0605), por `channel` + `ownerKey`; 30 dias (`purgeOldChats` no daily-ops) |
+| Ajuda | `chat/retrieval.ts` | markdown com cabeçalho (`modulo`, `titulo`, `rotas`, `palavras`); escolha por palavras-chave + página aberta (sem IA), junta os achados pelo significado (`combineHelpDocs`, máx. 3) e tira de cada página longa a parte da pergunta (`excerptHelp`); índice curto no prompt estável |
+| Ferramentas | `chat/tools.ts` | `ChatTool<Ctx>` = `available(ctx)` (declarada ou não) + `run(args, ctx)` (volta a verificar); `makeToolExecutor` com gancho de auditoria (`onCall`) e de erros (`onError`) |
 | Histórico | `chat/history.ts` | últimos N turnos (6) + resumo extrativo das perguntas antigas (sem chamada extra) |
 
 Custos: prompt estável (regras + índice da ajuda + ferramentas) na cache de
-contexto; por turno só vão o contexto (data/página), o histórico curto, 1–2
-ficheiros de ajuda e a pergunta; `maxTokens` 700; nível `lite`.
+contexto; por turno só vão o contexto (data/página), as notas da memória, o
+histórico curto, 1–3 ficheiros de ajuda (até 6000 caracteres no total) e a
+pergunta; `maxTokens` 700; nível `lite`.
 
 #### Chat público (multipark.app) — como fazer, quando for a altura
 

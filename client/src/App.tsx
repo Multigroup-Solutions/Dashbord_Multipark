@@ -63,6 +63,7 @@ import OperacoesDashboard from "./pages/OperacoesDashboard";
 import PessoasDashboard from "./pages/PessoasDashboard";
 import RhDashboardPage from "./pages/RhDashboardPage";
 import SuporteDashboard from "./pages/SuporteDashboard";
+import MultisFalhasPage from "./pages/MultisFalhasPage";
 import { GlobalFiltersProvider } from "./contexts/GlobalFiltersContext";
 
 function Router() {
@@ -319,6 +320,10 @@ function Router() {
       </Route>
       <Route path="/definicoes">
         {() => (<DashboardLayout><DefinicoesPage /></DashboardLayout>)}
+      </Route>
+      {/* Multis 2: perguntas que falharam (só admin/super_admin; a página e o servidor verificam). */}
+      <Route path="/multis/falhas">
+        {() => (<DashboardLayout><MultisFalhasPage /></DashboardLayout>)}
       </Route>
       <Route path="/financeiro">
         {() => (<DashboardLayout><FinanceiroDashboard /></DashboardLayout>)}

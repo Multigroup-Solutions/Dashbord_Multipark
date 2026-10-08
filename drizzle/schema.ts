@@ -3285,11 +3285,64 @@ export const aiChatMessages = mysqlTable("ai_chat_messages", {
 	role: varchar({ length: 12 }).notNull(),
 	content: text().notNull(),
 	tools: varchar({ length: 255 }),
+	// 0605: ficheiros de ajuda usados no turno e a página onde se perguntou (para o 👍/👎).
+	helpFiles: varchar({ length: 255 }),
+	path: varchar({ length: 200 }),
 	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
 },
 (table) => [
 	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),
 	index("idx_ai_chat_msg_created").on(table.createdAt),
+]);
+
+// ─── Multis 2 (0605): memória e 👍/👎 ─────────────────────────────────────────
+// Notas que o Multis segue: 'user' (da pessoa, até 30 ativas) ou 'company'
+// (userId NULL; só admin/super_admin; até 100). Arquivar marca; nada se apaga.
+export const assistantMemories = mysqlTable("assistant_memories", {
+	id: int().autoincrement().primaryKey(),
+	/** user | company */
+	scope: varchar({ length: 10 }).notNull(),
+	userId: int(),
+	text: varchar({ length: 300 }).notNull(),
+	createdById: int().notNull(),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	archivedAt: datetime({ mode: 'string', fsp: 3 }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_assistant_memories_scope").on(table.scope, table.userId, table.archivedAt),
+]);
+
+// 👍/👎 (auto = 0) e marcas automáticas das respostas que não responderam
+// (auto = 1). Cópia da pergunta/resposta (as conversas apagam-se aos 30 dias;
+// isto não). Sem purga.
+export const assistantFeedback = mysqlTable("assistant_feedback", {
+	id: int().autoincrement().primaryKey(),
+	/** ai_chat_messages.id da resposta */
+	messageId: bigint({ mode: "number" }).notNull(),
+	conversationId: bigint({ mode: "number" }),
+	userId: int().notNull(),
+	/** 1 = 👍, -1 = 👎 */
+	rating: tinyint().notNull(),
+	/** errada | incompleta | nao_percebeu | sem_dados | outro (shared/assistantFeedback.ts) */
+	reason: varchar({ length: 20 }),
+	comment: varchar({ length: 500 }),
+	question: text(),
+	answer: text(),
+	path: varchar({ length: 200 }),
+	tools: varchar({ length: 255 }),
+	helpFiles: varchar({ length: 255 }),
+	auto: tinyint().default(0).notNull(),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	updatedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	resolvedAt: datetime({ mode: 'string', fsp: 3 }),
+	resolvedById: int(),
+	resolvedNote: varchar({ length: 500 }),
+},
+(table) => [
+	uniqueIndex("uq_assistant_feedback_msg").on(table.messageId, table.userId, table.auto),
+	index("idx_assistant_feedback_created").on(table.createdAt),
+	index("idx_assistant_feedback_open").on(table.rating, table.resolvedAt, table.createdAt),
 ]);
 
 // ─── Automações internas com IA (migração 0125) ─────────────────────────────

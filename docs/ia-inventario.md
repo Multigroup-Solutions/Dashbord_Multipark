@@ -34,7 +34,8 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 ### Em todas as páginas — Multis
 | O quê | Quando | Quem vê | Dados que vão à IA | Guardado / age sozinha? |
 |---|---|---|---|---|
-| Multis (chat) — `AI_ASSISTANT` | Pedido (20/min, 200/dia por pessoa) | Qualquer pessoa com sessão; as ferramentas exigem o módulo e correm como a própria pessoa | Pergunta, 6 últimas trocas, ajuda e base de conhecimento, com `redactPii`; resultados das ferramentas (totais e listas curtas) | Conversas 30 dias; ferramentas usadas ficam na Atividade |
+| Multis (chat) — `AI_ASSISTANT` | Pedido (20/min, 200/dia por pessoa) | Qualquer pessoa com sessão; as ferramentas exigem o módulo e correm como a própria pessoa | Pergunta, 6 últimas trocas, ajuda (palavras-chave + significado, até 3 páginas) e base de conhecimento, notas da memória (`<memoria>`), com `redactPii`; resultados das ferramentas (totais e listas curtas) | Conversas 30 dias; ferramentas usadas ficam na Atividade. 👍/👎 e respostas que não responderam (marcadas sozinhas) em "Perguntas que falharam" (só admins; sem purga) |
+| Memória do Multis — `AI_ASSISTANT_MEMORY` (sem IA) | "Lembra-te…" no chat (grava sem IA) ou à mão em Memória | A própria pessoa (as suas); notas da empresa: todos leem, só admins escrevem | O texto da nota (até 300 car.) | `assistant_memories`; arquivar não apaga. Ligado por omissão |
 
 ### Dashboard e Tarefas — Briefing do dia
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
