@@ -19,6 +19,7 @@ import { isForbidden } from "@/lib/queryRetry";
 import { availabilityWeekFrom } from "@shared/availabilityWeek";
 import { NoCityNotice, NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+import { MyAvailabilityPatternCard } from "@/components/AvailabilityPatternCard";
 
 // Semana a mostrar: a do link (?week=, levada à segunda-feira) ou a PRÓXIMA
 // semana de Lisboa — calculada aqui (antes vinha do servidor e, se essa
@@ -193,6 +194,8 @@ function MyAvailability() {
   return (
     <div className="max-w-2xl mx-auto py-6 px-4 space-y-4">
       {missingCostCenter && <NoCityNotice />}
+      {/* Dias livres habituais (8 out 2026): esboço, não datas — por cima da semana. */}
+      <MyAvailabilityPatternCard />
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

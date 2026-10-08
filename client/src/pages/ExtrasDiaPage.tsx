@@ -70,6 +70,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
 import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
+import { HabitualLine } from "@/components/AvailabilityPatternCard";
 import { LicenceWarning } from "./extrasDia/LicenceWarning";
 import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
 import { StaffingBanner, StaffingGapList } from "./extrasDia/StaffingIndicator";
@@ -1180,6 +1181,7 @@ function AssignmentForm({
             candidates={candidates}
             others={others}
             city={city}
+            shift={shift}
             value={employeeId}
             onPick={(c) => {
               const full = [...candidates, ...(others ?? [])].find(x => x.id === c.id);
@@ -2311,6 +2313,8 @@ export function AvailabilitySection() {
             <Pencil className="h-3 w-3" />
           </button>
         </span>
+        {/* Dias livres habituais (8 out 2026): só para quem ainda não preencheu a semana. */}
+        {!ex.responded && <HabitualLine habitual={ex.habitual} note={ex.habitualNote} />}
       </td>
       <td className="py-1 pr-2 whitespace-nowrap text-xs text-muted-foreground">
         {(ex as any).lastWorked ? fmtPTDate((ex as any).lastWorked) : "nunca"}
