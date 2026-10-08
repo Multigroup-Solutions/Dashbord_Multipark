@@ -26,6 +26,13 @@ Toda a IA da aplicação passa por um único módulo, `server/_core/ai/` (ver o
      da UE que tenha os modelos.
    - `GOOGLE_SERVICE_ACCOUNT_JSON=<o JSON, em texto ou base64>`
 3. O Vertex ganha à `GEMINI_API_KEY`. Quando tudo funcionar, podes apagar a chave.
+   - **Ficheiros pessoais inteiros** (documentos e CV do RH: `AI_HR_AUTOFILL` e
+     `AI_HR_EMAIL_ATTACHMENTS`) **só correm em Vertex AI numa região da UE**
+     (`europe-*`, menos `europe-west2` Londres e `europe-west6` Zurique; ou `eu`).
+     Com o Google AI Studio (ou o fornecedor antigo) não correm, mesmo com o
+     interruptor ligado. Regra em `shared/aiLimits.ts`, aplicada no `runAi` e
+     no `aiFeatureAvailable`; as Definições → Automações dizem ao lado do
+     interruptor onde está a IA hoje.
 4. Confirma que os modelos escolhidos existem na região escolhida. Se não
    existirem, muda os `AI_MODEL_*`.
 
@@ -93,11 +100,11 @@ faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
 | `AI_EXPENSE_OCR` | `expense_ocr`: leitura de faturas nas Despesas | lite (imagem) / fast (PDF) |
 | `AI_REVIEW_DRAFTS` | `review_reply`: rascunho de resposta às críticas Google (4 pontos de entrada) | lite |
 | `AI_RADIO` | `radio_transcription` + `radio_summary` | lite |
-| `AI_HANDOVER_SUMMARY` | `handover_summary`: 5 pontos da passagem de turno | lite |
+| `AI_HANDOVER_SUMMARY` | `handover_summary`: 5 pontos da passagem de turno, **só ao entregar** (1.ª gravação) e no botão "Resumir agora"; as edições não chamam a IA (o resumo fica "desatualizado", `aiSummaryVersion` < `version`, migração 0600) | lite |
 | `AI_WHATSAPP_ASSIST` | `whatsapp_summary` + `whatsapp_reply` | lite |
 | `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais e da base de conhecimento (texto com `redactPii`; o PDF anexo vai inteiro) | fast (manual) / lite (base) |
-| `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH (só campos vazios; o IBAN só entra na hora para quem o pode mudar na hora — os outros ficam com pedido ao RH, D49) | lite. **Desligado por omissão** até decisão sobre o RGPD. |
-| `AI_HR_EMAIL_ATTACHMENTS` | `hr_email_attachments`: anexos dos emails do RH (CV, documentos) → candidato (só campos vazios) + resumo para quem entrevista | lite. **Desligado por omissão**. Corre no varrimento de 15 em 15 min (2 anexos por vez), só emails dos últimos 14 dias, cada anexo uma vez (`rh_attachment_reads`). NIF/BI-CC/carta só o RH vê. |
+| `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH (só campos vazios; o IBAN só entra na hora para quem o pode mudar na hora — os outros ficam com pedido ao RH, D49) | lite. **Desligado por omissão.** **Só corre com Vertex AI na UE.** |
+| `AI_HR_EMAIL_ATTACHMENTS` | `hr_email_attachments`: anexos dos emails do RH (CV, documentos) → candidato (só campos vazios) + resumo para quem entrevista | lite. **Desligado por omissão**. **Só corre com Vertex AI na UE.** Corre no varrimento de 15 em 15 min (2 anexos por vez), só emails dos últimos 14 dias, cada anexo uma vez (`rh_attachment_reads`). NIF/BI-CC/carta só o RH vê. |
 | `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz) | lite |
 | `AI_COMPLAINT_TRIAGE` | `complaint_triage`: triagem das reclamações por email | lite |
 | `AI_REVIEW_AUTO_DRAFTS` | `review_auto_draft`: rascunho automático para cada crítica nova | lite |
@@ -107,18 +114,18 @@ faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
 | `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
 | `AI_OPS_BRIEFING` | `ops_briefing`: parágrafo do briefing diário por cidade | lite |
 | `AI_WEEKLY_REPORTS` | `weekly_report`: texto dos relatórios de segunda (direção, marketing, operações, RH) | lite |
-| `AI_ANOMALY_EXPLAIN` | `anomaly_explain`: uma linha por anomalia (1 chamada por corrida) | lite |
+| `AI_ANOMALY_EXPLAIN` | `anomaly_explain`: uma linha por anomalia (1 chamada por corrida); condutores e extras veem o alerta sem a linha da IA | lite |
 | `AI_AVAILABILITY_CLASSIFY` | `availability_classify`: respostas de disponibilidade pouco claras | lite |
-| `AI_LEAD_SCORING` | `lead_summary` + `lead_first_contact`: resumo da pontuação e rascunho do 1.º contacto (a aprovar) | lite |
+| `AI_LEAD_SCORING` | `lead_summary` + `lead_first_contact`: resumo da pontuação e rascunho do 1.º contacto (a aprovar); os dois só para quem edita as Leads | lite |
 | `AI_EVALUATION_EXPLAIN` | `evaluation_explain`: explicação da avaliação | lite |
 | `AI_HANDOVER_REPEATS` | `handover_repeats`: pendentes repetidos e resumo semanal da passagem | lite |
-| `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar) | lite |
+| `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar); team leader para cima | lite |
 | `AI_MAIL_ROUTING` | `mail_routing`: separar os emails novos das caixas gerais pelas caixas do tema (só move; nunca responde) | lite. **Desligado por omissão.** |
 | `AI_MAIL_DRAFT` | `mail_reply`: "Rascunho IA" na Comunicação (fica no editor) | lite |
 | `AI_WEB_INSIGHT` | `web_insight`: resumo semanal do Web & SEO | lite |
 | `AI_PAGESPEED_EXPLAIN` | `pagespeed_explain`: o que corrigir primeiro na PageSpeed | lite |
 | `AI_GBP_POSTS` | `gbp_post_draft`: rascunho de publicações do Google Business | lite |
-| `AI_KNOWLEDGE` | `knowledge_extract` + `knowledge_embed`: índice da base de conhecimento (PDFs sem Drive, embeddings) | lite / embed |
+| `AI_KNOWLEDGE` | `knowledge_extract` + `knowledge_embed`: índice da base de conhecimento (PDFs sem Drive, embeddings); sincroniza sozinha quando há alterações nas pastas do Drive | lite / embed |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
@@ -203,6 +210,8 @@ tabelas na migração 0125.
   últimas 8 semanas (reservas por parque e por canal, gasto e ROAS do
   marketing) e, nas despesas, valores fora do normal (mediana/MAD) e possíveis
   duplicados. Aparecem como "Alertas" em Operações, Despesas e Marketing.
+  A linha da IA (`AI_ANOMALY_EXPLAIN`) faz-se uma vez por dia nesta corrida;
+  condutores e extras veem o alerta, mas o servidor não lhes manda a linha da IA.
 - **Relatórios semanais** (`WEEKLY_REPORTS`, segunda de manhã): direção,
   marketing, operações e RH, a quem tem o módulo com alcance nacional; resumo
   semanal da passagem de turno por cidade.
@@ -214,7 +223,10 @@ tabelas na migração 0125.
   `seja_motorista` continua como antes).
 - **Avaliação**: explicação a partir das linhas das regras (nunca recalcula);
   o team leader pode escondê-la.
-- **Tarefas a partir de texto**: a IA propõe, a pessoa confirma.
+- **Tarefas a partir de texto**: a IA propõe, a pessoa confirma. Só team
+  leader para cima (o servidor recusa a extras e condutores).
+- **Passagem de turno**: o resumo da IA faz-se ao entregar a passagem e no
+  botão "Resumir agora"; editar depois não chama a IA.
 
 Custos: pedidos curtos, dados pessoais tapados (`redactPii`), teto de 12
 chamadas por corrida do cron e cache por hash (leads, avaliação).
@@ -255,7 +267,9 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   chegar. Nas respostas públicas (críticas), os marcadores são retirados.
 - Dos nomes, só se envia o primeiro.
 - As imagens e PDFs (faturas, documentos do RH) vão tal como estão. Por isso o
-  `AI_HR_AUTOFILL` está desligado por omissão.
+  `AI_HR_AUTOFILL` e o `AI_HR_EMAIL_ATTACHMENTS` estão desligados por omissão
+  e **só correm com Vertex AI numa região da UE** (ver secção 1): fora disso
+  não correm, mesmo ligados. O rádio, as faturas e o resto não dependem disto.
 - Os logs do servidor só têm metadados: funcionalidade, código de erro e modelo.
 
 ## 6. Erros

@@ -58,7 +58,7 @@ vi.mock("./whatsappInbox", () => ({ listConversations: async () => [] }));
 
 import { appRouter } from "./routers";
 import { buildHandoverDraft } from "./shiftHandoverDraft";
-import { ackHandover, saveHandoverAiSummary } from "./shiftHandoverAutomation";
+import { ackHandover, summarizeSavedHandover } from "./shiftHandoverAutomation";
 import { buildHandoverLatestBefore } from "./shiftHandoverSql";
 import { buildUpcomingSql } from "./multiparkDb/shiftState";
 import { canEditOldHandover, findPersonShift } from "../shared/shiftHandover";
@@ -242,15 +242,13 @@ describe("Regra das 24h e 'Recebi'", () => {
     expect(state.saved.map((s) => s.opts.canEditOld)).toEqual([true, false]);
   });
 
-  it("o resumo IA não fura o prazo de 24h", async () => {
+  it("o resumo IA não fura o prazo de 24h (49g: recusa antes de chamar a IA)", async () => {
     state.currentRow = { id: 8, ageMinutes: 3000 };
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-09-28", shift: "night", city: "lisbon" }, "• ok", { canEditOld: false })).toBeNull();
+    expect(await summarizeSavedHandover({ handoverDate: "2026-09-28", shift: "night", city: "lisbon" }, { canEditOld: false, userId: 77 })).toEqual({ ok: false, reason: "locked" });
     expect(state.updates).toHaveLength(0);
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-09-28", shift: "night", city: "lisbon" }, "• ok", { canEditOld: true })).toBe(8);
-    state.currentRow = { id: 9, ageMinutes: 30 };
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-10-02", shift: "morning", city: "lisbon" }, "• ok", { canEditOld: false })).toBe(9);
     state.currentRow = null;
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-10-02", shift: "night", city: "lisbon" }, "• ok", { canEditOld: true })).toBeNull();
+    expect(await summarizeSavedHandover({ handoverDate: "2026-10-02", shift: "night", city: "lisbon" }, { canEditOld: true, userId: 77 })).toEqual({ ok: false, reason: "not_saved" });
+    // O caminho com IA (grava com a versão) está em ia49g.test.ts.
   });
 
   it("'Recebi': nem quem a criou nem quem a editou por último", async () => {

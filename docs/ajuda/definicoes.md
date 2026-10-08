@@ -18,6 +18,7 @@ Separadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador ce
   - **Saltado** (Agendador) = correu mas não fez o trabalho (ex.: interruptor desligado, sem configuração). Não conta como **Último OK**.
   - Os erros mostrados nunca levam segredos (tokens, passwords em endereços).
 - **Automações**: interruptores de cada automação, incluindo a **Inteligência artificial**. Cada um diz o estado **agora** e de onde vem: *definido aqui*, *pela variável do servidor* ou *por omissão*. "Seguir o servidor" tira o que foi definido aqui.
+  - Os dois da IA que leem ficheiros pessoais inteiros (documentos do RH e anexos/CV dos emails do RH) dizem por baixo "Só corre com a IA em Vertex AI na UE (hoje: …)". A verde: a IA está em Vertex AI numa região da UE e correm quando ligados. A laranja: não correm, mesmo ligados, até a IA passar para o Vertex AI na UE (variáveis na Vercel; ver `docs/ia.md`).
 - **Integrações**: resumo; o estado, os testes e a gestão de cada ligação vivem na página **Integrações**.
 - **Comunicação**: caixas de email, **Envio de email (Gmail)** — o remetente só o super admin muda (os admins podem testá-lo) —, calendários partilhados da escala, Google em tempo real, Contactos Google e Google Drive. Um cartão que não consegue ler mostra o erro e "Tentar de novo" (antes desaparecia).
 - **Parâmetros**:

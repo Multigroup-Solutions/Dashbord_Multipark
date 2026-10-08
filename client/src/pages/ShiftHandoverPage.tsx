@@ -246,6 +246,8 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
   const [openItems, setOpenItemsRaw] = useState<OpenItem[]>([]);
   const setOpenItems = touch(setOpenItemsRaw);
   const [aiText, setAiText] = useState<string | null>(null);
+  // 0600: resumo feito para uma versão anterior (a passagem foi editada depois de entregue).
+  const [aiStale, setAiStale] = useState(false);
   const [carriedKey, setCarriedKey] = useState<string | null>(null);
   // Gravar mesmo sem conseguir ler os pendentes do turno anterior (escolha explícita).
   const [saveWithoutPrev, setSaveWithoutPrev] = useState(false);
@@ -293,6 +295,7 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
     // 44b: só PDAs e notas (os de outros tipos gravados antes ficam na BD, sem aparecer).
     setOpenItemsRaw(((existing?.openItems ?? []) as OpenItem[]).filter(isHandoverItem));
     setAiText(existing?.aiSummary ?? null);
+    setAiStale(!!existing?.aiSummaryStale);
     setCarriedKey(null);
     setSaveWithoutPrev(false);
     setDirty(false);
@@ -323,10 +326,13 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
     setCarriedKey(formKey);
   }, [loading, draft, draftQ.isFetching, carriedKey, formKey, recent, loaded, since]);
 
+  // "Resumir agora": resume a passagem gravada (Jorge, 8 out 2026: a IA só ao entregar).
   const ai = trpc.shiftHandover.aiSummary.useMutation({
     onSuccess: (r) => {
       setAiText(r.aiSummary);
-      toast.success(r.saved ? "Resumo gerado e guardado na passagem" : "Resumo gerado (não ficou guardado: ao gravar a passagem é gerado de novo)");
+      setAiStale(false);
+      toast.success("Resumo feito e guardado na passagem");
+      void utils.shiftHandover.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -336,9 +342,11 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
   });
 
   const save = trpc.shiftHandover.save.useMutation({
-    onSuccess: async () => {
-      // D7: grava logo; o resumo (IA), o aviso e o email ao turno seguinte seguem dentro de momentos
-      toast.success("Passagem de turno guardada — o resumo e o aviso ao turno seguinte seguem dentro de momentos");
+    onSuccess: async (r) => {
+      // D7: grava logo; o resumo (IA), o aviso e o email ao turno seguinte seguem dentro de momentos.
+      // 8 out 2026: a IA só resume na entrega (1.ª gravação); editar deixa o resumo desatualizado.
+      if (r.mode === "insert") toast.success("Passagem de turno guardada — o resumo e o aviso ao turno seguinte seguem dentro de momentos");
+      else toast.success("Passagem de turno atualizada — o aviso ao turno seguinte segue dentro de momentos. O resumo da IA não se refaz sozinho: \"Resumir agora\".");
       await utils.shiftHandover.draft.invalidate();
       // Recarrega o registo gravado (nova versão) antes de permitir nova edição.
       await utils.shiftHandover.list.invalidate();
@@ -454,7 +462,8 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
             {(prev.missingShifts ?? 0) > 0 && (
               <p className="text-xs text-amber-700">É a última passagem que houve: {prev.missingShifts === 1 ? "o turno entre essa e este não fez passagem" : `os ${prev.missingShifts} turnos entre essa e este não fizeram passagem`}. Os pendentes vêm dela.</p>
             )}
-            {prev.aiSummary ? <p className="text-sm whitespace-pre-line">{prev.aiSummary}</p> : prev.notes ? <p className="text-sm text-muted-foreground whitespace-pre-line">{prev.notes}</p> : null}
+            {prev.aiSummary && !prev.aiSummaryStale ? <p className="text-sm whitespace-pre-line">{prev.aiSummary}</p> : prev.notes ? <p className="text-sm text-muted-foreground whitespace-pre-line">{prev.notes}</p> : null}
+            {prev.aiSummary && prev.aiSummaryStale && <p className="text-[11px] text-muted-foreground">O resumo da IA desta passagem ficou desatualizado (foi alterada depois de entregue).</p>}
             {prev.openItems.length > 0 && <p className="text-xs text-amber-700">{prev.openItems.length} pendente(s) por resolver — estão na lista "Pendentes" abaixo.</p>}
           </div>
         )}
@@ -558,9 +567,12 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
 
           <AiSummaryBox
             text={aiText}
+            stale={aiStale}
+            saved={!!loaded}
+            dirty={dirty}
             available={canEdit && !lockedOld}
             pending={ai.isPending}
-            onGenerate={() => ai.mutate({ date, shift, city, notes: f.notes || null, openItems })}
+            onGenerate={() => ai.mutate({ date, shift, city })}
           />
 
           {canEdit && (
@@ -780,7 +792,7 @@ function HandoverHistory({ cityState, userId, canEdit }: { cityState: CityState;
                     <td className="p-2 text-center"><YN v={h.pdasCharged} /></td>
                     <td className="p-2 text-xs max-w-[220px] truncate" title={clothingCell(h)}>{clothingCell(h) || "—"}</td>
                     <td className="p-2 text-xs">{author(h)}</td>
-                    <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={h.aiSummary ?? h.notes ?? ""}>{h.notes ?? (h.aiSummary ? "✨ resumo IA" : "—")}</td>
+                    <td className="p-2 text-xs text-muted-foreground max-w-[200px] truncate" title={h.aiSummary ?? h.notes ?? ""}>{h.notes ?? (h.aiSummary ? (h.aiSummaryStale ? "✨ resumo IA (desatualizado)" : "✨ resumo IA") : "—")}</td>
                     <td className="p-2 text-xs tabular-nums" title={openOf(h).filter((i) => !i.resolved).map((i) => i.text).join("\n")}>
                       {openOf(h).length ? `${openOf(h).filter((i) => !i.resolved).length} abertos / ${openOf(h).length}` : "—"}
                     </td>

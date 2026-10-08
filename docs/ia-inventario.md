@@ -1,6 +1,7 @@
 # IA no dashboard — inventário página a página (D7)
 
-Levantamento feito no código a 3 out 2026 (lote 26b). Para cada sítio onde a IA
+Levantamento feito no código a 3 out 2026 (lote 26b); atualizado a 8 out 2026
+com as decisões do Jorge (ver "Decidido a 8 out 2026", no fim). Para cada sítio onde a IA
 corre: **quando** (sozinha ou a pedido), **quem vê**, **que dados lhe chegam** e
 **o que fica guardado ou o que ela faz sozinha**. A configuração geral (modelos,
 custos, interruptores) está em [`docs/ia.md`](ia.md).
@@ -15,6 +16,10 @@ custos, interruptores) está em [`docs/ia.md`](ia.md).
   relatórios, anomalias, avaliação, leads).
 - Começam **desligados**: `AI_HR_AUTOFILL`, `AI_HR_EMAIL_ATTACHMENTS`,
   `AI_CRM_IDENTITY`, `AI_MAIL_ROUTING`. Todos os outros começam ligados.
+- **Ficheiros pessoais inteiros** (documentos e CV do RH: `AI_HR_AUTOFILL` e
+  `AI_HR_EMAIL_ATTACHMENTS`) só correm com a IA em **Vertex AI numa região da
+  UE**. Fora disso não correm, mesmo ligados (regra em `shared/aiLimits.ts`,
+  no `runAi` e no `aiFeatureAvailable`).
 - Agendamentos (agendador `/api/cron/tick`, de 5 em 5 min):
   - `ai-comms` de 15 em 15 min;
   - `ops-briefing` uma vez por dia a partir das 07:30;
@@ -39,7 +44,7 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 ### Operações, Despesas e Marketing — Alertas
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
-| Explicação das anomalias — `AI_ANOMALY_EXPLAIN` + `OPS_ANOMALIES` | Auto no `ops-briefing` (1 chamada para até 20 anomalias) | Reservas: quem lê Reservas & Operações (**inclui o condutor**). Despesas: quem vê a cidade. Marketing: super admin | Linhas da anomalia (parque, canal ou fornecedor, números), com `redactPii` | `ops_anomalies.explanation` |
+| Explicação das anomalias — `AI_ANOMALY_EXPLAIN` + `OPS_ANOMALIES` | Auto no `ops-briefing` (1 chamada por dia para até 20 anomalias). Abrir a página nunca a dispara | Reservas: quem lê Reservas & Operações. **Condutores e extras veem o alerta, mas não a linha da IA** (o servidor não a manda; 8 out 2026). Despesas: quem vê a cidade. Marketing: super admin | Linhas da anomalia (parque, canal ou fornecedor, números), com `redactPii` | `ops_anomalies.explanation` |
 
 ### Despesas
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
@@ -60,7 +65,7 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 ### Passagem de turno
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
-| Resumo para o turno seguinte — `AI_HANDOVER_SUMMARY` | Auto **a cada gravação** (nova ou editada). Pedido: "Gerar resumo / Gerar de novo" | Passagem de turno (TL para cima, cidade); **email** aos TL do turno seguinte e CC | Contagens, 1.º nome da equipa seguinte, picos, notas do TL (até 1500 car.) e pendentes, com `redactPii` | `shift_handovers.aiSummary` |
+| Resumo para o turno seguinte — `AI_HANDOVER_SUMMARY` | Auto **só ao entregar** (1.ª gravação). Pedido: **"Resumir agora"** (quem edita; resume a passagem gravada). Editar depois **não chama a IA**: aparece "resumo desatualizado" | Passagem de turno (TL para cima, cidade); **email** aos TL do turno seguinte e CC (o resumo desatualizado não vai no email) | Contagens, 1.º nome da equipa seguinte, picos, notas do TL (até 1500 car.) e pendentes, com `redactPii` | `shift_handovers.aiSummary` + `aiSummaryVersion` (0600) |
 | Resumo da semana e pendentes repetidos — `AI_HANDOVER_REPEATS` + `WEEKLY_REPORTS` | Auto à segunda-feira | Passagem de turno com a cidade; **email** aos TL e supervisores | Contagens da semana e pendentes repetidos, com `redactPii` | `ai_weekly_reports` |
 
 ### WhatsApp
@@ -95,18 +100,18 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 |---|---|---|---|---|
 | Perguntas do quiz — `AI_QUIZ` | Pedido: **"Gerar perguntas (IA)"** (manual) e **"Gerar rascunhos"** (documento da base) | Formação com gestão (admin, super admin) | Texto com `redactPii` (**26b:** também no manual). O PDF anexo do manual vai **inteiro** | `quiz_questions` como rascunho (por publicar) |
 | Tutor da formação — `AI_TRAINING_TUTOR` | Pedido: chat, "Explicar melhor", "Explicar as respostas erradas" (10/min, 100/dia) | Todos os papéis; cada um vê o seu; os formadores veem um agregado anónimo | Pergunta com `redactPii`, trechos do manual, 4 últimas trocas | Mensagens 30 dias; perguntas anónimas |
-| Base de conhecimento — `AI_KNOWLEDGE` | Ao carregar, "Sincronizar agora" e **também auto** com alterações no Drive (fila do Google de hora a hora + verificação de 4 em 4 h) | Formação com gestão; as citações conforme quem lê | **PDF inteiro** só quando o Drive não o converte; trechos e perguntas com `redactPii` | Texto, trechos e vetores |
+| Base de conhecimento — `AI_KNOWLEDGE` | Ao carregar, "Sincronizar agora" e **sozinha quando há alterações nas pastas do Drive** (avisos da Google → fila de hora a hora + verificação de 4 em 4 h) | Formação com gestão; as citações conforme quem lê | **PDF inteiro** só quando o Drive não o converte; trechos e perguntas com `redactPii` | Texto, trechos e vetores |
 
 ### Recursos Humanos
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
-| Preencher a ficha a partir de documentos — `AI_HR_AUTOFILL` (**desligado**) | Auto em cada carregamento de CC, título de residência, carta, IBAN ou morada | Quem pode editar os dados pessoais | Imagem ou PDF do documento **inteiro** | Só campos **vazios** (NIF, nascimento, nacionalidade, morada). **26b:** o IBAN lido só entra na hora para quem o pode mudar na hora (D49); para os outros (incluindo o próprio) fica um **pedido ao RH** |
+| Preencher a ficha a partir de documentos — `AI_HR_AUTOFILL` (**desligado**; **só com Vertex AI na UE**) | Auto em cada carregamento de CC, título de residência, carta, IBAN ou morada | Quem pode editar os dados pessoais | Imagem ou PDF do documento **inteiro** | Só campos **vazios** (NIF, nascimento, nacionalidade, morada). **26b:** o IBAN lido só entra na hora para quem o pode mudar na hora (D49); para os outros (incluindo o próprio) fica um **pedido ao RH** |
 
 ### Leads de Extras
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
-| Anexos do email do RH (CV) — `AI_HR_EMAIL_ATTACHMENTS` (**desligado**) | Auto no `ai-comms` (2 anexos por corrida, emails até 14 dias, cada anexo uma vez) | Resumo: Leads (TL para cima). NIF, BI/CC e carta só papéis nacionais e admin para cima | CV em PDF, imagem ou DOCX **inteiro** | Campos vazios do candidato + resumo para quem entrevista |
-| Resumo da pontuação — `AI_LEAD_SCORING` | Pedido: **"Resumo IA"** | Leads **só com ler** | Linhas da pontuação (calculada no código), com `redactPii` | Cache por hash |
+| Anexos do email do RH (CV) — `AI_HR_EMAIL_ATTACHMENTS` (**desligado**; **só com Vertex AI na UE**) | Auto no `ai-comms` (2 anexos por corrida, emails até 14 dias, cada anexo uma vez) | Resumo: Leads (TL para cima). NIF, BI/CC e carta só papéis nacionais e admin para cima | CV em PDF, imagem ou DOCX **inteiro** | Campos vazios do candidato + resumo para quem entrevista |
+| Resumo da pontuação — `AI_LEAD_SCORING` | Pedido: **"Resumo IA"** | Pedir: Leads **com editar** (os recrutadores; 8 out 2026). Ver o resumo já feito: Leads com ler | Linhas da pontuação (calculada no código), com `redactPii` | Cache por hash |
 | Rascunho do 1.º contacto — `AI_LEAD_SCORING` | Pedido: **"Rascunho com IA"** | Leads com editar | 1.º nome e cidade | Rascunho; enviar exige "Aprovar" |
 
 ### Extras Dia e Disponibilidade
@@ -122,7 +127,7 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 ### Tarefas
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
-| Tarefas a partir de texto — `AI_TASKS_FROM_TEXT` | Pedido: **"Criar tarefas a partir de texto"** | Tarefas com editar (**inclui extra e condutor**, só as suas) | Texto colado (até 6000 car.) com `redactPii` | Não. Só cria depois de a pessoa confirmar |
+| Tarefas a partir de texto — `AI_TASKS_FROM_TEXT` | Pedido: **"Criar tarefas a partir de texto"** | Tarefas com editar, **team leader para cima** (extras e condutores não; o servidor recusa) | Texto colado (até 6000 car.) com `redactPii` | Não. Só cria depois de a pessoa confirmar |
 
 ### Marketing → Web & SEO (só super admin)
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
@@ -143,11 +148,16 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 
 ## O que a IA faz sozinha (sem uma pessoa a carregar)
 
-1. **Disponibilidade dos extras:** com ≥ 85 % marca, responde por WhatsApp e confirma ou recusa o turno.
-2. **Triagem do WhatsApp:** muda a conversa de caixa, e com isso quem a vê.
-3. **Reclamações:** com ≥ 0,85 preenche o tipo, a prioridade, o SLA e a reserva quando estão vazios (com "Desfazer").
-4. **Clientes:** junta fichas com ≥ 85 % (desligado).
-5. **Ficha do RH:** preenche campos vazios a partir de documentos (desligado; o IBAN fica pedido ao RH).
+Regra do dono (8 out 2026): a IA age sozinha onde é **reversível** e **não fala
+com clientes**.
+
+1. **Disponibilidade dos extras** (`AI_AVAILABILITY_CLASSIFY`): com ≥ 85 % marca a disponibilidade, responde por WhatsApp ao colaborador e confirma ou recusa o turno. Abaixo disso, tarefa para uma pessoa. Mantém-se.
+2. **WhatsApp:** a IA separa as conversas novas pelas caixas; as conversas com histórico ficam onde estão.
+3. **Reclamações** (`AI_COMPLAINT_TRIAGE`): com ≥ 0,85 preenche o tipo, a prioridade, o SLA e a reserva quando estão vazios (com "Desfazer"). Mantém-se.
+4. **Passagem de turno** (`AI_HANDOVER_SUMMARY`): o resumo faz-se **só ao entregar** a passagem. As edições não chamam a IA; quem edita carrega em "Resumir agora".
+5. **Clientes:** junta fichas com ≥ 85 % (desligado).
+6. **Ficha do RH:** preenche campos vazios a partir de documentos (desligado; só com Vertex AI na UE; o IBAN fica pedido ao RH).
+7. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.
 
 Nada disto envia emails a clientes nem publica respostas: isso é sempre uma pessoa.
 
@@ -158,3 +168,19 @@ Nada disto envia emails a clientes nem publica respostas: isso é sempre uma pes
   - tabela dos interruptores completa;
   - agendamentos certos (agendador, briefing a partir das 07:30, Google Business em pausa);
   - lista das variáveis de ambiente sem duplicados.
+
+## Decidido a 8 out 2026
+
+O Jorge respondeu aos 7 pontos "para decidires" do lote 26b ("avança com o 7,
+a IA a agir sozinha"):
+
+1. **Disponibilidade dos extras** (`AI_AVAILABILITY_CLASSIFY`): **mantém-se**. Com ≥ 85 % marca, responde por WhatsApp e confirma ou recusa o turno.
+2. **Triagem do WhatsApp:** **mantém-se**, governada pelo encaminhamento por caixas. A IA separa as conversas novas pelas caixas; as conversas com histórico ficam onde estão.
+3. **Reclamações** (≥ 0,85, só campos vazios, com "Desfazer"): **mantém-se**.
+4. **Resumo da passagem de turno:** passa a correr **só ao entregar** (1.ª gravação) e no botão **"Resumir agora"** (quem pode editar). Editar depois não chama a IA: o ecrã mostra "resumo desatualizado" e o email ao turno seguinte já não leva o resumo velho. Coluna `shift_handovers.aiSummaryVersion` (migração 0600).
+5. **Quem vê a mais** (garantido no servidor):
+   - **Alertas:** condutores e extras veem o alerta, mas não a linha da IA. A explicação faz-se uma vez por dia no `ops-briefing`; abrir a página nunca a dispara.
+   - **"Criar tarefas a partir de texto":** só team leader para cima.
+   - **"Resumo IA" das leads:** só quem edita as Leads (os recrutadores).
+6. **Base de conhecimento:** os textos passam a dizer a verdade: sincroniza sozinha quando há alterações nas pastas do Drive. O comportamento não muda.
+7. **Ficheiros pessoais inteiros (RGPD):** `AI_HR_AUTOFILL` e `AI_HR_EMAIL_ATTACHMENTS` só correm com a IA em **Vertex AI numa região da UE**. Fora disso não correm, mesmo ligados. As Definições → Automações dizem ao lado do interruptor "Só corre com a IA em Vertex AI na UE (hoje: …)". O rádio, as faturas e o resto não dependem disto.

@@ -3765,32 +3765,32 @@ export const appRouter = router({
       return { available: true as const, ...r.data };
     }),
 
-    // Resumo por IA a pedido (5 pontos PT-PT); guarda-o se a passagem já existir.
+    // "Resumir agora" (5 pontos PT-PT): só numa passagem JÁ GRAVADA, a partir do
+    // que está gravado. Jorge (8 out 2026): a IA resume sozinha só ao entregar;
+    // depois de uma edição o resumo fica desatualizado até alguém carregar aqui.
     aiSummary: protectedProcedure.input(z.object({
       date: handoverDaySchema,
       shift: z.enum(["morning", "night"]),
       city: z.enum(HANDOVER_CITIES),
-      notes: z.string().max(2000).nullable().optional(),
-      openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "edit");
-      const { generateAiSummary } = await import("./shiftHandoverAutomation");
+      const { summarizeSavedHandover } = await import("./shiftHandoverAutomation");
       const { aiTrpcError } = await import("./_core/ai/trpcError");
-      const { buildHandoverDraft } = await import("./shiftHandoverDraft");
-      const draft = await buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city }).catch(() => null);
-      let text: string | null;
+      const { canEditOldHandover } = await import("../shared/shiftHandover");
+      let r: Awaited<ReturnType<typeof summarizeSavedHandover>>;
       try {
-        text = await generateAiSummary(draft, { city: input.city, shift: { date: input.date, shift: input.shift }, notes: input.notes ?? null, openItems: (input.openItems ?? []) as any }, { throwOnError: true, userId: ctx.user.id });
+        // Mesma regra das 24h que a gravação (vista ANTES de chamar a IA).
+        r = await summarizeSavedHandover({ handoverDate: input.date, shift: input.shift, city: input.city }, { canEditOld: canEditOldHandover(withOverrides(ctx.user)), userId: ctx.user.id });
       } catch (err) {
         throw aiTrpcError(err);
       }
-      if (!text) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
-      const { saveHandoverAiSummary } = await import("./shiftHandoverAutomation");
-      const { canEditOldHandover } = await import("../shared/shiftHandover");
-      // Mesma regra das 24h que a gravação; e fica registado quem o gerou.
-      const savedId = await saveHandoverAiSummary({ handoverDate: input.date, shift: input.shift, city: input.city }, text, { canEditOld: canEditOldHandover(withOverrides(ctx.user)) });
-      if (savedId != null) await logActivity({ userId: ctx.user.id, action: "update", entity: "shift_handover", entityId: savedId, details: `Resumo IA gerado — ${input.date} ${input.shift} ${input.city}` });
-      return { aiSummary: text, saved: savedId != null };
+      if (!r.ok) {
+        if (r.reason === "not_saved") throw new TRPCError({ code: "BAD_REQUEST", message: "Guarda primeiro a passagem: a IA faz o resumo quando a entregas." });
+        if (r.reason === "locked") throw new TRPCError({ code: "FORBIDDEN", message: "Passaram mais de 24h — só um supervisor pode refazer o resumo." });
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
+      }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "shift_handover", entityId: r.id, details: `Resumo IA gerado — ${input.date} ${input.shift} ${input.city}` });
+      return { aiSummary: r.aiSummary, saved: true as const, version: r.version };
     }),
 
     // 29d (Jorge, 6 out 2026): despesas do turno — entram DIRETAS nas Despesas

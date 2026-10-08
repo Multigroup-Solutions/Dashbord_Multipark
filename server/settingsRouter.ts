@@ -106,7 +106,16 @@ export const settingsRouter = router({
   flags: router({
     list: adminOnly.query(async () => {
       const { listAutomationFlags } = await import("./appSettings");
-      return listAutomationFlags();
+      const { aiWhere } = await import("./_core/ai/status");
+      const { EU_VERTEX_ONLY_FEATURES, euVertexNote, flagRequiresEuVertex } = await import("../shared/aiLimits");
+      const { AI_FEATURES } = await import("../shared/aiFeatures");
+      // Jorge (8 out 2026): ao lado dos interruptores dos documentos/CV do RH,
+      // "Só corre com a IA em Vertex AI na UE (hoje: …)".
+      const featureOf = (flag: string) => EU_VERTEX_ONLY_FEATURES.find((f) => AI_FEATURES[f].flag === flag);
+      return (await listAutomationFlags()).map((f) => {
+        const feature = flagRequiresEuVertex(f.name) ? featureOf(f.name) : undefined;
+        return feature ? { ...f, euVertex: euVertexNote(aiWhere(process.env, feature)) } : { ...f, euVertex: null };
+      });
     }),
     /**
      * `value: null` remove a sobreposição (volta à env / omissão).

@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { addDays, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 import { can, scopeFor, type AccessOverrides } from "../../shared/access";
+import { seesAiAlertExplanations } from "../../shared/aiLimits";
 import type { OpenItem } from "../../shared/shiftHandoverAuto";
 import { OPS_BRIEFING_SYSTEM } from "../_core/ai/prompts/ops";
 import { AiCallCap, tryAi } from "./aiCall";
@@ -97,7 +98,11 @@ export function buildBriefingData(input: {
 
 // ─── Quem vê o quê (por pessoa) ──────────────────────────────────────────────
 
-export interface ViewerPerms { complaints: boolean; incidents: boolean; marketing: boolean; bookingsAnomalies: boolean; expenseAnomalies: boolean }
+export interface ViewerPerms {
+  complaints: boolean; incidents: boolean; marketing: boolean; bookingsAnomalies: boolean; expenseAnomalies: boolean;
+  /** Vê a linha da IA nos alertas (Jorge, 8 out 2026: condutor e extra não). Omissão: sim. */
+  aiExplanations?: boolean;
+}
 
 export function viewerPerms(user: { role: string; accessOverrides?: AccessOverrides | null }): ViewerPerms {
   const exp = scopeFor(user as any, "despesas");
@@ -107,6 +112,7 @@ export function viewerPerms(user: { role: string; accessOverrides?: AccessOverri
     marketing: can(user as any, "marketing", "view"),
     bookingsAnomalies: can(user as any, "reservas_operacoes", "view"),
     expenseAnomalies: exp === "city" || exp === "national",
+    aiExplanations: seesAiAlertExplanations(user.role),
   };
 }
 
@@ -122,7 +128,7 @@ export function filterBriefingFor(d: BriefingData, p: ViewerPerms): BriefingData
       incidentsDueToday: p.incidents ? d.sla.incidentsDueToday : 0, incidentsOverdue: p.incidents ? d.sla.incidentsOverdue : 0,
       items,
     },
-    anomalies: d.anomalies.filter((a) => p[ANOMALY_DOMAIN_PERM[a.domain] ?? "marketing"]),
+    anomalies: d.anomalies.filter((a) => p[ANOMALY_DOMAIN_PERM[a.domain] ?? "marketing"]).map((a) => (p.aiExplanations === false ? { ...a, explanation: null } : a)),
     marketingAlerts: p.marketing ? d.marketingAlerts : [],
   };
 }

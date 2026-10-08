@@ -567,6 +567,44 @@ export function buildHandoverEmail(input: {
   return { subject, text, html };
 }
 
+// ─── Resumo IA: só ao entregar (Jorge, 8 out 2026) ──────────────────────────
+
+/**
+ * A IA resume sozinha só quando a passagem é ENTREGUE (1.ª gravação). Editar
+ * depois não chama a IA (cada chamada é paga): o resumo fica desatualizado e
+ * quem pode editar carrega em "Resumir agora". PURA.
+ */
+export function handoverAiOnSave(mode: "insert" | "update"): boolean {
+  return mode === "insert";
+}
+
+type AiSummaryRow = { aiSummary?: string | null; aiSummaryVersion?: number | string | null; version?: number | string | null };
+
+/**
+ * Resumo IA desatualizado = há resumo e foi feito para uma versão anterior da
+ * passagem. Sem versão guardada (resumos de antes de 8 out 2026) conta como em
+ * dia — a 1.ª edição carimba-o (`legacyAiSummaryVersion`). PURA.
+ */
+export function handoverAiSummaryStale(r: AiSummaryRow): boolean {
+  if (!String(r.aiSummary ?? "").trim() || r.aiSummaryVersion == null) return false;
+  return Number(r.aiSummaryVersion) < Number(r.version ?? 1);
+}
+
+/**
+ * Resumo antigo (sem versão) numa passagem que acabou de ser editada: era da
+ * versão anterior (antes a IA corria a cada gravação). null = nada a carimbar. PURA.
+ */
+export function legacyAiSummaryVersion(r: AiSummaryRow): number | null {
+  if (!String(r.aiSummary ?? "").trim() || r.aiSummaryVersion != null) return null;
+  return Math.max(1, Number(r.version ?? 1) - 1);
+}
+
+/** Resumo para o email/turno seguinte: o desatualizado não vai (as notas e os números vão). PURA. */
+export function currentAiSummary(r: AiSummaryRow): string | null {
+  const t = String(r.aiSummary ?? "").trim();
+  return t && !handoverAiSummaryStale(r) ? t : null;
+}
+
 /** Normaliza a resposta do LLM em até 5 linhas "• …". */
 export function normalizeAiBullets(raw: string): string | null {
   const lines = String(raw ?? "")
