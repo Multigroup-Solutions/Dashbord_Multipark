@@ -510,7 +510,7 @@ function IntegrationsCard() {
 
 // ─── Parâmetros ─────────────────────────────────────────────────────────────
 
-const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)", operacao: "Operação (GPS / Zello / parques)" };
+const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)", operacao: "Operação (GPS / Zello / parques)", pessoas: "Pessoas (desempenho)" };
 
 const CITY_FIELDS: { id: "lisbon" | "porto" | "faro"; label: string }[] = [
   { id: "lisbon", label: "Lisboa" },
