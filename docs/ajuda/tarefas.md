@@ -34,7 +34,7 @@ palavras: filtros, filtrar tarefas, limpar filtros, estado da reserva, candidatu
 3. **Team leader**: vês, mudas o estado e editas só as tarefas da tua equipa (as tuas, as de quem está abaixo de ti e as que criaste). As que não têm responsáveis só as editas se foste tu a criar.
 4. O **Quadro de tarefas** mostra as colunas por estado; arrasta para mudar. Os contadores de cima contam o que está no ecrã (com a pesquisa e os filtros).
 5. **Mostrar antigas**: as concluídas há mais de 30 dias ficam escondidas até ligares isto.
-6. **Criar tarefas a partir de texto**: colas notas ou uma passagem de turno, a IA propõe tarefas e só se criam as que confirmares.
+6. **Criar tarefas a partir de texto**: colas notas ou uma passagem de turno, a IA propõe tarefas e só se criam as que confirmares. É para **team leaders para cima**: extras e condutores não veem o botão (e o servidor recusa).
 7. **Arquivar** (o ícone da caixa): a tarefa sai das listas, dos avisos e do Google Tarefas, mas fica no histórico com quem arquivou. Nada se apaga. Uma tarefa automática arquivada (checklist, serviço) **não volta a ser criada**.
 
 **Checklists recorrentes** (supervisor, frontoffice, backoffice e admin)

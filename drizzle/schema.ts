@@ -1199,6 +1199,8 @@ export const shiftHandovers = mysqlTable("shift_handovers", {
 	openItems: text(),
 	autoSummary: mediumtext(),
 	aiSummary: text(),
+	// 0600 — versão da passagem para a qual o resumo IA foi feito (< version = desatualizado)
+	aiSummaryVersion: int(),
 	filledById: int(),
 	filledByName: varchar({ length: 255 }),
 	createdById: int(),

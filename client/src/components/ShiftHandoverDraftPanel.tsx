@@ -191,18 +191,33 @@ export function OpenItemsEditor({ items, onChange, disabled, currentSince }: {
   );
 }
 
-export function AiSummaryBox({ text, onGenerate, pending, available }: { text: string | null; onGenerate: () => void; pending: boolean; available: boolean }) {
+/**
+ * Resumo IA para o turno seguinte. Jorge (8 out 2026): a IA resume sozinha só
+ * quando a passagem é ENTREGUE (1.ª gravação). Editar depois não chama a IA:
+ * aparece "resumo desatualizado" e quem pode editar carrega em "Resumir agora"
+ * (resume o que está gravado — com alterações por gravar, grava primeiro).
+ */
+export function AiSummaryBox({ text, stale, saved, dirty, onGenerate, pending, available }: {
+  text: string | null; stale: boolean; saved: boolean; dirty: boolean;
+  onGenerate: () => void; pending: boolean; available: boolean;
+}) {
+  const canRun = available && saved;
   return (
     <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs font-semibold flex items-center gap-1"><Sparkles className="w-3.5 h-3.5" />Resumo IA para o turno seguinte</p>
-        {available && (
-          <Button type="button" size="sm" variant="outline" onClick={onGenerate} disabled={pending}>
-            {pending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : null}{text ? "Gerar de novo" : "Gerar resumo"}
+        {canRun && (
+          <Button type="button" size="sm" variant="outline" onClick={onGenerate} disabled={pending || dirty} title={dirty ? "Grava primeiro as alterações: o resumo é feito a partir da passagem gravada" : undefined}>
+            {pending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : null}Resumir agora
           </Button>
         )}
       </div>
-      {text ? <p className="text-sm whitespace-pre-line">{text}</p> : <p className="text-xs text-muted-foreground">{available ? "Gerado automaticamente ao guardar (ou carrega em \"Gerar resumo\")." : "Gerado ao guardar, se a IA estiver configurada."}</p>}
+      {text && stale && (
+        <p className="text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />Resumo desatualizado — a passagem mudou depois do resumo.{canRun ? " Carrega em \"Resumir agora\"." : ""}</p>
+      )}
+      {text ? <p className={`text-sm whitespace-pre-line${stale ? " text-muted-foreground" : ""}`}>{text}</p>
+        : <p className="text-xs text-muted-foreground">{saved ? "Sem resumo da IA." : "A IA faz o resumo quando guardares (entregares) a passagem."}</p>}
+      {canRun && dirty && <p className="text-[11px] text-muted-foreground">Tens alterações por gravar: o resumo é feito a partir da passagem gravada.</p>}
     </div>
   );
 }

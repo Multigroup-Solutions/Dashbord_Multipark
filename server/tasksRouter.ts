@@ -18,6 +18,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess, withOverrides } from "./_core/access";
 import { roleRank } from "../shared/access";
+import { AI_TASKS_FROM_TEXT_FORBIDDEN, canUseAiTasksFromText } from "../shared/aiLimits";
 import { assertProjectAccess, scopedProjectIds } from "./cityScope";
 import { getDb, getEmployeeByUserId, getTaskById, getTaskAssignees, logActivity, resolveProjectIds, setTaskAssignees, createTask, updateTask } from "./db";
 import { taskTemplates } from "../drizzle/schema";
@@ -299,11 +300,14 @@ export const tasksRouter = router({
   /**
    * "Criar tarefas a partir de texto" — passo 1: a IA PROPÕE (nada é criado).
    * Os responsáveis sugeridos saem só de quem a pessoa pode atribuir.
+   * Jorge (8 out 2026): só team leader para cima (extras e condutores não).
    */
   proposeFromText: protectedProcedure
     .input(z.object({ text: z.string().trim().min(10).max(6000), projectId: z.number().int().positive().nullable().optional() }))
     .mutation(async ({ ctx, input }) => {
       const u = viewerOf(ctx);
+      // Pelo papel, mesmo com permissões das Tarefas dadas à parte (a IA tem custo).
+      if (!canUseAiTasksFromText(u.role)) throw new TRPCError({ code: "FORBIDDEN", message: AI_TASKS_FROM_TEXT_FORBIDDEN });
       requireAccess(u, "tarefas", "edit");
       if (input.projectId != null) assertProjectAccess(input.projectId);
       const ids = input.projectId ? await resolveProjectIds(input.projectId) : null;

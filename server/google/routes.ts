@@ -51,8 +51,9 @@ export function registerGoogleAccountRoutes(app: Express, opts: { defer?: (p: Pr
   });
 
   // Base de conhecimento: pastas do Shared Drive + documentos por processar.
-  // SEM agenda (decisão do Jorge, 26 set 2026): só à mão — "Sincronizar
-  // agora" na página ou este endpoint; os carregamentos processam-se logo.
+  // Este endpoint não está na agenda (é o "Sincronizar agora" à mão); as
+  // alterações nas pastas chegam sozinhas pelos avisos do Drive e pela
+  // verificação de 4 em 4 h do google-sync; os carregamentos processam-se logo.
   app.get("/api/cron/knowledge-sync", async (req: Request, res: Response) => {
     if (!cronAuthOk(req.headers["authorization"])) { res.status(401).json({ error: "Unauthorized" }); return; }
     const { knowledgeSyncCron, sendCronRun } = await import("../cronJobs");

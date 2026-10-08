@@ -843,7 +843,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_EXPENSE_OCR", label: "IA: leitura de faturas", description: "Extrai fornecedor, valor, datas e NIF das faturas carregadas nas Despesas.", group: "ia" },
   { name: "AI_REVIEW_DRAFTS", label: "IA: rascunhos de resposta às críticas", description: "Prepara a resposta às críticas Google (nunca publica sozinha).", group: "ia" },
   { name: "AI_RADIO", label: "IA: transcrição e resumo do rádio", description: "Transcreve as mensagens de rádio e resume-as em 1–2 frases.", group: "ia" },
-  { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte.", group: "ia" },
+  { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte, feitos quando a passagem é entregue (1.ª gravação) e no botão «Resumir agora». Editar a passagem depois não chama a IA.", group: "ia" },
   { name: "AI_WHATSAPP_ASSIST", label: "IA: assistente do WhatsApp", description: "Resumo da conversa e sugestão de resposta (vai para a caixa de texto, nunca é enviada sozinha).", group: "ia" },
   { name: "AI_QUIZ", label: "IA: perguntas da formação", description: "Gera rascunhos de perguntas a partir dos manuais.", group: "ia" },
   { name: "AI_TRAINING_TUTOR", label: "IA: tutor da formação", description: "Chat nas páginas da Formação: responde só com o conteúdo dos manuais, motiva e explica as respostas erradas do quiz.", group: "ia" },
@@ -853,13 +853,13 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_LOST_FOUND_MATCH", label: "IA: correspondências nos Perdidos & Achados", description: "Compara as descrições dos perdidos com os objetos encontrados (depois de um filtro por data, matrícula/reserva e parque). Contactar o cliente é sempre humano.", group: "ia" },
   { name: "AI_CRM_IDENTITY", label: "IA: fichas de clientes duvidosas", description: "Nas sugestões para juntar que as regras não resolvem (nome diferente, nome de uma palavra…), a IA dá o parecer e junta sozinha só com certeza alta (≥ 85 %); o resto fica em Rever fichas com o parecer à vista. Recebe só o primeiro nome e factos (\"telefone igual\", \"NIF diferente\"), nunca emails, telefones ou matrículas. Empresas, clientes Pro e NIF pessoais diferentes nunca vão à IA. Só funciona com a junção automática (CRM_AUTO_MERGE) ligada.", defaultEnabled: false, group: "ia" },
   { name: "AI_ASSISTANT", label: "IA: assistente (chat)", description: "Botão de ajuda em todas as páginas: explica como se usa a app e responde a perguntas sobre os dados que a pessoa já pode ver (só leitura).", group: "ia" },
-  { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
-  { name: "AI_HR_EMAIL_ATTACHMENTS", label: "IA: anexos dos emails do RH (CV)", description: "Lê os anexos (CV, documentos) dos emails de candidatura que chegam ao RH: preenche no candidato só os campos vazios (NIF, n.º do BI/CC, n.º da carta, cidade só quando é certa, outros contactos) e escreve um resumo para quem entrevista. NIF e números dos documentos só o RH vê. Só emails dos últimos 14 dias; cada anexo é lido uma vez.", defaultEnabled: false, group: "ia" },
+  { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. O documento vai inteiro: só corre com a IA em Vertex AI na UE. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  { name: "AI_HR_EMAIL_ATTACHMENTS", label: "IA: anexos dos emails do RH (CV)", description: "Lê os anexos (CV, documentos) dos emails de candidatura que chegam ao RH: preenche no candidato só os campos vazios (NIF, n.º do BI/CC, n.º da carta, cidade só quando é certa, outros contactos) e escreve um resumo para quem entrevista. NIF e números dos documentos só o RH vê. Só emails dos últimos 14 dias; cada anexo é lido uma vez. O ficheiro vai inteiro: só corre com a IA em Vertex AI na UE.", defaultEnabled: false, group: "ia" },
   { name: "AI_OPS_BRIEFING", label: "IA: texto do briefing diário", description: "Escreve o parágrafo do briefing das 07:30 por cidade (os números vêm sempre do sistema).", group: "ia" },
   { name: "AI_WEEKLY_REPORTS", label: "IA: texto dos relatórios semanais", description: "Narrativa curta dos relatórios de segunda-feira (direção, marketing, operações, RH).", group: "ia" },
-  { name: "AI_ANOMALY_EXPLAIN", label: "IA: explicação das anomalias", description: "Uma linha por anomalia detetada (reservas, despesas, marketing). A deteção é estatística, sem IA.", group: "ia" },
+  { name: "AI_ANOMALY_EXPLAIN", label: "IA: explicação das anomalias", description: "Uma linha por anomalia detetada (reservas, despesas, marketing), uma vez por dia. A deteção é estatística, sem IA. Condutores e extras veem o alerta sem a linha da IA.", group: "ia" },
   { name: "AI_AVAILABILITY_CLASSIFY", label: "IA: respostas de disponibilidade pouco claras", description: "Classifica as respostas que o sistema não percebeu. Confiança alta aplica-se sozinha; o resto vai para revisão humana.", group: "ia" },
-  { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação.", group: "ia" },
+  { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação. Os dois só para quem edita as leads.", group: "ia" },
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
   // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
@@ -869,7 +869,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },
   { name: "AI_WEB_INSIGHT", label: "IA: resumo semanal Web & SEO", description: "Marketing → Web & SEO: um parágrafo por semana sobre o que mudou no tráfego, na pesquisa Google e na velocidade (só a partir dos totais; sem dados pessoais).", group: "ia" },
   { name: "AI_KNOWLEDGE", label: "IA: base de conhecimento", description: "Índice dos manuais (Drive e ficheiros carregados) por embeddings e leitura de PDFs sem Drive. Desligado = a pesquisa usa só palavras-chave (FULLTEXT).", group: "ia" },
-  { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação.", group: "ia" },
+  { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação. Team leader para cima.", group: "ia" },
 ];
 
 /** Omissão de um interruptor do catálogo (desconhecido → ligado). PURA. */
@@ -964,9 +964,11 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "tick" },
   { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 1440, workflow: "tick" },
-  // Fora da agenda (só à mão): base de conhecimento (botão "Sincronizar
-  // agora") e Google Business Profile (em pausa até a Google aprovar a API).
-  { name: "knowledge-sync", label: "Base de conhecimento (pastas do Drive)", intervalMinutes: null, workflow: "manual" },
+  // Fora da agenda do tick: base de conhecimento — sincroniza SOZINHA quando há
+  // alterações nas pastas do Drive (avisos da Google → fila de hora a hora, e a
+  // verificação de 4 em 4 h do google-sync); esta linha regista só o botão
+  // "Sincronizar agora" — e Google Business Profile (em pausa até a Google aprovar a API).
+  { name: "knowledge-sync", label: "Base de conhecimento: «Sincronizar agora» (sozinha quando há alterações nas pastas do Drive)", intervalMinutes: null, workflow: "manual" },
   { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: null, workflow: "manual (em pausa)" },
 ];
 

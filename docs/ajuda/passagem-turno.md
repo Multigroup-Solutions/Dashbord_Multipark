@@ -2,7 +2,7 @@
 modulo: passagem_turno
 titulo: Passagem de turno
 rotas: /passagem-turno
-palavras: mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
+palavras: resumir agora, resumo desatualizado, resumo ia, resumo da ia, entregar a passagem, mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
 ---
 # Passagem de turno
 
@@ -13,6 +13,12 @@ Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
 2. Preenche a caixa (caixa de check-out, fecho de caixa no cofre, valores das bolsas front/terminal, tickets/despesas pagos), o material (canetas, rolos MB, bateria), o fardamento e os **Pendentes para o turno seguinte**.
 3. Escreve observações e carrega em **Guardar passagem de turno**. Grava logo. O resumo IA, o aviso e o email ao team leader do turno seguinte seguem dentro de momentos, e o histórico atualiza-se sozinho.
 4. Quem entra confirma com **Recebi**. Nem quem criou a passagem nem quem a editou por último a podem confirmar.
+
+**Resumo IA para o turno seguinte**
+- A IA faz o resumo **quando entregas** a passagem (a 1.ª vez que carregas em **Guardar passagem de turno**). Antes disso a caixa diz "A IA faz o resumo quando guardares (entregares) a passagem."
+- **Atualizar** a passagem depois **não chama a IA** (cada resumo é uma chamada paga). O resumo fica como estava e aparece **Resumo desatualizado**; o email desse envio já não leva o resumo velho (leva as notas, os números e os pendentes).
+- **Resumir agora** (quem pode preencher passagens) refaz o resumo a partir da passagem **gravada**. Com alterações por gravar, grava primeiro.
+- No histórico, um resumo que ficou para trás aparece como "✨ resumo IA (desatualizado)"; na **Passagem recebida**, o turno seguinte vê as notas em vez do resumo velho.
 
 **Pendentes que passam de turno**
 - Só passam de turno os **PDAs ainda com check-in** e o que o team leader escreve (as notas). Reclamações, perdidos e achados, ocorrências e entregas pendentes **já não entram** nos pendentes: tratam-se nas páginas deles. Os que já estavam gravados em passagens antigas não se apagam, só deixam de passar e de aparecer.
@@ -57,9 +63,9 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
 - Uma falha nunca aparece como "sem passagens" ou "sem cidade atribuída".
 
 **Notas**
-- Depois de 24 h só um supervisor, ou quem tem acesso ao **Resumo do dia**, pode alterar a passagem. A mesma regra vale para o resumo IA.
+- Depois de 24 h só um supervisor, ou quem tem acesso ao **Resumo do dia**, pode alterar a passagem. A mesma regra vale para o **Resumir agora**.
 - Não dá para registar passagens para depois de amanhã.
-- Quem só consulta vê a passagem, mas não grava, não gera o resumo nem confirma.
+- Quem só consulta vê a passagem, mas não grava, não pede o resumo nem confirma.
 - No telemóvel, o **Histórico** mostra um cartão por passagem.
 - A supervisão vê o **Resumo do dia** (entregas lentas, recolhas atrasadas, reclamações do dia). Em **Quem trabalhou** há, por pessoa, as **horas** trabalhadas (as do ponto; com "~" quando não há picagens e é o tempo com o Zello ligado), os **km** e o tempo **parado** (com o Zello ligado mas sem andar). Todas as colunas se ordenam. Num dia com movimentos a mais aparece o aviso de que os tempos são só de uma parte do dia.
 

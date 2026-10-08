@@ -11,13 +11,14 @@
  */
 import type { z } from "zod";
 import {
-  getProvider, selectProvider,
+  geminiConfig, getProvider, selectProvider,
   type AiPart, type AiProvider, type AiProviderId, type AiToolCall, type AiToolDeclaration, type AiToolRound, type AiTurn, type ProviderResponse,
 } from "./client";
 import { getOrCreateContextCache, forgetContextCache } from "./contextCache";
 import {
   AiDisabledError,
   AiError,
+  AiEuOnlyError,
   AiInvalidOutputError,
   AiNotConfiguredError,
   AiTimeoutError,
@@ -29,6 +30,7 @@ import { toProviderJsonSchema } from "./jsonSchema";
 import { fallbackTier, resolveModel, type AiTier } from "./models";
 import { costEur, type TokenUsage } from "./pricing";
 import { enforceBudget, getPriceOverrides, logAiUsage } from "./usage";
+import { euVertexOk, requiresEuVertex } from "../../../shared/aiLimits";
 
 /** Prazo por omissão (a função do Vercel morre aos 60 s). */
 export const DEFAULT_AI_TIMEOUT_MS = 25_000;
@@ -127,6 +129,12 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
   let tier: AiTier = resolveFeatureTier(opts.feature, { requested: opts.tier, settings: await loadFeatureTierSettings(), env });
   const providerId = selectProvider(env, opts.feature);
   if (!providerId) throw new AiNotConfiguredError();
+  // Jorge (8 out 2026): documentos e CV do RH vão inteiros — só com o Gemini em
+  // Vertex AI na UE (mesmo com o interruptor ligado). Nada sai para o fornecedor.
+  if (requiresEuVertex(opts.feature)) {
+    const cfg = providerId === "gemini" ? geminiConfig(env) : null;
+    if (!euVertexOk({ provider: providerId, mode: cfg?.mode ?? null, location: cfg?.mode === "vertex" ? cfg.location : null })) throw new AiEuOnlyError(opts.feature);
+  }
   const provider = getProvider(providerId, env);
   let model = opts.model || resolveModel(tier, providerId, env);
 
