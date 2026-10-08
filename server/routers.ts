@@ -1683,7 +1683,9 @@ export const appRouter = router({
         requireAccess(ctx.user, "marketing", "view");
         const { computeRuleBudgets } = await import("./marketingBudgetRule");
         const r = await computeRuleBudgets(input.month);
-        return r.ok ? { ok: true as const, baseMonth: r.baseMonth, count: r.rows.length, total: Math.round(r.rows.reduce((s, x) => s + x.amount, 0) * 100) / 100 } : { ok: false as const, baseMonth: r.baseMonth, reason: r.reason };
+        return r.ok
+          ? { ok: true as const, baseMonth: r.baseMonth, count: r.rows.length, total: Math.round(r.rows.reduce((s, x) => s + x.amount, 0) * 100) / 100, marketplaceWithoutCity: r.marketplaceWithoutCity ?? null }
+          : { ok: false as const, baseMonth: r.baseMonth, reason: r.reason };
       }),
       copyFromPrevious: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "marketing", "manage");
@@ -4012,7 +4014,9 @@ export const appRouter = router({
       requireAccess(ctx.user, "parcerias", "view");
       const canSeeTotals = await canSeeFinanceTotals(ctx.user);
       const { readPartnershipsLive, hideLiveMoney, linkRecords } = await import("./multiparkDb/partnerships");
-      const r = await readPartnershipsLive(scopedCityNames());
+      const { getSetting } = await import("./appSettings");
+      const excluded = ((await getSetting("operations.excludedParks").catch(() => null)) as string[] | null) ?? [];
+      const r = await readPartnershipsLive(scopedCityNames(), undefined, undefined, excluded);
       if (!r.available) return { available: false as const, reason: r.reason };
       const records = (await getPartnerships()).map((p: any) => ({
         id: p.id, name: p.name, partnerType: p.partnerType ?? null, partnerStatus: p.partnerStatus ?? null, multiparkPartnerId: p.multiparkPartnerId ?? null,
@@ -4467,7 +4471,10 @@ export const appRouter = router({
         const { getMultiparkOpsList } = await import("./multiparkDb/opsLists");
         const state = opsListsShared.isOpsListState(input.kind, input.state) ? input.state : "all";
         // D6 (Jorge, 3 out): as compras online por pagar contam nas listas operacionais até serem recolhidas/canceladas
-        const r = await getMultiparkOpsList({ ...input, state, includePending: true }, scopedCityNames());
+        // 8 out 2026: os excluídos nas Definições só dão a etiqueta "não operado" (a lista não muda)
+        const { getSetting } = await import("./appSettings");
+        const excluded = ((await getSetting("operations.excludedParks").catch(() => null)) as string[] | null) ?? [];
+        const r = await getMultiparkOpsList({ ...input, state, includePending: true }, scopedCityNames(), undefined, excluded);
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         return { available: true as const, ...r.data };
       }),

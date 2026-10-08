@@ -18,6 +18,7 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList } from "./read";
+import { MARKETPLACE_ORIGIN_SQL } from "./marketplaceSql";
 
 export const MARKETING_BOOKINGS_LIMIT = 100_000;
 export const MARKETING_CLIENTS_LIMIT = 200_000;
@@ -32,16 +33,31 @@ export interface MarketingReadSpec {
   /** Domínios de email da casa (não contam como cliente). */
   internalDomains: readonly string[];
   /**
-   * Marketplace (Jorge, 7 out 2026): parques de TERCEIROS — só as reservas que
-   * nós vendemos (origin MARKETPLACE ou com comissão nossa, OUR_SALE).
+   * Marketplace: parques de TERCEIROS — TODAS as reservas (Jorge, 8 out 2026:
+   * "têm que aparecer TODAS as reservas feitas no marketplace, seja de que
+   * parque for"; antes só as com origem MARKETPLACE ou comissão nossa).
    */
   marketplaceParkIds?: string[];
   /** Parques nossos de que só interessam as reservas vindas pelo Marketplace (multipark.pt). */
   marketplaceOnlyParkIds?: string[];
 }
 
-/** Venda nossa num parque de terceiros (a mesma regra da faturação do Marketplace, partnerBilling.ts). */
-export const MARKETPLACE_OUR_SALE = `(b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0)`;
+/**
+ * Que reservas entram (alias `b`): as dos parques nossos e as dos de
+ * terceiros, todas; nos "só Marketplace" (nossos fora do âmbito, cujo nó
+ * Marketplace da cidade está no âmbito), só as que vieram pelo Marketplace —
+ * a regra única (shared/marketplace.ts isMarketplaceBooking). PURA.
+ */
+function bookingScope(p: ParamList, spec: Pick<MarketingReadSpec, "parkIds" | "marketplaceParkIds" | "marketplaceOnlyParkIds">): { which: string; allParks: string[] } {
+  const all = [...new Set([...spec.parkIds, ...(spec.marketplaceParkIds ?? [])])];
+  const mkOnly = (spec.marketplaceOnlyParkIds ?? []).filter((id) => !all.includes(id));
+  const list = (ids: string[]) => ids.map((id) => p.add(id)).join(", ");
+  const conds = [
+    all.length ? `b."parkId" IN (${list(all)})` : null,
+    mkOnly.length ? `(b."parkId" IN (${list(mkOnly)}) AND ${MARKETPLACE_ORIGIN_SQL})` : null,
+  ].filter(Boolean) as string[];
+  return { which: conds.length === 1 ? conds[0] : `(${conds.join(" OR ")})`, allParks: [...all, ...mkOnly] };
+}
 
 const lisbonDay = (col: string) => `to_char((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon', 'YYYY-MM-DD')`;
 const ts = (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI:SS')`;
@@ -58,17 +74,8 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
   const mkOnly = spec.marketplaceOnlyParkIds ?? [];
   if (!spec.parkIds.length && !third.length && !mkOnly.length) throw new Error("Sem parques.");
   const p = new ParamList();
-  const list = (ids: string[]) => ids.map((id) => p.add(id)).join(", ");
-  // Que reservas entram: as dos parques nossos; nos de terceiros só as vendidas
-  // por nós; nos "só Marketplace" só as que vieram pelo Marketplace.
-  const conds = [
-    spec.parkIds.length ? `b."parkId" IN (${list(spec.parkIds)})` : null,
-    third.length ? `(b."parkId" IN (${list(third)}) AND ${MARKETPLACE_OUR_SALE})` : null,
-    mkOnly.length ? `(b."parkId" IN (${list(mkOnly)}) AND b."origin"::text = 'MARKETPLACE')` : null,
-  ].filter(Boolean) as string[];
-  const which = conds.length === 1 ? conds[0] : `(${conds.join(" OR ")})`;
-  const allParks = [...new Set([...spec.parkIds, ...third, ...mkOnly])];
-  const parks = list(allParks);
+  const { which, allParks } = bookingScope(p, spec);
+  const parks = allParks.map((id) => p.add(id)).join(", ");
   const s = p.add(spec.start);
   const e = p.add(spec.end);
   const em = emailExpr(p, "c", spec.internalDomains);
@@ -109,11 +116,16 @@ export function buildMarketingBookingsSql(spec: MarketingReadSpec): { sql: strin
 /** Estados em que o carro entrou (valor realizado do cliente). */
 export const VISITED = ["CHECKED_IN", "CHECKING_OUT", "PENDING_CHECKOUT", "CHECKED_OUT"] as const;
 
-/** Clientes (por email) de todo o histórico destes parques; período só para contar. PURA. */
+/**
+ * Clientes (por email) de todo o histórico destes parques; período só para
+ * contar. Com o Marketplace (8 out 2026), as mesmas reservas que a lista:
+ * todas as dos parques de terceiros e, nos "só Marketplace", as vindas por ele.
+ * PURA.
+ */
 export function buildMarketingClientsSql(spec: MarketingReadSpec): { sql: string; params: SqlParam[] } {
-  if (!spec.parkIds.length) throw new Error("Sem parques.");
+  if (!spec.parkIds.length && !(spec.marketplaceParkIds ?? []).length && !(spec.marketplaceOnlyParkIds ?? []).length) throw new Error("Sem parques.");
   const p = new ParamList();
-  const parks = spec.parkIds.map((id) => p.add(id)).join(", ");
+  const { which } = bookingScope(p, spec);
   const em = emailExpr(p, "c", spec.internalDomains);
   const s = p.add(spec.start);
   const e = p.add(spec.end);
@@ -122,19 +134,20 @@ export function buildMarketingClientsSql(spec: MarketingReadSpec): { sql: string
   const sql = [
     `WITH x AS (`,
     `  SELECT ${em} AS em, b."id" AS id, b."createdAt" AS created_at, b."status"::text AS status, b."origin"::text AS origin,`,
-    `    NULLIF(trim(b."originUrl"), '') AS url, b."partnerId" AS partner_id, NULLIF(b."paymentMethod", '') AS pm, b."campaignId" AS campaign_id, b."bookingPrice" AS price`,
+    `    NULLIF(trim(b."originUrl"), '') AS url, b."partnerId" AS partner_id, NULLIF(b."paymentMethod", '') AS pm, b."campaignId" AS campaign_id, b."bookingPrice" AS price,`,
+    `    b."parkId" AS park_id`,
     `  FROM "Booking" b`,
     `  ${clientOf("b", "c")}`,
-    `  WHERE b."parkId" IN (${parks}) AND b."status"::text <> 'CANCELLED'`,
+    `  WHERE ${which} AND b."status"::text <> 'CANCELLED'`,
     `),`,
     `y AS (SELECT * FROM x WHERE x.em IS NOT NULL),`,
-    `f AS (SELECT DISTINCT ON (y.em) y.em, y.created_at, y.origin, y.url, y.partner_id, y.pm, y.campaign_id FROM y ORDER BY y.em, y.created_at, y.id),`,
+    `f AS (SELECT DISTINCT ON (y.em) y.em, y.created_at, y.origin, y.url, y.partner_id, y.pm, y.campaign_id, y.park_id FROM y ORDER BY y.em, y.created_at, y.id),`,
     `bp AS (SELECT z."bookingId" AS id, SUM(z."total") AS total FROM "BookingPricing" z`,
     `  WHERE z."bookingId" IN (SELECT y.id FROM y WHERE y.status IN (${visited})) GROUP BY z."bookingId"),`,
     `a AS (SELECT y.em, count(*) AS n, count(*) FILTER (WHERE y.created_at >= ${s}::timestamp AND y.created_at < ${e}::timestamp) AS pn,`,
     `  SUM(CASE WHEN y.status IN (${visited}) THEN COALESCE(bp.total, y.price) END) AS value`,
     `  FROM y LEFT JOIN bp ON bp.id = y.id GROUP BY y.em)`,
-    `SELECT md5(a.em) AS client_key, ${ts("f.created_at")} AS first_at, f.origin AS first_origin, f.url AS first_url,`,
+    `SELECT md5(a.em) AS client_key, ${ts("f.created_at")} AS first_at, f.origin AS first_origin, f.url AS first_url, f.park_id AS first_park_id,`,
     `  f.partner_id AS first_partner_id, NULLIF(pa."name", '') AS first_partner_name, f.pm AS first_payment_method,`,
     `  NULLIF(ca."name", '') AS first_campaign_name, NULLIF(ca."discountCode", '') AS first_discount_code,`,
     `  a.n AS bookings, a.pn AS period_bookings, a.value`,
@@ -166,7 +179,7 @@ export interface MarketingBookingRow {
   total: number;
   hasEmail: boolean;
   newClient: boolean;
-  /** comissão nossa (vendas do Marketplace em parques de terceiros); null se não houver */
+  /** comissão gravada (parques de terceiros); null se não houver */
   commission?: number | null;
 }
 
@@ -175,6 +188,8 @@ export interface MarketingClientRow {
   firstAt: string;
   firstOrigin: string | null;
   firstUrl: string | null;
+  /** parque da 1.ª reserva (para a regra única do Marketplace) */
+  firstParkId?: string | null;
   firstPartnerId: string | null;
   firstPartnerName: string | null;
   firstPaymentMethod: string | null;
@@ -202,7 +217,7 @@ export function mapMarketingBookingRow(r: Record<string, unknown>): MarketingBoo
 
 export function mapMarketingClientRow(r: Record<string, unknown>): MarketingClientRow {
   return {
-    clientKey: String(r.client_key ?? ""), firstAt: String(r.first_at ?? ""), firstOrigin: txt(r.first_origin), firstUrl: txt(r.first_url),
+    clientKey: String(r.client_key ?? ""), firstAt: String(r.first_at ?? ""), firstOrigin: txt(r.first_origin), firstUrl: txt(r.first_url), firstParkId: txt(r.first_park_id),
     firstPartnerId: txt(r.first_partner_id), firstPartnerName: txt(r.first_partner_name), firstPaymentMethod: txt(r.first_payment_method),
     firstCampaignName: txt(r.first_campaign_name), firstDiscountCode: txt(r.first_discount_code),
     bookings: int(r.bookings), periodBookings: int(r.period_bookings), value: money(r.value),

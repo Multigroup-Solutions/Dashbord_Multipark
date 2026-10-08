@@ -24,6 +24,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import { adAccounts, projects } from "../../../drizzle/schema";
 import { brandNameForProject } from "../../../shared/adCampaignMapping";
+import { MARKETPLACE_BRAND } from "../../../shared/projectTree";
 import { isAdPlatformInvoice, roasNetOfVat } from "../../../shared/marketingRules";
 import { lisbonDaySql } from "../../../shared/lisbonDay";
 import { vatRateForPeriod } from "../../finance/rates";
@@ -82,7 +83,7 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
   const attributionQuality = { siteBookings: 0, withOriginUrl: 0, withClickId: 0, attributed: 0 };
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no
   // período, sem canceladas, atribuição Google/Meta a partir do link de origem.
-  const { loadMarketingBookings } = await import("../../marketingLive");
+  const { loadMarketingBookings, summarizeMarketplace } = await import("../../marketingLive");
   // 19a: a BD da Multipark em baixo não esconde o gasto (que é nosso) — as
   // reservas ficam "indisponíveis" (null), nunca 0.
   let bookingsError: string | null = null;
@@ -116,6 +117,8 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     if (paid && b.adCampaignExternalId && b.campaignEvidence === "gclid") attributedByCampaignGclid[b.adCampaignExternalId] = (attributedByCampaignGclid[b.adCampaignExternalId] ?? 0) + 1;
   }
   bookingsByDay = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, v]) => ({ date, ...v }));
+  // 8 out 2026: todas as reservas do Marketplace, operado por nós / não operado, e as sem cidade
+  const marketplace = summarizeMarketplace(bookings);
   const expensesSplit = await marketingCategoryExpenses(db, f.from, f.to, projectIds);
   const mktExpenses = expensesSplit.other;
   const bk = <T,>(v: T): T | null => (bookingsError ? null : v);
@@ -153,6 +156,7 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     // Reservas reais (Multipark), pela data de criação — null se a BD da Multipark não respondeu
     bookingsError,
     bookingsTotal: bk(bookingsTotal), bookingsAttributed: bk(bookingsAttributed), bookingsUnattributed: bk(bookingsUnattributed),
+    marketplace: bk(marketplace),
     bookingsGoogle: bk(bookingsGoogle), bookingsMeta: bk(bookingsMeta),
     revenueTotal: bk(revenueTotal), revenueAttributed: bk(revenueAttributed),
     /** 28c: reservas "via net" (não parceiros) e o valor; quantas trazem o link de origem */
@@ -239,21 +243,27 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
   const ads = preloadedAds ?? await getAdMetrics({ from: f.from, to: f.to, projectIds });
 
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts), somadas por centro.
-  const { loadMarketingBookings } = await import("../../marketingLive");
-  const byProject = new Map<number | null, { projectId: number | null; n: number; attributed: number; rev: number; revAttributed: number; web: number; revWeb: number; webLink: number }>();
+  const { loadMarketingBookings, loadUnplacedMarketplaceParks, summarizeMarketplace } = await import("../../marketingLive");
+  type ProjectAgg = { projectId: number | null; n: number; attributed: number; rev: number; revAttributed: number; web: number; revWeb: number; webLink: number };
+  const emptyAgg = (projectId: number | null): ProjectAgg => ({ projectId, n: 0, attributed: 0, rev: 0, revAttributed: 0, web: 0, revWeb: 0, webLink: 0 });
+  const byProject = new Map<number | null, ProjectAgg>();
+  // 8 out 2026: reservas do Marketplace sem nó (parque de terceiros sem cidade reconhecida) → "Marketplace (sem cidade)"
+  const marketplaceNoCity = emptyAgg(null);
   // 19a: Multipark em baixo → gasto por marca na mesma; reservas "indisponíveis".
   let bookingsError: string | null = null;
   // Jorge (7 out 2026: "não encontramos as reservas do Marketplace"): as vendas do Marketplace ficam em "Marketplace <cidade>".
   const live = await loadMarketingBookings(f.from, f.to, projectIds, { marketplace: true }).catch((err: any) => { bookingsError = String(err?.message ?? err).slice(0, 300); return []; });
   for (const b of live) {
-    const r = byProject.get(b.projectId) ?? { projectId: b.projectId, n: 0, attributed: 0, rev: 0, revAttributed: 0, web: 0, revWeb: 0, webLink: 0 };
+    const r = b.projectId == null && b.marketplace ? marketplaceNoCity : byProject.get(b.projectId) ?? emptyAgg(b.projectId);
     const paid = b.adAttribution === "google_paid" || b.adAttribution === "meta_paid";
     r.n++; r.rev += b.total;
     if (paid) { r.attributed++; r.revAttributed += b.total; }
     if (b.viaNet) { r.web++; r.revWeb += b.total; if (b.hasOriginUrl) r.webLink++; }
-    byProject.set(b.projectId, r);
+    if (r !== marketplaceNoCity) byProject.set(b.projectId, r);
   }
   const bookingRows = [...byProject.values()];
+  const marketplace = summarizeMarketplace(live);
+  const unplacedMarketplaceParks = bookingsError ? [] : await loadUnplacedMarketplaceParks(projectIds).catch(() => []);
 
   const key = (name: string) => name.trim().toLowerCase();
   const brands = new Map<string, BrandRow>();
@@ -324,6 +334,14 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
       c.bookingsWeb += r.web; c.revenueWeb += r.revWeb; c.webWithLink += r.webLink;
     }
   }
+  // "Marketplace (sem cidade)": contam na marca Marketplace (em nenhuma cidade) e a página avisa.
+  if (marketplaceNoCity.n > 0) {
+    const k = key(MARKETPLACE_BRAND);
+    const row = brands.get(k) ?? newRow(MARKETPLACE_BRAND, true);
+    row.bookings += marketplaceNoCity.n; row.attributed += marketplaceNoCity.attributed; row.revenue += marketplaceNoCity.rev; row.revenueAttributed += marketplaceNoCity.revAttributed;
+    row.bookingsWeb += marketplaceNoCity.web; row.revenueWeb += marketplaceNoCity.revWeb; row.webWithLink += marketplaceNoCity.webLink;
+    brands.set(k, row);
+  }
   for (const b of brands.values()) b.roasNet = bookingsError ? null : roasNetOfVat(b.revenue, b.spend, vat);
   return {
     range: { from: f.from, to: f.to },
@@ -332,6 +350,9 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     byBrandCity: Array.from(byBrandCity.values()),
     bookingsWithoutBrand,
     unassignedSpend,
+    /** 8 out 2026: todas as reservas do Marketplace (operado / não operado / sem cidade) e os parques sem cidade (aviso) */
+    marketplace: bookingsError ? null : marketplace,
+    unplacedMarketplaceParks,
     vatRate: vat,
     bookingsError,
   };

@@ -2,13 +2,13 @@
 modulo: faturacao
 titulo: Faturação
 rotas: /faturacao, /financeiro, /anual
-palavras: preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, marketing, anúncios, período de consumo, no-shows, financeiro, anual, totais
+palavras: marketplace, dupla comissão, prior velho, preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, marketing, anúncios, período de consumo, no-shows, financeiro, anual, totais
 ---
 # Faturação
 
 Receita, custos e margem por período (só super admin; o dashboard Financeiro é para admin e acima).
 
-As reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro). Já não dependem de importações nem da cópia antiga. Se a base da Multipark não responder (ou faltar a permissão de ver totais), a página diz o porquê, em vez de números a zero, e tem um botão **Tentar de novo**.
+As reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro — a cidade do parque é a reconhecida: Prior Velho e Moscavide contam como Lisboa, Maia como Porto…). As reservas do **Marketplace** dos parques de terceiros não entram na receita; nos nossos parques, uma reserva vinda pelo Marketplace paga 20 % ao Marketplace e, se também tiver parceiro, conta só o Marketplace (nunca duas comissões). Já não dependem de importações nem da cópia antiga. Se a base da Multipark não responder (ou faltar a permissão de ver totais), a página diz o porquê, em vez de números a zero, e tem um botão **Tentar de novo**.
 
 **Ler a página**
 1. Menu **Financeiro → Faturação**. Escolhe o período e, se quiseres, a marca/projeto.

@@ -40,9 +40,15 @@ export const GROUP_LABEL: Record<ChannelGroup, string> = {
 export const CHANNEL_ORDER: ChannelKey[] = ["marketplace", "site", "telefone", "parceiro", "campanha", "outros"];
 export const GROUP_ORDER: ChannelGroup[] = ["anuncios", "organico", "parceiros", "campanhas", "outros"];
 
-export function channelOf(b: { origin?: string | null; campaign?: string | null }, hasPartner: (campaign: string) => boolean): ChannelKey {
+/**
+ * Canal de uma reserva. `marketplace` = a regra única do Marketplace
+ * (shared/marketplace.ts isMarketplaceBooking — num parque de terceiros conta
+ * sempre como Marketplace, seja qual for a origem; 8 out 2026). Sem ela, só a
+ * origem MARKETPLACE. PURA.
+ */
+export function channelOf(b: { origin?: string | null; campaign?: string | null; marketplace?: boolean }, hasPartner: (campaign: string) => boolean): ChannelKey {
   const origin = String(b.origin ?? "");
-  if (origin === "MARKETPLACE") return "marketplace";
+  if (b.marketplace || origin === "MARKETPLACE") return "marketplace";
   const campaign = (b.campaign ?? "").trim();
   if (campaign) return hasPartner(campaign) ? "parceiro" : "campanha";
   if (origin === "PARTNER_DASHBOARD") return "parceiro";

@@ -5,7 +5,7 @@
  * nunca lança (`{ available:false, reason }`).
  *
  * Duas leituras por dia:
- *   1. os parques ("Park": id, name, city, firebaseBrand, listingType, status
+ *   1. os parques ("Park": id, name, city, address, firebaseBrand, listingType, status
  *      — ~55 linhas), filtrados pelas cidades do utilizador, SEM os "Parques
  *      que a operação não faz" (Definições → operations.excludedParks) e
  *      agrupados para a operação (marca nossa + cidade, ou o próprio parque);
@@ -21,7 +21,7 @@
  *     pré-filtro com 1 dia de folga de cada lado deixa o Postgres usá-los.
  *
  * Colunas usadas (docs/multipark-db/schema.md):
- *   Park: id, name, city, firebaseBrand, listingType, status
+ *   Park: id, name, city, address, firebaseBrand, listingType, status
  *   Booking: id, allocation, status, checkIn, checkOut, checkInDate, checkOutDate,
  *     checkInTime, checkOutTime, createdAt, parkId, clientId, customerId, vehicleId,
  *     partnerId, garageId, spotId, externalGarage, externalRow, externalSpot,
@@ -110,7 +110,8 @@ const parkOut = (p: DayPark): DayParkOut => {
 /** SQL dos parques (tabela pequena). PURA. */
 export function buildParksSql(): { sql: string; params: SqlParam[] } {
   return {
-    sql: `SELECT p."id" AS id, p."name" AS name, p."city" AS city, NULLIF(p."firebaseBrand", '') AS firebase_brand, p."listingType"::text AS listing_type, p."status"::text AS status FROM "Park" p ORDER BY p."name" LIMIT 500`,
+    // 8 out 2026: + a morada (último recurso para a cidade — resolveParkCity)
+    sql: `SELECT p."id" AS id, p."name" AS name, p."city" AS city, NULLIF(p."address", '') AS address, NULLIF(p."firebaseBrand", '') AS firebase_brand, p."listingType"::text AS listing_type, p."status"::text AS status FROM "Park" p ORDER BY p."name" LIMIT 500`,
     params: [],
   };
 }
@@ -125,7 +126,7 @@ export function mapParks(rows: Array<Record<string, unknown>>, cities?: string[]
     const cityName = str(r.city);
     const name = str(r.name) ?? id;
     const firebaseBrand = str(r.firebase_brand);
-    const cls = classifyPark({ name, city: cityName, firebaseBrand, listingType: str(r.listing_type) });
+    const cls = classifyPark({ name, city: cityName, address: str(r.address), firebaseBrand, listingType: str(r.listing_type) });
     // 42d: a cidade gravada no parque; sem ela (ou escrita de outra maneira), a da classificação (que lê o nome)
     if (allowed && !allowed.has(String(cityName ?? "").trim().toLowerCase()) && !(cls.city && allowed.has(cls.city))) continue;
     out.push({ id, name, cityName, firebaseBrand, status: str(r.status), ...cls });

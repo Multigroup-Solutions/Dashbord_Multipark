@@ -22,6 +22,7 @@ import { STICKY_FIRST_COL } from "@/components/finance/layoutClasses";
 import { AlertTriangle, ChevronDown, ChevronRight, ExternalLink, Link2, Loader2, Pencil, Plus, Unlink } from "lucide-react";
 import { getPartnerType } from "@shared/partnerTypes";
 import { brandsOfParkNames, isLivePartnerActive, partnerBrandFees } from "@shared/partnerBrands";
+import { operatedLabel } from "@shared/marketplace";
 import { toast } from "sonner";
 
 type Out = inferRouterOutputs<AppRouter>["partnerships"];
@@ -284,6 +285,7 @@ export function ParksLiveTab() {
                   <th className="p-2">Parque</th><th className="p-2">Cidade</th>
                   <th className="p-2 text-right">Reservas ({month})</th>
                   <th className="p-2 text-right">Das quais de parceiros</th>
+                  <th className="p-2 text-right" title="Reservas que vieram pelo Marketplace (multipark.pt) — contam no Marketplace (20 %)">Pelo Marketplace</th>
                   <th className="p-2 text-right">Valor</th>
                 </tr>
               </thead>
@@ -294,10 +296,11 @@ export function ParksLiveTab() {
                     <td className="p-2 text-muted-foreground">{p.city ?? "—"}</td>
                     <td className="p-2 text-right tabular-nums">{int(p.bookings)}</td>
                     <td className="p-2 text-right tabular-nums">{int(p.partnerBookings)}</td>
+                    <td className="p-2 text-right tabular-nums">{int(p.marketplaceBookings)}</td>
                     <td className="p-2 text-right tabular-nums">{eur(p.value)}</td>
                   </tr>
                 ))}
-                {ours.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">Sem parques nossos no teu âmbito.</td></tr>}
+                {ours.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">Sem parques nossos no teu âmbito.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -305,8 +308,9 @@ export function ParksLiveTab() {
       </TabsContent>
       <TabsContent value="third" className="space-y-2">
         <p className="text-sm text-muted-foreground">
-          Parques de terceiros em que <strong>nós somos o marketplace</strong>: só as reservas que nós lhes levámos, entradas em {month}.
-          O <strong>nosso</strong> é a <strong>comissão gravada em cada reserva na Multipark</strong> (cada parque tem a sua taxa); o parque fica com o resto.
+          Parques de terceiros em que <strong>nós somos o marketplace</strong>, entradas em {month}. <strong>Todas</strong> = todas as reservas do parque (contam como Marketplace);
+          <strong> com comissão</strong> = as que nós lhes levámos, com a <strong>comissão gravada em cada reserva na Multipark</strong> (cada parque tem a sua taxa) — o valor, o parque e o nosso são destas.
+          Cada parque diz se é <strong>operado por nós</strong> ou não (a comissão é diferente).
         </p>
         <Card className="p-0">
           <div className="overflow-x-auto">
@@ -314,7 +318,8 @@ export function ParksLiveTab() {
               <thead>
                 <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                   <th className="p-2">Parque</th><th className="p-2">Cidade</th>
-                  <th className="p-2 text-right">Reservas</th><th className="p-2 text-right">Valor</th>
+                  <th className="p-2 text-right" title="Todas as reservas do parque no mês (todas contam como Marketplace)">Todas</th>
+                  <th className="p-2 text-right" title="Reservas com a nossa comissão (origem Marketplace ou comissão gravada)">Com comissão</th><th className="p-2 text-right">Valor</th>
                   <th className="p-2 text-right">Parque</th><th className="p-2 text-right" title='"commissionAmount" das reservas na Multipark'>Nosso (comissão gravada)</th>
                   <th className="p-2 text-right">Taxa</th>
                 </tr>
@@ -328,8 +333,10 @@ export function ParksLiveTab() {
                         Ficha no CRM <ExternalLink className="h-3 w-3" />
                       </a>
                       {p.status && p.status !== "ACTIVE" && <Badge variant="secondary" className="ml-1 text-[10px]">{p.status}</Badge>}
+                      <span className={`block text-[11px] ${p.operated ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`}>{operatedLabel(p.operated)}</span>
                     </td>
                     <td className="p-2 text-muted-foreground">{p.city ?? "—"}</td>
+                    <td className="p-2 text-right tabular-nums">{int(p.marketplaceBookings)}</td>
                     <td className="p-2 text-right tabular-nums">{int(p.bookings)}</td>
                     <td className="p-2 text-right tabular-nums">{eur(p.value)}</td>
                     <td className="p-2 text-right tabular-nums">{eur(p.parkShare)}</td>
@@ -337,7 +344,7 @@ export function ParksLiveTab() {
                     <td className="p-2 text-right tabular-nums text-muted-foreground">{p.rate == null ? "—" : `${String(p.rate).replace(".", ",")} %`}</td>
                   </tr>
                 ))}
-                {third.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Sem parques de terceiros no teu âmbito.</td></tr>}
+                {third.length === 0 && <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">Sem parques de terceiros no teu âmbito.</td></tr>}
               </tbody>
             </table>
           </div>
