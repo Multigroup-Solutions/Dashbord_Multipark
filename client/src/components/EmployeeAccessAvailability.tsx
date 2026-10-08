@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PersonLinksDialog } from '@/components/PersonLinksDialog';
+import { EmployeeAvailabilityPattern } from '@/components/AvailabilityPatternCard';
 
 /**
  * 41a: o agente da Multipark desta ficha (principal + extra), dentro do cartão
@@ -120,6 +121,8 @@ export function EmployeeAccessAvailability({ employeeId, employeeName }: { emplo
     <Card>
       <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="h-4 w-4" />Disponibilidade</CardTitle></CardHeader>
       <CardContent className="space-y-3">
+        {/* Dias livres habituais (8 out 2026): esboço, não datas. */}
+        <EmployeeAvailabilityPattern employeeId={employeeId} />
         <div className="flex items-center justify-between gap-2"><Button size="icon" variant="outline" aria-label="Semana anterior" onClick={() => moveWeek(-7)}><ChevronLeft className="h-4 w-4" /></Button>
           <span className="text-sm font-medium">Semana de {format(new Date(`${weekStart}T12:00:00`), 'dd/MM/yyyy')}</span>
           <Button size="icon" variant="outline" aria-label="Semana seguinte" onClick={() => moveWeek(7)}><ChevronRight className="h-4 w-4" /></Button></div>

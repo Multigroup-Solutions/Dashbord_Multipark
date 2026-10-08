@@ -8,6 +8,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'rh.me', 'rh.timeRecords.myStatus',
     // O que é de cada um (a ficha vem da sessão): sem centro de custos também.
     'extrasAvailability.myWeek', 'extrasAvailability.setMyWeek', 'extrasAvailability.weekHints',
+    // Dias livres habituais (8 out 2026): de cada um, também com a ficha inativa e sem cidade.
+    'extrasAvailability.myPattern', 'extrasAvailability.setMyPattern',
     'evaluation.mine', 'evaluation.disputes.create',
     // 19c: a foto, o PDA, o Drive e terminar as próprias sessões são de cada um
     // (um extra novo sem cidade tirava a foto pedida e recebia "Sem centro de custos").
@@ -33,6 +35,8 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
   'rh.accountSummary': 'employeeId', 'rh.agentSummary': 'employeeId', 'rh.autoMail': 'employeeId',
   'rh.myMonthSummary': 'employeeId', 'rh.timeRecords.monthlyHours': 'employeeId',
   'extrasAvailability.forEmployee': 'employeeId', 'rh.loginLinks': 'employeeId',
+  // Dias livres habituais da própria ficha (8 out 2026) — só a leitura; gravar a sua é pelo setMyPattern.
+  'extrasAvailability.patternFor': 'employeeId',
 };
 
 /**

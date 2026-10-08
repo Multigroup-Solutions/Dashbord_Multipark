@@ -168,6 +168,7 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0565", () => import("./migration_0565").then((m) => step(m.MIGRATION_0565_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0565))],
   ["0570", () => import("./migration_0570").then((m) => step(m.MIGRATION_0570_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0570))],
   ["0575", () => import("./migration_0575").then((m) => step(m.MIGRATION_0575_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0575))],
+  ["0580", () => import("./migration_0580").then((m) => step(m.MIGRATION_0580_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0580))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
