@@ -14,7 +14,7 @@ custos, interruptores) está em [`docs/ia.md`](ia.md).
 - Os números vêm sempre do SQL/código; a IA só escreve o texto (briefing,
   relatórios, anomalias, avaliação, leads).
 - Começam **desligados**: `AI_HR_AUTOFILL`, `AI_HR_EMAIL_ATTACHMENTS`,
-  `AI_CRM_IDENTITY`, `AI_MAIL_ROUTING`. Todos os outros começam ligados.
+  `AI_CRM_IDENTITY`. Todos os outros começam ligados (o `AI_MAIL_ROUTING` passou a ligado a 8 out 2026).
 - Agendamentos (agendador `/api/cron/tick`, de 5 em 5 min):
   - `ai-comms` de 15 em 15 min;
   - `ops-briefing` uma vez por dia a partir das 07:30;
@@ -67,13 +67,13 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
 | Resumo e sugestão de resposta — `AI_WHATSAPP_ASSIST` | Pedido: menu ⋮ **"Resumo da conversa (IA)"** e ✨ **"Sugerir resposta"** | Quem edita no WhatsApp e vê a conversa | Últimas 40 mensagens (até 8000 car.) com `redactPii` | Não. A sugestão vai para a caixa de texto; nunca é enviada sozinha |
-| Intenção e urgência — `AI_WHATSAPP_TRIAGE` | Auto a cada mensagem recebida (no máximo 1 vez/5 min por conversa) + `ai-comms` | WhatsApp | Últimas 8 mensagens (até 1500 car.) com `redactPii` | Etiquetas e urgência. **Também muda a conversa de caixa** (origem "ai"), o que muda quem a vê |
+| Intenção e urgência — `AI_WHATSAPP_TRIAGE` | Auto a cada mensagem recebida (no máximo 1 vez/5 min por conversa) + `ai-comms` | WhatsApp | Últimas 8 mensagens (até 1500 car.) com `redactPii` | Etiquetas e urgência. A intenção serve para pôr na caixa do tema as conversas **novas** (com `AI_MAIL_ROUTING`); a que já tem caixa fica |
 
 ### Comunicação (email)
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
 | Rascunho de resposta — `AI_MAIL_DRAFT` | Pedido: **"Rascunho IA"** | Quem pode responder na caixa (no "O meu email", o dono) | Últimas 8 mensagens (até 9000 car.) com `redactPii` | Não (fica no editor) |
-| Separar pelas caixas — `AI_MAIL_ROUTING` (**desligado**) | Auto em cada conversa nova numa caixa geral marcada para isso | Quem vê a caixa de destino | Assunto e texto (até 3000 car.) com `redactPii` | Muda a caixa (origem "ai"); nunca responde |
+| Separar pelas caixas — `AI_MAIL_ROUTING` (ligado) | Auto: cada email que abre conversa numa caixa partilhada (na sincronização, até 10 por vez; o resto no `ai-comms`) e cada conversa NOVA do WhatsApp (a seguir à triagem, sem 2.ª chamada) | Quem vê a caixa de destino; "Movido pela IA → caixa (motivo)" na conversa; "Entraram pela IA" nos Leads | Assunto e texto (até 2500 car., sem o histórico citado) com `redactPii`, 1.º nome, nomes dos anexos | Muda a caixa (por ler); não percebeu → info. Recrutamento em 1.º contacto: cria lead + candidatura. Registo em `comms_ai_routing`; nunca responde |
 
 ### Reclamações
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
@@ -144,7 +144,7 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 ## O que a IA faz sozinha (sem uma pessoa a carregar)
 
 1. **Disponibilidade dos extras:** com ≥ 85 % marca, responde por WhatsApp e confirma ou recusa o turno.
-2. **Triagem do WhatsApp:** muda a conversa de caixa, e com isso quem a vê.
+2. **Separar pelas caixas (email e WhatsApp):** põe as conversas novas na caixa do tema (e com isso muda quem as vê); o que não percebe vai para o info. Recrutamento em 1.º contacto: cria a lead e a candidatura (nunca escreve ao candidato).
 3. **Reclamações:** com ≥ 0,85 preenche o tipo, a prioridade, o SLA e a reserva quando estão vazios (com "Desfazer").
 4. **Clientes:** junta fichas com ≥ 85 % (desligado).
 5. **Ficha do RH:** preenche campos vazios a partir de documentos (desligado; o IBAN fica pedido ao RH).

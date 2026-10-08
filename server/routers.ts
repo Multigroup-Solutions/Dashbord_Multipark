@@ -14,6 +14,7 @@ import { apiKeysRouter } from './apiKeysRouter';
 import { evaluationRouter } from './evaluationRouter';
 import { assistantRouter } from './assistant/router';
 import { aiOpsRouter } from './aiOps/router';
+import { commsRoutingRouter } from './commsRoutingRouter';
 import { z } from "zod";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -1161,6 +1162,8 @@ export const appRouter = router({
   // ── AVALIAÇÃO (motor único: individual + "A minha avaliação") ────────────────
   evaluation: evaluationRouter,
   aiOps: aiOpsRouter,
+  // IA: separar emails e WhatsApp pelas caixas (o que decidiu e o que entrou no recrutamento).
+  commsRouting: commsRoutingRouter,
 
   // ── CATEGORIES ──────────────────────────────────────────────────────────────
   categories: router({
@@ -6026,6 +6029,7 @@ export const appRouter = router({
         const { setConversationBox } = await import("./whatsappInboxOps");
         const { GENERAL_BOX_KEY } = await import("../shared/commsBoxes");
         await setConversationBox(input.conversationId, input.boxKey === GENERAL_BOX_KEY ? null : input.boxKey, "manual");
+        await (await import("./commsRouting")).noteManualBoxChange("whatsapp", input.conversationId, input.boxKey === GENERAL_BOX_KEY ? null : input.boxKey, ctx.user.id);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "whatsapp_conversation", entityId: input.conversationId, details: `Caixa → ${input.boxKey ?? "Geral"}` } as any).catch(() => {});
         return { ok: true };
       }),

@@ -18,6 +18,7 @@ Separadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador ce
   - **Saltado** (Agendador) = correu mas não fez o trabalho (ex.: interruptor desligado, sem configuração). Não conta como **Último OK**.
   - Os erros mostrados nunca levam segredos (tokens, passwords em endereços).
 - **Automações**: interruptores de cada automação, incluindo a **Inteligência artificial**. Cada um diz o estado **agora** e de onde vem: *definido aqui*, *pela variável do servidor* ou *por omissão*. "Seguir o servidor" tira o que foi definido aqui.
+  - **"IA: separar emails e WhatsApp pelas caixas"** vem **ligado**: os emails novos das caixas partilhadas e as conversas novas do WhatsApp vão sozinhos para a caixa do tema (o que a IA não percebe vai para o info); recrutamento em 1.º contacto cria a lead e a candidatura. Nunca responde a ninguém. O limiar de certeza e o máximo por vez estão em Parâmetros → IA → **"IA a separar emails e WhatsApp: limiar e teto"**.
 - **Integrações**: resumo; o estado, os testes e a gestão de cada ligação vivem na página **Integrações**.
 - **Comunicação**: caixas de email, **Envio de email (Gmail)** — o remetente só o super admin muda (os admins podem testá-lo) —, calendários partilhados da escala, Google em tempo real, Contactos Google e Google Drive. Um cartão que não consegue ler mostra o erro e "Tentar de novo" (antes desaparecia).
 - **Parâmetros**:
