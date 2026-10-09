@@ -9,6 +9,9 @@ primeiro consumidor: o filtro de cidade na tabela "Disponibilidade dos extras"
 por Faro / Porto / Lisboa").
 
 ## Related
+- `whatsapp-integration.md` — **2026-10-09**: 2.º consumidor de filtro — inbox WhatsApp filtra por cidade da pessoa
+  (`conversationCityKey`: ficha por esta derivação → lead → reserva). `resolveEmployeeCities` aceita `preloadedIndex`
+  e `loadProjectIndex` passou a exportada. Debt: aqui ainda se usa `matchCityKey` em vez de `cityKeyFromText`/`cityKeyFromAddress`.
 - `whatsapp-integration.md` — **2026-10-07**: `city` derivada → template WhatsApp da cidade (`driverCityFrom` + `hasDriverTemplate`); sem cidade = escolher no diálogo / fica de fora nos jobs. `resolveCitiesForProjectIds` (leads).
 - `whatsapp-integration.md` — a tabela filtrada é o alvo do broadcast WhatsApp; o
   filtro tinha de compor-se com a Decisão 1 ("a todos" = conjunto visível).

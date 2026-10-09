@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveWindowState, sortConversations } from "./whatsappInbox";
+import { deriveWindowState, pickCityConversationIds, sortConversations } from "./whatsappInbox";
 
 const NOW = new Date("2026-07-09T12:00:00Z");
 
@@ -131,5 +131,24 @@ describe("sortConversations (ordem da lista do inbox)", () => {
     const copy = [...rows];
     sortConversations(rows);
     expect(rows).toEqual(copy);
+  });
+});
+
+describe("pickCityConversationIds (filtro de cidade antes do LIMIT)", () => {
+  const cities = new Map<number, "lisboa" | "porto" | "faro" | null>([
+    [1, "lisboa"], [2, "porto"], [3, null], [4, "porto"], [5, "faro"], [6, "porto"],
+  ]);
+  const ordered = [1, 2, 3, 4, 5, 6];
+  it("só a cidade pedida, pela ordem recebida (mais recentes primeiro)", () => {
+    expect(pickCityConversationIds(ordered, cities, "porto", 300)).toEqual([2, 4, 6]);
+  });
+  it("respeita o limite (as mais recentes da cidade)", () => {
+    expect(pickCityConversationIds(ordered, cities, "porto", 2)).toEqual([2, 4]);
+  });
+  it("none = sem cidade; id sem classificação conta como sem cidade", () => {
+    expect(pickCityConversationIds([...ordered, 7], cities, "none", 300)).toEqual([3, 7]);
+  });
+  it("all devolve tudo até ao limite", () => {
+    expect(pickCityConversationIds(ordered, cities, "all", 4)).toEqual([1, 2, 3, 4]);
   });
 });

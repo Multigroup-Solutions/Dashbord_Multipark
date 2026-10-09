@@ -7,14 +7,15 @@
  * do `reply`.
  */
 import { projectVisible, scopedProjectIds } from "./extrasCityFilter";
-import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
 import { employees, extraLeads, users, whatsappConversations, whatsappMessages } from "../drizzle/schema";
 import { sendTextMessage } from "./whatsapp";
 import { firstNameOf } from "../shared/whatsappTemplate";
 import { OPTED_OUT_ERROR, duplicateRequestOutcome, finishOutboundMessage, previewFields, reserveOutboundMessage } from "./whatsappStore";
 import { caseProposalKind, type CaseProposalKind, type ConversationStatus } from "../shared/whatsappConversation";
-import { INBOX_LIST_LIMIT } from "../shared/whatsappInboxView";
+import { INBOX_CITY_SCAN_LIMIT, INBOX_LIST_LIMIT, conversationCityKey, matchesCityFilter, type InboxCityFilter } from "../shared/whatsappInboxView";
+import type { CityKey } from "../shared/city";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -91,6 +92,8 @@ export interface ConversationRow {
   aiUrgency: string | null;
   /** Caixa por tema (17f): mailboxKey da caixa; null = Geral. */
   boxKey: string | null;
+  /** Cidade da pessoa (`conversationCityKey`); null = sem cidade conhecida. */
+  cityKey: CityKey | null;
   /**
    * A leitura completa falhou e veio a de recurso: estado, responsável e
    * ligações NÃO são reais (17a) — o ecrã avisa.
@@ -334,6 +337,62 @@ export async function crmNamesByPhone(db: any, phones: ReadonlyArray<string>): P
 /** Nome do lead mais recente com o número da conversa (subquery escalar). */
 export const leadNameSql = sql<string | null>`(SELECT ln.fullName FROM extra_leads ln WHERE ln.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci ORDER BY ln.id DESC LIMIT 1)`;
 
+/** Centro de custos do lead mais recente com o número (o mesmo lead de `conversationDriverCity`). */
+const leadProjectIdSql = sql<number | null>`(SELECT lp.projectId FROM extra_leads lp WHERE lp.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci ORDER BY lp.id DESC LIMIT 1)`;
+
+/** O que a classificação por cidade precisa de cada conversa (vem nas queries da lista). */
+interface ConversationCityInput {
+  id: number;
+  employeeId: number | null;
+  employeeProjectId: number | null;
+  employeeAddress: string | null;
+  leadProjectId: number | null;
+  bookingProjectId: number | null;
+}
+
+/**
+ * Cidade de cada conversa pela regra única `conversationCityKey`. Lê a árvore de
+ * `projects` UMA vez e, só para fichas sem cidade pelo projeto, as candidaturas
+ * (via `resolveEmployeeCities`) — no máximo 2 queries, nunca por linha.
+ */
+async function classifyConversationCities(rows: ConversationCityInput[]): Promise<Map<number, CityKey | null>> {
+  const out = new Map<number, CityKey | null>();
+  if (!rows.length) return out;
+  const { loadProjectIndex, resolveCityFromProjects, resolveEmployeeCities } = await import("./employeeCity");
+  const index = await loadProjectIndex();
+  const people = new Map<number, { id: number; projectId: number | null; address: string | null }>();
+  for (const r of rows) {
+    if (r.employeeId != null) people.set(r.employeeId, { id: r.employeeId, projectId: r.employeeProjectId, address: r.employeeAddress });
+  }
+  const employeeCities = await resolveEmployeeCities(Array.from(people.values()), index);
+  for (const r of rows) {
+    out.set(r.id, conversationCityKey({
+      employeeCity: r.employeeId != null ? employeeCities.get(r.employeeId)?.city ?? null : null,
+      leadCity: resolveCityFromProjects(index, r.leadProjectId),
+      bookingCity: resolveCityFromProjects(index, r.bookingProjectId),
+    }));
+  }
+  return out;
+}
+
+/**
+ * Ids das conversas da cidade pedida, pela ordem recebida (mais recentes
+ * primeiro), no máximo `limit`. PURA.
+ */
+export function pickCityConversationIds(
+  orderedIds: readonly number[],
+  cities: ReadonlyMap<number, CityKey | null>,
+  filter: InboxCityFilter,
+  limit: number,
+): number[] {
+  const out: number[] = [];
+  for (const id of orderedIds) {
+    if (out.length >= limit) break;
+    if (matchesCityFilter(cities.get(id) ?? null, filter)) out.push(id);
+  }
+  return out;
+}
+
 /**
  * Conversas antigas sem resumo (escritas antes da 0094 e não apanhadas pelo
  * backfill): calcula-o a partir da última mensagem e grava-o, 1× por conversa.
@@ -355,7 +414,13 @@ async function fillMissingPreviews(db: NonNullable<Awaited<ReturnType<typeof get
   return out;
 }
 
-export async function listConversations(opts: { search?: string | null; boxKey?: string | null; hiddenBoxes?: readonly string[] } = {}): Promise<ConversationRow[]> {
+export async function listConversations(opts: {
+  search?: string | null;
+  boxKey?: string | null;
+  hiddenBoxes?: readonly string[];
+  /** Cidade da pessoa (2026-10-09); omissão/"all" = todas. */
+  city?: InboxCityFilter | null;
+} = {}): Promise<ConversationRow[]> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
   const searchCond = conversationSearchSql(opts.search);
@@ -366,6 +431,35 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
   if (boxCond) conds.push(boxCond);
   if (opts.boxKey === "geral") conds.push(sql`${whatsappConversations.boxKey} IS NULL`);
   else if (opts.boxKey) conds.push(sql`${whatsappConversations.boxKey} = ${opts.boxKey}`);
+
+  // Filtro de cidade (2026-10-09), ANTES do LIMIT como a pesquisa: a cidade da
+  // ficha vem também da candidatura e da morada (texto), por isso não cabe em
+  // SQL — classificam-se as INBOX_CITY_SCAN_LIMIT conversas mais recentes (só
+  // colunas leves) e a lista passa a ser as INBOX_LIST_LIMIT mais recentes da
+  // cidade. Isto NÃO é permissão: a visibilidade por cidade (acima) aplica-se
+  // sempre; aqui só se escolhe, dentro do que a pessoa já vê.
+  let scannedCities: Map<number, CityKey | null> | null = null;
+  const cityFilter = opts.city && opts.city !== "all" ? opts.city : null;
+  if (cityFilter) {
+    const scan = await db
+      .select({
+        id: whatsappConversations.id,
+        employeeId: whatsappConversations.employeeId,
+        employeeProjectId: employees.projectId,
+        employeeAddress: employees.address,
+        leadProjectId: leadProjectIdSql,
+        bookingProjectId: whatsappConversations.bookingProjectId,
+      })
+      .from(whatsappConversations)
+      .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
+      .where(and(...conds))
+      .orderBy(desc(whatsappConversations.lastMessageAt))
+      .limit(INBOX_CITY_SCAN_LIMIT);
+    scannedCities = await classifyConversationCities(scan);
+    const ids = pickCityConversationIds(scan.map((r) => r.id), scannedCities, cityFilter, INBOX_LIST_LIMIT);
+    if (!ids.length) return [];
+    conds.push(inArray(whatsappConversations.id, ids));
+  }
   const whereList = and(...conds);
 
   // O filtro de cidade vai no WHERE, ANTES do LIMIT — senão quem só vê uma
@@ -397,6 +491,10 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
       aiIntent: whatsappConversations.aiIntent,
       aiUrgency: whatsappConversations.aiUrgency,
       boxKey: whatsappConversations.boxKey,
+      employeeProjectId: employees.projectId,
+      employeeAddress: employees.address,
+      leadProjectId: leadProjectIdSql,
+      bookingProjectId: whatsappConversations.bookingProjectId,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -434,6 +532,11 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
       aiIntent: sql<string | null>`NULL`,
       aiUrgency: sql<string | null>`NULL`,
       boxKey: sql<string | null>`NULL`,
+      // A cidade da ficha continua (mesmo JOIN); lead e reserva ficam de fora no recurso.
+      employeeProjectId: employees.projectId,
+      employeeAddress: employees.address,
+      leadProjectId: sql<number | null>`NULL`,
+      bookingProjectId: sql<number | null>`NULL`,
     })
     .from(whatsappConversations)
     .leftJoin(employees, eq(whatsappConversations.employeeId, employees.id))
@@ -455,6 +558,8 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
   const filled = await fillMissingPreviews(db, missing);
   // Sem ficha nem lead: o nome do cliente do CRM (17f).
   const crmNames = await crmNamesByPhone(db, convs.filter((c) => !c.employeeName?.trim() && !c.leadName?.trim()).map((c) => c.phoneE164));
+  // Com filtro, a cidade já foi calculada na varredura (mesmas linhas); sem filtro, calcula-se para as da lista.
+  const cities = scannedCities ?? (await classifyConversationCities(convs));
 
   // A query vem por `lastMessageAt` desc só para o cap de 300 apanhar as
   // conversas ativas; a ordem que a UI mostra é a de `sortConversations`.
@@ -486,6 +591,7 @@ export async function listConversations(opts: { search?: string | null; boxKey?:
       aiIntent: c.aiIntent ?? null,
       aiUrgency: c.aiUrgency ?? null,
       boxKey: c.boxKey ?? null,
+      cityKey: cities.get(c.id) ?? null,
       ...(partial ? { partial: true as const } : {}),
     };
   });
