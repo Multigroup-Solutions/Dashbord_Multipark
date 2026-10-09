@@ -62,9 +62,10 @@ import {
   encodeAssignee,
   type ConversationStatus,
 } from "@shared/whatsappConversation";
-import { CITY_KEYS } from "@shared/city";
+import { CITY_KEYS, CITY_LABELS, matchCityKey, type CityKey } from "@shared/city";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { withDraft, type WhatsAppDrafts } from "@shared/whatsappDrafts";
-import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, matchesBoxFilter, type InboxListFilters } from "@shared/whatsappInboxView";
+import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, matchesBoxFilter, matchesCityFilter, type InboxListFilters } from "@shared/whatsappInboxView";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
@@ -214,8 +215,20 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
     return () => clearInterval(t);
   }, []);
 
+  // Filtro de cidade (2026-10-09): só as cidades que a pessoa vê (as do seletor
+  // global). NÃO segue a cidade escolhida em cima — para quem só tem uma cidade
+  // ela vem sempre preenchida e esconderia as conversas sem cidade conhecida.
+  const globalFilters = useGlobalFilters();
+  const cityOptions = useMemo<CityKey[]>(() => {
+    const keys = new Set(globalFilters.cities.map((c) => matchCityKey(c.name)).filter((k): k is CityKey => k != null));
+    return CITY_KEYS.filter((k) => keys.has(k));
+  }, [globalFilters.cities]);
+  // A cidade vai ao servidor (aplicada antes do LIMIT, como a pesquisa).
+  const listInput = serverSearch || filters.city !== "all"
+    ? { ...(serverSearch ? { search: serverSearch } : {}), ...(filters.city !== "all" ? { cityKey: filters.city } : {}) }
+    : undefined;
   // Dentro da Comunicação (embedded) a lista é a da Comunicação — aqui não se pede.
-  const conversations = trpc.whatsapp.conversations.list.useQuery(serverSearch ? { search: serverSearch } : undefined, {
+  const conversations = trpc.whatsapp.conversations.list.useQuery(listInput, {
     enabled: !embedded,
     refetchInterval: pageVisible ? POLL_MS : false,
     placeholderData: (prev) => prev,
@@ -382,6 +395,8 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
       (!filters.onlyAlerts || a?.overdue || a?.windowClosing || c.id === selectedId) &&
       (filters.intent === "all" || c.aiIntent === filters.intent || c.id === selectedId) &&
       (matchesBoxFilter(c.boxKey, filters.box) || c.id === selectedId) &&
+      // O servidor já filtrou; isto cobre a lista anterior mostrada enquanto a nova carrega.
+      (matchesCityFilter(c.cityKey, filters.city) || c.id === selectedId) &&
       (!filters.onlyUrgent || c.aiUrgency === "urgente" || c.id === selectedId)
     );
   });
@@ -551,6 +566,7 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
         pendingCallbacksError={callsOn && !!pendingCallbacks.error}
         onOpenCallbacks={() => setCallbacksOpen(true)}
         boxes={boxes.data ?? []}
+        cities={cityOptions}
       />
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {conversations.error && (
@@ -570,17 +586,22 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
         )}
         {convList.length === 0 && !conversations.error && (
           <div className="p-4 text-sm text-muted-foreground text-center">
-            {conversations.isLoading
+            {/* placeholder = a lista anterior enquanto a nova carrega (ex.: mudou a cidade) */}
+            {conversations.isLoading || conversations.isPlaceholderData
               ? "A carregar…"
               : hasSearch
                 ? `Sem resultados para “${search.trim()}”${filters.onlyUnread ? " entre as não lidas" : ""}.`
-                : filters.onlyUnread
-                  ? "Sem mensagens por ler."
-                  : filters.onlyAlerts
-                    ? "Sem conversas com alerta."
-                    : allConversations.length
-                      ? "Nenhuma conversa com estes filtros."
-                      : "Ainda sem conversas."}
+                : filters.city !== "all" && !allConversations.length
+                  ? filters.city === "none"
+                    ? "Sem conversas sem cidade conhecida."
+                    : `Sem conversas de ${CITY_LABELS[filters.city]}.`
+                  : filters.onlyUnread
+                    ? "Sem mensagens por ler."
+                    : filters.onlyAlerts
+                      ? "Sem conversas com alerta."
+                      : allConversations.length
+                        ? "Nenhuma conversa com estes filtros."
+                        : "Ainda sem conversas."}
           </div>
         )}
         {openList.length > 0 && groupHeader("Janela aberta — a fechar primeiro", openList.length, "open")}

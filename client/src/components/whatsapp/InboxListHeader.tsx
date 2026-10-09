@@ -13,6 +13,7 @@ import {
   Clock,
   Inbox,
   Keyboard,
+  MapPin,
   MessageCircle,
   PhoneMissed,
   Search,
@@ -23,7 +24,8 @@ import {
 } from "lucide-react";
 import { formatWaiting, type AssigneeFilter, type StatusFilter } from "@shared/whatsappConversation";
 import { WHATSAPP_INTENTS, WHATSAPP_INTENT_LABELS } from "@shared/commsAi";
-import { activeInboxFilterCount, type InboxListFilters } from "@shared/whatsappInboxView";
+import { activeInboxFilterCount, type InboxCityFilter, type InboxListFilters } from "@shared/whatsappInboxView";
+import { CITY_LABELS, type CityKey } from "@shared/city";
 
 export interface InboxCounts {
   /** Conversas (no âmbito responsável+estado) com mensagens por ler. */
@@ -92,6 +94,7 @@ export function InboxListHeader({
   pendingCallbacksError = false,
   onOpenCallbacks,
   boxes = [],
+  cities = [],
 }: {
   search: string;
   onSearchChange: (v: string) => void;
@@ -110,6 +113,8 @@ export function InboxListHeader({
   onOpenCallbacks: () => void;
   /** Caixas por tema que a pessoa vê (17f). */
   boxes?: Array<{ key: string; label: string }>;
+  /** Cidades que a pessoa vê (filtro de cidade, 2026-10-09). Vazio = sem filtro. */
+  cities?: CityKey[];
 }) {
   const active = activeInboxFilterCount(filters);
   const hasSearch = search.trim().length > 0;
@@ -172,20 +177,40 @@ export function InboxListHeader({
         </div>
       </div>
 
-      {/* Caixa por tema (17f): Geral = ainda por separar. */}
-      {boxes.length > 0 && (
-        <div className="px-2 pb-1.5">
-          <Select value={filters.box} onValueChange={(v) => onFiltersChange({ box: v })}>
-            <SelectTrigger size="sm" className="h-8 w-full text-xs" aria-label="Caixa">
-              <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas as caixas</SelectItem>
-              <SelectItem value="geral">Geral (por separar)</SelectItem>
-              {boxes.map((b) => <SelectItem key={b.key} value={b.key}>{b.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
+      {/* Caixa por tema (17f): Geral = ainda por separar. Cidade da pessoa (2026-10-09) ao lado. */}
+      {(boxes.length > 0 || cities.length > 0) && (
+        <div className="flex items-center gap-1.5 px-2 pb-1.5">
+          {boxes.length > 0 && (
+            <Select value={filters.box} onValueChange={(v) => onFiltersChange({ box: v })}>
+              <SelectTrigger size="sm" className="h-8 flex-1 min-w-0 text-xs" aria-label="Caixa">
+                <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas as caixas</SelectItem>
+                <SelectItem value="geral">Geral (por separar)</SelectItem>
+                {boxes.map((b) => <SelectItem key={b.key} value={b.key}>{b.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {cities.length > 0 && (
+            <Select value={filters.city} onValueChange={(v) => onFiltersChange({ city: v as InboxCityFilter })}>
+              <SelectTrigger
+                size="sm"
+                className={cn("h-8 flex-1 min-w-0 text-xs", filters.city !== "all" && "border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-950/40")}
+                aria-label="Filtrar por cidade"
+                title="Cidade da pessoa: ficha (projeto, candidatura ou morada), senão lead, senão reserva"
+              >
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas as cidades</SelectItem>
+                {cities.map((k) => <SelectItem key={k} value={k}>{CITY_LABELS[k]}</SelectItem>)}
+                <SelectItem value="none">Sem cidade</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
         </div>
       )}
 

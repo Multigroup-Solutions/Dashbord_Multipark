@@ -5,10 +5,47 @@
  * `server/whatsappInboxView.test.ts` sem DOM.
  */
 import type { AssigneeFilter, StatusFilter } from "./whatsappConversation";
+import type { CityKey } from "./city";
 import { lisbonDayOf } from "./lisbonDay";
 
 /** Máximo de conversas que a lista traz (as mais recentes); a pesquisa vai ao servidor. */
 export const INBOX_LIST_LIMIT = 300;
+
+/**
+ * Filtro de cidade do inbox (2026-10-09): "all" = sem filtro; "none" = conversas
+ * sem cidade conhecida (estado real, como na tabela de extras — nunca se adivinha).
+ */
+export const INBOX_CITY_FILTERS = ["all", "lisboa", "porto", "faro", "none"] as const;
+export type InboxCityFilter = (typeof INBOX_CITY_FILTERS)[number];
+
+/**
+ * Quantas conversas (as mais recentes) o servidor classifica por cidade quando
+ * há filtro. A cidade da ficha usa a morada (texto), por isso não se resolve em
+ * SQL: classificam-se estas e devolvem-se as INBOX_LIST_LIMIT mais recentes da
+ * cidade pedida.
+ */
+export const INBOX_CITY_SCAN_LIMIT = 5000;
+
+/**
+ * Cidade da PESSOA de uma conversa — regra ÚNICA do filtro. PURA.
+ * Ordem: ficha do colaborador (projeto → candidatura → morada, ver
+ * server/employeeCity.ts) → lead mais recente com o número (centro de custos)
+ * → reserva com o mesmo telefone (só números soltos). Nada → null ("Sem cidade").
+ */
+export function conversationCityKey(f: {
+  employeeCity: CityKey | null;
+  leadCity: CityKey | null;
+  bookingCity: CityKey | null;
+}): CityKey | null {
+  return f.employeeCity ?? f.leadCity ?? f.bookingCity ?? null;
+}
+
+/** A conversa passa no filtro de cidade? PURA. */
+export function matchesCityFilter(cityKey: CityKey | null | undefined, filter: InboxCityFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "none") return cityKey == null;
+  return cityKey === filter;
+}
 
 /** Iniciais para o avatar: 1.ª letra do primeiro e do último nome; número → últimos 2 dígitos. */
 export function contactInitials(name: string | null | undefined): string {
@@ -73,6 +110,8 @@ export interface InboxListFilters {
   intent: string;
   /** Caixa por tema (17f): "all", "geral" (sem caixa) ou a chave da caixa. */
   box: string;
+  /** Cidade da pessoa (`conversationCityKey`); aplicada no servidor, antes do LIMIT. */
+  city: InboxCityFilter;
   onlyUnread: boolean;
   onlyUrgent: boolean;
   onlyAlerts: boolean;
@@ -84,6 +123,7 @@ export const DEFAULT_INBOX_FILTERS: InboxListFilters = {
   status: "all",
   intent: "all",
   box: "all",
+  city: "all",
   onlyUnread: false,
   onlyUrgent: false,
   onlyAlerts: false,
@@ -103,6 +143,7 @@ export function activeInboxFilterCount(f: InboxListFilters): number {
     (f.status !== DEFAULT_INBOX_FILTERS.status ? 1 : 0) +
     (f.intent !== DEFAULT_INBOX_FILTERS.intent ? 1 : 0) +
     (f.box !== DEFAULT_INBOX_FILTERS.box ? 1 : 0) +
+    (f.city !== DEFAULT_INBOX_FILTERS.city ? 1 : 0) +
     (f.onlyUnread ? 1 : 0) +
     (f.onlyUrgent ? 1 : 0) +
     (f.onlyAlerts ? 1 : 0)

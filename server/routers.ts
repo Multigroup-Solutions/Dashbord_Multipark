@@ -102,6 +102,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
+import { INBOX_CITY_FILTERS } from "../shared/whatsappInboxView";
 import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import { crmQuerySchema } from "../shared/crmFilters";
@@ -5961,11 +5962,19 @@ export const appRouter = router({
     // ── INBOX ──────────────────────────────────────────────────────────────
     conversations: router({
       // `search` vai ao servidor (17a): procura também fora das 300 mais recentes.
-      list: protectedProcedure.input(z.object({ search: z.string().max(120).optional(), boxKey: z.string().max(40).nullish() }).optional()).query(async ({ ctx, input }) => {
+      // `cityKey` (2026-10-09) também, pela mesma razão. Não se chama `city` de
+      // propósito: esse nome faz o middleware estreitar o âmbito de cidades
+      // (`selectedCityAccess`), que deixa à vista as conversas SEM cidade e
+      // não sabe o que é "none". A visibilidade por cidade aplica-se na mesma.
+      list: protectedProcedure.input(z.object({
+        search: z.string().max(120).optional(),
+        boxKey: z.string().max(40).nullish(),
+        cityKey: z.enum(INBOX_CITY_FILTERS).optional(),
+      }).optional()).query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
         // 17f: as caixas que a pessoa não vê ficam de fora; `boxKey` filtra uma ("geral" = sem caixa).
         const { hiddenBoxKeys } = await import("./whatsappInbox");
-        return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user) });
+        return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user), city: input?.cityKey ?? null });
       }),
       /** Quem é o contacto (17f): ficha do RH, candidato ou cliente do CRM, com o resumo do histórico. */
       identity: protectedProcedure.input(z.object({ conversationId: z.number().int().positive() })).query(async ({ ctx, input }) => {

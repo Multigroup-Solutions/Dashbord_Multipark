@@ -4,6 +4,8 @@ import {
   activeInboxFilterCount,
   avatarToneIndex,
   contactInitials,
+  conversationCityKey,
+  matchesCityFilter,
   daySeparatorLabel,
   localDayKey,
 } from "../shared/whatsappInboxView";
@@ -87,10 +89,43 @@ describe("activeInboxFilterCount", () => {
         status: "pendente",
         intent: "reclamacao",
         box: "rh", // 17f: caixa por tema
+        city: "porto",
         onlyUnread: true,
         onlyUrgent: true,
         onlyAlerts: true,
       }),
-    ).toBe(7);
+    ).toBe(8);
+  });
+});
+
+describe("conversationCityKey (cidade da pessoa da conversa)", () => {
+  it("a ficha manda sobre o lead e a reserva", () => {
+    expect(conversationCityKey({ employeeCity: "porto", leadCity: "lisboa", bookingCity: "faro" })).toBe("porto");
+  });
+  it("ficha sem cidade → lead → reserva", () => {
+    expect(conversationCityKey({ employeeCity: null, leadCity: "faro", bookingCity: "lisboa" })).toBe("faro");
+    expect(conversationCityKey({ employeeCity: null, leadCity: null, bookingCity: "lisboa" })).toBe("lisboa");
+  });
+  it("nada conhecido → null (nunca se adivinha)", () => {
+    expect(conversationCityKey({ employeeCity: null, leadCity: null, bookingCity: null })).toBeNull();
+  });
+});
+
+describe("matchesCityFilter", () => {
+  it("all deixa passar tudo, incluindo sem cidade", () => {
+    expect(matchesCityFilter("porto", "all")).toBe(true);
+    expect(matchesCityFilter(null, "all")).toBe(true);
+  });
+  it("Porto mostra SÓ Porto — nem Lisboa, nem Faro, nem sem cidade", () => {
+    expect(matchesCityFilter("porto", "porto")).toBe(true);
+    expect(matchesCityFilter("lisboa", "porto")).toBe(false);
+    expect(matchesCityFilter("faro", "porto")).toBe(false);
+    expect(matchesCityFilter(null, "porto")).toBe(false);
+    expect(matchesCityFilter(undefined, "porto")).toBe(false);
+  });
+  it("none = só as sem cidade conhecida", () => {
+    expect(matchesCityFilter(null, "none")).toBe(true);
+    expect(matchesCityFilter(undefined, "none")).toBe(true);
+    expect(matchesCityFilter("lisboa", "none")).toBe(false);
   });
 });
