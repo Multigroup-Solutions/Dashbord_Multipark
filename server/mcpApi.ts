@@ -21,6 +21,7 @@ import {
 import { API_KEY_CAPABILITIES } from "../shared/apiKeyCapabilities";
 import { registerMcpReportRoutes } from "./mcpReportsApi";
 import { registerMcpMarketingRoutes } from "./mcpMarketingApi";
+import { registerMcpProcedureRoutes } from "./mcpProceduresApi";
 import {
   getMultiparkBookingStats,
   getComplaints,
@@ -112,6 +113,7 @@ export function createMcpApiRouter(): Router {
         "complaints:write": [
           "POST /complaints", "PATCH /complaints/:id", "POST /complaints/:id/messages", "POST /reviews",
         ],
+        "owner:read": ["GET /procedures?search=&withInput=1", "POST /procedures/call {path, input}"],
         admin: [
           "DELETE /complaints/:id (arquiva)", "POST /projects", "POST /admin/migrate-0048", "POST /admin/backfill-projects",
           "POST /admin/merge-duplicate-extras",
@@ -528,6 +530,7 @@ export function createMcpApiRouter(): Router {
   // ── RELATÓRIOS (só leitura): caixa, condutores, parceiros, passagens de turno ──
   registerMcpReportRoutes(r, h);
   registerMcpMarketingRoutes(r, h);
+  registerMcpProcedureRoutes(r, h);
 
   return r;
 }

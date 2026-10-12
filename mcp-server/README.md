@@ -22,6 +22,8 @@ A autenticação é por **API key** (header `X-API-Key`). Cada chave tem
 | Reclamações e críticas — escrever (`complaints:write`) | Criar/atualizar reclamações, mensagens e críticas |
 | Formulários do site (`site:intake`) | Candidaturas e disponibilidades que chegam do site |
 | Administração (`admin`) | Tudo, mais arquivar reclamações, criar projetos e `/admin/*` — **não uses num MCP** |
+| MCP pessoal — ler (`owner:read`) | Qualquer **leitura** dos ecrãs (RH, CRM, despesas, WhatsApp, formação, reservas…), **como quem criou a chave** — vê o mesmo que essa pessoa vê na app. Não vem com `admin`: marca-se à parte |
+| MCP pessoal — alterar (`owner:write`) | As alterações da lista fechada (faltas, avaliação, juntar/separar, tarefas, críticas, reclamações, perdidos, ocorrências), como quem criou a chave. Não vem com `admin` |
 
 Chaves antigas (`read` / `write` / `admin`) continuam a fazer o que faziam; no
 ecrã podes reduzi-las ao que precisam.
@@ -60,7 +62,7 @@ claude mcp add multipark-dashboard \
   -- node /caminho/absoluto/para/mcp-server/index.mjs
 ```
 
-Confirma com `claude mcp list` e abre uma sessão — as 20 tools aparecem.
+Confirma com `claude mcp list` e abre uma sessão — as 36 tools aparecem.
 
 ### Claude Desktop — `claude_desktop_config.json`
 
@@ -109,6 +111,39 @@ Reinicia o Claude Desktop e as tools aparecem (ícone de ferramentas no chat).
 | `create_review` | complaints:write | Registar avaliação |
 | `list_vehicles` | reports:ops | Viaturas |
 | `list_employees` | pii | Colaboradores |
+| `list_campaigns` | reports:marketing | Campanhas (internas, ad antigas e Google Ads/Meta) |
+| `get_campaign_daily` | reports:marketing | Histórico diário de uma campanha Google Ads/Meta |
+
+## MCP pessoal — o que os ecrãs leem e fazem
+
+Com as capacidades **MCP pessoal**, quatro tools usam os próprios
+procedimentos do Dashboard (tRPC), sem uma rota por cada dado. O que entrar de
+novo no Dashboard aparece sozinho, sem mexer na API nem no MCP.
+
+| Tool | Capacidade | Rota | O que faz |
+|---|---|---|---|
+| `dashboard_procedures` | owner:read | `GET /procedures?search=&withInput=1` | Lista as leituras (~450; ex.: `search=rh`), com o input de cada uma em JSON Schema |
+| `dashboard_query` | owner:read | `POST /procedures/call {path, input}` | Corre a leitura |
+| `dashboard_actions` | owner:write | `GET /procedures/actions?search=&withInput=1` | Lista as alterações abertas ao MCP, por área |
+| `dashboard_action` | owner:write | `POST /procedures/action {path, input, confirmExternal?}` | Faz a alteração |
+
+- Corre **como a pessoa que criou a chave** (ou a conta que ficou, se foram
+  juntas): as mesmas permissões e o mesmo alcance de cidade da app. As
+  alterações ficam nos Logs em nome dessa pessoa, e cada uma também como
+  `mcp_action` da chave (para se ver tudo o que o MCP fez).
+- **Alterações: só uma lista fechada** (`MCP_ACTIONS` em
+  `server/mcpProceduresApi.ts`, 61 hoje): faltas e ponto, pontos da avaliação,
+  juntar/separar utilizadores, colaboradores e clientes, tarefas, críticas,
+  reclamações, perdidos e achados, ocorrências. Nada de apagar, ficheiros ou
+  salários. Para abrir outra, acrescenta-se o caminho à lista.
+- O que **sai para fora** (publicar resposta no Google, email ao cliente) só
+  passa com `confirmExternal: true`.
+- `apiKeys.*` e tudo o que tenha "token" no caminho ficam sempre de fora.
+- Datas no input podem ir em texto (`2026-10-01`); se o procedimento pedir
+  `Date`, o servidor converte e tenta outra vez.
+- Resultado acima de 4 MB → `413` (usa filtros/paginação). O MCP corta o texto
+  a 200 000 caracteres.
+- Código: `server/mcpProceduresApi.ts` (testes em `server/mcpProceduresApi.test.ts`).
 
 ## Notas de segurança
 
