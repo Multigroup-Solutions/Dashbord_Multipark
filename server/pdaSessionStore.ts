@@ -28,6 +28,8 @@ export interface PdaSessionStore {
   clearIf(pdaId: number, nonce: string): Promise<boolean>;
   /** Sessões abertas destas contas (para a saída do ponto e o fecho automático). */
   openSessionsOf(userIds: readonly number[]): Promise<Array<{ pdaId: number; nonce: string; userId: number }>>;
+  /** Todas as sessões de PDA abertas ("Terminar as sessões de todas as contas"). */
+  allOpenSessions(): Promise<Array<{ pdaId: number; nonce: string; userId: number }>>;
   /** Contas da ficha (principal + employee_accounts). */
   accountsOfEmployee(employeeId: number): Promise<number[]>;
   /** Os avisos deste PDA passam para quem entrou (e voltam a ligar) — só se a sessão ainda for esta (nonce). */
@@ -78,6 +80,12 @@ export const sqlPdaSessionStore: PdaSessionStore = {
     if (!d || !list.length) return [];
     return rowsOf(await d.execute(sql`SELECT id, sessionNonce, sessionUserId FROM pdas
       WHERE sessionUserId IN (${idList(list)}) AND sessionNonce IS NOT NULL`))
+      .map((r) => ({ pdaId: Number(r.id), nonce: String(r.sessionNonce), userId: Number(r.sessionUserId) }));
+  },
+  async allOpenSessions() {
+    const d = await database();
+    if (!d) return [];
+    return rowsOf(await d.execute(sql`SELECT id, sessionNonce, sessionUserId FROM pdas WHERE sessionNonce IS NOT NULL`))
       .map((r) => ({ pdaId: Number(r.id), nonce: String(r.sessionNonce), userId: Number(r.sessionUserId) }));
   },
   async accountsOfEmployee(employeeId) {

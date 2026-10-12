@@ -74,8 +74,10 @@ function clearSession(req: Req, res: Res): void {
 async function reissueSession(req: Req, res: Res, user: { id: number; openId: string; name: string | null }): Promise<void> {
   const { bumpSessionVersion } = await import("./appSettings");
   const version = await bumpSessionVersion(user.id);
-  const { reissueSessionCookie } = await import("./pdaSession");
+  const { reissueSessionCookie, endPdaSessionsAfterSessionBump } = await import("./pdaSession");
   await reissueSessionCookie(req, res, user, version);
+  // (auditoria A2) as sessões desta pessoa noutros PDAs acabam também (avisos incluídos).
+  await endPdaSessionsAfterSessionBump([user.id], req, user.id);
 }
 
 /** O PDA registado deste aparelho (token validado em `pdas.deviceToken`), só com as sessões de PDA ligadas. */

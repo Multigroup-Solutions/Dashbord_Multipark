@@ -262,6 +262,9 @@ export const settingsRouter = router({
       const { bumpSessionVersion } = await import("./appSettings");
       const version = await bumpSessionVersion(ctx.user.id);
       await reissueSessionCookie(ctx as any, version);
+      // (auditoria A2) as sessões desta pessoa noutros PDAs acabam também (avisos incluídos).
+      const { endPdaSessionsAfterSessionBump } = await import("./pdaSession");
+      await endPdaSessionsAfterSessionBump([ctx.user.id], ctx.req, ctx.user.id);
       await log(ctx.user.id, "update", "session", "Terminou as suas sessões nos outros dispositivos");
       return { success: true };
     }),
@@ -273,6 +276,9 @@ export const settingsRouter = router({
       // +1 à própria conta para ter a versão exata a pôr no novo cookie.
       const version = await bumpSessionVersion(ctx.user.id);
       await reissueSessionCookie(ctx as any, version);
+      // (auditoria A2) e as sessões de todos os PDAs (menos a deste aparelho, se for um PDA).
+      const { endPdaSessionsAfterSessionBump } = await import("./pdaSession");
+      await endPdaSessionsAfterSessionBump("all", ctx.req, ctx.user.id);
       await log(ctx.user.id, "update", "session", `Terminou as sessões de todas as contas (${affected})`);
       return { success: true, affected };
     }),

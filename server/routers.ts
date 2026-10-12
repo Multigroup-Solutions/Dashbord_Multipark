@@ -890,6 +890,9 @@ export const appRouter = router({
         await resetAccess(await realLoginDeps(), { id: ctx.user.id, name: ctx.user.name ?? null }, { id: target.id, name: target.name ?? null, email: target.email ?? null });
         const { bumpSessionVersion } = await import("./appSettings");
         await bumpSessionVersion(target.id);
+        // (auditoria A2) as sessões de PDA da pessoa acabam também (avisos do PDA incluídos).
+        const { endPdaSessionsAfterSessionBump } = await import("./pdaSession");
+        await endPdaSessionsAfterSessionBump([target.id], null, ctx.user.id);
         return { success: true };
       }),
     getInvites: protectedProcedure

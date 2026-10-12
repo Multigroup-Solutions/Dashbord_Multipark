@@ -133,12 +133,13 @@ export async function openPdaSession(input: {
   return true;
 }
 
-export type PdaSessionEndReason = "logout" | "checkout" | "stale_checkout" | "rebind";
+export type PdaSessionEndReason = "logout" | "checkout" | "stale_checkout" | "rebind" | "sessions_ended";
 const END_LABEL: Record<PdaSessionEndReason, string> = {
   logout: "saiu (logout)",
   checkout: "saída do ponto",
   stale_checkout: "fecho automático do ponto esquecido",
   rebind: "a sessão passou para outro PDA",
+  sessions_ended: "as sessões da pessoa foram terminadas (terminar sessões, palavra-passe ou repor acesso)",
 };
 
 /** Acaba a sessão SÓ se o nonce ainda for este; desliga os avisos do PDA. */
@@ -170,6 +171,30 @@ export async function endPdaSessionsOfEmployee(employeeId: number, reason: "chec
     console.warn("[pda] sessões de PDA não terminadas:", String((err as Error)?.message ?? err).slice(0, 160));
   }
   return ended;
+}
+
+/**
+ * Auditoria A2: "Terminar sessões", criar/mudar a palavra-passe, "Repor
+ * acesso" e "Terminar as sessões de todas as contas" sobem
+ * `users.sessionVersion` — o cookie do PDA deixa de valer, mas o PDA ficava
+ * "com a sessão" (nonce em `pdas`) e a receber os avisos da pessoa até às
+ * 16 h. Acaba essas sessões de PDA, menos a deste pedido (que fica, com o
+ * cookie novo). Nunca lança.
+ */
+export async function endPdaSessionsAfterSessionBump(userIds: readonly number[] | "all", req: Req | null, actorUserId: number): Promise<number> {
+  let n = 0;
+  try {
+    const store = pdaSessionStore();
+    const keep = req ? await sessionClaimsOf(req) : null;
+    const sessions = userIds === "all" ? await store.allOpenSessions() : await store.openSessionsOf(userIds);
+    for (const s of sessions) {
+      if (keep?.pda === s.pdaId && keep.pn === s.nonce) continue;
+      if (await endPdaSession(s.pdaId, s.nonce, "sessions_ended", actorUserId)) n++;
+    }
+  } catch (err) {
+    console.warn("[pda] sessões de PDA não terminadas depois de terminar as sessões:", String((err as Error)?.message ?? err).slice(0, 160));
+  }
+  return n;
 }
 
 /** A sessão deste pedido é uma das que acabaram? (o ecrã mostra "A sessão termina em 10 s"). */

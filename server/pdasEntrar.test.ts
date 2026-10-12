@@ -112,6 +112,7 @@ const m = vi.hoisted(() => {
     async read(pdaId: number) { const p = pdaOf(pdaId); return p ? { userId: p.sessionUserId ?? null, nonce: p.status === "active" ? p.sessionNonce ?? null : null, startedAt: p.sessionStartedAt ?? null } : null; },
     async clearIf(pdaId: number, nonce: string) { const p = pdaOf(pdaId); if (!p || p.sessionNonce !== nonce) return false; p.sessionNonce = null; return true; },
     async openSessionsOf(ids: number[]) { return state.pdas.filter((p) => p.sessionNonce && ids.includes(p.sessionUserId)).map((p) => ({ pdaId: p.id, nonce: p.sessionNonce, userId: p.sessionUserId })); },
+    async allOpenSessions() { return state.pdas.filter((p) => p.sessionNonce).map((p) => ({ pdaId: p.id, nonce: p.sessionNonce, userId: p.sessionUserId })); },
     async accountsOfEmployee(employeeId: number) { const f = state.fichas.find((x) => x.id === employeeId); return f ? [f.userId, ...(f.aliasUserIds ?? [])].filter(Boolean) : []; },
     async movePush(pdaId: number, userId: number, nonce: string) {
       const p = pdaOf(pdaId);
@@ -729,6 +730,29 @@ describe("push nos PDAs: muda de dono e desliga-se", () => {
     expect(await pushToUsers([100], payload)).toEqual({ sent: 1 });
     pda7().status = "lost";
     expect(await pushToUsers([100], payload)).toEqual({ sent: 0 });
+  });
+
+  it("(auditoria) 'Terminar sessões' / palavra-passe noutro aparelho acaba a sessão do PDA e os avisos do PDA (a do próprio PDA fica)", async () => {
+    lisbon();
+    const pda = device();
+    await codeLogin(pda, "joaquim@gmail.com");
+    await (await pda.caller()).notifications.pushSubscribe({ endpoint: "https://fcm.googleapis.com/fcm/send/pda12-c", keys: { p256dh: "B".repeat(87), auth: "A".repeat(22) } });
+    const payload = { type: "login_code", title: "t", body: "b", url: "/", tag: "x" };
+    expect(await pushToUsers([100], payload)).toEqual({ sent: 1 });
+    // no telemóvel: "Terminar sessões noutros aparelhos"
+    const phone = device();
+    await googleSession(phone, userBy(100));
+    await (await phone.caller()).settings.security.endMySessions();
+    expect(await phone.valid()).toBe(true);
+    expect(await pda.valid()).toBe(false);
+    expect(pda7().sessionNonce).toBeNull();
+    expect(await pushToUsers([100], payload)).toEqual({ sent: 0 });
+    expect(m.state.logs.some((l) => l.action === "pda_session_end" && /sessões da pessoa foram terminadas/.test(l.details))).toBe(true);
+    // no próprio PDA: terminar as OUTRAS sessões não acaba a deste PDA
+    await codeLogin(pda, "joaquim@gmail.com");
+    await (await pda.caller()).settings.security.endMySessions();
+    expect(await pda.valid()).toBe(true);
+    expect(pda7().sessionNonce).toBeTruthy();
   });
 });
 
