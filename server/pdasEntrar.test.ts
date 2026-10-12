@@ -191,6 +191,8 @@ vi.mock("./mail/systemMail", async (original) => ({
   ...(await original<object>()),
   sendEmailDetailed: async (o: any) => { m.state.sentMail.push(o); return m.state.sendResult; },
 }));
+vi.mock("./whatsappCallStream", async (original) => ({ ...(await original<object>()), callScopeForUser: async () => ({ enabled: true, scope: null }) }));
+vi.mock("./whatsappCallsQueries", async (original) => ({ ...(await original<object>()), listIncomingCalls: async () => [{ id: 900, status: "ringing" }] }));
 vi.mock("web-push", () => ({
   default: {
     setVapidDetails: () => undefined,
@@ -219,7 +221,7 @@ import { sendLoginCodeEmailWith } from "./loginMail";
 import { sendMailWith } from "./mail/systemMail";
 import { syncAccount, type GmailApiLike, type SyncStore } from "./mail/sync";
 import { parseGmailMessage } from "./mail/parse";
-import { pushToUsers } from "./webPush";
+import { pushRingingCalls, pushToUsers } from "./webPush";
 import { MIGRATION_0635_STATEMENTS } from "./migrations/migration_0635";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { appRouter } from "./routers";
@@ -1041,5 +1043,45 @@ describe("auditoria A2: PDA retirado (perdido, inativo, manutenção) acaba a se
     await (await adm.caller()).operational.pdas.delete({ id: 7 });
     pda7().status = "active";
     expect(await dev.valid()).toBe(false);
+  });
+});
+
+describe("regressão: chamadas do WhatsApp no telemóvel (push) com os PDAs", () => {
+  beforeEach(() => {
+    process.env.VAPID_PUBLIC_KEY = "BPub";
+    process.env.VAPID_PRIVATE_KEY = "priv";
+    process.env.VAPID_SUBJECT = "mailto:dev@multipark.pt";
+  });
+
+  it("subscrição normal recebe a chamada como sempre (nome); a do PDA com sessão recebe 'Tens um aviso'; a do PDA sem sessão não recebe", async () => {
+    lisbon();
+    const dev = device();
+    await codeLogin(dev, "joaquim@gmail.com"); // sessão viva no PDA 12 (#7) para o #100
+    const subs = [
+      { id: 1, userId: 21, endpoint: "https://push/tl", p256dh: "p", auth: "a", pdaId: null, disabledAt: null },
+      { id: 2, userId: 100, endpoint: "https://push/pda12", p256dh: "p", auth: "a", pdaId: 7, disabledAt: null },
+      { id: 3, userId: 110, endpoint: "https://push/pda13", p256dh: "p", auth: "a", pdaId: 8, disabledAt: null }, // PDA 13 sem sessão
+      { id: 4, userId: 21, endpoint: "https://push/off", p256dh: "p", auth: "a", pdaId: null, disabledAt: "2026-10-12 09:00:00" },
+    ];
+    const thenable = (rows: any[]) => Object.assign(Promise.resolve(rows), { where: async () => rows, limit: async () => rows });
+    m.state.fakeDb = {
+      execute: async () => [[{ id: 900, phoneE164: "+351912345678", conversationId: 55, name: "Maria Cliente" }]],
+      select: () => ({ from: (t: any) => (t === undefined ? thenable([]) : thenable(String((t as any)?.[Symbol.for("drizzle:Name")] ?? "") === "users"
+        ? m.state.users.filter((u) => [21, 100, 110].includes(u.id))
+        : subs)) }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+      delete: () => ({ where: async () => undefined }),
+    };
+    m.state.webpushSent = [];
+    await pushRingingCalls(["wacid.1"]);
+    const by = new Map(m.state.webpushSent.map((x) => [x.endpoint, x.body]));
+    expect(by.get("https://push/tl")).toMatchObject({ title: "Chamada WhatsApp de Maria Cliente", url: "/whatsapp?c=55" });
+    expect(by.get("https://push/tl").type).toBeUndefined(); // o service worker toca como chamada (sem tipo)
+    expect(by.get("https://push/pda12")).toEqual({ type: "pda", title: "Multipark", body: "Tens um aviso", url: "/", tag: "pda-wa-call-900" });
+    expect(by.has("https://push/pda13")).toBe(false);
+    expect(by.has("https://push/off")).toBe(false);
+    // e o service worker: sem tipo → chamada; "pda" → aviso genérico
+    const sw = readFileSync("client/public/sw.js", "utf8");
+    expect(sw).toContain('if (data.type === "pda" || (data.type && data.type !== "wa_call"))');
   });
 });
