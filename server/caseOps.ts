@@ -535,7 +535,7 @@ export async function convertIncident(id: number, to: "complaint" | "lost", acto
   ].filter(Boolean).join("\n\n");
   let newId: number;
   if (to === "complaint") {
-    newId = await createComplaint({ ...incidentToComplaintFields(inc as any), createdById: actor.id } as any);
+    newId = await createComplaint({ ...incidentToComplaintFields(inc as any), createdById: actor.id, origin: "conversao" } as any);
     await addComplaintMessage({ complaintId: newId, message: noteLines, isInternal: 1, authorId: actor.id, authorName: actor.name ?? null } as any);
     if (inc.employeeId && drvName) {
       await d.insert(complaintDriversOnDuty).values({ complaintId: newId, employeeId: inc.employeeId, employeeName: drvName.slice(0, 256), source: "incident", penaltyPointsApplied: 0, notes: `Da ocorrência #${id}${inc.driverConfirmed ? " (envolvimento confirmado)" : ""}` });
@@ -567,7 +567,7 @@ export async function convertLostToComplaint(id: number, actor: Actor): Promise<
   if (item.status === "converted" && item.convertedToId) throw new Error(`Já convertido (${item.convertedToType} #${item.convertedToId})`);
   const { createComplaint, addComplaintMessage, addComplaintPhoto, getLostFoundMessages, getLostFoundPhotos, listLostFoundDrivers, addLostFoundMessage } = await import("./db");
   const [messages, photos, drivers] = await Promise.all([getLostFoundMessages(id), getLostFoundPhotos(id), listLostFoundDrivers(id)]);
-  const newId = await createComplaint({ ...lostToComplaintFields(item as any), createdById: actor.id } as any);
+  const newId = await createComplaint({ ...lostToComplaintFields(item as any), createdById: actor.id, origin: "conversao" } as any);
   for (const m of messages as any[]) {
     try { await addComplaintMessage({ complaintId: newId, message: m.message, isInternal: m.isInternal, authorId: m.userId ?? actor.id, authorName: m.userName ?? null } as any); } catch { /* best-effort */ }
   }

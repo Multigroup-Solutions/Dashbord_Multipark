@@ -44,6 +44,7 @@ export async function convertReviewToComplaint(
       projectId: review.projectId ?? opts.defaultProjectId ?? null,
       slaDeadline: sqlNow(Date.now() + REVIEW_COMPLAINT_SLA_HOURS * 3_600_000),
       createdById: actor.id,
+      origin: "critica",
     } as any)) as any;
     const complaintId = Number(res.insertId);
     await tx.update(googleReviews).set({ status: "converted_complaint", complaintId }).where(eq(googleReviews.id, reviewId));

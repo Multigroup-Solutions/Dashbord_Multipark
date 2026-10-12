@@ -88,6 +88,7 @@ export async function createCaseFromConversation(
         reservationRef: t.linkedBookingRef ?? null,
         projectId,
         createdById: userId,
+        origin: "whatsapp",
       } as any));
       if (!id) throw new Error("A reclamação não foi gravada.");
       await logActivity({ userId, action: "create", entity: "complaint", entityId: id, details: `Reclamação a partir do WhatsApp (conversa ${conversationId}): ${draft.title}` });

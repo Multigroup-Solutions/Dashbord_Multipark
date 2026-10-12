@@ -19,7 +19,7 @@
  * própria pessoa).
  */
 import { sql } from "drizzle-orm";
-import { aliasPipeline, canSeeMailbox, configuredPipelines, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
+import { aliasPipeline, canSeeMailbox, configuredPipelines, isAutomatedSender, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
 import { emailRoutingEligible } from "../../shared/commsRouting";
 import type { InboundAlias } from "../emailParse";
 import { gmailThreadIdToImap } from "./parse";
@@ -102,7 +102,12 @@ export const dbAutoLinkDeps: AutoLinkDeps = {
 
 // ─── Pós-processamento de cada email guardado ───────────────────────────────
 
-async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<GmailApi, "getAttachment">, pipeline: MailPipeline): Promise<{ targetModule: string; targetId?: number; existing?: true } | null> {
+async function runPipeline(
+  e: Pick<StoredEvent, "parsed" | "result">,
+  api: Pick<GmailApi, "getAttachment">,
+  pipeline: MailPipeline,
+  aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null,
+): Promise<{ targetModule: string; targetId?: number; existing?: true } | null> {
   const p = e.parsed;
   if (!p.rfcMessageId) return null;
   const { processInboundEmail } = await import("../jobs/emailInboundSync");
@@ -126,6 +131,7 @@ async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<
       }
       return list;
     },
+    aiIntake,
   });
   if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, out.status).catch(() => {});
   if (out.status === "processed") return out.routed;
@@ -206,12 +212,23 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     // 1) Pipeline temático — só emails RECEBIDOS (de pessoas), recentes, de caixas partilhadas.
     if (!p.outbound && !e.classification.personal && !p.systemMail) {
       const accountPipelines = [...configuredPipelines(e.account.mailboxes).keys()];
-      const pipeline = aliasPipeline(mailbox, alias, p.subject, accountPipelines);
-      pipelineUsed = pipeline;
+      let pipeline = aliasPipeline(mailbox, alias, p.subject, accountPipelines);
       const recent = p.sentAt ? Date.now() - Date.parse(p.sentAt.replace(" ", "T") + "Z") <= windowMs : false;
+      // Lote 57: o cliente responde numa conversa de outra caixa que a IA ligou
+      // a uma reclamação → a resposta vai para ESSA reclamação (volta a "Em
+      // Análise"), como se tivesse vindo pela reclamacoes@. Nunca cria outra
+      // nem escreve ao cliente. Só respostas de pessoas de fora da empresa.
+      let aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null;
+      if (!pipeline && recent && !e.result.newThread && e.result.messageId && p.fromEmail
+        && !isCompanyAddress(p.fromEmail, brandDomains) && !isAutomatedSender(p.fromEmail, { autoSubmitted: p.autoSubmitted, precedence: p.precedence })) {
+        const { intakeComplaintOfThread } = await import("../complaintMailIntake");
+        const complaintId = await intakeComplaintOfThread(e.result.threadId);
+        if (complaintId) { pipeline = "reclamacoes"; aiIntake = { forceComplaintId: complaintId, replyOnly: true }; }
+      }
+      pipelineUsed = pipeline;
       if (pipeline && recent) {
         try {
-          routed = await runPipeline(e, api, pipeline);
+          routed = await runPipeline(e, api, pipeline, aiIntake);
           if (routed && !routed.existing && ["complaint", "lostfound", "review", "incident"].includes(routed.targetModule)) report.pipelineCreated++;
         } catch (err: any) {
           // O caso NÃO foi criado: fica marcado para nova tentativa e o cron
@@ -256,6 +273,8 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     // Respostas num fio que já está numa caixa ficam onde estão. O aviso vai a
     // quem vê a caixa nova.
     let noticeBox: MailboxConfig | null = mailbox;
+    // Lote 57: a IA criou/juntou a reclamação (o aviso "Nova reclamação" já foi) — sem 2.º aviso de email novo.
+    let aiComplaint = false;
     const routable = !!mailbox && !!e.result.messageId && emailRoutingEligible({
       outbound: p.outbound, personal: e.classification.personal, systemMail: !!p.systemMail, automated, newThread: e.result.newThread,
       mailboxKey: mailbox.key, pipeline: pipelineUsed, createdCase,
@@ -270,7 +289,10 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
         } catch { routingRun.left = 10; }
       }
       const before = routingRun.left;
-      const target = await routeNewThreadByAi(e.result.threadId, e.result.messageId!, mailbox!, p, routingRun).catch(() => null);
+      const target = await routeNewThreadByAi(e.result.threadId, e.result.messageId!, mailbox!, p, routingRun, api, (r) => {
+        if (r.status === "created" || r.status === "linked") aiComplaint = true;
+        if (r.status === "created") report.pipelineCreated++; // a triagem das reclamações novas corre no fim
+      }).catch(() => null);
       if (routingRun.left < before) report.aiRouted = (report.aiRouted ?? 0) + 1;
       if (target) noticeBox = target;
     }
@@ -278,7 +300,7 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     if (fresh && mailbox && alias?.owner && e.result.newThread && noticeBox === mailbox) {
       ownerNotified = await notifyAliasOwner(e, mailbox, alias, projectId).catch(() => false);
     }
-    if (fresh && noticeBox?.notify && !createdCase && !ownerNotified) {
+    if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified) {
       await notifyNewMail(e, noticeBox, projectId).catch(() => {});
     }
   };
@@ -294,18 +316,30 @@ export async function routeNewThreadByAi(
   threadId: number,
   messageId: number,
   from: MailboxConfig,
-  p: Pick<StoredEvent["parsed"], "subject" | "text" | "snippet" | "fromName" | "fromEmail" | "attachments">,
+  p: StoredEvent["parsed"],
   run: { left: number; deadlineAt?: number },
+  api: Pick<GmailApi, "getAttachment" | "getMessage"> | null = null,
+  onComplaint?: (r: import("../complaintMailIntake").IntakeResult) => void,
 ): Promise<MailboxRow | null> {
-  const { routeEmailMessage } = await import("../commsRouting");
+  const { routeEmailMessage, dbEmailRoutingDeps } = await import("../commsRouting");
   const d = await db();
   const t = rowsOf(await d.execute(sql`SELECT projectId FROM mail_threads WHERE id = ${threadId} LIMIT 1`))[0];
+  // Lote 57: a reclamação que a IA vir aqui nasce com o email já lido (anexos incluídos) — sem voltar ao Gmail.
+  const deps = {
+    ...dbEmailRoutingDeps,
+    async complaintIntake(msg: Parameters<NonNullable<typeof dbEmailRoutingDeps.complaintIntake>>[0], verdict: Parameters<NonNullable<typeof dbEmailRoutingDeps.complaintIntake>>[1]) {
+      const { intakeFromRouting, dbIntakeDeps } = await import("../complaintMailIntake");
+      const r = await intakeFromRouting(msg, verdict, dbIntakeDeps({ parsed: p, api }));
+      onComplaint?.(r);
+      return r;
+    },
+  };
   const res = await routeEmailMessage({
     threadId, messageId, fromBoxKey: from.key, subject: p.subject ?? "", text: p.text || p.snippet || "",
     fromName: p.fromName ?? null, fromEmail: p.fromEmail ?? null,
     attachmentNames: (p.attachments ?? []).filter((a) => !a.inline).map((a) => a.filename).filter(Boolean),
     projectId: t?.projectId != null ? Number(t.projectId) : null,
-  }, undefined, run);
+  }, deps, run);
   if (res.status !== "moved") return null;
   const { listMailboxes } = await import("./store");
   return (await listMailboxes()).find((b) => b.key === res.boxKey) ?? null;
@@ -378,7 +412,15 @@ export async function retryPipelineMessage(messageId: number, opts: { manual?: b
     if (!raw) throw new Error("O email já não está no Gmail.");
     const parsed = parseGmailMessage(raw);
     const threadId = Number(m.threadId);
-    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline);
+    // Lote 57: resposta numa conversa que a IA ligou a uma reclamação → só junta a ESSA (nunca o pipeline normal,
+    // que podia abrir outra reclamação e mandar o aviso de receção).
+    let aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null;
+    if (pipeline === "reclamacoes") {
+      const { intakeOfThread } = await import("../complaintMailIntake");
+      const seen = await intakeOfThread(threadId);
+      if (seen) aiIntake = { forceComplaintId: seen.complaintId, replyOnly: true };
+    }
+    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline, aiIntake);
     if (routed?.targetId) {
       const links = await proposeLinks({ contactEmail: null, subject: "", bodyText: "", gmThreadId: null, refs: [], sentAt: null, pipeline: routed }, dbAutoLinkDeps);
       for (const l of links) await addAutoLink({ threadId, messageId, entityType: l.entityType, entityId: l.entityId, confidence: l.confidence, reason: l.reason });

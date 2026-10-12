@@ -282,12 +282,40 @@ const tools = [
     inputSchema: { type: "object", properties: { source: { type: "string", enum: ["ga", "sc"] }, dim: { type: "string" }, from: { type: "string" }, to: { type: "string" }, brand: { type: "string" }, compare: { type: "string", enum: ["previous", "yoy"] }, sort: { type: "string" }, pageSize: { type: "number" }, search: { type: "string" } }, required: ["source", "dim", "from", "to"] },
     run: (a) => api("GET", "/web/list", { query: a }),
   },
+  // ── MCP pessoal: qualquer leitura dos ecrãs, como quem criou a chave (capacidade owner:read) ──
+  {
+    name: "dashboard_procedures",
+    description: "Lista as LEITURAS do Dashboard (os mesmos procedimentos dos ecrãs): RH, ponto, horários, férias, salários, CRM, despesas, extras, tarefas, ocorrências, perdidos e achados, WhatsApp, email, formação, reservas da Multipark, etc. Usa search com palavras do caminho (ex.: \"rh\", \"expenses\", \"crm client\", \"whatsapp\", \"multipark\"). Com withInput=true devolve também o input de cada uma (JSON Schema) — pede-o só depois de filtrar, porque é grande. Depois chama dashboard_query. Requer a capacidade 'MCP pessoal' na chave.",
+    inputSchema: { type: "object", properties: { search: { type: "string" }, withInput: { type: "boolean" } } },
+    run: (a) => api("GET", "/procedures", { query: { search: a.search, withInput: a.withInput ? "1" : undefined } }),
+  },
+  {
+    name: "dashboard_query",
+    description: "Corre uma leitura do Dashboard pelo caminho (ex.: \"rh.list\") com o input em JSON, como quem criou a chave: vê exatamente o que essa pessoa vê na app. Datas podem ir em texto (AAAA-MM-DD ou ISO). Só leituras; as alterações respondem 403. Se o resultado for grande, usa filtros/paginação do input.",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, input: {} }, required: ["path"] },
+    run: (a) => api("POST", "/procedures/call", { body: { path: a.path, input: a.input } }),
+  },
+  {
+    name: "dashboard_actions",
+    description: "Lista as ALTERAÇÕES que o MCP pode fazer no Dashboard, por área: Faltas, Ponto, Avaliação (pontos), Utilizadores (juntar/separar), Clientes (juntar/separar), Tarefas, Críticas, Reclamações, Perdidos e achados, Ocorrências. search filtra pelo caminho ou pela área. withInput=true traz o input de cada uma. external=true quer dizer que sai para fora (Google ou email ao cliente). Requer a capacidade 'MCP pessoal (alterar)'.",
+    inputSchema: { type: "object", properties: { search: { type: "string" }, withInput: { type: "boolean" } } },
+    run: (a) => api("GET", "/procedures/actions", { query: { search: a.search, withInput: a.withInput ? "1" : undefined } }),
+  },
+  {
+    name: "dashboard_action",
+    description: "Faz uma alteração no Dashboard em nome de quem criou a chave (fica nos Logs em nome dessa pessoa, com as permissões dela). Antes de alterar, confirma com o Jorge o que vais fazer (o quê, a quem, valores). Para as que saem para fora (external: publicar resposta no Google, email ao cliente) mostra-lhe o texto final e só depois manda confirmExternal: true. Só as da lista de dashboard_actions.",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, input: {}, confirmExternal: { type: "boolean" } }, required: ["path"] },
+    run: (a) => api("POST", "/procedures/action", { body: { path: a.path, input: a.input, confirmExternal: a.confirmExternal === true } }),
+  },
 ];
+
+/** Texto devolvido ao Claude acima disto é cortado (com aviso), para não rebentar o contexto. */
+const MAX_TEXT = 200_000;
 
 const toolByName = new Map(tools.map((t) => [t.name, t]));
 
 // ─── Transporte MCP: JSON-RPC 2.0 newline-delimited sobre stdin/stdout ──────────
-const SERVER_INFO = { name: "multipark-dashboard", version: "1.0.0" };
+const SERVER_INFO = { name: "multipark-dashboard", version: "1.1.0" };
 let negotiatedProtocol = "2024-11-05";
 
 function send(msg) {
@@ -325,7 +353,9 @@ async function handle(msg) {
       if (!tool) { if (isRequest) reply(id, { isError: true, content: [{ type: "text", text: `Tool desconhecida: ${params?.name}` }] }); return; }
       try {
         const result = await tool.run(params?.arguments ?? {});
-        if (isRequest) reply(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
+        let text = JSON.stringify(result, null, 2);
+        if (text.length > MAX_TEXT) text = text.slice(0, MAX_TEXT) + `\n\n… [cortado: ${text.length} caracteres no total — usa filtros ou paginação]`;
+        if (isRequest) reply(id, { content: [{ type: "text", text }] });
       } catch (err) {
         if (isRequest) reply(id, { isError: true, content: [{ type: "text", text: `Erro: ${err?.message || String(err)}` }] });
       }
