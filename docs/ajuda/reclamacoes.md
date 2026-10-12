@@ -18,8 +18,8 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 
 **Reclamações que a IA vê noutras caixas**
 - A IA que separa os emails pelas caixas lê o 1.º email de cada conversa nova. Se diz que é uma reclamação:
-  - **certeza alta** → a reclamação é criada sozinha, ou o email junta-se à reclamação **aberta** do mesmo cliente (mesma conversa, mesmo email ou matrícula, ou a mesma reserva — nunca só pelo nome ou pelo assunto);
-  - **menos certeza** → aparece no topo da lista em **Parecem reclamações**, com **Criar reclamação** e **Não é reclamação** (fica registado; nada se apaga) e **Abrir conversa**.
+  - **certeza alta** → a reclamação é criada sozinha, ou o email junta-se à reclamação **aberta** do mesmo cliente (mesma conversa ou mesmo email; a mesma matrícula ou a mesma reserva só quando essa reclamação é do mesmo email ou não tem email — nunca no caso de outro cliente, nunca só pelo nome ou pelo assunto);
+  - **menos certeza** → aparece no topo da lista em **Parecem reclamações**, com **Criar reclamação** e **Não é reclamação** (fica registado; nada se apaga) e **Abrir conversa**. No telemóvel o cartão vem fechado (carrega no título para abrir); o título diz quantas são e quantas falharam.
 - Nunca para emails internos, automáticos (no-reply, newsletters), de parceiros nem avisos de avaliações.
 - **Nunca responde ao cliente**: sem aviso de receção, sem resposta. O email fica na caixa onde chegou.
 - Uma conversa nunca dá duas reclamações, mesmo que a sincronização corra outra vez. Se o cliente responder nessa conversa, a resposta entra na mesma reclamação (volta a **Em Análise**).
@@ -28,9 +28,10 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 - Interruptor: Definições → Automações → **"IA: reclamações que chegam a outras caixas vão para as Reclamações"** (ligado). Precisa de **"IA: separar emails e WhatsApp pelas caixas"** ligado (é a mesma leitura da IA). As certezas para criar e para sugerir estão em Definições → Parâmetros → IA (**ai.mailComplaints**, 0,85 e 0,5). Desligado: deixa de criar e de sugerir; as sugestões que já lá estavam ficam até alguém decidir.
 
 **Filtros**
-- **Pesquisar**: nº, título, nome, email, telefone, reserva, matrícula e responsável (sem acentos nem traços: "aa12bb" encontra "AA-12-BB").
+- **Pesquisar**: nº, título, nome, email, telefone, reserva, matrícula e responsável (sem acentos nem traços: "aa12bb" encontra "AA-12-BB"). **#12** abre só a reclamação nº 12.
 - **Estado** (também **Em aberto** e **Em atraso**), **Tipo**, **Cidade** (inclui **Sem cidade** para quem vê todas), **Responsável** (ou **Sem responsável**), **Origem** (email, IA, WhatsApp, crítica Google, ocorrência/perdido, à mão, API) e **Criada de / até** (dia de Lisboa).
-- Tudo filtra a **mesma** lista: o quadro, os contadores, o CSV e o total batem sempre certo. **Limpar filtros** volta ao início.
+- Tudo filtra a **mesma** lista: o quadro, os contadores, o CSV e o total batem sempre certo. **Limpar filtros** volta ao início. Os filtros ficam guardados enquanto o separador estiver aberto (sair e voltar às Reclamações não os perde).
+- Escolher uma cidade no cabeçalho tira o **Sem cidade**.
 - Com datas escolhidas procura em todas (sem o limite dos 90 dias), como a pesquisa.
 - No telemóvel os filtros estão no botão **Filtros (n)** e o quadro mostra **um estado de cada vez** (os botões têm as contagens).
 
@@ -41,6 +42,7 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 - No caso: separadores **Detalhes**, **Mensagens**, **Fotos**, **Viatura** (quem mexeu no carro), **Em serviço**, **Histórico** e **Emails do cliente**.
 - **Emails do cliente**: TODAS as conversas com o cliente nas caixas partilhadas que vês (info@, reservas@, reclamações@, cancelamentos…), da mais recente para a mais antiga — não só as desta reclamação. Cada uma mostra a caixa, o assunto, a última mensagem e a data; carregar abre a conversa na Comunicação. A desta reclamação está marcada **Esta reclamação**.
   - O cliente encontra-se pelo email da reclamação (e dos emails ligados ao caso), pelo email do cliente da reserva ligada e pelos emails da ficha do cliente no CRM. Em **Procurado por** vês quais.
+  - Nunca entram os emails de **parceiros/agências** (uma agência reserva para muitos clientes — as conversas dela são de outros). A ficha do CRM só conta pelo telefone (ou por um email de duas fichas) quando tem o **mesmo nome**; empresas nunca.
   - O teu email pessoal ("O meu email") e as caixas a que não tens acesso nunca aparecem.
   - Mostra 10 de cada vez; **Ver mais** traz mais (até 100).
   - Em baixo, **Só desta reclamação** tem os emails ligados e as reuniões.
