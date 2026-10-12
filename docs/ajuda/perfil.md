@@ -39,7 +39,7 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 
 **Terminar sessões noutros aparelhos**
 - **Num PDA** (aparelho registado), ao entrar a Google pede **sempre** para escolher a conta — assim ninguém entra por engano com a conta de quem usou o PDA antes.
-- Com **Entrar com email e código** ligado, a sessão num PDA registado acaba sozinha na **saída do ponto** (feita em qualquer aparelho), no **Sair**, quando **outra pessoa entra** no PDA ou ao fim de **16 h** — ver a ajuda "Entrada". Terminar as outras sessões (ou mudar a palavra-passe) num PDA não muda isto.
+- Com **Entrar com email e código** ligado, a sessão num PDA registado acaba sozinha na **saída do ponto** (feita em qualquer aparelho), no **Sair**, quando **outra pessoa entra** no PDA ou ao fim de **16 h** — ver a ajuda "Entrada". Terminar as outras sessões (ou mudar a palavra-passe) **no próprio PDA** não muda isto; feito **noutro aparelho** (ou com "Repor acesso"), a sessão no PDA também acaba e o PDA deixa de receber os teus avisos.
 - Perdeste o telemóvel ou entraste num PDA partilhado? Carrega em **Terminar sessões noutros aparelhos**: todas as outras sessões fecham (este aparelho continua ligado). **Sair** só fecha este aparelho.
 
 **Sem centro de custos**: consegues na mesma pôr a foto, abrir a tua ficha, marcar a disponibilidade, carregar documentos, ver o PDA e terminar sessões. O aviso diz para pedires ao RH a tua cidade.
