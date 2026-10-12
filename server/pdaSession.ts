@@ -101,9 +101,13 @@ export async function openPdaSession(input: {
   await store.movePush(input.pda.id, input.account.id, nonce).catch(() => undefined);
   const name = input.pda.name ?? (await store.pdaName(input.pda.id).catch(() => null)) ?? `PDA #${input.pda.id}`;
   // O PDA e o Zello ficam com a ficha desta conta (se tiver) — como o "login→PDA" de sempre.
+  // Duas entradas quase ao mesmo tempo no mesmo PDA: só quem ficou com a sessão
+  // (o nonce em `pdas`) fica com o PDA e o Zello — nunca quem já foi posto fora.
   try {
+    const current = await store.read(input.pda.id).catch(() => null);
+    const stillMine = !!current && current.nonce === nonce && current.userId === input.account.id;
     const { getEmployeeByUserId, attachPdaByDeviceToken } = await import("./db");
-    const emp = await getEmployeeByUserId(input.account.id);
+    const emp = stillMine ? await getEmployeeByUserId(input.account.id) : null;
     if (emp) {
       const att = await attachPdaByDeviceToken(input.pda.token, emp.employee.id);
       if (att?.changed) {

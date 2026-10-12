@@ -922,3 +922,36 @@ describe("auditoria A2: código por email (assunto e limite)", () => {
     expect(m.state.logs.some((l) => /limite diário de emails de código/.test(l.details))).toBe(true);
   });
 });
+
+describe("auditoria A2: aviso de PDA noutro aparelho e entradas ao mesmo tempo", () => {
+  it("o aviso 'PDA mudou de aparelho' não guarda nenhum pedaço do token novo", async () => {
+    lisbon();
+    const tl = device();
+    await googleSession(tl, userBy(21));
+    const r = await (await tl.caller()).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: null });
+    const n = m.state.notified.find((x) => x.kind === "pda_device");
+    expect(n.entity.id).toMatch(/^7:[0-9a-f]{12}$/);
+    expect(n.entity.id).not.toContain(r.token.slice(0, 6));
+    expect(JSON.stringify(n)).not.toContain(r.token.slice(0, 8));
+  });
+
+  it("duas entradas quase ao mesmo tempo no mesmo PDA: o PDA/Zello fica com quem ficou com a sessão", async () => {
+    lisbon();
+    const orig = m.pdaStore.movePush;
+    // A Carla entra no PDA 12 entre o "start" e a ligação do PDA à ficha do Joaquim
+    m.pdaStore.movePush = async (pdaId: number, userId: number, nonce: string) => {
+      m.pdaStore.movePush = orig;
+      await m.pdaStore.start(pdaId, 110, "c".repeat(32), Date.now());
+      return orig(pdaId, userId, nonce);
+    };
+    try {
+      const dev = device();
+      await codeLogin(dev, "joaquim@gmail.com");
+      expect(pda7().sessionUserId).toBe(110);
+      expect(await dev.valid()).toBe(false);
+      expect(m.state.attaches.filter((a) => a.employeeId === 101)).toEqual([]);
+    } finally {
+      m.pdaStore.movePush = orig;
+    }
+  });
+});

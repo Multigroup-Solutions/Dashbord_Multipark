@@ -752,7 +752,8 @@ export const operationalRouter = router({
               title: `O ${pda.name} mudou de aparelho`,
               body: `${who} registou outro aparelho como ${pda.name} pelo QR às ${hhmmLisbon(Date.now())}. O aparelho antigo deixou de ser este PDA. Se não estavas à espera, fala com quem o registou.`,
               link: "/operacional?tab=pdas",
-              entity: { type: "pda_device", id: `${input.pdaId}:${token.slice(0, 8)}` },
+              // (nunca um pedaço do token: o id da entidade fica guardado no sino)
+              entity: { type: "pda_device", id: `${input.pdaId}:${(await import("node:crypto")).createHash("sha256").update(`pda-device:${token}`).digest("hex").slice(0, 12)}` },
               recipientFilter: (c) => c.id !== ctx.user.id,
             });
           } catch (err) {
