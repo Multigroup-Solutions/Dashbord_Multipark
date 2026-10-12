@@ -934,3 +934,19 @@ describe("auditoria B2 — Zello com mais de 100 utilizadores", () => {
     expect(parseZelloUserLocation(null, "PDA 12")).toBeNull();
   });
 });
+
+describe("auditoria B2 — RH corrige à volta da meia-noite e na mudança de hora", () => {
+  it("troço que começou antes da meia-noite: \"00:10–02:00\" é na madrugada SEGUINTE (não no início desse dia)", () => {
+    // começou às 23:50 de Lisboa (22:50 UTC, verão)
+    expect(correctionRange("2026-10-12 22:50:00", "00:10", "02:00")).toEqual({ from: "2026-10-12 23:10:00", until: "2026-10-13 01:00:00" });
+    expect(correctionRange("2026-10-12 22:50:00", "23:55", "01:30")).toEqual({ from: "2026-10-12 22:55:00", until: "2026-10-13 00:30:00" });
+    // começou às 00:20 de Lisboa: "23:50" é a noite ANTERIOR (o RH puxa o início para trás)
+    expect(correctionRange("2026-10-12 23:20:00", "23:50", "02:00")).toEqual({ from: "2026-10-12 22:50:00", until: "2026-10-13 01:00:00" });
+    // de dia continua igual
+    expect(correctionRange("2026-10-12 13:05:00", "12:30", "17:20")).toEqual({ from: "2026-10-12 11:30:00", until: "2026-10-12 16:20:00" });
+  });
+  it("na noite em que a hora muda (25 out 2026) as horas de Lisboa batem certo", () => {
+    // 02:30 de Lisboa no domingo 25 out (já inverno, UTC+0) até às 05:00
+    expect(correctionRange("2026-10-24 23:30:00", "01:00", "05:00")).toEqual({ from: "2026-10-25 00:00:00", until: "2026-10-25 05:00:00" });
+  });
+});

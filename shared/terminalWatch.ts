@@ -484,9 +484,10 @@ export function countedLabel(s: { endedAt: string | null; countedUntil: string |
 // ─── RH: corrigir as horas (de–a, em hora de Lisboa) ────────────────────────
 
 /**
- * "Das 14:05 às 17:20" (hora de Lisboa) no dia em que o troço começou → UTC da
- * BD. Se a hora de fim for antes da de início, é no dia seguinte (troço que
- * passa a meia-noite). null = hora inválida. PURA.
+ * "Das 14:05 às 17:20" (hora de Lisboa) perto do troço → UTC da BD. "Das" é
+ * a ocorrência dessa hora mais perto do início do troço (o próprio dia, a
+ * véspera ou o dia seguinte — troços à volta da meia-noite); se a hora de fim
+ * for antes da de início, é no dia seguinte. null = hora inválida. PURA.
  */
 export function correctionRange(startedAt: string, fromHHMM: string, untilHHMM: string): { from: string; until: string } | null {
   const p = (t: string) => {
@@ -498,8 +499,15 @@ export function correctionRange(startedAt: string, fromHHMM: string, untilHHMM: 
   const a = p(fromHHMM), b = p(untilHHMM);
   const start = ms(startedAt);
   if (a == null || b == null || start == null) return null;
-  const day = lisbonDayOf(start);
-  const fromMs = lisbonWallTimeUtcMs(day, a);
+  // "Das" é a hora mais perto do início do troço (no dia dele, na véspera ou no
+  // dia seguinte): um troço das 23:50 corrigido para "00:10" é na madrugada
+  // SEGUINTE, não 24 h antes; um das 00:20 corrigido para "23:50" é a véspera.
+  const day0 = lisbonDayOf(start);
+  let day = day0, fromMs = lisbonWallTimeUtcMs(day0, a);
+  for (const d of [addDays(day0, -1), addDays(day0, 1)]) {
+    const t = lisbonWallTimeUtcMs(d, a);
+    if (Math.abs(t - start) < Math.abs(fromMs - start)) { day = d; fromMs = t; }
+  }
   let untilMs = lisbonWallTimeUtcMs(day, b);
   if (untilMs <= fromMs) untilMs = lisbonWallTimeUtcMs(addDays(day, 1), b);
   return { from: toDbUtc(fromMs), until: toDbUtc(untilMs) };
