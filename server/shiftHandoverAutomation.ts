@@ -377,6 +377,8 @@ export interface ComplianceRow {
   status: ComplianceStatus; late: boolean;
   ackByName: string | null; authorName: string | null;
   cashDiff: number | null; reminded: boolean;
+  /** quando a passagem foi feita (criada), epoch ms — null sem passagem */
+  createdAtMs: number | null;
 }
 
 export async function getHandoverCompliance(date: string, city: HandoverCity | null, nowMs: number = Date.now()): Promise<{ day: ComplianceRow[]; percent30: number | null; expected30: number }> {
@@ -409,6 +411,7 @@ export async function getHandoverCompliance(date: string, city: HandoverCity | n
       ackByName: h?.ackByName ?? null, authorName: h ? (h.createdByName ?? h.filledByName ?? null) : null,
       cashDiff: h ? cashDifference(h, hMap.get(k(prev.date, prev.shift, c)) ?? null) : null,
       reminded: remindedSet.has(key),
+      createdAtMs: h?.createdAtUnix != null ? Number(h.createdAtUnix) * 1000 : null,
     });
   }
   const order = (r: ComplianceRow) => `${r.date}|${r.shift === "morning" ? 0 : 1}|${r.city}`;

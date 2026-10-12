@@ -11,6 +11,7 @@
  * calculada entre pontos (o GPS parado a "tremer" gerava picos).
  */
 import { zelloKey } from "../shared/zelloKey";
+import { MAX_PLAUSIBLE_KMH, STOPPED_SPEED_KMH } from "../shared/gpsRules";
 
 /** Velocidade de um report do Zello, em km/h. */
 export function zelloSpeedKmh(props: Record<string, any> | null | undefined): number {
@@ -32,10 +33,8 @@ export function zelloTimestamp(props: Record<string, any> | null | undefined): n
 export const MAX_ACCURACY_M = 100;
 /** Intervalo mínimo (s) entre dois pontos para calcular velocidade implícita. */
 export const MIN_IMPLICIT_GAP_S = 5;
-/** Acima disto é ruído (não há condutores a 150 km/h num parque). */
-export const MAX_PLAUSIBLE_KMH = 150;
-/** Abaixo disto (km/h) o condutor está parado — "horas de movimento" = o resto. */
-export const STOPPED_SPEED_KMH = 2;
+// Acima de 150 km/h é ruído; abaixo de 2 km/h está parado — regras únicas em shared/gpsRules.ts.
+export { MAX_PLAUSIBLE_KMH, STOPPED_SPEED_KMH };
 
 export function zelloAccuracyOk(props: Record<string, any> | null | undefined): boolean {
   const a = parseFloat(props?.accuracy);

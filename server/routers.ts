@@ -3898,6 +3898,45 @@ export const appRouter = router({
       const { getSupervisorDayDashboard } = await import("./db");
       return getSupervisorDayDashboard(input.date);
     }),
+
+    // 12 out 2026 (Jorge): "Parado" limitado ao TURNO de cada pessoa (picagens;
+    // sem elas, a escala), a partir dos pontos do Zello. À parte do resumo:
+    // lê os ficheiros do GPS e não pode atrasar o resto. Só fichas da cidade.
+    peopleShiftGps: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+      employeeIds: z.array(z.number().int().positive()).max(300),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
+      const { getPeopleShiftGps } = await import("./shiftDayDetail");
+      return getPeopleShiftGps(input.date, input.employeeIds);
+    }),
+
+    // O dia de um condutor (linha de "Quem trabalhou"): recolhas/entregas/movimentos
+    // com a reserva, pendente→entregue, velocidade máxima em cada entrega e o GPS do turno.
+    driverDay: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+      key: z.string().min(3).max(300),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
+      const { getDriverShiftDay } = await import("./shiftDayDetail");
+      return getDriverShiftDay(input.date, input.key);
+    }),
+
+    // Uma entrega lenta: a reserva, a linha do tempo e os outros pedidos da
+    // cidade à espera ao mesmo tempo (uma leitura, limitada à cidade e à janela).
+    deliveryContext: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+      booking: z.string().min(1).max(64),
+      pendingAt: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+      deliveredAt: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
+      const { getDeliveryContext } = await import("./shiftDayDetail");
+      return getDeliveryContext({ booking: input.booking, pendingAt: input.pendingAt, deliveredAt: input.deliveredAt });
+    }),
   }),
 
   // ─── PARCERIAS ───────────────────────────────────────────────────────────
