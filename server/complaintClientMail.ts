@@ -108,13 +108,27 @@ export const NO_MAIL_ACCESS = (limit?: number | null): ClientMailResult => ({
 });
 
 /**
+ * Teto para a reserva AO VIVO da Multipark: lenta (até 15 s por consulta) não
+ * pode prender a ficha — passa a aviso "podem faltar conversas" (auditoria 57).
+ */
+export const CLIENT_MAIL_BOOKING_TIMEOUT_MS = 6_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => { t = setTimeout(() => reject(new Error("A Multipark não respondeu a tempo.")), ms); }),
+  ]).finally(() => clearTimeout(t));
+}
+
+/**
  * O histórico de emails do cliente de uma reclamação. Quem chama já confirmou
  * o acesso à reclamação (e a cidade dela). Lança se as conversas não se lerem.
  */
 export async function clientMailHistory(
   viewer: MailViewer,
   complaint: ClientMailComplaint,
-  opts: { limit?: number | null; scopeIds: number[] | undefined },
+  opts: { limit?: number | null; scopeIds: number[] | undefined; bookingTimeoutMs?: number },
   deps: ClientMailDeps = dbClientMailDeps,
 ): Promise<ClientMailResult> {
   const limit = clientMailLimit(opts.limit);
@@ -123,27 +137,33 @@ export async function clientMailHistory(
   if (!access.length) return NO_MAIL_ACCESS(limit);
 
   const warnings: string[] = [];
-  const brandDomains = await deps.brandDomains().catch(() => undefined);
+  // As leituras independentes ao mesmo tempo (a reserva ao vivo com teto): uma
+  // Multipark lenta já não soma o tempo dela ao resto.
+  const [brandR, partnersR, linkedR, bookingR] = await Promise.allSettled([
+    deps.brandDomains(),
+    deps.partnerEmails(),
+    deps.complaintEmails(complaint.id),
+    complaint.reservationRef
+      ? withTimeout(deps.booking(complaint.reservationRef), opts.bookingTimeoutMs ?? CLIENT_MAIL_BOOKING_TIMEOUT_MS)
+      : Promise.resolve(null),
+  ]);
+  const brandDomains = brandR.status === "fulfilled" ? brandR.value : undefined;
   // Parceiros (agências que reservam para vários clientes): o email deles nunca
   // identifica ESTE cliente — as conversas com a agência são de outros clientes.
-  let partners: string[] | null = null;
-  try { partners = await deps.partnerEmails(); } catch { partners = null; }
+  const partners: string[] | null = partnersR.status === "fulfilled" ? partnersR.value : null;
   const isCompany = (e: string) => isCompanyAddress(e, brandDomains) || (partners != null && isPartnerSender(e, partners));
   const found: Array<{ email: string | null | undefined; source: IdentitySource }> = [{ email: complaint.clientEmail, source: "reclamacao" }];
-  try {
-    for (const e of await deps.complaintEmails(complaint.id)) found.push({ email: e, source: "reclamacao" });
-  } catch {
+  if (linkedR.status === "fulfilled") {
+    for (const e of linkedR.value) found.push({ email: e, source: "reclamacao" });
+  } else {
     warnings.push("Não foi possível ler os emails ligados a esta reclamação — podem faltar conversas.");
   }
   let bookingClientIds: number[] = [];
-  if (complaint.reservationRef) {
-    try {
-      const b = await deps.booking(complaint.reservationRef);
-      for (const e of b.emails) found.push({ email: e, source: "reserva" });
-      bookingClientIds = b.clientIds;
-    } catch {
-      warnings.push("Não foi possível ler a reserva ligada (Multipark) — podem faltar conversas do email da reserva.");
-    }
+  if (bookingR.status === "fulfilled" && bookingR.value) {
+    for (const e of bookingR.value.emails) found.push({ email: e, source: "reserva" });
+    bookingClientIds = bookingR.value.clientIds;
+  } else if (bookingR.status === "rejected") {
+    warnings.push("Não foi possível ler a reserva ligada (Multipark) — podem faltar conversas do email da reserva.");
   }
   const seeds = identityEmails(found, isCompany).map((x) => x.email);
   try {
@@ -256,7 +276,9 @@ export const dbClientMailDeps: ClientMailDeps = {
     if (clientIds.length) return { emails: [], clientIds };
     // Sem ficha ligada (reserva muito recente): a reserva AO VIVO, nas cidades de quem pede.
     const { liveBookingByRef } = await import("./multiparkDb/bookingSearch");
-    const b = await liveBookingByRef(ref, { cities: "request" });
+    const { multiparkDbQuery } = await import("./multiparkDb/client");
+    // Consulta curta (o teto da ficha é CLIENT_MAIL_BOOKING_TIMEOUT_MS): não fica a correr 15 s no servidor.
+    const b = await liveBookingByRef(ref, { cities: "request" }, (q, p) => multiparkDbQuery(q, p, { timeoutMs: 5_000 }));
     return { emails: b?.clientEmail ? [b.clientEmail] : [], clientIds: [] };
   },
   async crm(q) {

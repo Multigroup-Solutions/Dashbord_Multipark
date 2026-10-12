@@ -838,3 +838,19 @@ describe("auditoria 57 — telemóvel e estados (capturas em scratchpad/harness-
     expect(src("client/src/components/ClientHistoryCard.tsx")).toContain('closed: "Fechado"');
   });
 });
+
+describe("auditoria 57 — a Multipark lenta não prende os emails do cliente", () => {
+  it("a reserva ao vivo que não responde passa a aviso (e as conversas aparecem na mesma)", async () => {
+    const { deps } = mailDeps({ booking: () => new Promise(() => {}) });
+    const t0 = Date.now();
+    const r = await clientMailHistory(TL, COMPLAINT, { limit: 10, scopeIds: [1], bookingTimeoutMs: 30 }, deps);
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(r.threads.length).toBeGreaterThan(0);
+    expect(r.warnings.some((w) => /reserva ligada/.test(w))).toBe(true);
+  });
+  it("a leitura da reserva usa uma consulta curta à Multipark (nunca os 15 s por omissão)", () => {
+    const m = src("server/complaintClientMail.ts");
+    expect(m).toContain("multiparkDbQuery(q, p, { timeoutMs: 5_000 })");
+    expect(m).toContain("Promise.allSettled([");
+  });
+});
