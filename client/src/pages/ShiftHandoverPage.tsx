@@ -14,9 +14,13 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ClipboardCheck, History, BarChart3, Radio, Loader2, Sun, Moon, CheckCircle2, XCircle, AlertTriangle, Clock, RefreshCw } from "lucide-react";
+import { ClipboardCheck, History, BarChart3, Radio, Loader2, Sun, Moon, CheckCircle2, XCircle, AlertTriangle, Clock, RefreshCw, Gauge, Route } from "lucide-react";
 import { useTableSort, Th } from "@/components/SortableTable";
-import { fmtPTDate } from "@/lib/lisbonTime";
+import { fmtPTDate, fmtPTTime } from "@/lib/lisbonTime";
+import { retryTransient } from "@/lib/queryRetry";
+import { useOpenEmployee } from "@/hooks/useOpenEmployee";
+import { DriverDaySheet, HandoverShiftCard, SlowDeliveryDialog, type ComplianceDayRow, type DriverRow, type SlowDelivery } from "@/components/shiftDay/ShiftDayReview";
+import type { TeamLine } from "@shared/shiftDayReview";
 import { Plus, Trash2 } from "lucide-react";
 import {
   CLOTHING_LABELS,
@@ -43,7 +47,6 @@ import {
   type HandoverShift,
 } from "@shared/shiftHandover";
 import {
-  COMPLIANCE_LABELS,
   HANDOVER_CITY_FIELDS,
   MATERIAL_EXCEPTION_LABELS,
   SHIFT_LABELS,
@@ -53,13 +56,12 @@ import {
   previousShiftOf,
   shiftSince,
   withNoteItems,
-  type ComplianceStatus,
   type MaterialException,
   type MaterialExceptionItem,
   type OpenItem,
 } from "@shared/shiftHandoverAuto";
 import { AiSummaryBox, OpenItemsEditor, ShiftHandoverDraftPanel } from "@/components/ShiftHandoverDraftPanel";
-import { fmtHours, stoppedHours, workedHours } from "@shared/dayWorkSummary";
+import { fmtHours, stoppedForDisplay, workedHours } from "@shared/dayWorkSummary";
 import HandoverRepeatsCard from "@/components/aiOps/HandoverRepeatsCard";
 import { ShiftHandoverLiveState } from "@/components/ShiftHandoverLiveState";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -809,25 +811,44 @@ function HandoverHistory({ cityState, userId, canEdit }: { cityState: CityState;
 }
 
 // ─── RESUMO DO DIA (supervisor+) ────────────────────────────────────────────
+// 12 out 2026 (Jorge): "Quem trabalhou" clicável (nome → ficha; linha → o dia
+// da pessoa), velocidade e excessos, parado limitado ao turno, entregas lentas
+// com o que havia no mesmo horário e a passagem por chefe de turno (equipa).
 function SupervisorDashboard({ cityState }: { cityState: CityState }) {
   const { city, allowed, setCity } = cityState;
   // Dia operacional (03:00 → 03:00): de madrugada ainda é o dia anterior.
   const [date, setDate] = useState(() => operationalShift().date);
   const dashQ = trpc.shiftHandover.supervisorDashboard.useQuery({ date, city });
   const data = dashQ.data;
+  const openEmployee = useOpenEmployee();
+  // Parado no TURNO (picagens; sem elas, a escala): lido à parte (os pontos do Zello), não atrasa o resumo.
+  const employeeIds = useMemo(() => Array.from(new Set(((data?.people ?? []) as any[]).map((p) => p.employeeId).filter((x): x is number => typeof x === "number"))).sort((a, b) => a - b), [data]);
+  const gpsQ = trpc.shiftHandover.peopleShiftGps.useQuery({ date, city, employeeIds }, { enabled: !!data && employeeIds.length > 0, refetchOnWindowFocus: false, staleTime: 5 * 60_000, retry: retryTransient });
   // 44b: horas trabalhadas (ponto; sem ele, Zello ligado) e tempo parado (Zello ligado sem andar).
   const people = useMemo(() => ((data?.people ?? []) as any[]).map((p) => {
     const w = workedHours(p);
-    return { ...p, workedH: w.hours, workedSrc: w.source, stoppedH: stoppedHours(p) };
-  }), [data]);
+    const shift = p.employeeId != null ? (gpsQ.data?.people as Record<number, any> | undefined)?.[p.employeeId] : undefined;
+    const st = stoppedForDisplay(p, shift);
+    return { ...p, workedH: w.hours, workedSrc: w.source, stoppedH: st.hours, stoppedSrc: st.source, stoppedPartial: !!shift?.partial };
+  }), [data, gpsQ.data]);
   const peopleSort = useTableSort(people);
   const complianceQ = trpc.shiftHandover.compliance.useQuery({ date, city });
+  const [driver, setDriver] = useState<DriverRow | null>(null);
+  const [slow, setSlow] = useState<SlowDelivery | null>(null);
+  const gpsPending = employeeIds.length > 0 && gpsQ.isLoading;
 
   // Pelo id do funcionário; só sem id se cai no nome (e na cidade).
   const shiftOf = (employeeId: number | null, name: string) => {
     const a = findPersonShift((data?.shifts ?? []) as any[], { employeeId, name }, city);
     return a ? (a.shift === "morning" ? "☀️" : "🌙") : "";
   };
+  // Cartões novos: os mesmos números da tabela (Atividade diária para km/velocidade; o parado do turno).
+  const speeders = people.filter((p) => (p.violations ?? 0) > 0).length;
+  const maxSpeedOfDay = people.reduce((m, p) => Math.max(m, Number(p.maxSpeed ?? 0)), 0);
+  // Horas paradas: das pessoas (um PDA sem login esquecido ligado não é ninguém parado).
+  const withStopped = people.filter((p) => p.kind !== "sem_login" && p.stoppedH != null);
+  const stoppedWholeDay = withStopped.filter((p) => p.stoppedSrc === "dia").length;
+  const stoppedTotal = Math.round(withStopped.reduce((s, p) => s + Number(p.stoppedH), 0) * 10) / 10;
 
   return (
     <div className="space-y-4">
@@ -846,43 +867,63 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
             <p className="text-xs text-amber-700">Dia com movimentos a mais para ler de uma vez: os tempos de entrega e de recolha são só de uma parte do dia.</p>
           )}
           {/* KPIs do dia */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <Card className="p-3"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold text-emerald-700">{data.totals.checkins}</p></Card>
-            <Card className="p-3"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold text-blue-700">{data.totals.checkouts}</p></Card>
-            <Card className="p-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <Card className="p-3 gap-0.5"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold text-emerald-700">{data.totals.checkins}</p></Card>
+            <Card className="p-3 gap-0.5"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold text-blue-700">{data.totals.checkouts}</p></Card>
+            <Card className="p-3 gap-0.5">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" />Pendente→Entrega</p>
               <p className="text-xl font-bold">{data.delivery.avgMins} min</p>
               <p className="text-[11px] text-muted-foreground">máx {data.delivery.maxMins} · {data.delivery.count} medidas</p>
             </Card>
-            <Card className={`p-3 ${data.delivery.over30 > 0 ? "border-red-300 bg-red-50/50" : ""}`}>
+            <Card className={`p-3 gap-0.5 ${data.delivery.over30 > 0 ? "border-red-300 bg-red-50/50" : ""}`}>
               <p className="text-xs text-muted-foreground">Entregas &gt;15/&gt;30 min</p>
               <p className="text-xl font-bold"><span className="text-amber-700">{data.delivery.over15}</span> / <span className="text-red-700">{data.delivery.over30}</span></p>
             </Card>
-            <Card className="p-3">
+            <Card className="p-3 gap-0.5">
               <p className="text-xs text-muted-foreground">Recolhas atrasadas &gt;15min</p>
               <p className="text-xl font-bold text-amber-700">{data.pickup.over15}</p>
               <p className="text-[11px] text-muted-foreground">desvio médio {data.pickup.avgDelayMins} min</p>
             </Card>
-            <Card className={`p-3 ${data.complaintsToday > 0 ? "border-amber-300 bg-amber-50/50" : ""}`}>
+            <Card className={`p-3 gap-0.5 ${data.complaintsToday > 0 ? "border-amber-300 bg-amber-50/50" : ""}`}>
               <p className="text-xs text-muted-foreground flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Reclamações do dia</p>
               <p className="text-xl font-bold">{data.complaintsToday}</p>
             </Card>
+            <Card className="p-3 gap-0.5" title="Os km do GPS da Atividade diária (dia civil, PDAs partilhados partidos por quem os tinha)">
+              <p className="text-xs text-muted-foreground flex items-center gap-1"><Route className="w-3 h-3" />Km da equipa</p>
+              <p className="text-xl font-bold text-purple-700 tabular-nums">{Number(data.totals.totalKm).toLocaleString("pt-PT", { maximumFractionDigits: 1 })} km</p>
+              <p className="text-[11px] text-muted-foreground">{(data.gpsMissingDays ?? []).includes(date) ? "provisório (GPS por recolher)" : `${people.filter((p) => (p.totalKm ?? 0) > 0).length} pessoas com GPS`}</p>
+            </Card>
+            <Card className={`p-3 gap-0.5 ${speeders > 0 ? "border-red-300 bg-red-50/50" : ""}`}>
+              <p className="text-xs text-muted-foreground flex items-center gap-1"><Gauge className="w-3 h-3" />Excesso de velocidade</p>
+              <p className={`text-xl font-bold tabular-nums ${speeders > 0 ? "text-red-700" : ""}`}>{speeders} {speeders === 1 ? "pessoa" : "pessoas"}</p>
+              <p className="text-[11px] text-muted-foreground">máx. do dia {maxSpeedOfDay > 0 ? `${Math.round(maxSpeedOfDay)} km/h` : "—"} · {data.totals.violations} excessos</p>
+            </Card>
+            <Card className="p-3 gap-0.5" title="Com o Zello ligado mas sem andar, dentro do turno de cada pessoa (picagens; sem elas, a escala)">
+              <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" />Horas paradas</p>
+              <p className="text-xl font-bold tabular-nums">{gpsPending ? "…" : withStopped.length ? fmtHours(stoppedTotal) : "—"}</p>
+              <p className="text-[11px] text-muted-foreground">{gpsPending ? "a ler o GPS do turno…" : withStopped.length ? `média ${fmtHours(Math.round((stoppedTotal / withStopped.length) * 10) / 10)} por pessoa${stoppedWholeDay ? ` · ${stoppedWholeDay} sem turno (~)` : ""}` : "sem GPS"}</p>
+            </Card>
           </div>
 
-          {/* Cumprimento das passagens de turno */}
+          {/* Cumprimento das passagens de turno + equipa de cada chefe de turno */}
           {complianceQ.isError
             ? <QueryErrorNote error={complianceQ.error} onRetry={() => complianceQ.refetch()} retrying={complianceQ.isFetching} what="o cumprimento das passagens" />
-            : <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} />}
+            : <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} teams={(data.teams ?? []) as TeamLine[]} />}
 
-          {/* Piores entregas */}
+          {/* Piores entregas — cada uma abre o que se passava nesse horário */}
           {data.delivery.worst.length > 0 && (
             <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Entregas mais lentas do dia (pendente → entregue)</CardTitle></CardHeader>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Entregas mais lentas do dia (pendente → entregue)</CardTitle>
+                <p className="text-[11px] text-muted-foreground">Toca numa para ver a reserva, a linha do tempo e os outros pedidos à espera nesse horário.</p>
+              </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
-                {data.delivery.worst.map((w: any) => (
-                  <Badge key={w.booking} variant="outline" className={`text-xs ${w.mins > 30 ? "border-red-300 text-red-700" : w.mins > 15 ? "border-amber-300 text-amber-700" : ""}`}>
-                    {w.mins} min{w.agent ? ` · ${w.agent}` : ""}
-                  </Badge>
+                {(data.delivery.worst as SlowDelivery[]).map((w) => (
+                  <button key={`${w.booking}-${w.pendingAt}`} type="button" onClick={() => setSlow(w)} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`${w.bookingCode ?? w.booking} · pedido às ${fmtPTTime(w.pendingAt)}`}>
+                    <Badge variant="outline" className={`text-xs cursor-pointer hover:bg-muted ${w.mins > 30 ? "border-red-300 text-red-700" : w.mins > 15 ? "border-amber-300 text-amber-700" : ""}`}>
+                      {w.mins} min{w.agent ? ` · ${w.agent}` : ""}{w.bookingCode ? ` · ${w.bookingCode}` : ""}
+                    </Badge>
+                  </button>
                 ))}
               </CardContent>
             </Card>
@@ -892,7 +933,14 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Quem trabalhou — {fmtPTDate(date)}</CardTitle>
-              <p className="text-[11px] text-muted-foreground">Horas = as do ponto (com "~" quando não há picagens e é o tempo com o Zello ligado). Parado = com o Zello ligado mas sem andar.</p>
+              <p className="text-[11px] text-muted-foreground">
+                Clica no <b>nome</b> para abrir a ficha; no resto da linha para ver o dia dessa pessoa (cada recolha e entrega, com a reserva e a velocidade).
+                Horas = as do ponto (com "~" quando não há picagens e é o tempo com o Zello ligado). Km, Vel. máx. e Excessos = os da Atividade diária.
+                Parado = com o Zello ligado mas sem andar, dentro do turno (picagens; sem elas, a escala); "~" = sem turno, o dia inteiro.
+              </p>
+              {gpsQ.isError && (
+                <QueryErrorNote error={gpsQ.error} onRetry={() => gpsQ.refetch()} retrying={gpsQ.isFetching} what={`o GPS do turno (o "Parado" fica o do dia inteiro, com ~)`} />
+              )}
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
@@ -907,30 +955,57 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
                       <Th k="totalActions" label="Total" align="right" className="font-bold" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                       <Th k="workedH" label="Horas" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                       <Th k="totalKm" label="Km" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
+                      <Th k="maxSpeed" label="Vel. máx." align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
+                      <Th k="violations" label="Excessos" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                       <Th k="stoppedH" label="Parado" align="right" sortKey={peopleSort.sortKey} sortDir={peopleSort.sortDir} onToggle={peopleSort.toggle} />
                     </tr>
                   </thead>
                   <tbody>
-                    {(peopleSort.sorted as any[]).map((p) => (
-                      <tr key={p.key} className="border-b hover:bg-muted/30">
-                        <td className="p-2 font-medium">{p.kind === "parceiro" ? "🤝 " : p.kind === "por_ligar" ? "⚠ " : ""}{p.name}</td>
-                        <td className="p-2">{shiftOf(p.employeeId, p.name)}</td>
-                        <td className="p-2 text-right text-emerald-700 tabular-nums">{p.checkins || ""}</td>
-                        <td className="p-2 text-right text-blue-700 tabular-nums">{p.checkouts || ""}</td>
-                        <td className="p-2 text-right tabular-nums">{p.movements || ""}</td>
-                        <td className="p-2 text-right font-bold tabular-nums">{p.totalActions || ""}</td>
-                        <td className="p-2 text-right tabular-nums" title={p.workedSrc === "zello" ? "Sem picagens: tempo com o Zello ligado" : p.workedSrc === "ponto" ? "Horas do ponto" : undefined}>
-                          {fmtHours(p.workedH)}{p.workedSrc === "zello" ? <span className="text-muted-foreground"> ~</span> : null}
-                        </td>
-                        <td className="p-2 text-right tabular-nums">{p.totalKm > 0 ? `${p.totalKm} km` : "—"}</td>
-                        <td className="p-2 text-right tabular-nums" title="Com o Zello ligado mas sem andar">{fmtHours(p.stoppedH)}</td>
-                      </tr>
-                    ))}
+                    {(peopleSort.sorted as any[]).map((p) => {
+                      const open = () => setDriver(p as DriverRow);
+                      return (
+                        <tr key={p.key} className="border-b hover:bg-muted/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={open} tabIndex={0} aria-label={`Ver o dia de ${p.name}`} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
+                          <td className="p-2 font-medium min-w-[9rem]">
+                            {p.kind === "parceiro" ? "🤝 " : p.kind === "por_ligar" ? "⚠ " : ""}
+                            {p.employeeId != null ? (
+                              <button type="button" className="font-medium text-primary hover:underline text-left" title="Abrir a ficha no RH"
+                                onClick={(e) => { e.stopPropagation(); openEmployee(p.employeeId); }}>{p.name}</button>
+                            ) : p.name}
+                            {p.isTeamLeader && <Badge className="ml-1 bg-amber-100 text-amber-800 border-amber-300 text-[11px] px-1.5 py-0">TL</Badge>}
+                          </td>
+                          <td className="p-2">{shiftOf(p.employeeId, p.name)}</td>
+                          <td className="p-2 text-right text-emerald-700 tabular-nums">{p.checkins || ""}</td>
+                          <td className="p-2 text-right text-blue-700 tabular-nums">{p.checkouts || ""}</td>
+                          <td className="p-2 text-right tabular-nums">{p.movements || ""}</td>
+                          <td className="p-2 text-right font-bold tabular-nums">{p.totalActions || ""}</td>
+                          <td className="p-2 text-right tabular-nums" title={p.workedSrc === "zello" ? "Sem picagens: tempo com o Zello ligado" : p.workedSrc === "ponto" ? "Horas do ponto" : undefined}>
+                            {fmtHours(p.workedH)}{p.workedSrc === "zello" ? <span className="text-muted-foreground"> ~</span> : null}
+                          </td>
+                          <td className="p-2 text-right tabular-nums">
+                            {p.totalKm > 0 ? `${p.totalKm} km` : "—"}
+                            {p.provisionalKm && <span className="block text-[11px] text-amber-700">provisório</span>}
+                          </td>
+                          <td className="p-2 text-right tabular-nums">{p.maxSpeed != null && p.maxSpeed > 0 ? `${Math.round(p.maxSpeed)} km/h` : "—"}</td>
+                          <td className={`p-2 text-right tabular-nums ${p.violations > 0 ? "text-red-700 font-semibold" : "text-muted-foreground"}`} title={p.violations > 0 ? "Excessos de velocidade do dia (GPS)" : "Sem excessos"}>{p.violations > 0 ? p.violations : "não"}</td>
+                          <td className="p-2 text-right tabular-nums" title={p.stoppedSrc === "dia" ? "Sem turno (nem picagens nem escala) ou sem GPS do turno: o dia inteiro" : p.stoppedSrc ? `Com o Zello ligado mas sem andar, dentro do turno (${p.stoppedSrc === "ponto" ? "picagens" : "escala"})` : undefined}>
+                            {gpsPending && p.employeeId != null ? <span className="text-muted-foreground">…</span> : (
+                              <>{fmtHours(p.stoppedH)}{p.stoppedSrc === "dia" ? <span className="text-muted-foreground"> ~</span> : null}{p.stoppedPartial ? <span className="text-amber-700" title="GPS incompleto"> *</span> : null}</>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </CardContent>
           </Card>
+          {driver && (
+            <DriverDaySheet date={date} city={city} person={driver} onClose={() => setDriver(null)}
+              onOpenEmployee={(id) => { setDriver(null); openEmployee(id); }} />
+          )}
+          {slow && <SlowDeliveryDialog date={date} city={city} item={slow} onClose={() => setSlow(null)} />}
         </>
       )}
     </div>
@@ -938,17 +1013,12 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
 }
 
 // ─── Cumprimento das passagens (Resumo do dia) ──────────────────────────────
-const COMPLIANCE_TONE: Record<ComplianceStatus, string> = {
-  pending: "text-muted-foreground",
-  missing: "border-red-300 text-red-700 bg-red-50/60",
-  late: "border-amber-300 text-amber-700 bg-amber-50/60",
-  on_time: "border-emerald-300 text-emerald-700",
-  confirmed: "border-emerald-400 text-emerald-800 bg-emerald-50/60",
-};
-
-function HandoverCompliance({ data, loading }: {
-  data: { day: Array<{ date: string; shift: HandoverShift; city: string; status: ComplianceStatus; late: boolean; ackByName: string | null; authorName: string | null; cashDiff: number | null; reminded: boolean }>; percent30: number | null; expected30: number } | undefined;
+// 12 out 2026: cada turno diz se houve passagem (a que horas e por quem) e,
+// por chefe de turno, o que a equipa dele fez a tempo e atrasado.
+function HandoverCompliance({ data, loading, teams }: {
+  data: { day: ComplianceDayRow[]; percent30: number | null; expected30: number } | undefined;
   loading: boolean;
+  teams: TeamLine[];
 }) {
   return (
     <Card>
@@ -961,6 +1031,7 @@ function HandoverCompliance({ data, loading }: {
             </Badge>
           )}
         </div>
+        <p className="text-[11px] text-muted-foreground">Equipa = o turno do chefe de turno na escala (mesmo dia, cidade e turno), como no Desempenho. Entregas atrasadas: mais de 15 min do pedido à entrega; recolhas: mais de 15 min depois da entrada prevista.</p>
       </CardHeader>
       <CardContent>
         {loading ? <p className="text-sm text-muted-foreground">A carregar…</p> : !data?.day.length ? (
@@ -968,13 +1039,7 @@ function HandoverCompliance({ data, loading }: {
         ) : (
           <div className="flex flex-wrap gap-2">
             {data.day.map((r) => (
-              <div key={`${r.shift}-${r.city}`} className="border rounded-lg px-3 py-2 text-xs space-y-1 min-w-[12rem]">
-                <p className="font-medium">{r.shift === "morning" ? "☀️ Manhã" : "🌙 Noite"} · {CITY_LABELS[r.city] ?? r.city}</p>
-                <Badge variant="outline" className={COMPLIANCE_TONE[r.status]}>{COMPLIANCE_LABELS[r.status]}{r.status === "confirmed" && r.late ? " · entregue atrasada" : ""}</Badge>
-                {r.authorName && <p className="text-muted-foreground">por {r.authorName}{r.ackByName ? ` · recebida por ${r.ackByName}` : ""}</p>}
-                {r.cashDiff != null && <p className={r.cashDiff < 0 ? "text-red-700" : "text-amber-700"}>Caixa vs passagem anterior: {r.cashDiff > 0 ? "+" : ""}{r.cashDiff.toFixed(2).replace(".", ",")} €</p>}
-                {r.reminded && <p className="text-muted-foreground">lembrete enviado</p>}
-              </div>
+              <HandoverShiftCard key={`${r.shift}-${r.city}`} row={r} teams={teams.filter((t) => t.shift === r.shift && t.city === r.city)} />
             ))}
           </div>
         )}

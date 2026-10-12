@@ -94,6 +94,7 @@ import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle
 import { ENV } from "./_core/env";
 import { expenseStatsWindows, lisbonToday } from "../shared/expensePeriods";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
+import { DELIVERY_LATE_MIN, DELIVERY_VERY_LATE_MIN, PICKUP_LATE_MIN, dayTimings, teamLines, type ActorRef } from "../shared/shiftDayReview";
 import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
@@ -4080,43 +4081,24 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
  * Tempos do painel do supervisor a partir do histórico (ao vivo):
  *  - pendente→entrega: 1.º PENDING_CHECKOUT no dia → 1.º CHECK_OUT (até 10 h depois);
  *  - atraso na recolha: 1.º CHECK_IN no dia vs entrada PREVISTA da reserva (±10 h).
- * Instantes UTC "YYYY-MM-DD HH:MM:SS". PURA.
+ * Instantes UTC "YYYY-MM-DD HH:MM:SS". PURA. As regras vivem em
+ * shared/shiftDayReview.ts (`dayTimings`, com a reserva e quem fez cada uma).
  */
 export function supervisorTimings(
   rows: Array<{ bookingExternalId: string; changeType: string | null; actionTime: string | null; agentName: string | null; checkIn: string | null }>,
   w: { start: string; end: string; checkoutEnd: string },
 ): { deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }>; pickupDelays: number[] } {
-  const ms = (t: string) => Date.parse(`${t.replace(" ", "T")}Z`);
-  const pend = new Map<string, string>(), out = new Map<string, { t: string; agent: string | null }>(), cin = new Map<string, { t: string; planned: string | null }>();
-  for (const r of rows) {
-    const t = r.actionTime; const b = r.bookingExternalId;
-    if (!t || !b) continue;
-    const ct = (r.changeType ?? "").toUpperCase();
-    if (ct === "PENDING_CHECKOUT" && t >= w.start && t < w.end) { if (!pend.has(b) || t < pend.get(b)!) pend.set(b, t); }
-    else if (ct === "CHECK_OUT" && t >= w.start && t < w.checkoutEnd) {
-      const e = out.get(b);
-      if (!e || t < e.t) out.set(b, { t, agent: r.agentName ?? e?.agent ?? null });
-    } else if (ct === "CHECK_IN" && t >= w.start && t < w.end) { if (!cin.has(b) || t < cin.get(b)!.t) cin.set(b, { t, planned: r.checkIn }); }
-  }
-  const deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }> = [];
-  for (const [b, t1] of pend) {
-    const o = out.get(b);
-    if (!o || o.t < t1) continue;
-    const mins = Math.floor((ms(o.t) - ms(t1)) / 60_000);
-    if (mins < 600) deliveryTimes.push({ booking: b, mins, agent: o.agent });
-  }
-  const pickupDelays: number[] = [];
-  for (const { t, planned } of cin.values()) {
-    if (!planned) continue;
-    const mins = Math.trunc((ms(t) - ms(planned)) / 60_000);
-    if (Number.isFinite(mins) && Math.abs(mins) < 600) pickupDelays.push(mins);
-  }
-  return { deliveryTimes, pickupDelays };
+  const t = dayTimings(rows, w);
+  return {
+    deliveryTimes: t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent })),
+    pickupDelays: t.pickups.filter((p) => p.delayMins != null).map((p) => p.delayMins!),
+  };
 }
 
 /** Resumo do dia do supervisor: condutores por turno, carros
  *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
- *  (previsto vs real), e reclamações do dia.
+ *  (previsto vs real), reclamações do dia e, por chefe de turno, o que a
+ *  equipa dele fez a tempo e atrasado (12 out 2026).
  *  O "dia" é o dia OPERACIONAL de Lisboa: 03:00 → 03:00 do dia seguinte
  *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
  *  dentro das cidades do utilizador (ou da cidade pedida). */
@@ -4133,11 +4115,12 @@ export async function getSupervisorDayDashboard(date: string) {
   const { scopedCityNamesLive } = await import("./cityScope");
   const HIST_LIMIT = 5000;
   const hist = await readLiveHistory({ changeTypes: ["PENDING_CHECKOUT", "CHECK_OUT", "CHECK_IN"], from: start, to: checkoutEnd, cities: scopedCityNamesLive(), limit: HIST_LIMIT, order: "asc" });
-  const { deliveryTimes, pickupDelays } = supervisorTimings(hist, { start, end, checkoutEnd });
-  deliveryTimes.sort((a, b) => b.mins - a.mins);
+  const timings = dayTimings(hist, { start, end, checkoutEnd });
+  const deliveryTimes = [...timings.deliveries].sort((a, b) => b.mins - a.mins);
+  const pickupDelays = timings.pickups.filter((p) => p.delayMins != null).map((p) => p.delayMins!);
   const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
 
-  const late = pickupDelays.filter((m) => m > 15).length;
+  const late = pickupDelays.filter((m) => m > PICKUP_LATE_MIN).length;
   const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
 
   // Reclamações criadas no mesmo dia operacional
@@ -4153,22 +4136,46 @@ export async function getSupervisorDayDashboard(date: string) {
     employeeId: extrasDiaAssignments.employeeId,
     startHour: extrasDiaAssignments.startHour,
     endHour: extrasDiaAssignments.endHour,
+    sentHomeHour: extrasDiaAssignments.sentHomeHour,
     isTeamLeader: extrasDiaAssignments.isTeamLeader,
   }).from(extrasDiaAssignments).where(and(eq(extrasDiaAssignments.assignmentDate, date), cityNameScope(extrasDiaAssignments.city)));
+
+  // Equipas por chefe de turno (regra 42c): quem fez cada entrega/recolha → a
+  // ficha (a MESMA identidade da Atividade do Dia) → o turno dela na escala.
+  const { loadIdentityResolver } = await import("./dayActivity");
+  const { resolve } = await loadIdentityResolver();
+  const actor = (userId: string | null, name: string | null): ActorRef => {
+    const who = resolve(userId, name);
+    if (who.kind === "ignorado") return { employeeId: null, name: null };
+    return { employeeId: who.employeeId, name: who.kind === "colaborador" ? who.name : name };
+  };
+  const teams = teamLines(date, assignments.map((a) => ({ ...a, shift: a.shift as "morning" | "night" })), {
+    deliveries: [
+      ...timings.deliveries.map((d) => ({ actor: actor(d.agentUserId, d.agent), at: d.deliveredAt, mins: d.mins })),
+      ...timings.unmeasured.map((d) => ({ actor: actor(d.agentUserId, d.agent), at: d.at, mins: null })),
+    ],
+    pickups: timings.pickups.map((p) => ({ actor: actor(p.agentUserId, p.agent), at: p.at, delayMins: p.delayMins })),
+  });
 
   return {
     date,
     window: { start, end },
     totals: dayActivity.totals,
     people: dayActivity.people,
+    gpsMissingDays: dayActivity.gpsMissingDays,
     shifts: assignments,
+    teams,
     delivery: {
       count: deliveryTimes.length,
       avgMins: dAvg,
       maxMins: deliveryTimes[0]?.mins ?? 0,
-      over15: deliveryTimes.filter((r) => r.mins > 15).length,
-      over30: deliveryTimes.filter((r) => r.mins > 30).length,
-      worst: deliveryTimes.slice(0, 8),
+      over15: deliveryTimes.filter((r) => r.mins > DELIVERY_LATE_MIN).length,
+      over30: deliveryTimes.filter((r) => r.mins > DELIVERY_VERY_LATE_MIN).length,
+      // Cada uma abre o "o que se passava nesse horário" (shiftHandover.deliveryContext).
+      worst: deliveryTimes.slice(0, 8).map((d) => ({
+        booking: d.booking, mins: d.mins, agent: d.agent, pendingAt: d.pendingAt, deliveredAt: d.deliveredAt,
+        bookingCode: d.bookingCode, plate: d.plate, parkName: d.parkName, city: d.city,
+      })),
     },
     pickup: {
       count: pickupDelays.length,

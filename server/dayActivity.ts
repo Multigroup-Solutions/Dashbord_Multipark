@@ -51,6 +51,12 @@ export interface ActivityPerson {
   /** null = sem permissão para ver custos */
   cost: number | null; costPerAction: number | null;
   totalKm: number | null; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number | null;
+  /**
+   * Horas paradas do dia (GPS): a regra do Histórico Diário e do Desempenho —
+   * troços parados entre reports a menos de 1 h (o tempo com o Zello
+   * desligado não conta). null sem GPS (ou partes antigas sem minutos em movimento).
+   */
+  hoursStopped: number | null;
   violations: number; pontoHours: number | null; pdaNames: string | null;
   /** km de dias ainda sem recolha GPS, vindos do ponto (check-out) */
   provisionalKm: boolean;
@@ -205,7 +211,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     key, name, kind, employeeId, partnerName, isTeamLeader: false,
     checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
     inShift: null, outOfShift: null, daysScheduled: 0, hoursPaid: 0, cost: canSeeCost ? 0 : null, costPerAction: null,
-    totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null, violations: 0, pontoHours: null, pdaNames: null,
+    totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null, hoursStopped: null, violations: 0, pontoHours: null, pdaNames: null,
     provisionalKm: false, zelloUsernames: [],
   });
   const get = (key: string, make: () => ActivityPerson) => {
@@ -299,10 +305,11 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
   }
 
   // ── GPS
-  const addGps = (p: ActivityPerson, g: { km: number; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number; violations: number }, day: string) => {
+  const addGps = (p: ActivityPerson, g: { km: number; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number; violations: number; hoursStopped?: number | null }, day: string) => {
     p.totalKm = r2((p.totalKm ?? 0) + g.km);
     if (g.hoursWorked != null) p.hoursWorked = r2((p.hoursWorked ?? 0) + g.hoursWorked);
     if (g.hoursOnline != null) p.hoursOnline = r2((p.hoursOnline ?? 0) + g.hoursOnline);
+    if (g.hoursStopped != null) p.hoursStopped = r2((p.hoursStopped ?? 0) + g.hoursStopped);
     if (g.maxSpeed > 0) p.maxSpeed = Math.max(p.maxSpeed ?? 0, g.maxSpeed);
     p.violations += g.violations;
     const d = daily.get(day);
@@ -326,12 +333,13 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
       km: Number(sh.km ?? 0),
       hoursWorked: sh.movingMinutes == null ? null : Number(sh.movingMinutes) / 60,
       hoursOnline: Number(sh.minutes ?? 0) / 60,
+      hoursStopped: sh.movingMinutes == null ? null : Math.max(0, Number(sh.minutes ?? 0) - Number(sh.movingMinutes)) / 60,
       maxSpeed: Number(sh.maxSpeed ?? 0), violations: Number(sh.violations ?? 0),
     }, String(sh.day));
   }
   const gpsRows = rowsOf(await db.execute(sql`
     SELECT h.id, h.employeeId, h.zelloUsername, h.displayName, DATE_FORMAT(h.date, '%Y-%m-%d') AS day,
-           h.totalKm, h.hoursWorked, h.totalHoursOnline, h.maxSpeed, h.speedViolations,
+           h.totalKm, h.hoursWorked, h.hoursStopped, h.totalHoursOnline, h.maxSpeed, h.speedViolations,
            CASE WHEN ${gpsRowOwnScope(sql`h.employeeId`, sql`h.zelloUsername`)} THEN 1 ELSE 0 END AS own
       FROM daily_driver_history h
      WHERE DATE(h.date) >= ${startDate} AND DATE(h.date) <= ${lastDay}
@@ -361,7 +369,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     if (Number(g.own) !== 1) continue; // só visível pelas partes (já contadas)
     const whole = {
       km: Number(g.totalKm ?? 0), hoursMoving: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0),
-      maxSpeed: Number(g.maxSpeed ?? 0), violations: Number(g.speedViolations ?? 0),
+      maxSpeed: Number(g.maxSpeed ?? 0), violations: Number(g.speedViolations ?? 0), hoursStopped: Number(g.hoursStopped ?? 0),
     };
     const sums = shareSums.get(Number(g.id));
     const zello = String(g.zelloUsername ?? "");
@@ -373,16 +381,16 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
       if (owner != null) {
         const p = personForEmployee(owner, g.displayName);
         addZello(p, zello);
-        addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations }, day);
+        addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations, hoursStopped: rest.hoursStopped }, day);
         continue;
       }
       const key = `gpsu:${zello}`;
       const p = get(key, () => blank(key, `${g.displayName || zello} — sem login no PDA`, "sem_login", null));
       addZello(p, zello);
-      addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations }, day);
+      addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations, hoursStopped: rest.hoursStopped }, day);
       continue;
     }
-    const gps = { km: whole.km, hoursWorked: whole.hoursMoving, hoursOnline: whole.hoursOnline, maxSpeed: whole.maxSpeed, violations: whole.violations };
+    const gps = { km: whole.km, hoursWorked: whole.hoursMoving, hoursOnline: whole.hoursOnline, maxSpeed: whole.maxSpeed, violations: whole.violations, hoursStopped: whole.hoursStopped };
     if (g.employeeId != null) {
       const p = personForEmployee(Number(g.employeeId), g.displayName);
       addZello(p, zello);
