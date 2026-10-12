@@ -2783,6 +2783,8 @@ export const inboundEmails = mysqlTable("inbound_emails", {
 	uniqueIndex("inbound_emails_message_id_unique").on(table.messageId),
 	index("inbound_emails_alias_idx").on(table.alias),
 	index("inbound_emails_gm_thread_idx").on(table.gmThreadId),
+	// 0630 (lote 57): emails de uma reclamação/perdido sem ler a tabela toda.
+	index("idx_inbound_emails_target").on(table.targetModule, table.targetId),
 ]);
 
 // ─── WhatsApp (integração Cloud API) ────────────────────────────────────────

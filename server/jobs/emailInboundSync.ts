@@ -53,6 +53,7 @@ import {
   parseComplaintCaseTag,
   COMPLAINT_DEFAULT_SLA_HOURS,
 } from "../complaintEmail";
+import { aiMergeSameClient } from "../../shared/complaintIntake";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
@@ -180,15 +181,19 @@ async function routeToModule(
     const taggedId = parseComplaintCaseTag(ctx.subject);
     const ai = ctx.aiIntake ?? null;
     // Lote 57 — email de outra caixa visto pela IA: só junta pela própria
-    // reclamação desta conversa, pelo fio do email, pelo email/matrícula do
-    // cliente ou pela MESMA reserva (aberta). Nunca só pelo nome nem pelo
-    // assunto ("Reclamação" juntava clientes diferentes).
+    // reclamação desta conversa, pelo fio do email, pelo email do cliente ou —
+    // sinais fracos — pela matrícula / MESMA reserva (aberta) quando essa
+    // reclamação é do mesmo email (ou não tem nenhum). Nunca só pelo nome nem
+    // pelo assunto ("Reclamação" juntava clientes diferentes).
+    const sameClient = <T extends { clientEmail?: string | null } | null | undefined>(c: T): T | null =>
+      c && aiMergeSameClient(c.clientEmail, clientEmail) ? c : null;
     const existing = ai
       ? ((ai.forceComplaintId ? await getComplaintById(ai.forceComplaintId) : null) ||
         (taggedId ? await getComplaintById(taggedId) : null) ||
         (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
-        (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, null)) ||
-        (parsed.bookingRef ? await findOpenComplaintByBookingRef(parsed.bookingRef) : null))
+        (clientEmail ? await findComplaintByClientSignals(clientEmail, null, null) : null) ||
+        (parsed.vehiclePlate ? sameClient(await findComplaintByClientSignals(null, parsed.vehiclePlate, null)) : null) ||
+        (parsed.bookingRef ? sameClient(await findOpenComplaintByBookingRef(parsed.bookingRef)) : null))
       : ((taggedId ? await getComplaintById(taggedId) : null) ||
         (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
         (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, clientName)) ||
@@ -239,7 +244,7 @@ async function routeToModule(
     const booking = match?.booking ?? null;
     // Lote 57: a reserva de que o cliente fala já tem uma reclamação aberta → junta-se a essa (não duplica).
     if (ai && booking?.externalId) {
-      const sameBooking = await findOpenComplaintByBookingRef(String(booking.externalId));
+      const sameBooking = sameClient(await findOpenComplaintByBookingRef(String(booking.externalId)));
       if (sameBooking) {
         await addComplaintMessage({
           complaintId: sameBooking.id,

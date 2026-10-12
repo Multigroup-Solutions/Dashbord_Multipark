@@ -81,6 +81,20 @@ export const PUBLIC_MAIL_DOMAINS: ReadonlySet<string> = new Set([
 const domainOf = (e: string): string => e.slice(e.lastIndexOf("@") + 1);
 
 /**
+ * Famílias de webmail em qualquer país (hotmail.co.uk, outlook.es, yahoo.com.br,
+ * gmx.at…): a lista acima não chega — um parceiro com "@hotmail.co.uk" fazia de
+ * TODOS os clientes desse webmail "parceiros" (as reclamações deles nunca
+ * chegavam). Auditoria do lote 57.
+ */
+const PUBLIC_MAIL_FAMILY_RE = /^(gmail|googlemail|hotmail|outlook|live|msn|windowslive|yahoo|ymail|rocketmail|icloud|me|mac|aol|gmx|web|proton|protonmail|pm|zoho|yandex|mail|email|inbox|free|orange|wanadoo|laposte|sfr|libero|virgilio|tiscali|alice|t-online|freenet|arcor|btinternet|sky|virginmedia|comcast|verizon|att|bellsouth|sbcglobal|telenet|skynet|bluewin|seznam|wp|o2|interia|onet|terra|uol|bol|ig|sapo|netcabo|clix|iol|vodafone|meo|nos|telepac)\.(com|net|org|co|[a-z]{2})(\.[a-z]{2})?$/;
+
+/** O domínio é de um webmail público (não identifica uma empresa)? PURA. */
+export function isPublicMailDomain(domain: string | null | undefined): boolean {
+  const d = String(domain ?? "").trim().toLowerCase();
+  return !!d && (PUBLIC_MAIL_DOMAINS.has(d) || PUBLIC_MAIL_FAMILY_RE.test(d));
+}
+
+/**
  * O remetente é um parceiro? O email exato de um contacto de parceria, ou o
  * mesmo domínio de empresa (nunca por um webmail público). PURA.
  */
@@ -90,7 +104,7 @@ export function isPartnerSender(sender: string | null | undefined, partnerEmails
   const list = partnerEmails.map((p) => emailKey(p)).filter(Boolean);
   if (list.includes(s)) return true;
   const d = domainOf(s);
-  if (!d || PUBLIC_MAIL_DOMAINS.has(d)) return false;
+  if (!d || isPublicMailDomain(d)) return false;
   return list.some((p) => domainOf(p) === d);
 }
 
@@ -161,6 +175,22 @@ export function complaintIntakeDecision(
   if (c >= settings.createMinConfidence) return { action: "create" };
   if (c >= settings.suggestMinConfidence) return { action: "suggest" };
   return { action: "skip", why: "low_confidence" };
+}
+
+// ─── Juntar a uma reclamação aberta ─────────────────────────────────────────
+
+/**
+ * Pode o email que a IA viu juntar-se a esta reclamação aberta por um sinal
+ * FRACO (a mesma matrícula ou a mesma reserva)? Só se a reclamação não tiver
+ * email do cliente ou for o MESMO email — a mesma matrícula de outro cliente
+ * (carro de empresa, vendido, gralha) ou a reserva de outra pessoa nunca
+ * escondem uma reclamação dentro do caso de outro cliente. Auditoria do lote
+ * 57. A conversa, o fio do email e a etiqueta [REC-n] continuam a juntar. PURA.
+ */
+export function aiMergeSameClient(existingEmail: string | null | undefined, senderEmail: string | null | undefined): boolean {
+  const a = emailKey(existingEmail);
+  const b = emailKey(senderEmail);
+  return !a || !b || a === b;
 }
 
 // ─── Notas na reclamação ────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
  * sem caixa, caixas sem acesso e as arquivadas pela retenção nunca aparecem.
  */
 import { canSeeMailbox, mailboxCityRestricted, type MailViewer, type MailboxConfig } from "./mail";
-import { emailKey, isPersonalEmail } from "./crmIdentity";
+import { emailKey, isPersonalEmail, MAX_AUTO_SHARED, namesMatch } from "./crmIdentity";
 
 /** Conversas por página ("Ver mais" pede mais). */
 export const CLIENT_MAIL_PAGE = 10;
@@ -49,6 +49,31 @@ export function identityEmails(
     out.set(e, [f.source]);
   }
   return [...out.entries()].map(([email, sources]) => ({ email, sources }));
+}
+
+/** Uma ficha do CRM encontrada por um email ou telefone do cliente. */
+export interface CrmIdentityCandidate { clientId: number; name: string | null; kind: string | null }
+
+/**
+ * Que fichas do CRM são MESMO deste cliente (regra do dono: junta sozinho só
+ * o óbvio — mesmo nome + mesmo email/telefone; nunca empresas). Auditoria do
+ * lote 57: o telefone sozinho (família, agência, balcão) juntava os emails de
+ * OUTRA pessoa ao histórico do cliente — e as conversas dela apareciam aqui.
+ *  - email: uma só ficha com ele → é dela; duas (família) → só a do mesmo nome;
+ *    mais do que MAX_AUTO_SHARED → nenhuma;
+ *  - telefone: só fichas com o mesmo nome (sem nome na reclamação → nenhuma);
+ *  - empresas nunca (o email/telefone de uma empresa é de muitas pessoas). PURA.
+ */
+export function crmIdentityAccepted(
+  by: "email" | "phone",
+  rows: readonly CrmIdentityCandidate[],
+  complaintName: string | null | undefined,
+): number[] {
+  const people = rows.filter((r) => Number.isInteger(r.clientId) && r.clientId > 0);
+  if (!people.length || people.length > MAX_AUTO_SHARED) return [];
+  const persons = people.filter((r) => String(r.kind ?? "person") !== "company");
+  if (by === "email" && people.length === 1) return persons.map((r) => r.clientId);
+  return persons.filter((r) => namesMatch(r.name, complaintName)).map((r) => r.clientId);
 }
 
 /** Uma caixa partilhada que a pessoa vê; `cityIds` null = todas as cidades. */

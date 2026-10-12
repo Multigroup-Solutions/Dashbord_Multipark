@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   byId: vi.fn(async (id: number) => ({ id, projectId: 1, complaintStatus: "new", clientEmail: "cliente@gmail.com", reservationRef: null }) as any),
   sendMail: vi.fn(async () => ({ ok: true })),
   inboundByMessageId: vi.fn(async (_id: string) => null as any),
+  overrides: {} as Record<number, any>,
 }));
 
 const national = vi.hoisted(() => ({ all: true, defaultCityId: null, cityName: null, cityIds: [] as number[], projectIds: [] as number[], missingCostCenter: false }));
@@ -40,7 +41,7 @@ vi.mock("./db", async (orig) => {
     ...actual,
     getDb: async () => h.db,
     getUserPermissionOverrides: async () => ({}),
-    getUserModuleOverrides: async () => ({}),
+    getUserModuleOverrides: async (id: number) => h.overrides[id] ?? {},
     logActivity: async () => {},
     claimInboundEmail: vi.fn(async (d: any) => (h.claimed.has(d.messageId) ? null : (h.claimed.add(d.messageId), h.claimed.size))),
     updateInboundEmail: vi.fn(async () => {}),
@@ -79,7 +80,8 @@ import {
   COMPLAINT_INTAKE_DEFAULTS, COMPLAINT_INTAKE_FLAG, complaintIntakeDecision, complaintIntakeSettings, intakeNote, isPartnerSender,
   looksLikeNewsletter, looksLikeReviewNotice, type IntakeFacts,
 } from "../shared/complaintIntake";
-import { clientThreadAllowed, identityEmails, lastMessageDirection, visibleSharedBoxes, clientMailLimit, CLIENT_MAIL_MAX } from "../shared/complaintClientMail";
+import { clientThreadAllowed, identityEmails, lastMessageDirection, visibleSharedBoxes, clientMailLimit, CLIENT_MAIL_MAX, crmIdentityAccepted } from "../shared/complaintClientMail";
+import { aiMergeSameClient, isPublicMailDomain } from "../shared/complaintIntake";
 import { AUTOMATION_FLAGS, SETTINGS, automationFlagDefault, validateSetting } from "../shared/appSettings";
 import { isCompanyAddress } from "../shared/mail";
 import { clientMailHistory, clientThreadsUnion, dbClientMailDeps, type ClientMailDeps } from "./complaintClientMail";
@@ -171,7 +173,7 @@ describe("3a — filtros da página (uma regra só)", () => {
     expect(ids({ q: "aa12bb" })).toEqual([1]);
     expect(ids({ q: "912345678" })).toEqual([1]);
     expect(ids({ q: "ana@sapo.pt" })).toEqual([2]);
-    expect(ids({ q: "#3" })).toContain(3);
+    expect(ids({ q: "#3" })).toEqual([3]);
     expect(ids({ q: "maria" })).toEqual([1, 4]); // responsável também conta
     expect(ids({ q: "ninguem-com-isto" })).toEqual([]);
   });
@@ -211,6 +213,7 @@ function mailDeps(o: Partial<ClientMailDeps> = {}) {
   const deps: ClientMailDeps = {
     boxes: async () => BOXES as any,
     brandDomains: async () => ({ multipark: ["multipark.pt"] }),
+    partnerEmails: async () => [],
     complaintEmails: async () => ["cliente@gmail.com", "reservas@multipark.pt"],
     booking: async () => ({ emails: ["Cliente.Reserva@Hotmail.com"], clientIds: [] }),
     crm: async (q) => { calls.crm.push(q); return { emails: ["cliente.outro@gmail.com", "info@empresa-do-cliente.pt"] }; },
@@ -331,6 +334,8 @@ describe("1 — histórico de emails do CLIENTE na reclamação", () => {
     }
     const page = src("client/src/pages/ComplaintsPage.tsx");
     expect(page).toContain("<ComplaintClientMail complaintId={id} />");
+    // outra reclamação = ficha nova (nada da anterior passa: emails do cliente, rascunho, edição)
+    expect(page).toMatch(/<DetailView\s+\/\/[^\n]*\n[^\n]*\n\s*key=\{selectedId\}/);
     expect(page).toContain('<TabsTrigger value="comms">Emails do cliente</TabsTrigger>');
     const comp = src("client/src/components/ComplaintClientMail.tsx");
     expect(comp).toContain('what="os emails do cliente"');
@@ -600,7 +605,7 @@ describe("3b — nunca envia nada ao cliente; agrupa sem duplicar", () => {
     const { processInboundEmail } = await import("./jobs/emailInboundSync");
     await processInboundEmail(base({ aiIntake: { actorId: null }, text: "Reserva: 20451. O carro veio riscado." }));
     expect(h.bySubject).not.toHaveBeenCalled();
-    expect(h.bySignals).toHaveBeenCalledWith("ana.sousa@gmail.com", undefined, null);
+    expect(h.bySignals).toHaveBeenCalledWith("ana.sousa@gmail.com", null, null);
     h.byBooking.mockImplementationOnce(async () => ({ id: 12, complaintStatus: "analyzing", reservationRef: "20451" }));
     h.created = [];
     const out = await processInboundEmail(base({ aiIntake: { actorId: null }, text: "Reserva: 20451. Outra vez." }));
@@ -688,5 +693,121 @@ describe("0630 — origem das reclamações e registo da IA (só acrescenta)", (
     expect(src("server/integrations/googleBusiness/service.ts")).toContain("origin: 'critica'");
     expect(src("server/caseOps.ts").match(/origin: "conversao"/g)).toHaveLength(2);
     expect(src("server/jobs/emailInboundSync.ts")).toContain('origin: ai ? "ia" : "email"');
+  });
+});
+
+// ─── Auditoria do lote 57 (cada teste falha sem a correção) ─────────────────
+
+describe("auditoria 57 — privacidade dos 'Emails do cliente'", () => {
+  it("o email de um PARCEIRO (agência que reserva para vários clientes) nunca identifica o cliente", async () => {
+    const { deps, calls } = mailDeps({
+      partnerEmails: async () => ["reservas@agencia-viagens.pt"],
+      // a reserva foi feita pela agência: o email da reserva é o dela
+      booking: async () => ({ emails: ["joao.balcao@agencia-viagens.pt"], clientIds: [] }),
+      crm: async (q) => { calls.crm.push(q); return { emails: ["cliente.outro@gmail.com"] }; },
+    });
+    const r = await clientMailHistory(TL, COMPLAINT, { limit: 10, scopeIds: [1] }, deps);
+    expect(r.emails.map((e) => e.email)).toEqual(["cliente@gmail.com", "cliente.outro@gmail.com"]);
+    expect(calls.crm[0].emails).not.toContain("joao.balcao@agencia-viagens.pt");
+    expect(calls.threads[0].emails).not.toContain("joao.balcao@agencia-viagens.pt");
+  });
+  it("sem a lista dos parceiros: só os emails da própria reclamação (+ aviso), nunca os da reserva/CRM às cegas", async () => {
+    const { deps, calls } = mailDeps({ partnerEmails: async () => { throw new Error("BD"); } });
+    const r = await clientMailHistory(TL, COMPLAINT, { limit: 10, scopeIds: [1] }, deps);
+    expect(r.emails.map((e) => e.email)).toEqual(["cliente@gmail.com"]);
+    expect(calls.threads[0].emails).toEqual(["cliente@gmail.com"]);
+    expect(r.warnings.some((w) => /parceiros/.test(w))).toBe(true);
+  });
+  it("CRM: o telefone só junta a ficha com o MESMO nome; email partilhado só a do mesmo nome; nunca empresas", () => {
+    const ana = { clientId: 1, name: "Ana Sousa", kind: "person" };
+    const rui = { clientId: 2, name: "Rui Sousa", kind: "person" };
+    const firma = { clientId: 3, name: "Sousa & Filhos Lda", kind: "company" };
+    expect(crmIdentityAccepted("phone", [rui], "Ana Sousa")).toEqual([]);
+    expect(crmIdentityAccepted("phone", [ana, rui], "Ana Maria Sousa")).toEqual([1]);
+    expect(crmIdentityAccepted("phone", [ana], null)).toEqual([]);
+    expect(crmIdentityAccepted("email", [rui], "Ana Sousa")).toEqual([2]); // email de uma só ficha: é dela
+    expect(crmIdentityAccepted("email", [ana, rui], "Ana Sousa")).toEqual([1]);
+    expect(crmIdentityAccepted("email", [firma], "Ana Sousa")).toEqual([]);
+    expect(crmIdentityAccepted("email", [ana, rui, { clientId: 4, name: "Ana Sousa", kind: "person" }], "Ana Sousa")).toEqual([]);
+  });
+  it("BD: o telefone de outra pessoa (outro nome) não traz os emails dela", async () => {
+    h.db = createFakeDb((q) => {
+      if (q.sql.includes("FROM crm_client_phones")) return [[{ clientId: 9, kind: "person", displayName: "Rui Sousa" }]];
+      if (q.sql.includes("FROM crm_client_emails ce JOIN crm_clients c ON c.id = ce.clientId\n        WHERE ce.email")) return [[]];
+      return [[{ email: "rui.sousa@gmail.com" }]];
+    });
+    const r = await dbClientMailDeps.crm({ emails: [], phone: "+351912345678", name: "Ana Sousa", clientIds: [] });
+    expect(r.emails).toEqual([]);
+    // sem nome na reclamação, o telefone nem é procurado
+    h.db = createFakeDb(() => [[{ clientId: 9, kind: "person", displayName: "Rui Sousa" }]]);
+    expect(await dbClientMailDeps.crm({ emails: [], phone: "+351912345678", name: null, clientIds: [] })).toEqual({ emails: [] });
+    expect(h.db.queries).toHaveLength(0);
+  });
+  it("Comunicação só 'own' (acesso à parte): 'sem acesso às caixas', não um erro", async () => {
+    h.overrides[78] = { comunicacao: { access: "own", actions: ["view"] } };
+    const c = appRouter.createCaller({ user: { id: 78, role: "team_leader", name: "Rui" }, req: { headers: {} }, res: {} } as any);
+    await expect(c.complaints.clientMail({ complaintId: 5 })).resolves.toMatchObject({ noMailAccess: true, threads: [] });
+    await expect(c.complaints.mailSuggestions()).resolves.toEqual({ items: [], noMailAccess: true });
+    await expect(c.complaints.dismissMailSuggestion({ id: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("auditoria 57 — a IA nunca junta à reclamação de OUTRO cliente", () => {
+  const base = (o: any = {}) => ({
+    alias: "reclamacoes" as const, messageId: `<a-${Math.random()}@x>`, gmThreadId: "999", refs: [], fromName: "Ana Sousa", fromEmail: "ana.sousa@gmail.com",
+    subject: "Carro riscado", receivedAt: "2026-10-12 10:00:00", html: null, loadAttachments: async () => [], ...o,
+  });
+  const other = { id: 12, complaintStatus: "new", clientEmail: "outro.cliente@gmail.com", reservationRef: "20451" };
+  it("a mesma matrícula de outro cliente (outro email) → cria a dela, não esconde no caso dele", async () => {
+    const { processInboundEmail } = await import("./jobs/emailInboundSync");
+    h.bySignals.mockImplementation(async (_e: any, plate: any) => (plate ? other : null) as any);
+    const out = await processInboundEmail(base({ aiIntake: { actorId: null }, text: "Matrícula: AA-12-BB\nO carro veio riscado." }));
+    expect(out).toMatchObject({ routed: { targetModule: "complaint", isNew: true } });
+    expect(h.created).toHaveLength(1);
+    expect(h.messages.some((m) => m.complaintId === 12)).toBe(false);
+  });
+  it("a mesma reserva com uma reclamação aberta de outro email → não junta; do mesmo email (ou sem email) → junta", async () => {
+    const { processInboundEmail } = await import("./jobs/emailInboundSync");
+    h.byBooking.mockImplementation(async () => other as any);
+    const a = await processInboundEmail(base({ aiIntake: { actorId: null }, text: "Reserva: 20451\nCobraram a mais." }));
+    expect(a).toMatchObject({ routed: { isNew: true } });
+    h.byBooking.mockImplementation(async () => ({ ...other, clientEmail: "Ana.Sousa@gmail.com" }) as any);
+    const b = await processInboundEmail(base({ aiIntake: { actorId: null }, text: "Reserva: 20451\nCobraram a mais." }));
+    expect(b).toMatchObject({ routed: { targetId: 12, isNew: false } });
+    expect(aiMergeSameClient(null, "a@b.pt")).toBe(true);
+    expect(aiMergeSameClient("x@b.pt", "a@b.pt")).toBe(false);
+  });
+});
+
+describe("auditoria 57 — filtros, parceiros, migração e página", () => {
+  it("'#1' é a reclamação nº 1 (não todas as que têm um '1' no telefone ou matrícula)", () => {
+    expect(ids({ q: "#1" })).toEqual([1]);
+    expect(ids({ q: "# 6" })).toEqual([6]);
+    expect(ids({ q: "#999" })).toEqual([]);
+  });
+  it("um parceiro com webmail de outro país (hotmail.co.uk) não faz de todos os clientes desse webmail 'parceiros'", () => {
+    expect(isPartnerSender("cliente@hotmail.co.uk", ["agencia.lx@hotmail.co.uk"])).toBe(false);
+    expect(isPartnerSender("cliente@yahoo.com.br", ["parceiro@yahoo.com.br"])).toBe(false);
+    expect(isPartnerSender("agencia.lx@hotmail.co.uk", ["agencia.lx@hotmail.co.uk"])).toBe(true); // o email exato continua
+    expect(isPublicMailDomain("outlook.es")).toBe(true);
+    expect(isPublicMailDomain("mail.agencia-viagens.pt")).toBe(false);
+    expect(isPartnerSender("ana@agencia-viagens.pt", ["reservas@agencia-viagens.pt"])).toBe(true);
+  });
+  it("0630: índice inbound_emails(targetModule, targetId) ANTES do preenchimento que o usa", () => {
+    const i = MIGRATION_0630_STATEMENTS.findIndex((x) => x.includes("idx_inbound_emails_target"));
+    const u = MIGRATION_0630_STATEMENTS.findIndex((x) => x.includes("FROM `inbound_emails`"));
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(MIGRATION_0630_STATEMENTS[i]).toBe("CREATE INDEX `idx_inbound_emails_target` ON `inbound_emails` (`targetModule`, `targetId`)");
+    expect(i).toBeLessThan(u);
+    expect(IDEMPOTENT_ERROR_CODES_0630.has("ER_DUP_KEYNAME")).toBe(true);
+    expect(src("drizzle/schema.ts")).toContain('index("idx_inbound_emails_target").on(table.targetModule, table.targetId)');
+  });
+  it("página: sem carácter invisível no CSV, filtros com nome acessível, 'Sem cidade' sai ao escolher uma cidade", () => {
+    const page = src("client/src/pages/ComplaintsPage.tsx");
+    expect(page).not.toContain("﻿");
+    expect(page).toContain('new Blob(["\\ufeff" + toCsv(headers, rows)]');
+    for (const l of ["Estado", "Tipo", "Cidade", "Responsável", "Origem"]) expect(page).toContain(`aria-label="${l}"`);
+    expect(page).toContain("if (globalFilters.cityId != null) setFilters((f) => (f.noCity ? { ...f, noCity: false } : f));");
+    expect(page).not.toMatch(/role="tab"/);
   });
 });

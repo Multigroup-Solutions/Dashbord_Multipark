@@ -174,8 +174,12 @@ async function intakeSettings(): Promise<ComplaintIntakeSettings> {
   }
 }
 
-/** Emails dos contactos das parcerias (parcerias + ligações do CRM aos parceiros). Lança se a BD falhar. */
-async function partnerEmails(d: any): Promise<string[]> {
+/**
+ * Emails dos contactos das parcerias (parcerias + ligações do CRM aos
+ * parceiros). Lança se a BD falhar. Também usado pelos "Emails do cliente"
+ * (server/complaintClientMail.ts): o email de um parceiro nunca identifica um cliente.
+ */
+export async function partnerEmails(d: any): Promise<string[]> {
   const a = rowsOf(await d.execute(sql`SELECT contactEmail AS e FROM partnerships WHERE contactEmail IS NOT NULL AND contactEmail <> '' AND archivedAt IS NULL LIMIT 2000`));
   let b: any[] = [];
   try {

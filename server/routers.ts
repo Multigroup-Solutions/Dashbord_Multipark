@@ -463,9 +463,22 @@ function mailViewerFrom(user: { id: number; role: string; accessOverrides?: any 
   return { id: w.id, role: w.role, accessOverrides: w.accessOverrides ?? null };
 }
 
+/**
+ * Lote 57: a pessoa usa as caixas partilhadas da Comunicação? (a mesma regra do
+ * mail.*: o super admin sempre; os outros com a Comunicação acima de "own").
+ * Sim → passa pela matriz (a cidade das caixas fica a da Comunicação). Não →
+ * "sem acesso às caixas" (≠ erro, ≠ "sem emails").
+ */
+function sharedMailGate(user: any, viewer: { role: string }): boolean {
+  if (viewer.role === "super_admin") return true;
+  if (!canAccess(user, "comunicacao", "view")) return false;
+  requireAccess(user, "comunicacao", "view");
+  return true;
+}
+
 /** Lote 57: a sugestão é de uma conversa que a pessoa vê (caixa partilhada + cidade da Comunicação). */
 async function assertSuggestionThread(user: any, viewer: { id: number; role: string; accessOverrides: any }, threadId: number): Promise<void> {
-  if (can(viewer as any, "comunicacao", "view")) requireAccess(user, "comunicacao", "view");
+  if (!sharedMailGate(user, viewer)) throw new TRPCError({ code: "FORBIDDEN", message: "Não tens acesso às caixas de email da Comunicação." });
   const { threadAccess } = await import("./mail/inbox");
   const acc = await threadAccess(viewer, threadId);
   if (acc.personal || !acc.mailbox) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conversa não é de uma caixa partilhada." });
@@ -2217,11 +2230,12 @@ export const appRouter = router({
       const complaint = await getComplaintById(input.complaintId); // âmbito de cidade das reclamações
       if (!complaint) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
       const viewer = mailViewerFrom(ctx.user);
+      const { clientMailHistory, NO_MAIL_ACCESS } = await import("./complaintClientMail");
       // Cidade das caixas = a da Comunicação (quem tem um acesso à parte na Comunicação fica com ele).
-      if (can(viewer as any, "comunicacao", "view")) requireAccess(ctx.user, "comunicacao", "view");
-      const { clientMailHistory } = await import("./complaintClientMail");
+      if (!sharedMailGate(ctx.user, viewer)) return NO_MAIL_ACCESS(input.limit);
       return clientMailHistory(viewer, {
-        id: complaint.id, clientEmail: complaint.clientEmail ?? null, clientPhone: complaint.clientPhone ?? null, reservationRef: complaint.reservationRef ?? null,
+        id: complaint.id, clientName: complaint.clientName ?? null, clientEmail: complaint.clientEmail ?? null,
+        clientPhone: complaint.clientPhone ?? null, reservationRef: complaint.reservationRef ?? null,
       }, { limit: input.limit, scopeIds: scopedProjectIds() });
     }),
 
@@ -2229,8 +2243,7 @@ export const appRouter = router({
     mailSuggestions: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "reclamacoes", "view");
       const viewer = mailViewerFrom(ctx.user);
-      if (!can(viewer as any, "comunicacao", "view") && viewer.role !== "super_admin") return { items: [], noMailAccess: true };
-      if (can(viewer as any, "comunicacao", "view")) requireAccess(ctx.user, "comunicacao", "view");
+      if (!sharedMailGate(ctx.user, viewer)) return { items: [], noMailAccess: true };
       const { listMailSuggestions } = await import("./complaintMailIntake");
       return { items: await listMailSuggestions(viewer, scopedProjectIds()), noMailAccess: false };
     }),
@@ -2238,6 +2251,8 @@ export const appRouter = router({
       requireAccess(ctx.user, "reclamacoes", "edit");
       const viewer = mailViewerFrom(ctx.user);
       const { suggestionThreadId, createFromSuggestion, IntakeActionError } = await import("./complaintMailIntake");
+      // Sem acesso às caixas partilhadas: recusa antes de ler o que quer que seja.
+      if (!sharedMailGate(ctx.user, viewer)) throw new TRPCError({ code: "FORBIDDEN", message: "Não tens acesso às caixas de email da Comunicação." });
       try {
         await assertSuggestionThread(ctx.user, viewer, await suggestionThreadId(input.id));
         const r = await createFromSuggestion(input.id, { id: ctx.user.id, name: ctx.user.name ?? null }, undefined, defaultScopedProjectId());
@@ -2251,6 +2266,8 @@ export const appRouter = router({
       requireAccess(ctx.user, "reclamacoes", "edit");
       const viewer = mailViewerFrom(ctx.user);
       const { suggestionThreadId, dismissSuggestion, IntakeActionError } = await import("./complaintMailIntake");
+      // Sem acesso às caixas partilhadas: recusa antes de ler o que quer que seja.
+      if (!sharedMailGate(ctx.user, viewer)) throw new TRPCError({ code: "FORBIDDEN", message: "Não tens acesso às caixas de email da Comunicação." });
       try {
         await assertSuggestionThread(ctx.user, viewer, await suggestionThreadId(input.id));
         await dismissSuggestion(input.id, { id: ctx.user.id }, input.reason ?? null);

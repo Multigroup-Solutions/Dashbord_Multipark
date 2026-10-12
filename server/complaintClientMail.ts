@@ -10,8 +10,11 @@
  *  - o email do cliente da reserva ligada (ficha do CRM ligada à reserva; sem
  *    ela, a reserva lida AO VIVO da Multipark);
  *  - os emails da ficha do cliente no CRM (pelo email ou pelo telefone — só
- *    quando esse email/telefone é de até 2 fichas, regra MAX_AUTO_SHARED).
- * Só emails pessoais (nem da empresa nem de balcão).
+ *    quando esse email/telefone é de até 2 fichas, regra MAX_AUTO_SHARED, e
+ *    pelo telefone, ou num email partilhado, só a ficha com o MESMO nome;
+ *    nunca empresas — shared/complaintClientMail.ts crmIdentityAccepted).
+ * Só emails pessoais (nem da empresa nem de balcão) e nunca de um PARCEIRO
+ * (agência que reserva para vários clientes: as conversas dela são de outros).
  *
  * Que conversas: as das caixas partilhadas visíveis (regra da Comunicação +
  * cidade), nunca "O meu email" nem caixas sem acesso, nem arquivadas pela
@@ -23,9 +26,10 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import {
-  clientMailLimit, clientThreadAllowed, clientThreadLink, identityEmails, lastMessageDirection, visibleSharedBoxes,
+  clientMailLimit, clientThreadAllowed, clientThreadLink, crmIdentityAccepted, identityEmails, lastMessageDirection, visibleSharedBoxes,
   type BoxAccess, type IdentitySource,
 } from "../shared/complaintClientMail";
+import { isPartnerSender } from "../shared/complaintIntake";
 import { emailKey, isPersonalEmail, phoneKey, MAX_AUTO_SHARED } from "../shared/crmIdentity";
 import { isCompanyAddress, type MailViewer, type MailboxConfig } from "../shared/mail";
 
@@ -41,6 +45,8 @@ async function database() {
 
 export interface ClientMailComplaint {
   id: number;
+  /** Nome do cliente (o telefone só junta uma ficha do CRM com o MESMO nome). */
+  clientName?: string | null;
   clientEmail: string | null;
   clientPhone: string | null;
   reservationRef: string | null;
@@ -83,16 +89,23 @@ export interface ThreadQuery { emails: string[]; complaintId: number; access: Bo
 export interface ClientMailDeps {
   boxes(): Promise<Array<Pick<MailboxConfig, "key" | "label" | "module" | "visibleRoles" | "active" | "cityRule">>>;
   brandDomains(): Promise<Record<string, string[]>>;
+  /** Emails dos contactos dos parceiros (agências…): nunca identificam um cliente. Lança se a BD falhar. */
+  partnerEmails(): Promise<string[]>;
   /** Emails dos emails/conversas ligados ao caso. */
   complaintEmails(complaintId: number): Promise<string[]>;
   /** Email(s) do cliente da reserva ligada + fichas do CRM ligadas à reserva. */
   booking(ref: string): Promise<{ emails: string[]; clientIds: number[] }>;
-  /** Fichas do CRM destes emails/telefone (regra de identidade) e os emails delas. */
-  crm(q: { emails: string[]; phone: string | null; clientIds: number[] }): Promise<{ emails: string[] }>;
+  /** Fichas do CRM destes emails/telefone (regra de identidade: mesmo nome, nunca empresas) e os emails delas. */
+  crm(q: { emails: string[]; phone: string | null; name: string | null; clientIds: number[] }): Promise<{ emails: string[] }>;
   threads(q: ThreadQuery): Promise<{ rows: any[]; total: number }>;
   /** Reclamações ligadas a cada conversa. */
   complaintLinks(threadIds: number[]): Promise<Map<number, number[]>>;
 }
+
+/** Resposta "não usas as caixas partilhadas da Comunicação" (≠ erro, ≠ "sem emails"). */
+export const NO_MAIL_ACCESS = (limit?: number | null): ClientMailResult => ({
+  noMailAccess: true, emails: [], threads: [], total: 0, hasMore: false, limit: clientMailLimit(limit), warnings: [],
+});
 
 /**
  * O histórico de emails do cliente de uma reclamação. Quem chama já confirmou
@@ -107,11 +120,15 @@ export async function clientMailHistory(
   const limit = clientMailLimit(opts.limit);
   const boxes = await deps.boxes();
   const access = visibleSharedBoxes(viewer, boxes, opts.scopeIds);
-  if (!access.length) return { noMailAccess: true, emails: [], threads: [], total: 0, hasMore: false, limit, warnings: [] };
+  if (!access.length) return NO_MAIL_ACCESS(limit);
 
   const warnings: string[] = [];
   const brandDomains = await deps.brandDomains().catch(() => undefined);
-  const isCompany = (e: string) => isCompanyAddress(e, brandDomains);
+  // Parceiros (agências que reservam para vários clientes): o email deles nunca
+  // identifica ESTE cliente — as conversas com a agência são de outros clientes.
+  let partners: string[] | null = null;
+  try { partners = await deps.partnerEmails(); } catch { partners = null; }
+  const isCompany = (e: string) => isCompanyAddress(e, brandDomains) || (partners != null && isPartnerSender(e, partners));
   const found: Array<{ email: string | null | undefined; source: IdentitySource }> = [{ email: complaint.clientEmail, source: "reclamacao" }];
   try {
     for (const e of await deps.complaintEmails(complaint.id)) found.push({ email: e, source: "reclamacao" });
@@ -130,12 +147,18 @@ export async function clientMailHistory(
   }
   const seeds = identityEmails(found, isCompany).map((x) => x.email);
   try {
-    const crm = await deps.crm({ emails: seeds, phone: complaint.clientPhone, clientIds: bookingClientIds });
+    const crm = await deps.crm({ emails: seeds, phone: complaint.clientPhone, name: complaint.clientName ?? null, clientIds: bookingClientIds });
     for (const e of crm.emails) found.push({ email: e, source: "crm" });
   } catch {
     warnings.push("Não foi possível ler a ficha do cliente no CRM — podem faltar conversas de outros emails do cliente.");
   }
-  const emails = identityEmails(found, isCompany);
+  let emails = identityEmails(found, isCompany);
+  if (partners == null) {
+    // Sem a lista dos parceiros não se sabe se um email da reserva/CRM é de uma
+    // agência: fica só o que é da própria reclamação (nunca conversas de outros).
+    emails = emails.filter((x) => x.sources.includes("reclamacao"));
+    warnings.push("Não foi possível confirmar os parceiros — só se procura pelos emails da própria reclamação (podem faltar conversas).");
+  }
 
   // As conversas: falha aqui = erro (a ficha diz "Não foi possível carregar").
   const { rows, total } = await deps.threads({ emails: emails.map((x) => x.email), complaintId: complaint.id, access, limit: limit + 1 });
@@ -214,6 +237,10 @@ export const dbClientMailDeps: ClientMailDeps = {
     const { loadBrandDomains } = await import("./mail/store");
     return loadBrandDomains();
   },
+  async partnerEmails() {
+    const { partnerEmails } = await import("./complaintMailIntake");
+    return partnerEmails(await database());
+  },
   async complaintEmails(complaintId) {
     const d = await database();
     const a = rowsOf(await d.execute(sql`SELECT clientEmail AS e1, fromEmail AS e2 FROM inbound_emails
@@ -236,20 +263,24 @@ export const dbClientMailDeps: ClientMailDeps = {
     const d = await database();
     const { clientVisibleSql } = await import("./crm/scope");
     const ids = new Set<number>(q.clientIds);
-    // Pelo email: só emails de até MAX_AUTO_SHARED fichas (um email de família/empresa não junta pessoas).
+    const cand = (rows: any[]) => rows.map((r) => ({
+      clientId: Number(r.clientId), kind: r.kind != null ? String(r.kind) : null,
+      name: String(r.displayName ?? "").trim() || `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || null,
+    }));
+    // Pelo email: até MAX_AUTO_SHARED fichas; partilhado (família) → só a do mesmo nome; nunca empresas.
     for (const raw of q.emails.slice(0, 6)) {
       const e = emailKey(raw);
       if (!e || !isPersonalEmail(e)) continue;
-      const rows = rowsOf(await d.execute(sql`SELECT DISTINCT ce.clientId FROM crm_client_emails ce JOIN crm_clients c ON c.id = ce.clientId
+      const rows = rowsOf(await d.execute(sql`SELECT DISTINCT ce.clientId, c.kind, c.displayName, c.firstName, c.lastName FROM crm_client_emails ce JOIN crm_clients c ON c.id = ce.clientId
         WHERE ce.email = ${e} AND ce.generic = 0 AND c.status = 'active' AND ${clientVisibleSql(sql`c.id`)} LIMIT ${MAX_AUTO_SHARED + 1}`));
-      if (rows.length <= MAX_AUTO_SHARED) for (const r of rows) ids.add(Number(r.clientId));
+      for (const id of crmIdentityAccepted("email", cand(rows), q.name)) ids.add(id);
     }
-    // Pelo telefone: o mesmo teto.
+    // Pelo telefone: só a ficha com o MESMO nome (um telefone sozinho junta pessoas diferentes).
     const phone = phoneKey(q.phone);
-    if (phone) {
-      const rows = rowsOf(await d.execute(sql`SELECT DISTINCT cp.clientId FROM crm_client_phones cp JOIN crm_clients c ON c.id = cp.clientId
+    if (phone && q.name) {
+      const rows = rowsOf(await d.execute(sql`SELECT DISTINCT cp.clientId, c.kind, c.displayName, c.firstName, c.lastName FROM crm_client_phones cp JOIN crm_clients c ON c.id = cp.clientId
         WHERE cp.phone = ${phone} AND c.status = 'active' AND ${clientVisibleSql(sql`c.id`)} LIMIT ${MAX_AUTO_SHARED + 1}`));
-      if (rows.length <= MAX_AUTO_SHARED) for (const r of rows) ids.add(Number(r.clientId));
+      for (const id of crmIdentityAccepted("phone", cand(rows), q.name)) ids.add(id);
     }
     const list = [...ids].filter((x) => Number.isInteger(x) && x > 0).slice(0, 5);
     if (!list.length) return { emails: [] };

@@ -125,6 +125,9 @@ export default function ComplaintsPage() {
         />
       ) : selectedId ? (
         <DetailView
+          // Auditoria lote 57: outra reclamação (link do sino/pesquisa com a ficha aberta) = ficha nova —
+          // nada do caso anterior (emails do cliente, rascunho da mensagem, edição) passa para este.
+          key={selectedId}
           id={selectedId}
           user={user}
           onBack={() => { setView("kanban"); setSelectedId(null); }}
@@ -248,6 +251,10 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
   // cartões ficam como alternativa para touch, onde o drag nativo não existe).
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
+  // Escolher uma cidade no filtro global (cabeçalho) tira o "Sem cidade" — senão o quadro ficava vazio sem razão à vista.
+  useEffect(() => {
+    if (globalFilters.cityId != null) setFilters((f) => (f.noCity ? { ...f, noCity: false } : f));
+  }, [globalFilters.cityId, setFilters]);
   const cityValue = filters.noCity ? "none" : globalFilters.cityId != null ? String(globalFilters.cityId) : "all";
   const onCity = (v: string) => {
     if (v === "none") { globalFilters.setCityId(null); setF({ noCity: true }); return; }
@@ -283,7 +290,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
                   day(c.createdAt), day(c.resolvedAt), day(c.slaDeadline),
                   c.assignedToName ?? "",
                 ]);
-                const blob = new Blob(["﻿" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8;" });
+                const blob = new Blob(["\ufeff" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8;" });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
                 a.href = url; a.download = `reclamacoes_${lisbonDayOf(Date.now())}.csv`; a.click();
@@ -328,7 +335,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
         <div id="complaints-filter-panel" className={`${showFilters ? "grid" : "hidden"} sm:grid grid-cols-1 min-[480px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2`}>
           <FilterField label="Estado">
             <Select value={String(filters.status ?? "all")} onValueChange={(v) => { setF({ status: v as ComplaintStatusFilter }); setMobileCol(null); }}>
-              <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full" aria-label="Estado"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {COMPLAINT_STATUS_FILTERS.map((k) => <SelectItem key={k} value={k}>{COMPLAINT_STATUS_FILTER_LABELS[k]}</SelectItem>)}
               </SelectContent>
@@ -336,7 +343,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
           </FilterField>
           <FilterField label="Tipo" className="sm:hidden">
             <Select value={String(filters.type ?? "all")} onValueChange={(v) => setF({ type: v })}>
-              <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full" aria-label="Tipo"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>
                 {Object.entries(TYPE_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.emoji} {v.label}</SelectItem>)}
@@ -345,7 +352,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
           </FilterField>
           <FilterField label="Cidade">
             <Select value={cityValue} onValueChange={onCity}>
-              <SelectTrigger className="h-9 w-full"><SelectValue placeholder="Cidade" /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full" aria-label="Cidade"><SelectValue placeholder="Cidade" /></SelectTrigger>
               <SelectContent>
                 {seesAllCities && <SelectItem value="all">Todas</SelectItem>}
                 {globalFilters.cities.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
@@ -358,7 +365,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
               value={filters.assignee == null ? "all" : String(filters.assignee)}
               onValueChange={(v) => setF({ assignee: v === "all" || v === "none" ? v : Number(v) })}
             >
-              <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full" aria-label="Responsável"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>
                 <SelectItem value="none">Sem responsável</SelectItem>
@@ -368,7 +375,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
           </FilterField>
           <FilterField label="Origem">
             <Select value={String(filters.origin ?? "all")} onValueChange={(v) => setF({ origin: v as any })}>
-              <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full" aria-label="Origem"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas</SelectItem>
                 {COMPLAINT_ORIGINS.map((o) => <SelectItem key={o} value={o}>{COMPLAINT_ORIGIN_LABELS[o]}</SelectItem>)}
@@ -482,13 +489,13 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
         <>
           {/* Telemóvel: uma coluna de cada vez, com as contagens nos botões. */}
           <div className="sm:hidden space-y-3" data-testid="complaints-mobile-board">
-            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Estado">
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Estado a mostrar">
               {KANBAN_COLUMNS.map((st) => {
                 const cfg = STATUS_CONFIG[st];
                 const on = activeCol === st;
                 return (
                   <button
-                    key={st} type="button" role="tab" aria-selected={on}
+                    key={st} type="button" aria-pressed={on}
                     onClick={() => setMobileCol(st)}
                     className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium min-h-9 ${on ? "bg-primary text-primary-foreground border-primary" : `${cfg.color}`}`}
                   >

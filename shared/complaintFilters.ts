@@ -130,7 +130,12 @@ export function complaintMatchesFilters(c: ComplaintFilterRow, f: ComplaintListF
   }
 
   const q = String(f.q ?? "").trim();
-  if (q && !textMatches(complaintSearchHaystack(c), q.replace(/^#/, ""))) return false;
+  if (q) {
+    // "#12" = a reclamação nº 12 (não todas as que têm "12" num telefone,
+    // matrícula ou noutro nº). Sem o "#", o nº entra na pesquisa de texto.
+    const byId = /^#\s*(\d{1,9})$/.exec(q);
+    if (byId ? c.id !== Number(byId[1]) : !textMatches(complaintSearchHaystack(c), q)) return false;
+  }
   return true;
 }
 

@@ -13,7 +13,15 @@
 //    (`threadId` UNIQUE) — a mesma conversa nunca gera duas reclamações, nem
 //    quando o cron corre outra vez. Nada se apaga: "Não é reclamação" marca.
 //
-// Só acrescenta. ADD COLUMN / CREATE TABLE IF NOT EXISTS ignoram o que já existe.
+//  - índice inbound_emails(targetModule, targetId): os emails de uma
+//    reclamação (anexos na ficha, "Emails do cliente") e o preenchimento da
+//    origem liam a tabela toda em cada pedido / em cada arranque (auditoria
+//    do lote 57). Vem ANTES do UPDATE que o usa.
+//
+// Corre em cada arranque: os UPDATE só tocam nas que ainda não têm origem
+// (`origin` IS NULL) e, com o índice, ficam baratos.
+//
+// Só acrescenta. ADD COLUMN / CREATE INDEX / CREATE TABLE IF NOT EXISTS ignoram o que já existe.
 
 export const MIGRATION_0630_STATEMENTS: string[] = [
   "ALTER TABLE `complaints` ADD COLUMN `origin` VARCHAR(16) NULL",
@@ -21,6 +29,7 @@ export const MIGRATION_0630_STATEMENTS: string[] = [
   "UPDATE `complaints` SET `origin` = 'conversao' WHERE `origin` IS NULL AND `convertedFromType` IS NOT NULL",
   "UPDATE `complaints` SET `origin` = 'critica' WHERE `origin` IS NULL AND `id` IN (SELECT g.`complaintId` FROM `google_reviews` g WHERE g.`complaintId` IS NOT NULL)",
   "UPDATE `complaints` SET `origin` = 'whatsapp' WHERE `origin` IS NULL AND `id` IN (SELECT w.`caseId` FROM `whatsapp_conversations` w WHERE w.`caseKind` = 'complaint' AND w.`caseId` IS NOT NULL)",
+  "CREATE INDEX `idx_inbound_emails_target` ON `inbound_emails` (`targetModule`, `targetId`)",
   "UPDATE `complaints` SET `origin` = 'email' WHERE `origin` IS NULL AND `createdById` IS NULL AND `id` IN (SELECT e.`targetId` FROM `inbound_emails` e WHERE e.`targetModule` = 'complaint' AND e.`targetId` IS NOT NULL)",
   "UPDATE `complaints` SET `origin` = 'manual' WHERE `origin` IS NULL AND `createdById` IS NOT NULL",
   "CREATE TABLE IF NOT EXISTS `complaint_mail_intake` (" +
