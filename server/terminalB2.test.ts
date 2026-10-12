@@ -972,3 +972,35 @@ describe("auditoria B2 — ecrãs: erro ≠ vazio", () => {
     expect(src("client/src/pages/DefinicoesPage.tsx")).toContain("grid grid-cols-[1fr_1fr_3.5rem] gap-1 text-[10px] text-muted-foreground");
   });
 });
+
+describe("auditoria B2 — vigia: corridas, carga e Zello em baixo", () => {
+  it("o cron a correr duas vezes ao mesmo tempo: uma só pergunta, uma só libertação, avisos uma vez", async () => {
+    const t = await joaoGoesOut();
+    t.zello(JOAO, FAR_LIS);
+    t.clock.now += 15 * MIN; // 14:35
+    const [a, b] = await Promise.all([runTerminalWatch(t.deps), runTerminalWatch(t.deps)]);
+    expect(a.asked + b.asked).toBe(1);
+    expect(t.notices.filter((n) => n.entity.type === "terminal_ask")).toHaveLength(2); // pessoa + TL, uma vez
+    t.zello(JOAO, FAR_LIS);
+    t.clock.now += 15 * MIN; // 14:50
+    const [c, d] = await Promise.all([runTerminalWatch(t.deps), runTerminalWatch(t.deps)]);
+    expect(c.released + d.released).toBe(1);
+    expect(t.notices.filter((n) => n.entity.type === "terminal_release")).toHaveLength(2);
+    expect(t.store._.sessions.filter((s: TerminalSessionRow) => s.employeeId === JOAO)).toHaveLength(1);
+  });
+  it("sem ninguém no terminal o vigia nem chama o Zello (ligado)", async () => {
+    const t = makeDeps();
+    for (let i = 0; i < 5; i++) expect(await t.tick(5)).toMatchObject({ open: 0, zello: false });
+    expect(t.state.zelloCalls).toBe(0);
+  });
+  it("Zello em baixo → também não pergunta (o vigia só decide com o Zello a responder)", async () => {
+    const t = await joaoGoesOut(); // fora confirmado desde 14:14:30
+    t.zello(JOAO, FAR_LIS); expect((await t.tick(10)).asked).toBe(0); // 14:30 (fora há ~16 min; leitura das 14:29:30)
+    t.state.zello = null;
+    expect((await t.tick(5)).asked).toBe(0); // 14:35 — fora há 20 min e a última leitura é de há 5 min, mas o Zello não respondeu agora
+    expect(sessionOf(t.store, JOAO).askedAt).toBeNull();
+    t.state.zello = new Map();
+    t.zello(JOAO, FAR_LIS);
+    expect((await t.tick(1)).asked).toBe(1); // 14:36 — o Zello voltou e continua fora
+  });
+});

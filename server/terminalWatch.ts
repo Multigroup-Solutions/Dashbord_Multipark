@@ -16,8 +16,9 @@
  *    "saiu do aeroporto às HH:MM (GPS)". Até 30 min depois, "Ainda estou"
  *    reabre sem buraco se o lugar estiver livre; ocupado → vai ao TL.
  *
- * Interruptor PONTO_TERMINAL desligado → o vigia nem lê o Zello, nada se
- * pergunta e nada se grava. Nada se apaga. Nunca lança para fora do cron.
+ * Zello em baixo (ou não configurado) → nada se pergunta nem se liberta nessa
+ * volta. Interruptor PONTO_TERMINAL desligado → o vigia nem lê o Zello, nada
+ * se pergunta e nada se grava. Nada se apaga. Nunca lança para fora do cron.
  */
 import { lisbonClock } from "../shared/pontoTerminal";
 import { zelloKey } from "../shared/zelloKey";
@@ -71,30 +72,29 @@ export async function runTerminalWatch(deps: TerminalDeps): Promise<TerminalWatc
     readings = null;
   }
   out.zello = readings != null;
+  // Zello em baixo (ou não configurado): não se sabe se a pessoa voltou ao
+  // aeroporto (o que responderia por si) — nesta volta nada se grava, nada se
+  // pergunta e nada se liberta (um erro do Zello nunca pergunta nem liberta ninguém).
+  if (!readings) return out;
   for (const s of open) {
     try {
       const nowMs = deps.now();
-      let state = {
+      const state0 = {
         startedAtMs: toMs(s.startedAt), lastInsideAtMs: ms0(s.lastInsideAt), outsideSinceMs: ms0(s.outsideSince),
         outsideCount: Number(s.outsideCount ?? 0), lastFixAtMs: ms0(s.lastFixAt),
       };
-      if (readings) {
-        const r = classifyReading(readings.get(s.employeeId) ?? null, airports[s.cityKey], nowMs);
-        const nx = nextWatch(state, r, nowMs);
-        // fechou ou mudou entretanto ("Sim, estou" no mesmo instante) → fica para a próxima volta
-        if (!(await deps.store.updateWatch(s.id, nx.patch, { lastFixAt: s.lastFixAt ?? null, stillHereAt: s.stillHereAt ?? null }))) continue;
-        if (r.state === "no_gps") out.noGps++;
-        if (nx.newReading) out.readings++;
-        state = nx.state;
-      }
+      const r = classifyReading(readings.get(s.employeeId) ?? null, airports[s.cityKey], nowMs);
+      const nx = nextWatch(state0, r, nowMs);
+      // fechou ou mudou entretanto ("Sim, estou" no mesmo instante) → fica para a próxima volta
+      if (!(await deps.store.updateWatch(s.id, nx.patch, { lastFixAt: s.lastFixAt ?? null, stillHereAt: s.stillHereAt ?? null }))) continue;
+      if (r.state === "no_gps") out.noGps++;
+      if (nx.newReading) out.readings++;
+      const state = nx.state;
       const ask = { outsideSinceMs: state.outsideSinceMs, outsideCount: state.outsideCount, askedAtMs: ms0(s.askedAt), stillHereAtMs: ms0(s.stillHereAt), lastFixAtMs: state.lastFixAtMs };
       const d = watchDecision(ask, nowMs);
       const cur = { ...s, lastInsideAt: state.lastInsideAtMs != null ? toDbUtc(state.lastInsideAtMs) : null, outsideSince: state.outsideSinceMs != null ? toDbUtc(state.outsideSinceMs) : null, outsideCount: state.outsideCount };
       if (d === "ask" && (await askStillThere(deps, cur, nowMs))) out.asked++;
-      // Libertar só com o Zello a responder NESTA volta: com o Zello em baixo não
-      // se sabe se a pessoa voltou ao aeroporto (o que responderia por si) —
-      // espera pela próxima leitura (um erro do Zello nunca liberta ninguém).
-      else if (d === "release" && readings != null && (await releaseNoAnswer(deps, cur, nowMs))) out.released++;
+      else if (d === "release" && (await releaseNoAnswer(deps, cur, nowMs))) out.released++;
     } catch (err) {
       console.warn(`[terminal-watch] sessão ${s.id}:`, String((err as Error)?.message ?? err).slice(0, 160));
     }

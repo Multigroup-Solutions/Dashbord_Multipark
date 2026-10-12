@@ -33,7 +33,7 @@ palavras: ainda estás no terminal, sim estou, já saí, lugar libertado, reabri
 
 **"Ainda estás no terminal?"** (só com o mesmo interruptor ligado)
 1. De 5 em 5 minutos a app vê o GPS do **Zello do aparelho que está contigo** (o PDA onde fizeste check-in; senão o teu Zello).
-2. GPS velho (mais de 10 min), pouco preciso ou sem Zello = **sem GPS**: nunca conta como "fora".
+2. GPS velho (mais de 10 min), pouco preciso ou sem Zello = **sem GPS**: nunca conta como "fora". Com o **Zello em baixo** a app não pergunta nem liberta o lugar: espera pela leitura seguinte.
 3. **Fora** = o GPS fora da zona do aeroporto, descontada a imprecisão, em **2 leituras seguidas**.
 4. Fora há mais de **20 min** → aparece na barra (e no telemóvel) **"Ainda estás no terminal?"** com **Sim, estou** e **Já saí**. O TL de serviço recebe o aviso no sino e no telemóvel.
 5. **Sim, estou** → não voltamos a perguntar durante **60 min**. Se o GPS do telemóvel te puser no aeroporto, também conta como prova.
