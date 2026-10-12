@@ -41,6 +41,21 @@ export function vapidConfig(): VapidConfig | null {
 const endpointHash = (endpoint: string): string => crypto.createHash("sha256").update(endpoint).digest("hex");
 const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace("T", " ");
 
+/**
+ * Auditoria A2: as subscrições de um PDA só recebem enquanto a sessão nesse PDA
+ * for de quem as tem (nonce, mesma conta, < 16 h, PDA ativo — lido em `pdas`).
+ * Sem confirmar (BD em falha) → o PDA não recebe (é um aparelho partilhado).
+ * As subscrições sem PDA ficam como sempre.
+ */
+async function onlyLivePdaSubs<T extends { pdaId?: number | null; userId: number }>(subs: T[], now = Date.now()): Promise<T[]> {
+  const pdaIds = Array.from(new Set(subs.map((s) => s.pdaId).filter((x): x is number => x != null)));
+  if (!pdaIds.length) return subs;
+  const [{ pdaSessionStore }, { pdaPushLive }] = await Promise.all([import("./pdaSessionStore"), import("../shared/pdaSession")]);
+  const rows = new Map<number, Awaited<ReturnType<ReturnType<typeof pdaSessionStore>["read"]>>>();
+  for (const id of pdaIds) rows.set(id, await pdaSessionStore().read(id).catch(() => null));
+  return subs.filter((s) => s.pdaId == null || pdaPushLive(rows.get(s.pdaId), s.userId, now));
+}
+
 async function dbOrThrow() {
   const { getDb } = await import("./db");
   const db = await getDb();
@@ -127,7 +142,8 @@ export async function pushRingingCalls(callIds: string[]): Promise<void> {
     const db = await dbOrThrow();
     const calls = await loadRingingCalls(callIds);
     if (!calls.length) return;
-    const subs = await db.select().from(webPushSubscriptions);
+    // Plano 56 (A2): as de um PDA só enquanto a sessão nesse PDA for de quem as tem.
+    const subs = await onlyLivePdaSubs((await db.select().from(webPushSubscriptions)).filter((s) => !isPushDisabled(s)));
     if (!subs.length) return;
 
     // Quem vê cada chamada no toque: o âmbito de cada pessoa com subscrição é
@@ -200,8 +216,8 @@ export async function pushToUsers(userIds: readonly number[], payload: UserPushP
   if (!cfg) return out;
   try {
     const db = await dbOrThrow();
-    // Plano 56 (A2): as de um PDA cuja sessão acabou não recebem nada.
-    const subs = (await db.select().from(webPushSubscriptions).where(inArray(webPushSubscriptions.userId, ids))).filter((s) => !isPushDisabled(s));
+    // Plano 56 (A2): as de um PDA cuja sessão acabou (logout, saída, outra pessoa, 16 h, PDA retirado) não recebem nada.
+    const subs = await onlyLivePdaSubs((await db.select().from(webPushSubscriptions).where(inArray(webPushSubscriptions.userId, ids))).filter((s) => !isPushDisabled(s)));
     if (!subs.length) return out;
     const webpush = (await import("web-push")).default;
     webpush.setVapidDetails(cfg.subject, cfg.publicKey, cfg.privateKey);

@@ -710,6 +710,26 @@ describe("push nos PDAs: muda de dono e desliga-se", () => {
     await pushToUsers([21], { type: "login_code", title: "Código de entrada para X: 123 456", body: "X: 123 456", url: "/operacional?tab=live", tag: "login-code-2" });
     expect(m.state.webpushSent[0].body).toMatchObject({ type: "login_code", body: "X: 123 456" });
   });
+
+  it("(auditoria) a sessão do PDA acabou sem logout — 16 h, PDA retirado, terminar sessões — o PDA deixa de receber os avisos dessa pessoa", async () => {
+    lisbon();
+    const dev = device();
+    await codeLogin(dev, "joaquim@gmail.com");
+    await (await dev.caller()).notifications.pushSubscribe({ endpoint: "https://fcm.googleapis.com/fcm/send/pda12-b", keys: { p256dh: "B".repeat(87), auth: "A".repeat(22) } });
+    const payload = { type: "login_code", title: "t", body: "b", url: "/", tag: "x" };
+    expect(await pushToUsers([100], payload)).toEqual({ sent: 1 });
+    // passaram as 16 h: ninguém limpou o nonce, mas a sessão já não vale → o PDA não recebe
+    vi.setSystemTime(T0 + PDA_SESSION_MS + 60_000);
+    expect(await dev.valid()).toBe(false);
+    m.state.webpushSent = [];
+    expect(await pushToUsers([100], payload)).toEqual({ sent: 0 });
+    expect(m.state.webpushSent).toEqual([]);
+    // nova entrada (outra vez a mesma pessoa) → volta a receber; PDA retirado → deixa de receber
+    await codeLogin(dev, "joaquim@gmail.com");
+    expect(await pushToUsers([100], payload)).toEqual({ sent: 1 });
+    pda7().status = "lost";
+    expect(await pushToUsers([100], payload)).toEqual({ sent: 0 });
+  });
 });
 
 describe("código por email pela acesso@ (definição login.codeDelivery = 'email')", () => {

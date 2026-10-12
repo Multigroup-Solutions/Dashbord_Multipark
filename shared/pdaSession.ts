@@ -57,6 +57,19 @@ export function pdaSessionOk(row: PdaSessionRow | null | undefined, claims: { us
 }
 
 /**
+ * Auditoria A2: a subscrição de avisos de um PDA só recebe enquanto a sessão
+ * nesse PDA for de quem a tem — nonce em `pdas`, a mesma conta, menos de 16 h
+ * e o PDA ativo. Passaram as 16 h, o PDA foi retirado ou a sessão acabou de
+ * outra forma → o PDA não recebe nada dessa pessoa (o aparelho pode já estar
+ * nas mãos de outra). PURA.
+ */
+export function pdaPushLive(row: PdaSessionRow | null | undefined, userId: number, now: number): boolean {
+  if (!row || !row.nonce || row.startedAt == null || row.userId !== userId) return false;
+  const age = now - row.startedAt;
+  return age > -5 * 60_000 && age < PDA_SESSION_MS;
+}
+
+/**
  * O botão Google aparece neste aparelho? Fora dos PDAs registados, sempre.
  * Num PDA registado sai só com GOOGLE_NOS_PDAS desligado E a entrada com
  * código ligada (senão o PDA ficava sem forma de entrar). PURA.
