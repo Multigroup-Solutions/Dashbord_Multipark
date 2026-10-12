@@ -6,19 +6,23 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Plus, X, ExternalLink, AlertTriangle } from "lucide-react";
+import { Sparkles, Plus, X, ExternalLink, AlertTriangle, ChevronDown } from "lucide-react";
 
 const VISIBLE = 3;
+/** Auditoria do lote 57: no telemóvel o cartão abre fechado (só o título com a contagem) — senão empurrava o quadro 1000 px para baixo. */
+const openByDefault = () => (typeof window === "undefined" ? true : window.innerWidth >= 640);
 
 export default function ComplaintMailSuggestions({ canEdit, onOpenComplaint }: { canEdit: boolean; onOpenComplaint: (id: number) => void }) {
   const utils = trpc.useUtils();
   const q = trpc.complaints.mailSuggestions.useQuery(undefined, { retry: false, staleTime: 60_000 });
   const [showAll, setShowAll] = useState(false);
+  const [open, setOpen] = usePersistedState<boolean>("complaints.mailSuggestionsOpen", openByDefault());
   const refresh = () => { utils.complaints.mailSuggestions.invalidate(); utils.complaints.list.invalidate(); };
   const create = trpc.complaints.createFromMailSuggestion.useMutation({
     onSuccess: (r) => {
@@ -38,17 +42,33 @@ export default function ComplaintMailSuggestions({ canEdit, onOpenComplaint }: {
   if (!items.length) return null;
   const shown = showAll ? items : items.slice(0, VISIBLE);
   const busy = create.isPending || dismiss.isPending;
+  const failed = items.filter((s) => s.status === "failed").length;
 
   return (
-    <Card className="border-violet-200 dark:border-violet-900" data-testid="complaint-mail-suggestions">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm flex flex-wrap items-center gap-x-2 gap-y-1">
-          <Sparkles className="w-4 h-4 text-violet-600 shrink-0" aria-hidden />
-          <span>Parecem reclamações ({items.length})</span>
-          <span className="text-[11px] font-normal text-muted-foreground">emails de outras caixas que a IA leu — uma pessoa decide; nada é enviado ao cliente</span>
+    <Card className="border-violet-200 dark:border-violet-900 gap-0 py-0" data-testid="complaint-mail-suggestions">
+      <CardHeader className="p-0">
+        <CardTitle className="text-sm">
+          <button
+            type="button"
+            className="flex w-full min-h-11 items-start gap-2 rounded-xl px-4 py-3 text-left focus-visible:outline-2 focus-visible:outline-primary"
+            aria-expanded={open}
+            aria-controls="complaint-mail-suggestions-list"
+            onClick={() => setOpen((v) => !v)}
+          >
+            <Sparkles className="w-4 h-4 mt-0.5 text-violet-600 dark:text-violet-300 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-x-2">
+                <span>Parecem reclamações ({items.length})</span>
+                {failed > 0 && <span className="text-xs font-medium text-red-700 dark:text-red-300">{failed} falh{failed === 1 ? "ou" : "aram"} ao criar</span>}
+              </span>
+              <span className="block text-[11px] font-normal text-muted-foreground">emails de outras caixas que a IA leu — uma pessoa decide; nada é enviado ao cliente</span>
+            </span>
+            <ChevronDown className={`w-4 h-4 mt-0.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+            <span className="sr-only">{open ? "Esconder" : "Mostrar"}</span>
+          </button>
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-2">
+      {open && <CardContent id="complaint-mail-suggestions-list" className="space-y-2 px-4 pb-4">
         {shown.map((s) => (
           <div key={s.id} className="rounded-md border p-2 space-y-1.5">
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -68,27 +88,27 @@ export default function ComplaintMailSuggestions({ canEdit, onOpenComplaint }: {
             )}
             <div className="flex flex-wrap gap-2 pt-0.5">
               {canEdit && (
-                <Button size="sm" className="h-8" disabled={busy} onClick={() => create.mutate({ id: s.id })}>
+                <Button size="sm" className="h-9 sm:h-8" disabled={busy} onClick={() => create.mutate({ id: s.id })}>
                   <Plus className="w-4 h-4 mr-1" /> {s.status === "failed" ? "Tentar de novo" : "Criar reclamação"}
                 </Button>
               )}
               {canEdit && (
-                <Button size="sm" variant="outline" className="h-8" disabled={busy} onClick={() => dismiss.mutate({ id: s.id })}>
+                <Button size="sm" variant="outline" className="h-9 sm:h-8" disabled={busy} onClick={() => dismiss.mutate({ id: s.id })}>
                   <X className="w-4 h-4 mr-1" /> Não é reclamação
                 </Button>
               )}
-              <Button size="sm" variant="ghost" className="h-8" asChild>
+              <Button size="sm" variant="ghost" className="h-9 sm:h-8" asChild>
                 <Link href={s.link}><ExternalLink className="w-4 h-4 mr-1" /> Abrir conversa</Link>
               </Button>
             </div>
           </div>
         ))}
         {items.length > VISIBLE && (
-          <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setShowAll((v) => !v)}>
+          <Button size="sm" variant="ghost" className="h-9 sm:h-8 text-xs" onClick={() => setShowAll((v) => !v)}>
             {showAll ? "Mostrar só as primeiras" : `Ver todas (${items.length})`}
           </Button>
         )}
-      </CardContent>
+      </CardContent>}
     </Card>
   );
 }

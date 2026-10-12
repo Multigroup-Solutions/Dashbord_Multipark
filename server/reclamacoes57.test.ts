@@ -811,3 +811,30 @@ describe("auditoria 57 — filtros, parceiros, migração e página", () => {
     expect(page).not.toMatch(/role="tab"/);
   });
 });
+
+describe("auditoria 57 — telemóvel e estados (capturas em scratchpad/harness-recl/audit2)", () => {
+  it("as sugestões da IA abrem FECHADAS no telemóvel (só o título com a contagem e as que falharam) — o quadro fica à vista", () => {
+    const c = src("client/src/components/ComplaintMailSuggestions.tsx");
+    expect(c).toContain('usePersistedState<boolean>("complaints.mailSuggestionsOpen", openByDefault())');
+    expect(c).toContain("window.innerWidth >= 640");
+    expect(c).toContain("aria-expanded={open}");
+    expect(c).toMatch(/falh\{failed === 1 \? "ou" : "aram"\} ao criar/);
+  });
+  it("lista vazia = um aviso com a saída (limpar filtros / ver todas), não cinco colunas 'Sem tickets'", () => {
+    const page = src("client/src/pages/ComplaintsPage.tsx");
+    expect(page).toContain('data-testid="complaints-empty"');
+    expect(page).toContain("Nenhuma reclamação com estes filtros.");
+  });
+  it("modo escuro: estados, prioridades e contadores com variante escura (contraste)", () => {
+    const page = src("client/src/pages/ComplaintsPage.tsx");
+    const cfg = page.slice(page.indexOf("const STATUS_CONFIG"), page.indexOf("const KANBAN_COLUMNS"));
+    for (const line of cfg.split("\n").filter((l) => /color: "bg-/.test(l))) expect(line).toContain("dark:");
+    expect(page).toContain('color: "text-gray-600 dark:text-gray-300"');
+  });
+  it("filtros guardados como nas outras páginas; a cidade nunca fica em branco para quem só vê a sua", () => {
+    const page = src("client/src/pages/ComplaintsPage.tsx");
+    expect(page).toContain('usePersistedState<ComplaintListFilters>("complaints.filters", EMPTY_FILTERS)');
+    expect(page).toContain('(seesAllCities || globalFilters.cityId == null) && <SelectItem value="all">');
+    expect(src("client/src/components/ClientHistoryCard.tsx")).toContain('closed: "Fechado"');
+  });
+});

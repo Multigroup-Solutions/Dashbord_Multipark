@@ -24,6 +24,7 @@ import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
 import { retryTransient } from "@/lib/queryRetry";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,12 +56,12 @@ import {
 import { Link } from "wouter";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-  new: { label: "Novo", color: "bg-blue-100 text-blue-800 border-blue-200", icon: AlertCircle },
-  analyzing: { label: "Em Análise", color: "bg-yellow-100 text-yellow-800 border-yellow-200", icon: Hourglass },
-  waiting_client: { label: "Aguarda Cliente", color: "bg-purple-100 text-purple-800 border-purple-200", icon: Clock },
-  resolved: { label: "Resolvido", color: "bg-green-100 text-green-800 border-green-200", icon: CheckCircle2 },
-  closed: { label: "Fechado", color: "bg-gray-100 text-gray-800 border-gray-200", icon: XCircle },
-  converted: { label: "Convertida", color: "bg-violet-100 text-violet-800 border-violet-200", icon: XCircle },
+  new: { label: "Novo", color: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/60 dark:text-blue-200 dark:border-blue-900", icon: AlertCircle },
+  analyzing: { label: "Em Análise", color: "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-950/60 dark:text-yellow-200 dark:border-yellow-900", icon: Hourglass },
+  waiting_client: { label: "Aguarda Cliente", color: "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-950/60 dark:text-purple-200 dark:border-purple-900", icon: Clock },
+  resolved: { label: "Resolvido", color: "bg-green-100 text-green-800 border-green-200 dark:bg-green-950/60 dark:text-green-200 dark:border-green-900", icon: CheckCircle2 },
+  closed: { label: "Fechado", color: "bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-800/60 dark:text-gray-200 dark:border-gray-700", icon: XCircle },
+  converted: { label: "Convertida", color: "bg-violet-100 text-violet-800 border-violet-200 dark:bg-violet-950/60 dark:text-violet-200 dark:border-violet-900", icon: XCircle },
 };
 
 const TYPE_CONFIG: Record<string, { label: string; emoji: string }> = {
@@ -73,10 +74,10 @@ const TYPE_CONFIG: Record<string, { label: string; emoji: string }> = {
 };
 
 const PRIORITY_CONFIG: Record<string, { label: string; color: string }> = {
-  low: { label: "Baixa", color: "bg-slate-100 text-slate-700" },
-  medium: { label: "Média", color: "bg-blue-100 text-blue-700" },
-  high: { label: "Alta", color: "bg-orange-100 text-orange-700" },
-  urgent: { label: "Urgente", color: "bg-red-100 text-red-700" },
+  low: { label: "Baixa", color: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
+  medium: { label: "Média", color: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-200" },
+  high: { label: "Alta", color: "bg-orange-100 text-orange-700 dark:bg-orange-950/60 dark:text-orange-200" },
+  urgent: { label: "Urgente", color: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-200" },
 };
 
 const KANBAN_COLUMNS = ["new", "analyzing", "waiting_client", "resolved", "closed"] as const;
@@ -108,10 +109,12 @@ export default function ComplaintsPage() {
   // ?new=1 (atalho "Nova reclamação" da pesquisa global) abre logo o formulário.
   const [showCreate, setShowCreate] = useState(() => new URLSearchParams(window.location.search).get("new") === "1");
   // Lote 57: os filtros ficam aqui (voltar da ficha não os perde). ?q= vem da pesquisa global.
-  const [filters, setFilters] = useState<ComplaintListFilters>(() => ({
-    ...EMPTY_FILTERS,
-    q: (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120),
-  }));
+  // Auditoria: como nas outras páginas (usePersistedState), os filtros mantêm-se também ao mudar de página e voltar.
+  const [filters, setFilters] = usePersistedState<ComplaintListFilters>("complaints.filters", EMPTY_FILTERS);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (q != null) setFilters((f) => ({ ...f, q: q.slice(0, 120) }));
+  }, [setFilters]);
 
   return (
     <>
@@ -354,7 +357,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
             <Select value={cityValue} onValueChange={onCity}>
               <SelectTrigger className="h-9 w-full" aria-label="Cidade"><SelectValue placeholder="Cidade" /></SelectTrigger>
               <SelectContent>
-                {seesAllCities && <SelectItem value="all">Todas</SelectItem>}
+                {(seesAllCities || globalFilters.cityId == null) && <SelectItem value="all">{seesAllCities ? "Todas" : "As tuas cidades"}</SelectItem>}
                 {globalFilters.cities.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
                 {seesAllCities && <SelectItem value="none">Sem cidade</SelectItem>}
               </SelectContent>
@@ -386,7 +389,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
           <FilterField label="Criada de">
             <Input type="date" className="h-9 w-full min-w-0" value={filters.from ?? ""} max={filters.to || undefined} onChange={(e) => setF({ from: e.target.value })} aria-label="Criada a partir de" />
           </FilterField>
-          <FilterField label="até">
+          <FilterField label="Criada até">
             <Input type="date" className="h-9 w-full min-w-0" value={filters.to ?? ""} min={filters.from || undefined} onChange={(e) => setF({ to: e.target.value })} aria-label="Criada até" />
           </FilterField>
         </div>
@@ -422,17 +425,17 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
           <p className="sm:hidden text-sm" data-testid="complaints-mobile-total">
             <span className="font-semibold tabular-nums">{stats.total}</span> reclamaç{stats.total === 1 ? "ão" : "ões"}
             {activeCount > 0 ? " com estes filtros" : ""}
-            {stats.overdue > 0 && <> · <span className="font-semibold text-red-600 tabular-nums">{stats.overdue} em atraso</span></>}
+            {stats.overdue > 0 && <> · <span className="font-semibold text-red-600 dark:text-red-400 tabular-nums">{stats.overdue} em atraso</span></>}
           </p>
           <div className="hidden sm:grid grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
             {[
               { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
-              { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
-              { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-700" },
-              { label: "Aguarda Cliente", value: stats.waitingClient, icon: Clock, color: "text-purple-600" },
-              { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-700" },
-              { label: "Fechados", value: stats.closed, icon: XCircle, color: "text-gray-600" },
-              { label: "Em Atraso", value: stats.overdue, icon: AlertTriangle, color: "text-red-600" },
+              { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600 dark:text-blue-400" },
+              { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-700 dark:text-yellow-300" },
+              { label: "Aguarda Cliente", value: stats.waitingClient, icon: Clock, color: "text-purple-600 dark:text-purple-400" },
+              { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-700 dark:text-green-400" },
+              { label: "Fechados", value: stats.closed, icon: XCircle, color: "text-gray-600 dark:text-gray-300" },
+              { label: "Em Atraso", value: stats.overdue, icon: AlertTriangle, color: "text-red-600 dark:text-red-400" },
             ].map(s => (
               <Card key={s.label} className="p-3 gap-1 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
@@ -484,6 +487,22 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
               </CardContent>
             </Card>
           ))}
+        </div>
+      ) : complaints.length === 0 ? (
+        // Auditoria lote 57: lista vazia = UM aviso claro com a saída (e não cinco colunas "Sem tickets").
+        <div className="rounded-lg border border-dashed px-4 py-10 text-center space-y-3" data-testid="complaints-empty">
+          <p className="text-sm font-medium">
+            {activeCount > 0
+              ? "Nenhuma reclamação com estes filtros."
+              : windowed
+                ? `Sem reclamações nos últimos ${COMPLAINT_LIST_DEFAULT_DAYS} dias e nenhuma aberta.`
+                : "Ainda não há reclamações."}
+          </p>
+          {activeCount > 0 ? (
+            <Button variant="outline" size="sm" className="h-9" onClick={clearFilters}><XIcon className="w-4 h-4 mr-1" /> Limpar filtros</Button>
+          ) : windowed ? (
+            <Button variant="outline" size="sm" className="h-9" onClick={() => setAllTime(true)}>Ver todas (sem o limite de {COMPLAINT_LIST_DEFAULT_DAYS} dias)</Button>
+          ) : null}
         </div>
       ) : (
         <>
@@ -873,11 +892,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
             <h1 className="text-lg sm:text-xl font-bold break-words [overflow-wrap:anywhere] min-w-0">{c.title}</h1>
             <Badge className={STATUS_CONFIG[c.complaintStatus]?.color}>{STATUS_CONFIG[c.complaintStatus]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[c.complaintPriority]?.color}>{PRIORITY_CONFIG[c.complaintPriority]?.label}</Badge>
-            {isOverdue && <Badge className="bg-red-100 text-red-800">SLA Ultrapassado</Badge>}
+            {isOverdue && <Badge className="bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-200">SLA Ultrapassado</Badge>}
             {(() => {
               // Nº de contactos do cliente = mensagens vindas de email (📧).
               const n = data.messages.filter((m: any) => typeof m.message === "string" && m.message.startsWith("📧")).length;
-              return n > 1 ? <Badge className="bg-amber-100 text-amber-800">Cliente já contactou {n}×</Badge> : null;
+              return n > 1 ? <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">Cliente já contactou {n}×</Badge> : null;
             })()}
           </div>
           <p className="text-sm text-muted-foreground break-words">
@@ -1261,7 +1280,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                 </CardContent>
               </Card>
               <details className="rounded-lg border bg-card px-3 py-2 sm:px-4 group">
-                <summary className="cursor-pointer text-sm font-medium select-none">Só desta reclamação: emails ligados e reuniões</summary>
+                <summary className="cursor-pointer text-sm font-medium select-none min-h-9 py-2 -my-2 flex items-center">Só desta reclamação: emails ligados e reuniões</summary>
                 <div className="mt-3 space-y-3">
                   <div className="flex justify-end"><CreateMeetingButton entityType="complaint" entityId={id} defaultTitle={`Reunião — reclamação #${id}${c.clientName ? ` (${c.clientName})` : ""}`} /></div>
                   <CommunicationsTimeline type="complaint" id={id} compact />

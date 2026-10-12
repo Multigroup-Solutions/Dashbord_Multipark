@@ -79,7 +79,7 @@ export default function ComplaintClientMail({ complaintId }: { complaintId: numb
                     className={`block rounded-lg border bg-card px-3 py-2 hover:bg-accent/60 focus-visible:outline-2 focus-visible:outline-primary ${t.thisComplaint ? "border-primary/50 ring-1 ring-primary/30" : ""}`}
                   >
                     <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                      <Badge variant="secondary" className="text-[11px] max-w-[60%]"><span className="truncate">{t.mailboxLabel}</span></Badge>
+                      <Badge variant="secondary" className="text-[11px] max-w-[60%]" title={t.mailboxLabel}><span className="truncate">{t.mailboxLabel}</span></Badge>
                       {t.thisComplaint && <Badge className="text-[11px] bg-primary text-primary-foreground">Esta reclamação</Badge>}
                       {t.otherComplaintIds.length > 0 && (
                         <Badge variant="outline" className="text-[11px]">Reclamação {t.otherComplaintIds.map((x) => `#${x}`).join(", ")}</Badge>
@@ -94,10 +94,10 @@ export default function ComplaintClientMail({ complaintId }: { complaintId: numb
                         : <ArrowDownLeft className="h-3.5 w-3.5 mt-px shrink-0" aria-label="Última: do cliente" />}
                       <span className="min-w-0 break-words [overflow-wrap:anywhere] line-clamp-2">{t.snippet || "(sem texto)"}</span>
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
-                      <span>{t.messageCount} mensage{t.messageCount === 1 ? "m" : "ns"}</span>
-                      <span>· {STATUS_LABEL[t.status] ?? t.status}</span>
-                      {t.contactEmail && <span className="min-w-0 break-all">· {t.contactEmail}</span>}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                      <span>{t.messageCount} mensage{t.messageCount === 1 ? "m" : "ns"} · {STATUS_LABEL[t.status] ?? t.status}</span>
+                      {/* Uma linha só (o email completo no title): num email comprido eram 3 linhas em cada conversa. */}
+                      {t.contactEmail && <span className="min-w-0 max-w-full truncate" title={t.contactEmail}>{t.contactEmail}</span>}
                       <span className="ml-auto text-primary underline">Abrir conversa</span>
                     </div>
                   </Link>
