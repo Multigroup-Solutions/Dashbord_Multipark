@@ -971,3 +971,18 @@ describe("auditoria A2: ecrãs a 360 px e o PDA partilhado", () => {
     expect(src.slice(i, i + 600)).toMatch(/<SelectTrigger className="w-full max-w-sm min-w-0 [^"]*truncate"/);
   });
 });
+
+describe("auditoria A2: só o nosso email de código é saltado na sincronização", () => {
+  it("um email de fora com X-Multipark-Login (cabeçalho que qualquer um pode pôr) entra na Comunicação como os outros", () => {
+    const b64 = (x: string) => Buffer.from(x).toString("base64url");
+    const msg = (from: string): gmail_v1.Schema$Message => ({
+      id: "x", threadId: "x", labelIds: ["INBOX"], snippet: "", internalDate: String(T0),
+      payload: { mimeType: "text/plain", body: { data: b64("Reclamação: o carro veio riscado.") }, headers: [
+        { name: "From", value: from }, { name: "To", value: "reclamacoes@multipark.pt" }, { name: "Subject", value: "Reclamação" }, { name: LOGIN_MAIL_HEADER, value: "1" },
+      ] },
+    });
+    expect(parseGmailMessage(msg("Cliente <cliente@gmail.com>")).loginMail).toBe(false);
+    expect(parseGmailMessage(msg("Multipark <acesso@multipark.pt>")).loginMail).toBe(true);
+    expect(parseGmailMessage(msg("Multipark <ACESSO@Multipark.pt>")).loginMail).toBe(true);
+  });
+});
