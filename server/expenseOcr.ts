@@ -1,5 +1,6 @@
 /**
- * Leitura de faturas por IA (Despesas → "Extrair com IA"). Saída estruturada
+ * Leitura de faturas por IA (Despesas → "Extrair com IA"; Passagem de turno →
+ * Despesas do turno, ao tirar a foto do talão). Saída estruturada
  * validada por zod (sem regex nem "cercas" de markdown); o valor é
  * normalizado para "1234.56". Lança AiError (a UI mostra `userMessage`).
  */
@@ -15,6 +16,8 @@ export interface InvoiceData {
   selfInvoice: boolean;
   description: string | null;
   amount: string | null;
+  /** IVA total do documento ("2.30"), quando aparece. */
+  vatAmount: string | null;
   currency: string;
   paymentMethod: InvoiceExtraction["paymentMethod"];
   expenseDate: string | null;
@@ -40,6 +43,7 @@ export function normalizeInvoice(x: InvoiceExtraction): InvoiceData {
     selfInvoice: x.selfInvoice === true,
     description: s(x.description),
     amount: normalizeAmount(s(x.amount)),
+    vatAmount: normalizeAmount(s(x.vatAmount ?? null)),
     currency: s(x.currency) ?? "EUR",
     paymentMethod: x.paymentMethod ?? null,
     expenseDate: s(x.expenseDate),
