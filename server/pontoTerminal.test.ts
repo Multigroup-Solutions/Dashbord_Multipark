@@ -296,7 +296,12 @@ describe("terminal à mão: quem revê o ponto, com motivo, sem apagar", () => {
     expect(block).toContain("pontoTerminalEnabled()");
   });
   it("saída esquecida (cortada às 12 h) nunca fecha terminal sozinha: fica por confirmar", () => {
-    expect(src("server/rhRouter.ts")).toContain('if (autoNote && terminalOut.terminalStatus === "auto") { terminalOut.terminalStatus = "pending";');
+    // Plano 56 B1: o método antigo saiu do ponto; um troço antigo ainda aberto
+    // fecha sempre "por confirmar" e a sessão do terminal pelo perfil fecha com
+    // `forgotten` (nunca conta pelo GPS de uma saída esquecida).
+    const r = src("server/rhRouter.ts");
+    expect(r).toContain('terminalStatus: legacyTerminal ? "pending" : null,');
+    expect(r).toContain('reason: "checkout", forgotten: !!autoNote');
   });
   it("no aeroporto não se marca \"fora do raio\" (entrada e saída)", () => {
     const r = src("server/rhRouter.ts");

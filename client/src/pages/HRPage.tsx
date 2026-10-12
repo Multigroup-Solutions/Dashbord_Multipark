@@ -851,8 +851,6 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
       }
       if (data?.warning) toast.warning(data.warning, { duration: 10000 });
       if (data?.outsideGeofence) toast.warning("Atenção: check-in dado FORA do raio do local de trabalho — ficou marcado.", { duration: 10000 });
-      if (data?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
-      if (data?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
@@ -870,7 +868,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
           { duration: 10000 }
         );
       }
-      if (data?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
+      // Terminal pelo perfil (plano 56 B1): a saída do ponto liberta o lugar no terminal
+      if (data?.terminalReleased) toast.info(data.terminalReleased.message, { duration: 8000 });
       if (data?.terminal === "partial") toast.success(`${data.terminalLabel ?? "Terminal até à última recolha/entrega"}. Daí até à saída conta como hora normal.`, { duration: 10000 });
       if (data?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS) e ainda não há recolhas/entregas tuas no troço. Não paga terminal até o RH confirmar.", { duration: 10000 });
       setCameraMode(null);
@@ -947,7 +946,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
       {openTerminal && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-950/40 px-3 py-2 text-sm">
           <Badge className="bg-sky-600 hover:bg-sky-600 text-white gap-1"><Plane className="w-3 h-3" />Terminal</Badge>
-          <span>Estás no terminal desde {fmtPTDateTime(openTerminal.recordedAt)}. Antes de saíres do aeroporto, dá saída + entrada para voltares a extra normal.</span>
+          <span>Troço de terminal antigo (saída + entrada no aeroporto) aberto desde {fmtPTDateTime(openTerminal.recordedAt)}. A saída do ponto fecha-o como "por confirmar". Agora o terminal é pela fotografia lá em cima → "Estou no terminal".</span>
         </div>
       )}
 

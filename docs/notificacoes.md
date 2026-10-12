@@ -52,6 +52,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | GPS desligado | `gps_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Condutor com GPS desligado no Zello. |
 | A trabalhar sem PDA ou Zello | `ops_presence` | PDAs (view) | a pessoa | Pessoal | — | com interruptor | Verificação da presença operacional (só com OPS_PRESENCE_ALERTS ligado): ponto aberto sem PDA ou com o Zello desligado, ou movimentos na Multipark sem ponto. D50: obrigatória com o interruptor NOTIFY_CRITICAL_MANDATORY ligado (desligado por omissão). |
 | Códigos de entrada | `login_code` | Actividade Diária (view) | a pessoa | Pessoal | — | sim |  |
+| Terminal do aeroporto | `terminal` | Minha ficha (view) | a pessoa | Pessoal | — | não |  |
 | Relatório diário dos motoristas | `driver_daily_report` | Histórico diário (GPS) (view) | nacional | Admin, Super Admin | sim (desligado) | não | Fim da recolha diária do histórico GPS. |
 | Anomalias nas reservas | `anomaly_bookings` | Reservas & Operações (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Deteção diária de anomalias nas reservas (só críticas). |
 | As tuas tarefas | `task` | Tarefas (view) | a pessoa | Pessoal | — | não | Tarefas: atraso, conclusão, comentários (criador, responsáveis, gestores da hierarquia). Nas automáticas (checklists, serviços, disponibilidade, fichas sem cidade) só os responsáveis, e só com "Avisos de atraso das tarefas automáticas" ligado. |

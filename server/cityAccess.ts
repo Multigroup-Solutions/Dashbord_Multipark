@@ -18,6 +18,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'accountLink.mine', 'accountLink.startCandidate', 'accountLink.request', 'accountLink.confirmCode', 'rh.comeback',
     // Plano 56: a palavra-passe e os códigos de entrada que recebeu são de cada um.
     'auth.password.status', 'auth.password.set', 'auth.password.change', 'auth.codes.pendingForMe',
+    // Plano 56 B1: o terminal da própria pessoa (a cidade vem do GPS e da ficha; sem cidade a resposta diz o que fazer).
+    'terminal.status', 'terminal.start', 'terminal.stop', 'terminal.requestHandover', 'terminal.answerHandover',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 

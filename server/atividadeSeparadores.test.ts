@@ -74,7 +74,7 @@ describe("1 — Pressão: tempo por carro só das entregas ou só das recolhas",
     expect(hasCycleSplit([slot({ cycleN: 9 })])).toBe(false);
     expect(hasCycleSplit([slot({ cycleN: 9, cycleInN: 1 })])).toBe(true);
   });
-  it("migração 0615: só acrescenta colunas (idempotente) e está registada no fim", () => {
+  it("migração 0615: só acrescenta colunas (idempotente) e está registada a seguir à 0610", () => {
     expect(MIGRATION_0615_STATEMENTS.every((x) => /^ALTER TABLE `ops_pressure_stats` ADD COLUMN `cycle(Out|In)(N|P50|P60|P75|P85|P90)`/.test(x))).toBe(true);
     expect(MIGRATION_0615_STATEMENTS).toHaveLength(12);
     expect(MIGRATION_0615_STATEMENTS.join(" ")).not.toMatch(/DROP|DELETE|UPDATE /);

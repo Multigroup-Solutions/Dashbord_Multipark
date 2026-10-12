@@ -2349,6 +2349,77 @@ export const timeRecords = mysqlTable("time_records", {
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
 
+// ─── Terminal pelo perfil (0625, plano 56 B; shared/terminalSession.ts) ──────
+// Uma linha por estadia no terminal. `activeCityKey`/`activeEmployeeId` só
+// estão preenchidos com a sessão aberta e são UNIQUE: 1 por cidade, 1 por
+// pessoa (a BD recusa a segunda). Fechar = pô-los a NULL; nada se apaga.
+// Instantes em UTC ("YYYY-MM-DD HH:MM:SS").
+export const terminalSessions = mysqlTable("terminal_sessions", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	userId: int(),
+	cityKey: varchar({ length: 8 }).notNull(), // lisbon | porto | faro
+	startedAt: datetime({ mode: 'string' }).notNull(),
+	startLat: decimal({ precision: 10, scale: 7 }),
+	startLng: decimal({ precision: 10, scale: 7 }),
+	startAccuracy: int(),
+	startSource: mysqlEnum(['button','checkin','handover','tl','takeover','reopen']).notNull(),
+	startedByUserId: int(),
+	endedAt: datetime({ mode: 'string' }),
+	endReason: mysqlEnum(['button','handover','tl','checkout','no_answer','stale_checkout']),
+	endedByUserId: int(),
+	endLat: decimal({ precision: 10, scale: 7 }),
+	endLng: decimal({ precision: 10, scale: 7 }),
+	endNote: varchar({ length: 255 }),
+	// B2: GPS de 5 em 5 min e "Ainda estás no terminal?"
+	lastInsideAt: datetime({ mode: 'string' }),
+	outsideSince: datetime({ mode: 'string' }),
+	outsideCount: int().default(0).notNull(),
+	askedAt: datetime({ mode: 'string' }),
+	stillHereAt: datetime({ mode: 'string' }),
+	// Horas que contam: até quando e porquê
+	countedUntil: datetime({ mode: 'string' }),
+	countedBasis: mysqlEnum(['gps_close','last_gps','last_service','confirmed','pending','rejected']),
+	// Nível +1 no pagamento: só extras
+	payUplift: tinyint().default(0).notNull(),
+	note: varchar({ length: 255 }),
+	timeRecordId: int(),
+	activeCityKey: varchar({ length: 8 }),
+	activeEmployeeId: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_terminal_sessions_active_city").on(table.activeCityKey),
+	uniqueIndex("uq_terminal_sessions_active_employee").on(table.activeEmployeeId),
+	index("idx_terminal_sessions_employee").on(table.employeeId, table.startedAt),
+	index("idx_terminal_sessions_city").on(table.cityKey, table.startedAt),
+]);
+
+/** 0625 — "Pedir ao João para passar": pendente até Passar / Ainda estou (ou caducar). */
+export const terminalHandoverRequests = mysqlTable("terminal_handover_requests", {
+	id: int().autoincrement().primaryKey(),
+	sessionId: int().notNull(),
+	cityKey: varchar({ length: 8 }).notNull(),
+	holderEmployeeId: int().notNull(),
+	requesterEmployeeId: int().notNull(),
+	requesterUserId: int(),
+	requestedAt: datetime({ mode: 'string' }).notNull(),
+	reqLat: decimal({ precision: 10, scale: 7 }),
+	reqLng: decimal({ precision: 10, scale: 7 }),
+	reqAccuracy: int(),
+	status: mysqlEnum(['pending','passed','declined','expired','cancelled']).default('pending').notNull(),
+	answeredAt: datetime({ mode: 'string' }),
+	answeredByUserId: int(),
+	newSessionId: int(),
+	note: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_terminal_handover_session").on(table.sessionId, table.status),
+	index("idx_terminal_handover_requester").on(table.requesterEmployeeId, table.requestedAt),
+]);
+
 // ─── Fecho mensal de ordenados (0064): apuramento → aprovado → pago ───────────
 // Cada fecho é uma VERSÃO imutável do cálculo (linhas em JSON). O cálculo ao
 // vivo continua a existir como "apuramento provisório".

@@ -97,6 +97,7 @@ import {
   Inbox,
   HardDrive,
   PhoneCall,
+  Plane,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -122,6 +123,8 @@ import { QueryErrorNote } from "@/components/QueryErrorNote";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PAGE_RELOAD_EVENT, jumpTo } from "@/lib/jumpTo";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
+import { useTerminal } from "@/components/terminal/useTerminal";
+import { TerminalBar, TerminalBusyDialog } from "@/components/terminal/TerminalBar";
 
 /** Lote 45: o "Drive" do menu abre o Google Drive da pessoa (a conta Google com que está no browser). */
 export const GOOGLE_DRIVE_URL = "https://drive.google.com/drive/my-drive";
@@ -477,17 +480,23 @@ function DashboardLayoutContent({
     refetchInterval: 120_000,
   });
   const [pontoMode, setPontoMode] = useState<"check_in" | "check_out" | null>(null);
+  // Terminal pelo perfil (plano 56 B1; interruptor PONTO_TERMINAL): "Estou no terminal"
+  // no menu da foto, opção na entrada do ponto e barra fina por baixo do cabeçalho.
+  const terminal = useTerminal(!!employee);
+  const terminalOn = !!terminal.status?.enabled && !!terminal.status?.eligible;
+  const [pontoTerminal, setPontoTerminal] = useState(false);
   const pontoDone = () => {
     utils.rh.timeRecords.myStatus.invalidate();
     utils.rh.timeRecords.list.invalidate();
+    utils.terminal.status.invalidate();
     setPontoMode(null);
+    setPontoTerminal(false);
   };
   const quickCheckIn = trpc.rh.timeRecords.checkIn.useMutation({
     onSuccess: (d) => {
       toast.success("Entrada registada!");
-      // Terminal no ponto (aeroporto) — só vem preenchido com o interruptor ligado
-      if (d?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
-      if (d?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
+      // "Estou no terminal" marcado: a entrada fica feita mesmo com o terminal ocupado
+      if (d?.terminalSession) terminal.handleOpenResult(d.terminalSession as any);
       pontoDone();
     },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
@@ -495,7 +504,7 @@ function DashboardLayoutContent({
   const quickCheckOut = trpc.rh.timeRecords.checkOut.useMutation({
     onSuccess: (d) => {
       toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`);
-      if (d?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
+      if (d?.terminalReleased) toast.info(d.terminalReleased.message, { duration: 8000 });
       if (d?.terminal === "partial") toast.success(`${d.terminalLabel ?? "Terminal até à última recolha/entrega"}. Daí até à saída conta como hora normal.`, { duration: 10000 });
       if (d?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS) e ainda não há recolhas/entregas tuas no troço. Não paga terminal até o RH confirmar.", { duration: 10000 });
       pontoDone();
@@ -505,7 +514,7 @@ function DashboardLayoutContent({
   const submitPonto = (base64: string, mimeType: string) => {
     const employeeId = pontoQ.data?.employeeId;
     if (!employeeId || !pontoMode) return;
-    const doSubmit = (lat: number, lng: number) => {
+    const doSubmit = (lat: number, lng: number, accuracy: number) => {
       const payload = {
         employeeId,
         photoBase64: base64,
@@ -514,7 +523,7 @@ function DashboardLayoutContent({
         longitude: String(lng),
         locationName: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
       };
-      if (pontoMode === "check_in") quickCheckIn.mutate(payload);
+      if (pontoMode === "check_in") quickCheckIn.mutate({ ...payload, ...(pontoTerminal && terminalOn ? { terminal: true, accuracy } : {}) });
       else quickCheckOut.mutate(payload);
     };
     // O ponto exige localização EXATA (o bloqueio global da app foi removido —
@@ -531,7 +540,7 @@ function DashboardLayoutContent({
           setPontoMode(null);
           return;
         }
-        doSubmit(pos.coords.latitude, pos.coords.longitude);
+        doSubmit(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
       },
       () => { toast.error("Sem acesso à localização. Autoriza a localização exata para picar o ponto."); setPontoMode(null); },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
@@ -937,7 +946,7 @@ function DashboardLayoutContent({
                 <DropdownMenuSeparator />
                 {pontoStatus === "out" && (
                   <DropdownMenuItem
-                    onClick={() => setPontoMode("check_in")}
+                    onClick={() => { setPontoTerminal(false); setPontoMode("check_in"); }}
                     className="cursor-pointer text-green-700 focus:text-green-700"
                   >
                     <ArrowDownToLine className="mr-2 h-4 w-4" />
@@ -951,6 +960,16 @@ function DashboardLayoutContent({
                   >
                     <ArrowUpFromLine className="mr-2 h-4 w-4" />
                     <span>Dar saída (check-out)</span>
+                  </DropdownMenuItem>
+                )}
+                {terminalOn && !terminal.status?.session && (
+                  <DropdownMenuItem
+                    onClick={() => terminal.start(() => { setPontoTerminal(true); setPontoMode("check_in"); })}
+                    disabled={terminal.working}
+                    className="cursor-pointer text-sky-800 focus:text-sky-800 dark:text-sky-200"
+                  >
+                    <Plane className="mr-2 h-4 w-4" />
+                    <span>Estou no terminal</span>
                   </DropdownMenuItem>
                 )}
                 {employee && (
@@ -969,7 +988,7 @@ function DashboardLayoutContent({
               </DropdownMenuContent>
             </DropdownMenu>
             {employee && <ProfilePhotoPrompt open={photoOpen} onOpenChange={setPhotoOpen} />}
-            <Dialog open={!!pontoMode} onOpenChange={(o) => { if (!o) setPontoMode(null); }}>
+            <Dialog open={!!pontoMode} onOpenChange={(o) => { if (!o) { setPontoMode(null); setPontoTerminal(false); } }}>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
@@ -977,8 +996,15 @@ function DashboardLayoutContent({
                     {pontoMode === "check_in" ? "Entrada — Foto + GPS" : "Saída — Foto + GPS"}
                   </DialogTitle>
                 </DialogHeader>
+                {pontoMode === "check_in" && terminalOn && (
+                  <label className="flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-100">
+                    <input type="checkbox" className="h-4 w-4" checked={pontoTerminal} onChange={(e) => setPontoTerminal(e.target.checked)} />
+                    <Plane className="h-4 w-4" aria-hidden />
+                    <span>Estou no terminal</span>
+                  </label>
+                )}
                 {pontoMode && (
-                  <CameraCapture onCapture={submitPonto} onCancel={() => setPontoMode(null)} />
+                  <CameraCapture onCapture={submitPonto} onCancel={() => { setPontoMode(null); setPontoTerminal(false); }} />
                 )}
                 {(quickCheckIn.isPending || quickCheckOut.isPending) && (
                   <p className="text-sm text-muted-foreground text-center animate-pulse">
@@ -990,6 +1016,9 @@ function DashboardLayoutContent({
           </div>
         </div>
 
+        {/* Terminal pelo perfil: "Terminal Lisboa · desde 14:05 · Sair" + pedido de troca */}
+        <TerminalBar t={terminal} />
+        <TerminalBusyDialog t={terminal} />
         {/* pb extra: a última linha da página não fica por baixo da tab bar
             (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
