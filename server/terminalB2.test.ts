@@ -950,3 +950,13 @@ describe("auditoria B2 — RH corrige à volta da meia-noite e na mudança de ho
     expect(correctionRange("2026-10-24 23:30:00", "01:00", "05:00")).toEqual({ from: "2026-10-25 00:00:00", until: "2026-10-25 05:00:00" });
   });
 });
+
+describe("auditoria B2 — ecrãs: erro ≠ vazio", () => {
+  it("ficha → Ponto: se os troços de terminal não carregam aparece o erro (não fica como \"sem terminal\")", () => {
+    expect(src("client/src/components/terminal/TerminalRhSessions.tsx")).toContain("error: enabled ? q.error : null");
+    expect(src("client/src/pages/HRPage.tsx")).toContain('{terminalRh.error && <QueryErrorNote error={terminalRh.error}');
+    // o Resumo do dia e o "Terminal agora" já mostravam o erro
+    expect(src("client/src/components/terminal/TerminalDayCard.tsx")).toContain("if (q.error) return <QueryErrorNote");
+    expect(src("client/src/components/terminal/TerminalLiveCard.tsx")).toContain("if (q.error) return <QueryErrorNote");
+  });
+});

@@ -987,6 +987,9 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
         </Card>
       )}
 
+      {/* Plano 56 B2: os troços de terminal não carregaram → diz-se (erro ≠ "sem terminal") */}
+      {terminalRh.error && <QueryErrorNote error={terminalRh.error} onRetry={() => terminalRh.refetch()} retrying={terminalRh.fetching} what="os troços de terminal" />}
+
       {/* Records list */}
       <div className="space-y-2">
         {records.slice(0, 30).map((r, idx) => {

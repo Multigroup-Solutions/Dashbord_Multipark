@@ -28,10 +28,13 @@ const ms = (v: string | null | undefined): number => {
   return Date.parse(v.includes("T") ? v : v.replace(" ", "T") + "Z");
 };
 
-/** Os troços de terminal da ficha (últimos 45 dias). */
+/** Os troços de terminal da ficha (últimos 45 dias). Erro ≠ vazio: quem usa mostra o erro (`error`). */
 export function useTerminalRh(employeeId: number, enabled: boolean) {
   const q = trpc.terminal.rh.list.useQuery({ employeeId }, { enabled, retry: false, staleTime: 30_000 });
-  return { enabled: !!q.data?.enabled, canManage: !!q.data?.canManage, sessions: (q.data?.sessions ?? []) as RhTerminalSession[] };
+  return {
+    enabled: !!q.data?.enabled, canManage: !!q.data?.canManage, sessions: (q.data?.sessions ?? []) as RhTerminalSession[],
+    error: enabled ? q.error : null, refetch: () => q.refetch(), fetching: q.isFetching,
+  };
 }
 
 /** Os troços que tocam o turno [inAt, outAt] (sem saída = até agora). */
