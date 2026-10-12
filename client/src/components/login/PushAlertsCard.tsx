@@ -100,7 +100,7 @@ export function PushAlertsCard() {
   );
 }
 
-export function PushAlertsBanner() {
+export function PushAlertsBanner({ pda = false }: { pda?: boolean } = {}) {
   const p = usePushAlerts();
   const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; } });
   if (hidden || !p.loaded || !p.supported || !p.available || p.active || p.blocked || notificationPermission() !== "default") return null;
@@ -108,7 +108,9 @@ export function PushAlertsBanner() {
   return (
     <div role="status" className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-3 text-sm flex flex-wrap items-center gap-2">
       <BellRing className="h-4 w-4 text-primary shrink-0" />
-      <span className="min-w-0 flex-1">Ativa os avisos para receberes no telemóvel os códigos de entrada de quem os pede.</span>
+      <span className="min-w-0 flex-1">{pda
+        ? "Ativa os avisos neste PDA: enquanto estiveres com ele recebes \"Tens um aviso\" (sem nomes) mesmo com a app fechada."
+        : "Ativa os avisos para receberes no telemóvel os códigos de entrada de quem os pede."}</span>
       <Button size="sm" disabled={p.busy} onClick={async () => { if (await p.enable()) dismiss(); }}>Ativar avisos</Button>
       <Button size="sm" variant="ghost" onClick={dismiss} aria-label="Agora não"><X className="h-4 w-4 mr-1" />Agora não</Button>
     </div>

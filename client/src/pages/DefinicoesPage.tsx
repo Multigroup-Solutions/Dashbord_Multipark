@@ -867,7 +867,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
           <SelectTrigger className="max-w-sm" aria-label={item.label}><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="duty">TL e supervisor de serviço (sem cidade: RH e admins)</SelectItem>
-            <SelectItem value="email">Email da pessoa, pela acesso@ (ainda não disponível)</SelectItem>
+            <SelectItem value="email">Email da pessoa, pela acesso@ (se falhar, vai ao TL)</SelectItem>
           </SelectContent>
         </Select>
       ) : isTime ? (

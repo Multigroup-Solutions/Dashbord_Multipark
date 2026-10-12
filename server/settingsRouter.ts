@@ -8,10 +8,9 @@
  * marcados superAdminOnly). As integrações vivem no hub /integracoes (19d).
  */
 import { TRPCError } from "@trpc/server";
+import { GOOGLE_ON_PDAS_FLAG, googleOnPdasChangeError } from "../shared/pdaSession";
 import { z } from "zod";
-import { COOKIE_NAME } from "@shared/const";
 import { protectedProcedure, router } from "./_core/trpc";
-import { getSessionCookieOptions } from "./_core/cookies";
 import { requireAccess } from "./_core/access";
 import {
   AUTOMATION_FLAGS, SETTINGS, SETTING_KEYS, automationFlagSuperAdminOnly, flagSettingKey, isAutomationFlag, settingSuperAdminOnly,
@@ -46,16 +45,10 @@ async function log(userId: number, action: string, entity: string, details: stri
   } catch { /* o registo nunca parte a ação */ }
 }
 
-/** Novo cookie de sessão para ESTE dispositivo, com a versão atual. */
+/** Novo cookie de sessão para ESTE dispositivo, com a versão atual (num PDA continua presa ao PDA — plano 56 A2). */
 async function reissueSessionCookie(ctx: { req: any; res: any; user: { openId: string; name: string | null } }, sessionVersion: number) {
-  const { sdk } = await import("./_core/sdk");
-  const { SESSION_MAX_MS } = await import("./_core/oauth");
-  const token = await sdk.createSessionToken(ctx.user.openId, {
-    name: ctx.user.name || "Utilizador",
-    expiresInMs: SESSION_MAX_MS,
-    sessionVersion,
-  });
-  ctx.res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(ctx.req), maxAge: SESSION_MAX_MS });
+  const { reissueSessionCookie: reissue } = await import("./pdaSession");
+  await reissue(ctx.req, ctx.res, ctx.user, sessionVersion);
 }
 
 export const settingsRouter = router({
@@ -128,6 +121,12 @@ export const settingsRouter = router({
         if (!isAutomationFlag(input.name)) throw new TRPCError({ code: "BAD_REQUEST", message: "Interruptor desconhecido." });
         // Ex.: MULTIPARK_SOURCE (fonte das reservas), CRM_AUTO_MERGE (20b).
         if (automationFlagSuperAdminOnly(input.name)) requireSuperAdmin(ctx.user.role);
+        // Plano 56 (A2): sem "Entrar com email e código" os PDAs só têm a Google — não se tira.
+        if (input.name === GOOGLE_ON_PDAS_FLAG) {
+          const { codeLoginEnabled } = await import("./loginCode");
+          const err = googleOnPdasChangeError(input.value, await codeLoginEnabled());
+          if (err) throw new TRPCError({ code: "PRECONDITION_FAILED", message: err });
+        }
         const { setSetting, SettingConflictError } = await import("./appSettings");
         let r: { changed: boolean; value: unknown };
         try {

@@ -115,8 +115,8 @@ export interface LoginAccountLike {
 }
 
 export type CompleteLoginResult =
-  | { ok: true; account: LoginAccountLike }
-  | { ok: false; reason: "missing" | "inactive" | "method" };
+  | { ok: true; account: LoginAccountLike; pdaSession?: boolean }
+  | { ok: false; reason: "missing" | "inactive" | "method" | "pda" };
 
 const METHOD_LOG: Record<LoginMethod, string> = { google: "Entrou com a Google", code: "Entrou com um código de entrada", password: "Entrou com a palavra-passe" };
 const METHOD_TAG: Record<LoginMethod, string> = { google: "[OAuth]", code: "[Entrada]", password: "[Entrada]" };
@@ -142,6 +142,12 @@ export async function completeLogin(opts: {
   reload: () => Promise<LoginAccountLike | null | undefined>;
   /** Depois das portas e antes da sessão (ex.: marcar a entrada). Pode devolver a conta atualizada. */
   beforeSession?: (account: LoginAccountLike) => Promise<LoginAccountLike | null | undefined | void>;
+  /**
+   * Plano 56 (A2): entrou num PDA registado (o `deviceToken` validado no
+   * servidor) → sessão de PDA (nonce em `pdas`, 16 h) em vez da de 30 dias.
+   */
+  pda?: { id: number; token: string; name?: string | null } | null;
+  /** Funcionários com código: só no PDA registado onde o código foi pedido (omissão: há `pda`). */
   registeredPda?: boolean;
 }): Promise<CompleteLoginResult> {
   const { req, res, method, email } = opts;
@@ -177,7 +183,7 @@ export async function completeLogin(opts: {
   }
 
   // Plano 56: palavra-passe e código só para utilizador/extra/condutor (TL e acima entram com Google).
-  if (!methodAllowedForRole(method, account.role, { registeredPda: opts.registeredPda })) {
+  if (!methodAllowedForRole(method, account.role, { registeredPda: opts.registeredPda ?? !!opts.pda })) {
     console.warn(`${tag} Acesso recusado <${maskEmailForLog(email)}> — o papel ${account.role} entra com Google`);
     await logLogin({ userId: 0, action: "login_denied", entityId: account.id, details: `Entrada recusada: o papel ${account.role} entra com Google (tentou ${method === "code" ? "um código" : "a palavra-passe"}) <${maskEmailForLog(email)}>` });
     return { ok: false, reason: "method" };
@@ -211,6 +217,25 @@ export async function completeLogin(opts: {
   if (opts.beforeSession) {
     const next = await opts.beforeSession(account);
     if (next) account = next;
+  }
+
+  // Plano 56 (A2): num PDA registado a sessão fica presa ao PDA (acaba na
+  // saída do ponto, no logout, quando outra pessoa entra ou ao fim de 16 h).
+  if (opts.pda) {
+    const { openPdaSession } = await import("../pdaSession");
+    const opened = await openPdaSession({
+      req, res, account, sessionName: opts.sessionName, pda: opts.pda,
+      how: method === "code" ? "código" : method === "password" ? "palavra-passe" : "Google",
+    }).catch((err) => {
+      console.warn(`${tag} Sessão de PDA não abriu:`, String((err as Error)?.message ?? err).slice(0, 160));
+      return false;
+    });
+    if (!opened) {
+      await logLogin({ userId: 0, action: "login_denied", entityId: account.id, details: `Entrada recusada: a sessão no PDA #${opts.pda.id} não abriu (PDA inativo?) <${maskEmailForLog(email)}>` });
+      return { ok: false, reason: "pda" };
+    }
+    await logLogin({ userId: account.id, action: "login", entityId: account.id, details: `${METHOD_LOG[method]} num PDA (${opts.pda.name ?? `#${opts.pda.id}`})` });
+    return { ok: true, account, pdaSession: true };
   }
 
   const sessionToken = await sdk.createSessionToken(account.openId, {

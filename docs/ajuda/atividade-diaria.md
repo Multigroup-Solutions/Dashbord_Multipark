@@ -102,6 +102,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 - Os nomes do Zello comparam-se sem ligar a maiúsculas.
 - Os alertas **Sem PDA ou Zello** (ponto aberto sem PDA, Zello desligado, movimentos sem ponto) ficam pequenos, ao lado (no telemóvel, por cima). Carrega no título para os encolher. **Visto** marca que trataste; **+ nota** abre a caixa para escreveres porquê.
 - **Novo PDA**, **editar** e **QR** para quem edita PDAs. O olho abre o **histórico** do PDA (os últimos 100 check-ins, com "Em uso" ou "Devolvido").
+- Com **Entrar com email e código** ligado, só o team leader (ou acima) lê o QR, os supervisores são avisados quando um PDA passa para outro aparelho e a sessão no PDA acaba na saída do ponto. A **limpeza única de cada PDA** (uma conta Google da empresa; Chrome sem guardar palavras-passe) está na ajuda do Ponto → PDAs.
 - **Retirar** (o caixote, só administração) passa o PDA a **Inativo**. Nunca se apaga: o histórico de quem o teve e o GPS partido por pessoa ficam.
 
 **Quando a leitura falha**

@@ -9,8 +9,10 @@
  *    para os supervisores da cidade da pessoa (sem cidade → RH/admins); fica
  *    preso ao aparelho que o pediu (cookie `app_login_nonce`).
  *  - Palavra-passe só para utilizador/extra/condutor; TL e acima entram com
- *    Google. Nesta fase o código também é só para esses papéis (no A2 os
- *    funcionários passam a poder entrar com código num PDA registado).
+ *    Google. O código também é só para esses papéis, menos num PDA registado
+ *    (A2): aí os funcionários entram com código (sem palavra-passe).
+ *  - A2: com a definição `login.codeDelivery` = "email" o código vai para o
+ *    email da própria pessoa, pela acesso@multipark.pt (falha → TL/supervisor).
  */
 import { ROLE_LABELS, isRole, roleRank } from "./access";
 import { addDays, lisbonDayOf, lisbonMidnightUtcMs } from "./lisbonDay";
@@ -56,6 +58,10 @@ export const PASSWORD_MAX = 128;
 // ─── Textos (curtos, para quem tem pouca prática) ───────────────────────────
 
 export const CODE_REQUESTED_MSG = "Pedimos o código ao TL e ao supervisor de serviço. Pede-lhes o código de 6 algarismos.";
+/** A2, modo "email": o código foi para o email da pessoa (pela acesso@). */
+export const CODE_EMAILED_MSG = "Enviámos o código para o teu email. Escreve-o neste aparelho.";
+/** A2, modo "email": o email não saiu — o código foi para o TL/supervisor de serviço. */
+export const CODE_EMAIL_FAILED_MSG = "Não conseguimos enviar o email agora — pede o código ao TL.";
 export const CODE_WRONG_MSG = "Código errado. Confirma os 6 algarismos.";
 export const CODE_EXPIRED_MSG = "Código errado ou fora do prazo. Pede um código novo neste aparelho.";
 export const PASSWORD_WRONG_MSG = "Email ou palavra-passe errados.";
@@ -71,10 +77,28 @@ export type LoginMethod = "google" | "code" | "password";
 export const PASSWORD_ROLES = ["user", "extra", "condutor"] as const;
 
 /**
- * A2: funcionários (TL e acima) com código só num PDA registado. Fica
- * desligado no A1 (o código é só para utilizador/extra/condutor).
+ * A2: funcionários (TL e acima) entram com código só num PDA registado (o
+ * `deviceToken` do aparelho validado no servidor). Nunca com palavra-passe.
  */
-export const STAFF_CODE_ON_REGISTERED_PDA = false;
+export const STAFF_CODE_ON_REGISTERED_PDA = true;
+
+/** A2: o código por email sai desta conta própria (DWD), nunca de uma caixa da Comunicação. */
+export const LOGIN_CODE_SENDER = "acesso@multipark.pt";
+
+/** Assunto e texto do email com o código (sem link). PURA. */
+export function loginCodeEmail(code: string): { subject: string; text: string } {
+  const c = formatCode(code);
+  return {
+    subject: `Código de entrada Multipark: ${c}`,
+    text: [
+      `O teu código de entrada é ${c}.`,
+      "",
+      `Escreve-o no aparelho onde pediste. Vale ${LOGIN_CODE.minutes} minutos.`,
+      "",
+      "Se não foste tu que pediste, ignora este email.",
+    ].join("\n"),
+  };
+}
 
 /** Este papel pode ter/usar palavra-passe? (utilizador, extra, condutor). PURA. */
 export function canUsePassword(role: string | null | undefined): boolean {
@@ -217,6 +241,17 @@ export function pickCodeRecipients(city: string | null, pools: DutyPools, exclud
   return list.length ? { userIds: list, via: "duty" } : rh();
 }
 
+/**
+ * A2: o código de um FUNCIONÁRIO (só num PDA registado) só vai a quem está ao
+ * mesmo nível ou acima — um TL nunca recebe o código de um supervisor ou de um
+ * admin (podia entrar como ele). Utilizador/extra/condutor: todos. PURA.
+ */
+export function codeRecipientsForRole(targetRole: string | null | undefined, ids: readonly number[], roles: ReadonlyMap<number, string>): number[] {
+  const need = roleRank(targetRole);
+  if (need < roleRank("team_leader")) return [...ids];
+  return ids.filter((id) => roleRank(roles.get(id)) >= need);
+}
+
 /** "TL Rui", "supervisor Ana", "back office Marta". PURA. */
 export function recipientLabel(role: string | null | undefined, name: string | null | undefined): string {
   const r = String(role ?? "");
@@ -227,7 +262,8 @@ export function recipientLabel(role: string | null | undefined, name: string | n
 }
 
 /** Aviso à pessoa: "Entraste com um código enviado a TL X / supervisor Y às 14:05." PURA. */
-export function codeUsedNotice(labels: readonly string[], hhmm: string): string {
+export function codeUsedNotice(labels: readonly string[], hhmm: string, mode: "duty" | "email" = "duty"): string {
+  if (mode === "email") return `Entraste com um código enviado para o teu email às ${hhmm}.`;
   const to = labels.length ? labels.join(" / ") : "quem estava de serviço";
   return `Entraste com um código enviado a ${to} às ${hhmm}.`;
 }

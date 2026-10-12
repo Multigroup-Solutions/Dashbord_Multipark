@@ -168,6 +168,11 @@ export const MAIL_AUTOMATED_RESERVATION = 2;
  */
 export const MAIL_AUTOMATED_SYSTEM = 3;
 export const SYSTEM_MAIL_HEADER = "X-Multipark-System";
+/**
+ * Plano 56 (A2): o email com o código de entrada (pela acesso@) leva este
+ * cabeçalho e a sincronização SALTA-O (nunca fica guardado: tem o código).
+ */
+export const LOGIN_MAIL_HEADER = "X-Multipark-Login";
 /** Valores de mail_messages.automated que tornam a conversa "automática" (escondida por omissão). */
 export const MAIL_HIDDEN_AUTOMATED_VALUES: readonly number[] = [MAIL_AUTOMATED_RESERVATION, MAIL_AUTOMATED_SYSTEM];
 

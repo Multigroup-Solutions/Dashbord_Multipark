@@ -2,7 +2,7 @@
 modulo: dashboards
 titulo: Entrada, menu e "Sem acesso"
 rotas: /, /dashboard, /modulos
-palavras: entrar com email, palavra-passe, esqueci a palavra-passe, pedir código, código de entrada, código de 6 algarismos, cria a tua palavra-passe, agora não, palavra-passe bloqueada, com o teu papel entra-se com google, repor acesso, entrar com código, liga a tua conta, sou novo, candidatar-me, já me candidatei, outro email, código por email, voltei, inativo, desativado, entrar, login, google, sem acesso, acesso recusado, não consigo entrar, sessão, sair, perfil, menu, página em branco, erro, versão nova, recarregar, sem centro de custos, notificação não abre, instalar app, ícone
+palavras: entrar no pda, sessão do pda, a sessão termina em 10 s, sessão terminou, google nos pdas, sem google no pda, o chrome guarda a palavra-passe, código por email, acesso@, pede o código ao tl, entrar com email, palavra-passe, esqueci a palavra-passe, pedir código, código de entrada, código de 6 algarismos, cria a tua palavra-passe, agora não, palavra-passe bloqueada, com o teu papel entra-se com google, repor acesso, entrar com código, liga a tua conta, sou novo, candidatar-me, já me candidatei, outro email, código por email, voltei, inativo, desativado, entrar, login, google, sem acesso, acesso recusado, não consigo entrar, sessão, sair, perfil, menu, página em branco, erro, versão nova, recarregar, sem centro de custos, notificação não abre, instalar app, ícone
 ---
 # Entrada, menu e "Sem acesso"
 
@@ -22,6 +22,20 @@ palavras: entrar com email, palavra-passe, esqueci a palavra-passe, pedir códig
 - **Repor acesso** (Utilizadores, quem gere a conta): tira a palavra-passe, termina as sessões em todos os aparelhos e avisa a pessoa (fica nos Logs). Ninguém define a palavra-passe de outra pessoa.
 - Tudo fica nos Logs: código pedido e a quem foi, entradas (Google, código, palavra-passe), palavra-passe criada/mudada/reposta, tentativas erradas.
 - Uma conta Google cujo email já está noutra conta ligada a **outra** Google não se junta sozinha: a entrada é recusada e os admins são avisados (juntam em Ligações).
+
+**Entrar num PDA** (só com **Entrar com email e código** ligado; desligado, os PDAs entram como sempre, com a Google)
+- Num **PDA registado** (registado pelo QR) a sessão fica **presa a esse PDA** e acaba sozinha quando: dás **saída do ponto** (em qualquer aparelho, também no telemóvel), carregas em **Sair**, **outra pessoa entra** no PDA, o ponto esquecido é fechado sozinho, ou ao fim de **16 horas**. Funciona também para quem ainda não tem ficha (contas novas, candidatos).
+- Depois da saída do ponto aparece o **resumo da saída** (horas, km do Zello) e **"A sessão termina em 10 s"**; depois volta à página de entrada para a pessoa seguinte. **Terminar já** sai logo.
+- **Team leaders e supervisores** entram num PDA registado com **código** (sem palavra-passe). O código só vai a quem está ao mesmo nível ou acima (um TL nunca recebe o código de um supervisor). Fora dos PDAs continuam com a Google.
+- **Google nos PDAs** (Definições → Automações, só o super admin; vem **ligado**, como hoje): desligado, o botão **Entrar com Google** desaparece nos PDAs registados (página de entrada, "Iniciar sessão" e registo do PDA). Telemóveis e PCs ficam sempre com o Google. Só dá para desligar com **Entrar com email e código** ligado.
+- Quem já tinha entrado no PDA com a Google **não é posto fora**: ao abrir a app, a sessão passa a sessão do PDA.
+- No PDA o Chrome **não guarda nem sugere** emails e palavras-passe (e o email escrito não fica para a pessoa seguinte). Faz também a limpeza única de cada PDA (ver a ajuda do Ponto → PDAs).
+- Um separador antigo aberto no PDA não termina a sessão de quem entrou depois.
+
+**Código por email** (definição **Código de entrada vai para**, Definições → Operação; vem em **TL + supervisor de serviço**)
+- Com **email**, o código vai para o email da própria pessoa, enviado pela conta **acesso@multipark.pt** (uma conta só para isto, nunca uma caixa da Comunicação — se for, não envia). O email traz só o código e "escreve-o no aparelho onde pediste" (sem link) e nunca aparece na Comunicação.
+- Se o email não sair, aparece **"Não conseguimos enviar o email agora — pede o código ao TL"** e o código vai para o TL e o supervisor de serviço, como hoje.
+- No teu sino fica "Entraste com um código enviado para o teu email às HH:MM".
 - **Acesso recusado** (conta desativada ou não registada): aparece a mensagem na página de entrada e **não** volta a mandar para a Google em ciclo. Fala com a administração.
 - **Conta nova**: qualquer conta Google entra como **utilizador**. Se ainda não está em nenhuma ficha, aparece **"Liga a tua conta"** com duas opções:
   1. **Sou novo — quero candidatar-me**: escolhes a cidade (ou "Ainda não sei") e cria-se a tua ficha de **candidato** (com o nome e o email da Google, e a cidade escolhida — assim o supervisor dessa cidade vê-a) e a candidatura no Recrutamento, e abre **A minha ficha** para preencheres os dados e carregares os documentos. O supervisor revê e o RH aprova. Se já houver ficha ou candidatura com esse email, liga a essa (nunca cria outra).

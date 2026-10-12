@@ -4,7 +4,7 @@
  * (só metadados — os bytes vêm a pedido), direção. PURA (testável).
  */
 import type { gmail_v1 } from "@googleapis/gmail";
-import { AUTO_MAIL_HEADER, SYSTEM_MAIL_HEADER, extractAddresses, normalizeAutoMailKind, parseMailbox } from "../../shared/mail";
+import { AUTO_MAIL_HEADER, LOGIN_MAIL_HEADER, SYSTEM_MAIL_HEADER, extractAddresses, normalizeAutoMailKind, parseMailbox } from "../../shared/mail";
 
 export interface MailAttachmentMeta {
   index: number;
@@ -45,6 +45,8 @@ export interface ParsedGmailMessage {
   systemMail: boolean;
   /** Tipo do envio automático (cabeçalho X-Multipark-Auto) ou null. */
   autoKind: string | null;
+  /** Email com o código de entrada (cabeçalho X-Multipark-Login): a sincronização não o guarda. */
+  loginMail: boolean;
   text: string;
   html: string;
   attachments: MailAttachmentMeta[];
@@ -132,6 +134,7 @@ export function parseGmailMessage(m: gmail_v1.Schema$Message, opts: { accountEma
     precedence: header(h, "Precedence"),
     systemMail: !!header(h, SYSTEM_MAIL_HEADER),
     autoKind: normalizeAutoMailKind(header(h, AUTO_MAIL_HEADER)),
+    loginMail: !!header(h, LOGIN_MAIL_HEADER),
     text: bodies.text.join("\n\n").slice(0, 200_000),
     html: bodies.html.join("\n").slice(0, 1_000_000),
     attachments: bodies.attachments,

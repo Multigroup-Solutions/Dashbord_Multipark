@@ -13,6 +13,16 @@ import { getZelloUsers, getZelloChannels, getZelloLocations, getZelloUserHistory
 import { collectDailyDriverData } from "./jobs/dailyDriverCollection";
 import { requireRole } from "./routerGuards";
 
+/**
+ * Plano 56 (A2): o PDA como vai para o ecrã — sem o token do aparelho, o QR e
+ * o nonce da sessão (com o token dava para fazer passar outro aparelho por
+ * este PDA sem ninguém ser avisado). `registered` = já tem aparelho.
+ */
+function publicPdaRow<T extends Record<string, any>>(p: T): Omit<T, "deviceToken" | "qrCode" | "sessionNonce"> & { registered: boolean } {
+  const { deviceToken, qrCode: _qr, sessionNonce: _n, ...rest } = p;
+  return { ...rest, registered: !!deviceToken };
+}
+
 export const operationalRouter = router({
   dashboard: protectedProcedure.query(async ({ ctx }) => {
     requireAccess(ctx.user, "atividade_diaria", "view");
@@ -648,7 +658,8 @@ export const operationalRouter = router({
   pdas: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "pdas", "view");
-      return listPdas();
+      // Plano 56 (A2): o token do aparelho e o nonce da sessão nunca saem para o ecrã.
+      return ((await listPdas()) as any[]).map(publicPdaRow);
     }),
     /** 43b: o Zello de cada PDA bate certo com a lista do Zello? ("mede e põe o nome") */
     zelloCheck: protectedProcedure.query(async ({ ctx }) => {
@@ -702,15 +713,59 @@ export const operationalRouter = router({
     }),
     // Ler o QR no próprio aparelho regista-o como este PDA (substitui a
     // escolha na lista). Só chefias — é uma vez por aparelho.
-    registerByQr: protectedProcedure.input(z.object({ pdaId: z.number(), code: z.string().min(8).max(64) })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "pdas", "edit", { allowOwn: true });
+    // Plano 56 (A2, com ENTRAR_COM_CODIGO): só TL e acima; a sessão de quem
+    // registou passa a sessão deste PDA; se o PDA estava noutro aparelho, o
+    // supervisor da cidade é avisado no sino. Desligado: como sempre.
+    registerByQr: protectedProcedure.input(z.object({ pdaId: z.number(), code: z.string().min(8).max(64), currentToken: z.string().max(80).nullable().optional() })).mutation(async ({ ctx, input }) => {
+      const { pdaSessionsEnabled } = await import("./pdaSession");
+      const pdaOn = await pdaSessionsEnabled();
+      if (pdaOn) {
+        if ((ACCESS_ROLE_RANK[ctx.user.role as keyof typeof ACCESS_ROLE_RANK] ?? 0) < ACCESS_ROLE_RANK.team_leader) {
+          const { QR_TL_ONLY_MSG } = await import("../shared/pdaSession");
+          throw new TRPCError({ code: "FORBIDDEN", message: QR_TL_ONLY_MSG });
+        }
+        requireAccess(ctx.user, "pdas", "edit");
+      } else {
+        requireAccess(ctx.user, "pdas", "edit", { allowOwn: true });
+      }
       const { verifyPdaQrCode, setPdaDeviceToken } = await import("./db");
       const pda = await verifyPdaQrCode(input.pdaId, input.code);
       if (!pda) throw new TRPCError({ code: "BAD_REQUEST", message: "QR inválido ou PDA inativo." });
-      const token = await setPdaDeviceToken(input.pdaId);
+      const { pdaSessionStore } = await import("./pdaSessionStore");
+      const before = pdaOn ? await pdaSessionStore().registration(input.pdaId).catch(() => null) : null;
+      // A2: o QR lido outra vez no MESMO aparelho (já tem o token deste PDA) não
+      // troca o token nem avisa ninguém — é o mesmo PDA.
+      const sameDevice = !!(before?.deviceToken && input.currentToken && before.deviceToken === input.currentToken);
+      const token = sameDevice ? before!.deviceToken! : await setPdaDeviceToken(input.pdaId);
       if (!token) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
-      await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: `Aparelho registado por QR como ${pda.name}` });
-      return { token, name: pda.name };
+      await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: sameDevice ? `QR lido outra vez no mesmo aparelho (${pda.name})` : `Aparelho registado por QR como ${pda.name}` });
+      let pdaSession = false;
+      if (pdaOn) {
+        // O PDA mudou de aparelho (já tinha outro token): aviso ao supervisor da cidade.
+        if (before?.deviceToken && before.deviceToken !== token) {
+          try {
+            const { notify } = await import("./notify");
+            const { hhmmLisbon } = await import("../shared/opsPresence");
+            const who = ctx.user.name || `#${ctx.user.id}`;
+            await notify({
+              kind: "pda_device", projectId: before.projectId,
+              title: `O ${pda.name} mudou de aparelho`,
+              body: `${who} registou outro aparelho como ${pda.name} pelo QR às ${hhmmLisbon(Date.now())}. O aparelho antigo deixou de ser este PDA. Se não estavas à espera, fala com quem o registou.`,
+              link: "/operacional?tab=pdas",
+              entity: { type: "pda_device", id: `${input.pdaId}:${token.slice(0, 8)}` },
+              recipientFilter: (c) => c.id !== ctx.user.id,
+            });
+          } catch (err) {
+            console.warn("[pda] aviso de PDA noutro aparelho falhou:", String((err as Error)?.message ?? err).slice(0, 160));
+          }
+        }
+        // O cookie passa a sessão DESTE PDA (presa a ele, como qualquer entrada no PDA).
+        const { sessionClaimsOf, endPdaSession, openPdaSession } = await import("./pdaSession");
+        const claims = await sessionClaimsOf(ctx.req);
+        if (claims?.pda && claims.pn && claims.pda !== input.pdaId) await endPdaSession(claims.pda, claims.pn, "rebind", ctx.user.id);
+        pdaSession = await openPdaSession({ req: ctx.req, res: ctx.res, account: ctx.user, sessionName: ctx.user.name || "Utilizador", pda: { id: input.pdaId, token, name: pda.name }, how: "registo pelo QR" }).catch(() => false);
+      }
+      return { token, name: pda.name, pdaSession };
     }),
     // Login num PDA registado → o PDA (e o Zello) fica com esta pessoa até
     // sair ou entrar outra (PDAs partilhados entre turnos).
@@ -761,7 +816,8 @@ export const operationalRouter = router({
     }),
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "pdas", "view");
-      return getPdaById(input.id);
+      const pda = await getPdaById(input.id);
+      return pda ? publicPdaRow(pda) : pda;
     }),
     create: protectedProcedure.input(z.object({
       name: z.string().min(1),

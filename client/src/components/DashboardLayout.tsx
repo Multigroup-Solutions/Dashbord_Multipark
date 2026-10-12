@@ -1,8 +1,10 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { BlockedOwnDocuments } from "@/components/BlockedOwnDocuments";
 import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
+import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
+import { checkoutSummaryLines } from "@shared/pdaSession";
 import { PushAlertsPrompt } from "@/components/login/PushAlertsPrompt";
-import { codeLoginCached } from "@/lib/loginOptions";
+import { codeLoginCached, useCodeLoginOption } from "@/lib/loginOptions";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -342,6 +344,9 @@ export default function DashboardLayout({
   });
   const { loading, user, error, logout } = useAuth();
   const utils = trpc.useUtils();
+  // Plano 56: "Iniciar sessão" vai à página de entrada com o interruptor ligado
+  // (lá decide-se se há Google neste PDA); a resposta fica guardada para o getLoginUrl.
+  const { codeLogin: codeLoginNow } = useCodeLoginOption();
   // Conta sem acesso (desativada/desconhecida): a MESMA mensagem que a página
   // de entrada mostra — nunca "inicia sessão", que levaria a tentar em ciclo.
   const accessDenied = error?.message === ACCESS_DENIED_MSG;
@@ -387,7 +392,7 @@ export default function DashboardLayout({
               size="lg"
               className="w-full shadow-lg hover:shadow-xl transition-all"
             >
-              {codeLoginCached() ? "Entrar" : "Entrar com Google"}
+              {(codeLoginNow ?? codeLoginCached()) ? "Entrar" : "Entrar com Google"}
             </Button>
           )}
         </div>
@@ -503,6 +508,8 @@ function DashboardLayoutContent({
   });
   const quickCheckOut = trpc.rh.timeRecords.checkOut.useMutation({
     onSuccess: (d) => {
+      // Plano 56 (A2): num PDA a saída acaba a sessão — o resumo fica no ecrã e "A sessão termina em 10 s".
+      if (d?.pdaSessionEnded) { setPontoMode(null); beginPdaSessionEnd(checkoutSummaryLines(d as any)); return; }
       toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`);
       if (d?.terminalReleased) toast.info(d.terminalReleased.message, { duration: 8000 });
       if (d?.terminal === "partial") toast.success(`${d.terminalLabel ?? "Terminal até à última recolha/entrega"}. Daí até à saída conta como hora normal.`, { duration: 10000 });
@@ -653,7 +660,7 @@ function DashboardLayoutContent({
   return (
     <>
       {/* Fase 2: login num PDA registado → o PDA fica com esta pessoa */}
-      <PdaDeviceBinder userId={user?.id} />
+      <PdaDeviceBinder userId={user?.id} pdaSession={(user as any)?.pdaSession ?? null} />
       {/* Segurança: sem localização precisa + permissão de câmara, a app não
           funciona (overlay bloqueante). */}
       <div className="relative" ref={sidebarRef}>
@@ -1023,7 +1030,7 @@ function DashboardLayoutContent({
             (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
           {/* Plano 56: TL e supervisor recebem os códigos de entrada — "Ativar avisos" (uma vez por aparelho). */}
-          <PushAlertsPrompt role={user?.role ?? null} />
+          <PushAlertsPrompt role={user?.role ?? null} pdaSession={!!(user as any)?.pdaSession} />
           {routeDecision.kind === "no_access" ? (
             <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout}
               hint={noAccessHint(location, new Set(filteredItems.map(i => i.path)))} onHint={(to) => setLocation(to)} />

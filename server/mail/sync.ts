@@ -169,6 +169,9 @@ async function processIds(
       res.fetched++;
       const parsed = parseGmailMessage(m, { accountEmail: account.email });
       if (parsed.labelIds.some((l) => SKIP_LABELS.has(l))) continue;
+      // Plano 56 (A2): o email com o código de entrada (X-Multipark-Login) nunca
+      // fica guardado — leva o código em claro.
+      if (parsed.loginMail) continue;
       const company = (a: string) => isCompanyAddress(a, opts.brandDomains);
       const classification = classifyMessage(
         { deliveredTo: parsed.deliveredTo, xOriginalTo: parsed.xOriginalTo, to: parsed.to, cc: parsed.cc, bcc: parsed.bcc, from: parsed.fromEmail },

@@ -84,6 +84,8 @@ import { ContactActions } from "@/components/ContactActions";
 import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
 import UsersPage from "./UsersPage";
+import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
+import { checkoutSummaryLines } from "@shared/pdaSession";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Position =
@@ -857,6 +859,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
   });
   const checkOut = trpc.rh.timeRecords.checkOut.useMutation({
     onSuccess: (data: any) => {
+      // Plano 56 (A2): num PDA a saída acaba a sessão — o resumo fica no ecrã e "A sessão termina em 10 s".
+      if (data?.pdaSessionEnded) { setCameraMode(null); beginPdaSessionEnd(checkoutSummaryLines(data)); return; }
       utils.rh.timeRecords.list.invalidate();
       utils.rh.timeRecords.monthlyHours.invalidate();
       toast.success(`Check-out registado! ${data.hoursWorked}h trabalhadas`);

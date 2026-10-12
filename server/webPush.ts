@@ -22,7 +22,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { users, webPushSubscriptions } from "../drizzle/schema";
 import { maskPhone } from "../shared/maskPhone";
 import {
-  buildCallPushPayload, isGonePushStatus, pickPushDeliveries, vapidConfigFrom,
+  buildCallPushPayload, isGonePushStatus, isPushDisabled, payloadForSubscription, pickPushDeliveries, vapidConfigFrom,
   type PushSubscriptionInput, type VapidConfig,
 } from "../shared/webPush";
 
@@ -48,9 +48,14 @@ async function dbOrThrow() {
   return db;
 }
 
-/** Guarda (ou passa para esta pessoa) a subscrição deste browser. */
-export async function savePushSubscription(userId: number, sub: PushSubscriptionInput, userAgent: string | null): Promise<void> {
+/**
+ * Guarda (ou passa para esta pessoa) a subscrição deste browser. Plano 56
+ * (A2): numa sessão de PDA fica com o `pdaId` (passa a quem entrar no PDA e
+ * desliga-se quando a sessão acaba); fora de um PDA, `pdaId` fica vazio.
+ */
+export async function savePushSubscription(userId: number, sub: PushSubscriptionInput, userAgent: string | null, opts: { pdaId?: number | null } = {}): Promise<void> {
   const db = await dbOrThrow();
+  const pdaId = opts.pdaId ?? null;
   await db.insert(webPushSubscriptions).values({
     userId,
     endpointHash: endpointHash(sub.endpoint),
@@ -58,8 +63,13 @@ export async function savePushSubscription(userId: number, sub: PushSubscription
     p256dh: sub.keys.p256dh,
     auth: sub.keys.auth,
     userAgent: userAgent ? userAgent.slice(0, 255) : null,
+    ...(pdaId != null ? { pdaId } : {}),
   }).onDuplicateKeyUpdate({
-    set: { userId, p256dh: sub.keys.p256dh, auth: sub.keys.auth, userAgent: userAgent ? userAgent.slice(0, 255) : null, lastFailureAt: null },
+    set: {
+      userId, p256dh: sub.keys.p256dh, auth: sub.keys.auth, userAgent: userAgent ? userAgent.slice(0, 255) : null, lastFailureAt: null,
+      // Num PDA fica do PDA; fora dele é uma subscrição normal (sem PDA, ligada).
+      pdaId, disabledAt: null,
+    },
   });
 }
 
@@ -72,9 +82,9 @@ export async function deletePushSubscription(userId: number, endpoint: string): 
 /** A pessoa tem esta subscrição registada? */
 export async function hasPushSubscription(userId: number, endpoint: string): Promise<boolean> {
   const db = await dbOrThrow();
-  const rows = await db.select({ id: webPushSubscriptions.id }).from(webPushSubscriptions)
+  const rows = await db.select({ id: webPushSubscriptions.id, disabledAt: webPushSubscriptions.disabledAt }).from(webPushSubscriptions)
     .where(and(eq(webPushSubscriptions.endpointHash, endpointHash(endpoint)), eq(webPushSubscriptions.userId, userId))).limit(1);
-  return rows.length > 0;
+  return rows.length > 0 && !isPushDisabled(rows[0]);
 }
 
 interface CallForPush {
@@ -139,11 +149,14 @@ export async function pushRingingCalls(callIds: string[]): Promise<void> {
     let sent = 0;
     let removed = 0;
     for (const call of calls) {
-      const payload = JSON.stringify(buildCallPushPayload({ callId: call.id, name: call.name, phoneE164: call.phoneE164, conversationId: call.conversationId }));
+      const callPayload = buildCallPushPayload({ callId: call.id, name: call.name, phoneE164: call.phoneE164, conversationId: call.conversationId });
+      const payload = JSON.stringify(callPayload);
       for (const sub of pickPushDeliveries(subs, visibleByCall.get(call.id) ?? new Set())) {
         try {
           // TTL curto: um aviso de chamada com mais de 1 min já não serve.
-          await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload, { TTL: 60, urgency: "high" });
+          // Num PDA (A2): "Tens um aviso", sem nome nem telefone.
+          const body = sub.pdaId != null ? JSON.stringify(payloadForSubscription(sub, callPayload)) : payload;
+          await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body, { TTL: 60, urgency: "high" });
           sent++;
           await db.update(webPushSubscriptions).set({ lastSuccessAt: nowUtc() }).where(eq(webPushSubscriptions.id, sub.id));
         } catch (err: any) {
@@ -187,13 +200,15 @@ export async function pushToUsers(userIds: readonly number[], payload: UserPushP
   if (!cfg) return out;
   try {
     const db = await dbOrThrow();
-    const subs = await db.select().from(webPushSubscriptions).where(inArray(webPushSubscriptions.userId, ids));
+    // Plano 56 (A2): as de um PDA cuja sessão acabou não recebem nada.
+    const subs = (await db.select().from(webPushSubscriptions).where(inArray(webPushSubscriptions.userId, ids))).filter((s) => !isPushDisabled(s));
     if (!subs.length) return out;
     const webpush = (await import("web-push")).default;
     webpush.setVapidDetails(cfg.subject, cfg.publicKey, cfg.privateKey);
-    const body = JSON.stringify(payload);
     for (const sub of subs) {
       try {
+        // Num PDA (partilhado) o aviso não diz nada de ninguém: "Tens um aviso", abre a app.
+        const body = JSON.stringify(payloadForSubscription(sub, payload));
         await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body, { TTL: opts.ttlSec ?? 600, urgency: opts.urgency ?? "high" });
         out.sent++;
         await db.update(webPushSubscriptions).set({ lastSuccessAt: nowUtc() }).where(eq(webPushSubscriptions.id, sub.id));
