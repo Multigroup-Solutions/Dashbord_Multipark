@@ -34,7 +34,8 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   // Google outra vez fazia um ciclo (recusado → entrada → 401 → Google…).
   if (new URLSearchParams(window.location.search).get(AUTH_DENIED_PARAM) === AUTH_DENIED_VALUE) return;
 
-  // a sessão caiu: entra e volta à página onde estavas
+  // a sessão caiu: entra e volta à página onde estavas (com "Entrar com email
+  // e código" ligado vai à página de entrada; senão à Google, como sempre)
   window.location.href = getLoginUrl(currentPath());
 };
 

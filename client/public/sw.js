@@ -1,7 +1,8 @@
 /*
- * Service worker do dashboard: SÓ notificações push (chamadas do WhatsApp a
- * tocar). Não faz cache nem interceta pedidos (sem handler de fetch), por isso
- * não muda nada no carregamento da app.
+ * Service worker do dashboard: SÓ notificações push — chamadas do WhatsApp a
+ * tocar e (plano 56) o código de entrada para o TL/supervisor de serviço
+ * (`type: "login_code"`). Não faz cache nem interceta pedidos (sem handler de
+ * fetch), por isso não muda nada no carregamento da app.
  */
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -13,6 +14,24 @@ self.addEventListener("push", (event) => {
   } catch (e) {
     data = {};
   }
+
+  // Código de entrada (plano 56): aviso normal (não toca como uma chamada).
+  // Não se fecha sozinho — o browser não deixa o service worker esperar os
+  // 10 minutos do código; o sino e o cartão "Códigos de entrada" dizem se ainda vale.
+  if (data.type === "login_code") {
+    event.waitUntil(
+      self.registration.showNotification(data.title || "Código de entrada", {
+        body: data.body || "Abre a app para veres o código.",
+        tag: data.tag || "login-code",
+        renotify: true,
+        icon: "/icon.png",
+        badge: "/icon.png",
+        data: { url: data.url || "/operacional?tab=live" },
+      }),
+    );
+    return;
+  }
+
   const title = data.title || "Chamada WhatsApp";
   const tag = data.tag || "wa-call";
   event.waitUntil(

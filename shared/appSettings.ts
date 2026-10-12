@@ -28,6 +28,13 @@ import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
 import { PERF_RANK_WEIGHTS_KEY, rankWeightsSchema } from "./peoplePerformance";
 
+// ─── Entrar com código (plano 56) ───────────────────────────────────────────
+
+/** Para onde vai o código de entrada: TL/supervisor de serviço (duty) ou o email da pessoa (A2). */
+export const LOGIN_CODE_DELIVERY_MODES = ["duty", "email"] as const;
+export type LoginCodeDeliveryMode = (typeof LOGIN_CODE_DELIVERY_MODES)[number];
+export const LOGIN_CODE_DELIVERY_SETTING_KEY = "login.codeDelivery";
+
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -392,6 +399,15 @@ export const SETTINGS = {
     description: "Quem recebe o WhatsApp quando um alerta \"a trabalhar sem PDA ou Zello ligado\" fica sem resposta: os administradores de cada cidade e a cópia para todas as cidades. Escolhe as pessoas do RH (o telefone vem da ficha, por isso fica sempre atualizado); para alguém que não está no RH, escreve o número em \"Outros números\".",
     schema: presencePhonesSchema,
     defaultValue: { lisbon: [], porto: [], faro: [], copy: [] },
+    wiring: "live",
+  }),
+  "login.codeDelivery": def({
+    key: "login.codeDelivery",
+    group: "operacao",
+    label: "Código de entrada vai para",
+    description: "Com \"Entrar com email e código\" ligado: duty = o team leader de serviço e os supervisores da cidade da pessoa (sem cidade: RH e admins). email = o email da própria pessoa, enviado pela acesso@multipark.pt — ainda não disponível (por agora vai sempre ao TL e ao supervisor).",
+    schema: z.enum(LOGIN_CODE_DELIVERY_MODES, { error: "Escolhe duty ou email." }),
+    defaultValue: "duty",
     wiring: "live",
   }),
   "ops.presenceEscalateMinutes": def({
@@ -843,6 +859,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "PARTNER_CLOSE_ALERTS", label: "Parceiros: avisar diferenças no fecho do mês", description: "Todas as manhãs (06:40) compara-se o mês corrente e o anterior, parceiro a parceiro, entre a Multipark e a nossa memória do webhook (a comparação corre sempre; isto só liga os avisos). Com isto ligado, quando aparecem diferenças NOVAS chega um aviso (sino e email) a quem vê as Parcerias.", defaultEnabled: false },
   { name: "OPS_PRESENCE_ALERTS", label: "Alertas: a trabalhar sem PDA ou Zello ligado", description: "De 5 em 5 minutos o dashboard vê quem do operacional tem o ponto aberto sem PDA (ou com o Zello desligado) e quem fez movimentos na Multipark sem ponto aberto (ou com o Zello desligado). A lista aparece sempre em Operacional → PDAs; com isto ligado, avisa também no sino o team leader de serviço na cidade e o supervisor. Desligado por omissão até se ver a lista uns dias.", defaultEnabled: false },
   { name: "OPS_PRESENCE_WHATSAPP", label: "Alertas sem PDA/Zello: WhatsApp aos administradores", description: "Se um alerta ficar sem ligação nem \"Visto\" do team leader (10 min por omissão), manda um WhatsApp aos administradores da cidade e à cópia (Definições → Operação). Precisa do modelo aprovado pela Meta e do alerta no sino ligado.", defaultEnabled: false },
+  // Plano 56 (Jorge, 12 out 2026): entrar com email + código + palavra-passe. Avisa gente e mexe na entrada → desligado; só o super admin.
+  { name: "ENTRAR_COM_CODIGO", label: "Entrar com email e código (sem Google)", description: "Na página de entrada aparecem Email + Palavra-passe e \"Pedir código\". O código (6 algarismos, vale 10 minutos, só no aparelho onde foi pedido) vai para o team leader de serviço e os supervisores da cidade da pessoa (sino + aviso no telemóvel; sem cidade, RH e admins), que o dão à pessoa. Depois do código a pessoa pode criar uma palavra-passe. Só para utilizadores, extras e condutores: team leaders e acima continuam a entrar com Google. O botão Google continua lá. Google e código caem na mesma conta (mesmo email). Desligado: tudo como antes (só Google).", defaultEnabled: false, superAdminOnly: true },
   // ── Caixa, fase 4: cruzar com o exterior (desligados até haver chaves e decisão do dono; até lá confirma-se à mão) ──
   { name: "CASH_STRIPE_CHECK", label: "Caixa: cruzar os pagamentos online com a Stripe", description: "Todos os dias (07:00), as saídas de ontem e anteontem pagas online são confirmadas na Stripe (cobrado, valor, reembolsos, disputas). Precisa da chave restrita STRIPE_READ_KEY na Vercel. Desligado: só se confirma na Multipark que o pagamento online existe.", defaultEnabled: false, superAdminOnly: true },
   { name: "CASH_VIVA_CHECK", label: "Caixa: cruzar o multibanco com a Viva Wallet", description: "Todos os dias (07:00), os pagamentos por multibanco de ontem e anteontem são procurados nas transações da Viva Wallet (mesmo dia ou seguinte, mesmo valor). Precisa de VIVA_MERCHANT_ID e VIVA_API_KEY na Vercel. Desligado: confirma-se à mão com a foto do talão.", defaultEnabled: false, superAdminOnly: true },

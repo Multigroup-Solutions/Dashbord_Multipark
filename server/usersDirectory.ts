@@ -23,6 +23,7 @@ import { employees, projects, users } from "../drizzle/schema";
 import { projectScope, userScope } from "./cityScope";
 import { resolveCityFromProjects, type ProjectNode } from "./employeeCity";
 import { CITY_KEYS, type CityKey } from "../shared/city";
+import { entersWith, type EntersWith } from "../shared/loginCode";
 import { USER_ROLES } from "./userAdminRules";
 import { getDb } from "./db";
 
@@ -240,7 +241,26 @@ export async function searchUserDirectory(input: UserDirectoryQuery) {
     .orderBy(...userDirectoryOrder(input.sort))
     .limit(page.limit)
     .offset(page.offset);
-  return { rows: await attachEmployees(db, accounts), total: Number(countRow?.n ?? 0), ...page };
+  return { rows: await attachLoginInfo(db, await attachEmployees(db, accounts)), total: Number(countRow?.n ?? 0), ...page };
+}
+
+/**
+ * Plano 56: "Entra com" (Google / palavra-passe / código). A palavra-passe
+ * nunca sai daqui — só se tem ou não (lida por SQL: não está no drizzle).
+ */
+async function attachLoginInfo<T extends { id: number; openId: string; googleSub?: string | null; loginMethod: string | null }>(db: any, rows: T[]): Promise<Array<T & { hasPassword: boolean; entersWith: EntersWith[] }>> {
+  const ids = rows.map((r) => r.id);
+  const withPassword = new Set<number>();
+  if (ids.length) {
+    try {
+      const res = await db.execute(sql`SELECT id FROM users WHERE passwordHash IS NOT NULL AND id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
+      for (const r of rowsOf(res)) withPassword.add(Number(r.id));
+    } catch { /* coluna ainda por criar: ninguém tem */ }
+  }
+  return rows.map((r) => {
+    const hasPassword = withPassword.has(r.id);
+    return { ...r, hasPassword, entersWith: entersWith({ openId: r.openId, googleSub: r.googleSub ?? null, hasPassword, loginMethod: r.loginMethod }) };
+  });
 }
 
 /** Contagens do resumo — sempre sobre o âmbito completo do visitante (sem filtros). */

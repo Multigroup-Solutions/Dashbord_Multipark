@@ -1,8 +1,9 @@
 /**
- * Notificações push do browser (Web Push + VAPID) — só para as chamadas do
- * WhatsApp a tocar: "Chamada WhatsApp de <nome>" mesmo com o separador do
- * dashboard em segundo plano (o toque dentro da página continua a ser o
- * `WhatsAppCallManager`).
+ * Notificações push do browser (Web Push + VAPID) — as chamadas do WhatsApp a
+ * tocar ("Chamada WhatsApp de <nome>" mesmo com o separador do dashboard em
+ * segundo plano; o toque dentro da página continua a ser o
+ * `WhatsAppCallManager`) e, desde o plano 56, avisos para qualquer pessoa
+ * (`pushToUsers`: o código de entrada ao TL/supervisor de serviço).
  *
  *  - envs `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`
  *    (gerar com `pnpm exec web-push generate-vapid-keys`); faltam → tudo
@@ -162,4 +163,50 @@ export async function pushRingingCalls(callIds: string[]): Promise<void> {
   } catch (err: any) {
     console.warn("[WebPush] aviso de chamada falhou:", String(err?.message ?? err).slice(0, 160));
   }
+}
+
+/** Aviso push genérico (plano 56: o código de entrada vai ao TL/supervisor). */
+export interface UserPushPayload {
+  /** O service worker escolhe o aspeto pelo tipo (`login_code`; sem tipo = chamada do WhatsApp). */
+  type: string;
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+}
+
+/**
+ * Push para TODAS as subscrições (browsers) destas pessoas — sem depender do
+ * WhatsApp. Sem chaves VAPID não faz nada. Nunca lança; devolve quantos saíram.
+ */
+export async function pushToUsers(userIds: readonly number[], payload: UserPushPayload, opts: { ttlSec?: number; urgency?: "high" | "normal" } = {}): Promise<{ sent: number }> {
+  const out = { sent: 0 };
+  const ids = Array.from(new Set(userIds.filter((x) => Number.isInteger(x) && x > 0)));
+  if (!ids.length) return out;
+  const cfg = vapidConfig();
+  if (!cfg) return out;
+  try {
+    const db = await dbOrThrow();
+    const subs = await db.select().from(webPushSubscriptions).where(inArray(webPushSubscriptions.userId, ids));
+    if (!subs.length) return out;
+    const webpush = (await import("web-push")).default;
+    webpush.setVapidDetails(cfg.subject, cfg.publicKey, cfg.privateKey);
+    const body = JSON.stringify(payload);
+    for (const sub of subs) {
+      try {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body, { TTL: opts.ttlSec ?? 600, urgency: opts.urgency ?? "high" });
+        out.sent++;
+        await db.update(webPushSubscriptions).set({ lastSuccessAt: nowUtc() }).where(eq(webPushSubscriptions.id, sub.id));
+      } catch (err: any) {
+        if (isGonePushStatus(err?.statusCode)) {
+          await db.delete(webPushSubscriptions).where(eq(webPushSubscriptions.id, sub.id)).catch(() => undefined);
+        } else {
+          await db.update(webPushSubscriptions).set({ lastFailureAt: nowUtc() }).where(eq(webPushSubscriptions.id, sub.id)).catch(() => undefined);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn("[WebPush] aviso falhou:", String(err?.message ?? err).slice(0, 160));
+  }
+  return out;
 }

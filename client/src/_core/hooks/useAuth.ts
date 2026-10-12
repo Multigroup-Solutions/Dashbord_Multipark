@@ -23,7 +23,8 @@ export function useAuth(options?: UseAuthOptions) {
 
   // Fase 2: sair num PDA registado solta-o (fica livre para o próximo turno)
   const releasePda = trpc.operational.pdas.releaseOnLogout.useMutation();
-  const pushUnsubscribe = trpc.whatsapp.calls.pushUnsubscribe.useMutation();
+  // Plano 56: os avisos no telemóvel são de todos (antes só do WhatsApp).
+  const pushUnsubscribe = trpc.notifications.pushUnsubscribe.useMutation();
 
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: () => {
@@ -39,8 +40,8 @@ export function useAuth(options?: UseAuthOptions) {
     markClaimed(null);
     // 20d: as pesquisas recentes (nomes, matrículas) não ficam para quem usar o aparelho a seguir (PDAs partilhados).
     try { localStorage.removeItem(RECENT_SEARCHES_KEY); sessionStorage.clear(); } catch { /* sem storage */ }
-    // Este browser deixa de receber avisos de chamadas desta pessoa (ainda
-    // com a sessão válida, para o servidor apagar a subscrição).
+    // Este browser deixa de receber avisos desta pessoa (chamadas, códigos de
+    // entrada) — ainda com a sessão válida, para o servidor apagar a subscrição.
     try {
       const endpoint = await disablePush();
       if (endpoint) await pushUnsubscribe.mutateAsync({ endpoint });

@@ -1,8 +1,8 @@
 ---
 modulo: ficha
-titulo: Perfil (foto, notificações, sessões, contas Google)
+titulo: Perfil (foto, notificações, palavra-passe, sessões, contas Google)
 rotas: /perfil
-palavras: liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha
+palavras: palavra-passe, mudar a palavra-passe, criar palavra-passe, esqueci a palavra-passe, ativar avisos, avisos no telemóvel, códigos de entrada, liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha
 ---
 # Perfil
 
@@ -20,6 +20,17 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 - Só aparecem os tipos que te podem chegar (pela tua área e cidade). Desliga os que não precisas; os **obrigatórios** (cadeado) não se desligam. **Ocorrência crítica** e **A trabalhar sem PDA ou Zello** ficam obrigatórias só quando o interruptor **Avisos críticos obrigatórios** está ligado (Definições → Automações; vem desligado) — desligado, voltas a ter o que tinhas escolhido. Nos que têm email, há o interruptor **Também por email**.
 - Cada interruptor grava sozinho (com duas abas abertas, uma já não desfaz a outra) e fica registado o que silenciaste.
 - Se a lista não se conseguir ler, aparece um erro com **Tentar de novo** (nunca "Não há notificações para o teu papel" por engano).
+
+**Palavra-passe** (só com **Entrar com email e código** ligado; só utilizadores, extras e condutores)
+- Diz se já tens palavra-passe. **Criar** (a primeira) ou **Mudar** (pede a atual).
+- Esqueceste-te? Sai e entra com um código: durante 15 minutos podes criar outra sem a antiga.
+- Mudar termina as sessões nos outros aparelhos (este fica).
+- Pelo menos 8 caracteres; não pode ser fácil, nem ter o teu nome, nem uma data.
+- Se hoje a palavra-passe foi errada 5 vezes, o cartão diz que está bloqueada até ao fim do dia (entra com um código).
+
+**Avisos no telemóvel** (team leaders e acima, com **Entrar com email e código** ligado)
+- **Ativar avisos**: recebes no telemóvel os códigos de entrada de quem os pede, mesmo com a app fechada. Depois de entrar, o TL e o supervisor veem também um pedido curto para os ativar (uma vez por aparelho).
+- No iPhone, primeiro instala a app no ecrã principal (Partilhar → Adicionar ao ecrã principal).
 
 **Contas Google** (email, Tarefas, Calendário, Contactos)
 - Se as tuas preferências não se conseguirem ler, os interruptores ficam bloqueados com um aviso — nada é gravado por cima com os valores de omissão. Cada interruptor grava só o que mudaste.

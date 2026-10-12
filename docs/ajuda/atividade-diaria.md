@@ -82,6 +82,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
   - **Forçar re-divisão** volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa-se depois de corrigir um check-in. Não volta ao Zello nem muda as velocidades.
 
 **Ao Vivo**
+- **Códigos de entrada** (só com **Entrar com email e código** ligado): os pedidos dos últimos 15 minutos cujo código veio para ti (TL de serviço e supervisores da cidade; sem cidade, RH e admins) — nome, foto da ficha, aparelho e o código. Dá-o só à própria pessoa, quando ta pedir. Os que já foram usados ou passaram do prazo ficam por baixo, sem o código.
 - Mapa com a posição de cada condutor. Atualiza sozinho a cada 30 segundos.
 - Em cima fica uma linha só: quantos estão no mapa, a hora da última leitura e os alertas contados (acima do limite de velocidade, bateria fraca, sem reportar há mais de 1 h). Carrega num alerta para ver os nomes.
 - **Atualizar** lê tudo de novo (posições, ligações Zello ↔ pessoas e PDAs) e volta a mostrar toda a gente no mapa.

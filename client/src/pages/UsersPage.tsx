@@ -38,7 +38,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { directoryInfoFor, useDirectoryLookup } from "@/hooks/useDirectoryLookup";
 import { useViewPref } from "@/hooks/useViewPref";
 import { ViewToggle } from "@/components/ViewToggle";
+import { useCodeLoginOption } from "@/lib/loginOptions";
+import { ENTERS_WITH_LABELS, type EntersWith } from "@shared/loginCode";
 import {
+  RotateCcw,
   Users,
   Shield,
   Loader2,
@@ -363,6 +366,16 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
     onError: (e) => toast.error("Erro: " + e.message),
   });
 
+  // Plano 56: "Entra com" e "Repor acesso" só com "Entrar com email e código" ligado.
+  const { codeLogin } = useCodeLoginOption();
+  const resetAccessMutation = trpc.users.resetAccess.useMutation({
+    onSuccess: () => {
+      toast.success("Acesso reposto: a palavra-passe saiu, as sessões terminaram e a pessoa foi avisada.");
+      refreshUsers();
+    },
+    onError: (e) => toast.error("Erro: " + e.message),
+  });
+
   const sendInviteMutation = trpc.users.sendInvite.useMutation({
     onSuccess: (data) => {
       toast.success(`Convite gerado para ${data.email}! Copia o link e envia ao utilizador.`);
@@ -527,11 +540,40 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
   const lastAccess = (u: Row) =>
     u.loginMethod === "manual" ? "Nunca entrou" : u.lastSignedIn ? format(new Date(u.lastSignedIn), "dd MMM yyyy HH:mm", { locale: pt }) : "—";
 
+  /** Plano 56: como a conta entra (Google / palavra-passe / código). */
+  const entersCell = (u: Row) => {
+    const list = ((u as { entersWith?: EntersWith[] }).entersWith ?? []);
+    if (!list.length) return <span className="text-xs text-muted-foreground">—</span>;
+    return (
+      <div className="flex flex-wrap gap-1">
+        {list.map((m) => <Badge key={m} variant="outline" className="text-[10px] font-normal">{ENTERS_WITH_LABELS[m]}</Badge>)}
+      </div>
+    );
+  };
+
   const actionsCell = (u: Row) => (
     <div className="flex items-center gap-1">
       {(manageable(u) || u.id === currentUser?.id) && (
         <Button variant="ghost" size="sm" onClick={() => openEdit(u)} className="h-8 w-8 p-0" title="Editar" aria-label="Editar">
           <Pencil className="h-3.5 w-3.5" />
+        </Button>
+      )}
+      {codeLogin && manageable(u) && u.id !== currentUser?.id && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            const who = u.name ?? u.email ?? `#${u.id}`;
+            if (confirm(`Repor o acesso de ${who}?\n\nTira a palavra-passe, termina as sessões em todos os aparelhos e avisa a pessoa. Para voltar a entrar, ela pede um código.`)) {
+              resetAccessMutation.mutate({ userId: u.id });
+            }
+          }}
+          disabled={resetAccessMutation.isPending}
+          className="h-8 w-8 p-0"
+          title="Repor acesso (tira a palavra-passe e termina as sessões)"
+          aria-label="Repor acesso"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
         </Button>
       )}
       {manageable(u) && u.loginMethod === "manual" && (
@@ -850,6 +892,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       <div>{statusCell(u)}</div>
                       <span className="text-[11px] text-muted-foreground">Último acesso: {lastAccess(u)}</span>
                     </div>
+                    {codeLogin && <div className="flex items-center gap-2 text-xs text-muted-foreground">Entra com: {entersCell(u)}</div>}
                     {u.employees.length > 0 && <UserEmployeeLinks employees={u.employees} />}
                     {u.employees.length > 0 && <div className="text-xs text-muted-foreground">Agente: <UserAgentLinks employees={u.employees} /></div>}
                   </div>
@@ -874,6 +917,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                       <TableHead className="hidden xl:table-cell">Departamento</TableHead>
                       <TableHead>Estado</TableHead>
                       <TableHead>Último Acesso</TableHead>
+                      {codeLogin && <TableHead>Entra com</TableHead>}
                       <TableHead className="hidden xl:table-cell">Criado em</TableHead>
                       <TableHead className="text-right">Ações</TableHead>
                     </TableRow>
@@ -906,6 +950,7 @@ export default function UsersPage({ onBack }: { onBack?: () => void } = {}) {
                         </TableCell>
                         <TableCell className="whitespace-normal">{statusCell(u)}</TableCell>
                         <TableCell className="text-xs text-muted-foreground whitespace-normal min-w-[90px]">{lastAccess(u)}</TableCell>
+                        {codeLogin && <TableCell className="whitespace-normal min-w-[90px]">{entersCell(u)}</TableCell>}
                         <TableCell className="hidden xl:table-cell text-xs text-muted-foreground">
                           {format(new Date(u.createdAt), "dd MMM yyyy", { locale: pt })}
                         </TableCell>

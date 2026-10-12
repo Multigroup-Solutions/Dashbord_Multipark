@@ -53,7 +53,7 @@ const CACHE_MIN_CHARS = 6000;
 // ─── Limites ───────────────────────────────────────────────────────────────
 
 /** Definições (ai.trainingTutorLimits) > env AI_TRAINING_TUTOR_PER_MINUTE/PER_DAY > 10/min e 100/dia. */
-export async function tutorLimits(env: Record<string, string | undefined> = process.env): Promise<Required<RateLimitRule>> {
+export async function tutorLimits(env: Record<string, string | undefined> = process.env): Promise<Required<Pick<RateLimitRule, "perMinute" | "perDay">>> {
   try {
     const { getSetting } = await import("./appSettings");
     const s = await getSetting("ai.trainingTutorLimits");

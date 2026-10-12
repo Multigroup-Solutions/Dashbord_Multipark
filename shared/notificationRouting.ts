@@ -149,6 +149,9 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "historico_diario", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "ops_presence", group: "operacoes", label: "A trabalhar sem PDA ou Zello", description: "Alguém do operacional com o ponto aberto sem PDA ou com o Zello desligado, ou com movimentos na Multipark sem ponto aberto. Vai ao team leader de serviço na cidade e ao supervisor.",
     module: "pdas", action: "view", roles: [], cityScoped: true, personal: true, channels: IN_APP, dedupeMinutes: 60, mandatoryFlag: CRITICAL_ALERTS_MANDATORY_FLAG }),
+  // Plano 56 (Jorge, 12 out 2026): o código de entrada vai ao TL de serviço e aos supervisores da cidade. Só com ENTRAR_COM_CODIGO.
+  K({ kind: "login_code", group: "operacoes", label: "Códigos de entrada", description: "Alguém da tua cidade pediu para entrar com o email: recebes o código de 6 algarismos para lhe dares (só à própria pessoa). Vai ao team leader de serviço e aos supervisores da cidade (sem cidade: RH e admins). Também aparece em Atividade diária → Ao vivo. Só com \"Entrar com email e código\" ligado.",
+    module: "atividade_diaria", action: "view", roles: [], cityScoped: true, personal: true, mandatory: true, channels: IN_APP, dedupeMinutes: 1 }),
   K({ kind: "driver_daily_report", group: "operacoes", label: "Relatório diário dos motoristas", description: "Resumo da recolha automática do histórico GPS.",
     module: "historico_diario", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),
   K({ kind: "anomaly_bookings", group: "operacoes", label: "Anomalias nas reservas", description: "Quedas/picos fora do normal nas reservas (só críticas).",
@@ -227,6 +230,11 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "definicoes", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "google_account_reauth", group: "sistema", label: "A tua conta Google", description: "A ligação à tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada e tem de ser religada.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
+  // Plano 56: avisos à própria pessoa sobre a entrada (código usado, palavra-passe bloqueada, acesso reposto).
+  K({ kind: "login_security", group: "sistema", label: "A tua entrada", description: "Entraste com um código (e a quem foi o código), alguém errou a tua palavra-passe 5 vezes no mesmo dia, ou o RH repôs o teu acesso.",
+    module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, mandatory: true, channels: IN_APP, dedupeMinutes: 1 }),
+  K({ kind: "login_conflict", group: "sistema", label: "Entradas recusadas por conta duplicada", description: "Alguém entrou com uma conta Google cujo email já está noutra conta ligada a OUTRA Google, ou com um email de várias contas. Não se junta sozinho: resolve em Utilizadores → Ligações.",
+    module: "utilizadores", action: "view", roles: [], cityScoped: false, personal: false, channels: IN_APP, dedupeMinutes: 1440 }),
   K({ kind: "sync_alert", group: "sistema", label: "Sincronização Multipark", description: "Webhooks parados/retomados e reservas por sincronizar.",
     module: "sincronizacao", action: "view", roles: [], cityScoped: false, personal: false, channels: IN_APP }),
   K({ kind: "ai_budget", group: "sistema", label: "Orçamento da IA", description: "O gasto da IA chegou ao orçamento do mês.",
