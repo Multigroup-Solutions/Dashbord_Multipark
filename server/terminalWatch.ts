@@ -352,6 +352,8 @@ export interface ZelloLocationLike { username: string; latitude: number; longitu
 
 /** No máximo X pedidos à parte (location/getuser) por volta — há no máximo 1 sessão por cidade. */
 export const ZELLO_SINGLE_LOOKUPS_MAX = 5;
+/** Cada pedido à parte espera no máximo isto (ms) e todos juntos no máximo o dobro: o vigia cabe nos 25 s do tick. */
+export const ZELLO_SINGLE_LOOKUP_TIMEOUT_MS = 5_000;
 
 /**
  * Leituras do Zello por ficha a partir da lista de location/get. Essa lista
@@ -367,15 +369,22 @@ export async function zelloReadingsFor(o: {
   excluded: (username: string) => boolean;
   fetchOne?: (username: string) => Promise<ZelloLocationLike | null>;
   listMax?: number;
+  /** prazo de cada pedido à parte (ms) */
+  timeoutMs?: number;
 }): Promise<Map<number, ZelloReading | null>> {
   const key = zelloKey;
   const byUser = new Map(o.list.map((l) => [key(l.username), l]));
   if (o.fetchOne && o.list.length >= (o.listMax ?? 100)) {
     const missing = Array.from(new Set(o.employeeIds.map((id) => o.devices.get(id) ?? null)
       .filter((u): u is string => !!u && !o.excluded(u) && !byUser.has(key(u)))));
+    const each = o.timeoutMs ?? ZELLO_SINGLE_LOOKUP_TIMEOUT_MS;
+    const until = Date.now() + 2 * each;
     for (const u of missing.slice(0, ZELLO_SINGLE_LOOKUPS_MAX)) {
+      if (Date.now() > until) break; // o resto fica "sem GPS" nesta volta
       try {
-        const l = await o.fetchOne(u);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), each); (timer as any)?.unref?.(); });
+        const l = await Promise.race([o.fetchOne(u), late]).finally(() => clearTimeout(timer));
         if (l) byUser.set(key(u), l);
       } catch (err) {
         console.warn("[terminal-watch] Zello location/getuser falhou:", String((err as Error)?.message ?? err).slice(0, 160));

@@ -923,6 +923,15 @@ describe("auditoria B2 — Zello com mais de 100 utilizadores", () => {
     expect((await zelloReadingsFor({ employeeIds: [JOAO], devices: new Map([[JOAO, "PDA 12"]]), list: filler, excluded: (u) => u === "PDA 12", fetchOne: ex })).get(JOAO)).toBeNull();
     expect(ex).not.toHaveBeenCalled();
   });
+  it("pedido à parte pendurado → não prende o vigia (prazo curto; essa pessoa fica sem GPS nesta volta)", async () => {
+    const { zelloReadingsFor } = await import("./terminalWatch");
+    const hang = vi.fn(() => new Promise<null>(() => {}));
+    const t0 = Date.now();
+    const r = await zelloReadingsFor({ employeeIds: [JOAO, PEDRO, RUI], devices: new Map([[JOAO, "PDA 1"], [PEDRO, "PDA 2"], [RUI, "PDA 3"]]), list: filler, excluded: () => false, fetchOne: hang, timeoutMs: 50 });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect([r.get(JOAO), r.get(PEDRO), r.get(RUI)]).toEqual([null, null, null]);
+    expect(hang.mock.calls.length).toBeLessThanOrEqual(3);
+  });
   it("a resposta de location/getuser lê-se em qualquer das formas e nunca dá a posição de outra pessoa", async () => {
     const { parseZelloUserLocation } = await import("./zello");
     const p = { latitude: "38.77", longitude: "-9.13", accuracy: "15", lastReport: "1760274000", lastReportDelay: "40" };
