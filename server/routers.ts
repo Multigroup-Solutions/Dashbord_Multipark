@@ -124,6 +124,17 @@ const LEAD_STATUS_ENUM = LEAD_STATUSES;
 
 // Dia "YYYY-MM-DD" válido (mês/dia reais) — nunca colado em SQL, mas validado na mesma.
 const handoverDaySchema = z.string().refine(isIsoDay, "Data inválida (AAAA-MM-DD)");
+// Despesas do turno (12 out 2026): dados do talão, todos opcionais — escritos à mão ou lidos pela IA.
+// As regras (NIF, data do talão, IVA ≤ total, categoria) estão em server/shiftExpenses.ts.
+const shiftExpenseExtrasInput = {
+  supplier: z.string().max(256).nullable().optional(),
+  supplierNif: z.string().max(40).nullable().optional(),
+  documentNumber: z.string().max(64).nullable().optional(),
+  invoiceDate: z.string().max(10).nullable().optional(),
+  vatAmount: z.number().finite().min(0).max(100_000).nullable().optional(),
+  categoryId: z.number().int().positive().nullable().optional(),
+  extractedByAi: z.boolean().optional(),
+};
 
 // ─── CRM: auxiliares do router `crm` ────────────────────────────────────────
 
@@ -3812,9 +3823,11 @@ export const appRouter = router({
       city: z.enum(HANDOVER_CITIES),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "view");
-      const { listShiftExpenses, shiftExpensesTotal } = await import("./shiftExpenses");
+      const { listShiftExpenses, shiftExpensesTotal, openableInExpenses } = await import("./shiftExpenses");
       const rows = await listShiftExpenses({ day: input.date, shift: input.shift, city: input.city, includeCancelled: true });
-      return { rows, total: shiftExpensesTotal(rows) };
+      // "Abrir nas Despesas" só para quem pode abrir essa despesa lá (a mesma regra do detalhe).
+      const open = await openableInExpenses(rows, ctx.user).catch(() => rows.map(() => false));
+      return { rows: rows.map((r, i) => ({ ...r, canOpen: open[i] === true })), total: shiftExpensesTotal(rows) };
     }),
     addExpense: protectedProcedure.input(z.object({
       date: handoverDaySchema,
@@ -3824,12 +3837,18 @@ export const appRouter = router({
       amount: z.number().finite().min(0.01).max(100_000),
       invoiceKey: z.string().max(500).nullable().optional(),
       invoiceUrl: z.string().max(2000).nullable().optional(),
+      ...shiftExpenseExtrasInput,
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "edit");
       if (input.date > maxHandoverDate()) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível lançar despesas para depois de amanhã." });
       const { addShiftExpense } = await import("./shiftExpenses");
       try {
-        return await addShiftExpense({ day: input.date, shift: input.shift, city: input.city, description: input.description, amount: Math.round(input.amount * 100) / 100, invoiceKey: input.invoiceKey ?? null, invoiceUrl: input.invoiceUrl ?? null, user: { id: ctx.user.id, name: ctx.user.name ?? null } });
+        return await addShiftExpense({
+          day: input.date, shift: input.shift, city: input.city, description: input.description, amount: Math.round(input.amount * 100) / 100,
+          invoiceKey: input.invoiceKey ?? null, invoiceUrl: input.invoiceUrl ?? null, user: { id: ctx.user.id, name: ctx.user.name ?? null },
+          supplier: input.supplier, supplierNif: input.supplierNif, documentNumber: input.documentNumber, invoiceDate: input.invoiceDate,
+          vatAmount: input.vatAmount, categoryId: input.categoryId, extractedByAi: input.extractedByAi,
+        });
       } catch (e: any) {
         throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e).slice(0, 200) });
       }
@@ -3847,6 +3866,26 @@ export const appRouter = router({
       const key = `invoices/${ctx.user.id}/${suffix}-${safeName}`;
       const { url } = await storagePut(key, Buffer.from(input.fileBase64, "base64"), input.mimeType);
       return { url, key };
+    }),
+    // 12 out 2026 (Jorge): a IA lê o talão — a MESMA das Despesas (expense_ocr, com o seu interruptor,
+    // nível e limites), mas com a permissão da passagem de turno (o TL pode não ter as Despesas).
+    // Não grava nada: devolve o que leu para o cartão preencher. Desligada/falhou → erro amigável e
+    // o TL preenche à mão.
+    readReceipt: protectedProcedure.input(z.object({
+      imageBase64: z.string().max(14_000_000),
+      mimeType: z.string().max(100).default("image/jpeg"),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_turno", "edit");
+      const { readShiftReceipt, shiftReceiptDuplicate } = await import("./shiftExpenses");
+      const { aiTrpcError } = await import("./_core/ai/trpcError");
+      let reading: Awaited<ReturnType<typeof readShiftReceipt>>;
+      try {
+        reading = await readShiftReceipt({ base64: input.imageBase64, mimeType: input.mimeType, userId: ctx.user.id });
+      } catch (err) {
+        throw aiTrpcError(err);
+      }
+      const duplicate = await shiftReceiptDuplicate(reading, ctx.user).catch(() => null);
+      return { ...reading, duplicate };
     }),
     cancelExpense: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "edit");

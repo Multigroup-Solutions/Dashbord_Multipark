@@ -97,7 +97,7 @@ faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
 | Interruptor | Funcionalidade (`feature`) | Nível |
 |---|---|---|
 | `AI_ENABLED` | todas (interruptor geral) | — |
-| `AI_EXPENSE_OCR` | `expense_ocr`: leitura de faturas nas Despesas | lite (imagem) / fast (PDF) |
+| `AI_EXPENSE_OCR` | `expense_ocr`: leitura de faturas nas Despesas e dos talões nas Despesas do turno (Passagem de turno → `shiftHandover.readReceipt`, mesmo `extractInvoice`) | lite (imagem) / fast (PDF) |
 | `AI_REVIEW_DRAFTS` | `review_reply`: rascunho de resposta às críticas Google (4 pontos de entrada) | lite |
 | `AI_RADIO` | `radio_transcription` + `radio_summary` | lite |
 | `AI_HANDOVER_SUMMARY` | `handover_summary`: 5 pontos da passagem de turno, **só ao entregar** (1.ª gravação) e no botão "Resumir agora"; as edições não chamam a IA (o resumo fica "desatualizado", `aiSummaryVersion` < `version`, migração 0600) | lite |

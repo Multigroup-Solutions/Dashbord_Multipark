@@ -21,7 +21,8 @@ import { getAllCategories, listExpenses, summarizeExpenses, recordExpenseEvent, 
 import { requireRole, isPermissionDenied, requireFinanceTotals } from "./routerGuards";
 
 // ─── DESPESAS: âmbito único (ver server/expenseScope.ts) ─────────────────────
-async function expenseVisibilityFor(user: { id: number; role: string }): Promise<ExpenseVisibility> {
+// Exportada para a Passagem de turno saber quem pode abrir a despesa do turno nas Despesas.
+export async function expenseVisibilityFor(user: { id: number; role: string }): Promise<ExpenseVisibility> {
   return resolveExpenseVisibility(user, {
     denied: isPermissionDenied,
     employeeProjectId: async (uid) => {

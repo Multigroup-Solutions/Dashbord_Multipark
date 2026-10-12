@@ -68,6 +68,7 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 |---|---|---|---|---|
 | Resumo para o turno seguinte — `AI_HANDOVER_SUMMARY` | Auto **só ao entregar** (1.ª gravação). Pedido: **"Resumir agora"** (quem edita; resume a passagem gravada). Editar depois **não chama a IA**: aparece "resumo desatualizado" | Passagem de turno (TL para cima, cidade); **email** aos TL do turno seguinte e CC (o resumo desatualizado não vai no email) | Contagens, 1.º nome da equipa seguinte, picos, notas do TL (até 1500 car.) e pendentes, com `redactPii` | `shift_handovers.aiSummary` + `aiSummaryVersion` (0600) |
 | Resumo da semana e pendentes repetidos — `AI_HANDOVER_REPEATS` + `WEEKLY_REPORTS` | Auto à segunda-feira | Passagem de turno com a cidade; **email** aos TL e supervisores | Contagens da semana e pendentes repetidos, com `redactPii` | `ai_weekly_reports` |
+| Ler o talão das despesas do turno — `AI_EXPENSE_OCR` (o mesmo das Despesas) | Pedido: ao tirar ou escolher a **foto do talão** no cartão Despesas do turno (`shiftHandover.readReceipt`) | Passagem de turno → editar (TL para cima, cidade) | Foto do talão (ou PNG das 2 primeiras páginas do PDF) **inteira** e a lista de categorias | Não. Só preenche o cartão; quem lança é o TL |
 
 ### WhatsApp
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
