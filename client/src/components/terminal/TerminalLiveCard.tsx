@@ -30,9 +30,9 @@ function km(m: number | null | undefined): string {
 
 /** GPS da última leitura do vigia (Zello do aparelho com a pessoa). */
 function GpsBadge({ s }: { s: { gps: string | null; gpsAt: string | null; gpsDistanceM: number | null; asked: boolean; outsideSince: string | null } }) {
-  if (s.asked) return <Badge variant="outline" className="ml-2 border-amber-400 text-amber-800 dark:text-amber-200">perguntámos se ainda está{s.outsideSince ? ` (fora desde ${fmtPTTime(s.outsideSince)})` : ""}</Badge>;
-  if (s.gps === "inside") return <Badge variant="outline" className="ml-2 border-emerald-400 text-emerald-800 dark:text-emerald-200" title={s.gpsAt ? `GPS das ${fmtPTTime(s.gpsAt)}` : undefined}>no aeroporto ✓</Badge>;
-  if (s.gps === "outside") return <Badge variant="outline" className="ml-2 border-amber-400 text-amber-800 dark:text-amber-200" title={s.gpsAt ? `GPS das ${fmtPTTime(s.gpsAt)}` : undefined}>fora{km(s.gpsDistanceM)}</Badge>;
+  if (s.asked) return <Badge variant="outline" className="ml-2 whitespace-normal text-left border-amber-400 text-amber-800 dark:text-amber-200">perguntámos se ainda está{s.outsideSince ? ` (fora desde ${fmtPTTime(s.outsideSince)})` : ""}</Badge>;
+  if (s.gps === "inside") return <Badge variant="outline" className="ml-2 whitespace-normal border-emerald-400 text-emerald-800 dark:text-emerald-200" title={s.gpsAt ? `GPS das ${fmtPTTime(s.gpsAt)}` : undefined}>no aeroporto ✓</Badge>;
+  if (s.gps === "outside") return <Badge variant="outline" className="ml-2 whitespace-normal border-amber-400 text-amber-800 dark:text-amber-200" title={s.gpsAt ? `GPS das ${fmtPTTime(s.gpsAt)}` : undefined}>fora{km(s.gpsDistanceM)}</Badge>;
   if (s.gps === "no_gps") return <Badge variant="outline" className="ml-2 text-muted-foreground">sem GPS</Badge>;
   return null;
 }
@@ -81,7 +81,8 @@ export function TerminalLiveCard() {
           <div key={c.cityKey} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-sm">
             <span className="font-semibold w-14 shrink-0">{c.cityLabel}</span>
             {c.session ? (
-              <span className="min-w-0 flex-1">
+              // basis mínima: no telemóvel os botões passam para a linha de baixo em vez de espremerem o nome e o GPS
+              <span className="min-w-0 flex-1 basis-44">
                 <strong>{c.session.name}</strong> desde {fmtPTTime(c.session.startedAt)}
                 <span className="text-muted-foreground"> · {c.session.sourceLabel}</span>
                 <GpsBadge s={c.session} />
@@ -91,7 +92,7 @@ export function TerminalLiveCard() {
                 ))}
               </span>
             ) : (
-              <span className="min-w-0 flex-1 text-muted-foreground">Livre</span>
+              <span className="min-w-0 flex-1 basis-44 text-muted-foreground">Livre</span>
             )}
             {c.canManage && (
               <span className="flex gap-2">

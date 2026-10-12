@@ -43,7 +43,7 @@ export function TerminalBar({ t }: { t: TerminalApi }) {
       {!s.session && s.released && (
         <div className="flex flex-wrap items-center gap-2">
           <Plane className="h-4 w-4 shrink-0" aria-hidden />
-          <span>{s.released.message}</span>
+          <span className="min-w-0 flex-1 basis-56">{s.released.message}</span>
           <Button size="sm" className="h-7 px-3" disabled={t.working} onClick={() => t.reopen()}>Ainda estou</Button>
         </div>
       )}

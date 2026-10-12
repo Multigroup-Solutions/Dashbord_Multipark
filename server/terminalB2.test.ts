@@ -960,4 +960,15 @@ describe("auditoria B2 — ecrãs: erro ≠ vazio", () => {
     expect(src("client/src/components/terminal/TerminalDayCard.tsx")).toContain("if (q.error) return <QueryErrorNote");
     expect(src("client/src/components/terminal/TerminalLiveCard.tsx")).toContain("if (q.error) return <QueryErrorNote");
   });
+  it("360 px (capturas do harness): Terminal agora não espreme o nome e o GPS; textos dos selos partem a linha; horas e zonas legíveis", () => {
+    const live = src("client/src/components/terminal/TerminalLiveCard.tsx");
+    expect(live).toContain('<span className="min-w-0 flex-1 basis-44">'); // os botões descem em vez de espremer
+    expect(live.match(/ml-2 whitespace-normal/g)?.length).toBe(3); // no aeroporto ✓ / fora / perguntámos
+    expect(src("client/src/components/terminal/TerminalDayCard.tsx")).toContain("text-[11px] whitespace-normal text-left");
+    expect(src("client/src/components/terminal/TerminalBar.tsx")).toContain('<span className="min-w-0 flex-1 basis-56">{s.released.message}</span>');
+    const rh = src("client/src/components/terminal/TerminalRhSessions.tsx");
+    expect(rh).toContain('<div className="grid max-w-xs grid-cols-2 gap-2">');
+    expect(rh).not.toContain('className="w-28"');
+    expect(src("client/src/pages/DefinicoesPage.tsx")).toContain("grid grid-cols-[1fr_1fr_3.5rem] gap-1 text-[10px] text-muted-foreground");
+  });
 });

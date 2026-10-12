@@ -835,10 +835,11 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
                       <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Tirar a zona ${z.label || i + 1}`} disabled={locked}
                         onClick={() => setAirports((p) => ({ ...p, [c.id]: { ...p[c.id]!, zones: (p[c.id]?.zones ?? []).filter((_, j) => j !== i) } }))}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </div>
-                    <div className="grid grid-cols-3 gap-1">
-                      <Input className="h-7 text-xs" inputMode="decimal" placeholder="Lat." disabled={locked} aria-label={`${c.label} — zona ${i + 1} latitude`} value={z.lat} onChange={(e) => setZone(c.id, i, { lat: e.target.value })} />
-                      <Input className="h-7 text-xs" inputMode="decimal" placeholder="Long." disabled={locked} aria-label={`${c.label} — zona ${i + 1} longitude`} value={z.lng} onChange={(e) => setZone(c.id, i, { lng: e.target.value })} />
-                      <Input className="h-7 text-xs" inputMode="decimal" placeholder="Raio (m)" disabled={locked} aria-label={`${c.label} — zona ${i + 1} raio em metros`} value={z.radiusM} onChange={(e) => setZone(c.id, i, { radiusM: e.target.value })} />
+                    <div className="grid grid-cols-[1fr_1fr_3.5rem] gap-1 text-[10px] text-muted-foreground" aria-hidden><span>Latitude</span><span>Longitude</span><span>Raio (m)</span></div>
+                    <div className="grid grid-cols-[1fr_1fr_3.5rem] gap-1">
+                      <Input className="h-7 px-1.5 text-xs" inputMode="decimal" placeholder="Lat." disabled={locked} aria-label={`${c.label} — zona ${i + 1} latitude`} value={z.lat} onChange={(e) => setZone(c.id, i, { lat: e.target.value })} />
+                      <Input className="h-7 px-1.5 text-xs" inputMode="decimal" placeholder="Long." disabled={locked} aria-label={`${c.label} — zona ${i + 1} longitude`} value={z.lng} onChange={(e) => setZone(c.id, i, { lng: e.target.value })} />
+                      <Input className="h-7 px-1.5 text-xs" inputMode="decimal" placeholder="Raio (m)" disabled={locked} aria-label={`${c.label} — zona ${i + 1} raio em metros`} value={z.radiusM} onChange={(e) => setZone(c.id, i, { radiusM: e.target.value })} />
                     </div>
                   </div>
                 ))}

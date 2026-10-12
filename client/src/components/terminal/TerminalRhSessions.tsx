@@ -121,9 +121,9 @@ export function TerminalShiftSessions({ sessions, canManage }: { sessions: RhTer
             </DialogDescription>
           </DialogHeader>
           {mode?.kind === "correct" && (
-            <div className="flex items-end gap-2">
-              <div className="space-y-1"><Label htmlFor="term-from">Das</Label><Input id="term-from" type="time" value={from} onChange={(e) => setFrom(e.target.value)} className="w-28" /></div>
-              <div className="space-y-1"><Label htmlFor="term-until">Às</Label><Input id="term-until" type="time" value={until} onChange={(e) => setUntil(e.target.value)} className="w-28" /></div>
+            <div className="grid max-w-xs grid-cols-2 gap-2">
+              <div className="space-y-1"><Label htmlFor="term-from">Das</Label><Input id="term-from" type="time" value={from} onChange={(e) => setFrom(e.target.value)} className="w-full" /></div>
+              <div className="space-y-1"><Label htmlFor="term-until">Às</Label><Input id="term-until" type="time" value={until} onChange={(e) => setUntil(e.target.value)} className="w-full" /></div>
             </div>
           )}
           <div className="space-y-1">

@@ -38,7 +38,7 @@ export function TerminalDayCard({ date, city }: { date: string; city: "lisbon" |
                   <span className="font-medium tabular-nums">{fmtPTTime(it.from)}–{it.to ? fmtPTTime(it.to) : "agora"}</span>
                   <span className="font-medium">{it.name}</span>
                   <span className="text-xs text-muted-foreground">{it.sourceLabel}{it.endReasonLabel ? ` · ${it.endReasonLabel}` : ""}</span>
-                  <Badge variant="outline" className={`text-[11px] ${it.basis === "pending" ? "border-amber-400 text-amber-800 dark:text-amber-200" : it.basis === "rejected" ? "line-through text-muted-foreground" : ""}`}>{it.countedLabel}</Badge>
+                  <Badge variant="outline" className={`text-[11px] whitespace-normal text-left ${it.basis === "pending" ? "border-amber-400 text-amber-800 dark:text-amber-200" : it.basis === "rejected" ? "line-through text-muted-foreground" : ""}`}>{it.countedLabel}</Badge>
                   {!it.payUplift && <span className="text-[11px] text-muted-foreground">(sem nível +1)</span>}
                 </div>
                 {it.endNote && <p className="text-[11px] text-muted-foreground">{it.endNote}</p>}
