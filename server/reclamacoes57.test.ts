@@ -678,7 +678,9 @@ describe("3b — de ponta a ponta: email de info@ → reclamação (sem tocar no
 
 describe("0630 — origem das reclamações e registo da IA (só acrescenta)", () => {
   it("registada no fim, idempotente, sem apagar nada", () => {
-    expect(SCHEMA_MIGRATION_IDS[SCHEMA_MIGRATION_IDS.length - 1]).toBe("0630");
+    // Registada e por ordem (depois da 0625); a seguir podem vir outras (ex.: 0635, PDAs).
+    expect(SCHEMA_MIGRATION_IDS).toContain("0630");
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0630")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0625"));
     const all = MIGRATION_0630_STATEMENTS.join("\n");
     expect(all).not.toMatch(/\bDELETE\b|\bDROP\b|TRUNCATE/i);
     for (const u of MIGRATION_0630_STATEMENTS.filter((x) => x.startsWith("UPDATE"))) expect(u).toContain("`origin` IS NULL");
