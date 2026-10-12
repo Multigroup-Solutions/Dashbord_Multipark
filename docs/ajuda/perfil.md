@@ -31,7 +31,7 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 **Avisos no telemóvel** (team leaders e acima, com **Entrar com email e código** ligado)
 - **Ativar avisos**: recebes no telemóvel os códigos de entrada de quem os pede, mesmo com a app fechada. Depois de entrar, o TL e o supervisor veem também um pedido curto para os ativar (uma vez por aparelho).
 - No iPhone, primeiro instala a app no ecrã principal (Partilhar → Adicionar ao ecrã principal).
-- **Num PDA** os avisos são de quem tem a sessão nesse momento: passam para a pessoa seguinte quando ela entra e desligam-se quando a sessão acaba. No PDA o aviso diz só **"Tens um aviso"** (sem nomes) e abre a app.
+- **Num PDA** os avisos são de quem tem a sessão nesse momento: passam para a pessoa seguinte quando ela entra e param quando a sessão acaba (saída do ponto, Sair, outra pessoa entra, 16 h, PDA retirado). No PDA o aviso diz só **"Tens um aviso"** (sem nomes) e abre a app.
 
 **Contas Google** (email, Tarefas, Calendário, Contactos)
 - Se as tuas preferências não se conseguirem ler, os interruptores ficam bloqueados com um aviso — nada é gravado por cima com os valores de omissão. Cada interruptor grava só o que mudaste.

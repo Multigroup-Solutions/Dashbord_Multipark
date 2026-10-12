@@ -26,15 +26,16 @@ palavras: entrar no pda, sessão do pda, a sessão termina em 10 s, sessão term
 **Entrar num PDA** (só com **Entrar com email e código** ligado; desligado, os PDAs entram como sempre, com a Google)
 - Num **PDA registado** (registado pelo QR) a sessão fica **presa a esse PDA** e acaba sozinha quando: dás **saída do ponto** (em qualquer aparelho, também no telemóvel), carregas em **Sair**, **outra pessoa entra** no PDA, o ponto esquecido é fechado sozinho, ou ao fim de **16 horas**. Funciona também para quem ainda não tem ficha (contas novas, candidatos).
 - Depois da saída do ponto aparece o **resumo da saída** (horas, km do Zello) e **"A sessão termina em 10 s"**; depois volta à página de entrada para a pessoa seguinte. **Terminar já** sai logo.
-- **Team leaders e supervisores** entram num PDA registado com **código** (sem palavra-passe). O código só vai a quem está ao mesmo nível ou acima (um TL nunca recebe o código de um supervisor). Fora dos PDAs continuam com a Google.
+- **Team leaders e supervisores** entram num PDA registado com **código** (sem palavra-passe). O código só vai a quem está **acima** da pessoa (o código de um TL vai aos supervisores; o de um supervisor ao backoffice e aos admins) — nunca a um colega do mesmo nível, que podia entrar como ele. Fora dos PDAs continuam com a Google.
 - **Google nos PDAs** (Definições → Automações, só o super admin; vem **ligado**, como hoje): desligado, o botão **Entrar com Google** desaparece nos PDAs registados (página de entrada, "Iniciar sessão" e registo do PDA). Telemóveis e PCs ficam sempre com o Google. Só dá para desligar com **Entrar com email e código** ligado.
 - Quem já tinha entrado no PDA com a Google **não é posto fora**: ao abrir a app, a sessão passa a sessão do PDA.
-- No PDA o Chrome **não guarda nem sugere** emails e palavras-passe (e o email escrito não fica para a pessoa seguinte). Faz também a limpeza única de cada PDA (ver a ajuda do Ponto → PDAs).
+- No PDA a página pede ao Chrome para **não sugerir** emails nem palavras-passe, e o email escrito não fica para a pessoa seguinte. Para o Chrome **não guardar** nada, faz a limpeza única de cada PDA (ver a ajuda do Ponto → PDAs) — sem ela o Chrome pode perguntar se quer guardar a palavra-passe.
 - Um separador antigo aberto no PDA não termina a sessão de quem entrou depois.
 
 **Código por email** (definição **Código de entrada vai para**, Definições → Operação; vem em **TL + supervisor de serviço**)
 - Com **email**, o código vai para o email da própria pessoa, enviado pela conta **acesso@multipark.pt** (uma conta só para isto, nunca uma caixa da Comunicação — se for, não envia). O email traz só o código e "escreve-o no aparelho onde pediste" (sem link) e nunca aparece na Comunicação.
 - Se o email não sair, aparece **"Não conseguimos enviar o email agora — pede o código ao TL"** e o código vai para o TL e o supervisor de serviço, como hoje.
+- No máximo **10 emails de código por dia** para o mesmo endereço (ninguém enche a caixa de outra pessoa). O código nunca vai no assunto do email, só no texto.
 - No teu sino fica "Entraste com um código enviado para o teu email às HH:MM".
 - **Acesso recusado** (conta desativada ou não registada): aparece a mensagem na página de entrada e **não** volta a mandar para a Google em ciclo. Fala com a administração.
 - **Conta nova**: qualquer conta Google entra como **utilizador**. Se ainda não está em nenhuma ficha, aparece **"Liga a tua conta"** com duas opções:
