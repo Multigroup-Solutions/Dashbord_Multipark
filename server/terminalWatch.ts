@@ -20,6 +20,7 @@
  * pergunta e nada se grava. Nada se apaga. Nunca lança para fora do cron.
  */
 import { lisbonClock } from "../shared/pontoTerminal";
+import { zelloKey } from "../shared/zelloKey";
 import {
   TERMINAL_CITY_LABELS, TERMINAL_CITY_OF, canUseTerminal, firstName, fixInsideCity, isDupEntry, terminalLeftMessage, terminalPayUplift, toDbUtc, toMs,
   type GpsFix, type TerminalCityKey,
@@ -318,7 +319,7 @@ export async function zelloDevicesOf(employeeIds: readonly number[]): Promise<Ma
   const out = new Map<number, string | null>();
   const ids = Array.from(new Set(employeeIds.filter((x) => Number.isInteger(x) && x > 0)));
   if (!ids.length) return out;
-  const [{ getDb }, { sql }, { zelloKey }] = await Promise.all([import("./db"), import("drizzle-orm"), import("../shared/zelloKey")]);
+  const [{ getDb }, { sql }] = await Promise.all([import("./db"), import("drizzle-orm")]);
   const db = await getDb();
   if (!db) return out;
   const checkins = rowsOf(await db.execute(sql`
@@ -346,22 +347,45 @@ export async function zelloDevicesOf(employeeIds: readonly number[]): Promise<Ma
   return out;
 }
 
+/** O que o vigia precisa de uma posição do Zello (o formato de server/zello.ts). */
+export interface ZelloLocationLike { username: string; latitude: number; longitude: number; accuracy: number; lastReport?: number; lastReportDelay: number }
+
+/** No máximo X pedidos à parte (location/getuser) por volta — há no máximo 1 sessão por cidade. */
+export const ZELLO_SINGLE_LOOKUPS_MAX = 5;
+
 /**
- * Posição do Zello de cada pessoa: UMA chamada location/get (máx. 100
- * utilizadores). null = Zello não configurado ou em baixo (o vigia não muda
- * nada). Contas excluídas do GPS (Definições) → sem GPS.
+ * Leituras do Zello por ficha a partir da lista de location/get. Essa lista
+ * traz no máximo `listMax` (100) utilizadores: com a lista cheia, quem lá não
+ * vem é pedido à parte (`fetchOne`, location/getuser; no máximo 5). Um erro
+ * num pedido à parte = sem GPS dessa pessoa (nunca "fora"); nunca lança.
+ * Contas excluídas do GPS (Definições) → sem GPS.
  */
-export async function zelloReadingsFromDb(employeeIds: number[]): Promise<Map<number, ZelloReading | null> | null> {
-  const { getZelloLocations, isZelloConfigured, loadZelloGpsExclusions } = await import("./zello");
-  if (!isZelloConfigured()) return null;
-  const [devices, { zelloKey }, { isZelloGpsExcluded }] = await Promise.all([zelloDevicesOf(employeeIds), import("../shared/zelloKey"), import("../shared/appSettings")]);
-  const list = await getZelloLocations();
-  const excluded = await loadZelloGpsExclusions();
-  const byUser = new Map(list.map((l) => [zelloKey(l.username), l]));
+export async function zelloReadingsFor(o: {
+  employeeIds: readonly number[];
+  devices: ReadonlyMap<number, string | null>;
+  list: ReadonlyArray<ZelloLocationLike>;
+  excluded: (username: string) => boolean;
+  fetchOne?: (username: string) => Promise<ZelloLocationLike | null>;
+  listMax?: number;
+}): Promise<Map<number, ZelloReading | null>> {
+  const key = zelloKey;
+  const byUser = new Map(o.list.map((l) => [key(l.username), l]));
+  if (o.fetchOne && o.list.length >= (o.listMax ?? 100)) {
+    const missing = Array.from(new Set(o.employeeIds.map((id) => o.devices.get(id) ?? null)
+      .filter((u): u is string => !!u && !o.excluded(u) && !byUser.has(key(u)))));
+    for (const u of missing.slice(0, ZELLO_SINGLE_LOOKUPS_MAX)) {
+      try {
+        const l = await o.fetchOne(u);
+        if (l) byUser.set(key(u), l);
+      } catch (err) {
+        console.warn("[terminal-watch] Zello location/getuser falhou:", String((err as Error)?.message ?? err).slice(0, 160));
+      }
+    }
+  }
   const out = new Map<number, ZelloReading | null>();
-  for (const id of employeeIds) {
-    const u = devices.get(id) ?? null;
-    const l = u && !isZelloGpsExcluded(u, excluded) ? byUser.get(zelloKey(u)) : undefined;
+  for (const id of o.employeeIds) {
+    const u = o.devices.get(id) ?? null;
+    const l = u && !o.excluded(u) ? byUser.get(key(u)) : undefined;
     // o zello.ts põe 0 quando a API não dá o valor: atraso 0 SEM instante do relatório = idade desconhecida (sem GPS)
     const known = (l?.lastReport ?? 0) > 0 || (l?.lastReportDelay ?? 0) > 0;
     out.set(id, l && known ? {
@@ -370,6 +394,21 @@ export async function zelloReadingsFromDb(employeeIds: number[]): Promise<Map<nu
     } : null);
   }
   return out;
+}
+
+/**
+ * Posição do Zello de cada pessoa: UMA chamada location/get (máx. 100
+ * utilizadores; quem não couber pede-se à parte). null = Zello não
+ * configurado ou em baixo (o vigia não muda nada). Contas excluídas do GPS
+ * (Definições) → sem GPS.
+ */
+export async function zelloReadingsFromDb(employeeIds: number[]): Promise<Map<number, ZelloReading | null> | null> {
+  const { getZelloLocations, getZelloUserLocationOf, isZelloConfigured, loadZelloGpsExclusions, ZELLO_LOCATIONS_MAX } = await import("./zello");
+  if (!isZelloConfigured()) return null;
+  const [devices, { isZelloGpsExcluded }] = await Promise.all([zelloDevicesOf(employeeIds), import("../shared/appSettings")]);
+  const list = await getZelloLocations();
+  const excluded = await loadZelloGpsExclusions();
+  return zelloReadingsFor({ employeeIds, devices, list, excluded: (u) => isZelloGpsExcluded(u, excluded), fetchOne: getZelloUserLocationOf, listMax: ZELLO_LOCATIONS_MAX });
 }
 
 /** Cidade das chaves (para os textos). */

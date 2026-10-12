@@ -895,3 +895,42 @@ describe("auditoria B2 — vigia", () => {
     expect((await terminalStatus(t.deps, JOAO)).ask).toBeNull();
   });
 });
+
+describe("auditoria B2 — Zello com mais de 100 utilizadores", () => {
+  const loc = (username: string, o: Record<string, unknown> = {}) => ({ username, latitude: IN_LIS.lat, longitude: IN_LIS.lng, accuracy: 20, lastReport: Math.floor(T0 / 1000) - 30, lastReportDelay: 30, ...o });
+  const filler = Array.from({ length: 100 }, (_, i) => loc(`outro${i}`));
+  it("lista cheia (100) sem o aparelho da pessoa → pede-o à parte (location/getuser), só para quem está no terminal", async () => {
+    const { zelloReadingsFor } = await import("./terminalWatch");
+    const fetchOne = vi.fn(async (u: string) => (u === "PDA 12" ? loc("PDA 12") : null));
+    const r = await zelloReadingsFor({ employeeIds: [JOAO, PEDRO], devices: new Map([[JOAO, "PDA 12"], [PEDRO, "outro3"]]), list: filler, excluded: () => false, fetchOne });
+    expect(fetchOne).toHaveBeenCalledTimes(1);
+    expect(fetchOne).toHaveBeenCalledWith("PDA 12");
+    expect(r.get(JOAO)).toMatchObject({ lat: IN_LIS.lat, lng: IN_LIS.lng, accuracy: 20, lastReportDelay: 30 });
+    expect(r.get(PEDRO)).toMatchObject({ lat: IN_LIS.lat });
+  });
+  it("lista com menos de 100 → não pede nada à parte (quem não vem não tem posição); erro no pedido à parte → sem GPS, nunca rebenta", async () => {
+    const { zelloReadingsFor } = await import("./terminalWatch");
+    const fetchOne = vi.fn(async () => { throw new Error("Zello 500"); });
+    const short = await zelloReadingsFor({ employeeIds: [JOAO], devices: new Map([[JOAO, "PDA 12"]]), list: filler.slice(0, 40), excluded: () => false, fetchOne });
+    expect(fetchOne).not.toHaveBeenCalled();
+    expect(short.get(JOAO)).toBeNull();
+    const failed = await zelloReadingsFor({ employeeIds: [JOAO], devices: new Map([[JOAO, "PDA 12"]]), list: filler, excluded: () => false, fetchOne });
+    expect(fetchOne).toHaveBeenCalledTimes(1);
+    expect(failed.get(JOAO)).toBeNull();
+    // conta excluída do GPS (Definições) → nem se pede
+    const ex = vi.fn(async () => loc("PDA 12"));
+    expect((await zelloReadingsFor({ employeeIds: [JOAO], devices: new Map([[JOAO, "PDA 12"]]), list: filler, excluded: (u) => u === "PDA 12", fetchOne: ex })).get(JOAO)).toBeNull();
+    expect(ex).not.toHaveBeenCalled();
+  });
+  it("a resposta de location/getuser lê-se em qualquer das formas e nunca dá a posição de outra pessoa", async () => {
+    const { parseZelloUserLocation } = await import("./zello");
+    const p = { latitude: "38.77", longitude: "-9.13", accuracy: "15", lastReport: "1760274000", lastReportDelay: "40" };
+    expect(parseZelloUserLocation({ status: "OK", location: { username: "PDA 12", ...p } }, "pda 12")).toMatchObject({ username: "PDA 12", latitude: 38.77, longitude: -9.13, accuracy: 15, lastReportDelay: 40 });
+    expect(parseZelloUserLocation({ status: "OK", locations: [{ username: "PDA 12", ...p }] }, "PDA 12")).toMatchObject({ latitude: 38.77 });
+    expect(parseZelloUserLocation({ status: "OK", ...p }, "PDA 12")).toMatchObject({ username: "PDA 12", latitude: 38.77 });
+    expect(parseZelloUserLocation({ status: "OK", location: { username: "PDA 13", ...p } }, "PDA 12")).toBeNull();
+    expect(parseZelloUserLocation({ status: "Not found" }, "PDA 12")).toBeNull();
+    expect(parseZelloUserLocation({ status: "OK", locations: [] }, "PDA 12")).toBeNull();
+    expect(parseZelloUserLocation(null, "PDA 12")).toBeNull();
+  });
+});
