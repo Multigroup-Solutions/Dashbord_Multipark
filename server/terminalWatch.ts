@@ -275,7 +275,6 @@ export async function reopenTerminal(deps: TerminalDeps, o: { employeeId: number
     if (h) return busyToTl(deps, person.fullName, h, o.actorUserId);
     throw err;
   }
-  const noHole = startMs === toMs(last.endedAt!);
   await safeLog(deps, { userId: o.actorUserId, action: "terminal_reopen", entityId: id, details: `${person.fullName}: "Ainda estou" — terminal ${TERMINAL_CITY_OF[city]} reaberto desde ${lisbonClock(startedAt)} (sessão ${last.id} → ${id}${inside ? "; GPS no aeroporto" : "; sem GPS no aeroporto: horas por confirmar sem prova"})` });
   await safeNotify(deps, {
     city, targetUserIds: (await deps.tlOnDuty(city)).filter((u) => u !== o.actorUserId), link: "/operacional?tab=live",
@@ -287,7 +286,8 @@ export async function reopenTerminal(deps: TerminalDeps, o: { employeeId: number
   return {
     status: "started",
     session: session ? view(session) : { id, employeeId: person.id, cityKey: city, cityLabel: TERMINAL_CITY_LABELS[city], startedAt, startSource: "reopen", payUplift: terminalPayUplift(person) === 1 },
-    message: `Voltaste ao terminal ${TERMINAL_CITY_OF[city]}${noHole ? " (sem buraco)" : ` desde ${lisbonClock(startedAt)}`}.`,
+    // Para o extra: está de volta e conta a partir de agora; o tempo em que o GPS o viu fora não conta sozinho (o RH decide).
+    message: `Voltaste ao terminal ${TERMINAL_CITY_OF[city]}. Conta a partir de agora (${lisbonClock(at)}); o tempo em que o GPS te viu fora fica para o RH decidir.`,
     takeoverFrom: null,
   };
 }

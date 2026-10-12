@@ -445,7 +445,8 @@ describe("\"Ainda estás no terminal?\"", () => {
     u.zello(JOAO, FAR_LIS); await u.tick(15);
     u.zello(JOAO, FAR_LIS); await u.tick(15); // liberta às 14:50
     const r = await answerStillHere(u.deps, { employeeId: JOAO, actorUserId: 110, answer: "yes", fix: null });
-    expect(r).toMatchObject({ status: "started", message: "Voltaste ao terminal de Lisboa (sem buraco)." });
+    expect(r).toMatchObject({ status: "started", message: "Voltaste ao terminal de Lisboa. Conta a partir de agora (14:50); o tempo em que o GPS te viu fora fica para o RH decidir." });
+    expect(sessionOf(u.store, JOAO)).toMatchObject({ startSource: "reopen", startedAt: "2026-10-12 13:50:00", countedFrom: "2026-10-12 13:50:00" });
   });
 });
 
@@ -463,7 +464,7 @@ describe("reabrir depois de libertado", () => {
     const first = sessionOf(t.store, JOAO);
     t.clock.now += 20 * MIN; // 15:10
     const r = await reopenTerminal(t.deps, { employeeId: JOAO, actorUserId: 110, fix: null });
-    expect(r).toMatchObject({ status: "started", message: "Voltaste ao terminal de Lisboa (sem buraco)." });
+    expect(r).toMatchObject({ status: "started", message: "Voltaste ao terminal de Lisboa. Conta a partir de agora (15:10); o tempo em que o GPS te viu fora fica para o RH decidir." });
     const s = sessionOf(t.store, JOAO);
     expect(s).toMatchObject({ startSource: "reopen", startedAt: first.endedAt, countedFrom: "2026-10-12 14:10:00", prevSessionId: first.id, lastInsideAt: null, payUplift: 1 });
     expect(t.notices.at(-1)).toMatchObject({ targetUserIds: [900], title: "João Silva voltou ao terminal de Lisboa" });
@@ -497,7 +498,7 @@ describe("reabrir depois de libertado", () => {
     await stopTerminal(t.deps, { employeeId: PEDRO, actorUserId: 120, fix: IN_LIS }); // 14:57
     t.clock.now += 3 * MIN;
     const r = await reopenTerminal(t.deps, { employeeId: JOAO, actorUserId: 110, fix: null });
-    expect(r).toMatchObject({ status: "started", message: "Voltaste ao terminal de Lisboa desde 14:57." });
+    expect(r).toMatchObject({ status: "started", message: "Voltaste ao terminal de Lisboa. Conta a partir de agora (15:00); o tempo em que o GPS te viu fora fica para o RH decidir." });
     expect(sessionOf(t.store, JOAO).startedAt).toBe("2026-10-12 13:57:00");
   });
 });

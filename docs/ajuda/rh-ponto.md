@@ -40,7 +40,7 @@ palavras: ainda estás no terminal, sim estou, já saí, lugar libertado, reabri
 6. **Já saí** → sais do terminal à hora a que o GPS te viu sair.
 7. Sem resposta em **15 min** → o lugar fica livre. Fica escrito **"saiu do aeroporto às 16:40 (GPS)"** e o TL é avisado.
 8. A barra mostra então **"Saíste do terminal de Lisboa às 16:40 (GPS)"** com **Ainda estou**:
-    - até **30 min** depois, voltas ao terminal **sem buraco**, se o lugar estiver livre;
+    - até **30 min** depois, voltas ao terminal (o lugar fica teu sem buraco na linha do tempo), se estiver livre. **Conta a partir de agora**; o tempo em que o GPS te viu fora fica para o RH decidir;
     - se já estiver com outra pessoa, o pedido vai ao TL de serviço;
     - mais tarde, carrega outra vez em **Estou no terminal** (com GPS).
 9. Depois de um **Ainda estou** sem prova, as horas desse bocado ficam **por confirmar** até haver GPS no aeroporto (ou o RH decidir).
