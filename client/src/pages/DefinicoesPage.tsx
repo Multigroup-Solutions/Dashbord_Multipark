@@ -699,7 +699,12 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     ]]));
     if (isAirports) {
       const n = (v: string | undefined) => { const t = String(v ?? "").trim().replace(",", "."); return t === "" ? NaN : Number(t); };
-      return Object.fromEntries(CITY_FIELDS.map((c) => [c.id, { lat: n(airports[c.id]?.lat), lng: n(airports[c.id]?.lng), radiusM: n(airports[c.id]?.radiusM) }]));
+      // Plano 56: as zonas por terminal (T1/T2) que já existam ficam como estão (este editor só mexe no círculo).
+      const cur = (current ?? {}) as Record<string, { zones?: unknown[] } | undefined>;
+      return Object.fromEntries(CITY_FIELDS.map((c) => [c.id, {
+        lat: n(airports[c.id]?.lat), lng: n(airports[c.id]?.lng), radiusM: n(airports[c.id]?.radiusM),
+        ...(Array.isArray(cur[c.id]?.zones) && cur[c.id]!.zones!.length ? { zones: cur[c.id]!.zones } : {}),
+      }]));
     }
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);

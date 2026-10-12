@@ -114,6 +114,7 @@ import { expensesRouter } from "./expensesRouter";
 import { rhRouter } from "./rhRouter";
 import { accountLinkRouter } from "./accountLinkRouter";
 import { operationalRouter } from "./operationalRouter";
+import { terminalRouter } from "./terminalRouter";
 import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
 import { availabilityPatternProcedures } from "./availabilityPatternRouter";
 
@@ -1713,6 +1714,8 @@ export const appRouter = router({
 
   // ─── OPERACIONAL ──────────────────────────────────────────────────────────
   operational: operationalRouter,
+  // Plano 56 B1: terminal pelo perfil ("Estou no terminal", troca, TL) — server/terminalRouter.ts.
+  terminal: terminalRouter,
 
   // ─── API KEYS MANAGEMENT ──────────────────────────────────────────────────
   // ─── INTEGRAÇÕES (Google Ads) ─────────────────────────────────────────────

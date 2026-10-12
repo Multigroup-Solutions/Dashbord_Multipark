@@ -34,11 +34,26 @@
 
 export type AirportCityId = "lisbon" | "porto" | "faro";
 
+/**
+ * Zona de um terminal (ex.: "T1", "T2"): centro + raio. Plano 56 (terminal
+ * pelo perfil): o aeroporto pode ter várias zonas; sem zonas vale o círculo
+ * do aeroporto (centro + raio), como até aqui.
+ */
+export interface TerminalZone {
+  label?: string;
+  lat: number;
+  lng: number;
+  /** raio em metros */
+  radiusM: number;
+}
+
 export interface AirportFence {
   lat: number;
   lng: number;
   /** raio em metros */
   radiusM: number;
+  /** Zonas por terminal (opcional). Com zonas, só elas contam para o terminal pelo perfil. */
+  zones?: TerminalZone[];
 }
 
 export type AirportsMap = Record<AirportCityId, AirportFence>;

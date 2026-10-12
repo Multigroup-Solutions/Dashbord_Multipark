@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { ZelloLiveTab } from "@/components/ZelloLiveTab";
+import { TerminalLiveCard } from "@/components/terminal/TerminalLiveCard";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
 import RadioPage from "@/pages/RadioPage";
 import { UniDateNav } from "@/components/DateRangeNav";
@@ -100,7 +101,7 @@ export default function OperationalPage() {
         {has("resumo") && <TabsContent value="resumo">{tab === "resumo" && <DaySummaryTab />}</TabsContent>}
         {has("semana") && <TabsContent value="semana">{tab === "semana" && <WeekActivityTab />}</TabsContent>}
         {has("mes") && <TabsContent value="mes" className="mt-4">{tab === "mes" && <MonthEvaluationTab isSupervisor={evalSupervisor} />}</TabsContent>}
-        {has("live") && <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>}
+        {has("live") && <TabsContent value="live">{tab === "live" && <><TerminalLiveCard /><ZelloLiveTab /></>}</TabsContent>}
         {has("history") && <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>}
         {has("pdas") && <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>}
         {has("radio") && <TabsContent value="radio">{tab === "radio" && <RadioPage />}</TabsContent>}
