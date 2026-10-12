@@ -2,7 +2,7 @@
 modulo: avaliacao
 titulo: Avaliação (dia e mês)
 rotas: /avaliacao, /avaliacao-operacional
-palavras: mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
+palavras: avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
 ---
 # Avaliação
 
@@ -33,6 +33,7 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - **CSV** exporta o dia.
 
 **Separador Mês**
+- O mesmo separador está também em **Operações → Actividade Diária → Avaliação do mês** (é uma cópia: o mesmo ecrã, os mesmos números e a mesma regra de acesso). Aqui na Avaliação continua igual.
 - Abre no **mês atual** (botão **Este mês**). Podes andar mês a mês ou escolher outro período. O link antigo `?tab=semanas` abre este separador.
 - O **filtro de cidade e marca** do topo da app conta: a cidade é a do dia na escala (quem é de Lisboa e fez um dia no Porto entra no Porto; sem escala, vale a cidade da ficha). A marca filtra os movimentos lidos da Multipark pelos parques dela; os pontos guardados são por cidade (as pessoas trabalham para todas as marcas da cidade).
 - **Ranking** por pontos, com a vista **Por hora**. Todas as colunas ordenam. Clicar no nome abre a ficha e clicar nos pontos abre o detalhe.

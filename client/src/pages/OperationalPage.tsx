@@ -28,12 +28,16 @@ import { PDA_ZELLO_LABELS } from "@shared/pdaZelloMatch";
 import { SpeedTrackMap } from "@/components/maps/SpeedTrackMap";
 import {
   Plus, Trash2, Eye, Gauge, ArrowUpDown, Satellite, Users, Settings,
-  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio,
+  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio, BarChart3, CalendarRange, Trophy,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { can, seesBeyondOwn, type ModuleId } from "@shared/access";
+// 12 out 2026 (Jorge): Resumo do dia (veio da Passagem de turno), Semana e Avaliação do mês.
+import DaySummaryTab, { DepartedComplaintsCard } from "@/components/shiftDay/DaySummaryTab";
+import WeekActivityTab from "@/components/operacoes/WeekActivityTab";
+import MonthEvaluationTab from "@/components/evaluation/MonthEvaluationTab";
 import { OPERATIONAL_TABS as TABS, operationalAccess, type OperationalTab as TabKey } from "@shared/operationalTabs";
 import { retryTransient } from "@/lib/queryRetry";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -74,20 +78,28 @@ export default function OperationalPage() {
     return <Card className="p-8 text-center text-sm text-muted-foreground">A tua conta não tem acesso à Actividade Diária.</Card>;
   }
   const has = (t: TabKey) => allowed.includes(t);
+  // Avaliação do mês: "Recalcular" e ajustes como no separador "Mês" da Avaliação.
+  const evalSupervisor = !!user && can(user as any, "avaliacao", "edit");
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, os PDAs e o rádio.</p>
+        <p className="text-muted-foreground">Quem fez o quê, o resumo do dia, a semana por hora, km e velocidades, os PDAs e o rádio.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
           {has("dia") && <TabsTrigger value="dia"><Activity className="w-4 h-4 mr-1" />Atividade do Dia</TabsTrigger>}
+          {has("resumo") && <TabsTrigger value="resumo"><BarChart3 className="w-4 h-4 mr-1" />Resumo do dia</TabsTrigger>}
+          {has("semana") && <TabsTrigger value="semana"><CalendarRange className="w-4 h-4 mr-1" />Semana</TabsTrigger>}
+          {has("mes") && <TabsTrigger value="mes"><Trophy className="w-4 h-4 mr-1" />Avaliação do mês</TabsTrigger>}
           {has("live") && <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>}
           {has("history") && <TabsTrigger value="history"><Gauge className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>}
           {has("pdas") && <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>}
           {has("radio") && <TabsTrigger value="radio"><Radio className="w-4 h-4 mr-1" />Rádio</TabsTrigger>}
         </TabsList>
         {has("dia") && <TabsContent value="dia"><DayActivityTab onOpenSpeedHistory={has("history") ? openSpeedHistory : undefined} /></TabsContent>}
+        {has("resumo") && <TabsContent value="resumo">{tab === "resumo" && <DaySummaryTab />}</TabsContent>}
+        {has("semana") && <TabsContent value="semana">{tab === "semana" && <WeekActivityTab />}</TabsContent>}
+        {has("mes") && <TabsContent value="mes" className="mt-4">{tab === "mes" && <MonthEvaluationTab isSupervisor={evalSupervisor} />}</TabsContent>}
         {has("live") && <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>}
         {has("history") && <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>}
         {has("pdas") && <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>}
@@ -140,6 +152,11 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
   );
   const { data, isLoading } = activityQ;
   const totals = data?.totals;
+  // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM nestes dias (à parte: não atrasa a atividade).
+  const departedQ = trpc.multipark.departedComplaints.useQuery(
+    { startDate, endDate, projectId },
+    { enabled: !!startDate && !tooLong, refetchOnWindowFocus: false, retry: retryTransient, staleTime: 2 * 60_000 },
+  );
   const allPeople = (data?.people ?? []) as any[];
   // 43a: escolher a pessoa (o nome abre a ficha; o resto da linha, o dia dela)
   const [who, setWho] = usePersistedState<string>("operacional.dia.who", "");
@@ -209,6 +226,10 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
           </Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Km GPS</p><p className="text-xl font-bold tabular-nums truncate text-purple-700">{Number(totals.totalKm).toLocaleString("pt-PT", { maximumFractionDigits: 1 })} km</p><p className="text-[11px] text-muted-foreground">{totals.violations} excessos</p></Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Pessoas ativas</p><p className="text-xl font-bold tabular-nums truncate">{totals.activePeople}</p></Card>
+          <DepartedComplaintsCard
+            loading={departedQ.isLoading}
+            value={departedQ.data ?? (departedQ.error ? { available: false, reason: departedQ.error.message } : undefined)}
+          />
           {canSeeCost && totals.totalCost != null && (
             <Card className="p-3 gap-0.5 min-w-0">
               <p className="text-xs text-muted-foreground">Custo extras</p>

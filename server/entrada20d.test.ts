@@ -114,7 +114,9 @@ describe("20d links e saltos", () => {
     expect(cityDayEvent("2026-10-05", "lisbon", [row], "https://app")?.link).toBe("https://app/extras-dia?dia=2026-10-05");
     expect(read("client/src/pages/ExtrasDiaPage.tsx")).toMatch(/qs\.get\("dia"\) \?\? qs\.get\("date"\)/);
     const handover = read("client/src/pages/ShiftHandoverPage.tsx");
-    expect(handover).toMatch(/get\("city"\) \|\| localStorage\.getItem\(LAST_CITY_KEY\)/);
+    // 12 out 2026: a cidade da página vive em components/shiftDay/handoverCity.tsx (também na Atividade diária).
+    expect(read("client/src/components/shiftDay/handoverCity.tsx")).toMatch(/get\("city"\) \|\| localStorage\.getItem\(LAST_CITY_KEY\)/);
+    expect(handover).toContain("useHandoverCity()");
     expect(handover).toMatch(/get\("date"\);\s*\n\s*if \(d && \/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\/\.test\(d\) && d <= maxDate\) return d;/);
   });
   it("notificação para a página já aberta volta a montá-la; sair apaga as pesquisas recentes", () => {

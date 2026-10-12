@@ -142,6 +142,41 @@ export function buildLiveHistoryByAgentSql(f: Omit<LiveHistoryFilters, "limit" |
   return { sql, params: p.values };
 }
 
+/** 12 out 2026: reservas diferentes (id + código) com um dado tipo de ação no período — ex.: os carros que saíram (CHECK_OUT). */
+export const HISTORY_BOOKINGS_LIMIT = 20_000;
+
+/**
+ * Reservas diferentes com ações dos tipos pedidos em [from, to) (filtros como
+ * em buildLiveHistorySql). Para contar as reclamações dos carros que saíram
+ * num dia (Atividade diária). PURA.
+ */
+export function buildLiveHistoryBookingsSql(f: Omit<LiveHistoryFilters, "limit" | "order"> & { limit?: number }): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const where = whereOf({ ...f, limit: 1 }, p);
+  const limit = Math.min(Math.max(Math.floor(f.limit ?? HISTORY_BOOKINGS_LIMIT) || 1, 1), HISTORY_BOOKINGS_LIMIT);
+  const sql = [
+    `SELECT DISTINCT h."bookingId" AS booking_id, NULLIF(b."allocation"::text, '') AS booking_code`,
+    FROM,
+    ` WHERE ${where}`,
+    ` LIMIT ${p.add(limit)}`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+/** Reservas com ações no período (id + código). Lança se a BD da Multipark não responder. */
+export async function readLiveHistoryBookings(
+  f: Omit<LiveHistoryFilters, "limit" | "order"> & { limit?: number },
+  query: Query = multiparkDbQuery,
+): Promise<{ rows: Array<{ bookingId: string; bookingCode: string | null }>; truncated: boolean }> {
+  const { sql, params } = buildLiveHistoryBookingsSql(f);
+  const raw = await query<Record<string, unknown>>(sql, params);
+  const limit = Number(params[params.length - 1]);
+  return {
+    rows: raw.map((r) => ({ bookingId: String(r.booking_id ?? ""), bookingCode: s(r.booking_code) })).filter((r) => r.bookingId),
+    truncated: raw.length >= limit,
+  };
+}
+
 export interface LiveHistoryRow {
   historyId: string;
   bookingExternalId: string;

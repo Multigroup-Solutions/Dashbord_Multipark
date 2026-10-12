@@ -23,7 +23,8 @@ describe("43b — Rádio dentro da Atividade diária", () => {
     expect(app).toMatch(/<Route path="\/radio">\s*\{\(\) => <Redirect to="\/operacional\?tab=radio" replace \/>\}/);
     expect(app).not.toContain("<RadioPage />");
     const menu = src("client/src/components/DashboardLayout.tsx");
-    expect(menu).toContain('anyOf: ["atividade_diaria", "historico_diario", "radio"]');
+    // 12 out 2026: + o Resumo do dia (veio da Passagem de turno, mesma permissão)
+    expect(menu).toContain('anyOf: ["atividade_diaria", "historico_diario", "radio", "passagem_resumo_dia"]');
     expect(menu).not.toContain('label: "Rádio", path: "/radio"');
     expect(src("shared/globalSearch.ts")).toContain('path: "/operacional?tab=radio"');
     const page = src("client/src/pages/OperationalPage.tsx");

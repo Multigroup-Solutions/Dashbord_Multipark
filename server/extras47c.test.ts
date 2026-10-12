@@ -31,7 +31,7 @@ import {
   crewBandCase, mapPressureCrewRow, mapPressureDriverRow, mapPressureLoadRow, mapPressureSlotRow, pressureWindow, pressureWindowSince,
 } from "./multiparkDb/pressure";
 import {
-  PRESSURE_DAYS_VERSION, combineDriverDays, combineGroupDays, crewBandIndex, driverDayPayloads, groupDayPayloads, missingPressureDays, msList,
+  PRESSURE_DAYS_VERSION, PRESSURE_DRIVER_DAYS_VERSION, combineDriverDays, combineGroupDays, crewBandIndex, driverDayPayloads, groupDayPayloads, missingPressureDays, msList,
   parseDayPayload, percentileCont, pressureDaySig, uidList, windowDayList, type DriverDayPayload, type GroupDayPayload,
 } from "./pressureDays";
 import {
@@ -73,6 +73,9 @@ describe("47c — leituras de UM dia na BD da Multipark", () => {
     expect(sql).toContain('AND h."bookingId" IN (SELECT rel.id FROM rel)');
     expect(params).toEqual(expect.arrayContaining([r.wideStart, r.wideEnd, r.start, r.end]));
     expect(sql).toContain("round(jb.gap * 60000)::bigint END AS cycle_ms");
+    // 12 out 2026: o mesmo tempo por carro separado em entregas e recolhas
+    expect(sql).toContain("FILTER (WHERE jw.ct = 'CHECKING_OUT') AS cyo");
+    expect(sql).toContain("FILTER (WHERE jw.ct = 'CHECKING_IN') AS cyi");
     expect(sql).toContain("array_agg(DISTINCT ha.uid ORDER BY ha.uid) AS uids");
     // o TL aplica-se ao juntar os dias (lista de hoje): nenhum TL vai para a leitura
     expect(sql).toContain("bool_or(FALSE)");
@@ -115,6 +118,11 @@ describe("47c — dias guardados: o que falta, assinatura e reprocessar", () => 
     expect(pressureDaySig(["b", "a", "a"])).toBe(pressureDaySig(["a", "b"]));
     expect(pressureDaySig(["a", "b"])).not.toBe(pressureDaySig(["a", "b", "c"]));
     expect(pressureDaySig(["a"])).toMatch(new RegExp(`^v${PRESSURE_DAYS_VERSION}:1:[0-9a-f]{16}$`));
+    // 12 out 2026: a parte por condutor tem versão própria (entregas/recolhas separadas) → só esses dias se releem
+    expect(PRESSURE_DRIVER_DAYS_VERSION).toBe(2);
+    expect(pressureDaySig(["a"], "driver")).toMatch(new RegExp(`^v${PRESSURE_DRIVER_DAYS_VERSION}:1:[0-9a-f]{16}$`));
+    expect(pressureDaySig(["a"], "group")).toBe(pressureDaySig(["a"]));
+    expect(pressureDaySig(["a"], "driver")).not.toBe(pressureDaySig(["a"]));
   });
   it("lê-se só o que falta: sem linha, outra assinatura, ou reprocessar à mão (uma vez)", () => {
     const sig = pressureDaySig(["p1"]);
@@ -165,8 +173,8 @@ describe("47c — linhas de um dia → payload", () => {
     expect(m.has("2026-10-09")).toBe(false);
   });
   it("condutores: serviços, durações e quem agiu", () => {
-    const m = driverDayPayloads([{ d: "2026-10-05", hr: 7, jobs: "2", cy: "2400000", dr: null, tp: "300000,600000", uids: ["A"] }], ["2026-10-05"]);
-    expect(m.get("2026-10-05")).toEqual({ h: { 7: { jobs: 2, cy: [2400000], dr: [], tp: [300000, 600000], u: ["A"] } } });
+    const m = driverDayPayloads([{ d: "2026-10-05", hr: 7, jobs: "2", cy: "2400000,2700000", cyo: "2400000", cyi: "2700000", dr: null, tp: "300000,600000", uids: ["A"] }], ["2026-10-05"]);
+    expect(m.get("2026-10-05")).toEqual({ h: { 7: { jobs: 2, cy: [2400000, 2700000], cyo: [2400000], cyi: [2700000], dr: [], tp: [300000, 600000], u: ["A"] } } });
   });
   it("payload guardado: JSON → objeto; lixo → vazio", () => {
     expect(parseDayPayload<GroupDayPayload>('{"h":{},"c":{"2026-10-05 01":1}}').c).toEqual({ "2026-10-05 01": 1 });
@@ -209,19 +217,30 @@ describe("47c — juntar os dias (o mesmo que as leituras antigas)", () => {
     const bands = crewMeasureBands(DEFAULT_CREW_RULES.lisbon);
     const days: Array<{ day: string; payload: DriverDayPayload }> = [
       // sexta 18h: A (TL) e B agiram; 3 serviços → 2 pessoas, hora cheia
-      { day: "2026-10-02", payload: { h: { 18: { jobs: 3, cy: [2400000, 2700000], dr: [1200000], tp: [], u: ["A", "B"] } } } },
+      // 12 out 2026: 40 min de uma entrega e 45 de uma recolha (o dia seguinte é um dia guardado ANTES da versão 2, sem cyo/cyi)
+      { day: "2026-10-02", payload: { h: { 18: { jobs: 3, cy: [2400000, 2700000], cyo: [2400000], cyi: [2700000], dr: [1200000], tp: [], u: ["A", "B"] } } } },
       // sexta seguinte 18h: só C (sem TL → +1 = 2 pessoas), 1 serviço → hora cheia (1 ≥ 1)
       { day: "2026-10-09", payload: { h: { 18: { jobs: 1, cy: [3000000], dr: [], tp: [600000], u: ["C"] }, 19: { jobs: 0, cy: [], dr: [], tp: [], u: ["C", "D"] } } } },
     ];
     const { driverRows, crewRows } = combineDriverDays(days, [" A "], bands);
     expect(driverRows).toEqual([
-      { wd: 5, hr: 18, cy_n: 3, cy_p50: 45, cy_p60: 46, cy_p75: 47.5, cy_p85: 48.5, cy_p90: 49, dr_n: 1, dr_p50: 20, dr_p75: 20, dr_p90: 20, tp_n: 1, tp_p50: 10, tp_p75: 10, crew_avg: 2 },
-      { wd: 5, hr: 19, cy_n: 0, cy_p50: null, cy_p60: null, cy_p75: null, cy_p85: null, cy_p90: null, dr_n: 0, dr_p50: null, dr_p75: null, dr_p90: null, tp_n: 0, tp_p50: null, tp_p75: null, crew_avg: 3 },
+      {
+        wd: 5, hr: 18, cy_n: 3, cy_p50: 45, cy_p60: 46, cy_p75: 47.5, cy_p85: 48.5, cy_p90: 49,
+        cyo_n: 1, cyo_p50: 40, cyo_p60: 40, cyo_p75: 40, cyo_p85: 40, cyo_p90: 40,
+        cyi_n: 1, cyi_p50: 45, cyi_p60: 45, cyi_p75: 45, cyi_p85: 45, cyi_p90: 45,
+        dr_n: 1, dr_p50: 20, dr_p75: 20, dr_p90: 20, tp_n: 1, tp_p50: 10, tp_p75: 10, crew_avg: 2,
+      },
+      {
+        wd: 5, hr: 19, cy_n: 0, cy_p50: null, cy_p60: null, cy_p75: null, cy_p85: null, cy_p90: null,
+        cyo_n: 0, cyo_p50: null, cyo_p60: null, cyo_p75: null, cyo_p85: null, cyo_p90: null,
+        cyi_n: 0, cyi_p50: null, cyi_p60: null, cyi_p75: null, cyi_p85: null, cyi_p90: null,
+        dr_n: 0, dr_p50: null, dr_p75: null, dr_p90: null, tp_n: 0, tp_p50: null, tp_p75: null, crew_avg: 3,
+      },
     ]);
     const band2 = crewBandIndex(2, bands);
     expect(crewRows).toEqual([{ band: band2, busy: true, n: 3, p50: 45, p60: 46, p75: 47.5, p85: 48.5, p90: 49 }]);
     expect(mapPressureCrewRow("cidade_lisboa", bands, crewRows[0])).toMatchObject({ bandLabel: "2", n: 3 });
-    expect(mapPressureDriverRow(driverRows[0])).toMatchObject({ cycleN: 3, crewAvg: 2 });
+    expect(mapPressureDriverRow(driverRows[0])).toMatchObject({ cycleN: 3, crewAvg: 2, cycleOutN: 1, cycleOutP75: 40, cycleInN: 1, cycleInP75: 45 });
     // sem TL conhecido: +1 em todas as horas
     expect(combineDriverDays(days, [], bands).driverRows[0].crew_avg).toBe(2.5);
   });
@@ -286,6 +305,17 @@ describe("47c — corrida: lê só os dias que faltam", () => {
     t.q.mockClear();
     const r = await runExtrasPressure({ ...base, deadlineAt: Date.now() + 60_000, query: t.q as any, store: t.store, days: t.days });
     expect(r.daysRead).toBe(3); // o dia 1 out de cada um dos 3 pedaços
+  });
+  it("12 out 2026: os dias por condutor guardados na versão 1 (sem entregas/recolhas) releem-se; os dos grupos não", async () => {
+    const t = setup();
+    await runExtrasPressure({ ...base, deadlineAt: Date.now() + 60_000, query: t.q as any, store: t.store, days: t.days });
+    // como estavam antes desta versão: assinatura v1 também na parte por condutor
+    for (const [k, v] of Array.from(t.rows)) if (k.includes("|driver|")) t.rows.set(k, { ...v, sig: v.sig.replace(/^v2:/, "v1:") });
+    t.q.mockClear();
+    const r = await runExtrasPressure({ ...base, deadlineAt: Date.now() + 60_000, query: t.q as any, store: t.store, days: t.days });
+    expect(r.daysRead).toBe(10); // só os 10 dias dos condutores de Lisboa
+    const reads = t.q.mock.calls.filter(([sql]) => !String(sql).includes('FROM "Park"'));
+    expect(reads.every(([sql]) => String(sql).includes("AS jobs"))).toBe(true);
   });
   it("reprocessar à mão: relê o intervalo uma vez (o pedido segue no cursor)", async () => {
     const t = setup();

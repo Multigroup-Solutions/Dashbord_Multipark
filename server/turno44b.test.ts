@@ -95,7 +95,8 @@ describe("44b — Resumo do dia: horas, km e tempo parado", () => {
     expect(fmtHours(null)).toBe("—");
   });
   it("a tabela tem as colunas Horas, Km e Parado (ordenáveis)", () => {
-    const page = src("client/src/pages/ShiftHandoverPage.tsx");
+    // 12 out 2026: o Resumo do dia está na Atividade diária (components/shiftDay/DaySummaryTab.tsx).
+    const page = src("client/src/components/shiftDay/DaySummaryTab.tsx");
     expect(page).toContain('<Th k="workedH" label="Horas"');
     expect(page).toContain('<Th k="stoppedH" label="Parado"');
   });

@@ -4126,6 +4126,18 @@ export async function getSupervisorDayDashboard(date: string) {
   // Reclamações criadas no mesmo dia operacional
   const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
     WHERE createdAt >= ${start} AND createdAt < ${end} AND ${projectScope(sql`complaints.projectId`)}`) as any;
+  // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM neste dia (entrega feita
+  // no dia operacional), seja qual for o dia em que chegaram — com o histórico já lido.
+  let complaintsDeparted: { available: true; complaints: number; bookings: number; truncated: boolean } | { available: false; reason: string };
+  try {
+    const { departedFromHistory, departedRefs } = await import("../shared/departedComplaints");
+    const { countComplaintsForRefs } = await import("./departedComplaints");
+    const left = departedFromHistory(hist, start, end);
+    complaintsDeparted = { available: true, complaints: await countComplaintsForRefs(departedRefs(left)), bookings: left.length, truncated: hist.length >= HIST_LIMIT };
+  } catch (err: any) {
+    console.warn("[resumo-dia] reclamações dos carros que saíram:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+    complaintsDeparted = { available: false, reason: "Não foi possível contar as reclamações dos carros que saíram." };
+  }
 
   // Condutores por turno (escala extras-dia do dia + ações)
   const dayActivity = await getDayActivity(date);
@@ -4183,6 +4195,7 @@ export async function getSupervisorDayDashboard(date: string) {
       over15: late,
     },
     complaintsToday: Number((compl as any)?.n ?? 0),
+    complaintsDeparted,
     // Movimentos cortados no limite: os tempos são de uma parte do dia (o ecrã avisa).
     timingsTruncated: hist.length >= HIST_LIMIT,
   };

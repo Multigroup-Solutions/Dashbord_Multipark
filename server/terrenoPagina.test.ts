@@ -61,9 +61,10 @@ afterEach(() => {
 });
 
 describe("Actividade Diária: abas pelas permissões (as do servidor)", () => {
-  it("team leader e supervisor veem as quatro e (43b) o Rádio", () => {
-    for (const role of ["team_leader", "supervisor", "admin"]) {
-      expect(operationalAccess({ role } as any)).toEqual({ tabs: ["dia", "live", "history", "pdas", "radio"], ownSpeedOnly: false });
+  it("team leader e supervisor veem as quatro e (43b) o Rádio; 12 out 2026: Semana, Resumo do dia (supervisor+) e Avaliação do mês", () => {
+    expect(operationalAccess({ role: "team_leader" } as any)).toEqual({ tabs: ["dia", "semana", "live", "history", "pdas", "radio", "mes"], ownSpeedOnly: false });
+    for (const role of ["supervisor", "admin"]) {
+      expect(operationalAccess({ role } as any)).toEqual({ tabs: ["dia", "semana", "live", "history", "pdas", "radio", "resumo", "mes"], ownSpeedOnly: false });
     }
   });
   it("condutor e extra: nenhuma aba, só o próprio histórico de velocidade", () => {
