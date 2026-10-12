@@ -852,3 +852,46 @@ it("tempos do plano: 20 min fora, 15 min sem resposta, 60 min depois do \"Sim\",
   expect(overlapConflict({ id: 1, employeeId: 1, cityKey: "lisbon", fromMs: 0, untilMs: 10 }, [], 0)).toBeNull();
   expect(toDbUtc(T0)).toBe("2026-10-12 13:05:00");
 });
+
+// ─── Auditoria (B2): casos que o primeiro lote não apanhava ─────────────────
+
+describe("auditoria B2 — vigia", () => {
+  it("Zello em baixo com a pergunta à espera → NÃO liberta (sem leitura não se sabe se voltou); volta o Zello e continua fora → liberta", async () => {
+    const t = await joaoGoesOut();
+    t.zello(JOAO, FAR_LIS); await t.tick(15); // 14:35 pergunta (última leitura fora às 14:34:30)
+    expect(sessionOf(t.store, JOAO).askedAt).toBe("2026-10-12 13:35:00");
+    t.state.zello = null; // o Zello cai às 14:40
+    expect((await t.tick(5)).released).toBe(0); // 14:40
+    expect((await t.tick(5)).released).toBe(0); // 14:45
+    expect((await t.tick(5)).released).toBe(0); // 14:50 — já devia libertar, mas o Zello não respondeu
+    expect(sessionOf(t.store, JOAO)).toMatchObject({ endedAt: null, activeCityKey: "lisbon" });
+    // o Zello volta e continua fora (leitura "seguida": ≤ 15 min depois da anterior) → liberta
+    t.state.zello = new Map();
+    t.zello(JOAO, FAR_LIS, 30, Date.UTC(2026, 9, 12, 13, 49, 0));
+    expect((await t.tick(1)).released).toBe(1); // 14:51
+    expect(sessionOf(t.store, JOAO)).toMatchObject({ endReason: "no_answer", countedBasis: "last_gps", countedUntil: "2026-10-12 13:09:30" });
+  });
+  it("Zello em baixo muito tempo → o \"fora\" recomeça quando volta (pergunta outra vez antes de libertar; nunca liberta às cegas)", async () => {
+    const t = await joaoGoesOut();
+    t.zello(JOAO, FAR_LIS); await t.tick(15); // 14:35 pergunta
+    t.state.zello = null;
+    let released = 0;
+    for (let i = 0; i < 8; i++) released += (await t.tick(5)).released; // até 15:15
+    expect(released).toBe(0);
+    t.state.zello = new Map();
+    t.zello(JOAO, FAR_LIS);
+    expect((await t.tick(5)).released).toBe(0); // 15:20: 1.ª leitura depois do buraco → "fora" recomeça
+    expect(sessionOf(t.store, JOAO)).toMatchObject({ endedAt: null, outsideCount: 1 });
+  });
+  it("Zello volta com o GPS dentro → a pergunta responde-se sozinha (nunca liberta)", async () => {
+    const t = await joaoGoesOut();
+    t.zello(JOAO, FAR_LIS); await t.tick(15);
+    t.state.zello = null;
+    await t.tick(10); await t.tick(10);
+    t.state.zello = new Map();
+    t.zello(JOAO, IN_LIS);
+    expect((await t.tick(5)).released).toBe(0);
+    expect(sessionOf(t.store, JOAO)).toMatchObject({ endedAt: null, outsideSince: null, outsideCount: 0 });
+    expect((await terminalStatus(t.deps, JOAO)).ask).toBeNull();
+  });
+});

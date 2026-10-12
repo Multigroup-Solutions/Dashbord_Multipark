@@ -90,7 +90,10 @@ export async function runTerminalWatch(deps: TerminalDeps): Promise<TerminalWatc
       const d = watchDecision(ask, nowMs);
       const cur = { ...s, lastInsideAt: state.lastInsideAtMs != null ? toDbUtc(state.lastInsideAtMs) : null, outsideSince: state.outsideSinceMs != null ? toDbUtc(state.outsideSinceMs) : null, outsideCount: state.outsideCount };
       if (d === "ask" && (await askStillThere(deps, cur, nowMs))) out.asked++;
-      else if (d === "release" && (await releaseNoAnswer(deps, cur, nowMs))) out.released++;
+      // Libertar só com o Zello a responder NESTA volta: com o Zello em baixo não
+      // se sabe se a pessoa voltou ao aeroporto (o que responderia por si) —
+      // espera pela próxima leitura (um erro do Zello nunca liberta ninguém).
+      else if (d === "release" && readings != null && (await releaseNoAnswer(deps, cur, nowMs))) out.released++;
     } catch (err) {
       console.warn(`[terminal-watch] sessão ${s.id}:`, String((err as Error)?.message ?? err).slice(0, 160));
     }
