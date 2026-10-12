@@ -39,6 +39,7 @@ import {
   findOpenLostFoundByClient,
   findComplaintByThread,
   findOpenComplaintBySubject,
+  findOpenComplaintByBookingRef,
   updateComplaint,
   addComplaintMessage,
   addLostFoundMessage,
@@ -67,6 +68,8 @@ async function routeToModule(
     messageId: string;
     gmThreadId?: string | null;
     refs?: string[];
+    /** Lote 57: email de OUTRA caixa que a IA viu como reclamação (ver InboundEmailInput.aiIntake). */
+    aiIntake?: AiComplaintIntake | null;
   },
 ): Promise<{ targetModule: string; targetId?: number; taskId?: number; isNew?: boolean }> {
   // O remetente do cabeçalho é muitas vezes o BACKOFFICE que reencaminha
@@ -175,11 +178,23 @@ async function routeToModule(
     //     nunca com endereços internos ou nomes genéricos ("Multipark")
     //  3) assunto normalizado (resposta reencaminhada que perdeu o thread)
     const taggedId = parseComplaintCaseTag(ctx.subject);
-    const existing =
-      (taggedId ? await getComplaintById(taggedId) : null) ||
-      (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
-      (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, clientName)) ||
-      (await findOpenComplaintBySubject(ctx.subject));
+    const ai = ctx.aiIntake ?? null;
+    // Lote 57 — email de outra caixa visto pela IA: só junta pela própria
+    // reclamação desta conversa, pelo fio do email, pelo email/matrícula do
+    // cliente ou pela MESMA reserva (aberta). Nunca só pelo nome nem pelo
+    // assunto ("Reclamação" juntava clientes diferentes).
+    const existing = ai
+      ? ((ai.forceComplaintId ? await getComplaintById(ai.forceComplaintId) : null) ||
+        (taggedId ? await getComplaintById(taggedId) : null) ||
+        (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
+        (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, null)) ||
+        (parsed.bookingRef ? await findOpenComplaintByBookingRef(parsed.bookingRef) : null))
+      : ((taggedId ? await getComplaintById(taggedId) : null) ||
+        (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
+        (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, clientName)) ||
+        (await findOpenComplaintBySubject(ctx.subject)));
+    // Resposta numa conversa ligada pela IA: junta-se SÓ à reclamação dessa conversa — nunca cria outra.
+    if (ai?.replyOnly && !existing) return { targetModule: "ignored" };
     if (existing) {
       await addComplaintMessage({
         complaintId: existing.id,
@@ -222,6 +237,19 @@ async function routeToModule(
       clientName,
     });
     const booking = match?.booking ?? null;
+    // Lote 57: a reserva de que o cliente fala já tem uma reclamação aberta → junta-se a essa (não duplica).
+    if (ai && booking?.externalId) {
+      const sameBooking = await findOpenComplaintByBookingRef(String(booking.externalId));
+      if (sameBooking) {
+        await addComplaintMessage({
+          complaintId: sameBooking.id,
+          message: `📧 ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
+          isInternal: 0,
+          authorName: (clientName || "").slice(0, 200) || null,
+        } as any);
+        return { targetModule: "complaint", targetId: sameBooking.id, isNew: false };
+      }
+    }
     // Livro de Reclamações oficial (nº ROR…): prazo legal de resposta —
     // entra logo como URGENTE. SLA igual ao da criação manual (48h por
     // omissão do formulário) — não há no código um prazo próprio para o ROR.
@@ -239,8 +267,11 @@ async function routeToModule(
       reservationRef: parsed.bookingRef ?? (booking?.externalId || undefined),
       reservationStart: booking?.checkIn ?? undefined,
       reservationEnd: booking?.checkOut ?? undefined,
-      projectId: booking?.projectId ?? undefined,
+      projectId: booking?.projectId ?? ai?.projectId ?? undefined,
       slaDeadline: complaintSlaDeadline(COMPLAINT_DEFAULT_SLA_HOURS),
+      // Lote 57: de onde veio (filtro "Origem"). A IA criada por uma pessoa (sugestão aceite) fica dela.
+      origin: ai ? "ia" : "email",
+      createdById: ai?.actorId ?? null,
     } as any);
     return { targetModule: "complaint", targetId: id, isNew: true };
   }
@@ -402,7 +433,7 @@ async function routeToModule(
  */
 async function afterComplaintEmail(
   complaintId: number,
-  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string; fromName?: string; subject?: string; receivedAt?: string | null },
+  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string; fromName?: string; subject?: string; receivedAt?: string | null; aiIntake?: boolean },
 ): Promise<void> {
   try {
     const systemUser = await getSystemUserId().catch(() => undefined);
@@ -436,6 +467,9 @@ async function afterComplaintEmail(
   } catch (err) {
     console.warn("[EmailInbound] notificação de reclamação falhou:", err);
   }
+  // Lote 57: a reclamação que a IA tirou de outra caixa NUNCA escreve ao
+  // cliente (nem o aviso de receção) — responder é sempre uma pessoa.
+  if (ctx.aiIntake) return;
   try {
     const c = await getComplaintById(complaintId);
     // In-Reply-To só quando o email veio DIRETAMENTE do cliente (num
@@ -472,6 +506,23 @@ export interface InboundEmailInput {
   html?: string | null;
   /** Só chamado DEPOIS de reservar o Message-ID (duplicados não descarregam nada). */
   loadAttachments: () => Promise<RawInboundAttachment[]>;
+  /**
+   * Lote 57: email de OUTRA caixa (info@, reservas@…) que a IA viu como
+   * reclamação (server/complaintMailIntake.ts). Sem aviso de receção ao
+   * cliente; só junta a uma reclamação pela conversa, email/matrícula do
+   * cliente ou mesma reserva (nunca só pelo nome/assunto); origem "ia".
+   */
+  aiIntake?: AiComplaintIntake | null;
+}
+
+export interface AiComplaintIntake {
+  /** Quem carregou em "Criar reclamação" numa sugestão (null = a IA, sozinha). */
+  actorId?: number | null;
+  /** Cidade da conversa (quando a reserva não a dá). */
+  projectId?: number | null;
+  /** Resposta numa conversa já ligada: junta-se a ESTA reclamação e nunca cria outra. */
+  forceComplaintId?: number | null;
+  replyOnly?: boolean;
 }
 
 export type InboundOutcome =
@@ -552,6 +603,7 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 
     const routed = await routeToModule(alias, parsed, {
       subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
+      aiIntake: alias === "reclamacoes" ? input.aiIntake ?? null : null,
     });
     routedOk = true;
 
@@ -569,6 +621,8 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 
     if (routed.targetModule === "complaint" && routed.targetId) {
       await afterComplaintEmail(routed.targetId, {
+        // Lote 57: veio de outra caixa pela IA → nunca o aviso de receção ao cliente.
+        aiIntake: !!input.aiIntake,
         isNew: !!routed.isNew,
         attachments,
         messageId,

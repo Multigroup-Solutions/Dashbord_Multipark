@@ -52,7 +52,12 @@ export default function CaseAssignmentCard({
         <div>
           <Label className="text-xs">Grupo (centro de custos)</Label>
           <Select value={proj} onValueChange={setProj}>
-            <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
+            {/* Lote 57: a toda a largura do cartão — um nome comprido encurta com "…" em vez de sair do ecrã. */}
+            <SelectTrigger className="w-full min-w-0">
+              <SelectValue placeholder="—">
+                <span className="block min-w-0 truncate">{proj === "none" ? "— Nenhum —" : projects.find((p) => String(p.id) === proj)?.name ?? "—"}</span>
+              </SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="none">— Nenhum —</SelectItem>
               {projects.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
@@ -62,7 +67,11 @@ export default function CaseAssignmentCard({
         <div>
           <Label className="text-xs">Responsável (investiga) — team leader ou acima</Label>
           <Select value={person} onValueChange={setPerson}>
-            <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
+            <SelectTrigger className="w-full min-w-0">
+              <SelectValue placeholder="—">
+                <span className="block min-w-0 truncate">{person === "none" ? "— Ninguém —" : people.find((p) => String(p.id) === person)?.fullName ?? "—"}</span>
+              </SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="none">— Ninguém —</SelectItem>
               {people.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.fullName}</SelectItem>)}

@@ -365,6 +365,7 @@ export function createMcpApiRouter(): Router {
       projectId: b.projectId ? Number(b.projectId) : null,
       assignedToId: b.assignedToId ? Number(b.assignedToId) : null,
       createdById: apiKeyActorId(getApiKeyInfo(req)) || null,
+      origin: "api",
     } as any);
     await logApiKeyAction(req, { action: "create", entity: "complaint", entityId: id, details: `[MCP] ${b.title}` });
     res.json({ success: true, id });

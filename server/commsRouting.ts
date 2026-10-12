@@ -29,6 +29,7 @@ import { isAutomatedSender } from "../shared/extraLeadsFunnel";
 import type { WhatsappIntent } from "../shared/commsAi";
 import type { FirstContactInput, FirstContactResult } from "./recruitmentFirstContact";
 import type { MailRoutingOutput } from "./_core/ai/prompts/comms";
+import type { IntakeResult, IntakeVerdict } from "./complaintMailIntake";
 
 const nowStr = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 const rowsOf = (r: any): any[] => (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : Array.isArray(r) ? r : []);
@@ -75,6 +76,11 @@ export interface EmailRoutingDeps {
   cityProjectId(text: string | null): Promise<number | null>;
   /** Candidato no RH: pipeline do recrutamento (lista Recrutamento + leitura do CV) e ligação à lead. */
   afterRh(threadId: number, opts: { moved: boolean; leadId: number | null }): Promise<void>;
+  /**
+   * Lote 57: a IA disse "reclamacoes" → Reclamações (criar, juntar ou sugerir;
+   * server/complaintMailIntake.ts, interruptor AI_MAIL_COMPLAINTS). Nunca escreve ao cliente.
+   */
+  complaintIntake?(msg: EmailRoutingMessage, verdict: IntakeVerdict): Promise<IntakeResult>;
 }
 
 export interface DecisionPatch {
@@ -93,7 +99,7 @@ export interface DecisionPatch {
 
 export type EmailRoutingResult =
   | { status: "off" | "seen" | "pending" }
-  | { status: "moved" | "kept" | "failed"; boxKey: string; recruit?: FirstContactResult | null };
+  | { status: "moved" | "kept" | "failed"; boxKey: string; recruit?: FirstContactResult | null; complaint?: IntakeResult | null };
 
 // ─── Email ───────────────────────────────────────────────────────────────────
 
@@ -170,7 +176,16 @@ export async function classifyAndApply(msg: EmailRoutingMessage, deps: EmailRout
     reason, error, candidateJson: candidate ? JSON.stringify(candidate) : null,
     recruitOutcome: recruit?.outcome ?? null, leadId: recruit?.leadId ?? null, applicationId: recruit?.applicationId ?? null,
   });
-  return { status, boxKey: finalBox, recruit };
+  // Lote 57: mover para a caixa "Reclamações" não cria o caso — a reclamação
+  // (ou a sugestão) nasce aqui, mesmo quando a dúvida a deixou no info.
+  let complaint: IntakeResult | null = null;
+  if (classified && decision.aiBoxKey === "reclamacoes" && deps.complaintIntake) {
+    complaint = await deps.complaintIntake(msg, { aiBoxKey: decision.aiBoxKey, confidence: decision.confidence, reason }).catch((err: any) => {
+      console.warn("[IA caixas] reclamação (email) falhou:", msg.threadId, String(err?.message ?? err).slice(0, 160));
+      return null;
+    });
+  }
+  return { status, boxKey: finalBox, recruit, complaint };
 }
 
 /** Dados do candidato de um email: o que a IA leu + o remetente (quando é uma pessoa). PURA. */
@@ -299,6 +314,10 @@ export const dbEmailRoutingDeps: EmailRoutingDeps = {
   },
   cityProjectId: cityProjectIdOf,
   afterRh: afterRhReal,
+  async complaintIntake(msg, verdict) {
+    const { intakeFromRouting } = await import("./complaintMailIntake");
+    return intakeFromRouting(msg, verdict);
+  },
 };
 
 /** Mensagem guardada → o que a IA precisa (BD). null = já não é para separar. */
