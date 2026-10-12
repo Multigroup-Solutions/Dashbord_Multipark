@@ -60,17 +60,17 @@ export async function loadTerminalPaySessions(employeeIds: readonly number[], fr
   return out;
 }
 
-/** Meses ("YYYY-MM") com fecho do ordenado aprovado ou pago. Nunca lança (erro → nenhum). */
+/**
+ * Meses ("YYYY-MM") com fecho do ordenado aprovado ou pago. LANÇA se a BD
+ * falhar: um erro nunca pode passar por "nenhum mês fechado" (o RH e a
+ * repetição recusam/saltam — server/terminalReview.ts).
+ */
 export async function closedPayrollMonthKeys(): Promise<Set<string>> {
-  try {
-    const [{ getDb }, { sql }] = await Promise.all([import("./db"), import("drizzle-orm")]);
-    const db = await getDb();
-    if (!db) return new Set();
-    const rows = rowsOf(await db.execute(sql`SELECT DISTINCT year, month FROM payroll_runs WHERE status IN ('approved', 'paid')`));
-    return new Set(rows.map((r) => `${Number(r.year)}-${String(Number(r.month)).padStart(2, "0")}`));
-  } catch {
-    return new Set();
-  }
+  const [{ getDb }, { sql }] = await Promise.all([import("./db"), import("drizzle-orm")]);
+  const db = await getDb();
+  if (!db) throw new Error("BD indisponível");
+  const rows = rowsOf(await db.execute(sql`SELECT DISTINCT year, month FROM payroll_runs WHERE status IN ('approved', 'paid')`));
+  return new Set(rows.map((r) => `${Number(r.year)}-${String(Number(r.month)).padStart(2, "0")}`));
 }
 
 /**

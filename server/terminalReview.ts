@@ -64,6 +64,20 @@ export interface RhTerminalSession {
   closedMonth: string | null;
 }
 
+/**
+ * Os meses com o ordenado fechado. Erro a ler → TerminalError (o RH não mexe:
+ * um erro nunca vale por "nenhum mês fechado").
+ */
+async function closedMonthsOrRefuse(deps: TerminalDeps): Promise<Set<string>> {
+  if (!deps.closedMonths) return new Set<string>();
+  try {
+    return await deps.closedMonths();
+  } catch (err) {
+    console.warn("[terminal] fechos do ordenado não lidos:", String((err as Error)?.message ?? err).slice(0, 160));
+    throw new TerminalError("Não deu para ver se o ordenado deste mês já está fechado. Tenta outra vez daqui a pouco.");
+  }
+}
+
 /** O mês fechado que a sessão toca (pela entrada do ponto dela), ou null. */
 async function closedMonthOf(deps: TerminalDeps, closed: ReadonlySet<string>, s: TerminalSessionRow, extra: Array<string | null | undefined> = []): Promise<string | null> {
   if (!closed.size) return null;
@@ -101,7 +115,8 @@ export async function rhSessionsOf(deps: TerminalDeps, o: { employeeId: number; 
   if (!(await deps.enabled())) return { enabled: false, sessions: [] };
   const [rows, closed] = await Promise.all([
     deps.store.sessionsBetween({ employeeId: o.employeeId, fromUtc: o.fromUtc, toUtc: o.toUtc }),
-    deps.closedMonths ? deps.closedMonths() : Promise.resolve(new Set<string>()),
+    // (só para mostrar: se falhar, a lista abre na mesma — quem decide é o servidor, que recusa)
+    deps.closedMonths ? deps.closedMonths().catch(() => new Set<string>()) : Promise.resolve(new Set<string>()),
   ]);
   const views: RhTerminalSession[] = [];
   for (const r of rows) views.push(rhView(r, await closedMonthOf(deps, closed, r)));
@@ -125,7 +140,7 @@ async function reviewable(deps: TerminalDeps, sessionId: number): Promise<Termin
   const s = await deps.store.byId(sessionId);
   if (!s) throw new TerminalError("Troço de terminal não encontrado.", "NOT_FOUND");
   if (!s.endedAt) throw new TerminalError("Ainda está no terminal: decide depois de sair.");
-  const closed = deps.closedMonths ? await deps.closedMonths() : new Set<string>();
+  const closed = await closedMonthsOrRefuse(deps);
   const cm = await closedMonthOf(deps, closed, s, [s.countedFrom, s.countedUntil]);
   if (cm) throw new TerminalError(`O ordenado de ${monthLabel(cm)} já está fechado: o terminal desse mês não muda.`);
   return s;
@@ -187,7 +202,7 @@ export async function rhCorrect(deps: TerminalDeps, actor: RhActor, o: { session
   // perto do troço (o mesmo dia de trabalho): até 16 h antes do início e depois do fecho
   const start = toMs(s.startedAt), end = toMs(s.endedAt!);
   if (from < start - TERMINAL_CORRECT_MAX_HOURS * 3_600_000 || until > end + TERMINAL_CORRECT_MAX_HOURS * 3_600_000) throw new TerminalError("As horas estão longe deste troço. Escolhe o troço certo.");
-  const closed = deps.closedMonths ? await deps.closedMonths() : new Set<string>();
+  const closed = await closedMonthsOrRefuse(deps);
   const cm = await closedMonthOf(deps, closed, s, [o.from, o.until]);
   if (cm) throw new TerminalError(`O ordenado de ${monthLabel(cm)} já está fechado: o terminal desse mês não muda.`);
   await assertNoOverlap(deps, s, from, until);
@@ -293,7 +308,15 @@ export async function retryPendingTerminalSessions(deps: TerminalDeps, o: {
   const list = await deps.store.toSettle(since, 200);
   report.pending = list.length;
   if (!list.length) return report;
-  const closed = deps.closedMonths ? await deps.closedMonths() : new Set<string>();
+  let closed: Set<string>;
+  try {
+    closed = deps.closedMonths ? await deps.closedMonths() : new Set<string>();
+  } catch (err) {
+    // sem saber que meses estão fechados não se escreve nada: fica para a próxima volta
+    console.warn("[terminal] repetição: fechos do ordenado não lidos:", String((err as Error)?.message ?? err).slice(0, 160));
+    report.deferred = list.length;
+    return report;
+  }
   const todo0: TerminalSessionRow[] = [];
   for (const s of list) {
     if (await closedMonthOf(deps, closed, s)) report.closedMonth++;

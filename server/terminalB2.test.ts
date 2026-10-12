@@ -1068,3 +1068,24 @@ describe("auditoria B2 — dinheiro: ordenado = custo dos extras, meia-noite e m
     expect(splitTerminalHours(two, true)).toMatchObject({ terminalHours: 4 }); // 09–11 (2 h) + 12–14 (2 h)
   });
 });
+
+describe("auditoria B2 — meses fechados: erro ao ler os fechos ≠ \"nenhum mês fechado\"", () => {
+  it("se não se consegue ler os fechos do ordenado, o RH não mexe e a repetição não escreve (nunca abre por engano um mês fechado)", async () => {
+    const t = makeDeps();
+    const id = t.store._.seed({ employeeId: JOAO, startedAt: "2026-09-20 09:00:00", endedAt: "2026-09-20 13:00:00", countedBasis: "pending", endReason: "checkout" });
+    t.deps.closedMonths = async () => { throw new Error("ETIMEDOUT"); };
+    t.clock.now = Date.UTC(2026, 8, 25, 10, 0);
+    await expect(rhConfirm(t.deps, { userId: 1 }, { sessionId: id, note: "confirmado com o TL" })).rejects.toThrow("Não deu para ver se o ordenado");
+    await expect(rhReject(t.deps, { userId: 1 }, { sessionId: id, note: "não esteve" })).rejects.toThrow("Não deu para ver se o ordenado");
+    await expect(rhCorrect(t.deps, { userId: 1 }, { sessionId: id, from: "2026-09-20 09:00:00", until: "2026-09-20 11:00:00", note: "só até às 12h" })).rejects.toThrow("Não deu para ver se o ordenado");
+    const before = t.store._.writes;
+    const read = vi.fn(async () => ({ available: true as const, data: { truncated: false, rows: [{ at: "2026-09-20 12:00:00", kind: "CHECK_OUT", agentUserId: "j" }] } }));
+    const r = await retryPendingTerminalSessions(t.deps, { deadlineAt: Date.now() + 30_000, read: read as any, agentIdsOf: async () => ["j"] });
+    expect(r).toMatchObject({ pending: 1, resolved: 0, deferred: 1 });
+    expect(read).not.toHaveBeenCalled();
+    expect(t.store._.writes).toBe(before);
+    expect(t.store._.sessions[0]).toMatchObject({ countedBasis: "pending", reviewedAt: null });
+    // a lista da ficha continua a abrir (só mostra; quem decide é o servidor)
+    expect((await rhSessionsOf(t.deps, { employeeId: JOAO, fromUtc: "2026-09-01 00:00:00", toUtc: "2026-09-30 00:00:00" })).sessions).toHaveLength(1);
+  });
+});
