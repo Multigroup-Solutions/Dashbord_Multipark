@@ -1085,3 +1085,24 @@ describe("regressão: chamadas do WhatsApp no telemóvel (push) com os PDAs", ()
     expect(sw).toContain('if (data.type === "pda" || (data.type && data.type !== "wa_call"))');
   });
 });
+
+describe("auditoria A2: o cookie do PDA não se forja nem se corta ao meio", () => {
+  it("assinado com outro segredo, meio cookie de PDA (só pda ou só pn) e o nonce de outro PDA → recusados", async () => {
+    lisbon();
+    const dev = device();
+    await codeLogin(dev, "joaquim@gmail.com");
+    const nonce = pda7().sessionNonce as string;
+    const { SignJWT } = await import("jose");
+    const sign = (payload: Record<string, unknown>, secret = process.env.JWT_SECRET!) =>
+      new SignJWT(payload).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setExpirationTime(Math.floor(Date.now() / 1000) + 3600).sign(new TextEncoder().encode(secret));
+    const base = { openId: "google_100", appId: "app-teste", name: "Joaquim", sv: 0 };
+    const tryCookie = async (jwt: string) => { const d = device(); d.jar.set(COOKIE_NAME, jwt); return d.valid(); };
+    expect(await tryCookie(await sign({ ...base, pda: 7, pn: nonce }))).toBe(true); // o verdadeiro (controlo)
+    expect(await tryCookie(await sign({ ...base, pda: 7, pn: nonce }, "outro-segredo-qualquer-com-tamanho"))).toBe(false);
+    expect(await tryCookie(await sign({ ...base, pda: 7 }))).toBe(false);
+    expect(await tryCookie(await sign({ ...base, pn: nonce }))).toBe(false);
+    expect(await tryCookie(await sign({ ...base, pda: 8, pn: nonce }))).toBe(false); // nonce do PDA 12 no PDA 13
+    expect(await tryCookie(await sign({ ...base, openId: "google_110", pda: 7, pn: nonce }))).toBe(false); // outra conta com o nonce
+    expect(await tryCookie(await sign({ ...base, pda: "7", pn: nonce }))).toBe(false);
+  });
+});
