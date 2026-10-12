@@ -69,7 +69,7 @@ beforeEach(() => {
 type Route = { file: string; method: string; path: string; caps: string[] | "any" };
 function routes(): Route[] {
   const out: Route[] = [];
-  for (const file of ["server/mcpApi.ts", "server/mcpReportsApi.ts", "server/mcpMarketingApi.ts"]) {
+  for (const file of ["server/mcpApi.ts", "server/mcpReportsApi.ts", "server/mcpMarketingApi.ts", "server/mcpProceduresApi.ts"]) {
     for (const line of read(file).split("\n")) {
       const m = line.match(/\br\.(get|post|patch|put|delete)\("([^"]+)",\s*(.*)$/);
       if (!m) continue;
@@ -99,6 +99,11 @@ describe("20a cada rota da /api/v1 pede uma capacidade", () => {
     for (const r of routes()) {
       if (r.caps === "any") continue;
       const caps = r.caps as any[];
+      // MCP pessoal: nenhuma chave antiga nem "admin" o traz (corre como quem criou a chave).
+      if (caps.length === 1 && String(caps[0]).startsWith("owner:")) {
+        for (const k of [legacyAdmin, legacyWrite, legacyRead]) expect(v1Allowed(k, caps), `${r.method} ${r.path}`).toBe(false);
+        continue;
+      }
       const adminOnly = caps.length === 1 && caps[0] === "admin";
       expect(v1Allowed(legacyAdmin, caps), `${r.method} ${r.path}`).toBe(true);
       if (adminOnly) {
@@ -145,7 +150,9 @@ describe("20a capacidades", () => {
   it("normaliza: admin = tudo, desconhecidas fora, ordem fixa", () => {
     expect(normalizeCapabilities(["pii", "reports:ops", "pii", "xpto"])).toEqual(["reports:ops", "pii"]);
     expect(normalizeCapabilities(["pii", "admin"])).toEqual(["admin"]);
-    expect(capabilitiesFor('["admin"]').size).toBe(API_KEY_CAPABILITIES.length);
+    // Todas menos as do MCP pessoal ("owner:*"), que se marcam à parte.
+    expect(capabilitiesFor('["admin"]').size).toBe(API_KEY_CAPABILITIES.length - 2);
+    expect(capabilitiesFor('["admin"]').has("owner:read")).toBe(false);
     expect(capabilitiesLabel(capabilitiesFor('["admin"]'))).toBe("Administração (tudo)");
     expect(capabilitiesLabel(new Set(["reports:marketing", "pii"] as const))).toBe("Marketing, Dados pessoais");
   });

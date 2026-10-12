@@ -30,7 +30,7 @@ const EXPIRY_OPTIONS = [
 const isExpired = (expiresAt: string | null | undefined) =>
   !!expiresAt && new Date(`${String(expiresAt).replace(" ", "T")}Z`).getTime() <= Date.now();
 
-/** Caixas das capacidades. "Administração" marca tudo (as outras ficam incluídas). */
+/** Caixas das capacidades. "Administração" marca tudo (as outras ficam incluídas), menos o MCP pessoal. */
 function CapabilityPicker({ value, onChange, idPrefix }: {
   value: ApiKeyCapability[];
   onChange: (next: ApiKeyCapability[]) => void;
@@ -46,8 +46,10 @@ function CapabilityPicker({ value, onChange, idPrefix }: {
     <div className="grid gap-2 mt-1">
       {API_KEY_CAPABILITIES.map((c) => {
         const info = API_KEY_CAPABILITY_INFO[c];
-        const checked = admin || value.includes(c);
-        const disabled = admin && c !== "admin";
+        // O MCP pessoal ("owner:*") não vem com "admin" (corre como quem criou a chave): marca-se à parte.
+        const inAdmin = !c.startsWith("owner:");
+        const checked = (admin && inAdmin) || value.includes(c);
+        const disabled = admin && inAdmin && c !== "admin";
         return (
           <label
             key={c}
@@ -70,10 +72,13 @@ function CapabilityPicker({ value, onChange, idPrefix }: {
 }
 
 function CapabilityBadges({ caps }: { caps: ApiKeyCapability[] }) {
-  if (caps.includes("admin")) return <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300">{API_KEY_CAPABILITY_INFO.admin.label}</Badge>;
+  const admin = caps.includes("admin");
+  // Com "admin" as outras já estão incluídas: mostra só "admin" (+ o MCP pessoal, que é à parte).
+  const shown = admin ? caps.filter((c) => c.startsWith("owner:")) : caps;
   return (
     <span className="flex flex-wrap gap-1">
-      {caps.map((c) => <Badge key={c} variant="outline" className="font-normal">{API_KEY_CAPABILITY_INFO[c].label}</Badge>)}
+      {admin && <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300">{API_KEY_CAPABILITY_INFO.admin.label}</Badge>}
+      {shown.map((c) => <Badge key={c} variant="outline" className="font-normal">{API_KEY_CAPABILITY_INFO[c].label}</Badge>)}
     </span>
   );
 }

@@ -20,6 +20,8 @@ export const API_KEY_CAPABILITIES = [
   "complaints:write",
   "device",
   "admin",
+  "owner:read",
+  "owner:write",
 ] as const;
 export type ApiKeyCapability = (typeof API_KEY_CAPABILITIES)[number];
 
@@ -52,11 +54,26 @@ export const API_KEY_CAPABILITY_INFO: Record<ApiKeyCapability, { label: string; 
     label: "Dispositivo (GPS / rádio)",
     description: "Só a /api/external: viaturas, colaboradores, alertas de velocidade, movimentos e rádio.",
   },
+  "owner:read": {
+    label: "MCP pessoal (ler tudo como eu)",
+    description: "Só para o teu MCP: lê qualquer dado que os ecrãs mostram, com as TUAS permissões (corre como quem criou a chave). Não escreve nada. Não vem com \"Administração\".",
+  },
+  "owner:write": {
+    label: "MCP pessoal (alterar como eu)",
+    description: "Só para o teu MCP: faz as alterações escolhidas (faltas, pontos da avaliação, juntar/separar contas e clientes, tarefas, críticas, reclamações, perdidos, ocorrências), em teu nome e com as TUAS permissões. Não vem com \"Administração\".",
+  },
   admin: {
     label: "Administração (tudo)",
     description: "Tudo o que está acima, mais arquivar reclamações, criar projetos e as rotas /admin. Só para manutenção.",
   },
 };
+
+/**
+ * Fora do "admin" e das chaves antigas: corre como a pessoa que criou a chave
+ * (server/mcpProceduresApi.ts), por isso só se dá quando marcada à mão.
+ */
+const OWNER_ONLY: ApiKeyCapability[] = ["owner:read", "owner:write"];
+const ADMIN_SET: ApiKeyCapability[] = API_KEY_CAPABILITIES.filter((c) => !OWNER_ONLY.includes(c));
 
 /** O que uma chave "read" antiga fazia: ler tudo. */
 const LEGACY_READ: ApiKeyCapability[] = ["reports:ops", "reports:cash", "reports:marketing", "pii"];
@@ -86,7 +103,7 @@ export function isLegacyPermissions(permissions: string | null | undefined): boo
 }
 
 /**
- * Capacidades efetivas. `admin` (ou "*"/"full") = todas. Sem permissions =
+ * Capacidades efetivas. `admin` (ou "*"/"full") = todas menos as do MCP pessoal ("owner:*"). Sem permissions =
  * dispositivo (legado). Valores desconhecidos são ignorados.
  */
 export function capabilitiesFor(permissions: string | null | undefined): Set<ApiKeyCapability> {
@@ -94,7 +111,7 @@ export function capabilitiesFor(permissions: string | null | undefined): Set<Api
   const out = new Set<ApiKeyCapability>();
   if (tokens.length === 0) { out.add("device"); return out; }
   for (const t of tokens) {
-    if (t === "admin" || t === "*" || t === "full") API_KEY_CAPABILITIES.forEach((c) => out.add(c));
+    if (t === "admin" || t === "*" || t === "full") ADMIN_SET.forEach((c) => out.add(c));
     else if (t === "write") LEGACY_WRITE.forEach((c) => out.add(c));
     else if (t === "read") LEGACY_READ.forEach((c) => out.add(c));
     else if (isCapability(t)) out.add(t);
@@ -105,14 +122,14 @@ export function capabilitiesFor(permissions: string | null | undefined): Set<Api
 /** Valida e normaliza a lista que o ecrã grava (ordem fixa, sem repetidos). */
 export function normalizeCapabilities(list: readonly string[]): ApiKeyCapability[] {
   const set = new Set(list.map((x) => String(x).trim().toLowerCase()).filter(isCapability));
-  if (set.has("admin")) return ["admin"];
+  if (set.has("admin")) return ["admin", ...OWNER_ONLY.filter((c) => set.has(c))];
   return API_KEY_CAPABILITIES.filter((c) => set.has(c));
 }
 
 /** Texto curto para listas e logs: "Marketing, Dados pessoais". */
 export function capabilitiesLabel(caps: Iterable<ApiKeyCapability>): string {
   const s = new Set(caps);
-  if (s.has("admin")) return API_KEY_CAPABILITY_INFO.admin.label;
+  if (s.has("admin")) return [API_KEY_CAPABILITY_INFO.admin.label, ...OWNER_ONLY.filter((c) => s.has(c)).map((c) => API_KEY_CAPABILITY_INFO[c].label)].join(", ");
   const names = API_KEY_CAPABILITIES.filter((c) => s.has(c)).map((c) => API_KEY_CAPABILITY_INFO[c].label);
   return names.length ? names.join(", ") : "nenhuma";
 }
