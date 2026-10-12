@@ -133,13 +133,14 @@ export async function openPdaSession(input: {
   return true;
 }
 
-export type PdaSessionEndReason = "logout" | "checkout" | "stale_checkout" | "rebind" | "sessions_ended";
+export type PdaSessionEndReason = "logout" | "checkout" | "stale_checkout" | "rebind" | "sessions_ended" | "retired";
 const END_LABEL: Record<PdaSessionEndReason, string> = {
   logout: "saiu (logout)",
   checkout: "saída do ponto",
   stale_checkout: "fecho automático do ponto esquecido",
   rebind: "a sessão passou para outro PDA",
   sessions_ended: "as sessões da pessoa foram terminadas (terminar sessões, palavra-passe ou repor acesso)",
+  retired: "o PDA foi retirado (inativo, perdido ou em manutenção)",
 };
 
 /** Acaba a sessão SÓ se o nonce ainda for este; desliga os avisos do PDA. */
@@ -171,6 +172,26 @@ export async function endPdaSessionsOfEmployee(employeeId: number, reason: "chec
     console.warn("[pda] sessões de PDA não terminadas:", String((err as Error)?.message ?? err).slice(0, 160));
   }
   return ended;
+}
+
+/**
+ * Auditoria A2: PDA retirado (inativo, perdido, em manutenção) → a sessão que
+ * lá estiver acaba DE VEZ (nonce limpo, avisos desligados). Sem isto, a sessão
+ * só ficava suspensa enquanto o PDA não estivesse ativo — ao voltar a "ativo"
+ * (ex.: perdido e encontrado), quem tivesse o aparelho ficava com a sessão da
+ * pessoa anterior. Nunca lança.
+ */
+export async function endPdaSessionOnRetire(pdaId: number, actorUserId: number, now = Date.now()): Promise<boolean> {
+  try {
+    const store = pdaSessionStore();
+    if (!(await store.clearAny(pdaId))) return false;
+    await store.disablePush(pdaId, now).catch(() => undefined);
+    await log(actorUserId, "pda_session_end", pdaId, `Sessão do PDA terminou: ${END_LABEL.retired}`);
+    return true;
+  } catch (err) {
+    console.warn("[pda] sessão do PDA retirado não terminada:", String((err as Error)?.message ?? err).slice(0, 160));
+    return false;
+  }
 }
 
 /**

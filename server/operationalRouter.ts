@@ -868,6 +868,11 @@ export const operationalRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "pdas", "edit");
       await updatePda(input.id, input.data);
+      // (auditoria A2) PDA retirado (inativo/perdido/manutenção): a sessão que lá estiver acaba de vez.
+      if (input.data.status && input.data.status !== "active") {
+        const { endPdaSessionOnRetire } = await import("./pdaSession");
+        await endPdaSessionOnRetire(input.id, ctx.user.id);
+      }
       if (input.data.name !== undefined || input.data.zelloUsername !== undefined) {
         const { syncPdaZelloName } = await import("./pdaZelloName");
         void syncPdaZelloName(input.id);
@@ -883,6 +888,9 @@ export const operationalRouter = router({
       const pda = await getPdaById(input.id);
       if (!pda) throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado." });
       await updatePda(input.id, { status: "inactive" });
+      // (auditoria A2) a sessão que estava no PDA acaba de vez.
+      const { endPdaSessionOnRetire } = await import("./pdaSession");
+      await endPdaSessionOnRetire(input.id, ctx.user.id);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "pda", entityId: input.id, details: `PDA retirado (passou a Inativo; histórico mantido): ${pda.name}` });
       return { success: true, retired: true };
     }),

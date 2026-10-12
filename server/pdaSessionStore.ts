@@ -26,6 +26,8 @@ export interface PdaSessionStore {
   read(pdaId: number): Promise<PdaSessionRow | null>;
   /** Acaba a sessão só se o nonce ainda for este (outra entrada entretanto → nada). */
   clearIf(pdaId: number, nonce: string): Promise<boolean>;
+  /** PDA retirado (inativo, perdido, manutenção): acaba a sessão que lá estiver, seja qual for. */
+  clearAny(pdaId: number): Promise<boolean>;
   /** Sessões abertas destas contas (para a saída do ponto e o fecho automático). */
   openSessionsOf(userIds: readonly number[]): Promise<Array<{ pdaId: number; nonce: string; userId: number }>>;
   /** Todas as sessões de PDA abertas ("Terminar as sessões de todas as contas"). */
@@ -72,6 +74,12 @@ export const sqlPdaSessionStore: PdaSessionStore = {
     const d = await database();
     if (!d) return false;
     const r = await d.execute(sql`UPDATE pdas SET sessionNonce = NULL WHERE id = ${pdaId} AND sessionNonce = ${nonce}`);
+    return affected(r) > 0;
+  },
+  async clearAny(pdaId) {
+    const d = await database();
+    if (!d) return false;
+    const r = await d.execute(sql`UPDATE pdas SET sessionNonce = NULL WHERE id = ${pdaId} AND sessionNonce IS NOT NULL`);
     return affected(r) > 0;
   },
   async openSessionsOf(userIds) {

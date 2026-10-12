@@ -111,6 +111,7 @@ const m = vi.hoisted(() => {
     },
     async read(pdaId: number) { const p = pdaOf(pdaId); return p ? { userId: p.sessionUserId ?? null, nonce: p.status === "active" ? p.sessionNonce ?? null : null, startedAt: p.sessionStartedAt ?? null } : null; },
     async clearIf(pdaId: number, nonce: string) { const p = pdaOf(pdaId); if (!p || p.sessionNonce !== nonce) return false; p.sessionNonce = null; return true; },
+    async clearAny(pdaId: number) { const p = pdaOf(pdaId); if (!p || !p.sessionNonce) return false; p.sessionNonce = null; return true; },
     async openSessionsOf(ids: number[]) { return state.pdas.filter((p) => p.sessionNonce && ids.includes(p.sessionUserId)).map((p) => ({ pdaId: p.id, nonce: p.sessionNonce, userId: p.sessionUserId })); },
     async allOpenSessions() { return state.pdas.filter((p) => p.sessionNonce).map((p) => ({ pdaId: p.id, nonce: p.sessionNonce, userId: p.sessionUserId })); },
     async accountsOfEmployee(employeeId: number) { const f = state.fichas.find((x) => x.id === employeeId); return f ? [f.userId, ...(f.aliasUserIds ?? [])].filter(Boolean) : []; },
@@ -153,6 +154,8 @@ vi.mock("./db", async (original) => ({
     return p ? { pdaId: p.id, pdaName: p.name, zelloUsername: null, replacedName: null, changed: true } : null;
   },
   verifyPdaQrCode: async (pdaId: number, code: string) => { const p = m.state.pdas.find((x) => x.id === pdaId && x.qrCode === code && x.status === "active"); return p ? { name: p.name } : null; },
+  updatePda: async (id: number, data: any) => { Object.assign(m.state.pdas.find((x) => x.id === id) ?? {}, data); },
+  getPdaById: async (id: number) => m.state.pdas.find((x) => x.id === id),
   setPdaDeviceToken: async (pdaId: number) => { const p = m.state.pdas.find((x) => x.id === pdaId); const t = `tok${++m.state.nextId}`.padEnd(32, "x"); p.deviceToken = t; return t; },
   getTimeRecords: async (employeeId: number) => m.state.timeRecords.get(employeeId) ?? [],
   checkGeofenceNote: async () => null,
@@ -1008,5 +1011,35 @@ describe("auditoria A2: só o nosso email de código é saltado na sincronizaç�
     expect(parseGmailMessage(msg("Cliente <cliente@gmail.com>")).loginMail).toBe(false);
     expect(parseGmailMessage(msg("Multipark <acesso@multipark.pt>")).loginMail).toBe(true);
     expect(parseGmailMessage(msg("Multipark <ACESSO@Multipark.pt>")).loginMail).toBe(true);
+  });
+});
+
+describe("auditoria A2: PDA retirado (perdido, inativo, manutenção) acaba a sessão de vez", () => {
+  it("marcar como perdido e voltar a ativo NÃO ressuscita a sessão que estava no aparelho", async () => {
+    lisbon();
+    const dev = device();
+    await codeLogin(dev, "joaquim@gmail.com");
+    expect(await dev.valid()).toBe(true);
+    const sup = device();
+    await googleSession(sup, userBy(22));
+    await (await sup.caller()).operational.pdas.update({ id: 7, data: { status: "lost" } });
+    expect(await dev.valid()).toBe(false);
+    expect(pda7().sessionNonce).toBeNull();
+    // encontrado: volta a ativo — quem tem o aparelho NÃO fica com a sessão do Joaquim
+    await (await sup.caller()).operational.pdas.update({ id: 7, data: { status: "active" } });
+    expect(await dev.valid()).toBe(false);
+    expect(m.state.logs.some((l) => l.action === "pda_session_end" && /retirado/.test(l.details))).toBe(true);
+  });
+
+  it("'Retirar' (inativo) também acaba a sessão", async () => {
+    lisbon();
+    const dev = device();
+    await codeLogin(dev, "joaquim@gmail.com");
+    addUser({ id: 2, role: "admin", name: "Admin" });
+    const adm = device();
+    await googleSession(adm, userBy(2));
+    await (await adm.caller()).operational.pdas.delete({ id: 7 });
+    pda7().status = "active";
+    expect(await dev.valid()).toBe(false);
   });
 });
