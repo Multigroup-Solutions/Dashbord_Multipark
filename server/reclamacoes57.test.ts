@@ -85,7 +85,7 @@ import { aiMergeSameClient, isPublicMailDomain } from "../shared/complaintIntake
 import { AUTOMATION_FLAGS, SETTINGS, automationFlagDefault, validateSetting } from "../shared/appSettings";
 import { isCompanyAddress } from "../shared/mail";
 import { clientMailHistory, clientThreadsUnion, dbClientMailDeps, type ClientMailDeps } from "./complaintClientMail";
-import { createFromSuggestion, dbIntakeDeps, intakeFromRouting, type IntakeDeps, type IntakeMessage } from "./complaintMailIntake";
+import { createFromSuggestion, dbIntakeDeps, intakeFactsText, intakeFromRouting, type IntakeDeps, type IntakeMessage } from "./complaintMailIntake";
 import { routeEmailMessage, type EmailRoutingDeps, type EmailRoutingMessage } from "./commsRouting";
 import { availableTargets } from "../shared/commsBoxes";
 import { MIGRATION_0630_STATEMENTS, IDEMPOTENT_ERROR_CODES_0630 } from "./migrations/migration_0630";
@@ -852,5 +852,16 @@ describe("auditoria 57 — a Multipark lenta não prende os emails do cliente", 
     const m = src("server/complaintClientMail.ts");
     expect(m).toContain("multiparkDbQuery(q, p, { timeoutMs: 5_000 })");
     expect(m).toContain("Promise.allSettled([");
+  });
+});
+
+describe("auditoria 57 — a queixa em resposta a uma newsletter nossa não é 'newsletter'", () => {
+  it("as regras leem só a mensagem nova (o rodapé citado da newsletter não conta)", () => {
+    const body = "Cobraram-me duas vezes a reserva de outubro e ninguém responde!\n\nEm 10/10/2026, Multipark escreveu:\n> Promoções de outono\n> Para cancelar a subscrição clique aqui";
+    const v = { aiBoxKey: "reclamacoes", confidence: 0.95 };
+    expect(complaintIntakeDecision(v, { ...FACTS, text: intakeFactsText(body) }, SETTINGS_57)).toEqual({ action: "create" });
+    // uma newsletter a sério continua a ser newsletter
+    expect(complaintIntakeDecision(v, { ...FACTS, text: intakeFactsText("Promoções de outono. Para cancelar a subscrição clique aqui.") }, SETTINGS_57)).toEqual({ action: "skip", why: "newsletter" });
+    expect(src("server/complaintMailIntake.ts")).toContain("text: intakeFactsText(r.bodyText ?? msg.text),");
   });
 });

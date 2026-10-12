@@ -35,6 +35,7 @@ import {
 } from "../shared/complaintIntake";
 import { clientThreadAllowed, clientThreadLink, visibleSharedBoxes } from "../shared/complaintClientMail";
 import { isAutomatedSender, isCompanyAddress, type MailViewer } from "../shared/mail";
+import { stripQuoted } from "./commsRouting";
 import type { ParsedGmailMessage } from "./mail/parse";
 import type { GmailApi } from "./mail/gmailApi";
 
@@ -188,6 +189,16 @@ export async function partnerEmails(d: any): Promise<string[]> {
   return [...a, ...b].map((r) => String(r.e ?? "")).filter(Boolean);
 }
 
+/**
+ * O texto que as regras (newsletter…) leem: só a mensagem NOVA, sem o histórico
+ * citado — o cliente que responde a uma newsletter nossa com uma queixa trazia
+ * no fim o "cancelar a subscrição" dela e a reclamação era deitada fora como
+ * newsletter (auditoria do lote 57). PURA.
+ */
+export function intakeFactsText(body: string | null | undefined): string {
+  return stripQuoted(String(body ?? ""));
+}
+
 async function factsOf(msg: IntakeMessage): Promise<IntakeFacts & { boxLabel: string; uncertain?: boolean }> {
   const d = await database();
   const r = rowsOf(await d.execute(sql`SELECT m.direction, m.automated, m.fromEmail, m.subject, LEFT(m.bodyText, 20000) AS bodyText,
@@ -211,7 +222,7 @@ async function factsOf(msg: IntakeMessage): Promise<IntakeFacts & { boxLabel: st
     senderIsAutomated: !!sender && isAutomatedSender(sender),
     senderIsPartner,
     subject: String(r.subject ?? msg.subject ?? ""),
-    text: String(r.bodyText ?? msg.text ?? ""),
+    text: intakeFactsText(r.bodyText ?? msg.text),
     senderEmail: sender,
     boxLabel: box?.label ?? msg.fromBoxKey,
     uncertain,
