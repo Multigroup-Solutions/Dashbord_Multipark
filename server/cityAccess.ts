@@ -16,6 +16,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'rh.uploadMyPhoto', 'operational.pdas.mine', 'googleDrive.status', 'settings.security.endMySessions',
     // 49c: quem entra sem ficha liga a conta ("Sou novo" / "Já me candidatei") e quem está inativo diz "Voltei".
     'accountLink.mine', 'accountLink.startCandidate', 'accountLink.request', 'accountLink.confirmCode', 'rh.comeback',
+    // Plano 56 B1: o terminal da própria pessoa (a cidade vem do GPS e da ficha; sem cidade a resposta diz o que fazer).
+    'terminal.status', 'terminal.start', 'terminal.stop', 'terminal.requestHandover', 'terminal.answerHandover',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 

@@ -3987,6 +3987,7 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   // terminal → a saída esquecida fica "por confirmar" (o trabalho diário tenta
   // logo a seguir "até à última recolha/entrega"; senão decide o RH).
   let terminalOn: boolean | null = null;
+  let terminalDeps: import("./terminalSessions").TerminalDeps | null = null;
   let closed = 0;
   for (const r of rows as any[]) {
     const outAt = new Date(new Date(r.recordedAt).getTime() + 12 * 3600000);
@@ -4004,6 +4005,16 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
       ...(terminalStatus ? { terminalStatus } : {}),
     } as any);
     closed++;
+    // Terminal pelo perfil (plano 56 B1): o ponto esquecido fechado sozinho
+    // também liberta o lugar no terminal (endReason "stale_checkout"; as horas
+    // ficam "por confirmar"). Nunca parte o fecho do ponto.
+    try {
+      const ts = await import("./terminalSessions");
+      terminalDeps ??= await ts.realTerminalDeps();
+      await ts.releaseOnCheckout(terminalDeps, { employeeId: Number(r.employeeId), actorUserId: null, endedAtMs: outAt.getTime(), fix: null, reason: "stale_checkout" });
+    } catch (err) {
+      console.warn("[terminal] lugar não libertado no fecho automático do ponto:", String((err as any)?.message ?? err).slice(0, 160));
+    }
   }
   return { closed };
 }

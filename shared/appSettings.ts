@@ -193,10 +193,23 @@ export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro
  * por cidade. Entrada/saída do ponto de um extra com GPS dentro do raio do
  * aeroporto da cidade dele = troço de terminal (shared/pontoTerminal.ts).
  */
+const latSchema = z.number({ error: "Indica a latitude (ex.: 38.7742)." }).min(-90, "Latitude entre -90 e 90.").max(90, "Latitude entre -90 e 90.");
+const lngSchema = z.number({ error: "Indica a longitude (ex.: -9.1342)." }).min(-180, "Longitude entre -180 e 180.").max(180, "Longitude entre -180 e 180.");
+/**
+ * Plano 56 (terminal pelo perfil): zonas por terminal (T1/T2…), centro + raio.
+ * Opcional — sem zonas vale o círculo do aeroporto (como até aqui).
+ */
+const terminalZoneSchema = z.object({
+  label: z.string().trim().max(40, "Nome da zona: máximo 40 caracteres.").optional(),
+  lat: latSchema,
+  lng: lngSchema,
+  radiusM: z.number({ error: "Indica o raio da zona em metros." }).int("Raio em metros inteiros.").min(50, "Raio mínimo da zona: 50 m.").max(5000, "Raio máximo da zona: 5 000 m."),
+});
 const airportFenceSchema = z.object({
-  lat: z.number({ error: "Indica a latitude (ex.: 38.7742)." }).min(-90, "Latitude entre -90 e 90.").max(90, "Latitude entre -90 e 90."),
-  lng: z.number({ error: "Indica a longitude (ex.: -9.1342)." }).min(-180, "Longitude entre -180 e 180.").max(180, "Longitude entre -180 e 180."),
+  lat: latSchema,
+  lng: lngSchema,
   radiusM: z.number({ error: "Indica o raio em metros." }).int("Raio em metros inteiros.").min(100, "Raio mínimo: 100 m.").max(10000, "Raio máximo: 10 000 m."),
+  zones: z.array(terminalZoneSchema).max(6, "Máximo 6 zonas por aeroporto.").optional(),
 });
 export const terminalAirportsSchema = z.object({ lisbon: airportFenceSchema, porto: airportFenceSchema, faro: airportFenceSchema }, { error: "Indica os aeroportos de Lisboa, Porto e Faro." });
 export const TERMINAL_AIRPORTS_SETTING_KEY = "ponto.terminalAirports" as const;
@@ -560,7 +573,7 @@ export const SETTINGS = {
     key: TERMINAL_AIRPORTS_SETTING_KEY,
     group: "extras",
     label: "Aeroportos (terminal no ponto)",
-    description: "Centro e raio do aeroporto de cada cidade. Com o interruptor \"Terminal no ponto (aeroporto)\" ligado (Definições → Automações), a entrada de um extra com GPS dentro deste raio (aeroporto da cidade dele) abre um troço de terminal, pago à taxa do nível seguinte. A saída fora do raio ou sem GPS conta o terminal até à última recolha/entrega do extra no troço; sem nenhuma, fica \"por confirmar\" até o RH ver.",
+    description: "Centro e raio do aeroporto de cada cidade. Com o interruptor \"Terminal no ponto (aeroporto)\" ligado (Definições → Automações), o \"Estou no terminal\" (fotografia lá em cima, ou na entrada do ponto) só abre com o GPS dentro deste raio (descontada a imprecisão do GPS), no aeroporto de uma cidade onde a pessoa trabalha. Mais tarde cada aeroporto pode ter zonas por terminal (T1/T2: centro e raio); sem zonas vale este círculo.",
     schema: terminalAirportsSchema,
     defaultValue: DEFAULT_TERMINAL_AIRPORTS,
     wiring: "live",
@@ -832,7 +845,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
   // Pauta do Rafael (Jorge, 7 out 2026): mexe no dinheiro (ordenado e custos) → desligado por omissão.
-  { name: "PONTO_TERMINAL", label: "Terminal no ponto (aeroporto)", description: "O extra que dá saída + entrada no aeroporto da cidade dele (GPS dentro do raio, Definições → Parâmetros → Extras-dia → \"Aeroportos (terminal no ponto)\") conta esse troço como terminal: paga à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master; o master fica master), no ordenado, no recibo e no custo dos extras. Antes de sair do aeroporto volta a dar saída + entrada e passa a extra normal. Saída fora do aeroporto (ou sem GPS, ou esquecida): o terminal conta até à última recolha ou entrega feita por ele na Multipark dentro do troço (só leitura) e o resto é hora normal; sem nenhuma, o troço fica \"por confirmar\" (não paga terminal) até o RH o confirmar na ficha → Ponto. Desligado: nada muda no ordenado nem nos ecrãs.", defaultEnabled: false },
+  // Plano 56 (Jorge, 12 out 2026): passa a ser "terminal pelo perfil + pagamento".
+  { name: "PONTO_TERMINAL", label: "Terminal no ponto (aeroporto)", description: "Terminal pelo perfil. Extras, condutores e team leaders carregam na fotografia → \"Estou no terminal\" (ou marcam \"Estou no terminal\" na entrada do ponto). O GPS tem de estar no aeroporto de uma cidade onde a pessoa trabalha (Definições → Parâmetros → Extras-dia → \"Aeroportos (terminal no ponto)\"). Só uma pessoa por cidade e cada pessoa só num terminal: ocupado → \"Pedir ao João para passar\" (sino ao João e ao TL de serviço). O TL/supervisor da cidade põe, passa ou fecha em Atividade diária → Ao vivo → Terminal agora (com motivo). A saída do ponto liberta o lugar. As horas de terminal pagam ao nível seguinte só aos extras (júnior → sénior, sénior → terminal, terminal → master); condutores e TL ficam no terminal sem mudar o valor. O método antigo (saída + entrada no aeroporto) deixa de contar. Ainda não ligar: o ordenado só passa a ler o terminal pelo perfil no passo seguinte. Desligado: nada aparece e nada muda.", defaultEnabled: false },
   { name: "ZELLO_PDA_NAMES", label: "Zello: nome de quem tem o PDA no mapa", description: "Quando alguém faz login num PDA (registado pelo QR), o nome da conta Zello desse PDA passa a \"PDA 12 · Rui Santos\"; no logout volta a \"PDA 12\". Assim o mapa do Zello mostra quem está com cada PDA. Escreve no Zello (só o nome). Desligado por omissão até testar com um PDA.", defaultEnabled: false },
   // 20b (Jorge, 2 out 2026): mexe em fichas de clientes sozinho → só o super admin o liga/desliga.
   { name: "CRM_AUTO_MERGE", label: "CRM: juntar sozinho as fichas óbvias", description: "Todas as madrugadas (depois das sugestões das 05:15; se não acabar, continua) o CRM junta sozinho as fichas com o mesmo 1.º e último nome e um dado igual (email, telefone ou matrícula), ou com o mesmo email E telefone mesmo com outro nome. Nunca empresas, clientes Pro, emails genéricos (info@, reservas@…), dados em mais de 2 fichas nem NIF pessoais diferentes. Fica a ficha com mais reservas; cada junção aparece em Rever fichas → Juntas recentemente e pode ser separada. As dúvidas só vão à IA com \"IA: fichas de clientes duvidosas\" ligado.", defaultEnabled: true, superAdminOnly: true },

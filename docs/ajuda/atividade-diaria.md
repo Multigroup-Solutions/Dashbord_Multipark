@@ -2,7 +2,7 @@
 modulo: atividade_diaria
 titulo: Actividade Diária (quem fez o quê, GPS e PDAs)
 rotas: /operacional
-palavras: semana, quadro da semana, semana por hora, entregas por hora, recolhas por hora, quantas entregas, tempo por carro, p75, dia operacional, resumo do dia, quem trabalhou, dia do condutor, velocidade máxima, velocidade por entrega, excesso de velocidade, km da equipa, horas paradas, parado no turno, entregas mais lentas, entrega lenta, pedidos à espera, excesso de pedidos, chefe de turno, equipa do turno, sem passagem de turno, entregas a tempo, entregas atrasadas, recolhas atrasadas, horas trabalhadas, tempo parado, reclamações dos carros que saíram, reclamações das saídas, avaliação do mês, ranking do mês, dono do pda, zello do pda, nome do zello, trajeto, mapa das velocidades, geojson, recolher dados, forçar re-divisão, escolher pessoa, actividade diária, atividade diária, atividade do dia, quem fez o quê, recolhas, entregas, movimentações, no horário, fora do horário, escalados, km, quilómetros, gps, zello, velocidade, excessos, histórico de velocidade, ao vivo, mapa, pda, pdas, check-in do pda, retirar pda, agente por ligar, parceiro, pda sem login, ponto
+palavras: terminal agora, quem está no terminal, pôr no terminal, passar o terminal, fechar o terminal, semana, quadro da semana, semana por hora, entregas por hora, recolhas por hora, quantas entregas, tempo por carro, p75, dia operacional, resumo do dia, quem trabalhou, dia do condutor, velocidade máxima, velocidade por entrega, excesso de velocidade, km da equipa, horas paradas, parado no turno, entregas mais lentas, entrega lenta, pedidos à espera, excesso de pedidos, chefe de turno, equipa do turno, sem passagem de turno, entregas a tempo, entregas atrasadas, recolhas atrasadas, horas trabalhadas, tempo parado, reclamações dos carros que saíram, reclamações das saídas, avaliação do mês, ranking do mês, dono do pda, zello do pda, nome do zello, trajeto, mapa das velocidades, geojson, recolher dados, forçar re-divisão, escolher pessoa, actividade diária, atividade diária, atividade do dia, quem fez o quê, recolhas, entregas, movimentações, no horário, fora do horário, escalados, km, quilómetros, gps, zello, velocidade, excessos, histórico de velocidade, ao vivo, mapa, pda, pdas, check-in do pda, retirar pda, agente por ligar, parceiro, pda sem login, ponto
 ---
 # Actividade Diária
 
@@ -82,6 +82,10 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
   - **Forçar re-divisão** volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa-se depois de corrigir um check-in. Não volta ao Zello nem muda as velocidades.
 
 **Ao Vivo**
+- **Terminal agora** (em cima; só com o interruptor "Terminal no ponto (aeroporto)" ligado): por cidade, **quem está no terminal e desde quando**, como entrou (pelo GPS, na entrada do ponto, passado pelo colega, posto pelo TL) e quem pediu o lugar. "Livre" = ninguém.
+  - O **team leader e acima**, só nas suas cidades, têm **Pôr** (terminal livre), **Passar** e **Fechar** (terminal ocupado). Escolhe a pessoa (só aparecem as que têm o ponto aberto e trabalham nessa cidade) e escreve sempre o **motivo**. Não precisa de GPS.
+  - A pessoa recebe o aviso no sino. Fica registado quem fez, quando e porquê (Logs). Nada se apaga.
+  - "sem ponto aberto" ao lado do nome: a pessoa já deu saída — quem chegar ao terminal entra logo.
 - Mapa com a posição de cada condutor. Atualiza sozinho a cada 30 segundos.
 - Em cima fica uma linha só: quantos estão no mapa, a hora da última leitura e os alertas contados (acima do limite de velocidade, bateria fraca, sem reportar há mais de 1 h). Carrega num alerta para ver os nomes.
 - **Atualizar** lê tudo de novo (posições, ligações Zello ↔ pessoas e PDAs) e volta a mostrar toda a gente no mapa.

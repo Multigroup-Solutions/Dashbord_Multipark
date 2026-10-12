@@ -28,6 +28,7 @@ import {
   type PrevRecordLike,
   type TerminalResolution,
 } from "../shared/pontoTerminal";
+import { isTerminalExtra } from "../shared/terminalSession";
 import type { MultiparkRead } from "./multiparkDb/read";
 import type { AgentServiceInstant } from "./multiparkDb/movements";
 
@@ -58,9 +59,13 @@ export async function loadTerminalAirports(): Promise<AirportsMap> {
   }
 }
 
-/** É extra (posto ou tipo de contrato)? Só os extras têm terminal. */
+/**
+ * É extra (posto ou tipo de contrato)? Só os extras têm o nível +1 no
+ * pagamento do terminal (plano 56: `payUplift`). A regra vive em
+ * shared/terminalSession.ts (`isTerminalExtra`) — a mesma para os dois.
+ */
 export function isExtraEmployee(e: { position?: string | null; contractType?: string | null } | null | undefined): boolean {
-  return !!e && (e.position === "extra" || e.contractType === "extra");
+  return isTerminalExtra(e);
 }
 
 /** Aeroporto da cidade da ficha (centro de custos → candidatura → morada), ou null. */
