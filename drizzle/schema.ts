@@ -2644,9 +2644,45 @@ export const users = mysqlTable("users", {
 	notificationPrefs: json(),
 	// 0525 — caixa de email por onde a pessoa entra na Comunicação (chave ou "me"; NULL = automática).
 	mailHomeBox: varchar({ length: 64 }),
+	// 0620 — identificador da conta Google (sem "google_"); o login Google
+	// procura por aqui primeiro, depois pelo openId e pelo email (plano 56).
+	googleSub: varchar({ length: 64 }),
+	// 0620 — a palavra-passe (passwordHash, passwordSetAt, passwordFailedDay,
+	// passwordFailedCount, passwordLockedUntil) existe na tabela mas NÃO está
+	// aqui de propósito: `select().from(users)` chega ao cliente (auth.me,
+	// Utilizadores). Só server/loginStore.ts a lê e escreve, por SQL.
 },
 (table) => [
 	uniqueIndex("users_openId_unique").on(table.openId),
+	uniqueIndex("users_googleSub_unique").on(table.googleSub),
+]);
+
+// 0620 — pedidos de código de entrada (plano 56): o código só em HMAC, preso
+// ao aparelho que o pediu (hash do cookie app_login_nonce). `deliveredTo` =
+// contas a quem foi o código (TL/supervisor de serviço, ou RH/admins). Nada se apaga.
+export const loginCodes = mysqlTable("login_codes", {
+	id: int().autoincrement().primaryKey(),
+	emailNorm: varchar({ length: 320 }).notNull(),
+	userId: int(),
+	employeeId: int(),
+	codeHash: char({ length: 64 }).notNull(),
+	deviceNonceHash: char({ length: 64 }).notNull(),
+	deviceLabel: varchar({ length: 120 }),
+	pdaId: int(),
+	cityKey: varchar({ length: 16 }),
+	deliveredTo: json(),
+	deliveryMode: mysqlEnum(['duty','email']).default('duty').notNull(),
+	expiresAt: datetime({ mode: 'string' }).notNull(),
+	attempts: int().default(0).notNull(),
+	usedAt: datetime({ mode: 'string' }),
+	usedByUserId: int(),
+	ipHash: varchar({ length: 32 }),
+	createdAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	index("idx_login_codes_device").on(table.emailNorm, table.deviceNonceHash, table.id),
+	index("idx_login_codes_created").on(table.createdAt),
+	index("idx_login_codes_user").on(table.usedByUserId, table.usedAt),
 ]);
 
 export const vehicleMovements = mysqlTable("vehicle_movements", {

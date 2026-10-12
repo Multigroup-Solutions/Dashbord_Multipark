@@ -33,7 +33,7 @@ import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
-import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
+import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, LOGIN_CODE_DELIVERY_SETTING_KEY, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
 import { AIRPORT_LABELS, type AirportCityId } from "@shared/pontoTerminal";
 import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -646,6 +646,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const isZelloList = item.key === "zello.gpsExcludedUsers";
   const isEmails = item.key === "emails.handoverCc" || isZelloList;
   const isParkList = item.key === EXCLUDED_PARKS_SETTING_KEY;
+  // Plano 56: para onde vai o código de entrada (duas escolhas).
+  const isLoginDelivery = item.key === LOGIN_CODE_DELIVERY_SETTING_KEY;
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
@@ -860,6 +862,14 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
           <Switch checked={bool} onCheckedChange={setBool} aria-label={item.label} />
           {bool ? "Ligado" : "Desligado"}
         </label>
+      ) : isLoginDelivery ? (
+        <Select value={text || "duty"} onValueChange={setText} disabled={locked}>
+          <SelectTrigger className="max-w-sm" aria-label={item.label}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="duty">TL e supervisor de serviço (sem cidade: RH e admins)</SelectItem>
+            <SelectItem value="email">Email da pessoa, pela acesso@ (ainda não disponível)</SelectItem>
+          </SelectContent>
+        </Select>
       ) : isTime ? (
         <Input type="time" className="w-32" value={text} onChange={(e) => setText(e.target.value)} aria-label={item.label} />
       ) : isJson ? (

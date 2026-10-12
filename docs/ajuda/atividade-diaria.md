@@ -86,6 +86,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
   - O **team leader e acima**, só nas suas cidades, têm **Pôr** (terminal livre), **Passar** e **Fechar** (terminal ocupado). Escolhe a pessoa (só aparecem as que têm o ponto aberto e trabalham nessa cidade) e escreve sempre o **motivo**. Não precisa de GPS.
   - A pessoa recebe o aviso no sino. Fica registado quem fez, quando e porquê (Logs). Nada se apaga.
   - "sem ponto aberto" ao lado do nome: a pessoa já deu saída — quem chegar ao terminal entra logo.
+- **Códigos de entrada** (só com **Entrar com email e código** ligado): os pedidos dos últimos 15 minutos cujo código veio para ti (TL de serviço e supervisores da cidade; sem cidade, RH e admins) — nome, foto da ficha, aparelho e o código. Dá-o só à própria pessoa, quando ta pedir. Os que já foram usados ou passaram do prazo ficam por baixo, sem o código.
 - Mapa com a posição de cada condutor. Atualiza sozinho a cada 30 segundos.
 - Em cima fica uma linha só: quantos estão no mapa, a hora da última leitura e os alertas contados (acima do limite de velocidade, bateria fraca, sem reportar há mais de 1 h). Carrega num alerta para ver os nomes.
 - **Atualizar** lê tudo de novo (posições, ligações Zello ↔ pessoas e PDAs) e volta a mostrar toda a gente no mapa.

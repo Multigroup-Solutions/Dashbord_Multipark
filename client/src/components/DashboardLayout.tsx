@@ -1,6 +1,8 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { BlockedOwnDocuments } from "@/components/BlockedOwnDocuments";
 import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
+import { PushAlertsPrompt } from "@/components/login/PushAlertsPrompt";
+import { codeLoginCached } from "@/lib/loginOptions";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -385,7 +387,7 @@ export default function DashboardLayout({
               size="lg"
               className="w-full shadow-lg hover:shadow-xl transition-all"
             >
-              Entrar com Google
+              {codeLoginCached() ? "Entrar" : "Entrar com Google"}
             </Button>
           )}
         </div>
@@ -1020,6 +1022,8 @@ function DashboardLayoutContent({
         {/* pb extra: a última linha da página não fica por baixo da tab bar
             (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
+          {/* Plano 56: TL e supervisor recebem os códigos de entrada — "Ativar avisos" (uma vez por aparelho). */}
+          <PushAlertsPrompt role={user?.role ?? null} />
           {routeDecision.kind === "no_access" ? (
             <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout}
               hint={noAccessHint(location, new Set(filteredItems.map(i => i.path)))} onHint={(to) => setLocation(to)} />

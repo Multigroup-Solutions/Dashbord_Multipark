@@ -42,6 +42,16 @@ export function loginUrlWithReturn(path?: string | null): string {
 }
 
 /**
+ * Plano 56: com "Entrar com email e código" ligado, entrar é na página de
+ * entrada (email + palavra-passe, código, ou Google), com o regresso em
+ * `?next=`. PURA.
+ */
+export function loginPageUrl(path?: string | null): string {
+  const next = safeReturnPath(path);
+  return next ? `/?next=${encodeURIComponent(next)}` : "/";
+}
+
+/**
  * D61 (Jorge, 3 out 2026): num PDA (aparelho partilhado) o login da Google
  * pede SEMPRE para escolher a conta — senão entra com a conta de quem usou o
  * PDA antes. O servidor não sabe que é um PDA (o token do aparelho vive no

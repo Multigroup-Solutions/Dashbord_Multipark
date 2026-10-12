@@ -117,6 +117,7 @@ import { operationalRouter } from "./operationalRouter";
 import { terminalRouter } from "./terminalRouter";
 import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
 import { availabilityPatternProcedures } from "./availabilityPatternRouter";
+import { loginProcedures } from "./loginRouter";
 
 /** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
@@ -595,6 +596,8 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
+    // Plano 56 (A1): entrar com email + código + palavra-passe (ENTRAR_COM_CODIGO).
+    ...loginProcedures,
   }),
 
   // ── USERS ───────────────────────────────────────────────────────────────────
@@ -830,6 +833,22 @@ export const appRouter = router({
           token: invite.token,
           expiresAt: invite.expiresAt,
         };
+      }),
+    /**
+     * Plano 56: "Repor acesso" — tira a palavra-passe e o bloqueio, termina as
+     * sessões (sessionVersion + 1) e avisa a pessoa (entra com um código e cria
+     * outra). Fica no registo. Ninguém define a palavra-passe de outro.
+     */
+    resetAccess: protectedProcedure
+      .input(z.object({ userId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Para a tua conta usa o Perfil → Palavra-passe." });
+        const target = await assertCanManageUser(ctx.user, input.userId);
+        const { realLoginDeps, resetAccess } = await import("./loginCode");
+        await resetAccess(await realLoginDeps(), { id: ctx.user.id, name: ctx.user.name ?? null }, { id: target.id, name: target.name ?? null, email: target.email ?? null });
+        const { bumpSessionVersion } = await import("./appSettings");
+        await bumpSessionVersion(target.id);
+        return { success: true };
       }),
     getInvites: protectedProcedure
       .input(z.object({ userId: z.number() }))
@@ -2211,6 +2230,36 @@ export const appRouter = router({
       await markAllNotificationsRead(ctx.user.id);
       return { success: true };
     }),
+    // Plano 56: "Ativar avisos" para todos (antes só quem atende o WhatsApp).
+    // As mesmas subscrições do server/webPush.ts; cada um só mexe nas suas.
+    pushState: protectedProcedure
+      .input(z.object({ endpoint: z.string().url().max(2048).nullable() }))
+      .query(async ({ ctx, input }) => {
+        const { vapidConfig, hasPushSubscription } = await import("./webPush");
+        const cfg = vapidConfig();
+        if (!cfg) return { available: false as const, publicKey: null, registered: false };
+        const registered = input.endpoint ? await hasPushSubscription(ctx.user.id, input.endpoint) : false;
+        return { available: true as const, publicKey: cfg.publicKey, registered };
+      }),
+    pushSubscribe: protectedProcedure
+      .input(z.object({ endpoint: z.string().url().max(2048), keys: z.object({ p256dh: z.string().min(1).max(255), auth: z.string().min(1).max(64) }) }))
+      .mutation(async ({ ctx, input }) => {
+        const { vapidConfig, savePushSubscription } = await import("./webPush");
+        if (!vapidConfig()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Os avisos no telemóvel não estão configurados no servidor." });
+        const { pushSubscriptionError } = await import("../shared/webPush");
+        const err = pushSubscriptionError(input);
+        if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+        const ua = typeof ctx.req?.headers?.["user-agent"] === "string" ? ctx.req.headers["user-agent"] : null;
+        await savePushSubscription(ctx.user.id, input, ua);
+        return { ok: true };
+      }),
+    pushUnsubscribe: protectedProcedure
+      .input(z.object({ endpoint: z.string().url().max(2048) }))
+      .mutation(async ({ ctx, input }) => {
+        const { deletePushSubscription } = await import("./webPush");
+        await deletePushSubscription(ctx.user.id, input.endpoint);
+        return { ok: true };
+      }),
     // Preferências da própria pessoa (Perfil): tipos silenciados, email por
     // tipo e os tipos que PODE receber (pelas regras de roteamento).
     prefs: protectedProcedure.query(async ({ ctx }) => {

@@ -52,6 +52,9 @@ function EmployeeAgentSection({ employeeId, name }: { employeeId: number; name?:
  * nenhuma: os emails da ficha com que tem de entrar e as contas que entraram
  * SEM ficha e parecem ser dela (só a quem gere o RH de todas as cidades).
  */
+/** Formas de entrar que contam como "já entrou" (Google, código, palavra-passe). */
+const LOGGED_IN_METHODS = new Set(['google', 'email_code', 'password']);
+
 function EmployeeLoginsSection({ employeeId }: { employeeId: number }) {
   const q = trpc.rh.loginLinks.useQuery({ employeeId });
   const d = q.data;
@@ -60,11 +63,12 @@ function EmployeeLoginsSection({ employeeId }: { employeeId: number }) {
   if (!d) return null;
   const active = d.logins.filter(l => l.isActive);
   return <div className="space-y-2">
-    <p className="flex items-center gap-2 text-sm font-medium"><LogIn className="h-4 w-4" />Entra com a Google como</p>
+    <p className="flex items-center gap-2 text-sm font-medium"><LogIn className="h-4 w-4" />Entra como</p>
     {active.length > 0 ? <ul className="space-y-1">{active.map(l => <li key={l.userId} className="flex flex-wrap items-center gap-2 text-sm">
       <Badge variant={l.principal ? 'default' : 'secondary'}>{l.principal ? 'principal' : 'extra'}</Badge>
       <span className="min-w-0 [overflow-wrap:anywhere]">{l.email ?? `conta #${l.userId}`}</span>
-      <span className="text-xs text-muted-foreground">{l.lastSignedIn && l.loginMethod === 'google' ? `último login ${l.lastSignedIn}` : 'ainda não entrou'}</span>
+      {/* Plano 56: também conta quem entrou com um código ou com a palavra-passe. */}
+      <span className="text-xs text-muted-foreground">{l.lastSignedIn && LOGGED_IN_METHODS.has(l.loginMethod ?? '') ? `último login ${l.lastSignedIn}${l.loginMethod === 'google' ? ' (Google)' : l.loginMethod === 'password' ? ' (palavra-passe)' : ' (código)'}` : 'ainda não entrou'}</span>
     </li>)}</ul>
       : <div role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/20 dark:text-amber-100 space-y-1">
         <p><strong>Sem conta ligada.</strong> {d.fichaEmails.length

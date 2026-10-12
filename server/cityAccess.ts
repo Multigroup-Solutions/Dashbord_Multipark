@@ -16,6 +16,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'rh.uploadMyPhoto', 'operational.pdas.mine', 'googleDrive.status', 'settings.security.endMySessions',
     // 49c: quem entra sem ficha liga a conta ("Sou novo" / "Já me candidatei") e quem está inativo diz "Voltei".
     'accountLink.mine', 'accountLink.startCandidate', 'accountLink.request', 'accountLink.confirmCode', 'rh.comeback',
+    // Plano 56: a palavra-passe e os códigos de entrada que recebeu são de cada um.
+    'auth.password.status', 'auth.password.set', 'auth.password.change', 'auth.codes.pendingForMe',
     // Plano 56 B1: o terminal da própria pessoa (a cidade vem do GPS e da ficha; sem cidade a resposta diz o que fazer).
     'terminal.status', 'terminal.start', 'terminal.stop', 'terminal.requestHandover', 'terminal.answerHandover',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
@@ -49,7 +51,9 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
  * Só estes caminhos, e só para a própria ficha (ou caminhos sem ficha que
  * são de cada um).
  */
-const BLOCKED_SELF_PATHS = new Set(['rh.me', 'rh.byId', 'rh.documents.list', 'rh.documents.checklist', 'rh.documents.upload', 'rh.documents.uploadBatch', 'rh.uploadMyPhoto', 'permissions.mine', 'permissions.myCityAccess']);
+const BLOCKED_SELF_PATHS = new Set(['rh.me', 'rh.byId', 'rh.documents.list', 'rh.documents.checklist', 'rh.documents.upload', 'rh.documents.uploadBatch', 'rh.uploadMyPhoto', 'permissions.mine', 'permissions.myCityAccess',
+  // Plano 56: criar/mudar a própria palavra-passe logo a seguir ao código, mesmo com a ficha bloqueada.
+  'auth.password.status', 'auth.password.set', 'auth.password.change']);
 /** 'own' = precisa que a ficha do pedido seja a da pessoa; 'self' = não tem ficha no pedido (é sempre a da pessoa). PURA. */
 export function blockedSelfPathKind(path: string): 'own' | 'self' | null {
   if (!BLOCKED_SELF_PATHS.has(path)) return null;

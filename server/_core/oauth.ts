@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import * as db from "../db";
 import { adoptPlaceholderAccountByEmail, linkEmployeesToUserByEmail } from "../identity";
 import { resolveLoginComeback } from "../comebackLogin";
+import { methodAllowedForRole, type LoginMethod } from "@shared/loginCode";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 import { shouldRejectUnverifiedGoogleEmail } from "./googleIdentity";
@@ -100,6 +101,141 @@ async function logLogin(entry: { userId: number; action: "login" | "login_denied
   try {
     await db.logActivity({ userId: entry.userId, action: entry.action, entity: "user", entityId: entry.entityId, details: entry.details, source: "ui" } as any);
   } catch { /* registo */ }
+}
+
+/** O que `completeLogin` precisa da conta (a linha de `users`). */
+export interface LoginAccountLike {
+  id: number;
+  openId: string;
+  name?: string | null;
+  role: string;
+  isActive: number;
+  deactivationReason?: string | null;
+  sessionVersion?: number | null;
+}
+
+export type CompleteLoginResult =
+  | { ok: true; account: LoginAccountLike }
+  | { ok: false; reason: "missing" | "inactive" | "method" };
+
+const METHOD_LOG: Record<LoginMethod, string> = { google: "Entrou com a Google", code: "Entrou com um código de entrada", password: "Entrou com a palavra-passe" };
+const METHOD_TAG: Record<LoginMethod, string> = { google: "[OAuth]", code: "[Entrada]", password: "[Entrada]" };
+
+/**
+ * As portas COMUNS a todas as formas de entrar (Google, código, palavra-passe
+ * — plano 56): quem estava inativo e pode voltar ("Voltei"), a porta única da
+ * conta desativada (mesma mensagem para todos os casos), o papel × forma de
+ * entrar (palavra-passe/código só utilizador/extra/condutor), as fichas e a
+ * ficha de candidato com o mesmo email, a sessão e o registo. Quem chama trata
+ * da recusa (`ok: false`) e do destino. Nunca lança por causa das ligações.
+ */
+export async function completeLogin(opts: {
+  req: Request;
+  res: Response;
+  account: LoginAccountLike | null | undefined;
+  method: LoginMethod;
+  /** Email com que entrou (liga as fichas com esse email). */
+  email: string | null;
+  /** Nome que vai no cookie de sessão. */
+  sessionName: string;
+  /** Lê a conta outra vez (o "voltei" muda-a). */
+  reload: () => Promise<LoginAccountLike | null | undefined>;
+  /** Depois das portas e antes da sessão (ex.: marcar a entrada). Pode devolver a conta atualizada. */
+  beforeSession?: (account: LoginAccountLike) => Promise<LoginAccountLike | null | undefined | void>;
+  registeredPda?: boolean;
+}): Promise<CompleteLoginResult> {
+  const { req, res, method, email } = opts;
+  const tag = METHOD_TAG[method];
+  let account = opts.account ?? null;
+
+  // 49c (Jorge, 8 out 2026): quem está INATIVO (deixou de vir, pode
+  // voltar) e é extra/condutor volta a entrar como UTILIZADOR — chega à
+  // ficha, às disponibilidades e ao "Voltei". DESATIVADO (roubou,
+  // despedido, segurança…), estrutura ou conta sem ficha: como sempre.
+  // Os "Suspenso: sem atividade" (41a) passam a inativos aqui.
+  if (account) {
+    try {
+      const outcome = await resolveLoginComeback({ id: account.id, role: account.role, isActive: account.isActive, deactivationReason: account.deactivationReason ?? null });
+      if (outcome !== "none") {
+        console.log(`${tag} <${maskEmailForLog(email)}> ${outcome === "reactivated" ? "inativo voltou a entrar como utilizador" : "suspensão por inatividade passou a inativo"}`);
+        account = (await opts.reload()) ?? account;
+      }
+    } catch (err) {
+      console.warn(`${tag} Falha a ver se a pessoa pode voltar:`, String((err as Error)?.message ?? err).slice(0, 160));
+    }
+  }
+
+  // Porta de acesso ÚNICA: conta desativada (ou sem linha em `users`, se a
+  // BD estiver indisponível) → sem sessão e com a MESMA mensagem para
+  // todos os casos. Nunca distinguir "desconhecido" de "desativado".
+  if (!account || account.isActive !== 1) {
+    console.warn(
+      `${tag} Acesso recusado <${maskEmailForLog(email)}> — ${account ? "conta desativada" : "conta não encontrada"}`,
+    );
+    await logLogin({ userId: 0, action: "login_denied", entityId: account?.id ?? null, details: `Entrada recusada: ${account ? "conta desativada" : "conta não encontrada"} <${maskEmailForLog(email)}>` });
+    return { ok: false, reason: account ? "inactive" : "missing" };
+  }
+
+  // Plano 56: palavra-passe e código só para utilizador/extra/condutor (TL e acima entram com Google).
+  if (!methodAllowedForRole(method, account.role, { registeredPda: opts.registeredPda })) {
+    console.warn(`${tag} Acesso recusado <${maskEmailForLog(email)}> — o papel ${account.role} entra com Google`);
+    await logLogin({ userId: 0, action: "login_denied", entityId: account.id, details: `Entrada recusada: o papel ${account.role} entra com Google (tentou ${method === "code" ? "um código" : "a palavra-passe"}) <${maskEmailForLog(email)}>` });
+    return { ok: false, reason: "method" };
+  }
+
+  // A ficha de colaborador com o MESMO email é desta pessoa: fica ligada à
+  // conta (regra do Jorge, 2026-09-10). Sem isto o login criava a conta e a
+  // ficha ficava órfã. Best-effort — nunca pode partir o login.
+  const database = await db.getDb();
+  if (database && email) {
+    try {
+      const linked = await linkEmployeesToUserByEmail(database, account.id, email, { actorId: account.id, source: "ui" });
+      if (linked.length) console.log(`${tag} <${maskEmailForLog(email)}> ligado à(s) ficha(s) #${linked.join(", #")}`);
+    } catch (err) {
+      console.warn(`${tag} Falha a ligar ficha por email:`, String((err as Error)?.message ?? err).slice(0, 160));
+    }
+  }
+
+  // 49h: quem se candidatou por email (ficha de candidato criada pela IA no
+  // 1.º contacto, ainda sem conta) fica ligado logo ao entrar com esse email.
+  if (email) {
+    try {
+      const { linkCandidateFichaOnLogin } = await import("../accountLink");
+      const cand = await linkCandidateFichaOnLogin(account.id, email);
+      if (cand) console.log(`${tag} <${maskEmailForLog(email)}> ligado à ficha de candidato #${cand}`);
+    } catch (err) {
+      console.warn(`${tag} Falha a ligar a ficha de candidato:`, String((err as Error)?.message ?? err).slice(0, 160));
+    }
+  }
+
+  if (opts.beforeSession) {
+    const next = await opts.beforeSession(account);
+    if (next) account = next;
+  }
+
+  const sessionToken = await sdk.createSessionToken(account.openId, {
+    name: opts.sessionName,
+    expiresInMs: SESSION_MAX_MS,
+    sessionVersion: account.sessionVersion ?? 0,
+  });
+
+  const cookieOptions = getSessionCookieOptions(req);
+  res.cookie(COOKIE_NAME, sessionToken, {
+    ...cookieOptions,
+    maxAge: SESSION_MAX_MS,
+  });
+  await logLogin({ userId: account.id, action: "login", entityId: account.id, details: METHOD_LOG[method] });
+  return { ok: true, account };
+}
+
+/** ENTRAR_COM_CODIGO ligado? (o Google passa a procurar também pelo email). Falha = desligado. */
+async function codeLoginOn(): Promise<boolean> {
+  try {
+    const { codeLoginEnabled } = await import("../loginCode");
+    return await codeLoginEnabled();
+  } catch {
+    return false;
+  }
 }
 
 export function registerOAuthRoutes(app: Express) {
@@ -331,10 +467,35 @@ export function registerOAuthRoutes(app: Express) {
       const openId = `google_${userInfo.sub}`;
       const email = normalizeEmail(userInfo.email ?? "");
 
+      // Plano 56: a conta procura-se por googleSub → openId → (com
+      // ENTRAR_COM_CODIGO) email — assim Google e código caem na MESMA conta.
+      // Quem já entra com a Google segue o caminho de sempre ("default").
+      const { loginStore } = await import("../loginStore");
+      const store = loginStore();
+      let resolution: import("../loginAccount").GoogleResolution = { kind: "default", existing: null };
+      try {
+        const { resolveGoogleAccount } = await import("../loginAccount");
+        resolution = await resolveGoogleAccount(store, { sub: userInfo.sub, email, codeLogin: await codeLoginOn() });
+      } catch (err) {
+        console.warn("[OAuth] Falha a procurar a conta (segue o caminho de sempre):", String((err as Error)?.message ?? err).slice(0, 160));
+      }
+      if (resolution.kind === "conflict") {
+        console.warn(`[OAuth] Acesso recusado <${maskEmailForLog(email)}> — o email está na conta #${resolution.user.id}, ${resolution.reason}`);
+        await logLogin({ userId: 0, action: "login_denied", entityId: resolution.user.id, details: `Entrada recusada: <${maskEmailForLog(email)}> está na conta #${resolution.user.id}, ${resolution.reason} (não se junta sozinho)` });
+        try {
+          const { notify } = await import("../notify");
+          await notify({ kind: "login_conflict", title: `Entrada recusada: ${maskEmailForLog(email)} já está noutra conta Google`,
+            body: `Alguém entrou com uma conta Google com o email ${email}, que já está na conta #${resolution.user.id} ligada a OUTRA Google. Não se juntou sozinho: se for a mesma pessoa, junta as contas em Utilizadores → Ligações.`,
+            link: "/utilizadores", entity: { type: "login_google_conflict", id: `${resolution.user.id}:${userInfo.sub}` } });
+        } catch { /* o aviso nunca parte a recusa */ }
+        denyAccess(req, res);
+        return;
+      }
+
       // Modo fechado (opcional): só entra quem o backoffice já registou. Sem a
       // env, mantém-se o comportamento histórico — qualquer conta Google cria
       // um utilizador com role `user` (sem permissões relevantes).
-      if (LOGIN_RESTRICTED_TO_REGISTERED) {
+      if (LOGIN_RESTRICTED_TO_REGISTERED && resolution.kind === "default") {
         let known: unknown = (await db.getUserByOpenId(openId)) ?? (email ? await db.getUserByEmail(email) : undefined);
         // Email (profissional OU pessoal) de uma ficha ativa também conta como
         // registado — a mesma pessoa pode entrar com qualquer dos dois (0081).
@@ -355,88 +516,55 @@ export function registerOAuthRoutes(app: Express) {
         }
       }
 
-      // A identidade é o EMAIL: se o backoffice já registou esta pessoa à mão,
-      // o primeiro login Google ADOTA essa conta (role/permissões incluídos)
-      // em vez de criar uma segunda linha em `users` com role default.
-      const database = await db.getDb();
-      if (database && email) {
-        await adoptPlaceholderAccountByEmail(database, email, openId, userInfo.name || null);
-      }
+      let account: LoginAccountLike | undefined;
+      let accountOpenId = openId;
+      let beforeSession: ((a: LoginAccountLike) => Promise<LoginAccountLike | null | undefined | void>) | undefined;
+      if (resolution.kind === "linked") {
+        // Conta já desta pessoa (entrou com código, ou ligada a esta Google):
+        // entra nela sem mudar o openId nem o nome/email; grava o googleSub.
+        accountOpenId = resolution.user.openId;
+        account = await db.getUserByOpenId(accountOpenId);
+        const sub = userInfo.sub;
+        beforeSession = async (a) => {
+          await store.setGoogleSub(a.id, sub).catch(() => false);
+          // Conta do backoffice por usar (achada pela ficha) passa a google_<sub>, como na adoção de sempre.
+          await store.markSignedIn(a.id, "google", Date.now(), { googleSub: sub }).catch(() => undefined);
+          return (await db.getUserByOpenId(a.openId)) ?? (await store.userById(a.id)) ?? a;
+        };
+      } else {
+        // A identidade é o EMAIL: se o backoffice já registou esta pessoa à mão,
+        // o primeiro login Google ADOTA essa conta (role/permissões incluídos)
+        // em vez de criar uma segunda linha em `users` com role default.
+        const database = await db.getDb();
+        if (database && email) {
+          await adoptPlaceholderAccountByEmail(database, email, openId, userInfo.name || null);
+        }
 
-      await db.upsertUser({
-        openId,
-        name: userInfo.name || null,
-        email: email || null,
-        loginMethod: "google",
-        lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
-      });
+        await db.upsertUser({
+          openId,
+          name: userInfo.name || null,
+          email: email || null,
+          loginMethod: "google",
+          lastSignedIn: new Date().toISOString().slice(0, 19).replace("T", " "),
+        });
 
-      // 49c (Jorge, 8 out 2026): quem está INATIVO (deixou de vir, pode
-      // voltar) e é extra/condutor volta a entrar como UTILIZADOR — chega à
-      // ficha, às disponibilidades e ao "Voltei". DESATIVADO (roubou,
-      // despedido, segurança…), estrutura ou conta sem ficha: como sempre.
-      // Os "Suspenso: sem atividade" (41a) passam a inativos aqui.
-      let account = await db.getUserByOpenId(openId);
-      if (account) {
-        try {
-          const outcome = await resolveLoginComeback({ id: account.id, role: account.role, isActive: account.isActive, deactivationReason: (account as any).deactivationReason ?? null });
-          if (outcome !== "none") {
-            console.log(`[OAuth] <${maskEmailForLog(email)}> ${outcome === "reactivated" ? "inativo voltou a entrar como utilizador" : "suspensão por inatividade passou a inativo"}`);
-            account = (await db.getUserByOpenId(openId)) ?? account;
-          }
-        } catch (err) {
-          console.warn("[OAuth] Falha a ver se a pessoa pode voltar:", String((err as Error)?.message ?? err).slice(0, 160));
+        account = await db.getUserByOpenId(openId);
+        // Plano 56: o googleSub fica gravado (as contas antigas vêm da migração 0620).
+        if (account && !(account as { googleSub?: string | null }).googleSub) {
+          await store.setGoogleSub(account.id, userInfo.sub).catch(() => false);
         }
       }
 
-      // Porta de acesso ÚNICA: conta desativada (ou sem linha em `users`, se a
-      // BD estiver indisponível) → sem sessão e com a MESMA mensagem para
-      // todos os casos. Nunca distinguir "desconhecido" de "desativado".
-      if (!account || account.isActive !== 1) {
-        console.warn(
-          `[OAuth] Acesso recusado <${maskEmailForLog(email)}> — ${account ? "conta desativada" : "conta não encontrada"}`,
-        );
-        await logLogin({ userId: 0, action: "login_denied", entityId: account?.id ?? null, details: `Entrada recusada: ${account ? "conta desativada" : "conta não encontrada"} <${maskEmailForLog(email)}>` });
+      const done = await completeLogin({
+        req, res, account, method: "google", email,
+        sessionName: userInfo.name || "",
+        reload: () => db.getUserByOpenId(accountOpenId),
+        beforeSession,
+      });
+      if (!done.ok) {
         denyAccess(req, res);
         return;
       }
-
-      // A ficha de colaborador com o MESMO email é desta pessoa: fica ligada à
-      // conta (regra do Jorge, 2026-09-10). Sem isto o login criava a conta e a
-      // ficha ficava órfã. Best-effort — nunca pode partir o login.
-      if (database && email) {
-        try {
-          const linked = await linkEmployeesToUserByEmail(database, account.id, email, { actorId: account.id, source: "ui" });
-          if (linked.length) console.log(`[OAuth] <${maskEmailForLog(email)}> ligado à(s) ficha(s) #${linked.join(", #")}`);
-        } catch (err) {
-          console.warn("[OAuth] Falha a ligar ficha por email:", String((err as Error)?.message ?? err).slice(0, 160));
-        }
-      }
-
-      // 49h: quem se candidatou por email (ficha de candidato criada pela IA no
-      // 1.º contacto, ainda sem conta) fica ligado logo ao entrar com esse email.
-      if (email) {
-        try {
-          const { linkCandidateFichaOnLogin } = await import("../accountLink");
-          const cand = await linkCandidateFichaOnLogin(account.id, email);
-          if (cand) console.log(`[OAuth] <${maskEmailForLog(email)}> ligado à ficha de candidato #${cand}`);
-        } catch (err) {
-          console.warn("[OAuth] Falha a ligar a ficha de candidato:", String((err as Error)?.message ?? err).slice(0, 160));
-        }
-      }
-
-      const sessionToken = await sdk.createSessionToken(openId, {
-        name: userInfo.name || "",
-        expiresInMs: SESSION_MAX_MS,
-        sessionVersion: account.sessionVersion ?? 0,
-      });
-
-      const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, {
-        ...cookieOptions,
-        maxAge: SESSION_MAX_MS,
-      });
-      await logLogin({ userId: account.id, action: "login", entityId: account.id, details: "Entrou com a Google" });
 
       // Destino do state assinado (sobrevive à mudança de browser); senão o do
       // cookie. takeReturnPath corre sempre, para limpar o cookie.

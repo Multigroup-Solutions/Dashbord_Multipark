@@ -51,6 +51,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Excesso de velocidade | `speed_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Alerta de velocidade (API GPS, registo manual, verificação Zello). |
 | GPS desligado | `gps_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Condutor com GPS desligado no Zello. |
 | A trabalhar sem PDA ou Zello | `ops_presence` | PDAs (view) | a pessoa | Pessoal | — | com interruptor | Verificação da presença operacional (só com OPS_PRESENCE_ALERTS ligado): ponto aberto sem PDA ou com o Zello desligado, ou movimentos na Multipark sem ponto. D50: obrigatória com o interruptor NOTIFY_CRITICAL_MANDATORY ligado (desligado por omissão). |
+| Códigos de entrada | `login_code` | Actividade Diária (view) | a pessoa | Pessoal | — | sim |  |
 | Terminal do aeroporto | `terminal` | Minha ficha (view) | a pessoa | Pessoal | — | não |  |
 | Relatório diário dos motoristas | `driver_daily_report` | Histórico diário (GPS) (view) | nacional | Admin, Super Admin | sim (desligado) | não | Fim da recolha diária do histórico GPS. |
 | Anomalias nas reservas | `anomaly_bookings` | Reservas & Operações (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Deteção diária de anomalias nas reservas (só críticas). |
@@ -104,6 +105,8 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Integrações com problemas | `integration_alert` | Integrações (view) | nacional | Admin, Super Admin | sim (ligado) | não | Ligação (Google Ads, Meta, Google Business, WhatsApp) passa a precisar de religação ou fica em erro. D51: também quando alguém desliga o Google Business ou o Google Ads (menos a quem desligou), com o interruptor INTEGRATION_DISCONNECT_NOTIFY (desligado por omissão). |
 | Crons parados | `cron_stale` | Definições (view) | nacional | Admin, Super Admin | sim (ligado) | não | Cron parado há mais do dobro do intervalo. |
 | A tua conta Google | `google_account_reauth` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | A autorização da tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada — 1× por mudança de estado. |
+| A tua entrada | `login_security` | Minha ficha (view) | a pessoa | Pessoal | — | sim |  |
+| Entradas recusadas por conta duplicada | `login_conflict` | Utilizadores (view) | nacional | Admin, Super Admin | — | não |  |
 | Sincronização Multipark | `sync_alert` | Sincronização (view) | nacional | Admin, Super Admin | — | não | Sem webhooks Multipark / webhooks retomados / reservas por sincronizar. |
 | Orçamento da IA | `ai_budget` | Definições (view) | nacional | Admin, Super Admin | sim (desligado) | não | Gasto da IA chega ao orçamento do mês. |
 

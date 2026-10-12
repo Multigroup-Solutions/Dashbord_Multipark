@@ -2,11 +2,26 @@
 modulo: dashboards
 titulo: Entrada, menu e "Sem acesso"
 rotas: /, /dashboard, /modulos
-palavras: liga a tua conta, sou novo, candidatar-me, já me candidatei, outro email, código por email, voltei, inativo, desativado, entrar, login, google, sem acesso, acesso recusado, não consigo entrar, sessão, sair, perfil, menu, página em branco, erro, versão nova, recarregar, sem centro de custos, notificação não abre, instalar app, ícone
+palavras: entrar com email, palavra-passe, esqueci a palavra-passe, pedir código, código de entrada, código de 6 algarismos, cria a tua palavra-passe, agora não, palavra-passe bloqueada, com o teu papel entra-se com google, repor acesso, entrar com código, liga a tua conta, sou novo, candidatar-me, já me candidatei, outro email, código por email, voltei, inativo, desativado, entrar, login, google, sem acesso, acesso recusado, não consigo entrar, sessão, sair, perfil, menu, página em branco, erro, versão nova, recarregar, sem centro de custos, notificação não abre, instalar app, ícone
 ---
 # Entrada, menu e "Sem acesso"
 
 **Entrar**: "Entrar com Google" na página inicial. Depois de entrar vais para o teu ecrã: o Dashboard (quem o vê), as Tarefas (team leaders) ou a tua ficha (extras e condutores).
+
+**Entrar com email e código** (só com o interruptor **Entrar com email e código** ligado em Definições → Automações; vem desligado — desligado, entra-se só com a Google, como sempre)
+- A página de entrada passa a ter **Email**, **Palavra-passe** e **Entrar**. O botão **Entrar com Google** continua lá.
+- **Primeira vez ou esqueceste-te? Pedir código**: escreve o email e carrega aí. Aparece "Pedimos o código ao TL e ao supervisor de serviço. Pede-lhes o código de 6 algarismos." Escreve o código **no mesmo aparelho onde o pediste** (noutro não funciona). Vale **10 minutos** e dá para errar **5 vezes**. Dá para colar. **Pedir outro código** só passado 1 minuto (os 3 últimos pedidos deste aparelho continuam a valer).
+- Depois do código aparece **Cria a tua palavra-passe** (pelo menos 8 caracteres; não pode ser fácil como 12345678, nem ter o teu nome, nem uma data como o dia de anos). **Agora não** salta este passo — da próxima vez pedes outro código.
+- O código vai para o **team leader de serviço** e os **supervisores** da cidade da tua ficha (os que têm o ponto aberto; se nenhum tiver, todos os da cidade). Sem cidade (conta nova, candidato) vai para o **RH e os admins**. Eles recebem no sino, no telemóvel (se ativaram os avisos) e em Atividade diária → Ao Vivo → **Códigos de entrada**, e dão-te o código.
+- No teu sino fica "Entraste com um código enviado a TL X / supervisor Y às HH:MM". Se não foste tu, avisa o RH.
+- É a **mesma conta** que com a Google (mesmo email = mesma pessoa): as mesmas permissões, a mesma ficha, o mesmo histórico. Serve qualquer email (Gmail, Hotmail, Sapo…) — o da conta ou, para extras e condutores, um dos emails da ficha. No Gmail, pontos e "+" contam como o mesmo email.
+- O ecrã diz sempre o mesmo, exista ou não a conta. Um email que não existe só cria uma conta (utilizador, com "Liga a tua conta") depois do código certo.
+- Depois do código valem as mesmas regras da Google: desativado não entra; inativo extra/condutor entra como utilizador ("Voltei"); ficha bloqueada mostra o ecrã de bloqueio.
+- **Só para utilizadores, extras e condutores.** Team leaders, supervisores, back/front office e admins entram com a Google — com a palavra-passe aparece "Com o teu papel entra-se com Google".
+- **Palavra-passe errada 5 vezes no mesmo dia** (em qualquer aparelho): até ao fim do dia só se entra com código, e o dono da conta é avisado no sino. A mensagem é sempre "Email ou palavra-passe errados".
+- **Repor acesso** (Utilizadores, quem gere a conta): tira a palavra-passe, termina as sessões em todos os aparelhos e avisa a pessoa (fica nos Logs). Ninguém define a palavra-passe de outra pessoa.
+- Tudo fica nos Logs: código pedido e a quem foi, entradas (Google, código, palavra-passe), palavra-passe criada/mudada/reposta, tentativas erradas.
+- Uma conta Google cujo email já está noutra conta ligada a **outra** Google não se junta sozinha: a entrada é recusada e os admins são avisados (juntam em Ligações).
 - **Acesso recusado** (conta desativada ou não registada): aparece a mensagem na página de entrada e **não** volta a mandar para a Google em ciclo. Fala com a administração.
 - **Conta nova**: qualquer conta Google entra como **utilizador**. Se ainda não está em nenhuma ficha, aparece **"Liga a tua conta"** com duas opções:
   1. **Sou novo — quero candidatar-me**: escolhes a cidade (ou "Ainda não sei") e cria-se a tua ficha de **candidato** (com o nome e o email da Google, e a cidade escolhida — assim o supervisor dessa cidade vê-a) e a candidatura no Recrutamento, e abre **A minha ficha** para preencheres os dados e carregares os documentos. O supervisor revê e o RH aprova. Se já houver ficha ou candidatura com esse email, liga a essa (nunca cria outra).

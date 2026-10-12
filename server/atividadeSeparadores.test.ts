@@ -78,7 +78,7 @@ describe("1 — Pressão: tempo por carro só das entregas ou só das recolhas",
     expect(MIGRATION_0615_STATEMENTS.every((x) => /^ALTER TABLE `ops_pressure_stats` ADD COLUMN `cycle(Out|In)(N|P50|P60|P75|P85|P90)`/.test(x))).toBe(true);
     expect(MIGRATION_0615_STATEMENTS).toHaveLength(12);
     expect(MIGRATION_0615_STATEMENTS.join(" ")).not.toMatch(/DROP|DELETE|UPDATE /);
-    // (registada logo a seguir à 0610; as seguintes acrescentam-se depois)
+    // registada logo a seguir à 0610 (depois dela vêm outras, ex.: 0620 do plano 56)
     expect(SCHEMA_MIGRATION_IDS.indexOf("0615")).toBe(SCHEMA_MIGRATION_IDS.indexOf("0610") + 1);
   });
   it("o quadro tem o seletor Entregas / Recolhas / Juntas, com a mesma legenda e as mesmas regras", () => {

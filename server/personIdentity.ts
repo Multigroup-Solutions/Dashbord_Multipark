@@ -71,14 +71,15 @@ export async function listEmployeeLogins(employeeId: number): Promise<EmployeeLo
 }
 
 /**
- * Lote 46: contas que ENTRARAM com a Google e não têm ficha (nem como conta
- * extra) e que parecem ser a pessoa desta ficha (mesmo email ou dois nomes em
- * comum — shared/ownAccess.ts). Só sugestões, as mais recentes primeiro.
+ * Lote 46: contas que ENTRARAM (com a Google ou, desde o plano 56, com um
+ * código / a palavra-passe) e não têm ficha (nem como conta extra) e que
+ * parecem ser a pessoa desta ficha (mesmo email ou dois nomes em comum —
+ * shared/ownAccess.ts). Só sugestões, as mais recentes primeiro.
  */
 export async function orphanLoginCandidates(ficha: { fullName: string; emails: string[] }, limit = 5): Promise<Array<{ userId: number; name: string | null; email: string | null; lastSignedIn: string | null; reason: string }>> {
   const d = await database();
   const rows = rowsOf(await d.execute(sql`SELECT u.id, u.name, u.email, DATE_FORMAT(u.lastSignedIn, '%Y-%m-%d %H:%i') AS lastSignedIn FROM users u
-    WHERE u.isActive = 1 AND u.loginMethod = 'google'
+    WHERE u.isActive = 1 AND u.loginMethod IN ('google', 'email_code', 'password')
       AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.userId = u.id)
       AND NOT EXISTS (SELECT 1 FROM employee_accounts a WHERE a.userId = u.id)
     ORDER BY u.lastSignedIn DESC LIMIT 1000`).catch(() => [[]]));
