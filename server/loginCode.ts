@@ -140,7 +140,7 @@ export interface CodeRequestInput {
  */
 export interface CodeRequestOutcome {
   delivered: boolean;
-  reason: "sent" | "resend_wait" | "refused" | "staff" | "unknown_cap" | "nobody";
+  reason: "sent" | "resend_wait" | "refused" | "staff" | "unknown_cap" | "mail_cap" | "nobody";
   message: string;
   via?: "duty" | "email";
   codeId?: number;
@@ -203,6 +203,12 @@ export async function requestLoginCode(deps: LoginDeps, input: CodeRequestInput)
   // sair, cai no TL/supervisor de serviço ("pede o código ao TL").
   let emailFailed = false;
   if (mode === "email") {
+    // Auditoria A2: teto diário de emails de código para o mesmo endereço (spam a
+    // terceiros/funcionários). Passou → não envia e o ecrã diz o mesmo de sempre.
+    if (!(await deps.allow(`login_code:mail:${key}`, { perDay: LOGIN_LIMITS.emailSendPerDay }))) {
+      await store.log({ userId: 0, action: "login_code_request", entityId: user?.id ?? null, details: `Código de entrada pedido para <${masked}> — não enviado: limite diário de emails de código para este endereço` });
+      return out({ delivered: false, reason: "mail_cap" });
+    }
     const sentMail = await deps.sendCodeEmail({ to: email, code }).catch((err) => ({ ok: false, error: String((err as Error)?.message ?? err) }));
     if (sentMail.ok) {
       const codeId = await store.insertCode({

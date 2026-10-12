@@ -47,6 +47,11 @@ export const LOGIN_LIMITS = {
   networkPerHour: 200,
   /** Emails que não existem: no máximo isto por dia (no país todo) chega ao RH. */
   unknownPerDay: 60,
+  /**
+   * A2, modo "email": no máximo isto de emails com código por dia para o MESMO
+   * endereço (ninguém enche a caixa de outra pessoa com pedidos de código).
+   */
+  emailSendPerDay: 10,
   /** Tentativas de código/palavra-passe por rede. */
   verifyNetworkPerHour: 200,
   passwordEmailPerHour: 30,
@@ -85,11 +90,15 @@ export const STAFF_CODE_ON_REGISTERED_PDA = true;
 /** A2: o código por email sai desta conta própria (DWD), nunca de uma caixa da Comunicação. */
 export const LOGIN_CODE_SENDER = "acesso@multipark.pt";
 
-/** Assunto e texto do email com o código (sem link). PURA. */
+/**
+ * Assunto e texto do email com o código (sem link). PURA.
+ * O código NUNCA vai no assunto: o assunto aparece nos registos do servidor
+ * (ex.: "[email] Não enviado …: <assunto>") e nas listas de envios.
+ */
 export function loginCodeEmail(code: string): { subject: string; text: string } {
   const c = formatCode(code);
   return {
-    subject: `Código de entrada Multipark: ${c}`,
+    subject: "O teu código de entrada Multipark",
     text: [
       `O teu código de entrada é ${c}.`,
       "",

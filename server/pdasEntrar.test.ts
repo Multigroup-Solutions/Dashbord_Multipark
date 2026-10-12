@@ -198,8 +198,8 @@ import { readFileSync } from "node:fs";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { COOKIE_NAME } from "@shared/const";
 import {
-  CODE_EMAILED_MSG, CODE_EMAIL_FAILED_MSG, CODE_REQUESTED_MSG, LOGIN_CODE_SENDER, ROLE_GOOGLE_MSG, STAFF_CODE_ON_REGISTERED_PDA,
-  codeFromLoginCodeTitle, codeRecipientsForRole, methodAllowedForRole,
+  CODE_EMAILED_MSG, CODE_EMAIL_FAILED_MSG, CODE_REQUESTED_MSG, LOGIN_CODE_SENDER, LOGIN_LIMITS, ROLE_GOOGLE_MSG, STAFF_CODE_ON_REGISTERED_PDA,
+  codeFromLoginCodeTitle, codeRecipientsForRole, loginCodeEmail, methodAllowedForRole,
 } from "@shared/loginCode";
 import {
   GOOGLE_PDAS_NEEDS_CODE_MSG, PDA_SESSION_MS, QR_TL_ONLY_MSG, checkoutSummaryLines, googleShownOnDevice, pdaSessionOk, sessionEndsInText,
@@ -886,5 +886,39 @@ describe("auditoria A2: o token do PDA nunca vai num endereço", () => {
     const page = readFileSync("client/src/pages/OperationalPage.tsx", "utf8");
     expect(page).toContain("trpc.operational.pdas.deviceInfo.useMutation()");
     expect(page).not.toContain("deviceInfo.useQuery");
+  });
+});
+
+describe("auditoria A2: código por email (assunto e limite)", () => {
+  it("o código nunca vai no assunto do email (o assunto aparece nos registos do servidor)", async () => {
+    const logs: string[] = [];
+    const deps = {
+      systemSender: async () => "reservas@multipark.pt",
+      mailboxes: async () => [],
+      apiFor: async () => ({ listSendAs: async () => [], sendRaw: async () => ({ id: "g", threadId: null }) }),
+      dwdAvailable: () => false, // conta de serviço em falta → o envio regista o assunto
+      log: (msg: string) => { logs.push(msg); },
+    };
+    const r = await sendLoginCodeEmailWith({ isMailbox: async () => false, send: (o) => sendMailWith(deps as any, o) }, { to: "pessoa@gmail.com", code: "482913" });
+    expect(r.ok).toBe(false);
+    expect(logs.join("\n")).not.toMatch(/482\s?913/);
+    expect(loginCodeEmail("482913").subject).not.toMatch(/\d/);
+    expect(loginCodeEmail("482913").text).toContain("482 913");
+  });
+
+  it("modo email: no máximo 10 emails de código por dia para o mesmo endereço (o ecrã diz sempre o mesmo)", async () => {
+    lisbon();
+    m.state.settings["login.codeDelivery"] = "email";
+    const messages: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      vi.setSystemTime(T0 + i * 7 * 60_000);
+      const r = await (await device().caller()).auth.code.request({ email: "joaquim@gmail.com" });
+      messages.push(r.message);
+    }
+    expect(m.state.sentMail).toHaveLength(LOGIN_LIMITS.emailSendPerDay);
+    expect(LOGIN_LIMITS.emailSendPerDay).toBe(10);
+    expect(new Set(messages)).toEqual(new Set([CODE_EMAILED_MSG]));
+    expect(m.state.notified.filter((n) => n.kind === "login_code")).toEqual([]);
+    expect(m.state.logs.some((l) => /limite diário de emails de código/.test(l.details))).toBe(true);
   });
 });
