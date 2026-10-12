@@ -519,7 +519,41 @@ export const complaints = mysqlTable("complaints", {
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedById: int(),
 	archiveReason: varchar({ length: 255 }),
+	// 0630 (lote 57) — de onde veio: email | ia | whatsapp | critica | conversao | manual | api (shared/complaintFilters.ts).
+	origin: varchar({ length: 16 }),
 });
+
+/**
+ * 0630 (lote 57) — a IA viu uma reclamação num email de OUTRA caixa: o que se
+ * decidiu (criada, junta a uma aberta, sugerida, ignorada e porquê, falhou).
+ * Uma linha por conversa (threadId UNIQUE): nunca duas reclamações da mesma
+ * conversa. Nada se apaga ("Não é reclamação" só marca).
+ */
+export const complaintMailIntake = mysqlTable("complaint_mail_intake", {
+	id: int().autoincrement().primaryKey(),
+	threadId: int().notNull(),
+	messageId: int(),
+	fromBoxKey: varchar({ length: 40 }),
+	aiBoxKey: varchar({ length: 40 }),
+	confidence: decimal({ precision: 4, scale: 3 }),
+	reason: varchar({ length: 300 }),
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	skipReason: varchar({ length: 32 }),
+	complaintId: int(),
+	projectId: int(),
+	attempts: int().default(0).notNull(),
+	error: varchar({ length: 300 }),
+	decidedById: int(),
+	decidedAt: datetime({ mode: 'string' }),
+	dismissReason: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_complaint_mail_intake_thread").on(table.threadId),
+	index("idx_complaint_mail_intake_status").on(table.status, table.createdAt),
+	index("idx_complaint_mail_intake_complaint").on(table.complaintId),
+]);
 
 /** 0340 — o que se tira de um caso (foto, condutor associado…), com a linha inteira. Nada se apaga de vez. */
 export const removedRecords = mysqlTable("removed_records", {
@@ -2749,6 +2783,8 @@ export const inboundEmails = mysqlTable("inbound_emails", {
 	uniqueIndex("inbound_emails_message_id_unique").on(table.messageId),
 	index("inbound_emails_alias_idx").on(table.alias),
 	index("inbound_emails_gm_thread_idx").on(table.gmThreadId),
+	// 0630 (lote 57): emails de uma reclamação/perdido sem ler a tabela toda.
+	index("idx_inbound_emails_target").on(table.targetModule, table.targetId),
 ]);
 
 // ─── WhatsApp (integração Cloud API) ────────────────────────────────────────

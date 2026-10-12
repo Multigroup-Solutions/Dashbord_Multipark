@@ -2127,7 +2127,8 @@ export async function revokeApiKey(id: number, byUserId: number, reason: string)
 
 export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number; archived?: boolean; sinceDays?: number }) {
   const db = await getDb();
-  if (!db) return [];
+  // Lote 57: BD em baixo = erro (a página diz "Não foi possível carregar"), nunca "Sem tickets".
+  if (!db) throw new Error("Base de dados indisponível.");
   const conditions: any[] = await projectFilterConds(complaints.projectId, filters?.projectId);
   // Arquivadas (16b) só quando pedidas; nunca misturadas com as outras.
   conditions.push(filters?.archived ? sql`${complaints.archivedAt} IS NOT NULL` : sql`${complaints.archivedAt} IS NULL`);
@@ -6403,6 +6404,27 @@ export async function findComplaintByClientSignals(
       notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]),
       or(gte(complaints.updatedAt, since), gte(complaints.createdAt, since)),
       or(...conds),
+    ))
+    .orderBy(desc(complaints.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Lote 57: reclamação ainda aberta (Novo, Em Análise, Aguarda Cliente) da
+ * MESMA reserva (ref da Multipark ou nº), não arquivada — para o email que a
+ * IA viu como reclamação se juntar a ela em vez de abrir outra.
+ */
+export async function findOpenComplaintByBookingRef(ref?: string | null) {
+  const r = String(ref ?? "").trim().replace(/^#+/, "");
+  if (r.length < 3) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(complaints)
+    .where(and(
+      eq(complaints.reservationRef, r),
+      inArray(complaints.complaintStatus, ["new", "analyzing", "waiting_client"]),
+      sql`${complaints.archivedAt} IS NULL`,
     ))
     .orderBy(desc(complaints.createdAt))
     .limit(1);

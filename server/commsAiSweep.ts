@@ -13,6 +13,8 @@ export interface CommsAiSweepReport {
   rhAttachments?: unknown;
   /** Emails que ficaram por separar pelas caixas na sincronização (interruptor AI_MAIL_ROUTING). */
   routing?: unknown;
+  /** Lote 57: reclamações vistas pela IA noutras caixas cuja criação falhou — nova tentativa (AI_MAIL_COMPLAINTS). */
+  complaintIntake?: unknown;
   errors: string[];
 }
 
@@ -32,5 +34,7 @@ export async function runCommsAiSweep(opts: { deadlineAt?: number } = {}): Promi
   await step("rhAttachments", async () => (await import("./rhAttachmentReader")).runRhAttachmentSweep({ limit: 2, deadlineAt }));
   // Separar pelas caixas: os emails novos que não couberam no teto da sincronização (por último: não tira tempo aos outros).
   await step("routing", async () => (await import("./commsRouting")).runPendingEmailRoutings({ limit: 4, deadlineAt }));
+  // Reclamações que a IA viu noutra caixa e não se conseguiram criar (Gmail/BD em baixo): sem IA, só volta a tentar.
+  await step("complaintIntake", async () => (await import("./complaintMailIntake")).retryFailedIntakes({ limit: 2, deadlineAt }));
   return report;
 }
