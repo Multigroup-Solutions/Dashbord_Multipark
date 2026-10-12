@@ -71,4 +71,11 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
 - No telemóvel, o **Histórico** mostra um cartão por passagem.
 - O **Resumo do dia** (supervisão) está em **Operações → Actividade Diária → Resumo do dia**.
 
-**Despesas do turno** (em Valores): lança cada despesa paga com o dinheiro da caixa — descrição, valor e foto do talão. Entra logo nas **Despesas** (paga, dinheiro, centro da cidade) e abate à **caixa do dia** (Financeiro → Caixa → Por dia). **Anular** deixa-a cancelada (nunca se apaga).
+**Despesas do turno** (em Valores): lança aqui cada despesa paga com o dinheiro da caixa — não é preciso ir ao Financeiro.
+1. Carrega em **Talão** e tira a foto (ou escolhe uma foto ou PDF). Enquanto aparece **A ler o talão…**, a IA (a mesma das Despesas) lê o talão e preenche a descrição, o valor e os dados do talão: fornecedor, NIF, n.º do documento, data, IVA e categoria.
+2. Abre **O que a IA leu do talão**, confirma e corrige o que for preciso e carrega em **Lançar**. A IA nunca escreve por cima do que já escreveste. Se a IA estiver desligada ou não conseguir ler, preenche à mão: descrição e valor chegam (os dados do talão são opcionais, em **Dados do talão**).
+3. A aplicação avisa quando o NIF não está certo, quando a data do talão está longe do turno (só aceita do dia seguinte até um mês antes), quando o talão parece já estar lançado nas Despesas e quando o documento parece uma fatura emitida pela Multipark.
+4. A despesa entra logo nas **Despesas** (paga, dinheiro, centro da cidade, com o talão e a data do talão) e abate à **caixa do dia** (Financeiro → Caixa → Por dia). O IVA lido fica nas notas da despesa.
+5. Cada despesa lançada tem **Abrir nas Despesas (n.º …)**: abre o detalhe dessa despesa num separador novo (a passagem que estás a preencher não se perde). Quem não pode ver essa despesa nas Despesas vê só "Já está nas Despesas (n.º …)".
+
+**Anular** deixa a despesa do turno cancelada (nunca se apaga).

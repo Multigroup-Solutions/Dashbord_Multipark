@@ -10,6 +10,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 
 **Só quando carregas no botão**
 - **Despesas:** "Extrair com IA" lê a fatura e preenche o formulário. Quem grava és tu.
+- **Passagem de turno → Despesas do turno:** ao tirar a foto do talão, a mesma IA das Despesas lê-o e preenche o cartão. Quem lança és tu.
 - **Críticas:** "Gerar com IA" faz um rascunho. Publicar exige "Aprovar e publicar".
 - **WhatsApp:** "Resumo da conversa (IA)" e "Sugerir resposta". A sugestão vai para a caixa de texto e nunca é enviada sozinha.
 - **Comunicação (email):** "Rascunho IA" fica no editor.

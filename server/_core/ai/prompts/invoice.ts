@@ -9,6 +9,8 @@ export const invoiceSchema = z.object({
   selfInvoice: z.boolean().describe("true se o EMITENTE for uma empresa do grupo (Multipark/Airpark/Skypark/Redpark/Top Parking)."),
   description: z.string().nullable().describe("Descrição curta dos produtos/serviços."),
   amount: z.string().nullable().describe("Valor TOTAL com ponto decimal e sem símbolos, ex.: 45.90"),
+  // Passagem de turno (12 out 2026): o talão mostra o IVA; opcional para não mudar a leitura das Despesas.
+  vatAmount: z.string().nullable().optional().describe("Valor TOTAL do IVA (todas as taxas somadas), com ponto decimal e sem símbolos, ex.: 2.30; null se não aparecer."),
   currency: z.string().nullable().describe("Código ISO da moeda, ex.: EUR"),
   paymentMethod: z.enum(PAYMENT_METHODS).nullable(),
   expenseDate: z.string().nullable().describe("Data da fatura, YYYY-MM-DD"),

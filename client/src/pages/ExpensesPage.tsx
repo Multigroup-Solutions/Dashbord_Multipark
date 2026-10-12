@@ -7,6 +7,8 @@ import { isAdPlatformInvoice } from "@shared/marketingRules";
 import { ExpenseAdCostsCard } from "@/components/ExpenseAdCostsCard";
 import { trpc } from "@/lib/trpc";
 import { compressImage } from "@/lib/compressImage";
+import { fileToBase64, pdfToPngDataUrl } from "@/lib/invoiceFile";
+import { expenseIdFromSearch, searchWithoutExpenseId } from "@shared/expenseLink";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
@@ -250,6 +252,19 @@ export default function ExpensesPage() {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [detailExpense, setDetailExpense] = useState<any>(null);
+  // Ligação direta (Passagem de turno → "Abrir nas Despesas"): /despesas?id=123 abre o detalhe
+  // dessa despesa. A permissão é a do detalhe (expenses.byId); o `id` sai do endereço depois de usado.
+  const [linkedId, setLinkedId] = useState<number | null>(() => (typeof window !== "undefined" ? expenseIdFromSearch(window.location.search) : null));
+  const linked = trpc.expenses.byId.useQuery({ id: linkedId ?? 0 }, { enabled: linkedId != null, retry: false });
+  useEffect(() => {
+    if (linkedId == null || linked.isFetching) return;
+    if (linked.data) setDetailExpense(linked.data);
+    else if (linked.error) toast.error("Não foi possível abrir a despesa", { description: linked.error.data?.code === "FORBIDDEN" ? "Não tens acesso a esta despesa." : linked.error.message });
+    else if (linked.isFetched) toast.error(`Despesa n.º ${linkedId} não encontrada`);
+    else return;
+    setLinkedId(null);
+    try { window.history.replaceState(null, "", window.location.pathname + searchWithoutExpenseId(window.location.search) + window.location.hash); } catch { /* sem history */ }
+  }, [linkedId, linked.isFetching, linked.isFetched, linked.data, linked.error]);
   // Notas de crédito (Jorge, 7 out 2026): lançar a partir da fatura; mudar na própria NC.
   const [creditTarget, setCreditTarget] = useState<CreditNoteTarget | null>(null);
 
@@ -1766,48 +1781,4 @@ function ExpenseFormModal({
       </DialogContent>
     </Dialog>
   );
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-// Converte as primeiras páginas de um PDF numa única imagem PNG (empilhadas
-// na vertical) para o preview e o OCR por IA. pdf.js é importado on-demand
-// para não pesar no bundle de quem nunca carrega PDFs.
-async function pdfToPngDataUrl(file: File, maxPages = 2): Promise<string> {
-  const pdfjs = await import("pdfjs-dist");
-  const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-
-  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-  const pages = Math.min(pdf.numPages, maxPages);
-  const canvases: HTMLCanvasElement[] = [];
-  for (let i = 1; i <= pages; i++) {
-    const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: 2 }); // A4 → ~1190×1684, bom para OCR
-    const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvasContext: canvas.getContext("2d")!, viewport } as any).promise;
-    canvases.push(canvas);
-  }
-  if (canvases.length === 1) return canvases[0].toDataURL("image/png");
-  const out = document.createElement("canvas");
-  out.width = Math.max(...canvases.map((c) => c.width));
-  out.height = canvases.reduce((s, c) => s + c.height, 0);
-  const ctx = out.getContext("2d")!;
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, out.width, out.height);
-  let y = 0;
-  for (const c of canvases) { ctx.drawImage(c, 0, y); y += c.height; }
-  return out.toDataURL("image/png");
 }

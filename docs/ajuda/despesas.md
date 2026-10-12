@@ -2,7 +2,7 @@
 modulo: despesas
 titulo: Despesas
 rotas: /despesas, /despesas/dashboard
-palavras: nota de crédito, notas de crédito, nc, devolução, reembolso, abatida, por receber, despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista
+palavras: nota de crédito, notas de crédito, nc, devolução, reembolso, abatida, por receber, despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista, despesas do turno, passagem de turno, talão, foto do talão, link direto, abrir nas despesas
 ---
 # Despesas
 
@@ -13,6 +13,10 @@ Registo de faturas e despesas da empresa.
 2. Carrega a fatura (foto ou PDF) e carrega em **Extrair com IA**: fornecedor, valor, datas e NIF são preenchidos. Confirma sempre os valores.
 3. Escolhe o **Centro de custos**, a categoria e o método de pagamento. **Guardar Despesa**.
 4. Se a fatura parecer emitida pela Multipark a um cliente, a aplicação avisa — não é uma despesa. Se o nº de documento (ou o ficheiro) já existir noutra despesa, também avisa.
+
+**Despesas do turno (team leaders)**
+- As despesas pagas com o dinheiro da caixa lançam-se na **Passagem de turno** (cartão **Despesas do turno**), não aqui: foto do talão, a mesma leitura por IA, e entram logo nas Despesas pagas, em dinheiro, no centro de custos da cidade.
+- **Ligação direta**: `/despesas?id=N` abre o detalhe da despesa n.º N (é o que usa o **Abrir nas Despesas** da passagem de turno). Abre só a quem pode ver essa despesa.
 
 **Lista**
 - Abre na **semana atual**. Muda o período com as setas, ou liga **Todo o histórico** para procurar em tudo.
