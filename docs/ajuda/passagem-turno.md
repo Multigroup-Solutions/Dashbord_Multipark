@@ -2,11 +2,13 @@
 modulo: passagem_turno
 titulo: Passagem de turno
 rotas: /passagem-turno
-palavras: quem trabalhou, dia do condutor, velocidade máxima, velocidade por entrega, excessos, excesso de velocidade, km da equipa, horas paradas, parado no turno, entregas mais lentas, entrega lenta, pedidos à espera, excesso de pedidos, chefe de turno, equipa do turno, sem passagem de turno, entregas a tempo, entregas atrasadas, recolhas atrasadas, resumir agora, resumo desatualizado, resumo ia, resumo da ia, entregar a passagem, mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
+palavras: sem passagem de turno, resumir agora, resumo desatualizado, resumo ia, resumo da ia, entregar a passagem, mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
 ---
 # Passagem de turno
 
-Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
+Checklist de fim de turno dos team leaders e o histórico das passagens.
+
+**O Resumo do dia mudou de sítio** (12 out 2026): está agora em **Operações → Actividade Diária → Resumo do dia**, com tudo o que tinha (quem trabalhou, entregas lentas, passagens por chefe de turno). Quem o via aqui vê-o lá, com a mesma permissão. Na Passagem de turno fica uma ligação para lá.
 
 **Preencher** (Team Leader)
 1. Menu **Operações → Passagem de Turno**. Escolhe a cidade e o turno (manhã/noite). O dia operacional vai das 03:00 às 03:00 do dia seguinte.
@@ -59,7 +61,7 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
 - Mudar de dia, turno ou cidade, ou recarregar, pergunta antes se há alterações **por gravar**.
 
 **Quando a leitura falha**
-- Cada parte (as tuas cidades, o registo do turno, o resumo automático, o histórico, o resumo do dia, o cumprimento) mostra **"Não foi possível carregar…"** com **Tentar de novo**.
+- Cada parte (as tuas cidades, o registo do turno, o resumo automático, o histórico) mostra **"Não foi possível carregar…"** com **Tentar de novo**.
 - Uma falha nunca aparece como "sem passagens" ou "sem cidade atribuída".
 
 **Notas**
@@ -67,28 +69,6 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
 - Não dá para registar passagens para depois de amanhã.
 - Quem só consulta vê a passagem, mas não grava, não pede o resumo nem confirma.
 - No telemóvel, o **Histórico** mostra um cartão por passagem.
-- A supervisão vê o **Resumo do dia** (entregas lentas, recolhas atrasadas, reclamações do dia). Em **Quem trabalhou** há, por pessoa, as **horas** trabalhadas (as do ponto; com "~" quando não há picagens e é o tempo com o Zello ligado), os **km**, a **velocidade máxima**, os **excessos** e o tempo **parado**. Todas as colunas se ordenam. Num dia com movimentos a mais aparece o aviso de que os tempos são só de uma parte do dia. O resto está em **Resumo do dia** (abaixo).
-
-**Resumo do dia** (supervisão)
-1. Menu **Operações → Passagem de Turno → Resumo do dia**. Escolhe o dia e a cidade. O dia é o operacional (03:00 → 03:00).
-2. **Cartões do topo**: recolhas, entregas, pendente→entrega, entregas >15/>30 min, recolhas atrasadas, reclamações e ainda:
-   - **Km da equipa**: os km do GPS da Atividade diária.
-   - **Excesso de velocidade**: quantas pessoas tiveram excessos, a velocidade máxima do dia e o total de excessos.
-   - **Horas paradas**: o total do "Parado" da tabela e a média por pessoa.
-3. **Passagens de turno**: um cartão por turno (Manhã/Noite) e cidade.
-   - Diz se houve passagem: **"Passagem feita às 15:05 por X"** (e quem a recebeu) ou **"Sem passagem de turno"** a vermelho.
-   - Por **chefe de turno** (o TL da escala): a equipa, as **entregas** (a tempo, atrasadas >15 min, >30 min) e as **recolhas** (a tempo, atrasadas >15 min face à entrada prevista). São os mesmos limites dos cartões, só da equipa desse TL.
-   - Equipa = o turno do TL na escala (mesmo dia, cidade e turno), sem os TL, como no Desempenho. O que o próprio TL fez aparece à parte. Com dois TL no mesmo turno há uma linha por TL. "Sem medida" = entregas sem pedido (pendente) registado ou recolhas sem entrada prevista.
-4. **Entregas mais lentas do dia**: toca numa para abrir:
-   - a reserva (com o link para a **Ficha da reserva**);
-   - a linha do tempo: pedido (pendente), quem pegou no carro, entregue, minutos;
-   - **o que se passava nesse horário**: os outros pedidos da mesma cidade à espera entre o pedido e a entrega, com a hora do pedido, quando foram entregues, por quem e quanto demoraram. Também quantos já estavam à espera quando este entrou, o pico de pedidos à espera e quem entregou entretanto. Serve para ver se a demora foi por excesso de pedidos.
-5. **Quem trabalhou**:
-   - Clica no **nome** para abrir a ficha da pessoa no RH.
-   - Clica no resto da **linha** para ver o dia dessa pessoa: cada recolha, entrega e movimento com a hora, a reserva (link para a Ficha), o parque, o tempo pendente→entregue de cada entrega, o atraso de cada recolha e a **velocidade máxima em cada entrega** (o GPS dele entre o pedido e a entrega; a vermelho acima do limite dos excessos). Em cima: km do dia, velocidade máxima, excessos, horas trabalhadas e paradas.
-   - **Km, Vel. máx. e Excessos** são os mesmos da Atividade diária (o dia inteiro).
-   - **Parado** = com o Zello ligado mas sem andar, **dentro do turno**: entre as picagens do ponto; sem picagens, nas horas da escala. Sem nenhum dos dois fica o dia inteiro, com "~". Conta só o tempo entre reports do Zello a menos de 1 h (a mesma regra do Histórico Diário e do Desempenho): o tempo com o Zello desligado não é "parado".
-   - "*" no Parado = GPS incompleto (um ficheiro não se leu ou o dia seguinte ainda não foi recolhido). Se o GPS do turno não se conseguir ler, aparece o aviso com **Tentar de novo** e o Parado fica o do dia inteiro, com "~".
-   - O GPS do próprio dia só chega às 23h (provisório) e o final dois dias depois: antes disso a velocidade de cada entrega e o parado aparecem "—".
+- O **Resumo do dia** (supervisão) está em **Operações → Actividade Diária → Resumo do dia**.
 
 **Despesas do turno** (em Valores): lança cada despesa paga com o dinheiro da caixa — descrição, valor e foto do talão. Entra logo nas **Despesas** (paga, dinheiro, centro da cidade) e abate à **caixa do dia** (Financeiro → Caixa → Por dia). **Anular** deixa-a cancelada (nunca se apaga).

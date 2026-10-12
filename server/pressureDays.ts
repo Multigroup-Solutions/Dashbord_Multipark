@@ -29,6 +29,13 @@ import type { PressureWindow } from "./multiparkDb/pressure";
 
 /** Versão do cálculo por dia: mudar isto relê todos os dias (vai na assinatura). */
 export const PRESSURE_DAYS_VERSION = 1;
+/**
+ * 12 out 2026 (Jorge: "um quadro igual para as recolhas"): a parte por
+ * condutor passou a guardar o tempo por carro separado por tipo de serviço
+ * (`cyo` entregas, `cyi` recolhas). Versão própria da parte "driver": só os
+ * dias por condutor (3 cidades) se voltam a ler, os dos grupos ficam.
+ */
+export const PRESSURE_DRIVER_DAYS_VERSION = 2;
 
 export type PressureDayPart = "group" | "driver";
 
@@ -36,8 +43,12 @@ export type PressureDayPart = "group" | "driver";
 export interface GroupHour { ci: number; co: number; cis: number; cos: number; del: number[]; pik: number[] }
 /** Um dia de um grupo: horas ("0"–"23") e carros em mãos por hora de relógio ("AAAA-MM-DD HH"). */
 export interface GroupDayPayload { h: Record<string, GroupHour>; c: Record<string, number> }
-/** Uma hora de Lisboa por condutor: serviços começados, durações (ms) e quem agiu. */
-export interface DriverHour { jobs: number; cy: number[]; dr: number[]; tp: number[]; u: string[] }
+/**
+ * Uma hora de Lisboa por condutor: serviços começados, durações (ms) e quem
+ * agiu. `cyo`/`cyi` (versão 2): o mesmo `cy` só das entregas / só das recolhas
+ * (faltam nos dias guardados antes — esses voltam a ler-se pela assinatura).
+ */
+export interface DriverHour { jobs: number; cy: number[]; cyo?: number[]; cyi?: number[]; dr: number[]; tp: number[]; u: string[] }
 export interface DriverDayPayload { h: Record<string, DriverHour> }
 
 export interface StoredDayMeta { sig: string; computedAt: string }
@@ -54,11 +65,14 @@ export function windowDayList(w: Pick<PressureWindow, "startDay" | "endDay">): s
   return out;
 }
 
-/** Assinatura dos dias guardados de um grupo: versão do cálculo + os parques. PURA. */
-export function pressureDaySig(parkIds: readonly string[]): string {
+/**
+ * Assinatura dos dias guardados de um grupo: versão do cálculo (a da parte) +
+ * os parques. PURA.
+ */
+export function pressureDaySig(parkIds: readonly string[], part: PressureDayPart = "group"): string {
   const ids = [...new Set(parkIds.map(String))].sort();
   const h = createHash("sha1").update(ids.join("\n")).digest("hex").slice(0, 16);
-  return `v${PRESSURE_DAYS_VERSION}:${ids.length}:${h}`;
+  return `v${part === "driver" ? PRESSURE_DRIVER_DAYS_VERSION : PRESSURE_DAYS_VERSION}:${ids.length}:${h}`;
 }
 
 /**
@@ -133,7 +147,7 @@ export function driverDayPayloads(rows: ReadonlyArray<Record<string, unknown>>, 
     const day = out.get(String(r.d ?? ""));
     const hr = int(r.hr);
     if (!day || !hourOk(hr)) continue;
-    day.h[String(hr)] = { jobs: int(r.jobs), cy: msList(r.cy), dr: msList(r.dr), tp: msList(r.tp), u: uidList(r.uids) };
+    day.h[String(hr)] = { jobs: int(r.jobs), cy: msList(r.cy), cyo: msList(r.cyo), cyi: msList(r.cyi), dr: msList(r.dr), tp: msList(r.tp), u: uidList(r.uids) };
   }
   return out;
 }
@@ -270,7 +284,7 @@ export function combineDriverDays(
   bands: readonly CrewMeasureBand[],
 ): { driverRows: Array<Record<string, unknown>>; crewRows: Array<Record<string, unknown>> } {
   const tls = new Set(tlAgentIds.map((x) => String(x ?? "").trim()).filter(Boolean));
-  const cells = new Map<string, { wd: number; hr: number; jobs: number; cy: number[]; dr: number[]; tp: number[]; crewSum: number; crewHours: number }>();
+  const cells = new Map<string, { wd: number; hr: number; jobs: number; cy: number[]; cyo: number[]; cyi: number[]; dr: number[]; tp: number[]; crewSum: number; crewHours: number }>();
   const crew = new Map<string, { band: number; busy: boolean; ms: number[] }>();
   for (const { day, payload } of days) {
     const wd = isoWeekday(day);
@@ -279,7 +293,7 @@ export function combineDriverDays(
       if (!Number.isInteger(hr) || !hourOk(hr)) continue;
       const k = `${wd}:${hr}`;
       let c = cells.get(k);
-      if (!c) cells.set(k, (c = { wd, hr, jobs: 0, cy: [], dr: [], tp: [], crewSum: 0, crewHours: 0 }));
+      if (!c) cells.set(k, (c = { wd, hr, jobs: 0, cy: [], cyo: [], cyi: [], dr: [], tp: [], crewSum: 0, crewHours: 0 }));
       const u = x.u ?? [];
       const cy = x.cy ?? [];
       const jobs = x.jobs ?? 0;
@@ -287,6 +301,8 @@ export function combineDriverDays(
       const people = agents ? agents + (u.some((id) => tls.has(id)) ? 0 : 1) : 0;
       c.jobs += jobs;
       for (const v of cy) c.cy.push(v);
+      for (const v of x.cyo ?? []) c.cyo.push(v);
+      for (const v of x.cyi ?? []) c.cyi.push(v);
       for (const v of x.dr ?? []) c.dr.push(v);
       for (const v of x.tp ?? []) c.tp.push(v);
       if (agents) { c.crewSum += people; c.crewHours++; }
@@ -306,14 +322,20 @@ export function combineDriverDays(
     .sort((a, b) => a.wd - b.wd || a.hr - b.hr)
     .map((c) => {
       const cy = minutesSorted(c.cy);
+      const cyo = minutesSorted(c.cyo);
+      const cyi = minutesSorted(c.cyi);
       const dr = minutesSorted(c.dr);
       const tp = minutesSorted(c.tp);
       const [cy50, cy60, cy75, cy85, cy90] = pcts(cy, [0.5, 0.6, 0.75, 0.85, 0.9]);
+      const [o50, o60, o75, o85, o90] = pcts(cyo, [0.5, 0.6, 0.75, 0.85, 0.9]);
+      const [i50, i60, i75, i85, i90] = pcts(cyi, [0.5, 0.6, 0.75, 0.85, 0.9]);
       const [dr50, dr75, dr90] = pcts(dr, [0.5, 0.75, 0.9]);
       const [tp50, tp75] = pcts(tp, [0.5, 0.75]);
       return {
         wd: c.wd, hr: c.hr,
         cy_n: cy.length, cy_p50: cy50, cy_p60: cy60, cy_p75: cy75, cy_p85: cy85, cy_p90: cy90,
+        cyo_n: cyo.length, cyo_p50: o50, cyo_p60: o60, cyo_p75: o75, cyo_p85: o85, cyo_p90: o90,
+        cyi_n: cyi.length, cyi_p50: i50, cyi_p60: i60, cyi_p75: i75, cyi_p85: i85, cyi_p90: i90,
         dr_n: dr.length, dr_p50: dr50, dr_p75: dr75, dr_p90: dr90,
         tp_n: tp.length, tp_p50: tp50, tp_p75: tp75,
         crew_avg: c.crewHours ? c.crewSum / c.crewHours : null,

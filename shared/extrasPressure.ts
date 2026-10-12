@@ -145,6 +145,42 @@ export interface PressureSlot {
   toParkP75?: number | null;
   /** Pessoas (agentes diferentes) por hora com movimento, média. */
   crewAvg?: number | null;
+  /**
+   * 12 out 2026 (Jorge): o mesmo tempo por carro separado pelo tipo do
+   * serviço — entregas (começado com o início da entrega; o par "entrega +
+   * recolha pelo meio" conta aqui) e recolhas. cycleN = cycleOutN + cycleInN.
+   * 0/null até o trabalho noturno reler os dias (migração 0615).
+   */
+  cycleOutN?: number;
+  cycleOutP50?: number | null;
+  cycleOutP60?: number | null;
+  cycleOutP75?: number | null;
+  cycleOutP85?: number | null;
+  cycleOutP90?: number | null;
+  cycleInN?: number;
+  cycleInP50?: number | null;
+  cycleInP60?: number | null;
+  cycleInP75?: number | null;
+  cycleInP85?: number | null;
+  cycleInP90?: number | null;
+}
+
+/** Que serviços entram no tempo por carro: todos (como a escala usa), só entregas ou só recolhas. */
+export type CycleKind = "all" | "out" | "in";
+
+/** Amostra e percentil do tempo por carro de uma célula, por tipo de serviço. PURA. */
+export function slotCycleOf(s: PressureSlot, kind: CycleKind, p: CyclePercentile): { n: number; value: number | null; p50: number | null } {
+  if (kind === "out") return { n: s.cycleOutN ?? 0, value: cycleAt({ p50: s.cycleOutP50, p60: s.cycleOutP60, p75: s.cycleOutP75, p85: s.cycleOutP85, p90: s.cycleOutP90 }, p), p50: s.cycleOutP50 ?? null };
+  if (kind === "in") return { n: s.cycleInN ?? 0, value: cycleAt({ p50: s.cycleInP50, p60: s.cycleInP60, p75: s.cycleInP75, p85: s.cycleInP85, p90: s.cycleInP90 }, p), p50: s.cycleInP50 ?? null };
+  return { n: s.cycleN ?? 0, value: slotCycleAt(s, p), p50: s.cycleP50 ?? null };
+}
+
+/**
+ * Já há tempos separados (entregas/recolhas) nestas células? Só depois de o
+ * trabalho noturno reler os dias com a versão nova. PURA.
+ */
+export function hasCycleSplit(slots: ReadonlyArray<Pick<PressureSlot, "cycleOutN" | "cycleInN">>): boolean {
+  return slots.some((s) => (s.cycleOutN ?? 0) + (s.cycleInN ?? 0) > 0);
 }
 
 /** 22d — condutor por carro por escalão de pessoas × hora cheia (só cidades). */

@@ -89,7 +89,9 @@ describe("44a — Pressão: mapa maior, botões em cima, métricas explicadas", 
   });
   it("explica o p75 e tem legenda (rampa de um só tom, sem dados, hora apertada)", () => {
     expect(s).toContain("O que é o p75");
-    expect(s).toContain('const RAMP = ["#86b6ef", "#5598e7", "#256abf", "#104281"] as const;');
+    // 12 out 2026: a rampa é partilhada com a Semana da Atividade diária (mesma legenda).
+    expect(src("client/src/components/heatRamp.ts")).toContain('export const RAMP = ["#86b6ef", "#5598e7", "#256abf", "#104281"] as const;');
+    expect(s).toContain('import { cellStyle, rampLegend } from "@/components/heatRamp";');
     expect(s).toContain("hora apertada (top 20 %)");
     expect(s).toContain("h-12 md:h-14");
   });

@@ -282,9 +282,12 @@ describe("Ecrã: erro ≠ vazio, permissões e nada se perde", () => {
   const page = src("client/src/pages/ShiftHandoverPage.tsx");
   const panel = src("client/src/components/ShiftHandoverDraftPanel.tsx");
   it("cada leitura tem o seu aviso de erro com 'Tentar de novo'", () => {
-    for (const what of ["as tuas cidades", "o registo deste turno", "o resumo automático do turno", "o histórico de passagens", "o resumo do dia", "o cumprimento das passagens"]) {
+    for (const what of ["as tuas cidades", "o registo deste turno", "o resumo automático do turno", "o histórico de passagens"]) {
       expect(page).toContain(`what="${what}`);
     }
+    // 12 out 2026: o Resumo do dia passou para a Atividade diária (components/shiftDay/DaySummaryTab.tsx)
+    const resumo = src("client/src/components/shiftDay/DaySummaryTab.tsx");
+    for (const what of ["as tuas cidades", "o resumo do dia", "o cumprimento das passagens"]) expect(resumo).toContain(`what="${what}`);
     expect(panel).toContain(`{failed ? "erro" : count}`);
   });
   it("não grava uma passagem nova sem os pendentes do turno anterior (a não ser que se confirme)", () => {

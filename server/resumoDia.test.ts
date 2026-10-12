@@ -219,7 +219,8 @@ describe("Resumo do dia — parado limitado ao turno", () => {
 });
 
 describe("Resumo do dia — o ecrã", () => {
-  const page = src("client/src/pages/ShiftHandoverPage.tsx");
+  // 12 out 2026: o Resumo do dia passou para a Atividade diária (o mesmo componente, sem perder nada).
+  const page = src("client/src/components/shiftDay/DaySummaryTab.tsx");
   const comp = src("client/src/components/shiftDay/ShiftDayReview.tsx");
   it("Quem trabalhou: nome abre a ficha, a linha abre o dia; colunas Vel. máx. e Excessos", () => {
     expect(page).toContain("openEmployee(p.employeeId)");

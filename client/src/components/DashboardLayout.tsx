@@ -227,7 +227,8 @@ export const menuGroups: MenuGroup[] = [
     items: [
       { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", module: "reservas_operacoes" },
       { icon: Wrench, label: "Serviços", path: "/servicos", module: "servicos" },
-      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario", "radio"] },
+      // 12 out 2026: + o Resumo do dia (veio da Passagem de turno, mesma permissão).
+      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario", "radio", "passagem_resumo_dia"] },
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
       { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },

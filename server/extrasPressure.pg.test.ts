@@ -74,8 +74,12 @@ describe.skipIf(!URL)("Pressão por condutor num Postgres real (PRESSURE_PG_URL)
     // 17h de Lisboa: A 16:00→16:40 e B 16:10→16:50 (40 min); 2 pessoas. 26d: a entrega
     // das 16:40 (entregue 17:05) + a recolha das 17:20 são UM serviço, sem serviço a seguir → fora.
     expect(rows).toContainEqual(expect.objectContaining({ weekday: 5, hour: 17, cycleN: 2, cycleP50: 40, driveN: 4, driveP50: 22.5, crewAvg: 2 }));
+    // 12 out 2026: as duas são entregas (começadas com o início da entrega) — nenhuma recolha nessa hora
+    expect(rows).toContainEqual(expect.objectContaining({ weekday: 5, hour: 17, cycleOutN: 2, cycleOutP50: 40, cycleInN: 0, cycleInP50: null }));
     // 26d, sábado 19h: C entrega + recolha pelo meio = 70 min até ao serviço seguinte; D sem par = 60
     expect(rows).toContainEqual(expect.objectContaining({ weekday: 6, hour: 19, cycleN: 2, cycleP50: 65, crewAvg: 3 }));
+    // o par entrega + recolha conta como entrega (a recolha do par não tem intervalo próprio)
+    expect(rows).toContainEqual(expect.objectContaining({ weekday: 6, hour: 19, cycleOutN: 2, cycleOutP50: 65, cycleInN: 0 }));
     // 18h: a recolha (recolhido 17:30 → no parque 17:45 = 15 min); sem serviço seguinte
     expect(rows).toContainEqual(expect.objectContaining({ weekday: 5, hour: 18, cycleN: 0, toParkN: 1, toParkP50: 15 }));
   });
@@ -223,7 +227,37 @@ describe.skipIf(!URL)("47c — dia a dia + juntar = leitura da janela inteira (P
     expect(g.slotRows.map((r) => mapPressureSlotRow("g", w, r))).toEqual(oldSlots);
     expect(g.loadRows.map((r) => mapPressureLoadRow("g", r)).filter(Boolean)).toEqual(oldLoads);
     expect(d.driverRows.map(mapPressureDriverRow)).toEqual(oldDrivers);
+    // 12 out 2026: entregas + recolhas = todos, em cada célula; há recolhas medidas
+    for (const r of oldDrivers) expect((r?.cycleOutN ?? 0) + (r?.cycleInN ?? 0)).toBe(r?.cycleN);
+    expect(oldDrivers.some((r) => (r?.cycleInN ?? 0) > 0)).toBe(true);
+    expect(oldDrivers.some((r) => (r?.cycleOutN ?? 0) > 0)).toBe(true);
     expect(d.crewRows.map((r) => mapPressureCrewRow("g", bands, r)).filter(Boolean)).toEqual(oldCrew);
+  }, 120_000);
+
+  it("12 out 2026 — Semana da Atividade diária: UMA leitura de 8 dias dá, dia a dia e hora a hora, o mesmo que os dias lidos um a um", async () => {
+    const { driverDayPayloads, groupDayPayloads } = await import("./pressureDays");
+    const { buildPressureDaySql, buildPressureDriverDaySql, pressureWindow } = await import("./multiparkDb/pressure");
+    const { weekCalendarDays } = await import("../shared/weekActivity");
+    const w = pressureWindowSince(since, end);
+    const calDays = weekCalendarDays("2026-10-18"); // domingo 18 → domingo 25 (passa a mudança da hora)
+    const r = pressureWindow(calDays[calDays.length - 1], calDays.length);
+    // como em produção (leitura analítica: sem nested loops nem JIT)
+    await client.query("SET enable_nestloop = off");
+    await client.query("SET jit = off");
+    const wg = groupDayPayloads(await q(buildPressureDaySql(w, r, parks)), calDays);
+    const wd = driverDayPayloads(await q(buildPressureDriverDaySql(w, r, parks)), calDays);
+    let events = 0;
+    for (const day of calDays) {
+      const one = pressureWindow(day, 1);
+      const g1 = groupDayPayloads(await q(buildPressureDaySql(w, one, parks)), [day]).get(day);
+      const d1 = driverDayPayloads(await q(buildPressureDriverDaySql(w, one, parks)), [day]).get(day);
+      expect(wg.get(day), day).toEqual(g1);
+      expect(wd.get(day), day).toEqual(d1);
+      events += Object.values(g1!.h).reduce((a, x) => a + x.ci + x.co, 0);
+    }
+    await client.query("RESET enable_nestloop");
+    await client.query("RESET jit");
+    expect(events).toBeGreaterThan(50);
   }, 120_000);
 
   it("a leitura analítica do cliente (SET LOCAL sem nested loops/JIT) corre num Postgres só de leitura", async () => {

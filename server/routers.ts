@@ -4561,6 +4561,44 @@ export const appRouter = router({
         return getPersonDay(input.date, input.key);
       }),
 
+    // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM no(s) dia(s)
+    // operacional(ais) — entrega feita nesse dia, seja qual for o dia da reclamação.
+    departedComplaints: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        projectId: z.number().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "atividade_diaria", "view");
+        const end = input.endDate && input.endDate >= input.startDate ? input.endDate : input.startDate;
+        const { daysInRange } = await import("../shared/lisbonDay");
+        if (daysInRange(input.startDate, end).length > 93) throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo máximo: 93 dias." });
+        const { getDepartedComplaints } = await import("./departedComplaints");
+        return getDepartedComplaints(input.startDate, end);
+      }),
+
+    // 12 out 2026 (Jorge): separador "Semana" — uma semana (domingo → sábado,
+    // dias operacionais) de UMA cidade, por hora: entregas/recolhas, tempo por
+    // carro (a métrica da Pressão) e espera. Uma leitura por semana, só desta cidade.
+    weekActivity: protectedProcedure
+      .input(z.object({
+        city: z.enum(HANDOVER_CITIES),
+        weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "atividade_diaria", "view");
+        // A cidade tem de ser uma das do utilizador (o pedido já vem limitado a ela).
+        const { scopedCityNamesLive } = await import("./cityScope");
+        const { allowedHandoverCities } = await import("../shared/shiftHandover");
+        const names = scopedCityNamesLive();
+        if (names !== undefined && !allowedHandoverCities({ all: false, cityNames: names }).includes(input.city)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Esta cidade não pertence ao teu centro de custos." });
+        }
+        const { getWeekActivity } = await import("./weekActivity");
+        return getWeekActivity({ city: input.city, weekStart: input.weekStart });
+      }),
+
     // Liga um agente Multipark a um PARCEIRO (agências que marcam pelo portal)
     setAgentPartner: protectedProcedure
       .input(z.object({ agentName: z.string().min(1).max(256), partnershipId: z.number().nullable() }))
