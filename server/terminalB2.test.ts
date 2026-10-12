@@ -1089,3 +1089,36 @@ describe("auditoria B2 — meses fechados: erro ao ler os fechos ≠ \"nenhum m�
     expect((await rhSessionsOf(t.deps, { employeeId: JOAO, fromUtc: "2026-09-01 00:00:00", toUtc: "2026-09-30 00:00:00" })).sessions).toHaveLength(1);
   });
 });
+
+describe("auditoria B2 — permissões das tRPC novas", () => {
+  const router = src("server/terminalRouter.ts");
+  const block = (name: string) => {
+    const i = router.indexOf(`  ${name}: protectedProcedure`);
+    expect(i, name).toBeGreaterThan(-1);
+    return router.slice(i, router.indexOf("\n  }),", i) + 6);
+  };
+  it("\"Sim, estou\" / \"Já saí\" / \"Ainda estou\": a ficha vem SEMPRE de quem pede (não há employeeId na entrada)", () => {
+    for (const n of ["answerStillHere", "reopen"]) {
+      const b = block(n);
+      expect(b, n).toContain("employeeId: await myEmployeeId(ctx.user.id)");
+      expect(b, n).not.toMatch(/input\.employeeId|employeeId: z\./);
+    }
+  });
+  it("RH: lista com a guarda do ponto da ficha; confirmar/corrigir/desmarcar só quem gere essa ficha (a da sessão)", () => {
+    const rh = router.slice(router.indexOf("  rh: router({"), router.indexOf("  liveByCity:"));
+    expect(rh).toContain("await assertCanViewTimeRecords(ctx.user, input.employeeId);");
+    expect(rh.match(/await assertManagesSession\(ctx\.user, input\.sessionId\);/g)).toHaveLength(3);
+    expect(router).toContain("await assertCanManageEmployee(user, s.employeeId,");
+  });
+  it("Resumo do dia só das cidades de quem pede; zonas só com Definições", () => {
+    const d = block("dayTimeline");
+    expect(d).toContain('requireAccess(ctx.user, "passagem_resumo_dia", "view");');
+    expect(d).toContain('if (!actor.cities.includes(input.city)) throw new TRPCError({ code: "FORBIDDEN"');
+    expect(block("parkPoints")).toContain('requireAccess(ctx.user, "definicoes", "view");');
+  });
+  it("só as respostas da própria pessoa saltam o centro de custos (as do RH e do TL não)", () => {
+    expect(isPersonalAccessPath("terminal.answerStillHere")).toBe(true);
+    expect(isPersonalAccessPath("terminal.reopen")).toBe(true);
+    for (const p of ["terminal.rh.confirm", "terminal.rh.correct", "terminal.rh.reject", "terminal.rh.list", "terminal.dayTimeline", "terminal.liveByCity", "terminal.tl.put", "terminal.parkPoints"]) expect(isPersonalAccessPath(p), p).toBe(false);
+  });
+});
