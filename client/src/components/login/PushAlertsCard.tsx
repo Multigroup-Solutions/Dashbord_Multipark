@@ -102,13 +102,17 @@ export function PushAlertsCard() {
 
 export function PushAlertsBanner({ pda = false }: { pda?: boolean } = {}) {
   const p = usePushAlerts();
-  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; } });
+  // (auditoria A2) Num PDA (partilhado) o "Agora não" vale só para esta sessão —
+  // senão a primeira pessoa que o carregasse escondia-o para todas as seguintes.
+  const store = (): Storage | null => { try { return pda ? sessionStorage : localStorage; } catch { return null; } };
+  const [hidden, setHidden] = useState(() => { try { return store()?.getItem(DISMISS_KEY) === "1"; } catch { return false; } });
   if (hidden || !p.loaded || !p.supported || !p.available || p.active || p.blocked || notificationPermission() !== "default") return null;
-  const dismiss = () => { setHidden(true); try { localStorage.setItem(DISMISS_KEY, "1"); } catch { /* sem storage */ } };
+  const dismiss = () => { setHidden(true); try { store()?.setItem(DISMISS_KEY, "1"); } catch { /* sem storage */ } };
   return (
     <div role="status" className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-3 text-sm flex flex-wrap items-center gap-2">
       <BellRing className="h-4 w-4 text-primary shrink-0" />
-      <span className="min-w-0 flex-1">{pda
+      {/* basis-56: a 360 px os botões descem para a linha de baixo (antes o texto ficava uma palavra por linha, por baixo dos botões) */}
+      <span className="min-w-0 flex-1 basis-56">{pda
         ? "Ativa os avisos neste PDA: enquanto estiveres com ele recebes \"Tens um aviso\" (sem nomes) mesmo com a app fechada."
         : "Ativa os avisos para receberes no telemóvel os códigos de entrada de quem os pede."}</span>
       <Button size="sm" disabled={p.busy} onClick={async () => { if (await p.enable()) dismiss(); }}>Ativar avisos</Button>

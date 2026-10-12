@@ -955,3 +955,19 @@ describe("auditoria A2: aviso de PDA noutro aparelho e entradas ao mesmo tempo",
     }
   });
 });
+
+describe("auditoria A2: ecrãs a 360 px e o PDA partilhado", () => {
+  it("'Ativar avisos' no PDA: os botões descem de linha a 360 px e o 'Agora não' vale só para esta sessão", () => {
+    const src = readFileSync("client/src/components/login/PushAlertsCard.tsx", "utf8");
+    const banner = src.slice(src.indexOf("export function PushAlertsBanner"));
+    expect(banner).toContain('<span className="min-w-0 flex-1 basis-56">');
+    expect(banner).toContain("return pda ? sessionStorage : localStorage;");
+    expect(banner).not.toMatch(/localStorage\.(get|set)Item\(DISMISS_KEY/);
+  });
+
+  it("Definições → 'Código de entrada vai para': a escolha comprida não sai do ecrã a 360 px", () => {
+    const src = readFileSync("client/src/pages/DefinicoesPage.tsx", "utf8");
+    const i = src.indexOf("isLoginDelivery ? (");
+    expect(src.slice(i, i + 600)).toMatch(/<SelectTrigger className="w-full max-w-sm min-w-0 [^"]*truncate"/);
+  });
+});
