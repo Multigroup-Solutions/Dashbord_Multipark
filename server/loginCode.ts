@@ -15,7 +15,8 @@
  *    erradas por conta e por dia → à 5.ª fica bloqueada até ao fim do dia
  *    (só com código) e o dono é avisado. Só utilizador/extra/condutor.
  *  - A2: num PDA registado (token validado) os funcionários também recebem
- *    código — só para quem está ao mesmo nível ou acima. Com a definição
+ *    código — só para quem está ACIMA da pessoa (nunca um colega do mesmo
+ *    nível: podia entrar como ele). Com a definição
  *    `login.codeDelivery` = "email" o código vai para o email da pessoa pela
  *    acesso@ (server/loginMail.ts); se não sair, vai ao TL/supervisor.
  */
@@ -220,7 +221,7 @@ export async function requestLoginCode(deps: LoginDeps, input: CodeRequestInput)
 
   const pools = await store.dutyPools(city, operationalShift(now), now);
   let { userIds, via } = pickCodeRecipients(city, pools, user ? [user.id] : []);
-  // A2: o código de um funcionário (num PDA) só a quem está ao mesmo nível ou acima.
+  // A2: o código de um funcionário (num PDA) só a quem está acima dele (nunca um colega do mesmo nível).
   if (user && !canUsePassword(user.role)) {
     const roles = new Map(Array.from(await store.peopleOf([...userIds, ...pools.rhAdmins])).map(([id, p]) => [id, p.role]));
     const same = codeRecipientsForRole(user.role, userIds, roles);

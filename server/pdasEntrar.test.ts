@@ -579,7 +579,8 @@ describe("funcionários com código só num PDA registado (sem palavra-passe)", 
     vi.setSystemTime(T0 + 61_000);
     await (await pda.caller()).auth.code.request({ email: "p26@x.pt", pdaToken: TOKEN7 });
     const n = m.state.notified.find((x) => x.kind === "login_code");
-    expect(n.targetUserIds).toEqual([21, 22]);
+    // (auditoria) o TL de serviço #21 é colega do mesmo nível: não recebe — só o supervisor
+    expect(n.targetUserIds).toEqual([22]);
     expect(n.title).toContain("Tiago Folga (PDA 12)");
     const code = lastCode()!;
     // no mesmo aparelho mas sem o token do PDA → recusado (papel)
@@ -593,17 +594,18 @@ describe("funcionários com código só num PDA registado (sem palavra-passe)", 
     expect(await pda.valid()).toBe(true);
   });
 
-  it("o código de um funcionário só vai a quem está ao mesmo nível ou acima (o TL nunca recebe o de um supervisor)", async () => {
+  it("o código de um funcionário só vai a quem está ACIMA dele (nunca a um colega do mesmo nível, nem o de um supervisor a um TL)", async () => {
     lisbon();
     await (await device().caller()).auth.code.request({ email: "p23@x.pt", pdaToken: TOKEN7 });
-    expect(m.state.notified.filter((n) => n.kind === "login_code").map((n) => n.targetUserIds)).toEqual([[22]]);
+    // (auditoria) a supervisora #22 de serviço é colega: não recebe o código do supervisor #23 → vai ao backoffice #30
+    expect(m.state.notified.filter((n) => n.kind === "login_code").map((n) => n.targetUserIds)).toEqual([[30]]);
     // admin num PDA: ninguém de serviço ao nível dele, nem no RH → não se envia
     addUser({ id: 40, role: "admin", name: "Admin Cidade", email: "admin@x.pt" });
     await (await device().caller()).auth.code.request({ email: "admin@x.pt", pdaToken: TOKEN7 });
     expect(m.state.notified.filter((n) => n.kind === "login_code")).toHaveLength(1);
     expect(m.state.logs.some((l) => /ninguém de serviço/.test(l.details))).toBe(true);
     expect(codeRecipientsForRole("extra", [21, 22], new Map([[21, "team_leader"], [22, "supervisor"]]))).toEqual([21, 22]);
-    expect(codeRecipientsForRole("supervisor", [21, 22, 30], new Map([[21, "team_leader"], [22, "supervisor"], [30, "backoffice"]]))).toEqual([22, 30]);
+    expect(codeRecipientsForRole("supervisor", [21, 22, 30], new Map([[21, "team_leader"], [22, "supervisor"], [30, "backoffice"]]))).toEqual([30]);
   });
 
   it("código pedido num PDA não serve para entrar como funcionário noutro PDA", async () => {

@@ -242,14 +242,17 @@ export function pickCodeRecipients(city: string | null, pools: DutyPools, exclud
 }
 
 /**
- * A2: o código de um FUNCIONÁRIO (só num PDA registado) só vai a quem está ao
- * mesmo nível ou acima — um TL nunca recebe o código de um supervisor ou de um
- * admin (podia entrar como ele). Utilizador/extra/condutor: todos. PURA.
+ * A2: o código de um FUNCIONÁRIO (só num PDA registado) só vai a quem está
+ * ACIMA dele (estritamente, como em "quem gere quem") — quem recebe o código
+ * pode entrar como a pessoa, por isso nunca um colega do mesmo nível: um TL
+ * não recebe o de outro TL nem o de um supervisor, um supervisor não recebe o
+ * de outro supervisor, o backoffice não recebe o de outro backoffice.
+ * Utilizador/extra/condutor: todos (como no A1). PURA.
  */
 export function codeRecipientsForRole(targetRole: string | null | undefined, ids: readonly number[], roles: ReadonlyMap<number, string>): number[] {
   const need = roleRank(targetRole);
   if (need < roleRank("team_leader")) return [...ids];
-  return ids.filter((id) => roleRank(roles.get(id)) >= need);
+  return ids.filter((id) => roleRank(roles.get(id)) > need);
 }
 
 /** "TL Rui", "supervisor Ana", "back office Marta". PURA. */
