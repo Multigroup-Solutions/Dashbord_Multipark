@@ -149,7 +149,7 @@ export async function importReview(locationId: number, payload: GoogleReview, us
       const result = await tx.insert(complaints).values({ title: `Crítica Google ${review.rating}★ — ${review.reviewerName}`.slice(0, 255),
         description: review.reviewText || 'Avaliação sem texto.', complaintType: 'other', complaintStatus: 'new',
         complaintPriority: review.rating === 1 ? 'urgent' : 'high', clientName: review.reviewerName,
-        projectId: location.projectId, createdById: userId,
+        projectId: location.projectId, createdById: userId, origin: 'critica',
         slaDeadline: new Date(Date.now() + 86_400_000).toISOString().slice(0, 19).replace('T', ' ') });
       await tx.update(googleReviews).set({ complaintId: result[0].insertId, status: 'converted_complaint' }).where(eq(googleReviews.id, id));
     }

@@ -26,6 +26,7 @@ import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
 import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
+import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
 import { PERF_RANK_WEIGHTS_KEY, rankWeightsSchema } from "./peoplePerformance";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
@@ -486,6 +487,16 @@ export const SETTINGS = {
     defaultValue: { ...COMMS_ROUTING_DEFAULTS },
     wiring: "live",
   }),
+  // Lote 57 (Jorge, 12 out 2026): a IA vê uma reclamação num email de outra caixa → Reclamações.
+  "ai.mailComplaints": def({
+    key: "ai.mailComplaints",
+    group: "ia",
+    label: "IA: reclamações vistas noutras caixas — certeza para criar ou sugerir",
+    description: "Quando a IA que separa os emails diz que um email novo de outra caixa (info@, reservas@…) é uma reclamação: com certeza ≥ createMinConfidence a reclamação é criada (ou o email junta-se à aberta do mesmo cliente); entre suggestMinConfidence e isso fica só a sugestão \"Parece uma reclamação\" na página das Reclamações; abaixo, nada. JSON: {\"createMinConfidence\": 0.85, \"suggestMinConfidence\": 0.5}.",
+    schema: complaintIntakeSettingsSchema,
+    defaultValue: { ...COMPLAINT_INTAKE_DEFAULTS },
+    wiring: "live",
+  }),
   "ai.priceOverridesEur": def({
     key: "ai.priceOverridesEur",
     group: "ia",
@@ -917,6 +928,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
   // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
   { name: "AI_MAIL_ROUTING", label: "IA: separar emails e WhatsApp pelas caixas", description: "Os emails novos que chegam às caixas partilhadas (info@, reservas@, recursos-humanos@…; nunca as pessoais) e as conversas NOVAS do WhatsApp vão sozinhos para a caixa do tema: RH, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. Ficam por ler. O que a IA não percebe (ou se falhar) vai para o info (no WhatsApp, a Geral). Uma resposta numa conversa que já tem caixa não muda. Recrutamento em 1.º contacto cria a lead e a candidatura. Nunca responde a ninguém; mover à mão corrige.", group: "ia" },
+  // Lote 57 (Jorge, 12 out 2026: "se a IA vê que é uma reclamação, envia para lá") → ligado por omissão.
+  { name: "AI_MAIL_COMPLAINTS", label: "IA: reclamações que chegam a outras caixas vão para as Reclamações", description: "Usa a leitura da IA que separa os emails pelas caixas (precisa de «IA: separar emails e WhatsApp pelas caixas» ligado; não faz outra chamada à IA). Quando um email novo de outra caixa partilhada (info@, reservas@, cancelamentos…) é uma reclamação: com certeza alta cria a reclamação ou junta o email à reclamação aberta do mesmo cliente/reserva; com menos certeza fica a sugestão \"Parece uma reclamação → Criar reclamação\" na página das Reclamações. Uma conversa nunca dá duas reclamações. Nunca para emails internos, automáticos, newsletters, parceiros nem avisos de avaliações. O email fica na caixa onde chegou e NUNCA se responde ao cliente (sem aviso de receção). Na reclamação fica escrito que veio da IA, de que caixa e porquê. Certezas em Definições → Parâmetros → IA (ai.mailComplaints). Desligado: a IA continua a separar pelas caixas, mas não cria nem sugere reclamações.", group: "ia" },
   { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
   { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
   { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },

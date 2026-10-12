@@ -29,6 +29,11 @@ const d = (s?: string | null) => fmtPTDate(s);
  * detalhes de Reclamações, Perdidos & Achados e Críticas. O cliente é a ficha
  * do CRM (as reservas vêm dela, lidas ao vivo da Multipark).
  */
+/** Estado das reclamações em português (aparecia "closed", "analyzing"… — auditoria do lote 57). */
+const COMPLAINT_STATUS_PT: Record<string, string> = {
+  new: "Novo", analyzing: "Em Análise", waiting_client: "Aguarda Cliente", resolved: "Resolvido", closed: "Fechado", converted: "Convertida",
+};
+
 export default function ClientHistoryCard({ clientId, email, phone, plate, name, highlightRef, className }: Props) {
   const hasKey = !!(clientId || email || phone || plate || name);
   const { data, isLoading, error, refetch, isFetching } = trpc.clients.history.useQuery(
@@ -124,7 +129,7 @@ export default function ClientHistoryCard({ clientId, email, phone, plate, name,
               {data!.complaints.map((c) => (
                 <div key={c.id} className="flex items-center justify-between gap-2 border-b last:border-0 py-0.5">
                   <span className="truncate">{c.title}</span>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">{c.status} · {d(c.createdAt)}</span>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{COMPLAINT_STATUS_PT[c.status] ?? c.status} · {d(c.createdAt)}</span>
                 </div>
               ))}
             </div>
