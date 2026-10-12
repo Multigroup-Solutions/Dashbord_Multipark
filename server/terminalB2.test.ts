@@ -1004,3 +1004,67 @@ describe("auditoria B2 — vigia: corridas, carga e Zello em baixo", () => {
     expect((await t.tick(1)).asked).toBe(1); // 14:36 — o Zello voltou e continua fora
   });
 });
+
+describe("auditoria B2 — dinheiro: ordenado = custo dos extras, meia-noite e mês, contas duplas", () => {
+  const rates = { extraRateByLevel: new Map([[1, 4.5], [2, 5], [3, 5.5], [4, 6]]), extraRateByName: new Map([["junior", 4.5], ["senior", 5], ["terminal", 5.5], ["master", 6]]) };
+  const xr = { junior: 4.5, senior: 5, terminal: 5.5, master: 6 } as any;
+  const db = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+  let seed = 4242;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const pick = <T,>(a: T[]): T => a[Math.floor(rnd() * a.length)];
+
+  it("em 60 meses aleatórios (sessões a cavalo do turno, sobrepostas, todas as bases) o ordenado e o custo dos extras pagam o mesmo", () => {
+    for (let i = 0; i < 60; i++) {
+      const level = 1 + Math.floor(rnd() * 4);
+      const recs: any[] = [], sessions: any[] = [];
+      let t = Date.UTC(2026, 9, 1, 5, 0) + Math.floor(rnd() * 20) * 3_600_000, id = 1;
+      while (t < Date.UTC(2026, 9, 29)) {
+        const inMs = t, h = 1 + Math.floor(rnd() * 44) / 4, outMs = inMs + h * 3_600_000;
+        recs.push({ id: id++, type: "check_in", recordedAt: db(inMs) }, { id: id++, type: "check_out", recordedAt: db(outMs), hoursWorked: h.toFixed(2) });
+        for (let k = 0; k < 3; k++) {
+          const a = inMs + (rnd() - 0.3) * h * 3_600_000, b = a + rnd() * 6 * 3_600_000;
+          sessions.push({ startedAt: db(a), endedAt: db(b), countedFrom: rnd() < 0.2 ? db(a + 900_000) : null, countedUntil: db(a + rnd() * (b - a)), countedBasis: pick(["gps_close", "last_gps", "last_service", "confirmed", "pending", "rejected"]), payUplift: pick([0, 1, 1]) });
+        }
+        t = outMs + (6 + rnd() * 30) * 3_600_000;
+      }
+      const shifts = countableShifts(pairShifts(recs).shifts);
+      const pay = computeEmployeeMonth({ employee: { id: 1, fullName: "X", position: "extra", extraLevel: level, isActive: 1 } as any, year: 2026, month: 10, shifts, leaves: [], ...rates, terminalEnabled: true, terminalSessions: sessions });
+      const ponto = shifts.map((s) => ({ recordedAt: s.outAt, hours: String(s.hours), level, employeeId: 1, projectId: 1, terminalStatus: null, terminalUntil: null, shiftInAt: s.inAt }));
+      const cost = aggregateExtrasCost({ assignments: [], ponto, terminalSessions: new Map([[1, sessions]]) }, xr, { dayOfRecord: () => "d", cityOfProject: () => null, terminal: true });
+      expect(Math.abs((cost.realByDay.get("d") ?? 0) - pay.extraPayment), `mês ${i}`).toBeLessThan(0.01 * shifts.length + 0.011);
+      // nunca mais horas de terminal do que as do mês; condutores (payUplift 0) não contam
+      expect(pay.terminalHours).toBeLessThanOrEqual(pay.totalHours + 1e-9);
+    }
+  });
+  it("turno da noite de 31 out a 1 nov: as horas de terminal depois da meia-noite são do ordenado de OUTUBRO (o mês do turno), nunca de novembro", () => {
+    // 31 out 22:00 → 1 nov 06:00 (Lisboa = UTC desde 25 out); terminal 23:00–02:00 com GPS no fecho
+    const recs = [
+      { id: 1, type: "check_in" as const, recordedAt: "2026-10-31 22:00:00" },
+      { id: 2, type: "check_out" as const, recordedAt: "2026-11-01 06:00:00", hoursWorked: "8.00" },
+    ];
+    const sessions = [{ startedAt: "2026-10-31 23:00:00", endedAt: "2026-11-01 02:00:00", countedUntil: "2026-11-01 02:00:00", countedBasis: "gps_close", payUplift: 1 }];
+    const all = pairShifts(recs).shifts;
+    const of = (y: number, m: number) => {
+      const first = `${y}-${String(m).padStart(2, "0")}-01`, last = `${y}-${String(m).padStart(2, "0")}-${new Date(Date.UTC(y, m, 0)).getUTCDate()}`;
+      return computeEmployeeMonth({ employee: { id: 1, fullName: "X", position: "extra", extraLevel: 1, isActive: 1 } as any, year: y, month: m, shifts: all.filter((s) => s.day >= first && s.day <= last), leaves: [], ...rates, terminalEnabled: true, terminalSessions: sessions });
+    };
+    expect(of(2026, 10)).toMatchObject({ totalHours: 8, terminalHours: 3 });
+    expect(of(2026, 11)).toMatchObject({ totalHours: 0, terminalHours: 0 });
+    // passa as 03:00 (início do dia operacional): conta na mesma (não há fecho às 03:00)
+    const late = [{ ...sessions[0], endedAt: "2026-11-01 05:00:00", countedUntil: "2026-11-01 05:00:00" }];
+    expect(splitTerminalHours(all.map((s) => ({ ...s, sessions: late })), true).terminalHours).toBe(6);
+  });
+  it("contas duplas: sessões sobrepostas da mesma pessoa e uma reaberta contam o tempo UMA vez; duas saídas no mesmo dia não somam a mesma hora", () => {
+    const s1 = { startedAt: "2026-10-12 09:00:00", endedAt: "2026-10-12 12:00:00", countedUntil: "2026-10-12 12:00:00", countedBasis: "gps_close", payUplift: 1 };
+    const s2 = { startedAt: "2026-10-12 11:00:00", endedAt: "2026-10-12 13:00:00", countedUntil: "2026-10-12 13:00:00", countedBasis: "confirmed", payUplift: 1 };
+    const reopen = { startedAt: "2026-10-12 12:30:00", countedFrom: "2026-10-12 12:45:00", endedAt: "2026-10-12 14:00:00", countedUntil: "2026-10-12 14:00:00", countedBasis: "last_gps", payUplift: 1 };
+    // turno 08:00–16:00 UTC (8 h): terminal 09:00–14:00 = 5 h (não 3 + 2 + 1,25)
+    expect(sessionHoursInShift({ inAt: "2026-10-12 08:00:00", outAt: "2026-10-12 16:00:00", hours: 8 }, [s1, s2, reopen])).toEqual({ terminalHours: 5, pendingHours: 0 });
+    // dois turnos no mesmo dia (08–11 e 12–16): cada um só com a sua parte (3 h + 2 h)
+    const two = [
+      { hours: 3, inAt: "2026-10-12 08:00:00", outAt: "2026-10-12 11:00:00", sessions: [s1, s2, reopen] },
+      { hours: 4, inAt: "2026-10-12 12:00:00", outAt: "2026-10-12 16:00:00", sessions: [s1, s2, reopen] },
+    ];
+    expect(splitTerminalHours(two, true)).toMatchObject({ terminalHours: 4 }); // 09–11 (2 h) + 12–14 (2 h)
+  });
+});
