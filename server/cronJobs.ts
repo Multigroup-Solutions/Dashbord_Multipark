@@ -322,6 +322,24 @@ export async function opsPresenceCron(): Promise<CronJobRun> {
   }
 }
 
+/**
+ * Terminal pelo perfil (plano 56 B2): "Ainda estás no terminal?" — GPS do
+ * Zello de quem está no terminal, pergunta, liberta sem resposta. Interruptor
+ * PONTO_TERMINAL desligado → não lê o Zello nem a BD do terminal.
+ */
+export async function terminalWatchCron(): Promise<CronJobRun> {
+  try {
+    const { pontoTerminalEnabled } = await import("./pontoTerminal");
+    if (!(await pontoTerminalEnabled())) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "off" }, done: true };
+    const [{ realTerminalDeps }, { runTerminalWatch }] = await Promise.all([import("./terminalSessions"), import("./terminalWatch")]);
+    const r = await runTerminalWatch(await realTerminalDeps());
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron terminal-watch] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 /** Caixa: fecho do dia — todas as saídas de ontem e anteontem, com as mesmas regras. */
 export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
@@ -444,8 +462,12 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
       await step("terminal-pending", "terminal por confirmar", async () => {
         const { retryPendingTerminalShifts } = await import("./pontoTerminal");
         const r = await retryPendingTerminalShifts({ deadlineAt: cap(15_000) });
+        const t = r.sessions;
+        if (t && t.pending > 0) {
+          console.log(`[daily-ops] terminal (sessões) por confirmar: ${t.resolved} de ${t.pending} até à última recolha/entrega (${t.noActions} sem ações, ${t.noAgent} sem agente ligado${t.closedMonth ? `, ${t.closedMonth} em meses fechados` : ""}${t.deferred ? `, ${t.deferred} para amanhã` : ""}${t.readFailed ? " — Multipark não lida" : ""})`);
+        }
         if (!r.skipped && r.pending > 0) {
-          console.log(`[daily-ops] terminal por confirmar: ${r.resolved} de ${r.pending} até à última recolha/entrega (${r.noActions} sem ações, ${r.noAgent} sem agente ligado${r.deferred ? `, ${r.deferred} para amanhã` : ""}${r.readFailed ? " — Multipark não lida" : ""})`);
+          console.log(`[daily-ops] terminal antigo por confirmar: ${r.resolved} de ${r.pending} até à última recolha/entrega (${r.noActions} sem ações, ${r.noAgent} sem agente ligado${r.deferred ? `, ${r.deferred} para amanhã` : ""}${r.readFailed ? " — Multipark não lida" : ""})`);
         }
       });
       // RH: "possíveis faltas" de ontem (pendentes de validação; não

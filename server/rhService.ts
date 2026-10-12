@@ -300,6 +300,26 @@ export async function reviewTimeRecord(id: number, decision: "approved" | "rejec
  * Marca o troço de uma SAÍDA como terminal ("confirmed") ou desmarca-o
  * ("rejected"). Nada se apaga: fica o estado, quem, quando e o motivo.
  */
+/**
+ * Plano 56 B2: o turno de uma SAÍDA do ponto (a entrada anterior) e o estado
+ * de terminal do método antigo, se houver. null = não é uma saída.
+ */
+export async function shiftOfCheckOut(id: number): Promise<{ employeeId: number; inAt: string | null; outAt: string; legacyStatus: string | null } | null> {
+  const db = await getDb();
+  if (!db) throw new Error("DB indisponível");
+  const res: any = await db.execute(sql`
+    SELECT o.employeeId, o.type, o.terminalStatus,
+      DATE_FORMAT(o.recordedAt, '%Y-%m-%d %H:%i:%s') AS outAt,
+      (SELECT DATE_FORMAT(MAX(i.recordedAt), '%Y-%m-%d %H:%i:%s') FROM time_records i
+        WHERE i.employeeId = o.employeeId AND i.type = 'check_in' AND i.recordedAt < o.recordedAt) AS inAt
+    FROM time_records o WHERE o.id = ${id} LIMIT 1`);
+  const r = (Array.isArray(res) ? res[0] : res)?.[0];
+  if (!r || String(r.type) !== "check_out") return null;
+  const legacy = r.terminalStatus ? String(r.terminalStatus) : null;
+  const { hasLegacyTerminal } = await import("../shared/pontoTerminal");
+  return { employeeId: Number(r.employeeId), inAt: r.inAt ? String(r.inAt) : null, outAt: String(r.outAt), legacyStatus: hasLegacyTerminal(legacy) ? legacy : null };
+}
+
 export async function setTimeRecordTerminal(id: number, terminal: boolean, reviewerId: number, note: string): Promise<{ ok: true; status: "confirmed" | "rejected"; previous: string | null } | { ok: false; error: string }> {
   const db = await getDb();
   if (!db) throw new Error("DB indisponível");

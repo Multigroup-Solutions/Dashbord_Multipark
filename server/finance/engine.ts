@@ -402,9 +402,10 @@ export async function computeFinance(filters: FinanceFilters): Promise<FinanceRe
   // Ponto em dias de LISBOA (mesma janela UTC das reservas).
   const extraRatesLive = await loadExtraRates();
   out.params = { ...out.params, extrasDiaRates: extraRatesLive };
-  const extrasCostRows = await loadExtrasCostRows(db, { from, to, projectIds, cities, pontoRange: { start: utc.start, endExclusive: utc.end } });
-  // Terminal no ponto (aeroporto): troço pago ao nível seguinte — interruptor PONTO_TERMINAL.
+  // Terminal no ponto (aeroporto): troço pago ao nível seguinte — interruptor PONTO_TERMINAL
+  // (plano 56 B2: ligado → lê também as sessões do terminal pelo perfil).
   const extrasTerminal = await (await import("../pontoTerminal")).pontoTerminalEnabled();
+  const extrasCostRows = await loadExtrasCostRows(db, { from, to, projectIds, cities, pontoRange: { start: utc.start, endExclusive: utc.end }, terminal: extrasTerminal });
 
   // ─── 5. Parceiros: UMA regra de correspondência (./partners.ts) ───────────
   const { partners: partnerRows, index: rawPartnerIndex } = await loadPartnerIndex(db);

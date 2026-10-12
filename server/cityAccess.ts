@@ -20,6 +20,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'auth.password.status', 'auth.password.set', 'auth.password.change', 'auth.codes.pendingForMe',
     // Plano 56 B1: o terminal da própria pessoa (a cidade vem do GPS e da ficha; sem cidade a resposta diz o que fazer).
     'terminal.status', 'terminal.start', 'terminal.stop', 'terminal.requestHandover', 'terminal.answerHandover',
+    // Plano 56 B2: "Ainda estás no terminal?" (Sim, estou / Já saí) e "Ainda estou" (reabrir) — sempre a própria pessoa.
+    'terminal.answerStillHere', 'terminal.reopen',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 

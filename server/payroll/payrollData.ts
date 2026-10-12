@@ -77,6 +77,17 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
   // Terminal no ponto (aeroporto): interruptor PONTO_TERMINAL (desligado → como antes)
   const { pontoTerminalEnabled } = await import("../pontoTerminal");
   const terminalEnabled = await pontoTerminalEnabled();
+  // Plano 56 B2: as sessões do terminal pelo perfil (só extras, payUplift = 1) que tocam
+  // os turnos do mês — só com o interruptor ligado (desligado → nem se leem).
+  let terminalSessionsFailed = false;
+  const sessionsByEmp = terminalEnabled
+    ? await (await import("../terminalPay")).loadTerminalPaySessions(empIds, recFrom, recTo).catch((err) => {
+      // nunca em silêncio: os extras ficam com o aviso (as horas de terminal ficam de fora)
+      terminalSessionsFailed = true;
+      console.warn("[payroll] sessões do terminal não lidas:", String((err as Error)?.message ?? err).slice(0, 160));
+      return new Map<number, never[]>();
+    })
+    : new Map<number, never[]>();
   const schedByEmp = new Map<number, typeof scheds>();
   for (const s of scheds) { if (!schedByEmp.has(s.employeeId)) schedByEmp.set(s.employeeId, []); schedByEmp.get(s.employeeId)!.push(s); }
 
@@ -89,7 +100,9 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
       employee: { id: e.id, fullName: e.fullName, position: e.position, extraLevel: e.extraLevel, contractStart: e.contractStart, contractEnd: e.contractEnd, isActive: e.isActive, monthlySalary: e.monthlySalary, mealAllowancePerDay: e.mealAllowancePerDay },
       year, month, snapshot: snapshotByEmp.get(e.id) ?? null, shifts: monthShifts,
       leaves: leavesByEmp.get(e.id) ?? [], schedules: schedByEmp.get(e.id) ?? [], extraRateByLevel, extraRateByName, terminalEnabled,
+      terminalSessions: sessionsByEmp.get(e.id) ?? null,
     });
+    if (terminalSessionsFailed && res.isExtra) res.warnings.push("terminal pelo perfil: as sessões não foram lidas — horas de terminal em falta (recarrega antes de fechar o mês)");
     // fichas sem vínculo no mês e sem qualquer valor não entram na folha
     if (!res.inContract && res.totalHours === 0 && res.suspiciousHours === 0 && res.openShifts === 0) continue;
     out.push({ ...res, department: e.department, projectName: project?.name ?? null, projectId: e.projectId, nif: e.nif, nib: e.nib });

@@ -123,10 +123,12 @@ export async function getExtrasMetrics(days = 30): Promise<ExtrasMetrics> {
   const scopedNames = scopedCityNamesLive();
   const cities = scopedNames === undefined ? null : extrasCityKeys(scopedNames);
   const utc = lisbonDayRangeUtc(from, to);
-  const costRows = await loadExtrasCostRows(db, { from, to, cities, projectIds: scopedProjectIds(), pontoRange: { start: utc.start, endExclusive: utc.end } });
-  // Terminal no ponto (aeroporto): a mesma regra do ordenado — interruptor PONTO_TERMINAL.
+  // Terminal no ponto (aeroporto): a mesma regra do ordenado — interruptor PONTO_TERMINAL
+  // (plano 56 B2: ligado → também as sessões do terminal pelo perfil).
   const { pontoTerminalEnabled } = await import("./pontoTerminal");
-  const agg = aggregateExtrasCost(costRows, rates, { dayOfRecord: (v) => (v ? lisbonDayOf(v) : ""), cityOfProject: () => null, terminal: await pontoTerminalEnabled() });
+  const terminalOn = await pontoTerminalEnabled();
+  const costRows = await loadExtrasCostRows(db, { from, to, cities, projectIds: scopedProjectIds(), pontoRange: { start: utc.start, endExclusive: utc.end }, terminal: terminalOn });
+  const agg = aggregateExtrasCost(costRows, rates, { dayOfRecord: (v) => (v ? lisbonDayOf(v) : ""), cityOfProject: () => null, terminal: terminalOn });
   for (const l of agg.plannedByLevel.values()) { out.cost.plannedHours += l.hours; out.cost.planned += l.cost; }
   for (const l of agg.realByLevel.values()) { out.cost.paidHours += l.hours; out.cost.paid += l.cost; }
   // 44c: a escala até ontem (a de hoje ainda não foi picada) — base da comparação com o pago.

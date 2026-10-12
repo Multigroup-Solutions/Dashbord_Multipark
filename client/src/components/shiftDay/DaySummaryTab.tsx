@@ -26,6 +26,7 @@ import type { TeamLine } from "@shared/shiftDayReview";
 import { findPersonShift, operationalShift } from "@shared/shiftHandover";
 import { fmtHours, stoppedForDisplay, workedHours } from "@shared/dayWorkSummary";
 import { DEPARTED_COMPLAINTS_HINT } from "@shared/departedComplaints";
+import { TerminalDayCard } from "@/components/terminal/TerminalDayCard";
 
 /** O separador: escolhe a cidade (as do centro de custos) e mostra o resumo. */
 export default function DaySummaryTab() {
@@ -138,6 +139,9 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
           {complianceQ.isError
             ? <QueryErrorNote error={complianceQ.error} onRetry={() => complianceQ.refetch()} retrying={complianceQ.isFetching} what="o cumprimento das passagens" />
             : <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} teams={(data.teams ?? []) as TeamLine[]} />}
+
+          {/* Plano 56 B2: linha do tempo do terminal da cidade (só com PONTO_TERMINAL ligado) */}
+          <TerminalDayCard date={date} city={city} />
 
           {/* Piores entregas — cada uma abre o que se passava nesse horário */}
           {data.delivery.worst.length > 0 && (

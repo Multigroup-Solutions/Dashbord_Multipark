@@ -2,7 +2,7 @@
 modulo: definicoes
 titulo: Definições
 rotas: /definicoes
-palavras: aeroportos, terminal no ponto, salta há dias, cron saltado, avisos críticos obrigatórios, definições, definicoes, configuração, automações, interruptores, parâmetros, iva, tsu, sla, prazos, emails, integrações, segurança, sessões, api keys, inteligência artificial, ia, orçamento da ia, assistente, calendário, escala da cidade, passagem de turno, google calendar, serviços, tarefas dos serviços, lavagem, carregamento elétrico, estado desconhecido, saltado, último ok, parado, alguém mudou isto entretanto, histórico de alterações, remetente, juntar fichas, telefones dos alertas, sem pda
+palavras: zonas do terminal, zona t1, zona t2, parque dentro da zona, ainda estás no terminal, aeroportos, terminal no ponto, salta há dias, cron saltado, avisos críticos obrigatórios, definições, definicoes, configuração, automações, interruptores, parâmetros, iva, tsu, sla, prazos, emails, integrações, segurança, sessões, api keys, inteligência artificial, ia, orçamento da ia, assistente, calendário, escala da cidade, passagem de turno, google calendar, serviços, tarefas dos serviços, lavagem, carregamento elétrico, estado desconhecido, saltado, último ok, parado, alguém mudou isto entretanto, histórico de alterações, remetente, juntar fichas, telefones dos alertas, sem pda
 ---
 # Definições
 
@@ -27,6 +27,10 @@ Separadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador ce
   - IVA e TSU com data de efeito, prazos (SLA), destinatários de email, disponibilidades, IA, contas Zello excluídas do GPS, parques que a operação não faz.
   - **Alertas sem PDA/Zello**: os telefones por cidade e a **cópia** (todas as cidades), um número por linha.
   - **Aeroportos (terminal no ponto)** (no cartão Extras-dia): latitude, longitude e raio (metros) do aeroporto de Lisboa, Porto e Faro. Só conta com o interruptor **"Terminal no ponto (aeroporto)"** ligado (Automações; desligado por omissão). Ver a ajuda "RH e ponto".
+    - **+ Zona de terminal**: cada aeroporto pode ter até 6 zonas (ex.: **T1**, **T2**), cada uma com centro (latitude, longitude) e raio (50 a 5 000 m). Com zonas, **só elas contam**; sem zonas vale o círculo do aeroporto (1 500 m por omissão).
+    - Entrar no terminal: distância − imprecisão do GPS ≤ raio. O "Ainda estás no terminal?" usa as mesmas zonas (fora = distância − imprecisão > raio).
+    - Se o centro de um parque (centro de custos com **raio de picagem**) cair dentro de uma zona, aparece um **aviso** com o parque e a zona: quem estivesse no parque contava como "no aeroporto". Confirma as zonas antes de ligar o interruptor.
+  - Interruptor **"Terminal no ponto (aeroporto)"** (Automações): terminal pelo perfil, "Ainda estás no terminal?" e pagamento das horas de terminal. Desligado por omissão; desligado não aparece nada, o vigia de 5 em 5 min não corre e o ordenado fica igual.
   - Um valor gravado que já não é válido fica assinalado (a aplicação usa a omissão até se gravar de novo).
 - **Notificações**: quem recebe cada aviso (só o super admin muda).
 - **Segurança**: validade das API keys (até ao fim do dia escolhido, hora de Lisboa) e **Terminar sessões**.

@@ -34,7 +34,8 @@ import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettin
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
 import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, LOGIN_CODE_DELIVERY_SETTING_KEY, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
-import { AIRPORT_LABELS, type AirportCityId } from "@shared/pontoTerminal";
+import { AIRPORT_LABELS, type AirportCityId, type AirportFence } from "@shared/pontoTerminal";
+import { parksInsideZones } from "@shared/terminalWatch";
 import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
@@ -666,7 +667,10 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const [fichaSel, setFichaSel] = useState<Record<string, number[]>>({});
   const people = trpc.settings.values.presencePeople.useQuery(undefined, { enabled: isPhones, staleTime: 60_000 });
   const personById = useMemo(() => new Map((people.data ?? []).map((p) => [p.id, p])), [people.data]);
-  const [airports, setAirports] = useState<Record<string, { lat: string; lng: string; radiusM: string }>>({});
+  // Plano 56 B2: cada aeroporto pode ter zonas por terminal (T1/T2: centro + raio); sem zonas vale o círculo.
+  type ZoneDraft = { label: string; lat: string; lng: string; radiusM: string };
+  const [airports, setAirports] = useState<Record<string, { lat: string; lng: string; radiusM: string; zones: ZoneDraft[] }>>({});
+  const parkPoints = trpc.terminal.parkPoints.useQuery(undefined, { enabled: isAirports, staleTime: 5 * 60_000, retry: false });
   const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
@@ -679,9 +683,12 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
       setCityMap(Object.fromEntries(PRESENCE_PHONE_FIELDS.map((c) => [c.id, of(c.id).filter((x) => presenceFichaId(x) == null).join("\n")])));
     }
     else if (isAirports) {
-      const cur = (current ?? {}) as Record<string, { lat?: number; lng?: number; radiusM?: number } | undefined>;
+      const cur = (current ?? {}) as Record<string, { lat?: number; lng?: number; radiusM?: number; zones?: Array<{ label?: string; lat?: number; lng?: number; radiusM?: number }> } | undefined>;
       const txt = (v: number | undefined) => (v == null ? "" : String(v).replace(".", ","));
-      setAirports(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, { lat: txt(cur[c.id]?.lat), lng: txt(cur[c.id]?.lng), radiusM: txt(cur[c.id]?.radiusM) }])));
+      setAirports(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, {
+        lat: txt(cur[c.id]?.lat), lng: txt(cur[c.id]?.lng), radiusM: txt(cur[c.id]?.radiusM),
+        zones: (cur[c.id]?.zones ?? []).map((z) => ({ label: z.label ?? "", lat: txt(z.lat), lng: txt(z.lng), radiusM: txt(z.radiusM) })),
+      }])));
     }
     else if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
@@ -699,15 +706,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
       ...(fichaSel[c.id] ?? []).map((id) => `${PRESENCE_FICHA_PREFIX}${id}`),
       ...(cityMap[c.id] ?? "").split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean),
     ]]));
-    if (isAirports) {
-      const n = (v: string | undefined) => { const t = String(v ?? "").trim().replace(",", "."); return t === "" ? NaN : Number(t); };
-      // Plano 56: as zonas por terminal (T1/T2) que já existam ficam como estão (este editor só mexe no círculo).
-      const cur = (current ?? {}) as Record<string, { zones?: unknown[] } | undefined>;
-      return Object.fromEntries(CITY_FIELDS.map((c) => [c.id, {
-        lat: n(airports[c.id]?.lat), lng: n(airports[c.id]?.lng), radiusM: n(airports[c.id]?.radiusM),
-        ...(Array.isArray(cur[c.id]?.zones) && cur[c.id]!.zones!.length ? { zones: cur[c.id]!.zones } : {}),
-      }]));
-    }
+    if (isAirports) return airportsValue();
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
@@ -724,6 +723,24 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     if (isNumber) return text.trim() === "" ? NaN : Number(text.replace(",", "."));
     return text.trim();
   };
+  /** Plano 56 B2: aeroportos + zonas por terminal (T1/T2) a partir do que está escrito. */
+  function airportsValue(): Record<string, AirportFence> {
+    const n = (v: string | undefined) => { const t = String(v ?? "").trim().replace(",", "."); return t === "" ? NaN : Number(t); };
+    return Object.fromEntries(CITY_FIELDS.map((c) => {
+      const a = airports[c.id];
+      const zones = (a?.zones ?? []).map((z) => ({ ...(z.label.trim() ? { label: z.label.trim() } : {}), lat: n(z.lat), lng: n(z.lng), radiusM: n(z.radiusM) }));
+      return [c.id, { lat: n(a?.lat), lng: n(a?.lng), radiusM: n(a?.radiusM), ...(zones.length ? { zones } : {}) }];
+    }));
+  }
+  // Parques (centros de custos com raio de picagem) dentro de uma zona → aviso
+  const parkWarnings = isAirports && parkPoints.data?.length
+    ? parksInsideZones(Object.fromEntries(Object.entries(airportsValue()).filter(([, f]) => Number.isFinite(f.lat) && Number.isFinite(f.lng) && Number.isFinite(f.radiusM))
+      .map(([k, f]) => [k, { ...f, zones: (f.zones ?? []).filter((z) => Number.isFinite(z.lat) && Number.isFinite(z.lng) && Number.isFinite(z.radiusM)) }])), parkPoints.data)
+    : [];
+  const setZone = (city: string, i: number, patch: Partial<ZoneDraft>) => setAirports((p) => ({
+    ...p, [city]: { ...(p[city] ?? { lat: "", lng: "", radiusM: "", zones: [] }), zones: (p[city]?.zones ?? []).map((z, j) => (j === i ? { ...z, ...patch } : z)) },
+  }));
+
   const submit = () => {
     const v = build();
     const r = validateSetting(item.key, v);
@@ -805,11 +822,43 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
                   <span className="w-16 text-muted-foreground">{f === "lat" ? "Latitude" : f === "lng" ? "Longitude" : "Raio (m)"}</span>
                   <Input className="h-8 text-xs" inputMode="decimal" disabled={locked} aria-label={`${c.label} — ${f === "lat" ? "latitude" : f === "lng" ? "longitude" : "raio em metros"}`}
                     value={airports[c.id]?.[f] ?? ""}
-                    onChange={(e) => setAirports((p) => ({ ...p, [c.id]: { ...(p[c.id] ?? { lat: "", lng: "", radiusM: "" }), [f]: e.target.value } }))} />
+                    onChange={(e) => setAirports((p) => ({ ...p, [c.id]: { ...(p[c.id] ?? { lat: "", lng: "", radiusM: "", zones: [] }), [f]: e.target.value } }))} />
                 </label>
               ))}
+              {/* Zonas por terminal (T1/T2): com zonas, só elas contam para o terminal pelo perfil */}
+              <div className="pt-1 space-y-1">
+                <div className="text-[11px] text-muted-foreground">{(airports[c.id]?.zones ?? []).length ? "Zonas por terminal (só estas contam):" : "Sem zonas: conta o círculo acima."}</div>
+                {(airports[c.id]?.zones ?? []).map((z, i) => (
+                  <div key={i} className="rounded border p-1.5 space-y-1">
+                    <div className="flex items-center gap-1">
+                      <Input className="h-7 text-xs" placeholder="Nome (ex.: T1)" maxLength={40} disabled={locked} aria-label={`${c.label} — nome da zona ${i + 1}`} value={z.label} onChange={(e) => setZone(c.id, i, { label: e.target.value })} />
+                      <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Tirar a zona ${z.label || i + 1}`} disabled={locked}
+                        onClick={() => setAirports((p) => ({ ...p, [c.id]: { ...p[c.id]!, zones: (p[c.id]?.zones ?? []).filter((_, j) => j !== i) } }))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      <Input className="h-7 text-xs" inputMode="decimal" placeholder="Lat." disabled={locked} aria-label={`${c.label} — zona ${i + 1} latitude`} value={z.lat} onChange={(e) => setZone(c.id, i, { lat: e.target.value })} />
+                      <Input className="h-7 text-xs" inputMode="decimal" placeholder="Long." disabled={locked} aria-label={`${c.label} — zona ${i + 1} longitude`} value={z.lng} onChange={(e) => setZone(c.id, i, { lng: e.target.value })} />
+                      <Input className="h-7 text-xs" inputMode="decimal" placeholder="Raio (m)" disabled={locked} aria-label={`${c.label} — zona ${i + 1} raio em metros`} value={z.radiusM} onChange={(e) => setZone(c.id, i, { radiusM: e.target.value })} />
+                    </div>
+                  </div>
+                ))}
+                {(airports[c.id]?.zones ?? []).length < 6 && (
+                  <Button variant="outline" size="sm" className="h-7 text-xs" disabled={locked}
+                    onClick={() => setAirports((p) => ({ ...p, [c.id]: { ...(p[c.id] ?? { lat: "", lng: "", radiusM: "", zones: [] }), zones: [...(p[c.id]?.zones ?? []), { label: `T${(p[c.id]?.zones ?? []).length + 1}`, lat: p[c.id]?.lat ?? "", lng: p[c.id]?.lng ?? "", radiusM: "500" }] } }))}>
+                    + Zona de terminal
+                  </Button>
+                )}
+              </div>
             </div>
           ))}
+          {parkWarnings.length > 0 && (
+            <div className="sm:col-span-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+              <AlertTriangle className="inline h-3 w-3 mr-1" />Há parques dentro de uma zona do terminal (quem estiver no parque contaria como "no aeroporto"):
+              <ul className="mt-1 list-disc pl-5">
+                {parkWarnings.map((w, i) => <li key={i}>{w.park} — {AIRPORT_LABELS[w.city as AirportCityId] ?? w.city}{w.zone ? `, zona ${w.zone}` : ""} (a {w.distanceM} m do centro)</li>)}
+              </ul>
+            </div>
+          )}
         </div>
       ) : isRate ? (
         <div className="space-y-2">

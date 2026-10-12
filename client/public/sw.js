@@ -1,8 +1,10 @@
 /*
  * Service worker do dashboard: SÓ notificações push — chamadas do WhatsApp a
  * tocar e (plano 56) o código de entrada para o TL/supervisor de serviço
- * (`type: "login_code"`). Não faz cache nem interceta pedidos (sem handler de
- * fetch), por isso não muda nada no carregamento da app.
+ * (`type: "login_code"`) e o terminal do aeroporto (`type: "terminal"`:
+ * "Ainda estás no terminal?", lugar libertado, aviso ao TL). Não faz cache nem
+ * interceta pedidos (sem handler de fetch), por isso não muda nada no
+ * carregamento da app.
  */
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -27,6 +29,23 @@ self.addEventListener("push", (event) => {
         icon: "/icon.png",
         badge: "/icon.png",
         data: { url: data.url || "/operacional?tab=live" },
+      }),
+    );
+    return;
+  }
+
+  // Terminal do aeroporto (plano 56 B2): fica no ecrã até a pessoa abrir (a
+  // pergunta precisa de resposta em 15 min). Texto sem nome (pode ser um PDA).
+  if (data.type === "terminal") {
+    event.waitUntil(
+      self.registration.showNotification(data.title || "Terminal do aeroporto", {
+        body: data.body || "Abre a app.",
+        tag: data.tag || "terminal",
+        renotify: true,
+        requireInteraction: true,
+        icon: "/icon.png",
+        badge: "/icon.png",
+        data: { url: data.url || "/perfil" },
       }),
     );
     return;
