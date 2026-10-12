@@ -810,7 +810,10 @@ export const operationalRouter = router({
     // Info do aparelho atual (cartão "Este aparelho" na aba PDAs) — qualquer
     // role autenticada pode consultar: os condutores precisam de ver em que
     // PDA estão a picar o ponto.
-    deviceInfo: protectedProcedure.input(z.object({ token: z.string().min(8) })).query(async ({ ctx, input }) => {
+    // Plano 56 (A2, auditoria): mutação (POST) — numa query o token do aparelho
+    // ia no endereço (?input=…) e ficava nos registos da Vercel; com ele, outro
+    // aparelho passava por este PDA (entrada com código de funcionários, sessão de PDA).
+    deviceInfo: protectedProcedure.input(z.object({ token: z.string().min(8).max(80) })).mutation(async ({ ctx, input }) => {
       const { getPdaByDeviceToken } = await import("./db");
       return getPdaByDeviceToken(input.token);
     }),

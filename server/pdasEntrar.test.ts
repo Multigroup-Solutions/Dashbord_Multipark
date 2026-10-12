@@ -844,3 +844,25 @@ describe("migração 0635", () => {
     expect(SCHEMA_MIGRATION_IDS).toContain("0635");
   });
 });
+
+describe("auditoria A2: o token do PDA nunca vai num endereço", () => {
+  it("o token do aparelho nunca vai num endereço: nenhuma query recebe o token de um PDA (deviceInfo é mutação)", () => {
+    const procs = (appRouter as any)._def.procedures as Record<string, any>;
+    const keysOf = (s: any): string[] => {
+      if (!s) return [];
+      if (s.shape) return Object.keys(s.shape);
+      const inner = s._zod?.def?.innerType ?? s._def?.innerType;
+      return inner ? keysOf(inner) : [];
+    };
+    const pdaTokenKeys = /^(deviceToken|pdaToken|pdaDeviceToken|currentToken)$/;
+    const offenders = Object.entries(procs)
+      .filter(([path, p]) => p._def.type === "query")
+      .filter(([path, p]) => (p._def.inputs ?? []).flatMap(keysOf).some((k: string) => pdaTokenKeys.test(k) || (path.startsWith("operational.pdas.") && k === "token")))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+    expect(procs["operational.pdas.deviceInfo"]._def.type).toBe("mutation");
+    const page = readFileSync("client/src/pages/OperationalPage.tsx", "utf8");
+    expect(page).toContain("trpc.operational.pdas.deviceInfo.useMutation()");
+    expect(page).not.toContain("deviceInfo.useQuery");
+  });
+});
