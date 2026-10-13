@@ -2,7 +2,7 @@ import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { useCallback, useEffect, useMemo } from "react";
-import { getPdaToken, markClaimed } from "@/lib/pdaDevice";
+import { getPdaToken, getPersonalToken, markClaimed } from "@/lib/pdaDevice";
 import { disablePush } from "@/lib/webPush";
 import { RECENT_SEARCHES_KEY } from "@shared/globalSearch";
 
@@ -25,6 +25,8 @@ export function useAuth(options?: UseAuthOptions) {
   const releasePda = trpc.operational.pdas.releaseOnLogout.useMutation();
   // Plano 56: os avisos no telemóvel são de todos (antes só do WhatsApp).
   const pushUnsubscribe = trpc.notifications.pushUnsubscribe.useMutation();
+  // Telemóvel pessoal: sair deixa de mostrar "agora com" esta pessoa (o telemóvel continua pessoal).
+  const leavePersonal = trpc.operational.personalDevices.left.useMutation();
 
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: () => {
@@ -41,6 +43,10 @@ export function useAuth(options?: UseAuthOptions) {
     const expect = me && (pdaSession || pdaToken) ? { userId: me.id, tag: pdaSession?.tag ?? null } : undefined;
     if (pdaToken && !pdaSession) {
       try { await releasePda.mutateAsync({ token: pdaToken }); } catch (err) { console.warn("[pda] soltar o PDA no logout falhou:", err); /* não impede o logout */ }
+    }
+    const personalToken = getPersonalToken();
+    if (personalToken) {
+      try { await leavePersonal.mutateAsync({ token: personalToken }); } catch (err) { console.warn("[aparelho] sair do telemóvel pessoal falhou:", err); /* não impede o logout */ }
     }
     markClaimed(null);
     // 20d: as pesquisas recentes (nomes, matrículas) não ficam para quem usar o aparelho a seguir (PDAs partilhados).
@@ -69,7 +75,7 @@ export function useAuth(options?: UseAuthOptions) {
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }
-  }, [logoutMutation, releasePda, pushUnsubscribe, utils, meQuery.data]);
+  }, [logoutMutation, releasePda, leavePersonal, pushUnsubscribe, utils, meQuery.data]);
 
   const state = useMemo(() => {
     return {

@@ -21,7 +21,8 @@ import { useCodeLoginOption } from "@/lib/loginOptions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Download, Loader2, Smartphone, XCircle } from "lucide-react";
-import { getPdaToken, setPdaToken, setPendingQr, markClaimed } from "@/lib/pdaDevice";
+import { getPdaToken, setPdaToken, setPendingQr, markClaimed, getPersonalToken, setPersonalToken } from "@/lib/pdaDevice";
+import { PDA_ON_PERSONAL_MSG } from "@shared/personalDevice";
 
 export default function PdaRegisterPage() {
   const { user, loading } = useAuth();
@@ -53,6 +54,9 @@ export default function PdaRegisterPage() {
     onError: (e) => setState({ ok: false, message: e.message }),
   });
 
+  // Telemóvel pessoal (shared/personalDevice.ts): não passa a PDA partilhado pelo QR.
+  const personalCheck = trpc.operational.personalDevices.seen.useMutation();
+
   useEffect(() => {
     if (loading) return;
     if (!user) {
@@ -70,6 +74,19 @@ export default function PdaRegisterPage() {
     // Já estamos no registo: o QR pendente deixa de ser preciso.
     setPendingQr(null);
     if (!pdaId || !code) { setState({ ok: false, message: "QR incompleto." }); return; }
+    const personal = getPersonalToken();
+    if (personal) {
+      if (personalCheck.isPending || state) return;
+      personalCheck.mutate({ token: personal }, {
+        onSuccess: (r) => {
+          if (r.kind === "pessoal") { setState({ ok: false, message: PDA_ON_PERSONAL_MSG }); return; }
+          setPersonalToken(null); // já não era pessoal: segue o registo do PDA
+          if (!register.isPending) register.mutate({ pdaId, code, currentToken: getPdaToken() });
+        },
+        onError: (e) => setState({ ok: false, message: e.message }),
+      });
+      return;
+    }
     if (!register.isPending && !state) register.mutate({ pdaId, code, currentToken: getPdaToken() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, user?.id, codeLogin]);

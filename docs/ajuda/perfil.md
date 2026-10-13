@@ -2,7 +2,7 @@
 modulo: ficha
 titulo: Perfil (foto, notificações, palavra-passe, sessões, contas Google)
 rotas: /perfil
-palavras: sessão do pda, avisos no pda, tens um aviso, a sessão termina em 10 s, palavra-passe, mudar a palavra-passe, criar palavra-passe, esqueci a palavra-passe, ativar avisos, avisos no telemóvel, códigos de entrada, liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha
+palavras: este telemóvel, registar este telemóvel como meu, telemóvel pessoal, deixar de ser pessoal, sessão do pda, avisos no pda, tens um aviso, a sessão termina em 10 s, palavra-passe, mudar a palavra-passe, criar palavra-passe, esqueci a palavra-passe, ativar avisos, avisos no telemóvel, códigos de entrada, liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha
 ---
 # Perfil
 
@@ -12,6 +12,12 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 - **O meu ponto** abre o separador Ponto da tua ficha. À direita diz "entrada aberta" ou "picar entrada"; se não tens ficha diz "sem ficha", e se o estado não se conseguir ler diz "estado indisponível" (não "picar entrada").
 - **A minha ficha** abre a tua ficha nos RH (dados, documentos, IBAN — ver a ajuda "RH e ponto").
 - **A minha disponibilidade** abre a página onde marcas os dias e turnos em que podes trabalhar (ver a ajuda "Disponibilidade").
+
+**Este telemóvel** (no telemóvel; num PDA não aparece)
+- **Registar este telemóvel como meu**: o teu telemóvel passa a **telemóvel pessoal** (não é um PDA partilhado). Aparece em Operacional → PDAs → Telemóveis pessoais com o nome de quem tem sessão nele e usa o teu Zello (o da tua ficha).
+- Num telemóvel pessoal a sessão **não** acaba na saída do ponto e não tira o PDA nem o Zello a ninguém. Se outra pessoa entrar nele, aparece o nome dela; o Zello continua o teu.
+- **Deixar de ser pessoal** (o dono, ou uma chefia): fica no histórico; podes voltar a registá-lo.
+- Se o telemóvel já é de outra pessoa, diz de quem é. Num PDA registado não deixa (uma chefia converte o PDA em Operacional → PDAs → botão **Pessoal?** nesse PDA).
 
 **Foto**
 - **Adicionar foto / Trocar a foto**: tira com a câmara ou carrega uma imagem (JPEG, PNG ou WebP; a app reduz-a antes de enviar). É obrigatória para picar o ponto e é a que se compara com a selfie do ponto. Cada troca fica registada.

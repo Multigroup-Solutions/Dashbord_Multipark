@@ -20,6 +20,9 @@ import { ZelloLiveTab } from "@/components/ZelloLiveTab";
 import { LoginCodesCard } from "@/components/login/LoginCodesCard";
 import { TerminalLiveCard } from "@/components/terminal/TerminalLiveCard";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
+import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
+import { DEVICE_CHANGED_EVENT, getPersonalToken, movePdaTokenToPersonal } from "@/lib/pdaDevice";
+import { PERSONAL_DEVICE_HELP } from "@shared/personalDevice";
 import RadioPage from "@/pages/RadioPage";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
@@ -30,7 +33,7 @@ import { PDA_ZELLO_LABELS } from "@shared/pdaZelloMatch";
 import { SpeedTrackMap } from "@/components/maps/SpeedTrackMap";
 import {
   Plus, Trash2, Eye, Gauge, ArrowUpDown, Satellite, Users, Settings,
-  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio, BarChart3, CalendarRange, Trophy,
+  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio, BarChart3, CalendarRange, Trophy, UserRound,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -888,14 +891,25 @@ function SpeedHistoryCard({ target, onTarget, people, threshold, own }: {
 // troca sozinha quando entra outro). Pedido do Jorge 2026-08-06.
 function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister: boolean }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("mp.pda.deviceToken"));
+  // Telemóvel pessoal (não é PDA): o cartão mostra-o em vez do "lê o QR".
+  const [personal, setPersonal] = useState<string | null>(() => getPersonalToken());
+  useEffect(() => {
+    const on = () => { setToken(localStorage.getItem("mp.pda.deviceToken")); setPersonal(getPersonalToken()); };
+    window.addEventListener(DEVICE_CHANGED_EVENT, on);
+    return () => window.removeEventListener(DEVICE_CHANGED_EVENT, on);
+  }, []);
   // Plano 56 (A2): mutação (o token vai no corpo do pedido, nunca no endereço — senão ficava nos registos).
   const info = trpc.operational.pdas.deviceInfo.useMutation();
+  // O PDA deixou de reconhecer este token: pode ter sido convertido em telemóvel pessoal por uma chefia.
+  const personalSeen = trpc.operational.personalDevices.seen.useMutation({
+    onSuccess: (r, vars) => { if (r.kind === "pessoal" && r.migrated && vars.pdaToken) movePdaTokenToPersonal(vars.pdaToken); },
+  });
   useEffect(() => {
-    if (token) info.mutate({ token });
+    if (token) info.mutate({ token }, { onSuccess: (d) => { if (!d) personalSeen.mutate({ pdaToken: token }); } });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
   const deviceInfo = token ? info.data : undefined;
-  const isLoading = !!token && (info.isIdle || info.isPending);
+  const isLoading = !!token && (info.isIdle || info.isPending || personalSeen.isPending);
 
   return (
     <Card className={token && deviceInfo ? "border-green-300" : "border-dashed"}>
@@ -922,16 +936,20 @@ function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister:
             <Button size="sm" variant="outline" onClick={() => { localStorage.removeItem("mp.pda.deviceToken"); setToken(null); }}>Limpar</Button>
           </div>
         ) : (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Smartphone className="w-5 h-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm font-medium">Registar um PDA: lê o QR colado no aparelho</p>
-                <p className="text-xs text-muted-foreground">
-                  Uma chefia lê o QR (botão <QrCode className="inline w-3 h-3" /> em cada PDA) <b>no próprio aparelho</b>, uma vez. Depois, quem entrar nele fica com o PDA/Zello.
-                </p>
+          <div className="space-y-3">
+            {!personal && (
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">Registar um PDA: lê o QR colado no aparelho</p>
+                  <p className="text-xs text-muted-foreground">
+                    Uma chefia lê o QR (botão <QrCode className="inline w-3 h-3" /> em cada PDA) <b>no próprio aparelho</b>, uma vez. Depois, quem entrar nele fica com o PDA/Zello.
+                    O <b>teu telemóvel</b> não é um PDA: regista-o como teu aqui em baixo (ou no Perfil).
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
+            <PersonalDeviceCard className="shadow-none" />
           </div>
         )}
       </CardContent>
@@ -947,7 +965,11 @@ function PdasTab() {
   const [editPda, setEditPda] = useState<any | null>(null);
   const [viewPda, setViewPda] = useState<number | null>(null);
   const [qrPda, setQrPda] = useState<{ id: number; name: string } | null>(null);
+  const [convertPda, setConvertPda] = useState<{ id: number; name: string; holderId: number | null } | null>(null);
   const utils = trpc.useUtils();
+  // Telemóveis pessoais (não são PDAs partilhados): à parte, com o nome de quem lá está.
+  const personalQ = trpc.operational.personalDevices.list.useQuery(undefined, { retry: retryTransient });
+  const convertedPdaIds = useMemo(() => new Set(personalQ.data?.convertedPdaIds ?? []), [personalQ.data]);
 
   const pdasQ = trpc.operational.pdas.list.useQuery(undefined, { retry: retryTransient });
   const { data: pdaList, isLoading } = pdasQ;
@@ -965,6 +987,7 @@ function PdasTab() {
   // 43b: o Zello de cada PDA bate certo com o Zello? (e corrigir com um clique)
   const zelloCheckQ = trpc.operational.pdas.zelloCheck.useQuery(undefined, { retry: false, staleTime: 5 * 60_000 });
   const zelloCheckBy = useMemo(() => new Map(((zelloCheckQ.data?.available ? zelloCheckQ.data.checks : []) ?? []).map((c) => [c.pdaId, c])), [zelloCheckQ.data]);
+  const personalZelloBy = useMemo(() => new Map(((zelloCheckQ.data?.available ? zelloCheckQ.data.personal : []) ?? []).map((c) => [c.deviceId, c])), [zelloCheckQ.data]);
   const fixZelloMut = trpc.operational.pdas.update.useMutation({
     onSuccess: () => { utils.operational.pdas.list.invalidate(); utils.operational.pdas.zelloCheck.invalidate(); toast.success("Zello do PDA corrigido."); },
     onError: (e) => toast.error(e.message),
@@ -1054,6 +1077,9 @@ function PdasTab() {
                       {PDA_STATUS_LABELS[pda.status]}
                     </span>
                   </div>
+                  {convertedPdaIds.has(pda.id) && (
+                    <p className="text-xs text-muted-foreground">Passou a telemóvel pessoal (ver em baixo). O histórico de quem o teve fica.</p>
+                  )}
 
                   <div className="text-sm space-y-1 text-muted-foreground">
                     {(() => {
@@ -1105,6 +1131,12 @@ function PdasTab() {
                         <QrCode className="w-3 h-3" />
                       </Button>
                     )}
+                    {canManage && pda.registered && !convertedPdaIds.has(pda.id) && (
+                      <Button size="sm" variant="outline" title="É um telemóvel pessoal (de uma pessoa, não um PDA partilhado)" aria-label={`O ${pda.name} é um telemóvel pessoal`}
+                        onClick={() => setConvertPda({ id: pda.id, name: pda.name, holderId: checkin?.employeeId ?? null })}>
+                        <UserRound className="w-3 h-3 mr-1" />Pessoal?
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" title="Histórico de quem o teve" aria-label={`Histórico do ${pda.name}`} onClick={() => setViewPda(pda.id)}>
                       <Eye className="w-3 h-3" />
                     </Button>
@@ -1123,13 +1155,137 @@ function PdasTab() {
         </div>
       )}
 
+      <PersonalDevicesSection q={personalQ} zelloBy={personalZelloBy} canManage={canManage} />
+
       {/* Dialogs */}
+      {convertPda && <ConvertPdaDialog pda={convertPda} onClose={() => setConvertPda(null)} />}
       {showCreate && <CreatePdaDialog onClose={() => setShowCreate(false)} />}
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
       {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} pdaName={pdaList?.find((p: any) => p.id === viewPda)?.name ?? null} onClose={() => setViewPda(null)} />}
       {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
     </div>
     </div>
+  );
+}
+
+// Telemóveis pessoais (shared/personalDevice.ts): o telemóvel de UMA pessoa
+// (TL, supervisor…), registado por ela no próprio aparelho. Aparece com o nome
+// de quem tem sessão nele agora e o Zello da ficha do dono. Não é um PDA.
+function PersonalDevicesSection({ q, zelloBy, canManage }: {
+  q: { data?: { devices: any[] } | undefined; isLoading: boolean; error: any; isFetching: boolean; refetch: () => unknown };
+  zelloBy: Map<number, { status: string; problem: boolean; detail: string }>;
+  canManage: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const unregister = trpc.operational.personalDevices.unregister.useMutation({
+    onSuccess: () => { utils.operational.personalDevices.list.invalidate(); toast.info("Deixou de ser telemóvel pessoal (fica no histórico)."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const devices = q.data?.devices ?? [];
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2"><UserRound className="w-4 h-4" />Telemóveis pessoais{q.data ? ` (${devices.length})` : ""}</CardTitle>
+        <p className="text-xs text-muted-foreground">{PERSONAL_DEVICE_HELP} Cada pessoa regista o seu no <b>Perfil → Este telemóvel</b>.</p>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading ? (
+          <p className="text-sm text-muted-foreground">A carregar…</p>
+        ) : q.error && !q.data ? (
+          <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os telemóveis pessoais" />
+        ) : devices.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Ainda não há telemóveis pessoais registados.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {devices.map((d: any) => {
+              const zc = zelloBy.get(d.id);
+              return (
+                <div key={d.id} className="rounded-lg border p-3 space-y-1 text-sm min-w-0">
+                  <p className="font-semibold truncate" title={d.title}>{d.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {d.currentName
+                      ? <>Agora com <span className="font-medium text-foreground">{d.currentName}</span>{d.currentSince ? ` desde ${fmtPTDateTime(d.currentSince)}` : ""}</>
+                      : <>Ninguém com sessão{d.lastName ? ` · último: ${d.lastName}${d.lastSeenAt ? ` (${fmtPTDateTime(d.lastSeenAt)})` : ""}` : ""}</>}
+                  </p>
+                  {d.ownerName && d.ownerName !== d.currentName && <p className="text-xs text-muted-foreground">Dono: {d.ownerName}</p>}
+                  <p className={`text-xs ${zc?.problem ? "rounded border border-amber-300 bg-amber-50 p-1 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200" : "text-muted-foreground"}`}>
+                    Zello: <span className="font-medium">{d.zelloUsername || "—"}</span>{d.zelloOf ? ` (da ficha de ${d.zelloOf})` : ""}
+                    {zc && zc.status !== "ok" && <span className="block">{zc.detail}</span>}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">{d.label ?? ""}{d.convertedFromPdaId ? " · era um PDA" : ""}</p>
+                  {canManage && (
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={unregister.isPending}
+                      onClick={() => { if (confirm(`${d.title} deixa de ser telemóvel pessoal? Fica no histórico; a pessoa pode voltar a registá-lo.`)) unregister.mutate({ id: d.id }); }}>
+                      Deixar de ser pessoal
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// "É um telemóvel pessoal": um PDA que afinal é o telemóvel de alguém (o do
+// Jorge, da Márcia, do Marco…) passa a telemóvel pessoal dessa pessoa. O PDA
+// fica Inativo (o histórico fica); o telemóvel passa sozinho na próxima entrada.
+function ConvertPdaDialog({ pda, onClose }: { pda: { id: number; name: string; holderId: number | null }; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const histQ = trpc.operational.pdas.checkins.byPda.useQuery({ pdaId: pda.id, limit: PDA_HISTORY_LIMIT }, { retry: retryTransient });
+  // Quem já o teve (o dono costuma ser quem mais o usou): o atual primeiro.
+  const people = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const c of (histQ.data as any[]) ?? []) if (c.employeeId && c.employeeName && !seen.has(Number(c.employeeId))) seen.set(Number(c.employeeId), String(c.employeeName));
+    return [...seen].map(([id, name]) => ({ value: String(id), label: name }));
+  }, [histQ.data]);
+  const [owner, setOwner] = useState<string>(pda.holderId ? String(pda.holderId) : "");
+  useEffect(() => { if (!owner && people.length) setOwner(people[0].value); }, [people, owner]);
+  const convert = trpc.operational.personalDevices.convertFromPda.useMutation({
+    onSuccess: (r) => {
+      utils.operational.pdas.list.invalidate();
+      utils.operational.pdas.checkins.active.invalidate();
+      utils.operational.personalDevices.list.invalidate();
+      utils.operational.pdas.zelloCheck.invalidate();
+      toast.success(`O ${r.pdaName} passou a ${r.device?.title ?? "telemóvel pessoal"}.${r.zelloAdopted ? ` O Zello ${r.zelloAdopted} passou para a ficha.` : ""}`, { duration: 10000 });
+      onClose();
+    },
+    onError: (e) => toast.error(e.message, { duration: 10000 }),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>O {pda.name} é um telemóvel pessoal?</DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            Para o telemóvel de uma pessoa (TL, supervisor…) registado por engano como PDA. Passa a <b>telemóvel pessoal</b>:
+            deixa de ser PDA partilhado (fica <b>Inativo</b>, com o histórico), a sessão de PDA que lá estiver termina e a pessoa entra outra vez.
+            A partir daí a sessão não acaba na saída do ponto e o telemóvel não tira o Zello a ninguém.
+          </p>
+          <div>
+            <Label>De quem é o telemóvel?</Label>
+            {histQ.isLoading ? <p className="text-xs text-muted-foreground">A carregar quem o teve…</p> : (
+              <Select value={owner || "none"} onValueChange={(v) => setOwner(v === "none" ? "" : v)}>
+                <SelectTrigger><SelectValue placeholder="Escolher a pessoa" /></SelectTrigger>
+                <SelectContent>
+                  {people.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+                  <SelectItem value="none">Ninguém por agora (fica de quem o registar no Perfil)</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">Aparece com o nome de quem estiver ligado nele; o Zello é o da ficha do dono.</p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button disabled={convert.isPending || histQ.isLoading} onClick={() => convert.mutate({ pdaId: pda.id, employeeId: owner ? Number(owner) : null })}>
+            {convert.isPending ? "A converter…" : "Passar a telemóvel pessoal"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
