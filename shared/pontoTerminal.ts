@@ -32,6 +32,8 @@
  * nunca se paga terminal sem prova.
  */
 
+import { sessionHoursInShift, type TerminalPaySessionLike } from "./terminalWatch";
+
 export type AirportCityId = "lisbon" | "porto" | "faro";
 
 /**
@@ -270,29 +272,47 @@ export function terminalStatusLabel(status: string | null | undefined, terminalU
 export interface TerminalShiftLike {
   /** horas pagas do troço (as da saída / corrigidas pelo RH) */
   hours: number;
-  /** estado da SAÍDA */
+  /** estado da SAÍDA (método antigo, só histórico) */
   terminalStatus?: string | null;
   /** "partial": até quando conta o terminal (UTC) */
   terminalUntil?: string | Date | null;
-  /** entrada do troço (UTC) — necessária no "partial" */
+  /** entrada do troço (UTC) — necessária no "partial" e nas sessões */
   inAt?: string | Date | null;
+  /** saída do troço (UTC) */
+  outAt?: string | Date | null;
+  /**
+   * Plano 56 B2 — terminal pelo perfil: as sessões da pessoa (`terminal_sessions`).
+   * Só as de nível +1 (extras) e só as horas que contam (base ≠ pendente/desmarcado)
+   * pagam, na interseção com o turno.
+   */
+  sessions?: ReadonlyArray<TerminalPaySessionLike> | null;
+}
+
+/** O troço tem estado do método antigo (saída + entrada no aeroporto)? Esses ficam como estavam. */
+export function hasLegacyTerminal(status: string | null | undefined): boolean {
+  return status === "auto" || status === "pending" || status === "partial" || status === "confirmed" || status === "rejected";
 }
 
 /**
  * REGRA ÚNICA das horas de um troço (ordenado E custo dos extras):
  * quantas horas pagam como terminal (nível seguinte) e quantas como normais.
  *  - interruptor desligado → tudo normal (igual a antes);
- *  - "auto" / "confirmed" → tudo terminal;
- *  - "partial" → terminal da entrada até `terminalUntil` (nunca mais do que as
- *    horas pagas do troço), o resto normal; sem entrada ou sem hora → tudo
- *    normal (sem prova não se paga terminal);
- *  - resto ("pending", "rejected", normal) → tudo normal.
- * PURA.
+ *  - troço do método antigo (histórico, `time_records.terminalStatus`):
+ *    "auto" / "confirmed" → tudo terminal; "partial" → terminal da entrada até
+ *    `terminalUntil`; "pending"/"rejected" → tudo normal;
+ *  - senão (terminal pelo perfil, plano 56 B2) → as horas das sessões com
+ *    nível +1 na interseção com o turno, até ao `countedUntil`, só as que
+ *    contam (`sessionHoursInShift`); sem sessões → tudo normal.
+ * Nunca mais horas de terminal do que as do troço. PURA.
  */
 export function terminalSplitOfShift(s: TerminalShiftLike, enabled: boolean): { terminalHours: number; normalHours: number } {
   const hours = Math.max(0, Number(s.hours) || 0);
   const r2 = (v: number) => Math.round(v * 100) / 100;
   if (!enabled || hours <= 0) return { terminalHours: 0, normalHours: r2(hours) };
+  if (!hasLegacyTerminal(s.terminalStatus) && s.sessions?.length) {
+    const t = sessionHoursInShift({ inAt: s.inAt, outAt: s.outAt, hours }, s.sessions).terminalHours;
+    return { terminalHours: t, normalHours: r2(hours - t) };
+  }
   if (isPaidTerminal(s.terminalStatus)) return { terminalHours: r2(hours), normalHours: 0 };
   if (s.terminalStatus === "partial") {
     const inMs = toMs(s.inAt ?? null), untilMs = toMs(s.terminalUntil ?? null);
@@ -307,6 +327,19 @@ export function terminalSplitOfShift(s: TerminalShiftLike, enabled: boolean): { 
 /** O troço está à espera do RH (entrada no aeroporto, saída fora ou sem GPS)? */
 export function isPendingTerminal(status: string | null | undefined): boolean {
   return status === "pending";
+}
+
+/**
+ * Horas de terminal "por confirmar" de um troço (pagas como normais até o RH
+ * decidir): no método antigo, o troço "pending" todo; no terminal pelo perfil,
+ * as horas do turno em sessões por confirmar. Desligado → 0. PURA.
+ */
+export function terminalPendingOfShift(s: TerminalShiftLike, enabled: boolean): number {
+  const hours = Math.max(0, Number(s.hours) || 0);
+  if (!enabled || hours <= 0) return 0;
+  if (hasLegacyTerminal(s.terminalStatus)) return isPendingTerminal(s.terminalStatus) ? terminalSplitOfShift(s, enabled).normalHours : 0;
+  if (!s.sessions?.length) return 0;
+  return sessionHoursInShift({ inAt: s.inAt, outAt: s.outAt, hours }, s.sessions).pendingHours;
 }
 
 /** Nível da ficha normalizado (1–4; desconhecido → 1, júnior). */
@@ -347,7 +380,7 @@ export function splitTerminalHours(
     const part = terminalSplitOfShift(s, enabled);
     terminal += part.terminalHours;
     normal += part.normalHours;
-    if (enabled && isPendingTerminal(s.terminalStatus)) pending += part.normalHours;
+    pending += terminalPendingOfShift(s, enabled);
   }
   const r2 = (v: number) => Math.round(v * 100) / 100;
   return { normalHours: r2(normal), terminalHours: r2(terminal), pendingHours: r2(pending) };

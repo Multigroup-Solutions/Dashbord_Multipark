@@ -156,7 +156,7 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "pda_device", group: "operacoes", label: "PDA registado noutro aparelho", description: "Alguém leu o QR de um PDA da tua cidade noutro aparelho: esse aparelho passa a ser o PDA e o antigo deixa de o ser. Vai aos supervisores da cidade (não a quem registou). Só com \"Entrar com email e código\" ligado.",
     module: "pdas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 1 }),
   // Plano 56 B (Jorge, 12 out 2026): terminal pelo perfil — só com o interruptor PONTO_TERMINAL.
-  K({ kind: "terminal", group: "operacoes", label: "Terminal do aeroporto", description: "Alguém pede para ficar com o terminal onde estás (Passar / Ainda estou), a resposta ao teu pedido, ou o TL pôs-te ou tirou-te do terminal. O team leader de serviço na cidade também recebe os pedidos.",
+  K({ kind: "terminal", group: "operacoes", label: "Terminal do aeroporto", description: "Alguém pede para ficar com o terminal onde estás (Passar / Ainda estou), a resposta ao teu pedido, ou o TL pôs-te ou tirou-te do terminal. \"Ainda estás no terminal?\" quando o GPS te vê fora há mais de 20 min (também no telemóvel) e o lugar libertado sem resposta. O team leader de serviço na cidade também recebe os pedidos, as perguntas (também no telemóvel) e os lugares libertados.",
     module: "ficha", action: "view", roles: [], cityScoped: true, personal: true, channels: IN_APP, dedupeMinutes: 10 }),
   K({ kind: "driver_daily_report", group: "operacoes", label: "Relatório diário dos motoristas", description: "Resumo da recolha automática do histórico GPS.",
     module: "historico_diario", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),

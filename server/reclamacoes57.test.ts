@@ -677,8 +677,8 @@ describe("3b — de ponta a ponta: email de info@ → reclamação (sem tocar no
 // ─── Migração e origem ───────────────────────────────────────────────────────
 
 describe("0630 — origem das reclamações e registo da IA (só acrescenta)", () => {
-  it("registada no fim, idempotente, sem apagar nada", () => {
-    // Registada e por ordem (depois da 0625); a seguir podem vir outras (ex.: 0635, PDAs).
+  it("registada (por ordem, depois da 0625), idempotente, sem apagar nada", () => {
+    // (a 0640 do terminal B2 veio depois: a 0630 já não é a última — a ordem crescente é do index.test)
     expect(SCHEMA_MIGRATION_IDS).toContain("0630");
     expect(SCHEMA_MIGRATION_IDS.indexOf("0630")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0625"));
     const all = MIGRATION_0630_STATEMENTS.join("\n");

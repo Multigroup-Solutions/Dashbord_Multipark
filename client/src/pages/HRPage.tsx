@@ -80,6 +80,7 @@ import {
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { TERMINAL_STATUS_LABELS, lisbonClock, terminalStatusLabel } from "@shared/pontoTerminal";
+import { TerminalShiftSessions, sessionsInShift, useTerminalRh } from "@/components/terminal/TerminalRhSessions";
 import { ContactActions } from "@/components/ContactActions";
 import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
@@ -812,9 +813,12 @@ function TerminalBadge({ status, until }: { status: string | null | undefined; u
 
 function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { employeeId: number; canManage?: boolean; isExtra?: boolean }) {
   const utils = trpc.useUtils();
-  // Terminal no ponto (aeroporto): só com o interruptor ligado e só nos extras.
+  // Terminal no ponto (aeroporto): só com o interruptor ligado. O método antigo
+  // (histórico, troços nas saídas) só nos extras; o terminal pelo perfil (plano
+  // 56 B2) mostra os troços de cada turno a quem os tiver (extras, condutores, TL).
   const terminalQ = trpc.rh.timeRecords.terminalEnabled.useQuery(undefined, { staleTime: 60_000 });
   const terminalOn = !!terminalQ.data?.enabled && isExtra;
+  const terminalRh = useTerminalRh(employeeId, !!terminalQ.data?.enabled);
   const [terminalEdit, setTerminalEdit] = useState<{ id: number; terminal: boolean } | null>(null);
   const [terminalNote, setTerminalNote] = useState("");
   const setTerminal = trpc.rh.timeRecords.setTerminal.useMutation({
@@ -987,10 +991,17 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
         </Card>
       )}
 
+      {/* Plano 56 B2: os troços de terminal não carregaram → diz-se (erro ≠ "sem terminal") */}
+      {terminalRh.error && <QueryErrorNote error={terminalRh.error} onRetry={() => terminalRh.refetch()} retrying={terminalRh.fetching} what="os troços de terminal" />}
+
       {/* Records list */}
       <div className="space-y-2">
-        {records.slice(0, 30).map((r) => {
+        {records.slice(0, 30).map((r, idx) => {
           const isExpanded = expandedRecord === r.id;
+          // Plano 56 B2: troços do terminal pelo perfil deste turno — na saída (entrada = a picagem seguinte da lista),
+          // ou na entrada ainda aberta (a última picagem).
+          const shiftIn = r.type === "check_out" ? (records[idx + 1]?.type === "check_in" ? records[idx + 1].recordedAt : null) : idx === 0 ? r.recordedAt : null;
+          const shiftSessions = terminalRh.enabled && shiftIn ? sessionsInShift(terminalRh.sessions, shiftIn, r.type === "check_out" ? r.recordedAt : null) : [];
           const hasCoords = r.latitude && r.longitude;
           // Ponto suspeito (check-out esquecido cortado a 12h) ou fora do raio → VERMELHO
           const reviewStatus = (r as any).reviewStatus as string | undefined;
@@ -1017,6 +1028,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                       {!reviewStatus && isFlagged && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
                       {terminalOn && <TerminalBadge status={r.terminalStatus} until={r.terminalUntil} />}
                     </p>
+                    {shiftSessions.length > 0 && <TerminalShiftSessions sessions={shiftSessions} canManage={canManage && terminalRh.canManage} />}
                     {terminalOn && canManage && r.type === "check_out" && r.terminalStatus === "pending" && (
                       <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>Confirmar terminal</Button>
@@ -1101,7 +1113,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                       Horas trabalhadas: <span className="font-semibold text-foreground">{parseFloat(String(r.hoursWorked)).toFixed(2)}h</span>
                     </div>
                   )}
-                  {terminalOn && r.type === "check_out" && (
+                  {terminalOn && r.type === "check_out" && r.terminalStatus && (
                     <div className="text-xs text-muted-foreground space-y-1" onClick={(e) => e.stopPropagation()}>
                       <p>
                         Terminal (aeroporto): <span className="font-medium text-foreground">{r.terminalStatus ? terminalStatusLabel(r.terminalStatus, r.terminalUntil) : "não (troço normal)"}</span>

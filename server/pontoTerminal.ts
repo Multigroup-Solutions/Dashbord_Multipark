@@ -253,6 +253,8 @@ export interface PendingTerminalShift {
 
 export interface TerminalRetryReport {
   skipped?: "off";
+  /** Plano 56 B2: as sessões do terminal pelo perfil (o que conta agora). */
+  sessions?: import("./terminalReview").TerminalSessionsRetryReport;
   /** troços "pending" vistos */
   pending: number;
   /** passaram a "partial" */
@@ -286,11 +288,16 @@ async function loadPendingTerminalShifts(sinceUtc: string, limit: number): Promi
 
 /**
  * Repetição automática (trabalho diário daily-ops, depois de fechar os pontos
- * esquecidos): os troços "pending" dos últimos TERMINAL_RETRY_DAYS dias voltam
- * a ler a Multipark — UMA leitura para todos (os agentes de todas as fichas,
- * da entrada mais antiga à saída mais recente) — e passam a "partial" quando
- * há recolha/entrega dentro do troço. Interruptor desligado → nada. Respeita o
- * prazo (`deadlineAt`). Nunca apaga; nunca mexe no que o RH decidiu.
+ * esquecidos). Plano 56 B2: PRIMEIRO as sessões do terminal pelo perfil dos
+ * últimos 7 dias por confirmar (ou só com o último GPS) — server/terminalReview.ts
+ * `retryPendingTerminalSessions`, que melhora as horas que contam até à última
+ * recolha/entrega (só até ao "fora" confirmado). DEPOIS o que ainda houver do
+ * método antigo (histórico): os troços "pending" dos últimos
+ * TERMINAL_RETRY_DAYS dias voltam a ler a Multipark — UMA leitura para todos
+ * (os agentes de todas as fichas, da entrada mais antiga à saída mais
+ * recente) — e passam a "partial" quando há recolha/entrega dentro do troço.
+ * Interruptor desligado → nada. Respeita o prazo (`deadlineAt`). Nunca apaga;
+ * nunca mexe no que o RH decidiu.
  */
 export async function retryPendingTerminalShifts(o: {
   deadlineAt: number;
@@ -300,9 +307,19 @@ export async function retryPendingTerminalShifts(o: {
   load?: (sinceUtc: string, limit: number) => Promise<PendingTerminalShift[]>;
   agentIdsOf?: (employeeId: number) => Promise<string[]>;
   apply?: (recordId: number, terminalUntil: string) => Promise<boolean>;
+  /** sessões do terminal pelo perfil (injetável nos testes); omissão: BD */
+  sessions?: () => Promise<import("./terminalReview").TerminalSessionsRetryReport | null>;
 }): Promise<TerminalRetryReport> {
   const report: TerminalRetryReport = { pending: 0, resolved: 0, noActions: 0, noAgent: 0, readFailed: false, deferred: 0 };
   if (!(await pontoTerminalEnabled())) return { ...report, skipped: "off" };
+  const sessions = await (o.sessions ?? (async () => {
+    const [{ realTerminalDeps }, { retryPendingTerminalSessions }] = await Promise.all([import("./terminalSessions"), import("./terminalReview")]);
+    return retryPendingTerminalSessions(await realTerminalDeps(), { deadlineAt: o.deadlineAt, days: o.days });
+  }))().catch((err) => {
+    console.warn("[ponto/terminal] sessões por confirmar não revistas:", String((err as Error)?.message ?? err).slice(0, 160));
+    return null;
+  });
+  if (sessions) report.sessions = sessions;
   const now = o.now ?? Date.now();
   const since = new Date(now - (o.days ?? TERMINAL_RETRY_DAYS) * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
   const shifts = await (o.load ?? loadPendingTerminalShifts)(since, TERMINAL_RETRY_MAX_SHIFTS);

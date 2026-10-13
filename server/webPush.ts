@@ -196,7 +196,7 @@ export async function pushRingingCalls(callIds: string[]): Promise<void> {
 
 /** Aviso push genérico (plano 56: o código de entrada vai ao TL/supervisor). */
 export interface UserPushPayload {
-  /** O service worker escolhe o aspeto pelo tipo (`login_code`; sem tipo = chamada do WhatsApp). */
+  /** O service worker escolhe o aspeto pelo tipo (`login_code`, `terminal`; sem tipo = chamada do WhatsApp). */
   type: string;
   title: string;
   body: string;

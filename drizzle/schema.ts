@@ -2426,6 +2426,20 @@ export const terminalSessions = mysqlTable("terminal_sessions", {
 	timeRecordId: int(),
 	activeCityKey: varchar({ length: 8 }),
 	activeEmployeeId: int(),
+	// 0640 (B2): última leitura do Zello usada (instante, estado, distância) e
+	// quando se olhou; reabrir sem buraco; início do que conta (reabertura/RH);
+	// decisão do RH (quem, quando, motivo) e o resultado automático de antes.
+	lastFixAt: datetime({ mode: 'string' }),
+	lastFixState: varchar({ length: 8 }), // inside | outside | no_gps
+	lastFixDistanceM: int(),
+	lastCheckAt: datetime({ mode: 'string' }),
+	countedFrom: datetime({ mode: 'string' }),
+	prevSessionId: int(),
+	reviewedByUserId: int(),
+	reviewedAt: datetime({ mode: 'string' }),
+	reviewNote: varchar({ length: 255 }),
+	autoCountedUntil: datetime({ mode: 'string' }),
+	autoCountedBasis: varchar({ length: 16 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },

@@ -223,7 +223,9 @@ describe("custo dos extras (Finanças / Métricas): a mesma regra", () => {
     expect(src("server/payroll/compute.ts")).toContain("splitTerminalHours(");
     expect(src("server/payroll/compute.ts")).toContain("terminalLevelOf(");
     expect(src("server/finance/engine.ts")).toContain("terminal: extrasTerminal");
-    expect(src("server/extrasMetrics.ts")).toContain("terminal: await pontoTerminalEnabled()");
+    // plano 56 B2: o interruptor lê-se uma vez (também carrega as sessões do terminal pelo perfil)
+    expect(src("server/extrasMetrics.ts")).toContain("const terminalOn = await pontoTerminalEnabled();");
+    expect(src("server/extrasMetrics.ts")).toContain("cityOfProject: () => null, terminal: terminalOn");
   });
 });
 
