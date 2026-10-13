@@ -897,6 +897,34 @@ describe("auditoria B2 — vigia", () => {
   });
 });
 
+describe("vigia B2 — Zello do aparelho com cada pessoa (pickZelloDevices)", () => {
+  it("check-in num PDA sem Zello → o Zello da ficha (como o opsPresence), não 'sem GPS'", async () => {
+    const { pickZelloDevices } = await import("./terminalWatch");
+    const r = pickZelloDevices([JOAO], [{ employeeId: JOAO, zello: null }], new Map([[JOAO, "Joao.TL"]]));
+    expect(r.get(JOAO)).toBe("Joao.TL");
+    // Zello vazio (só espaços) no PDA também conta como sem Zello
+    expect(pickZelloDevices([JOAO], [{ employeeId: JOAO, zello: "  " }], new Map([[JOAO, "Joao.TL"]])).get(JOAO)).toBe("Joao.TL");
+  });
+  it("o PDA com Zello continua a mandar; o Zello da ficha que está agora noutro PDA (com outra pessoa) não serve", async () => {
+    const { pickZelloDevices } = await import("./terminalWatch");
+    const checkins = [
+      { employeeId: JOAO, zello: "PDA 12" },
+      { employeeId: PEDRO, zello: null },
+      { employeeId: RUI, zello: "Pedro.Fixo" }, // o aparelho do Pedro está agora com o Rui
+    ];
+    const r = pickZelloDevices([JOAO, PEDRO, RUI], checkins, new Map([[JOAO, "Joao.TL"], [PEDRO, "Pedro.Fixo"], [RUI, null]]));
+    expect(r.get(JOAO)).toBe("PDA 12");
+    expect(r.get(PEDRO)).toBeNull();
+    expect(r.get(RUI)).toBe("Pedro.Fixo");
+  });
+  it("sem check-in: o Zello da ficha (como antes); sem nada → null", async () => {
+    const { pickZelloDevices } = await import("./terminalWatch");
+    const r = pickZelloDevices([JOAO, PEDRO], [], new Map([[JOAO, "Joao.TL"], [PEDRO, null]]));
+    expect(r.get(JOAO)).toBe("Joao.TL");
+    expect(r.get(PEDRO)).toBeNull();
+  });
+});
+
 describe("auditoria B2 — Zello com mais de 100 utilizadores", () => {
   const loc = (username: string, o: Record<string, unknown> = {}) => ({ username, latitude: IN_LIS.lat, longitude: IN_LIS.lng, accuracy: 20, lastReport: Math.floor(T0 / 1000) - 30, lastReportDelay: 30, ...o });
   const filler = Array.from({ length: 100 }, (_, i) => loc(`outro${i}`));
