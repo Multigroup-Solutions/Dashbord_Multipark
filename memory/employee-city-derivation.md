@@ -9,6 +9,7 @@ primeiro consumidor: o filtro de cidade na tabela "Disponibilidade dos extras"
 por Faro / Porto / Lisboa").
 
 ## Related
+- `site-applications-approval.md` — **2026-10-13**: o fluxo de aprovação das candidaturas (diálogo de cidade de 2026-09-17) passou a ter ficheiro próprio; a cidade derivada da ficha confirma a cidade do template do pedido de disponibilidade enviado ao aprovar.
 - `whatsapp-integration.md` — **2026-10-09**: 2.º consumidor de filtro — inbox WhatsApp filtra por cidade da pessoa
   (`conversationCityKey`: ficha por esta derivação → lead → reserva). `resolveEmployeeCities` aceita `preloadedIndex`
   e `loadProjectIndex` passou a exportada. Debt: aqui ainda se usa `matchCityKey` em vez de `cityKeyFromText`/`cityKeyFromAddress`.

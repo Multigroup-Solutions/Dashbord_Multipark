@@ -30,6 +30,7 @@ import { getDb } from "./db";
 import { extractAffectedRows } from "./availabilityFormToken";
 import { driverCityFrom, hasDriverTemplate, type City, type DriverMessage } from "../shared/driverTemplates";
 import type { HourWindow } from "../shared/availabilityWindow";
+import { availabilityRangeLabel } from "../shared/availabilityWeek";
 import { NOT_EXTRA_NOTICE_REASON, noticeSpans } from "../shared/shiftNotice";
 
 // ─── Relógio de Lisboa (puro) ───────────────────────────────────────────────
@@ -96,10 +97,9 @@ export function fmtWorkDay(date: string, startHour: number, endHour: number): st
   return `${label}, das ${hh(startHour)} às ${hh(endHour)}`;
 }
 
-/** "semana de 29/09 a 05/10" */
+/** "semana de 29/09 a 05/10" — mesma forma do pedido feito ao aprovar uma candidatura. */
 export function fmtWeek(weekStart: string): string {
-  const end = addDaysIso(weekStart, 6);
-  return `semana de ${weekStart.slice(8, 10)}/${weekStart.slice(5, 7)} a ${end.slice(8, 10)}/${end.slice(5, 7)}`;
+  return availabilityRangeLabel(weekStart, addDaysIso(weekStart, 6));
 }
 
 // ─── Cobertura (pura) ───────────────────────────────────────────────────────
