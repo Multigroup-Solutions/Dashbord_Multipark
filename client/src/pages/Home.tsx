@@ -5,6 +5,9 @@
 // Email + Palavra-passe, "Pedir código" (o código vai ao TL e ao supervisor de
 // serviço) e "Cria a tua palavra-passe"; o botão Google continua. O passo fica
 // no endereço (?passo=codigo / ?passo=nova-palavra-passe). Desligado: igual a antes.
+// A2: num PDA registado (token do aparelho validado no servidor) o Google sai
+// com GOOGLE_NOS_PDAS desligado, o Chrome não guarda nada (autocomplete off /
+// new-password / one-time-code) e a entrada leva o token (sessão de PDA).
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can, roleRank } from "@shared/access";
 import { Button } from "@/components/ui/button";
@@ -13,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { getGoogleLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG, AUTH_DENIED_PARAM, AUTH_DENIED_VALUE } from "@shared/const";
 import { CODE_REQUESTED_MSG, LOGIN_CODE, PASSWORD_MIN, canUsePassword, cleanCode, passwordProblem } from "@shared/loginCode";
+import { googleShownOnDevice } from "@shared/pdaSession";
 import { safeReturnPath } from "@shared/loginReturn";
 import { KeyRound, Loader2, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
@@ -24,6 +28,7 @@ import { useCodeLoginOption } from "@/lib/loginOptions";
 type Step = "entrar" | "codigo" | "nova-palavra-passe";
 const STEPS: Step[] = ["entrar", "codigo", "nova-palavra-passe"];
 const EMAIL_KEY = "mp.login.email";
+const CODE_MSG_KEY = "mp.login.codeMsg";
 
 function readStep(): Step {
   if (typeof window === "undefined") return "entrar";
@@ -59,6 +64,33 @@ function useLoginStep(): [Step, (s: Step, opts?: { replace?: boolean }) => void]
 
 const readEmail = () => { try { return sessionStorage.getItem(EMAIL_KEY) ?? ""; } catch { return ""; } };
 const saveEmail = (v: string) => { try { sessionStorage.setItem(EMAIL_KEY, v); } catch { /* sem storage */ } };
+/** A mensagem do pedido de código (o TL/supervisor, o email, ou "pede ao TL"). */
+const readCodeMsg = () => { try { return sessionStorage.getItem(CODE_MSG_KEY) || CODE_REQUESTED_MSG; } catch { return CODE_REQUESTED_MSG; } };
+const saveCodeMsg = (v: string | null | undefined) => { try { sessionStorage.setItem(CODE_MSG_KEY, v || CODE_REQUESTED_MSG); } catch { /* sem storage */ } };
+/** Num PDA (partilhado) o email não fica para a pessoa seguinte. */
+const forgetLoginSteps = () => { try { sessionStorage.removeItem(EMAIL_KEY); sessionStorage.removeItem(CODE_MSG_KEY); } catch { /* sem storage */ } };
+
+/**
+ * A2: este aparelho é um PDA registado? (o servidor valida o token; o pedido
+ * vai no corpo, nunca no endereço). `undefined` enquanto pergunta.
+ */
+function usePdaDevice(token: string | null, codeLogin: boolean | undefined): { registered: boolean; google: boolean } | undefined {
+  const check = trpc.auth.pda.device.useMutation();
+  const [state, setState] = useState<{ registered: boolean; google: boolean } | undefined>(() => (token ? undefined : { registered: false, google: true }));
+  useEffect(() => {
+    if (!token) { setState({ registered: false, google: true }); return; }
+    if (codeLogin === undefined) return;
+    if (!codeLogin) { setState({ registered: false, google: true }); return; }
+    let alive = true;
+    check.mutateAsync({ deviceToken: token })
+      .then((r) => { if (alive) setState({ registered: r.registered, google: r.google }); })
+      // sem resposta: mostra o Google (nunca deixar o PDA sem forma de entrar)
+      .catch(() => { if (alive) setState({ registered: false, google: true }); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, codeLogin]);
+  return state;
+}
 
 export default function Home() {
   const { user, loading, error } = useAuth();
@@ -66,6 +98,10 @@ export default function Home() {
   const utils = trpc.useUtils();
   const { codeLogin, resendAfterSec } = useCodeLoginOption();
   const [step, setStep] = useLoginStep();
+  const pdaToken = getPdaToken();
+  const pdaDevice = usePdaDevice(pdaToken, codeLogin);
+  const onPda = !!pdaToken;
+  const showGoogle = !pdaDevice || googleShownOnDevice({ registeredPda: pdaDevice.registered, codeLogin: !!codeLogin, googleOnPdas: pdaDevice.google });
 
   // Acesso recusado — MESMA mensagem em todos os casos (conta desativada,
   // desconhecida, ou registada sem acesso). Duas origens possíveis:
@@ -96,7 +132,7 @@ export default function Home() {
     }
   }, [user, loading, step, goHome]);
 
-  if (loading || (codeLogin === undefined && !user)) {
+  if (loading || (!user && (codeLogin === undefined || (codeLogin && onPda && pdaDevice === undefined)))) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -163,7 +199,7 @@ export default function Home() {
       </>
     );
   } else if (step === "codigo") {
-    form = <EnterCode resendAfterSec={resendAfterSec} onBack={() => setStep("entrar")}
+    form = <EnterCode resendAfterSec={resendAfterSec} onPda={onPda} onBack={() => setStep("entrar")}
       onDone={async (needsPassword) => {
         if (needsPassword) setStep("nova-palavra-passe", { replace: true });
         await utils.auth.me.invalidate();
@@ -174,14 +210,24 @@ export default function Home() {
       <>
         <p className="text-[15px] text-slate-500 leading-snug mb-6">Entra com o teu email.</p>
         {alerts}
-        <EmailPassword onCodeRequested={() => setStep("codigo")} />
-        <div className="flex items-center text-center text-slate-400 text-xs my-6 before:content-[''] before:flex-1 before:h-px before:bg-slate-200 after:content-[''] after:flex-1 after:h-px after:bg-slate-200">
-          <span className="px-3.5">ou</span>
-        </div>
-        {googleButton("outline")}
-        <p className="text-[12.5px] text-slate-400 leading-relaxed mt-4">
-          Team leaders, supervisores e escritório entram com Google.
-        </p>
+        <EmailPassword onPda={onPda} onCodeRequested={() => setStep("codigo")} />
+        {showGoogle ? (
+          <>
+            <div className="flex items-center text-center text-slate-400 text-xs my-6 before:content-[''] before:flex-1 before:h-px before:bg-slate-200 after:content-[''] after:flex-1 after:h-px after:bg-slate-200">
+              <span className="px-3.5">ou</span>
+            </div>
+            {googleButton("outline")}
+            <p className="text-[12.5px] text-slate-400 leading-relaxed mt-4">
+              {pdaDevice?.registered
+                ? "Neste PDA, team leaders e supervisores também entram com código (sem palavra-passe)."
+                : "Team leaders, supervisores e escritório entram com Google."}
+            </p>
+          </>
+        ) : (
+          <p className="text-[12.5px] text-slate-400 leading-relaxed mt-6">
+            Neste PDA entra-se com o email. Team leaders e supervisores: pede o código (sem palavra-passe).
+          </p>
+        )}
       </>
     );
   }
@@ -245,7 +291,7 @@ function FormError({ message }: { message: string | null }) {
 }
 
 /** Email + Palavra-passe + Entrar, e "Primeira vez ou esqueceste-te? Pedir código". */
-function EmailPassword({ onCodeRequested }: { onCodeRequested: () => void }) {
+function EmailPassword({ onCodeRequested, onPda }: { onCodeRequested: () => void; onPda: boolean }) {
   const [email, setEmail] = useState(readEmail);
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -258,7 +304,8 @@ function EmailPassword({ onCodeRequested }: { onCodeRequested: () => void }) {
     setErr(null);
     saveEmail(email.trim());
     try {
-      const r = await login.mutateAsync({ email: email.trim(), password, next: nextFromUrl() });
+      const r = await login.mutateAsync({ email: email.trim(), password, next: nextFromUrl(), pdaToken: getPdaToken() });
+      if (onPda) forgetLoginSteps();
       window.location.replace(r.next ?? "/");
     } catch (x: any) {
       setErr(x?.message ?? "Não foi possível entrar.");
@@ -272,7 +319,8 @@ function EmailPassword({ onCodeRequested }: { onCodeRequested: () => void }) {
     if (!/^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(e)) { setErr("Escreve primeiro o teu email e depois carrega em \"Pedir código\"."); return; }
     saveEmail(e);
     try {
-      await request.mutateAsync({ email: e, pdaToken: getPdaToken() });
+      const r = await request.mutateAsync({ email: e, pdaToken: getPdaToken() });
+      saveCodeMsg(r.message);
       onCodeRequested();
     } catch (x: any) {
       setErr(x?.message ?? "Não foi possível pedir o código.");
@@ -280,15 +328,16 @@ function EmailPassword({ onCodeRequested }: { onCodeRequested: () => void }) {
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4" autoComplete="on">
+    // A2: no PDA (partilhado) o Chrome não guarda nem sugere o email/palavra-passe de ninguém.
+    <form onSubmit={submit} className="space-y-4" autoComplete={onPda ? "off" : "on"}>
       <div className="space-y-1.5">
         <Label htmlFor="login-email">Email</Label>
-        <Input id="login-email" type="email" inputMode="email" autoComplete="username" autoCapitalize="none" spellCheck={false}
+        <Input id="login-email" type="email" inputMode="email" autoComplete={onPda ? "off" : "username"} autoCapitalize="none" spellCheck={false}
           className="h-11 text-[15px]" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nome@gmail.com" required />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="login-password">Palavra-passe</Label>
-        <Input id="login-password" type="password" autoComplete="current-password" className="h-11 text-[15px]"
+        <Input id="login-password" type="password" autoComplete={onPda ? "new-password" : "current-password"} className="h-11 text-[15px]"
           value={password} onChange={(e) => setPassword(e.target.value)} />
       </div>
       <FormError message={err} />
@@ -304,8 +353,9 @@ function EmailPassword({ onCodeRequested }: { onCodeRequested: () => void }) {
 }
 
 /** O código de 6 algarismos (teclado numérico, aceita colar). */
-function EnterCode({ resendAfterSec, onBack, onDone }: { resendAfterSec: number; onBack: () => void; onDone: (needsPassword: boolean) => Promise<void> }) {
+function EnterCode({ resendAfterSec, onBack, onDone, onPda }: { resendAfterSec: number; onBack: () => void; onDone: (needsPassword: boolean) => Promise<void>; onPda: boolean }) {
   const email = readEmail();
+  const [message, setMessage] = useState(readCodeMsg);
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [waitUntil, setWaitUntil] = useState(() => Date.now() + resendAfterSec * 1000);
@@ -324,7 +374,8 @@ function EnterCode({ resendAfterSec, onBack, onDone }: { resendAfterSec: number;
     e.preventDefault();
     setErr(null);
     try {
-      const r = await verify.mutateAsync({ email, code, next: nextFromUrl() });
+      const r = await verify.mutateAsync({ email, code, next: nextFromUrl(), pdaToken: getPdaToken() });
+      if (onPda) forgetLoginSteps();
       await onDone(r.needsPassword);
     } catch (x: any) {
       setErr(x?.message ?? "Não foi possível entrar.");
@@ -334,7 +385,9 @@ function EnterCode({ resendAfterSec, onBack, onDone }: { resendAfterSec: number;
   const again = async () => {
     setErr(null);
     try {
-      await request.mutateAsync({ email, pdaToken: getPdaToken() });
+      const r = await request.mutateAsync({ email, pdaToken: getPdaToken() });
+      saveCodeMsg(r.message);
+      setMessage(r.message || CODE_REQUESTED_MSG);
       setWaitUntil(Date.now() + resendAfterSec * 1000);
     } catch (x: any) {
       setErr(x?.message ?? "Não foi possível pedir outro código.");
@@ -342,9 +395,9 @@ function EnterCode({ resendAfterSec, onBack, onDone }: { resendAfterSec: number;
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4">
+    <form onSubmit={submit} className="space-y-4" autoComplete="off">
       <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
-        {CODE_REQUESTED_MSG}
+        {message}
       </div>
       <p className="text-[13px] text-slate-500 [overflow-wrap:anywhere]">
         Para <b>{email}</b> · <button type="button" className="text-primary underline underline-offset-2" onClick={onBack}>Mudar</button>

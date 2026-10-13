@@ -6,6 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import DashboardLayout from "./components/DashboardLayout";
+import { PdaSessionEndNotice } from "./components/PdaSessionEndNotice";
 import ExpensesPage from "./pages/ExpensesPage";
 import UsersPage from "./pages/UsersPage";
 import LogsPage from "./pages/LogsPage";
@@ -360,6 +361,7 @@ function App() {
         <GlobalFiltersProvider>
           <TooltipProvider>
             <Toaster richColors position="top-right" />
+            <PdaSessionEndNotice />
             <Router />
           </TooltipProvider>
         </GlobalFiltersProvider>

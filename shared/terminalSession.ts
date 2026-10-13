@@ -25,7 +25,7 @@ export type TerminalStartSource = (typeof TERMINAL_START_SOURCES)[number];
 /** Como fechou (o lugar libertou-se). */
 export const TERMINAL_END_REASONS = ["button", "handover", "tl", "checkout", "no_answer", "stale_checkout"] as const;
 export type TerminalEndReason = (typeof TERMINAL_END_REASONS)[number];
-/** Até onde contam as horas e porquê (B2 completa; no B1 fica "gps_close", "last_service" ou "pending"). */
+/** Até onde contam as horas e porquê (regras em shared/terminalWatch.ts `countedAtClose`; o RH confirma ou desmarca). */
 export const TERMINAL_COUNTED_BASES = ["gps_close", "last_gps", "last_service", "confirmed", "pending", "rejected"] as const;
 export type TerminalCountedBasis = (typeof TERMINAL_COUNTED_BASES)[number];
 /** Estado de um pedido para passar o terminal. */
@@ -224,12 +224,11 @@ export function fixInsideCity(fix: GpsFix | null | undefined, airports: Partial<
 // ─── Fecho: até onde contam as horas (B1) ───────────────────────────────────
 
 /**
- * Fecho de uma sessão (regra de 7 out: nunca se paga sem prova, não se corta a
- * quem tem prova). No B1:
- *  - fechou com GPS dentro da zona → conta até ao fecho ("gps_close");
- *  - senão → "pending" (o servidor tenta logo a última recolha/entrega dele na
- *    Multipark — "last_service"; o resto, "Ainda estás?", fica para o B2).
- * Uma saída esquecida (ponto cortado às 12 h) nunca prova nada. PURA.
+ * Fecho de uma sessão — a regra do B1 (regra de 7 out: nunca se paga sem
+ * prova, não se corta a quem tem prova): fechou com GPS dentro → até ao
+ * fecho ("gps_close"); senão "pending". Uma saída esquecida nunca prova nada.
+ * O B2 completa-a (último GPS dentro, última recolha/entrega até ao "fora"):
+ * shared/terminalWatch.ts `countedAtClose`, que é o que o servidor usa. PURA.
  */
 export function closeCounting(o: { endedAtMs: number; insideAtClose: boolean | null; forgotten?: boolean }): { countedUntil: string | null; countedBasis: TerminalCountedBasis } {
   if (o.insideAtClose === true && !o.forgotten) return { countedUntil: toDbUtc(o.endedAtMs), countedBasis: "gps_close" };

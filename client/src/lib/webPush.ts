@@ -40,7 +40,7 @@ function sameKey(current: ArrayBuffer | null, expected: Uint8Array): boolean {
   return a.length === expected.length && a.every((b, i) => b === expected[i]);
 }
 
-function toInput(sub: PushSubscription): PushSubscriptionInput | null {
+export function toInput(sub: PushSubscription): PushSubscriptionInput | null {
   const json = sub.toJSON();
   const p256dh = json.keys?.p256dh;
   const auth = json.keys?.auth;

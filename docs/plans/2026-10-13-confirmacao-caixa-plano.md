@@ -417,7 +417,7 @@ Separador "Confirmação" em `/caixa`: cidade → dia → turno.
 ## 27. Entrega 1 (código desta PR)
 
 Implementado:
-- **Passagem de turno**: 3 campos novos (`cashierCashReceived`, `cashierMbReceived`, `cashierMultiparkTotal`, migração 0635).
+- **Passagem de turno**: 3 campos novos (`cashierCashReceived`, `cashierMbReceived`, `cashierMultiparkTotal`, migração 0645).
 - **Caixa → Confirmação** (cidade × dia 03:00→03:00, parques operados): universo = saídas do dia + reservas com pagamentos no dia + canceladas depois do check-in (por `checkInDriverId`/`checkingInAt`, nunca `checkIn`); leitura ao vivo com **falha fechado** (LIMIT+1 → `truncated`, o dia não fecha).
 - **Motor de achados** (`shared/cashConfirm.ts`, puro, cêntimos half-even): preço que baixou (base = 1.º webhook BOOKING_CREATED, só o original da Multipark sem memória; desconto PRO/campanha só até ao valor das linhas), subida sem causa, sem origem, origem em conflito, webhook de criação tardio (> 2 min), pago a menos/mais (devido = final − crédito + `BookingFee`), crédito, pagamento negativo, método desconhecido (dicionário exato), fora do balcão numa reserva normal, linha ≠ pagamentos, linha antiga, sub-cêntimo, MB sem talão do mesmo valor ligado à reserva, online sem Stripe / sem PI / 404 / valor ou estado diferente, transferência, caixa por fechar, validações fora de ordem, cancelada depois do check-in, pagamento do dia numa reserva sem saída. Chaves dos achados pelo conteúdo (a Multipark recria ids).
 - **Justificar** (motivo da lista + ≥ 20 carateres + comprovativo nas perdas), **talões/comprovativos** com sha256 único (o mesmo ficheiro nunca serve duas vezes; retirar fica registado), **valores do João**, **fechar** (bloqueios: antes das 03:00, Multipark em falha, dados cortados, vermelhos por justificar, turno por declarar, diferença sem nota), **selo** (estado de cada reserva com hash + cabeça da cadeia), **aprovar/recusar** pelo Jorge (quem fechou/justificou não aprova; recusar reabre; com diferença > 30 € o dia aprova-se à parte), **reabrir** com motivo.
@@ -461,7 +461,7 @@ Riscos aceites (por escrito):
 - **Marcas** só se confiam com memória lida da BD e com o campo preenchido; senão amarelo "sem prova de origem" (sem vermelho falso). **Avença/plano** → amarelo (a memória não guarda quando foi ligado).
 - **Quem declarou** = quem escreveu os valores da caixa (`cashierDeclaredById`, gravado quando esses campos mudam); nas antigas, quem criou a passagem.
 - PaymentIntent antigo abandonado não dá vermelho se outro pagamento Stripe da reserva foi bem-sucedido; falha a gravar uma leitura da Stripe aparece no ecrã; pelo MCP não se chama a Stripe; a varredura lê o selo dia a dia; saída por concluir que fecha depois das 03:00 sai do dia sem o reabrir.
-- A migração 0635 **nunca correu em nenhuma BD** (só commits locais, sem deploy): editá-la no sítio é seguro.
+- A migração 0645 **nunca correu em nenhuma BD** (só commits locais, sem deploy): editá-la no sítio é seguro.
 
 Riscos aceites (por escrito), além dos do §27.1:
 - `late_payment`/`checkout_unfinished` podem dar vermelhos legítimos-mas-chatos (dívida paga noutro dia); o valor continua no dinheiro do dia em que foi registado (é onde está o envelope) e o João justifica. Medir no **modo sombra** (fase 7) com os dias reais antes de contar como definitivo.

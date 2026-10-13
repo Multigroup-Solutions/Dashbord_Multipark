@@ -483,7 +483,7 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
             {NumInput({ k: "frontPouchValue", label: "Valor bolsa do front (€)", decimal: true })}
             {cityFields.terminalPouch && NumInput({ k: "terminalPouchValue", label: "Valor bolsa terminal (€)", decimal: true })}
           </div>
-          {/* 0635 — Fecho da caixa do turno (confirmação da caixa reserva a reserva): o team leader fecha primeiro na
+          {/* 0645 — Fecho da caixa do turno (confirmação da caixa reserva a reserva): o team leader fecha primeiro na
               Multipark e depois escreve aqui o que recebeu; o João confirma no dia seguinte (Caixa → Confirmação). */}
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Fecho da caixa do turno</p>
           <p className="text-xs text-muted-foreground -mt-2">Depois de fechares a caixa na Multipark: o que recebeste dos condutores neste turno e o total que a caixa da Multipark dava.</p>

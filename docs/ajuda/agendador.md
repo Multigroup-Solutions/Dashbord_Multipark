@@ -2,7 +2,7 @@
 modulo: definicoes
 titulo: Agendador (tarefas automáticas)
 rotas: /definicoes
-palavras: agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/cron/tick, cron_secret, automático, sincronização automática, parado, falhou, a meio, retoma, próxima corrida, github actions, recolha diária, zello, gps, services-tasks, serviços, tarefas dos serviços, cash-sweep, cash-close, ops-presence, sem pda, zello desligado, cash-external, invoicexpress, stripe, correção de caixa, varredura da caixa
+palavras: agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/cron/tick, cron_secret, automático, sincronização automática, parado, falhou, a meio, retoma, próxima corrida, github actions, recolha diária, zello, gps, services-tasks, serviços, tarefas dos serviços, cash-sweep, cash-close, ops-presence, sem pda, zello desligado, terminal-watch, ainda estás no terminal, cash-external, invoicexpress, stripe, correção de caixa, varredura da caixa
 ---
 # Agendador (tarefas automáticas)
 
@@ -38,6 +38,7 @@ Pronto. Não é preciso mais nada no GitHub.
 | CRM: fichas de cliente — **quando chega o webhook da reserva**; a volta diária apanha o que tenha escapado (trabalho `crm-sync`) | 1×/dia a partir das 04:00 |
 | CRM: juntar sozinho as fichas óbvias (mesmo nome + mesmo telefone, email ou NIF; separa-se em Rever fichas → Juntas recentemente) (trabalho `crm-auto-merge`) | 1×/dia depois das sugestões das 05:15 (o mais tardar 06:00); se não acabar, continua 5 min depois |
 | Operacional: a trabalhar sem PDA ou Zello ligado (ponto aberto sem PDA, Zello desligado, movimentos na Multipark sem ponto; lista em Operacional → PDAs, avisos só com os interruptores ligados) (trabalho `ops-presence`) | de 5 em 5 min |
+| Terminal: "Ainda estás no terminal?" (GPS do Zello de quem está no terminal; pergunta e liberta o lugar sem resposta). Só com o interruptor "Terminal no ponto (aeroporto)" ligado; desligado não lê nada (trabalho `terminal-watch`) | de 5 em 5 min |
 | Caixa: varredura do dinheiro (lê ao vivo da BD da Multipark as reservas dos nossos parques alteradas, as que estão dentro e as que saíram nas últimas 48 h; guarda um retrato quando o dinheiro muda e abre, atualiza ou resolve os casos da **Correção de caixa**). À mão: `/api/cron/cash-sweep` (trabalho `cash-sweep`) | de 3 em 3 horas (a caixa só se confere depois); se ficar a meio continua 5 min depois; o fecho das 06:15 revê as saídas de ontem e anteontem |
 | Caixa: fecho do dia (todas as saídas de ontem e anteontem, com as mesmas regras). À mão: `/api/cron/cash-close` (trabalho `cash-close`) | diário, a partir das 06:15 |
 | Caixa: confirmar os pagamentos das saídas de ontem e anteontem: pago online tem o pagamento Stripe na Multipark (sempre); com os interruptores ligados, também Stripe, Viva Wallet (multibanco) e InvoiceExpress. À mão: `/api/cron/cash-external` (trabalho `cash-external`) | diário, a partir das 07:00 |

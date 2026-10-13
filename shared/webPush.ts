@@ -59,6 +59,8 @@ export function pushSubscriptionError(sub: PushSubscriptionInput): string | null
 export interface PushSubscriptionRow {
   id: number;
   userId: number;
+  /** Plano 56 (A2): sessão de PDA acabou → desligada. */
+  disabledAt?: string | null;
 }
 
 /**
@@ -71,8 +73,22 @@ export interface PushSubscriptionRow {
 export function pickPushDeliveries<T extends PushSubscriptionRow>(subs: readonly T[], visibleUserIds: ReadonlySet<number>): T[] {
   const seen = new Set<number>();
   return subs
-    .filter((s) => visibleUserIds.has(s.userId) && !seen.has(s.id) && (seen.add(s.id), true))
+    .filter((s) => !isPushDisabled(s) && visibleUserIds.has(s.userId) && !seen.has(s.id) && (seen.add(s.id), true))
     .sort((a, b) => a.id - b.id);
+}
+
+/** Plano 56 (A2): subscrição de um PDA cuja sessão acabou (não recebe nada). PURA. */
+export function isPushDisabled(s: { disabledAt?: string | null }): boolean {
+  return s.disabledAt != null && s.disabledAt !== "";
+}
+
+/**
+ * Plano 56 (A2): o que segue para cada subscrição — num PDA (partilhado) o
+ * aviso não diz nada de ninguém ("Tens um aviso") e abre a app. PURA.
+ */
+export function payloadForSubscription<P extends { tag?: string }>(s: { pdaId?: number | null }, payload: P): P | { type: "pda"; title: string; body: string; url: string; tag: string } {
+  if (s.pdaId == null) return payload;
+  return { type: "pda", title: "Multipark", body: "Tens um aviso", url: "/", tag: `pda-${payload.tag ?? "aviso"}`.slice(0, 64) };
 }
 
 export interface CallPushPayload {

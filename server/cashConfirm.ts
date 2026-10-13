@@ -190,7 +190,7 @@ async function shiftDeclarations(d: Db, day: string, city: string): Promise<Shif
   return rows.filter((r) => r.shift === "morning" || r.shift === "night").map((r) => ({
     shift: r.shift, cash: n(r.cashierCashReceived), mb: n(r.cashierMbReceived), multiparkTotal: n(r.cashierMultiparkTotal),
     byName: r.filledByName ?? null,
-    // Quem escreveu os valores da caixa (registado na gravação desde a 0635); para as antigas, quem criou a passagem.
+    // Quem escreveu os valores da caixa (registado na gravação desde a 0645); para as antigas, quem criou a passagem.
     byId: r.cashierDeclaredById != null ? Number(r.cashierDeclaredById) : r.createdById != null ? Number(r.createdById) : r.filledById == null ? null : Number(r.filledById),
   }));
 }

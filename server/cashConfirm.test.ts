@@ -9,7 +9,7 @@ import {
 } from "../shared/cashConfirm";
 import { eventHash, verifyChain, verifyIntegrity, sealDrift, summaryDrift, buildSeal, GENESIS_HASH, type ChainEvent, type StoredEvent } from "./cashConfirm";
 import { buildConfirmDaySql, mapConfirmRow, CONFIRM_BOOKINGS_MAX, CONFIRM_PAYMENTS_MAX } from "./multiparkDb/cashConfirm";
-import { MIGRATION_0635_STATEMENTS } from "./migrations/migration_0635";
+import { MIGRATION_0645_STATEMENTS } from "./migrations/migration_0645";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 
 const V = (done = false) => ({ done, at: null, by: null, byId: null });
@@ -440,11 +440,11 @@ describe("só acréscimo e regras do repositório", () => {
     }
     expect(bad).toEqual([]);
   });
-  it("migração 0635 registada depois da 0630, sem apagar nada; horas em DATETIME(3)", () => {
-    expect(SCHEMA_MIGRATION_IDS.indexOf("0635")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0630"));
-    const all = MIGRATION_0635_STATEMENTS.join("\n");
+  it("migração 0645 registada depois da 0640, sem apagar nada; horas em DATETIME(3)", () => {
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0645")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0640"));
+    const all = MIGRATION_0645_STATEMENTS.join("\n");
     expect(all).not.toMatch(/\bDELETE\b|\bDROP\b|TRUNCATE/i);
-    for (const s of MIGRATION_0635_STATEMENTS) expect(s).not.toMatch(/^\s*UPDATE\b/i);
+    for (const s of MIGRATION_0645_STATEMENTS) expect(s).not.toMatch(/^\s*UPDATE\b/i);
     expect(all).not.toMatch(/`\w+` TIMESTAMP/);
     for (const t of [...APPEND_ONLY, "cash_confirm_days"]) expect(all).toMatch(new RegExp(`CREATE TABLE IF NOT EXISTS \`${t}\``));
     for (const c of ["cashierCashReceived", "cashierMbReceived", "cashierMultiparkTotal"]) expect(all).toMatch(new RegExp(`ADD COLUMN \`${c}\``));

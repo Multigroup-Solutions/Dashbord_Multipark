@@ -3989,6 +3989,9 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   // logo a seguir "até à última recolha/entrega"; senão decide o RH).
   let terminalOn: boolean | null = null;
   let terminalDeps: import("./terminalSessions").TerminalDeps | null = null;
+  // Plano 56 (A2, só com ENTRAR_COM_CODIGO): o ponto esquecido fechado sozinho
+  // também solta o PDA (pda_checkins) e acaba a sessão de PDA da pessoa.
+  let pdaOn: boolean | null = null;
   let closed = 0;
   for (const r of rows as any[]) {
     const outAt = new Date(new Date(r.recordedAt).getTime() + 12 * 3600000);
@@ -4015,6 +4018,18 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
       await ts.releaseOnCheckout(terminalDeps, { employeeId: Number(r.employeeId), actorUserId: null, endedAtMs: outAt.getTime(), fix: null, reason: "stale_checkout" });
     } catch (err) {
       console.warn("[terminal] lugar não libertado no fecho automático do ponto:", String((err as any)?.message ?? err).slice(0, 160));
+    }
+    try {
+      const ps = await import("./pdaSession");
+      // As sessões de PDA só existem com o interruptor; acabar as que houver nunca faz mal.
+      await ps.endPdaSessionsOfEmployee(Number(r.employeeId), "stale_checkout");
+      pdaOn ??= await ps.pdaSessionsEnabled();
+      if (pdaOn && (await closePdaCheckinsForEmployee(Number(r.employeeId), outAt))) {
+        const { syncPdaZelloNamesForEmployee } = await import("./pdaZelloName");
+        void syncPdaZelloNamesForEmployee(Number(r.employeeId));
+      }
+    } catch (err) {
+      console.warn("[pda] PDA não soltado no fecho automático do ponto:", String((err as any)?.message ?? err).slice(0, 160));
     }
   }
   return { closed };

@@ -1245,7 +1245,7 @@ export const shiftHandovers = mysqlTable("shift_handovers", {
 	frontPouchValue: decimal({ precision: 10, scale: 2 }),
 	terminalPouchValue: decimal({ precision: 10, scale: 2 }),
 	ticketsExpensesPaid: decimal({ precision: 10, scale: 2 }),
-	// 0635 — fecho da caixa do turno (team leader, depois de fechar na Multipark):
+	// 0645 — fecho da caixa do turno (team leader, depois de fechar na Multipark):
 	// dinheiro recebido dos condutores (antes das despesas), MB recebido e o total que dava a caixa na Multipark.
 	cashierCashReceived: decimal({ precision: 10, scale: 2 }),
 	cashierMbReceived: decimal({ precision: 10, scale: 2 }),
@@ -1986,6 +1986,12 @@ export const pdas = mysqlTable("pdas", {
 	notes: text(),
 	// Cidade fixa do PDA (migração 0280): nó `level='city'` de `projects`.
 	projectId: int(),
+	// Sessão de PDA (plano 56 A2, migração 0635): quem tem a sessão AGORA e o
+	// nonce que vai no cookie. Limpa-se (nonce NULL) quando outra pessoa entra,
+	// no logout, na saída do ponto e no fecho automático; dura no máximo 16 h.
+	sessionUserId: int(),
+	sessionNonce: varchar({ length: 64 }),
+	sessionStartedAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
@@ -2426,6 +2432,20 @@ export const terminalSessions = mysqlTable("terminal_sessions", {
 	timeRecordId: int(),
 	activeCityKey: varchar({ length: 8 }),
 	activeEmployeeId: int(),
+	// 0640 (B2): última leitura do Zello usada (instante, estado, distância) e
+	// quando se olhou; reabrir sem buraco; início do que conta (reabertura/RH);
+	// decisão do RH (quem, quando, motivo) e o resultado automático de antes.
+	lastFixAt: datetime({ mode: 'string' }),
+	lastFixState: varchar({ length: 8 }), // inside | outside | no_gps
+	lastFixDistanceM: int(),
+	lastCheckAt: datetime({ mode: 'string' }),
+	countedFrom: datetime({ mode: 'string' }),
+	prevSessionId: int(),
+	reviewedByUserId: int(),
+	reviewedAt: datetime({ mode: 'string' }),
+	reviewNote: varchar({ length: 255 }),
+	autoCountedUntil: datetime({ mode: 'string' }),
+	autoCountedBasis: varchar({ length: 16 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -3056,12 +3076,18 @@ export const webPushSubscriptions = mysqlTable("web_push_subscriptions", {
 	userAgent: varchar({ length: 255 }),
 	lastSuccessAt: datetime({ mode: 'string' }),
 	lastFailureAt: datetime({ mode: 'string' }),
+	// Plano 56 A2 (migração 0635): subscrição de um PDA — é de quem tem a
+	// sessão nesse PDA (muda de dono em cada entrada) e fica desligada quando a
+	// sessão acaba (`disabledAt`). No PDA o aviso diz só "Tens um aviso".
+	pdaId: int(),
+	disabledAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	uniqueIndex("uq_web_push_endpoint").on(table.endpointHash),
 	index("idx_web_push_user").on(table.userId),
+	index("idx_web_push_pda").on(table.pdaId),
 ]);
 
 // ─── Leads de extras (2026-09-17) ───────────────────────────────────────────

@@ -1,5 +1,7 @@
-// Terminal pelo perfil (plano 56 B1): estado da própria pessoa e as ações
-// ("Estou no terminal", Sair, pedir ao colega, Passar / Ainda estou).
+// Terminal pelo perfil (plano 56 B1 + B2): estado da própria pessoa e as ações
+// ("Estou no terminal", Sair, pedir ao colega, Passar / Ainda estou, e no B2
+// "Ainda estás no terminal?" → Sim, estou / Já saí, e "Ainda estou" depois de
+// o lugar ter sido libertado).
 // Interruptor PONTO_TERMINAL desligado → `status.enabled` false e nada aparece.
 import { useState } from "react";
 import { toast } from "sonner";
@@ -47,8 +49,8 @@ export function useTerminal(enabled: boolean) {
     retry: false,
     staleTime: 15_000,
     refetchInterval: (q) => {
-      const d = q.state.data as { session?: unknown; incoming?: unknown; outgoing?: unknown } | undefined;
-      return d && (d.session || d.incoming || d.outgoing) ? 30_000 : 120_000;
+      const d = q.state.data as { session?: unknown; incoming?: unknown; outgoing?: unknown; ask?: unknown; released?: unknown } | undefined;
+      return d && (d.ask || d.released) ? 20_000 : d && (d.session || d.incoming || d.outgoing) ? 30_000 : 120_000;
     },
   });
   const status = statusQ.data;
@@ -58,6 +60,8 @@ export function useTerminal(enabled: boolean) {
   const stopM = trpc.terminal.stop.useMutation();
   const requestM = trpc.terminal.requestHandover.useMutation();
   const answerM = trpc.terminal.answerHandover.useMutation();
+  const stillM = trpc.terminal.answerStillHere.useMutation();
+  const reopenM = trpc.terminal.reopen.useMutation();
 
   const refresh = () => {
     utils.terminal.status.invalidate();
@@ -113,7 +117,21 @@ export function useTerminal(enabled: boolean) {
     refresh();
   });
 
-  return { status, statusQ, busy, setBusy, working, handleOpenResult, start, askToPass, stop, answer, refresh };
+  /** "Ainda estás no terminal?" → "Sim, estou" (com GPS, se der: também é prova) / "Já saí". */
+  const stillHere = (a: "yes" | "left") => guard(async () => {
+    const fix = await tryPosition();
+    const r = await stillM.mutateAsync({ answer: a, ...(fix ?? {}) }) as { status: string; message: string };
+    if (r.status === "ok" || r.status === "closed") { toast.success(r.message, { duration: 8000 }); refresh(); }
+    else handleOpenResult(r as OpenResult);
+  });
+
+  /** "Ainda estou" depois de o lugar ter sido libertado (até 30 min). */
+  const reopen = () => guard(async () => {
+    const fix = await tryPosition();
+    handleOpenResult(await reopenM.mutateAsync(fix ?? {}) as OpenResult);
+  });
+
+  return { status, statusQ, busy, setBusy, working, handleOpenResult, start, askToPass, stop, answer, stillHere, reopen, refresh };
 }
 
 export type TerminalApi = ReturnType<typeof useTerminal>;

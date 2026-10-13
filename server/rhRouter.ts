@@ -1316,6 +1316,10 @@ export const rhRouter = router({
     // Terminal à mão (quem revê o ponto desta ficha): confirma ou desmarca o
     // troço de terminal de uma SAÍDA, com motivo. Não apaga nada: muda o estado
     // e regista quem, quando e porquê (também no registo de atividade).
+    // Plano 56 B2: num turno SEM estado antigo, os botões atuam nas sessões do
+    // terminal pelo perfil desse turno (server/terminalReview.ts rhSetShift —
+    // sem sobreposição, nunca em meses fechados). Os troços do método antigo
+    // (histórico) continuam como estavam.
     setTerminal: protectedProcedure
       .input(z.object({ id: z.number().int().positive(), terminal: z.boolean(), note: z.string().trim().min(3, "Escreve o motivo (mín. 3 letras).").max(255) }))
       .mutation(async ({ ctx, input }) => {
@@ -1326,6 +1330,18 @@ export const rhRouter = router({
         const empId = await employeeIdOfRecord("time_records", input.id);
         if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Registo de ponto não encontrado" });
         await assertCanManageEmployee(ctx.user, empId, "Sem permissão para rever o ponto desta pessoa.");
+        const shift = await (await import("./rhService")).shiftOfCheckOut(input.id);
+        if (shift && !shift.legacyStatus) {
+          if (!shift.inAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta saída não tem entrada: não há turno para rever." });
+          const [{ realTerminalDeps, TerminalError }, { rhSetShift }] = await Promise.all([import("./terminalSessions"), import("./terminalReview")]);
+          try {
+            const r = await rhSetShift(await realTerminalDeps(), { userId: ctx.user.id }, { employeeId: empId, inAt: shift.inAt, outAt: shift.outAt, terminal: input.terminal, note: input.note });
+            return { success: true, terminalStatus: (input.terminal ? "confirmed" : "rejected") as "confirmed" | "rejected", sessions: r.changed, message: r.message };
+          } catch (err) {
+            if (err instanceof TerminalError) throw new TRPCError({ code: err.code, message: err.message });
+            throw err;
+          }
+        }
         const { setTimeRecordTerminal } = await import("./rhService");
         const emp = await getEmployeeById(empId);
         if (!isExtraEmployee(emp?.employee)) throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal é só para extras." });
@@ -1632,9 +1648,21 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
         }
+        // Plano 56 (A2): a saída do ponto acaba as sessões de PDA da pessoa (as
+        // contas da ficha, em qualquer PDA, feita em qualquer aparelho). Sem
+        // sessões de PDA (interruptor desligado) não muda nada. O resumo vai
+        // nesta resposta: depois disto a sessão do PDA já não pede mais nada.
+        let pdaSessionEnded = false;
+        try {
+          const { endPdaSessionsOfEmployee, requestSessionEnded } = await import("./pdaSession");
+          const ended = await endPdaSessionsOfEmployee(input.employeeId, "checkout", ctx.user.id);
+          pdaSessionEnded = await requestSessionEnded(ctx.req, ended);
+        } catch (err) {
+          console.warn("[pda] sessão de PDA não terminada no check-out:", String((err as any)?.message ?? err).slice(0, 160));
+        }
         await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalPartial ? ` · ${terminalPartial.label.toLowerCase()}` : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}${terminalReleased ? " · saiu do terminal" : ""}` });
         const terminalResult: "auto" | "pending" | "partial" | null = terminalPartial ? "partial" : terminalOut.terminal;
-        return { success: true, hoursWorked, zello, terminal: terminalResult, terminalUntil: terminalPartial?.until ?? null, terminalLabel: terminalPartial?.label ?? null, terminalReleased };
+        return { success: true, hoursWorked, zello, terminal: terminalResult, terminalUntil: terminalPartial?.until ?? null, terminalLabel: terminalPartial?.label ?? null, terminalReleased, pdaSessionEnded };
       }),
 
     // ── Geofence por centro de custos (raio de picagem) ───────────────────

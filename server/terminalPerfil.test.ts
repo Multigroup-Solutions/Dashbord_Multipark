@@ -111,13 +111,22 @@ function memoryStore() {
       Object.assign(s, c, { activeCityKey: null, activeEmployeeId: null });
       return true;
     },
-    setCounted: async (id, until, basis) => {
-      const s = sessions.find((x) => x.id === id && x.countedBasis === "pending");
+    // B2: melhorar as horas que contam (só bases automáticas e só para mais tarde)
+    improveCounted: async (id, until, basis) => {
+      const s = sessions.find((x) => x.id === id && x.endedAt != null && ["pending", "last_gps", "last_service"].includes(String(x.countedBasis)) && (x.countedUntil == null || x.countedUntil < until));
       if (!s) return false;
       writes++;
       s.countedUntil = until; s.countedBasis = basis;
       return true;
     },
+    updateWatch: async () => false, // (B2: o vigia não corre nestes testes)
+    markAsked: async () => false,
+    markStillHere: async () => false,
+    closeIfUnanswered: async () => false,
+    latestByEmployee: async (e) => copy([...sessions].filter((s) => s.employeeId === e).sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : b.id - a.id))[0] ?? null),
+    sessionsBetween: async () => [],
+    review: async () => false,
+    toSettle: async () => [],
     insertHandover: async (row) => {
       const id = nextH++;
       writes++;
