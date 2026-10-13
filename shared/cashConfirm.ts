@@ -257,7 +257,9 @@ export function offCounterOf(b: Pick<ConfirmBookingLive, "pro" | "partnerId" | "
  * guardado) não é dinheiro de balcão — fica fora das regras do dia, do
  * "balcão do dia" e do selo da saída. PURA.
  */
-export function isSettlement(b: Pick<ConfirmBookingLive, "checkOut">, p: Pick<ConfirmPayment, "recordedAt">, offCounter: boolean): boolean {
+export function isSettlement(b: Pick<ConfirmBookingLive, "checkOut">, p: Pick<ConfirmPayment, "recordedAt" | "method">, offCounter: boolean): boolean {
+  // Dinheiro e MB ao balcão nunca são liquidação: continuam a pedir talão e a dar "registado depois da saída".
+  if (isCounterKind(payKind(p.method))) return false;
   return offCounter && !!b.checkOut && !!p.recordedAt && Date.parse(p.recordedAt) - Date.parse(b.checkOut) > LATE_PAYMENT_MS;
 }
 

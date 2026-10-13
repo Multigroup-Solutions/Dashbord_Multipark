@@ -182,10 +182,10 @@ describe("auditoria do código, ronda 2", () => {
     expect(payKind("MIT_OFF_SESSION")).toBe("off_counter");
     expect(run(live, { inDay: "payment_only", origin: proOrigin })).toEqual([]);
     expect(hasCounterInDay(live, new Set(["z1"]), undefined, true)).toBe(false);
-    // Nem mesmo se o acerto vier com outro método (ex.: "Multibanco"): é liquidação de uma reserva PRO depois da saída.
+    // Mas dinheiro/MB ao balcão depois da saída numa reserva PRO não é liquidação (ronda 3, BAIXO 1): talão e "registado depois".
     const mb = settled({ payments: [pay(50, "Multibanco", { recordedAt: DAYP })] });
-    expect(run(mb, { inDay: "payment_only", origin: proOrigin })).toEqual([]);
-    expect(hasCounterInDay(mb, new Set(["z1"]), undefined, true)).toBe(false);
+    expect(codes(run(mb, { inDay: "payment_only", origin: proOrigin }))).toEqual(["late_payment:red", "mb_no_receipt:red", "not_checked_out:amber"]);
+    expect(hasCounterInDay(mb, new Set(["z1"]), undefined, true)).toBe(true);
   });
   it("ALTO 1: o selo da saída PRO não muda quando chega o acerto (não reabre o dia da saída)", () => {
     const atCheckout = bk({ pro: true, lines: [line(50, 0)], payments: [] });
