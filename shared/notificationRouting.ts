@@ -217,6 +217,11 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "parcerias", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "cash_daily_digest", group: "financeiro", label: "Caixa: resumo diário", description: "Casos da Correção de caixa por explicar (por cidade), depois do fecho do dia.",
     module: "caixa", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 12 * 60 }),
+  // Confirmação da caixa (Jorge, 13 out 2026): diferença do dia > 30 € → aviso na app; > 70 € → também email; dia fechado que a Multipark alterou → aviso na app.
+  K({ kind: "cash_confirm_alert", group: "financeiro", label: "Caixa: diferença no dia (> 30 €)", description: "Confirmação da caixa: o João fechou um dia com diferença acima de 30 €, ou um dia já fechado foi reaberto porque a Multipark mudou uma reserva.",
+    module: "caixa", action: "manage", roles: [], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 60 }),
+  K({ kind: "cash_confirm_alert_email", group: "financeiro", label: "Caixa: diferença grande no dia (> 70 €)", description: "Confirmação da caixa: dia fechado com diferença acima de 70 € (também por email).",
+    module: "caixa", action: "manage", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, dedupeMinutes: 60 }),
 
   // ── Marketing ──
   K({ kind: "marketing_alert", group: "marketing", label: "Alertas de marketing", description: "Gasto ou ROAS fora do normal (só críticos).",

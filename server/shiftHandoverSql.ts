@@ -9,7 +9,7 @@ import { sql, type SQL } from "drizzle-orm";
 /** Colunas editáveis do formulário (ordem estável para INSERT/UPDATE). */
 export const HANDOVER_VALUE_COLUMNS = [
   "carsForCovered", "chargedUntilDate", "cashClosedInSafe", "checkoutCashDone",
-  "frontPouchValue", "terminalPouchValue", "ticketsExpensesPaid", "mbRolls",
+  "frontPouchValue", "terminalPouchValue", "ticketsExpensesPaid", "cashierCashReceived", "cashierMbReceived", "cashierMultiparkTotal", "mbRolls",
   "mbRollsInPouch", "pensInPouch", "mbBattery", "pdasCharged", "materialOk",
   "materialExceptions", "clothingItems", "notes", "openItems",
 ] as const;
@@ -39,6 +39,9 @@ export function handoverBoundValues(data: HandoverInput): Record<HandoverValueCo
     frontPouchValue: numOrNull(data.frontPouchValue),
     terminalPouchValue: numOrNull(data.terminalPouchValue),
     ticketsExpensesPaid: numOrNull(data.ticketsExpensesPaid),
+    cashierCashReceived: numOrNull(data.cashierCashReceived),
+    cashierMbReceived: numOrNull(data.cashierMbReceived),
+    cashierMultiparkTotal: numOrNull(data.cashierMultiparkTotal),
     mbRolls: numOrNull(data.mbRolls),
     mbRollsInPouch: numOrNull(data.mbRollsInPouch),
     pensInPouch: numOrNull(data.pensInPouch),

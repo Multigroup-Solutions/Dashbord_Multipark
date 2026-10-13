@@ -3824,6 +3824,10 @@ export const appRouter = router({
       frontPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       terminalPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       ticketsExpensesPaid: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      // 0635 — fecho da caixa do turno (confirmação da caixa reserva a reserva).
+      cashierCashReceived: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      cashierMbReceived: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      cashierMultiparkTotal: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       mbRolls: z.number().int().min(0).max(100_000).nullable().optional(),
       mbRollsInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
       pensInPouch: z.number().int().min(0).max(100_000).nullable().optional(),

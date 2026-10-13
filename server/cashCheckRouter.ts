@@ -49,6 +49,31 @@ export async function requireCashCheck(user: { id: number; role: string }) {
 
 type Unavailable = { available: false; reason: string };
 
+const CONFIRM_CITY = z.enum(["lisbon", "porto", "faro"]);
+
+/** Caixa → editar (pelo módulo da Caixa ou, para quem já tinha, da Faturação), além da porta. */
+async function requireCashEdit(user: { id: number; role: string }) {
+  await requireCashCheck(user);
+  requireAccess(user, cashModuleFor(user, "edit"), "edit");
+}
+
+/** A cidade tem de estar no âmbito da pessoa; devolve o âmbito (nomes) para as leituras da Multipark. */
+async function confirmScope(city: "lisbon" | "porto" | "faro"): Promise<string[] | undefined> {
+  const { scopedCityNamesLive } = await import("./cityScope");
+  const { cityOfParkName } = await import("./cashDay");
+  const scope = scopedCityNamesLive();
+  if (scope !== undefined && !scope.some((c) => cityOfParkName(c) === city)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Esta cidade não está no teu âmbito." });
+  }
+  return scope;
+}
+
+/** { ok:false, code, message } → TRPCError; senão o resultado sem o `ok`. */
+function failOr<T extends { ok: true }>(r: T | { ok: false; code: "BAD_REQUEST" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "INTERNAL_SERVER_ERROR"; message: string }): T {
+  if (!r.ok) throw new TRPCError({ code: r.code, message: r.message });
+  return r;
+}
+
 function snapshotOut(s: MemorySnapshot) {
   return {
     id: s.id, eventType: s.eventType, receivedAt: s.receivedAt, sourceUpdatedAt: s.sourceUpdatedAt, status: s.status,
@@ -442,6 +467,109 @@ export const cashCheckRouter = router({
     await requireCashCheck(ctx.user);
     const { cashDayReviewLog } = await import("./cashDay");
     return cashDayReviewLog(input.day, input.city);
+  }),
+
+  // ─── Confirmação da caixa reserva a reserva (Jorge, 13 out 2026) ─────────
+  // Ver: porta da Caixa. Justificar, anexar, confirmar valores e fechar: Caixa → editar.
+  // Aprovar/recusar e reabrir: Caixa → gerir. Nada disto está aberto ao MCP (só leituras).
+
+  confirmDay: protectedProcedure.input(z.object({ day: DAY, city: CONFIRM_CITY })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const cities = await confirmScope(input.city);
+    const { loadConfirmDay } = await import("./cashConfirm");
+    const r = await loadConfirmDay(input.day, input.city, cities);
+    if (!r.available) return r;
+    const { states: _s, ...rest } = r;
+    return rest;
+  }),
+
+  confirmMonth: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    const { scopedCityNamesLive } = await import("./cityScope");
+    const { cityOfParkName } = await import("./cashDay");
+    const scope = scopedCityNamesLive();
+    const cities = scope === undefined ? (["lisbon", "porto", "faro"] as const).slice() : [...new Set(scope.map((c) => cityOfParkName(c)).filter((c): c is "lisbon" | "porto" | "faro" => !!c))];
+    const { confirmMonth } = await import("./cashConfirm");
+    return confirmMonth(input.month, cities);
+  }),
+
+  confirmFileUrl: protectedProcedure.input(z.object({ day: DAY, city: CONFIRM_CITY, fileId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    await confirmScope(input.city);
+    const { confirmFileUrl } = await import("./cashConfirm");
+    return { url: await confirmFileUrl(input) };
+  }),
+
+  confirmUpload: protectedProcedure.input(z.object({
+    day: DAY, city: CONFIRM_CITY,
+    bookingId: z.string().trim().min(1).max(64).nullable(),
+    kind: z.enum(["talao_mb", "comprovativo"]),
+    amount: z.number().positive().max(1_000_000).nullable(),
+    base64: z.string().min(16).max(4_500_000),
+    mimeType: z.string().max(64),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashEdit(ctx.user);
+    await confirmScope(input.city);
+    const { uploadConfirmFile } = await import("./cashConfirm");
+    return failOr(await uploadConfirmFile({ ...input, userId: ctx.user.id }));
+  }),
+
+  confirmRemoveFile: protectedProcedure.input(z.object({ day: DAY, city: CONFIRM_CITY, fileId: z.number().int().positive(), reason: z.string().trim().max(255) })).mutation(async ({ ctx, input }) => {
+    await requireCashEdit(ctx.user);
+    await confirmScope(input.city);
+    const { removeConfirmFile } = await import("./cashConfirm");
+    return failOr(await removeConfirmFile({ ...input, userId: ctx.user.id }));
+  }),
+
+  confirmJustify: protectedProcedure.input(z.object({
+    day: DAY, city: CONFIRM_CITY, findingKey: z.string().trim().min(3).max(200),
+    reason: z.string().trim().max(40), explanation: z.string().trim().max(4000), fileIds: z.array(z.number().int().positive()).max(20),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashEdit(ctx.user);
+    const cities = await confirmScope(input.city);
+    const { justifyFinding } = await import("./cashConfirm");
+    return failOr(await justifyFinding({ ...input, cities, userId: ctx.user.id }));
+  }),
+
+  confirmValues: protectedProcedure.input(z.object({
+    day: DAY, city: CONFIRM_CITY,
+    cash: z.number().min(0).max(10_000_000).nullable(), mb: z.number().min(0).max(10_000_000).nullable(), note: z.string().trim().max(4000).nullable(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashEdit(ctx.user);
+    await confirmScope(input.city);
+    const { saveConfirmValues } = await import("./cashConfirm");
+    return failOr(await saveConfirmValues({ ...input, userId: ctx.user.id }));
+  }),
+
+  confirmClose: protectedProcedure.input(z.object({ day: DAY, city: CONFIRM_CITY })).mutation(async ({ ctx, input }) => {
+    await requireCashEdit(ctx.user);
+    const cities = await confirmScope(input.city);
+    const { closeConfirmDay } = await import("./cashConfirm");
+    const r = failOr(await closeConfirmDay({ ...input, cities, userId: ctx.user.id, userName: ctx.user.name ?? null }));
+    const { logActivity } = await import("./db");
+    await logActivity({ userId: ctx.user.id, action: "update", entity: "cash_confirm_day", details: `Confirmação da caixa ${input.day} ${input.city}: fechado (${r.status}${r.alert !== "none" ? `, alerta ${r.alert}` : ""})` }).catch(() => {});
+    return r;
+  }),
+
+  confirmDecide: protectedProcedure.input(z.object({
+    day: DAY, city: CONFIRM_CITY, justificationId: z.number().int().positive().nullable(), decision: z.enum(["aprovado", "recusado"]), note: z.string().trim().max(2000).nullable(),
+  })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    if (!canCash(ctx.user, "manage")) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem gere a Caixa aprova ou recusa." });
+    await confirmScope(input.city);
+    const { decideConfirm } = await import("./cashConfirm");
+    const r = failOr(await decideConfirm({ ...input, userId: ctx.user.id }));
+    const { logActivity } = await import("./db");
+    await logActivity({ userId: ctx.user.id, action: "update", entity: "cash_confirm_day", details: `Confirmação da caixa ${input.day} ${input.city}: ${input.decision}${input.justificationId ? ` (justificação #${input.justificationId})` : " (dia)"}` }).catch(() => {});
+    return r;
+  }),
+
+  confirmReopen: protectedProcedure.input(z.object({ day: DAY, city: CONFIRM_CITY, reason: z.string().trim().max(2000) })).mutation(async ({ ctx, input }) => {
+    await requireCashCheck(ctx.user);
+    if (!canCash(ctx.user, "manage")) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem gere a Caixa reabre um dia." });
+    await confirmScope(input.city);
+    const { reopenConfirmDay } = await import("./cashConfirm");
+    return failOr(await reopenConfirmDay({ ...input, userId: ctx.user.id }));
   }),
 
   // ─── Fase 3: contagem da caixa (R24) ─────────────────────────────────────

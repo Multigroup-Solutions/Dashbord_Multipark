@@ -327,7 +327,18 @@ export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobR
   try {
     const { runCashClose } = await import("./cashSweep");
     const r = await runCashClose({ deadlineAt: o.deadlineAt - 2_000 });
-    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: !r.partial };
+    // Confirmação da caixa (13 out 2026): reler os dias já fechados; se a Multipark mudou uma reserva selada, o dia reabre.
+    let confirm: { checked: number; reopened: number; skipped: number } | { error: string } | null = null;
+    if (!r.partial && Date.now() < o.deadlineAt - 12_000) {
+      try {
+        const { recheckClosedConfirmDays } = await import("./cashConfirm");
+        confirm = await recheckClosedConfirmDays({ deadlineAt: o.deadlineAt - 2_000 });
+      } catch (err) {
+        console.error("[cron cash-close] confirmação:", msg(err, 200));
+        confirm = { error: msg(err, 120) };
+      }
+    }
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, confirm }, done: !r.partial };
   } catch (err) {
     console.error("[cron cash-close] falhou:", msg(err, 200));
     return fail(err);

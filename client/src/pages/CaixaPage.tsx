@@ -7,6 +7,8 @@
  *     despesas do turno, esperado vs contado, quem entregou e quem fechou, e a
  *     correção do dia (certo / não certo, com motivo);
  *   - Resumo: recebido / por cobrar / no-shows pré-pagos no período;
+ *   - Confirmação (13 out 2026): reserva a reserva por cidade e dia — o João
+ *     confirma, anexa talões, justifica os vermelhos e fecha; o Jorge aprova;
  *   - Correção de caixa: casos, contagem por parque e dia, multibanco,
  *     externos (Stripe/Viva/InvoiceExpress), preços iniciais e era/é.
  * O alerta "Caixa: casos graves" abre /caixa?tab=correcao&case=N.
@@ -23,6 +25,7 @@ import CashCountPanel from "@/components/cashCheck/CashCountPanel";
 import CashExternalPanel from "@/components/cashCheck/CashExternalPanel";
 import { InitialPricesPanel } from "@/components/cashCheck/InitialPricesPanel";
 import CashDayBoard from "@/components/cashCheck/CashDayBoard";
+import CashConfirmPanel from "@/components/cashCheck/CashConfirmPanel";
 import FitAmount from "@/components/finance/FitAmount";
 import { TABS_SCROLL } from "@/components/finance/layoutClasses";
 import DateRangeNav, { type DateGran, rangeFor } from "@/components/DateRangeNav";
@@ -63,6 +66,7 @@ export default function CaixaPage() {
       <Tabs value={tab} onValueChange={(v) => setTab(v as CaixaTab)} className="space-y-4">
         <TabsList className={TABS_SCROLL}>
           <TabsTrigger value="dia">Por dia</TabsTrigger>
+          <TabsTrigger value="confirmacao">Confirmação</TabsTrigger>
           <TabsTrigger value="resumo">Resumo</TabsTrigger>
           <TabsTrigger value="correcao">Correção de caixa</TabsTrigger>
         </TabsList>
@@ -71,6 +75,9 @@ export default function CaixaPage() {
           {tab === "dia" && <CashDayBoard projectId={projectId} />}
         </TabsContent>
 
+        <TabsContent value="confirmacao" className="space-y-4">
+          {tab === "confirmacao" && <CashConfirmPanel />}
+        </TabsContent>
         <TabsContent value="resumo" className="space-y-4">
           <DateRangeNav start={from} end={to} gran={gran} onChange={(s, e, g) => { setFrom(s); setTo(e); setGran(g); }} />
           <CashSummary cash={cashQ.data} loading={cashQ.isLoading} error={cashQ.error?.message ?? null} onRetry={() => cashQ.refetch()} busy={cashQ.isFetching} />
