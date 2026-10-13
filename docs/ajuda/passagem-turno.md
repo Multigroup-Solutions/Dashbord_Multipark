@@ -71,6 +71,8 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
 - No telemóvel, o **Histórico** mostra um cartão por passagem.
 - O **Resumo do dia** (supervisão) está em **Operações → Actividade Diária → Resumo do dia**.
 
+**Fecho da caixa do turno** (13 out 2026): depois de fechares a caixa na Multipark, escreve o **dinheiro recebido** dos condutores neste turno (antes das despesas), o **Multibanco recebido** e o **total que dava a caixa na Multipark**. O João usa estes valores no dia seguinte em **Caixa → Confirmação**; sem eles o dia não se fecha.
+
 **Despesas do turno** (em Valores): lança aqui cada despesa paga com o dinheiro da caixa — não é preciso ir ao Financeiro.
 1. Carrega em **Talão** e tira a foto (ou escolhe uma foto ou PDF). Enquanto aparece **A ler o talão…**, a IA (a mesma das Despesas) lê o talão e preenche a descrição, o valor e os dados do talão: fornecedor, NIF, n.º do documento, data, IVA e categoria.
 2. Abre **O que a IA leu do talão**, confirma e corrige o que for preciso e carrega em **Lançar**. A IA nunca escreve por cima do que já escreveste. Se a IA estiver desligada ou não conseguir ler, preenche à mão: descrição e valor chegam (os dados do talão são opcionais, em **Dados do talão**).

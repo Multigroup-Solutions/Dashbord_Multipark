@@ -352,6 +352,18 @@ export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobR
   }
 }
 
+/** Confirmação da caixa: reler os dias já fechados (os há mais tempo por reler primeiro); reabre os que a Multipark mudou. */
+export async function cashConfirmRecheckCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { recheckClosedConfirmDays } = await import("./cashConfirm");
+    const r = await recheckClosedConfirmDays({ deadlineAt: o.deadlineAt - 2_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron cash-confirm-recheck] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 /** Caixa, fase 4: saídas de ontem e anteontem contra a InvoiceExpress e a Stripe. */
 export async function cashExternalCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {

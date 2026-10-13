@@ -90,6 +90,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // Plano 56 B2: "Ainda estás no terminal?" — GPS do Zello de quem está no terminal (só com PONTO_TERMINAL).
   { key: "terminal-watch", runName: "terminal-watch", label: "Terminal: \"Ainda estás no terminal?\" (GPS de 5 em 5 min)", cadence: { kind: "interval", minutes: 5 }, priority: 21, minMs: 10 * S, maxMs: 25 * S },
   { key: "cash-sweep", runName: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", cadence: { kind: "interval", minutes: 180 }, priority: 25, minMs: 15 * S, maxMs: 40 * S },
+  // Confirmação da caixa (13 out 2026): reler os dias já fechados (retomável) — se a Multipark mudou um dia selado, reabre.
+  { key: "cash-confirm-recheck", runName: "cash-confirm-recheck", label: "Caixa: reler os dias confirmados (reabre se a Multipark mudou)", cadence: { kind: "interval", minutes: 60 }, priority: 26, minMs: 15 * S, maxMs: 40 * S },
   { key: "cash-close", runName: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", cadence: { kind: "daily", from: "06:15" }, priority: 104, minMs: 20 * S, maxMs: 45 * S },
   // Caixa, fase 4: cruzar as saídas de ontem e anteontem com a InvoiceExpress e a Stripe (chaves só de leitura).
   { key: "cash-external", runName: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", cadence: { kind: "daily", from: "07:00" }, priority: 106, minMs: 20 * S, maxMs: 45 * S },

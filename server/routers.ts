@@ -3845,6 +3845,10 @@ export const appRouter = router({
       frontPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       terminalPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       ticketsExpensesPaid: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      // 0645 — fecho da caixa do turno (confirmação da caixa reserva a reserva).
+      cashierCashReceived: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      cashierMbReceived: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      cashierMultiparkTotal: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       mbRolls: z.number().int().min(0).max(100_000).nullable().optional(),
       mbRollsInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
       pensInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
@@ -3874,6 +3878,11 @@ export const appRouter = router({
       }
       const { saveShiftHandover } = await import("./db");
       const { handoverDate, shift, city, expectedVersion, ...values } = input;
+      // Confirmação da caixa: num dia já confirmado pelo João os valores do fecho da caixa ficam presos;
+      // quem os escreve fica registado (é essa pessoa que não pode confirmar o mesmo dia).
+      const { handoverCashCheck, markHandoverCashAuthor } = await import("./cashConfirm");
+      const cashCheck = await handoverCashCheck({ day: handoverDate, city, shift, values });
+      if (cashCheck.locked) throw new TRPCError({ code: "FORBIDDEN", message: cashCheck.locked });
       const { canEditOldHandover } = await import("../shared/shiftHandover");
       const result = await saveShiftHandover({ handoverDate, shift, city }, {
         ...values,
@@ -3888,6 +3897,7 @@ export const appRouter = router({
         // Passadas 24h desde a criação: a mesma regra do ecrã (com overrides).
         canEditOld: canEditOldHandover(withOverrides(ctx.user)),
       });
+      if (cashCheck.changed) await markHandoverCashAuthor({ day: handoverDate, city, shift, userId: ctx.user.id });
       await logActivity({
         userId: ctx.user.id,
         action: result.mode === "insert" ? "create" : "update",

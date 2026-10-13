@@ -88,6 +88,9 @@ const NUM_RULES = {
   frontPouchValue: { min: 0, max: 1_000_000 },
   terminalPouchValue: { min: 0, max: 1_000_000 },
   ticketsExpensesPaid: { min: 0, max: 1_000_000 },
+  cashierCashReceived: { min: 0, max: 1_000_000 },
+  cashierMbReceived: { min: 0, max: 1_000_000 },
+  cashierMultiparkTotal: { min: 0, max: 1_000_000 },
   mbRolls: { int: true, min: 0 },
   mbRollsInPouch: { int: true, min: 0 },
   pensInPouch: { int: true, min: 0 },
@@ -155,7 +158,8 @@ export default function ShiftHandoverPage() {
 const EMPTY_FORM = {
   carsForCovered: "", chargedUntilDate: "", cashClosedInSafe: null as boolean | null,
   checkoutCashDone: null as boolean | null, frontPouchValue: "", terminalPouchValue: "",
-  ticketsExpensesPaid: "", mbRolls: "", mbRollsInPouch: "", pensInPouch: "",
+  ticketsExpensesPaid: "", cashierCashReceived: "", cashierMbReceived: "", cashierMultiparkTotal: "",
+  mbRolls: "", mbRollsInPouch: "", pensInPouch: "",
   mbBattery: "", pdasCharged: null as boolean | null, notes: "",
 };
 type FormState = typeof EMPTY_FORM;
@@ -171,6 +175,9 @@ function formFromRecord(existing: any): FormState {
     frontPouchValue: str(existing.frontPouchValue),
     terminalPouchValue: str(existing.terminalPouchValue),
     ticketsExpensesPaid: str(existing.ticketsExpensesPaid),
+    cashierCashReceived: str(existing.cashierCashReceived),
+    cashierMbReceived: str(existing.cashierMbReceived),
+    cashierMultiparkTotal: str(existing.cashierMultiparkTotal),
     mbRolls: str(existing.mbRolls),
     mbRollsInPouch: str(existing.mbRollsInPouch),
     pensInPouch: str(existing.pensInPouch),
@@ -476,6 +483,15 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
             {NumInput({ k: "frontPouchValue", label: "Valor bolsa do front (€)", decimal: true })}
             {cityFields.terminalPouch && NumInput({ k: "terminalPouchValue", label: "Valor bolsa terminal (€)", decimal: true })}
           </div>
+          {/* 0645 — Fecho da caixa do turno (confirmação da caixa reserva a reserva): o team leader fecha primeiro na
+              Multipark e depois escreve aqui o que recebeu; o João confirma no dia seguinte (Caixa → Confirmação). */}
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Fecho da caixa do turno</p>
+          <p className="text-xs text-muted-foreground -mt-2">Depois de fechares a caixa na Multipark: o que recebeste dos condutores neste turno e o total que a caixa da Multipark dava.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {NumInput({ k: "cashierCashReceived", label: "Dinheiro recebido (€, antes das despesas)", decimal: true })}
+            {NumInput({ k: "cashierMbReceived", label: "Multibanco recebido (€)", decimal: true })}
+            {NumInput({ k: "cashierMultiparkTotal", label: "Total que dava a caixa na Multipark (€)", decimal: true })}
+          </div>
           {/* 29d: as despesas do turno lançam-se aqui, uma a uma, com o talão — entram nas Despesas e abatem à caixa do dia.
               O total vai para "Tickets/despesas pagos" da passagem. */}
           <ShiftExpensesCard date={date} shift={shift} city={city} canEdit={canEdit}
@@ -562,6 +578,9 @@ function HandoverForm({ cityState, canEdit, canEditOld, userId }: { cityState: C
                 frontPouchValue: numVal("frontPouchValue"),
                 terminalPouchValue: numVal("terminalPouchValue"),
                 ticketsExpensesPaid: numVal("ticketsExpensesPaid"),
+                cashierCashReceived: numVal("cashierCashReceived"),
+                cashierMbReceived: numVal("cashierMbReceived"),
+                cashierMultiparkTotal: numVal("cashierMultiparkTotal"),
                 mbRolls: numVal("mbRolls"),
                 mbRollsInPouch: numVal("mbRollsInPouch"),
                 pensInPouch: numVal("pensInPouch"),

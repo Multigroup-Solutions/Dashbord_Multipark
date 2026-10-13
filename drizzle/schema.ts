@@ -1245,6 +1245,12 @@ export const shiftHandovers = mysqlTable("shift_handovers", {
 	frontPouchValue: decimal({ precision: 10, scale: 2 }),
 	terminalPouchValue: decimal({ precision: 10, scale: 2 }),
 	ticketsExpensesPaid: decimal({ precision: 10, scale: 2 }),
+	// 0645 — fecho da caixa do turno (team leader, depois de fechar na Multipark):
+	// dinheiro recebido dos condutores (antes das despesas), MB recebido e o total que dava a caixa na Multipark.
+	cashierCashReceived: decimal({ precision: 10, scale: 2 }),
+	cashierMbReceived: decimal({ precision: 10, scale: 2 }),
+	cashierMultiparkTotal: decimal({ precision: 10, scale: 2 }),
+	cashierDeclaredById: int(),
 	mbRolls: int(),
 	mbRollsInPouch: int(),
 	pensInPouch: int(),
