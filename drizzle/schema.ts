@@ -1250,6 +1250,7 @@ export const shiftHandovers = mysqlTable("shift_handovers", {
 	cashierCashReceived: decimal({ precision: 10, scale: 2 }),
 	cashierMbReceived: decimal({ precision: 10, scale: 2 }),
 	cashierMultiparkTotal: decimal({ precision: 10, scale: 2 }),
+	cashierDeclaredById: int(),
 	mbRolls: int(),
 	mbRollsInPouch: int(),
 	pensInPouch: int(),

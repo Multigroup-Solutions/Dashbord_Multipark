@@ -3857,10 +3857,11 @@ export const appRouter = router({
       }
       const { saveShiftHandover } = await import("./db");
       const { handoverDate, shift, city, expectedVersion, ...values } = input;
-      // Confirmação da caixa: num dia já confirmado pelo João os valores do fecho da caixa ficam presos.
-      const { assertHandoverCashEditable } = await import("./cashConfirm");
-      const locked = await assertHandoverCashEditable({ day: handoverDate, city, shift, values });
-      if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
+      // Confirmação da caixa: num dia já confirmado pelo João os valores do fecho da caixa ficam presos;
+      // quem os escreve fica registado (é essa pessoa que não pode confirmar o mesmo dia).
+      const { handoverCashCheck, markHandoverCashAuthor } = await import("./cashConfirm");
+      const cashCheck = await handoverCashCheck({ day: handoverDate, city, shift, values });
+      if (cashCheck.locked) throw new TRPCError({ code: "FORBIDDEN", message: cashCheck.locked });
       const { canEditOldHandover } = await import("../shared/shiftHandover");
       const result = await saveShiftHandover({ handoverDate, shift, city }, {
         ...values,
@@ -3875,6 +3876,7 @@ export const appRouter = router({
         // Passadas 24h desde a criação: a mesma regra do ecrã (com overrides).
         canEditOld: canEditOldHandover(withOverrides(ctx.user)),
       });
+      if (cashCheck.changed) await markHandoverCashAuthor({ day: handoverDate, city, shift, userId: ctx.user.id });
       await logActivity({
         userId: ctx.user.id,
         action: result.mode === "insert" ? "create" : "update",

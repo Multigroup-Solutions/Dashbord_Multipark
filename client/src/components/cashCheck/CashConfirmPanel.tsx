@@ -153,7 +153,7 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
           {d.stripe.available && d.stripe.reason && <Notice>{d.stripe.reason} <button className="underline" onClick={() => q.refetch()}>Atualizar</button></Notice>}
           {d.truncated && <Notice>Há mais reservas/pagamentos do que os lidos: o dia não fecha com dados cortados.</Notice>}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            <Cell label="Dinheiro registado" value={eur(s.computedCashCents)} hint={s.feesCents ? `+ taxas extra ${eur(s.feesCents)}` : undefined} />
+            <Cell label="Dinheiro registado" value={eur(s.computedCashCents)} hint={s.feesCashCents || s.feesMbCents ? `+ taxas extra ${eur(s.feesCashCents)} (MB ${eur(s.feesMbCents)})` : undefined} />
             <Cell label="Despesas do turno" value={`− ${eur(s.shiftExpensesCents)}`} />
             <Cell label="Tem de haver em dinheiro" value={eur(s.expectedCashCents)} strong />
             <Cell label="Multibanco registado" value={eur(s.expectedMbCents)} strong />

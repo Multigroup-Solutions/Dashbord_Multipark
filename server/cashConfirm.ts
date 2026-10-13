@@ -26,7 +26,7 @@
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
-  bookingFindings, buildBookingView, bookingSealState, hasCounterInDay, summarySealState, validationFlags, isCheckoutKind,
+  bookingFindings, buildBookingView, bookingSealState, hasCounterInDay, summarySealState, validationFlags, isCheckoutKind, offCounterOf, feeSplitOf,
   canonicalJson, closeBlockers, daySummary, justificationProblem, justificationValid, statusAfterClose, toCents, eur, normText,
   ORIGIN_LATE_MS, type BookingView, type ConfirmOrigin, type DayStatus, type DaySummary, type Finding, type InDay,
   type JustificationRef, type MbReceiptRef, type ShiftDeclaration, type StripeCheck,
@@ -159,7 +159,7 @@ async function originsOf(d: Db, bookingIds: readonly string[]): Promise<Map<stri
   const D = (c: string) => sql.raw(`DATE_FORMAT(${c}, '%Y-%m-%d %H:%i:%s')`);
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500);
-    const rows = rowsOf(await d.execute(sql`SELECT s.bookingId, s.bookingPrice, s.originalBookingPrice, s.pro, s.partnerId, s.campaignId, ${D("s.checkOut")} AS checkOut,
+    const rows = rowsOf(await d.execute(sql`SELECT s.bookingId, s.bookingPrice, s.originalBookingPrice, s.pro, s.partnerId, s.campaignId, s.source, ${D("s.checkOut")} AS checkOut,
         ${D("s.receivedAt")} AS receivedAt, ${D("s.dbReadAt")} AS dbReadAt, ${D("s.eventCreatedAt")} AS eventCreatedAt
       FROM multipark_webhook_snapshots s
       JOIN (SELECT bookingId, MIN(id) AS id FROM multipark_webhook_snapshots
@@ -175,6 +175,7 @@ async function originsOf(d: Db, bookingIds: readonly string[]): Promise<Map<stri
         pro: r.pro == null ? null : Number(r.pro) === 1 || r.pro === true,
         partnerId: r.partnerId ? String(r.partnerId) : null,
         campaignId: r.campaignId ? String(r.campaignId) : null,
+        fromDb: r.source === "multipark_db" || r.source === "db_retry",
         late: !!born && !!read && Date.parse(read) - Date.parse(born) > ORIGIN_LATE_MS,
       });
     }
@@ -183,12 +184,14 @@ async function originsOf(d: Db, bookingIds: readonly string[]): Promise<Map<stri
 }
 
 async function shiftDeclarations(d: Db, day: string, city: string): Promise<ShiftDeclaration[]> {
-  const rows = rowsOf(await d.execute(sql`SELECT shift, cashierCashReceived, cashierMbReceived, cashierMultiparkTotal, filledByName, filledById
+  const rows = rowsOf(await d.execute(sql`SELECT shift, cashierCashReceived, cashierMbReceived, cashierMultiparkTotal, filledByName, filledById, createdById, cashierDeclaredById
     FROM shift_handovers WHERE handoverDate = ${day} AND city = ${city}`));
   const n = (v: unknown) => (v == null ? null : Number(v));
   return rows.filter((r) => r.shift === "morning" || r.shift === "night").map((r) => ({
     shift: r.shift, cash: n(r.cashierCashReceived), mb: n(r.cashierMbReceived), multiparkTotal: n(r.cashierMultiparkTotal),
-    byName: r.filledByName ?? null, byId: r.filledById == null ? null : Number(r.filledById),
+    byName: r.filledByName ?? null,
+    // Quem escreveu os valores da caixa (registado na gravação desde a 0635); para as antigas, quem criou a passagem.
+    byId: r.cashierDeclaredById != null ? Number(r.cashierDeclaredById) : r.createdById != null ? Number(r.createdById) : r.filledById == null ? null : Number(r.filledById),
   }));
 }
 
@@ -258,6 +261,7 @@ async function stripeChecks(d: Db, ids: readonly string[], mode: StripeMode): Pr
     if (mode === "fetch" && (!s || s.check?.status !== "succeeded" || now - s.at > STRIPE_FRESH_MS)) todo.push(id);
   }
   const batch = todo.slice(0, STRIPE_CONFIRM_MAX);
+  let saveFailed = 0;
   for (let i = 0; i < batch.length; i += STRIPE_CONCURRENCY) {
     await Promise.all(batch.slice(i, i + STRIPE_CONCURRENCY).map(async (id) => {
       const r = await stripeGetPayment(id);
@@ -265,11 +269,13 @@ async function stripeChecks(d: Db, ids: readonly string[], mode: StripeMode): Pr
       const v: StripeCheck | null = r.payment ? { status: r.payment.status, received: r.payment.received, refunded: r.payment.refunded, disputed: r.payment.disputed } : null;
       checks.set(id, v);
       await d.execute(sql`INSERT INTO cash_confirm_stripe_checks (intentId, found, status, receivedCents, refundedCents, disputed, checkedAt)
-        VALUES (${id}, ${v ? 1 : 0}, ${v?.status ?? null}, ${v?.received == null ? null : toCents(v.received)}, ${v?.refunded == null ? null : toCents(v.refunded)}, ${v?.disputed ? 1 : 0}, ${utcStamp()})`).catch(() => {});
+        VALUES (${id}, ${v ? 1 : 0}, ${v?.status ?? null}, ${v?.received == null ? null : toCents(v.received)}, ${v?.refunded == null ? null : toCents(v.refunded)}, ${v?.disputed ? 1 : 0}, ${utcStamp()})`)
+        .catch((err) => { saveFailed++; console.warn("[cashConfirm] gravar leitura da Stripe falhou:", String((err as Error)?.message ?? err).slice(0, 160)); });
     }));
   }
   const unread = want.filter((id) => !checks.has(id)).length;
-  return { available: true, checks, unread, reason: unread ? `${unread} pagamento(s) online ainda por ler na Stripe.` : null };
+  const reason = [unread ? `${unread} pagamento(s) online ainda por ler na Stripe.` : null, saveFailed ? `${saveFailed} leitura(s) da Stripe não ficaram gravadas (o fecho não as vê): tenta outra vez.` : null].filter(Boolean).join(" ");
+  return { available: true, checks, unread, reason: reason || null };
 }
 
 // ─── O dia ──────────────────────────────────────────────────────────────────
@@ -329,7 +335,7 @@ export async function loadConfirmDay(day: string, city: HandoverCity, cities: st
   const rows = r.data.read.rows;
   const partners = new Set(r.data.read.partnerNames.map(normText));
   const [origins, shifts, files, justs, dayRows, expenses, evRows] = await Promise.all([
-    originsOf(d, rows.filter((x) => isCheckoutKind(x.kind)).map((x) => x.live.id)),
+    originsOf(d, rows.map((x) => x.live.id)),
     shiftDeclarations(d, day, city),
     dayFiles(d, day, city),
     justificationsOf(d, day, city),
@@ -352,23 +358,25 @@ export async function loadConfirmDay(day: string, city: HandoverCity, cities: st
   const views: BookingView[] = [];
   const states: Record<string, string> = {};
   const windowPayments: Array<{ amount: number | null; method: string | null }> = [];
-  let feesCents = 0;
+  const fees = { cash: 0, mb: 0 };
   for (const row of rows) {
     const live = row.live;
+    const origin = origins.get(live.id) ?? null;
+    const off = offCounterOf(live, origin);
     const windowIds = new Set(live.payments.filter((p) => inWindow(p.recordedAt)).map((p) => p.id));
     for (const p of live.payments) if (windowIds.has(p.id)) windowPayments.push({ amount: p.amount, method: p.method });
-    if (isCheckoutKind(row.kind)) feesCents += toCents(live.fees);
-    const origin = origins.get(live.id) ?? null;
+    if (isCheckoutKind(row.kind)) { const f = feeSplitOf(live, windowIds, off, partners); fees.cash += f.cash; fees.mb += f.mb; }
     const findings: Finding[] = bookingFindings({ live, origin, windowPaymentIds: windowIds, inDay: row.kind, stripe: stripe.checks, stripeAvailable: stripe.available, mbReceipts: receipts, partnerNames: partners });
     views.push(buildBookingView({ live, origin, inDay: row.kind, findings, windowPaymentIds: windowIds, justifications: justs.latest, activeFileIds: activeIds, partnerNames: partners }));
-    const short: Record<InDay, string> = { checkout: "c", checkout_pending: "c", cancelled: "x", payment_only: "p" };
-    states[live.id] = [stateHash(bookingSealState(live, row.kind, windowIds, partners)), isCheckoutKind(row.kind) ? validationFlags(live) : "", short[row.kind], hasCounterInDay(live, windowIds, partners) ? "1" : "0"].join("|");
+    const short: Record<InDay, string> = { checkout: "c", checkout_pending: "k", cancelled: "x", payment_only: "p" };
+    states[live.id] = [stateHash(bookingSealState(live, row.kind, windowIds, partners, off)), isCheckoutKind(row.kind) ? validationFlags(live) : "", short[row.kind], hasCounterInDay(live, windowIds, partners, off) ? "1" : "0"].join("|");
   }
   const RANK = { red: 0, amber: 1, green: 2 } as const;
   views.sort((a, b) => RANK[a.color] - RANK[b.color] || (b.findings.length - a.findings.length) || String(a.checkOut ?? "").localeCompare(String(b.checkOut ?? "")));
   const confirmed = st ? { cash: st.confirmedCash == null ? null : Number(st.confirmedCash), mb: st.confirmedMb == null ? null : Number(st.confirmedMb) } : null;
   const se = expenses.get(city) ?? { total: 0, count: 0 };
-  const summary = daySummary({ windowPayments, shiftExpenses: se.total, feesCents, shifts, confirmed, partnerNames: partners });
+  // As liquidações (acertos PRO/parceiro) não são dinheiro de balcão: o método já as põe fora (CARD/PRO_PLAN), e as contas só somam dinheiro e MB.
+  const summary = daySummary({ windowPayments, shiftExpenses: se.total, fees, shifts, confirmed, partnerNames: partners });
   const status: DayStatus = (st?.status as DayStatus) ?? "aberto";
   const truncated = r.data.read.truncated;
   const events: StoredEvent[] = evRows.map((e) => ({ id: Number(e.id), day: String(e.day), city: String(e.city), at: String(ms3(e.at)), userId: e.userId == null ? null : Number(e.userId), action: String(e.action), findingKey: e.findingKey ?? null, data: parseJson(e.data), prevHash: String(e.prevHash), hash: String(e.hash) }));
@@ -615,15 +623,25 @@ export async function reopenConfirmDay(o: { day: string; city: HandoverCity; rea
   return res;
 }
 
-/** Passagem de turno: os valores da caixa de um dia já confirmado não mudam (pede ao Jorge para reabrir). */
-export async function assertHandoverCashEditable(o: { day: string; city: string; shift: string; values: { cashierCashReceived?: number | null; cashierMbReceived?: number | null; cashierMultiparkTotal?: number | null } }): Promise<string | null> {
+/**
+ * Passagem de turno: os valores da caixa mudam nesta gravação? Num dia já
+ * confirmado não podem (pede ao Jorge para reabrir). `changed` serve para
+ * registar quem os escreveu (a segregação usa essa pessoa, não o último a gravar).
+ */
+export async function handoverCashCheck(o: { day: string; city: string; shift: string; values: { cashierCashReceived?: number | null; cashierMbReceived?: number | null; cashierMultiparkTotal?: number | null } }): Promise<{ changed: boolean; locked: string | null }> {
   const d = await db();
-  const [st] = rowsOf(await d.execute(sql`SELECT status FROM cash_confirm_days WHERE day = ${o.day} AND city = ${o.city} LIMIT 1`));
-  if (isOpen(st?.status)) return null;
   const [cur] = rowsOf(await d.execute(sql`SELECT cashierCashReceived, cashierMbReceived, cashierMultiparkTotal FROM shift_handovers WHERE handoverDate = ${o.day} AND shift = ${o.shift} AND city = ${o.city} LIMIT 1`));
   const same = (a: unknown, b: unknown) => (a == null ? null : toCents(Number(a))) === (b == null ? null : toCents(Number(b)));
   const changed = !same(cur?.cashierCashReceived, o.values.cashierCashReceived) || !same(cur?.cashierMbReceived, o.values.cashierMbReceived) || !same(cur?.cashierMultiparkTotal, o.values.cashierMultiparkTotal);
-  return changed ? "A caixa deste dia já foi confirmada: os valores do fecho da caixa não se mudam (pede ao Jorge para reabrir o dia)." : null;
+  if (!changed) return { changed, locked: null };
+  const [st] = rowsOf(await d.execute(sql`SELECT status FROM cash_confirm_days WHERE day = ${o.day} AND city = ${o.city} LIMIT 1`));
+  return { changed, locked: isOpen(st?.status) ? null : "A caixa deste dia já foi confirmada: os valores do fecho da caixa não se mudam (pede ao Jorge para reabrir o dia)." };
+}
+
+/** Regista quem escreveu os valores da caixa da passagem (depois de gravar). */
+export async function markHandoverCashAuthor(o: { day: string; city: string; shift: string; userId: number }): Promise<void> {
+  const d = await db();
+  await d.execute(sql`UPDATE shift_handovers SET cashierDeclaredById = ${o.userId} WHERE handoverDate = ${o.day} AND shift = ${o.shift} AND city = ${o.city}`);
 }
 
 // ─── Mês (para o Jorge) ─────────────────────────────────────────────────────
@@ -700,6 +718,7 @@ export function sealDrift(sealStates: Record<string, string>, now: Record<string
   const parse = (s: string) => { const [hash = "", flags = "", kind = "", counter = "0"] = s.split("|"); return { hash, flags, kind, counter: counter === "1" }; };
   for (const [id, h] of Object.entries(now)) {
     const n = parse(h);
+    // Uma saída por concluir ("k") que aparece só conta se trouxer balcão no dia (confere-se no dia em que fechar).
     if (!(id in sealStates)) { if (n.kind === "c" || n.kind === "x" || n.counter) added.push(id); continue; }
     const s = parse(sealStates[id]);
     const reverted = [...s.flags].some((f, k) => f === "1" && n.flags[k] !== "1");
@@ -709,7 +728,8 @@ export function sealDrift(sealStates: Record<string, string>, now: Record<string
   for (const [id, h] of Object.entries(sealStates)) {
     if (id in now) continue;
     const s = parse(h);
-    if (s.kind === "c" || s.kind === "x" || s.counter) removed.push(id);
+    // Uma saída por concluir que saiu do dia (fechou depois das 03:00) não reabre: confere-se no dia em que fechou.
+    if (s.kind === "c" || s.kind === "x" || (s.kind !== "k" && s.counter)) removed.push(id);
   }
   return { changed, added, removed };
 }
@@ -719,7 +739,7 @@ export function summaryDrift(sealSummary: unknown, now: DaySummary): string[] {
   const s = (sealSummary ?? {}) as Record<string, unknown>;
   const cur = summarySealState(now) as Record<string, unknown>;
   const LABEL: Record<string, string> = {
-    computedCashCents: "dinheiro do dia", computedMbCents: "Multibanco do dia", shiftExpensesCents: "despesas do turno", feesCents: "taxas extra",
+    computedCashCents: "dinheiro do dia", computedMbCents: "Multibanco do dia", shiftExpensesCents: "despesas do turno", feesCashCents: "taxas extra em dinheiro", feesMbCents: "taxas extra em MB",
     declaredCashCents: "dinheiro declarado", declaredMbCents: "MB declarado", declaredMultiparkTotalCents: "total da Multipark declarado",
     confirmedCashCents: "envelope", confirmedMbCents: "talões",
   };
@@ -737,7 +757,7 @@ export async function recheckClosedConfirmDays(o: { deadlineAt: number; nowMs?: 
   const { addDays } = await import("../shared/lisbonDay");
   const { currentCashDay } = await import("../shared/cashDayWindow");
   const since = addDays(currentCashDay(o.nowMs ?? Date.now()), -RECHECK_DAYS);
-  const days = rowsOf(await d.execute(sql`SELECT day, city, sealJson FROM cash_confirm_days
+  const days = rowsOf(await d.execute(sql`SELECT day, city FROM cash_confirm_days
     WHERE status IN ('fechado', 'a_aprovar', 'aprovado') AND day >= ${since} AND sealJson IS NOT NULL
     ORDER BY lastCheckedAt IS NULL DESC, lastCheckedAt ASC LIMIT 200`));
   let checked = 0, reopened = 0, skipped = 0;
@@ -745,7 +765,8 @@ export async function recheckClosedConfirmDays(o: { deadlineAt: number; nowMs?: 
     if (Date.now() > o.deadlineAt - 8_000) break;
     const day = String(row.day), city = String(row.city) as HandoverCity;
     let seal: any;
-    try { seal = JSON.parse(String(row.sealJson)); } catch { skipped++; continue; }
+    const [sr] = rowsOf(await d.execute(sql`SELECT sealJson FROM cash_confirm_days WHERE day = ${day} AND city = ${city} LIMIT 1`));
+    try { seal = JSON.parse(String(sr?.sealJson)); } catch { skipped++; continue; }
     const data = await loadConfirmDay(day, city, undefined, { stripe: "db", parkIds: Array.isArray(seal?.parkIds) ? seal.parkIds : undefined });
     if (!data.available || data.truncated) { skipped++; continue; } // sem dados completos não se conclui nada (tenta na próxima)
     checked++;

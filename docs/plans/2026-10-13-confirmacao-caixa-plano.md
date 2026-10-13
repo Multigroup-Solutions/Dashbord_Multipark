@@ -452,3 +452,18 @@ Riscos aceites (por escrito):
 - A mesma folha fotografada duas vezes passa no sha256 (a foto é recodificada): o valor do talão bate com o pagamento e o Jorge revê; fica para a Entrega 2 a API da Viva.
 - A leitura por `recordedAt` não tem índice na Multipark (é a mesma consulta do "Por dia" já em produção); pedido de índice ao Rafael.
 - Reembolso ou disputa Stripe depois do fecho: não reabre o dia (a Stripe não é relida na varredura); é apanhado pela verificação diária existente (R20 → casos da Correção de caixa).
+
+### 27.2 Depois da ronda 2 (74/100)
+
+- **Liquidações** (acertos PRO/parceiro/avença registados > 30 min depois da saída, numa reserva fora do balcão): fora das regras do dia, do "balcão do dia" e do selo da saída; `CARD`/`MIT_*` passam a "fora do balcão". Um acerto PRO não enche o dia de vermelhos nem reabre o dia da saída.
+- **Taxa extra** vai para o método do maior pagamento de balcão da saída (dinheiro ou MB; sem balcão, dinheiro); reservas fora do balcão não somam taxa.
+- **Alerta** = o maior entre a diferença (contado vs esperado) e a quebra (declarado pelo team leader vs contado pelo João); o desvio do "total que dava a Multipark" também pede nota.
+- **Marcas** só se confiam com memória lida da BD e com o campo preenchido; senão amarelo "sem prova de origem" (sem vermelho falso). **Avença/plano** → amarelo (a memória não guarda quando foi ligado).
+- **Quem declarou** = quem escreveu os valores da caixa (`cashierDeclaredById`, gravado quando esses campos mudam); nas antigas, quem criou a passagem.
+- PaymentIntent antigo abandonado não dá vermelho se outro pagamento Stripe da reserva foi bem-sucedido; falha a gravar uma leitura da Stripe aparece no ecrã; pelo MCP não se chama a Stripe; a varredura lê o selo dia a dia; saída por concluir que fecha depois das 03:00 sai do dia sem o reabrir.
+- A migração 0635 **nunca correu em nenhuma BD** (só commits locais, sem deploy): editá-la no sítio é seguro.
+
+Riscos aceites (por escrito), além dos do §27.1:
+- `late_payment`/`checkout_unfinished` podem dar vermelhos legítimos-mas-chatos (dívida paga noutro dia); o valor continua no dinheiro do dia em que foi registado (é onde está o envelope) e o João justifica. Medir no **modo sombra** (fase 7) com os dias reais antes de contar como definitivo.
+- Se o único gestor da Caixa mexer num dia, ninguém o aprova: o Jorge não anexa nem justifica (só decide).
+- Ficheiro órfão no storage se a gravação falhar a meio (não conta para nada; sem linha na BD).

@@ -24,6 +24,8 @@ export const MIGRATION_0635_STATEMENTS: string[] = [
   "ALTER TABLE `shift_handovers` ADD COLUMN `cashierCashReceived` DECIMAL(10,2) NULL",
   "ALTER TABLE `shift_handovers` ADD COLUMN `cashierMbReceived` DECIMAL(10,2) NULL",
   "ALTER TABLE `shift_handovers` ADD COLUMN `cashierMultiparkTotal` DECIMAL(10,2) NULL",
+  // Quem escreveu os valores da caixa (não o último a gravar a passagem): é essa pessoa que não confirma o mesmo dia.
+  "ALTER TABLE `shift_handovers` ADD COLUMN `cashierDeclaredById` INT NULL",
   "CREATE TABLE IF NOT EXISTS `cash_confirm_days` (" +
     "`id` INT NOT NULL AUTO_INCREMENT, " +
     "`day` VARCHAR(10) NOT NULL, " +

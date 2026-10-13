@@ -477,7 +477,9 @@ export const cashCheckRouter = router({
     await requireCashCheck(ctx.user);
     const cities = await confirmScope(input.city);
     const { loadConfirmDay } = await import("./cashConfirm");
-    const r = await loadConfirmDay(input.day, input.city, cities, { stripe: "fetch", viewerId: ctx.user.id });
+    // Pelo MCP/chave de API (leitura) não se chama a Stripe: usa só o que já está guardado.
+    const viaKey = !!(ctx.req as any)?.apiKeyInfo;
+    const r = await loadConfirmDay(input.day, input.city, cities, { stripe: viaKey ? "db" : "fetch", viewerId: ctx.user.id });
     if (!r.available) return r;
     const { states: _s, parkIds: _p, ...rest } = r;
     return rest;

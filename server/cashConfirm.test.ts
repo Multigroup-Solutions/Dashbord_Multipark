@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   toCents, payKind, bookingFindings, buildBookingView, daySummary, dayAlertOf, resolvedColor, justificationValid, justificationProblem, closeBlockers,
-  statusAfterClose, canonicalJson, bookingSealState, validationFlags, hasCounterInDay, stableSubKeys, offCounterOf, eur,
+  statusAfterClose, canonicalJson, bookingSealState, validationFlags, hasCounterInDay, stableSubKeys, offCounterOf, feeSplitOf, eur,
   type ConfirmBookingLive, type ConfirmOrigin, type StripeCheck, type Finding, type JustificationRef, type InDay, type ShiftDeclaration,
 } from "../shared/cashConfirm";
 import { eventHash, verifyChain, verifyIntegrity, sealDrift, summaryDrift, buildSeal, GENESIS_HASH, type ChainEvent, type StoredEvent } from "./cashConfirm";
@@ -25,7 +25,7 @@ function bk(o: Partial<ConfirmBookingLive> = {}): ConfirmBookingLive {
     intents: [], cancelled: false, refunded: null, ...o,
   };
 }
-const origin = (o: Partial<ConfirmOrigin> = {}): ConfirmOrigin => ({ source: "webhook", bookingPrice: 50, originalBookingPrice: 50, checkOut: DAYP, receivedAt: "2026-10-01T10:00:05.000Z", pro: false, partnerId: null, campaignId: null, late: false, ...o });
+const origin = (o: Partial<ConfirmOrigin> = {}): ConfirmOrigin => ({ source: "webhook", bookingPrice: 50, originalBookingPrice: 50, checkOut: DAYP, receivedAt: "2026-10-01T10:00:05.000Z", pro: false, partnerId: null, campaignId: null, fromDb: true, late: false, ...o });
 const run = (live: ConfirmBookingLive, extra: Partial<Parameters<typeof bookingFindings>[0]> = {}) => bookingFindings({
   live, origin: origin(), windowPaymentIds: new Set(live.payments.map((p) => p.id)), inDay: "checkout",
   stripe: new Map(), stripeAvailable: true, mbReceipts: [], ...extra,
@@ -170,6 +170,68 @@ describe("reservas que só têm dinheiro no dia", () => {
   });
 });
 
+describe("auditoria do código, ronda 2", () => {
+  const proOrigin = origin({ pro: true, bookingPrice: 50 });
+  const settled = (o: Partial<ConfirmBookingLive> = {}) => bk({
+    pro: true, checkOut: "2026-09-20T10:00:00.000Z", lines: [line(50, 50)],
+    payments: [pay(50, "CARD", { recordedAt: DAYP })], ...o,
+  });
+  it("ALTO 1: acerto PRO 20 dias depois da saída (CARD) não dá vermelhos no dia nem entra num dia selado", () => {
+    const live = settled();
+    expect(payKind("CARD")).toBe("off_counter");
+    expect(payKind("MIT_OFF_SESSION")).toBe("off_counter");
+    expect(run(live, { inDay: "payment_only", origin: proOrigin })).toEqual([]);
+    expect(hasCounterInDay(live, new Set(["z1"]), undefined, true)).toBe(false);
+    // Nem mesmo se o acerto vier com outro método (ex.: "Multibanco"): é liquidação de uma reserva PRO depois da saída.
+    const mb = settled({ payments: [pay(50, "Multibanco", { recordedAt: DAYP })] });
+    expect(run(mb, { inDay: "payment_only", origin: proOrigin })).toEqual([]);
+    expect(hasCounterInDay(mb, new Set(["z1"]), undefined, true)).toBe(false);
+  });
+  it("ALTO 1: o selo da saída PRO não muda quando chega o acerto (não reabre o dia da saída)", () => {
+    const atCheckout = bk({ pro: true, lines: [line(50, 0)], payments: [] });
+    const afterSettle = bk({ pro: true, lines: [line(50, 50)], payments: [pay(50, "CARD", { recordedAt: "2026-11-02T10:00:00.000Z" })] });
+    const h = (b: ConfirmBookingLive) => canonicalJson(bookingSealState(b, "checkout", new Set(), undefined, true));
+    expect(h(afterSettle)).toBe(h(atCheckout));
+    // Numa reserva normal, um pagamento novo depois da saída muda o selo (e reabre).
+    expect(canonicalJson(bookingSealState({ ...afterSettle, pro: false }, "checkout", new Set(), undefined, false))).not.toBe(canonicalJson(bookingSealState({ ...atCheckout, pro: false }, "checkout", new Set(), undefined, false)));
+  });
+  it("MÉDIO 2: taxa paga no MB vai para o MB; reserva PRO não paga taxa ao balcão", () => {
+    const mbFee = bk({ fees: 5, payments: [pay(55, "Multibanco")] });
+    expect(feeSplitOf(mbFee, new Set(["z1"]), false)).toEqual({ cash: 0, mb: 500 });
+    expect(feeSplitOf(bk({ fees: 5 }), new Set(["z1"]), false)).toEqual({ cash: 500, mb: 0 });
+    expect(feeSplitOf(bk({ fees: 5, payments: [] }), new Set(), false)).toEqual({ cash: 500, mb: 0 });
+    expect(feeSplitOf(bk({ fees: 5, pro: true }), new Set(["z1"]), true)).toEqual({ cash: 0, mb: 0 });
+    const s = daySummary({ windowPayments: [{ amount: 55, method: "Multibanco" }], shiftExpenses: 0, fees: { cash: 0, mb: 500 }, shifts: [{ shift: "morning", cash: 0, mb: 60, multiparkTotal: null, byName: null, byId: 1 }, { shift: "night", cash: 0, mb: 0, multiparkTotal: null, byName: null, byId: 1 }], confirmed: { cash: 0, mb: 60 } });
+    expect([s.expectedMbCents, s.absDifferenceCents]).toEqual([6000, 0]);
+  });
+  it("MÉDIO 3: envelope abaixo do que o team leader declarou dá alerta mesmo com o esperado certo", () => {
+    const sh: ShiftDeclaration[] = [{ shift: "morning", cash: 250, mb: 0, multiparkTotal: null, byName: null, byId: 1 }, { shift: "night", cash: 250, mb: 0, multiparkTotal: null, byName: null, byId: 1 }];
+    const s = daySummary({ windowPayments: [{ amount: 440, method: "Numerário" }], shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: sh, confirmed: { cash: 440, mb: 0 } });
+    expect(s.absDifferenceCents).toBe(0);
+    expect(s.declaredVsCountedCashCents).toBe(-6000);
+    expect(s.alertBasisCents).toBe(6000);
+    expect(s.alert).toBe("amber");
+  });
+  it("MÉDIO 4: memória sem o campo PRO (ou só do payload) → amarelo, sem vermelho falso", () => {
+    const live = bk({ pro: true, payments: [], lines: [line(50, 0)] });
+    expect(codes(run(live, { origin: origin({ pro: null }) }))).toEqual(["marker_unverified:amber"]);
+    expect(codes(run(live, { origin: origin({ fromDb: false, pro: false }) }))).toEqual(["marker_unverified:amber"]);
+    expect(codes(run(live, { origin: origin({ pro: false }) }))).toContain("marker_added:red");
+  });
+  it("MÉDIO 5: avença/plano → aviso amarelo (a memória não guarda quando foi ligada)", () => {
+    expect(codes(run(bk({ clientPlanId: "cp1", payments: [], lines: [line(50, 0)] })))).toEqual(["plan_unverified:amber"]);
+  });
+  it("BAIXO 14: PaymentIntent antigo abandonado não dá vermelho se o pagamento por link foi bem-sucedido", () => {
+    const live = bk({ payments: [pay(50, "Online, Card")], intents: [{ id: "pi_link", expected: 50 }, { id: "pi_old", expected: null }] });
+    const stripe = new Map<string, StripeCheck | null>([["pi_link", { status: "succeeded", received: 50, refunded: 0, disputed: false }], ["pi_old", { status: "requires_payment_method", received: 0, refunded: 0, disputed: false }]]);
+    expect(run(live, { stripe })).toEqual([]);
+  });
+  it("MÉDIO 7: saída por concluir que fechou depois das 03:00 sai do dia sem o reabrir", () => {
+    expect(sealDrift({ b1: "h|000|k|1" }, {})).toEqual({ changed: [], added: [], removed: [] });
+    expect(sealDrift({ b1: "h|111|c|1" }, {}).removed).toEqual(["b1"]);
+  });
+});
+
 describe("justificações", () => {
   const red = { code: "price_down", color: "red" } as const;
   it("motivo da lista, explicação e comprovativo quando é perda", () => {
@@ -202,23 +264,23 @@ describe("o dia", () => {
   ];
   const pays = [{ amount: 100, method: "Numerário" }, { amount: 50, method: "Multibanco" }, { amount: 70, method: "Online, Card" }];
   it("esperado = dinheiro + taxas − despesas; diferença só depois de o João contar", () => {
-    const s = daySummary({ windowPayments: pays, shiftExpenses: 10, feesCents: 500, shifts: sh(105, 50), confirmed: null });
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 10, fees: { cash: 500, mb: 0 }, shifts: sh(105, 50), confirmed: null });
     expect(s.expectedCashCents).toBe(9500);
     expect(s.expectedMbCents).toBe(5000);
     expect(s.differenceCents).toBeNull();
     expect(s.alert).toBe("none");
-    const c = daySummary({ windowPayments: pays, shiftExpenses: 10, feesCents: 500, shifts: sh(105, 50), confirmed: { cash: 95, mb: 50 } });
+    const c = daySummary({ windowPayments: pays, shiftExpenses: 10, fees: { cash: 500, mb: 0 }, shifts: sh(105, 50), confirmed: { cash: 95, mb: 50 } });
     expect([c.cashDiffCents, c.mbDiffCents, c.absDifferenceCents, c.declaredVsCountedCashCents]).toEqual([0, 0, 0, 0]);
   });
   it("cenário A: dinheiro por declarar e envelope por contar → bloqueia", () => {
-    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(null, 50), confirmed: null });
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: sh(null, 50), confirmed: null });
     expect(s.missingShifts).toEqual(["morning", "night"]);
     const b = closeBlockers({ dayClosedAt3am: true, truncated: false, multiparkOk: true, stripe: { available: true, unread: 0 }, views: [], summary: s, noteLen: 100, closerId: 1, declarantIds: [9] });
     expect(b.join(" ")).toMatch(/turno da manhã/);
     expect(b.join(" ")).toMatch(/Conta o envelope/);
   });
   it("cenário B: −60 € em dinheiro e +60 € em MB não se anulam (alerta pelos absolutos)", () => {
-    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 40, mb: 110 } });
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: sh(100, 50), confirmed: { cash: 40, mb: 110 } });
     expect(s.differenceCents).toBe(0);
     expect(s.absDifferenceCents).toBe(12000);
     expect(s.alert).toBe("email");
@@ -231,7 +293,7 @@ describe("o dia", () => {
     expect(dayAlertOf(null)).toBe("none");
   });
   it("bloqueios: antes das 03:00, dados cortados, Stripe desligada, vermelhos, diferença sem nota, quem declarou não fecha", () => {
-    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 90, mb: 50 } });
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: sh(100, 50), confirmed: { cash: 90, mb: 50 } });
     const live = bk({ bookingPrice: 40, payments: [pay(40, "Online, Card")], lines: [line(40)], intents: [{ id: "pi", expected: 40 }] });
     const ids = new Set(["z1"]);
     const f = run(live, { stripeAvailable: false });
@@ -240,7 +302,7 @@ describe("o dia", () => {
     expect(b.length).toBe(6);
   });
   it("depois de fechar: justificações por aprovar, diferença > 30 € ou dia já reaberto → à espera do Jorge", () => {
-    const ok = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 100, mb: 50 } });
+    const ok = daySummary({ windowPayments: pays, shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: sh(100, 50), confirmed: { cash: 100, mb: 50 } });
     const live = bk({ bookingPrice: 40, payments: [pay(40)], lines: [line(40)] });
     const f = run(live);
     const justs = new Map(f.map((x) => [x.key, { id: 1, findingKey: x.key, code: x.code, amountCents: x.amountCents, reason: "outro", explanation: "x", fileIds: [3], decision: null } as JustificationRef]));
@@ -249,7 +311,7 @@ describe("o dia", () => {
     expect(statusAfterClose({ views: [pending], summary: ok, reopenedBefore: false })).toBe("a_aprovar");
     expect(statusAfterClose({ views: [], summary: ok, reopenedBefore: false })).toBe("fechado");
     expect(statusAfterClose({ views: [], summary: ok, reopenedBefore: true })).toBe("a_aprovar");
-    const big = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 60, mb: 50 } });
+    const big = daySummary({ windowPayments: pays, shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: sh(100, 50), confirmed: { cash: 60, mb: 50 } });
     expect(statusAfterClose({ views: [], summary: big, reopenedBefore: false })).toBe("a_aprovar");
     // Um vermelho aprovado e um amarelo sem relação não fazem esperar (achado 24).
     const approved = new Map([...justs].map(([k, v]) => [k, { ...v, decision: "aprovado" as const }]));
@@ -291,14 +353,14 @@ describe("selo e varredura", () => {
   });
   it("as contas do dia também estão no selo (declarações, despesas, envelope)", () => {
     const sh: ShiftDeclaration[] = [{ shift: "morning", cash: 50, mb: 0, multiparkTotal: 50, byName: null, byId: 1 }, { shift: "night", cash: 50, mb: 0, multiparkTotal: 50, byName: null, byId: 1 }];
-    const s1 = daySummary({ windowPayments: [{ amount: 100, method: "Numerário" }], shiftExpenses: 0, feesCents: 0, shifts: sh, confirmed: { cash: 100, mb: 0 } });
+    const s1 = daySummary({ windowPayments: [{ amount: 100, method: "Numerário" }], shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: sh, confirmed: { cash: 100, mb: 0 } });
     const seal = JSON.parse(buildSeal({ day: "d", city: "lisbon", summary: s1, states: {}, parkIds: ["p1"], justificationIds: [], fileIds: [], chainHead: "h", status: "fechado" }).json);
     expect(summaryDrift(seal.summary, s1)).toEqual([]);
-    const s2 = daySummary({ windowPayments: [{ amount: 100, method: "Numerário" }], shiftExpenses: 20, feesCents: 0, shifts: sh, confirmed: { cash: 100, mb: 0 } });
+    const s2 = daySummary({ windowPayments: [{ amount: 100, method: "Numerário" }], shiftExpenses: 20, fees: { cash: 0, mb: 0 }, shifts: sh, confirmed: { cash: 100, mb: 0 } });
     expect(summaryDrift(seal.summary, s2).join(" ")).toMatch(/despesas do turno/);
   });
   it("selo determinístico", () => {
-    const summary = daySummary({ windowPayments: [], shiftExpenses: 0, feesCents: 0, shifts: [], confirmed: null });
+    const summary = daySummary({ windowPayments: [], shiftExpenses: 0, fees: { cash: 0, mb: 0 }, shifts: [], confirmed: null });
     const a = buildSeal({ day: "d", city: "lisbon", summary, states: { x: "1|111|c|1" }, parkIds: ["b", "a"], justificationIds: [2, 1], fileIds: [], chainHead: "h", status: "fechado" });
     const b = buildSeal({ day: "d", city: "lisbon", summary, states: { x: "1|111|c|1" }, parkIds: ["a", "b"], justificationIds: [1, 2], fileIds: [], chainHead: "h", status: "fechado" });
     expect(a.hash).toBe(b.hash);

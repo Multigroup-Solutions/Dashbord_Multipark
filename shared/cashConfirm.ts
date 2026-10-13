@@ -83,8 +83,11 @@ export function payKind(method: string | null | undefined, partnerNames: Readonl
     "online": "online", "online, card": "online", "online, mbway": "online", "online, mb way": "online", "mbway": "online", "mb way": "online", "stripe": "online",
     "transferencia bancaria": "transfer", "transferencia": "transfer",
     "credito": "off_counter", "pro_plan": "off_counter", "client_plan": "off_counter", "avenca": "off_counter",
+    // Acertos PRO/entidade feitos pela Multipark (cartão guardado, cobrança automática): nunca são balcão.
+    "card": "off_counter",
   };
   if (EXACT[m]) return EXACT[m];
+  if (/^mit[_ ]/.test(m)) return "off_counter";
   if (partnerNames.has(m)) return "off_counter";
   if (/^online\b/.test(m) || /\bmb ?way\b/.test(m) || /\bstripe\b/.test(m)) return "online";
   if (/^(numerario|dinheiro)\b/.test(m)) return "cash";
@@ -126,8 +129,9 @@ export interface ConfirmOrigin {
   originalBookingPrice: number | null;
   checkOut: string | null;
   receivedAt: string | null;
-  /** Marcas fora do balcão que a reserva tinha quando nasceu. */
+  /** Marcas fora do balcão que a reserva tinha quando nasceu (só fiáveis se `fromDb`: lidas da BD da Multipark, não só do payload). */
   pro: boolean | null; partnerId: string | null; campaignId: string | null;
+  fromDb: boolean;
   /** Lido da BD da Multipark mais de 2 min depois de a reserva nascer: pode já não ser o preço da criação. */
   late: boolean;
 }
@@ -154,7 +158,7 @@ export const isCheckoutKind = (k: InDay) => k === "checkout" || k === "checkout_
 export type Color = "green" | "amber" | "red";
 
 export type FindingCode =
-  | "price_down" | "price_down_early" | "price_up_unexplained" | "no_origin" | "origin_conflict" | "origin_late" | "marker_added"
+  | "price_down" | "price_down_early" | "price_up_unexplained" | "no_origin" | "origin_conflict" | "origin_late" | "marker_added" | "marker_unverified" | "plan_unverified"
   | "underpaid" | "overpaid" | "credit_given" | "fee_cash" | "negative_payment" | "unknown_method" | "off_counter_method"
   | "ledger_mismatch" | "legacy_line" | "subcent" | "late_payment"
   | "mb_no_receipt" | "online_unverified" | "online_mismatch" | "transfer_unproven"
@@ -168,6 +172,8 @@ export const FINDING_LABEL: Record<FindingCode, string> = {
   origin_conflict: "Preço original diferente do que vimos nascer",
   origin_late: "Webhook de criação lido tarde",
   marker_added: "PRO / parceiro ligado depois da criação",
+  marker_unverified: "PRO / parceiro sem prova de origem",
+  plan_unverified: "Avença / plano (sem memória de quando foi ligado)",
   underpaid: "Pago a menos",
   overpaid: "Pago a mais",
   credit_given: "Crédito dado",
@@ -230,15 +236,29 @@ export function stableSubKeys(b: Pick<ConfirmBookingLive, "payments" | "lines">)
   return { payment, line };
 }
 
+/** A memória de origem diz de forma fiável se a reserva era PRO/parceiro? (lida da BD e com o campo PRO preenchido). PURA. */
+const marksKnown = (origin: ConfirmOrigin | null) => origin?.source === "webhook" && origin.fromDb && origin.pro !== null;
+
 /**
- * A reserva é "fora do balcão" (PRO/parceiro/avença)? Com memória, as marcas
- * PRO e parceiro só contam se já existiam quando a reserva nasceu (avença não
- * está na memória: conta a de agora). PURA.
+ * A reserva é "fora do balcão" (PRO/parceiro/avença)? Com memória fiável, as
+ * marcas PRO e parceiro só contam se já existiam quando a reserva nasceu; sem
+ * ela (ou com o campo desconhecido), conta a de agora e fica um aviso amarelo.
+ * A avença não está na memória: conta a de agora (aviso amarelo). PURA.
  */
 export function offCounterOf(b: Pick<ConfirmBookingLive, "pro" | "partnerId" | "clientPlanId" | "allowance">, origin: ConfirmOrigin | null): boolean {
   const plan = !!b.clientPlanId || b.allowance;
-  if (origin?.source !== "webhook") return b.pro || !!b.partnerId || plan;
-  return (b.pro && origin.pro === true) || (!!b.partnerId && !!origin.partnerId) || plan;
+  if (!marksKnown(origin)) return b.pro || !!b.partnerId || plan;
+  return (b.pro && origin!.pro === true) || (!!b.partnerId && !!origin!.partnerId) || plan;
+}
+
+/**
+ * Pagamento de liquidação: numa reserva fora do balcão, o que é registado mais
+ * de 30 min depois da saída (acerto mensal PRO/parceiro, cobrança no cartão
+ * guardado) não é dinheiro de balcão — fica fora das regras do dia, do
+ * "balcão do dia" e do selo da saída. PURA.
+ */
+export function isSettlement(b: Pick<ConfirmBookingLive, "checkOut">, p: Pick<ConfirmPayment, "recordedAt">, offCounter: boolean): boolean {
+  return offCounter && !!b.checkOut && !!p.recordedAt && Date.parse(p.recordedAt) - Date.parse(b.checkOut) > LATE_PAYMENT_MS;
 }
 
 /**
@@ -264,7 +284,9 @@ export function bookingFindings(i: {
   const subOf = stableSubKeys(b);
   const offCounter = offCounterOf(b, i.origin);
   const checkout = isCheckoutKind(i.inDay);
-  const windowPays = b.payments.filter((p) => i.windowPaymentIds.has(p.id));
+  // Liquidações (acertos PRO/parceiro depois da saída) não entram em nada do dia.
+  const counted = b.payments.filter((p) => !isSettlement(b, p, offCounter));
+  const windowPays = counted.filter((p) => i.windowPaymentIds.has(p.id));
   const lineOf = new Map(b.lines.map((l) => [l.id, l]));
   const paidByLine = new Map<string, number>();
   for (const p of b.payments) if (p.pricingId) paidByLine.set(p.pricingId, (paidByLine.get(p.pricingId) ?? 0) + toCents(p.amount));
@@ -275,7 +297,7 @@ export function bookingFindings(i: {
   };
 
   // ── Dinheiro de balcão do dia (todas as reservas) ──
-  const scope = checkout ? b.payments : windowPays;
+  const scope = checkout ? counted : windowPays;
   for (const p of scope) {
     const c = toCents(p.amount);
     const k = payKind(p.method, partners);
@@ -318,13 +340,19 @@ export function bookingFindings(i: {
   // ── Só as saídas do dia daqui para baixo ──
   if (i.inDay === "checkout_pending") add("checkout_unfinished", "red", 0, `A saída está por concluir na Multipark (estado ${b.status ?? "?"}).`);
 
-  // Marcas fora do balcão ganhas depois da criação.
-  if (i.origin?.source === "webhook") {
-    const added: string[] = [];
-    if (b.pro && i.origin.pro !== true) added.push("PRO");
-    if (b.partnerId && !i.origin.partnerId) added.push("parceiro");
-    if (added.length) add("marker_added", "red", 0, `A reserva passou a ${added.join(" e ")} depois de nascer: o pagamento deixa de ser conferido ao balcão.`);
+  // Marcas fora do balcão ganhas depois da criação (só com memória fiável; senão aviso amarelo).
+  if (b.pro || b.partnerId) {
+    const marks = [b.pro ? "PRO" : null, b.partnerId ? "parceiro" : null].filter(Boolean).join(" e ");
+    if (marksKnown(i.origin)) {
+      const added: string[] = [];
+      if (b.pro && i.origin!.pro !== true) added.push("PRO");
+      if (b.partnerId && !i.origin!.partnerId) added.push("parceiro");
+      if (added.length) add("marker_added", "red", 0, `A reserva passou a ${added.join(" e ")} depois de nascer: o pagamento deixa de ser conferido ao balcão.`);
+    } else {
+      add("marker_unverified", "amber", 0, `Reserva ${marks}: a memória não diz se já era assim quando nasceu (o pagamento não é conferido ao balcão).`);
+    }
   }
+  if (b.clientPlanId || b.allowance) add("plan_unverified", "amber", 0, "Reserva de avença/plano: a memória não guarda quando foi ligada (o pagamento não é conferido ao balcão).");
 
   // ── Preço: origem e variação ──
   const final = b.bookingPrice == null ? null : toCents(b.bookingPrice);
@@ -368,8 +396,8 @@ export function bookingFindings(i: {
     }
   }
 
-  // ── Pagamentos da reserva ──
-  const paid = b.payments.reduce((s, p) => s + toCents(p.amount), 0);
+  // ── Pagamentos da reserva (sem as liquidações depois da saída) ──
+  const paid = counted.reduce((s, p) => s + toCents(p.amount), 0);
   for (const l of b.lines) {
     const lp = toCents(l.amountPaid);
     const reg = paidByLine.get(l.id);
@@ -388,18 +416,23 @@ export function bookingFindings(i: {
   }
 
   // ── Online: Stripe ──
-  const online = b.payments.filter((p) => payKind(p.method, partners) === "online");
+  const online = counted.filter((p) => payKind(p.method, partners) === "online");
   const onlineCents = online.reduce((s, p) => s + toCents(p.amount), 0);
   if (onlineCents !== 0) {
     if (!i.stripeAvailable) add("online_unverified", "amber", Math.abs(onlineCents), `${eur(onlineCents)} online: a verificação da Stripe não está disponível (o dia não fecha sem ela).`);
     else if (!b.intents.length) add("online_mismatch", "red", Math.abs(onlineCents), `${eur(onlineCents)} dados como online mas a Multipark não tem nenhum pagamento Stripe ligado à reserva.`);
     else {
       let received = 0; let unread = 0; const problems: string[] = [];
+      // O PaymentIntent antigo da reserva (sem valor dito pela Multipark) abandonado não é problema se outro pagamento Stripe da reserva foi bem-sucedido.
+      const anySucceeded = b.intents.some((it) => i.stripe.get(it.id)?.status === "succeeded");
       for (const it of b.intents) {
         if (!i.stripe.has(it.id)) { unread++; continue; }
         const s = i.stripe.get(it.id);
         if (s === null) { problems.push(`${it.id} não existe na Stripe (404)`); continue; }
-        if (!s || s.status !== "succeeded") { problems.push(`${it.id} está "${s?.status ?? "?"}"`); continue; }
+        if (!s || s.status !== "succeeded") {
+          if (it.expected == null && anySucceeded) continue;
+          problems.push(`${it.id} está "${s?.status ?? "?"}"`); continue;
+        }
         if (s.disputed) problems.push(`${it.id} tem disputa`);
         received += toCents(s.received) - toCents(s.refunded);
       }
@@ -537,8 +570,10 @@ export function buildBookingView(o: {
 export interface ShiftDeclaration { shift: "morning" | "night"; cash: number | null; mb: number | null; multiparkTotal: number | null; byName: string | null; byId: number | null }
 
 export interface DaySummary {
-  computedCashCents: number; computedMbCents: number; shiftExpensesCents: number; feesCents: number;
-  /** Tem de haver em dinheiro = dinheiro registado no dia + taxas extra das saídas − despesas do turno. */
+  computedCashCents: number; computedMbCents: number; shiftExpensesCents: number;
+  /** Taxas extra das saídas (não registadas na Multipark), pelo método do balcão da saída. */
+  feesCashCents: number; feesMbCents: number;
+  /** Tem de haver em dinheiro = dinheiro registado no dia + taxas extra em dinheiro − despesas do turno; MB = MB registado + taxas em MB. */
   expectedCashCents: number; expectedMbCents: number;
   declaredCashCents: number | null; declaredMbCents: number | null; declaredMultiparkTotalCents: number | null;
   confirmedCashCents: number | null; confirmedMbCents: number | null;
@@ -550,6 +585,8 @@ export interface DaySummary {
   declaredVsCountedCashCents: number | null; declaredVsCountedMbCents: number | null;
   /** Total que dava a caixa da Multipark (team leader) vs o nosso (dinheiro + MB registados). */
   multiparkTotalGapCents: number | null;
+  /** O que decide o alerta: o maior entre a diferença (contado vs esperado) e a quebra (declarado vs contado), em absolutos. */
+  alertBasisCents: number | null;
   alert: DayAlert;
   /** Turnos sem o dinheiro OU sem o MB declarados (0 tem de ser escrito). */
   missingShifts: Array<"morning" | "night">;
@@ -559,7 +596,7 @@ export interface DaySummary {
 export function daySummary(o: {
   windowPayments: ReadonlyArray<{ amount: number | null; method: string | null }>;
   shiftExpenses: number;
-  feesCents: number;
+  fees: { cash: number; mb: number };
   shifts: readonly ShiftDeclaration[];
   confirmed: { cash: number | null; mb: number | null } | null;
   partnerNames?: ReadonlySet<string>;
@@ -571,7 +608,8 @@ export function daySummary(o: {
     else if (k === "card") mb += toCents(p.amount);
   }
   const exp = toCents(o.shiftExpenses);
-  const expectedCash = cash + o.feesCents - exp;
+  const expectedCash = cash + o.fees.cash - exp;
+  const expectedMb = mb + o.fees.mb;
   const missingShifts = (["morning", "night"] as const).filter((sh) => !o.shifts.some((s) => s.shift === sh && s.cash != null && s.mb != null));
   const all = missingShifts.length === 0;
   const sum = (f: (s: ShiftDeclaration) => number | null) => {
@@ -584,20 +622,25 @@ export function daySummary(o: {
   const confirmedCash = o.confirmed?.cash == null ? null : toCents(o.confirmed.cash);
   const confirmedMb = o.confirmed?.mb == null ? null : toCents(o.confirmed.mb);
   const cashDiff = confirmedCash == null ? null : confirmedCash - expectedCash;
-  const mbDiff = confirmedMb == null ? null : confirmedMb - mb;
+  const mbDiff = confirmedMb == null ? null : confirmedMb - expectedMb;
   const both = cashDiff != null && mbDiff != null;
   const absDiff = both ? Math.abs(cashDiff!) + Math.abs(mbDiff!) : null;
+  const gapCash = confirmedCash == null || declaredCash == null ? null : confirmedCash - (declaredCash - exp);
+  const gapMb = confirmedMb == null || declaredMb == null ? null : confirmedMb - declaredMb;
+  const gapAbs = gapCash == null && gapMb == null ? null : Math.abs(gapCash ?? 0) + Math.abs(gapMb ?? 0);
+  const basis = absDiff == null && gapAbs == null ? null : Math.max(absDiff ?? 0, gapAbs ?? 0);
   return {
-    computedCashCents: cash, computedMbCents: mb, shiftExpensesCents: exp, feesCents: o.feesCents,
-    expectedCashCents: expectedCash, expectedMbCents: mb,
+    computedCashCents: cash, computedMbCents: mb, shiftExpensesCents: exp, feesCashCents: o.fees.cash, feesMbCents: o.fees.mb,
+    expectedCashCents: expectedCash, expectedMbCents: expectedMb,
     declaredCashCents: declaredCash, declaredMbCents: declaredMb, declaredMultiparkTotalCents: declaredTotal,
     confirmedCashCents: confirmedCash, confirmedMbCents: confirmedMb,
     cashDiffCents: cashDiff, mbDiffCents: mbDiff,
     differenceCents: both ? cashDiff! + mbDiff! : null, absDifferenceCents: absDiff,
-    declaredVsCountedCashCents: confirmedCash == null || declaredCash == null ? null : confirmedCash - (declaredCash - exp),
-    declaredVsCountedMbCents: confirmedMb == null || declaredMb == null ? null : confirmedMb - declaredMb,
+    declaredVsCountedCashCents: gapCash,
+    declaredVsCountedMbCents: gapMb,
     multiparkTotalGapCents: declaredTotal == null ? null : declaredTotal - (cash + mb),
-    alert: dayAlertOf(absDiff),
+    alertBasisCents: basis,
+    alert: dayAlertOf(basis),
     missingShifts,
   };
 }
@@ -625,7 +668,7 @@ export function closeBlockers(o: {
   if (unresolvedRed) out.push(`${unresolvedRed} reserva(s) com vermelho por justificar.`);
   if (o.summary.missingShifts.length) out.push(`Falta o team leader declarar o dinheiro e o Multibanco ${o.summary.missingShifts.map((s) => (s === "morning" ? "do turno da manhã" : "do turno da noite")).join(" e ")} na Passagem de turno (0 também se escreve).`);
   if (o.summary.confirmedCashCents == null || o.summary.confirmedMbCents == null) out.push("Conta o envelope e os talões e grava os valores (dinheiro e Multibanco) antes de fechar.");
-  const gap = Math.abs(o.summary.absDifferenceCents ?? 0) + Math.abs(o.summary.declaredVsCountedCashCents ?? 0) + Math.abs(o.summary.declaredVsCountedMbCents ?? 0);
+  const gap = Math.abs(o.summary.absDifferenceCents ?? 0) + Math.abs(o.summary.declaredVsCountedCashCents ?? 0) + Math.abs(o.summary.declaredVsCountedMbCents ?? 0) + Math.abs(o.summary.multiparkTotalGapCents ?? 0);
   if (gap !== 0 && o.noteLen < JUSTIFY_MIN_CHARS) out.push(`Há diferenças no dia: explica na nota onde estão (pelo menos ${JUSTIFY_MIN_CHARS} carateres).`);
   if (o.closerId != null && o.declarantIds.includes(o.closerId)) out.push("Quem declarou a caixa na Passagem de turno não pode confirmar o mesmo dia.");
   return out;
@@ -660,7 +703,9 @@ export function canonicalJson(v: unknown): string {
  *    conteúdo) e o estado da cancelada — o resto da reserva confere-se no dia
  *    da saída (uma reserva pré-paga que sai daqui a 5 dias não reabre hoje). PURA.
  */
-export function bookingSealState(b: ConfirmBookingLive, inDay: InDay, windowPaymentIds: ReadonlySet<string>, partnerNames?: ReadonlySet<string>): Record<string, unknown> {
+export function bookingSealState(b: ConfirmBookingLive, inDay: InDay, windowPaymentIds: ReadonlySet<string>, partnerNames?: ReadonlySet<string>, offCounter = false): Record<string, unknown> {
+  // As liquidações (acertos PRO/parceiro depois da saída) não fazem parte do que se selou na saída.
+  const counted = b.payments.filter((p) => !isSettlement(b, p, offCounter));
   const acc = (list: readonly ConfirmPayment[]) => {
     const byMethod: Record<string, number> = {};
     for (const p of list) {
@@ -671,9 +716,9 @@ export function bookingSealState(b: ConfirmBookingLive, inDay: InDay, windowPaym
     return byMethod;
   };
   if (isCheckoutKind(inDay)) {
-    return { id: b.id, kind: "checkout", status: b.status, price: toCents(b.bookingPrice), original: toCents(b.originalBookingPrice), credit: toCents(b.credit), fees: toCents(b.fees), paid: acc(b.payments), checkOut: b.checkOut, parkId: b.parkId };
+    return { id: b.id, kind: "checkout", status: b.status, price: toCents(b.bookingPrice), original: toCents(b.originalBookingPrice), credit: toCents(b.credit), fees: toCents(b.fees), paid: acc(counted), checkOut: b.checkOut, parkId: b.parkId };
   }
-  const day = b.payments.filter((p) => windowPaymentIds.has(p.id));
+  const day = counted.filter((p) => windowPaymentIds.has(p.id));
   return { id: b.id, kind: inDay, ...(inDay === "cancelled" ? { status: b.status } : {}), dayPaid: acc(day), parkId: b.parkId };
 }
 
@@ -682,12 +727,29 @@ export const validationFlags = (b: Pick<ConfirmBookingLive, "cashValidated" | "d
   `${b.cashValidated.done ? 1 : 0}${b.driverValidated.done ? 1 : 0}${b.cashierClosed.done ? 1 : 0}`;
 
 /** A reserva tem dinheiro de balcão no dia? (decide se uma reserva que entra/sai de um dia selado conta.) PURA. */
-export const hasCounterInDay = (b: ConfirmBookingLive, windowPaymentIds: ReadonlySet<string>, partnerNames?: ReadonlySet<string>) =>
-  b.payments.some((p) => windowPaymentIds.has(p.id) && toCents(p.amount) !== 0 && (isCounterKind(payKind(p.method, partnerNames)) || payKind(p.method, partnerNames) === "unknown"));
+export const hasCounterInDay = (b: ConfirmBookingLive, windowPaymentIds: ReadonlySet<string>, partnerNames?: ReadonlySet<string>, offCounter = false) =>
+  b.payments.some((p) => windowPaymentIds.has(p.id) && !isSettlement(b, p, offCounter) && toCents(p.amount) !== 0 && (isCounterKind(payKind(p.method, partnerNames)) || payKind(p.method, partnerNames) === "unknown"));
+
+/**
+ * Taxa extra de uma saída (não registada na Multipark): vai para o método do
+ * maior pagamento de balcão do dia da reserva (dinheiro ou MB); sem balcão,
+ * dinheiro. Reservas fora do balcão não pagam taxa ao balcão (0). PURA.
+ */
+export function feeSplitOf(b: ConfirmBookingLive, windowPaymentIds: ReadonlySet<string>, offCounter: boolean, partnerNames?: ReadonlySet<string>): { cash: number; mb: number } {
+  const fee = toCents(b.fees);
+  if (fee <= 0 || offCounter) return { cash: 0, mb: 0 };
+  let best: { k: PayKind; c: number } | null = null;
+  for (const p of b.payments) {
+    if (!windowPaymentIds.has(p.id)) continue;
+    const k = payKind(p.method, partnerNames), c = toCents(p.amount);
+    if (isCounterKind(k) && c > 0 && (!best || c > best.c)) best = { k, c };
+  }
+  return best?.k === "card" ? { cash: 0, mb: fee } : { cash: fee, mb: 0 };
+}
 
 /** Contas do dia que o selo fixa (as declarações, despesas e taxas também). PURA. */
 export const summarySealState = (s: DaySummary) => ({
-  computedCashCents: s.computedCashCents, computedMbCents: s.computedMbCents, shiftExpensesCents: s.shiftExpensesCents, feesCents: s.feesCents,
+  computedCashCents: s.computedCashCents, computedMbCents: s.computedMbCents, shiftExpensesCents: s.shiftExpensesCents, feesCashCents: s.feesCashCents, feesMbCents: s.feesMbCents,
   declaredCashCents: s.declaredCashCents, declaredMbCents: s.declaredMbCents, declaredMultiparkTotalCents: s.declaredMultiparkTotalCents,
   confirmedCashCents: s.confirmedCashCents, confirmedMbCents: s.confirmedMbCents,
 });
