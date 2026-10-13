@@ -6,12 +6,15 @@
  * Um PDA convertido em telemóvel pessoal por uma chefia ainda tem o token na
  * chave do PDA: o servidor reconhece-o (`migrated`) e o token passa para a
  * chave do telemóvel pessoal — o aparelho deixa de ser PDA aqui (os fluxos do
- * PDA já não o reconhecem no servidor).
+ * PDA já não o reconhecem no servidor). Os avisos que estavam presos ao PDA
+ * (só com o texto "Tens um aviso" e desligados no fim da sessão) passam a
+ * avisos normais desta pessoa, se o browser já os tinha autorizado.
  */
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { getPdaToken, getPersonalToken, movePdaTokenToPersonal, setPersonalToken } from "@/lib/pdaDevice";
+import { currentPushSubscription, notificationPermission, toInput } from "@/lib/webPush";
 
 const SEEN_KEY = "mp.device.seenFor";
 
@@ -24,6 +27,7 @@ function markSeen(key: string): void {
 
 export function PersonalDeviceBinder({ userId }: { userId: number | null | undefined }) {
   const seen = trpc.operational.personalDevices.seen.useMutation();
+  const pushSubscribe = trpc.notifications.pushSubscribe.useMutation();
 
   useEffect(() => {
     if (!userId) return;
@@ -44,6 +48,12 @@ export function PersonalDeviceBinder({ userId }: { userId: number | null | undef
           }
           if (r.migrated && pda) {
             movePdaTokenToPersonal(pda);
+            if (notificationPermission() === "granted") {
+              void currentPushSubscription().then((sub) => {
+                const input = sub ? toInput(sub) : null;
+                if (input) pushSubscribe.mutate(input, { onError: (e) => console.warn("[push] avisos do telemóvel pessoal:", e) });
+              });
+            }
             toast.info(`Este aparelho passou a ${r.device?.title ?? "telemóvel pessoal"}: já não é um PDA partilhado.`, { duration: 10000 });
           }
         },
