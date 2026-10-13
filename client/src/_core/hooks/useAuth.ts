@@ -34,7 +34,12 @@ export function useAuth(options?: UseAuthOptions) {
 
   const logout = useCallback(async () => {
     const pdaToken = getPdaToken();
-    if (pdaToken) {
+    const me = meQuery.data as { id: number; pdaSession?: { tag: string } | null } | null | undefined;
+    const pdaSession = me?.pdaSession ?? null;
+    // Plano 56 (A2): num PDA, o logout diz que sessão este separador tem — se
+    // outro separador já entrou com outra pessoa, o servidor não mexe em nada.
+    const expect = me && (pdaSession || pdaToken) ? { userId: me.id, tag: pdaSession?.tag ?? null } : undefined;
+    if (pdaToken && !pdaSession) {
       try { await releasePda.mutateAsync({ token: pdaToken }); } catch (err) { console.warn("[pda] soltar o PDA no logout falhou:", err); /* não impede o logout */ }
     }
     markClaimed(null);
@@ -42,12 +47,16 @@ export function useAuth(options?: UseAuthOptions) {
     try { localStorage.removeItem(RECENT_SEARCHES_KEY); sessionStorage.clear(); } catch { /* sem storage */ }
     // Este browser deixa de receber avisos desta pessoa (chamadas, códigos de
     // entrada) — ainda com a sessão válida, para o servidor apagar a subscrição.
+    // Sessão de PDA: o servidor solta o PDA e desliga os avisos dele (o browser
+    // continua subscrito para quem entrar a seguir).
+    if (!pdaSession) {
+      try {
+        const endpoint = await disablePush();
+        if (endpoint) await pushUnsubscribe.mutateAsync({ endpoint });
+      } catch (err) { console.warn("[push] desativar no logout falhou:", err); /* não impede o logout */ }
+    }
     try {
-      const endpoint = await disablePush();
-      if (endpoint) await pushUnsubscribe.mutateAsync({ endpoint });
-    } catch (err) { console.warn("[push] desativar no logout falhou:", err); /* não impede o logout */ }
-    try {
-      await logoutMutation.mutateAsync();
+      await logoutMutation.mutateAsync(expect ? { expect } : undefined);
     } catch (error: unknown) {
       if (
         error instanceof TRPCClientError &&
@@ -60,7 +69,7 @@ export function useAuth(options?: UseAuthOptions) {
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }
-  }, [logoutMutation, releasePda, pushUnsubscribe, utils]);
+  }, [logoutMutation, releasePda, pushUnsubscribe, utils, meQuery.data]);
 
   const state = useMemo(() => {
     return {

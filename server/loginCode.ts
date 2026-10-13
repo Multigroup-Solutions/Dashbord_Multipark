@@ -14,14 +14,20 @@
  *  - Palavra-passe: scrypt (node:crypto), scrypt falso quando não há conta;
  *    erradas por conta e por dia → à 5.ª fica bloqueada até ao fim do dia
  *    (só com código) e o dono é avisado. Só utilizador/extra/condutor.
+ *  - A2: num PDA registado (token validado) os funcionários também recebem
+ *    código — só para quem está ACIMA da pessoa (nunca um colega do mesmo
+ *    nível: podia entrar como ele). Com a definição
+ *    `login.codeDelivery` = "email" o código vai para o email da pessoa pela
+ *    acesso@ (server/loginMail.ts); se não sair, vai ao TL/supervisor.
  */
 import crypto from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { isPlausibleEmail, normalizeEmail } from "../shared/email";
 import {
+  CODE_EMAILED_MSG, CODE_EMAIL_FAILED_MSG, CODE_REQUESTED_MSG,
   CODE_EXPIRED_MSG, CODE_LOGIN_OFF_MSG, CODE_WRONG_MSG, EMAIL_INVALID_MSG, LOGIN_CODE, LOGIN_CODE_FLAG, LOGIN_LIMITS,
   PASSWORD_LOCKED_MSG, PASSWORD_WRONG_MSG, ROLE_GOOGLE_MSG, TOO_MANY_MSG,
-  canUsePassword, cleanCode, codeFromLoginCodeTitle, codeUsedNotice, deviceLabelFromUserAgent, formatCode, gmailCanonical,
+  canUsePassword, cleanCode, codeFromLoginCodeTitle, codeRecipientsForRole, codeUsedNotice, deviceLabelFromUserAgent, formatCode, gmailCanonical,
   lisbonEndOfDayMs, loginCodeTitle, maskLoginEmail, methodAllowedForRole, passwordProblem, pickCodeRecipients, recipientLabel,
   usableDeviceCodes,
 } from "../shared/loginCode";
@@ -53,8 +59,10 @@ export interface LoginDeps {
   randomCode(): string;
   /** Segredo do HMAC (JWT_SECRET). */
   secret: string;
-  /** "duty" (TL/supervisor de serviço) ou "email" (A2, ainda não disponível → duty). */
+  /** "duty" (TL/supervisor de serviço) ou "email" (A2: o email da pessoa, pela acesso@; falha → duty). */
   deliveryMode(): Promise<"duty" | "email">;
+  /** A2: envia o código para o email da pessoa pela acesso@ (server/loginMail.ts). */
+  sendCodeEmail(input: { to: string; code: string }): Promise<{ ok: boolean; error?: string }>;
   notify(input: LoginNotify): Promise<{ recipients: number[] }>;
   push(userIds: number[], payload: LoginPush): Promise<void>;
   /** RESTRICT_LOGIN_TO_REGISTERED: email desconhecido sem ficha não cria conta. */
@@ -124,16 +132,26 @@ export interface CodeRequestInput {
   pdaToken?: string | null;
 }
 
-/** Só para os testes e o registo — o ecrã recebe sempre CODE_REQUESTED_MSG. */
+/**
+ * O ecrã recebe só `message` — a mesma exista ou não a conta: em "duty" sempre
+ * CODE_REQUESTED_MSG; em "email" CODE_EMAILED_MSG, ou CODE_EMAIL_FAILED_MSG se
+ * o email não saiu (e o código foi para o TL/supervisor). O resto é para os
+ * testes e o registo.
+ */
 export interface CodeRequestOutcome {
   delivered: boolean;
-  reason: "sent" | "resend_wait" | "refused" | "staff" | "unknown_cap" | "nobody";
+  reason: "sent" | "resend_wait" | "refused" | "staff" | "unknown_cap" | "mail_cap" | "nobody";
+  message: string;
+  via?: "duty" | "email";
   codeId?: number;
   recipients?: number[];
 }
 
 export async function requestLoginCode(deps: LoginDeps, input: CodeRequestInput): Promise<CodeRequestOutcome> {
   await requireOn(deps);
+  const mode = await deps.deliveryMode().catch(() => "duty" as const);
+  const msg = mode === "email" ? CODE_EMAILED_MSG : CODE_REQUESTED_MSG;
+  const out = (o: Omit<CodeRequestOutcome, "message">, message = msg): CodeRequestOutcome => ({ ...o, message });
   const email = normalizeEmail(input.email);
   if (!isPlausibleEmail(email)) throw bad(EMAIL_INVALID_MSG);
   if (!deps.secret) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "A entrada com código não está configurada no servidor." });
@@ -150,7 +168,7 @@ export async function requestLoginCode(deps: LoginDeps, input: CodeRequestInput)
   const now = deps.now();
   const masked = maskLoginEmail(email);
   const [last] = await store.deviceCodes(email, input.nonceHash, 1);
-  if (last && now - last.createdAt < LOGIN_CODE.resendSeconds * 1000) return { delivered: false, reason: "resend_wait" };
+  if (last && now - last.createdAt < LOGIN_CODE.resendSeconds * 1000) return out({ delivered: false, reason: "resend_wait" });
 
   const lookup = await findLoginAccountByEmail(store, email);
   if (lookup.kind === "refused") {
@@ -158,40 +176,75 @@ export async function requestLoginCode(deps: LoginDeps, input: CodeRequestInput)
     if (lookup.reason === "ambiguous") {
       await deps.notify({ kind: "login_conflict", title: `Pedido de código para um email com várias contas (${masked})`, body: `Não se enviou o código: o email ${email} está em várias contas (${lookup.detail ?? ""}). Junta-as em Utilizadores → Ligações.`, link: "/utilizadores", entity: { type: "login_email", id: key } }).catch(() => undefined);
     }
-    return { delivered: false, reason: "refused" };
+    return out({ delivered: false, reason: "refused" });
   }
   const user = lookup.kind === "account" ? lookup.user : null;
-  // A1: TL e acima entram com Google (o código para funcionários só num PDA registado, no A2).
-  if (user && !methodAllowedForRole("code", user.role)) {
-    await store.log({ userId: 0, action: "login_code_request", entityId: user.id, details: `Código de entrada pedido para <${masked}> — não enviado (o papel ${user.role} entra com Google)` });
-    return { delivered: false, reason: "staff" };
+  // A2: o PDA registado (o `deviceToken` validado aqui) — os funcionários só
+  // entram com código num PDA registado; fora disso entram com Google.
+  const pda = input.pdaToken ? await store.pdaByToken(input.pdaToken).catch(() => null) : null;
+  if (user && !methodAllowedForRole("code", user.role, { registeredPda: !!pda })) {
+    await store.log({ userId: 0, action: "login_code_request", entityId: user.id, details: `Código de entrada pedido para <${masked}> — não enviado (o papel ${user.role} entra com Google${pda ? "" : "; com código só num PDA registado"})` });
+    return out({ delivered: false, reason: "staff" });
   }
   const ficha = lookup.ficha;
   if (!user && !ficha && !(await deps.allow("login_code:unknown", { perDay: LOGIN_LIMITS.unknownPerDay }))) {
     await store.log({ userId: 0, action: "login_code_request", entityId: null, details: `Código de entrada pedido para <${masked}> (email novo) — não enviado: limite diário de emails novos` });
-    return { delivered: false, reason: "unknown_cap" };
+    return out({ delivered: false, reason: "unknown_cap" });
   }
 
-  const pda = input.pdaToken ? await store.pdaByToken(input.pdaToken).catch(() => null) : null;
   let city: NotifyCity | null = ficha ? await store.cityOfFicha(ficha.id).catch(() => null) : null;
   if (!city && pda) city = pda.city;
   const device = pda ? pda.name : deviceLabelFromUserAgent(input.userAgent);
-  const mode = await deps.deliveryMode().catch(() => "duty" as const);
-  // "email" (pela acesso@) é do A2: por agora vai sempre ao TL/supervisor.
+  const code = deps.randomCode();
+  const ipHash = crypto.createHmac("sha256", deps.secret).update(`login-ip:${String(input.ip ?? "")}`).digest("hex").slice(0, 32);
+  const accountLabel = user ? `conta #${user.id}` : ficha ? `ficha #${ficha.id}, sem conta` : "email novo";
+
+  // A2, modo "email": o código vai para o email escrito, pela acesso@. Se não
+  // sair, cai no TL/supervisor de serviço ("pede o código ao TL").
+  let emailFailed = false;
+  if (mode === "email") {
+    // Auditoria A2: teto diário de emails de código para o mesmo endereço (spam a
+    // terceiros/funcionários). Passou → não envia e o ecrã diz o mesmo de sempre.
+    if (!(await deps.allow(`login_code:mail:${key}`, { perDay: LOGIN_LIMITS.emailSendPerDay }))) {
+      await store.log({ userId: 0, action: "login_code_request", entityId: user?.id ?? null, details: `Código de entrada pedido para <${masked}> — não enviado: limite diário de emails de código para este endereço` });
+      return out({ delivered: false, reason: "mail_cap" });
+    }
+    const sentMail = await deps.sendCodeEmail({ to: email, code }).catch((err) => ({ ok: false, error: String((err as Error)?.message ?? err) }));
+    if (sentMail.ok) {
+      const codeId = await store.insertCode({
+        emailNorm: email, userId: user?.id ?? null, employeeId: ficha?.id ?? null,
+        codeHash: hashLoginCode(deps.secret, email, input.nonceHash, code), deviceNonceHash: input.nonceHash,
+        deviceLabel: device, pdaId: pda?.id ?? null, cityKey: city, deliveryMode: "email",
+        expiresAt: now + LOGIN_CODE.minutes * 60_000, ipHash, createdAt: now,
+      });
+      await store.log({ userId: 0, action: "login_code_request", entityId: user?.id ?? null, details: `Código de entrada pedido para <${masked}> (${accountLabel}) em ${device}${city ? ` · ${city}` : ""} — enviado para o email (pela acesso@) · pedido #${codeId}` });
+      return out({ delivered: true, reason: "sent", via: "email", codeId, recipients: [] });
+    }
+    emailFailed = true;
+    await store.log({ userId: 0, action: "login_code_request", entityId: user?.id ?? null, details: `Código de entrada para <${masked}>: o email não saiu (${String(sentMail.error ?? "erro").slice(0, 200)}) — vai para o TL/supervisor de serviço` });
+  }
+  const dutyMsg = emailFailed ? CODE_EMAIL_FAILED_MSG : msg;
+
   const pools = await store.dutyPools(city, operationalShift(now), now);
-  const { userIds, via } = pickCodeRecipients(city, pools, user ? [user.id] : []);
+  let { userIds, via } = pickCodeRecipients(city, pools, user ? [user.id] : []);
+  // A2: o código de um funcionário (num PDA) só a quem está acima dele (nunca um colega do mesmo nível).
+  if (user && !canUsePassword(user.role)) {
+    const roles = new Map(Array.from(await store.peopleOf([...userIds, ...pools.rhAdmins])).map(([id, p]) => [id, p.role]));
+    const same = codeRecipientsForRole(user.role, userIds, roles);
+    if (same.length) userIds = same;
+    else { userIds = codeRecipientsForRole(user.role, pools.rhAdmins.filter((id) => id !== user.id), roles); via = "rh"; }
+  }
   if (!userIds.length) {
     await store.log({ userId: 0, action: "login_code_request", entityId: user?.id ?? null, details: `Código de entrada pedido para <${masked}> — não enviado: ninguém de serviço para o receber` });
-    return { delivered: false, reason: "nobody" };
+    return out({ delivered: false, reason: "nobody" }, dutyMsg);
   }
 
-  const code = deps.randomCode();
   const codeId = await store.insertCode({
     emailNorm: email, userId: user?.id ?? null, employeeId: ficha?.id ?? null,
     codeHash: hashLoginCode(deps.secret, email, input.nonceHash, code), deviceNonceHash: input.nonceHash,
     deviceLabel: device, pdaId: pda?.id ?? null, cityKey: city, deliveryMode: "duty",
     // A rede fica no pedido só em HMAC (com o segredo: não se descobre o IP a partir dele).
-    expiresAt: now + LOGIN_CODE.minutes * 60_000, ipHash: crypto.createHmac("sha256", deps.secret).update(`login-ip:${String(input.ip ?? "")}`).digest("hex").slice(0, 32), createdAt: now,
+    expiresAt: now + LOGIN_CODE.minutes * 60_000, ipHash, createdAt: now,
   });
   const who = ficha?.fullName || user?.name || email;
   const sent = await deps.notify({
@@ -209,9 +262,9 @@ export async function requestLoginCode(deps: LoginDeps, input: CodeRequestInput)
   const to = sent.recipients.map((id) => recipientLabel(people.get(id)?.role, people.get(id)?.name)).join(", ") || "ninguém (sem notificações)";
   await store.log({
     userId: 0, action: "login_code_request", entityId: user?.id ?? null,
-    details: `Código de entrada pedido para <${masked}> (${user ? `conta #${user.id}` : ficha ? `ficha #${ficha.id}, sem conta` : "email novo"}) em ${device}${city ? ` · ${city}` : ""} — enviado a ${to}${via === "rh" ? " (RH/admins)" : ""}${mode === "email" ? " · modo email ainda não disponível" : ""} · pedido #${codeId}`,
+    details: `Código de entrada pedido para <${masked}> (${accountLabel}) em ${device}${city ? ` · ${city}` : ""} — enviado a ${to}${via === "rh" ? " (RH/admins)" : ""}${emailFailed ? " · o email não saiu" : ""} · pedido #${codeId}`,
   });
-  return { delivered: true, reason: "sent", codeId, recipients: sent.recipients };
+  return out({ delivered: true, reason: "sent", via: "duty", codeId, recipients: sent.recipients }, dutyMsg);
 }
 
 // ─── Escrever o código ──────────────────────────────────────────────────────
@@ -268,7 +321,7 @@ export async function accountForCodeLogin(deps: LoginDeps, rawEmail: string): Pr
 export async function noticeCodeUsed(deps: LoginDeps, userId: number, code: StoredLoginCode): Promise<void> {
   const people = await deps.store.peopleOf(code.deliveredTo);
   const labels = code.deliveredTo.map((id) => recipientLabel(people.get(id)?.role, people.get(id)?.name));
-  const text = codeUsedNotice(labels, hhmmLisbon(deps.now()));
+  const text = codeUsedNotice(labels, hhmmLisbon(deps.now()), code.deliveryMode === "email" ? "email" : "duty");
   await deps.notify({ kind: "login_security", targetUserIds: [userId], title: text, body: "Se não foste tu, avisa já o RH.", link: "/perfil", entity: { type: "login_code_used", id: code.id } }).catch(() => undefined);
 }
 
@@ -440,6 +493,10 @@ export async function realLoginDeps(): Promise<LoginDeps> {
     async deliveryMode() {
       const { getSetting } = await import("./appSettings");
       return (await getSetting("login.codeDelivery")) === "email" ? "email" : "duty";
+    },
+    async sendCodeEmail(input) {
+      const { sendLoginCodeEmail } = await import("./loginMail");
+      return sendLoginCodeEmail(input);
     },
     async notify(input) {
       const { notify } = await import("./notify");

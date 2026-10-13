@@ -864,10 +864,11 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
         </label>
       ) : isLoginDelivery ? (
         <Select value={text || "duty"} onValueChange={setText} disabled={locked}>
-          <SelectTrigger className="max-w-sm" aria-label={item.label}><SelectValue /></SelectTrigger>
+          {/* (auditoria A2) w-full + truncate: a 360 px a escolha comprida saía do ecrã */}
+          <SelectTrigger className="w-full max-w-sm min-w-0 *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate" aria-label={item.label}><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="duty">TL e supervisor de serviço (sem cidade: RH e admins)</SelectItem>
-            <SelectItem value="email">Email da pessoa, pela acesso@ (ainda não disponível)</SelectItem>
+            <SelectItem value="email">Email da pessoa, pela acesso@ (se falhar, vai ao TL)</SelectItem>
           </SelectContent>
         </Select>
       ) : isTime ? (

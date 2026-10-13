@@ -54,7 +54,25 @@ export type SendEmailOptions = {
    * extra → "Comunicações automáticas").
    */
   auto?: { kind: string; employeeId?: number | null };
+  /**
+   * Plano 56 (A2): sai DESTA conta (delegação), sem passar pelas caixas nem
+   * pelo remetente de sistema — ex.: acesso@multipark.pt, a conta própria do
+   * código de entrada.
+   */
+  account?: string;
+  /** Cabeçalhos extra nossos (só `X-Multipark-…`), ex.: X-Multipark-Login. */
+  headers?: Record<string, string>;
 };
+
+/** Só cabeçalhos `X-Multipark-…` e sem quebras de linha (nada de injeção). PURA. */
+export function safeExtraHeaders(h: Record<string, string> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(h ?? {})) {
+    if (!/^X-Multipark-[A-Za-z][A-Za-z-]{0,40}$/.test(k)) continue;
+    out[k] = String(v ?? "").replace(/[\r\n]+/g, " ").slice(0, 200);
+  }
+  return out;
+}
 
 export interface SendResult {
   ok: boolean; messageId?: string; from?: string; accountKey?: string; error?: string;
@@ -141,6 +159,8 @@ export async function sendMailWith(deps: SystemMailDeps, o: SendEmailOptions): P
   const autoKind = o.auto ? normalizeAutoMailKind(o.auto.kind) ?? "system" : null;
   const system = normalizeAddress(await deps.systemSender().catch(() => DEFAULT_MAILBOX_SOURCE)) || DEFAULT_MAILBOX_SOURCE;
   const requested = normalizeAddress(o.from);
+  const own = normalizeAddress(o.account);
+  if (o.account && !own) return { ok: false, error: "Conta de envio inválida." };
 
   // 1) Alias pedido → conta de origem da caixa, se o alias estiver em "Enviar como".
   let accountKey = `dwd:${system}`;
@@ -148,7 +168,12 @@ export async function sendMailWith(deps: SystemMailDeps, o: SendEmailOptions): P
   let replyTo: string | null = null;
   let api: SenderApi | null = null;
   try {
-    if (requested && requested !== system) {
+    if (own) {
+      // Conta própria (A2: acesso@): sai dela, sem alias nem Reply-To.
+      accountKey = `dwd:${own}`;
+      fromAddress = own;
+      api = await deps.apiFor(accountKey);
+    } else if (requested && requested !== system) {
       const aliasAccount = accountForAlias(requested, await deps.mailboxes());
       const candidates = Array.from(new Set([aliasAccount, `dwd:${system}`].filter((k): k is string => !!k)));
       let chosen = false;
@@ -176,7 +201,10 @@ export async function sendMailWith(deps: SystemMailDeps, o: SendEmailOptions): P
       inReplyTo: o.inReplyTo ?? null,
       references: refs.filter(Boolean),
       attachments: (o.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.contentType || undefined, content: a.content })),
-      headers: kind === "system" || autoKind ? { [SYSTEM_MAIL_HEADER]: "1", [AUTO_MAIL_HEADER]: autoKind ?? "system", "Auto-Submitted": "auto-generated" } : {},
+      headers: {
+        ...(kind === "system" || autoKind ? { [SYSTEM_MAIL_HEADER]: "1", [AUTO_MAIL_HEADER]: autoKind ?? "system", "Auto-Submitted": "auto-generated" } : {}),
+        ...safeExtraHeaders(o.headers),
+      },
       messageId,
       replyTo,
     });

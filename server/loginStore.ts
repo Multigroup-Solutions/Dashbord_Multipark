@@ -79,6 +79,10 @@ export interface StoredLoginCode {
   attempts: number;
   usedAt: number | null;
   createdAt: number;
+  /** A2: PDA registado onde foi pedido (funcionários só entram com código aí). */
+  pdaId?: number | null;
+  /** A2: "email" = foi para o email da pessoa (pela acesso@). */
+  deliveryMode?: "duty" | "email";
 }
 
 export interface PendingCodeForMe {
@@ -115,6 +119,8 @@ export interface LoginStore {
   fichasOfUser(userId: number): Promise<LoginFichaRow[]>;
   /** Caixa partilhada da Comunicação (reservas@, info@…)? */
   isSharedMailbox(email: string): Promise<boolean>;
+  /** A2: o endereço é de QUALQUER caixa da Comunicação (partilhada ou pessoal, conta ou alias)? */
+  isMailboxAddress(email: string): Promise<boolean>;
   /** Grava o googleSub (só se a conta ainda não tem e ninguém o tem). */
   setGoogleSub(userId: number, sub: string): Promise<boolean>;
   /**
@@ -204,6 +210,7 @@ function codeRow(r: any): StoredLoginCode {
     id: Number(r.id), emailNorm: String(r.emailNorm), userId: r.userId == null ? null : Number(r.userId), employeeId: r.employeeId == null ? null : Number(r.employeeId),
     codeHash: String(r.codeHash), deviceNonceHash: String(r.deviceNonceHash), deviceLabel: r.deviceLabel ?? null, deliveredTo: delivered,
     expiresAt: toMs(r.expiresAt) ?? 0, attempts: Number(r.attempts ?? 0), usedAt: toMs(r.usedAt), createdAt: toMs(r.createdAt) ?? 0,
+    pdaId: r.pdaId == null ? null : Number(r.pdaId), deliveryMode: r.deliveryMode === "email" ? "email" : "duty",
   };
 }
 
@@ -258,6 +265,20 @@ export const sqlLoginStore: LoginStore = {
       const kind = String(r.sourceKind ?? "dwd");
       if (kind === "user") continue;
       if (kind === "dwd" && String(r.sourceEmail ?? "").trim().toLowerCase() === e) return true;
+      let list: unknown = [];
+      try { list = JSON.parse(String(r.addressesJson ?? "[]")); } catch { list = []; }
+      const addressOf = (a: any) => String(typeof a === "string" ? a : a?.address ?? "").trim().toLowerCase();
+      if (Array.isArray(list) && list.some((a) => addressOf(a) === e)) return true;
+    }
+    return false;
+  },
+  async isMailboxAddress(email) {
+    const d = await database();
+    if (!d) return true; // sem confirmar → trata como caixa (não envia)
+    const e = email.trim().toLowerCase();
+    const rows = rowsOf(await d.execute(sql`SELECT addressesJson, sourceEmail FROM mail_mailboxes`));
+    for (const r of rows) {
+      if (String(r.sourceEmail ?? "").trim().toLowerCase() === e) return true;
       let list: unknown = [];
       try { list = JSON.parse(String(r.addressesJson ?? "[]")); } catch { list = []; }
       const addressOf = (a: any) => String(typeof a === "string" ? a : a?.address ?? "").trim().toLowerCase();

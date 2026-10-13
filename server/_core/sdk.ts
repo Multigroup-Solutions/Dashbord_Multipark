@@ -7,6 +7,7 @@ import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
 import { shouldTouchLastSignedIn } from "./lastSignedIn";
+import { isPdaNonce } from "@shared/pdaSession";
 import type { GoogleTokenResponse, GoogleUserInfo } from "./types/oauthTypes";
 
 const isNonEmptyString = (value: unknown): value is string =>
@@ -18,6 +19,18 @@ export type SessionPayload = {
   name: string;
   /** Versão da sessão (users.sessionVersion) no momento do login; ausente = 0. */
   sv?: number;
+  /** Plano 56 (A2): sessão de PDA — o PDA e o nonce que tem de estar em `pdas.sessionNonce`. */
+  pda?: number;
+  pn?: string;
+};
+
+/** O que vem num cookie de sessão válido (assinatura e forma). */
+export type VerifiedSession = {
+  openId: string; appId: string; name: string; sv: number;
+  /** Sessão de PDA (A2) ou null. */
+  pda: number | null; pn: string | null;
+  /** Fim do cookie (segundos, `exp` do JWT) ou null. */
+  exp: number | null;
 };
 
 /** O cookie ainda vale para a versão atual da conta? (cookies antigos sem `sv` = 0). PURA. */
@@ -111,7 +124,7 @@ class SDKServer {
    */
   async createSessionToken(
     openId: string,
-    options: { expiresInMs?: number; name?: string; sessionVersion?: number } = {}
+    options: { expiresInMs?: number; name?: string; sessionVersion?: number; pda?: { id: number; nonce: string } | null } = {}
   ): Promise<string> {
     return this.signSession(
       {
@@ -119,6 +132,7 @@ class SDKServer {
         appId: ENV.appId,
         name: options.name || "",
         sv: options.sessionVersion ?? 0,
+        ...(options.pda ? { pda: options.pda.id, pn: options.pda.nonce } : {}),
       },
       options
     );
@@ -138,6 +152,7 @@ class SDKServer {
       appId: payload.appId,
       name: payload.name,
       sv: payload.sv ?? 0,
+      ...(payload.pda != null && payload.pn ? { pda: payload.pda, pn: payload.pn } : {}),
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setExpirationTime(expirationSeconds)
@@ -146,7 +161,7 @@ class SDKServer {
 
   async verifySession(
     cookieValue: string | undefined | null
-  ): Promise<{ openId: string; appId: string; name: string; sv: number } | null> {
+  ): Promise<VerifiedSession | null> {
     if (!cookieValue) return null;
 
     try {
@@ -154,17 +169,29 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name, sv } = payload as Record<string, unknown>;
+      const { openId, appId, name, sv, pda, pn, exp } = payload as Record<string, unknown>;
 
       if (!isNonEmptyString(openId) || !isNonEmptyString(appId) || !isNonEmptyString(name)) {
         return null;
       }
 
       const version = typeof sv === "number" && Number.isInteger(sv) && sv >= 0 ? sv : 0;
-      return { openId, appId, name, sv: version };
+      // Sessão de PDA (A2): os dois juntos e bem formados; meio cookie de PDA não vale.
+      const hasPda = pda !== undefined || pn !== undefined;
+      if (hasPda && !(typeof pda === "number" && Number.isSafeInteger(pda) && pda > 0 && isPdaNonce(pn))) return null;
+      return {
+        openId, appId, name, sv: version,
+        pda: hasPda ? (pda as number) : null, pn: hasPda ? (pn as string) : null,
+        exp: typeof exp === "number" ? exp : null,
+      };
     } catch {
       return null;
     }
+  }
+
+  /** Os dados do cookie de sessão deste pedido (sem ir à BD), ou null. */
+  async sessionOf(req: Request): Promise<VerifiedSession | null> {
+    return this.verifySession(this.parseCookies(req.headers.cookie).get(COOKIE_NAME));
   }
 
   async authenticateRequest(req: Request): Promise<User> {
@@ -193,6 +220,17 @@ class SDKServer {
     // emitidos antes deixam de valer (sessão inválida → volta ao login).
     if (!sessionVersionMatches(session.sv, (user as { sessionVersion?: number }).sessionVersion)) {
       throw ForbiddenError("Invalid session cookie");
+    }
+
+    // Plano 56 (A2): sessão de PDA — só vale enquanto o nonce em `pdas` for o
+    // do cookie (outra entrada, logout, saída do ponto e fecho automático
+    // limpam-no) e até 16 h. Também para contas sem ficha. Cookies sem PDA
+    // (todos os de hoje) nem vão à BD.
+    if (session.pda != null) {
+      const { pdaSessionStillValid } = await import("../pdaSession");
+      if (!(await pdaSessionStillValid({ pdaId: session.pda, nonce: session.pn, userId: user.id }))) {
+        throw ForbiddenError("Invalid session cookie");
+      }
     }
 
     // No máximo uma escrita a cada 5 min (antes: um UPDATE por pedido).

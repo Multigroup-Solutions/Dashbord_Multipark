@@ -590,7 +590,14 @@ export const appRouter = router({
         const { getUserModuleOverrides } = await import("./db");
         accessOverrides = await getUserModuleOverrides(u.id);
       } catch { /* sem overrides: fica o papel */ }
-      const uElev = { ...u, accessOverrides };
+      // Plano 56 (A2): sessão presa a um PDA (nome, etiqueta da sessão, fim) — o
+      // ecrã usa-a no logout e na saída do ponto ("A sessão termina em 10 s").
+      let pdaSession: Awaited<ReturnType<typeof import("./pdaSession").pdaSessionInfo>> = null;
+      try {
+        const { pdaSessionInfo } = await import("./pdaSession");
+        pdaSession = await pdaSessionInfo(opts.ctx.req);
+      } catch { pdaSession = null; }
+      const uElev = { ...u, accessOverrides, pdaSession };
       // Se houver ficha de colaborador, devolve também o estado dos docs
       // e bloqueio. Lazy check para extras: actualiza flags se passou tempo.
       try {
@@ -618,11 +625,19 @@ export const appRouter = router({
         return uElev;
       }
     }),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return { success: true } as const;
-    }),
+    // Plano 56 (A2): `expect` = a conta (e a sessão de PDA) que este separador
+    // pensa que tem. Se o cookie já é de outra pessoa/sessão (outro separador
+    // entrou entretanto), não se mexe em nada. Numa sessão de PDA, acaba-a.
+    logout: publicProcedure
+      .input(z.object({ expect: z.object({ userId: z.number().int(), tag: z.string().max(32).nullable() }).nullable().optional() }).optional())
+      .mutation(async ({ ctx, input }) => {
+        const { pdaLogout } = await import("./pdaSession");
+        const r = await pdaLogout(ctx.req, ctx.user?.id ?? null, input?.expect ?? null).catch(() => "ok" as const);
+        if (r === "stale") return { success: true, stale: true } as { success: true; stale?: boolean };
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+        return { success: true } as { success: true; stale?: boolean };
+      }),
     // Plano 56 (A1): entrar com email + código + palavra-passe (ENTRAR_COM_CODIGO).
     ...loginProcedures,
   }),
@@ -875,6 +890,9 @@ export const appRouter = router({
         await resetAccess(await realLoginDeps(), { id: ctx.user.id, name: ctx.user.name ?? null }, { id: target.id, name: target.name ?? null, email: target.email ?? null });
         const { bumpSessionVersion } = await import("./appSettings");
         await bumpSessionVersion(target.id);
+        // (auditoria A2) as sessões de PDA da pessoa acabam também (avisos do PDA incluídos).
+        const { endPdaSessionsAfterSessionBump } = await import("./pdaSession");
+        await endPdaSessionsAfterSessionBump([target.id], null, ctx.user.id);
         return { success: true };
       }),
     getInvites: protectedProcedure
@@ -2339,7 +2357,10 @@ export const appRouter = router({
         const err = pushSubscriptionError(input);
         if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
         const ua = typeof ctx.req?.headers?.["user-agent"] === "string" ? ctx.req.headers["user-agent"] : null;
-        await savePushSubscription(ctx.user.id, input, ua);
+        // Plano 56 (A2): numa sessão de PDA a subscrição é do PDA (muda de dono a cada entrada).
+        const { sessionClaimsOf } = await import("./pdaSession");
+        const claims = await sessionClaimsOf(ctx.req);
+        await savePushSubscription(ctx.user.id, input, ua, { pdaId: claims?.pda ?? null });
         return { ok: true };
       }),
     pushUnsubscribe: protectedProcedure

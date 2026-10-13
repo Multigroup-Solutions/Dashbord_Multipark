@@ -18,6 +18,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'accountLink.mine', 'accountLink.startCandidate', 'accountLink.request', 'accountLink.confirmCode', 'rh.comeback',
     // Plano 56: a palavra-passe e os códigos de entrada que recebeu são de cada um.
     'auth.password.status', 'auth.password.set', 'auth.password.change', 'auth.codes.pendingForMe',
+    // Plano 56 A2: a sessão Google num PDA passa a sessão de PDA (é da própria pessoa).
+    'auth.pda.bind',
     // Plano 56 B1: o terminal da própria pessoa (a cidade vem do GPS e da ficha; sem cidade a resposta diz o que fazer).
     'terminal.status', 'terminal.start', 'terminal.stop', 'terminal.requestHandover', 'terminal.answerHandover',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
@@ -53,7 +55,9 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
  */
 const BLOCKED_SELF_PATHS = new Set(['rh.me', 'rh.byId', 'rh.documents.list', 'rh.documents.checklist', 'rh.documents.upload', 'rh.documents.uploadBatch', 'rh.uploadMyPhoto', 'permissions.mine', 'permissions.myCityAccess',
   // Plano 56: criar/mudar a própria palavra-passe logo a seguir ao código, mesmo com a ficha bloqueada.
-  'auth.password.status', 'auth.password.set', 'auth.password.change']);
+  'auth.password.status', 'auth.password.set', 'auth.password.change',
+  // Plano 56 A2: num PDA a sessão fica presa ao PDA também com a ficha bloqueada (acaba na saída, no logout, às 16 h).
+  'auth.pda.bind']);
 /** 'own' = precisa que a ficha do pedido seja a da pessoa; 'self' = não tem ficha no pedido (é sempre a da pessoa). PURA. */
 export function blockedSelfPathKind(path: string): 'own' | 'self' | null {
   if (!BLOCKED_SELF_PATHS.has(path)) return null;

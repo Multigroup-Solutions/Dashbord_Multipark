@@ -1632,9 +1632,21 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
         }
+        // Plano 56 (A2): a saída do ponto acaba as sessões de PDA da pessoa (as
+        // contas da ficha, em qualquer PDA, feita em qualquer aparelho). Sem
+        // sessões de PDA (interruptor desligado) não muda nada. O resumo vai
+        // nesta resposta: depois disto a sessão do PDA já não pede mais nada.
+        let pdaSessionEnded = false;
+        try {
+          const { endPdaSessionsOfEmployee, requestSessionEnded } = await import("./pdaSession");
+          const ended = await endPdaSessionsOfEmployee(input.employeeId, "checkout", ctx.user.id);
+          pdaSessionEnded = await requestSessionEnded(ctx.req, ended);
+        } catch (err) {
+          console.warn("[pda] sessão de PDA não terminada no check-out:", String((err as any)?.message ?? err).slice(0, 160));
+        }
         await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalPartial ? ` · ${terminalPartial.label.toLowerCase()}` : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}${terminalReleased ? " · saiu do terminal" : ""}` });
         const terminalResult: "auto" | "pending" | "partial" | null = terminalPartial ? "partial" : terminalOut.terminal;
-        return { success: true, hoursWorked, zello, terminal: terminalResult, terminalUntil: terminalPartial?.until ?? null, terminalLabel: terminalPartial?.label ?? null, terminalReleased };
+        return { success: true, hoursWorked, zello, terminal: terminalResult, terminalUntil: terminalPartial?.until ?? null, terminalLabel: terminalPartial?.label ?? null, terminalReleased, pdaSessionEnded };
       }),
 
     // ── Geofence por centro de custos (raio de picagem) ───────────────────

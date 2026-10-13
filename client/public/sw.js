@@ -1,7 +1,7 @@
 /*
  * Service worker do dashboard: SÓ notificações push — chamadas do WhatsApp a
  * tocar e (plano 56) o código de entrada para o TL/supervisor de serviço
- * (`type: "login_code"`). Não faz cache nem interceta pedidos (sem handler de
+ * (`type: "login_code"`); num PDA, só "Tens um aviso" (`type: "pda"`). Não faz cache nem interceta pedidos (sem handler de
  * fetch), por isso não muda nada no carregamento da app.
  */
 self.addEventListener("install", () => self.skipWaiting());
@@ -27,6 +27,23 @@ self.addEventListener("push", (event) => {
         icon: "/icon.png",
         badge: "/icon.png",
         data: { url: data.url || "/operacional?tab=live" },
+      }),
+    );
+    return;
+  }
+
+  // Plano 56 (A2): num PDA (aparelho partilhado) o aviso não diz nada de
+  // ninguém — "Tens um aviso" — e abre a app. Outros tipos com nome (ex.:
+  // "terminal") também são avisos normais, nunca o toque de uma chamada.
+  if (data.type === "pda" || (data.type && data.type !== "wa_call")) {
+    event.waitUntil(
+      self.registration.showNotification(data.title || "Multipark", {
+        body: data.body || "Tens um aviso",
+        tag: data.tag || "aviso",
+        renotify: true,
+        icon: "/icon.png",
+        badge: "/icon.png",
+        data: { url: data.url || "/" },
       }),
     );
     return;
