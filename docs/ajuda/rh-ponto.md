@@ -146,7 +146,7 @@ palavras: limpeza dos pdas, conta google do pda, oferecer para guardar, início 
 - Num **PDA registado**, ao entrar na app o aparelho fica ligado a ti (e ao Zello do PDA) até saíres ou outra pessoa entrar. Se essa ligação falhar, aparece um aviso — fala com a chefia.
 - **PDAs só pelo QR**: cada PDA regista-se uma vez lendo, no próprio aparelho, o QR colado nele (Operacional → PDAs → botão QR). Já não há check-in manual nem registo pela lista. A seguir ao registo aparece **Instalar a app neste PDA**: o dashboard fica instalado e abre sempre direto, no mesmo browser.
 - Com **Entrar com email e código** ligado (Definições → Automações):
-  - **Só o team leader (ou acima) lê o QR** — um extra ou condutor vê "Só o team leader (ou acima) regista um PDA pelo QR".
+  - **Só o team leader (ou acima) regista um PDA pelo QR** — um extra ou condutor que lê o QR noutro aparelho vê "Só o team leader (ou acima) regista um PDA pelo QR". Se ler o QR no PDA onde já está (o aparelho já é esse PDA), vê **"Este PDA já está registado — estás no PDA 12"**: está tudo certo, não precisa de fazer nada.
   - Sem sessão, o QR abre a **página de entrada nova** (email e código); depois do registo, a sessão de quem registou fica presa a esse PDA.
   - Ler o QR noutro aparelho passa o PDA para esse aparelho (o antigo deixa de ser o PDA) e os **supervisores da cidade** recebem no sino **"O PDA 12 mudou de aparelho"** (não quem registou). Ler outra vez no mesmo aparelho não muda nada nem avisa.
   - A **saída do ponto** num PDA mostra o resumo e **"A sessão termina em 10 s"**; a sessão também acaba quando outra pessoa entra, no Sair, quando o ponto esquecido fecha sozinho (que também solta o PDA) e ao fim de 16 h.
