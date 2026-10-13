@@ -671,7 +671,12 @@ export const operationalRouter = router({
         return { available: false as const, reason: `O Zello não respondeu: ${String((err as Error)?.message ?? err).slice(0, 120)}` };
       }
       if (!users.length) return { available: false as const, reason: "O Zello não está configurado." };
-      return { available: true as const, checks: checkPdaZello(pdas.filter((p) => p.status !== "inactive").map((p) => ({ id: Number(p.id), name: String(p.name ?? ""), zelloUsername: p.zelloUsername ?? null })), users) };
+      // Telemóveis pessoais: o Zello da ficha do dono, um a um ("sem Zello" não é erro — há quem não use).
+      const [{ listPersonalDevices }, { personalZelloCheck }] = await Promise.all([import("./personalDevices"), import("../shared/personalDevice")]);
+      const personal = await listPersonalDevices(ctx.user)
+        .then((r) => r.devices.map((d) => ({ deviceId: d.id, ...personalZelloCheck(d.zelloUsername, d.zelloOf ?? d.ownerName ?? d.currentName, users) })))
+        .catch(() => []);
+      return { available: true as const, checks: checkPdaZello(pdas.filter((p) => p.status !== "inactive").map((p) => ({ id: Number(p.id), name: String(p.name ?? ""), zelloUsername: p.zelloUsername ?? null })), users), personal };
     }),
     // PDA ligado AGORA ao próprio utilizador (check-in aberto) — para o Perfil.
     mine: protectedProcedure.query(async ({ ctx }) => {
@@ -960,6 +965,77 @@ export const operationalRouter = router({
         await logActivity({ userId: ctx.user.id, action: "update", entity: "pda_checkin", entityId: input.id, details: "Check-out PDA" });
         return { success: true };
       }),
+    }),
+  }),
+
+  // ─── TELEMÓVEIS PESSOAIS (não são PDAs partilhados; server/personalDevices.ts) ──
+  // O token vai sempre no corpo do pedido (mutações), nunca no endereço.
+  personalDevices: router({
+    /** "Registar este telemóvel como meu" — qualquer pessoa com sessão, no próprio telemóvel. Recusa num PDA. */
+    register: protectedProcedure.input(z.object({
+      pdaToken: z.string().max(80).nullable().optional(),
+      currentToken: z.string().max(80).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const { registerPersonalDevice } = await import("./personalDevices");
+      return registerPersonalDevice(ctx.user, { ...input, userAgent: String((ctx.req as any)?.headers?.["user-agent"] ?? "") || null });
+    }),
+    /** Em cada entrada: quem está neste telemóvel agora (e um PDA convertido passa a pessoal). */
+    seen: protectedProcedure.input(z.object({
+      token: z.string().max(80).nullable().optional(),
+      pdaToken: z.string().max(80).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const { seenPersonalDevice } = await import("./personalDevices");
+      return seenPersonalDevice(ctx.user, input);
+    }),
+    /** Sair neste telemóvel: deixa de aparecer "agora com" esta pessoa. */
+    left: protectedProcedure.input(z.object({ token: z.string().max(80) })).mutation(async ({ ctx, input }) => {
+      const { leftPersonalDevice } = await import("./personalDevices");
+      return leftPersonalDevice(ctx.user, input.token);
+    }),
+    /** Deixar de ser pessoal no PRÓPRIO telemóvel (fica Inativo, nunca se apaga): o dono, ou quem edita PDAs. */
+    unregisterMine: protectedProcedure.input(z.object({ token: z.string().max(80) })).mutation(async ({ ctx, input }) => {
+      const [{ unregisterPersonalDevice }, { canAccess }] = await Promise.all([import("./personalDevices"), import("./_core/access")]);
+      return unregisterPersonalDevice(ctx.user, { token: input.token }, canAccess(ctx.user, "pdas", "edit"));
+    }),
+    /** Deixar de ser pessoal pela lista (Operacional → PDAs): quem edita PDAs, só os telemóveis das suas cidades. */
+    unregister: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "pdas", "edit");
+      const { unregisterPersonalDevice } = await import("./personalDevices");
+      return unregisterPersonalDevice(ctx.user, { id: input.id }, true);
+    }),
+    /** Operacional → PDAs → Telemóveis pessoais (com o âmbito de cidade). */
+    list: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "pdas", "view");
+      const { listPersonalDevices } = await import("./personalDevices");
+      return listPersonalDevices(ctx.user);
+    }),
+    /**
+     * "É um telemóvel pessoal": um PDA que afinal é o telemóvel de alguém
+     * (registado por engano como PDA) passa a telemóvel pessoal dessa pessoa.
+     * Só quem edita PDAs, do team leader para cima, e só PDAs que vê.
+     */
+    convertFromPda: protectedProcedure.input(z.object({
+      pdaId: z.number().int().positive(),
+      employeeId: z.number().int().positive().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "pdas", "edit");
+      if ((ACCESS_ROLE_RANK[ctx.user.role as keyof typeof ACCESS_ROLE_RANK] ?? 0) < ACCESS_ROLE_RANK.team_leader) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Só o team leader (ou acima) converte um PDA em telemóvel pessoal." });
+      }
+      if (!((await listPdas()) as any[]).some((p) => Number(p.id) === input.pdaId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado nas tuas cidades." });
+      }
+      let owner: { userId: number | null; employeeId: number | null; name: string | null } | null = null;
+      if (input.employeeId != null) {
+        const { assertEmployeeAccess } = await import("./cityScope");
+        await assertEmployeeAccess(input.employeeId);
+        const { getEmployeeById } = await import("./db");
+        const e = await getEmployeeById(input.employeeId);
+        if (!e) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
+        owner = { userId: e.employee.userId ?? null, employeeId: Number(e.employee.id), name: e.employee.fullName ?? null };
+      }
+      const { convertPdaToPersonal } = await import("./personalDevices");
+      return convertPdaToPersonal(ctx.user, { pdaId: input.pdaId, owner });
     }),
   }),
 

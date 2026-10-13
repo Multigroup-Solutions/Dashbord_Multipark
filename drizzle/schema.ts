@@ -1996,6 +1996,43 @@ export const pdas = mysqlTable("pdas", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
+// Telemóveis pessoais (migração 0650, Jorge 13 out 2026): o telemóvel de UMA
+// pessoa (TL, supervisor, qualquer um), registado por ela no próprio aparelho.
+// NÃO é um PDA partilhado: não tem sessão presa, não acaba na saída do ponto,
+// não tem check-ins de PDA nem Zello próprio — usa o Zello da ficha de quem lá
+// está (`employees.zelloUsername`). O token vive no localStorage do aparelho
+// com outra chave (`mp.device.personalToken`), por isso nunca se cruza com os
+// PDAs. Nada se apaga: deixar de ser pessoal = `status = 'inactive'`.
+export const personalDevices = mysqlTable("personal_devices", {
+	id: int().autoincrement().primaryKey(),
+	deviceToken: varchar({ length: 64 }).notNull(),
+	// "Android · Chrome" (do browser que registou), ou o nome do PDA convertido.
+	label: varchar({ length: 255 }),
+	status: mysqlEnum(['active','inactive']).default('active').notNull(),
+	// Quem o registou (o dono): a conta e a ficha dessa conta.
+	ownerUserId: int(),
+	ownerEmployeeId: int(),
+	// Quem tem sessão nele AGORA (limpa no Sair) e quem lá esteve por último.
+	currentUserId: int(),
+	currentEmployeeId: int(),
+	currentSince: datetime({ mode: 'string' }),
+	lastUserId: int(),
+	lastEmployeeId: int(),
+	lastSeenAt: datetime({ mode: 'string' }),
+	// Era um PDA (registado por engano como PDA) convertido em telemóvel pessoal.
+	convertedFromPdaId: int(),
+	deactivatedAt: datetime({ mode: 'string' }),
+	deactivatedById: int(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_personal_devices_token").on(table.deviceToken),
+	index("idx_personal_devices_owner").on(table.ownerEmployeeId),
+	index("idx_personal_devices_current").on(table.currentEmployeeId),
+]);
+
 export const performanceEvaluations = mysqlTable("performance_evaluations", {
 	id: int().autoincrement().primaryKey(),
 	employeeId: int().notNull(),

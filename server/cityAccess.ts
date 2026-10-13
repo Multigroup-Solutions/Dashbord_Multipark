@@ -24,6 +24,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'terminal.status', 'terminal.start', 'terminal.stop', 'terminal.requestHandover', 'terminal.answerHandover',
     // Plano 56 B2: "Ainda estás no terminal?" (Sim, estou / Já saí) e "Ainda estou" (reabrir) — sempre a própria pessoa.
     'terminal.answerStillHere', 'terminal.reopen',
+    // Telemóveis pessoais (13 out 2026): o PRÓPRIO telemóvel (registar, quem está nele, sair, deixar de ser pessoal).
+    'operational.personalDevices.register', 'operational.personalDevices.seen', 'operational.personalDevices.left', 'operational.personalDevices.unregisterMine',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 
