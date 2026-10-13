@@ -724,10 +724,19 @@ export const operationalRouter = router({
     registerByQr: protectedProcedure.input(z.object({ pdaId: z.number(), code: z.string().min(8).max(64), currentToken: z.string().max(80).nullable().optional() })).mutation(async ({ ctx, input }) => {
       const { pdaSessionsEnabled } = await import("./pdaSession");
       const pdaOn = await pdaSessionsEnabled();
+      const { pdaSessionStore } = await import("./pdaSessionStore");
       if (pdaOn) {
         if ((ACCESS_ROLE_RANK[ctx.user.role as keyof typeof ACCESS_ROLE_RANK] ?? 0) < ACCESS_ROLE_RANK.team_leader) {
+          // Um extra/condutor que lê o QR do PDA onde já está (este aparelho já
+          // é esse PDA) não regista nada: só fica a saber que está tudo certo.
+          // Noutro aparelho (ou sem token) continua a ser só para o TL.
           const { QR_TL_ONLY_MSG } = await import("../shared/pdaSession");
-          throw new TRPCError({ code: "FORBIDDEN", message: QR_TL_ONLY_MSG });
+          const { verifyPdaQrCode } = await import("./db");
+          const reg = input.currentToken ? await pdaSessionStore().registration(input.pdaId).catch(() => null) : null;
+          const here = !!(reg?.deviceToken && reg.deviceToken === input.currentToken);
+          const ok = here ? await verifyPdaQrCode(input.pdaId, input.code) : null;
+          if (!here || !ok) throw new TRPCError({ code: "FORBIDDEN", message: QR_TL_ONLY_MSG });
+          return { token: reg!.deviceToken!, name: ok.name, pdaSession: false, alreadyRegistered: true as const };
         }
         requireAccess(ctx.user, "pdas", "edit");
       } else {
@@ -736,7 +745,6 @@ export const operationalRouter = router({
       const { verifyPdaQrCode, setPdaDeviceToken } = await import("./db");
       const pda = await verifyPdaQrCode(input.pdaId, input.code);
       if (!pda) throw new TRPCError({ code: "BAD_REQUEST", message: "QR inválido ou PDA inativo." });
-      const { pdaSessionStore } = await import("./pdaSessionStore");
       const before = pdaOn ? await pdaSessionStore().registration(input.pdaId).catch(() => null) : null;
       // A2: o QR lido outra vez no MESMO aparelho (já tem o token deste PDA) não
       // troca o token nem avisa ninguém — é o mesmo PDA.
@@ -771,7 +779,7 @@ export const operationalRouter = router({
         if (claims?.pda && claims.pn && claims.pda !== input.pdaId) await endPdaSession(claims.pda, claims.pn, "rebind", ctx.user.id);
         pdaSession = await openPdaSession({ req: ctx.req, res: ctx.res, account: ctx.user, sessionName: ctx.user.name || "Utilizador", pda: { id: input.pdaId, token, name: pda.name }, how: "registo pelo QR" }).catch(() => false);
       }
-      return { token, name: pda.name, pdaSession };
+      return { token, name: pda.name, pdaSession, alreadyRegistered: sameDevice };
     }),
     // Login num PDA registado → o PDA (e o Zello) fica com esta pessoa até
     // sair ou entrar outra (PDAs partilhados entre turnos).

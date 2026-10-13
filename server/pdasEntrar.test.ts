@@ -647,7 +647,29 @@ describe("QR do PDA (operational.pdas.registerByQr)", () => {
     // o QR lido outra vez no MESMO aparelho: o token fica e ninguém é avisado
     const again = await (await tl.caller()).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: r.token });
     expect(again.token).toBe(r.token);
+    expect(again.alreadyRegistered).toBe(true);
     expect(m.state.notified.filter((x) => x.kind === "pda_device")).toHaveLength(1);
+  });
+
+  it("um extra que lê o QR no PDA onde já está vê \"já está registado\" (nada muda); noutro aparelho continua só TL", async () => {
+    lisbon();
+    const extraDev = device();
+    await googleSession(extraDev, userBy(100));
+    const before = { ...pda7() };
+    const ok = await (await extraDev.caller()).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: TOKEN7 });
+    expect(ok).toEqual({ token: TOKEN7, name: "PDA 12", pdaSession: false, alreadyRegistered: true });
+    expect(pda7().deviceToken).toBe(TOKEN7);
+    expect(pda7().sessionNonce).toBe(before.sessionNonce);
+    expect(m.state.notified.filter((x) => x.kind === "pda_device")).toHaveLength(0);
+    // token de outro PDA, QR errado ou sem token: o erro de sempre (não diz qual falhou)
+    for (const bad of [
+      { pdaId: 7, code: QR7, currentToken: TOKEN8 },
+      { pdaId: 7, code: "x".repeat(12), currentToken: TOKEN7 },
+      { pdaId: 7, code: QR7, currentToken: null },
+    ]) {
+      await expect((await extraDev.caller()).operational.pdas.registerByQr(bad)).rejects.toMatchObject({ code: "FORBIDDEN", message: QR_TL_ONLY_MSG });
+    }
+    expect(pda7().deviceToken).toBe(TOKEN7);
   });
 
   it("a lista dos PDAs nunca leva o token do aparelho nem o nonce da sessão", () => {

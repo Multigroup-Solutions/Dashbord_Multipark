@@ -10,7 +10,8 @@
  * Plano 56 (A2), com "Entrar com email e código" ligado: sem sessão, o QR abre
  * a página de entrada nova (e não a Google); só o TL ou acima regista; depois
  * do registo a sessão de quem registou fica presa a este PDA. Desligado: a
- * Google, como sempre.
+ * Google, como sempre. Um extra que lê o QR no PDA onde já está (este aparelho
+ * já é esse PDA) vê "Este PDA já está registado" em vez do erro.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
@@ -43,8 +44,18 @@ export default function PdaRegisterPage() {
   }, []);
   const register = trpc.operational.pdas.registerByQr.useMutation({
     onSuccess: (r) => {
+      // Lido no PDA onde já estás (este aparelho já é esse PDA): nada muda.
+      if (r.alreadyRegistered && !r.pdaSession) {
+        setState({ ok: true, message: `Este PDA já está registado — estás no ${r.name}. Não precisas de fazer mais nada.` });
+        return;
+      }
       setPdaToken(r.token);
       markClaimed(null);
+      if (r.alreadyRegistered) {
+        setState({ ok: true, message: `Este PDA já está registado — estás no ${r.name}. Nada mudou.` });
+        if (r.pdaSession) void utils.auth.me.invalidate();
+        return;
+      }
       setState({ ok: true, message: r.pdaSession
         ? `Este aparelho é agora o ${r.name}. Quem entrar aqui fica com ele (e com o Zello) até dar saída do ponto, sair ou entrar outra pessoa.`
         : `Este aparelho é agora o ${r.name}. Quem fizer login aqui fica com ele (e com o Zello) até sair.` });
