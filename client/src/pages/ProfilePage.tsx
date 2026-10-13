@@ -16,6 +16,7 @@ import { GoogleDriveCard } from "@/components/google/GoogleDriveCard";
 import { CallPushCard } from "@/components/whatsapp/CallPushCard";
 import { PasswordCard } from "@/components/login/PasswordCard";
 import { PushAlertsCard } from "@/components/login/PushAlertsCard";
+import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
 import { useCodeLoginOption } from "@/lib/loginOptions";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
@@ -128,6 +129,8 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+      {/* Este telemóvel: registar o PRÓPRIO telemóvel como pessoal (num PDA não aparece) */}
+      <PersonalDeviceCard />
       {/* Atalhos */}
       <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
         {rows.map((r, i) => (

@@ -312,39 +312,53 @@ const rowsOf = (res: unknown): any[] => {
 };
 
 /**
- * Zello do aparelho que está com cada pessoa: o PDA com check-in; senão o
- * Zello fixo da ficha — se ninguém o tiver agora num check-in de PDA.
+ * Zello do aparelho que está com cada pessoa: o PDA com check-in (o mais
+ * recente); se não tem PDA, ou o PDA não tem Zello, o Zello fixo da ficha —
+ * se ninguém o tiver agora num check-in de PDA (como o opsPresence). Sem
+ * isto, quem tinha check-in num PDA sem Zello ficava "sem GPS" mesmo com o
+ * Zello na ficha (o telemóvel do TL registado como PDA). PURA.
+ *
+ * `checkins`: os check-ins abertos, do mais recente para o mais antigo.
  */
-export async function zelloDevicesOf(employeeIds: readonly number[]): Promise<Map<number, string | null>> {
+export function pickZelloDevices(
+  ids: readonly number[],
+  checkins: ReadonlyArray<{ employeeId: number; zello: string | null }>,
+  fixedOf: ReadonlyMap<number, string | null>,
+): Map<number, string | null> {
   const out = new Map<number, string | null>();
-  const ids = Array.from(new Set(employeeIds.filter((x) => Number.isInteger(x) && x > 0)));
-  if (!ids.length) return out;
-  const [{ getDb }, { sql }] = await Promise.all([import("./db"), import("drizzle-orm")]);
-  const db = await getDb();
-  if (!db) return out;
-  const checkins = rowsOf(await db.execute(sql`
-    SELECT c.employeeId, COALESCE(NULLIF(p.zelloUsername, ''), NULLIF(c.zelloUsername, '')) AS zello
-    FROM pda_checkins c JOIN pdas p ON p.id = c.pdaId
-    WHERE c.checkin_status = 'checked_in' AND c.employeeId IS NOT NULL
-    ORDER BY c.checkinAt DESC`).catch(() => [[]]));
   const pdaOf = new Map<number, string | null>();
   const holderOf = new Map<string, number>();
   for (const r of checkins) {
-    const id = Number(r.employeeId);
-    const z = r.zello ? String(r.zello) : null;
-    if (!pdaOf.has(id)) pdaOf.set(id, z);
+    const z = String(r.zello ?? "").trim() || null;
+    if (!pdaOf.has(r.employeeId)) pdaOf.set(r.employeeId, z);
     const k = zelloKey(z);
-    if (k && !holderOf.has(k)) holderOf.set(k, id);
+    if (k && !holderOf.has(k)) holderOf.set(k, r.employeeId);
   }
-  const fixed = rowsOf(await db.execute(sql`SELECT id, zelloUsername FROM employees WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`));
-  const fixedOf = new Map(fixed.map((r) => [Number(r.id), r.zelloUsername ? String(r.zelloUsername) : null]));
   for (const id of ids) {
-    if (pdaOf.has(id)) { out.set(id, pdaOf.get(id) ?? null); continue; }
-    const f = fixedOf.get(id) ?? null;
+    const viaPda = pdaOf.get(id) ?? null;
+    if (viaPda) { out.set(id, viaPda); continue; }
+    const f = String(fixedOf.get(id) ?? "").trim() || null;
     const holder = f ? holderOf.get(zelloKey(f)) : undefined;
     out.set(id, f && (holder == null || holder === id) ? f : null);
   }
   return out;
+}
+
+export async function zelloDevicesOf(employeeIds: readonly number[]): Promise<Map<number, string | null>> {
+  const ids = Array.from(new Set(employeeIds.filter((x) => Number.isInteger(x) && x > 0)));
+  if (!ids.length) return new Map();
+  const [{ getDb }, { sql }] = await Promise.all([import("./db"), import("drizzle-orm")]);
+  const db = await getDb();
+  if (!db) return new Map();
+  const checkins = rowsOf(await db.execute(sql`
+    SELECT c.employeeId, COALESCE(NULLIF(p.zelloUsername, ''), NULLIF(c.zelloUsername, '')) AS zello
+    FROM pda_checkins c JOIN pdas p ON p.id = c.pdaId
+    WHERE c.checkin_status = 'checked_in' AND c.employeeId IS NOT NULL
+    ORDER BY c.checkinAt DESC`).catch(() => [[]]))
+    .map((r) => ({ employeeId: Number(r.employeeId), zello: r.zello ? String(r.zello) : null }));
+  const fixed = rowsOf(await db.execute(sql`SELECT id, zelloUsername FROM employees WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`));
+  const fixedOf = new Map(fixed.map((r) => [Number(r.id), r.zelloUsername ? String(r.zelloUsername) : null]));
+  return pickZelloDevices(ids, checkins, fixedOf);
 }
 
 /** O que o vigia precisa de uma posição do Zello (o formato de server/zello.ts). */

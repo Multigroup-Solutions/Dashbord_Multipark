@@ -1,6 +1,7 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { BlockedOwnDocuments } from "@/components/BlockedOwnDocuments";
 import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
+import { PersonalDeviceBinder } from "@/components/PersonalDeviceBinder";
 import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
 import { checkoutSummaryLines } from "@shared/pdaSession";
 import { PushAlertsPrompt } from "@/components/login/PushAlertsPrompt";
@@ -661,6 +662,7 @@ function DashboardLayoutContent({
     <>
       {/* Fase 2: login num PDA registado → o PDA fica com esta pessoa */}
       <PdaDeviceBinder userId={user?.id} pdaSession={(user as any)?.pdaSession ?? null} />
+      <PersonalDeviceBinder userId={user?.id} />
       {/* Segurança: sem localização precisa + permissão de câmara, a app não
           funciona (overlay bloqueante). */}
       <div className="relative" ref={sidebarRef}>

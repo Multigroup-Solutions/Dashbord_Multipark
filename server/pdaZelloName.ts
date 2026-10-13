@@ -45,14 +45,43 @@ export async function syncPdaZelloName(pdaId: number): Promise<"ok" | "skip" | "
     if (!isZelloConfigured()) return "skip";
     const d = await database();
     if (!d) return "skip";
-    const pda = rowsOf(await d.execute(sql`SELECT id, name, zelloUsername FROM pdas WHERE id = ${pdaId} LIMIT 1`))[0];
+    const pda = rowsOf(await d.execute(sql`SELECT id, name, zelloUsername, status FROM pdas WHERE id = ${pdaId} LIMIT 1`))[0];
     if (!pda?.zelloUsername) return "skip";
+    // Um PDA que passou a telemóvel pessoal (13 out 2026): o Zello é agora o do dono — nunca volta a ter nome de PDA
+    // (p. ex. a saída do ponto logo a seguir à conversão acertava os PDAs largados nos últimos 10 min).
+    if (String(pda.status ?? "") === "inactive") {
+      const converted = rowsOf(await d.execute(sql`SELECT 1 AS x FROM personal_devices WHERE convertedFromPdaId = ${pdaId} AND status = 'active' LIMIT 1`).catch(() => [[]]))[0];
+      if (converted) return "skip";
+    }
     const holder = rowsOf(await d.execute(sql`SELECT e.fullName FROM pda_checkins c JOIN employees e ON e.id = c.employeeId
       WHERE c.pdaId = ${pdaId} AND c.checkin_status = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1`))[0];
     await setZelloUserFullName(String(pda.zelloUsername), zelloDisplayName(String(pda.name), holder?.fullName ?? null));
     return "ok";
   } catch (err) {
     console.warn("[pda] nome no Zello falhou:", (err as Error)?.message);
+    return "error";
+  }
+}
+
+/**
+ * Telemóveis pessoais (13 out 2026): um PDA que afinal era o telemóvel de
+ * alguém passa a telemóvel pessoal (Operacional → PDAs → "Pessoal?") e o
+ * Zello dele é o da ficha do dono. A conta Zello deixa de ter nome de PDA
+ * ("Telemóvel Jorge · Jorge Tabuada") e fica com o nome do dono. Mesmo
+ * interruptor (ZELLO_PDA_NAMES): desligado, nada muda. Nunca lança.
+ */
+export async function syncPersonalZelloName(zelloUsername: string, ownerFullName: string): Promise<"ok" | "skip" | "error"> {
+  try {
+    const user = String(zelloUsername ?? "").trim();
+    const name = shortName(String(ownerFullName ?? "")).slice(0, ZELLO_FULL_NAME_MAX);
+    if (!user || !name) return "skip";
+    if (!(await enabled())) return "skip";
+    const { isZelloConfigured, setZelloUserFullName } = await import("./zello");
+    if (!isZelloConfigured()) return "skip";
+    await setZelloUserFullName(user, name);
+    return "ok";
+  } catch (err) {
+    console.warn("[pda] nome no Zello do telemóvel pessoal falhou:", (err as Error)?.message);
     return "error";
   }
 }
