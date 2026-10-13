@@ -6,10 +6,12 @@
  *  - "checkout"  : CHECKED_OUT com saída (`checkOut`, data e hora) na janela;
  *  - "payment"   : reservas com algum pagamento registado na janela (pago no
  *                  check-in, antes, ainda no parque…);
- *  - "cancelled" : canceladas, atualizadas na janela, que tiveram check-in
- *                  (`checkInDriverId`/`checkingInAt` preenchidos) — nunca pelo
- *                  `checkIn`, que é obrigatório e tem sempre a hora prevista.
- * Uma reserva entra uma vez, com o tipo mais forte (checkout > cancelled > payment).
+ *  - "checkout_pending": saídas por concluir (CHECKING_OUT / PENDING_CHECKOUT)
+ *                  com a saída na janela;
+ *  - "cancelled" : canceladas NA JANELA (data do "Cancellation") que tiveram
+ *                  check-in (`checkInDriverId`/`checkingInAt` preenchidos) —
+ *                  nunca pelo `checkIn`, que é obrigatório e tem sempre a hora prevista.
+ * Uma reserva entra uma vez, com o tipo mais forte (checkout > por concluir > cancelada > pagamento).
  *
  * Por reserva: os campos de dinheiro da "Booking" (só as chaves pedidas, via
  * jsonb — nada pessoal), as linhas, os pagamentos (com id, linha, método e
@@ -23,7 +25,7 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, toIsoUtc } from "./read";
-import type { ConfirmBookingLive, ConfirmLine, ConfirmPayment, ConfirmValidation } from "../../shared/cashConfirm";
+import type { ConfirmBookingLive, ConfirmLine, ConfirmPayment, ConfirmValidation, InDay } from "../../shared/cashConfirm";
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
 type J = Record<string, any>;
@@ -55,10 +57,13 @@ export function buildConfirmDaySql(o: { parkIds: readonly string[]; start: strin
     `   WHERE b."parkId" IN (${parks}) AND b."status"::text = 'CHECKED_OUT' AND b."checkOut" >= ${st}::timestamp AND b."checkOut" < ${en}::timestamp`,
     `  UNION ALL`,
     `  SELECT b."id", 2 FROM "Booking" b`,
-    `   WHERE b."parkId" IN (${parks}) AND b."status"::text = 'CANCELLED' AND (b."checkInDriverId" IS NOT NULL OR b."checkingInAt" IS NOT NULL)`,
-    `     AND b."updatedAt" >= ${st}::timestamp AND b."updatedAt" < ${en}::timestamp`,
+    `   WHERE b."parkId" IN (${parks}) AND b."status"::text IN ('CHECKING_OUT', 'PENDING_CHECKOUT') AND b."checkOut" >= ${st}::timestamp AND b."checkOut" < ${en}::timestamp`,
     `  UNION ALL`,
-    `  SELECT y."bookingId", 3 FROM "BookingPricingPayment" z JOIN "BookingPricing" y ON y."id" = z."pricingId" JOIN "Booking" b ON b."id" = y."bookingId"`,
+    `  SELECT b."id", 3 FROM "Booking" b JOIN "Cancellation" cn ON cn."bookingId" = b."id"`,
+    `   WHERE b."parkId" IN (${parks}) AND b."status"::text = 'CANCELLED' AND (b."checkInDriverId" IS NOT NULL OR b."checkingInAt" IS NOT NULL)`,
+    `     AND cn."createdAt" >= ${st}::timestamp AND cn."createdAt" < ${en}::timestamp`,
+    `  UNION ALL`,
+    `  SELECT y."bookingId", 4 FROM "BookingPricingPayment" z JOIN "BookingPricing" y ON y."id" = z."pricingId" JOIN "Booking" b ON b."id" = y."bookingId"`,
     `   WHERE b."parkId" IN (${parks}) AND z."recordedAt" >= ${st}::timestamp AND z."recordedAt" < ${en}::timestamp`,
     `),`,
     `d AS (SELECT u.id, MIN(u.rk) AS rk FROM u GROUP BY u.id ORDER BY u.id LIMIT ${p.add(CONFIRM_BOOKINGS_MAX + 1)})`,
@@ -108,8 +113,8 @@ const str = (v: unknown): string | null => (v == null || typeof v === "object" |
 const num = (v: unknown): number | null => { if (v == null || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 const bool = (v: unknown) => v === true || v === 1 || v === "1" || v === "t" || v === "true";
 
-export type ConfirmKind = "checkout" | "cancelled" | "payment_only";
-const KIND: Record<number, ConfirmKind> = { 1: "checkout", 2: "cancelled", 3: "payment_only" };
+export type ConfirmKind = InDay;
+const KIND: Record<number, ConfirmKind> = { 1: "checkout", 2: "checkout_pending", 3: "cancelled", 4: "payment_only" };
 
 export interface ConfirmRow { kind: ConfirmKind; live: ConfirmBookingLive; truncated: boolean }
 

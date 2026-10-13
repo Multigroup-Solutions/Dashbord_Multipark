@@ -477,9 +477,9 @@ export const cashCheckRouter = router({
     await requireCashCheck(ctx.user);
     const cities = await confirmScope(input.city);
     const { loadConfirmDay } = await import("./cashConfirm");
-    const r = await loadConfirmDay(input.day, input.city, cities);
+    const r = await loadConfirmDay(input.day, input.city, cities, { stripe: "fetch", viewerId: ctx.user.id });
     if (!r.available) return r;
-    const { states: _s, ...rest } = r;
+    const { states: _s, parkIds: _p, ...rest } = r;
     return rest;
   }),
 
@@ -505,7 +505,7 @@ export const cashCheckRouter = router({
     bookingId: z.string().trim().min(1).max(64).nullable(),
     kind: z.enum(["talao_mb", "comprovativo"]),
     amount: z.number().positive().max(1_000_000).nullable(),
-    base64: z.string().min(16).max(4_500_000),
+    base64: z.string().min(16).max(4_400_000),
     mimeType: z.string().max(64),
   })).mutation(async ({ ctx, input }) => {
     await requireCashEdit(ctx.user);
@@ -569,7 +569,7 @@ export const cashCheckRouter = router({
     if (!canCash(ctx.user, "manage")) throw new TRPCError({ code: "FORBIDDEN", message: "Só quem gere a Caixa reabre um dia." });
     await confirmScope(input.city);
     const { reopenConfirmDay } = await import("./cashConfirm");
-    return failOr(await reopenConfirmDay({ ...input, userId: ctx.user.id }));
+    return failOr(await reopenConfirmDay({ ...input, userId: ctx.user.id, userName: ctx.user.name ?? null }));
   }),
 
   // ─── Fase 3: contagem da caixa (R24) ─────────────────────────────────────

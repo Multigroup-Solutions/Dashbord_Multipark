@@ -14,6 +14,9 @@
 //    cash_confirm_file_removals: justificações do João, decisões do Jorge,
 //    ficheiros (sha256 único — o mesmo talão nunca serve duas vezes) e a
 //    retirada de um ficheiro (o ficheiro nunca se apaga). SÓ ACRÉSCIMO.
+//  - cash_confirm_stripe_checks: cada leitura de um pagamento na Stripe (o que o
+//    João viu; justificar/fechar/varredura não voltam a chamar a Stripe). SÓ ACRÉSCIMO.
+//  Horas em DATETIME(3) UTC escritas pela app (o hash da cadeia não depende do fuso da sessão).
 //
 // Só acrescenta. ADD COLUMN / CREATE TABLE IF NOT EXISTS ignoram o que já existe.
 
@@ -30,17 +33,19 @@ export const MIGRATION_0635_STATEMENTS: string[] = [
     "`confirmedMb` DECIMAL(12,2) NULL, " +
     "`note` TEXT NULL, " +
     "`differenceCents` INT NULL, " +
+    "`cashDiffCents` INT NULL, " +
+    "`mbDiffCents` INT NULL, " +
     "`alert` VARCHAR(8) NULL, " +
     "`closedBy` INT NULL, " +
-    "`closedAt` TIMESTAMP(3) NULL, " +
+    "`closedAt` DATETIME(3) NULL, " +
     "`approvedBy` INT NULL, " +
-    "`approvedAt` TIMESTAMP(3) NULL, " +
+    "`approvedAt` DATETIME(3) NULL, " +
     "`sealHash` CHAR(64) NULL, " +
     "`sealJson` MEDIUMTEXT NULL, " +
-    "`reopenedAt` TIMESTAMP(3) NULL, " +
+    "`reopenedAt` DATETIME(3) NULL, " +
     "`reopenReason` TEXT NULL, " +
-    "`lastCheckedAt` TIMESTAMP(3) NULL, " +
-    "`updatedAt` TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), " +
+    "`lastCheckedAt` DATETIME(3) NULL, " +
+    "`updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), " +
     "PRIMARY KEY (`id`), " +
     "UNIQUE KEY `uq_cash_confirm_day` (`day`, `city`), " +
     "KEY `idx_cash_confirm_days_status` (`status`, `day`)" +
@@ -49,7 +54,7 @@ export const MIGRATION_0635_STATEMENTS: string[] = [
     "`id` INT NOT NULL AUTO_INCREMENT, " +
     "`day` VARCHAR(10) NOT NULL, " +
     "`city` VARCHAR(16) NOT NULL, " +
-    "`at` TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
+    "`at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
     "`userId` INT NULL, " +
     "`action` VARCHAR(32) NOT NULL, " +
     "`findingKey` VARCHAR(200) NULL, " +
@@ -72,7 +77,7 @@ export const MIGRATION_0635_STATEMENTS: string[] = [
     "`explanation` TEXT NOT NULL, " +
     "`fileIds` TEXT NULL, " +
     "`userId` INT NOT NULL, " +
-    "`at` TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
+    "`at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
     "PRIMARY KEY (`id`), " +
     "KEY `idx_cash_confirm_just_day` (`day`, `city`), " +
     "KEY `idx_cash_confirm_just_key` (`findingKey`)" +
@@ -85,7 +90,7 @@ export const MIGRATION_0635_STATEMENTS: string[] = [
     "`decision` VARCHAR(12) NOT NULL, " +
     "`note` TEXT NULL, " +
     "`userId` INT NOT NULL, " +
-    "`at` TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
+    "`at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
     "PRIMARY KEY (`id`), " +
     "KEY `idx_cash_confirm_dec_day` (`day`, `city`), " +
     "KEY `idx_cash_confirm_dec_just` (`justificationId`)" +
@@ -102,7 +107,7 @@ export const MIGRATION_0635_STATEMENTS: string[] = [
     "`size` INT NOT NULL, " +
     "`sha256` CHAR(64) NOT NULL, " +
     "`uploadedBy` INT NOT NULL, " +
-    "`uploadedAt` TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
+    "`uploadedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
     "PRIMARY KEY (`id`), " +
     "UNIQUE KEY `uq_cash_confirm_files_sha` (`sha256`), " +
     "KEY `idx_cash_confirm_files_day` (`day`, `city`)" +
@@ -111,8 +116,20 @@ export const MIGRATION_0635_STATEMENTS: string[] = [
     "`fileId` INT NOT NULL, " +
     "`userId` INT NOT NULL, " +
     "`reason` VARCHAR(255) NULL, " +
-    "`at` TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
+    "`at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), " +
     "PRIMARY KEY (`fileId`)" +
+  ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  "CREATE TABLE IF NOT EXISTS `cash_confirm_stripe_checks` (" +
+    "`id` INT NOT NULL AUTO_INCREMENT, " +
+    "`intentId` VARCHAR(128) NOT NULL, " +
+    "`found` TINYINT NOT NULL, " +
+    "`status` VARCHAR(40) NULL, " +
+    "`receivedCents` INT NULL, " +
+    "`refundedCents` INT NULL, " +
+    "`disputed` TINYINT NOT NULL DEFAULT 0, " +
+    "`checkedAt` DATETIME(3) NOT NULL, " +
+    "PRIMARY KEY (`id`), " +
+    "KEY `idx_cash_confirm_stripe_pi` (`intentId`, `id`)" +
   ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 ];
 

@@ -431,3 +431,24 @@ Fica para a Entrega 2 (registado; o motor já falha fechado nestes casos):
 - Âncora externa (WORM/email da contabilidade) e triggers na BD; hoje a imutabilidade é por código + teste + cadeia verificada no ecrã.
 - Enriquecer a memória do webhook (crédito, taxa, avença, PI, % de desconto) e o "primeiro visto" dos pagamentos; regras P11/V5 pelo History.
 - Extrato bancário (depósitos e transferências por extrato): hoje a transferência fica vermelha até comprovativo + aprovação do Jorge.
+
+### 27.1 Depois da auditoria do código (ronda 1: 45/100)
+
+- **Âmbito por reserva**: as **saídas** do dia levam todas as regras (preço, pagamentos, Stripe, validações). As reservas **só com pagamento no dia** (pré-pagas, pagas no check-in) e as **canceladas** levam só as regras do dinheiro desse dia — o preço e a Stripe conferem-se no dia da saída, nunca duas vezes. O selo de uma reserva só com pagamento guarda só os pagamentos do dia (pelo conteúdo): um pré-pago que sai daqui a 5 dias não reabre o dia de hoje; um acerto PRO com data no passado (sem balcão) não entra num dia selado.
+- **Dinheiro**: o team leader tem de declarar dinheiro **e** MB em cada turno (0 escreve-se); o João tem de gravar o envelope e os talões; a diferença conta-se em separado (dinheiro e MB) e o alerta usa a soma dos valores absolutos (uma não esconde a outra). A taxa extra (`BookingFee`, cobrada em dinheiro e nunca registada na Multipark) entra no dinheiro esperado e não dá "pago a menos".
+- **Justificações** presas ao código, ao valor e a um comprovativo ainda anexado; um comprovativo serve uma só justificação e é sempre da reserva.
+- **Marcas PRO/parceiro** só contam se já existiam no 1.º webhook; ganhas depois → vermelho.
+- **Base do preço** = preço líquido com que nasceu (sem "cobertura" por linhas de desconto quando há memória). Saída antecipada → vermelho próprio sem comprovativo obrigatório. Pagamento negativo que espelha uma linha de desconto não é achado.
+- **Pagamento registado > 30 min depois da saída** (recriado pela Multipark) → vermelho.
+- **Saídas por concluir** entram no dia (vermelho); canceladas pela data do `Cancellation`.
+- **Stripe**: só para as saídas do dia; leituras guardadas na nossa BD (`cash_confirm_stripe_checks`, só acréscimo); justificar/fechar/varredura não chamam a Stripe; desligada ou por ler → o dia não fecha (bloqueio, não vermelhos em massa).
+- **Selo** inclui as contas do dia (declarações, despesas, taxas, envelope, talões) e os parques; a varredura usa os parques do selo (mudar parques operados não reabre dias); declarações/despesas mudadas depois do fecho reabrem; a passagem de turno não deixa mudar os valores da caixa de um dia confirmado.
+- **Integridade**: cadeia + selo (sha256 = hash gravado = evento "selar") + cada justificação, decisão, ficheiro e retirada com o seu evento; fechar exige a mesma cabeça da cadeia que foi lida; horas em DATETIME(3) UTC.
+- **Segregação**: quem declarou não fecha; quem mexeu no dia não aprova; reabrir à mão avisa e o próximo fecho volta a precisar do Jorge; recusar avisa quem fechou.
+- **Varredura** com cron próprio (`cash-confirm-recheck`, de hora a hora, retomável).
+- **Mês** mostra todos os dias (os nunca abertos como "por fechar").
+
+Riscos aceites (por escrito):
+- A mesma folha fotografada duas vezes passa no sha256 (a foto é recodificada): o valor do talão bate com o pagamento e o Jorge revê; fica para a Entrega 2 a API da Viva.
+- A leitura por `recordedAt` não tem índice na Multipark (é a mesma consulta do "Por dia" já em produção); pedido de índice ao Rafael.
+- Reembolso ou disputa Stripe depois do fecho: não reabre o dia (a Stripe não é relida na varredura); é apanhado pela verificação diária existente (R20 → casos da Correção de caixa).

@@ -3857,6 +3857,10 @@ export const appRouter = router({
       }
       const { saveShiftHandover } = await import("./db");
       const { handoverDate, shift, city, expectedVersion, ...values } = input;
+      // Confirmação da caixa: num dia já confirmado pelo João os valores do fecho da caixa ficam presos.
+      const { assertHandoverCashEditable } = await import("./cashConfirm");
+      const locked = await assertHandoverCashEditable({ day: handoverDate, city, shift, values });
+      if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
       const { canEditOldHandover } = await import("../shared/shiftHandover");
       const result = await saveShiftHandover({ handoverDate, shift, city }, {
         ...values,

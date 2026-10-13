@@ -1,34 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
-  toCents, payKind, bookingFindings, buildBookingView, daySummary, dayAlertOf, resolvedColor, justificationProblem, closeBlockers,
-  statusAfterClose, canonicalJson, bookingMoneyState, validationFlags, stableSubKeys, eur,
-  type ConfirmBookingLive, type ConfirmOrigin, type StripeCheck, type Finding, type JustificationRef,
+  toCents, payKind, bookingFindings, buildBookingView, daySummary, dayAlertOf, resolvedColor, justificationValid, justificationProblem, closeBlockers,
+  statusAfterClose, canonicalJson, bookingSealState, validationFlags, hasCounterInDay, stableSubKeys, offCounterOf, eur,
+  type ConfirmBookingLive, type ConfirmOrigin, type StripeCheck, type Finding, type JustificationRef, type InDay, type ShiftDeclaration,
 } from "../shared/cashConfirm";
-import { eventHash, verifyChain, sealDrift, buildSeal, GENESIS_HASH, type ChainEvent } from "./cashConfirm";
+import { eventHash, verifyChain, verifyIntegrity, sealDrift, summaryDrift, buildSeal, GENESIS_HASH, type ChainEvent, type StoredEvent } from "./cashConfirm";
 import { buildConfirmDaySql, mapConfirmRow, CONFIRM_BOOKINGS_MAX, CONFIRM_PAYMENTS_MAX } from "./multiparkDb/cashConfirm";
 import { MIGRATION_0635_STATEMENTS } from "./migrations/migration_0635";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 
 const V = (done = false) => ({ done, at: null, by: null, byId: null });
+const DAYP = "2026-10-12T10:00:00.000Z";
 function bk(o: Partial<ConfirmBookingLive> = {}): ConfirmBookingLive {
   return {
-    id: "b1", code: "A1", parkId: "p1", parkName: "Airpark Lisboa", status: "CHECKED_OUT", checkIn: "2026-10-10T08:00:00.000Z", checkOut: "2026-10-12T10:00:00.000Z",
+    id: "b1", code: "A1", parkId: "p1", parkName: "Airpark Lisboa", status: "CHECKED_OUT", checkIn: "2026-10-10T08:00:00.000Z", checkOut: DAYP,
     createdAt: "2026-10-01T10:00:00.000Z", bookingPrice: 50, originalBookingPrice: 50, paymentMethod: "Numerário", campaignId: null, partnerId: null,
     pro: false, clientPlanId: null, allowance: false, checkOutDriverName: "Rui", checkInDriverId: "d1", checkingInAt: null, paymentIntentId: null, stripeChargeId: null,
     credit: null, fees: null, cashierClosed: V(true), cashValidated: V(true), driverValidated: V(true),
     lines: [{ id: "l1", description: "Estacionamento", category: "PARKING", total: 50, amountPaid: 50, extraServiceId: null }],
-    payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "Numerário", recordedAt: "2026-10-12T10:00:00.000Z" }],
+    payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "Numerário", recordedAt: DAYP }],
     intents: [], cancelled: false, refunded: null, ...o,
   };
 }
-const origin = (o: Partial<ConfirmOrigin> = {}): ConfirmOrigin => ({ source: "webhook", bookingPrice: 50, originalBookingPrice: 50, checkOut: "2026-10-12T10:00:00.000Z", receivedAt: "2026-10-01T10:00:05.000Z", late: false, ...o });
+const origin = (o: Partial<ConfirmOrigin> = {}): ConfirmOrigin => ({ source: "webhook", bookingPrice: 50, originalBookingPrice: 50, checkOut: DAYP, receivedAt: "2026-10-01T10:00:05.000Z", pro: false, partnerId: null, campaignId: null, late: false, ...o });
 const run = (live: ConfirmBookingLive, extra: Partial<Parameters<typeof bookingFindings>[0]> = {}) => bookingFindings({
   live, origin: origin(), windowPaymentIds: new Set(live.payments.map((p) => p.id)), inDay: "checkout",
   stripe: new Map(), stripeAvailable: true, mbReceipts: [], ...extra,
 });
 const codes = (f: Finding[]) => f.map((x) => `${x.code}:${x.color}`).sort();
+const line = (total: number, paid = total, o: Partial<ConfirmBookingLive["lines"][number]> = {}) => ({ id: "l1", description: "Estacionamento", category: "PARKING", total, amountPaid: paid, extraServiceId: null, ...o });
+const pay = (amount: number, method = "Numerário", o: Partial<ConfirmBookingLive["payments"][number]> = {}) => ({ id: "z1", pricingId: "l1", amount, method, recordedAt: DAYP, ...o });
 
 describe("dinheiro em cêntimos", () => {
   it("half-even e sem erros de float", () => {
@@ -43,116 +47,126 @@ describe("dinheiro em cêntimos", () => {
 
 describe("métodos (dicionário exato)", () => {
   it("classifica os valores conhecidos e o resto é desconhecido", () => {
-    expect(payKind("Numerário")).toBe("cash");
-    expect(payKind("dinheiro")).toBe("cash");
-    expect(payKind("Multibanco")).toBe("card");
-    expect(payKind("Cartão de crédito")).toBe("card");
-    expect(payKind("Online, MBWAY")).toBe("online");
-    expect(payKind("MB WAY")).toBe("online");
-    expect(payKind("Online, Card")).toBe("online");
-    expect(payKind("Crédito")).toBe("off_counter");
-    expect(payKind("PRO_PLAN")).toBe("off_counter");
-    expect(payKind("Transferencia Bancária")).toBe("transfer");
-    expect(payKind("Unknown")).toBe("unknown");
-    expect(payKind("Depósito")).toBe("unknown");
-    expect(payKind("Parkos")).toBe("unknown");
+    for (const [m, k] of [["Numerário", "cash"], ["dinheiro", "cash"], ["Multibanco", "card"], ["Cartão de crédito", "card"], ["Online, MBWAY", "online"], ["MB WAY", "online"],
+      ["Online, Card", "online"], ["Crédito", "off_counter"], ["PRO_PLAN", "off_counter"], ["Transferencia Bancária", "transfer"], ["Unknown", "unknown"], ["Depósito", "unknown"], ["Parkos", "unknown"]] as const) {
+      expect(payKind(m), m).toBe(k);
+    }
     expect(payKind("Parkos", new Set(["parkos"]))).toBe("off_counter");
   });
 });
 
-describe("achados de uma reserva", () => {
-  it("tudo certo → nada", () => {
-    expect(run(bk())).toEqual([]);
+describe("achados de uma saída", () => {
+  it("tudo certo → nada", () => { expect(run(bk())).toEqual([]); });
+  it("preço desceu face ao que nasceu → vermelho com o valor", () => {
+    const f = run(bk({ bookingPrice: 40, lines: [line(40)], payments: [pay(40)] })).find((x) => x.code === "price_down")!;
+    expect(f.color).toBe("red");
+    expect(f.amountCents).toBe(1000);
   });
-  it("preço desceu → vermelho com o valor", () => {
-    const f = run(bk({ bookingPrice: 40, lines: [{ id: "l1", description: "Estacionamento", category: "PARKING", total: 40, amountPaid: 40, extraServiceId: null }], payments: [{ id: "z1", pricingId: "l1", amount: 40, method: "Numerário", recordedAt: "2026-10-12T10:00:00.000Z" }] }));
-    const d = f.find((x) => x.code === "price_down")!;
-    expect(d.color).toBe("red");
-    expect(d.amountCents).toBe(1000);
+  it("PRO: nasceu já com o desconto; um desconto manual a mais é vermelho (cenário D da auditoria)", () => {
+    const lines = [line(100, 0), { id: "l2", description: "Desconto PRO", category: "DISCOUNT", total: -10, amountPaid: 0, extraServiceId: null }, { id: "l3", description: "Ajuste de preço (desconto)", category: "DISCOUNT", total: -10, amountPaid: 0, extraServiceId: null }];
+    const f = run(bk({ pro: true, bookingPrice: 80, originalBookingPrice: 100, lines, payments: [] }), { origin: origin({ bookingPrice: 90, originalBookingPrice: 100, pro: true }) });
+    expect(f.find((x) => x.code === "price_down")?.amountCents).toBe(1000);
   });
-  it("desconto PRO explica a descida só até ao valor da linha", () => {
-    const lines = [
-      { id: "l1", description: "Estacionamento", category: "PARKING", total: 50, amountPaid: 0, extraServiceId: null },
-      { id: "l2", description: "Desconto PRO", category: "DISCOUNT", total: -5, amountPaid: 0, extraServiceId: null },
-    ];
-    const ok = run(bk({ pro: true, bookingPrice: 45, lines, payments: [] }));
-    expect(ok.some((x) => x.code === "price_down")).toBe(false);
-    const more = run(bk({ pro: true, bookingPrice: 40, lines, payments: [] }));
-    expect(more.find((x) => x.code === "price_down")?.amountCents).toBe(500);
-    // Sem PRO, a linha "Desconto PRO" não explica nada.
-    expect(run(bk({ pro: false, bookingPrice: 45, lines, payments: [] })).some((x) => x.code === "price_down")).toBe(true);
+  it("sem memória: o desconto PRO/campanha explica a descida só até ao valor das linhas", () => {
+    const lines = [line(50, 0), { id: "l2", description: "Desconto PRO", category: "DISCOUNT", total: -5, amountPaid: 0, extraServiceId: null }];
+    const none = (o: Partial<ConfirmBookingLive>) => bookingFindings({ live: bk({ lines, payments: [], ...o }), origin: null, windowPaymentIds: new Set(), inDay: "checkout", stripe: new Map(), stripeAvailable: true, mbReceipts: [] });
+    expect(none({ pro: true, bookingPrice: 45 }).some((x) => x.code === "price_down")).toBe(false);
+    expect(none({ pro: true, bookingPrice: 40 }).find((x) => x.code === "price_down")?.amountCents).toBe(500);
+    expect(none({ pro: false, bookingPrice: 45 }).some((x) => x.code === "price_down")).toBe(true);
+    expect(codes(none({ bookingPrice: 45 }))).toContain("no_origin:amber");
   });
-  it("sem webhook de criação compara com o original e avisa; sem nada → amarelo", () => {
-    const f = bookingFindings({ live: bk({ bookingPrice: 40 }), origin: null, windowPaymentIds: new Set(), inDay: "checkout", stripe: new Map(), stripeAvailable: true, mbReceipts: [] });
-    expect(codes(f)).toContain("no_origin:amber");
-    expect(codes(f)).toContain("price_down:red");
-    const g = bookingFindings({ live: bk({ originalBookingPrice: 0 }), origin: null, windowPaymentIds: new Set(), inDay: "checkout", stripe: new Map(), stripeAvailable: true, mbReceipts: [] });
-    expect(codes(g)).toContain("no_origin:amber");
+  it("saída antecipada → vermelho próprio (sem comprovativo obrigatório)", () => {
+    const f = run(bk({ bookingPrice: 40, checkOut: "2026-10-12T06:00:00.000Z", lines: [line(40)], payments: [pay(40, "Numerário", { recordedAt: "2026-10-12T06:00:00.000Z" })] }));
+    expect(codes(f)).toContain("price_down_early:red");
+    expect(justificationProblem({ finding: f.find((x) => x.code === "price_down_early")!, reason: "saida_antecipada", explanation: "a".repeat(30), fileCount: 0 })).toBeNull();
   });
   it("original da Multipark abaixo do que vimos nascer → vermelho; webhook tardio → amarelo", () => {
     expect(codes(run(bk({ originalBookingPrice: 45 })))).toContain("origin_conflict:red");
-    const f = bookingFindings({ live: bk(), origin: origin({ late: true }), windowPaymentIds: new Set(["z1"]), inDay: "checkout", stripe: new Map(), stripeAvailable: true, mbReceipts: [] });
-    expect(codes(f)).toContain("origin_late:amber");
+    expect(codes(run(bk(), { origin: origin({ late: true }) }))).toContain("origin_late:amber");
   });
   it("subida: com taxa/extra ou mais dias é verde; sem causa é amarelo", () => {
-    const up = (lines: ConfirmBookingLive["lines"], checkOut = "2026-10-12T10:00:00.000Z") =>
-      run(bk({ bookingPrice: 60, checkOut, lines, payments: [{ id: "z1", pricingId: lines[0].id, amount: 60, method: "Numerário", recordedAt: "2026-10-12T10:00:00.000Z" }] }));
-    expect(up([{ id: "l1", description: "Estacionamento", category: "PARKING", total: 50, amountPaid: 50, extraServiceId: null }, { id: "l2", description: "Noturno", category: "FEE", total: 10, amountPaid: 10, extraServiceId: null }])
-      .some((x) => x.code === "price_up_unexplained")).toBe(false);
-    expect(up([{ id: "l1", description: "Estacionamento", category: "PARKING", total: 60, amountPaid: 60, extraServiceId: null }], "2026-10-13T10:00:00.000Z")
-      .some((x) => x.code === "price_up_unexplained")).toBe(false);
-    expect(codes(up([{ id: "l1", description: "Ajuste", category: "ADJUSTMENT", total: 60, amountPaid: 60, extraServiceId: null }]))).toContain("price_up_unexplained:amber");
+    const up = (lines: ConfirmBookingLive["lines"], checkOut = DAYP) => run(bk({ bookingPrice: 60, checkOut, lines, payments: [pay(60, "Numerário", { pricingId: lines[0].id, recordedAt: checkOut })] }));
+    expect(up([line(50, 60), { id: "l2", description: "Noturno", category: "FEE", total: 10, amountPaid: 0, extraServiceId: null }]).some((x) => x.code === "price_up_unexplained")).toBe(false);
+    expect(up([line(60)], "2026-10-13T10:00:00.000Z").some((x) => x.code === "price_up_unexplained")).toBe(false);
+    expect(codes(up([line(60, 60, { category: "ADJUSTMENT", description: "Ajuste" })]))).toContain("price_up_unexplained:amber");
   });
-  it("pago a menos, crédito, negativo, método desconhecido, fora do balcão numa reserva normal", () => {
-    expect(run(bk({ payments: [{ id: "z1", pricingId: "l1", amount: 30, method: "Numerário", recordedAt: null }], lines: [{ id: "l1", description: "Estacionamento", category: "PARKING", total: 50, amountPaid: 30, extraServiceId: null }] }))
-      .find((x) => x.code === "underpaid")?.amountCents).toBe(2000);
-    expect(codes(run(bk({ credit: 10, payments: [{ id: "z1", pricingId: "l1", amount: 40, method: "Numerário", recordedAt: null }], lines: [{ id: "l1", description: "Estacionamento", category: "PARKING", total: 50, amountPaid: 40, extraServiceId: null }] }))))
-      .toEqual(["credit_given:red"]);
-    expect(codes(run(bk({ payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "PRO_PLAN", recordedAt: null }] })))).toContain("off_counter_method:red");
-    expect(run(bk({ pro: true, payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "PRO_PLAN", recordedAt: null }] })).some((x) => x.code === "off_counter_method")).toBe(false);
-    expect(codes(run(bk({ payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "Unknown", recordedAt: null }] })))).toContain("unknown_method:red");
-    expect(codes(run(bk({ payments: [{ id: "z1", pricingId: "l1", amount: 60, method: "Numerário", recordedAt: null }, { id: "z2", pricingId: "l1", amount: -10, method: "Numerário", recordedAt: null }] })))).toContain("negative_payment:red");
+  it("PRO/parceiro ligado depois de nascer → vermelho e o pagamento continua a ser conferido", () => {
+    const f = run(bk({ partnerId: "par1", payments: [pay(0)], lines: [line(50, 0)] }));
+    expect(codes(f)).toContain("marker_added:red");
+    expect(codes(f)).toContain("underpaid:red");
+    expect(offCounterOf(bk({ partnerId: "par1" }), origin())).toBe(false);
+    expect(offCounterOf(bk({ partnerId: "par1" }), origin({ partnerId: "par1" }))).toBe(true);
   });
-  it("taxa (BookingFee) entra no devido", () => {
-    expect(run(bk({ fees: 5 })).find((x) => x.code === "underpaid")?.amountCents).toBe(500);
+  it("pago a menos, crédito, negativo, desconhecido, fora do balcão numa reserva normal", () => {
+    expect(run(bk({ payments: [pay(30)], lines: [line(50, 30)] })).find((x) => x.code === "underpaid")?.amountCents).toBe(2000);
+    expect(codes(run(bk({ credit: 10, payments: [pay(40)], lines: [line(50, 40)] })))).toEqual(["credit_given:red"]);
+    expect(codes(run(bk({ payments: [pay(50, "PRO_PLAN")] })))).toContain("off_counter_method:red");
+    expect(run(bk({ pro: true, payments: [pay(50, "PRO_PLAN")] }), { origin: origin({ pro: true }) }).some((x) => x.code === "off_counter_method")).toBe(false);
+    expect(codes(run(bk({ payments: [pay(50, "Unknown")] })))).toContain("unknown_method:red");
+    expect(codes(run(bk({ payments: [pay(60), { id: "z2", pricingId: "l1", amount: -10, method: "Numerário", recordedAt: DAYP }] })))).toContain("negative_payment:red");
+  });
+  it("pagamento negativo que espelha uma linha de desconto não é achado", () => {
+    const lines = [line(60, 60), { id: "l2", description: "Desconto parceiro", category: "DISCOUNT", total: -10, amountPaid: -10, extraServiceId: null }];
+    const f = run(bk({ lines, payments: [pay(60), { id: "z2", pricingId: "l2", amount: -10, method: "Numerário", recordedAt: DAYP }] }));
+    expect(f.some((x) => x.code === "negative_payment")).toBe(false);
+  });
+  it("taxa extra (BookingFee) não dá 'pago a menos' — é dinheiro à parte (cenário C)", () => {
+    const f = run(bk({ fees: 5 }));
+    expect(f.some((x) => x.code === "underpaid")).toBe(false);
+    expect(codes(f)).toEqual(["fee_cash:amber"]);
   });
   it("linha: pago ≠ pagamentos → vermelho; linha antiga sem pagamentos → amarelo", () => {
-    expect(codes(run(bk({ lines: [{ id: "l1", description: "Estacionamento", category: "PARKING", total: 50, amountPaid: 40, extraServiceId: null }] })))).toContain("ledger_mismatch:red");
-    expect(codes(run(bk({ lines: [{ id: "l1", description: "Reserva", category: null, total: 50, amountPaid: 50, extraServiceId: null }], payments: [{ id: "z1", pricingId: "lx", amount: 50, method: "Numerário", recordedAt: null }] })))).toContain("legacy_line:amber");
+    expect(codes(run(bk({ lines: [line(50, 40)] })))).toContain("ledger_mismatch:red");
+    expect(codes(run(bk({ lines: [line(50, 50, { description: "Reserva", category: null })], payments: [pay(50, "Numerário", { pricingId: "lx" })] })))).toContain("legacy_line:amber");
   });
-  it("Multibanco: sem talão vermelho; com talão do mesmo valor sai", () => {
-    const live = bk({ payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "Multibanco", recordedAt: "2026-10-12T10:00:00.000Z" }] });
+  it("Multibanco: sem talão vermelho; com talão do mesmo valor e da reserva sai", () => {
+    const live = bk({ payments: [pay(50, "Multibanco")] });
     expect(codes(run(live))).toContain("mb_no_receipt:red");
     expect(run(live, { mbReceipts: [{ id: 1, amountCents: 5000, bookingId: "b1" }] }).some((x) => x.code === "mb_no_receipt")).toBe(false);
-    // Talão de outra reserva ou de outro valor não serve.
     expect(codes(run(live, { mbReceipts: [{ id: 1, amountCents: 5000, bookingId: "b2" }] }))).toContain("mb_no_receipt:red");
     expect(codes(run(live, { mbReceipts: [{ id: 1, amountCents: 4999, bookingId: "b1" }] }))).toContain("mb_no_receipt:red");
   });
-  it("Online: sem Stripe, sem PI, 404 e valor diferente são vermelhos; certo não dá nada", () => {
-    const live = bk({ payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "Online, Card", recordedAt: null }], intents: [{ id: "pi_1", expected: 50 }] });
+  it("Online: sem Stripe ou por ler → amarelo (bloqueia o dia); sem PI, 404, valor ou estado errado → vermelho; certo → nada", () => {
+    const live = bk({ payments: [pay(50, "Online, Card")], intents: [{ id: "pi_1", expected: 50 }] });
     const ok: StripeCheck = { status: "succeeded", received: 50, refunded: 0, disputed: false };
-    expect(codes(run(live, { stripeAvailable: false }))).toContain("online_unverified:red");
+    expect(codes(run(live, { stripeAvailable: false }))).toContain("online_unverified:amber");
+    expect(codes(run(live, { stripe: new Map() }))).toContain("online_unverified:amber");
     expect(codes(run(bk({ payments: live.payments, intents: [] })))).toContain("online_mismatch:red");
-    expect(codes(run(live, { stripe: new Map([["pi_1", null]]) }))).toContain("online_unverified:red");
-    expect(codes(run(live, { stripe: new Map() }))).toContain("online_unverified:red");
+    expect(codes(run(live, { stripe: new Map([["pi_1", null]]) }))).toContain("online_mismatch:red");
     expect(codes(run(live, { stripe: new Map([["pi_1", { ...ok, received: 40 }]]) }))).toContain("online_mismatch:red");
     expect(codes(run(live, { stripe: new Map([["pi_1", { ...ok, status: "requires_payment_method" }]]) }))).toContain("online_mismatch:red");
     expect(run(live, { stripe: new Map([["pi_1", ok]]) })).toEqual([]);
   });
-  it("validações da Multipark: por fechar amarelo; fora de ordem vermelho", () => {
+  it("validações: por fechar amarelo; fora de ordem vermelho; saída por concluir vermelho", () => {
     expect(codes(run(bk({ cashierClosed: V(false) })))).toEqual(["mp_not_closed:amber"]);
     expect(codes(run(bk({ cashValidated: V(false) })))).toContain("mp_order:red");
+    expect(codes(run(bk({ status: "CHECKING_OUT", cashierClosed: V(false), cashValidated: V(false), driverValidated: V(false) }), { inDay: "checkout_pending" }))).toContain("checkout_unfinished:red");
   });
-  it("cancelada depois do check-in → vermelho com o pago", () => {
-    const f = run(bk({ status: "CANCELLED" }), { inDay: "cancelled" });
-    expect(f.find((x) => x.code === "cancelled_after_checkin")?.amountCents).toBe(5000);
-  });
-  it("chaves estáveis: recriar os ids dos pagamentos não muda a chave do achado", () => {
-    const a = run(bk({ payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "Unknown", recordedAt: "2026-10-12T10:00:00.000Z" }] })).find((x) => x.code === "unknown_method")!;
-    const b = run(bk({ payments: [{ id: "zz9", pricingId: "l9", amount: 50, method: "Unknown", recordedAt: "2026-10-12T10:00:00.000Z" }], lines: [{ id: "l9", description: "Estacionamento", category: "PARKING", total: 50, amountPaid: 50, extraServiceId: null }] })).find((x) => x.code === "unknown_method")!;
+  it("chaves estáveis: recriar os ids não muda a chave do achado", () => {
+    const a = run(bk({ payments: [pay(50, "Unknown")] })).find((x) => x.code === "unknown_method")!;
+    const b = run(bk({ payments: [pay(50, "Unknown", { id: "zz9", pricingId: "l9" })], lines: [line(50, 50, { id: "l9" })] })).find((x) => x.code === "unknown_method")!;
     expect(a.key).toBe(b.key);
-    const sk = stableSubKeys(bk({ payments: [{ id: "a", pricingId: null, amount: 10, method: "Multibanco", recordedAt: "1" }, { id: "b", pricingId: null, amount: 10, method: "Multibanco", recordedAt: "2" }] }));
+    const sk = stableSubKeys(bk({ payments: [pay(10, "Multibanco", { id: "a", recordedAt: "1" }), pay(10, "Multibanco", { id: "b", recordedAt: "2" })] }));
     expect(sk.payment.get("a")).not.toBe(sk.payment.get("b"));
+  });
+});
+
+describe("reservas que só têm dinheiro no dia", () => {
+  const prepaidOnline = bk({ status: "BOOKED", checkOut: "2026-10-17T10:00:00.000Z", bookingPrice: 30, payments: [pay(50, "Online, Card")], intents: [] });
+  it("pré-pago online que sai noutro dia: nada hoje (o preço e a Stripe conferem-se no dia da saída)", () => {
+    expect(run(prepaidOnline, { inDay: "payment_only" })).toEqual([]);
+  });
+  it("dinheiro no check-in: aparece a amarelo e o MB precisa de talão", () => {
+    const f = run(bk({ status: "CHECKED_IN", checkOut: "2026-10-15T10:00:00.000Z", payments: [pay(20, "Multibanco")] }), { inDay: "payment_only" });
+    expect(codes(f)).toEqual(["mb_no_receipt:red", "not_checked_out:amber"]);
+  });
+  it("pagamento recriado pela Multipark dias depois da saída → vermelho (cenário 9)", () => {
+    const f = run(bk({ checkOut: "2026-10-09T10:00:00.000Z", payments: [pay(20, "Numerário", { recordedAt: DAYP })] }), { inDay: "payment_only" });
+    expect(codes(f)).toContain("late_payment:red");
+  });
+  it("cancelada depois do check-in: vermelho com o pago menos o reembolso", () => {
+    const f = run(bk({ status: "CANCELLED", refunded: 20 }), { inDay: "cancelled" });
+    expect(f.find((x) => x.code === "cancelled_after_checkin")?.amountCents).toBe(3000);
   });
 });
 
@@ -163,68 +177,137 @@ describe("justificações", () => {
     expect(justificationProblem({ finding: red, reason: "perda_aceite", explanation: "curta", fileCount: 1 })).toMatch(/20/);
     expect(justificationProblem({ finding: red, reason: "perda_aceite", explanation: "a".repeat(30), fileCount: 0 })).toMatch(/comprovativo/);
     expect(justificationProblem({ finding: red, reason: "perda_aceite", explanation: "a".repeat(30), fileCount: 1 })).toBeNull();
-    expect(justificationProblem({ finding: { code: "mb_no_receipt", color: "red" }, reason: "talao_em_falta", explanation: "a".repeat(30), fileCount: 0 })).toBeNull();
+    expect(justificationProblem({ finding: { code: "credit_given", color: "red" }, reason: "cortesia_reclamacao", explanation: "a".repeat(30), fileCount: 0 })).toBeNull();
   });
-  it("vermelho justificado → amarelo (à espera do Jorge); aprovado → verde; recusado → vermelho", () => {
-    const j = (decision: JustificationRef["decision"]): JustificationRef => ({ id: 1, findingKey: "k", reason: "outro", explanation: "x", fileCount: 0, decision });
-    expect(resolvedColor({ color: "red" }, null)).toBe("red");
-    expect(resolvedColor({ color: "red" }, j(null))).toBe("amber");
-    expect(resolvedColor({ color: "red" }, j("aprovado"))).toBe("green");
-    expect(resolvedColor({ color: "red" }, j("recusado"))).toBe("red");
+  const j = (o: Partial<JustificationRef> = {}): JustificationRef => ({ id: 1, findingKey: "k", code: "price_down", amountCents: 500, reason: "outro", explanation: "x", fileIds: [7], decision: null, ...o });
+  const f = { code: "price_down" as const, color: "red" as const, amountCents: 500 };
+  it("vermelho justificado → amarelo; aprovado → verde; recusado → vermelho", () => {
+    expect(resolvedColor(f, null, new Set([7]))).toBe("red");
+    expect(resolvedColor(f, j(), new Set([7]))).toBe("amber");
+    expect(resolvedColor(f, j({ decision: "aprovado" }), new Set([7]))).toBe("green");
+    expect(resolvedColor(f, j({ decision: "recusado" }), new Set([7]))).toBe("red");
+  });
+  it("a justificação fica presa ao valor e ao comprovativo (achado 4)", () => {
+    expect(justificationValid({ ...f, amountCents: 5000 }, j({ decision: "aprovado" }), new Set([7]))).toBe(false);
+    expect(resolvedColor({ ...f, amountCents: 5000 }, j({ decision: "aprovado" }), new Set([7]))).toBe("red");
+    expect(resolvedColor(f, j({ decision: "aprovado" }), new Set())).toBe("red");
+    expect(resolvedColor({ ...f, code: "underpaid" }, j(), new Set([7]))).toBe("red");
   });
 });
 
 describe("o dia", () => {
-  const shifts = (cash: number, mb: number) => [{ shift: "morning" as const, cash: cash / 2, mb: mb / 2, multiparkTotal: (cash + mb) / 2, byName: "TL" }, { shift: "night" as const, cash: cash / 2, mb: mb / 2, multiparkTotal: (cash + mb) / 2, byName: "TL" }];
+  const sh = (cash: number | null, mb: number | null, byId = 9): ShiftDeclaration[] => [
+    { shift: "morning", cash: cash == null ? null : cash / 2, mb: mb == null ? null : mb / 2, multiparkTotal: null, byName: "TL", byId },
+    { shift: "night", cash: cash == null ? null : cash / 2, mb: mb == null ? null : mb / 2, multiparkTotal: null, byName: "TL", byId },
+  ];
   const pays = [{ amount: 100, method: "Numerário" }, { amount: 50, method: "Multibanco" }, { amount: 70, method: "Online, Card" }];
-  it("esperado = dinheiro − despesas; diferença = o que há − esperado", () => {
-    const s = daySummary({ windowPayments: pays, shiftExpenses: 10, shifts: shifts(100, 50), confirmed: null });
-    expect(s.expectedCashCents).toBe(9000);
+  it("esperado = dinheiro + taxas − despesas; diferença só depois de o João contar", () => {
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 10, feesCents: 500, shifts: sh(105, 50), confirmed: null });
+    expect(s.expectedCashCents).toBe(9500);
     expect(s.expectedMbCents).toBe(5000);
-    expect(s.differenceCents).toBe(0);
-    expect(s.multiparkTotalGapCents).toBe(0);
+    expect(s.differenceCents).toBeNull();
     expect(s.alert).toBe("none");
-    const short = daySummary({ windowPayments: pays, shiftExpenses: 10, shifts: shifts(100, 50), confirmed: { cash: 50, mb: null } });
-    expect(short.differenceCents).toBe(-4000);
-    expect(short.alert).toBe("amber");
+    const c = daySummary({ windowPayments: pays, shiftExpenses: 10, feesCents: 500, shifts: sh(105, 50), confirmed: { cash: 95, mb: 50 } });
+    expect([c.cashDiffCents, c.mbDiffCents, c.absDifferenceCents, c.declaredVsCountedCashCents]).toEqual([0, 0, 0, 0]);
   });
-  it("limiares: 30 € não chega; 30,01 € amarelo; 70,01 € email (também sobras)", () => {
-    expect(dayAlertOf(-3000)).toBe("none");
-    expect(dayAlertOf(-3001)).toBe("amber");
+  it("cenário A: dinheiro por declarar e envelope por contar → bloqueia", () => {
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(null, 50), confirmed: null });
+    expect(s.missingShifts).toEqual(["morning", "night"]);
+    const b = closeBlockers({ dayClosedAt3am: true, truncated: false, multiparkOk: true, stripe: { available: true, unread: 0 }, views: [], summary: s, noteLen: 100, closerId: 1, declarantIds: [9] });
+    expect(b.join(" ")).toMatch(/turno da manhã/);
+    expect(b.join(" ")).toMatch(/Conta o envelope/);
+  });
+  it("cenário B: −60 € em dinheiro e +60 € em MB não se anulam (alerta pelos absolutos)", () => {
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 40, mb: 110 } });
+    expect(s.differenceCents).toBe(0);
+    expect(s.absDifferenceCents).toBe(12000);
+    expect(s.alert).toBe("email");
+  });
+  it("limiares: 30 € não chega; 30,01 € amarelo; 70,01 € email", () => {
+    expect(dayAlertOf(3000)).toBe("none");
+    expect(dayAlertOf(3001)).toBe("amber");
     expect(dayAlertOf(7000)).toBe("amber");
-    expect(dayAlertOf(-7001)).toBe("email");
+    expect(dayAlertOf(7001)).toBe("email");
     expect(dayAlertOf(null)).toBe("none");
   });
-  it("turno sem declaração bloqueia o fecho", () => {
-    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, shifts: [shifts(100, 50)[0]], confirmed: null });
-    expect(s.missingShifts).toEqual(["night"]);
-    const b = closeBlockers({ dayClosedAt3am: true, truncated: false, multiparkOk: true, views: [], summary: s, noteLen: 100 });
-    expect(b.join(" ")).toMatch(/turno da noite/);
+  it("bloqueios: antes das 03:00, dados cortados, Stripe desligada, vermelhos, diferença sem nota, quem declarou não fecha", () => {
+    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 90, mb: 50 } });
+    const live = bk({ bookingPrice: 40, payments: [pay(40, "Online, Card")], lines: [line(40)], intents: [{ id: "pi", expected: 40 }] });
+    const ids = new Set(["z1"]);
+    const f = run(live, { stripeAvailable: false });
+    const view = buildBookingView({ live, origin: origin(), inDay: "checkout", findings: f, windowPaymentIds: ids, justifications: new Map(), activeFileIds: new Set() });
+    const b = closeBlockers({ dayClosedAt3am: false, truncated: true, multiparkOk: true, stripe: { available: false, unread: 1 }, views: [view], summary: s, noteLen: 0, closerId: 9, declarantIds: [9] });
+    expect(b.length).toBe(6);
   });
-  it("bloqueios: dia por fechar, dados cortados, vermelhos por justificar, diferença sem nota", () => {
-    const s = daySummary({ windowPayments: pays, shiftExpenses: 0, shifts: shifts(90, 50), confirmed: null });
-    const live = bk({ bookingPrice: 40, payments: [], lines: [] });
+  it("depois de fechar: justificações por aprovar, diferença > 30 € ou dia já reaberto → à espera do Jorge", () => {
+    const ok = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 100, mb: 50 } });
+    const live = bk({ bookingPrice: 40, payments: [pay(40)], lines: [line(40)] });
     const f = run(live);
-    const view = buildBookingView({ live, origin: origin(), inDay: "checkout", findings: f, justifications: new Map() });
-    const b = closeBlockers({ dayClosedAt3am: false, truncated: true, multiparkOk: true, views: [view], summary: s, noteLen: 0 });
-    expect(b.length).toBe(4);
-  });
-  it("depois de fechar: justificações por aprovar ou diferença > 30 € → à espera do Jorge", () => {
-    const ok = daySummary({ windowPayments: pays, shiftExpenses: 0, shifts: shifts(100, 50), confirmed: null });
-    const live = bk({ bookingPrice: 40, payments: [], lines: [] });
-    const f = run(live);
-    const justs = new Map(f.map((x) => [x.key, { id: 1, findingKey: x.key, reason: "outro", explanation: "x", fileCount: 1, decision: null } as JustificationRef]));
-    const pending = buildBookingView({ live, origin: origin(), inDay: "checkout", findings: f, justifications: justs });
-    expect(statusAfterClose({ views: [pending], summary: ok })).toBe("a_aprovar");
-    expect(statusAfterClose({ views: [], summary: ok })).toBe("fechado");
-    const big = daySummary({ windowPayments: pays, shiftExpenses: 0, shifts: shifts(60, 50), confirmed: null });
-    expect(statusAfterClose({ views: [], summary: big })).toBe("a_aprovar");
+    const justs = new Map(f.map((x) => [x.key, { id: 1, findingKey: x.key, code: x.code, amountCents: x.amountCents, reason: "outro", explanation: "x", fileIds: [3], decision: null } as JustificationRef]));
+    const pending = buildBookingView({ live, origin: origin(), inDay: "checkout", findings: f, windowPaymentIds: new Set(["z1"]), justifications: justs, activeFileIds: new Set([3]) });
+    expect(pending.color).toBe("amber");
+    expect(statusAfterClose({ views: [pending], summary: ok, reopenedBefore: false })).toBe("a_aprovar");
+    expect(statusAfterClose({ views: [], summary: ok, reopenedBefore: false })).toBe("fechado");
+    expect(statusAfterClose({ views: [], summary: ok, reopenedBefore: true })).toBe("a_aprovar");
+    const big = daySummary({ windowPayments: pays, shiftExpenses: 0, feesCents: 0, shifts: sh(100, 50), confirmed: { cash: 60, mb: 50 } });
+    expect(statusAfterClose({ views: [], summary: big, reopenedBefore: false })).toBe("a_aprovar");
+    // Um vermelho aprovado e um amarelo sem relação não fazem esperar (achado 24).
+    const approved = new Map([...justs].map(([k, v]) => [k, { ...v, decision: "aprovado" as const }]));
+    const mixed = buildBookingView({ live: bk({ ...live, cashierClosed: V(false) }), origin: origin(), inDay: "checkout", findings: run(bk({ ...live, cashierClosed: V(false) })), windowPaymentIds: new Set(["z1"]), justifications: approved, activeFileIds: new Set([3]) });
+    expect(statusAfterClose({ views: [mixed], summary: ok, reopenedBefore: false })).toBe("fechado");
   });
 });
 
-describe("cadeia de eventos e selo", () => {
-  const ev = (i: number, prev: string): ChainEvent & { id: number; prevHash: string; hash: string } => {
-    const e: ChainEvent = { day: "2026-10-12", city: "lisbon", at: `2026-10-13 09:00:0${i}.000`, userId: 5326, action: "justificar", findingKey: "b1:price_down", data: { n: i } };
+describe("selo e varredura", () => {
+  const st = (b: ConfirmBookingLive, kind: InDay, ids = new Set(b.payments.map((p) => p.id))) => {
+    const h = createHash("sha256").update(canonicalJson(bookingSealState(b, kind, ids)), "utf8").digest("hex");
+    const short = kind === "payment_only" ? "p" : kind === "cancelled" ? "x" : "c";
+    return [h, kind === "checkout" || kind === "checkout_pending" ? validationFlags(b) : "", short, hasCounterInDay(b, ids) ? "1" : "0"].join("|");
+  };
+  it("CRÍTICO 1: pré-pago online do dia que sai daqui a 5 dias não reabre o dia", () => {
+    const before = bk({ status: "BOOKED", checkOut: "2026-10-17T10:00:00.000Z", payments: [pay(50, "Online, Card")] });
+    const after = bk({ status: "CHECKED_OUT", checkOut: "2026-10-17T12:00:00.000Z", bookingPrice: 60, payments: [pay(50, "Online, Card"), pay(10, "Numerário", { id: "z9", recordedAt: "2026-10-17T12:00:00.000Z" })] });
+    const sealed = { b1: st(before, "payment_only", new Set(["z1"])) };
+    const now = { b1: st(after, "payment_only", new Set(["z1"])) };
+    expect(sealDrift(sealed, now)).toEqual({ changed: [], added: [], removed: [] });
+  });
+  it("acerto PRO com data no passado (sem balcão) não entra num dia selado; dinheiro de balcão novo entra", () => {
+    const pro = bk({ id: "b2", pro: true, payments: [pay(80, "PRO_PLAN")] });
+    expect(sealDrift({}, { b2: st(pro, "payment_only") }).added).toEqual([]);
+    const cash = bk({ id: "b3", status: "CHECKED_IN", payments: [pay(20)] });
+    expect(sealDrift({}, { b3: st(cash, "payment_only") }).added).toEqual(["b3"]);
+  });
+  it("saída: dinheiro mudado, saída nova ou que saiu do dia e validação que volta a 'não' reabrem; passar a 'sim' não", () => {
+    const a = bk();
+    const sealed = { b1: st(a, "checkout") };
+    expect(sealDrift(sealed, { b1: st(a, "checkout") }).changed).toEqual([]);
+    expect(sealDrift(sealed, { b1: st(bk({ payments: [pay(50, "Online, Card")] }), "checkout") }).changed).toEqual(["b1"]);
+    expect(sealDrift(sealed, { b1: st(bk({ cashierClosed: V(false) }), "checkout") }).changed).toEqual(["b1"]);
+    expect(sealDrift({ b1: st(bk({ cashierClosed: V(false) }), "checkout") }, { b1: st(a, "checkout") }).changed).toEqual([]);
+    expect(sealDrift(sealed, {}).removed).toEqual(["b1"]);
+    expect(sealDrift({}, sealed).added).toEqual(["b1"]);
+    // Ids recriados pela Multipark não mudam nada.
+    expect(sealDrift(sealed, { b1: st(bk({ payments: [pay(50, "Numerário", { id: "novo", pricingId: "x" })] }), "checkout") }).changed).toEqual([]);
+  });
+  it("as contas do dia também estão no selo (declarações, despesas, envelope)", () => {
+    const sh: ShiftDeclaration[] = [{ shift: "morning", cash: 50, mb: 0, multiparkTotal: 50, byName: null, byId: 1 }, { shift: "night", cash: 50, mb: 0, multiparkTotal: 50, byName: null, byId: 1 }];
+    const s1 = daySummary({ windowPayments: [{ amount: 100, method: "Numerário" }], shiftExpenses: 0, feesCents: 0, shifts: sh, confirmed: { cash: 100, mb: 0 } });
+    const seal = JSON.parse(buildSeal({ day: "d", city: "lisbon", summary: s1, states: {}, parkIds: ["p1"], justificationIds: [], fileIds: [], chainHead: "h", status: "fechado" }).json);
+    expect(summaryDrift(seal.summary, s1)).toEqual([]);
+    const s2 = daySummary({ windowPayments: [{ amount: 100, method: "Numerário" }], shiftExpenses: 20, feesCents: 0, shifts: sh, confirmed: { cash: 100, mb: 0 } });
+    expect(summaryDrift(seal.summary, s2).join(" ")).toMatch(/despesas do turno/);
+  });
+  it("selo determinístico", () => {
+    const summary = daySummary({ windowPayments: [], shiftExpenses: 0, feesCents: 0, shifts: [], confirmed: null });
+    const a = buildSeal({ day: "d", city: "lisbon", summary, states: { x: "1|111|c|1" }, parkIds: ["b", "a"], justificationIds: [2, 1], fileIds: [], chainHead: "h", status: "fechado" });
+    const b = buildSeal({ day: "d", city: "lisbon", summary, states: { x: "1|111|c|1" }, parkIds: ["a", "b"], justificationIds: [1, 2], fileIds: [], chainHead: "h", status: "fechado" });
+    expect(a.hash).toBe(b.hash);
+  });
+});
+
+describe("cadeia e integridade", () => {
+  const ev = (i: number, prev: string, action = "justificar", data: unknown = { justificationId: i }): StoredEvent => {
+    const e: ChainEvent = { day: "2026-10-12", city: "lisbon", at: `2026-10-13 09:00:0${i}.000`, userId: 5326, action, findingKey: "b1:price_down", data };
     return { ...e, id: i, prevHash: prev, hash: eventHash(prev, e) };
   };
   it("a cadeia confere e deteta adulteração", () => {
@@ -233,82 +316,88 @@ describe("cadeia de eventos e selo", () => {
     expect(verifyChain([a, { ...b, data: { n: 99 } }, c]).brokenAt).toBe(2);
     expect(verifyChain([a, c]).brokenAt).toBe(3);
   });
+  it("justificação, decisão ou ficheiro sem evento e selo trocado são apanhados (achado 15)", () => {
+    const a = ev(1, GENESIS_HASH);
+    expect(verifyIntegrity({ events: [a], seal: { json: null, hash: null }, justificationIds: [1], decisionIds: [], fileIds: [], removedFileIds: [] }).ok).toBe(true);
+    expect(verifyIntegrity({ events: [a], seal: { json: null, hash: null }, justificationIds: [1, 2], decisionIds: [], fileIds: [], removedFileIds: [] }).problems.join(" ")).toMatch(/Justificações sem registo/);
+    expect(verifyIntegrity({ events: [a], seal: { json: null, hash: null }, justificationIds: [1], decisionIds: [5], fileIds: [], removedFileIds: [] }).ok).toBe(false);
+    const json = '{"x":1}';
+    const hash = createHash("sha256").update(json).digest("hex");
+    const s = ev(2, a.hash, "selar", { sealHash: hash });
+    expect(verifyIntegrity({ events: [a, s], seal: { json, hash }, justificationIds: [1], decisionIds: [], fileIds: [], removedFileIds: [] }).ok).toBe(true);
+    expect(verifyIntegrity({ events: [a, s], seal: { json: '{"x":2}', hash }, justificationIds: [1], decisionIds: [], fileIds: [], removedFileIds: [] }).ok).toBe(false);
+  });
   it("JSON canónico independente da ordem das chaves", () => {
     expect(canonicalJson({ b: 1, a: { d: 2, c: [1, { z: 1, y: 2 }] } })).toBe(canonicalJson({ a: { c: [1, { y: 2, z: 1 }], d: 2 }, b: 1 }));
-  });
-  it("selo determinístico", () => {
-    const summary = daySummary({ windowPayments: [], shiftExpenses: 0, shifts: [], confirmed: null });
-    const a = buildSeal({ day: "d", city: "lisbon", summary, states: { x: "1|111" }, justificationIds: [2, 1], fileIds: [], chainHead: "h", status: "fechado" });
-    const b = buildSeal({ day: "d", city: "lisbon", summary, states: { x: "1|111" }, justificationIds: [1, 2], fileIds: [], chainHead: "h", status: "fechado" });
-    expect(a.hash).toBe(b.hash);
-  });
-  it("deriva: dinheiro mudado, reservas que entram/saem e validação que volta a 'não'; passar a 'sim' não conta", () => {
-    expect(sealDrift({ a: "h1|111" }, { a: "h1|111" })).toEqual({ changed: [], added: [], removed: [] });
-    expect(sealDrift({ a: "h1|011" }, { a: "h1|111" }).changed).toEqual([]);
-    expect(sealDrift({ a: "h1|111" }, { a: "h1|110" }).changed).toEqual(["a"]);
-    expect(sealDrift({ a: "h1|111" }, { a: "h2|111" }).changed).toEqual(["a"]);
-    expect(sealDrift({ a: "h1|111" }, { b: "h1|111" })).toEqual({ changed: [], added: ["b"], removed: ["a"] });
-  });
-  it("estado da reserva: ids recriados não mudam; dinheiro mudado muda", () => {
-    const s1 = canonicalJson(bookingMoneyState(bk()));
-    const s2 = canonicalJson(bookingMoneyState(bk({ payments: [{ id: "novo", pricingId: "x", amount: 50, method: "Numerário", recordedAt: "2026-10-12T11:00:00.000Z" }] })));
-    expect(s1).toBe(s2);
-    expect(canonicalJson(bookingMoneyState(bk({ payments: [{ id: "z1", pricingId: "l1", amount: 50, method: "Online, Card", recordedAt: null }] })))).not.toBe(s1);
-    expect(validationFlags(bk())).toBe("111");
   });
 });
 
 describe("leitura da Multipark", () => {
-  it("SQL: universo do dia, canceladas pelo check-in real (nunca pelo checkIn), LIMIT + 1", () => {
+  it("SQL: saídas, por concluir, canceladas pela data do cancelamento (nunca pelo checkIn), pagamentos; LIMIT + 1", () => {
     const { sql, params } = buildConfirmDaySql({ parkIds: ["p1", "p2"], start: "2026-10-12 02:00:00", end: "2026-10-13 02:00:00" });
     expect(sql).toMatch(/'CHECKED_OUT'/);
-    expect(sql).toMatch(/"checkInDriverId" IS NOT NULL OR b."checkingInAt" IS NOT NULL/);
+    expect(sql).toMatch(/'CHECKING_OUT', 'PENDING_CHECKOUT'/);
+    expect(sql).toMatch(/JOIN "Cancellation" cn ON cn."bookingId" = b."id"/);
+    expect(sql).toMatch(/cn."createdAt" >= /);
+    expect(sql).not.toMatch(/b\."updatedAt" >= /);
     expect(sql).not.toMatch(/b\."checkIn" IS NOT NULL/);
     expect(params).toContain(CONFIRM_BOOKINGS_MAX + 1);
     expect(params).toContain(CONFIRM_PAYMENTS_MAX + 1);
     expect(() => buildConfirmDaySql({ parkIds: [], start: "a", end: "b" })).toThrow();
   });
-  it("mapeia e assinala listas cortadas", () => {
-    const r = mapConfirmRow({ rk: 1, booking: { id: "b1", parkId: "p1", status: "CHECKED_OUT", bookingPrice: 50, cashierClosed: true, cashierClosedById: "a1", pro: false },
+  it("mapeia o tipo e assinala listas cortadas", () => {
+    const r = mapConfirmRow({ rk: 2, booking: { id: "b1", parkId: "p1", status: "CHECKING_OUT", bookingPrice: 50, cashierClosed: true, cashierClosedById: "a1", pro: false },
       lines: [], payments: Array.from({ length: CONFIRM_PAYMENTS_MAX + 1 }, (_, i) => ({ id: `z${i}`, amount: 1, method: "Numerário" })),
       links: [{ pi: "pi_1", amount: 5000, received: 5000 }], billing_pi: [{ pi: "pi_1", amount: 50 }, { pi: "pi_2", amount: 10 }], credit: 2.5, fees: null });
-    expect(r.kind).toBe("checkout");
+    expect(r.kind).toBe("checkout_pending");
+    expect(mapConfirmRow({ rk: 4, booking: { id: "x", parkId: "p" } }).kind).toBe("payment_only");
     expect(r.truncated).toBe(true);
     expect(r.live.payments.length).toBe(CONFIRM_PAYMENTS_MAX);
     expect(r.live.intents).toEqual([{ id: "pi_1", expected: 50 }, { id: "pi_2", expected: 10 }]);
     expect(r.live.cashierClosed).toEqual({ done: true, at: null, by: null, byId: "a1" });
-    expect(r.live.credit).toBe(2.5);
   });
 });
 
-describe("só acréscimo", () => {
-  const APPEND_ONLY = ["cash_confirm_events", "cash_confirm_justifications", "cash_confirm_decisions", "cash_confirm_files", "cash_confirm_file_removals"];
+describe("só acréscimo e regras do repositório", () => {
+  const APPEND_ONLY = ["cash_confirm_events", "cash_confirm_justifications", "cash_confirm_decisions", "cash_confirm_files", "cash_confirm_file_removals", "cash_confirm_stripe_checks"];
   const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => {
     const p = join(dir, f);
     if (statSync(p).isDirectory()) return f === "node_modules" ? [] : walk(p);
-    return /\.ts$/.test(f) && !/\.test\.ts$/.test(f) ? [p] : [];
+    return /\.(ts|tsx)$/.test(f) && !/\.test\.ts$/.test(f) ? [p] : [];
   });
-  it("nenhum UPDATE/DELETE/TRUNCATE/REPLACE nas tabelas da confirmação", () => {
+  it("nenhum UPDATE/DELETE/TRUNCATE/REPLACE/DROP nas tabelas só acréscimo (server, shared, client, scripts)", () => {
     const bad: string[] = [];
-    for (const f of walk(join(__dirname))) {
-      const src = readFileSync(f, "utf8");
-      for (const t of APPEND_ONLY) {
-        const re = new RegExp(`(UPDATE\\s+\`?${t}\\b|DELETE\\s+FROM\\s+\`?${t}\\b|TRUNCATE\\s+(TABLE\\s+)?\`?${t}\\b|REPLACE\\s+INTO\\s+\`?${t}\\b|DROP\\s+TABLE\\s+(IF\\s+EXISTS\\s+)?\`?${t}\\b)`, "i");
-        if (re.test(src)) bad.push(`${f}: ${t}`);
+    for (const dir of ["server", "shared", "client/src", "scripts"].map((d) => join(__dirname, "..", d))) {
+      for (const f of walk(dir)) {
+        const src = readFileSync(f, "utf8");
+        for (const t of APPEND_ONLY) {
+          const re = new RegExp(`(UPDATE\\s+\`?${t}\\b|DELETE\\s+FROM\\s+\`?${t}\\b|TRUNCATE\\s+(TABLE\\s+)?\`?${t}\\b|REPLACE\\s+INTO\\s+\`?${t}\\b|DROP\\s+TABLE\\s+(IF\\s+EXISTS\\s+)?\`?${t}\\b)`, "i");
+          if (re.test(src)) bad.push(`${f}: ${t}`);
+        }
       }
     }
     expect(bad).toEqual([]);
   });
-  it("migração 0635 registada no fim (depois da 0630), sem apagar nada", () => {
-    expect(SCHEMA_MIGRATION_IDS[SCHEMA_MIGRATION_IDS.length - 1]).toBe("0635");
+  it("migração 0635 registada depois da 0630, sem apagar nada; horas em DATETIME(3)", () => {
     expect(SCHEMA_MIGRATION_IDS.indexOf("0635")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0630"));
-    expect(MIGRATION_0635_STATEMENTS.join("\n")).not.toMatch(/\bDELETE\b|\bDROP\b|TRUNCATE/i);
-    for (const s of MIGRATION_0635_STATEMENTS) expect(s).not.toMatch(/^\s*UPDATE\b/i);
-  });
-  it("a migração cria as tabelas e os campos da passagem de turno", () => {
     const all = MIGRATION_0635_STATEMENTS.join("\n");
+    expect(all).not.toMatch(/\bDELETE\b|\bDROP\b|TRUNCATE/i);
+    for (const s of MIGRATION_0635_STATEMENTS) expect(s).not.toMatch(/^\s*UPDATE\b/i);
+    expect(all).not.toMatch(/`\w+` TIMESTAMP/);
     for (const t of [...APPEND_ONLY, "cash_confirm_days"]) expect(all).toMatch(new RegExp(`CREATE TABLE IF NOT EXISTS \`${t}\``));
     for (const c of ["cashierCashReceived", "cashierMbReceived", "cashierMultiparkTotal"]) expect(all).toMatch(new RegExp(`ADD COLUMN \`${c}\``));
     expect(all).toMatch(/UNIQUE KEY `uq_cash_confirm_files_sha`/);
+  });
+  it("notificações da confirmação só pelo notify()", () => {
+    const src = readFileSync(join(__dirname, "cashConfirm.ts"), "utf8");
+    expect(src).not.toMatch(/app_notifications/);
+    expect(src).toMatch(/kind: "cash_confirm_alert"/);
+    expect(src).toMatch(/kind: "cash_confirm_alert_email"/);
+    expect(src).toMatch(/kind: "cash_confirm_refused"/);
+  });
+  it("as ações da confirmação não estão abertas ao MCP e o link dos ficheiros também não", () => {
+    const src = readFileSync(join(__dirname, "mcpProceduresApi.ts"), "utf8");
+    expect(src).not.toMatch(/"cashCheck\.confirm(Justify|Upload|Close|Decide|Reopen|Values|RemoveFile)"/);
+    expect(src).toMatch(/\^cashCheck\\\.confirmFileUrl\$/);
   });
 });

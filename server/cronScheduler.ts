@@ -75,6 +75,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "partner-close": async () => (await import("./cronJobs")).partnerCloseCron(),
   "ops-presence": async () => (await import("./cronJobs")).opsPresenceCron(),
   "cash-close": async (o) => (await import("./cronJobs")).cashCloseCron(o),
+  "cash-confirm-recheck": async (o) => (await import("./cronJobs")).cashConfirmRecheckCron(o),
   "cash-external": async (o) => (await import("./cronJobs")).cashExternalCron(o),
   "zello-sameday": async (o) => (await import("./cronJobs")).zelloSameDayCron(o),
   "extras-pressure": async (o) => (await import("./cronJobs")).extrasPressureCron(o),

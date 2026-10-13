@@ -32,7 +32,7 @@ export const MAX_RESULT_BYTES = 4_000_000;
  * Leituras que nunca saem por aqui, mesmo sendo queries: as chaves de API
  * (gerir chaves por uma chave não faz sentido) e tudo o que trate de tokens.
  */
-const DENY: RegExp[] = [/^apiKeys\./, /token/i];
+const DENY: RegExp[] = [/^apiKeys\./, /token/i, /^cashCheck\.confirmFileUrl$/];
 
 export type ProcedureType = "query" | "mutation" | "subscription";
 

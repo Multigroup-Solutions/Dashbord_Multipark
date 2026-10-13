@@ -37,6 +37,15 @@ const STATUS_CLS: Record<DayStatus, string> = {
   a_aprovar: "border-amber-400 text-amber-800 bg-amber-50", aprovado: "border-emerald-500 text-emerald-800 bg-emerald-50",
 };
 const euros = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
+/** Horas guardadas em UTC → hora de Lisboa ("13/10 09:15"). */
+const lisbon = (v: string | null | undefined) => {
+  if (!v) return "—";
+  const iso = v.includes("T") ? (/[zZ]$/.test(v) ? v : `${v}Z`) : `${v.replace(" ", "T")}Z`;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleString("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+};
+/** O mesmo limite do servidor (3,3 MB já reduzido; o pedido não passa dos ~4,5 MB da Vercel). */
+const FILE_MAX_BYTES = 3_300_000;
 const parseEuro = (s: string): number | null => {
   const t = s.trim().replace(/\s/g, "").replace(",", ".");
   if (!t) return null;
@@ -46,6 +55,7 @@ const parseEuro = (s: string): number | null => {
 
 async function fileToBase64(file: File): Promise<{ base64: string; mimeType: string }> {
   const f = file.type.startsWith("image/") ? await compressImage(file) : file;
+  if (f.size > FILE_MAX_BYTES) throw new Error(`O ficheiro tem ${(f.size / 1_000_000).toFixed(1)} MB: o máximo é 3,3 MB (comprime o PDF ou tira outra foto).`);
   const buf = await f.arrayBuffer();
   let bin = "";
   const bytes = new Uint8Array(buf);
@@ -99,6 +109,7 @@ export default function CashConfirmPanel() {
 
 function DayView({ day, city, canEdit, canManage }: { day: string; city: City; canEdit: boolean; canManage: boolean }) {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
   const q = trpc.cashCheck.confirmDay.useQuery({ day, city }, { retry: false });
   const [showAll, setShowAll] = useState(false);
   const [justify, setJustify] = useState<{ key: string; code: FindingCode; color: string; bookingId: string; detail: string } | null>(null);
@@ -119,8 +130,10 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
   const visible = showAll ? d.views : d.views.filter((v) => v.color !== "green");
   const justByKey = new Map(d.justifications.map((j) => [j.findingKey, j]));
   const filesByBooking = new Map<string, typeof d.files>();
-  for (const f of d.files) { const k = f.bookingId ?? ""; filesByBooking.set(k, [...(filesByBooking.get(k) ?? []), f]); }
+  for (const f of d.files) { if (f.removed) continue; const k = f.bookingId ?? ""; filesByBooking.set(k, [...(filesByBooking.get(k) ?? []), f]); }
   const pending = d.justifications.filter((j) => j.decision == null);
+  const mine = user?.id != null && d.authors.includes(Number(user.id));
+  const canDecide = canManage && !open && !mine;
 
   return (
     <div className="space-y-4">
@@ -129,27 +142,29 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
           <CardTitle className="flex flex-wrap items-center gap-2 text-base">
             Caixa de {day} <span className="text-xs font-normal text-muted-foreground">({d.window})</span>
             <Badge variant="outline" className={STATUS_CLS[d.status as DayStatus]}>{DAY_STATUS_LABEL[d.status as DayStatus]}</Badge>
-            {d.chain.ok ? <span className="flex items-center gap-1 text-xs font-normal text-emerald-700"><ShieldCheck className="h-3.5 w-3.5" />Registo íntegro ({d.chain.events})</span>
-              : <span className="flex items-center gap-1 text-xs font-normal text-red-700"><CircleAlert className="h-3.5 w-3.5" />Registo adulterado — avisa o Jorge</span>}
+            {d.integrity.ok ? <span className="flex items-center gap-1 text-xs font-normal text-emerald-700"><ShieldCheck className="h-3.5 w-3.5" />Registo íntegro ({d.integrity.events})</span>
+              : <span className="flex items-center gap-1 text-xs font-normal text-red-700" title={d.integrity.problems.join(" ")}><CircleAlert className="h-3.5 w-3.5" />Registo adulterado — {d.integrity.problems[0]}</span>}
           </CardTitle>
-          {d.state.closedByName && <p className="text-xs text-muted-foreground">Fechado por {d.state.closedByName} · {d.state.closedAt?.slice(0, 16)}{d.state.approvedByName ? ` · aprovado por ${d.state.approvedByName} · ${d.state.approvedAt?.slice(0, 16)}` : ""}</p>}
+          {d.state.closedByName && <p className="text-xs text-muted-foreground">Fechado por {d.state.closedByName} · {lisbon(d.state.closedAt)}{d.state.approvedByName ? ` · aprovado por ${d.state.approvedByName} · ${lisbon(d.state.approvedAt)}` : ""}</p>}
           {d.state.reopenReason && <p className="text-xs text-red-700">Reaberto: {d.state.reopenReason}</p>}
         </CardHeader>
         <CardContent className="space-y-3">
-          {!d.stripe.available && <Notice>A Stripe não está a ser verificada: {d.stripe.reason} Os pagamentos online ficam a vermelho.</Notice>}
-          {d.stripe.available && d.stripe.reason && <Notice>{d.stripe.reason}</Notice>}
+          {!d.stripe.available && <Notice>A Stripe não está a ser verificada: {d.stripe.reason} O dia não fecha com pagamentos online por verificar.</Notice>}
+          {d.stripe.available && d.stripe.reason && <Notice>{d.stripe.reason} <button className="underline" onClick={() => q.refetch()}>Atualizar</button></Notice>}
           {d.truncated && <Notice>Há mais reservas/pagamentos do que os lidos: o dia não fecha com dados cortados.</Notice>}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            <Cell label="Dinheiro registado" value={eur(s.computedCashCents)} />
+            <Cell label="Dinheiro registado" value={eur(s.computedCashCents)} hint={s.feesCents ? `+ taxas extra ${eur(s.feesCents)}` : undefined} />
             <Cell label="Despesas do turno" value={`− ${eur(s.shiftExpensesCents)}`} />
             <Cell label="Tem de haver em dinheiro" value={eur(s.expectedCashCents)} strong />
             <Cell label="Multibanco registado" value={eur(s.expectedMbCents)} strong />
-            <Cell label="Team leader declarou" value={s.declaredCashCents == null && s.declaredMbCents == null ? "—" : `${eur(s.declaredCashCents)} + MB ${eur(s.declaredMbCents)}`} hint={s.declaredMultiparkTotalCents != null ? `Multipark dava ${eur(s.declaredMultiparkTotalCents)}${s.multiparkTotalGapCents ? ` (≠ ${eur(s.multiparkTotalGapCents)})` : ""}` : undefined} />
-            <Cell label="Diferença do dia" value={s.differenceCents == null ? "—" : eur(s.differenceCents)} cls={s.differenceCents == null ? "" : s.alert !== "none" ? "text-red-700" : s.differenceCents === 0 ? "text-emerald-700" : "text-amber-700"} hint={s.alert === "email" ? "> 70 €: o Jorge recebe email" : s.alert === "amber" ? "> 30 €: fica a amarelo para o Jorge" : undefined} />
+            <Cell label="Team leader declarou" value={s.declaredCashCents == null ? "—" : `${eur(s.declaredCashCents)} + MB ${eur(s.declaredMbCents)}`} hint={s.declaredMultiparkTotalCents != null ? `Multipark dava ${eur(s.declaredMultiparkTotalCents)}${s.multiparkTotalGapCents ? ` (≠ ${eur(s.multiparkTotalGapCents)})` : ""}` : undefined} />
+            <Cell label="Diferença do dia" value={s.absDifferenceCents == null ? "conta primeiro" : `dinheiro ${eur(s.cashDiffCents)} · MB ${eur(s.mbDiffCents)}`}
+              cls={s.absDifferenceCents == null ? "" : s.alert !== "none" ? "text-red-700" : s.absDifferenceCents === 0 ? "text-emerald-700" : "text-amber-700"}
+              hint={s.alert === "email" ? "> 70 €: o Jorge recebe email" : s.alert === "amber" ? "> 30 €: fica a amarelo para o Jorge" : s.declaredVsCountedCashCents ? `team leader vs envelope: ${eur(s.declaredVsCountedCashCents)}` : undefined} />
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             {d.shifts.map((sh) => <span key={sh.shift} className="rounded border px-2 py-0.5">{sh.shift === "morning" ? "Manhã" : "Noite"}: dinheiro {sh.cash == null ? "—" : eur(euros(sh.cash))} · MB {sh.mb == null ? "—" : eur(euros(sh.mb))} · Multipark {sh.multiparkTotal == null ? "—" : eur(euros(sh.multiparkTotal))}{sh.byName ? ` · ${sh.byName}` : ""}</span>)}
-            {s.missingShifts.map((m) => <span key={m} className="rounded border border-red-300 px-2 py-0.5 text-red-700">{m === "morning" ? "Manhã" : "Noite"}: o team leader ainda não declarou na Passagem de turno</span>)}
+            {s.missingShifts.map((m) => <span key={m} className="rounded border border-red-300 px-2 py-0.5 text-red-700">{m === "morning" ? "Manhã" : "Noite"}: falta declarar o dinheiro e o Multibanco na Passagem de turno</span>)}
           </div>
           {canEdit && open && <ConfirmValues day={day} city={city} state={d.state} onSaved={refresh} />}
           <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -169,7 +184,7 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
                 <Lock className="mr-1 h-4 w-4" />Fechar o dia
               </Button>
             )}
-            {canManage && !open && d.status !== "aprovado" && (
+            {canDecide && d.status !== "aprovado" && (
               <Button size="sm" variant="outline" className="border-emerald-500 text-emerald-700" disabled={decide.isPending} onClick={() => {
                 const note = window.prompt(`Aprovar o dia${pending.length ? ` e as ${pending.length} justificação(ões) por decidir` : ""}? Nota (opcional):`, "");
                 if (note !== null) decide.mutate({ day, city, justificationId: null, decision: "aprovado", note: note || null });
@@ -190,8 +205,8 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
         <Card key={v.id} className={`p-3 ${COLOR_CLS[v.color]}`}>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm font-semibold">{v.code ?? v.id} <span className="font-normal text-muted-foreground">· {v.parkName ?? "?"}{v.driver ? ` · ${v.driver}` : ""}{v.checkOut ? ` · saída ${v.checkOut.slice(0, 16).replace("T", " ")}` : ""}</span></p>
-              <p className="text-xs text-muted-foreground">{v.inDay === "payment_only" ? `Sem saída hoje (${v.status ?? "?"}) — pagamento registado no dia` : v.inDay === "cancelled" ? "Cancelada depois do check-in" : v.status}</p>
+              <p className="text-sm font-semibold">{v.code ?? v.id} <span className="font-normal text-muted-foreground">· {v.parkName ?? "?"}{v.driver ? ` · ${v.driver}` : ""}{v.checkOut ? ` · saída ${lisbon(v.checkOut)}` : ""}</span></p>
+              <p className="text-xs text-muted-foreground">{v.inDay === "payment_only" ? `Sem saída neste dia (${v.status ?? "?"}) — só conta o dinheiro de balcão recebido no dia` : v.inDay === "cancelled" ? "Cancelada depois do check-in" : v.inDay === "checkout_pending" ? "Saída por concluir na Multipark" : v.status}</p>
             </div>
             <div className="flex gap-1 text-[11px]">
               <Val label="Conferida" v={v.validations.cashValidated} />
@@ -207,7 +222,7 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
             <Mini label="Pago" value={eur(v.paidCents)} strong />
             <Mini label="Crédito / taxa" value={`${eur(v.creditCents)} / ${eur(v.feesCents)}`} />
             <div className="col-span-2 sm:col-span-4 lg:col-span-1 flex flex-wrap gap-1">
-              {(Object.entries(v.paidByKind) as Array<[PayKind, number]>).filter(([, c]) => c !== 0).map(([k, c]) => <span key={k} className="rounded border px-1.5 py-0.5">{PAY_KIND_LABEL[k]} {eur(c)}</span>)}
+              {(Object.entries(v.paidByKind) as Array<[PayKind, number]>).filter(([, c]) => c !== 0).map(([k, c]) => <span key={k} className="rounded border px-1.5 py-0.5">{PAY_KIND_LABEL[k]} {eur(c)}{v.dayPaidByKind[k] != null && v.dayPaidByKind[k] !== c ? ` (no dia ${eur(v.dayPaidByKind[k])})` : ""}</span>)}
             </div>
           </div>
           {v.findings.length > 0 && (
@@ -217,20 +232,21 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
                 return (
                   <li key={f.key} className="rounded border bg-muted/30 p-2 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className={`inline-block h-2 w-2 rounded-full ${DOT[f.color as keyof typeof DOT]}`} />
+                      <span className={`inline-block h-2 w-2 rounded-full ${DOT[f.resolved as keyof typeof DOT]}`} />
                       <b>{FINDING_LABEL[f.code as FindingCode]}</b>
                       {f.amountCents > 0 && <span className="tabular-nums">{eur(f.amountCents)}</span>}
                       <span className="text-muted-foreground">{f.detail}</span>
                     </div>
-                    {j && (
+                    {j && f.stale && <p className="mt-1 text-[11px] text-red-700">A justificação anterior já não vale (o valor mudou ou o comprovativo foi retirado): justifica outra vez.</p>}
+                    {j && !f.stale && (
                       <p className="mt-1 text-[11px]">
                         <span className={j.decision === "aprovado" ? "text-emerald-700" : j.decision === "recusado" ? "text-red-700" : "text-amber-800"}>
                           {j.decision === "aprovado" ? "Aprovado" : j.decision === "recusado" ? "Recusado" : "Justificado — à espera do Jorge"}
                         </span>
-                        {" · "}{JUSTIFY_REASON_LABEL[j.reason as keyof typeof JUSTIFY_REASON_LABEL] ?? j.reason} · {j.explanation} · {j.byName ?? "?"} {j.at.slice(0, 16)}
+                        {" · "}{JUSTIFY_REASON_LABEL[j.reason as keyof typeof JUSTIFY_REASON_LABEL] ?? j.reason} · {j.explanation} · {j.byName ?? "?"} {lisbon(j.at)}
                         {j.fileIds.length ? ` · ${j.fileIds.length} comprovativo(s)` : ""}
                         {j.decisionNote ? ` · nota do Jorge: ${j.decisionNote}` : ""}
-                        {canManage && !open && j.decision == null && (
+                        {canDecide && j.decision == null && (
                           <>
                             {" "}<button className="underline text-emerald-700" onClick={() => decide.mutate({ day, city, justificationId: j.id, decision: "aprovado", note: null })}>aprovar</button>
                             {" "}<button className="underline text-red-700" onClick={() => { const n = window.prompt("Porque recusas? (pelo menos 10 carateres) — o dia reabre"); if (n) decide.mutate({ day, city, justificationId: j.id, decision: "recusado", note: n }); }}>recusar</button>
@@ -238,10 +254,12 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
                         )}
                       </p>
                     )}
-                    {canEdit && open && f.color !== "green" && (!j || j.decision === "recusado") && (
+                    {canEdit && open && f.color !== "green" && (
                       <div className="mt-1 flex flex-wrap gap-2">
                         {f.code === "mb_no_receipt" && <Button size="sm" variant="outline" className="h-7" onClick={() => setUpload({ bookingId: v.id, kind: "talao_mb", amount: f.amountCents / 100 })}><Paperclip className="mr-1 h-3.5 w-3.5" />Anexar talão</Button>}
-                        <Button size="sm" variant={f.color === "red" ? "destructive" : "outline"} className="h-7" onClick={() => setJustify({ key: f.key, code: f.code as FindingCode, color: f.color, bookingId: v.id, detail: f.detail })}>Justificar</Button>
+                        <Button size="sm" variant={f.resolved === "red" ? "destructive" : "outline"} className="h-7" onClick={() => setJustify({ key: f.key, code: f.code as FindingCode, color: f.color, bookingId: v.id, detail: f.detail })}>
+                          {j && !f.stale && j.decision == null ? "Corrigir justificação" : "Justificar"}
+                        </Button>
                       </div>
                     )}
                   </li>
@@ -257,7 +275,7 @@ function DayView({ day, city, canEdit, canManage }: { day: string; city: City; c
       <History events={d.events} />
 
       {justify && (
-        <JustifyDialog day={day} city={city} target={justify} files={[...(filesByBooking.get(justify.bookingId) ?? []), ...(filesByBooking.get("") ?? [])].filter((f) => f.kind === "comprovativo")}
+        <JustifyDialog day={day} city={city} target={justify} files={(filesByBooking.get(justify.bookingId) ?? []).filter((f) => f.kind === "comprovativo")}
           onUpload={() => setUpload({ bookingId: justify.bookingId, kind: "comprovativo" })} onClose={() => setJustify(null)} onDone={() => { setJustify(null); refresh(); }} />
       )}
       {upload && <UploadDialog day={day} city={city} target={upload} onClose={() => setUpload(null)} onDone={() => { setUpload(null); refresh(); }} />}
@@ -310,7 +328,7 @@ function JustifyDialog({ day, city, target, files, onUpload, onClose, onDone }: 
           {files.length === 0 ? <p className="text-xs text-muted-foreground">Ainda não há comprovativos nesta reserva.</p> : (
             <ul className="space-y-1 text-xs">
               {files.map((f) => (
-                <li key={f.id}><label className="flex items-center gap-2"><input type="checkbox" checked={picked.includes(f.id)} onChange={(e) => setPicked((p) => e.target.checked ? [...p, f.id] : p.filter((x) => x !== f.id))} />#{f.id} · {f.mime} · {f.byName ?? "?"} {f.uploadedAt.slice(0, 16)}</label></li>
+                <li key={f.id}><label className="flex items-center gap-2"><input type="checkbox" checked={picked.includes(f.id)} onChange={(e) => setPicked((p) => e.target.checked ? [...p, f.id] : p.filter((x) => x !== f.id))} />#{f.id} · {f.mime} · {f.byName ?? "?"} {lisbon(f.uploadedAt)}</label></li>
               ))}
             </ul>
           )}
@@ -402,7 +420,7 @@ function History({ events }: { events: Array<{ id: number; at: string; action: s
       <button className="text-sm font-medium" onClick={() => setOpen((v) => !v)}>{open ? "Esconder" : "Ver"} o registo do dia ({events.length})</button>
       {open && (
         <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
-          {events.map((e) => <li key={e.id}>{e.at} · {e.byName ?? "Sistema"} · {ACTION_LABEL[e.action] ?? e.action}{e.findingKey ? ` · ${e.findingKey}` : ""}</li>)}
+          {events.map((e) => <li key={e.id}>{lisbon(e.at)} · {e.byName ?? "Sistema"} · {ACTION_LABEL[e.action] ?? e.action}{e.findingKey ? ` · ${e.findingKey}` : ""}</li>)}
         </ul>
       )}
     </Card>
@@ -422,18 +440,18 @@ function MonthView({ onOpen }: { onOpen: (day: string, city: City) => void }) {
         <p className="text-xs text-muted-foreground">Os dias a amarelo esperam pela tua aprovação (diferença &gt; 30 € ou justificações).</p>
       </div>
       {q.isLoading ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /> : q.error ? <p className="text-sm text-destructive">{q.error.message}</p> : rows.length === 0 ? (
-        <Card className="p-6 text-center text-sm text-muted-foreground">Nenhum dia confirmado neste mês.</Card>
+        <Card className="p-6 text-center text-sm text-muted-foreground">Sem dias neste mês.</Card>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="p-1.5">Dia</th><th className="p-1.5">Cidade</th><th className="p-1.5">Estado</th><th className="p-1.5 text-right">Diferença</th><th className="p-1.5 text-right">Por aprovar</th><th className="p-1.5">Fechado por</th><th className="p-1.5" /></tr></thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={`${r.day}-${r.city}`} className={`border-b ${r.status === "a_aprovar" || r.status === "reaberto" ? "bg-amber-50" : ""}`}>
+                <tr key={`${r.day}-${r.city}`} className={`border-b ${r.status === "a_aprovar" || r.status === "reaberto" ? "bg-amber-50" : !r.opened ? "text-muted-foreground" : ""}`}>
                   <td className="p-1.5 tabular-nums">{r.day}</td>
                   <td className="p-1.5">{CITIES.find((c) => c.id === r.city)?.label ?? r.city}</td>
-                  <td className="p-1.5"><Badge variant="outline" className={STATUS_CLS[r.status]}>{DAY_STATUS_LABEL[r.status]}</Badge></td>
-                  <td className={`p-1.5 text-right tabular-nums ${r.alert && r.alert !== "none" ? "text-red-700 font-semibold" : ""}`}>{eur(r.differenceCents)}</td>
+                  <td className="p-1.5"><Badge variant="outline" className={STATUS_CLS[r.status]}>{r.opened ? DAY_STATUS_LABEL[r.status] : "Por fechar (nunca aberto)"}</Badge></td>
+                  <td className={`p-1.5 text-right tabular-nums ${r.alert && r.alert !== "none" ? "text-red-700 font-semibold" : ""}`}>{r.cashDiffCents == null && r.mbDiffCents == null ? "—" : `${eur(r.cashDiffCents)} · MB ${eur(r.mbDiffCents)}`}</td>
                   <td className="p-1.5 text-right">{r.pending || ""}</td>
                   <td className="p-1.5 text-xs">{r.closedByName ?? "—"}{r.approvedByName ? ` · aprovado ${r.approvedByName}` : ""}</td>
                   <td className="p-1.5"><Button size="sm" variant="ghost" onClick={() => onOpen(r.day, r.city)}>Abrir</Button></td>
@@ -466,7 +484,7 @@ function Mini({ label, value, strong }: { label: string; value: string; strong?:
 }
 function Val({ label, v }: { label: string; v: { done: boolean; at: string | null; by: string | null } }) {
   return (
-    <span title={v.done ? `${v.by ?? "?"}${v.at ? ` · ${v.at.slice(0, 16).replace("T", " ")} UTC` : ""}` : "por fazer na Multipark"} className={`rounded border px-1.5 py-0.5 ${v.done ? "border-emerald-300 text-emerald-700" : "border-slate-300 text-slate-500"}`}>
+    <span title={v.done ? `${v.by ?? "?"}${v.at ? ` · ${lisbon(v.at)}` : ""}` : "por fazer na Multipark"} className={`rounded border px-1.5 py-0.5 ${v.done ? "border-emerald-300 text-emerald-700" : "border-slate-300 text-slate-500"}`}>
       {v.done ? "✓" : "○"} {label}
     </span>
   );

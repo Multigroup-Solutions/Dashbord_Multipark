@@ -90,6 +90,7 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Parceiros: diferenças no fecho do mês | `partner_close_alert` | Parcerias (view) | nacional | Admin, Super Admin | sim (ligado) | não |  |
 | Caixa: resumo diário | `cash_daily_digest` | Caixa (por dia e correção) (view) | por cidade | Super Admin | sim (desligado) | não |  |
 | Caixa: diferença no dia (> 30 €) | `cash_confirm_alert` | Caixa (por dia e correção) (manage) | por cidade | Super Admin | — | não |  |
+| Caixa: justificação recusada | `cash_confirm_refused` | Caixa (por dia e correção) (view) | a pessoa | Pessoal | — | não |  |
 | Caixa: diferença grande no dia (> 70 €) | `cash_confirm_alert_email` | Caixa (por dia e correção) (manage) | por cidade | Super Admin | sim (ligado) | não |  |
 
 ### Marketing

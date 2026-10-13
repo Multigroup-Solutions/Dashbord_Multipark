@@ -1016,6 +1016,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "partner-close", label: "Parceiros: comparar o fecho do mês", intervalMinutes: 1440, workflow: "tick" },
   { name: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", intervalMinutes: 180, workflow: "tick" },
   { name: "ops-presence", label: "Operacional: a trabalhar sem PDA ou Zello ligado", intervalMinutes: 5, workflow: "tick" },
+  { name: "cash-confirm-recheck", label: "Caixa: reler os dias confirmados (reabre se a Multipark mudou)", intervalMinutes: 60, workflow: "tick" },
   { name: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", intervalMinutes: 1440, workflow: "tick" },
   { name: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", intervalMinutes: 1440, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
