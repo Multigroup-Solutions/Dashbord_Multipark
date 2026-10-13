@@ -45,8 +45,14 @@ export async function syncPdaZelloName(pdaId: number): Promise<"ok" | "skip" | "
     if (!isZelloConfigured()) return "skip";
     const d = await database();
     if (!d) return "skip";
-    const pda = rowsOf(await d.execute(sql`SELECT id, name, zelloUsername FROM pdas WHERE id = ${pdaId} LIMIT 1`))[0];
+    const pda = rowsOf(await d.execute(sql`SELECT id, name, zelloUsername, status FROM pdas WHERE id = ${pdaId} LIMIT 1`))[0];
     if (!pda?.zelloUsername) return "skip";
+    // Um PDA que passou a telemóvel pessoal (13 out 2026): o Zello é agora o do dono — nunca volta a ter nome de PDA
+    // (p. ex. a saída do ponto logo a seguir à conversão acertava os PDAs largados nos últimos 10 min).
+    if (String(pda.status ?? "") === "inactive") {
+      const converted = rowsOf(await d.execute(sql`SELECT 1 AS x FROM personal_devices WHERE convertedFromPdaId = ${pdaId} AND status = 'active' LIMIT 1`).catch(() => [[]]))[0];
+      if (converted) return "skip";
+    }
     const holder = rowsOf(await d.execute(sql`SELECT e.fullName FROM pda_checkins c JOIN employees e ON e.id = c.employeeId
       WHERE c.pdaId = ${pdaId} AND c.checkin_status = 'checked_in' ORDER BY c.checkinAt DESC LIMIT 1`))[0];
     await setZelloUserFullName(String(pda.zelloUsername), zelloDisplayName(String(pda.name), holder?.fullName ?? null));
