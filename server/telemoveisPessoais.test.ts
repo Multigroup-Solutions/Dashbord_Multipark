@@ -20,6 +20,9 @@ const m = vi.hoisted(() => {
     attaches: [] as any[],
     zelloUsers: [] as { name: string }[],
     raceOnRelease: false,
+    failOnRelease: false,
+    hiddenPdaIds: [] as number[],
+    zelloNames: [] as any[],
   };
   const dev = (id: number) => state.devices.find((d) => d.id === id);
   const copy = (d: any) => (d ? { ...d } : null);
@@ -62,13 +65,15 @@ const m = vi.hoisted(() => {
       return true;
     },
     async listActive() { return state.devices.filter((d) => d.status === "active").map(copy); },
-    async convertedPdaIds() { return state.devices.map((d) => d.convertedFromPdaId).filter((x) => x != null); },
+    // Como o SQL: só os PDAs que ficaram mesmo Inativos.
+    async convertedPdaIds() { return state.devices.map((d) => d.convertedFromPdaId).filter((x) => x != null && state.pdas.find((p) => p.id === x)?.status === "inactive"); },
     async activePdaByToken(token: string) { const p = state.pdas.find((x) => x.deviceToken === token && x.status === "active"); return p ? { id: p.id, name: p.name } : null; },
     async pda(id: number) {
       const p = state.pdas.find((x) => x.id === id);
       return p ? { id: p.id, name: p.name, status: p.status, deviceToken: p.deviceToken ?? null, projectId: p.projectId ?? null, zelloUsername: p.zelloUsername ?? null } : null;
     },
     async releasePdaToken(pdaId: number, token: string) {
+      if (state.failOnRelease) throw new Error("Lost connection to MySQL server during query");
       const p = state.pdas.find((x) => x.id === pdaId);
       if (state.raceOnRelease && p) p.deviceToken = "registado-noutro-aparelho-entretanto";
       if (!p || p.deviceToken !== token) return false;
@@ -114,7 +119,7 @@ vi.mock("./db", async (original) => ({
   logActivity: async (e: any) => { m.state.logs.push(e); },
   getEmployeeByUserId: async (userId: number) => m.ficha(m.state.fichas.find((f) => f.userId === userId)) ?? undefined,
   getEmployeeById: async (id: number) => m.ficha(m.state.fichas.find((f) => f.id === id)) ?? undefined,
-  listPdas: async () => m.state.pdas.map((p) => ({ ...p })),
+  listPdas: async () => m.state.pdas.filter((p) => !m.state.hiddenPdaIds.includes(p.id)).map((p) => ({ ...p })),
   attachPdaByDeviceToken: async (token: string, employeeId: number) => { m.state.attaches.push({ token, employeeId }); return null; },
   verifyPdaQrCode: async (pdaId: number, code: string) => { const p = m.state.pdas.find((x) => x.id === pdaId && x.qrCode === code && x.status === "active"); return p ? { name: p.name } : null; },
   setPdaDeviceToken: async (pdaId: number) => { const p = m.state.pdas.find((x) => x.id === pdaId); if (!p) return null; p.deviceToken = `qr${pdaId}`.padEnd(32, "z"); return p.deviceToken; },
@@ -123,7 +128,11 @@ vi.mock("./pdaSession", async (original) => ({
   ...(await original<object>()),
   endPdaSessionOnRetire: async (pdaId: number) => { m.state.ended.push(pdaId); const p = m.state.pdas.find((x) => x.id === pdaId); if (p) p.sessionNonce = null; return true; },
 }));
-vi.mock("./pdaZelloName", () => ({ syncPdaZelloName: async () => "skip", syncPdaZelloNameByToken: async () => undefined, syncPdaZelloNamesForEmployee: async () => undefined }));
+vi.mock("./pdaZelloName", () => ({
+  syncPdaZelloName: async (pdaId: number) => { m.state.zelloNames.push({ pda: pdaId }); return "skip"; },
+  syncPersonalZelloName: async (zello: string, name: string) => { m.state.zelloNames.push({ zello, name }); return "skip"; },
+  syncPdaZelloNameByToken: async () => undefined, syncPdaZelloNamesForEmployee: async () => undefined,
+}));
 vi.mock("./zello", async (original) => ({ ...(await original<object>()), getZelloUsers: async () => m.state.zelloUsers }));
 
 import { appRouter } from "./routers";
@@ -144,7 +153,7 @@ const ROLE_OF: Record<number, string> = { 21: "team_leader", 22: "supervisor", 2
 const as = (userId: number) => appRouter.createCaller({ user: { id: userId, role: ROLE_OF[userId], name: m.state.users.get(userId) ?? null }, req: { headers: { "user-agent": ANDROID } }, res: {} } as any);
 
 beforeEach(() => {
-  Object.assign(m.state, { nextId: 1, devices: [], pdas: [], checkins: [], fichas: [], users: new Map(), logs: [], ended: [], attaches: [], zelloUsers: [], raceOnRelease: false });
+  Object.assign(m.state, { nextId: 1, devices: [], pdas: [], checkins: [], fichas: [], users: new Map(), logs: [], ended: [], attaches: [], zelloUsers: [], raceOnRelease: false, failOnRelease: false, hiddenPdaIds: [], zelloNames: [] });
   // Jorge (TL), Márcia (supervisora), Marco (admin, sem Zello na ficha), Joaquim (extra)
   m.state.users = new Map([[21, "Jorge"], [22, "Márcia"], [23, "Marco"], [100, "Joaquim"]]);
   m.state.fichas.push({ id: 11, fullName: "Jorge Manuel Tabuada", userId: 21, zello: "Jorge", position: "team_leader" });
@@ -351,22 +360,39 @@ describe("converter um PDA que afinal é o telemóvel de alguém", () => {
   it("o Zello que estava no PDA passa para a ficha do dono só se a ficha não tiver nenhum e mais ninguém o tiver", async () => {
     m.state.pdas.push({ id: 10, name: "Telemóvel Marco", deviceToken: "k".repeat(32), status: "active", projectId: 49, zelloUsername: "marco", registered: true });
     const r = await as(21).operational.personalDevices.convertFromPda({ pdaId: 10, employeeId: 13 });
-    expect(r.zelloAdopted).toBe("marco");
+    expect(r).toMatchObject({ zelloAdopted: "marco", zelloLeft: null });
     expect(m.state.fichas.find((f) => f.id === 13)?.zello).toBe("marco");
-    // A Márcia já tem Zello: o "Jorge" do PDA não lhe tira nem troca nada
+    // A conta Zello deixa de ter nome de PDA: fica com o nome do dono (nunca "Telemóvel Marco")
+    expect(m.state.zelloNames).toEqual([{ zello: "marco", name: "Marco Antunes" }]);
+    // A Márcia já tem Zello: o "Jorge" do PDA não lhe tira nem troca nada, e a resposta diz qual ficou
     m.state.pdas.push({ id: 11, name: "Telemóvel Márcia", deviceToken: "n".repeat(32), status: "active", projectId: 49, zelloUsername: "Jorge", registered: true });
-    expect((await as(21).operational.personalDevices.convertFromPda({ pdaId: 11, employeeId: 12 })).zelloAdopted).toBeNull();
+    expect(await as(21).operational.personalDevices.convertFromPda({ pdaId: 11, employeeId: 12 })).toMatchObject({ zelloAdopted: null, zelloLeft: "Jorge" });
     expect(m.state.fichas.find((f) => f.id === 12)?.zello).toBe("Marcia");
     expect(m.state.fichas.find((f) => f.id === 11)?.zello).toBe("Jorge");
+    // …e não se mexe no nome do Zello "Jorge" (é de outra ficha)
+    expect(m.state.zelloNames).toHaveLength(1);
+    expect(m.state.logs.some((l) => l.action === "convert_device" && /Zello Jorge do PDA não passou para a ficha/.test(l.details))).toBe(true);
+  });
+  it("o PDA cujo Zello já é o da ficha do dono: fica com o nome do dono no Zello, sem aviso", async () => {
+    m.state.pdas.push({ id: 10, name: "Telemóvel Márcia", deviceToken: "k".repeat(32), status: "active", projectId: 49, zelloUsername: "marcia", registered: true });
+    const r = await as(21).operational.personalDevices.convertFromPda({ pdaId: 10, employeeId: 12 });
+    expect(r).toMatchObject({ zelloAdopted: null, zelloLeft: null });
+    expect(m.state.zelloNames).toEqual([{ zello: "marcia", name: "Márcia Costa" }]);
+    // O check-in fechado não volta a pôr o nome do PDA no Zello
+    expect(m.state.zelloNames.some((z) => "pda" in z)).toBe(false);
   });
   it("sem dono escolhido: quem o registar no Perfil fica dono; até lá o nome é o de quem lá está", async () => {
     await as(21).operational.personalDevices.convertFromPda({ pdaId: 9, employeeId: null });
-    await as(22).operational.personalDevices.seen({ pdaToken: JORGE_PHONE_AS_PDA });
+    const seen = await as(22).operational.personalDevices.seen({ pdaToken: JORGE_PHONE_AS_PDA });
+    // O ecrã do telemóvel sabe que não tem dono (mostra "Registar este telemóvel como meu")
+    expect(seen).toMatchObject({ kind: "pessoal", device: { hasOwner: false, mine: false } });
     let [d] = await listed();
-    expect(d).toMatchObject({ title: "Telemóvel de Márcia Costa", ownerName: null, zelloUsername: "Marcia" });
+    expect(d).toMatchObject({ title: "Telemóvel de Márcia Costa", ownerName: null, hasOwner: false, zelloUsername: "Marcia" });
     await as(21).operational.personalDevices.register({ currentToken: JORGE_PHONE_AS_PDA });
     [d] = await listed();
-    expect(d).toMatchObject({ ownerName: "Jorge Manuel Tabuada", zelloUsername: "Jorge", title: "Telemóvel de Jorge Tabuada" });
+    expect(d).toMatchObject({ ownerName: "Jorge Manuel Tabuada", hasOwner: true, zelloUsername: "Jorge", title: "Telemóvel de Jorge Tabuada" });
+    // Já com dono: a Márcia não o toma
+    await expect(as(22).operational.personalDevices.register({ currentToken: JORGE_PHONE_AS_PDA })).rejects.toMatchObject({ code: "CONFLICT" });
   });
   it("um PDA sem aparelho registado não se converte; um já convertido também não", async () => {
     m.state.pdas.push({ id: 12, name: "PDA 20", deviceToken: null, status: "active", projectId: 49, registered: false });
@@ -382,6 +408,25 @@ describe("converter um PDA que afinal é o telemóvel de alguém", () => {
     expect(m.state.devices).toHaveLength(1);
     expect(m.state.devices[0].status).toBe("inactive");
     expect(m.state.ended).toEqual([]);
+    // O PDA não aparece como "passou a telemóvel pessoal" (e o botão "Pessoal?" continua)
+    expect((await as(21).operational.personalDevices.list()).convertedPdaIds).toEqual([]);
+  });
+  it("a BD falha a meio da conversão: o telemóvel novo fica inativo e o PDA fica como estava (nunca os dois ao mesmo tempo)", async () => {
+    m.state.failOnRelease = true;
+    await expect(as(21).operational.personalDevices.convertFromPda({ pdaId: 9, employeeId: 11 })).rejects.toThrow();
+    expect(m.state.pdas.find((p) => p.id === 9)).toMatchObject({ status: "active", deviceToken: JORGE_PHONE_AS_PDA, sessionNonce: "nonce-jorge" });
+    expect(m.state.devices.map((d) => d.status)).toEqual(["inactive"]);
+    expect(await as(21).operational.personalDevices.seen({ pdaToken: JORGE_PHONE_AS_PDA })).toEqual({ kind: "none" });
+  });
+  it("só PDAs das cidades de quem converte; um PDA já inativo (retirado com o aparelho registado) converte-se na mesma", async () => {
+    m.state.hiddenPdaIds = [9];
+    await expect(as(21).operational.personalDevices.convertFromPda({ pdaId: 9, employeeId: 11 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(m.state.devices).toHaveLength(0);
+    m.state.hiddenPdaIds = [];
+    m.state.pdas.find((p) => p.id === 9).status = "inactive";
+    const r = await as(21).operational.personalDevices.convertFromPda({ pdaId: 9, employeeId: 11 });
+    expect(r.device).toMatchObject({ convertedFromPdaId: 9, hasOwner: true });
+    expect(m.state.pdas.find((p) => p.id === 9)).toMatchObject({ status: "inactive", deviceToken: null });
   });
 });
 
@@ -408,6 +453,9 @@ describe("migração 0650", () => {
     expect(MIGRATION_0650_STATEMENTS).toHaveLength(1);
     expect(MIGRATION_0650_STATEMENTS[0]).toMatch(/^CREATE TABLE IF NOT EXISTS `personal_devices`/);
     expect(MIGRATION_0650_STATEMENTS[0]).toContain("UNIQUE KEY `uq_personal_devices_token` (`deviceToken`)");
+    // O token distingue maiúsculas (base64url)
+    expect(MIGRATION_0650_STATEMENTS[0]).toContain("`deviceToken` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL");
+    expect(MIGRATION_0650_STATEMENTS[0]).not.toMatch(/FOREIGN KEY|REFERENCES/i);
     expect(MIGRATION_0650_STATEMENTS.join(" ")).not.toMatch(/\b(DROP|DELETE|TRUNCATE)\b/i);
     expect(IDEMPOTENT_ERROR_CODES_0650.has("ER_TABLE_EXISTS_ERROR")).toBe(true);
     expect(SCHEMA_MIGRATION_IDS.indexOf("0650")).toBe(SCHEMA_MIGRATION_IDS.indexOf("0645") + 1);

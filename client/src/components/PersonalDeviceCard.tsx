@@ -37,10 +37,14 @@ export function PersonalDeviceCard({ className = "", alwaysOffer = false }: { cl
     if (token && user?.id) info.mutate({ token });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, user?.id]);
+  const device = token && info.data?.kind === "pessoal" ? info.data.device : null;
   const register = trpc.operational.personalDevices.register.useMutation({
     onSuccess: (r) => {
+      const same = r.token === token;
       setPersonalToken(r.token);
-      toast.success(r.already ? "Este telemóvel já era teu." : `Registado como ${r.device?.title ?? "telemóvel pessoal"}.`);
+      // O mesmo token (ficou dono de um telemóvel sem dono): volta a ler para mostrar o dono.
+      if (same) info.mutate({ token: r.token });
+      toast.success(r.already ? (same && device && !device.hasOwner ? "Este telemóvel passou a ser teu." : "Este telemóvel já era teu.") : `Registado como ${r.device?.title ?? "telemóvel pessoal"}.`);
     },
     onError: (e) => toast.error(e.message, { duration: 10000 }),
   });
@@ -50,7 +54,6 @@ export function PersonalDeviceCard({ className = "", alwaysOffer = false }: { cl
   });
 
   if (!user || pdaToken) return null;
-  const device = token && info.data?.kind === "pessoal" ? info.data.device : null;
   const phone = typeof navigator !== "undefined" && looksLikePhone(navigator.userAgent);
   if (!token && !phone && !alwaysOffer) return null;
 
@@ -88,7 +91,16 @@ export function PersonalDeviceCard({ className = "", alwaysOffer = false }: { cl
       </div>
       {token && device ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11px] text-muted-foreground flex-1 min-w-[12rem]">{PERSONAL_DEVICE_HELP}</p>
+          <p className="text-[11px] text-muted-foreground flex-1 min-w-[12rem]">
+            {PERSONAL_DEVICE_HELP}
+            {!device.hasOwner && " Ainda não tem dono (era um PDA): se é teu, regista-o como teu."}
+          </p>
+          {!device.hasOwner && (
+            <Button size="sm" disabled={register.isPending}
+              onClick={() => register.mutate({ pdaToken: getPdaToken(), currentToken: token })}>
+              {register.isPending ? "A registar…" : "Registar este telemóvel como meu"}
+            </Button>
+          )}
           {(device.mine || canManage) && (
             <Button size="sm" variant="outline" disabled={unregister.isPending}
               onClick={() => { if (confirm("Este telemóvel deixa de ser pessoal? Fica no histórico; podes voltar a registá-lo.")) unregister.mutate({ token }); }}>

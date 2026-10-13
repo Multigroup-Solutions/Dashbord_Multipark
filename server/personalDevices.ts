@@ -27,6 +27,7 @@ import {
   CONVERT_NOT_REGISTERED_MSG, CONVERT_RACE_MSG, isDeviceToken, personalDeviceTitle, personalDeviceZello, personalIsPdaMsg,
   personalOtherOwnerMsg, shortPersonName,
 } from "../shared/personalDevice";
+import { zelloKey } from "../shared/zelloKey";
 import { personalDeviceStore, type PersonalDeviceRow } from "./personalDeviceStore";
 
 /** Token novo do telemóvel pessoal (32 caracteres base64url). */
@@ -42,6 +43,8 @@ export interface PersonalDeviceView {
   label: string | null;
   ownerName: string | null;
   ownerEmployeeId: number | null;
+  /** Tem dono (conta ou ficha). Sem dono (convertido sem escolher a pessoa): quem o registar no Perfil fica dono. */
+  hasOwner: boolean;
   /** Quem tem sessão nele agora (null = ninguém). */
   currentName: string | null;
   currentEmployeeId: number | null;
@@ -95,6 +98,7 @@ export async function personalDeviceViews(rows: readonly PersonalDeviceRow[], vi
       label: r.label,
       ownerName,
       ownerEmployeeId: r.ownerEmployeeId,
+      hasOwner: r.ownerUserId != null || r.ownerEmployeeId != null,
       currentName,
       currentEmployeeId: r.currentEmployeeId,
       currentSince: r.currentSince,
@@ -221,10 +225,12 @@ export async function listPersonalDevices(viewer: Actor): Promise<{ devices: Per
  * precisa de fazer nada: na próxima entrada passa sozinho), o PDA fica Inativo
  * com nota, a sessão de PDA que lá estivesse acaba e os check-ins abertos
  * fecham. Se o PDA tinha um Zello e a ficha do dono não tem nenhum (e mais
- * ninguém o tem), esse Zello passa para a ficha. Quem chama já validou a
- * permissão (editar PDAs, TL ou acima) e a cidade do PDA.
+ * ninguém o tem), esse Zello passa para a ficha; se a ficha já tem outro,
+ * não se mexe e a resposta diz qual ficou (`zelloLeft`) para a chefia
+ * confirmar. O nome no Zello nunca volta a ser o do PDA. Quem chama já
+ * validou a permissão (editar PDAs, TL ou acima) e a cidade do PDA.
  */
-export async function convertPdaToPersonal(actor: Actor, input: { pdaId: number; owner: { userId: number | null; employeeId: number | null; name: string | null } | null }, now = Date.now()): Promise<{ id: number; pdaName: string; closedCheckins: number; zelloAdopted: string | null; device: PersonalDeviceView | null }> {
+export async function convertPdaToPersonal(actor: Actor, input: { pdaId: number; owner: { userId: number | null; employeeId: number | null; name: string | null } | null }, now = Date.now()): Promise<{ id: number; pdaName: string; closedCheckins: number; zelloAdopted: string | null; zelloLeft: string | null; device: PersonalDeviceView | null }> {
   const store = personalDeviceStore();
   const pda = await store.pda(input.pdaId);
   if (!pda) throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado." });
@@ -236,7 +242,15 @@ export async function convertPdaToPersonal(actor: Actor, input: { pdaId: number;
   });
   if (!id) throw new TRPCError({ code: "CONFLICT", message: "Este aparelho já é um telemóvel pessoal." });
   // O PDA larga o token só se ainda for este (outro registo pelo QR entretanto → não se mexe).
-  if (!(await store.releasePdaToken(pda.id, pda.deviceToken))) {
+  // Se a BD falhar aqui, o telemóvel novo fica inativo: nunca um aparelho PDA e pessoal ao mesmo tempo.
+  let released: boolean;
+  try {
+    released = await store.releasePdaToken(pda.id, pda.deviceToken);
+  } catch (err) {
+    await store.deactivate(id, actor.id, now).catch(() => false);
+    throw err;
+  }
+  if (!released) {
     await store.deactivate(id, actor.id, now);
     throw new TRPCError({ code: "CONFLICT", message: CONVERT_RACE_MSG });
   }
@@ -247,18 +261,28 @@ export async function convertPdaToPersonal(actor: Actor, input: { pdaId: number;
   // A sessão de PDA que lá estivesse acaba (avisos do PDA desligados); os check-ins abertos fecham.
   const { endPdaSessionOnRetire } = await import("./pdaSession");
   await endPdaSessionOnRetire(pda.id, actor.id, now);
+  // (Sem o "nome do PDA no Zello": a conta Zello deste aparelho deixa de ser de um PDA — ver em baixo.)
   const closedCheckins = await store.closePdaCheckins(pda.id, now, "fechado: o aparelho passou a telemóvel pessoal");
-  if (closedCheckins) {
-    const { syncPdaZelloName } = await import("./pdaZelloName");
-    void syncPdaZelloName(pda.id);
-  }
   let zelloAdopted: string | null = null;
-  if (pda.zelloUsername && owner?.employeeId != null && (await store.adoptZello(owner.employeeId, pda.zelloUsername).catch(() => false))) {
-    zelloAdopted = pda.zelloUsername;
+  let zelloLeft: string | null = null;
+  if (pda.zelloUsername && owner?.employeeId != null) {
+    if (await store.adoptZello(owner.employeeId, pda.zelloUsername).catch(() => false)) zelloAdopted = pda.zelloUsername;
+    const people = await store.people([owner.employeeId], []).catch(() => null);
+    const ownerZello = people?.employees.get(owner.employeeId)?.zello ?? null;
+    if (zelloKey(ownerZello) && zelloKey(ownerZello) === zelloKey(pda.zelloUsername)) {
+      // O Zello do aparelho é o da ficha do dono: com "Zello: nome de quem tem o PDA" ligado, deixa de ter nome de PDA.
+      if (owner.name) {
+        const { syncPersonalZelloName } = await import("./pdaZelloName");
+        void syncPersonalZelloName(pda.zelloUsername, owner.name);
+      }
+    } else {
+      // A ficha já tem outro Zello (ou este é de outra ficha): não se mexe em nada — a chefia confirma.
+      zelloLeft = pda.zelloUsername;
+    }
   }
-  const details = `${pda.name} (PDA #${pda.id}) passou a telemóvel pessoal #${id}${who ? ` de ${who}` : ""}; o PDA ficou Inativo${closedCheckins ? `, ${closedCheckins} check-in(s) fechado(s)` : ""}${zelloAdopted ? `; o Zello ${zelloAdopted} passou para a ficha` : ""}`;
+  const details = `${pda.name} (PDA #${pda.id}) passou a telemóvel pessoal #${id}${who ? ` de ${who}` : ""}; o PDA ficou Inativo${closedCheckins ? `, ${closedCheckins} check-in(s) fechado(s)` : ""}${zelloAdopted ? `; o Zello ${zelloAdopted} passou para a ficha` : ""}${zelloLeft ? `; o Zello ${zelloLeft} do PDA não passou para a ficha (a ficha tem outro, ou outra ficha tem este)` : ""}`;
   await log(actor.id, "convert_device", "pda", pda.id, details);
   await log(actor.id, "convert_device", "personal_device", id, details);
   const emp = await employeeOf(actor.id);
-  return { id, pdaName: pda.name, closedCheckins, zelloAdopted, device: await viewOf(id, { userId: actor.id, employeeId: emp?.id ?? null }) };
+  return { id, pdaName: pda.name, closedCheckins, zelloAdopted, zelloLeft, device: await viewOf(id, { userId: actor.id, employeeId: emp?.id ?? null }) };
 }

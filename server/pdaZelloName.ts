@@ -57,6 +57,29 @@ export async function syncPdaZelloName(pdaId: number): Promise<"ok" | "skip" | "
   }
 }
 
+/**
+ * Telemóveis pessoais (13 out 2026): um PDA que afinal era o telemóvel de
+ * alguém passa a telemóvel pessoal (Operacional → PDAs → "Pessoal?") e o
+ * Zello dele é o da ficha do dono. A conta Zello deixa de ter nome de PDA
+ * ("Telemóvel Jorge · Jorge Tabuada") e fica com o nome do dono. Mesmo
+ * interruptor (ZELLO_PDA_NAMES): desligado, nada muda. Nunca lança.
+ */
+export async function syncPersonalZelloName(zelloUsername: string, ownerFullName: string): Promise<"ok" | "skip" | "error"> {
+  try {
+    const user = String(zelloUsername ?? "").trim();
+    const name = shortName(String(ownerFullName ?? "")).slice(0, ZELLO_FULL_NAME_MAX);
+    if (!user || !name) return "skip";
+    if (!(await enabled())) return "skip";
+    const { isZelloConfigured, setZelloUserFullName } = await import("./zello");
+    if (!isZelloConfigured()) return "skip";
+    await setZelloUserFullName(user, name);
+    return "ok";
+  } catch (err) {
+    console.warn("[pda] nome no Zello do telemóvel pessoal falhou:", (err as Error)?.message);
+    return "error";
+  }
+}
+
 export async function syncPdaZelloNameByToken(deviceToken: string): Promise<void> {
   const d = await database();
   const r = d ? rowsOf(await d.execute(sql`SELECT id FROM pdas WHERE deviceToken = ${deviceToken} LIMIT 1`).catch(() => [[]]))[0] : null;

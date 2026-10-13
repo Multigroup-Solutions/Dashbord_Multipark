@@ -18,6 +18,27 @@ import { currentPushSubscription, notificationPermission, toInput } from "@/lib/
 
 const SEEN_KEY = "mp.device.seenFor";
 
+/**
+ * Um PDA convertido em telemóvel pessoal (o servidor respondeu `migrated`):
+ * o token passa para a chave do telemóvel pessoal e os avisos deste browser
+ * (presos ao PDA, desligados no fim da sessão do PDA) passam a avisos normais
+ * desta pessoa, se o browser já os tinha autorizado. Usado aqui e no cartão
+ * "Este aparelho" (Operacional → PDAs) — quem chegar primeiro.
+ */
+export function usePersonalMigration(): (pdaToken: string, title?: string | null) => void {
+  const pushSubscribe = trpc.notifications.pushSubscribe.useMutation();
+  return (pdaToken, title) => {
+    movePdaTokenToPersonal(pdaToken);
+    if (notificationPermission() === "granted") {
+      void currentPushSubscription().then((sub) => {
+        const input = sub ? toInput(sub) : null;
+        if (input) pushSubscribe.mutate(input, { onError: (e) => console.warn("[push] avisos do telemóvel pessoal:", e) });
+      });
+    }
+    toast.info(`Este aparelho passou a ${title ?? "telemóvel pessoal"}: já não é um PDA partilhado.`, { duration: 10000 });
+  };
+}
+
 function seenFor(key: string): boolean {
   try { return sessionStorage.getItem(SEEN_KEY) === key; } catch { return false; }
 }
@@ -27,7 +48,7 @@ function markSeen(key: string): void {
 
 export function PersonalDeviceBinder({ userId }: { userId: number | null | undefined }) {
   const seen = trpc.operational.personalDevices.seen.useMutation();
-  const pushSubscribe = trpc.notifications.pushSubscribe.useMutation();
+  const migrate = usePersonalMigration();
 
   useEffect(() => {
     if (!userId) return;
@@ -46,16 +67,7 @@ export function PersonalDeviceBinder({ userId }: { userId: number | null | undef
             if (personal) setPersonalToken(null);
             return;
           }
-          if (r.migrated && pda) {
-            movePdaTokenToPersonal(pda);
-            if (notificationPermission() === "granted") {
-              void currentPushSubscription().then((sub) => {
-                const input = sub ? toInput(sub) : null;
-                if (input) pushSubscribe.mutate(input, { onError: (e) => console.warn("[push] avisos do telemóvel pessoal:", e) });
-              });
-            }
-            toast.info(`Este aparelho passou a ${r.device?.title ?? "telemóvel pessoal"}: já não é um PDA partilhado.`, { duration: 10000 });
-          }
+          if (r.migrated && pda) migrate(pda, r.device?.title);
         },
         onError: (e) => console.warn("[aparelho] telemóvel pessoal:", e),
       },

@@ -21,7 +21,8 @@ import { LoginCodesCard } from "@/components/login/LoginCodesCard";
 import { TerminalLiveCard } from "@/components/terminal/TerminalLiveCard";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
 import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
-import { DEVICE_CHANGED_EVENT, getPersonalToken, movePdaTokenToPersonal } from "@/lib/pdaDevice";
+import { usePersonalMigration } from "@/components/PersonalDeviceBinder";
+import { DEVICE_CHANGED_EVENT, getPersonalToken } from "@/lib/pdaDevice";
 import { PERSONAL_DEVICE_HELP } from "@shared/personalDevice";
 import RadioPage from "@/pages/RadioPage";
 import { UniDateNav } from "@/components/DateRangeNav";
@@ -38,7 +39,7 @@ import {
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { can, seesBeyondOwn, type ModuleId } from "@shared/access";
+import { ROLE_RANK, can, seesBeyondOwn, type ModuleId } from "@shared/access";
 // 12 out 2026 (Jorge): Resumo do dia (veio da Passagem de turno), Semana e Avaliação do mês.
 import DaySummaryTab, { DepartedComplaintsCard } from "@/components/shiftDay/DaySummaryTab";
 import WeekActivityTab from "@/components/operacoes/WeekActivityTab";
@@ -900,9 +901,11 @@ function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister:
   }, []);
   // Plano 56 (A2): mutação (o token vai no corpo do pedido, nunca no endereço — senão ficava nos registos).
   const info = trpc.operational.pdas.deviceInfo.useMutation();
-  // O PDA deixou de reconhecer este token: pode ter sido convertido em telemóvel pessoal por uma chefia.
+  // O PDA deixou de reconhecer este token: pode ter sido convertido em telemóvel pessoal por uma chefia
+  // (o token muda de chave e os avisos passam a ser da pessoa, como no PersonalDeviceBinder).
+  const migrate = usePersonalMigration();
   const personalSeen = trpc.operational.personalDevices.seen.useMutation({
-    onSuccess: (r, vars) => { if (r.kind === "pessoal" && r.migrated && vars.pdaToken) movePdaTokenToPersonal(vars.pdaToken); },
+    onSuccess: (r, vars) => { if (r.kind === "pessoal" && r.migrated && vars.pdaToken) migrate(vars.pdaToken, r.device?.title); },
   });
   useEffect(() => {
     if (token) info.mutate({ token }, { onSuccess: (d) => { if (!d) personalSeen.mutate({ pdaToken: token }); } });
@@ -961,6 +964,9 @@ function PdasTab() {
   // As mesmas permissões do servidor: criar/editar/QR = editar PDAs; eliminar = gerir.
   const canManage = useCan("pdas", "edit");
   const canDelete = useCan("pdas", "manage");
+  // "Pessoal?" (PDA → telemóvel pessoal): quem edita PDAs, do team leader para cima (como o servidor).
+  const { user: me } = useAuth();
+  const canConvert = canManage && (ROLE_RANK[(me as any)?.role as keyof typeof ROLE_RANK] ?? 0) >= ROLE_RANK.team_leader;
   const [showCreate, setShowCreate] = useState(false);
   const [editPda, setEditPda] = useState<any | null>(null);
   const [viewPda, setViewPda] = useState<number | null>(null);
@@ -1131,7 +1137,7 @@ function PdasTab() {
                         <QrCode className="w-3 h-3" />
                       </Button>
                     )}
-                    {canManage && pda.registered && !convertedPdaIds.has(pda.id) && (
+                    {canConvert && pda.registered && !convertedPdaIds.has(pda.id) && (
                       <Button size="sm" variant="outline" title="É um telemóvel pessoal (de uma pessoa, não um PDA partilhado)" aria-label={`O ${pda.name} é um telemóvel pessoal`}
                         onClick={() => setConvertPda({ id: pda.id, name: pda.name, holderId: checkin?.employeeId ?? null })}>
                         <UserRound className="w-3 h-3 mr-1" />Pessoal?
@@ -1241,8 +1247,9 @@ function ConvertPdaDialog({ pda, onClose }: { pda: { id: number; name: string; h
     for (const c of (histQ.data as any[]) ?? []) if (c.employeeId && c.employeeName && !seen.has(Number(c.employeeId))) seen.set(Number(c.employeeId), String(c.employeeName));
     return [...seen].map(([id, name]) => ({ value: String(id), label: name }));
   }, [histQ.data]);
-  const [owner, setOwner] = useState<string>(pda.holderId ? String(pda.holderId) : "");
-  useEffect(() => { if (!owner && people.length) setOwner(people[0].value); }, [people, owner]);
+  // Por omissão quem o tem agora (senão quem mais recentemente o teve); "none" = ninguém, escolhido de propósito.
+  const [picked, setPicked] = useState<string | null>(pda.holderId ? String(pda.holderId) : null);
+  const owner = picked ?? people[0]?.value ?? "none";
   const convert = trpc.operational.personalDevices.convertFromPda.useMutation({
     onSuccess: (r) => {
       utils.operational.pdas.list.invalidate();
@@ -1250,6 +1257,9 @@ function ConvertPdaDialog({ pda, onClose }: { pda: { id: number; name: string; h
       utils.operational.personalDevices.list.invalidate();
       utils.operational.pdas.zelloCheck.invalidate();
       toast.success(`O ${r.pdaName} passou a ${r.device?.title ?? "telemóvel pessoal"}.${r.zelloAdopted ? ` O Zello ${r.zelloAdopted} passou para a ficha.` : ""}`, { duration: 10000 });
+      if (r.zelloLeft) {
+        toast.warning(`O Zello ${r.zelloLeft} do PDA não passou para a ficha (a ficha já tem outro, ou outra ficha tem este). Confirma na ficha qual é o Zello deste telemóvel.`, { duration: 15000 });
+      }
       onClose();
     },
     onError: (e) => toast.error(e.message, { duration: 10000 }),
@@ -1267,7 +1277,7 @@ function ConvertPdaDialog({ pda, onClose }: { pda: { id: number; name: string; h
           <div>
             <Label>De quem é o telemóvel?</Label>
             {histQ.isLoading ? <p className="text-xs text-muted-foreground">A carregar quem o teve…</p> : (
-              <Select value={owner || "none"} onValueChange={(v) => setOwner(v === "none" ? "" : v)}>
+              <Select value={owner} onValueChange={setPicked}>
                 <SelectTrigger><SelectValue placeholder="Escolher a pessoa" /></SelectTrigger>
                 <SelectContent>
                   {people.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
@@ -1280,7 +1290,7 @@ function ConvertPdaDialog({ pda, onClose }: { pda: { id: number; name: string; h
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={convert.isPending || histQ.isLoading} onClick={() => convert.mutate({ pdaId: pda.id, employeeId: owner ? Number(owner) : null })}>
+          <Button disabled={convert.isPending || histQ.isLoading} onClick={() => convert.mutate({ pdaId: pda.id, employeeId: owner !== "none" ? Number(owner) : null })}>
             {convert.isPending ? "A converter…" : "Passar a telemóvel pessoal"}
           </Button>
         </DialogFooter>

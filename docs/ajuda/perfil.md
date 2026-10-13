@@ -18,6 +18,7 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 - Num telemóvel pessoal a sessão **não** acaba na saída do ponto e não tira o PDA nem o Zello a ninguém. Se outra pessoa entrar nele, aparece o nome dela; o Zello continua o teu.
 - **Deixar de ser pessoal** (o dono, ou uma chefia): fica no histórico; podes voltar a registá-lo.
 - Se o telemóvel já é de outra pessoa, diz de quem é. Num PDA registado não deixa (uma chefia converte o PDA em Operacional → PDAs → botão **Pessoal?** nesse PDA).
+- Um telemóvel que era PDA e foi convertido sem dono mostra **Registar este telemóvel como meu**: quem carregar fica dono.
 
 **Foto**
 - **Adicionar foto / Trocar a foto**: tira com a câmara ou carrega uma imagem (JPEG, PNG ou WebP; a app reduz-a antes de enviar). É obrigatória para picar o ponto e é a que se compara com a selfie do ponto. Cada troca fica registada.

@@ -73,7 +73,7 @@ export interface PersonalDeviceStore {
   claimOwner(id: number, userId: number, employeeId: number | null): Promise<boolean>;
   /** Os ativos, com o âmbito de cidade do pedido (pela ficha do dono, de quem está ou esteve). */
   listActive(): Promise<PersonalDeviceRow[]>;
-  /** Os convertidos de PDAs (para marcar o PDA na lista). */
+  /** Os PDAs convertidos que ficaram Inativos (para marcar o PDA na lista). */
   convertedPdaIds(): Promise<number[]>;
   /** PDA ATIVO com este token (um PDA não passa a pessoal por aqui). */
   activePdaByToken(token: string): Promise<{ id: number; name: string } | null>;
@@ -181,9 +181,13 @@ export const sqlPersonalDeviceStore: PersonalDeviceStore = {
   async listActive() {
     const d = await database();
     if (!d) return [];
-    const { employeeScope, scopedProjectIds } = await import("./cityScope");
+    const { employeeScope, pdaScope, scopedProjectIds } = await import("./cityScope");
+    // Pela ficha do dono, de quem está ou esteve; um convertido também pela cidade do PDA que era
+    // (senão um convertido sem dono, onde ainda ninguém entrou, só aparecia a quem vê todas as cidades).
     const scope = scopedProjectIds() === undefined ? sql`1 = 1`
-      : sql`(${employeeScope(sql`ownerEmployeeId`)} OR ${employeeScope(sql`currentEmployeeId`)} OR ${employeeScope(sql`lastEmployeeId`)})`;
+      : sql`(${employeeScope(sql`personal_devices.ownerEmployeeId`)} OR ${employeeScope(sql`personal_devices.currentEmployeeId`)}
+          OR ${employeeScope(sql`personal_devices.lastEmployeeId`)}
+          OR (personal_devices.convertedFromPdaId IS NOT NULL AND ${pdaScope(sql`personal_devices.convertedFromPdaId`)}))`;
     return rowsOf(await d.execute(sql`SELECT ${COLS} FROM personal_devices WHERE status = 'active' AND ${scope}
       ORDER BY COALESCE(lastSeenAt, createdAt) DESC, id DESC`)).map(rowFrom);
   },
@@ -197,7 +201,10 @@ export const sqlPersonalDeviceStore: PersonalDeviceStore = {
   async convertedPdaIds() {
     const d = await database();
     if (!d) return [];
-    return rowsOf(await d.execute(sql`SELECT DISTINCT convertedFromPdaId AS id FROM personal_devices WHERE convertedFromPdaId IS NOT NULL`))
+    // Só os PDAs que passaram mesmo (ficaram Inativos): uma conversão desfeita a meio (o PDA mudou de
+    // aparelho entretanto) deixa um telemóvel inativo, mas o PDA continua ativo e com o botão "Pessoal?".
+    return rowsOf(await d.execute(sql`SELECT DISTINCT pd.convertedFromPdaId AS id FROM personal_devices pd
+      JOIN pdas p ON p.id = pd.convertedFromPdaId WHERE p.status = 'inactive'`))
       .map((r) => Number(r.id)).filter((x) => Number.isInteger(x) && x > 0);
   },
   async activePdaByToken(token) {

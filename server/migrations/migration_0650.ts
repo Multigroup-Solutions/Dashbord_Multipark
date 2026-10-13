@@ -15,7 +15,8 @@
 export const MIGRATION_0650_STATEMENTS: string[] = [
   "CREATE TABLE IF NOT EXISTS `personal_devices` (" +
     "`id` INT NOT NULL AUTO_INCREMENT, " +
-    "`deviceToken` VARCHAR(64) NOT NULL, " +
+    // O token distingue maiúsculas (base64url): comparação binária, como o gclid (0610).
+    "`deviceToken` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, " +
     "`label` VARCHAR(255) NULL, " +
     "`status` ENUM('active','inactive') NOT NULL DEFAULT 'active', " +
     "`ownerUserId` INT NULL, " +
