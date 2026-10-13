@@ -289,7 +289,9 @@ export const whatsappCallsRouter = router({
       const err = pushSubscriptionError(input);
       if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
       const ua = typeof ctx.req?.headers?.["user-agent"] === "string" ? ctx.req.headers["user-agent"] : null;
-      await savePushSubscription(ctx.user.id, input, ua);
+      // Plano 56 (A2): numa sessão de PDA a subscrição é do PDA (texto genérico, muda de dono).
+      const { sessionClaimsOf } = await import("./pdaSession");
+      await savePushSubscription(ctx.user.id, input, ua, { pdaId: (await sessionClaimsOf(ctx.req))?.pda ?? null });
       return { ok: true };
     }),
 

@@ -888,10 +888,14 @@ function SpeedHistoryCard({ target, onTarget, people, threshold, own }: {
 // troca sozinha quando entra outro). Pedido do Jorge 2026-08-06.
 function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister: boolean }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("mp.pda.deviceToken"));
-  const { data: deviceInfo, isLoading } = trpc.operational.pdas.deviceInfo.useQuery(
-    { token: token ?? "" },
-    { enabled: !!token }
-  );
+  // Plano 56 (A2): mutação (o token vai no corpo do pedido, nunca no endereço — senão ficava nos registos).
+  const info = trpc.operational.pdas.deviceInfo.useMutation();
+  useEffect(() => {
+    if (token) info.mutate({ token });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+  const deviceInfo = token ? info.data : undefined;
+  const isLoading = !!token && (info.isIdle || info.isPending);
 
   return (
     <Card className={token && deviceInfo ? "border-green-300" : "border-dashed"}>

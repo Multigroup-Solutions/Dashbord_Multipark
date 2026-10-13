@@ -33,6 +33,7 @@ export const KIND_SOURCES: Record<string, string> = {
   driver_daily_report: "Fim da recolha diária do histórico GPS.",
   anomaly_bookings: "Deteção diária de anomalias nas reservas (só críticas).",
   task: "Tarefas: atraso, conclusão, comentários (criador, responsáveis, gestores da hierarquia). Nas automáticas (checklists, serviços, disponibilidade, fichas sem cidade) só os responsáveis, e só com \"Avisos de atraso das tarefas automáticas\" ligado.",
+  pda_device: "Plano 56 A2 (só com ENTRAR_COM_CODIGO ligado): o QR de um PDA foi lido noutro aparelho (operational.pdas.registerByQr) e o PDA mudou de aparelho. Vai aos supervisores da cidade do PDA, menos a quem registou.",
   ops_presence: "Verificação da presença operacional (só com OPS_PRESENCE_ALERTS ligado): ponto aberto sem PDA ou com o Zello desligado, ou movimentos na Multipark sem ponto. D50: obrigatória com o interruptor NOTIFY_CRITICAL_MANDATORY ligado (desligado por omissão).",
   task_assigned: "Tarefas (criar, criar a partir de texto, editar): quem passou agora a responsável de uma tarefa feita por uma pessoa — nunca quem a atribuiu; as automáticas e as do Google não avisam. Interruptor TASK_ASSIGNED_NOTIFY (desligado por omissão).",
   task_overdue_city: "Cron horário (extras-auto): tarefas automáticas que passaram o prazo, um resumo por cidade ao supervisor — só com \"Avisos de atraso das tarefas automáticas\" ligado (desligado por omissão).",

@@ -2,7 +2,7 @@
 modulo: ficha
 titulo: Perfil (foto, notificações, palavra-passe, sessões, contas Google)
 rotas: /perfil
-palavras: palavra-passe, mudar a palavra-passe, criar palavra-passe, esqueci a palavra-passe, ativar avisos, avisos no telemóvel, códigos de entrada, liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha
+palavras: sessão do pda, avisos no pda, tens um aviso, a sessão termina em 10 s, palavra-passe, mudar a palavra-passe, criar palavra-passe, esqueci a palavra-passe, ativar avisos, avisos no telemóvel, códigos de entrada, liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha
 ---
 # Perfil
 
@@ -31,6 +31,7 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 **Avisos no telemóvel** (team leaders e acima, com **Entrar com email e código** ligado)
 - **Ativar avisos**: recebes no telemóvel os códigos de entrada de quem os pede, mesmo com a app fechada. Depois de entrar, o TL e o supervisor veem também um pedido curto para os ativar (uma vez por aparelho).
 - No iPhone, primeiro instala a app no ecrã principal (Partilhar → Adicionar ao ecrã principal).
+- **Num PDA** os avisos são de quem tem a sessão nesse momento: passam para a pessoa seguinte quando ela entra e param quando a sessão acaba (saída do ponto, Sair, outra pessoa entra, 16 h, PDA retirado). No PDA o aviso diz só **"Tens um aviso"** (sem nomes) e abre a app.
 
 **Contas Google** (email, Tarefas, Calendário, Contactos)
 - Se as tuas preferências não se conseguirem ler, os interruptores ficam bloqueados com um aviso — nada é gravado por cima com os valores de omissão. Cada interruptor grava só o que mudaste.
@@ -38,6 +39,7 @@ O **Perfil** (menu de baixo, à direita) tem o teu cartão, atalhos e o que é s
 
 **Terminar sessões noutros aparelhos**
 - **Num PDA** (aparelho registado), ao entrar a Google pede **sempre** para escolher a conta — assim ninguém entra por engano com a conta de quem usou o PDA antes.
+- Com **Entrar com email e código** ligado, a sessão num PDA registado acaba sozinha na **saída do ponto** (feita em qualquer aparelho), no **Sair**, quando **outra pessoa entra** no PDA ou ao fim de **16 h** — ver a ajuda "Entrada". Terminar as outras sessões (ou mudar a palavra-passe) **no próprio PDA** não muda isto; feito **noutro aparelho** (ou com "Repor acesso"), a sessão no PDA também acaba e o PDA deixa de receber os teus avisos.
 - Perdeste o telemóvel ou entraste num PDA partilhado? Carrega em **Terminar sessões noutros aparelhos**: todas as outras sessões fecham (este aparelho continua ligado). **Sair** só fecha este aparelho.
 
 **Sem centro de custos**: consegues na mesma pôr a foto, abrir a tua ficha, marcar a disponibilidade, carregar documentos, ver o PDA e terminar sessões. O aviso diz para pedires ao RH a tua cidade.

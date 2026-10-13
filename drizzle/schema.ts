@@ -1980,6 +1980,12 @@ export const pdas = mysqlTable("pdas", {
 	notes: text(),
 	// Cidade fixa do PDA (migração 0280): nó `level='city'` de `projects`.
 	projectId: int(),
+	// Sessão de PDA (plano 56 A2, migração 0635): quem tem a sessão AGORA e o
+	// nonce que vai no cookie. Limpa-se (nonce NULL) quando outra pessoa entra,
+	// no logout, na saída do ponto e no fecho automático; dura no máximo 16 h.
+	sessionUserId: int(),
+	sessionNonce: varchar({ length: 64 }),
+	sessionStartedAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
@@ -3064,12 +3070,18 @@ export const webPushSubscriptions = mysqlTable("web_push_subscriptions", {
 	userAgent: varchar({ length: 255 }),
 	lastSuccessAt: datetime({ mode: 'string' }),
 	lastFailureAt: datetime({ mode: 'string' }),
+	// Plano 56 A2 (migração 0635): subscrição de um PDA — é de quem tem a
+	// sessão nesse PDA (muda de dono em cada entrada) e fica desligada quando a
+	// sessão acaba (`disabledAt`). No PDA o aviso diz só "Tens um aviso".
+	pdaId: int(),
+	disabledAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	uniqueIndex("uq_web_push_endpoint").on(table.endpointHash),
 	index("idx_web_push_user").on(table.userId),
+	index("idx_web_push_pda").on(table.pdaId),
 ]);
 
 // ─── Leads de extras (2026-09-17) ───────────────────────────────────────────

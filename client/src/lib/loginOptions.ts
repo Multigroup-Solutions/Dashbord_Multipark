@@ -23,10 +23,15 @@ export function rememberCodeLogin(on: boolean): void {
 }
 
 /** O interruptor (e guarda-o para o getLoginUrl). `undefined` enquanto carrega. */
-export function useCodeLoginOption(): { codeLogin: boolean | undefined; resendAfterSec: number } {
+export function useCodeLoginOption(): { codeLogin: boolean | undefined; resendAfterSec: number; googleOnPdas: boolean } {
   const q = trpc.auth.options.useQuery(undefined, { staleTime: 5 * 60_000, retry: 1, refetchOnWindowFocus: false });
   useEffect(() => {
     if (q.data) rememberCodeLogin(q.data.codeLogin);
   }, [q.data]);
-  return { codeLogin: q.data ? q.data.codeLogin : q.isError ? false : undefined, resendAfterSec: q.data?.resendAfterSec ?? 60 };
+  return {
+    codeLogin: q.data ? q.data.codeLogin : q.isError ? false : undefined,
+    resendAfterSec: q.data?.resendAfterSec ?? 60,
+    // A2: o Google aparece nos PDAs registados? (sem resposta → sim, como hoje)
+    googleOnPdas: q.data?.googleOnPdas ?? true,
+  };
 }
