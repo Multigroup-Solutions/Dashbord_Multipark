@@ -116,6 +116,8 @@ vi.mock("./db", async (original) => ({
   getEmployeeById: async (id: number) => m.ficha(m.state.fichas.find((f) => f.id === id)) ?? undefined,
   listPdas: async () => m.state.pdas.map((p) => ({ ...p })),
   attachPdaByDeviceToken: async (token: string, employeeId: number) => { m.state.attaches.push({ token, employeeId }); return null; },
+  verifyPdaQrCode: async (pdaId: number, code: string) => { const p = m.state.pdas.find((x) => x.id === pdaId && x.qrCode === code && x.status === "active"); return p ? { name: p.name } : null; },
+  setPdaDeviceToken: async (pdaId: number) => { const p = m.state.pdas.find((x) => x.id === pdaId); if (!p) return null; p.deviceToken = `qr${pdaId}`.padEnd(32, "z"); return p.deviceToken; },
 }));
 vi.mock("./pdaSession", async (original) => ({
   ...(await original<object>()),
@@ -136,6 +138,7 @@ import {
 const ANDROID = "Mozilla/5.0 (Linux; Android 14; SM-A546B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36";
 const PDA_TOKEN = "p".repeat(32);
 const JORGE_PHONE_AS_PDA = "j".repeat(32);
+const QR7 = "q".repeat(32);
 
 const ROLE_OF: Record<number, string> = { 21: "team_leader", 22: "supervisor", 23: "admin", 100: "extra" };
 const as = (userId: number) => appRouter.createCaller({ user: { id: userId, role: ROLE_OF[userId], name: m.state.users.get(userId) ?? null }, req: { headers: { "user-agent": ANDROID } }, res: {} } as any);
@@ -149,7 +152,7 @@ beforeEach(() => {
   m.state.fichas.push({ id: 13, fullName: "Marco Antunes", userId: 23, zello: null });
   m.state.fichas.push({ id: 101, fullName: "Joaquim Extra", userId: 100, zello: "Extra12" });
   // PDA 12, partilhado (extras), com sessão e check-in do Joaquim
-  m.state.pdas.push({ id: 7, name: "PDA 12", deviceToken: PDA_TOKEN, status: "active", projectId: 49, zelloUsername: "Extra12", sessionNonce: "nonce-do-pda-12", registered: true });
+  m.state.pdas.push({ id: 7, name: "PDA 12", deviceToken: PDA_TOKEN, status: "active", projectId: 49, zelloUsername: "Extra12", sessionNonce: "nonce-do-pda-12", registered: true, qrCode: QR7 });
   m.state.checkins.push({ id: 1, pdaId: 7, employeeId: 101, status: "checked_in" });
   m.state.zelloUsers = [{ name: "Jorge" }, { name: "Marcia" }, { name: "Extra12" }, { name: "marco" }];
 });
@@ -273,6 +276,26 @@ describe("não toca nos PDAs partilhados", () => {
     const before = JSON.stringify(m.state.pdas);
     expect(await as(100).operational.personalDevices.seen({ pdaToken: PDA_TOKEN })).toEqual({ kind: "none" });
     expect(JSON.stringify(m.state.pdas)).toBe(before);
+  });
+  it("QR de um PDA lido num telemóvel pessoal ATIVO: o servidor recusa (também a um TL) e o PDA não muda", async () => {
+    const { token } = await as(21).operational.personalDevices.register({});
+    const before = JSON.stringify(m.state.pdas);
+    for (const who of [21, 100]) {
+      await expect(as(who).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: null, personalToken: token }))
+        .rejects.toMatchObject({ code: "FORBIDDEN", message: PDA_ON_PERSONAL_MSG });
+    }
+    expect(JSON.stringify(m.state.pdas)).toBe(before);
+    expect(m.state.logs.some((l) => l.entity === "pda" && l.action === "register_device")).toBe(false);
+  });
+  it("QR com um token pessoal já inativo (ou que não existe): o registo do PDA segue como sempre", async () => {
+    const { token } = await as(21).operational.personalDevices.register({});
+    await as(21).operational.personalDevices.unregisterMine({ token });
+    const r = await as(21).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: null, personalToken: token });
+    expect(r).toMatchObject({ name: "PDA 12", alreadyRegistered: false });
+    expect(m.state.pdas.find((p) => p.id === 7)?.deviceToken).toBe(r.token);
+    // Token pessoal que não existe, ou sem o campo (clientes antigos): igual
+    expect(await as(21).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: r.token, personalToken: "x".repeat(32) })).toMatchObject({ name: "PDA 12" });
+    expect(await as(21).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: r.token })).toMatchObject({ name: "PDA 12" });
   });
   it("no cliente: chave própria no browser; o ponto→PDA, o login no PDA e o QR não usam o token pessoal; o QR recusa num pessoal", () => {
     const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");

@@ -721,7 +721,21 @@ export const operationalRouter = router({
     // Plano 56 (A2, com ENTRAR_COM_CODIGO): só TL e acima; a sessão de quem
     // registou passa a sessão deste PDA; se o PDA estava noutro aparelho, o
     // supervisor da cidade é avisado no sino. Desligado: como sempre.
-    registerByQr: protectedProcedure.input(z.object({ pdaId: z.number(), code: z.string().min(8).max(64), currentToken: z.string().max(80).nullable().optional() })).mutation(async ({ ctx, input }) => {
+    registerByQr: protectedProcedure.input(z.object({
+      pdaId: z.number(), code: z.string().min(8).max(64), currentToken: z.string().max(80).nullable().optional(),
+      // Telemóveis pessoais (13 out 2026): o token pessoal deste browser, se houver (nunca é o do PDA).
+      personalToken: z.string().max(80).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      // Um telemóvel pessoal ATIVO não passa a PDA partilhado pelo QR (primeiro "Deixar de ser pessoal").
+      // Sem token pessoal (ou já inativo, ou a tabela em baixo) fica tudo como sempre.
+      {
+        const { isDeviceToken, PDA_ON_PERSONAL_MSG } = await import("../shared/personalDevice");
+        if (isDeviceToken(input.personalToken)) {
+          const { personalDeviceStore } = await import("./personalDeviceStore");
+          const personal = await personalDeviceStore().byToken(input.personalToken).catch(() => null);
+          if (personal?.status === "active") throw new TRPCError({ code: "FORBIDDEN", message: PDA_ON_PERSONAL_MSG });
+        }
+      }
       const { pdaSessionsEnabled } = await import("./pdaSession");
       const pdaOn = await pdaSessionsEnabled();
       const { pdaSessionStore } = await import("./pdaSessionStore");

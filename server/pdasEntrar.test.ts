@@ -672,6 +672,18 @@ describe("QR do PDA (operational.pdas.registerByQr)", () => {
     expect(pda7().deviceToken).toBe(TOKEN7);
   });
 
+  it("telemóveis pessoais: com um token pessoal que não é de nenhum telemóvel pessoal ativo, o QR faz o de sempre (sessão do PDA, aviso)", async () => {
+    lisbon();
+    const tl = device();
+    await googleSession(tl, userBy(21));
+    // (a tabela dos telemóveis pessoais não responde aqui: nunca parte o registo do PDA)
+    const r = await (await tl.caller()).operational.pdas.registerByQr({ pdaId: 7, code: QR7, currentToken: null, personalToken: "x".repeat(32) });
+    expect(r).toMatchObject({ name: "PDA 12", pdaSession: true, alreadyRegistered: false });
+    expect(r.token).not.toBe(TOKEN7);
+    expect(pda7().sessionUserId).toBe(21);
+    expect(m.state.notified.filter((x) => x.kind === "pda_device")).toHaveLength(1);
+  });
+
   it("a lista dos PDAs nunca leva o token do aparelho nem o nonce da sessão", () => {
     const src = readFileSync("server/operationalRouter.ts", "utf8");
     expect(src).toContain("return ((await listPdas()) as any[]).map(publicPdaRow);");

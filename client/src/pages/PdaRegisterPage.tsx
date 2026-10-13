@@ -92,13 +92,14 @@ export default function PdaRegisterPage() {
         onSuccess: (r) => {
           if (r.kind === "pessoal") { setState({ ok: false, message: PDA_ON_PERSONAL_MSG }); return; }
           setPersonalToken(null); // já não era pessoal: segue o registo do PDA
-          if (!register.isPending) register.mutate({ pdaId, code, currentToken: getPdaToken() });
+          if (!register.isPending) register.mutate({ pdaId, code, currentToken: getPdaToken(), personalToken: getPersonalToken() });
         },
         onError: (e) => setState({ ok: false, message: e.message }),
       });
       return;
     }
-    if (!register.isPending && !state) register.mutate({ pdaId, code, currentToken: getPdaToken() });
+    // (o servidor também recusa num telemóvel pessoal ativo: `personalToken`)
+    if (!register.isPending && !state) register.mutate({ pdaId, code, currentToken: getPdaToken(), personalToken: getPersonalToken() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, user?.id, codeLogin]);
 
