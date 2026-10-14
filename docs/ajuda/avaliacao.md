@@ -73,9 +73,19 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - Se uma leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem dados".
 
 **Como se contam os movimentos**
-- Recolha = check-in feito. Entrega = check-out feito. Movimento = mudança de parque ou de lugar.
-- **Levar ao parque** é o primeiro movimento depois de uma recolha, na mesma reserva, e vale mais pontos.
-- **Entrega atrasada** é uma entrega feita mais de 15 minutos depois de o cliente a pedir, e conta como atraso.
+- Os dias calculados antes de 14 out 2026 seguiam as regras antigas. A avaliação do mês avisa quantos são ("N dia(s) calculado(s) com as regras antigas") e, a quem pode, mostra **Recalcular**.
+- Recolha = check-in feito. Entrega = check-out feito.
+- Cada vez que um carro muda de sítio, a app Multipark grava duas linhas: o **início** e o **fim**. Só o fim conta. "Parque" é a **garagem** (PD, PD FORA, COBERTO, Central…).
+  - **Levar ao parque**: o carro foi arrumado (ainda não tinha garagem), por exemplo logo a seguir à recolha. Vale +5.
+  - **Movimento entre parques**: o carro mudou de garagem (ex.: PD → COBERTO). Vale +2.
+  - **Mudança de lugar**: o carro ficou na mesma garagem, só mudou de lugar (ex.: PD 26/3 → PD 70/1). Não é movimento. Vale +1.
+- **Atraso à entrada**: a entrada no ponto foi depois da hora da escala. Conta no máximo **1 por dia** e vale −5.
+- **Entrega atrasada** (−5 cada):
+  - O pedido de entrega chegou **antes** da hora marcada, ou à hora: conta como atrasada se for feita mais de **15 minutos** depois da **hora marcada**.
+  - O pedido chegou **depois** da hora marcada (ex.: voo atrasado): conta como atrasada se for feita mais de **30 minutos** depois do **pedido**. Os 30 minutos incluem a viagem até ao terminal.
+  - A entrega não tem hora marcada: conta como atrasada se for feita mais de **30 minutos** depois do pedido. Essas entregas aparecem numa nota ("N entrega(s) sem hora marcada: medidas pelo pedido + 30 min").
+- **Excesso de velocidade** (−10): os alertas de velocidade e as penalizações do RH e, além disso, **1 por dia** em que a velocidade máxima do GPS do Zello passou o limite. Se nesse dia (de calendário, ou no dia da avaliação) já houver um alerta, o GPS não conta outra vez. Se não der para ler o limite, o GPS não conta e aparece um aviso. O limite é o marcado como padrão em Operacional → velocidade; sem nenhum, vale **120 km/h com 10 % de tolerância (132 km/h)**.
+- **Reclamação confirmada** (−20, uma vez por reclamação e condutor): uma reclamação não convertida com pontos aplicados (na reclamação ou ao condutor), positivos ou negativos. Conta no dia em que a reclamação foi criada.
 - Início da recolha, pedido de entrega, início da entrega, alterações e criações aparecem na lista e contam como ações, mas não dão pontos.
 
 **Quem vê o quê**

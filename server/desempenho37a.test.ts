@@ -67,7 +67,8 @@ describe("37a — pontos e ranking", () => {
     expect(workPoints("office", t)).toBe(10 * 0.5 + 5 * 1 + 2 * 2 + 4 * 0.5);
     const d = emptyTotals();
     d.evalPoints = 120; d.overLimitDays = 2; d.occurrences = 3;
-    expect(workPoints("drivers", d)).toBe(120 - 20 + 3);
+    // 14 out 2026: os dias acima do limite já descontam −10 na avaliação (evalPoints) — aqui não repetem
+    expect(workPoints("drivers", d)).toBe(120 + 3);
     // as horas e os km nunca dão pontos
     for (const g of Object.keys(GROUP_VIEW) as Array<keyof typeof GROUP_VIEW>) {
       expect(GROUP_VIEW[g].weights.hours).toBeUndefined();
@@ -183,7 +184,7 @@ describe("37a — só o super admin", () => {
     const r = src("server/evaluationRouter.ts");
     expect(r).toMatch(/peoplePerformance: protectedProcedure[\s\S]{0,400}if \(ctx\.user\.role !== "super_admin"\) throw new TRPCError\(\{ code: "FORBIDDEN"/);
     const p = src("client/src/pages/CondutoresAgentesPage.tsx");
-    expect(p).toContain('const isSuper = (user as any).role === "super_admin";');
+    expect(p).toContain('const isSuper = canSeePeoplePerformance(user as any);'); // 14 out 2026: regra em shared/peopleTabsAccess.ts (só super_admin)
     expect(p).toContain('{isSuper && <TabsTrigger value="performance">');
     expect(p).toContain('{isSuper && <TabsContent value="performance"');
     // só leitura

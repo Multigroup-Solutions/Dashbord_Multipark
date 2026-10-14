@@ -27,6 +27,7 @@ import {
 import { storagePut } from "../storage";
 import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, STOPPED_SPEED_KMH, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
 import { addDays, lisbonDayOf, lisbonDayRangeUtc, zelloLatestDay } from "../../shared/lisbonDay";
+import { speedThresholdKmh } from "../../shared/gpsRules";
 
 /** Calculate distance between two GPS points using Haversine formula */
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -254,7 +255,8 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
   if (!db) return { processed: 0, done: true, nextAfterId: null, errors: ["BD indisponível"] };
   const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
   const speedLimit = await getDefaultSpeedLimit();
-  const threshold = speedLimit ? speedLimit.maxSpeed * (1 + speedLimit.tolerancePercent / 100) : 999;
+  // 14 out 2026: sem limite padrão na tabela vale o de omissão (120 km/h + 10 %), não 999
+  const threshold = speedThresholdKmh(speedLimit);
   const [holders, intervals, owners] = await Promise.all([resolveZelloHoldersForDay(day), pdaIntervalsForDay(day), fixedZelloOwners()]);
   const rows = rowsOf(await db.execute(sql`
     SELECT id, zelloUsername, geoJsonUrl FROM daily_driver_history
@@ -380,9 +382,8 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
 
     // Get speed limit for violation counting
     const speedLimit = await getDefaultSpeedLimit();
-    const threshold = speedLimit
-      ? speedLimit.maxSpeed * (1 + speedLimit.tolerancePercent / 100)
-      : 999;
+    // 14 out 2026: sem limite padrão na tabela vale o de omissão (120 km/h + 10 %), não 999
+    const threshold = speedThresholdKmh(speedLimit);
 
     console.log(`[DailyCollection] Processing ${nonAdminUsers.length} users for ${dateStr} (${pass})`);
 

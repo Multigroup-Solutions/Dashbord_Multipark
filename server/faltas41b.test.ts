@@ -71,7 +71,7 @@ describe("41b: Detalhe por colaborador com horas e movimentos", () => {
     const i = d.indexOf("export async function monthWorkMetrics");
     const fn = d.slice(i, i + 1600);
     expect(fn).toContain("FROM employee_day_metrics WHERE day >= ${from} AND day <= ${to}");
-    expect(fn).toContain("SUM(movements + parkingMoves) AS movements");
+    expect(fn).toContain("SUM(movements) AS movements"); // 14 out 2026: o levar ao parque já está dentro de movements
     expect(fn).toContain("SUM(CASE WHEN hoursWorked > 0 THEN 0 ELSE scheduledHours END) AS hoursEscala");
     expect(d).toContain("work: monthMetrics.get(empId) ?? null,");
   });

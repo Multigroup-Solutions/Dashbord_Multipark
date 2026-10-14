@@ -1309,7 +1309,7 @@ export async function monthWorkMetrics(employeeIds: number[], year: number, mont
   const from = `${year}-${mm}-01`, to = `${year}-${mm}-31`;
   const ids = sql.join(Array.from(new Set(employeeIds)).map((i) => sql`${i}`), sql`, `);
   const [rows] = await db.execute(sql`SELECT employeeId,
-      SUM(actions) AS actions, SUM(recolhas) AS recolhas, SUM(entregas) AS entregas, SUM(movements + parkingMoves) AS movements,
+      SUM(actions) AS actions, SUM(recolhas) AS recolhas, SUM(entregas) AS entregas, SUM(movements) AS movements,
       SUM(CASE WHEN actions > 0 THEN 1 ELSE 0 END) AS daysWithActions,
       SUM(hoursWorked) AS hoursPonto, SUM(CASE WHEN hoursWorked > 0 THEN 0 ELSE scheduledHours END) AS hoursEscala
     FROM employee_day_metrics WHERE day >= ${from} AND day <= ${to} AND employeeId IN (${ids}) GROUP BY employeeId`) as any;
@@ -6077,6 +6077,8 @@ export async function getAgentHistoryFromDb(opts: {
   userIds?: readonly string[];
 }): Promise<{
   total: number;
+  /** 14 out 2026: inícios de movimento lidos e deixados de fora da lista e do total */
+  movementStarts?: number;
   truncated?: boolean;
   period: { startDate: string; endDate: string };
   agentName: string;
@@ -6122,13 +6124,20 @@ export async function getAgentHistoryFromDb(opts: {
   });
   const rows = live.map((r) => ({
     id: r.historyId, changeType: r.changeType, actionTime: r.actionTime, remarks: r.remarks, agentName: r.agentName,
-    agentUserId: r.agentUserId, modifiedFields: r.modifiedFields, platform: r.platform, bookingExternalId: r.bookingExternalId,
+    agentUserId: r.agentUserId, modifiedFields: r.modifiedFields, moveKind: r.moveKind, platform: r.platform, bookingExternalId: r.bookingExternalId,
     bookingStatus: r.bookingStatus, bookingCheckIn: r.checkIn, bookingCheckOut: r.checkOut, bookingParkName: r.parkName, bookingLicensePlate: r.licensePlate,
   }));
 
+  // Jorge, 14 out 2026: o início de um movimento e a mudança de lugar (mesma garagem) não são movimentos —
+  // no detalhe (Condutores e agentes) aparecem com o seu nome, e "Movimentos" mostra só os que contam.
+  // O tipo vem do SQL (texto completo); sem ele (leituras antigas), do texto que veio (pode vir cortado).
+  const { classifyMovement, displayChangeType, MOVEMENT_KIND_CHANGE_TYPES } = await import("../shared/multiparkMovements");
+  const MOVEMENT_START_TYPE = MOVEMENT_KIND_CHANGE_TYPES.inicio;
+  const moveType = (ct: string | null, mf: string | null, kind: string | null | undefined): string =>
+    String(ct ?? "").toUpperCase() !== "MOVEMENT" ? (ct ?? "") : displayChangeType(ct, kind ?? classifyMovement(mf));
   const history = rows.map((r) => ({
     id: r.id,
-    changeType: r.changeType ?? "",
+    changeType: moveType(r.changeType, r.modifiedFields, r.moveKind),
     actionTime: r.actionTime ?? "",
     remarks: r.remarks ?? undefined,
     agentName: r.agentName ?? "",
@@ -6148,14 +6157,18 @@ export async function getAgentHistoryFromDb(opts: {
   }));
 
   const first = rows[0];
+  // 14 out 2026: o início de um movimento não é uma ação — fica fora da lista e do total (contado à parte)
+  const actions = history.filter((h) => h.changeType !== MOVEMENT_START_TYPE);
   return {
-    total: history.length,
+    total: actions.length,
+    /** inícios de movimento lidos e deixados de fora (não contam) */
+    movementStarts: history.length - actions.length,
     // Leitura limitada a AGENT_HISTORY_LIMIT ações: no limite, o total é "pelo menos".
     truncated: history.length >= AGENT_HISTORY_LIMIT,
     period: { startDate: opts.startDate, endDate: opts.endDate },
     agentName: first?.agentName ?? opts.agentName ?? "",
     agentUserId: first?.agentUserId ?? ids[0] ?? "",
-    history,
+    history: actions,
   };
 }
 

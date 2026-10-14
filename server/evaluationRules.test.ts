@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   EVALUATION_POINTS,
+  MAX_LATE_ARRIVALS_PER_DAY,
+  EVALUATION_RULES_VERSION,
+  LATE_AFTER_REQUEST_MINUTES,
+  lateArrivalsOf,
   actionPoints,
   applyAdjustments,
   emptyDayMetrics,
@@ -45,8 +49,36 @@ describe("regras do dono (pontos)", () => {
     expect(s.negativePoints).toBe(10 + 10 + 20 + 6000);
     expect(s.totalPoints).toBe(6 - 6040);
     expect(s.lines.map((l) => l.key)).toEqual([
-      "movement", "pickupOrDelivery", "firstMoveAfterPickup", "speeding", "delay", "confirmedComplaint", "accidentOrDamage",
+      "movement", "spotChange", "pickupOrDelivery", "firstMoveAfterPickup", "speeding", "delay", "lateDelivery", "confirmedComplaint", "accidentOrDamage",
     ]);
+  });
+
+  it("14 out 2026: atraso à entrada e entrega atrasada são regras separadas (−5 cada); os atrasos à entrada = delays − lateServices", () => {
+    // 3 atrasos no total, dos quais 2 entregas atrasadas → 1 atraso à entrada
+    const s = scoreOf(m({ delays: 3, lateServices: 2 }));
+    const line = (k: string) => s.lines.find((l) => l.key === k)!;
+    expect(line("delay")).toMatchObject({ label: "Atraso à entrada", points: -5, count: 1, subtotal: -5 });
+    expect(line("lateDelivery")).toMatchObject({ label: "Entrega atrasada", points: -5, count: 2, subtotal: -10 });
+    expect(s.totalPoints).toBe(-15);
+    expect(lateArrivalsOf({ delays: 2, lateServices: 2 })).toBe(0);
+    expect(lateArrivalsOf({ delays: 1, lateServices: 3 })).toBe(0); // nunca negativo
+    expect(MAX_LATE_ARRIVALS_PER_DAY).toBe(1);
+  });
+
+  it("14 out 2026: mudança de lugar +1 (não é movimento entre parques)", () => {
+    const s = scoreOf(m({ movements: 3, parkingMoves: 1, spotChanges: 2 }));
+    expect(s.lines.find((l) => l.key === "spotChange")).toMatchObject({ label: "Mudança de lugar (mesma garagem)", points: 1, count: 2, subtotal: 2 });
+    expect(s.lines.find((l) => l.key === "movement")!.count).toBe(2);
+    expect(actionPoints({ movements: 3, parkingMoves: 1, recolhas: 0, entregas: 0, spotChanges: 2 })).toBe(2 * 2 + 5 + 2);
+    expect(EVALUATION_POINTS.spotChange).toBe(1);
+  });
+
+  it("ajustar as entregas atrasadas mexe no total dos atrasos (os atrasos à entrada ficam)", () => {
+    const out = applyAdjustments(m({ delays: 3, lateServices: 2 }), [{ metric: "lateServices", delta: -1 }]);
+    expect(out).toMatchObject({ delays: 2, lateServices: 1 });
+    expect(lateArrivalsOf(out)).toBe(1);
+    const sp = applyAdjustments(m({ movements: 2, spotChanges: 1 }), [{ metric: "spotChanges", delta: 1 }]);
+    expect(sp.weightedActions).toBe(2 * 2 + 2 * 1);
   });
 
   it("é linear: a pontuação da soma é a soma das pontuações", () => {
@@ -146,5 +178,31 @@ describe("migração 0099", async () => {
       expect(s).not.toMatch(/\(\s*SELECT/i);
     }
     expect(MIGRATION_0099_STATEMENTS.some((s) => s.includes("uq_employee_day_metrics"))).toBe(true);
+  });
+});
+
+describe("14 out 2026 — limite de velocidade por omissão", () => {
+  it("sem limite padrão: 120 km/h + 10 % = 132; com limite, o dele", async () => {
+    const { speedThresholdKmh, DEFAULT_SPEED_LIMIT_KMH, DEFAULT_SPEED_TOLERANCE_PERCENT, MAX_PLAUSIBLE_KMH } = await import("../shared/gpsRules");
+    expect([DEFAULT_SPEED_LIMIT_KMH, DEFAULT_SPEED_TOLERANCE_PERCENT]).toEqual([120, 10]);
+    expect(speedThresholdKmh(null)).toBe(132);
+    expect(speedThresholdKmh(undefined)).toBe(132);
+    expect(speedThresholdKmh({ maxSpeed: 100, tolerancePercent: 5 })).toBe(105);
+    expect(speedThresholdKmh({ maxSpeed: "90", tolerancePercent: null })).toBe(90);
+    expect(speedThresholdKmh({ maxSpeed: 0, tolerancePercent: 10 })).toBe(132); // limite inválido → omissão
+    expect(MAX_PLAUSIBLE_KMH).toBe(150); // o teto do ruído não mudou
+  });
+});
+
+describe("14 out 2026 — ajustes e entregas sem hora marcada", () => {
+  it("ajustar as entregas atrasadas nunca apaga atrasos à entrada (o delta fica limitado)", () => {
+    const out = applyAdjustments(m({ delays: 3, lateServices: 2 }), [{ metric: "lateServices", delta: -5 }]);
+    expect(out).toMatchObject({ delays: 1, lateServices: 0 });
+    expect(lateArrivalsOf(out)).toBe(1);
+  });
+  it("as entregas sem hora marcada são informativas (não pontuam) e a versão das regras é 2", () => {
+    expect(scoreOf(m({ deliveriesWithoutSchedule: 4 })).totalPoints).toBe(0);
+    expect(EVALUATION_RULES_VERSION).toBe(2);
+    expect(LATE_AFTER_REQUEST_MINUTES).toBe(30);
   });
 });

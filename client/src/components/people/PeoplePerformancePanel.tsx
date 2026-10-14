@@ -20,12 +20,12 @@
  * "Como se contam os pontos" mostra os pesos EM VIGOR e tem o Editar pesos
  * (grava a definição `perf.rankWeights`).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import {
   GROUP_VIEW, PERF_GROUPS, PERF_METRICS, PERF_PERIODS, periodTitle, rankPeople, shiftAnchor, MIN_HOURS_FOR_RATE,
-  TEAM_COLUMNS, TEAM_GROUPS, TEAM_POINT_WEIGHTS, TEAM_WEIGHT_KEYS, TEAM_WEIGHT_LABELS, UNWEIGHTED_METRICS, PERF_RANK_WEIGHTS_KEY,
+  TEAM_COLUMNS, TEAM_GROUPS, TEAM_POINT_WEIGHTS, TEAM_WEIGHT_KEYS, TEAM_WEIGHT_LABELS, unweightedMetricsFor, PERF_RANK_WEIGHTS_KEY,
   rankWeightSchema, rankWeightsSchema, teamWeightOverridesOf, weightOverridesOf, withTabOverrides,
   type PerfGroup, type PerfMetric, type PerfPeriod, type RankMode, type RankWeightOverrides, type TeamPointWeights,
 } from "@shared/peoplePerformance";
@@ -35,6 +35,8 @@ import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { PersonLinksDialog } from "@/components/PersonLinksDialog";
 import { HourBars, HourHeatmap, HourlyNote, type HourlyInfo } from "@/components/people/PerformanceHours";
+import { PeopleFilterBar } from "@/components/people/PeopleFilterBar";
+import { matchesSearch, passesRules, type MetricRule } from "@shared/peopleFilters";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,6 +57,25 @@ const HOUR_METRICS: ReadonlySet<PerfMetric> = new Set(["hours", "teamHoursStoppe
 const fmt = (k: PerfMetric, v: number) => (k === "km" ? `${nf.format(v)} km` : k === "maxSpeed" ? (v ? `${Math.round(v)} km/h` : "—")
   : k === "teamCost" ? eur.format(v) : HOUR_METRICS.has(k) ? `${nf.format(v)} h` : k === "callMinutes" ? `${nf.format(v)} min` : nf.format(v));
 const signed = (n: number) => (n > 0 ? `+${nf.format(n)}` : nf.format(n));
+
+/**
+ * 14 out 2026: as colunas que a pessoa escolheu em cada aba ficam neste browser,
+ * só as escolhas explícitas ({coluna: mostra?}); as outras seguem a omissão
+ * (aparecem as que têm algum valor no período). Assim uma coluna que deixa de
+ * estar a zero aparece sozinha, e "Repor" volta à omissão.
+ */
+type ColChoices = Record<string, boolean>;
+const colsKey = (g: PerfGroup) => `perf.cols2.${g}`;
+function readCols(g: PerfGroup): ColChoices {
+  try {
+    const v = localStorage.getItem(colsKey(g));
+    const o = v ? JSON.parse(v) : null;
+    return o && typeof o === "object" && !Array.isArray(o) ? Object.fromEntries(Object.entries(o).filter(([, x]) => typeof x === "boolean")) as ColChoices : {};
+  } catch { return {}; }
+}
+function writeCols(g: PerfGroup, c: ColChoices) {
+  try { if (Object.keys(c).length) localStorage.setItem(colsKey(g), JSON.stringify(c)); else localStorage.removeItem(colsKey(g)); } catch { /* modo privado: fica só nesta visita */ }
+}
 
 type Person = {
   employeeId: number; name: string; position: string | null; role: string | null; active: boolean; photoUrl: string | null;
@@ -77,7 +98,30 @@ export function PeoplePerformancePanel() {
   const d = q.data;
   const view = GROUP_VIEW[group];
   const ranked = useMemo(() => (d ? rankPeople(d.people as Person[], mode) : []), [d, mode]);
-  const { sorted, sortKey, sortDir, toggle } = useTableSort(ranked);
+  // 14 out 2026 (Jorge): procurar pelo nome, filtros por parâmetros e escolher as colunas
+  const [search, setSearch] = useState("");
+  const [rules, setRules] = useState<MetricRule[]>([]);
+  const [onlyActive, setOnlyActive] = useState(false);
+  const [colChoices, setColChoices] = useState<ColChoices>(() => readCols(group));
+  useEffect(() => { setColChoices(readCols(group)); setRules([]); }, [group]);
+  const filtered = useMemo(() => ranked.filter((r) => (!onlyActive || r.active) && matchesSearch(search, r.name, r.position)
+    && passesRules(r, rules, (x, k) => (k === "points" ? x.points : k === "perHour" ? x.perHour : (x.totals as Record<string, number>)[k] ?? 0))),
+  [ranked, onlyActive, search, rules]);
+  /** omissão: as colunas com algum valor neste período (as que estão a zero para toda a gente ficam escondidas); as escolhas explícitas mandam */
+  const shownCols = useMemo(() => new Set<string>(view.columns.filter((k) => colChoices[k] ?? ((d?.people ?? []) as Person[]).some((p) => (p.totals[k] ?? 0) !== 0))), [colChoices, view, d]);
+  /** uma caixa: só essa coluna passa a escolha explícita (as outras continuam a seguir a omissão) */
+  const toggleCol = (k: string, show: boolean) => {
+    const next: ColChoices = { ...colChoices, [k]: show };
+    setColChoices(next);
+    writeCols(group, next);
+  };
+  const chooseCols = (s: Set<string> | null) => {
+    const next: ColChoices = s == null ? {} : Object.fromEntries(view.columns.map((k) => [k, s.has(k)]));
+    setColChoices(next);
+    writeCols(group, next);
+  };
+  const columns = view.columns.filter((k) => shownCols.has(k));
+  const { sorted, sortKey, sortDir, toggle } = useTableSort(filtered);
   /** o nome abre a ficha; o resto da linha, o detalhe */
   const nameCell = (r: Person) => (
     <>
@@ -126,6 +170,13 @@ export function PeoplePerformancePanel() {
       {q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o desempenho" />
         : !d ? <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
         : (<>
+          {/* 14 out 2026: dias guardados com as regras antigas (antes das correções dos atrasos, movimentos e velocidade) */}
+          {(d.oldRulesDays ?? 0) > 0 && (
+            <div role="status" className="rounded-lg border border-amber-500 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+              <strong>{d.oldRulesDays} dia(s)·pessoa deste período foram calculados com as regras antigas</strong> (atrasos por entrega, movimentos a dobrar, sem excessos do Zello). Os números destes dias só batem certo depois de <strong>Recalcular</strong> em Avaliação → Mês. Atenção: recalcular também aplica as ligações das fichas e os estados das reclamações de hoje e o limite de velocidade atual — muda meses já usados em prémios.
+            </div>
+          )}
+
           {/* números grandes do grupo */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {view.cards.map((k) => (
@@ -180,17 +231,25 @@ export function PeoplePerformancePanel() {
 
           {/* tabela: toda a gente, todas as colunas da aba (42c: todos os cabeçalhos ordenam) */}
           <Card>
-            <CardHeader className="pb-1"><CardTitle className="text-base">Toda a gente ({ranked.length})</CardTitle></CardHeader>
+            <CardHeader className="space-y-3 pb-2">
+              <CardTitle className="text-base">Toda a gente ({filtered.length === ranked.length ? ranked.length : `${filtered.length} de ${ranked.length}`})</CardTitle>
+              <PeopleFilterBar search={search} onSearch={setSearch}
+                metrics={[{ key: "points", label: "Pontos" }, { key: "perHour", label: "Por hora" }, ...view.columns.map((k) => ({ key: k, label: PERF_METRICS[k].label }))]}
+                rules={rules} onRules={setRules} onlyActive={onlyActive} onOnlyActive={setOnlyActive}
+                columns={view.columns.map((k) => ({ key: k, label: PERF_METRICS[k].label }))} shown={shownCols}
+                onShown={chooseCols} onToggleShown={toggleCol} onResetShown={() => chooseCols(null)} />
+            </CardHeader>
             <CardContent className="overflow-x-auto p-0">
-              <table className="w-full min-w-[900px] text-[13px]">
+              {filtered.length === 0 ? <p className="p-4 text-sm text-muted-foreground">{ranked.length === 0 ? "Ninguém nesta aba neste período." : "Ninguém com estes filtros."}</p> : (
+              <table className="w-full text-[13px]">
                 <thead>
                   <tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground">
                     <Th k="rank" label="#" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="sticky left-0 bg-muted px-3" />
-                    <Th k="name" label="Pessoa" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="sticky left-8 bg-muted px-3" />
+                    <Th k="name" label="Pessoa" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="sticky left-8 min-w-[160px] bg-muted px-3" />
                     <Th k="grade" label="Nota" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
                     <Th k="points" label="Pontos" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
                     <Th k="perHour" label="Por hora" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />
-                    {view.columns.map((k) => <Th key={k} k={`totals.${k}`} label={<span title={`${PERF_METRICS[k].label} (${PERF_METRICS[k].source})`}>{PERF_METRICS[k].label}</span>} sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" />)}
+                    {columns.map((k) => <Th key={k} k={`totals.${k}`} label={<span title={`${PERF_METRICS[k].label} (${PERF_METRICS[k].source})`}>{PERF_METRICS[k].label}</span>} sortKey={sortKey} sortDir={sortDir} onToggle={toggle} align="right" className="min-w-[64px] max-w-[104px] whitespace-normal leading-tight" />)}
                   </tr>
                 </thead>
                 <tbody>
@@ -201,7 +260,7 @@ export function PeoplePerformancePanel() {
                       <td className="px-2 py-1.5 text-right"><GradeBar grade={r.grade} /></td>
                       <td className="px-2 py-1.5 text-right font-semibold tabular-nums">{nf.format(r.points)}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{r.perHour == null ? "—" : nf.format(r.perHour)}</td>
-                      {view.columns.map((k) => {
+                      {columns.map((k) => {
                         const v = r.totals[k] ?? 0;
                         return <td key={k} className={`px-2 py-1.5 text-right tabular-nums ${(PERF_METRICS[k].bad && v > 0) || v < 0 ? "font-semibold text-destructive" : v === 0 ? "text-muted-foreground" : ""}`}>{v === 0 ? "·" : fmt(k, v)}</td>;
                       })}
@@ -209,10 +268,11 @@ export function PeoplePerformancePanel() {
                   ))}
                 </tbody>
               </table>
+              )}
             </CardContent>
           </Card>
 
-          {TEAM_GROUPS.includes(group) && <TeamTable group={group} people={ranked} nameCell={nameCell} onOpen={setOpen} />}
+          {TEAM_GROUPS.includes(group) && <TeamTable group={group} people={filtered} nameCell={nameCell} onOpen={setOpen} />}
 
           {/* 8 out 2026: os pesos em vigor e o editor (a aba dos dados que chegaram, não a do separador a carregar) */}
           <PointsTable key={d.group} group={d.group} rw={d.rankWeights} />
@@ -248,7 +308,7 @@ function TeamTable({ group, people, nameCell, onOpen }: { group: PerfGroup; peop
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
         {sorted.length === 0 ? <p className="p-4 text-sm text-muted-foreground">Ninguém com equipa na escala neste período.</p> : (
-          <table className="w-full min-w-[900px] text-[13px]">
+          <table className="w-full text-[13px]">
             <thead>
               <tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground">
                 <Th k="name" label="Pessoa" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="sticky left-0 bg-muted px-3" />
@@ -372,7 +432,9 @@ function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
     : null;
   const keys = (editing ? Object.keys(draft) : Object.keys(rw.weights)) as PerfMetric[];
   const shownEval = editing ? (weightOf(draft.evalPoints) ?? 0) !== 0 : (rw.weights.evalPoints ?? 0) !== 0;
-  const addable = editing ? GROUP_VIEW[group].columns.filter((k) => !(k in draft) && !UNWEIGHTED_METRICS.has(k)) : [];
+  // 14 out 2026: nas abas que contam pelos pontos da avaliação, o que já lá está não tem peso próprio (o servidor recusa)
+  const unweighted = unweightedMetricsFor(group);
+  const addable = editing ? GROUP_VIEW[group].columns.filter((k) => !(k in draft) && !unweighted.has(k)) : [];
   const missedOff = GROUP_VIEW[group].columns.includes("callsMissed") && !(rw.weights.callsMissed ?? 0);
 
   const cell = (k: string, txt: string | undefined, onChange: (v: string) => void, label: string) => (

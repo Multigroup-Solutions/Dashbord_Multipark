@@ -43,7 +43,7 @@ describe("Pessoas → Condutores e agentes", () => {
     expect(src("client/src/App.tsx")).toMatch(/<Route path="\/pessoas\/condutores-agentes">\s*\{\(\) => \(<DashboardLayout><CondutoresAgentesPage \/><\/DashboardLayout>\)\}/);
     const layout = src("client/src/components/DashboardLayout.tsx");
     const pessoas = layout.slice(layout.indexOf('label: "Pessoas"'), layout.indexOf('label: "Operações"'));
-    expect(pessoas).toMatch(/\{ icon: Car, label: "Condutores e agentes", path: "\/pessoas\/condutores-agentes", module: "criticas" \}/);
+    expect(pessoas).toMatch(/\{ icon: Car, label: "Condutores e agentes", path: "\/pessoas\/condutores-agentes", module: "criticas", roles: PEOPLE_MOVEMENT_ROLES \}/); // 14 out 2026: só supervisor e acima
     expect(src("docs/ajuda/condutores-agentes.md")).toMatch(/rotas: \/pessoas\/condutores-agentes/);
   });
 });
