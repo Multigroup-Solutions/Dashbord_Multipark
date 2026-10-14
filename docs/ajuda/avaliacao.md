@@ -44,16 +44,17 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - **Recalcular** (quem gere a avaliação) volta a calcular o período já. Um período grande pode ficar a meio e o resto fica para o recálculo automático da noite.
 
 **Pesquisar e filtrar o ranking (como no Odoo)**
-- **Pesquisa**: escreve o nome ou o n.º de agente e o ranking filtra-se logo. Enquanto escreves aparece **Procurar «…» em**: Nome ou n.º de agente, Cidade, Marca, Posto ou Equipa (TL), com quantas pessoas encontra em cada. Escolhe uma e a pesquisa passa a **chip** (o Enter faz o mesmo, no nome). No mesmo campo, as pesquisas juntam com "ou"; em campos diferentes, com "e".
+- **Pesquisa**: escreve o nome ou o n.º de agente e o ranking filtra-se logo. Não contam acentos nem maiúsculas ("joao" encontra "João"). Enquanto escreves aparece **Procurar «…» em**: Nome ou n.º de agente, Cidade, Marca, Posto ou Equipa (TL), com quantas pessoas encontra em cada. Escolhe uma e a pesquisa passa a **chip** (o Enter faz o mesmo, no nome). No mesmo campo, as pesquisas juntam com "ou"; em campos diferentes, com "e".
 - **Grupos**: **Cidade**, **Marca**, **Posto** (condutor, condutor sénior, extra, team leader), **Equipa** e **Só com…** (excessos de velocidade, reclamações, acidentes, atrasos, entregas atrasadas, contestações abertas, com ajustes, pontos negativos). No mesmo grupo junta com "ou" (Porto ou Faro); entre grupos, com "e" (Porto e só com reclamações).
 - **+ Regra**: regras sobre as colunas e as métricas: pontos (total, ganhos e perdidos), horas, dias, ações, recolhas e entregas, movimentos, levar ao parque, atrasos, entregas atrasadas, excessos de velocidade, reclamações, acidentes, custo, ações e pontos por hora, ocorrências, penalizações, contestações abertas e dias como TL.
-  - Operadores: **≥**, **≤**, **=**, **entre**, **tem** e **não tem**.
+  - As horas são as do ponto (não as da escala) e o custo é em euros. Usa vírgula ou ponto nas casas decimais (7,5 = 7.5).
+  - Operadores: **≥**, **≤**, **=**, **entre** (inclui os dois valores), **tem** (diferente de 0) e **não tem**. Por hora, quem não tem horas só cumpre **não tem**.
   - Escolhe se cumprem **todas as regras** ou **pelo menos uma**.
   - Exemplos: "Pontos ≥ 500 e Excessos de velocidade ≥ 1"; "Reclamações: tem".
 - Cada filtro aparece como **chip**: o **×** tira esse e **Limpar tudo** tira todos.
-- **Agrupar** por cidade, marca, posto ou equipa (TL), com o total de cada grupo (pessoas, horas, ações e pontos).
+- **Agrupar** por cidade, marca, posto ou equipa (TL), com o total de cada grupo (pessoas, pontos, horas e ações).
   - A cidade de cada pessoa é a da escala onde fez mais dias; sem escala, a da ficha.
-  - A marca é a da ficha.
+  - A marca é a da ficha. É a mesma marca em todas as cidades: o Airpark de Lisboa e o do Porto aparecem juntos como **Airpark**.
   - A equipa é o TL com quem mais trabalhou (mesmo dia, cidade e turno). Quem só foi TL fica na própria equipa.
 - **Filtros guardados**: guarda o filtro com um nome. Leva também o agrupar, a vista (Totais ou Por hora) e a ordem.
   - Podes **partilhá-lo com a equipa** (quem vê o ranking).
@@ -83,7 +84,7 @@ São as permissões de Definições → Permissões, iguais no ecrã e no servid
 - **Mês**: team leaders, só a **sua equipa** (condutores e extras abaixo deles, e eles próprios), supervisores, front e backoffice e a administração.
 - **Recalcular, ajustar e decidir contestações**: supervisores, front e backoffice e a administração. Ninguém ajusta nem decide a sua própria avaliação.
 - **A minha avaliação**: cada pessoa com ficha. Funciona mesmo sem centro de custos.
-- **Filtros guardados do ranking**: quem vê o Mês. Os partilhados aparecem a todos os que veem o Mês; só quem o criou o apaga.
+- **Filtros guardados do ranking**: quem vê o Mês. Os partilhados aparecem a todos os que veem o Mês, e cada um aplica-o só aos dados que já vê. Só quem o criou o altera ou o apaga.
 - **Contestações** tem **Procurar pessoa**, que filtra pelo nome.
 - Todos veem só os dados das suas cidades.
 - O link antigo `/avaliacao-operacional` abre o separador Dia.

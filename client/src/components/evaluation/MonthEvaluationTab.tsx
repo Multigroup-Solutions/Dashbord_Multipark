@@ -250,7 +250,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         <Card className="p-10 text-center">
           <SearchX className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
           <p className="text-muted-foreground">Ninguém cumpre este filtro neste período.</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => setFlt({ groupBy: flt.groupBy })}>Limpar o filtro</Button>
+          <Button variant="outline" size="sm" className="mt-3 self-center" onClick={() => setFlt({ groupBy: flt.groupBy })}>Limpar o filtro</Button>
         </Card>
       ) : (
         <Card>
@@ -293,9 +293,12 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
                     ? groups.map((g) => (
                       <Fragment key={`g-${g.key}`}>
                         <tr className="border-b bg-muted/60">
-                          <td colSpan={colCount} className="p-2 text-[13px]">
-                            <span className="font-semibold">{g.label}</span>
-                            <span className="text-muted-foreground"> · {g.totals.people} {g.totals.people === 1 ? "pessoa" : "pessoas"} · {fmtNum(g.totals.hours)} h · {g.totals.actions} ações · <span className={ptsClass(g.totals.points)}>{fmtPts(g.totals.points)} pts</span></span>
+                          {/* telemóvel: a tabela desliza de lado; o subtotal fica preso à esquerda e quebra de linha (nunca cortado) */}
+                          <td colSpan={colCount} className="p-0 text-[13px]">
+                            <div className="sticky left-0 max-w-[calc(100vw-4rem)] p-2 whitespace-normal">
+                              <span className="font-semibold">{g.label}</span>
+                              <span className="text-muted-foreground"> · {g.totals.people} {g.totals.people === 1 ? "pessoa" : "pessoas"} · <span className={ptsClass(g.totals.points)}>{fmtPts(g.totals.points)} pts</span> · {fmtNum(g.totals.hours)} h · {g.totals.actions} ações</span>
+                            </div>
                           </td>
                         </tr>
                         {g.rows.map(renderRow)}

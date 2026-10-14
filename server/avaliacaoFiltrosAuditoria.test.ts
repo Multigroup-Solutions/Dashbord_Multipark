@@ -28,10 +28,11 @@ const state = vi.hoisted(() => ({
 }));
 
 const national = vi.hoisted(() => ({ all: true, defaultCityId: null, cityName: null, cityIds: [] as number[], projectIds: [] as number[], missingCostCenter: false }));
+const access = vi.hoisted(() => ({ current: null as any }));
 vi.mock("./cityAccess", async (original) => ({
   ...(await original<object>()),
-  loadCityAccess: async () => national,
-  loadCityAccessParts: async () => ({ access: national, base: national, all: national }),
+  loadCityAccess: async () => access.current ?? national,
+  loadCityAccessParts: async () => ({ access: access.current ?? national, base: access.current ?? national, all: national }),
 }));
 vi.mock("./db", async (original) => ({
   ...(await original<object>()),
@@ -71,6 +72,7 @@ const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "ut
 const caller = (role: string, id = 1) => appRouter.createCaller({ user: { id, role, name: "Rita" }, req: { headers: {} }, res: {} } as any);
 
 beforeEach(() => {
+  access.current = null;
   state.days = [];
   state.handler = () => [];
   state.seen = [];
@@ -367,6 +369,16 @@ describe("âmbito: o team leader só vê (e só lê as facetas de) a sua equipa"
   it("as facetas nunca leem a BD da Multipark", () => {
     const f = src("server/evaluationRankingFacets.ts");
     expect(f).not.toMatch(/multiparkDb|getMultiparkPool|multiparkQuery/);
+  });
+});
+
+describe("âmbito de cidade: a cidade/marca do topo não abre outra cidade (ecrã e folha)", () => {
+  it("supervisor de Lisboa a pedir o projeto do Porto: recusado no ranking e na exportação", async () => {
+    access.current = { all: false, defaultCityId: 1, cityName: "Lisboa", cityNames: ["Lisboa"], cityIds: [1], projectIds: [1, 10, 11], missingCostCenter: false };
+    await expect(caller("supervisor").evaluation.ranking({ ...range, projectId: 10 })).resolves.toEqual([]); // o seu: abre
+    await expect(caller("supervisor").evaluation.ranking({ ...range, projectId: 20 })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/não pertence à cidade/) });
+    await expect(caller("supervisor").googleDrive.sheets.export({ report: "avaliacoes", from: range.from, to: range.to, projectId: 20, filter: { text: "ana" } }))
+      .rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/não pertence à cidade/) });
   });
 });
 
