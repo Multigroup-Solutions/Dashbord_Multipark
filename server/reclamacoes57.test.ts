@@ -78,7 +78,7 @@ import {
 } from "../shared/complaintFilters";
 import {
   COMPLAINT_INTAKE_DEFAULTS, COMPLAINT_INTAKE_FLAG, complaintIntakeDecision, complaintIntakeSettings, intakeNote, isPartnerSender,
-  looksLikeNewsletter, looksLikeReviewNotice, type IntakeFacts,
+  looksLikeReviewNotice, type IntakeFacts,
 } from "../shared/complaintIntake";
 import { clientThreadAllowed, identityEmails, lastMessageDirection, visibleSharedBoxes, clientMailLimit, CLIENT_MAIL_MAX, crmIdentityAccepted } from "../shared/complaintClientMail";
 import { aiMergeSameClient, isPublicMailDomain } from "../shared/complaintIntake";
@@ -357,27 +357,32 @@ describe("3b — regras: criar, sugerir ou ignorar", () => {
     expect(complaintIntakeDecision({ aiBoxKey: "reservas", confidence: 0.99 }, FACTS, SETTINGS_57)).toEqual({ action: "ignore" });
     expect(complaintIntakeDecision({ aiBoxKey: null, confidence: 0.99 }, FACTS, SETTINGS_57)).toEqual({ action: "ignore" });
   });
-  it("certeza ≥ limiar → cria; entre os dois → só sugere; abaixo → ignora; sem certeza → sugere", () => {
+  it("certeza ≥ limiar → cria; entre os dois → cria 'Por confirmar' (14 out 2026: já não fica só sugerida); abaixo → ignora", () => {
     expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: 0.9 }, FACTS, SETTINGS_57)).toEqual({ action: "create" });
     expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: 0.85 }, FACTS, SETTINGS_57)).toEqual({ action: "create" });
-    expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: 0.84 }, FACTS, SETTINGS_57)).toEqual({ action: "suggest" });
-    expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: 0.5 }, FACTS, SETTINGS_57)).toEqual({ action: "suggest" });
+    expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: 0.84 }, FACTS, SETTINGS_57)).toEqual({ action: "create", uncertain: true });
+    expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: 0.5 }, FACTS, SETTINGS_57)).toEqual({ action: "create", uncertain: true });
     expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: 0.3 }, FACTS, SETTINGS_57)).toEqual({ action: "skip", why: "low_confidence" });
-    expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: null }, FACTS, SETTINGS_57)).toEqual({ action: "suggest" });
+    expect(complaintIntakeDecision({ aiBoxKey: "reclamacoes", confidence: null }, FACTS, SETTINGS_57)).toEqual({ action: "create", uncertain: true });
   });
   it("newsletter, parceiro, interno, automático, avaliação, pessoal ou já da caixa das reclamações → nunca cria", () => {
     const v = { aiBoxKey: "reclamacoes", confidence: 0.99 };
-    expect(complaintIntakeDecision(v, { ...FACTS, text: "Promoções da semana… Clique aqui para cancelar a subscrição." }, SETTINGS_57)).toEqual({ action: "skip", why: "newsletter" });
+    // 14 out 2026: newsletter pelos CABEÇALHOS (List-Unsubscribe/List-Id), nunca pelas palavras do texto.
+    expect(complaintIntakeDecision(v, { ...FACTS, listMail: true }, SETTINGS_57)).toEqual({ action: "skip", why: "newsletter" });
+    expect(complaintIntakeDecision(v, { ...FACTS, text: "Promoções da semana… Clique aqui para cancelar a subscrição." }, SETTINGS_57)).toEqual({ action: "create" });
     expect(complaintIntakeDecision(v, { ...FACTS, senderIsPartner: true }, SETTINGS_57)).toEqual({ action: "skip", why: "partner" });
     expect(complaintIntakeDecision(v, { ...FACTS, senderIsCompany: true, senderEmail: "rui@multipark.pt" }, SETTINGS_57)).toEqual({ action: "skip", why: "internal" });
     expect(complaintIntakeDecision(v, { ...FACTS, automated: true }, SETTINGS_57)).toEqual({ action: "skip", why: "automatic" });
     expect(complaintIntakeDecision(v, { ...FACTS, senderIsAutomated: true }, SETTINGS_57)).toEqual({ action: "skip", why: "automatic" });
-    expect(complaintIntakeDecision(v, { ...FACTS, subject: "Nova avaliação de 1 estrela no Google" }, SETTINGS_57)).toEqual({ action: "skip", why: "review" });
+    // aviso de avaliação pelo REMETENTE (o assunto já não decide)
+    expect(complaintIntakeDecision(v, { ...FACTS, senderEmail: "businessprofile-noreply@google.com" }, SETTINGS_57)).toEqual({ action: "skip", why: "review" });
+    expect(complaintIntakeDecision(v, { ...FACTS, subject: "Nova avaliação de 1 estrela no Google" }, SETTINGS_57)).toEqual({ action: "create" });
+    // a empresa a reencaminhar a queixa de um cliente já pode criar
+    expect(complaintIntakeDecision(v, { ...FACTS, senderIsCompany: true, senderEmail: "backoffice@multipark.pt", forwardedExternal: true }, SETTINGS_57)).toEqual({ action: "create" });
     expect(complaintIntakeDecision(v, { ...FACTS, personal: true }, SETTINGS_57)).toEqual({ action: "skip", why: "personal" });
     expect(complaintIntakeDecision(v, { ...FACTS, fromBoxPipeline: "reclamacoes" }, SETTINGS_57)).toEqual({ action: "skip", why: "complaints_box" });
-    expect(looksLikeNewsletter("Newsletter de outubro", "")).toBe(true);
-    expect(looksLikeNewsletter("Carro riscado", "Quero ser ressarcido.")).toBe(false);
     expect(looksLikeReviewNotice("Olá", "noreply-business@google.com")).toBe(true);
+    expect(looksLikeReviewNotice("Nova avaliação de 1 estrela", "cliente@gmail.com")).toBe(false);
   });
   it("parceiro: email exato do contacto ou o mesmo domínio de empresa (nunca por gmail.com)", () => {
     const partners = ["reservas@agencia-viagens.pt", "ana@gmail.com"];
@@ -453,18 +458,18 @@ describe("3b — a IA viu uma reclamação noutra caixa", () => {
     expect(await intakeFromRouting(MSG, { aiBoxKey: "reclamacoes", confidence: 0.9, reason: null }, deps)).toEqual({ status: "linked", complaintId: 12 });
     expect(calls.record[0][1]).toMatchObject({ status: "linked", complaintId: 12 });
   });
-  it("abaixo do limiar só sugere (nada é criado)", async () => {
+  it("abaixo do limiar de 'confirmada': cria 'Por confirmar (IA)' (14 out 2026 — antes só sugeria)", async () => {
     const { deps, calls } = intakeDeps();
-    expect(await intakeFromRouting(MSG, { aiBoxKey: "reclamacoes", confidence: 0.7, reason: "Talvez" }, deps)).toEqual({ status: "suggested" });
-    expect(calls.claim[0].status).toBe("suggested");
-    expect(calls.create).toEqual([]);
+    expect(await intakeFromRouting(MSG, { aiBoxKey: "reclamacoes", confidence: 0.7, reason: "Talvez" }, deps)).toEqual({ status: "created", complaintId: 555 });
+    expect(calls.claim[0]).toMatchObject({ status: "creating", uncertain: true, kind: "complaint" });
+    expect(calls.create[0]).toMatchObject({ uncertain: true, kind: "complaint" });
     // não se confirmou se é parceiro (lista em baixo) → também só sugere
     const b = intakeDeps({ facts: { uncertain: true } });
     expect(await intakeFromRouting(MSG, { aiBoxKey: "reclamacoes", confidence: 0.99, reason: null }, b.deps)).toEqual({ status: "suggested" });
     expect(b.calls.create).toEqual([]);
   });
   it("newsletter, parceiro e interno não criam (fica registado porquê)", async () => {
-    for (const [patch, why] of [[{ text: "Newsletter… unsubscribe" }, "newsletter"], [{ senderIsPartner: true }, "partner"], [{ senderIsCompany: true }, "internal"]] as const) {
+    for (const [patch, why] of [[{ listMail: true }, "newsletter"], [{ senderIsPartner: true }, "partner"], [{ senderIsCompany: true }, "internal"]] as const) {
       const { deps, calls } = intakeDeps({ facts: patch as any });
       expect(await intakeFromRouting(MSG, { aiBoxKey: "reclamacoes", confidence: 0.99, reason: null }, deps)).toEqual({ status: "skipped", why });
       expect(calls.claim[0]).toMatchObject({ status: "skipped", skipReason: why });
@@ -538,24 +543,24 @@ function routingDeps(output: any, intake = vi.fn(async (..._a: any[]) => ({ stat
     firstContact: async () => ({ outcome: "created", leadId: 1, applicationId: null }) as any,
     cityProjectId: async () => null,
     afterRh: async () => {},
-    complaintIntake: intake,
+    caseIntake: intake,
   };
   return { deps, intake };
 }
 const RMSG: EmailRoutingMessage = { threadId: 10, messageId: 100, fromBoxKey: "info", subject: "Carro riscado", text: "…", fromName: "Ana", fromEmail: "ana@gmail.com", attachmentNames: [], projectId: null };
 
 describe("3b — porque não chegavam: mover para a caixa Reclamações não criava o caso", () => {
-  it("a IA diz reclamação → depois de mover, a reclamação nasce (com a certeza e o motivo da IA)", async () => {
+  it("a IA diz reclamação → a reclamação nasce (com a certeza e o motivo da IA) e a conversa vai para as Reclamações", async () => {
     const { deps, intake } = routingDeps({ box: "reclamacoes", confidence: 0.92, reason: "Dano no carro" });
     const r = await routeEmailMessage(RMSG, deps);
     expect(r).toMatchObject({ status: "moved", boxKey: "reclamacoes", complaint: { status: "created" } });
-    expect(intake).toHaveBeenCalledWith(RMSG, { aiBoxKey: "reclamacoes", confidence: 0.92, reason: "Dano no carro" });
+    expect(intake).toHaveBeenCalledWith(RMSG, { kind: "complaint", aiBoxKey: "reclamacoes", confidence: 0.92, reason: "Dano no carro" });
   });
-  it("com pouca certeza fica no info, mas a sugestão ainda chega às Reclamações", async () => {
+  it("com certeza média a reclamação nasce na mesma ('Por confirmar' decide-se no caso) e a conversa vai para as Reclamações", async () => {
     const { deps, intake } = routingDeps({ box: "reclamacoes", confidence: 0.6, reason: "?" });
-    // entrou pelo info e fica no info (a dúvida não muda de caixa)
-    expect(await routeEmailMessage(RMSG, deps)).toMatchObject({ status: "kept", boxKey: "info" });
-    expect(intake).toHaveBeenCalledWith(RMSG, { aiBoxKey: "reclamacoes", confidence: 0.6, reason: "?" });
+    // 14 out 2026: antes ficava no info só com a sugestão
+    expect(await routeEmailMessage(RMSG, deps)).toMatchObject({ status: "moved", boxKey: "reclamacoes" });
+    expect(intake).toHaveBeenCalledWith(RMSG, { kind: "complaint", aiBoxKey: "reclamacoes", confidence: 0.6, reason: "?" });
   });
   it("outra caixa ou falha da IA → nada nas Reclamações", async () => {
     const a = routingDeps({ box: "reservas", confidence: 0.95, reason: "preço" });
@@ -570,12 +575,14 @@ describe("3b — porque não chegavam: mover para a caixa Reclamações não cri
     const svc = src("server/mail/service.ts");
     expect(svc).toContain("intakeComplaintOfThread(e.result.threadId)");
     expect(svc).toContain('aiIntake = { forceComplaintId: complaintId, replyOnly: true }');
-    expect(svc).toContain("intakeFromRouting(msg, verdict, dbIntakeDeps({ parsed: p, api }))");
+    expect(svc).toContain("intakeFromRouting(msg, verdict, dbIntakeDeps({ parsed: p, api: ctx.api }))");
     expect(src("server/commsAiSweep.ts")).toContain("retryFailedIntakes");
     // a nova tentativa de uma resposta que falhou nunca corre o pipeline "normal" numa conversa da IA
     const retry = svc.slice(svc.indexOf("export async function retryPipelineMessage"), svc.indexOf("export async function retryFailedPipelines"));
     expect(retry).toContain("intakeOfThread(threadId)");
-    expect(retry).toContain("aiIntake = { forceComplaintId: seen.complaintId, replyOnly: true }");
+    expect(retry).toContain("{ forceComplaintId: seen.complaintId, replyOnly: true }");
+    // auditoria: o mesmo para um perdido que a IA ligou
+    expect(retry).toContain("{ forceLostFoundId: seen.lostFoundId, replyOnly: true }");
   });
 });
 
@@ -858,12 +865,12 @@ describe("auditoria 57 — a Multipark lenta não prende os emails do cliente", 
 });
 
 describe("auditoria 57 — a queixa em resposta a uma newsletter nossa não é 'newsletter'", () => {
-  it("as regras leem só a mensagem nova (o rodapé citado da newsletter não conta)", () => {
+  it("o texto nunca decide 'newsletter' (14 out 2026): a queixa em resposta a uma newsletter cria; a newsletter a sério sai pelos cabeçalhos", () => {
     const body = "Cobraram-me duas vezes a reserva de outubro e ninguém responde!\n\nEm 10/10/2026, Multipark escreveu:\n> Promoções de outono\n> Para cancelar a subscrição clique aqui";
     const v = { aiBoxKey: "reclamacoes", confidence: 0.95 };
     expect(complaintIntakeDecision(v, { ...FACTS, text: intakeFactsText(body) }, SETTINGS_57)).toEqual({ action: "create" });
-    // uma newsletter a sério continua a ser newsletter
-    expect(complaintIntakeDecision(v, { ...FACTS, text: intakeFactsText("Promoções de outono. Para cancelar a subscrição clique aqui.") }, SETTINGS_57)).toEqual({ action: "skip", why: "newsletter" });
+    // uma newsletter a sério (List-Unsubscribe) continua a ser newsletter
+    expect(complaintIntakeDecision(v, { ...FACTS, listMail: true }, SETTINGS_57)).toEqual({ action: "skip", why: "newsletter" });
     expect(src("server/complaintMailIntake.ts")).toContain("text: intakeFactsText(r.bodyText ?? msg.text),");
   });
 });

@@ -727,6 +727,15 @@ export async function aiCommsCron(o: { deadlineAt: number }): Promise<CronJobRun
   } catch (err) { return fail(err); }
 }
 
+/** 14 out 2026: casos dos pipelines que falharam + rever os emails que já estão nas caixas (AI_MAIL_BACKFILL). */
+export async function mailBackfillCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runMailBackfillJob } = await import("./commsAiSweep");
+    const report = await runMailBackfillJob({ deadlineAt: o.deadlineAt });
+    return { httpStatus: 200, body: { ok: report.errors.length === 0, ranAt: ranAt(), ...report }, done: true };
+  } catch (err) { return fail(err); }
+}
+
 // ─── Google (Gmail, Tarefas/Calendário/Drive, conhecimento, Web & SEO, Ads) ──
 
 export async function mailSyncCron(o: { deadlineAt: number }): Promise<CronJobRun> {

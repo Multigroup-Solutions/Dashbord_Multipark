@@ -521,6 +521,8 @@ export const complaints = mysqlTable("complaints", {
 	archiveReason: varchar({ length: 255 }),
 	// 0630 (lote 57) — de onde veio: email | ia | whatsapp | critica | conversao | manual | api (shared/complaintFilters.ts).
 	origin: varchar({ length: 16 }),
+	// 0655 — a IA criou-a com certeza média: "Por confirmar (IA)" até alguém confirmar (ou arquivar).
+	aiUnconfirmed: tinyint().default(0).notNull(),
 });
 
 /**
@@ -546,6 +548,10 @@ export const complaintMailIntake = mysqlTable("complaint_mail_intake", {
 	decidedById: int(),
 	decidedAt: datetime({ mode: 'string' }),
 	dismissReason: varchar({ length: 255 }),
+	// 0655 — também os perdidos: complaint | lost_found; o caso de perdidos; criado "Por confirmar".
+	caseKind: varchar({ length: 12 }).default('complaint').notNull(),
+	lostFoundId: int(),
+	uncertain: tinyint().default(0).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
@@ -706,6 +712,15 @@ export const commsAiRouting = mysqlTable("comms_ai_routing", {
 	correctedById: int(),
 	correctedAt: datetime({ mode: 'string' }),
 	decidedAt: datetime({ mode: 'string' }),
+	// 0655 — triagem: categoria final, certezas de reclamação/perdido, tentativas (a IA falhou),
+	// aviso reconhecido pela regra (review | occurrence | livro), lido pela regra, lido pelo varrimento.
+	category: varchar({ length: 20 }),
+	complaintScore: decimal({ precision: 4, scale: 3 }),
+	lostScore: decimal({ precision: 4, scale: 3 }),
+	attempts: int().default(0).notNull(),
+	notice: varchar({ length: 16 }),
+	markedReadAt: datetime({ mode: 'string' }),
+	sweptAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [
@@ -1538,6 +1553,9 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedById: int(),
 	archiveReason: varchar({ length: 255 }),
+	// 0655 — de onde veio (email | ia | manual…) e "Por confirmar (IA)" (certeza média).
+	origin: varchar({ length: 16 }),
+	aiUnconfirmed: tinyint().default(0).notNull(),
 	createdBy: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),

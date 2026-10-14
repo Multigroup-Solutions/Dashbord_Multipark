@@ -9,6 +9,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { GOOGLE_ON_PDAS_FLAG, googleOnPdasChangeError } from "../shared/pdaSession";
+import { TRIAGE_CORPUS_KEYS } from "../shared/mailTriage";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess } from "./_core/access";
@@ -75,6 +76,43 @@ export const settingsRouter = router({
     const { schedulerStatus } = await import("./cronScheduler");
     return schedulerStatus();
   }),
+
+  /**
+   * 14 out 2026 — "Testar a triagem" (só o super admin): um lote do corpus
+   * rotulado pelo MESMO pedido e decisão de produção, com o modelo real. Não
+   * escreve nada nos casos (só o custo da IA). O ecrã pede os lotes um a um.
+   */
+  mailTriageEval: protectedProcedure
+    .input(z.object({ offset: z.number().int().min(0).max(1000), limit: z.number().int().min(1).max(20), corpus: z.enum(TRIAGE_CORPUS_KEYS).default("principal") }))
+    .mutation(async ({ ctx, input }) => {
+      requireSuperAdmin(ctx.user.role);
+      // Teto de custo: cada lote são até 20 leituras da IA. Por hora e por dia
+      // (na BD, vale para todas as instâncias) — umas 2 corridas completas por
+      // hora e 6 por dia dos dois corpora.
+      const { checkRateLimit } = await import("./_core/ai/rateLimit");
+      const { MAIL_TRIAGE_EVAL_LIMITS } = await import("./mailTriageEval");
+      const rl = await checkRateLimit(`triage-eval:user:${ctx.user.id}`, MAIL_TRIAGE_EVAL_LIMITS);
+      if (!rl.allowed) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `Já testaste muitas vezes (limite de custo da IA). Tenta daqui a ${Math.ceil(rl.retryAfterSec / 60)} min.` });
+      }
+      const { evalTriageSlice } = await import("./mailTriageEval");
+      return evalTriageSlice({ offset: input.offset, limit: input.limit, concurrency: 4, corpus: input.corpus });
+    }),
+  /** As contas finais (rótulos do servidor) e a linha "[triagem-eval]" nos logs. */
+  mailTriageEvalReport: protectedProcedure
+    .input(z.object({
+      rows: z.array(z.object({ id: z.string().min(1).max(40), predicted: z.string().max(40).nullable() })).max(500),
+      ms: z.number().int().min(0).max(3_600_000).nullish(),
+      model: z.string().max(120).nullish(),
+      corpus: z.enum(TRIAGE_CORPUS_KEYS).default("principal"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      requireSuperAdmin(ctx.user.role);
+      const { triageEvalReport, TRIAGE_CORPUS_LABELS } = await import("./mailTriageEval");
+      const r = triageEvalReport(input);
+      await log(ctx.user.id, "test", "mail_triage", `Testar a triagem (${TRIAGE_CORPUS_LABELS[input.corpus]}): reclamações ${r.recallComplaints ?? "—"}, perdidos ${r.recallLostFound ?? "—"} (${r.correct}/${r.total})`);
+      return r;
+    }),
 
   /** IA: gasto do mês por funcionalidade (ai_usage_log), orçamento e modelos em uso. */
   aiUsage: adminOnly.query(async () => {
