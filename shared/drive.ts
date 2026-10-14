@@ -612,3 +612,47 @@ export function exportSpreadsheetName(input: SheetExportInput, today: string): s
   const period = "from" in input && "to" in input ? ` ${input.from} a ${input.to}` : "";
   return sanitizeDriveName(`${label}${period} (exportado ${today})`, 150);
 }
+
+// ─── Links para abrir o Google Drive (menu "Drive" e a página /drive) ────────
+// Jorge (14 out 2026): "abre um drive qualquer" — com várias contas Google no
+// browser/telemóvel, abria a pessoal. `authuser=<email>` escolhe a conta certa
+// e a entrada principal abre o Shared Drive da empresa.
+
+export const GOOGLE_DRIVE_BASE = "https://drive.google.com/drive";
+export const GOOGLE_DRIVE_VIEWS = ["shared", "my", "sharedWithMe", "sharedDrives", "recent"] as const;
+export type GoogleDriveView = (typeof GOOGLE_DRIVE_VIEWS)[number];
+
+const DRIVE_VIEW_PATHS: Record<Exclude<GoogleDriveView, "shared">, string> = {
+  my: "/my-drive", sharedWithMe: "/shared-with-me", sharedDrives: "/shared-drives", recent: "/recent",
+};
+
+/** Parece um email (para ir no `authuser`)? PURA. */
+export function looksLikeEmail(raw: string | null | undefined): boolean {
+  const s = String(raw ?? "").trim();
+  return s.length <= 254 && /^[^\s@/?#&]+@[^\s@/?#&]+\.[^\s@/?#&]{2,}$/.test(s);
+}
+
+/** Id de um Shared Drive com forma válida (nunca vai texto qualquer para o URL). PURA. */
+export function isDriveIdLike(raw: string | null | undefined): boolean {
+  return /^[A-Za-z0-9_-]{5,120}$/.test(String(raw ?? ""));
+}
+
+/**
+ * URL do Google Drive na conta certa. `shared` = o Shared Drive da empresa
+ * (pasta raiz pelo id; sem id conhecido → a lista dos Drives partilhados).
+ * O email só entra se tiver forma de email. PURA.
+ */
+export function googleDriveUrl(view: GoogleDriveView, o: { email?: string | null; sharedDriveId?: string | null } = {}): string {
+  const path = view === "shared"
+    ? (isDriveIdLike(o.sharedDriveId) ? `/folders/${o.sharedDriveId}` : DRIVE_VIEW_PATHS.sharedDrives)
+    : DRIVE_VIEW_PATHS[view];
+  const email = String(o.email ?? "").trim();
+  return `${GOOGLE_DRIVE_BASE}${path}${looksLikeEmail(email) ? `?authuser=${encodeURIComponent(email)}` : ""}`;
+}
+
+/** Conta para o `authuser`: a conta Google ligada no Perfil; senão o email do login; senão nenhuma. PURA. */
+export function driveAuthEmail(googleEmail: string | null | undefined, loginEmail: string | null | undefined): string | null {
+  if (looksLikeEmail(googleEmail)) return String(googleEmail).trim();
+  if (looksLikeEmail(loginEmail)) return String(loginEmail).trim();
+  return null;
+}

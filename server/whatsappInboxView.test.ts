@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   DEFAULT_INBOX_FILTERS,
   activeInboxFilterCount,
@@ -6,6 +8,8 @@ import {
   contactInitials,
   conversationCityKey,
   matchesCityFilter,
+  inboxCityScope,
+  inboxBoxCounts,
   daySeparatorLabel,
   localDayKey,
 } from "../shared/whatsappInboxView";
@@ -88,13 +92,12 @@ describe("activeInboxFilterCount", () => {
         assignee: "unassigned",
         status: "pendente",
         intent: "reclamacao",
-        box: "rh", // 17f: caixa por tema
-        city: "porto",
+        onlyNoCity: true,
         onlyUnread: true,
         onlyUrgent: true,
         onlyAlerts: true,
       }),
-    ).toBe(8);
+    ).toBe(7);
   });
 });
 
@@ -127,5 +130,66 @@ describe("matchesCityFilter", () => {
     expect(matchesCityFilter(null, "none")).toBe(true);
     expect(matchesCityFilter(undefined, "none")).toBe(true);
     expect(matchesCityFilter("lisboa", "none")).toBe(false);
+  });
+});
+
+describe("matchesCityFilter com as sem cidade (2026-10-14)", () => {
+  it("Porto + sem cidade: Porto e as sem cidade passam, as outras cidades não", () => {
+    expect(matchesCityFilter("porto", "porto", true)).toBe(true);
+    expect(matchesCityFilter(null, "porto", true)).toBe(true);
+    expect(matchesCityFilter(undefined, "porto", true)).toBe(true);
+    expect(matchesCityFilter("lisboa", "porto", true)).toBe(false);
+  });
+  it("none continua a ser SÓ as sem cidade", () => {
+    expect(matchesCityFilter("lisboa", "none", true)).toBe(false);
+  });
+});
+
+describe("inboxCityScope (a cidade segue o seletor de cima)", () => {
+  it("cidade escolhida em cima → essa cidade + as sem cidade (ninguém perde conversas)", () => {
+    expect(inboxCityScope({ globalCity: "faro", onlyNoCity: false })).toEqual({ cityKey: "faro", withNoCity: true });
+  });
+  it("todas as cidades → sem filtro", () => {
+    expect(inboxCityScope({ globalCity: null, onlyNoCity: false })).toEqual({ cityKey: "all", withNoCity: false });
+  });
+  it("chip Sem cidade → só as sem cidade, com ou sem cidade em cima", () => {
+    expect(inboxCityScope({ globalCity: "lisboa", onlyNoCity: true })).toEqual({ cityKey: "none", withNoCity: false });
+    expect(inboxCityScope({ globalCity: null, onlyNoCity: true })).toEqual({ cityKey: "none", withNoCity: false });
+  });
+  it("o chip Sem cidade conta como filtro; a caixa e a cidade já não", () => {
+    expect(activeInboxFilterCount({ ...DEFAULT_INBOX_FILTERS, onlyNoCity: true })).toBe(1);
+    expect(Object.keys(DEFAULT_INBOX_FILTERS)).not.toContain("box");
+    expect(Object.keys(DEFAULT_INBOX_FILTERS)).not.toContain("city");
+  });
+});
+
+describe("inboxBoxCounts (coluna das caixas)", () => {
+  it("conta por caixa, Geral = sem caixa, e as por ler", () => {
+    const m = inboxBoxCounts([
+      { boxKey: "rh", unreadCount: 2 },
+      { boxKey: "rh", unreadCount: 0 },
+      { boxKey: null, unreadCount: 1 },
+      { boxKey: undefined, unreadCount: 0 },
+      { boxKey: "", unreadCount: 0 },
+    ]);
+    expect(m.get("all")).toEqual({ total: 5, unread: 2 });
+    expect(m.get("rh")).toEqual({ total: 2, unread: 1 });
+    expect(m.get("geral")).toEqual({ total: 3, unread: 1 });
+    expect(m.get("reservas")).toBeUndefined();
+  });
+});
+
+describe("página do WhatsApp como as caixas de email (2026-10-14)", () => {
+  const src = (p: string) => readFileSync(resolve(__dirname, "..", p), "utf8");
+  const page = src("client/src/pages/WhatsAppInboxPage.tsx");
+  const header = src("client/src/components/whatsapp/InboxListHeader.tsx");
+  it("três colunas no PC: caixas | conversas | conversa; o menu recolhe ao entrar (não embutida)", () => {
+    expect(page).toContain('<div className="w-52 xl:w-60 shrink-0 min-h-0">{boxesColumn}</div>');
+    expect(page).toContain("if (embedded || sidebar.isMobile) return;");
+    expect(header).toContain('aria-label="Caixas de WhatsApp"');
+  });
+  it("a cidade segue o seletor de cima: sem seletor de cidade no topo da lista", () => {
+    expect(header).not.toContain("Todas as cidades</SelectItem>");
+    expect(page).toContain("inboxCityScope({ globalCity: globalCityKey, onlyNoCity: filters.onlyNoCity })");
   });
 });

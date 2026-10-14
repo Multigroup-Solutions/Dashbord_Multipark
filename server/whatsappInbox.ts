@@ -377,18 +377,20 @@ async function classifyConversationCities(rows: ConversationCityInput[]): Promis
 
 /**
  * Ids das conversas da cidade pedida, pela ordem recebida (mais recentes
- * primeiro), no máximo `limit`. PURA.
+ * primeiro), no máximo `limit`. PURA. `withNoCity`: com uma cidade, as sem
+ * cidade conhecida também entram (`inboxCityScope`, 2026-10-14).
  */
 export function pickCityConversationIds(
   orderedIds: readonly number[],
   cities: ReadonlyMap<number, CityKey | null>,
   filter: InboxCityFilter,
   limit: number,
+  withNoCity = false,
 ): number[] {
   const out: number[] = [];
   for (const id of orderedIds) {
     if (out.length >= limit) break;
-    if (matchesCityFilter(cities.get(id) ?? null, filter)) out.push(id);
+    if (matchesCityFilter(cities.get(id) ?? null, filter, withNoCity)) out.push(id);
   }
   return out;
 }
@@ -420,6 +422,8 @@ export async function listConversations(opts: {
   hiddenBoxes?: readonly string[];
   /** Cidade da pessoa (2026-10-09); omissão/"all" = todas. */
   city?: InboxCityFilter | null;
+  /** Com uma cidade: as sem cidade conhecida também entram (`inboxCityScope`). */
+  withNoCity?: boolean;
 } = {}): Promise<ConversationRow[]> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");
@@ -456,7 +460,7 @@ export async function listConversations(opts: {
       .orderBy(desc(whatsappConversations.lastMessageAt))
       .limit(INBOX_CITY_SCAN_LIMIT);
     scannedCities = await classifyConversationCities(scan);
-    const ids = pickCityConversationIds(scan.map((r) => r.id), scannedCities, cityFilter, INBOX_LIST_LIMIT);
+    const ids = pickCityConversationIds(scan.map((r) => r.id), scannedCities, cityFilter, INBOX_LIST_LIMIT, opts.withNoCity === true);
     if (!ids.length) return [];
     conds.push(inArray(whatsappConversations.id, ids));
   }

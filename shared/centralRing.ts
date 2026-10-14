@@ -17,8 +17,12 @@ export const CENTRAL_RING_FLAG = "CENTRAL_RING";
 export const CENTRAL_RING_STREAM_PATH = "/api/central/ring/stream";
 /** Uma pesquisa conta como "a tocar" durante este tempo. */
 export const CENTRAL_RING_WINDOW_MS = 45_000;
-/** O som pára sozinho ao fim disto (a chamada continua na consola). */
-export const CENTRAL_RING_SOUND_MS = 25_000;
+/**
+ * O som pára sozinho ao fim disto (a chamada continua na consola). Jorge (14 out
+ * 2026): 25 s era demais — quem atende na consola ficava a ouvir o dashboard a
+ * tocar ao telefone. 12 s = 4 toques (0, 3, 6 e 9 s).
+ */
+export const CENTRAL_RING_SOUND_MS = 12_000;
 /** O aviso fecha sozinho ao fim disto. */
 export const CENTRAL_RING_CARD_MS = 5 * 60_000;
 /** A mesma pesquisa repetida (Contacts, Leads, Accounts…) dentro disto é a mesma chamada. */
@@ -29,6 +33,23 @@ export const CENTRAL_RING_SAME_CALL_MS = 15_000;
  */
 export const CENTRAL_RING_BATCH_MS = 5_000;
 export const CENTRAL_RING_BATCH_NUMBERS = 3;
+/**
+ * Endereço da consola da Vodafone para o botão "Atender na consola" (abre/foca o
+ * separador com o nome `CENTRAL_CONSOLE_WINDOW`). A One Net Attendant Console é
+ * uma aplicação do Windows, sem endereço web nem protocolo conhecido: enquanto
+ * isto for null, o botão chama-se "Já atendi" e só silencia.
+ */
+export const CENTRAL_CONSOLE_URL: string | null = null;
+export const CENTRAL_CONSOLE_WINDOW = "vodafone-consola";
+
+/**
+ * Evento SSE "atendida" (ainda não é enviado). TODO(API da Vodafone): quando a
+ * Vodafone nos disser que a chamada foi atendida (Xsi/eventos da One Net), o
+ * stream (`server/centralRing.ts`) manda `event: answered` com o id do toque e
+ * o `CentralRingManager` já pára o som sozinho ao recebê-lo.
+ */
+export const CENTRAL_RING_ANSWERED_EVENT = "answered";
+
 /** Um clique num "Ligar" da dashboard para o mesmo número há menos disto → é a chamada que eu fiz (sem toque). */
 export const CENTRAL_DIALED_MS = 90_000;
 
@@ -84,9 +105,24 @@ export function ringContactHref(ref: string): string | null {
   const r = parseContactRef(ref);
   if (!r || r.kind === "ext") return null;
   if (r.kind === "crm") return `/clientes/${r.id}`;
-  if (r.kind === "emp") return "/rh";
+  if (r.kind === "emp") return employeeFichaHref(Number(r.id));
   if (r.kind === "tel") return `/clientes?q=${encodeURIComponent(`+${r.id}`)}`;
   return "/clientes";
+}
+
+/** A ficha RH de uma pessoa (o RH abre-a com `?employeeId=`). PURA. */
+export function employeeFichaHref(employeeId: number): string {
+  return `/rh?employeeId=${employeeId}`;
+}
+
+/**
+ * Para onde leva o nome de quem atendeu/fez a chamada: a ficha RH dessa conta
+ * (a ativa primeiro); sem ficha ligada, a conta em RH → Utilizadores. PURA.
+ */
+export function centralPersonHref(employeeId: number | null | undefined, userId: number | null | undefined): string | null {
+  if (employeeId != null && Number.isFinite(employeeId) && employeeId > 0) return employeeFichaHref(employeeId);
+  if (userId != null && Number.isFinite(userId) && userId > 0) return `/rh/utilizadores?userId=${userId}`;
+  return null;
 }
 
 /**
@@ -102,4 +138,19 @@ export function wasDialedByMe(dialed: ReadonlyArray<{ tail: string; atMs: number
 /** Um evento SSE do toque (só o id — quem liga vem pelo tRPC `central.myRing`). PURA. */
 export function formatRingEvent(id: number): string {
   return `event: ring\ndata: ${JSON.stringify({ id })}\n\n`;
+}
+
+/** O evento "atendida" (ver `CENTRAL_RING_ANSWERED_EVENT`). PURA. */
+export function formatRingAnsweredEvent(id: number): string {
+  return `event: ${CENTRAL_RING_ANSWERED_EVENT}\ndata: ${JSON.stringify({ id })}\n\n`;
+}
+
+/** O id de um evento do stream (`{"id": 12}`); outra coisa → null. PURA. */
+export function parseRingEventId(data: unknown): number | null {
+  try {
+    const id = Number((JSON.parse(String(data ?? "")) as { id?: unknown })?.id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
 }

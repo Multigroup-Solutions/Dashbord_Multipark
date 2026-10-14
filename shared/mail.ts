@@ -861,7 +861,29 @@ export function checkSendAs(from: string | null | undefined, account: string, li
 
 export const MAIL_THREAD_STATUSES = ["aberto", "pendente", "resolvido"] as const;
 export type MailThreadStatus = (typeof MAIL_THREAD_STATUSES)[number];
-export const MAIL_THREAD_STATUS_LABELS: Record<MailThreadStatus, string> = { aberto: "Aberta", pendente: "Pendente", resolvido: "Resolvida" };
+// 14 out 2026 (Jorge: "Abertas" lia-se como "já abertas/lidas"): "aberto" mostra-se "Por tratar" (o valor não muda).
+export const MAIL_THREAD_STATUS_LABELS: Record<MailThreadStatus, string> = { aberto: "Por tratar", pendente: "Pendente", resolvido: "Resolvida" };
+/** Os mesmos estados no plural, para os filtros. */
+export const MAIL_THREAD_STATUS_FILTER_LABELS: Record<MailThreadStatus, string> = { aberto: "Por tratar", pendente: "Pendentes", resolvido: "Resolvidas" };
+
+// ─── Lista de conversas: vista principal (14 out 2026) ──────────────────────
+// Jorge: "está um bocado confuso" — as caixas partilhadas abriam em "Abertas"
+// (estado de trabalho) e isso lia-se como "já lidas". Agora há uma escolha
+// principal (Não lidas · Por responder · Todas) e o resto vai para "Filtros".
+export const MAIL_LIST_VIEWS = ["unread", "awaiting", "all"] as const;
+export type MailListView = (typeof MAIL_LIST_VIEWS)[number];
+export const MAIL_LIST_VIEW_LABELS: Record<MailListView, string> = { unread: "Não lidas", awaiting: "Por responder", all: "Todas" };
+
+/** Vista com que a lista abre: caixas partilhadas → Não lidas; O meu email e a pesquisa global (?q=) → Todas. PURA. */
+export function mailInitialView(o: { personal: boolean; search?: string | null }): MailListView {
+  return o.personal || String(o.search ?? "").trim() ? "all" : "unread";
+}
+
+/** Quantos filtros secundários (dentro de "Filtros") estão ativos — o número no botão. PURA. */
+export function mailActiveFilterCount(f: { status: string; assigned: string; brand: string; showAutomatic: boolean; archived: boolean; personal: boolean }): number {
+  return (f.status !== "all" ? 1 : 0) + (!f.personal && f.assigned !== "all" ? 1 : 0) + (f.brand !== "all" ? 1 : 0)
+    + (f.showAutomatic ? 1 : 0) + (f.archived ? 1 : 0);
+}
 
 export const MAIL_DEFAULT_SLA_HOURS = 24;
 export const MAIL_DEFAULT_RETENTION_YEARS = 5;

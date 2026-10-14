@@ -335,7 +335,7 @@ type Authed = Request & { centralAccount?: Account };
 const contactRedirectScript = `function(){
   var m=/^#?\\/?(?:Contacts|Leads|Accounts)\\/((crm|ct|emp|tel)-(\\d+))/.exec(location.hash||"");
   var to="/";
-  if(m){ if(m[2]==="crm") to="/clientes/"+m[3]; else if(m[2]==="emp") to="/rh"; else if(m[2]==="tel") to="/clientes?q="+encodeURIComponent("+"+m[3]); else to="/clientes"; }
+  if(m){ if(m[2]==="crm") to="/clientes/"+m[3]; else if(m[2]==="emp") to="/rh?employeeId="+m[3]; else if(m[2]==="tel") to="/clientes?q="+encodeURIComponent("+"+m[3]); else to="/clientes"; }
   location.replace(to);
 }`;
 

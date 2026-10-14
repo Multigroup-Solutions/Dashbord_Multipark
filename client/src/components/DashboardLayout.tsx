@@ -125,12 +125,17 @@ import { noAccessHint, noLinkedRecordMessage } from "@shared/ownAccess";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PAGE_RELOAD_EVENT, jumpTo } from "@/lib/jumpTo";
+import { driveUrl, useDriveLinkContext } from "@/lib/driveLink";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
 import { useTerminal } from "@/components/terminal/useTerminal";
 import { TerminalBar, TerminalBusyDialog } from "@/components/terminal/TerminalBar";
 
-/** Lote 45: o "Drive" do menu abre o Google Drive da pessoa (a conta Google com que está no browser). */
-export const GOOGLE_DRIVE_URL = "https://drive.google.com/drive/my-drive";
+/**
+ * Lote 45: o "Drive" do menu abre o Google Drive num separador novo. 14 out 2026
+ * ("abre um drive qualquer"): no clique troca-se pelo Shared Drive da empresa,
+ * na conta Google da pessoa (`authuser`) — ver lib/driveLink.ts.
+ */
+export const GOOGLE_DRIVE_URL = "https://drive.google.com/drive/shared-drives";
 
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
 export type AccessSubject = string | { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
@@ -153,6 +158,8 @@ export type MenuItem = {
 
 /** Abre um item do menu: navega, ou abre o endereço externo num separador novo. */
 export function openMenuItem(item: Pick<MenuItem, "path" | "external">, navigate: (path: string) => void): void {
+  // Drive: o URL já com a conta certa e o Shared Drive (em cache — o window.open não pode esperar).
+  if (item.external === GOOGLE_DRIVE_URL) item = { ...item, external: driveUrl("shared") };
   if (item.external) {
     window.open(item.external, "_blank", "noopener,noreferrer");
     return;
@@ -456,6 +463,7 @@ function DashboardLayoutContent({
   setSidebarWidth,
 }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
+  useDriveLinkContext(user); // o "Drive" do menu já sabe a conta e o Shared Drive quando se carrega
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar, setOpenMobile } = useSidebar();
   const isCollapsed = state === "collapsed";

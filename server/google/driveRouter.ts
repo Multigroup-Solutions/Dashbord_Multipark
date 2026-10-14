@@ -33,6 +33,12 @@ export const googleDriveRouter = router({
     return driveStatus(ctx.user.id);
   }),
 
+  /** Menu "Drive": id do Shared Drive da empresa (só o já guardado) + email Google da pessoa (authuser). */
+  sharedDriveLink: protectedProcedure.query(async ({ ctx }) => {
+    const { sharedDriveLink } = await import("./driveService");
+    return sharedDriveLink(ctx.user.id);
+  }),
+
   /** Token curto (só drive.file) para o Google Picker da própria pessoa; null = colar o link. */
   pickerToken: protectedProcedure.mutation(async ({ ctx }) => {
     const { pickerAccessToken } = await import("./driveService");

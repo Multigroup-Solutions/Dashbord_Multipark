@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/useMobile";
+import { useSidebar } from "@/components/ui/sidebar";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import {
   MessageCircle,
@@ -65,14 +66,14 @@ import {
 import { CITY_KEYS, CITY_LABELS, matchCityKey, type CityKey } from "@shared/city";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { withDraft, type WhatsAppDrafts } from "@shared/whatsappDrafts";
-import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, matchesBoxFilter, matchesCityFilter, type InboxListFilters } from "@shared/whatsappInboxView";
+import { DEFAULT_INBOX_FILTERS, INBOX_LIST_LIMIT, inboxBoxCounts, inboxCityScope, matchesBoxFilter, matchesCityFilter, type InboxListFilters } from "@shared/whatsappInboxView";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { WhatsAppContextSheet } from "@/components/whatsapp/WhatsAppContextSheet";
 import { QuickRepliesDialog } from "@/components/whatsapp/QuickRepliesDialog";
 import { CallContactDialog, PendingCallbacksDialog, type TimelineCall } from "@/components/whatsapp/WhatsAppCallsPanels";
 import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
 import { ConversationListItem } from "@/components/whatsapp/ConversationListItem";
-import { InboxListHeader } from "@/components/whatsapp/InboxListHeader";
+import { INBOX_ALL_BOXES, INBOX_GENERAL_BOX, InboxBoxesColumn, InboxListHeader } from "@/components/whatsapp/InboxListHeader";
 import { MessageThread } from "@/components/whatsapp/MessageThread";
 import { CaseProposalBar } from "@/components/whatsapp/CaseProposalBar";
 import { OPT_OUT_SOURCE_LABEL, type OptOutSource } from "@shared/whatsappOptOut";
@@ -152,6 +153,18 @@ export interface WhatsAppInboxProps {
 export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedClose, onEmbeddedChanged }: WhatsAppInboxProps = {}) {
   const embedded = embeddedConversationId !== undefined;
   const isMobile = useIsMobile();
+  // 2026-10-14 (Jorge: "igual às caixas de email"): no PC o menu recolhe ao
+  // entrar e volta como estava ao sair (abre-se à mão quando se quiser). Mesma
+  // regra da ComunicacaoPage. Embutida, a página de fora é que decide.
+  const sidebar = useSidebar();
+  const sidebarWasOpen = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (embedded || sidebar.isMobile) return;
+    sidebarWasOpen.current = sidebar.open;
+    if (sidebar.open) sidebar.setOpen(false);
+    return () => { if (sidebarWasOpen.current) sidebar.setOpen(true); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded, sidebar.isMobile]);
   const openEmployee = useOpenEmployee();
   // ?c=<id> (pesquisa global) abre logo a conversa.
   const [selectedId, setSelectedIdState] = useState<number | null>(() =>
@@ -215,17 +228,26 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
     return () => clearInterval(t);
   }, []);
 
-  // Filtro de cidade (2026-10-09): só as cidades que a pessoa vê (as do seletor
-  // global). NÃO segue a cidade escolhida em cima — para quem só tem uma cidade
-  // ela vem sempre preenchida e esconderia as conversas sem cidade conhecida.
+  // Cidade (2026-10-14): segue o seletor GLOBAL da barra de topo — já não há
+  // seletor de cidade no inbox. Antes (2026-10-09) não o seguia porque, para
+  // quem só tem uma cidade, ela vem sempre preenchida e escondia as conversas
+  // SEM cidade conhecida. Resolvido em `inboxCityScope`: com uma cidade
+  // escolhida a lista traz essa cidade E as sem cidade (ninguém perde
+  // conversas); o chip "Sem cidade" (com a contagem) mostra só essas.
   const globalFilters = useGlobalFilters();
-  const cityOptions = useMemo<CityKey[]>(() => {
-    const keys = new Set(globalFilters.cities.map((c) => matchCityKey(c.name)).filter((k): k is CityKey => k != null));
-    return CITY_KEYS.filter((k) => keys.has(k));
-  }, [globalFilters.cities]);
+  const globalCityKey = useMemo<CityKey | null>(() => {
+    if (globalFilters.cityId == null) return null;
+    return matchCityKey(globalFilters.cities.find((c) => c.id === globalFilters.cityId)?.name);
+  }, [globalFilters.cityId, globalFilters.cities]);
+  const cityScope = inboxCityScope({ globalCity: globalCityKey, onlyNoCity: filters.onlyNoCity });
+  // Caixa (coluna da esquerda, como nas caixas de email): não é um "filtro" — o "Limpar" não a muda.
+  const [box, setActiveBox] = useState<string>(INBOX_ALL_BOXES);
   // A cidade vai ao servidor (aplicada antes do LIMIT, como a pesquisa).
-  const listInput = serverSearch || filters.city !== "all"
-    ? { ...(serverSearch ? { search: serverSearch } : {}), ...(filters.city !== "all" ? { cityKey: filters.city } : {}) }
+  const listInput = serverSearch || cityScope.cityKey !== "all"
+    ? {
+        ...(serverSearch ? { search: serverSearch } : {}),
+        ...(cityScope.cityKey !== "all" ? { cityKey: cityScope.cityKey, ...(cityScope.withNoCity ? { withNoCity: true } : {}) } : {}),
+      }
     : undefined;
   // Dentro da Comunicação (embedded) a lista é a da Comunicação — aqui não se pede.
   const conversations = trpc.whatsapp.conversations.list.useQuery(listInput, {
@@ -370,7 +392,15 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
     for (const c of allConversations) m.set(c.id, conversationAlerts(c, now, slaMinutes));
     return m;
   }, [allConversations, now, slaMinutes]);
-  const scoped = allConversations.filter((c) =>
+  // O servidor já filtrou a cidade; isto cobre a lista anterior mostrada enquanto a nova carrega.
+  const inCity = allConversations.filter((c) => matchesCityFilter(c.cityKey, cityScope.cityKey, cityScope.withNoCity) || c.id === selectedId);
+  // Coluna das caixas: conversas por ler de cada caixa (na cidade de cima).
+  const boxCounts = inboxBoxCounts(inCity);
+  const boxUnread = (key: string) => boxCounts.get(key)?.unread ?? 0;
+  // Tudo o resto (contagens dos chips e a lista) é DENTRO da caixa escolhida, como no email.
+  const inBox = inCity.filter((c) => matchesBoxFilter(c.boxKey, box) || c.id === selectedId);
+  const noCityCount = inBox.filter((c) => c.cityKey == null).length;
+  const scoped = inBox.filter((c) =>
     matchesInboxFilters(c, { assignee: filters.assignee, status: filters.status, userId: user?.id }),
   );
   const counts = {
@@ -378,12 +408,12 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
     overdue: scoped.filter((c) => alertsById.get(c.id)?.overdue).length,
     closing: scoped.filter((c) => alertsById.get(c.id)?.windowClosing).length,
     urgent: scoped.filter((c) => c.aiUrgency === "urgente" && c.status !== "resolvido").length,
-    mine: allConversations.filter((c) => c.assignedUserId != null && c.assignedUserId === user?.id && c.status !== "resolvido").length,
+    mine: inBox.filter((c) => c.assignedUserId != null && c.assignedUserId === user?.id && c.status !== "resolvido").length,
   };
   const searchLower = search.trim().toLowerCase();
   // A conversa ABERTA fica sempre à vista (ex.: acabou de ser resolvida).
   const scopedIds = new Set(scoped.map((c) => c.id));
-  const convList = allConversations.filter((c) => {
+  const convList = inBox.filter((c) => {
     const a = alertsById.get(c.id);
     return (
       (scopedIds.has(c.id) || c.id === selectedId) &&
@@ -394,9 +424,6 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
       (!filters.onlyUnread || c.unreadCount > 0 || c.id === selectedId) &&
       (!filters.onlyAlerts || a?.overdue || a?.windowClosing || c.id === selectedId) &&
       (filters.intent === "all" || c.aiIntent === filters.intent || c.id === selectedId) &&
-      (matchesBoxFilter(c.boxKey, filters.box) || c.id === selectedId) &&
-      // O servidor já filtrou; isto cobre a lista anterior mostrada enquanto a nova carrega.
-      (matchesCityFilter(c.cityKey, filters.city) || c.id === selectedId) &&
       (!filters.onlyUrgent || c.aiUrgency === "urgente" || c.id === selectedId)
     );
   });
@@ -547,7 +574,14 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
     />
   );
 
-  // ── Coluna esquerda: lista de conversas ──
+  // ── Coluna 1 (PC): as caixas, umas por baixo das outras (como no email) ──
+  const boxList = boxes.data ?? [];
+  const boxTitle = box === INBOX_ALL_BOXES ? "Todas as caixas" : box === INBOX_GENERAL_BOX ? "Geral (por separar)" : boxLabels.get(box) ?? "Caixa";
+  const selectInboxBox = (key: string) => { setActiveBox(key); setSelectedId(null); };
+  const boxesColumn = <InboxBoxesColumn boxes={boxList} box={box} onBoxChange={selectInboxBox} boxUnread={boxUnread} />;
+  const cityLabel = globalCityKey ? CITY_LABELS[globalCityKey] : null;
+
+  // ── Coluna 2: lista de conversas da caixa ──
   const listColumn = (
     <div className="flex flex-col h-full border-r min-w-0">
       <InboxListHeader
@@ -565,8 +599,14 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
         pendingCallbacks={pendingCallbacks.data?.length ?? 0}
         pendingCallbacksError={callsOn && !!pendingCallbacks.error}
         onOpenCallbacks={() => setCallbacksOpen(true)}
-        boxes={boxes.data ?? []}
-        cities={cityOptions}
+        boxTitle={boxTitle}
+        // Telemóvel: as caixas num seletor compacto no topo (no PC estão na coluna da esquerda).
+        boxes={isMobile ? boxList : []}
+        box={box}
+        onBoxChange={isMobile ? selectInboxBox : undefined}
+        boxUnread={boxUnread}
+        cityLabel={cityLabel}
+        noCityCount={noCityCount}
       />
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {conversations.error && (
@@ -591,17 +631,19 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
               ? "A carregar…"
               : hasSearch
                 ? `Sem resultados para “${search.trim()}”${filters.onlyUnread ? " entre as não lidas" : ""}.`
-                : filters.city !== "all" && !allConversations.length
-                  ? filters.city === "none"
-                    ? "Sem conversas sem cidade conhecida."
-                    : `Sem conversas de ${CITY_LABELS[filters.city]}.`
-                  : filters.onlyUnread
-                    ? "Sem mensagens por ler."
-                    : filters.onlyAlerts
-                      ? "Sem conversas com alerta."
-                      : allConversations.length
-                        ? "Nenhuma conversa com estes filtros."
-                        : "Ainda sem conversas."}
+                : filters.onlyNoCity
+                  ? "Sem conversas sem cidade conhecida."
+                  : globalCityKey && !allConversations.length
+                    ? `Sem conversas de ${CITY_LABELS[globalCityKey]} (nem sem cidade).`
+                    : box !== INBOX_ALL_BOXES && !inBox.length
+                      ? `Sem conversas em ${boxTitle}.`
+                      : filters.onlyUnread
+                        ? "Sem mensagens por ler."
+                        : filters.onlyAlerts
+                          ? "Sem conversas com alerta."
+                          : allConversations.length
+                            ? "Nenhuma conversa com estes filtros."
+                            : "Ainda sem conversas."}
           </div>
         )}
         {openList.length > 0 && groupHeader("Janela aberta — a fechar primeiro", openList.length, "open")}
@@ -1207,7 +1249,8 @@ export default function WhatsAppInboxPage({ embeddedConversationId, onEmbeddedCl
             )
           ) : (
             <>
-              <div className="w-[340px] xl:w-[380px] shrink-0">{listColumn}</div>
+              <div className="w-52 xl:w-60 shrink-0 min-h-0">{boxesColumn}</div>
+              <div className="w-[320px] xl:w-[360px] shrink-0 min-h-0">{listColumn}</div>
               {threadColumn}
             </>
           )}

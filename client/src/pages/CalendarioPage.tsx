@@ -17,20 +17,21 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useSidebar } from "@/components/ui/sidebar";
 import { toast } from "sonner";
 import {
-  AlertTriangle, AlignLeft, CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Layers, Loader2, MapPin, Plus, RefreshCw, Users, Video,
+  AlertTriangle, AlignLeft, CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Layers, Loader2, MapPin, Plus, RefreshCw, Repeat, Users, Video,
 } from "lucide-react";
 import { GoogleAccountCard, useGoogleOAuthReturnToast } from "@/components/GoogleAccountCard";
 import { googleFeaturesHref } from "@/components/google/GoogleSyncCard";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import {
-  CALENDAR_MAX_GUESTS, CALENDAR_VIEW_LABELS, PT_WEEKDAYS_SHORT, addLocalMinutes, allDayLanes, daySegments, eventWhenLabel, eventsOnDay, isAllDayLike,
+  CALENDAR_MAX_GUESTS, CALENDAR_MAX_REPEAT_COUNT, CALENDAR_REPEAT_FREQS, CALENDAR_VIEW_LABELS, PT_WEEKDAYS_SHORT, addLocalMinutes, calendarRepeatLabel, calendarRepeatNote, allDayLanes, daySegments, eventWhenLabel, eventsOnDay, isAllDayLike,
   isRealDay, layoutDay, lisbonHHMM, lisbonWallMinutes, localMinutesBetween, monthGridDays, readableTextOn, safeHttpsUrl, shiftAnchor, splitGuests,
   validateNewCalendarEvent, viewDays, viewTitle, weekdayIndex,
-  type CalendarView, type CalendarViewCalendar, type CalendarViewEvent, type CalendarViewReason, type CreateCalendarEventInput, type DaySegment,
+  type CalendarRepeatFreq, type CalendarView, type CalendarViewCalendar, type CalendarViewEvent, type CalendarViewReason, type CreateCalendarEventInput, type DaySegment,
 } from "@shared/calendarView";
 
 type PlacedSegment = DaySegment<CalendarViewEvent> & { col: number; cols: number };
@@ -665,17 +666,24 @@ function NewEventDialog({ initial, onClose, onCreated }: { initial: NewEventInit
   const [description, setDescription] = useState("");
   const [guestsText, setGuestsText] = useState("");
   const [withMeet, setWithMeet] = useState(false);
+  // Repetição: só a escolha vai para o servidor (que monta a regra do Google).
+  const [repeat, setRepeat] = useState<"none" | CalendarRepeatFreq>("none");
+  const [repeatEnd, setRepeatEnd] = useState<"never" | "until" | "count">("never");
+  const [untilDay, setUntilDay] = useState("");
+  const [repeatCount, setRepeatCount] = useState("10");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!initial) return;
     setTitle(""); setAllDay(initial.allDay); setStartDay(initial.startDay); setStartTime(initial.startTime);
     setEndDay(initial.endDay); setEndTime(initial.endTime); setLocation(""); setDescription(""); setGuestsText(""); setWithMeet(false); setError(null);
+    setRepeat("none"); setRepeatEnd("never"); setUntilDay(""); setRepeatCount("10");
   }, [initial]);
 
   const create = trpc.googleCalendar.createEvent.useMutation({
     onSuccess: (r) => {
-      toast.success(r.guests ? `Evento criado no teu Google Calendar e convite enviado a ${r.guests} pessoa(s).` : "Evento criado no teu Google Calendar.");
+      const what = r.recurrenceLabel ? `Evento criado no teu Google Calendar (${r.recurrenceLabel})` : "Evento criado no teu Google Calendar";
+      toast.success(r.guests ? `${what} e convite enviado a ${r.guests} pessoa(s).` : `${what}.`);
       onCreated(startDay);
     },
     onError: (e) => setError(e.message),
@@ -700,7 +708,16 @@ function NewEventDialog({ initial, onClose, onCreated }: { initial: NewEventInit
     ...(location.trim() ? { location: location.trim() } : {}),
     ...(description.trim() ? { description } : {}),
     guests, withMeet,
+    ...(repeat === "none" ? {} : {
+      recurrence: {
+        freq: repeat,
+        end: repeatEnd === "until" ? { kind: "until" as const, untilDay }
+          : repeatEnd === "count" ? { kind: "count" as const, count: Number(repeatCount) }
+          : { kind: "never" as const },
+      },
+    }),
   };
+  const repeatNote = repeat === "none" ? null : calendarRepeatNote(repeat, startDay);
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const check = validateNewCalendarEvent(payload, { nowMs: Date.now() });
@@ -743,6 +760,38 @@ function NewEventDialog({ initial, onClose, onCreated }: { initial: NewEventInit
                 <Input id="cal-end-time" type="time" step={300} value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-28" />
               </div>
             )}
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="cal-repeat" className="flex items-center gap-1 text-xs text-muted-foreground"><Repeat className="h-3.5 w-3.5" />Repete</Label>
+            <Select value={repeat} onValueChange={(v) => setRepeat(v as "none" | CalendarRepeatFreq)}>
+              <SelectTrigger id="cal-repeat" className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Não se repete</SelectItem>
+                {CALENDAR_REPEAT_FREQS.map((f) => <SelectItem key={f} value={f}>{calendarRepeatLabel(f, startDay)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {repeat !== "none" && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Select value={repeatEnd} onValueChange={(v) => setRepeatEnd(v as "never" | "until" | "count")}>
+                  <SelectTrigger className="h-9 w-[150px]" aria-label="Quando termina a repetição"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="never">Nunca termina</SelectItem>
+                    <SelectItem value="until">Termina em</SelectItem>
+                    <SelectItem value="count">Termina após</SelectItem>
+                  </SelectContent>
+                </Select>
+                {repeatEnd === "until" && (
+                  <Input type="date" value={untilDay} min={startDay || undefined} onChange={(e) => setUntilDay(e.target.value)} className="h-9 w-auto" aria-label="Último dia da repetição" />
+                )}
+                {repeatEnd === "count" && (
+                  <span className="flex items-center gap-1.5 text-sm">
+                    <Input type="number" inputMode="numeric" min={2} max={CALENDAR_MAX_REPEAT_COUNT} step={1} value={repeatCount} onChange={(e) => setRepeatCount(e.target.value)} className="h-9 w-20" aria-label="Número de vezes" />
+                    vezes
+                  </span>
+                )}
+              </div>
+            )}
+            {repeatNote && <p className="text-[11.5px] text-muted-foreground">{repeatNote}</p>}
           </div>
           <div className="space-y-1">
             <Label htmlFor="cal-guests" className="flex items-center gap-1 text-xs text-muted-foreground"><Users className="h-3.5 w-3.5" />Convidados (opcional)</Label>

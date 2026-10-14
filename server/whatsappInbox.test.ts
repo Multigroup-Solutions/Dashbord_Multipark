@@ -151,4 +151,8 @@ describe("pickCityConversationIds (filtro de cidade antes do LIMIT)", () => {
   it("all devolve tudo até ao limite", () => {
     expect(pickCityConversationIds(ordered, cities, "all", 4)).toEqual([1, 2, 3, 4]);
   });
+  it("cidade + sem cidade (a cidade de cima, 2026-10-14): Porto e as sem cidade, pela ordem", () => {
+    expect(pickCityConversationIds([...ordered, 7], cities, "porto", 300, true)).toEqual([2, 3, 4, 6, 7]);
+    expect(pickCityConversationIds(ordered, cities, "porto", 2, true)).toEqual([2, 3]);
+  });
 });

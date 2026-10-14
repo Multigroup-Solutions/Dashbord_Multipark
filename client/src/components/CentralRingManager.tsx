@@ -5,9 +5,14 @@
  *  - stream SSE (`/api/central/ring/stream`) + polling como rede de segurança,
  *    como o toque do WhatsApp;
  *  - aviso com quem liga (nome, cliente/equipa, reservas) e "Abrir ficha";
- *  - som durante 25 s no máximo (silenciável, fica guardado neste browser);
+ *  - som durante 12 s no máximo (CENTRAL_RING_SOUND_MS; "Sem som neste browser"
+ *    fica guardado neste browser);
  *  - as chamadas feitas pelos botões "Ligar" da dashboard não tocam (só avisam).
- * Atender e desligar continua a ser na consola.
+ * Atender e desligar continua a ser na consola. Jorge (14 out 2026): quem atende
+ * na consola não pode ficar a ouvir o dashboard — o ícone do telefone é um botão
+ * grande "Já atendi" (pára logo o som e, se houver endereço da consola, abre-a),
+ * e qualquer clique no aviso também silencia. Quando a API da Vodafone disser
+ * "atendida", o stream manda `answered` e o som pára sozinho.
  */
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -17,7 +22,8 @@ import { Button } from "@/components/ui/button";
 import { fmtPhone } from "@/components/crm/crmUi";
 import { CALL_STREAM_REOPEN_MS } from "@shared/whatsappCallSignal";
 import {
-  CENTRAL_DIALED_MS, CENTRAL_RING_CARD_MS, CENTRAL_RING_SOUND_MS, CENTRAL_RING_STREAM_PATH, phoneTail, wasDialedByMe,
+  CENTRAL_CONSOLE_URL, CENTRAL_CONSOLE_WINDOW, CENTRAL_DIALED_MS, CENTRAL_RING_ANSWERED_EVENT, CENTRAL_RING_CARD_MS, CENTRAL_RING_SOUND_MS,
+  CENTRAL_RING_STREAM_PATH, parseRingEventId, phoneTail, wasDialedByMe,
 } from "@shared/centralRing";
 
 const MUTE_KEY = "central-ring-muted";
@@ -59,6 +65,18 @@ function startRing() {
 function stopRing() {
   if (timer) clearInterval(timer);
   timer = null;
+  // Corta também o toque que está a meio (senão ainda se ouve até 1 s).
+  if (ctx && ctx.state === "running") void ctx.suspend().catch(() => undefined);
+}
+
+/** Traz a consola da Vodafone para a frente, se tivermos um endereço para ela (por agora não há: só silencia). */
+function focusConsole() {
+  if (!CENTRAL_CONSOLE_URL) return;
+  try {
+    // Nome fixo: se o separador já estiver aberto, o browser reutiliza-o (e foca-o).
+    const w = window.open(CENTRAL_CONSOLE_URL, CENTRAL_CONSOLE_WINDOW);
+    w?.focus();
+  } catch { /* bloqueado pelo browser — fica só o silêncio */ }
 }
 
 function usePageVisible(): boolean {
@@ -71,11 +89,17 @@ function usePageVisible(): boolean {
   return visible;
 }
 
-/** SSE do toque: cada `ring` chama `onSignal`. Recusado/fechado de vez → nova tentativa em 30 s. */
-function useRingStream(enabled: boolean, onSignal: () => void): boolean {
+/**
+ * SSE do toque: cada `ring` chama `onSignal`; `answered` (quando a API da
+ * Vodafone o mandar) chama `onAnswered` com o id. Recusado/fechado de vez →
+ * nova tentativa em 30 s.
+ */
+function useRingStream(enabled: boolean, onSignal: () => void, onAnswered: (id: number) => void): boolean {
   const [connected, setConnected] = useState(false);
   const signal = useRef(onSignal);
   signal.current = onSignal;
+  const answered = useRef(onAnswered);
+  answered.current = onAnswered;
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return;
     let es: EventSource | null = null;
@@ -85,6 +109,10 @@ function useRingStream(enabled: boolean, onSignal: () => void): boolean {
       es = new EventSource(CENTRAL_RING_STREAM_PATH);
       es.onopen = () => { setConnected(true); signal.current(); };
       es.addEventListener("ring", () => signal.current());
+      es.addEventListener(CENTRAL_RING_ANSWERED_EVENT, (ev) => {
+        const id = parseRingEventId((ev as MessageEvent).data);
+        if (id != null) answered.current(id);
+      });
       es.onerror = () => {
         setConnected(false);
         if (es && es.readyState === EventSource.CLOSED && !stopped) {
@@ -110,7 +138,8 @@ export function CentralRingManager({ enabled }: { enabled: boolean }) {
   const utils = trpc.useUtils();
   const setup = trpc.central.ringSetup.useQuery(undefined, { enabled, staleTime: 5 * 60_000, retry: false });
   const on = enabled && !!setup.data?.enabled;
-  const streamConnected = useRingStream(on, () => { void utils.central.myRing.invalidate(); });
+  const [silencedId, setSilencedId] = useState<number | null>(null);
+  const streamConnected = useRingStream(on, () => { void utils.central.myRing.invalidate(); }, (id) => setSilencedId(id));
   const ringQ = trpc.central.myRing.useQuery(undefined, {
     enabled: on,
     refetchInterval: streamConnected ? 15_000 : visible ? 4_000 : 10_000,
@@ -137,7 +166,6 @@ export function CentralRingManager({ enabled }: { enabled: boolean }) {
 
   const [muted, setMuted] = useState(readMuted);
   const [closedId, setClosedId] = useState<number | null>(null);
-  const [silencedId, setSilencedId] = useState<number | null>(null);
   const [card, setCard] = useState<{ ring: NonNullable<typeof ringQ.data>; mine: boolean; shownAt: number } | null>(null);
 
   // Nova chamada → novo aviso (o aviso fica mesmo depois de a pesquisa sair da janela do toque).
@@ -158,7 +186,7 @@ export function CentralRingManager({ enabled }: { enabled: boolean }) {
     return () => clearTimeout(t);
   }, [card]);
 
-  // Som: só chamadas recebidas, até 25 s, nunca silenciado.
+  // Som: só chamadas recebidas, até CENTRAL_RING_SOUND_MS (12 s), nunca silenciado.
   const [soundOver, setSoundOver] = useState(false);
   useEffect(() => {
     setSoundOver(false);
@@ -176,28 +204,44 @@ export function CentralRingManager({ enabled }: { enabled: boolean }) {
   if (!on || !card) return null;
   const { ring: r, mine } = card;
   const close = () => { setClosedId(r.id); setCard(null); };
+  const silence = () => { if (silencedId !== r.id) setSilencedId(r.id); };
+  const answered = () => { silence(); focusConsole(); };
+  const answerLabel = CENTRAL_CONSOLE_URL ? "Atender na consola" : "Já atendi";
+  const silenced = silencedId === r.id;
   const canAskOsAlerts = typeof Notification !== "undefined" && Notification.permission === "default";
   // Ao meio, em cima (Jorge: "pop-up ao meio"), para se ver logo onde quer que se esteja.
+  // Qualquer clique no aviso silencia (quem está ao telefone não tem de procurar o botão).
   return (
     <div className="fixed z-[60] left-1/2 -translate-x-1/2 top-16 w-[min(400px,calc(100vw-24px))]" aria-live="assertive">
-      <div className="rounded-xl border bg-background shadow-lg p-3 space-y-2" role="alert">
-        <div className="flex items-start gap-2">
-          <div className={`mt-0.5 rounded-full p-2 ${mine ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}>
-            {mine ? <PhoneOutgoing className="h-4 w-4" /> : <PhoneIncoming className={`h-4 w-4 ${ringing ? "animate-pulse" : ""}`} />}
-          </div>
+      <div className="rounded-xl border bg-background shadow-lg p-3 space-y-2" role="alert" onClick={silence}>
+        <div className="flex items-start gap-3">
+          {mine ? (
+            <div className="mt-0.5 rounded-full p-2 bg-muted text-muted-foreground"><PhoneOutgoing className="h-4 w-4" /></div>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); answered(); }}
+              className={`flex w-[72px] shrink-0 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[11px] font-semibold leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                silenced || !ringing ? "bg-muted text-muted-foreground hover:bg-muted/80" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
+              aria-label={CENTRAL_CONSOLE_URL ? "Atender na consola (pára o som)" : "Já atendi na consola (pára o som)"}
+              title={CENTRAL_CONSOLE_URL ? "Pára o som e abre a consola da Vodafone" : "Pára o som (atende na consola da Vodafone)"}
+            >
+              <span className={`rounded-full p-2 ${silenced || !ringing ? "bg-background/60" : "bg-primary-foreground/15"}`}>
+                <PhoneIncoming className={`h-6 w-6 ${ringing ? "animate-pulse" : ""}`} />
+              </span>
+              {silenced ? "Silenciado" : answerLabel}
+            </button>
+          )}
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{mine ? "Central · a ligar" : "Central · chamada"}</div>
             <div className="font-semibold truncate">{r.name}</div>
             <div className="text-xs text-muted-foreground truncate">{[r.title, r.internal ? r.phone : fmtPhone(r.phone)].filter(Boolean).join(" · ")}</div>
           </div>
-          <button type="button" onClick={close} className="text-muted-foreground hover:text-foreground" aria-label="Fechar o aviso da chamada"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); close(); }} className="text-muted-foreground hover:text-foreground" aria-label="Fechar o aviso da chamada"><X className="h-4 w-4" /></button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {r.href && (
             <Button size="sm" onClick={() => { setSilencedId(r.id); setLocation(r.href!); }}>Abrir ficha</Button>
-          )}
-          {ringing && (
-            <Button size="sm" variant="outline" onClick={() => setSilencedId(r.id)}><VolumeX className="h-4 w-4" />Silenciar</Button>
           )}
           {!mine && (
             <Button size="sm" variant="ghost" onClick={() => { const v = !muted; setMuted(v); writeMuted(v); }} title={muted ? "Voltar a tocar nas próximas chamadas" : "O aviso continua a aparecer, sem som"}>
@@ -210,7 +254,7 @@ export function CentralRingManager({ enabled }: { enabled: boolean }) {
             </Button>
           )}
         </div>
-        <p className="text-[11px] text-muted-foreground">Atende e desliga na consola. A chamada fica registada quando a consola a envia no fim.</p>
+        <p className="text-[11px] text-muted-foreground">Atende e desliga na consola. Um clique aqui pára o som; a chamada fica registada quando a consola a envia no fim.</p>
       </div>
     </div>
   );
