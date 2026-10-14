@@ -63,6 +63,25 @@ export function parseDbDate(s: string): Date {
   return new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
 }
 
+/** Turno máx. 12 h: entrada aberta há mais de 16 h = check-out esquecido. */
+export const CHECKOUT_FORGOTTEN_AFTER_H = 16;
+export const CHECKOUT_FORGOTTEN_CAP_H = 12;
+
+/**
+ * Horas da saída do ponto a partir da entrada como está na BD (texto UTC).
+ * Nunca `new Date("YYYY-MM-DD HH:MM:SS")`: isso lê a hora local do servidor
+ * (em Lisboa, no verão, dava +1 h a cada turno).
+ * Esquecida (>16 h) → corta às 12 h, sem extraordinárias.
+ */
+export function checkoutHours(checkInAt: string, nowMs: number): { inAt: Date; outAt: Date; hoursWorked: string; forgotten: boolean } {
+  const inAt = parseDbDate(checkInAt);
+  const diff = (nowMs - inAt.getTime()) / 3600000;
+  if (diff > CHECKOUT_FORGOTTEN_AFTER_H) {
+    return { inAt, outAt: new Date(inAt.getTime() + CHECKOUT_FORGOTTEN_CAP_H * 3600000), hoursWorked: CHECKOUT_FORGOTTEN_CAP_H.toFixed(2), forgotten: true };
+  }
+  return { inAt, outAt: new Date(nowMs), hoursWorked: diff.toFixed(2), forgotten: false };
+}
+
 /**
  * Reparte [inAt, outAt) em normal / noite / fim de semana, minuto a minuto.
  * Fim de semana prevalece sobre a noite (buckets mutuamente exclusivos).

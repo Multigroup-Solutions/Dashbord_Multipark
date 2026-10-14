@@ -1523,20 +1523,13 @@ export const rhRouter = router({
           photoUrl = result.url;
           photoKey = key;
         }
-        const diff = (new Date().getTime() - new Date(last.recordedAt).getTime()) / 3600000;
         // Regra do Jorge (turnos máx. 12h): entrada aberta há >16h = esquecimento
         // de check-out. Corta às 12h (sem extraordinárias) e marca a VERMELHO
         // para revisão — não paga dias inteiros de horas fantasma.
-        let hoursWorked: string;
-        let autoNote: string | null = null;
-        let outAt = new Date();
-        if (diff > 16) {
-          hoursWorked = "12.00";
-          outAt = new Date(new Date(last.recordedAt).getTime() + 12 * 3600000);
-          autoNote = "[SUSPEITO] check-out esquecido — cortado a 12h";
-        } else {
-          hoursWorked = diff.toFixed(2);
-        }
+        // A entrada vem da BD em UTC: lida como UTC, nunca na hora local do servidor.
+        const { checkoutHours } = await import("./payroll/shifts");
+        const { inAt, outAt, hoursWorked, forgotten } = checkoutHours(String(last.recordedAt), Date.now());
+        const autoNote: string | null = forgotten ? "[SUSPEITO] check-out esquecido — cortado a 12h" : null;
         // Terminal pelo perfil (plano 56 B1): o método antigo (saída + entrada no
         // aeroporto) já não corre. A saída do ponto liberta o lugar no terminal
         // (a seguir à saída, mais abaixo). Um troço antigo ainda aberto ("start",
@@ -1573,11 +1566,11 @@ export const rhRouter = router({
         // pessoa fez check-in nesse dia (cada dia é um PDA diferente),
         // depois a ligação fixa da ficha (telemóveis pessoais).
         const { resolveZelloUsernameForShift } = await import("./db");
-        const empZello = await resolveZelloUsernameForShift(input.employeeId, new Date(last.recordedAt), outAt);
+        const empZello = await resolveZelloUsernameForShift(input.employeeId, inAt, outAt);
         if (empZello) {
           try {
             const { summarizeZelloShift } = await import("./zello");
-            zello = await summarizeZelloShift(empZello, new Date(last.recordedAt), outAt);
+            zello = await summarizeZelloShift(empZello, inAt, outAt);
           } catch (err) {
             console.warn("[checkOut] snapshot Zello falhou:", err);
           }
