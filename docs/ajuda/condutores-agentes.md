@@ -89,7 +89,7 @@ Em **Pessoas → Condutores e agentes**. Antes estavam nas Críticas.
 - **Horas trabalhadas**: o ponto (sem os registos suspeitos); sem ponto, a escala. **Dias com trabalho**: dias com horas ou com ações.
 - **Pontos da avaliação**: a soma dos pontos de cada dia da Avaliação (com os ajustes).
 - **Recolhas, entregas, movimentos, levar ao parque, mudanças de lugar, pôs em recolha/entrega, alterações de reserva**: a Multipark, pela avaliação diária.
-- **Atrasos ao trabalho** (−5 cada): a 1.ª picagem **5 minutos ou mais** depois da hora da escala (03:04:59 não conta; 03:05 já conta), no máximo 1 por dia. Nos dias antigos o número já vem sem as entregas atrasadas.
+- **Atrasos ao trabalho** (−5 cada): a 1.ª picagem **5 minutos ou mais** depois da hora da escala ou, sem escala nesse dia, do horário fixo da ficha do RH (03:04:59 não conta; 03:05 já conta), no máximo 1 por dia. Nos dias antigos o número já vem sem as entregas atrasadas.
 - **Entregas atrasadas: saíram** (tarefa 62). Os tempos das entregas são da equipa, não de cada pessoa: a coluna saiu das abas e já não tira pontos.
 - Por cima dos números, o detalhe explica em texto de onde vêm os atrasos ao trabalho, os excessos de velocidade e os dias sem GPS.
 - **Km (GPS)**, **velocidade máxima**: o GPS do Zello das partes de PDA da pessoa (e do Zello fixo da ficha). A máxima já não tem os picos falsos do GPS.

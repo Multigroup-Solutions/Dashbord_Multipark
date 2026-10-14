@@ -67,6 +67,11 @@ import { rankCandidates, type ScheduleCandidate } from "../shared/extrasSchedule
 import { SHEET_REPORTS } from "./google/sheetsExport";
 import { STAFF_TOOLS } from "./assistant/tools";
 import { PERF_METRICS, GROUP_VIEW } from "../shared/peoplePerformance";
+import { fixedScheduledStarts, hoursOfHhmm } from "../shared/workSchedule";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const src = (p: string) => readFileSync(resolve(import.meta.dirname, "..", p), "utf8");
 
 const caller = (role: string, id = 1) => appRouter.createCaller({ user: { id, role, name: "Rita" }, req: { headers: {} }, res: {} } as any);
 const m = (over: Partial<DayMetrics>): DayMetrics => ({ ...emptyDayMetrics(), ...over });
@@ -239,5 +244,50 @@ describe("P2d — fecho mensal no servidor", () => {
     await expect(caller("supervisor", 2).evaluation.adjust({ employeeId: 8, day: "2026-10-02", metric: "delays", delta: -1, reason: "ponto avariado" })).rejects.toThrow(/Não deu para ler o fecho/);
     await expect(caller("supervisor", 2).evaluation.recompute({ from: "2026-10-01", to: "2026-10-03" })).rejects.toThrow(/Não deu para ler o fecho/);
     expect(state.adjustments).toEqual([]);
+  });
+});
+
+describe("Q8 — o atraso conta para todos os que têm horário (escala ou horário fixo do RH)", () => {
+  // 2 nov 2026 (segunda-feira; Lisboa = UTC): horário fixo das 09:00
+  const identity = buildEvaluationIdentity({ employees: [{ id: 1, fullName: "Ana Silva", userId: 10, multiparkAgentName: null, multiparkAgentUserId: null }, { id: 2, fullName: "Rui Escritório", userId: 11, multiparkAgentName: null, multiparkAgentUserId: null }], agentAliases: [], accountAliases: [] });
+  const base = (o: Partial<EngineInput>): EngineInput => ({
+    startDay: "2026-11-02", endDay: "2026-11-02", identity, employees: new Map(),
+    actions: [], ponto: [], assignments: [], incidents: [], complaints: [], speedAlerts: [], penalties: [], rate: () => 10, tlWorkingDaysPerMonth: 15, ...o,
+  });
+  const segunda = (employeeId: number, startTime = "09:00") => ({ employeeId, weekday: 1, startTime, endTime: "18:00", isWorkDay: true });
+  const ci = (employeeId: number, at: string) => ({ id: Math.random(), employeeId, type: "check_in" as const, recordedAt: at });
+  const delays = (out: ReturnType<typeof computeEmployeeDays>, emp: number) => out.rows.find((r) => r.employeeId === emp)?.metrics.delays ?? 0;
+
+  it("horas da semana pelo horário: 09:04:59 não; 09:05 já é (−5); sem entrada não é atraso", () => {
+    expect(fixedScheduledStarts("2026-11-02", "2026-11-02", [segunda(2)]).map((f) => f.startMs)).toEqual([Date.parse("2026-11-02T09:00:00Z")]);
+    expect(delays(computeEmployeeDays(base({ fixedSchedules: [segunda(2)], ponto: [ci(2, "2026-11-02 09:04:59")] })), 2)).toBe(0);
+    const out = computeEmployeeDays(base({ fixedSchedules: [segunda(2)], ponto: [ci(2, "2026-11-02 09:05:00")] }));
+    expect(delays(out, 2)).toBe(1);
+    expect(scoreOf(out.rows[0].metrics).totalPoints).toBe(-5);
+    expect(computeEmployeeDays(base({ fixedSchedules: [segunda(2)] })).rows).toHaveLength(0);
+  });
+  it("dia livre, férias/baixa e fora do contrato: sem hora de entrada", () => {
+    expect(fixedScheduledStarts("2026-11-02", "2026-11-02", [{ ...segunda(2), isWorkDay: false }])).toEqual([]);
+    expect(fixedScheduledStarts("2026-11-02", "2026-11-02", [segunda(2)], [{ employeeId: 2, fromDate: "2026-11-01", toDate: "2026-11-05" }])).toEqual([]);
+    expect(fixedScheduledStarts("2026-11-02", "2026-11-02", [{ ...segunda(2), contractEnd: "2026-10-31" }])).toEqual([]);
+    expect(fixedScheduledStarts("2026-11-02", "2026-11-02", [{ ...segunda(2), weekday: 2 }])).toEqual([]);
+  });
+  it("entrada às 01:00 de terça é ainda do dia operacional de segunda", () => {
+    const f = fixedScheduledStarts("2026-11-02", "2026-11-02", [{ employeeId: 2, weekday: 2, startTime: "01:00", isWorkDay: 1 }]);
+    expect(f).toMatchObject([{ calendarDay: "2026-11-03", day: "2026-11-02" }]);
+    expect(hoursOfHhmm("08:30:00")).toBe(8.5);
+    expect(hoursOfHhmm("25:00")).toBeNull();
+  });
+  it("nos dias com escala do Extras-Dia vale a escala; no máximo 1 por dia", () => {
+    const esc = { assignmentDate: "2026-11-02", employeeId: 1, personName: "Ana Silva", level: "1", isTeamLeader: false, shift: "morning" as const, city: "lisbon", startHour: 10, endHour: 16, sentHomeHour: null };
+    // horário fixo às 09:00, escala às 10:00, entrou às 09:30 → a tempo pela escala (não conta pelo horário)
+    expect(delays(computeEmployeeDays(base({ fixedSchedules: [segunda(1)], assignments: [esc], ponto: [ci(1, "2026-11-02 09:30:00")] })), 1)).toBe(0);
+    // entrou às 10:20: atrasado pela escala → 1 (e não 2)
+    expect(delays(computeEmployeeDays(base({ fixedSchedules: [segunda(1)], assignments: [esc], ponto: [ci(1, "2026-11-02 10:20:00")] })), 1)).toBe(1);
+  });
+  it("o motor lê os horários das fichas ativas e as férias/baixas", () => {
+    const eng = src("server/evaluationEngine.ts");
+    expect(eng).toMatch(/FROM schedules s JOIN employees e ON e\.id = s\.employeeId\s+WHERE e\.isActive = 1 AND s\.isWorkDay = 1/);
+    expect(eng).toContain("FROM employee_leaves");
   });
 });

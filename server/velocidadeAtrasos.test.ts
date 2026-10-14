@@ -404,7 +404,7 @@ describe("Desempenho: dias acima do limite, dias com e sem GPS", () => {
   });
   it("o porquê no detalhe: atrasos ao trabalho (≥ 5 min), excessos e dias sem GPS (sem Zello ligado); a entrega atrasada saiu (tarefa 62)", () => {
     const lines = explainPersonTotals({ delays: 2, lateDeliveries: 9, noGpsDays: 6, noZelloDays: 6, speedAlerts: 1 });
-    expect(lines[0]).toBe("Atrasos ao trabalho 2: entrada no ponto 5 min ou mais depois da hora da escala, no máximo 1 por dia. Cada um −5 na avaliação.");
+    expect(lines[0]).toBe("Atrasos ao trabalho 2: entrada no ponto 5 min ou mais depois da hora da escala ou do horário, no máximo 1 por dia. Cada um −5 na avaliação.");
     expect(lines[1]).toMatch(/^6 dia\(s\) de trabalho sem GPS: 6 sem Zello ligado à pessoa .* "Utilizadores Zello ↔ Pessoas"\.$/);
     expect(lines[2]).toMatch(/^Excessos de velocidade 1: alertas e penalizações de velocidade e 1 por dia com o GPS do Zello acima do limite\./);
     expect(lines.join(" ")).not.toMatch(/Entregas atrasadas/);

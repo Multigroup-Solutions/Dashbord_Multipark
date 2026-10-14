@@ -101,7 +101,7 @@ export function RulesLegend() {
             <span className="text-muted-foreground">
               {r.label}
               {r.key === "firstMoveAfterPickup" && <span className="block text-[11px]">substitui os {fmtPts(EVALUATION_POINTS.movement)} desse movimento</span>}
-              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto {LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala (no máximo 1 por dia)</span>}
+              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto {LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala ou do horário (no máximo 1 por dia)</span>}
               {r.key === "spotChange" && <span className="block text-[11px]">o carro ficou na mesma garagem; não é movimento</span>}
               {r.key === "speeding" && <span className="block text-[11px]">alertas e penalizações; ou 1 por dia com o GPS do Zello acima do limite</span>}
             </span>

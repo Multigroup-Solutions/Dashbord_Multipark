@@ -8,8 +8,8 @@
  *        SUBSTITUI os +2 desse movimento, não soma
  *   −10  por cada excesso de velocidade
  *   −5   por cada atraso ao trabalho: entrada no ponto 5 min ou mais depois
- *        da hora da escala (máx. 1 por dia — Jorge, 14 out 2026; ≥ 5 min
- *        desde a tarefa 62)
+ *        da hora da escala ou do horário fixo do RH (máx. 1 por dia — Jorge,
+ *        14 out 2026; ≥ 5 min e para todos os que têm horário desde a tarefa 62)
  *   +1   por cada mudança de lugar (mesma garagem; não é movimento — 14 out 2026)
  * A "entrega atrasada" (−5) saiu na tarefa 62 (D5): os tempos das entregas e
  * das recolhas são da organização, não de cada pessoa.
@@ -43,7 +43,7 @@ export const EVALUATION_POINTS = {
   speeding: -10,
   /**
    * Atraso ao trabalho: entrada no ponto LATE_ARRIVAL_FROM_MINUTES ou mais depois da hora da
-   * escala — no máximo MAX_LATE_ARRIVALS_PER_DAY por dia.
+   * escala (Extras-Dia) ou do horário fixo (RH) — no máximo MAX_LATE_ARRIVALS_PER_DAY por dia.
    */
   delay: -5,
   /** Reclamação confirmada (com pontos aplicados) em que o colaborador foi associado. */

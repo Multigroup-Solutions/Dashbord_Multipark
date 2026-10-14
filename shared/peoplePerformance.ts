@@ -525,7 +525,7 @@ export function explainPersonTotals(t: Partial<Record<PerfMetric, number>>): str
   const n = (k: PerfMetric) => Number(t[k] ?? 0) || 0;
   const out: string[] = [];
   // Tarefa 62: só os atrasos ao trabalho (≥ 5 min); a "entrega atrasada" saiu (os tempos são da organização)
-  if (n("delays") > 0) out.push(`Atrasos ao trabalho ${nf.format(n("delays"))}: entrada no ponto ${LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala, no máximo 1 por dia. Cada um −5 na avaliação.`);
+  if (n("delays") > 0) out.push(`Atrasos ao trabalho ${nf.format(n("delays"))}: entrada no ponto ${LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala ou do horário, no máximo 1 por dia. Cada um −5 na avaliação.`);
   if (n("noGpsDays") > 0) {
     const noZ = n("noZelloDays"), other = n("noGpsDays") - noZ;
     const why = [

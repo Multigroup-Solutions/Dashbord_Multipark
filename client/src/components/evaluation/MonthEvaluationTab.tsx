@@ -185,7 +185,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.actions}</td>
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.recolhas + m.entregas}</td>
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.movements}{m.parkingMoves > 0 && <span className="text-muted-foreground"> ({m.parkingMoves})</span>}</td>
-            <td className="p-2 text-right tabular-nums whitespace-nowrap" title="Atrasos ao trabalho: entrada no ponto 5 min ou mais depois da hora da escala (no máximo 1 por dia)">{lateArrivalsOf(m) || "—"}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap" title="Atrasos ao trabalho: entrada no ponto 5 min ou mais depois da hora da escala ou do horário (no máximo 1 por dia)">{lateArrivalsOf(m) || "—"}</td>
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.speedingEvents}/{m.complaints}/{m.accidents}</td>
           </>
         ) : (
