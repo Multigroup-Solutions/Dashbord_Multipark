@@ -36,6 +36,7 @@
 | Formação | próprio VE | próprio VE | próprio VE | equipa (cidade) VE | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Avaliação (mês e própria) | — | próprio V | próprio V | equipa (cidade) V | cidade VE | nacional VE | nacional VE | nacional VEXG | nacional VEXG |
 | Avaliação — Dia | — | — | — | — | cidade V | nacional V | nacional V | nacional VX | nacional VX |
+| Condutores e agentes | — | — | — | — | cidade V | — | nacional V | nacional V | nacional V |
 | Recursos Humanos | — | — | — | equipa (cidade) VE | cidade VEG | nacional VE | nacional VEG | nacional VEXG | nacional VEXG |
 | RH — ordenados e processamento | — | — | — | — | — | — | — | nacional VEXG | nacional VEXG |
 | Leads de Extras | — | — | — | cidade VE | cidade VE | nacional VE | nacional VE | nacional VEG | nacional VEG |

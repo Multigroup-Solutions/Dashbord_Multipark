@@ -2638,12 +2638,17 @@ export const appRouter = router({
           : `${r.errors.length ? `Sincronizado com ${r.errors.length} erro(s)` : "Sincronizado"}: ${r.stored} email(s) novos, ${r.pipelineCreated} registo(s) criados.${r.done ? "" : " Parcial — carrega outra vez para continuar."}`,
       };
     }),
-    // Checkout drivers ranking (DB local — alimentada pelo sync da API Multipark)
+    // Checkout drivers ranking (DB local — alimentada pelo sync da API Multipark).
+    // 14 out 2026 (Jorge: "isto não devia aparecer a toda a gente"): estas
+    // leituras (Condutores e agentes) pedem o módulo `condutores_agentes` —
+    // supervisor (cidade), back office, admin e super admin. Antes era o das
+    // Críticas (team leader e acima). O MCP (dashboard_query) corre como quem
+    // criou a chave, por isso passa pela mesma guarda.
     checkoutDrivers: protectedProcedure.input(z.object({
       startDate: z.string(),
       endDate: z.string(),
     })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       const { getCheckoutDriversFromDb } = await import("./db");
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
@@ -2659,7 +2664,7 @@ export const appRouter = router({
       projectId: z.number().int().optional(),
       drivers: z.boolean().default(false),
     }).refine((r) => r.startDate <= r.endDate, "Intervalo inválido")).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       const days = (Date.parse(`${input.endDate}T00:00:00Z`) - Date.parse(`${input.startDate}T00:00:00Z`)) / 86_400_000 + 1;
       if (days > 62) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 62 dias de cada vez." });
       const { loadMovementPeople, brandParkIdsFor } = await import("./movementPeople");
@@ -2671,7 +2676,7 @@ export const appRouter = router({
     // Multipark ligados a ela), nunca por nome escrito — homónimos e grafias
     // diferentes davam o histórico de outra pessoa.
     agentPeople: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       const { employeesWithAgents } = await import("./personIdentity");
       return employeesWithAgents(scopedProjectIds());
     }),
@@ -2683,7 +2688,7 @@ export const appRouter = router({
       agentUserIds: z.array(z.string().min(1).max(128)).min(1).max(10).optional(),
       agentName: z.string().max(200).optional(),
     }).refine((r) => r.employeeId != null || (r.agentUserIds?.length ?? 0) > 0, "Escolhe a pessoa.")).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       if (input.employeeId == null) {
         const { getAgentHistoryFromDb } = await import("./db");
         const r = await getAgentHistoryFromDb({ startDate: input.startDate, endDate: input.endDate, userIds: input.agentUserIds! });

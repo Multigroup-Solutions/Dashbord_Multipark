@@ -233,8 +233,9 @@ export const menuGroups: MenuGroup[] = [
       // Avaliação: separadores "Dia" (avaliacao_operacional) e "Mês";
       // extra/condutor veem a própria avaliação — filtrado no servidor
       { icon: Trophy, label: "Avaliação", path: "/avaliacao", anyOf: ["avaliacao", "avaliacao_operacional"] },
-      // Jorge, 3 out 2026: saíram das Críticas (mesmo acesso: módulo Críticas, team leader+).
-      { icon: Car, label: "Condutores e agentes", path: "/pessoas/condutores-agentes", module: "criticas" },
+      // Jorge, 3 out 2026: saíram das Críticas. 14 out 2026: módulo próprio — só supervisor,
+      // back office, admin e super admin (o Desempenho lá dentro só o super admin).
+      { icon: Car, label: "Condutores e agentes", path: "/pessoas/condutores-agentes", module: "condutores_agentes" },
     ],
   },
   {

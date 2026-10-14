@@ -182,8 +182,9 @@ export const rhRouter = router({
       for (const a of extra as Array<{ agentUserId: string; agentName: string | null }>) {
         agents.push({ agentUserId: String(a.agentUserId), agentName: a.agentName ?? null, principal: false, url: multiparkAgentUrl(template, String(a.agentUserId)) });
       }
-      // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo Críticas)
-      return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
+      // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo próprio desde 14 out 2026:
+      // supervisor, back office, admin e super admin — quem não o tem não vê o botão)
+      return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'condutores_agentes', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
     }),
   /**
    * Lote 46 (Jorge, 7 out 2026): com que conta(s) Google a pessoa entra

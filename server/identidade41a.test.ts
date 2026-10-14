@@ -103,7 +103,7 @@ describe("41a: servidor", () => {
     expect(block).toContain("canViewEmployee(viewer, person.employee)");
     expect(block).toContain("assertEmployeeAccess(input.employeeId)");
     expect(block).toContain("canManageLinks: canAccess(ctx.user, 'rh', 'manage')");
-    expect(block).toContain("canOpenAgent: canAccess(ctx.user, 'criticas', 'view')");
+    expect(block).toContain("canOpenAgent: canAccess(ctx.user, 'condutores_agentes', 'view')");
     expect(block).toContain("FROM employee_agents WHERE employeeId");
     expect(block).toContain("getSetting('multipark.agentUrl')");
   });
