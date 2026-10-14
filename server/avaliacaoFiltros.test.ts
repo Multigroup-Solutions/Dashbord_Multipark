@@ -47,7 +47,7 @@ vi.mock("./evaluationEngine", () => ({
 import { appRouter } from "./routers";
 import {
   describeFilter, facetCounts, filterParts, filterRanking, groupOptions, groupRanking, isFilterActive, matchesSearches, personMatches,
-  rankingCsv, rankingTotals, ruleHolds, sanitizeEvalSavedView, evalSavedViewSchema, type EvalRankingRowLike,
+  rankingCsv, rankingTotals, ruleHolds, sanitizeEvalSavedView, evalSavedViewSchema, EVAL_FILTER_LIMITS, type EvalRankingRowLike,
 } from "../shared/evaluationFilters";
 import { mainTeamLeaders } from "../shared/evaluationTeam";
 import { ancestorOfLevel, buildEmployeeFacets, citiesOfDays } from "./evaluationRankingFacets";
@@ -254,9 +254,13 @@ describe("filtros guardados: a mesma tabela do CRM, uma página de cada vez", ()
     expect(db.seen.at(-1)!.sql).toMatch(/DELETE FROM crm_saved_filters WHERE id = \? AND userId = \? AND page = \?/);
     expect(state.logs.at(-1)).toMatchObject({ action: "evaluation_filter_delete", entity: "evaluation_filter", entityId: 4 });
   });
-  it("o esquema guarda também o agrupar, a vista e a ordem", () => {
+  it("o esquema guarda também o agrupar, a vista e a ordem; acima dos limites recusa (o ecrã não deixa lá chegar)", () => {
     expect(evalSavedViewSchema.safeParse({ groupBy: "brand", view: "totals", sort: { key: "hours", dir: 1 } }).success).toBe(true);
     expect(evalSavedViewSchema.safeParse({ sort: { key: "hours", dir: 2 } }).success).toBe(false);
+    const rule = { field: "points", op: "gte", value: 1 };
+    expect(evalSavedViewSchema.safeParse({ rules: { match: "all", items: Array(EVAL_FILTER_LIMITS.rules).fill(rule) } }).success).toBe(true);
+    expect(evalSavedViewSchema.safeParse({ rules: { match: "all", items: Array(EVAL_FILTER_LIMITS.rules + 1).fill(rule) } }).success).toBe(false);
+    expect(src("client/src/components/evaluation/RankingFilterBar.tsx")).toContain("const { searches: MAX_SEARCHES, rules: MAX_RULES } = EVAL_FILTER_LIMITS;");
   });
   it("migração 0665: coluna page (por omissão 'crm') + índice, idempotente", async () => {
     const m = await import("./migrations/migration_0665");

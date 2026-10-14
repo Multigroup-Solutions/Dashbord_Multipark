@@ -411,6 +411,9 @@ export function describeFilter(view: EvalFilterView | null | undefined, rows: re
 
 // ─── Esquemas (filtros guardados e exportação) ──────────────────────────────
 
+/** Limites do filtro (o ecrã não deixa passar; o esquema recusa acima disto). */
+export const EVAL_FILTER_LIMITS = { searches: 20, rules: 20 } as const;
+
 const SEARCH_IDS = EVAL_SEARCH_FIELDS.map((f) => f.id) as [EvalSearchField, ...EvalSearchField[]];
 const POSITION_IDS = EVAL_POSITIONS.map((p) => p.id) as [EvalPosition, ...EvalPosition[]];
 const FLAG_IDS = EVAL_FLAGS.map((f) => f.id) as [EvalFlag, ...EvalFlag[]];
@@ -426,11 +429,11 @@ export const evalGroupsSchema = z.object({
   position: z.array(z.enum(POSITION_IDS)).max(10).optional(),
   flags: z.array(z.enum(FLAG_IDS)).max(20).optional(),
 });
-export const evalRulesSchema = z.object({ match: z.enum(["all", "any"]), items: z.array(evalRuleSchema).max(20) });
+export const evalRulesSchema = z.object({ match: z.enum(["all", "any"]), items: z.array(evalRuleSchema).max(EVAL_FILTER_LIMITS.rules) });
 /** O filtro (sem a ordem): é o que a exportação para Sheets aplica. */
 export const evalFilterViewSchema = z.object({
   text: z.string().max(200).optional(),
-  searches: z.array(evalSearchSchema).max(20).optional(),
+  searches: z.array(evalSearchSchema).max(EVAL_FILTER_LIMITS.searches).optional(),
   groups: evalGroupsSchema.optional(),
   rules: evalRulesSchema.nullable().optional(),
 });

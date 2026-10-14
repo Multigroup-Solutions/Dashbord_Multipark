@@ -173,7 +173,9 @@ export const evaluationRouter = router({
     // linha (shared/evaluationFilters.ts). Nunca partem o ranking (falha → sem facetas).
     const { loadRankingFacets, citiesOfDays } = await import("./evaluationRankingFacets");
     const { mainTeamLeaders } = await import("../shared/evaluationTeam");
-    const { employees: facets, tlDays } = await loadRankingFacets([...byEmp.keys()], input.from, input.to);
+    const { employees: facets, tlDays } = byEmp.size
+      ? await loadRankingFacets([...byEmp.keys()], input.from, input.to)
+      : { employees: new Map(), tlDays: [] };
     const teams = mainTeamLeaders(Array.from(byEmp.values()).flat(), tlDays);
     return Array.from(byEmp.entries()).map(([employeeId, list]) => {
       const t = totalsOf(list);

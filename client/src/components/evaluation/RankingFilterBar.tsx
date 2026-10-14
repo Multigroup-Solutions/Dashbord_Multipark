@@ -16,10 +16,12 @@ import {
   type FilterChip, type Opt, type RuleOpDef,
 } from "@/components/crm/CrmFilters";
 import {
-  EVAL_GROUP_BY, EVAL_GROUP_CHIP_LABELS, EVAL_GROUP_LABELS, EVAL_GROUP_ORDER, EVAL_RULE_FIELDS, EVAL_RULE_OPS, EVAL_SEARCH_FIELDS,
+  EVAL_FILTER_LIMITS, EVAL_GROUP_BY, EVAL_GROUP_CHIP_LABELS, EVAL_GROUP_LABELS, EVAL_GROUP_ORDER, EVAL_RULE_FIELDS, EVAL_RULE_OPS, EVAL_SEARCH_FIELDS,
   evalRuleText, facetCounts, groupOptions, groupValueLabel, isFilterActive, sanitizeEvalSavedView, usableRules,
-  type EvalGroupBy, type EvalGroups, type EvalRankingRowLike, type EvalRule, type EvalSavedView, type EvalSearchField,
+  type EvalGroupBy, type EvalGroups, type EvalRankingRowLike, type EvalRule, type EvalRules, type EvalSavedView, type EvalSearchField,
 } from "@shared/evaluationFilters";
+
+const { searches: MAX_SEARCHES, rules: MAX_RULES } = EVAL_FILTER_LIMITS;
 
 const RULE_FIELDS = EVAL_RULE_FIELDS.map((f) => ({ id: f.id, label: f.label, type: "number" }));
 const RULE_OPS: Record<string, RuleOpDef[]> = { number: EVAL_RULE_OPS.map((o) => ({ id: o.id, label: o.label, arity: o.arity })) };
@@ -78,7 +80,15 @@ export function RankingFilterBar({ rows, value, onChange, shown, extras, onApply
   const commit = (field: EvalSearchField) => {
     const t = text.trim();
     if (!t) return;
+    // os mesmos limites do que se guarda e exporta (shared/evaluationFilters.ts)
+    if ((value.searches ?? []).length >= MAX_SEARCHES) { toast.warning(`No máximo ${MAX_SEARCHES} pesquisas. Tira uma antes de pôr outra.`); return; }
     set({ text: "", searches: [...(value.searches ?? []), { field, text: t }] });
+  };
+  /** Regras do editor → filtro (no máximo MAX_RULES, como o que se guarda e exporta). */
+  const rulesFrom = (r: EvalRules | null): EvalRules | null => {
+    if (!r || r.items.length <= MAX_RULES) return r;
+    toast.warning(`No máximo ${MAX_RULES} regras: ficaram as primeiras ${MAX_RULES}.`);
+    return { match: r.match, items: r.items.slice(0, MAX_RULES) };
   };
 
   // chips do filtro ativo (o texto que se está a escrever filtra já, sem chip)
@@ -171,9 +181,9 @@ export function RankingFilterBar({ rows, value, onChange, shown, extras, onApply
 
       {rulesOpen && (
         <RulesEditor<EvalRule> fields={RULE_FIELDS} opsByType={RULE_OPS} subject="colaboradores" initial={value.rules?.items?.length ? { match: value.rules.match, items: value.rules.items } : null}
-          onApply={(r) => { set({ rules: r }); setRulesOpen(false); }}
+          onApply={(r) => { set({ rules: rulesFrom(r) }); setRulesOpen(false); }}
           onCancel={() => setRulesOpen(false)}
-          onSave={(r) => { set({ rules: r }); setRulesOpen(false); setSaveReq(true); }} />
+          onSave={(r) => { set({ rules: rulesFrom(r) }); setRulesOpen(false); setSaveReq(true); }} />
       )}
 
       {active && (
