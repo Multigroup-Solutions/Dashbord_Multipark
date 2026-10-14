@@ -31,7 +31,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 6. **Reclamações:** sugestões de tipo, prioridade, SLA e reserva, com um rascunho de resposta.
    - Com confiança alta, preenche sozinha os campos vazios. Há sempre **Desfazer**.
 7. **WhatsApp:** etiqueta a intenção e a urgência; uma conversa **nova** vai para a caixa do tema (a que já tem caixa fica onde está).
-   - **Email:** os emails novos das caixas partilhadas vão para a caixa do tema, por ler; o que a IA não percebe vai para o info. Na conversa lê-se "Movido pela IA → caixa (motivo)".
+   - **Email:** a IA lê os emails das caixas partilhadas pelo sentido (não por palavras): as conversas novas vão para a caixa do tema, por ler; o que não percebe vai para o info. As **reclamações** (e, com o interruptor, os **perdidos**) que lá estejam — mesmo escondidas noutro pedido, numa resposta ou num reencaminhamento — abrem o caso no módulo (certeza média: "Por confirmar (IA)") e a conversa vai para a caixa do caso. Na conversa lê-se "Movido pela IA → caixa (motivo)". Para medir: Definições → Comunicação → **Testar a triagem** (super admin).
    - Alguém a candidatar-se pela 1.ª vez (email ou WhatsApp) entra nos **Leads de Extras** como lead (e candidatura, se houver email), com a nota "Entrou pela IA".
 8. **Perdidos & Achados:** procura possíveis correspondências.
 9. **Disponibilidade dos extras:** quando a resposta não é clara, a IA interpreta-a.

@@ -2,7 +2,7 @@
 modulo: perdidos
 titulo: Perdidos e Achados
 rotas: /perdidos-achados
-palavras: perdidos, achados, marcar como devolvido, como foi devolvido, data da devolução, parado há, perdido, objeto, item, esquecido, encontrado, devolução, devolver, entregar ao cliente, cruzamento de condutores, documentos, eletrónica, acessórios, correspondências, sem cidade, prazo, lembretes, arquivar, arquivados, tirar do arquivo, eliminar, pontos, avisar cliente, quem mexeu no carro
+palavras: perdidos, achados, por confirmar, criado pela ia, perdido por email, é um perdido, não é um perdido, marcar como devolvido, como foi devolvido, data da devolução, parado há, perdido, objeto, item, esquecido, encontrado, devolução, devolver, entregar ao cliente, cruzamento de condutores, documentos, eletrónica, acessórios, correspondências, sem cidade, prazo, lembretes, arquivar, arquivados, tirar do arquivo, eliminar, pontos, avisar cliente, quem mexeu no carro
 ---
 # Perdidos e Achados
 
@@ -14,6 +14,13 @@ Objetos esquecidos pelos clientes nos carros.
 3. Escolhe o tipo (documentos, eletrónica, acessórios…) e descreve o objeto. Guarda.
 - Ao gravar, a reserva liga-se sozinha **só** com a matrícula, o email ou o telefone iguais (o nome não chega: há homónimos). Uma ref. escrita à mão nunca é trocada por outra.
 - Quem só vê a sua cidade e não escolhe o projeto: o caso fica na cidade dessa pessoa. Os casos **Sem cidade** só os vê quem vê todas as cidades.
+
+**Por email**
+- Os emails para **perdidos@** criam o caso sozinhos (como sempre).
+- **Noutras caixas** (info@, reservas@, alterações…), com o interruptor **"IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados"** (Definições → Automações; **desligado por omissão**): a IA lê cada email pelo sentido e, quando alguém diz que deixou, perdeu ou esqueceu um objeto (mesmo no meio de um elogio ou de outro pedido), abre o caso aqui (origem IA) ou junta o email ao caso **aberto** do mesmo cliente. A conversa vai para a caixa **Perdidos** da Comunicação, **por ler**. As respostas do cliente nessa conversa juntam-se ao mesmo caso.
+- Com **certeza média** o caso nasce **"Por confirmar (IA)"** (selo no cartão, aviso roxo no caso): **É um perdido** confirma; **Não é um perdido** arquiva com o motivo (nada se apaga).
+- No caso fica uma nota interna "Criado pela IA" com a caixa, o motivo e a certeza. **Nunca se escreve ao cliente** — avisá-lo é sempre uma pessoa (**Avisar cliente**).
+- A mesma matrícula de outro cliente nunca junta o email ao caso dele.
 
 **Tratar**
 - Quadro por estados: Novo → Investigação → Encontrado → Devolvido/Fechado. Os convertidos ficam em Fechado e não se movem.

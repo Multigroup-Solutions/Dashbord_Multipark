@@ -2,7 +2,7 @@
 modulo: reclamacoes
 titulo: Reclamações
 rotas: /reclamacoes
-palavras: reclamação, reclamações, cliente, 90 dias, ver todas, cliente respondeu, aviso ao responsável, queixa, dano, sujidade, atraso, cobrança, sla, prazo, email ao cliente, condutores envolvidos, quem mexeu no carro, em serviço, reserva, converter em perdido, em análise, aguarda cliente, arquivar, arquivadas, tirar do arquivo, eliminar, fotos, pontos, csv, anexar email, sincronizar emails, aviso de receção, sugestões da ia, emails do cliente, histórico de emails, todas as caixas, parece uma reclamação, criar reclamação, não é reclamação, origem, filtros, responsável, sem cidade, datas, telemóvel
+palavras: reclamação, reclamações, por confirmar, por confirmar ia, é reclamação, não é reclamação, criada pela ia, reclamação escondida, reencaminhamento, livro de reclamações, cliente, 90 dias, ver todas, cliente respondeu, aviso ao responsável, queixa, dano, sujidade, atraso, cobrança, sla, prazo, email ao cliente, condutores envolvidos, quem mexeu no carro, em serviço, reserva, converter em perdido, em análise, aguarda cliente, arquivar, arquivadas, tirar do arquivo, eliminar, fotos, pontos, csv, anexar email, sincronizar emails, aviso de receção, sugestões da ia, emails do cliente, histórico de emails, todas as caixas, parece uma reclamação, criar reclamação, não é reclamação, origem, filtros, responsável, sem cidade, datas, telemóvel
 ---
 # Reclamações
 
@@ -17,15 +17,21 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 - Uma reclamação que chega a **outra caixa** (info@, reservas@, cancelamentos…) também vem para aqui — ver "Reclamações que a IA vê noutras caixas".
 
 **Reclamações que a IA vê noutras caixas**
-- A IA que separa os emails pelas caixas lê o 1.º email de cada conversa nova. Se diz que é uma reclamação:
-  - **certeza alta** → a reclamação é criada sozinha, ou o email junta-se à reclamação **aberta** do mesmo cliente (mesma conversa ou mesmo email; a mesma matrícula ou a mesma reserva só quando essa reclamação é do mesmo email ou não tem email — nunca no caso de outro cliente, nunca só pelo nome ou pelo assunto);
-  - **menos certeza** → aparece no topo da lista em **Parecem reclamações**, com **Criar reclamação** e **Não é reclamação** (fica registado; nada se apaga) e **Abrir conversa**. No telemóvel o cartão vem fechado (carrega no título para abrir); o título diz quantas são e quantas falharam.
-- Nunca para emails internos, automáticos (no-reply, newsletters), de parceiros nem avisos de avaliações.
-- **Nunca responde ao cliente**: sem aviso de receção, sem resposta. O email fica na caixa onde chegou.
+- A IA lê cada email das caixas partilhadas (info@, reservas@, cancelamentos…) **pelo sentido** — não por palavras. Vê a reclamação mesmo **escondida noutro pedido** ("quero mudar a data… e da última vez o carro veio sujo"), num pedido de reembolso zangado, num "nunca mais", numa **resposta** curta ("ainda estou à espera!") ou num **reencaminhamento** do backoffice. Quando vê uma reclamação:
+  - **certeza alta** → a reclamação é criada sozinha, ou o email junta-se à reclamação **aberta** do mesmo cliente (mesma conversa, o nº **[REC-n]** no assunto, ou o mesmo email; a mesma matrícula ou a mesma reserva só quando essa reclamação é do mesmo email ou não tem email — nunca no caso de outro cliente, nunca só pelo nome ou pelo assunto);
+  - **certeza média** → a reclamação é criada na mesma, marcada **"Por confirmar (IA)"** (selo no cartão e aviso roxo no caso). Abre-a e carrega em **É reclamação** (confirma) ou **Não é reclamação** (arquiva com o motivo — nada se apaga; volta com "Tirar do arquivo");
+  - **pouca certeza** → nada.
+- A conversa vai para a caixa **Reclamações** da Comunicação, **por ler**.
+- Nunca para emails internos (salvo o backoffice a reencaminhar a queixa de um cliente), automáticos, envios em massa, de parceiros nem avisos de avaliações.
+- **Nunca responde ao cliente**: sem aviso de receção, sem resposta. O aviso no sino vai à equipa como numa reclamação nova ("Reclamação por confirmar (IA)" quando é o caso).
 - Uma conversa nunca dá duas reclamações, mesmo que a sincronização corra outra vez. Se o cliente responder nessa conversa, a resposta entra na mesma reclamação (volta a **Em Análise**).
+- O **Livro de Reclamações eletrónico** (aviso da plataforma oficial) abre sempre a reclamação.
 - Na reclamação fica uma nota **"Criada pela IA"** com a caixa por onde chegou, o motivo e a certeza, e a origem **IA (email noutra caixa)**. Nos cartões aparece o selo **IA**.
+- As sugestões antigas **Parecem reclamações** (de antes de 14 out 2026, ou quando não se conseguiu confirmar se o remetente é um parceiro) continuam no topo, com **Criar reclamação** e **Não é reclamação**.
 - Se a criação falhar (Gmail ou base de dados em baixo), fica em **Parecem reclamações** como **Falhou ao criar** com **Tentar de novo**; o sistema também volta a tentar sozinho.
-- Interruptor: Definições → Automações → **"IA: reclamações que chegam a outras caixas vão para as Reclamações"** (ligado). Precisa de **"IA: separar emails e WhatsApp pelas caixas"** ligado (é a mesma leitura da IA). As certezas para criar e para sugerir estão em Definições → Parâmetros → IA (**ai.mailComplaints**, 0,85 e 0,5). Desligado: deixa de criar e de sugerir; as sugestões que já lá estavam ficam até alguém decidir.
+- **As que já estão nas caixas**: com o interruptor **"IA: rever os emails que já estão nas caixas"** (desligado por omissão) a IA passa também pelos emails dos últimos 30 dias ainda sem caso.
+- Interruptor: Definições → Automações → **"IA: reclamações que chegam a outras caixas vão para as Reclamações"** (ligado). Precisa de **"IA: separar emails e WhatsApp pelas caixas"** ligado (é a mesma leitura da IA). As certezas estão em Definições → Parâmetros → IA (**ai.mailComplaints**: 0,85 para confirmada, 0,5 para "Por confirmar"). Desligado: deixa de criar.
+- Para ver se a IA está a apanhar as reclamações: Definições → Comunicação → **Testar a triagem** (super admin). A meta é mais de 90 %.
 
 **Filtros**
 - **Pesquisar**: nº, título, nome, email, telefone, reserva, matrícula e responsável (sem acentos nem traços: "aa12bb" encontra "AA-12-BB"). **#12** abre só a reclamação nº 12.
