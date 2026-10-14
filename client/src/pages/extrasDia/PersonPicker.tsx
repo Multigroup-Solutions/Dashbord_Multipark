@@ -5,9 +5,14 @@
  *
  * Escreve-se o nome e aparece a lista do RH, quem começa pelo que se escreveu
  * primeiro (shared/contactSearch.ts → sortByNameMatch). Secções: a cidade da
- * escala, outras cidades, (no TL) quem ainda não tem a permissão de TL, e no
- * fim quem não tem cidade na ficha — esses não se podem escolher (o servidor
- * recusa).
+ * escala, outras cidades e no fim quem não tem cidade na ficha — esses não se
+ * podem escolher (o servidor recusa).
+ *
+ * TL (Jorge, 14 out 2026: "ao escolher o TL ainda aparecem extras"): no TL só
+ * aparece quem o servidor dá como elegível (`extrasDia.candidates` com
+ * forTeamLeader → conta com papel Team Leader ou acima, ou a permissão "Pode
+ * ser Team Leader na escala"; shared/teamLeaderEligibility.ts). O resto do RH
+ * (`others`) já não se mostra — e o servidor recusa-o ao guardar.
  */
 import { useMemo, useState } from "react";
 import { CheckCircle2, ChevronsUpDown, Moon, Sun } from "lucide-react";
@@ -49,17 +54,15 @@ interface Section { key: string; label: string; rows: Array<{ c: PickerCandidate
 /** Secções do seletor, já filtradas e ordenadas pela pesquisa. PURA (exportada para os testes). */
 export function pickerSections(
   candidates: readonly PickerCandidate[],
-  others: readonly PickerCandidate[],
   city: CityId,
   query: string,
 ): Section[] {
-  const all = [...candidates.map((c) => ({ c, other: false })), ...others.map((c) => ({ c, other: true }))];
+  const all = candidates.map((c) => ({ c, other: false }));
   const ranked = sortByNameMatch(query, all.filter((x) => matchesContactQuery(query, { name: x.c.fullName })), (x) => x.c.fullName);
   const noCity = (x: { c: PickerCandidate }) => x.c.city === null;
   const sections: Section[] = [
-    { key: "here", label: CITY_NAMES[city], rows: ranked.filter((x) => !x.other && !noCity(x) && (x.c.city === undefined || x.c.city === city)) },
-    { key: "elsewhere", label: "Outras cidades", rows: ranked.filter((x) => !x.other && !noCity(x) && x.c.city !== undefined && x.c.city !== city) },
-    { key: "notTl", label: "Do RH, ainda sem permissão de TL", rows: ranked.filter((x) => x.other && !noCity(x)) },
+    { key: "here", label: CITY_NAMES[city], rows: ranked.filter((x) => !noCity(x) && (x.c.city === undefined || x.c.city === city)) },
+    { key: "elsewhere", label: "Outras cidades", rows: ranked.filter((x) => !noCity(x) && x.c.city !== undefined && x.c.city !== city) },
     { key: "noCity", label: "Sem cidade na ficha — não pode ser escalado(a)", rows: ranked.filter(noCity), disabled: true },
   ];
   return sections.filter((s) => s.rows.length > 0);
@@ -113,14 +116,17 @@ export function CandidateLabel({ c, shift }: { c: PickerCandidate; shift?: "morn
 
 export function PersonPicker({
   candidates,
-  others = [],
   city,
   shift,
   value,
   onPick,
 }: {
   candidates: readonly PickerCandidate[];
-  /** Só no TL: gente do RH que ainda não tem a permissão (pode-se dar daqui). */
+  /**
+   * Já não se mostra (14 out 2026): no TL só entra quem tem conta com
+   * permissões de TL. Mantido só para quem ainda o passa; é ignorado.
+   * @deprecated
+   */
   others?: readonly PickerCandidate[];
   city: CityId;
   /** Turno da escala (para a dica dos dias habituais). */
@@ -130,8 +136,8 @@ export function PersonPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const selected = useMemo(() => [...candidates, ...others].find((c) => c.id === value) ?? null, [candidates, others, value]);
-  const sections = useMemo(() => pickerSections(candidates, others, city, query), [candidates, others, city, query]);
+  const selected = useMemo(() => candidates.find((c) => c.id === value) ?? null, [candidates, value]);
+  const sections = useMemo(() => pickerSections(candidates, city, query), [candidates, city, query]);
 
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQuery(""); }}>

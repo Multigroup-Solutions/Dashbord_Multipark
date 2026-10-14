@@ -45,7 +45,7 @@ describe("Envio em massa: retomar sem duplicar", () => {
     expect(one.indexOf("eq(whatsappMessages.clientRequestId, requestId)")).toBeLessThan(one.indexOf("issueAvailabilityFormToken("));
   });
   it("o ecrã manda um código por diálogo e não deixa enviar 2× depois do resultado", () => {
-    const page = src("client/src/pages/ExtrasDiaPage.tsx");
+    const page = src("client/src/pages/extrasDia/AvailabilityWhatsAppDialog.tsx");
     expect(page).toContain("sendKey: testPhone ? undefined : waSendKey,");
     expect(page).toContain("disabled={waMissingParam || broadcast.isPending || waValidCount === 0 || waSentReal || !!waCity.blockReason}");
     expect(src("client/src/pages/ExtraLeadsPage.tsx")).toContain("sendKey: contactSendKey || undefined");

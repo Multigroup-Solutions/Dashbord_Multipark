@@ -89,6 +89,9 @@ import { Switch } from "@/components/ui/switch";
 import { expenseTotals } from "@shared/expenseTotals";
 import { parseExpenseAmount } from "@shared/expenseAmount";
 import { utcMs } from "@shared/lisbonDay";
+import { canMarkPaidOnCreate, defaultCreatePaymentMethod, isFuturePaidAt, paymentOnCreate } from "@shared/expenseCreatePayment";
+import { orderExpenseCategories } from "@shared/expenseCategories";
+import { SearchPicker, CostCentrePicker } from "@/components/expenses/ExpensePickers";
 
 const PAID_BY_LABELS: Record<string, string> = { company: "Empresa", employee: "Colaborador" };
 
@@ -181,48 +184,7 @@ function fmtEur(v: number | string) {
   return parseFloat(String(v || 0)).toLocaleString("pt-PT", { style: "currency", currency: "EUR" });
 }
 
-// ─── Hierarquia de projetos (Grupo → Cidade → Marca → Projeto) ─────────────
-const LEVEL_LABEL: Record<string, string> = {
-  group: "Grupo",
-  city: "Cidade",
-  brand: "Marca",
-  project: "Projeto",
-};
-const LEVEL_COLOR: Record<string, string> = {
-  group: "bg-violet-100 text-violet-700 border-violet-200",
-  city: "bg-blue-100 text-blue-700 border-blue-200",
-  brand: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  project: "bg-amber-100 text-amber-700 border-amber-200",
-};
-
-/** Devolve a lista de projetos ordenada hierarquicamente (pai antes dos
- * filhos) com `__depth` calculado para indentação no UI. */
-function sortProjectsHierarchical<T extends { id: number; name: string; parentId?: number | null; level?: string | null }>(
-  list: T[],
-): Array<T & { __depth: number }> {
-  const byParent = new Map<number | null, T[]>();
-  for (const p of list) {
-    const key = p.parentId ?? null;
-    if (!byParent.has(key)) byParent.set(key, []);
-    byParent.get(key)!.push(p);
-  }
-  for (const arr of byParent.values()) arr.sort((a, b) => a.name.localeCompare(b.name, "pt"));
-  const out: Array<T & { __depth: number }> = [];
-  function walk(parentId: number | null, depth: number) {
-    const children = byParent.get(parentId) ?? [];
-    for (const c of children) {
-      out.push({ ...c, __depth: depth });
-      walk(c.id, depth + 1);
-    }
-  }
-  walk(null, 0);
-  // Captura órfãos (parentId que não existe na lista)
-  const seen = new Set(out.map((p) => p.id));
-  for (const p of list) {
-    if (!seen.has(p.id)) out.push({ ...p, __depth: 0 });
-  }
-  return out;
-}
+// Centro de custos (Grupo → Cidade → Marca → Projeto): escolha em components/expenses/ExpensePickers.tsx.
 
 export default function ExpensesPage() {
   const { user } = useAuth();
@@ -339,7 +301,8 @@ export default function ExpensesPage() {
   const shownTab = canResumo ? tab : "lista";
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
-  const { data: employeesList } = trpc.rh.list.useQuery({});
+  // Quem comprou: só team leader e acima, das cidades de quem lança (id + nome) — expenses.buyers
+  const { data: buyersList, isLoading: buyersLoading, isError: buyersError, refetch: refetchBuyers } = trpc.expenses.buyers.useQuery(undefined, { retry: false });
   const { data: usersList } = trpc.users.list.useQuery(undefined, { enabled: canManage, retry: false });
 
   const deleteMutation = trpc.expenses.delete.useMutation({
@@ -888,12 +851,16 @@ export default function ExpensesPage() {
           editId={editId}
           categories={categories ?? []}
           projects={projectsList ?? []}
-          employees={(employeesList ?? []).map((e: any) => e.employee).filter(Boolean)}
+          employees={buyersList ?? []}
+          employeesState={buyersLoading ? "loading" : buyersError ? "error" : "ready"}
+          onRetryEmployees={() => { void refetchBuyers(); }}
+          role={role}
           onClose={() => { setShowForm(false); setEditId(null); }}
-          onSuccess={() => {
+          onSuccess={(res?: { status?: string; paidAt?: string | null }) => {
             setShowForm(false);
             setEditId(null);
             utils.expenses.invalidate();
+            if (res?.status === "paid" && res.paidAt) toast.success(`Despesa lançada já paga (pago em ${res.paidAt.split("-").reverse().join("/")})`);
           }}
         />
       )}
@@ -1120,16 +1087,26 @@ function ExpenseFormModal({
   categories,
   projects,
   employees,
+  employeesState = "ready",
+  onRetryEmployees,
+  role,
   onClose,
   onSuccess,
 }: {
   editId: number | null;
   categories: any[];
   projects: any[];
-  employees: any[];
+  /** Quem pode ser "quem comprou" (expenses.buyers): id + nome, já por ordem alfabética. */
+  employees: Array<{ id: number; fullName: string }>;
+  employeesState?: "loading" | "error" | "ready";
+  onRetryEmployees?: () => void;
+  role: string;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (res?: { status?: string; paidAt?: string | null }) => void;
 }) {
+  // Jorge (14 out 2026): admin/super admin lançam já pago escolhendo o método (começa vazio);
+  // os outros papéis como antes ("Cartão" por omissão, fica sempre pendente).
+  const canPayOnCreate = canMarkPaidOnCreate(role);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [scanning, setScanning] = useState(false);
@@ -1137,6 +1114,11 @@ function ExpenseFormModal({
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [lastFileBase64, setLastFileBase64] = useState<string>("");
   const [lastFileMime, setLastFileMime] = useState<string>("");
+  // Admin+ ao lançar: o método que a IA leu NÃO se aplica sozinho (escolher método = fica paga);
+  // aparece como sugestão "A fatura diz: … — Usar".
+  const [suggestedMethod, setSuggestedMethod] = useState<string>("");
+  // Pago com data futura: só com confirmação explícita para ESSA data (o servidor exige-a também).
+  const [confirmedFuturePaidAt, setConfirmedFuturePaidAt] = useState<string>("");
   const openDocument = useOpenExpenseDocument();
 
   const [form, setForm] = useState<FormData>({
@@ -1144,7 +1126,7 @@ function ExpenseFormModal({
     description: "",
     amount: "",
     currency: "EUR",
-    paymentMethod: "card",
+    paymentMethod: defaultCreatePaymentMethod(role),
     expenseDate: format(new Date(), "yyyy-MM-dd"),
     paymentDueDate: "",
     categoryId: "",
@@ -1181,7 +1163,7 @@ function ExpenseFormModal({
       description: e.description ?? "",
       amount: String(e.amount ?? ""),
       currency: "EUR",
-      paymentMethod: e.paymentMethod ?? "card",
+      paymentMethod: e.paymentMethod ?? "",
       expenseDate: e.expenseDate ? format(parseDbDate(e.expenseDate), "yyyy-MM-dd") : "",
       paymentDueDate: e.paymentDueDate ? format(parseDbDate(e.paymentDueDate), "yyyy-MM-dd") : "",
       categoryId: e.categoryId ? String(e.categoryId) : "",
@@ -1207,6 +1189,21 @@ function ExpenseFormModal({
   const set = (key: keyof FormData, value: string | boolean) =>
     setForm((f) => ({ ...f, [key]: value }));
 
+  // Categoria: a ordem de sempre (alfabética), com pesquisa
+  const categoryOptions = useMemo(
+    () => orderExpenseCategories(categories as Array<{ id: number; name: string | null; color?: string | null }>)
+      .map((c) => ({ value: String(c.id), label: String(c.name ?? ""), color: c.color ?? null })),
+    [categories],
+  );
+  // Quem comprou: team leader e acima (servidor), por ordem alfabética. Ao editar uma despesa
+  // antiga com outro comprador (ex.: condutor), ele continua a aparecer para não se perder.
+  const buyerOptions = useMemo(() => {
+    const opts = employees.map((e) => ({ value: String(e.id), label: e.fullName }));
+    const cur = (existingExpense as any)?.buyer;
+    if (editId && cur?.id && !opts.some((o) => o.value === String(cur.id))) opts.push({ value: String(cur.id), label: `${cur.fullName ?? `#${cur.id}`} (atual)` });
+    return opts;
+  }, [employees, existingExpense, editId]);
+
   // Aviso de possível duplicado (mesmo nº de documento do mesmo fornecedor,
   // ou o mesmo ficheiro). Não bloqueia: a pessoa decide.
   const dupEnabled = Boolean((form.documentNumber.trim() && (form.supplier.trim() || form.supplierNif.trim())) || form.invoiceImageKey);
@@ -1222,12 +1219,12 @@ function ExpenseFormModal({
   );
 
   const createMutation = trpc.expenses.create.useMutation({
-    onSuccess,
+    onSuccess: (res) => onSuccess(res as any),
     onError: (e) => toast.error("Erro ao criar despesa: " + e.message),
   });
 
   const updateMutation = trpc.expenses.update.useMutation({
-    onSuccess,
+    onSuccess: () => onSuccess(),
     onError: (e) => toast.error("Erro ao atualizar despesa: " + e.message),
   });
 
@@ -1304,7 +1301,8 @@ function ExpenseFormModal({
       if (data.description) set("description", data.description);
       if (data.amount) set("amount", data.amount);
       if (data.paymentMethod && ["cash","card","transfer","check","other"].includes(data.paymentMethod)) {
-        set("paymentMethod", data.paymentMethod);
+        if (!editId && canPayOnCreate) setSuggestedMethod(data.paymentMethod);
+        else set("paymentMethod", data.paymentMethod);
       }
       if (data.expenseDate) set("expenseDate", data.expenseDate);
       if (data.paymentDueDate) set("paymentDueDate", data.paymentDueDate);
@@ -1344,7 +1342,10 @@ function ExpenseFormModal({
       toast.error("Tens de associar a despesa a um centro de custos (grupo / cidade / marca / projeto)");
       return;
     }
-    if (form.status === "paid" && form.paidAt && form.paidAt > format(new Date(), "yyyy-MM-dd")) {
+    // Uma lançada já paga com vencimento futuro (admin, 14 out 2026) guarda esse dia: só se recusa
+    // uma data futura NOVA (senão já não se podia editar mais nada nessa despesa).
+    const savedPaidAt = existingExpense?.expense?.paidAt ? format(parseDbDate(existingExpense.expense.paidAt), "yyyy-MM-dd") : "";
+    if (form.status === "paid" && form.paidAt && form.paidAt > format(new Date(), "yyyy-MM-dd") && form.paidAt !== savedPaidAt) {
       toast.error("A data de pagamento não pode ser no futuro");
       return;
     }
@@ -1353,6 +1354,13 @@ function ExpenseFormModal({
     const orNull = (v: string) => (sanitize(v) ?? null);
     const method = (form.paymentMethod && ['cash','card','transfer','check','other'].includes(form.paymentMethod)) ? form.paymentMethod as any : undefined;
     const paidBy = form.paidBy === "company" || form.paidBy === "employee" ? form.paidBy : undefined;
+    // Lançar já paga com data futura: só depois de a pessoa confirmar essa data
+    const payNow = paymentOnCreate({ role, paymentMethod: form.paymentMethod, expenseDate: form.expenseDate, paymentDueDate: form.paymentDueDate });
+    const futurePaid = !editId && payNow.status === "paid" && isFuturePaidAt(payNow.paidAt);
+    if (futurePaid && confirmedFuturePaidAt !== payNow.paidAt) {
+      toast.error("Fica paga com data futura — confirma no aviso por baixo do método, ou tira o método.");
+      return;
+    }
 
     if (editId) {
       updateMutation.mutate({
@@ -1401,6 +1409,7 @@ function ExpenseFormModal({
         invoiceImageUrl: form.invoiceImageUrl || undefined,
         invoiceImageKey: form.invoiceImageKey || undefined,
         extractedByAi: form.extractedByAi,
+        confirmFuturePaid: futurePaid ? true : undefined,
       });
     }
   };
@@ -1627,11 +1636,12 @@ function ExpenseFormModal({
             </div>
             <div className="space-y-1.5">
               <Label>Método de Pagamento</Label>
-              <Select value={form.paymentMethod} onValueChange={(v) => set("paymentMethod", v)}>
-                <SelectTrigger>
+              <Select value={form.paymentMethod || "none"} onValueChange={(v) => set("paymentMethod", v === "none" ? "" : v)}>
+                <SelectTrigger aria-label="Método de pagamento">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  {(canPayOnCreate || !form.paymentMethod) && <SelectItem value="none">— sem método —</SelectItem>}
                   <SelectItem value="cash">Numerário</SelectItem>
                   <SelectItem value="card">Cartão</SelectItem>
                   <SelectItem value="transfer">Transferência</SelectItem>
@@ -1639,6 +1649,48 @@ function ExpenseFormModal({
                   <SelectItem value="other">Outro</SelectItem>
                 </SelectContent>
               </Select>
+              {/* Só admin/super admin, ao lançar: com método fica já paga (o servidor aplica a mesma regra) */}
+              {!editId && canPayOnCreate && suggestedMethod && form.paymentMethod !== suggestedMethod && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <Sparkles className="h-3 w-3 shrink-0 text-primary" />
+                  <span>A fatura diz: <strong className="text-foreground">{PAYMENT_LABELS[suggestedMethod] ?? suggestedMethod}</strong></span>
+                  <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => set("paymentMethod", suggestedMethod)}>
+                    Usar (fica paga)
+                  </Button>
+                </div>
+              )}
+              {!editId && canPayOnCreate && (() => {
+                const pay = paymentOnCreate({ role, paymentMethod: form.paymentMethod, expenseDate: form.expenseDate, paymentDueDate: form.paymentDueDate });
+                if (pay.status !== "paid") {
+                  return <p className="text-xs text-muted-foreground">Sem método fica por pagar (pendente). Escolhe o método se já está paga.</p>;
+                }
+                const day = pay.paidAt.split("-").reverse().join("/");
+                if (isFuturePaidAt(pay.paidAt)) {
+                  return (
+                    <div role="alert" className="rounded-[10px] border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                      <p className="flex items-center gap-1 font-medium">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                        Fica paga com data futura ({day}). É mesmo isso?
+                      </p>
+                      <label className="mt-1.5 flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-amber-600"
+                          checked={confirmedFuturePaidAt === pay.paidAt}
+                          onChange={(e) => setConfirmedFuturePaidAt(e.target.checked ? pay.paidAt : "")}
+                        />
+                        Sim, já está paga com data de {day}
+                      </label>
+                    </div>
+                  );
+                }
+                return (
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3 shrink-0" />
+                    Fica já paga em {day} ({form.paymentDueDate ? "data de vencimento" : "data da despesa"}).
+                  </p>
+                );
+              })()}
             </div>
             </div>
           </div>
@@ -1649,44 +1701,22 @@ function ExpenseFormModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Categoria</Label>
-              <Select value={form.categoryId} onValueChange={(v) => set("categoryId", v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecionar categoria" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categories.map((c) => (
-                    <SelectItem key={c.id} value={String(c.id)}>
-                      <span className="flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: c.color }} />
-                        {c.name}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchPicker
+                ariaLabel="Categoria"
+                value={form.categoryId}
+                onChange={(v) => set("categoryId", v)}
+                placeholder="Selecionar categoria"
+                searchPlaceholder="Pesquisar categoria…"
+                emptyText="Nenhuma categoria com esse nome"
+                options={categoryOptions}
+              />
             </div>
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1">
                 Centro de custos *
                 <span className="text-xs text-muted-foreground font-normal">(Grupo / Cidade / Marca / Projeto)</span>
               </Label>
-              <Select value={form.projectId} onValueChange={(v) => set("projectId", v)}>
-                <SelectTrigger className={!form.projectId ? "border-amber-400" : undefined}>
-                  <SelectValue placeholder="Escolher centro de custos..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {sortProjectsHierarchical(projects).map((p: any) => (
-                    <SelectItem key={p.id} value={String(p.id)}>
-                      <span style={{ paddingLeft: `${p.__depth * 12}px` }} className="inline-flex items-center gap-2">
-                        <span className={`text-[11px] px-1.5 py-0.5 rounded border ${LEVEL_COLOR[p.level] ?? ""}`}>
-                          {LEVEL_LABEL[p.level] ?? p.level}
-                        </span>
-                        {p.name}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <CostCentrePicker value={form.projectId} onChange={(v) => set("projectId", v)} projects={projects} />
               <p className="text-xs text-muted-foreground">
                 Esta despesa vai entrar nos custos deste centro <em>e</em> de todos os pais (rollup automático).
               </p>
@@ -1697,17 +1727,19 @@ function ExpenseFormModal({
                 <User className="h-3.5 w-3.5" />
                 Funcionário (quem comprou)
               </Label>
-              <Select value={form.buyerId} onValueChange={(v) => set("buyerId", v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecionar funcionário" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Nenhum</SelectItem>
-                  {employees.map((emp: any) => (
-                    <SelectItem key={emp.id} value={String(emp.id)}>{emp.fullName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchPicker
+                ariaLabel="Funcionário (quem comprou)"
+                value={form.buyerId === "none" ? "" : form.buyerId}
+                onChange={(v) => set("buyerId", v)}
+                placeholder="Selecionar funcionário"
+                searchPlaceholder="Pesquisar pessoa…"
+                emptyText="Ninguém com esse nome (só team leader e acima)"
+                noneLabel="Nenhum"
+                options={buyerOptions}
+                loading={employeesState === "loading"}
+                error={employeesState === "error"}
+                onRetry={onRetryEmployees}
+              />
             </div>
             {/* Quem suportou a compra: empresa ou colaborador (dá origem a reembolso) */}
             <div className="space-y-1.5">

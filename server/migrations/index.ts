@@ -187,6 +187,7 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0660", () => import("./migration_0660").then((m) => step(m.MIGRATION_0660_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0660))],
   ["0665", () => import("./migration_0665").then((m) => step(m.MIGRATION_0665_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0665))],
   ["0670", () => import("./migration_0670").then((m) => step(m.MIGRATION_0670_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0670))],
+  ["0675", () => import("./migration_0675").then((m) => step(m.MIGRATION_0675_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0675))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
@@ -257,5 +258,13 @@ export async function ensureRecentSchema(db: Executor): Promise<void> {
     if (await runMigration0545Collation(db as any)) console.log("[Schema ensure] 0545 tasks.bookingRef: collation igual à de multipark_bookings.externalId");
   } catch (err: any) {
     console.warn("[Schema ensure] 0545 (collation de tasks.bookingRef) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    // Categorias de despesa: acentos certos + "Sinistros" — uma vez em toda a frota (marca em app_settings).
+    const { runMigration0675Data } = await import("./migration_0675");
+    const r = await runMigration0675Data(db as any);
+    if (r.status === "applied") console.log(`[Schema ensure] 0675 categorias: ${r.plan?.renames.length ?? 0} nome(s) corrigido(s)${r.plan?.renames.length ? ` (${r.plan.renames.map((x) => `${x.from} → ${x.to}`).join("; ")})` : ""}${r.plan?.skipped.length ? `, ${r.plan.skipped.length} ficaram (nome certo já existe)` : ""}${r.sinistrosAdded ? ", Sinistros acrescentada" : ""}`.slice(0, 600));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0675 (nomes das categorias) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }

@@ -3,9 +3,11 @@
  * cidade da tabela de extras.
  *
  * Pedido do Jorge (set 2026): a tabela mostrava toda a gente de uma vez ao
- * fazer scroll. Agora os extras aparecem em secções por cidade (fechadas,
- * menos a mais relevante), com filtro por estado e "mostrar mais". Estas
- * regras são puras e partilhadas para poderem ser testadas sem browser.
+ * fazer scroll. Agora os extras aparecem em secções por cidade, com filtro por
+ * estado e "mostrar mais". Desde 14 out 2026 cada cidade fica aberta e é o
+ * ESTADO que fecha o ruído ("Sem resposta"/"Indisponíveis" fechadas — ver
+ * `defaultOpenStatuses` em shared/availabilityFilters.ts). Estas regras são
+ * puras e partilhadas para poderem ser testadas sem browser.
  */
 
 import { CITY_KEYS, type CityKey } from "./city";
@@ -78,23 +80,6 @@ export function groupByCity<T extends { city: CityKey | null }>(rows: T[]): City
     else buckets.set(key, [r]);
   }
   return CITY_GROUP_ORDER.filter((k) => buckets.has(k)).map((key) => ({ key, rows: buckets.get(key)! }));
-}
-
-/**
- * Secções abertas por defeito: só a mais relevante — a cidade escolhida no
- * filtro (se tiver gente), senão a maior. Com uma pesquisa ativa os
- * resultados são poucos e abrem-se todas as secções.
- */
-export function defaultOpenGroups(
-  groups: { key: CityGroupKey; rows: unknown[] }[],
-  opts: { preferred?: CityGroupKey | null; searching?: boolean } = {},
-): Set<CityGroupKey> {
-  if (opts.searching) return new Set(groups.map((g) => g.key));
-  const preferred = opts.preferred ? groups.find((g) => g.key === opts.preferred) : undefined;
-  if (preferred) return new Set([preferred.key]);
-  let best: { key: CityGroupKey; rows: unknown[] } | undefined;
-  for (const g of groups) if (!best || g.rows.length > best.rows.length) best = g;
-  return new Set(best ? [best.key] : []);
 }
 
 /** Tamanho de cada "página" das secções ("Mostrar mais"). */
