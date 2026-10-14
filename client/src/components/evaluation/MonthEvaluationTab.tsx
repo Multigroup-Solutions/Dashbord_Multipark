@@ -457,8 +457,8 @@ function LiveMovementsCard({ from, to }: { from: string; to: string }) {
                     <th className="p-2">Pessoa / agente</th>
                     <th className="p-2 text-right" title="Todas as ações registadas">Ações</th>
                     <th className="p-2 text-right" title="Recolhas (check-in) · início da recolha">Check-in</th>
-                    <th className="p-2 text-right" title="Levar ao parque e tirar do parque para a entrega (os que dão pontos)">Movimentos</th>
-                    <th className="p-2 text-right" title="O carro já no parque só mudou de lugar: conta nas ações, não nos movimentos nem nos pontos">Mudanças de lugar</th>
+                    <th className="p-2 text-right" title="Levar ao parque e entre garagens (o início de cada deslocação não conta)">Movimentos</th>
+                    <th className="p-2 text-right" title="O carro ficou na mesma garagem e só mudou de lugar: conta nas ações, não nos movimentos (+1 na avaliação)">Mudanças de lugar</th>
                     <th className="p-2 text-right" title="Entregas (check-out) · pedidos de entrega">Check-out</th>
                     <th className="p-2 text-right" title="Reservas diferentes">Reservas</th>
                     <th className="p-2 text-right" title="Reservas com o seu id no check-in / check-out">Assinados</th>

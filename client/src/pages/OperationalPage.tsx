@@ -224,7 +224,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
         <div className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-8 gap-3">
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold tabular-nums truncate text-emerald-700">{totals.checkins}</p></Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold tabular-nums truncate text-blue-700">{totals.checkouts}</p></Card>
-          <Card className="p-3 gap-0.5 min-w-0" title="Levar ao parque e tirar do parque para a entrega. As mudanças de lugar (o carro já no parque) contam nas ações, não aqui."><p className="text-xs text-muted-foreground">Movimentações</p><p className="text-xl font-bold tabular-nums truncate">{totals.movements}</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0" title="Levar ao parque e entre garagens. O início de cada deslocação não conta; as mudanças de lugar (mesma garagem) contam nas ações, não aqui."><p className="text-xs text-muted-foreground">Movimentações</p><p className="text-xl font-bold tabular-nums truncate">{totals.movements}</p></Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Cancelamentos</p><p className="text-xl font-bold tabular-nums truncate text-red-700">{totals.cancels}</p></Card>
           <Card className="p-3 gap-0.5 min-w-0">
             <p className="text-xs text-muted-foreground">No horário / fora</p>
