@@ -33,7 +33,7 @@
  * AI_MAIL_LOST_FOUND, AI_MAIL_NOTICES e AI_MAIL_BACKFILL. Nunca responde a
  * ninguém; nunca apaga nada.
  */
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import {
   commsRoutingSettings, normalizeCandidate, routingNoteText, whatsappRoutingPlan,
   ROUTING_BODY_MAX, ROUTING_SUBJECT_MAX, type CandidateData, type CommsRoutingSettings,
@@ -209,7 +209,9 @@ export async function classifyAndApply(msg: EmailRoutingMessage, deps: EmailRout
   // 14 out 2026: a IA falhou → nada se mexe (nunca se perde): fica onde está,
   // por ler, e volta a ser lida pelo varrimento (até MAIL_TRIAGE_MAX_ATTEMPTS).
   if (!classified) {
-    await deps.record(msg.messageId, { status: "failed", via: "fallback", boxKey: msg.fromBoxKey, error });
+    // Varrimento: a linha antiga (o encaminhador já a tinha separado) fica como estava — só o erro e a tentativa;
+    // o próprio varrimento volta a tentar (runMailBackfill, até MAIL_TRIAGE_MAX_ATTEMPTS).
+    await deps.record(msg.messageId, { status: "failed", via: "fallback", boxKey: msg.fromBoxKey, error, onlyTriage: sweep });
     return { status: "failed", boxKey: msg.fromBoxKey };
   }
 
@@ -369,21 +371,33 @@ const QUOTED_SEP = "§§§CITADO§§§";
  */
 export async function classifyEmailWithAi(msg: EmailRoutingMessage, fromLabel: string): Promise<ClassifiedEmail> {
   const { runAi } = await import("./_core/ai/run");
+  const { mailRoutingSchema } = await import("./_core/ai/prompts/comms");
+  const req = await mailRoutingRequest(msg, fromLabel);
+  const r = await runAi({
+    feature: "mail_routing", system: req.system, schema: mailRoutingSchema, input: req.input,
+    maxTokens: 700, timeoutMs: 15_000, retries: 1, entity: "mail_thread", entityId: msg.threadId || null,
+  });
+  return { output: r.output, restore: req.restore, model: r.model };
+}
+
+/**
+ * O pedido EXATO que vai à IA (sistema + utilizador), já com os dados
+ * pessoais tapados e os cortes. Uma só fonte: a leitura real, o "Testar a
+ * triagem" e a avaliação offline (scripts/eval-mail-triage.ts --dump) usam
+ * esta função. Sem I/O.
+ */
+export async function mailRoutingRequest(msg: Pick<EmailRoutingMessage, "subject" | "text" | "fromName" | "senderKind" | "attachmentNames">, fromLabel: string): Promise<{ system: string; input: string; restore: (s: string) => string }> {
   const { redactPii, firstName } = await import("./_core/ai/pii");
-  const { MAIL_ROUTING_SYSTEM, MAIL_QUOTED_MAX, mailRoutingInput, mailRoutingSchema } = await import("./_core/ai/prompts/comms");
+  const { MAIL_ROUTING_SYSTEM, MAIL_QUOTED_MAX, mailRoutingInput } = await import("./_core/ai/prompts/comms");
   const parts = splitQuotedText(msg.text);
   const red = redactPii(`${msg.subject.slice(0, ROUTING_SUBJECT_MAX).replace(/\n/g, " ")}\n${parts.fresh.slice(0, ROUTING_BODY_MAX)}\n${QUOTED_SEP}\n${parts.quoted.slice(0, MAIL_QUOTED_MAX)}`);
   const [head, quoted = ""] = red.text.split(`\n${QUOTED_SEP}\n`);
   const [subject, ...body] = head.split("\n");
-  const r = await runAi({
-    feature: "mail_routing", system: MAIL_ROUTING_SYSTEM, schema: mailRoutingSchema,
-    input: mailRoutingInput({
-      subject: subject ?? "", body: body.join("\n"), quoted, fromBox: fromLabel,
-      senderFirstName: firstName(msg.fromName, ""), senderKind: msg.senderKind ?? null, attachmentNames: msg.attachmentNames,
-    }),
-    maxTokens: 700, timeoutMs: 15_000, retries: 1, entity: "mail_thread", entityId: msg.threadId || null,
+  const input = mailRoutingInput({
+    subject: subject ?? "", body: body.join("\n"), quoted, fromBox: fromLabel,
+    senderFirstName: firstName(msg.fromName, ""), senderKind: msg.senderKind ?? null, attachmentNames: msg.attachmentNames,
   });
-  return { output: r.output, restore: red.restore, model: r.model };
+  return { system: MAIL_ROUTING_SYSTEM, input, restore: red.restore };
 }
 
 /** Tira o histórico citado ("> …", "Em … escreveu:") — só a mensagem nova. PURA. */
@@ -543,6 +557,18 @@ export const dbEmailRoutingDeps: EmailRoutingDeps = {
 
 // ─── Emails já guardados (pendentes, falhados, varrimento) ──────────────────
 
+/**
+ * Uma conversa "já tem caso" só por uma ligação FORTE a uma reclamação ou a um
+ * perdido: feita à mão, pelo pipeline/IA (100) ou pela mesma conversa (95).
+ * Auditoria (14 out 2026): as ligações automáticas fracas "reclamação/perdido
+ * aberto do mesmo cliente" (70) — que se fazem a QUALQUER email desse cliente,
+ * mesmo de um perdido de há meses — faziam a nova tentativa e o varrimento
+ * saltar uma reclamação nova ("a conversa já tem caso").
+ */
+export const STRONG_CASE_LINK_MIN_CONFIDENCE = 95;
+export const strongCaseLinkSql = (threadCol: SQL) => sql`EXISTS (SELECT 1 FROM mail_links l WHERE l.threadId = ${threadCol}
+  AND l.entityType IN ('complaint', 'lost_found') AND l.removedAt IS NULL AND (l.source = 'manual' OR l.confidence >= ${STRONG_CASE_LINK_MIN_CONFIDENCE}))`;
+
 export interface StoredTriageMessage {
   msg: EmailRoutingMessage;
   pre: PreTriageFacts;
@@ -559,7 +585,7 @@ export async function loadStoredTriageMessage(messageId: number, mode: "sync" | 
       m.direction, m.automated, m.pipeline, DATE_FORMAT(m.sentAt, '%Y-%m-%d %H:%i:%s') AS sentAt,
       t.mailboxKey, t.routedBy, t.projectId, t.ownerUserId, t.status AS threadStatus, t.archivedAt,
       (SELECT MIN(x.id) FROM mail_messages x WHERE x.threadId = m.threadId AND x.direction = 'in') AS firstInId,
-      EXISTS (SELECT 1 FROM mail_links l WHERE l.threadId = m.threadId AND l.entityType IN ('complaint', 'lost_found')) AS hasCase,
+      ${strongCaseLinkSql(sql`m.threadId`)} AS hasCase,
       EXISTS (SELECT 1 FROM comms_ai_routing c WHERE c.threadId = m.threadId AND c.correctedBoxKey IS NOT NULL) AS corrected,
       (SELECT i.status FROM complaint_mail_intake i WHERE i.threadId = m.threadId LIMIT 1) AS intakeStatus
     FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId WHERE m.id = ${messageId} LIMIT 1`))[0];
@@ -646,20 +672,29 @@ export async function runPendingEmailRoutings(opts: { limit?: number; deadlineAt
   const since = nowStr(Date.now() - 2 * 86_400_000);
   // As que o varrimento dos antigos acabou de reservar ficam com ele (só se pega nelas se ficarem presas > 10 min).
   const sweepStale = nowStr(Date.now() - 10 * 60_000);
-  const rows = rowsOf(await d.execute(sql`SELECT messageId FROM comms_ai_routing
+  // Auditoria: as linhas do varrimento (sweptAt) ficam com ele — só se pega numa que ficou presa
+  // "pending" (a corrida morreu a meio) e SEMPRE em modo varrimento (nunca mexe na caixa de tema de um email antigo).
+  const rows = rowsOf(await d.execute(sql`SELECT messageId, sweptAt FROM comms_ai_routing
     WHERE channel = 'email' AND createdAt >= ${since} AND attempts < ${MAIL_TRIAGE_MAX_ATTEMPTS}
-      AND (sweptAt IS NULL OR sweptAt < ${sweepStale})
+      AND (sweptAt IS NULL OR (status = 'pending' AND sweptAt < ${sweepStale}))
       AND (status = 'pending' OR (status = 'failed' AND via = 'fallback' AND (error IS NULL OR error <> 'disabled')))
     ORDER BY id LIMIT ${Math.max(1, Math.min(settings.perRun, opts.limit ?? settings.perRun))}`));
   for (const r of rows) {
     if (Date.now() + 16_000 > deadlineAt) { out.skipped = "deadline"; break; }
-    const res = await triageStoredMessage(Number(r.messageId), deps);
+    const res = await triageStoredMessage(Number(r.messageId), deps, { mode: r.sweptAt != null ? "sweep" : "sync" });
     if (res.status !== "failed" && res.status !== "pending") out.routed++;
   }
   return out;
 }
 
 // ─── Varrimento dos emails que já estão nas caixas (AI_MAIL_BACKFILL) ──────
+
+/** Uma linha que o varrimento já leu mas cuja leitura falhou (e ainda tem tentativas). */
+const retryableSweep = (r: SQL, stale: string) =>
+  sql`${r}.sweptAt < ${stale} AND ${r}.category IS NULL AND ${r}.error IS NOT NULL AND ${r}.attempts > 0 AND ${r}.attempts < ${MAIL_TRIAGE_MAX_ATTEMPTS}`;
+/** Uma leitura da sincronização que falhou e que a nova tentativa (runPendingEmailRoutings, 2 dias) ainda vai repetir — não é do varrimento. */
+const ownedByPending = (r: SQL, since2d: string) =>
+  sql`${r}.sweptAt IS NULL AND ${r}.status = 'failed' AND ${r}.attempts < ${MAIL_TRIAGE_MAX_ATTEMPTS} AND ${r}.createdAt >= ${since2d}`;
 
 export interface BackfillReport { read: number; ai: number; cases: number; skipped?: string }
 
@@ -686,14 +721,18 @@ export async function runMailBackfill(
   const deadlineAt = opts.deadlineAt ?? Date.now() + 30_000;
   const d = await database();
   const since = nowStr(Date.now() - cfg.days * 86_400_000);
+  // Uma leitura que falhou (IA em baixo) volta a ser tentada pelo próprio varrimento, até MAIL_TRIAGE_MAX_ATTEMPTS.
+  const stale = nowStr(Date.now() - 10 * 60_000);
+  const since2d = nowStr(Date.now() - 2 * 86_400_000);
   const rows = rowsOf(await d.execute(sql`SELECT m.id, m.threadId FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId
     WHERE m.direction = 'in' AND m.sentAt >= ${since} AND m.automated IN (0, 1) AND m.archivedAt IS NULL
       AND t.mailboxKey IS NOT NULL AND t.ownerUserId IS NULL AND t.archivedAt IS NULL
       AND (t.routedBy IS NULL OR t.routedBy <> 'manual') AND t.status <> 'resolvido'
       AND NOT EXISTS (SELECT 1 FROM comms_ai_routing r WHERE r.sourceRef = CONCAT('mail_message:', m.id)
-        AND (r.category IS NOT NULL OR r.sweptAt IS NOT NULL OR r.status = 'pending'))
+        AND (r.category IS NOT NULL OR r.status = 'pending' OR (${ownedByPending(sql`r`, since2d)})
+          OR (r.sweptAt IS NOT NULL AND NOT (${retryableSweep(sql`r`, stale)}))))
       AND NOT EXISTS (SELECT 1 FROM comms_ai_routing c WHERE c.threadId = m.threadId AND c.correctedBoxKey IS NOT NULL)
-      AND NOT EXISTS (SELECT 1 FROM mail_links l WHERE l.threadId = m.threadId AND l.entityType IN ('complaint', 'lost_found'))
+      AND NOT ${strongCaseLinkSql(sql`m.threadId`)}
       AND NOT EXISTS (SELECT 1 FROM complaint_mail_intake i WHERE i.threadId = m.threadId AND i.status <> 'skipped')
     ORDER BY m.sentAt DESC LIMIT ${perRun * 3}`));
   const routingOn = await deps.enabled();
@@ -701,23 +740,22 @@ export async function runMailBackfill(
     if (Date.now() + 16_000 > deadlineAt) { out.skipped = "deadline"; break; }
     if (out.ai >= perRun) break;
     const messageId = Number(r.id);
-    // Reserva: linha nova, ou a linha antiga ainda nunca varrida.
+    // IA desligada: o que precisa dela fica por varrer (não se reserva) — volta quando a IA voltar.
+    const stored = await (deps.load ?? loadStoredTriageMessage)(messageId, "sweep");
+    const willUseAi = !!stored && preTriageMail(stored.pre).action === "ai";
+    if (willUseAi && !routingOn) continue;
+    // Reserva: linha nova, ou a linha antiga ainda nunca varrida (ou cuja leitura falhou).
     const ins = await d.execute(sql`INSERT IGNORE INTO comms_ai_routing (channel, sourceRef, threadId, messageId, fromBoxKey, via, status, sweptAt)
       SELECT 'email', ${`mail_message:${messageId}`}, m.threadId, m.id, t.mailboxKey, 'ai', 'pending', ${nowStr()}
       FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId WHERE m.id = ${messageId}`);
     let claimed = affected(ins) === 1;
     if (!claimed) {
-      const upd = await d.execute(sql`UPDATE comms_ai_routing SET sweptAt = ${nowStr()}
-        WHERE sourceRef = ${`mail_message:${messageId}`} AND sweptAt IS NULL AND category IS NULL AND status <> 'pending'`);
+      const upd = await d.execute(sql`UPDATE comms_ai_routing r SET r.sweptAt = ${nowStr()}
+        WHERE r.sourceRef = ${`mail_message:${messageId}`} AND r.category IS NULL AND r.status <> 'pending'
+          AND ((r.sweptAt IS NULL AND NOT (${ownedByPending(sql`r`, since2d)})) OR ${retryableSweep(sql`r`, stale)})`);
       claimed = affected(upd) === 1;
     }
     if (!claimed) continue;
-    const stored = await (deps.load ?? loadStoredTriageMessage)(messageId, "sweep");
-    const willUseAi = !!stored && preTriageMail(stored.pre).action === "ai";
-    if (willUseAi && !routingOn) {
-      await deps.record(messageId, { status: "kept", via: "rule", reason: "IA desligada", onlyTriage: true });
-      continue;
-    }
     const res = await triageStoredMessage(messageId, { ...deps, load: async () => stored }, { mode: "sweep" });
     out.read++;
     if (willUseAi) out.ai++;

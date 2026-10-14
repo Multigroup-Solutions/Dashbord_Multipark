@@ -493,7 +493,8 @@ describe("emails já guardados", () => {
     const q = h.db.queries[0].sql as string;
     expect(q).toContain("attempts < ?");
     expect(q).toContain("(status = 'pending' OR (status = 'failed' AND via = 'fallback'");
-    expect(q).toContain("(sweptAt IS NULL OR sweptAt < ?)");
+    // auditoria: do varrimento só as presas "pending" (a corrida morreu), e em modo varrimento
+    expect(q).toContain("(sweptAt IS NULL OR (status = 'pending' AND sweptAt < ?))");
   });
 });
 
@@ -506,7 +507,7 @@ describe("varrimento dos emails que já estão nas caixas (AI_MAIL_BACKFILL)", (
         if (opts.claimable.has(id)) { opts.claimable.delete(id); return [{ affectedRows: 1 }]; }
         return [{ affectedRows: 0 }];
       }
-      if (q.sql.startsWith("UPDATE comms_ai_routing SET sweptAt")) return [{ affectedRows: 0 }];
+      if (q.sql.startsWith("UPDATE comms_ai_routing r SET r.sweptAt")) return [{ affectedRows: 0 }];
       return [[]];
     });
   }
@@ -539,7 +540,8 @@ describe("varrimento dos emails que já estão nas caixas (AI_MAIL_BACKFILL)", (
     const q = (h.db.queries as any[]).find((x) => x.sql.startsWith("SELECT m.id, m.threadId")).sql as string;
     for (const part of [
       "m.direction = 'in'", "m.automated IN (0, 1)", "t.ownerUserId IS NULL", "t.routedBy <> 'manual'", "t.status <> 'resolvido'", "t.archivedAt IS NULL",
-      "c.correctedBoxKey IS NOT NULL", "l.entityType IN ('complaint', 'lost_found')", "i.status <> 'skipped'", "r.category IS NOT NULL OR r.sweptAt IS NOT NULL",
+      "c.correctedBoxKey IS NOT NULL", "l.entityType IN ('complaint', 'lost_found')", "i.status <> 'skipped'", "r.category IS NOT NULL OR r.status = 'pending'",
+      "r.sweptAt IS NOT NULL AND NOT",
       "ORDER BY m.sentAt DESC",
     ]) expect(q, part).toContain(part);
   });
@@ -559,13 +561,14 @@ describe("varrimento dos emails que já estão nas caixas (AI_MAIL_BACKFILL)", (
 describe("lido e por ler", () => {
   it("marcar lida (crítica/aviso): no dashboard e no Gmail; já lida → nada", async () => {
     h.modify.mockClear();
-    h.db = createFakeDb((q) => (q.sql.startsWith("SELECT threadId, accountKey") ? [[{ threadId: 10, accountKey: "dwd:reservas@multipark.pt", gmailMessageId: "g1", isRead: 0 }]] : [{ affectedRows: 1 }]));
+    const row = { threadId: 10, accountKey: "dwd:reservas@multipark.pt", gmailMessageId: "g1", isRead: 0, direction: "in", mailboxKey: "criticas", ownerUserId: null };
+    h.db = createFakeDb((q) => (q.sql.startsWith("SELECT m.threadId, m.accountKey") ? [[row]] : [{ affectedRows: 1 }]));
     const { markMessageReadBySystem } = await import("./mail/store");
     expect(await markMessageReadBySystem(100)).toBe(true);
     const all = h.db.queries.map((q: any) => q.sql).join("\n");
     expect(all).toContain("UPDATE mail_messages SET isRead = 1 WHERE id = ?");
     expect(h.modify).toHaveBeenCalledWith("g1", [], ["UNREAD"]);
-    h.db = createFakeDb((q) => (q.sql.startsWith("SELECT threadId, accountKey") ? [[{ threadId: 10, accountKey: "x", gmailMessageId: "g1", isRead: 1 }]] : [{ affectedRows: 1 }]));
+    h.db = createFakeDb((q) => (q.sql.startsWith("SELECT m.threadId, m.accountKey") ? [[{ ...row, isRead: 1 }]] : [{ affectedRows: 1 }]));
     expect(await markMessageReadBySystem(100)).toBe(false);
   });
   it("mover nunca marca lida; com caso pode mudar uma conversa que a IA separou, nunca uma movida à mão", async () => {

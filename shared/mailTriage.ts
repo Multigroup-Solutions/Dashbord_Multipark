@@ -182,6 +182,18 @@ export function automatedByHeaders(m: { fromEmail: string | null | undefined; au
   return m.automated === 1 && !isAutomatedSender(m.fromEmail);
 }
 
+/**
+ * Envio em massa (newsletter) pelos cabeçalhos de lista — SÓ quando a
+ * sincronização já o deu como automático. Auditoria (14 out 2026): os emails
+ * que um Grupo Google da empresa distribui (info@, reclamacoes@…) trazem
+ * List-Id/List-Unsubscribe do NOSSO domínio; a sincronização sabe que são do
+ * cliente (automated = 0, shared/mail.ts isOwnListId), mas o caso via o
+ * cabeçalho cru e deitava a reclamação fora como "newsletter". PURA.
+ */
+export function bulkListMail(m: { automated: number; listUnsubscribe?: string | null; listId?: string | null }): boolean {
+  return m.automated === 1 && !!(String(m.listUnsubscribe ?? "").trim() || String(m.listId ?? "").trim());
+}
+
 const FORWARD_FROM_RE = /^[\s>*]*(?:De|From|Von|Desde)\s*:\s*(.+)$/gim;
 const EMAIL_IN_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 
@@ -195,7 +207,9 @@ export function forwardedExternalSender(text: string | null | undefined, isCompa
   const t = String(text ?? "").replace(/\r/g, "").slice(0, 20_000);
   for (const m of t.matchAll(FORWARD_FROM_RE)) {
     const e = EMAIL_IN_RE.exec(m[1] ?? "")?.[0]?.toLowerCase();
-    if (e && !isCompany(e) && !isAutomatedSender(e)) return e;
+    // Um aviso de avaliação reencaminhado (Google Business Profile, Trustpilot…)
+    // não é um cliente: a crítica entra pelas Críticas (auditoria, 14 out 2026).
+    if (e && !isCompany(e) && !isAutomatedSender(e) && !isReviewNoticeSender(e)) return e;
   }
   return null;
 }

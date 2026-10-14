@@ -218,6 +218,38 @@ export function aiMergeSameClient(existingEmail: string | null | undefined, send
   return !a || !b || a === b;
 }
 
+/**
+ * Auditoria (14 out 2026): o MESMO cliente pode ter duas reservas e duas
+ * reclamações diferentes. Um email de uma conversa NOVA só se junta ao caso
+ * aberto desse cliente quando nada o contradiz: se o email traz uma reserva
+ * (ou uma matrícula) e o caso aberto tem OUTRA, é outro caso. "48213" e
+ * "MP-48213" são a mesma reserva. A conversa, o fio do email e a etiqueta
+ * [REC-n] continuam a juntar sempre (é a mesma conversa). PURA.
+ */
+export function aiMergeConflict(
+  existing: { ref?: string | null; plate?: string | null },
+  incoming: { ref?: string | null; plate?: string | null },
+): boolean {
+  const norm = (v: string | null | undefined) => String(v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const differ = (a: string, b: string) => !!a && !!b && a !== b && !a.endsWith(b) && !b.endsWith(a);
+  return differ(norm(existing.ref), norm(incoming.ref)) || differ(norm(existing.plate), norm(incoming.plate));
+}
+
+/** Perdidos: um email de uma conversa nova só se junta ao perdido aberto do mesmo cliente criado há menos disto (a mesma viagem). */
+export const LOST_FOUND_AI_MERGE_DAYS = 14;
+
+/** O perdido aberto é recente o bastante para um email novo do mesmo cliente se juntar a ele? PURA. */
+export function lostFoundMergeRecent(createdAt: string | Date | null | undefined, now: number = Date.now()): boolean {
+  let t: number;
+  if (createdAt instanceof Date) t = createdAt.getTime();
+  else {
+    const raw = String(createdAt ?? "").trim();
+    // "AAAA-MM-DD HH:MM:SS" da BD é UTC.
+    t = Date.parse(/[zZ]$|[+-]\d\d:?\d\d$/.test(raw) ? raw : `${raw.replace(" ", "T")}Z`);
+  }
+  return Number.isFinite(t) && now - t <= LOST_FOUND_AI_MERGE_DAYS * 86_400_000;
+}
+
 // ─── Notas na reclamação ────────────────────────────────────────────────────
 
 const pct = (c: number | null | undefined) => (c == null || !Number.isFinite(c) ? null : `${Math.round(c * 100)}%`);

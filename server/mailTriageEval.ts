@@ -2,26 +2,46 @@
  * "Testar a triagem" (14 out 2026 — meta do Jorge: mais de 90 % das
  * reclamações e dos perdidos vão para lá).
  *
- * Corre o corpus rotulado (server/fixtures/mailTriageCorpus.ts) pelo MESMO
- * caminho de produção: os mesmos factos (remetente, automático, reencaminhado),
- * a mesma pré-triagem (regras sem IA), o MESMO pedido à IA
- * (classifyEmailWithAi, com o fornecedor configurado) e a MESMA decisão
- * (decideMailTriage com as certezas das Definições; reclamacoes@/perdidos@
- * pela mesma porta aliasGateIsNoise). Mede recall e precisão por categoria.
- * NÃO escreve nada nos casos nem na Comunicação: só o registo do custo da IA
- * e uma linha "[triagem-eval]" nos logs.
+ * Corre os corpora rotulados — o principal (server/fixtures/mailTriageCorpus.ts)
+ * e o de CONTROLO, escrito à parte por quem auditou
+ * (server/fixtures/mailTriageHoldout.ts) — pelo MESMO caminho de produção: os
+ * mesmos factos (remetente, automático, reencaminhado), a mesma pré-triagem
+ * (regras sem IA), o MESMO pedido à IA (classifyEmailWithAi, com o fornecedor
+ * configurado), a MESMA decisão (decideMailTriage com as certezas das
+ * Definições; reclamacoes@/perdidos@ pela mesma porta aliasGateIsNoise) e a
+ * MESMA porta do caso (caseIntakeDecision: interno, automático, envio em
+ * massa, aviso de avaliação). Uma reclamação ou um perdido só contam como
+ * "foram para lá" quando o caso abre de facto. Mede recall e precisão por
+ * categoria e conta os "Por confirmar". NÃO escreve nada nos casos nem na
+ * Comunicação: só o registo do custo da IA e uma linha "[triagem-eval]" nos logs.
  *
  * Usado pelo botão em Definições → Comunicação (super admin, por lotes — cada
  * pedido cabe nos 60 s do Vercel) e por scripts/eval-mail-triage.ts.
  */
 import {
-  ALL_TRIAGE_FEATURES, DIRECT_CASE_PIPELINES, aliasGateIsNoise, decideMailTriage, forwardedExternalSender, parseTriageCategory, preTriageMail,
+  ALL_TRIAGE_FEATURES, DIRECT_CASE_PIPELINES, aliasGateIsNoise, bulkListMail, decideMailTriage, forwardedExternalSender, parseTriageCategory, preTriageMail,
   senderKindOf, triageMetrics, triageMetricsLogLine,
   type MailTriageCategory, type PreTriageFacts, type TriageEvalRow, type TriageMetrics, type TriageThresholds,
 } from "../shared/mailTriage";
 import { DEFAULT_BRAND_DOMAINS, isAutomatedSender, isCompanyAddress } from "../shared/mail";
+import { caseIntakeDecision } from "../shared/complaintIntake";
 import { TRIAGE_CORPUS, type TriageCorpusItem } from "./fixtures/mailTriageCorpus";
+import { TRIAGE_HOLDOUT } from "./fixtures/mailTriageHoldout";
 import type { ClassifiedEmail, EmailRoutingMessage } from "./commsRouting";
+
+/** Os corpora rotulados: o principal e o de controlo (independente). */
+export const TRIAGE_CORPORA = { principal: TRIAGE_CORPUS, controlo: TRIAGE_HOLDOUT } as const;
+export type TriageCorpusKey = keyof typeof TRIAGE_CORPORA;
+export const TRIAGE_CORPUS_KEYS = Object.keys(TRIAGE_CORPORA) as TriageCorpusKey[];
+export const TRIAGE_CORPUS_LABELS: Record<TriageCorpusKey, string> = { principal: "Corpus principal", controlo: "Corpus de controlo (independente)" };
+const corpusOf = (k: TriageCorpusKey | null | undefined): readonly TriageCorpusItem[] => TRIAGE_CORPORA[k ?? "principal"] ?? TRIAGE_CORPUS;
+
+/**
+ * Teto de custo do "Testar a triagem" (por pessoa): cada lote são até 20
+ * leituras da IA; os dois corpora são ~17 lotes de 12 — ≈ 2 corridas
+ * completas por hora e 6 por dia.
+ */
+export const MAIL_TRIAGE_EVAL_LIMITS = { perHour: 40, perDay: 110 } as const;
 
 /** Pipeline de cada caixa do corpus (o das caixas reais). */
 const BOX_PIPELINE: Record<string, string> = {
@@ -53,7 +73,7 @@ export function corpusFacts(item: TriageCorpusItem, brandDomains: Record<string,
       threadId: 0, messageId: 0, fromBoxKey: item.box, subject: item.subject, text: item.body, fromName: item.fromName, fromEmail: item.fromEmail,
       attachmentNames: item.attachments ?? [], projectId: null, newThread: item.newThread ?? true, senderKind, mode: "sync",
       forwardedExternal: senderKind === "company" && !!forwardedExternalSender(item.body, company),
-      listMail: !!(item.headers?.listUnsubscribe || item.headers?.listId),
+      listMail: bulkListMail({ automated, listUnsubscribe: item.headers?.listUnsubscribe, listId: item.headers?.listId }),
     },
   };
 }
@@ -63,6 +83,10 @@ export interface EvalItemResult extends TriageEvalRow {
   subject: string;
   note: string | null;
   reason: string | null;
+  /** O caso que abriria (null = nenhum). */
+  caseKind?: "complaint" | "lost_found" | null;
+  /** O caso nasceria "Por confirmar (IA)". */
+  uncertain?: boolean;
   error?: string;
 }
 
@@ -93,7 +117,30 @@ export async function evalCorpusItem(item: TriageCorpusItem, classify: Classify,
     return { ...base, predicted: noise ? "ruido" : f.pre.pipeline === "perdidos" ? "perdidos" : "reclamacoes", via: "porta", reason, model: c.model };
   }
   const d = decideMailTriage(c.output, { sender: f.msg.senderKind!, forwardedExternal: !!f.msg.forwardedExternal, newThread: f.msg.newThread ?? true, mode: "sync" }, t, ALL_TRIAGE_FEATURES, ALL_BOXES);
-  return { ...base, predicted: d.category, via: "ia", reason: [d.uncertain ? "por confirmar" : null, reason].filter(Boolean).join(" — ") || null, model: c.model };
+  // A porta do caso (a mesma de produção, server/complaintMailIntake.ts): sem
+  // caso aberto, uma reclamação ou um perdido NÃO "foram para lá".
+  let predicted: MailTriageCategory = d.category;
+  let caseKind = d.caseKind;
+  let uncertain = d.uncertain;
+  if (d.caseKind) {
+    const gate = caseIntakeDecision(d.caseKind, d.caseScore, corpusIntakeFacts(item, f), { createMinConfidence: t.createMinConfidence, suggestMinConfidence: t.suggestMinConfidence });
+    if (gate.action === "create") uncertain = uncertain || gate.uncertain === true;
+    else caseKind = null;
+  }
+  if (!caseKind && (predicted === "reclamacoes" || predicted === "perdidos")) predicted = "geral";
+  const why = [caseKind ? (uncertain ? "por confirmar" : "caso") : null, reason].filter(Boolean).join(" — ") || null;
+  return { ...base, predicted, via: "ia", reason: why, caseKind: caseKind ?? null, uncertain: !!caseKind && uncertain, model: c.model };
+}
+
+/** Os factos que a porta do caso lê (server/complaintMailIntake.ts factsOf), a partir do corpus. PURA. */
+function corpusIntakeFacts(item: TriageCorpusItem, f: CorpusFacts) {
+  const automated = f.pre.automated !== 0;
+  return {
+    fromBoxKey: item.box, fromBoxPipeline: f.pre.pipeline ?? null, outbound: false, automated, systemMail: false, personal: false,
+    senderIsCompany: f.msg.senderKind === "company", forwardedExternal: !!f.msg.forwardedExternal,
+    senderIsAutomated: isAutomatedSender(item.fromEmail), senderIsPartner: false,
+    subject: item.subject, text: item.body, senderEmail: item.fromEmail, listMail: !!f.msg.listMail,
+  };
 }
 
 /** As certezas de produção (Definições), com a omissão se a BD não responder. */
@@ -112,10 +159,10 @@ export async function productionThresholds(): Promise<TriageThresholds> {
 
 /** Um lote do corpus (`offset`, `limit`), `concurrency` pedidos de cada vez. */
 export async function evalTriageSlice(
-  opts: { offset: number; limit: number; concurrency?: number },
+  opts: { offset: number; limit: number; concurrency?: number; corpus?: TriageCorpusKey },
   deps: { classify?: Classify; thresholds?: TriageThresholds; corpus?: readonly TriageCorpusItem[] } = {},
 ): Promise<{ total: number; items: EvalItemResult[]; model: string | null }> {
-  const corpus = deps.corpus ?? TRIAGE_CORPUS;
+  const corpus = deps.corpus ?? corpusOf(opts.corpus);
   const classify = deps.classify ?? (async (m: EmailRoutingMessage, l: string) => (await import("./commsRouting")).classifyEmailWithAi(m, l));
   const t = deps.thresholds ?? (await productionThresholds());
   const slice = corpus.slice(Math.max(0, opts.offset), Math.max(0, opts.offset) + Math.max(1, Math.min(30, opts.limit)));
@@ -138,8 +185,8 @@ export async function evalTriageSlice(
  * corpus do servidor) e a linha "[triagem-eval]" nos logs.
  */
 export function triageEvalReport(
-  input: { rows: ReadonlyArray<{ id: string; predicted: string | null }>; ms?: number | null; model?: string | null },
-  corpus: readonly TriageCorpusItem[] = TRIAGE_CORPUS,
+  input: { rows: ReadonlyArray<{ id: string; predicted: string | null }>; ms?: number | null; model?: string | null; corpus?: TriageCorpusKey | null },
+  corpus: readonly TriageCorpusItem[] = corpusOf(input.corpus),
   log: (line: string) => void = (l) => console.log(l),
 ): TriageMetrics & { missing: number } {
   const byId = new Map(corpus.map((c) => [c.id, c]));
@@ -152,6 +199,6 @@ export function triageEvalReport(
   const seen = new Set(rows.map((r) => r.id));
   const missing = corpus.filter((c) => !seen.has(c.id)).length;
   const m = triageMetrics(rows);
-  log(`${triageMetricsLogLine(m, { model: input.model ?? null, ms: input.ms ?? null })}${missing ? ` · faltaram ${missing}` : ""}`);
+  log(`${triageMetricsLogLine(m, { model: input.model ?? null, ms: input.ms ?? null })} · corpus=${input.corpus ?? "principal"}${missing ? ` · faltaram ${missing}` : ""}`);
   return { ...m, missing };
 }

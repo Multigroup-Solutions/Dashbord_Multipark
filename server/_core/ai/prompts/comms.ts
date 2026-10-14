@@ -83,7 +83,7 @@ export const MAIL_ROUTING_SYSTEM = [
   ...MAIL_TRIAGE_HINTS.map((h) => `- ${h.key}: ${h.hint}`),
   "box: a chave da categoria que melhor descreve o email. Não inventes chaves.",
   "confidence: 0 a 1, quão certa estás de `box`.",
-  "complaint: 0 a 1, quão certa estás de que quem escreve (ou o cliente cuja mensagem vem reencaminhada) se queixa de algo que correu mal com o serviço — mesmo que peça também outra coisa, o escreva com calma ou em poucas palavras, ou esteja a insistir numa queixa anterior. Uma pergunta, um pedido de reserva, de alteração, de cancelamento ou de fatura sem descontentamento é 0.",
+  "complaint: 0 a 1, quão certa estás de que quem escreve (ou o cliente cuja mensagem vem reencaminhada) se queixa de algo que correu mal com o serviço — mesmo que peça também outra coisa, o escreva com calma ou em poucas palavras, ou esteja a insistir numa queixa anterior. Uma pergunta, um pedido de reserva, de alteração, de cancelamento ou de fatura sem descontentamento é 0. Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) também é 0: as avaliações tratam-se nas Críticas.",
   "lostItem: 0 a 1, quão certa estás de que alguém diz que deixou, perdeu ou esqueceu um objeto connosco (no carro, no parque, no transfer) ou pergunta por um objeto encontrado.",
   "reason: motivo curto (máx. 10 palavras, sem dados pessoais).",
   "candidate: true SÓ se for uma pessoa a candidatar-se a trabalhar connosco (enviar CV, pedir emprego, perguntar por vagas); falso para colaboradores, fornecedores e clientes.",

@@ -580,7 +580,9 @@ describe("3b — porque não chegavam: mover para a caixa Reclamações não cri
     // a nova tentativa de uma resposta que falhou nunca corre o pipeline "normal" numa conversa da IA
     const retry = svc.slice(svc.indexOf("export async function retryPipelineMessage"), svc.indexOf("export async function retryFailedPipelines"));
     expect(retry).toContain("intakeOfThread(threadId)");
-    expect(retry).toContain("aiIntake = { forceComplaintId: seen.complaintId, replyOnly: true }");
+    expect(retry).toContain("{ forceComplaintId: seen.complaintId, replyOnly: true }");
+    // auditoria: o mesmo para um perdido que a IA ligou
+    expect(retry).toContain("{ forceLostFoundId: seen.lostFoundId, replyOnly: true }");
   });
 });
 

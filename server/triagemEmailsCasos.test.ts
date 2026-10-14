@@ -179,13 +179,14 @@ describe("o caso nasce pelo pipeline, sem nunca escrever ao cliente", () => {
   });
   it("perdido aberto do mesmo cliente → junta (não duplica); resposta sem caso → nada", async () => {
     const { processInboundEmail } = await import("./jobs/emailInboundSync");
-    h.openLost.mockImplementationOnce(async () => ({ id: 77, clientEmail: "ana.sousa@gmail.com", bookingRef: "b" }));
+    const recent = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+    h.openLost.mockImplementationOnce(async () => ({ id: 77, clientEmail: "ana.sousa@gmail.com", bookingRef: "b", createdAt: recent }));
     const out = await processInboundEmail(base({ aiIntake: { actorId: null } }));
     expect(out).toMatchObject({ routed: { targetModule: "lostfound", targetId: 77, isNew: false } });
     expect(h.lost).toEqual([]);
     expect(h.lostMsgs[0]).toMatchObject({ itemId: 77, isInternal: 0 });
     // a mesma matrícula de OUTRO cliente nunca esconde o perdido no caso dele
-    h.openLost.mockImplementation(async (email: any, plate: any) => (plate ? { id: 78, clientEmail: "outro@gmail.com" } : null));
+    h.openLost.mockImplementation(async (email: any, plate: any) => (plate ? { id: 78, clientEmail: "outro@gmail.com", createdAt: recent } : null));
     const other = await processInboundEmail(base({ aiIntake: { actorId: null }, text: "Matrícula: AA-11-BB\nDeixei a carteira." }));
     expect(other).toMatchObject({ routed: { targetModule: "lostfound", isNew: true } });
     h.lostById.mockImplementationOnce(async () => null);
@@ -224,5 +225,34 @@ describe("o caso nasce pelo pipeline, sem nunca escrever ao cliente", () => {
     expect(all).not.toMatch(/DELETE FROM|mailboxKey = \?/);
     expect(h.lostMsgs.some((m) => m.isInternal === 1 && String(m.message).includes("POR CONFIRMAR"))).toBe(true);
     expect(h.sendMail).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Auditoria (14 out 2026): a junção da IA nunca esconde outro caso ───────
+
+describe("auditoria — o mesmo cliente com outra reserva tem outro caso", () => {
+  const complaintMail = (o: any = {}) => ({
+    alias: "reclamacoes" as const, messageId: `<c-${Math.random()}@x>`, gmThreadId: "999", refs: [], fromName: "Ana Sousa", fromEmail: "ana.sousa@gmail.com",
+    subject: "Outra reserva", receivedAt: "2026-10-14 10:00:00", html: null, loadAttachments: async () => [], aiIntake: { actorId: null }, ...o,
+  });
+  // Nota: a reserva/matrícula compara-se quando o email as traz identificadas ("Reserva: …", "Matrícula: …").
+  it("reclamação aberta do mesmo email mas de OUTRA reserva → cria outra; da mesma reserva → junta", async () => {
+    const { processInboundEmail } = await import("./jobs/emailInboundSync");
+    h.bySignals.mockImplementation(async () => ({ id: 41, clientEmail: "ana.sousa@gmail.com", reservationRef: "MP-48213", vehiclePlate: null, complaintStatus: "new" }));
+    const other = await processInboundEmail(complaintMail({ text: "Reserva: 51003\nO carro veio com o vidro partido." }));
+    expect(other).toMatchObject({ routed: { targetModule: "complaint", isNew: true } });
+    expect(h.complaints).toHaveLength(1);
+    const same = await processInboundEmail(complaintMail({ text: "Reserva: 48213\nContinuo à espera de resposta." }));
+    expect(same).toMatchObject({ routed: { targetModule: "complaint", targetId: 41, isNew: false } });
+    const noSignal = await processInboundEmail(complaintMail({ text: "Continuo à espera de resposta." }));
+    expect(noSignal).toMatchObject({ routed: { targetModule: "complaint", targetId: 41, isNew: false } });
+    expect(h.complaints).toHaveLength(1);
+  });
+  it("perdido aberto há meses do mesmo cliente → um objeto novo abre o seu próprio caso", async () => {
+    const { processInboundEmail } = await import("./jobs/emailInboundSync");
+    h.openLost.mockImplementation(async (email: any) => (email ? { id: 90, clientEmail: "ana.sousa@gmail.com", createdAt: "2026-03-01 10:00:00" } : null));
+    const out = await processInboundEmail(complaintMail({ alias: "perdidos", subject: "Carregador", text: "Esqueci-me do carregador na carrinha." }));
+    expect(out).toMatchObject({ routed: { targetModule: "lostfound", isNew: true } });
+    expect(h.lostMsgs.filter((m) => m.itemId === 90)).toEqual([]);
   });
 });

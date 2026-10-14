@@ -54,7 +54,7 @@ import {
   parseComplaintCaseTag,
   COMPLAINT_DEFAULT_SLA_HOURS,
 } from "../complaintEmail";
-import { aiMergeSameClient } from "../../shared/complaintIntake";
+import { aiMergeConflict, aiMergeSameClient, lostFoundMergeRecent } from "../../shared/complaintIntake";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
@@ -188,12 +188,15 @@ async function routeToModule(
     // pelo assunto ("Reclamação" juntava clientes diferentes).
     const sameClient = <T extends { clientEmail?: string | null } | null | undefined>(c: T): T | null =>
       c && aiMergeSameClient(c.clientEmail, clientEmail) ? c : null;
+    // Auditoria: o mesmo cliente com OUTRA reserva/matrícula no caso aberto → é outra reclamação.
+    const noConflict = <T extends { reservationRef?: string | null; vehiclePlate?: string | null } | null | undefined>(c: T): T | null =>
+      c && !aiMergeConflict({ ref: c.reservationRef, plate: c.vehiclePlate }, { ref: parsed.bookingRef, plate: parsed.vehiclePlate }) ? c : null;
     const existing = ai
       ? ((ai.forceComplaintId ? await getComplaintById(ai.forceComplaintId) : null) ||
         (taggedId ? await getComplaintById(taggedId) : null) ||
         (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
-        (clientEmail ? await findComplaintByClientSignals(clientEmail, null, null) : null) ||
-        (parsed.vehiclePlate ? sameClient(await findComplaintByClientSignals(null, parsed.vehiclePlate, null)) : null) ||
+        (clientEmail ? noConflict(await findComplaintByClientSignals(clientEmail, null, null)) : null) ||
+        (parsed.vehiclePlate ? noConflict(sameClient(await findComplaintByClientSignals(null, parsed.vehiclePlate, null))) : null) ||
         (parsed.bookingRef ? sameClient(await findOpenComplaintByBookingRef(parsed.bookingRef)) : null))
       : ((taggedId ? await getComplaintById(taggedId) : null) ||
         (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
@@ -292,10 +295,13 @@ async function routeToModule(
     const ai = ctx.aiIntake;
     const sameClientLf = <T extends { clientEmail?: string | null } | null | undefined>(c: T): T | null =>
       c && aiMergeSameClient(c.clientEmail, clientEmail) ? c : null;
+    // Auditoria: um perdido aberto há meses (ou de outra reserva/matrícula) não engole o objeto de uma viagem nova.
+    const recentLf = <T extends { createdAt?: string | null; bookingRef?: string | null; vehiclePlate?: string | null } | null | undefined>(c: T): T | null =>
+      c && lostFoundMergeRecent(c.createdAt) && !aiMergeConflict({ ref: c.bookingRef, plate: c.vehiclePlate }, { ref: parsed.bookingRef, plate: parsed.vehiclePlate }) ? c : null;
     const forced = ai.forceLostFoundId ? await getLostFoundItemById(ai.forceLostFoundId) : null;
     const existing = forced
-      || (clientEmail ? await findOpenLostFoundByClient(clientEmail, null) : null)
-      || (parsed.vehiclePlate ? sameClientLf(await findOpenLostFoundByClient(null, parsed.vehiclePlate)) : null);
+      || (clientEmail ? recentLf(await findOpenLostFoundByClient(clientEmail, null)) : null)
+      || (parsed.vehiclePlate ? recentLf(sameClientLf(await findOpenLostFoundByClient(null, parsed.vehiclePlate))) : null);
     if (ai.replyOnly && !existing) return { targetModule: "ignored" };
     if (existing) {
       await addLostFoundMessage({

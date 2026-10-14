@@ -346,8 +346,12 @@ export const dbSyncStore: SyncStore = {
  */
 export async function markMessageReadBySystem(messageId: number): Promise<boolean> {
   const d = await db();
-  const r = rowsOf(await d.execute(sql`SELECT threadId, accountKey, gmailMessageId, isRead FROM mail_messages WHERE id = ${messageId} LIMIT 1`))[0];
+  // Só emails RECEBIDOS de caixas PARTILHADAS (auditoria): nunca o email pessoal de alguém,
+  // nem uma conta pessoal ("user:<id>") — a triagem só lê as partilhadas, mas a guarda fica aqui.
+  const r = rowsOf(await d.execute(sql`SELECT m.threadId, m.accountKey, m.gmailMessageId, m.isRead, m.direction, t.mailboxKey, t.ownerUserId
+    FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId WHERE m.id = ${messageId} LIMIT 1`))[0];
   if (!r || Number(r.isRead) === 1) return false;
+  if (!systemMayMarkRead({ direction: r.direction, mailboxKey: r.mailboxKey ?? null, ownerUserId: r.ownerUserId ?? null, accountKey: String(r.accountKey ?? "") })) return false;
   await d.execute(sql`UPDATE mail_messages SET isRead = 1 WHERE id = ${messageId}`);
   await recomputeThread(Number(r.threadId));
   try {
@@ -356,6 +360,11 @@ export async function markMessageReadBySystem(messageId: number): Promise<boolea
     await api.modifyLabels(String(r.gmailMessageId), [], ["UNREAD"]);
   } catch { /* fica só no dashboard */ }
   return true;
+}
+
+/** O sistema pode marcar este email como lido? Só recebidos, de caixas partilhadas, de contas que não são pessoais. PURA. */
+export function systemMayMarkRead(m: { direction: string | null; mailboxKey: string | null; ownerUserId: number | null; accountKey: string }): boolean {
+  return m.direction === "in" && !!m.mailboxKey && m.ownerUserId == null && userIdOfAccountKey(m.accountKey) == null;
 }
 
 export async function setMessagePipeline(messageId: number, pipeline: string, status: string): Promise<void> {

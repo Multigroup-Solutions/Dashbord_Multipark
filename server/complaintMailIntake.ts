@@ -451,17 +451,34 @@ export async function intakeLostFoundOfThread(threadId: number): Promise<number 
  * pipeline "normal" (que podia criar outro caso e mandar o aviso de receção).
  * Lança se a BD falhar.
  */
-export async function intakeOfThread(threadId: number): Promise<{ complaintId: number | null; lostFoundId: number | null; kind: MailCaseKind } | null> {
+export async function intakeOfThread(threadId: number): Promise<{ complaintId: number | null; lostFoundId: number | null; kind: MailCaseKind; rejected?: boolean } | null> {
   const d = await database();
-  const r = rowsOf(await d.execute(sql`SELECT complaintId, lostFoundId, caseKind, status FROM complaint_mail_intake WHERE threadId = ${threadId} LIMIT 1`))[0];
+  const r = rowsOf(await d.execute(sql`SELECT i.complaintId, i.lostFoundId, i.caseKind, i.status,
+      c.archivedAt AS cArchivedAt, c.aiUnconfirmed AS cUnconfirmed, l.archivedAt AS lArchivedAt, l.aiUnconfirmed AS lUnconfirmed
+    FROM complaint_mail_intake i
+      LEFT JOIN complaints c ON c.id = i.complaintId
+      LEFT JOIN lost_found_items l ON l.id = i.lostFoundId
+    WHERE i.threadId = ${threadId} LIMIT 1`))[0];
   if (!r) return null;
   const done = r.status === "created" || r.status === "linked";
   const kind: MailCaseKind = r.caseKind === "lost_found" ? "lost_found" : "complaint";
+  // Auditoria (o humano manda): o caso "Por confirmar (IA)" que uma pessoa
+  // ARQUIVOU foi recusado ("não é reclamação") — a resposta seguinte do
+  // cliente não o reabre nem o tira do arquivo.
+  const rejected = caseRejectedByHuman(kind === "lost_found"
+    ? { archivedAt: r.lArchivedAt ?? null, aiUnconfirmed: r.lUnconfirmed }
+    : { archivedAt: r.cArchivedAt ?? null, aiUnconfirmed: r.cUnconfirmed });
   return {
     kind,
-    complaintId: done && kind === "complaint" && r.complaintId != null ? Number(r.complaintId) : null,
-    lostFoundId: done && kind === "lost_found" && r.lostFoundId != null ? Number(r.lostFoundId) : null,
+    complaintId: done && !rejected && kind === "complaint" && r.complaintId != null ? Number(r.complaintId) : null,
+    lostFoundId: done && !rejected && kind === "lost_found" && r.lostFoundId != null ? Number(r.lostFoundId) : null,
+    ...(rejected ? { rejected: true } : {}),
   };
+}
+
+/** Caso "Por confirmar (IA)" arquivado = uma pessoa disse que não era. PURA. */
+export function caseRejectedByHuman(c: { archivedAt: unknown; aiUnconfirmed: unknown }): boolean {
+  return c.archivedAt != null && String(c.archivedAt) !== "" && Number(c.aiUnconfirmed ?? 0) === 1;
 }
 
 // ─── Página das Reclamações: sugestões ("Parece uma reclamação") ─────────────

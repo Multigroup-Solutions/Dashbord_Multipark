@@ -20,7 +20,7 @@
  */
 import { sql } from "drizzle-orm";
 import { aliasPipeline, canSeeMailbox, isAutomatedSender, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
-import { DIRECT_CASE_PIPELINES, forwardedExternalSender, preTriageMail, senderKindOf } from "../../shared/mailTriage";
+import { DIRECT_CASE_PIPELINES, bulkListMail, forwardedExternalSender, preTriageMail, senderKindOf } from "../../shared/mailTriage";
 import type { InboundAlias } from "../emailParse";
 import { gmailThreadIdToImap } from "./parse";
 import { syncAccount, type AccountSyncResult, type StoredEvent } from "./sync";
@@ -333,14 +333,19 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
 async function threadTriageState(threadId: number, newThread: boolean): Promise<{ humanTouched: boolean; threadHasCase: boolean }> {
   if (newThread) return { humanTouched: false, threadHasCase: false };
   const d = await db();
+  // Auditoria: uma conversa que uma PESSOA ligou à mão a uma reclamação/perdido é dela — a IA não abre
+  // outro caso numa resposta. (As ligações automáticas não contam: a junção da IA ao caso da mesma
+  // conversa — fio do email, [REC-n] — continua a pôr a resposta no caso certo.)
   const r = rowsOf(await d.execute(sql`SELECT t.routedBy,
       EXISTS (SELECT 1 FROM comms_ai_routing c WHERE c.threadId = t.id AND c.correctedBoxKey IS NOT NULL) AS corrected,
-      (SELECT i.status FROM complaint_mail_intake i WHERE i.threadId = t.id LIMIT 1) AS intakeStatus
+      (SELECT i.status FROM complaint_mail_intake i WHERE i.threadId = t.id LIMIT 1) AS intakeStatus,
+      EXISTS (SELECT 1 FROM mail_links l WHERE l.threadId = t.id AND l.entityType IN ('complaint', 'lost_found')
+        AND l.removedAt IS NULL AND l.source = 'manual') AS hasCase
     FROM mail_threads t WHERE t.id = ${threadId} LIMIT 1`))[0] ?? {};
   const intake = r.intakeStatus != null ? String(r.intakeStatus) : null;
   return {
     humanTouched: r.routedBy === "manual" || Number(r.corrected ?? 0) === 1 || intake === "dismissed",
-    threadHasCase: intake === "created" || intake === "linked" || intake === "creating" || intake === "suggested",
+    threadHasCase: Number(r.hasCase ?? 0) === 1 || intake === "created" || intake === "linked" || intake === "creating" || intake === "suggested",
   };
 }
 
@@ -392,7 +397,8 @@ async function triageNewMessage(
     projectId: t?.projectId != null ? Number(t.projectId) : null,
     newThread: e.result.newThread, senderKind, mode: "sync" as const, sentAt: p.sentAt ?? null,
     forwardedExternal: senderKind === "company" && !!forwardedExternalSender(text, ctx.company),
-    listMail: !!(p.listUnsubscribe || p.listId),
+    // Só o que a sincronização deu como envio em massa (uma lista NOSSA — Grupo Google que distribui a caixa — é o cliente).
+    listMail: bulkListMail({ automated: ctx.automated, listUnsubscribe: p.listUnsubscribe, listId: p.listId }),
   };
   let res: Awaited<ReturnType<typeof routeEmailMessage>>;
   if (pre.action === "rule") res = await applyRuleTriage(msg, pre, deps);
@@ -521,11 +527,12 @@ export async function retryPipelineMessage(messageId: number, opts: { manual?: b
     const threadId = Number(m.threadId);
     // Lote 57: resposta numa conversa que a IA ligou a uma reclamação → só junta a ESSA (nunca o pipeline normal,
     // que podia abrir outra reclamação e mandar o aviso de receção).
+    // Auditoria: o mesmo para um perdido que a IA ligou (senão o pipeline normal dos perdidos podia abrir outro caso).
     let aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null;
-    if (pipeline === "reclamacoes") {
+    if (pipeline === "reclamacoes" || pipeline === "perdidos") {
       const { intakeOfThread } = await import("../complaintMailIntake");
       const seen = await intakeOfThread(threadId);
-      if (seen) aiIntake = { forceComplaintId: seen.complaintId, replyOnly: true };
+      if (seen) aiIntake = pipeline === "perdidos" ? { forceLostFoundId: seen.lostFoundId, replyOnly: true } : { forceComplaintId: seen.complaintId, replyOnly: true };
     }
     const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline, aiIntake);
     if (routed?.targetId) {
