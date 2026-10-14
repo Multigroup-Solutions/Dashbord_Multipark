@@ -186,8 +186,11 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
             {infoError && <p className="text-center text-sm text-destructive">Não foi possível carregar o quiz. Tenta atualizar a página.</p>}
             {preset ? (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/40 bg-primary/5 p-2 text-sm">
-                <span className="min-w-0">Tema: <b className="break-words">{topicLabel}</b></span>
-                <Button size="sm" variant="ghost" onClick={() => onClearPreset?.()}><X className="w-4 h-4" />Escolher outro</Button>
+                <span className="min-w-0">
+                  Tema: <b className="break-words">{topicLabel}</b>
+                  {!info?.ai && !preset.categoryId && <span className="block text-xs text-muted-foreground">Sem a IA do quiz, o jogo usa as perguntas fixas (não escolhe o tema).</span>}
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => onClearPreset?.()}><X className="w-4 h-4" />{info?.ai ? "Escolher outro" : "Tirar"}</Button>
               </div>
             ) : info?.ai ? (
               <div className="space-y-2">

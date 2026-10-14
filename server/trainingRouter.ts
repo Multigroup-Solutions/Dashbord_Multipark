@@ -429,7 +429,7 @@ export const trainingRouter = router({
   }),
   /** Quem gere: grava a área/subsecção de vários conteúdos (rever as propostas). */
   setAreas: protectedProcedure.input(z.object({
-    items: z.array(z.object({ itemType: z.enum(["manual", "video"]), id: z.number().int().positive(), area: z.enum(AREA_VALUES).nullable(), subarea: z.string().max(80).nullable() })).min(1).max(300),
+    items: z.array(z.object({ itemType: z.enum(["manual", "video"]), id: z.number().int().positive(), area: z.enum(AREA_VALUES).nullable(), subarea: z.string().max(80).nullable() })).min(1).max(1000),
   })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
     const d = await dbOrThrow();
