@@ -148,3 +148,13 @@ describe("servidor: os procedimentos recusam quem não pode (e o MCP corre-os co
     expect(src("client/src/components/EmployeeAccessAvailability.tsx")).toContain("d.canOpenAgent && d.agents.length > 0");
   });
 });
+
+describe("alcance de cidade: o módulo próprio decide (ronda 2)", () => {
+  it("as quatro leituras estão no router das Críticas mas o alcance vem de condutores_agentes", async () => {
+    const { moduleForPath } = await import("./_core/accessContext");
+    for (const p of ["reviews.checkoutDrivers", "reviews.movementPeople", "reviews.agentPeople", "reviews.agentHistory"]) {
+      expect(moduleForPath(p)).toBe(CONDUTORES_MODULE);
+    }
+    expect(moduleForPath("reviews.list")).toBe("criticas");
+  });
+});

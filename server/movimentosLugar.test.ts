@@ -108,3 +108,15 @@ describe("já não há uma segunda regra (pela sequência) em lado nenhum", () =
     }
   });
 });
+
+describe("Atividade do dia pela cópia local (dias antigos ou a Multipark sem resposta): a mesma regra (ronda 2)", () => {
+  it("o início não é ação; a mudança de lugar vem como SPOT_CHANGE; o formato antigo continua movimento", async () => {
+    const { legacyActionRowOf } = await import("./dayActivity");
+    const base = { agentUserId: "u1", agentName: "Ana", actionTime: "2026-02-10 09:00:00" };
+    expect(legacyActionRowOf({ ...base, changeType: "MOVEMENT", modifiedFields: START })).toBeNull();
+    expect(legacyActionRowOf({ ...base, changeType: "MOVEMENT", modifiedFields: END("PD", "PD", "1 / 1", "9 / 2") })?.changeType).toBe("SPOT_CHANGE");
+    expect(legacyActionRowOf({ ...base, changeType: "MOVEMENT", modifiedFields: END(null, "PD") })?.changeType).toBe("MOVEMENT");
+    expect(legacyActionRowOf({ ...base, changeType: "MOVEMENT", modifiedFields: '{"garagem":"G2","lugar":"114"}' })?.changeType).toBe("MOVEMENT");
+    expect(legacyActionRowOf({ ...base, changeType: "check_in", modifiedFields: null })?.changeType).toBe("CHECK_IN");
+  });
+});
