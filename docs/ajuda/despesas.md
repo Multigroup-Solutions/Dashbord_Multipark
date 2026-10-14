@@ -2,7 +2,7 @@
 modulo: despesas
 titulo: Despesas
 rotas: /despesas, /despesas/dashboard
-palavras: nota de crédito, notas de crédito, nc, devolução, reembolso, abatida, por receber, despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista, despesas do turno, passagem de turno, talão, foto do talão, link direto, abrir nas despesas
+palavras: sinistros, categoria, quem comprou, método de pagamento, lançar paga, já paga, principais, data futura, nota de crédito, notas de crédito, nc, devolução, reembolso, abatida, por receber, despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista, despesas do turno, passagem de turno, talão, foto do talão, link direto, abrir nas despesas
 ---
 # Despesas
 
@@ -13,6 +13,19 @@ Registo de faturas e despesas da empresa.
 2. Carrega a fatura (foto ou PDF) e carrega em **Extrair com IA**: fornecedor, valor, datas e NIF são preenchidos. Confirma sempre os valores.
 3. Escolhe o **Centro de custos**, a categoria e o método de pagamento. **Guardar Despesa**.
 4. Se a fatura parecer emitida pela Multipark a um cliente, a aplicação avisa — não é uma despesa. Se o nº de documento (ou o ficheiro) já existir noutra despesa, também avisa.
+
+**Lançar já paga (só admin e super admin)**
+- Para o admin e o super admin o **Método de Pagamento** começa em **— sem método —**. Se escolheres um método, a despesa fica logo **paga**, com a data de pagamento = **Data de Vencimento** (se a preencheste) ou, sem ela, a **Data da Despesa**. Por baixo do campo aparece "Fica já paga em …".
+- Sem método fica como sempre: **pendente**.
+- Se a data de pagamento for **depois de hoje** (vencimento futuro), aparece um aviso âmbar "Fica paga com data futura (…). É mesmo isso?": tens de marcar **Sim, já está paga com data de …** para gravar (o servidor também o exige). Ou tira o método e fica pendente.
+- **Extrair com IA** não escolhe o método por ti (escolher o método = fica paga): mostra "A fatura diz: Transferência" com o botão **Usar (fica paga)**.
+- Para os outros papéis nada muda: o método começa em **Cartão** e a despesa fica pendente (o servidor nunca a marca paga por esta via).
+- No histórico da despesa fica o lançamento e o pagamento ("Pago"), com quem e em que dia.
+
+**Escolher categoria, centro de custos e quem comprou**
+- **Categoria** e **Funcionário (quem comprou)** têm uma barra de pesquisa no topo: escreve e salta para a certa (não contam acentos nem maiúsculas). As categorias mantêm a ordem alfabética; existe a categoria **Sinistros**.
+- **Funcionário (quem comprou)**: só aparecem **team leaders e acima** (pelo cargo da ficha ou pelo papel da conta), ativos, das tuas cidades, por ordem alfabética — sem extras nem condutores. Ao editar uma despesa antiga com outro comprador, ele continua lá ("atual").
+- **Centro de custos**: ao abrir aparecem primeiro os **Principais** — Multipark, Lisboa, Porto, Faro e Marketplace (um por cidade, ex.: "Marketplace · Porto"). Para algo mais específico, carrega na seta **Mais específico: parques, marcas e projetos** e abre a árvore (setas em cada nó, como nos Projetos; no teclado, → abre e ← fecha o nó escolhido). A pesquisa procura na árvore toda. A despesa entra nos custos desse centro e de todos os pais.
 
 **Despesas do turno (team leaders)**
 - As despesas pagas com o dinheiro da caixa lançam-se na **Passagem de turno** (cartão **Despesas do turno**), não aqui: foto do talão, a mesma leitura por IA, e entram logo nas Despesas pagas, em dinheiro, no centro de custos da cidade.

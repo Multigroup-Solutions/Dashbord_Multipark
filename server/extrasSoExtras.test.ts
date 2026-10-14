@@ -24,10 +24,12 @@ describe("Lista da disponibilidade", () => {
     expect(body).toContain("const extras = [...(await listActiveExtras(projectId))];");
   });
   it("a cidade escolhida em cima manda: só essa cidade (sem 'Todas' nem 'Sem cidade')", () => {
-    const page = src("client/src/pages/ExtrasDiaPage.tsx");
-    expect(page).toContain("const cityFilter: CityKey | \"all\" | \"none\" = globalCity ?? pickedCity;");
-    expect(page).toContain("? [{ key: globalCity, label: CITY_LABELS[globalCity] }]");
-    expect(page).toContain("let sorted = sortByAvailability(list);");
+    // 14 out 2026: o ecrã saiu para extrasDia/AvailabilityTab.tsx e as regras para shared/availabilityFilters.ts.
+    const page = src("client/src/pages/extrasDia/AvailabilityTab.tsx");
+    expect(page).toContain("const cityFilter: AvailabilityCityFilter = globalCity ?? filters.city;");
+    // Com cidade em cima só se MOSTRA essa (sem seletor, sem "Todas" nem "Sem cidade").
+    expect(page).toMatch(/\{globalCity \? \(\s*<span[\s\S]*?\{CITY_LABELS\[globalCity\]\}[\s\S]*?\) : \(\s*<Select value=\{filters\.city\}/);
+    expect(src("shared/availabilityFilters.ts")).toContain("const sorted = sortByAvailability(rows.filter((r) => matchesAvailabilityFilters(r, f)));");
   });
 });
 

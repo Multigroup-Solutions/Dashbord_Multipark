@@ -5152,6 +5152,9 @@ export const appRouter = router({
     // 44a (Jorge: "quando solto um extra para ser team leader tenho que o soltar em todo lado"):
     // dar a permissão "Pode ser Team Leader na escala" daqui mesmo, sem ir às Permissões.
     // As mesmas regras da página Permissões; fica no registo de atividade.
+    // Fica DE PROPÓSITO (API / futuro botão): o ecrã do Extras-Dia já não o oferece
+    // desde 14 out 2026 (no TL só aparecem contas com permissões de TL). Protegido
+    // por extras_dia edit + canTouchPermission + âmbito da cidade (userInCityScope).
     allowTeamLeader: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
@@ -5165,7 +5168,7 @@ export const appRouter = router({
         const userId = person.employee.userId;
         const name = person.employee.fullName;
         if (!userId) {
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${name} não tem conta no dashboard e a permissão de TL é da conta. Cria a conta em Utilizadores (a partir da ficha) ou muda o posto no RH para Team Leader.` });
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${name} não tem conta no dashboard e a permissão de TL é da conta. Para ser TL, a conta da pessoa tem de ter papel Team Leader ou acima, ou a permissão «Pode ser Team Leader na escala» (Permissões / Utilizadores).` });
         }
         if (userId === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes alterar as tuas próprias permissões." });
         const target = await getUserById(userId);

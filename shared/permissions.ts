@@ -27,7 +27,7 @@ export const PERMISSIONS: PermissionDef[] = [
     description:
       "Pode ser escolhido como Team Leader na escala do Extras-Dia. Um extra normal não aparece na lista de TL; com esta permissão passa a aparecer. NÃO dá acessos de team leader na aplicação (o papel da conta é que decide).",
     category: "Operações",
-    defaultBehavior: "Só posições team_leader, supervisor e director aparecem como TL.",
+    defaultBehavior: "Só contas com papel Team Leader ou acima aparecem como TL (o posto da ficha do RH não chega).",
   },
   {
     id: "finance.view_totals",

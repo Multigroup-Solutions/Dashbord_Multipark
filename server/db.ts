@@ -370,6 +370,7 @@ export async function seedDefaultCategories() {
       const found = await db.select().from(expenseCategories).where(eq(expenseCategories.name, cat.name)).limit(1);
       if (found.length === 0) await db.insert(expenseCategories).values(cat);
     }
+    // Acentos certos + "Sinistros" nas categorias que já existem: migração 0675 (uma vez).
     return;
   }
 
@@ -383,6 +384,7 @@ export async function seedDefaultCategories() {
     { name: "Transportes", department: "Operacional", color: "#14b8a6" },
     { name: "Tecnologia", department: "IT", color: "#0ea5e9" },
     { name: "Seguros", department: "Financeiro", color: "#f97316" },
+    { name: "Sinistros", department: "Operacional", color: "#b91c1c" },
     { name: "Rendas", department: "Financeiro", color: "#e11d48" },
     { name: "Água", department: "Instalações", color: "#06b6d4" },
     { name: "Eletricidade", department: "Instalações", color: "#eab308" },

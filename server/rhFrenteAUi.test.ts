@@ -14,8 +14,8 @@ describe("Extras-dia: carta no seletor e aviso ao escalar; atalho das notas", ()
   it("etiqueta só quando a carta NÃO está validada; aviso ao escolher, sem bloquear o Adicionar", () => {
     expect(src("client/src/pages/extrasDia/PersonPicker.tsx")).toMatch(/c\.licence && c\.licence !== "validated" && <LicenceBadge/);
     const page = src("client/src/pages/ExtrasDiaPage.tsx");
-    expect(page).toMatch(/<LicenceWarning status=\{\[\.\.\.candidates, \.\.\.\(others \?\? \[\]\)\]\.find\(x => x\.id === employeeId\)\?\.licence\}/);
-    expect(page).toMatch(/const valid = employeeId != null && !pickedOther && span >= 3 && span <= 12;/);
+    expect(page).toMatch(/<LicenceWarning status=\{candidates\.find\(x => x\.id === employeeId\)\?\.licence\}/);
+    expect(page).toMatch(/const valid = employeeId != null && span >= 3 && span <= 12;/);
   });
   it("nota interna a partir da linha da escala, já com o dia e a linha; só TL e acima com RH", () => {
     expect(src("client/src/pages/ExtrasDiaPage.tsx")).toMatch(/<QuickNoteButton employeeId=\{a\.employeeId\} name=\{a\.personName\} workDate=\{a\.assignmentDate\} assignmentId=\{a\.id\} \/>/);

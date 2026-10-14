@@ -28,6 +28,7 @@ import { DEFAULT_CREW_RULES, DEFAULT_TIMES_PERCENTILE } from "../shared/appSetti
 import { PRESSURE_CITY_GROUP, describeMeasuredCrewRule, effectiveCrewRule, type CyclePercentile, type MeasuredBandInfo } from "../shared/extrasPressure";
 import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, PICKUP_PAIR_AFTER_MIN, PICKUP_PAIR_BEFORE_MIN, describeCrewRule, extrasNeededFor, pairPickupsWithDeliveries, pairTerminal, type CrewRule } from "../shared/extrasSchedule";
 import { lisbonDayOf, lisbonWallTimeUtcMs } from "../shared/lisbonDay";
+import { TL_PERMISSION, canBeTeamLeader, teamLeaderRefusal, teamLeaderRefusalMessage, type TlAccount } from "../shared/teamLeaderEligibility";
 import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -896,6 +897,27 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     }
   }
 
+  // Jorge, 14 out 2026: o TL tem de ter CONTA com permissões de Team Leader
+  // (shared/teamLeaderEligibility.ts) — também pela API, não só no seletor.
+  // Verifica-se quando a pessoa ENTRA como TL (linha nova, troca de pessoa ou
+  // linha que passa a TL); mexer só nas horas de um TL já escalado não volta a
+  // verificar (não se parte a escala de quem já lá está).
+  if (isTL && input.employeeId != null) {
+    let entering = !input.id;
+    if (input.id) {
+      const [prevTl] = await db
+        .select({ employeeId: extrasDiaAssignments.employeeId, isTeamLeader: extrasDiaAssignments.isTeamLeader })
+        .from(extrasDiaAssignments)
+        .where(eq(extrasDiaAssignments.id, input.id))
+        .limit(1);
+      entering = !prevTl || prevTl.employeeId !== input.employeeId || Number(prevTl.isTeamLeader) !== 1;
+    }
+    if (entering) {
+      const refusal = await teamLeaderRefusalFor(input.employeeId, input.personName);
+      if (refusal) throw new Error(refusal);
+    }
+  }
+
   const payload = {
     assignmentDate: input.assignmentDate,
     city: input.city ?? "lisbon",
@@ -1073,8 +1095,44 @@ function suggestLevel(position: string | null | undefined, extraLevel: number | 
   return POSITION_TO_LEVEL[(position ?? "").toLowerCase()] ?? "junior";
 }
 
-// Posições que podem ser TL sem permissão especial
-const TL_POSITIONS = new Set(["team_leader", "supervisor", "director"]);
+/**
+ * Contas (papel + ativa) e overrides da permissão "Pode ser Team Leader na
+ * escala" dos utilizadores pedidos — para shared/teamLeaderEligibility.ts.
+ */
+async function loadTeamLeaderAccess(userIds: readonly number[]): Promise<{ accounts: Map<number, TlAccount>; overrides: Map<number, "grant" | "deny"> }> {
+  const accounts = new Map<number, TlAccount>();
+  const overrides = new Map<number, "grant" | "deny">();
+  const ids = Array.from(new Set(userIds.filter((id) => Number.isFinite(id) && id > 0)));
+  if (!ids.length) return { accounts, overrides };
+  const db = await getDb();
+  if (!db) return { accounts, overrides };
+  const rows = await db.select({ id: users.id, role: users.role, isActive: users.isActive }).from(users).where(inArray(users.id, ids));
+  for (const r of rows) accounts.set(Number(r.id), { role: r.role, isActive: r.isActive });
+  const { listPermissionAssignments } = await import("./db");
+  for (const p of await listPermissionAssignments()) {
+    if (p.permission === TL_PERMISSION && accounts.has(p.userId)) overrides.set(p.userId, p.mode);
+  }
+  return { accounts, overrides };
+}
+
+/**
+ * Jorge, 14 out 2026: o TL de um turno só pode ser alguém cuja CONTA tem
+ * permissões de Team Leader (papel team_leader ou acima, ou a permissão
+ * "Pode ser Team Leader na escala"). Devolve a mensagem de recusa, ou null.
+ */
+export async function teamLeaderRefusalFor(employeeId: number, personName?: string): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [emp] = await db.select({ fullName: employees.fullName, userId: employees.userId }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+  const name = personName || emp?.fullName || "Esta pessoa";
+  if (!emp) return teamLeaderRefusalMessage(name, "no_account");
+  const userId = emp.userId != null ? Number(emp.userId) : null;
+  if (userId == null) return teamLeaderRefusalMessage(name, "no_account");
+  const { getUserPermissionOverrides } = await import("./db");
+  const [{ accounts }, ov] = await Promise.all([loadTeamLeaderAccess([userId]), getUserPermissionOverrides(userId)]);
+  const reason = teamLeaderRefusal(accounts.get(userId), ov[TL_PERMISSION]);
+  return reason ? teamLeaderRefusalMessage(name, reason) : null;
+}
 
 export async function listDriverCandidates(date?: string, opts?: { forTeamLeader?: boolean }): Promise<DriverCandidate[]> {
   const db = await getDb();
@@ -1093,16 +1151,13 @@ export async function listDriverCandidates(date?: string, opts?: { forTeamLeader
     .where(and(eq(employees.isActive, 1), projectScope(employees.projectId)))
     .orderBy(asc(employees.fullName));
 
-  // TL (pedido Jorge): só aparecem posições de chefia OU quem tiver a
-  // permissão explícita extras_dia.team_leader — os extras normais saem da
-  // lista (antes apareciam todos).
+  // TL (Jorge, 14 out 2026): só quem tem CONTA com permissões de Team Leader —
+  // papel team_leader ou acima, ou a permissão "Pode ser Team Leader na escala"
+  // (shared/teamLeaderEligibility.ts). O posto da ficha já não chega e os
+  // extras sem essa conta saem da lista.
   if (opts?.forTeamLeader) {
-    const { listUserIdsWithGrant } = await import("./db");
-    const granted = new Set(await listUserIdsWithGrant("extras_dia.team_leader"));
-    rows = rows.filter(r =>
-      TL_POSITIONS.has((r.position ?? "").toLowerCase()) ||
-      (r.userId != null && granted.has(r.userId)),
-    );
+    const { accounts, overrides } = await loadTeamLeaderAccess(rows.map(r => Number(r.userId ?? 0)));
+    rows = rows.filter(r => r.userId != null && canBeTeamLeader(accounts.get(Number(r.userId)), overrides.get(Number(r.userId))));
   }
 
   // Disponibilidade declarada para o dia, se uma data foi pedida.
