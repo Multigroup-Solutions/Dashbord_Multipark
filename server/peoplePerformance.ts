@@ -51,7 +51,7 @@ import {
   perfRange, perHourOf, rosterGroup, signedWeight, teamDayPoints, utcHourMs, workPoints, CALLBACK_WINDOW_HOURS, PERF_RANK_WEIGHTS_KEY,
   type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals, type PerfWeights, type RankWeightOverrides, type TeamPointWeights,
 } from "../shared/peoplePerformance";
-import { applyAdjustments, emptyDayMetrics, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
+import { applyAdjustments, emptyDayMetrics, EVALUATION_RULES_VERSION, lateArrivalsOf, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
 import { operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
 import type { MultiparkRead } from "./multiparkDb/read";
 
@@ -192,6 +192,12 @@ export interface PerfResult {
    * editor do ecrã junta-lhe a aba e grava com esse `updatedAt`.
    */
   rankWeights: RankWeightsInfo;
+  /**
+   * 14 out 2026: dias·pessoa do período (os que contam nesta aba) calculados com
+   * regras antigas (employee_day_metrics.rulesVersion < EVALUATION_RULES_VERSION):
+   * o ecrã avisa "N dias calculados com as regras antigas — Recalcular".
+   */
+  oldRulesDays: number;
   notes: string[];
 }
 
@@ -356,6 +362,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (multipark) addHours(h.mp, hours);
   };
   let hourlyMissingDays = 0;
+  let oldRulesDays = 0;
 
   // ── Avaliação diária (Multipark + horas + penalizações), com os ajustes ──
   const ids = [...people.keys()];
@@ -383,15 +390,17 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
       try { byType = m.actionsByType ? JSON.parse(m.actionsByType) : {}; } catch { byType = {}; }
       const hours = normalisationHours(d);
       // 49e: as ações da Multipark por hora do dia, guardadas pela avaliação (dias antigos não as têm)
+      if (Number(m.rulesVersion ?? 1) < EVALUATION_RULES_VERSION && bucketFor(emp, day)) oldRulesDays += 1;
       const byHour = parseHours(m.actionsByHour);
       if (byHour) putHours(emp, day, byHour, true);
       else if (d.actions > 0 && bucketFor(emp, day)) hourlyMissingDays += 1;
       put(emp, day, {
         hours, workDays: hours > 0 || d.actions > 0 ? 1 : 0, evalPoints: scoreOf(d).totalPoints,
-        recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, cancels: d.cancels,
+        recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, spotChanges: d.spotChanges ?? 0, cancels: d.cancels,
         checkingIn: Number(byType.CHECKING_IN ?? 0), checkingOut: Number(byType.CHECKING_OUT ?? 0),
         created: Number(byType.CREATED ?? 0), updated: Number(byType.UPDATE ?? 0),
-        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: d.delays, complaintsAgainst: d.complaints, accidents: d.accidents,
+        // 14 out 2026: atrasos à entrada e entregas atrasadas em colunas separadas
+        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: lateArrivalsOf(d), lateDeliveries: d.lateServices, complaintsAgainst: d.complaints, accidents: d.accidents,
       });
     }
     if (!mRows.length) notes.push("Sem avaliação diária guardada neste período (a Multipark e as horas entram pela avaliação, recalculada todas as noites).");
@@ -403,6 +412,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     const { speedThreshold } = await import("./dayActivity");
     speedLimit = await speedThreshold();
   } catch { /* sem limite */ }
+  if (speedLimit == null && (o.group === "drivers" || o.group === "teamleaders")) notes.push("Não deu para ler o limite de velocidade: os dias acima do limite ficam a 0 nesta leitura.");
   if (ids.length && o.group !== "office" && o.group !== "supervision") {
     const idList = sql.join(ids.map((x) => sql`${x}`), sql`, `);
     const gps = [
@@ -550,7 +560,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
     people: out, groupTotals, groupSeries, speedLimit, cities: dayCities ?? null,
     groupByHour: groupByHour.map(round1), groupByHourMultipark: groupByHourMultipark.map(round1),
-    hourly: { since: hourlySince, missingDays: hourlyMissingDays }, rankWeights, notes };
+    hourly: { since: hourlySince, missingDays: hourlyMissingDays }, rankWeights, oldRulesDays, notes };
 }
 
 /**

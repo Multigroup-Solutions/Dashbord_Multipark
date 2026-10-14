@@ -15,6 +15,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
+import { canSeePeopleMovements, canSeePeoplePerformance } from "@shared/peopleTabsAccess";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart3, Car, Users } from "lucide-react";
 import { PeoplePerformancePanel } from "@/components/people/PeoplePerformancePanel";
@@ -32,9 +33,9 @@ export default function CondutoresAgentesPage() {
   const [initialFicha] = useState(fichaFromUrl);
   const [tab, setTab] = useState(() => (initialFicha ? "agents" : "drivers"));
   if (!user) return null;
-  if (!can(user as any, "criticas", "view")) return <div className="p-6 text-sm text-muted-foreground">Sem acesso a esta página.</div>;
-  // 37a: o desempenho por pessoa é só do super admin (o servidor também confirma)
-  const isSuper = (user as any).role === "super_admin";
+  // 14 out 2026: Condutores e Agentes só a supervisor e acima; o Desempenho só o super admin (o servidor também confirma)
+  if (!can(user as any, "criticas", "view") || !canSeePeopleMovements(user as any)) return <div className="p-6 text-sm text-muted-foreground">Sem acesso a esta página.</div>;
+  const isSuper = canSeePeoplePerformance(user as any);
   return (
     <div className="space-y-4">
       <p className="text-muted-foreground">Recolhas, entregas, movimentos e km de cada condutor e as ações de cada agente da Multipark, nas tuas cidades (lidas ao vivo). Cidade e marca: o filtro do topo.</p>

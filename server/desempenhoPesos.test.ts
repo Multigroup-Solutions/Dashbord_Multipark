@@ -45,7 +45,26 @@ describe("pesos — a definição perf.rankWeights", () => {
   });
 
   it("números finitos entre −10 000 e 10 000, no máximo 1 casa decimal", () => {
-    expect(errorsOf({ office: { created: 10_000 }, drivers: { overLimitDays: -10_000 } })).toBeNull();
+    expect(errorsOf({ office: { created: 10_000 }, drivers: { occurrences: -10_000 } })).toBeNull();
+    // 14 out 2026: nas abas da avaliação, o que já está nos evalPoints não pode ter peso próprio (contava a dobrar)
+    expect(errorsOf({ drivers: { overLimitDays: -10 } })).toMatch(/já conta nos pontos da avaliação/);
+    expect(errorsOf({ teamleaders: { speedAlerts: -10 } })).toMatch(/já conta nos pontos da avaliação/);
+    expect(errorsOf({ office: { overLimitDays: -10 } })).toBeNull(); // o escritório não conta pela avaliação
+  });
+
+  it("14 out 2026: valor gravado com um peso proibido — ao LER ignora-o e o resto vale; ao GRAVAR recusa", async () => {
+    const { PERF_RANK_WEIGHTS_KEY, effectiveWeights } = await import("../shared/peoplePerformance");
+    const { validateSettingForWrite } = await import("../shared/appSettings");
+    const saved = { drivers: { overLimitDays: -10, occurrences: 2 }, office: { created: 3 } };
+    const r = validateSetting(PERF_RANK_WEIGHTS_KEY, saved);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.value).toEqual({ drivers: { occurrences: 2 }, office: { created: 3 } });
+    expect(effectiveWeights("office", r.ok ? (r.value as any) : {}).created).toBe(3);
+    expect(effectiveWeights("drivers", r.ok ? (r.value as any) : {})).toEqual({ evalPoints: 1, occurrences: 2 });
+    const w = validateSettingForWrite(PERF_RANK_WEIGHTS_KEY, saved);
+    expect(w.ok).toBe(false);
+    expect(!w.ok && w.error).toMatch(/já conta nos pontos da avaliação/);
+    expect(validateSettingForWrite(PERF_RANK_WEIGHTS_KEY, { office: { created: 3 } }).ok).toBe(true);
     expect(errorsOf({ office: { created: 10_000.1 } })).toMatch(/entre −10 000 e 10 000/);
     expect(errorsOf({ office: { created: -10_001 } })).toMatch(/entre −10 000 e 10 000/);
     expect(errorsOf({ team: { actionsPerPerson: 20_000 } })).toMatch(/entre −10 000 e 10 000/);
@@ -141,7 +160,8 @@ describe("pesos — omissões de 8 out 2026 (1 ponto ≈ 5 min de trabalho)", ()
     });
   });
   it("condutores e equipa ficam como estavam", () => {
-    expect(GROUP_VIEW.drivers.weights).toEqual({ evalPoints: 1, overLimitDays: -10, occurrences: 1 });
+    // 14 out 2026: os dias acima do limite já descontam na avaliação (excesso de velocidade −10) — o ranking não repete
+    expect(GROUP_VIEW.drivers.weights).toEqual({ evalPoints: 1, occurrences: 1 });
     expect(TEAM_POINT_WEIGHTS).toEqual({ actionsPerPerson: 1, noZelloPerPerson: -20, stoppedHoursPerPerson: -2 });
   });
   it("perdidas, horas e km não contam em nenhuma aba; nenhum 0 explícito nas omissões", () => {
@@ -211,7 +231,7 @@ describe("pesos — o servidor calcula com os pesos em vigor e devolve-os", () =
     expect(ana.totals.evalPoints).toBeGreaterThan(0);
     expect(ana.totals.occurrences).toBe(2);
     expect(ana.totals.overLimitDays).toBeGreaterThan(0);
-    expect(ana.points).toBe(round1(ana.totals.evalPoints - 10 * ana.totals.overLimitDays + ana.totals.occurrences));
+    expect(ana.points).toBe(round1(ana.totals.evalPoints + ana.totals.occurrences));
     expect(r.rankWeights).toEqual({ weights: GROUP_VIEW.drivers.weights, team: TEAM_POINT_WEIGHTS, overrides: {}, updatedAt: null, updatedByName: null, readable: true });
   });
 
@@ -220,8 +240,8 @@ describe("pesos — o servidor calcula com os pesos em vigor e devolve-os", () =
     const { loadPeoplePerformance } = await import("./peoplePerformance");
     const r = await loadPeoplePerformance({ period: "week", anchor: "2026-10-06", group: "drivers" });
     const ana = r.people.find((p) => p.name === "Ana")!;
-    expect(ana.points).toBe(round1(2 * ana.totals.evalPoints - 10 * ana.totals.overLimitDays)); // as ocorrências deixaram de contar
-    expect(r.rankWeights.weights).toEqual({ evalPoints: 2, overLimitDays: -10, occurrences: 0 });
+    expect(ana.points).toBe(round1(2 * ana.totals.evalPoints)); // as ocorrências deixaram de contar
+    expect(r.rankWeights.weights).toEqual({ evalPoints: 2, occurrences: 0 });
     expect(r.rankWeights.overrides).toEqual({ drivers: { evalPoints: 2, occurrences: 0 }, office: { created: 5 } });
     expect(r.rankWeights).toMatchObject({ updatedAt: "2026-10-08 10:00:00", updatedByName: "Jorge", readable: true });
   });
@@ -253,7 +273,7 @@ describe("pesos — o servidor calcula com os pesos em vigor e devolve-os", () =
     expect(off.rankWeights.weights).toEqual(GROUP_VIEW.drivers.weights);
     expect(off.rankWeights.readable).toBe(false);
     const ana = off.people.find((p) => p.name === "Ana")!;
-    expect(ana.points).toBe(round1(ana.totals.evalPoints - 10 * ana.totals.overLimitDays + ana.totals.occurrences));
+    expect(ana.points).toBe(round1(ana.totals.evalPoints + ana.totals.occurrences));
     h.setting = null;
   });
 });

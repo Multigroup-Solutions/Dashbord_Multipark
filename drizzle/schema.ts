@@ -2080,6 +2080,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	entregas: int().default(0).notNull(),
 	movements: int().default(0).notNull(),
 	parkingMoves: int().default(0).notNull(),
+	// 0655 (14 out 2026): mudanças de lugar (MOVEMENT na mesma garagem) — não são movimentos.
+	spotChanges: int().default(0).notNull(),
 	cancels: int().default(0).notNull(),
 	otherActions: int().default(0).notNull(),
 	weightedActions: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
@@ -2089,6 +2091,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	speedingEvents: int().default(0).notNull(),
 	delays: int().default(0).notNull(),
 	lateServices: int().default(0).notNull(),
+	// 0655: entregas sem hora marcada (medidas pelo pedido + 30 min)
+	deliveriesWithoutSchedule: int().default(0).notNull(),
 	complaints: int().default(0).notNull(),
 	accidents: int().default(0).notNull(),
 	incidentsReported: int().default(0).notNull(),
@@ -2097,6 +2101,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	positivePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	negativePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	totalPoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
+	// 0655: versão das regras com que o dia foi calculado (1 = antigas; EVALUATION_RULES_VERSION = 2)
+	rulesVersion: int().default(1).notNull(),
 	computedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [

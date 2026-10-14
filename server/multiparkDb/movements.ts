@@ -37,8 +37,8 @@ import {
   addDays,
   operationalDayRangeUtc,
 } from "../../shared/lisbonDay";
-import { LATE_SERVICE_MAX_MINUTES, LATE_SERVICE_MINUTES } from "../../shared/evaluationRules";
-import { MOVEMENT_CHANGE_TYPES, type MovementChangeType } from "../../shared/multiparkMovements";
+import { LATE_AFTER_REQUEST_MINUTES, LATE_SERVICE_MAX_MINUTES, LATE_SERVICE_MINUTES } from "../../shared/evaluationRules";
+import { MOVEMENT_CHANGE_TYPES, MOVEMENT_GARAGE_KEYS, MOVEMENT_PATTERNS, MOVEMENT_SPOT_KEYS, displayChangeType, type MovementChangeType } from "../../shared/multiparkMovements";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -64,6 +64,44 @@ export const opShiftSql = (col: string) => {
   return `CASE WHEN ${h} >= ${OPERATIONAL_DAY_START_HOUR} AND ${h} < ${OPERATIONAL_NIGHT_START_HOUR} THEN 'morning' ELSE 'night' END`;
 };
 const ts = (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI:SS')`;
+
+// ─── Que movimento foi: os MESMOS padrões de shared/multiparkMovements.ts (classifyMovement) ─
+/** Os padrões POSIX partilhados (também usados pelo classifyMovement em JS). */
+export const MOVEMENT_SQL_PATTERNS = MOVEMENT_PATTERNS;
+
+/** Valor `from`/`to` normalizado (sem aspas, aparado, minúsculas; ''/null → NULL) — igual ao placeValue do JS. */
+const placeSideSql = (col: string, keys: readonly string[], side: "from" | "to") =>
+  `COALESCE(${keys.map((k) => `NULLIF(NULLIF(lower(trim(btrim(substring(${col} from '${MOVEMENT_PATTERNS.side(k, side)}'), '"'))), ''), 'null')`).join(", ")})`;
+
+/**
+ * Tipo de uma linha MOVEMENT pelo modifiedFields (texto COMPLETO, nunca o
+ * cortado): 'inicio' (status → MOVING, sem garagem/lugar), 'arrumar' (sem
+ * garagem de origem), 'lugar' (mesma garagem), 'parques' (garagens
+ * diferentes) ou 'antigo' (sem dados). `col` tem de ser texto não nulo
+ * (COALESCE(…, '')). A mesma árvore do classifyMovement. PURA.
+ */
+export function movementKindSql(col: string): string {
+  const P = MOVEMENT_PATTERNS, G = MOVEMENT_GARAGE_KEYS, S = MOVEMENT_SPOT_KEYS;
+  const hasG = `${col} ~ '${P.hasKey(G)}'`, hasS = `${col} ~ '${P.hasKey(S)}'`;
+  const plain = (keys: readonly string[]) => `${col} ~ '${P.plainKey(keys)}'`;
+  const moving = `${col} ~* '${P.moving}'`;
+  const gf = placeSideSql(col, G, "from"), gt = placeSideSql(col, G, "to"), sf = placeSideSql(col, S, "from");
+  return [
+    `CASE`,
+    ` WHEN NOT (${hasG} OR ${hasS}) THEN CASE WHEN ${moving} THEN 'inicio' ELSE 'antigo' END`,
+    ` WHEN ${plain(G)} OR ${plain(S)} THEN 'antigo'`,
+    ` WHEN ${hasG} THEN CASE WHEN ${gf} IS NULL THEN 'arrumar' WHEN ${gf} <> COALESCE(${gt}, '') THEN 'parques' ELSE 'lugar' END`,
+    ` WHEN ${sf} IS NULL THEN 'arrumar'`,
+    ` ELSE 'lugar'`,
+    `END`,
+  ].join("");
+}
+
+/** Hora marcada da entrega numa linha CHECK_OUT (`modifiedFields.checkOut.from`) como texto ISO; NULL se não houver. */
+export const scheduledCheckOutTextSql = (col: string) => `substring(${col} from '${MOVEMENT_PATTERNS.checkOutFrom}')`;
+/** O texto → timestamp UTC sem fuso, só se for uma data válida (pg_input_is_valid: Postgres ≥ 16; a Multipark está no 17). */
+export const scheduledCheckOutAtSql = (txt: string) =>
+  `CASE WHEN pg_input_is_valid(${txt}, 'timestamptz') THEN (${txt}::timestamptz AT TIME ZONE 'UTC') END`;
 
 function cityCondition(cities: string[] | undefined, params: ParamList, col = `p."city"`): string | null {
   if (cities === undefined) return null;
@@ -106,11 +144,20 @@ export function movementWindow(startDay: string, endDay: string = startDay): Mov
 /**
  * Contagens para o motor da avaliação, por (agente, dia operacional, turno,
  * changeType e — 49e — hora de Lisboa), com as MESMAS regras de evaluationCore.ts:
- *  - "levar ao parque" = MOVEMENT cuja ação anterior da MESMA reserva, entre
- *    recolha/entrega/movimento/cancelamento, foi uma recolha (CHECK_IN);
- *  - entrega atrasada = CHECK_OUT mais de LATE_SERVICE_MINUTES (e menos de
- *    LATE_SERVICE_MAX_MINUTES) depois do 1.º PENDING_CHECKOUT desde a entrega
- *    anterior da mesma reserva.
+ *  - cada MOVEMENT classifica-se pelo modifiedFields (movementKindSql; Jorge,
+ *    14 out 2026): o INÍCIO (status → MOVING) não conta; o fim sem garagem de
+ *    origem é "levar ao parque"; a mesma garagem é "mudança de lugar"
+ *    (`spot_changes`, não é movimento); garagens diferentes é "movimento entre
+ *    parques". `moves` = levar ao parque + entre parques (+ os antigos);
+ *  - formato antigo (sem garagem/lugar): "levar ao parque" = MOVEMENT cuja ação
+ *    anterior da MESMA reserva (recolha/entrega/movimento/cancelamento, sem os
+ *    inícios) foi uma recolha (CHECK_IN);
+ *  - entrega atrasada (shared/evaluationRules.ts): com o 1.º PENDING_CHECKOUT
+ *    (desde a entrega anterior) antes/à hora MARCADA, ou sem pedido: CHECK_OUT
+ *    depois da marcada + LATE_SERVICE_MINUTES; com o pedido DEPOIS da marcada,
+ *    ou sem hora marcada: depois do pedido + LATE_AFTER_REQUEST_MINUTES. Menos
+ *    de LATE_SERVICE_MAX_MINUTES. Hora marcada = modifiedFields.checkOut.from;
+ *  - os INÍCIOS de movimento ficam fora de todas as contagens (não são ações).
  * A sequência lê desde `lookbackFrom` (uma recolha de dias antes conta), mas
  * só se contam as ações de [from, to).
  * Sem âmbito de cidade: o motor calcula tudo (o âmbito aplica-se ao ler).
@@ -121,35 +168,48 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
   const lb = params.add(opts.lookbackFrom);
   const to = params.add(opts.to);
   const from = params.add(opts.from);
-  const late = params.add(LATE_SERVICE_MINUTES);
+  const lateTol = params.add(LATE_SERVICE_MINUTES);
   const lateMax = params.add(LATE_SERVICE_MAX_MINUTES);
+  const lateReq = params.add(LATE_AFTER_REQUEST_MINUTES);
   const cats = `('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL')`;
+  const inSeq = `(k.ct IN ${cats} AND k.mk IS DISTINCT FROM 'inicio')`;
+  // pedido depois da hora marcada (voo atrasado) ou sem hora marcada: pedido + LATE_AFTER_REQUEST_MINUTES (viagem incluída); senão marcada + LATE_SERVICE_MINUTES
+  const byRequest = `(x.pending_at IS NOT NULL AND (x.sched_at IS NULL OR x.pending_at > x.sched_at))`;
+  const late = (b: string, tol: string) => `(x.at - ${b} > ${tol}::int * interval '1 minute' AND x.at - ${b} < ${lateMax}::int * interval '1 minute')`;
   const sql = [
     `WITH h AS (`,
     `  SELECT h."id" AS id, h."bookingId" AS booking_id, h."userId" AS user_id,`,
     `         COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", '')) AS agent_name,`,
-    `         upper(h."changeType"::text) AS ct, h."actionTime" AS at`,
+    `         upper(h."changeType"::text) AS ct, h."actionTime" AS at, COALESCE(h."modifiedFields", '') AS mf`,
     `    FROM "History" h`,
     `    LEFT JOIN "Booking" b ON b."id" = h."bookingId"`,
     `    LEFT JOIN "Agent" ag ON ag."userId" = h."userId" AND ag."parkId" = b."parkId"`,
     `   WHERE h."actionTime" >= ${lb}::timestamp AND h."actionTime" < ${to}::timestamp`,
-    `), seq AS (`,
-    `  SELECT h.*,`,
-    `         CASE WHEN h.ct IN ${cats} THEN lag(h.ct) OVER (PARTITION BY h.booking_id, (h.ct IN ${cats}) ORDER BY h.at, h.id) END AS prev_cat,`,
-    `         COALESCE(sum(CASE WHEN h.ct = 'CHECK_OUT' THEN 1 ELSE 0 END) OVER (PARTITION BY h.booking_id ORDER BY h.at, h.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS deliveries_before`,
+    `), k AS MATERIALIZED (`, // o tipo de cada MOVEMENT calcula-se uma vez (sem MATERIALIZED o Postgres recopia a expressão)
+    `  SELECT h.id, h.booking_id, h.user_id, h.agent_name, h.ct, h.at,`,
+    `         CASE WHEN h.ct = 'MOVEMENT' THEN ${movementKindSql("h.mf")} END AS mk,`,
+    `         CASE WHEN h.ct = 'CHECK_OUT' THEN ${scheduledCheckOutTextSql("h.mf")} END AS sched_txt`,
     `    FROM h`,
+    `), seq AS (`,
+    `  SELECT k.*, ${scheduledCheckOutAtSql("k.sched_txt")} AS sched_at,`,
+    `         CASE WHEN ${inSeq} THEN lag(k.ct) OVER (PARTITION BY k.booking_id, ${inSeq} ORDER BY k.at, k.id) END AS prev_cat,`,
+    `         COALESCE(sum(CASE WHEN k.ct = 'CHECK_OUT' THEN 1 ELSE 0 END) OVER (PARTITION BY k.booking_id ORDER BY k.at, k.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS deliveries_before`,
+    `    FROM k`,
     `), seq2 AS (`,
     `  SELECT s.*, min(s.at) FILTER (WHERE s.ct = 'PENDING_CHECKOUT') OVER (PARTITION BY s.booking_id, s.deliveries_before) AS pending_at`,
     `    FROM seq s`,
     `)`,
     `SELECT x.user_id, max(x.agent_name) AS agent_name, ${opDaySql("x.at")} AS day, ${opShiftSql("x.at")} AS shift, x.ct AS change_type, ${lisbonHourSql("x.at")} AS hour,`,
     `       count(*) AS n,`,
-    `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.prev_cat = 'CHECK_IN') AS parking_moves,`,
-    `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND x.pending_at IS NOT NULL`,
-    `                          AND x.at - x.pending_at > ${late}::int * interval '1 minute'`,
-    `                          AND x.at - x.pending_at < ${lateMax}::int * interval '1 minute') AS late_deliveries`,
+    `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND (x.mk = 'arrumar' OR (x.mk = 'antigo' AND x.prev_cat = 'CHECK_IN'))) AS parking_moves,`,
+    `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.mk IN ('arrumar', 'parques', 'antigo')) AS moves,`,
+    `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.mk = 'lugar') AS spot_changes,`,
+    `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND CASE WHEN ${byRequest} THEN ${late("x.pending_at", lateReq)}`,
+    `                          WHEN x.sched_at IS NOT NULL THEN ${late("x.sched_at", lateTol)} ELSE FALSE END) AS late_deliveries,`,
+    `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND x.sched_at IS NULL) AS deliveries_without_schedule`,
     `  FROM seq2 x`,
-    ` WHERE x.at >= ${from}::timestamp`,
+    // 14 out 2026: o início de um movimento não é uma ação (nem conta nas ações, por hora ou por tipo)
+    ` WHERE x.at >= ${from}::timestamp AND x.mk IS DISTINCT FROM 'inicio'`,
     // 49e: também por hora de Lisboa (a avaliação guarda as ações por hora do dia); nunca há mais linhas do que ações
     ` GROUP BY x.user_id, 3, 4, x.ct, 6`,
     ` ORDER BY 3, x.user_id, x.ct, 6`,
@@ -169,6 +229,12 @@ export interface EngineActionCount {
   n: number;
   parkingMoves: number;
   lateDeliveries: number;
+  /** MOVEMENT que contam como movimento (levar ao parque + entre parques + antigos). Sem isto, todos os `n`. */
+  moves?: number;
+  /** MOVEMENT na mesma garagem (mudança de lugar) — não são movimentos. */
+  spotChanges?: number;
+  /** CHECK_OUT sem hora marcada legível: o atraso mediu-se só pelo PENDING_CHECKOUT. */
+  deliveriesWithoutSchedule?: number;
 }
 
 const str = (v: unknown): string | null => {
@@ -199,6 +265,9 @@ export function mapEngineActionCountRow(r: Record<string, unknown>): EngineActio
     n: int(r.n),
     parkingMoves: int(r.parking_moves),
     lateDeliveries: int(r.late_deliveries),
+    ...(r.moves !== undefined ? { moves: int(r.moves) } : {}),
+    ...(r.spot_changes !== undefined ? { spotChanges: int(r.spot_changes) } : {}),
+    ...(r.deliveries_without_schedule !== undefined ? { deliveriesWithoutSchedule: int(r.deliveries_without_schedule) } : {}),
   };
 }
 
@@ -265,33 +334,45 @@ const typeAlias = (t: MovementChangeType) => `t_${t.toLowerCase()}`;
 /** Movimentos por agente: contagens por tipo, reservas, 1.ª/última ação, plataformas. PURA. */
 export function buildAgentHistoryAggSql(f: AggregateFilters): { sql: string; params: SqlParam[] } {
   const params = new ParamList();
-  const conds = [
+  // dentro: o que só depende da History (janela e agentes) — o tipo do MOVEMENT calcula-se UMA vez por linha
+  const inner = [
     `h."actionTime" >= ${params.add(f.window.from)}::timestamp`,
     `h."actionTime" < ${params.add(f.window.to)}::timestamp`,
   ];
   const ids = idList(f.userIds, params, `h."userId"`);
-  if (ids) conds.push(ids);
+  if (ids) inner.push(ids);
+  // fora: parque/cidade e (14 out 2026) sem os inícios de movimento — não são ações (nem no total, nem nos movimentos, nem nas reservas)
+  const outer = [`h.mk IS DISTINCT FROM 'inicio'`];
   const city = cityCondition(f.cities, params);
-  if (city) conds.push(city);
+  if (city) outer.push(city);
   const park = parkCondition(f.parkIds, params);
-  if (park) conds.push(park);
+  if (park) outer.push(park);
   const dayCol = f.byDay ? `, ${opDaySql(`h."actionTime"`)} AS day` : `, NULL AS day`;
   const perType = MOVEMENT_CHANGE_TYPES.map((t) => `count(*) FILTER (WHERE h."changeType"::text = '${t}') AS ${typeAlias(t)}`);
   const sql = [
     `SELECT h."userId" AS user_id, max(COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", ''))) AS agent_name${dayCol},`,
     `       count(*) AS total,`,
     `       ${perType.join(",\n       ")},`,
-    // Alterações de lugar/garagem: UPDATE cujo modifiedFields fala de lugar ou garagem.
-    `       count(*) FILTER (WHERE h."changeType"::text = 'UPDATE' AND (h."modifiedFields" ILIKE '%spot%' OR h."modifiedFields" ILIKE '%garage%')) AS spot_changes,`,
+    // Jorge, 14 out 2026: cada MOVEMENT pelo modifiedFields (movementKindSql). A mesma garagem é mudança de
+    // lugar (não é movimento); o resto (levar ao parque, entre parques, antigos) é movimento.
+    `       count(*) FILTER (WHERE h.mk IN ('arrumar', 'parques', 'antigo')) AS moves,`,
+    `       count(*) FILTER (WHERE h.mk = 'lugar') AS spot_changes,`,
     `       count(DISTINCT h."bookingId") AS bookings,`,
     `       ${ts(`min(h."actionTime")`)} AS first_at,`,
     `       ${ts(`max(h."actionTime")`)} AS last_at,`,
     `       string_agg(DISTINCT NULLIF(h."platform", ''), ',') AS platforms`,
-    `  FROM "History" h`,
+    `  FROM (`,
+    `    SELECT h."userId", h."agentName", h."changeType", h."bookingId", h."actionTime", h."platform",`,
+    `           CASE WHEN h."changeType"::text = 'MOVEMENT' THEN ${movementKindSql(`COALESCE(h."modifiedFields", '')`)} END AS mk`,
+    `      FROM "History" h`,
+    `     WHERE ${inner.join(" AND ")}`,
+    // OFFSET 0: o Postgres não "puxa" a subconsulta, por isso o tipo (13 regex) calcula-se uma vez por linha
+    `    OFFSET 0`,
+    `  ) h`,
     `  LEFT JOIN "Booking" b ON b."id" = h."bookingId"`,
     `  LEFT JOIN "Park" p ON p."id" = b."parkId"`,
     `  LEFT JOIN "Agent" ag ON ag."userId" = h."userId" AND ag."parkId" = b."parkId"`,
-    ` WHERE ${conds.join(" AND ")}`,
+    ` WHERE ${outer.join(" AND ")}`,
     ` GROUP BY h."userId"${f.byDay ? ", 3" : ""}`,
     ` ORDER BY total DESC`,
     ` LIMIT ${params.add(AGG_ROW_LIMIT)}`,
@@ -420,9 +501,9 @@ export interface AgentMovementSummary {
   recolhas: number;
   /** CHECK_OUT */
   entregas: number;
-  /** MOVEMENT */
+  /** MOVEMENT que são movimentos: levar ao parque + entre parques (sem os inícios nem as mudanças de lugar). */
   movements: number;
-  /** UPDATE que mexeu no lugar/garagem (modifiedFields). */
+  /** MOVEMENT na mesma garagem (mudança de lugar). */
   spotChanges: number;
   /** Reservas diferentes em que mexeu. */
   bookings: number;
@@ -479,7 +560,8 @@ export function mergeAgentAggregates(input: {
     }
     s.recolhas = s.byType.CHECK_IN ?? 0;
     s.entregas = s.byType.CHECK_OUT ?? 0;
-    s.movements = s.byType.MOVEMENT ?? 0;
+    // sem a coluna `moves` (leituras antigas/testes): todas as linhas MOVEMENT
+    s.movements = r.moves !== undefined ? s.movements + int(r.moves) : s.byType.MOVEMENT ?? 0;
     s.spotChanges += int(r.spot_changes);
     s.bookings += int(r.bookings);
     const first = toIsoUtc(r.first_at), last = toIsoUtc(r.last_at);
@@ -629,7 +711,9 @@ export function buildAgentMovementDetailSql(f: MovementDetailFilters): { sql: st
     `       h."userId" AS user_id, COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", '')) AS agent_name,`,
     `       h."bookingId" AS booking_id, NULLIF(b."allocation", '') AS booking_code, v."licensePlate" AS plate,`,
     `       p."name" AS park_name, p."city" AS park_city, NULLIF(h."platform", '') AS platform,`,
-    `       left(h."modifiedFields", 300) AS modified_fields, left(h."remarks", 300) AS remarks`,
+    `       left(h."modifiedFields", 300) AS modified_fields, left(h."remarks", 300) AS remarks,`,
+    // 14 out 2026: o tipo do MOVEMENT sobre o texto COMPLETO (o mostrado vem cortado a 300)
+    `       CASE WHEN upper(h."changeType"::text) = 'MOVEMENT' THEN ${movementKindSql(`COALESCE(h."modifiedFields", '')`)} END AS move_kind`,
     `  FROM "History" h`,
     `  LEFT JOIN "Booking" b ON b."id" = h."bookingId"`,
     `  LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
@@ -656,13 +740,16 @@ export interface AgentMovement {
   platform: string | null;
   modifiedFields: string | null;
   remarks: string | null;
+  /** 14 out 2026: tipo do MOVEMENT (inicio/arrumar/lugar/parques/antigo); null nas outras ações. */
+  moveKind: string | null;
 }
 
 export function mapAgentMovementRow(r: Record<string, unknown>): AgentMovement {
   return {
     id: String(r.id ?? ""),
     actionTime: toIsoUtc(r.action_time),
-    changeType: String(r.change_type ?? "?").toUpperCase(),
+    // o início do movimento e a mudança de lugar com o seu nome (MOVEMENT_START / SPOT_CHANGE): o detalhe bate com os totais
+    changeType: displayChangeType(String(r.change_type ?? "?").toUpperCase(), str(r.move_kind)),
     agentUserId: str(r.user_id),
     agentName: str(r.agent_name),
     bookingId: str(r.booking_id),
@@ -673,6 +760,7 @@ export function mapAgentMovementRow(r: Record<string, unknown>): AgentMovement {
     platform: str(r.platform),
     modifiedFields: str(r.modified_fields),
     remarks: str(r.remarks),
+    moveKind: str(r.move_kind),
   };
 }
 

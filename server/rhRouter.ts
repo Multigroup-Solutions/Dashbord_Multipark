@@ -3,6 +3,7 @@
  * penalizações…) — saiu do routers.ts a 1 out 2026 (P2, só mudança de sítio).
  * Quem vê o quê: server/rhGuards.ts + server/rhAccess.ts.
  */
+import { canSeePeopleMovements } from "@shared/peopleTabsAccess";
 import { TRPCError } from "@trpc/server";
 import { scopedProjectIds, assertEmployeeAccess, assertProjectAccess } from './cityScope';
 import { z } from "zod";
@@ -183,7 +184,7 @@ export const rhRouter = router({
         agents.push({ agentUserId: String(a.agentUserId), agentName: a.agentName ?? null, principal: false, url: multiparkAgentUrl(template, String(a.agentUserId)) });
       }
       // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo Críticas)
-      return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
+      return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view') && canSeePeopleMovements(ctx.user), hasAgentUrl: !!String(template ?? '').trim() };
     }),
   /**
    * Lote 46 (Jorge, 7 out 2026): com que conta(s) Google a pessoa entra

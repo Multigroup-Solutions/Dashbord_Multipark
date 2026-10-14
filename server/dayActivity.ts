@@ -576,11 +576,22 @@ async function actionsOf(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, ran
 
 // ─── Histórico de velocidade por pessoa ──────────────────────────────────────
 
-/** Limite usado nos excessos (o mesmo da recolha): máx. × (1 + tolerância). */
+/**
+ * Limiar de velocidade (km/h, com a tolerância): o limite padrão de
+ * speed_limits; se a tabela não tiver nenhum, o de omissão (shared/gpsRules.ts
+ * → 120 km/h + 10 % = 132). Erro a ler (ou sem BD) → null: sem limiar, e quem
+ * chama diz-o numa nota (Jorge, 14 out 2026).
+ */
 export async function speedThreshold(): Promise<number | null> {
   const { getDefaultSpeedLimit } = await import("./db");
-  const l = await getDefaultSpeedLimit();
-  return l ? Number(l.maxSpeed) * (1 + Number(l.tolerancePercent ?? 0) / 100) : null;
+  const { speedThresholdKmh } = await import("../shared/gpsRules");
+  // a omissão só vale quando a leitura correu bem e veio vazia; BD em baixo ou erro → sem limiar (null)
+  if (!(await getDb())) return null;
+  try {
+    return speedThresholdKmh(await getDefaultSpeedLimit());
+  } catch {
+    return null;
+  }
 }
 
 export async function getPersonSpeedHistory(opts: { employeeId?: number; zelloUsername?: string; days: number }) {

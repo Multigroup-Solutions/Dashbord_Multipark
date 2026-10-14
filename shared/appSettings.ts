@@ -27,7 +27,7 @@ import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
 import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
-import { PERF_RANK_WEIGHTS_KEY, rankWeightsSchema } from "./peoplePerformance";
+import { PERF_RANK_WEIGHTS_KEY, rankWeightsReadSchema, rankWeightsSchema } from "./peoplePerformance";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
 
@@ -299,6 +299,8 @@ export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   defaultValue: z.input<S>;
   /** Onde o valor é usado; "store" = só guardado/mostrado (ainda não ligado ao código). */
   wiring: "live" | "store";
+  /** Validação mais apertada só ao GRAVAR (a leitura usa `schema`, que pode ser mais tolerante com valores antigos). */
+  writeSchema?: z.ZodTypeAny;
 }
 
 function def<S extends z.ZodTypeAny>(d: SettingDef<S>): SettingDef<S> {
@@ -746,7 +748,9 @@ export const SETTINGS = {
     group: "pessoas",
     label: "Pesos do ranking do Desempenho",
     description: "Quanto vale cada coisa nos pontos do ranking de Pessoas → Condutores e agentes → Desempenho, por aba (office, supervision, teamleaders, drivers) e os pontos da equipa (team). Só o que muda face às omissões do código (1 ponto ≈ 5 minutos de trabalho). Um peso 0 = não conta; sem a métrica = a omissão. Pesos entre −10 000 e 10 000, com 1 casa decimal no máximo; horas e km nunca dão pontos. JSON: {\"office\": {\"created\": 3}, \"team\": {\"noZelloPerPerson\": -10}}. Mais fácil no próprio Desempenho: \"Como se contam os pontos desta aba\" → Editar pesos. Vazio = omissões do código. Só o super admin muda.",
-    schema: rankWeightsSchema,
+    // 14 out 2026: ao ler, um peso proibido gravado antes é ignorado (o resto vale); ao gravar, é recusado
+    schema: rankWeightsReadSchema,
+    writeSchema: rankWeightsSchema,
     defaultValue: {},
     wiring: "live",
   }),
@@ -801,6 +805,18 @@ export function validateSetting(key: string, value: unknown): ValidationResult<u
   const r = SETTINGS[key].schema.safeParse(value);
   if (r.success) return { ok: true, value: r.data };
   return { ok: false, error: r.error.issues.map((i) => i.message).join(" ") || "Valor inválido." };
+}
+
+/** Validação para GRAVAR: a `writeSchema` (se houver) primeiro, e depois a normal. */
+export function validateSettingForWrite(key: string, value: unknown): ValidationResult<unknown> {
+  if (isSettingKey(key)) {
+    const w = (SETTINGS[key] as SettingDef).writeSchema;
+    if (w) {
+      const r = w.safeParse(value);
+      if (!r.success) return { ok: false, error: r.error.issues.map((i) => i.message).join(" ") || "Valor inválido." };
+    }
+  }
+  return validateSetting(key, value);
 }
 
 // ─── Interruptores das automações ───────────────────────────────────────────

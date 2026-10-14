@@ -190,7 +190,7 @@ export async function evaluateDay(date: string, opts: { cities?: string[] } = {}
       // ao vivo; o "levar ao parque" (+5) só se conta com ficha.
       const u = sumAgentSummaries(liveByKey.get(agentKeyOf(shortName)) ?? []);
       if (u) {
-        m = { ...emptyDayMetrics(), actions: u.total, recolhas: u.recolhas, entregas: u.entregas, movements: u.movements };
+        m = { ...emptyDayMetrics(), actions: u.total, recolhas: u.recolhas, entregas: u.entregas, movements: u.movements, spotChanges: u.spotChanges };
         m.weightedActions = actionPoints(m);
         byType = { ...u.byType };
       }

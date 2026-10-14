@@ -17,6 +17,7 @@ import { aiOpsRouter } from './aiOps/router';
 import { commsRoutingRouter } from './commsRoutingRouter';
 import { z } from "zod";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
+import { canSeePeopleMovements } from "@shared/peopleTabsAccess";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -482,6 +483,11 @@ async function assertSuggestionThread(user: any, viewer: { id: number; role: str
   const { threadAccess } = await import("./mail/inbox");
   const acc = await threadAccess(viewer, threadId);
   if (acc.personal || !acc.mailbox) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conversa não é de uma caixa partilhada." });
+}
+
+/** Condutores e Agentes (Pessoas): só supervisor, admin e super admin (Jorge, 14 out 2026). */
+function requirePeopleMovements(user: { role?: string | null } | null | undefined) {
+  if (!canSeePeopleMovements(user)) throw new TRPCError({ code: "FORBIDDEN", message: "Condutores e agentes: só para supervisores e acima." });
 }
 
 export const appRouter = router({
@@ -2632,6 +2638,7 @@ export const appRouter = router({
       endDate: z.string(),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "view");
+      requirePeopleMovements(ctx.user);
       const { getCheckoutDriversFromDb } = await import("./db");
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
@@ -2648,6 +2655,7 @@ export const appRouter = router({
       drivers: z.boolean().default(false),
     }).refine((r) => r.startDate <= r.endDate, "Intervalo inválido")).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "view");
+      requirePeopleMovements(ctx.user);
       const days = (Date.parse(`${input.endDate}T00:00:00Z`) - Date.parse(`${input.startDate}T00:00:00Z`)) / 86_400_000 + 1;
       if (days > 62) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 62 dias de cada vez." });
       const { loadMovementPeople, brandParkIdsFor } = await import("./movementPeople");
@@ -2660,6 +2668,7 @@ export const appRouter = router({
     // diferentes davam o histórico de outra pessoa.
     agentPeople: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "criticas", "view");
+      requirePeopleMovements(ctx.user);
       const { employeesWithAgents } = await import("./personIdentity");
       return employeesWithAgents(scopedProjectIds());
     }),
@@ -2672,6 +2681,7 @@ export const appRouter = router({
       agentName: z.string().max(200).optional(),
     }).refine((r) => r.employeeId != null || (r.agentUserIds?.length ?? 0) > 0, "Escolhe a pessoa.")).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "view");
+      requirePeopleMovements(ctx.user);
       if (input.employeeId == null) {
         const { getAgentHistoryFromDb } = await import("./db");
         const r = await getAgentHistoryFromDb({ startDate: input.startDate, endDate: input.endDate, userIds: input.agentUserIds! });
@@ -4599,7 +4609,9 @@ export const appRouter = router({
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         const byType: Record<string, number> = {};
         for (const m of r.data.rows) byType[m.changeType] = (byType[m.changeType] ?? 0) + 1;
-        return { available: true as const, agentUserIds: ids, total: r.data.rows.length, truncated: r.data.truncated, byType, items: r.data.rows };
+        // 14 out 2026: os inícios de movimento aparecem na lista com "(não conta)", mas ficam fora do total (contados à parte)
+        const movementStarts = byType.MOVEMENT_START ?? 0;
+        return { available: true as const, agentUserIds: ids, total: r.data.rows.length - movementStarts, movementStarts, truncated: r.data.truncated, byType, items: r.data.rows };
       }),
 
     // Liga (ou desliga) um nome de agente Multipark a um colaborador. Único:

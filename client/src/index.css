@@ -292,7 +292,7 @@
 /* 37a — Desempenho por pessoa: 4 séries por gráfico (paleta validada; o
    modo escuro tem os seus próprios passos, não é uma inversão). */
 .perf-viz {
-  --perf-1: #2a78d6;
+  --perf-1: #0055d2; /* azul da marca (design Multipark) */
   --perf-2: #eb6834;
   --perf-3: #1baf7a;
   --perf-4: #eda100;
