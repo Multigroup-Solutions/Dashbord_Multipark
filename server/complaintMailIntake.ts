@@ -454,7 +454,10 @@ export async function intakeLostFoundOfThread(threadId: number): Promise<number 
 export async function intakeOfThread(threadId: number): Promise<{ complaintId: number | null; lostFoundId: number | null; kind: MailCaseKind; rejected?: boolean } | null> {
   const d = await database();
   const r = rowsOf(await d.execute(sql`SELECT i.complaintId, i.lostFoundId, i.caseKind, i.status,
-      c.archivedAt AS cArchivedAt, c.aiUnconfirmed AS cUnconfirmed, l.archivedAt AS lArchivedAt, l.aiUnconfirmed AS lUnconfirmed
+      c.archivedAt AS cArchivedAt, c.aiUnconfirmed AS cUnconfirmed, l.archivedAt AS lArchivedAt, l.aiUnconfirmed AS lUnconfirmed,
+      EXISTS (SELECT 1 FROM mail_links ml WHERE ml.threadId = i.threadId AND ml.removedAt IS NOT NULL
+        AND ((ml.entityType = 'complaint' AND ml.entityId = CAST(i.complaintId AS CHAR))
+          OR (ml.entityType = 'lost_found' AND ml.entityId = CAST(i.lostFoundId AS CHAR)))) AS unlinked
     FROM complaint_mail_intake i
       LEFT JOIN complaints c ON c.id = i.complaintId
       LEFT JOIN lost_found_items l ON l.id = i.lostFoundId
@@ -463,9 +466,10 @@ export async function intakeOfThread(threadId: number): Promise<{ complaintId: n
   const done = r.status === "created" || r.status === "linked";
   const kind: MailCaseKind = r.caseKind === "lost_found" ? "lost_found" : "complaint";
   // Auditoria (o humano manda): o caso "Por confirmar (IA)" que uma pessoa
-  // ARQUIVOU foi recusado ("não é reclamação") — a resposta seguinte do
-  // cliente não o reabre nem o tira do arquivo.
-  const rejected = caseRejectedByHuman(kind === "lost_found"
+  // ARQUIVOU foi recusado ("não é reclamação"), e uma pessoa que TIROU a
+  // ligação da conversa ao caso disse que não é dele — a resposta seguinte do
+  // cliente não vai para esse caso (nem o reabre ou tira do arquivo).
+  const rejected = Number(r.unlinked ?? 0) === 1 || caseRejectedByHuman(kind === "lost_found"
     ? { archivedAt: r.lArchivedAt ?? null, aiUnconfirmed: r.lUnconfirmed }
     : { archivedAt: r.cArchivedAt ?? null, aiUnconfirmed: r.cUnconfirmed });
   return {
@@ -635,7 +639,22 @@ export async function retryFailedIntakes(opts: { limit?: number; deadlineAt?: nu
       kind, uncertain: Number(row.uncertain ?? 0) === 1,
     });
     out.retried++;
-    if (result.status === "created" || result.status === "linked") out.created++;
+    if (result.status === "created" || result.status === "linked") {
+      out.created++;
+      // Auditoria: o caso nasceu à 2.ª — a conversa vai na mesma para a caixa do caso, por ler (como à 1.ª).
+      // Só a criação automática (a sugestão aceite por uma pessoa fica onde ela a deixou); nunca uma movida à mão.
+      if (row.decidedById == null) await moveToCaseBox(Number(row.threadId), kind).catch(() => {});
+    }
   }
   return out;
+}
+
+/** A conversa vai para a caixa do caso (Reclamações / Perdidos), se essa caixa estiver ativa. Nunca mexe numa movida à mão. */
+async function moveToCaseBox(threadId: number, kind: MailCaseKind): Promise<boolean> {
+  const { CASE_BOX } = await import("../shared/mailTriage");
+  const { listMailboxes } = await import("./mail/store");
+  const box = CASE_BOX[kind];
+  if (!(await listMailboxes()).some((b) => b.key === box && b.active)) return false;
+  const { moveThreadToBox } = await import("./mail/service");
+  return moveThreadToBox(threadId, box, "ai", { reroute: true });
 }

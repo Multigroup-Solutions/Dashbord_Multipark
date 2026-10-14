@@ -251,6 +251,10 @@ describe("o caso 'Por confirmar' que uma pessoa arquivou não volta pela respost
     expect(await intakeOfThread(1)).toEqual({ kind: "complaint", complaintId: 5, lostFoundId: null });
     h.db = createFakeDb(() => [[{ complaintId: null, lostFoundId: 8, caseKind: "lost_found", status: "linked", lArchivedAt: "2026-10-14 10:00:00", lUnconfirmed: 1 }]]);
     expect(await intakeOfThread(1)).toMatchObject({ lostFoundId: null, rejected: true });
+    // uma pessoa tirou a ligação da conversa ao caso → também é dela
+    h.db = createFakeDb(() => [[{ complaintId: 5, lostFoundId: null, caseKind: "complaint", status: "created", cArchivedAt: null, cUnconfirmed: 0, unlinked: 1 }]]);
+    expect(await intakeOfThread(1)).toMatchObject({ complaintId: null, rejected: true });
+    expect(h.db.queries[0].sql).toContain("ml.removedAt IS NOT NULL");
   });
 });
 
@@ -364,5 +368,18 @@ describe("'Testar a triagem' tem teto de custo (por hora e por dia)", () => {
   });
   it("todas as categorias da triagem continuam a existir", () => {
     expect(MAIL_TRIAGE_CATEGORIES.length).toBe(13);
+  });
+});
+
+// ─── Caso criado à 2.ª tentativa: a conversa vai na mesma para a caixa do caso ─
+
+describe("o caso que nasce na nova tentativa leva a conversa para a caixa do caso", () => {
+  it("só a criação automática, só para uma caixa ativa, nunca uma conversa movida à mão", () => {
+    const s = src("server/complaintMailIntake.ts");
+    const retry = s.slice(s.indexOf("export async function retryFailedIntakes"), s.indexOf("async function moveToCaseBox"));
+    expect(retry).toContain("if (row.decidedById == null) await moveToCaseBox(Number(row.threadId), kind)");
+    const move = s.slice(s.indexOf("async function moveToCaseBox"));
+    expect(move).toContain("b.key === box && b.active");
+    expect(move).toContain('moveThreadToBox(threadId, box, "ai", { reroute: true })');
   });
 });
