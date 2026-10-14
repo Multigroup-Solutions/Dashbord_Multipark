@@ -118,8 +118,40 @@ export type CompleteLoginResult =
   | { ok: true; account: LoginAccountLike; pdaSession?: boolean }
   | { ok: false; reason: "missing" | "inactive" | "method" | "pda" };
 
-const METHOD_LOG: Record<LoginMethod, string> = { google: "Entrou com a Google", code: "Entrou com um código de entrada", password: "Entrou com a palavra-passe" };
-const METHOD_TAG: Record<LoginMethod, string> = { google: "[OAuth]", code: "[Entrada]", password: "[Entrada]" };
+const METHOD_LOG: Record<LoginMethod, string> = { google: "Entrou com a Google", code: "Entrou com um código de entrada", password: "Entrou com a palavra-passe", shared: "Entrou com a conta Multipark" };
+const METHOD_TAG: Record<LoginMethod, string> = { google: "[OAuth]", code: "[Entrada]", password: "[Entrada]", shared: "[Multipark]" };
+
+/** Quem está a entrar — vai para o be-shared (sessões e limite de tentativas pelo IP da pessoa). */
+export function clientMetaOf(req: Request): { ip: string | null; userAgent: string | null } {
+  const fwd = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+  const ua = req.headers["user-agent"];
+  return { ip: fwd || req.ip || null, userAgent: typeof ua === "string" ? ua.slice(0, 400) : null };
+}
+
+/**
+ * Plano 05: o que o login Google faz com a conta Multipark (be-shared).
+ *   "login" (SHARED_AUTH_LOGIN) — liga e GUARDA a sessão Multipark no cookie (revalidada);
+ *   "link"  (SHARED_AUTH_LINK)  — sombra: liga e termina logo a sessão Multipark;
+ *   "off"   — como antes.
+ */
+async function sharedModeForGoogle(): Promise<"login" | "link" | "off"> {
+  try {
+    const { ensureFeatureFlagOverrides } = await import("./featureFlags");
+    await ensureFeatureFlagOverrides();
+    const { sharedLoginEnabled, sharedLinkEnabled } = await import("../sharedIdentity");
+    return sharedLoginEnabled() ? "login" : sharedLinkEnabled() ? "link" : "off";
+  } catch {
+    return "off";
+  }
+}
+
+/** Corre a ligação Google → conta Multipark com prazo (nunca atrasa o login mais do que isto). */
+async function googleSharedWithin(ms: number, input: { userId: number; idToken: string | null | undefined; req: Request }) {
+  const { resolveGoogleShared, realSharedIdentityDeps } = await import("../sharedIdentity");
+  const work = (async () => resolveGoogleShared(await realSharedIdentityDeps(), { userId: input.userId, idToken: input.idToken, meta: clientMetaOf(input.req) }))();
+  const timeout = new Promise<null>((resolve) => { const t = setTimeout(() => resolve(null), ms); (t as any).unref?.(); });
+  return Promise.race([work.catch(() => null), timeout]);
+}
 
 /**
  * As portas COMUNS a todas as formas de entrar (Google, código, palavra-passe
@@ -149,6 +181,8 @@ export async function completeLogin(opts: {
   pda?: { id: number; token: string; name?: string | null } | null;
   /** Funcionários com código: só no PDA registado onde o código foi pedido (omissão: há `pda`). */
   registeredPda?: boolean;
+  /** Plano 05 (F3): sessão do be-shared a guardar no cookie (revalidada). As sessões de PDA não a levam. */
+  sharedSessionId?: string | null;
 }): Promise<CompleteLoginResult> {
   const { req, res, method, email } = opts;
   const tag = METHOD_TAG[method];
@@ -242,6 +276,7 @@ export async function completeLogin(opts: {
     name: opts.sessionName,
     expiresInMs: SESSION_MAX_MS,
     sessionVersion: account.sessionVersion ?? 0,
+    sharedSessionId: opts.sharedSessionId ?? null,
   });
 
   const cookieOptions = getSessionCookieOptions(req);
@@ -580,15 +615,42 @@ export function registerOAuthRoutes(app: Express) {
         }
       }
 
+      // Plano 05: a mesma identidade Google na conta Multipark (be-shared). Com
+      // SHARED_AUTH_LOGIN a sessão Multipark vai no cookie; nunca parte o login
+      // (be-shared lento ou em baixo → entra como antes, sem ela).
+      const sharedMode = account && account.isActive === 1 ? await sharedModeForGoogle() : "off";
+      let sharedSession: import("./sharedAuth").SharedSession | null = null;
+      if (sharedMode === "login" && account) {
+        const r = await googleSharedWithin(4000, { userId: account.id, idToken: tokenResponse.id_token, req });
+        if (r && (r.kind === "linked" || r.kind === "matched")) sharedSession = r.session;
+      }
+
       const done = await completeLogin({
         req, res, account, method: "google", email,
         sessionName: userInfo.name || "",
         reload: () => db.getUserByOpenId(accountOpenId),
         beforeSession,
+        sharedSessionId: sharedSession?.sessionId ?? null,
       });
+      if (!done.ok || done.pdaSession) {
+        // Sessão Multipark aberta para nada (recusado, ou sessão de PDA que não a leva): termina-a.
+        if (sharedSession) {
+          const { sharedAuth } = await import("./sharedAuth");
+          await sharedAuth().logout(sharedSession);
+        }
+      }
       if (!done.ok) {
         denyAccess(req, res);
         return;
+      }
+
+      // Modo sombra (SHARED_AUTH_LINK): só liga à conta Multipark e termina essa sessão.
+      if (sharedMode === "link" && account) {
+        const r = await googleSharedWithin(3000, { userId: account.id, idToken: tokenResponse.id_token, req });
+        if (r && (r.kind === "linked" || r.kind === "matched")) {
+          const { sharedAuth } = await import("./sharedAuth");
+          await sharedAuth().logout(r.session);
+        }
       }
 
       // Destino do state assinado (sobrevive à mudança de browser); senão o do

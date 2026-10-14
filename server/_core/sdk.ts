@@ -22,6 +22,8 @@ export type SessionPayload = {
   /** Plano 56 (A2): sessão de PDA — o PDA e o nonce que tem de estar em `pdas.sessionNonce`. */
   pda?: number;
   pn?: string;
+  /** Plano 05 (F3): a sessão do be-shared (conta Multipark) — revalidada no máximo de 5 em 5 min. */
+  ss?: string;
 };
 
 /** O que vem num cookie de sessão válido (assinatura e forma). */
@@ -31,6 +33,8 @@ export type VerifiedSession = {
   pda: number | null; pn: string | null;
   /** Fim do cookie (segundos, `exp` do JWT) ou null. */
   exp: number | null;
+  /** Plano 05: sessão do be-shared ou null (cookies antigos e de PDA não têm). */
+  ss: string | null;
 };
 
 /** O cookie ainda vale para a versão atual da conta? (cookies antigos sem `sv` = 0). PURA. */
@@ -124,7 +128,7 @@ class SDKServer {
    */
   async createSessionToken(
     openId: string,
-    options: { expiresInMs?: number; name?: string; sessionVersion?: number; pda?: { id: number; nonce: string } | null } = {}
+    options: { expiresInMs?: number; name?: string; sessionVersion?: number; pda?: { id: number; nonce: string } | null; sharedSessionId?: string | null } = {}
   ): Promise<string> {
     return this.signSession(
       {
@@ -133,6 +137,7 @@ class SDKServer {
         name: options.name || "",
         sv: options.sessionVersion ?? 0,
         ...(options.pda ? { pda: options.pda.id, pn: options.pda.nonce } : {}),
+        ...(options.sharedSessionId ? { ss: options.sharedSessionId } : {}),
       },
       options
     );
@@ -153,6 +158,7 @@ class SDKServer {
       name: payload.name,
       sv: payload.sv ?? 0,
       ...(payload.pda != null && payload.pn ? { pda: payload.pda, pn: payload.pn } : {}),
+      ...(payload.ss ? { ss: payload.ss } : {}),
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setExpirationTime(expirationSeconds)
@@ -169,7 +175,7 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name, sv, pda, pn, exp } = payload as Record<string, unknown>;
+      const { openId, appId, name, sv, pda, pn, exp, ss } = payload as Record<string, unknown>;
 
       if (!isNonEmptyString(openId) || !isNonEmptyString(appId) || !isNonEmptyString(name)) {
         return null;
@@ -183,6 +189,7 @@ class SDKServer {
         openId, appId, name, sv: version,
         pda: hasPda ? (pda as number) : null, pn: hasPda ? (pn as string) : null,
         exp: typeof exp === "number" ? exp : null,
+        ss: typeof ss === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(ss) ? ss : null,
       };
     } catch {
       return null;
@@ -220,6 +227,15 @@ class SDKServer {
     // emitidos antes deixam de valer (sessão inválida → volta ao login).
     if (!sessionVersionMatches(session.sv, (user as { sessionVersion?: number }).sessionVersion)) {
       throw ForbiddenError("Invalid session cookie");
+    }
+
+    // Plano 05 (F3): sessão aberta com a conta Multipark — o be-shared ainda a
+    // aceita? (de 5 em 5 min no máximo; falha aberta se o be-shared não responder).
+    if (session.ss) {
+      const { sharedSessionStillValid } = await import("../sharedSessionCheck");
+      if (!(await sharedSessionStillValid(session.ss))) {
+        throw ForbiddenError(ACCESS_DENIED_MSG);
+      }
     }
 
     // Plano 56 (A2): sessão de PDA — só vale enquanto o nonce em `pdas` for o
