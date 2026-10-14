@@ -553,10 +553,10 @@ export const SETTINGS = {
     key: "serviceTimes.gpsGate",
     group: "operacao",
     label: "Tempos com GPS: portão",
-    description: "Os tempos que dependem do GPS (Trânsito, Cliente das entregas, Nosso, % na meta, No terminal, Até à 1.ª garagem, Atrasadas no T2) só aparecem a quem não é super admin com \"visible\": true e, por cidade e período, com a cobertura ≥ minCoveragePct % e pelo menos minN medições. Fechado (omissão): só o super admin os vê, com \"em calibração\". Abre-se depois da calibração (diagnóstico dos tempos) e do PR dos parâmetros.",
+    description: "Os tempos que dependem do GPS (Trânsito, Cliente das entregas, Nosso, % na meta, No terminal, Até à 1.ª garagem, Atrasadas no T2, a máxima no Trânsito) só aparecem a quem não é super admin com \"visible\": true e, por cidade e período, com a cobertura ≥ minCoveragePct % e pelo menos minN medições; abaixo disso aparece \"Sem dados suficientes\". Fechado (omissão): só o super admin os vê, marcados como provisórios (\"em calibração\"); os outros veem \"Em calibração\". Vale no servidor (os números nem saem) no Resumo do dia, no dia do condutor, na Pressão, na Semana, na Ficha da reserva e nos tempos por condutor (Condutores e agentes, Desempenho). A cobertura vê-se sempre. Abre-se depois da calibração (diagnóstico dos tempos), quando o cartão \"De onde vêm os tempos\" mostrar ≥ 60 % numa cidade.",
     schema: gpsGateSchema,
     defaultValue: { ...DEFAULT_GPS_GATE },
-    wiring: "store",
+    wiring: "live",
   }),
   "emails.handoverCc": def({
     key: "emails.handoverCc",
