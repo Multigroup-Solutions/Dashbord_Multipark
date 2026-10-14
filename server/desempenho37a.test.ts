@@ -60,14 +60,16 @@ describe("37a — períodos e baldes", () => {
 });
 
 describe("37a — pontos e ranking", () => {
-  it("pontos = soma ponderada da aba; condutores pelos pontos da avaliação, excessos descontam", () => {
+  it("pontos = soma ponderada da aba; condutores pelos pontos da avaliação (onde os excessos descontam)", () => {
     const t = emptyTotals();
     t.callsAnswered = 10; t.emails = 5; t.created = 2; t.updated = 4;
     // pesos de 8 out 2026 (1 ponto ≈ 5 min): atendida 0,5, email 1, reserva criada 2, alteração 0,5
     expect(workPoints("office", t)).toBe(10 * 0.5 + 5 * 1 + 2 * 2 + 4 * 0.5);
     const d = emptyTotals();
     d.evalPoints = 120; d.overLimitDays = 2; d.occurrences = 3;
-    expect(workPoints("drivers", d)).toBe(120 - 20 + 3);
+    // 14 out 2026: os excessos descontam nos pontos da avaliação (−10 cada); os dias acima do limite já não descontam outra vez
+    expect(workPoints("drivers", d)).toBe(120 + 3);
+    expect(workPoints("drivers", d, { evalPoints: 1, overLimitDays: -10, occurrences: 1 })).toBe(120 - 20 + 3); // se o super admin lhes der peso
     // as horas e os km nunca dão pontos
     for (const g of Object.keys(GROUP_VIEW) as Array<keyof typeof GROUP_VIEW>) {
       expect(GROUP_VIEW[g].weights.hours).toBeUndefined();

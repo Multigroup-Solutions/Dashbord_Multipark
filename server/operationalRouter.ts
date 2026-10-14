@@ -8,7 +8,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess, isOwnOnly } from "./_core/access";
 import { ROLE_RANK as ACCESS_ROLE_RANK } from "../shared/access";
-import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, getSpeedLimits, getDefaultSpeedLimit, createSpeedLimit, updateSpeedLimit, deleteSpeedLimit, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
+import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, getSpeedLimits, createSpeedLimit, updateSpeedLimit, deleteSpeedLimit, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
 import { getZelloUsers, getZelloChannels, getZelloLocations, getZelloUserHistory, getZelloUserLocation } from "./zello";
 import { collectDailyDriverData } from "./jobs/dailyDriverCollection";
 import { requireRole } from "./routerGuards";
@@ -521,10 +521,10 @@ export const operationalRouter = router({
     checkNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "atividade_diaria", "manage");
       const locations = await getZelloLocations();
-      const defaultLimit = await getDefaultSpeedLimit();
-      if (!defaultLimit) return { checked: 0, violations: 0, message: "Nenhum limite de velocidade configurado" };
-
-      const threshold = defaultLimit.maxSpeed * (1 + defaultLimit.tolerancePercent / 100);
+      // 14 out 2026: o limite vem de Definições → Parâmetros (gps.speedRule; 120 km/h por omissão)
+      const { speedRuleNow } = await import("./speedRule");
+      const { rule, threshold } = await speedRuleNow();
+      const defaultLimit = { maxSpeed: rule.limitKmh };
       let violationCount = 0;
 
       for (const loc of locations) {

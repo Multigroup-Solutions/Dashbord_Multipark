@@ -79,6 +79,12 @@ const MOVE_EXIT_AFTER_SQL = sqlList(MOVE_EXIT_AFTER);
 /** A ação anterior (`prevPark` entre as primeiras, `prevAny` entre todas) faz deste MOVEMENT uma mudança de lugar? */
 export const moveIsSpotSql = (prevPark: string, prevAny: string) =>
   `(${prevPark} IS DISTINCT FROM 'CHECK_IN' AND (${prevAny} IS NULL OR ${prevAny} NOT IN ${MOVE_EXIT_AFTER_SQL}))`;
+/**
+ * 14 out 2026: quando a entrega ficou feita para quem entregou — o carro no
+ * local de entrega (Booking.arrivedAtDeliveryAt), se a app o registou entre o
+ * pedido e este CHECK_OUT; senão o próprio CHECK_OUT (como o Extras → Pressão).
+ */
+export const DELIVERED_AT_SQL = `(CASE WHEN x.arrived_at IS NOT NULL AND x.arrived_at >= x.pending_at AND x.arrived_at <= x.at THEN x.arrived_at ELSE x.at END)`;
 /** Dias de histórico lidos para trás para saber o que veio antes (uma recolha ou um pedido de entrega de dias antes). */
 export const MOVE_LOOKBACK_DAYS = 3;
 /**
@@ -152,9 +158,14 @@ export function movementWindow(startDay: string, endDay: string = startDay): Mov
  *  - "mudança de lugar" (14 out 2026) = MOVEMENT que não leva ao parque nem
  *    tira do parque para a entrega (shared/multiparkMovements.ts): conta como
  *    ação, não como movimento — `spot_moves`;
- *  - entrega atrasada = CHECK_OUT mais de LATE_SERVICE_MINUTES (e menos de
+ *  - entrega atrasada = entregue mais de LATE_SERVICE_MINUTES (e menos de
  *    LATE_SERVICE_MAX_MINUTES) depois do 1.º PENDING_CHECKOUT desde a entrega
- *    anterior da mesma reserva.
+ *    anterior da mesma reserva. 14 out 2026: "entregue" = o carro chegou ao
+ *    local de entrega (Booking.arrivedAtDeliveryAt, quando a app o regista e
+ *    cai entre o pedido e o CHECK_OUT) — senão o CHECK_OUT. É a mesma medida do
+ *    Extras → Pressão (pressure.ts: "entregue = arrivedAtDeliveryAt → 1.º
+ *    CHECK_OUT"): o tempo em que o cliente ainda estava nas malas não é atraso
+ *    de quem entregou.
  * A sequência lê desde `lookbackFrom` (uma recolha de dias antes conta), mas
  * só se contam as ações de [from, to).
  * Sem âmbito de cidade: o motor calcula tudo (o âmbito aplica-se ao ler).
@@ -173,7 +184,7 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
     `WITH h AS (`,
     `  SELECT h."id" AS id, h."bookingId" AS booking_id, h."userId" AS user_id,`,
     `         COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", '')) AS agent_name,`,
-    `         upper(h."changeType"::text) AS ct, h."actionTime" AS at`,
+    `         upper(h."changeType"::text) AS ct, h."actionTime" AS at, b."arrivedAtDeliveryAt" AS arrived_at`,
     `    FROM "History" h`,
     `    LEFT JOIN "Booking" b ON b."id" = h."bookingId"`,
     `    LEFT JOIN "Agent" ag ON ag."userId" = h."userId" AND ag."parkId" = b."parkId"`,
@@ -193,8 +204,8 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
     `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.prev_cat = 'CHECK_IN') AS parking_moves,`,
     `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND ${moveIsSpotSql("x.prev_cat", "x.prev_any")}) AS spot_moves,`,
     `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND x.pending_at IS NOT NULL`,
-    `                          AND x.at - x.pending_at > ${late}::int * interval '1 minute'`,
-    `                          AND x.at - x.pending_at < ${lateMax}::int * interval '1 minute') AS late_deliveries`,
+    `                          AND ${DELIVERED_AT_SQL} - x.pending_at > ${late}::int * interval '1 minute'`,
+    `                          AND ${DELIVERED_AT_SQL} - x.pending_at < ${lateMax}::int * interval '1 minute') AS late_deliveries`,
     `  FROM seq2 x`,
     ` WHERE x.at >= ${from}::timestamp`,
     // 49e: também por hora de Lisboa (a avaliação guarda as ações por hora do dia); nunca há mais linhas do que ações

@@ -172,6 +172,25 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     }
   } catch { /* sem a tabela das reclamações: fica a regra antiga (dentro do período) */ }
 
+  // 14 out 2026: excessos de velocidade do GPS do Zello (só os recolhidos com a regra nova —
+  // metricsVersion ≥ 5; os dias antigos tinham pontos acima de 999 km/h, sem valor).
+  let gpsSpeedingRows: any[] = [];
+  try {
+    const { SPEED_EXCESS_METRICS_VERSION } = await import("../shared/speedRules");
+    gpsSpeedingRows = rowsOf(await db.execute(sql`
+      SELECT x.employeeId, x.day, SUM(x.n) AS n FROM (
+        SELECT s.employeeId, s.day AS day, s.violations AS n
+          FROM driver_day_shares s JOIN daily_driver_history h ON h.id = s.historyId
+         WHERE s.day >= ${startDay} AND s.day <= ${endDay} AND s.violations > 0 AND h.metricsVersion >= ${SPEED_EXCESS_METRICS_VERSION}
+        UNION ALL
+        SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.speedViolations AS n
+          FROM daily_driver_history h
+         WHERE h.employeeId IS NOT NULL AND h.date >= ${`${startDay} 00:00:00`} AND h.date < ${`${addDays(endDay, 1)} 00:00:00`}
+           AND h.speedViolations > 0 AND h.metricsVersion >= ${SPEED_EXCESS_METRICS_VERSION}
+           AND NOT EXISTS (SELECT 1 FROM driver_day_shares s2 WHERE s2.historyId = h.id)
+      ) x GROUP BY x.employeeId, x.day`));
+  } catch { /* sem as tabelas do GPS: só os alertas */ }
+
   // Acidentes confirmados pelo TL (D15): o dia operacional da ocorrência já vem gravado.
   let accidentRows: any[] = [];
   try {
@@ -213,6 +232,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       at: toUtcStr(r.at), penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null,
     })),
     speedAlerts: rowsOf(speed).map((r) => ({ id: Number(r.id), employeeId: r.employeeId != null ? Number(r.employeeId) : null, createdAt: toUtcStr(r.createdAt) })),
+    gpsSpeeding: gpsSpeedingRows.map((r) => ({ employeeId: Number(r.employeeId), day: String(r.day).slice(0, 10), n: Number(r.n) || 0 })),
     relatedCountedElsewhere,
     penalties: penRows.map((r) => ({
       employeeId: Number(r.employeeId), points: Number(r.points ?? 0), reason: String(r.reason ?? ""),

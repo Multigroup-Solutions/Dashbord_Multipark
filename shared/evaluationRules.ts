@@ -62,11 +62,16 @@ export function withAccidentCutoff<M extends { accidents: number }>(day: string,
 export const DELAY_TOLERANCE_MINUTES = 0;
 
 /**
- * Serviço atrasado: entrega (CHECK_OUT) feita mais de X minutos depois de o
- * cliente a pedir (PENDING_CHECKOUT), na mesma reserva — a mesma medida do
- * resumo do supervisor ("> 15 min"). Acima de LATE_SERVICE_MAX_MINUTES não é
- * o mesmo pedido (dados incoerentes) e não conta. As recolhas não contam: o
- * atraso aí é quase sempre do voo/cliente, não do condutor.
+ * Serviço atrasado: entrega feita mais de X minutos depois de o cliente a
+ * pedir (PENDING_CHECKOUT), na mesma reserva — a mesma medida do resumo do
+ * supervisor ("> 15 min"). Acima de LATE_SERVICE_MAX_MINUTES não é o mesmo
+ * pedido (dados incoerentes) e não conta. As recolhas não contam: o atraso aí
+ * é quase sempre do voo/cliente, não do condutor.
+ * 14 out 2026 (Jorge: "80 atrasos em 8 dias?"): "feita" = o carro chegou ao
+ * local de entrega (Booking.arrivedAtDeliveryAt, quando a app o regista), não
+ * o CHECK_OUT — o tempo à espera do cliente (malas) não é atraso de quem
+ * entregou. Sem essa hora, o CHECK_OUT (como antes). Igual ao Extras → Pressão.
+ * Conta UMA vez por entrega (o CHECK_OUT), contra quem a fez.
  */
 export const LATE_SERVICE_MINUTES = 15;
 export const LATE_SERVICE_MAX_MINUTES = 600;

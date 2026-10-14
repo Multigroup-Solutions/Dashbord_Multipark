@@ -139,12 +139,21 @@ describe("Resumo do dia — GPS dentro de uma janela (regras da recolha)", () =>
     expect(s).toMatchObject({ stoppedMinutes: 30, movingMinutes: 20, minutes: 50, maxSpeed: 40, points: 7 });
     expect(gpsWindowStats(p, [win(15, 35)], { threshold: null })).toMatchObject({ stoppedMinutes: 0, movingMinutes: 10, points: 2 });
   });
-  it("velocidade máxima e excessos numa entrega: pontos precisos e plausíveis, acima do limite", () => {
-    const p = pts([[0, 20], [5, 95, false], [6, 70], [7, MAX_PLAUSIBLE_KMH + 10], [8, 62], [30, 90]]);
+  it("velocidade máxima e excessos numa entrega: sem o impreciso nem o pico falso; pontos seguidos = UM excesso (14 out 2026)", () => {
+    // 3 s depois do 70 um "200" e 3 s depois 64: salto isolado (pico falso do GPS)
+    const p = pts([[0, 20], [5, 95, false], [6, 70], [6.05, 200], [6.1, 64], [8, 62], [30, 90]]);
     const s = gpsWindowStats(p, [win(0, 10)], { threshold: 60 });
     expect(s.maxSpeed).toBe(70);
     expect(s.maxAt).toBe(t0 + 6 * 60);
-    expect(s.violations).toBe(2); // 70 e 62 (o impreciso e o implausível não contam)
+    expect(s.violations).toBe(1); // 70, 64 e 62 seguidos acima de 60 = 1 excesso (o impreciso e o pico não contam)
+    // acima de 150 já não se deita fora sem mais: 70 → 160 → 62 em minutos é possível e conta
+    const real = gpsWindowStats(pts([[0, 20], [6, 70], [7, MAX_PLAUSIBLE_KMH + 10], [8, 62]]), [win(0, 10)], { threshold: 60 });
+    expect(real.maxSpeed).toBe(MAX_PLAUSIBLE_KMH + 10);
+    expect(real.violations).toBe(1);
+    // um ponto sozinho acima do limite (sem posição para o confirmar) não é excesso nem é a máxima
+    const lone = gpsWindowStats(pts([[0, 20], [6, 40], [7, 75], [8, 42]]), [win(0, 10)], { threshold: 60 });
+    expect(lone).toMatchObject({ violations: 0, maxSpeed: 42 });
+    expect(gpsWindowStats(pts([[0, 20], [6, 40], [7, 75], [8, 42]]), [win(0, 10)], { threshold: 60, minPoints: 1 })).toMatchObject({ violations: 1, maxSpeed: 75 });
   });
   it("PDA partilhado: só os pontos de quem o tinha (o troço na troca não conta)", () => {
     const p = pts([[0, 0], [10, 0], [20, 0], [30, 0]]);

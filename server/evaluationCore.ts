@@ -114,6 +114,8 @@ export interface ActionRow {
   actionTime: string; // UTC
   agentUserId: string | null;
   agentName: string | null;
+  /** 14 out 2026: só nos CHECK_OUT — quando o carro chegou ao local de entrega (Booking.arrivedAtDeliveryAt, UTC), se se sabe */
+  arrivedAtDeliveryAt?: string | null;
 }
 
 /**
@@ -161,9 +163,12 @@ export function markSpotChanges(rows: ActionRow[]): Set<number> {
 }
 
 /**
- * Índices das ENTREGAS atrasadas: CHECK_OUT mais de LATE_SERVICE_MINUTES
+ * Índices das ENTREGAS atrasadas: entregue mais de LATE_SERVICE_MINUTES
  * depois do 1.º PENDING_CHECKOUT (pedido do cliente) ainda por servir, na
  * mesma reserva. Mais de LATE_SERVICE_MAX_MINUTES = outro pedido → não conta.
+ * "Entregue" = o carro no local de entrega (`arrivedAtDeliveryAt`, se cair
+ * entre o pedido e o CHECK_OUT), senão o CHECK_OUT — o mesmo que o SQL
+ * (server/multiparkDb/movements.ts → DELIVERED_AT_SQL).
  */
 export function markLateDeliveries(rows: ActionRow[], thresholdMinutes = LATE_SERVICE_MINUTES): Set<number> {
   const byBooking = new Map<string, number[]>();
@@ -183,7 +188,9 @@ export function markLateDeliveries(rows: ActionRow[], thresholdMinutes = LATE_SE
         if (pendingAt == null) pendingAt = t;
       } else if (actionCategory(type) === "entregas") {
         if (pendingAt != null) {
-          const mins = (t - pendingAt) / 60_000;
+          const arrived = rows[i].arrivedAtDeliveryAt ? utcMs(rows[i].arrivedAtDeliveryAt!) : NaN;
+          const delivered = Number.isFinite(arrived) && arrived >= pendingAt && arrived <= t ? arrived : t;
+          const mins = (delivered - pendingAt) / 60_000;
           if (mins > thresholdMinutes && mins < LATE_SERVICE_MAX_MINUTES) out.add(i);
         }
         pendingAt = null;
@@ -292,6 +299,13 @@ export interface EngineComplaint {
 }
 
 export interface EngineSpeedAlert { id?: number; employeeId: number | null; createdAt: string }
+/**
+ * 14 out 2026: excessos de velocidade do GPS do Zello de uma pessoa num dia
+ * (a recolha grava-os por dia de Lisboa — shared/speedRules.ts; só os
+ * recolhidos com a regra nova, metricsVersion ≥ 5). Cada um conta como um
+ * "excesso de velocidade" (−10), como os alertas.
+ */
+export interface EngineGpsSpeeding { employeeId: number; day: string; n: number }
 /** Acidente confirmado pelo TL (evaluation_accidents ativo, D15): conta no dia operacional da ocorrência. */
 export interface EngineConfirmedAccident { employeeId: number; day: string }
 export interface EnginePenalty { employeeId: number; points: number; reason: string; relatedId: number | null; createdAt: string }
@@ -312,6 +326,8 @@ export interface EngineInput {
   incidents: EngineIncident[];
   complaints: EngineComplaint[];
   speedAlerts: EngineSpeedAlert[];
+  /** 14 out 2026: excessos do GPS do Zello por pessoa e dia (opcional nos testes antigos) */
+  gpsSpeeding?: EngineGpsSpeeding[];
   penalties: EnginePenalty[];
   /** Acidentes confirmados (ocorrências Multipark + quem conduzia). */
   confirmedAccidents?: EngineConfirmedAccident[];
@@ -521,13 +537,21 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
 
   // ── Excessos de velocidade: alertas (speed_alerts) + penalizações RH de
   // velocidade confirmadas (a que aponta para um alerta já contado não repete).
-  // Os "excessos" do GPS Zello são PONTOS acima do limite, não eventos — não contam.
+  // 14 out 2026 (Jorge: "porque é que os 141 não tiram pontos?"): + os EXCESSOS
+  // do GPS do Zello (antes eram pontos acima de um limite que nem existia, e não
+  // contavam). Um excesso = pontos seguidos acima do limite de Definições, sem
+  // picos falsos (shared/speedRules.ts); conta no dia de Lisboa da recolha.
   const alertIds = new Set<string>();
   for (const s of input.speedAlerts) {
     if (!s.employeeId) continue;
     if (s.id != null) alertIds.add(`${s.employeeId}|${s.id}`);
     const d = operationalDayOf(s.createdAt);
     if (inRange(d, startDay, endDay)) row(s.employeeId, d).metrics.speedingEvents += 1;
+  }
+  for (const g of input.gpsSpeeding ?? []) {
+    const n = Math.max(0, Math.round(Number(g.n) || 0));
+    if (!g.employeeId || !n || !inRange(g.day, startDay, endDay)) continue;
+    row(g.employeeId, g.day).metrics.speedingEvents += n;
   }
 
   // ── Penalizações RH confirmadas (informativo; as de reclamação contam como

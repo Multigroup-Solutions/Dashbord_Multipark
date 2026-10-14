@@ -140,8 +140,8 @@ describe("pesos — omissões de 8 out 2026 (1 ponto ≈ 5 min de trabalho)", ()
       callMinutes: 0.2, waMessages: 0.2, cashCounts: 2, handovers: 2, extrasDia: 0.5, lostFound: 2, occurrences: 1,
     });
   });
-  it("condutores e equipa ficam como estavam", () => {
-    expect(GROUP_VIEW.drivers.weights).toEqual({ evalPoints: 1, overLimitDays: -10, occurrences: 1 });
+  it("condutores: os dias acima do limite já não descontam (14 out 2026: cada excesso desconta −10 na avaliação); a equipa fica", () => {
+    expect(GROUP_VIEW.drivers.weights).toEqual({ evalPoints: 1, occurrences: 1 });
     expect(TEAM_POINT_WEIGHTS).toEqual({ actionsPerPerson: 1, noZelloPerPerson: -20, stoppedHoursPerPerson: -2 });
   });
   it("perdidas, horas e km não contam em nenhuma aba; nenhum 0 explícito nas omissões", () => {
@@ -211,7 +211,7 @@ describe("pesos — o servidor calcula com os pesos em vigor e devolve-os", () =
     expect(ana.totals.evalPoints).toBeGreaterThan(0);
     expect(ana.totals.occurrences).toBe(2);
     expect(ana.totals.overLimitDays).toBeGreaterThan(0);
-    expect(ana.points).toBe(round1(ana.totals.evalPoints - 10 * ana.totals.overLimitDays + ana.totals.occurrences));
+    expect(ana.points).toBe(round1(ana.totals.evalPoints + ana.totals.occurrences)); // o dia acima do limite só se mostra
     expect(r.rankWeights).toEqual({ weights: GROUP_VIEW.drivers.weights, team: TEAM_POINT_WEIGHTS, overrides: {}, updatedAt: null, updatedByName: null, readable: true });
   });
 
@@ -220,8 +220,8 @@ describe("pesos — o servidor calcula com os pesos em vigor e devolve-os", () =
     const { loadPeoplePerformance } = await import("./peoplePerformance");
     const r = await loadPeoplePerformance({ period: "week", anchor: "2026-10-06", group: "drivers" });
     const ana = r.people.find((p) => p.name === "Ana")!;
-    expect(ana.points).toBe(round1(2 * ana.totals.evalPoints - 10 * ana.totals.overLimitDays)); // as ocorrências deixaram de contar
-    expect(r.rankWeights.weights).toEqual({ evalPoints: 2, overLimitDays: -10, occurrences: 0 });
+    expect(ana.points).toBe(round1(2 * ana.totals.evalPoints)); // as ocorrências deixaram de contar
+    expect(r.rankWeights.weights).toEqual({ evalPoints: 2, occurrences: 0 });
     expect(r.rankWeights.overrides).toEqual({ drivers: { evalPoints: 2, occurrences: 0 }, office: { created: 5 } });
     expect(r.rankWeights).toMatchObject({ updatedAt: "2026-10-08 10:00:00", updatedByName: "Jorge", readable: true });
   });
@@ -253,7 +253,7 @@ describe("pesos — o servidor calcula com os pesos em vigor e devolve-os", () =
     expect(off.rankWeights.weights).toEqual(GROUP_VIEW.drivers.weights);
     expect(off.rankWeights.readable).toBe(false);
     const ana = off.people.find((p) => p.name === "Ana")!;
-    expect(ana.points).toBe(round1(ana.totals.evalPoints - 10 * ana.totals.overLimitDays + ana.totals.occurrences));
+    expect(ana.points).toBe(round1(ana.totals.evalPoints + ana.totals.occurrences));
     h.setting = null;
   });
 });

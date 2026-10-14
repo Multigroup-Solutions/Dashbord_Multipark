@@ -205,6 +205,6 @@ export async function heldPointsFor(daysByEmp: ReadonlyMap<number, readonly stri
 }
 
 /** As contas do GPS de uma pessoa dentro das janelas (todos os ficheiros dela). PURA. */
-export function heldStats(held: readonly HeldPoints[] | undefined, windows: readonly TimeWindow[], threshold: number | null): GpsWindowStats {
-  return mergeGpsStats((held ?? []).map((h) => gpsWindowStats(h.points, windows, { threshold, mine: h.mine })));
+export function heldStats(held: readonly HeldPoints[] | undefined, windows: readonly TimeWindow[], threshold: number | null, minPoints?: number): GpsWindowStats {
+  return mergeGpsStats((held ?? []).map((h) => gpsWindowStats(h.points, windows, { threshold, mine: h.mine, minPoints })));
 }

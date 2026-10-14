@@ -47,7 +47,7 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import {
-  addHours, addTotals, bucketOf, effectiveTeamWeights, effectiveWeights, emptyHours, emptyTotals, GROUP_VIEW, groupOf, kmWithoutMoves, lisbonHourOfUtcHour, parseHours,
+  addHours, addTotals, bucketOf, effectiveTeamWeights, effectiveWeights, emptyHours, emptyTotals, gpsDayOverLimit, GROUP_VIEW, groupOf, kmWithoutMoves, lisbonDaysTouched, lisbonHourOfUtcHour, parseHours,
   perfRange, perHourOf, rosterGroup, signedWeight, teamDayPoints, utcHourMs, workPoints, CALLBACK_WINDOW_HOURS, PERF_RANK_WEIGHTS_KEY,
   type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals, type PerfWeights, type RankWeightOverrides, type TeamPointWeights,
 } from "../shared/peoplePerformance";
@@ -356,6 +356,10 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (multipark) addHours(h.mp, hours);
   };
   let hourlyMissingDays = 0;
+  /** 14 out 2026: dias (que contam) com trabalho e com GPS, por pessoa — "N dias sem GPS (Zello não ligado)" */
+  const workDaySet = new Map<number, Set<string>>();
+  const gpsDaySet = new Map<number, Set<string>>();
+  const markDay = (m: Map<number, Set<string>>, emp: number, day: string) => { if (bucketFor(emp, day)) addDay(m, emp, day); };
 
   // ── Avaliação diária (Multipark + horas + penalizações), com os ajustes ──
   const ids = [...people.keys()];
@@ -386,35 +390,77 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
       const byHour = parseHours(m.actionsByHour);
       if (byHour) putHours(emp, day, byHour, true);
       else if (d.actions > 0 && bucketFor(emp, day)) hourlyMissingDays += 1;
+      if (hours > 0 || d.actions > 0) markDay(workDaySet, emp, day);
       put(emp, day, {
         hours, workDays: hours > 0 || d.actions > 0 ? 1 : 0, evalPoints: scoreOf(d).totalPoints,
         recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, spotChanges: d.spotChanges, cancels: d.cancels,
         checkingIn: Number(byType.CHECKING_IN ?? 0), checkingOut: Number(byType.CHECKING_OUT ?? 0),
         created: Number(byType.CREATED ?? 0), updated: Number(byType.UPDATE ?? 0),
         occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: d.delays, complaintsAgainst: d.complaints, accidents: d.accidents,
+        // 14 out 2026: de onde vêm os atrasos — entregas > 15 min do pedido e entradas tardias no ponto
+        lateDeliveries: d.lateServices, lateArrivals: Math.max(0, d.delays - d.lateServices),
       });
     }
     if (!mRows.length) notes.push("Sem avaliação diária guardada neste período (a Multipark e as horas entram pela avaliação, recalculada todas as noites).");
   }
 
   // ── GPS do Zello (km, velocidade) ──
+  // 14 out 2026: o limite vem de Definições (120 km/h por omissão — antes da tabela
+  // `speed_limits`, sem ecrã: sem ela o limite era nulo e os dias acima davam sempre 0).
   let speedLimit: number | null = null;
   try {
     const { speedThreshold } = await import("./dayActivity");
     speedLimit = await speedThreshold();
   } catch { /* sem limite */ }
+  let approxSpeedDays = 0;
   if (ids.length && o.group !== "office" && o.group !== "supervision") {
     const idList = sql.join(ids.map((x) => sql`${x}`), sql`, `);
     const gps = [
-      ...rowsOf(await db.execute(sql`SELECT employeeId, day, km, maxSpeed FROM driver_day_shares
-          WHERE day >= ${r.from} AND day <= ${r.to} AND employeeId IN (${idList})`).catch(() => [[]])),
-      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.totalKm AS km, h.maxSpeed FROM daily_driver_history h
+      ...rowsOf(await db.execute(sql`SELECT s.employeeId, s.day, s.km, s.maxSpeed, s.violations, s.points, h.metricsVersion FROM driver_day_shares s
+          LEFT JOIN daily_driver_history h ON h.id = s.historyId
+          WHERE s.day >= ${r.from} AND s.day <= ${r.to} AND s.employeeId IN (${idList})`).catch(() => [[]])),
+      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.totalKm AS km, h.maxSpeed, h.speedViolations AS violations,
+            h.gpsPointsCount AS points, h.metricsVersion FROM daily_driver_history h
           WHERE h.employeeId IN (${idList}) AND DATE(h.date) >= ${r.from} AND DATE(h.date) <= ${r.to}
             AND NOT EXISTS (SELECT 1 FROM driver_day_shares s WHERE s.historyId = h.id)`).catch(() => [[]])),
     ];
+    // uma pessoa com dois PDAs (ou um PDA e o telemóvel) no mesmo dia: UM dia com GPS e UM dia acima do limite
+    const days = new Map<string, { emp: number; day: string; km: number; max: number; over: boolean; approx: boolean; gps: boolean }>();
     for (const g of gps) {
+      const emp = Number(g.employeeId), day = dayStr(g.day);
+      const k = `${emp}|${day}`;
+      const x = days.get(k) ?? { emp, day, km: 0, max: 0, over: false, approx: false, gps: false };
       const km = Number(g.km ?? 0), max = Number(g.maxSpeed ?? 0);
-      put(Number(g.employeeId), dayStr(g.day), { km: Math.round(km * 10) / 10, gpsDays: km > 0 ? 1 : 0, maxSpeed: max, overLimitDays: speedLimit != null && max > speedLimit ? 1 : 0 });
+      const o = gpsDayOverLimit({ metricsVersion: g.metricsVersion, violations: g.violations, maxSpeed: max }, speedLimit);
+      x.km += km;
+      x.max = Math.max(x.max, max);
+      x.over = x.over || o.over;
+      x.approx = x.approx || (o.over && o.approx);
+      x.gps = x.gps || km > 0 || Number(g.points ?? 0) > 0;
+      days.set(k, x);
+    }
+    for (const x of days.values()) {
+      if (x.gps) markDay(gpsDaySet, x.emp, x.day);
+      if (x.approx && bucketFor(x.emp, x.day)) approxSpeedDays += 1;
+      put(x.emp, x.day, { km: Math.round(x.km * 10) / 10, gpsDays: x.gps ? 1 : 0, maxSpeed: x.max, overLimitDays: x.over ? 1 : 0 });
+    }
+    if (approxSpeedDays) notes.push(`Dias acima do limite: ${approxSpeedDays} dia(s) recolhido(s) antes de 14 out 2026 contam pela velocidade máxima do dia (sem o filtro de picos nem os pontos seguidos); os novos contam pelos excessos. Para refazer um dia: Atividade diária → Histórico → Forçar re-divisão.`);
+
+    // ── 14 out 2026: dias de trabalho sem GPS, e porquê (Zello não ligado à pessoa?) ──
+    const pdaDays = new Map<number, Set<string>>();
+    const fixedZello = new Set<number>();
+    try {
+      for (const e of rowsOf(await db.execute(sql`SELECT id FROM employees WHERE id IN (${idList}) AND zelloUsername IS NOT NULL AND zelloUsername <> ''`))) fixedZello.add(Number(e.id));
+      for (const c of rowsOf(await db.execute(sql`SELECT employeeId, checkinAt, checkoutAt FROM pda_checkins
+          WHERE employeeId IN (${idList}) AND checkinAt < ${range.end} AND (checkoutAt IS NULL OR checkoutAt >= ${range.start})`))) {
+        for (const d of lisbonDaysTouched(c.checkinAt, c.checkoutAt)) addDay(pdaDays, Number(c.employeeId), d);
+      }
+    } catch { /* sem a informação do Zello: só "sem GPS" */ }
+    for (const [emp, work] of workDaySet) {
+      for (const day of work) {
+        if (gpsDaySet.get(emp)?.has(day)) continue;
+        put(emp, day, { noGpsDays: 1, noZelloDays: !fixedZello.has(emp) && !pdaDays.get(emp)?.has(day) ? 1 : 0 });
+      }
     }
   }
 

@@ -66,9 +66,15 @@ async function shiftsFor(date: string, employeeIds: number[], nowMs: number): Pr
   return out;
 }
 
-async function speedLimit(): Promise<number | null> {
-  const { speedThreshold } = await import("./dayActivity");
-  return speedThreshold().catch(() => null);
+/** O limite dos excessos (Definições → Limite de velocidade; 120 km/h por omissão) e os pontos seguidos que fazem um excesso. */
+async function speedRule(): Promise<{ threshold: number | null; minPoints: number | undefined }> {
+  try {
+    const { speedRuleNow } = await import("./speedRule");
+    const r = await speedRuleNow();
+    return { threshold: r.threshold, minPoints: r.rule.minPoints };
+  } catch {
+    return { threshold: null, minPoints: undefined };
+  }
 }
 
 const isoWindows = (ws: readonly TimeWindow[]) => ws.map((w) => ({ start: new Date(w.startMs).toISOString(), end: new Date(w.endMs).toISOString() }));
@@ -96,7 +102,7 @@ export async function getPeopleShiftGps(date: string, employeeIds: readonly numb
   const shifts = await shiftsFor(date, ids, nowMs);
   const daysByEmp = new Map<number, string[]>();
   for (const [e, s] of shifts) if (s.windows.length) daysByEmp.set(e, daysOfWindows(s.windows));
-  const threshold = await speedLimit();
+  const { threshold, minPoints } = await speedRule();
   const held = await heldPointsFor(daysByEmp, { deadlineAt: Date.now() + GPS_DEADLINE_MS });
   const people: Record<number, PersonShiftGps> = {};
   for (const [e, s] of shifts) {
@@ -108,7 +114,7 @@ export async function getPeopleShiftGps(date: string, employeeIds: readonly numb
       people[e] = { source: s.source, windows: isoWindows(s.windows), stoppedHours: null, movingHours: null, partial: failed > 0 };
       continue;
     }
-    const st = heldStats(files, s.windows, threshold);
+    const st = heldStats(files, s.windows, threshold, minPoints);
     people[e] = { source: s.source, windows: isoWindows(s.windows), stoppedHours: r1(st.stoppedMinutes / 60), movingHours: r1(st.movingMinutes / 60), partial: failed > 0 || missingDay };
   }
   return { people };
@@ -218,7 +224,7 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
       };
       const deliveryWindows = actions.map(deliveryWindow).filter((x): x is TimeWindow => !!x);
       const days = daysOfWindows([...s.windows, ...deliveryWindows]);
-      const threshold = await speedLimit();
+      const { threshold, minPoints } = await speedRule();
       const held = await heldPointsFor(new Map([[empId, days]]), { deadlineAt: Date.now() + GPS_DEADLINE_MS });
       const files = held.byEmp.get(empId);
       const failed = held.failed.get(empId) ?? 0;
@@ -226,12 +232,12 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
         for (const a of actions) {
           const win = deliveryWindow(a);
           if (!win) continue;
-          const st = heldStats(files, [win], threshold);
+          const st = heldStats(files, [win], threshold, minPoints);
           a.maxSpeed = st.points > 0 ? Math.round(st.maxSpeed) : null;
           a.violations = st.points > 0 ? st.violations : null;
         }
       }
-      const st = files?.length && s.windows.length ? heldStats(files, s.windows, threshold) : null;
+      const st = files?.length && s.windows.length ? heldStats(files, s.windows, threshold, minPoints) : null;
       const missingDay = days.some((d) => d <= lisbonDayOf(nowMs) && !held.collectedDays.has(d));
       gps = {
         source: s.source, windows: isoWindows(s.windows),

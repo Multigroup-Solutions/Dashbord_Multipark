@@ -2,7 +2,7 @@
 modulo: avaliacao
 titulo: Avaliação (dia e mês)
 rotas: /avaliacao, /avaliacao-operacional
-palavras: pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
+palavras: mudanças de lugar, mudança de lugar, movimento que toca no parque, tirar do parque, excesso do gps, limite 120, entrega atrasada, local de entrega, pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
 ---
 # Avaliação
 
@@ -12,6 +12,7 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - **Movimentos**: quem mexeu em que reserva, quando e em que fase. São lidos **em tempo real da base de dados da Multipark**: o histórico da app (recolha, movimento, pedido de entrega, entrega, cancelamento, alterações), o condutor que ficou registado no check-in e no check-out da reserva, as ocorrências que criou ou resolveu e as avaliações dos clientes nas reservas que fez. Não se copia nada.
 - **GPS** (onde deixaram os carros e por onde andaram): continua a vir do **Zello**, guardado no dashboard.
 - **Ponto, escala do Extras Dia, reclamações, alertas de velocidade e penalizações**: vêm do dashboard.
+- **Excessos de velocidade do GPS do Zello** (desde 14 out 2026): vêm da recolha diária do Zello (ver "Como se contam os excessos").
 - A ligação entre o agente da app Multipark e a ficha do colaborador é a do RH (o agente ligado à ficha).
 - A **Atividade do Dia** (menu Operacional, `/operacional`) lê as ações da mesma forma, **ao vivo** da BD da Multipark (dia civil de Lisboa, 00h–24h). Só os dias antes de 2 de março de 2026 vêm da cópia antiga guardada no dashboard. Se a BD da Multipark não responder, a página mostra um aviso amarelo e usa essa cópia antiga, que já não é atualizada (os dias recentes aparecem sem ações).
 
@@ -72,11 +73,19 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - O **Recalcular** avisa que nada foi recalculado. Tenta de novo daqui a pouco.
 - Se uma leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem dados".
 
-**Como se contam os movimentos**
-- Recolha = check-in feito. Entrega = check-out feito. Movimento = mudança de parque ou de lugar.
-- **Levar ao parque** é o primeiro movimento depois de uma recolha, na mesma reserva, e vale mais pontos.
-- **Entrega atrasada** é uma entrega feita mais de 15 minutos depois de o cliente a pedir, e conta como atraso.
-- Início da recolha, pedido de entrega, início da entrega, alterações e criações aparecem na lista e contam como ações, mas não dão pontos.
+**Como se contam os movimentos** (definição de 14 out 2026: "os movimentos, para os pontos, são os que tocam no parque")
+- Recolha = check-in feito. Entrega = check-out feito.
+- A Multipark grava todas as deslocações de um carro como "movimento". A dashboard separa-as pela ação anterior da mesma reserva:
+  - **Levar ao parque**: o 1.º movimento depois de uma recolha. Toca no parque (entra). **+5**.
+  - **Tirar do parque para a entrega**: o 1.º movimento depois do pedido de entrega ou do início da entrega. Toca no parque (sai). **+2**.
+  - **Mudança de lugar**: qualquer outro movimento (o carro já está no parque e só muda de lugar, garagem ou fila). Conta como **ação**, mas **não é movimento nem dá pontos**. Aparece à parte ("Mudanças de lugar").
+- **Entrega atrasada**: o carro chegou ao cliente mais de 15 minutos depois de ele a pedir, e conta como atraso (−5), uma vez por entrega, contra quem a fez. "Chegou" é a hora em que a app marca o carro no local de entrega, quando a marca; senão, o check-out. O tempo em que o cliente ainda estava nas malas não é atraso de quem entregou (é a mesma medida do Extras → Pressão).
+- Início da recolha, pedido de entrega, início da entrega, mudanças de lugar, alterações e criações aparecem na lista e contam como ações, mas não dão pontos.
+- **Os meses passados**: o recálculo da noite refaz o último mês com estas regras. Os dias mais antigos ficam como estavam (com as mudanças de lugar dentro dos movimentos) até alguém carregar em **Recalcular** para esse período.
+
+**Como se contam os excessos de velocidade**
+- Contam os alertas de velocidade (API do GPS dos carros, registo à mão), as penalizações de velocidade do RH e, desde 14 out 2026, os **excessos do GPS do Zello**: pontos seguidos acima do limite de **Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"** (120 km/h por omissão), sem os picos falsos do GPS. Cada um **−10**.
+- Só contam os dias de GPS recolhidos com esta regra (a recolha das 23h e a final de 2 dias depois). Os dias antigos não tinham limite e não contam, até se voltarem a dividir (Atividade diária → Histórico → Forçar re-divisão) e recalcular.
 
 **Quem vê o quê**
 São as permissões de Definições → Permissões, iguais no ecrã e no servidor, com as permissões por utilizador.

@@ -13,7 +13,8 @@
  * ranking (pontos de trabalho = soma ponderada; por hora quando há horas).
  */
 import { z } from "zod";
-import { addDays, lisbonHourOf, OPERATIONAL_DAY_START_HOUR } from "./lisbonDay";
+import { addDays, lisbonDayOf, lisbonHourOf, OPERATIONAL_DAY_START_HOUR } from "./lisbonDay";
+import { SPEED_EXCESS_METRICS_VERSION } from "./speedRules";
 
 // ─── Grupos (abas) ──────────────────────────────────────────────────────────
 
@@ -125,6 +126,8 @@ export type PerfMetric =
   | "recolhas" | "entregas" | "movements" | "parkingMoves" | "spotChanges" | "cancels" | "checkingIn" | "checkingOut"
   | "created" | "updated" | "occurrences" | "speedAlerts" | "delays" | "complaintsAgainst" | "accidents"
   | "km" | "gpsDays" | "overLimitDays" | "maxSpeed"
+  // 14 out 2026 (Jorge: "2 dias com GPS e 8 de trabalho?"; "80 atrasos?"): sem GPS e porquê; de onde vêm os atrasos
+  | "noGpsDays" | "noZelloDays" | "lateDeliveries" | "lateArrivals"
   | "callsAnswered" | "callsMade" | "callbacks" | "waMessages" | "emails"
   | "complaintMsgs" | "complaintsClosed" | "reviewsReplied"
   | "expenses" | "expensesApproved" | "cashCounts" | "cashCorrections"
@@ -167,12 +170,17 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   created: { key: "created", label: "Reservas criadas", source: "multipark" },
   updated: { key: "updated", label: "Alterações de reserva", source: "multipark" },
   occurrences: { key: "occurrences", label: "Ocorrências registadas", source: "multipark" },
-  speedAlerts: { key: "speedAlerts", label: "Alertas de velocidade", source: "zello", bad: true },
+  // 14 out 2026: na avaliação contam os alertas e os EXCESSOS do GPS do Zello (−10 cada)
+  speedAlerts: { key: "speedAlerts", label: "Excessos de velocidade", source: "avaliação", bad: true },
   delays: { key: "delays", label: "Atrasos", source: "avaliação", bad: true },
+  lateDeliveries: { key: "lateDeliveries", label: "Atrasos: entregas > 15 min", source: "avaliação", bad: true },
+  lateArrivals: { key: "lateArrivals", label: "Atrasos: entrada no ponto", source: "avaliação", bad: true },
   complaintsAgainst: { key: "complaintsAgainst", label: "Reclamações contra", source: "avaliação", bad: true },
   accidents: { key: "accidents", label: "Acidentes", source: "avaliação", bad: true },
   km: { key: "km", label: "Km (GPS)", source: "zello" },
   gpsDays: { key: "gpsDays", label: "Dias com GPS", source: "zello" },
+  noGpsDays: { key: "noGpsDays", label: "Dias de trabalho sem GPS", source: "zello", bad: true },
+  noZelloDays: { key: "noZelloDays", label: "…sem Zello ligado à pessoa", source: "zello", bad: true },
   overLimitDays: { key: "overLimitDays", label: "Dias acima do limite", source: "zello", bad: true },
   maxSpeed: { key: "maxSpeed", label: "Velocidade máxima", source: "zello", max: true },
   callsAnswered: { key: "callsAnswered", label: "Chamadas atendidas", source: "dashboard" },
@@ -272,15 +280,18 @@ export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfM
   },
   teamleaders: {
     cards: ["hours", "recolhas", "entregas", "checkingIn", "checkingOut", "callsAnswered", "tlDays", "teamPeople"],
-    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "spotChanges", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
+    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "spotChanges", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "lateDeliveries", "lateArrivals", "speedAlerts", "complaintsAgainst"],
     chart: ["recolhas", "entregas", "checkingIn", "checkingOut"],
     weights: { evalPoints: 1, teamPoints: 1, checkingIn: 0.5, checkingOut: 0.5, updated: 0.5, returnFlights: 0.5, callsAnswered: 0.5, callsMade: 0.5, callMinutes: 0.2, waMessages: 0.2, cashCounts: 2, handovers: 2, extrasDia: 0.5, lostFound: 2, occurrences: 1 },
   },
   drivers: {
     cards: ["hours", "recolhas", "entregas", "movements", "km", "overLimitDays", "occurrences", "evalPoints"],
-    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "km", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "complaintsAgainst", "accidents"],
+    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "km", "gpsDays", "noGpsDays", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "lateDeliveries", "lateArrivals", "complaintsAgainst", "accidents"],
     chart: ["recolhas", "entregas", "movements"],
-    weights: { evalPoints: 1, overLimitDays: -10, occurrences: 1 },
+    // 14 out 2026: os dias acima do limite deixaram de descontar aqui (era −10): cada EXCESSO
+    // já desconta −10 nos pontos da avaliação, que entram nesta aba — senão contava a dobrar.
+    // A coluna fica a mostrar; volta a contar em Editar pesos, se se quiser.
+    weights: { evalPoints: 1, occurrences: 1 },
   },
 };
 
@@ -446,6 +457,49 @@ export function withTabOverrides(all: RankWeightOverrides | null | undefined, gr
   return next;
 }
 
+/**
+ * 14 out 2026 (Jorge: "a tabela fica toda apertada à esquerda"): reparte uma
+ * lista por `cols` colunas seguidas e equilibradas (a 1.ª fica com o resto),
+ * para a tabela dos pesos ocupar a largura toda no computador; no telemóvel
+ * as colunas ficam umas por baixo das outras, pela mesma ordem. PURA.
+ */
+export function balancedColumns<T>(list: readonly T[], cols: number): T[][] {
+  const n = Math.max(1, Math.floor(cols) || 1);
+  if (list.length === 0) return [];
+  const per = Math.ceil(list.length / n);
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += per) out.push(list.slice(i, i + per));
+  return out;
+}
+
+/**
+ * 14 out 2026 (Jorge sobre o detalhe de uma pessoa: "8 dias, 80 atrasos, 141
+ * km/h, 2 dias com GPS — de onde vem isto?"): o porquê dos números que não se
+ * explicam sozinhos — de que são feitos os atrasos e porque faltam dias de GPS. PURA.
+ */
+export function explainPersonTotals(t: Partial<Record<PerfMetric, number>>): string[] {
+  const nf = new Intl.NumberFormat("pt-PT", { maximumFractionDigits: 1 });
+  const n = (k: PerfMetric) => Number(t[k] ?? 0) || 0;
+  const out: string[] = [];
+  if (n("delays") > 0) {
+    const parts = [
+      n("lateDeliveries") > 0 ? `${nf.format(n("lateDeliveries"))} entrega(s) a mais de 15 min do pedido do cliente` : null,
+      n("lateArrivals") > 0 ? `${nf.format(n("lateArrivals"))} entrada(s) no ponto depois da hora da escala` : null,
+    ].filter(Boolean);
+    out.push(`Atrasos ${nf.format(n("delays"))}${parts.length ? ` = ${parts.join(" + ")}` : ""}. Cada um −5 na avaliação.`);
+  }
+  if (n("noGpsDays") > 0) {
+    const noZ = n("noZelloDays"), other = n("noGpsDays") - noZ;
+    const why = [
+      noZ > 0 ? `${nf.format(noZ)} sem Zello ligado à pessoa (nem Zello na ficha, nem PDA lido com o QR nesse dia) — liga-o em Atividade diária → Ao vivo → "Utilizadores Zello ↔ Pessoas"` : null,
+      other > 0 ? `${nf.format(other)} com Zello ou PDA mas sem GPS recolhido (Zello ou localização desligados, sem sinal, ou a recolha ainda não chegou a esse dia)` : null,
+    ].filter(Boolean);
+    out.push(`${nf.format(n("noGpsDays"))} dia(s) de trabalho sem GPS: ${why.join("; ")}.`);
+  }
+  if (n("speedAlerts") > 0) out.push(`Excessos de velocidade: ${nf.format(n("speedAlerts"))} (−10 cada na avaliação).`);
+  return out;
+}
+
 /** "+1", "−20", "+0,5", "0" (o sinal menos tipográfico, vírgula decimal). PURA. */
 export function signedWeight(n: number): string {
   const abs = String(Math.abs(Math.round(n * 10) / 10)).replace(".", ",");
@@ -469,6 +523,32 @@ export function rosterGroup(base: PerfGroup | null, roster: { days: number; tlDa
  */
 export function kmWithoutMoves(t: Pick<PerfTotals, "km" | "recolhas" | "entregas" | "movements"> & Partial<Pick<PerfTotals, "spotChanges">>): boolean {
   return t.km > 0 && t.recolhas + t.entregas + t.movements + (t.spotChanges ?? 0) === 0;
+}
+
+/**
+ * 14 out 2026: um dia de GPS (uma linha do Zello ou a parte de um PDA) está
+ * acima do limite? As linhas recolhidas com a regra nova (metricsVersion ≥ 5)
+ * pelos EXCESSOS (pontos seguidos, sem picos falsos — shared/speedRules.ts);
+ * as antigas só têm a velocidade máxima do dia, comparada com o limite em
+ * vigor (`approx` — sem o filtro de picos). Sem limite: nunca. PURA.
+ */
+export function gpsDayOverLimit(g: { metricsVersion?: unknown; violations?: unknown; maxSpeed?: unknown }, threshold: number | null): { over: boolean; approx: boolean } {
+  if ((Number(g.metricsVersion) || 0) >= SPEED_EXCESS_METRICS_VERSION) return { over: (Number(g.violations) || 0) > 0, approx: false };
+  const over = threshold != null && (Number(g.maxSpeed) || 0) > threshold;
+  return { over, approx: over };
+}
+
+/** Dias de Lisboa tocados por um check-in de PDA (UTC; sem saída = até agora; no máximo 4). PURA. */
+export function lisbonDaysTouched(start: unknown, end: unknown, nowMs: number = Date.now()): string[] {
+  const ms = (v: unknown) => (v instanceof Date ? v.getTime() : Date.parse(`${String(v ?? "").trim().replace(" ", "T").slice(0, 19)}Z`));
+  const a = ms(start);
+  if (!Number.isFinite(a)) return [];
+  const raw = end == null || end === "" ? nowMs : ms(end);
+  const b = Number.isFinite(raw) && raw > a ? raw : a;
+  const out: string[] = [];
+  const last = lisbonDayOf(b);
+  for (let d = lisbonDayOf(a), i = 0; i < 4 && d <= last; i++, d = addDays(d, 1)) out.push(d);
+  return out;
 }
 
 /** Abaixo disto de horas no período não há "por hora" (dá números absurdos). */
