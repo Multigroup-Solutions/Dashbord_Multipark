@@ -226,9 +226,9 @@ export function AnswerReview({ review }: { review: Array<{ questionId: number; q
           </p>
           <div className="mt-2 flex flex-wrap gap-2 text-xs">
             {r.yourAnswer ? (
-              <Badge variant="outline" className={r.correct ? "border-green-400" : "border-red-400"}>A tua: {r.yourAnswer}. {r.options[r.yourAnswer]}</Badge>
+              <Badge variant="outline" className={`whitespace-normal break-words text-left justify-start ${r.correct ? "border-green-400" : "border-red-400"}`}>A tua: {r.yourAnswer}. {r.options[r.yourAnswer]}</Badge>
             ) : <Badge variant="outline" className="border-red-400">Sem resposta</Badge>}
-            {!r.correct && <Badge className="bg-green-100 text-green-800">Correta: {r.correctOption}. {r.options[r.correctOption]}</Badge>}
+            {!r.correct && <Badge className="whitespace-normal break-words text-left justify-start bg-green-100 text-green-800">Correta: {r.correctOption}. {r.options[r.correctOption]}</Badge>}
           </div>
           {r.explanation && <p className="mt-2 text-xs text-muted-foreground">{r.explanation}</p>}
         </div>

@@ -93,9 +93,9 @@ function MandatoryTraining({ data, loading, error, onRetry, retrying, onOpenItem
                 const Icon = ITEM_ICONS[it.itemType] ?? BookOpen;
                 return (
                   <div key={it.id} className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg border">
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
                       {it.completedAt ? <CheckCircle className="w-5 h-5 text-green-600 shrink-0" /> : <Icon className="w-5 h-5 text-muted-foreground shrink-0" />}
-                      <span className={`truncate ${it.completedAt ? "text-muted-foreground line-through" : ""}`}>{it.title}</span>
+                      <span className={`min-w-0 break-words ${it.completedAt ? "text-muted-foreground line-through" : ""}`}>{it.title}</span>
                       <Badge variant="outline" className="text-xs">{ITEM_TYPE_LABELS[it.itemType] ?? it.itemType}</Badge>
                       {!it.required && !it.unavailable && <Badge variant="secondary" className="text-xs">Opcional</Badge>}
                       {it.unavailable && <Badge variant="secondary" className="text-xs" title="Foi retirado — já não é preciso para concluir o percurso">Já não conta</Badge>}

@@ -163,7 +163,7 @@ export function AreaReviewDialog({ open, onOpenChange, items, inUse }: {
             <div key={`${r.itemType}:${r.id}`} className="rounded-lg border p-3 space-y-2">
               <p className="text-sm font-medium flex items-center gap-2 min-w-0">
                 {r.itemType === "video" ? <Play className="w-4 h-4 text-primary shrink-0" /> : <BookOpen className="w-4 h-4 text-primary shrink-0" />}
-                <span className="truncate">{r.title}</span>
+                <span className="min-w-0 break-words">{r.title}</span>
               </p>
               <AreaFields idPrefix={`rev-${r.itemType}-${r.id}`} area={r.area} subarea={r.subarea} inUse={inUse}
                 onChange={(v) => setRows((p) => p.map((x, j) => (j === i ? { ...x, ...v } : x)))} />
@@ -244,7 +244,7 @@ export function TrainingFinder({ done, onOpenItem, onQuizTopic }: { done: DoneSe
                 {data.kb.map((k) => (
                   <button key={k.docId} type="button" onClick={() => openKb(k.docId)} className="w-full text-left flex items-center gap-2 rounded-lg border p-2 text-sm hover:bg-accent/50 min-w-0">
                     <FileText className="w-4 h-4 text-primary shrink-0" />
-                    <span className="truncate flex-1 min-w-0">{k.title}{k.section && k.section !== k.title ? ` — ${k.section}` : ""}</span>
+                    <span className="line-clamp-2 break-words flex-1 min-w-0">{k.title}{k.section && k.section !== k.title ? ` — ${k.section}` : ""}</span>
                     <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
                   </button>
                 ))}
@@ -267,8 +267,8 @@ function FinderRow({ item, done, onOpen, primary }: { item: any; done: DoneSet; 
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-2", !primary && "rounded-lg border p-2")}>
       <div className="min-w-0 flex-1 space-y-1">
-        <p className={cn("flex items-center gap-2 min-w-0", primary ? "font-semibold" : "text-sm font-medium")}>
-          <Icon className="w-4 h-4 text-primary shrink-0" /><span className="truncate">{item.title}</span>
+        <p className={cn("flex items-start gap-2 min-w-0", primary ? "font-semibold" : "text-sm font-medium")}>
+          <Icon className="w-4 h-4 text-primary shrink-0 mt-0.5" /><span className="min-w-0 break-words">{item.title}</span>
           {isDone && <CheckCircle className="w-4 h-4 text-green-600 shrink-0" aria-label="Já feita" />}
         </p>
         <div className="flex flex-wrap gap-1">
@@ -352,9 +352,9 @@ export function AreaCatalog({ done, onOpenItem }: { done: DoneSet; onOpenItem: (
                       return (
                         <div key={i.key} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
                           <div className="min-w-0 flex-1">
-                            <p className="flex items-center gap-2 min-w-0 text-sm font-medium">
-                              {isDone ? <CheckCircle className="w-4 h-4 text-green-600 shrink-0" /> : <Icon className="w-4 h-4 text-primary shrink-0" />}
-                              <span className={cn("truncate", isDone && "text-muted-foreground")}>{i.title}</span>
+                            <p className="flex items-start gap-2 min-w-0 text-sm font-medium">
+                              {isDone ? <CheckCircle className="w-4 h-4 text-green-600 shrink-0 mt-0.5" /> : <Icon className="w-4 h-4 text-primary shrink-0 mt-0.5" />}
+                              <span className={cn("min-w-0 break-words", isDone && "text-muted-foreground")}>{i.title}</span>
                             </p>
                             <div className="mt-1 flex flex-wrap gap-1">
                               {sub == null && <Badge variant="outline" className="text-xs">{i.subarea || NO_SUBAREA_LABEL}</Badge>}

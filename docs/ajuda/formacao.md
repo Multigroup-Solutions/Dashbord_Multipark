@@ -11,7 +11,8 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
 **Fazer a tua formação**
 1. Menu **Pessoas → Formação** → separador **A minha formação**. O número a vermelho é o que tens por fazer.
 2. **Procurar formação**: escreve o que queres aprender (ex.: "fechar a caixa", "entregar um carro") e carrega em **Procurar**. Aparece **Faz esta formação** com a melhor e, por baixo, outras que podem ajudar e documentos da base de conhecimento. **Treinar com um quiz sobre isto** abre o Quiz com esse tema.
-   - Com a IA ligada, as sugestões são escolhidas pelo sentido (diz "Sugestões escolhidas pela IA"); sem IA, ou se ela falhar, procura pelas palavras.
+   - Com a IA ligada, as sugestões são escolhidas pelo sentido (diz "Sugestões escolhidas pela IA"); sem IA, ou se ela falhar, procura pelas palavras (no título, na área, na categoria e no texto).
+   - Quem procura muitas vezes seguidas (mais de 6 por minuto ou 60 por dia) fica só com a pesquisa por palavras até passar o limite.
 3. **A tua formação obrigatória**: abre cada item do teu percurso (vídeo, manual) e marca como visto/lido. Um item marcado "Já não conta" foi retirado e não precisas dele. **Fazer** num quiz do percurso abre o Quiz já com o tema dessa formação.
 4. **Formação por área**: escolhe **Multipark** (a app: reservas, receber e entregar carros), **Dashboard** (este dashboard: caixa, passagem de turno, ponto, tarefas), **Operacional** (condução, chaves, danos, segurança) ou **Comunicação** (clientes, WhatsApp, email, rádio, reclamações) e depois a subsecção (ex.: Dashboard → Financeiro). O que ainda não tem área aparece em **Outros**. No telemóvel os botões passam para a linha de baixo.
 5. O percurso tem **prazo**: acaba às 23:59 (hora de Lisboa) do último dia. A partir de 2 dias antes do prazo recebes 1 lembrete por dia (entre as 9h e as 20h) até concluíres. Com 3 dias de atraso, o team leader e o supervisor da tua cidade são avisados.
@@ -19,7 +20,7 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
 **Quiz**
 1. Separador **Quiz** → escolhe um tema (opcional): uma área, ou escreve um tema. Carrega em **Jogar**.
 2. Com a IA ligada, **cada jogo tem 10 perguntas novas**, feitas na hora a partir da base de conhecimento e dos manuais que podes ver. A IA evita as perguntas que já tiveste. Pode demorar até meio minuto a preparar.
-3. A resposta certa nunca vai para o teu telemóvel antes de responderes: a correção é feita no servidor. Até 5 jogos por dia. Com 70% ou mais o quiz conta para o teu percurso.
+3. A resposta certa nunca vai para o teu telemóvel antes de responderes: a correção é feita no servidor. Até 5 jogos por dia: o jogo conta logo que carregas em **Jogar**, mesmo enquanto a IA prepara as perguntas (carregar várias vezes não dá jogos a mais). Com 70% ou mais o quiz conta para o teu percurso.
 4. Se a IA falhar ou estiver desligada, o jogo usa as **perguntas fixas** e aparece um aviso a dizer porquê.
 5. **As tuas últimas tentativas** → **Rever**: vês cada pergunta, a tua resposta, a certa e a explicação.
 
@@ -47,7 +48,8 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
   - Em **Manuais**, o seletor principal passou a ser a área e a subsecção; o tipo (Manuais, Procedimentos, Atualizações, Notícias, Links interativos) ficou como filtro ao lado.
 - **Quiz** (quem gere a formação):
   - **Perguntas fixas** (antes "Gerir perguntas") ficam de **reserva**, para quando a IA falha ou está desligada; continuas a criar, editar, publicar e arquivar.
-  - **Perguntas feitas pela IA** mostra as últimas 40 da tua cidade, com a certa, a fonte e se a pessoa acertou. **Guardar nas fixas** copia uma boa para as perguntas fixas como rascunho.
+  - **Perguntas feitas pela IA** mostra as últimas 40 da tua cidade, só de jogos já acabados, com a certa, a fonte e se a pessoa acertou. As que saíram de documentos que tu não podes ver (papéis ou cidades marcados) ficam escondidas.
+  - **Guardar nas fixas** copia uma boa para as perguntas fixas como rascunho. Se a pergunta saiu de um **documento restrito** (aparece "Documento restrito"), a app avisa que as perguntas fixas, depois de publicadas, são vistas por toda a gente e pede confirmação. Uma pergunta que já está nas fixas não é copiada outra vez.
   - Interruptor **IA: quiz novo em cada jogo** em Definições → Automações (ligado).
 - **FAQs da base de conhecimento** (quem gere a formação, separador **FAQs**):
   - **Gerar agora** escolhe 2 ou 3 documentos da base de conhecimento (primeiro os atualizados há pouco e os que ainda não deram FAQ) e a IA escreve até 3 FAQs novas, com resposta curta e a ligação ao documento. Entram logo publicadas, marcadas **IA**.
@@ -55,6 +57,7 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
   - Nunca repete uma FAQ que existe ou que arquivaste: **Arquivar** uma FAQ da IA é dizer "esta não".
   - Para correr sozinho **uma vez por semana** (segunda a partir das 09:30), liga **Formação: FAQs novas da base de conhecimento (semanal)** em Definições → Automações. Vem **desligado**. Precisa também de **IA: FAQs a partir da base de conhecimento** (ligado).
   - O cartão diz se o semanal está ligado e o que aconteceu da última vez.
+  - **Gerar agora** pode ser usado no máximo 3 vezes por hora e 8 por dia (para toda a gente junta). Corre uma geração de cada vez: se a semanal ou outra pessoa já estiver a gerar, aparece "já há uma geração a correr" — tenta daqui a um minuto.
 - **Arquivar** (antes "Eliminar") vídeos, manuais, FAQs, perguntas e percursos tira-os das listas, mas nada se apaga. Um vídeo ou manual arquivado deixa de contar nos percursos, por isso ninguém fica preso por ele.
 - O **tutor IA** responde a partir dos manuais e pode ser desligado em Definições → Automações. O mesmo interruptor liga as sugestões da IA em **Procurar formação**.
 - Os lembretes por email respeitam o **Não enviar email** da ficha.

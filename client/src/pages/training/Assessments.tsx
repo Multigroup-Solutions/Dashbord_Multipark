@@ -12,7 +12,7 @@ import { Progress } from "@/components/ui/progress";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { toast } from "sonner";
-import { Award, BookOpen, CheckCircle, ChevronDown, Clock, Copy, Download, Eye, Gamepad2, GraduationCap, History, Pencil, Play, Plus, Settings, Sparkles, Star, Trash2, Trophy, X, XCircle } from "lucide-react";
+import { Award, BookOpen, CheckCircle, ChevronDown, Clock, Copy, Download, Eye, Gamepad2, GraduationCap, History, Info, Lock, Pencil, Play, Plus, Settings, Sparkles, Star, Trash2, Trophy, X, XCircle } from "lucide-react";
 import { AreaPills, type AreaFilter } from "./areas";
 import { TRAINING_AREA_LABELS, type TrainingAreaId } from "@shared/trainingAreas";
 import {
@@ -98,6 +98,18 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
     onSuccess: () => { toast.success("Guardada nas perguntas fixas como rascunho — revê e publica."); void utils.training.quizQuestions.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  /** "Guardar nas fixas": as fixas são para toda a gente — pergunta de um documento restrito pede confirmação. */
+  const saveToBank = async (q: { id: number; restricted?: boolean; sourceTitle?: string | null }) => {
+    if (q.restricted) {
+      const ok = await confirm({
+        title: "Pergunta de um documento restrito",
+        description: `Saiu de ${q.sourceTitle ? `«${q.sourceTitle}», ` : "um documento "}que só alguns papéis ou cidades podem ver. As perguntas fixas, depois de publicadas, aparecem a toda a gente. Guardar mesmo assim (como rascunho)?`,
+        confirmLabel: "Guardar mesmo assim",
+      });
+      if (!ok) return;
+    }
+    copyToBank.mutate({ id: q.id, confirmRestricted: !!q.restricted });
+  };
   const rankingQ = trpc.training.quizRanking.useQuery();
   const ranking = rankingQ.data ?? [];
   const rankedIds = useMemo(() => (ranking as any[]).slice(0, 10).map((r) => r.employeeId), [ranking]);
@@ -106,7 +118,7 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
   const { data: adminQuestions = [], refetch: refetchAdmin } = trpc.training.quizQuestions.useQuery({}, { enabled: isAdmin });
   const onErr = (e: { message: string }) => toast.error(e.message);
   const start = trpc.training.startQuiz.useMutation({
-    onSuccess: (s) => { setResult(null); setSession(s); if (s.notice) toast.info(s.notice); },
+    onSuccess: (s) => { setResult(null); setSession(s); },
     onError: onErr,
   });
   const submit = trpc.training.submitQuiz.useMutation({
@@ -161,7 +173,17 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
     const header = session.source === "ai"
       ? <Badge className="bg-primary/10 text-primary border border-primary/30"><Sparkles className="w-3 h-3 mr-1" />Perguntas novas{session.topic && session.topic !== "Tudo" ? ` · ${session.topic}` : ""}</Badge>
       : <Badge variant="outline">Perguntas fixas</Badge>;
-    return <QuestionRunner key={session.sessionId} session={session} header={header} pending={submit.isPending} remainingSeconds={null} onSubmit={(answers) => submit.mutate({ sessionId: session.sessionId, answers })} />;
+    return (
+      <div className="space-y-4">
+        {/* Reserva (IA falhou/sem conteúdo): o aviso fica à vista durante o jogo, não só num toast. */}
+        {session.notice && (
+          <div role="status" className="max-w-2xl mx-auto flex items-start gap-2 rounded-lg border border-l-4 border-amber-300 border-l-amber-500 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            <Info className="w-4 h-4 shrink-0 mt-0.5" /><span className="min-w-0 break-words">{session.notice}</span>
+          </div>
+        )}
+        <QuestionRunner key={session.sessionId} session={session} header={header} pending={submit.isPending} remainingSeconds={null} onSubmit={(answers) => submit.mutate({ sessionId: session.sessionId, answers })} />
+      </div>
+    );
   }
 
   const canPlay = !!info?.ai || !!info?.published;
@@ -196,7 +218,7 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">Tema (opcional)</Label>
                 <AreaPills value={pickArea} onChange={(v) => { setPickArea(v); setTopicText(""); }} showNone={false} />
-                <Input value={topicText} maxLength={120} placeholder="Ou escreve um tema (ex.: fechar a caixa)" onChange={(e) => setTopicText(e.target.value)} />
+                <Input value={topicText} maxLength={120} placeholder="Ou escreve um tema" aria-label="Tema do quiz (ex.: fechar a caixa)" onChange={(e) => setTopicText(e.target.value)} />
               </div>
             ) : null}
             <div className="text-center">
@@ -267,7 +289,7 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
               <CardTitle className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary" />Perguntas feitas pela IA</CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">As últimas 40 (da tua cidade), para veres se estão certas. Uma boa pode ir para as perguntas fixas.</p>
+              <p className="text-xs text-muted-foreground mt-1">As últimas 40 de jogos já acabados (da tua cidade), para veres se estão certas. Uma boa pode ir para as perguntas fixas. As que saíram de documentos que não podes ver ficam escondidas.</p>
             </div>
             <Button size="sm" variant="outline" onClick={() => setShowAiQs((v) => !v)}><ChevronDown className={`w-4 h-4 transition-transform ${showAiQs ? "rotate-180" : ""}`} />{showAiQs ? "Esconder" : "Ver"}</Button>
           </CardHeader>
@@ -283,10 +305,11 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
                       <p className="text-xs text-muted-foreground break-words">Certa: {q.correctOption}. {(q as any)[`option${q.correctOption}`]}</p>
                       <div className="flex flex-wrap items-center gap-2">
                         {q.sourceTitle && <Badge variant="outline" className="text-xs max-w-full truncate">Fonte: {q.sourceTitle}</Badge>}
+                        {q.restricted && <Badge variant="outline" className="text-xs border-amber-400 text-amber-800" title="Saiu de um documento que só alguns papéis ou cidades veem"><Lock className="w-3 h-3 mr-1" />Documento restrito</Badge>}
                         {q.topic && q.topic !== "Tudo" && <Badge variant="secondary" className="text-xs">{q.topic}</Badge>}
                         {q.answered === "right" && <Badge className="text-xs bg-green-100 text-green-800">Acertada</Badge>}
                         {q.answered === "wrong" && <Badge className="text-xs bg-red-100 text-red-700">Errada</Badge>}
-                        <Button size="sm" variant="ghost" className="ml-auto" disabled={copyToBank.isPending} onClick={() => copyToBank.mutate({ id: q.id })}><Copy className="w-4 h-4" />Guardar nas fixas</Button>
+                        <Button size="sm" variant="ghost" className="ml-auto" disabled={copyToBank.isPending} onClick={() => void saveToBank(q)}><Copy className="w-4 h-4" />Guardar nas fixas</Button>
                       </div>
                     </div>
                   ))}
@@ -312,8 +335,8 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
           <CardContent>
             <div className="space-y-2 max-h-[32rem] overflow-y-auto">
               {questions.map((q) => (
-                <div key={q.id} className={`flex items-center justify-between gap-2 p-3 border rounded-lg ${q.published === 0 ? "border-dashed bg-amber-50/40" : ""}`}>
-                  <div className="min-w-0">
+                <div key={q.id} className={`flex flex-wrap items-center justify-between gap-2 p-3 border rounded-lg ${q.published === 0 ? "border-dashed bg-amber-50/40" : ""}`}>
+                  <div className="min-w-[12rem] flex-1">
                     <p className="font-medium text-sm">{q.question}</p>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {q.published === 0 && <Badge className="bg-amber-100 text-amber-800">Rascunho{q.sourceManualId || q.sourceKbDocId ? " (IA)" : ""}</Badge>}

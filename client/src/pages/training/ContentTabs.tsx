@@ -529,7 +529,7 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
                   <div className="flex items-center gap-3 min-w-0">
                     <Icon className="w-5 h-5 text-primary shrink-0" />
                     <div className="min-w-0">
-                      <h3 className="font-semibold truncate">{m.title}</h3>
+                      <h3 className="font-semibold line-clamp-2 break-words">{m.title}</h3>
                       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                         <span>{fmtPTDate(m.createdAt)}</span>
                         <AreaBadge area={m.areaEffective} subarea={m.subareaEffective} guessed={isAdmin && m.areaGuessed} />
@@ -679,7 +679,7 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
       {isAdmin && (
         <Card>
           <CardContent className="p-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0 flex-1 text-sm">
+            <div className="min-w-[14rem] flex-1 text-sm">
               <p className="font-medium flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary shrink-0" />FAQs da base de conhecimento</p>
               <p className="text-xs text-muted-foreground">
                 Semanal: {autoQ.data?.weeklyOn ? "ligado (segunda a partir das 09:30)" : "desligado"} · IA: {autoQ.data?.aiOn ? "ligada" : "desligada"}
@@ -708,7 +708,7 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
             <Card key={f.id} className="overflow-hidden">
               <CardContent className="p-0">
                 <button className="w-full p-4 text-left flex items-center justify-between gap-2 hover:bg-accent/50 transition-colors" aria-expanded={expandedId === f.id} onClick={() => setExpandedId(expandedId === f.id ? null : f.id)}>
-                  <span className="font-medium flex items-center gap-2 min-w-0"><HelpCircle className="w-4 h-4 text-primary shrink-0" /><span className="truncate">{f.question}</span></span>
+                  <span className="font-medium flex items-start gap-2 min-w-0"><HelpCircle className="w-4 h-4 text-primary shrink-0 mt-0.5" /><span className="min-w-0 break-words">{f.question}</span></span>
                   <span className="flex items-center gap-1 shrink-0">
                     {f.isAi && <Badge variant="outline" className="text-xs" title="Escrita pela IA a partir da base de conhecimento"><Sparkles className="w-3 h-3 mr-1" />IA</Badge>}
                     <ChevronRight className={`w-4 h-4 transition-transform ${expandedId === f.id ? "rotate-90" : ""}`} />
