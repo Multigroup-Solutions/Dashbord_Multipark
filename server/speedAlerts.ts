@@ -32,7 +32,7 @@ export interface SpeedAlertInput {
   displayName: string;
   /** dia de Lisboa da recolha */
   day: string;
-  /** o limite que os excessos passaram, JÁ com a tolerância (ex.: 132 = 120 + 10 %) */
+  /** o limite que os excessos passaram, JÁ com a tolerância (ex.: 120 com 0 %; 132 = 120 + 10 %) */
   limitKmh: number;
   excesses: SpeedExcess[];
   /** quem tinha o Zello nesse instante (s) — a parte do PDA, o dono ou a pessoa da linha */

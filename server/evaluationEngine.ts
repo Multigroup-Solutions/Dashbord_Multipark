@@ -187,15 +187,18 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
   } catch { /* sem a tabela das reclamações: fica a regra antiga (dentro do período) */ }
 
   // 14 out 2026: a velocidade máxima do GPS do Zello por pessoa e dia (as partes do PDA; sem partes, a linha
-  // do dia) e o limiar (Definições → "Limite de velocidade (GPS do Zello)", 120 km/h + 10 % = 132 por omissão)
+  // do dia) e o limiar (Definições → "Limite de velocidade (GPS do Zello)", acima de 120 km/h por omissão)
   // — um dia acima conta 1 excesso de velocidade. Desde a recolha com metricsVersion 5 a máxima já vem sem
   // picos falsos e, acima do limite, só de um excesso confirmado (shared/speedRules.ts).
+  // Tarefa 62 (a "trava da linha GPS"): com o limiar com que a linha foi recolhida (as partes pela historyId);
+  // sem ele, a linha conta como recolhida a 132 — nunca se conta um excesso que a recolha não confirmou.
   let gpsRows: any[] = [];
   try {
     gpsRows = [
-      ...rowsOf(await db.execute(sql`SELECT employeeId, day, maxSpeed FROM driver_day_shares
-          WHERE employeeId IS NOT NULL AND day >= ${startDay} AND day <= ${endDay}`)),
-      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.maxSpeed FROM daily_driver_history h
+      ...rowsOf(await db.execute(sql`SELECT s.employeeId, s.day, s.maxSpeed, h.speedThresholdKmh FROM driver_day_shares s
+          LEFT JOIN daily_driver_history h ON h.id = s.historyId
+          WHERE s.employeeId IS NOT NULL AND s.day >= ${startDay} AND s.day <= ${endDay}`)),
+      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.maxSpeed, h.speedThresholdKmh FROM daily_driver_history h
           WHERE h.employeeId IS NOT NULL AND DATE(h.date) >= ${startDay} AND DATE(h.date) <= ${endDay}
             AND NOT EXISTS (SELECT 1 FROM driver_day_shares s WHERE s.historyId = h.id)`)),
     ];
@@ -249,7 +252,10 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       at: toUtcStr(r.at), penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null,
       driverPenaltyPoints: Number(r.driverPoints ?? 0),
     })),
-    gpsDays: gpsRows.map((r) => ({ employeeId: Number(r.employeeId), day: typeof r.day === "string" ? r.day.slice(0, 10) : r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day ?? "").slice(0, 10), maxSpeed: Number(r.maxSpeed ?? 0) })),
+    gpsDays: gpsRows.map((r) => ({
+      employeeId: Number(r.employeeId), day: typeof r.day === "string" ? r.day.slice(0, 10) : r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day ?? "").slice(0, 10),
+      maxSpeed: Number(r.maxSpeed ?? 0), collectedThresholdKmh: r.speedThresholdKmh != null ? Number(r.speedThresholdKmh) : null,
+    })),
     speedThresholdKmh: speedLimitKmh,
     speedCalendarContext: rowsOf(speedContext).filter((r) => r.employeeId != null).map((r) => ({ employeeId: Number(r.employeeId), at: toUtcStr(r.createdAt) })),
     speedAlerts: rowsOf(speed).map((r) => ({ id: Number(r.id), employeeId: r.employeeId != null ? Number(r.employeeId) : null, createdAt: toUtcStr(r.createdAt) })),

@@ -25,7 +25,8 @@ vi.mock("./db", () => {
       if (t.includes("multipark_booking_history")) return [state.localHistory];
       // 14 out 2026: o contexto das 00h–03h do 1.º dia (alertas/penalizações de velocidade) e o GPS do dia
       if (t.includes("UNION ALL")) return [(globalThis as any).__speedContext ?? []];
-      if (t.startsWith("SELECT employeeId, day, maxSpeed FROM driver_day_shares")) return [(globalThis as any).__gps ?? []];
+      // tarefa 62: as partes leem o limiar da recolha pela historyId (a trava da linha GPS)
+      if (t.startsWith("SELECT s.employeeId, s.day, s.maxSpeed, h.speedThresholdKmh FROM driver_day_shares s")) return [(globalThis as any).__gps ?? []];
       if (t.includes("employee_penalties")) return [state.penalties];
       if (t.includes("d.complaintId IN")) return [state.relComplaints];
       if (t.includes("FROM speed_alerts WHERE employeeId IS NOT NULL AND id IN")) return [state.relAlerts];
@@ -46,7 +47,7 @@ vi.mock("./evaluationIdentity", async (original) => {
 });
 vi.mock("./extraRates", () => ({ loadExtraRates: async () => ({}), rateFor: () => 10 }));
 vi.mock("./extrasDia", () => ({ TL_WORKING_DAYS_PER_MONTH: 22 }));
-// 14 out 2026: o limiar de velocidade (132 = omissão); `state.speedLimit = null` simula a leitura que falhou
+// 14 out 2026: o limiar de velocidade (132 = a omissão antiga); `state.speedLimit = null` simula a leitura que falhou
 vi.mock("./dayActivity", () => ({ speedThreshold: async () => ((globalThis as any).__speedLimit === undefined ? 132 : (globalThis as any).__speedLimit) }));
 
 import { computeRange, recomputeRange, runEvaluationRecompute } from "./evaluationEngine";

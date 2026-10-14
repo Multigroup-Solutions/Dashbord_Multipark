@@ -5,7 +5,7 @@
  *  - "Porque é que os 141 não dão aviso nenhum, nem tiram pontos, nem nada?";
  *  - "80 atrasos em 8 dias? 2 dias com GPS em 8 de trabalho?";
  *  - "Como se contam os pontos desta aba" apertado à esquerda.
- * Testa: o limite (unidades, omissão 120 + 10 % = 132, Definições), os picos
+ * Testa: o limite (unidades, omissão 120 sem tolerância desde a tarefa 62, Definições), os picos
  * falsos (com trajetos realistas), os excessos (pontos seguidos), o aviso
  * (interruptor desligado por omissão), a penalização (a regra do #381: 1
  * excesso por dia acima do limite, sem contar a dobrar com os alertas; o
@@ -17,6 +17,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SPEED_RULE, EXCESS_MERGE_GAP_S, GPS_ABSURD_KMH, POSITION_MAX_GAP_S, SPEED_EXCESS_METRICS_VERSION, SPEED_RULE_SETTING_KEY,
+  LEGACY_COLLECTED_THRESHOLD_KMH, SPEED_THRESHOLD_METRICS_VERSION, gpsDayOverThreshold, gpsDayThresholdOf,
   speedExcesses, speedSpikes, speedThresholdOf, trustedMaxSpeed, type SpeedPoint, type SpeedRule,
 } from "../shared/speedRules";
 import { validateSetting, SETTINGS, automationFlagDefault, AUTOMATION_FLAGS } from "../shared/appSettings";
@@ -40,12 +41,14 @@ const track = (speeds: number[], step = 10, o: { lat0?: number; accurate?: boole
 };
 /** Uma regra sem tolerância (120 km/h), para testar a mecânica dos excessos com números redondos. */
 const R120: SpeedRule = { limitKmh: 120, tolerancePercent: 0, minPoints: 2 };
+/** A omissão de antes da tarefa 62 (120 + 10 % = 132). */
+const R132: SpeedRule = { limitKmh: 120, tolerancePercent: 10, minPoints: 2 };
 
 describe("o limite: unidades, omissão e Definições", () => {
-  it("120 km/h + 10 % = 132 por omissão (a mesma do #381), 2 pontos seguidos; tudo em km/h", () => {
-    expect(DEFAULT_SPEED_RULE).toEqual({ limitKmh: 120, tolerancePercent: 10, minPoints: 2 });
-    expect(speedThresholdOf(DEFAULT_SPEED_RULE)).toBe(132);
-    expect(speedThresholdOf(R120)).toBe(120);
+  it("tarefa 62: 120 km/h sem tolerância por omissão (conta acima de 120), 2 pontos seguidos; tudo em km/h", () => {
+    expect(DEFAULT_SPEED_RULE).toEqual({ limitKmh: 120, tolerancePercent: 0, minPoints: 2 });
+    expect(speedThresholdOf(DEFAULT_SPEED_RULE)).toBe(120);
+    expect(speedThresholdOf(R132)).toBe(132);
     // o Zello dá km/h (pedimos speedUnits=kmh) — nada de ×3,6
     expect(src("server/zelloGps.ts")).toContain("A API do Zello Work devolve a velocidade JÁ em km/h");
     expect(src("server/zello.ts")).toContain('speedUnits: "kmh"');
@@ -54,7 +57,7 @@ describe("o limite: unidades, omissão e Definições", () => {
     const def = SETTINGS[SPEED_RULE_SETTING_KEY];
     expect(def.group).toBe("operacao");
     expect(def.wiring).toBe("live");
-    expect(def.defaultValue).toEqual({ limitKmh: 120, tolerancePercent: 10, minPoints: 2 });
+    expect(def.defaultValue).toEqual({ limitKmh: 120, tolerancePercent: 0, minPoints: 2 });
     expect(validateSetting(SPEED_RULE_SETTING_KEY, { limitKmh: 100, tolerancePercent: 5, minPoints: 3 })).toEqual({ ok: true, value: { limitKmh: 100, tolerancePercent: 5, minPoints: 3 } });
     expect(validateSetting(SPEED_RULE_SETTING_KEY, { limitKmh: 999, tolerancePercent: 0, minPoints: 2 }).ok).toBe(false);
     expect(validateSetting(SPEED_RULE_SETTING_KEY, { limitKmh: 120, tolerancePercent: 0, minPoints: 0 }).ok).toBe(false);
@@ -64,7 +67,8 @@ describe("o limite: unidades, omissão e Definições", () => {
     expect(src("server/dayActivity.ts")).toMatch(/export async function speedThreshold[\s\S]{0,200}speedRuleRead\(\)\)\?\.threshold \?\? null/);
     expect(src("server/dayActivity.ts")).not.toMatch(/getDefaultSpeedLimit/);
     const col = src("server/jobs/dailyDriverCollection.ts");
-    expect(col).not.toMatch(/getDefaultSpeedLimit|speedThresholdKmh|: 999/);
+    // (a função antiga speedThresholdKmh() de gpsRules saiu; a coluna speedThresholdKmh da 0680 é outra coisa)
+    expect(col).not.toMatch(/getDefaultSpeedLimit|speedThresholdKmh\(|: 999/);
     expect(col).toMatch(/const \{ rule: speedRule \} = await speedRuleNow\(\);/);
     expect(src("server/operationalRouter.ts")).toMatch(/checkNow[\s\S]{0,800}speedRuleNow\(\)/);
     const rule = src("server/speedRule.ts");
@@ -85,15 +89,17 @@ vi.mock("./appSettings", async (original) => ({
 }));
 
 describe("server/speedRule.ts: ler o limite", () => {
-  it("sem valor gravado: a omissão (132); com valor: o dele; leitura falhada: null para contar, a omissão para a recolha", async () => {
+  it("sem valor gravado: a omissão (120, tarefa 62); com valor: o dele; leitura falhada: null para contar, a omissão para a recolha", async () => {
     const { speedRuleRead, speedRuleNow } = await import("./speedRule");
     appSettingsMock.fresh = null;
+    expect((await speedRuleRead())?.threshold).toBe(120);
+    appSettingsMock.fresh = { value: { limitKmh: 120, tolerancePercent: 10, minPoints: 2 } };
     expect((await speedRuleRead())?.threshold).toBe(132);
     appSettingsMock.fresh = { value: { limitKmh: 120, tolerancePercent: 0, minPoints: 3 } };
     expect(await speedRuleRead()).toEqual({ rule: { limitKmh: 120, tolerancePercent: 0, minPoints: 3 }, threshold: 120 });
     appSettingsMock.fresh = "erro";
     expect(await speedRuleRead()).toBeNull();
-    expect((await speedRuleNow()).threshold).toBe(132);
+    expect((await speedRuleNow()).threshold).toBe(120);
     appSettingsMock.fresh = null;
   });
 });
@@ -131,7 +137,7 @@ describe("picos falsos do GPS (explícitos, testados)", () => {
   });
 });
 
-describe("trajetos realistas (limite por omissão: 132 km/h)", () => {
+describe("trajetos realistas (limite por omissão: 120 km/h desde a tarefa 62)", () => {
   it("autoestrada a 125–150 km/h durante 5 minutos (um ponto a cada 10 s): UM excesso, máxima 150", () => {
     const speeds = Array.from({ length: 31 }, (_, i) => 125 + Math.round(12.5 * (1 + Math.sin(i / 3)))); // 125…150
     const p = track([90, 110, ...speeds, 110, 90], 10);
@@ -142,10 +148,10 @@ describe("trajetos realistas (limite por omissão: 132 km/h)", () => {
     expect(ex[0].confirmedBy).toBe("points");
     expect(trustedMaxSpeed(p, { rule: DEFAULT_SPEED_RULE }).maxSpeed).toBe(150);
   });
-  it("autoestrada a 125–131 (abaixo de 132): nada; com a tolerância a 0 (limite 120): um excesso", () => {
+  it("autoestrada a 125–131: com a omissão (120, sem tolerância) um excesso; com a antiga (132) nada", () => {
     const p = track([100, 125, 128, 131, 127, 100], 10);
-    expect(speedExcesses(p, DEFAULT_SPEED_RULE)).toEqual([]);
-    expect(speedExcesses(p, R120)).toHaveLength(1);
+    expect(speedExcesses(p, DEFAULT_SPEED_RULE)).toHaveLength(1);
+    expect(speedExcesses(p, R132)).toEqual([]);
   });
   it("um pico isolado de 300 no meio de um troço a 100: não conta e não estraga a máxima", () => {
     const p = track([100, 102, 300, 101, 99], 10);
@@ -209,10 +215,13 @@ describe("a recolha diária grava excessos (não pontos) e a máxima sem picos",
   it("o 141 de 4 s entre 40 e 42 é pico: a máxima é 131 e há 1 excesso (125 → 131) com o limite a 120", () => {
     expect(processGeoJsonHistory(data, R120).maxSpeed).toBe(131);
     expect(countSpeedViolations(data, R120)).toBe(1);
-    // com a omissão (132) não há excesso, e a máxima continua 131
-    expect(countSpeedViolations(data, DEFAULT_SPEED_RULE)).toBe(0);
-    expect(processGeoJsonHistory(data, DEFAULT_SPEED_RULE).maxSpeed).toBe(131);
-    expect(DRIVER_METRICS_VERSION).toBe(SPEED_EXCESS_METRICS_VERSION);
+    // com a omissão antiga (132) não há excesso, e a máxima continua 131; com a nova (120) há 1
+    expect(countSpeedViolations(data, R132)).toBe(0);
+    expect(processGeoJsonHistory(data, R132).maxSpeed).toBe(131);
+    expect(countSpeedViolations(data, DEFAULT_SPEED_RULE)).toBe(1);
+    // tarefa 62: versão 6 = + o limiar da recolha; os excessos são de confiança desde a 5
+    expect(DRIVER_METRICS_VERSION).toBe(SPEED_THRESHOLD_METRICS_VERSION);
+    expect(SPEED_THRESHOLD_METRICS_VERSION).toBe(6);
     expect(SPEED_EXCESS_METRICS_VERSION).toBe(5);
   });
   it("PDA partilhado: cada pessoa com os seus excessos e a sua máxima", () => {
@@ -284,7 +293,7 @@ describe("o aviso: interruptor GPS_SPEED_ALERTS, desligado por omissão", () => 
     const other = deps({ on: true, seen: [stamp(ex[0].startTs - 3600)] });
     expect((await recordSpeedExcessesWith(other.d, input)).outcome).toBe("notified");
   });
-  it("o aviso diz o limite que se passou, JÁ com a tolerância (132 por omissão), não o de 120", () => {
+  it("o aviso diz o limite que se passou, JÁ com a tolerância (com 10 % seria 132, não 120)", () => {
     expect(src("server/jobs/dailyDriverCollection.ts")).toContain("limitKmh: speedThresholdOf(speedRule), excesses,");
   });
   it("o \"verificar agora\" manual (sem ecrã) também só avisa com o interruptor, e diz o limite com a tolerância", () => {
@@ -335,12 +344,58 @@ describe("a penalização: 1 excesso (−10) por dia acima do limite, sem contar
   });
 });
 
+describe("tarefa 62: a trava da linha GPS (um dia nunca conta um excesso que a recolha não confirmou)", () => {
+  const identity = buildEvaluationIdentity({ employees: [{ id: 1, fullName: "Ana Silva", userId: 10, multiparkAgentName: null, multiparkAgentUserId: null }], agentAliases: [], accountAliases: [] });
+  const base: EngineInput = {
+    startDay: "2026-11-02", endDay: "2026-11-02", identity, employees: new Map([[1, { id: 1, position: "driver", contractType: null, extraLevel: null, monthlySalary: null, projectId: 1 }]]),
+    actions: [], ponto: [], assignments: [], incidents: [], complaints: [], speedAlerts: [], penalties: [], rate: () => 10, tlWorkingDaysPerMonth: 15,
+    speedThresholdKmh: 120,
+  };
+  const over = (maxSpeed: number, collected: number | null | undefined, today = 120) =>
+    computeEmployeeDays({ ...base, speedThresholdKmh: today, gpsDays: [{ employeeId: 1, day: "2026-11-02", maxSpeed, collectedThresholdKmh: collected }] }).rows[0]?.metrics.speedingEvents ?? 0;
+  it("linha antiga (sem limiar gravado = 132) com 125 → não conta; com 133 → conta", () => {
+    expect(gpsDayThresholdOf(120, null)).toBe(LEGACY_COLLECTED_THRESHOLD_KMH);
+    expect(LEGACY_COLLECTED_THRESHOLD_KMH).toBe(132);
+    expect(over(125, null)).toBe(0);
+    expect(over(125, undefined)).toBe(0);
+    expect(over(133, null)).toBe(1);
+  });
+  it("re-dividida a 120 com 125 confirmado → conta", () => {
+    expect(over(125, 120)).toBe(1);
+    expect(gpsDayOverThreshold("125.00", 120, "120.00")).toBe(true);
+  });
+  it("linha recolhida a 120 com o limite mudado para 125 → conta a 125", () => {
+    expect(gpsDayThresholdOf(125, 120)).toBe(125);
+    expect(over(124, 120, 125)).toBe(0);
+    expect(over(126, 120, 125)).toBe(1);
+  });
+  it("sem limite de hoje (não deu para ler), nunca conta", () => {
+    expect(gpsDayThresholdOf(null, 120)).toBeNull();
+    expect(gpsDayOverThreshold(200, null, 120)).toBe(false);
+  });
+  it("a recolha (as duas passagens) e a re-divisão gravam o limiar; a Avaliação e o Desempenho leem-no (as partes pela historyId)", () => {
+    const col = src("server/jobs/dailyDriverCollection.ts");
+    expect(col).toContain("speedThresholdKmh: String(speedThresholdOf(speedRule)),");
+    expect(col).toContain("speedThresholdKmh = ${String(speedThresholdOf(speedRule))} WHERE id = ${r.id}");
+    const eng = src("server/evaluationEngine.ts");
+    expect(eng).toMatch(/SELECT s\.employeeId, s\.day, s\.maxSpeed, h\.speedThresholdKmh FROM driver_day_shares s\s+LEFT JOIN daily_driver_history h ON h\.id = s\.historyId/);
+    expect(eng).toContain("collectedThresholdKmh: r.speedThresholdKmh != null ? Number(r.speedThresholdKmh) : null");
+    expect(src("drizzle/schema.ts")).toContain("speedThresholdKmh: decimal({ precision: 6, scale: 2 }),");
+  });
+  it("GPS_SPEED_ALERTS continua desligado por omissão (D3)", () => {
+    expect(automationFlagDefault(GPS_SPEED_ALERTS_FLAG)).toBe(false);
+  });
+});
+
 describe("Desempenho: dias acima do limite, dias com e sem GPS", () => {
   it("a mesma regra da avaliação (máxima > limite); linhas antigas marcadas como aproximadas; sem limite nunca", () => {
-    expect(gpsDayOverLimit({ metricsVersion: 5, maxSpeed: 141 }, 132)).toEqual({ over: true, approx: false });
-    expect(gpsDayOverLimit({ metricsVersion: 5, maxSpeed: 131 }, 132)).toEqual({ over: false, approx: false });
-    expect(gpsDayOverLimit({ metricsVersion: 4, maxSpeed: 141 }, 132)).toEqual({ over: true, approx: true });
-    expect(gpsDayOverLimit({ metricsVersion: 4, maxSpeed: 141 }, null)).toEqual({ over: false, approx: false });
+    expect(gpsDayOverLimit({ metricsVersion: 5, maxSpeed: 141 }, 132)).toEqual({ over: true, approx: false, locked: false });
+    expect(gpsDayOverLimit({ metricsVersion: 5, maxSpeed: 131 }, 132)).toEqual({ over: false, approx: false, locked: false });
+    expect(gpsDayOverLimit({ metricsVersion: 4, maxSpeed: 141 }, 132)).toEqual({ over: true, approx: true, locked: false });
+    expect(gpsDayOverLimit({ metricsVersion: 4, maxSpeed: 141 }, null)).toEqual({ over: false, approx: false, locked: false });
+    // tarefa 62 (trava): linha antiga (sem limiar gravado = 132) a 125 com o limite de hoje a 120 → não conta
+    expect(gpsDayOverLimit({ metricsVersion: 5, maxSpeed: 125 }, 120)).toEqual({ over: false, approx: false, locked: true });
+    expect(gpsDayOverLimit({ metricsVersion: 6, maxSpeed: 125, speedThresholdKmh: "120.00" }, 120)).toEqual({ over: true, approx: false, locked: false });
   });
   it("check-in de PDA → dias de Lisboa que toca", () => {
     expect(lisbonDaysTouched("2026-10-12 22:30:00", "2026-10-13 02:00:00")).toEqual(["2026-10-12", "2026-10-13"]); // 23:30 → 03:00 Lisboa
@@ -373,10 +428,11 @@ vi.mock("./db", () => ({
         return [[day("2026-10-05", { delays: 4, lateServices: 3, speedingEvents: 1 }), day("2026-10-06"), day("2026-10-07"), day("2026-10-08")]];
       }
       if (/FROM employee_metric_adjustments/.test(text)) return [[]];
-      // 5 out: dois PDAs no mesmo dia (UM dia com GPS, UM acima do limite); 6 out: linha antiga a 125
+      // 5 out: dois PDAs no mesmo dia (UM dia com GPS, UM acima do limite — a parte recolhida a 120);
+      // 6 out: linha antiga a 125 (sem limiar gravado = 132: a trava não a conta a 120)
       if (/FROM driver_day_shares s\s+LEFT JOIN daily_driver_history/.test(text)) return [[
-        { employeeId: 1, day: "2026-10-05", km: 40, maxSpeed: 141, violations: 1, points: 300, metricsVersion: 5 },
-        { employeeId: 1, day: "2026-10-05", km: 10, maxSpeed: 80, violations: 0, points: 90, metricsVersion: 5 },
+        { employeeId: 1, day: "2026-10-05", km: 40, maxSpeed: 125, violations: 1, points: 300, metricsVersion: 6, speedThresholdKmh: "120.00" },
+        { employeeId: 1, day: "2026-10-05", km: 10, maxSpeed: 80, violations: 0, points: 90, metricsVersion: 6, speedThresholdKmh: "120.00" },
       ]];
       if (/FROM daily_driver_history h/.test(text)) return [[{ employeeId: 1, day: "2026-10-06", km: 30, maxSpeed: 125, violations: 0, points: 200, metricsVersion: 4 }]];
       if (/zelloUsername IS NOT NULL/.test(text)) return [[]]; // sem Zello fixo na ficha
@@ -393,12 +449,14 @@ describe("Desempenho → Condutores: os números do detalhe", () => {
     const r = await loadPeoplePerformance({ period: "week", anchor: "2026-10-06", group: "drivers" });
     const ana = r.people[0];
     expect(ana.totals).toMatchObject({
-      workDays: 4, gpsDays: 2, km: 80, maxSpeed: 141, overLimitDays: 2, noGpsDays: 2, noZelloDays: 1,
+      workDays: 4, gpsDays: 2, km: 80, maxSpeed: 125, overLimitDays: 1, noGpsDays: 2, noZelloDays: 1,
       // #381: "Atrasos à entrada" (no máx. 1 por dia) e "Entregas atrasadas" em colunas separadas
       delays: 1, lateDeliveries: 3, speedAlerts: 1, movements: 8, spotChanges: 12,
     });
     expect(r.speedLimit).toBe(120);
-    expect(r.notes.join(" ")).toMatch(/1 dia\(s\) recolhido\(s\) antes de 14 out 2026 contam pela velocidade máxima/);
+    // tarefa 62: o 6 out (125, recolhido a 132) não conta e a nota diz porquê
+    expect(r.notes.join(" ")).toMatch(/1 dia\(s\) com a máxima acima do limite de hoje não contam porque foram recolhidos com um limite mais largo/);
+    expect(h.texts.some((t) => /h\.speedThresholdKmh FROM driver_day_shares s/.test(t))).toBe(true);
     // só leitura
     expect(h.texts.some((t) => /\b(INSERT|UPDATE|DELETE)\b/.test(t))).toBe(false);
   });

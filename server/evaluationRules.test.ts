@@ -182,12 +182,13 @@ describe("migração 0099", async () => {
 });
 
 describe("14 out 2026 — limite de velocidade por omissão", () => {
-  it("sem valor gravado em Definições: 120 km/h + 10 % = 132; com valor, o dele", async () => {
-    // a omissão passou da tabela `speed_limits` (sem ecrã) para a definição gps.speedRule — o número é o mesmo
+  it("sem valor gravado em Definições: 120 km/h sem tolerância (tarefa 62; antes 132); com valor, o dele", async () => {
+    // a omissão passou da tabela `speed_limits` (sem ecrã) para a definição gps.speedRule; a tarefa 62 tirou a tolerância
     const { DEFAULT_SPEED_RULE, speedThresholdOf } = await import("../shared/speedRules");
     const { MAX_PLAUSIBLE_KMH } = await import("../shared/gpsRules");
-    expect([DEFAULT_SPEED_RULE.limitKmh, DEFAULT_SPEED_RULE.tolerancePercent]).toEqual([120, 10]);
-    expect(speedThresholdOf(DEFAULT_SPEED_RULE)).toBe(132);
+    expect([DEFAULT_SPEED_RULE.limitKmh, DEFAULT_SPEED_RULE.tolerancePercent]).toEqual([120, 0]);
+    expect(speedThresholdOf(DEFAULT_SPEED_RULE)).toBe(120);
+    expect(speedThresholdOf({ limitKmh: 120, tolerancePercent: 10 })).toBe(132);
     expect(speedThresholdOf({ limitKmh: 100, tolerancePercent: 5 })).toBe(105);
     expect(speedThresholdOf({ limitKmh: 120, tolerancePercent: 0 })).toBe(120);
     expect(MAX_PLAUSIBLE_KMH).toBe(150); // só para a média (a máxima usa o filtro de picos)

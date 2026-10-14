@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 import { addDays, lisbonDayOf, lisbonHourOf, OPERATIONAL_DAY_START_HOUR } from "./lisbonDay";
-import { SPEED_EXCESS_METRICS_VERSION } from "./speedRules";
+import { SPEED_EXCESS_METRICS_VERSION, gpsDayOverThreshold } from "./speedRules";
 import { LATE_AFTER_REQUEST_MINUTES, LATE_SERVICE_MINUTES } from "./evaluationRules";
 
 // ─── Grupos (abas) ──────────────────────────────────────────────────────────
@@ -573,11 +573,16 @@ export function kmWithoutMoves(t: Pick<PerfTotals, "km" | "recolhas" | "entregas
  * recolhidas com a regra nova (metricsVersion ≥ 5) a máxima já vem sem picos
  * falsos e, acima do limite, só de um excesso confirmado (pontos seguidos —
  * shared/speedRules.ts); nas antigas é a máxima bruta (`approx`). Sem limite:
- * nunca. PURA.
+ * nunca. Tarefa 62: com a "trava da linha GPS" (gpsDayOverThreshold) — o
+ * limite é o MAIOR entre o de hoje e o da recolha da linha (`speedThresholdKmh`;
+ * sem ele, 132). `locked` = acima do limite de hoje mas não do da recolha (não
+ * conta até se re-dividir o dia). PURA.
  */
-export function gpsDayOverLimit(g: { metricsVersion?: unknown; maxSpeed?: unknown }, threshold: number | null): { over: boolean; approx: boolean } {
-  const over = threshold != null && Number.isFinite(threshold) && (Number(g.maxSpeed) || 0) > threshold;
-  return { over, approx: over && (Number(g.metricsVersion) || 0) < SPEED_EXCESS_METRICS_VERSION };
+export function gpsDayOverLimit(g: { metricsVersion?: unknown; maxSpeed?: unknown; speedThresholdKmh?: unknown }, threshold: number | null): { over: boolean; approx: boolean; locked: boolean } {
+  const valid = threshold != null && Number.isFinite(threshold);
+  const over = valid && gpsDayOverThreshold(g.maxSpeed, threshold, g.speedThresholdKmh);
+  const locked = valid && !over && (Number(g.maxSpeed) || 0) > (threshold as number);
+  return { over, approx: over && (Number(g.metricsVersion) || 0) < SPEED_EXCESS_METRICS_VERSION, locked };
 }
 
 /** Dias de Lisboa tocados por um check-in de PDA (UTC; sem saída = até agora; no máximo 4). PURA. */

@@ -24,6 +24,7 @@ import {
 } from "../shared/evaluationRules";
 import { addDays, lisbonDayOf, lisbonHourOf, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
 import { classifyMovement, scheduledCheckOutMs, type MovementKind } from "../shared/multiparkMovements";
+import { gpsDayOverThreshold } from "../shared/speedRules";
 import { pontoShiftHours } from "../shared/pontoHours";
 import type { EvaluationIdentity } from "./evaluationIdentity";
 
@@ -328,8 +329,12 @@ export interface EngineComplaint {
 }
 
 export interface EngineSpeedAlert { id?: number; employeeId: number | null; createdAt: string }
-/** Velocidade máxima do GPS do Zello de uma pessoa num dia (driver_day_shares / daily_driver_history). */
-export interface EngineGpsDay { employeeId: number; day: string; maxSpeed: number }
+/**
+ * Velocidade máxima do GPS do Zello de uma pessoa num dia (driver_day_shares / daily_driver_history) e o
+ * limiar com que essa linha foi recolhida (tarefa 62: daily_driver_history.speedThresholdKmh; null/ausente
+ * = recolhida antes da coluna, conta como 132 — a "trava da linha GPS", shared/speedRules.ts).
+ */
+export interface EngineGpsDay { employeeId: number; day: string; maxSpeed: number; collectedThresholdKmh?: number | null }
 /** Acidente confirmado pelo TL (evaluation_accidents ativo, D15): conta no dia operacional da ocorrência. */
 export interface EngineConfirmedAccident { employeeId: number; day: string }
 export interface EnginePenalty { employeeId: number; points: number; reason: string; relatedId: number | null; createdAt: string }
@@ -592,11 +597,12 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
   // ── 14 out 2026: o GPS do Zello — um dia com a velocidade máxima acima do
   // limiar conta 1 excesso, se nesse dia não houver já alertas/penalizações de
   // velocidade (não conta a dobrar). Fica para depois das penalizações.
+  // Tarefa 62: o limiar é o MAIOR entre o de hoje e o da recolha da linha (a trava da linha GPS).
   const gpsOver = new Set<string>();
   if (input.speedThresholdKmh != null && Number.isFinite(input.speedThresholdKmh)) {
     for (const g of input.gpsDays ?? []) {
       if (!g.employeeId || !inRange(g.day, startDay, endDay)) continue;
-      if (Number(g.maxSpeed) > input.speedThresholdKmh) gpsOver.add(`${g.employeeId}|${g.day}`);
+      if (gpsDayOverThreshold(g.maxSpeed, input.speedThresholdKmh, g.collectedThresholdKmh)) gpsOver.add(`${g.employeeId}|${g.day}`);
     }
   }
 

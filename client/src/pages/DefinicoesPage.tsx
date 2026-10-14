@@ -904,7 +904,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {([
               ["limitKmh", "Limite (km/h)", "120", "numeric"],
-              ["tolerancePercent", "Tolerância (%)", "10", "decimal"],
+              ["tolerancePercent", "Tolerância (%)", "0", "decimal"],
               ["minPoints", "Pontos seguidos para um excesso", "2", "numeric"],
             ] as const).map(([k, label, ph, mode]) => (
               <label key={k} className="text-xs space-y-1">

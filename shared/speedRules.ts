@@ -9,7 +9,8 @@
  *
  * LIMITE: um só, em Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"
  * (`gps.speedRule`): 120 km/h por omissão (o máximo legal em Portugal, nas
- * autoestradas), mais uma tolerância em % (10 por omissão = 132 km/h). O GPS do Zello não
+ * autoestradas), mais uma tolerância em % (0 por omissão desde a tarefa 62 =
+ * conta acima de 120 km/h; antes eram 10 % = 132 km/h). O GPS do Zello não
  * diz em que estrada se vai, por isso não há limites por tipo de via nem por
  * cidade: o limite é o de autoestrada — passar dele é excesso em qualquer
  * estrada. (A tabela antiga `speed_limits` deixou de ser lida: não tinha ecrã.)
@@ -52,11 +53,13 @@ export interface SpeedRule {
 }
 
 /**
- * Omissão: 120 km/h com 10 % de tolerância (= 132 km/h) — a mesma que a
- * Avaliação usa desde o #381 (14 out 2026), para nada mudar sem o Jorge
- * decidir. A tolerância muda-se em Definições.
+ * Omissão: 120 km/h SEM tolerância (conta acima de 120) — decisão do Jorge
+ * (tarefa 62, D1). Antes eram 10 % (= 132 km/h); a migração 0680 passa o
+ * valor gravado {120, 10, x} para {120, 0, x}. A tolerância muda-se em
+ * Definições. Os dias já recolhidos com um limite mais largo não passam a
+ * contar excessos que não confirmaram: ver `gpsDayOverThreshold` (a trava).
  */
-export const DEFAULT_SPEED_RULE: Readonly<SpeedRule> = { limitKmh: 120, tolerancePercent: 10, minPoints: 2 };
+export const DEFAULT_SPEED_RULE: Readonly<SpeedRule> = { limitKmh: 120, tolerancePercent: 0, minPoints: 2 };
 
 export const speedRuleSchema = z.object({
   limitKmh: z.number({ error: "Indica o limite em km/h." }).int("Número inteiro de km/h.").min(30, "Mínimo 30 km/h.").max(200, "Máximo 200 km/h."),
@@ -70,6 +73,41 @@ export const speedRuleSchema = z.object({
  * acima de um limite que, sem `speed_limits`, era 999 km/h.
  */
 export const SPEED_EXCESS_METRICS_VERSION = 5;
+/**
+ * Tarefa 62 (P1): a partir desta versão a linha guarda também o limiar com que
+ * foi recolhida (`daily_driver_history.speedThresholdKmh`, migração 0680). Os
+ * excessos continuam de confiança desde a 5 (SPEED_EXCESS_METRICS_VERSION).
+ */
+export const SPEED_THRESHOLD_METRICS_VERSION = 6;
+
+/**
+ * Limiar (km/h, já com a tolerância) com que as linhas SEM `speedThresholdKmh`
+ * foram recolhidas: a omissão antiga, 120 + 10 % (tarefa 62, §7.2).
+ */
+export const LEGACY_COLLECTED_THRESHOLD_KMH = 132;
+
+/**
+ * Limiar efetivo de um dia de GPS — a "trava da linha GPS" (tarefa 62, §7.2):
+ * o MAIOR entre o limiar de hoje e o limiar com que a linha foi recolhida
+ * (sem ele: LEGACY_COLLECTED_THRESHOLD_KMH). Porquê: numa linha recolhida a
+ * 132, a máxima gravada pode ser um ponto solto entre 120 e 132 que nunca foi
+ * confirmado como excesso (trustedMaxSpeed só filtra acima do limiar da
+ * recolha); comparada com 120 inventava um excesso. Assim nunca se conta um
+ * excesso que a recolha não confirmou; um dia antigo só conta a 120 depois de
+ * re-dividido. Sem limiar de hoje (não deu para ler): null. PURA.
+ */
+export function gpsDayThresholdOf(todayThresholdKmh: number | null | undefined, collectedThresholdKmh: unknown): number | null {
+  if (todayThresholdKmh == null || !Number.isFinite(Number(todayThresholdKmh))) return null;
+  const c = collectedThresholdKmh == null || collectedThresholdKmh === "" ? NaN : Number(collectedThresholdKmh);
+  const collected = Number.isFinite(c) && c > 0 ? c : LEGACY_COLLECTED_THRESHOLD_KMH;
+  return Math.max(Number(todayThresholdKmh), collected);
+}
+
+/** Um dia de GPS (máxima do dia) passou o limite, com a trava da linha? Sem limiar de hoje: nunca. PURA. */
+export function gpsDayOverThreshold(maxSpeed: unknown, todayThresholdKmh: number | null | undefined, collectedThresholdKmh: unknown): boolean {
+  const t = gpsDayThresholdOf(todayThresholdKmh, collectedThresholdKmh);
+  return t != null && (Number(maxSpeed) || 0) > t;
+}
 
 /** Acima disto (km/h) é erro do GPS — nenhum carro nosso lá chega. */
 export const GPS_ABSURD_KMH = 250;

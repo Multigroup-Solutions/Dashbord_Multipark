@@ -479,7 +479,7 @@ export const operationalRouter = router({
     checkNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "atividade_diaria", "manage");
       const locations = await getZelloLocations();
-      // 14 out 2026: o limite vem de Definições → Parâmetros (gps.speedRule; 120 km/h + 10 % = 132 por omissão).
+      // 14 out 2026: o limite vem de Definições → Parâmetros (gps.speedRule; acima de 120 km/h, 0 % de tolerância, por omissão).
       // O limite que conta (e que se diz) é o COM a tolerância. Antes, sem a tabela speed_limits, isto não fazia
       // nada; para não passar a avisar gente sem o Jorge decidir, o aviso só sai com o interruptor GPS_SPEED_ALERTS.
       const { speedRuleNow } = await import("./speedRule");
