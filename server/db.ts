@@ -2369,7 +2369,7 @@ export async function getTrainingVideos(categoryId?: number) {
   return db.select().from(trainingVideos).where(and(...conditions)).orderBy(trainingVideos.sortOrder);
 }
 
-export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number; careerLevel?: string }) {
+export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number; careerLevel?: string; area?: string | null; subarea?: string | null }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingVideos).values(data).$returningId();
@@ -2393,14 +2393,14 @@ export async function getTrainingManuals(categoryId?: number, type?: string, inc
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
 }
 
-export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure" | "link"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string; careerLevel?: string }) {
+export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure" | "link"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string; careerLevel?: string; area?: string | null; subarea?: string | null }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingManuals).values(data).$returningId();
   return result;
 }
 
-export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure" | "link"; published?: boolean; fileUrl?: string | null; fileKey?: string | null; fileName?: string | null; fileMimeType?: string | null; careerLevel?: string | null; categoryId?: number | null }) {
+export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure" | "link"; published?: boolean; fileUrl?: string | null; fileKey?: string | null; fileName?: string | null; fileMimeType?: string | null; careerLevel?: string | null; categoryId?: number | null; area?: string | null; subarea?: string | null }) {
   const db = await getDb();
   if (!db) return;
   const { published, ...rest } = data;

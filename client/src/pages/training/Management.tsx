@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { CAREER_LEVEL_LABELS, CITY_OPTIONS, ITEM_TYPE_LABELS, STATUS_LABELS, TARGET_ROLES, useConfirm } from "./shared";
 import { TutorPanel, TutorQuestionsCard } from "./TutorPanel";
+import { AreaCatalog, TrainingFinder } from "./areas";
+import type { DoneSet } from "./ContentTabs";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -33,22 +35,43 @@ function StatusBadge({ status }: { status: string }) {
 
 // ─── A MINHA FORMAÇÃO ──────────────────────────────────────────────────────
 
-export function MyTrainingTab({ data, loading, error, onRetry, retrying, onOpenItem }: {
+/**
+ * A minha formação (Jorge, 14 out 2026): procurar por tema ("Faz esta
+ * formação"), a formação obrigatória atribuída e a formação por área
+ * (Multipark, Dashboard, Operacional, Comunicação → subsecções).
+ */
+export function MyTrainingTab({ data, loading, error, onRetry, retrying, onOpenItem, done, onQuizTopic }: {
+  data: any; loading?: boolean; error?: { message: string } | null; onRetry?: () => void; retrying?: boolean;
+  onOpenItem: (item: { itemType: string; itemId: number }) => void;
+  done: DoneSet;
+  onQuizTopic: (topic: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <TrainingFinder done={done} onOpenItem={onOpenItem} onQuizTopic={onQuizTopic} />
+      <MandatoryTraining data={data} loading={loading} error={error} onRetry={onRetry} retrying={retrying} onOpenItem={onOpenItem} />
+      <AreaCatalog done={done} onOpenItem={onOpenItem} />
+    </div>
+  );
+}
+
+function MandatoryTraining({ data, loading, error, onRetry, retrying, onOpenItem }: {
   data: any; loading?: boolean; error?: { message: string } | null; onRetry?: () => void; retrying?: boolean;
   onOpenItem: (item: { itemType: string; itemId: number }) => void;
 }) {
   const assignments: any[] = data?.assignments ?? [];
   // Erro ≠ vazio (18c): com a rede fraca não se diz "não há formação".
   if (error) return <QueryErrorNote error={error} onRetry={() => onRetry?.()} retrying={retrying} what="a tua formação" />;
-  if (loading || !data) return <Card><CardContent className="py-12 text-center text-muted-foreground">A carregar a tua formação…</CardContent></Card>;
+  if (loading || !data) return <Card><CardContent className="py-6 text-center text-muted-foreground">A carregar a tua formação…</CardContent></Card>;
   if (!data?.employeeId) {
-    return <Card><CardContent className="py-12 text-center text-muted-foreground">Sem ficha de colaborador associada — não há formação atribuída.</CardContent></Card>;
+    return <Card><CardContent className="py-6 text-center text-muted-foreground">Sem ficha de colaborador associada — não há formação obrigatória atribuída.</CardContent></Card>;
   }
   if (!assignments.length) {
-    return <Card><CardContent className="py-12 text-center text-muted-foreground">Não tens formação obrigatória atribuída. 🎉</CardContent></Card>;
+    return <Card><CardContent className="py-4 text-sm text-muted-foreground flex items-center gap-2"><CheckCircle className="w-4 h-4 text-green-600 shrink-0" />Não tens formação obrigatória por fazer.</CardContent></Card>;
   }
   return (
     <div className="space-y-4">
+      <h2 className="text-base font-semibold flex items-center gap-2"><ClipboardList className="w-5 h-5 text-primary" />A tua formação obrigatória</h2>
       {assignments.map((a) => (
         <Card key={a.id} className={a.status === "overdue" ? "border-red-300" : undefined}>
           <CardHeader className="pb-2">

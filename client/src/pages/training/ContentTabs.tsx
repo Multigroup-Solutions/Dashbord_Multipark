@@ -14,7 +14,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { toast } from "sonner";
 import { Streamdown } from "streamdown";
 import {
-  BookOpen, CheckCircle, ChevronRight, Clock, ExternalLink, EyeOff, FileText, HelpCircle, Newspaper, Pencil, Play, Plus,
+  BookOpen, CheckCircle, ChevronRight, Clock, ExternalLink, EyeOff, FileText, HelpCircle, Layers, Newspaper, Pencil, Play, Plus,
   RefreshCw, Sparkles, Trash2, XCircle,
 } from "lucide-react";
 import {
@@ -22,6 +22,10 @@ import {
 } from "./shared";
 import { TutorPanel } from "./TutorPanel";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { AreaBadge, AreaFields, AreaPills, AreaReviewDialog, SubareaPills, areaFormValue, areaToSave, type AreaFilter } from "./areas";
+import { NO_SUBAREA_LABEL, sameSubarea } from "@shared/trainingAreas";
+import { matchKey } from "@shared/textKey";
 
 /** Conjunto "tipo:id" dos itens concluídos pelo próprio (vem de myTraining). */
 export type DoneSet = Set<string>;
@@ -37,8 +41,13 @@ function useMarkItem() {
 
 // ─── VÍDEOS ────────────────────────────────────────────────────────────────
 
-type VideoForm = { categoryId: string; title: string; description: string; videoUrl: string; durationMinutes: string; careerLevel: string };
-const emptyVideo: VideoForm = { categoryId: "", title: "", description: "", videoUrl: "", durationMinutes: "", careerLevel: "" };
+type VideoForm = { categoryId: string; title: string; description: string; videoUrl: string; durationMinutes: string; careerLevel: string; area: string; subarea: string };
+const emptyVideo: VideoForm = { categoryId: "", title: "", description: "", videoUrl: "", durationMinutes: "", careerLevel: "", area: "", subarea: "" };
+
+/** Áreas/subsecções já em uso (sugestões no formulário). */
+function areasInUse(rows: any[]): Array<{ area: string | null; subarea: string | null }> {
+  return rows.map((r) => ({ area: r.areaEffective ?? null, subarea: r.subareaEffective ?? null }));
+}
 
 export function VideosTab({ isAdmin, isSuperAdmin, done }: { isAdmin: boolean; isSuperAdmin: boolean; done: DoneSet }) {
   const [selectedCat, setSelectedCat] = useState<string>("all");
@@ -81,7 +90,7 @@ export function VideosTab({ isAdmin, isSuperAdmin, done }: { isAdmin: boolean; i
   const save = () => {
     if (!editing) return;
     const f = editing.form;
-    const payload = { categoryId: Number(f.categoryId), title: f.title, description: f.description || undefined, videoUrl: f.videoUrl, durationMinutes: f.durationMinutes ? Number(f.durationMinutes) : undefined, careerLevel: f.careerLevel || undefined };
+    const payload = { categoryId: Number(f.categoryId), title: f.title, description: f.description || undefined, videoUrl: f.videoUrl, durationMinutes: f.durationMinutes ? Number(f.durationMinutes) : undefined, careerLevel: f.careerLevel || undefined, ...areaToSave(f.area, f.subarea) };
     if (editing.id) updateVideo.mutate({ id: editing.id, ...payload, description: f.description || null, durationMinutes: f.durationMinutes ? Number(f.durationMinutes) : null, careerLevel: f.careerLevel || null });
     else createVideo.mutate(payload);
   };
@@ -128,13 +137,14 @@ export function VideosTab({ isAdmin, isSuperAdmin, done }: { isAdmin: boolean; i
                 <h3 className="font-semibold">{v.title}</h3>
                 {v.description && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{v.description}</p>}
                 <div className="flex items-center justify-between mt-2 gap-2">
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap gap-1 min-w-0">
+                    <AreaBadge area={v.areaEffective} subarea={v.subareaEffective} guessed={isAdmin && v.areaGuessed} />
                     {v.durationMinutes ? <Badge variant="secondary"><Clock className="w-3 h-3 mr-1" />{v.durationMinutes} min</Badge> : null}
                     {v.careerLevel && <Badge variant="outline">{CAREER_LEVEL_LABELS[v.careerLevel] ?? v.careerLevel}</Badge>}
                   </div>
                   {isAdmin && (
                     <div className="flex">
-                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Editar" onClick={() => setEditing({ id: v.id, form: { categoryId: String(v.categoryId), title: v.title, description: v.description ?? "", videoUrl: v.videoUrl, durationMinutes: v.durationMinutes ? String(v.durationMinutes) : "", careerLevel: v.careerLevel ?? "" } })}><Pencil className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Editar" onClick={() => setEditing({ id: v.id, form: { categoryId: String(v.categoryId), title: v.title, description: v.description ?? "", videoUrl: v.videoUrl, durationMinutes: v.durationMinutes ? String(v.durationMinutes) : "", careerLevel: v.careerLevel ?? "", ...areaFormValue(v) } })}><Pencil className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" title="Arquivar" aria-label="Arquivar vídeo" onClick={async () => {
                         if (await confirm({ title: `Arquivar o vídeo "${v.title}"?`, description: "Sai da lista e deixa de contar nos percursos onde estiver (ninguém fica preso por ele). Nada se apaga.", confirmLabel: "Arquivar", destructive: true })) deleteVideo.mutate({ id: v.id });
                       }}><Trash2 className="w-4 h-4" /></Button>
@@ -163,6 +173,8 @@ export function VideosTab({ isAdmin, isSuperAdmin, done }: { isAdmin: boolean; i
               <div><Label>Título</Label><Input value={editing.form.title} onChange={(e) => setF("title", e.target.value)} /></div>
               <div><Label>URL do vídeo (YouTube, Vimeo ou ficheiro .mp4)</Label><Input value={editing.form.videoUrl} onChange={(e) => setF("videoUrl", e.target.value)} placeholder="https://..." /></div>
               <div><Label>Descrição</Label><Textarea value={editing.form.description} onChange={(e) => setF("description", e.target.value)} /></div>
+              <AreaFields idPrefix="video" area={editing.form.area} subarea={editing.form.subarea} inUse={areasInUse(videos as any[])}
+                onChange={(v) => setEditing((p) => p && ({ ...p, form: { ...p.form, area: v.area, subarea: v.subarea } }))} />
               <div><Label>Duração (min)</Label><Input type="number" value={editing.form.durationMinutes} onChange={(e) => setF("durationMinutes", e.target.value)} /></div>
               <div><Label>Nível de carreira (opcional — torna-o módulo desse nível)</Label>
                 <Select value={editing.form.careerLevel || "none"} onValueChange={(v) => setF("careerLevel", v === "none" ? "" : v)}>
@@ -259,8 +271,8 @@ export function VideoPlayerDialog({ video, done, onClose }: { video: any | null;
 // ─── MANUAIS ───────────────────────────────────────────────────────────────
 
 type ManualType = "manual" | "update" | "news" | "procedure" | "link";
-type ManualForm = { title: string; content: string; type: ManualType; linkUrl: string; careerLevel: string; categoryId: string; published: boolean };
-const emptyManual: ManualForm = { title: "", content: "", type: "manual", linkUrl: "", careerLevel: "", categoryId: "", published: true };
+type ManualForm = { title: string; content: string; type: ManualType; linkUrl: string; careerLevel: string; categoryId: string; published: boolean; area: string; subarea: string };
+const emptyManual: ManualForm = { title: "", content: "", type: "manual", linkUrl: "", careerLevel: "", categoryId: "", published: true, area: "", subarea: "" };
 type UploadedFile = { url: string; key: string; fileName: string; mimeType: string };
 
 export const MANUAL_TYPE_LABELS: Record<string, string> = { manual: "Manual", update: "Atualização", news: "Notícia", procedure: "Procedimento", link: "Link interativo" };
@@ -268,7 +280,11 @@ const typeIcons: Record<string, any> = { manual: BookOpen, update: RefreshCw, ne
 const typeColors: Record<string, string> = { manual: "bg-blue-100 text-blue-800", update: "bg-amber-100 text-amber-800", news: "bg-purple-100 text-purple-800", procedure: "bg-emerald-100 text-emerald-800", link: "bg-cyan-100 text-cyan-800" };
 
 export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boolean; done: DoneSet; openId?: number | null; onOpened?: () => void }) {
+  // Jorge (14 out 2026): o seletor principal é a ÁREA (e a subsecção); o tipo fica como filtro secundário.
+  const [areaFilter, setAreaFilter] = usePersistedState<AreaFilter>("training.manuals.area", "all");
+  const [subFilter, setSubFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [editing, setEditing] = useState<{ id: number | null; form: ManualForm; file: UploadedFile | null; removeFile: boolean } | null>(null);
   const [selectedManual, setSelectedManual] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
@@ -279,8 +295,35 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
 
   const utils = trpc.useUtils();
   const { data: categories = [] } = trpc.training.categories.useQuery();
-  const manualsQ = trpc.training.manuals.useQuery({ type: typeFilter !== "all" ? typeFilter : undefined });
+  const manualsQ = trpc.training.manuals.useQuery({});
   const { data: manuals = [], refetch } = manualsQ;
+  const all = manuals as any[];
+  const areaCounts = useMemo(() => {
+    const c: Partial<Record<AreaFilter, number>> = { all: all.length, none: 0 };
+    for (const m of all) { const k: AreaFilter = m.areaEffective ?? "none"; c[k] = (c[k] ?? 0) + 1; }
+    return c;
+  }, [all]);
+  const inArea = useMemo(() => (areaFilter === "all" ? all : all.filter((m) => (m.areaEffective ?? "none") === areaFilter)), [all, areaFilter]);
+  const subOptions = useMemo(() => {
+    if (areaFilter === "all") return [];
+    const map = new Map<string, { label: string; count: number }>();
+    for (const m of inArea) {
+      const label = m.subareaEffective || NO_SUBAREA_LABEL;
+      const cur = map.get(matchKey(label));
+      if (cur) cur.count++; else map.set(matchKey(label), { label, count: 1 });
+    }
+    return Array.from(map.values());
+  }, [inArea, areaFilter]);
+  const shownManuals = useMemo(() => inArea
+    .filter((m) => subFilter == null || sameSubarea(m.subareaEffective || NO_SUBAREA_LABEL, subFilter))
+    .filter((m) => typeFilter === "all" || m.type === typeFilter), [inArea, subFilter, typeFilter]);
+  const guessed = useMemo(() => all.filter((m) => m.areaGuessed), [all]);
+  // Os vídeos (já carregados pela página) também entram no "Arrumar por área".
+  const allVideosQ = trpc.training.videos.useQuery({}, { enabled: isAdmin });
+  const reviewItems = useMemo(() => [
+    ...guessed.map((m) => ({ itemType: "manual" as const, id: m.id, title: m.title, areaEffective: m.areaEffective ?? null, subareaEffective: m.subareaEffective ?? null })),
+    ...((allVideosQ.data ?? []) as any[]).filter((v) => v.areaGuessed).map((v) => ({ itemType: "video" as const, id: v.id, title: v.title, areaEffective: v.areaEffective ?? null, subareaEffective: v.subareaEffective ?? null })),
+  ], [guessed, allVideosQ.data]);
   const { data: llm } = trpc.training.llmStatus.useQuery(undefined, { enabled: isAdmin });
   const onErr = (e: { message: string }) => toast.error(e.message);
   const done_ = () => { refetch(); setEditing(null); };
@@ -326,12 +369,13 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
       : file ? { fileUrl: file.url, fileKey: file.key, fileName: file.fileName, fileMimeType: file.mimeType }
         : removeFile ? { fileUrl: null, fileKey: null, fileName: null, fileMimeType: null } : {};
     const content = form.content || (isLink ? form.linkUrl : "");
+    const areaFields = areaToSave(form.area, form.subarea);
     if (id) {
-      updateManual.mutate({ id, title: form.title, content, type: form.type, published: form.published, careerLevel: form.careerLevel || null, categoryId: form.categoryId ? Number(form.categoryId) : null, ...fileFields });
+      updateManual.mutate({ id, title: form.title, content, type: form.type, published: form.published, careerLevel: form.careerLevel || null, categoryId: form.categoryId ? Number(form.categoryId) : null, ...areaFields, ...fileFields });
     } else {
       const f = fileFields as any;
       createManual.mutate({
-        title: form.title, content, type: form.type, careerLevel: form.careerLevel || undefined, categoryId: form.categoryId ? Number(form.categoryId) : undefined,
+        title: form.title, content, type: form.type, careerLevel: form.careerLevel || undefined, categoryId: form.categoryId ? Number(form.categoryId) : undefined, ...areaFields,
         ...(f.fileUrl ? { fileUrl: f.fileUrl, fileKey: f.fileKey ?? undefined, fileName: f.fileName, fileMimeType: f.fileMimeType } : {}),
       });
     }
@@ -339,7 +383,7 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
   const setF = <K extends keyof ManualForm>(k: K, v: ManualForm[K]) => setEditing((p) => p && ({ ...p, form: { ...p.form, [k]: v } }));
   const startEdit = (m: any) => setEditing({
     id: m.id, file: null, removeFile: false,
-    form: { title: m.title, content: m.content ?? "", type: m.type, linkUrl: m.type === "link" ? m.fileUrl ?? "" : "", careerLevel: m.careerLevel ?? "", categoryId: m.categoryId ? String(m.categoryId) : "", published: m.published !== 0 },
+    form: { title: m.title, content: m.content ?? "", type: m.type, linkUrl: m.type === "link" ? m.fileUrl ?? "" : "", careerLevel: m.careerLevel ?? "", categoryId: m.categoryId ? String(m.categoryId) : "", published: m.published !== 0, ...areaFormValue(m) },
   });
   const askDelete = async (m: any) => {
     if (await confirm({ title: `Arquivar "${m.title}"?`, description: "Sai da lista e deixa de contar nos percursos onde estiver (ninguém fica preso por ele). O ficheiro fica guardado.", confirmLabel: "Arquivar", destructive: true })) deleteManual.mutate({ id: m.id });
@@ -375,6 +419,8 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
               </div>
             </div>
             <div><Label>Título</Label><Input value={editing.form.title} onChange={(e) => setF("title", e.target.value)} /></div>
+            <AreaFields idPrefix="manual" area={editing.form.area} subarea={editing.form.subarea} inUse={areasInUse(all)}
+              onChange={(v) => setEditing((p) => p && ({ ...p, form: { ...p.form, area: v.area, subarea: v.subarea } }))} />
             <div><Label>Nível de carreira (opcional — torna-o módulo desse nível)</Label>
               <Select value={editing.form.careerLevel || "none"} onValueChange={(v) => setF("careerLevel", v === "none" ? "" : v)}>
                 <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
@@ -444,11 +490,14 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
   return (
     <div className="space-y-4">
       {confirmUi}{editDialog}{aiDialog}
+      {isAdmin && <AreaReviewDialog open={reviewOpen} onOpenChange={setReviewOpen} items={reviewItems} inUse={areasInUse(all)} />}
+      <AreaPills value={areaFilter} onChange={(v) => { setAreaFilter(v); setSubFilter(null); }} counts={areaCounts} />
+      <SubareaPills options={subOptions} value={subFilter} onChange={setSubFilter} />
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-[200px]" aria-label="Tipo de conteúdo"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos</SelectItem>
+            <SelectItem value="all">Todos os tipos</SelectItem>
             <SelectItem value="manual">Manuais</SelectItem>
             <SelectItem value="procedure">Procedimentos</SelectItem>
             <SelectItem value="update">Atualizações</SelectItem>
@@ -456,18 +505,23 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
             <SelectItem value="link">Links interativos</SelectItem>
           </SelectContent>
         </Select>
-        {isAdmin && <Button onClick={() => setEditing({ id: null, form: emptyManual, file: null, removeFile: false })}><Plus className="w-4 h-4 mr-1" />Novo</Button>}
+        {isAdmin && (
+          <div className="flex flex-wrap gap-2">
+            {reviewItems.length > 0 && <Button variant="outline" onClick={() => setReviewOpen(true)} title="Rever as áreas propostas automaticamente (manuais e vídeos)"><Layers className="w-4 h-4 mr-1" />Arrumar por área ({reviewItems.length})</Button>}
+            <Button onClick={() => setEditing({ id: null, form: { ...emptyManual, area: areaFilter !== "all" && areaFilter !== "none" ? areaFilter : "", subarea: subFilter && subFilter !== NO_SUBAREA_LABEL ? subFilter : "" }, file: null, removeFile: false })}><Plus className="w-4 h-4 mr-1" />Novo</Button>
+          </div>
+        )}
       </div>
 
       {manualsQ.error ? (
         <QueryErrorNote error={manualsQ.error} onRetry={() => manualsQ.refetch()} retrying={manualsQ.isFetching} what="os manuais" />
       ) : manualsQ.isLoading ? (
         <p className="text-sm text-muted-foreground">A carregar manuais…</p>
-      ) : manuals.length === 0 ? (
-        <Card><CardContent className="py-12 text-center text-muted-foreground">Nenhum conteúdo disponível</CardContent></Card>
+      ) : shownManuals.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground">{all.length ? "Nenhum conteúdo com estes filtros" : "Nenhum conteúdo disponível"}</CardContent></Card>
       ) : (
         <div className="space-y-3">
-          {(manuals as any[]).map((m) => {
+          {shownManuals.map((m) => {
             const Icon = typeIcons[m.type] || FileText;
             return (
               <Card key={m.id} className={`cursor-pointer hover:bg-accent/50 transition-colors ${m.published === 0 ? "border-dashed opacity-80" : ""}`} onClick={() => setSelectedManual(m)}>
@@ -478,6 +532,7 @@ export function ManualsTab({ isAdmin, done, openId, onOpened }: { isAdmin: boole
                       <h3 className="font-semibold truncate">{m.title}</h3>
                       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                         <span>{fmtPTDate(m.createdAt)}</span>
+                        <AreaBadge area={m.areaEffective} subarea={m.subareaEffective} guessed={isAdmin && m.areaGuessed} />
                         <Badge variant="outline" className="text-xs">{MANUAL_TYPE_LABELS[m.type] || m.type}</Badge>
                         {m.published === 0 && <Badge className="text-xs bg-amber-100 text-amber-800"><EyeOff className="w-3 h-3 mr-1" />Não publicado</Badge>}
                         {done.has(`manual:${m.id}`) && <Badge className="text-xs bg-green-100 text-green-800"><CheckCircle className="w-3 h-3 mr-1" />Lido</Badge>}
@@ -534,6 +589,7 @@ function ManualDetail({ manual, done, isAdmin, llmConfigured, onBack, onEdit, on
         <CardHeader>
           <div className="flex flex-wrap items-center gap-3">
             <Badge className={typeColors[manual.type] || "bg-gray-100 text-gray-800"}>{MANUAL_TYPE_LABELS[manual.type] || manual.type}</Badge>
+            <AreaBadge area={manual.areaEffective} subarea={manual.subareaEffective} guessed={isAdmin && manual.areaGuessed} />
             {manual.published === 0 && <Badge className="bg-amber-100 text-amber-800"><EyeOff className="w-3 h-3 mr-1" />Não publicado</Badge>}
             <CardTitle>{manual.title}</CardTitle>
           </div>
@@ -592,10 +648,51 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
   const createFAQ = trpc.training.createFAQ.useMutation({ onSuccess: () => { refetch(); setEditing(null); toast.success("FAQ adicionada"); }, onError: onErr });
   const updateFAQ = trpc.training.updateFAQ.useMutation({ onSuccess: () => { refetch(); setEditing(null); toast.success("FAQ atualizada"); }, onError: onErr });
   const deleteFAQ = trpc.training.deleteFAQ.useMutation({ onSuccess: () => { refetch(); toast.success("FAQ arquivada"); }, onError: onErr });
+  // FAQs automáticas da base de conhecimento (14 out 2026).
+  const autoQ = trpc.training.faqAutoStatus.useQuery(undefined, { enabled: isAdmin });
+  const genNow = trpc.training.generateFaqsNow.useMutation({
+    onSuccess: (r) => {
+      void refetch(); void autoQ.refetch();
+      if (r.created.length) toast.success(`${r.created.length} FAQ(s) nova(s) da base de conhecimento.`);
+      else if (r.errors.length) toast.error(r.errors[0]);
+      else toast.info(r.skipped ? `Nada de novo: ${r.skipped}.` : "Nada de novo.");
+    },
+    onError: onErr,
+  });
+  const kbOpen = trpc.knowledge.open.useMutation({ onError: onErr });
+  const openSource = (id: number) => {
+    const w = window.open("about:blank", "_blank");
+    kbOpen.mutate({ id }, {
+      onSuccess: (r) => {
+        if (!r.url) { w?.close(); return; }
+        if (/^https:/.test(r.url)) { if (w) w.location.href = r.url; else window.open(r.url, "_blank", "noopener,noreferrer"); }
+        else { w?.close(); window.location.assign(r.url); }
+      },
+      onError: () => w?.close(),
+    });
+  };
+  const last = autoQ.data?.lastRun;
 
   return (
     <div className="space-y-4">
       {confirmUi}
+      {isAdmin && (
+        <Card>
+          <CardContent className="p-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0 flex-1 text-sm">
+              <p className="font-medium flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary shrink-0" />FAQs da base de conhecimento</p>
+              <p className="text-xs text-muted-foreground">
+                Semanal: {autoQ.data?.weeklyOn ? "ligado (segunda a partir das 09:30)" : "desligado"} · IA: {autoQ.data?.aiOn ? "ligada" : "desligada"}
+                {last ? ` · Última vez: ${fmtPTDate(last.ranAt)}, ${last.created.length} nova(s)${last.skipped ? ` (${last.skipped})` : ""}` : ""}
+              </p>
+              <p className="text-xs text-muted-foreground">Escolhe 2 ou 3 documentos atualizados e escreve até 3 FAQs novas, marcadas «IA». As que arquivares não voltam.</p>
+            </div>
+            <Button variant="outline" size="sm" disabled={genNow.isPending || !autoQ.data?.aiOn} title={autoQ.data?.aiOn ? undefined : "Liga «IA: FAQs a partir da base de conhecimento» em Definições → Automações"} onClick={() => genNow.mutate()}>
+              <Sparkles className="w-4 h-4 mr-1" />{genNow.isPending ? "A gerar…" : "Gerar agora"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
       <div className="flex justify-end">
         {isAdmin && <Button onClick={() => setEditing({ id: null, question: "", answer: "" })}><Plus className="w-4 h-4 mr-1" />Nova FAQ</Button>}
       </div>
@@ -610,18 +707,28 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
           {faqsList.map((f: any) => (
             <Card key={f.id} className="overflow-hidden">
               <CardContent className="p-0">
-                <button className="w-full p-4 text-left flex items-center justify-between gap-2 hover:bg-accent/50 transition-colors" onClick={() => setExpandedId(expandedId === f.id ? null : f.id)}>
+                <button className="w-full p-4 text-left flex items-center justify-between gap-2 hover:bg-accent/50 transition-colors" aria-expanded={expandedId === f.id} onClick={() => setExpandedId(expandedId === f.id ? null : f.id)}>
                   <span className="font-medium flex items-center gap-2 min-w-0"><HelpCircle className="w-4 h-4 text-primary shrink-0" /><span className="truncate">{f.question}</span></span>
-                  <ChevronRight className={`w-4 h-4 shrink-0 transition-transform ${expandedId === f.id ? "rotate-90" : ""}`} />
+                  <span className="flex items-center gap-1 shrink-0">
+                    {f.isAi && <Badge variant="outline" className="text-xs" title="Escrita pela IA a partir da base de conhecimento"><Sparkles className="w-3 h-3 mr-1" />IA</Badge>}
+                    <ChevronRight className={`w-4 h-4 transition-transform ${expandedId === f.id ? "rotate-90" : ""}`} />
+                  </span>
                 </button>
                 {expandedId === f.id && (
                   <div className="px-4 pb-4 border-t">
-                    <div className="pt-3 prose max-w-none text-sm"><Streamdown>{f.answer}</Streamdown></div>
+                    {f.isAi
+                      ? <p className="pt-3 text-sm whitespace-pre-line">{f.answer}</p>
+                      : <div className="pt-3 prose max-w-none text-sm"><Streamdown>{f.answer}</Streamdown></div>}
+                    {f.sourceKbDocId && f.sourceTitle && (
+                      <button type="button" className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline max-w-full" onClick={() => openSource(f.sourceKbDocId)}>
+                        <FileText className="w-3.5 h-3.5 shrink-0" /><span className="truncate">Fonte: {f.sourceTitle}</span>
+                      </button>
+                    )}
                     {isAdmin && (
                       <div className="flex gap-2 mt-2">
                         <Button variant="ghost" size="sm" onClick={() => setEditing({ id: f.id, question: f.question, answer: f.answer })}><Pencil className="w-3 h-3 mr-1" />Editar</Button>
                         <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
-                          if (await confirm({ title: "Arquivar esta FAQ?", description: f.question, confirmLabel: "Arquivar", destructive: true })) deleteFAQ.mutate({ id: f.id });
+                          if (await confirm({ title: "Arquivar esta FAQ?", description: f.isAi ? `${f.question} — a IA não volta a escrever esta pergunta.` : f.question, confirmLabel: "Arquivar", destructive: true })) deleteFAQ.mutate({ id: f.id });
                         }}><Trash2 className="w-3 h-3 mr-1" />Arquivar</Button>
                       </div>
                     )}

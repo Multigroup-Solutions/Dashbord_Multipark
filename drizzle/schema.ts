@@ -1342,9 +1342,16 @@ export const faqs = mysqlTable("faqs", {
 	sortOrder: int().default(0),
 	// 0385 — arquivada em vez de apagada.
 	archivedAt: timestamp({ mode: 'string' }),
+	// 0660 — FAQ feita pela IA ('ai'; NULL = escrita por uma pessoa), documento de
+	// origem na base de conhecimento e a pergunta normalizada quando nasceu (não
+	// muda com edições; uma arquivada continua a impedir que a IA a repita).
+	source: varchar({ length: 16 }),
+	sourceKbDocId: int(),
+	aiKey: varchar({ length: 190 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
-});
+},
+(table) => [index("idx_faqs_kb_doc").on(table.sourceKbDocId)]);
 
 export const googleReviews = mysqlTable("google_reviews", {
 	googleReviewKey: varchar({ length: 64 }).unique('uq_google_review_key'),
@@ -2586,6 +2593,9 @@ export const trainingManuals = mysqlTable("training_manuals", {
 	fileName: varchar({ length: 255 }),
 	fileMimeType: varchar({ length: 100 }),
 	careerLevel: varchar({ length: 32 }), // módulo de um nível de carreira (opcional)
+	// 0660 — área (multipark|dashboard|operacional|comunicacao) e subsecção; NULL = proposta pelas regras.
+	area: varchar({ length: 24 }),
+	subarea: varchar({ length: 80 }),
 });
 
 export const trainingVideos = mysqlTable("training_videos", {
@@ -2603,6 +2613,9 @@ export const trainingVideos = mysqlTable("training_videos", {
 	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+	// 0660 — área e subsecção (como nos manuais).
+	area: varchar({ length: 24 }),
+	subarea: varchar({ length: 80 }),
 });
 
 // ─── Formação: percursos obrigatórios (migration 0090) ───────────────────────
@@ -2679,8 +2692,40 @@ export const trainingAttemptSessions = mysqlTable("training_attempt_sessions", {
 	resultId: int(),
 	score: int(),
 	passed: tinyint(),
+	// 0660 — 'ai' = perguntas feitas pela IA para esta tentativa (training_quiz_ai_questions);
+	// NULL/'bank' = lista fixa. Tema pedido e respostas dadas (JSON, para rever).
+	source: varchar({ length: 8 }),
+	topic: varchar({ length: 160 }),
+	answersJson: text(),
 },
 (table) => [index("training_attempt_sessions_emp_idx").on(table.employeeId, table.kind, table.startedAt)]);
+
+// 0660 — perguntas que a IA fez para uma tentativa de quiz (a resposta certa
+// fica só no servidor). Só acréscimo.
+export const trainingQuizAiQuestions = mysqlTable("training_quiz_ai_questions", {
+	id: int().autoincrement().primaryKey(),
+	sessionId: int().notNull(),
+	employeeId: int().notNull(),
+	ord: int().default(0).notNull(),
+	question: text().notNull(),
+	optionA: text().notNull(),
+	optionB: text().notNull(),
+	optionC: text().notNull(),
+	optionD: text().notNull(),
+	correctOption: char({ length: 1 }).notNull(),
+	explanation: text(),
+	difficulty: varchar({ length: 8 }).default('medium').notNull(),
+	points: int().default(10).notNull(),
+	questionKey: varchar({ length: 190 }),
+	sourceKbDocId: int(),
+	sourceManualId: int(),
+	sourceTitle: varchar({ length: 300 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_tqai_session").on(table.sessionId, table.ord),
+	index("idx_tqai_employee").on(table.employeeId, table.createdAt),
+]);
 
 export const trainingPromotions = mysqlTable("training_promotions", {
 	id: int().autoincrement().primaryKey(),

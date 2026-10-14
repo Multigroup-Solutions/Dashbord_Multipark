@@ -7,7 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
-import { projectScope } from "./cityScope";
+import { cityScope, projectScope } from "./cityScope";
 import { assessmentAnswers, trainingResultScope } from "./trainingAssessments";
 import { CENTER_SCOPED_ROLES, type RhViewer } from "./rhAccess";
 import {
@@ -25,6 +25,39 @@ import { requireAccess, employeeBelowCondition, withOverrides } from "./_core/ac
 import { roleRank, scopeFor, seesBeyondOwn } from "../shared/access";
 import { trainingTutorRouter } from "./trainingTutorRouter";
 import { uploadRefsAllowed } from "./storageRefs";
+import { NO_AREA_ID, TRAINING_AREA_IDS, cleanSubarea, effectiveArea } from "../shared/trainingAreas";
+import type { KbViewer } from "../shared/knowledge";
+
+/** Quem vê (papel efetivo + cidades do pedido) — para os trechos da base de conhecimento. */
+async function kbViewerOf(user: { id: number; role: string }): Promise<KbViewer> {
+  const { kbViewerFrom } = await import("./knowledge/retrieve");
+  return kbViewerFrom(withOverrides(user as any).role, cityScope.getStore());
+}
+
+/**
+ * Área e subsecção (0660): uma das quatro áreas, "none" (sem área, de
+ * propósito: fica em Outros) ou null (por arrumar: a app propõe); subsecção
+ * limpa (≤ 80) ou null.
+ */
+const AREA_VALUES = [...TRAINING_AREA_IDS, NO_AREA_ID] as const;
+const areaField = z.enum(AREA_VALUES).nullable().optional();
+const subareaField = z.string().max(80).nullable().optional();
+/** Grava a área só quando veio no pedido; a subsecção só fica com uma das quatro áreas. */
+function areaPatch(input: { area?: string | null; subarea?: string | null }): { area?: string | null; subarea?: string | null } {
+  if (input.area === undefined && input.subarea === undefined) return {};
+  const area = input.area ?? null;
+  return { area, subarea: area && area !== NO_AREA_ID ? cleanSubarea(input.subarea) : null };
+}
+
+/** Lista de manuais/vídeos com a área efetiva (gravada, ou proposta pelas regras → `areaGuessed`). */
+async function withAreas<T extends { title: string; categoryId?: number | null; area?: string | null; subarea?: string | null; content?: string | null; description?: string | null }>(rows: T[]) {
+  const cats = await getTrainingCategories();
+  const name = new Map(cats.map((c) => [c.id, c.name]));
+  return rows.map((r) => {
+    const e = effectiveArea(r, r.categoryId ? name.get(r.categoryId) ?? null : null);
+    return { ...r, areaEffective: e.area, subareaEffective: e.subarea, areaGuessed: e.guessed };
+  });
+}
 
 /** Fichas da equipa de um team_leader (abaixo dele, na cidade) + a própria. */
 async function trainingTeamIds(user: { id: number; role: string }): Promise<Set<number>> {
@@ -148,19 +181,20 @@ export const trainingRouter = router({
   // ─── Vídeos ──────────────────────────────────────────────────────────────
   videos: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
-    return getTrainingVideos(input.categoryId);
+    return withAreas(await getTrainingVideos(input.categoryId));
   }),
-  createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string().min(1), description: z.string().optional(), videoUrl: z.string().min(1), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
+  createVideo: protectedProcedure.input(z.object({ categoryId: z.number(), title: z.string().min(1), description: z.string().optional(), videoUrl: z.string().min(1), thumbnailUrl: z.string().optional(), durationMinutes: z.number().optional(), careerLevel: z.string().max(32).optional(), area: areaField, subarea: subareaField })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
-    const result = await createTrainingVideo({ ...input, createdBy: ctx.user.id });
+    const { area: _a, subarea: _s, ...base } = input;
+    const result = await createTrainingVideo({ ...base, ...areaPatch(input), createdBy: ctx.user.id });
     await logActivity({ userId: ctx.user.id, action: "create", entity: "training_video", entityId: result.id, details: input.title });
     return result;
   }),
-  updateVideo: protectedProcedure.input(z.object({ id: z.number(), categoryId: z.number().optional(), title: z.string().min(1).optional(), description: z.string().nullable().optional(), videoUrl: z.string().min(1).optional(), thumbnailUrl: z.string().nullable().optional(), durationMinutes: z.number().int().min(0).nullable().optional(), careerLevel: z.string().max(32).nullable().optional() })).mutation(async ({ ctx, input }) => {
+  updateVideo: protectedProcedure.input(z.object({ id: z.number(), categoryId: z.number().optional(), title: z.string().min(1).optional(), description: z.string().nullable().optional(), videoUrl: z.string().min(1).optional(), thumbnailUrl: z.string().nullable().optional(), durationMinutes: z.number().int().min(0).nullable().optional(), careerLevel: z.string().max(32).nullable().optional(), area: areaField, subarea: subareaField })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
-    const { id, ...data } = input;
+    const { id, area: _a, subarea: _s, ...data } = input;
     const d = await dbOrThrow();
-    await d.update(trainingVideos).set(data).where(eq(trainingVideos.id, id));
+    await d.update(trainingVideos).set({ ...data, ...areaPatch(input) }).where(eq(trainingVideos.id, id));
     await logActivity({ userId: ctx.user.id, action: "update", entity: "training_video", entityId: id, details: data.title || "" });
     return { success: true };
   }),
@@ -174,12 +208,13 @@ export const trainingRouter = router({
   // ─── Manuais ─────────────────────────────────────────────────────────────
   manuals: protectedProcedure.input(z.object({ categoryId: z.number().optional(), type: z.string().optional() })).query(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
-    return getTrainingManuals(input.categoryId, input.type, atLeast(ctx.user.role, "admin"));
+    return withAreas(await getTrainingManuals(input.categoryId, input.type, atLeast(ctx.user.role, "admin")));
   }),
-  createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string().min(1), content: z.string(), type: z.enum(MANUAL_TYPES).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional(), careerLevel: z.string().max(32).optional() })).mutation(async ({ ctx, input }) => {
+  createManual: protectedProcedure.input(z.object({ categoryId: z.number().optional(), title: z.string().min(1), content: z.string(), type: z.enum(MANUAL_TYPES).optional(), fileUrl: z.string().optional(), fileKey: z.string().optional(), fileName: z.string().optional(), fileMimeType: z.string().optional(), careerLevel: z.string().max(32).optional(), area: areaField, subarea: subareaField })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
     assertManualFileRefs([input.fileUrl, input.fileKey]);
-    const result = await createTrainingManual({ ...input, createdBy: ctx.user.id });
+    const { area: _a, subarea: _s, ...base } = input;
+    const result = await createTrainingManual({ ...base, ...areaPatch(input), createdBy: ctx.user.id });
     await logActivity({ userId: ctx.user.id, action: "create", entity: "training_manual", entityId: result.id, details: input.title });
     return result;
   }),
@@ -193,9 +228,10 @@ export const trainingRouter = router({
     const { url } = await storagePut(key, buffer, input.mimeType);
     return { url, key, fileName: input.fileName, mimeType: input.mimeType };
   }),
-  updateManual: protectedProcedure.input(z.object({ id: z.number(), categoryId: z.number().nullable().optional(), title: z.string().min(1).optional(), content: z.string().optional(), type: z.enum(MANUAL_TYPES).optional(), published: z.boolean().optional(), fileUrl: z.string().nullable().optional(), fileKey: z.string().nullable().optional(), fileName: z.string().nullable().optional(), fileMimeType: z.string().nullable().optional(), careerLevel: z.string().max(32).nullable().optional() })).mutation(async ({ ctx, input }) => {
+  updateManual: protectedProcedure.input(z.object({ id: z.number(), categoryId: z.number().nullable().optional(), title: z.string().min(1).optional(), content: z.string().optional(), type: z.enum(MANUAL_TYPES).optional(), published: z.boolean().optional(), fileUrl: z.string().nullable().optional(), fileKey: z.string().nullable().optional(), fileName: z.string().nullable().optional(), fileMimeType: z.string().nullable().optional(), careerLevel: z.string().max(32).nullable().optional(), area: areaField, subarea: subareaField })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
-    const { id, ...data } = input;
+    const { id, area: _a, subarea: _s, ...rest } = input;
+    const data = { ...rest, ...areaPatch(input) };
     if (data.fileUrl != null || data.fileKey != null) {
       // reenviar o anexo que o manual já tem (formulário completo) não conta
       const d = await dbOrThrow();
@@ -232,7 +268,41 @@ export const trainingRouter = router({
   // ─── FAQs ────────────────────────────────────────────────────────────────
   faqs: protectedProcedure.input(z.object({ categoryId: z.number().optional() })).query(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
-    return getFAQs(input.categoryId);
+    const rows = await getFAQs(input.categoryId);
+    // "Fonte" das FAQs da IA: só o título de documentos que continuam visíveis para todos.
+    const docIds = Array.from(new Set(rows.map((r) => r.sourceKbDocId).filter((x): x is number => !!x)));
+    const titles = new Map<number, string>();
+    if (docIds.length) {
+      try {
+        const d = await dbOrThrow();
+        const res: any = await d.execute(sql`SELECT d.id, d.title FROM kb_documents d WHERE d.id IN (${sql.join(docIds.map((x) => sql`${x}`), sql`, `)})
+          AND d.deletedAt IS NULL AND d.status = 'synced'
+          AND (d.visibilityRoles IS NULL OR d.visibilityRoles = '' OR d.visibilityRoles = '[]')
+          AND (d.visibilityCities IS NULL OR d.visibilityCities = '' OR d.visibilityCities = '[]')`);
+        const list = Array.isArray(res) ? res[0] : res?.rows ?? res;
+        for (const r of Array.isArray(list) ? list : []) titles.set(Number(r.id), String(r.title ?? ""));
+      } catch { /* sem título da fonte */ }
+    }
+    return rows.map(({ aiKey: _k, ...r }) => ({ ...r, isAi: r.source === "ai", sourceTitle: r.sourceKbDocId ? titles.get(r.sourceKbDocId) ?? null : null }));
+  }),
+  /** Estado das FAQs automáticas (interruptores e última corrida) — quem gere a formação. */
+  faqAutoStatus: protectedProcedure.query(async ({ ctx }) => {
+    requireAccess(ctx.user, "formacao", "manage");
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }, { aiFeatureAvailableFresh }, { lastFaqRun }] = await Promise.all([
+      import("./_core/featureFlags"), import("../shared/appSettings"), import("./_core/ai/status"), import("./trainingFaqAuto"),
+    ]);
+    await ensureFeatureFlagOverrides().catch(() => undefined);
+    return {
+      weeklyOn: isFeatureEnabled("KB_FAQ_WEEKLY", { defaultEnabled: automationFlagDefault("KB_FAQ_WEEKLY") }),
+      aiOn: await aiFeatureAvailableFresh("kb_faq"),
+      lastRun: await lastFaqRun(),
+    };
+  }),
+  /** "Gerar agora": a mesma corrida do trabalho semanal, já (não depende do interruptor semanal). */
+  generateFaqsNow: protectedProcedure.mutation(async ({ ctx }) => {
+    requireAccess(ctx.user, "formacao", "manage");
+    const { runKbFaqGeneration } = await import("./trainingFaqAuto");
+    return runKbFaqGeneration({ trigger: "manual", userId: ctx.user.id, deadlineAt: Date.now() + 50_000 });
   }),
   createFAQ: protectedProcedure.input(z.object({ categoryId: z.number().optional(), question: z.string().min(1), answer: z.string().min(1), sortOrder: z.number().optional() })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
@@ -267,7 +337,8 @@ export const trainingRouter = router({
     const [r] = await d.select({ n: sql<number>`COUNT(*)` }).from(quizQuestions)
       .where(and(eq(quizQuestions.published, 1), isNull(quizQuestions.archivedAt), input?.categoryId ? eq(quizQuestions.categoryId, input.categoryId) : undefined));
     const { QUIZ_MAX_PER_DAY, QUIZ_QUESTIONS_PER_GAME } = await import("./trainingRules");
-    return { published: Number(r?.n ?? 0), perGame: QUIZ_QUESTIONS_PER_GAME, maxPerDay: QUIZ_MAX_PER_DAY };
+    const { liveQuizAvailable } = await import("./trainingQuizAi");
+    return { published: Number(r?.n ?? 0), perGame: QUIZ_QUESTIONS_PER_GAME, maxPerDay: QUIZ_MAX_PER_DAY, ai: await liveQuizAvailable() };
   }),
   createQuizQuestion: protectedProcedure.input(z.object({ categoryId: z.number().optional(), ...questionFields, difficulty: z.enum(["easy", "medium", "hard"]).optional(), points: z.number().int().min(1).max(10000).optional() })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
@@ -299,12 +370,78 @@ export const trainingRouter = router({
     const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
     return { configured: await aiFeatureAvailableFresh("quiz_generation") };
   }),
-  /** Começa um jogo: o servidor escolhe e guarda as perguntas servidas. */
-  startQuiz: protectedProcedure.input(z.object({ categoryId: z.number().optional() }).optional()).mutation(async ({ ctx, input }) => {
+  /**
+   * Começa um jogo: o servidor escolhe (ou a IA faz, 0660) e guarda as
+   * perguntas servidas. Tema: categoria do percurso, área/subsecção ou texto.
+   */
+  startQuiz: protectedProcedure.input(z.object({
+    categoryId: z.number().int().positive().optional(),
+    area: z.enum(TRAINING_AREA_IDS).optional(),
+    subarea: z.string().max(80).optional(),
+    topic: z.string().max(120).optional(),
+  }).optional()).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
     const employeeId = await myEmployeeId(ctx.user.id);
     const { startQuizAttempt } = await import("./trainingAttempts");
-    return startQuizAttempt(employeeId, input?.categoryId ?? null);
+    return startQuizAttempt(employeeId, {
+      categoryId: input?.categoryId ?? null, area: input?.area ?? null, subarea: cleanSubarea(input?.subarea), topic: input?.topic?.trim() || null,
+      viewer: await kbViewerOf(ctx.user), userId: ctx.user.id,
+    });
+  }),
+  /** As minhas últimas tentativas do quiz (para "Rever"). */
+  myQuizAttempts: protectedProcedure.query(async ({ ctx }) => {
+    requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
+    const me = await getEmployeeByUserId(ctx.user.id);
+    if (!me) return [];
+    const { myQuizAttempts } = await import("./trainingAttempts");
+    return myQuizAttempts(me.employee.id);
+  }),
+  /** Rever uma tentativa minha (perguntas, a minha resposta, a certa e a explicação). */
+  quizAttemptReview: protectedProcedure.input(z.object({ sessionId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
+    const employeeId = await myEmployeeId(ctx.user.id);
+    const { quizAttemptReview } = await import("./trainingAttempts");
+    return quizAttemptReview(employeeId, input.sessionId);
+  }),
+  /** Quem gere: as últimas perguntas feitas pela IA (qualidade; sem nomes; só a sua cidade). */
+  aiQuizQuestions: protectedProcedure.query(async ({ ctx }) => {
+    requireAccess(ctx.user, "formacao", "manage");
+    const { recentAiQuizQuestions } = await import("./trainingAttempts");
+    return recentAiQuizQuestions(40);
+  }),
+  /** Quem gere: guarda uma pergunta da IA na lista fixa, como rascunho. */
+  copyAiQuestionToBank: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "formacao", "manage");
+    const { copyAiQuestionToBank } = await import("./trainingAttempts");
+    return copyAiQuestionToBank(input.id, ctx.user.id);
+  }),
+
+  // ─── Catálogo por área e procurar por tema (0660) ───────────────────────
+  catalog: protectedProcedure.query(async ({ ctx }) => {
+    requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
+    const { loadCatalog } = await import("./trainingCatalog");
+    return loadCatalog();
+  }),
+  findTraining: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(160) })).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
+    const { findTraining } = await import("./trainingCatalog");
+    return findTraining({ q: input.q, userId: ctx.user.id, viewer: await kbViewerOf(ctx.user) });
+  }),
+  /** Quem gere: grava a área/subsecção de vários conteúdos (rever as propostas). */
+  setAreas: protectedProcedure.input(z.object({
+    items: z.array(z.object({ itemType: z.enum(["manual", "video"]), id: z.number().int().positive(), area: z.enum(AREA_VALUES).nullable(), subarea: z.string().max(80).nullable() })).min(1).max(300),
+  })).mutation(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "formacao", "manage");
+    const d = await dbOrThrow();
+    let updated = 0;
+    for (const it of input.items) {
+      const patch = areaPatch({ area: it.area, subarea: it.subarea });
+      const table = it.itemType === "video" ? trainingVideos : trainingManuals;
+      await d.update(table).set(patch).where(eq(table.id, it.id));
+      updated++;
+    }
+    await logActivity({ userId: ctx.user.id, action: "update", entity: "training_area", entityId: null, details: `Áreas da formação gravadas em ${updated} conteúdo(s)` } as any);
+    return { updated };
   }),
   submitQuiz: protectedProcedure.input(z.object({ sessionId: z.number().int().positive(), answers: assessmentAnswers })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });

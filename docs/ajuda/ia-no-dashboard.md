@@ -18,6 +18,9 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - **Leads de Extras:** "Resumo IA" e "Rascunho com IA", só para quem edita as leads. Enviar exige "Aprovar".
 - **Passagem de turno:** "Resumir agora" refaz o resumo da passagem gravada.
 - **Formação:** "Gerar perguntas (IA)" cria rascunhos por publicar. O **Tutor** responde no manual, no vídeo e no quiz.
+  - **Quiz:** ao carregares em **Jogar**, a IA faz 10 perguntas novas a partir da base de conhecimento (sem IA, perguntas fixas). A resposta certa fica no servidor.
+  - **Procurar formação:** a IA escolhe a formação certa no catálogo (sem IA, pesquisa por palavras).
+  - **FAQs → Gerar agora** (quem gere a formação): 2 ou 3 documentos da base de conhecimento dão até 3 FAQs novas, publicadas e marcadas "IA".
 - **Rádio:** "Transcrever".
 - **Multis:** o chat em todas as páginas.
 
@@ -39,12 +42,14 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
    - Abaixo disso, cria uma tarefa para uma pessoa.
 10. **Relatórios de segunda-feira:** por email (direção, marketing, operações e RH).
 11. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.
+12. **FAQs da formação** (se ligares o interruptor semanal): à segunda-feira, até 3 FAQs novas a partir da base de conhecimento, publicadas e marcadas "IA". Arquivar uma é dizer "esta não": não volta.
 
 **Começam desligadas** (só um administrador as liga):
 - ler os documentos do RH para preencher a ficha (o IBAN fica sempre como pedido ao RH, exceto para quem o pode mudar na hora);
 - ler os CV dos emails do RH;
   - estas duas mandam o ficheiro inteiro, por isso **só correm com a IA em Vertex AI na UE**. Sem isso não correm, mesmo ligadas. Em **Definições → Automações**, ao lado do interruptor, aparece "Só corre com a IA em Vertex AI na UE (hoje: …)". O sítio onde a IA está vê-se também no cartão **IA — custo do mês** ("Gemini (Vertex AI)" ou "Gemini");
-- juntar fichas de clientes.
+- juntar fichas de clientes;
+- as FAQs semanais da formação (o botão **Gerar agora** funciona na mesma).
 
 **Dados pessoais**
 - Nos textos, os emails, os telefones, o NIF, o IBAN e as matrículas são tapados antes de irem para a IA.

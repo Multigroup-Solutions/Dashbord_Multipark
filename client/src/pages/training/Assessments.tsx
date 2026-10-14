@@ -12,7 +12,9 @@ import { Progress } from "@/components/ui/progress";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDate } from "@/lib/lisbonTime";
 import { toast } from "sonner";
-import { Award, BookOpen, CheckCircle, Clock, Download, Eye, Gamepad2, GraduationCap, Pencil, Play, Plus, Settings, Star, Trash2, Trophy, XCircle } from "lucide-react";
+import { Award, BookOpen, CheckCircle, ChevronDown, Clock, Copy, Download, Eye, Gamepad2, GraduationCap, History, Pencil, Play, Plus, Settings, Sparkles, Star, Trash2, Trophy, X, XCircle } from "lucide-react";
+import { AreaPills, type AreaFilter } from "./areas";
+import { TRAINING_AREA_LABELS, type TrainingAreaId } from "@shared/trainingAreas";
 import {
   ALL_CAREER_LEVELS, AnswerReview, CAREER_LEVEL_COLORS, CAREER_LEVEL_LABELS, CAREER_TRACKS, QuestionDialog, emptyQuestion,
   questionFrom, useConfirm, useOpenManualFile, type QuestionFormValue,
@@ -20,7 +22,10 @@ import {
 import { QuizTutorReview, TutorPanel } from "./TutorPanel";
 
 type Answer = { questionId: number; answer: "A" | "B" | "C" | "D" };
-type Session = { sessionId: number; questions: any[]; timeLimitSeconds: number | null; attemptsLeft: number };
+type Session = { sessionId: number; questions: any[]; timeLimitSeconds: number | null; attemptsLeft: number; source?: "ai" | "bank"; topic?: string | null; notice?: string | null };
+
+/** Tema do próximo quiz, vindo de fora (item de um percurso ou "Treinar com um quiz sobre isto"). */
+export type QuizPreset = { categoryId?: number; topic?: string; label?: string | null };
 
 /** Jogo de perguntas (quiz ou exame): uma pergunta de cada vez, submete no fim. */
 function QuestionRunner({ session, header, pending, onSubmit, remainingSeconds }: {
@@ -72,15 +77,27 @@ const answersRef = new Map<number, Answer[]>();
 
 // ─── QUIZ ──────────────────────────────────────────────────────────────────
 
-export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
+export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; preset?: QuizPreset | null; onClearPreset?: () => void }) {
   const utils = trpc.useUtils();
   const [session, setSession] = useState<Session | null>(null);
   const [result, setResult] = useState<any>(null);
   const [editing, setEditing] = useState<{ id: number | null; value: QuestionFormValue } | null>(null);
   const [onlyDrafts, setOnlyDrafts] = useState(false);
   const [confirm, confirmUi] = useConfirm();
+  // Tema escolhido aqui (área ou texto); um `preset` (percurso / pesquisa) ganha.
+  const [pickArea, setPickArea] = useState<AreaFilter>("all");
+  const [topicText, setTopicText] = useState("");
+  const [reviewId, setReviewId] = useState<number | null>(null);
+  const [showAiQs, setShowAiQs] = useState(false);
 
   const { data: info, isLoading: infoLoading, error: infoError } = trpc.training.quizInfo.useQuery({});
+  const attemptsQ = trpc.training.myQuizAttempts.useQuery();
+  const reviewQ = trpc.training.quizAttemptReview.useQuery({ sessionId: reviewId ?? 0 }, { enabled: reviewId != null });
+  const aiQsQ = trpc.training.aiQuizQuestions.useQuery(undefined, { enabled: isAdmin && showAiQs });
+  const copyToBank = trpc.training.copyAiQuestionToBank.useMutation({
+    onSuccess: () => { toast.success("Guardada nas perguntas fixas como rascunho — revê e publica."); void utils.training.quizQuestions.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
   const rankingQ = trpc.training.quizRanking.useQuery();
   const ranking = rankingQ.data ?? [];
   const rankedIds = useMemo(() => (ranking as any[]).slice(0, 10).map((r) => r.employeeId), [ranking]);
@@ -88,11 +105,26 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
   const nameMap = useMemo(() => new Map((names as any[]).map((n) => [n.id, n.name])), [names]);
   const { data: adminQuestions = [], refetch: refetchAdmin } = trpc.training.quizQuestions.useQuery({}, { enabled: isAdmin });
   const onErr = (e: { message: string }) => toast.error(e.message);
-  const start = trpc.training.startQuiz.useMutation({ onSuccess: (s) => { setResult(null); setSession(s); }, onError: onErr });
-  const submit = trpc.training.submitQuiz.useMutation({
-    onSuccess: (r, vars) => { setResult({ ...r, sessionId: vars.sessionId, answers: vars.answers }); setSession(null); void utils.training.quizRanking.invalidate(); void utils.training.myTraining.invalidate(); },
+  const start = trpc.training.startQuiz.useMutation({
+    onSuccess: (s) => { setResult(null); setSession(s); if (s.notice) toast.info(s.notice); },
     onError: onErr,
   });
+  const submit = trpc.training.submitQuiz.useMutation({
+    onSuccess: (r, vars) => { setResult({ ...r, sessionId: vars.sessionId, answers: vars.answers }); setSession(null); void utils.training.quizRanking.invalidate(); void utils.training.myTraining.invalidate(); void utils.training.myQuizAttempts.invalidate(); },
+    onError: onErr,
+  });
+  /** O que se pede ao servidor: o tema do percurso/pesquisa, ou o escolhido aqui. */
+  const startInput = (): { categoryId?: number; area?: TrainingAreaId; topic?: string } => {
+    if (preset?.categoryId) return { categoryId: preset.categoryId };
+    if (preset?.topic) return { topic: preset.topic.slice(0, 120) };
+    const t = topicText.replace(/\s+/g, " ").trim();
+    if (t) return { topic: t.slice(0, 120) };
+    if (pickArea !== "all" && pickArea !== "none") return { area: pickArea };
+    return {};
+  };
+  const topicLabel = preset ? (preset.label || preset.topic || "o tema da formação")
+    : topicText.trim() ? topicText.trim() : pickArea !== "all" && pickArea !== "none" ? TRAINING_AREA_LABELS[pickArea] : null;
+  const play = () => start.mutate(startInput());
   const afterSave = () => { refetchAdmin(); setEditing(null); void utils.training.quizInfo.invalidate(); };
   const createQ = trpc.training.createQuizQuestion.useMutation({ onSuccess: () => { afterSave(); toast.success("Pergunta adicionada"); }, onError: onErr });
   const updateQ = trpc.training.updateQuizQuestion.useMutation({ onSuccess: () => { afterSave(); toast.success("Pergunta atualizada"); }, onError: onErr });
@@ -112,9 +144,9 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
             <div className="text-4xl font-bold text-primary">{pct}%</div>
             <p className="text-muted-foreground">{result.correct} de {result.total} corretas · {result.score} pontos</p>
             <Progress value={pct} className="h-3" />
-            <div className="flex justify-center gap-2">
+            <div className="flex flex-wrap justify-center gap-2">
               <Button variant="outline" onClick={() => setResult(null)}>Voltar</Button>
-              <Button disabled={start.isPending} onClick={() => start.mutate({})}><Play className="w-4 h-4 mr-1" />Tentar novamente</Button>
+              <Button disabled={start.isPending} onClick={play}><Play className="w-4 h-4 mr-1" />{start.isPending ? "A preparar…" : "Jogar outra vez (perguntas novas)"}</Button>
             </div>
           </CardContent>
         </Card>
@@ -126,24 +158,50 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
   }
 
   if (session) {
-    return <QuestionRunner key={session.sessionId} session={session} pending={submit.isPending} remainingSeconds={null} onSubmit={(answers) => submit.mutate({ sessionId: session.sessionId, answers })} />;
+    const header = session.source === "ai"
+      ? <Badge className="bg-primary/10 text-primary border border-primary/30"><Sparkles className="w-3 h-3 mr-1" />Perguntas novas{session.topic && session.topic !== "Tudo" ? ` · ${session.topic}` : ""}</Badge>
+      : <Badge variant="outline">Perguntas fixas</Badge>;
+    return <QuestionRunner key={session.sessionId} session={session} header={header} pending={submit.isPending} remainingSeconds={null} onSubmit={(answers) => submit.mutate({ sessionId: session.sessionId, answers })} />;
   }
 
+  const canPlay = !!info?.ai || !!info?.published;
+  const attempts = attemptsQ.data ?? [];
   return (
     <div className="space-y-6">
       {confirmUi}
       <TutorPanel context={{ type: "quiz", id: 0 }} title="Tutor — dicas antes do quiz" />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
-          <CardContent className="p-8 text-center space-y-4">
-            <Gamepad2 className="w-16 h-16 mx-auto text-primary" />
-            <h2 className="text-xl font-bold">Quiz Interativo</h2>
-            <p className="text-muted-foreground">{info?.published ?? 0} perguntas disponíveis. Responde a {info?.perGame ?? 10} perguntas aleatórias e ganha pontos! (máx. {info?.maxPerDay ?? 5} jogos por dia)</p>
-            {infoLoading && <p>A carregar perguntas…</p>}
-            {infoError && <p className="text-destructive">Não foi possível carregar as perguntas. Tenta atualizar a página.</p>}
-            <Button size="lg" disabled={infoLoading || !!infoError || !info?.published || start.isPending} onClick={() => start.mutate({})}>
-              <Play className="w-4 h-4 mr-2" />Jogar
-            </Button>
+          <CardContent className="p-5 sm:p-8 space-y-4">
+            <div className="text-center space-y-2">
+              <Gamepad2 className="w-14 h-14 mx-auto text-primary" />
+              <h2 className="text-xl font-bold">Quiz</h2>
+              <p className="text-sm text-muted-foreground">
+                {info?.ai
+                  ? `Em cada jogo a IA faz ${info?.perGame ?? 10} perguntas novas a partir da base de conhecimento. Máx. ${info?.maxPerDay ?? 5} jogos por dia.`
+                  : `${info?.published ?? 0} perguntas disponíveis. Responde a ${info?.perGame ?? 10} perguntas aleatórias (máx. ${info?.maxPerDay ?? 5} jogos por dia).`}
+              </p>
+            </div>
+            {infoLoading && <p className="text-center text-sm">A carregar…</p>}
+            {infoError && <p className="text-center text-sm text-destructive">Não foi possível carregar o quiz. Tenta atualizar a página.</p>}
+            {preset ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/40 bg-primary/5 p-2 text-sm">
+                <span className="min-w-0">Tema: <b className="break-words">{topicLabel}</b></span>
+                <Button size="sm" variant="ghost" onClick={() => onClearPreset?.()}><X className="w-4 h-4" />Escolher outro</Button>
+              </div>
+            ) : info?.ai ? (
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">Tema (opcional)</Label>
+                <AreaPills value={pickArea} onChange={(v) => { setPickArea(v); setTopicText(""); }} showNone={false} />
+                <Input value={topicText} maxLength={120} placeholder="Ou escreve um tema (ex.: fechar a caixa)" onChange={(e) => setTopicText(e.target.value)} />
+              </div>
+            ) : null}
+            <div className="text-center">
+              <Button size="lg" variant="selected" disabled={infoLoading || !!infoError || !canPlay || start.isPending} onClick={play}>
+                <Play className="w-4 h-4 mr-2" />{start.isPending ? "A preparar as perguntas…" : "Jogar"}
+              </Button>
+              {start.isPending && info?.ai && <p className="mt-2 text-xs text-muted-foreground">A IA está a fazer as perguntas — pode demorar até meio minuto.</p>}
+            </div>
           </CardContent>
         </Card>
         <Card>
@@ -171,10 +229,78 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
         </Card>
       </div>
 
+      {attempts.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><History className="w-4 h-4 text-primary" />As tuas últimas tentativas</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {attempts.slice(0, 5).map((a) => (
+              <div key={a.sessionId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium truncate">{a.source === "ai" ? (a.topic && a.topic !== "Tudo" ? a.topic : "Perguntas da IA") : "Perguntas fixas"}</p>
+                  <p className="text-xs text-muted-foreground">{fmtPTDate(a.startedAt)} · {a.correct}/{a.total} certas ({a.percentage}%)</p>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => setReviewId(a.sessionId)}><Eye className="w-4 h-4" />Rever</Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+      <Dialog open={reviewId != null} onOpenChange={(o) => !o && setReviewId(null)}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Rever a tentativa</DialogTitle></DialogHeader>
+          {reviewQ.isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p>
+            : reviewQ.error ? <QueryErrorNote error={reviewQ.error} onRetry={() => reviewQ.refetch()} retrying={reviewQ.isFetching} what="a tentativa" />
+            : reviewQ.data ? (
+              <div className="space-y-2">
+                {!reviewQ.data.hasAnswers && <p className="text-xs text-muted-foreground">Esta tentativa é anterior ao registo das respostas: vês as perguntas e as respostas certas.</p>}
+                <AnswerReview review={reviewQ.data.review} />
+              </div>
+            ) : null}
+        </DialogContent>
+      </Dialog>
+
       {isAdmin && (
         <Card>
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-            <CardTitle>Gerir perguntas ({adminQuestions.length}{drafts ? ` · ${drafts} rascunho(s)` : ""})</CardTitle>
+            <div className="min-w-0">
+              <CardTitle className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary" />Perguntas feitas pela IA</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">As últimas 40 (da tua cidade), para veres se estão certas. Uma boa pode ir para as perguntas fixas.</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setShowAiQs((v) => !v)}><ChevronDown className={`w-4 h-4 transition-transform ${showAiQs ? "rotate-180" : ""}`} />{showAiQs ? "Esconder" : "Ver"}</Button>
+          </CardHeader>
+          {showAiQs && (
+            <CardContent>
+              {aiQsQ.isLoading ? <p className="text-sm text-muted-foreground">A carregar…</p>
+                : aiQsQ.error ? <QueryErrorNote error={aiQsQ.error} onRetry={() => aiQsQ.refetch()} retrying={aiQsQ.isFetching} what="as perguntas da IA" />
+                : !(aiQsQ.data ?? []).length ? <p className="text-sm text-muted-foreground">Ainda ninguém jogou com perguntas da IA.</p> : (
+                <div className="space-y-2 max-h-[32rem] overflow-y-auto">
+                  {(aiQsQ.data ?? []).map((q) => (
+                    <div key={q.id} className="rounded-lg border p-3 space-y-1">
+                      <p className="text-sm font-medium">{q.question}</p>
+                      <p className="text-xs text-muted-foreground break-words">Certa: {q.correctOption}. {(q as any)[`option${q.correctOption}`]}</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {q.sourceTitle && <Badge variant="outline" className="text-xs max-w-full truncate">Fonte: {q.sourceTitle}</Badge>}
+                        {q.topic && q.topic !== "Tudo" && <Badge variant="secondary" className="text-xs">{q.topic}</Badge>}
+                        {q.answered === "right" && <Badge className="text-xs bg-green-100 text-green-800">Acertada</Badge>}
+                        {q.answered === "wrong" && <Badge className="text-xs bg-red-100 text-red-700">Errada</Badge>}
+                        <Button size="sm" variant="ghost" className="ml-auto" disabled={copyToBank.isPending} onClick={() => copyToBank.mutate({ id: q.id })}><Copy className="w-4 h-4" />Guardar nas fixas</Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          )}
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <CardTitle>Perguntas fixas ({adminQuestions.length}{drafts ? ` · ${drafts} rascunho(s)` : ""})</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">{info?.ai ? "De reserva: usadas quando a IA falha ou está desligada." : "A IA do quiz está desligada: o jogo usa estas perguntas."}</p>
+            </div>
             <div className="flex gap-2">
               {drafts > 0 && <Button size="sm" variant={onlyDrafts ? "selected" : "outline"} onClick={() => setOnlyDrafts((v) => !v)}>Só rascunhos</Button>}
               <Button size="sm" onClick={() => setEditing({ id: null, value: emptyQuestion() })}><Plus className="w-4 h-4 mr-1" />Nova pergunta</Button>
@@ -187,7 +313,7 @@ export function QuizTab({ isAdmin }: { isAdmin: boolean }) {
                   <div className="min-w-0">
                     <p className="font-medium text-sm">{q.question}</p>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {q.published === 0 && <Badge className="bg-amber-100 text-amber-800">Rascunho{q.sourceManualId ? " (IA)" : ""}</Badge>}
+                      {q.published === 0 && <Badge className="bg-amber-100 text-amber-800">Rascunho{q.sourceManualId || q.sourceKbDocId ? " (IA)" : ""}</Badge>}
                       <Badge variant="outline">{q.difficulty === "easy" ? "Fácil" : q.difficulty === "medium" ? "Médio" : "Difícil"}</Badge>
                       <Badge variant="secondary">{q.points} pts</Badge>
                       <Badge className="bg-green-100 text-green-800">Resp: {q.correctOption}</Badge>
