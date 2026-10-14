@@ -142,7 +142,7 @@ export async function myCalendarEvents(userId: number, fromDay: string, toDay: s
  * mensagem para o ecrã.
  */
 export async function createMyCalendarEvent(userId: number, input: CreateCalendarEventInput, deps: CalendarViewDeps = defaultDeps): Promise<{
-  eventId: string; htmlLink: string | null; meetLink: string | null; start: string; end: string; allDay: boolean; guests: number;
+  eventId: string; htmlLink: string | null; meetLink: string | null; start: string; end: string; allDay: boolean; guests: number; recurrenceLabel: string | null;
 }> {
   const acc = await deps.account(userId);
   if (!acc || acc.status === "disconnected" || !acc.refreshTokenEnc) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Liga primeiro a tua conta Google." });
@@ -175,5 +175,6 @@ export async function createMyCalendarEvent(userId: number, input: CreateCalenda
     end: new Date(v.value.endMs).toISOString(),
     allDay: v.value.allDay,
     guests: v.value.guests.length,
+    recurrenceLabel: v.value.recurrenceLabel,
   };
 }

@@ -40,11 +40,62 @@ export function conversationCityKey(f: {
   return f.employeeCity ?? f.leadCity ?? f.bookingCity ?? null;
 }
 
-/** A conversa passa no filtro de cidade? PURA. */
-export function matchesCityFilter(cityKey: CityKey | null | undefined, filter: InboxCityFilter): boolean {
+/**
+ * A conversa passa no filtro de cidade? PURA. `withNoCity` (2026-10-14): com
+ * uma cidade escolhida, as conversas SEM cidade conhecida também passam —
+ * ver `inboxCityScope`.
+ */
+export function matchesCityFilter(cityKey: CityKey | null | undefined, filter: InboxCityFilter, withNoCity = false): boolean {
   if (filter === "all") return true;
   if (filter === "none") return cityKey == null;
-  return cityKey === filter;
+  return cityKey === filter || (withNoCity && cityKey == null);
+}
+
+/**
+ * Âmbito de cidade da lista do inbox (2026-10-14, Jorge: a cidade segue a da
+ * barra de topo, como no resto do dashboard). PURA. Já não há seletor de
+ * cidade dentro do inbox.
+ *
+ * Porquê `withNoCity`: quem só tem uma cidade tem SEMPRE essa cidade escolhida
+ * em cima. Se a lista mostrasse só essa cidade, as conversas sem cidade
+ * conhecida (números novos, contactos que ainda não são ficha, lead nem
+ * reserva) nunca lhe apareciam — e são precisamente as que alguém tem de ir
+ * ver. Por isso, com uma cidade escolhida, a lista mostra essa cidade E as sem
+ * cidade (o mais seguro: ninguém perde conversas). O chip "Sem cidade" mostra
+ * SÓ as sem cidade, com a contagem à vista.
+ *
+ * - `onlyNoCity` → só as sem cidade ("none").
+ * - cidade escolhida em cima → essa cidade + as sem cidade.
+ * - todas as cidades → tudo.
+ */
+export function inboxCityScope(opts: { globalCity: CityKey | null; onlyNoCity: boolean }): { cityKey: InboxCityFilter; withNoCity: boolean } {
+  if (opts.onlyNoCity) return { cityKey: "none", withNoCity: false };
+  if (opts.globalCity) return { cityKey: opts.globalCity, withNoCity: true };
+  return { cityKey: "all", withNoCity: false };
+}
+
+/**
+ * Contagens da coluna das caixas (2026-10-14, como nas caixas de email): por
+ * caixa, quantas conversas há e quantas têm mensagens por ler, sobre a lista
+ * já carregada (as INBOX_LIST_LIMIT mais recentes do âmbito de cidade). PURA.
+ * Chaves: "all" (todas), "geral" (sem caixa) e a chave de cada caixa.
+ */
+export function inboxBoxCounts(
+  rows: ReadonlyArray<{ boxKey: string | null | undefined; unreadCount: number }>,
+): Map<string, { total: number; unread: number }> {
+  const out = new Map<string, { total: number; unread: number }>();
+  const bump = (key: string, unread: boolean) => {
+    const c = out.get(key) ?? { total: 0, unread: 0 };
+    c.total += 1;
+    if (unread) c.unread += 1;
+    out.set(key, c);
+  };
+  for (const r of rows) {
+    const unread = r.unreadCount > 0;
+    bump("all", unread);
+    bump(r.boxKey ? r.boxKey : "geral", unread);
+  }
+  return out;
 }
 
 /** Iniciais para o avatar: 1.ª letra do primeiro e do último nome; número → últimos 2 dígitos. */
@@ -103,15 +154,18 @@ export function daySeparatorLabel(ms: number, now: number): string {
   return y === today.slice(0, 4) ? `${d}/${m}` : `${d}/${m}/${y}`;
 }
 
-/** Filtros da lista do inbox (fora a pesquisa, que tem o seu próprio "limpar"). */
+/**
+ * Filtros da lista do inbox (fora a pesquisa, que tem o seu próprio "limpar").
+ * 2026-10-14: a caixa saiu daqui (vive na coluna da esquerda, como nas caixas
+ * de email — trocar de caixa não é "um filtro" e "Limpar" não a muda) e a
+ * cidade também (segue o seletor global — `inboxCityScope`).
+ */
 export interface InboxListFilters {
   assignee: AssigneeFilter;
   status: StatusFilter;
   intent: string;
-  /** Caixa por tema (17f): "all", "geral" (sem caixa) ou a chave da caixa. */
-  box: string;
-  /** Cidade da pessoa (`conversationCityKey`); aplicada no servidor, antes do LIMIT. */
-  city: InboxCityFilter;
+  /** Só as conversas SEM cidade conhecida (chip "Sem cidade"). */
+  onlyNoCity: boolean;
   onlyUnread: boolean;
   onlyUrgent: boolean;
   onlyAlerts: boolean;
@@ -122,14 +176,13 @@ export const DEFAULT_INBOX_FILTERS: InboxListFilters = {
   assignee: "all",
   status: "all",
   intent: "all",
-  box: "all",
-  city: "all",
+  onlyNoCity: false,
   onlyUnread: false,
   onlyUrgent: false,
   onlyAlerts: false,
 };
 
-/** A conversa está na caixa do filtro? ("geral" = sem caixa). PURA. */
+/** A conversa está na caixa escolhida? ("all" = todas, "geral" = sem caixa). PURA. */
 export function matchesBoxFilter(boxKey: string | null | undefined, box: string): boolean {
   if (box === "all") return true;
   if (box === "geral") return !boxKey;
@@ -142,8 +195,7 @@ export function activeInboxFilterCount(f: InboxListFilters): number {
     (f.assignee !== DEFAULT_INBOX_FILTERS.assignee ? 1 : 0) +
     (f.status !== DEFAULT_INBOX_FILTERS.status ? 1 : 0) +
     (f.intent !== DEFAULT_INBOX_FILTERS.intent ? 1 : 0) +
-    (f.box !== DEFAULT_INBOX_FILTERS.box ? 1 : 0) +
-    (f.city !== DEFAULT_INBOX_FILTERS.city ? 1 : 0) +
+    (f.onlyNoCity ? 1 : 0) +
     (f.onlyUnread ? 1 : 0) +
     (f.onlyUrgent ? 1 : 0) +
     (f.onlyAlerts ? 1 : 0)

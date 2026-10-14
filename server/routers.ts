@@ -6258,11 +6258,14 @@ export const appRouter = router({
         search: z.string().max(120).optional(),
         boxKey: z.string().max(40).nullish(),
         cityKey: z.enum(INBOX_CITY_FILTERS).optional(),
+        // 2026-10-14: a cidade segue o seletor de cima e traz também as SEM
+        // cidade (`inboxCityScope`) — senão quem só tem uma cidade nunca as via.
+        withNoCity: z.boolean().optional(),
       }).optional()).query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
         // 17f: as caixas que a pessoa não vê ficam de fora; `boxKey` filtra uma ("geral" = sem caixa).
         const { hiddenBoxKeys } = await import("./whatsappInbox");
-        return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user), city: input?.cityKey ?? null });
+        return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user), city: input?.cityKey ?? null, withNoCity: input?.withNoCity === true });
       }),
       /** Quem é o contacto (17f): ficha do RH, candidato ou cliente do CRM, com o resumo do histórico. */
       identity: protectedProcedure.input(z.object({ conversationId: z.number().int().positive() })).query(async ({ ctx, input }) => {

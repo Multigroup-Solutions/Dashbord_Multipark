@@ -160,7 +160,9 @@ export function CentralVodafoneCard() {
               <div key={c.id} className="flex flex-wrap items-center gap-2 p-2 text-xs" title={c.subject ?? undefined}>
                 {!c.held ? <PhoneMissed className="h-3.5 w-3.5 text-destructive" /> : c.direction === "out" ? <PhoneOutgoing className="h-3.5 w-3.5" /> : <PhoneIncoming className="h-3.5 w-3.5" />}
                 <span>{c.startedAt ? fmtPTDateTime(c.startedAt) : ""}</span>
-                <span className="font-medium">{c.userName ?? "?"}</span>
+                {c.userHref
+                  ? <Link href={c.userHref} className="font-medium underline" title="Abrir a ficha desta pessoa">{c.userName ?? `#${c.userId}`}</Link>
+                  : <span className="font-medium">{c.userName ?? "?"}</span>}
                 <span className="text-muted-foreground">{c.direction === "out" ? "ligou a" : "chamada de"}</span>
                 {/* 39e: com quem foi (a ficha que a consola escolheu); sem ficha, o número; sem nada, o texto da consola */}
                 {c.contact && c.contact.kind !== "Sem ficha" ? (

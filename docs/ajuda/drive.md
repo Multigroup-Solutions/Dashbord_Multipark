@@ -2,11 +2,17 @@
 modulo: drive
 titulo: Google Drive, Docs e Sheets
 rotas: /perfil
-palavras: drive, google drive, docs, google docs, sheets, google sheets, folha, folha de cálculo, anexar do drive, guardar no drive, exportar para sheets, importar do sheets, modelo, modelos, gerar documento, marcadores, placeholders, shared drive, drive partilhado, pasta multipark, picker, escolher do drive, relatórios ao vivo, espelho, multipark direção, leitura de folhas, rh
+palavras: drive, google drive, abrir o drive, drive da empresa, conta errada, várias contas, authuser, docs, google docs, sheets, google sheets, folha, folha de cálculo, anexar do drive, guardar no drive, exportar para sheets, importar do sheets, modelo, modelos, gerar documento, marcadores, placeholders, shared drive, drive partilhado, pasta multipark, picker, escolher do drive, relatórios ao vivo, espelho, multipark direção, leitura de folhas, rh
 ---
 # Google Drive, Docs e Sheets
 
 Liga ficheiros do Google Drive aos registos, guarda anexos e documentos no teu Drive, gera documentos a partir de modelos Google Docs e exporta relatórios para o Google Sheets.
+
+**Abrir o Drive** (menu **Comunicação → Drive**)
+- Abre o **Drive da empresa** (o Shared Drive configurado) num separador novo, **na tua conta Google**: a que ligaste no Perfil → Google ou, sem ela, o email com que entras no dashboard. Num telemóvel ou browser com várias contas Google já não cai na conta pessoal.
+- Se a conta não estiver aberta nesse browser, o Google pede para entrares com ela.
+- Se o Shared Drive ainda não estiver ligado, abre a lista dos **Drives partilhados**.
+- Em **/drive** há também os atalhos **O meu Drive**, **Partilhados comigo**, **Drives partilhados** e **Recentes**, todos na tua conta.
 
 **Ativar o Drive** (cada pessoa, no **Perfil → Google Drive**)
 1. Liga primeiro a tua conta Google (Perfil → Google).

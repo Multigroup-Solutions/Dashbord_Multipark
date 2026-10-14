@@ -114,7 +114,7 @@ export async function sharedDriveContext(deadlineAt: number, o: { live?: boolean
   const name = o.live ? cfg.liveDriveName.trim() : cfg.sharedDriveName;
   const client = delegatedClient(cfg.ownerEmail, DWD_DRIVE_SCOPES);
   const apis = googleWorkspaceApis(client, deadlineAt);
-  const key = `drive:${name}`.slice(0, 64);
+  const key = sharedDriveStateKey(name);
   let driveId = await getState(key);
   if (!driveId) {
     driveId = await apis.drive.findSharedDrive(name);
@@ -126,6 +126,32 @@ export async function sharedDriveContext(deadlineAt: number, o: { live?: boolean
     await setState(key, driveId).catch(() => {});
   }
   return { apis, driveId, ownerEmail: cfg.ownerEmail, scopeKey: sharedScopeKey(driveId), cfg };
+}
+
+/** Chave onde fica guardado o id do Shared Drive com este nome. PURA. */
+export function sharedDriveStateKey(name: string): string {
+  return `drive:${name}`.slice(0, 64);
+}
+
+/**
+ * Menu "Drive" (14 out 2026): o id do Shared Drive da empresa (só o que já
+ * está guardado — nunca chama a Google) e o email da conta Google ligada da
+ * pessoa, para o link abrir o Drive certo na conta certa. Nunca falha: sem
+ * dados devolve null e o link cai na lista dos Drives partilhados.
+ */
+export async function sharedDriveLink(userId: number): Promise<{ userId: number; sharedDriveId: string | null; googleEmail: string | null }> {
+  let googleEmail: string | null = null;
+  try {
+    const { getGoogleAccount } = await import("./userAccounts");
+    const acc = await getGoogleAccount(userId);
+    if (acc && acc.status !== "disconnected" && acc.email) googleEmail = String(acc.email);
+  } catch { /* sem conta Google: fica o email do login */ }
+  let sharedDriveId: string | null = null;
+  try {
+    const cfg = await loadDriveConfig();
+    if (cfg.sharedEnabled) sharedDriveId = await getState(sharedDriveStateKey(cfg.sharedDriveName));
+  } catch { /* sem id: lista dos Drives partilhados */ }
+  return { userId, sharedDriveId, googleEmail };
 }
 
 /** O erro é "o Shared Drive configurado não existe" (aviso nos crons, não falha)? */

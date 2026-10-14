@@ -113,7 +113,13 @@ export default function CentralPage() {
                         {c.phone ? (telHref(c.phone) ? <a href={telHref(c.phone)} className="hover:underline">{fmtPhone(c.phone)}</a> : c.phone) : "—"}
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">{formatCallDuration(c.durationS)}</td>
-                      {d.seesAll && <td className="px-3 py-2">{c.userName ?? "—"}</td>}
+                      {d.seesAll && (
+                        <td className="px-3 py-2">
+                          {c.userHref
+                            ? <Link href={c.userHref} className="text-primary hover:underline" title="Abrir a ficha desta pessoa">{c.userName ?? `#${c.userId}`}</Link>
+                            : (c.userName ?? "—")}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

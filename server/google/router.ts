@@ -128,7 +128,7 @@ export const googleCalendarRouter = router({
         const { logActivity } = await import("../db");
         await logActivity({
           userId: ctx.user.id, action: "create", entity: "google_calendar_event", entityId: null,
-          details: `Evento "${input.title.slice(0, 120)}" (${input.startDay}${input.allDay ? ", dia inteiro" : ` ${input.startTime ?? ""}`})${r.guests ? ` · ${r.guests} convidado(s)` : ""}${input.withMeet ? " · com Meet" : ""}`,
+          details: `Evento "${input.title.slice(0, 120)}" (${input.startDay}${input.allDay ? ", dia inteiro" : ` ${input.startTime ?? ""}`})${r.guests ? ` · ${r.guests} convidado(s)` : ""}${input.withMeet ? " · com Meet" : ""}${r.recurrenceLabel ? ` · repete: ${r.recurrenceLabel}` : ""}`,
         } as any);
       } catch { /* registo */ }
       return r;
