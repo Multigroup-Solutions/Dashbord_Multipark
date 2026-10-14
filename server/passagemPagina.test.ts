@@ -136,7 +136,7 @@ describe("Leitura falhada ≠ 0 (email, IA, notificação)", () => {
 
   it("draftKeyLines diz 'sem dados' em vez de 0", () => {
     const lines = draftKeyLines(counts, unavailableCounts(["pending deliveries", "speed"]));
-    expect(lines.find((l) => l.startsWith("Entregas pendentes"))).toBe("Entregas pendentes (sem check-out): sem dados (falhou a leitura)");
+    expect(lines.find((l) => l.startsWith("Entregas pendentes"))).toBe("Entregas pendentes (na fila): sem dados (falhou a leitura)");
     expect(lines.find((l) => l.startsWith("Alertas"))).toBe("Alertas de velocidade/GPS no turno: sem dados (falhou a leitura)/0");
     // 44b: reclamações, perdidos e ocorrências saíram da passagem de turno
     expect(lines.find((l) => l.startsWith("Reclamações") || l.startsWith("Perdidos") || l.startsWith("Ocorrências"))).toBeUndefined();

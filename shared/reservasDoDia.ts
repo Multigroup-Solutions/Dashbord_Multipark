@@ -14,6 +14,7 @@
  */
 import { classifyBookingChannel, isNotOperatedByName, OUR_PARK_BRAND_LABELS, OUR_PARK_BRANDS, type OurParkBrand } from "./multiparkParks";
 import { CITY_LABELS, type CityKey } from "./city";
+import { livePhaseOf, livePhaseText } from "./livePhases";
 
 // ─── Estados e fases ────────────────────────────────────────────────────────
 
@@ -61,16 +62,17 @@ export function movementDone(kind: MovementKind, status: string | null | undefin
 }
 
 /**
- * Fase fina (texto curto) a partir das horas das fases da reserva: "No local
- * de entrega" e "À espera da bagagem" só existem nessas colunas. PURA.
+ * Fase fina (texto curto) das reservas em curso — a MESMA regra do estado ao
+ * vivo da Passagem de turno (shared/livePhases.ts, fluxo A; tarefa 62): "Em
+ * recolha (cliente a caminho)", "Na fila", "Em entrega", "No terminal" (só com
+ * um "Cheguei" deste ciclo) e a etiqueta "à espera das malas" (deste pedido).
+ * Fora destas fases: null. PURA.
  */
 export function phaseLabel(b: Pick<DayBooking, "status" | "phases">): string | null {
-  const s = b.status;
-  if (s === "PENDING_CHECKOUT" || s === "CHECKING_OUT") {
-    if (b.phases.baggageWaitingAt) return "À espera da bagagem";
-    if (b.phases.arrivedAtDeliveryAt) return "No local de entrega";
-  }
-  return null;
+  const r = { status: b.status, ...b.phases };
+  const p = livePhaseOf(r);
+  if (p === "in_park" || p === "moving") return null;
+  return livePhaseText(r);
 }
 
 // ─── Grupos (operação): um por parque ───────────────────────────────────────
