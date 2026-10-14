@@ -35,7 +35,7 @@
  *
  * Esta regra está em DOIS sítios que têm de dizer o mesmo: aqui
  * (`moveKindsOf`, para as linhas soltas) e no SQL de
- * server/multiparkDb/movements.ts (`MOVE_KIND_*`, para as contagens
+ * server/multiparkDb/movements.ts (`moveSeqCteSql` + `moveIsSpotSql`, para as contagens
  * agregadas na BD da Multipark). Os testes comparam os dois.
  */
 
