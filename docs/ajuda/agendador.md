@@ -2,7 +2,7 @@
 modulo: definicoes
 titulo: Agendador (tarefas automáticas)
 rotas: /definicoes
-palavras: agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/cron/tick, cron_secret, automático, sincronização automática, parado, falhou, a meio, retoma, próxima corrida, github actions, recolha diária, zello, gps, services-tasks, serviços, tarefas dos serviços, cash-sweep, cash-close, ops-presence, sem pda, zello desligado, terminal-watch, ainda estás no terminal, cash-external, invoicexpress, stripe, correção de caixa, varredura da caixa
+palavras: gps-resplit-backfill, re-dividir os últimos 31 dias, agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/cron/tick, cron_secret, automático, sincronização automática, parado, falhou, a meio, retoma, próxima corrida, github actions, recolha diária, zello, gps, services-tasks, serviços, tarefas dos serviços, cash-sweep, cash-close, ops-presence, sem pda, zello desligado, terminal-watch, ainda estás no terminal, cash-external, invoicexpress, stripe, correção de caixa, varredura da caixa
 ---
 # Agendador (tarefas automáticas)
 
@@ -48,6 +48,7 @@ Pronto. Não é preciso mais nada no GitHub.
 | Automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |
 | Escala automática dos extras (propor às 14h, confirmar às 18h, por omissão) | de hora a hora, das 08h às 23h |
 | GPS do Zello — recolha provisória do próprio dia | 1×/dia entre as 23:15 e as 23:55 (se falhar, fica para a final) |
+| GPS: re-dividir os últimos 31 dias com o limite de velocidade de hoje — **só quando o super admin pede** em Atividade diária → Histórico Diário (sem pedido não faz nada); continua de onde ficou, não avisa ninguém (trabalho `gps-resplit-backfill`) | de 5 em 5 min, até ~40 s de cada vez |
 | Manutenção diária + recolha GPS do Zello final (D-2) | 1×/dia a partir das 04:30 |
 | RH — regra documental dos extras (documentos em falta) | 1×/semana, segunda a partir das 04:45 |
 | RH — pedir os documentos em falta aos extras ativos (WhatsApp e email; 1 pedido a cada 7 dias por pessoa, no máximo 4 automáticos). **Desligado por omissão**: interruptor em Definições → Automações ("Pedir documentos em falta aos extras"). À mão: `/api/cron/rh-docs-request` (trabalho `rh-docs-request`) | 1×/semana, segunda a partir das 10:00 (se não couber, continua no tick seguinte) |

@@ -551,6 +551,31 @@ export const operationalRouter = router({
       return loadDriverTrack(input.id);
     }),
     /**
+     * Tarefa 62 (P1b, Q9): re-dividir UMA vez o GPS dos últimos 31 dias com o limite de hoje (120 km/h), em
+     * segundo plano no agendador (gps-resplit-backfill), retomável. Só o super admin. Não avisa ninguém.
+     */
+    resplitBackfill: router({
+      status: protectedProcedure.query(async ({ ctx }) => {
+        if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin." });
+        const { realResplitBackfillDeps } = await import("./gpsResplitBackfill");
+        return (await realResplitBackfillDeps()).read();
+      }),
+      start: protectedProcedure.mutation(async ({ ctx }) => {
+        if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin re-divide o GPS dos últimos 31 dias." });
+        const [{ realResplitBackfillDeps, startResplitBackfill }, { lisbonDayOf }] = await Promise.all([import("./gpsResplitBackfill"), import("../shared/lisbonDay")]);
+        const s = await startResplitBackfill(await realResplitBackfillDeps(), { userId: ctx.user.id, todayLisbon: lisbonDayOf(Date.now()) });
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "daily_driver_history", entityId: 0, details: `Re-divisão do GPS de ${s.from} a ${s.to} pedida (em segundo plano)` });
+        return s;
+      }),
+      stop: protectedProcedure.mutation(async ({ ctx }) => {
+        if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin." });
+        const { realResplitBackfillDeps, stopResplitBackfill } = await import("./gpsResplitBackfill");
+        const s = await stopResplitBackfill(await realResplitBackfillDeps());
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "daily_driver_history", entityId: 0, details: "Re-divisão do GPS dos últimos 31 dias parada" });
+        return s;
+      }),
+    }),
+    /**
      * Recolha manual de um dia (só admin — abrange todas as cidades). Prazo de
      * 45 s (a função morre aos 60 s): devolve `done:false` e a UI volta a
      * chamar — a recolha é retomável. `resplit`: volta a partir o GPS já

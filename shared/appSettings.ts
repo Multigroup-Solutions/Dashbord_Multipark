@@ -1121,6 +1121,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", intervalMinutes: 1440, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "gps-resplit-backfill", label: "GPS: re-dividir os últimos 31 dias (a pedido do super admin)", intervalMinutes: 5, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },

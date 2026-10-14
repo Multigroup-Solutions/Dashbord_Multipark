@@ -596,6 +596,24 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
  * passagem final (D-2, daily-ops) substitui estas linhas. Retomável dentro
  * da janela; nunca passa da meia-noite (prazo cortado 1 min antes).
  */
+/**
+ * Tarefa 62 (P1b): re-divisão do GPS dos últimos 31 dias com o limite de hoje, a pedido do super admin
+ * (sem pedido → nada). Retomável: o cursor fica em app_settings (gps.resplitBackfillV1). Não avisa ninguém.
+ */
+export async function gpsResplitBackfillCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { realResplitBackfillDeps, runResplitBackfillStep } = await import("./gpsResplitBackfill");
+    const r = await runResplitBackfillStep(await realResplitBackfillDeps(), { deadlineAt: o.deadlineAt - 2_000 });
+    if (r.idle) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "sem pedido" }, done: true };
+    const st = r.state;
+    console.log(`[gps-resplit-backfill] ${st.state === "done" ? "concluído" : `a correr (próximo ${st.day})`}: ${st.daysDone} dia(s), ${st.rowsDone} linha(s) (${r.rowsNow} agora)${st.errors.length ? `, ${st.errors.length} erro(s)` : ""}`);
+    return { httpStatus: 200, body: { ranAt: ranAt(), state: st.state, day: st.day, daysDone: st.daysDone, rowsDone: st.rowsDone, rowsNow: r.rowsNow }, done: true };
+  } catch (err) {
+    console.error("[cron gps-resplit-backfill] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 export async function zelloSameDayCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
     const { isZelloConfigured } = await import("./zello");
