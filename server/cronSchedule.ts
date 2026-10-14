@@ -69,6 +69,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "mail-sync", runName: "mail-sync", label: "Comunicação: sincronização do Gmail", cadence: { kind: "interval", minutes: 5 }, priority: 10, minMs: 10 * S, maxMs: 25 * S },
   { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark (repescagem)", cadence: { kind: "interval", minutes: 60 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
   { key: "ai-comms", runName: "ai-comms", label: "IA na comunicação com clientes", cadence: { kind: "interval", minutes: 15 }, priority: 30, minMs: 20 * S, maxMs: 30 * S },
+  // 14 out 2026: casos de email que falharam (com o push o mail-sync só corre 1×/dia) + rever os emails das caixas (AI_MAIL_BACKFILL).
+  { key: "mail-backfill", runName: "mail-backfill", label: "Comunicação: casos por criar e emails das caixas revistos pela IA", cadence: { kind: "interval", minutes: 15 }, priority: 32, minMs: 15 * S, maxMs: 30 * S },
   // Google por eventos (26 set 2026): o que muda vai/vem logo (push da Google,
   // fila "sincronizar já", heartbeat do dashboard); aqui só a repetição do que
   // falhou (15 min), a rede de segurança completa (4 h) e a renovação diária
@@ -110,6 +112,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras (interruptor
   // EXTRAS_DOCS_REQUEST, desligado por omissão). De manhã, não de madrugada: escreve a pessoas.
   { key: "rh-docs-request", runName: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "10:00" }, priority: 103, minMs: 15 * S, maxMs: 45 * S },
+  // Jorge (14 out 2026): FAQs novas da base de conhecimento, 1×/semana (interruptor KB_FAQ_WEEKLY, desligado por omissão).
+  { key: "kb-faq-weekly", runName: "kb-faq-weekly", label: "Formação: FAQs novas da base de conhecimento (semanal)", cadence: { kind: "weekly", dow: 1, from: "09:30" }, priority: 107, minMs: 30 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },
   { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads", runName: "google-ads", label: "Google Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 120, minMs: 15 * S, maxMs: 45 * S },

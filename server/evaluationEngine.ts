@@ -378,7 +378,7 @@ export interface EvaluatedDay {
   hoursSource: string | null;
   actionsByType: Record<string, number>;
   computedAt: string | null;
-  /** 0655: versão das regras com que o dia foi calculado (1 = antigas; null = só ajustes, sem cálculo) */
+  /** 0665: versão das regras com que o dia foi calculado (1 = antigas; null = só ajustes, sem cálculo) */
   rulesVersion: number | null;
   /** calculado (sem ajustes) */
   base: DayMetrics;

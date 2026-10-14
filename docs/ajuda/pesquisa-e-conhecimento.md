@@ -2,7 +2,7 @@
 modulo: pesquisa_conhecimento
 titulo: Pesquisa global (Ctrl+K) e Base de conhecimento
 rotas: /formacao/conhecimento
-palavras: pesquisa global, ctrl+k, ctrl k, cmd k, paleta, procurar em tudo, pesquisas recentes, perguntar à ia, perguntar ao multis, base de conhecimento, manuais do drive, pasta do drive, procedimentos da empresa, carregar documento, carregar manual, documento duplicado, voltar a incluir, excluir documento, sincronizar pastas, visibilidade do documento, fontes, citações, perguntas a partir de documento
+palavras: faqs da base de conhecimento, quiz da base de conhecimento, pesquisa global, ctrl+k, ctrl k, cmd k, paleta, procurar em tudo, pesquisas recentes, perguntar à ia, perguntar ao multis, base de conhecimento, manuais do drive, pasta do drive, procedimentos da empresa, carregar documento, carregar manual, documento duplicado, voltar a incluir, excluir documento, sincronizar pastas, visibilidade do documento, fontes, citações, perguntas a partir de documento
 ---
 # Pesquisa global (Ctrl+K) e Base de conhecimento
 
@@ -24,7 +24,7 @@ Regras:
 
 ## Base de conhecimento
 
-Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente** e a **pesquisa global** usam para responder. As respostas indicam as **Fontes** (título do documento). No tutor e na pesquisa global, carregar na fonte abre o documento (só se o puderes ver); nas Fontes do assistente só os do Drive têm ligação. Na pesquisa global os documentos aparecem pelo título ou pela pasta.
+Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente**, a **pesquisa global**, o **Quiz** (perguntas novas em cada jogo), as **FAQs da IA** e o **Procurar formação** usam. As respostas indicam as **Fontes** (título do documento). No tutor e na pesquisa global, carregar na fonte abre o documento (só se o puderes ver); nas Fontes do assistente só os do Drive têm ligação. Na pesquisa global os documentos aparecem pelo título ou pela pasta.
 
 **Onde estão os documentos**
 - Pastas do Shared Drive "Multipark" (por omissão **Formação** e **Procedimentos**), sincronizadas sozinhas quando alguém muda um ficheiro nessas pastas (a Google avisa a app) e, mesmo sem avisos, de 4 em 4 horas; **Sincronizar agora** continua a funcionar: Google Docs, PDF, DOCX e ficheiros de texto. Um ficheiro alterado no Drive é lido outra vez; um ficheiro apagado sai do índice e, se for recuperado do lixo do Drive, volta a ser lido.
@@ -49,6 +49,11 @@ Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente
 **Perguntas de quiz a partir de um documento**
 - O botão ✨ num documento sincronizado pede à IA perguntas de escolha múltipla só com o texto desse documento.
 - Ficam como **rascunho**: revê-as, corrige e publica em **Formação → Quiz**.
+
+**Quiz e FAQs feitos a partir da base**
+- **Quiz**: com a IA ligada, cada jogo tem perguntas novas feitas na hora a partir dos trechos que **quem joga** pode ver (papéis e cidades contam). Ver **Formação → Quiz**.
+- **FAQs**: a IA só usa documentos que **todos** podem ver (sem papéis nem cidades marcados) e nunca a ajuda da app; prefere os atualizados há pouco e os que ainda não deram FAQ. Um documento que mudas no Drive volta a ser candidato. Ver **Formação → FAQs**.
+- Mudar a visibilidade de um documento para restrita tira-o das FAQs seguintes e esconde a ligação **Fonte** das FAQs que já saíram dele.
 
 **Sem Drive nem IA**
 - Sem o Shared Drive configurado, os ficheiros carregados funcionam na mesma (DOCX lido pela app; PDF lido pela IA).

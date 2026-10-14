@@ -1,7 +1,9 @@
 # IA no dashboard — inventário página a página (D7)
 
 Levantamento feito no código a 3 out 2026 (lote 26b); atualizado a 8 out 2026
-com as decisões do Jorge (ver "Decidido a 8 out 2026", no fim). Para cada sítio onde a IA
+com as decisões do Jorge (ver "Decidido a 8 out 2026", no fim) e a 14 out 2026
+com a Formação com IA (quiz novo em cada jogo, FAQs da base de conhecimento,
+procurar formação por tema). Para cada sítio onde a IA
 corre: **quando** (sozinha ou a pedido), **quem vê**, **que dados lhe chegam** e
 **o que fica guardado ou o que ela faz sozinha**. A configuração geral (modelos,
 custos, interruptores) está em [`docs/ia.md`](ia.md).
@@ -15,7 +17,9 @@ custos, interruptores) está em [`docs/ia.md`](ia.md).
 - Os números vêm sempre do SQL/código; a IA só escreve o texto (briefing,
   relatórios, anomalias, avaliação, leads).
 - Começam **desligados**: `AI_HR_AUTOFILL`, `AI_HR_EMAIL_ATTACHMENTS`,
-  `AI_CRM_IDENTITY`. Todos os outros começam ligados (o `AI_MAIL_ROUTING` passou a ligado a 8 out 2026).
+  `AI_CRM_IDENTITY`, `AI_MAIL_LOST_FOUND`, `AI_MAIL_NOTICES`, `AI_MAIL_BACKFILL`,
+  `AI_MAIL_ALIAS_FILTER`, `AI_MAIL_PARTNER_CASES`. Todos os outros começam ligados (o `AI_MAIL_ROUTING` passou a ligado a 8 out 2026).
+  O trabalho semanal das FAQs (`KB_FAQ_WEEKLY`) também começa desligado.
 - **Ficheiros pessoais inteiros** (documentos e CV do RH: `AI_HR_AUTOFILL` e
   `AI_HR_EMAIL_ATTACHMENTS`) só correm com a IA em **Vertex AI numa região da
   UE**. Fora disso não correm, mesmo ligados (regra em `shared/aiLimits.ts`,
@@ -25,7 +29,8 @@ custos, interruptores) está em [`docs/ia.md`](ia.md).
   - `ops-briefing` uma vez por dia a partir das 07:30;
   - `crm-auto-merge` a partir das 05:15;
   - `web-analytics` uma vez por dia;
-  - `mail-sync` de 5 em 5 min.
+  - `mail-sync` de 5 em 5 min;
+  - `kb-faq-weekly` à segunda a partir das 09:30 (só com `KB_FAQ_WEEKLY`, desligado).
 
 Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no botão.
 
@@ -80,8 +85,10 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
 | Rascunho de resposta — `AI_MAIL_DRAFT` | Pedido: **"Rascunho IA"** | Quem pode responder na caixa (no "O meu email", o dono) | Últimas 8 mensagens (até 9000 car.) com `redactPii` | Não (fica no editor) |
-| Separar pelas caixas — `AI_MAIL_ROUTING` (ligado) | Auto: cada email que abre conversa numa caixa partilhada (na sincronização, até 10 por vez; o resto no `ai-comms`) e cada conversa NOVA do WhatsApp (a seguir à triagem, sem 2.ª chamada) | Quem vê a caixa de destino; "Movido pela IA → caixa (motivo)" na conversa; "Entraram pela IA" nos Leads | Assunto e texto (até 2500 car., sem o histórico citado) com `redactPii`, 1.º nome, nomes dos anexos | Muda a caixa (por ler); não percebeu → info. Recrutamento em 1.º contacto: cria lead + candidatura. Registo em `comms_ai_routing`; nunca responde |
-| Reclamações vistas noutras caixas — `AI_MAIL_COMPLAINTS` (ligado; lote 57) | Auto: quando a leitura acima diz "reclamacoes" (sem 2.ª chamada à IA). Respostas do cliente nessa conversa vão para a mesma reclamação | Reclamações: a reclamação (origem "IA", nota com a caixa, motivo e certeza) ou "Parecem reclamações" no topo da lista | Os mesmos dados da linha acima | Certeza ≥ `ai.mailComplaints.createMinConfidence` (0,85) → cria a reclamação ou junta à aberta do mesmo cliente/reserva; ≥ `suggestMinConfidence` (0,5) → só sugere. Nunca para internos, automáticos, newsletters, parceiros ou avisos de avaliações. Uma linha por conversa em `complaint_mail_intake` (0630, `threadId` único). **Nunca responde ao cliente** (sem aviso de receção) |
+| Triagem dos emails (separar pelas caixas) — `AI_MAIL_ROUTING` (ligado; refeita a 14 out 2026) | Auto: cada email recebido numa caixa partilhada, conversas novas **e respostas** (na sincronização, até 10 por vez; o resto no `ai-comms` e no `mail-backfill`), e cada conversa NOVA do WhatsApp (a seguir à triagem, sem 2.ª chamada). Antes da IA só regras óbvias (enviados, sistema, reservas, o que uma pessoa mexeu, envios em massa pelos cabeçalhos, avisos de avaliação/Livro/ocorrência da app pelo remetente ou formulário) | Quem vê a caixa de destino; "Movido pela IA → caixa (motivo)" na conversa; "Entraram pela IA" nos Leads | Mensagem nova (até 2500 car.) + o citado/reencaminhado (até 1200, só contexto) com `redactPii`, 1.º nome, nomes dos anexos | Uma leitura dá a categoria e as certezas de reclamação e de perdido, pelo sentido (sem listas de palavras). Conversa nova → caixa do tema (por ler); não percebeu → info; lixo fica. **Falhou → nada se mexe**, volta a ser lida (até 3×). Recrutamento em 1.º contacto: lead + candidatura. Registo em `comms_ai_routing` (uma linha por mensagem); nunca responde. Avaliação: Definições → Comunicação → "Testar a triagem" |
+| Reclamações e perdidos a partir dos emails — `AI_MAIL_COMPLAINTS` (ligado) e `AI_MAIL_LOST_FOUND` (desligado) | Auto: quando a leitura acima dá certeza de reclamação / de objeto perdido (sem 2.ª chamada à IA); tudo o que chega a reclamacoes@ / perdidos@ abre caso (só não abre se a IA tiver ≥ 90 % de que é lixo, com `AI_MAIL_ALIAS_FILTER`, desligado) | Reclamações / Perdidos: o caso (origem "IA", nota "veio pela IA, da caixa X, porquê"), "Por confirmar (IA)" quando a certeza é média; a conversa vai para a caixa do módulo, **por ler** | Os mesmos dados da linha acima | ≥ `ai.mailComplaints.createMinConfidence` (0,85) → caso; ≥ `suggestMinConfidence` (0,5) → caso "Por confirmar (IA)" (arquivável). Respostas e continuações juntam-se ao caso da conversa (fio do Gmail, In-Reply-To/References, [REC-n]) ou ao aberto do mesmo cliente (nunca se o email traz outra reserva/matrícula; perdidos só se o aberto tiver menos de 14 dias). Um caso "Por confirmar" arquivado por uma pessoa não volta com a resposta seguinte. Uma conversa nunca dá dois casos (`complaint_mail_intake.threadId` único). Quando a IA diz que a queixa / o objeto aparece em qualquer parte do email (sim/não `complaintMentioned` / `lostItemMentioned`), o caso abre pelo menos "Por confirmar". Nunca para emails internos (salvo um colega a reencaminhar o email de um cliente) nem automáticos; de parceiros (contacto de uma parceria) só com `AI_MAIL_PARTNER_CASES` (desligado) — sempre "Por confirmar", sem o email do parceiro como o do cliente. **Nunca responde ao cliente** |
+| Avisos nos emails — `AI_MAIL_NOTICES` (desligado) | Auto, pela leitura acima (críticas) ou por regra (avisos de avaliação pelo remetente; aviso de ocorrência da app pelo formulário) | Caixa Críticas (lido, nada no módulo); caixa Ocorrências (lido e ligado à ocorrência da Multipark quando é aviso da app; por ler quando é relato de uma pessoa) | Os mesmos dados da linha acima; número/matrícula do aviso para procurar a ocorrência (BD da Multipark só leitura) | Só move, marca lido e liga; nunca cria ocorrências nem responde |
+| Varrimento dos emails antigos — `AI_MAIL_BACKFILL` (desligado) | Trabalho `mail-backfill` (15 em 15 min): emails dos últimos `ai.mailBackfill.days` (30) das caixas partilhadas ainda sem caso nem toque humano, `perRun` (6) de cada vez. O mesmo trabalho, mesmo com o interruptor desligado, volta a tentar os casos que falharam a abrir (reclamacoes@/perdidos@), 3 de cada vez | Como as linhas acima | Como as linhas acima | Idempotente (`comms_ai_routing.sweptAt`): nunca duplica casos nem baralha o que uma pessoa já mexeu |
 
 ### Reclamações
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
@@ -102,7 +109,10 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
 | Perguntas do quiz — `AI_QUIZ` | Pedido: **"Gerar perguntas (IA)"** (manual) e **"Gerar rascunhos"** (documento da base) | Formação com gestão (admin, super admin) | Texto com `redactPii` (**26b:** também no manual). O PDF anexo do manual vai **inteiro** | `quiz_questions` como rascunho (por publicar) |
+| Quiz novo em cada jogo — `AI_QUIZ_LIVE` (ligado) | Pedido: **"Jogar"** no Quiz (até 5 jogos por dia por pessoa; a tentativa é reservada antes de chamar a IA, por isso cliques repetidos não passam o limite) | Quem joga vê as perguntas sem a resposta certa; depois de responder, a revisão. Quem gere a formação vê as últimas 40 da sua cidade, só de jogos acabados, sem nomes e sem as de documentos que não pode ver ("Guardar nas fixas" de uma de documento restrito pede confirmação) | Até 10 trechos da base de conhecimento que **quem joga** pode ver e dos manuais publicados, com `redactPii`; o tema; as perguntas que a pessoa já teve | `training_quiz_ai_questions` (0660, com a resposta certa, só no servidor) e as respostas em `training_attempt_sessions.answersJson`. Falha → perguntas fixas |
+| FAQs da base de conhecimento — `AI_KB_FAQ` (ligado) + `KB_FAQ_WEEKLY` (**desligado**) | Pedido: **"Gerar agora"** (Formação → FAQs; 3/hora e 8/dia no total). Auto: à segunda a partir das 09:30, só com `KB_FAQ_WEEKLY`. Uma corrida de cada vez (cadeado em `kb_sync_state`) | Todos os que veem a Formação (as FAQs); gerar só quem gere a formação | Texto de 2 ou 3 documentos visíveis para todos (nunca a ajuda da app), até 20 000 car. cada, com `redactPii`; a lista das FAQs que existem e existiram | Até 3 FAQs **publicadas** (`faqs.source = 'ai'`, documento de origem, `aiKey`). Arquivar não apaga e impede que a IA a repita |
 | Tutor da formação — `AI_TRAINING_TUTOR` | Pedido: chat, "Explicar melhor", "Explicar as respostas erradas" (10/min, 100/dia) | Todos os papéis; cada um vê o seu; os formadores veem um agregado anónimo | Pergunta com `redactPii`, trechos do manual, 4 últimas trocas | Mensagens 30 dias; perguntas anónimas |
+| Procurar formação — `AI_TRAINING_TUTOR` (`training_search`) | Pedido: **"Procurar"** em A minha formação (6/min, 60/dia por pessoa) | Quem procura | O que a pessoa escreveu e o catálogo (título, tipo, área e resumo de 140 car. de cada vídeo/manual publicado), com `redactPii` | Não. Falha ou fora do limite → pesquisa por palavras (e a base de conhecimento sem embeddings) |
 | Base de conhecimento — `AI_KNOWLEDGE` | Ao carregar, "Sincronizar agora" e **sozinha quando há alterações nas pastas do Drive** (avisos da Google → fila de hora a hora + verificação de 4 em 4 h) | Formação com gestão; as citações conforme quem lê | **PDF inteiro** só quando o Drive não o converte; trechos e perguntas com `redactPii` | Texto, trechos e vetores |
 
 ### Recursos Humanos
@@ -155,12 +165,13 @@ Regra do dono (8 out 2026): a IA age sozinha onde é **reversível** e **não fa
 com clientes**.
 
 1. **Disponibilidade dos extras** (`AI_AVAILABILITY_CLASSIFY`): com ≥ 85 % marca a disponibilidade, responde por WhatsApp ao colaborador e confirma ou recusa o turno. Abaixo disso, tarefa para uma pessoa. Mantém-se.
-2. **Separar pelas caixas (email e WhatsApp):** põe as conversas novas na caixa do tema (e com isso muda quem as vê); o que não percebe vai para o info. Recrutamento em 1.º contacto: cria a lead e a candidatura (nunca escreve ao candidato).
+2. **Separar pelas caixas (email e WhatsApp):** põe as conversas novas na caixa do tema (e com isso muda quem as vê); o que não percebe vai para o info. Recrutamento em 1.º contacto: cria a lead e a candidatura (nunca escreve ao candidato). Nos emails (14 out 2026) a mesma leitura abre a reclamação ou o perdido ("Por confirmar (IA)" quando a certeza é média) e põe a conversa na caixa do módulo, por ler; se a IA falhar, nada se mexe e o email volta a ser lido. Nunca responde ao cliente.
 3. **Reclamações** (`AI_COMPLAINT_TRIAGE`): com ≥ 0,85 preenche o tipo, a prioridade, o SLA e a reserva quando estão vazios (com "Desfazer"). Mantém-se.
 4. **Passagem de turno** (`AI_HANDOVER_SUMMARY`): o resumo faz-se **só ao entregar** a passagem. As edições não chamam a IA; quem edita carrega em "Resumir agora".
 5. **Clientes:** junta fichas com ≥ 85 % (desligado).
 6. **Ficha do RH:** preenche campos vazios a partir de documentos (desligado; só com Vertex AI na UE; o IBAN fica pedido ao RH).
 7. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.
+8. **FAQs da formação** (`KB_FAQ_WEEKLY`, **desligado por omissão**; 14 out 2026): à segunda-feira publica até 3 FAQs novas a partir da base de conhecimento, marcadas "IA". Reversível: quem gere edita ou arquiva (e a arquivada não volta).
 
 Nada disto envia emails a clientes nem publica respostas: isso é sempre uma pessoa.
 

@@ -1,24 +1,39 @@
-// Migration 0655 — Avaliação (Jorge, 14 out 2026): "os movimentos dentro do
-// mesmo parque só contam como mudança de lugar, não como movimento".
+// Migration 0655 — Emails → casos pela IA (Jorge, 14 out 2026: "tudo o que
+// está na caixa de correio e é uma reclamação tem de ir para as Reclamações;
+// os perdidos e achados também").
 //
-//  - `employee_day_metrics.spotChanges`: as mudanças de lugar do dia (linhas
-//    MOVEMENT da History na mesma garagem — shared/multiparkMovements.ts →
-//    classifyMovement). Valem +1 na avaliação (EVALUATION_POINTS.spotChange) e
-//    deixam de entrar em `movements`.
+//  - complaints.aiUnconfirmed / lost_found_items.aiUnconfirmed: a IA criou o
+//    caso com certeza média → "Por confirmar (IA)" até uma pessoa confirmar
+//    (ou arquivar — nunca se apaga).
+//  - lost_found_items.origin: de onde veio o perdido (email | ia | manual…),
+//    como as reclamações (0630).
+//  - complaint_mail_intake passa a guardar também os perdidos: `caseKind`
+//    (complaint | lost_found), `lostFoundId` e `uncertain`. Continua UMA linha
+//    por conversa (threadId UNIQUE): uma conversa nunca dá dois casos.
+//  - comms_ai_routing: o que a triagem decidiu (`category`), as duas certezas
+//    da IA (`complaintScore`, `lostScore`), as tentativas quando a IA falha
+//    (`attempts` — o email fica onde está e volta a ser lido), o aviso que a
+//    regra reconheceu (`notice`: review | occurrence | livro), quando ficou
+//    lido pela regra (`markedReadAt`) e quando o varrimento dos antigos o leu
+//    (`sweptAt`).
 //
-//  - `employee_day_metrics.deliveriesWithoutSchedule`: entregas sem hora marcada
-//    legível (medidas pelo pedido + 30 min) — nota na avaliação do dia/mês.
-//  - `employee_day_metrics.rulesVersion`: com que regras o dia foi calculado
-//    (1 = antigas, por omissão em todas as linhas que já existem; 2 = as de
-//    14 out 2026, EVALUATION_RULES_VERSION). Os ecrãs avisam dos dias com < 2.
-//
-// Só acrescenta as colunas (0/1 por omissão); sem backfill: o recálculo da noite
-// refaz os últimos 31 dias. Idempotente: ADD COLUMN repetido dá ER_DUP_FIELDNAME.
+// Só acrescenta. ADD COLUMN ignora o que já existe (ER_DUP_FIELDNAME).
 
 export const MIGRATION_0655_STATEMENTS: string[] = [
-  "ALTER TABLE `employee_day_metrics` ADD COLUMN `spotChanges` INT NOT NULL DEFAULT 0 AFTER `parkingMoves`",
-  "ALTER TABLE `employee_day_metrics` ADD COLUMN `deliveriesWithoutSchedule` INT NOT NULL DEFAULT 0 AFTER `lateServices`",
-  "ALTER TABLE `employee_day_metrics` ADD COLUMN `rulesVersion` INT NOT NULL DEFAULT 1 AFTER `totalPoints`",
+  "ALTER TABLE `complaints` ADD COLUMN `aiUnconfirmed` TINYINT NOT NULL DEFAULT 0",
+  "ALTER TABLE `lost_found_items` ADD COLUMN `aiUnconfirmed` TINYINT NOT NULL DEFAULT 0",
+  "ALTER TABLE `lost_found_items` ADD COLUMN `origin` VARCHAR(16) NULL",
+  "ALTER TABLE `complaint_mail_intake` ADD COLUMN `caseKind` VARCHAR(12) NOT NULL DEFAULT 'complaint'",
+  "ALTER TABLE `complaint_mail_intake` ADD COLUMN `lostFoundId` INT NULL",
+  "ALTER TABLE `complaint_mail_intake` ADD COLUMN `uncertain` TINYINT NOT NULL DEFAULT 0",
+  "ALTER TABLE `comms_ai_routing` ADD COLUMN `category` VARCHAR(20) NULL",
+  "ALTER TABLE `comms_ai_routing` ADD COLUMN `complaintScore` DECIMAL(4,3) NULL",
+  "ALTER TABLE `comms_ai_routing` ADD COLUMN `lostScore` DECIMAL(4,3) NULL",
+  "ALTER TABLE `comms_ai_routing` ADD COLUMN `attempts` INT NOT NULL DEFAULT 0",
+  "ALTER TABLE `comms_ai_routing` ADD COLUMN `notice` VARCHAR(16) NULL",
+  "ALTER TABLE `comms_ai_routing` ADD COLUMN `markedReadAt` DATETIME NULL",
+  "ALTER TABLE `comms_ai_routing` ADD COLUMN `sweptAt` DATETIME NULL",
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0655 = new Set<string>(["ER_DUP_FIELDNAME"]);
+/** ER_DUP_FIELDNAME (1060), ER_DUP_KEYNAME (1061). */
+export const IDEMPOTENT_ERROR_CODES_0655 = new Set<string>(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);

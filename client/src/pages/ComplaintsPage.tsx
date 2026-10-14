@@ -13,6 +13,7 @@ import { lisbonDayOf } from "@shared/lisbonDay";
 import { toCsv } from "@shared/csv";
 import { COMPLAINT_LIST_DEFAULT_DAYS, complaintOverdue } from "@shared/caseRules";
 import {
+  COMPLAINT_AI_UNCONFIRMED_FILTER, COMPLAINT_AI_UNCONFIRMED_LABEL,
   COMPLAINT_ORIGINS, COMPLAINT_ORIGIN_LABELS, COMPLAINT_STATUS_FILTERS, COMPLAINT_STATUS_FILTER_LABELS, activeComplaintFilterCount,
   complaintAssigneeOptions, complaintDateRangeInvalid, complaintFiltersNeedAllTime, complaintOriginLabel, filterComplaintRows,
   type ComplaintListFilters, type ComplaintStatusFilter,
@@ -44,6 +45,7 @@ import LinkInboundEmailButton from "@/components/LinkInboundEmailButton";
 import ComplaintAiPanel from "@/components/ComplaintAiPanel";
 import ComplaintClientMail from "@/components/ComplaintClientMail";
 import ComplaintMailSuggestions from "@/components/ComplaintMailSuggestions";
+import { AiUnconfirmedBadge, AiUnconfirmedBanner } from "@/components/AiUnconfirmedBanner";
 import { useState, useMemo, useEffect } from "react";
 import { useSearch } from "wouter";
 import {
@@ -192,6 +194,8 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
     [allComplaints, filters],
   );
   const activeCount = activeComplaintFilterCount(filters);
+  // Ronda 2: quantas "Por confirmar (IA)" há na lista (sem os filtros) — atalho para as ver.
+  const unconfirmedCount = useMemo(() => (allComplaints as any[]).filter((c) => Number(c.aiUnconfirmed ?? 0) === 1 && !c.archivedAt).length, [allComplaints]);
   const dateInvalid = complaintDateRangeInvalid(filters);
   const assigneeOptions = useMemo(() => {
     const opts = complaintAssigneeOptions(allComplaints as any[]);
@@ -382,6 +386,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
               <SelectContent>
                 <SelectItem value="all">Todas</SelectItem>
                 {COMPLAINT_ORIGINS.map((o) => <SelectItem key={o} value={o}>{COMPLAINT_ORIGIN_LABELS[o]}</SelectItem>)}
+                <SelectItem value={COMPLAINT_AI_UNCONFIRMED_FILTER}>{COMPLAINT_AI_UNCONFIRMED_LABEL}</SelectItem>
                 <SelectItem value="unknown">Sem origem registada</SelectItem>
               </SelectContent>
             </Select>
@@ -417,6 +422,14 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
       )}
 
       {/* Lote 57: emails de outras caixas que a IA achou que podem ser reclamações. */}
+      {!showArchived && unconfirmedCount > 0 && filters.origin !== COMPLAINT_AI_UNCONFIRMED_FILTER && (
+        <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-900 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-100">
+          <span className="min-w-0 flex-1 basis-56">
+            <strong>{unconfirmedCount}</strong> {unconfirmedCount === 1 ? "reclamação criada pela IA está" : "reclamações criadas pela IA estão"} <strong>{COMPLAINT_AI_UNCONFIRMED_LABEL}</strong>.
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setF({ origin: COMPLAINT_AI_UNCONFIRMED_FILTER })}>Ver só essas</Button>
+        </div>
+      )}
       {!showArchived && <ComplaintMailSuggestions canEdit={canEdit} onOpenComplaint={onSelect} />}
 
       {/* Stats */}
@@ -660,6 +673,7 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus, canMove 
               {PRIORITY_CONFIG[c.complaintPriority]?.label}
             </Badge>
             {c.origin === "ia" && <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-800 dark:text-violet-200" title="Criada a partir de um email de outra caixa que a IA viu como reclamação">IA</Badge>}
+            {Number((c as any).aiUnconfirmed ?? 0) === 1 && <AiUnconfirmedBadge />}
           </div>
           <div className="flex gap-1 shrink-0">
             {canMoveLeft && (
@@ -774,6 +788,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const unarchiveMut = trpc.complaints.unarchive.useMutation({
     onSuccess: () => { toast.success("Reclamação tirada do arquivo"); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); },
     onError: (e) => toast.error(e.message || "Erro ao tirar do arquivo"),
+  });
+  // 14 out 2026: "Por confirmar (IA)" — uma pessoa confirma (ou arquiva).
+  const confirmAiMut = trpc.complaints.confirmAi.useMutation({
+    onSuccess: () => { toast.success("Confirmada como reclamação"); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); },
+    onError: (e) => toast.error(e.message || "Erro ao confirmar"),
   });
   const convertMut = trpc.complaints.convertToLostFound.useMutation({
     onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId} (a reclamação fica fechada e ligada)`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
@@ -953,6 +972,13 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
         )}
       </div>
 
+      {!archived && Number((c as any).aiUnconfirmed ?? 0) === 1 && (
+        <AiUnconfirmedBanner
+          kind="complaint" canConfirm={canEdit} canArchive={canManage} confirming={confirmAiMut.isPending}
+          onConfirm={() => confirmAiMut.mutate({ id })}
+          onReject={() => { setArchiveReason("Não é reclamação (a IA criou-a por confirmar)"); setArchiveOpen(true); }}
+        />
+      )}
       {archived && (
         <div role="status" className="rounded-md border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800 dark:bg-slate-900/40 dark:text-slate-200">
           <Archive className="w-4 h-4 inline mr-1" /> Arquivada{(c as any).archivedAt ? ` em ${fmtPTDateTime((c as any).archivedAt)}` : ""}{(c as any).archiveReason ? ` — ${(c as any).archiveReason}` : ""}.

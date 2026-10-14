@@ -18,6 +18,9 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - **Leads de Extras:** "Resumo IA" e "Rascunho com IA", só para quem edita as leads. Enviar exige "Aprovar".
 - **Passagem de turno:** "Resumir agora" refaz o resumo da passagem gravada.
 - **Formação:** "Gerar perguntas (IA)" cria rascunhos por publicar. O **Tutor** responde no manual, no vídeo e no quiz.
+  - **Quiz:** ao carregares em **Jogar**, a IA faz 10 perguntas novas a partir da base de conhecimento (sem IA, perguntas fixas). A resposta certa fica no servidor.
+  - **Procurar formação:** a IA escolhe a formação certa no catálogo (sem IA, pesquisa por palavras).
+  - **FAQs → Gerar agora** (quem gere a formação): 2 ou 3 documentos da base de conhecimento dão até 3 FAQs novas, publicadas e marcadas "IA".
 - **Rádio:** "Transcrever".
 - **Multis:** o chat em todas as páginas.
 
@@ -31,7 +34,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 6. **Reclamações:** sugestões de tipo, prioridade, SLA e reserva, com um rascunho de resposta.
    - Com confiança alta, preenche sozinha os campos vazios. Há sempre **Desfazer**.
 7. **WhatsApp:** etiqueta a intenção e a urgência; uma conversa **nova** vai para a caixa do tema (a que já tem caixa fica onde está).
-   - **Email:** os emails novos das caixas partilhadas vão para a caixa do tema, por ler; o que a IA não percebe vai para o info. Na conversa lê-se "Movido pela IA → caixa (motivo)".
+   - **Email:** a IA lê os emails das caixas partilhadas pelo sentido (não por palavras): as conversas novas vão para a caixa do tema, por ler; o que não percebe vai para o info. As **reclamações** (e, com o interruptor, os **perdidos**) que lá estejam — mesmo escondidas noutro pedido, numa resposta ou num reencaminhamento — abrem o caso no módulo (certeza média: "Por confirmar (IA)") e a conversa vai para a caixa do caso. Na conversa lê-se "Movido pela IA → caixa (motivo)". Para medir: Definições → Comunicação → **Testar a triagem** (super admin).
    - Alguém a candidatar-se pela 1.ª vez (email ou WhatsApp) entra nos **Leads de Extras** como lead (e candidatura, se houver email), com a nota "Entrou pela IA".
 8. **Perdidos & Achados:** procura possíveis correspondências.
 9. **Disponibilidade dos extras:** quando a resposta não é clara, a IA interpreta-a.
@@ -39,12 +42,14 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
    - Abaixo disso, cria uma tarefa para uma pessoa.
 10. **Relatórios de segunda-feira:** por email (direção, marketing, operações e RH).
 11. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.
+12. **FAQs da formação** (se ligares o interruptor semanal): à segunda-feira, até 3 FAQs novas a partir da base de conhecimento, publicadas e marcadas "IA". Arquivar uma é dizer "esta não": não volta.
 
 **Começam desligadas** (só um administrador as liga):
 - ler os documentos do RH para preencher a ficha (o IBAN fica sempre como pedido ao RH, exceto para quem o pode mudar na hora);
 - ler os CV dos emails do RH;
   - estas duas mandam o ficheiro inteiro, por isso **só correm com a IA em Vertex AI na UE**. Sem isso não correm, mesmo ligadas. Em **Definições → Automações**, ao lado do interruptor, aparece "Só corre com a IA em Vertex AI na UE (hoje: …)". O sítio onde a IA está vê-se também no cartão **IA — custo do mês** ("Gemini (Vertex AI)" ou "Gemini");
-- juntar fichas de clientes.
+- juntar fichas de clientes;
+- as FAQs semanais da formação (o botão **Gerar agora** funciona na mesma).
 
 **Dados pessoais**
 - Nos textos, os emails, os telefones, o NIF, o IBAN e as matrículas são tapados antes de irem para a IA.
