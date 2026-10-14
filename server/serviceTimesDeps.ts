@@ -106,7 +106,8 @@ async function pdaCheckins(fromMs: number, toMs: number): Promise<PdaCheckinLike
     return rowsOf(await db.execute(sql`SELECT COALESCE(NULLIF(c.zelloUsername, ''), NULLIF(p.zelloUsername, '')) AS zello, c.employeeId, c.checkinAt, c.checkoutAt
         FROM pda_checkins c LEFT JOIN pdas p ON p.id = c.pdaId
        WHERE c.employeeId IS NOT NULL AND COALESCE(NULLIF(c.zelloUsername, ''), NULLIF(p.zelloUsername, '')) IS NOT NULL
-         AND c.checkinAt < ${mysql(toMs)} AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${mysql(fromMs)})`))
+         AND c.checkinAt < ${mysql(toMs)} AND (c.checkoutAt IS NULL OR c.checkoutAt >= ${mysql(fromMs)})
+       ORDER BY c.checkinAt, c.id`))
       .map((r) => ({ employeeId: Number(r.employeeId), zello: String(r.zello), start: utcTextMs(r.checkinAt) ?? 0, end: utcTextMs(r.checkoutAt) }))
       .filter((c) => c.start > 0);
   } catch {
@@ -150,7 +151,7 @@ async function loadGps(requests: Array<{ zello: string; day: string }>, o: { dea
     if (out.has(k)) return;
     const row = rows.get(k);
     if (!row?.url) { out.set(k, { status: "missing" }); return; }
-    if (Date.now() > o.deadlineAt - 1_000) { out.set(k, { status: "failed" }); return; }
+    if (Date.now() > o.deadlineAt - 1_000) { out.set(k, { status: "failed", reason: "prazo" }); return; }
     try {
       const res = await fetch(await storageReadableUrl(row.url), { signal: AbortSignal.timeout(Math.max(1_000, Math.min(15_000, o.deadlineAt - Date.now()))) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

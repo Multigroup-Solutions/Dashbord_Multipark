@@ -3,7 +3,8 @@
  * (plano 62, P7). Interruptor SERVICE_TIMES (só super admin, DESLIGADO por
  * omissão); à mão em /api/cron/service-times?reprocessar=AAAA-MM-DD..AAAA-MM-DD
  * (corre mesmo com o interruptor desligado: é o "dia reprocessado à mão" que
- * se faz antes de o ligar).
+ * se faz antes de o ligar — explícito, com a chave das tarefas automáticas,
+ * só escreve na tabela dos tempos e não avisa ninguém; auditoria final: fica).
  *
  * Cada corrida:
  *  1. noite (uma vez por dia operacional): os ciclos que FECHARAM nos dias
@@ -11,11 +12,14 @@
  *     início de D-3 até agora: os MOVEMENT até 48 h depois de cada check-in e
  *     os "por arrumar" vêm nesta mesma leitura); D-1 com o GPS provisório,
  *     D-2 e D-3 com o final (`gpsPass` sobe para "final");
- *  2. preenchimento para trás (blocos de 7 dias, ≤ 2 leituras por corrida e só
- *     nos primeiros 20 s): desde `serviceTimes.since` (sem GPS antes de
- *     `serviceTimes.gpsSince`). Mudar o `calcVersion` recomeça-o; mudar zonas,
- *     papéis das garagens ou a janela das chamadas (outro `paramsHash`) refaz
- *     os últimos 14 dias; o resto só à mão.
+ *  2. preenchimento para trás (blocos de 7 dias, 2 nos dias com GPS; ≤ 2
+ *     leituras por corrida, só nos primeiros 20 s e só até às 09h de Lisboa):
+ *     desde `serviceTimes.since` (sem GPS antes de `serviceTimes.gpsSince`).
+ *     Mudar o `calcVersion` recomeça-o; mudar zonas, papéis das garagens ou a
+ *     janela das chamadas (outro `paramsHash`) refaz os últimos 14 dias; as
+ *     noites que faltaram também entram; o resto só à mão.
+ *  Limites de carga: ver "Carga" abaixo (prazo, tetos das leituras, anulação
+ *  suspensa numa leitura vazia).
  *  O estado (versão, impressão digital, noite feita, blocos por fazer) fica em
  *  `app_settings` ("serviceTimes._state"), por isso sobrevive de um dia para o
  *  outro.
@@ -43,7 +47,7 @@ import {
 import type { AirportFence } from "../shared/pontoTerminal";
 import { distanceMeters } from "../shared/pontoTerminal";
 import { classifyPark, marketplaceOperated } from "../shared/multiparkParks";
-import { addDays, lisbonDayOf, operationalDayOf, operationalDayRangeUtc, zelloLatestDay } from "../shared/lisbonDay";
+import { addDays, lisbonDayOf, lisbonHourOf, operationalDayOf, operationalDayRangeUtc, zelloLatestDay } from "../shared/lisbonDay";
 import { percentile } from "../shared/extrasPressure";
 import {
   SERVICE_HISTORY_MAX_ROWS, buildServiceAgentsSql, buildServiceBookingsSql, buildServiceDriverPhonesSql, buildServiceHistorySql, buildServiceParksSql,
@@ -73,7 +77,7 @@ export interface ServiceSettings {
 
 export interface ServiceIdentity { agent(userId: string | null, name: string | null): { kind: AgentKind; employeeId: number | null } }
 
-export type GpsFile = { status: "ok"; pass: "sameday" | "final"; points: GpsFix[] } | { status: "missing" } | { status: "failed" };
+export type GpsFile = { status: "ok"; pass: "sameday" | "final"; points: GpsFix[] } | { status: "missing" } | { status: "failed"; reason?: "prazo" };
 export const gpsFileKey = (zello: string, day: string) => `${zello.trim().toLowerCase()}|${day}`;
 
 export interface ServiceOurDb {
@@ -198,6 +202,30 @@ export const SERVICE_TIMES_ROW_COLUMNS = [
   "parkedStatus", "parkedEmployeeId", "spotType", "t2DriverArrivedAt", "t2LateMs", "t2Status", "calcVersion", "paramsHash", "computedAt", "voidedAt",
 ] as const satisfies ReadonlyArray<keyof ServiceTimesRow>;
 
+/**
+ * Tamanho máximo das colunas de texto (o mesmo da migração 0685; testado). Os
+ * textos que vêm da Multipark (nome da garagem, código do lugar, papel do
+ * agente…) cortam-se aqui: com o MySQL em modo estrito, um texto comprido
+ * fazia falhar o lote inteiro do upsert.
+ */
+export const SERVICE_TIMES_TEXT_MAX: Partial<Record<keyof ServiceTimesRow, number>> = {
+  kind: 8, bookingId: 64, anchorHistoryId: 64, outcome: 12, bookingCode: 40, parkId: 64, cityKey: 8, parkGroup: 40, terminalClass: 8,
+  callSource: 10, startSource: 12, customerStatus: 32, zelloUsername: 255, gpsPass: 10, flags: 600, startAgentId: 64, startPlatform: 10,
+  startRole: 16, arrivedSource: 24, deliverAgentId: 64, queueStatus: 32, transitStatus: 32, ourStatus: 32, checkInAgentId: 64,
+  terminalExitSource: 24, terminalStatus: 32, firstGarage: 80, firstGarageRole: 12, p2Status: 32, parkedGarage: 80, parkedStatus: 16,
+  spotType: 12, t2Status: 32, paramsHash: 16,
+};
+
+/** Corta os textos ao tamanho das colunas. PURA. */
+export function fitServiceRow(r: ServiceTimesRow): ServiceTimesRow {
+  const out = { ...r } as Record<string, unknown>;
+  for (const [k, max] of Object.entries(SERVICE_TIMES_TEXT_MAX)) {
+    const v = out[k];
+    if (typeof v === "string" && v.length > max!) out[k] = v.slice(0, max);
+  }
+  return out as unknown as ServiceTimesRow;
+}
+
 // ─── Ajudantes puros ────────────────────────────────────────────────────────
 
 /** ms → "YYYY-MM-DD HH:MM:SS.mmm" UTC (null fica null). PURA. */
@@ -228,12 +256,53 @@ export function mergeDayRanges(ranges: ReadonlyArray<{ from: string; to: string 
   return out;
 }
 
-/** O bloco seguinte do preenchimento para trás (≤ 7 dias, a partir do fim do intervalo mais recente). PURA. */
-export function nextBackfillBlock(todo: ReadonlyArray<{ from: string; to: string }>, days = 7): { block: { from: string; to: string } | null; rest: Array<{ from: string; to: string }> } {
+// ─── Carga (auditoria final): limites de cada corrida ───────────────────────
+//
+// A função da Vercel morre aos 60 s e o agendador dá a cada trabalho ≤ 45 s.
+// Cada intervalo = UMA leitura sequencial da History (sem índice em
+// "actionTime") + leituras por chave + os ficheiros GPS. Para nunca passar do
+// prazo nem deixar leituras penduradas na Multipark:
+//  - só se começa um intervalo com SERVICE_TIMES_RANGE_MIN_MS pela frente;
+//  - a leitura da History tem teto próprio (o Postgres corta-a: statement_timeout)
+//    e o resto das leituras também, sempre dentro do que falta;
+//  - os blocos para trás com GPS são de 2 dias (≈ 40 Zellos × 2 ficheiros),
+//    os sem GPS de 7;
+//  - o preenchimento para trás só corre até às 09h de Lisboa (de madrugada e
+//    de manhã cedo): não junta leituras sequenciais à Multipark a meio do dia.
+//    O que faltar continua na manhã seguinte. À mão (`reprocessar`) não tem hora.
+
+/** Só se começa um intervalo (uma leitura da History) com isto de prazo pela frente. */
+export const SERVICE_TIMES_RANGE_MIN_MS = 25_000;
+/** Teto da leitura da History deste trabalho. */
+export const SERVICE_HISTORY_TIMEOUT_MS = 25_000;
+/** Teto das leituras por chave (Booking, Driver, Agent). */
+export const SERVICE_KEY_TIMEOUT_MS = 10_000;
+/** Ficheiros GPS só com isto (ou mais) de prazo; senão ficam por recolher. */
+export const SERVICE_GPS_MIN_MS = 8_000;
+/** Blocos do preenchimento para trás: sem GPS e com GPS. */
+export const BACKFILL_DAYS = 7;
+export const BACKFILL_GPS_DAYS = 2;
+/** O preenchimento para trás (automático) só até esta hora de Lisboa. */
+export const BACKFILL_UNTIL_HOUR = 9;
+/** Anulação suspensa quando desapareceriam mais do que isto E mais desta fração das linhas ativas do intervalo. */
+export const VOID_MAX_ROWS = 20;
+export const VOID_MAX_SHARE = 0.25;
+
+/**
+ * O bloco seguinte do preenchimento para trás, a partir do fim do intervalo
+ * mais recente: 7 dias, ou 2 nos dias com GPS (desde `gpsSince`; um bloco não
+ * mistura dias com e sem GPS). PURA.
+ */
+export function nextBackfillBlock(todo: ReadonlyArray<{ from: string; to: string }>, o: number | { days?: number; gpsDays?: number; gpsSince?: string | null } = BACKFILL_DAYS): { block: { from: string; to: string } | null; rest: Array<{ from: string; to: string }> } {
+  const opts = typeof o === "number" ? { days: o } : o;
   const merged = mergeDayRanges(todo);
   if (!merged.length) return { block: null, rest: [] };
   const last = merged[merged.length - 1];
-  const from = addDays(last.to, -(days - 1)) < last.from ? last.from : addDays(last.to, -(days - 1));
+  const gpsEra = !!opts.gpsSince && last.to >= opts.gpsSince;
+  const days = Math.max(1, gpsEra ? opts.gpsDays ?? BACKFILL_GPS_DAYS : opts.days ?? BACKFILL_DAYS);
+  let from = addDays(last.to, -(days - 1));
+  if (from < last.from) from = last.from;
+  if (gpsEra && from < opts.gpsSince!) from = opts.gpsSince!;
   const block = { from, to: last.to };
   const rest = [...merged.slice(0, -1), ...(from > last.from ? [{ from: last.from, to: addDays(from, -1) }] : [])];
   return { block, rest };
@@ -242,18 +311,24 @@ export function nextBackfillBlock(todo: ReadonlyArray<{ from: string; to: string
 /**
  * O estado do trabalho: versão nova → recomeça o preenchimento para trás desde
  * `since`; impressão digital nova → os últimos 14 dias entram nos blocos por
- * fazer. PURA.
+ * fazer; noites que faltaram (Multipark em baixo, interruptor desligado uns
+ * dias) → os dias entre a última noite feita e D-4 também (a noite só lê D-3 …
+ * D-1). PURA.
  */
 export function nextServiceState(prev: ServiceTimesState | null, o: { version: number; hash: string; today: string; since: string }): ServiceTimesState {
   const lastBack = addDays(o.today, -4);
   if (!prev || prev.v !== o.version) {
     return { v: o.version, h: o.hash, nightly: null, todo: o.since <= lastBack ? [{ from: o.since, to: lastBack }] : [] };
   }
+  const extra: Array<{ from: string; to: string }> = [];
   if (prev.h !== o.hash) {
     const from14 = addDays(o.today, -14) < o.since ? o.since : addDays(o.today, -14);
-    return { ...prev, h: o.hash, todo: mergeDayRanges([...prev.todo, ...(from14 <= lastBack ? [{ from: from14, to: lastBack }] : [])]) };
+    if (from14 <= lastBack) extra.push({ from: from14, to: lastBack });
   }
-  return { ...prev, todo: mergeDayRanges(prev.todo.filter((r) => r.to >= o.since).map((r) => ({ from: r.from < o.since ? o.since : r.from, to: r.to }))) };
+  // a última noite (N) leu N-3 … N-1; hoje lê-se T-3 … T-1: faltam N … T-4
+  if (prev.nightly && DAY_RE.test(prev.nightly) && prev.nightly <= lastBack) extra.push({ from: prev.nightly < o.since ? o.since : prev.nightly, to: lastBack });
+  const todo = [...prev.todo, ...extra].filter((r) => r.to >= o.since).map((r) => ({ from: r.from < o.since ? o.since : r.from, to: r.to }));
+  return { ...prev, h: o.hash, todo: mergeDayRanges(todo) };
 }
 
 const CITY_OF: Record<string, ParkZoneCity> = { lisboa: "lisbon", porto: "porto", faro: "faro" };
@@ -360,16 +435,19 @@ export interface RangeReport {
   reason: "noite" | "para_tras" | "reprocessar";
   historyRows: number;
   truncated: boolean;
+  /** Linhas que deixaram de aparecer mas NÃO se anularam (leitura vazia ou anulação em massa: suspeito). */
+  voidSuspended: number;
   deliveries: number;
   pickups: number;
   openCycles: number;
   written: number;
   keptFinal: number;
   voided: number;
-  gpsFiles: { asked: number; read: number; failed: number };
+  gpsFiles: { asked: number; read: number; failed: number; /** não lidos por falta de prazo (ficam por recolher) */ skipped: number };
 }
 
 export interface ServiceTimesRunResult {
+  /** `skipped` = saiu sem ler (ex.: sem prazo para uma leitura neste pedido). */
   ok: boolean;
   done: boolean;
   cursor: string | null;
@@ -396,12 +474,15 @@ interface RangeCtx {
 async function processRange(c: RangeCtx, range: { from: string; to: string }, reason: RangeReport["reason"]): Promise<{ report: RangeReport; rows: ServiceTimesRow[] }> {
   const { deps, settings } = c;
   const w = readWindowFor(range.from, range.to, c.nowMs);
-  const rep: RangeReport = { from: range.from, to: range.to, reason, historyRows: 0, truncated: false, deliveries: 0, pickups: 0, openCycles: 0, written: 0, keptFinal: 0, voided: 0, gpsFiles: { asked: 0, read: 0, failed: 0 } };
-  const timeout = Math.max(15_000, Math.min(40_000, c.deadlineAt - Date.now() - 4_000));
+  const rep: RangeReport = { from: range.from, to: range.to, reason, historyRows: 0, truncated: false, voidSuspended: 0, deliveries: 0, pickups: 0, openCycles: 0, written: 0, keptFinal: 0, voided: 0, gpsFiles: { asked: 0, read: 0, failed: 0, skipped: 0 } };
+  const left = () => c.deadlineAt - Date.now();
+  // tetos sempre dentro do que falta (o Postgres corta a leitura no servidor: nada fica pendurado)
+  const historyTimeout = Math.max(5_000, Math.min(SERVICE_HISTORY_TIMEOUT_MS, left() - 15_000));
+  const keyTimeout = () => ({ timeoutMs: Math.max(3_000, Math.min(SERVICE_KEY_TIMEOUT_MS, left() - 8_000)) });
 
   // 1. UMA leitura da History
   const h = buildServiceHistorySql({ fromUtc: utc0(w.readFromMs), toUtc: utc0(w.readToMs) });
-  const raw = await deps.query<Record<string, unknown>>(h.sql, h.params, { timeoutMs: timeout });
+  const raw = await deps.query<Record<string, unknown>>(h.sql, h.params, { timeoutMs: historyTimeout });
   rep.historyRows = raw.length;
   rep.truncated = raw.length >= SERVICE_HISTORY_MAX_ROWS;
   const events = raw.map(mapServiceHistoryRow).filter((e): e is ServiceEvent => !!e);
@@ -416,7 +497,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   const bookings = new Map<string, ServiceBookingRow>();
   for (const batch of idBatches(bookingIds)) {
     const q = buildServiceBookingsSql(batch);
-    for (const r of await deps.query<Record<string, unknown>>(q.sql, q.params)) { const b = mapServiceBookingRow(r); if (b) bookings.set(b.id, b); }
+    for (const r of await deps.query<Record<string, unknown>>(q.sql, q.params, keyTimeout())) { const b = mapServiceBookingRow(r); if (b) bookings.set(b.id, b); }
   }
   const parks = parkInfos(c.parkRows, settings.excludedParks);
   const operated = (bookingId: string) => { const b = bookings.get(bookingId); const p = b?.parkId ? parks.get(b.parkId) : null; return !!p?.operated; };
@@ -428,7 +509,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   const driverPhones = new Map<string, string[]>();
   for (const batch of idBatches(liveIds)) {
     const q = buildServiceDriverPhonesSql(batch);
-    for (const r of await deps.query<Record<string, unknown>>(q.sql, q.params)) {
+    for (const r of await deps.query<Record<string, unknown>>(q.sql, q.params, keyTimeout())) {
       const id = String(r.booking_id ?? ""), p9 = phone9Of(r.phone);
       if (id && p9) driverPhones.set(id, [...(driverPhones.get(id) ?? []), p9]);
     }
@@ -438,7 +519,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   const agentRows: Array<{ userId: string; parkId: string | null; role: string | null }> = [];
   for (const batch of idBatches(agentIds)) {
     const q = buildServiceAgentsSql(batch);
-    for (const r of await deps.query<Record<string, unknown>>(q.sql, q.params)) agentRows.push({ userId: String(r.user_id ?? ""), parkId: r.park_id == null ? null : String(r.park_id), role: r.role == null ? null : String(r.role) });
+    for (const r of await deps.query<Record<string, unknown>>(q.sql, q.params, keyTimeout())) agentRows.push({ userId: String(r.user_id ?? ""), parkId: r.park_id == null ? null : String(r.park_id), role: r.role == null ? null : String(r.role) });
   }
 
   // 3. A nossa BD: chamadas, CRM, PDAs, Zellos fixos; identidade
@@ -446,6 +527,8 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   const calls = callsOn ? await deps.ourDb.calls(w.anchorFromMs - 6 * 3_600_000, w.anchorToMs + 3_600_000) : [];
   const crm = callsOn && liveIds.length ? await deps.ourDb.crmLinks(liveIds) : new Map<string, { phones: string[]; crmIds: number[] }>();
   const gpsOn = range.to >= settings.gpsSince;
+  /** O GPS do Zello só existe desde `gpsSince` (dia de Lisboa do início). */
+  const gpsOnAt = (at: number) => gpsOn && lisbonDayOf(at) >= settings.gpsSince;
   const checkins = gpsOn ? await deps.ourDb.pdaCheckins(w.readFromMs - 17 * 3_600_000, w.readToMs) : [];
   const fixed = gpsOn ? await deps.ourDb.fixedZellos() : [];
   const identity = await deps.identity();
@@ -483,7 +566,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     if (keepFinal("entrega", d)) { rep.keptFinal++; continue; }
     todoDel.push(d);
     const who = empOf(d.start);
-    if (gpsOn && d.outcome !== "cancelado" && d.start && d.checkout && who?.employeeId != null) {
+    if (gpsOnAt(d.start?.at ?? d.anchor.at) && d.outcome !== "cancelado" && d.start && d.checkout && who?.employeeId != null) {
       const S = d.start.at, E = d.checkout.at;
       // a janela do GPS começa antes do mais cedo entre a chamada (até 60 min antes do pendente) e S
       ask(gpsRequestsFor(gctx, who.employeeId, S, Math.min(S, d.requests[0]?.at ?? S) - CALL_WINDOW_BEFORE_MIN * 60_000 - G_GOOD_S * 1000 - 5 * 60_000, E + AFTER_SIGNATURE_S * 1000));
@@ -493,7 +576,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     seenKeys.add(rowKey("recolha", p.bookingId, p.anchor.id));
     if (keepFinal("recolha", p)) { rep.keptFinal++; continue; }
     todoPick.push(p);
-    if (!gpsOn || !p.checkIn) continue;
+    if (!p.checkIn || !gpsOnAt(p.checkIn.at)) continue;
     const I = p.checkIn.at;
     for (const e of [sortServiceEvents(p.moves).find((m) => m.at >= I) ?? null, p.checkIn]) {
       const who = empOf(e);
@@ -508,8 +591,10 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   }
   const reqList = [...requests.values()].sort((a, b) => a.day.localeCompare(b.day));
   rep.gpsFiles.asked = reqList.length;
-  const files = reqList.length ? await deps.loadGps(reqList, { deadlineAt: c.deadlineAt - 6_000 }) : new Map<string, GpsFile>();
-  for (const f of files.values()) { if (f.status === "ok" || f.status === "missing") rep.gpsFiles.read++; else rep.gpsFiles.failed++; }
+  // sem prazo para os ficheiros: ficam por recolher (a noite seguinte, ou o D-3 volta para trás)
+  const files = reqList.length && left() >= SERVICE_GPS_MIN_MS + 6_000 ? await deps.loadGps(reqList, { deadlineAt: c.deadlineAt - 6_000 }) : new Map<string, GpsFile>();
+  for (const f of files.values()) { if (f.status === "ok" || f.status === "missing") rep.gpsFiles.read++; else if (f.reason === "prazo") rep.gpsFiles.skipped++; else rep.gpsFiles.failed++; }
+  rep.gpsFiles.skipped += Math.max(0, reqList.length - files.size);
   const ctx: GpsCtx = { checkins, fixed, files, finalUntil: zelloLatestDay(c.nowMs) };
   const computedAt = utc0(c.nowMs);
   const rows: ServiceTimesRow[] = [];
@@ -538,7 +623,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
       parks: [...parks.values()].filter((p) => p.zoneCity === city && p.operated && p.pos).map((p) => p.pos!),
     });
     if (d.outcome !== "cancelado" && S != null && E != null && !driverBlock) {
-      if (!gpsOn) noGps = "gps_fora_do_periodo";
+      if (!gpsOnAt(S)) noGps = "gps_fora_do_periodo";
       else if (who?.employeeId == null) noGps = "condutor_desconhecido";
       else {
         const Q0 = Math.min(R ?? S, cm.call?.at ?? Infinity, S);
@@ -605,12 +690,13 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     const p2Zone = p2ZoneOf(c.zones, city);
     const overlap = !!p2Zone && (airport?.zones ?? []).some((z) => zonesTouch(p2Zone, z));
     const spot = spotTypeOf(b.parkingType, b.code);
-    let exit: ExitResolution = { kind: "sem_medicao", status: gpsOn ? "sem_zello" : "gps_fora_do_periodo", flags: [] };
+    const gpsHere = I != null && gpsOnAt(I);
+    let exit: ExitResolution = { kind: "sem_medicao", status: gpsHere ? "sem_zello" : "gps_fora_do_periodo", flags: [] };
     let driver: { employeeId: number; held: HeldGps } | null = null;
     if (I != null && p.outcome === "recebido") {
       if (overlap) exit = { kind: "sem_medicao", status: "zonas_sobrepostas", flags: ["zonas_sobrepostas"] };
       else if (!zone) exit = { kind: "sem_medicao", status: "sem_zona", flags: [] };
-      else if (gpsOn) {
+      else if (gpsHere) {
         const firstMove = sortServiceEvents(p.moves).find((m) => m.at >= I) ?? null;
         let firstStatus: string | null = null;
         for (const e of [firstMove, p.checkIn]) {
@@ -620,7 +706,8 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
           driver ??= { employeeId: who.employeeId, held: hg };
           if (hg.kind === "no") { firstStatus ??= hg.status; continue; }
           const x = detectExit({ points: hg.points, fromAt: I, zone, startPos: posOf(p.checkIn) });
-          if (x.kind === "saida") { exit = { kind: "medido", at: x.at, source: "gps", precisionS: x.precisionS, flags: x.flags }; driver = { employeeId: who.employeeId, held: hg }; break; }
+          // a zona do aeroporto inteiro (sem zona T1/T2 nem ponto do check-in) adianta-se pouco, mas é larga: fica marcado
+          if (x.kind === "saida") { exit = { kind: "medido", at: x.at, source: "gps", precisionS: x.precisionS, flags: [...x.flags, ...(zoneRes.kind === "zona" ? zoneRes.flags : [])] }; driver = { employeeId: who.employeeId, held: hg }; break; }
           firstStatus ??= hg.pending && (x.status === "sem_pontos" || x.status === "sem_saida") ? "gps_por_recolher" : x.status;
         }
         if (exit.kind !== "medido") exit = { kind: "sem_medicao", status: firstStatus ?? "sem_zello", flags: [] };
@@ -635,7 +722,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
       const who = empOf(p.checkIn);
       let arrival: { at: number; alreadyThere: boolean } | { status: string };
       if (!zT2) arrival = { status: "sem_zona_t2" };
-      else if (!gpsOn) arrival = { status: "gps_fora_do_periodo" };
+      else if (!gpsOnAt(I)) arrival = { status: "gps_fora_do_periodo" };
       else if (who?.employeeId == null) arrival = { status: "sem_gps" };
       else {
         const hg = heldGps(ctx, who.employeeId, k0, k0 - T2_LOOKBACK_MIN * 60_000, I);
@@ -650,7 +737,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     // saída do P2 pelo GPS (sem início de movimento): quem levou o carro do P2
     let p2GpsExitAt: number | null = null;
     const p2 = p2LeaveOf(p, settings.garageRoles);
-    if (p2Zone && !overlap && gpsOn && p2) {
+    if (p2Zone && !overlap && p2 && gpsOnAt(p2.leave.at)) {
       const who = empOf(p2.leave);
       if (who?.employeeId != null) {
         const hg = heldGps(ctx, who.employeeId, p2.leave.at, p2.firstEnd.at, p2.leave.at);
@@ -682,12 +769,14 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   }
 
   // 8. Gravar (upsert) e anular o que deixou de aparecer (só com a leitura completa)
-  if (rows.length) await deps.store.upsert(rows);
+  if (rows.length) await deps.store.upsert(rows.map(fitServiceRow));
   rep.written = rows.length;
   if (!rep.truncated) {
-    const gone = existing.filter((e) => !e.voided && !seenKeys.has(rowKey(e.kind, e.bookingId, e.anchorHistoryId))).map((e) => e.id);
-    if (gone.length) await deps.store.voidRows(gone, computedAt);
-    rep.voided = gone.length;
+    const active = existing.filter((e) => !e.voided);
+    const gone = active.filter((e) => !seenKeys.has(rowKey(e.kind, e.bookingId, e.anchorHistoryId))).map((e) => e.id);
+    // uma leitura vazia (ou que perde de repente muitas linhas) é suspeita: não se anula nada e fica no log
+    if (gone.length && (rep.historyRows === 0 || (gone.length > VOID_MAX_ROWS && gone.length > active.length * VOID_MAX_SHARE))) rep.voidSuspended = gone.length;
+    else if (gone.length) { await deps.store.voidRows(gone, computedAt); rep.voided = gone.length; }
   }
   return { report: rep, rows };
 }
@@ -782,14 +871,18 @@ export async function runServiceTimes(deps: ServiceTimesDeps, o: { deadlineAt: n
         for (const city of ["lisboa", "porto", "faro"]) { const l = summarizeServiceDay(rows, day, city, settings.targetMinutes); if (l) { out.lines.push(l); log(l); } }
       }
       lastRows = rows;
-      const l = `[tempos] ${reason} ${range.from}..${range.to}: entregas ${report.deliveries}, recolhas ${report.pickups}, gravadas ${report.written}, finais mantidas ${report.keptFinal}, anuladas ${report.voided}, abertas ${report.openCycles}, GPS ${report.gpsFiles.read}/${report.gpsFiles.asked}${report.gpsFiles.failed ? ` (${report.gpsFiles.failed} falharam)` : ""}${report.truncated ? ", LEITURA CORTADA" : ""}`;
+      const l = `[tempos] ${reason} ${range.from}..${range.to}: entregas ${report.deliveries}, recolhas ${report.pickups}, gravadas ${report.written}, finais mantidas ${report.keptFinal}, anuladas ${report.voided}, abertas ${report.openCycles}, GPS ${report.gpsFiles.read}/${report.gpsFiles.asked}${report.gpsFiles.failed ? ` (${report.gpsFiles.failed} falharam)` : ""}${report.gpsFiles.skipped ? ` (${report.gpsFiles.skipped} sem prazo, por recolher)` : ""}${report.truncated ? ", LEITURA CORTADA" : ""}${report.voidSuspended ? `, ANULAÇÃO SUSPENSA (${report.voidSuspended} linhas deixaram de aparecer${report.historyRows === 0 ? " numa leitura vazia" : ""})` : ""}`;
       out.lines.push(l);
       log(l);
     };
 
-    // À mão: só o intervalo pedido (força refazer), em blocos de 7 dias, com cursor
+    const blockOpts = { days: BACKFILL_DAYS, gpsDays: BACKFILL_GPS_DAYS, gpsSince: settings.gpsSince };
+    const canStart = () => o.deadlineAt - Date.now() >= SERVICE_TIMES_RANGE_MIN_MS;
+
+    // À mão: só o intervalo pedido (força refazer), em blocos (7 dias; 2 com GPS), com cursor
     if (o.reprocess) {
-      const { block, rest } = nextBackfillBlock([o.reprocess]);
+      const { block, rest } = nextBackfillBlock([o.reprocess], blockOpts);
+      if (!canStart()) return { ...out, done: false, cursor: `${o.reprocess.from}..${o.reprocess.to}`, skipped: "sem prazo para uma leitura" };
       if (block) await run(block, "reprocessar", true);
       out.done = rest.length === 0;
       // o que falta (chamar outra vez com ?reprocessar=<isto>)
@@ -801,6 +894,8 @@ export async function runServiceTimes(deps: ServiceTimesDeps, o: { deadlineAt: n
     let state = nextServiceState(prev, { version: SERVICE_TIMES_CALC_VERSION, hash, today, since: settings.since });
     let reads = 0;
     if (state.nightly !== today) {
+      // sem prazo para a leitura da noite neste tick: fica para o seguinte (a meio, não falhado)
+      if (!canStart()) return { ...out, done: false, cursor: "noite" };
       await run({ from: addDays(today, -3), to: addDays(today, -1) }, "noite", false);
       reads++;
       // D-3 é a última noite em que o GPS se lê: o que ficou por recolher (ficheiro que falhou, prazo) tenta-se já nos blocos seguintes
@@ -808,8 +903,16 @@ export async function runServiceTimes(deps: ServiceTimesDeps, o: { deadlineAt: n
       state = { ...state, nightly: today, todo: pendingD3 ? mergeDayRanges([...state.todo, { from: addDays(today, -3), to: addDays(today, -3) }]) : state.todo };
       await deps.store.saveState(state);
     }
-    while (state.todo.length && reads < SERVICE_TIMES_MAX_READS && Date.now() - startedAt < SERVICE_TIMES_RUN_READS_MS && o.deadlineAt - Date.now() > 20_000) {
-      const { block, rest } = nextBackfillBlock(state.todo);
+    // para trás só de madrugada / manhã cedo (até às 09h de Lisboa): o que faltar fica para amanhã
+    const backfillHours = lisbonHourOf(nowMs) < BACKFILL_UNTIL_HOUR;
+    if (state.todo.length && !backfillHours) {
+      const l = `[tempos] para trás: ${state.todo.length} intervalo(s) por fazer — continua amanhã de manhã (só até às ${BACKFILL_UNTIL_HOUR}h)`;
+      out.lines.push(l);
+      log(l);
+      return { ...out, done: true, cursor: null };
+    }
+    while (state.todo.length && reads < SERVICE_TIMES_MAX_READS && Date.now() - startedAt < SERVICE_TIMES_RUN_READS_MS && canStart()) {
+      const { block, rest } = nextBackfillBlock(state.todo, blockOpts);
       if (!block) break;
       await run(block, "para_tras", false);
       reads++;

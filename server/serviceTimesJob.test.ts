@@ -179,17 +179,18 @@ const calls: CallRecord[] = [
   { at: T("07:00"), source: "central", held: true, phone9: "931000003", crmClientId: null },
 ];
 
-interface Harness { deps: ServiceTimesDeps; rows: Map<string, ServiceTimesRow & { id: number; voidedAt: string | null }>; sqls: string[]; historyReads: string[]; gpsAsked: string[]; state: { value: ServiceTimesState | null }; upserts: number }
+interface Harness { deps: ServiceTimesDeps; rows: Map<string, ServiceTimesRow & { id: number; voidedAt: string | null }>; sqls: string[]; historyReads: string[]; timeouts: Array<{ history: boolean; ms: number | undefined }>; gpsAsked: string[]; state: { value: ServiceTimesState | null }; upserts: number }
 
 function harness(o: { now: number; history: () => Raw[]; files: () => Map<string, GpsFile>; settings?: Partial<Awaited<ReturnType<ServiceTimesDeps["settings"]>>>; failQuery?: boolean; prev?: Harness }): Harness {
   const rows = o.prev?.rows ?? new Map();
   const state = o.prev?.state ?? { value: null };
-  const H: Harness = { rows, sqls: [], historyReads: [], gpsAsked: [], state, upserts: 0, deps: null as any };
+  const H: Harness = { rows, sqls: [], historyReads: [], timeouts: [], gpsAsked: [], state, upserts: 0, deps: null as any };
   let nextId = Math.max(0, ...[...rows.values()].map((r) => r.id)) + 1;
   H.deps = {
-    query: async (sql, params = []) => {
+    query: async (sql, params = [], opts) => {
       assertReadOnlySql(sql);
       H.sqls.push(sql);
+      H.timeouts.push({ history: sql.includes('FROM "History"'), ms: opts?.timeoutMs });
       if (o.failQuery) throw new MultiparkDbError("canceling statement due to statement timeout", "QUERY_FAILED");
       if (sql.includes('FROM "History"')) {
         H.historyReads.push(sql);
@@ -331,12 +332,17 @@ describe("trabalho service-times — dia sintético de Lisboa", () => {
     expect(JSON.stringify(H3.rows.get(`entrega|e1|${del(H3, "e1")[0].anchorHistoryId}`))).toBe(before.get(`entrega|e1|${del(H3, "e1")[0].anchorHistoryId}`));
   });
 
-  it("reprocessar à mão: força refazer, em blocos de 7 dias, com o que falta em `cursor`", async () => {
+  it("reprocessar à mão: força refazer, em blocos (7 dias; 2 nos dias com GPS), com o que falta em `cursor`", async () => {
     const H = harness({ now: NOW2, history: () => dayHistory(), files: () => filesFor("final") });
     const r = await runServiceTimes(H.deps, { deadlineAt: Date.now() + 40_000, reprocess: { from: "2026-10-01", to: "2026-10-13" } });
-    expect(r.ranges.map((x) => `${x.reason} ${x.from}..${x.to}`)).toEqual(["reprocessar 2026-10-07..2026-10-13"]);
-    expect(r).toMatchObject({ done: false, cursor: "2026-10-01..2026-10-06" });
+    expect(r.ranges.map((x) => `${x.reason} ${x.from}..${x.to}`)).toEqual(["reprocessar 2026-10-12..2026-10-13"]);
+    expect(r).toMatchObject({ done: false, cursor: "2026-10-01..2026-10-11" });
     expect(H.historyReads).toHaveLength(1);
+    // antes do GPS: blocos de 7 dias
+    const H2 = harness({ now: NOW2, history: () => [], files: () => new Map(), settings: { gpsSince: "2026-10-20" } });
+    const r2 = await runServiceTimes(H2.deps, { deadlineAt: Date.now() + 40_000, reprocess: { from: "2026-10-01", to: "2026-10-13" } });
+    expect(r2.ranges.map((x) => `${x.from}..${x.to}`)).toEqual(["2026-10-07..2026-10-13"]);
+    expect(r2.cursor).toBe("2026-10-01..2026-10-06");
   });
 
   it("Multipark em baixo: nada se grava, ok:false com o motivo (o agendador repete); nunca lança", async () => {
@@ -346,6 +352,53 @@ describe("trabalho service-times — dia sintético de Lisboa", () => {
     expect(r.error).toMatch(/demorou demasiado/);
     expect(H.upserts).toBe(0);
     expect(H.state.value).toBeNull();
+  });
+
+  it("serviceTimes.useCalls desligado → a Fila conta desde o pendente (nenhuma chamada lida)", async () => {
+    const H = harness({ now: NOW1, history: () => dayHistory(), files: () => filesFor("sameday"), settings: { useCalls: false } });
+    await runServiceTimes(H.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(del(H, "e1")[0]).toMatchObject({ startSource: "pendente", callAt: null, queueMs: 10 * MIN });
+    expect(pick(H, "r3")).toMatchObject({ startSource: "em_recolha", callAt: null });
+  });
+
+  it("carga: a leitura da History com teto próprio (≤ 25 s) e as leituras por chave também; sem prazo para uma leitura, não lê nada e fica a meio", async () => {
+    const H = harness({ now: NOW1, history: () => dayHistory(), files: () => filesFor("sameday") });
+    await runServiceTimes(H.deps, { deadlineAt: Date.now() + 43_000 });
+    const hist = H.timeouts.filter((t) => t.history);
+    expect(hist.length).toBeGreaterThan(0);
+    for (const t of hist) expect(t.ms).toBeLessThanOrEqual(25_000);
+    for (const t of H.timeouts.filter((x) => !x.history && x.ms != null)) expect(t.ms!).toBeLessThanOrEqual(10_000);
+    // sem teto próprio (o normal, 15 s) só "Park" e "Garage" (tabelas pequenas, uma vez por corrida)
+    expect(H.sqls.filter((_, i) => H.timeouts[i].ms == null).every((q) => /FROM "(Park|Garage)"/.test(q))).toBe(true);
+    // 10 s de prazo: nem começa a noite (o agendador volta no tick seguinte)
+    const H2 = harness({ now: NOW1, history: () => dayHistory(), files: () => filesFor("sameday") });
+    const r2 = await runServiceTimes(H2.deps, { deadlineAt: Date.now() + 10_000 });
+    expect(r2).toMatchObject({ ok: true, done: false, cursor: "noite" });
+    expect(H2.historyReads).toHaveLength(0);
+    expect(H2.state.value).toBeNull();
+    expect(TICK_JOBS.find((j) => j.key === "service-times")!.minMs).toBeGreaterThanOrEqual(27_000); // o agendador só o arranca com prazo para uma leitura
+  });
+
+  it("para trás só até às 09h de Lisboa (a meio do dia não lê a Multipark em sequência); o que falta fica para a manhã seguinte", async () => {
+    const at11 = Date.parse("2026-10-14T10:00:00Z"); // 11h de Lisboa
+    const H = harness({ now: at11, history: () => dayHistory(), files: () => filesFor("sameday") });
+    const r = await runServiceTimes(H.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(r).toMatchObject({ ok: true, done: true });
+    expect(r.ranges.map((x) => x.reason)).toEqual(["noite"]);
+    expect(H.historyReads).toHaveLength(1);
+    expect(H.state.value!.todo).toEqual([{ from: "2026-10-09", to: "2026-10-10" }]);
+    expect(r.lines.some((l) => /continua amanhã de manhã/.test(l))).toBe(true);
+  });
+
+  it("uma leitura vazia da History não anula nada (fica no log: anulação suspensa)", async () => {
+    const H1 = harness({ now: NOW1, history: () => dayHistory(), files: () => filesFor("sameday") });
+    await runServiceTimes(H1.deps, { deadlineAt: Date.now() + 40_000 });
+    const H2 = harness({ now: NOW2, history: () => [], files: () => new Map(), prev: H1 });
+    const r2 = await runServiceTimes(H2.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(r2.ranges[0]).toMatchObject({ historyRows: 0, voided: 0 });
+    expect(r2.ranges[0].voidSuspended).toBeGreaterThan(0);
+    expect([...H2.rows.values()].every((x) => x.voidedAt == null)).toBe(true);
+    expect(r2.lines.some((l) => /ANULAÇÃO SUSPENSA/.test(l))).toBe(true);
   });
 
   it("mudar uma zona (outra impressão digital) refaz os últimos 14 dias; mudar o calcVersion recomeça desde `since`", async () => {
@@ -366,6 +419,25 @@ describe("trabalho service-times — dia sintético de Lisboa", () => {
 });
 
 describe("peças do trabalho (puras)", () => {
+  it("noites que faltaram (Multipark em baixo, interruptor desligado): os dias entre a última noite e D-4 vão para trás", () => {
+    const prev = { v: 1, h: "a", nightly: "2026-10-08", todo: [] };
+    // a noite de 8 leu 5–7; hoje (14) lê 11–13: faltam 8–10
+    expect(nextServiceState(prev, { version: 1, hash: "a", today: "2026-10-14", since: "2026-04-03" }).todo).toEqual([{ from: "2026-10-08", to: "2026-10-10" }]);
+    expect(nextServiceState({ ...prev, nightly: "2026-10-13" }, { version: 1, hash: "a", today: "2026-10-14", since: "2026-04-03" }).todo).toEqual([]);
+    expect(nextServiceState({ ...prev, nightly: "2026-10-10" }, { version: 1, hash: "a", today: "2026-10-14", since: "2026-04-03" }).todo).toEqual([{ from: "2026-10-10", to: "2026-10-10" }]);
+  });
+
+  it("blocos para trás: 7 dias sem GPS, 2 com GPS, sem misturar", () => {
+    const o = { days: 7, gpsDays: 2, gpsSince: "2026-09-15" };
+    expect(nextBackfillBlock([{ from: "2026-04-03", to: "2026-10-10" }], o)).toEqual({ block: { from: "2026-10-09", to: "2026-10-10" }, rest: [{ from: "2026-04-03", to: "2026-10-08" }] });
+    expect(nextBackfillBlock([{ from: "2026-04-03", to: "2026-09-15" }], o).block).toEqual({ from: "2026-09-15", to: "2026-09-15" });
+    expect(nextBackfillBlock([{ from: "2026-04-03", to: "2026-09-14" }], o).block).toEqual({ from: "2026-09-08", to: "2026-09-14" });
+    // quantas leituras desde 3 abr (uma vez): 24 sem GPS + 13 com GPS
+    let todo = [{ from: "2026-04-03", to: "2026-10-10" }], n = 0;
+    for (; todo.length && n < 100; n++) todo = nextBackfillBlock(todo, o).rest;
+    expect(n).toBe(37);
+  });
+
   it("intervalos de dias, blocos de 7 para trás e o parâmetro reprocessar", () => {
     expect(mergeDayRanges([{ from: "2026-10-05", to: "2026-10-07" }, { from: "2026-10-08", to: "2026-10-09" }, { from: "2026-09-01", to: "2026-09-02" }])).toEqual([{ from: "2026-09-01", to: "2026-09-02" }, { from: "2026-10-05", to: "2026-10-09" }]);
     expect(nextBackfillBlock([{ from: "2026-09-20", to: "2026-10-10" }])).toEqual({ block: { from: "2026-10-04", to: "2026-10-10" }, rest: [{ from: "2026-09-20", to: "2026-10-03" }] });
@@ -382,6 +454,11 @@ describe("peças do trabalho (puras)", () => {
     expect(new Date(w.anchorToMs).toISOString()).toBe("2026-10-14T02:00:00.000Z");
     expect(new Date(w.readFromMs).toISOString()).toBe("2026-10-10T20:00:00.000Z");
     expect(w.readToMs).toBe(NOW1);
+    // mudança de hora: o dia operacional de 24 out tem 25 h (02:00 UTC → 03:00 UTC do dia 25)
+    const d = readWindowFor("2026-10-24", "2026-10-24", Date.parse("2026-11-01T00:00:00Z"));
+    expect(new Date(d.anchorFromMs).toISOString()).toBe("2026-10-24T02:00:00.000Z");
+    expect(new Date(d.anchorToMs).toISOString()).toBe("2026-10-25T03:00:00.000Z");
+    expect((d.anchorToMs - d.anchorFromMs) / 3_600_000).toBe(25);
   });
 
   it("classe do destino = a do Extras-Dia (classifyDeliveryType); tipo de lugar", () => {

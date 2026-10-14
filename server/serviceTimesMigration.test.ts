@@ -7,6 +7,7 @@ import { getTableConfig } from "drizzle-orm/mysql-core";
 import { IDEMPOTENT_ERROR_CODES_0685, MIGRATION_0685_STATEMENTS } from "./migrations/migration_0685";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { serviceTimes } from "../drizzle/schema";
+import { SERVICE_TIMES_TEXT_MAX, fitServiceRow } from "./serviceTimesJob";
 
 describe("migração 0685 — service_times", () => {
   it("CREATE TABLE IF NOT EXISTS, idempotente, sem DROP/DELETE/ALTER de dados", () => {
@@ -41,6 +42,17 @@ describe("migração 0685 — service_times", () => {
       "idx_service_times_anchor", "idx_service_times_checkin_day", "idx_service_times_day_city", "idx_service_times_deliver_day", "idx_service_times_driver_day",
       "idx_service_times_p2_day", "idx_service_times_parked_day", "idx_service_times_pickup_driver_day", "uq_service_times_cycle",
     ]);
+  });
+
+  it("os textos do trabalho cabem nas colunas (fitServiceRow usa os tamanhos da migração)", () => {
+    const sql = MIGRATION_0685_STATEMENTS[0];
+    const fromSql = Object.fromEntries([...sql.matchAll(/`([A-Za-z0-9]+)` (?:VARCHAR|CHAR)\((\d+)\)/g)].map((m) => [m[1], Number(m[2])]));
+    expect(SERVICE_TIMES_TEXT_MAX).toEqual(fromSql);
+    const long = fitServiceRow({ firstGarage: "G".repeat(200), startRole: "OPERATIONS_MANAGER_NIGHT", flags: "x".repeat(900), parkedGarage: null } as any);
+    expect(long.firstGarage).toHaveLength(80);
+    expect(long.startRole).toHaveLength(16);
+    expect(long.flags).toHaveLength(600);
+    expect(long.parkedGarage).toBeNull();
   });
 
   it("registada no fim, por ordem crescente (quem juntar com a 0680 resolve por ordem)", () => {

@@ -679,7 +679,7 @@ export async function serviceTimesCron(o: { deadlineAt: number; reprocess?: { fr
     const r = await runServiceTimes(await realServiceTimesDeps(), { deadlineAt: o.deadlineAt - 2_000, reprocess: o.reprocess ?? null });
     return {
       httpStatus: 200,
-      body: { ok: r.ok, ranAt: ranAt(), ...(r.error ? { error: r.error } : {}), done: r.done, ...(r.cursor ? { next: r.cursor } : {}), ranges: r.ranges, lines: r.lines },
+      body: { ok: r.ok, ranAt: ranAt(), ...(r.error ? { error: r.error } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), done: r.done, ...(r.cursor ? { next: r.cursor } : {}), ranges: r.ranges, lines: r.lines },
       done: r.done,
       cursor: r.cursor,
     };
