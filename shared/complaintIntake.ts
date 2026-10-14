@@ -128,6 +128,26 @@ export function isPartnerSender(sender: string | null | undefined, partnerEmails
 }
 
 /**
+ * Ronda 3 da auditoria: um PARCEIRO que escreve em nome do cliente assina com
+ * o próprio email ("Sunway Travel | bookings@sunwaytravel.co.uk") ou põe um
+ * colega em cópia — o email que se tira do corpo só fica como o do cliente se
+ * não for do parceiro: nem o endereço de quem escreve, nem o mesmo domínio de
+ * empresa (num webmail público, só o endereço exato). Sem isto o email do
+ * parceiro voltava a entrar pelo corpo e juntava reclamações de clientes
+ * diferentes da mesma agência. PURA.
+ */
+export function partnerSafeClientEmail(candidate: string | null | undefined, partnerSender: string | null | undefined): string | undefined {
+  const c = emailKey(candidate);
+  if (!c) return undefined;
+  const s = emailKey(partnerSender);
+  if (!s) return String(candidate).trim();
+  if (c === s) return undefined;
+  const d = domainOf(c);
+  if (d && !isPublicMailDomain(d) && d === domainOf(s)) return undefined;
+  return String(candidate).trim();
+}
+
+/**
  * Aviso de uma avaliação (Google Business Profile, Trustpilot, Tripadvisor) —
  * trata-se nas Críticas, não aqui. Pelo REMETENTE (nunca pelas palavras do
  * assunto, 14 out 2026). PURA.

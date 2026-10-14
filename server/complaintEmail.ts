@@ -148,15 +148,65 @@ export function htmlToPlainText(html?: string | null): string {
 }
 
 /**
+ * Tira do HTML, em tempo LINEAR (sem expressões que voltam atrás), o que nunca
+ * é texto do email: comentários, <head>, <style> e <script>. Um bloco sem fecho
+ * vai até ao fim (como no browser). Ronda 3 da auditoria: um <head> com 500 KB
+ * de estilos deixava de fora o texto todo quando se cortava o HTML. PURA.
+ */
+export function stripHtmlNoise(html: string): string {
+  const lower = html.toLowerCase();
+  const n = html.length;
+  const parts: string[] = [];
+  let i = 0;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) { parts.push(html.slice(i)); break; }
+    parts.push(html.slice(i, lt));
+    if (lower.startsWith("<!--", lt)) {
+      const end = lower.indexOf("-->", lt + 4);
+      i = end < 0 ? n : end + 3;
+      continue;
+    }
+    const tag = (["head", "style", "script"] as const).find((t) => lower.startsWith(`<${t}`, lt) && /^[\s>/]?$/.test(lower.charAt(lt + t.length + 1)));
+    if (tag) {
+      const close = lower.indexOf(`</${tag}`, lt + tag.length + 1);
+      const gt = close < 0 ? -1 : lower.indexOf(">", close);
+      i = gt < 0 ? n : gt + 1;
+      continue;
+    }
+    parts.push("<");
+    i = lt + 1;
+  }
+  return parts.join("");
+}
+
+/**
+ * Teto do HTML que se converte para a triagem (ronda 3 da auditoria): a
+ * conversão demora mais do que o tamanho em HTML muito aninhado (1 MB de
+ * <div> encadeados = ~19 s a bloquear a sincronização). 100 KB de corpo (sem
+ * cabeçalho nem estilos) dão muito mais texto do que a IA lê.
+ */
+export const READABLE_HTML_MAX = 100_000;
+/** O mesmo teto para os pipelines das caixas (reclamacoes@, perdidos@…), que guardam até 20 000 caracteres do texto. */
+export const INBOUND_HTML_MAX = 150_000;
+
+/** HTML → texto com teto: tira o que não é texto (linear) e corta antes de converter. Nunca lança. PURA. */
+export function boundedHtmlToText(html: string | null | undefined, max: number = READABLE_HTML_MAX): string {
+  if (!html) return "";
+  return htmlToPlainText(stripHtmlNoise(String(html)).slice(0, Math.max(0, max)));
+}
+
+/**
  * O texto de um email para LER (triagem da IA, regras): o text/plain; um email
  * só em HTML (sem parte de texto — alguns clientes de email e formulários)
- * passa a texto pelo HTML; por fim o resumo do Gmail. Ronda 2 da auditoria
- * (14 out 2026): sem isto, a IA lia só o resumo (~200 caracteres) e uma
- * reclamação depois da saudação e de outro pedido ficava de fora.
+ * passa a texto pelo HTML (com teto — `READABLE_HTML_MAX`); por fim o resumo
+ * do Gmail. Ronda 2 da auditoria (14 out 2026): sem isto, a IA lia só o
+ * resumo (~200 caracteres) e uma reclamação depois da saudação e de outro
+ * pedido ficava de fora.
  */
 export function readableMailText(m: { text?: string | null; html?: string | null; snippet?: string | null }): string {
   if (String(m.text ?? "").trim()) return String(m.text);
-  const fromHtml = m.html ? htmlToPlainText(m.html) : "";
+  const fromHtml = boundedHtmlToText(m.html, READABLE_HTML_MAX);
   return fromHtml || String(m.snippet ?? "");
 }
 

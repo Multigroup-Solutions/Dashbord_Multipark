@@ -46,15 +46,16 @@ import {
   addLostFoundMessage,
 } from "../db";
 import {
+  boundedHtmlToText,
   clientSignalEmail,
   complaintSlaDeadline,
-  htmlToPlainText,
+  INBOUND_HTML_MAX,
   isGenericSenderName,
   isLivroReclamacoes,
   parseComplaintCaseTag,
   COMPLAINT_DEFAULT_SLA_HOURS,
 } from "../complaintEmail";
-import { aiMergeConflict, aiMergeSameClient, lostFoundMergeRecent } from "../../shared/complaintIntake";
+import { aiMergeConflict, aiMergeSameClient, lostFoundMergeRecent, partnerSafeClientEmail } from "../../shared/complaintIntake";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
@@ -79,11 +80,14 @@ async function routeToModule(
   // com nome próprio; senão os reencaminhamentos misturavam clientes.
   // Ronda 2: um parceiro (agência, hotel…) que escreve em nome do cliente não É o cliente —
   // o email dele nunca fica na reclamação/perdido nem junta casos de clientes diferentes.
-  const senderEmail = ctx.aiIntake?.partnerSender ? undefined : clientSignalEmail(ctx.fromEmail);
+  const partnerSender = !!ctx.aiIntake?.partnerSender;
+  const senderEmail = partnerSender ? undefined : clientSignalEmail(ctx.fromEmail);
   const senderName = senderEmail && !isGenericSenderName(ctx.fromName) ? ctx.fromName?.trim() : undefined;
   const bodyName = parsed.clientName && !isGenericSenderName(parsed.clientName) ? parsed.clientName.trim() : undefined;
   const clientName = bodyName || senderName || "Desconhecido";
-  const clientEmail = clientSignalEmail(parsed.clientEmail) || senderEmail;
+  // Ronda 3: o email que vem do corpo também não pode ser o do parceiro (assinatura, colega em cópia).
+  const bodyEmail = clientSignalEmail(parsed.clientEmail);
+  const clientEmail = (partnerSender ? partnerSafeClientEmail(bodyEmail, ctx.fromEmail) : bodyEmail) || senderEmail;
   let desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
 
   if (alias === "criticas") {
@@ -645,7 +649,8 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 
     // HTML → texto com html-to-text (mantém quebras de linha para o
     // parsing "Etiqueta: valor", descodifica entidades, sem <style>).
-    const htmlText = typeof input.html === "string" && input.html ? htmlToPlainText(input.html) : "";
+    // Ronda 3: com teto (HTML muito aninhado bloqueava a sincronização segundos a fio).
+    const htmlText = typeof input.html === "string" && input.html && !input.text ? boundedHtmlToText(input.html, INBOUND_HTML_MAX) : "";
     const bodyText = (input.text || htmlText || "").slice(0, 20000);
     const parsed = parseInboundBody(bodyText);
     // Guarda os ficheiros no storage (antes só se registavam os nomes e o

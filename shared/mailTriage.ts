@@ -333,14 +333,28 @@ export interface TriageAiOutput {
  * certeza baixa porque o assunto principal é outro: o sim/não não depende
  * dessa calibração, e uma pessoa confirma. Só números e sim/não da IA — o
  * texto do email não entra aqui. PURA.
+ *
+ * `complaintFloored` / `lostFloored` (ronda 3): a certeza só chegou lá pelo
+ * sim/não (a da IA e a da caixa ficam abaixo de `createMinConfidence`) — o
+ * caso nasce SEMPRE "Por confirmar (IA)", mesmo que nas Definições
+ * `suggestMinConfidence` seja igual a `createMinConfidence`.
  */
-export function caseScoresOf(out: TriageAiOutput, t: Pick<TriageThresholds, "suggestMinConfidence">): { complaintScore: number; lostScore: number } {
+export function caseScoresOf(
+  out: TriageAiOutput,
+  t: Pick<TriageThresholds, "suggestMinConfidence"> & Partial<Pick<TriageThresholds, "createMinConfidence">>,
+): { complaintScore: number; lostScore: number; complaintFloored: boolean; lostFloored: boolean } {
   const aiBoxKey = parseTriageCategory(out.box);
   const confidence = normalizeConfidence(out.confidence) ?? 0;
-  const floor = (said: unknown) => (said === true ? t.suggestMinConfidence : 0);
+  const create = t.createMinConfidence ?? 1;
+  const complaintOwn = Math.max(normalizeConfidence(out.complaint) ?? 0, aiBoxKey === "reclamacoes" ? confidence : 0);
+  const lostOwn = Math.max(normalizeConfidence(out.lostItem) ?? 0, aiBoxKey === "perdidos" ? confidence : 0);
+  const complaintSaid = out.complaintMentioned === true;
+  const lostSaid = out.lostItemMentioned === true;
   return {
-    complaintScore: Math.max(normalizeConfidence(out.complaint) ?? 0, aiBoxKey === "reclamacoes" ? confidence : 0, floor(out.complaintMentioned)),
-    lostScore: Math.max(normalizeConfidence(out.lostItem) ?? 0, aiBoxKey === "perdidos" ? confidence : 0, floor(out.lostItemMentioned)),
+    complaintScore: Math.max(complaintOwn, complaintSaid ? t.suggestMinConfidence : 0),
+    lostScore: Math.max(lostOwn, lostSaid ? t.suggestMinConfidence : 0),
+    complaintFloored: complaintSaid && complaintOwn < create,
+    lostFloored: lostSaid && lostOwn < create,
   };
 }
 
@@ -417,7 +431,7 @@ export function decideMailTriage(
 ): TriageDecision {
   const aiBoxKey = parseTriageCategory(out.box);
   const confidence = normalizeConfidence(out.confidence);
-  const { complaintScore, lostScore } = caseScoresOf(out, t);
+  const { complaintScore, lostScore, complaintFloored, lostFloored } = caseScoresOf(out, t);
   const noticeOk = !aiBoxKey || !NOTICE_CATEGORIES.has(aiBoxKey) || features.notices;
   const understood = !!aiBoxKey && aiBoxKey !== "geral" && confidence != null && confidence >= t.minConfidence && noticeOk;
 
@@ -426,7 +440,9 @@ export function decideMailTriage(
   const wantLost = features.lostFound && caseAllowed && lostScore >= t.suggestMinConfidence;
   const caseKind: MailCaseKind | null = wantComplaint && (!wantLost || complaintScore >= lostScore) ? "complaint" : wantLost ? "lost_found" : null;
   const caseScore = caseKind === "complaint" ? complaintScore : caseKind === "lost_found" ? lostScore : null;
-  const uncertain = caseScore != null && caseScore < t.createMinConfidence;
+  // Só pelo sim/não (a certeza da IA ficou abaixo) → sempre "Por confirmar", seja qual for o limiar.
+  const floored = caseKind === "complaint" ? complaintFloored : caseKind === "lost_found" ? lostFloored : false;
+  const uncertain = caseScore != null && (caseScore < t.createMinConfidence || floored);
 
   const category: MailTriageCategory = caseKind ? CASE_BOX[caseKind] : understood ? aiBoxKey! : "geral";
 

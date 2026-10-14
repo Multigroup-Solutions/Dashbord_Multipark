@@ -31,7 +31,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { corpusCounts, type TriageCorpusItem } from "../server/fixtures/mailTriageCorpus";
 import {
-  TRIAGE_CORPORA, TRIAGE_CORPUS_KEYS, TRIAGE_CORPUS_LABELS, corpusFacts, evalCorpusItem, evalTriageSlice, productionThresholds, triageEvalReport,
+  TRIAGE_CORPORA, TRIAGE_CORPUS_KEYS, TRIAGE_CORPUS_LABELS, corpusFacts, evalCorpusItem, evalTriageSlice, parseOfflineAnswer, productionThresholds, triageEvalReport,
   type EvalItemResult, type TriageCorpusKey,
 } from "../server/mailTriageEval";
 import { mailRoutingRequest } from "../server/commsRouting";
@@ -153,7 +153,8 @@ async function main() {
       const name = byItem.get(`${k}:${item.id}`);
       const out = name ? answers[name] : undefined;
       if (!out) throw Object.assign(new Error(`sem resposta (${name ?? "fora do dump"})`), { code: "sem_resposta" });
-      return { output: out as any, restore: (s: string) => s, model: "substituto" };
+      // O mesmo esquema da produção ("true" vale sim; fora do formato = a IA falhou).
+      return { output: parseOfflineAnswer(out), restore: (s: string) => s, model: "substituto" };
     }, t);
   }
   const results = [];

@@ -306,6 +306,7 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     let noticeBox: MailboxConfig | null = mailbox;
     // A IA criou/juntou o caso (o aviso "Nova reclamação" já foi) — sem 2.º aviso de email novo.
     let aiComplaint = false;
+    let aiLostFound = false;
     if (mailbox && e.result.messageId) {
       const target = await triageNewMessage(e, mailbox, {
         automated: automatedValue, pipeline: pipelineUsed, createdCase, routingRun, loadBudget, api, company,
@@ -313,6 +314,7 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
           // Só a RECLAMAÇÃO tem o seu aviso ("Nova reclamação" / "por confirmar (IA)"). Ronda 2: um perdido
           // aberto pela IA não avisa ninguém por si — o aviso de email novo vai a quem vê a caixa Perdidos.
           if ((r.status === "created" || r.status === "linked") && "complaintId" in r) aiComplaint = true;
+          if ((r.status === "created" || r.status === "linked") && "lostFoundId" in r) aiLostFound = true;
           if (r.status === "created" && "complaintId" in r) report.pipelineCreated++; // a triagem das reclamações novas corre no fim
         },
         onAi: () => { report.aiRouted = (report.aiRouted ?? 0) + 1; },
@@ -321,6 +323,14 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
         return null;
       });
       if (target) noticeBox = target;
+    }
+    // Ronda 3: o perdido que a IA abriu deu a cidade à conversa (pela reserva) — o aviso vai a quem
+    // vê a caixa Perdidos NESSA cidade (antes da triagem a conversa ainda não tinha cidade).
+    if (aiLostFound && projectId == null) {
+      try {
+        const pr = rowsOf(await (await db()).execute(sql`SELECT projectId FROM mail_threads WHERE id = ${e.result.threadId} LIMIT 1`))[0];
+        if (pr?.projectId != null) projectId = Number(pr.projectId);
+      } catch { /* sem cidade: o aviso segue como antes */ }
     }
     let ownerNotified = false;
     if (fresh && mailbox && alias?.owner && e.result.newThread && noticeBox === mailbox) {

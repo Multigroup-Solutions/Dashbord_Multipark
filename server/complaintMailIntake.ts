@@ -80,6 +80,11 @@ export interface IntakeVerdict {
   reason: string | null;
   /** Aviso oficial de formato conhecido (Livro de Reclamações): passa os filtros de automático. */
   notice?: "livro" | null;
+  /**
+   * Ronda 3: a triagem já disse "Por confirmar" (ex.: só o sim/não da IA deu a
+   * certeza) — o caso nunca nasce confirmado, seja qual for o limiar.
+   */
+  uncertain?: boolean;
 }
 
 export type IntakeResult =
@@ -173,7 +178,7 @@ async function decideAndApply(msg: IntakeMessage, verdict: IntakeVerdict, kind: 
   if (decision.action === "ignore") return { status: "ignored" };
   // Não se conseguiu confirmar tudo (ex.: a lista de parceiros não respondeu): uma reclamação só fica sugerida.
   if (decision.action === "create" && facts.uncertain && kind === "complaint") decision = { action: "suggest" };
-  const uncertain = decision.action === "create" && (decision.uncertain === true || !!facts.uncertain);
+  const uncertain = decision.action === "create" && (decision.uncertain === true || !!facts.uncertain || verdict.uncertain === true);
   const partnerSender = decision.action === "create" && decision.partner === true;
   const status: IntakeStatus = decision.action === "create" ? "creating" : decision.action === "suggest" ? "suggested" : "skipped";
   const skipReason = decision.action === "skip" ? decision.why : null;
@@ -345,6 +350,9 @@ export async function createOrLinkFromThread(
   if (!partnerSender && m.fromEmail) {
     try { partnerSender = isPartnerSender(String(m.fromEmail), await partnerEmails(d)); } catch { /* lista indisponível: como antes */ }
   }
+  // Um parceiro em nome do cliente: sempre "Por confirmar" (uma pessoa confirma quem é o cliente) —
+  // salvo quando foi uma pessoa a criá-lo (sugestão aceite).
+  const uncertain = !!input.uncertain || (partnerSender && !input.actor);
   // Ronda 2: o perdido que já está ligado a ESTA conversa (à mão ou pelo próprio caso, ≥ 95) — uma
   // conversa nunca dá dois casos (o caminho dos perdidos não procura pelo fio do email como o das reclamações).
   let threadLostFoundId: number | null = null;
@@ -392,9 +400,7 @@ export async function createOrLinkFromThread(
     },
     aiIntake: {
       actorId: input.actor?.id ?? null, projectId: input.projectId,
-      // Um parceiro em nome do cliente: sempre "Por confirmar" (uma pessoa confirma quem é o cliente) —
-      // salvo quando foi uma pessoa a criá-lo (sugestão aceite).
-      ...(input.uncertain || (partnerSender && !input.actor) ? { uncertain: true } : {}),
+      ...(uncertain ? { uncertain: true } : {}),
       ...(partnerSender ? { partnerSender: true } : {}),
       ...(threadLostFoundId ? { forceLostFoundId: threadLostFoundId } : {}),
     },
@@ -432,7 +438,7 @@ export async function createOrLinkFromThread(
   if (!already) {
     const note = intakeNote(isNew ? "created" : "linked", {
       boxLabel: input.boxLabel, reason: input.verdict.reason, confidence: input.verdict.confidence, by: input.actor?.name ?? null,
-      caseKind: kind, uncertain: isNew && (!!input.uncertain || (partnerSender && !input.actor)), partner: partnerSender,
+      caseKind: kind, uncertain: isNew && uncertain, partner: partnerSender,
     });
     if (lost) {
       await db.addLostFoundMessage({
@@ -445,7 +451,7 @@ export async function createOrLinkFromThread(
     }
     await db.logActivity({
       userId: input.actor?.id ?? 0, action: isNew ? "create" : "update", entity: lost ? "lost_found" : "complaint", entityId: caseId,
-      details: `${lost ? (isNew ? "Perdido criado" : "Email junto ao perdido") : (isNew ? "Reclamação criada" : "Email junto à reclamação")} pela IA${isNew && input.uncertain ? " (por confirmar)" : ""} — email da caixa ${input.boxLabel} (conversa ${input.threadId})`,
+      details: `${lost ? (isNew ? "Perdido criado" : "Email junto ao perdido") : (isNew ? "Reclamação criada" : "Email junto à reclamação")} pela IA${isNew && uncertain ? " (por confirmar)" : ""}${partnerSender ? " (email de um parceiro)" : ""} — email da caixa ${input.boxLabel} (conversa ${input.threadId})`,
       source: input.actor ? "ui" : "system",
     } as any).catch(() => {});
   }

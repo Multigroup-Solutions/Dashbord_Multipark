@@ -30,6 +30,20 @@ import { TRIAGE_CORPUS, type TriageCorpusItem } from "./fixtures/mailTriageCorpu
 import { TRIAGE_HOLDOUT } from "./fixtures/mailTriageHoldout";
 import { TRIAGE_BLIND } from "./fixtures/mailTriageBlind";
 import type { ClassifiedEmail, EmailRoutingMessage } from "./commsRouting";
+import { mailRoutingSchema, type MailRoutingOutput } from "./_core/ai/prompts/comms";
+
+/**
+ * Uma resposta dada à mão ao script (`--answers`, scripts/eval-mail-triage.ts)
+ * passa pelo MESMO esquema que a resposta da IA em produção (ronda 3 da
+ * auditoria): "true" vale sim, um campo em falta vale 0 / não, e fora do
+ * formato é como a IA ter falhado (lança "invalid_output") — senão o teste
+ * offline media outra porta. PURA.
+ */
+export function parseOfflineAnswer(raw: unknown): MailRoutingOutput {
+  const r = mailRoutingSchema.safeParse(raw);
+  if (!r.success) throw Object.assign(new Error("resposta fora do formato"), { code: "invalid_output" });
+  return r.data;
+}
 
 /** Os corpora rotulados: o principal, o de controlo (independente) e o cego (auditoria, ronda 2). */
 export const TRIAGE_CORPORA: Record<TriageCorpusKey, readonly TriageCorpusItem[]> = { principal: TRIAGE_CORPUS, controlo: TRIAGE_HOLDOUT, cego: TRIAGE_BLIND };

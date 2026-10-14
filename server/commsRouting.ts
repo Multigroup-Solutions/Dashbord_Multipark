@@ -227,7 +227,9 @@ export async function classifyAndApply(msg: EmailRoutingMessage, deps: EmailRout
   // 1) Reclamação / perdido → o caso (criar ou juntar). Nunca escreve ao cliente.
   let complaint: IntakeResult | null = null;
   if (d.caseKind && deps.caseIntake) {
-    complaint = await deps.caseIntake(msg, { kind: d.caseKind, aiBoxKey: d.aiBoxKey, confidence: d.caseScore, reason: aiReason }).catch((err: any) => {
+    // Ronda 3: "Por confirmar" que a certeza sozinha não mostra à porta do caso (só o sim/não da IA a levou ao limiar).
+    const forceUncertain = d.uncertain && d.caseScore != null && d.caseScore >= caseT.createMinConfidence;
+    complaint = await deps.caseIntake(msg, { kind: d.caseKind, aiBoxKey: d.aiBoxKey, confidence: d.caseScore, reason: aiReason, ...(forceUncertain ? { uncertain: true } : {}) }).catch((err: any) => {
       console.warn("[IA caixas] caso (email) falhou:", msg.threadId, String(err?.message ?? err).slice(0, 160));
       return null;
     });
