@@ -49,6 +49,8 @@ import OperacoesPage from "./pages/OperacoesPage";
 import ExtrasDiaPage from "./pages/ExtrasDiaPage";
 import BookingFilePage from "./pages/BookingFilePage";
 import InvitePage from "./pages/InvitePage";
+import SharedLinkConfirmPage from "./pages/SharedLinkConfirmPage";
+import SharedIdentityPage from "./pages/SharedIdentityPage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
 import ComunicacaoPage from "./pages/ComunicacaoPage";
@@ -71,6 +73,8 @@ function Router() {
   return (
     <Switch>
       <Route path="/convite/:token" component={InvitePage} />
+      {/* Plano 05 (L2): o link do email da proposta — abre sem sessão. */}
+      <Route path="/ligar-conta-multipark/:token" component={SharedLinkConfirmPage} />
       <Route path="/pda/registar" component={PdaRegisterPage} />
       <Route path="/" component={Home} />
       <Route path="/dashboards">
@@ -97,6 +101,14 @@ function Router() {
       {/* O painel passou a separador "Resumo" de /despesas */}
       <Route path="/despesas/dashboard">
         {() => <Redirect to="/despesas?tab=resumo" />}
+      </Route>
+      {/* Plano 05: só super admin (o menu e o servidor) */}
+      <Route path="/utilizadores/identidade-partilhada">
+        {() => (
+          <DashboardLayout>
+            <SharedIdentityPage />
+          </DashboardLayout>
+        )}
       </Route>
       <Route path="/utilizadores">
         {() => (

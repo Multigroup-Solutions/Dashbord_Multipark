@@ -15,6 +15,7 @@ import { GoogleContactsCard } from "@/components/google/GoogleContactsCard";
 import { GoogleDriveCard } from "@/components/google/GoogleDriveCard";
 import { CallPushCard } from "@/components/whatsapp/CallPushCard";
 import { PasswordCard } from "@/components/login/PasswordCard";
+import { SharedAccountCard } from "@/components/login/SharedAccountCard";
 import { PushAlertsCard } from "@/components/login/PushAlertsCard";
 import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
 import { useCodeLoginOption } from "@/lib/loginOptions";
@@ -151,6 +152,9 @@ export default function ProfilePage() {
       </div>
 
       {codeLogin && user && <PasswordCard name={user.name ?? null} email={user.email ?? null} />}
+
+      {/* Plano 05: a conta Multipark (be-shared) — só com os interruptores ligados. */}
+      {user && <SharedAccountCard email={user.email ?? null} />}
 
       {/* TL e supervisor recebem aqui os códigos de entrada de quem os pede. */}
       {codeLogin && user && roleRank(user.role) >= roleRank("team_leader") && <PushAlertsCard />}
