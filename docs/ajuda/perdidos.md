@@ -18,8 +18,11 @@ Objetos esquecidos pelos clientes nos carros.
 **Por email**
 - Os emails para **perdidos@** criam o caso sozinhos (como sempre).
 - **Noutras caixas** (info@, reservas@, alterações…), com o interruptor **"IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados"** (Definições → Automações; **desligado por omissão**): a IA lê cada email pelo sentido e, quando alguém diz que deixou, perdeu ou esqueceu um objeto (mesmo no meio de um elogio ou de outro pedido), abre o caso aqui (origem IA) ou junta o email ao caso **aberto** do mesmo cliente. A conversa vai para a caixa **Perdidos** da Comunicação, **por ler**. As respostas do cliente nessa conversa juntam-se ao mesmo caso.
-- Com **certeza média** o caso nasce **"Por confirmar (IA)"** (selo no cartão, aviso roxo no caso): **É um perdido** confirma; **Não é um perdido** arquiva com o motivo (nada se apaga).
-- No caso fica uma nota interna "Criado pela IA" com a caixa, o motivo e a certeza. **Nunca se escreve ao cliente** — avisá-lo é sempre uma pessoa (**Avisar cliente**).
+- Com **certeza média** o caso nasce **"Por confirmar (IA)"** (selo no cartão, aviso roxo no caso): **É um perdido** confirma; **Não é um perdido** arquiva com o motivo (nada se apaga). Quando a IA diz que o objeto aparece em qualquer parte do email (mesmo de passagem), o caso abre pelo menos "Por confirmar".
+- No quadro, **Por confirmar (IA) (n)** (ao lado de "Sem cidade") mostra só esses. Os casos criados pela IA têm o selo **IA**.
+- Um **parceiro** (agência, hotel — contacto das Parcerias) que escreve em nome de um cliente só abre o caso com o interruptor **"IA: reclamações e perdidos que um parceiro manda em nome de um cliente abrem o caso"** (desligado por omissão); ligado, nasce sempre "Por confirmar" e o email do parceiro não fica como o do cliente.
+- Uma conversa já ligada a um perdido (à mão ou pelo próprio caso) junta as mensagens seguintes a esse perdido — nunca abre outro.
+- No caso fica uma nota interna "Criado pela IA" com a caixa, o motivo e a certeza. **Nunca se escreve ao cliente** — avisá-lo é sempre uma pessoa (**Avisar cliente**). Quem vê a caixa **Perdidos** recebe o aviso de email novo (como num email que chega diretamente).
 - A mesma matrícula de outro cliente nunca junta o email ao caso dele. Um email novo do mesmo cliente só se junta a um perdido aberto há **menos de 14 dias** (a mesma viagem) e sem outra reserva/matrícula; um perdido antigo ainda aberto não "engole" um objeto novo.
 - Um caso **"Por confirmar (IA)"** que alguém arquivou ("Não é um perdido") não volta com a resposta seguinte do cliente.
 

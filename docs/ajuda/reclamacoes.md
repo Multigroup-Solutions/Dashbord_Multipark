@@ -22,7 +22,10 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
   - **certeza média** → a reclamação é criada na mesma, marcada **"Por confirmar (IA)"** (selo no cartão e aviso roxo no caso). Abre-a e carrega em **É reclamação** (confirma) ou **Não é reclamação** (arquiva com o motivo — nada se apaga; volta com "Tirar do arquivo");
   - **pouca certeza** → nada.
 - A conversa vai para a caixa **Reclamações** da Comunicação, **por ler**.
-- Nunca para emails internos (salvo o backoffice a reencaminhar a queixa de um cliente), automáticos, envios em massa, de parceiros nem avisos de avaliações.
+- Nunca para emails internos (salvo o backoffice a reencaminhar a queixa de um cliente), automáticos, envios em massa nem avisos de avaliações.
+- **Parceiros** (agência, hotel, comparador — contacto das Parcerias) que escrevem em nome de um cliente: só com o interruptor **"IA: reclamações e perdidos que um parceiro manda em nome de um cliente abrem o caso"** (Definições → Automações; **desligado** por omissão). Ligado, a reclamação nasce sempre **"Por confirmar (IA)"** e o email do parceiro **não fica** como o do cliente (nunca junta reclamações de clientes diferentes da mesma agência) — confirma quem é o cliente. Desligado, o email de um parceiro nunca abre reclamação.
+- Quando a IA diz que há uma queixa **em qualquer parte** do email (mesmo de passagem, dentro de outro pedido), a reclamação abre pelo menos **"Por confirmar (IA)"**, mesmo que a certeza seja baixa.
+- Um email só em HTML (sem texto simples) é lido pelo texto do HTML — não só pelas primeiras linhas.
 - **Nunca responde ao cliente**: sem aviso de receção, sem resposta. O aviso no sino vai à equipa como numa reclamação nova ("Reclamação por confirmar (IA)" quando é o caso).
 - Uma conversa nunca dá duas reclamações, mesmo que a sincronização corra outra vez. Se o cliente responder nessa conversa, a resposta entra na mesma reclamação (volta a **Em Análise**). Uma reclamação **"Por confirmar (IA)"** que alguém **arquivou** ("Não é reclamação") **não volta** com a resposta seguinte do cliente: a pessoa já decidiu.
 - O **Livro de Reclamações eletrónico** (aviso da plataforma oficial) abre sempre a reclamação.
@@ -31,11 +34,12 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 - Se a criação falhar (Gmail ou base de dados em baixo), fica em **Parecem reclamações** como **Falhou ao criar** com **Tentar de novo**; o sistema também volta a tentar sozinho.
 - **As que já estão nas caixas**: com o interruptor **"IA: rever os emails que já estão nas caixas"** (desligado por omissão) a IA passa também pelos emails dos últimos 30 dias ainda sem caso.
 - Interruptor: Definições → Automações → **"IA: reclamações que chegam a outras caixas vão para as Reclamações"** (ligado). Precisa de **"IA: separar emails e WhatsApp pelas caixas"** ligado (é a mesma leitura da IA). As certezas estão em Definições → Parâmetros → IA (**ai.mailComplaints**: 0,85 para confirmada, 0,5 para "Por confirmar"). Desligado: deixa de criar.
-- Para ver se a IA está a apanhar as reclamações: Definições → Comunicação → **Testar a triagem** (super admin). A meta é mais de 90 %.
+- Para ver se a IA está a apanhar as reclamações: Definições → Comunicação → **Testar a triagem** (super admin). A meta é mais de 90 % em cada um dos três conjuntos de exemplo.
 
 **Filtros**
 - **Pesquisar**: nº, título, nome, email, telefone, reserva, matrícula e responsável (sem acentos nem traços: "aa12bb" encontra "AA-12-BB"). **#12** abre só a reclamação nº 12.
-- **Estado** (também **Em aberto** e **Em atraso**), **Tipo**, **Cidade** (inclui **Sem cidade** para quem vê todas), **Responsável** (ou **Sem responsável**), **Origem** (email, IA, WhatsApp, crítica Google, ocorrência/perdido, à mão, API) e **Criada de / até** (dia de Lisboa).
+- **Estado** (também **Em aberto** e **Em atraso**), **Tipo**, **Cidade** (inclui **Sem cidade** para quem vê todas), **Responsável** (ou **Sem responsável**), **Origem** (email, IA, WhatsApp, crítica Google, ocorrência/perdido, à mão, API, ou **Por confirmar (IA)** — só as que a IA criou e ninguém confirmou) e **Criada de / até** (dia de Lisboa).
+- Quando há reclamações **"Por confirmar (IA)"**, aparece por cima do quadro quantas são, com **Ver só essas**.
 - Tudo filtra a **mesma** lista: o quadro, os contadores, o CSV e o total batem sempre certo. **Limpar filtros** volta ao início. Os filtros ficam guardados enquanto o separador estiver aberto (sair e voltar às Reclamações não os perde).
 - Escolher uma cidade no cabeçalho tira o **Sem cidade**.
 - Com datas escolhidas procura em todas (sem o limite dos 90 dias), como a pesquisa.
