@@ -963,8 +963,10 @@ function DashboardLayoutContent({
                 </div>
                 <DropdownMenuSeparator />
                 {/* Jorge (14 out 2026): o "Perfil" da barra do telemóvel também no computador.
-                    /perfil é pessoal (shared/routeAccess.ts): abre para todos os papéis. */}
-                <DropdownMenuItem onClick={() => navigate("/perfil")} className="cursor-pointer">
+                    /perfil é pessoal (shared/routeAccess.ts): abre para todos os papéis, PDA e
+                    sem centro de custos incluídos. No telemóvel (< md) a barra de baixo
+                    (MobileTabBar, md:hidden) já tem o Perfil — aqui só a partir de md, sem repetir. */}
+                <DropdownMenuItem onClick={() => navigate("/perfil")} className="hidden cursor-pointer md:flex">
                   <UserRound className="mr-2 h-4 w-4" />
                   <span>O meu perfil</span>
                 </DropdownMenuItem>

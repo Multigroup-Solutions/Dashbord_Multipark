@@ -19,7 +19,7 @@
  * aplica ESTAS funções no servidor, sobre o mesmo procedimento da página. PURO.
  */
 import { z } from "zod";
-import { matchWords, textMatches } from "./textKey";
+import { matchKey, matchWords } from "./textKey";
 import type { DayMetrics } from "./evaluationRules";
 
 // ─── A linha do ranking (o que o filtro lê) ─────────────────────────────────
@@ -36,7 +36,11 @@ export interface EvalRankingRowLike {
   openDisputes?: number;
   /** cidades (lisbon/porto/faro) onde trabalhou no período; sem escala, a da ficha */
   cities?: string[];
-  /** marca da ficha (nó "marca" do centro de custos) */
+  /**
+   * marca da ficha (nó "marca" do centro de custos). Os nós de marca são POR
+   * CIDADE (o Airpark de Lisboa e o do Porto são nós diferentes): os filtros
+   * e o agrupar usam o NOME (brandKey), não o id.
+   */
   brand?: { id: number; name: string } | null;
   /** n.º (id) e nomes dos agentes Multipark da pessoa */
   agents?: string[];
@@ -59,6 +63,10 @@ export const EVAL_POSITIONS = [
 export type EvalPosition = (typeof EVAL_POSITIONS)[number]["id"];
 export const positionLabel = (p: string | null | undefined) => EVAL_POSITIONS.find((x) => x.id === p)?.label ?? (p || "Sem posto");
 
+/** A chave da marca para filtrar e agrupar: o nome normalizado ("Airpark" = "AIRPARK"), igual em todas as cidades. PURA. */
+export const brandKey = (name: string | null | undefined) => matchKey(name);
+const brandKeyOf = (r: EvalRankingRowLike) => (r.brand ? brandKey(r.brand.name) : "");
+
 // ─── Pesquisa por facetas ───────────────────────────────────────────────────
 
 export const EVAL_SEARCH_FIELDS = [
@@ -71,21 +79,36 @@ export const EVAL_SEARCH_FIELDS = [
 export type EvalSearchField = (typeof EVAL_SEARCH_FIELDS)[number]["id"];
 export interface EvalSearch { field: EvalSearchField; text: string }
 
-/** O texto de cada faceta de uma linha (o que a pesquisa compara). PURA. */
-export function searchHaystack(r: EvalRankingRowLike, field: EvalSearchField): string {
+/**
+ * Os textos de cada faceta de uma linha (o que a pesquisa compara), em PARTES
+ * separadas: o nome, cada agente, cada cidade… — uma palavra procura-se em cada
+ * parte, nunca na junção de duas ("Silva" + agente "12" não dá "a1"). PURA.
+ */
+export function searchHaystack(r: EvalRankingRowLike, field: EvalSearchField): string[] {
   switch (field) {
-    case "name": return [r.employeeName, ...(r.agents ?? [])].join(" ");
-    case "city": return (r.cities ?? []).map((c) => `${cityLabel(c)} ${c}`).join(" ");
-    case "brand": return r.brand?.name ?? "";
-    case "position": return [positionLabel(r.position), (r.tlDays ?? 0) > 0 ? "team leader TL" : ""].join(" ");
-    case "team": return r.teamLeader?.name ?? "";
+    case "name": return [r.employeeName, ...(r.agents ?? [])];
+    case "city": return (r.cities ?? []).flatMap((c) => [cityLabel(c), c]);
+    case "brand": return r.brand?.name ? [r.brand.name] : [];
+    case "position": return [positionLabel(r.position), ...((r.tlDays ?? 0) > 0 ? ["team leader", "TL"] : [])];
+    case "team": return r.teamLeader?.name ? [r.teamLeader.name] : [];
   }
 }
 
-/** Uma linha cumpre a pesquisa? (cada palavra tem de aparecer; ver shared/textKey.ts). PURA. */
+/**
+ * Pesquisa em partes: cada palavra da pergunta tem de aparecer numa das partes
+ * (sem acentos, maiúsculas, apóstrofos nem traços — a regra de shared/textKey.ts:
+ * "joao dalmeida" encontra "João d'Almeida"; "4711" encontra o agente 4711). PURA.
+ */
+export function partsMatch(parts: ReadonlyArray<string | null | undefined>, query: string | null | undefined): boolean {
+  const words = matchWords(query);
+  if (!words.length) return true;
+  const keys = parts.map((p) => matchKey(p)).filter(Boolean);
+  return words.every((w) => keys.some((k) => k.includes(w)));
+}
+
+/** Uma linha cumpre a pesquisa? (cada palavra tem de aparecer). PURA. */
 export function matchesSearch(r: EvalRankingRowLike, s: EvalSearch): boolean {
-  if (!matchWords(s.text).length) return true;
-  return textMatches(searchHaystack(r, s.field), s.text);
+  return partsMatch(searchHaystack(r, s.field), s.text);
 }
 
 /** Quantas linhas cada faceta encontra com este texto ("Procurar «ana» em Nome (3)"). PURA. */
@@ -111,7 +134,7 @@ export type EvalFlag = (typeof EVAL_FLAGS)[number]["id"];
 
 export interface EvalGroups {
   city?: string[];
-  /** id da marca (texto) */
+  /** chave do nome da marca (brandKey: "airpark") — a mesma em todas as cidades */
   brand?: string[];
   position?: EvalPosition[];
   /** id do TL (texto) */
@@ -145,7 +168,7 @@ export function hasFlag(r: EvalRankingRowLike, f: EvalFlag): boolean {
 export function matchesGroups(r: EvalRankingRowLike, g: EvalGroups | undefined): boolean {
   if (!g) return true;
   if (g.city?.length && !g.city.some((c) => (r.cities ?? []).includes(c))) return false;
-  if (g.brand?.length && !(r.brand && g.brand.includes(String(r.brand.id)))) return false;
+  if (g.brand?.length && !(r.brand && g.brand.includes(brandKeyOf(r)))) return false;
   if (g.position?.length && !g.position.some((p) => (p === "tl" ? (r.tlDays ?? 0) > 0 : r.position === p))) return false;
   if (g.team?.length && !(r.teamLeader && g.team.includes(String(r.teamLeader.id)))) return false;
   if (g.flags?.length && !g.flags.some((f) => hasFlag(r, f))) return false;
@@ -319,7 +342,7 @@ export function groupKeysOf(r: EvalRankingRowLike, by: EvalGroupBy): { key: stri
       // a cidade principal (a 1.ª: mais dias) — cada pessoa só conta uma vez
       return [c.length ? { key: c[0], label: cityLabel(c[0]) } : { key: "", label: "Sem cidade" }];
     }
-    case "brand": return [r.brand ? { key: String(r.brand.id), label: r.brand.name } : { key: "", label: "Sem marca" }];
+    case "brand": return [r.brand ? { key: brandKeyOf(r), label: r.brand.name } : { key: "", label: "Sem marca" }];
     case "position": return [{ key: r.position ?? "", label: positionLabel(r.position) }];
     case "team": return [r.teamLeader ? { key: String(r.teamLeader.id), label: r.teamLeader.name } : { key: "", label: "Sem equipa (TL)" }];
   }
@@ -353,7 +376,8 @@ export function groupOptions(rows: readonly EvalRankingRowLike[]): Record<keyof 
     return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "pt"));
   };
   const cities = count(rows.flatMap((r) => (r.cities ?? []).map((c) => ({ value: c, label: cityLabel(c) }))));
-  const brands = count(rows.flatMap((r) => (r.brand ? [{ value: String(r.brand.id), label: r.brand.name }] : [])));
+  // uma marca = um nome (os nós são por cidade: o Airpark de Lisboa e o do Porto juntam-se)
+  const brands = count(rows.flatMap((r) => (r.brand ? [{ value: brandKeyOf(r), label: r.brand.name }] : [])));
   const teams = count(rows.flatMap((r) => (r.teamLeader ? [{ value: String(r.teamLeader.id), label: r.teamLeader.name }] : [])));
   const positions = EVAL_POSITIONS.map((p) => ({ value: p.id as string, label: p.label, n: rows.filter((r) => matchesGroups(r, { position: [p.id] })).length }));
   const flags = EVAL_FLAGS.map((f) => ({ value: f.id as string, label: f.label, n: rows.filter((r) => hasFlag(r, f.id)).length }));
@@ -371,7 +395,8 @@ export function evalRuleText(r: EvalRule): string {
   const label = f?.label ?? r.field;
   const op = EVAL_RULE_OPS.find((o) => o.id === r.op);
   if (r.op === "has" || r.op === "not_has") return `${label}: ${op?.label ?? r.op}`;
-  if (r.op === "between") return `${label} entre ${fmtNumber(r.value)} e ${fmtNumber(r.value2)}`;
+  // "entre" sem o 2.º valor filtra como "≥" (ruleHolds) — e di-lo assim
+  if (r.op === "between") return ruleNumber(r.value2) == null ? `${label} ≥ ${fmtNumber(r.value)}` : `${label} entre ${fmtNumber(r.value)} e ${fmtNumber(r.value2)}`;
   return `${label} ${op?.label ?? r.op} ${fmtNumber(r.value)}`;
 }
 
@@ -381,7 +406,7 @@ export function groupValueLabel(group: keyof EvalGroups, value: string, rows: re
     case "city": return cityLabel(value);
     case "position": return positionLabel(value);
     case "flags": return EVAL_FLAGS.find((f) => f.id === value)?.label ?? value;
-    case "brand": return rows.find((r) => String(r.brand?.id) === value)?.brand?.name ?? `Marca #${value}`;
+    case "brand": return rows.find((r) => r.brand && brandKeyOf(r) === value)?.brand?.name ?? value;
     case "team": return rows.find((r) => String(r.teamLeader?.id) === value)?.teamLeader?.name ?? `TL #${value}`;
   }
 }
@@ -527,5 +552,5 @@ export function rankingCsv(rows: readonly EvalRankingRowLike[], o: { rankOf: (em
  * a mesma regra do ranking (nome, agente…; cada palavra tem de aparecer). PURA.
  */
 export function personMatches(parts: ReadonlyArray<string | null | undefined>, query: string | null | undefined): boolean {
-  return textMatches(parts.filter(Boolean).join(" "), query);
+  return partsMatch(parts, query);
 }

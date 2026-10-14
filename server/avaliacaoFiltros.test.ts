@@ -116,7 +116,7 @@ describe("grupos: OU dentro do grupo, E entre grupos", () => {
   it("posto (TL = teve dias como TL), marca, equipa e os 'só com'", () => {
     expect(ids(filterRanking(ROWS, { groups: { position: ["tl"] } }))).toEqual([4]);
     expect(ids(filterRanking(ROWS, { groups: { position: ["extra", "senior_driver"] } }))).toEqual([3, 4]);
-    expect(ids(filterRanking(ROWS, { groups: { brand: ["30"] } }))).toEqual([1]);
+    expect(ids(filterRanking(ROWS, { groups: { brand: ["redpark"] } }))).toEqual([1]); // a marca pelo nome (os nós são por cidade)
     expect(ids(filterRanking(ROWS, { groups: { team: ["9"] } }))).toEqual([1, 2]);
     expect(ids(filterRanking(ROWS, { groups: { flags: ["speeding"] } }))).toEqual([1, 5]);
     expect(ids(filterRanking(ROWS, { groups: { flags: ["disputes"] } }))).toEqual([4]);
@@ -125,7 +125,7 @@ describe("grupos: OU dentro do grupo, E entre grupos", () => {
   it("as opções vêm das linhas, com quantas pessoas", () => {
     const o = groupOptions(ROWS);
     expect(o.city.map((x) => [x.label, x.n])).toEqual([["Faro", 1], ["Lisboa", 2], ["Porto", 2]]);
-    expect(o.brand).toEqual([{ value: "30", label: "Redpark", n: 1 }]);
+    expect(o.brand).toEqual([{ value: "redpark", label: "Redpark", n: 1 }]);
     expect(o.team).toEqual([{ value: "9", label: "Rita TL", n: 2 }]);
     expect(o.flags.find((f) => f.value === "speeding")?.n).toBe(2);
   });
@@ -188,7 +188,7 @@ describe("os cartões do topo e o agrupar são do que se vê", () => {
     expect(filterParts(view, ROWS)).toEqual([
       "Nome ou n.º de agente: «ana»", "Cidade: Porto", "Só com: Reclamações", "Pontos ≥ 500 ou Excessos de velocidade ≥ 1",
     ]);
-    expect(describeFilter({ groups: { brand: ["30"], team: ["9"] } }, ROWS)).toBe("Marca: Redpark · Equipa: Rita TL");
+    expect(describeFilter({ groups: { brand: ["redpark"], team: ["9"] } }, ROWS)).toBe("Marca: Redpark · Equipa: Rita TL");
     expect(describeFilter({})).toBe("");
   });
 });
@@ -435,7 +435,9 @@ describe("menu da fotografia (computador): 'O meu perfil'", () => {
   const layout = src("client/src/components/DashboardLayout.tsx");
   const menu = layout.slice(layout.indexOf('aria-label="Menu da conta"'), layout.indexOf("</DropdownMenuContent>", layout.indexOf('aria-label="Menu da conta"')));
   it("está no menu do avatar, abre /perfil (o mesmo destino da barra do telemóvel) e mantém os outros itens", () => {
-    expect(menu).toContain('<DropdownMenuItem onClick={() => navigate("/perfil")} className="cursor-pointer">');
+    // só a partir de md: no telemóvel a barra de baixo (md:hidden) já tem o Perfil
+    expect(menu).toContain('<DropdownMenuItem onClick={() => navigate("/perfil")} className="hidden cursor-pointer md:flex">');
+    expect(src("client/src/components/MobileTabBar.tsx")).toMatch(/className="md:hidden fixed bottom-0/);
     expect(menu).toContain("<span>O meu perfil</span>");
     expect(src("client/src/components/MobileTabBar.tsx")).toContain('navigate("/perfil")');
     for (const item of ["Dar entrada (check-in)", "Dar saída (check-out)", "Trocar foto", "<span>Sair</span>"]) expect(menu, item).toContain(item);

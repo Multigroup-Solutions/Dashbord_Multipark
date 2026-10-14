@@ -121,7 +121,8 @@ export function RankingFilterBar({ rows, value, onChange, shown, extras, onApply
         <label htmlFor="aval-q" className="sr-only">Procurar no ranking</label>
         <div className="flex h-11 min-w-0 items-center gap-2.5 rounded-[10px] border-2 border-primary bg-card px-3">
           <Search className="h-[18px] w-[18px] shrink-0 text-muted-foreground" />
-          <input id="aval-q" value={text} autoComplete="off"
+          {/* o mesmo limite do que se guarda e exporta (evalSearchSchema: 200) */}
+          <input id="aval-q" value={text} autoComplete="off" maxLength={200}
             onChange={(e) => set({ text: e.target.value })}
             onFocus={() => setFocus(true)} onBlur={() => setTimeout(() => setFocus(false), 150)}
             onKeyDown={(e) => {

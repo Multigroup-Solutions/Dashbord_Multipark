@@ -60,12 +60,54 @@ export interface SavedFilterRow<V = unknown> {
   id: number; name: string; shared: boolean; isDefault: boolean; mine: boolean; ownerName: string | null; payload: V; dropped: number;
 }
 
+/**
+ * Antes de a 0665 correr (coluna `page` ainda inexistente — arranque a meio,
+ * ALTER sem permissões, lock), o MySQL responde "Unknown column 'page'"
+ * (ER_BAD_FIELD_ERROR). Os filtros do CRM nunca podem deixar de ler por isso:
+ * nesse caso todos os filtros da tabela são do CRM (é o que a 0665 lhes põe por
+ * omissão) e lê-se/grava-se sem a coluna; a Avaliação fica sem guardados até a
+ * migração correr. PURA.
+ */
+export function isMissingPageColumn(err: any): boolean {
+  const code = err?.code ?? err?.cause?.code;
+  if (code === "ER_BAD_FIELD_ERROR") return true;
+  const msg = String(err?.cause?.message ?? err?.message ?? err ?? "");
+  return /unknown column/i.test(msg) && /\bpage\b/i.test(msg);
+}
+
+/** Mensagem da Avaliação quando a migração 0665 ainda não correu. */
+export const SAVED_FILTERS_PENDING_MIGRATION = "Os filtros guardados da Avaliação ainda não estão disponíveis (falta atualizar a base de dados). Tenta daqui a pouco.";
+
+let warnedMissingPage = false;
+
+/** Corre `withPage`; sem a coluna `page`, o CRM corre `legacy` (a Avaliação lança o aviso ou devolve `avalFallback`). */
+async function pageAware<T>(page: SavedFilterPage, withPage: () => Promise<T>, legacy: () => Promise<T>, avalFallback?: () => T): Promise<T> {
+  try {
+    return await withPage();
+  } catch (err) {
+    if (!isMissingPageColumn(err)) throw err;
+    // um aviso por processo (aparece nos logs da Vercel até a 0665 correr)
+    if (!warnedMissingPage) { warnedMissingPage = true; console.warn("[savedFilters] coluna `page` em falta (migração 0665 por correr) — filtros do CRM lidos sem ela"); }
+    if (page === "crm") return legacy();
+    if (avalFallback) return avalFallback();
+    throw new Error(SAVED_FILTERS_PENDING_MIGRATION);
+  }
+}
+
 /** Os meus + os partilhados desta página (os meus primeiro). */
 export async function listSavedFiltersFor(db: any, userId: number, page: SavedFilterPage): Promise<SavedFilterRow[]> {
   const spec = await specOf(page);
-  return rowsOf(await db.execute(sql`SELECT f.id, f.userId, f.name, f.payloadJson, f.shared, f.isDefault, u.name AS ownerName
-    FROM crm_saved_filters f LEFT JOIN users u ON u.id = f.userId
-    WHERE (f.userId = ${userId} OR f.shared = 1) AND f.page = ${page} ORDER BY f.userId = ${userId} DESC, f.name`)).map((f) => {
+  const rows = await pageAware(page,
+    async () => rowsOf(await db.execute(sql`SELECT f.id, f.userId, f.name, f.payloadJson, f.shared, f.isDefault, u.name AS ownerName
+      FROM crm_saved_filters f LEFT JOIN users u ON u.id = f.userId
+      WHERE (f.userId = ${userId} OR f.shared = 1) AND f.page = ${page} ORDER BY f.userId = ${userId} DESC, f.name`)),
+    // antes da 0665: a consulta de sempre do CRM (todos os filtros eram do CRM)
+    async () => rowsOf(await db.execute(sql`SELECT f.id, f.userId, f.name, f.payloadJson, f.shared, f.isDefault, u.name AS ownerName
+      FROM crm_saved_filters f LEFT JOIN users u ON u.id = f.userId
+      WHERE f.userId = ${userId} OR f.shared = 1 ORDER BY f.userId = ${userId} DESC, f.name`)),
+    () => [],
+  );
+  return rows.map((f) => {
     // 21a: um filtro antigo com valores que deixaram de existir aplica o que ainda vale e diz quantos caíram
     const { view, dropped } = spec.sanitize(safeJson(f.payloadJson));
     return {
@@ -82,25 +124,61 @@ export async function saveFilterFor(db: any, userId: number, page: SavedFilterPa
   if (!parsed.ok) throw new Error("O filtro tem valores inválidos e não foi guardado.");
   const payload = JSON.stringify(parsed.data);
   if (payload.length > spec.maxChars) throw new Error(spec.tooBig);
-  // "Abrir com este": um por pessoa EM CADA página
-  if (o.isDefault) await db.execute(sql`UPDATE crm_saved_filters SET isDefault = 0 WHERE userId = ${userId} AND page = ${page}`);
-  if (o.id) {
-    await db.execute(sql`UPDATE crm_saved_filters SET name = ${o.name.slice(0, 128)}, payloadJson = ${payload}, shared = ${o.shared ? 1 : 0}, isDefault = ${o.isDefault ? 1 : 0}
-      WHERE id = ${o.id} AND userId = ${userId} AND page = ${page}`);
-    return { id: o.id };
-  }
-  const res = await db.execute(sql`INSERT INTO crm_saved_filters (userId, name, payloadJson, shared, isDefault, page)
-    VALUES (${userId}, ${o.name.slice(0, 128)}, ${payload}, ${o.shared ? 1 : 0}, ${o.isDefault ? 1 : 0}, ${page})`);
-  return { id: insertId(res) };
+  const name = o.name.slice(0, 128);
+  return pageAware(page, async () => {
+    // Só se altera um filtro PRÓPRIO desta página (o partilhado de outra pessoa não se mexe) —
+    // e verifica-se ANTES de tirar o "abrir com este" aos outros.
+    if (o.id) {
+      const [mine] = rowsOf(await db.execute(sql`SELECT id FROM crm_saved_filters WHERE id = ${o.id} AND userId = ${userId} AND page = ${page}`));
+      if (!mine) throw new Error("Filtro não encontrado (só podes alterar os teus).");
+    }
+    // "Abrir com este": um por pessoa EM CADA página
+    if (o.isDefault) await db.execute(sql`UPDATE crm_saved_filters SET isDefault = 0 WHERE userId = ${userId} AND page = ${page}`);
+    if (o.id) {
+      await db.execute(sql`UPDATE crm_saved_filters SET name = ${name}, payloadJson = ${payload}, shared = ${o.shared ? 1 : 0}, isDefault = ${o.isDefault ? 1 : 0}
+        WHERE id = ${o.id} AND userId = ${userId} AND page = ${page}`);
+      return { id: o.id };
+    }
+    const res = await db.execute(sql`INSERT INTO crm_saved_filters (userId, name, payloadJson, shared, isDefault, page)
+      VALUES (${userId}, ${name}, ${payload}, ${o.shared ? 1 : 0}, ${o.isDefault ? 1 : 0}, ${page})`);
+    return { id: insertId(res) };
+  }, async () => {
+    // antes da 0665 (só o CRM chega aqui): as consultas de sempre
+    if (o.id) {
+      const [mine] = rowsOf(await db.execute(sql`SELECT id FROM crm_saved_filters WHERE id = ${o.id} AND userId = ${userId}`));
+      if (!mine) throw new Error("Filtro não encontrado (só podes alterar os teus).");
+    }
+    if (o.isDefault) await db.execute(sql`UPDATE crm_saved_filters SET isDefault = 0 WHERE userId = ${userId}`);
+    if (o.id) {
+      await db.execute(sql`UPDATE crm_saved_filters SET name = ${name}, payloadJson = ${payload}, shared = ${o.shared ? 1 : 0}, isDefault = ${o.isDefault ? 1 : 0}
+        WHERE id = ${o.id} AND userId = ${userId}`);
+      return { id: o.id };
+    }
+    const res = await db.execute(sql`INSERT INTO crm_saved_filters (userId, name, payloadJson, shared, isDefault)
+      VALUES (${userId}, ${name}, ${payload}, ${o.shared ? 1 : 0}, ${o.isDefault ? 1 : 0})`);
+    return { id: insertId(res) };
+  });
 }
 
 export async function deleteFilterFor(db: any, userId: number, page: SavedFilterPage, id: number) {
   const spec = await specOf(page);
-  // Preferência da pessoa (não é um dado de negócio): sai, mas fica no registo — com o nome
-  // e se era partilhado, porque um partilhado desaparece também aos outros.
-  const [f] = rowsOf(await db.execute(sql`SELECT name, shared FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId} AND page = ${page}`));
-  if (!f) throw new Error("Filtro não encontrado.");
-  await db.execute(sql`DELETE FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId} AND page = ${page}`);
+  // Preferência da pessoa (não é um dado de negócio — é o que o CRM sempre fez): sai, mas fica
+  // no registo — com o nome e se era partilhado, porque um partilhado desaparece também aos outros.
+  // Só o próprio apaga (userId); nunca o de outra página.
+  const f = await pageAware(page,
+    async () => {
+      const [row] = rowsOf(await db.execute(sql`SELECT name, shared FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId} AND page = ${page}`));
+      if (!row) throw new Error("Filtro não encontrado.");
+      await db.execute(sql`DELETE FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId} AND page = ${page}`);
+      return row;
+    },
+    async () => {
+      const [row] = rowsOf(await db.execute(sql`SELECT name, shared FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId}`));
+      if (!row) throw new Error("Filtro não encontrado.");
+      await db.execute(sql`DELETE FROM crm_saved_filters WHERE id = ${id} AND userId = ${userId}`);
+      return row;
+    },
+  );
   const { logActivity } = await import("./db");
   await logActivity({ userId, action: spec.logAction, entity: spec.logEntity, entityId: id, details: JSON.stringify({ name: String(f.name), shared: Number(f.shared) === 1 }) } as any);
 }

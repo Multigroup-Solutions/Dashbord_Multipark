@@ -65,9 +65,12 @@ async function employeeFacetsFrom(db: Executor, employeeIds: readonly number[]):
   if (!ids.length) return new Map();
   try {
     const inIds = sql.join(ids.map((x) => sql`${x}`), sql`, `);
-    const emps = await db.execute(sql`SELECT id, projectId, multiparkAgentName, multiparkAgentUserId FROM employees WHERE id IN (${inIds})`);
-    const agents = await db.execute(sql`SELECT employeeId, agentUserId, agentName FROM employee_agents WHERE employeeId IN (${inIds})`).catch(() => [[]]);
-    const projects = await db.execute(sql`SELECT id, parentId, level, name FROM projects`);
+    // três leituras pequenas e fixas (nunca uma por pessoa), em paralelo
+    const [emps, agents, projects] = await Promise.all([
+      db.execute(sql`SELECT id, projectId, multiparkAgentName, multiparkAgentUserId FROM employees WHERE id IN (${inIds})`),
+      db.execute(sql`SELECT employeeId, agentUserId, agentName FROM employee_agents WHERE employeeId IN (${inIds})`).catch(() => [[]]),
+      db.execute(sql`SELECT id, parentId, level, name FROM projects`),
+    ]);
     const { opsCityOf } = await import("./aiOps/cities");
     const num = (v: unknown) => (v == null || v === "" ? null : Number(v));
     return buildEmployeeFacets(
@@ -106,8 +109,9 @@ async function teamLeaderDaysFrom(db: Executor, from: string, to: string): Promi
 
 /**
  * O que os filtros do ranking precisam e os dias guardados não trazem: as
- * facetas de cada ficha e os dias de TL do período. Uma ligação, leituras em
- * série (poucas e pequenas). Nunca lança.
+ * facetas de cada ficha e os dias de TL do período. Quatro leituras fixas à
+ * NOSSA BD (não à da Multipark), em paralelo — o mesmo número com 5 ou 500
+ * pessoas. Nunca lança.
  */
 export async function loadRankingFacets(employeeIds: readonly number[], from: string, to: string): Promise<{ employees: Map<number, EmployeeFacets>; tlDays: TeamLeaderDay[] }> {
   let db: Executor | null = null;
@@ -118,7 +122,8 @@ export async function loadRankingFacets(employeeIds: readonly number[], from: st
     console.warn("[evaluation] facetas do ranking indisponíveis:", String(err?.message ?? err).slice(0, 160));
   }
   if (!db) return { employees: new Map(), tlDays: [] };
-  return { employees: await employeeFacetsFrom(db, employeeIds), tlDays: await teamLeaderDaysFrom(db, from, to) };
+  const [employees, tlDays] = await Promise.all([employeeFacetsFrom(db, employeeIds), teamLeaderDaysFrom(db, from, to)]);
+  return { employees, tlDays };
 }
 
 /** As cidades de uma pessoa no período: as dos dias (mais dias primeiro); sem nenhuma, a da ficha. PURA. */
