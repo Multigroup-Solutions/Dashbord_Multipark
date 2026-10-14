@@ -171,7 +171,7 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
 
   if (session) {
     const header = session.source === "ai"
-      ? <Badge className="bg-primary/10 text-primary border border-primary/30"><Sparkles className="w-3 h-3 mr-1" />Perguntas novas{session.topic && session.topic !== "Tudo" ? ` · ${session.topic}` : ""}</Badge>
+      ? <Badge className="bg-primary/10 text-primary border border-primary/30 justify-start"><Sparkles className="w-3 h-3 mr-1 shrink-0" /><span className="truncate">Perguntas novas{session.topic && session.topic !== "Tudo" ? ` · ${session.topic}` : ""}</span></Badge>
       : <Badge variant="outline">Perguntas fixas</Badge>;
     return (
       <div className="space-y-4">
@@ -304,8 +304,8 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
                       <p className="text-sm font-medium">{q.question}</p>
                       <p className="text-xs text-muted-foreground break-words">Certa: {q.correctOption}. {(q as any)[`option${q.correctOption}`]}</p>
                       <div className="flex flex-wrap items-center gap-2">
-                        {q.sourceTitle && <Badge variant="outline" className="text-xs max-w-full truncate">Fonte: {q.sourceTitle}</Badge>}
-                        {q.restricted && <Badge variant="outline" className="text-xs border-amber-400 text-amber-800" title="Saiu de um documento que só alguns papéis ou cidades veem"><Lock className="w-3 h-3 mr-1" />Documento restrito</Badge>}
+                        {q.sourceTitle && <Badge variant="outline" className="text-xs max-w-full justify-start" title={`Fonte: ${q.sourceTitle}`}><span className="truncate">Fonte: {q.sourceTitle}</span></Badge>}
+                        {q.restricted && <Badge variant="outline" className="text-xs border-amber-400 text-amber-800 dark:border-amber-600 dark:text-amber-300" title="Saiu de um documento que só alguns papéis ou cidades veem"><Lock className="w-3 h-3 mr-1" />Documento restrito</Badge>}
                         {q.topic && q.topic !== "Tudo" && <Badge variant="secondary" className="text-xs">{q.topic}</Badge>}
                         {q.answered === "right" && <Badge className="text-xs bg-green-100 text-green-800">Acertada</Badge>}
                         {q.answered === "wrong" && <Badge className="text-xs bg-red-100 text-red-700">Errada</Badge>}
@@ -335,7 +335,7 @@ export function QuizTab({ isAdmin, preset, onClearPreset }: { isAdmin: boolean; 
           <CardContent>
             <div className="space-y-2 max-h-[32rem] overflow-y-auto">
               {questions.map((q) => (
-                <div key={q.id} className={`flex flex-wrap items-center justify-between gap-2 p-3 border rounded-lg ${q.published === 0 ? "border-dashed bg-amber-50/40" : ""}`}>
+                <div key={q.id} className={`flex flex-wrap items-center justify-between gap-2 p-3 border rounded-lg ${q.published === 0 ? "border-dashed bg-amber-50/40 dark:bg-amber-950/20" : ""}`}>
                   <div className="min-w-[12rem] flex-1">
                     <p className="font-medium text-sm">{q.question}</p>
                     <div className="flex flex-wrap gap-2 mt-1">

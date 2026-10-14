@@ -93,8 +93,8 @@ export function AreaBadge({ area, subarea, guessed, className }: { area: string 
   if (!area || !(area in TRAINING_AREA_LABELS)) return null;
   const label = `${TRAINING_AREA_LABELS[area as TrainingAreaId]}${subarea ? ` · ${subarea}` : ""}`;
   return (
-    <Badge variant="outline" className={cn("text-xs max-w-full truncate", guessed && "border-dashed text-muted-foreground", className)} title={guessed ? "Área proposta automaticamente (quem gere a formação pode confirmar ou mudar)" : undefined}>
-      {label}{guessed ? " (proposta)" : ""}
+    <Badge variant="outline" className={cn("text-xs max-w-full justify-start", guessed && "border-dashed text-muted-foreground", className)} title={guessed ? "Área proposta automaticamente (quem gere a formação pode confirmar ou mudar)" : label}>
+      <span className="truncate">{label}{guessed ? " (proposta)" : ""}</span>
     </Badge>
   );
 }

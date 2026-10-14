@@ -720,7 +720,7 @@ export function FAQsTab({ isAdmin }: { isAdmin: boolean }) {
                       ? <p className="pt-3 text-sm whitespace-pre-line">{f.answer}</p>
                       : <div className="pt-3 prose max-w-none text-sm"><Streamdown>{f.answer}</Streamdown></div>}
                     {f.sourceKbDocId && f.sourceTitle && (
-                      <button type="button" className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline max-w-full" onClick={() => openSource(f.sourceKbDocId)}>
+                      <button type="button" title={`Fonte: ${f.sourceTitle}`} className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline max-w-full" onClick={() => openSource(f.sourceKbDocId)}>
                         <FileText className="w-3.5 h-3.5 shrink-0" /><span className="truncate">Fonte: {f.sourceTitle}</span>
                       </button>
                     )}
