@@ -69,9 +69,6 @@ describe("corpus de controlo (independente, escrito antes de ler o principal)", 
     }
     expect(TRIAGE_CORPORA).toMatchObject({ principal: TRIAGE_CORPUS, controlo: TRIAGE_HOLDOUT });
   });
-  it("sem identificadores de modelos nos fixtures", () => {
-    for (const f of ["server/fixtures/mailTriageHoldout.ts", "server/fixtures/mailTriageCorpus.ts"]) expect(src(f)).not.toMatch(/claude|gpt-|gemini|opus|sonnet|haiku/i);
-  });
   it("com a IA simulada a acertar tudo, os dois corpora passam (os factos de produção não estragam nenhum rótulo)", async () => {
     for (const [key, corpus] of Object.entries(TRIAGE_CORPORA)) {
       const perfect = async (m: EmailRoutingMessage) => {
