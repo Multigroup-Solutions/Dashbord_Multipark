@@ -275,6 +275,9 @@ describe("o aviso: interruptor GPS_SPEED_ALERTS, desligado por omissão", () => 
     expect((await recordSpeedExcessesWith(d, input)).outcome).toBe("already");
     expect(records.length + notes.length).toBe(0);
   });
+  it("o aviso diz o limite que se passou, JÁ com a tolerância (132 por omissão), não o de 120", () => {
+    expect(src("server/jobs/dailyDriverCollection.ts")).toContain("limitKmh: speedThresholdOf(speedRule), excesses,");
+  });
   it("os registos vão para speed_violations (não para speed_alerts): a Avaliação não os conta a dobrar", () => {
     const s = src("server/speedAlerts.ts");
     expect(s).toContain("recordSpeedViolation(row as any)");

@@ -25,7 +25,7 @@ import {
 } from "../db";
 import { storagePut } from "../storage";
 import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, STOPPED_SPEED_KMH, asSpeedRule, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
-import { SPEED_EXCESS_METRICS_VERSION, speedExcesses, trustedMaxSpeed, type SpeedRule } from "../../shared/speedRules";
+import { SPEED_EXCESS_METRICS_VERSION, speedExcesses, speedThresholdOf, trustedMaxSpeed, type SpeedRule } from "../../shared/speedRules";
 import { addDays, lisbonDayOf, lisbonDayRangeUtc, zelloLatestDay } from "../../shared/lisbonDay";
 
 /** Calculate distance between two GPS points using Haversine formula */
@@ -462,7 +462,8 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
           const owner = owners.get(zelloKey(user.name)) ?? null;
           const holderAt = zIntervals?.length ? holderAtFn(zIntervals, owner) : () => row.employeeId ?? owner;
           await recordSpeedExcesses({
-            zello: user.name, displayName: user.fullName || user.name, day: dateStr, limitKmh: speedRule.limitKmh, excesses,
+            // o limite que os excessos passaram é o da regra COM a tolerância (120 + 10 % = 132 por omissão)
+            zello: user.name, displayName: user.fullName || user.name, day: dateStr, limitKmh: speedThresholdOf(speedRule), excesses,
             employeeAt: holderAt,
           });
         }
