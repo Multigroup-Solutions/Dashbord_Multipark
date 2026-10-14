@@ -107,6 +107,13 @@ describe("detectFixedScheduleNoShows", () => {
     expect(r.created).toBe(0);
     expect(state.inserted).toEqual([]);
   });
+  it("feriado: nem possível falta (8 dez 2026, terça)", async () => {
+    state.schedules = [sched(2, { weekday: 2 })];
+    expect(await detectFixedScheduleNoShows("2026-12-08")).toMatchObject({ scanned: 0, created: 0 });
+    expect(state.inserted).toEqual([]);
+    // o dia útil seguinte (terça 15 dez) já dá
+    expect(await detectFixedScheduleNoShows("2026-12-15")).toMatchObject({ scanned: 1, created: 1 });
+  });
   it("só funcionários: os extras regem-se pela escala (e têm a sua deteção)", () => {
     expect(src("server/rhService.ts")).toMatch(/WHERE e\.isActive = 1 AND s\.isWorkDay = 1\s+AND COALESCE\(e\.position, ''\) <> 'extra' AND COALESCE\(e\.contractType, ''\) <> 'extra'/);
   });

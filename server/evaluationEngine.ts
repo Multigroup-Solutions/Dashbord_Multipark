@@ -61,6 +61,7 @@ import {
 import { addDays, lisbonDayRangeUtc, operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
+
 const toUtcStr = (v: any): string => {
   if (v == null) return "";
   if (v instanceof Date) return v.toISOString().slice(0, 19).replace("T", " ");
@@ -154,11 +155,11 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
                     WHERE status = 'confirmed' AND reason = 'speeding' AND createdAt >= ${calendarStart} AND createdAt < ${range.start}`).catch(() => [[]] as any),
   ]);
   // Tarefa 62 (Q8): horários fixos do RH (fichas ativas, funcionários — os extras regem-se pela escala) e
-  // férias/baixas — o atraso conta para quem tem horário
+  // férias/baixas — o atraso conta para quem tem horário. A cidade da ficha só serve para o feriado municipal.
   let fixedSchedules: any[] = [], leaveRows: any[] = [];
   try {
     fixedSchedules = rowsOf(await db.execute(sql`
-      SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay,
+      SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
              DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
         FROM schedules s JOIN employees e ON e.id = s.employeeId
        WHERE e.isActive = 1 AND s.isWorkDay = 1
@@ -167,6 +168,9 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       SELECT employeeId, fromDate, toDate FROM employee_leaves
        WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
   } catch { /* sem horários: só a escala (como antes) */ }
+  const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
+    ? await (await import("./aiOps/cities")).projectCityResolver(db)
+    : () => null;
   let complaintRows: any[] = [];
   try {
     complaintRows = rowsOf(await db.execute(sql`
@@ -269,6 +273,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     fixedSchedules: fixedSchedules.map((r) => ({
       employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
       isWorkDay: Number(r.isWorkDay) === 1, contractStart: r.contractStart ? String(r.contractStart).slice(0, 10) : null, contractEnd: r.contractEnd ? String(r.contractEnd).slice(0, 10) : null,
+      city: cityOfProjectId(r.projectId != null ? Number(r.projectId) : null),
     })),
     leaves: leaveRows.map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) })),
     gpsDays: gpsRows.map((r) => ({

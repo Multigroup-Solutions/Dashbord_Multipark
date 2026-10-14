@@ -67,7 +67,7 @@ import { rankCandidates, type ScheduleCandidate } from "../shared/extrasSchedule
 import { SHEET_REPORTS } from "./google/sheetsExport";
 import { STAFF_TOOLS } from "./assistant/tools";
 import { PERF_METRICS, GROUP_VIEW } from "../shared/peoplePerformance";
-import { fixedScheduledStarts, hoursOfHhmm } from "../shared/workSchedule";
+import { easterSunday, fixedScheduledStarts, hoursOfHhmm, ptHolidayOf } from "../shared/workSchedule";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -100,6 +100,16 @@ describe("atraso ao trabalho a partir de 5 min (motor, com o ponto e a escala)",
     expect(delaysAt("2026-11-02 03:10:00")).toBe(1);
     const r = computeEmployeeDays(input("2026-11-02 03:05:00")).rows[0];
     expect(scoreOf(r.metrics).lines.find((l) => l.key === "delay")).toMatchObject({ count: 1, points: -5, subtotal: -5 });
+  });
+  it("hora de verão e o dia da mudança da hora: a fronteira dos 5 min é na hora de Lisboa", () => {
+    const at = (day: string, checkIn: string) => computeEmployeeDays({ ...input(checkIn), startDay: day, endDay: day,
+      assignments: [{ assignmentDate: day, employeeId: 1, personName: "Ana Silva", level: "1", isTeamLeader: false, shift: "morning" as const, city: "lisbon", startHour: 3, endHour: 11, sentHomeHour: null }] }).rows[0].metrics.delays;
+    // 14 out 2026 (UTC+1): 03:00 de Lisboa = 02:00 UTC
+    expect(at("2026-10-14", "2026-10-14 02:04:59")).toBe(0);
+    expect(at("2026-10-14", "2026-10-14 02:05:00")).toBe(1);
+    // 25 out 2026 (a hora muda às 02:00 → 01:00): 03:00 de Lisboa já é UTC+0
+    expect(at("2026-10-25", "2026-10-25 03:04:59")).toBe(0);
+    expect(at("2026-10-25", "2026-10-25 03:05:00")).toBe(1);
   });
   it("duas linhas na escala no mesmo dia, as duas atrasadas → 1", () => {
     expect(delaysAt("2026-11-02 05:30:00", [{ startHour: 3, endHour: 8 }, { startHour: 5, endHour: 11 }])).toBe(1);
@@ -272,6 +282,28 @@ describe("Q8 — o atraso conta para todos os que têm horário (escala ou horá
     expect(fixedScheduledStarts("2026-11-02", "2026-11-02", [{ ...segunda(2), contractEnd: "2026-10-31" }])).toEqual([]);
     expect(fixedScheduledStarts("2026-11-02", "2026-11-02", [{ ...segunda(2), weekday: 2 }])).toEqual([]);
   });
+  it("feriados nacionais (fixos e móveis) e o municipal da cidade da ficha: sem hora de entrada (nem atraso nem falta)", () => {
+    expect(easterSunday(2026)).toBe("2026-04-05");
+    expect(easterSunday(2027)).toBe("2027-03-28");
+    expect(easterSunday(2024)).toBe("2024-03-31");
+    expect(ptHolidayOf("2026-04-03")).toBe("Sexta-feira Santa");
+    expect(ptHolidayOf("2026-06-04")).toBe("Corpo de Deus");
+    expect(ptHolidayOf("2026-12-08")).toBe("Imaculada Conceição");
+    expect(ptHolidayOf("2026-02-17")).toBeNull(); // Carnaval: facultativo, não entra
+    expect(ptHolidayOf("2026-06-24")).toBeNull();
+    expect(ptHolidayOf("2026-06-24", "porto")).toMatch(/São João/);
+    expect(ptHolidayOf("2026-06-24", "lisbon")).toBeNull();
+    expect(ptHolidayOf("2026-06-13", "lisbon")).toMatch(/Santo António/);
+    expect(ptHolidayOf("2026-09-07", "faro")).toMatch(/Faro/);
+    // 8 dez 2026 (terça): ninguém tem hora de entrada; 24 jun 2026 (quarta): só no Porto
+    expect(fixedScheduledStarts("2026-12-08", "2026-12-08", [{ employeeId: 2, weekday: 2, startTime: "09:00", isWorkDay: 1 }])).toEqual([]);
+    const sjoao = (city: string) => fixedScheduledStarts("2026-06-24", "2026-06-24", [{ employeeId: 2, weekday: 3, startTime: "09:00", isWorkDay: 1, city }]);
+    expect(sjoao("porto")).toEqual([]);
+    expect(sjoao("lisbon")).toHaveLength(1);
+    // atrasado num feriado: não conta
+    const tue = (o: Partial<EngineInput>) => ({ ...base(o), startDay: "2026-12-08", endDay: "2026-12-08" });
+    expect(delays(computeEmployeeDays(tue({ fixedSchedules: [{ employeeId: 2, weekday: 2, startTime: "09:00", isWorkDay: true }], ponto: [ci(2, "2026-12-08 09:30:00")] })), 2)).toBe(0);
+  });
   it("entrada às 01:00 de terça é ainda do dia operacional de segunda", () => {
     const f = fixedScheduledStarts("2026-11-02", "2026-11-02", [{ employeeId: 2, weekday: 2, startTime: "01:00", isWorkDay: 1 }]);
     expect(f).toMatchObject([{ calendarDay: "2026-11-03", day: "2026-11-02" }]);
@@ -285,8 +317,10 @@ describe("Q8 — o atraso conta para todos os que têm horário (escala ou horá
     // entrou às 10:20: atrasado pela escala → 1 (e não 2)
     expect(delays(computeEmployeeDays(base({ fixedSchedules: [segunda(1)], assignments: [esc], ponto: [ci(1, "2026-11-02 10:20:00")] })), 1)).toBe(1);
   });
-  it("o motor lê os horários das fichas ativas e as férias/baixas", () => {
+  it("o motor lê os horários das fichas ativas, as férias/baixas e a cidade da ficha (feriado municipal)", () => {
     const eng = src("server/evaluationEngine.ts");
+    expect(eng).toContain("projectCityResolver(db)");
+    expect(eng).toContain("city: cityOfProjectId(");
     expect(eng).toMatch(/FROM schedules s JOIN employees e ON e\.id = s\.employeeId\s+WHERE e\.isActive = 1 AND s\.isWorkDay = 1\s+AND COALESCE\(e\.position, ''\) <> 'extra' AND COALESCE\(e\.contractType, ''\) <> 'extra'/);
     expect(eng).toContain("FROM employee_leaves");
   });

@@ -247,7 +247,8 @@ export interface FixedNoShowReport { scanned: number; created: number; alreadyPe
  * marcada como falta quando confirmada, SEM pontos de penalização (points 0:
  * não soma para o bloqueio das 3 faltas dos extras). Como nos extras: fora quem está na escala
  * do Extras-Dia nesse dia (tem a sua regra), as férias/baixas, os dias livres,
- * fora do contrato e quem mexeu em carros na Multipark (trabalhou sem picar).
+ * fora do contrato, os feriados (nacionais e o municipal da cidade da ficha) e
+ * quem mexeu em carros na Multipark (trabalhou sem picar).
  * Idempotente. Só corre com o interruptor RH_FALTAS_HORARIO ligado.
  */
 export async function detectFixedScheduleNoShows(dateStr: string): Promise<FixedNoShowReport> {
@@ -257,14 +258,18 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
   const { fixedScheduledStarts } = await import("../shared/workSchedule");
   const { addDays } = await import("../shared/lisbonDay");
   const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
-  const schedules = rowsOf(await db.execute(sql`
-    SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay,
+  const scheduleRows = rowsOf(await db.execute(sql`
+    SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
            DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
       FROM schedules s JOIN employees e ON e.id = s.employeeId
      WHERE e.isActive = 1 AND s.isWorkDay = 1
-       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`)).map((r) => ({
+       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+  // a cidade da ficha só serve para o feriado municipal (os nacionais ficam sempre fora)
+  const cityOf: (projectId: number | null) => string | null = scheduleRows.length ? await (await import("./aiOps/cities")).projectCityResolver(db) : () => null;
+  const schedules = scheduleRows.map((r) => ({
     employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
     isWorkDay: true, contractStart: r.contractStart ?? null, contractEnd: r.contractEnd ?? null,
+    city: cityOf(r.projectId != null ? Number(r.projectId) : null),
   }));
   const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves
      WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)}`))
