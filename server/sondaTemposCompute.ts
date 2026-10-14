@@ -19,9 +19,9 @@ import { distanceMeters, type AirportFence, type TerminalZone } from "../shared/
 import {
   CALL_HIST_AFTER_MIN, CALL_HIST_BEFORE_MIN, CALL_LATE_AFTER_MIN, CALL_WINDOW_AFTER_MIN, CALL_WINDOW_BEFORE_MIN,
   EXIT_CAR_SPEEDS_KMH, EXIT_MARGINS_M, GAP_MOVING_KMH, PARK_FAR_M, PARK_OK_M, PICKUP_GPS_WINDOW_MIN, PICKUP_TRACK_MAX_HOURS,
-  PROBE_TERMINAL_RADIUS_M, QUICK_PICKUP_MIN, SHARED_PHONE_MIN_BOOKINGS, STOP_MIN_SECONDS, STOP_RADII_M, STOP_SPEEDS_KMH,
+  GARAGE_MAX_FROM_PARK_M, PROBE_TERMINAL_RADIUS_M, QUICK_PICKUP_MIN, SHARED_PHONE_MIN_BOOKINGS, STOP_MIN_SECONDS, STOP_RADII_M, STOP_SPEEDS_KMH, T2_LATE_AFTER_MIN,
   SondaAcc, emptySondaResult, exitComboKey, stopComboKey,
-  type ProbeCity, type ProbeZoneInfo, type SondaResult, type SondaStatic,
+  type ProbeCity, type ProbeGarageInfo, type ProbeZoneInfo, type SondaResult, type SondaStatic,
 } from "../shared/sondaTempos";
 import { matchKey } from "../shared/textKey";
 
@@ -54,8 +54,9 @@ export interface ProbeEvent {
 
 export type TerminalClass = "t1" | "t2" | "vip" | "other" | "unknown";
 export interface ProbeBooking { id: string; parkId: string; terminalClass: TerminalClass }
-export interface ProbePark { id: string; city: ProbeCity; lat: number | null; lng: number | null }
-export interface ProbeGarage { name: string; parkingType: string | null; parkId: string; mapHasCoords: boolean }
+export interface ProbePark { id: string; name?: string | null; city: ProbeCity; lat: number | null; lng: number | null }
+/** Uma linha da tabela Garage, já com as coordenadas que a Multipark tem (Q6) e de onde vieram. */
+export interface ProbeGarage { name: string; parkingType: string | null; parkId: string; mapHasCoords: boolean; lat?: number | null; lng?: number | null; coordSource?: string }
 /** Um ponto do Zello COM posição (a P4 vai usar a mesma variante do loadPoints). */
 export interface PosPoint { ts: number; speed: number; lat: number; lon: number; accurate: boolean }
 export interface ProbeGpsFile { id: number; day: string; split: boolean; points: PosPoint[]; mine: (tsSec: number) => boolean }
@@ -87,7 +88,9 @@ export interface ProbeCityInput {
   airport: AirportFence | null;
   /** o que é de TODA a corrida (chamadas recebidas no dia, linhas do Histórico Diário do dia D, ficheiros por ler): só na 1.ª cidade */
   global?: { gpsRows: ReadonlyArray<{ pass: string; hasFile: boolean }>; filesPending: number; calls: readonly ProbeCall[] };
-  staticBase: Omit<SondaStatic, "garages" | "zones" | "airportRadiusM">;
+  /** colunas com posições na BD da Multipark ("Garage.mapLink (text)", …) */
+  coordColumns?: string[];
+  staticBase: Omit<SondaStatic, "garages" | "zones" | "airportRadiusM" | "coordColumns">;
   truncated?: boolean;
   failures?: string[];
 }
@@ -352,9 +355,51 @@ const P2_RE = /(^|[^a-z0-9])p\s*-?\s*2($|[^0-9])/i;
 /** Nome de garagem que é o "P2". PURA. */
 export const isP2Name = (name: string | null | undefined): boolean => P2_RE.test(String(name ?? ""));
 
-/** O link do mapa tem coordenadas ("@lat,lng", "q=lat,lng", "ll=…")? PURA. */
+const okCoord = (lat: number, lng: number) => Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(Math.abs(lat) < 1e-6 && Math.abs(lng) < 1e-6);
+const COORD_PATTERNS: RegExp[] = [
+  /!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/, // pino do Google Maps (o sítio, não o centro do mapa)
+  /@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/, // centro do mapa
+  /[?&](?:q|ll|query|center|destination|daddr|sll)=(?:loc:)?(-?\d{1,2}\.\d+),\s*\+?(-?\d{1,3}\.\d+)/,
+  /"lat(?:itude)?"\s*:\s*"?(-?\d{1,2}\.\d+)"?\s*,\s*"(?:lng|lon|long|longitude)"\s*:\s*"?(-?\d{1,3}\.\d+)/,
+  /(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/, // "38.77, -9.13" solto
+];
+
+/** Coordenadas num texto (link do mapa, "lat,lng", JSON {lat,lng}); sem elas (ex.: link curto) → null. PURA. */
+export function coordsFromText(raw: string | null | undefined): { lat: number; lng: number } | null {
+  let t = String(raw ?? "");
+  if (!t.trim()) return null;
+  try { t = decodeURIComponent(t); } catch { /* fica como está */ }
+  t = t.replace(/%2C/gi, ",");
+  for (const re of COORD_PATTERNS) {
+    const m = re.exec(t);
+    if (!m) continue;
+    const lat = Number(m[1]), lng = Number(m[2]);
+    if (okCoord(lat, lng)) return { lat, lng };
+  }
+  return null;
+}
+
+/** O link do mapa tem coordenadas? PURA. */
 export function mapLinkHasCoords(link: string | null | undefined): boolean {
-  return /(@|[?&](q|ll|query|center|destination)=)-?\d{1,3}\.\d+,\s*-?\d{1,3}\.\d+/.test(String(link ?? ""));
+  return coordsFromText(link) != null;
+}
+
+/**
+ * As coordenadas de uma garagem pela ordem: colunas lat/lng da Garage →
+ * outra coluna de posição da Garage → link do mapa. Diz de onde vieram (ou
+ * porque não há). PURA.
+ */
+export function garageCoords(g: { lat?: unknown; lng?: unknown; other?: Array<{ column: string; value: unknown }>; mapLink?: string | null }): { lat: number | null; lng: number | null; source: string } {
+  const lat = g.lat == null || g.lat === "" ? NaN : Number(g.lat), lng = g.lng == null || g.lng === "" ? NaN : Number(g.lng);
+  if (okCoord(lat, lng)) return { lat, lng, source: "colunas lat/lng da Garage" };
+  for (const o of g.other ?? []) {
+    const c = coordsFromText(o.value == null ? null : String(o.value));
+    if (c) return { ...c, source: `coluna ${o.column} da Garage` };
+  }
+  const c = coordsFromText(g.mapLink);
+  if (c) return { ...c, source: "link do mapa (mapLink)" };
+  if (g.mapLink && String(g.mapLink).trim()) return { lat: null, lng: null, source: "link do mapa sem coordenadas (link curto?)" };
+  return { lat: null, lng: null, source: "sem coordenadas" };
 }
 
 // ─── Chamadas ───────────────────────────────────────────────────────────────
@@ -458,19 +503,31 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
   for (const g of inp.garages) { const k = matchKey(g.name); if (k && !garageByKey.has(k)) garageByKey.set(k, g.name.trim().slice(0, 40)); }
   const garageName = (raw: string | null) => (raw ? garageByKey.get(matchKey(raw)) ?? null : null);
   const cityParkIds = new Set([...inp.parks.values()].filter((p) => p.city === inp.city).map((p) => p.id));
-  const cityGarages = new Map<string, { name: string; parkingType: string | null; mapHasCoords: boolean }>();
+  // Item 16 (Q6): cada garagem dos parques da cidade, com as coordenadas da Multipark
+  const cityGarages: Array<ProbeGarageInfo & { parkId: string }> = [];
   for (const g of inp.garages) {
     if (!cityParkIds.has(g.parkId)) continue;
     const name = g.name.trim().slice(0, 40);
-    const cur = cityGarages.get(matchKey(name));
-    cityGarages.set(matchKey(name), { name, parkingType: cur?.parkingType ?? g.parkingType, mapHasCoords: (cur?.mapHasCoords ?? false) || g.mapHasCoords });
+    const park = inp.parks.get(g.parkId);
+    const lat = g.lat ?? null, lng = g.lng ?? null;
+    const valid = lat != null && lng != null && (park?.lat == null || park.lng == null || distanceMeters(lat, lng, park.lat, park.lng) <= GARAGE_MAX_FROM_PARK_M);
+    const r5 = (x: number | null) => (x == null ? null : Math.round(x * 1e5) / 1e5);
+    cityGarages.push({ name, park: park?.name ? String(park.name).slice(0, 60) : null, parkingType: g.parkingType, coordSource: g.coordSource ?? (g.mapHasCoords ? "link do mapa (mapLink)" : "sem coordenadas"), lat: r5(lat), lng: r5(lng), valid, mapHasCoords: g.mapHasCoords, parkId: g.parkId });
     if (isP2Name(name)) acc.inc("p2.na_tabela");
   }
+  cityGarages.sort((a, b) => a.name.localeCompare(b.name, "pt") || String(a.park).localeCompare(String(b.park), "pt"));
+  /** A garagem (com coordenadas válidas) de um destino: a do parque da reserva, senão a da cidade com esse nome. */
+  const garageCoordFor = (name: string, parkId: string | undefined) => {
+    const k = matchKey(name);
+    const same = cityGarages.filter((g) => g.valid && matchKey(g.name) === k);
+    return same.find((g) => g.parkId === parkId) ?? same[0] ?? null;
+  };
   res.s = {
     ...inp.staticBase,
     airportRadiusM: inp.airport?.radiusM ?? null,
     zones: zoneInfo,
-    garages: [...cityGarages.values()].sort((a, b) => a.name.localeCompare(b.name, "pt")),
+    garages: cityGarages.map(({ parkId: _p, ...g }) => g),
+    coordColumns: [...(inp.coordColumns ?? [])],
   };
 
   // Linhas por reserva → ciclos
@@ -744,6 +801,7 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
             acc.inc("t2.com_chegada");
             acc.hist("t2.chegada_menos_k0", "min", (arrived - k0) / MIN);
             if (arrived <= k0) acc.inc("t2.ja_la");
+            if (arrived - k0 > T2_LATE_AFTER_MIN * MIN) acc.inc("t2.atrasadas");
           }
         }
       }
@@ -761,6 +819,11 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
       if (!to) { acc.inc("garagens.fora_da_tabela"); acc.label("garagens.destino", "outra (fora da tabela)"); continue; }
       acc.label("garagens.destino", to);
       acc.label("garagens.de_para", `${garageName(mv.garageFrom) ?? (mv.garageFrom ? "outra" : "—")} → ${to}`);
+      // Item 16 (Q6): a posição da app no fim do movimento bate com as coordenadas da garagem?
+      const gc = garageCoordFor(to, inp.bookings.get(mv.bookingId)?.parkId);
+      if (mv.lat == null || mv.lng == null) acc.inc("garagens.coord.mov_sem_posicao");
+      else if (!gc || gc.lat == null || gc.lng == null) acc.inc("garagens.coord.garagem_sem_coordenadas");
+      else acc.hist(`garagens.posicao_vs_coord.${to}`, "distM", distanceMeters(mv.lat, mv.lng, gc.lat, gc.lng));
       const next = moves.slice(i + 1).find((x) => x.atMs > mv.atMs && x.atMs - mv.atMs <= PICKUP_TRACK_MAX_HOURS * 3_600_000);
       if (next) acc.hist(`garagens.ate_seguinte.${to}`, "hours", (next.atMs - mv.atMs) / 3_600_000);
       if (isP2Name(to)) {

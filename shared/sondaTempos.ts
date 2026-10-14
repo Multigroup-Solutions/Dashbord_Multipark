@@ -52,6 +52,15 @@ export const SHARED_PHONE_MIN_BOOKINGS = 3;
 export const GAP_MOVING_KMH = 10;
 /** Velocidade "a pé" (§4.4) para a chegada à zona T2. */
 export const WALK_KMH = 7;
+/**
+ * Recolha atrasada no T2 (Q4, Jorge 14 out): o condutor chega à zona T2 mais
+ * de 15 min depois da chamada / do "em recolha" (K0). Omissão 15, não 10.
+ */
+export const T2_LATE_AFTER_MIN = 15;
+/** Garagem com coordenadas "válidas": a posição fica a ≤ 30 km do parque (apanha lat/lng trocadas). */
+export const GARAGE_MAX_FROM_PARK_M = 30_000;
+/** A posição de um fim de movimento "bate" com a garagem até esta distância (só para a leitura). */
+export const GARAGE_MATCH_M = 150;
 /** Movimentos depois do check-in que contam para a recolha (§3.1). */
 export const PICKUP_TRACK_MAX_HOURS = 48;
 /** Raio do parque (§4.6, D_PARK_OK provisório) e "longe do parque" (D_MISMATCH). */
@@ -175,6 +184,21 @@ export function histShareBetween(h: Hist | undefined, a: number, b: number): num
 /** Uma zona de terminal das Definições, sem coordenadas (item 15). */
 export interface ProbeZoneInfo { label: "T1" | "T2" | "outro" | "sem_rotulo"; radiusM: number }
 
+/** Uma garagem da Multipark (item 16, Q6). */
+export interface ProbeGarageInfo {
+  name: string;
+  park: string | null;
+  parkingType: string | null;
+  /** de onde vieram as coordenadas (colunas lat/lng, outra coluna, link do mapa) ou porque não há */
+  coordSource: string;
+  lat: number | null;
+  lng: number | null;
+  /** coordenadas dentro do mundo e a ≤ 30 km do parque */
+  valid: boolean;
+  /** compatibilidade com a 1.ª versão */
+  mapHasCoords: boolean;
+}
+
 /** O que não se soma entre dias (o mais recente ganha). Sem coordenadas. */
 export interface SondaStatic {
   /** Definições → "Aeroportos (terminal no ponto)": raio do aeroporto e as zonas (rótulo + raio). */
@@ -186,8 +210,14 @@ export interface SondaStatic {
   excludedParks: number;
   /** Parques operados desta cidade que entraram (quantos). */
   parks: number;
-  /** Garagens dos parques da cidade: nome, tipo de lugar e se o link do mapa tem coordenadas. */
-  garages: Array<{ name: string; parkingType: string | null; mapHasCoords: boolean }>;
+  /**
+   * Garagens dos parques da cidade (uma por linha da tabela Garage): nome, parque,
+   * tipo de lugar, de onde vêm as coordenadas e as coordenadas (Q6: locais, não
+   * pessoas — podem aparecer), e se são válidas (perto do parque).
+   */
+  garages: ProbeGarageInfo[];
+  /** Colunas com posições na BD da Multipark (Garage, Park, Spot, DeliveryType…): "Tabela.coluna (tipo)". */
+  coordColumns: string[];
   /** now() do Postgres da Multipark − hora do servidor (ms), no momento da leitura. */
   pgClockOffsetMs: number | null;
 }
@@ -398,6 +428,17 @@ export function criteriaRows(r: SondaResult): ReportRow[] {
   const withK = n0(r, "recolhas.com_em_recolha");
   const quickSame = pctOf(n0(r, "recolhas.k_i_rapido.mesmo_agente"), withK);
   rows.push({ label: "\"Em recolha\" < 2 min pelo mesmo agente do check-in", value: quickSame == null ? "sem dados" : `${fmtPct(quickSame)} (n=${withK})`, hint: quickSame != null && quickSame >= 0.5 ? "≥ 50 % → o Cliente das recolhas só com chamada (volta ao auditor)" : undefined });
+  // T2 atrasadas (Q4 = 15 min)
+  const t2n = n0(r, "t2.com_chegada");
+  if (t2n) rows.push({ label: `Recolhas T2 atrasadas (> ${T2_LATE_AFTER_MIN} min depois de K0)`, value: `${fmtPct(pctOf(n0(r, "t2.atrasadas"), t2n))} (${n0(r, "t2.atrasadas")} de ${t2n})`, hint: `limiar do Jorge (Q4): ${T2_LATE_AFTER_MIN} min` });
+  // Coordenadas das garagens (Q6)
+  if (r.s) {
+    const g = r.s.garages;
+    const valid = g.filter((x) => x.valid).length;
+    rows.push({ label: "Garagens com coordenadas válidas na Multipark (Q6)", value: `${valid} de ${g.length}`, hint: !g.length ? undefined : valid === g.length ? "todas: as zonas dos parques podem vir da Multipark" : `${g.length - valid} sem coordenadas válidas → o super admin corrige essas zonas à mão (recurso)` });
+  }
+  const gm = mergedHist(r, Object.keys(r.h).filter((k) => k.startsWith("garagens.posicao_vs_coord.")));
+  if (histTotal(gm)) rows.push({ label: "Fim de movimento → coordenadas da garagem", value: `mediana ${fmtP(histPercentile(gm, 0.5), "m", 1, 0)} · ≤ ${GARAGE_MATCH_M} m ${fmtPct(histShareBelow(gm, GARAGE_MATCH_M))} (n=${histTotal(gm)})` });
   // P2
   const p2 = n0(r, "p2.na_tabela") + n0(r, "p2.nos_movimentos");
   rows.push({ label: "Há uma garagem \"P2\"?", value: p2 > 0 ? `sim (tabela ${n0(r, "p2.na_tabela") > 0 ? "sim" : "não"}, movimentos ${n0(r, "p2.nos_movimentos")})` : "não", hint: p2 > 0 ? undefined : "sem P2 nas garagens → ramo \"P2 sem garagem\" (§3.2) ou fica fora até o Jorge decidir (Q5)" });
@@ -581,7 +622,7 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
     const destTotal = Object.values(r.l["garagens.destino"] ?? {}).reduce((s, x) => s + x, 0);
     const table = dest.map(([g, v]) => [g, fmtN(v), fmtPct(pctOf(v, destTotal)), pctLine(r.h[`garagens.ate_seguinte.${g}`], "h", 1, [0.5, 0.9])]);
     const rows: ReportRow[] = [
-      { label: "Garagens na tabela (parques da cidade)", value: (r.s?.garages ?? []).map((g) => `${g.name}${g.parkingType ? ` (${g.parkingType})` : ""}${g.mapHasCoords ? " · mapa com coordenadas" : ""}`).join(" · ") || "—" },
+      { label: "Garagens na tabela (parques da cidade)", value: [...new Set((r.s?.garages ?? []).map((g) => `${g.name}${g.parkingType ? ` (${g.parkingType})` : ""}`))].join(" · ") || "—" },
       { label: "1.ª garagem depois do check-in", value: labelsLine(r.l["garagens.primeira"], 10) },
       { label: "De → para (todos os movimentos)", value: labelsLine(r.l["garagens.de_para"], 10) },
       { label: "Há \"P2\"?", value: `tabela ${n0(r, "p2.na_tabela") > 0 ? "sim" : "não"} · movimentos que acabam no P2 ${fmtN(n0(r, "p2.nos_movimentos"))}` },
@@ -613,11 +654,12 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
   {
     const t2 = n0(r, "t2.recolhas");
     out.push({
-      id: "t2", item: 12, title: "Recolhas no T2: chegada do condutor", closes: "pickupT2TargetMinutes, Q4",
+      id: "t2", item: 12, title: "Recolhas no T2: chegada do condutor", closes: `pickupT2TargetMinutes (${T2_LATE_AFTER_MIN} min, Q4)`,
       rows: [
         { label: "Recolhas T2", value: `${fmtN(t2)} · sem zona T2 com rótulo ${fmtN(n0(r, "t2.sem_zona_t2"))} · sem GPS ${fmtN(n0(r, "t2.sem_gps"))} · sem chegada ${fmtN(n0(r, "t2.sem_chegada"))}` },
         { label: "Chegada à zona T2 − K0", value: pctLine(r.h["t2.chegada_menos_k0"], "min", 1, [0.5, 0.75, 0.9]) },
         { label: "Já lá antes de K0", value: fmtPct(pctOf(n0(r, "t2.ja_la"), n0(r, "t2.com_chegada"))) },
+        { label: `Atrasadas (chegada > ${T2_LATE_AFTER_MIN} min depois de K0)`, value: `${fmtPct(pctOf(n0(r, "t2.atrasadas"), n0(r, "t2.com_chegada")))} (${fmtN(n0(r, "t2.atrasadas"))} de ${fmtN(n0(r, "t2.com_chegada"))})`, hint: `Q4: ${T2_LATE_AFTER_MIN} min` },
       ],
     });
   }
@@ -658,6 +700,35 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
         { label: "Central Vodafone (consola) ligada", value: s?.centralSugarOn == null ? "—" : s.centralSugarOn ? "sim" : "não" },
         { label: "Parques operados / fora pela lista", value: s ? `${fmtN(s.parks)} / ${fmtN(s.excludedParks)}` : "—" },
       ],
+    });
+  }
+
+  // 16. Coordenadas das garagens (Q6)
+  {
+    const s = r.s;
+    const g = s?.garages ?? [];
+    const bySource: Record<string, number> = {};
+    for (const x of g) bySource[x.coordSource] = (bySource[x.coordSource] ?? 0) + 1;
+    const distKeys = Object.keys(r.h).filter((k) => k.startsWith("garagens.posicao_vs_coord.")).sort();
+    const coord = (x: ProbeGarageInfo) => (x.lat == null || x.lng == null ? "—" : `${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}`);
+    const tableRows: string[][] = g.length
+      ? g.map((x) => {
+          const h = r.h[`garagens.posicao_vs_coord.${x.name}`];
+          return [x.name, x.park ?? "—", x.coordSource, coord(x), x.valid ? "sim" : "não", histTotal(h) ? fmtP(histPercentile(h, 0.5), "m", 1, 0) : "—", histTotal(h) ? fmtPct(histShareBelow(h, GARAGE_MATCH_M)) : "—", fmtN(histTotal(h))];
+        })
+      : distKeys.map((k) => {
+          const h = r.h[k];
+          return [k.slice("garagens.posicao_vs_coord.".length), "—", "—", "—", "—", fmtP(histPercentile(h, 0.5), "m", 1, 0), fmtPct(histShareBelow(h, GARAGE_MATCH_M)), fmtN(histTotal(h))];
+        });
+    out.push({
+      id: "garagens_coord", item: 16, title: "Coordenadas das garagens na Multipark (Q6)", closes: "operations.parkZones a partir da Multipark (Q6), raio das zonas dos parques",
+      rows: [
+        { label: "Colunas com posições na BD da Multipark", value: s ? (s.coordColumns.join(" · ") || "nenhuma encontrada") : "—" },
+        { label: "Garagens nos parques da cidade", value: s ? `${fmtN(g.length)} · com coordenadas ${fmtN(g.filter((x) => x.lat != null).length)} · válidas ${fmtN(g.filter((x) => x.valid).length)}` : "—", hint: `válida = dentro do mundo e a ≤ ${fmtN(GARAGE_MAX_FROM_PARK_M / 1000)} km do parque` },
+        { label: "De onde vêm", value: labelsLine(bySource) },
+        { label: "Fins de movimento sem posição / garagem sem coordenadas", value: `${fmtN(n0(r, "garagens.coord.mov_sem_posicao"))} / ${fmtN(n0(r, "garagens.coord.garagem_sem_coordenadas"))}` },
+      ],
+      table: { head: ["Garagem", "Parque", "Origem", "Coordenadas", "Válida", "Mediana posição → garagem", `≤ ${GARAGE_MATCH_M} m`, "N"], rows: tableRows },
     });
   }
   return out;
@@ -709,7 +780,12 @@ export function sondaLogLines(r: SondaResult, maxBytes = LOG_LINE_MAX_BYTES): st
   const head = { d: r.days.join(","), c: r.city, tr: r.truncated ? 1 : 0 };
   const parts: Array<[string, unknown]> = [];
   if (r.failures.length) parts.push(["f", r.failures.map((f) => f.slice(0, 160))]);
-  if (r.s) parts.push(["s", r.s]);
+  if (r.s) {
+    const { garages, ...rest } = r.s;
+    parts.push(["s", rest]);
+    // as garagens (com as coordenadas, Q6) aos bocados, para nenhuma linha passar dos 2 KB
+    for (let i = 0; i < garages.length; i += 4) parts.push([`s.garages.${i / 4}`, garages.slice(i, i + 4)]);
+  }
   for (const [k, v] of Object.entries(r.n).sort()) parts.push([`n.${k}`, v]);
   for (const [k, h] of Object.entries(r.h).sort()) parts.push([`h.${k}`, trimZeros(h.c)]);
   for (const [g, m] of Object.entries(r.l).sort()) parts.push([`l.${g}`, m]);

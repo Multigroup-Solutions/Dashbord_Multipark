@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { assertReadOnlySql } from "./multiparkDb/client";
 import {
-  PROBE_HISTORY_TYPES, buildProbeAgentsSql, buildProbeBookingsSql, buildProbeClientPhonesSql, buildProbeClockSql, buildProbeDriverPhonesSql,
-  buildProbeGaragesSql, buildProbeHistorySql, buildProbeParksSql, mapProbeHistoryRow, movementGarages,
+  PROBE_HISTORY_TYPES, buildProbeAgentsSql, buildProbeBookingsSql, buildProbeClientPhonesSql, buildProbeClockSql, buildProbeCoordColumnsSql, buildProbeDriverPhonesSql,
+  buildProbeGaragesSql, buildProbeHistorySql, buildProbeParksSql, garageCoordColumns, mapCoordColumns, mapProbeHistoryRow, movementGarages,
 } from "./multiparkDb/sondaTempos";
 import {
-  buildBookingCycles, computeProbeCity, lastArrivalInZone, matchCalls, sharedPhones, terminalExit, terminalStop, windowGaps, zoneKind,
+  buildBookingCycles, computeProbeCity, coordsFromText, garageCoords, lastArrivalInZone, matchCalls, sharedPhones, terminalExit, terminalStop, windowGaps, zoneKind,
   type PosPoint, type ProbeCall, type ProbeCityInput, type ProbeEvent,
 } from "./sondaTemposCompute";
 import { loadProbeGps, probeDayError, runTimesProbe, type ProbeDeps, type ProbeGpsSource } from "./sondaTempos";
 import {
-  LOG_LINE_MAX_BYTES, buildSondaReport, emptySondaResult, histAdd, histPercentile, histShareAtLeast, mergeSondaResults, newHist,
+  LOG_LINE_MAX_BYTES, T2_LATE_AFTER_MIN, buildSondaReport, emptySondaResult, histAdd, histPercentile, histShareAtLeast, mergeSondaResults, newHist,
   sondaLogLines, sondaReportText, type SondaResult,
 } from "../shared/sondaTempos";
 import { operationalDayRangeUtc } from "../shared/lisbonDay";
@@ -21,6 +21,8 @@ const DAY = "2026-10-10";
 const OP = operationalDayRangeUtc(DAY); // 03h Lisboa = 02:00Z
 const at = (hhmm: string, s = 0) => Date.parse(`${DAY}T${hhmm}:00Z`) + s * 1000;
 const PARK = { lat: 38.7900, lng: -9.1200 };
+/** Coordenadas de uma garagem (locais, não pessoas: podem aparecer na saída — Q6). */
+const P2_GARAGE = { lat: 38.76120, lng: -9.11850 };
 const T1 = { lat: 38.7700, lng: -9.1300 };
 const T2 = { lat: 38.7760, lng: -9.1260 };
 const AIRPORT = { lat: 38.7742, lng: -9.1342, radiusM: 1500, zones: [{ label: "T1", ...T1, radiusM: 200 }, { label: "Terminal 2", ...T2, radiusM: 200 }] };
@@ -81,7 +83,10 @@ function cityInput(over: Partial<ProbeCityInput> = {}): ProbeCityInput {
     events: dayEvents(),
     bookings: new Map([[DEL, { id: DEL, parkId: "park-AIR-LIS-77", terminalClass: "t1" as const }], [PIC, { id: PIC, parkId: "park-AIR-LIS-77", terminalClass: "t2" as const }]]),
     parks: new Map([["park-AIR-LIS-77", { id: "park-AIR-LIS-77", city: "lisbon" as const, ...PARK }]]),
-    garages: [{ name: "P2", parkingType: "UNCOVERED", parkId: "park-AIR-LIS-77", mapHasCoords: false }, { name: "PD", parkingType: "UNCOVERED", parkId: "park-AIR-LIS-77", mapHasCoords: true }],
+    garages: [
+      { name: "P2", parkingType: "UNCOVERED", parkId: "park-AIR-LIS-77", mapHasCoords: false, ...P2_GARAGE, coordSource: "colunas lat/lng da Garage" },
+      { name: "PD", parkingType: "UNCOVERED", parkId: "park-AIR-LIS-77", mapHasCoords: false, lat: null, lng: null, coordSource: "link do mapa sem coordenadas (link curto?)" },
+    ],
     agents: new Map([["agent-uid-TL1", [{ parkId: "park-AIR-LIS-77", role: "LEADER" }]], ["agent-uid-DRV1", [{ parkId: "outro-parque", role: "DRIVER" }]]]),
     resolveAgent: (uid) => (uid === "agent-uid-DRV1" ? { kind: "ficha", employeeId: 501 } : uid === "agent-uid-TL1" ? { kind: "ficha", employeeId: 502 } : { kind: "sem_ficha" }),
     gps: new Map([[501, { status: "ok" as const, files: [{ id: 9001, day: DAY, split: false, points: drvPoints(), mine: () => true }] }], [502, { status: "sem_ficheiro" as const, files: [] }]]),
@@ -208,6 +213,95 @@ describe("saída do terminal e chegada ao T2", () => {
   });
   it("rótulos das zonas", () => {
     expect([zoneKind("T1"), zoneKind("Terminal 2"), zoneKind("t2 chegadas"), zoneKind(""), zoneKind("Partidas")]).toEqual(["T1", "T2", "T2", "sem_rotulo", "outro"]);
+  });
+});
+
+// ─── Q6: coordenadas das garagens ───────────────────────────────────────────
+
+describe("coordenadas das garagens (Q6)", () => {
+  it("lê o link do mapa (pino, centro, q=, %2C, JSON) e recusa link curto e 0,0", () => {
+    expect(coordsFromText("https://www.google.com/maps/place/P2/@38.7600,-9.1100,17z/data=!3d38.76125!4d-9.11852")).toEqual({ lat: 38.76125, lng: -9.11852 });
+    expect(coordsFromText("https://www.google.com/maps/@38.7612,-9.1185,17z")).toEqual({ lat: 38.7612, lng: -9.1185 });
+    expect(coordsFromText("https://maps.google.com/?q=38.7612%2C-9.1185")).toEqual({ lat: 38.7612, lng: -9.1185 });
+    expect(coordsFromText(`{"lat": 38.7612, "lng": -9.1185}`)).toEqual({ lat: 38.7612, lng: -9.1185 });
+    expect(coordsFromText("38.7612, -9.1185")).toEqual({ lat: 38.7612, lng: -9.1185 });
+    expect(coordsFromText("https://maps.app.goo.gl/AbCdEf")).toBeNull();
+    expect(coordsFromText("0.000, 0.000")).toBeNull();
+    expect(coordsFromText(null)).toBeNull();
+  });
+  it("ordem: colunas lat/lng → outra coluna → link do mapa; diz de onde vieram", () => {
+    expect(garageCoords({ lat: "38.7612", lng: "-9.1185", mapLink: "https://maps.google.com/?q=1.5,2.5" })).toEqual({ lat: 38.7612, lng: -9.1185, source: "colunas lat/lng da Garage" });
+    expect(garageCoords({ other: [{ column: "location", value: "38.7612,-9.1185" }] }).source).toBe("coluna location da Garage");
+    expect(garageCoords({ mapLink: "https://maps.google.com/?q=38.7612,-9.1185" }).source).toBe("link do mapa (mapLink)");
+    expect(garageCoords({ mapLink: "https://maps.app.goo.gl/x" })).toEqual({ lat: null, lng: null, source: "link do mapa sem coordenadas (link curto?)" });
+    expect(garageCoords({})).toEqual({ lat: null, lng: null, source: "sem coordenadas" });
+  });
+  it("descobre as colunas no information_schema (só identificadores seguros) e lê-as da Garage", () => {
+    const q = buildProbeCoordColumnsSql();
+    expect(() => assertReadOnlySql(q.sql)).not.toThrow();
+    expect(q.sql).toContain("information_schema.columns");
+    const cols = mapCoordColumns([
+      { table_name: "Garage", column_name: "mapLink", data_type: "text" },
+      { table_name: "Garage", column_name: "latitude", data_type: "double precision" },
+      { table_name: "Garage", column_name: "longitude", data_type: "double precision" },
+      { table_name: "Garage", column_name: "geoPoint", data_type: "jsonb" },
+      { table_name: "Garage", column_name: `x"; DROP TABLE "Garage`, data_type: "text" },
+      { table_name: "Park", column_name: "lat", data_type: "double precision" },
+    ]);
+    expect(cols.map((c) => `${c.table}.${c.column}`)).toEqual(["Garage.mapLink", "Garage.latitude", "Garage.longitude", "Garage.geoPoint", "Park.lat"]);
+    const gc = garageCoordColumns(cols);
+    expect(gc).toEqual({ lat: "latitude", lng: "longitude", other: ["geoPoint"] });
+    const g = buildProbeGaragesSql(gc);
+    expect(() => assertReadOnlySql(g.sql)).not.toThrow();
+    expect(g.sql).toContain(`g."latitude"::text AS g_lat`);
+    expect(g.sql).toContain(`left(g."geoPoint"::text, 600) AS g_other_0`);
+    // só a lat sem a lng não conta como par; identificadores perigosos nunca entram
+    expect(garageCoordColumns(cols.filter((c) => c.column !== "longitude")).lat).toBeNull();
+    expect(buildProbeGaragesSql({ lat: `a"b`, lng: "c", other: [`x" OR 1=1`] }).sql).not.toContain(`a"b`);
+  });
+  it("conta as garagens com coordenadas válidas e mede a posição dos fins de movimento até elas", () => {
+    const r = computeProbeCity(cityInput());
+    expect(r.s?.garages).toEqual([
+      expect.objectContaining({ name: "P2", lat: P2_GARAGE.lat, lng: P2_GARAGE.lng, valid: true, coordSource: "colunas lat/lng da Garage" }),
+      expect.objectContaining({ name: "PD", lat: null, valid: false }),
+    ]);
+    // o fim no P2 tem posição → distância às coordenadas do P2; o do PD não tem posição
+    expect(histPercentile(r.h["garagens.posicao_vs_coord.P2"], 0.5)?.value).toBeGreaterThan(1000);
+    expect(r.n["garagens.coord.mov_sem_posicao"]).toBe(1);
+    // coordenadas longe do parque (> 30 km, ex.: lat/lng trocadas) não são válidas
+    const far = computeProbeCity(cityInput({ garages: [{ name: "P2", parkingType: null, parkId: "park-AIR-LIS-77", mapHasCoords: false, lat: -9.1185, lng: 38.7612, coordSource: "colunas lat/lng da Garage" }] }));
+    expect(far.s?.garages[0].valid).toBe(false);
+    expect(far.n["garagens.coord.garagem_sem_coordenadas"]).toBe(1);
+    const report = buildSondaReport(r);
+    const sec = report.find((x) => x.id === "garagens_coord")!;
+    expect(sec.item).toBe(16);
+    expect(sec.table?.rows[0].slice(0, 5)).toEqual(["P2", "—", "colunas lat/lng da Garage", "38.76120, -9.11850", "sim"]);
+    expect(report[0].rows.find((x) => x.label.startsWith("Garagens com coordenadas válidas"))?.value).toBe("1 de 2");
+  });
+});
+
+// ─── Q4: recolha atrasada no T2 a partir de 15 min ──────────────────────────
+
+describe("recolha atrasada no T2 (Q4 = 15 min)", () => {
+  // K0 = a chamada do WhatsApp às 07:58 (antes do "em recolha" das 08:00)
+  const withArrival = (hhmm: string) => {
+    const pts = [...track(at(hhmm), at("08:24"), T2, T2, 0), ...track(at("08:26"), at("08:40"), { lat: T2.lat + 0.004, lng: T2.lng }, { lat: T2.lat + 0.03, lng: T2.lng }, 30)];
+    return computeProbeCity(cityInput({ gps: new Map([[501, { status: "ok" as const, files: [{ id: 1, day: DAY, split: false, points: pts, mine: () => true }] }]]) }));
+  };
+  it("o limiar é 15 min", () => expect(T2_LATE_AFTER_MIN).toBe(15));
+  it("chega 14 min depois de K0 → a tempo (com a regra antiga dos 10 min era atrasada)", () => {
+    const r = withArrival("08:12");
+    expect(r.n["t2.com_chegada"]).toBe(1);
+    expect(r.n["t2.atrasadas"]).toBeUndefined();
+  });
+  it("chega 18 min depois de K0 → atrasada; aparece na leitura rápida e no item 12", () => {
+    const r = withArrival("08:16");
+    expect(r.n["t2.atrasadas"]).toBe(1);
+    const report = buildSondaReport(r);
+    expect(report[0].rows.find((x) => x.label.includes("T2 atrasadas"))?.label).toContain("> 15 min");
+    const t2 = report.find((x) => x.id === "t2")!;
+    expect(t2.closes).toContain("15 min");
+    expect(t2.rows.find((x) => x.label.startsWith("Atrasadas"))?.value).toContain("1 de 1");
   });
 });
 
@@ -417,10 +511,11 @@ function fakeDeps(o: { historyFails?: boolean; slowGps?: boolean } = {}) {
         if (o.historyFails) throw new Error("canceling statement due to statement timeout");
         return dayEvents().map(histRow) as any;
       }
+      if (/information_schema/.test(sql)) return [{ table_name: "Garage", column_name: "mapLink", data_type: "text" }, { table_name: "Park", column_name: "lat", data_type: "double precision" }, { table_name: "Park", column_name: "lng", data_type: "double precision" }] as any;
       if (/FROM "Park"/.test(sql)) return [{ id: "park-AIR-LIS-77", name: "Airpark Lisboa", city: "Lisboa", lat: PARK.lat, lng: PARK.lng }] as any;
       if (/FROM "Booking"/.test(sql)) return [{ id: DEL, park_id: "park-AIR-LIS-77", delivery_type: "Terminal 1", client_id: "cli-SECRET-9" }, { id: PIC, park_id: "park-AIR-LIS-77", delivery_type: "Terminal 2", client_id: "cli-SECRET-9" }] as any;
       if (/FROM "Agent"/.test(sql)) return [{ uid: "agent-uid-DRV1", park_id: "park-AIR-LIS-77", role: "DRIVER" }] as any;
-      if (/FROM "Garage"/.test(sql)) return [{ name: "P2", parking_type: "UNCOVERED", park_id: "park-AIR-LIS-77", map_link: null }] as any;
+      if (/FROM "Garage"/.test(sql)) return [{ name: "P2", parking_type: "UNCOVERED", park_id: "park-AIR-LIS-77", map_link: `https://www.google.com/maps/@${P2_GARAGE.lat},${P2_GARAGE.lng},17z` }] as any;
       if (/FROM "Client"/.test(sql)) return [{ id: "cli-SECRET-9", phone: "+351 912 345 678" }] as any;
       if (/FROM "Driver"/.test(sql)) return [{ booking_id: PIC, phone: "+351934567890" }] as any;
       if (/now\(\)/.test(sql)) return [{ now_utc: "2026-10-14 10:00:00.100" }] as any;
@@ -455,6 +550,8 @@ describe("runTimesProbe", () => {
     expect(res.n["chamadas.entregas.na_janela"]).toBe(1);
     expect(res.n["ficheiros.lidos"]).toBe(1);
     expect(res.s?.pgClockOffsetMs).not.toBeNull();
+    expect(res.s?.coordColumns).toEqual(["Garage.mapLink (text)", "Park.lat (double precision)", "Park.lng (double precision)"]);
+    expect(res.s?.garages[0]).toMatchObject({ name: "P2", park: "Airpark Lisboa", coordSource: "link do mapa (mapLink)", lat: P2_GARAGE.lat, valid: true });
     noSecrets(JSON.stringify(r));
     expect(logs.length).toBeGreaterThan(0);
     for (const l of logs) { expect(l.startsWith("[sonda62 ")).toBe(true); noSecrets(l); }

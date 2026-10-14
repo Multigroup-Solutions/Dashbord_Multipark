@@ -25,13 +25,14 @@ import { matchCityKey } from "../shared/city";
 import { marketplaceOperated } from "../shared/multiparkParks";
 import { PROBE_CITIES, PROBE_CITY_LABELS, emptySondaResult, sondaLogLines, type ProbeCity, type SondaResult } from "../shared/sondaTempos";
 import {
-  computeProbeCity, mapLinkHasCoords,
+  computeProbeCity, garageCoords,
   type AgentResolution, type PosPoint, type ProbeBooking, type ProbeCall, type ProbeEvent, type ProbeGarage, type ProbeGpsEmp, type ProbeGpsFile, type ProbePark, type TerminalClass,
 } from "./sondaTemposCompute";
 import {
   PROBE_HISTORY_LIMIT, PROBE_IDS_PER_READ,
-  buildProbeAgentsSql, buildProbeBookingsSql, buildProbeClientPhonesSql, buildProbeClockSql, buildProbeDriverPhonesSql,
-  buildProbeGaragesSql, buildProbeHistorySql, buildProbeParksSql, mapProbeHistoryRow, utcTextMs,
+  buildProbeAgentsSql, buildProbeBookingsSql, buildProbeClientPhonesSql, buildProbeClockSql, buildProbeCoordColumnsSql, buildProbeDriverPhonesSql,
+  buildProbeGaragesSql, buildProbeHistorySql, buildProbeParksSql, garageCoordColumns, mapCoordColumns, mapProbeHistoryRow, utcTextMs,
+  type ProbeCoordColumn,
 } from "./multiparkDb/sondaTempos";
 
 // ─── Limites ────────────────────────────────────────────────────────────────
@@ -235,7 +236,7 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
       if (!city || !cities.includes(city)) continue;
       if (!deps.operated(p, settings.excludedParkIds)) { excludedCount.set(city, (excludedCount.get(city) ?? 0) + 1); continue; }
       const ll = latLng.get(p.id);
-      parks.set(p.id, { id: p.id, city, lat: ll && Number.isFinite(ll.lat) && ll.lat !== 0 ? ll.lat : null, lng: ll && Number.isFinite(ll.lng) && ll.lng !== 0 ? ll.lng : null });
+      parks.set(p.id, { id: p.id, name: p.name, city, lat: ll && Number.isFinite(ll.lat) && ll.lat !== 0 ? ll.lat : null, lng: ll && Number.isFinite(ll.lng) && ll.lng !== 0 ? ll.lng : null });
     }
     if (!parks.size) { fail("falhou: nenhum parque operado nas cidades escolhidas"); return finish(); }
 
@@ -280,12 +281,23 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
         }
       }
     } catch (err) { mpFail("agentes da Multipark (sem papéis)", err); }
+    // Q6: de onde vêm as coordenadas das garagens (information_schema) e as garagens com elas
+    let coordCols: ProbeCoordColumn[] = [];
+    try {
+      const q = buildProbeCoordColumnsSql();
+      coordCols = mapCoordColumns(await deps.mpQuery(q.sql, q.params, { timeoutMs: keyTimeout() }));
+    } catch (err) { mpFail("colunas das coordenadas (Q6)", err); }
     let garages: ProbeGarage[] = [];
     try {
-      const q = buildProbeGaragesSql();
-      garages = (await deps.mpQuery(q.sql, q.params, { timeoutMs: keyTimeout() })).map((r) => ({
-        name: String(r.name ?? "").trim(), parkingType: r.parking_type ? String(r.parking_type) : null, parkId: String(r.park_id ?? ""), mapHasCoords: mapLinkHasCoords(r.map_link as string | null),
-      })).filter((g) => g.name);
+      const gc = garageCoordColumns(coordCols);
+      const q = buildProbeGaragesSql(gc);
+      garages = (await deps.mpQuery(q.sql, q.params, { timeoutMs: keyTimeout() })).map((r) => {
+        const c = garageCoords({ lat: r.g_lat, lng: r.g_lng, other: gc.other.map((column, i) => ({ column, value: r[`g_other_${i}`] })), mapLink: (r.map_link as string | null) ?? null });
+        return {
+          name: String(r.name ?? "").trim(), parkingType: r.parking_type ? String(r.parking_type) : null, parkId: String(r.park_id ?? ""),
+          mapHasCoords: c.source === "link do mapa (mapLink)", lat: c.lat, lng: c.lng, coordSource: c.source,
+        };
+      }).filter((g) => g.name);
     } catch (err) { mpFail("garagens da Multipark", err); }
     try {
       const byClient = new Map<string, string[]>();
@@ -368,6 +380,7 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
           calls,
           airport: settings.airports[city] ?? null,
           global: first ? { gpsRows, filesPending, calls } : undefined,
+          coordColumns: coordCols.map((c) => `${c.table}.${c.column} (${c.type})`),
           staticBase: { centralSugarOn: settings.centralSugarOn, excludedParks: excludedCount.get(city) ?? 0, parks: cityParks.size, pgClockOffsetMs },
           truncated: out.truncated,
           failures: [...out.failures],

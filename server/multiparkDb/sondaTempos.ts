@@ -37,12 +37,67 @@ export function buildProbeParksSql(): { sql: string; params: SqlParam[] } {
   };
 }
 
-/** Garagens (tabela pequena; ~21 linhas). PURA. */
-export function buildProbeGaragesSql(): { sql: string; params: SqlParam[] } {
+// ─── Q6: de onde vêm as coordenadas das garagens ────────────────────────────
+
+/** Tabelas onde se procuram colunas com posições (as das garagens e as vizinhas). */
+export const PROBE_COORD_TABLES = ["Garage", "Park", "Spot", "DeliveryType"] as const;
+const COORD_COLUMN_RE = "(lat|lng|lon|coord|location|map|geo|position|polygon|point|address)";
+
+/**
+ * Colunas com posições nas tabelas das garagens e vizinhas (e em qualquer
+ * tabela com "garage" ou "zone" no nome), lidas do information_schema — o
+ * esquema guardado no repositório pode estar atrasado. Só metadados. PURA.
+ */
+export function buildProbeCoordColumnsSql(): { sql: string; params: SqlParam[] } {
   return {
-    sql: `SELECT g."name" AS name, g."parkingType"::text AS parking_type, g."parkId" AS park_id, left(g."mapLink", 600) AS map_link FROM "Garage" g ORDER BY g."name" LIMIT 500`,
+    sql: [
+      `SELECT c.table_name AS table_name, c.column_name AS column_name, c.data_type AS data_type`,
+      `FROM information_schema.columns c`,
+      `WHERE c.table_schema = 'public'`,
+      `  AND (c.table_name IN (${PROBE_COORD_TABLES.map((t) => `'${t}'`).join(", ")}) OR c.table_name ILIKE '%garage%' OR c.table_name ILIKE '%zone%')`,
+      `  AND c.column_name ~* '${COORD_COLUMN_RE}'`,
+      `ORDER BY 1, 2`,
+      `LIMIT 200`,
+    ].join("\n"),
     params: [],
   };
+}
+
+export interface ProbeCoordColumn { table: string; column: string; type: string }
+const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+
+/** Linhas do information_schema → colunas (só identificadores seguros). PURA. */
+export function mapCoordColumns(rows: Array<Record<string, unknown>>): ProbeCoordColumn[] {
+  const out: ProbeCoordColumn[] = [];
+  for (const r of rows) {
+    const table = String(r.table_name ?? ""), column = String(r.column_name ?? "");
+    if (!SAFE_IDENT.test(table) || !SAFE_IDENT.test(column)) continue;
+    out.push({ table, column, type: String(r.data_type ?? "").slice(0, 40) });
+  }
+  return out;
+}
+
+/** As colunas da Garage a ler: o par lat/lng (se existir) e até 2 outras colunas de posição. PURA. */
+export function garageCoordColumns(cols: readonly ProbeCoordColumn[]): { lat: string | null; lng: string | null; other: string[] } {
+  const g = cols.filter((c) => c.table === "Garage" && SAFE_IDENT.test(c.column));
+  const lat = g.find((c) => /^(lat|latitude)$/i.test(c.column))?.column ?? null;
+  const lng = g.find((c) => /^(lng|lon|long|longitude)$/i.test(c.column))?.column ?? null;
+  const other = g
+    .filter((c) => c.column !== lat && c.column !== lng && c.column !== "mapLink" && /(coord|location|position|geo|point|polygon)/i.test(c.column))
+    .map((c) => c.column)
+    .slice(0, 2);
+  return { lat: lat && lng ? lat : null, lng: lat && lng ? lng : null, other };
+}
+
+/**
+ * Garagens (tabela pequena; ~21 linhas), com as colunas de posição que o
+ * information_schema mostrou (identificadores validados, entre aspas). PURA.
+ */
+export function buildProbeGaragesSql(extra: { lat: string | null; lng: string | null; other: string[] } = { lat: null, lng: null, other: [] }): { sql: string; params: SqlParam[] } {
+  const cols = [`g."name" AS name`, `g."parkingType"::text AS parking_type`, `g."parkId" AS park_id`, `left(g."mapLink", 600) AS map_link`];
+  if (extra.lat && extra.lng && SAFE_IDENT.test(extra.lat) && SAFE_IDENT.test(extra.lng)) cols.push(`g."${extra.lat}"::text AS g_lat`, `g."${extra.lng}"::text AS g_lng`);
+  extra.other.filter((c) => SAFE_IDENT.test(c)).slice(0, 2).forEach((c, i) => cols.push(`left(g."${c}"::text, 600) AS g_other_${i}`));
+  return { sql: `SELECT ${cols.join(", ")} FROM "Garage" g ORDER BY g."name" LIMIT 500`, params: [] };
 }
 
 /**
