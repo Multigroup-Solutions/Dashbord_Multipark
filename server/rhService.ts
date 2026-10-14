@@ -240,7 +240,8 @@ export type FixedNoShowSkip = "escala" | "check_in" | "multipark";
 export interface FixedNoShowReport { scanned: number; created: number; alreadyPending: number; skipped: Record<FixedNoShowSkip, number>; multiparkRead: boolean }
 
 /**
- * Quem tinha horário fixo (RH → Horário) num dia de trabalho e não picou a
+ * Quem tinha horário fixo (RH → Horário; funcionários — os extras regem-se
+ * pela escala e têm a sua deteção) num dia de trabalho e não picou a
  * entrada → "possível falta" PENDENTE na lista que já existe (RH →
  * Possíveis faltas), para alguém da operação confirmar ou dispensar. Fica
  * marcada como falta quando confirmada, SEM pontos de penalização (points 0:
@@ -260,7 +261,8 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
     SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay,
            DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
       FROM schedules s JOIN employees e ON e.id = s.employeeId
-     WHERE e.isActive = 1 AND s.isWorkDay = 1`)).map((r) => ({
+     WHERE e.isActive = 1 AND s.isWorkDay = 1
+       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`)).map((r) => ({
     employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
     isWorkDay: true, contractStart: r.contractStart ?? null, contractEnd: r.contractEnd ?? null,
   }));

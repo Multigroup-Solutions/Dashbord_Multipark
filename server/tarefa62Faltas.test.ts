@@ -107,6 +107,9 @@ describe("detectFixedScheduleNoShows", () => {
     expect(r.created).toBe(0);
     expect(state.inserted).toEqual([]);
   });
+  it("só funcionários: os extras regem-se pela escala (e têm a sua deteção)", () => {
+    expect(src("server/rhService.ts")).toMatch(/WHERE e\.isActive = 1 AND s\.isWorkDay = 1\s+AND COALESCE\(e\.position, ''\) <> 'extra' AND COALESCE\(e\.contractType, ''\) <> 'extra'/);
+  });
   it("a lista mostra 'Falta (horário fixo)'", () => {
     expect(src("client/src/pages/RhDashboardPage.tsx")).toContain('"Falta (horário fixo)"');
   });

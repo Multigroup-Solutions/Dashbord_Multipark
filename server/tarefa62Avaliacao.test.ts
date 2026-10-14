@@ -287,7 +287,7 @@ describe("Q8 — o atraso conta para todos os que têm horário (escala ou horá
   });
   it("o motor lê os horários das fichas ativas e as férias/baixas", () => {
     const eng = src("server/evaluationEngine.ts");
-    expect(eng).toMatch(/FROM schedules s JOIN employees e ON e\.id = s\.employeeId\s+WHERE e\.isActive = 1 AND s\.isWorkDay = 1/);
+    expect(eng).toMatch(/FROM schedules s JOIN employees e ON e\.id = s\.employeeId\s+WHERE e\.isActive = 1 AND s\.isWorkDay = 1\s+AND COALESCE\(e\.position, ''\) <> 'extra' AND COALESCE\(e\.contractType, ''\) <> 'extra'/);
     expect(eng).toContain("FROM employee_leaves");
   });
 });

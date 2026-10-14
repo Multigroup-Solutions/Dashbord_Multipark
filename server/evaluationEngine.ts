@@ -153,14 +153,16 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
                    SELECT employeeId, createdAt FROM employee_penalties
                     WHERE status = 'confirmed' AND reason = 'speeding' AND createdAt >= ${calendarStart} AND createdAt < ${range.start}`).catch(() => [[]] as any),
   ]);
-  // Tarefa 62 (Q8): horários fixos do RH (fichas ativas) e férias/baixas — o atraso conta para quem tem horário
+  // Tarefa 62 (Q8): horários fixos do RH (fichas ativas, funcionários — os extras regem-se pela escala) e
+  // férias/baixas — o atraso conta para quem tem horário
   let fixedSchedules: any[] = [], leaveRows: any[] = [];
   try {
     fixedSchedules = rowsOf(await db.execute(sql`
       SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay,
              DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
         FROM schedules s JOIN employees e ON e.id = s.employeeId
-       WHERE e.isActive = 1 AND s.isWorkDay = 1`));
+       WHERE e.isActive = 1 AND s.isWorkDay = 1
+         AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
     leaveRows = rowsOf(await db.execute(sql`
       SELECT employeeId, fromDate, toDate FROM employee_leaves
        WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
