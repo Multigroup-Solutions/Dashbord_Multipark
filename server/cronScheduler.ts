@@ -83,6 +83,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "extras-pressure": async (o) => (await import("./cronJobs")).extrasPressureCron(o),
   "rh-docs-weekly": async () => (await import("./cronJobs")).rhDocsWeeklyCron(),
   "rh-docs-request": async (o) => (await import("./cronJobs")).rhDocsRequestCron(o),
+  "kb-faq-weekly": async (o) => (await import("./cronJobs")).kbFaqWeeklyCron(o),
   "daily-ops": async (o) => (await import("./cronJobs")).dailyOpsCron({ deadlineAt: o.deadlineAt, cursor: o.cursor, deferStepErrors: true }),
   "ops-briefing": async (o) => (await import("./cronJobs")).opsBriefingCron(o),
   "evaluation-recompute": async (o) => (await import("./cronJobs")).evaluationRecomputeCron({ deadlineAt: o.deadlineAt, offsetDays: offset(o.cursor) }),

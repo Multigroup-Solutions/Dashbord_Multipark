@@ -105,7 +105,8 @@ describe("IA: níveis e modelos", () => {
   it("regra do dono: tudo lite por omissão; fast só onde o lite falha; smart em lado nenhum", () => {
     for (const id of AI_FEATURE_IDS) expect(AI_FEATURES[id].tier).not.toBe("smart");
     const fast = AI_FEATURE_IDS.filter((id) => AI_FEATURES[id].tier === "fast");
-    expect(fast).toEqual(["quiz_generation"]);
+    // As perguntas de escolha múltipla (rascunhos e o quiz novo em cada jogo, 14 out 2026): com o lite a resposta certa falha.
+    expect(fast).toEqual(["quiz_generation", "quiz_live"]);
     expect(AI_FEATURES.expense_ocr.tier).toBe("lite");
     expect(AI_FEATURES.review_reply.tier).toBe("lite");
   });

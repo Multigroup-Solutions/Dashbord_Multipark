@@ -8,7 +8,7 @@ import { Link } from "wouter";
 import { BarChart3, BookOpen, ClipboardList, Gamepad2, GraduationCap, HelpCircle, ListChecks, Play } from "lucide-react";
 import { can, seesBeyondOwn } from "@shared/access";
 import { FAQsTab, ManualsTab, VideoPlayerDialog, VideosTab, useDoneSet } from "./training/ContentTabs";
-import { CareerTab, QuizTab } from "./training/Assessments";
+import { CareerTab, QuizTab, type QuizPreset } from "./training/Assessments";
 import { DashboardTab, MyTrainingTab, PathsAdminTab } from "./training/Management";
 
 export default function TrainingPage() {
@@ -22,6 +22,8 @@ export default function TrainingPage() {
   const [tab, setTab] = usePersistedState("training.tab", "mine");
   const [openManualId, setOpenManualId] = useState<number | null>(null);
   const [playVideo, setPlayVideo] = useState<any>(null);
+  // Tema do próximo quiz: o da formação (categoria do percurso) ou o procurado em "A minha formação".
+  const [quizPreset, setQuizPreset] = useState<QuizPreset | null>(null);
 
   const mineQ = trpc.training.myTraining.useQuery();
   const mine = mineQ.data;
@@ -30,7 +32,7 @@ export default function TrainingPage() {
   const allVideosQ = trpc.training.videos.useQuery({});
   const allVideos = allVideosQ.data ?? [];
 
-  const openItem = useCallback((it: { itemType: string; itemId: number }) => {
+  const openItem = useCallback((it: { itemType: string; itemId: number; title?: string }) => {
     if (it.itemType === "video") {
       const v = (allVideos as any[]).find((x) => x.id === it.itemId);
       if (v) setPlayVideo(v);
@@ -38,8 +40,13 @@ export default function TrainingPage() {
       else { setTab("videos"); if (allVideosQ.error) void allVideosQ.refetch(); }
     } else if (it.itemType === "manual") { setOpenManualId(it.itemId); setTab("manuals"); }
     else if (it.itemType === "exam") setTab("career");
-    else if (it.itemType === "quiz") setTab("quiz");
+    else if (it.itemType === "quiz") {
+      // Quiz de um percurso: o tema é a categoria do item (0 = qualquer).
+      setQuizPreset(it.itemId > 0 ? { categoryId: it.itemId, label: it.title ?? null } : null);
+      setTab("quiz");
+    }
   }, [allVideos, allVideosQ, setTab]);
+  const quizTopic = useCallback((topic: string) => { setQuizPreset({ topic, label: topic }); setTab("quiz"); }, [setTab]);
   const clearOpenManual = useCallback(() => setOpenManualId(null), []);
 
   return (
@@ -64,11 +71,11 @@ export default function TrainingPage() {
           {seesProgress && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Acompanhamento</TabsTrigger>}
         </TabsList>
 
-        <TabsContent value="mine"><MyTrainingTab data={mine} loading={mineQ.isLoading} error={mineQ.error} onRetry={() => mineQ.refetch()} retrying={mineQ.isFetching} onOpenItem={openItem} /></TabsContent>
+        <TabsContent value="mine"><MyTrainingTab data={mine} loading={mineQ.isLoading} error={mineQ.error} onRetry={() => mineQ.refetch()} retrying={mineQ.isFetching} onOpenItem={openItem} done={done} onQuizTopic={quizTopic} /></TabsContent>
         <TabsContent value="videos"><VideosTab isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} done={done} /></TabsContent>
         <TabsContent value="manuals"><ManualsTab isAdmin={isAdmin} done={done} openId={openManualId} onOpened={clearOpenManual} /></TabsContent>
         <TabsContent value="faqs"><FAQsTab isAdmin={isAdmin} /></TabsContent>
-        <TabsContent value="quiz"><QuizTab isAdmin={isAdmin} /></TabsContent>
+        <TabsContent value="quiz"><QuizTab isAdmin={isAdmin} preset={quizPreset} onClearPreset={() => setQuizPreset(null)} /></TabsContent>
         <TabsContent value="career"><CareerTab isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} certificates={mine?.certificates ?? []} /></TabsContent>
         {isSupervisor && <TabsContent value="paths"><PathsAdminTab isAdmin={isAdmin} /></TabsContent>}
         {seesProgress && <TabsContent value="dashboard"><DashboardTab /></TabsContent>}
