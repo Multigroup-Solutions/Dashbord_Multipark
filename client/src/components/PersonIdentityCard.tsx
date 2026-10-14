@@ -15,7 +15,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Link2, Loader2, Merge, Unlink, UserRound } from "lucide-react";
+import { GoogleMoveDialog } from "@/components/GoogleMoveDialog";
+import { ArrowRightLeft, Link2, Loader2, Merge, Unlink, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 type Opt = { value: string; label: string };
@@ -58,6 +59,8 @@ export function PersonIdentityCard({ employeeOptions = [], orphanUsers = [], can
   const [unlinkAcc, setUnlinkAcc] = useState<{ userId: number; email: string | null; principal: boolean } | null>(null);
   const detachAcc = trpc.identityLinks.detachAccount.useMutation({ onSuccess: () => { refresh(); setUnlinkAcc(null); toast.success("Conta separada da ficha (a conta continua igual)."); }, onError: onErr });
   const [unlinkAgent, setUnlinkAgent] = useState<{ agentUserId: string; name: string } | null>(null);
+  // 15 out 2026: conta Google reaproveitada pela Workspace (quem saiu → pessoa nova)
+  const [googleMove, setGoogleMove] = useState<{ userId: number; email: string | null } | null>(null);
 
   const p = person.data;
   const principal = p?.accounts.find((a) => a.principal) ?? null;
@@ -88,6 +91,12 @@ export function PersonIdentityCard({ employeeOptions = [], orphanUsers = [], can
                     {!a.principal && principal && canMerge && (
                       <Button size="sm" variant="outline" className="h-7" onClick={() => setMerge({ keepUserId: a.userId, dropUserId: principal.userId })}>
                         <Merge className="h-3.5 w-3.5 mr-1" /> Ficar só com esta
+                      </Button>
+                    )}
+                    {!a.isActive && canMerge && (
+                      <Button size="sm" variant="outline" className="h-7" title="A Google Workspace renomeou esta conta para outra pessoa? Passa-a para a conta dela (o histórico fica aqui)."
+                        onClick={() => setGoogleMove({ userId: a.userId, email: a.email ?? null })}>
+                        <ArrowRightLeft className="h-3.5 w-3.5 mr-1" /> Passar a conta Google
                       </Button>
                     )}
                     <Button size="sm" variant="ghost" className="h-7" disabled={detachAcc.isPending} onClick={() => setUnlinkAcc({ userId: a.userId, email: a.email ?? null, principal: !!a.principal })}>
@@ -177,6 +186,7 @@ export function PersonIdentityCard({ employeeOptions = [], orphanUsers = [], can
             )}
           </>
         )}
+        <GoogleMoveDialog from={googleMove} onClose={() => setGoogleMove(null)} onDone={() => { setGoogleMove(null); refresh(); }} />
       </CardContent>
 
       <AlertDialog open={!!unlinkAcc} onOpenChange={(o) => !o && setUnlinkAcc(null)}>

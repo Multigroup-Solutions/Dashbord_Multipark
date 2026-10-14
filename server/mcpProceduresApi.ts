@@ -58,6 +58,7 @@ export const MCP_ACTIONS: Record<string, { area: string; external?: true }> = {
   "incidents.confirmDriver": { area: "Avaliação" },
   // Utilizadores e colaboradores: juntar e separar
   "identityLinks.mergeUsers": { area: "Utilizadores" },
+  "identityLinks.moveGoogleAccount": { area: "Utilizadores" },
   "identityLinks.mergeEmployees": { area: "Utilizadores" },
   "identityLinks.linkUser": { area: "Utilizadores" },
   "identityLinks.detachAccount": { area: "Utilizadores" },
