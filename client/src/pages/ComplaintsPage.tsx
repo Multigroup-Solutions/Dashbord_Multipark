@@ -700,11 +700,12 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus, canMove 
 
 const CHANGE_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
   CREATED: { label: "Criada", color: "bg-blue-100 text-blue-800" },
-  CHECKING_IN: { label: "A fazer check-in", color: "bg-cyan-100 text-cyan-800" },
+  CHECKING_IN: { label: "Em recolha", color: "bg-cyan-100 text-cyan-800" },
   CHECK_IN: { label: "Check-in", color: "bg-green-100 text-green-800" },
   MOVEMENT: { label: "Movimento", color: "bg-amber-100 text-amber-800" },
   PENDING_CHECKOUT: { label: "Pend. Check-out", color: "bg-purple-100 text-purple-800" },
-  CHECKING_OUT: { label: "A fazer check-out", color: "bg-indigo-100 text-indigo-800" },
+  // tarefa 62 (fluxo A): o condutor pegou no carro e leva-o ao terminal
+  CHECKING_OUT: { label: "Em entrega", color: "bg-indigo-100 text-indigo-800" },
   CHECK_OUT: { label: "Check-out", color: "bg-violet-100 text-violet-800" },
   ocorrencia: { label: "Ocorrência", color: "bg-red-100 text-red-800" },
 };

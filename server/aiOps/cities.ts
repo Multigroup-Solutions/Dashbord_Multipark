@@ -2,6 +2,7 @@
  * Cidades operacionais (lisbon/porto/faro, como a passagem de turno e o
  * Extras-Dia) ↔ árvore de projetos (nó `level='city'` + descendentes).
  */
+import { sql } from "drizzle-orm";
 import { matchCityKey } from "../../shared/city";
 import { HANDOVER_CITIES, HANDOVER_CITY_LABELS, type HandoverCity } from "../../shared/shiftHandover";
 
@@ -47,4 +48,20 @@ export async function loadCityTrees(): Promise<CityTree[]> {
   const { getProjects } = await import("../db");
   const rows = (await getProjects()) as any[];
   return cityTrees(rows.map((p) => ({ id: Number(p.id), name: String(p.name ?? ""), level: p.level ?? null, parentId: p.parentId == null ? null : Number(p.parentId) })));
+}
+
+/**
+ * Projeto → cidade da operação, lido com a BD dada (tarefa 62, Q8: o feriado
+ * municipal do horário fixo). Erro a ler a árvore: sempre null (ficam só os
+ * feriados nacionais). Nunca lança.
+ */
+export async function projectCityResolver(db: { execute: (q: any) => Promise<unknown> }): Promise<(projectId: number | null | undefined) => OpsCity | null> {
+  try {
+    const res = await db.execute(sql`SELECT id, name, level, parentId FROM projects`);
+    const raw = (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
+    const trees = cityTrees(raw.map((p) => ({ id: Number(p.id), name: String(p.name ?? ""), level: p.level ?? null, parentId: p.parentId == null ? null : Number(p.parentId) })));
+    return (projectId) => cityOfProject(projectId, trees)?.city ?? null;
+  } catch {
+    return () => null;
+  }
 }

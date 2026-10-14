@@ -34,17 +34,17 @@ const ddmmyyyy = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/
 /** 44a: as métricas, com nome claro e o que querem dizer. */
 const METRICS: Array<{ key: Metric; label: string; short: string; city?: boolean }> = [
   { key: "load", label: "Carros por hora", short: "chegadas + saídas feitas" },
-  { key: "delivery", label: "Tempo de entrega", short: "do pedido ao carro entregue" },
+  { key: "delivery", label: "Tempo de entrega", short: "do pedido à assinatura" },
   { key: "cycle", label: "Tempo por carro", short: "de cada condutor", city: true },
-  { key: "drive", label: "Na estrada", short: "do início da entrega a entregue", city: true },
+  { key: "drive", label: "Na estrada", short: "de pegar no carro à assinatura", city: true },
   { key: "crew", label: "Pessoas a trabalhar", short: "média, com o TL", city: true },
 ];
 
 const METRIC_HELP: Record<Metric, string> = {
   load: "Quantos carros se tratam nessa hora, em média por dia (chegadas + saídas concluídas). Mais escuro = mais carros.",
-  delivery: "Minutos desde o cliente pedir o carro até o ter na mão. Mostra-se o p75: em 3 de cada 4 entregas demorou isto ou menos. Mais escuro = entregas mais lentas.",
+  delivery: "Minutos desde o cliente pedir o carro (pendente) até assinar a entrega: junta a fila, o caminho até ao terminal e a espera pelo cliente. Mostra-se o p75: em 3 de cada 4 entregas demorou isto ou menos. Mais escuro = entregas mais lentas.",
   cycle: "Minutos entre o início de um serviço e o início do seguinte do mesmo condutor (inclui voltar, trânsito e esperas). Mostra-se o p{p}: em {p} % das vezes foi isto ou menos. Mais escuro = cada carro come mais tempo.",
-  drive: "Minutos desde que o condutor arranca com a entrega até entregar. Mostra-se o p75: em 3 de cada 4 entregas foi isto ou menos. Mais escuro = mais tempo na estrada.",
+  drive: "Minutos desde que o condutor pega no carro (em entrega) até o cliente assinar: junta o caminho até ao terminal e a espera pelo cliente lá. Mostra-se o p75: em 3 de cada 4 entregas foi isto ou menos. Mais escuro = mais tempo na estrada.",
   crew: "Pessoas diferentes a fazer serviços nessa hora, sempre a contar o team leader (média por dia). Mais escuro = mais gente.",
 };
 

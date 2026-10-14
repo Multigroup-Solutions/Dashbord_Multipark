@@ -24,7 +24,9 @@ function route(samples: Array<[number, number]>, o: { lat0?: number; posKmh?: (i
 const every = (step: number, speeds: number[], t0 = 0): Array<[number, number]> => speeds.map((v, i) => [t0 + i * step, v]);
 
 describe("trajetos realistas (limite 120 + 10 % = 132, 2 pontos)", () => {
-  const R = DEFAULT_SPEED_RULE;
+  // Tarefa 62: a omissão passou a 120 sem tolerância; estes trajetos foram desenhados à volta de 132 e
+  // continuam a testar a mecânica com essa regra (a de antes, que alguém pode voltar a escolher em Definições).
+  const R = { ...DEFAULT_SPEED_RULE, tolerancePercent: 10 };
 
   it("autoestrada sustentada a 135–145 com pontos de 5 em 5 s: UM excesso, máxima real", () => {
     const pts = route(every(5, [60, 90, 110, 125, ...Array.from({ length: 60 }, (_, i) => 135 + (i % 11)), 120, 100, 60]));
@@ -103,6 +105,9 @@ describe("trajetos realistas (limite 120 + 10 % = 132, 2 pontos)", () => {
     const pts = route(every(5, Array.from({ length: 40 }, (_, i) => 125 + (i % 7))));
     expect(speedExcesses(pts, R)).toHaveLength(0);
     expect(trustedMaxSpeed(pts, { rule: R }).maxSpeed).toBe(131);
+    // com a omissão da tarefa 62 (120, sem tolerância) é UM excesso, máxima 131
+    expect(speedExcesses(pts, DEFAULT_SPEED_RULE)).toHaveLength(1);
+    expect(trustedMaxSpeed(pts, { rule: DEFAULT_SPEED_RULE }).maxSpeed).toBe(131);
   });
 
   it("dois troços acima do limite separados por 10 min a 110: dois excessos", () => {

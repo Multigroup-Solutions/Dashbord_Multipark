@@ -102,6 +102,9 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "partner-close", runName: "partner-close", label: "Parceiros: comparar o fecho do mês (Multipark vs memória do webhook)", cadence: { kind: "daily", from: "06:40" }, priority: 109, minMs: 20 * S, maxMs: 45 * S },
   { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },
   { key: "crm-pro-sync", runName: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", cadence: { kind: "interval", minutes: 30 }, priority: 81, minMs: 15 * S, maxMs: 45 * S },
+  // Tarefa 62 (P1b): re-dividir uma vez o GPS dos últimos 31 dias com o limite de hoje — só a pedido do
+  // super admin (sem pedido não faz nada); retomável, até ~40 s por vez (server/gpsResplitBackfill.ts).
+  { key: "gps-resplit-backfill", runName: "gps-resplit-backfill", label: "GPS: re-dividir os últimos 31 dias (a pedido do super admin)", cadence: { kind: "interval", minutes: 5 }, priority: 96, minMs: 15 * S, maxMs: 40 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },

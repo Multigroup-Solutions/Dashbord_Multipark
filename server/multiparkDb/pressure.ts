@@ -38,6 +38,14 @@
  * Tempo de entrega = pedido → entregue (0 < t ≤ 240 min); tempo de recolha =
  * check-in começado → feito (0 < t ≤ 180 min). `customerCheckinEta` é um
  * número de minutos (ETA dado pelo cliente), não um instante — não entra.
+ *
+ * Tarefa 62 (fluxo A, Jorge 14 out 2026) — o que cada número É, sem mudar o
+ * cálculo (mexer obrigava a reler 6 meses): o "check-out começado" (`co_started`)
+ * é o PEDIDO do cliente (PENDING_CHECKOUT = na fila), não o condutor a pegar no
+ * carro (esse é o CHECKING_OUT = em entrega); o "tempo de entrega" junta Fila +
+ * Trânsito + espera pelo Cliente (pedido → assinatura); o "tempo de recolha" é
+ * só o do cliente ("em recolha" = CHECKING_IN → check-in feito). Os tempos
+ * separados vêm da tabela `service_times` (Fase 2).
  */
 import { type SqlParam } from "./client";
 import { ParamList } from "./read";

@@ -116,6 +116,7 @@ import { accountLinkRouter } from "./accountLinkRouter";
 import { operationalRouter } from "./operationalRouter";
 import { terminalRouter } from "./terminalRouter";
 import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
+import { timesProbeProcedures } from "./sondaTemposRouter";
 import { availabilityPatternProcedures } from "./availabilityPatternRouter";
 import { loginProcedures } from "./loginRouter";
 
@@ -5395,6 +5396,9 @@ export const appRouter = router({
     // Frente B (7 out 2026): indicador de pessoal, "Avisar este turno" (pré-visualização +
     // envio por WhatsApp/email) e notas do dia — server/extrasDiaShiftRouter.ts.
     ...extrasDiaShiftProcedures,
+    // Plano 62, P0 (14 out 2026): "Diagnóstico dos tempos (calibração)" — só o super admin, só leitura,
+    // um dia por pedido (server/sondaTempos.ts).
+    ...timesProbeProcedures,
 
     bookingsInSlot: protectedProcedure
       .input(

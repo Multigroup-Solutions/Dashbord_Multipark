@@ -35,6 +35,7 @@ import {
   ADJUSTABLE_METRICS,
   EVALUATION_RULES_VERSION,
   METRIC_KEYS,
+  isRetiredMetric,
   perHourMetrics,
   scoreOf,
   sumMetrics,
@@ -42,6 +43,8 @@ import {
 } from "../shared/evaluationRules";
 import { addDays, daysInRange } from "../shared/lisbonDay";
 import { scopeFor } from "../shared/access";
+import { EVALUATION_CLOSED_UNTIL_KEY, canCloseEvaluation, closedDayMessage, fmtClosedUntil, isDayClosed, openFrom } from "../shared/evaluationClose";
+import { CLOSED_READ_FAILED_MESSAGE, readEvaluationClosedUntil, readEvaluationClosers } from "./evaluationClose";
 
 type Viewer = { id: number; role: string; name?: string | null };
 /** Ver OUTRAS pessoas (ranking, detalhe): o módulo além do "own". */
@@ -95,6 +98,19 @@ async function brandParkIds(projectId: number | undefined): Promise<string[] | u
 }
 
 const metricSchema = z.string().refine((m) => (METRIC_KEYS as string[]).includes(m), "Métrica inválida");
+/**
+ * Tarefa 62 (P2d): o fecho mensal — um dia ≤ evaluation.closedUntil já não se escreve (ajustes, anular
+ * ajustes, contestações, Recalcular). O fecho não se leu → não se escreve. Devolve a data do fecho.
+ */
+async function assertDayOpen(day: string): Promise<string | null> {
+  const closed = await readEvaluationClosedUntil();
+  if (!closed.ok) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: CLOSED_READ_FAILED_MESSAGE });
+  if (isDayClosed(day, closed.closedUntil)) throw new TRPCError({ code: "FORBIDDEN", message: closedDayMessage(closed.closedUntil!) });
+  return closed.closedUntil;
+}
+
+/** Tarefa 62: regras retiradas (entrega atrasada) — não se ajustam nem se contestam. */
+const RETIRED_METRIC_MESSAGE = "Essa regra saiu da avaliação (entregas atrasadas): já não conta pontos, por isso não se ajusta nem se contesta.";
 
 async function myEmployee(userId: number): Promise<{ id: number; fullName: string } | null> {
   const me = await getEmployeeByUserId(userId);
@@ -159,6 +175,10 @@ export const evaluationRouter = router({
   ranking: protectedProcedure.input(filteredRangeSchema).query(async ({ ctx, input }) => {
     requireOthers(ctx.user);
     const days = await loadEvaluatedDays({ startDay: input.from, endDay: input.to, rankingOnly: true, dayCityAware: true });
+    // tarefa 62 (P2d): o fecho só se lê quando há dias com regras antigas (sem leituras a mais no caso normal)
+    const anyOldRules = days.some((d) => d.rulesVersion != null && d.rulesVersion < EVALUATION_RULES_VERSION);
+    const closedRead = anyOldRules ? await readEvaluationClosedUntil() : null;
+    const closedUntil = closedRead?.ok ? closedRead.closedUntil : null;
     const team = await evaluationTeamIds(ctx.user);
     const byEmp = new Map<number, EvaluatedDay[]>();
     for (const d of days) {
@@ -191,8 +211,9 @@ export const evaluationRouter = router({
         perHour: t.perHour,
         adjustments: list.reduce((s, d) => s + d.adjustments.length, 0),
         openDisputes: openBy.get(employeeId) ?? 0,
-        // 14 out 2026: dias desta pessoa calculados com as regras antigas (o ecrã avisa e oferece Recalcular)
-        oldRulesDays: list.filter((d) => d.rulesVersion != null && d.rulesVersion < EVALUATION_RULES_VERSION).length,
+        // 14 out 2026: dias desta pessoa calculados com as regras antigas (o ecrã avisa e oferece Recalcular);
+        // tarefa 62 (P2d): só os dias abertos (os fechados já não se recalculam)
+        oldRulesDays: list.filter((d) => d.rulesVersion != null && d.rulesVersion < EVALUATION_RULES_VERSION && !isDayClosed(d.day, closedUntil)).length,
         cities: citiesOfDays(list, f?.homeCity ?? null),
         brand: f?.brand ?? null,
         agents: f?.agents ?? [],
@@ -342,7 +363,13 @@ export const evaluationRouter = router({
     const today = currentOperationalDay();
     const to = input.to > today ? today : input.to;
     if (input.from > to) return { days: 0, written: 0, removed: 0, source: "multipark" as const, notice: null, partial: false, until: to, skipped: false };
-    const days = daysInRange(input.from, to);
+    // Tarefa 62 (P2d): os dias fechados (fecho mensal) não se recalculam — começa no 1.º dia aberto
+    const closed = await readEvaluationClosedUntil();
+    if (!closed.ok) throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: CLOSED_READ_FAILED_MESSAGE });
+    const fromOpen = openFrom(input.from, to, closed.closedUntil);
+    if (fromOpen == null) throw new TRPCError({ code: "BAD_REQUEST", message: `${closedDayMessage(closed.closedUntil!)} Nada foi recalculado.` });
+    const closedNote = fromOpen !== input.from ? `Os dias até ${fmtClosedUntil(closed.closedUntil!)} estão fechados (fecho mensal): ficaram como estavam.` : null;
+    const days = daysInRange(fromOpen, to);
     if (days.length > 93) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 93 dias de cada vez." });
     // Cada fatia de 7 dias lê os movimentos AO VIVO da BD da Multipark (uma
     // consulta agregada). Para caber na função (60 s), pára a tempo e diz até
@@ -364,9 +391,9 @@ export const evaluationRouter = router({
     const skipped = source === "copia";
     const partial = doneDays < days.length;
     await logActivity({ userId: ctx.user.id, action: "generate", entity: "employee_day_metrics", details: skipped && doneDays === 0
-      ? `Avaliação NÃO recalculada (${input.from} a ${to}): BD da Multipark indisponível, ficam os valores anteriores`
-      : `Avaliação recalculada ${input.from} a ${days[Math.max(0, doneDays - 1)]}: ${written} dia(s)${skipped ? " (parou: BD da Multipark indisponível)" : ""}` });
-    return { days: doneDays, written, removed, source, notice, partial, until: days[Math.max(0, doneDays - 1)], skipped };
+      ? `Avaliação NÃO recalculada (${fromOpen} a ${to}): BD da Multipark indisponível, ficam os valores anteriores`
+      : `Avaliação recalculada ${fromOpen} a ${days[Math.max(0, doneDays - 1)]}: ${written} dia(s)${skipped ? " (parou: BD da Multipark indisponível)" : ""}${closedNote ? " (dias fechados não mexidos)" : ""}` });
+    return { days: doneDays, written, removed, source, notice: [notice, closedNote].filter(Boolean).join(" ") || null, partial, until: days[Math.max(0, doneDays - 1)], skipped };
   }),
 
   /** Ajuste manual (delta sobre uma métrica de um dia) — "edit", com motivo. */
@@ -378,11 +405,13 @@ export const evaluationRouter = router({
     reason: z.string().trim().min(3, "Indica o motivo").max(500),
   })).mutation(async ({ ctx, input }) => {
     requireManage(ctx.user);
+    if (isRetiredMetric(input.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: RETIRED_METRIC_MESSAGE });
     if (!(ADJUSTABLE_METRICS as string[]).includes(input.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta métrica não se ajusta à mão." });
     await assertEmployeeAccess(input.employeeId);
     const me = await myEmployee(ctx.user.id);
     if (me?.id === input.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes ajustar a tua própria avaliação." });
     if (input.day > addDays(currentOperationalDay(), 1)) throw new TRPCError({ code: "BAD_REQUEST", message: "Dia no futuro." });
+    await assertDayOpen(input.day);
     const id = await createAdjustment({
       employeeId: input.employeeId, day: input.day, metric: input.metric as MetricKey, delta: input.delta,
       reason: input.reason, authorId: ctx.user.id, authorName: ctx.user.name ?? null,
@@ -400,10 +429,32 @@ export const evaluationRouter = router({
       await assertEmployeeAccess(adj.employeeId);
       const me = await myEmployee(ctx.user.id);
       if (me?.id === adj.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes alterar a tua própria avaliação." });
+      await assertDayOpen(adj.day);
       await voidAdjustment(input.id, ctx.user.id, input.reason ?? null);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "employee_metric_adjustment", entityId: input.id, details: "Ajuste anulado" });
       return { success: true };
     }),
+
+  /**
+   * Tarefa 62 (P2d): o fecho mensal — até quando está fechada e se quem vê pode fechar/reabrir
+   * (o super admin e as contas da lista "Avaliação: quem fecha o mês", Q10).
+   */
+  closure: protectedProcedure.query(async ({ ctx }) => {
+    requireOwn(ctx.user);
+    const closed = await readEvaluationClosedUntil();
+    const closers = await readEvaluationClosers();
+    return { closedUntil: closed.ok ? closed.closedUntil : null, readFailed: !closed.ok, canClose: canCloseEvaluation(ctx.user, closers) };
+  }),
+  /** Fechar (ou reabrir: data mais cedo ou nula) — só o super admin e quem está na lista. Fica no histórico das Definições. */
+  setClosedUntil: protectedProcedure.input(z.object({ closedUntil: daySchema.nullable() })).mutation(async ({ ctx, input }) => {
+    const closers = await readEvaluationClosers();
+    if (!canCloseEvaluation(ctx.user, closers)) throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin e as pessoas autorizadas fecham o mês da Avaliação." });
+    if (input.closedUntil && input.closedUntil >= currentOperationalDay()) throw new TRPCError({ code: "BAD_REQUEST", message: "Só se fecha até ontem (o dia de hoje ainda está a acontecer)." });
+    const { setSetting } = await import("./appSettings");
+    const r = await setSetting(EVALUATION_CLOSED_UNTIL_KEY, input.closedUntil, ctx.user.id);
+    await logActivity({ userId: ctx.user.id, action: "update", entity: "evaluation", details: input.closedUntil ? `Avaliação fechada até ${input.closedUntil}` : "Avaliação reaberta (nada fechado)" });
+    return { changed: r.changed, closedUntil: input.closedUntil };
+  }),
 
   disputes: router({
     /** O colaborador contesta um dia (e, opcionalmente, uma métrica) da SUA avaliação. */
@@ -413,9 +464,11 @@ export const evaluationRouter = router({
       comment: z.string().trim().min(5, "Explica o que está errado").max(2000),
     })).mutation(async ({ ctx, input }) => {
       requireOwn(ctx.user);
+      if (isRetiredMetric(input.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: RETIRED_METRIC_MESSAGE });
       const me = await myEmployee(ctx.user.id);
       if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "A tua conta não tem ficha de colaborador." });
       if (input.day > currentOperationalDay()) throw new TRPCError({ code: "BAD_REQUEST", message: "Esse dia ainda não aconteceu." });
+      await assertDayOpen(input.day);
       const open = await listDisputes({ employeeId: me.id, status: "open", startDay: input.day, endDay: input.day });
       if (open.some((d) => (d.metric ?? null) === (input.metric ?? null))) {
         throw new TRPCError({ code: "CONFLICT", message: "Já tens uma contestação em análise para este dia." });
@@ -461,7 +514,10 @@ export const evaluationRouter = router({
       if (me?.id === d.employeeId) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes decidir a tua própria contestação." });
       if (d.status !== "open") throw new TRPCError({ code: "CONFLICT", message: "Esta contestação já foi decidida." });
       let adjustmentId: number | null = null;
+      // tarefa 62 (P2d): aceitar COM ajuste escreve no dia — num dia fechado, não (recusar ou aceitar sem ajuste, sim)
+      if (input.accept && input.adjustment) await assertDayOpen(d.day);
       if (input.accept && input.adjustment) {
+        if (isRetiredMetric(input.adjustment.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: RETIRED_METRIC_MESSAGE });
         if (!(ADJUSTABLE_METRICS as string[]).includes(input.adjustment.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta métrica não se ajusta à mão." });
         adjustmentId = await createAdjustment({
           employeeId: d.employeeId, day: d.day, metric: input.adjustment.metric, delta: input.adjustment.delta,

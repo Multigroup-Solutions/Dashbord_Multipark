@@ -188,6 +188,7 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0665", () => import("./migration_0665").then((m) => step(m.MIGRATION_0665_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0665))],
   ["0670", () => import("./migration_0670").then((m) => step(m.MIGRATION_0670_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0670))],
   ["0675", () => import("./migration_0675").then((m) => step(m.MIGRATION_0675_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0675))],
+  ["0680", () => import("./migration_0680").then((m) => step(m.MIGRATION_0680_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0680))],
   // Plano 62 (P6): service_times — tempos de entrega e de recolha por ciclo.
   ["0685", () => import("./migration_0685").then((m) => step(m.MIGRATION_0685_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0685))],
 ];
@@ -268,5 +269,13 @@ export async function ensureRecentSchema(db: Executor): Promise<void> {
     if (r.status === "applied") console.log(`[Schema ensure] 0675 categorias: ${r.plan?.renames.length ?? 0} nome(s) corrigido(s)${r.plan?.renames.length ? ` (${r.plan.renames.map((x) => `${x.from} → ${x.to}`).join("; ")})` : ""}${r.plan?.skipped.length ? `, ${r.plan.skipped.length} ficaram (nome certo já existe)` : ""}${r.sinistrosAdded ? ", Sinistros acrescentada" : ""}`.slice(0, 600));
   } catch (err: any) {
     console.warn("[Schema ensure] 0675 (nomes das categorias) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    // Velocidade (tarefa 62): {120 km/h, 10 %} gravado → 0 % — uma vez em toda a frota (marca em app_settings).
+    const { runMigration0680Data, describe0680 } = await import("./migration_0680");
+    const line = describe0680(await runMigration0680Data(db as any));
+    if (line) console.log(`[Schema ensure] ${line}`);
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0680 (tolerância da velocidade) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }

@@ -8,25 +8,17 @@ import { AlertTriangle, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { fmtPTDate, fmtPTDateTime, fmtPTTime } from "@/lib/lisbonTime";
 import type { HandoverCity } from "@shared/shiftHandover";
 import { GARAGE_FIT_LABEL, groupMisplaced } from "@shared/garageFit";
-import type { LiveCar, LivePhase, LiveUpcoming, ShiftState } from "../../../server/multiparkDb/shiftState";
+import type { LiveCar, LiveUpcoming, ShiftState } from "../../../server/multiparkDb/shiftState";
+import { BAGGAGE_WAITING_LABEL, LIVE_PHASE_LABELS, type LivePhase } from "@shared/livePhases";
 
 // ─── "Estado do parque (ao vivo)" — separador da Passagem de turno ──────────
 // Lido AO VIVO da BD da Multipark (só leitura): carros no parque por
 // garagem/lugar, operações em curso, próximas recolhas/entregas (com voo e
 // ETA), ocorrências por resolver, caixa por fechar e bloqueios de amanhã.
 
-const PHASE_LABELS: Record<LivePhase, string> = {
-  checking_in: "A fazer check-in",
-  in_park: "No parque",
-  moving: "Em movimento",
-  pending_checkout: "Entrega pendente",
-  baggage_waiting: "À espera das malas",
-  at_delivery: "No local de entrega",
-  checking_out: "A fazer check-out",
-};
+// Tarefa 62 (P2c): os rótulos vêm de shared/livePhases.ts (fluxo A) — o cliente deixou de ter a sua cópia.
 const PHASE_TONE: Partial<Record<LivePhase, string>> = {
   pending_checkout: "border-red-300 text-red-700",
-  baggage_waiting: "border-amber-300 text-amber-700",
   at_delivery: "border-blue-300 text-blue-700",
   checking_out: "border-blue-300 text-blue-700",
   checking_in: "border-emerald-300 text-emerald-700",
@@ -202,10 +194,11 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
       </Card>
 
       <div className="space-y-2">
-        <Section title="Operações em curso (check-in, movimento, entrega pendente, malas, check-out)" count={d.inProgress.length} tone="warn" open={d.inProgress.length > 0}>
+        <Section title="Operações em curso (em recolha, em movimento, na fila, em entrega)" count={d.inProgress.length} tone="warn" open={d.inProgress.length > 0}>
           {d.inProgress.map((c) => (
             <div key={c.id} className="flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className={`text-[11px] ${PHASE_TONE[c.phase] ?? ""}`}>{PHASE_LABELS[c.phase]}{c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}</Badge>
+              <Badge variant="outline" className={`text-[11px] ${PHASE_TONE[c.phase] ?? ""}`}>{LIVE_PHASE_LABELS[c.phase]}{c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}</Badge>
+              {c.baggageWaiting && <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-700">{BAGGAGE_WAITING_LABEL}</Badge>}
               <CarLine c={c} />
             </div>
           ))}

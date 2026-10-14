@@ -14,7 +14,7 @@ export const MAX_SEGMENT_GAP_S = 3600;
 
 // ─── Limite de velocidade (Jorge, 14 out 2026) ──────────────────────────────
 // Passou para a definição "Limite de velocidade (GPS do Zello)" (`gps.speedRule`,
-// shared/speedRules.ts): 120 km/h + 10 % = 132 km/h por omissão, editável em
+// shared/speedRules.ts): acima de 120 km/h (0 % de tolerância) por omissão, editável em
 // Definições. A tabela antiga `speed_limits` (sem ecrã) deixou de ser lida.
 // O MAX_PLAUSIBLE_KMH (150) só limpa a velocidade MÉDIA; a máxima e os excessos
 // usam o filtro de picos de shared/speedRules.ts (um 160 real já não desaparece).

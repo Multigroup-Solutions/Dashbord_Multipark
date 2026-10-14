@@ -33,6 +33,10 @@ vi.mock("./migration_0675", async (original) => ({
   ...(await original<object>()),
   runMigration0675Data: async () => { data.calls.push("0675"); return { status: "skipped" }; },
 }));
+vi.mock("./migration_0680", async (original) => ({
+  ...(await original<object>()),
+  runMigration0680Data: async () => { data.calls.push("0680"); return { status: "skipped" }; },
+}));
 
 import { SCHEMA_MIGRATIONS, SCHEMA_MIGRATION_IDS, ensureRecentSchema } from "./index";
 
@@ -103,7 +107,7 @@ describe("ensureRecentSchema (BD falsa)", () => {
       const schemaWarns = warn.mock.calls.filter((c) => c[0] === "[Schema ensure]");
       expect(schemaWarns).toHaveLength(1);
       expect(schemaWarns[0][1]).toBe("ER_PARSE_ERROR");
-      expect(data.calls).toEqual(["0210", "0215", "0230", "0410", "0545", "0675"]);
+      expect(data.calls).toEqual(["0210", "0215", "0230", "0410", "0545", "0675", "0680"]);
     } finally {
       warn.mockRestore();
     }
@@ -114,7 +118,7 @@ describe("ensureRecentSchema (BD falsa)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       await ensureRecentSchema({ execute: async () => [] });
-      expect(data.calls).toEqual(["0210", "0215", "0230", "0410", "0545", "0675"]);
+      expect(data.calls).toEqual(["0210", "0215", "0230", "0410", "0545", "0675", "0680"]);
       expect(warn.mock.calls.some((c) => String(c[0]).includes("0215"))).toBe(true);
     } finally {
       warn.mockRestore();

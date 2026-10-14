@@ -176,7 +176,8 @@ export function pickResolution(ref: string, rows: J[], hintIds: readonly string[
 export const STATUS_LABELS: Record<string, string> = {
   PENDING: "Pendente",
   BOOKED: "Reservada",
-  CHECKING_IN: "A entrar",
+  // tarefa 62 (fluxo A): CHECKING_IN = o cliente ligou e vem a caminho ("em recolha")
+  CHECKING_IN: "Em recolha (cliente ligou)",
   CHECKED_IN: "No parque",
   MOVING: "Em movimento",
   PENDING_CHECKOUT: "À espera de saída",
@@ -192,7 +193,7 @@ export function statusLabel(s: string | null | undefined): string {
 export const CHANGE_TYPE_LABELS: Record<string, string> = {
   CREATED: "Criada",
   UPDATE: "Alteração",
-  CHECKING_IN: "A entrar",
+  CHECKING_IN: "Em recolha (cliente ligou)",
   CHECK_IN: "Check-in",
   MOVEMENT: "Movimento",
   PENDING_CHECKOUT: "À espera de saída",
@@ -496,14 +497,16 @@ export interface BookingFileCore {
   pro: boolean;
 }
 
+// Tarefa 62 (fluxo A): o cliente liga → "Pendente"; o condutor pega no carro → "Em entrega"; o "Cheguei" é um
+// botão (quase não se usa); nas recolhas o cliente liga ~10 min antes → "Em recolha".
 const PHASES: Array<[string, string]> = [
   ["createdAt", "Criada"],
-  ["checkingInAt", "A entrar"],
+  ["checkingInAt", "Em recolha (cliente ligou)"],
   ["movingAt", "Em movimento"],
-  ["pendingCheckoutAt", "À espera de saída"],
-  ["arrivedAtDeliveryAt", "Chegou à entrega"],
+  ["pendingCheckoutAt", "Pendente (cliente ligou)"],
+  ["arrivedAtDeliveryAt", "Cheguei (botão)"],
   ["baggageWaitingAt", "À espera da bagagem"],
-  ["checkingOutAt", "A sair"],
+  ["checkingOutAt", "Em entrega (a caminho)"],
   ["cashierClosedAt", "Caixa fechada"],
 ];
 

@@ -20,10 +20,11 @@ import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Th, useTableSort } from "@/components/SortableTable";
 import { operationalDayOf } from "@shared/lisbonDay";
-import { LATE_AFTER_REQUEST_MINUTES } from "@shared/evaluationRules";
+import { lateArrivalsOf } from "@shared/evaluationRules";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { MovementSourceNotice } from "@/components/evaluation/DayEvaluationTab";
 import { EvaluationDrawer, RulesLegend, fmtDay, fmtNum, fmtPts, ptsClass } from "@/components/evaluation/EvaluationBreakdown";
+import { EvaluationClosureBar } from "@/components/evaluation/EvaluationClosureBar";
 import { RankingFilterBar, useRankingFilter } from "@/components/evaluation/RankingFilterBar";
 import { describeFilter, filterRanking, groupRanking, isFilterActive, rankingCsv, rankingTotals, type EvalFilterView } from "@shared/evaluationFilters";
 
@@ -101,9 +102,8 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "points", dir: -1 });
   const [drawer, setDrawer] = useState<{ id: number; name: string } | null>(null);
   const rows = q.data ?? [];
-  // 14 out 2026: dias calculados com as regras antigas e entregas medidas pelo pedido (sem hora marcada)
+  // 14 out 2026: dias calculados com as regras antigas (tarefa 62: versão 3 — atraso só a partir de 5 min, sem entrega atrasada)
   const oldRulesDays = rows.reduce((s, r) => s + (r.oldRulesDays ?? 0), 0);
-  const noSchedule = rows.reduce((s, r) => s + (r.metrics.deliveriesWithoutSchedule ?? 0), 0);
   // 14 out 2026: pesquisa e filtros "como no Odoo" (shared/evaluationFilters.ts) — no ecrã, na hora.
   const [flt, setFlt] = useRankingFilter();
   const filterOnly: EvalFilterView = { text: flt.text, searches: flt.searches, groups: flt.groups, rules: flt.rules };
@@ -127,7 +127,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         case "hours": return r.perHour.hours;
         case "recEnt": return r.metrics.recolhas + r.metrics.entregas;
         case "movs": return r.metrics.movements;
-        case "delays": return r.metrics.delays;
+        case "delays": return lateArrivalsOf(r.metrics);
         case "incidents": return r.metrics.speedingEvents + r.metrics.complaints + r.metrics.accidents;
         case "weightedPerHour": return r.perHour.weightedPerHour ?? -Infinity;
       }
@@ -185,7 +185,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.actions}</td>
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.recolhas + m.entregas}</td>
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.movements}{m.parkingMoves > 0 && <span className="text-muted-foreground"> ({m.parkingMoves})</span>}</td>
-            <td className="p-2 text-right tabular-nums whitespace-nowrap" title="Atrasos à entrada + entregas atrasadas (entre parênteses)">{m.delays || "—"}{m.lateServices > 0 && <span className="text-muted-foreground"> ({m.lateServices})</span>}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap" title="Atrasos ao trabalho: entrada no ponto 5 min ou mais depois da hora da escala ou do horário (no máximo 1 por dia)">{lateArrivalsOf(m) || "—"}</td>
             <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.speedingEvents}/{m.complaints}/{m.accidents}</td>
           </>
         ) : (
@@ -209,6 +209,8 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
 
   return (
     <div className="space-y-4">
+      {/* tarefa 62 (P2d): o fecho mensal — os dias fechados já não mudam */}
+      <EvaluationClosureBar from={from} to={to} />
       {/* 14 out 2026: pesquisa e filtros como no Odoo — mandam nos cartões, no ranking e nas exportações */}
       {rows.length > 0 && (
         <RankingFilterBar rows={rows} value={flt} onChange={setFlt} shown={shownRows.length}
@@ -242,16 +244,13 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
 
       {oldRulesDays > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
-          <span>{oldRulesDays} dia(s) calculado(s) com as regras antigas (antes de 14 out 2026: movimentos, atrasos e entregas contavam de outra forma).</span>
+          <span>{oldRulesDays} dia(s) calculado(s) com as regras antigas (movimentos, atrasos e entregas contavam de outra forma; agora o atraso só conta a partir de 5 min e já não há entrega atrasada).</span>
           {isSupervisor && (
             <Button size="sm" variant="outline" className="h-7" disabled={recompute.isPending} onClick={() => recompute.mutate({ from, to })}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> Recalcular
             </Button>
           )}
         </div>
-      )}
-      {noSchedule > 0 && (
-        <p className="text-xs text-muted-foreground">{noSchedule} entrega(s) sem hora marcada: medidas pelo pedido + {LATE_AFTER_REQUEST_MINUTES} min.</p>
       )}
 
       {q.isLoading ? (

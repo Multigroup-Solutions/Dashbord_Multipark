@@ -20,7 +20,7 @@
  */
 import { z } from "zod";
 import { matchKey, matchWords } from "./textKey";
-import type { DayMetrics } from "./evaluationRules";
+import { lateArrivalsOf, type DayMetrics } from "./evaluationRules";
 
 // ─── A linha do ranking (o que o filtro lê) ─────────────────────────────────
 
@@ -124,8 +124,7 @@ export const EVAL_FLAGS = [
   { id: "speeding", label: "Excessos de velocidade" },
   { id: "complaints", label: "Reclamações" },
   { id: "accidents", label: "Acidentes / danos" },
-  { id: "delays", label: "Atrasos" },
-  { id: "lateServices", label: "Entregas atrasadas" },
+  { id: "delays", label: "Atrasos ao trabalho" },
   { id: "disputes", label: "Contestações abertas" },
   { id: "adjusted", label: "Com ajustes" },
   { id: "negative", label: "Pontos negativos (total < 0)" },
@@ -150,14 +149,18 @@ export const EVAL_GROUP_LABELS: Record<keyof EvalGroups, string> = {
 export const EVAL_GROUP_CHIP_LABELS: Record<keyof EvalGroups, string> = { ...EVAL_GROUP_LABELS, flags: "Só com" };
 
 const m = (r: EvalRankingRowLike, k: keyof DayMetrics) => Number(r.metrics?.[k] ?? 0) || 0;
+/**
+ * Atrasos ao trabalho (tarefa 62): sempre `lateArrivalsOf` — nos dias antigos o `delays` em bruto ainda
+ * inclui as entregas atrasadas (regra retirada). O mesmo número no ecrã, nos filtros, no CSV e no Sheets.
+ */
+export const lateArrivalsOfRow = (r: EvalRankingRowLike): number => lateArrivalsOf({ delays: m(r, "delays"), lateServices: m(r, "lateServices") });
 
 export function hasFlag(r: EvalRankingRowLike, f: EvalFlag): boolean {
   switch (f) {
     case "speeding": return m(r, "speedingEvents") > 0;
     case "complaints": return m(r, "complaints") > 0;
     case "accidents": return m(r, "accidents") > 0;
-    case "delays": return m(r, "delays") > 0;
-    case "lateServices": return m(r, "lateServices") > 0;
+    case "delays": return lateArrivalsOfRow(r) > 0;
     case "disputes": return (r.openDisputes ?? 0) > 0;
     case "adjusted": return (r.adjustments ?? 0) > 0;
     case "negative": return (r.score?.totalPoints ?? 0) < 0;
@@ -198,8 +201,7 @@ export const EVAL_RULE_FIELDS: { id: string; label: string; get: Getter }[] = [
   { id: "movements", label: "Movimentos", get: metric("movements") },
   { id: "parkingMoves", label: "Levar ao parque", get: metric("parkingMoves") },
   { id: "spotChanges", label: "Mudanças de lugar", get: metric("spotChanges") },
-  { id: "delays", label: "Atrasos", get: metric("delays") },
-  { id: "lateServices", label: "Entregas atrasadas", get: metric("lateServices") },
+  { id: "delays", label: "Atrasos ao trabalho", get: lateArrivalsOfRow },
   { id: "speedingEvents", label: "Excessos de velocidade", get: metric("speedingEvents") },
   { id: "complaints", label: "Reclamações", get: metric("complaints") },
   { id: "accidents", label: "Acidentes / danos", get: metric("accidents") },
@@ -506,6 +508,14 @@ export function sanitizeEvalSavedView(raw: unknown): { view: EvalSavedView; drop
   for (const [k, v] of Object.entries(g)) {
     const sch = (evalGroupsSchema.shape as Record<string, z.ZodTypeAny>)[k];
     if (!sch) { dropped++; continue; }
+    // "Só com…": um "só com" que deixou de existir (tarefa 62: "Entregas atrasadas") cai sozinho; os outros ficam
+    if (k === "flags" && Array.isArray(v)) {
+      const known = v.filter((f) => (FLAG_IDS as readonly unknown[]).includes(f));
+      dropped += v.length - known.length;
+      const p = sch.safeParse(known);
+      if (p.success) { if (known.length) groups[k] = p.data; } else dropped++;
+      continue;
+    }
     const p = sch.safeParse(v);
     if (p.success) groups[k] = p.data; else dropped++;
   }
@@ -529,7 +539,7 @@ export function sanitizeEvalSavedView(raw: unknown): { view: EvalSavedView; drop
 
 // ─── CSV do ranking (o que se vê: filtrado e pela ordem do ecrã) ────────────
 
-export const RANKING_CSV_HEADERS = ["Pos", "Colaborador", "Dias", "Horas", "Ações", "Recolhas", "Entregas", "Movimentos", "Levar ao parque", "Mudanças de lugar", "Atrasos (entrada + entregas)", "Entregas atrasadas", "Velocidade", "Reclamações", "Acidentes", "Pts+", "Pts−", "Total", "Ações/h", "Pontos/h", "Custo", "Cidade", "Marca", "Equipa (TL)"];
+export const RANKING_CSV_HEADERS = ["Pos", "Colaborador", "Dias", "Horas", "Ações", "Recolhas", "Entregas", "Movimentos", "Levar ao parque", "Mudanças de lugar", "Atrasos ao trabalho", "Velocidade", "Reclamações", "Acidentes", "Pts+", "Pts−", "Total", "Ações/h", "Pontos/h", "Custo", "Cidade", "Marca", "Equipa (TL)"];
 
 /**
  * CSV (";") das linhas dadas, pela ordem dada. Com filtro, as duas primeiras
@@ -540,7 +550,7 @@ export function rankingCsv(rows: readonly EvalRankingRowLike[], o: { rankOf: (em
   const cell = (v: unknown) => String(v ?? "").replace(/[;\r\n]+/g, ",");
   const lines = rows.map((r) => [
     o.rankOf(r.employeeId), r.employeeName, r.days, m(r, "hoursWorked"), m(r, "actions"), m(r, "recolhas"), m(r, "entregas"),
-    m(r, "movements"), m(r, "parkingMoves"), m(r, "spotChanges"), m(r, "delays"), m(r, "lateServices"), m(r, "speedingEvents"), m(r, "complaints"), m(r, "accidents"),
+    m(r, "movements"), m(r, "parkingMoves"), m(r, "spotChanges"), lateArrivalsOfRow(r), m(r, "speedingEvents"), m(r, "complaints"), m(r, "accidents"),
     r.score.positivePoints ?? "", r.score.negativePoints ?? "", r.score.totalPoints, r.perHour?.actionsPerHour ?? "", r.perHour?.pointsPerHour ?? "", m(r, "cost"),
     (r.cities ?? []).map(cityLabel).join(", "), r.brand?.name ?? "", r.teamLeader?.name ?? "",
   ].map(cell).join(";"));

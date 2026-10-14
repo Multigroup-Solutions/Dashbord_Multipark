@@ -49,6 +49,7 @@ import {
   type ShiftRef,
 } from "../shared/shiftHandoverAuto";
 import type { LiveUpcoming, ShiftState } from "./multiparkDb/shiftState";
+import { QUEUE_PHASES } from "../shared/livePhases";
 
 // ─── Helpers puros ───────────────────────────────────────────────────────────
 
@@ -189,7 +190,9 @@ export function draftPartsFromLive(st: ShiftState): {
       } satisfies DraftBookingRow,
     };
   };
-  const pendingPhases = new Set(["pending_checkout", "baggage_waiting", "at_delivery"]);
+  // tarefa 62 (P2c, fluxo A): pendentes = só os que estão NA FILA (PENDING_CHECKOUT). Um carro "Em entrega"
+  // ou "No terminal" já saiu do parque — não é pendente da passagem de turno.
+  const pendingPhases = QUEUE_PHASES;
   return {
     ciRows: st.upcoming.checkins.map(up),
     coRows: st.upcoming.checkouts.map(up),

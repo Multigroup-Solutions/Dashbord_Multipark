@@ -2,7 +2,7 @@
 modulo: extras_dia
 titulo: Extras-Dia
 rotas: /extras-dia
-palavras: tempo por carro das recolhas, tempo por carro das entregas, quadro das recolhas, entregas e recolhas separadas, juntas, habitual, dias livres habituais, habitual não neste dia, mexido à mão, a mão humana manda, tirados à mão, proposta voltou a pôr, sistema voltou a pôr, reprocessar, dia a dia, a meio, notas do dia, notas internas, nota do dia, nota interna, trabalhou mal, carta < 3 anos, carta pendente de validação, sem carta, aviso da carta, faltam escalar, falta gente, disponíveis por escalar, escalados, indicador de pessoal, aviso de trabalho por email, pré-visualização do aviso, email pessoal, madrugada, 00h às 03h, até às 3h, 24 horas, das 03h às 03h, pode ser team leader na escala, quem pode ser TL, pesquisar pessoa, ficha do RH, p75 explicado, dados de uma janela anterior, fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: diagnóstico dos tempos, calibração, coordenadas das garagens, recolha atrasada no T2, sonda dos tempos, sonda62, copiar resumo, cobertura do GPS, intervalo entre pontos, paragem no terminal, tempo por carro das recolhas, tempo por carro das entregas, quadro das recolhas, entregas e recolhas separadas, juntas, habitual, dias livres habituais, habitual não neste dia, mexido à mão, a mão humana manda, tirados à mão, proposta voltou a pôr, sistema voltou a pôr, reprocessar, dia a dia, a meio, notas do dia, notas internas, nota do dia, nota interna, trabalhou mal, carta < 3 anos, carta pendente de validação, sem carta, aviso da carta, faltam escalar, falta gente, disponíveis por escalar, escalados, indicador de pessoal, aviso de trabalho por email, pré-visualização do aviso, email pessoal, madrugada, 00h às 03h, até às 3h, 24 horas, das 03h às 03h, pode ser team leader na escala, quem pode ser TL, pesquisar pessoa, ficha do RH, p75 explicado, dados de uma janela anterior, fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -34,12 +34,12 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 1. Em cima, escolhe o separador **Pressão** (o separador **Dia** é a previsão de sempre).
 2. Logo em cima escolhe o **grupo de parques** (a cidade toda, uma marca + cidade como Airpark Lisboa, ou o Marketplace) e **o que queres ver no mapa**, nos botões grandes:
    - **Carros por hora**: chegadas + saídas concluídas nessa hora, média por dia.
-   - **Tempo de entrega**: minutos desde o cliente pedir o carro até o ter na mão.
+   - **Tempo de entrega**: minutos desde o cliente pedir o carro (pendente) até assinar a entrega. Junta a fila, o caminho até ao terminal e a espera pelo cliente.
    - Na cidade toda há mais três:
      - **Tempo por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas. Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço.
        - Por cima do mapa escolhe **Entregas**, **Recolhas** ou **Juntas**. Entregas = os serviços que começam com o início de uma entrega (a recolha pelo meio fica dentro dela); Recolhas = os que começam com o início de uma recolha (inclui levar o carro ao parque). **Juntas** é o quadro de antes, as duas juntas, e é o que a escala usa. Mesmas regras, mesmas cores e mesma legenda.
        - Logo a seguir à mudança (12 out 2026) só há **Juntas**: o cálculo da noite relê os dias desde abril com as entregas e as recolhas separadas, e os botões **Entregas** e **Recolhas** acendem quando acabar. Enquanto isso, a Pressão mostra o último cálculo completo.
-     - **Na estrada**: do início da entrega até entregue.
+     - **Na estrada**: desde que o condutor pega no carro (em entrega) até o cliente assinar. Junta o caminho e a espera pelo cliente no terminal.
      - **Pessoas a trabalhar**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL** (se nessa hora não carregou em nenhum botão na app, junta-se 1). São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.
 3. **O mapa (dia da semana × hora)** ocupa quase o ecrã. Por cima diz em palavras o que a cor quer dizer; por baixo há a legenda (os 4 tons de azul com os valores, cinzento = sem dados, contorno laranja = hora apertada, horas a âmbar = horas de ponta).
    - **Carrega numa célula** (ou passa o rato) para ver o detalhe dessa hora: volume, carros em simultâneo, entrega, recolha, por carro (juntas, só entregas e só recolhas), na estrada, recolhido → no parque e pessoas.
@@ -69,6 +69,29 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Escala com os tempos medidos** (Definições → Parâmetros, por cidade; **desligado** por omissão): desligado, a escala e a previsão usam só a tabela de máximos, como até aqui.
    - Ligado numa cidade, a previsão, a escala automática e a estimativa passam a usar o tempo por carro **medido nas horas cheias** (com o percentil da cidade), mas **nunca acima do máximo** da tabela.
    - Um escalão com menos de 30 serviços medidos continua com o valor da tabela. Na previsão, a linha da capacidade diz em cada escalão se é **medido** (com o máximo ao lado) ou **tabela**.
+
+**Diagnóstico dos tempos (calibração)** (só o super admin)
+1. Em **Extras-Dia → Pressão**, no fim da página, está o cartão **Diagnóstico dos tempos (calibração)**. Só o super admin o vê e só ele o pode correr.
+2. Escolhe o **Último dia** (por omissão, há 3 dias: o GPS desse dia já é o final), quantos **Dias** para trás (só esse dia, 7 ou 14) e a **Cidade** (ou **Todas**). Depois carrega em **Correr**.
+   - Lê um dia de cada vez e cada dia pode demorar até um minuto. Podes carregar em **Parar** e ver o que já veio.
+   - Com **Todas**, os botões **Juntas**, **Lisboa**, **Porto** e **Faro** mudam o que vês.
+3. Aparecem os números que acertam os tempos de entrega e de recolha, cada um com o parâmetro que fecha:
+   - intervalo entre os pontos do GPS;
+   - cobertura do GPS por entrega e por recolha (e porque falta);
+   - paragem no terminal antes do check-out (o carro parado ou o condutor a pé), com a regra do plano e o recurso ao lado;
+   - chamadas antes do pendente e do "em recolha";
+   - "Cheguei" e "À espera das malas";
+   - quem marca cada estado;
+   - estados e sequências das recolhas, e onde se marca o "em recolha";
+   - garagens de destino e se há **P2**;
+   - saída do terminal e chegada ao T2 (conta como **atrasada** quando o condutor chega mais de **15 min** depois de o cliente ligar);
+   - **coordenadas das garagens** na Multipark: de onde vêm, quantas garagens há na cidade, quantas têm coordenadas válidas e se a posição da app no fim dos movimentos bate com elas (distância mediana);
+   - ficheiros do GPS, relógio e definições.
+   - Em cima, a **Leitura rápida** diz o que cada critério dá com os números de agora.
+4. Carrega em **Copiar resumo** e cola na conversa com o Claude. Cada corrida também fica no registo do servidor (linhas `[sonda62]`), por isso também basta dizer "corri".
+- **Só lê**: não grava nada, não manda nada a ninguém e não tem interruptor. Mostra só totais e percentagens, nunca nomes, telefones, matrículas nem reservas.
+- Se uma leitura falhar (BD da Multipark, chamadas, GPS), aparece no quadro amarelo **O que falhou**, com o motivo, e o resto aparece na mesma. Um dia com ficheiros do GPS por ler (prazo ou mais de 60 ficheiros) fica como **leitura parcial**.
+- O que dependia de uma leitura que falhou **não entra nas contas desse dia** (não conta como zero). Em cima, a **Leitura rápida** diz quantos dias têm dados e que leituras falharam.
 
 **Recolha pelo meio de uma entrega**
 1. Quem leva um carro ao aeroporto volta ao parque com o carro de uma recolha, se houver uma aí: essa recolha não lhe custa um carro a mais.
@@ -122,6 +145,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 - Editar uma linha não apaga as notas e fica registado quem alterou.
 - **Suspender envio automático** trava a confirmação e os avisos do cron nesse dia (e, como é mexer no dia, a proposta automática também já não corre nele).
 - **Pedir disponibilidade a quem não respondeu**: o número do botão é o número de extras da cidade sem resposta, e é a eles que o pedido vai.
+- **Ordem dos candidatos**: a proposta escolhe primeiro quem cobre mais horas com falta de gente e, depois, pela avaliação (pontos médios por dia nas últimas 4 semanas), o custo, a equidade e a fiabilidade. A avaliação mudou (atraso ao trabalho só a partir de 5 min, sem "entrega atrasada", velocidade acima de 120 km/h), por isso a **ordem** de quem é proposto pode mudar. A procura e quantos extras são precisos não mudam. Fica certo depois do recálculo da noite (os 31 dias cobrem as 4 semanas).
 
 **Quem vê o quê**
 - Quem só vê a escala (por exemplo, um condutor) vê as escalas e os turnos, **sem euros** e sem os botões de ação.

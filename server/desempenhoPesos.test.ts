@@ -212,7 +212,7 @@ vi.mock("./db", () => ({
         metric(3, "2026-10-05", { recolhas: 1, entregas: 1 }),
       ]];
       if (/FROM driver_day_shares/.test(text)) return [[
-        { employeeId: 1, day: "2026-10-05", km: 84, maxSpeed: 131, minutes: 480, movingMinutes: 300 }, // 3 h paradas, acima do limite
+        { employeeId: 1, day: "2026-10-05", km: 84, maxSpeed: 131, minutes: 480, movingMinutes: 300, speedThresholdKmh: "100.00" }, // 3 h paradas, acima do limite (recolhida a 100: a trava deixa contar)
       ]];
       if (/FROM extras_dia_assignments/.test(text) && /assignmentDate AS day/.test(text)) return [[asg("2026-10-05", 3, 1, null), asg("2026-10-05", 1), asg("2026-10-05", 5)]];
       return [[]];

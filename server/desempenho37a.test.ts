@@ -132,7 +132,8 @@ vi.mock("./db", () => ({
       ]];
       if (/FROM employee_metric_adjustments/.test(text)) return [[]];
       if (/FROM daily_driver_history/.test(text)) return [[]];
-      if (/FROM driver_day_shares/.test(text)) return [[{ employeeId: 1, day: "2026-10-05", km: 84.4, maxSpeed: 131 }]];
+      // tarefa 62: recolhida com o limite de hoje (100) — a trava da linha GPS deixa contar o 131
+      if (/FROM driver_day_shares/.test(text)) return [[{ employeeId: 1, day: "2026-10-05", km: 84.4, maxSpeed: 131, speedThresholdKmh: "100.00" }]];
       // chamadas atendidas pela conta extra da Bea, às 01h UTC de 6 out = 02h Lisboa → dia operacional 5 out
       if (/FROM whatsapp_calls/.test(text) && /answeredByUserId/.test(text)) return [[{ u: 22, h: "2026-10-06 01", n: 3 }]];
       if (/FROM mail_messages/.test(text)) return [[{ u: 12, h: "2026-10-05 10", n: 4 }]];

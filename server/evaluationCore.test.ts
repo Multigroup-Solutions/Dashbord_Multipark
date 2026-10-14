@@ -6,9 +6,6 @@ import {
   incidentIsAccident,
   isFlaggedPonto,
   isLateArrival,
-  classifyDeliveries,
-  isLateDelivery,
-  markLateDeliveries,
   markParkingMoves,
   pairPonto,
   scheduledStartUtcMs,
@@ -16,7 +13,7 @@ import {
   type EngineInput,
 } from "./evaluationCore";
 import { buildEvaluationIdentity } from "./evaluationIdentity";
-import { LATE_AFTER_REQUEST_MINUTES, scoreOf } from "../shared/evaluationRules";
+import { LATE_ARRIVAL_FROM_MINUTES, scoreOf } from "../shared/evaluationRules";
 import { utcMs } from "../shared/lisbonDay";
 
 const act = (bookingExternalId: string, changeType: string, actionTime: string, agentName = "Gelson Sousa"): ActionRow =>
@@ -42,18 +39,25 @@ describe("levar ao parque (1.º movimento depois de uma recolha)", () => {
   });
 });
 
-describe("entregas atrasadas (serviço)", () => {
-  it("sem hora marcada: > 30 min (LATE_AFTER_REQUEST_MINUTES) entre o pedido (PENDING_CHECKOUT) e a entrega conta; ≤ 30 não", () => {
+describe("tarefa 62: a entrega atrasada saiu da avaliação (os tempos são da organização)", () => {
+  it("uma entrega 40 min depois do pedido conta como entrega (+3), sem −5 nem atraso", () => {
     const rows = [
       act("B1", "PENDING_CHECKOUT", "2026-09-24 10:00:00"),
-      act("B1", "CHECK_OUT", "2026-09-24 10:31:00"),
-      act("B2", "PENDING_CHECKOUT", "2026-09-24 10:00:00"),
-      act("B2", "CHECK_OUT", "2026-09-24 10:30:00"),
-      act("B3", "CHECK_OUT", "2026-09-24 11:00:00"), // sem pedido nem hora marcada
+      act("B1", "CHECK_OUT", "2026-09-24 10:40:00"),
       act("B4", "PENDING_CHECKOUT", "2026-09-24 01:00:00"),
-      act("B4", "CHECK_OUT", "2026-09-24 12:00:00"), // > 10 h: outro pedido
+      act("B4", "CHECK_OUT", "2026-09-24 12:00:00"),
     ];
-    expect([...markLateDeliveries(rows)]).toEqual([1]);
+    const counts = actionRowsToCounts(rows);
+    for (const c of counts) expect(c).not.toHaveProperty("lateDeliveries");
+    for (const c of counts) expect(c).not.toHaveProperty("deliveriesWithoutSchedule");
+    const identity = buildEvaluationIdentity({ employees: [{ id: 1, fullName: "Gelson Sousa", userId: 10, multiparkAgentName: null, multiparkAgentUserId: null }], agentAliases: [], accountAliases: [] });
+    const out = computeEmployeeDays({
+      startDay: "2026-09-24", endDay: "2026-09-24", identity, employees: new Map([[1, { id: 1, position: "driver", contractType: null, extraLevel: null, monthlySalary: null, projectId: 1 }]]),
+      actions: rows, ponto: [], assignments: [], incidents: [], complaints: [], speedAlerts: [], penalties: [], rate: () => 10, tlWorkingDaysPerMonth: 15,
+    });
+    expect(out.rows[0].metrics).toMatchObject({ entregas: 2, lateServices: 0, delays: 0, deliveriesWithoutSchedule: 0 });
+    expect(scoreOf(out.rows[0].metrics).lines.map((l) => l.key)).not.toContain("lateDelivery");
+    expect(scoreOf(out.rows[0].metrics).totalPoints).toBe(6);
   });
 });
 
@@ -83,10 +87,14 @@ describe("atrasos no ponto", () => {
     expect(scheduledStartUtcMs("2026-09-24", 15)).toBe(utcMs("2026-09-24 14:00:00"));
     expect(scheduledStartUtcMs("2026-09-24", 25)).toBe(utcMs("2026-09-25 00:00:00"));
   });
-  it("atraso ao minuto; sem entrada não é atraso (é falta)", () => {
+  it("tarefa 62: atraso a partir de 5 min inteiros (03:04:59 não, 03:05:00 sim, 03:10 sim); sem entrada não é atraso (é falta)", () => {
+    expect(LATE_ARRIVAL_FROM_MINUTES).toBe(5);
     const sched = scheduledStartUtcMs("2026-09-24", 15);
     expect(isLateArrival([sched + 40_000], sched)).toBe(false);
-    expect(isLateArrival([sched + 61_000], sched)).toBe(true);
+    expect(isLateArrival([sched + 61_000], sched)).toBe(false);
+    expect(isLateArrival([sched + 4 * 60_000 + 59_999], sched)).toBe(false);
+    expect(isLateArrival([sched + 5 * 60_000], sched)).toBe(true);
+    expect(isLateArrival([sched + 10 * 60_000], sched)).toBe(true);
     expect(isLateArrival([sched - 600_000], sched)).toBe(false);
     expect(isLateArrival([], sched)).toBe(false);
   });
@@ -117,7 +125,7 @@ describe("motor (dia operacional completo)", () => {
       act("B1", "MOVEMENT", "2026-09-24 14:50:00"), // levar ao parque (+5)
       act("B2", "MOVEMENT", "2026-09-25 00:30:00"), // 01:30 Lisboa → ainda dia 24, noite (+2)
       act("B3", "PENDING_CHECKOUT", "2026-09-24 20:00:00", "Cliente"),
-      act("B3", "CHECK_OUT", "2026-09-24 20:40:00"), // entrega atrasada (+3, −5)
+      act("B3", "CHECK_OUT", "2026-09-24 20:40:00"), // entrega 40 min depois do pedido (+3; a entrega atrasada saiu)
       act("B4", "MOVEMENT", "2026-09-25 02:30:00"), // 03:30 Lisboa → dia 25, fora
     ],
     ponto: [
@@ -139,10 +147,10 @@ describe("motor (dia operacional completo)", () => {
     const m = r.metrics;
     expect(m).toMatchObject({
       actions: 4, actionsNight: 4, actionsMorning: 0, recolhas: 1, entregas: 1, movements: 2, parkingMoves: 1,
-      hoursWorked: 11, suspiciousHours: 3, scheduledHours: 12, delays: 2, lateServices: 1, cost: 110,
+      hoursWorked: 11, suspiciousHours: 3, scheduledHours: 12, delays: 1, lateServices: 0, cost: 110,
     });
     expect(m.weightedActions).toBe(5 + 2 + 3 + 3);
-    expect(scoreOf(m).totalPoints).toBe(13 - 10);
+    expect(scoreOf(m).totalPoints).toBe(13 - 5); // só o atraso ao trabalho (10 min)
   });
 
   it("contagens já agregadas (BD da Multipark) dão os mesmos números que as linhas soltas", () => {
@@ -155,14 +163,14 @@ describe("motor (dia operacional completo)", () => {
     expect(fromCounts.unresolved.get("2026-09-24")?.get("agent:cliente")?.actions).toBe(1);
   });
 
-  it("contagens vivas: dia/turno, levar ao parque e entregas atrasadas vêm da BD; ocorrências da app contam como reportadas", () => {
+  it("contagens vivas: dia/turno e levar ao parque vêm da BD; ocorrências da app contam como reportadas", () => {
     const out = computeEmployeeDays({
       ...base, actions: [], ponto: [], assignments: [],
       actionCounts: [
-        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "morning", changeType: "MOVEMENT", n: 3, parkingMoves: 1, lateDeliveries: 0 },
-        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night", changeType: "CHECK_OUT", n: 2, parkingMoves: 0, lateDeliveries: 1 },
-        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-25", shift: "morning", changeType: "CHECK_IN", n: 5, parkingMoves: 0, lateDeliveries: 0 }, // fora do intervalo
-        { agentUserId: "mp-2", agentName: "Outro Agente", day: "2026-09-24", shift: "night", changeType: "UPDATE", n: 4, parkingMoves: 0, lateDeliveries: 0 },
+        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "morning", changeType: "MOVEMENT", n: 3, parkingMoves: 1 },
+        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night", changeType: "CHECK_OUT", n: 2, parkingMoves: 0 },
+        { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-25", shift: "morning", changeType: "CHECK_IN", n: 5, parkingMoves: 0 }, // fora do intervalo
+        { agentUserId: "mp-2", agentName: "Outro Agente", day: "2026-09-24", shift: "night", changeType: "UPDATE", n: 4, parkingMoves: 0 },
       ],
       agentOccurrences: [
         { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", n: 2 },
@@ -170,7 +178,7 @@ describe("motor (dia operacional completo)", () => {
       ],
     });
     expect(out.rows).toHaveLength(1);
-    expect(out.rows[0].metrics).toMatchObject({ actions: 5, actionsMorning: 3, actionsNight: 2, movements: 3, parkingMoves: 1, entregas: 2, lateServices: 1, delays: 1, incidentsReported: 2 });
+    expect(out.rows[0].metrics).toMatchObject({ actions: 5, actionsMorning: 3, actionsNight: 2, movements: 3, parkingMoves: 1, entregas: 2, lateServices: 0, delays: 0, incidentsReported: 2 });
     expect(out.rows[0].actionsByType).toEqual({ MOVEMENT: 3, CHECK_OUT: 2 });
     expect(out.unresolved.get("2026-09-24")?.get("agent:outroagente")).toMatchObject({ actions: 4, byType: { UPDATE: 4 } });
   });
@@ -253,51 +261,17 @@ describe("14 out 2026 — movimentos: início não conta; mesma garagem = mudan�
   });
 });
 
-describe("14 out 2026 — entrega atrasada pela hora marcada (e pelo pedido + 30 quando o pedido vem depois)", () => {
+describe("tarefa 62 — a hora marcada já não entra na avaliação (D5, D6)", () => {
   const outFields = (sched: string | null, at: string) => JSON.stringify({ _version: 2, status: { from: "CHECKING_OUT", to: "CHECKED_OUT" }, ...(sched ? { checkOut: { from: sched, to: at } } : {}) });
   const co = (b: string, at: string, sched: string | null): ActionRow => ({ ...act(b, "CHECK_OUT", at.replace("T", " ").slice(0, 19)), modifiedFields: outFields(sched, at) });
 
-  it("regras com os casos reais e os de fronteira", () => {
+  it("entregas muito depois da hora marcada ou do pedido: nenhuma entrega atrasada, nenhum atraso, nenhuma 'sem hora marcada'", () => {
     const rows: ActionRow[] = [
-      // 24008 (10/10): pedido 18:27 antes da marcada 18:45, entregue 18:47 → NÃO é atraso (antes era)
-      act("B1", "PENDING_CHECKOUT", "2026-10-10 18:27:43"), co("B1", "2026-10-10T18:47:43.000Z", "2026-10-10T18:45:00.000Z"),
-      // 21013 (10/10): marcada 17:45, pedido 17:47 (depois), entregue 18:05 → 18 min do pedido: NÃO é atraso (≤ 30)
-      act("B2", "PENDING_CHECKOUT", "2026-10-10 17:47:01"), co("B2", "2026-10-10T18:05:12.000Z", "2026-10-10T17:45:00.000Z"),
-      // voo atrasado com viagem > 15 min: marcada 10:00, pedido 11:00, entregue 11:25 → NÃO é atraso
-      act("B3", "PENDING_CHECKOUT", "2026-10-10 11:00:00"), co("B3", "2026-10-10T11:25:00.000Z", "2026-10-10T10:00:00.000Z"),
-      // voo atrasado mas o condutor demorou: pedido 11:00, entregue 11:31 → atraso
-      act("B7", "PENDING_CHECKOUT", "2026-10-10 11:00:00"), co("B7", "2026-10-10T11:31:00.000Z", "2026-10-10T10:00:00.000Z"),
-      // sem pedido, marcada 12:00, entregue 12:30 → atraso; 12:15 → não
       co("B4", "2026-10-10T12:30:00.000Z", "2026-10-10T12:00:00.000Z"),
-      co("B8", "2026-10-10T12:15:00.000Z", "2026-10-10T12:00:00.000Z"),
-      // pedido à hora marcada: conta a marcada + 15 → 12:16 é atraso
-      act("B9", "PENDING_CHECKOUT", "2026-10-10 12:00:00"), co("B9", "2026-10-10T12:16:00.000Z", "2026-10-10T12:00:00.000Z"),
-      // sem hora marcada: pedido 13:00, entregue 13:20 → não (≤ 30); 13:31 → sim
-      act("B5", "PENDING_CHECKOUT", "2026-10-10 13:00:00"), co("B5", "2026-10-10T13:20:00.000Z", null),
       act("B10", "PENDING_CHECKOUT", "2026-10-10 13:00:00"), co("B10", "2026-10-10T13:31:00.000Z", null),
-      // hora marcada que não é data → cai no pedido + 30: 14:00 → 14:10 não é atraso
-      act("B6", "PENDING_CHECKOUT", "2026-10-10 14:00:00"), { ...act("B6", "CHECK_OUT", "2026-10-10 14:10:00"), modifiedFields: '{"checkOut":{"from":"amanha","to":"x"}}' },
     ];
-    const late = [...markLateDeliveries(rows)].map((i) => rows[i].bookingExternalId).sort();
-    expect(late).toEqual(["B10", "B4", "B7", "B9"]);
-    const { noSchedule } = classifyDeliveries(rows);
-    expect([...noSchedule].map((i) => rows[i].bookingExternalId).sort()).toEqual(["B10", "B5", "B6"]);
-    expect(LATE_AFTER_REQUEST_MINUTES).toBe(30);
-  });
-
-  it("isLateDelivery", () => {
-    const at = (s: string) => utcMs(s);
-    expect(isLateDelivery(at("2026-10-10 12:16:00"), at("2026-10-10 12:00:00"), null)).toBe(true);
-    expect(isLateDelivery(at("2026-10-10 12:15:00"), at("2026-10-10 12:00:00"), null)).toBe(false);
-    expect(isLateDelivery(at("2026-10-10 12:40:00"), at("2026-10-10 12:00:00"), at("2026-10-10 12:20:00"))).toBe(false); // 20 min do pedido
-    expect(isLateDelivery(at("2026-10-10 12:51:00"), at("2026-10-10 12:00:00"), at("2026-10-10 12:20:00"))).toBe(true);
-    expect(isLateDelivery(at("2026-10-10 12:51:00"), null, null)).toBe(false);
-  });
-
-  it("as entregas sem hora marcada chegam à avaliação do dia", () => {
-    const rows = [act("B1", "PENDING_CHECKOUT", "2026-10-10 13:00:00"), co("B1", "2026-10-10T13:40:00.000Z", null)];
     const out = computeEmployeeDays({ ...emptyInput("2026-10-10", "2026-10-10", ident1()), actions: rows });
-    expect(out.rows[0].metrics).toMatchObject({ entregas: 1, lateServices: 1, delays: 1, deliveriesWithoutSchedule: 1 });
+    expect(out.rows[0].metrics).toMatchObject({ entregas: 2, lateServices: 0, delays: 0, deliveriesWithoutSchedule: 0 });
   });
 });
 

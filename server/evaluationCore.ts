@@ -11,10 +11,7 @@ import { incidentCountsAgainstDriver } from "../shared/caseRules";
 import {
   ACCIDENTS_FROM_DAY,
   DAMAGE_INCIDENT_TYPES,
-  DELAY_TOLERANCE_MINUTES,
-  LATE_AFTER_REQUEST_MINUTES,
-  LATE_SERVICE_MAX_MINUTES,
-  LATE_SERVICE_MINUTES,
+  LATE_ARRIVAL_FROM_MINUTES,
   MAX_LATE_ARRIVALS_PER_DAY,
   actionCategory,
   actionPoints,
@@ -23,7 +20,9 @@ import {
   type DayMetrics,
 } from "../shared/evaluationRules";
 import { addDays, lisbonDayOf, lisbonHourOf, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
-import { classifyMovement, scheduledCheckOutMs, type MovementKind } from "../shared/multiparkMovements";
+import { classifyMovement, type MovementKind } from "../shared/multiparkMovements";
+import { gpsDayOverThreshold } from "../shared/speedRules";
+import { fixedScheduledStarts, type FixedScheduleRow, type LeaveRow } from "../shared/workSchedule";
 import { pontoShiftHours } from "../shared/pontoHours";
 import type { EvaluationIdentity } from "./evaluationIdentity";
 
@@ -95,16 +94,17 @@ export function scheduledStartUtcMs(day: string, startHour: number): number {
 }
 
 /**
- * Atraso: a 1.ª entrada no ponto à volta da hora da escala (de 6 h antes a
- * 12 h depois) foi depois da hora + tolerância. Sem entrada nenhuma não é
- * atraso (é falta — tratada no RH).
+ * Atraso ao trabalho (tarefa 62, D4): a 1.ª entrada no ponto à volta da hora
+ * da escala (de 6 h antes a 12 h depois) foi `fromMinutes` minutos INTEIROS ou
+ * mais depois da hora — floor((entrada − hora) / 60 s) ≥ 5: 03:04:59 numa
+ * escala das 03:00 não é atraso; 03:05:00 é; 03:10 é. Sem entrada nenhuma não
+ * é atraso (é falta — tratada no RH).
  */
-export function isLateArrival(checkInsMs: number[], scheduledMs: number, toleranceMinutes = DELAY_TOLERANCE_MINUTES): boolean {
+export function isLateArrival(checkInsMs: number[], scheduledMs: number, fromMinutes = LATE_ARRIVAL_FROM_MINUTES): boolean {
   const from = scheduledMs - 6 * 3_600_000, to = scheduledMs + 12 * 3_600_000;
   const first = checkInsMs.filter((t) => t >= from && t <= to).sort((a, b) => a - b)[0];
   if (first == null) return false;
-  // ao minuto: 03:00:40 numa escala das 03:00 não é atraso
-  return Math.floor(first / 60_000) > Math.floor((scheduledMs + toleranceMinutes * 60_000) / 60_000);
+  return Math.floor((first - scheduledMs) / 60_000) >= fromMinutes;
 }
 
 // ─── Ações das reservas ──────────────────────────────────────────────────────
@@ -167,64 +167,9 @@ export function markParkingMoves(rows: ActionRow[]): Set<number> {
 }
 
 /**
- * Entrega atrasada? (Jorge, 14 out 2026 — shared/evaluationRules.ts):
- *  - pedido (1.º PENDING_CHECKOUT) antes ou à hora marcada, ou sem pedido:
- *    atrasada se passar a hora marcada + LATE_SERVICE_MINUTES;
- *  - pedido DEPOIS da hora marcada, ou sem hora marcada: atrasada se passar o
- *    pedido + LATE_AFTER_REQUEST_MINUTES (viagem incluída);
- *  - mais de LATE_SERVICE_MAX_MINUTES = outro pedido → não conta. PURA.
- */
-export function isLateDelivery(deliveredMs: number, scheduledMs: number | null, pendingMs: number | null): boolean {
-  const within = (base: number, tol: number) => {
-    const mins = (deliveredMs - base) / 60_000;
-    return mins > tol && mins < LATE_SERVICE_MAX_MINUTES;
-  };
-  if (pendingMs != null && (scheduledMs == null || pendingMs > scheduledMs)) return within(pendingMs, LATE_AFTER_REQUEST_MINUTES);
-  if (scheduledMs != null) return within(scheduledMs, LATE_SERVICE_MINUTES);
-  return false;
-}
-
-/**
- * Índices das ENTREGAS atrasadas (isLateDelivery) e das entregas sem hora
- * marcada legível (`noSchedule`), na mesma reserva. Hora marcada =
- * modifiedFields.checkOut.from da linha CHECK_OUT. PURA.
- */
-export function classifyDeliveries(rows: ActionRow[]): { late: Set<number>; noSchedule: Set<number> } {
-  const byBooking = new Map<string, number[]>();
-  rows.forEach((r, i) => {
-    const list = byBooking.get(r.bookingExternalId) ?? [];
-    list.push(i);
-    byBooking.set(r.bookingExternalId, list);
-  });
-  const late = new Set<number>(), noSchedule = new Set<number>();
-  for (const idx of byBooking.values()) {
-    idx.sort((a, b) => utcMs(rows[a].actionTime) - utcMs(rows[b].actionTime) || a - b);
-    let pendingAt: number | null = null;
-    for (const i of idx) {
-      const type = String(rows[i].changeType ?? "").trim().toUpperCase();
-      const t = utcMs(rows[i].actionTime);
-      if (type === "PENDING_CHECKOUT") {
-        if (pendingAt == null) pendingAt = t;
-      } else if (actionCategory(type) === "entregas") {
-        const scheduled = scheduledCheckOutMs(rows[i].modifiedFields);
-        if (scheduled == null) noSchedule.add(i);
-        if (isLateDelivery(t, scheduled, pendingAt)) late.add(i);
-        pendingAt = null;
-      }
-    }
-  }
-  return { late, noSchedule };
-}
-
-/** Índices das ENTREGAS atrasadas (classifyDeliveries). PURA. */
-export function markLateDeliveries(rows: ActionRow[]): Set<number> {
-  return classifyDeliveries(rows).late;
-}
-
-/**
  * Ações agregadas por (agente, dia operacional, turno, tipo) — a forma em que
- * chegam da BD da Multipark. `parkingMoves`/`lateDeliveries` = quantas dessas
- * `n` ações foram "levar ao parque" / entregas atrasadas.
+ * chegam da BD da Multipark. `parkingMoves` = quantas dessas `n` ações foram
+ * "levar ao parque". (Tarefa 62: a "entrega atrasada" saiu — já não se conta.)
  */
 export interface ActionCountRow {
   agentUserId: string | null;
@@ -236,13 +181,10 @@ export interface ActionCountRow {
   hour?: number;
   n: number;
   parkingMoves: number;
-  lateDeliveries: number;
   /** MOVEMENT que contam como movimento (sem os inícios nem as mudanças de lugar). Sem isto: todos os `n`. */
   moves?: number;
   /** MOVEMENT na mesma garagem (mudança de lugar). */
   spotChanges?: number;
-  /** CHECK_OUT sem hora marcada legível (medidas pelo pedido + LATE_AFTER_REQUEST_MINUTES). */
-  deliveriesWithoutSchedule?: number;
 }
 
 export interface AgentOccurrenceCount {
@@ -253,13 +195,11 @@ export interface AgentOccurrenceCount {
 }
 
 /**
- * Linhas soltas → contagens (mesmas regras: markParkingMoves e
- * markLateDeliveries sobre TODAS as linhas, incluindo as de antes do
- * intervalo). PURA.
+ * Linhas soltas → contagens (mesmas regras: markParkingMoves sobre TODAS as
+ * linhas, incluindo as de antes do intervalo). PURA.
  */
 export function actionRowsToCounts(rows: ActionRow[]): ActionCountRow[] {
   const { parking, moves, spot, start } = classifyActionRows(rows);
-  const { late, noSchedule } = classifyDeliveries(rows);
   const out = new Map<string, ActionCountRow>();
   rows.forEach((a, i) => {
     if (start.has(i)) return; // 14 out 2026: o início de um movimento não é uma ação
@@ -269,15 +209,13 @@ export function actionRowsToCounts(rows: ActionRow[]): ActionCountRow[] {
     const k = `${a.agentUserId ?? ""}|${a.agentName ?? ""}|${slot.day}|${slot.shift}|${type}|${hour}`;
     let c = out.get(k);
     if (!c) {
-      c = { agentUserId: a.agentUserId, agentName: a.agentName, day: slot.day, shift: slot.shift, changeType: type, hour, n: 0, parkingMoves: 0, lateDeliveries: 0, moves: 0, spotChanges: 0, deliveriesWithoutSchedule: 0 };
+      c = { agentUserId: a.agentUserId, agentName: a.agentName, day: slot.day, shift: slot.shift, changeType: type, hour, n: 0, parkingMoves: 0, moves: 0, spotChanges: 0 };
       out.set(k, c);
     }
     c.n += 1;
     if (parking.has(i)) c.parkingMoves += 1;
-    if (late.has(i)) c.lateDeliveries += 1;
     if (moves.has(i)) c.moves! += 1;
     if (spot.has(i)) c.spotChanges! += 1;
-    if (noSchedule.has(i)) c.deliveriesWithoutSchedule! += 1;
   });
   return Array.from(out.values());
 }
@@ -328,8 +266,12 @@ export interface EngineComplaint {
 }
 
 export interface EngineSpeedAlert { id?: number; employeeId: number | null; createdAt: string }
-/** Velocidade máxima do GPS do Zello de uma pessoa num dia (driver_day_shares / daily_driver_history). */
-export interface EngineGpsDay { employeeId: number; day: string; maxSpeed: number }
+/**
+ * Velocidade máxima do GPS do Zello de uma pessoa num dia (driver_day_shares / daily_driver_history) e o
+ * limiar com que essa linha foi recolhida (tarefa 62: daily_driver_history.speedThresholdKmh; null/ausente
+ * = recolhida antes da coluna, conta como 132 — a "trava da linha GPS", shared/speedRules.ts).
+ */
+export interface EngineGpsDay { employeeId: number; day: string; maxSpeed: number; collectedThresholdKmh?: number | null }
 /** Acidente confirmado pelo TL (evaluation_accidents ativo, D15): conta no dia operacional da ocorrência. */
 export interface EngineConfirmedAccident { employeeId: number; day: string }
 export interface EnginePenalty { employeeId: number; points: number; reason: string; relatedId: number | null; createdAt: string }
@@ -350,6 +292,13 @@ export interface EngineInput {
   incidents: EngineIncident[];
   complaints: EngineComplaint[];
   speedAlerts: EngineSpeedAlert[];
+  /**
+   * Tarefa 62 (Q8): horários fixos do RH (tabela `schedules`, só fichas ativas) — o atraso ao trabalho conta
+   * para todos os que têm horário, não só para quem está na escala. Nos dias com escala vale a da escala.
+   */
+  fixedSchedules?: FixedScheduleRow[];
+  /** Férias/baixas (employee_leaves): nesses dias não há hora de entrada pelo horário fixo. */
+  leaves?: LeaveRow[];
   /** 14 out 2026: dias com GPS do Zello (a velocidade máxima); acima de `speedThresholdKmh` = 1 excesso nesse dia. */
   gpsDays?: EngineGpsDay[];
   /** Limiar de velocidade (km/h, já com a tolerância) — shared/gpsRules.ts → speedThresholdKmh. */
@@ -463,8 +412,7 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
           const r = row(who.employeeId, a.day);
           r.actionsByType[type] = (r.actionsByType[type] ?? 0) + a.n;
           if (r.actionsByHour && Number.isInteger(a.hour) && a.hour! >= 0 && a.hour! < 24) r.actionsByHour[a.hour!] += a.n;
-          if (a.lateDeliveries > 0) { r.metrics.lateServices += a.lateDeliveries; r.metrics.delays += a.lateDeliveries; }
-          if ((a.deliveriesWithoutSchedule ?? 0) > 0) r.metrics.deliveriesWithoutSchedule += a.deliveriesWithoutSchedule!;
+          // tarefa 62: a "entrega atrasada" saiu — lateServices e deliveriesWithoutSchedule ficam a 0 nos dias novos
           return r.metrics;
         })()
       : (() => {
@@ -533,11 +481,29 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
     } else if (a.level) {
       scheduleCost.set(k, (scheduleCost.get(k) ?? 0) + hours * input.rate(a.level));
     }
-    // 14 out 2026: no máximo MAX_LATE_ARRIVALS_PER_DAY atrasos à entrada por pessoa e dia (duas linhas na escala não contam a dobrar)
+    // 14 out 2026: no máximo MAX_LATE_ARRIVALS_PER_DAY atrasos ao trabalho por pessoa e dia (duas linhas na escala não contam a dobrar);
+    // tarefa 62: só a partir de LATE_ARRIVAL_FROM_MINUTES (5) minutos inteiros depois da hora da escala
     if ((lateArrivalsByDay.get(k) ?? 0) < MAX_LATE_ARRIVALS_PER_DAY
       && isLateArrival(checkInsByEmp.get(who.employeeId) ?? [], scheduledStartUtcMs(a.assignmentDate, a.startHour))) {
       lateArrivalsByDay.set(k, (lateArrivalsByDay.get(k) ?? 0) + 1);
       r.metrics.delays += 1;
+    }
+  }
+
+  // ── Tarefa 62 (Q8): quem tem horário fixo no RH também tem atraso ao trabalho (≥ 5 min, −5, no máximo 1
+  // por dia, o mesmo contador da escala). Nos dias em que a pessoa está na escala do Extras-Dia vale a escala.
+  if (input.fixedSchedules?.length) {
+    const inEscala = new Set<string>();
+    for (const a of input.assignments) {
+      const who = identity.assignment({ employeeId: a.employeeId, personName: a.personName });
+      if (who.employeeId != null) inEscala.add(`${who.employeeId}|${a.assignmentDate}`);
+    }
+    for (const f of fixedScheduledStarts(startDay, endDay, input.fixedSchedules, input.leaves ?? [])) {
+      const k = `${f.employeeId}|${f.day}`;
+      if (inEscala.has(k) || (lateArrivalsByDay.get(k) ?? 0) >= MAX_LATE_ARRIVALS_PER_DAY) continue;
+      if (!isLateArrival(checkInsByEmp.get(f.employeeId) ?? [], f.startMs)) continue;
+      lateArrivalsByDay.set(k, (lateArrivalsByDay.get(k) ?? 0) + 1);
+      row(f.employeeId, f.day).metrics.delays += 1;
     }
   }
 
@@ -592,11 +558,12 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
   // ── 14 out 2026: o GPS do Zello — um dia com a velocidade máxima acima do
   // limiar conta 1 excesso, se nesse dia não houver já alertas/penalizações de
   // velocidade (não conta a dobrar). Fica para depois das penalizações.
+  // Tarefa 62: o limiar é o MAIOR entre o de hoje e o da recolha da linha (a trava da linha GPS).
   const gpsOver = new Set<string>();
   if (input.speedThresholdKmh != null && Number.isFinite(input.speedThresholdKmh)) {
     for (const g of input.gpsDays ?? []) {
       if (!g.employeeId || !inRange(g.day, startDay, endDay)) continue;
-      if (Number(g.maxSpeed) > input.speedThresholdKmh) gpsOver.add(`${g.employeeId}|${g.day}`);
+      if (gpsDayOverThreshold(g.maxSpeed, input.speedThresholdKmh, g.collectedThresholdKmh)) gpsOver.add(`${g.employeeId}|${g.day}`);
     }
   }
 

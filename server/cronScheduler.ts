@@ -80,6 +80,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "cash-confirm-recheck": async (o) => (await import("./cronJobs")).cashConfirmRecheckCron(o),
   "cash-external": async (o) => (await import("./cronJobs")).cashExternalCron(o),
   "zello-sameday": async (o) => (await import("./cronJobs")).zelloSameDayCron(o),
+  "gps-resplit-backfill": async (o) => (await import("./cronJobs")).gpsResplitBackfillCron(o),
   "extras-pressure": async (o) => (await import("./cronJobs")).extrasPressureCron(o),
   "rh-docs-weekly": async () => (await import("./cronJobs")).rhDocsWeeklyCron(),
   "rh-docs-request": async (o) => (await import("./cronJobs")).rhDocsRequestCron(o),

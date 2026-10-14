@@ -21,6 +21,7 @@ import { LoginCodesCard } from "@/components/login/LoginCodesCard";
 import { TerminalLiveCard } from "@/components/terminal/TerminalLiveCard";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
 import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
+import { ResplitBackfillCard } from "@/components/ResplitBackfillCard";
 import { usePersonalMigration } from "@/components/PersonalDeviceBinder";
 import { DEVICE_CHANGED_EVENT, getPersonalToken } from "@/lib/pdaDevice";
 import { PERSONAL_DEVICE_HELP } from "@shared/personalDevice";
@@ -627,6 +628,9 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
         <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Bat. Média</p><p className="text-xl font-bold tabular-nums truncate">{st(stats?.avgBattery, (n) => `${n}%`)}</p></CardContent></Card>
         <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Excessos{threshold ? ` (> ${Math.round(threshold)} km/h)` : ""}</p><p className="text-xl font-bold tabular-nums truncate text-amber-600">{st(stats?.totalViolations, String)}</p></CardContent></Card>
       </div>
+
+      {/* tarefa 62 (P1b): re-dividir uma vez os últimos 31 dias com o limite de hoje (só o super admin vê) */}
+      <ResplitBackfillCard />
 
       <SpeedHistoryCard target={speedTarget} onTarget={onSpeedTarget} people={peopleData} threshold={threshold} />
 

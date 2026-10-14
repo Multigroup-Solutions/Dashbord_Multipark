@@ -37,7 +37,6 @@ import {
   addDays,
   operationalDayRangeUtc,
 } from "../../shared/lisbonDay";
-import { LATE_AFTER_REQUEST_MINUTES, LATE_SERVICE_MAX_MINUTES, LATE_SERVICE_MINUTES } from "../../shared/evaluationRules";
 import { MOVEMENT_CHANGE_TYPES, MOVEMENT_GARAGE_KEYS, MOVEMENT_PATTERNS, MOVEMENT_SPOT_KEYS, displayChangeType, type MovementChangeType } from "../../shared/multiparkMovements";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -152,12 +151,9 @@ export function movementWindow(startDay: string, endDay: string = startDay): Mov
  *  - formato antigo (sem garagem/lugar): "levar ao parque" = MOVEMENT cuja ação
  *    anterior da MESMA reserva (recolha/entrega/movimento/cancelamento, sem os
  *    inícios) foi uma recolha (CHECK_IN);
- *  - entrega atrasada (shared/evaluationRules.ts): com o 1.º PENDING_CHECKOUT
- *    (desde a entrega anterior) antes/à hora MARCADA, ou sem pedido: CHECK_OUT
- *    depois da marcada + LATE_SERVICE_MINUTES; com o pedido DEPOIS da marcada,
- *    ou sem hora marcada: depois do pedido + LATE_AFTER_REQUEST_MINUTES. Menos
- *    de LATE_SERVICE_MAX_MINUTES. Hora marcada = modifiedFields.checkOut.from;
  *  - os INÍCIOS de movimento ficam fora de todas as contagens (não são ações).
+ * Tarefa 62: a "entrega atrasada" saiu da avaliação — já não se calcula aqui
+ * (nem a hora marcada nem o pedido): a consulta ficou mais simples e barata.
  * A sequência lê desde `lookbackFrom` (uma recolha de dias antes conta), mas
  * só se contam as ações de [from, to).
  * Sem âmbito de cidade: o motor calcula tudo (o âmbito aplica-se ao ler).
@@ -168,14 +164,8 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
   const lb = params.add(opts.lookbackFrom);
   const to = params.add(opts.to);
   const from = params.add(opts.from);
-  const lateTol = params.add(LATE_SERVICE_MINUTES);
-  const lateMax = params.add(LATE_SERVICE_MAX_MINUTES);
-  const lateReq = params.add(LATE_AFTER_REQUEST_MINUTES);
   const cats = `('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL')`;
   const inSeq = `(k.ct IN ${cats} AND k.mk IS DISTINCT FROM 'inicio')`;
-  // pedido depois da hora marcada (voo atrasado) ou sem hora marcada: pedido + LATE_AFTER_REQUEST_MINUTES (viagem incluída); senão marcada + LATE_SERVICE_MINUTES
-  const byRequest = `(x.pending_at IS NOT NULL AND (x.sched_at IS NULL OR x.pending_at > x.sched_at))`;
-  const late = (b: string, tol: string) => `(x.at - ${b} > ${tol}::int * interval '1 minute' AND x.at - ${b} < ${lateMax}::int * interval '1 minute')`;
   const sql = [
     `WITH h AS (`,
     `  SELECT h."id" AS id, h."bookingId" AS booking_id, h."userId" AS user_id,`,
@@ -187,27 +177,19 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
     `   WHERE h."actionTime" >= ${lb}::timestamp AND h."actionTime" < ${to}::timestamp`,
     `), k AS MATERIALIZED (`, // o tipo de cada MOVEMENT calcula-se uma vez (sem MATERIALIZED o Postgres recopia a expressão)
     `  SELECT h.id, h.booking_id, h.user_id, h.agent_name, h.ct, h.at,`,
-    `         CASE WHEN h.ct = 'MOVEMENT' THEN ${movementKindSql("h.mf")} END AS mk,`,
-    `         CASE WHEN h.ct = 'CHECK_OUT' THEN ${scheduledCheckOutTextSql("h.mf")} END AS sched_txt`,
+    `         CASE WHEN h.ct = 'MOVEMENT' THEN ${movementKindSql("h.mf")} END AS mk`,
     `    FROM h`,
     `), seq AS (`,
-    `  SELECT k.*, ${scheduledCheckOutAtSql("k.sched_txt")} AS sched_at,`,
-    `         CASE WHEN ${inSeq} THEN lag(k.ct) OVER (PARTITION BY k.booking_id, ${inSeq} ORDER BY k.at, k.id) END AS prev_cat,`,
-    `         COALESCE(sum(CASE WHEN k.ct = 'CHECK_OUT' THEN 1 ELSE 0 END) OVER (PARTITION BY k.booking_id ORDER BY k.at, k.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS deliveries_before`,
+    `  SELECT k.*,`,
+    `         CASE WHEN ${inSeq} THEN lag(k.ct) OVER (PARTITION BY k.booking_id, ${inSeq} ORDER BY k.at, k.id) END AS prev_cat`,
     `    FROM k`,
-    `), seq2 AS (`,
-    `  SELECT s.*, min(s.at) FILTER (WHERE s.ct = 'PENDING_CHECKOUT') OVER (PARTITION BY s.booking_id, s.deliveries_before) AS pending_at`,
-    `    FROM seq s`,
     `)`,
     `SELECT x.user_id, max(x.agent_name) AS agent_name, ${opDaySql("x.at")} AS day, ${opShiftSql("x.at")} AS shift, x.ct AS change_type, ${lisbonHourSql("x.at")} AS hour,`,
     `       count(*) AS n,`,
     `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND (x.mk = 'arrumar' OR (x.mk = 'antigo' AND x.prev_cat = 'CHECK_IN'))) AS parking_moves,`,
     `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.mk IN ('arrumar', 'parques', 'antigo')) AS moves,`,
-    `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.mk = 'lugar') AS spot_changes,`,
-    `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND CASE WHEN ${byRequest} THEN ${late("x.pending_at", lateReq)}`,
-    `                          WHEN x.sched_at IS NOT NULL THEN ${late("x.sched_at", lateTol)} ELSE FALSE END) AS late_deliveries,`,
-    `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND x.sched_at IS NULL) AS deliveries_without_schedule`,
-    `  FROM seq2 x`,
+    `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.mk = 'lugar') AS spot_changes`,
+    `  FROM seq x`,
     // 14 out 2026: o início de um movimento não é uma ação (nem conta nas ações, por hora ou por tipo)
     ` WHERE x.at >= ${from}::timestamp AND x.mk IS DISTINCT FROM 'inicio'`,
     // 49e: também por hora de Lisboa (a avaliação guarda as ações por hora do dia); nunca há mais linhas do que ações
@@ -228,13 +210,10 @@ export interface EngineActionCount {
   hour?: number;
   n: number;
   parkingMoves: number;
-  lateDeliveries: number;
   /** MOVEMENT que contam como movimento (levar ao parque + entre parques + antigos). Sem isto, todos os `n`. */
   moves?: number;
   /** MOVEMENT na mesma garagem (mudança de lugar) — não são movimentos. */
   spotChanges?: number;
-  /** CHECK_OUT sem hora marcada legível: o atraso mediu-se só pelo PENDING_CHECKOUT. */
-  deliveriesWithoutSchedule?: number;
 }
 
 const str = (v: unknown): string | null => {
@@ -264,10 +243,8 @@ export function mapEngineActionCountRow(r: Record<string, unknown>): EngineActio
     ...(Number.isInteger(hour) && hour >= 0 && hour <= 23 ? { hour } : {}),
     n: int(r.n),
     parkingMoves: int(r.parking_moves),
-    lateDeliveries: int(r.late_deliveries),
     ...(r.moves !== undefined ? { moves: int(r.moves) } : {}),
     ...(r.spot_changes !== undefined ? { spotChanges: int(r.spot_changes) } : {}),
-    ...(r.deliveries_without_schedule !== undefined ? { deliveriesWithoutSchedule: int(r.deliveries_without_schedule) } : {}),
   };
 }
 

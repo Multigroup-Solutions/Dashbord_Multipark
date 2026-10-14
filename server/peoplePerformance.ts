@@ -404,8 +404,8 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
         recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, spotChanges: d.spotChanges ?? 0, cancels: d.cancels,
         checkingIn: Number(byType.CHECKING_IN ?? 0), checkingOut: Number(byType.CHECKING_OUT ?? 0),
         created: Number(byType.CREATED ?? 0), updated: Number(byType.UPDATE ?? 0),
-        // 14 out 2026: atrasos à entrada e entregas atrasadas em colunas separadas
-        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: lateArrivalsOf(d), lateDeliveries: d.lateServices, complaintsAgainst: d.complaints, accidents: d.accidents,
+        // tarefa 62: só os atrasos ao trabalho (lateArrivalsOf — nos dias antigos o delays incluía entregas); a entrega atrasada saiu
+        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: lateArrivalsOf(d), complaintsAgainst: d.complaints, accidents: d.accidents,
       });
     }
     if (!mRows.length) notes.push("Sem avaliação diária guardada neste período (a Multipark e as horas entram pela avaliação, recalculada todas as noites).");
@@ -414,44 +414,49 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   // ── GPS do Zello (km, velocidade) ──
   // 14 out 2026: o limite vem de Definições (120 km/h por omissão — antes da tabela
   // `speed_limits`, sem ecrã: sem ela o limite era nulo e os dias acima davam sempre 0).
+  // Tarefa 62: com a trava da linha GPS (o limiar com que cada linha foi recolhida; sem ele, 132).
   let speedLimit: number | null = null;
   try {
     const { speedThreshold } = await import("./dayActivity");
     speedLimit = await speedThreshold();
   } catch { /* sem limite */ }
   let approxSpeedDays = 0;
+  let lockedSpeedDays = 0;
   if (speedLimit == null && (o.group === "drivers" || o.group === "teamleaders")) notes.push("Não deu para ler o limite de velocidade: os dias acima do limite ficam a 0 nesta leitura.");
   if (ids.length && o.group !== "office" && o.group !== "supervision") {
     const idList = sql.join(ids.map((x) => sql`${x}`), sql`, `);
     const gps = [
-      ...rowsOf(await db.execute(sql`SELECT s.employeeId, s.day, s.km, s.maxSpeed, s.violations, s.points, h.metricsVersion FROM driver_day_shares s
+      ...rowsOf(await db.execute(sql`SELECT s.employeeId, s.day, s.km, s.maxSpeed, s.violations, s.points, h.metricsVersion, h.speedThresholdKmh FROM driver_day_shares s
           LEFT JOIN daily_driver_history h ON h.id = s.historyId
           WHERE s.day >= ${r.from} AND s.day <= ${r.to} AND s.employeeId IN (${idList})`).catch(() => [[]])),
       ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.totalKm AS km, h.maxSpeed, h.speedViolations AS violations,
-            h.gpsPointsCount AS points, h.metricsVersion FROM daily_driver_history h
+            h.gpsPointsCount AS points, h.metricsVersion, h.speedThresholdKmh FROM daily_driver_history h
           WHERE h.employeeId IN (${idList}) AND DATE(h.date) >= ${r.from} AND DATE(h.date) <= ${r.to}
             AND NOT EXISTS (SELECT 1 FROM driver_day_shares s WHERE s.historyId = h.id)`).catch(() => [[]])),
     ];
     // uma pessoa com dois PDAs (ou um PDA e o telemóvel) no mesmo dia: UM dia com GPS e UM dia acima do limite
-    const days = new Map<string, { emp: number; day: string; km: number; max: number; over: boolean; approx: boolean; gps: boolean }>();
+    const days = new Map<string, { emp: number; day: string; km: number; max: number; over: boolean; approx: boolean; locked: boolean; gps: boolean }>();
     for (const g of gps) {
       const emp = Number(g.employeeId), day = dayStr(g.day);
       const k = `${emp}|${day}`;
-      const x = days.get(k) ?? { emp, day, km: 0, max: 0, over: false, approx: false, gps: false };
+      const x = days.get(k) ?? { emp, day, km: 0, max: 0, over: false, approx: false, locked: false, gps: false };
       const km = Number(g.km ?? 0), max = Number(g.maxSpeed ?? 0);
-      const over = gpsDayOverLimit({ metricsVersion: g.metricsVersion, maxSpeed: max }, speedLimit);
+      const over = gpsDayOverLimit({ metricsVersion: g.metricsVersion, maxSpeed: max, speedThresholdKmh: g.speedThresholdKmh }, speedLimit);
       x.km += km;
       x.max = Math.max(x.max, max);
       x.over = x.over || over.over;
       x.approx = x.approx || over.approx;
+      x.locked = x.locked || over.locked;
       x.gps = x.gps || km > 0 || Number(g.points ?? 0) > 0;
       days.set(k, x);
     }
     for (const x of days.values()) {
       if (x.gps) markDay(gpsDaySet, x.emp, x.day);
       if (x.approx && bucketFor(x.emp, x.day)) approxSpeedDays += 1;
+      if (x.locked && !x.over && bucketFor(x.emp, x.day)) lockedSpeedDays += 1;
       put(x.emp, x.day, { km: Math.round(x.km * 10) / 10, gpsDays: x.gps ? 1 : 0, maxSpeed: x.max, overLimitDays: x.over ? 1 : 0 });
     }
+    if (lockedSpeedDays) notes.push(`Dias acima do limite: ${lockedSpeedDays} dia(s) com a máxima acima do limite de hoje não contam porque foram recolhidos com um limite mais largo (antes de 120 km/h sem tolerância, a 132): esses excessos nunca foram confirmados. Contam depois de re-divididos (Atividade diária → Histórico Diário → Forçar re-divisão).`);
     if (approxSpeedDays) notes.push(`Dias acima do limite: ${approxSpeedDays} dia(s) recolhido(s) antes de 14 out 2026 contam pela velocidade máxima do dia (sem o filtro de picos nem os pontos seguidos); os novos já vêm sem picos falsos e só com excessos confirmados. Para refazer um dia: Atividade diária → Histórico Diário → Forçar re-divisão.`);
 
     // ── 14 out 2026: dias de trabalho sem GPS, e porquê (Zello não ligado à pessoa?) ──
