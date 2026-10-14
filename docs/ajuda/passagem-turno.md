@@ -2,7 +2,7 @@
 modulo: passagem_turno
 titulo: Passagem de turno
 rotas: /passagem-turno
-palavras: sem passagem de turno, resumir agora, resumo desatualizado, resumo ia, resumo da ia, entregar a passagem, mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
+palavras: na fila há, em entrega há, em recolha há, cronómetro, cor da meta, sem passagem de turno, resumir agora, resumo desatualizado, resumo ia, resumo da ia, entregar a passagem, mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
 ---
 # Passagem de turno
 
@@ -52,8 +52,9 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
   - **Ver por parque e garagem** abre a divisão antiga.
 - **Pendentes que se arrastam** e **Resumo da semana** contam só os pendentes da passagem: PDAs ainda com check-in e notas do team leader. Ocorrências, reclamações e perdidos não são da passagem e já não aparecem aqui. Os resumos de semanas anteriores, que ainda falavam deles, deixam de se mostrar; o próximo sai na segunda-feira.
 - Os que já passaram a hora de saída.
-- **Operações em curso** (com "desde" quando a hora existe): **Em recolha (cliente a caminho)** — o cliente ligou para a recolha; **Em movimento**; **Na fila** — o cliente ligou a pedir o carro (pendente); **Em entrega** — o condutor já pegou no carro e saiu do parque (a caminho do terminal ou lá à espera do cliente; sem GPS ao vivo não se sabe se já chegou); **No terminal** — só quando o condutor carregou em "Cheguei" nesta entrega (quase não se usa). **À espera das malas** aparece como etiqueta ao lado, quando é deste pedido.
-- Na lista **Entregas pendentes (na fila)** do rascunho só entram os carros **na fila**, com a hora do pedido: um carro em entrega já saiu do parque.
+- **Operações em curso**, cada uma com um **cronómetro** que anda sozinho (de 30 em 30 s) e a hora em que começou: **Em recolha há X** — o cliente ligou para a recolha; **Em movimento há X**; **Na fila há X** — o cliente ligou a pedir o carro (pendente); **Em entrega há X** — o condutor já pegou no carro e saiu do parque (a caminho do terminal ou lá à espera do cliente; sem GPS ao vivo não se sabe se já chegou); **No terminal** — só quando o condutor carregou em "Cheguei" nesta entrega (quase não se usa). **À espera das malas** aparece como etiqueta ao lado, quando é deste pedido.
+  - Só **Na fila** tem cor: fica **âmbar** a partir da meta da entrega (**Definições → Parâmetros → "Tempos: meta da entrega"**, 15 min por omissão) e **vermelho** a partir do dobro. **Em entrega** não tem cor: inclui a espera pelo cliente no terminal, que não é tempo nosso.
+- Na lista **Entregas pendentes (na fila)** do rascunho só entram os carros **na fila**: um carro em entrega já saiu do parque. Cada um diz **"na fila há X min"** (com a hora do pedido entre parênteses), com as mesmas cores.
 - **Próximas entregas e recolhas** (4, 8, 12 ou 24 h) com voo e ETA do voo.
 - **Caixa do turno por fechar/validar** (caixa fechada, caixa validada, condutor validado).
 - **Bloqueios e horário de amanhã** dos parques. Às 02:30 "amanhã" ainda conta a partir da noite de ontem.
