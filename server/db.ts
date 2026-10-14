@@ -6083,7 +6083,9 @@ export async function getAgentHistoryFromDb(opts: {
   agentUserId: string;
   history: Array<{
     id: string;
+    /** 14 out 2026: o MOVEMENT que é só mudança de lugar vem como SPOT_CHANGE */
     changeType: string;
+    moveKind: "park" | "exit" | "spot" | null;
     actionTime: string;
     remarks?: string;
     agentName: string;
@@ -6125,10 +6127,16 @@ export async function getAgentHistoryFromDb(opts: {
     agentUserId: r.agentUserId, modifiedFields: r.modifiedFields, platform: r.platform, bookingExternalId: r.bookingExternalId,
     bookingStatus: r.bookingStatus, bookingCheckIn: r.checkIn, bookingCheckOut: r.checkOut, bookingParkName: r.parkName, bookingLicensePlate: r.licensePlate,
   }));
+  // 14 out 2026: cada MOVEMENT diz se tocou no parque (movimento) ou se foi só mudança de
+  // lugar (SPOT_CHANGE) — a mesma regra das contagens (shared/multiparkMovements.ts)
+  const { readMoveKinds } = await import("./multiparkDb/movements");
+  const { actionKeyOf } = await import("../shared/multiparkMovements");
+  const kinds = await readMoveKinds(rows.map((r) => ({ id: r.id, bookingId: r.bookingExternalId ?? "", changeType: r.changeType, actionTime: r.actionTime ?? "" })));
 
   const history = rows.map((r) => ({
     id: r.id,
-    changeType: r.changeType ?? "",
+    changeType: actionKeyOf(r.changeType ?? "", kinds?.get(r.id) ?? null),
+    moveKind: String(r.changeType ?? "").toUpperCase() === "MOVEMENT" ? kinds?.get(r.id) ?? null : null,
     actionTime: r.actionTime ?? "",
     remarks: r.remarks ?? undefined,
     agentName: r.agentName ?? "",

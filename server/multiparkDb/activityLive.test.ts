@@ -39,8 +39,10 @@ describe("Atividade do Dia — ações ao vivo", () => {
     expect(sql).toContain(`h."actionTime" >= $1::timestamp AND h."actionTime" < $2::timestamp`);
     expect(sql).toContain(`date_trunc('minute', h."actionTime")`);
     expect(sql).toContain(`COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", ''))`);
-    expect(sql).toContain(`lower(trim(p."city")) IN ($3, $4)`);
-    expect(params).toEqual([W.from, W.to, "lisboa", "lisbon", ACTIVITY_ROW_LIMIT]);
+    expect(sql).toContain(`lower(trim(p."city")) IN ($4, $5)`);
+    // 14 out 2026: a sequência das reservas (para separar as mudanças de lugar) lê desde 3 dias antes
+    expect(params).toEqual([W.from, W.to, "2026-09-23 23:00:00", "lisboa", "lisbon", ACTIVITY_ROW_LIMIT]);
+    expect(sql).toContain(`THEN 'SPOT_CHANGE' ELSE upper(h."changeType"::text) END AS change_type`);
     expect(buildActivityActionsSql({ ...W, cities: [] }).sql).toContain("FALSE");
     expect(buildActivityActionsSql(W).sql).not.toContain(`p."city"`);
   });
@@ -66,8 +68,8 @@ describe("Atividade do Dia — ações ao vivo", () => {
     expect(sql).toContain(`(h."userId" IN ($3) OR lower(trim(COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", '')))) IN ($4))`);
     expect(params.slice(0, 4)).toEqual([W.from, W.to, "u1", "ana silva"]);
     expect(buildActivityDetailSql(W).sql).toContain("FALSE");
-    expect(mapActivityDetailRow({ booking_id: "b1", change_type: "check_out", action_time: "2026-09-27 10:00:00", agent_name: "Ana", plate: "AA-00-BB", booking_code: "MP123", park_name: "P1" }))
-      .toEqual({ bookingExternalId: "b1", changeType: "CHECK_OUT", actionTime: "2026-09-27T10:00:00.000Z", agentName: "Ana", licensePlate: "AA-00-BB", bookingNumber: "MP123", parkName: "P1" });
+    expect(mapActivityDetailRow({ id: "h1", booking_id: "b1", change_type: "check_out", action_time: "2026-09-27 10:00:00", agent_name: "Ana", plate: "AA-00-BB", booking_code: "MP123", park_name: "P1" }))
+      .toEqual({ id: "h1", bookingExternalId: "b1", changeType: "CHECK_OUT", actionTime: "2026-09-27T10:00:00.000Z", agentName: "Ana", licensePlate: "AA-00-BB", bookingNumber: "MP123", parkName: "P1" });
     // sem quem → nem consulta
     expect(await getActivityDetailLive({ ...W })).toEqual({ available: true, data: [] });
     expect(queryMock).not.toHaveBeenCalled();

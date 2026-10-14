@@ -113,7 +113,8 @@ describe("motor (dia operacional completo)", () => {
     actions: [
       act("B1", "CHECK_IN", "2026-09-24 14:30:00"), // 15:30 Lisboa → noite
       act("B1", "MOVEMENT", "2026-09-24 14:50:00"), // levar ao parque (+5)
-      act("B2", "MOVEMENT", "2026-09-25 00:30:00"), // 01:30 Lisboa → ainda dia 24, noite (+2)
+      act("B2", "PENDING_CHECKOUT", "2026-09-25 00:20:00", "Cliente"),
+      act("B2", "MOVEMENT", "2026-09-25 00:30:00"), // 01:30 Lisboa → ainda dia 24, noite; tira do parque para a entrega (+2)
       act("B3", "PENDING_CHECKOUT", "2026-09-24 20:00:00", "Cliente"),
       act("B3", "CHECK_OUT", "2026-09-24 20:40:00"), // entrega atrasada (+3, −5)
       act("B4", "MOVEMENT", "2026-09-25 02:30:00"), // 03:30 Lisboa → dia 25, fora
@@ -150,7 +151,7 @@ describe("motor (dia operacional completo)", () => {
     const fromCounts = computeEmployeeDays({ ...base, actions: [], actionCounts: counts });
     expect(fromCounts.rows[0].metrics).toEqual(fromRows.rows[0].metrics);
     expect(fromCounts.rows[0].actionsByType).toEqual(fromRows.rows[0].actionsByType);
-    expect(fromCounts.unresolved.get("2026-09-24")?.get("agent:cliente")?.actions).toBe(1);
+    expect(fromCounts.unresolved.get("2026-09-24")?.get("agent:cliente")?.actions).toBe(2);
   });
 
   it("contagens vivas: dia/turno, levar ao parque e entregas atrasadas vêm da BD; ocorrências da app contam como reportadas", () => {

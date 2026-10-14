@@ -113,7 +113,7 @@ export function RulesLegend() {
 // ─── Métricas ────────────────────────────────────────────────────────────────
 
 const SHOWN_METRICS: MetricKey[] = [
-  "hoursWorked", "scheduledHours", "suspiciousHours", "actions", "recolhas", "entregas", "movements", "parkingMoves",
+  "hoursWorked", "scheduledHours", "suspiciousHours", "actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges",
   "weightedActions", "delays", "lateServices", "speedingEvents", "complaints", "accidents", "incidentsReported", "penaltyPoints", "cost",
 ];
 

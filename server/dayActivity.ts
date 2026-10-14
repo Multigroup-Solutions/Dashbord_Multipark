@@ -155,6 +155,8 @@ export async function loadActivityActions(
   return { rows: [...(await readers.legacy(parts.legacy)), ...live.data.rows], source: "misto", notice };
 }
 
+// 14 out 2026: o MOVEMENT que é só mudança de lugar chega como SPOT_CHANGE (activityLive) e
+// cai nas "outras" ações — conta como ação, não como movimento (shared/multiparkMovements.ts).
 const CT: Record<string, "checkins" | "checkouts" | "movements" | "cancels"> = {
   CHECK_IN: "checkins", CHECKIN: "checkins",
   CHECK_OUT: "checkouts", CHECKOUT: "checkouts",
@@ -563,11 +565,12 @@ async function legacyDetail(range: { start: string; end: string }, w: { userIds?
 
 async function actionsOf(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, range: { start: string; end: string }, who: ReturnType<typeof sql>) {
   return rowsOf(await db.execute(sql`
-    SELECT h.bookingExternalId, h.changeType, h.actionTime, h.agentName, b.licensePlate, b.bookingNumber, b.parkName
+    SELECT h.historyId, h.bookingExternalId, h.changeType, h.actionTime, h.agentName, b.licensePlate, b.bookingNumber, b.parkName
       FROM multipark_booking_history h LEFT JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
      WHERE h.actionTime >= ${range.start} AND h.actionTime < ${range.end} AND ${who}
        AND ${bookingHistoryScope(sql`h.bookingExternalId`)}
      ORDER BY h.actionTime LIMIT 500`)).map((r) => ({
+    id: String(r.historyId ?? ""),
     bookingExternalId: String(r.bookingExternalId ?? ""), changeType: String(r.changeType ?? ""), actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
     agentName: r.agentName ? String(r.agentName) : null, licensePlate: r.licensePlate ? String(r.licensePlate) : null,
     bookingNumber: r.bookingNumber ? String(r.bookingNumber) : null, parkName: r.parkName ? String(r.parkName) : null,

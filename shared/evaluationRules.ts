@@ -2,7 +2,11 @@
  * REGRAS da avaliação (individual e operacional) — o ÚNICO sítio com pontos.
  *
  * Regras definidas pelo dono (24 set 2026):
- *   +2   por cada movimento entre parques
+ *   +2   por cada movimento que toca no parque (14 out 2026: "os movimentos,
+ *        para os pontos, eram os que tocavam no parque") — hoje, tirar o carro
+ *        do parque para a entrega. As MUDANÇAS DE LUGAR (o carro já no parque,
+ *        só muda de lugar/garagem/fila) não contam como movimento nem dão
+ *        pontos; contam como ação. Regra e dedução em shared/multiparkMovements.ts
  *   +3   por cada recolha ou entrega
  *   +5   pelo 1.º movimento depois de uma recolha (levar o carro ao parque) —
  *        SUBSTITUI os +2 desse movimento, não soma
@@ -26,7 +30,7 @@
 // ─── Pontos (configuráveis) ──────────────────────────────────────────────────
 
 export const EVALUATION_POINTS = {
-  /** Movimento entre parques (changeType MOVEMENT). */
+  /** Movimento que toca no parque e não é o "levar ao parque" (tirar para a entrega). As mudanças de lugar não contam. */
   movement: 2,
   /** Recolha (CHECK_IN) ou entrega (CHECK_OUT). */
   pickupOrDelivery: 3,
@@ -114,10 +118,12 @@ export interface DayMetrics {
   actionsNight: number;
   recolhas: number;
   entregas: number;
-  /** Todos os movimentos (inclui os `parkingMoves`). */
+  /** Movimentos que tocam no parque (inclui os `parkingMoves`); as mudanças de lugar NÃO entram aqui (14 out 2026). */
   movements: number;
   /** Movimentos que foram o 1.º depois de uma recolha (levar ao parque). */
   parkingMoves: number;
+  /** Mudanças de lugar (MOVEMENT com o carro já no parque): contam como ação, não como movimento nem pontos. */
+  spotChanges: number;
   cancels: number;
   otherActions: number;
   /** Pontos das ações (movimentos + recolhas/entregas + levar ao parque). */
@@ -143,7 +149,7 @@ export type MetricKey = keyof DayMetrics;
 
 export const METRIC_KEYS: MetricKey[] = [
   "hoursWorked", "suspiciousHours", "scheduledHours", "pontoEvents", "cost",
-  "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves", "cancels", "otherActions",
+  "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "cancels", "otherActions",
   "weightedActions", "speedingEvents", "delays", "lateServices", "complaints", "accidents",
   "incidentsReported", "incidentsAgainst", "penaltyPoints", "bonusPoints",
 ];
@@ -160,8 +166,9 @@ export const METRIC_LABELS: Record<MetricKey, string> = {
   actionsNight: "Ações noite (15h–03h)",
   recolhas: "Recolhas",
   entregas: "Entregas",
-  movements: "Movimentos",
+  movements: "Movimentos (tocam no parque)",
   parkingMoves: "Levar ao parque (1.º movimento após recolha)",
+  spotChanges: "Mudanças de lugar (ação, não é movimento)",
   cancels: "Cancelamentos",
   otherActions: "Outras ações",
   weightedActions: "Pontos das ações",
@@ -207,7 +214,7 @@ export interface RuleLine {
 
 /** Regras, pela ordem da legenda. `count` lê as métricas do dia (ou da soma). */
 export const EVALUATION_RULES: Array<{ key: Exclude<RuleKey, "manual">; label: string; count: (m: DayMetrics) => number }> = [
-  { key: "movement", label: "Movimento entre parques", count: (m) => Math.max(0, m.movements - m.parkingMoves) },
+  { key: "movement", label: "Movimento que toca no parque (tirar para a entrega)", count: (m) => Math.max(0, m.movements - m.parkingMoves) },
   { key: "pickupOrDelivery", label: "Recolha ou entrega", count: (m) => m.recolhas + m.entregas },
   { key: "firstMoveAfterPickup", label: "1.º movimento após recolha (levar ao parque)", count: (m) => m.parkingMoves },
   { key: "speeding", label: "Excesso de velocidade", count: (m) => m.speedingEvents },
@@ -281,7 +288,7 @@ export function perHourMetrics(m: DayMetrics, score: Pick<Score, "totalPoints"> 
 export interface AdjustmentLike { metric: string; delta: number | string; voidedAt?: string | null }
 
 const NON_NEGATIVE = new Set<MetricKey>(METRIC_KEYS.filter((k) => k !== "bonusPoints"));
-const ACTION_PARTS: MetricKey[] = ["recolhas", "entregas", "movements", "cancels", "otherActions"];
+const ACTION_PARTS: MetricKey[] = ["recolhas", "entregas", "movements", "spotChanges", "cancels", "otherActions"];
 
 /**
  * Aplica ajustes (deltas) sobre as métricas CALCULADAS, sem as alterar:

@@ -19,7 +19,9 @@ export interface MovementPersonRow {
   agentName: string | null;
   recolhas: number;
   entregas: number;
+  /** movimentos que tocam no parque (levar ao parque, tirar para a entrega) */
   movements: number;
+  /** mudanças de lugar (o carro já no parque): ações, não movimentos */
   spotChanges: number;
   bookings: number;
   total: number;
@@ -56,7 +58,8 @@ export async function loadMovementPeople(opts: { from: string; to: string; citie
       total: t.total, byType: t.byType, lastAt: t.lastAt, km: null,
     };
   });
-  if (opts.drivers) rows = rows.filter((x) => x.recolhas + x.entregas + x.movements > 0);
+  // condutores = quem mexeu em carros: recolhas, entregas, movimentos ou mudanças de lugar (14 out 2026: já não somam aos movimentos)
+  if (opts.drivers) rows = rows.filter((x) => x.recolhas + x.entregas + x.movements + x.spotChanges > 0);
 
   // km do GPS (as partes de PDA partilhado de cada pessoa; sem partes, a linha do dia)
   const ids = Array.from(new Set(rows.map((x) => x.employeeId).filter((x): x is number => x != null)));

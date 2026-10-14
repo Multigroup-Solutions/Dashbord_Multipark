@@ -73,7 +73,7 @@ describe("motor — contagens agregadas", () => {
 
   it("linha → contagem", () => {
     expect(mapEngineActionCountRow({ user_id: "u1", agent_name: " Ana ", day: "2026-09-02", shift: "morning", change_type: "movement", n: "4", parking_moves: "1", late_deliveries: null }))
-      .toEqual({ agentUserId: "u1", agentName: "Ana", day: "2026-09-02", shift: "morning", changeType: "MOVEMENT", n: 4, parkingMoves: 1, lateDeliveries: 0 });
+      .toEqual({ agentUserId: "u1", agentName: "Ana", day: "2026-09-02", shift: "morning", changeType: "MOVEMENT", n: 4, parkingMoves: 1, spotMoves: 0, lateDeliveries: 0 });
     expect(mapEngineActionCountRow({ user_id: null, day: "2026-09-02", shift: "x", change_type: null, n: 1 }).shift).toBe("night");
   });
 
@@ -118,7 +118,8 @@ describe("agregados por agente", () => {
     expect(sql).toContain(`count(DISTINCT h."bookingId") AS bookings`);
     expect(sql).toContain(`GROUP BY h."userId"\n`);
     expect(sql).toContain(`NULL AS day`);
-    expect(params).toEqual([w.from, w.to, 10_000]);
+    // 14 out 2026: a sequência das reservas (mudanças de lugar) lê desde 3 dias antes
+    expect(params).toEqual(["2026-08-29 02:00:00", w.from, w.to, 10_000]);
   });
 
   it("por dia, com cidades e agentes — tudo parametrizado", () => {
@@ -126,17 +127,17 @@ describe("agregados por agente", () => {
     const { sql, params } = buildAgentHistoryAggSql(f({ byDay: true, cities: ["Lisboa"], userIds: ["u1", evil, "u1", " "] }));
     expect(() => assertReadOnlySql(sql)).not.toThrow();
     expect(sql).not.toContain("DROP");
-    expect(sql).toContain(`h."userId" IN ($3, $4)`);
-    expect(sql).toContain(`lower(trim(p."city")) IN ($5, $6)`);
+    expect(sql).toContain(`h."userId" IN ($4, $5)`);
+    expect(sql).toContain(`lower(trim(p."city")) IN ($6, $7)`);
     expect(sql).toContain(`GROUP BY h."userId", 3`);
-    expect(params).toEqual([w.from, w.to, "u1", evil, "lisboa", "lisbon", 10_000]);
+    expect(params).toEqual(["2026-08-29 02:00:00", w.from, w.to, "u1", evil, "lisboa", "lisbon", 10_000]);
   });
 
   it("âmbito vazio ou sem agentes → FALSE; ids limitados", () => {
     expect(buildAgentHistoryAggSql(f({ cities: [] })).sql).toContain("AND FALSE");
     expect(buildAgentHistoryAggSql(f({ userIds: [] })).sql).toContain("AND FALSE");
     const many = Array.from({ length: MAX_AGENT_IDS + 50 }, (_, i) => `u${i}`);
-    expect(buildAgentHistoryAggSql(f({ userIds: many })).params).toHaveLength(2 + MAX_AGENT_IDS + 1);
+    expect(buildAgentHistoryAggSql(f({ userIds: many })).params).toHaveLength(3 + MAX_AGENT_IDS + 1);
   });
 
   it("fases assinadas na reserva, ocorrências e avaliações", () => {
@@ -165,11 +166,12 @@ describe("agregados por agente", () => {
     expect(rows).toHaveLength(2);
     const u1 = rows.find((r) => r.agentUserId === "u1")!;
     expect(u1).toMatchObject({
-      agentName: "Ana S.", total: 9, recolhas: 3, movements: 4, entregas: 2, spotChanges: 1, bookings: 5,
+      // 14 out 2026: das 4 MOVEMENT, 1 foi só mudança de lugar — fica nas ações (total), não nos movimentos
+      agentName: "Ana S.", total: 9, recolhas: 3, movements: 3, entregas: 2, spotChanges: 1, bookings: 5,
       firstAt: "2026-09-02T07:00:00.000Z", lastAt: "2026-09-02T18:30:00.000Z", platforms: ["MOBILE", "WEB"],
       checkInsSigned: 2, checkOutsSigned: 1, occurrencesCreated: 1, occurrencesResolved: 2, reviews: 2, reviewAvg: 4.5,
     });
-    expect(u1.byType).toEqual({ CHECK_IN: 3, MOVEMENT: 4, CHECK_OUT: 2 });
+    expect(u1.byType).toEqual({ CHECK_IN: 3, MOVEMENT: 3, SPOT_CHANGE: 1, CHECK_OUT: 2 });
     expect(rows.find((r) => r.agentUserId === "u2")).toMatchObject({ agentName: "Rui", total: 0, checkInsSigned: 1 });
   });
 

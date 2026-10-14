@@ -122,7 +122,7 @@ export function periodTitle(period: PerfPeriod, anchor: string): string {
 
 export type PerfMetric =
   | "hours" | "workDays" | "evalPoints"
-  | "recolhas" | "entregas" | "movements" | "parkingMoves" | "cancels" | "checkingIn" | "checkingOut"
+  | "recolhas" | "entregas" | "movements" | "parkingMoves" | "spotChanges" | "cancels" | "checkingIn" | "checkingOut"
   | "created" | "updated" | "occurrences" | "speedAlerts" | "delays" | "complaintsAgainst" | "accidents"
   | "km" | "gpsDays" | "overLimitDays" | "maxSpeed"
   | "callsAnswered" | "callsMade" | "callbacks" | "waMessages" | "emails"
@@ -159,6 +159,8 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   entregas: { key: "entregas", label: "Entregas", source: "multipark" },
   movements: { key: "movements", label: "Movimentos", source: "multipark" },
   parkingMoves: { key: "parkingMoves", label: "Levar ao parque", source: "multipark" },
+  // 14 out 2026: o carro já no parque só muda de lugar — conta como ação, não como movimento (shared/multiparkMovements.ts)
+  spotChanges: { key: "spotChanges", label: "Mudanças de lugar", source: "multipark" },
   cancels: { key: "cancels", label: "Cancelamentos", source: "multipark" },
   checkingIn: { key: "checkingIn", label: "Pôs em recolha", source: "multipark" },
   checkingOut: { key: "checkingOut", label: "Pôs em entrega", source: "multipark" },
@@ -270,13 +272,13 @@ export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfM
   },
   teamleaders: {
     cards: ["hours", "recolhas", "entregas", "checkingIn", "checkingOut", "callsAnswered", "tlDays", "teamPeople"],
-    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
+    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "spotChanges", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
     chart: ["recolhas", "entregas", "checkingIn", "checkingOut"],
     weights: { evalPoints: 1, teamPoints: 1, checkingIn: 0.5, checkingOut: 0.5, updated: 0.5, returnFlights: 0.5, callsAnswered: 0.5, callsMade: 0.5, callMinutes: 0.2, waMessages: 0.2, cashCounts: 2, handovers: 2, extrasDia: 0.5, lostFound: 2, occurrences: 1 },
   },
   drivers: {
     cards: ["hours", "recolhas", "entregas", "movements", "km", "overLimitDays", "occurrences", "evalPoints"],
-    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "km", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "complaintsAgainst", "accidents"],
+    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "km", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "complaintsAgainst", "accidents"],
     chart: ["recolhas", "entregas", "movements"],
     weights: { evalPoints: 1, overLimitDays: -10, occurrences: 1 },
   },
@@ -460,9 +462,13 @@ export function rosterGroup(base: PerfGroup | null, roster: { days: number; tlDa
   return base;
 }
 
-/** 42c: "tem km e nenhum movimento" — o Zello/PDA e o agente da Multipark não estão na mesma ficha. PURA. */
-export function kmWithoutMoves(t: Pick<PerfTotals, "km" | "recolhas" | "entregas" | "movements">): boolean {
-  return t.km > 0 && t.recolhas + t.entregas + t.movements === 0;
+/**
+ * 42c: "tem km e nenhum movimento" — o Zello/PDA e o agente da Multipark não
+ * estão na mesma ficha. 14 out 2026: uma mudança de lugar também é mexer em
+ * carros (só não conta como movimento). PURA.
+ */
+export function kmWithoutMoves(t: Pick<PerfTotals, "km" | "recolhas" | "entregas" | "movements"> & Partial<Pick<PerfTotals, "spotChanges">>): boolean {
+  return t.km > 0 && t.recolhas + t.entregas + t.movements + (t.spotChanges ?? 0) === 0;
 }
 
 /** Abaixo disto de horas no período não há "por hora" (dá números absurdos). */

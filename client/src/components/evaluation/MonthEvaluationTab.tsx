@@ -433,13 +433,14 @@ function LiveMovementsCard({ from, to }: { from: string; to: string }) {
           : d.rows.length === 0 ? <p className="text-sm text-muted-foreground">Sem movimentos neste período.</p>
           : (
             <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
-              <table className="w-full text-sm min-w-[760px]">
+              <table className="w-full text-sm min-w-[840px]">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="p-2">Pessoa / agente</th>
                     <th className="p-2 text-right" title="Todas as ações registadas">Ações</th>
                     <th className="p-2 text-right" title="Recolhas (check-in) · início da recolha">Check-in</th>
-                    <th className="p-2 text-right">Movimentos</th>
+                    <th className="p-2 text-right" title="Levar ao parque e tirar do parque para a entrega (os que dão pontos)">Movimentos</th>
+                    <th className="p-2 text-right" title="O carro já no parque só mudou de lugar: conta nas ações, não nos movimentos nem nos pontos">Mudanças de lugar</th>
                     <th className="p-2 text-right" title="Entregas (check-out) · pedidos de entrega">Check-out</th>
                     <th className="p-2 text-right" title="Reservas diferentes">Reservas</th>
                     <th className="p-2 text-right" title="Reservas com o seu id no check-in / check-out">Assinados</th>
@@ -460,6 +461,7 @@ function LiveMovementsCard({ from, to }: { from: string; to: string }) {
                       <td className="p-2 text-right tabular-nums">{r.total}</td>
                       <td className="p-2 text-right tabular-nums">{r.recolhas}{(r.byType.CHECKING_IN ?? 0) > 0 && <span className="text-muted-foreground"> · {r.byType.CHECKING_IN}</span>}</td>
                       <td className="p-2 text-right tabular-nums">{r.movements}</td>
+                      <td className="p-2 text-right tabular-nums">{r.spotChanges || <span className="text-muted-foreground">·</span>}</td>
                       <td className="p-2 text-right tabular-nums">{r.entregas}{(r.byType.PENDING_CHECKOUT ?? 0) > 0 && <span className="text-muted-foreground"> · {r.byType.PENDING_CHECKOUT}</span>}</td>
                       <td className="p-2 text-right tabular-nums">{r.bookings}</td>
                       <td className="p-2 text-right tabular-nums">{r.checkInsSigned}/{r.checkOutsSigned}</td>

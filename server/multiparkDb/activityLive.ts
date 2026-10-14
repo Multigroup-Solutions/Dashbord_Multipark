@@ -21,6 +21,7 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
+import { moveIsSpotSql, moveLookbackFrom, moveSeqCteSql, readMoveKinds, withMoveKinds } from "./movements";
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
 
@@ -67,20 +68,28 @@ const int = (v: unknown): number => {
 
 /**
  * Ações de todos os agentes em [from, to), agregadas ao minuto (chega para
- * o turno: no horário / fora do horário). PURA.
+ * o turno: no horário / fora do horário). 14 out 2026: o MOVEMENT que é só
+ * mudança de lugar vem como SPOT_CHANGE (conta nas ações, não nos
+ * movimentos — regra em shared/multiparkMovements.ts). PURA.
  */
 export function buildActivityActionsSql(opts: { from: string; to: string; cities?: string[]; limit?: number }): { sql: string; params: SqlParam[] } {
   const params = new ParamList();
+  const from = params.add(opts.from);
+  const to = params.add(opts.to);
+  const lb = params.add(moveLookbackFrom(opts.from));
   const conds = [
-    `h."actionTime" >= ${params.add(opts.from)}::timestamp`,
-    `h."actionTime" < ${params.add(opts.to)}::timestamp`,
+    `h."actionTime" >= ${from}::timestamp`,
+    `h."actionTime" < ${to}::timestamp`,
   ];
   const city = cityCondition(opts.cities, params);
   if (city) conds.push(city);
   const sql = [
-    `SELECT h."userId" AS user_id, ${AGENT_NAME} AS agent_name, upper(h."changeType"::text) AS change_type,`,
+    `WITH ${moveSeqCteSql(lb, to)}`,
+    `SELECT h."userId" AS user_id, ${AGENT_NAME} AS agent_name,`,
+    `       CASE WHEN h."changeType"::text = 'MOVEMENT' AND ${moveIsSpotSql("sq.prev_cat", "sq.prev_any")} THEN 'SPOT_CHANGE' ELSE upper(h."changeType"::text) END AS change_type,`,
     `       ${ts(`date_trunc('minute', h."actionTime")`)} AS at, count(*) AS n`,
     `  FROM "History" h`,
+    `  LEFT JOIN seq sq ON sq.id = h."id"`,
     ...JOINS,
     ` WHERE ${conds.join(" AND ")}`,
     ` GROUP BY 1, 2, 3, 4`,
@@ -137,7 +146,7 @@ export function buildActivityDetailSql(opts: {
   const city = cityCondition(opts.cities, params);
   if (city) conds.push(city);
   const sql = [
-    `SELECT h."bookingId" AS booking_id, h."changeType"::text AS change_type, ${ts(`h."actionTime"`)} AS action_time,`,
+    `SELECT h."id" AS id, h."bookingId" AS booking_id, h."changeType"::text AS change_type, ${ts(`h."actionTime"`)} AS action_time,`,
     `       ${AGENT_NAME} AS agent_name, v."licensePlate" AS plate, NULLIF(b."allocation", '') AS booking_code, p."name" AS park_name`,
     `  FROM "History" h`,
     ...JOINS,
@@ -152,6 +161,7 @@ export function buildActivityDetailSql(opts: {
 /** Mesmo formato da gaveta antiga (cópia local). PURA. */
 export function mapActivityDetailRow(r: Record<string, unknown>) {
   return {
+    id: String(r.id ?? ""),
     bookingExternalId: String(r.booking_id ?? ""),
     changeType: String(r.change_type ?? "").toUpperCase(),
     actionTime: toIsoUtc(r.action_time) ?? String(r.action_time ?? ""),
@@ -161,7 +171,7 @@ export function mapActivityDetailRow(r: Record<string, unknown>) {
     parkName: str(r.park_name),
   };
 }
-export type ActivityDetailRow = ReturnType<typeof mapActivityDetailRow>;
+export type ActivityDetailRow = ReturnType<typeof mapActivityDetailRow> & { moveKind?: "park" | "exit" | "spot" | null };
 
 export async function getActivityDetailLive(
   opts: { from: string; to: string; userIds?: string[]; names?: string[]; cities?: string[] },
@@ -170,7 +180,10 @@ export async function getActivityDetailLive(
   return safeMultiparkRead("atividade do dia (detalhe)", async () => {
     if (!(opts.userIds ?? []).some((x) => String(x ?? "").trim()) && !(opts.names ?? []).some((x) => String(x ?? "").trim())) return [];
     const { sql, params } = buildActivityDetailSql(opts);
-    return (await query(sql, params)).map(mapActivityDetailRow);
+    const rows = (await query(sql, params)).map(mapActivityDetailRow);
+    // 14 out 2026: o MOVEMENT que é só mudança de lugar passa a SPOT_CHANGE (a mesma regra das contagens)
+    const kinds = await readMoveKinds(rows.map((r) => ({ id: r.id, bookingId: r.bookingExternalId, changeType: r.changeType, actionTime: r.actionTime })), query);
+    return withMoveKinds(rows, kinds);
   });
 }
 

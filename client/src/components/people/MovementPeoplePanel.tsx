@@ -1,8 +1,12 @@
 /**
  * Lote 42b — Pessoas → Condutores e agentes: primeiro a LISTA (uma linha por
  * pessoa, com os totais do período), depois o detalhe.
- *  - Condutores: recolhas, entregas, movimentos e km do GPS;
+ *  - Condutores: recolhas, entregas, movimentos, mudanças de lugar e km do GPS;
  *  - Agentes: todas as ações (reservas criadas, alterações, mudanças de lugar…).
+ * 14 out 2026 (Jorge): "Movimentos" = só os que tocam no parque (levar ao
+ * parque e tirar do parque para a entrega); "Mudanças de lugar" = o carro já
+ * no parque só muda de lugar — conta nas ações, não nos movimentos nem nos
+ * pontos (regra em shared/multiparkMovements.ts).
  * Clicar no NOME abre a ficha; clicar num NÚMERO abre a lista desses
  * movimentos. O filtro de cidade e marca é o do topo da app; aqui escolhe-se o
  * período e a pessoa. Quem gere o RH une/separa (Ligações) e tira da lista
@@ -16,7 +20,7 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
-import { movementLabel } from "@shared/multiparkMovements";
+import { MOVE_KIND_LABELS, SPOT_CHANGE_KEY, movementLabel, type MoveKind } from "@shared/multiparkMovements";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Th, useTableSort } from "@/components/SortableTable";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -41,11 +45,12 @@ type Row = {
   byType: Record<string, number>; lastAt: string | null; km: number | null;
 };
 
-/** O que cada coluna clicável mostra no detalhe (changeType da Multipark). */
+/** O que cada coluna clicável mostra no detalhe (changeType da Multipark; a mudança de lugar vem como SPOT_CHANGE). */
 const COLUMN_TYPES: Record<string, string[] | null> = {
   recolhas: ["CHECK_IN"],
   entregas: ["CHECK_OUT"],
   movements: ["MOVEMENT"],
+  spotChanges: [SPOT_CHANGE_KEY],
   total: null,
 };
 
@@ -66,6 +71,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
   const listQ = trpc.reviews.movementPeople.useQuery({ startDate: start, endDate: end, projectId, drivers: mode === "drivers" }, { enabled: valid, refetchOnWindowFocus: false });
   const data = listQ.data;
   const all = (data && data.available ? data.rows : []) as Row[];
+  const spotLabel = "Mudanças de lugar";
   const options = useMemo(() => all.map((r) => ({ value: r.key, label: `${r.name}${r.kind === "por_ligar" ? " (sem ficha)" : r.kind === "parceiro" ? " (parceiro)" : ""}` })), [all]);
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -77,7 +83,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
     onSuccess: () => { toast.success("Tirado da lista (fica como \"não é funcionário\"; desfaz-se no RH → Agentes)."); utils.reviews.movementPeople.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
-  const totals = useMemo(() => rows.reduce((s, r) => ({ recolhas: s.recolhas + r.recolhas, entregas: s.entregas + r.entregas, movements: s.movements + r.movements, total: s.total + r.total, km: s.km + (r.km ?? 0) }), { recolhas: 0, entregas: 0, movements: 0, total: 0, km: 0 }), [rows]);
+  const totals = useMemo(() => rows.reduce((s, r) => ({ recolhas: s.recolhas + r.recolhas, entregas: s.entregas + r.entregas, movements: s.movements + r.movements, spotChanges: s.spotChanges + (r.spotChanges ?? 0), total: s.total + r.total, km: s.km + (r.km ?? 0) }), { recolhas: 0, entregas: 0, movements: 0, spotChanges: 0, total: 0, km: 0 }), [rows]);
 
   const num = (r: Row, k: keyof typeof COLUMN_TYPES, label: string) => {
     const v = r[k as keyof Row] as number;
@@ -98,6 +104,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
           {mode === "drivers"
             ? "Quem recolheu, entregou ou moveu carros no período (lido ao vivo da Multipark) e os km do GPS do Zello."
             : "Todos os agentes da Multipark com ações no período: recolhas, entregas, movimentos, mudanças de lugar, reservas criadas e alterações."}
+          {" "}Movimentos = só os que tocam no parque (levar ao parque e tirar para a entrega). Mudanças de lugar = o carro já no parque muda de lugar: contam nas ações, não nos movimentos nem nos pontos.
           {" "}Cidade e marca: o filtro do topo. Clica no nome para abrir a ficha e num número para ver esses movimentos.
         </p>
       </CardHeader>
@@ -124,17 +131,17 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
           : rows.length === 0 ? <p className="text-sm text-muted-foreground">Ninguém com movimentos neste período{person || q ? " com esse filtro" : ""}.</p>
           : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[640px]">
+              <table className="w-full text-sm min-w-[720px]">
                 <thead><tr className="border-b text-left text-xs">
                   <Th k="name" label="Pessoa" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   {mode === "agents" && <Th k="total" label="Ações" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />}
                   <Th k="recolhas" label="Recolhas" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   <Th k="entregas" label="Entregas" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   <Th k="movements" label="Movimentos" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
+                  <Th k="spotChanges" label={spotLabel} align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   {mode === "drivers"
                     ? <Th k="km" label="Km (GPS)" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                     : <>
-                        <Th k="spotChanges" label="Mudanças de lugar" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                         <Th k="bookings" label="Reservas" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                         <Th k="lastAt" label="Última ação" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                       </>}
@@ -155,10 +162,10 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                       <td className="p-2 text-right">{num(r, "recolhas", "Recolhas")}</td>
                       <td className="p-2 text-right">{num(r, "entregas", "Entregas")}</td>
                       <td className="p-2 text-right">{num(r, "movements", "Movimentos")}</td>
+                      <td className="p-2 text-right">{num(r, "spotChanges", spotLabel)}</td>
                       {mode === "drivers"
                         ? <td className="p-2 text-right tabular-nums">{r.km != null ? r.km.toLocaleString("pt-PT") : <span className="text-muted-foreground">·</span>}</td>
                         : <>
-                            <td className="p-2 text-right tabular-nums">{r.spotChanges || <span className="text-muted-foreground">·</span>}</td>
                             <td className="p-2 text-right tabular-nums">{r.bookings}</td>
                             <td className="p-2 text-right text-xs text-muted-foreground whitespace-nowrap">{r.lastAt ? fmtPTDateTime(r.lastAt) : "—"}</td>
                           </>}
@@ -185,7 +192,8 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                   <td className="p-2 text-right tabular-nums">{totals.recolhas}</td>
                   <td className="p-2 text-right tabular-nums">{totals.entregas}</td>
                   <td className="p-2 text-right tabular-nums">{totals.movements}</td>
-                  {mode === "drivers" ? <td className="p-2 text-right tabular-nums">{Math.round(totals.km).toLocaleString("pt-PT")}</td> : <td colSpan={3} />}
+                  <td className="p-2 text-right tabular-nums">{totals.spotChanges}</td>
+                  {mode === "drivers" ? <td className="p-2 text-right tabular-nums">{Math.round(totals.km).toLocaleString("pt-PT")}</td> : <td colSpan={2} />}
                   {canManageRh && <td />}
                 </tr></tfoot>
               </table>
@@ -230,7 +238,7 @@ export function MovementDetailSheet({ target, from, to, onClose }: { target: Det
                   {history.map((h) => (
                     <div key={h.id} className="flex items-center justify-between gap-2 flex-wrap rounded bg-muted p-2">
                       <div className="flex items-center gap-2 flex-wrap min-w-0">
-                        <Badge variant="outline" className="text-xs">{movementLabel(h.changeType)}</Badge>
+                        <Badge variant="outline" className="text-xs">{h.moveKind && h.moveKind !== "spot" ? MOVE_KIND_LABELS[h.moveKind as MoveKind] : movementLabel(h.changeType)}</Badge>
                         <span>{h.booking?.licensePlate || "—"}</span>
                         <span className="text-muted-foreground">{h.booking?.parkName || ""}</span>
                       </div>

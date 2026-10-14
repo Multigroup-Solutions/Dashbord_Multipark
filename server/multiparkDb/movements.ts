@@ -38,7 +38,10 @@ import {
   operationalDayRangeUtc,
 } from "../../shared/lisbonDay";
 import { LATE_SERVICE_MAX_MINUTES, LATE_SERVICE_MINUTES } from "../../shared/evaluationRules";
-import { MOVEMENT_CHANGE_TYPES, type MovementChangeType } from "../../shared/multiparkMovements";
+import {
+  MOVEMENT_CHANGE_TYPES, MOVE_EXIT_AFTER, MOVE_SEQ_PARK_TYPES, MOVE_SEQ_TYPES, SPOT_CHANGE_KEY, actionKeyOf, moveKindsOf,
+  type MoveKind, type MovementChangeType,
+} from "../../shared/multiparkMovements";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -64,6 +67,44 @@ export const opShiftSql = (col: string) => {
   return `CASE WHEN ${h} >= ${OPERATIONAL_DAY_START_HOUR} AND ${h} < ${OPERATIONAL_NIGHT_START_HOUR} THEN 'morning' ELSE 'night' END`;
 };
 const ts = (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI:SS')`;
+
+// ─── Movimento × mudança de lugar (regra em shared/multiparkMovements.ts) ────
+// O mesmo que `moveKindsOf`, em SQL: a ação anterior da MESMA reserva decide.
+const sqlList = (xs: readonly string[]) => `(${xs.map((x) => `'${x}'`).join(", ")})`;
+/** recolha, entrega, movimento, cancelamento (o "levar ao parque" de sempre) */
+export const MOVE_PARK_CATS_SQL = sqlList(MOVE_SEQ_PARK_TYPES);
+/** as mesmas + pedido de entrega e início da entrega */
+export const MOVE_SEQ_CATS_SQL = sqlList(MOVE_SEQ_TYPES);
+const MOVE_EXIT_AFTER_SQL = sqlList(MOVE_EXIT_AFTER);
+/** A ação anterior (`prevPark` entre as primeiras, `prevAny` entre todas) faz deste MOVEMENT uma mudança de lugar? */
+export const moveIsSpotSql = (prevPark: string, prevAny: string) =>
+  `(${prevPark} IS DISTINCT FROM 'CHECK_IN' AND (${prevAny} IS NULL OR ${prevAny} NOT IN ${MOVE_EXIT_AFTER_SQL}))`;
+/** Dias de histórico lidos para trás para saber o que veio antes (uma recolha ou um pedido de entrega de dias antes). */
+export const MOVE_LOOKBACK_DAYS = 3;
+/**
+ * CTE `seq` (id, prev_cat, prev_any) com as ações que decidem o tipo de cada
+ * MOVEMENT, em [lb, to) — `lb` e `to` são marcadores já na ParamList. Junta-se
+ * por `seq.id = h."id"`. Sem filtro de cidade: a sequência é da reserva.
+ */
+export function moveSeqCteSql(lb: string, to: string): string {
+  const ct = `upper(s."changeType"::text)`;
+  return [
+    `seq AS (`,
+    `  SELECT s."id" AS id,`,
+    `         CASE WHEN ${ct} IN ${MOVE_PARK_CATS_SQL}`,
+    `              THEN lag(${ct}) OVER (PARTITION BY s."bookingId", (${ct} IN ${MOVE_PARK_CATS_SQL}) ORDER BY s."actionTime", s."id") END AS prev_cat,`,
+    `         lag(${ct}) OVER (PARTITION BY s."bookingId" ORDER BY s."actionTime", s."id") AS prev_any`,
+    `    FROM "History" s`,
+    `   WHERE s."actionTime" >= ${lb}::timestamp AND s."actionTime" < ${to}::timestamp`,
+    `     AND ${ct} IN ${MOVE_SEQ_CATS_SQL}`,
+    `)`,
+  ].join("\n");
+}
+/** Início (UTC) da leitura da sequência para uma janela que começa em `fromUtc` ("YYYY-MM-DD HH:MM:SS"). PURA. */
+export function moveLookbackFrom(fromUtc: string): string {
+  const ms = Date.parse(`${String(fromUtc).replace(" ", "T").slice(0, 19)}Z`);
+  return new Date(ms - MOVE_LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+}
 
 function cityCondition(cities: string[] | undefined, params: ParamList, col = `p."city"`): string | null {
   if (cities === undefined) return null;
@@ -108,6 +149,9 @@ export function movementWindow(startDay: string, endDay: string = startDay): Mov
  * changeType e — 49e — hora de Lisboa), com as MESMAS regras de evaluationCore.ts:
  *  - "levar ao parque" = MOVEMENT cuja ação anterior da MESMA reserva, entre
  *    recolha/entrega/movimento/cancelamento, foi uma recolha (CHECK_IN);
+ *  - "mudança de lugar" (14 out 2026) = MOVEMENT que não leva ao parque nem
+ *    tira do parque para a entrega (shared/multiparkMovements.ts): conta como
+ *    ação, não como movimento — `spot_moves`;
  *  - entrega atrasada = CHECK_OUT mais de LATE_SERVICE_MINUTES (e menos de
  *    LATE_SERVICE_MAX_MINUTES) depois do 1.º PENDING_CHECKOUT desde a entrega
  *    anterior da mesma reserva.
@@ -123,7 +167,8 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
   const from = params.add(opts.from);
   const late = params.add(LATE_SERVICE_MINUTES);
   const lateMax = params.add(LATE_SERVICE_MAX_MINUTES);
-  const cats = `('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL')`;
+  const cats = MOVE_PARK_CATS_SQL;
+  const seqCats = MOVE_SEQ_CATS_SQL;
   const sql = [
     `WITH h AS (`,
     `  SELECT h."id" AS id, h."bookingId" AS booking_id, h."userId" AS user_id,`,
@@ -136,6 +181,7 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
     `), seq AS (`,
     `  SELECT h.*,`,
     `         CASE WHEN h.ct IN ${cats} THEN lag(h.ct) OVER (PARTITION BY h.booking_id, (h.ct IN ${cats}) ORDER BY h.at, h.id) END AS prev_cat,`,
+    `         CASE WHEN h.ct IN ${seqCats} THEN lag(h.ct) OVER (PARTITION BY h.booking_id, (h.ct IN ${seqCats}) ORDER BY h.at, h.id) END AS prev_any,`,
     `         COALESCE(sum(CASE WHEN h.ct = 'CHECK_OUT' THEN 1 ELSE 0 END) OVER (PARTITION BY h.booking_id ORDER BY h.at, h.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS deliveries_before`,
     `    FROM h`,
     `), seq2 AS (`,
@@ -145,6 +191,7 @@ export function buildEngineActionCountsSql(opts: { lookbackFrom: string; from: s
     `SELECT x.user_id, max(x.agent_name) AS agent_name, ${opDaySql("x.at")} AS day, ${opShiftSql("x.at")} AS shift, x.ct AS change_type, ${lisbonHourSql("x.at")} AS hour,`,
     `       count(*) AS n,`,
     `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND x.prev_cat = 'CHECK_IN') AS parking_moves,`,
+    `       count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND ${moveIsSpotSql("x.prev_cat", "x.prev_any")}) AS spot_moves,`,
     `       count(*) FILTER (WHERE x.ct = 'CHECK_OUT' AND x.pending_at IS NOT NULL`,
     `                          AND x.at - x.pending_at > ${late}::int * interval '1 minute'`,
     `                          AND x.at - x.pending_at < ${lateMax}::int * interval '1 minute') AS late_deliveries`,
@@ -168,6 +215,8 @@ export interface EngineActionCount {
   hour?: number;
   n: number;
   parkingMoves: number;
+  /** 14 out 2026: destas `n` (MOVEMENT), quantas foram só mudanças de lugar (não contam como movimento) */
+  spotMoves: number;
   lateDeliveries: number;
 }
 
@@ -198,6 +247,7 @@ export function mapEngineActionCountRow(r: Record<string, unknown>): EngineActio
     ...(Number.isInteger(hour) && hour >= 0 && hour <= 23 ? { hour } : {}),
     n: int(r.n),
     parkingMoves: int(r.parking_moves),
+    spotMoves: int(r.spot_moves),
     lateDeliveries: int(r.late_deliveries),
   };
 }
@@ -237,7 +287,7 @@ export interface EngineLiveInputs {
 export async function getEngineLiveInputs(startDay: string, endDay: string, query: Query = multiparkDbQuery): Promise<MultiparkRead<EngineLiveInputs>> {
   return safeMultiparkRead("avaliação (movimentos)", async () => {
     const w = movementWindow(startDay, endDay);
-    const lookbackFrom = operationalDayRangeUtc(addDays(startDay, -3), startDay).start;
+    const lookbackFrom = operationalDayRangeUtc(addDays(startDay, -MOVE_LOOKBACK_DAYS), startDay).start;
     const a = buildEngineActionCountsSql({ lookbackFrom, from: w.from, to: w.to });
     const o = buildEngineOccurrenceCountsSql({ from: w.from, to: w.to });
     const actions = (await query(a.sql, a.params)).map(mapEngineActionCountRow);
@@ -262,12 +312,23 @@ export interface AggregateFilters {
 
 const typeAlias = (t: MovementChangeType) => `t_${t.toLowerCase()}`;
 
-/** Movimentos por agente: contagens por tipo, reservas, 1.ª/última ação, plataformas. PURA. */
+/**
+ * Movimentos por agente: contagens por tipo, reservas, 1.ª/última ação,
+ * plataformas. 14 out 2026: `spot_changes` = os MOVEMENT que são só mudanças
+ * de lugar (a regra de shared/multiparkMovements.ts, pela ação anterior da
+ * MESMA reserva — lida desde MOVE_LOOKBACK_DAYS antes, de qualquer agente).
+ * Antes contava UPDATE com "spot"/"garage" no modifiedFields, que a Multipark
+ * não grava (a mudança de lugar é um MOVEMENT): dava sempre 0. PURA.
+ */
 export function buildAgentHistoryAggSql(f: AggregateFilters): { sql: string; params: SqlParam[] } {
   const params = new ParamList();
+  const lookbackFrom = operationalDayRangeUtc(addDays(f.window.startDay, -MOVE_LOOKBACK_DAYS), f.window.startDay).start;
+  const lb = params.add(lookbackFrom);
+  const from = params.add(f.window.from);
+  const to = params.add(f.window.to);
   const conds = [
-    `h."actionTime" >= ${params.add(f.window.from)}::timestamp`,
-    `h."actionTime" < ${params.add(f.window.to)}::timestamp`,
+    `h."actionTime" >= ${from}::timestamp`,
+    `h."actionTime" < ${to}::timestamp`,
   ];
   const ids = idList(f.userIds, params, `h."userId"`);
   if (ids) conds.push(ids);
@@ -278,16 +339,18 @@ export function buildAgentHistoryAggSql(f: AggregateFilters): { sql: string; par
   const dayCol = f.byDay ? `, ${opDaySql(`h."actionTime"`)} AS day` : `, NULL AS day`;
   const perType = MOVEMENT_CHANGE_TYPES.map((t) => `count(*) FILTER (WHERE h."changeType"::text = '${t}') AS ${typeAlias(t)}`);
   const sql = [
+    `WITH ${moveSeqCteSql(lb, to)}`,
     `SELECT h."userId" AS user_id, max(COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", ''))) AS agent_name${dayCol},`,
     `       count(*) AS total,`,
     `       ${perType.join(",\n       ")},`,
-    // Alterações de lugar/garagem: UPDATE cujo modifiedFields fala de lugar ou garagem.
-    `       count(*) FILTER (WHERE h."changeType"::text = 'UPDATE' AND (h."modifiedFields" ILIKE '%spot%' OR h."modifiedFields" ILIKE '%garage%')) AS spot_changes,`,
+    // 14 out 2026: mudanças de lugar = MOVEMENT que não leva ao parque nem tira para a entrega
+    `       count(*) FILTER (WHERE h."changeType"::text = 'MOVEMENT' AND ${moveIsSpotSql("sq.prev_cat", "sq.prev_any")}) AS spot_changes,`,
     `       count(DISTINCT h."bookingId") AS bookings,`,
     `       ${ts(`min(h."actionTime")`)} AS first_at,`,
     `       ${ts(`max(h."actionTime")`)} AS last_at,`,
     `       string_agg(DISTINCT NULLIF(h."platform", ''), ',') AS platforms`,
     `  FROM "History" h`,
+    `  LEFT JOIN seq sq ON sq.id = h."id"`,
     `  LEFT JOIN "Booking" b ON b."id" = h."bookingId"`,
     `  LEFT JOIN "Park" p ON p."id" = b."parkId"`,
     `  LEFT JOIN "Agent" ag ON ag."userId" = h."userId" AND ag."parkId" = b."parkId"`,
@@ -420,9 +483,9 @@ export interface AgentMovementSummary {
   recolhas: number;
   /** CHECK_OUT */
   entregas: number;
-  /** MOVEMENT */
+  /** MOVEMENT que toca no parque (levar ao parque ou tirar para a entrega) — 14 out 2026 */
   movements: number;
-  /** UPDATE que mexeu no lugar/garagem (modifiedFields). */
+  /** MOVEMENT que é só mudança de lugar (conta em `total`, não em `movements`); em `byType` é SPOT_CHANGE */
   spotChanges: number;
   /** Reservas diferentes em que mexeu. */
   bookings: number;
@@ -477,9 +540,6 @@ export function mergeAgentAggregates(input: {
       const n = int(r[typeAlias(t)]);
       if (n) s.byType[t] = (s.byType[t] ?? 0) + n;
     }
-    s.recolhas = s.byType.CHECK_IN ?? 0;
-    s.entregas = s.byType.CHECK_OUT ?? 0;
-    s.movements = s.byType.MOVEMENT ?? 0;
     s.spotChanges += int(r.spot_changes);
     s.bookings += int(r.bookings);
     const first = toIsoUtc(r.first_at), last = toIsoUtc(r.last_at);
@@ -512,6 +572,18 @@ export function mergeAgentAggregates(input: {
     }
     s.reviews += n;
     s.reviewsLow += int(r.low_reviews);
+  }
+  // 14 out 2026: as mudanças de lugar saem dos movimentos (byType.MOVEMENT) para SPOT_CHANGE
+  for (const s of out.values()) {
+    const rawMoves = s.byType.MOVEMENT ?? 0;
+    s.spotChanges = Math.min(s.spotChanges, rawMoves);
+    if (s.spotChanges > 0) {
+      if (rawMoves - s.spotChanges > 0) s.byType.MOVEMENT = rawMoves - s.spotChanges; else delete s.byType.MOVEMENT;
+      s.byType[SPOT_CHANGE_KEY] = s.spotChanges;
+    }
+    s.recolhas = s.byType.CHECK_IN ?? 0;
+    s.entregas = s.byType.CHECK_OUT ?? 0;
+    s.movements = s.byType.MOVEMENT ?? 0;
   }
   const names = new Map<string, string>();
   for (const r of input.names ?? []) {
@@ -645,7 +717,10 @@ export function buildAgentMovementDetailSql(f: MovementDetailFilters): { sql: st
 export interface AgentMovement {
   id: string;
   actionTime: string | null;
+  /** o tipo da History; 14 out 2026: um MOVEMENT que é só mudança de lugar vem como SPOT_CHANGE */
   changeType: string;
+  /** só nos MOVEMENT: levar ao parque, tirar para a entrega ou mudança de lugar (null = não deu para saber) */
+  moveKind?: MoveKind | null;
   agentUserId: string | null;
   agentName: string | null;
   bookingId: string | null;
@@ -686,7 +761,83 @@ export async function getAgentDayMovements(
     if (opts.userIds.length === 0) return { rows: [], truncated: false };
     const { sql, params } = buildAgentMovementDetailSql({ window: movementWindow(opts.day), userIds: opts.userIds, cities: opts.cities, limit });
     const rows = await query(sql, params);
-    return { rows: rows.slice(0, limit).map(mapAgentMovementRow), truncated: rows.length > limit };
+    const list = rows.slice(0, limit).map(mapAgentMovementRow);
+    // 14 out 2026: cada MOVEMENT diz se tocou no parque ou se foi só mudança de lugar
+    const kinds = await readMoveKinds(list.map((m) => ({ id: m.id, bookingId: m.bookingId ?? "", changeType: m.changeType, actionTime: m.actionTime ?? "" })), query);
+    return { rows: withMoveKinds(list, kinds), truncated: rows.length > limit };
+  });
+}
+
+// ─── 3b. Movimento × mudança de lugar numa lista solta (detalhes) ────────────
+
+/** Teto das linhas lidas para classificar os movimentos de uma lista. */
+export const MOVE_SEQ_LIMIT = 20_000;
+/** Reservas por leitura (IN (…)). */
+export const MOVE_SEQ_BOOKINGS_PER_READ = 500;
+
+/**
+ * As ações que decidem o tipo de movimento (recolhas, entregas, movimentos,
+ * cancelamentos, pedidos e inícios de entrega) destas reservas em [from, to).
+ * Uma leitura da "History" (sem índice em bookingId: é sequencial, como as
+ * outras). PURA.
+ */
+export function buildBookingSequenceSql(f: { bookingIds: string[]; from: string; to: string; limit?: number }): { sql: string; params: SqlParam[] } {
+  const params = new ParamList();
+  const ids = Array.from(new Set(f.bookingIds.map((x) => String(x ?? "").trim()).filter(Boolean))).slice(0, MOVE_SEQ_BOOKINGS_PER_READ);
+  const sql = [
+    `SELECT h."id" AS id, h."bookingId" AS booking_id, upper(h."changeType"::text) AS change_type, ${ts(`h."actionTime"`)} AS action_time`,
+    `  FROM "History" h`,
+    ` WHERE ${ids.length ? `h."bookingId" IN (${ids.map((id) => params.add(id)).join(", ")})` : "FALSE"}`,
+    `   AND h."actionTime" >= ${params.add(f.from)}::timestamp AND h."actionTime" < ${params.add(f.to)}::timestamp`,
+    `   AND upper(h."changeType"::text) IN ${MOVE_SEQ_CATS_SQL}`,
+    ` ORDER BY h."bookingId", h."actionTime", h."id"`,
+    ` LIMIT ${params.add(Math.max(1, Math.min(f.limit ?? MOVE_SEQ_LIMIT, MOVE_SEQ_LIMIT)))}`,
+  ].join("\n");
+  return { sql, params: params.values };
+}
+
+const utcStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+const rowMs = (t: string) => {
+  const v = String(t ?? "").trim();
+  const ms = Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(v) ? `${v.replace(" ", "T")}Z` : v);
+  return Number.isFinite(ms) ? ms : NaN;
+};
+
+/**
+ * Para as linhas de uma lista (de um agente), que tipo de movimento é cada
+ * MOVEMENT — lê o que veio antes na mesma reserva (de qualquer agente, desde
+ * MOVE_LOOKBACK_DAYS antes). Sem MOVEMENT não lê nada. null = a leitura
+ * falhou (a lista fica como estava). Nunca lança.
+ */
+export async function readMoveKinds(
+  rows: ReadonlyArray<{ id: string; bookingId: string; changeType: string | null; actionTime: string }>,
+  query: Query = multiparkDbQuery,
+): Promise<Map<string, MoveKind> | null> {
+  const moves = rows.filter((r) => String(r.changeType ?? "").toUpperCase() === "MOVEMENT" && r.bookingId && Number.isFinite(rowMs(r.actionTime)));
+  if (!moves.length) return new Map();
+  try {
+    const times = moves.map((r) => rowMs(r.actionTime));
+    const from = utcStamp(Math.min(...times) - MOVE_LOOKBACK_DAYS * 86_400_000);
+    const to = utcStamp(Math.max(...times) + 1000);
+    const bookingIds = Array.from(new Set(moves.map((r) => r.bookingId)));
+    const seq: Array<{ id: string; bookingId: string; changeType: string; actionTime: string }> = [];
+    for (let i = 0; i < bookingIds.length; i += MOVE_SEQ_BOOKINGS_PER_READ) {
+      const { sql, params } = buildBookingSequenceSql({ bookingIds: bookingIds.slice(i, i + MOVE_SEQ_BOOKINGS_PER_READ), from, to });
+      for (const r of await query(sql, params)) {
+        seq.push({ id: String(r.id ?? ""), bookingId: String(r.booking_id ?? ""), changeType: String(r.change_type ?? ""), actionTime: String(r.action_time ?? "") });
+      }
+    }
+    return moveKindsOf(seq);
+  } catch {
+    return null;
+  }
+}
+
+/** Põe o tipo de movimento em cada linha (a mudança de lugar passa a SPOT_CHANGE). PURA. */
+export function withMoveKinds<T extends { id: string; changeType: string }>(rows: T[], kinds: Map<string, MoveKind> | null): Array<T & { moveKind: MoveKind | null }> {
+  return rows.map((r) => {
+    const kind = String(r.changeType).toUpperCase() === "MOVEMENT" ? kinds?.get(r.id) ?? null : null;
+    return { ...r, changeType: actionKeyOf(r.changeType, kind), moveKind: kind };
   });
 }
 

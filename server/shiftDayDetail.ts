@@ -181,6 +181,9 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
     if (!roster.length) return cal;
     return classifyActionShift(cal, [...windowsOf(addDays(cal, -1)), ...windowsOf(cal)], (d) => lisbonHoursSince(d, at)).day;
   };
+  // 14 out 2026: o MOVEMENT que é só mudança de lugar aparece como tal (shared/multiparkMovements.ts)
+  const { moveKindsOf, actionKeyOf } = await import("../shared/multiparkMovements");
+  const kinds = moveKindsOf(rows.filter((r) => r.actionTime).map((r) => ({ id: r.historyId, bookingId: r.bookingExternalId, changeType: r.changeType, actionTime: r.actionTime! })));
   const actions: DriverAction[] = [];
   for (const r of rows) {
     const ct = (r.changeType ?? "").toUpperCase();
@@ -194,7 +197,7 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
       if (Number.isFinite(m) && Math.abs(m) < TIMING_MAX_MIN) delay = m;
     }
     actions.push({
-      at: r.actionTime, changeType: ct, booking: r.bookingExternalId, bookingCode: r.bookingCode, plate: r.licensePlate, parkName: r.parkName,
+      at: r.actionTime, changeType: actionKeyOf(ct, kinds.get(r.historyId) ?? null), booking: r.bookingExternalId, bookingCode: r.bookingCode, plate: r.licensePlate, parkName: r.parkName,
       pendingAt: pair?.pendingAt ?? null, takenAt: pair?.takenAt ?? null, mins: pair?.mins != null && pair.mins < TIMING_MAX_MIN ? pair.mins : null,
       plannedIn: ct === "CHECK_IN" ? r.checkIn : null, delayMins: delay, maxSpeed: null, violations: null,
     });

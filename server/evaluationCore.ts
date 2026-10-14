@@ -21,6 +21,7 @@ import {
   type DayMetrics,
 } from "../shared/evaluationRules";
 import { addDays, lisbonHourOf, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
+import { SPOT_CHANGE_KEY, moveKindsOf } from "../shared/multiparkMovements";
 import { pontoShiftHours } from "../shared/pontoHours";
 import type { EvaluationIdentity } from "./evaluationIdentity";
 
@@ -147,6 +148,19 @@ export function markParkingMoves(rows: ActionRow[]): Set<number> {
 }
 
 /**
+ * Índices dos MOVEMENT que são só MUDANÇAS DE LUGAR (14 out 2026): nem levar
+ * ao parque nem tirar do parque para a entrega — a regra de
+ * shared/multiparkMovements.ts (`moveKindsOf`), a mesma do SQL. PURA.
+ */
+export function markSpotChanges(rows: ActionRow[]): Set<number> {
+  const id = (i: number) => `${String(rows[i].historyId ?? "").padStart(24, "0")}|${String(i).padStart(9, "0")}`;
+  const kinds = moveKindsOf(rows.map((r, i) => ({ id: id(i), bookingId: r.bookingExternalId, changeType: r.changeType, actionTime: r.actionTime })));
+  const out = new Set<number>();
+  rows.forEach((_, i) => { if (kinds.get(id(i)) === "spot") out.add(i); });
+  return out;
+}
+
+/**
  * Índices das ENTREGAS atrasadas: CHECK_OUT mais de LATE_SERVICE_MINUTES
  * depois do 1.º PENDING_CHECKOUT (pedido do cliente) ainda por servir, na
  * mesma reserva. Mais de LATE_SERVICE_MAX_MINUTES = outro pedido → não conta.
@@ -194,6 +208,8 @@ export interface ActionCountRow {
   hour?: number;
   n: number;
   parkingMoves: number;
+  /** 14 out 2026: destas `n` (MOVEMENT), as que foram só mudanças de lugar (contam como ação, não como movimento) */
+  spotMoves?: number;
   lateDeliveries: number;
 }
 
@@ -211,6 +227,7 @@ export interface AgentOccurrenceCount {
  */
 export function actionRowsToCounts(rows: ActionRow[]): ActionCountRow[] {
   const parking = markParkingMoves(rows);
+  const spot = markSpotChanges(rows);
   const late = markLateDeliveries(rows);
   const out = new Map<string, ActionCountRow>();
   rows.forEach((a, i) => {
@@ -220,11 +237,12 @@ export function actionRowsToCounts(rows: ActionRow[]): ActionCountRow[] {
     const k = `${a.agentUserId ?? ""}|${a.agentName ?? ""}|${slot.day}|${slot.shift}|${type}|${hour}`;
     let c = out.get(k);
     if (!c) {
-      c = { agentUserId: a.agentUserId, agentName: a.agentName, day: slot.day, shift: slot.shift, changeType: type, hour, n: 0, parkingMoves: 0, lateDeliveries: 0 };
+      c = { agentUserId: a.agentUserId, agentName: a.agentName, day: slot.day, shift: slot.shift, changeType: type, hour, n: 0, parkingMoves: 0, spotMoves: 0, lateDeliveries: 0 };
       out.set(k, c);
     }
     c.n += 1;
     if (parking.has(i)) c.parkingMoves += 1;
+    if (spot.has(i)) c.spotMoves = (c.spotMoves ?? 0) + 1;
     if (late.has(i)) c.lateDeliveries += 1;
   });
   return Array.from(out.values());
@@ -334,6 +352,7 @@ export interface UnresolvedAgentDay {
   entregas: number;
   movements: number;
   parkingMoves: number;
+  spotChanges: number;
   byType: Record<string, number>;
 }
 
@@ -384,10 +403,16 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
     if (who.kind === "ignorado") continue;
     const type = String(a.changeType ?? "?").toUpperCase();
     const cat = actionCategory(type);
+    // 14 out 2026: as mudanças de lugar são ações, não movimentos (byType: SPOT_CHANGE)
+    const spot = cat === "movements" ? Math.min(a.n, Math.max(0, Math.round(Number(a.spotMoves ?? 0)) || 0)) : 0;
+    const addByType = (byType: Record<string, number>) => {
+      if (a.n - spot > 0) byType[type] = (byType[type] ?? 0) + a.n - spot;
+      if (spot > 0) byType[SPOT_CHANGE_KEY] = (byType[SPOT_CHANGE_KEY] ?? 0) + spot;
+    };
     const target = who.kind === "colaborador"
       ? (() => {
           const r = row(who.employeeId, a.day);
-          r.actionsByType[type] = (r.actionsByType[type] ?? 0) + a.n;
+          addByType(r.actionsByType);
           if (r.actionsByHour && Number.isInteger(a.hour) && a.hour! >= 0 && a.hour! < 24) r.actionsByHour[a.hour!] += a.n;
           if (a.lateDeliveries > 0) { r.metrics.lateServices += a.lateDeliveries; r.metrics.delays += a.lateDeliveries; }
           return r.metrics;
@@ -396,13 +421,14 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
           let byDay = unresolved.get(a.day);
           if (!byDay) { byDay = new Map(); unresolved.set(a.day, byDay); }
           let u = byDay.get(who.key);
-          if (!u) { u = { key: who.key, name: who.name, actions: 0, actionsMorning: 0, actionsNight: 0, recolhas: 0, entregas: 0, movements: 0, parkingMoves: 0, byType: {} }; byDay.set(who.key, u); }
-          u.byType[type] = (u.byType[type] ?? 0) + a.n;
+          if (!u) { u = { key: who.key, name: who.name, actions: 0, actionsMorning: 0, actionsNight: 0, recolhas: 0, entregas: 0, movements: 0, parkingMoves: 0, spotChanges: 0, byType: {} }; byDay.set(who.key, u); }
+          addByType(u.byType);
           return u;
         })();
     target.actions += a.n;
     if (a.shift === "morning") target.actionsMorning += a.n; else target.actionsNight += a.n;
-    if (cat === "recolhas" || cat === "entregas" || cat === "movements") target[cat] += a.n;
+    if (cat === "movements") { target.movements += a.n - spot; target.spotChanges += spot; }
+    else if (cat === "recolhas" || cat === "entregas") target[cat] += a.n;
     else if (who.kind === "colaborador") (target as DayMetrics)[cat] += a.n;
     if (a.parkingMoves > 0) target.parkingMoves += a.parkingMoves;
   }

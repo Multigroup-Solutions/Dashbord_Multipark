@@ -234,7 +234,7 @@ function metricsRow(r: EmployeeDayRow, stamp: string) {
     hoursWorked: String(m.hoursWorked), suspiciousHours: String(m.suspiciousHours), scheduledHours: String(m.scheduledHours),
     pontoEvents: m.pontoEvents, cost: String(m.cost),
     actions: m.actions, actionsMorning: m.actionsMorning, actionsNight: m.actionsNight,
-    recolhas: m.recolhas, entregas: m.entregas, movements: m.movements, parkingMoves: m.parkingMoves,
+    recolhas: m.recolhas, entregas: m.entregas, movements: m.movements, parkingMoves: m.parkingMoves, spotChanges: m.spotChanges,
     cancels: m.cancels, otherActions: m.otherActions, weightedActions: String(m.weightedActions),
     actionsByType: JSON.stringify(r.actionsByType),
     // 49e: ações por hora (Lisboa) — só quando houve ações; dias antigos ficam NULL (o Desempenho diz "por hora desde…")
@@ -248,7 +248,7 @@ function metricsRow(r: EmployeeDayRow, stamp: string) {
 
 const UPSERT_COLUMNS = [
   "projectId", "city", "shift", "isTeamLeader", "level", "hoursSource", "hoursWorked", "suspiciousHours", "scheduledHours",
-  "pontoEvents", "cost", "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves",
+  "pontoEvents", "cost", "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges",
   "cancels", "otherActions", "weightedActions", "actionsByType", "actionsByHour", "speedingEvents", "delays", "lateServices", "complaints", "accidents",
   "incidentsReported", "incidentsAgainst", "penaltyPoints", "positivePoints", "negativePoints", "totalPoints", "computedAt",
 ] as const;

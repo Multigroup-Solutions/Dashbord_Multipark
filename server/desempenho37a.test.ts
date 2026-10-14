@@ -183,9 +183,11 @@ describe("37a — só o super admin", () => {
     const r = src("server/evaluationRouter.ts");
     expect(r).toMatch(/peoplePerformance: protectedProcedure[\s\S]{0,400}if \(ctx\.user\.role !== "super_admin"\) throw new TRPCError\(\{ code: "FORBIDDEN"/);
     const p = src("client/src/pages/CondutoresAgentesPage.tsx");
-    expect(p).toContain('const isSuper = (user as any).role === "super_admin";');
-    expect(p).toContain('{isSuper && <TabsTrigger value="performance">');
-    expect(p).toContain('{isSuper && <TabsContent value="performance"');
+    // 14 out 2026: a regra está em shared/condutoresAccess.ts (Desempenho = papel super_admin)
+    expect(p).toContain("condutoresTabs(user as any)");
+    expect(p).toContain('{has("performance") && <TabsTrigger value="performance">');
+    expect(p).toContain('{has("performance") && <TabsContent value="performance"');
+    expect(src("shared/condutoresAccess.ts")).toContain('if (user.role === "super_admin") tabs.push("performance");');
     // só leitura
     expect(src("server/peoplePerformance.ts")).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b\s+(INTO|\w+\s+SET|FROM)/);
   });

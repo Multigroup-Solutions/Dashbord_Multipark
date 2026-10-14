@@ -388,7 +388,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
       else if (d.actions > 0 && bucketFor(emp, day)) hourlyMissingDays += 1;
       put(emp, day, {
         hours, workDays: hours > 0 || d.actions > 0 ? 1 : 0, evalPoints: scoreOf(d).totalPoints,
-        recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, cancels: d.cancels,
+        recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, spotChanges: d.spotChanges, cancels: d.cancels,
         checkingIn: Number(byType.CHECKING_IN ?? 0), checkingOut: Number(byType.CHECKING_OUT ?? 0),
         created: Number(byType.CREATED ?? 0), updated: Number(byType.UPDATE ?? 0),
         occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: d.delays, complaintsAgainst: d.complaints, accidents: d.accidents,

@@ -2105,6 +2105,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	entregas: int().default(0).notNull(),
 	movements: int().default(0).notNull(),
 	parkingMoves: int().default(0).notNull(),
+	/** 14 out 2026: mudanças de lugar (MOVEMENT com o carro já no parque) — ação, não movimento (migração 0670). */
+	spotChanges: int().default(0).notNull(),
 	cancels: int().default(0).notNull(),
 	otherActions: int().default(0).notNull(),
 	weightedActions: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
