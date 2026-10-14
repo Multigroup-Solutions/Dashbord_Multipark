@@ -36,7 +36,7 @@ export const EVALUATION_POINTS = {
   pickupOrDelivery: 3,
   /** 1.º movimento depois de uma recolha, na mesma reserva (substitui `movement`). */
   firstMoveAfterPickup: 5,
-  /** Excesso de velocidade (speed_alerts do colaborador + penalização RH "velocidade" confirmada). */
+  /** Excesso de velocidade (speed_alerts do colaborador + penalização RH "velocidade" confirmada + 14 out 2026: cada excesso do GPS do Zello — shared/speedRules.ts). */
   speeding: -10,
   /** Atraso: entrada no ponto depois da hora da escala OU entrega atrasada (serviço). */
   delay: -5,
