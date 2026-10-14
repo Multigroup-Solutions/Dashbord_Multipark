@@ -733,8 +733,11 @@ export async function runMailBackfill(
   // Uma leitura que falhou (IA em baixo) volta a ser tentada pelo próprio varrimento, até MAIL_TRIAGE_MAX_ATTEMPTS.
   const stale = nowStr(Date.now() - 10 * 60_000);
   const since2d = nowStr(Date.now() - 2 * 86_400_000);
+  // Ronda 2: um email acabado de guardar (m.createdAt < 10 min) é da sincronização — lê-o como email NOVO,
+  // com a caixa do tema; o varrimento só lhe pega depois e nunca lhe "rouba" a leitura numa corrida em paralelo.
   const rows = rowsOf(await d.execute(sql`SELECT m.id, m.threadId FROM mail_messages m JOIN mail_threads t ON t.id = m.threadId
     WHERE m.direction = 'in' AND m.sentAt >= ${since} AND m.automated IN (0, 1) AND m.archivedAt IS NULL
+      AND m.createdAt < ${stale}
       AND t.mailboxKey IS NOT NULL AND t.ownerUserId IS NULL AND t.archivedAt IS NULL
       AND (t.routedBy IS NULL OR t.routedBy <> 'manual') AND t.status <> 'resolvido'
       AND NOT EXISTS (SELECT 1 FROM comms_ai_routing r WHERE r.sourceRef = CONCAT('mail_message:', m.id)

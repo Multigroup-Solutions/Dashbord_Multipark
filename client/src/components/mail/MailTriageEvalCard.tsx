@@ -81,7 +81,7 @@ export function MailTriageEvalCard() {
             : <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200 dark:bg-red-950/50 dark:text-red-200 dark:border-red-800"><XCircle className="h-3 w-3 mr-1" />Abaixo da meta</Badge>)}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Corre uns 260 emails de exemplo (já rotulados, em português, inglês, espanhol e francês), em três conjuntos — o principal, um de controlo e um cego, escritos à parte —, pelo mesmo pedido à IA e pelas mesmas regras de produção, com o modelo real.
+          Corre uns 260 emails de exemplo (já rotulados, em português, inglês, espanhol e francês), em três conjuntos — o principal, um de controlo e um cego, escritos à parte —, pelo mesmo pedido à IA e pelas mesmas regras de produção, com o modelo real — como se os interruptores dos casos (reclamações, perdidos, parceiros) estivessem todos ligados.
           Uma reclamação ou um perdido só contam como reconhecidos quando o caso abriria de facto (os "Por confirmar (IA)" contam).
           Não cria casos nem mexe na Comunicação; gasta um pouco de IA (uma leitura por email) e tem um limite de vezes por hora. Meta: mais de {Math.round(TRIAGE_RECALL_TARGET * 100)} % das reclamações e dos perdidos reconhecidos, em cada conjunto.
           O resultado fica também nos logs (linha "[triagem-eval]").

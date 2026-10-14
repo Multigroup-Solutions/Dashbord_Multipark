@@ -380,6 +380,8 @@ describe("o que a sincronização reservou e nunca leu não fica por ler para se
     await runMailBackfill({ deadlineAt: Date.now() + 60_000 }, { ...deps, backfillEnabled: async () => true });
     const q = (h.db.queries as any[]).find((x) => x.sql.startsWith("SELECT m.id, m.threadId")).sql as string;
     expect(q).toContain("(r.status = 'pending' AND NOT (r.status = 'pending' AND r.sweptAt IS NULL AND r.createdAt < ?))");
+    // corrida com a sincronização: um email acabado de guardar é dela (10 min) — o varrimento não lhe rouba a leitura
+    expect(q).toContain("AND m.createdAt < ?");
     const src2 = src("server/commsRouting.ts");
     const claim = src2.slice(src2.indexOf("const upd = await d.execute(sql`UPDATE comms_ai_routing r SET r.sweptAt"), src2.indexOf("claimed = affected(upd) === 1"));
     expect(claim).toContain("OR (${strandedPending(sql`r`, since2d)})");
