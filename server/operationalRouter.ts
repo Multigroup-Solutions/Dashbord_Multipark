@@ -521,10 +521,16 @@ export const operationalRouter = router({
     checkNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "atividade_diaria", "manage");
       const locations = await getZelloLocations();
-      // 14 out 2026: o limite vem de Definições → Parâmetros (gps.speedRule; 120 km/h por omissão)
+      // 14 out 2026: o limite vem de Definições → Parâmetros (gps.speedRule; 120 km/h + 10 % = 132 por omissão).
+      // O limite que conta (e que se diz) é o COM a tolerância. Antes, sem a tabela speed_limits, isto não fazia
+      // nada; para não passar a avisar gente sem o Jorge decidir, o aviso só sai com o interruptor GPS_SPEED_ALERTS.
       const { speedRuleNow } = await import("./speedRule");
-      const { rule, threshold } = await speedRuleNow();
-      const defaultLimit = { maxSpeed: rule.limitKmh };
+      const { threshold } = await speedRuleNow();
+      const defaultLimit = { maxSpeed: Math.round(threshold) };
+      const { GPS_SPEED_ALERTS_FLAG } = await import("./speedAlerts");
+      const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+      await ensureFeatureFlagOverrides();
+      const alertsOn = isFeatureEnabled(GPS_SPEED_ALERTS_FLAG, { defaultEnabled: automationFlagDefault(GPS_SPEED_ALERTS_FLAG) });
       let violationCount = 0;
 
       for (const loc of locations) {
@@ -539,10 +545,11 @@ export const operationalRouter = router({
             latitude: loc.latitude ? String(loc.latitude) : null,
             longitude: loc.longitude ? String(loc.longitude) : null,
             heading: loc.heading ? String(loc.heading) : null,
-            notificationSent: 1,
+            notificationSent: alertsOn ? 1 : 0,
             occurredAt: new Date().toISOString().slice(0, 19).replace("T", " "),
           });
           violationCount++;
+          if (!alertsOn) continue;
           // Aviso `speed_alert` (sem cidade conhecida no Zello → quem vê todas).
           const { notify } = await import("./notify");
           await notify({

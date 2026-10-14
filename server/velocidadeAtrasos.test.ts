@@ -66,7 +66,7 @@ describe("o limite: unidades, omissão e Definições", () => {
     const col = src("server/jobs/dailyDriverCollection.ts");
     expect(col).not.toMatch(/getDefaultSpeedLimit|speedThresholdKmh|: 999/);
     expect(col).toMatch(/const \{ rule: speedRule \} = await speedRuleNow\(\);/);
-    expect(src("server/operationalRouter.ts")).toMatch(/checkNow[\s\S]{0,400}speedRuleNow\(\)/);
+    expect(src("server/operationalRouter.ts")).toMatch(/checkNow[\s\S]{0,800}speedRuleNow\(\)/);
     const rule = src("server/speedRule.ts");
     expect(rule).toMatch(/if \(r == null\) return null; \/\/ BD em baixo ou erro a ler/);
     expect(rule).toContain("return (await speedRuleRead()) ?? withThreshold({ ...DEFAULT_SPEED_RULE });");
@@ -277,6 +277,13 @@ describe("o aviso: interruptor GPS_SPEED_ALERTS, desligado por omissão", () => 
   });
   it("o aviso diz o limite que se passou, JÁ com a tolerância (132 por omissão), não o de 120", () => {
     expect(src("server/jobs/dailyDriverCollection.ts")).toContain("limitKmh: speedThresholdOf(speedRule), excesses,");
+  });
+  it("o \"verificar agora\" manual (sem ecrã) também só avisa com o interruptor, e diz o limite com a tolerância", () => {
+    const r = src("server/operationalRouter.ts");
+    const block = r.slice(r.indexOf("speedMonitoring: router({"), r.indexOf("violations: router({", r.indexOf("speedMonitoring: router({")) + 4000);
+    expect(block).toContain("const alertsOn = isFeatureEnabled(GPS_SPEED_ALERTS_FLAG");
+    expect(block).toContain("if (!alertsOn) continue;");
+    expect(block).toContain("const defaultLimit = { maxSpeed: Math.round(threshold) };");
   });
   it("os registos vão para speed_violations (não para speed_alerts): a Avaliação não os conta a dobrar", () => {
     const s = src("server/speedAlerts.ts");
