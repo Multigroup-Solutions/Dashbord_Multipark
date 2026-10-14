@@ -1,24 +1,16 @@
-// Migration 0665 — Avaliação (Jorge, 14 out 2026): "os movimentos dentro do
-// mesmo parque só contam como mudança de lugar, não como movimento".
+// Migration 0665 — Filtros guardados também na Avaliação → Mês (Jorge, 14 out
+// 2026: filtros "como no Odoo" no ranking, com filtros guardados e um por
+// omissão). Reaproveita a tabela do CRM (`crm_saved_filters`): ganha a coluna
+// `page` — "crm" (todos os que já existem, por omissão) ou "avaliacao". Cada
+// página só vê os seus; o "abrir com este" é um por pessoa em cada página.
 //
-//  - `employee_day_metrics.spotChanges`: as mudanças de lugar do dia (linhas
-//    MOVEMENT da History na mesma garagem — shared/multiparkMovements.ts →
-//    classifyMovement). Valem +1 na avaliação (EVALUATION_POINTS.spotChange) e
-//    deixam de entrar em `movements`.
-//
-//  - `employee_day_metrics.deliveriesWithoutSchedule`: entregas sem hora marcada
-//    legível (medidas pelo pedido + 30 min) — nota na avaliação do dia/mês.
-//  - `employee_day_metrics.rulesVersion`: com que regras o dia foi calculado
-//    (1 = antigas, por omissão em todas as linhas que já existem; 2 = as de
-//    14 out 2026, EVALUATION_RULES_VERSION). Os ecrãs avisam dos dias com < 2.
-//
-// Só acrescenta as colunas (0/1 por omissão); sem backfill: o recálculo da noite
-// refaz os últimos 31 dias. Idempotente: ADD COLUMN repetido dá ER_DUP_FIELDNAME.
+// Só acrescenta (coluna com valor por omissão + índice). Idempotente: a coluna
+// ou o índice que já existam ficam calados.
 
 export const MIGRATION_0665_STATEMENTS: string[] = [
-  "ALTER TABLE `employee_day_metrics` ADD COLUMN `spotChanges` INT NOT NULL DEFAULT 0 AFTER `parkingMoves`",
-  "ALTER TABLE `employee_day_metrics` ADD COLUMN `deliveriesWithoutSchedule` INT NOT NULL DEFAULT 0 AFTER `lateServices`",
-  "ALTER TABLE `employee_day_metrics` ADD COLUMN `rulesVersion` INT NOT NULL DEFAULT 1 AFTER `totalPoints`",
+  "ALTER TABLE `crm_saved_filters` ADD COLUMN `page` VARCHAR(24) NOT NULL DEFAULT 'crm'",
+  "ALTER TABLE `crm_saved_filters` ADD INDEX `idx_crm_filters_user_page` (`userId`, `page`)",
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0665 = new Set<string>(["ER_DUP_FIELDNAME"]);
+/** ER_DUP_FIELDNAME (1060), ER_DUP_KEYNAME (1061). */
+export const IDEMPOTENT_ERROR_CODES_0665 = new Set<string>(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);

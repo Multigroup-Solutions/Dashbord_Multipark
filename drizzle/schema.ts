@@ -2105,7 +2105,7 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	entregas: int().default(0).notNull(),
 	movements: int().default(0).notNull(),
 	parkingMoves: int().default(0).notNull(),
-	// 0665 (14 out 2026): mudanças de lugar (MOVEMENT na mesma garagem) — não são movimentos.
+	// 0670 (14 out 2026): mudanças de lugar (MOVEMENT na mesma garagem) — não são movimentos.
 	spotChanges: int().default(0).notNull(),
 	cancels: int().default(0).notNull(),
 	otherActions: int().default(0).notNull(),
@@ -2116,7 +2116,7 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	speedingEvents: int().default(0).notNull(),
 	delays: int().default(0).notNull(),
 	lateServices: int().default(0).notNull(),
-	// 0665: entregas sem hora marcada (medidas pelo pedido + 30 min)
+	// 0670: entregas sem hora marcada (medidas pelo pedido + 30 min)
 	deliveriesWithoutSchedule: int().default(0).notNull(),
 	complaints: int().default(0).notNull(),
 	accidents: int().default(0).notNull(),
@@ -2126,7 +2126,7 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	positivePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	negativePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	totalPoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
-	// 0665: versão das regras com que o dia foi calculado (1 = antigas; EVALUATION_RULES_VERSION = 2)
+	// 0670: versão das regras com que o dia foi calculado (1 = antigas; EVALUATION_RULES_VERSION = 2)
 	rulesVersion: int().default(1).notNull(),
 	computedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
@@ -4455,12 +4455,15 @@ export const crmSavedFilters = mysqlTable("crm_saved_filters", {
 	payloadJson: text().notNull(),
 	shared: tinyint().default(0).notNull(),
 	isDefault: tinyint().default(0).notNull(),
+	// 0665: a página do filtro — "crm" (Clientes) ou "avaliacao" (Avaliação → Mês).
+	page: varchar({ length: 24 }).default('crm').notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	index("idx_crm_filters_user").on(table.userId),
 	index("idx_crm_filters_shared").on(table.shared),
+	index("idx_crm_filters_user_page").on(table.userId, table.page),
 ]);
 
 /** Email/telefone/matrícula retirados à mão de uma ficha: a carga não os volta a pôr. */

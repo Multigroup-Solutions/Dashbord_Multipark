@@ -92,7 +92,7 @@ export const LATE_SERVICE_MINUTES = 15;
 export const LATE_AFTER_REQUEST_MINUTES = 30;
 
 /**
- * Versão das regras com que um dia foi calculado (employee_day_metrics.rulesVersion, 0665).
+ * Versão das regras com que um dia foi calculado (employee_day_metrics.rulesVersion, 0670).
  * 1 = antes de 14 out 2026 (inícios de movimento contados, entregas pelo pedido + 15 min, atrasos à entrada sem limite por dia);
  * 2 = regras de 14 out 2026. Dias com versão menor mostram o aviso "calculados com as regras antigas — Recalcular".
  */
