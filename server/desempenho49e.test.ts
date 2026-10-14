@@ -175,9 +175,9 @@ describe("49e — a avaliação diária guarda a Multipark por hora (a mesma lei
       rate: () => 10, tlWorkingDaysPerMonth: 15,
     };
     const live = computeEmployeeDays({ ...base, actionCounts: [
-      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night", changeType: "CHECK_IN", hour: 22, n: 3, parkingMoves: 0, lateDeliveries: 0 },
-      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night", changeType: "MOVEMENT", hour: 1, n: 2, parkingMoves: 0, lateDeliveries: 0 }, // 01h do dia 25 = noite do 24
-      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "morning", changeType: "UPDATE", n: 1, parkingMoves: 0, lateDeliveries: 0 }, // sem hora
+      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night", changeType: "CHECK_IN", hour: 22, n: 3, parkingMoves: 0 },
+      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night", changeType: "MOVEMENT", hour: 1, n: 2, parkingMoves: 0 }, // 01h do dia 25 = noite do 24
+      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "morning", changeType: "UPDATE", n: 1, parkingMoves: 0 }, // sem hora
     ] });
     const h = live.rows[0].actionsByHour!;
     expect(h).toHaveLength(24);

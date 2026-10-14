@@ -122,6 +122,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 - Editar uma linha não apaga as notas e fica registado quem alterou.
 - **Suspender envio automático** trava a confirmação e os avisos do cron nesse dia (e, como é mexer no dia, a proposta automática também já não corre nele).
 - **Pedir disponibilidade a quem não respondeu**: o número do botão é o número de extras da cidade sem resposta, e é a eles que o pedido vai.
+- **Ordem dos candidatos**: a proposta escolhe primeiro quem cobre mais horas com falta de gente e, depois, pela avaliação (pontos médios por dia nas últimas 4 semanas), o custo, a equidade e a fiabilidade. Desde a tarefa 62 a avaliação mudou (atraso ao trabalho só a partir de 5 min, sem "entrega atrasada", velocidade acima de 120 km/h), por isso a **ordem** de quem é proposto pode mudar. A procura e quantos extras são precisos não mudam. Fica certo depois do recálculo da noite (os 31 dias cobrem as 4 semanas).
 
 **Quem vê o quê**
 - Quem só vê a escala (por exemplo, um condutor) vê as escalas e os turnos, **sem euros** e sem os botões de ação.

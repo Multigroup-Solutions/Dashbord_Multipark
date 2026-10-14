@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { addDays, lisbonDayOf, lisbonHourOf, OPERATIONAL_DAY_START_HOUR } from "./lisbonDay";
 import { SPEED_EXCESS_METRICS_VERSION, gpsDayOverThreshold } from "./speedRules";
-import { LATE_AFTER_REQUEST_MINUTES, LATE_SERVICE_MINUTES } from "./evaluationRules";
+import { LATE_ARRIVAL_FROM_MINUTES } from "./evaluationRules";
 
 // ─── Grupos (abas) ──────────────────────────────────────────────────────────
 
@@ -174,8 +174,9 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   occurrences: { key: "occurrences", label: "Ocorrências que registou", source: "multipark" },
   // 14 out 2026: os excessos da avaliação — alertas manuais/penalizações RH + 1 por dia com o Zello acima do limiar
   speedAlerts: { key: "speedAlerts", label: "Excessos de velocidade", source: "avaliação", bad: true },
-  delays: { key: "delays", label: "Atrasos à entrada", source: "avaliação", bad: true },
-  lateDeliveries: { key: "lateDeliveries", label: "Entregas atrasadas", source: "avaliação", bad: true },
+  delays: { key: "delays", label: "Atrasos ao trabalho", source: "avaliação", bad: true },
+  // tarefa 62: regra retirada (os tempos das entregas são da organização) — já não se calcula nem aparece nas colunas
+  lateDeliveries: { key: "lateDeliveries", label: "Entregas atrasadas (regra antiga)", source: "avaliação", bad: true },
   complaintsAgainst: { key: "complaintsAgainst", label: "Reclamações contra", source: "avaliação", bad: true },
   accidents: { key: "accidents", label: "Acidentes", source: "avaliação", bad: true },
   km: { key: "km", label: "Km (GPS)", source: "zello" },
@@ -281,13 +282,13 @@ export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfM
   },
   teamleaders: {
     cards: ["hours", "recolhas", "entregas", "checkingIn", "checkingOut", "callsAnswered", "tlDays", "teamPeople"],
-    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "spotChanges", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "lateDeliveries", "speedAlerts", "complaintsAgainst"],
+    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "spotChanges", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "speedAlerts", "complaintsAgainst"],
     chart: ["recolhas", "entregas", "checkingIn", "checkingOut"],
     weights: { evalPoints: 1, teamPoints: 1, checkingIn: 0.5, checkingOut: 0.5, updated: 0.5, returnFlights: 0.5, callsAnswered: 0.5, callsMade: 0.5, callMinutes: 0.2, waMessages: 0.2, cashCounts: 2, handovers: 2, extrasDia: 0.5, lostFound: 2, occurrences: 1 },
   },
   drivers: {
     cards: ["hours", "recolhas", "entregas", "movements", "km", "overLimitDays", "occurrences", "evalPoints"],
-    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "km", "gpsDays", "noGpsDays", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "lateDeliveries", "complaintsAgainst", "accidents"],
+    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "km", "gpsDays", "noGpsDays", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "complaintsAgainst", "accidents"],
     chart: ["recolhas", "entregas", "movements"],
     // 14 out 2026: os dias acima do limite já descontam −10 nos pontos da avaliação (excesso de velocidade) — aqui não repetem
     weights: { evalPoints: 1, occurrences: 1 },
@@ -523,11 +524,8 @@ export function explainPersonTotals(t: Partial<Record<PerfMetric, number>>): str
   const nf = new Intl.NumberFormat("pt-PT", { maximumFractionDigits: 1 });
   const n = (k: PerfMetric) => Number(t[k] ?? 0) || 0;
   const out: string[] = [];
-  // 14 out 2026: "Atrasos à entrada" (delays, no máximo 1 por dia) e "Entregas atrasadas" (lateDeliveries) são colunas separadas
-  if (n("lateDeliveries") > 0) {
-    out.push(`Entregas atrasadas ${nf.format(n("lateDeliveries"))}: feitas mais de ${LATE_SERVICE_MINUTES} min depois da hora marcada (ou, com o pedido do cliente depois da hora marcada ou sem hora marcada, mais de ${LATE_AFTER_REQUEST_MINUTES} min depois do pedido). Uma por entrega, contra quem a fez. Cada uma −5 na avaliação.`);
-  }
-  if (n("delays") > 0) out.push(`Atrasos à entrada ${nf.format(n("delays"))}: entrada no ponto depois da hora da escala, no máximo 1 por dia. Cada um −5 na avaliação.`);
+  // Tarefa 62: só os atrasos ao trabalho (≥ 5 min); a "entrega atrasada" saiu (os tempos são da organização)
+  if (n("delays") > 0) out.push(`Atrasos ao trabalho ${nf.format(n("delays"))}: entrada no ponto ${LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala, no máximo 1 por dia. Cada um −5 na avaliação.`);
   if (n("noGpsDays") > 0) {
     const noZ = n("noZelloDays"), other = n("noGpsDays") - noZ;
     const why = [

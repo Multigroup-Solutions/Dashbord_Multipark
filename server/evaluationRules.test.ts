@@ -3,7 +3,11 @@ import {
   EVALUATION_POINTS,
   MAX_LATE_ARRIVALS_PER_DAY,
   EVALUATION_RULES_VERSION,
-  LATE_AFTER_REQUEST_MINUTES,
+  ADJUSTABLE_METRICS,
+  LATE_ARRIVAL_FROM_MINUTES,
+  METRIC_LABELS,
+  RETIRED_METRICS,
+  isRetiredMetric,
   lateArrivalsOf,
   actionPoints,
   applyAdjustments,
@@ -49,17 +53,19 @@ describe("regras do dono (pontos)", () => {
     expect(s.negativePoints).toBe(10 + 10 + 20 + 6000);
     expect(s.totalPoints).toBe(6 - 6040);
     expect(s.lines.map((l) => l.key)).toEqual([
-      "movement", "spotChange", "pickupOrDelivery", "firstMoveAfterPickup", "speeding", "delay", "lateDelivery", "confirmedComplaint", "accidentOrDamage",
+      "movement", "spotChange", "pickupOrDelivery", "firstMoveAfterPickup", "speeding", "delay", "confirmedComplaint", "accidentOrDamage",
     ]);
+    expect(EVALUATION_POINTS).not.toHaveProperty("lateDelivery");
   });
 
-  it("14 out 2026: atraso à entrada e entrega atrasada são regras separadas (−5 cada); os atrasos à entrada = delays − lateServices", () => {
-    // 3 atrasos no total, dos quais 2 entregas atrasadas → 1 atraso à entrada
+  it("tarefa 62: linha antiga com entregas atrasadas → só o atraso ao trabalho conta (−5); a entrega atrasada não tira pontos", () => {
+    // 3 atrasos no total, dos quais 2 entregas atrasadas (dia antigo) → 1 atraso ao trabalho
     const s = scoreOf(m({ delays: 3, lateServices: 2 }));
-    const line = (k: string) => s.lines.find((l) => l.key === k)!;
-    expect(line("delay")).toMatchObject({ label: "Atraso à entrada", points: -5, count: 1, subtotal: -5 });
-    expect(line("lateDelivery")).toMatchObject({ label: "Entrega atrasada", points: -5, count: 2, subtotal: -10 });
-    expect(s.totalPoints).toBe(-15);
+    const line = (k: string) => s.lines.find((l) => l.key === k);
+    expect(line("delay")).toMatchObject({ label: "Atraso ao trabalho (≥ 5 min)", points: -5, count: 1, subtotal: -5 });
+    expect(line("lateDelivery")).toBeUndefined();
+    expect(s.totalPoints).toBe(-5);
+    expect(lateArrivalsOf({ delays: 3, lateServices: 2 })).toBe(1);
     expect(lateArrivalsOf({ delays: 2, lateServices: 2 })).toBe(0);
     expect(lateArrivalsOf({ delays: 1, lateServices: 3 })).toBe(0); // nunca negativo
     expect(MAX_LATE_ARRIVALS_PER_DAY).toBe(1);
@@ -201,9 +207,21 @@ describe("14 out 2026 — ajustes e entregas sem hora marcada", () => {
     expect(out).toMatchObject({ delays: 1, lateServices: 0 });
     expect(lateArrivalsOf(out)).toBe(1);
   });
-  it("as entregas sem hora marcada são informativas (não pontuam) e a versão das regras é 2", () => {
+  it("as entregas sem hora marcada são informativas (não pontuam) e a versão das regras é 3 (tarefa 62)", () => {
     expect(scoreOf(m({ deliveriesWithoutSchedule: 4 })).totalPoints).toBe(0);
-    expect(EVALUATION_RULES_VERSION).toBe(2);
-    expect(LATE_AFTER_REQUEST_MINUTES).toBe(30);
+    expect(EVALUATION_RULES_VERSION).toBe(3);
+    expect(LATE_ARRIVAL_FROM_MINUTES).toBe(5);
+  });
+  it("tarefa 62: as métricas da regra retirada não se ajustam nem se contestam e têm o rótulo '(regra antiga)'", () => {
+    expect(RETIRED_METRICS).toEqual(["lateServices", "deliveriesWithoutSchedule"]);
+    expect(ADJUSTABLE_METRICS).not.toContain("lateServices");
+    expect(isRetiredMetric("lateServices")).toBe(true);
+    expect(isRetiredMetric("delays")).toBe(false);
+    expect(METRIC_LABELS.delays).toBe("Atrasos ao trabalho");
+    expect(METRIC_LABELS.lateServices).toMatch(/regra antiga/);
+    // um ajuste antigo de lateServices continua a ler-se, sem efeito na pontuação
+    const base = m({ delays: 3, lateServices: 2 });
+    const adj = applyAdjustments(base, [{ metric: "lateServices", delta: -1 }]);
+    expect(scoreOf(adj).totalPoints).toBe(scoreOf(base).totalPoints);
   });
 });

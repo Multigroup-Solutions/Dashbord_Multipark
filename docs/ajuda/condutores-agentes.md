@@ -2,7 +2,7 @@
 modulo: condutores_agentes
 titulo: Condutores e agentes
 rotas: /pessoas/condutores-agentes
-palavras: mudanças de lugar, mudança de lugar, quem vê condutores, acesso, dias acima do limite, limite de velocidade, 120 km/h, excesso de velocidade, picos do gps, dias com gps, dias sem gps, zello não ligado, atrasos, entregas atrasadas, km, quilómetros, km sem movimentos, pontos da equipa, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou, atividade por hora, horas do dia, a que horas trabalha, chamadas perdidas, chamadas devolvidas, minutos ao telefone, emails pessoais, pesos, editar pesos, pesos do ranking, pontos do ranking, quanto vale cada coisa, repor omissões, 1 ponto 5 minutos, procurar nome, pesquisar, filtros, parâmetros, colunas, esconder colunas, só ativos, atraso à entrada
+palavras: mudanças de lugar, mudança de lugar, quem vê condutores, acesso, dias acima do limite, limite de velocidade, 120 km/h, excesso de velocidade, picos do gps, dias com gps, dias sem gps, zello não ligado, atrasos, atrasos ao trabalho, entregas atrasadas, km, quilómetros, km sem movimentos, pontos da equipa, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou, atividade por hora, horas do dia, a que horas trabalha, chamadas perdidas, chamadas devolvidas, minutos ao telefone, emails pessoais, pesos, editar pesos, pesos do ranking, pontos do ranking, quanto vale cada coisa, repor omissões, 1 ponto 5 minutos, procurar nome, pesquisar, filtros, parâmetros, colunas, esconder colunas, só ativos, atraso à entrada
 ---
 # Condutores e agentes
 
@@ -89,9 +89,9 @@ Em **Pessoas → Condutores e agentes**. Antes estavam nas Críticas.
 - **Horas trabalhadas**: o ponto (sem os registos suspeitos); sem ponto, a escala. **Dias com trabalho**: dias com horas ou com ações.
 - **Pontos da avaliação**: a soma dos pontos de cada dia da Avaliação (com os ajustes).
 - **Recolhas, entregas, movimentos, levar ao parque, mudanças de lugar, pôs em recolha/entrega, alterações de reserva**: a Multipark, pela avaliação diária.
-- **Entregas atrasadas** (−5 cada, uma por entrega, contra quem a fez): feitas mais de 15 min depois da **hora marcada**; com o pedido do cliente depois da hora marcada (voo atrasado), ou sem hora marcada, mais de 30 min depois do **pedido**. Antes contava-se desde o pedido + 15 min, e quase todas as entregas davam atraso.
-- **Atrasos à entrada** (−5 cada): a 1.ª picagem depois da hora da escala, no máximo 1 por dia.
-- Por cima dos números, o detalhe explica em texto de onde vêm as entregas atrasadas, os atrasos à entrada, os excessos de velocidade e os dias sem GPS.
+- **Atrasos ao trabalho** (−5 cada): a 1.ª picagem **5 minutos ou mais** depois da hora da escala (03:04:59 não conta; 03:05 já conta), no máximo 1 por dia. Nos dias antigos o número já vem sem as entregas atrasadas.
+- **Entregas atrasadas: saíram** (tarefa 62). Os tempos das entregas são da equipa, não de cada pessoa: a coluna saiu das abas e já não tira pontos.
+- Por cima dos números, o detalhe explica em texto de onde vêm os atrasos ao trabalho, os excessos de velocidade e os dias sem GPS.
 - **Km (GPS)**, **velocidade máxima**: o GPS do Zello das partes de PDA da pessoa (e do Zello fixo da ficha). A máxima já não tem os picos falsos do GPS.
 - **Dias com GPS**: dias com pontos de GPS dela (dois PDAs no mesmo dia contam um dia). **Dias de trabalho sem GPS**: dias com trabalho e sem GPS, e porquê:
   - **sem Zello ligado à pessoa**: a ficha não tem Zello fixo e nesse dia não leu nenhum PDA com o QR. Liga-o em **Atividade diária → Ao vivo → "Utilizadores Zello ↔ Pessoas"** (ou faz o check-in do PDA pelo QR).

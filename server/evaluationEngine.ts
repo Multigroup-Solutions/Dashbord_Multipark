@@ -6,7 +6,7 @@
  *    intervalo que deixaram de existir). Fontes:
  *      · BD da Multipark AO VIVO (server/multiparkDb/movements.ts): os
  *        movimentos de cada agente ("History", já agregados no Postgres com
- *        as regras de "levar ao parque" e entregas atrasadas) e as
+ *        a regra de "levar ao parque"; a "entrega atrasada" saiu na tarefa 62) e as
  *        ocorrências que criou na app ("Occurrence");
  *      · a nossa BD: ponto, escala, ocorrências/reclamações nossas, alertas
  *        de velocidade (GPS Zello), penalizações e os acidentes confirmados

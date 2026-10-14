@@ -402,12 +402,12 @@ describe("Desempenho: dias acima do limite, dias com e sem GPS", () => {
     expect(lisbonDaysTouched("2026-10-12 08:00:00", null, Date.parse("2026-10-12T12:00:00Z"))).toEqual(["2026-10-12"]);
     expect(lisbonDaysTouched("lixo", null)).toEqual([]);
   });
-  it("o porquê no detalhe: entregas atrasadas, atrasos à entrada, excessos e dias sem GPS (sem Zello ligado)", () => {
+  it("o porquê no detalhe: atrasos ao trabalho (≥ 5 min), excessos e dias sem GPS (sem Zello ligado); a entrega atrasada saiu (tarefa 62)", () => {
     const lines = explainPersonTotals({ delays: 2, lateDeliveries: 9, noGpsDays: 6, noZelloDays: 6, speedAlerts: 1 });
-    expect(lines[0]).toMatch(/^Entregas atrasadas 9: feitas mais de 15 min depois da hora marcada .* mais de 30 min depois do pedido\)\. Uma por entrega, contra quem a fez\. Cada uma −5 na avaliação\.$/);
-    expect(lines[1]).toBe("Atrasos à entrada 2: entrada no ponto depois da hora da escala, no máximo 1 por dia. Cada um −5 na avaliação.");
-    expect(lines[2]).toMatch(/^6 dia\(s\) de trabalho sem GPS: 6 sem Zello ligado à pessoa .* "Utilizadores Zello ↔ Pessoas"\.$/);
-    expect(lines[3]).toMatch(/^Excessos de velocidade 1: alertas e penalizações de velocidade e 1 por dia com o GPS do Zello acima do limite\./);
+    expect(lines[0]).toBe("Atrasos ao trabalho 2: entrada no ponto 5 min ou mais depois da hora da escala, no máximo 1 por dia. Cada um −5 na avaliação.");
+    expect(lines[1]).toMatch(/^6 dia\(s\) de trabalho sem GPS: 6 sem Zello ligado à pessoa .* "Utilizadores Zello ↔ Pessoas"\.$/);
+    expect(lines[2]).toMatch(/^Excessos de velocidade 1: alertas e penalizações de velocidade e 1 por dia com o GPS do Zello acima do limite\./);
+    expect(lines.join(" ")).not.toMatch(/Entregas atrasadas/);
     expect(explainPersonTotals({ noGpsDays: 2, noZelloDays: 0 })[0]).toMatch(/2 com Zello ou PDA mas sem GPS recolhido/);
     expect(explainPersonTotals({})).toEqual([]);
   });
@@ -450,13 +450,14 @@ describe("Desempenho → Condutores: os números do detalhe", () => {
     const ana = r.people[0];
     expect(ana.totals).toMatchObject({
       workDays: 4, gpsDays: 2, km: 80, maxSpeed: 125, overLimitDays: 1, noGpsDays: 2, noZelloDays: 1,
-      // #381: "Atrasos à entrada" (no máx. 1 por dia) e "Entregas atrasadas" em colunas separadas
-      delays: 1, lateDeliveries: 3, speedAlerts: 1, movements: 8, spotChanges: 12,
+      // tarefa 62: "Atrasos ao trabalho" = delays − lateServices nas linhas antigas (4 − 3 = 1); a entrega atrasada saiu
+      delays: 1, speedAlerts: 1, movements: 8, spotChanges: 12,
     });
     expect(r.speedLimit).toBe(120);
     // tarefa 62: o 6 out (125, recolhido a 132) não conta e a nota diz porquê
     expect(r.notes.join(" ")).toMatch(/1 dia\(s\) com a máxima acima do limite de hoje não contam porque foram recolhidos com um limite mais largo/);
     expect(h.texts.some((t) => /h\.speedThresholdKmh FROM driver_day_shares s/.test(t))).toBe(true);
+    expect(ana.totals.lateDeliveries ?? 0).toBe(0);
     // só leitura
     expect(h.texts.some((t) => /\b(INSERT|UPDATE|DELETE)\b/.test(t))).toBe(false);
   });

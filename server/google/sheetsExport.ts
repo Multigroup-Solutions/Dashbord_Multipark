@@ -15,7 +15,7 @@ import { can } from "../../shared/access";
 import {
   GOOGLE_MIME, SHEET_EXPORT_GATES, chunkSheetWrites, sanitizeSheetTitle, type SheetExportInput, type SheetExportReport, type SheetTab, type SheetCell, type LiveReportKey,
 } from "../../shared/drive";
-import { METRIC_KEYS, METRIC_LABELS } from "../../shared/evaluationRules";
+import { METRIC_KEYS, METRIC_LABELS, lateArrivalsOf } from "../../shared/evaluationRules";
 import type { DriveApiLike, DriveFileMeta, SheetsApiLike } from "./driveApi";
 
 export type ProcedureCall = (path: string, input?: unknown) => Promise<any>;
@@ -129,7 +129,8 @@ export const SHEET_REPORTS: Record<SheetExportReport, ReportDef> = {
       const header: SheetCell[] = ["Colaborador", "Função", "Dias", "Pontos", "Positivos", "Negativos", "Contestações abertas", ...METRIC_KEYS.map((k) => METRIC_LABELS[k])];
       const ranking = tabOf(active ? "Ranking (filtrado)" : "Ranking", header, list.map((x: any) => [
         x.employeeName, x.position, x.days, r2(x.score?.totalPoints), r2(x.score?.positivePoints), r2(x.score?.negativePoints), x.openDisputes,
-        ...METRIC_KEYS.map((k) => (x.metrics?.[k] == null ? null : r2(x.metrics[k]))),
+        // tarefa 62: "Atrasos ao trabalho" = lateArrivalsOf (nas linhas antigas o delays incluía as entregas atrasadas)
+        ...METRIC_KEYS.map((k) => (x.metrics?.[k] == null ? null : k === "delays" ? r2(lateArrivalsOf({ delays: Number(x.metrics.delays) || 0, lateServices: Number(x.metrics.lateServices) || 0 })) : r2(x.metrics[k]))),
       ]));
       if (!active) return [ranking];
       return [ranking, tabOf("Filtro", ["Filtro aplicado", "Valor"], [

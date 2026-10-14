@@ -23,9 +23,10 @@ import {
   DISPUTE_STATUS_LABELS,
   EVALUATION_POINTS,
   EVALUATION_RULES,
-  LATE_AFTER_REQUEST_MINUTES,
-  LATE_SERVICE_MINUTES,
+  LATE_ARRIVAL_FROM_MINUTES,
   METRIC_LABELS,
+  isRetiredMetric,
+  lateArrivalsOf,
   type DayMetrics,
   type DisputeStatus,
   type MetricKey,
@@ -99,8 +100,7 @@ export function RulesLegend() {
             <span className="text-muted-foreground">
               {r.label}
               {r.key === "firstMoveAfterPickup" && <span className="block text-[11px]">substitui os {fmtPts(EVALUATION_POINTS.movement)} desse movimento</span>}
-              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto depois da hora da escala (no máximo 1 por dia)</span>}
-              {r.key === "lateDelivery" && <span className="block text-[11px]">&gt; {LATE_SERVICE_MINUTES} min depois da hora marcada; com o pedido depois da hora marcada (ou sem ela), &gt; {LATE_AFTER_REQUEST_MINUTES} min depois do pedido</span>}
+              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto {LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala (no máximo 1 por dia)</span>}
               {r.key === "spotChange" && <span className="block text-[11px]">o carro ficou na mesma garagem; não é movimento</span>}
               {r.key === "speeding" && <span className="block text-[11px]">alertas e penalizações; ou 1 por dia com o GPS do Zello acima do limite</span>}
             </span>
@@ -110,6 +110,7 @@ export function RulesLegend() {
       })}
       <p className="sm:col-span-2 text-[11px] text-muted-foreground pt-1">
         Os totais podem ser negativos. Ponto marcado [SUSPEITO] não conta horas. Dia operacional: 03h→03h (manhã 03h–15h, noite 15h–03h).
+        Os tempos das entregas e das recolhas são da equipa, não de cada pessoa: já não há "entrega atrasada".
       </p>
     </div>
   );
@@ -119,22 +120,24 @@ export function RulesLegend() {
 
 const SHOWN_METRICS: MetricKey[] = [
   "hoursWorked", "scheduledHours", "suspiciousHours", "actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges",
-  "weightedActions", "delays", "lateServices", "deliveriesWithoutSchedule", "speedingEvents", "complaints", "accidents", "incidentsReported", "penaltyPoints", "cost",
+  "weightedActions", "delays", "speedingEvents", "complaints", "accidents", "incidentsReported", "penaltyPoints", "cost",
 ];
+/** Tarefa 62: os atrasos mostram-se sempre como atrasos ao trabalho (nos dias antigos o `delays` incluía entregas). */
+const shownMetric = (m: DayMetrics, k: MetricKey): number => (k === "delays" ? lateArrivalsOf(m) : m[k]);
 
 export function MetricsGrid({ metrics, base, hideZero = false }: { metrics: DayMetrics; base?: DayMetrics; hideZero?: boolean }) {
-  const keys = SHOWN_METRICS.filter((k) => !hideZero || metrics[k] !== 0 || (base && base[k] !== 0));
+  const keys = SHOWN_METRICS.filter((k) => !hideZero || shownMetric(metrics, k) !== 0 || (base && shownMetric(base, k) !== 0));
   if (keys.length === 0) return <p className="text-xs text-muted-foreground">Sem métricas.</p>;
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
       {keys.map((k) => {
-        const changed = base && base[k] !== metrics[k];
+        const changed = base && shownMetric(base, k) !== shownMetric(metrics, k);
         return (
           <div key={k} className="rounded-md border p-2">
             <div className="text-[11px] text-muted-foreground leading-tight">{METRIC_LABELS[k]}</div>
             <div className="font-semibold tabular-nums">
-              {k === "cost" ? `${fmtNum(metrics[k], 2)} €` : fmtNum(metrics[k], 2)}
-              {changed && <span className="ml-1 text-[11px] font-normal text-amber-700" title="Com ajuste manual">(calc. {fmtNum(base![k], 2)})</span>}
+              {k === "cost" ? `${fmtNum(metrics[k], 2)} €` : fmtNum(shownMetric(metrics, k), 2)}
+              {changed && <span className="ml-1 text-[11px] font-normal text-amber-700" title="Com ajuste manual">(calc. {fmtNum(shownMetric(base!, k), 2)})</span>}
             </div>
           </div>
         );
@@ -237,6 +240,7 @@ export function EmployeeEvaluationDetail({
                               <span className="text-muted-foreground"> · {a.authorName ?? "—"} · {a.createdAt.slice(0, 16)}</span>
                               <div className="text-muted-foreground break-words">{a.reason}</div>
                               {a.voidedAt && <div className="no-underline">Anulado{a.voidReason ? `: ${a.voidReason}` : ""}</div>}
+                              {!a.voidedAt && isRetiredMetric(a.metric) && <div className="text-amber-700 dark:text-amber-300">Sem efeito: regra retirada (a entrega atrasada já não conta pontos).</div>}
                             </div>
                             {mode === "manage" && canAdjust && !a.voidedAt && (
                               <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" title="Anular ajuste" disabled={voidMut.isPending}
@@ -361,7 +365,7 @@ function DisputeDialog({ day, onClose, onDone }: { day: string; onClose: () => v
     onSuccess: () => { toast.success("Contestação enviada"); onDone(); },
     onError: (e) => toast.error(e.message),
   });
-  const keys: MetricKey[] = ["actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "hoursWorked", "delays", "lateServices", "speedingEvents", "complaints", "accidents"];
+  const keys: MetricKey[] = ["actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "hoursWorked", "delays", "speedingEvents", "complaints", "accidents"];
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent>

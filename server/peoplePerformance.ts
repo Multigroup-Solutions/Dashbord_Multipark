@@ -404,8 +404,8 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
         recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, spotChanges: d.spotChanges ?? 0, cancels: d.cancels,
         checkingIn: Number(byType.CHECKING_IN ?? 0), checkingOut: Number(byType.CHECKING_OUT ?? 0),
         created: Number(byType.CREATED ?? 0), updated: Number(byType.UPDATE ?? 0),
-        // 14 out 2026: atrasos à entrada e entregas atrasadas em colunas separadas
-        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: lateArrivalsOf(d), lateDeliveries: d.lateServices, complaintsAgainst: d.complaints, accidents: d.accidents,
+        // tarefa 62: só os atrasos ao trabalho (lateArrivalsOf — nos dias antigos o delays incluía entregas); a entrega atrasada saiu
+        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: lateArrivalsOf(d), complaintsAgainst: d.complaints, accidents: d.accidents,
       });
     }
     if (!mRows.length) notes.push("Sem avaliação diária guardada neste período (a Multipark e as horas entram pela avaliação, recalculada todas as noites).");

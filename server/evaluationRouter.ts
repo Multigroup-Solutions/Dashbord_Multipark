@@ -35,6 +35,7 @@ import {
   ADJUSTABLE_METRICS,
   EVALUATION_RULES_VERSION,
   METRIC_KEYS,
+  isRetiredMetric,
   perHourMetrics,
   scoreOf,
   sumMetrics,
@@ -95,6 +96,8 @@ async function brandParkIds(projectId: number | undefined): Promise<string[] | u
 }
 
 const metricSchema = z.string().refine((m) => (METRIC_KEYS as string[]).includes(m), "Métrica inválida");
+/** Tarefa 62: regras retiradas (entrega atrasada) — não se ajustam nem se contestam. */
+const RETIRED_METRIC_MESSAGE = "Essa regra saiu da avaliação (entregas atrasadas): já não conta pontos, por isso não se ajusta nem se contesta.";
 
 async function myEmployee(userId: number): Promise<{ id: number; fullName: string } | null> {
   const me = await getEmployeeByUserId(userId);
@@ -378,6 +381,7 @@ export const evaluationRouter = router({
     reason: z.string().trim().min(3, "Indica o motivo").max(500),
   })).mutation(async ({ ctx, input }) => {
     requireManage(ctx.user);
+    if (isRetiredMetric(input.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: RETIRED_METRIC_MESSAGE });
     if (!(ADJUSTABLE_METRICS as string[]).includes(input.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta métrica não se ajusta à mão." });
     await assertEmployeeAccess(input.employeeId);
     const me = await myEmployee(ctx.user.id);
@@ -413,6 +417,7 @@ export const evaluationRouter = router({
       comment: z.string().trim().min(5, "Explica o que está errado").max(2000),
     })).mutation(async ({ ctx, input }) => {
       requireOwn(ctx.user);
+      if (isRetiredMetric(input.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: RETIRED_METRIC_MESSAGE });
       const me = await myEmployee(ctx.user.id);
       if (!me) throw new TRPCError({ code: "FORBIDDEN", message: "A tua conta não tem ficha de colaborador." });
       if (input.day > currentOperationalDay()) throw new TRPCError({ code: "BAD_REQUEST", message: "Esse dia ainda não aconteceu." });
@@ -462,6 +467,7 @@ export const evaluationRouter = router({
       if (d.status !== "open") throw new TRPCError({ code: "CONFLICT", message: "Esta contestação já foi decidida." });
       let adjustmentId: number | null = null;
       if (input.accept && input.adjustment) {
+        if (isRetiredMetric(input.adjustment.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: RETIRED_METRIC_MESSAGE });
         if (!(ADJUSTABLE_METRICS as string[]).includes(input.adjustment.metric)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta métrica não se ajusta à mão." });
         adjustmentId = await createAdjustment({
           employeeId: d.employeeId, day: d.day, metric: input.adjustment.metric, delta: input.adjustment.delta,
