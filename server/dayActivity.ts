@@ -582,12 +582,13 @@ async function actionsOf(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, ran
 /**
  * Limite usado nos excessos (o mesmo da recolha): limite × (1 + tolerância),
  * de Definições → Parâmetros → "Limite de velocidade (GPS do Zello)" — 120
- * km/h por omissão (14 out 2026; antes vinha da tabela `speed_limits`, sem
- * ecrã: sem linha "por omissão" dava null e nada passava o limite).
+ * km/h com 10 % por omissão = 132 (14 out 2026; antes vinha da tabela
+ * `speed_limits`, sem ecrã). Erro a ler (ou sem BD) → null: sem limiar, e
+ * quem chama diz-o numa nota (a omissão só vale quando a leitura correu bem).
  */
 export async function speedThreshold(): Promise<number | null> {
-  const { speedRuleNow } = await import("./speedRule");
-  return (await speedRuleNow()).threshold;
+  const { speedRuleRead } = await import("./speedRule");
+  return (await speedRuleRead())?.threshold ?? null;
 }
 
 export async function getPersonSpeedHistory(opts: { employeeId?: number; zelloUsername?: string; days: number }) {

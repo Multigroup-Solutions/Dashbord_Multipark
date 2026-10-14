@@ -9,7 +9,7 @@
  *
  * LIMITE: um só, em Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"
  * (`gps.speedRule`): 120 km/h por omissão (o máximo legal em Portugal, nas
- * autoestradas), mais uma tolerância em % (0 por omissão). O GPS do Zello não
+ * autoestradas), mais uma tolerância em % (10 por omissão = 132 km/h). O GPS do Zello não
  * diz em que estrada se vai, por isso não há limites por tipo de via nem por
  * cidade: o limite é o de autoestrada — passar dele é excesso em qualquer
  * estrada. (A tabela antiga `speed_limits` deixou de ser lida: não tinha ecrã.)
@@ -18,10 +18,12 @@
  * antes — um excesso real a 160 desaparecia):
  *  1. ponto impreciso (precisão > 100 m — zelloAccuracyOk) → a velocidade não conta;
  *  2. acima de GPS_ABSURD_KMH (250 km/h): nenhum carro nosso lá chega — erro;
- *  3. salto isolado: o ponto está acima dos DOIS vizinhos (até
- *     SPIKE_NEIGHBOUR_MAX_GAP_S de distância) e sobe e desce mais do que
- *     MAX_SPEED_JUMP_KMH_PER_S por segundo (ex.: 40 → 141 → 38 em 4 s) — um
- *     carro não acelera nem trava assim.
+ *  3. salto isolado: um ponto — ou até MAX_SPIKE_RUN pontos seguidos (o GPS
+ *     a "saltar" dois ou três reports) — acima dos DOIS vizinhos (até
+ *     SPIKE_NEIGHBOUR_MAX_GAP_S de distância), em que se sobe e se desce mais
+ *     do que MAX_SPEED_JUMP_KMH_PER_S por segundo (ex.: 40 → 141 → 38 em 4 s,
+ *     ou 40 → 160 → 158 → 40 em 3 s cada) — um carro não acelera nem trava
+ *     assim.
  *
  * EXCESSO (o que conta e dá aviso/pontos): pontos de confiança SEGUIDOS acima
  * do limite (com tolerância), juntando os que distam até EXCESS_MERGE_GAP_S
@@ -45,7 +47,12 @@ export interface SpeedRule {
   minPoints: number;
 }
 
-export const DEFAULT_SPEED_RULE: Readonly<SpeedRule> = { limitKmh: 120, tolerancePercent: 0, minPoints: 2 };
+/**
+ * Omissão: 120 km/h com 10 % de tolerância (= 132 km/h) — a mesma que a
+ * Avaliação usa desde o #381 (14 out 2026), para nada mudar sem o Jorge
+ * decidir. A tolerância muda-se em Definições.
+ */
+export const DEFAULT_SPEED_RULE: Readonly<SpeedRule> = { limitKmh: 120, tolerancePercent: 10, minPoints: 2 };
 
 export const speedRuleSchema = z.object({
   limitKmh: z.number({ error: "Indica o limite em km/h." }).int("Número inteiro de km/h.").min(30, "Mínimo 30 km/h.").max(200, "Máximo 200 km/h."),
@@ -66,12 +73,19 @@ export const GPS_ABSURD_KMH = 250;
 export const MAX_SPEED_JUMP_KMH_PER_S = 15;
 /** Vizinhos a mais do que isto (s) já não servem para dizer que é um pico. */
 export const SPIKE_NEIGHBOUR_MAX_GAP_S = 60;
+/** Um "salto" pode ter até isto de pontos seguidos (o GPS a saltar 2–3 reports); mais do que isso já é andar. */
+export const MAX_SPIKE_RUN = 3;
 /** Dois pontos acima do limite a até isto (s) um do outro são o mesmo excesso. */
 export const EXCESS_MERGE_GAP_S = 120;
 /** A posição só confirma uma velocidade com pelo menos isto (s) entre os pontos (menos, o GPS a tremer engana). */
 export const POSITION_MIN_GAP_S = 5;
-/** …e no máximo isto (s). */
-export const POSITION_MAX_GAP_S = 120;
+/**
+ * …e no máximo isto (s). 5 min: com o Zello a mandar pontos espaçados, um
+ * ponto a 145 com o seguinte a 3 min de distância só se confirma pela
+ * posição; e a distância em linha reta subestima a velocidade (as estradas
+ * não são retas), por isso um intervalo maior nunca inventa um excesso.
+ */
+export const POSITION_MAX_GAP_S = 300;
 
 /** Limite com a tolerância (km/h). PURA. */
 export function speedThresholdOf(r: Pick<SpeedRule, "limitKmh" | "tolerancePercent">): number {
@@ -94,19 +108,26 @@ export function speedSpikes(points: readonly SpeedPoint[]): Map<number, SpikeRea
   const out = new Map<number, SpikeReason>();
   const idx: number[] = [];
   points.forEach((p, i) => { if (p.accurate) idx.push(i); });
-  for (let k = 0; k < idx.length; k++) {
-    const i = idx[k];
-    const p = points[i];
-    if (!hasSpeed(p)) continue;
-    if (p.speed > GPS_ABSURD_KMH) { out.set(i, "absurd"); continue; }
-    const prev = k > 0 ? points[idx[k - 1]] : null;
-    const next = k + 1 < idx.length ? points[idx[k + 1]] : null;
-    if (!prev || !next) continue;
-    const dtPrev = p.ts - prev.ts, dtNext = next.ts - p.ts;
-    if (dtPrev <= 0 || dtNext <= 0 || dtPrev > SPIKE_NEIGHBOUR_MAX_GAP_S || dtNext > SPIKE_NEIGHBOUR_MAX_GAP_S) continue;
-    const up = (p.speed - prev.speed) / Math.max(1, dtPrev);
-    const down = (p.speed - next.speed) / Math.max(1, dtNext);
-    if (up > MAX_SPEED_JUMP_KMH_PER_S && down > MAX_SPEED_JUMP_KMH_PER_S) out.set(i, "jump");
+  for (const i of idx) if (hasSpeed(points[i]) && points[i].speed > GPS_ABSURD_KMH) out.set(i, "absurd");
+  // saltos: 1..MAX_SPIKE_RUN pontos seguidos muito acima dos dois vizinhos, a subir e a descer depressa demais.
+  // Vizinhos = os pontos precisos (também os parados, a 0); os absurdos ficam fora da sequência.
+  const ok = idx.filter((i) => !out.has(i));
+  for (let k = 1; k < ok.length - 1; k++) {
+    for (let len = 1; len <= MAX_SPIKE_RUN && k + len < ok.length; len++) {
+      const run = ok.slice(k, k + len);
+      if (run.some((i) => out.has(i) || !hasSpeed(points[i]))) break;
+      const prev = points[ok[k - 1]], next = points[ok[k + len]];
+      const first = points[run[0]], last = points[run[run.length - 1]];
+      const dtPrev = first.ts - prev.ts, dtNext = next.ts - last.ts;
+      if (dtPrev <= 0 || dtNext <= 0 || dtPrev > SPIKE_NEIGHBOUR_MAX_GAP_S || dtNext > SPIKE_NEIGHBOUR_MAX_GAP_S) continue;
+      const low = Math.min(...run.map((i) => points[i].speed));
+      const up = (low - prev.speed) / Math.max(1, dtPrev);
+      const down = (low - next.speed) / Math.max(1, dtNext);
+      if (up > MAX_SPEED_JUMP_KMH_PER_S && down > MAX_SPEED_JUMP_KMH_PER_S) {
+        for (const i of run) out.set(i, "jump");
+        break;
+      }
+    }
   }
   return out;
 }

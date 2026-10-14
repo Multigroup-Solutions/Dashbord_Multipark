@@ -6,37 +6,6 @@
  * Enum "ChangeType" (docs/multipark-db/schema.md): CREATED, UPDATE,
  * CHECKING_IN, CHECK_IN, MOVEMENT, PENDING_CHECKOUT, CHECKING_OUT, CHECK_OUT,
  * CANCEL.
- *
- * ─── MOVIMENTO, MUDANÇA DE LUGAR E AÇÃO (Jorge, 14 out 2026) ───────────────
- * "Os movimentos, para os pontos, eram os que tocavam no parque. As mudanças
- * de lugar não contam como movimentos; contam como interações."
- *
- * A Multipark grava TODA a deslocação de um carro como `MOVEMENT` (o mesmo
- * evento serve para o levar ao parque e para o mudar de lugar/garagem/fila —
- * `modifiedFields` com o lugar/garagem). Não há um tipo "mudança de lugar":
- * por isso as "Mudanças de lugar" (que procuravam UPDATE com spot/garage)
- * davam sempre 0 e todas as mudanças de lugar entravam como movimentos (+2).
- * A distinção deduz-se da ORDEM das ações da MESMA reserva (o que veio antes
- * do MOVEMENT), que é fiável — o formato do `modifiedFields` não é:
- *
- *  - LEVAR AO PARQUE (toca no parque, entra): o 1.º MOVEMENT depois da
- *    recolha (CHECK_IN) — entre recolha, entrega, movimento e cancelamento,
- *    a ação anterior foi a recolha. Já era a regra (+5).
- *  - TIRAR DO PARQUE PARA A ENTREGA (toca no parque, sai): o 1.º MOVEMENT
- *    depois do pedido de entrega (PENDING_CHECKOUT) ou do início da entrega
- *    (CHECKING_OUT) — a ação anterior (contando também estas duas) foi uma
- *    delas. Movimento (+2).
- *  - MUDANÇA DE LUGAR: qualquer outro MOVEMENT — o carro já está no parque
- *    (já lá foi levado e não há entrega pedida) e só muda de lugar, garagem
- *    ou fila. Conta como AÇÃO (interação), não como movimento, nem pontos.
- *  - AÇÃO (interação): qualquer linha do histórico do agente — recolhas,
- *    entregas, movimentos, mudanças de lugar, pôr em recolha/entrega, pedidos
- *    de entrega, criações, alterações e cancelamentos.
- *
- * Esta regra está em DOIS sítios que têm de dizer o mesmo: aqui
- * (`moveKindsOf`, para as linhas soltas) e no SQL de
- * server/multiparkDb/movements.ts (`moveSeqCteSql` + `moveIsSpotSql`, para as contagens
- * agregadas na BD da Multipark). Os testes comparam os dois.
  */
 
 export const MOVEMENT_CHANGE_TYPES = [
@@ -78,113 +47,134 @@ export const MOVEMENT_LABELS: Record<MovementChangeType, string> = {
   CREATED: "Criação",
 };
 
-/**
- * Chave NOSSA (não existe na BD da Multipark) para um MOVEMENT que é uma
- * mudança de lugar: as contagens por tipo (`byType`, `actionsByType`) e as
- * listas de detalhe usam-na para a separar dos movimentos que tocam no parque.
- */
-export const SPOT_CHANGE_KEY = "SPOT_CHANGE" as const;
-
-const EXTRA_LABELS: Record<string, string> = { [SPOT_CHANGE_KEY]: "Mudança de lugar" };
-const EXTRA_PHASES: Record<string, MovementPhase> = { [SPOT_CHANGE_KEY]: "move" };
-
 /** Rótulo PT-PT de um changeType (desconhecido → o próprio texto). */
 export function movementLabel(changeType: string | null | undefined): string {
   const k = String(changeType ?? "").trim().toUpperCase();
-  return (MOVEMENT_LABELS as Record<string, string>)[k] ?? EXTRA_LABELS[k] ?? (k || "—");
+  return (MOVEMENT_LABELS as Record<string, string>)[k] ?? MOVEMENT_KIND_LABELS[k] ?? (k || "—");
 }
 
 /** Fase de um changeType (desconhecido → "other"). */
 export function movementPhase(changeType: string | null | undefined): MovementPhase {
   const k = String(changeType ?? "").trim().toUpperCase();
-  return (MOVEMENT_PHASE as Record<string, MovementPhase>)[k] ?? EXTRA_PHASES[k] ?? "other";
+  if (k === "MOVEMENT_START" || k === "SPOT_CHANGE") return "move"; // MOVEMENT com outro nome no detalhe
+  return (MOVEMENT_PHASE as Record<string, MovementPhase>)[k] ?? "other";
 }
 
-// ─── Movimento × mudança de lugar (regra no topo do ficheiro) ───────────────
+// ─── Que movimento foi (Jorge, 14 out 2026) ─────────────────────────────────
+//
+// A app Multipark grava DUAS linhas MOVEMENT por cada vez que um carro muda de
+// sítio: o INÍCIO ({"status":{"from":"CHECKED_IN","to":"MOVING"}}, sem garagem
+// nem lugar) e o FIM ({"garageName":{"from":X,"to":Y},"spot":{"from":a,"to":b}}).
+// "Parque" = a GARAGEM (PD, PD FORA, COBERTO, Central…), não o Park da reserva
+// (esse nunca muda num movimento). Regras:
+//  - início (status → MOVING, sem garagem/lugar): NÃO conta (nem como ação);
+//  - fim sem garagem de origem: "levar ao parque" (arrumar o carro);
+//  - mesma garagem (from = to, ou só muda o lugar): "mudança de lugar";
+//  - garagens diferentes: "movimento entre parques";
+//  - sem garagem/lugar nem início, ou com um valor simples sem origem (formato
+//    da cópia local: {"garagem":"G2","lugar":"114"}): "antigo" — fica a regra
+//    de antes (1.º movimento depois de uma recolha = levar ao parque; o resto,
+//    movimento).
+// Chaves com evidência nos dados: garageName/spot (History da Multipark, out
+// 2026) e garagem/lugar (cópia local). A classificação é feita com OS MESMOS
+// padrões (regex POSIX) no Postgres (server/multiparkDb/movements.ts →
+// movementKindSql) e aqui em JS (posixToJs): o resultado é igual por
+// construção, também com JSON que não se lê ou cortado.
 
-/** Que movimento é: leva ao parque, tira do parque para a entrega, ou só muda de lugar. */
-export type MoveKind = "park" | "exit" | "spot";
+/** inicio · arrumar (levar ao parque) · lugar (mudança de lugar) · parques (entre parques) · antigo (sem dados). */
+export type MovementKind = "inicio" | "arrumar" | "lugar" | "parques" | "antigo";
 
-export const MOVE_KIND_LABELS: Record<MoveKind, string> = {
-  park: "Levar ao parque",
-  exit: "Tirar do parque (entrega)",
-  spot: "Mudança de lugar",
+export const MOVEMENT_GARAGE_KEYS = ["garageName", "garagem"] as const;
+export const MOVEMENT_SPOT_KEYS = ["spot", "lugar"] as const;
+
+const SP = "[[:space:]]*";
+/**
+ * Padrões em regex POSIX (sem barras invertidas: a guarda de SQL recusa-as).
+ * `side` captura o valor inteiro (com as aspas, ou um número/null) — o
+ * `placeValue` tira as aspas, apara, passa a minúsculas e trata vazio/null
+ * como nulo.
+ */
+export const MOVEMENT_PATTERNS = {
+  /** a chave existe (qualquer valor) */
+  hasKey: (keys: readonly string[]) => `"(${keys.join("|")})"${SP}:`,
+  /** a chave tem um valor simples (texto/número/lista: formato antigo, sem origem) */
+  plainKey: (keys: readonly string[]) => `"(${keys.join("|")})"${SP}:${SP}[^{n[:space:]]`,
+  /** início do movimento: status → MOVING (sem distinguir maiúsculas) */
+  moving: `"status"${SP}:${SP}[{][^}]*"to"${SP}:${SP}"moving"`,
+  /** o "from"/"to" de {"key":{"from":…,"to":…}} — 1.º grupo: "texto", número, null… */
+  side: (key: string, side: "from" | "to") => `"${key}"${SP}:${SP}[{][^}]*"${side}"${SP}:${SP}("[^"]*"|[^",}[:space:]]+)`,
+  /** a hora marcada da entrega: checkOut.from (ISO COM fuso: Z ou ±hh:mm; sem fuso = sem hora marcada) — 1.º grupo */
+  checkOutFrom: `"checkOut"${SP}:${SP}[{][^}]*"from"${SP}:${SP}"([0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]*(Z|[+-][0-9]{2}:?[0-9]{2}))"`,
+} as const;
+
+/** Regex POSIX (as nossas: [[:space:]] e [[:space:]] dentro de […]) → RegExp do JS. PURA. */
+export function posixToJs(pat: string, flags = ""): RegExp {
+  return new RegExp(pat.replace(/\[\[:space:\]\]/g, "\\s").replace(/\[:space:\]/g, "\\s"), flags);
+}
+
+/** O valor capturado → texto normalizado ou null (o mesmo que no SQL: btrim das aspas, trim, lower, ''/null → NULL). PURA. */
+export function placeValue(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const v = raw.replace(/^"+|"+$/g, "").trim().toLowerCase();
+  return v === "" || v === "null" ? null : v;
+}
+
+const jsCache = new Map<string, RegExp>();
+const re = (pat: string, flags = "") => {
+  const k = `${flags}|${pat}`;
+  let r = jsCache.get(k);
+  if (!r) { r = posixToJs(pat, flags); jsCache.set(k, r); }
+  return r;
 };
-
-/** Ações que decidem o "levar ao parque" (a regra antiga, sem mudar). */
-export const MOVE_SEQ_PARK_TYPES = ["CHECK_IN", "CHECK_OUT", "MOVEMENT", "CANCEL"] as const;
-/** As mesmas mais o pedido e o início da entrega (decidem o "tirar do parque"). */
-export const MOVE_SEQ_TYPES = [...MOVE_SEQ_PARK_TYPES, "PENDING_CHECKOUT", "CHECKING_OUT"] as const;
-/** Ação anterior que faz de um MOVEMENT a saída para a entrega. */
-export const MOVE_EXIT_AFTER = ["PENDING_CHECKOUT", "CHECKING_OUT"] as const;
-
-/** Nomes antigos/variantes (API e cópia local) → o tipo da BD. PURA. */
-export function canonicalChangeType(changeType: string | null | undefined): string {
-  const k = String(changeType ?? "").trim().toUpperCase();
-  switch (k) {
-    case "CHECKIN": return "CHECK_IN";
-    case "CHECKOUT": return "CHECK_OUT";
-    case "MOVE": return "MOVEMENT";
-    case "CANCELLATION": case "CANCELLED": return "CANCEL";
-    default: return k;
+const sideOf = (text: string, keys: readonly string[], side: "from" | "to"): string | null => {
+  for (const k of keys) {
+    const v = placeValue(re(MOVEMENT_PATTERNS.side(k, side)).exec(text)?.[1]);
+    if (v != null) return v;
   }
-}
-
-/** O movimento conta como movimento (toca no parque)? */
-export const moveTouchesPark = (k: MoveKind | null | undefined): boolean => k === "park" || k === "exit";
-
-export interface SeqAction {
-  /** id da linha (History.id) — desempata ações no mesmo instante */
-  id: string;
-  bookingId: string;
-  changeType: string | null;
-  /** instante UTC (qualquer formato que o Date perceba; "YYYY-MM-DD HH:MM:SS" = UTC) */
-  actionTime: string;
-}
-
-const msOf = (t: string): number => {
-  const s = String(t ?? "").trim();
-  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s) ? `${s.replace(" ", "T")}Z` : s;
-  const ms = Date.parse(iso);
-  return Number.isFinite(ms) ? ms : 0;
+  return null;
 };
 
 /**
- * Para cada MOVEMENT (pelo id), que movimento é — com a regra do topo do
- * ficheiro, pela ordem das ações da MESMA reserva (instante, depois id).
- * As outras ações não aparecem no resultado. PURA.
+ * Classifica UMA linha MOVEMENT pelo modifiedFields (texto, ou objeto — que
+ * passa a JSON). A MESMA árvore de movementKindSql. PURA.
  */
-export function moveKindsOf(rows: readonly SeqAction[]): Map<string, MoveKind> {
-  const byBooking = new Map<string, Array<{ r: SeqAction; ms: number; ct: string }>>();
-  for (const r of rows) {
-    const ct = canonicalChangeType(r.changeType);
-    if (!(MOVE_SEQ_TYPES as readonly string[]).includes(ct)) continue;
-    const list = byBooking.get(r.bookingId) ?? [];
-    list.push({ r, ms: msOf(r.actionTime), ct });
-    byBooking.set(r.bookingId, list);
+export function classifyMovement(modifiedFields: unknown): MovementKind {
+  const text = modifiedFields == null ? "" : typeof modifiedFields === "string" ? modifiedFields : JSON.stringify(modifiedFields);
+  const P = MOVEMENT_PATTERNS, G = MOVEMENT_GARAGE_KEYS, S = MOVEMENT_SPOT_KEYS;
+  const hasG = re(P.hasKey(G)).test(text), hasS = re(P.hasKey(S)).test(text);
+  if (!hasG && !hasS) return re(P.moving, "i").test(text) ? "inicio" : "antigo";
+  if (re(P.plainKey(G)).test(text) || re(P.plainKey(S)).test(text)) return "antigo";
+  if (hasG) {
+    const gf = sideOf(text, G, "from");
+    if (gf == null) return "arrumar";
+    return gf !== (sideOf(text, G, "to") ?? "") ? "parques" : "lugar";
   }
-  const out = new Map<string, MoveKind>();
-  for (const list of byBooking.values()) {
-    list.sort((a, b) => a.ms - b.ms || (a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0));
-    let lastPark: string | null = null; // anterior entre recolha/entrega/movimento/cancelamento
-    let lastAny: string | null = null;  // anterior contando também o pedido e o início da entrega
-    for (const { r, ct } of list) {
-      if (ct === "MOVEMENT") {
-        const kind: MoveKind = lastPark === "CHECK_IN" ? "park" : lastAny != null && (MOVE_EXIT_AFTER as readonly string[]).includes(lastAny) ? "exit" : "spot";
-        out.set(r.id, kind);
-      }
-      if ((MOVE_SEQ_PARK_TYPES as readonly string[]).includes(ct)) lastPark = ct;
-      lastAny = ct;
-    }
-  }
-  return out;
+  return sideOf(text, S, "from") == null ? "arrumar" : "lugar";
 }
 
 /**
- * Chave de uma linha para as contagens e o detalhe: a mudança de lugar passa
- * a SPOT_CHANGE; o resto fica com o seu tipo. PURA.
+ * Hora MARCADA da entrega numa linha CHECK_OUT: `modifiedFields.checkOut.from`
+ * (a app reescreve o Booking.checkOut com a hora real; a marcada fica no
+ * "from"). Devolve ms UTC, ou null se não houver ou não for uma data. PURA.
  */
-export function actionKeyOf(changeType: string | null | undefined, kind: MoveKind | null | undefined): string {
-  const ct = String(changeType ?? "").trim().toUpperCase();
-  return canonicalChangeType(ct) === "MOVEMENT" && kind === "spot" ? SPOT_CHANGE_KEY : ct;
+export function scheduledCheckOutMs(modifiedFields: unknown): number | null {
+  const text = modifiedFields == null ? "" : typeof modifiedFields === "string" ? modifiedFields : JSON.stringify(modifiedFields);
+  const from = re(MOVEMENT_PATTERNS.checkOutFrom).exec(text)?.[1];
+  if (!from) return null;
+  const ms = Date.parse(from);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Rótulos das linhas MOVEMENT que não são movimentos (os detalhes do Condutores e agentes e da Avaliação do dia). */
+export const MOVEMENT_KIND_CHANGE_TYPES = { inicio: "MOVEMENT_START", lugar: "SPOT_CHANGE" } as const;
+export const MOVEMENT_KIND_LABELS: Record<string, string> = {
+  MOVEMENT_START: "Início de movimento (não conta)",
+  SPOT_CHANGE: "Mudança de lugar",
+};
+
+/** changeType a mostrar no detalhe: MOVEMENT → MOVEMENT_START / SPOT_CHANGE quando não é movimento. PURA. */
+export function displayChangeType(changeType: string | null | undefined, kind: MovementKind | string | null | undefined): string {
+  const ct = String(changeType ?? "");
+  if (ct.toUpperCase() !== "MOVEMENT") return ct;
+  return kind === "inicio" ? MOVEMENT_KIND_CHANGE_TYPES.inicio : kind === "lugar" ? MOVEMENT_KIND_CHANGE_TYPES.lugar : ct;
 }

@@ -47,7 +47,8 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
     - **Vermelho**: indoor (ou VIP) fora de uma garagem coberta, ou descoberto numa garagem coberta.
     - **Amarelo**: toldo numa garagem descoberta. Passa para a coberta quando houver lugar ("se der").
     - Garagem com outro nome, ou carro sem tipo: fica sem cor (não se adivinha).
-  - **Mal arrumados** (por baixo) lista esses carros, com matrícula, garagem, lugar e parque, para se irem buscar.
+  - **Mal arrumados** (por baixo): em cima, quantos estão mal arrumados e quantos toldos estão numa descoberta. Por baixo, **uma linha por tipo**, com quantos carros: por exemplo "Descoberto em COBERTO · 11 carros", "Interior em PD · 6 carros", "Toldo em PD (se der, coberta) · 8 carros". Primeiro os mal arrumados (a vermelho, com ⚠), depois os "se der" (a amarelo).
+    - Carrega numa linha para ver os carros dela (matrícula, lugar e parque) e ires buscá-los; carrega outra vez para fechar. Ao entrar estão todas fechadas.
   - **Ver por parque e garagem** abre a divisão antiga.
 - **Pendentes que se arrastam** e **Resumo da semana** contam só os pendentes da passagem: PDAs ainda com check-in e notas do team leader. Ocorrências, reclamações e perdidos não são da passagem e já não aparecem aqui. Os resumos de semanas anteriores, que ainda falavam deles, deixam de se mostrar; o próximo sai na segunda-feira.
 - Os que já passaram a hora de saída.

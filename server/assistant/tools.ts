@@ -13,6 +13,7 @@ import { can, roleRank, ROLE_RANK, seesBeyondOwn, type AccessOverrides } from ".
 import type { CityAccess } from "../cityAccess";
 import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/ai/chat/tools";
 import { excerptHelp, type HelpDoc } from "../_core/ai/chat/retrieval";
+import { lateArrivalsOf } from "../../shared/evaluationRules";
 
 export interface StaffUser {
   id: number;
@@ -257,7 +258,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
   },
   {
     name: "minha_avaliacao",
-    description: "A avaliação individual da PRÓPRIA pessoa num intervalo: pontos, horas, recolhas, entregas, movimentos (só os que tocam no parque), mudanças de lugar (ações, sem pontos de movimento), atrasos, excessos de velocidade, reclamações e acidentes. Omissão: últimos 30 dias.",
+    description: "A avaliação individual da PRÓPRIA pessoa num intervalo: pontos, horas, recolhas, entregas, movimentos (levar ao parque e entre garagens), mudanças de lugar (mesma garagem: não são movimentos), atrasos à entrada, entregas atrasadas, excessos de velocidade, reclamações e acidentes. Omissão: últimos 30 dias.",
     parameters: { type: "object", properties: { ...rangeParams } },
     available: (ctx) => roleRank(ctx.user.role) >= ROLE_RANK.extra,
     async run(args, ctx) {
@@ -269,7 +270,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
         periodo: { de: from, ate: to }, dias: num(r.totals.days),
         pontos: { total: num(r.totals.score?.totalPoints), positivos: num(r.totals.score?.positivePoints), negativos: num(r.totals.score?.negativePoints) },
         porRegra: (r.totals.score?.lines ?? []).filter((l: any) => num(l.count) !== 0).map((l: any) => ({ regra: l.label, n: num(l.count), pontos: num(l.subtotal) })),
-        metricas: { horas: num(m.hoursWorked), recolhas: num(m.recolhas), entregas: num(m.entregas), movimentos: num(m.movements), mudancasDeLugar: num(m.spotChanges), atrasos: num(m.delays), excessosVelocidade: num(m.speedingEvents), reclamacoes: num(m.complaints), acidentes: num(m.accidents) },
+        metricas: { horas: num(m.hoursWorked), recolhas: num(m.recolhas), entregas: num(m.entregas), movimentos: num(m.movements), mudancasDeLugar: num(m.spotChanges), atrasosEntrada: lateArrivalsOf({ delays: num(m.delays), lateServices: num(m.lateServices) }), entregasAtrasadas: num(m.lateServices), excessosVelocidade: num(m.speedingEvents), reclamacoes: num(m.complaints), acidentes: num(m.accidents) },
         pontosPorHora: r.totals.perHour?.pointsPerHour ?? null,
         contestacoesAbertas: (r.disputes ?? []).filter((d: any) => d.status === "open").length,
       };

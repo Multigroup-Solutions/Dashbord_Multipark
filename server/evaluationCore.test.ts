@@ -6,6 +6,8 @@ import {
   incidentIsAccident,
   isFlaggedPonto,
   isLateArrival,
+  classifyDeliveries,
+  isLateDelivery,
   markLateDeliveries,
   markParkingMoves,
   pairPonto,
@@ -14,7 +16,7 @@ import {
   type EngineInput,
 } from "./evaluationCore";
 import { buildEvaluationIdentity } from "./evaluationIdentity";
-import { scoreOf } from "../shared/evaluationRules";
+import { LATE_AFTER_REQUEST_MINUTES, scoreOf } from "../shared/evaluationRules";
 import { utcMs } from "../shared/lisbonDay";
 
 const act = (bookingExternalId: string, changeType: string, actionTime: string, agentName = "Gelson Sousa"): ActionRow =>
@@ -41,13 +43,13 @@ describe("levar ao parque (1.º movimento depois de uma recolha)", () => {
 });
 
 describe("entregas atrasadas (serviço)", () => {
-  it("> 15 min entre o pedido (PENDING_CHECKOUT) e a entrega conta; ≤ 15 não", () => {
+  it("sem hora marcada: > 30 min (LATE_AFTER_REQUEST_MINUTES) entre o pedido (PENDING_CHECKOUT) e a entrega conta; ≤ 30 não", () => {
     const rows = [
       act("B1", "PENDING_CHECKOUT", "2026-09-24 10:00:00"),
-      act("B1", "CHECK_OUT", "2026-09-24 10:16:00"),
+      act("B1", "CHECK_OUT", "2026-09-24 10:31:00"),
       act("B2", "PENDING_CHECKOUT", "2026-09-24 10:00:00"),
-      act("B2", "CHECK_OUT", "2026-09-24 10:15:00"),
-      act("B3", "CHECK_OUT", "2026-09-24 11:00:00"), // sem pedido
+      act("B2", "CHECK_OUT", "2026-09-24 10:30:00"),
+      act("B3", "CHECK_OUT", "2026-09-24 11:00:00"), // sem pedido nem hora marcada
       act("B4", "PENDING_CHECKOUT", "2026-09-24 01:00:00"),
       act("B4", "CHECK_OUT", "2026-09-24 12:00:00"), // > 10 h: outro pedido
     ];
@@ -200,5 +202,182 @@ describe("motor (dia operacional completo)", () => {
     const out = computeEmployeeDays({ ...base, actions: [act("B9", "CHECK_OUT", "2026-09-24 10:00:00", "Zé Desconhecido")], ponto: [], assignments: [] });
     expect(out.rows).toHaveLength(0);
     expect(out.unresolved.get("2026-09-24")?.get("agent:zedesconhecido")).toMatchObject({ actions: 1, entregas: 1 });
+  });
+});
+
+// ─── 14 out 2026 (Jorge): movimentos pelo modifiedFields, entregas pela hora marcada, 1 atraso à entrada por dia,
+// excessos do Zello e reclamações confirmadas pelos pontos (de qualquer sinal) ─────────────────────────────
+const mv = (bookingExternalId: string, actionTime: string, modifiedFields: string): ActionRow =>
+  ({ bookingExternalId, changeType: "MOVEMENT", actionTime, agentUserId: null, agentName: "Gelson Sousa", modifiedFields });
+const START = '{"_version":2,"status":{"from":"CHECKED_IN","to":"MOVING"}}';
+const place = (gFrom: string | null, gTo: string, sFrom: string | null, sTo: string) =>
+  JSON.stringify({ _version: 2, garageName: { from: gFrom, to: gTo }, spot: { from: sFrom, to: sTo } });
+const ident1 = () => buildEvaluationIdentity({ employees: [{ id: 1, fullName: "Gelson Sousa", userId: 10, multiparkAgentName: null, multiparkAgentUserId: null }], agentAliases: [], accountAliases: [] });
+const emptyInput = (startDay: string, endDay: string, identity: EngineInput["identity"]): EngineInput => ({
+  startDay, endDay, identity, employees: new Map(), actions: [],
+  ponto: [], assignments: [], incidents: [], complaints: [], speedAlerts: [], penalties: [], rate: () => 0, tlWorkingDaysPerMonth: 15,
+});
+
+describe("14 out 2026 — movimentos: início não conta; mesma garagem = mudança de lugar", () => {
+  // o dia do Herlander (03/10) em pequeno: recolha + início + fim (arrumar), mudança de lugar e dois entre parques
+  const rows: ActionRow[] = [
+    act("B1", "CHECK_IN", "2026-10-03 02:26:13"),
+    mv("B1", "2026-10-03 02:26:24", START), // 1 início: não conta
+    mv("B1", "2026-10-03 02:40:40", place(null, "PD", null, "26 / 4")), // 2 levar ao parque
+    mv("B2", "2026-10-03 13:32:13", place("PD", "PD", "26 / 3", "70 / 1")), // 3 mudança de lugar
+    mv("B3", "2026-10-03 13:36:47", place("PD FORA", "PD", "4 / 1", "75 / 1")), // 4 entre parques
+    mv("B4", "2026-10-03 12:13:53", START), // 5 início
+    mv("B4", "2026-10-03 12:23:10", place("PD", "COBERTO", "72 / 2", "7 / 3")), // 6 entre parques
+    act("B5", "CHECK_IN", "2026-10-03 09:00:00"),
+    act("B5", "MOVEMENT", "2026-10-03 09:10:00"), // 8 formato antigo logo a seguir à recolha → levar ao parque
+  ];
+
+  it("classifyActionRows / markParkingMoves / actionRowsToCounts", () => {
+    expect([...markParkingMoves(rows)].sort()).toEqual([2, 8]);
+    const counts = actionRowsToCounts(rows).filter((c) => c.changeType === "MOVEMENT");
+    const sum = (k: "n" | "moves" | "spotChanges" | "parkingMoves") => counts.reduce((s, c) => s + (c[k] ?? 0), 0);
+    // os 2 inícios ficam fora de tudo (nem ações)
+    expect({ n: sum("n"), moves: sum("moves"), spot: sum("spotChanges"), parking: sum("parkingMoves") }).toEqual({ n: 5, moves: 4, spot: 1, parking: 2 });
+  });
+
+  it("no motor: movimentos 4 (2 levar ao parque + 2 entre parques), 1 mudança de lugar (+1), os inícios fora", () => {
+    const identity = ident1();
+    const out = computeEmployeeDays({ ...emptyInput("2026-10-03", "2026-10-03", identity), actions: rows });
+    const m = out.rows[0].metrics;
+    expect(m).toMatchObject({ movements: 4, parkingMoves: 2, spotChanges: 1, recolhas: 2, actions: 2 + 5 });
+    expect(out.rows[0].actionsByType.MOVEMENT).toBe(5); // sem os 2 inícios
+    expect(out.rows[0].actionsByHour!.reduce((s, n) => s + n, 0)).toBe(7);
+    expect(m.weightedActions).toBe(2 * 5 + 2 * 2 + 1 * 1 + 2 * 3);
+    // as contagens agregadas (BD da Multipark) dão o mesmo
+    const fromCounts = computeEmployeeDays({ ...emptyInput("2026-10-03", "2026-10-03", identity), actionCounts: actionRowsToCounts(rows) });
+    expect(fromCounts.rows[0].metrics).toEqual(m);
+  });
+});
+
+describe("14 out 2026 — entrega atrasada pela hora marcada (e pelo pedido + 30 quando o pedido vem depois)", () => {
+  const outFields = (sched: string | null, at: string) => JSON.stringify({ _version: 2, status: { from: "CHECKING_OUT", to: "CHECKED_OUT" }, ...(sched ? { checkOut: { from: sched, to: at } } : {}) });
+  const co = (b: string, at: string, sched: string | null): ActionRow => ({ ...act(b, "CHECK_OUT", at.replace("T", " ").slice(0, 19)), modifiedFields: outFields(sched, at) });
+
+  it("regras com os casos reais e os de fronteira", () => {
+    const rows: ActionRow[] = [
+      // 24008 (10/10): pedido 18:27 antes da marcada 18:45, entregue 18:47 → NÃO é atraso (antes era)
+      act("B1", "PENDING_CHECKOUT", "2026-10-10 18:27:43"), co("B1", "2026-10-10T18:47:43.000Z", "2026-10-10T18:45:00.000Z"),
+      // 21013 (10/10): marcada 17:45, pedido 17:47 (depois), entregue 18:05 → 18 min do pedido: NÃO é atraso (≤ 30)
+      act("B2", "PENDING_CHECKOUT", "2026-10-10 17:47:01"), co("B2", "2026-10-10T18:05:12.000Z", "2026-10-10T17:45:00.000Z"),
+      // voo atrasado com viagem > 15 min: marcada 10:00, pedido 11:00, entregue 11:25 → NÃO é atraso
+      act("B3", "PENDING_CHECKOUT", "2026-10-10 11:00:00"), co("B3", "2026-10-10T11:25:00.000Z", "2026-10-10T10:00:00.000Z"),
+      // voo atrasado mas o condutor demorou: pedido 11:00, entregue 11:31 → atraso
+      act("B7", "PENDING_CHECKOUT", "2026-10-10 11:00:00"), co("B7", "2026-10-10T11:31:00.000Z", "2026-10-10T10:00:00.000Z"),
+      // sem pedido, marcada 12:00, entregue 12:30 → atraso; 12:15 → não
+      co("B4", "2026-10-10T12:30:00.000Z", "2026-10-10T12:00:00.000Z"),
+      co("B8", "2026-10-10T12:15:00.000Z", "2026-10-10T12:00:00.000Z"),
+      // pedido à hora marcada: conta a marcada + 15 → 12:16 é atraso
+      act("B9", "PENDING_CHECKOUT", "2026-10-10 12:00:00"), co("B9", "2026-10-10T12:16:00.000Z", "2026-10-10T12:00:00.000Z"),
+      // sem hora marcada: pedido 13:00, entregue 13:20 → não (≤ 30); 13:31 → sim
+      act("B5", "PENDING_CHECKOUT", "2026-10-10 13:00:00"), co("B5", "2026-10-10T13:20:00.000Z", null),
+      act("B10", "PENDING_CHECKOUT", "2026-10-10 13:00:00"), co("B10", "2026-10-10T13:31:00.000Z", null),
+      // hora marcada que não é data → cai no pedido + 30: 14:00 → 14:10 não é atraso
+      act("B6", "PENDING_CHECKOUT", "2026-10-10 14:00:00"), { ...act("B6", "CHECK_OUT", "2026-10-10 14:10:00"), modifiedFields: '{"checkOut":{"from":"amanha","to":"x"}}' },
+    ];
+    const late = [...markLateDeliveries(rows)].map((i) => rows[i].bookingExternalId).sort();
+    expect(late).toEqual(["B10", "B4", "B7", "B9"]);
+    const { noSchedule } = classifyDeliveries(rows);
+    expect([...noSchedule].map((i) => rows[i].bookingExternalId).sort()).toEqual(["B10", "B5", "B6"]);
+    expect(LATE_AFTER_REQUEST_MINUTES).toBe(30);
+  });
+
+  it("isLateDelivery", () => {
+    const at = (s: string) => utcMs(s);
+    expect(isLateDelivery(at("2026-10-10 12:16:00"), at("2026-10-10 12:00:00"), null)).toBe(true);
+    expect(isLateDelivery(at("2026-10-10 12:15:00"), at("2026-10-10 12:00:00"), null)).toBe(false);
+    expect(isLateDelivery(at("2026-10-10 12:40:00"), at("2026-10-10 12:00:00"), at("2026-10-10 12:20:00"))).toBe(false); // 20 min do pedido
+    expect(isLateDelivery(at("2026-10-10 12:51:00"), at("2026-10-10 12:00:00"), at("2026-10-10 12:20:00"))).toBe(true);
+    expect(isLateDelivery(at("2026-10-10 12:51:00"), null, null)).toBe(false);
+  });
+
+  it("as entregas sem hora marcada chegam à avaliação do dia", () => {
+    const rows = [act("B1", "PENDING_CHECKOUT", "2026-10-10 13:00:00"), co("B1", "2026-10-10T13:40:00.000Z", null)];
+    const out = computeEmployeeDays({ ...emptyInput("2026-10-10", "2026-10-10", ident1()), actions: rows });
+    expect(out.rows[0].metrics).toMatchObject({ entregas: 1, lateServices: 1, delays: 1, deliveriesWithoutSchedule: 1 });
+  });
+});
+
+describe("14 out 2026 — no máximo 1 atraso à entrada por dia", () => {
+  it("duas linhas na escala no mesmo dia, as duas atrasadas → 1", () => {
+    const a = (startHour: number, endHour: number) => ({ assignmentDate: "2026-10-10", employeeId: 1, personName: "Gelson Sousa", level: "1", isTeamLeader: false, shift: "morning" as const, city: "lisbon", startHour, endHour, sentHomeHour: null });
+    const out = computeEmployeeDays({
+      ...emptyInput("2026-10-10", "2026-10-10", ident1()),
+      ponto: [{ id: 1, employeeId: 1, type: "check_in", recordedAt: "2026-10-10 09:30:00" }],
+      assignments: [a(8, 12), a(9, 14)],
+    });
+    expect(out.rows[0].metrics).toMatchObject({ delays: 1, lateServices: 0 });
+    expect(scoreOf(out.rows[0].metrics).lines.find((l) => l.key === "delay")).toMatchObject({ count: 1, subtotal: -5 });
+  });
+});
+
+describe("14 out 2026 — excessos de velocidade do Zello (1 por dia acima do limiar, sem contar a dobrar)", () => {
+  const identity = buildEvaluationIdentity({ employees: [
+    { id: 1, fullName: "Ana Silva", userId: 10, multiparkAgentName: null, multiparkAgentUserId: null },
+    { id: 2, fullName: "Rui Costa", userId: 11, multiparkAgentName: null, multiparkAgentUserId: null },
+  ], agentAliases: [], accountAliases: [] });
+  it("dia com a máxima acima do limiar = 1; abaixo = 0; com alertas nesse dia ficam os alertas", () => {
+    const out = computeEmployeeDays({
+      ...emptyInput("2026-10-10", "2026-10-11", identity),
+      speedThresholdKmh: 132,
+      gpsDays: [
+        { employeeId: 1, day: "2026-10-10", maxSpeed: 148.39 }, { employeeId: 1, day: "2026-10-10", maxSpeed: 140 }, // duas partes do PDA, 1 dia
+        { employeeId: 1, day: "2026-10-11", maxSpeed: 131.9 },
+        { employeeId: 2, day: "2026-10-10", maxSpeed: 140 },
+      ],
+      speedAlerts: [{ id: 7, employeeId: 2, createdAt: "2026-10-10 10:00:00" }, { id: 8, employeeId: 2, createdAt: "2026-10-10 11:00:00" }],
+    });
+    const get = (e: number, d: string) => out.rows.find((r) => r.employeeId === e && r.day === d)?.metrics.speedingEvents ?? 0;
+    expect(get(1, "2026-10-10")).toBe(1);
+    expect(get(1, "2026-10-11")).toBe(0);
+    expect(get(2, "2026-10-10")).toBe(2); // os 2 alertas; o Zello não soma
+  });
+  it("sem limiar o GPS não conta", () => {
+    expect(computeEmployeeDays({ ...emptyInput("2026-10-10", "2026-10-10", identity), gpsDays: [{ employeeId: 1, day: "2026-10-10", maxSpeed: 200 }] }).rows).toHaveLength(0);
+  });
+});
+
+describe("14 out 2026 — reclamação confirmada pelos pontos (qualquer sinal) ou pelos pontos do condutor", () => {
+  it("regra", () => {
+    expect(complaintIsConfirmed({ penaltyPoints: -10, status: "closed" })).toBe(true); // a tabela base do ecrã é negativa
+    expect(complaintIsConfirmed({ penaltyPoints: 0, status: "open", driverPenaltyPoints: -5 })).toBe(true);
+    expect(complaintIsConfirmed({ penaltyPoints: 0, status: "closed", driverPenaltyPoints: 0 })).toBe(false);
+    expect(complaintIsConfirmed({ penaltyPoints: -10, status: "converted", driverPenaltyPoints: 3 })).toBe(false);
+  });
+  it("uma vez por reclamação e condutor, −20 (nunca a dobrar, nunca positivo)", () => {
+    const c = { complaintId: 5, employeeId: 1, at: "2026-10-10 10:00:00", penaltyPoints: -10, status: "closed", driverPenaltyPoints: -10 };
+    const out = computeEmployeeDays({ ...emptyInput("2026-10-10", "2026-10-10", ident1()), complaints: [c, { ...c }] });
+    expect(out.rows[0].metrics.complaints).toBe(1);
+    expect(scoreOf(out.rows[0].metrics).lines.find((l) => l.key === "confirmedComplaint")).toMatchObject({ count: 1, subtotal: -20 });
+  });
+});
+
+describe("14 out 2026 — excesso do Zello e alertas na fronteira das 03:00", () => {
+  const identity = buildEvaluationIdentity({ employees: [{ id: 1, fullName: "Ana Silva", userId: 10, multiparkAgentName: null, multiparkAgentUserId: null }], agentAliases: [], accountAliases: [] });
+  const run = (over: Partial<EngineInput>) => computeEmployeeDays({ ...emptyInput("2026-10-09", "2026-10-11", identity), speedThresholdKmh: 132, ...over });
+  const ev = (out: ReturnType<typeof computeEmployeeDays>, d: string) => out.rows.find((r) => r.day === d)?.metrics.speedingEvents ?? 0;
+
+  it("alerta às 02:30 de 10/10 (dia operacional 09/10) + GPS do dia de calendário 10/10 acima → conta 1 vez (no 09/10)", () => {
+    const out = run({ speedAlerts: [{ id: 1, employeeId: 1, createdAt: "2026-10-10 01:30:00" }], gpsDays: [{ employeeId: 1, day: "2026-10-10", maxSpeed: 145 }] });
+    expect(ev(out, "2026-10-09")).toBe(1);
+    expect(ev(out, "2026-10-10")).toBe(0);
+  });
+  it("alerta às 03:10 de 10/10 (dia operacional 10/10) + GPS 10/10 → 1 no 10/10", () => {
+    const out = run({ speedAlerts: [{ id: 1, employeeId: 1, createdAt: "2026-10-10 02:10:00" }], gpsDays: [{ employeeId: 1, day: "2026-10-10", maxSpeed: 145 }] });
+    expect(ev(out, "2026-10-10")).toBe(1);
+    expect(ev(out, "2026-10-09")).toBe(0);
+  });
+  it("alerta às 01:00 de 11/10 (dia operacional 10/10) + GPS de 11/10 → o GPS de 11/10 não soma", () => {
+    const out = run({ speedAlerts: [{ id: 1, employeeId: 1, createdAt: "2026-10-11 00:00:00" }], gpsDays: [{ employeeId: 1, day: "2026-10-11", maxSpeed: 145 }] });
+    expect(ev(out, "2026-10-10")).toBe(1);
+    expect(ev(out, "2026-10-11")).toBe(0);
+  });
+  it("penalização RH de velocidade conta como alerta para o GPS", () => {
+    const out = run({ penalties: [{ employeeId: 1, points: 5, reason: "speeding", relatedId: null, createdAt: "2026-10-10 01:30:00" }], gpsDays: [{ employeeId: 1, day: "2026-10-10", maxSpeed: 145 }] });
+    expect(ev(out, "2026-10-09") + ev(out, "2026-10-10")).toBe(1);
   });
 });

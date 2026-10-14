@@ -155,6 +155,8 @@ export type MenuItem = {
   external?: string;
   /** Lote 46: nome no menu de quem só vê o que é SEU aqui (ex.: "A minha ficha" em vez de "Recursos Humanos"). */
   ownLabel?: string;
+  /** 14 out 2026: só estes papéis (além do módulo), ex.: Condutores e agentes só a supervisor e acima. */
+  roles?: readonly string[];
 };
 
 /** Abre um item do menu: navega, ou abre o endereço externo num separador novo. */
@@ -175,7 +177,8 @@ export type MenuGroup = {
 };
 
 /** O item é visível para a pessoa (papel + overrides)? (sem módulo = visível a qualquer sessão) */
-export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf" | "beyondOwn">): boolean {
+export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf" | "beyondOwn"> & { roles?: readonly string[] }): boolean {
+  if (item.roles && !item.roles.includes(typeof userRole === "string" ? userRole : String(userRole?.role ?? ""))) return false;
   const mods = item.anyOf ?? (item.module ? [item.module] : []);
   if (item.beyondOwn) return mods.some(m => seesBeyondOwn(userRole, m));
   return mods.length === 0 || mods.some(m => can(userRole, m, "view"));

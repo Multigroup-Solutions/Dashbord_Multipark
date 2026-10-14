@@ -21,6 +21,7 @@ import {
   isSettingKey,
   normalizeFlagEnv,
   validateSetting,
+  validateSettingForWrite,
   type SettingKey,
   type SettingValue,
 } from "../shared/appSettings";
@@ -224,7 +225,7 @@ export async function setSetting(key: string, value: unknown, userId: number, op
   if (!isSettingKey(key) && !isFlagSettingKey(key)) throw new Error(`Definição desconhecida: ${key}`);
   let normalized: unknown = null;
   if (value !== null) {
-    const v = validateSetting(key, value);
+    const v = validateSettingForWrite(key, value);
     if (!v.ok) throw new Error(v.error);
     normalized = v.value;
   }

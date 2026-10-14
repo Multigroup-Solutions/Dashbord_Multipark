@@ -23,12 +23,15 @@ vi.mock("./db", () => {
       const t = textOf(q);
       state.executed.push(t);
       if (t.includes("multipark_booking_history")) return [state.localHistory];
+      // 14 out 2026: o contexto das 00h–03h do 1.º dia (alertas/penalizações de velocidade) e o GPS do dia
+      if (t.includes("UNION ALL")) return [(globalThis as any).__speedContext ?? []];
+      if (t.startsWith("SELECT employeeId, day, maxSpeed FROM driver_day_shares")) return [(globalThis as any).__gps ?? []];
       if (t.includes("employee_penalties")) return [state.penalties];
       if (t.includes("d.complaintId IN")) return [state.relComplaints];
       if (t.includes("FROM speed_alerts WHERE employeeId IS NOT NULL AND id IN")) return [state.relAlerts];
       return [[]];
     },
-    insert: () => ({ values: (v: any[]) => ({ onDuplicateKeyUpdate: async () => { state.inserted += v.length; } }) }),
+    insert: () => ({ values: (v: any[]) => ({ onDuplicateKeyUpdate: async () => { state.inserted += v.length; (globalThis as any).__lastValues = v; } }) }),
     delete: () => ({ where: async () => { state.deleted += 1; return [{ affectedRows: 0 }]; } }),
   };
   return { getDb: async () => db };
@@ -43,6 +46,8 @@ vi.mock("./evaluationIdentity", async (original) => {
 });
 vi.mock("./extraRates", () => ({ loadExtraRates: async () => ({}), rateFor: () => 10 }));
 vi.mock("./extrasDia", () => ({ TL_WORKING_DAYS_PER_MONTH: 22 }));
+// 14 out 2026: o limiar de velocidade (132 = omissão); `state.speedLimit = null` simula a leitura que falhou
+vi.mock("./dayActivity", () => ({ speedThreshold: async () => ((globalThis as any).__speedLimit === undefined ? 132 : (globalThis as any).__speedLimit) }));
 
 import { computeRange, recomputeRange, runEvaluationRecompute } from "./evaluationEngine";
 
@@ -84,6 +89,53 @@ describe("computeRange — movimentos da BD da Multipark", () => {
     expect(state.executed.some((t) => t.includes("time_records"))).toBe(true);
     expect(out.rows).toHaveLength(1);
     expect(out.rows[0].metrics).toMatchObject({ actions: 3, movements: 2, parkingMoves: 1, entregas: 1, lateServices: 1, delays: 1, incidentsReported: 1 });
+  });
+
+  it("14 out 2026: sem limiar de velocidade (leitura falhou) o GPS não conta e o aviso diz porquê", async () => {
+    (globalThis as any).__speedLimit = null;
+    try {
+      const out = await computeRange("2026-09-24", "2026-09-24", liveOk);
+      expect(out.notice).toMatch(/Não deu para ler o limite de velocidade/);
+    } finally {
+      delete (globalThis as any).__speedLimit;
+    }
+  });
+
+  it("14 out 2026: alerta às 01:30 do 1.º dia da fatia (dia operacional anterior) → o GPS desse dia de calendário não conta a dobrar", async () => {
+    (globalThis as any).__gps = [{ employeeId: 1, day: "2026-09-24", maxSpeed: 149 }];
+    try {
+      const sem = await computeRange("2026-09-24", "2026-09-24", liveOk);
+      expect(sem.rows.find((r) => r.employeeId === 1)!.metrics.speedingEvents).toBe(1);
+      (globalThis as any).__speedContext = [{ employeeId: 1, createdAt: "2026-09-24 00:30:00" }]; // 01:30 de Lisboa
+      const com = await computeRange("2026-09-24", "2026-09-24", liveOk);
+      expect(com.rows.find((r) => r.employeeId === 1)!.metrics.speedingEvents).toBe(0); // o alerta conta no dia 23 (noutra fatia)
+      expect(state.executed.some((q) => q.includes("UNION ALL") && q.includes("speed_alerts") && q.includes("reason = 'speeding'"))).toBe(true);
+    } finally {
+      delete (globalThis as any).__gps;
+      delete (globalThis as any).__speedContext;
+    }
+  });
+
+  it("14 out 2026: sem limiar de velocidade grava a versão 1 (o aviso de regras antigas continua)", async () => {
+    (globalThis as any).__speedLimit = null;
+    try {
+      const out = await computeRange("2026-09-24", "2026-09-24", liveOk);
+      expect(out.rulesVersion).toBe(1);
+      const { persistRows } = await import("./evaluationEngine");
+      await persistRows(out.rows, "2026-09-24", "2026-09-24", out.rulesVersion);
+      expect((globalThis as any).__lastValues[0].rulesVersion).toBe(1);
+    } finally {
+      delete (globalThis as any).__speedLimit;
+    }
+  });
+
+  it("14 out 2026: cada dia gravado leva a versão das regras (2)", async () => {
+    const { persistRows } = await import("./evaluationEngine");
+    const before = state.inserted;
+    const out = await computeRange("2026-09-24", "2026-09-24", liveOk);
+    await persistRows(out.rows, "2026-09-24", "2026-09-24");
+    expect(state.inserted - before).toBe(out.rows.length);
+    expect((globalThis as any).__lastValues[0]).toMatchObject({ rulesVersion: 2, spotChanges: 0, deliveriesWithoutSchedule: expect.any(Number) });
   });
 
   it("sem BD da Multipark: calcula com a cópia local e devolve o aviso", async () => {

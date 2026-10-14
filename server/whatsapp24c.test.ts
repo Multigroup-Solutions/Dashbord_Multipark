@@ -112,7 +112,8 @@ describe("D32 — Confirmar antes de enviar a várias pessoas", () => {
   });
 
   it("Extras-Dia e Leads: primeiro clique pede confirmação, o segundo envia", () => {
-    for (const p of ["client/src/pages/ExtrasDiaPage.tsx", "client/src/pages/ExtraLeadsPage.tsx"]) {
+    // 14 out 2026: o diálogo do WhatsApp da Disponibilidade saiu da ExtrasDiaPage.
+    for (const p of ["client/src/pages/extrasDia/AvailabilityWhatsAppDialog.tsx", "client/src/pages/ExtraLeadsPage.tsx"]) {
       const s = src(p);
       expect(s).toContain("needsBroadcastConfirm(");
       expect(s).toContain("broadcastConfirmText(");

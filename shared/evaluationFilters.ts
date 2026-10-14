@@ -529,7 +529,7 @@ export function sanitizeEvalSavedView(raw: unknown): { view: EvalSavedView; drop
 
 // ─── CSV do ranking (o que se vê: filtrado e pela ordem do ecrã) ────────────
 
-export const RANKING_CSV_HEADERS = ["Pos", "Colaborador", "Dias", "Horas", "Ações", "Recolhas", "Entregas", "Movimentos", "Levar ao parque", "Atrasos", "Velocidade", "Reclamações", "Acidentes", "Pts+", "Pts−", "Total", "Ações/h", "Pontos/h", "Custo", "Cidade", "Marca", "Equipa (TL)"];
+export const RANKING_CSV_HEADERS = ["Pos", "Colaborador", "Dias", "Horas", "Ações", "Recolhas", "Entregas", "Movimentos", "Levar ao parque", "Mudanças de lugar", "Atrasos (entrada + entregas)", "Entregas atrasadas", "Velocidade", "Reclamações", "Acidentes", "Pts+", "Pts−", "Total", "Ações/h", "Pontos/h", "Custo", "Cidade", "Marca", "Equipa (TL)"];
 
 /**
  * CSV (";") das linhas dadas, pela ordem dada. Com filtro, as duas primeiras
@@ -540,7 +540,7 @@ export function rankingCsv(rows: readonly EvalRankingRowLike[], o: { rankOf: (em
   const cell = (v: unknown) => String(v ?? "").replace(/[;\r\n]+/g, ",");
   const lines = rows.map((r) => [
     o.rankOf(r.employeeId), r.employeeName, r.days, m(r, "hoursWorked"), m(r, "actions"), m(r, "recolhas"), m(r, "entregas"),
-    m(r, "movements"), m(r, "parkingMoves"), m(r, "delays"), m(r, "speedingEvents"), m(r, "complaints"), m(r, "accidents"),
+    m(r, "movements"), m(r, "parkingMoves"), m(r, "spotChanges"), m(r, "delays"), m(r, "lateServices"), m(r, "speedingEvents"), m(r, "complaints"), m(r, "accidents"),
     r.score.positivePoints ?? "", r.score.negativePoints ?? "", r.score.totalPoints, r.perHour?.actionsPerHour ?? "", r.perHour?.pointsPerHour ?? "", m(r, "cost"),
     (r.cities ?? []).map(cityLabel).join(", "), r.brand?.name ?? "", r.teamLeader?.name ?? "",
   ].map(cell).join(";"));

@@ -4,9 +4,9 @@
  *  - Condutores: recolhas, entregas, movimentos, mudanças de lugar e km do GPS;
  *  - Agentes: todas as ações (reservas criadas, alterações, mudanças de lugar…).
  * 14 out 2026 (Jorge): "Movimentos" = só os que tocam no parque (levar ao
- * parque e tirar do parque para a entrega); "Mudanças de lugar" = o carro já
- * no parque só muda de lugar — conta nas ações, não nos movimentos nem nos
- * pontos (regra em shared/multiparkMovements.ts).
+ * parque e entre garagens); "Mudanças de lugar" = o carro ficou na mesma
+ * garagem e só mudou de lugar — conta nas ações, não nos movimentos (regra em
+ * shared/multiparkMovements.ts → classifyMovement).
  * Clicar no NOME abre a ficha; clicar num NÚMERO abre a lista desses
  * movimentos. O filtro de cidade e marca é o do topo da app; aqui escolhe-se o
  * período e a pessoa. Quem gere o RH une/separa (Ligações) e tira da lista
@@ -20,11 +20,13 @@ import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
-import { MOVE_KIND_LABELS, SPOT_CHANGE_KEY, movementLabel, type MoveKind } from "@shared/multiparkMovements";
+import { movementLabel } from "@shared/multiparkMovements";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { Th, useTableSort } from "@/components/SortableTable";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { PersonLinksDialog } from "@/components/PersonLinksDialog";
+import { PeopleFilterBar } from "@/components/people/PeopleFilterBar";
+import { matchesSearch, passesRules, type MetricRule } from "@shared/peopleFilters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,7 +52,8 @@ const COLUMN_TYPES: Record<string, string[] | null> = {
   recolhas: ["CHECK_IN"],
   entregas: ["CHECK_OUT"],
   movements: ["MOVEMENT"],
-  spotChanges: [SPOT_CHANGE_KEY],
+  /** 14 out 2026: as mudanças de lugar (mesma garagem) vêm como SPOT_CHANGE no detalhe */
+  spotChanges: ["SPOT_CHANGE"],
   total: null,
 };
 
@@ -65,25 +68,29 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
   const [{ start, end }, setRange] = useState(monthToDate);
   const [person, setPerson] = useState("");
   const [q, setQ] = useState("");
+  // 14 out 2026 (Jorge): pesquisa pelo nome nos dois e filtros por parâmetros (coluna ≥ / ≤ valor)
+  const [rules, setRules] = useState<MetricRule[]>([]);
   const [detail, setDetail] = useState<DetailTarget | null>(initialDetail ?? null);
   const [links, setLinks] = useState<{ employeeId: number; name: string } | null>(null);
   const valid = !!start && !!end && start <= end;
   const listQ = trpc.reviews.movementPeople.useQuery({ startDate: start, endDate: end, projectId, drivers: mode === "drivers" }, { enabled: valid, refetchOnWindowFocus: false });
   const data = listQ.data;
   const all = (data && data.available ? data.rows : []) as Row[];
-  const spotLabel = "Mudanças de lugar";
   const options = useMemo(() => all.map((r) => ({ value: r.key, label: `${r.name}${r.kind === "por_ligar" ? " (sem ficha)" : r.kind === "parceiro" ? " (parceiro)" : ""}` })), [all]);
   const rows = useMemo(() => {
-    const t = q.trim().toLowerCase();
     return all.filter((r) => (!person || r.key === person)
-      && (!t || r.name.toLowerCase().includes(t) || (r.agentName ?? "").toLowerCase().includes(t) || r.agentUserIds.some((id) => id.toLowerCase().includes(t))));
-  }, [all, person, q]);
+      && matchesSearch(q, r.name, r.agentName, ...r.agentUserIds)
+      && passesRules(r, rules, (x, k) => (k === "km" ? x.km : (x as unknown as Record<string, number>)[k] ?? 0)));
+  }, [all, person, q, rules]);
+  const filterMetrics = mode === "drivers"
+    ? [{ key: "recolhas", label: "Recolhas" }, { key: "entregas", label: "Entregas" }, { key: "movements", label: "Movimentos" }, { key: "spotChanges", label: "Mudanças de lugar" }, { key: "km", label: "Km (GPS)" }]
+    : [{ key: "total", label: "Ações" }, { key: "recolhas", label: "Recolhas" }, { key: "entregas", label: "Entregas" }, { key: "movements", label: "Movimentos" }, { key: "spotChanges", label: "Mudanças de lugar" }, { key: "bookings", label: "Reservas" }];
   const sort = useTableSort(rows, mode === "drivers" ? "entregas" : "total", -1);
   const ignore = trpc.multipark.ignoreAgent.useMutation({
     onSuccess: () => { toast.success("Tirado da lista (fica como \"não é funcionário\"; desfaz-se no RH → Agentes)."); utils.reviews.movementPeople.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
-  const totals = useMemo(() => rows.reduce((s, r) => ({ recolhas: s.recolhas + r.recolhas, entregas: s.entregas + r.entregas, movements: s.movements + r.movements, spotChanges: s.spotChanges + (r.spotChanges ?? 0), total: s.total + r.total, km: s.km + (r.km ?? 0) }), { recolhas: 0, entregas: 0, movements: 0, spotChanges: 0, total: 0, km: 0 }), [rows]);
+  const totals = useMemo(() => rows.reduce((s, r) => ({ recolhas: s.recolhas + r.recolhas, entregas: s.entregas + r.entregas, movements: s.movements + r.movements, spotChanges: s.spotChanges + (r.spotChanges ?? 0), bookings: s.bookings + (r.bookings ?? 0), total: s.total + r.total, km: s.km + (r.km ?? 0) }), { recolhas: 0, entregas: 0, movements: 0, spotChanges: 0, bookings: 0, total: 0, km: 0 }), [rows]);
 
   const num = (r: Row, k: keyof typeof COLUMN_TYPES, label: string) => {
     const v = r[k as keyof Row] as number;
@@ -104,7 +111,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
           {mode === "drivers"
             ? "Quem recolheu, entregou ou moveu carros no período (lido ao vivo da Multipark) e os km do GPS do Zello."
             : "Todos os agentes da Multipark com ações no período: recolhas, entregas, movimentos, mudanças de lugar, reservas criadas e alterações."}
-          {" "}Movimentos = só os que tocam no parque (levar ao parque e tirar para a entrega). Mudanças de lugar = o carro já no parque muda de lugar: contam nas ações, não nos movimentos nem nos pontos.
+          {" "}Movimentos = levar ao parque + entre garagens; na mesma garagem conta só como mudança de lugar.
           {" "}Cidade e marca: o filtro do topo. Clica no nome para abrir a ficha e num número para ver esses movimentos.
         </p>
       </CardHeader>
@@ -117,18 +124,15 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
             <SearchableSelect value={person} onChange={setPerson} options={[{ value: "", label: mode === "drivers" ? "Todos os condutores" : "Todos" }, ...options]}
               placeholder={mode === "drivers" ? "Todos os condutores" : "Todos"} searchPlaceholder="Procurar nome…" className="w-full" />
           </div>
-          {mode === "agents" && (
-            <div className="min-w-[180px]"><Label className="text-xs">Nome ou código do agente</Label>
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Procurar…" className="w-full" /></div>
-          )}
           {listQ.isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>
+        <PeopleFilterBar search={q} onSearch={setQ} metrics={filterMetrics} rules={rules} onRules={setRules} />
 
         {!valid ? <p className="text-sm text-muted-foreground">A data "De" tem de ser antes de "Até".</p>
           : listQ.error ? <QueryErrorNote error={listQ.error} onRetry={() => listQ.refetch()} retrying={listQ.isFetching} what="os movimentos (BD da Multipark)" />
           : data && !data.available ? <p className="text-sm text-amber-700">{data.reason}</p>
           : listQ.isLoading ? <p className="text-sm text-muted-foreground">A ler a Multipark…</p>
-          : rows.length === 0 ? <p className="text-sm text-muted-foreground">Ninguém com movimentos neste período{person || q ? " com esse filtro" : ""}.</p>
+          : rows.length === 0 ? <p className="text-sm text-muted-foreground">Ninguém com movimentos neste período{person || q || rules.length ? " com esse filtro" : ""}.</p>
           : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm min-w-[720px]">
@@ -138,7 +142,8 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                   <Th k="recolhas" label="Recolhas" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   <Th k="entregas" label="Entregas" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   <Th k="movements" label="Movimentos" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
-                  <Th k="spotChanges" label={spotLabel} align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
+                  {/* 14 out 2026: na mesma garagem conta só como mudança de lugar (condutores e agentes) */}
+                  <Th k="spotChanges" label="Mudanças de lugar" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   {mode === "drivers"
                     ? <Th k="km" label="Km (GPS)" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                     : <>
@@ -162,7 +167,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                       <td className="p-2 text-right">{num(r, "recolhas", "Recolhas")}</td>
                       <td className="p-2 text-right">{num(r, "entregas", "Entregas")}</td>
                       <td className="p-2 text-right">{num(r, "movements", "Movimentos")}</td>
-                      <td className="p-2 text-right">{num(r, "spotChanges", spotLabel)}</td>
+                      <td className="p-2 text-right">{num(r, "spotChanges", "Mudanças de lugar")}</td>
                       {mode === "drivers"
                         ? <td className="p-2 text-right tabular-nums">{r.km != null ? r.km.toLocaleString("pt-PT") : <span className="text-muted-foreground">·</span>}</td>
                         : <>
@@ -193,7 +198,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                   <td className="p-2 text-right tabular-nums">{totals.entregas}</td>
                   <td className="p-2 text-right tabular-nums">{totals.movements}</td>
                   <td className="p-2 text-right tabular-nums">{totals.spotChanges}</td>
-                  {mode === "drivers" ? <td className="p-2 text-right tabular-nums">{Math.round(totals.km).toLocaleString("pt-PT")}</td> : <td colSpan={2} />}
+                  {mode === "drivers" ? <td className="p-2 text-right tabular-nums">{Math.round(totals.km).toLocaleString("pt-PT")}</td> : <><td className="p-2 text-right tabular-nums" title="Soma por pessoa: uma reserva mexida por dois agentes conta nos dois">Σ {totals.bookings}</td><td /></>}
                   {canManageRh && <td />}
                 </tr></tfoot>
               </table>
@@ -238,7 +243,7 @@ export function MovementDetailSheet({ target, from, to, onClose }: { target: Det
                   {history.map((h) => (
                     <div key={h.id} className="flex items-center justify-between gap-2 flex-wrap rounded bg-muted p-2">
                       <div className="flex items-center gap-2 flex-wrap min-w-0">
-                        <Badge variant="outline" className="text-xs">{h.moveKind && h.moveKind !== "spot" ? MOVE_KIND_LABELS[h.moveKind as MoveKind] : movementLabel(h.changeType)}</Badge>
+                        <Badge variant="outline" className="text-xs">{movementLabel(h.changeType)}</Badge>
                         <span>{h.booking?.licensePlate || "—"}</span>
                         <span className="text-muted-foreground">{h.booking?.parkName || ""}</span>
                       </div>

@@ -67,9 +67,8 @@ describe("37a — pontos e ranking", () => {
     expect(workPoints("office", t)).toBe(10 * 0.5 + 5 * 1 + 2 * 2 + 4 * 0.5);
     const d = emptyTotals();
     d.evalPoints = 120; d.overLimitDays = 2; d.occurrences = 3;
-    // 14 out 2026: os excessos descontam nos pontos da avaliação (−10 cada); os dias acima do limite já não descontam outra vez
+    // 14 out 2026: os dias acima do limite já descontam −10 na avaliação (evalPoints) — aqui não repetem
     expect(workPoints("drivers", d)).toBe(120 + 3);
-    expect(workPoints("drivers", d, { evalPoints: 1, overLimitDays: -10, occurrences: 1 })).toBe(120 - 20 + 3); // se o super admin lhes der peso
     // as horas e os km nunca dão pontos
     for (const g of Object.keys(GROUP_VIEW) as Array<keyof typeof GROUP_VIEW>) {
       expect(GROUP_VIEW[g].weights.hours).toBeUndefined();

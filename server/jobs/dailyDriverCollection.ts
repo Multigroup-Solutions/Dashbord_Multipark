@@ -387,7 +387,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     // Fase 3: intervalos de cada pessoa em cada PDA → GPS partido por pessoa
     const intervals = await pdaIntervalsForDay(dateStr);
 
-    // Limite de velocidade (Definições → Parâmetros; 120 km/h por omissão) — os excessos contam-se com ele
+    // Limite de velocidade (Definições → Parâmetros; 120 km/h + 10 % por omissão) — os excessos contam-se com ele
     const { speedRuleNow } = await import("../speedRule");
     const { rule: speedRule } = await speedRuleNow();
 

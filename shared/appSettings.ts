@@ -29,7 +29,7 @@ import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouti
 import { MAIL_BACKFILL_DEFAULTS, mailBackfillSettingsSchema } from "./mailTriage";
 import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
 import { DEFAULT_SPEED_RULE, SPEED_RULE_SETTING_KEY, speedRuleSchema } from "./speedRules";
-import { PERF_RANK_WEIGHTS_KEY, rankWeightsSchema } from "./peoplePerformance";
+import { PERF_RANK_WEIGHTS_KEY, rankWeightsReadSchema, rankWeightsSchema } from "./peoplePerformance";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
 
@@ -301,6 +301,8 @@ export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   defaultValue: z.input<S>;
   /** Onde o valor é usado; "store" = só guardado/mostrado (ainda não ligado ao código). */
   wiring: "live" | "store";
+  /** Validação mais apertada só ao GRAVAR (a leitura usa `schema`, que pode ser mais tolerante com valores antigos). */
+  writeSchema?: z.ZodTypeAny;
 }
 
 function def<S extends z.ZodTypeAny>(d: SettingDef<S>): SettingDef<S> {
@@ -368,7 +370,7 @@ export const SETTINGS = {
     key: SPEED_RULE_SETTING_KEY,
     group: "operacao",
     label: "Limite de velocidade (GPS do Zello)",
-    description: "Quando é excesso de velocidade no GPS do Zello: o limite em km/h (120 = autoestrada em Portugal; o Zello não diz em que estrada se vai, por isso é um limite único), a tolerância em % (0 = nenhuma) e quantos pontos seguidos acima dele contam um excesso (2 por omissão; um ponto sozinho só conta se a distância percorrida o confirmar). Os picos falsos do GPS (acima de 250 km/h ou um salto isolado) nunca contam. Vale para a recolha diária (excessos de cada dia, Atividade diária, Resumo do dia), para a Avaliação (cada excesso −10) e para o Desempenho (dias acima do limite). Os dias já recolhidos ficam como estavam até se voltarem a dividir (Histórico diário → Forçar re-divisão). JSON: {\"limitKmh\": 120, \"tolerancePercent\": 0, \"minPoints\": 2}.",
+    description: "Quando é excesso de velocidade no GPS do Zello: o limite em km/h (120 = autoestrada em Portugal; o Zello não diz em que estrada se vai, por isso é um limite único), a tolerância em % (10 por omissão = 132 km/h; 0 = nenhuma) e quantos pontos seguidos acima dele contam um excesso (2 por omissão; um ponto sozinho só conta se a distância percorrida o confirmar). Os picos falsos do GPS (acima de 250 km/h ou um salto isolado) nunca contam. Vale para a recolha diária (excessos de cada dia, Atividade diária, Resumo do dia), para a Avaliação (1 excesso de velocidade, −10, por dia acima do limite, sem contar a dobrar com os alertas) e para o Desempenho (dias acima do limite). Os dias já recolhidos ficam como estavam até se voltarem a dividir (Histórico diário → Forçar re-divisão). Substitui a tabela antiga speed_limits (sem ecrã). JSON: {\"limitKmh\": 120, \"tolerancePercent\": 10, \"minPoints\": 2}.",
     schema: speedRuleSchema,
     defaultValue: { ...DEFAULT_SPEED_RULE },
     wiring: "live",
@@ -769,7 +771,9 @@ export const SETTINGS = {
     group: "pessoas",
     label: "Pesos do ranking do Desempenho",
     description: "Quanto vale cada coisa nos pontos do ranking de Pessoas → Condutores e agentes → Desempenho, por aba (office, supervision, teamleaders, drivers) e os pontos da equipa (team). Só o que muda face às omissões do código (1 ponto ≈ 5 minutos de trabalho). Um peso 0 = não conta; sem a métrica = a omissão. Pesos entre −10 000 e 10 000, com 1 casa decimal no máximo; horas e km nunca dão pontos. JSON: {\"office\": {\"created\": 3}, \"team\": {\"noZelloPerPerson\": -10}}. Mais fácil no próprio Desempenho: \"Como se contam os pontos desta aba\" → Editar pesos. Vazio = omissões do código. Só o super admin muda.",
-    schema: rankWeightsSchema,
+    // 14 out 2026: ao ler, um peso proibido gravado antes é ignorado (o resto vale); ao gravar, é recusado
+    schema: rankWeightsReadSchema,
+    writeSchema: rankWeightsSchema,
     defaultValue: {},
     wiring: "live",
   }),
@@ -824,6 +828,18 @@ export function validateSetting(key: string, value: unknown): ValidationResult<u
   const r = SETTINGS[key].schema.safeParse(value);
   if (r.success) return { ok: true, value: r.data };
   return { ok: false, error: r.error.issues.map((i) => i.message).join(" ") || "Valor inválido." };
+}
+
+/** Validação para GRAVAR: a `writeSchema` (se houver) primeiro, e depois a normal. */
+export function validateSettingForWrite(key: string, value: unknown): ValidationResult<unknown> {
+  if (isSettingKey(key)) {
+    const w = (SETTINGS[key] as SettingDef).writeSchema;
+    if (w) {
+      const r = w.safeParse(value);
+      if (!r.success) return { ok: false, error: r.error.issues.map((i) => i.message).join(" ") || "Valor inválido." };
+    }
+  }
+  return validateSetting(key, value);
 }
 
 // ─── Interruptores das automações ───────────────────────────────────────────
@@ -882,7 +898,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "GBP_WINDSOR_SYNC", label: "Críticas: importar do Google Business pela Windsor", description: "Quando a Google não está ligada diretamente, a recolha agendada vai buscar as avaliações dos perfis escolhidos à Windsor (WINDSOR_API_KEY) e põe-nas nas Críticas, como a ligação direta (1–3 estrelas → Reclamações). A 1.ª vez vai até 3 anos para trás; depois os últimos 60 dias. O botão \"Importar pela Windsor\" funciona sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "GBP_WINDSOR_REPLY", label: "Críticas: publicar respostas no Google pela Windsor", description: "Quando a Google não está ligada diretamente, o \"Aprovar e publicar\" das Críticas publica a resposta pela Windsor (ação reply_to_review — tem de estar ativa na equipa da Windsor). A resposta é pública e substitui a anterior. Desligado: publica-se no perfil Google e marca-se \"Já publiquei\". Desligado por omissão.", defaultEnabled: false },
   // Jorge (14 out 2026): "porque é que os 141 não dão aviso nenhum?" — avisa gente → desligado por omissão.
-  { name: "GPS_SPEED_ALERTS", label: "Avisos de excesso de velocidade (GPS do Zello)", description: "Na recolha do GPS do Zello (a provisória das 23h e a final de D-2), cada excesso de velocidade (Definições → Parâmetros → Limite de velocidade) fica registado e avisa no sino o team leader e o supervisor da cidade da pessoa (\"Excesso de velocidade\"): um aviso por pessoa e dia, com quantos excessos e a velocidade máxima (só para dias dos últimos 3; um dia antigo recolhido à mão não avisa). Os pontos da Avaliação (−10 por excesso) contam sempre, com ou sem isto. Desligado por omissão.", defaultEnabled: false },
+  { name: "GPS_SPEED_ALERTS", label: "Avisos de excesso de velocidade (GPS do Zello)", description: "Na recolha do GPS do Zello (a provisória das 23h e a final de D-2), cada excesso de velocidade (Definições → Parâmetros → Limite de velocidade) fica registado e avisa no sino o team leader e o supervisor da cidade da pessoa (\"Excesso de velocidade\"): um aviso por pessoa e dia, com quantos excessos e a velocidade máxima (só para dias dos últimos 3; um dia antigo recolhido à mão não avisa). Os pontos da Avaliação (−10 por dia acima do limite) contam sempre, com ou sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.
   { name: "TASKS_AUTO_OVERDUE", label: "Avisos de atraso das tarefas automáticas", description: "Checklists, serviços, disponibilidade e fichas sem cidade que passam o prazo: avisa no sino os responsáveis e o supervisor da cidade (um resumo por cidade). Sem email. Só as que passaram o prazo há menos de 48 h (as mais antigas ficam marcadas sem aviso)." },

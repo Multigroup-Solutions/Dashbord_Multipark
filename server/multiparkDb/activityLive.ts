@@ -21,7 +21,8 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
-import { moveIsSpotSql, moveLookbackFrom, moveSeqCteSql, readMoveKinds, withMoveKinds } from "./movements";
+import { movementKindSql } from "./movements";
+import { MOVEMENT_KIND_CHANGE_TYPES, displayChangeType } from "../../shared/multiparkMovements";
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
 
@@ -68,30 +69,39 @@ const int = (v: unknown): number => {
 
 /**
  * Ações de todos os agentes em [from, to), agregadas ao minuto (chega para
- * o turno: no horário / fora do horário). 14 out 2026: o MOVEMENT que é só
- * mudança de lugar vem como SPOT_CHANGE (conta nas ações, não nos
- * movimentos — regra em shared/multiparkMovements.ts). PURA.
+ * o turno: no horário / fora do horário). 14 out 2026 (a mesma regra da
+ * Avaliação e de Condutores e agentes — shared/multiparkMovements.ts →
+ * classifyMovement, aqui em SQL com movementKindSql): cada MOVEMENT
+ * classifica-se pelo modifiedFields — o INÍCIO de um movimento (status →
+ * MOVING) não é uma ação e fica de fora; a mudança de lugar (mesma garagem)
+ * vem como SPOT_CHANGE (conta nas ações, não nas "Movimentações"); o resto
+ * fica MOVEMENT. O tipo calcula-se uma vez por linha, na subconsulta. PURA.
  */
 export function buildActivityActionsSql(opts: { from: string; to: string; cities?: string[]; limit?: number }): { sql: string; params: SqlParam[] } {
   const params = new ParamList();
-  const from = params.add(opts.from);
-  const to = params.add(opts.to);
-  const lb = params.add(moveLookbackFrom(opts.from));
-  const conds = [
-    `h."actionTime" >= ${from}::timestamp`,
-    `h."actionTime" < ${to}::timestamp`,
+  // dentro: o que só depende da History (a janela) — o tipo do MOVEMENT calcula-se UMA vez por linha
+  const inner = [
+    `h."actionTime" >= ${params.add(opts.from)}::timestamp`,
+    `h."actionTime" < ${params.add(opts.to)}::timestamp`,
   ];
+  // fora: sem os inícios de movimento e (com âmbito) a cidade
+  const outer = [`h.mk IS DISTINCT FROM 'inicio'`];
   const city = cityCondition(opts.cities, params);
-  if (city) conds.push(city);
+  if (city) outer.push(city);
   const sql = [
-    `WITH ${moveSeqCteSql(lb, to)}`,
     `SELECT h."userId" AS user_id, ${AGENT_NAME} AS agent_name,`,
-    `       CASE WHEN h."changeType"::text = 'MOVEMENT' AND ${moveIsSpotSql("sq.prev_cat", "sq.prev_any")} THEN 'SPOT_CHANGE' ELSE upper(h."changeType"::text) END AS change_type,`,
+    `       CASE WHEN h.mk = 'lugar' THEN '${MOVEMENT_KIND_CHANGE_TYPES.lugar}' ELSE upper(h."changeType"::text) END AS change_type,`,
     `       ${ts(`date_trunc('minute', h."actionTime")`)} AS at, count(*) AS n`,
-    `  FROM "History" h`,
-    `  LEFT JOIN seq sq ON sq.id = h."id"`,
+    `  FROM (`,
+    `    SELECT h."id", h."userId", h."agentName", h."changeType", h."bookingId", h."actionTime",`,
+    `           CASE WHEN upper(h."changeType"::text) = 'MOVEMENT' THEN ${movementKindSql(`COALESCE(h."modifiedFields", '')`)} END AS mk`,
+    `      FROM "History" h`,
+    `     WHERE ${inner.join(" AND ")}`,
+    // OFFSET 0: o Postgres não "puxa" a subconsulta, por isso o tipo (os regex) calcula-se uma vez por linha
+    `    OFFSET 0`,
+    `  ) h`,
     ...JOINS,
-    ` WHERE ${conds.join(" AND ")}`,
+    ` WHERE ${outer.join(" AND ")}`,
     ` GROUP BY 1, 2, 3, 4`,
     ` ORDER BY 4`,
     ` LIMIT ${params.add(Math.max(1, Math.min(opts.limit ?? ACTIVITY_ROW_LIMIT, ACTIVITY_ROW_LIMIT)))}`,
@@ -147,7 +157,9 @@ export function buildActivityDetailSql(opts: {
   if (city) conds.push(city);
   const sql = [
     `SELECT h."id" AS id, h."bookingId" AS booking_id, h."changeType"::text AS change_type, ${ts(`h."actionTime"`)} AS action_time,`,
-    `       ${AGENT_NAME} AS agent_name, v."licensePlate" AS plate, NULLIF(b."allocation", '') AS booking_code, p."name" AS park_name`,
+    `       ${AGENT_NAME} AS agent_name, v."licensePlate" AS plate, NULLIF(b."allocation", '') AS booking_code, p."name" AS park_name,`,
+    // 14 out 2026: o tipo do MOVEMENT (início / levar ao parque / mudança de lugar / entre garagens) sobre o texto completo
+    `       CASE WHEN upper(h."changeType"::text) = 'MOVEMENT' THEN ${movementKindSql(`COALESCE(h."modifiedFields", '')`)} END AS move_kind`,
     `  FROM "History" h`,
     ...JOINS,
     `  LEFT JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
@@ -158,12 +170,16 @@ export function buildActivityDetailSql(opts: {
   return { sql, params: params.values };
 }
 
-/** Mesmo formato da gaveta antiga (cópia local). PURA. */
+/**
+ * Mesmo formato da gaveta antiga (cópia local). 14 out 2026: o MOVEMENT que é
+ * mudança de lugar vem como SPOT_CHANGE e o início de um movimento como
+ * MOVEMENT_START (a leitura deixa-os de fora — não são ações). PURA.
+ */
 export function mapActivityDetailRow(r: Record<string, unknown>) {
   return {
     id: String(r.id ?? ""),
     bookingExternalId: String(r.booking_id ?? ""),
-    changeType: String(r.change_type ?? "").toUpperCase(),
+    changeType: displayChangeType(String(r.change_type ?? "").toUpperCase(), str(r.move_kind)),
     actionTime: toIsoUtc(r.action_time) ?? String(r.action_time ?? ""),
     agentName: str(r.agent_name),
     licensePlate: str(r.plate),
@@ -171,7 +187,7 @@ export function mapActivityDetailRow(r: Record<string, unknown>) {
     parkName: str(r.park_name),
   };
 }
-export type ActivityDetailRow = ReturnType<typeof mapActivityDetailRow> & { moveKind?: "park" | "exit" | "spot" | null };
+export type ActivityDetailRow = ReturnType<typeof mapActivityDetailRow>;
 
 export async function getActivityDetailLive(
   opts: { from: string; to: string; userIds?: string[]; names?: string[]; cities?: string[] },
@@ -180,10 +196,8 @@ export async function getActivityDetailLive(
   return safeMultiparkRead("atividade do dia (detalhe)", async () => {
     if (!(opts.userIds ?? []).some((x) => String(x ?? "").trim()) && !(opts.names ?? []).some((x) => String(x ?? "").trim())) return [];
     const { sql, params } = buildActivityDetailSql(opts);
-    const rows = (await query(sql, params)).map(mapActivityDetailRow);
-    // 14 out 2026: o MOVEMENT que é só mudança de lugar passa a SPOT_CHANGE (a mesma regra das contagens)
-    const kinds = await readMoveKinds(rows.map((r) => ({ id: r.id, bookingId: r.bookingExternalId, changeType: r.changeType, actionTime: r.actionTime })), query);
-    return withMoveKinds(rows, kinds);
+    // o início de um movimento não é uma ação (como nas contagens)
+    return (await query(sql, params)).map(mapActivityDetailRow).filter((r) => r.changeType !== MOVEMENT_KIND_CHANGE_TYPES.inicio);
   });
 }
 

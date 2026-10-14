@@ -17,6 +17,7 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, cityAliases, likeContains, normalizePlate } from "./read";
+import { movementKindSql } from "./movements";
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
 
@@ -115,7 +116,9 @@ export function buildLiveHistorySql(f: LiveHistoryFilters): { sql: string; param
     `       left(h."remarks", 1000) AS remarks, NULLIF(h."agentName", '') AS agent_name, h."userId" AS agent_user_id,`,
     `       left(h."modifiedFields"::text, 1000) AS modified_fields, NULLIF(h."platform"::text, '') AS platform,`,
     `       NULLIF(b."allocation"::text, '') AS booking_code, v."licensePlate" AS plate, pk."name" AS park_name, pk."city" AS city,`,
-    `       b."status"::text AS booking_status, ${ts(`b."checkIn"`)} AS check_in, ${ts(`b."checkOut"`)} AS check_out`,
+    `       b."status"::text AS booking_status, ${ts(`b."checkIn"`)} AS check_in, ${ts(`b."checkOut"`)} AS check_out,`,
+    // 14 out 2026: o tipo do MOVEMENT sobre o texto COMPLETO (o modified_fields acima vem cortado a 1000)
+    `       CASE WHEN upper(h."changeType"::text) = 'MOVEMENT' THEN ${movementKindSql(`COALESCE(h."modifiedFields"::text, '')`)} END AS move_kind`,
     FROM,
     ` WHERE ${where}`,
     ` ORDER BY h."actionTime" ${dir}, h."id" ${dir}`,
@@ -197,6 +200,8 @@ export interface LiveHistoryRow {
   bookingStatus: string | null;
   checkIn: string | null;
   checkOut: string | null;
+  /** 14 out 2026: tipo do MOVEMENT (shared/multiparkMovements.ts → MovementKind), calculado sobre o texto completo. */
+  moveKind?: string | null;
 }
 
 const s = (v: unknown) => (v == null || String(v).trim() === "" ? null : String(v));
@@ -207,6 +212,7 @@ export function mapLiveHistoryRow(r: Record<string, unknown>): LiveHistoryRow {
     actionTime: s(r.action_time), remarks: s(r.remarks), agentName: s(r.agent_name), agentUserId: s(r.agent_user_id), agentEmail: null,
     modifiedFields: s(r.modified_fields), platform: s(r.platform), bookingCode: s(r.booking_code), licensePlate: s(r.plate),
     parkName: s(r.park_name), city: s(r.city), bookingStatus: s(r.booking_status), checkIn: s(r.check_in), checkOut: s(r.check_out),
+    ...(r.move_kind !== undefined ? { moveKind: s(r.move_kind) } : {}),
   };
 }
 

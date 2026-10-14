@@ -7,6 +7,7 @@ vi.mock("./client", async (importOriginal) => {
 });
 
 import { assertReadOnlySql } from "./client";
+import { movementKindSql } from "./movements";
 import {
   ACTIVITY_ROW_LIMIT,
   buildActivityActionsSql,
@@ -39,10 +40,13 @@ describe("Atividade do Dia — ações ao vivo", () => {
     expect(sql).toContain(`h."actionTime" >= $1::timestamp AND h."actionTime" < $2::timestamp`);
     expect(sql).toContain(`date_trunc('minute', h."actionTime")`);
     expect(sql).toContain(`COALESCE(NULLIF(h."agentName", ''), NULLIF(ag."name", ''))`);
-    expect(sql).toContain(`lower(trim(p."city")) IN ($4, $5)`);
-    // 14 out 2026: a sequência das reservas (para separar as mudanças de lugar) lê desde 3 dias antes
-    expect(params).toEqual([W.from, W.to, "2026-09-23 23:00:00", "lisboa", "lisbon", ACTIVITY_ROW_LIMIT]);
-    expect(sql).toContain(`THEN 'SPOT_CHANGE' ELSE upper(h."changeType"::text) END AS change_type`);
+    expect(sql).toContain(`lower(trim(p."city")) IN ($3, $4)`);
+    expect(params).toEqual([W.from, W.to, "lisboa", "lisbon", ACTIVITY_ROW_LIMIT]);
+    // 14 out 2026: cada MOVEMENT pelo modifiedFields (a regra da Avaliação): o início não conta, a mudança de lugar é SPOT_CHANGE
+    expect(sql).toContain(`CASE WHEN h.mk = 'lugar' THEN 'SPOT_CHANGE' ELSE upper(h."changeType"::text) END AS change_type`);
+    expect(sql).toContain(`h.mk IS DISTINCT FROM 'inicio'`);
+    expect(sql).toContain(`THEN ${movementKindSql(`COALESCE(h."modifiedFields", '')`)} END AS mk`);
+    expect(sql).toContain("OFFSET 0"); // o tipo calcula-se uma vez por linha
     expect(buildActivityActionsSql({ ...W, cities: [] }).sql).toContain("FALSE");
     expect(buildActivityActionsSql(W).sql).not.toContain(`p."city"`);
   });
@@ -70,6 +74,11 @@ describe("Atividade do Dia — ações ao vivo", () => {
     expect(buildActivityDetailSql(W).sql).toContain("FALSE");
     expect(mapActivityDetailRow({ id: "h1", booking_id: "b1", change_type: "check_out", action_time: "2026-09-27 10:00:00", agent_name: "Ana", plate: "AA-00-BB", booking_code: "MP123", park_name: "P1" }))
       .toEqual({ id: "h1", bookingExternalId: "b1", changeType: "CHECK_OUT", actionTime: "2026-09-27T10:00:00.000Z", agentName: "Ana", licensePlate: "AA-00-BB", bookingNumber: "MP123", parkName: "P1" });
+    // 14 out 2026: o tipo do MOVEMENT vem do SQL (texto completo)
+    expect(mapActivityDetailRow({ id: "h2", change_type: "movement", move_kind: "lugar" }).changeType).toBe("SPOT_CHANGE");
+    expect(mapActivityDetailRow({ id: "h3", change_type: "movement", move_kind: "inicio" }).changeType).toBe("MOVEMENT_START");
+    expect(mapActivityDetailRow({ id: "h4", change_type: "movement", move_kind: "arrumar" }).changeType).toBe("MOVEMENT");
+    expect(buildActivityDetailSql({ ...W, userIds: ["u1"] }).sql).toContain(`END AS move_kind`);
     // sem quem → nem consulta
     expect(await getActivityDetailLive({ ...W })).toEqual({ available: true, data: [] });
     expect(queryMock).not.toHaveBeenCalled();

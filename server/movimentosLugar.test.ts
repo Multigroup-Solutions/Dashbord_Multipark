@@ -1,283 +1,110 @@
 /**
  * Movimento × mudança de lugar (Jorge, 14 out 2026: "os movimentos, para os
- * pontos, eram os que tocavam no parque. As mudanças de lugar não contam como
- * movimentos; contam como interações").
+ * pontos, são os que tocam no parque; as mudanças de lugar não contam como
+ * movimentos, contam como interações") — EM TODO O LADO.
  *
- * A Multipark grava toda a deslocação como MOVEMENT; o tipo deduz-se da ação
- * anterior da MESMA reserva (shared/multiparkMovements.ts → moveKindsOf, e o
- * mesmo em SQL em server/multiparkDb/movements.ts). Estes testes provam:
- *  - a regra (levar ao parque, tirar para a entrega, mudança de lugar);
- *  - que o motor da avaliação tira as mudanças de lugar dos movimentos e dos
- *    pontos, mas deixa-as nas ações — pelas linhas soltas e pelas contagens;
- *  - que os agregados (Condutores e agentes, Avaliação → Mês) e os detalhes
- *    separam as mudanças de lugar (deixam de dar sempre 0);
- *  - que o SQL tem a mesma regra que o JS.
+ * A regra é a do #381 (shared/multiparkMovements.ts → classifyMovement, e a
+ * mesma em SQL em server/multiparkDb/movements.ts → movementKindSql): a app
+ * grava cada deslocação em DUAS linhas MOVEMENT (início: status → MOVING; fim:
+ * garageName/spot from → to). O início não conta; sem garagem de origem =
+ * levar ao parque; mesma garagem = mudança de lugar; garagens diferentes =
+ * entre parques. Classifica-se LINHA A LINHA (não depende do que veio antes),
+ * por isso a janela, os cancelamentos e as reservas sem recolha no histórico
+ * não mudam nada.
+ *
+ * Estes testes cobrem os sítios que o #381 não tinha mudado e que contavam
+ * todas as linhas MOVEMENT: a Atividade do dia (contagens e gaveta) e o Resumo
+ * do dia (as ações de um condutor). O motor da Avaliação, os agregados de
+ * Condutores e agentes e o detalhe estão em multiparkDb/movements.test.ts e
+ * movimentosRotulos.test.ts.
  */
-import { describe, expect, it, vi } from "vitest";
-import {
-  MOVE_KIND_LABELS, SPOT_CHANGE_KEY, actionKeyOf, canonicalChangeType, movementLabel, movementPhase, moveKindsOf, moveTouchesPark,
-} from "../shared/multiparkMovements";
-import { actionPoints, applyAdjustments, emptyDayMetrics, scoreOf, METRIC_KEYS } from "../shared/evaluationRules";
-import { actionRowsToCounts, computeEmployeeDays, markSpotChanges, type ActionRow, type EngineInput } from "./evaluationCore";
-import { buildEvaluationIdentity } from "./evaluationIdentity";
-import {
-  buildAgentHistoryAggSql, buildBookingSequenceSql, buildEngineActionCountsSql, mergeAgentAggregates, moveIsSpotSql, movementWindow, readMoveKinds,
-  sumAgentSummaries, withMoveKinds, MOVE_PARK_CATS_SQL, MOVE_SEQ_CATS_SQL,
-} from "./multiparkDb/movements";
-import { buildActivityActionsSql } from "./multiparkDb/activityLive";
-import { assertReadOnlySql } from "./multiparkDb/client";
-import { MIGRATION_0670_STATEMENTS, IDEMPOTENT_ERROR_CODES_0670 } from "./migrations/migration_0670";
-import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { classifyMovement, displayChangeType, movementLabel, MOVEMENT_KIND_CHANGE_TYPES } from "../shared/multiparkMovements";
+import { buildActivityActionsSql, buildActivityDetailSql, mapActivityActionRow, mapActivityDetailRow } from "./multiparkDb/activityLive";
+import { movementKindSql } from "./multiparkDb/movements";
+import { assertReadOnlySql } from "./multiparkDb/client";
 
 const src = (p: string) => readFileSync(resolve(import.meta.dirname, "..", p), "utf8");
-let seq = 0;
-const a = (bookingId: string, changeType: string, actionTime: string) => ({ id: `h${String(++seq).padStart(4, "0")}`, bookingId, changeType, actionTime });
+const START = '{"_version":2,"status":{"from":"CHECKED_IN","to":"MOVING"}}';
+const END = (gFrom: string | null, gTo: string, sFrom: string | null = null, sTo = "1 / 1") =>
+  JSON.stringify({ _version: 2, garageName: { from: gFrom, to: gTo }, spot: { from: sFrom, to: sTo } });
 
-describe("a regra (moveKindsOf)", () => {
-  it("1.º movimento depois da recolha = levar ao parque; os seguintes com o carro no parque = mudança de lugar", () => {
-    const rows = [
-      a("B1", "CHECK_IN", "2026-10-01 08:00:00"),
-      a("B1", "MOVEMENT", "2026-10-01 08:10:00"), // levar ao parque
-      a("B1", "MOVEMENT", "2026-10-01 15:00:00"), // muda de lugar
-      a("B1", "MOVEMENT", "2026-10-02 09:00:00"), // muda outra vez
-    ];
-    const k = moveKindsOf(rows);
-    expect([...k.values()]).toEqual(["park", "spot", "spot"]);
+describe("casos-limite da regra (por linha, não pela sequência)", () => {
+  it("depois de uma recolha: início (não conta) + fim sem garagem = levar ao parque; os seguintes na mesma garagem = mudança de lugar", () => {
+    const seq = [START, END(null, "PD"), START, END("PD", "PD", "1 / 1", "9 / 2"), START, END("PD", "PD", "9 / 2", "3 / 1")];
+    expect(seq.map(classifyMovement)).toEqual(["inicio", "arrumar", "inicio", "lugar", "inicio", "lugar"]);
   });
-
-  it("1.º movimento depois do pedido (ou do início) da entrega = tirar do parque; uma 2.ª deslocação já é mudança de lugar", () => {
-    const rows = [
-      a("B2", "CHECK_IN", "2026-10-01 08:00:00"),
-      a("B2", "MOVEMENT", "2026-10-01 08:10:00"),
-      a("B2", "PENDING_CHECKOUT", "2026-10-03 10:00:00"),
-      a("B2", "MOVEMENT", "2026-10-03 10:05:00"), // sai do parque para a entrega
-      a("B2", "MOVEMENT", "2026-10-03 10:07:00"), // mexe outra vez (não volta a contar)
-      a("B2", "CHECKING_OUT", "2026-10-03 10:20:00"),
-      a("B2", "CHECK_OUT", "2026-10-03 10:30:00"),
-      a("B3", "CHECKING_OUT", "2026-10-03 11:00:00"),
-      a("B3", "MOVEMENT", "2026-10-03 11:01:00"), // início da entrega → sai do parque
-    ];
-    const k = moveKindsOf(rows);
-    expect(rows.filter((r) => r.changeType === "MOVEMENT").map((r) => k.get(r.id))).toEqual(["park", "exit", "spot", "exit"]);
+  it("não depende da janela nem do que veio antes: o fim de uma arrumação com a recolha há 3 dias continua a ser levar ao parque", () => {
+    expect(classifyMovement(END(null, "PD FORA"))).toBe("arrumar");
   });
-
-  it("sem nada antes na reserva (o carro já estava no parque) = mudança de lugar; ordem pelo instante, não pela lista", () => {
-    const rows = [a("B4", "MOVEMENT", "2026-10-02 09:00:00"), a("B4", "CHECK_IN", "2026-10-02 08:00:00")];
-    expect(moveKindsOf(rows).get(rows[0].id)).toBe("park"); // a recolha veio antes no tempo
-    const only = [a("B5", "MOVEMENT", "2026-10-02 09:00:00")];
-    expect(moveKindsOf(only).get(only[0].id)).toBe("spot");
-    // UPDATE/CREATED no meio não mudam nada; a recolha continua a valer
-    const mid = [a("B6", "CHECK_IN", "2026-10-02 08:00:00"), a("B6", "UPDATE", "2026-10-02 08:01:00"), a("B6", "MOVEMENT", "2026-10-02 08:05:00")];
-    expect(moveKindsOf(mid).get(mid[2].id)).toBe("park");
-    // reservas diferentes não se misturam
-    const two = [a("B7", "CHECK_IN", "2026-10-02 08:00:00"), a("B8", "MOVEMENT", "2026-10-02 08:05:00")];
-    expect(moveKindsOf(two).get(two[1].id)).toBe("spot");
+  it("reserva sem recolha no histórico (o carro já estava no parque): mudança de lugar / entre parques pelo próprio registo", () => {
+    expect(classifyMovement(END("PD", "PD"))).toBe("lugar");
+    expect(classifyMovement(END("PD FORA", "PD"))).toBe("parques");
   });
-
-  it("um cancelamento ou uma entrega fecham o ciclo", () => {
-    const rows = [a("B9", "CHECK_IN", "2026-10-02 08:00:00"), a("B9", "CANCEL", "2026-10-02 08:01:00"), a("B9", "MOVEMENT", "2026-10-02 08:05:00")];
-    expect(moveKindsOf(rows).get(rows[2].id)).toBe("spot");
-    const out = [a("B10", "PENDING_CHECKOUT", "2026-10-02 08:00:00"), a("B10", "CHECK_OUT", "2026-10-02 08:20:00"), a("B10", "MOVEMENT", "2026-10-02 09:00:00")];
-    expect(moveKindsOf(out).get(out[2].id)).toBe("spot");
+  it("cancelamento ou ações com o mesmo instante não mudam a classificação (cada linha decide-se sozinha)", () => {
+    const a = classifyMovement(END("PD", "PD"));
+    expect([a, classifyMovement(END("PD", "PD"))]).toEqual(["lugar", "lugar"]);
   });
-
-  it("nomes antigos da API/cópia local (MOVE, CHECKIN…) seguem a mesma regra", () => {
-    expect(canonicalChangeType("move")).toBe("MOVEMENT");
-    expect(canonicalChangeType("CHECKIN")).toBe("CHECK_IN");
-    const rows = [a("B11", "CHECKIN", "2026-10-02 08:00:00"), a("B11", "MOVE", "2026-10-02 08:05:00")];
-    expect(moveKindsOf(rows).get(rows[1].id)).toBe("park");
-  });
-
-  it("rótulos e chave SPOT_CHANGE", () => {
-    expect(actionKeyOf("MOVEMENT", "spot")).toBe(SPOT_CHANGE_KEY);
-    expect(actionKeyOf("MOVEMENT", "exit")).toBe("MOVEMENT");
-    expect(actionKeyOf("MOVEMENT", null)).toBe("MOVEMENT");
-    expect(actionKeyOf("CHECK_IN", "spot")).toBe("CHECK_IN");
-    expect(movementLabel(SPOT_CHANGE_KEY)).toBe("Mudança de lugar");
-    expect(movementPhase(SPOT_CHANGE_KEY)).toBe("move");
-    expect(MOVE_KIND_LABELS.park).toBe("Levar ao parque");
-    expect(moveTouchesPark("park") && moveTouchesPark("exit") && !moveTouchesPark("spot")).toBe(true);
+  it("rótulos: o início e a mudança de lugar com o seu nome; o resto continua MOVEMENT", () => {
+    expect(displayChangeType("MOVEMENT", "inicio")).toBe(MOVEMENT_KIND_CHANGE_TYPES.inicio);
+    expect(displayChangeType("MOVEMENT", "lugar")).toBe("SPOT_CHANGE");
+    expect(displayChangeType("MOVEMENT", "arrumar")).toBe("MOVEMENT");
+    expect(displayChangeType("MOVEMENT", "parques")).toBe("MOVEMENT");
+    expect(movementLabel("SPOT_CHANGE")).toBe("Mudança de lugar");
   });
 });
 
-describe("avaliação: a mudança de lugar é ação, não movimento nem pontos", () => {
-  const identity = buildEvaluationIdentity({
-    employees: [{ id: 1, fullName: "Ana Silva", userId: 10, multiparkAgentName: "Ana", multiparkAgentUserId: null }],
-    agentAliases: [], accountAliases: [],
-  });
-  const act = (bookingExternalId: string, changeType: string, actionTime: string, agentName = "Ana"): ActionRow =>
-    ({ bookingExternalId, changeType, actionTime, agentUserId: null, agentName });
-  const base: EngineInput = {
-    startDay: "2026-10-01", endDay: "2026-10-01", identity,
-    employees: new Map([[1, { id: 1, position: "driver", contractType: null, extraLevel: null, monthlySalary: null, projectId: 1 }]]),
-    actions: [
-      act("B1", "CHECK_IN", "2026-10-01 08:00:00"),
-      act("B1", "MOVEMENT", "2026-10-01 08:10:00"), // levar ao parque +5
-      act("B1", "MOVEMENT", "2026-10-01 10:00:00"), // mudança de lugar (0)
-      act("B2", "MOVEMENT", "2026-10-01 11:00:00"), // mudança de lugar (0)
-      act("B3", "PENDING_CHECKOUT", "2026-10-01 12:00:00", "Cliente"),
-      act("B3", "MOVEMENT", "2026-10-01 12:05:00"), // tirar do parque +2
-      act("B3", "CHECK_OUT", "2026-10-01 12:10:00"), // entrega +3
-    ],
-    ponto: [], assignments: [], incidents: [], complaints: [], speedAlerts: [], penalties: [],
-    rate: () => 10, tlWorkingDaysPerMonth: 15,
-  };
-
-  it("pelas linhas soltas: 6 ações, 2 movimentos (1 levar ao parque), 2 mudanças de lugar, pontos 5 + 2 + 3", () => {
-    expect(markSpotChanges(base.actions)).toEqual(new Set([2, 3]));
-    const m = computeEmployeeDays(base).rows[0].metrics;
-    expect(m).toMatchObject({ actions: 6, recolhas: 1, entregas: 1, movements: 2, parkingMoves: 1, spotChanges: 2 });
-    expect(m.weightedActions).toBe(5 + 2 + 3 + 3);
-    expect(scoreOf(m).lines.find((l) => l.key === "movement")).toMatchObject({ count: 1, subtotal: 2 });
-    expect(computeEmployeeDays(base).rows[0].actionsByType).toEqual({ CHECK_IN: 1, MOVEMENT: 2, SPOT_CHANGE: 2, CHECK_OUT: 1 });
-  });
-
-  it("pelas contagens agregadas (BD da Multipark) dá o mesmo", () => {
-    const counts = actionRowsToCounts(base.actions);
-    expect(counts.filter((c) => c.changeType === "MOVEMENT").reduce((s, c) => s + (c.spotMoves ?? 0), 0)).toBe(2);
-    const fromRows = computeEmployeeDays(base).rows[0];
-    const fromCounts = computeEmployeeDays({ ...base, actions: [], actionCounts: counts }).rows[0];
-    expect(fromCounts.metrics).toEqual(fromRows.metrics);
-    expect(fromCounts.actionsByType).toEqual(fromRows.actionsByType);
-  });
-
-  it("antes (sem a separação) estas 2 mudanças de lugar davam +4 pontos de movimento", () => {
-    const old = { ...emptyDayMetrics(), recolhas: 1, entregas: 1, movements: 4, parkingMoves: 1 };
-    const now = computeEmployeeDays(base).rows[0].metrics;
-    expect(actionPoints(old) - now.weightedActions).toBe(4);
-  });
-
-  it("agentes sem ficha também separam (operacional do dia)", () => {
-    const u = computeEmployeeDays({ ...base, actions: base.actions.map((x) => (x.agentName === "Ana" ? { ...x, agentName: "Zé Sem Ficha" } : x)) }).unresolved.get("2026-10-01")!;
-    const z = u.get("agent:zesemficha")!;
-    expect(z).toMatchObject({ actions: 6, movements: 2, spotChanges: 2, parkingMoves: 1 });
-  });
-
-  it("a métrica nova existe, guarda-se e não se ajusta à mão; um ajuste nas ações não mexe nela", () => {
-    expect(METRIC_KEYS).toContain("spotChanges");
-    const m = { ...emptyDayMetrics(), actions: 3, movements: 1, spotChanges: 2 };
-    expect(applyAdjustments(m, [{ metric: "movements", delta: 1 }])).toMatchObject({ movements: 2, spotChanges: 2, actions: 4 });
-    const eng = src("server/evaluationEngine.ts");
-    expect(eng).toContain("parkingMoves: m.parkingMoves, spotChanges: m.spotChanges");
-    expect(eng).toMatch(/"parkingMoves", "spotChanges",/);
-  });
-
-  it("migração 0670: só acrescenta a coluna, idempotente, registada no fim", () => {
-    expect(MIGRATION_0670_STATEMENTS).toEqual(["ALTER TABLE `employee_day_metrics` ADD COLUMN `spotChanges` INT NOT NULL DEFAULT 0 AFTER `parkingMoves`"]);
-    expect(IDEMPOTENT_ERROR_CODES_0670.has("ER_DUP_FIELDNAME")).toBe(true);
-    expect(SCHEMA_MIGRATION_IDS[SCHEMA_MIGRATION_IDS.length - 1]).toBe("0670");
-    expect(src("drizzle/schema.ts")).toContain("spotChanges: int().default(0).notNull(),");
-  });
-});
-
-describe("SQL: a mesma regra (motor, agregados, Atividade do dia)", () => {
-  const w = movementWindow("2026-09-01");
-  it("motor: lag entre recolha/entrega/movimento/cancelamento E entre todas (com o pedido e o início da entrega)", () => {
-    const { sql } = buildEngineActionCountsSql({ lookbackFrom: "2026-08-29 02:00:00", from: w.from, to: w.to });
+describe("Atividade do dia: as contagens já não contam o início nem as mudanças de lugar como movimentos", () => {
+  const W = { from: "2026-10-12 23:00:00", to: "2026-10-13 23:00:00" };
+  it("SQL: o tipo de cada MOVEMENT pelo modifiedFields (uma vez por linha), sem os inícios, mudança de lugar = SPOT_CHANGE", () => {
+    const { sql, params } = buildActivityActionsSql({ ...W, cities: ["Lisboa"] });
     expect(() => assertReadOnlySql(sql)).not.toThrow();
-    expect(MOVE_PARK_CATS_SQL).toBe("('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL')");
-    expect(MOVE_SEQ_CATS_SQL).toBe("('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL', 'PENDING_CHECKOUT', 'CHECKING_OUT')");
-    expect(sql).toContain(`CASE WHEN h.ct IN ${MOVE_SEQ_CATS_SQL} THEN lag(h.ct) OVER (PARTITION BY h.booking_id, (h.ct IN ${MOVE_SEQ_CATS_SQL}) ORDER BY h.at, h.id) END AS prev_any`);
-    expect(sql).toContain(`count(*) FILTER (WHERE x.ct = 'MOVEMENT' AND ${moveIsSpotSql("x.prev_cat", "x.prev_any")}) AS spot_moves`);
-    expect(moveIsSpotSql("p", "q")).toBe("(p IS DISTINCT FROM 'CHECK_IN' AND (q IS NULL OR q NOT IN ('PENDING_CHECKOUT', 'CHECKING_OUT')))");
+    expect(sql).toContain(`CASE WHEN upper(h."changeType"::text) = 'MOVEMENT' THEN ${movementKindSql(`COALESCE(h."modifiedFields", '')`)} END AS mk`);
+    expect(sql).toContain("OFFSET 0");
+    expect(sql).toContain(`WHERE h.mk IS DISTINCT FROM 'inicio'`);
+    expect(sql).toContain(`CASE WHEN h.mk = 'lugar' THEN 'SPOT_CHANGE' ELSE upper(h."changeType"::text) END AS change_type`);
+    expect(params).toEqual([W.from, W.to, "lisboa", "lisbon", expect.any(Number)]);
+    expect(mapActivityActionRow({ user_id: "u1", agent_name: "Ana", change_type: "SPOT_CHANGE", at: "2026-10-13 08:00:00", n: 2 })?.changeType).toBe("SPOT_CHANGE");
   });
+  it("as \"Movimentações\" da página contam só MOVEMENT; a mudança de lugar fica nas ações (outras)", () => {
+    const day = src("server/dayActivity.ts");
+    const ct = day.slice(day.indexOf("const CT: Record<string"), day.indexOf("};", day.indexOf("const CT: Record<string")));
+    expect(ct).toContain('MOVEMENT: "movements"');
+    expect(ct).not.toContain("SPOT_CHANGE");
+    expect(day).toContain('const col = CT[String(r.changeType ?? "").toUpperCase()] ?? "other";');
+  });
+  it("gaveta de uma pessoa: o tipo vem do SQL; os inícios ficam de fora", async () => {
+    const { sql } = buildActivityDetailSql({ ...W, userIds: ["u1"] });
+    expect(sql).toContain("END AS move_kind");
+    expect(mapActivityDetailRow({ id: "1", change_type: "movement", move_kind: "lugar" }).changeType).toBe("SPOT_CHANGE");
+    expect(src("server/multiparkDb/activityLive.ts")).toContain(".filter((r) => r.changeType !== MOVEMENT_KIND_CHANGE_TYPES.inicio)");
+  });
+  it("o ecrã chama-lhe \"Mudança de lugar\"", () => {
+    expect(src("client/src/pages/OperationalPage.tsx")).toContain('SPOT_CHANGE: "Mudança de lugar"');
+  });
+});
 
-  it("o SQL decide como o JS em todas as combinações da ação anterior", () => {
-    // simula o CASE do SQL com os dois "anteriores" e compara com moveKindsOf
-    const sqlKind = (prevPark: string | null, prevAny: string | null) => prevPark === "CHECK_IN" ? "park"
-      : !(prevPark !== "CHECK_IN" && (prevAny == null || !["PENDING_CHECKOUT", "CHECKING_OUT"].includes(prevAny))) ? "exit" : "spot";
-    const types = ["CHECK_IN", "CHECK_OUT", "MOVEMENT", "CANCEL", "PENDING_CHECKOUT", "CHECKING_OUT"];
-    for (const t1 of [null, ...types]) for (const t2 of [null, ...types]) {
-      const rows = [t1, t2].filter((x): x is string => !!x).map((t, i) => a("BX", t, `2026-10-01 08:0${i}:00`));
-      const mv = a("BX", "MOVEMENT", "2026-10-01 09:00:00");
-      const kinds = moveKindsOf([...rows, mv]);
-      const parkSeq = rows.filter((r) => ["CHECK_IN", "CHECK_OUT", "MOVEMENT", "CANCEL"].includes(r.changeType));
-      const prevPark = parkSeq.length ? parkSeq[parkSeq.length - 1].changeType : null;
-      const prevAny = rows.length ? rows[rows.length - 1].changeType : null;
-      expect({ t1, t2, kind: kinds.get(mv.id) }).toEqual({ t1, t2, kind: sqlKind(prevPark, prevAny) });
+describe("Resumo do dia: as ações de um condutor com a mesma regra", () => {
+  it("usa o tipo do SQL (texto completo) e, sem ele, o do texto; o início não é ação", () => {
+    const s = src("server/shiftDayDetail.ts");
+    expect(s).toContain("return ct === \"MOVEMENT\" ? displayChangeType(ct, r.moveKind ?? classifyMovement(r.modifiedFields)) : ct;");
+    expect(s).toContain("if (typeOf(r) === MOVEMENT_KIND_CHANGE_TYPES.inicio) return false;");
+    expect(s).toContain("changeType: typeOf(r),");
+    // já não há a regra pela sequência das ações (a do ramo antes do #381)
+    expect(s).not.toMatch(/moveKindsOf|readMoveKinds|actionKeyOf/);
+    expect(src("client/src/components/shiftDay/ShiftDayReview.tsx")).toContain('SPOT_CHANGE: "Mudança de lugar"');
+  });
+  it("a leitura do Resumo traz o tipo calculado sobre o texto completo", () => {
+    expect(src("server/multiparkDb/historyLive.ts")).toContain(`CASE WHEN upper(h."changeType"::text) = 'MOVEMENT' THEN \${movementKindSql(\`COALESCE(h."modifiedFields"::text, '')\`)} END AS move_kind`);
+  });
+});
+
+describe("já não há uma segunda regra (pela sequência) em lado nenhum", () => {
+  it("nenhum ficheiro usa a regra antiga do ramo (moveKindsOf / moveSeqCteSql / readMoveKinds)", () => {
+    for (const f of ["server/multiparkDb/movements.ts", "server/multiparkDb/activityLive.ts", "server/shiftDayDetail.ts", "server/evaluationCore.ts", "server/db.ts", "shared/multiparkMovements.ts"]) {
+      expect(src(f)).not.toMatch(/moveKindsOf|moveSeqCteSql|moveIsSpotSql|readMoveKinds|markSpotChanges/);
     }
-  });
-
-  it("agregados por agente: deixaram de procurar UPDATE com spot/garage (que dava sempre 0)", () => {
-    const { sql } = buildAgentHistoryAggSql({ window: w, byDay: false });
-    expect(() => assertReadOnlySql(sql)).not.toThrow();
-    expect(sql).not.toMatch(/ILIKE '%spot%'/);
-    expect(sql).toContain(`LEFT JOIN seq sq ON sq.id = h."id"`);
-    expect(sql).toContain(`count(*) FILTER (WHERE h."changeType"::text = 'MOVEMENT' AND ${moveIsSpotSql("sq.prev_cat", "sq.prev_any")}) AS spot_changes`);
-  });
-
-  it("Atividade do dia: a mudança de lugar chega como SPOT_CHANGE (cai nas outras ações)", () => {
-    const { sql } = buildActivityActionsSql({ from: "2026-09-26 23:00:00", to: "2026-09-27 23:00:00" });
-    expect(() => assertReadOnlySql(sql)).not.toThrow();
-    expect(sql).toContain("THEN 'SPOT_CHANGE'");
-    expect(src("server/dayActivity.ts")).not.toMatch(/SPOT_CHANGE: "movements"/);
-  });
-});
-
-describe("Condutores e agentes / Avaliação → Mês: as mudanças de lugar aparecem (já não são sempre 0)", () => {
-  it("o resumo separa: MOVEMENT tocam no parque, SPOT_CHANGE à parte, e o total (ações) não muda", () => {
-    const [s] = mergeAgentAggregates({
-      history: [{ user_id: "u1", total: 10, t_check_in: 2, t_movement: 6, t_check_out: 2, spot_changes: 4, bookings: 4 }],
-      phases: [], occurrences: [], reviews: [],
-    });
-    expect(s).toMatchObject({ total: 10, recolhas: 2, entregas: 2, movements: 2, spotChanges: 4 });
-    expect(s.byType).toEqual({ CHECK_IN: 2, MOVEMENT: 2, SPOT_CHANGE: 4, CHECK_OUT: 2 });
-    const [all] = mergeAgentAggregates({ history: [{ user_id: "u2", total: 3, t_movement: 3, spot_changes: 3 }], phases: [], occurrences: [], reviews: [] });
-    expect(all).toMatchObject({ movements: 0, spotChanges: 3 });
-    expect(all.byType).toEqual({ SPOT_CHANGE: 3 });
-    expect(sumAgentSummaries([s, all])).toMatchObject({ movements: 2, spotChanges: 7, total: 13 });
-  });
-
-  it("detalhe: lê a sequência das reservas e marca cada MOVEMENT; sem MOVEMENT não lê; se a leitura falha fica como estava", async () => {
-    const q = vi.fn(async () => [
-      { id: "x1", booking_id: "B1", change_type: "CHECK_IN", action_time: "2026-10-01 08:00:00" },
-      { id: "m1", booking_id: "B1", change_type: "MOVEMENT", action_time: "2026-10-01 08:10:00" },
-      { id: "m2", booking_id: "B1", change_type: "MOVEMENT", action_time: "2026-10-01 12:00:00" },
-    ]);
-    const rows = [
-      { id: "m1", bookingId: "B1", changeType: "MOVEMENT", actionTime: "2026-10-01T08:10:00.000Z" },
-      { id: "m2", bookingId: "B1", changeType: "MOVEMENT", actionTime: "2026-10-01 12:00:00" },
-      { id: "c1", bookingId: "B1", changeType: "UPDATE", actionTime: "2026-10-01 12:30:00" },
-    ];
-    const kinds = await readMoveKinds(rows, q as any);
-    expect(q).toHaveBeenCalledTimes(1);
-    const [sql, params] = (q.mock.calls[0] as unknown) as [string, unknown[]];
-    expect(() => assertReadOnlySql(sql)).not.toThrow();
-    expect(params.slice(0, 3)).toEqual(["B1", "2026-09-28 08:10:00", "2026-10-01 12:00:01"]);
-    expect(withMoveKinds(rows, kinds).map((r) => [r.changeType, r.moveKind])).toEqual([["MOVEMENT", "park"], [SPOT_CHANGE_KEY, "spot"], ["UPDATE", null]]);
-    const none = vi.fn();
-    expect(await readMoveKinds([rows[2]], none as any)).toEqual(new Map());
-    expect(none).not.toHaveBeenCalled();
-    expect(await readMoveKinds(rows, (async () => { throw new Error("x"); }) as any)).toBeNull();
-    expect(withMoveKinds(rows, null).map((r) => r.changeType)).toEqual(["MOVEMENT", "MOVEMENT", "UPDATE"]);
-  });
-
-  it("a leitura da sequência é só leitura e limitada", () => {
-    const { sql, params } = buildBookingSequenceSql({ bookingIds: ["B1", "B1", " "], from: "2026-09-28 00:00:00", to: "2026-10-01 00:00:00" });
-    expect(() => assertReadOnlySql(sql)).not.toThrow();
-    expect(sql).toContain(`h."bookingId" IN ($1)`);
-    expect(params[params.length - 1]).toBe(20_000);
-    expect(buildBookingSequenceSql({ bookingIds: [], from: "a", to: "b" }).sql).toContain("FALSE");
-  });
-
-  it("o ecrã mostra a coluna Mudanças de lugar nos Condutores e nos Agentes, clicável, e os condutores incluem quem só mudou carros de lugar", () => {
-    const p = src("client/src/components/people/MovementPeoplePanel.tsx");
-    expect(p).toContain("spotChanges: [SPOT_CHANGE_KEY]");
-    expect(p).toContain('<Th k="spotChanges" label={spotLabel}');
-    expect(p).toContain('num(r, "spotChanges", spotLabel)');
-    expect(src("server/movementPeople.ts")).toContain("x.recolhas + x.entregas + x.movements + x.spotChanges > 0");
-    expect(src("client/src/components/evaluation/MonthEvaluationTab.tsx")).toContain(">Mudanças de lugar</th>");
-  });
-
-  it("Resumo do dia: as ações do condutor classificam-se com a sequência da reserva (recolha de dias antes conta), e a leitura do ecrã fica como recurso", () => {
-    const d = src("server/shiftDayDetail.ts");
-    expect(d).toContain("const kinds = (await readMoveKinds(mine.map(asSeq))) ?? moveKindsOf(rows.filter((r) => r.actionTime).map(asSeq));");
-    expect(d).toContain("changeType: actionKeyOf(ct, kinds.get(r.historyId) ?? null)");
-  });
-
-  it("o assistente (minha_avaliacao) separa movimentos de mudanças de lugar", () => {
-    expect(src("server/assistant/tools.ts")).toContain("movimentos: num(m.movements), mudancasDeLugar: num(m.spotChanges)");
   });
 });

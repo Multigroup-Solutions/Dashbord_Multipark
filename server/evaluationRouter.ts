@@ -33,6 +33,7 @@ import {
 } from "./evaluationEngine";
 import {
   ADJUSTABLE_METRICS,
+  EVALUATION_RULES_VERSION,
   METRIC_KEYS,
   perHourMetrics,
   scoreOf,
@@ -190,6 +191,8 @@ export const evaluationRouter = router({
         perHour: t.perHour,
         adjustments: list.reduce((s, d) => s + d.adjustments.length, 0),
         openDisputes: openBy.get(employeeId) ?? 0,
+        // 14 out 2026: dias desta pessoa calculados com as regras antigas (o ecrã avisa e oferece Recalcular)
+        oldRulesDays: list.filter((d) => d.rulesVersion != null && d.rulesVersion < EVALUATION_RULES_VERSION).length,
         cities: citiesOfDays(list, f?.homeCity ?? null),
         brand: f?.brand ?? null,
         agents: f?.agents ?? [],

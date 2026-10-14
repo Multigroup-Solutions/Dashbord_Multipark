@@ -291,7 +291,8 @@ describe("Ecrãs", () => {
   });
   it("ficha no RH, lista da gestão e seletor do Extras-Dia mostram o habitual", () => {
     expect(src("client/src/components/EmployeeAccessAvailability.tsx")).toContain("<EmployeeAvailabilityPattern employeeId={employeeId} />");
-    expect(src("client/src/pages/ExtrasDiaPage.tsx")).toContain("{!ex.responded && <HabitualLine habitual={ex.habitual} note={ex.habitualNote} />}");
+    // 14 out 2026: a grelha da gestão saiu para extrasDia/AvailabilityGrid.tsx.
+    expect(src("client/src/pages/extrasDia/AvailabilityGrid.tsx")).toContain("{!ex.responded && <HabitualLine habitual={ex.habitual} note={ex.habitualNote} />}");
     expect(src("server/extrasAvailability.ts")).toContain("habitual: patterns.has(e.id) ? summarizePattern(patterns.get(e.id)!.slots, { short: true }) || null : null,");
     const picker = src("client/src/pages/extrasDia/PersonPicker.tsx");
     expect(picker).toContain('c.availability?.status === "no_response" ? c.habitual ?? null : null');

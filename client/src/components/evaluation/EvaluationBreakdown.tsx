@@ -23,6 +23,8 @@ import {
   DISPUTE_STATUS_LABELS,
   EVALUATION_POINTS,
   EVALUATION_RULES,
+  LATE_AFTER_REQUEST_MINUTES,
+  LATE_SERVICE_MINUTES,
   METRIC_LABELS,
   type DayMetrics,
   type DisputeStatus,
@@ -97,7 +99,10 @@ export function RulesLegend() {
             <span className="text-muted-foreground">
               {r.label}
               {r.key === "firstMoveAfterPickup" && <span className="block text-[11px]">substitui os {fmtPts(EVALUATION_POINTS.movement)} desse movimento</span>}
-              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto depois da escala ou entrega &gt; 15 min</span>}
+              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto depois da hora da escala (no máximo 1 por dia)</span>}
+              {r.key === "lateDelivery" && <span className="block text-[11px]">&gt; {LATE_SERVICE_MINUTES} min depois da hora marcada; com o pedido depois da hora marcada (ou sem ela), &gt; {LATE_AFTER_REQUEST_MINUTES} min depois do pedido</span>}
+              {r.key === "spotChange" && <span className="block text-[11px]">o carro ficou na mesma garagem; não é movimento</span>}
+              {r.key === "speeding" && <span className="block text-[11px]">alertas e penalizações; ou 1 por dia com o GPS do Zello acima do limite</span>}
             </span>
             <span className={`font-semibold tabular-nums ${ptsClass(p)}`}>{fmtPts(p)}</span>
           </div>
@@ -114,7 +119,7 @@ export function RulesLegend() {
 
 const SHOWN_METRICS: MetricKey[] = [
   "hoursWorked", "scheduledHours", "suspiciousHours", "actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges",
-  "weightedActions", "delays", "lateServices", "speedingEvents", "complaints", "accidents", "incidentsReported", "penaltyPoints", "cost",
+  "weightedActions", "delays", "lateServices", "deliveriesWithoutSchedule", "speedingEvents", "complaints", "accidents", "incidentsReported", "penaltyPoints", "cost",
 ];
 
 export function MetricsGrid({ metrics, base, hideZero = false }: { metrics: DayMetrics; base?: DayMetrics; hideZero?: boolean }) {
@@ -356,7 +361,7 @@ function DisputeDialog({ day, onClose, onDone }: { day: string; onClose: () => v
     onSuccess: () => { toast.success("Contestação enviada"); onDone(); },
     onError: (e) => toast.error(e.message),
   });
-  const keys: MetricKey[] = ["actions", "recolhas", "entregas", "movements", "parkingMoves", "hoursWorked", "delays", "speedingEvents", "complaints", "accidents"];
+  const keys: MetricKey[] = ["actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "hoursWorked", "delays", "lateServices", "speedingEvents", "complaints", "accidents"];
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent>

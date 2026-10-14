@@ -187,19 +187,21 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
     if (!roster.length) return cal;
     return classifyActionShift(cal, [...windowsOf(addDays(cal, -1)), ...windowsOf(cal)], (d) => lisbonHoursSince(d, at)).day;
   };
+  // 14 out 2026: cada MOVEMENT pelo modifiedFields (a regra da Avaliação e de Condutores e agentes —
+  // shared/multiparkMovements.ts → classifyMovement; o tipo vem do SQL sobre o texto completo): o
+  // início de um movimento não é uma ação (fica de fora) e a mudança de lugar aparece como tal.
+  const { classifyMovement, displayChangeType, MOVEMENT_KIND_CHANGE_TYPES } = await import("../shared/multiparkMovements");
+  const typeOf = (r: (typeof rows)[number]): string => {
+    const ct = (r.changeType ?? "").toUpperCase();
+    return ct === "MOVEMENT" ? displayChangeType(ct, r.moveKind ?? classifyMovement(r.modifiedFields)) : ct;
+  };
   const mine = rows.filter((r): r is (typeof rows)[number] & { actionTime: string } => {
     const ct = (r.changeType ?? "").toUpperCase();
     if (!r.actionTime || !["CHECK_IN", "CHECK_OUT", "MOVEMENT"].includes(ct)) return false;
+    if (typeOf(r) === MOVEMENT_KIND_CHANGE_TYPES.inicio) return false;
     const who = resolve(r.agentUserId, r.agentName);
     return who.kind !== "ignorado" && who.key === key && dayOf(r.actionTime) === date;
   });
-  // 14 out 2026: o MOVEMENT que é só mudança de lugar aparece como tal (shared/multiparkMovements.ts).
-  // A sequência de cada reserva lê-se como nas outras listas (desde MOVE_LOOKBACK_DAYS antes:
-  // uma recolha de anteontem conta); se essa leitura falhar, vale o que esta leitura já tem.
-  const { moveKindsOf, actionKeyOf } = await import("../shared/multiparkMovements");
-  const { readMoveKinds } = await import("./multiparkDb/movements");
-  const asSeq = (r: (typeof rows)[number]) => ({ id: r.historyId, bookingId: r.bookingExternalId, changeType: r.changeType, actionTime: r.actionTime! });
-  const kinds = (await readMoveKinds(mine.map(asSeq))) ?? moveKindsOf(rows.filter((r) => r.actionTime).map(asSeq));
   const actions: DriverAction[] = [];
   for (const r of mine) {
     const ct = (r.changeType ?? "").toUpperCase();
@@ -210,7 +212,7 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
       if (Number.isFinite(m) && Math.abs(m) < TIMING_MAX_MIN) delay = m;
     }
     actions.push({
-      at: r.actionTime, changeType: actionKeyOf(ct, kinds.get(r.historyId) ?? null), booking: r.bookingExternalId, bookingCode: r.bookingCode, plate: r.licensePlate, parkName: r.parkName,
+      at: r.actionTime, changeType: typeOf(r), booking: r.bookingExternalId, bookingCode: r.bookingCode, plate: r.licensePlate, parkName: r.parkName,
       pendingAt: pair?.pendingAt ?? null, takenAt: pair?.takenAt ?? null, mins: pair?.mins != null && pair.mins < TIMING_MAX_MIN ? pair.mins : null,
       plannedIn: ct === "CHECK_IN" ? r.checkIn : null, delayMins: delay, maxSpeed: null, violations: null,
     });
