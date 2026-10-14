@@ -490,6 +490,15 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() - 86400000));
         const n = await detectExtraDiaNoShows(yesterday);
         console.log(`[daily-ops] RH: possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas; fora: ${n.skipped.proposed} só propostos, ${n.skipped.sent_home} mandados para casa, ${n.skipped.multipark} com movimentos na Multipark${n.multiparkRead ? "" : " — Multipark não lida"})`);
+        // Tarefa 62 (Q8): também quem tem horário fixo no RH (interruptor RH_FALTAS_HORARIO, desligado por omissão)
+        const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }, { FIXED_SCHEDULE_NO_SHOWS_FLAG, detectFixedScheduleNoShows }] = await Promise.all([
+          import("./_core/featureFlags"), import("../shared/appSettings"), import("./rhService"),
+        ]);
+        await ensureFeatureFlagOverrides();
+        if (isFeatureEnabled(FIXED_SCHEDULE_NO_SHOWS_FLAG, { defaultEnabled: automationFlagDefault(FIXED_SCHEDULE_NO_SHOWS_FLAG) })) {
+          const f = await detectFixedScheduleNoShows(yesterday);
+          console.log(`[daily-ops] RH: possíveis faltas (horário fixo) ${yesterday}: ${f.created} novas de ${f.scanned} com horário (${f.alreadyPending} já registadas; fora: ${f.skipped.escala} na escala, ${f.skipped.check_in} com entrada, ${f.skipped.multipark} com movimentos na Multipark${f.multiparkRead ? "" : " — Multipark não lida"})`);
+        }
       });
       // Retenções, em lotes e com prazo curto — o resto fica para o dia seguinte.
       // Fila de notificações Multipark: apaga concluídos com mais de 30 dias.
