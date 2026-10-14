@@ -62,15 +62,15 @@ describe("histórico ao vivo (\"History\" da Multipark)", () => {
 describe("painel do supervisor: tempos a partir do histórico", () => {
   const w = { start: "2026-09-28 02:00:00", end: "2026-09-29 02:00:00", checkoutEnd: "2026-09-29 12:00:00" };
   const r = (b: string, ct: string, t: string, o: any = {}) => ({ bookingExternalId: b, changeType: ct, actionTime: t, agentName: "Rui", checkIn: null, ...o });
-  it("pendente→entrega (mesma reserva, < 10 h) e atraso na recolha vs previsto", () => {
-    const { deliveryTimes, pickupDelays } = supervisorTimings([
+  it("pendente→entrega (mesma reserva, < 10 h); a hora marcada já não entra nas recolhas", () => {
+    const res = supervisorTimings([
       r("a", "PENDING_CHECKOUT", "2026-09-28 10:00:00"), r("a", "CHECK_OUT", "2026-09-28 10:25:00"),
       r("b", "PENDING_CHECKOUT", "2026-09-28 10:00:00"), r("b", "CHECK_OUT", "2026-09-28 22:00:00"),   // > 10 h: fora
       r("c", "CHECK_OUT", "2026-09-28 11:00:00"),                                                    // sem pendente: fora
       r("d", "CHECK_IN", "2026-09-28 08:20:00", { checkIn: "2026-09-28 08:00:00" }),
       r("d", "CHECK_IN", "2026-09-28 09:00:00", { checkIn: "2026-09-28 08:00:00" }),                 // conta o 1.º
     ], w);
-    expect(deliveryTimes).toEqual([{ booking: "a", mins: 25, agent: "Rui" }]);
-    expect(pickupDelays).toEqual([20]);
+    expect(res.deliveryTimes).toEqual([{ booking: "a", mins: 25, agent: "Rui" }]);
+    expect(res).not.toHaveProperty("pickupDelays");
   });
 });

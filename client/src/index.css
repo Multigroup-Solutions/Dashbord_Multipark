@@ -289,6 +289,25 @@
   border-color: var(--primary);
 }
 
+/* Tempos de entrega e de recolha (15 out 2026): as três partes de uma entrega
+   (Fila, Trânsito, Cliente — paleta categórica validada, com os minutos
+   escritos ao lado) e o condutor ao lado dos colegas (o condutor no azul da
+   marca, os colegas a cinzento: forma de ênfase). Passos próprios no escuro. */
+.times-viz {
+  --times-queue: #0055d2;
+  --times-transit: #eb6834;
+  --times-customer: #1baf7a;
+  --times-me: #0055d2;
+  --times-peers: #8a94a3;
+}
+.dark .times-viz {
+  --times-queue: #3987e5;
+  --times-transit: #d95926;
+  --times-customer: #199e70;
+  --times-me: #3987e5;
+  --times-peers: #a3acba;
+}
+
 /* 37a — Desempenho por pessoa: 4 séries por gráfico (paleta validada; o
    modo escuro tem os seus próprios passos, não é uma inversão). */
 .perf-viz {

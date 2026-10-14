@@ -4135,7 +4135,8 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_resumo_dia", "view");
       const { getSupervisorDayDashboard } = await import("./db");
-      return getSupervisorDayDashboard(input.date);
+      // 15 out 2026: o portão dos tempos com GPS aplica-se no servidor (só o super admin os vê com ele fechado)
+      return getSupervisorDayDashboard(input.date, { isSuperAdmin: ctx.user.role === "super_admin" });
     }),
 
     // 12 out 2026 (Jorge): "Parado" limitado ao TURNO de cada pessoa (picagens;
@@ -4160,7 +4161,7 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_resumo_dia", "view");
       const { getDriverShiftDay } = await import("./shiftDayDetail");
-      return getDriverShiftDay(input.date, input.key);
+      return getDriverShiftDay(input.date, input.key, Date.now(), { isSuperAdmin: ctx.user.role === "super_admin" });
     }),
 
     // Uma entrega lenta: a reserva, a linha do tempo e os outros pedidos da

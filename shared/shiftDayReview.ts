@@ -7,8 +7,10 @@
  *     agora com a reserva e quem fez cada uma.
  *  2. `teamLines` — a equipa de cada chefe de turno, com a regra do
  *     Desempenho (42c): o turno dele na escala (mesmo dia, cidade e turno),
- *     sem os TL. Quantas recolhas e entregas a tempo e atrasadas, com os
- *     mesmos limites dos cartões (entregas >15/>30 min, recolhas >15 min).
+ *     sem os TL. Tempos de entrega e de recolha (15 out 2026): a entrega é do
+ *     condutor do Trânsito (quem pegou no carro) e conta dentro ou fora da
+ *     meta pelo "nosso tempo" (Fila + Trânsito); a recolha é de quem tirou o
+ *     carro do terminal e só há atrasadas no T2. A hora marcada já não entra.
  *  3. `deliveryPairs` + `deliveryContext` — o que se passava na mesma cidade
  *     enquanto uma entrega lenta esperava (pedidos à espera, quem entregou).
  *  4. `shiftWindowsFor` + `gpsWindowStats` — o GPS dentro de uma janela:
@@ -24,8 +26,6 @@ import { matchKey } from "./textKey";
 /** Entrega "atrasada" (pendente → entregue), como no cartão "Entregas >15/>30 min". */
 export const DELIVERY_LATE_MIN = 15;
 export const DELIVERY_VERY_LATE_MIN = 30;
-/** Recolha atrasada face à entrada prevista, como no cartão "Recolhas atrasadas >15min". */
-export const PICKUP_LATE_MIN = 15;
 /** Acima de 10 h não é a mesma operação (pendente→entrega e desvio da recolha). */
 export const TIMING_MAX_MIN = 600;
 
@@ -82,12 +82,10 @@ export interface DeliveryRecord extends BookingMeta {
   agentUserId: string | null;
 }
 export interface CheckoutRecord extends BookingMeta { booking: string; at: string; agent: string | null; agentUserId: string | null }
+/** Uma recolha feita no dia (a hora marcada já não entra nos tempos — decisão do Jorge, 14 out 2026). */
 export interface PickupRecord extends BookingMeta {
   booking: string;
   at: string;
-  planned: string | null;
-  /** minutos depois (+) ou antes (−) da entrada prevista; null sem previsão ou fora das 10 h */
-  delayMins: number | null;
   agent: string | null;
   agentUserId: string | null;
 }
@@ -99,8 +97,10 @@ export interface PickupRecord extends BookingMeta {
  *    em menos de 10 h;
  *  - entrega SEM MEDIDA: o 1.º CHECK_OUT do dia de uma reserva sem pendente
  *    medido (conta para o total da equipa, não para os tempos);
- *  - recolha: 1.º CHECK_IN do dia vs entrada PREVISTA (±10 h).
- * São as regras de sempre dos cartões (server/db.ts → supervisorTimings). PURA.
+ *  - recolha: 1.º CHECK_IN do dia (a hora marcada não entra: só serve para
+ *    ver reclamações, nunca para os tempos).
+ * Os tempos novos (Fila, Trânsito, Cliente…) vêm da tabela dos tempos ou do
+ * cálculo ao vivo (server/serviceTimesAgg.ts). PURA.
  */
 export function dayTimings(
   rows: readonly DayHistRow[],
@@ -109,7 +109,7 @@ export function dayTimings(
   const meta = new Map<string, BookingMeta>();
   const pend = new Map<string, string>();
   const out = new Map<string, { t: string; agent: string | null; agentUserId: string | null }>();
-  const cin = new Map<string, { t: string; planned: string | null; agent: string | null; agentUserId: string | null }>();
+  const cin = new Map<string, { t: string; agent: string | null; agentUserId: string | null }>();
   for (const r of rows) {
     const t = r.actionTime; const b = r.bookingExternalId;
     if (!t || !b) continue;
@@ -121,7 +121,7 @@ export function dayTimings(
       const e = out.get(b);
       if (!e || t < e.t) out.set(b, { t, agent: r.agentName ?? e?.agent ?? null, agentUserId: r.agentUserId ?? e?.agentUserId ?? null });
     } else if (ct === "CHECK_IN" && t >= w.start && t < w.end) {
-      if (!cin.has(b) || t < cin.get(b)!.t) cin.set(b, { t, planned: r.checkIn ?? null, agent: r.agentName ?? null, agentUserId: r.agentUserId ?? null });
+      if (!cin.has(b) || t < cin.get(b)!.t) cin.set(b, { t, agent: r.agentName ?? null, agentUserId: r.agentUserId ?? null });
     }
   }
   const deliveries: DeliveryRecord[] = [];
@@ -141,14 +141,7 @@ export function dayTimings(
     unmeasured.push({ ...meta.get(b)!, booking: b, at: o.t, agent: o.agent, agentUserId: o.agentUserId });
   }
   const pickups: PickupRecord[] = [];
-  for (const [b, c] of cin) {
-    let delay: number | null = null;
-    if (c.planned) {
-      const mins = Math.trunc((utcMs(c.t) - utcMs(c.planned)) / 60_000);
-      if (Number.isFinite(mins) && Math.abs(mins) < TIMING_MAX_MIN) delay = mins;
-    }
-    pickups.push({ ...meta.get(b)!, booking: b, at: c.t, planned: c.planned, delayMins: delay, agent: c.agent, agentUserId: c.agentUserId });
-  }
+  for (const [b, c] of cin) pickups.push({ ...meta.get(b)!, booking: b, at: c.t, agent: c.agent, agentUserId: c.agentUserId });
   return { deliveries, unmeasured, pickups };
 }
 
@@ -173,8 +166,10 @@ export interface RosterEntry {
 /** Quem fez a ação: a ficha (ou, sem ficha ligada, o nome). */
 export interface ActorRef { employeeId: number | null; name: string | null }
 
-export interface DeliveryTally { count: number; measured: number; onTime: number; over15: number; over30: number }
-export interface PickupTally { count: number; measured: number; onTime: number; late: number }
+/** Entregas da equipa: dentro / fora da meta pelo "nosso tempo" (sem medida: sem chegada pelo GPS ou portão fechado). */
+export interface DeliveryTally { count: number; measured: number; onTime: number; late: number }
+/** Recolhas da equipa: quantas, quantas no T2 e, dessas, a tempo / atrasadas (só no T2 há atrasadas). */
+export interface PickupTally { count: number; t2: number; measured: number; onTime: number; late: number }
 export interface TeamLine {
   shift: "morning" | "night";
   city: string;
@@ -189,39 +184,42 @@ export interface TeamLine {
 }
 
 const isTL = (r: Pick<RosterEntry, "isTeamLeader">) => r.isTeamLeader === true || Number(r.isTeamLeader) === 1;
-const emptyDeliveries = (): DeliveryTally => ({ count: 0, measured: 0, onTime: 0, over15: 0, over30: 0 });
-const emptyPickups = (): PickupTally => ({ count: 0, measured: 0, onTime: 0, late: 0 });
+const emptyDeliveries = (): DeliveryTally => ({ count: 0, measured: 0, onTime: 0, late: 0 });
+const emptyPickups = (): PickupTally => ({ count: 0, t2: 0, measured: 0, onTime: 0, late: 0 });
 
-/** Junta uma entrega aos números (os mesmos limites dos cartões). PURA. */
-export function addDelivery(t: DeliveryTally, mins: number | null): void {
+/** Junta uma entrega: dentro da meta se o nosso tempo (min) ≤ meta. PURA. */
+export function addDelivery(t: DeliveryTally, ourMins: number | null, targetMinutes: number): void {
   t.count++;
-  if (mins == null) return;
+  if (ourMins == null) return;
   t.measured++;
-  if (mins > DELIVERY_LATE_MIN) t.over15++; else t.onTime++;
-  if (mins > DELIVERY_VERY_LATE_MIN) t.over30++;
+  if (ourMins > targetMinutes) t.late++; else t.onTime++;
 }
-/** Junta uma recolha aos números. PURA. */
-export function addPickup(t: PickupTally, delayMins: number | null): void {
+/** Junta uma recolha: atrasada só no T2 (o condutor chegou ao T2 depois do alvo). PURA. */
+export function addPickup(t: PickupTally, p: { t2: boolean; t2LateMins: number | null }): void {
   t.count++;
-  if (delayMins == null) return;
+  if (!p.t2) return;
+  t.t2++;
+  if (p.t2LateMins == null) return;
   t.measured++;
-  if (delayMins > PICKUP_LATE_MIN) t.late++; else t.onTime++;
+  if (p.t2LateMins > 0) t.late++; else t.onTime++;
 }
 
 /**
  * Uma linha por chefe de turno (dois TL no mesmo turno → duas linhas, com a
- * mesma equipa). Cada ação vai para o turno de quem a fez nesse dia: pela
- * ficha (ou pelo nome, se a escala não tem ficha ligada); com dois turnos no
- * mesmo dia, o que abriga a hora da ação. Quem não está na escala não conta
- * para nenhuma equipa. PURA.
+ * mesma equipa). Cada entrega vai para o turno do condutor do Trânsito (quem
+ * pegou no carro); cada recolha para o de quem tirou o carro do terminal —
+ * pela ficha (ou pelo nome, se a escala não tem ficha ligada); com dois turnos
+ * no mesmo dia, o que abriga a hora. Quem não está na escala não conta para
+ * nenhuma equipa. PURA.
  */
 export function teamLines(
   date: string,
   roster: readonly RosterEntry[],
   acts: {
-    deliveries: ReadonlyArray<{ actor: ActorRef; at: string; mins: number | null }>;
-    pickups: ReadonlyArray<{ actor: ActorRef; at: string; delayMins: number | null }>;
+    deliveries: ReadonlyArray<{ actor: ActorRef; at: string | number; ourMins: number | null }>;
+    pickups: ReadonlyArray<{ actor: ActorRef; at: string | number; t2: boolean; t2LateMins: number | null }>;
   },
+  o: { targetMinutes: number },
 ): TeamLine[] {
   type Group = { shift: "morning" | "night"; city: string; tls: Map<string, RosterEntry>; members: RosterEntry[]; d: DeliveryTally; p: PickupTally; own: Map<string, { deliveries: number; pickups: number }> };
   type Slot = { group: Group; key: string; tl: boolean; from: number; to: number };
@@ -239,7 +237,7 @@ export function teamLines(
     if (key === "n:") continue;
     slots.set(key, [...(slots.get(key) ?? []), { group: g, key, tl, from: r.startHour, to: r.sentHomeHour ?? r.endHour }]);
   }
-  const slotFor = (actor: ActorRef, at: string): Slot | null => {
+  const slotFor = (actor: ActorRef, at: string | number): Slot | null => {
     const cands = (actor.employeeId != null ? slots.get(`e:${actor.employeeId}`) : undefined)
       ?? (actor.name && matchKey(actor.name) ? slots.get(`n:${matchKey(actor.name)}`) : undefined);
     if (!cands?.length) return null;
@@ -250,13 +248,13 @@ export function teamLines(
     const s = slotFor(d.actor, d.at);
     if (!s) continue;
     if (s.tl) s.group.own.get(s.key)!.deliveries++;
-    else addDelivery(s.group.d, d.mins);
+    else addDelivery(s.group.d, d.ourMins, o.targetMinutes);
   }
   for (const p of acts.pickups) {
     const s = slotFor(p.actor, p.at);
     if (!s) continue;
     if (s.tl) s.group.own.get(s.key)!.pickups++;
-    else addPickup(s.group.p, p.delayMins);
+    else addPickup(s.group.p, p);
   }
   const out: TeamLine[] = [];
   for (const g of groups.values()) {

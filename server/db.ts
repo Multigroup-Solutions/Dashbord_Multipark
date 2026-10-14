@@ -92,7 +92,7 @@ import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle
 import { ENV } from "./_core/env";
 import { expenseStatsWindows, lisbonToday } from "../shared/expensePeriods";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
-import { DELIVERY_LATE_MIN, DELIVERY_VERY_LATE_MIN, PICKUP_LATE_MIN, dayTimings, teamLines, type ActorRef } from "../shared/shiftDayReview";
+import { dayTimings, teamLines } from "../shared/shiftDayReview";
 import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
@@ -4105,50 +4105,52 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
 }
 
 /**
- * Tempos do painel do supervisor a partir do histórico (ao vivo):
- *  - pendente→entrega: 1.º PENDING_CHECKOUT no dia → 1.º CHECK_OUT (até 10 h depois);
- *  - atraso na recolha: 1.º CHECK_IN no dia vs entrada PREVISTA da reserva (±10 h).
- * Instantes UTC "YYYY-MM-DD HH:MM:SS". PURA. As regras vivem em
- * shared/shiftDayReview.ts (`dayTimings`, com a reserva e quem fez cada uma).
+ * Entregas pendente→entregue a partir do histórico (ao vivo): 1.º
+ * PENDING_CHECKOUT no dia → 1.º CHECK_OUT (até 10 h depois). Instantes UTC
+ * "YYYY-MM-DD HH:MM:SS". PURA. A hora marcada já não entra nas recolhas (15
+ * out 2026): os tempos das recolhas vêm da tabela dos tempos (ou ao vivo).
  */
 export function supervisorTimings(
   rows: Array<{ bookingExternalId: string; changeType: string | null; actionTime: string | null; agentName: string | null; checkIn: string | null }>,
   w: { start: string; end: string; checkoutEnd: string },
-): { deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }>; pickupDelays: number[] } {
+): { deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }> } {
   const t = dayTimings(rows, w);
-  return {
-    deliveryTimes: t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent })),
-    pickupDelays: t.pickups.filter((p) => p.delayMins != null).map((p) => p.delayMins!),
-  };
+  return { deliveryTimes: t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent })) };
 }
 
 /** Resumo do dia do supervisor: condutores por turno, carros
- *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
- *  (previsto vs real), reclamações do dia e, por chefe de turno, o que a
- *  equipa dele fez a tempo e atrasado (12 out 2026).
+ *  recolhidos/entregues, reclamações do dia e, por chefe de turno, o que a
+ *  equipa dele fez (12 out 2026).
+ *  15 out 2026 — os tempos novos (Fila, Trânsito, Cliente, Nosso e a meta;
+ *  nas recolhas o tempo no terminal, no P2, o cliente e as atrasadas no T2):
+ *  da tabela dos tempos; sem linhas para o dia, calculados agora com as mesmas
+ *  regras, sem GPS (server/serviceTimesRead.ts). O PORTÃO dos tempos com GPS
+ *  aplica-se aqui (server/serviceTimesAgg.ts): quem não é super admin não
+ *  recebe esses números enquanto ele estiver fechado. A hora marcada já não
+ *  entra em nenhum tempo.
  *  O "dia" é o dia OPERACIONAL de Lisboa: 03:00 → 03:00 do dia seguinte
  *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
  *  dentro das cidades do utilizador (ou da cidade pedida). */
-export async function getSupervisorDayDashboard(date: string) {
+export async function getSupervisorDayDashboard(date: string, opts: { isSuperAdmin?: boolean } = {}) {
   const db = await getDb();
   if (!db) return null;
   const { start, end, endMs } = operationalDayWindowUtc(date);
-  // Entregas: o CHECK_OUT pode acontecer até 10h depois do pendente (o mesmo
-  // limite do TIMESTAMPDIFF < 600 abaixo) — limite superior explícito.
+  // Entregas: o CHECK_OUT pode acontecer até 10h depois do pendente — limite superior explícito.
   const checkoutEnd = new Date(endMs + 600 * 60_000).toISOString().slice(0, 19).replace("T", " ");
 
-  // Movimentos AO VIVO da BD da Multipark ("History"; a cópia local está congelada desde o #141).
+  // Movimentos AO VIVO da BD da Multipark ("History"; a cópia local está congelada desde o #141):
+  // para as reclamações dos carros que saíram.
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
   const HIST_LIMIT = 5000;
   const hist = await readLiveHistory({ changeTypes: ["PENDING_CHECKOUT", "CHECK_OUT", "CHECK_IN"], from: start, to: checkoutEnd, cities: scopedCityNamesLive(), limit: HIST_LIMIT, order: "asc" });
-  const timings = dayTimings(hist, { start, end, checkoutEnd });
-  const deliveryTimes = [...timings.deliveries].sort((a, b) => b.mins - a.mins);
-  const pickupDelays = timings.pickups.filter((p) => p.delayMins != null).map((p) => p.delayMins!);
-  const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
 
-  const late = pickupDelays.filter((m) => m > PICKUP_LATE_MIN).length;
-  const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
+  // Tempos (15 out 2026): a tabela; sem linhas, ao vivo. O portão no servidor.
+  const { dayServiceRows, loadServiceViewSettings, scopedServiceCityKeys, employeeNames } = await import("./serviceTimesRead");
+  const { dayTimesView, teamActs } = await import("./serviceTimesAgg");
+  const [svc, svcSettings] = await Promise.all([dayServiceRows(date, { cityKeys: await scopedServiceCityKeys() }), loadServiceViewSettings()]);
+  const gate = { gate: svcSettings.gate, isSuperAdmin: !!opts.isSuperAdmin };
+  const timesView = dayTimesView(svc.rows, { targetMinutes: svcSettings.targetMinutes, gate });
 
   // Reclamações criadas no mesmo dia operacional
   const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
@@ -4179,22 +4181,16 @@ export async function getSupervisorDayDashboard(date: string) {
     isTeamLeader: extrasDiaAssignments.isTeamLeader,
   }).from(extrasDiaAssignments).where(and(eq(extrasDiaAssignments.assignmentDate, date), cityNameScope(extrasDiaAssignments.city)));
 
-  // Equipas por chefe de turno (regra 42c): quem fez cada entrega/recolha → a
-  // ficha (a MESMA identidade da Atividade do Dia) → o turno dela na escala.
-  const { loadIdentityResolver } = await import("./dayActivity");
-  const { resolve } = await loadIdentityResolver();
-  const actor = (userId: string | null, name: string | null): ActorRef => {
-    const who = resolve(userId, name);
-    if (who.kind === "ignorado") return { employeeId: null, name: null };
-    return { employeeId: who.employeeId, name: who.kind === "colaborador" ? who.name : name };
-  };
+  // Equipas por chefe de turno (regra 42c): a entrega é do condutor do Trânsito
+  // (quem pegou no carro), dentro ou fora da meta pelo nosso tempo; a recolha é
+  // de quem tirou o carro do terminal (só há atrasadas no T2). Com o portão
+  // fechado, sem medida (a contagem fica).
+  const acts = teamActs(svc.rows, { targetMinutes: svcSettings.targetMinutes, gate });
   const teams = teamLines(date, assignments.map((a) => ({ ...a, shift: a.shift as "morning" | "night" })), {
-    deliveries: [
-      ...timings.deliveries.map((d) => ({ actor: actor(d.agentUserId, d.agent), at: d.deliveredAt, mins: d.mins })),
-      ...timings.unmeasured.map((d) => ({ actor: actor(d.agentUserId, d.agent), at: d.at, mins: null })),
-    ],
-    pickups: timings.pickups.map((p) => ({ actor: actor(p.agentUserId, p.agent), at: p.at, delayMins: p.delayMins })),
-  });
+    deliveries: acts.deliveries.map((d) => ({ actor: { employeeId: d.employeeId, name: null }, at: d.at, ourMins: d.ourMins })),
+    pickups: acts.pickups.map((p) => ({ actor: { employeeId: p.employeeId, name: null }, at: p.at, t2: p.t2, t2LateMins: p.t2LateMins })),
+  }, { targetMinutes: svcSettings.targetMinutes });
+  const driverNames = await employeeNames([...timesView.deliveries.slowest.map((x) => x.driverEmployeeId), ...timesView.pickups.longest.map((x) => x.driverEmployeeId)]);
 
   return {
     date,
@@ -4204,26 +4200,13 @@ export async function getSupervisorDayDashboard(date: string) {
     gpsMissingDays: dayActivity.gpsMissingDays,
     shifts: assignments,
     teams,
-    delivery: {
-      count: deliveryTimes.length,
-      avgMins: dAvg,
-      maxMins: deliveryTimes[0]?.mins ?? 0,
-      over15: deliveryTimes.filter((r) => r.mins > DELIVERY_LATE_MIN).length,
-      over30: deliveryTimes.filter((r) => r.mins > DELIVERY_VERY_LATE_MIN).length,
-      // Cada uma abre o "o que se passava nesse horário" (shiftHandover.deliveryContext).
-      worst: deliveryTimes.slice(0, 8).map((d) => ({
-        booking: d.booking, mins: d.mins, agent: d.agent, pendingAt: d.pendingAt, deliveredAt: d.deliveredAt,
-        bookingCode: d.bookingCode, plate: d.plate, parkName: d.parkName, city: d.city,
-      })),
-    },
-    pickup: {
-      count: pickupDelays.length,
-      avgDelayMins: pAvg,
-      over15: late,
-    },
+    /** Portão fechado: as equipas vêm sem "dentro/fora da meta" (o texto a pôr no lugar). */
+    teamsHidden: acts.hidden,
+    times: { ...timesView, source: svc.source, computedAt: svc.computedAt, truncated: svc.truncated, reason: svc.reason },
+    driverNames,
     complaintsToday: Number((compl as any)?.n ?? 0),
     complaintsDeparted,
-    // Movimentos cortados no limite: os tempos são de uma parte do dia (o ecrã avisa).
+    // Movimentos cortados no limite: as reclamações dos carros que saíram são de uma parte do dia (o ecrã avisa).
     timingsTruncated: hist.length >= HIST_LIMIT,
   };
 }
