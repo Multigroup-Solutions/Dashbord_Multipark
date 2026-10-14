@@ -20,7 +20,8 @@ Objetos esquecidos pelos clientes nos carros.
 - **Noutras caixas** (info@, reservas@, alterações…), com o interruptor **"IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados"** (Definições → Automações; **desligado por omissão**): a IA lê cada email pelo sentido e, quando alguém diz que deixou, perdeu ou esqueceu um objeto (mesmo no meio de um elogio ou de outro pedido), abre o caso aqui (origem IA) ou junta o email ao caso **aberto** do mesmo cliente. A conversa vai para a caixa **Perdidos** da Comunicação, **por ler**. As respostas do cliente nessa conversa juntam-se ao mesmo caso.
 - Com **certeza média** o caso nasce **"Por confirmar (IA)"** (selo no cartão, aviso roxo no caso): **É um perdido** confirma; **Não é um perdido** arquiva com o motivo (nada se apaga).
 - No caso fica uma nota interna "Criado pela IA" com a caixa, o motivo e a certeza. **Nunca se escreve ao cliente** — avisá-lo é sempre uma pessoa (**Avisar cliente**).
-- A mesma matrícula de outro cliente nunca junta o email ao caso dele.
+- A mesma matrícula de outro cliente nunca junta o email ao caso dele. Um email novo do mesmo cliente só se junta a um perdido aberto há **menos de 14 dias** (a mesma viagem) e sem outra reserva/matrícula; um perdido antigo ainda aberto não "engole" um objeto novo.
+- Um caso **"Por confirmar (IA)"** que alguém arquivou ("Não é um perdido") não volta com a resposta seguinte do cliente.
 
 **Tratar**
 - Quadro por estados: Novo → Investigação → Encontrado → Devolvido/Fechado. Os convertidos ficam em Fechado e não se movem.

@@ -79,12 +79,14 @@ export const MAIL_ROUTING_SYSTEM = [
   PT_PT_RULE,
   PLACEHOLDER_RULE,
   "O email pode estar em qualquer língua. Recebes o assunto, a mensagem nova e, se houver, o texto citado ou reencaminhado (o contexto da conversa: lê-o para perceber uma resposta curta ou um reencaminhamento).",
+  "Primeiro, duas perguntas independentes da categoria (responde-as sempre, mesmo que a categoria seja outra):",
+  "complaint: 0 a 1, quão certa estás de que quem escreve (ou o cliente cuja mensagem vem reencaminhada) se queixa de algo que correu mal com o serviço — mesmo que peça também outra coisa (uma alteração, uma reserva, uma fatura, um cancelamento), o escreva com calma ou em poucas palavras, fale de uma vez anterior, ou esteja a insistir numa queixa anterior. Uma pergunta, um pedido de reserva, de alteração, de cancelamento ou de fatura sem descontentamento é 0. Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) também é 0: as avaliações tratam-se nas Críticas.",
+  "lostItem: 0 a 1, quão certa estás de que alguém diz que deixou, perdeu ou esqueceu um objeto connosco (no carro, no parque, no transfer) ou pergunta por um objeto encontrado — mesmo que o diga dentro de um elogio, de outro pedido ou numa resposta curta.",
+  "Depois, a categoria:",
   "Categorias (chave: o que quer dizer):",
   ...MAIL_TRIAGE_HINTS.map((h) => `- ${h.key}: ${h.hint}`),
   "box: a chave da categoria que melhor descreve o email. Não inventes chaves.",
   "confidence: 0 a 1, quão certa estás de `box`.",
-  "complaint: 0 a 1, quão certa estás de que quem escreve (ou o cliente cuja mensagem vem reencaminhada) se queixa de algo que correu mal com o serviço — mesmo que peça também outra coisa, o escreva com calma ou em poucas palavras, ou esteja a insistir numa queixa anterior. Uma pergunta, um pedido de reserva, de alteração, de cancelamento ou de fatura sem descontentamento é 0. Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) também é 0: as avaliações tratam-se nas Críticas.",
-  "lostItem: 0 a 1, quão certa estás de que alguém diz que deixou, perdeu ou esqueceu um objeto connosco (no carro, no parque, no transfer) ou pergunta por um objeto encontrado.",
   "reason: motivo curto (máx. 10 palavras, sem dados pessoais).",
   "candidate: true SÓ se for uma pessoa a candidatar-se a trabalhar connosco (enviar CV, pedir emprego, perguntar por vagas); falso para colaboradores, fornecedores e clientes.",
   "Se candidate for true, preenche o que aparecer (senão vazio): candidateName (nome completo), candidatePhone e candidateEmail (copia o marcador tal como está, ex. [TELEFONE_1]), candidateCity (onde vive ou quer trabalhar), hasLicense (sim/nao/desconhecido), licenseYears (anos de carta, número ou null), availability (disponibilidade, texto curto).",
@@ -92,12 +94,16 @@ export const MAIL_ROUTING_SYSTEM = [
 ].join("\n");
 
 export const mailRoutingSchema = z.object({
+  // Auditoria (14 out 2026): as duas certezas de caso vêm PRIMEIRO e são
+  // obrigatórias no esquema que vai ao fornecedor (o modelo pondera-as antes
+  // de escolher a caixa e não as pode omitir — omitidas contavam 0 e as
+  // reclamações escondidas noutro pedido perdiam-se). Uma resposta sem elas
+  // continua válida (default 0).
+  complaint: z.number().default(0),
+  lostItem: z.number().default(0),
   box: z.string(),
   confidence: z.number(),
   reason: z.string(),
-  // Opcionais: uma resposta antiga (sem eles) continua válida — conta como 0.
-  complaint: z.number().optional(),
-  lostItem: z.number().optional(),
   candidate: z.boolean().optional(),
   candidateName: z.string().optional(),
   candidatePhone: z.string().optional(),

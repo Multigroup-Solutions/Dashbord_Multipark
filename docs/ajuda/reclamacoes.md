@@ -18,13 +18,13 @@ Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).
 
 **Reclamações que a IA vê noutras caixas**
 - A IA lê cada email das caixas partilhadas (info@, reservas@, cancelamentos…) **pelo sentido** — não por palavras. Vê a reclamação mesmo **escondida noutro pedido** ("quero mudar a data… e da última vez o carro veio sujo"), num pedido de reembolso zangado, num "nunca mais", numa **resposta** curta ("ainda estou à espera!") ou num **reencaminhamento** do backoffice. Quando vê uma reclamação:
-  - **certeza alta** → a reclamação é criada sozinha, ou o email junta-se à reclamação **aberta** do mesmo cliente (mesma conversa, o nº **[REC-n]** no assunto, ou o mesmo email; a mesma matrícula ou a mesma reserva só quando essa reclamação é do mesmo email ou não tem email — nunca no caso de outro cliente, nunca só pelo nome ou pelo assunto);
+  - **certeza alta** → a reclamação é criada sozinha, ou o email junta-se à reclamação **aberta** do mesmo cliente (mesma conversa, o nº **[REC-n]** no assunto, ou o mesmo email; a mesma matrícula ou a mesma reserva só quando essa reclamação é do mesmo email ou não tem email — nunca no caso de outro cliente, nunca só pelo nome ou pelo assunto). Se o email do mesmo cliente traz **outra reserva ou outra matrícula** ("Reserva: …", "Matrícula: …") do que a reclamação aberta, é **outra reclamação**;
   - **certeza média** → a reclamação é criada na mesma, marcada **"Por confirmar (IA)"** (selo no cartão e aviso roxo no caso). Abre-a e carrega em **É reclamação** (confirma) ou **Não é reclamação** (arquiva com o motivo — nada se apaga; volta com "Tirar do arquivo");
   - **pouca certeza** → nada.
 - A conversa vai para a caixa **Reclamações** da Comunicação, **por ler**.
 - Nunca para emails internos (salvo o backoffice a reencaminhar a queixa de um cliente), automáticos, envios em massa, de parceiros nem avisos de avaliações.
 - **Nunca responde ao cliente**: sem aviso de receção, sem resposta. O aviso no sino vai à equipa como numa reclamação nova ("Reclamação por confirmar (IA)" quando é o caso).
-- Uma conversa nunca dá duas reclamações, mesmo que a sincronização corra outra vez. Se o cliente responder nessa conversa, a resposta entra na mesma reclamação (volta a **Em Análise**).
+- Uma conversa nunca dá duas reclamações, mesmo que a sincronização corra outra vez. Se o cliente responder nessa conversa, a resposta entra na mesma reclamação (volta a **Em Análise**). Uma reclamação **"Por confirmar (IA)"** que alguém **arquivou** ("Não é reclamação") **não volta** com a resposta seguinte do cliente: a pessoa já decidiu.
 - O **Livro de Reclamações eletrónico** (aviso da plataforma oficial) abre sempre a reclamação.
 - Na reclamação fica uma nota **"Criada pela IA"** com a caixa por onde chegou, o motivo e a certeza, e a origem **IA (email noutra caixa)**. Nos cartões aparece o selo **IA**.
 - As sugestões antigas **Parecem reclamações** (de antes de 14 out 2026, ou quando não se conseguiu confirmar se o remetente é um parceiro) continuam no topo, com **Criar reclamação** e **Não é reclamação**.
