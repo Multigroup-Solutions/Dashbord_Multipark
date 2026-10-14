@@ -78,7 +78,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 3. Aparecem os números que acertam os tempos de entrega e de recolha, cada um com o parâmetro que fecha:
    - intervalo entre os pontos do GPS;
    - cobertura do GPS por entrega e por recolha (e porque falta);
-   - paragem no terminal antes do check-out;
+   - paragem no terminal antes do check-out (o carro parado ou o condutor a pé), com a regra do plano e o recurso ao lado;
    - chamadas antes do pendente e do "em recolha";
    - "Cheguei" e "À espera das malas";
    - quem marca cada estado;
@@ -91,6 +91,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 4. Carrega em **Copiar resumo** e cola na conversa com o Claude. Cada corrida também fica no registo do servidor (linhas `[sonda62]`), por isso também basta dizer "corri".
 - **Só lê**: não grava nada, não manda nada a ninguém e não tem interruptor. Mostra só totais e percentagens, nunca nomes, telefones, matrículas nem reservas.
 - Se uma leitura falhar (BD da Multipark, chamadas, GPS), aparece no quadro amarelo **O que falhou**, com o motivo, e o resto aparece na mesma. Um dia com ficheiros do GPS por ler (prazo ou mais de 60 ficheiros) fica como **leitura parcial**.
+- O que dependia de uma leitura que falhou **não entra nas contas desse dia** (não conta como zero). Em cima, a **Leitura rápida** diz quantos dias têm dados e que leituras falharam.
 
 **Recolha pelo meio de uma entrega**
 1. Quem leva um carro ao aeroporto volta ao parque com o carro de uma recolha, se houver uma aí: essa recolha não lhe custa um carro a mais.

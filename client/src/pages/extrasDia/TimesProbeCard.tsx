@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import {
   PROBE_CITIES, PROBE_CITY_LABELS, PROBE_DAY_CHOICES, PROBE_DEFAULT_OFFSET_DAYS,
-  buildSondaReport, mergeSondaResults, sondaReportText,
+  buildSondaReport, emptySondaResult, mergeSondaResults, sondaReportText,
   type ProbeCity, type ReportSection, type SondaResult,
 } from "@shared/sondaTempos";
 
@@ -90,7 +90,10 @@ export function TimesProbeCard({ city }: { city: ProbeCity }) {
         const r = await probe.mutateAsync({ day: days[i], cities });
         acc.push({ day: r.day, elapsedMs: r.elapsedMs, truncated: r.truncated, failures: r.failures, results: r.results as RunRow["results"] });
       } catch (err) {
-        acc.push({ day: days[i], elapsedMs: 0, truncated: false, failures: [`falhou: ${(err as Error)?.message ?? "erro"}`], results: {} });
+        // O pedido inteiro falhou (rede, prazo da Vercel…): o dia conta como pedido e sem dados — "falhou", nunca "zero".
+        const failures = [`falhou: ${(err as Error)?.message ?? "erro"}`];
+        const results = Object.fromEntries(cities.map((c) => [c, { ...emptySondaResult(c, [days[i]]), failures }])) as RunRow["results"];
+        acc.push({ day: days[i], elapsedMs: 0, truncated: false, failures, results });
       }
       setRuns([...acc]);
     }
