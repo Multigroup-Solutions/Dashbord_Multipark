@@ -15,6 +15,10 @@
  *   (daily_driver_history/driver_day_shares), nunca em dados de negócio.
  * - A Avaliação acerta-se no recálculo da noite (os últimos 31 dias) ou com
  *   Recalcular em Avaliação → Mês.
+ * - Respeita o FECHO MENSAL da Avaliação (`evaluation.closedUntil`): os dias
+ *   fechados saltam-se (os números de um mês pago não mudam, nem no Desempenho
+ *   nem na Atividade diária); se o fecho não se conseguir ler, esse passo não
+ *   re-divide nada e volta a tentar no seguinte.
  */
 import { addDays } from "../shared/lisbonDay";
 
@@ -36,6 +40,8 @@ export interface ResplitBackfillState {
   rowsDone: number;
   /** últimos erros (no máximo 20) */
   errors: string[];
+  /** dias saltados por estarem fechados (fecho mensal da Avaliação) */
+  daysClosed?: number;
   requestedById: number | null;
   requestedAt: string;
   updatedAt: string;
@@ -46,8 +52,16 @@ export interface ResplitBackfillDeps {
   read(): Promise<ResplitBackfillState | null>;
   write(s: ResplitBackfillState): Promise<void>;
   resplit(day: string, opts: { deadlineAt: number; afterId?: number }): Promise<{ processed: number; done: boolean; nextAfterId: number | null; errors: string[] }>;
+  /** O fecho mensal da Avaliação (server/evaluationClose.ts); `ok: false` = não se leu → não se re-divide. */
+  closedUntil(): Promise<{ ok: true; closedUntil: string | null } | { ok: false }>;
   now(): Date;
 }
+
+/** Mensagem quando o fecho do mês não se lê (fica nos erros; o passo seguinte volta a tentar). */
+export const RESPLIT_CLOSED_READ_FAILED = "não deu para ler o fecho do mês da Avaliação: nada re-dividido neste passo";
+
+/** Dias de `a` (inclusive) até `b` (exclusive), em dias de calendário. PURA. */
+const dayDiff = (a: string, b: string): number => Math.max(0, Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000));
 
 /** Os últimos 31 dias de calendário até ontem (hoje ainda é provisório). PURA. */
 export function resplitBackfillRange(todayLisbon: string): { from: string; to: string } {
@@ -84,6 +98,24 @@ export async function runResplitBackfillStep(deps: ResplitBackfillDeps, o: { dea
   if (!cur || cur.state !== "running") return { idle: true };
   const s: ResplitBackfillState = { ...cur, errors: [...(cur.errors ?? [])] };
   let rowsNow = 0;
+  // fecho mensal: os dias fechados não se re-dividem; sem o fecho lido, nada se escreve neste passo
+  const closed = await deps.closedUntil().catch(() => ({ ok: false as const }));
+  if (!closed.ok) {
+    s.errors = [...s.errors, `${s.day}: ${RESPLIT_CLOSED_READ_FAILED}`].slice(-MAX_ERRORS);
+    s.updatedAt = deps.now().toISOString();
+    await deps.write(s);
+    return { idle: false, state: s, rowsNow };
+  }
+  if (closed.closedUntil && s.day <= closed.closedUntil) {
+    const open = addDays(closed.closedUntil, 1);
+    const skip = Math.min(dayDiff(s.day, open), dayDiff(s.day, addDays(s.to, 1)));
+    s.daysClosed = (s.daysClosed ?? 0) + skip;
+    s.day = open > s.to ? addDays(s.to, 1) : open;
+    s.afterId = null;
+    s.updatedAt = deps.now().toISOString();
+    if (s.day > s.to) { s.state = "done"; s.finishedAt = s.updatedAt; }
+    await deps.write(s);
+  }
   while (s.day <= s.to && Date.now() + MIN_LEFT_MS < o.deadlineAt) {
     let r: Awaited<ReturnType<ResplitBackfillDeps["resplit"]>>;
     try {
@@ -130,6 +162,7 @@ export async function realResplitBackfillDeps(): Promise<ResplitBackfillDeps> {
         ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`)`);
     },
     resplit: (day, opts) => resplitDriverDay(day, opts),
+    closedUntil: async () => (await import("./evaluationClose")).readEvaluationClosedUntil(),
     now: () => new Date(),
   };
 }

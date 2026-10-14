@@ -43,7 +43,7 @@ import { recomputeRange, runEvaluationRecompute } from "./evaluationEngine";
 import {
   EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, canCloseEvaluation, evaluationRulesFingerprint, fmtClosedUntil, isDayClosed, openFrom,
 } from "../shared/evaluationClose";
-import { SETTINGS, settingSuperAdminOnly, validateSetting } from "../shared/appSettings";
+import { SETTINGS, settingSuperAdminOnly, validateSetting, validateSettingForWrite } from "../shared/appSettings";
 
 const src = (p: string) => readFileSync(resolve(import.meta.dirname, "..", p), "utf8");
 const live = vi.fn(async (_s: string, _e: string) => ({
@@ -79,6 +79,10 @@ describe("definições", () => {
     expect(validateSetting(EVALUATION_CLOSED_UNTIL_KEY, "2026-11-31").ok).toBe(false);
     expect(validateSetting(EVALUATION_CLOSED_UNTIL_KEY, "30/11/2026").ok).toBe(false);
     expect(settingSuperAdminOnly(EVALUATION_CLOSED_UNTIL_KEY)).toBe(true);
+    // ao gravar em Definições: nunca hoje nem o futuro (congelava o recálculo); vazio/nulo = reabrir
+    expect(validateSettingForWrite(EVALUATION_CLOSED_UNTIL_KEY, "2999-01-01").ok).toBe(false);
+    expect(validateSettingForWrite(EVALUATION_CLOSED_UNTIL_KEY, "2026-09-30")).toEqual({ ok: true, value: "2026-09-30" });
+    expect(validateSettingForWrite(EVALUATION_CLOSED_UNTIL_KEY, "")).toEqual({ ok: true, value: null });
   });
   it("evaluation.closers: contas (ids), sem repetir, sem nomes no código; só o super admin muda", () => {
     expect(SETTINGS[EVALUATION_CLOSERS_KEY].defaultValue).toEqual([]);

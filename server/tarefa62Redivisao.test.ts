@@ -16,7 +16,7 @@ import { CRON_JOBS } from "../shared/appSettings";
 
 const src = (p: string) => readFileSync(resolve(import.meta.dirname, "..", p), "utf8");
 
-function fakeDeps(o: { rowsPerDay?: number; perCall?: number; failDay?: string } = {}) {
+function fakeDeps(o: { rowsPerDay?: number; perCall?: number; failDay?: string; closed?: { ok: true; closedUntil: string | null } | { ok: false } } = {}) {
   let stored: ResplitBackfillState | null = null;
   const calls: Array<{ day: string; afterId?: number }> = [];
   const perCall = o.perCall ?? Infinity;
@@ -31,6 +31,7 @@ function fakeDeps(o: { rowsPerDay?: number; perCall?: number; failDay?: string }
       const processed = done ? total - (opts.afterId ?? 0) : perCall;
       return { processed, done, nextAfterId: done ? null : (opts.afterId ?? 0) + perCall, errors: [] };
     },
+    closedUntil: async () => o.closed ?? { ok: true, closedUntil: null },
     now: () => new Date("2026-10-14T10:00:00Z"),
   };
   return { deps, calls, get: () => stored };
@@ -93,6 +94,36 @@ describe("em segundo plano e retomável", () => {
     await runResplitBackfillStep(f.deps, { deadlineAt: Date.now() + 60_000 });
     expect((await stopResplitBackfill(f.deps))?.state).toBe("stopped");
     expect(await runResplitBackfillStep(f.deps, { deadlineAt: Date.now() + 60_000 })).toEqual({ idle: true });
+  });
+});
+
+describe("o fecho mensal da Avaliação", () => {
+  it("os dias fechados saltam-se (nunca se re-dividem); os abertos sim", async () => {
+    const f = fakeDeps({ rowsPerDay: 1, closed: { ok: true, closedUntil: "2026-09-30" } });
+    await startResplitBackfill(f.deps, { userId: 1, todayLisbon: "2026-10-14" });
+    await runResplitBackfillStep(f.deps, { deadlineAt: Date.now() + 60_000 });
+    const days = f.calls.map((c) => c.day);
+    expect(days[0]).toBe("2026-10-01");
+    expect(days.every((d) => d > "2026-09-30")).toBe(true);
+    expect(f.get()).toMatchObject({ state: "done", daysDone: 13, daysClosed: 18, rowsDone: 13 });
+  });
+  it("tudo fechado: não re-divide nenhum dia e fica 'done'", async () => {
+    const f = fakeDeps({ closed: { ok: true, closedUntil: "2026-10-13" } });
+    await startResplitBackfill(f.deps, { userId: 1, todayLisbon: "2026-10-14" });
+    await runResplitBackfillStep(f.deps, { deadlineAt: Date.now() + 60_000 });
+    expect(f.calls).toEqual([]);
+    expect(f.get()).toMatchObject({ state: "done", daysDone: 0, daysClosed: 31 });
+  });
+  it("o fecho não se leu: nada se re-divide neste passo (fica a correr, no mesmo dia)", async () => {
+    const f = fakeDeps({ closed: { ok: false } });
+    await startResplitBackfill(f.deps, { userId: 1, todayLisbon: "2026-10-14" });
+    await runResplitBackfillStep(f.deps, { deadlineAt: Date.now() + 60_000 });
+    expect(f.calls).toEqual([]);
+    expect(f.get()).toMatchObject({ state: "running", day: "2026-09-13", daysDone: 0 });
+    expect(f.get()!.errors.at(-1)).toMatch(/fecho do mês/);
+  });
+  it("as dependências reais leem o fecho da Avaliação", () => {
+    expect(src("server/gpsResplitBackfill.ts")).toContain('closedUntil: async () => (await import("./evaluationClose")).readEvaluationClosedUntil(),');
   });
 });
 

@@ -31,6 +31,8 @@ export function ResplitBackfillCard() {
   const s = q.data;
   const running = s?.state === "running";
   const total = s ? Math.round((Date.parse(`${s.to}T00:00:00Z`) - Date.parse(`${s.from}T00:00:00Z`)) / 86_400_000) + 1 : 0;
+  // fecho mensal da Avaliação: os dias fechados não se re-dividem (os números de um mês pago não mudam)
+  const closedNote = s?.daysClosed ? ` ${s.daysClosed} dia(s) fechado(s) no fecho do mês ficaram como estavam.` : "";
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-[14px] border px-3 py-2 text-sm" data-resplit-backfill>
       <RefreshCw className="h-4 w-4 shrink-0 text-[#0055D2]" aria-hidden />
@@ -38,9 +40,9 @@ export function ResplitBackfillCard() {
         <p className="font-medium">Re-dividir os últimos 31 dias com o limite de hoje</p>
         <p className="text-xs text-muted-foreground">
           {q.isError ? "Não deu para ler o estado."
-            : !s ? "Volta a calcular a velocidade máxima e os excessos dos dias já recolhidos (setembro e outubro passam a contar acima de 120 km/h). Em segundo plano; não vai ao Zello nem avisa ninguém."
-            : running ? <>A correr: {s.daysDone} de {total} dias ({s.rowsDone} linhas), próximo {ddmm(s.day)}.{s.errors.length ? ` ${s.errors.length} erro(s).` : ""}</>
-            : s.state === "done" ? <>Concluído {s.finishedAt ? fmtPTDateTime(s.finishedAt) : ""}: {s.daysDone} dias ({ddmm(s.from)}–{ddmm(s.to)}), {s.rowsDone} linhas{s.errors.length ? `, ${s.errors.length} erro(s)` : ""}. A Avaliação acerta-se no recálculo da noite.</>
+            : !s ? "Volta a calcular a velocidade máxima e os excessos dos dias já recolhidos (setembro e outubro passam a contar acima de 120 km/h). Em segundo plano; não vai ao Zello nem avisa ninguém. Os dias de meses fechados ficam como estão."
+            : running ? <>A correr: {s.daysDone} de {total} dias ({s.rowsDone} linhas), próximo {ddmm(s.day)}.{closedNote}{s.errors.length ? ` ${s.errors.length} erro(s).` : ""}</>
+            : s.state === "done" ? <>Concluído {s.finishedAt ? fmtPTDateTime(s.finishedAt) : ""}: {s.daysDone} dias ({ddmm(s.from)}–{ddmm(s.to)}), {s.rowsDone} linhas.{closedNote}{s.errors.length ? ` ${s.errors.length} erro(s).` : ""} A Avaliação acerta-se no recálculo da noite (os últimos 31 dias); os mais antigos, com Recalcular em Avaliação → Mês.</>
             : <>Parado em {ddmm(s.day)} ({s.daysDone} de {total} dias).</>}
         </p>
       </div>

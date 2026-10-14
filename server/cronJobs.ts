@@ -606,7 +606,7 @@ export async function gpsResplitBackfillCron(o: { deadlineAt: number }): Promise
     const r = await runResplitBackfillStep(await realResplitBackfillDeps(), { deadlineAt: o.deadlineAt - 2_000 });
     if (r.idle) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "sem pedido" }, done: true };
     const st = r.state;
-    console.log(`[gps-resplit-backfill] ${st.state === "done" ? "concluído" : `a correr (próximo ${st.day})`}: ${st.daysDone} dia(s), ${st.rowsDone} linha(s) (${r.rowsNow} agora)${st.errors.length ? `, ${st.errors.length} erro(s)` : ""}`);
+    console.log(`[gps-resplit-backfill] ${st.state === "done" ? "concluído" : `a correr (próximo ${st.day})`}: ${st.daysDone} dia(s), ${st.rowsDone} linha(s) (${r.rowsNow} agora)${st.daysClosed ? `, ${st.daysClosed} dia(s) fechado(s) saltado(s)` : ""}${st.errors.length ? `, ${st.errors.length} erro(s)` : ""}`);
     return { httpStatus: 200, body: { ranAt: ranAt(), state: st.state, day: st.day, daysDone: st.daysDone, rowsDone: st.rowsDone, rowsNow: r.rowsNow }, done: true };
   } catch (err) {
     console.error("[cron gps-resplit-backfill] falhou:", msg(err, 200));

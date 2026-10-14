@@ -38,6 +38,7 @@ import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, F
 import { AIRPORT_LABELS, type AirportCityId, type AirportFence } from "@shared/pontoTerminal";
 import { SPEED_RULE_SETTING_KEY, speedThresholdOf } from "@shared/speedRules";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY } from "@shared/evaluationClose";
+import { addDays, operationalDayOf } from "@shared/lisbonDay";
 import { parksInsideZones } from "@shared/terminalWatch";
 import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -909,7 +910,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
         <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={isZelloList ? "um utilizador Zello por linha (vazio = ninguém excluído)" : "um email por linha"} />
       ) : isDate ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Input type="date" className="w-44 rounded-[10px]" value={text} disabled={locked} aria-label={item.label} onChange={(e) => setText(e.target.value)} />
+          <Input type="date" className="w-44 rounded-[10px]" value={text} max={addDays(operationalDayOf(Date.now()), -1)} disabled={locked} aria-label={item.label} onChange={(e) => setText(e.target.value)} />
           {text && <Button size="sm" variant="ghost" disabled={locked} onClick={() => setText("")}>Limpar (nada fechado)</Button>}
         </div>
       ) : isUserList ? (

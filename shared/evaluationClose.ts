@@ -2,8 +2,9 @@
  * Fecho mensal da Avaliação (tarefa 62, P2d; Jorge, 14 out 2026). PURO.
  *
  * `evaluation.closedUntil` (Definições; omissão nula = nada fechado): com uma
- * data, o recálculo da noite, o Recalcular, os ajustes, a anulação de ajustes
- * e as contestações (criar e aceitar com ajuste) NÃO escrevem dias ≤ essa
+ * data, o recálculo da noite, o Recalcular, os ajustes, a anulação de ajustes,
+ * as contestações (criar e aceitar com ajuste) e a re-divisão do GPS dos
+ * últimos 31 dias (server/gpsResplitBackfill.ts) NÃO escrevem dias ≤ essa
  * data. Reabrir = mudar a data (fica no histórico das Definições). Uso: fechar
  * cada mês ANTES de pagar os prémios — o 1.º é novembro, no início de
  * dezembro (setembro e outubro não são meses de prémios).
