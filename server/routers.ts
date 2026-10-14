@@ -2672,6 +2672,26 @@ export const appRouter = router({
       return loadMovementPeople({ from: input.startDate, to: input.endDate, cities: scopedCityNamesLive(), parkIds: await brandParkIdsFor(input.projectId), drivers: input.drivers });
     }),
 
+    /**
+     * Q7 (Jorge, 14 out 2026): os tempos de UM condutor — Fila, Trânsito, Cliente,
+     * no terminal e P2 — por semana, mês e 6 meses, ao lado dos colegas da mesma
+     * cidade e tipo de serviço, e a evolução (gráfico). Só informação: não dá
+     * pontos. Acesso: o módulo Condutores e agentes (supervisor na cidade dele;
+     * back office, admin e super admin) e a ficha tem de estar no âmbito. O portão
+     * dos tempos com GPS aplica-se no servidor (server/driverTimes.ts).
+     */
+    driverTimes: protectedProcedure.input(z.object({
+      employeeId: z.number().int().positive(),
+      refDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "condutores_agentes", "view");
+      await assertEmployeeAccess(input.employeeId);
+      const [{ getDriverTimes }, { scopedServiceCityKeys }, { operationalDayOf, addDays }] = await Promise.all([import("./driverTimes"), import("./serviceTimesRead"), import("../shared/lisbonDay")]);
+      // o dia de referência: ontem (o último dia já calculado pela noite), salvo pedido
+      const refDay = input.refDay ?? addDays(operationalDayOf(Date.now()), -1);
+      return getDriverTimes({ employeeId: input.employeeId, refDay, cityKeys: await scopedServiceCityKeys(), isSuperAdmin: ctx.user.role === "super_admin" });
+    }),
+
     // Agent performance history (DB local — alimentada pelo sync da API Multipark)
     // D27 (Jorge, 3 out 2026): o agente escolhe-se pela FICHA (os agentes da
     // Multipark ligados a ela), nunca por nome escrito — homónimos e grafias

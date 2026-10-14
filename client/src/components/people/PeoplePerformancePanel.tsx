@@ -19,6 +19,10 @@
  * Pesos (Jorge, 8 out 2026: "avança com os pesos do ranking"): a tabela
  * "Como se contam os pontos" mostra os pesos EM VIGOR e tem o Editar pesos
  * (grava a definição `perf.rankWeights`).
+ *
+ * Q7 (Jorge, 14 out 2026): no detalhe de um condutor ou team leader, os
+ * TEMPOS dele (Fila, Trânsito, Cliente, terminal, P2) por semana, mês e 6
+ * meses, ao lado dos colegas, com o gráfico. Só informação: não dá pontos.
  */
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -35,6 +39,7 @@ import { useOpenEmployee } from "@/hooks/useOpenEmployee";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { PersonLinksDialog } from "@/components/PersonLinksDialog";
 import { HourBars, HourHeatmap, HourlyNote, type HourlyInfo } from "@/components/people/PerformanceHours";
+import { DriverTimesCard } from "@/components/people/DriverTimesCard";
 import { PeopleFilterBar } from "@/components/people/PeopleFilterBar";
 import { matchesSearch, passesRules, type MetricRule } from "@shared/peopleFilters";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -596,6 +601,8 @@ function PersonDialog({ p, group, labels, hourly, from, onClose }: { p: Person; 
         <HourBars byHour={p.byHour ?? []} byHourMultipark={p.byHourMultipark ?? []} />
         <HourlyNote hourly={hourly} from={from} />
         <PersonExplain t={p.totals} />
+        {/* Q7: tempos por condutor (só informação; não entra nos pontos) */}
+        {(group === "drivers" || group === "teamleaders") && <DriverTimesCard employeeId={p.employeeId} name={p.name} compact />}
         {shown.length === 0 ? <p className="text-sm text-muted-foreground">Nada registado neste período.</p> : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {shown.map((k) => (
