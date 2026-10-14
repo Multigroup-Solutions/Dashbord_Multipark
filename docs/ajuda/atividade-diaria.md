@@ -84,7 +84,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
   - um dia com muitos pontos é reduzido para o mapa, mas os excessos ficam sempre.
 - A recolha corre de madrugada. Quem gere o Histórico diário tem dois botões:
   - **Recolher Dados** vai buscar agora ao Zello o GPS do dia escolhido (km, velocidades, trajeto) de todos os utilizadores. O Zello só dá um dia completo 2 dias depois; o de hoje fica provisório.
-  - **Forçar re-divisão** volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa-se depois de corrigir um check-in. Não volta ao Zello nem muda as velocidades.
+  - **Forçar re-divisão** volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa-se depois de corrigir um check-in. Não volta ao Zello nem muda os km; desde 14 out 2026 refaz a velocidade máxima e os excessos desse dia com o limite em vigor (sem avisar ninguém).
 
 **Ao Vivo**
 - **Terminal agora** (em cima; só com o interruptor "Terminal no ponto (aeroporto)" ligado): por cidade, **quem está no terminal e desde quando**, como entrou (pelo GPS, na entrada do ponto, passado pelo colega, posto pelo TL) e quem pediu o lugar. "Livre" = ninguém.

@@ -187,15 +187,22 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
     if (!roster.length) return cal;
     return classifyActionShift(cal, [...windowsOf(addDays(cal, -1)), ...windowsOf(cal)], (d) => lisbonHoursSince(d, at)).day;
   };
-  // 14 out 2026: o MOVEMENT que é só mudança de lugar aparece como tal (shared/multiparkMovements.ts)
-  const { moveKindsOf, actionKeyOf } = await import("../shared/multiparkMovements");
-  const kinds = moveKindsOf(rows.filter((r) => r.actionTime).map((r) => ({ id: r.historyId, bookingId: r.bookingExternalId, changeType: r.changeType, actionTime: r.actionTime! })));
-  const actions: DriverAction[] = [];
-  for (const r of rows) {
+  const mine = rows.filter((r): r is (typeof rows)[number] & { actionTime: string } => {
     const ct = (r.changeType ?? "").toUpperCase();
-    if (!r.actionTime || !["CHECK_IN", "CHECK_OUT", "MOVEMENT"].includes(ct)) continue;
+    if (!r.actionTime || !["CHECK_IN", "CHECK_OUT", "MOVEMENT"].includes(ct)) return false;
     const who = resolve(r.agentUserId, r.agentName);
-    if (who.kind === "ignorado" || who.key !== key || dayOf(r.actionTime) !== date) continue;
+    return who.kind !== "ignorado" && who.key === key && dayOf(r.actionTime) === date;
+  });
+  // 14 out 2026: o MOVEMENT que é só mudança de lugar aparece como tal (shared/multiparkMovements.ts).
+  // A sequência de cada reserva lê-se como nas outras listas (desde MOVE_LOOKBACK_DAYS antes:
+  // uma recolha de anteontem conta); se essa leitura falhar, vale o que esta leitura já tem.
+  const { moveKindsOf, actionKeyOf } = await import("../shared/multiparkMovements");
+  const { readMoveKinds } = await import("./multiparkDb/movements");
+  const asSeq = (r: (typeof rows)[number]) => ({ id: r.historyId, bookingId: r.bookingExternalId, changeType: r.changeType, actionTime: r.actionTime! });
+  const kinds = (await readMoveKinds(mine.map(asSeq))) ?? moveKindsOf(rows.filter((r) => r.actionTime).map(asSeq));
+  const actions: DriverAction[] = [];
+  for (const r of mine) {
+    const ct = (r.changeType ?? "").toUpperCase();
     const pair = ct === "CHECK_OUT" ? pairByDelivery.get(`${r.bookingExternalId}|${r.actionTime}`) : undefined;
     let delay: number | null = null;
     if (ct === "CHECK_IN" && r.checkIn) {

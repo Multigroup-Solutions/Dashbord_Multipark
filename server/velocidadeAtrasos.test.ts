@@ -23,7 +23,7 @@ import { GROUP_VIEW, PERF_METRICS, balancedColumns, explainPersonTotals, gpsDayO
 import { EVALUATION_POINTS, scoreOf } from "../shared/evaluationRules";
 import { computeEmployeeDays, markLateDeliveries, type ActionRow, type EngineInput } from "./evaluationCore";
 import { buildEvaluationIdentity } from "./evaluationIdentity";
-import { recordSpeedExcessesWith, GPS_SPEED_ALERTS_FLAG, type SpeedAlertDeps } from "./speedAlerts";
+import { recordSpeedExcessesWith, GPS_SPEED_ALERTS_FLAG, speedAlertDayIsRecent, type SpeedAlertDeps } from "./speedAlerts";
 import { DRIVER_METRICS_VERSION, countSpeedViolations, processGeoJsonHistory } from "./jobs/dailyDriverCollection";
 import { splitByHolder } from "./zelloGps";
 import { buildEngineActionCountsSql, DELIVERED_AT_SQL, movementWindow } from "./multiparkDb/movements";
@@ -144,13 +144,14 @@ describe("a recolha diária grava excessos (não pontos) e a máxima sem picos",
 
 describe("o aviso: interruptor GPS_SPEED_ALERTS, desligado por omissão", () => {
   const ex = speedExcesses(track([100, 125, 141, 128, 100], 20), DEFAULT_SPEED_RULE);
-  const deps = (o: { on: boolean; seen?: string[] }) => {
+  const deps = (o: { on: boolean; seen?: string[]; today?: string }) => {
     const records: any[] = [], notes: any[] = [];
     const d: SpeedAlertDeps = {
       flagOn: async () => o.on,
       existingStarts: async () => new Set(o.seen ?? []),
       record: async (r) => { records.push(r); },
       notify: async (n) => { notes.push(n); },
+      today: () => o.today ?? "2026-10-14",
     };
     return { d, records, notes };
   };
@@ -172,6 +173,15 @@ describe("o aviso: interruptor GPS_SPEED_ALERTS, desligado por omissão", () => 
     expect(records[0].notes).toContain("ficha #7 (Ana Silva)");
     expect(notes[0]).toMatchObject({ kind: "speed_alert", employeeId: 7, title: "Excesso de velocidade" });
     expect(notes[0].body).toMatch(/^Ana Silva: 1 excesso\(s\) acima de 120 km\/h em 12\/10\/2026 — máxima 141 km\/h/);
+  });
+  it("um dia antigo (Recolher Dados de há semanas) grava os excessos mas não manda avisos atrasados", async () => {
+    expect(speedAlertDayIsRecent("2026-10-12", "2026-10-14")).toBe(true);
+    expect(speedAlertDayIsRecent("2026-10-11", "2026-10-14")).toBe(true);
+    expect(speedAlertDayIsRecent("2026-10-10", "2026-10-14")).toBe(false);
+    const { d, records, notes } = deps({ on: true, today: "2026-11-02" });
+    expect(await recordSpeedExcessesWith(d, input)).toEqual({ outcome: "recorded_old", recorded: 1, notified: 0 });
+    expect(records).toHaveLength(1);
+    expect(notes).toEqual([]);
   });
   it("as duas passagens e a re-recolha não repetem", async () => {
     const start = new Date(ex[0].startTs * 1000).toISOString().slice(0, 19).replace("T", " ");

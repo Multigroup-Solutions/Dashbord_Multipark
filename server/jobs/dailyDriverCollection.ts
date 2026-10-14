@@ -243,10 +243,13 @@ export function countSpeedViolations(data: any, rule: SpeedRule | number): numbe
 
 /**
  * "Forçar re-divisão": volta a partir o GPS JÁ recolhido de um dia por quem
- * tinha cada PDA — para depois de corrigir check-ins de PDA. Só refaz as
- * partes (driver_day_shares) e o funcionário da linha; os km/velocidades da
- * linha não mudam (já estão em km/h — nada de ×3,6 outra vez). Retomável por
- * `afterId` (id da última linha feita) e com prazo.
+ * tinha cada PDA — para depois de corrigir check-ins de PDA. Refaz as partes
+ * (driver_day_shares) e o funcionário da linha; os km da linha não mudam (já
+ * estão em km/h — nada de ×3,6 outra vez). 14 out 2026: com o GeoJSON
+ * guardado, refaz também a máxima (sem picos) e os excessos da linha com o
+ * limite em vigor (metricsVersion 5) — é assim que um dia antigo passa a
+ * contar excessos na Avaliação. NÃO avisa ninguém (os avisos só saem na
+ * recolha). Retomável por `afterId` (id da última linha feita) e com prazo.
  */
 export async function resplitDriverDay(day: string, opts: { deadlineAt: number; afterId?: number }): Promise<{ processed: number; done: boolean; nextAfterId: number | null; errors: string[] }> {
   const { getDb, resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares, fixedZelloOwners } = await import("../db");

@@ -100,7 +100,7 @@ Em **Pessoas → Condutores e agentes**. Antes estavam nas Críticas.
 - **Excesso** = pontos de GPS seguidos acima do limite (2 por omissão; um troço de autoestrada com uma descida curta é **um** excesso). Um ponto sozinho só conta se a distância percorrida até ao ponto ao lado o confirmar.
 - **Picos falsos** (nunca contam, nem para a máxima): pontos imprecisos (mais de 100 m), acima de 250 km/h, ou um salto isolado (sobe e desce mais de 15 km/h por segundo, ex.: 40 → 141 → 40 em 4 s). Antes deitava-se fora tudo acima de 150 km/h, e um 160 real desaparecia.
 - **Pontos**: cada excesso desconta **−10** na Avaliação (como os alertas de velocidade). Conta no dia da recolha.
-- **Aviso**: com o interruptor **"Avisos de excesso de velocidade (GPS do Zello)"** ligado (Definições → Automações; desligado por omissão), cada excesso fica registado e o team leader e o supervisor da cidade recebem no sino "Excesso de velocidade", um por pessoa e dia.
+- **Aviso**: com o interruptor **"Avisos de excesso de velocidade (GPS do Zello)"** ligado (Definições → Automações; desligado por omissão), cada excesso fica registado e o team leader e o supervisor da cidade recebem no sino "Excesso de velocidade", um por pessoa e dia. Só avisa dias dos últimos 3 (a recolha das 23h e a final de 2 dias depois); recolher à mão um dia antigo grava os excessos mas não avisa.
 - A recolha do Zello é às 23h (provisória) e a final 2 dias depois. Os dias recolhidos antes de 14 out 2026 não têm excessos (o limite antigo não existia): para os refazer, **Atividade diária → Histórico → Forçar re-divisão** desse dia e depois **Recalcular** a Avaliação.
 
 **Quando a leitura falha**

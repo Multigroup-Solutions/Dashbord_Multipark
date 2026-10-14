@@ -13,13 +13,17 @@
  *    re-recolha não duplicam);
  *  - UM aviso no sino ("Excesso de velocidade", tipo speed_alert → team leader
  *    e supervisor da cidade da pessoa), com quantos e a máxima — só quando há
- *    excessos novos.
+ *    excessos novos E o dia é recente (até SPEED_ALERT_MAX_AGE_DAYS dias: as
+ *    duas passagens automáticas são de hoje e de D-2). Um "Recolher Dados" de
+ *    um dia antigo grava os excessos mas não manda avisos atrasados.
  * Os pontos da Avaliação NÃO dependem disto (contam pelo que a recolha grava).
  * Nunca lança.
  */
 import type { SpeedExcess } from "../shared/speedRules";
 
 export const GPS_SPEED_ALERTS_FLAG = "GPS_SPEED_ALERTS";
+/** Dias para trás em que ainda se avisa (a final é de D-2; mais antigo já não é aviso, é histórico). */
+export const SPEED_ALERT_MAX_AGE_DAYS = 3;
 
 export interface SpeedAlertInput {
   zello: string;
@@ -39,9 +43,18 @@ export interface SpeedAlertDeps {
   existingStarts(zello: string, startsUtc: string[]): Promise<Set<string>>;
   record(row: { zelloUsername: string; displayName: string; speed: string; speedLimit: number; excessPercent: string; latitude: string | null; longitude: string | null; notificationSent: number; occurredAt: string; notes: string }): Promise<unknown>;
   notify(input: Record<string, any>): Promise<unknown>;
+  /** hoje em Lisboa ("YYYY-MM-DD") */
+  today(): string;
 }
 
-export type SpeedAlertOutcome = { outcome: "flag_off" | "none" | "already" | "notified"; recorded: number; notified: number };
+export type SpeedAlertOutcome = { outcome: "flag_off" | "none" | "already" | "notified" | "recorded_old"; recorded: number; notified: number };
+
+/** O dia ainda dá aviso (até SPEED_ALERT_MAX_AGE_DAYS dias antes de hoje)? PURA. */
+export function speedAlertDayIsRecent(day: string, today: string): boolean {
+  const ms = (d: string) => Date.parse(`${d}T00:00:00Z`);
+  if (!Number.isFinite(ms(day)) || !Number.isFinite(ms(today))) return false;
+  return ms(today) - ms(day) <= SPEED_ALERT_MAX_AGE_DAYS * 86_400_000;
+}
 
 const utcStamp = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 19).replace("T", " ");
 const lisbonTime = (sec: number) => new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit" }).format(new Date(sec * 1000));
@@ -75,6 +88,7 @@ export async function recordSpeedExcessesWith(deps: SpeedAlertDeps, input: Speed
     g.list.push(e);
     byPerson.set(k, g);
   }
+  if (!speedAlertDayIsRecent(input.day, deps.today())) return { outcome: "recorded_old", recorded, notified: 0 };
   let notified = 0;
   for (const g of byPerson.values()) {
     const top = g.list.reduce((m, e) => (e.maxSpeed > m.maxSpeed ? e : m), g.list[0]);
@@ -118,6 +132,7 @@ export async function recordSpeedExcesses(input: SpeedAlertInput): Promise<Speed
         const { notify } = await import("./notify");
         return notify(n as any);
       },
+      today: () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()),
     }, input);
   } catch (err) {
     console.warn("[speedAlerts] falhou:", String((err as any)?.message ?? err).slice(0, 160));

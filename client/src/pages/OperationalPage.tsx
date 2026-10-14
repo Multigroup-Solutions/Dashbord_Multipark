@@ -577,7 +577,7 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
               {running === "collect" ? "A recolher…" : "Recolher Dados"}
             </Button>
             <Button variant="outline" onClick={() => run("resplit")} disabled={!!running}
-              title="Volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa depois de corrigir um check-in de PDA; não volta ao Zello nem muda as velocidades.">
+              title="Volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa depois de corrigir um check-in de PDA; não volta ao Zello nem muda os km, mas refaz a velocidade máxima e os excessos com o limite em vigor (sem avisar ninguém).">
               <RefreshCw className="w-4 h-4 mr-1" />{running === "resplit" ? "A dividir…" : "Forçar re-divisão"}
             </Button>
           </>

@@ -270,4 +270,14 @@ describe("Condutores e agentes / Avaliação → Mês: as mudanças de lugar apa
     expect(src("server/movementPeople.ts")).toContain("x.recolhas + x.entregas + x.movements + x.spotChanges > 0");
     expect(src("client/src/components/evaluation/MonthEvaluationTab.tsx")).toContain(">Mudanças de lugar</th>");
   });
+
+  it("Resumo do dia: as ações do condutor classificam-se com a sequência da reserva (recolha de dias antes conta), e a leitura do ecrã fica como recurso", () => {
+    const d = src("server/shiftDayDetail.ts");
+    expect(d).toContain("const kinds = (await readMoveKinds(mine.map(asSeq))) ?? moveKindsOf(rows.filter((r) => r.actionTime).map(asSeq));");
+    expect(d).toContain("changeType: actionKeyOf(ct, kinds.get(r.historyId) ?? null)");
+  });
+
+  it("o assistente (minha_avaliacao) separa movimentos de mudanças de lugar", () => {
+    expect(src("server/assistant/tools.ts")).toContain("movimentos: num(m.movements), mudancasDeLugar: num(m.spotChanges)");
+  });
 });
