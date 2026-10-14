@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { pairShifts, splitShiftHours, countableShifts } from "./shifts";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { pairShifts, splitShiftHours, countableShifts, checkoutHours } from "./shifts";
 import { computeEmployeeMonth, contractDaysInMonth, expectedHoursFromSchedule } from "./compute";
 
 // Instantes em UTC; em setembro (verão) Lisboa = UTC+1.
@@ -128,5 +128,35 @@ describe("computeEmployeeMonth — cenários da auditoria", () => {
     expect(contractDaysInMonth(base({ contractEnd: "2026-02-10" }), 2026, 2).days).toBe(10);
     const r = computeEmployeeMonth({ employee: base(), year: 2026, month: 2, shifts: [], leaves: [], ...rates });
     expect(r.baseSalary).toBe(1000);
+  });
+});
+
+describe("checkoutHours — horas da saída do ponto (a entrada vem da BD em UTC)", () => {
+  // O fuso da máquina não pode mexer nas horas: corre em Lisboa (UTC+1 em
+  // outubro), em Nova Iorque e em UTC, e o resultado é sempre o mesmo.
+  const savedTz = process.env.TZ;
+  beforeEach(() => { delete process.env.TZ; });
+  afterEach(() => { if (savedTz === undefined) delete process.env.TZ; else process.env.TZ = savedTz; });
+  const now = Date.parse("2026-10-12T10:00:00Z"); // 11:00 em Lisboa
+
+  for (const tz of ["Europe/Lisbon", "America/New_York", "UTC"]) {
+    it(`entrada às 06:00 UTC, saída às 10:00 UTC → 4.00 h (TZ=${tz})`, () => {
+      process.env.TZ = tz;
+      const r = checkoutHours("2026-10-12 06:00:00", now);
+      expect(r).toMatchObject({ hoursWorked: "4.00", forgotten: false });
+      expect(r.inAt.toISOString()).toBe("2026-10-12T06:00:00.000Z");
+      expect(r.outAt.getTime()).toBe(now);
+    });
+    it(`entrada esquecida (>16 h) → corta às 12 h a contar da entrada (TZ=${tz})`, () => {
+      process.env.TZ = tz;
+      const r = checkoutHours("2026-10-11 16:00:00", now);
+      expect(r).toMatchObject({ hoursWorked: "12.00", forgotten: true });
+      expect(r.outAt.toISOString()).toBe("2026-10-12T04:00:00.000Z");
+    });
+  }
+
+  it("exatamente 16 h ainda conta as horas reais; também aceita o formato ISO", () => {
+    expect(checkoutHours("2026-10-11 18:00:00", now)).toMatchObject({ hoursWorked: "16.00", forgotten: false });
+    expect(checkoutHours("2026-10-12T02:00:00Z", now)).toMatchObject({ hoursWorked: "8.00", forgotten: false });
   });
 });
