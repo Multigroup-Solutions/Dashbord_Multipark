@@ -227,6 +227,106 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
   return { scanned: rows.length, created, alreadyPending, skipped, multiparkRead };
 }
 
+// ─── Tarefa 62 (Q8): possíveis faltas de quem tem horário fixo ─────────────
+
+/** Interruptor (Definições → Automações; desligado por omissão, só o super admin). */
+export const FIXED_SCHEDULE_NO_SHOWS_FLAG = "RH_FALTAS_HORARIO";
+/** Marca no início das notas: é assim que a lista "Possíveis faltas" as distingue das outras penalizações "other". */
+export const FIXED_NO_SHOW_NOTE_PREFIX = "[FALTA HORÁRIO]";
+/** relatedId da penalização = o dia (AAAAMMDD): uma por pessoa e dia (índice único employeeId+reason+relatedId). */
+export const fixedNoShowRelatedId = (day: string): number => Number(day.split("-").join(""));
+
+export type FixedNoShowSkip = "escala" | "check_in" | "multipark";
+export interface FixedNoShowReport { scanned: number; created: number; alreadyPending: number; skipped: Record<FixedNoShowSkip, number>; multiparkRead: boolean }
+
+/**
+ * Quem tinha horário fixo (RH → Horário; funcionários — os extras regem-se
+ * pela escala e têm a sua deteção) num dia de trabalho e não picou a
+ * entrada → "possível falta" PENDENTE na lista que já existe (RH →
+ * Possíveis faltas), para alguém da operação confirmar ou dispensar. Fica
+ * marcada como falta quando confirmada, SEM pontos de penalização (points 0:
+ * não soma para o bloqueio das 3 faltas dos extras). Como nos extras: fora quem está na escala
+ * do Extras-Dia nesse dia (tem a sua regra), as férias/baixas, os dias livres,
+ * fora do contrato, os feriados (nacionais e o municipal da cidade da ficha) e
+ * quem mexeu em carros na Multipark (trabalhou sem picar).
+ * Idempotente. Só corre com o interruptor RH_FALTAS_HORARIO ligado.
+ */
+export async function detectFixedScheduleNoShows(dateStr: string): Promise<FixedNoShowReport> {
+  const skipped: Record<FixedNoShowSkip, number> = { escala: 0, check_in: 0, multipark: 0 };
+  const db = await getDb();
+  if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false };
+  const { fixedScheduledStarts } = await import("../shared/workSchedule");
+  const { addDays } = await import("../shared/lisbonDay");
+  const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
+  const scheduleRows = rowsOf(await db.execute(sql`
+    SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
+           DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
+      FROM schedules s JOIN employees e ON e.id = s.employeeId
+     WHERE e.isActive = 1 AND s.isWorkDay = 1
+       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+  // a cidade da ficha só serve para o feriado municipal (os nacionais ficam sempre fora)
+  const cityOf: (projectId: number | null) => string | null = scheduleRows.length ? await (await import("./aiOps/cities")).projectCityResolver(db) : () => null;
+  const schedules = scheduleRows.map((r) => ({
+    employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
+    isWorkDay: true, contractStart: r.contractStart ?? null, contractEnd: r.contractEnd ?? null,
+    city: cityOf(r.projectId != null ? Number(r.projectId) : null),
+  }));
+  const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves
+     WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)}`))
+    .map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }));
+  const starts = fixedScheduledStarts(dateStr, dateStr, schedules, leaves);
+  const escala = new Set((await db.select({ employeeId: extrasDiaAssignments.employeeId }).from(extrasDiaAssignments)
+    .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), isNotNull(extrasDiaAssignments.employeeId)))).map((r) => Number(r.employeeId)));
+  const candidates: typeof starts = [];
+  for (const f of starts) {
+    if (escala.has(f.employeeId)) { skipped.escala++; continue; }
+    const from = new Date(f.startMs - 2 * 3_600_000), to = new Date((f.endMs ?? f.startMs + 9 * 3_600_000) + 3_600_000);
+    const [ci] = await db.select({ id: timeRecords.id }).from(timeRecords)
+      .where(and(eq(timeRecords.employeeId, f.employeeId), eq(timeRecords.type, "check_in"), gte(timeRecords.recordedAt, toMysqlDateTime(from)), lte(timeRecords.recordedAt, toMysqlDateTime(to)))).limit(1);
+    if (ci) { skipped.check_in++; continue; }
+    candidates.push(f);
+  }
+  // Mexeu em carros na Multipark nesse dia (só leitura): trabalhou sem picar. Sem BD → como nos extras, com nota.
+  const movesByEmployee = new Map<number, number>();
+  let multiparkRead = candidates.length === 0;
+  if (candidates.length) {
+    try {
+      const { agentIdsOfEmployee } = await import("./personIdentity");
+      const agentsOf = new Map<number, string[]>();
+      for (const id of new Set(candidates.map((c) => c.employeeId))) agentsOf.set(id, (await agentIdsOfEmployee(id)).agentUserIds);
+      const allIds = Array.from(new Set(Array.from(agentsOf.values()).flat()));
+      if (!allIds.length) multiparkRead = true;
+      else {
+        const { getAgentMovementSummaries } = await import("./multiparkDb/movements");
+        const live = await getAgentMovementSummaries({ startDay: dateStr, endDay: dateStr, byDay: false, userIds: allIds });
+        if (live.available) {
+          multiparkRead = true;
+          const byAgent = new Map(live.data.map((s) => [s.agentUserId, s.total]));
+          for (const [emp, ids] of agentsOf) movesByEmployee.set(emp, ids.reduce((n, id) => n + (byAgent.get(id) ?? 0), 0));
+        }
+      }
+    } catch { /* sem identidade/Multipark: fica sem esta verificação (com nota) */ }
+  }
+  const hhmm = (ms: number) => new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit" }).format(ms);
+  let created = 0, alreadyPending = 0;
+  for (const f of candidates) {
+    if ((movesByEmployee.get(f.employeeId) ?? 0) > 0) { skipped.multipark++; continue; }
+    try {
+      await db.insert(employeePenalties).values({
+        // points 0: marca a falta (Q8: "não vem: marca-se falta") sem somar pontos de penalização — nos extras, 3 pontos
+        // confirmados bloqueiam a entrada na app; para quem tem horário fixo isso fica para o Jorge decidir
+        employeeId: f.employeeId, reason: "other", severity: "penalty", points: 0, relatedId: fixedNoShowRelatedId(dateStr), status: "pending",
+        notes: `${FIXED_NO_SHOW_NOTE_PREFIX} Possível falta em ${f.calendarDay} (horário ${hhmm(f.startMs)}${f.endMs ? `–${hhmm(f.endMs)}` : ""}) — sem entrada no ponto${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
+      });
+      created++;
+    } catch (err: any) {
+      if (err?.code === "ER_DUP_ENTRY" || err?.cause?.code === "ER_DUP_ENTRY") { alreadyPending++; continue; }
+      throw err;
+    }
+  }
+  return { scanned: starts.length, created, alreadyPending, skipped, multiparkRead };
+}
+
 /**
  * Possíveis faltas por validar, das cidades de quem vê (41b), com o TOTAL real
  * (antes o "(N)" parava nos 100 da lista).

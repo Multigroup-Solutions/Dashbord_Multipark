@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { weeklyRanges } from "../../shared/marketingRules";
 import { lisbonDayRangeUtc } from "../../shared/lisbonDay";
+import { lateArrivalsOf } from "../../shared/evaluationRules";
 import type { ModuleId } from "../../shared/access";
 import { WEEKLY_REPORT_SYSTEM } from "../_core/ai/prompts/ops";
 import { AiCallCap, tryAi } from "./aiCall";
@@ -187,7 +188,8 @@ async function rh(cur: Range, prev: Range): Promise<Pick<WeeklyReportData, "metr
     return {
       people: people.size,
       avgPoints: people.size ? points / people.size : null,
-      delays: days.reduce((s, d) => s + (d.metrics.delays ?? 0), 0),
+      // tarefa 62: atrasos ao trabalho (nos dias antigos o delays incluía as entregas atrasadas)
+      delays: days.reduce((s, d) => s + lateArrivalsOf({ delays: d.metrics.delays ?? 0, lateServices: d.metrics.lateServices ?? 0 }), 0),
       complaints: days.reduce((s, d) => s + (d.metrics.complaints ?? 0), 0),
       hours: days.reduce((s, d) => s + (d.metrics.hoursWorked ?? 0), 0),
     };
@@ -209,7 +211,7 @@ async function rh(cur: Range, prev: Range): Promise<Pick<WeeklyReportData, "metr
       { label: "Pessoas avaliadas", value: a.people, prev: b.people, unit: "n" },
       { label: "Pontos médios por pessoa", value: a.avgPoints, prev: b.avgPoints, unit: "n", higherIsBetter: true },
       { label: "Horas trabalhadas (ponto)", value: a.hours, prev: b.hours, unit: "h" },
-      { label: "Atrasos", value: a.delays, prev: b.delays, unit: "n", higherIsBetter: false },
+      { label: "Atrasos ao trabalho", value: a.delays, prev: b.delays, unit: "n", higherIsBetter: false },
       { label: "Reclamações atribuídas", value: a.complaints, prev: b.complaints, unit: "n", higherIsBetter: false },
       { label: "Leads novas (extras)", value: la.created, prev: lb.created, unit: "n", higherIsBetter: true },
       { label: "Leads convertidas", value: la.converted, prev: lb.converted, unit: "n", higherIsBetter: true },

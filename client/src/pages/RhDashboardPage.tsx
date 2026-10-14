@@ -218,7 +218,7 @@ function PendingNoShowsPanel() {
                 <div className="min-w-0 flex-1">
                   <span className="font-medium">{row.employee?.fullName ?? `#${row.penalty.employeeId}`}</span>
                   <span className="ml-1 tabular-nums text-amber-800">{Number(row.penalty.points).toLocaleString("pt-PT")} pt</span>
-                  <p className="text-muted-foreground line-clamp-1 break-words" title={row.penalty.notes ?? undefined}>{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason}{row.penalty.notes ? ` · ${row.penalty.notes}` : ""}</p>
+                  <p className="text-muted-foreground line-clamp-1 break-words" title={row.penalty.notes ?? undefined}>{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason === "other" && String(row.penalty.notes ?? "").startsWith("[FALTA HORÁRIO]") ? "Falta (horário fixo)" : row.penalty.reason}{row.penalty.notes ? ` · ${String(row.penalty.notes).replace(/^\[FALTA HORÁRIO\]\s*/, "")}` : ""}</p>
                 </div>
                 <div className="flex shrink-0 gap-1">
                   <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={busy} onClick={() => reviewOne.mutate({ id, decision: "confirmed" })}>Falta</Button>

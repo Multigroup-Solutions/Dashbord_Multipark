@@ -70,27 +70,26 @@ describe("motor — contagens agregadas", () => {
     expect(sql).toContain(`x.ct = 'MOVEMENT' AND x.mk IN ('arrumar', 'parques', 'antigo')) AS moves`);
     expect(sql).toContain(`x.ct = 'MOVEMENT' AND x.mk = 'lugar') AS spot_changes`);
     expect(sql).toContain(`PARTITION BY k.booking_id, (k.ct IN ('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL') AND k.mk IS DISTINCT FROM 'inicio')`);
-    // entrega atrasada: desde max(hora marcada, 1.º pedido de entrega depois da entrega anterior)
-    expect(sql).toContain(`min(s.at) FILTER (WHERE s.ct = 'PENDING_CHECKOUT') OVER (PARTITION BY s.booking_id, s.deliveries_before)`);
-    // pedido depois da hora marcada (ou sem ela): pedido + 30; senão marcada + 15
-    expect(sql).toContain(`CASE WHEN (x.pending_at IS NOT NULL AND (x.sched_at IS NULL OR x.pending_at > x.sched_at)) THEN (x.at - x.pending_at > $6::int * interval '1 minute'`);
-    expect(sql).toContain(`WHEN x.sched_at IS NOT NULL THEN (x.at - x.sched_at > $4::int * interval '1 minute'`);
+    // tarefa 62: a entrega atrasada saiu — nem hora marcada, nem pedido, nem late_deliveries (mais simples e barato)
+    expect(sql).not.toMatch(/late_deliveries|deliveries_without_schedule|sched_|pending_at|deliveries_before|PENDING_CHECKOUT/);
     // os inícios de movimento não são ações
     expect(sql).toContain(`WHERE x.at >= $3::timestamp AND x.mk IS DISTINCT FROM 'inicio'`);
-    expect(sql).toContain(`pg_input_is_valid(k.sched_txt, 'timestamptz')`);
+    expect(sql).toContain(`  FROM seq x`);
     expect(sql).not.toContain("\\"); // a guarda recusa barras invertidas
     expect(sql).toMatch(/GROUP BY x\.user_id, 3, 4, x\.ct/);
-    expect(params.slice(0, 6)).toEqual(["2026-08-29 02:00:00", w.to, w.from, 15, 600, 30]);
+    expect(params.slice(0, 3)).toEqual(["2026-08-29 02:00:00", w.to, w.from]);
   });
 
-  it("linha → contagem (com movimentos, mudanças de lugar e entregas sem hora marcada)", () => {
-    expect(mapEngineActionCountRow({ user_id: "u1", day: "2026-09-02", shift: "night", change_type: "MOVEMENT", n: 5, parking_moves: 1, late_deliveries: 0, moves: "2", spot_changes: "1", deliveries_without_schedule: 0 }))
-      .toMatchObject({ n: 5, parkingMoves: 1, moves: 2, spotChanges: 1, deliveriesWithoutSchedule: 0 });
+  it("linha → contagem (com movimentos e mudanças de lugar; tarefa 62: as entregas atrasadas já não vêm)", () => {
+    const r = mapEngineActionCountRow({ user_id: "u1", day: "2026-09-02", shift: "night", change_type: "MOVEMENT", n: 5, parking_moves: 1, late_deliveries: 3, moves: "2", spot_changes: "1", deliveries_without_schedule: 4 });
+    expect(r).toMatchObject({ n: 5, parkingMoves: 1, moves: 2, spotChanges: 1 });
+    expect(r).not.toHaveProperty("lateDeliveries");
+    expect(r).not.toHaveProperty("deliveriesWithoutSchedule");
   });
 
   it("linha → contagem", () => {
     expect(mapEngineActionCountRow({ user_id: "u1", agent_name: " Ana ", day: "2026-09-02", shift: "morning", change_type: "movement", n: "4", parking_moves: "1", late_deliveries: null }))
-      .toEqual({ agentUserId: "u1", agentName: "Ana", day: "2026-09-02", shift: "morning", changeType: "MOVEMENT", n: 4, parkingMoves: 1, lateDeliveries: 0 });
+      .toEqual({ agentUserId: "u1", agentName: "Ana", day: "2026-09-02", shift: "morning", changeType: "MOVEMENT", n: 4, parkingMoves: 1 });
     expect(mapEngineActionCountRow({ user_id: null, day: "2026-09-02", shift: "x", change_type: null, n: 1 }).shift).toBe("night");
   });
 

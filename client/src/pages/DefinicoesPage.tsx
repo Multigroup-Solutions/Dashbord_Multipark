@@ -37,6 +37,8 @@ import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSetting
 import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, LOGIN_CODE_DELIVERY_SETTING_KEY, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
 import { AIRPORT_LABELS, type AirportCityId, type AirportFence } from "@shared/pontoTerminal";
 import { SPEED_RULE_SETTING_KEY, speedThresholdOf } from "@shared/speedRules";
+import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY } from "@shared/evaluationClose";
+import { addDays, operationalDayOf } from "@shared/lisbonDay";
 import { parksInsideZones } from "@shared/terminalWatch";
 import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -662,6 +664,9 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   // 38a: ligado/desligado por cidade → interruptores (antes eram caixas de texto e "true" escrito não gravava)
   const cityMapBool = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "boolean";
   const isTime = typeof item.defaultValue === "string" && /^\d{2}:\d{2}$/.test(item.defaultValue as string);
+  // Tarefa 62 (P2d): o fecho mensal (uma data, vazio = nada fechado) e quem fecha (contas escolhidas na lista)
+  const isDate = item.key === EVALUATION_CLOSED_UNTIL_KEY;
+  const isUserList = item.key === EVALUATION_CLOSERS_KEY;
   const isJson = !isPhones && !isAirports && !isSpeedRule && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
@@ -678,6 +683,9 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
+  const [userSel, setUserSel] = useState<number[]>([]);
+  const usersQ = trpc.users.list.useQuery(undefined, { enabled: isUserList, staleTime: 5 * 60_000, retry: false });
+  const userById = useMemo(() => new Map(((usersQ.data ?? []) as Array<{ id: number; name?: string | null; email?: string | null }>).map((u) => [Number(u.id), u])), [usersQ.data]);
   const [speed, setSpeed] = useState<{ limitKmh: string; tolerancePercent: string; minPoints: string }>({ limitKmh: "", tolerancePercent: "", minPoints: "" });
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -698,6 +706,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     else if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
     else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
+    else if (isUserList) setUserSel([...((current as number[]) ?? [])].map(Number));
     else if (isSpeedRule) {
       const c = (current ?? {}) as Record<string, unknown>;
       const txt = (v: unknown) => (v == null ? "" : String(v).replace(".", ","));
@@ -720,6 +729,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
+    if (isUserList) return userSel;
+    if (isDate) return text.trim() === "" ? null : text.trim();
     if (isSpeedRule) {
       const n = (v: string) => { const t = v.trim().replace(",", "."); return t === "" ? NaN : Number(t); };
       return { limitKmh: n(speed.limitKmh), tolerancePercent: n(speed.tolerancePercent), minPoints: n(speed.minPoints) };
@@ -897,6 +908,34 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
         </div>
       ) : isEmails ? (
         <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={isZelloList ? "um utilizador Zello por linha (vazio = ninguém excluído)" : "um email por linha"} />
+      ) : isDate ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input type="date" className="w-44 rounded-[10px]" value={text} max={addDays(operationalDayOf(Date.now()), -1)} disabled={locked} aria-label={item.label} onChange={(e) => setText(e.target.value)} />
+          {text && <Button size="sm" variant="ghost" disabled={locked} onClick={() => setText("")}>Limpar (nada fechado)</Button>}
+        </div>
+      ) : isUserList ? (
+        <div className="space-y-2 max-w-xl">
+          {userSel.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {userSel.map((id) => {
+                const u = userById.get(id);
+                const label = u?.name || u?.email || `Conta ${id}`;
+                return (
+                  <span key={id} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs">
+                    {label}
+                    <button type="button" className="ml-0.5 rounded hover:bg-muted" aria-label={`Tirar ${label}`} disabled={locked}
+                      onClick={() => setUserSel((prev) => prev.filter((x) => x !== id))}><X className="h-3 w-3" /></button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          <SearchableSelect value="" disabled={locked || usersQ.isLoading} className="w-full h-8 text-xs"
+            options={((usersQ.data ?? []) as Array<{ id: number; name?: string | null; email?: string | null }>).filter((u) => !userSel.includes(Number(u.id)))
+              .map((u) => ({ value: String(u.id), label: `${u.name || "—"}${u.email ? ` · ${u.email}` : ""}` }))}
+            placeholder={usersQ.isLoading ? "A carregar as contas…" : usersQ.isError ? "Não deu para ler as contas" : "+ Juntar conta"} searchPlaceholder="Procurar pelo nome ou email…" emptyText="Nenhuma conta"
+            onChange={(v) => { const id = Number(v); if (id) setUserSel((prev) => [...prev.filter((x) => x !== id), id]); }} />
+        </div>
       ) : isParkList ? (
         <ParkPicker selected={parkSel} onChange={setParkSel} />
       ) : isSpeedRule ? (
@@ -904,7 +943,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {([
               ["limitKmh", "Limite (km/h)", "120", "numeric"],
-              ["tolerancePercent", "Tolerância (%)", "10", "decimal"],
+              ["tolerancePercent", "Tolerância (%)", "0", "decimal"],
               ["minPoints", "Pontos seguidos para um excesso", "2", "numeric"],
             ] as const).map(([k, label, ph, mode]) => (
               <label key={k} className="text-xs space-y-1">

@@ -594,6 +594,12 @@ export const dailyDriverHistory = mysqlTable("daily_driver_history", {
 	notes: text(),
 	/** 2 = km/h corrigidos + funcionário resolvido (migração 0078). */
 	metricsVersion: int().default(1).notNull(),
+	/**
+	 * Limiar (km/h, já com a tolerância) com que a linha foi recolhida ou re-dividida
+	 * (migração 0680, tarefa 62). NULL = antes disso (a omissão era 132): a "trava da
+	 * linha GPS" (shared/speedRules.ts → gpsDayOverThreshold) conta-o como 132.
+	 */
+	speedThresholdKmh: decimal({ precision: 6, scale: 2 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	/** 'sameday' = provisório (23h do próprio dia) | 'final' = D-2 (migração 0190). */
 	collectionPass: varchar({ length: 12 }).default('final').notNull(),

@@ -490,6 +490,15 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() - 86400000));
         const n = await detectExtraDiaNoShows(yesterday);
         console.log(`[daily-ops] RH: possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas; fora: ${n.skipped.proposed} só propostos, ${n.skipped.sent_home} mandados para casa, ${n.skipped.multipark} com movimentos na Multipark${n.multiparkRead ? "" : " — Multipark não lida"})`);
+        // Tarefa 62 (Q8): também quem tem horário fixo no RH (interruptor RH_FALTAS_HORARIO, desligado por omissão)
+        const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }, { FIXED_SCHEDULE_NO_SHOWS_FLAG, detectFixedScheduleNoShows }] = await Promise.all([
+          import("./_core/featureFlags"), import("../shared/appSettings"), import("./rhService"),
+        ]);
+        await ensureFeatureFlagOverrides();
+        if (isFeatureEnabled(FIXED_SCHEDULE_NO_SHOWS_FLAG, { defaultEnabled: automationFlagDefault(FIXED_SCHEDULE_NO_SHOWS_FLAG) })) {
+          const f = await detectFixedScheduleNoShows(yesterday);
+          console.log(`[daily-ops] RH: possíveis faltas (horário fixo) ${yesterday}: ${f.created} novas de ${f.scanned} com horário (${f.alreadyPending} já registadas; fora: ${f.skipped.escala} na escala, ${f.skipped.check_in} com entrada, ${f.skipped.multipark} com movimentos na Multipark${f.multiparkRead ? "" : " — Multipark não lida"})`);
+        }
       });
       // Retenções, em lotes e com prazo curto — o resto fica para o dia seguinte.
       // Fila de notificações Multipark: apaga concluídos com mais de 30 dias.
@@ -587,6 +596,24 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
  * passagem final (D-2, daily-ops) substitui estas linhas. Retomável dentro
  * da janela; nunca passa da meia-noite (prazo cortado 1 min antes).
  */
+/**
+ * Tarefa 62 (P1b): re-divisão do GPS dos últimos 31 dias com o limite de hoje, a pedido do super admin
+ * (sem pedido → nada). Retomável: o cursor fica em app_settings (gps.resplitBackfillV1). Não avisa ninguém.
+ */
+export async function gpsResplitBackfillCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { realResplitBackfillDeps, runResplitBackfillStep } = await import("./gpsResplitBackfill");
+    const r = await runResplitBackfillStep(await realResplitBackfillDeps(), { deadlineAt: o.deadlineAt - 2_000 });
+    if (r.idle) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "sem pedido" }, done: true };
+    const st = r.state;
+    console.log(`[gps-resplit-backfill] ${st.state === "done" ? "concluído" : `a correr (próximo ${st.day})`}: ${st.daysDone} dia(s), ${st.rowsDone} linha(s) (${r.rowsNow} agora)${st.daysClosed ? `, ${st.daysClosed} dia(s) fechado(s) saltado(s)` : ""}${st.errors.length ? `, ${st.errors.length} erro(s)` : ""}`);
+    return { httpStatus: 200, body: { ranAt: ranAt(), state: st.state, day: st.day, daysDone: st.daysDone, rowsDone: st.rowsDone, rowsNow: r.rowsNow }, done: true };
+  } catch (err) {
+    console.error("[cron gps-resplit-backfill] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 export async function zelloSameDayCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
     const { isZelloConfigured } = await import("./zello");

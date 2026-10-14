@@ -173,7 +173,7 @@ export function PeoplePerformancePanel() {
           {/* 14 out 2026: dias guardados com as regras antigas (antes das correções dos atrasos, movimentos e velocidade) */}
           {(d.oldRulesDays ?? 0) > 0 && (
             <div role="status" className="rounded-lg border border-amber-500 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-              <strong>{d.oldRulesDays} dia(s)·pessoa deste período foram calculados com as regras antigas</strong> (atrasos por entrega, movimentos a dobrar, sem excessos do Zello). Os números destes dias só batem certo depois de <strong>Recalcular</strong> em Avaliação → Mês. Atenção: recalcular também aplica as ligações das fichas e os estados das reclamações de hoje e o limite de velocidade atual — muda meses já usados em prémios.
+              <strong>{d.oldRulesDays} dia(s)·pessoa deste período foram calculados com as regras antigas</strong> (atrasos por entrega, movimentos a dobrar, sem excessos do Zello). Os números destes dias só batem certo depois de <strong>Recalcular</strong> em Avaliação → Mês. Atenção: recalcular também aplica as ligações das fichas e os estados das reclamações de hoje e o limite de velocidade atual — muda os meses abertos (os fechados no fecho mensal não mudam).
             </div>
           )}
 

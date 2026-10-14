@@ -30,6 +30,8 @@ import { MAIL_BACKFILL_DEFAULTS, mailBackfillSettingsSchema } from "./mailTriage
 import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
 import { DEFAULT_SPEED_RULE, SPEED_RULE_SETTING_KEY, speedRuleSchema } from "./speedRules";
 import { PERF_RANK_WEIGHTS_KEY, rankWeightsReadSchema, rankWeightsSchema } from "./peoplePerformance";
+import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, isIsoDay } from "./evaluationClose";
+import { operationalDayOf } from "./lisbonDay";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
 
@@ -292,6 +294,15 @@ export type AiAssistantLimits = z.infer<typeof aiAssistantLimitsSchema>;
 export const AI_ASSISTANT_DEFAULT_LIMITS = { perMinute: 20, perDay: 200, maxInputChars: 1000 } as const;
 
 
+/** Tarefa 62 (P2d): data AAAA-MM-DD ou nula ("" = nula, para o campo de texto/data). */
+export const closedUntilSchema = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? null : typeof v === "string" ? v.trim() : v),
+  z.string({ error: "Indica a data (AAAA-MM-DD)." }).refine(isIsoDay, "Data inválida (AAAA-MM-DD).").nullable(),
+);
+/** Lista de contas (ids de utilizador), sem repetir. */
+export const userIdListSchema = z.array(z.number({ error: "Escolhe as contas na lista." }).int().positive()).max(50, "No máximo 50 contas.")
+  .transform((ids) => Array.from(new Set(ids)));
+
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
   group: SettingGroup;
@@ -370,7 +381,7 @@ export const SETTINGS = {
     key: SPEED_RULE_SETTING_KEY,
     group: "operacao",
     label: "Limite de velocidade (GPS do Zello)",
-    description: "Quando é excesso de velocidade no GPS do Zello: o limite em km/h (120 = autoestrada em Portugal; o Zello não diz em que estrada se vai, por isso é um limite único), a tolerância em % (10 por omissão = 132 km/h; 0 = nenhuma) e quantos pontos seguidos acima dele contam um excesso (2 por omissão; um ponto sozinho só conta se a distância percorrida até ao ponto ao lado, a pelo menos 30 s, o confirmar; com o Zello a mandar pontos espaçados, o mesmo troço sem nenhum ponto abaixo do limite pelo meio é um excesso só). Os picos falsos do GPS (acima de 250 km/h ou um salto isolado) nunca contam. Vale para a recolha diária (excessos de cada dia, Atividade diária, Resumo do dia), para a Avaliação (1 excesso de velocidade, −10, por dia acima do limite, sem contar a dobrar com os alertas) e para o Desempenho (dias acima do limite). Os dias já recolhidos ficam como estavam até se voltarem a dividir (Atividade diária → Histórico Diário → Forçar re-divisão). Substitui a tabela antiga speed_limits (sem ecrã).",
+    description: "Quando é excesso de velocidade no GPS do Zello: o limite em km/h (120 = autoestrada em Portugal; o Zello não diz em que estrada se vai, por isso é um limite único), a tolerância em % (0 por omissão = conta acima de 120 km/h; 10 = 132 km/h) e quantos pontos seguidos acima dele contam um excesso (2 por omissão; um ponto sozinho só conta se a distância percorrida até ao ponto ao lado, a pelo menos 30 s, o confirmar; com o Zello a mandar pontos espaçados, o mesmo troço sem nenhum ponto abaixo do limite pelo meio é um excesso só). Os picos falsos do GPS (acima de 250 km/h ou um salto isolado) nunca contam. Vale para a recolha diária (excessos de cada dia, Atividade diária, Resumo do dia), para a Avaliação (1 excesso de velocidade, −10, por dia acima do limite, sem contar a dobrar com os alertas) e para o Desempenho (dias acima do limite). Os dias já recolhidos ficam como estavam até se voltarem a dividir (Atividade diária → Histórico Diário → Forçar re-divisão): na Avaliação e no Desempenho um dia só conta acima do MAIOR entre o limite de hoje e o limite com que foi recolhido (os dias recolhidos antes de se guardar o limite de cada dia contam a 132), para nunca contar um excesso que a recolha não confirmou. Substitui a tabela antiga speed_limits (sem ecrã).",
     schema: speedRuleSchema,
     defaultValue: { ...DEFAULT_SPEED_RULE },
     wiring: "live",
@@ -777,6 +788,27 @@ export const SETTINGS = {
     defaultValue: {},
     wiring: "live",
   }),
+  // Tarefa 62 (P2d): fecho mensal da Avaliação — fecha-se cada mês antes de pagar os prémios (o 1.º: novembro).
+  [EVALUATION_CLOSED_UNTIL_KEY]: def({
+    key: EVALUATION_CLOSED_UNTIL_KEY,
+    group: "pessoas",
+    label: "Avaliação fechada até (fecho mensal)",
+    description: "Último dia FECHADO da Avaliação (AAAA-MM-DD). Os dias até essa data já não mudam: o recálculo da noite, o Recalcular, os ajustes, a anulação de ajustes, as contestações (criar e aceitar com ajuste) e a re-divisão do GPS dos últimos 31 dias não lhes tocam. Fecha-se cada mês antes de pagar os prémios (o primeiro é novembro, no início de dezembro). Reabrir = mudar a data (fica no histórico). Vazio = nada fechado. Também se fecha em Avaliação → Mês (\"Fecho do mês\"), por quem está na lista \"Avaliação: quem fecha o mês\". Atenção: o fecho congela os números, não as regras — depois do primeiro fecho, uma mudança nos pontos tem de dizer a partir de que dia vale.",
+    schema: closedUntilSchema,
+    // ao gravar (também em Definições): nunca hoje nem o futuro — fechar o dia de hoje congelava o recálculo
+    writeSchema: closedUntilSchema.refine((v) => v == null || v < operationalDayOf(Date.now()), "Só se fecha até ontem (o dia de hoje ainda está a acontecer)."),
+    defaultValue: null,
+    wiring: "live",
+  }),
+  [EVALUATION_CLOSERS_KEY]: def({
+    key: EVALUATION_CLOSERS_KEY,
+    group: "pessoas",
+    label: "Avaliação: quem fecha o mês",
+    description: "Contas que podem fechar e reabrir a Avaliação (Avaliação → Mês → \"Fecho do mês\"), além do super admin. Escolhe as pessoas na lista. Só o super admin muda.",
+    schema: userIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -802,6 +834,10 @@ export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   "mail.systemSender",
   // o Desempenho só o super admin o vê (Jorge, 8 out 2026)
   PERF_RANK_WEIGHTS_KEY,
+  // tarefa 62 (Q10): em Definições, o fecho e a lista de quem fecha só o super admin muda
+  // (quem está na lista fecha em Avaliação → Mês, pelo procedimento próprio)
+  EVALUATION_CLOSED_UNTIL_KEY,
+  EVALUATION_CLOSERS_KEY,
 ]);
 export function settingSuperAdminOnly(key: string): boolean {
   return SUPER_ADMIN_SETTING_KEYS.has(key);
@@ -898,6 +934,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "GBP_WINDSOR_SYNC", label: "Críticas: importar do Google Business pela Windsor", description: "Quando a Google não está ligada diretamente, a recolha agendada vai buscar as avaliações dos perfis escolhidos à Windsor (WINDSOR_API_KEY) e põe-nas nas Críticas, como a ligação direta (1–3 estrelas → Reclamações). A 1.ª vez vai até 3 anos para trás; depois os últimos 60 dias. O botão \"Importar pela Windsor\" funciona sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "GBP_WINDSOR_REPLY", label: "Críticas: publicar respostas no Google pela Windsor", description: "Quando a Google não está ligada diretamente, o \"Aprovar e publicar\" das Críticas publica a resposta pela Windsor (ação reply_to_review — tem de estar ativa na equipa da Windsor). A resposta é pública e substitui a anterior. Desligado: publica-se no perfil Google e marca-se \"Já publiquei\". Desligado por omissão.", defaultEnabled: false },
   // Jorge (14 out 2026): "porque é que os 141 não dão aviso nenhum?" — avisa gente → desligado por omissão.
+  // Tarefa 62 (Q8, Jorge: "não vem: marca-se falta"): as faltas de quem tem horário fixo, como as dos extras.
+  { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar. Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas, dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro) e quem mexeu em carros na Multipark. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   { name: "GPS_SPEED_ALERTS", label: "Avisos de excesso de velocidade (GPS do Zello)", description: "Na recolha do GPS do Zello (a provisória das 23h e a final de D-2), cada excesso de velocidade (Definições → Parâmetros → Limite de velocidade) fica registado e avisa no sino o team leader e o supervisor da cidade da pessoa (\"Excesso de velocidade\"): um aviso por pessoa e recolha, com quantos excessos e a velocidade máxima (a final de D-2 só volta a avisar se trouxer excessos que a provisória não tinha; só para dias dos últimos 3; um dia antigo recolhido à mão não avisa). Também o aviso da verificação manual de velocidade (\"verificar agora\", pela API) só sai com isto ligado. Os pontos da Avaliação (−10 por dia acima do limite) contam sempre, com ou sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.
@@ -1086,6 +1124,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", intervalMinutes: 1440, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "gps-resplit-backfill", label: "GPS: re-dividir os últimos 31 dias (a pedido do super admin)", intervalMinutes: 5, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },

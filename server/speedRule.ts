@@ -1,9 +1,8 @@
 /**
  * O limite de velocidade em vigor (Definições → Parâmetros → "Limite de
  * velocidade (GPS do Zello)", `gps.speedRule`; regras em shared/speedRules.ts).
- * Sem valor gravado vale a omissão: 120 km/h com 10 % de tolerância (= 132
- * km/h, a mesma omissão que a Avaliação já usava desde o #381) e 2 pontos
- * seguidos.
+ * Sem valor gravado vale a omissão: 120 km/h sem tolerância (conta acima de
+ * 120 — tarefa 62; antes eram 10 % = 132) e 2 pontos seguidos.
  *
  * Substitui a tabela antiga `speed_limits` (sem ecrã para a configurar: sem
  * linha "por omissão", o limite era nulo, os "Dias acima do limite" davam

@@ -488,7 +488,7 @@ export function draftKeyLines(c: HandoverDraftCounts, unavailable: ReadonlyArray
   const lines = [
     `Recolhas no próximo turno: ${v("checkinsNext")}`,
     `Entregas no próximo turno: ${v("checkoutsNext")}${!na.has("toCollectEur") && c.toCollectEur > 0 ? ` (a cobrar ${eur(c.toCollectEur)})` : ""}`,
-    `Entregas pendentes (sem check-out): ${v("pendingDeliveries")}`,
+    `Entregas pendentes (na fila): ${v("pendingDeliveries")}`,
     // 44b: reclamações, perdidos e ocorrências saíram da passagem de turno (têm as páginas deles).
     `WhatsApp por ler: ${v("whatsappUnread")}`,
     `PDAs ainda com check-in: ${v("pdasCheckedIn")}`,

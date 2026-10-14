@@ -597,8 +597,8 @@ async function actionsOf(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, ran
 
 /**
  * Limite usado nos excessos (o mesmo da recolha): limite × (1 + tolerância),
- * de Definições → Parâmetros → "Limite de velocidade (GPS do Zello)" — 120
- * km/h com 10 % por omissão = 132 (14 out 2026; antes vinha da tabela
+ * de Definições → Parâmetros → "Limite de velocidade (GPS do Zello)" — acima
+ * de 120 km/h (0 % de tolerância) por omissão (tarefa 62; antes vinha da tabela
  * `speed_limits`, sem ecrã). Erro a ler (ou sem BD) → null: sem limiar, e
  * quem chama diz-o numa nota (a omissão só vale quando a leitura correu bem).
  */

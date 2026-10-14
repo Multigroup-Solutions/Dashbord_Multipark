@@ -25,7 +25,8 @@ vi.mock("./db", () => {
       if (t.includes("multipark_booking_history")) return [state.localHistory];
       // 14 out 2026: o contexto das 00h–03h do 1.º dia (alertas/penalizações de velocidade) e o GPS do dia
       if (t.includes("UNION ALL")) return [(globalThis as any).__speedContext ?? []];
-      if (t.startsWith("SELECT employeeId, day, maxSpeed FROM driver_day_shares")) return [(globalThis as any).__gps ?? []];
+      // tarefa 62: as partes leem o limiar da recolha pela historyId (a trava da linha GPS)
+      if (t.startsWith("SELECT s.employeeId, s.day, s.maxSpeed, h.speedThresholdKmh FROM driver_day_shares s")) return [(globalThis as any).__gps ?? []];
       if (t.includes("employee_penalties")) return [state.penalties];
       if (t.includes("d.complaintId IN")) return [state.relComplaints];
       if (t.includes("FROM speed_alerts WHERE employeeId IS NOT NULL AND id IN")) return [state.relAlerts];
@@ -46,7 +47,7 @@ vi.mock("./evaluationIdentity", async (original) => {
 });
 vi.mock("./extraRates", () => ({ loadExtraRates: async () => ({}), rateFor: () => 10 }));
 vi.mock("./extrasDia", () => ({ TL_WORKING_DAYS_PER_MONTH: 22 }));
-// 14 out 2026: o limiar de velocidade (132 = omissão); `state.speedLimit = null` simula a leitura que falhou
+// 14 out 2026: o limiar de velocidade (132 = a omissão antiga); `state.speedLimit = null` simula a leitura que falhou
 vi.mock("./dayActivity", () => ({ speedThreshold: async () => ((globalThis as any).__speedLimit === undefined ? 132 : (globalThis as any).__speedLimit) }));
 
 import { computeRange, recomputeRange, runEvaluationRecompute } from "./evaluationEngine";
@@ -55,8 +56,8 @@ const liveOk = vi.fn(async (_s: string, _e: string) => ({
   available: true as const,
   data: {
     actions: [
-      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night" as const, changeType: "MOVEMENT", n: 2, parkingMoves: 1, lateDeliveries: 0 },
-      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night" as const, changeType: "CHECK_OUT", n: 1, parkingMoves: 0, lateDeliveries: 1 },
+      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night" as const, changeType: "MOVEMENT", n: 2, parkingMoves: 1 },
+      { agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", shift: "night" as const, changeType: "CHECK_OUT", n: 1, parkingMoves: 0 },
     ],
     occurrences: [{ agentUserId: "mp-1", agentName: "Gelson Sousa", day: "2026-09-24", n: 1 }],
   },
@@ -88,7 +89,8 @@ describe("computeRange — movimentos da BD da Multipark", () => {
     // o resto (ponto, escala, ocorrências nossas, velocidade, penalizações) continua a vir da nossa BD
     expect(state.executed.some((t) => t.includes("time_records"))).toBe(true);
     expect(out.rows).toHaveLength(1);
-    expect(out.rows[0].metrics).toMatchObject({ actions: 3, movements: 2, parkingMoves: 1, entregas: 1, lateServices: 1, delays: 1, incidentsReported: 1 });
+    // tarefa 62: a entrega atrasada saiu — lateServices e delays ficam a 0
+    expect(out.rows[0].metrics).toMatchObject({ actions: 3, movements: 2, parkingMoves: 1, entregas: 1, lateServices: 0, delays: 0, incidentsReported: 1 });
   });
 
   it("14 out 2026: sem limiar de velocidade (leitura falhou) o GPS não conta e o aviso diz porquê", async () => {
@@ -129,13 +131,13 @@ describe("computeRange — movimentos da BD da Multipark", () => {
     }
   });
 
-  it("14 out 2026: cada dia gravado leva a versão das regras (2)", async () => {
+  it("cada dia gravado leva a versão das regras (3 desde a tarefa 62), com as colunas antigas a 0", async () => {
     const { persistRows } = await import("./evaluationEngine");
     const before = state.inserted;
     const out = await computeRange("2026-09-24", "2026-09-24", liveOk);
     await persistRows(out.rows, "2026-09-24", "2026-09-24");
     expect(state.inserted - before).toBe(out.rows.length);
-    expect((globalThis as any).__lastValues[0]).toMatchObject({ rulesVersion: 2, spotChanges: 0, deliveriesWithoutSchedule: expect.any(Number) });
+    expect((globalThis as any).__lastValues[0]).toMatchObject({ rulesVersion: 3, spotChanges: 0, lateServices: 0, deliveriesWithoutSchedule: 0 });
   });
 
   it("sem BD da Multipark: calcula com a cópia local e devolve o aviso", async () => {

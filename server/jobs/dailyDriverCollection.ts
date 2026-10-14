@@ -25,7 +25,7 @@ import {
 } from "../db";
 import { storagePut } from "../storage";
 import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, STOPPED_SPEED_KMH, asSpeedRule, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
-import { SPEED_EXCESS_METRICS_VERSION, speedExcesses, speedThresholdOf, trustedMaxSpeed, type SpeedRule } from "../../shared/speedRules";
+import { SPEED_EXCESS_METRICS_VERSION, SPEED_THRESHOLD_METRICS_VERSION, speedExcesses, speedThresholdOf, trustedMaxSpeed, type SpeedRule } from "../../shared/speedRules";
 import { addDays, lisbonDayOf, lisbonDayRangeUtc, zelloLatestDay } from "../../shared/lisbonDay";
 
 /** Calculate distance between two GPS points using Haversine formula */
@@ -232,7 +232,9 @@ export { processGeoJsonHistory };
 // 5 = (14 out 2026) velocidade máxima sem picos falsos e `speedViolations`/`violations`
 //     = EXCESSOS (shared/speedRules.ts), com o limite de Definições (120 km/h por
 //     omissão). Antes: PONTOS acima de um limite que sem `speed_limits` era 999.
-export const DRIVER_METRICS_VERSION = SPEED_EXCESS_METRICS_VERSION;
+// 6 = (tarefa 62) + o limiar com que a linha foi recolhida (`speedThresholdKmh`,
+//     migração 0680) — a "trava da linha GPS" da Avaliação e do Desempenho.
+export const DRIVER_METRICS_VERSION = SPEED_THRESHOLD_METRICS_VERSION;
 /** A partir desta versão os excessos gravados são de confiança (o Desempenho e a Avaliação usam-nos). */
 export { SPEED_EXCESS_METRICS_VERSION };
 
@@ -279,8 +281,10 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
         const data = await resp.json();
         // 14 out 2026: refaz também a máxima (sem picos falsos) e os excessos da linha, com o limite em vigor
         const pts = gpsPointsFromGeoJson(data);
+        // tarefa 62: grava também o limiar com que a linha ficou (a trava da Avaliação e do Desempenho)
         await db.execute(sql`UPDATE daily_driver_history SET maxSpeed = ${String(trustedMaxSpeed(pts, { rule: speedRule }).maxSpeed)},
-            speedViolations = ${speedExcesses(pts, speedRule).length}, metricsVersion = ${DRIVER_METRICS_VERSION} WHERE id = ${r.id}`);
+            speedViolations = ${speedExcesses(pts, speedRule).length}, metricsVersion = ${DRIVER_METRICS_VERSION},
+            speedThresholdKmh = ${String(speedThresholdOf(speedRule))} WHERE id = ${r.id}`);
         await saveDriverShares(Number(r.id), zello, day, zi.length ? splitByHolder(pts, zi, speedRule, owners.get(zelloKey(zello)) ?? null) : []);
       } else if (!zi.length) {
         await saveDriverShares(Number(r.id), zello, day, []); // já ninguém teve o PDA
@@ -387,7 +391,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     // Fase 3: intervalos de cada pessoa em cada PDA → GPS partido por pessoa
     const intervals = await pdaIntervalsForDay(dateStr);
 
-    // Limite de velocidade (Definições → Parâmetros; 120 km/h + 10 % por omissão) — os excessos contam-se com ele
+    // Limite de velocidade (Definições → Parâmetros; acima de 120 km/h por omissão) — os excessos contam-se com ele
     const { speedRuleNow } = await import("../speedRule");
     const { rule: speedRule } = await speedRuleNow();
 
@@ -427,6 +431,8 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
           // Antes ficava sempre vazio → km/horas soltos na Atividade do Dia
           employeeId: holders.get(zelloKey(user.name)) ?? null,
           metricsVersion: DRIVER_METRICS_VERSION,
+          // tarefa 62: o limiar com que a linha foi recolhida (a final atualiza o da provisória)
+          speedThresholdKmh: String(speedThresholdOf(speedRule)),
           date: `${dateStr} 00:00:00`,
           totalKm: String(metrics.totalKm),
           hoursWorked: String(metrics.hoursWorked),
@@ -462,7 +468,7 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
           const owner = owners.get(zelloKey(user.name)) ?? null;
           const holderAt = zIntervals?.length ? holderAtFn(zIntervals, owner) : () => row.employeeId ?? owner;
           await recordSpeedExcesses({
-            // o limite que os excessos passaram é o da regra COM a tolerância (120 + 10 % = 132 por omissão)
+            // o limite que os excessos passaram é o da regra COM a tolerância (120 com 0 % por omissão)
             zello: user.name, displayName: user.fullName || user.name, day: dateStr, limitKmh: speedThresholdOf(speedRule), excesses,
             employeeAt: holderAt,
           });

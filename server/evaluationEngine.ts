@@ -6,7 +6,7 @@
  *    intervalo que deixaram de existir). Fontes:
  *      · BD da Multipark AO VIVO (server/multiparkDb/movements.ts): os
  *        movimentos de cada agente ("History", já agregados no Postgres com
- *        as regras de "levar ao parque" e entregas atrasadas) e as
+ *        a regra de "levar ao parque"; a "entrega atrasada" saiu na tarefa 62) e as
  *        ocorrências que criou na app ("Occurrence");
  *      · a nossa BD: ponto, escala, ocorrências/reclamações nossas, alertas
  *        de velocidade (GPS Zello), penalizações e os acidentes confirmados
@@ -61,6 +61,7 @@ import {
 import { addDays, lisbonDayRangeUtc, operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
+
 const toUtcStr = (v: any): string => {
   if (v == null) return "";
   if (v instanceof Date) return v.toISOString().slice(0, 19).replace("T", " ");
@@ -153,6 +154,23 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
                    SELECT employeeId, createdAt FROM employee_penalties
                     WHERE status = 'confirmed' AND reason = 'speeding' AND createdAt >= ${calendarStart} AND createdAt < ${range.start}`).catch(() => [[]] as any),
   ]);
+  // Tarefa 62 (Q8): horários fixos do RH (fichas ativas, funcionários — os extras regem-se pela escala) e
+  // férias/baixas — o atraso conta para quem tem horário. A cidade da ficha só serve para o feriado municipal.
+  let fixedSchedules: any[] = [], leaveRows: any[] = [];
+  try {
+    fixedSchedules = rowsOf(await db.execute(sql`
+      SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
+             DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
+        FROM schedules s JOIN employees e ON e.id = s.employeeId
+       WHERE e.isActive = 1 AND s.isWorkDay = 1
+         AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+    leaveRows = rowsOf(await db.execute(sql`
+      SELECT employeeId, fromDate, toDate FROM employee_leaves
+       WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
+  } catch { /* sem horários: só a escala (como antes) */ }
+  const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
+    ? await (await import("./aiOps/cities")).projectCityResolver(db)
+    : () => null;
   let complaintRows: any[] = [];
   try {
     complaintRows = rowsOf(await db.execute(sql`
@@ -187,15 +205,18 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
   } catch { /* sem a tabela das reclamações: fica a regra antiga (dentro do período) */ }
 
   // 14 out 2026: a velocidade máxima do GPS do Zello por pessoa e dia (as partes do PDA; sem partes, a linha
-  // do dia) e o limiar (Definições → "Limite de velocidade (GPS do Zello)", 120 km/h + 10 % = 132 por omissão)
+  // do dia) e o limiar (Definições → "Limite de velocidade (GPS do Zello)", acima de 120 km/h por omissão)
   // — um dia acima conta 1 excesso de velocidade. Desde a recolha com metricsVersion 5 a máxima já vem sem
   // picos falsos e, acima do limite, só de um excesso confirmado (shared/speedRules.ts).
+  // Tarefa 62 (a "trava da linha GPS"): com o limiar com que a linha foi recolhida (as partes pela historyId);
+  // sem ele, a linha conta como recolhida a 132 — nunca se conta um excesso que a recolha não confirmou.
   let gpsRows: any[] = [];
   try {
     gpsRows = [
-      ...rowsOf(await db.execute(sql`SELECT employeeId, day, maxSpeed FROM driver_day_shares
-          WHERE employeeId IS NOT NULL AND day >= ${startDay} AND day <= ${endDay}`)),
-      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.maxSpeed FROM daily_driver_history h
+      ...rowsOf(await db.execute(sql`SELECT s.employeeId, s.day, s.maxSpeed, h.speedThresholdKmh FROM driver_day_shares s
+          LEFT JOIN daily_driver_history h ON h.id = s.historyId
+          WHERE s.employeeId IS NOT NULL AND s.day >= ${startDay} AND s.day <= ${endDay}`)),
+      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.maxSpeed, h.speedThresholdKmh FROM daily_driver_history h
           WHERE h.employeeId IS NOT NULL AND DATE(h.date) >= ${startDay} AND DATE(h.date) <= ${endDay}
             AND NOT EXISTS (SELECT 1 FROM driver_day_shares s WHERE s.historyId = h.id)`)),
     ];
@@ -249,7 +270,16 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       at: toUtcStr(r.at), penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null,
       driverPenaltyPoints: Number(r.driverPoints ?? 0),
     })),
-    gpsDays: gpsRows.map((r) => ({ employeeId: Number(r.employeeId), day: typeof r.day === "string" ? r.day.slice(0, 10) : r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day ?? "").slice(0, 10), maxSpeed: Number(r.maxSpeed ?? 0) })),
+    fixedSchedules: fixedSchedules.map((r) => ({
+      employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
+      isWorkDay: Number(r.isWorkDay) === 1, contractStart: r.contractStart ? String(r.contractStart).slice(0, 10) : null, contractEnd: r.contractEnd ? String(r.contractEnd).slice(0, 10) : null,
+      city: cityOfProjectId(r.projectId != null ? Number(r.projectId) : null),
+    })),
+    leaves: leaveRows.map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) })),
+    gpsDays: gpsRows.map((r) => ({
+      employeeId: Number(r.employeeId), day: typeof r.day === "string" ? r.day.slice(0, 10) : r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day ?? "").slice(0, 10),
+      maxSpeed: Number(r.maxSpeed ?? 0), collectedThresholdKmh: r.speedThresholdKmh != null ? Number(r.speedThresholdKmh) : null,
+    })),
     speedThresholdKmh: speedLimitKmh,
     speedCalendarContext: rowsOf(speedContext).filter((r) => r.employeeId != null).map((r) => ({ employeeId: Number(r.employeeId), at: toUtcStr(r.createdAt) })),
     speedAlerts: rowsOf(speed).map((r) => ({ id: Number(r.id), employeeId: r.employeeId != null ? Number(r.employeeId) : null, createdAt: toUtcStr(r.createdAt) })),
@@ -316,8 +346,24 @@ export async function persistRows(rows: EmployeeDayRow[], startDay: string, endD
   return { written: values.length, removed };
 }
 
-/** Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional). */
-export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number; skipped: boolean }> {
+/**
+ * Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional).
+ * Tarefa 62 (P2d): os dias FECHADOS (≤ evaluation.closedUntil) nunca se escrevem — o
+ * intervalo começa no 1.º dia aberto; todo fechado → nada; o fecho não se leu → nada.
+ */
+export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number; skipped: boolean; closedUntil?: string | null }> {
+  const { readEvaluationClosedUntil, CLOSED_READ_FAILED_MESSAGE } = await import("./evaluationClose");
+  const { openFrom, fmtClosedUntil } = await import("../shared/evaluationClose");
+  const closed = await readEvaluationClosedUntil();
+  const nothing = (notice: string, skipped: boolean, closedUntil: string | null) =>
+    ({ rows: [], unresolved: new Map(), source: "multipark" as const, notice, rulesVersion: EVALUATION_RULES_VERSION, written: 0, removed: 0, skipped, closedUntil });
+  if (!closed.ok) return nothing(CLOSED_READ_FAILED_MESSAGE, true, null);
+  const from = openFrom(startDay, endDay, closed.closedUntil);
+  if (from == null) return nothing(`Fechado até ${fmtClosedUntil(closed.closedUntil!)} (fecho mensal): nada a recalcular.`, false, closed.closedUntil);
+  if (from !== startDay) {
+    const r = await recomputeRange(from, endDay, readLive);
+    return { ...r, closedUntil: closed.closedUntil };
+  }
   const out = await computeRange(startDay, endDay, readLive);
   // Sem a BD da Multipark os movimentos vêm da cópia local (congelada): gravar
   // por cima punha zeros nos dias bons e apagava linhas. Fica o que estava.

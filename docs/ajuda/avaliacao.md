@@ -2,7 +2,7 @@
 modulo: avaliacao
 titulo: Avaliação (dia e mês)
 rotas: /avaliacao, /avaliacao-operacional
-palavras: mudanças de lugar, mudança de lugar, movimento entre garagens, início do movimento, excesso do gps, limite 120, 132 km/h, picos do gps, entrega atrasada, pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
+palavras: fecho do mês, fechar o mês, horário fixo, atraso num feriado, fechado até, reabrir, prémios, quem fecha o mês, atraso ao trabalho, 5 minutos, atraso de 5 min, entrega atrasada saiu, regra antiga, mudanças de lugar, mudança de lugar, movimento entre garagens, início do movimento, excesso do gps, limite 120, 120 km/h sem tolerância, 132 km/h, trava da velocidade, dia recolhido com outro limite, picos do gps, entrega atrasada, pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
 ---
 # Avaliação
 
@@ -46,8 +46,8 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 
 **Pesquisar e filtrar o ranking (como no Odoo)**
 - **Pesquisa**: escreve o nome ou o n.º de agente e o ranking filtra-se logo. Não contam acentos nem maiúsculas ("joao" encontra "João"). Enquanto escreves aparece **Procurar «…» em**: Nome ou n.º de agente, Cidade, Marca, Posto ou Equipa (TL), com quantas pessoas encontra em cada. Escolhe uma e a pesquisa passa a **chip** (o Enter faz o mesmo, no nome). No mesmo campo, as pesquisas juntam com "ou"; em campos diferentes, com "e".
-- **Grupos**: **Cidade**, **Marca**, **Posto** (condutor, condutor sénior, extra, team leader), **Equipa** e **Só com…** (excessos de velocidade, reclamações, acidentes, atrasos, entregas atrasadas, contestações abertas, com ajustes, pontos negativos). No mesmo grupo junta com "ou" (Porto ou Faro); entre grupos, com "e" (Porto e só com reclamações).
-- **+ Regra**: regras sobre as colunas e as métricas: pontos (total, ganhos e perdidos), horas, dias, ações, recolhas e entregas, movimentos, levar ao parque, atrasos, entregas atrasadas, excessos de velocidade, reclamações, acidentes, custo, ações e pontos por hora, ocorrências, penalizações, contestações abertas e dias como TL.
+- **Grupos**: **Cidade**, **Marca**, **Posto** (condutor, condutor sénior, extra, team leader), **Equipa** e **Só com…** (excessos de velocidade, reclamações, acidentes, atrasos ao trabalho, contestações abertas, com ajustes, pontos negativos). No mesmo grupo junta com "ou" (Porto ou Faro); entre grupos, com "e" (Porto e só com reclamações).
+- **+ Regra**: regras sobre as colunas e as métricas: pontos (total, ganhos e perdidos), horas, dias, ações, recolhas e entregas, movimentos, levar ao parque, atrasos ao trabalho, excessos de velocidade, reclamações, acidentes, custo, ações e pontos por hora, ocorrências, penalizações, contestações abertas e dias como TL.
   - As horas são as do ponto (não as da escala) e o custo é em euros. Usa vírgula ou ponto nas casas decimais (7,5 = 7.5).
   - Operadores: **≥**, **≤**, **=**, **entre** (inclui os dois valores), **tem** (diferente de 0) e **não tem**. Por hora, quem não tem horas só cumpre **não tem**.
   - Escolhe se cumprem **todas as regras** ou **pelo menos uma**.
@@ -74,23 +74,35 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - Se uma leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem dados".
 
 **Como se contam os movimentos**
-- Os dias calculados antes de 14 out 2026 seguiam as regras antigas. A avaliação do mês avisa quantos são ("N dia(s) calculado(s) com as regras antigas") e, a quem pode, mostra **Recalcular**.
+- Os dias calculados antes das regras de agora seguiam as regras antigas. A avaliação do mês avisa quantos são ("N dia(s) calculado(s) com as regras antigas") e, a quem pode, mostra **Recalcular**. O recálculo da noite refaz sozinho os últimos 31 dias; para dias mais antigos (ex.: o início de setembro), carrega uma vez em **Recalcular** em Avaliação → Mês. Setembro e outubro não contam para prémios: os prémios começam em novembro.
 - Recolha = check-in feito. Entrega = check-out feito.
 - Cada vez que um carro muda de sítio, a app Multipark grava duas linhas: o **início** e o **fim**. Só o fim conta. "Parque" é a **garagem** (PD, PD FORA, COBERTO, Central…).
   - **Levar ao parque**: o carro foi arrumado (ainda não tinha garagem), por exemplo logo a seguir à recolha. Vale +5.
   - **Movimento entre parques**: o carro mudou de garagem (ex.: PD → COBERTO). Vale +2.
   - **Mudança de lugar**: o carro ficou na mesma garagem, só mudou de lugar (ex.: PD 26/3 → PD 70/1). Não é movimento. Vale +1.
-- **Atraso à entrada**: a entrada no ponto foi depois da hora da escala. Conta no máximo **1 por dia** e vale −5.
-- **Entrega atrasada** (−5 cada):
-  - O pedido de entrega chegou **antes** da hora marcada, ou à hora: conta como atrasada se for feita mais de **15 minutos** depois da **hora marcada**.
-  - O pedido chegou **depois** da hora marcada (ex.: voo atrasado): conta como atrasada se for feita mais de **30 minutos** depois do **pedido**. Os 30 minutos incluem a viagem até ao terminal.
-  - A entrega não tem hora marcada: conta como atrasada se for feita mais de **30 minutos** depois do pedido. Essas entregas aparecem numa nota ("N entrega(s) sem hora marcada: medidas pelo pedido + 30 min").
+- **Atraso ao trabalho** (−5): a entrada no ponto foi **5 minutos ou mais** depois da hora da escala. Contam minutos inteiros: numa escala das 03:00, entrar às 03:04:59 não é atraso; às 03:05:00 já é (−5), e às 03:10 também. Conta no máximo **1 por dia**. Vale para **todos os que têm horário**: nos dias em que a pessoa está na escala do Extras-Dia conta a hora da escala; nos outros, o **horário fixo** da ficha do RH (Horário; para os funcionários — os extras regem-se pela escala). Nos dias livres do horário, nas férias ou baixas registadas no RH, fora do contrato e nos **feriados** (os nacionais e o municipal da cidade da ficha) não há atraso pelo horário fixo; quem estiver escalado no Extras-Dia num feriado tem a hora da escala.
+- **Entrega atrasada: saiu**. Os tempos das entregas e das recolhas são da equipa, não de cada pessoa, e a hora marcada na ficha não conta para eles. Vale para todos os dias, também os de setembro e outubro (não são meses de prémios).
+  - Nos dias antigos a coluna das entregas atrasadas fica guardada, com o rótulo "(regra antiga)", mas já não tira pontos nem aparece nos ecrãs, no CSV nem nos filtros. Os **atrasos** que se veem são sempre só os atrasos ao trabalho.
+  - Os ajustes antigos de "entregas atrasadas" ficam no histórico do dia com "Sem efeito: regra retirada". Já não se pode ajustar nem contestar essa métrica.
+  - Um filtro guardado com "Entregas atrasadas" perde só essa parte, e o ecrã avisa ("N partes do filtro deixaram de existir").
 - **Excesso de velocidade** (−10): os alertas de velocidade e as penalizações do RH e, além disso, **1 por dia** em que a velocidade máxima do GPS do Zello passou o limite. Se nesse dia (de calendário, ou no dia da avaliação) já houver um alerta, o GPS não conta outra vez. Se não der para ler o limite, o GPS não conta e aparece um aviso.
-  - O limite está em **Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"**: **120 km/h com 10 % de tolerância (132 km/h)** por omissão. É um limite único, porque o Zello não diz em que estrada se vai.
+  - O limite está em **Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"**: **120 km/h, sem tolerância** por omissão (conta acima de 120). Antes eram 10 % de tolerância (132 km/h); quem tinha o valor antigo gravado passou para 0 % sozinho, e fica no histórico das Definições. É um limite único, porque o Zello não diz em que estrada se vai.
   - Desde 14 out 2026 a velocidade máxima do dia já não tem os **picos falsos** do GPS (pontos imprecisos, acima de 250 km/h ou um salto isolado) e, acima do limite, só conta um **excesso confirmado**: pontos seguidos acima dele (2 por omissão). Antes deitava-se fora tudo acima de 150 km/h.
   - Os dias de GPS recolhidos antes contam pela velocidade máxima antiga, até se voltarem a dividir (**Atividade diária → Histórico Diário → Forçar re-divisão**) e recalcular.
+  - **Trava do dia recolhido**: cada dia de GPS guarda o limite com que foi recolhido. Um dia só conta excesso acima do **maior** entre o limite de hoje e esse. Os dias recolhidos com o limite antigo (132) contam a **132** até serem re-divididos. Porquê: nesses dias, uma máxima entre 120 e 132 pode ser um ponto solto que nunca foi confirmado como excesso; contá-la a 120 inventava excessos. Na Atividade diária esse dia pode aparecer a vermelho (passou 120) sem tirar pontos.
 - **Reclamação confirmada** (−20, uma vez por reclamação e condutor): uma reclamação não convertida com pontos aplicados (na reclamação ou ao condutor), positivos ou negativos. Conta no dia em que a reclamação foi criada.
 - Início da recolha, pedido de entrega, início da entrega, alterações e criações aparecem na lista e contam como ações, mas não dão pontos.
+
+**Fecho do mês (antes de pagar os prémios)**
+- Em **Avaliação → Mês**, por cima do ranking, aparece **"Fechado até DD/MM/AAAA"** quando há meses fechados. Os dias até essa data **já não mudam**: o recálculo da noite, o **Recalcular**, os ajustes, anular ajustes, as contestações (criar, e aceitar com ajuste) e a re-divisão do GPS dos últimos 31 dias (Atividade diária) não lhes tocam. Recusar uma contestação, ou aceitá-la sem mexer nos números, continua a dar.
+- **Quem fecha**: o super admin e as pessoas da lista **Definições → Parâmetros → Pessoas → "Avaliação: quem fecha o mês"** (o super admin escolhe as contas). Para fechar:
+  1. Avaliação → **Mês**.
+  2. Na barra "Fecho do mês", escolhe o último dia a fechar (vem preenchido com o fim do mês anterior).
+  3. **Fechar até esta data** e confirma.
+- **Reabrir**: **Reabrir** (nada fechado) ou fechar até uma data mais cedo. Cada mudança fica no histórico das Definições, com quem e quando.
+- Só se fecha até ontem. Setembro e outubro não são meses de prémios: o primeiro fecho é o de **novembro, no início de dezembro**.
+- O fecho congela os **números**, não as **regras**: a pontuação calcula-se ao ler. Depois do primeiro fecho, qualquer mudança nos pontos ou nas regras tem de dizer **a partir de que dia vale**, senão mudava meses já pagos.
+- No detalhe de uma pessoa, os dias fechados têm a etiqueta **fechado** e não mostram Ajustar nem Contestar.
 
 **Quem vê o quê**
 São as permissões de Definições → Permissões, iguais no ecrã e no servidor, com as permissões por utilizador.

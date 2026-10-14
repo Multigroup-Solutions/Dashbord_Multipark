@@ -52,7 +52,8 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
   - **Ver por parque e garagem** abre a divisão antiga.
 - **Pendentes que se arrastam** e **Resumo da semana** contam só os pendentes da passagem: PDAs ainda com check-in e notas do team leader. Ocorrências, reclamações e perdidos não são da passagem e já não aparecem aqui. Os resumos de semanas anteriores, que ainda falavam deles, deixam de se mostrar; o próximo sai na segunda-feira.
 - Os que já passaram a hora de saída.
-- **Operações em curso**: a fazer check-in, em movimento, entrega pendente, à espera das malas, no local de entrega, a fazer check-out.
+- **Operações em curso** (com "desde" quando a hora existe): **Em recolha (cliente a caminho)** — o cliente ligou para a recolha; **Em movimento**; **Na fila** — o cliente ligou a pedir o carro (pendente); **Em entrega** — o condutor já pegou no carro e saiu do parque (a caminho do terminal ou lá à espera do cliente; sem GPS ao vivo não se sabe se já chegou); **No terminal** — só quando o condutor carregou em "Cheguei" nesta entrega (quase não se usa). **À espera das malas** aparece como etiqueta ao lado, quando é deste pedido.
+- Na lista **Entregas pendentes (na fila)** do rascunho só entram os carros **na fila**, com a hora do pedido: um carro em entrega já saiu do parque.
 - **Próximas entregas e recolhas** (4, 8, 12 ou 24 h) com voo e ETA do voo.
 - **Caixa do turno por fechar/validar** (caixa fechada, caixa validada, condutor validado).
 - **Bloqueios e horário de amanhã** dos parques. Às 02:30 "amanhã" ainda conta a partir da noite de ontem.

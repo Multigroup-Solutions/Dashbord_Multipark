@@ -118,7 +118,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
           <p className="text-muted-foreground">Reservas com toldo com check-in feito e sem movimento registado depois da receção.</p>
           {(draft.coveredCars?.list ?? []).map((b) => <p key={`cv${b.externalId}`}>{b.plate ?? "sem matrícula"} · {b.bookingNumber ?? b.externalId}{b.park ? ` · ${b.park}` : ""} · check-in {b.checkIn}</p>)}
         </Section>
-        <Section title="Entregas pendentes (sem check-out)" count={c.pendingDeliveries} failed={bad("pending deliveries")} link="/operacoes" linkLabel="operações" tone="bad">
+        <Section title="Entregas pendentes (na fila)" count={c.pendingDeliveries} failed={bad("pending deliveries")} link="/operacoes" linkLabel="operações" tone="bad">
           {draft.pendingDeliveries.map((b) => <p key={b.externalId}>{b.since} · {b.bookingNumber ?? b.externalId} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}</p>)}
         </Section>
         {/* 44b (Jorge, 7 out 2026): reclamações, perdidos e ocorrências saíram da passagem de turno — têm as páginas deles. */}
