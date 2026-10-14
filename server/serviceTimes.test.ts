@@ -184,6 +184,10 @@ describe("chamadas → reserva (§5.1)", () => {
     const r = matchCallToBooking({ calls: [call(R + 40 * MIN)], phones, anchorAt: R, fallbackAt: null, untilAt: R + 90 * MIN });
     expect(r.call).toBeNull();
     expect(r.flags).toContain("pedido_antes_da_chamada");
+    // o cliente ligou ANTES do pendente e voltou a ligar ("então?"): não é um pendente posto antes da chamada
+    const twice = matchCallToBooking({ calls: [call(R - 10 * MIN), call(R + 40 * MIN)], phones, anchorAt: R, fallbackAt: null, untilAt: R + 90 * MIN });
+    expect(twice.call?.at).toBe(R - 10 * MIN);
+    expect(twice.flags).not.toContain("pedido_antes_da_chamada");
   });
 });
 
@@ -292,6 +296,34 @@ describe("tempos das entregas (§2.3)", () => {
   });
 });
 
+describe("invariantes (ciclos aleatórios)", () => {
+  it("com tudo medido, Fila + Trânsito + Cliente = Total ao milissegundo; nunca um negativo; A ≥ S; Nosso = Fila + Trânsito", () => {
+    let x = 12345;
+    const rnd = (n: number) => { x = (x * 1103515245 + 12345) % 2147483648; return x % n; };
+    let full = 0;
+    for (let i = 0; i < 400; i++) {
+      const id = `inv${i}`;
+      const R0 = T("12:00") + rnd(600) * MIN;
+      const S0 = R0 + (rnd(80) - 20) * MIN; // às vezes antes do pendente
+      const E0 = Math.max(S0, R0) + (1 + rnd(90)) * MIN + rnd(60_000);
+      const events = [ev("PENDING_CHECKOUT", R0, { bookingId: id }), ev("CHECKING_OUT", S0, { bookingId: id }), ev("CHECK_OUT", E0, { bookingId: id })];
+      const c = buildDeliveryCycles(events).cycles[0];
+      const cl = rnd(3) === 0 ? null : call(R0 - rnd(60) * MIN - rnd(60_000));
+      const A0 = S0 - 5 * MIN + rnd(Math.max(1, E0 + 2 * MIN - S0 + 5 * MIN)); // às vezes antes de S, às vezes depois de E
+      const term = rnd(6) === 0 ? { parkExitAt: rnd(2) ? S0 - rnd(5) * MIN : null } : null;
+      const t = deliveryTimes({ cycle: c, call: cl, arrival: arrived(A0), inicioNoTerminal: term });
+      for (const k of ["queueMs", "transitMs", "customerMs", "ourMs", "totalMs"] as const) if (t[k] != null) expect(t[k]!, `${k} ${i}`).toBeGreaterThanOrEqual(0);
+      if (t.arrivedAt != null && t.startedAt != null) expect(t.arrivedAt).toBeGreaterThanOrEqual(t.startedAt);
+      if (t.queueStatus === "medido" && t.transitStatus === "medido" && t.customerStatus === "medido") {
+        full++;
+        expect(t.queueMs! + t.transitMs! + t.customerMs!, `invariante ${i}`).toBe(t.totalMs);
+        expect(t.ourMs).toBe(t.queueMs! + t.transitMs!);
+      }
+    }
+    expect(full).toBeGreaterThan(100);
+  });
+});
+
 describe("chegada: GPS e \"Cheguei\" (§4.4)", () => {
   const S = T("16:10"), E = T("16:40");
   it("o \"Cheguei\" só serve sem GPS e se for coerente; com os dois guarda-se a diferença", () => {
@@ -352,6 +384,20 @@ describe("condutor (§2.4, §4.2)", () => {
     expect(zelloOfAt(3, T("13:00"), ctx)).toEqual({ zello: "pda 12", source: "fixo" });
     // condutor sem Zello nenhum
     expect(zelloOfAt(99, T("16:00"), ctx)).toEqual({ zello: null, reason: "sem_zello" });
+  });
+
+  it("PDA com dois check-ins abertos (ninguém fez check-out): ganha o mais recente, seja qual for a ordem da lista", () => {
+    const a = { employeeId: 1, zello: "PDA 7", start: T("06:00"), end: null }; // manhã, ficou aberto
+    const b = { employeeId: 2, zello: "pda 7", start: T("15:00"), end: null }; // tarde
+    for (const checkins of [[a, b], [b, a]]) {
+      const ctx = { checkins, fixed: [{ employeeId: 1, zello: "joao", active: true }] };
+      expect(zelloHolderAt("PDA 7", T("16:00"), ctx)).toBe(2);
+      expect(zelloHolderAt("PDA 7", T("10:00"), ctx)).toBe(1);
+      expect(zelloOfAt(2, T("16:00"), ctx)).toEqual({ zello: "pda 7", source: "pda" });
+      // o da manhã já não tem o PDA às 16h: vale o Zello fixo dele
+      expect(zelloOfAt(1, T("16:00"), ctx)).toEqual({ zello: "joao", source: "fixo" });
+      expect(zelloOfAt(1, T("10:00"), ctx)).toEqual({ zello: "pda 7", source: "pda" });
+    }
   });
 });
 
@@ -460,6 +506,20 @@ describe("tempos das recolhas (§3.3)", () => {
     expect(pickupTimes({ cycle: other, call: null, checkingInAtTerminal: true, terminalExit: gpsExit(T("07:28")), roles, spotType: "uncovered", now })).toMatchObject({ customerStatus: "em_recolha_tardio" });
   });
 
+  it("\"em recolha\" tardio com chamada DEPOIS dele: o K tardio não conta (Cliente desde a chamada); chamada já depois do check-in não conta; T2 sem início → sem medição", () => {
+    const same = buildPickupCycles([ev("CHECKING_IN", T("07:19"), { bookingId: "s3", agentUserId: "u-cond" }), ev("CHECK_IN", T("07:20"), { bookingId: "s3", agentUserId: "u-cond" })])[0];
+    // chamada às 07:19:30 (dentro da janela K+5): o Cliente conta desde a chamada, não desde o K (marcado no terminal)
+    expect(pickupTimes({ cycle: same, call: call(T("07:19") + 30_000), terminalExit: gpsExit(T("07:28")), roles, spotType: "uncovered", now })).toMatchObject({ startSource: "chamada", customerMs: 30_000 });
+    // chamada às 07:22 (depois do check-in) → não é o pedido: sem medição
+    const late = pickupTimes({ cycle: same, call: call(T("07:22")), terminalExit: gpsExit(T("07:28")), roles, spotType: "uncovered", now });
+    expect(late).toMatchObject({ customerStatus: "em_recolha_tardio", customerMs: null, startSource: null });
+    // T2: sem início do cliente (o K é tardio e não há chamada) → sem medição, nunca "a tempo"
+    const t2 = pickupTimes({ cycle: same, call: null, terminalExit: gpsExit(T("07:28")), roles, spotType: "uncovered", now, t2: { arrival: { at: T("07:00"), alreadyThere: true }, targetMinutes: 15 } });
+    expect(t2).toMatchObject({ t2Status: "em_recolha_tardio", t2LateMs: null });
+    // o dia operacional continua a ser o do K (a hora de referência não se perde)
+    expect(t2.opDay).toBe("2026-10-12");
+  });
+
   it("Q4: a recolha no T2 é atrasada a partir de 15 min depois da chamada (omissão 15, editável)", () => {
     expect(DEFAULT_PICKUP_T2_TARGET_MINUTES).toBe(15);
     const c = base([], T("07:00"), "q4");
@@ -532,10 +592,12 @@ describe("Q7 — tempos por condutor (médias por período, comparadas com os co
   rows.push(row(9, 15, 1)); // só uma entrega: sem dados suficientes
   rows.push(row(7, 99, 2, { outcome: "cancelado" }), row(7, 99, 3, { voidedAt: "2026-05-01 00:00:00" }), row(7, 99, 4, { ourStatus: "aproximado" }));
   rows.push(row(7, 10, 5, { cityKey: "porto" }));
+  // portão aberto (o Jorge abriu-o depois da calibração); a cobertura do fixture passa os 60 %
+  const open = { gate: { ...DEFAULT_GPS_GATE, visible: true }, isSuperAdmin: false };
 
   it("médias e percentis por condutor, cidade e tipo de serviço; os colegas sem ele; diferença do p50", () => {
     expect(driverPeriodRange("6meses", "2026-09-30")).toEqual({ fromDay: "2026-04-02", toDay: "2026-09-30" });
-    const stats = driverTimeStats(rows, { metric: "nosso", fromDay: "2026-04-01", toDay: "2026-09-30" });
+    const stats = driverTimeStats(rows, { metric: "nosso", fromDay: "2026-04-01", toDay: "2026-09-30", gpsGate: open });
     const me = stats.find((s) => s.employeeId === 7 && s.cityKey === "lisboa")!;
     expect(me).toMatchObject({ serviceType: "t1", n: 40, enough: true });
     expect(me.p50Ms! / MIN).toBeGreaterThanOrEqual(20);
@@ -553,7 +615,7 @@ describe("Q7 — tempos por condutor (médias por período, comparadas com os co
   });
 
   it("canceladas, anuladas e não medidas não contam; sem separar por tipo de serviço; outro tempo (Cliente → quem fez o check-out)", () => {
-    const all = driverTimeStats(rows, { metric: "nosso", fromDay: "2026-01-01", toDay: "2026-12-31", byServiceType: false });
+    const all = driverTimeStats(rows, { metric: "nosso", fromDay: "2026-01-01", toDay: "2026-12-31", byServiceType: false, gpsGate: open });
     expect(all.find((s) => s.employeeId === 7 && s.cityKey === "lisboa")).toMatchObject({ serviceType: "todos", n: 40 });
     const fila = driverTimeStats(rows, { metric: "fila", fromDay: "2026-01-01", toDay: "2026-12-31" });
     expect(fila.find((s) => s.employeeId === 7 && s.cityKey === "lisboa")!.n).toBe(41); // + a do Nosso aproximado (a Fila está medida); sem a cancelada nem a anulada
@@ -565,12 +627,40 @@ describe("Q7 — tempos por condutor (médias por período, comparadas com os co
     expect(Object.entries(DRIVER_METRICS).filter(([, d]) => !d.gps).map(([k]) => k).sort()).toEqual(["ate_arrumado", "cliente_recolha", "fila", "p2"]);
   });
 
+  it("portão (§8.1) dentro das contas por condutor: sem portão = fechado; super admin vê \"em calibração\"; cobertura baixa = sem números; a Fila (sem GPS) vê-se sempre", () => {
+    const closed = driverTimeStats(rows, { metric: "nosso", fromDay: "2026-04-01", toDay: "2026-09-30" });
+    const me = closed.find((x) => x.employeeId === 7 && x.cityKey === "lisboa")!;
+    expect(me).toMatchObject({ n: 40, enough: true, p50Ms: null, meanMs: null, deltaP50Ms: null, gpsHidden: "Em calibração" });
+    expect(me.peers.p50Ms).toBeNull();
+    const sa = driverTimeStats(rows, { metric: "nosso", fromDay: "2026-04-01", toDay: "2026-09-30", gpsGate: { gate: null, isSuperAdmin: true } }).find((x) => x.employeeId === 7 && x.cityKey === "lisboa")!;
+    expect(sa.p50Ms).not.toBeNull();
+    expect(sa).toMatchObject({ gpsHidden: null, gpsLabel: "em calibração" });
+    // cobertura < 60 %: metade das entregas de Lisboa sem Trânsito medido
+    const thin = rows.map((r, i) => (i % 2 ? { ...r, transitStatus: "sem_zello", ourStatus: "sem_zello" } : r));
+    const low = driverTimeStats(thin, { metric: "nosso", fromDay: "2026-04-01", toDay: "2026-09-30", gpsGate: open }).find((x) => x.cityKey === "lisboa")!;
+    expect(low.p50Ms).toBeNull();
+    expect(low.gpsHidden).toMatch(/^Sem dados suficientes \(cobertura \d+ %, n = \d+\)$/);
+    // a Fila não depende do GPS: vê-se com o portão fechado
+    expect(driverTimeStats(rows, { metric: "fila", fromDay: "2026-04-01", toDay: "2026-09-30" }).find((x) => x.employeeId === 7 && x.cityKey === "lisboa")!.p50Ms).not.toBeNull();
+    // série: fechado → sem números
+    expect(driverTimeSeries(rows, { metric: "nosso", employeeId: 7, fromDay: "2026-04-01", toDay: "2026-05-31", bucket: "mes" })[0]).toMatchObject({ p50Ms: null, gpsHidden: "Em calibração" });
+  });
+
+  it("a Fila e o Nosso de um \"em entrega\" marcado por quem despacha (ou por um parceiro/sistema) não vão para ninguém", () => {
+    const r = { ...rows[0], startEmployeeId: 9 };
+    for (const st of ["condutor_por_confirmar", "condutor_fora_da_equipa", "condutor_desconhecido"]) {
+      expect(DRIVER_METRICS.fila.employee({ ...r, transitStatus: st }), st).toBeNull();
+      expect(DRIVER_METRICS.nosso.employee({ ...r, transitStatus: st }), st).toBeNull();
+    }
+    expect(DRIVER_METRICS.fila.employee({ ...r, transitStatus: "sem_zello" })).toBe(9);
+  });
+
   it("evolução por semana/mês para o gráfico, com os colegas nas mesmas cidades e tipos", () => {
-    const series = driverTimeSeries(rows, { metric: "nosso", employeeId: 7, fromDay: "2026-04-01", toDay: "2026-05-31", bucket: "mes" });
+    const series = driverTimeSeries(rows, { metric: "nosso", employeeId: 7, fromDay: "2026-04-01", toDay: "2026-05-31", bucket: "mes", gpsGate: open });
     expect(series.map((x) => x.period)).toEqual(["2026-04", "2026-05"]);
     expect(series[0].p50Ms! / MIN).toBeGreaterThanOrEqual(20);
     expect(series[0].peersP50Ms! / MIN).toBeLessThanOrEqual(17);
-    const weeks = driverTimeSeries(rows, { metric: "nosso", employeeId: 7, fromDay: "2026-04-01", toDay: "2026-04-30", bucket: "semana" });
+    const weeks = driverTimeSeries(rows, { metric: "nosso", employeeId: 7, fromDay: "2026-04-01", toDay: "2026-04-30", bucket: "semana", gpsGate: open });
     expect(weeks[0].period).toBe("2026-03-30"); // a segunda-feira da semana de 1 abr
     expect(driverPeriodRange("semana", "2026-10-14")).toEqual({ fromDay: "2026-10-08", toDay: "2026-10-14" });
     expect(driverPeriodRange("mes", "2026-10-14").fromDay).toBe("2026-09-15");

@@ -540,7 +540,9 @@ export function matchCallToBooking(o: {
   } else if (mine.some((c) => c.at < from && c.at >= from - CALL_OUTSIDE_LOOKBACK_MIN * 60_000)) {
     flags.push("chamada_fora_da_janela");
   }
-  if (o.anchorAt != null) {
+  // só quando o cliente NÃO ligou antes do pendente: uma 2.ª chamada ("então?") depois de
+  // uma 1.ª antes do pendente não é um pendente posto antes da chamada (auditoria final)
+  if (o.anchorAt != null && (hit == null || hit.at > o.anchorAt)) {
     const until = o.untilAt ?? o.anchorAt + MAX_QUEUE_MIN * 60_000;
     if (mine.some((c) => c.at > o.anchorAt! + REQUEST_BEFORE_CALL_MIN * 60_000 && c.at <= until)) flags.push("pedido_antes_da_chamada");
   }
@@ -612,6 +614,12 @@ export interface PdaCheckinLike { employeeId: number; zello: string; start: numb
 export interface FixedZelloLike { employeeId: number; zello: string; active: boolean }
 
 const checkinEnd = (c: PdaCheckinLike) => c.end ?? c.start + PDA_OPEN_CHECKIN_MAX_HOURS * 3_600_000;
+/** O check-in que cobre o instante e começou mais tarde (o mais recente ganha). */
+function latestCovering(list: readonly PdaCheckinLike[], at: number): PdaCheckinLike | null {
+  let best: PdaCheckinLike | null = null;
+  for (const x of list) if (at >= x.start && at < checkinEnd(x) && (!best || x.start > best.start)) best = x;
+  return best;
+}
 
 /**
  * Quem tinha um Zello num instante: o check-in de PDA que o cobre (um aberto
@@ -621,7 +629,10 @@ const checkinEnd = (c: PdaCheckinLike) => c.end ?? c.start + PDA_OPEN_CHECKIN_MA
 export function zelloHolderAt(zello: string, at: number, o: { checkins: readonly PdaCheckinLike[]; fixed: readonly FixedZelloLike[] }): number | null {
   const k = zelloKey(zello);
   if (!k) return null;
-  const c = o.checkins.find((x) => zelloKey(x.zello) === k && at >= x.start && at < checkinEnd(x));
+  // Um check-in que ficou aberto (ninguém fez check-out) acaba no check-in seguinte do
+  // mesmo PDA: com dois a cobrir o instante, ganha o MAIS RECENTE (auditoria final —
+  // antes ganhava o 1.º da lista, e a lista da BD não tem ordem).
+  const c = latestCovering(o.checkins.filter((x) => zelloKey(x.zello) === k), at);
   if (c) return c.employeeId;
   const owners = new Set(o.fixed.filter((f) => f.active && zelloKey(f.zello) === k).map((f) => f.employeeId));
   return owners.size === 1 ? [...owners][0] : null;
@@ -633,8 +644,13 @@ export function zelloHolderAt(zello: string, at: number, o: { checkins: readonly
  * pode estar, nesse instante, num PDA com o check-in de outra pessoa. PURA.
  */
 export function zelloOfAt(employeeId: number, at: number, o: { checkins: readonly PdaCheckinLike[]; fixed: readonly FixedZelloLike[] }): { zello: string; source: "pda" | "fixo" } | { zello: null; reason: "sem_zello" } {
-  const c = o.checkins.find((x) => x.employeeId === employeeId && at >= x.start && at < checkinEnd(x));
-  if (c && zelloKey(c.zello)) return { zello: zelloKey(c.zello), source: "pda" };
+  // o PDA dela que cobre o instante e que, nesse instante, é mesmo dela (um check-in
+  // aberto dela acaba quando outra pessoa faz check-in no mesmo PDA)
+  const mineNow = o.checkins
+    .filter((x) => x.employeeId === employeeId && zelloKey(x.zello) && at >= x.start && at < checkinEnd(x))
+    .sort((a, b) => b.start - a.start)
+    .find((x) => zelloHolderAt(x.zello, at, o) === employeeId);
+  if (mineNow) return { zello: zelloKey(mineNow.zello), source: "pda" };
   const own = o.fixed.find((f) => f.employeeId === employeeId && f.active && zelloKey(f.zello));
   if (!own) return { zello: null, reason: "sem_zello" };
   const k = zelloKey(own.zello);
@@ -974,10 +990,19 @@ export function pickupTimes(o: {
   const K = c.checkingIn?.at ?? null;
   const C = o.call?.at ?? null;
   const I = c.checkIn?.at ?? null;
+  // "Em recolha" < 2 min antes do check-in, marcado por quem fez o check-in (ou já no
+  // terminal): esse K não é quando o cliente pediu — não serve de início (nem do Cliente,
+  // nem da referência do T2); só a chamada, se houver (§3.3; auditoria final: antes, com
+  // a chamada DEPOIS do K, o K tardio ainda contava e dava um Cliente de ~0).
+  const lateMark = K != null && I != null && I - K < LATE_PICKUP_MARK_MIN * 60_000
+    && ((!!c.checkingIn?.agentUserId && c.checkingIn.agentUserId === c.checkIn?.agentUserId) || !!o.checkingInAtTerminal);
+  const Kuse = lateMark ? null : K;
+  // uma chamada já depois do check-in não é o pedido do cliente
+  const Cuse = C != null && (I == null || C <= I) ? C : null;
   let K0: number | null = null;
   let startSource: PickupStartSource | null = null;
-  if (C != null && (K == null || C < K)) { K0 = C; startSource = "chamada"; } else if (K != null) { K0 = K; startSource = "em_recolha"; }
-  const refAt = K0 ?? I ?? c.anchor.at;
+  if (Cuse != null && (Kuse == null || Cuse < Kuse)) { K0 = Cuse; startSource = "chamada"; } else if (Kuse != null) { K0 = Kuse; startSource = "em_recolha"; }
+  const refAt = K0 ?? K ?? I ?? c.anchor.at;
   const base = {
     outcome: c.outcome, callAt: C, callSource: o.call?.source ?? null, callHeld: o.call ? o.call.held : null,
     requestAt: K, requestCount: c.checkingInCount, customerStartAt: K0, startSource, checkInAt: I,
@@ -992,11 +1017,8 @@ export function pickupTimes(o: {
   // Cliente (chamada / em recolha → check-in)
   let customerMs: number | null = null;
   let customerStatus: string;
-  const lateMark = K != null && I - K < LATE_PICKUP_MARK_MIN * 60_000
-    && ((!!c.checkingIn?.agentUserId && c.checkingIn.agentUserId === c.checkIn?.agentUserId) || !!o.checkingInAtTerminal);
   if (lateMark) addFlag(flags, "em_recolha_tardio");
-  if (K0 == null) customerStatus = "sem_em_recolha";
-  else if (lateMark && C == null) customerStatus = "em_recolha_tardio";
+  if (K0 == null) customerStatus = lateMark ? "em_recolha_tardio" : "sem_em_recolha";
   else {
     customerMs = Math.max(0, I - K0);
     customerStatus = over(customerMs, MAX_PICKUP_CUSTOMER_MIN) ? "fora_dos_limites" : "medido";
@@ -1060,7 +1082,7 @@ export function pickupTimes(o: {
   let t2DriverArrivedAt: number | null = null, t2LateMs: number | null = null;
   let t2Status = "nao_aplicavel";
   if (o.t2) {
-    if (K0 == null) t2Status = "sem_em_recolha";
+    if (K0 == null) t2Status = lateMark ? "em_recolha_tardio" : "sem_em_recolha";
     else if ("status" in o.t2.arrival) t2Status = o.t2.arrival.status;
     else {
       t2DriverArrivedAt = o.t2.arrival.at;
@@ -1182,11 +1204,19 @@ export interface DriverMetricDef {
 
 const measured = (v: number | null | undefined, st: string | null | undefined) => (st === "medido" && v != null && Number.isFinite(v) ? v : null);
 
+/**
+ * O "em entrega" não foi marcado pelo condutor (quem despacha, parceiro, sistema,
+ * agente por ligar): a Fila e o Nosso dessa entrega não são de ninguém (auditoria
+ * final — antes iam para a ficha do TL que despachou).
+ */
+const START_NOT_DRIVER = new Set<string>(["condutor_por_confirmar", "condutor_fora_da_equipa", "condutor_desconhecido"]);
+const startDriverOf = (r: DriverRowLike) => (r.transitStatus && START_NOT_DRIVER.has(r.transitStatus) ? null : r.startEmployeeId);
+
 /** Cada tempo e o condutor a quem pertence. */
 export const DRIVER_METRICS: Record<DriverMetric, DriverMetricDef> = {
-  fila: { kind: "entrega", label: "Fila (até pegar no carro)", employee: (r) => r.startEmployeeId, value: (r) => measured(r.queueMs, r.queueStatus), gps: false },
-  transito: { kind: "entrega", label: "Trânsito (até chegar ao terminal)", employee: (r) => r.startEmployeeId, value: (r) => measured(r.transitMs, r.transitStatus), gps: true },
-  nosso: { kind: "entrega", label: "Nosso tempo (Fila + Trânsito)", employee: (r) => r.startEmployeeId, value: (r) => measured(r.ourMs, r.ourStatus), gps: true },
+  fila: { kind: "entrega", label: "Fila (até pegar no carro)", employee: startDriverOf, value: (r) => measured(r.queueMs, r.queueStatus), gps: false },
+  transito: { kind: "entrega", label: "Trânsito (até chegar ao terminal)", employee: startDriverOf, value: (r) => measured(r.transitMs, r.transitStatus), gps: true },
+  nosso: { kind: "entrega", label: "Nosso tempo (Fila + Trânsito)", employee: startDriverOf, value: (r) => measured(r.ourMs, r.ourStatus), gps: true },
   cliente: { kind: "entrega", label: "Espera pelo cliente (entrega)", employee: (r) => r.deliverEmployeeId, value: (r) => measured(r.customerMs, r.customerStatus), gps: true },
   terminal: { kind: "recolha", label: "No terminal (tirar o carro)", employee: (r) => r.driverEmployeeId, value: (r) => measured(r.terminalMs, r.terminalStatus), gps: true },
   ate_garagem: { kind: "recolha", label: "Até à 1.ª garagem", employee: (r) => r.driverEmployeeId, value: (r) => (r.terminalStatus === "medido" ? r.toFirstGarageMs ?? null : null), gps: true },
@@ -1229,20 +1259,54 @@ export interface DriverStat {
   peers: { drivers: number; n: number; meanMs: number | null; p50Ms: number | null };
   /** p50 dele − p50 dos colegas (só com os dois n suficientes). */
   deltaP50Ms: number | null;
+  /**
+   * Tempo com GPS (§8.1): `null` = pode mostrar-se; senão o texto a pôr no lugar
+   * dos números ("Em calibração", "Sem dados suficientes (…)"). Para o super admin
+   * com o portão fechado os números vêm, com `gpsLabel` "em calibração".
+   */
+  gpsHidden: string | null;
+  gpsLabel: string | null;
+}
+
+/** Quem pede os números e o portão em vigor (`serviceTimes.gpsGate`). */
+export interface DriverGpsGate { gate: GpsGate | null | undefined; isSuperAdmin: boolean }
+
+const eligible = (r: DriverRowLike, def: DriverMetricDef, fromDay: string, toDay: string) =>
+  r.kind === def.kind && !r.voidedAt && r.outcome !== "cancelado" && r.opDay >= fromDay && r.opDay <= toDay;
+
+/**
+ * O portão de um tempo com GPS numa cidade e período (§8.1): cobertura = % das
+ * entregas (ou recolhas) da cidade no período com este tempo medido; n = quantas.
+ * Tempos sem GPS → sempre visíveis. PURA.
+ */
+export function driverGateFor(rows: readonly DriverRowLike[], o: { metric: DriverMetric; cityKey: string | null; fromDay: string; toDay: string; gpsGate?: DriverGpsGate | null }): { visible: boolean; label: string | null } {
+  const def = DRIVER_METRICS[o.metric];
+  if (!def.gps) return { visible: true, label: null };
+  let total = 0, n = 0;
+  for (const r of rows) {
+    if (!eligible(r, def, o.fromDay, o.toDay) || (r.cityKey ?? null) !== o.cityKey) continue;
+    total++;
+    const v = def.value(r);
+    if (v != null && Number.isFinite(v)) n++;
+  }
+  // sem portão indicado = o fechado e quem não é super admin: ninguém se esquece dele
+  return gpsTimesVisible({ coveragePct: total ? (n / total) * 100 : 0, n, gate: o.gpsGate?.gate ?? DEFAULT_GPS_GATE, isSuperAdmin: !!o.gpsGate?.isSuperAdmin });
 }
 
 /**
  * Médias e percentis de UM tempo por condutor num período, ao lado dos
- * colegas da mesma cidade e do mesmo tipo de serviço. Linhas anuladas e
- * canceladas não contam; só tempos medidos. PURA.
+ * colegas da mesma cidade e do mesmo tipo de serviço (sem ele). Linhas
+ * anuladas e canceladas não contam; só tempos medidos; abaixo de `minN`
+ * medições não há número. Os tempos com GPS passam pelo portão (§8.1) por
+ * cidade e período — sem `gpsGate`, fechado. Só informação: não dá pontos. PURA.
  */
-export function driverTimeStats(rows: readonly DriverRowLike[], o: { metric: DriverMetric; fromDay: string; toDay: string; minN?: number; byServiceType?: boolean }): DriverStat[] {
+export function driverTimeStats(rows: readonly DriverRowLike[], o: { metric: DriverMetric; fromDay: string; toDay: string; minN?: number; byServiceType?: boolean; gpsGate?: DriverGpsGate | null }): DriverStat[] {
   const def = DRIVER_METRICS[o.metric];
   const minN = o.minN ?? DRIVER_STATS_MIN_N;
   const byType = o.byServiceType !== false;
   const items: Array<{ emp: number; group: string; city: string | null; type: string; v: number }> = [];
   for (const r of rows) {
-    if (r.kind !== def.kind || r.voidedAt || r.outcome === "cancelado" || r.opDay < o.fromDay || r.opDay > o.toDay) continue;
+    if (!eligible(r, def, o.fromDay, o.toDay)) continue;
     const emp = def.employee(r), v = def.value(r);
     if (emp == null || v == null || !Number.isFinite(v)) continue;
     const type = byType ? r.terminalClass ?? "unknown" : "todos";
@@ -1250,19 +1314,30 @@ export function driverTimeStats(rows: readonly DriverRowLike[], o: { metric: Dri
   }
   const groups = new Map<string, typeof items>();
   for (const it of items) { const l = groups.get(it.group) ?? []; l.push(it); groups.set(it.group, l); }
+  const gateByCity = new Map<string, { visible: boolean; label: string | null }>();
+  const gateOf = (city: string | null) => {
+    const k = city ?? "";
+    let g = gateByCity.get(k);
+    if (!g) { g = driverGateFor(rows, { metric: o.metric, cityKey: city, fromDay: o.fromDay, toDay: o.toDay, gpsGate: o.gpsGate }); gateByCity.set(k, g); }
+    return g;
+  };
   const out: DriverStat[] = [];
   for (const list of groups.values()) {
     const emps = [...new Set(list.map((x) => x.emp))];
+    const gate = gateOf(list[0].city);
     for (const emp of emps) {
       const mine = list.filter((x) => x.emp === emp).map((x) => x.v);
       const others = list.filter((x) => x.emp !== emp);
       const me = statsOf(mine), peers = statsOf(others.map((x) => x.v));
       const enough = me.n >= minN;
+      const show = gate.visible;
+      const peersOk = show && peers.n >= minN;
       out.push({
         employeeId: emp, cityKey: list[0].city, serviceType: list[0].type, n: me.n, enough,
-        meanMs: enough ? me.meanMs : null, p50Ms: enough ? me.p50Ms : null, p75Ms: enough ? me.p75Ms : null,
-        peers: { drivers: new Set(others.map((x) => x.emp)).size, n: peers.n, meanMs: peers.n >= minN ? peers.meanMs : null, p50Ms: peers.n >= minN ? peers.p50Ms : null },
-        deltaP50Ms: enough && peers.n >= minN && me.p50Ms != null && peers.p50Ms != null ? Math.round(me.p50Ms - peers.p50Ms) : null,
+        meanMs: show && enough ? me.meanMs : null, p50Ms: show && enough ? me.p50Ms : null, p75Ms: show && enough ? me.p75Ms : null,
+        peers: { drivers: new Set(others.map((x) => x.emp)).size, n: peers.n, meanMs: peersOk ? peers.meanMs : null, p50Ms: peersOk ? peers.p50Ms : null },
+        deltaP50Ms: show && enough && peersOk && me.p50Ms != null && peers.p50Ms != null ? Math.round(me.p50Ms - peers.p50Ms) : null,
+        gpsHidden: show ? null : gate.label, gpsLabel: show ? gate.label : null,
       });
     }
   }
@@ -1280,26 +1355,46 @@ function bucketOf(day: string, bucket: "semana" | "mes"): string {
 /**
  * A evolução de um condutor (por semana ou mês) para o gráfico: em cada
  * período, o p50 dele e o dos colegas nas MESMAS cidades e tipos de serviço
- * em que ele trabalhou nesse período. Sem n mínimo → sem número. PURA.
+ * em que ele trabalhou nesse período. Sem n mínimo → sem número. Tempos com
+ * GPS: as cidades com o portão fechado nesse período saem das contas; sem
+ * nenhuma aberta, sem números e `gpsHidden` com o porquê. PURA.
  */
-export function driverTimeSeries(rows: readonly DriverRowLike[], o: { metric: DriverMetric; employeeId: number; fromDay: string; toDay: string; bucket: "semana" | "mes"; minN?: number }): Array<{ period: string; n: number; p50Ms: number | null; meanMs: number | null; peersN: number; peersP50Ms: number | null }> {
+export function driverTimeSeries(rows: readonly DriverRowLike[], o: { metric: DriverMetric; employeeId: number; fromDay: string; toDay: string; bucket: "semana" | "mes"; minN?: number; gpsGate?: DriverGpsGate | null }): Array<{ period: string; n: number; p50Ms: number | null; meanMs: number | null; peersN: number; peersP50Ms: number | null; gpsHidden: string | null }> {
   const def = DRIVER_METRICS[o.metric];
   const minN = o.minN ?? Math.max(3, Math.round(DRIVER_STATS_MIN_N / 2));
-  const per = new Map<string, { mine: number[]; groups: Set<string>; all: Array<{ emp: number; group: string; v: number }> }>();
+  type Item = { emp: number; city: string; group: string; v: number };
+  const per = new Map<string, { items: Item[]; cov: Map<string, { total: number; n: number }> }>();
   for (const r of rows) {
-    if (r.kind !== def.kind || r.voidedAt || r.outcome === "cancelado" || r.opDay < o.fromDay || r.opDay > o.toDay) continue;
-    const emp = def.employee(r), v = def.value(r);
-    if (emp == null || v == null || !Number.isFinite(v)) continue;
+    if (!eligible(r, def, o.fromDay, o.toDay)) continue;
     const k = bucketOf(r.opDay, o.bucket);
-    const b = per.get(k) ?? { mine: [], groups: new Set<string>(), all: [] };
-    const group = `${r.cityKey ?? ""}|${r.terminalClass ?? "unknown"}`;
-    b.all.push({ emp, group, v });
-    if (emp === o.employeeId) { b.mine.push(v); b.groups.add(group); }
-    per.set(k, b);
+    let b = per.get(k);
+    if (!b) { b = { items: [], cov: new Map() }; per.set(k, b); }
+    const city = r.cityKey ?? "";
+    const v = def.value(r);
+    const measuredHere = v != null && Number.isFinite(v);
+    const c = b.cov.get(city) ?? { total: 0, n: 0 };
+    c.total++;
+    if (measuredHere) c.n++;
+    b.cov.set(city, c);
+    const emp = def.employee(r);
+    if (emp != null && measuredHere) b.items.push({ emp, city, group: `${city}|${r.terminalClass ?? "unknown"}`, v: v! });
   }
   return [...per.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([period, b]) => {
-    const me = statsOf(b.mine);
-    const peers = statsOf(b.all.filter((x) => x.emp !== o.employeeId && b.groups.has(x.group)).map((x) => x.v));
-    return { period, n: me.n, p50Ms: me.n >= minN ? me.p50Ms : null, meanMs: me.n >= minN ? me.meanMs : null, peersN: peers.n, peersP50Ms: peers.n >= minN ? peers.p50Ms : null };
+    const mineAll = b.items.filter((x) => x.emp === o.employeeId);
+    // portão (§8.1) por cidade e período: as cidades fechadas saem das contas (dele e dos colegas)
+    let gpsHidden: string | null = null;
+    const visibleCities = new Set<string>();
+    for (const city of new Set(mineAll.map((x) => x.city))) {
+      if (!def.gps) { visibleCities.add(city); continue; }
+      const c = b.cov.get(city) ?? { total: 0, n: 0 };
+      const g = gpsTimesVisible({ coveragePct: c.total ? (c.n / c.total) * 100 : 0, n: c.n, gate: o.gpsGate?.gate ?? DEFAULT_GPS_GATE, isSuperAdmin: !!o.gpsGate?.isSuperAdmin });
+      if (g.visible) visibleCities.add(city); else gpsHidden ??= g.label;
+    }
+    const mine = mineAll.filter((x) => visibleCities.has(x.city));
+    const groups = new Set(mine.map((x) => x.group));
+    const me = statsOf(mine.map((x) => x.v));
+    const peers = statsOf(b.items.filter((x) => x.emp !== o.employeeId && groups.has(x.group)).map((x) => x.v));
+    if (mine.length) gpsHidden = null;
+    return { period, n: mineAll.length, p50Ms: me.n >= minN ? me.p50Ms : null, meanMs: me.n >= minN ? me.meanMs : null, peersN: peers.n, peersP50Ms: peers.n >= minN ? peers.p50Ms : null, gpsHidden };
   }).filter((x) => x.n > 0);
 }
