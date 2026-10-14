@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GARAGE_ZONE_RADIUS_M, G_GOOD_S, G_WEAK_S, R_SIGNATURE_M, V_WALK_KMH, effectiveParkZones, kindOfGarageName,
-  arrivalZoneFor, detectExit, detectStop, insideZone, lastZoneArrival, mapLinkCoords, median, p2TerminalConflicts, p2ZoneOf,
+  arrivalZoneFor, detectExit, detectStop, insideZone, lastZoneArrival, mapLinkCoords, mapLinkKind, median, p2TerminalConflicts, p2ZoneOf,
   parkZoneOverlaps, positionAt, startCoherence, terminalLabelOf, terminalZoneFor, unlabeledTerminalZones,
   type GpsFix, type ParkZonesMap, type Zone,
 } from "../shared/serviceGps";
@@ -57,6 +57,12 @@ describe("detectStop — paragem no destino (§4.4)", () => {
     if (ten.kind === "chegada") expect(ten.flags).toContain("precisao_fraca");
     const hole = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + MIN, 3500, 50), fix(S + MIN + 16 * MIN, 10, 0), fix(S + 25 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, park: PARK });
     expect(hole).toMatchObject({ kind: "sem_chegada", status: "buraco_no_gps" });
+    // dois pontos parados na zona com 10 min entre eles e a assinatura 25 min depois do último → chegou (precisão fraca), não "sem paragem"
+    const tenStay = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1800, 50), fix(S + 10 * MIN, 10, 0), fix(S + 20 * MIN, 10, 0)], startAt: S, endAt: S + 45 * MIN, zone: T2, park: PARK });
+    expect(tenStay).toMatchObject({ kind: "chegada", at: S + 7.5 * MIN });
+    // um só ponto devagar na zona e o seguinte, 10 min depois, fora a andar → passou (não chegou)
+    const pass = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1800, 50), fix(S + 10 * MIN, 10, 5), fix(S + 20 * MIN, 2500, 50), fix(S + 30 * MIN, 5000, 50)], startAt: S, endAt: S + 45 * MIN, zone: T2, park: PARK });
+    expect(pass).toMatchObject({ kind: "sem_chegada", status: "sem_paragem" });
     // espaçados (8 min) e já parados na zona: a chegada conta desde o 1.º ponto parado (não do último)
     const sparse = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 4 * MIN, 2000, 50), fix(S + 12 * MIN, 10, 0), fix(S + 20 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, park: PARK });
     expect(sparse).toMatchObject({ kind: "chegada", at: S + 8 * MIN, precisionS: 240 });
@@ -119,6 +125,15 @@ describe("detectStop — paragem no destino (§4.4)", () => {
     expect(detectStop({ points: [fix(S - 30 * MIN, 0, 0)], startAt: S, endAt: E, zone: T2 })).toMatchObject({ kind: "sem_chegada", status: "sem_pontos" });
     expect(startCoherence(at(T2, 3600, 100), PARK, null)).toBe("ok");
     expect(startCoherence(at(T2, 3600, 800), PARK, null)).toBe("duvidosa");
+  });
+
+  it("coerência com pontos espaçados: o ponto mais perto de S é de 4 min depois, já a 3 km (o carro a andar) → não é `gps_nao_bate`; a 15 km logo a seguir a S → é", () => {
+    // sem ponto até 6 min antes de S; o 1.º depois de S, 4 min depois, já a meio caminho
+    const moving = [fix(S + 4 * MIN, 600, 50), fix(S + 7 * MIN, 150, 30), fix(S + 9 * MIN, 20, 0), fix(S + 12 * MIN, 20, 0)];
+    expect(detectStop({ points: moving, startAt: S, endAt: E, zone: T2, park: PARK, startRow: PARK })).toMatchObject({ kind: "chegada" });
+    const far = [fix(S + 30_000, 18_000, 0), fix(S + 5 * MIN, 18_000, 0), fix(S + 10 * MIN, 18_100, 30)];
+    expect(detectStop({ points: far, startAt: S, endAt: E, zone: T2, park: PARK, startRow: PARK })).toMatchObject({ kind: "sem_chegada", status: "gps_nao_bate" });
+    expect(startCoherence(at(T2, 3600, 1500), PARK, null, 240 * 15)).toBe("ok");
   });
 
   it("chegada já depois da assinatura (> 60 s) → `chegada_depois_da_assinatura`; até 60 s → a própria assinatura", () => {
@@ -236,6 +251,35 @@ describe("zonas da operação (P5: operations.parkZones)", () => {
     expect(unlabeledTerminalZones({ lisbon: { ...airports.lisbon, zones: [T1, { lat: 1, lng: 2, radiusM: 100, label: "Chegadas" }] } })).toEqual([{ city: "lisbon", index: 1, label: "Chegadas" }]);
   });
 
+  it("links reais do Google Maps: o pino (!3d!4d) antes do centro do ecrã (@); q=, query=, ll=, /place/, /search/, embed, geo:", () => {
+    // "/place/…/@centro do ecrã…/data=…!3d<pino>!4d<pino>": vale o pino (o @ pode estar a centenas de metros)
+    expect(mapLinkCoords("https://www.google.com/maps/place/Multipark+P2/@38.7801,-9.1250,17z/data=!3m1!4b1!4m6!3m5!1s0xd1932b5:0x9a!8m2!3d38.7812345!4d-9.1234567!16s%2Fg%2F11")).toEqual({ lat: 38.7812345, lng: -9.1234567 });
+    // sítio com graus/minutos no nome do lugar: o pino na mesma
+    expect(mapLinkCoords("https://www.google.com/maps/place/38%C2%B046'52.4%22N+9%C2%B007'24.4%22W/@38.7812,-9.1235,17z/data=!4m4!3m3!8m2!3d38.781222!4d-9.123444")).toEqual({ lat: 38.781222, lng: -9.123444 });
+    expect(mapLinkCoords("https://www.google.com/maps/@38.7712,-9.1301,17z")).toEqual({ lat: 38.7712, lng: -9.1301 });
+    expect(mapLinkCoords("https://maps.google.com/?q=38.77,-9.13")).toEqual({ lat: 38.77, lng: -9.13 });
+    expect(mapLinkCoords("https://www.google.com/maps?q=loc:38.77%2C-9.13&z=17")).toEqual({ lat: 38.77, lng: -9.13 });
+    expect(mapLinkCoords("https://www.google.com/maps/search/?api=1&query=38.7712,+-9.1301")).toEqual({ lat: 38.7712, lng: -9.1301 });
+    expect(mapLinkCoords("https://www.google.com/maps/search/38.7712,+-9.1301?entry=ttu")).toEqual({ lat: 38.7712, lng: -9.1301 });
+    expect(mapLinkCoords("https://www.google.com/maps/place/38.7712,-9.1301")).toEqual({ lat: 38.7712, lng: -9.1301 });
+    expect(mapLinkCoords("https://www.google.com/maps/dir/?api=1&destination=41.2481,-8.6814")).toEqual({ lat: 41.2481, lng: -8.6814 });
+    expect(mapLinkCoords("https://maps.apple.com/?ll=37.0144,-7.9659&q=Faro")).toEqual({ lat: 37.0144, lng: -7.9659 });
+    // incorporar (iframe): !2d<lng>!3d<lat>
+    expect(mapLinkCoords("https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3111.2!2d-9.1301!3d38.7712!2m3!1f0!2f0!3f0")).toEqual({ lat: 38.7712, lng: -9.1301 });
+    expect(mapLinkCoords("geo:38.7712,-9.1301?z=17")).toEqual({ lat: 38.7712, lng: -9.1301 });
+    // só o nome do sítio, link curto, lixo, 0,0
+    expect(mapLinkCoords("https://www.google.com/maps/place/Multipark+Lisboa")).toBeNull();
+    expect(mapLinkCoords("https://maps.app.goo.gl/AbCdEf123")).toBeNull();
+    expect(mapLinkCoords("https://www.google.com/maps/@0,0,3z")).toBeNull();
+    expect(mapLinkCoords(null)).toBeNull();
+    // que link é (o editor diz o que fazer): os curtos não se abrem no servidor
+    expect(mapLinkKind("https://maps.app.goo.gl/AbCdEf123")).toBe("curto");
+    expect(mapLinkKind("https://goo.gl/maps/AbCdEf")).toBe("curto");
+    expect(mapLinkKind("https://www.google.com/maps/place/Multipark+Lisboa")).toBe("sem_coordenadas");
+    expect(mapLinkKind(" ")).toBe("sem_link");
+    expect(mapLinkKind("https://www.google.com/maps/@38.77,-9.13,17z")).toBe("coordenadas");
+  });
+
   it("\"Sugerir\": coordenadas do link do mapa e mediana", () => {
     expect(mapLinkCoords("https://www.google.com/maps/place/x/@38.7712,-9.1301,17z")).toEqual({ lat: 38.7712, lng: -9.1301 });
     expect(mapLinkCoords("https://maps.google.com/?q=38.77,-9.13")).toEqual({ lat: 38.77, lng: -9.13 });
@@ -262,6 +306,8 @@ describe("Q6 — zonas a partir das garagens da Multipark, com exceções", () =
     expect(r.zones.lisbon.map((z) => [z.label, z.kind, z.radiusM, z.source])).toEqual([["P2", "p2", DEFAULT_GARAGE_ZONE_RADIUS_M.p2, "multipark"], ["CENTRAL", "central", 200, "multipark"]]);
     expect(r.zones.porto).toHaveLength(1);
     expect(r.withoutCoords).toEqual([{ city: "lisbon", garage: "PD" }]);
+    // link curto: fica sem zona, e o porquê segue para o editor
+    expect(effectiveParkZones([{ garage: "P2", city: "lisbon", lat: null, lng: null, link: "curto" }], null).withoutCoords).toEqual([{ city: "lisbon", garage: "P2", link: "curto" }]);
   });
 
   it("exceções: só o raio, corrigir o centro, dar o centro a uma garagem sem coordenadas, zona só daqui; exceção sem centro e sem garagem → fora", () => {

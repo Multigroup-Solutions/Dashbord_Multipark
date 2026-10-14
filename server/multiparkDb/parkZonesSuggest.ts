@@ -20,7 +20,7 @@ import { type SqlParam } from "./client";
 import { ParamList } from "./read";
 import { MOVEMENT_PATTERNS } from "../../shared/multiparkMovements";
 import { resolveParkCity } from "../../shared/multiparkParks";
-import { kindOfGarageName, mapLinkCoords, type GarageCoord, type LatLng, type ParkZoneCity, type ParkZoneKind } from "../../shared/serviceGps";
+import { kindOfGarageName, mapLinkCoords, mapLinkKind, type GarageCoord, type LatLng, type ParkZoneCity, type ParkZoneKind } from "../../shared/serviceGps";
 import { matchKey } from "../../shared/textKey";
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -101,7 +101,8 @@ export function garageCoordsOf(garages: Array<Record<string, unknown>>, parks: A
     const park = cityOfPark.get(String(g.park_id ?? ""));
     if (!name || !park?.city) continue;
     const c = mapLinkCoords(str(g.map_link));
-    out.push({ garage: name, city: park.city, lat: c?.lat ?? null, lng: c?.lng ?? null, parkName: park.name });
+    // link curto (maps.app.goo.gl): o servidor não o abre — fica sem coordenadas e o editor diz como resolver
+    out.push({ garage: name, city: park.city, lat: c?.lat ?? null, lng: c?.lng ?? null, parkName: park.name, link: mapLinkKind(str(g.map_link)) });
   }
   return out;
 }

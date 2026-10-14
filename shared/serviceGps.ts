@@ -45,6 +45,12 @@ export const TERMINAL_ZONE_RADIUS_HINT_M = 200;
 export const D_PARK_OK_M = 500;
 export const D_START_ROW_OK_M = 300;
 export const D_MISMATCH_M = 1000;
+/**
+ * Folga da coerência por segundo entre o ponto usado e S (auditoria final): com
+ * pontos de 3–6 min, o ponto mais perto de S pode ser de minutos antes ou depois,
+ * com o carro já a andar — 15 m/s (54 km/h) de folga por segundo de distância a S.
+ */
+export const COHERENCE_SLACK_MPS = 15;
 /** "Em entrega" marcado no terminal sem GPS: a linha a ≥ isto do parque. */
 export const D_START_FAR_FROM_PARK_M = 1000;
 /** Saída de carro: a mais de raio + isto do centro (mesmo devagar). */
@@ -162,13 +168,14 @@ export function positionAt(points: readonly GpsFix[], at: number, maxBeforeS = G
  * linha "em entrega" (≤ 300 m) = ok; a mais de 1 km dos dois = `gps_nao_bate`;
  * no meio = `duvidosa`. Sem referências = ok. PURA.
  */
-export function startCoherence(pos: LatLng | null, park: LatLng | null | undefined, startRow: LatLng | null | undefined): "ok" | "duvidosa" | "gps_nao_bate" {
+export function startCoherence(pos: LatLng | null, park: LatLng | null | undefined, startRow: LatLng | null | undefined, slackM = 0): "ok" | "duvidosa" | "gps_nao_bate" {
   if (!pos) return "ok";
   const d = (c: LatLng | null | undefined) => (c && Number.isFinite(c.lat) && Number.isFinite(c.lng) ? distanceMeters(pos.lat, pos.lng, c.lat, c.lng) : null);
   const dp = d(park), dr = d(startRow);
+  const slack = Math.max(0, slackM);
   if (dp == null && dr == null) return "ok";
-  if ((dp != null && dp <= D_PARK_OK_M) || (dr != null && dr <= D_START_ROW_OK_M)) return "ok";
-  if ((dp == null || dp > D_MISMATCH_M) && (dr == null || dr > D_MISMATCH_M)) return "gps_nao_bate";
+  if ((dp != null && dp <= D_PARK_OK_M + slack) || (dr != null && dr <= D_START_ROW_OK_M + slack)) return "ok";
+  if ((dp == null || dp > D_MISMATCH_M + slack) && (dr == null || dr > D_MISMATCH_M + slack)) return "gps_nao_bate";
   return "duvidosa";
 }
 
@@ -190,8 +197,10 @@ export type StopResult =
  *     faz o 1.º ponto DEPOIS de S cair na zona é uma chegada rápida, não isto;
  *  2–3. candidatos = pontos dentro da zona a ≤ V_WALK, confirmados por (a)
  *     pontos densos parados na zona durante T_STOP_MIN, (b) o ponto seguinte
- *     (até T_CONFIRM) a ≤ V_WALK (dentro, ou fora a pé), ou (c) ser o último
- *     ponto antes da assinatura, a ≤ 20 min dela. Passar pela zona a andar não conta;
+ *     (até T_CONFIRM) a ≤ V_WALK (dentro, ou fora a pé) — ou ainda dentro e
+ *     devagar até G_WEAK —, ou (c) ser o último ponto antes da assinatura, a
+ *     ≤ 20 min dela. Passar pela zona a andar não conta. A coerência da posição
+ *     em S tem folga pelo tempo entre o ponto e S (COHERENCE_SLACK_MPS);
  *  4. nenhum → `sem_paragem` (ou `gps_parado`, se nunca se afastou 500 m);
  *  5. A = meio do intervalo se o ponto anterior ia a andar (nunca antes de S),
  *     senão o próprio ponto; intervalo > G_WEAK → `buraco_no_gps`, > G_GOOD → `precisao_fraca`;
@@ -220,7 +229,8 @@ export function detectStop(o: {
     return { kind: "inicio_no_terminal", flags };
   }
   const pos0 = q ?? after[0];
-  const coh = startCoherence({ lat: pos0.lat as number, lng: pos0.lon as number }, o.park, o.startRow);
+  // a folga cresce com a distância no tempo entre o ponto e S (o carro pode já ir a andar)
+  const coh = startCoherence({ lat: pos0.lat as number, lng: pos0.lon as number }, o.park, o.startRow, (Math.abs(ms(pos0) - S) / 1000) * COHERENCE_SLACK_MPS);
   if (coh === "gps_nao_bate") return { kind: "sem_chegada", status: "gps_nao_bate", flags };
   if (coh === "duvidosa") flags.push("posicao_duvidosa");
 
@@ -234,7 +244,10 @@ export function detectStop(o: {
     const win = rest.filter((x) => ms(x) <= t + T_STOP_MIN_S * 1000);
     const dense = win.length > 0 && win.every((x) => insideZone(x, z) && x.speed <= V_WALK_KMH);
     const nx = rest[0];
-    const nextOk = !!nx && ms(nx) - t <= T_CONFIRM_S * 1000 && nx.speed <= V_WALK_KMH;
+    // (b) o seguinte a ≤ V_WALK até T_CONFIRM (dentro, ou fora a pé); ou o seguinte AINDA DENTRO
+    // e devagar até G_WEAK (auditoria final: dois pontos parados na zona com 10 min entre eles
+    // davam "sem_paragem" — o intervalo fica na precisão)
+    const nextOk = !!nx && nx.speed <= V_WALK_KMH && (ms(nx) - t <= T_CONFIRM_S * 1000 || (insideZone(nx, z) && ms(nx) - t <= G_WEAK_S * 1000));
     const lastBeforeE = !rest.some((x) => ms(x) <= E) && E - t <= STOP_LAST_POINT_MAX_MIN * 60_000 && t <= E + AFTER_SIGNATURE_S * 1000;
     if (dense || nextOk || lastBeforeE) { hit = i; break; }
   }
@@ -388,8 +401,8 @@ export interface ParkZoneException {
 export type ParkZoneExceptionsMap = Record<ParkZoneCity, ParkZoneException[]>;
 export const DEFAULT_PARK_ZONES: ParkZoneExceptionsMap = { lisbon: [], porto: [], faro: [] };
 
-/** Uma garagem da Multipark com o centro tirado do `mapLink` (null = sem coordenadas). */
-export interface GarageCoord { garage: string; city: ParkZoneCity; lat: number | null; lng: number | null; parkName?: string | null }
+/** Uma garagem da Multipark com o centro tirado do `mapLink` (null = sem coordenadas; `link` diz porquê). */
+export interface GarageCoord { garage: string; city: ParkZoneCity; lat: number | null; lng: number | null; parkName?: string | null; link?: MapLinkKind }
 
 /** Tipo de zona pelo nome da garagem (P2 → p2, PD → pd, CENTRAL → central, COBERTO → coberto). PURA. */
 export function kindOfGarageName(name: string | null | undefined): ParkZoneKind {
@@ -411,9 +424,9 @@ export interface EffectiveParkZone extends ParkZone { source: EffectiveZoneSourc
  * uma zona manual; sem centro e sem garagem com coordenadas, fica de fora
  * (`withoutCoords`). PURA.
  */
-export function effectiveParkZones(garages: readonly GarageCoord[], exceptions: Partial<ParkZoneExceptionsMap> | null | undefined): { zones: Record<ParkZoneCity, EffectiveParkZone[]>; withoutCoords: Array<{ city: ParkZoneCity; garage: string }> } {
+export function effectiveParkZones(garages: readonly GarageCoord[], exceptions: Partial<ParkZoneExceptionsMap> | null | undefined): { zones: Record<ParkZoneCity, EffectiveParkZone[]>; withoutCoords: Array<{ city: ParkZoneCity; garage: string; link?: MapLinkKind }> } {
   const zones: Record<ParkZoneCity, EffectiveParkZone[]> = { lisbon: [], porto: [], faro: [] };
-  const withoutCoords: Array<{ city: ParkZoneCity; garage: string }> = [];
+  const withoutCoords: Array<{ city: ParkZoneCity; garage: string; link?: MapLinkKind }> = [];
   for (const city of PARK_ZONE_CITIES) {
     const exc = exceptions?.[city] ?? [];
     const used = new Set<number>();
@@ -427,7 +440,7 @@ export function effectiveParkZones(garages: readonly GarageCoord[], exceptions: 
       const e = i >= 0 ? exc[i] : null;
       if (i >= 0) used.add(i);
       const lat = e?.lat ?? g.lat, lng = e?.lng ?? g.lng;
-      if (lat == null || lng == null) { withoutCoords.push({ city, garage: g.garage }); continue; }
+      if (lat == null || lng == null) { withoutCoords.push({ city, garage: g.garage, ...(g.link ? { link: g.link } : {}) }); continue; }
       const kind = e?.kind ?? kindOfGarageName(g.garage);
       zones[city].push({
         label: e?.label ?? g.garage, kind, lat, lng, radiusM: e?.radiusM ?? DEFAULT_GARAGE_ZONE_RADIUS_M[kind],
@@ -498,13 +511,60 @@ export function p2ZoneOf(zones: Partial<ParkZonesMap> | null | undefined, city: 
 
 // ─── "Sugerir" (centros das zonas) ──────────────────────────────────────────
 
-/** Coordenadas num link de mapa ("@38.77,-9.13", "q=38.77,-9.13", "ll=…", "query=…"). PURA. */
+const LAT = String.raw`([+-]?\d{1,2}(?:\.\d+)?)`;
+const LNG = String.raw`([+-]?\d{1,3}(?:\.\d+)?)`;
+/** Separador entre a latitude e a longitude num link: vírgula (ou %2C), com espaços ("+", "%20") à volta. */
+const SEP = String.raw`(?:\s|\+|%20)*(?:,|%2C)(?:\s|\+|%20)*`;
+const okCoords = (lat: number, lng: number): LatLng | null =>
+  Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0) ? { lat, lng } : null;
+
+/**
+ * Coordenadas num link de mapa, pela ordem de confiança (o pino antes do centro
+ * do ecrã):
+ *  1. `!3d<lat>!4d<lng>` — o pino do sítio nos links "/place/…/data=…" (o "@"
+ *     desses links é o CENTRO DO ECRÃ, que pode estar a centenas de metros);
+ *  2. `!2d<lng>!3d<lat>` — os links de "incorporar" (`/maps/embed?pb=…`);
+ *  3. `q=`, `query=`, `ll=`, `sll=`, `center=`, `destination=`, `daddr=` (também
+ *     `q=loc:…`), e `geo:lat,lng`;
+ *  4. `/place/lat,lng`, `/search/lat,lng`, `/dir/…/lat,lng`;
+ *  5. `@lat,lng` (centro do ecrã).
+ * Os links curtos (`maps.app.goo.gl/…`, `goo.gl/maps/…`) não têm coordenadas:
+ * só se abrem com rede, e o servidor não os abre (ver `mapLinkKind`). PURA.
+ */
 export function mapLinkCoords(link: string | null | undefined): LatLng | null {
-  const s = String(link ?? "");
-  const m = /@(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/.exec(s) ?? /[?&](?:q|ll|query|center|destination)=(-?\d{1,2}\.\d+)(?:,|%2C)\s*(-?\d{1,3}\.\d+)/i.exec(s);
-  if (!m) return null;
-  const lat = Number(m[1]), lng = Number(m[2]);
-  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+  const s = String(link ?? "").trim();
+  if (!s) return null;
+  const pin = /!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/.exec(s);
+  if (pin) return okCoords(Number(pin[1]), Number(pin[2]));
+  const embed = /!2d(-?\d{1,3}\.\d+)!3d(-?\d{1,2}\.\d+)/.exec(s);
+  if (embed) return okCoords(Number(embed[2]), Number(embed[1]));
+  const tries = [
+    new RegExp(String.raw`[?&](?:q|query|ll|sll|center|destination|daddr)=(?:loc:)?${LAT}${SEP}${LNG}(?![\d.])`, "i"),
+    new RegExp(String.raw`^geo:${LAT}${SEP}${LNG}(?![\d.])`, "i"),
+    new RegExp(String.raw`/(?:place|search|dir(?:/[^/?#]*)*)/${LAT}${SEP}${LNG}(?![\d.])`, "i"),
+    new RegExp(String.raw`@${LAT}${SEP}${LNG}(?![\d.])`),
+  ];
+  for (const re of tries) {
+    const m = re.exec(s);
+    if (m) { const c = okCoords(Number(m[1]), Number(m[2])); if (c) return c; }
+  }
+  return null;
+}
+
+export type MapLinkKind = "coordenadas" | "curto" | "sem_coordenadas" | "sem_link";
+
+/**
+ * Que link é (para o editor dizer o que fazer): com coordenadas; curto
+ * (`maps.app.goo.gl`, `goo.gl/maps`, `g.co/kgs` — só se abre com rede: o
+ * servidor NÃO o abre; quem edita abre-o no browser e cola o link completo, ou
+ * usa "Sugerir"); um link sem coordenadas (só o nome do sítio); ou nenhum. PURA.
+ */
+export function mapLinkKind(link: string | null | undefined): MapLinkKind {
+  const s = String(link ?? "").trim();
+  if (!s) return "sem_link";
+  if (mapLinkCoords(s)) return "coordenadas";
+  if (/^(?:https?:\/\/)?(?:maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs)\b/i.test(s)) return "curto";
+  return "sem_coordenadas";
 }
 
 /** Mediana (null sem valores). PURA. */

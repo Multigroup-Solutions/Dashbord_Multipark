@@ -47,7 +47,7 @@ const p2 = (lat: number, lng: number) => ({ lisbon: [{ label: "P2", kind: "p2", 
 beforeEach(() => { fake.enabled = false; fake.calls = []; fake.airports = airports; });
 
 describe("definições novas (§5.2, §5.3, §10)", () => {
-  it("omissões: zonas vazias, papéis do §5.3, meta 15, T2 10, desde 3 abr / 15 set, chamadas ligadas, briefing desligado, portão fechado", () => {
+  it("omissões: zonas vazias, papéis do §5.3, meta 15, T2 15 (Q4), desde 3 abr / 15 set, chamadas ligadas, briefing desligado, portão fechado", () => {
     expect(SETTINGS[PARK_ZONES_SETTING_KEY].defaultValue).toEqual({ lisbon: [], porto: [], faro: [] });
     expect(SETTINGS[GARAGE_ROLES_SETTING_KEY].defaultValue).toEqual(DEFAULT_GARAGE_ROLES);
     expect(SETTINGS["serviceTimes.targetMinutes"].defaultValue).toBe(15);
@@ -111,7 +111,11 @@ describe("\"Sugerir\" (centros das garagens, só leitura)", () => {
       [{ name: "P2", park_id: "pL", map_link: "https://www.google.com/maps/@38.776,-9.128,18z" }, { name: "PD", park_id: "pL", map_link: "https://maps.app.goo.gl/x" }, { name: "X", park_id: "?", map_link: null }],
       [{ id: "pL", name: "Airpark Lisboa", city: "Lisboa", lat: 38.79, lng: -9.11 }],
     );
-    expect(coords).toEqual([{ garage: "P2", city: "lisbon", lat: 38.776, lng: -9.128, parkName: "Airpark Lisboa" }, { garage: "PD", city: "lisbon", lat: null, lng: null, parkName: "Airpark Lisboa" }]);
+    // link curto (maps.app.goo.gl): o servidor não o abre → sem coordenadas, e o editor diz porquê
+    expect(coords).toEqual([
+      { garage: "P2", city: "lisbon", lat: 38.776, lng: -9.128, parkName: "Airpark Lisboa", link: "coordenadas" },
+      { garage: "PD", city: "lisbon", lat: null, lng: null, parkName: "Airpark Lisboa", link: "curto" },
+    ]);
     // admin vê a lista (só leitura); sem ligação à Multipark diz porquê
     const r = await caller("admin").settings.values.multiparkGarages();
     expect(r.available).toBe(false);

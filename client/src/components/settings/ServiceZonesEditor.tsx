@@ -18,8 +18,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { parkZonesConflictError } from "@shared/appSettings";
 import {
-  DEFAULT_GARAGE_ZONE_RADIUS_M, PARK_ZONE_KINDS, PARK_ZONE_KIND_LABELS, effectiveParkZones, kindOfGarageName, parkZoneOverlaps,
-  type EffectiveParkZone, type GarageCoord, type ParkZoneCity, type ParkZoneException, type ParkZoneExceptionsMap, type ParkZoneKind,
+  DEFAULT_GARAGE_ZONE_RADIUS_M, PARK_ZONE_KINDS, PARK_ZONE_KIND_LABELS, effectiveParkZones, kindOfGarageName, mapLinkCoords, parkZoneOverlaps,
+  type EffectiveParkZone, type GarageCoord, type MapLinkKind, type ParkZoneCity, type ParkZoneException, type ParkZoneExceptionsMap, type ParkZoneKind,
 } from "@shared/serviceGps";
 import { matchKey } from "@shared/textKey";
 import { GARAGE_ROLES, GARAGE_ROLE_LABELS, type GarageRole } from "@shared/serviceTimes";
@@ -43,6 +43,13 @@ const KIND_COLOR: Record<ParkZoneKind, string> = {
   outra: "#64748B",
 };
 const TERMINAL_COLOR = "#0E2957";
+/** Porque é que uma garagem da Multipark ficou sem zona (o que fazer). */
+const NO_COORDS_TEXT: Record<MapLinkKind, string> = {
+  curto: "o link do mapa é curto (maps.app.goo.gl) e não traz as coordenadas — abre-o no browser, copia o link completo e cola-o em \"Dar o centro\" → \"Link do mapa\" (ou usa \"Sugerir centros\")",
+  sem_coordenadas: "o link do mapa não traz coordenadas (só o nome do sítio)",
+  sem_link: "a garagem não tem link do mapa na Multipark",
+  coordenadas: "sem coordenadas",
+};
 const SOURCE_LABEL: Record<EffectiveParkZone["source"], string> = {
   multipark: "Multipark",
   multipark_ajustada: "Multipark, ajustada aqui",
@@ -155,6 +162,7 @@ export function ParkZonesEditor({ draft, onChange, locked, airports, parks }: {
   parks: ParkPoint[];
 }) {
   const [city, setCity] = useState<ParkZoneCity>("lisbon");
+  const [linkError, setLinkError] = useState<number | null>(null);
   const base = trpc.settings.values.multiparkGarages.useQuery(undefined, { staleTime: 5 * 60_000, retry: false });
   const suggest = trpc.settings.values.parkZonesSuggest.useQuery(undefined, { enabled: false, retry: false, staleTime: 5 * 60_000 });
   const garages: GarageCoord[] = base.data?.available ? base.data.garages : [];
@@ -162,7 +170,7 @@ export function ParkZonesEditor({ draft, onChange, locked, airports, parks }: {
   const value = useMemo(() => usableExceptions(parkZonesFromDraft(draft)), [draft]);
   const eff = useMemo(() => effectiveParkZones(garages, value), [garages, value]);
   const setExceptions = (list: ParkZoneDraft[]) => onChange({ ...draft, [city]: list });
-  const patch = (i: number, p: Partial<ParkZoneDraft>) => setExceptions(exceptions.map((z, j) => (j === i ? { ...z, ...p } : z)));
+  const patch = (i: number, p: Partial<ParkZoneDraft>) => { setLinkError(null); setExceptions(exceptions.map((z, j) => (j === i ? { ...z, ...p } : z))); };
   const excIndexFor = (garage: string) => exceptions.findIndex((e) => matchKey(e.label) === matchKey(garage) || e.garages.split(/[,;]+/).some((g) => matchKey(g) === matchKey(garage)));
   const adjust = (garage: string, p: Partial<ParkZoneDraft> = {}) => {
     const i = excIndexFor(garage);
@@ -242,7 +250,7 @@ export function ParkZonesEditor({ draft, onChange, locked, airports, parks }: {
           <div key={`n${w.garage}`} className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-xs last:border-0">
             <AlertTriangle className="h-3.5 w-3.5 text-amber-600" aria-hidden />
             <span className="font-semibold">{w.garage}</span>
-            <span className="text-muted-foreground">sem coordenadas na Multipark (o link do mapa não as tem) — fica sem zona</span>
+            <span className="text-muted-foreground">sem zona: {NO_COORDS_TEXT[w.link ?? "sem_coordenadas"]}</span>
             <Button size="sm" variant="ghost" className="ml-auto h-7 rounded-[10px] text-xs text-primary" disabled={locked}
               onClick={() => adjust(w.garage, { kind: kindOfGarageName(w.garage) === "outra" ? "" : kindOfGarageName(w.garage) })}>
               <Plus className="mr-1 h-3.5 w-3.5" />Dar o centro
@@ -304,6 +312,18 @@ export function ParkZonesEditor({ draft, onChange, locked, airports, parks }: {
                 <Button variant="ghost" size="icon" className="ml-auto h-8 w-8 rounded-[10px]" disabled={locked} aria-label={`Tirar a exceção ${z.label || i + 1}`}
                   onClick={() => setExceptions(exceptions.filter((_, j) => j !== i))}><Trash2 className="h-3.5 w-3.5" /></Button>
               </div>
+              <label className="mt-2 block space-y-1 text-[11px] text-muted-foreground">
+                <span>Link do mapa (opcional): cola o link completo do Google Maps e o centro preenche-se</span>
+                <Input key={`link-${i}-${z.lat}-${z.lng}`} className="h-8 rounded-[10px] text-xs" inputMode="url" placeholder="https://www.google.com/maps/place/…" disabled={locked}
+                  aria-label={`${CITY_LABEL[city]} — exceção ${i + 1} link do mapa`} defaultValue=""
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    const c = v ? mapLinkCoords(v) : null;
+                    if (c) patch(i, { lat: txt(c.lat), lng: txt(c.lng) });
+                    else setLinkError(v && (/^https?:\/\//i.test(v) || v.length > 30) ? i : null);
+                  }} />
+                {linkError === i && <span className="block text-amber-700 dark:text-amber-300">Esse link não traz coordenadas (um link curto só as mostra depois de aberto no browser).</span>}
+              </label>
               <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-[1fr_1fr_7rem_2fr]">
                 {([["lat", "Latitude", fromMultipark ? "a da Multipark" : "38,7712"], ["lng", "Longitude", fromMultipark ? "a da Multipark" : "-9,1301"], ["radiusM", "Raio (m)", String(DEFAULT_GARAGE_ZONE_RADIUS_M[kind])]] as const).map(([k, label, ph]) => (
                   <label key={k} className="space-y-1 text-[11px] text-muted-foreground">
