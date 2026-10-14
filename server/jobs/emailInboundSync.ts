@@ -37,6 +37,7 @@ import {
   getSystemUserId,
   findComplaintByClientSignals,
   findOpenLostFoundByClient,
+  getLostFoundItemById,
   findComplaintByThread,
   findOpenComplaintBySubject,
   findOpenComplaintByBookingRef,
@@ -277,8 +278,60 @@ async function routeToModule(
       // Lote 57: de onde veio (filtro "Origem"). A IA criada por uma pessoa (sugestão aceite) fica dela.
       origin: ai ? "ia" : "email",
       createdById: ai?.actorId ?? null,
+      // 14 out 2026: certeza média → "Por confirmar (IA)" (arquivar tira-a; nada se apaga).
+      ...(ai?.uncertain ? { aiUnconfirmed: 1 } : {}),
     } as any);
     return { targetModule: "complaint", targetId: id, isNew: true };
+  }
+
+  if (alias === "perdidos" && ctx.aiIntake) {
+    // 14 out 2026 — email de OUTRA caixa que a IA viu como objeto perdido.
+    // Junta só pelo próprio caso desta conversa, pelo email do cliente ou —
+    // sinal fraco — pela matrícula quando o caso é do mesmo email (ou não tem
+    // nenhum). Nunca escreve ao cliente; uma resposta nunca abre outro caso.
+    const ai = ctx.aiIntake;
+    const sameClientLf = <T extends { clientEmail?: string | null } | null | undefined>(c: T): T | null =>
+      c && aiMergeSameClient(c.clientEmail, clientEmail) ? c : null;
+    const forced = ai.forceLostFoundId ? await getLostFoundItemById(ai.forceLostFoundId) : null;
+    const existing = forced
+      || (clientEmail ? await findOpenLostFoundByClient(clientEmail, null) : null)
+      || (parsed.vehiclePlate ? sameClientLf(await findOpenLostFoundByClient(null, parsed.vehiclePlate)) : null);
+    if (ai.replyOnly && !existing) return { targetModule: "ignored" };
+    if (existing) {
+      await addLostFoundMessage({
+        itemId: existing.id,
+        userId: await getSystemUserId(),
+        userName: clientName,
+        message: `📧 ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
+        isInternal: 0,
+      } as any);
+      if (!existing.bookingRef) {
+        try { await autoLinkLostFoundBooking(existing.id); } catch { /* best-effort */ }
+      }
+      return { targetModule: "lostfound", targetId: existing.id, isNew: false };
+    }
+    const lfMatch = await matchBookingForComplaint({
+      reservationRef: parsed.bookingRef, vehiclePlate: parsed.vehiclePlate, clientEmail, clientPhone: parsed.clientPhone, clientName,
+    });
+    const b = lfMatch?.booking ?? null;
+    const openComplaint = clientEmail ? await findComplaintByClientSignals(clientEmail, null, null) : null;
+    const id = await createLostFoundItem({
+      clientName,
+      clientEmail: clientEmail ?? (b?.clientEmail || undefined),
+      clientPhone: parsed.clientPhone ?? (b?.clientPhone || undefined),
+      vehiclePlate: parsed.vehiclePlate ?? (b?.licensePlate || undefined),
+      bookingRef: parsed.bookingRef ?? (b?.externalId || undefined),
+      projectId: b?.projectId ?? ai.projectId ?? undefined,
+      relatedComplaintId: openComplaint?.id ?? undefined,
+      itemType: "other",
+      description: desc || "(sem descrição)",
+      status: "new",
+      priority: "medium",
+      createdBy: ai.actorId ?? await getSystemUserId(),
+      origin: "ia",
+      ...(ai.uncertain ? { aiUnconfirmed: 1 } : {}),
+    } as any);
+    return { targetModule: "lostfound", targetId: id ?? undefined, isNew: true };
   }
 
   if (alias === "perdidos") {
@@ -334,8 +387,9 @@ async function routeToModule(
       status: "new",
       priority: "medium",
       createdBy: await getSystemUserId(),
+      origin: "email",
     } as any);
-    return { targetModule: "lostfound", targetId: id ?? undefined };
+    return { targetModule: "lostfound", targetId: id ?? undefined, isNew: true };
   }
 
   // ocorrencias → já NÃO cria ocorrências (incidents). As ocorrências vivem
@@ -516,6 +570,7 @@ export interface InboundEmailInput {
    * reclamação (server/complaintMailIntake.ts). Sem aviso de receção ao
    * cliente; só junta a uma reclamação pela conversa, email/matrícula do
    * cliente ou mesma reserva (nunca só pelo nome/assunto); origem "ia".
+   * 14 out 2026: também perdidos (alias "perdidos") e "Por confirmar".
    */
   aiIntake?: AiComplaintIntake | null;
 }
@@ -527,7 +582,11 @@ export interface AiComplaintIntake {
   projectId?: number | null;
   /** Resposta numa conversa já ligada: junta-se a ESTA reclamação e nunca cria outra. */
   forceComplaintId?: number | null;
+  /** 14 out 2026: o mesmo para um perdido que a IA ligou à conversa. */
+  forceLostFoundId?: number | null;
   replyOnly?: boolean;
+  /** 14 out 2026: certeza média → o caso nasce "Por confirmar (IA)". */
+  uncertain?: boolean;
 }
 
 export type InboundOutcome =
@@ -608,7 +667,7 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 
     const routed = await routeToModule(alias, parsed, {
       subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
-      aiIntake: alias === "reclamacoes" ? input.aiIntake ?? null : null,
+      aiIntake: alias === "reclamacoes" || alias === "perdidos" ? input.aiIntake ?? null : null,
     });
     routedOk = true;
 

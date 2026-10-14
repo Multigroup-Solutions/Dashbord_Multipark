@@ -42,6 +42,9 @@ export interface ParsedGmailMessage {
   replyTo: string | null;
   autoSubmitted: string | null;
   precedence: string | null;
+  /** 14 out 2026: envio em massa (List-Unsubscribe / List-Id) — newsletter pelos cabeçalhos, nunca pelo texto. */
+  listUnsubscribe?: string | null;
+  listId?: string | null;
   /** Email de sistema enviado pelo dashboard (cabeçalho X-Multipark-System). */
   systemMail: boolean;
   /** Tipo do envio automático (cabeçalho X-Multipark-Auto) ou null. */
@@ -137,6 +140,8 @@ export function parseGmailMessage(m: gmail_v1.Schema$Message, opts: { accountEma
     replyTo: extractAddresses(header(h, "Reply-To"))[0] ?? null,
     autoSubmitted: header(h, "Auto-Submitted"),
     precedence: header(h, "Precedence"),
+    listUnsubscribe: header(h, "List-Unsubscribe"),
+    listId: header(h, "List-Id"),
     systemMail: !!header(h, SYSTEM_MAIL_HEADER),
     autoKind: normalizeAutoMailKind(header(h, AUTO_MAIL_HEADER)),
     loginMail: !!header(h, LOGIN_MAIL_HEADER) && String(from.email ?? "").trim().toLowerCase() === LOGIN_CODE_SENDER,

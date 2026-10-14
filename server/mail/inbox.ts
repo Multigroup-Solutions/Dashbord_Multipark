@@ -595,6 +595,15 @@ async function resolveEntity(type: MailLinkType, raw: string): Promise<string> {
     if (!r) throw bad("Reserva não encontrada (usa a referência ou o nº da reserva).");
     return r.id;
   }
+  if (type === "occurrence") {
+    // Ao vivo na Multipark (só leitura), nas cidades de quem liga.
+    const { getMultiparkOccurrence } = await import("../multiparkDb/read");
+    const { scopedCityNamesLive } = await import("../cityScope");
+    const r = await getMultiparkOccurrence(id, scopedCityNamesLive());
+    if (!r.available) throw bad("Não foi possível confirmar a ocorrência (BD da Multipark sem resposta).");
+    if (!r.data) throw bad("Ocorrência não encontrada (ou fora da tua cidade).");
+    return r.data.id;
+  }
   const table = type === "complaint" ? sql`complaints` : type === "lost_found" ? sql`lost_found_items` : sql`incidents`;
   const r = rowsOf(await d.execute(sql`SELECT id FROM ${table} WHERE id = ${Number(id)} LIMIT 1`))[0];
   if (!r) throw bad("Registo não encontrado.");
@@ -935,6 +944,12 @@ export async function assertEntityInScope(type: MailLinkType, entityId: string):
     // A reserva (ao vivo) é de um parque das cidades de quem pede?
     const { liveBookingByRef } = await import("../multiparkDb/bookingSearch");
     ok = !!(await liveBookingByRef(entityId, { cities: "request" }).catch(() => null));
+  } else if (type === "occurrence") {
+    // A ocorrência da app Multipark (ao vivo, só leitura) é de um parque das cidades de quem pede?
+    const { getMultiparkOccurrence } = await import("../multiparkDb/read");
+    const { scopedCityNamesLive } = await import("../cityScope");
+    const r = await getMultiparkOccurrence(entityId, scopedCityNamesLive());
+    ok = r.available && !!r.data;
   } else {
     const table = type === "complaint" ? sql`complaints` : type === "lost_found" ? sql`lost_found_items` : sql`incidents`;
     ok = rowsOf(await d.execute(sql`SELECT 1 AS x FROM ${table} WHERE id = ${Number(entityId)} AND projectId ${inScope} LIMIT 1`)).length > 0;

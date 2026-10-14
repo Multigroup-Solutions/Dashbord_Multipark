@@ -76,6 +76,33 @@ export const settingsRouter = router({
     return schedulerStatus();
   }),
 
+  /**
+   * 14 out 2026 — "Testar a triagem" (só o super admin): um lote do corpus
+   * rotulado pelo MESMO pedido e decisão de produção, com o modelo real. Não
+   * escreve nada nos casos (só o custo da IA). O ecrã pede os lotes um a um.
+   */
+  mailTriageEval: protectedProcedure
+    .input(z.object({ offset: z.number().int().min(0).max(1000), limit: z.number().int().min(1).max(20) }))
+    .mutation(async ({ ctx, input }) => {
+      requireSuperAdmin(ctx.user.role);
+      const { evalTriageSlice } = await import("./mailTriageEval");
+      return evalTriageSlice({ offset: input.offset, limit: input.limit, concurrency: 4 });
+    }),
+  /** As contas finais (rótulos do servidor) e a linha "[triagem-eval]" nos logs. */
+  mailTriageEvalReport: protectedProcedure
+    .input(z.object({
+      rows: z.array(z.object({ id: z.string().min(1).max(40), predicted: z.string().max(40).nullable() })).max(500),
+      ms: z.number().int().min(0).max(3_600_000).nullish(),
+      model: z.string().max(120).nullish(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      requireSuperAdmin(ctx.user.role);
+      const { triageEvalReport } = await import("./mailTriageEval");
+      const r = triageEvalReport(input);
+      await log(ctx.user.id, "test", "mail_triage", `Testar a triagem: reclamações ${r.recallComplaints ?? "—"}, perdidos ${r.recallLostFound ?? "—"} (${r.correct}/${r.total})`);
+      return r;
+    }),
+
   /** IA: gasto do mês por funcionalidade (ai_usage_log), orçamento e modelos em uso. */
   aiUsage: adminOnly.query(async () => {
     const { aiUsageSummary } = await import("./_core/ai/usage");

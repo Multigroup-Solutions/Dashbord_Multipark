@@ -406,6 +406,7 @@ export async function notifyComplaintCreated(complaintId: number) {
       assignedToId: complaints.assignedToId,
       clientName: complaints.clientName,
       projectId: complaints.projectId,
+      aiUnconfirmed: complaints.aiUnconfirmed,
     })
     .from(complaints)
     .where(eq(complaints.id, complaintId))
@@ -416,7 +417,8 @@ export async function notifyComplaintCreated(complaintId: number) {
     kind: "complaint_new",
     projectId: c.projectId ?? null,
     alsoUserIds: await assigneeUserIds([c.assignedToId]),
-    title: `Nova reclamação: ${c.title}`,
+    // 14 out 2026: a IA criou-a com certeza média — quem abre sabe logo que é para confirmar.
+    title: `${Number(c.aiUnconfirmed ?? 0) === 1 ? "Reclamação por confirmar (IA)" : "Nova reclamação"}: ${c.title}`,
     body: `Tipo: ${c.complaintType} · Prioridade: ${c.complaintPriority}${c.clientName ? ` · Cliente: ${c.clientName}` : ""}`,
     link: `/reclamacoes?id=${complaintId}`,
     entity: { type: "complaint", id: complaintId },

@@ -26,6 +26,7 @@ import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
 import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
 import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
+import { MAIL_BACKFILL_DEFAULTS, mailBackfillSettingsSchema } from "./mailTriage";
 import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
 import { PERF_RANK_WEIGHTS_KEY, rankWeightsSchema } from "./peoplePerformance";
 
@@ -488,13 +489,24 @@ export const SETTINGS = {
     wiring: "live",
   }),
   // Lote 57 (Jorge, 12 out 2026): a IA vê uma reclamação num email de outra caixa → Reclamações.
+  // 14 out 2026: também os perdidos; a certeza média cria "Por confirmar (IA)" (já não fica só sugerida).
   "ai.mailComplaints": def({
     key: "ai.mailComplaints",
     group: "ia",
-    label: "IA: reclamações vistas noutras caixas — certeza para criar ou sugerir",
-    description: "Quando a IA que separa os emails diz que um email novo de outra caixa (info@, reservas@…) é uma reclamação: com certeza ≥ createMinConfidence a reclamação é criada (ou o email junta-se à aberta do mesmo cliente); entre suggestMinConfidence e isso fica só a sugestão \"Parece uma reclamação\" na página das Reclamações; abaixo, nada. JSON: {\"createMinConfidence\": 0.85, \"suggestMinConfidence\": 0.5}.",
+    label: "IA: reclamações e perdidos vistos nas caixas — certezas",
+    description: "Quando a IA vê uma reclamação (ou um objeto perdido) num email de uma caixa partilhada (info@, reservas@…): com certeza ≥ createMinConfidence o caso é criado (ou o email junta-se ao aberto do mesmo cliente); entre suggestMinConfidence e isso é criado na mesma, marcado \"Por confirmar (IA)\" (confirma-se ou arquiva-se — nada se apaga); abaixo, nada. JSON: {\"createMinConfidence\": 0.85, \"suggestMinConfidence\": 0.5}.",
     schema: complaintIntakeSettingsSchema,
     defaultValue: { ...COMPLAINT_INTAKE_DEFAULTS },
+    wiring: "live",
+  }),
+  // 14 out 2026 (Jorge: "tudo o que está na caixa de correio e é uma reclamação tem de ir para lá").
+  "ai.mailBackfill": def({
+    key: "ai.mailBackfill",
+    group: "ia",
+    label: "IA: rever os emails que já estão nas caixas — dias e lote",
+    description: "days: quantos dias para trás se revêem os emails das caixas partilhadas ainda sem caso (1 a 90); perRun: emails lidos pela IA em cada corrida de 15 em 15 min (1 a 20). Só com o interruptor «IA: rever os emails que já estão nas caixas» ligado. JSON: {\"days\": 30, \"perRun\": 6}.",
+    schema: mailBackfillSettingsSchema,
+    defaultValue: { ...MAIL_BACKFILL_DEFAULTS },
     wiring: "live",
   }),
   "ai.priceOverridesEur": def({
@@ -927,9 +939,20 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
   // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
-  { name: "AI_MAIL_ROUTING", label: "IA: separar emails e WhatsApp pelas caixas", description: "Os emails novos que chegam às caixas partilhadas (info@, reservas@, recursos-humanos@…; nunca as pessoais) e as conversas NOVAS do WhatsApp vão sozinhos para a caixa do tema: RH, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. Ficam por ler. O que a IA não percebe (ou se falhar) vai para o info (no WhatsApp, a Geral). Uma resposta numa conversa que já tem caixa não muda. Recrutamento em 1.º contacto cria a lead e a candidatura. Nunca responde a ninguém; mover à mão corrige.", group: "ia" },
+  // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
+  // 14 out 2026: lê pelo sentido; a falha não move nada; uma resposta só muda de caixa com um caso.
+  { name: "AI_MAIL_ROUTING", label: "IA: separar emails e WhatsApp pelas caixas", description: "A IA lê cada email recebido nas caixas partilhadas (info@, reservas@, recursos-humanos@…; nunca as pessoais) e as conversas NOVAS do WhatsApp, e decide pelo sentido do que a pessoa escreve (não por palavras soltas). Conversa nova → caixa do tema (RH, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação), por ler; lixo (publicidade, spam, respostas automáticas) fica onde está; o que não percebe vai para o info (no WhatsApp, a Geral). Se a IA falhar nada se mexe: fica por ler e volta a ser lida. Uma resposta numa conversa que já tem caixa só muda de caixa se trouxer uma reclamação ou um perdido. Recrutamento em 1.º contacto cria a lead e a candidatura. As reclamações, os perdidos, as críticas e as ocorrências têm interruptores próprios. Nunca responde a ninguém; mover à mão corrige e a IA não volta a mexer nessa conversa.", group: "ia" },
   // Lote 57 (Jorge, 12 out 2026: "se a IA vê que é uma reclamação, envia para lá") → ligado por omissão.
-  { name: "AI_MAIL_COMPLAINTS", label: "IA: reclamações que chegam a outras caixas vão para as Reclamações", description: "Usa a leitura da IA que separa os emails pelas caixas (precisa de «IA: separar emails e WhatsApp pelas caixas» ligado; não faz outra chamada à IA). Quando um email novo de outra caixa partilhada (info@, reservas@, cancelamentos…) é uma reclamação: com certeza alta cria a reclamação ou junta o email à reclamação aberta do mesmo cliente/reserva; com menos certeza fica a sugestão \"Parece uma reclamação → Criar reclamação\" na página das Reclamações. Uma conversa nunca dá duas reclamações. Nunca para emails internos, automáticos, newsletters, parceiros nem avisos de avaliações. O email fica na caixa onde chegou e NUNCA se responde ao cliente (sem aviso de receção). Na reclamação fica escrito que veio da IA, de que caixa e porquê. Certezas em Definições → Parâmetros → IA (ai.mailComplaints). Desligado: a IA continua a separar pelas caixas, mas não cria nem sugere reclamações.", group: "ia" },
+  // 14 out 2026: "tem de ficar automático" — certeza média cria "Por confirmar (IA)"; a conversa vai para as Reclamações.
+  { name: "AI_MAIL_COMPLAINTS", label: "IA: reclamações que chegam a outras caixas vão para as Reclamações", description: "Usa a leitura da IA das caixas (precisa de «IA: separar emails e WhatsApp pelas caixas»; não faz outra chamada à IA). Quando um email de uma caixa partilhada (info@, reservas@, cancelamentos…) é uma reclamação — também numa resposta, num reencaminhamento do backoffice ou escondida noutro pedido: cria a reclamação (origem IA) ou junta o email à aberta da mesma conversa, do mesmo cliente ou da mesma reserva, e a conversa vai para a caixa Reclamações, por ler. Com certeza média a reclamação nasce \"Por confirmar (IA)\": confirma-se ou arquiva-se (nada se apaga). Uma conversa nunca dá duas reclamações. Nunca para emails internos (salvo o reencaminhamento de um cliente), automáticos, envios em massa, parceiros nem avisos de avaliações. NUNCA se responde ao cliente (sem aviso de receção). Na reclamação fica escrito que veio da IA, de que caixa e porquê. Certezas em Definições → Parâmetros → IA (ai.mailComplaints). Desligado: a IA continua a separar pelas caixas, mas não cria reclamações.", group: "ia" },
+  // 14 out 2026 — o mesmo para os perdidos. Cria casos sozinha → desligado por omissão (o Jorge liga depois de ver).
+  { name: "AI_MAIL_LOST_FOUND", label: "IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados", description: "Como as reclamações, para os objetos perdidos (usa a mesma leitura da IA, sem outra chamada): quando um email de uma caixa partilhada diz que alguém deixou, perdeu ou esqueceu um objeto (no carro, no parque, no transfer), cria o caso nos Perdidos e Achados (origem IA) ou junta o email ao caso aberto do mesmo cliente, e a conversa vai para a caixa Perdidos, por ler. Com certeza média o caso nasce \"Por confirmar (IA)\". As respostas do cliente nessa conversa juntam-se ao caso. Uma conversa nunca dá dois casos. Nunca escreve ao cliente. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // 14 out 2026 — críticas e ocorrências por email: caixa própria e lidas. Muda o lido → desligado por omissão.
+  { name: "AI_MAIL_NOTICES", label: "IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas", description: "Avisos de avaliação (Google Business Profile, Trustpilot, Tripadvisor — reconhecidos pelo remetente) e elogios ou opiniões de clientes vão para a caixa Críticas e ficam LIDOS: a crítica entra nas Críticas pela API do Google ou pela criticas@ — daqui não se cria nada. Avisos de ocorrência da app Multipark (o formulário «Tipo de ocorrência / Matrícula») ligam-se à ocorrência da Multipark (só leitura, pela matrícula e pela hora), vão para a caixa Ocorrências e ficam lidos; se a ocorrência não estiver na app, ficam por ler. Relatos de ocorrências escritos por pessoas vão para as Ocorrências por ler. Lido também no Gmail. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // 14 out 2026 — rever o que já está nas caixas (cria casos sozinha) → desligado por omissão.
+  { name: "AI_MAIL_BACKFILL", label: "IA: rever os emails que já estão nas caixas", description: "De 15 em 15 min passa pela mesma triagem os emails recebidos nos últimos dias (30 por omissão; Definições → Parâmetros → IA, ai.mailBackfill) nas caixas partilhadas que ainda não têm caso: as reclamações e os perdidos que lá estejam abrem o caso (com os interruptores deles ligados) e a conversa vai para a caixa do caso; avisos de avaliação e de ocorrência ficam lidos (com o interruptor dos avisos). Não baralha as caixas de tema dos emails antigos. Cada email é lido uma vez; o que já tem caso e o que uma pessoa mexeu (moveu, corrigiu a IA, recusou, resolveu, arquivou) fica como está. Por lotes (6 emails por corrida, por omissão). Nunca escreve ao cliente. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // 14 out 2026 — reclamacoes@/perdidos@: só não abre o caso com a certeza da IA de que é lixo → desligado por omissão.
+  { name: "AI_MAIL_ALIAS_FILTER", label: "IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@", description: "Tudo o que chega à reclamacoes@ e à perdidos@ continua a abrir o caso (a reclamação com o aviso de receção, como sempre), salvo se a IA tiver a certeza (90 % ou mais) de que é lixo — publicidade, spam, resposta automática — e não vê reclamação nem perdido. Esse email fica na caixa, por ler, com a linha da IA a dizer porquê. Se a IA falhar ou não houver leitura nesta corrida, o caso abre na mesma. Desligado por omissão.", defaultEnabled: false, group: "ia" },
   { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
   { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
   { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },
@@ -996,6 +1019,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 60, workflow: "tick" },
   { name: "multipark-deliveries", label: "Fila do webhook Multipark (repescagem)", intervalMinutes: 60, workflow: "tick" },
   { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },
+  { name: "mail-backfill", label: "Comunicação: casos por criar e emails das caixas revistos pela IA", intervalMinutes: 15, workflow: "tick" },
   // Google por eventos: repetição de hora a hora, rede de segurança de 4 em 4 h, renovação diária dos canais.
   { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 60, workflow: "tick" },
   { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },

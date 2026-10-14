@@ -2135,6 +2135,18 @@ export const appRouter = router({
       await logActivity({ userId: ctx.user.id, action: "unarchive", entity: "complaint", entityId: input.id, details: "Reclamação tirada do arquivo" });
       return { success: true };
     }),
+    // 14 out 2026: a IA criou-a com certeza média ("Por confirmar (IA)") — uma
+    // pessoa confirma que é mesmo reclamação. Se não for, arquiva (nada se apaga).
+    confirmAi: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "edit");
+      const c = await getComplaintById(input.id);
+      if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
+      if (Number((c as any).aiUnconfirmed ?? 0) !== 1) return { success: true, already: true };
+      await updateComplaint(input.id, { aiUnconfirmed: 0 } as any);
+      await addComplaintMessage({ complaintId: input.id, isInternal: 1, authorId: ctx.user.id, authorName: ctx.user.name ?? null, message: `✅ Confirmada como reclamação por ${ctx.user.name ?? "—"} (a IA tinha-a criado por confirmar).` });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: input.id, details: "Reclamação da IA confirmada" });
+      return { success: true, already: false };
+    }),
     // "Isto afinal é um Perdido" — cria o caso nos Perdidos (dados, mensagens,
     // fotos, condutores) e FECHA a reclamação como 'converted', ligada nos
     // dois sentidos. Nada é apagado. Admin+.
@@ -2960,6 +2972,16 @@ export const appRouter = router({
       await addLostFoundMessage({ itemId: input.id, userId: ctx.user.id, userName: ctx.user.name ?? "—", message: `📂 Tirado do arquivo por ${ctx.user.name ?? "—"}.`, isInternal: 1 } as any);
       await logActivity({ userId: ctx.user.id, action: "unarchive", entity: "lost_found", entityId: input.id, details: "Perdido tirado do arquivo" });
       return { success: true };
+    }),
+    // 14 out 2026: a IA criou-o com certeza média ("Por confirmar (IA)") — uma pessoa confirma. Se não for, arquiva.
+    confirmAi: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "perdidos", "edit");
+      const item = await loadLostInScope(input.id);
+      if (Number((item as any).aiUnconfirmed ?? 0) !== 1) return { success: true, already: true };
+      await updateLostFoundItem(input.id, { aiUnconfirmed: 0 } as any);
+      await addLostFoundMessage({ itemId: input.id, userId: ctx.user.id, userName: ctx.user.name ?? "—", message: `✅ Confirmado por ${ctx.user.name ?? "—"} (a IA tinha-o criado por confirmar).`, isInternal: 1 } as any);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: input.id, details: "Perdido da IA confirmado" });
+      return { success: true, already: false };
     }),
 
     // Photos — URLs assinadas (temporárias), nunca a URL pública guardada.

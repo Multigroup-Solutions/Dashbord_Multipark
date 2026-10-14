@@ -1,26 +1,36 @@
 /**
  * Lote 57 (Jorge, 12 out 2026): "mesmo que o email não tenha ido para as
  * reclamações, se a IA vê que é uma reclamação, envia para lá" — regras PURAS.
+ * 14 out 2026: o mesmo para os PERDIDOS, e a certeza média já não fica só
+ * "sugerida": "tudo o que está na caixa de correio e é uma reclamação tem de
+ * ir para as Reclamações" (meta: > 90 % das reclamações e dos perdidos).
  *
- * A IA que separa os emails pelas caixas (#351, server/commsRouting.ts) lê a
- * mensagem que ABRE cada conversa nova numa caixa partilhada. Quando diz
- * "reclamacoes":
- *   - certeza ≥ `createMinConfidence` → a reclamação é criada (ou o email junta-
- *     se à reclamação aberta do mesmo cliente/reserva/conversa);
- *   - entre `suggestMinConfidence` e isso → fica só a sugestão "Parece uma
- *     reclamação → Criar reclamação" na página das Reclamações;
+ * A IA que lê os emails das caixas partilhadas (server/commsRouting.ts) dá a
+ * certeza de haver uma reclamação e a de haver um objeto perdido (mesmo dentro
+ * de outro pedido, numa resposta ou num reencaminhamento):
+ *   - certeza ≥ `createMinConfidence` → o caso é criado (ou o email junta-se
+ *     ao caso aberto da mesma conversa / cliente / reserva);
+ *   - entre `suggestMinConfidence` e isso → o caso é criado "Por confirmar
+ *     (IA)" (fácil de tirar: arquivar, nunca apagar);
  *   - abaixo → nada (fica registado porquê).
- * Nunca para emails internos, automáticos (newsletters, no-reply), de
- * parceiros, nem avisos de avaliações. Uma conversa = no máximo uma decisão
- * (`complaint_mail_intake.threadId` é UNIQUE). Nunca escreve ao cliente: sem
- * aviso de receção, sem resposta. O email fica na caixa onde está.
+ * Nunca para emails internos (salvo a empresa a reencaminhar um cliente),
+ * automáticos, de parceiros, envios em massa (pelos cabeçalhos) nem avisos de
+ * avaliações (pelo remetente) — nunca pelas palavras do texto. Uma conversa =
+ * no máximo um caso (`complaint_mail_intake.threadId` é UNIQUE). Nunca escreve
+ * ao cliente: sem aviso de receção, sem resposta.
  *
- * Interruptor próprio: AI_MAIL_COMPLAINTS (ligado por omissão, a pedido do Jorge).
+ * Interruptores: AI_MAIL_COMPLAINTS (reclamações, ligado por omissão a pedido
+ * do Jorge) e AI_MAIL_LOST_FOUND (perdidos, desligado por omissão).
  */
 import { z } from "zod";
 import { emailKey } from "./crmIdentity";
+import { isReviewNoticeSender, type MailCaseKind } from "./mailTriage";
 
 export const COMPLAINT_INTAKE_FLAG = "AI_MAIL_COMPLAINTS";
+/** 14 out 2026: os perdidos que a IA vê nas caixas partilhadas (desligado por omissão). */
+export const LOST_FOUND_INTAKE_FLAG = "AI_MAIL_LOST_FOUND";
+/** O interruptor de cada tipo de caso. */
+export const CASE_INTAKE_FLAG: Record<MailCaseKind, string> = { complaint: COMPLAINT_INTAKE_FLAG, lost_found: LOST_FOUND_INTAKE_FLAG };
 /** A caixa da IA que quer dizer "isto é uma reclamação". */
 export const COMPLAINT_INTAKE_BOX = "reclamacoes";
 
@@ -55,7 +65,7 @@ export const INTAKE_STATUS_LABELS: Record<IntakeStatus, string> = {
   failed: "Falhou ao criar",
 };
 
-export type IntakeSkipReason = "internal" | "automatic" | "partner" | "newsletter" | "review" | "personal" | "complaints_box" | "low_confidence" | "ignored_rule";
+export type IntakeSkipReason = "internal" | "automatic" | "partner" | "newsletter" | "review" | "personal" | "complaints_box" | "lost_box" | "low_confidence" | "ignored_rule";
 export const INTAKE_SKIP_LABELS: Record<IntakeSkipReason, string> = {
   internal: "email interno (remetente da empresa)",
   automatic: "email automático (no-reply, sistema, envio em massa)",
@@ -64,6 +74,7 @@ export const INTAKE_SKIP_LABELS: Record<IntakeSkipReason, string> = {
   review: "aviso de avaliação/crítica",
   personal: "caixa pessoal",
   complaints_box: "já entrou pela caixa das reclamações",
+  lost_box: "já entrou pela caixa dos perdidos",
   low_confidence: "a IA tinha pouca certeza",
   ignored_rule: "regra das reclamações (eco interno, auto-fatura ou aviso de reserva)",
 };
@@ -108,20 +119,13 @@ export function isPartnerSender(sender: string | null | undefined, partnerEmails
   return list.some((p) => domainOf(p) === d);
 }
 
-const NEWSLETTER_RE = /\b(unsubscribe|newsletter|cancelar (a )?subscri[cç][aã]o|anular (a )?subscri[cç][aã]o|deixar de receber (estes|os nossos|este tipo de) (e-?mails|emails|mensagens)|ver (este|o) e-?mail no (navegador|browser)|view (this email )?in (your )?browser|manage (your )?(email )?preferences|gerir (as )?(suas )?prefer[eê]ncias)\b/i;
-
-/** Newsletter / publicidade (texto típico de envio em massa). PURA. */
-export function looksLikeNewsletter(subject: string | null | undefined, text: string | null | undefined): boolean {
-  return NEWSLETTER_RE.test(`${subject ?? ""}\n${String(text ?? "").slice(0, 20_000)}`);
-}
-
-const REVIEW_SUBJECT_RE = /(nova|new) (avalia[cç][aã]o|cr[ií]tica|review)|deixou (uma|um) (avalia[cç][aã]o|cr[ií]tica|coment[aá]rio)|left a review|wrote a review|responder [àa] (avalia[cç][aã]o|cr[ií]tica)|trustpilot|google business profile/i;
-
-/** Aviso de uma avaliação (Google, Trustpilot…) — trata-se nas Críticas, não aqui. PURA. */
-export function looksLikeReviewNotice(subject: string | null | undefined, sender: string | null | undefined): boolean {
-  const from = String(sender ?? "").toLowerCase();
-  if (/@(google\.com|business\.google\.com|trustpilot\.com|tripadvisor\.[a-z.]+|booking\.com)$/.test(from)) return true;
-  return REVIEW_SUBJECT_RE.test(String(subject ?? ""));
+/**
+ * Aviso de uma avaliação (Google Business Profile, Trustpilot, Tripadvisor) —
+ * trata-se nas Críticas, não aqui. Pelo REMETENTE (nunca pelas palavras do
+ * assunto, 14 out 2026). PURA.
+ */
+export function looksLikeReviewNotice(_subject: string | null | undefined, sender: string | null | undefined): boolean {
+  return isReviewNoticeSender(sender);
 }
 
 // ─── Decisão ────────────────────────────────────────────────────────────────
@@ -141,40 +145,61 @@ export interface IntakeFacts {
   subject: string;
   text: string;
   senderEmail: string | null;
+  /** A empresa reencaminha a mensagem de alguém de fora (o caso pode nascer). */
+  forwardedExternal?: boolean;
+  /** Envio em massa pelos CABEÇALHOS (List-Unsubscribe/List-Id) — newsletter. */
+  listMail?: boolean;
 }
 
 export type IntakeDecision =
   /** A IA não disse "reclamação": nada a registar. */
   | { action: "ignore" }
-  | { action: "create" }
+  /** `uncertain` = certeza média → "Por confirmar (IA)". */
+  | { action: "create"; uncertain?: true }
   | { action: "suggest" }
   | { action: "skip"; why: IntakeSkipReason };
 
 /**
- * O que fazer com o veredicto da IA para a mensagem que abre a conversa. A
- * ordem conta: primeiro o que NUNCA é reclamação (interno, automático,
- * parceiro, newsletter, avaliação), depois a certeza. Sem confiança → só
- * sugere. PURA.
+ * O que fazer com a certeza da IA de haver um caso (reclamação ou perdido) na
+ * mensagem. A ordem conta: primeiro o que NUNCA abre caso (pessoal, já veio
+ * pela caixa do caso, automático, interno sem ser reencaminhamento de um
+ * cliente, parceiro, aviso de avaliação, envio em massa), depois a certeza.
+ * `trusted` = aviso oficial de formato conhecido (Livro de Reclamações): passa
+ * os filtros de automático. Sem certeza → "Por confirmar". PURA.
  */
+export function caseIntakeDecision(
+  kind: MailCaseKind,
+  confidence: number | null | undefined,
+  facts: IntakeFacts,
+  settings: ComplaintIntakeSettings,
+  opts: { trusted?: boolean } = {},
+): IntakeDecision {
+  if (facts.personal || !facts.fromBoxKey) return { action: "skip", why: "personal" };
+  // Entrou pela caixa do próprio caso: o pipeline dela já criou (ou juntou) o caso.
+  if (kind === "complaint" && facts.fromBoxPipeline === "reclamacoes") return { action: "skip", why: "complaints_box" };
+  if (kind === "lost_found" && facts.fromBoxPipeline === "perdidos") return { action: "skip", why: "lost_box" };
+  if (!opts.trusted) {
+    if (facts.outbound || facts.automated || facts.systemMail || facts.senderIsAutomated || !facts.senderEmail) return { action: "skip", why: "automatic" };
+    if (facts.senderIsCompany && !facts.forwardedExternal) return { action: "skip", why: "internal" };
+    if (facts.senderIsPartner) return { action: "skip", why: "partner" };
+    if (looksLikeReviewNotice(facts.subject, facts.senderEmail)) return { action: "skip", why: "review" };
+    if (facts.listMail) return { action: "skip", why: "newsletter" };
+  }
+  const c = confidence;
+  if (c == null || !Number.isFinite(c)) return { action: "create", uncertain: true };
+  if (c >= settings.createMinConfidence) return { action: "create" };
+  if (c >= settings.suggestMinConfidence) return { action: "create", uncertain: true };
+  return { action: "skip", why: "low_confidence" };
+}
+
+/** Lote 57 (só reclamações, pela caixa que a IA disse) — o mesmo que `caseIntakeDecision("complaint", …)`. PURA. */
 export function complaintIntakeDecision(
   verdict: { aiBoxKey: string | null | undefined; confidence: number | null | undefined },
   facts: IntakeFacts,
   settings: ComplaintIntakeSettings,
 ): IntakeDecision {
   if (verdict.aiBoxKey !== COMPLAINT_INTAKE_BOX) return { action: "ignore" };
-  if (facts.personal || !facts.fromBoxKey) return { action: "skip", why: "personal" };
-  // Entrou pela caixa das reclamações: o pipeline dela já criou (ou juntou) o caso.
-  if (facts.fromBoxPipeline === "reclamacoes") return { action: "skip", why: "complaints_box" };
-  if (facts.outbound || facts.automated || facts.systemMail || facts.senderIsAutomated || !facts.senderEmail) return { action: "skip", why: "automatic" };
-  if (facts.senderIsCompany) return { action: "skip", why: "internal" };
-  if (facts.senderIsPartner) return { action: "skip", why: "partner" };
-  if (looksLikeReviewNotice(facts.subject, facts.senderEmail)) return { action: "skip", why: "review" };
-  if (looksLikeNewsletter(facts.subject, facts.text)) return { action: "skip", why: "newsletter" };
-  const c = verdict.confidence;
-  if (c == null || !Number.isFinite(c)) return { action: "suggest" };
-  if (c >= settings.createMinConfidence) return { action: "create" };
-  if (c >= settings.suggestMinConfidence) return { action: "suggest" };
-  return { action: "skip", why: "low_confidence" };
+  return caseIntakeDecision("complaint", verdict.confidence, facts, settings);
 }
 
 // ─── Juntar a uma reclamação aberta ─────────────────────────────────────────
@@ -198,17 +223,26 @@ export function aiMergeSameClient(existingEmail: string | null | undefined, send
 const pct = (c: number | null | undefined) => (c == null || !Number.isFinite(c) ? null : `${Math.round(c * 100)}%`);
 
 /**
- * Nota interna que fica na reclamação: que veio da IA, de que caixa e porquê.
- * `by` = a pessoa que carregou em "Criar reclamação" numa sugestão. PURA.
+ * Nota interna que fica no caso: que veio da IA, de que caixa e porquê (e se
+ * ficou "Por confirmar"). `by` = a pessoa que carregou em "Criar reclamação"
+ * numa sugestão. PURA.
  */
-export function intakeNote(kind: "created" | "linked", ctx: { boxLabel: string; reason: string | null | undefined; confidence: number | null | undefined; by?: string | null }): string {
+export function intakeNote(kind: "created" | "linked", ctx: {
+  boxLabel: string; reason: string | null | undefined; confidence: number | null | undefined; by?: string | null;
+  caseKind?: MailCaseKind; uncertain?: boolean;
+}): string {
   const why = String(ctx.reason ?? "").replace(/\s+/g, " ").trim();
   const conf = pct(ctx.confidence);
   const detail = [why ? `Motivo da IA: ${why}` : null, conf ? `certeza ${conf}` : null].filter(Boolean).join(" · ");
+  const lost = ctx.caseKind === "lost_found";
+  const is = lost ? "fala de um objeto perdido" : "é uma reclamação";
+  const seems = lost ? "parece falar de um objeto perdido" : "parece uma reclamação";
   const head = kind === "created"
     ? ctx.by
       ? `🤖 Criada por ${ctx.by} a partir da sugestão da IA: um email que chegou à caixa «${ctx.boxLabel}» parece uma reclamação.`
-      : `🤖 Criada pela IA: um email que chegou à caixa «${ctx.boxLabel}» é uma reclamação.`
-    : `🤖 A IA juntou a esta reclamação um email que chegou à caixa «${ctx.boxLabel}».`;
-  return [head, detail || null, "O email ficou na caixa onde chegou. Ninguém respondeu ao cliente — responder é sempre uma pessoa."].filter(Boolean).join("\n");
+      : ctx.uncertain
+        ? `🤖 ${lost ? "Criado" : "Criada"} pela IA — POR CONFIRMAR: um email que chegou à caixa «${ctx.boxLabel}» ${seems}, mas a IA não tem a certeza. Se não for, arquiva (nada se apaga).`
+        : `🤖 ${lost ? "Criado" : "Criada"} pela IA: um email que chegou à caixa «${ctx.boxLabel}» ${is}.`
+    : `🤖 A IA juntou ${lost ? "a este caso" : "a esta reclamação"} um email que chegou à caixa «${ctx.boxLabel}».`;
+  return [head, detail || null, "O email está na Comunicação. Ninguém respondeu ao cliente — responder é sempre uma pessoa."].filter(Boolean).join("\n");
 }

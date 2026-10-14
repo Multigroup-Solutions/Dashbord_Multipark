@@ -42,6 +42,7 @@ import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { toCsv } from "@shared/csv";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import { Archive } from "lucide-react";
+import { AiUnconfirmedBadge } from "@/components/AiUnconfirmedBanner";
 
 // ─── KANBAN VIEW ──────────────────────────────────────────────────────────────
 
@@ -361,6 +362,7 @@ export function ItemCard({ item, onSelect, onMove, currentStatus, canMove, slaDa
         )}
         {item.projectId == null && <Badge variant="outline" className="text-[11px] text-red-600 border-red-300">Sem cidade</Badge>}
         {item.relatedComplaintId && <Badge variant="outline" className="text-[11px]">Reclamação #{item.relatedComplaintId}</Badge>}
+        {Number((item as any).aiUnconfirmed ?? 0) === 1 && <AiUnconfirmedBadge />}
 
         <div className="flex items-center gap-1 text-xs text-muted-foreground min-w-0">
           <User className="w-3 h-3 shrink-0" /> <span className="truncate" title={item.clientName ?? undefined}>{item.clientName}</span>

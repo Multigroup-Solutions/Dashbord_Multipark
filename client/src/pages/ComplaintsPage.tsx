@@ -44,6 +44,7 @@ import LinkInboundEmailButton from "@/components/LinkInboundEmailButton";
 import ComplaintAiPanel from "@/components/ComplaintAiPanel";
 import ComplaintClientMail from "@/components/ComplaintClientMail";
 import ComplaintMailSuggestions from "@/components/ComplaintMailSuggestions";
+import { AiUnconfirmedBadge, AiUnconfirmedBanner } from "@/components/AiUnconfirmedBanner";
 import { useState, useMemo, useEffect } from "react";
 import { useSearch } from "wouter";
 import {
@@ -660,6 +661,7 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus, canMove 
               {PRIORITY_CONFIG[c.complaintPriority]?.label}
             </Badge>
             {c.origin === "ia" && <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-800 dark:text-violet-200" title="Criada a partir de um email de outra caixa que a IA viu como reclamação">IA</Badge>}
+            {Number((c as any).aiUnconfirmed ?? 0) === 1 && <AiUnconfirmedBadge />}
           </div>
           <div className="flex gap-1 shrink-0">
             {canMoveLeft && (
@@ -774,6 +776,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const unarchiveMut = trpc.complaints.unarchive.useMutation({
     onSuccess: () => { toast.success("Reclamação tirada do arquivo"); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); },
     onError: (e) => toast.error(e.message || "Erro ao tirar do arquivo"),
+  });
+  // 14 out 2026: "Por confirmar (IA)" — uma pessoa confirma (ou arquiva).
+  const confirmAiMut = trpc.complaints.confirmAi.useMutation({
+    onSuccess: () => { toast.success("Confirmada como reclamação"); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); },
+    onError: (e) => toast.error(e.message || "Erro ao confirmar"),
   });
   const convertMut = trpc.complaints.convertToLostFound.useMutation({
     onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId} (a reclamação fica fechada e ligada)`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
@@ -953,6 +960,13 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
         )}
       </div>
 
+      {!archived && Number((c as any).aiUnconfirmed ?? 0) === 1 && (
+        <AiUnconfirmedBanner
+          kind="complaint" canConfirm={canEdit} canArchive={canManage} confirming={confirmAiMut.isPending}
+          onConfirm={() => confirmAiMut.mutate({ id })}
+          onReject={() => { setArchiveReason("Não é reclamação (a IA criou-a por confirmar)"); setArchiveOpen(true); }}
+        />
+      )}
       {archived && (
         <div role="status" className="rounded-md border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800 dark:bg-slate-900/40 dark:text-slate-200">
           <Archive className="w-4 h-4 inline mr-1" /> Arquivada{(c as any).archivedAt ? ` em ${fmtPTDateTime((c as any).archivedAt)}` : ""}{(c as any).archiveReason ? ` — ${(c as any).archiveReason}` : ""}.

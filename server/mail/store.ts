@@ -337,6 +337,27 @@ export const dbSyncStore: SyncStore = {
   },
 };
 
+/**
+ * 14 out 2026: a triagem deixa um email LIDO (críticas; avisos da app de
+ * ocorrências já ligados à ocorrência) — no dashboard e no Gmail, como se uma
+ * pessoa o abrisse. false = já estava lido (ou não existe). O Gmail é
+ * best-effort (sem rede/token fica só no dashboard; a próxima leitura do
+ * histórico não o volta a pôr por ler).
+ */
+export async function markMessageReadBySystem(messageId: number): Promise<boolean> {
+  const d = await db();
+  const r = rowsOf(await d.execute(sql`SELECT threadId, accountKey, gmailMessageId, isRead FROM mail_messages WHERE id = ${messageId} LIMIT 1`))[0];
+  if (!r || Number(r.isRead) === 1) return false;
+  await d.execute(sql`UPDATE mail_messages SET isRead = 1 WHERE id = ${messageId}`);
+  await recomputeThread(Number(r.threadId));
+  try {
+    const { gmailApiForAccount } = await import("./gmailApi");
+    const api = await gmailApiForAccount(String(r.accountKey));
+    await api.modifyLabels(String(r.gmailMessageId), [], ["UNREAD"]);
+  } catch { /* fica só no dashboard */ }
+  return true;
+}
+
 export async function setMessagePipeline(messageId: number, pipeline: string, status: string): Promise<void> {
   const d = await db();
   await d.execute(sql`UPDATE mail_messages SET pipeline = ${pipeline}, pipelineStatus = ${status.slice(0, 16)} WHERE id = ${messageId}`);
