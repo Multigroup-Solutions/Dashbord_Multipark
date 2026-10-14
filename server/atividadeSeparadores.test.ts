@@ -267,9 +267,11 @@ describe("3 — Resumo do dia: saiu da Passagem de turno, entrou na Atividade di
   it("o componente mudou de sítio sem perder nada do #361 (gaveta, entregas lentas, cartões por TL, parado no turno)", () => {
     const tab = src("client/src/components/shiftDay/DaySummaryTab.tsx");
     for (const s of ["trpc.shiftHandover.supervisorDashboard.useQuery", "trpc.shiftHandover.peopleShiftGps.useQuery", "trpc.shiftHandover.compliance.useQuery",
-      "<DriverDaySheet", "<SlowDeliveryDialog", "<HandoverShiftCard", "Entregas mais lentas do dia", "Quem trabalhou", "Horas paradas", "Excesso de velocidade", "Km da equipa"]) {
+      "<DriverDaySheet", "<SlowDeliveryDialog", "<HandoverShiftCard", "<DayTimesSection", "Quem trabalhou", "Horas paradas", "Excesso de velocidade", "Km da equipa"]) {
       expect(tab, s).toContain(s);
     }
+    // 15 out 2026: as entregas mais lentas passaram para os tempos (pelo nosso tempo; com o portão fechado, pela Fila)
+    expect(src("client/src/components/shiftDay/DayTimesSection.tsx")).toContain("Mais lentas");
     const op = src("client/src/pages/OperationalPage.tsx");
     expect(op).toContain('{has("resumo") && <TabsTrigger value="resumo">');
     expect(op).toContain("<DaySummaryTab />");

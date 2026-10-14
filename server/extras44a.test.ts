@@ -85,7 +85,8 @@ describe("44a — Pressão: mapa maior, botões em cima, métricas explicadas", 
   const s = src("client/src/pages/extrasDia/PressureTab.tsx");
   it("botões das métricas em cima, com nomes claros", () => {
     expect(s.indexOf('role="radiogroup"')).toBeLessThan(s.indexOf("dia da semana × hora"));
-    for (const label of ["Carros por hora", "Tempo de entrega", "Tempo por carro", "Na estrada", "Pessoas a trabalhar"]) expect(s).toContain(label);
+    // 15 out 2026 (tempos de entrega): "Tempo de entrega" passa a "Total (pedido → assinatura)" e "Na estrada" a "Início da entrega → assinatura"; + "Tempos"
+    for (const label of ["Carros por hora", "Total (pedido → assinatura)", "Tempo por carro", "Início da entrega → assinatura", "Pessoas a trabalhar", 'label: "Tempos"']) expect(s).toContain(label);
   });
   it("explica o p75 e tem legenda (rampa de um só tom, sem dados, hora apertada)", () => {
     expect(s).toContain("O que é o p75");

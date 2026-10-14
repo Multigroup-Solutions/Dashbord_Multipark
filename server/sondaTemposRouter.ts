@@ -29,4 +29,13 @@ export const timesProbeProcedures = {
     const { runTimesProbe, defaultProbeDeps } = await import("./sondaTempos");
     return runTimesProbe(input, defaultProbeDeps());
   }),
+  /**
+   * 15 out 2026 — "De onde vêm os tempos" (Pressão, super admin): por cidade e
+   * semana, chamadas, GPS, botão, motivos, Zellos que não batem, zonas em
+   * falta e garagens sem papel. Só contagens (a tabela dos tempos).
+   */
+  serviceTimesCoverage: superOnly.query(async () => {
+    const [{ getCoverageCard }, { scopedServiceCityKeys }, { operationalDayOf }] = await Promise.all([import("./serviceTimesViews"), import("./serviceTimesRead"), import("../shared/lisbonDay")]);
+    return getCoverageCard({ today: operationalDayOf(Date.now()), cityKeys: await scopedServiceCityKeys() });
+  }),
 };

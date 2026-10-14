@@ -473,3 +473,128 @@ export function driverDayTimes(dayRows: readonly ServiceRow[], employeeId: numbe
   const hidden = vT.hidden ?? vX.hidden;
   return { deliveries, pickups, gpsHidden: deliveries.length || pickups.length ? hidden : null, gpsNote: vT.note ?? vX.note };
 }
+
+// ─── Grelhas (P9): Pressão (dia da semana × hora) e Semana (dia × hora) ─────
+
+/** Amostra mínima de uma célula (a mesma da Pressão: shared/extrasPressure.ts → MIN_SAMPLE). */
+export const GRID_MIN_SAMPLE = 5;
+/** Total na Pressão e na Semana: até 240 min (o limite das entregas da Pressão). */
+export const GRID_TOTAL_MAX_MIN = 240;
+
+export interface CellStat { n: number; p50Ms: number; p75Ms: number; meanMs: number }
+export interface GridCell {
+  deliveries: number;
+  pickups: number;
+  /** Só os tempos com amostra (≥ mínimo) e com o portão aberto. */
+  m: Partial<Record<TimeMetric, CellStat>>;
+  /** % na meta (nosso tempo ≤ meta), com amostra. */
+  inTarget?: { n: number; pct: number };
+  /** % de recolhas T2 atrasadas, com amostra. */
+  t2Late?: { n: number; pct: number };
+}
+export interface TimesGrid {
+  cells: Record<string, GridCell>;
+  /** Por tempo: o texto do portão (escondido em todas as células) e a nota do super admin. */
+  hidden: Partial<Record<TimeMetric | "meta" | "t2", string>>;
+  notes: Partial<Record<TimeMetric | "meta" | "t2", string>>;
+  /** Cobertura (% medidos) de cada tempo no período inteiro — sempre visível. */
+  coverage: Partial<Record<TimeMetric, number | null>>;
+  deliveries: number;
+  pickups: number;
+}
+
+/**
+ * Agrega as linhas por célula (`keyOf`; null = fora) com o portão aplicado
+ * por cidade ao PERÍODO inteiro (o do ecrã) e o mínimo de casos por célula.
+ * Percentis iguais ao percentile_cont. PURA.
+ */
+export function timesGrid(rows: readonly ServiceRow[], keyOf: (r: ServiceRow) => string | null, o: { gate: GateCtx; targetMinutes: number; totalMaxMin?: number; minSample?: number; metrics?: readonly TimeMetric[] }): TimesGrid {
+  const metrics = o.metrics ?? [...DELIVERY_METRICS, ...PICKUP_METRICS];
+  const minN = o.minSample ?? GRID_MIN_SAMPLE;
+  const opt = { totalMaxMin: o.totalMaxMin ?? GRID_TOTAL_MAX_MIN };
+  const vis = new Map<TimeMetric, ReturnType<typeof visibleCities>>();
+  const hidden: TimesGrid["hidden"] = {}, notes: TimesGrid["notes"] = {}, coverage: TimesGrid["coverage"] = {};
+  for (const m of metrics) {
+    const v = visibleCities(rows, m, o.gate, opt);
+    vis.set(m, v);
+    if (v.hidden) hidden[m] = v.hidden;
+    if (v.note) notes[m] = v.note;
+    coverage[m] = metricView(rows, m, { gate: { visible: true, minCoveragePct: 0, minN: 1 }, isSuperAdmin: true }, opt).coveragePct;
+  }
+  const meta = inTargetView(rows, o.targetMinutes, o.gate);
+  if (meta.hidden) hidden.meta = meta.hidden;
+  if (meta.note) notes.meta = meta.note;
+  const t2 = t2View(rows, o.gate);
+  if (t2.hidden) hidden.t2 = t2.hidden;
+  if (t2.note) notes.t2 = t2.note;
+  const nossoOpen = vis.get("nosso")?.cities ?? visibleCities(rows, "nosso", o.gate).cities;
+
+  type Acc = { d: number; p: number; v: Map<TimeMetric, number[]>; meta: { n: number; ok: number }; t2: { n: number; late: number } };
+  const acc = new Map<string, Acc>();
+  let deliveries = 0, pickups = 0;
+  for (const r of rows) {
+    const isD = rowCounts(r, "entrega"), isP = rowCounts(r, "recolha");
+    if (!isD && !isP) continue;
+    if (isD) deliveries++; else pickups++;
+    const k = keyOf(r);
+    if (k == null) continue;
+    let a = acc.get(k);
+    if (!a) { a = { d: 0, p: 0, v: new Map(), meta: { n: 0, ok: 0 }, t2: { n: 0, late: 0 } }; acc.set(k, a); }
+    if (isD) a.d++; else a.p++;
+    const city = r.cityKey ?? "";
+    for (const m of metrics) {
+      if (TIME_METRICS[m].kind !== r.kind || !vis.get(m)!.cities.has(city)) continue;
+      const val = metricValue(r, m, opt);
+      if (val == null) continue;
+      const l = a.v.get(m) ?? [];
+      l.push(val);
+      a.v.set(m, l);
+    }
+    if (isD && !meta.hidden && nossoOpen.has(city)) {
+      const w = withinTarget({ ourMs: r.ourMs ?? null, ourStatus: r.ourStatus ?? "" }, o.targetMinutes);
+      if (w != null) { a.meta.n++; if (w) a.meta.ok++; }
+    }
+    if (isP && !t2.hidden && r.terminalClass === "t2" && r.t2Status === "medido" && r.t2LateMs != null) { a.t2.n++; if (r.t2LateMs > 0) a.t2.late++; }
+  }
+  const cells: Record<string, GridCell> = {};
+  for (const [k, a] of acc) {
+    const m: GridCell["m"] = {};
+    for (const [metric, vals] of a.v) {
+      if (vals.length < minN) continue;
+      const s = timeStats(vals);
+      m[metric] = { n: s.n, p50Ms: s.p50Ms!, p75Ms: s.p75Ms!, meanMs: s.meanMs! };
+    }
+    cells[k] = {
+      deliveries: a.d, pickups: a.p, m,
+      ...(a.meta.n >= minN ? { inTarget: { n: a.meta.n, pct: Math.round((a.meta.ok / a.meta.n) * 1000) / 10 } } : {}),
+      ...(a.t2.n >= minN ? { t2Late: { n: a.t2.n, pct: Math.round((a.t2.late / a.t2.n) * 1000) / 10 } } : {}),
+    };
+  }
+  return { cells, hidden, notes, coverage, deliveries, pickups };
+}
+
+/** (dia operacional, hora de Lisboa) → dia da semana ISO do dia de CALENDÁRIO dessa hora (00–02h = dia seguinte). PURA. */
+export function calendarWeekdayOf(opDay: string, hour: number): number {
+  const d = new Date(`${opDay}T12:00:00Z`);
+  if (hour < 3) d.setUTCDate(d.getUTCDate() + 1);
+  return d.getUTCDay() || 7;
+}
+
+/** Célula da Pressão ("dia da semana:hora") de uma linha (sem hora → fora). PURA. */
+export const pressureCellKey = (r: ServiceRow): string | null => (r.refHour == null ? null : `${calendarWeekdayOf(r.opDay, r.refHour)}:${r.refHour}`);
+/** Célula da Semana ("dia operacional|hora"). PURA. */
+export const weekCellKey = (r: ServiceRow): string | null => (r.refHour == null ? null : `${r.opDay}|${r.refHour}`);
+
+/**
+ * A Fila por célula da Pressão para a "hora apertada" (extras.tightUsesQueue):
+ * p75 em MINUTOS e n, e se a cobertura da Fila no grupo chega (≥ 60 %). PURA.
+ */
+export function queueCellsOf(grid: TimesGrid, minCoveragePct = 60): { ok: boolean; coveragePct: number | null; cells: Record<string, { n: number; p75: number | null }> } {
+  const cov = grid.coverage.fila ?? null;
+  const cells: Record<string, { n: number; p75: number | null }> = {};
+  for (const [k, c] of Object.entries(grid.cells)) {
+    const f = c.m.fila;
+    if (f) cells[k] = { n: f.n, p75: Math.round((f.p75Ms / 60_000) * 10) / 10 };
+  }
+  return { ok: cov != null && cov >= minCoveragePct && Object.keys(cells).length > 0, coveragePct: cov, cells };
+}

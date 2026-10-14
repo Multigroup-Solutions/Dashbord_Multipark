@@ -98,7 +98,8 @@ export async function loadServiceRows(o: { fromDay: string; toDay: string; cityK
     "DATE_FORMAT(`opDay`, '%Y-%m-%d') AS `opDay`", "DATE_FORMAT(`computedAt`, '%Y-%m-%d %H:%i:%s') AS `computedAt`",
   ].join(", "));
   const cities = o.cityKeys ? sql`AND cityKey IN (${sql.join(o.cityKeys.map((c) => sql`${c}`), sql`, `)})` : sql``;
-  const kind = o.kind ? sql`AND kind = ${o.kind}` : sql``;
+  // o índice (kind, opDay, cityKey) começa pelo tipo
+  const kind = o.kind ? sql`AND kind = ${o.kind}` : sql`AND kind IN ('entrega', 'recolha')`;
   const booking = o.bookingId ? sql`AND bookingId = ${o.bookingId}` : sql``;
   const limit = Math.max(1, Math.min(o.limit ?? 250_000, 250_000));
   try {

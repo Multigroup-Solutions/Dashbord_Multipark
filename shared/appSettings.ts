@@ -190,6 +190,10 @@ export const DEFAULT_USE_MEASURED_TIMES: UseMeasuredTimesMap = { lisbon: false, 
 export const pairPickupsSchema = useMeasuredTimesSchema;
 export type PairPickupsMap = UseMeasuredTimesMap;
 export const DEFAULT_PAIR_PICKUPS: PairPickupsMap = { lisbon: false, porto: false, faro: false };
+// Tempos de entrega (15 out 2026): a "hora apertada" pela Fila em vez do total. Por cidade; desligado por omissão.
+export const tightUsesQueueSchema = useMeasuredTimesSchema;
+export type TightUsesQueueMap = UseMeasuredTimesMap;
+export const DEFAULT_TIGHT_USES_QUEUE: TightUsesQueueMap = { lisbon: false, porto: false, faro: false };
 
 export const DEFAULT_CREW_RULES: CrewRulesMap = {
   lisbon: { minCrew: 2, bands: [{ upTo: 2, minutes: 75 }, { upTo: 4, minutes: 60 }, { upTo: 6, minutes: 45 }, { upTo: null, minutes: 30 }] },
@@ -744,6 +748,15 @@ export const SETTINGS = {
     description: "Ligado: quem leva um carro ao aeroporto e volta ao parque com o carro de uma recolha não conta essa recolha como um carro a mais. Vale para a recolha no mesmo terminal, entre 10 min antes e 30 min depois da entrega (uma por entrega; no T2 conta só a meia extra; moradas e hotéis nunca contam). Resultado: a previsão e a escala pedem menos extras nas horas com entregas e recolhas juntas. Desligado: cada recolha conta como um carro, como até aqui. Liga cidade a cidade.",
     schema: pairPickupsSchema,
     defaultValue: DEFAULT_PAIR_PICKUPS,
+    wiring: "live",
+  }),
+  "extras.tightUsesQueue": def({
+    key: "extras.tightUsesQueue",
+    group: "extras",
+    label: "Hora apertada pela Fila (por cidade)",
+    description: "Ligado: na Pressão e na escala do Extras-dia, a parte \"entregas lentas\" da hora apertada usa a Fila (da chamada do cliente, ou do pendente, até o condutor pegar no carro — o tempo que mostra se falta gente), em vez do tempo total do pedido à assinatura (que também tem o caminho e a espera pelo cliente). Só quando a Fila está medida em pelo menos 60 % das entregas da cidade; abaixo disso fica o total e o ecrã diz porquê. Desligado: as horas apertadas ficam exatamente como até aqui. Liga cidade a cidade.",
+    schema: tightUsesQueueSchema,
+    defaultValue: DEFAULT_TIGHT_USES_QUEUE,
     wiring: "live",
   }),
   "extras.autoProposeAt": def({

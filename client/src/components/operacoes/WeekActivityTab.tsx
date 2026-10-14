@@ -7,6 +7,9 @@
  * do tempo, e a espera: pendente → entregue / recolha começada → feita).
  * Leitura: multipark.weekActivity (server/weekActivity.ts); regras em
  * shared/weekActivity.ts.
+ * 15 out 2026: "Tempos" — Fila, Trânsito, nosso tempo, % na meta, Cliente e
+ * Total das entregas; Cliente, No terminal e No P2 das recolhas, da tabela
+ * dos tempos (o bloco `times`, com o portão dos tempos com GPS já aplicado).
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -17,7 +20,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CalendarRange, ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarRange, ChevronLeft, ChevronRight, Lock } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CalibrationBadge, fmtDur } from "@/components/serviceTimes/TimesBits";
+import type { GridCell, TimeMetric } from "../../../../server/serviceTimesAgg";
+import type { WeekTimes } from "../../../../server/serviceTimesViews";
 import { cellStyle, rampLegend } from "@/components/heatRamp";
 import { CitySelect, useHandoverCity } from "@/components/shiftDay/handoverCity";
 import { HANDOVER_CITY_LABELS } from "@shared/shiftHandover";
@@ -30,7 +37,31 @@ import {
 const hh = (h: number) => String(h).padStart(2, "0");
 const fmt0 = (n: number | null | undefined) => (n == null ? "—" : String(Math.round(n)));
 const KIND_LABEL: Record<WeekKind, string> = { entregas: "Entregas", recolhas: "Recolhas" };
-const MEASURE_LABEL: Record<WeekMeasure, string> = { quantidade: "Quantidade", tempo: "Tempo por carro" };
+type Measure = WeekMeasure | "tempos";
+const MEASURE_LABEL: Record<Measure, string> = { quantidade: "Quantidade", tempo: "Tempo por carro", tempos: "Tempos" };
+type TimesPick = TimeMetric | "meta";
+const TIMES_BY_KIND: Record<WeekKind, Array<{ key: TimesPick; label: string; help: string }>> = {
+  entregas: [
+    { key: "fila", label: "Fila", help: "da chamada do cliente (ou do pendente) até pegar no carro" },
+    { key: "transito", label: "Trânsito", help: "de pegar no carro até chegar ao terminal (GPS)" },
+    { key: "nosso", label: "Nosso tempo", help: "Fila + Trânsito" },
+    { key: "meta", label: "% na meta", help: "entregas com o nosso tempo dentro da meta" },
+    { key: "cliente", label: "Cliente", help: "do terminal à assinatura (espera pelo cliente)" },
+    { key: "total", label: "Total", help: "da chamada (ou do pendente) à assinatura" },
+  ],
+  recolhas: [
+    { key: "cliente_recolha", label: "Cliente", help: "da chamada (ou do \"em recolha\") ao check-in" },
+    { key: "terminal", label: "No terminal", help: "do check-in até o carro sair do terminal (GPS)" },
+    { key: "p2", label: "No P2", help: "do P2 até ir para um parque" },
+  ],
+};
+/** Valor de uma célula dos tempos: p75 em minutos (ou a % na meta); null = sem casos suficientes. */
+function timesCellValue(c: GridCell | undefined, pick: TimesPick): number | null {
+  if (!c) return null;
+  if (pick === "meta") return c.inTarget?.pct ?? null;
+  const st = c.m[pick];
+  return st ? st.p75Ms / 60_000 : null;
+}
 
 /** "média 42 · mediana 40 · p75 48 min" (ou "sem casos"). */
 function durText(d: DurStats, withMax = false): string {
@@ -63,7 +94,8 @@ export default function WeekActivityTab() {
   const thisWeek = weekStartOf(today);
   const [weekStart, setWeekStart] = useState(thisWeek);
   const [kind, setKind] = usePersistedState<WeekKind>("operacional.semana.kind", "entregas");
-  const [measure, setMeasure] = usePersistedState<WeekMeasure>("operacional.semana.measure", "quantidade");
+  const [measure, setMeasure] = usePersistedState<Measure>("operacional.semana.measure", "quantidade");
+  const [timesPickRaw, setTimesPick] = usePersistedState<TimesPick>("operacional.semana.tempo", "fila");
   const [sel, setSel] = useState<Sel>(null);
   const city = cityState.city;
   const q = trpc.multipark.weekActivity.useQuery(
@@ -72,15 +104,26 @@ export default function WeekActivityTab() {
   );
   const data = q.data;
   const grid: WeekGrid | null = data && data.available ? data.grids[kind] : null;
+  const times = ((data as { times?: WeekTimes | null } | undefined)?.times ?? null) as WeekTimes | null;
+  const timesPick: TimesPick = TIMES_BY_KIND[kind].some((o) => o.key === timesPickRaw) ? timesPickRaw : TIMES_BY_KIND[kind][0].key;
+  const timesHidden = measure === "tempos" && times ? times.cells.hidden[timesPick] ?? null : null;
+  const timesNote = measure === "tempos" && times ? times.cells.notes[timesPick] ?? null : null;
+  /** O valor mostrado: quantidade, tempo por carro (p75) ou o tempo escolhido (p75 / %). */
+  const cellVal = (c: WeekCell, key: string, which: "cells" | "byDay" | "byHour" | "total" = "cells"): number | null => {
+    if (measure !== "tempos") return weekCellValue(c, measure);
+    if (!times || timesHidden) return null;
+    return timesCellValue(times[which].cells[key], timesPick);
+  };
 
   const max = useMemo(() => {
     if (!grid) return 0;
     let m = 0;
-    for (const r of grid.rows) for (const c of r.cells) m = Math.max(m, weekCellValue(c, measure) ?? 0);
+    for (const r of grid.rows) r.cells.forEach((c, ci) => { m = Math.max(m, cellVal(c, `${r.day}|${grid.hours[ci]}`) ?? 0); });
     return m;
-  }, [grid, measure]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grid, measure, times, timesPick, timesHidden]);
   const legend = rampLegend(max);
-  const unit = measure === "quantidade" ? (kind === "entregas" ? " entregas" : " recolhas") : " min";
+  const unit = measure === "quantidade" ? (kind === "entregas" ? " entregas" : " recolhas") : measure === "tempos" && timesPick === "meta" ? " %" : " min";
 
   const go = (ws: string) => { setWeekStart(ws > thisWeek ? thisWeek : ws); setSel(null); };
 
@@ -100,13 +143,35 @@ export default function WeekActivityTab() {
     return { title: `${label} · ${hh(h)}h${h < 3 ? " (madrugada a seguir)" : ""}`, cell: r.cells[sel.col] };
   })();
   const isSel = (row: number | "total", col: number | "total") => !!sel && sel.row === row && sel.col === col;
+  /** A célula dos tempos novos que corresponde à seleção. */
+  const selTimes: GridCell | undefined = (() => {
+    if (!times || !grid || !sel) return undefined;
+    if (sel.row === "total" && sel.col === "total") return times.total.cells["*"];
+    if (sel.row === "total") return times.byHour.cells[String(grid.hours[sel.col as number])];
+    const r = grid.rows[sel.row];
+    if (!r) return undefined;
+    if (sel.col === "total") return times.byDay.cells[r.day];
+    return times.cells.cells[`${r.day}|${grid.hours[sel.col]}`];
+  })();
   const pick = (row: number | "total", col: number | "total") => setSel(isSel(row, col) ? null : { row, col });
-  /** Texto de uma célula/total: quantidade (vazio se 0) ou p75 do tempo. */
-  const shown = (c: WeekCell) => {
-    const v = weekCellValue(c, measure);
+  /** Texto de uma célula/total: quantidade (vazio se 0), p75 do tempo por carro ou o tempo escolhido. */
+  const shown = (c: WeekCell, key = "", which: "cells" | "byDay" | "byHour" | "total" = "cells") => {
+    const v = cellVal(c, key, which);
     return v == null ? "" : fmt0(v);
   };
   const few = (c: WeekCell) => measure === "tempo" && c.cycle.n > 0 && c.cycle.n < MIN_SAMPLE;
+  /** As linhas dos tempos novos de uma célula (no detalhe). */
+  const timesDetail = (cell: GridCell | undefined): string[] => {
+    if (!times || !cell) return [];
+    const out: string[] = [];
+    for (const o of TIMES_BY_KIND[kind]) {
+      if (times.cells.hidden[o.key]) continue;
+      if (o.key === "meta") { if (cell.inTarget) out.push(`Na meta (${times.targetMinutes} min): ${Math.round(cell.inTarget.pct)} % de ${cell.inTarget.n}`); continue; }
+      const st = cell.m[o.key];
+      if (st) out.push(`${o.label} (n=${st.n}): mediana ${fmtDur(st.p50Ms)} · p75 ${fmtDur(st.p75Ms)} · média ${fmtDur(st.meanMs)}`);
+    }
+    return out;
+  };
 
   return (
     <div className="space-y-4 mt-4">
@@ -137,11 +202,18 @@ export default function WeekActivityTab() {
                 <Button key={k} size="sm" variant={kind === k ? "selected" : "ghost"} className="h-8" role="radio" aria-checked={kind === k} onClick={() => { setKind(k); setSel(null); }}>{KIND_LABEL[k]}</Button>
               ))}
             </div>
-            <div className="inline-flex rounded-md border p-0.5" role="radiogroup" aria-label="Quantidade ou tempo por carro">
-              {(["quantidade", "tempo"] as const).map((m) => (
+            <div className="inline-flex rounded-md border p-0.5" role="radiogroup" aria-label="Quantidade, tempo por carro ou tempos">
+              {(["quantidade", "tempo", "tempos"] as const).map((m) => (
                 <Button key={m} size="sm" variant={measure === m ? "selected" : "ghost"} className="h-8" role="radio" aria-checked={measure === m} onClick={() => setMeasure(m)}>{MEASURE_LABEL[m]}</Button>
               ))}
             </div>
+            {measure === "tempos" && (
+              <Select value={timesPick} onValueChange={(v) => { setTimesPick(v as TimesPick); setSel(null); }}>
+                <SelectTrigger className="w-48 h-9 rounded-[10px]" aria-label="Que tempo"><SelectValue /></SelectTrigger>
+                <SelectContent>{TIMES_BY_KIND[kind].map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            )}
+            {measure === "tempos" && <CalibrationBadge note={timesNote} />}
           </div>
         </CardContent>
       </Card>
@@ -149,14 +221,18 @@ export default function WeekActivityTab() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base">
-            {KIND_LABEL[kind]} — {measure === "quantidade" ? "quantas por hora" : "tempo por carro (p75)"} — {HANDOVER_CITY_LABELS[city]}
+            {KIND_LABEL[kind]} — {measure === "quantidade" ? "quantas por hora" : measure === "tempo" ? "tempo por carro (p75)" : `${TIMES_BY_KIND[kind].find((o) => o.key === timesPick)?.label} (${timesPick === "meta" ? "%" : "p75"})`} — {HANDOVER_CITY_LABELS[city]}
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             {measure === "quantidade"
               ? kind === "entregas" ? "Carros entregues (entrega feita) em cada hora." : "Carros recolhidos (recolha feita) em cada hora."
-              : `Minutos entre o início de ${kind === "entregas" ? "uma entrega" : "uma recolha"} e o início do serviço seguinte do mesmo condutor (a métrica da Pressão), dos serviços começados nessa hora. Mostra-se o p75: em 3 de cada 4 vezes foi isto ou menos.`}
+              : measure === "tempo"
+                ? `Minutos entre o início de ${kind === "entregas" ? "uma entrega" : "uma recolha"} e o início do serviço seguinte do mesmo condutor (a métrica da Pressão), dos serviços começados nessa hora. Mostra-se o p75: em 3 de cada 4 vezes foi isto ou menos.`
+                : `${TIMES_BY_KIND[kind].find((o) => o.key === timesPick)?.label}: ${TIMES_BY_KIND[kind].find((o) => o.key === timesPick)?.help}. ${timesPick === "meta" ? "Mostra-se a %" : "Mostra-se o p75"}, pela hora em que ${kind === "entregas" ? "o cliente ligou (ou ficou pendente)" : "o cliente ligou (ou ficou em recolha)"}; células com menos de ${MIN_SAMPLE} casos ficam em branco. Medido em ${times?.cells.coverage[(timesPick === "meta" ? "nosso" : timesPick) as TimeMetric] ?? "—"} % na semana.`}
             {" "}Cada linha é um dia operacional (03:00 → 03:00): as colunas 00–02 são a madrugada a seguir, ainda desse dia.
           </p>
+          {measure === "tempos" && !times?.available && <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-[10px] px-3 py-2">Ainda não há tempos guardados para esta semana: o cálculo da noite dos tempos está desligado ou ainda não correu.</p>}
+          {timesHidden && <p className="text-sm font-medium text-muted-foreground flex items-center gap-1"><Lock className="w-4 h-4" />{timesHidden}: este tempo depende do GPS e ainda não se mostra.</p>}
         </CardHeader>
         <CardContent className="space-y-3">
           {q.isLoading ? <p className="text-sm text-muted-foreground">A ler a semana…</p>
@@ -183,27 +259,27 @@ export default function WeekActivityTab() {
                             {WEEK_DAY_SHORT[r.weekday]} <span className="text-[11px] font-normal">{ddmm(r.day)}</span>
                           </td>
                           {r.cells.map((c, ci) => {
-                            const v = weekCellValue(c, measure);
+                            const v = cellVal(c, `${r.day}|${grid.hours[ci]}`);
                             return (
                               <td key={ci} onClick={() => pick(ri, ci)} title={`${WEEK_DAY_SHORT[r.weekday]} ${ddmm(r.day)} ${hh(grid.hours[ci])}h\n${detailLines(kind, c).join("\n")}`}
                                 className={`h-10 md:h-12 text-center rounded tabular-nums cursor-pointer ${c.future ? "bg-transparent border border-dashed border-muted" : v == null ? "bg-muted/40 text-muted-foreground/60" : ""} ${few(c) ? "italic border border-dashed border-slate-500" : ""} ${isSel(ri, ci) ? "outline outline-2 outline-offset-1 outline-foreground" : ""}`}
                                 style={c.future ? {} : cellStyle(v, max)}>
-                                {c.future ? "" : shown(c)}
+                                {c.future ? "" : shown(c, `${r.day}|${grid.hours[ci]}`)}
                               </td>
                             );
                           })}
                           <td onClick={() => pick(ri, "total")} className={`text-center rounded tabular-nums font-semibold bg-muted cursor-pointer ${isSel(ri, "total") ? "outline outline-2 outline-offset-1 outline-foreground" : ""}`}>
-                            {r.future ? "" : shown(r.total) || (measure === "quantidade" ? "0" : "—")}
+                            {r.future ? "" : shown(r.total, r.day, "byDay") || (measure === "quantidade" ? "0" : "—")}
                           </td>
                         </tr>
                       ))}
                       <tr>
                         <td className="pr-1 text-sm font-semibold">Total</td>
                         {grid.hourTotals.map((c, ci) => (
-                          <td key={ci} onClick={() => pick("total", ci)} className={`h-9 text-center rounded tabular-nums font-semibold bg-muted cursor-pointer ${isSel("total", ci) ? "outline outline-2 outline-offset-1 outline-foreground" : ""}`}>{shown(c)}</td>
+                          <td key={ci} onClick={() => pick("total", ci)} className={`h-9 text-center rounded tabular-nums font-semibold bg-muted cursor-pointer ${isSel("total", ci) ? "outline outline-2 outline-offset-1 outline-foreground" : ""}`}>{shown(c, String(grid.hours[ci]), "byHour")}</td>
                         ))}
                         <td onClick={() => pick("total", "total")} className={`text-center rounded tabular-nums font-bold bg-muted cursor-pointer ${isSel("total", "total") ? "outline outline-2 outline-offset-1 outline-foreground" : ""}`}>
-                          {shown(grid.total) || (measure === "quantidade" ? "0" : "—")}
+                          {shown(grid.total, "*", "total") || (measure === "quantidade" ? "0" : "—")}
                         </td>
                       </tr>
                     </tbody>
@@ -234,7 +310,7 @@ export default function WeekActivityTab() {
                       <strong>{selCell.title}</strong>
                       <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setSel(null)}>fechar</button>
                     </div>
-                    <ul className="mt-1 space-y-0.5 text-xs">{detailLines(kind, selCell.cell).map((l, i) => <li key={i}>{l}</li>)}</ul>
+                    <ul className="mt-1 space-y-0.5 text-xs">{[...detailLines(kind, selCell.cell), ...timesDetail(selTimes)].map((l, i) => <li key={i}>{l}</li>)}</ul>
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">Carrega numa célula (ou num total) para ver o detalhe: quantos, a média e o p75 do tempo por carro, e {kind === "entregas" ? "o pendente → entregue" : "o tempo da recolha (começada → feita)"}.</p>

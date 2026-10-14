@@ -4838,7 +4838,12 @@ export const appRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "Esta cidade não pertence ao teu centro de custos." });
         }
         const { getWeekActivity } = await import("./weekActivity");
-        return getWeekActivity({ city: input.city, weekStart: input.weekStart });
+        const r = await getWeekActivity({ city: input.city, weekStart: input.weekStart });
+        // 15 out 2026: os tempos novos (Fila, Trânsito, Nosso, Cliente, % na meta; recolhas: Cliente, No terminal, No P2)
+        // da tabela dos tempos, ao lado (o formato de sempre não muda); portão dos tempos com GPS aplicado aqui
+        const { getWeekTimes } = await import("./serviceTimesViews");
+        const times = await getWeekTimes({ weekStart: r.weekStart, cityKey: input.city === "lisbon" ? "lisboa" : input.city, isSuperAdmin: ctx.user.role === "super_admin" });
+        return { ...r, times };
       }),
 
     // Liga um agente Multipark a um PARCEIRO (agências que marcam pelo portal)
@@ -5432,7 +5437,14 @@ export const appRouter = router({
         getSetting("extras.timesPercentile").catch(() => null),
         getSetting("extras.useMeasuredTimes").catch(() => null),
       ]);
-      return getPressureView((key) => groupAllowedForCities(key, keys), { crewRules, percentiles, useMeasured });
+      const view = await getPressureView((key) => groupAllowedForCities(key, keys), { crewRules, percentiles, useMeasured });
+      // 15 out 2026: os tempos novos por (dia da semana × hora) de cada cidade, ao lado (o formato de sempre não
+      // muda), com o portão dos tempos com GPS aplicado aqui e a Fila para a "hora apertada" (extras.tightUsesQueue)
+      const { getPressureTimes } = await import("./serviceTimesViews");
+      const times = view.available && view.windowStart && view.windowEnd
+        ? await getPressureTimes({ from: view.windowStart, to: view.windowEnd, cityKeys: keys, isSuperAdmin: ctx.user.role === "super_admin" })
+        : null;
+      return { ...view, times };
     }),
   }),
 
