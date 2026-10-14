@@ -7,7 +7,7 @@
  * UNIDADES: o Zello já devolve a velocidade em km/h (server/zelloGps.ts —
  * pedimos speedUnits=kmh). Aqui tudo é km/h e segundos.
  *
- * LIMITE: um só, em Definições → Parâmetros → "Limite de velocidade (GPS)"
+ * LIMITE: um só, em Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"
  * (`gps.speedRule`): 120 km/h por omissão (o máximo legal em Portugal, nas
  * autoestradas), mais uma tolerância em % (0 por omissão). O GPS do Zello não
  * diz em que estrada se vai, por isso não há limites por tipo de via nem por
