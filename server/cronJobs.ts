@@ -637,6 +637,25 @@ export async function rhDocsRequestCron(o: { deadlineAt: number; cursor?: string
   } catch (err) { return fail(err); }
 }
 
+/**
+ * Formação — FAQs novas da base de conhecimento, à segunda a partir das 09:30
+ * de Lisboa (trabalho kb-faq-weekly). Interruptor KB_FAQ_WEEKLY (desligado por
+ * omissão) + IA AI_KB_FAQ. Escolhe 2–3 documentos e publica até 3 FAQs sem
+ * repetir as que existem nem as eliminadas.
+ */
+export async function kbFaqWeeklyCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runKbFaqGeneration } = await import("./trainingFaqAuto");
+    const r = await runKbFaqGeneration({ trigger: "weekly", userId: null, deadlineAt: o.deadlineAt });
+    return {
+      httpStatus: 200,
+      body: { ok: r.ok, ranAt: ranAt(), ...(r.skipped ? { skipped: r.skipped } : {}), docs: r.docs.length, created: r.created.length, ...(r.ok ? {} : { error: r.errors.join(" · ").slice(0, 300) || "falhou" }) },
+      // Outra corrida (um "Gerar agora") tinha o cadeado: tenta no tick seguinte, não dá a semana por feita.
+      done: r.skipped !== "locked",
+    };
+  } catch (err) { return fail(err); }
+}
+
 /** Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7 dias. */
 export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDays: number }): Promise<CronJobRun> {
   try {

@@ -44,7 +44,10 @@ export type AiFlag =
   // Base de conhecimento (manuais do Drive/uploads): índice por embeddings e leitura de PDFs.
   | "AI_KNOWLEDGE"
   // D39: anexos dos emails do RH (CV, documentos) → candidato + resumo para quem entrevista.
-  | "AI_HR_EMAIL_ATTACHMENTS";
+  | "AI_HR_EMAIL_ATTACHMENTS"
+  // Formação com IA (14 out 2026): quiz novo em cada jogo e FAQs a partir da base de conhecimento.
+  | "AI_QUIZ_LIVE"
+  | "AI_KB_FAQ";
 
 export interface AiFeatureDef {
   label: string;
@@ -68,6 +71,15 @@ export const AI_FEATURES = {
   // Manual longo → 5–20 perguntas com resposta certa: o lite inventa/repete
   // opções com frequência; `fast` chega (nunca `smart`, por custo).
   quiz_generation: { label: "Perguntas da formação", flag: "AI_QUIZ", tier: "fast", essential: false },
+  // Quiz da Formação (Jorge, 14 out 2026: "perguntas diferentes de cada vez"):
+  // 10 perguntas novas em cada jogo, só com trechos da base de conhecimento e
+  // dos manuais que a pessoa pode ver. A resposta certa tem de estar certa →
+  // `fast`, como as perguntas dos manuais (pode baixar em ai.featureTiers).
+  quiz_live: { label: "Quiz: perguntas novas em cada jogo", flag: "AI_QUIZ_LIVE", tier: "fast", essential: false },
+  // FAQs a partir da base de conhecimento (semanal + "Gerar agora"): 1 pedido por documento, curto → lite.
+  kb_faq: { label: "FAQs a partir da base de conhecimento", flag: "AI_KB_FAQ", tier: "lite", essential: false },
+  // "Procurar formação por tema": escolhe no catálogo (só títulos e resumos) → lite; sem IA, pesquisa por palavras.
+  training_search: { label: "Formação: procurar por tema", flag: "AI_TRAINING_TUTOR", tier: "lite", essential: false },
   // Tutor da Formação: respostas curtas só a partir dos manuais (trechos
   // escolhidos por palavras-chave + conteúdo do módulo em cache) — o lite chega.
   training_tutor: { label: "Tutor da formação", flag: "AI_TRAINING_TUTOR", tier: "lite", essential: false },
