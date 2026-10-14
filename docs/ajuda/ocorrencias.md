@@ -2,7 +2,7 @@
 modulo: ocorrencias
 titulo: Ocorrências
 rotas: /ocorrencias
-palavras: ocorrência, ocorrências, fechada sozinha, fecha sozinha, 3 dias, três dias, média, fechadas sozinhas, parques tratados, parques que a operação não faz, incidente, vidro aberto, carro aberto, acidente, foi um acidente, confirmar acidente, quem conduzia, desfazer acidente, menos 6000, atraso, prioridade, multipark, app multipark, resolver, resolvida, parque, matrícula, reserva, ocorrência antiga, csv, indisponível, tentar de novo
+palavras: ocorrência, ocorrências, email de ocorrência, aviso da app, ocorrência por email, fechada sozinha, fecha sozinha, 3 dias, três dias, média, fechadas sozinhas, parques tratados, parques que a operação não faz, incidente, vidro aberto, carro aberto, acidente, foi um acidente, confirmar acidente, quem conduzia, desfazer acidente, menos 6000, atraso, prioridade, multipark, app multipark, resolver, resolvida, parque, matrícula, reserva, ocorrência antiga, csv, indisponível, tentar de novo
 ---
 # Ocorrências
 
@@ -45,6 +45,11 @@ As ocorrências registadas pelos agentes na **app Multipark** (vidro aberto, aci
 - **"Ocorrências indisponíveis"**: a base de dados da Multipark não respondeu. Carrega em **Tentar de novo**.
 - Se só as contagens falharem, aparece um aviso a laranja e a lista continua certa. Uma falha nunca aparece como "Sem ocorrências" nem como 0.
 - O mesmo vale para o painel de Suporte, o resumo da passagem de turno e o assistente: todos leem as ocorrências da app Multipark e dizem "sem dados" quando a leitura falha.
+
+**Avisos de ocorrência por email**
+- A app Multipark manda um email por cada ocorrência registada ("Tipo de ocorrência", "Matrícula", "Observações", "Link reserva"). Com o interruptor **"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas"** (Definições → Automações; desligado por omissão) esse email liga-se sozinho à ocorrência da app (pela matrícula e pela hora — só se lê a BD da Multipark, nunca se escreve), vai para a caixa **Ocorrências** da Comunicação e fica **lido**. Na conversa aparece a ligação **Ocorrência**, que a abre aqui.
+- Se a ocorrência ainda não estiver na app, o email vai para a caixa Ocorrências **por ler**. Se a BD da Multipark não responder, nada se mexe e volta a tentar.
+- Um colaborador que relata uma ocorrência por email (sem a registar na app) vai para a caixa **Ocorrências** **por ler**, com a linha da IA a dizer porquê: **regista-a na app Multipark** — o dashboard não cria ocorrências (a app é a fonte única).
 
 **Ocorrências antigas do dashboard**
 - As ocorrências registadas no dashboard antes da ligação à app Multipark ficam guardadas, mas já não entram nos números nem nos lembretes.

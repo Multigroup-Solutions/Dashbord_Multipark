@@ -58,6 +58,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "mail-sync": async (o) => (await import("./cronJobs")).mailSyncCron(o),
   "multipark-deliveries": async (o) => (await import("./cronJobs")).multiparkDeliveriesCron(o),
   "ai-comms": async (o) => (await import("./cronJobs")).aiCommsCron(o),
+  "mail-backfill": async (o) => (await import("./cronJobs")).mailBackfillCron(o),
   "google-pending": async (o) => (await import("./cronJobs")).googlePendingCron(o),
   "google-sync": async (o) => (await import("./cronJobs")).googleSyncCron(o),
   "google-watch-renew": async (o) => (await import("./cronJobs")).googleWatchRenewCron(o),

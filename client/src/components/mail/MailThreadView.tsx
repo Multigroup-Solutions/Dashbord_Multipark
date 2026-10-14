@@ -36,7 +36,7 @@ function LinksPanel({ threadId, links, canAct, onChanged }: {
     onError: (e) => toast.error(e.message),
   });
   const unlink = trpc.mail.threads.unlink.useMutation({ onSuccess: onChanged, onError: (e) => toast.error(e.message) });
-  const placeholder = { client: "email do cliente", booking: "referência / nº da reserva", complaint: "nº da reclamação", lost_found: "nº do caso", incident: "nº da ocorrência" }[type];
+  const placeholder = { client: "email do cliente", booking: "referência / nº da reserva", complaint: "nº da reclamação", lost_found: "nº do caso", incident: "nº da ocorrência antiga", occurrence: "id da ocorrência (app Multipark)" }[type];
   return (
     <div className="rounded-lg border bg-muted/40 p-2.5 space-y-2">
       <div className="text-xs font-semibold flex items-center gap-1"><Link2 className="h-3.5 w-3.5" /> Ligado a</div>

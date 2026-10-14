@@ -28,6 +28,7 @@ import {
   Mail, Save, ShieldCheck, SlidersHorizontal, Sparkles, ToggleLeft, Trash2, X, XCircle,
 } from "lucide-react";
 import { MailboxesSettings } from "@/components/mail/MailboxesSettings";
+import { MailTriageEvalCard } from "@/components/mail/MailTriageEvalCard";
 import { SharedCalendarsSettings } from "@/components/google/SharedCalendarsSettings";
 import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
@@ -91,7 +92,7 @@ export default function DefinicoesPage() {
         <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard /></TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes" className="space-y-4"><IntegrationsCard /><WebAnalyticsSettings /></TabsContent>
-        <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings /><SharedCalendarsSettings /><GooglePushSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
+        <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings />{user.role === "super_admin" && <MailTriageEvalCard />}<SharedCalendarsSettings /><GooglePushSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
         <TabsContent value="parametros" className="space-y-4"><ServiceTasksSettings /><ParametersCard /></TabsContent>
         <TabsContent value="notificacoes"><NotificationRoutingCard /></TabsContent>
         <TabsContent value="seguranca"><SecurityCard isSuperAdmin={user.role === "super_admin"} /></TabsContent>

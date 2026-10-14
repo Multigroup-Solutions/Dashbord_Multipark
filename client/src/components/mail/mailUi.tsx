@@ -44,7 +44,7 @@ export function BrandChip({ brand }: { brand: string | null | undefined }) {
 
 export function LinkChip({ type, id }: { type: string; id: string }) {
   const label = MAIL_LINK_LABELS[type as MailLinkType] ?? type;
-  const short = type === "client" ? id : type === "booking" ? id.slice(0, 10) : `#${id}`;
+  const short = type === "client" ? id : type === "booking" || type === "occurrence" ? id.slice(0, 10) : `#${id}`;
   return <Badge variant="outline" className="h-5 px-1.5 text-[10.5px] font-normal max-w-[180px] truncate">{label} {short}</Badge>;
 }
 
@@ -55,6 +55,8 @@ export const MAIL_LINK_HREF: Record<MailLinkType, (id: string) => string | null>
   complaint: (id) => `/reclamacoes?id=${encodeURIComponent(id)}`,
   lost_found: (id) => `/perdidos-achados/caso/${encodeURIComponent(id)}`,
   incident: (id) => `/ocorrencias?id=${encodeURIComponent(id)}`,
+  // 14 out 2026: a ocorrência da app Multipark (o aviso por email liga-se sozinho).
+  occurrence: (id) => `/ocorrencias?mp=${encodeURIComponent(id)}`,
 };
 
 /**

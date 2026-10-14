@@ -14,9 +14,8 @@
  * caixas", ligado por omissão a pedido do Jorge). Nunca responde a ninguém.
  */
 import { z } from "zod";
-import { GENERAL_BOX_KEY, INTENT_BOX, parseRoutingAnswer } from "./commsBoxes";
+import { GENERAL_BOX_KEY, INTENT_BOX } from "./commsBoxes";
 import type { WhatsappIntent } from "./commsAi";
-import type { MailPipeline } from "./mail";
 
 // ─── Definições (Definições → Parâmetros → IA, "ai.commsRouting") ───────────
 
@@ -58,60 +57,9 @@ export function normalizeConfidence(v: unknown): number | null {
   return Math.max(0, Math.min(1, Math.round(n * 1000) / 1000));
 }
 
-export interface RoutedBox {
-  /** Caixa aplicada (GENERAL_BOX_KEY = info quando não percebeu). */
-  boxKey: string;
-  /** O que a IA disse, se for uma caixa válida (null = "geral"/inválida). */
-  aiBoxKey: string | null;
-  confidence: number | null;
-  /** true = a IA percebeu (caixa válida e confiança ≥ limiar). */
-  understood: boolean;
-}
-
-/**
- * Caixa final a partir da resposta da IA: caixa válida (ativa) e confiança ≥
- * limiar → essa; senão (geral, inválida, sem confiança, abaixo do limiar) →
- * info. PURA.
- */
-export function decideRoutedBox(
-  answer: { box?: unknown; confidence?: unknown },
-  targets: ReadonlyArray<{ key: string }>,
-  opts: { minConfidence: number },
-): RoutedBox {
-  const aiBoxKey = parseRoutingAnswer(answer.box, targets);
-  const confidence = normalizeConfidence(answer.confidence);
-  const understood = !!aiBoxKey && confidence != null && confidence >= opts.minConfidence;
-  return { boxKey: understood ? aiBoxKey! : GENERAL_BOX_KEY, aiBoxKey, confidence, understood };
-}
-
-// ─── Email: que mensagens se separam ─────────────────────────────────────────
-
-/** Pipelines que podem ser separados (os outros são emails de máquinas ou já criaram o caso). */
-const ROUTABLE_PIPELINES: ReadonlySet<string> = new Set<MailPipeline>(["recursos-humanos"]);
-
-/**
- * Esta mensagem guardada é para separar? Só emails RECEBIDOS de pessoas, numa
- * caixa PARTILHADA (nunca as pessoais nem "Por classificar"), que ABREM uma
- * conversa (uma resposta num fio que já está numa caixa fica onde está) e que
- * não criaram um caso (reclamação, perdido…) nem são de máquinas (críticas,
- * campanhas, ocorrências). PURA.
- */
-export function emailRoutingEligible(e: {
-  outbound: boolean;
-  personal: boolean;
-  systemMail: boolean;
-  automated: boolean;
-  newThread: boolean;
-  mailboxKey: string | null | undefined;
-  pipeline: string | null | undefined;
-  createdCase: boolean;
-}): boolean {
-  if (e.outbound || e.personal || e.systemMail || e.automated) return false;
-  if (!e.newThread || !e.mailboxKey) return false;
-  if (e.createdCase) return false;
-  if (e.pipeline && !ROUTABLE_PIPELINES.has(e.pipeline)) return false;
-  return true;
-}
+// A caixa de um EMAIL decide-se agora em shared/mailTriage.ts (decideMailTriage:
+// a mesma leitura dá a caixa e o caso); as mensagens que se leem em
+// preTriageMail (14 out 2026).
 
 // ─── WhatsApp: caixa de uma conversa nova ────────────────────────────────────
 

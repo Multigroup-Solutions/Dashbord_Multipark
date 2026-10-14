@@ -43,6 +43,12 @@ Todos @multipark.pt (e, pelos domínios alternativos, também @skypark.pt, @redp
 6. **Etiqueta** (aparece na conversa) e **Ativo**. **Guardar**.
 Um endereço só pode estar numa caixa. Um alias inativo deixa de encaminhar.
 
+**Depois do alias: a triagem da IA** (14 out 2026)
+- O alias decide a caixa onde o email **entra**. Depois disso, nos emails recebidos de pessoas nas caixas partilhadas, a IA lê e decide pelo sentido (ver Ajuda → Comunicação): reclamações e perdidos vão para os módulos e para a caixa do caso; críticas e avisos de ocorrência para a caixa deles, lidos; o resto para a caixa do tema.
+- **reclamacoes@** e **perdidos@** criam sempre o caso (o destino deles). A IA só impede o caso quando tem a certeza de que é lixo e o interruptor **"IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@"** está ligado (desligado por omissão).
+- Envios em massa reconhecem-se pelos **cabeçalhos** (List-Unsubscribe, List-Id, Precedence, Auto-Submitted) — nunca pelas palavras. Um **Grupo Google da empresa** que distribui um alias (List-Id de um domínio nosso) não conta como envio em massa: é o cliente a escrever.
+- O assunto já **não** manda emails para o pipeline das Ocorrências (antes, "ocorrência" no assunto bastava). Os avisos da app Multipark reconhecem-se pelo formulário.
+
 **Por classificar** (Comunicação → caixa **Por classificar**, só admin e super admin)
 - Emails que chegaram por um endereço fora da tabela (ex.: em **Bcc**, ou um alias novo por configurar). Automáticos (notificações de reserva, emails do próprio dashboard) nunca vão para aqui.
 - Abre a conversa → **Atribuir à caixa** (opcional: um alias da tabela, e **Acrescentar este endereço à tabela** para os próximos já chegarem classificados). Se o destino criar registos, são criados nesse momento.
