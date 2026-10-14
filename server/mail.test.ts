@@ -125,9 +125,9 @@ describe("classificação alias → caixa → marca", () => {
     const off = [{ ...boxes[1], active: false }];
     expect(classifyMessage({ to: ["info@multipark.pt"] }, off).mailboxKey).toBeNull();
   });
-  it("pipeline: da caixa; 'ocorrência' no assunto como o IMAP fazia", () => {
+  it("pipeline: o da caixa — 14 out 2026: a palavra 'ocorrência' no assunto já não decide nada (a IA / o formulário do aviso decidem)", () => {
     expect(pipelineFor(boxes[0], "x")).toBe("reclamacoes");
-    expect(pipelineFor(boxes[2], "Fwd: Ocorrência no parque", ["ocorrencias"])).toBe("ocorrencias");
+    expect(pipelineFor(boxes[2], "Fwd: Ocorrência no parque", ["ocorrencias"])).toBeNull();
     expect(pipelineFor(boxes[2], "Fwd: Ocorrência no parque", [])).toBeNull();
   });
   it("endereços e remetentes automáticos", () => {

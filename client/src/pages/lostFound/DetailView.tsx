@@ -45,6 +45,7 @@ import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { compressImage } from "@/lib/compressImage";
 import { useConfirm } from "../training/shared";
 import { Archive, ArchiveRestore } from "lucide-react";
+import { AiUnconfirmedBanner } from "@/components/AiUnconfirmedBanner";
 
 // ─── DETAIL VIEW ──────────────────────────────────────────────────────────────
 
@@ -124,6 +125,11 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
   const unarchiveMut = trpc.lostFound.unarchive.useMutation({
     onSuccess: () => { toast.success("Caso tirado do arquivo"); utils.lostFound.list.invalidate(); utils.lostFound.getById.invalidate({ id }); },
     onError: (e) => toast.error(e.message || "Erro ao tirar do arquivo"),
+  });
+  // 14 out 2026: "Por confirmar (IA)" — uma pessoa confirma (ou arquiva).
+  const confirmAiMut = trpc.lostFound.confirmAi.useMutation({
+    onSuccess: () => { toast.success("Confirmado"); utils.lostFound.list.invalidate(); utils.lostFound.getById.invalidate({ id }); },
+    onError: (e) => toast.error(e.message || "Erro ao confirmar"),
   });
   const convertMut = trpc.lostFound.convertToComplaint.useMutation({
     onSuccess: (r) => { toast.success(`Convertido na Reclamação #${r.newId} (este caso fica fechado e ligado)`); utils.lostFound.list.invalidate(); utils.lostFound.getById.invalidate({ id }); utils.complaints.list.invalidate(); },
@@ -309,6 +315,13 @@ export function DetailView({ id, user, onBack }: { id: number; user: any; onBack
         )}
       </div>
 
+      {!archived && Number((item as any).aiUnconfirmed ?? 0) === 1 && (
+        <AiUnconfirmedBanner
+          kind="lost_found" canConfirm={canEdit} canArchive={canManage} confirming={confirmAiMut.isPending}
+          onConfirm={() => confirmAiMut.mutate({ id })}
+          onReject={() => { setArchiveReason("Não é um perdido (a IA criou-o por confirmar)"); setArchiveOpen(true); }}
+        />
+      )}
       {archived && (
         <div role="status" className="rounded-md border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800 dark:bg-slate-900/40 dark:text-slate-200">
           <Archive className="w-4 h-4 inline mr-1" /> Arquivado{(item as any).archivedAt ? ` em ${fmtPTDateTime((item as any).archivedAt)}` : ""}{(item as any).archiveReason ? ` — ${(item as any).archiveReason}` : ""}.

@@ -12,10 +12,11 @@ const h = vi.hoisted(() => ({ db: null as any, log: vi.fn() }));
 vi.mock("./db", () => ({ getDb: async () => h.db, logActivity: h.log }));
 
 import {
-  aiIntakeNote, commsRoutingSettings, decideRoutedBox, emailRoutingEligible, firstContactPlan, normalizeCandidate, normalizeConfidence,
+  aiIntakeNote, commsRoutingSettings, firstContactPlan, normalizeCandidate, normalizeConfidence,
   routingNoteText, whatsappRoutingPlan, COMMS_ROUTING_DEFAULTS, WHATSAPP_NEW_CONVERSATION_HOURS,
 } from "../shared/commsRouting";
-import { GENERAL_BOX_KEY, availableTargets } from "../shared/commsBoxes";
+import { GENERAL_BOX_KEY } from "../shared/commsBoxes";
+import { decideMailTriage, preTriageMail, type PreTriageFacts } from "../shared/mailTriage";
 import { AUTOMATION_FLAGS, SETTINGS, automationFlagDefault, validateSetting } from "../shared/appSettings";
 import { AI_FEATURES } from "../shared/aiFeatures";
 import { LEAD_SOURCES, LEAD_SOURCE_LABELS } from "../shared/extraLeadsFunnel";
@@ -42,22 +43,25 @@ const BOXES = [
   { key: "faturacao", label: "Faturação", active: true },
   { key: "parcerias", label: "Parcerias", active: false },
 ];
-const TARGETS = availableTargets(BOXES);
+const ACTIVE = new Set(BOXES.filter((b) => b.active).map((b) => b.key));
+const FACTS = { sender: "external" as const, forwardedExternal: false, newThread: true, mode: "sync" as const };
+const FEATURES = { complaints: true, lostFound: true, notices: true };
+const box = (out: { box?: unknown; confidence?: unknown }, opts = { minConfidence: 0.7 }) =>
+  decideMailTriage(out, FACTS, { ...opts, createMinConfidence: 0.85, suggestMinConfidence: 0.5 }, FEATURES, ACTIVE);
 
 // ─── Regras puras ────────────────────────────────────────────────────────────
 
 describe("resposta da IA → caixa (abaixo do limiar, geral ou inválida → info)", () => {
-  const opts = { minConfidence: 0.7 };
   it("caixa válida e certa → essa caixa", () => {
-    expect(decideRoutedBox({ box: "Reservas", confidence: 0.92 }, TARGETS, opts)).toMatchObject({ boxKey: "reservas", understood: true, confidence: 0.92 });
-    expect(decideRoutedBox({ box: "rh", confidence: 85 }, TARGETS, opts)).toMatchObject({ boxKey: "rh", confidence: 0.85 });
+    expect(box({ box: "Reservas", confidence: 0.92 })).toMatchObject({ routeBox: "reservas", understood: true, confidence: 0.92 });
+    expect(box({ box: "rh", confidence: 85 })).toMatchObject({ routeBox: "rh", confidence: 0.85 });
   });
   it("dúvida, geral, caixa inativa ou inventada → info", () => {
-    expect(decideRoutedBox({ box: "reservas", confidence: 0.5 }, TARGETS, opts)).toMatchObject({ boxKey: GENERAL_BOX_KEY, aiBoxKey: "reservas", understood: false });
-    expect(decideRoutedBox({ box: "geral", confidence: 0.99 }, TARGETS, opts).boxKey).toBe(GENERAL_BOX_KEY);
-    expect(decideRoutedBox({ box: "parcerias", confidence: 0.99 }, TARGETS, opts).boxKey).toBe(GENERAL_BOX_KEY);
-    expect(decideRoutedBox({ box: "marketing", confidence: 0.99 }, TARGETS, opts).boxKey).toBe(GENERAL_BOX_KEY);
-    expect(decideRoutedBox({ box: "reservas" }, TARGETS, opts).boxKey).toBe(GENERAL_BOX_KEY);
+    expect(box({ box: "reservas", confidence: 0.5 })).toMatchObject({ routeBox: GENERAL_BOX_KEY, aiBoxKey: "reservas", understood: false });
+    expect(box({ box: "geral", confidence: 0.99 }).routeBox).toBe(GENERAL_BOX_KEY);
+    expect(box({ box: "parcerias", confidence: 0.99 }).routeBox).toBe(GENERAL_BOX_KEY);
+    expect(box({ box: "marketing", confidence: 0.99 }).routeBox).toBe(GENERAL_BOX_KEY);
+    expect(box({ box: "reservas" }).routeBox).toBe(GENERAL_BOX_KEY);
   });
   it("confiança normalizada e definições com omissão", () => {
     expect(normalizeConfidence("0,8")).toBe(0.8);
@@ -71,22 +75,25 @@ describe("resposta da IA → caixa (abaixo do limiar, geral ou inválida → inf
   });
 });
 
-describe("email: que mensagens se separam", () => {
-  const base = { outbound: false, personal: false, systemMail: false, automated: false, newThread: true, mailboxKey: "info", pipeline: null, createdCase: false };
-  it("mensagem nova recebida numa caixa partilhada → sim (incluindo a recursos-humanos@)", () => {
-    expect(emailRoutingEligible(base)).toBe(true);
-    expect(emailRoutingEligible({ ...base, mailboxKey: "reservas" })).toBe(true);
-    expect(emailRoutingEligible({ ...base, mailboxKey: "rh", pipeline: "recursos-humanos" })).toBe(true);
+describe("email: que mensagens a IA lê (pré-triagem, 14 out 2026)", () => {
+  const base: PreTriageFacts = {
+    outbound: false, personal: false, systemMail: false, automated: 0, mailboxKey: "info", pipeline: null, fromEmail: "ana@sapo.pt", text: "Olá",
+    senderIsCompany: false, createdCase: false, threadHasCase: false, humanTouched: false,
+  };
+  const action = (f: Partial<PreTriageFacts>) => preTriageMail({ ...base, ...f }).action;
+  it("mensagem recebida numa caixa partilhada → IA (incluindo a recursos-humanos@ e as respostas)", () => {
+    expect(action({})).toBe("ai");
+    expect(action({ mailboxKey: "reservas" })).toBe("ai");
+    expect(action({ mailboxKey: "rh", pipeline: "recursos-humanos" })).toBe("ai");
   });
-  it("resposta num fio que já existe, pessoais, enviados, automáticos, casos criados e emails de máquinas → não", () => {
-    expect(emailRoutingEligible({ ...base, newThread: false })).toBe(false);
-    expect(emailRoutingEligible({ ...base, personal: true })).toBe(false);
-    expect(emailRoutingEligible({ ...base, outbound: true })).toBe(false);
-    expect(emailRoutingEligible({ ...base, automated: true })).toBe(false);
-    expect(emailRoutingEligible({ ...base, systemMail: true })).toBe(false);
-    expect(emailRoutingEligible({ ...base, mailboxKey: null })).toBe(false);
-    expect(emailRoutingEligible({ ...base, createdCase: true })).toBe(false);
-    for (const p of ["reclamacoes", "perdidos", "criticas", "campanhas", "ocorrencias"]) expect(emailRoutingEligible({ ...base, pipeline: p })).toBe(false);
+  it("pessoais, enviados, sistema, notificações de reserva, casos criados e caixas de máquinas → não", () => {
+    expect(action({ personal: true })).toBe("skip");
+    expect(action({ outbound: true })).toBe("skip");
+    expect(action({ systemMail: true })).toBe("skip");
+    expect(action({ automated: 2 })).toBe("skip");
+    expect(action({ mailboxKey: null })).toBe("skip");
+    expect(action({ createdCase: true })).toBe("skip");
+    for (const p of ["reclamacoes", "perdidos", "criticas", "campanhas", "ocorrencias"]) expect(action({ pipeline: p })).toBe("skip");
   });
   it("só a mensagem nova vai à IA (sem o histórico citado)", () => {
     expect(stripQuoted("Quero trabalhar.\n\nEm 3 out, X escreveu:\n> antigo")).toBe("Quero trabalhar.");
@@ -203,13 +210,15 @@ describe("email novo → caixa certa (por ler); dúvida ou falha → info", () =
     expect(await routeEmailMessage(MSG, deps)).toEqual({ status: "seen" });
     expect(calls.classify).toBe(1);
   });
-  it("dúvida → info; falha da IA → info (nunca se perde)", async () => {
+  it("dúvida → info; falha da IA → fica onde está, por ler, e volta a ser lida (nunca se perde)", async () => {
     const a = emailDeps({ output: { box: "reservas", confidence: 0.4, reason: "Pouco claro" } });
     expect(await routeEmailMessage({ ...MSG, fromBoxKey: "reservas" }, a.deps)).toMatchObject({ status: "moved", boxKey: "info" });
     expect(a.calls.record[0]).toMatchObject({ aiBoxKey: "reservas", boxKey: "info" });
+    // 14 out 2026: a falha já não manda para o info — nada se mexe e o varrimento volta a tentar.
     const b = emailDeps({ fail: true });
-    expect(await routeEmailMessage({ ...MSG, fromBoxKey: "reservas" }, b.deps)).toMatchObject({ status: "failed", boxKey: "info" });
-    expect(b.calls.record[0]).toMatchObject({ status: "failed", via: "fallback", error: "timeout", boxKey: "info" });
+    expect(await routeEmailMessage({ ...MSG, fromBoxKey: "reservas" }, b.deps)).toMatchObject({ status: "failed", boxKey: "reservas" });
+    expect(b.calls.record[0]).toMatchObject({ status: "failed", via: "fallback", error: "timeout", boxKey: "reservas" });
+    expect(b.calls.move).toEqual([]);
   });
   it("a IA diz a caixa onde já está → fica (kept); sem info ativa a dúvida fica onde entrou", async () => {
     const a = emailDeps({ output: { box: "rh", confidence: 0.95, reason: "Escala", candidate: false } });
@@ -269,7 +278,7 @@ describe("classificação pela IA (zod + dados pessoais)", () => {
     const fake = createFakeProvider("gemini", [okResponse(JSON.stringify(out))]);
     setAiProvidersForTests({ gemini: fake });
     const msg = { ...MSG, subject: "Emprego", text: "Olá, sou a Ana Sousa, quero ser condutora. Liguem 912 345 678 ou ana.s@gmail.com", fromName: "Ana Sousa Pereira" };
-    const r = await classifyEmailWithAi(msg, TARGETS, "Geral (info@)");
+    const r = await classifyEmailWithAi(msg, "Geral (info@)");
     expect(r.output).toMatchObject(out);
     expect(r.restore(String(r.output.candidatePhone))).toBe("912 345 678");
     const sent = fake.calls[0].parts.map((p: any) => p.text ?? "").join("\n");
@@ -281,13 +290,13 @@ describe("classificação pela IA (zod + dados pessoais)", () => {
   });
   it("resposta fora do schema → erro (o encaminhador manda para o info)", async () => {
     setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse(JSON.stringify({ box: "rh" }))]) });
-    await expect(classifyEmailWithAi(MSG, TARGETS, "Geral")).rejects.toMatchObject({ code: "invalid_output" });
+    await expect(classifyEmailWithAi(MSG, "Geral")).rejects.toMatchObject({ code: "invalid_output" });
   });
   it("interruptor desligado → nenhuma chamada ao fornecedor", async () => {
     process.env.AI_MAIL_ROUTING = "off";
     const fake = createFakeProvider("gemini", [okResponse("{}")]);
     setAiProvidersForTests({ gemini: fake });
-    await expect(classifyEmailWithAi(MSG, TARGETS, "Geral")).rejects.toMatchObject({ code: "disabled" });
+    await expect(classifyEmailWithAi(MSG, "Geral")).rejects.toMatchObject({ code: "disabled" });
     expect(fake.calls).toHaveLength(0);
   });
 });

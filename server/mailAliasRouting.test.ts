@@ -116,7 +116,8 @@ describe("destino/pipeline, responsável e avisos do encaminhamento", () => {
     expect(aliasPipeline(info, info.addresses[2], "x")).toBe("perdidos");
     expect(aliasPipeline(boxes[1], boxes[1].addresses[0], "x")).toBe("reclamacoes");
     expect(aliasPipeline(boxes[1], { destination: "geral" }, "x")).toBeNull();
-    expect(aliasPipeline(boxes[0], null, "Fwd: ocorrência", ["ocorrencias"])).toBe("ocorrencias");
+    // 14 out 2026: o assunto já não decide (era uma palavra-chave) — fica com o pipeline da caixa.
+    expect(aliasPipeline(boxes[0], null, "Fwd: ocorrência", ["ocorrencias"])).toBe(boxes[0].pipeline ?? null);
     expect([...configuredPipelines(boxes).keys()].sort()).toEqual(["perdidos", "reclamacoes"]);
   });
   it("responsável: pessoa ou equipa (papel)", () => {

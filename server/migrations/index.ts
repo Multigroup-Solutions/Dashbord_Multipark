@@ -183,7 +183,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0640", () => import("./migration_0640").then((m) => step(m.MIGRATION_0640_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0640))],
   ["0645", () => import("./migration_0645").then((m) => step(m.MIGRATION_0645_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0645))],
   ["0650", () => import("./migration_0650").then((m) => step(m.MIGRATION_0650_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0650))],
-  // 0655 e 0660 reservadas para outros PRs (entram ANTES desta linha).
+  ["0655", () => import("./migration_0655").then((m) => step(m.MIGRATION_0655_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0655))],
+  // 0660 (formação) entra entre a 0655 e esta, se chegar ao main depois.
   ["0665", () => import("./migration_0665").then((m) => step(m.MIGRATION_0665_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0665))],
 ];
 

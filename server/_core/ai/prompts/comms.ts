@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { COMPANY_CONTEXT, PLACEHOLDER_RULE, PT_PT_RULE } from "./common";
+import { MAIL_TRIAGE_HINTS } from "../../../../shared/mailTriage";
 
 // Schemas sem limites de tamanho/intervalo: a IA às vezes devolve 85 em vez de
 // 0,85 ou um texto maior — isso não pode dar "resposta inválida"; o código
@@ -65,21 +66,56 @@ export const whatsappTriageSchema = z.object({
   reason: z.string().optional(),
 });
 
-// ─── Email: separar pelas caixas (17f; Jorge, 8 out 2026: todas as caixas partilhadas) ──
+// ─── Email: triagem das caixas partilhadas (17f; Jorge, 8 e 14 out 2026) ──
+//
+// UMA leitura por mensagem decide a caixa E se há uma reclamação ou um objeto
+// perdido (mesmo dentro de outro pedido). As categorias vão descritas pelo que
+// QUEREM DIZER (shared/mailTriage.ts MAIL_TRIAGE_HINTS) — nunca listas de
+// palavras: quem decide é a IA, pelo sentido. O pedido é sempre o mesmo (a
+// lista não depende das caixas ativas): o que não existir decide-se depois.
 
 export const MAIL_ROUTING_SYSTEM = [
-  `Separas emails recebidos nas caixas partilhadas da empresa pela caixa do tema certo. ${COMPANY_CONTEXT} A empresa também recruta condutores extra.`,
+  `Lês emails que chegaram às caixas partilhadas da empresa e dizes do que tratam, pelo sentido do que a pessoa escreve e pelo que ela quer — nunca por uma palavra solta. ${COMPANY_CONTEXT} A empresa também recruta condutores extra.`,
   PT_PT_RULE,
   PLACEHOLDER_RULE,
-  "Recebes as caixas possíveis (chave: descrição) e o email. Responde com a chave da caixa certa em `box`,",
-  "ou `geral` se não for claro ou não encaixar em nenhuma. Não inventes chaves.",
-  "confidence: 0 a 1, quão certa estás. reason: motivo curto (máx. 10 palavras, sem dados pessoais).",
+  "O email pode estar em qualquer língua. Recebes o assunto, a mensagem nova e, se houver, o texto citado ou reencaminhado (o contexto da conversa: lê-o para perceber uma resposta curta ou um reencaminhamento).",
+  "Primeiro, quatro respostas sobre o email TODO, independentes da categoria (responde-as sempre, mesmo que o assunto principal seja outro):",
+  "complaintMentioned: true se, em qualquer parte do email, quem escreve (ou o cliente cuja mensagem vem reencaminhada, ou um parceiro em nome dele) diz que algo correu mal com o serviço — mesmo que seja de passagem ou dentro de outro pedido (uma alteração, uma reserva, uma fatura, um cancelamento), de uma vez anterior, com ironia, só pela foto que descreve, numa resposta curta, ou a insistir numa queixa anterior. false se não há queixa nenhuma: uma pergunta, um pedido sem descontentamento, uma urgência em que ainda nada correu mal, um elogio. Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) é false: as avaliações tratam-se nas Críticas.",
+  "complaint: 0 a 1, quão certa estás dessa queixa — 0 se complaintMentioned é false; cerca de 0,6 se a queixa é secundária, de uma vez anterior, dita de passagem ou só se percebe pelo contexto; 0,9 ou mais se a queixa é o assunto principal.",
+  "lostItemMentioned: true se, em qualquer parte do email, alguém diz que deixou, perdeu ou esqueceu um objeto connosco (no carro, no parque, no transfer) ou pergunta por um objeto encontrado — mesmo dentro de um elogio, de outro pedido ou numa resposta curta. false se não há objeto nenhum.",
+  "lostItem: 0 a 1, quão certa estás disso — 0 se lostItemMentioned é false; cerca de 0,6 se o objeto é secundário ou só se percebe pelo contexto; 0,9 ou mais se é o assunto principal.",
+  "Depois, a categoria:",
+  "Categorias (chave: o que quer dizer):",
+  ...MAIL_TRIAGE_HINTS.map((h) => `- ${h.key}: ${h.hint}`),
+  "box: a chave da categoria que melhor descreve o email. Não inventes chaves.",
+  "confidence: 0 a 1, quão certa estás de `box`.",
+  "reason: motivo curto (máx. 10 palavras, sem dados pessoais).",
   "candidate: true SÓ se for uma pessoa a candidatar-se a trabalhar connosco (enviar CV, pedir emprego, perguntar por vagas); falso para colaboradores, fornecedores e clientes.",
   "Se candidate for true, preenche o que aparecer (senão vazio): candidateName (nome completo), candidatePhone e candidateEmail (copia o marcador tal como está, ex. [TELEFONE_1]), candidateCity (onde vive ou quer trabalhar), hasLicense (sim/nao/desconhecido), licenseYears (anos de carta, número ou null), availability (disponibilidade, texto curto).",
   "Responde só com o JSON pedido.",
 ].join("\n");
 
+/** Sim/não da IA, tolerante ("true", 1, "sim"); qualquer outra coisa é false — nunca dá "resposta inválida". */
+const yesNo = z.preprocess(
+  (v) => (typeof v === "boolean" ? v : ["true", "1", "sim", "yes", "si", "oui"].includes(String(v ?? "").trim().toLowerCase())),
+  z.boolean(),
+).default(false);
+
 export const mailRoutingSchema = z.object({
+  // Auditoria (14 out 2026): as certezas de caso vêm PRIMEIRO e são
+  // obrigatórias no esquema que vai ao fornecedor (o modelo pondera-as antes
+  // de escolher a caixa e não as pode omitir — omitidas contavam 0 e as
+  // reclamações escondidas noutro pedido perdiam-se). Uma resposta sem elas
+  // continua válida (default 0 / false).
+  // Ronda 2: primeiro o SIM/NÃO ("há uma queixa / um objeto em qualquer parte
+  // do email?"), depois a certeza. Um modelo pequeno vê a queixa de passagem
+  // mas dá-lhe uma certeza baixa (o assunto principal é outro); o sim/não não
+  // depende dessa calibração — "mencionou" vale pelo menos "Por confirmar"
+  // (shared/mailTriage.ts caseScoresOf).
+  complaintMentioned: yesNo,
+  complaint: z.number().default(0),
+  lostItemMentioned: yesNo,
+  lostItem: z.number().default(0),
   box: z.string(),
   confidence: z.number(),
   reason: z.string(),
@@ -94,26 +130,33 @@ export const mailRoutingSchema = z.object({
 });
 export type MailRoutingOutput = z.infer<typeof mailRoutingSchema>;
 
+/** Caracteres do texto citado/reencaminhado que vão como contexto (depois da mensagem nova). */
+export const MAIL_QUOTED_MAX = 1200;
+
+export const SENDER_KIND_LABELS = { external: "de fora da empresa", company: "da empresa", automated: "endereço automático" } as const;
+
 export function mailRoutingInput(p: {
-  targets: ReadonlyArray<{ key: string; hint: string }>;
   subject: string;
   body: string;
+  /** Texto citado ou reencaminhado (contexto). */
+  quoted?: string | null;
   /** Caixa por onde entrou (ex.: "Geral (info@)"). */
   fromBox?: string | null;
   /** Só o primeiro nome de quem escreve. */
   senderFirstName?: string | null;
+  senderKind?: keyof typeof SENDER_KIND_LABELS | null;
   /** Nomes dos anexos (ex.: "CV.pdf") — ajudam a reconhecer candidaturas. */
   attachmentNames?: readonly string[];
 }): string {
+  const who = [p.senderFirstName || null, p.senderKind ? `(${SENDER_KIND_LABELS[p.senderKind]})` : null].filter(Boolean).join(" ");
+  const quoted = String(p.quoted ?? "").trim();
   return [
-    "Caixas:",
-    ...p.targets.map((t) => `- ${t.key}: ${t.hint}`),
-    "",
     ...(p.fromBox ? [`Entrou pela caixa: ${p.fromBox}`] : []),
-    ...(p.senderFirstName ? [`Remetente: ${p.senderFirstName}`] : []),
+    ...(who ? [`Remetente: ${who}`] : []),
     ...(p.attachmentNames?.length ? [`Anexos: ${p.attachmentNames.slice(0, 6).map((n) => n.slice(0, 60)).join(", ")}`] : []),
     `Assunto: ${p.subject.slice(0, 200)}`,
-    `Email:\n"""\n${p.body.slice(0, 2500)}\n"""`,
+    `Mensagem nova:\n"""\n${p.body.slice(0, 2500)}\n"""`,
+    ...(quoted ? [`Texto citado ou reencaminhado (contexto):\n"""\n${quoted.slice(0, MAIL_QUOTED_MAX)}\n"""`] : []),
   ].join("\n");
 }
 

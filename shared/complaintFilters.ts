@@ -29,6 +29,13 @@ export const COMPLAINT_ORIGIN_LABELS: Record<ComplaintOrigin, string> = {
 };
 export const isComplaintOrigin = (v: unknown): v is ComplaintOrigin => typeof v === "string" && (COMPLAINT_ORIGINS as readonly string[]).includes(v);
 
+/**
+ * Ronda 2 da auditoria (14 out 2026): no filtro "Origem", só as que a IA criou
+ * com certeza média e que ninguém confirmou ainda ("Por confirmar (IA)").
+ */
+export const COMPLAINT_AI_UNCONFIRMED_FILTER = "ai_unconfirmed" as const;
+export const COMPLAINT_AI_UNCONFIRMED_LABEL = "Por confirmar (IA)";
+
 /** Etiqueta da origem (sem origem registada → "Sem origem registada"). PURA. */
 export function complaintOriginLabel(v: string | null | undefined): string {
   return isComplaintOrigin(v) ? COMPLAINT_ORIGIN_LABELS[v] : "Sem origem registada";
@@ -57,8 +64,8 @@ export interface ComplaintListFilters {
   type?: string | null;
   /** "all" | "none" (sem responsável) | id da ficha. */
   assignee?: "all" | "none" | number | null;
-  /** "all" | origem | "unknown" (sem origem registada). */
-  origin?: ComplaintOrigin | "all" | "unknown" | null;
+  /** "all" | origem | "unknown" (sem origem registada) | "ai_unconfirmed" (Por confirmar (IA)). */
+  origin?: ComplaintOrigin | "all" | "unknown" | typeof COMPLAINT_AI_UNCONFIRMED_FILTER | null;
   /** Só as que não têm cidade (projeto) — a cidade em si escolhe-se no filtro global. */
   noCity?: boolean | null;
   /** Dia de criação (Lisboa), "AAAA-MM-DD", inclusive. */
@@ -81,6 +88,8 @@ export interface ComplaintFilterRow {
   assignedToName?: string | null;
   projectId?: number | null;
   origin?: string | null;
+  /** 0655: a IA criou-a com certeza média e ninguém a confirmou. */
+  aiUnconfirmed?: number | boolean | null;
   createdAt?: string | null;
 }
 
@@ -115,8 +124,12 @@ export function complaintMatchesFilters(c: ComplaintFilterRow, f: ComplaintListF
   if (typeof a === "number" && c.assignedToId !== a) return false;
 
   const o = f.origin ?? "all";
-  if (o === "unknown" && isComplaintOrigin(c.origin)) return false;
-  if (o !== "all" && o !== "unknown" && c.origin !== o) return false;
+  if (o === COMPLAINT_AI_UNCONFIRMED_FILTER) {
+    if (Number(c.aiUnconfirmed ?? 0) !== 1) return false;
+  } else {
+    if (o === "unknown" && isComplaintOrigin(c.origin)) return false;
+    if (o !== "all" && o !== "unknown" && c.origin !== o) return false;
+  }
 
   if (f.noCity && c.projectId != null) return false;
 

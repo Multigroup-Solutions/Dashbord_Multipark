@@ -369,6 +369,55 @@ export function buildOccurrenceByIdSql(id: string, cities?: string[]): { sql: st
   };
 }
 
+/** Janela à volta da hora do email em que se procura a ocorrência do aviso. */
+export const OCCURRENCE_NOTICE_WINDOW = { beforeMinutes: 180, afterMinutes: 30 } as const;
+
+const shiftUtc = (utc: string, minutes: number): string =>
+  new Date(Date.parse(`${utc.replace(" ", "T")}Z`) + minutes * 60_000).toISOString().slice(0, 19).replace("T", " ");
+
+/**
+ * 14 out 2026: a ocorrência de um aviso por email da app Multipark — a mesma
+ * matrícula, criada perto da hora do email (o mesmo tipo primeiro, depois a
+ * mais próxima). Só leitura, LIMIT 1. null = sem dados para procurar. PURA.
+ */
+export function buildOccurrenceForNoticeSql(n: { plate: string | null; type: string | null; atUtc: string | null }): { sql: string; params: SqlParam[] } | null {
+  const plate = normalizePlate(String(n.plate ?? ""));
+  if (plate.length < 4 || !n.atUtc || !UTC_TS_RE.test(n.atUtc)) return null;
+  const params = new ParamList();
+  const plateP = params.add(plate);
+  const from = params.add(shiftUtc(n.atUtc, -OCCURRENCE_NOTICE_WINDOW.beforeMinutes));
+  const to = params.add(shiftUtc(n.atUtc, OCCURRENCE_NOTICE_WINDOW.afterMinutes));
+  const at = params.add(n.atUtc);
+  const typeOrder = n.type?.trim() ? `CASE WHEN o."title" = ${params.add(n.type.trim().slice(0, 200))} THEN 0 ELSE 1 END, ` : "";
+  return {
+    sql: [
+      `SELECT o."id" AS id`,
+      `FROM "Occurrence" o`,
+      `JOIN "Booking" b ON b."id" = o."bookingId"`,
+      `JOIN "BookingVehicle" v ON v."id" = b."vehicleId"`,
+      `WHERE regexp_replace(upper(v."licensePlate"), '[^A-Z0-9]', '', 'g') = ${plateP}`,
+      `AND o."createdAt" >= ${from}::timestamp AND o."createdAt" <= ${to}::timestamp`,
+      `ORDER BY ${typeOrder}abs(extract(epoch from (o."createdAt" - ${at}::timestamp)))`,
+      `LIMIT 1`,
+    ].join("\n"),
+    params: params.values,
+  };
+}
+
+/** A ocorrência de um aviso por email (null = não há). Nunca lança. */
+export async function findMultiparkOccurrenceForNotice(
+  n: { plate: string | null; type: string | null; atUtc: string | null },
+  query: Query = (sql, params) => multiparkDbQuery(sql, params, { timeoutMs: 5_000 }),
+): Promise<MultiparkRead<{ id: string } | null>> {
+  const built = buildOccurrenceForNoticeSql(n);
+  if (!built) return { available: true, data: null };
+  return safeMultiparkRead("ocorrência do aviso por email", async () => {
+    const rows = await query<{ id?: unknown }>(built.sql, built.params);
+    const id = rows[0]?.id != null ? String(rows[0].id) : "";
+    return id ? { id } : null;
+  });
+}
+
 /** Linha → ocorrência. PURA. */
 export function mapOccurrenceRow(r: OccurrenceRow): MultiparkOccurrence {
   const priority = str(r.priority)?.toUpperCase() ?? null;
