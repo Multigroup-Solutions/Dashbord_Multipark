@@ -22,6 +22,12 @@ vi.mock("./evaluationEngine", () => ({
   getAdjustment: async () => null, getDispute: async () => null, recomputeRange: async () => ({}),
   resolveDispute: async () => true, voidAdjustment: async () => undefined,
 }));
+// tarefa 62 (P2d): o fecho mensal lê-se da BD — aqui nada fechado
+vi.mock("./evaluationClose", async (original) => ({
+  ...(await original<object>()),
+  readEvaluationClosedUntil: async () => ({ ok: true, closedUntil: null }),
+  readEvaluationClosers: async () => [],
+}));
 import { evaluationRouter } from "./evaluationRouter";
 
 const caller = (role: string, id = 1) => evaluationRouter.createCaller({ user: { id, role, name: "X" }, req: { headers: {} }, res: {} } as any);

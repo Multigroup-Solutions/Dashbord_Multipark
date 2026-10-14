@@ -2,7 +2,7 @@
 modulo: avaliacao
 titulo: Avaliação (dia e mês)
 rotas: /avaliacao, /avaliacao-operacional
-palavras: atraso ao trabalho, 5 minutos, atraso de 5 min, entrega atrasada saiu, regra antiga, mudanças de lugar, mudança de lugar, movimento entre garagens, início do movimento, excesso do gps, limite 120, 120 km/h sem tolerância, 132 km/h, trava da velocidade, dia recolhido com outro limite, picos do gps, entrega atrasada, pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
+palavras: fecho do mês, fechar o mês, fechado até, reabrir, prémios, quem fecha o mês, atraso ao trabalho, 5 minutos, atraso de 5 min, entrega atrasada saiu, regra antiga, mudanças de lugar, mudança de lugar, movimento entre garagens, início do movimento, excesso do gps, limite 120, 120 km/h sem tolerância, 132 km/h, trava da velocidade, dia recolhido com outro limite, picos do gps, entrega atrasada, pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
 ---
 # Avaliação
 
@@ -92,6 +92,17 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
   - **Trava do dia recolhido**: cada dia de GPS guarda o limite com que foi recolhido. Um dia só conta excesso acima do **maior** entre o limite de hoje e esse. Os dias recolhidos antes da tarefa 62 (com o limite a 132) contam a **132** até serem re-divididos. Porquê: nesses dias, uma máxima entre 120 e 132 pode ser um ponto solto que nunca foi confirmado como excesso; contá-la a 120 inventava excessos. Na Atividade diária esse dia pode aparecer a vermelho (passou 120) sem tirar pontos.
 - **Reclamação confirmada** (−20, uma vez por reclamação e condutor): uma reclamação não convertida com pontos aplicados (na reclamação ou ao condutor), positivos ou negativos. Conta no dia em que a reclamação foi criada.
 - Início da recolha, pedido de entrega, início da entrega, alterações e criações aparecem na lista e contam como ações, mas não dão pontos.
+
+**Fecho do mês (antes de pagar os prémios)**
+- Em **Avaliação → Mês**, por cima do ranking, aparece **"Fechado até DD/MM/AAAA"** quando há meses fechados. Os dias até essa data **já não mudam**: o recálculo da noite, o **Recalcular**, os ajustes, anular ajustes e as contestações (criar, e aceitar com ajuste) não lhes tocam. Recusar uma contestação, ou aceitá-la sem mexer nos números, continua a dar.
+- **Quem fecha**: o super admin e as pessoas da lista **Definições → Parâmetros → Pessoas → "Avaliação: quem fecha o mês"** (o super admin escolhe as contas). Para fechar:
+  1. Avaliação → **Mês**.
+  2. Na barra "Fecho do mês", escolhe o último dia a fechar (vem preenchido com o fim do mês anterior).
+  3. **Fechar até esta data** e confirma.
+- **Reabrir**: **Reabrir** (nada fechado) ou fechar até uma data mais cedo. Cada mudança fica no histórico das Definições, com quem e quando.
+- Só se fecha até ontem. Setembro e outubro não são meses de prémios: o primeiro fecho é o de **novembro, no início de dezembro**.
+- O fecho congela os **números**, não as **regras**: a pontuação calcula-se ao ler. Depois do primeiro fecho, qualquer mudança nos pontos ou nas regras tem de dizer **a partir de que dia vale**, senão mudava meses já pagos.
+- No detalhe de uma pessoa, os dias fechados têm a etiqueta **fechado** e não mostram Ajustar nem Contestar.
 
 **Quem vê o quê**
 São as permissões de Definições → Permissões, iguais no ecrã e no servidor, com as permissões por utilizador.

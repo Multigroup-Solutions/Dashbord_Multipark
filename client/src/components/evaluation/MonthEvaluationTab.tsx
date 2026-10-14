@@ -24,6 +24,7 @@ import { lateArrivalsOf } from "@shared/evaluationRules";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { MovementSourceNotice } from "@/components/evaluation/DayEvaluationTab";
 import { EvaluationDrawer, RulesLegend, fmtDay, fmtNum, fmtPts, ptsClass } from "@/components/evaluation/EvaluationBreakdown";
+import { EvaluationClosureBar } from "@/components/evaluation/EvaluationClosureBar";
 import { RankingFilterBar, useRankingFilter } from "@/components/evaluation/RankingFilterBar";
 import { describeFilter, filterRanking, groupRanking, isFilterActive, rankingCsv, rankingTotals, type EvalFilterView } from "@shared/evaluationFilters";
 
@@ -208,6 +209,8 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
 
   return (
     <div className="space-y-4">
+      {/* tarefa 62 (P2d): o fecho mensal — os dias fechados já não mudam */}
+      <EvaluationClosureBar from={from} to={to} />
       {/* 14 out 2026: pesquisa e filtros como no Odoo — mandam nos cartões, no ranking e nas exportações */}
       {rows.length > 0 && (
         <RankingFilterBar rows={rows} value={flt} onChange={setFlt} shown={shownRows.length}

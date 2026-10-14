@@ -322,8 +322,24 @@ export async function persistRows(rows: EmployeeDayRow[], startDay: string, endD
   return { written: values.length, removed };
 }
 
-/** Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional). */
-export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number; skipped: boolean }> {
+/**
+ * Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional).
+ * Tarefa 62 (P2d): os dias FECHADOS (≤ evaluation.closedUntil) nunca se escrevem — o
+ * intervalo começa no 1.º dia aberto; todo fechado → nada; o fecho não se leu → nada.
+ */
+export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number; skipped: boolean; closedUntil?: string | null }> {
+  const { readEvaluationClosedUntil, CLOSED_READ_FAILED_MESSAGE } = await import("./evaluationClose");
+  const { openFrom, fmtClosedUntil } = await import("../shared/evaluationClose");
+  const closed = await readEvaluationClosedUntil();
+  const nothing = (notice: string, skipped: boolean, closedUntil: string | null) =>
+    ({ rows: [], unresolved: new Map(), source: "multipark" as const, notice, rulesVersion: EVALUATION_RULES_VERSION, written: 0, removed: 0, skipped, closedUntil });
+  if (!closed.ok) return nothing(CLOSED_READ_FAILED_MESSAGE, true, null);
+  const from = openFrom(startDay, endDay, closed.closedUntil);
+  if (from == null) return nothing(`Fechado até ${fmtClosedUntil(closed.closedUntil!)} (fecho mensal): nada a recalcular.`, false, closed.closedUntil);
+  if (from !== startDay) {
+    const r = await recomputeRange(from, endDay, readLive);
+    return { ...r, closedUntil: closed.closedUntil };
+  }
   const out = await computeRange(startDay, endDay, readLive);
   // Sem a BD da Multipark os movimentos vêm da cópia local (congelada): gravar
   // por cima punha zeros nos dias bons e apagava linhas. Fica o que estava.

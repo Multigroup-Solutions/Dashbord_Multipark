@@ -32,6 +32,7 @@ import {
   type MetricKey,
   type RuleLine,
 } from "@shared/evaluationRules";
+import { isDayClosed } from "@shared/evaluationClose";
 
 // ─── Formatação ──────────────────────────────────────────────────────────────
 
@@ -176,6 +177,9 @@ export function EmployeeEvaluationDetail({
   const [openDay, setOpenDay] = useState<string | null>(null);
   const [adjustDay, setAdjustDay] = useState<string | null>(null);
   const [disputeDay, setDisputeDay] = useState<string | null>(null);
+  // tarefa 62 (P2d): os dias fechados (fecho mensal) já não se ajustam nem se contestam
+  const closure = trpc.evaluation.closure.useQuery(undefined, { staleTime: 60_000, refetchOnWindowFocus: false });
+  const closedUntil = closure.data?.closedUntil ?? null;
   const voidMut = trpc.evaluation.voidAdjustment.useMutation({
     onSuccess: () => { toast.success("Ajuste anulado"); onChanged?.(); },
     onError: (e) => toast.error(e.message),
@@ -211,6 +215,7 @@ export function EmployeeEvaluationDetail({
           {days.map((d) => {
             const isOpen = openDay === d.day;
             const activeAdj = d.adjustments.filter((a: any) => !a.voidedAt).length;
+            const dayClosed = isDayClosed(d.day, closedUntil);
             return (
               <div key={d.day}>
                 <button type="button" className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/40" onClick={() => setOpenDay(isOpen ? null : d.day)}>
@@ -218,6 +223,7 @@ export function EmployeeEvaluationDetail({
                   <span className="font-medium tabular-nums">{fmtDay(d.day)}</span>
                   {d.shift && <Badge variant="outline" className="text-[11px]">{SHIFT_LABEL[d.shift] ?? d.shift}</Badge>}
                   {activeAdj > 0 && <Badge variant="secondary" className="text-[11px] bg-amber-100 text-amber-800">ajustado</Badge>}
+                  {dayClosed && <Badge variant="outline" className="text-[11px]" title="Fecho mensal: este dia já não muda">fechado</Badge>}
                   <span className="ml-auto text-xs text-muted-foreground tabular-nums hidden sm:inline">{d.metrics.actions} ações · {fmtNum(d.metrics.hoursWorked)} h</span>
                   <span className={`w-16 text-right font-semibold tabular-nums ${ptsClass(d.score.totalPoints)}`}>{fmtPts(d.score.totalPoints)}</span>
                 </button>
@@ -242,7 +248,7 @@ export function EmployeeEvaluationDetail({
                               {a.voidedAt && <div className="no-underline">Anulado{a.voidReason ? `: ${a.voidReason}` : ""}</div>}
                               {!a.voidedAt && isRetiredMetric(a.metric) && <div className="text-amber-700 dark:text-amber-300">Sem efeito: regra retirada (a entrega atrasada já não conta pontos).</div>}
                             </div>
-                            {mode === "manage" && canAdjust && !a.voidedAt && (
+                            {mode === "manage" && canAdjust && !a.voidedAt && !dayClosed && (
                               <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" title="Anular ajuste" disabled={voidMut.isPending}
                                 onClick={() => { const reason = prompt("Motivo para anular (opcional)") ?? undefined; voidMut.mutate({ id: a.id, reason }); }}>
                                 <Undo2 className="h-3.5 w-3.5" />
@@ -253,10 +259,11 @@ export function EmployeeEvaluationDetail({
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2">
-                      {mode === "manage" && canAdjust && (
+                      {dayClosed && <p className="text-xs text-muted-foreground">Dia fechado (fecho mensal): já não se ajusta nem se contesta.</p>}
+                      {mode === "manage" && canAdjust && !dayClosed && (
                         <Button size="sm" variant="outline" onClick={() => setAdjustDay(d.day)}><Pencil className="h-3.5 w-3.5 mr-1" /> Ajustar</Button>
                       )}
-                      {mode === "self" && (
+                      {mode === "self" && !dayClosed && (
                         <Button size="sm" variant="outline" onClick={() => setDisputeDay(d.day)}><MessageSquareWarning className="h-3.5 w-3.5 mr-1" /> Contestar</Button>
                       )}
                     </div>

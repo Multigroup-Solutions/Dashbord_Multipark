@@ -30,6 +30,7 @@ import { MAIL_BACKFILL_DEFAULTS, mailBackfillSettingsSchema } from "./mailTriage
 import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
 import { DEFAULT_SPEED_RULE, SPEED_RULE_SETTING_KEY, speedRuleSchema } from "./speedRules";
 import { PERF_RANK_WEIGHTS_KEY, rankWeightsReadSchema, rankWeightsSchema } from "./peoplePerformance";
+import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, isIsoDay } from "./evaluationClose";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
 
@@ -291,6 +292,15 @@ export const aiAssistantLimitsSchema = z.object({
 export type AiAssistantLimits = z.infer<typeof aiAssistantLimitsSchema>;
 export const AI_ASSISTANT_DEFAULT_LIMITS = { perMinute: 20, perDay: 200, maxInputChars: 1000 } as const;
 
+
+/** Tarefa 62 (P2d): data AAAA-MM-DD ou nula ("" = nula, para o campo de texto/data). */
+export const closedUntilSchema = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? null : typeof v === "string" ? v.trim() : v),
+  z.string({ error: "Indica a data (AAAA-MM-DD)." }).refine(isIsoDay, "Data inválida (AAAA-MM-DD).").nullable(),
+);
+/** Lista de contas (ids de utilizador), sem repetir. */
+export const userIdListSchema = z.array(z.number({ error: "Escolhe as contas na lista." }).int().positive()).max(50, "No máximo 50 contas.")
+  .transform((ids) => Array.from(new Set(ids)));
 
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
@@ -777,6 +787,25 @@ export const SETTINGS = {
     defaultValue: {},
     wiring: "live",
   }),
+  // Tarefa 62 (P2d): fecho mensal da Avaliação — fecha-se cada mês antes de pagar os prémios (o 1.º: novembro).
+  [EVALUATION_CLOSED_UNTIL_KEY]: def({
+    key: EVALUATION_CLOSED_UNTIL_KEY,
+    group: "pessoas",
+    label: "Avaliação fechada até (fecho mensal)",
+    description: "Último dia FECHADO da Avaliação (AAAA-MM-DD). Os dias até essa data já não mudam: o recálculo da noite, o Recalcular, os ajustes, a anulação de ajustes e as contestações (criar e aceitar com ajuste) não lhes tocam. Fecha-se cada mês antes de pagar os prémios (o primeiro é novembro, no início de dezembro). Reabrir = mudar a data (fica no histórico). Vazio = nada fechado. Também se fecha em Avaliação → Mês (\"Fecho do mês\"), por quem está na lista \"Avaliação: quem fecha o mês\". Atenção: o fecho congela os números, não as regras — depois do primeiro fecho, uma mudança nos pontos tem de dizer a partir de que dia vale.",
+    schema: closedUntilSchema,
+    defaultValue: null,
+    wiring: "live",
+  }),
+  [EVALUATION_CLOSERS_KEY]: def({
+    key: EVALUATION_CLOSERS_KEY,
+    group: "pessoas",
+    label: "Avaliação: quem fecha o mês",
+    description: "Contas que podem fechar e reabrir a Avaliação (Avaliação → Mês → \"Fecho do mês\"), além do super admin. Escolhe as pessoas na lista. Só o super admin muda.",
+    schema: userIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -802,6 +831,10 @@ export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   "mail.systemSender",
   // o Desempenho só o super admin o vê (Jorge, 8 out 2026)
   PERF_RANK_WEIGHTS_KEY,
+  // tarefa 62 (Q10): em Definições, o fecho e a lista de quem fecha só o super admin muda
+  // (quem está na lista fecha em Avaliação → Mês, pelo procedimento próprio)
+  EVALUATION_CLOSED_UNTIL_KEY,
+  EVALUATION_CLOSERS_KEY,
 ]);
 export function settingSuperAdminOnly(key: string): boolean {
   return SUPER_ADMIN_SETTING_KEYS.has(key);

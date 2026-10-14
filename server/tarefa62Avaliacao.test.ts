@@ -12,6 +12,12 @@ const state = vi.hoisted(() => ({
   adjustments: [] as any[],
   disputes: [] as any[],
   dispute: null as any,
+  adjustment: null as any,
+  closed: { ok: true, closedUntil: null } as { ok: true; closedUntil: string | null } | { ok: false },
+  closers: [] as number[],
+  saved: [] as any[],
+  recomputed: [] as string[][],
+  voided: [] as number[],
 }));
 
 const national = vi.hoisted(() => ({ all: true, defaultCityId: null, cityName: null, cityIds: [] as number[], projectIds: [] as number[], missingCostCenter: false }));
@@ -35,12 +41,21 @@ vi.mock("./evaluationEngine", () => ({
   listDisputes: async () => [],
   createDispute: async (x: any) => { state.disputes.push(x); return 1; },
   createAdjustment: async (x: any) => { state.adjustments.push(x); return 1; },
-  getAdjustment: async () => null,
+  getAdjustment: async () => state.adjustment,
   getDispute: async () => state.dispute,
-  recomputeRange: async () => ({ written: 0, removed: 0, source: "multipark", notice: null, skipped: false }),
-  resolveDispute: async () => true, voidAdjustment: async () => undefined,
+  recomputeRange: async (s: string, e: string) => { state.recomputed.push([s, e]); return { written: 1, removed: 0, source: "multipark", notice: null, skipped: false }; },
+  resolveDispute: async () => true, voidAdjustment: async (id: number) => { state.voided.push(id); },
 }));
 vi.mock("./notify", () => ({ notify: async () => undefined }));
+vi.mock("./evaluationClose", async (original) => ({
+  ...(await original<object>()),
+  readEvaluationClosedUntil: async () => state.closed,
+  readEvaluationClosers: async () => state.closers,
+}));
+vi.mock("./appSettings", async (original) => ({
+  ...(await original<object>()),
+  setSetting: async (key: string, value: unknown, userId: number) => { state.saved.push({ key, value, userId }); return { changed: true, value }; },
+}));
 
 import { appRouter } from "./routers";
 import { computeEmployeeDays, type EngineInput } from "./evaluationCore";
@@ -58,7 +73,10 @@ const m = (over: Partial<DayMetrics>): DayMetrics => ({ ...emptyDayMetrics(), ..
 /** Uma linha antiga (antes da tarefa 62): 3 atrasos, dos quais 2 eram entregas atrasadas → 1 atraso ao trabalho. */
 const OLD = m({ delays: 3, lateServices: 2, entregas: 4 });
 
-beforeEach(() => { state.adjustments = []; state.disputes = []; state.dispute = null; });
+beforeEach(() => {
+  state.adjustments = []; state.disputes = []; state.dispute = null; state.adjustment = null;
+  state.closed = { ok: true, closedUntil: null }; state.closers = []; state.saved = []; state.recomputed = []; state.voided = [];
+});
 
 describe("atraso ao trabalho a partir de 5 min (motor, com o ponto e a escala)", () => {
   const identity = buildEvaluationIdentity({ employees: [{ id: 1, fullName: "Ana Silva", userId: 10, multiparkAgentName: null, multiparkAgentUserId: null }], agentAliases: [], accountAliases: [] });
@@ -174,5 +192,52 @@ describe("consequências que se veem", () => {
       const { eval: _c, total: _d, ...restAfter } = f(after, id);
       expect(restAfter).toEqual(restBefore);
     }
+  });
+});
+
+describe("P2d — fecho mensal no servidor", () => {
+  it("quem fecha: o super admin e as contas da lista (Q10); os outros não", async () => {
+    await expect(caller("super_admin", 3).evaluation.setClosedUntil({ closedUntil: "2026-09-30" })).resolves.toMatchObject({ closedUntil: "2026-09-30" });
+    state.closers = [5];
+    await expect(caller("admin", 5).evaluation.setClosedUntil({ closedUntil: "2026-09-30" })).resolves.toMatchObject({ closedUntil: "2026-09-30" });
+    await expect(caller("admin", 6).evaluation.setClosedUntil({ closedUntil: "2026-09-30" })).rejects.toThrow(/Só o super admin e as pessoas autorizadas/);
+    expect(state.saved).toEqual([
+      { key: "evaluation.closedUntil", value: "2026-09-30", userId: 3 },
+      { key: "evaluation.closedUntil", value: "2026-09-30", userId: 5 },
+    ]);
+    // reabrir = data nula (ou mais cedo); nunca hoje nem o futuro
+    await expect(caller("super_admin", 3).evaluation.setClosedUntil({ closedUntil: null })).resolves.toMatchObject({ closedUntil: null });
+    await expect(caller("super_admin", 3).evaluation.setClosedUntil({ closedUntil: "2026-10-14" })).rejects.toThrow(/até ontem/);
+    expect(await caller("admin", 5).evaluation.closure()).toMatchObject({ closedUntil: null, canClose: true });
+    expect(await caller("admin", 6).evaluation.closure()).toMatchObject({ canClose: false });
+  });
+  it("dia fechado: ajuste, anular ajuste, contestar e aceitar com ajuste recusados; aceitar sem ajuste e recusar continuam", async () => {
+    state.closed = { ok: true, closedUntil: "2026-09-30" };
+    await expect(caller("supervisor", 2).evaluation.adjust({ employeeId: 8, day: "2026-09-20", metric: "delays", delta: -1, reason: "ponto avariado" })).rejects.toThrow(/fechada até 30\/09\/2026/);
+    await expect(caller("supervisor", 2).evaluation.adjust({ employeeId: 8, day: "2026-10-02", metric: "delays", delta: -1, reason: "ponto avariado" })).resolves.toEqual({ id: 1 });
+    state.adjustment = { id: 4, employeeId: 8, day: "2026-09-20" };
+    await expect(caller("supervisor", 2).evaluation.voidAdjustment({ id: 4 })).rejects.toThrow(/fecho mensal/);
+    expect(state.voided).toEqual([]);
+    await expect(caller("extra", 1).evaluation.disputes.create({ day: "2026-09-20", metric: "delays", comment: "entrei a horas, o ponto falhou" })).rejects.toThrow(/fecho mensal/);
+    state.dispute = { id: 3, employeeId: 8, day: "2026-09-20", status: "open", metric: "delays", createdByUserId: 9 };
+    await expect(caller("supervisor", 2).evaluation.disputes.resolve({ id: 3, accept: true, resolution: "aceite", adjustment: { metric: "delays", delta: -1 } })).rejects.toThrow(/fecho mensal/);
+    await expect(caller("supervisor", 2).evaluation.disputes.resolve({ id: 3, accept: true, resolution: "aceite, sem mexer nos números" })).resolves.toMatchObject({ success: true });
+    expect(state.adjustments.map((a) => a.day)).toEqual(["2026-10-02"]);
+  });
+  it("Recalcular: tudo fechado → recusa; a meio → só os dias abertos; nula → como hoje", async () => {
+    state.closed = { ok: true, closedUntil: "2026-09-30" };
+    await expect(caller("supervisor", 2).evaluation.recompute({ from: "2026-09-01", to: "2026-09-30" })).rejects.toThrow(/Nada foi recalculado/);
+    const r = await caller("supervisor", 2).evaluation.recompute({ from: "2026-09-25", to: "2026-10-03" });
+    expect(state.recomputed).toEqual([["2026-10-01", "2026-10-03"]]);
+    expect(r.notice).toMatch(/fechados \(fecho mensal\)/);
+    state.closed = { ok: true, closedUntil: null }; state.recomputed = [];
+    await caller("supervisor", 2).evaluation.recompute({ from: "2026-09-25", to: "2026-10-03" });
+    expect(state.recomputed).toEqual([["2026-09-25", "2026-10-01"], ["2026-10-02", "2026-10-03"]]);
+  });
+  it("o fecho não se leu: não se escreve", async () => {
+    state.closed = { ok: false };
+    await expect(caller("supervisor", 2).evaluation.adjust({ employeeId: 8, day: "2026-10-02", metric: "delays", delta: -1, reason: "ponto avariado" })).rejects.toThrow(/Não deu para ler o fecho/);
+    await expect(caller("supervisor", 2).evaluation.recompute({ from: "2026-10-01", to: "2026-10-03" })).rejects.toThrow(/Não deu para ler o fecho/);
+    expect(state.adjustments).toEqual([]);
   });
 });
