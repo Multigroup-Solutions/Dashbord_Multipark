@@ -165,10 +165,11 @@ describe("filtros guardados ANTES da migração 0665 (sem a coluna `page`)", () 
     warn.mockRestore();
   });
 
-  it("a migração 0665 é a última da lista, depois da 0650 (0655 e 0660 ficam livres para os outros PRs)", async () => {
+  it("a migração 0665 está registada por ordem, depois da 0655 (a 0660 da formação entra entre as duas)", async () => {
     const { SCHEMA_MIGRATION_IDS } = await import("./migrations/index");
-    expect(SCHEMA_MIGRATION_IDS.at(-1)).toBe("0665");
-    expect(SCHEMA_MIGRATION_IDS.indexOf("0665") - SCHEMA_MIGRATION_IDS.indexOf("0650")).toBe(1);
+    expect(SCHEMA_MIGRATION_IDS).toContain("0665");
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0665")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0655"));
+    expect([...SCHEMA_MIGRATION_IDS].sort()).toEqual([...SCHEMA_MIGRATION_IDS]);
     const m = await import("./migrations/migration_0665");
     // só acrescenta: nada de DROP, DELETE nem UPDATE aos filtros que existem
     expect(m.MIGRATION_0665_STATEMENTS.join(" ")).not.toMatch(/\b(DROP|DELETE|UPDATE|MODIFY|CHANGE)\b/i);
