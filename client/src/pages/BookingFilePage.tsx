@@ -19,8 +19,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ContactActions } from "@/components/ContactActions";
 import {
   AlertTriangle, Car, ChevronDown, ChevronRight, Clock, CreditCard, ExternalLink, FileSearch, FileText, Info, Lock,
-  MapPin, MessageSquare, PenLine, Search, Sparkles, Star, User, Video,
+  MapPin, MessageSquare, PenLine, Search, Sparkles, Star, Timer, User, Video,
 } from "lucide-react";
+import { CalibrationBadge, fmtDur, flagLabel, sourceLabel, statusLabel } from "@/components/serviceTimes/TimesBits";
 
 /**
  * Ficha da reserva (/reserva/:id) — tudo sobre uma reserva num só sítio, lido
@@ -222,6 +223,7 @@ function FoundFile({ data, scope }: { data: MainFound; scope: { projectId?: numb
           <ClientVehicle data={data} scope={scope} />
           <EvidenceSection data={data} scope={scope} />
           <TimelineSection id={id} scope={scope} />
+          <TimesSection id={id} scope={scope} />
           <AccountsSection core={b} accounts={accounts.data} loading={accounts.isLoading} currency={cur}
             error={accounts.error} onRetry={() => accounts.refetch()} retrying={accounts.isFetching} />
           <BookingCashCheck id={id} scope={scope} />
@@ -449,6 +451,63 @@ function TimelineSection({ id, scope }: { id: string; scope: { projectId?: numbe
           </ol>
           {entries.length > shown.length && <Button size="sm" variant="ghost" onClick={() => setAll(true)}>Ver todas ({entries.length})</Button>}
           <p className="text-[11px] text-muted-foreground">O GPS vem da app Multipark; o percurso real dos condutores está nos dados do Zello.</p>
+        </>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * 15 out 2026 — "Tempos": a entrega e a recolha desta reserva, cada tempo com
+ * a fonte e o motivo (da tabela dos tempos; sem ela, calculado agora sem GPS).
+ * Os tempos com GPS chegam já filtrados pelo portão (servidor).
+ */
+function TimesSection({ id, scope }: { id: string; scope: { projectId?: number } }) {
+  const [enabled, setEnabled] = useState(false);
+  const q = trpc.bookingFile.times.useQuery({ id, ...scope }, { enabled, staleTime: 60_000, retry: false });
+  const d = q.data;
+  const T = (ms: number | null) => (ms == null ? null : new Date(ms).toISOString());
+  return (
+    <Section title="Tempos" icon={<Timer className="w-4 h-4" />} lazy onOpen={() => setEnabled(true)} right={d?.available ? `${d.entries.length}` : undefined}>
+      {q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} /> : q.isLoading || (!d && enabled) ? <Loading /> : !d ? null : !d.available ? <UnavailableNote reason={(d as Unavail).reason} /> : (
+        <>
+          <p className="text-[11px] text-muted-foreground">
+            {d.source === "tabela" ? "Da tabela dos tempos (cálculo da noite)." : "Calculado agora, provisório: sem GPS (o Trânsito, o Cliente da entrega e o tempo no terminal ficam \"GPS por recolher\") e sem as chamadas (a Fila conta desde o pendente)."}
+            {" "}A hora marcada não entra em nenhum tempo.
+          </p>
+          <CalibrationBadge note={d.gpsNote} />
+          {d.entries.length === 0 && <p className="text-xs text-muted-foreground">Sem entregas nem recolhas fechadas nesta reserva (ou antes de haver histórico, 2 mar 2026).</p>}
+          {d.entries.map((e, i) => (
+            <div key={`${e.kind}-${i}`} className="rounded-[10px] border p-2.5 space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="outline">{e.kind === "entrega" ? "Entrega" : "Recolha"}</Badge>
+                <span className="text-muted-foreground">dia {fmtPTDate(`${e.opDay}T12:00:00Z`)}{e.terminalClass ? ` · ${({ t1: "T1", t2: "T2", vip: "VIP", other: "Outro", unknown: "sem tipo" } as Record<string, string>)[e.terminalClass] ?? e.terminalClass}` : ""}</span>
+                {e.outcome !== "entregue" && e.outcome !== "recebido" && <Badge variant="outline" className="border-amber-300 text-amber-700">{e.outcome === "cancelado" ? "cancelada a meio" : e.outcome === "reaberta" ? "reaberta depois" : e.outcome}</Badge>}
+              </div>
+              <ol className="text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5">
+                {e.at.call && <li>chamada {dt(T(e.at.call))}</li>}
+                {e.at.request && <li>{e.kind === "entrega" ? "pendente" : "em recolha"} {dt(T(e.at.request))}</li>}
+                {e.at.start && <li>pegou no carro {dt(T(e.at.start))}</li>}
+                {e.at.arrived && <li>chegou ao terminal {dt(T(e.at.arrived))}</li>}
+                {e.at.delivered && <li>assinatura {dt(T(e.at.delivered))}</li>}
+                {e.at.checkIn && <li>check-in {dt(T(e.at.checkIn))}</li>}
+                {e.at.terminalExit && <li>saiu do terminal {dt(T(e.at.terminalExit))}</li>}
+                {e.firstGarage && <li>→ {e.firstGarage}{e.parkedGarage && e.parkedGarage !== e.firstGarage ? ` → ${e.parkedGarage}` : ""}</li>}
+              </ol>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {e.times.map((t) => (
+                  <div key={t.key} className="rounded-[10px] bg-muted/40 p-2 min-w-0" title={t.short}>
+                    <p className="text-[11px] text-muted-foreground truncate">{t.label}{t.gps ? " · GPS" : ""}</p>
+                    {t.hidden ? <p className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Lock className="w-3 h-3 shrink-0" />{t.hidden}</p>
+                      : t.ms != null ? <p className="text-base font-semibold">{fmtDur(t.ms)}</p>
+                      : <p className="text-xs text-muted-foreground">{statusLabel(t.status)}</p>}
+                    {!t.hidden && t.source && <p className="text-[10px] text-muted-foreground truncate">fonte: {sourceLabel(t.source)}</p>}
+                  </div>
+                ))}
+              </div>
+              {e.flags.length > 0 && <p className="text-[11px] text-muted-foreground">Notas: {e.flags.map(flagLabel).join(" · ")}</p>}
+            </div>
+          ))}
         </>
       )}
     </Section>

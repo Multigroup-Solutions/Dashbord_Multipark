@@ -36,6 +36,22 @@ const sideSql = (key: string, side: "from" | "to") =>
   `NULLIF(NULLIF(trim(btrim(substring(${MF} from '${MOVEMENT_PATTERNS.side(key, side)}'), '"')), ''), 'null')`;
 const tsMs = (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI:SS.MS')`;
 
+/** As colunas da leitura da History (as mesmas na leitura da noite e na de uma reserva). PURA. */
+function serviceHistoryColumns(type: string): string[] {
+  return [
+    `SELECT h."id" AS id, h."bookingId" AS booking_id, ${type} AS change_type, ${tsMs(`h."actionTime"`)} AS action_time,`,
+    `       h."userId" AS agent_user_id, NULLIF(h."agentName", '') AS agent_name, NULLIF(h."platform"::text, '') AS platform,`,
+    `       h."lat" AS lat, h."lng" AS lng,`,
+    `       CASE WHEN ${type} = 'UPDATE' THEN upper(${sideSql("status", "from")}) END AS status_from,`,
+    `       CASE WHEN ${type} = 'UPDATE' THEN upper(COALESCE(${sideSql("status", "to")}, h."snapshot"->>'status')) END AS status_to,`,
+    `       CASE WHEN ${type} = 'MOVEMENT' THEN ${movementKindSql(MF)} END AS move_kind,`,
+    `       CASE WHEN ${type} = 'MOVEMENT' THEN ${sideSql("garageName", "from")} END AS garage_from,`,
+    `       CASE WHEN ${type} = 'MOVEMENT' THEN ${sideSql("garageName", "to")} END AS garage_to,`,
+    `       h."snapshot"->>'arrivedAtDeliveryAt' AS snap_arrived,`,
+    `       h."snapshot"->>'baggageWaitingAt' AS snap_baggage`,
+  ];
+}
+
 /**
  * A leitura da History (uma por corrida): tipos precisos, janela [from, to)
  * em UTC, LIMIT. UPDATE só com "status" no modifiedFields. PURA.
@@ -48,22 +64,37 @@ export function buildServiceHistorySql(o: { fromUtc: string; toUtc: string; limi
   const limit = p.add(Math.min(Math.max(Math.floor(o.limit ?? SERVICE_HISTORY_MAX_ROWS), 1), SERVICE_HISTORY_MAX_ROWS));
   const type = `upper(h."changeType"::text)`;
   const sql = [
-    `SELECT h."id" AS id, h."bookingId" AS booking_id, ${type} AS change_type, ${tsMs(`h."actionTime"`)} AS action_time,`,
-    `       h."userId" AS agent_user_id, NULLIF(h."agentName", '') AS agent_name, NULLIF(h."platform"::text, '') AS platform,`,
-    `       h."lat" AS lat, h."lng" AS lng,`,
-    `       CASE WHEN ${type} = 'UPDATE' THEN upper(${sideSql("status", "from")}) END AS status_from,`,
-    `       CASE WHEN ${type} = 'UPDATE' THEN upper(COALESCE(${sideSql("status", "to")}, h."snapshot"->>'status')) END AS status_to,`,
-    `       CASE WHEN ${type} = 'MOVEMENT' THEN ${movementKindSql(MF)} END AS move_kind,`,
-    `       CASE WHEN ${type} = 'MOVEMENT' THEN ${sideSql("garageName", "from")} END AS garage_from,`,
-    `       CASE WHEN ${type} = 'MOVEMENT' THEN ${sideSql("garageName", "to")} END AS garage_to,`,
-    `       h."snapshot"->>'arrivedAtDeliveryAt' AS snap_arrived,`,
-    `       h."snapshot"->>'baggageWaitingAt' AS snap_baggage`,
+    ...serviceHistoryColumns(type),
     `  FROM "History" h`,
     ` WHERE h."actionTime" >= ${from}::timestamp AND h."actionTime" < ${to}::timestamp`,
     `   AND ${type} IN (${types})`,
     `   AND (${type} <> 'UPDATE' OR h."modifiedFields"::text LIKE ${statusLike})`,
     ` ORDER BY h."actionTime", h."id"`,
     ` LIMIT ${limit}`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
+/**
+ * A History de UMA reserva (Ficha da reserva → Tempos, quando a tabela dos
+ * tempos ainda não a tem): as mesmas colunas e tipos, só dessa reserva, com
+ * LIMIT. Uma leitura por clique (como a linha do tempo da ficha). PURA.
+ */
+export function buildServiceBookingHistorySql(bookingId: string, limit = 400): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const id = p.add(bookingId);
+  const types = SERVICE_HISTORY_TYPES.map((t) => p.add(t)).join(", ");
+  const statusLike = p.add('%"status"%');
+  const lim = p.add(Math.min(Math.max(Math.floor(limit), 1), 2000));
+  const type = `upper(h."changeType"::text)`;
+  const sql = [
+    ...serviceHistoryColumns(type),
+    `  FROM "History" h`,
+    ` WHERE h."bookingId" = ${id}`,
+    `   AND ${type} IN (${types})`,
+    `   AND (${type} <> 'UPDATE' OR h."modifiedFields"::text LIKE ${statusLike})`,
+    ` ORDER BY h."actionTime", h."id"`,
+    ` LIMIT ${lim}`,
   ].join("\n");
   return { sql, params: p.values };
 }

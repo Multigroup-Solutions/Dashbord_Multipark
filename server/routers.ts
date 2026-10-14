@@ -3984,7 +3984,9 @@ export const appRouter = router({
         cash: { startMs: win.startMs, endMs: Math.max(win.startMs, Math.min(nowMs, win.endMs)) },
       });
       if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
-      return { available: true as const, ...r.data };
+      // 15 out 2026: a meta da entrega para a cor do cronómetro "Na fila há X" (só a fila tem cor)
+      const targetMinutes = Number((await getSetting("serviceTimes.targetMinutes").catch(() => null)) ?? 15);
+      return { available: true as const, ...r.data, targetMinutes };
     }),
 
     // "Resumir agora" (5 pontos PT-PT): só numa passagem JÁ GRAVADA, a partir do

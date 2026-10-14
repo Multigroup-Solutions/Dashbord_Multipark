@@ -115,6 +115,8 @@ export interface HandoverDraft {
   window: { start: string; end: string };
   nextWindow: { start: string; end: string };
   generatedAt: string;
+  /** 15 out 2026: a meta da entrega (Definições) — a cor do "na fila há X min". */
+  targetMinutes?: number;
   counts: HandoverDraftCounts;
   byHour: Array<{ hour: number; label: string; checkins: number; checkouts: number }>;
   checkins: DraftBookingRow[];
@@ -122,7 +124,8 @@ export interface HandoverDraft {
   coveredCheckinsNext: number;
   /** Carros p/ coberto (automático): lugar coberto, no parque, ainda sem movimento. Regra em shared/shiftHandoverAuto.ts. */
   coveredCars: { count: number; list: Array<{ externalId: string; bookingNumber: string | null; plate: string | null; park: string | null; checkIn: string }> };
-  pendingDeliveries: Array<{ externalId: string; bookingNumber: string | null; plate: string | null; clientName: string; since: string }>;
+  /** 15 out 2026: `sinceAt` (ISO) = desde quando está na fila — o ecrã mostra "na fila há X min". */
+  pendingDeliveries: Array<{ externalId: string; bookingNumber: string | null; plate: string | null; clientName: string; since: string; sinceAt: string | null }>;
   complaints: Array<{ id: number; title: string; status: string; priority: string; createdAt: string; isNew: boolean }>;
   lostFound: Array<{ id: number; clientName: string; description: string; status: string }>;
   /** Ocorrências abertas: ao vivo ("Occurrence", id texto) ou, sem BD Multipark, a nossa tabela `incidents` (id numérico). */
@@ -199,6 +202,7 @@ export function draftPartsFromLive(st: ShiftState): {
     pendingDeliveries: st.inProgress.filter((c) => pendingPhases.has(c.phase)).map((c) => ({
       externalId: c.id, bookingNumber: c.code, plate: c.plate, clientName: c.clientName ?? "—",
       since: c.phaseSince ? lisbonHHMM(Date.parse(c.phaseSince)) : "",
+      sinceAt: c.phaseSince ?? null,
     })),
     covered: st.inPark.cars.map((c): CoveredCarCandidate => ({
       externalId: c.id, bookingNumber: c.code, plate: c.plate, parkName: c.parkName, status: c.status,
@@ -446,6 +450,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
   const pendingDeliveries = liveParts ? liveParts.pendingDeliveries : pending.map((r) => ({
     externalId: String(r.externalId), bookingNumber: r.bookingNumber ?? null, plate: r.licensePlate ?? null,
     clientName: fullName(r.clientFirstName, r.clientLastName), since: tsHHMM(r.t),
+    sinceAt: r.t == null ? null : new Date(Number(r.t) * 1000).toISOString(),
   }));
 
   const counts: HandoverDraftCounts = {
@@ -493,6 +498,10 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
     window: { start: win.start, end: win.end },
     nextWindow: { start: nwin.start, end: nwin.end },
     generatedAt: new Date(nowMs).toISOString(),
+    targetMinutes: await safe("meta da entrega", async () => {
+      const { getSetting } = await import("./appSettings");
+      return Number((await getSetting("serviceTimes.targetMinutes")) ?? 15);
+    }, 15),
     counts,
     byHour: bucketByHour(next, checkinMs, checkoutMs),
     checkins: checkins.slice(0, LIST_LIMIT),

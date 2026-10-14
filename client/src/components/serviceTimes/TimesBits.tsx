@@ -89,6 +89,33 @@ export function PickupCoverageNote({ c }: { c: PickupCoverage }) {
   );
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  chamada: "chamada do cliente", pendente: "pendente", inicio: "só o \"em entrega\"", em_recolha: "\"em recolha\"",
+  gps_zona: "GPS (zona do terminal)", gps_ponto_assinatura: "GPS (onde assinou)", gps_aeroporto: "GPS (aeroporto)", botao: "botão \"Cheguei\"",
+  gps: "GPS", app_inicio_movimento: "início do movimento na app",
+};
+/** De onde veio um tempo ("gps_zona" → "GPS (zona do terminal)"). */
+export function sourceLabel(k: string | null | undefined): string {
+  if (!k) return "—";
+  return SOURCE_LABELS[k] ?? k.replace(/_/g, " ");
+}
+
+const FLAG_LABELS: Record<string, string> = {
+  chamada_perdida: "chamada perdida", chamada_whatsapp: "chamada pelo WhatsApp", chamada_fora_da_janela: "chamada fora da janela (não conta)",
+  telefone_partilhado: "telefone partilhado (não conta)", pedido_antes_da_chamada: "pendente posto antes de o cliente ligar", pedido_repetido: "pendente repetido",
+  condutor_esperou: "o condutor esperou o cliente", inicio_no_terminal: "\"em entrega\" marcado já no terminal", inicio_antes_do_pedido: "pegou no carro antes do pedido",
+  chegada_ajustada: "chegada acertada à assinatura", nosso_aproximado: "nosso tempo aproximado", precisao_fraca: "GPS com pontos espaçados",
+  movimento_durante_pedido: "movimento durante o pedido", checkout_repetido: "check-out repetido", fecho_repetido: "fechada outra vez",
+  papel_de_outro_parque: "papel do agente de outro parque", em_recolha_tardio: "\"em recolha\" marcado já no terminal", checkin_repetido: "check-in repetido",
+  garagem_sem_papel: "garagem sem papel nas Definições", foi_para_o_sitio_errado: "foi primeiro para o sítio errado", arrumo_por_confirmar: "arrumo por confirmar",
+  garagem_desde_o_check_in: "garagem contada desde o check-in", garagem_fora_dos_limites: "1.ª garagem fora dos limites", saida_do_p2_pelo_gps: "saída do P2 pelo GPS",
+  zonas_sobrepostas: "zonas P2 e terminal sobrepostas",
+};
+/** Nota de um ciclo ("condutor_esperou" → "o condutor esperou o cliente"). */
+export function flagLabel(k: string): string {
+  return FLAG_LABELS[k] ?? k.replace(/_/g, " ");
+}
+
 /** Rótulo de um estado ("gps_por_recolher" → "GPS por recolher"). */
 export function statusLabel(k: string | null | undefined): string {
   if (!k) return "—";

@@ -10,6 +10,8 @@ import type { HandoverCity } from "@shared/shiftHandover";
 import { GARAGE_FIT_LABEL, groupMisplaced } from "@shared/garageFit";
 import type { LiveCar, LiveUpcoming, ShiftState } from "../../../server/multiparkDb/shiftState";
 import { BAGGAGE_WAITING_LABEL, LIVE_PHASE_LABELS, type LivePhase } from "@shared/livePhases";
+import { liveTimer, type QueueTone } from "@shared/liveTimers";
+import { useNow } from "@/hooks/useNow";
 
 // ─── "Estado do parque (ao vivo)" — separador da Passagem de turno ──────────
 // Lido AO VIVO da BD da Multipark (só leitura): carros no parque por
@@ -23,6 +25,11 @@ const PHASE_TONE: Partial<Record<LivePhase, string>> = {
   checking_out: "border-blue-300 text-blue-700",
   checking_in: "border-emerald-300 text-emerald-700",
   moving: "border-violet-300 text-violet-700",
+};
+/** 15 out 2026: só "Na fila" tem a cor da meta (âmbar a partir da meta, vermelho a partir do dobro). */
+const QUEUE_TONE: Record<Exclude<QueueTone, null>, string> = {
+  warn: "border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300",
+  late: "border-red-400 bg-red-50 text-red-800 dark:bg-red-950/30 dark:text-red-300",
 };
 const APPLIES_LABELS: Record<string, string> = { CHECK_IN: "recolhas", CHECK_OUT: "entregas", BOTH: "recolhas e entregas" };
 const eur = (n: number | null) => (n == null ? "" : `${n.toFixed(2).replace(".", ",")} €`);
@@ -118,7 +125,10 @@ export function ShiftHandoverLiveState({ city, citySelect }: { city: HandoverCit
   );
 }
 
-function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
+function LiveBody({ d, hours }: { d: ShiftState & { targetMinutes?: number }; hours: number }) {
+  // 15 out 2026: cronómetros ("Na fila há 12 min", "Em entrega há 25 min", "Em recolha há 8 min"), a cada 30 s
+  const now = useNow(30_000);
+  const target = d.targetMinutes ?? 15;
   const checkinsLeft = d.upcoming.checkins.filter((u) => !u.done).length;
   const checkoutsLeft = d.upcoming.checkouts.filter((u) => !u.done).length;
   const inParkOnly = d.inPark.cars.filter((c) => c.phase === "in_park");
@@ -195,13 +205,19 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
 
       <div className="space-y-2">
         <Section title="Operações em curso (em recolha, em movimento, na fila, em entrega)" count={d.inProgress.length} tone="warn" open={d.inProgress.length > 0}>
-          {d.inProgress.map((c) => (
+          {d.inProgress.length > 0 && <p className="text-[11px] text-muted-foreground">"Na fila há X" fica a âmbar a partir de {target} min (a meta do nosso tempo) e a vermelho a partir de {2 * target}. "Em entrega" não tem cor: inclui a espera pelo cliente no terminal.</p>}
+          {d.inProgress.map((c) => {
+            const t = liveTimer(c.phase, c.phaseSince, now, target);
+            return (
             <div key={c.id} className="flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className={`text-[11px] ${PHASE_TONE[c.phase] ?? ""}`}>{LIVE_PHASE_LABELS[c.phase]}{c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}</Badge>
+              <Badge variant="outline" className={`text-[11px] tabular-nums ${t?.tone ? QUEUE_TONE[t.tone] : PHASE_TONE[c.phase] ?? ""}`} title={`${LIVE_PHASE_LABELS[c.phase]}${c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}`}>
+                {t ? t.text : LIVE_PHASE_LABELS[c.phase]}{c.phaseSince ? <span className="opacity-70"> · {fmtPTTime(c.phaseSince)}</span> : null}
+              </Badge>
               {c.baggageWaiting && <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-700">{BAGGAGE_WAITING_LABEL}</Badge>}
               <CarLine c={c} />
             </div>
-          ))}
+            );
+          })}
         </Section>
         <Section title={`Próximas entregas (${hours} h)`} count={d.upcoming.checkouts.length}>
           {d.upcoming.checkouts.map((u) => <UpcomingLine key={u.id} u={u} />)}

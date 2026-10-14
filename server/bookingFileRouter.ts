@@ -87,6 +87,17 @@ export const bookingFileRouter = router({
     return r.available ? { available: true as const, ...r.data } : unavailable(r);
   }),
 
+  /**
+   * 15 out 2026 — "Tempos": a entrega e a recolha desta reserva, cada tempo
+   * com a fonte e o motivo (tabela dos tempos; sem linhas, ao vivo, sem GPS).
+   * O portão dos tempos com GPS aplica-se no servidor. Só quando se abre a secção.
+   */
+  times: protectedProcedure.input(idInput).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "reservas_operacoes", "view");
+    const { getBookingTimes } = await import("./serviceTimesBooking");
+    return getBookingTimes({ bookingId: input.id, cities: scopedCityNames(), isSuperAdmin: ctx.user.role === "super_admin" });
+  }),
+
   communication: protectedProcedure.input(idInput).query(async ({ ctx, input }) => {
     requireAccess(ctx.user, "reservas_operacoes", "view");
     const { getBookingFileCommunication } = await import("./multiparkDb/bookingFile");
