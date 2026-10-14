@@ -34,7 +34,9 @@ import { GooglePushSettings } from "@/components/google/GooglePushSettings";
 import { GoogleContactsSettings } from "@/components/google/GoogleContactsSettings";
 import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
-import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, LOGIN_CODE_DELIVERY_SETTING_KEY, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
+import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, GARAGE_ROLES_SETTING_KEY, LOGIN_CODE_DELIVERY_SETTING_KEY, PARK_ZONES_SETTING_KEY, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, parkZonesConflictError, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
+import { effectiveParkZones, unlabeledTerminalZones } from "@shared/serviceGps";
+import { GarageRolesEditor, ParkZonesEditor, parkZonesFromDraft, parkZonesToDraft, type GarageRoleDraft, type ParkZonesDraft } from "@/components/settings/ServiceZonesEditor";
 import { AIRPORT_LABELS, type AirportCityId, type AirportFence } from "@shared/pontoTerminal";
 import { SPEED_RULE_SETTING_KEY, speedThresholdOf } from "@shared/speedRules";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY } from "@shared/evaluationClose";
@@ -655,10 +657,13 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const isLoginDelivery = item.key === LOGIN_CODE_DELIVERY_SETTING_KEY;
   // 14 out 2026 (ronda 2): o limite de velocidade em três campos (antes era JSON escrito à mão)
   const isSpeedRule = item.key === SPEED_RULE_SETTING_KEY;
+  // Plano 62 (P5): zonas da operação (por cidade, com mapa e "Sugerir") e papéis das garagens
+  const isParkZones = item.key === PARK_ZONES_SETTING_KEY;
+  const isGarageRoles = item.key === GARAGE_ROLES_SETTING_KEY;
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
-  const isCityMap = !isPhones && !isAirports && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
+  const isCityMap = !isPhones && !isAirports && !isParkZones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
     && CITY_FIELDS.every((c) => c.id in (item.defaultValue as Record<string, unknown>));
   const cityMapNumeric = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "number";
   // 38a: ligado/desligado por cidade → interruptores (antes eram caixas de texto e "true" escrito não gravava)
@@ -667,7 +672,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   // Tarefa 62 (P2d): o fecho mensal (uma data, vazio = nada fechado) e quem fecha (contas escolhidas na lista)
   const isDate = item.key === EVALUATION_CLOSED_UNTIL_KEY;
   const isUserList = item.key === EVALUATION_CLOSERS_KEY;
-  const isJson = !isPhones && !isAirports && !isSpeedRule && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
+  const isJson = !isPhones && !isAirports && !isSpeedRule && !isParkZones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
@@ -687,6 +692,15 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const usersQ = trpc.users.list.useQuery(undefined, { enabled: isUserList, staleTime: 5 * 60_000, retry: false });
   const userById = useMemo(() => new Map(((usersQ.data ?? []) as Array<{ id: number; name?: string | null; email?: string | null }>).map((u) => [Number(u.id), u])), [usersQ.data]);
   const [speed, setSpeed] = useState<{ limitKmh: string; tolerancePercent: string; minPoints: string }>({ limitKmh: "", tolerancePercent: "", minPoints: "" });
+  const [zonesDraft, setZonesDraft] = useState<ParkZonesDraft>(() => parkZonesToDraft(null));
+  const [rolesDraft, setRolesDraft] = useState<GarageRoleDraft[]>([]);
+  // as outras definições (zonas do terminal ↔ zonas P2): a mesma lista da página (sem pedido novo)
+  const related = trpc.settings.values.list.useQuery(undefined, { enabled: isParkZones || isAirports, staleTime: 60_000 });
+  const savedValue = (key: string) => { const r = (related.data ?? []).find((x) => x.key === key); return r ? (r.isSet ? r.value : r.defaultValue) : null; };
+  const zoneParks = trpc.terminal.parkPoints.useQuery(undefined, { enabled: isParkZones, staleTime: 5 * 60_000, retry: false });
+  // Q6: as zonas em vigor = garagens da Multipark (centro do link do mapa) + as exceções gravadas aqui
+  const mpGarages = trpc.settings.values.multiparkGarages.useQuery(undefined, { enabled: isParkZones || isAirports, staleTime: 5 * 60_000, retry: false });
+  const zonesInForce = (exceptions: unknown) => effectiveParkZones(mpGarages.data?.available ? mpGarages.data.garages : [], exceptions as any).zones;
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setError(null);
@@ -703,6 +717,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
         zones: (cur[c.id]?.zones ?? []).map((z) => ({ label: z.label ?? "", lat: txt(z.lat), lng: txt(z.lng), radiusM: txt(z.radiusM) })),
       }])));
     }
+    else if (isParkZones) setZonesDraft(parkZonesToDraft(current));
+    else if (isGarageRoles) setRolesDraft(((current as GarageRoleDraft[]) ?? []).map((r) => ({ garage: r.garage, role: r.role })));
     else if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
     else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
@@ -726,6 +742,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
       ...(cityMap[c.id] ?? "").split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean),
     ]]));
     if (isAirports) return airportsValue();
+    if (isParkZones) return parkZonesFromDraft(zonesDraft);
+    if (isGarageRoles) return rolesDraft.map((r) => ({ garage: r.garage.trim(), role: r.role }));
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
@@ -770,6 +788,9 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     const v = build();
     const r = validateSetting(item.key, v);
     if (!r.ok) { setError(r.error); return; }
+    // P2 a tocar numa zona do terminal: o servidor recusa — diz-se já aqui
+    const conflict = isParkZones ? parkZonesConflictError(zonesInForce(r.value), savedValue(TERMINAL_AIRPORTS_SETTING_KEY) as any) : null;
+    if (conflict) { setError(conflict); return; }
     setError(null);
     onSave(r.value);
   };
@@ -877,6 +898,21 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
               </div>
             </div>
           ))}
+          {(() => {
+            // Plano 62 (P5): rótulo T1/T2 (os tempos de entrega usam-no) e zona do terminal a tocar no P2 — só avisos
+            const unlabeled = unlabeledTerminalZones(airportsValue());
+            const p2 = parkZonesConflictError(zonesInForce(savedValue(PARK_ZONES_SETTING_KEY)), airportsValue());
+            if (!unlabeled.length && !p2) return null;
+            return (
+              <div className="sm:col-span-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                <AlertTriangle className="inline h-3 w-3 mr-1" />Para os tempos de entrega e de recolha:
+                <ul className="mt-1 list-disc pl-5">
+                  {unlabeled.map((u) => <li key={`${u.city}${u.index}`}>{AIRPORT_LABELS[u.city as AirportCityId] ?? u.city}: a zona {u.label ? `"${u.label}"` : u.index + 1} não tem o nome T1 nem T2 — com mais de uma zona, os tempos não sabem qual é qual (o ponto funciona na mesma).</li>)}
+                  {p2 && <li>{p2.replace("A zona P2 não pode tocar", "Uma zona do terminal passa a tocar no P2")}</li>}
+                </ul>
+              </div>
+            );
+          })()}
           {parkWarnings.length > 0 && (
             <div className="sm:col-span-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
               <AlertTriangle className="inline h-3 w-3 mr-1" />Há parques dentro de uma zona do terminal (quem estiver no parque contaria como "no aeroporto"):
@@ -886,6 +922,11 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
             </div>
           )}
         </div>
+      ) : isParkZones ? (
+        <ParkZonesEditor draft={zonesDraft} onChange={setZonesDraft} locked={locked}
+          airports={savedValue(TERMINAL_AIRPORTS_SETTING_KEY) as Record<string, AirportFence> | null} parks={zoneParks.data ?? []} />
+      ) : isGarageRoles ? (
+        <GarageRolesEditor rows={rolesDraft} onChange={setRolesDraft} locked={locked} />
       ) : isRate ? (
         <div className="space-y-2">
           {rates.map((r, i) => (

@@ -692,6 +692,30 @@ export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDay
   } catch (err) { return fail(err); }
 }
 
+/**
+ * Tempos de entrega e de recolha (plano 62, P7): os ciclos que fecharam em
+ * D-3…D-1 e o preenchimento para trás (server/serviceTimesJob.ts). Interruptor
+ * SERVICE_TIMES (desligado por omissão); `reprocess` (só à mão) corre mesmo
+ * desligado. A Multipark em baixo → ok:false (o agendador repete).
+ */
+export async function serviceTimesCron(o: { deadlineAt: number; reprocess?: { from: string; to: string } | null }): Promise<CronJobRun> {
+  try {
+    const { serviceTimesEnabled, realServiceTimesDeps } = await import("./serviceTimesDeps");
+    if (!o.reprocess && !(await serviceTimesEnabled())) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "SERVICE_TIMES desligado" }, done: true };
+    const { runServiceTimes } = await import("./serviceTimesJob");
+    const r = await runServiceTimes(await realServiceTimesDeps(), { deadlineAt: o.deadlineAt - 2_000, reprocess: o.reprocess ?? null });
+    return {
+      httpStatus: 200,
+      body: { ok: r.ok, ranAt: ranAt(), ...(r.error ? { error: r.error } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), done: r.done, ...(r.cursor ? { next: r.cursor } : {}), ranges: r.ranges, lines: r.lines },
+      done: r.done,
+      cursor: r.cursor,
+    };
+  } catch (err) {
+    console.error("[cron service-times] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 // ─── Extras, briefing, emails, IA ───────────────────────────────────────────
 
 /** Automação dos extras (e companhia), com prazo; `from` retoma num passo. */

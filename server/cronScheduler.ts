@@ -88,6 +88,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "daily-ops": async (o) => (await import("./cronJobs")).dailyOpsCron({ deadlineAt: o.deadlineAt, cursor: o.cursor, deferStepErrors: true }),
   "ops-briefing": async (o) => (await import("./cronJobs")).opsBriefingCron(o),
   "evaluation-recompute": async (o) => (await import("./cronJobs")).evaluationRecomputeCron({ deadlineAt: o.deadlineAt, offsetDays: offset(o.cursor) }),
+  "service-times": async (o) => (await import("./cronJobs")).serviceTimesCron({ deadlineAt: o.deadlineAt }),
   "google-ads": async (o) => (await import("./cronJobs")).googleAdsCron({ deadlineAt: o.deadlineAt, kind: "daily" }),
   "google-ads-monthly": async (o) => (await import("./cronJobs")).googleAdsCron({ deadlineAt: o.deadlineAt, kind: "monthly" }),
   "google-ads-recent": async (o) => (await import("./cronJobs")).googleAdsCron({ deadlineAt: o.deadlineAt, kind: "recent" }),

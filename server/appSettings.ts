@@ -11,6 +11,9 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   AUTOMATION_FLAGS,
+  PARK_ZONES_SETTING_KEY,
+  TERMINAL_AIRPORTS_SETTING_KEY,
+  parkZonesConflictError,
   settingSuperAdminOnly,
   FLAG_SETTING_PREFIX,
   SETTINGS,
@@ -207,6 +210,19 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
+/** Q6: as garagens da Multipark com coordenadas (só leitura; sem ligação → nenhuma). */
+async function multiparkGarageCoords() {
+  try {
+    const [{ safeMultiparkRead }, { multiparkDbQuery }, { readGarageCoords }] = await Promise.all([
+      import("./multiparkDb/read"), import("./multiparkDb/client"), import("./multiparkDb/parkZonesSuggest"),
+    ]);
+    const r = await safeMultiparkRead("garageCoords", () => readGarageCoords(multiparkDbQuery));
+    return r.available ? r.data : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Outra pessoa gravou entretanto (20b): quem grava tem de ver o valor novo primeiro. */
 export class SettingConflictError extends Error {
   constructor(public readonly current: { updatedAt: string | null; updatedByName: string | null }) {
@@ -228,6 +244,14 @@ export async function setSetting(key: string, value: unknown, userId: number, op
     const v = validateSettingForWrite(key, value);
     if (!v.ok) throw new Error(v.error);
     normalized = v.value;
+  }
+  // Plano 62 (§5.2): uma zona P2 a tocar numa zona do terminal é recusada. As zonas
+  // em vigor = garagens da Multipark (Q6; sem ligação, só as exceções) + estas exceções.
+  if (key === PARK_ZONES_SETTING_KEY && normalized !== null) {
+    const airports = (await getSettingFresh(TERMINAL_AIRPORTS_SETTING_KEY))?.value ?? SETTINGS[TERMINAL_AIRPORTS_SETTING_KEY].defaultValue;
+    const [{ effectiveParkZones }, garages] = await Promise.all([import("../shared/serviceGps"), multiparkGarageCoords()]);
+    const conflict = parkZonesConflictError(effectiveParkZones(garages, normalized as SettingValue<typeof PARK_ZONES_SETTING_KEY>).zones, airports);
+    if (conflict) throw new Error(conflict);
   }
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");

@@ -257,6 +257,30 @@ export const settingsRouter = router({
         };
       });
     }),
+    /**
+     * Plano 62 (Q6): as garagens da Multipark com o centro do link do mapa — a
+     * base das Zonas da operação (as Definições guardam só as exceções). Só leitura.
+     */
+    multiparkGarages: adminOnly.query(async () => {
+      const [{ safeMultiparkRead }, { multiparkDbQuery }, { readGarageCoords }] = await Promise.all([
+        import("./multiparkDb/read"), import("./multiparkDb/client"), import("./multiparkDb/parkZonesSuggest"),
+      ]);
+      const r = await safeMultiparkRead("multiparkGarages", () => readGarageCoords(multiparkDbQuery));
+      return r.available ? { available: true as const, garages: r.data } : { available: false as const, reason: r.reason };
+    }),
+    /**
+     * Plano 62 (P5): "Sugerir" nas Zonas da operação — recurso para as garagens
+     * sem coordenadas na Multipark: link do mapa, mediana das posições da app nos
+     * movimentos das últimas 4 semanas, ou o parque. Só leitura; nada se grava.
+     */
+    parkZonesSuggest: adminOnly.query(async ({ ctx }) => {
+      requireSuperAdmin(ctx.user.role);
+      const [{ safeMultiparkRead }, { multiparkDbQuery }, { readZoneSuggestions }] = await Promise.all([
+        import("./multiparkDb/read"), import("./multiparkDb/client"), import("./multiparkDb/parkZonesSuggest"),
+      ]);
+      const r = await safeMultiparkRead("parkZonesSuggest", () => readZoneSuggestions(multiparkDbQuery, Date.now()));
+      return r.available ? { available: true as const, cities: r.data } : { available: false as const, reason: r.reason };
+    }),
     /** IVA/TSU em vigor HOJE nos cálculos (Definições; sem nada gravado = constantes do código). */
     codeConstants: adminOnly.query(async () => {
       const { financeRatesAt, lisbonTodayIso } = await import("./finance/rates");

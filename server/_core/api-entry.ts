@@ -327,6 +327,18 @@ app.get("/api/cron/extras-pressure", async (req, res) => {
   sendCronRun(res, await extrasPressureCron({ deadlineAt: manualDeadline(), cursor, reprocess }));
 });
 
+// Plano 62 (P7): tempos de entrega e de recolha. Interruptor SERVICE_TIMES (desligado
+// por omissão). ?reprocessar=AAAA-MM-DD (ou AAAA-MM-DD..AAAA-MM-DD, até 120 dias) refaz
+// esses dias (blocos de 7; a resposta traz `next` com o que falta) — mesmo desligado.
+app.get("/api/cron/service-times", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { serviceTimesCron, sendCronRun } = await import("../cronJobs");
+  const { parseServiceReprocess } = await import("../serviceTimesJob");
+  const reprocess = typeof req.query?.reprocessar === "string" ? parseServiceReprocess(req.query.reprocessar) : null;
+  if (typeof req.query?.reprocessar === "string" && !reprocess) return res.status(400).json({ error: "reprocessar: usar AAAA-MM-DD ou AAAA-MM-DD..AAAA-MM-DD (até 120 dias)" });
+  sendCronRun(res, await serviceTimesCron({ deadlineAt: manualDeadline(), reprocess }));
+});
+
 // Manutenção diária + recolha GPS FINAL do Zello (D-2 e dias
 // em falta), tudo dentro do prazo e retomável (done:false → chamar outra vez).
 // ?collectOnly=1 salta a manutenção; ?date=YYYY-MM-DD recolhe esse dia.
