@@ -5934,6 +5934,56 @@ export const appRouter = router({
           details: `Conta #${input.dropUserId} (${p.drop.email ?? "sem email"}) junta a #${input.keepUserId} (${p.keep.email ?? "sem email"})${p.employee ? ` · ficha ${p.employee.fullName} #${p.employee.id}` : ""}; a #${input.dropUserId} ficou desativada` });
         return { success: true, ...p };
       }),
+    /**
+     * 15 out 2026 (Jorge, caso Thiago Camargo): a Google Workspace renomeou a
+     * conta de quem saiu para a pessoa nova — passa essa conta Google da conta
+     * DESATIVADA (que volta ao nome/email da ficha e guarda o histórico) para a
+     * conta ativa da pessoa nova. Ver server/googleAccountMove.ts.
+     */
+    previewGoogleMove: protectedProcedure
+      .input(z.object({ fromUserId: z.number().int().positive(), toUserId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador passa contas Google." });
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { previewGoogleMove } = await import("./googleAccountMove");
+        try {
+          const p = await previewGoogleMove(db as any, input.fromUserId, input.toUserId);
+          return { from: { id: p.from.id, name: p.from.name, email: p.from.email }, to: { id: p.to.id, name: p.to.name, email: p.to.email }, restore: p.restore, googleEmail: p.googleEmail };
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+      }),
+    moveGoogleAccount: protectedProcedure
+      .input(z.object({ fromUserId: z.number().int().positive(), toUserId: z.number().int().positive(), setEmail: z.boolean().default(true) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador passa contas Google." });
+        if (input.fromUserId === ctx.user.id || input.toUserId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Não mexas na tua própria conta por aqui." });
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { previewGoogleMove, moveGoogleAccount } = await import("./googleAccountMove");
+        let p;
+        try {
+          const pre = await previewGoogleMove(db as any, input.fromUserId, input.toUserId);
+          if ((pre.from.role === "super_admin" || pre.to.role === "super_admin") && ctx.user.role !== "super_admin") throw new Error("Só um super admin mexe em contas de super admin.");
+          // as fichas das duas contas têm de estar no âmbito de quem passa
+          const { sql: q } = await import("drizzle-orm");
+          const emp = await db.execute(q`SELECT id FROM employees WHERE userId IN (${input.fromUserId}, ${input.toUserId})`) as any;
+          for (const e of ((Array.isArray(emp) ? emp[0] : emp) as any[]) ?? []) await assertEmployeeAccess(Number(e.id));
+          p = await moveGoogleAccount(db as any, { fromUserId: input.fromUserId, toUserId: input.toUserId, setEmail: input.setEmail });
+        } catch (err: any) {
+          if (err instanceof TRPCError) throw err;
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        const what = `Conta Google ${p.googleEmail ?? "(sem email)"} passada da conta #${p.from.id} (desativada; volta a ${p.restore.name ?? p.from.name ?? "?"} <${p.restore.email ?? p.from.email ?? "sem email"}>, histórico fica nela) para a #${p.to.id} (${p.to.name ?? "?"})${p.emailSet ? `, que fica com o email ${p.googleEmail}` : ""}`;
+        await logActivity({ userId: ctx.user.id, action: "users_google_move", entity: "user", entityId: p.to.id, details: what });
+        await logActivity({ userId: ctx.user.id, action: "users_google_move", entity: "user", entityId: p.from.id, details: what });
+        return { success: true, fromUserId: p.from.id, toUserId: p.to.id, googleEmail: p.googleEmail, restored: p.restore, emailSet: p.emailSet };
+      }),
     linkAgent: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128), agentName: z.string().max(256).optional() }))
       .mutation(async ({ ctx, input }) => {

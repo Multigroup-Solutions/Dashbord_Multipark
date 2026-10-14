@@ -232,6 +232,12 @@ A regra é que **cada agente é um utilizador e cada utilizador tem um agente**.
 - Fica a conta que entra na app. Tudo o que era da pessoa passa para ela: a ficha, as permissões e cidades extra, as notificações, o Google, o email, o WhatsApp e os casos atribuídos. O papel fica o mais alto dos dois.
 - A outra conta fica **desativada** ("conta duplicada"), nunca apagada, e o email dela passa para a ficha como email pessoal. O registo de quem fez o quê fica como estava.
 
+**Passar a conta Google** (só administradores) — quando a Google Workspace renomeia a conta de quem saiu para uma pessoa nova (ex.: carlosjesus@multipark.pt passou a thiagocamargo@multipark.pt)
+- Para a Google é a mesma conta, por isso o dashboard continuava a reconhecê-la como a conta antiga (desativada) e a pessoa nova não entrava.
+- Na ficha de quem saiu, na conta **desativada**, carrega em **Passar a conta Google**, procura a conta da pessoa nova e confirma.
+- A conta antiga larga a Google e volta ao nome e email da ficha dela, desativada — **o histórico (ponto, tarefas, registos) fica todo com ela**. A conta nova passa a entrar com essa Google e, se deixares a caixa marcada, fica com esse email como principal. A Google que a pessoa nova já usava continua a entrar.
+- Fica no registo de atividade das duas contas.
+
 **Juntar fichas da mesma pessoa** (só administradores)
 - Caso típico: a ficha do RH e outra criada sozinha a partir de um login ou de um agente (ex.: "ribeirohelio662", "Agent DRIVER").
 - No cartão **Uma pessoa**, escolhe a ficha que fica e, em **Ficha duplicada da mesma pessoa**, a outra. Carrega em **Juntar nesta ficha**: vês antes o que passa (ponto, PDAs, escalas, documentos…).
