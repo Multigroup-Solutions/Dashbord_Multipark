@@ -610,8 +610,11 @@ describe("interruptores (o que escreve sozinho entra desligado)", () => {
 });
 
 describe("migração 0655 (só acrescenta) e nunca apagar", () => {
-  it("registada no fim, por ordem, só ADD COLUMN, idempotente", () => {
-    expect(SCHEMA_MIGRATION_IDS[SCHEMA_MIGRATION_IDS.length - 1]).toBe("0655");
+  it("registada por ordem (depois da 0650), só ADD COLUMN, idempotente", () => {
+    // Outras migrações podem entrar depois desta: conta só a ordem crescente.
+    expect(SCHEMA_MIGRATION_IDS).toContain("0655");
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0655")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0650"));
+    expect([...SCHEMA_MIGRATION_IDS].sort()).toEqual([...SCHEMA_MIGRATION_IDS]);
     for (const s of MIGRATION_0655_STATEMENTS) expect(s).toMatch(/^ALTER TABLE `\w+` ADD COLUMN /);
     expect(MIGRATION_0655_STATEMENTS.join("\n")).not.toMatch(/\bDELETE\b|\bDROP\b|TRUNCATE/i);
     expect(IDEMPOTENT_ERROR_CODES_0655.has("ER_DUP_FIELDNAME")).toBe(true);
