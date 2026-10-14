@@ -244,7 +244,7 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
 
       {oldRulesDays > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
-          <span>{oldRulesDays} dia(s) calculado(s) com as regras antigas (movimentos, atrasos e entregas contavam de outra forma; desde a tarefa 62 o atraso só conta a partir de 5 min e já não há entrega atrasada).</span>
+          <span>{oldRulesDays} dia(s) calculado(s) com as regras antigas (movimentos, atrasos e entregas contavam de outra forma; agora o atraso só conta a partir de 5 min e já não há entrega atrasada).</span>
           {isSupervisor && (
             <Button size="sm" variant="outline" className="h-7" disabled={recompute.isPending} onClick={() => recompute.mutate({ from, to })}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> Recalcular

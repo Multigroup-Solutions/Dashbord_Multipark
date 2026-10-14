@@ -11,18 +11,21 @@
  *        da hora da escala ou do horário fixo do RH (máx. 1 por dia — Jorge,
  *        14 out 2026; ≥ 5 min e para todos os que têm horário desde a tarefa 62)
  *   +1   por cada mudança de lugar (mesma garagem; não é movimento — 14 out 2026)
- * A "entrega atrasada" (−5) saiu na tarefa 62 (D5): os tempos das entregas e
- * das recolhas são da organização, não de cada pessoa.
  *   −20  por cada reclamação confirmada
  *   −6000 por cada acidente (D15, Jorge 3 out: era −600) — ocorrência da app
  *        Multipark que um team leader (ou acima) confirmou como acidente e
  *        disse quem conduzia (server/evaluationAccidents.ts). Só a partir de
  *        ACCIDENTS_FROM_DAY: os acidentes antigos não contam (Jorge, 3 out)
+ * A "entrega atrasada" (−5) saiu na tarefa 62 (D5): os tempos das entregas e
+ * das recolhas são da organização, não de cada pessoa.
  * Os totais podem ser negativos. A normalização por hora é uma vista
  * secundária (não entra na pontuação).
  *
  * Mudar um número aqui muda as duas páginas e o recálculo diário (os dias
  * guardados atualizam-se no recálculo seguinte — o cron refaz o último mês).
+ * ATENÇÃO (fecho mensal, shared/evaluationClose.ts): a pontuação calcula-se ao
+ * ler, por isso, depois do 1.º mês fechado, uma mudança aqui tem de dizer a
+ * partir de que dia vale (como o withAccidentCutoff) — senão muda meses pagos.
  *
  * Tudo PURO (sem BD): usado no servidor (motor + routers) e no cliente
  * (legenda, rótulos, detalhe). Testado em server/evaluationRules.test.ts.

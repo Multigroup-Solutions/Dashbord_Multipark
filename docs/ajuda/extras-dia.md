@@ -34,12 +34,12 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 1. Em cima, escolhe o separador **Pressão** (o separador **Dia** é a previsão de sempre).
 2. Logo em cima escolhe o **grupo de parques** (a cidade toda, uma marca + cidade como Airpark Lisboa, ou o Marketplace) e **o que queres ver no mapa**, nos botões grandes:
    - **Carros por hora**: chegadas + saídas concluídas nessa hora, média por dia.
-   - **Tempo de entrega**: minutos desde o cliente pedir o carro até o ter na mão.
+   - **Tempo de entrega**: minutos desde o cliente pedir o carro (pendente) até assinar a entrega. Junta a fila, o caminho até ao terminal e a espera pelo cliente.
    - Na cidade toda há mais três:
      - **Tempo por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas. Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço.
        - Por cima do mapa escolhe **Entregas**, **Recolhas** ou **Juntas**. Entregas = os serviços que começam com o início de uma entrega (a recolha pelo meio fica dentro dela); Recolhas = os que começam com o início de uma recolha (inclui levar o carro ao parque). **Juntas** é o quadro de antes, as duas juntas, e é o que a escala usa. Mesmas regras, mesmas cores e mesma legenda.
        - Logo a seguir à mudança (12 out 2026) só há **Juntas**: o cálculo da noite relê os dias desde abril com as entregas e as recolhas separadas, e os botões **Entregas** e **Recolhas** acendem quando acabar. Enquanto isso, a Pressão mostra o último cálculo completo.
-     - **Na estrada**: do início da entrega até entregue.
+     - **Na estrada**: desde que o condutor pega no carro (em entrega) até o cliente assinar. Junta o caminho e a espera pelo cliente no terminal.
      - **Pessoas a trabalhar**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL** (se nessa hora não carregou em nenhum botão na app, junta-se 1). São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.
 3. **O mapa (dia da semana × hora)** ocupa quase o ecrã. Por cima diz em palavras o que a cor quer dizer; por baixo há a legenda (os 4 tons de azul com os valores, cinzento = sem dados, contorno laranja = hora apertada, horas a âmbar = horas de ponta).
    - **Carrega numa célula** (ou passa o rato) para ver o detalhe dessa hora: volume, carros em simultâneo, entrega, recolha, por carro (juntas, só entregas e só recolhas), na estrada, recolhido → no parque e pessoas.
@@ -122,7 +122,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 - Editar uma linha não apaga as notas e fica registado quem alterou.
 - **Suspender envio automático** trava a confirmação e os avisos do cron nesse dia (e, como é mexer no dia, a proposta automática também já não corre nele).
 - **Pedir disponibilidade a quem não respondeu**: o número do botão é o número de extras da cidade sem resposta, e é a eles que o pedido vai.
-- **Ordem dos candidatos**: a proposta escolhe primeiro quem cobre mais horas com falta de gente e, depois, pela avaliação (pontos médios por dia nas últimas 4 semanas), o custo, a equidade e a fiabilidade. Desde a tarefa 62 a avaliação mudou (atraso ao trabalho só a partir de 5 min, sem "entrega atrasada", velocidade acima de 120 km/h), por isso a **ordem** de quem é proposto pode mudar. A procura e quantos extras são precisos não mudam. Fica certo depois do recálculo da noite (os 31 dias cobrem as 4 semanas).
+- **Ordem dos candidatos**: a proposta escolhe primeiro quem cobre mais horas com falta de gente e, depois, pela avaliação (pontos médios por dia nas últimas 4 semanas), o custo, a equidade e a fiabilidade. A avaliação mudou (atraso ao trabalho só a partir de 5 min, sem "entrega atrasada", velocidade acima de 120 km/h), por isso a **ordem** de quem é proposto pode mudar. A procura e quantos extras são precisos não mudam. Fica certo depois do recálculo da noite (os 31 dias cobrem as 4 semanas).
 
 **Quem vê o quê**
 - Quem só vê a escala (por exemplo, um condutor) vê as escalas e os turnos, **sem euros** e sem os botões de ação.
