@@ -50,8 +50,24 @@ export const CALL_LATE_AFTER_MIN = 15;
 export const SHARED_PHONE_MIN_BOOKINGS = 3;
 /** Velocidade que separa "a andar" de "parado" no intervalo entre pontos. */
 export const GAP_MOVING_KMH = 10;
-/** Velocidade "a pé" (§4.4) para a chegada à zona T2. */
+/** Velocidade "a pé" (§4.4, V_WALK provisório): até aqui o carro está parado ou o condutor anda a pé. */
 export const WALK_KMH = 7;
+/**
+ * A regra da chegada do plano (§4.4, passos 2–5), medida tal como a P4 a vai
+ * usar: um ponto na zona a ≤ V_WALK confirmado por (a) ≥ T_STOP_MIN parado ou
+ * a pé dentro, (b) o ponto seguinte (até T_CONFIRM) a pé — dentro OU fora da
+ * zona (o condutor sai a pé) — ou (c) último ponto antes da assinatura, a ≤ 20 min.
+ */
+export const PLAN_STOP_MIN_S = 60;
+export const PLAN_CONFIRM_S = 6 * 60;
+export const PLAN_TAIL_MAX_S = 20 * 60;
+/** G_GOOD / G_WEAK provisórios (§4.4): precisão da chegada pelo intervalo até ao ponto anterior. */
+export const PLAN_GAP_GOOD_S = 6 * 60;
+export const PLAN_GAP_WEAK_S = 15 * 60;
+/** O recurso da sonda-62 (§11.0, critério da paragem): 1 ponto dentro + o seguinte a ≤ 10 km/h. */
+export const FALLBACK_NEXT_KMH = 10;
+/** Raio da regra do plano na leitura rápida (o provisório das zonas T1/T2, §11.1). */
+export const PLAN_STOP_RADIUS_M = 200;
 /**
  * Recolha atrasada no T2 (Q4, Jorge 14 out): o condutor chega à zona T2 mais
  * de 15 min depois da chamada / do "em recolha" (K0). Omissão 15, não 10.
@@ -392,9 +408,40 @@ export function bestStopCombo(r: SondaResult): { key: string; share: number; p50
   return best;
 }
 
+/** Leituras que podem falhar num dia sem parar a corrida (o que dependia delas não conta nesse dia). */
+export const PROBE_SOURCE_LABELS: Record<string, string> = {
+  chamadas: "chamadas ou telefones",
+  gps: "GPS ou fichas",
+  agentes: "papéis dos agentes",
+  garagens: "garagens",
+};
+
+/** Dias com dados (a sonda leu-os) face aos dias pedidos. PURA. */
+export function daysRead(r: SondaResult): { read: number; asked: number } {
+  return { read: Object.keys(r.l["corrida.dias_lidos"] ?? {}).length, asked: r.days.length };
+}
+
+/** "N dia(s) sem <leitura>" (o que falhou e por isso não conta), ou null. PURA. */
+export function sourceDownHint(r: SondaResult, key: keyof typeof PROBE_SOURCE_LABELS): string | null {
+  const n = r.n[`falhas.${key}`] ?? 0;
+  return n > 0 ? `${n} dia(s) com a leitura de ${PROBE_SOURCE_LABELS[key]} a falhar: esses dias não contam aqui (não é zero)` : null;
+}
+
+/** O que é de TODA a corrida (chamadas recebidas, Histórico Diário) só vem na 1.ª cidade: nas outras, "—", nunca 0. */
+const globalOr = (r: SondaResult, value: string): string => ((r.n["corrida.global"] ?? 0) > 0 ? value : "— (é de toda a corrida: vê em Juntas ou na 1.ª cidade)");
+
 /** O que cada critério do §11.0 diz com os números de agora (leitura rápida). PURA. */
 export function criteriaRows(r: SondaResult): ReportRow[] {
   const rows: ReportRow[] = [];
+  // Dias lidos e leituras que falharam ("falhou" não é "zero")
+  const dr = daysRead(r);
+  rows.push({
+    label: "Dias com dados",
+    value: `${dr.read} de ${dr.asked}`,
+    hint: dr.read === 0 ? "nenhum dia lido: os números abaixo não valem (ver O que falhou)" : dr.read < dr.asked ? "os outros falharam (ver O que falhou): não entram nas contas" : undefined,
+  });
+  const down = Object.keys(PROBE_SOURCE_LABELS).map((k) => [k, r.n[`falhas.${k}`] ?? 0] as const).filter(([, n]) => n > 0);
+  if (down.length) rows.push({ label: "Leituras que falharam (dias)", value: down.map(([k, n]) => `${PROBE_SOURCE_LABELS[k]} ${n}`).join(" · "), hint: "nesses dias o que dependia delas não conta (não é zero)" });
   // Intervalo
   const gapDel = mergedHist(r, ["gps.intervalo.entregas.andar", "gps.intervalo.entregas.parado"]);
   const p90 = histPercentile(gapDel, 0.9), p50 = histPercentile(gapDel, 0.5);
@@ -409,17 +456,21 @@ export function criteriaRows(r: SondaResult): ReportRow[] {
   }
   // Paragem
   const best = bestStopCombo(r);
+  const stopBase = n0(r, "paragem.base");
+  const fb = pctOf(n0(r, `paragem.recurso_r${PLAN_STOP_RADIUS_M}.com`), stopBase);
   rows.push(best
-    ? { label: "Melhor combinação de paragem", value: `${best.key} · ${fmtPct(best.share)} com paragem · p50 ${best.p50 == null ? "—" : dec(best.p50)} min antes do CHECK_OUT`, hint: best.share >= 0.7 ? "≥ 70 % → fecha V_STOP, V_WALK, T_STOP_MIN e o raio" : "< 70 % → aceitar \"1 ponto dentro + o seguinte a ≤ 10 km/h\" e voltar ao auditor" }
+    ? { label: "Melhor combinação de paragem", value: `${best.key} · ${fmtPct(best.share)} com paragem · p50 ${best.p50 == null ? "—" : dec(best.p50)} min antes do CHECK_OUT`, hint: best.share >= 0.7 ? "≥ 70 % → fecha V_STOP, V_WALK, T_STOP_MIN e o raio" : `< 70 % → aceitar "1 ponto dentro + o seguinte a ≤ 10 km/h" (daria ${fmtPct(fb)} com ${PLAN_STOP_RADIUS_M} m) e voltar ao auditor` }
     : { label: "Melhor combinação de paragem", value: "sem dados (nenhuma com p50 entre 2 e 20 min)" });
+  const plan = pctOf(n0(r, `paragem.plano_r${PLAN_STOP_RADIUS_M}.com`), stopBase);
+  if (plan != null) rows.push({ label: `Regra do plano (§4.4: parado ou a pé, ${PLAN_STOP_RADIUS_M} m)`, value: `${fmtPct(plan)} com chegada · p50 ${fmtP(histPercentile(r.h[`paragem.plano_r${PLAN_STOP_RADIUS_M}.antes`], 0.5), "min")} antes do CHECK_OUT (n=${stopBase})` });
   // Cobertura GPS
   const del = sumPrefix(r, "gps.cobertura.entregas.");
   const cov = pctOf(n0(r, "gps.cobertura.entregas.com_gps"), del);
-  rows.push({ label: "Cobertura GPS das entregas", value: cov == null ? "sem dados" : `${fmtPct(cov)} (n=${del})`, hint: cov == null ? undefined : cov >= 0.6 ? "≥ 60 % → o portão pode abrir nesta cidade" : cov < 0.3 ? "< 30 % → portão fechado; prioridade: ligar PDA/Zello às fichas" : "entre 30 e 60 % → portão fechado por agora" });
+  rows.push({ label: "Cobertura GPS das entregas", value: cov == null ? (sourceDownHint(r, "gps") ? "falhou (sem dados)" : "sem dados") : `${fmtPct(cov)} (n=${del})`, hint: cov == null ? sourceDownHint(r, "gps") ?? undefined : cov >= 0.6 ? "≥ 60 % → o portão pode abrir nesta cidade" : cov < 0.3 ? "< 30 % → portão fechado; prioridade: ligar PDA/Zello às fichas" : "entre 30 e 60 % → portão fechado por agora" });
   // Chamadas
   const dc = n0(r, "chamadas.entregas.com_pedido");
   const inWin = pctOf(n0(r, "chamadas.entregas.na_janela"), dc);
-  rows.push({ label: "Entregas com chamada na janela", value: inWin == null ? "sem dados" : `${fmtPct(inWin)} (n=${dc})`, hint: inWin != null && inWin < 0.2 ? "< 20 % → a Fila fica a do pendente (sem mudar código)" : undefined });
+  rows.push({ label: "Entregas com chamada na janela", value: inWin == null ? (sourceDownHint(r, "chamadas") ? "falhou (sem dados)" : "sem dados") : `${fmtPct(inWin)} (n=${dc})`, hint: inWin != null && inWin < 0.2 ? "< 20 % → a Fila fica a do pendente (sem mudar código)" : inWin == null ? sourceDownHint(r, "chamadas") ?? undefined : undefined });
   const cr = histPercentile(r.h["chamadas.entregas.c_menos_r"], 0.9);
   if (cr) rows.push({ label: "C − R (p90)", value: fmtP(cr, "min"), hint: Math.abs(cr.value) > 30 ? "|p90| > 30 min → rever a janela com o Jorge" : undefined });
   const late = pctOf(n0(r, "chamadas.entregas.pedido_antes_da_chamada"), n0(r, "chamadas.entregas.com_pedido"));
@@ -441,7 +492,8 @@ export function criteriaRows(r: SondaResult): ReportRow[] {
   if (histTotal(gm)) rows.push({ label: "Fim de movimento → coordenadas da garagem", value: `mediana ${fmtP(histPercentile(gm, 0.5), "m", 1, 0)} · ≤ ${GARAGE_MATCH_M} m ${fmtPct(histShareBelow(gm, GARAGE_MATCH_M))} (n=${histTotal(gm)})` });
   // P2
   const p2 = n0(r, "p2.na_tabela") + n0(r, "p2.nos_movimentos");
-  rows.push({ label: "Há uma garagem \"P2\"?", value: p2 > 0 ? `sim (tabela ${n0(r, "p2.na_tabela") > 0 ? "sim" : "não"}, movimentos ${n0(r, "p2.nos_movimentos")})` : "não", hint: p2 > 0 ? undefined : "sem P2 nas garagens → ramo \"P2 sem garagem\" (§3.2) ou fica fora até o Jorge decidir (Q5)" });
+  const garDown = sourceDownHint(r, "garagens");
+  rows.push({ label: "Há uma garagem \"P2\"?", value: p2 > 0 ? `sim (tabela ${n0(r, "p2.na_tabela") > 0 ? "sim" : "não"}, movimentos ${n0(r, "p2.nos_movimentos")})` : garDown ? "por saber (a leitura das garagens falhou)" : "não", hint: p2 > 0 ? undefined : garDown ?? "sem P2 nas garagens → ramo \"P2 sem garagem\" (§3.2) ou fica fora até o Jorge decidir (Q5)" });
   return rows;
 }
 
@@ -487,6 +539,8 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
         rows.push({ label: `  ${PROBE_CITY_LABELS[c]} (entregas)`, value: t ? `${fmtPct(pctOf(n0(cr, "gps.cobertura.entregas.com_gps"), t))} (n=${t})` : "sem casos" });
       }
     }
+    const gpsDown = sourceDownHint(r, "gps");
+    if (gpsDown) rows.push({ label: "Leitura do GPS", value: "falhou em alguns dias", hint: gpsDown });
     out.push({ id: "cobertura", item: 2, title: "Cobertura de GPS por entrega e por recolha", closes: "Portão (§8.1), R18", rows, table: { head: ["Tipo", "Motivo", "N", "%"], rows: table } });
   }
 
@@ -499,11 +553,25 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
       const h = r.h[`paragem.${key}.antes`];
       table.push([`${v} km/h`, `${t} s`, `${rad} m`, fmtPct(pctOf(n0(r, `paragem.${key}.com`), base)), fmtP(histPercentile(h, 0.5), "min"), fmtP(histPercentile(h, 0.9), "min"), fmtPct(pctOf(n0(r, `paragem.${key}.ate_e`), n0(r, `paragem.${key}.com`)))]);
     }
+    const ruleRows: ReportRow[] = [];
+    for (const rad of STOP_RADII_M) {
+      const pk = `paragem.plano_r${rad}`;
+      ruleRows.push({
+        label: `Regra do plano (§4.4), raio ${rad} m`,
+        value: `${fmtPct(pctOf(n0(r, `${pk}.com`), base))} com chegada · antes do CHECK_OUT ${pctLine(r.h[`${pk}.antes`], "min", 1, [0.5, 0.9])} · ${labelsLine(r.l[`${pk}.via`])} · precisão ${labelsLine(r.l[`${pk}.precisao`])}`,
+        hint: rad === PLAN_STOP_RADIUS_M ? `parado ou a pé (≤ ${WALK_KMH} km/h): ≥ ${PLAN_STOP_MIN_S} s dentro, ou o ponto seguinte (até ${PLAN_CONFIRM_S / 60} min) a pé dentro ou fora da zona, ou o último antes da assinatura (≤ ${PLAN_TAIL_MAX_S / 60} min)` : undefined,
+      });
+    }
+    for (const rad of STOP_RADII_M) {
+      const fk = `paragem.recurso_r${rad}`;
+      ruleRows.push({ label: `Recurso da sonda-62 (1 ponto dentro + o seguinte ≤ ${FALLBACK_NEXT_KMH} km/h), raio ${rad} m`, value: `${fmtPct(pctOf(n0(r, `${fk}.com`), base))} · antes do CHECK_OUT ${pctLine(r.h[`${fk}.antes`], "min", 1, [0.5, 0.9])}` });
+    }
     out.push({
       id: "paragem", item: 3, title: "Paragem no terminal antes do CHECK_OUT", closes: "V_STOP, V_WALK, raio T1/T2, R_SIGNATURE",
       rows: [
         { label: "Entregas com GPS e posição da assinatura", value: fmtN(base), hint: "zona = círculo à volta da posição da linha CHECK_OUT" },
         { label: "Sem posição na linha CHECK_OUT", value: fmtN(n0(r, "paragem.sem_posicao_e")) },
+        ...ruleRows,
       ],
       table: { head: ["Velocidade", "Mínimo", "Raio", "% com paragem", "p50 antes", "p90 antes", "% até ao CHECK_OUT"], rows: table },
     });
@@ -545,8 +613,10 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
       }
     }
     const inbound = n0(r, "chamadas.central.recebidas");
-    rows.push({ label: "Chamadas recebidas no dia (consola)", value: `${fmtN(inbound)} · sem número ${fmtPct(pctOf(n0(r, "chamadas.central.sem_numero"), inbound))} · WhatsApp recebidas ${fmtN(n0(r, "chamadas.whatsapp.recebidas"))}` });
-    rows.push({ label: "Atraso do registo da consola", value: pctLine(r.h["chamadas.central.atraso_registo"], "s", 1, [0.5, 0.9, 0.99]) });
+    const callsDown = sourceDownHint(r, "chamadas");
+    if (callsDown) rows.unshift({ label: "Leitura das chamadas", value: "falhou em alguns dias", hint: callsDown });
+    rows.push({ label: "Chamadas recebidas no dia (consola, todas as cidades)", value: globalOr(r, `${fmtN(inbound)} · sem número ${fmtPct(pctOf(n0(r, "chamadas.central.sem_numero"), inbound))} · WhatsApp recebidas ${fmtN(n0(r, "chamadas.whatsapp.recebidas"))}`) });
+    rows.push({ label: "Atraso do registo da consola", value: globalOr(r, pctLine(r.h["chamadas.central.atraso_registo"], "s", 1, [0.5, 0.9, 0.99])) });
     out.push({ id: "chamadas", item: 5, title: "Chamadas (cobertura da Fila)", closes: "CALL_WINDOW_*, Q1, Q2, Q11, R2", rows, table: { head: ["Tipo", "Motivo", "N", "%"], rows: table } });
   }
 
@@ -571,6 +641,8 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
       rows.push({ label: `${STATE_LABELS[t] ?? t}: plataforma`, value: labelsLine(r.l[`quem.${t}.plataforma`]) });
       rows.push({ label: `${STATE_LABELS[t] ?? t}: papel`, value: `${labelsLine(r.l[`quem.${t}.papel`])} · papel de outro parque ${fmtN(n0(r, `quem.${t}.outro_parque`))}` });
     }
+    const agDown = sourceDownHint(r, "agentes");
+    if (agDown) rows.push({ label: "Leitura dos agentes", value: "falhou em alguns dias", hint: agDown });
     out.push({ id: "quem", item: 7, title: "Quem marca cada estado", closes: "Despachante; \"em recolha\" pelo cliente?", rows });
   }
 
@@ -629,6 +701,8 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
       { label: "  Fim no P2 → zona T1 / T2 / aeroporto", value: `${pctLine(r.h["p2.distancia.T1"], "m", 1, [0.5])} / ${pctLine(r.h["p2.distancia.T2"], "m", 1, [0.5])} / ${pctLine(r.h["p2.distancia.aeroporto"], "m", 1, [0.5])}` },
       { label: "Garagens que não estão na tabela", value: fmtN(n0(r, "garagens.fora_da_tabela")) },
     ];
+    const garDown = sourceDownHint(r, "garagens");
+    if (garDown) rows.unshift({ label: "Leitura das garagens", value: "falhou em alguns dias", hint: garDown });
     out.push({ id: "garagens", item: 10, title: "Garagens (destino dos movimentos) e P2", closes: "Q5, operations.garageRoles, ramo \"P2 sem garagem\", §5.2", rows, table: { head: ["Garagem de destino", "N", "%", "Até ao movimento seguinte"], rows: table } });
   }
 
@@ -656,7 +730,7 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
     out.push({
       id: "t2", item: 12, title: "Recolhas no T2: chegada do condutor", closes: `pickupT2TargetMinutes (${T2_LATE_AFTER_MIN} min, Q4)`,
       rows: [
-        { label: "Recolhas T2", value: `${fmtN(t2)} · sem zona T2 com rótulo ${fmtN(n0(r, "t2.sem_zona_t2"))} · sem GPS ${fmtN(n0(r, "t2.sem_gps"))} · sem chegada ${fmtN(n0(r, "t2.sem_chegada"))}` },
+        { label: "Recolhas T2", value: `${fmtN(t2)} · sem zona T2 com rótulo ${fmtN(n0(r, "t2.sem_zona_t2"))} · sem GPS ${fmtN(n0(r, "t2.sem_gps"))} · sem chegada ${fmtN(n0(r, "t2.sem_chegada"))}${n0(r, "t2.por_ler") ? ` · ficheiro GPS por ler ${fmtN(n0(r, "t2.por_ler"))}` : ""}${n0(r, "t2.leitura_falhou") ? ` · por medir (leitura falhou) ${fmtN(n0(r, "t2.leitura_falhou"))}` : ""}` },
         { label: "Chegada à zona T2 − K0", value: pctLine(r.h["t2.chegada_menos_k0"], "min", 1, [0.5, 0.75, 0.9]) },
         { label: "Já lá antes de K0", value: fmtPct(pctOf(n0(r, "t2.ja_la"), n0(r, "t2.com_chegada"))) },
         { label: `Atrasadas (chegada > ${T2_LATE_AFTER_MIN} min depois de K0)`, value: `${fmtPct(pctOf(n0(r, "t2.atrasadas"), n0(r, "t2.com_chegada")))} (${fmtN(n0(r, "t2.atrasadas"))} de ${fmtN(n0(r, "t2.com_chegada"))})`, hint: `Q4: ${T2_LATE_AFTER_MIN} min` },
@@ -669,8 +743,8 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
     out.push({
       id: "ficheiros", item: 13, title: "Ficheiros GPS", closes: "§4.1",
       rows: [
-        { label: "Linhas do Histórico Diário do dia", value: labelsLine(r.l["ficheiros.passagem"]) },
-        { label: "Ficheiros do dia lidos / ficheiros por ler na corrida", value: `${fmtN(n0(r, "ficheiros.lidos"))} / ${fmtN(n0(r, "ficheiros.por_ler"))}` },
+        { label: "Linhas do Histórico Diário do dia (todas as cidades)", value: globalOr(r, labelsLine(r.l["ficheiros.passagem"])) },
+        { label: "Ficheiros do dia lidos / ficheiros por ler na corrida", value: `${fmtN(n0(r, "ficheiros.lidos"))} / ${globalOr(r, fmtN(n0(r, "ficheiros.por_ler")))}` },
         { label: "1.º ponto − meia-noite de Lisboa", value: pctLine(r.h["ficheiros.primeiro_ponto"], "h", 1, [0.1, 0.5, 0.9]) },
         { label: "Último ponto − meia-noite seguinte", value: pctLine(r.h["ficheiros.ultimo_ponto"], "h", 1, [0.1, 0.5, 0.9]) },
       ],
@@ -727,6 +801,7 @@ export function buildSondaReport(r: SondaResult, perCity?: Partial<Record<ProbeC
         { label: "Garagens nos parques da cidade", value: s ? `${fmtN(g.length)} · com coordenadas ${fmtN(g.filter((x) => x.lat != null).length)} · válidas ${fmtN(g.filter((x) => x.valid).length)}` : "—", hint: `válida = dentro do mundo e a ≤ ${fmtN(GARAGE_MAX_FROM_PARK_M / 1000)} km do parque` },
         { label: "De onde vêm", value: labelsLine(bySource) },
         { label: "Fins de movimento sem posição / garagem sem coordenadas", value: `${fmtN(n0(r, "garagens.coord.mov_sem_posicao"))} / ${fmtN(n0(r, "garagens.coord.garagem_sem_coordenadas"))}` },
+        ...(sourceDownHint(r, "garagens") ? [{ label: "Leitura das garagens", value: "falhou em alguns dias", hint: sourceDownHint(r, "garagens")! }] : []),
       ],
       table: { head: ["Garagem", "Parque", "Origem", "Coordenadas", "Válida", "Mediana posição → garagem", `≤ ${GARAGE_MATCH_M} m`, "N"], rows: tableRows },
     });
@@ -748,6 +823,8 @@ export function sondaReportText(r: SondaResult, sections: ReportSection[], o: { 
   const lines: string[] = [
     `Diagnóstico dos tempos (P0, plano 62) — ${o.cities || PROBE_CITY_LABELS[r.city]} · ${days}${o.ranAt ? ` · corrido ${o.ranAt}` : ""}`,
   ];
+  const dr = daysRead(r);
+  if (dr.read < dr.asked) lines.push(`Atenção: só ${dr.read} de ${dr.asked} dia(s) com dados (os outros falharam e não entram nas contas).`);
   if (r.truncated) lines.push("Atenção: há dias com leitura parcial (prazo ou limite de ficheiros).");
   for (const f of r.failures) lines.push(f);
   for (const s of sections) {
@@ -778,31 +855,53 @@ const trimZeros = (c: number[]) => { let k = c.length; while (k > 0 && c[k - 1] 
  */
 export function sondaLogLines(r: SondaResult, maxBytes = LOG_LINE_MAX_BYTES): string[] {
   const head = { d: r.days.join(","), c: r.city, tr: r.truncated ? 1 : 0 };
+  const budget = maxBytes - 40; // o prefixo "[sonda62 nnn/NNN] "
+  const fits = (o: Record<string, unknown>) => byteLen(JSON.stringify(o)) <= budget;
   const parts: Array<[string, unknown]> = [];
-  if (r.failures.length) parts.push(["f", r.failures.map((f) => f.slice(0, 160))]);
+  /**
+   * Um pedaço que não cabe sozinho numa linha parte-se SEM perder nada: as
+   * listas por elementos e os rótulos por chaves (`chave~0`, `chave~1`…).
+   * Só um valor simples maior do que a linha (não acontece) se corta.
+   */
+  const add = (k: string, v: unknown) => {
+    if (fits({ ...head, [k]: v })) { parts.push([k, v]); return; }
+    const entries: Array<[string | null, unknown]> = Array.isArray(v) ? v.map((x) => [null, x]) : v && typeof v === "object" ? Object.entries(v as Record<string, unknown>) : [];
+    if (entries.length > 1) {
+      let piece: Array<[string | null, unknown]> = [];
+      let i = 0;
+      const build = (list: Array<[string | null, unknown]>) => (Array.isArray(v) ? list.map(([, x]) => x) : Object.fromEntries(list as Array<[string, unknown]>));
+      for (const e of entries) {
+        const tryPiece = [...piece, e];
+        if (piece.length && !fits({ ...head, [`${k}~${i}`]: build(tryPiece) })) {
+          add(`${k}~${i++}`, build(piece));
+          piece = [e];
+        } else piece = tryPiece;
+      }
+      if (piece.length) add(`${k}~${i}`, build(piece));
+      return;
+    }
+    let s = JSON.stringify(v);
+    while (s.length && !fits({ ...head, [k]: `${s}…` })) s = s.slice(0, Math.max(0, s.length - Math.max(1, Math.ceil(s.length / 10))));
+    parts.push([k, `${s}…`]);
+  };
+  if (r.failures.length) add("f", r.failures.map((f) => f.slice(0, 160)));
   if (r.s) {
     const { garages, ...rest } = r.s;
-    parts.push(["s", rest]);
-    // as garagens (com as coordenadas, Q6) aos bocados, para nenhuma linha passar dos 2 KB
-    for (let i = 0; i < garages.length; i += 4) parts.push([`s.garages.${i / 4}`, garages.slice(i, i + 4)]);
+    add("s", rest);
+    // as garagens (com as coordenadas, Q6: locais, não pessoas) partem-se sozinhas se não couberem
+    add("s.garages", garages);
   }
-  for (const [k, v] of Object.entries(r.n).sort()) parts.push([`n.${k}`, v]);
-  for (const [k, h] of Object.entries(r.h).sort()) parts.push([`h.${k}`, trimZeros(h.c)]);
-  for (const [g, m] of Object.entries(r.l).sort()) parts.push([`l.${g}`, m]);
+  for (const [k, v] of Object.entries(r.n).sort()) add(`n.${k}`, v);
+  for (const [k, h] of Object.entries(r.h).sort()) add(`h.${k}`, trimZeros(h.c));
+  for (const [g, m] of Object.entries(r.l).sort()) add(`l.${g}`, m);
   const lines: Array<Record<string, unknown>> = [];
   let cur: Record<string, unknown> = { ...head };
-  const budget = maxBytes - 40; // o prefixo "[sonda62 nn/NN] "
   for (const [k, v] of parts) {
     const next = { ...cur, [k]: v };
-    if (byteLen(JSON.stringify(next)) > budget && Object.keys(cur).length > Object.keys(head).length) {
+    if (!fits(next) && Object.keys(cur).length > Object.keys(head).length) {
       lines.push(cur);
       cur = { ...head, [k]: v };
     } else cur = next;
-    // um só pedaço maior do que a linha (ex.: lista de garagens enorme): corta-se o texto
-    if (byteLen(JSON.stringify(cur)) > budget) {
-      const s = JSON.stringify(v);
-      cur = { ...head, [k]: `${s.slice(0, Math.max(0, budget - 200))}…` };
-    }
   }
   lines.push(cur);
   return lines.map((o, i) => `[sonda62 ${i + 1}/${lines.length}] ${JSON.stringify(o)}`);

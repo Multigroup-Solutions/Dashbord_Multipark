@@ -1,16 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { assertReadOnlySql } from "./multiparkDb/client";
 import {
   PROBE_HISTORY_TYPES, buildProbeAgentsSql, buildProbeBookingsSql, buildProbeClientPhonesSql, buildProbeClockSql, buildProbeCoordColumnsSql, buildProbeDriverPhonesSql,
   buildProbeGaragesSql, buildProbeHistorySql, buildProbeParksSql, garageCoordColumns, mapCoordColumns, mapProbeHistoryRow, movementGarages,
 } from "./multiparkDb/sondaTempos";
 import {
-  buildBookingCycles, computeProbeCity, coordsFromText, garageCoords, lastArrivalInZone, matchCalls, sharedPhones, terminalExit, terminalStop, windowGaps, zoneKind,
+  buildBookingCycles, computeProbeCity, coordsFromText, garageCoords, lastArrivalInZone, matchCalls, planArrival, sharedPhones, terminalExit, terminalStop, windowGaps, zoneKind,
   type PosPoint, type ProbeCall, type ProbeCityInput, type ProbeEvent,
 } from "./sondaTemposCompute";
-import { loadProbeGps, probeDayError, runTimesProbe, type ProbeDeps, type ProbeGpsSource } from "./sondaTempos";
+import { gpsNeeds, loadProbeGps, probeDayError, probeErrText, runTimesProbe, type ProbeDeps, type ProbeGpsSource } from "./sondaTempos";
 import {
-  LOG_LINE_MAX_BYTES, T2_LATE_AFTER_MIN, buildSondaReport, emptySondaResult, histAdd, histPercentile, histShareAtLeast, mergeSondaResults, newHist,
+  LOG_LINE_MAX_BYTES, SondaAcc, T2_LATE_AFTER_MIN, buildSondaReport, emptySondaResult, histAdd, histPercentile, histShareAtLeast, mergeSondaResults, newHist,
   sondaLogLines, sondaReportText, type SondaResult,
 } from "../shared/sondaTempos";
 import { operationalDayRangeUtc } from "../shared/lisbonDay";
@@ -572,6 +572,9 @@ describe("runTimesProbe", () => {
     expect((await runTimesProbe({ day: DAY, cities: [] }, deps)).failures[0]).toContain("nenhuma cidade");
     expect((await runTimesProbe({ day: DAY, cities: ["faro"] }, { ...deps, mpConfigured: () => false })).failures[0]).toContain("não está configurada");
     expect(probeDayError("2026-13-99x", Date.now())).toContain("inválido");
+    expect(probeDayError("2026-02-30", Date.now())).toContain("inválido");
+    expect(probeDayError("2026-13-01", Date.now())).toContain("inválido");
+    expect(probeDayError("2026-10-10", Date.parse("2026-10-14T10:00:00Z"))).toBeNull();
   });
 
   it("GPS lento: devolve dentro do prazo com 'truncated' e o ficheiro por ler", async () => {
@@ -603,5 +606,210 @@ describe("runTimesProbe", () => {
     const g = await loadProbeGps(services, sources, () => null, async () => [], { now: () => Date.now(), deadlineAt: Date.now() + 1000 });
     expect(g.byEmp.get(1)?.status).toBe("sem_ficheiro");
     expect(g.byEmp.get(2)?.status).toBe("sem_linha");
+  });
+});
+
+// ─── Auditoria final (P0): erros honestos, privacidade dos erros, carga, DST, chegada a pé ──
+
+describe("erros no log sem dados (probeErrText)", () => {
+  it("erro do drizzle: fica a causa, nunca o SQL nem os parâmetros", () => {
+    const err = Object.assign(new Error(`Failed query: SELECT l.bookingExternalId AS b FROM crm_booking_links l WHERE l.bookingExternalId IN (?, ?)\nparams: bk-SECRET-001,bk-SECRET-002`), { cause: new Error("Unknown column 'phone' in 'field list'") });
+    const t = probeErrText(err);
+    expect(t).toBe("Unknown column 'phone' in 'field list'");
+    noSecrets(t);
+  });
+  it("valores entre aspas, telefones, emails e ids longos saem; nomes de colunas ficam", () => {
+    const t = probeErrText(new Error(`invalid input syntax for type timestamp: "2026-10-10 08:45" near 'bk-SECRET-001' — +351 912 345 678 maria@exemplo.pt cmg1abc2def3ghi4jkl5mno; column "lat" does not exist`));
+    expect(t).not.toMatch(/2026-10-10|bk-SECRET|912 345|maria@|cmg1abc/);
+    expect(t).toBe(`invalid input syntax for type timestamp: "…" near '…' — # …@… #; column "lat" does not exist`);
+    expect(probeErrText(new Error("canceling statement due to statement timeout"))).toBe("canceling statement due to statement timeout");
+    expect(probeErrText(null)).toBe("erro");
+  });
+  it("o servidor nunca escreve um id de reserva no log quando o CRM falha", async () => {
+    const { deps } = fakeDeps();
+    const warns: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) => { warns.push(a.map(String).join(" ")); });
+    try {
+      const err = Object.assign(new Error(`Failed query: SELECT … IN (?)\nparams: ${DEL}`), { cause: new Error("Table 'crm_booking_links' doesn't exist") });
+      await runTimesProbe({ day: DAY, cities: ["lisbon"] }, { ...deps, crmPhones: async () => { throw err; } });
+    } finally { spy.mockRestore(); }
+    expect(warns.some((w) => w.startsWith("[sonda62] CRM:"))).toBe(true);
+    for (const w of warns) noSecrets(w);
+  });
+});
+
+describe("\"falhou\" não é \"zero\"", () => {
+  it("chamadas por ler: nada de chamadas nem de K0 conta, e o relatório diz que falhou", () => {
+    const r = computeProbeCity(cityInput({ unavailable: { chamadas: true } }));
+    expect(Object.keys(r.n).filter((k) => k.startsWith("chamadas.entregas") || k.startsWith("chamadas.recolhas"))).toEqual([]);
+    expect(r.n["falhas.chamadas"]).toBe(1);
+    expect(r.n["t2.leitura_falhou"]).toBe(1);
+    expect(r.n["t2.com_chegada"]).toBeUndefined();
+    const rows = buildSondaReport(r)[0].rows;
+    expect(rows.find((x) => x.label === "Entregas com chamada na janela")?.value).toBe("falhou (sem dados)");
+    expect(rows.find((x) => x.label.startsWith("Leituras que falharam"))?.value).toContain("chamadas");
+  });
+  it("fichas/GPS por ler: a cobertura não conta (não é 0 %)", () => {
+    const r = computeProbeCity(cityInput({ unavailable: { gps: true } }));
+    expect(Object.keys(r.n).filter((k) => k.startsWith("gps.cobertura."))).toEqual([]);
+    expect(r.n["paragem.base"]).toBeUndefined();
+    const cov = buildSondaReport(r)[0].rows.find((x) => x.label === "Cobertura GPS das entregas");
+    expect(cov?.value).toBe("falhou (sem dados)");
+    expect(cov?.hint).toContain("não é zero");
+  });
+  it("papéis e garagens por ler: sem \"sem agente\" nem \"fora da tabela\" inventados", () => {
+    const r = computeProbeCity(cityInput({ unavailable: { agentes: true, garagens: true }, garages: [] }));
+    expect(r.l["quem.CHECK_IN.papel"]).toBeUndefined();
+    expect(r.l["quem.CHECK_IN.plataforma"]).toEqual({ MOBILE: 1 });
+    expect(r.l["garagens.destino"]).toBeUndefined();
+    expect(r.l["garagens.primeira"]).toBeUndefined();
+    expect(r.n["garagens.fora_da_tabela"]).toBeUndefined();
+    expect(buildSondaReport(r)[0].rows.find((x) => x.label.startsWith("Há uma garagem"))?.value).toContain("por saber");
+  });
+  it("um dia que falhou inteiro não entra nas contas e o resumo diz quantos dias têm dados", () => {
+    const ok = computeProbeCity(cityInput());
+    const failed = { ...emptySondaResult("lisbon", ["2026-10-09"]), failures: ["falhou: History da Multipark: A BD da Multipark demorou demasiado a responder."] };
+    const m = mergeSondaResults([ok, failed]);
+    const report = buildSondaReport(m);
+    expect(report[0].rows[0]).toMatchObject({ label: "Dias com dados", value: "1 de 2" });
+    expect(sondaReportText(m, report, { cities: "Lisboa" })).toContain("só 1 de 2 dia(s) com dados");
+  });
+  it("o que é de toda a corrida (consola, Histórico Diário) só vem na 1.ª cidade: nas outras é \"—\", não 0", () => {
+    const porto = computeProbeCity(cityInput({ city: "porto", global: undefined }));
+    const sec = buildSondaReport(porto).find((s) => s.id === "chamadas")!;
+    expect(sec.rows.find((x) => x.label.startsWith("Chamadas recebidas no dia"))?.value).toMatch(/^— /);
+    const lisboa = computeProbeCity(cityInput());
+    expect(buildSondaReport(lisboa).find((s) => s.id === "chamadas")!.rows.find((x) => x.label.startsWith("Chamadas recebidas no dia"))?.value).toMatch(/^2 /);
+  });
+  it("runTimesProbe: as chamadas e as fichas que falham ficam marcadas no resultado", async () => {
+    const { deps } = fakeDeps();
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const r = await runTimesProbe({ day: DAY, cities: ["lisbon"] }, { ...deps, calls: async () => { throw new Error("x"); }, identity: async () => { throw new Error("y"); } });
+      const res = r.results.lisbon!;
+      expect(res.n["falhas.chamadas"]).toBe(1);
+      expect(res.n["falhas.gps"]).toBe(1);
+      expect(res.n["chamadas.entregas.com_pedido"]).toBeUndefined();
+      expect(res.n["gps.cobertura.entregas.sem_ficha"]).toBeUndefined();
+      expect(res.n["entregas.entregues"]).toBe(1);
+    } finally { spy.mockRestore(); }
+  });
+});
+
+describe("chegada pela regra do plano (§4.4): carro parado ou condutor a pé", () => {
+  const S = at("14:10"), E = at("14:30");
+  const o = { lat: T1.lat, lng: T1.lng, radiusM: 200, startMs: S, endMs: E };
+  const pt = (hhmm: string, speed: number, p: { lat: number; lng: number }): PosPoint => ({ ts: at(hhmm) / 1000, speed, lat: p.lat, lon: p.lng, accurate: true });
+  const near = { lat: T1.lat + 0.0005, lng: T1.lng }; // ~55 m
+  const out = { lat: T1.lat + 0.004, lng: T1.lng }; // ~440 m (fora dos 200 m)
+  it("carro parado na zona (pontos densos) → parado; a chegada é o meio desde o ponto anterior a andar", () => {
+    const a = planArrival([pt("14:17", 40, PARK), pt("14:21", 2, near), pt("14:22", 0, near), pt("14:23", 0, near)], { ...o, mode: "plano" });
+    expect(a).toMatchObject({ found: true, via: "parado", precision: "boa (≤ 6 min)" });
+    expect(a.found && a.arrivalMs).toBe((at("14:17") + at("14:21")) / 2);
+  });
+  it("pontos espaçados: um ponto dentro e o seguinte FORA mas a pé (o condutor sai a pé) → confirmado", () => {
+    const a = planArrival([pt("14:15", 35, PARK), pt("14:20", 3, near), pt("14:24", 4, out), pt("14:33", 30, PARK)], { ...o, mode: "plano" });
+    expect(a).toMatchObject({ found: true, via: "confirmado" });
+  });
+  it("passar pela zona a andar e sair de carro não é chegada; o recurso da sonda-62 também não", () => {
+    const pts = [pt("14:15", 35, PARK), pt("14:20", 30, near), pt("14:24", 40, out)];
+    expect(planArrival(pts, { ...o, mode: "plano" }).found).toBe(false);
+    expect(planArrival(pts, { ...o, mode: "recurso" }).found).toBe(false);
+  });
+  it("devagar na zona (8 km/h, fila) e depois a andar: só o recurso (≤ 10 km/h) o aceita se o seguinte for lento", () => {
+    const pts = [pt("14:15", 35, PARK), pt("14:20", 8, near), pt("14:23", 9, out)];
+    expect(planArrival(pts, { ...o, mode: "plano" }).found).toBe(false);
+    expect(planArrival(pts, { ...o, mode: "recurso" })).toMatchObject({ found: true, via: "recurso" });
+  });
+  it("o último ponto antes da assinatura, dentro e parado, a ≤ 20 min → até à assinatura; a mais de 20 min não", () => {
+    expect(planArrival([pt("14:12", 30, PARK), pt("14:25", 0, near)], { ...o, mode: "plano" })).toMatchObject({ found: true, via: "ate_assinatura", precision: "fraca (6–15 min)" });
+    expect(planArrival([pt("14:12", 0, near)], { ...o, endMs: at("14:40"), mode: "plano" }).found).toBe(false);
+  });
+  it("a chegada nunca fica antes do início (S)", () => {
+    const a = planArrival([pt("14:00", 40, PARK), pt("14:12", 0, near), pt("14:13", 0, near)], { ...o, mode: "plano" });
+    expect(a.found && a.arrivalMs).toBe(S);
+  });
+  it("entra nas contas do dia, por raio, com a via e a precisão", () => {
+    const r = computeProbeCity(cityInput());
+    expect(r.n["paragem.plano_r200.com"]).toBe(1);
+    expect(r.l["paragem.plano_r200.via"]).toEqual({ parado: 1 });
+    expect(r.n["paragem.recurso_r200.com"]).toBe(1);
+    const sec = buildSondaReport(r).find((s) => s.id === "paragem")!;
+    expect(sec.rows.some((x) => x.label.startsWith("Regra do plano (§4.4), raio 200 m"))).toBe(true);
+    expect(buildSondaReport(r)[0].rows.find((x) => x.label.startsWith("Regra do plano"))?.value).toContain("100 %");
+  });
+});
+
+describe("fusos e o dia operacional com 25 h (24 out)", () => {
+  const D = "2026-10-24";
+  const op = operationalDayRangeUtc(D);
+  it("o dia operacional de 24 out tem 25 h e acaba às 03h de inverno (03:00Z)", () => {
+    expect(op.startMs).toBe(Date.parse("2026-10-24T02:00:00Z"));
+    expect(op.endMs).toBe(Date.parse("2026-10-25T03:00:00Z"));
+    expect((op.endMs - op.startMs) / 3_600_000).toBe(25);
+  });
+  it("uma entrega às 02:30 de inverno de 25 out conta no dia 24; às 03:10 já é do dia 25", () => {
+    const mk = (iso: string, b: string) => [
+      ev({ bookingId: b, type: "PENDING_CHECKOUT", atMs: Date.parse(iso) }),
+      ev({ bookingId: b, type: "CHECK_OUT", atMs: Date.parse(iso) + 20 * 60_000 }),
+    ];
+    const evs = [...mk("2026-10-25T02:30:00Z", DEL), ...mk("2026-10-25T03:10:00Z", PIC)];
+    const r = computeProbeCity(cityInput({ day: D, opStartMs: op.startMs, opEndMs: op.endMs, events: evs }));
+    expect(r.n["entregas.entregues"]).toBe(1);
+    expect(r.l["corrida.dias_lidos"]).toEqual({ [D]: 1 });
+  });
+});
+
+describe("carga: só os ficheiros GPS que fazem falta", () => {
+  const resolve = (uid: string | null) => (uid === "u-tarde" ? { kind: "ficha" as const, employeeId: 1 } : uid === "u-manha" ? { kind: "ficha" as const, employeeId: 2 } : { kind: "sistema" as const });
+  const o = { opStartMs: OP.startMs, opEndMs: OP.endMs, hasBooking: () => true, resolve };
+  it("o ficheiro do dia seguinte só para quem trabalhou depois da meia-noite de Lisboa", () => {
+    const evs = [
+      ev({ bookingId: "b1", type: "CHECKING_OUT", atMs: Date.parse("2026-10-10T22:40:00Z"), uid: "u-tarde" }), // 23:40 em Lisboa
+      ev({ bookingId: "b1", type: "CHECK_OUT", atMs: Date.parse("2026-10-10T23:20:00Z"), uid: "u-tarde" }), // 00:20 de dia 11
+      ev({ bookingId: "b2", type: "CHECK_IN", atMs: at("08:20"), uid: "u-manha" }),
+      ev({ bookingId: "b3", type: "CHECKING_OUT", atMs: at("15:00"), uid: "system" }),
+    ];
+    const n = gpsNeeds(evs, o);
+    expect([...n.keys()].sort()).toEqual([1, 2]);
+    expect([...n.get(1)!.days].sort()).toEqual([DAY, "2026-10-11"]);
+    expect([...n.get(2)!.days]).toEqual([DAY]);
+  });
+  it("runTimesProbe pede e lê só esses ficheiros (o do dia seguinte fica de fora para quem não precisa)", async () => {
+    const { deps } = fakeDeps();
+    const asked: string[][] = [];
+    const fetched: string[] = [];
+    const r = await runTimesProbe({ day: DAY, cities: ["lisbon"] }, {
+      ...deps,
+      gpsSources: async (emps, days) => { asked.push(days); return emps.flatMap((e, i) => days.map((d, j) => ({ id: 100 + i * 10 + j, day: d, geoJsonUrl: `https://x/${e}/${d}`, split: false, rowEmployeeId: e, employeeIds: [e], zello: "z" }))); },
+      fetchPoints: async (src) => { fetched.push(src.day); return drvPoints(); },
+    });
+    expect(asked).toEqual([[DAY]]);
+    expect(fetched.every((d) => d === DAY)).toBe(true);
+    expect(r.truncated).toBe(false);
+  });
+  it("com o limite, os ficheiros do dia vêm antes dos do dia seguinte", async () => {
+    const sources: ProbeGpsSource[] = [
+      { id: 1, day: "2026-10-11", geoJsonUrl: "https://x/1", split: false, rowEmployeeId: 1, employeeIds: [1], zello: "a" },
+      { id: 2, day: DAY, geoJsonUrl: "https://x/2", split: false, rowEmployeeId: 2, employeeIds: [2], zello: "b" },
+    ];
+    const g = await loadProbeGps(new Map([[1, 50], [2, 1]]), sources, () => null, async () => [], { now: () => Date.now(), deadlineAt: Date.now() + 5_000, maxFiles: 1, primaryDay: DAY });
+    expect(g.byEmp.get(2)?.status).toBe("ok");
+    expect(g.byEmp.get(1)?.status).toBe("por_ler");
+  });
+});
+
+describe("log: nada se perde e nenhuma linha passa dos 2 KB", () => {
+  it("rótulos grandes (com acentos) partem-se em várias linhas sem cortar", () => {
+    const r = computeProbeCity(cityInput());
+    for (let i = 0; i < 120; i++) new SondaAcc(r).label("recolhas.sequencia", `em recolha → check-in → mov. início → mov. fim (arrumar) → mudança de lugar ${i} ção`);
+    const lines = sondaLogLines(r);
+    for (const l of lines) expect(new TextEncoder().encode(l).length).toBeLessThanOrEqual(LOG_LINE_MAX_BYTES);
+    const back: Record<string, number> = {};
+    for (const l of lines) {
+      const o = JSON.parse(l.slice(l.indexOf("{"))) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(o)) if (k.startsWith("l.recolhas.sequencia")) Object.assign(back, v as Record<string, number>);
+    }
+    expect(back).toEqual(r.l["recolhas.sequencia"]);
   });
 });

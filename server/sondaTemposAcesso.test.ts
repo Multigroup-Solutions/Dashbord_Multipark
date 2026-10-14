@@ -62,5 +62,10 @@ describe("leituras à nossa BD: só SELECT", () => {
       expect(s.trim()).toMatch(/^SELECT\b/i);
       expect(s).not.toMatch(/\b(INSERT|UPDATE|DELETE|REPLACE|ALTER|DROP|CREATE|TRUNCATE)\b/i);
     }
+    // Q1: só as RECEBIDAS (atendidas e perdidas, consola e WhatsApp); as que fazemos nós não contam
+    expect(f.sql[0]).toMatch(/FROM central_calls WHERE direction = 'in'/);
+    expect(f.sql[0]).not.toMatch(/\bheld\s*=/);
+    expect(f.sql[1]).toMatch(/FROM whatsapp_calls WHERE direction = 'in'/);
+    expect(f.sql[1]).not.toMatch(/\bmissed\s*=/);
   });
 });

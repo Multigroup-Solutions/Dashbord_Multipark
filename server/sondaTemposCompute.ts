@@ -18,7 +18,8 @@ import { type MovementKind } from "../shared/multiparkMovements";
 import { distanceMeters, type AirportFence, type TerminalZone } from "../shared/pontoTerminal";
 import {
   CALL_HIST_AFTER_MIN, CALL_HIST_BEFORE_MIN, CALL_LATE_AFTER_MIN, CALL_WINDOW_AFTER_MIN, CALL_WINDOW_BEFORE_MIN,
-  EXIT_CAR_SPEEDS_KMH, EXIT_MARGINS_M, GAP_MOVING_KMH, PARK_FAR_M, PARK_OK_M, PICKUP_GPS_WINDOW_MIN, PICKUP_TRACK_MAX_HOURS,
+  EXIT_CAR_SPEEDS_KMH, EXIT_MARGINS_M, FALLBACK_NEXT_KMH, GAP_MOVING_KMH, PARK_FAR_M, PARK_OK_M, PICKUP_GPS_WINDOW_MIN, PICKUP_TRACK_MAX_HOURS,
+  PLAN_CONFIRM_S, PLAN_GAP_GOOD_S, PLAN_GAP_WEAK_S, PLAN_STOP_MIN_S, PLAN_TAIL_MAX_S, WALK_KMH,
   GARAGE_MAX_FROM_PARK_M, PROBE_TERMINAL_RADIUS_M, QUICK_PICKUP_MIN, SHARED_PHONE_MIN_BOOKINGS, STOP_MIN_SECONDS, STOP_RADII_M, STOP_SPEEDS_KMH, T2_LATE_AFTER_MIN,
   SondaAcc, emptySondaResult, exitComboKey, stopComboKey,
   type ProbeCity, type ProbeGarageInfo, type ProbeZoneInfo, type SondaResult, type SondaStatic,
@@ -93,7 +94,17 @@ export interface ProbeCityInput {
   staticBase: Omit<SondaStatic, "garages" | "zones" | "airportRadiusM" | "coordColumns">;
   truncated?: boolean;
   failures?: string[];
+  /**
+   * Leituras que falharam neste dia: o que depende delas NÃO conta (nem como
+   * zero) e fica `falhas.<leitura>` = 1 para o relatório o dizer.
+   *  - chamadas: as chamadas ou os telefones das reservas (Multipark/CRM);
+   *  - gps: as fichas (agente → ficha) ou as linhas/ficheiros do GPS;
+   *  - agentes: os papéis (Agent);
+   *  - garagens: a tabela Garage.
+   */
+  unavailable?: Partial<Record<ProbeSource, boolean>>;
 }
+export type ProbeSource = "chamadas" | "gps" | "agentes" | "garagens";
 
 // ─── Ciclos por reserva ─────────────────────────────────────────────────────
 
@@ -309,6 +320,56 @@ export function terminalExit(
   return null;
 }
 
+export type ArrivalVia = "parado" | "confirmado" | "ate_assinatura" | "recurso";
+export type ArrivalPrecision = "boa (≤ 6 min)" | "fraca (6–15 min)" | "buraco (> 15 min)" | "sem ponto nos 15 min antes";
+
+/**
+ * A chegada pela regra do plano (§4.4, passos 2–5), para a P0 a medir tal
+ * como a P4 a vai usar. `pts` = os pontos "meus" e precisos desde S − G_WEAK
+ * (os anteriores a S só servem para o meio do passo 5 e para a precisão).
+ *  - "plano": candidato = ponto DENTRO da zona a ≤ V_WALK (carro parado OU
+ *    condutor a pé); confirmado por (a) ≥ T_STOP_MIN parado/a pé dentro,
+ *    (b) o ponto seguinte, até T_CONFIRM, a ≤ V_WALK — dentro OU fora da zona
+ *    (o condutor sai a pé), ou (c) não há mais pontos antes de E e E − t ≤ 20 min.
+ *    Dentro a mais de V_WALK e depois fora a andar = passou, não chegou.
+ *  - "recurso": a proposta da sonda-62 — 1 ponto dentro a ≤ 10 km/h e o
+ *    seguinte (dentro ou fora) a ≤ 10 km/h.
+ * Chegada (passo 5): o anterior a andar → o meio dos dois (nunca antes de S);
+ * o anterior parado/a pé → o próprio ponto. A precisão é o intervalo até ao
+ * anterior (G_GOOD 6 / G_WEAK 15 min). PURA.
+ */
+export function planArrival(
+  pts: readonly PosPoint[],
+  o: { lat: number; lng: number; radiusM: number; startMs: number; endMs: number; mode: "plano" | "recurso" },
+): { found: false } | { found: true; arrivalMs: number; via: ArrivalVia; precision: ArrivalPrecision } {
+  const S = o.startMs / 1000, E = o.endMs / 1000;
+  const inside = (p: PosPoint) => distTo(p, o.lat, o.lng) <= o.radiusM;
+  const walk = (p: PosPoint) => p.speed <= WALK_KMH;
+  for (let k = 0; k < pts.length; k++) {
+    const pi = pts[k];
+    if (pi.ts < S) continue;
+    if (pi.ts > E) break;
+    const next = pts[k + 1] && pts[k + 1].ts <= E + 120 ? pts[k + 1] : undefined;
+    let via: ArrivalVia | null = null;
+    if (o.mode === "recurso") {
+      if (inside(pi) && pi.speed <= FALLBACK_NEXT_KMH && next && next.speed <= FALLBACK_NEXT_KMH) via = "recurso";
+    } else if (inside(pi) && walk(pi)) {
+      let j = k;
+      while (j + 1 < pts.length && pts[j + 1].ts <= E + 120 && inside(pts[j + 1]) && walk(pts[j + 1])) j++;
+      if (pts[j].ts - pi.ts >= PLAN_STOP_MIN_S) via = "parado";
+      else if (next && next.ts - pi.ts <= PLAN_CONFIRM_S && walk(next)) via = "confirmado";
+      else if ((!pts[k + 1] || pts[k + 1].ts > E) && E - pi.ts <= PLAN_TAIL_MAX_S) via = "ate_assinatura";
+    }
+    if (!via) continue;
+    const prev = k > 0 ? pts[k - 1] : null;
+    const arrival = prev && prev.speed > WALK_KMH ? Math.max(S, (prev.ts + pi.ts) / 2) : pi.ts;
+    const g = prev ? pi.ts - prev.ts : null;
+    const precision: ArrivalPrecision = g == null ? "sem ponto nos 15 min antes" : g <= PLAN_GAP_GOOD_S ? "boa (≤ 6 min)" : g <= PLAN_GAP_WEAK_S ? "fraca (6–15 min)" : "buraco (> 15 min)";
+    return { found: true, arrivalMs: arrival * 1000, via, precision };
+  }
+  return { found: false };
+}
+
 /** A última chegada à zona antes de `untilMs`: o 1.º ponto da última série de pontos dentro. PURA. */
 export function lastArrivalInZone(pts: readonly PosPoint[], zone: { lat: number; lng: number; radiusM: number }, fromMs: number, untilMs: number): number | null {
   const w = pts.filter((p) => p.ts * 1000 >= fromMs && p.ts * 1000 <= untilMs);
@@ -494,6 +555,12 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
   const acc = new SondaAcc(res);
   res.truncated = !!inp.truncated;
   res.failures = [...(inp.failures ?? [])];
+  // Este dia foi lido (o relatório compara com os dias pedidos: "falhou" ≠ "zero")
+  acc.label("corrida.dias_lidos", inp.day);
+  if (inp.global) acc.inc("corrida.global");
+  const down = inp.unavailable ?? {};
+  for (const [k, v] of Object.entries(down)) if (v) acc.inc(`falhas.${k}`);
+  const callsDown = !!down.chamadas, gpsDown = !!down.gps, agentsDown = !!down.agentes, garagesDown = !!down.garagens;
   const inDay = (ms: number | null | undefined) => ms != null && ms >= inp.opStartMs && ms < inp.opEndMs;
   const zones = validZones(inp.airport);
   const zoneInfo: ProbeZoneInfo[] = zones.map((z) => ({ label: zoneKind(z.label), radiusM: z.radiusM }));
@@ -557,6 +624,7 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
   const who = (type: string, ev: ProbeEvent | null) => {
     if (!ev) return;
     acc.label(`quem.${type}.plataforma`, platformLabel(ev.platform));
+    if (agentsDown) return; // sem os papéis, "sem agente" seria mentira
     const r = agentRoleAt(inp.agents.get(ev.uid ?? ""), inp.bookings.get(ev.bookingId)?.parkId ?? "", ev.uid);
     acc.label(`quem.${type}.papel`, r.role);
     if (r.otherPark) acc.inc(`quem.${type}.outro_parque`);
@@ -667,15 +735,18 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
       }
     }
 
-    // Item 5: chamadas
-    if (R) callStats("entregas", R.atMs, d.bookingId);
-    else if (S) {
-      const m = matchCalls(callsSorted, S.atMs, inp.phones.get(d.bookingId), inp.crmIds.get(d.bookingId), shared);
-      acc.inc("chamadas.entregas_sem_pendente");
-      if (m.before60) acc.inc("chamadas.entregas_sem_pendente.com_chamada");
+    // Item 5: chamadas (sem a leitura das chamadas/telefones não conta: não é "sem chamada")
+    if (!callsDown) {
+      if (R) callStats("entregas", R.atMs, d.bookingId);
+      else if (S) {
+        const m = matchCalls(callsSorted, S.atMs, inp.phones.get(d.bookingId), inp.crmIds.get(d.bookingId), shared);
+        acc.inc("chamadas.entregas_sem_pendente");
+        if (m.before60) acc.inc("chamadas.entregas_sem_pendente.com_chamada");
+      }
     }
 
-    // Item 2: cobertura (o condutor = agente do CHECKING_OUT)
+    // Item 2: cobertura (o condutor = agente do CHECKING_OUT); sem fichas/GPS não conta
+    if (gpsDown) continue;
     if (!S) { acc.inc("gps.cobertura.entregas.sem_inicio"); continue; }
     const cov = coverage([S], S.atMs, E.atMs);
     acc.inc(`gps.cobertura.entregas.${cov.reason}`);
@@ -701,6 +772,19 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
       acc.inc(`paragem.${key}.com`);
       acc.hist(`paragem.${key}.antes`, "stopMin", Math.max(0, E.atMs - st.startMs) / MIN);
       if (st.lastsUntilEnd) acc.inc(`paragem.${key}.ate_e`);
+    }
+    // A regra do plano (carro parado OU condutor a pé, §4.4) e o recurso da sonda-62, por raio
+    // (desde S − G_WEAK: o ponto anterior dá o meio do passo 5 e a precisão)
+    const winPlan = myPoints(emp, S.atMs - PLAN_GAP_WEAK_S * 1000, E.atMs + 2 * MIN);
+    for (const rad of STOP_RADII_M) {
+      for (const mode of ["plano", "recurso"] as const) {
+        const a = planArrival(winPlan, { lat: E.lat, lng: E.lng, radiusM: rad, startMs: S.atMs, endMs: E.atMs, mode });
+        if (!a.found) continue;
+        const key = `paragem.${mode}_r${rad}`;
+        acc.inc(`${key}.com`);
+        acc.hist(`${key}.antes`, "stopMin", Math.max(0, E.atMs - a.arrivalMs) / MIN);
+        if (mode === "plano") { acc.label(`${key}.via`, a.via); acc.label(`${key}.precisao`, a.precision); }
+      }
     }
     let near: { d: number; ts: number } | null = null;
     for (const p of myPoints(emp, E.atMs - 30 * MIN, E.atMs + 30 * MIN)) {
@@ -747,23 +831,23 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
     if (moveStart) acc.hist("recolhas.i_inicio_mov", "min", (moveStart.atMs - I.atMs) / MIN);
     if (moveEnd) acc.hist("recolhas.i_fim_mov", "min", (moveEnd.atMs - I.atMs) / MIN);
     const firstGarage = p.moves.find((m) => FIM_KINDS.has(m.moveKind ?? "") && m.garageTo);
-    if (firstGarage) acc.label("garagens.primeira", garageName(firstGarage.garageTo) ?? "outra (fora da tabela)");
+    if (firstGarage && !garagesDown) acc.label("garagens.primeira", garageName(firstGarage.garageTo) ?? "outra (fora da tabela)");
 
-    // Chamadas (K) e K0
-    const m = K ? callStats("recolhas", K.atMs, p.bookingId) : null;
-    const k0 = K ? Math.min(K.atMs, m?.inWindow?.atMs ?? Infinity) : null;
+    // Chamadas (K) e K0 (sem a leitura das chamadas não conta, e o K0 fica por saber)
+    const m = K && !callsDown ? callStats("recolhas", K.atMs, p.bookingId) : null;
+    const k0 = K && !callsDown ? Math.min(K.atMs, m?.inWindow?.atMs ?? Infinity) : null;
 
     // Item 11: recurso da app (início do movimento na zona do check-in)
     if (moveStart && I.lat != null && I.lng != null && moveStart.lat != null && moveStart.lng != null
       && distanceMeters(moveStart.lat, moveStart.lng, I.lat, I.lng) <= PROBE_TERMINAL_RADIUS_M) acc.inc("saida.recurso_app");
 
-    // Item 2: cobertura (quem tira o carro: o do 1.º movimento, senão o do check-in)
+    // Item 2: cobertura (quem tira o carro: o do 1.º movimento, senão o do check-in); sem fichas/GPS não conta
     const firstMove = p.moves.find((mv) => mv.atMs - I.atMs <= PICKUP_GPS_WINDOW_MIN * MIN) ?? null;
     const until = I.atMs + PICKUP_GPS_WINDOW_MIN * MIN;
-    const cov = coverage(firstMove && firstMove.uid !== I.uid ? [firstMove, I] : [I], I.atMs, until);
-    acc.inc(`gps.cobertura.recolhas.${cov.reason}`);
-    if (cov.employeeId != null) involved.add(cov.employeeId);
-    if (cov.reason === "com_gps" && cov.employeeId != null) {
+    const cov = gpsDown ? null : coverage(firstMove && firstMove.uid !== I.uid ? [firstMove, I] : [I], I.atMs, until);
+    if (cov) acc.inc(`gps.cobertura.recolhas.${cov.reason}`);
+    if (cov?.employeeId != null) involved.add(cov.employeeId);
+    if (cov && cov.reason === "com_gps" && cov.employeeId != null) {
       const emp = inp.gps.get(cov.employeeId);
       acc.label("gps.aparelho.recolhas", windowUsesPda(emp, I.atMs, until) ? "PDA com check-in" : "Zello da linha");
       addGaps("recolhas", myPoints(emp, I.atMs - 30 * MIN, until + 30 * MIN), I.atMs, until);
@@ -784,12 +868,14 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
     if (classOf(p.bookingId) === "t2") {
       acc.inc("t2.recolhas");
       if (!t2Zones.length) acc.inc("t2.sem_zona_t2");
+      else if (callsDown || gpsDown) acc.inc("t2.leitura_falhou");
       else if (k0 == null) acc.inc("t2.sem_k0");
       else {
         const e = employeeOf(I);
         const emp = e.employeeId != null ? inp.gps.get(e.employeeId) : undefined;
         const pts = myPoints(emp, k0 - 30 * MIN, I.atMs);
-        if (pts.length < 1) acc.inc("t2.sem_gps");
+        if (emp?.status === "por_ler") acc.inc("t2.por_ler");
+        else if (pts.length < 1) acc.inc("t2.sem_gps");
         else {
           let arrived: number | null = null;
           for (const z of t2Zones) {
@@ -808,9 +894,9 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
     }
   }
 
-  // ── Item 10: movimentos do dia (todas as reservas da cidade) ──
+  // ── Item 10: movimentos do dia (todas as reservas da cidade); sem a tabela Garage não conta ──
   const nextMoveOf = new Map<string, ProbeEvent[]>();
-  for (const [b, evs] of byBooking) nextMoveOf.set(b, sortEvents(evs.filter((e) => e.type === "MOVEMENT")));
+  if (!garagesDown) for (const [b, evs] of byBooking) nextMoveOf.set(b, sortEvents(evs.filter((e) => e.type === "MOVEMENT")));
   for (const moves of nextMoveOf.values()) {
     for (let i = 0; i < moves.length; i++) {
       const mv = moves[i];

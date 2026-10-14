@@ -26,7 +26,7 @@ import { marketplaceOperated } from "../shared/multiparkParks";
 import { PROBE_CITIES, PROBE_CITY_LABELS, emptySondaResult, sondaLogLines, type ProbeCity, type SondaResult } from "../shared/sondaTempos";
 import {
   computeProbeCity, garageCoords,
-  type AgentResolution, type PosPoint, type ProbeBooking, type ProbeCall, type ProbeEvent, type ProbeGarage, type ProbeGpsEmp, type ProbeGpsFile, type ProbePark, type TerminalClass,
+  type AgentResolution, type PosPoint, type ProbeSource, type ProbeBooking, type ProbeCall, type ProbeEvent, type ProbeGarage, type ProbeGpsEmp, type ProbeGpsFile, type ProbePark, type TerminalClass,
 } from "./sondaTemposCompute";
 import {
   PROBE_HISTORY_LIMIT, PROBE_IDS_PER_READ,
@@ -99,7 +99,30 @@ const cityOfKey = (k: string | null | undefined): ProbeCity | null => {
   const c = matchCityKey(k);
   return c === "lisboa" ? "lisbon" : c === "porto" ? "porto" : c === "faro" ? "faro" : null;
 };
-const shortErr = (err: unknown) => String((err as any)?.message ?? err ?? "").replace(/\s+/g, " ").slice(0, 200);
+/**
+ * Texto curto de um erro para as linhas `[sonda62]` do log, SEM dados: o
+ * drizzle mete o SQL e os parâmetros na mensagem ("Failed query: … params:
+ * <ids>") — fica só a causa; textos entre aspas com algarismos ou @ (valores),
+ * emails, telefones e ids longos saem. PURA.
+ */
+export function probeErrText(err: unknown): string {
+  const e = err as { message?: unknown; cause?: { message?: unknown } | unknown } | null | undefined;
+  let msg = String(e?.message ?? err ?? "");
+  if (/^\s*Failed query:/i.test(msg)) {
+    const cause = (e?.cause as { message?: unknown } | undefined)?.message ?? e?.cause;
+    msg = cause ? String(cause) : "a consulta falhou";
+  }
+  msg = msg.split(/\bparams:/i)[0];
+  const clean = msg
+    .replace(/\s+/g, " ")
+    .replace(/(['"`])([^'"`]*)\1/g, (m, q: string, inner: string) => (/[0-9@+]/.test(inner) || inner.length > 40 ? `${q}…${q}` : m))
+    .replace(/[^\s'"`@]+@[^\s'"`@]+/g, "…@…")
+    .replace(/\+?\d[\d\s().-]{6,}\d/g, "#")
+    .replace(/\b(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{16,}\b/g, "#")
+    .trim()
+    .slice(0, 160);
+  return clean || "erro";
+}
 
 /** Corre `fn` sobre a lista, `limit` de cada vez. */
 async function pool<T>(items: readonly T[], limit: number, fn: (x: T) => Promise<void>): Promise<void> {
@@ -115,10 +138,51 @@ function withTimeout<T>(p: Promise<T>, ms: number, ctrl: AbortController): Promi
   return Promise.race([p, t]).finally(() => { if (timer) clearTimeout(timer); });
 }
 
+/** De que ficheiros GPS (dias de Lisboa) precisa uma pessoa, e quantos serviços tem (o peso). */
+export interface GpsNeed { services: number; days: Set<string> }
+
 /**
- * Os ficheiros GPS das pessoas pedidas: até `maxFiles` (os das pessoas com
- * mais serviços primeiro), `parallel` de cada vez, cada um com o seu prazo e
- * todos com o prazo do pedido. Nunca lança. O estado de cada pessoa:
+ * As pessoas com serviços no dia operacional (o agente do início da entrega,
+ * do check-in e dos movimentos) e os dias de Lisboa dos ficheiros GPS de que
+ * precisam: o do dia sempre; o do dia seguinte só se uma janela passa da
+ * meia-noite — entrega até à assinatura + 30 min (sem assinatura: S + 30 min),
+ * check-in e movimento até t + 90 min. Assim o ficheiro do dia seguinte só se
+ * lê para quem trabalhou depois da meia-noite (menos leituras ao S3 e menos
+ * "leitura parcial" por causa do limite de 60). PURA.
+ */
+export function gpsNeeds(
+  events: readonly ProbeEvent[],
+  o: { opStartMs: number; opEndMs: number; hasBooking: (id: string) => boolean; resolve: (uid: string | null, name: string | null) => AgentResolution },
+): Map<number, GpsNeed> {
+  const checkouts = new Map<string, number[]>();
+  for (const e of events) if (e.type === "CHECK_OUT") checkouts.set(e.bookingId, [...(checkouts.get(e.bookingId) ?? []), e.atMs]);
+  for (const list of checkouts.values()) list.sort((a, b) => a - b);
+  const out = new Map<number, GpsNeed>();
+  for (const e of events) {
+    if (e.atMs < o.opStartMs - H || e.atMs >= o.opEndMs + H || !o.hasBooking(e.bookingId)) continue;
+    if (e.type !== "CHECKING_OUT" && e.type !== "CHECK_IN" && e.type !== "MOVEMENT") continue;
+    const r = o.resolve(e.uid, e.agentName);
+    if (r.kind !== "ficha") continue;
+    let endMs = e.atMs + 90 * 60_000;
+    if (e.type === "CHECKING_OUT") {
+      const co = checkouts.get(e.bookingId)?.find((t) => t >= e.atMs && t - e.atMs <= 4 * H);
+      endMs = (co ?? e.atMs) + 30 * 60_000;
+    }
+    const need = out.get(r.employeeId) ?? { services: 0, days: new Set<string>() };
+    need.services++;
+    // o ficheiro do dia operacional sempre (as janelas começam no dia: [S − 30 min, …], [K0 − 30 min, I]…)
+    need.days.add(lisbonDayOf(o.opStartMs));
+    need.days.add(lisbonDayOf(endMs));
+    out.set(r.employeeId, need);
+  }
+  return out;
+}
+
+/**
+ * Os ficheiros GPS das pessoas pedidas: até `maxFiles` (os do dia `primaryDay`
+ * primeiro e, dentro de cada dia, os das pessoas com mais serviços),
+ * `parallel` de cada vez, cada um com o seu prazo e todos com o prazo do
+ * pedido. Nunca lança. O estado de cada pessoa:
  * ok (algum ficheiro lido) · sem_linha · sem_ficheiro · por_ler.
  */
 export async function loadProbeGps(
@@ -126,7 +190,7 @@ export async function loadProbeGps(
   sources: ProbeGpsSource[],
   holder: (src: ProbeGpsSource) => ((tsSec: number) => number | null) | null,
   fetchPoints: ProbeDeps["fetchPoints"],
-  o: { now: () => number; deadlineAt: number; maxFiles?: number; parallel?: number; fileTimeoutMs?: number },
+  o: { now: () => number; deadlineAt: number; maxFiles?: number; parallel?: number; fileTimeoutMs?: number; primaryDay?: string },
 ): Promise<{ byEmp: Map<number, ProbeGpsEmp>; read: number; pending: number; truncated: boolean }> {
   const byEmp = new Map<number, ProbeGpsEmp>();
   for (const e of servicesByEmp.keys()) byEmp.set(e, { status: "sem_linha", files: [] });
@@ -136,7 +200,8 @@ export async function loadProbeGps(
     if (cur && cur.status === "sem_linha") cur.status = "sem_ficheiro";
   }
   const weight = (s: ProbeGpsSource) => s.employeeIds.reduce((t, e) => t + (servicesByEmp.get(e) ?? 0), 0);
-  const ordered = [...withFile].sort((a, b) => weight(b) - weight(a) || a.id - b.id);
+  const dayRank = (s: ProbeGpsSource) => (o.primaryDay && s.day !== o.primaryDay ? 1 : 0);
+  const ordered = [...withFile].sort((a, b) => dayRank(a) - dayRank(b) || weight(b) - weight(a) || a.id - b.id);
   const max = o.maxFiles ?? PROBE_MAX_FILES;
   const take = ordered.slice(0, max);
   let pending = ordered.length - take.length;
@@ -173,6 +238,9 @@ export async function loadProbeGps(
 /** Dia operacional aceite: AAAA-MM-DD e já acabado (antes de hoje em Lisboa). PURA. */
 export function probeDayError(day: string, nowMs: number): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "falhou: dia inválido";
+  // 2026-02-30 passa na expressão mas não existe (o Date passava-o para 2 de março)
+  const noon = Date.parse(`${day}T12:00:00Z`);
+  if (!Number.isFinite(noon) || new Date(noon).toISOString().slice(0, 10) !== day) return "falhou: dia inválido";
   const end = operationalDayRangeUtc(day).endMs;
   if (end > nowMs) return "falhou: o dia operacional ainda não acabou (escolhe um dia fechado; o ideal é D-3, com o GPS final)";
   return null;
@@ -208,14 +276,16 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
       if (left < 1_000) throw new Error("statement timeout (prazo do pedido)");
       return Math.min(PROBE_KEY_TIMEOUT_MS, left);
     };
+    /** Leituras que falharam: o que depende delas não conta nas contas deste dia (nunca como zero). */
+    const down: Partial<Record<ProbeSource, boolean>> = {};
     const mpFail = (what: string, err: unknown) => {
-      console.warn(`[sonda62] ${what}:`, shortErr(err));
+      console.warn(`[sonda62] ${what}:`, probeErrText(err));
       fail(`falhou: ${what}: ${describeReadFailure(err).reason}`);
     };
 
     // 1. Definições (nossa BD)
     let settings: Awaited<ReturnType<ProbeDeps["settings"]>> = { airports: {} as AirportsMap, centralSugarOn: null, excludedParkIds: [] };
-    try { settings = await deps.settings(); } catch (err) { console.warn("[sonda62] definições:", shortErr(err)); fail("falhou: definições (usam-se as omissões)"); }
+    try { settings = await deps.settings(); } catch (err) { console.warn("[sonda62] definições:", probeErrText(err)); fail("falhou: definições (usam-se as omissões)"); }
     if (!settings.airports || !Object.keys(settings.airports).length) {
       const { DEFAULT_TERMINAL_AIRPORTS } = await import("../shared/pontoTerminal");
       settings.airports = DEFAULT_TERMINAL_AIRPORTS;
@@ -280,7 +350,7 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
           if (u) agents.set(u, [...(agents.get(u) ?? []), { parkId: String(r.park_id ?? ""), role: String(r.role ?? "") }]);
         }
       }
-    } catch (err) { mpFail("agentes da Multipark (sem papéis)", err); }
+    } catch (err) { down.agentes = true; mpFail("agentes da Multipark (sem papéis)", err); }
     // Q6: de onde vêm as coordenadas das garagens (information_schema) e as garagens com elas
     let coordCols: ProbeCoordColumn[] = [];
     try {
@@ -298,7 +368,7 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
           mapHasCoords: c.source === "link do mapa (mapLink)", lat: c.lat, lng: c.lng, coordSource: c.source,
         };
       }).filter((g) => g.name);
-    } catch (err) { mpFail("garagens da Multipark", err); }
+    } catch (err) { down.garagens = true; mpFail("garagens da Multipark", err); }
     try {
       const byClient = new Map<string, string[]>();
       for (const [b, c] of clientOf) byClient.set(c, [...(byClient.get(c) ?? []), b]);
@@ -312,7 +382,7 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
         if (!q) continue;
         for (const r of await deps.mpQuery(q.sql, q.params, { timeoutMs: keyTimeout() })) addPhone(String(r.booking_id ?? ""), r.phone);
       }
-    } catch (err) { mpFail("telefones das reservas (chamadas sem os números da Multipark)", err); }
+    } catch (err) { down.chamadas = true; mpFail("telefones das reservas (as chamadas deste dia não contam)", err); }
     let pgClockOffsetMs: number | null = null;
     try {
       const q = buildProbeClockSql();
@@ -324,7 +394,7 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
 
     // 5. Nossa BD: chamadas, CRM, identidade
     let calls: ProbeCall[] = [];
-    try { calls = await deps.calls(mysqlTs(op.startMs - 4 * H), mysqlTs(op.endMs + 48 * H)); } catch (err) { console.warn("[sonda62] chamadas:", shortErr(err)); fail("falhou: chamadas (central/WhatsApp) — erro na leitura"); }
+    try { calls = await deps.calls(mysqlTs(op.startMs - 4 * H), mysqlTs(op.endMs + 48 * H)); } catch (err) { down.chamadas = true; console.warn("[sonda62] chamadas:", probeErrText(err)); fail("falhou: chamadas (central/WhatsApp) — erro na leitura"); }
     const crmIds = new Map<string, Set<number>>();
     try {
       const crm = await deps.crmPhones([...bookings.keys()]);
@@ -332,33 +402,30 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
         for (const ph of v.phones) addPhone(b, ph);
         if (v.clientIds.length) crmIds.set(b, new Set(v.clientIds));
       }
-    } catch (err) { console.warn("[sonda62] CRM:", shortErr(err)); fail("falhou: telefones do CRM — erro na leitura"); }
+    } catch (err) { down.chamadas = true; console.warn("[sonda62] CRM:", probeErrText(err)); fail("falhou: telefones do CRM — erro na leitura (as chamadas deste dia não contam)"); }
     let resolveAgent: (uid: string | null, name: string | null) => AgentResolution = () => ({ kind: "sem_ficha" });
-    try { resolveAgent = await deps.identity(); } catch (err) { console.warn("[sonda62] identidade:", shortErr(err)); fail("falhou: fichas (agente → ficha) — sem GPS"); }
+    try { resolveAgent = await deps.identity(); } catch (err) { down.gps = true; console.warn("[sonda62] identidade:", probeErrText(err)); fail("falhou: fichas (agente → ficha) — o GPS deste dia não conta"); }
 
     // 6. GPS: as pessoas com serviços no dia (o agente do início da entrega, do check-in e do 1.º movimento)
-    const servicesByEmp = new Map<number, number>();
-    for (const e of events) {
-      if (e.atMs < op.startMs - H || e.atMs >= op.endMs + H || !bookings.has(e.bookingId)) continue;
-      if (e.type !== "CHECKING_OUT" && e.type !== "CHECK_IN" && e.type !== "MOVEMENT") continue;
-      const r = resolveAgent(e.uid, e.agentName);
-      if (r.kind === "ficha") servicesByEmp.set(r.employeeId, (servicesByEmp.get(r.employeeId) ?? 0) + 1);
-    }
-    const lisbonDays = [...new Set([lisbonDayOf(op.startMs), lisbonDayOf(op.endMs - 1), lisbonDayOf(op.endMs + H)])].sort();
+    //    e, de cada uma, só os ficheiros (dia de Lisboa) que as janelas dela tocam
+    const needs = down.gps ? new Map<number, GpsNeed>() : gpsNeeds(events, { opStartMs: op.startMs, opEndMs: op.endMs, hasBooking: (id) => bookings.has(id), resolve: resolveAgent });
+    const servicesByEmp = new Map([...needs].map(([e, n]) => [e, n.services] as const));
+    const lisbonDays = [...new Set([...needs.values()].flatMap((n) => [...n.days]))].sort();
     let gpsByEmp = new Map<number, ProbeGpsEmp>();
     let filesPending = 0;
     if (servicesByEmp.size) {
       try {
-        const sources = await deps.gpsSources([...servicesByEmp.keys()], lisbonDays);
+        const sources = (await deps.gpsSources([...servicesByEmp.keys()], lisbonDays))
+          .filter((s) => s.employeeIds.some((e) => needs.get(e)?.days.has(s.day)));
         const holder = await deps.gpsHolder(sources);
-        const g = await loadProbeGps(servicesByEmp, sources, holder, deps.fetchPoints, { now: deps.now, deadlineAt });
+        const g = await loadProbeGps(servicesByEmp, sources, holder, deps.fetchPoints, { now: deps.now, deadlineAt, primaryDay: input.day });
         gpsByEmp = g.byEmp;
         filesPending = g.pending;
         if (g.truncated) { out.truncated = true; fail(`falhou em parte: ${g.pending} ficheiro(s) GPS por ler (prazo ou limite de ${PROBE_MAX_FILES})`); }
-      } catch (err) { console.warn("[sonda62] GPS:", shortErr(err)); fail("falhou: GPS do Zello — erro na leitura"); }
+      } catch (err) { down.gps = true; console.warn("[sonda62] GPS:", probeErrText(err)); fail("falhou: GPS do Zello — erro na leitura (o GPS deste dia não conta)"); }
     }
     let gpsRows: Array<{ pass: string; hasFile: boolean }> = [];
-    try { gpsRows = await deps.gpsRows([input.day]); } catch (err) { console.warn("[sonda62] Histórico Diário:", shortErr(err)); fail("falhou: linhas do Histórico Diário — erro na leitura"); }
+    try { gpsRows = await deps.gpsRows([input.day]); } catch (err) { console.warn("[sonda62] Histórico Diário:", probeErrText(err)); fail("falhou: linhas do Histórico Diário — erro na leitura"); }
 
     // 7. As contas, por cidade
     let first = true;
@@ -384,15 +451,16 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
           staticBase: { centralSugarOn: settings.centralSugarOn, excludedParks: excludedCount.get(city) ?? 0, parks: cityParks.size, pgClockOffsetMs },
           truncated: out.truncated,
           failures: [...out.failures],
+          unavailable: { ...down },
         });
         first = false;
       } catch (err) {
-        console.warn(`[sonda62] contas ${city}:`, shortErr(err));
+        console.warn(`[sonda62] contas ${city}:`, probeErrText(err));
         fail(`falhou: contas de ${PROBE_CITY_LABELS[city]} (erro inesperado)`);
       }
     }
   } catch (err) {
-    console.warn("[sonda62] erro inesperado:", shortErr(err));
+    console.warn("[sonda62] erro inesperado:", probeErrText(err));
     fail("falhou: erro inesperado (ver o log do servidor)");
   }
   return finish();
@@ -402,6 +470,10 @@ export async function runTimesProbe(input: { day: string; cities: ProbeCity[] },
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
 
+/** Memória das colunas com posições (information_schema), por instância. */
+const COORD_COLUMNS_TTL_MS = 30 * 60_000;
+let coordColumnsCache: { at: number; rows: Array<Record<string, unknown>> } | null = null;
+
 /** As leituras de verdade (BD da Multipark só de leitura, nossa BD só SELECT, GeoJSON pelo storageReadableUrl). */
 export function defaultProbeDeps(): ProbeDeps {
   return {
@@ -409,7 +481,13 @@ export function defaultProbeDeps(): ProbeDeps {
     mpConfigured: () => isMultiparkDbConfigured(),
     mpQuery: async (sql, params = [], opts) => {
       const { multiparkDbQuery } = await import("./multiparkDb/client");
-      return multiparkDbQuery(sql, params, opts) as any;
+      // As colunas do information_schema (Q6) não mudam de um dia para o outro:
+      // lidas uma vez por instância (30 min), não uma vez por dia pedido.
+      const meta = sql.includes("information_schema.columns");
+      if (meta && coordColumnsCache && Date.now() - coordColumnsCache.at < COORD_COLUMNS_TTL_MS) return coordColumnsCache.rows as any;
+      const rows = await multiparkDbQuery(sql, params, opts);
+      if (meta) coordColumnsCache = { at: Date.now(), rows: rows as Array<Record<string, unknown>> };
+      return rows as any;
     },
     settings: async () => {
       const [{ loadTerminalAirports }, { getSetting }, { ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }, { CENTRAL_SUGAR_FLAG }] = await Promise.all([
