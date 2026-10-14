@@ -1101,6 +1101,9 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "CENTRAL_SUGAR", label: "Central Vodafone: receber as chamadas da consola", description: "A consola One Net Attendant Console regista cada chamada na dashboard, como se fosse um Sugar CRM (Integrações → Central Vodafone: endereço a pôr na consola e um acesso por pessoa). As chamadas contam no Desempenho de quem atendeu ou fez. Desligado: a dashboard responde \"desligada\" à consola e só regista que ela tentou. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   // Lote 45 (Jorge, 7 out 2026: "quando a aplicação toca, dê algum input aqui e também toque aqui").
   { name: "CENTRAL_RING", label: "Central Vodafone: tocar no dashboard", description: "Quando entra uma chamada na consola de uma pessoa, o dashboard dessa pessoa toca e mostra quem é (nome, cliente ou equipa, reservas) com o botão para abrir a ficha. Só para quem tem um acesso da consola (Integrações → Central Vodafone) e precisa do \"receber as chamadas da consola\" ligado. As chamadas que a pessoa faz pelos botões \"Ligar\" da dashboard não tocam. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  // Plano 62 (P7): lê a Multipark todas as noites e escreve a tabela service_times → desligado até o Jorge ver
+  // (depois do diagnóstico dos tempos, do PR dos parâmetros e de um dia reprocessado à mão).
+  { name: "SERVICE_TIMES", label: "Tempos de entrega e de recolha (trabalho noturno)", description: "Todas as madrugadas (a partir das 05:30, depois da recolha GPS final) calcula, para cada entrega e recolha que fechou nos últimos 3 dias, a Fila (desde a chamada do cliente ou o pendente), o Trânsito e a espera pelo cliente (pela paragem no terminal no GPS do Zello), e nas recolhas o tempo no terminal, no P2 e até arrumado, com o condutor de cada tempo; guarda tudo na tabela dos tempos e preenche para trás desde abril (blocos de 7 dias). Uma leitura da BD da Multipark por noite (só leitura); nada se apaga. Não avisa ninguém nem dá pontos. À mão: /api/cron/service-times?reprocessar=AAAA-MM-DD..AAAA-MM-DD (funciona mesmo desligado). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
   // B1 (Jorge, 8 out 2026: "as campanhas dão 0 reservas ligadas"). Só LÊ da Google e escreve
   // numa tabela nossa de apoio (google_ads_clicks) → ligado por omissão; desliga-se aqui.
@@ -1254,6 +1257,8 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "kb-faq-weekly", label: "Formação: FAQs novas da base de conhecimento (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", intervalMinutes: 1440, workflow: "tick" },
+  // Plano 62 (P7): interruptor SERVICE_TIMES (desligado por omissão).
+  { name: "service-times", label: "Tempos de entrega e de recolha (BD Multipark, chamadas e GPS)", intervalMinutes: 1440, workflow: "tick" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "google-ads-clicks", label: "Google Ads: cliques (gclid → campanha)", intervalMinutes: 60, workflow: "tick" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },

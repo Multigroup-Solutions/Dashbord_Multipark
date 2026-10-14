@@ -115,6 +115,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // Jorge (14 out 2026): FAQs novas da base de conhecimento, 1×/semana (interruptor KB_FAQ_WEEKLY, desligado por omissão).
   { key: "kb-faq-weekly", runName: "kb-faq-weekly", label: "Formação: FAQs novas da base de conhecimento (semanal)", cadence: { kind: "weekly", dow: 1, from: "09:30" }, priority: 107, minMs: 30 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },
+  // Plano 62 (P7): tempos de entrega e de recolha (D-3…D-1 + preenchimento para trás; interruptor SERVICE_TIMES, desligado).
+  { key: "service-times", runName: "service-times", label: "Tempos de entrega e de recolha (BD Multipark, chamadas e GPS)", cadence: { kind: "daily", from: "05:30", after: { job: "daily-ops", fallbackFrom: "07:00" } }, priority: 112, minMs: 20 * S, maxMs: 45 * S },
   { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads", runName: "google-ads", label: "Google Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 120, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads-monthly", runName: "google-ads", label: "Google Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 121, minMs: 15 * S, maxMs: 45 * S },
