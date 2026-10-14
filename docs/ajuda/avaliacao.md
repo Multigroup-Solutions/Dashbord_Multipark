@@ -88,7 +88,7 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - **Excesso de velocidade** (−10): os alertas de velocidade e as penalizações do RH e, além disso, **1 por dia** em que a velocidade máxima do GPS do Zello passou o limite. Se nesse dia (de calendário, ou no dia da avaliação) já houver um alerta, o GPS não conta outra vez. Se não der para ler o limite, o GPS não conta e aparece um aviso.
   - O limite está em **Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"**: **120 km/h com 10 % de tolerância (132 km/h)** por omissão. É um limite único, porque o Zello não diz em que estrada se vai.
   - Desde 14 out 2026 a velocidade máxima do dia já não tem os **picos falsos** do GPS (pontos imprecisos, acima de 250 km/h ou um salto isolado) e, acima do limite, só conta um **excesso confirmado**: pontos seguidos acima dele (2 por omissão). Antes deitava-se fora tudo acima de 150 km/h.
-  - Os dias de GPS recolhidos antes contam pela velocidade máxima antiga, até se voltarem a dividir (**Atividade diária → Histórico → Forçar re-divisão**) e recalcular.
+  - Os dias de GPS recolhidos antes contam pela velocidade máxima antiga, até se voltarem a dividir (**Atividade diária → Histórico Diário → Forçar re-divisão**) e recalcular.
 - **Reclamação confirmada** (−20, uma vez por reclamação e condutor): uma reclamação não convertida com pontos aplicados (na reclamação ou ao condutor), positivos ou negativos. Conta no dia em que a reclamação foi criada.
 - Início da recolha, pedido de entrega, início da entrega, alterações e criações aparecem na lista e contam como ações, mas não dão pontos.
 

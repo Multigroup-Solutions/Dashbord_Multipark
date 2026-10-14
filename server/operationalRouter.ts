@@ -8,7 +8,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess, isOwnOnly } from "./_core/access";
 import { ROLE_RANK as ACCESS_ROLE_RANK } from "../shared/access";
-import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, getSpeedLimits, createSpeedLimit, updateSpeedLimit, deleteSpeedLimit, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
+import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
 import { getZelloUsers, getZelloChannels, getZelloLocations, getZelloUserHistory, getZelloUserLocation } from "./zello";
 import { collectDailyDriverData } from "./jobs/dailyDriverCollection";
 import { requireRole } from "./routerGuards";
@@ -435,51 +435,9 @@ export const operationalRouter = router({
 
   // ─── SPEED MONITORING ──────────────────────────────────────────────
   speedMonitoring: router({
-    limits: router({
-      list: protectedProcedure.query(async ({ ctx }) => {
-        requireAccess(ctx.user, "atividade_diaria", "view");
-        return getSpeedLimits();
-      }),
-      create: protectedProcedure.input(z.object({
-        name: z.string().min(1),
-        maxSpeed: z.number().min(1),
-        tolerancePercent: z.number().min(0).max(100).default(10),
-        isDefault: z.boolean().default(false),
-      })).mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "atividade_diaria", "manage");
-        const id = await createSpeedLimit({
-          name: input.name,
-          maxSpeed: input.maxSpeed,
-          tolerancePercent: input.tolerancePercent,
-          isDefault: input.isDefault ? 1 : 0,
-        });
-        await logActivity({ userId: ctx.user.id, action: "create", entity: "speed_limit", entityId: id, details: `Limite ${input.name}: ${input.maxSpeed}km/h` });
-        return { id };
-      }),
-      update: protectedProcedure.input(z.object({
-        id: z.number(),
-        data: z.object({
-          name: z.string().optional(),
-          maxSpeed: z.number().optional(),
-          tolerancePercent: z.number().optional(),
-          isDefault: z.boolean().optional(),
-          isActive: z.boolean().optional(),
-        }),
-      })).mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "atividade_diaria", "manage");
-        const { isDefault, isActive, ...rest } = input.data;
-        const patch: Record<string, unknown> = { ...rest };
-        if (isDefault !== undefined) patch.isDefault = isDefault ? 1 : 0;
-        if (isActive !== undefined) patch.isActive = isActive ? 1 : 0;
-        await updateSpeedLimit(input.id, patch);
-        return { success: true };
-      }),
-      delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "atividade_diaria", "manage");
-        await deleteSpeedLimit(input.id);
-        return { success: true };
-      }),
-    }),
+    // ronda 2 (14 out 2026): o limite passou para Definições → Parâmetros → "Limite de velocidade (GPS do
+    // Zello)" (gps.speedRule). A tabela antiga speed_limits já não decide nada — sem ecrã nem endpoints, para
+    // não haver duas fontes (os dados ficam na tabela, sem se apagarem).
 
     violations: router({
       list: protectedProcedure.input(z.object({
@@ -533,9 +491,12 @@ export const operationalRouter = router({
       const alertsOn = isFeatureEnabled(GPS_SPEED_ALERTS_FLAG, { defaultEnabled: automationFlagDefault(GPS_SPEED_ALERTS_FLAG) });
       let violationCount = 0;
 
+      // ronda 2: um valor absurdo do GPS (acima de 250 km/h — shared/speedRules.ts) não é excesso, é erro
+      const { GPS_ABSURD_KMH } = await import("../shared/speedRules");
       for (const loc of locations) {
-        if (loc.speed > threshold) {
-          const excessPercent = ((loc.speed - defaultLimit.maxSpeed) / defaultLimit.maxSpeed) * 100;
+        if (loc.speed > threshold && loc.speed <= GPS_ABSURD_KMH) {
+          // excessPercent é DECIMAL(5,2) na BD: nunca acima de 999,99
+          const excessPercent = Math.min(999.99, ((loc.speed - defaultLimit.maxSpeed) / defaultLimit.maxSpeed) * 100);
           await recordSpeedViolation({
             zelloUsername: loc.username,
             displayName: loc.displayName || loc.username,

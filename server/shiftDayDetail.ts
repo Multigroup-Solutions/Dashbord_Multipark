@@ -66,15 +66,15 @@ async function shiftsFor(date: string, employeeIds: number[], nowMs: number): Pr
   return out;
 }
 
-/** O limite dos excessos (Definições → Limite de velocidade; 120 km/h por omissão) e os pontos seguidos que fazem um excesso. */
+/**
+ * O limite dos excessos (Definições → Limite de velocidade; 120 km/h + 10 % por omissão) e os pontos seguidos
+ * que fazem um excesso. Para CONTAR: se a definição não se lê, sem limite (não conta excessos), como na
+ * Avaliação e no Desempenho — a omissão só vale quando a leitura correu bem (server/speedRule.ts).
+ */
 async function speedRule(): Promise<{ threshold: number | null; minPoints: number | undefined }> {
-  try {
-    const { speedRuleNow } = await import("./speedRule");
-    const r = await speedRuleNow();
-    return { threshold: r.threshold, minPoints: r.rule.minPoints };
-  } catch {
-    return { threshold: null, minPoints: undefined };
-  }
+  const { speedRuleRead } = await import("./speedRule");
+  const r = await speedRuleRead();
+  return r ? { threshold: r.threshold, minPoints: r.rule.minPoints } : { threshold: null, minPoints: undefined };
 }
 
 const isoWindows = (ws: readonly TimeWindow[]) => ws.map((w) => ({ start: new Date(w.startMs).toISOString(), end: new Date(w.endMs).toISOString() }));

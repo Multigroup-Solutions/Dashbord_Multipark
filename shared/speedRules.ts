@@ -27,10 +27,14 @@
  *
  * EXCESSO (o que conta e dá aviso/pontos): pontos de confiança SEGUIDOS acima
  * do limite (com tolerância), juntando os que distam até EXCESS_MERGE_GAP_S
- * (uma autoestrada a 125–135 com uma descida curta é UM excesso). Conta quando
- * tem pelo menos `minPoints` pontos (2 por omissão: andou acima do limite
- * entre dois registos) — ou um só ponto confirmado pela POSIÇÃO (a distância ao
- * ponto vizinho a dividir pelo tempo também dá acima do limite).
+ * (uma autoestrada a 125–135 com uma descida curta é UM excesso) — e, com o
+ * Zello a mandar pontos espaçados, também os que distam até POSITION_MAX_GAP_S
+ * sem nenhum ponto de confiança abaixo do limite pelo meio (o mesmo troço de
+ * autoestrada não se parte em vários excessos só por os pontos virem de 3 em 3
+ * min). Conta quando tem pelo menos `minPoints` pontos (2 por omissão: andou
+ * acima do limite entre dois registos) — ou um só ponto confirmado pela
+ * POSIÇÃO (a distância ao ponto vizinho, a pelo menos POSITION_MIN_GAP_S, a
+ * dividir pelo tempo também dá acima do limite).
  */
 
 import { z } from "zod";
@@ -75,10 +79,16 @@ export const MAX_SPEED_JUMP_KMH_PER_S = 15;
 export const SPIKE_NEIGHBOUR_MAX_GAP_S = 60;
 /** Um "salto" pode ter até isto de pontos seguidos (o GPS a saltar 2–3 reports); mais do que isso já é andar. */
 export const MAX_SPIKE_RUN = 3;
-/** Dois pontos acima do limite a até isto (s) um do outro são o mesmo excesso. */
+/** Dois pontos acima do limite a até isto (s) um do outro são o mesmo excesso (mesmo com uma descida curta pelo meio). */
 export const EXCESS_MERGE_GAP_S = 120;
-/** A posição só confirma uma velocidade com pelo menos isto (s) entre os pontos (menos, o GPS a tremer engana). */
-export const POSITION_MIN_GAP_S = 5;
+/**
+ * A posição só confirma uma velocidade com pelo menos isto (s) entre os
+ * pontos. Ronda 2 (14 out 2026): era 5 s — com a precisão aceite até 100 m
+ * por ponto, 5 s de GPS a tremer davam mais de 140 km/h a um carro a 120. Com
+ * pontos mais juntos, os vizinhos já dizem a velocidade: um ponto sozinho
+ * acima do limite entre dois abaixo, a menos de 30 s, não é excesso.
+ */
+export const POSITION_MIN_GAP_S = 30;
 /**
  * …e no máximo isto (s). 5 min: com o Zello a mandar pontos espaçados, um
  * ponto a 145 com o seguinte a 3 min de distância só se confirma pela
@@ -203,7 +213,8 @@ export function speedExcesses(
   const minPoints = Math.max(1, Math.floor(Number(rule.minPoints) || 1));
   const spikes = o.spikes ?? speedSpikes(points);
   const out: SpeedExcess[] = [];
-  let cur: { start: number; end: number; max: number; maxAt: number; maxIdx: number; n: number; lastAbove: number; firstIdx: number; indices: number[] } | null = null;
+  /** `below` = desde o último ponto acima houve um ponto de confiança abaixo do limite (parado incluído) */
+  let cur: { start: number; end: number; max: number; maxAt: number; maxIdx: number; n: number; lastAbove: number; firstIdx: number; indices: number[]; below: boolean } | null = null;
   const confirmedByPosition = (i: number): boolean => {
     const p = points[i];
     const near = [i - 1, i + 1].map((j) => points[j]).filter((q): q is SpeedPoint => !!q);
@@ -222,14 +233,19 @@ export function speedExcesses(
   points.forEach((p, i) => {
     if (o.include && !o.include(i)) return;
     const v = trustedSpeedOf(points, i, spikes);
-    if (!(v > threshold)) return;
-    if (cur && p.ts - cur.lastAbove <= EXCESS_MERGE_GAP_S) {
-      cur.n++; cur.end = p.ts; cur.lastAbove = p.ts; cur.indices.push(i);
+    if (!(v > threshold)) {
+      // abaixo do limite, de confiança (preciso e não é pico; a 0 = parado): parte um troço espaçado
+      if (cur && p.accurate && !spikes.has(i)) cur.below = true;
+      return;
+    }
+    const gap = cur ? p.ts - cur.lastAbove : Number.POSITIVE_INFINITY;
+    if (cur && (gap <= EXCESS_MERGE_GAP_S || (!cur.below && gap <= POSITION_MAX_GAP_S))) {
+      cur.n++; cur.end = p.ts; cur.lastAbove = p.ts; cur.indices.push(i); cur.below = false;
       if (v > cur.max) { cur.max = v; cur.maxAt = p.ts; cur.maxIdx = i; }
       return;
     }
     close();
-    cur = { start: p.ts, end: p.ts, max: v, maxAt: p.ts, maxIdx: i, n: 1, lastAbove: p.ts, firstIdx: i, indices: [i] };
+    cur = { start: p.ts, end: p.ts, max: v, maxAt: p.ts, maxIdx: i, n: 1, lastAbove: p.ts, firstIdx: i, indices: [i], below: false };
   });
   close();
   return out;

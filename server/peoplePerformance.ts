@@ -452,7 +452,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
       if (x.approx && bucketFor(x.emp, x.day)) approxSpeedDays += 1;
       put(x.emp, x.day, { km: Math.round(x.km * 10) / 10, gpsDays: x.gps ? 1 : 0, maxSpeed: x.max, overLimitDays: x.over ? 1 : 0 });
     }
-    if (approxSpeedDays) notes.push(`Dias acima do limite: ${approxSpeedDays} dia(s) recolhido(s) antes de 14 out 2026 contam pela velocidade máxima do dia (sem o filtro de picos nem os pontos seguidos); os novos já vêm sem picos falsos e só com excessos confirmados. Para refazer um dia: Atividade diária → Histórico → Forçar re-divisão.`);
+    if (approxSpeedDays) notes.push(`Dias acima do limite: ${approxSpeedDays} dia(s) recolhido(s) antes de 14 out 2026 contam pela velocidade máxima do dia (sem o filtro de picos nem os pontos seguidos); os novos já vêm sem picos falsos e só com excessos confirmados. Para refazer um dia: Atividade diária → Histórico Diário → Forçar re-divisão.`);
 
     // ── 14 out 2026: dias de trabalho sem GPS, e porquê (Zello não ligado à pessoa?) ──
     const pdaDays = new Map<number, Set<string>>();

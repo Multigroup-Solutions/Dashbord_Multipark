@@ -40,8 +40,3 @@ export async function speedRuleRead(): Promise<SpeedRuleNow | null> {
 export async function speedRuleNow(): Promise<SpeedRuleNow> {
   return (await speedRuleRead()) ?? withThreshold({ ...DEFAULT_SPEED_RULE });
 }
-
-/** Só a regra (para a recolha). */
-export async function loadSpeedRule(): Promise<SpeedRule> {
-  return (await speedRuleNow()).rule;
-}

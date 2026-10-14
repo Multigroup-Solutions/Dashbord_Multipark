@@ -8,9 +8,11 @@
  * Interruptor GPS_SPEED_ALERTS — DESLIGADO por omissão (coisas novas que
  * avisam gente entram desligadas). Com ele ligado, na recolha (provisória das
  * 23h e final de D-2), por cada pessoa e dia com excessos:
- *  - cada excesso fica em `speed_violations` (uma linha por excesso; a mesma
- *    hora de início do mesmo Zello não se repete — as duas passagens e a
- *    re-recolha não duplicam);
+ *  - cada excesso fica em `speed_violations` (uma linha por excesso). As duas
+ *    passagens e a re-recolha não duplicam: um excesso já está registado
+ *    quando há uma linha da recolha do mesmo Zello que começa dentro dele (ou
+ *    até POSITION_MAX_GAP_S antes) — a final pode trazer pontos que a
+ *    provisória ainda não tinha e mudar um pouco o início do mesmo troço;
  *  - UM aviso no sino ("Excesso de velocidade", tipo speed_alert → team leader
  *    e supervisor da cidade da pessoa), com quantos e a máxima — só quando há
  *    excessos novos E o dia é recente (até SPEED_ALERT_MAX_AGE_DAYS dias: as
@@ -19,7 +21,7 @@
  * Os pontos da Avaliação NÃO dependem disto (contam pelo que a recolha grava).
  * Nunca lança.
  */
-import type { SpeedExcess } from "../shared/speedRules";
+import { POSITION_MAX_GAP_S, type SpeedExcess } from "../shared/speedRules";
 
 export const GPS_SPEED_ALERTS_FLAG = "GPS_SPEED_ALERTS";
 /** Dias para trás em que ainda se avisa (a final é de D-2; mais antigo já não é aviso, é histórico). */
@@ -40,8 +42,8 @@ export interface SpeedAlertInput {
 
 export interface SpeedAlertDeps {
   flagOn(): Promise<boolean>;
-  /** instantes de início ("YYYY-MM-DD HH:MM:SS" UTC) já registados para este Zello */
-  existingStarts(zello: string, startsUtc: string[]): Promise<Set<string>>;
+  /** inícios ("YYYY-MM-DD HH:MM:SS" UTC) dos excessos que a RECOLHA já registou para este Zello em [fromUtc, toUtc] */
+  existingStarts(zello: string, fromUtc: string, toUtc: string): Promise<string[]>;
   record(row: { zelloUsername: string; displayName: string; speed: string; speedLimit: number; excessPercent: string; latitude: string | null; longitude: string | null; notificationSent: number; occurredAt: string; notes: string }): Promise<unknown>;
   notify(input: Record<string, any>): Promise<unknown>;
   /** hoje em Lisboa ("YYYY-MM-DD") */
@@ -58,6 +60,14 @@ export function speedAlertDayIsRecent(day: string, today: string): boolean {
 }
 
 const utcStamp = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 19).replace("T", " ");
+const utcSec = (stamp: string) => Date.parse(`${stamp.replace(" ", "T")}Z`) / 1000;
+/** Prefixo das notas das linhas gravadas pela recolha (o "verificar agora" manual não as escreve). */
+export const SPEED_EXCESS_NOTE_PREFIX = "GPS do Zello, ";
+
+/** O excesso já está registado? (uma linha da recolha que começa dentro dele, ou pouco antes). PURA. */
+export function excessAlreadyRecorded(e: Pick<SpeedExcess, "startTs" | "endTs">, recordedStartsSec: readonly number[]): boolean {
+  return recordedStartsSec.some((s) => s >= e.startTs - POSITION_MAX_GAP_S && s <= e.endTs);
+}
 const lisbonTime = (sec: number) => new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit" }).format(new Date(sec * 1000));
 const kmh = (v: number) => `${Math.round(v)} km/h`;
 
@@ -65,9 +75,10 @@ const kmh = (v: number) => `${Math.round(v)} km/h`;
 export async function recordSpeedExcessesWith(deps: SpeedAlertDeps, input: SpeedAlertInput): Promise<SpeedAlertOutcome> {
   if (!input.excesses.length) return { outcome: "none", recorded: 0, notified: 0 };
   if (!(await deps.flagOn())) return { outcome: "flag_off", recorded: 0, notified: 0 };
-  const starts = input.excesses.map((e) => utcStamp(e.startTs));
-  const seen = await deps.existingStarts(input.zello, starts);
-  const fresh = input.excesses.filter((e, i) => !seen.has(starts[i]));
+  const from = Math.min(...input.excesses.map((e) => e.startTs)) - POSITION_MAX_GAP_S;
+  const to = Math.max(...input.excesses.map((e) => e.endTs));
+  const seen = (await deps.existingStarts(input.zello, utcStamp(from), utcStamp(to))).map(utcSec).filter(Number.isFinite);
+  const fresh = input.excesses.filter((e) => !excessAlreadyRecorded(e, seen));
   if (!fresh.length) return { outcome: "already", recorded: 0, notified: 0 };
   // por pessoa (um PDA partilhado pode ter excessos de duas pessoas no mesmo dia)
   const byPerson = new Map<string, { employeeId: number | null; list: SpeedExcess[] }>();
@@ -81,7 +92,7 @@ export async function recordSpeedExcessesWith(deps: SpeedAlertDeps, input: Speed
       excessPercent: String(Math.min(999.99, Math.round(((e.maxSpeed - input.limitKmh) / input.limitKmh) * 10_000) / 100)),
       latitude: e.lat != null ? String(e.lat) : null, longitude: e.lon != null ? String(e.lon) : null,
       notificationSent: 1, occurredAt: utcStamp(e.startTs),
-      notes: `GPS do Zello, ${input.day}: ${e.points} ponto(s) acima de ${kmh(input.limitKmh)} entre ${lisbonTime(e.startTs)} e ${lisbonTime(e.endTs)}${employeeId != null ? ` · ficha #${employeeId}${name ? ` (${name})` : ""}` : ""}`.slice(0, 500),
+      notes: `${SPEED_EXCESS_NOTE_PREFIX}${input.day}: ${e.points} ponto(s) acima de ${kmh(input.limitKmh)} entre ${lisbonTime(e.startTs)} e ${lisbonTime(e.endTs)}${employeeId != null ? ` · ficha #${employeeId}${name ? ` (${name})` : ""}` : ""}`.slice(0, 500),
     });
     recorded++;
     const k = employeeId == null ? `z:${input.zello}` : `e:${employeeId}`;
@@ -115,15 +126,16 @@ export async function recordSpeedExcesses(input: SpeedAlertInput): Promise<Speed
         await ensureFeatureFlagOverrides();
         return isFeatureEnabled(GPS_SPEED_ALERTS_FLAG, { defaultEnabled: automationFlagDefault(GPS_SPEED_ALERTS_FLAG) });
       },
-      async existingStarts(zello, startsUtc) {
+      async existingStarts(zello, fromUtc, toUtc) {
         const { getDb } = await import("./db");
         const { sql } = await import("drizzle-orm");
         const db = await getDb();
-        if (!db || !startsUtc.length) return new Set();
+        if (!db) throw new Error("BD indisponível"); // sem saber o que já está registado não se grava nem avisa
         const res: any = await db.execute(sql`SELECT DATE_FORMAT(occurredAt, '%Y-%m-%d %H:%i:%s') AS at FROM speed_violations
-          WHERE zelloUsername = ${zello} AND occurredAt IN (${sql.join(startsUtc.map((s) => sql`${s}`), sql`, `)})`);
+          WHERE zelloUsername = ${zello} AND occurredAt >= ${fromUtc} AND occurredAt <= ${toUtc}
+            AND notes LIKE ${`${SPEED_EXCESS_NOTE_PREFIX}%`} LIMIT 500`);
         const rows = ((Array.isArray(res) ? res[0] : res) as any[]) ?? [];
-        return new Set(rows.map((r) => String(r.at)));
+        return rows.map((r) => String(r.at));
       },
       async record(row) {
         const { recordSpeedViolation } = await import("./db");

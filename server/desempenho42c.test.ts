@@ -209,7 +209,8 @@ describe("42c — ecrã", () => {
   });
   it("a tabela dos pontos e a equipa do TL e do supervisor", () => {
     expect(c).toContain("Como se contam os pontos desta aba");
-    expect(c).toContain("EVALUATION_RULES.map");
+    // ronda 2 (14 out 2026): as regras da avaliação continuam todas na tabela (nos condutores, repartidas em 2 colunas)
+    expect(c).toContain("(showTeam ? [EVALUATION_RULES] : balancedColumns(EVALUATION_RULES, 2))");
     expect(c).toContain("{TEAM_GROUPS.includes(group) && <TeamTable");
     expect(c).toContain("km sem movimentos");
     expect(c).toContain("<PersonLinksDialog");

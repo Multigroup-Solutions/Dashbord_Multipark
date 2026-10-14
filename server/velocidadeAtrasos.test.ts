@@ -179,7 +179,9 @@ describe("excessos: pontos seguidos acima do limite (mecânica, limite 120)", ()
     expect(ex[0].lat).not.toBeNull();
   });
   it("dois troços afastados (mais de 2 min abaixo) são dois excessos", () => {
-    const p = [...track([125, 130], 10), ...track([125, 128], 10).map((x) => ({ ...x, ts: x.ts + EXCESS_MERGE_GAP_S + 60 }))];
+    // ronda 2: "abaixo" quer dizer pontos abaixo do limite pelo meio — sem eles (Zello espaçado) é o mesmo troço
+    const below = track([100, 95, 100], 30).map((x) => ({ ...x, ts: x.ts + 40 }));
+    const p = [...track([125, 130], 10), ...below, ...track([125, 128], 10).map((x) => ({ ...x, ts: x.ts + EXCESS_MERGE_GAP_S + 60 }))];
     expect(speedExcesses(p, R120)).toHaveLength(2);
   });
   it("um ponto sozinho acima do limite só conta se a posição o confirmar (e então também é a máxima)", () => {
@@ -234,7 +236,7 @@ describe("o aviso: interruptor GPS_SPEED_ALERTS, desligado por omissão", () => 
     const records: any[] = [], notes: any[] = [];
     const d: SpeedAlertDeps = {
       flagOn: async () => o.on,
-      existingStarts: async () => new Set(o.seen ?? []),
+      existingStarts: async () => o.seen ?? [],
       record: async (r) => { records.push(r); },
       notify: async (n) => { notes.push(n); },
       today: () => o.today ?? "2026-10-14",
@@ -270,10 +272,17 @@ describe("o aviso: interruptor GPS_SPEED_ALERTS, desligado por omissão", () => 
     expect(notes).toEqual([]);
   });
   it("as duas passagens e a re-recolha não repetem", async () => {
-    const start = new Date(ex[0].startTs * 1000).toISOString().slice(0, 19).replace("T", " ");
+    const stamp = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 19).replace("T", " ");
+    const start = stamp(ex[0].startTs);
     const { d, records, notes } = deps({ on: true, seen: [start] });
     expect((await recordSpeedExcessesWith(d, input)).outcome).toBe("already");
     expect(records.length + notes.length).toBe(0);
+    // ronda 2: a final trouxe pontos que a provisória não tinha e o mesmo troço começa um pouco antes — continua registado
+    const later = deps({ on: true, seen: [stamp(ex[0].startTs + 20)] });
+    expect((await recordSpeedExcessesWith(later.d, input)).outcome).toBe("already");
+    // uma linha de há uma hora (outro troço) não esconde este
+    const other = deps({ on: true, seen: [stamp(ex[0].startTs - 3600)] });
+    expect((await recordSpeedExcessesWith(other.d, input)).outcome).toBe("notified");
   });
   it("o aviso diz o limite que se passou, JÁ com a tolerância (132 por omissão), não o de 120", () => {
     expect(src("server/jobs/dailyDriverCollection.ts")).toContain("limitKmh: speedThresholdOf(speedRule), excesses,");
@@ -415,6 +424,8 @@ describe("Como se contam os pontos desta aba: a toda a largura", () => {
     expect(block).toContain("balancedColumns(keys, 2)");
     // no telemóvel, o 2.º cabeçalho esconde-se (fica uma lista só) e nada força largura
     expect(block).toContain('<thead className="max-md:hidden">');
+    // ronda 2: nos condutores (sem a tabela da equipa) a da avaliação também se reparte pelas 2 colunas
+    expect(block).toContain("(showTeam ? [EVALUATION_RULES] : balancedColumns(EVALUATION_RULES, 2))");
     expect(block).not.toMatch(/min-w-\[/);
     // a régua diz as regras do #381 (mudança de lugar +1, não é movimento)
     expect(block).toContain("mudança de lugar +1 — não é movimento");

@@ -36,6 +36,7 @@ import { GoogleDriveSettings } from "@/components/google/GoogleDriveSettings";
 import { WebAnalyticsSettings } from "@/components/marketing/WebAnalyticsSettings";
 import { AUTOMATION_FLAGS, CRON_SKIP_PROBLEM_DAYS, EXCLUDED_PARKS_SETTING_KEY, FLAG_SETTING_PREFIX, LOGIN_CODE_DELIVERY_SETTING_KEY, PRESENCE_FICHA_PREFIX, SETTINGS, TERMINAL_AIRPORTS_SETTING_KEY, presenceFichaId, validateSetting, type RateEntry } from "@shared/appSettings";
 import { AIRPORT_LABELS, type AirportCityId, type AirportFence } from "@shared/pontoTerminal";
+import { SPEED_RULE_SETTING_KEY, speedThresholdOf } from "@shared/speedRules";
 import { parksInsideZones } from "@shared/terminalWatch";
 import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -650,6 +651,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const isParkList = item.key === EXCLUDED_PARKS_SETTING_KEY;
   // Plano 56: para onde vai o código de entrada (duas escolhas).
   const isLoginDelivery = item.key === LOGIN_CODE_DELIVERY_SETTING_KEY;
+  // 14 out 2026 (ronda 2): o limite de velocidade em três campos (antes era JSON escrito à mão)
+  const isSpeedRule = item.key === SPEED_RULE_SETTING_KEY;
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
@@ -659,7 +662,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   // 38a: ligado/desligado por cidade → interruptores (antes eram caixas de texto e "true" escrito não gravava)
   const cityMapBool = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "boolean";
   const isTime = typeof item.defaultValue === "string" && /^\d{2}:\d{2}$/.test(item.defaultValue as string);
-  const isJson = !isPhones && !isAirports && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
+  const isJson = !isPhones && !isAirports && !isSpeedRule && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
@@ -675,6 +678,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
+  const [speed, setSpeed] = useState<{ limitKmh: string; tolerancePercent: string; minPoints: string }>({ limitKmh: "", tolerancePercent: "", minPoints: "" });
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setError(null);
@@ -694,6 +698,11 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     else if (isRate) setRates(((current as RateEntry[]) ?? []).map((r) => ({ pct: pct(r.rate), from: r.from })));
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
     else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
+    else if (isSpeedRule) {
+      const c = (current ?? {}) as Record<string, unknown>;
+      const txt = (v: unknown) => (v == null ? "" : String(v).replace(".", ","));
+      setSpeed({ limitKmh: txt(c.limitKmh), tolerancePercent: txt(c.tolerancePercent), minPoints: txt(c.minPoints) });
+    }
     else if (cityMapBool) setCityBools(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, (current as Record<string, unknown>)?.[c.id] === true])));
     else if (isCityMap) setCityMap(Object.fromEntries(CITY_FIELDS.map((c) => [c.id, String((current as Record<string, unknown>)?.[c.id] ?? "").replace(".", ",")])));
     else if (isBool) setBool(!!current);
@@ -711,6 +720,10 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     if (isRate) return rates.map((r) => ({ rate: Number(r.pct.replace(",", ".")) / 100, from: r.from.trim() }));
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
+    if (isSpeedRule) {
+      const n = (v: string) => { const t = v.trim().replace(",", "."); return t === "" ? NaN : Number(t); };
+      return { limitKmh: n(speed.limitKmh), tolerancePercent: n(speed.tolerancePercent), minPoints: n(speed.minPoints) };
+    }
     if (cityMapBool) return Object.fromEntries(CITY_FIELDS.map((c) => [c.id, cityBools[c.id] === true]));
     if (isCityMap) return Object.fromEntries(CITY_FIELDS.map((c) => {
       const raw = (cityMap[c.id] ?? "").trim();
@@ -886,6 +899,34 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
         <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={isZelloList ? "um utilizador Zello por linha (vazio = ninguém excluído)" : "um email por linha"} />
       ) : isParkList ? (
         <ParkPicker selected={parkSel} onChange={setParkSel} />
+      ) : isSpeedRule ? (
+        <div className="space-y-2 max-w-2xl" data-speed-rule>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {([
+              ["limitKmh", "Limite (km/h)", "120", "numeric"],
+              ["tolerancePercent", "Tolerância (%)", "10", "decimal"],
+              ["minPoints", "Pontos seguidos para um excesso", "2", "numeric"],
+            ] as const).map(([k, label, ph, mode]) => (
+              <label key={k} className="text-xs space-y-1">
+                <span className="text-muted-foreground">{label}</span>
+                <Input inputMode={mode} value={speed[k]} placeholder={ph} aria-label={label} disabled={locked}
+                  onChange={(e) => setSpeed((p) => ({ ...p, [k]: e.target.value }))} />
+              </label>
+            ))}
+          </div>
+          {(() => {
+            const v = build() as { limitKmh: number; tolerancePercent: number; minPoints: number };
+            if (!Number.isFinite(v.limitKmh) || !Number.isFinite(v.tolerancePercent)) return null;
+            const t = speedThresholdOf(v);
+            return (
+              <p className="text-xs text-muted-foreground">
+                Conta como excesso acima de <b className="text-foreground tabular-nums">{String(Math.round(t * 10) / 10).replace(".", ",")} km/h</b>
+                {v.tolerancePercent > 0 ? ` (${v.limitKmh} km/h + ${String(v.tolerancePercent).replace(".", ",")} %)` : ""}
+                {Number.isFinite(v.minPoints) ? `, com ${v.minPoints} ${v.minPoints === 1 ? "ponto" : "pontos seguidos"} acima.` : "."}
+              </p>
+            );
+          })()}
+        </div>
       ) : cityMapBool ? (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-2xl">
           {CITY_FIELDS.map((c) => (

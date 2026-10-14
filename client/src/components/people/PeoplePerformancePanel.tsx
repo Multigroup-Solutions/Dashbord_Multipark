@@ -444,6 +444,10 @@ function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
   const headRow = (title: string) => (
     <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">{title}</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
   );
+  /** cabeçalho da 2.ª coluna de uma lista repartida: no telemóvel esconde-se (fica uma lista só) */
+  const contHead = (title: string) => (
+    <thead className="max-md:hidden"><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">{title}</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
+  );
   const row = (label: string, pts: React.ReactNode, note?: string, extra?: React.ReactNode) => (
     <tr key={label} className="border-t"><td className="px-3 py-1">{label}{note && <span className="ml-1 text-muted-foreground">({note})</span>}{extra}</td><td className="px-3 py-1 text-right font-semibold tabular-nums">{pts}</td></tr>
   );
@@ -499,7 +503,7 @@ function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
             <div className="grid gap-x-6 gap-y-2 md:grid-cols-2" data-weights-grid>
               {weightColumns.map((chunk, ci) => (
                 <table key={ci} className="w-full text-[13px]">
-                  {ci === 0 ? headRow("Cada…") : <thead className="max-md:hidden"><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">Cada…</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>}
+                  {ci === 0 ? headRow("Cada…") : contHead("Cada…")}
                   <tbody>{chunk.map(weightRow)}</tbody>
                 </table>
               ))}
@@ -517,13 +521,14 @@ function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
             {missedOff && <p className="text-xs text-muted-foreground">Chamadas perdidas: aparecem mas não contam (a chamada toca em várias consolas).</p>}
           </div>
           {(shownEval || showTeam) && (
-            <div className="grid gap-4 md:grid-cols-2">
-              {shownEval && (
-                <table className="w-full text-[13px]">
-                  {headRow("Pontos da avaliação — cada…")}
-                  <tbody>{EVALUATION_RULES.map((r) => row(r.label, signed(EVALUATION_POINTS[r.key])))}</tbody>
+            // ronda 2: sem a tabela da equipa (condutores), a da avaliação reparte-se pelas 2 colunas — nada fica vazio à direita
+            <div className="grid gap-x-6 gap-y-2 md:grid-cols-2" data-eval-grid>
+              {shownEval && (showTeam ? [EVALUATION_RULES] : balancedColumns(EVALUATION_RULES, 2)).map((chunk, ci) => (
+                <table key={`eval-${ci}`} className="w-full text-[13px]">
+                  {ci === 0 ? headRow("Pontos da avaliação — cada…") : contHead("Pontos da avaliação — cada…")}
+                  <tbody>{chunk.map((r) => row(r.label, signed(EVALUATION_POINTS[r.key])))}</tbody>
                 </table>
-              )}
+              ))}
               {showTeam && (
                 <table className="w-full text-[13px]">
                   {headRow("Pontos da equipa — por dia, por pessoa da equipa")}
