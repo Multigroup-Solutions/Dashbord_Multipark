@@ -147,6 +147,19 @@ export function htmlToPlainText(html?: string | null): string {
   }
 }
 
+/**
+ * O texto de um email para LER (triagem da IA, regras): o text/plain; um email
+ * só em HTML (sem parte de texto — alguns clientes de email e formulários)
+ * passa a texto pelo HTML; por fim o resumo do Gmail. Ronda 2 da auditoria
+ * (14 out 2026): sem isto, a IA lia só o resumo (~200 caracteres) e uma
+ * reclamação depois da saudação e de outro pedido ficava de fora.
+ */
+export function readableMailText(m: { text?: string | null; html?: string | null; snippet?: string | null }): string {
+  if (String(m.text ?? "").trim()) return String(m.text);
+  const fromHtml = m.html ? htmlToPlainText(m.html) : "";
+  return fromHtml || String(m.snippet ?? "");
+}
+
 // ── Livro de Reclamações / SLA ──────────────────────────────────────────────
 
 /** Livro de Reclamações oficial (nº ROR…) → urgente. */

@@ -230,9 +230,16 @@ export function splitQuotedText(text: string | null | undefined): { fresh: strin
   const fresh: string[] = [];
   const quoted: string[] = [];
   let broke = false;
-  for (const l of lines) {
+  const nextIsQuote = (i: number) => {
+    for (let j = i + 1; j < lines.length; j++) if (lines[j].trim()) return /^\s*>/.test(lines[j]);
+    return false;
+  };
+  for (const [i, l] of lines.entries()) {
     if (broke) { quoted.push(l.replace(/^\s*>\s?/, "")); continue; }
     if ((QUOTE_HEADER_RE.test(l) || FORWARD_MARK_RE.test(l)) && fresh.some((x) => x.trim())) { broke = true; quoted.push(l); continue; }
+    // Ronda 2: resposta POR BAIXO da citação ("Em … escreveu:" + "> …" e só depois o texto
+    // novo) — a linha "Em … escreveu:" é do citado, não da mensagem nova.
+    if (QUOTE_HEADER_RE.test(l) && nextIsQuote(i)) { quoted.push(l); continue; }
     if (/^\s*>/.test(l)) { quoted.push(l.replace(/^\s*>\s?/, "")); continue; }
     fresh.push(l);
   }
@@ -311,6 +318,30 @@ export interface TriageAiOutput {
   confidence?: unknown;
   complaint?: unknown;
   lostItem?: unknown;
+  /** A IA viu uma queixa em qualquer parte do email (mesmo de passagem). */
+  complaintMentioned?: unknown;
+  /** A IA viu um objeto deixado/perdido em qualquer parte do email. */
+  lostItemMentioned?: unknown;
+}
+
+/**
+ * As certezas de caso que a decisão usa (ronda 2 da auditoria, 14 out 2026):
+ * a maior entre a certeza que a IA deu, a da caixa (quando a caixa É a do
+ * caso) e — quando a IA disse que a queixa / o objeto aparece em qualquer
+ * parte do email — `suggestMinConfidence` ("Por confirmar (IA)"). Um modelo
+ * pequeno vê a queixa dita de passagem dentro de outro pedido, mas dá-lhe uma
+ * certeza baixa porque o assunto principal é outro: o sim/não não depende
+ * dessa calibração, e uma pessoa confirma. Só números e sim/não da IA — o
+ * texto do email não entra aqui. PURA.
+ */
+export function caseScoresOf(out: TriageAiOutput, t: Pick<TriageThresholds, "suggestMinConfidence">): { complaintScore: number; lostScore: number } {
+  const aiBoxKey = parseTriageCategory(out.box);
+  const confidence = normalizeConfidence(out.confidence) ?? 0;
+  const floor = (said: unknown) => (said === true ? t.suggestMinConfidence : 0);
+  return {
+    complaintScore: Math.max(normalizeConfidence(out.complaint) ?? 0, aiBoxKey === "reclamacoes" ? confidence : 0, floor(out.complaintMentioned)),
+    lostScore: Math.max(normalizeConfidence(out.lostItem) ?? 0, aiBoxKey === "perdidos" ? confidence : 0, floor(out.lostItemMentioned)),
+  };
 }
 
 export interface TriageFacts {
@@ -366,7 +397,9 @@ const NOTICE_CATEGORIES: ReadonlySet<string> = new Set(["criticas", "ocorrencias
  * Resposta da IA → o que se faz. Só números e chaves — o texto do email não
  * entra aqui (a IA já o leu; nenhuma palavra decide nada). PURA.
  *
- *  - reclamação/perdido: quando a certeza do caso ≥ `suggestMinConfidence`
+ *  - reclamação/perdido: quando a certeza do caso (`caseScoresOf`: a da IA, a
+ *    da caixa do caso, ou "Por confirmar" quando a IA disse que a queixa / o
+ *    objeto aparece no email) ≥ `suggestMinConfidence`
  *    e quem escreve é de fora (ou a empresa a reencaminhar alguém de fora).
  *    Abaixo de `createMinConfidence` fica "Por confirmar (IA)". Os dois ao
  *    mesmo tempo → o mais certo (empate: reclamação);
@@ -384,8 +417,7 @@ export function decideMailTriage(
 ): TriageDecision {
   const aiBoxKey = parseTriageCategory(out.box);
   const confidence = normalizeConfidence(out.confidence);
-  const complaintScore = Math.max(normalizeConfidence(out.complaint) ?? 0, aiBoxKey === "reclamacoes" ? confidence ?? 0 : 0);
-  const lostScore = Math.max(normalizeConfidence(out.lostItem) ?? 0, aiBoxKey === "perdidos" ? confidence ?? 0 : 0);
+  const { complaintScore, lostScore } = caseScoresOf(out, t);
   const noticeOk = !aiBoxKey || !NOTICE_CATEGORIES.has(aiBoxKey) || features.notices;
   const understood = !!aiBoxKey && aiBoxKey !== "geral" && confidence != null && confidence >= t.minConfidence && noticeOk;
 
@@ -417,9 +449,10 @@ export function decideMailTriage(
 export function aliasGateIsNoise(out: TriageAiOutput, t: Pick<TriageThresholds, "suggestMinConfidence">): boolean {
   const k = parseTriageCategory(out.box);
   const c = normalizeConfidence(out.confidence) ?? 0;
-  const complaint = normalizeConfidence(out.complaint) ?? 0;
-  const lost = normalizeConfidence(out.lostItem) ?? 0;
-  return k === NOISE_CATEGORY && c >= ALIAS_NOISE_MIN_CONFIDENCE && complaint < t.suggestMinConfidence && lost < t.suggestMinConfidence;
+  const { complaintScore, lostScore } = caseScoresOf(out, t);
+  // A IA disse que há uma queixa ou um objeto (sim/não) → nunca é lixo, mesmo com suggestMinConfidence a 0.
+  if (out.complaintMentioned === true || out.lostItemMentioned === true) return false;
+  return k === NOISE_CATEGORY && c >= ALIAS_NOISE_MIN_CONFIDENCE && complaintScore < t.suggestMinConfidence && lostScore < t.suggestMinConfidence;
 }
 
 // ─── Nota no ecrã ───────────────────────────────────────────────────────────
@@ -467,6 +500,19 @@ export interface TriageMetrics {
 }
 
 export const TRIAGE_RECALL_TARGET = 0.9;
+
+/**
+ * Os conjuntos rotulados do "Testar a triagem" (server/fixtures): o principal,
+ * o de controlo e o CEGO (escrito na auditoria antes de ler os outros dois). A
+ * meta tem de passar em todos.
+ */
+export const TRIAGE_CORPUS_KEYS = ["principal", "controlo", "cego"] as const;
+export type TriageCorpusKey = (typeof TRIAGE_CORPUS_KEYS)[number];
+export const TRIAGE_CORPUS_LABELS: Record<TriageCorpusKey, string> = {
+  principal: "Corpus principal",
+  controlo: "Corpus de controlo (independente)",
+  cego: "Corpus cego (auditoria)",
+};
 
 const ratio = (a: number, b: number): number | null => (b > 0 ? Math.round((a / b) * 1000) / 1000 : null);
 

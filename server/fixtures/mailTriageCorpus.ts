@@ -31,6 +31,11 @@ export interface TriageCorpusItem {
   attachments?: string[];
   /** Cabeçalhos de envio automático/em massa. */
   headers?: { listUnsubscribe?: string; listId?: string; autoSubmitted?: string; precedence?: string };
+  /**
+   * Ronda 2: o remetente é um contacto das Parcerias (agência, hotel…) — em
+   * produção isso decide se o caso abre (interruptor AI_MAIL_PARTNER_CASES).
+   */
+  partner?: boolean;
   expected: MailTriageCategory;
   /** Porque é difícil (para quem lê os erros). */
   note?: string;

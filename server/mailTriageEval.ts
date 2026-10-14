@@ -2,9 +2,10 @@
  * "Testar a triagem" (14 out 2026 — meta do Jorge: mais de 90 % das
  * reclamações e dos perdidos vão para lá).
  *
- * Corre os corpora rotulados — o principal (server/fixtures/mailTriageCorpus.ts)
- * e o de CONTROLO, escrito à parte por quem auditou
- * (server/fixtures/mailTriageHoldout.ts) — pelo MESMO caminho de produção: os
+ * Corre os corpora rotulados — o principal (server/fixtures/mailTriageCorpus.ts),
+ * o de CONTROLO, escrito à parte por quem auditou
+ * (server/fixtures/mailTriageHoldout.ts), e o CEGO, escrito na 2.ª auditoria
+ * antes de ler os outros (server/fixtures/mailTriageBlind.ts) — pelo MESMO caminho de produção: os
  * mesmos factos (remetente, automático, reencaminhado), a mesma pré-triagem
  * (regras sem IA), o MESMO pedido à IA (classifyEmailWithAi, com o fornecedor
  * configurado), a MESMA decisão (decideMailTriage com as certezas das
@@ -19,27 +20,26 @@
  * pedido cabe nos 60 s do Vercel) e por scripts/eval-mail-triage.ts.
  */
 import {
-  ALL_TRIAGE_FEATURES, DIRECT_CASE_PIPELINES, aliasGateIsNoise, bulkListMail, decideMailTriage, forwardedExternalSender, parseTriageCategory, preTriageMail,
-  senderKindOf, triageMetrics, triageMetricsLogLine,
-  type MailTriageCategory, type PreTriageFacts, type TriageEvalRow, type TriageMetrics, type TriageThresholds,
+  ALL_TRIAGE_FEATURES, DIRECT_CASE_PIPELINES, TRIAGE_CORPUS_KEYS, TRIAGE_CORPUS_LABELS, aliasGateIsNoise, bulkListMail, decideMailTriage, forwardedExternalSender,
+  parseTriageCategory, preTriageMail, senderKindOf, triageMetrics, triageMetricsLogLine,
+  type MailTriageCategory, type PreTriageFacts, type TriageCorpusKey, type TriageEvalRow, type TriageMetrics, type TriageThresholds,
 } from "../shared/mailTriage";
 import { DEFAULT_BRAND_DOMAINS, isAutomatedSender, isCompanyAddress } from "../shared/mail";
 import { caseIntakeDecision } from "../shared/complaintIntake";
 import { TRIAGE_CORPUS, type TriageCorpusItem } from "./fixtures/mailTriageCorpus";
 import { TRIAGE_HOLDOUT } from "./fixtures/mailTriageHoldout";
+import { TRIAGE_BLIND } from "./fixtures/mailTriageBlind";
 import type { ClassifiedEmail, EmailRoutingMessage } from "./commsRouting";
 
-/** Os corpora rotulados: o principal e o de controlo (independente). */
-export const TRIAGE_CORPORA = { principal: TRIAGE_CORPUS, controlo: TRIAGE_HOLDOUT } as const;
-export type TriageCorpusKey = keyof typeof TRIAGE_CORPORA;
-export const TRIAGE_CORPUS_KEYS = Object.keys(TRIAGE_CORPORA) as TriageCorpusKey[];
-export const TRIAGE_CORPUS_LABELS: Record<TriageCorpusKey, string> = { principal: "Corpus principal", controlo: "Corpus de controlo (independente)" };
+/** Os corpora rotulados: o principal, o de controlo (independente) e o cego (auditoria, ronda 2). */
+export const TRIAGE_CORPORA: Record<TriageCorpusKey, readonly TriageCorpusItem[]> = { principal: TRIAGE_CORPUS, controlo: TRIAGE_HOLDOUT, cego: TRIAGE_BLIND };
+export { TRIAGE_CORPUS_KEYS, TRIAGE_CORPUS_LABELS, type TriageCorpusKey };
 const corpusOf = (k: TriageCorpusKey | null | undefined): readonly TriageCorpusItem[] => TRIAGE_CORPORA[k ?? "principal"] ?? TRIAGE_CORPUS;
 
 /**
  * Teto de custo do "Testar a triagem" (por pessoa): cada lote são até 20
- * leituras da IA; os dois corpora são ~17 lotes de 12 — ≈ 2 corridas
- * completas por hora e 6 por dia.
+ * leituras da IA; os três corpora (~260 emails) são ~23 lotes de 12 — uma
+ * corrida completa por hora e umas 4 por dia.
  */
 export const MAIL_TRIAGE_EVAL_LIMITS = { perHour: 40, perDay: 110 } as const;
 
@@ -123,7 +123,8 @@ export async function evalCorpusItem(item: TriageCorpusItem, classify: Classify,
   let caseKind = d.caseKind;
   let uncertain = d.uncertain;
   if (d.caseKind) {
-    const gate = caseIntakeDecision(d.caseKind, d.caseScore, corpusIntakeFacts(item, f), { createMinConfidence: t.createMinConfidence, suggestMinConfidence: t.suggestMinConfidence });
+    // Como a produção com os interruptores todos ligados (AI_MAIL_PARTNER_CASES incluído).
+    const gate = caseIntakeDecision(d.caseKind, d.caseScore, corpusIntakeFacts(item, f), { createMinConfidence: t.createMinConfidence, suggestMinConfidence: t.suggestMinConfidence }, { partnerCases: true });
     if (gate.action === "create") uncertain = uncertain || gate.uncertain === true;
     else caseKind = null;
   }
@@ -138,7 +139,7 @@ function corpusIntakeFacts(item: TriageCorpusItem, f: CorpusFacts) {
   return {
     fromBoxKey: item.box, fromBoxPipeline: f.pre.pipeline ?? null, outbound: false, automated, systemMail: false, personal: false,
     senderIsCompany: f.msg.senderKind === "company", forwardedExternal: !!f.msg.forwardedExternal,
-    senderIsAutomated: isAutomatedSender(item.fromEmail), senderIsPartner: false,
+    senderIsAutomated: isAutomatedSender(item.fromEmail), senderIsPartner: !!item.partner,
     subject: item.subject, text: item.body, senderEmail: item.fromEmail, listMail: !!f.msg.listMail,
   };
 }

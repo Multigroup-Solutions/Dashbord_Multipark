@@ -582,6 +582,7 @@ export interface StoredTriageMessage {
 export async function loadStoredTriageMessage(messageId: number, mode: "sync" | "sweep" = "sync"): Promise<StoredTriageMessage | null> {
   const d = await database();
   const r = rowsOf(await d.execute(sql`SELECT m.id, m.threadId, m.subject, m.bodyText, m.snippet, m.fromName, m.fromEmail, m.attachmentsJson,
+      CASE WHEN m.bodyText IS NULL OR m.bodyText = '' THEN m.bodyHtml END AS bodyHtml,
       m.direction, m.automated, m.pipeline, DATE_FORMAT(m.sentAt, '%Y-%m-%d %H:%i:%s') AS sentAt,
       t.mailboxKey, t.routedBy, t.projectId, t.ownerUserId, t.status AS threadStatus, t.archivedAt,
       (SELECT MIN(x.id) FROM mail_messages x WHERE x.threadId = m.threadId AND x.direction = 'in') AS firstInId,
@@ -597,7 +598,9 @@ export async function loadStoredTriageMessage(messageId: number, mode: "sync" | 
   const company = (a: string) => isCompanyAddress(a, brandDomains);
   let names: string[] = [];
   try { names = (JSON.parse(String(r.attachmentsJson ?? "[]")) as any[]).filter((a) => !a?.inline).map((a) => String(a?.filename ?? "")).filter(Boolean); } catch { /* sem anexos */ }
-  const text = String(r.bodyText ?? r.snippet ?? "");
+  // Ronda 2: um email só em HTML lê-se pelo HTML (não só o resumo do Gmail).
+  const { readableMailText } = await import("./complaintEmail");
+  const text = readableMailText({ text: r.bodyText ?? null, html: r.bodyHtml ?? null, snippet: r.snippet ?? null });
   const automated = Number(r.automated ?? 0);
   const senderKind = senderKindOf({ fromEmail: r.fromEmail ?? null, automated }, company);
   const intake = r.intakeStatus != null ? String(r.intakeStatus) : null;
@@ -695,6 +698,12 @@ const retryableSweep = (r: SQL, stale: string) =>
 /** Uma leitura da sincronização que falhou e que a nova tentativa (runPendingEmailRoutings, 2 dias) ainda vai repetir — não é do varrimento. */
 const ownedByPending = (r: SQL, since2d: string) =>
   sql`${r}.sweptAt IS NULL AND ${r}.status = 'failed' AND ${r}.attempts < ${MAIL_TRIAGE_MAX_ATTEMPTS} AND ${r}.createdAt >= ${since2d}`;
+/**
+ * Ronda 2: um email que a sincronização reservou ("pending") mas nunca leu
+ * (teto da corrida, sem tempo) e que já saiu da janela de 2 dias da nova
+ * tentativa — antes ficava por ler para sempre; agora o varrimento pega nele.
+ */
+const strandedPending = (r: SQL, since2d: string) => sql`${r}.status = 'pending' AND ${r}.sweptAt IS NULL AND ${r}.createdAt < ${since2d}`;
 
 export interface BackfillReport { read: number; ai: number; cases: number; skipped?: string }
 
@@ -729,7 +738,7 @@ export async function runMailBackfill(
       AND t.mailboxKey IS NOT NULL AND t.ownerUserId IS NULL AND t.archivedAt IS NULL
       AND (t.routedBy IS NULL OR t.routedBy <> 'manual') AND t.status <> 'resolvido'
       AND NOT EXISTS (SELECT 1 FROM comms_ai_routing r WHERE r.sourceRef = CONCAT('mail_message:', m.id)
-        AND (r.category IS NOT NULL OR r.status = 'pending' OR (${ownedByPending(sql`r`, since2d)})
+        AND (r.category IS NOT NULL OR (r.status = 'pending' AND NOT (${strandedPending(sql`r`, since2d)})) OR (${ownedByPending(sql`r`, since2d)})
           OR (r.sweptAt IS NOT NULL AND NOT (${retryableSweep(sql`r`, stale)}))))
       AND NOT EXISTS (SELECT 1 FROM comms_ai_routing c WHERE c.threadId = m.threadId AND c.correctedBoxKey IS NOT NULL)
       AND NOT ${strongCaseLinkSql(sql`m.threadId`)}
@@ -751,8 +760,9 @@ export async function runMailBackfill(
     let claimed = affected(ins) === 1;
     if (!claimed) {
       const upd = await d.execute(sql`UPDATE comms_ai_routing r SET r.sweptAt = ${nowStr()}
-        WHERE r.sourceRef = ${`mail_message:${messageId}`} AND r.category IS NULL AND r.status <> 'pending'
-          AND ((r.sweptAt IS NULL AND NOT (${ownedByPending(sql`r`, since2d)})) OR ${retryableSweep(sql`r`, stale)})`);
+        WHERE r.sourceRef = ${`mail_message:${messageId}`} AND r.category IS NULL
+          AND ((r.status <> 'pending' AND ((r.sweptAt IS NULL AND NOT (${ownedByPending(sql`r`, since2d)})) OR ${retryableSweep(sql`r`, stale)}))
+            OR (${strandedPending(sql`r`, since2d)}))`);
       claimed = affected(upd) === 1;
     }
     if (!claimed) continue;

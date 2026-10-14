@@ -540,7 +540,7 @@ describe("varrimento dos emails que já estão nas caixas (AI_MAIL_BACKFILL)", (
     const q = (h.db.queries as any[]).find((x) => x.sql.startsWith("SELECT m.id, m.threadId")).sql as string;
     for (const part of [
       "m.direction = 'in'", "m.automated IN (0, 1)", "t.ownerUserId IS NULL", "t.routedBy <> 'manual'", "t.status <> 'resolvido'", "t.archivedAt IS NULL",
-      "c.correctedBoxKey IS NOT NULL", "l.entityType IN ('complaint', 'lost_found')", "i.status <> 'skipped'", "r.category IS NOT NULL OR r.status = 'pending'",
+      "c.correctedBoxKey IS NOT NULL", "l.entityType IN ('complaint', 'lost_found')", "i.status <> 'skipped'", "r.category IS NOT NULL OR (r.status = 'pending' AND NOT",
       "r.sweptAt IS NOT NULL AND NOT",
       "ORDER BY m.sentAt DESC",
     ]) expect(q, part).toContain(part);

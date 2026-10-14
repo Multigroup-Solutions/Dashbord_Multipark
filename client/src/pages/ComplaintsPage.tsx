@@ -13,6 +13,7 @@ import { lisbonDayOf } from "@shared/lisbonDay";
 import { toCsv } from "@shared/csv";
 import { COMPLAINT_LIST_DEFAULT_DAYS, complaintOverdue } from "@shared/caseRules";
 import {
+  COMPLAINT_AI_UNCONFIRMED_FILTER, COMPLAINT_AI_UNCONFIRMED_LABEL,
   COMPLAINT_ORIGINS, COMPLAINT_ORIGIN_LABELS, COMPLAINT_STATUS_FILTERS, COMPLAINT_STATUS_FILTER_LABELS, activeComplaintFilterCount,
   complaintAssigneeOptions, complaintDateRangeInvalid, complaintFiltersNeedAllTime, complaintOriginLabel, filterComplaintRows,
   type ComplaintListFilters, type ComplaintStatusFilter,
@@ -193,6 +194,8 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
     [allComplaints, filters],
   );
   const activeCount = activeComplaintFilterCount(filters);
+  // Ronda 2: quantas "Por confirmar (IA)" há na lista (sem os filtros) — atalho para as ver.
+  const unconfirmedCount = useMemo(() => (allComplaints as any[]).filter((c) => Number(c.aiUnconfirmed ?? 0) === 1 && !c.archivedAt).length, [allComplaints]);
   const dateInvalid = complaintDateRangeInvalid(filters);
   const assigneeOptions = useMemo(() => {
     const opts = complaintAssigneeOptions(allComplaints as any[]);
@@ -383,6 +386,7 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
               <SelectContent>
                 <SelectItem value="all">Todas</SelectItem>
                 {COMPLAINT_ORIGINS.map((o) => <SelectItem key={o} value={o}>{COMPLAINT_ORIGIN_LABELS[o]}</SelectItem>)}
+                <SelectItem value={COMPLAINT_AI_UNCONFIRMED_FILTER}>{COMPLAINT_AI_UNCONFIRMED_LABEL}</SelectItem>
                 <SelectItem value="unknown">Sem origem registada</SelectItem>
               </SelectContent>
             </Select>
@@ -418,6 +422,14 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
       )}
 
       {/* Lote 57: emails de outras caixas que a IA achou que podem ser reclamações. */}
+      {!showArchived && unconfirmedCount > 0 && filters.origin !== COMPLAINT_AI_UNCONFIRMED_FILTER && (
+        <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-900 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-100">
+          <span className="min-w-0 flex-1 basis-56">
+            <strong>{unconfirmedCount}</strong> {unconfirmedCount === 1 ? "reclamação criada pela IA está" : "reclamações criadas pela IA estão"} <strong>{COMPLAINT_AI_UNCONFIRMED_LABEL}</strong>.
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setF({ origin: COMPLAINT_AI_UNCONFIRMED_FILTER })}>Ver só essas</Button>
+        </div>
+      )}
       {!showArchived && <ComplaintMailSuggestions canEdit={canEdit} onOpenComplaint={onSelect} />}
 
       {/* Stats */}

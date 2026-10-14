@@ -1,8 +1,9 @@
 // Avalia a triagem dos emails (14 out 2026 — meta do Jorge: mais de 90 % das
 // reclamações e dos perdidos vão para lá).
 //
-// Corre os corpora rotulados — o principal (server/fixtures/mailTriageCorpus.ts)
-// e o de controlo, independente (server/fixtures/mailTriageHoldout.ts) — pelo
+// Corre os corpora rotulados — o principal (server/fixtures/mailTriageCorpus.ts),
+// o de controlo, independente (server/fixtures/mailTriageHoldout.ts), e o cego
+// da auditoria (server/fixtures/mailTriageBlind.ts) — pelo
 // MESMO pedido à IA e pela MESMA decisão de produção (server/mailTriageEval.ts),
 // com o fornecedor de IA configurado no ambiente (o mesmo do servidor:
 // server/_core/ai — Gemini/Vertex ou o transporte antigo server/_core/llm.ts),
@@ -11,7 +12,7 @@
 //
 // Uso:
 //   pnpm tsx scripts/eval-mail-triage.ts                       (corpus principal)
-//   pnpm tsx scripts/eval-mail-triage.ts --corpus controlo     (o de controlo; "todos" = os dois)
+//   pnpm tsx scripts/eval-mail-triage.ts --corpus controlo     (o de controlo; "cego" = o da auditoria; "todos" = os três)
 //   pnpm tsx scripts/eval-mail-triage.ts --limit 20            (os primeiros 20)
 //   pnpm tsx scripts/eval-mail-triage.ts --json                (resultado em JSON)
 //
@@ -20,8 +21,9 @@
 //                   (sistema + utilizador, depois de tapar os dados pessoais e
 //                   dos cortes), com nomes opacos e baralhados (pNNN.txt) e o
 //                   mapa DIR/map.json (não o leias antes de responder);
-//   --answers F     lê as respostas JSON ({"p001": {box, confidence, complaint,
-//                   lostItem, reason}, …}; o mapa ao lado, F/../map.json) e corre a
+//   --answers F     lê as respostas JSON ({"p001": {complaintMentioned, complaint,
+//                   lostItemMentioned, lostItem, box, confidence, reason}, …}; o
+//                   mapa ao lado, F/../map.json) e corre a
 //                   MESMA decisão de produção sobre elas.
 // Sai com código 1 se as reclamações ou os perdidos ficarem abaixo de 90 % (em
 // qualquer corpus), e com 2 se a IA não estiver configurada (nenhum email lido).
@@ -95,7 +97,7 @@ async function dump(dir: string) {
   console.log(`${todo.length} pedidos em ${dir}/prompts (de ${all.length} emails; os outros vão por regra). Mapa em ${dir}/map.json.`);
 }
 
-type Answer = { box: string; confidence: number; reason: string; complaint?: number; lostItem?: number };
+type Answer = { box: string; confidence: number; reason: string; complaint?: number; lostItem?: number; complaintMentioned?: boolean; lostItemMentioned?: boolean };
 
 async function runCorpus(k: TriageCorpusKey, classifyFor: ((item: TriageCorpusItem) => Promise<EvalItemResult>) | null) {
   const corpus = corpusFor(k);

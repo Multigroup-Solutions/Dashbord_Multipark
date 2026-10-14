@@ -29,6 +29,14 @@ import { isReviewNoticeSender, type MailCaseKind } from "./mailTriage";
 export const COMPLAINT_INTAKE_FLAG = "AI_MAIL_COMPLAINTS";
 /** 14 out 2026: os perdidos que a IA vê nas caixas partilhadas (desligado por omissão). */
 export const LOST_FOUND_INTAKE_FLAG = "AI_MAIL_LOST_FOUND";
+/**
+ * Ronda 2 da auditoria (14 out 2026): uma reclamação ou um perdido que um
+ * PARCEIRO (agência, hotel, comparador) manda em nome de um cliente abre o
+ * caso — sempre "Por confirmar (IA)" e sem tomar o email do parceiro pelo do
+ * cliente (nunca junta pelo email do parceiro). Desligado por omissão (antes:
+ * emails de parceiros nunca abriam caso).
+ */
+export const PARTNER_CASES_FLAG = "AI_MAIL_PARTNER_CASES";
 /** O interruptor de cada tipo de caso. */
 export const CASE_INTAKE_FLAG: Record<MailCaseKind, string> = { complaint: COMPLAINT_INTAKE_FLAG, lost_found: LOST_FOUND_INTAKE_FLAG };
 /** A caixa da IA que quer dizer "isto é uma reclamação". */
@@ -154,8 +162,8 @@ export interface IntakeFacts {
 export type IntakeDecision =
   /** A IA não disse "reclamação": nada a registar. */
   | { action: "ignore" }
-  /** `uncertain` = certeza média → "Por confirmar (IA)". */
-  | { action: "create"; uncertain?: true }
+  /** `uncertain` = certeza média → "Por confirmar (IA)"; `partner` = um parceiro em nome do cliente (sempre por confirmar). */
+  | { action: "create"; uncertain?: true; partner?: true }
   | { action: "suggest" }
   | { action: "skip"; why: IntakeSkipReason };
 
@@ -165,14 +173,16 @@ export type IntakeDecision =
  * pela caixa do caso, automático, interno sem ser reencaminhamento de um
  * cliente, parceiro, aviso de avaliação, envio em massa), depois a certeza.
  * `trusted` = aviso oficial de formato conhecido (Livro de Reclamações): passa
- * os filtros de automático. Sem certeza → "Por confirmar". PURA.
+ * os filtros de automático. Sem certeza → "Por confirmar". `partnerCases`
+ * (interruptor AI_MAIL_PARTNER_CASES): um parceiro em nome de um cliente abre
+ * o caso, sempre "Por confirmar"; desligado, nunca (como antes). PURA.
  */
 export function caseIntakeDecision(
   kind: MailCaseKind,
   confidence: number | null | undefined,
   facts: IntakeFacts,
   settings: ComplaintIntakeSettings,
-  opts: { trusted?: boolean } = {},
+  opts: { trusted?: boolean; partnerCases?: boolean } = {},
 ): IntakeDecision {
   if (facts.personal || !facts.fromBoxKey) return { action: "skip", why: "personal" };
   // Entrou pela caixa do próprio caso: o pipeline dela já criou (ou juntou) o caso.
@@ -181,15 +191,17 @@ export function caseIntakeDecision(
   if (!opts.trusted) {
     if (facts.outbound || facts.automated || facts.systemMail || facts.senderIsAutomated || !facts.senderEmail) return { action: "skip", why: "automatic" };
     if (facts.senderIsCompany && !facts.forwardedExternal) return { action: "skip", why: "internal" };
-    if (facts.senderIsPartner) return { action: "skip", why: "partner" };
+    if (facts.senderIsPartner && !opts.partnerCases) return { action: "skip", why: "partner" };
     if (looksLikeReviewNotice(facts.subject, facts.senderEmail)) return { action: "skip", why: "review" };
     if (facts.listMail) return { action: "skip", why: "newsletter" };
   }
   const c = confidence;
-  if (c == null || !Number.isFinite(c)) return { action: "create", uncertain: true };
-  if (c >= settings.createMinConfidence) return { action: "create" };
-  if (c >= settings.suggestMinConfidence) return { action: "create", uncertain: true };
-  return { action: "skip", why: "low_confidence" };
+  // Um parceiro em nome de um cliente: o caso abre, mas uma pessoa confirma sempre.
+  const partner = !opts.trusted && facts.senderIsPartner;
+  if (c == null || !Number.isFinite(c)) return partner ? { action: "create", uncertain: true, partner: true } : { action: "create", uncertain: true };
+  if (c < settings.suggestMinConfidence) return { action: "skip", why: "low_confidence" };
+  if (partner) return { action: "create", uncertain: true, partner: true };
+  return c >= settings.createMinConfidence ? { action: "create" } : { action: "create", uncertain: true };
 }
 
 /** Lote 57 (só reclamações, pela caixa que a IA disse) — o mesmo que `caseIntakeDecision("complaint", …)`. PURA. */
@@ -262,6 +274,8 @@ const pct = (c: number | null | undefined) => (c == null || !Number.isFinite(c) 
 export function intakeNote(kind: "created" | "linked", ctx: {
   boxLabel: string; reason: string | null | undefined; confidence: number | null | undefined; by?: string | null;
   caseKind?: MailCaseKind; uncertain?: boolean;
+  /** Ronda 2: enviado por um parceiro (agência, hotel…) em nome do cliente. */
+  partner?: boolean;
 }): string {
   const why = String(ctx.reason ?? "").replace(/\s+/g, " ").trim();
   const conf = pct(ctx.confidence);
@@ -276,5 +290,6 @@ export function intakeNote(kind: "created" | "linked", ctx: {
         ? `🤖 ${lost ? "Criado" : "Criada"} pela IA — POR CONFIRMAR: um email que chegou à caixa «${ctx.boxLabel}» ${seems}, mas a IA não tem a certeza. Se não for, arquiva (nada se apaga).`
         : `🤖 ${lost ? "Criado" : "Criada"} pela IA: um email que chegou à caixa «${ctx.boxLabel}» ${is}.`
     : `🤖 A IA juntou ${lost ? "a este caso" : "a esta reclamação"} um email que chegou à caixa «${ctx.boxLabel}».`;
-  return [head, detail || null, "O email está na Comunicação. Ninguém respondeu ao cliente — responder é sempre uma pessoa."].filter(Boolean).join("\n");
+  const partner = ctx.partner ? "O email é de um PARCEIRO (agência, hotel…) em nome do cliente: o email do parceiro não ficou como o do cliente — confirma quem é o cliente." : null;
+  return [head, partner, detail || null, "O email está na Comunicação. Ninguém respondeu ao cliente — responder é sempre uma pessoa."].filter(Boolean).join("\n");
 }

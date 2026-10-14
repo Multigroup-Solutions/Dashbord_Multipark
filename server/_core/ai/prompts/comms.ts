@@ -79,9 +79,11 @@ export const MAIL_ROUTING_SYSTEM = [
   PT_PT_RULE,
   PLACEHOLDER_RULE,
   "O email pode estar em qualquer língua. Recebes o assunto, a mensagem nova e, se houver, o texto citado ou reencaminhado (o contexto da conversa: lê-o para perceber uma resposta curta ou um reencaminhamento).",
-  "Primeiro, duas perguntas independentes da categoria (responde-as sempre, mesmo que a categoria seja outra):",
-  "complaint: 0 a 1, quão certa estás de que quem escreve (ou o cliente cuja mensagem vem reencaminhada) se queixa de algo que correu mal com o serviço — mesmo que peça também outra coisa (uma alteração, uma reserva, uma fatura, um cancelamento), o escreva com calma ou em poucas palavras, fale de uma vez anterior, ou esteja a insistir numa queixa anterior. Uma pergunta, um pedido de reserva, de alteração, de cancelamento ou de fatura sem descontentamento é 0. Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) também é 0: as avaliações tratam-se nas Críticas.",
-  "lostItem: 0 a 1, quão certa estás de que alguém diz que deixou, perdeu ou esqueceu um objeto connosco (no carro, no parque, no transfer) ou pergunta por um objeto encontrado — mesmo que o diga dentro de um elogio, de outro pedido ou numa resposta curta.",
+  "Primeiro, quatro respostas sobre o email TODO, independentes da categoria (responde-as sempre, mesmo que o assunto principal seja outro):",
+  "complaintMentioned: true se, em qualquer parte do email, quem escreve (ou o cliente cuja mensagem vem reencaminhada, ou um parceiro em nome dele) diz que algo correu mal com o serviço — mesmo que seja de passagem ou dentro de outro pedido (uma alteração, uma reserva, uma fatura, um cancelamento), de uma vez anterior, com ironia, só pela foto que descreve, numa resposta curta, ou a insistir numa queixa anterior. false se não há queixa nenhuma: uma pergunta, um pedido sem descontentamento, uma urgência em que ainda nada correu mal, um elogio. Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) é false: as avaliações tratam-se nas Críticas.",
+  "complaint: 0 a 1, quão certa estás dessa queixa — 0 se complaintMentioned é false; cerca de 0,6 se a queixa é secundária, de uma vez anterior, dita de passagem ou só se percebe pelo contexto; 0,9 ou mais se a queixa é o assunto principal.",
+  "lostItemMentioned: true se, em qualquer parte do email, alguém diz que deixou, perdeu ou esqueceu um objeto connosco (no carro, no parque, no transfer) ou pergunta por um objeto encontrado — mesmo dentro de um elogio, de outro pedido ou numa resposta curta. false se não há objeto nenhum.",
+  "lostItem: 0 a 1, quão certa estás disso — 0 se lostItemMentioned é false; cerca de 0,6 se o objeto é secundário ou só se percebe pelo contexto; 0,9 ou mais se é o assunto principal.",
   "Depois, a categoria:",
   "Categorias (chave: o que quer dizer):",
   ...MAIL_TRIAGE_HINTS.map((h) => `- ${h.key}: ${h.hint}`),
@@ -93,13 +95,26 @@ export const MAIL_ROUTING_SYSTEM = [
   "Responde só com o JSON pedido.",
 ].join("\n");
 
+/** Sim/não da IA, tolerante ("true", 1, "sim"); qualquer outra coisa é false — nunca dá "resposta inválida". */
+const yesNo = z.preprocess(
+  (v) => (typeof v === "boolean" ? v : ["true", "1", "sim", "yes", "si", "oui"].includes(String(v ?? "").trim().toLowerCase())),
+  z.boolean(),
+).default(false);
+
 export const mailRoutingSchema = z.object({
-  // Auditoria (14 out 2026): as duas certezas de caso vêm PRIMEIRO e são
+  // Auditoria (14 out 2026): as certezas de caso vêm PRIMEIRO e são
   // obrigatórias no esquema que vai ao fornecedor (o modelo pondera-as antes
   // de escolher a caixa e não as pode omitir — omitidas contavam 0 e as
   // reclamações escondidas noutro pedido perdiam-se). Uma resposta sem elas
-  // continua válida (default 0).
+  // continua válida (default 0 / false).
+  // Ronda 2: primeiro o SIM/NÃO ("há uma queixa / um objeto em qualquer parte
+  // do email?"), depois a certeza. Um modelo pequeno vê a queixa de passagem
+  // mas dá-lhe uma certeza baixa (o assunto principal é outro); o sim/não não
+  // depende dessa calibração — "mencionou" vale pelo menos "Por confirmar"
+  // (shared/mailTriage.ts caseScoresOf).
+  complaintMentioned: yesNo,
   complaint: z.number().default(0),
+  lostItemMentioned: yesNo,
   lostItem: z.number().default(0),
   box: z.string(),
   confidence: z.number(),

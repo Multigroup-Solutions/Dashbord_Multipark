@@ -9,6 +9,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { GOOGLE_ON_PDAS_FLAG, googleOnPdasChangeError } from "../shared/pdaSession";
+import { TRIAGE_CORPUS_KEYS } from "../shared/mailTriage";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess } from "./_core/access";
@@ -82,7 +83,7 @@ export const settingsRouter = router({
    * escreve nada nos casos (só o custo da IA). O ecrã pede os lotes um a um.
    */
   mailTriageEval: protectedProcedure
-    .input(z.object({ offset: z.number().int().min(0).max(1000), limit: z.number().int().min(1).max(20), corpus: z.enum(["principal", "controlo"]).default("principal") }))
+    .input(z.object({ offset: z.number().int().min(0).max(1000), limit: z.number().int().min(1).max(20), corpus: z.enum(TRIAGE_CORPUS_KEYS).default("principal") }))
     .mutation(async ({ ctx, input }) => {
       requireSuperAdmin(ctx.user.role);
       // Teto de custo: cada lote são até 20 leituras da IA. Por hora e por dia
@@ -103,7 +104,7 @@ export const settingsRouter = router({
       rows: z.array(z.object({ id: z.string().min(1).max(40), predicted: z.string().max(40).nullable() })).max(500),
       ms: z.number().int().min(0).max(3_600_000).nullish(),
       model: z.string().max(120).nullish(),
-      corpus: z.enum(["principal", "controlo"]).default("principal"),
+      corpus: z.enum(TRIAGE_CORPUS_KEYS).default("principal"),
     }))
     .mutation(async ({ ctx, input }) => {
       requireSuperAdmin(ctx.user.role);

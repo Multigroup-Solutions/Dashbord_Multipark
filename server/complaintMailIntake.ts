@@ -33,7 +33,7 @@
  */
 import { sql } from "drizzle-orm";
 import {
-  CASE_INTAKE_FLAG, caseIntakeDecision, complaintIntakeSettings, intakeNote, isPartnerSender,
+  CASE_INTAKE_FLAG, PARTNER_CASES_FLAG, caseIntakeDecision, complaintIntakeSettings, intakeNote, isPartnerSender,
   type ComplaintIntakeSettings, type IntakeFacts, type IntakeSkipReason, type IntakeStatus,
 } from "../shared/complaintIntake";
 import { forwardedExternalSender, type MailCaseKind } from "../shared/mailTriage";
@@ -101,6 +101,12 @@ export interface CreateOrLinkInput {
   kind?: MailCaseKind;
   /** Certeza média → "Por confirmar (IA)". */
   uncertain?: boolean;
+  /**
+   * Ronda 2: um parceiro em nome do cliente — o email do parceiro nunca fica
+   * como o do cliente nem junta casos. Sem isto, `createOrLinkFromThread`
+   * descobre-o pelo remetente (vale também nas novas tentativas).
+   */
+  partnerSender?: boolean;
 }
 
 export type CreateOrLinkOutcome =
@@ -120,6 +126,8 @@ export interface IntakePatch {
 export interface IntakeDeps {
   /** Interruptor do tipo de caso (AI_MAIL_COMPLAINTS / AI_MAIL_LOST_FOUND). */
   enabled(kind: MailCaseKind): Promise<boolean>;
+  /** Ronda 2: um parceiro em nome do cliente abre o caso (AI_MAIL_PARTNER_CASES; omissão: não). */
+  partnerCases?(): Promise<boolean>;
   settings(): Promise<ComplaintIntakeSettings>;
   /** Os factos da mensagem (remetente, automático, parceiro…) + a etiqueta da caixa por onde entrou. */
   facts(msg: IntakeMessage): Promise<IntakeFacts & { boxLabel: string; uncertain?: boolean }>;
@@ -158,18 +166,21 @@ export async function intakeFromRouting(msg: IntakeMessage, verdict: IntakeVerdi
 }
 
 async function decideAndApply(msg: IntakeMessage, verdict: IntakeVerdict, kind: MailCaseKind, deps: IntakeDeps): Promise<IntakeResult> {
-  const [facts, settings] = await Promise.all([deps.facts(msg), deps.settings()]);
-  let decision = caseIntakeDecision(kind, verdict.confidence, { ...facts, listMail: facts.listMail || !!msg.listMail }, settings, { trusted: verdict.notice === "livro" });
+  const [facts, settings, partnerCases] = await Promise.all([
+    deps.facts(msg), deps.settings(), deps.partnerCases ? deps.partnerCases().catch(() => false) : Promise.resolve(false),
+  ]);
+  let decision = caseIntakeDecision(kind, verdict.confidence, { ...facts, listMail: facts.listMail || !!msg.listMail }, settings, { trusted: verdict.notice === "livro", partnerCases });
   if (decision.action === "ignore") return { status: "ignored" };
   // Não se conseguiu confirmar tudo (ex.: a lista de parceiros não respondeu): uma reclamação só fica sugerida.
   if (decision.action === "create" && facts.uncertain && kind === "complaint") decision = { action: "suggest" };
   const uncertain = decision.action === "create" && (decision.uncertain === true || !!facts.uncertain);
+  const partnerSender = decision.action === "create" && decision.partner === true;
   const status: IntakeStatus = decision.action === "create" ? "creating" : decision.action === "suggest" ? "suggested" : "skipped";
   const skipReason = decision.action === "skip" ? decision.why : null;
   if (!(await deps.claim({ msg, verdict, kind, status, skipReason, uncertain }))) return { status: "seen" };
   if (decision.action === "skip") return { status: "skipped", why: decision.why };
   if (decision.action === "suggest") return { status: "suggested" };
-  return createNow(deps, { threadId: msg.threadId, messageId: msg.messageId, boxLabel: facts.boxLabel, verdict, actor: null, projectId: msg.projectId, kind, uncertain });
+  return createNow(deps, { threadId: msg.threadId, messageId: msg.messageId, boxLabel: facts.boxLabel, verdict, actor: null, projectId: msg.projectId, kind, uncertain, partnerSender });
 }
 
 /** Cria/junta já e regista o resultado (a conversa já está reservada como "creating"). */
@@ -198,11 +209,19 @@ async function createNow(deps: Pick<IntakeDeps, "record" | "createOrLink">, inpu
 
 /** Interruptor do tipo de caso (AI_MAIL_COMPLAINTS ligado, AI_MAIL_LOST_FOUND desligado por omissão). */
 export async function intakeEnabled(kind: MailCaseKind = "complaint"): Promise<boolean> {
+  return automationFlagOn(CASE_INTAKE_FLAG[kind]);
+}
+
+async function automationFlagOn(flag: string): Promise<boolean> {
   const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("./_core/featureFlags");
   const { automationFlagDefault } = await import("../shared/appSettings");
   await ensureFeatureFlagOverrides().catch(() => {});
-  const flag = CASE_INTAKE_FLAG[kind];
   return isFeatureEnabled(flag, { defaultEnabled: automationFlagDefault(flag) });
+}
+
+/** Ronda 2: um parceiro em nome de um cliente abre o caso (AI_MAIL_PARTNER_CASES, desligado por omissão). */
+export async function partnerCasesEnabled(): Promise<boolean> {
+  return automationFlagOn(PARTNER_CASES_FLAG);
 }
 
 async function intakeSettings(): Promise<ComplaintIntakeSettings> {
@@ -318,8 +337,23 @@ export async function createOrLinkFromThread(
   const alias = lost ? "perdidos" : "reclamacoes";
   const module = lost ? "lostfound" : "complaint";
   const d = await database();
-  const m = rowsOf(await d.execute(sql`SELECT m.id, m.threadId, m.accountKey, m.gmailMessageId FROM mail_messages m WHERE m.id = ${input.messageId} LIMIT 1`))[0];
+  const m = rowsOf(await d.execute(sql`SELECT m.id, m.threadId, m.accountKey, m.gmailMessageId, m.fromEmail FROM mail_messages m WHERE m.id = ${input.messageId} LIMIT 1`))[0];
   if (!m) throw new Error("O email já não está na Comunicação.");
+  // Ronda 2: o email de um parceiro (agência, hotel…) nunca fica como o do cliente nem junta casos
+  // pelo email — também numa nova tentativa ou numa sugestão aceite (descobre-se pelo remetente).
+  let partnerSender = input.partnerSender === true;
+  if (!partnerSender && m.fromEmail) {
+    try { partnerSender = isPartnerSender(String(m.fromEmail), await partnerEmails(d)); } catch { /* lista indisponível: como antes */ }
+  }
+  // Ronda 2: o perdido que já está ligado a ESTA conversa (à mão ou pelo próprio caso, ≥ 95) — uma
+  // conversa nunca dá dois casos (o caminho dos perdidos não procura pelo fio do email como o das reclamações).
+  let threadLostFoundId: number | null = null;
+  if (lost) {
+    const l = rowsOf(await d.execute(sql`SELECT l.entityId FROM mail_links l JOIN lost_found_items f ON f.id = CAST(l.entityId AS UNSIGNED)
+      WHERE l.threadId = ${input.threadId} AND l.entityType = 'lost_found' AND l.removedAt IS NULL AND (l.source = 'manual' OR l.confidence >= 95)
+        AND f.archivedAt IS NULL ORDER BY l.confidence DESC, l.id DESC LIMIT 1`))[0];
+    if (l?.entityId != null && /^\d+$/.test(String(l.entityId))) threadLostFoundId = Number(l.entityId);
+  }
   let api = ctx.api ?? null;
   let parsed = ctx.parsed ?? null;
   if (!parsed || !api) {
@@ -356,7 +390,14 @@ export async function createOrLinkFromThread(
       }
       return list;
     },
-    aiIntake: { actorId: input.actor?.id ?? null, projectId: input.projectId, ...(input.uncertain ? { uncertain: true } : {}) },
+    aiIntake: {
+      actorId: input.actor?.id ?? null, projectId: input.projectId,
+      // Um parceiro em nome do cliente: sempre "Por confirmar" (uma pessoa confirma quem é o cliente) —
+      // salvo quando foi uma pessoa a criá-lo (sugestão aceite).
+      ...(input.uncertain || (partnerSender && !input.actor) ? { uncertain: true } : {}),
+      ...(partnerSender ? { partnerSender: true } : {}),
+      ...(threadLostFoundId ? { forceLostFoundId: threadLostFoundId } : {}),
+    },
   });
   const { setMessagePipeline, addAutoLink, setThreadProjectIfEmpty } = await import("./mail/store");
   let caseId: number | null = null;
@@ -391,7 +432,7 @@ export async function createOrLinkFromThread(
   if (!already) {
     const note = intakeNote(isNew ? "created" : "linked", {
       boxLabel: input.boxLabel, reason: input.verdict.reason, confidence: input.verdict.confidence, by: input.actor?.name ?? null,
-      caseKind: kind, uncertain: isNew && !!input.uncertain,
+      caseKind: kind, uncertain: isNew && (!!input.uncertain || (partnerSender && !input.actor)), partner: partnerSender,
     });
     if (lost) {
       await db.addLostFoundMessage({
@@ -415,6 +456,7 @@ export async function createOrLinkFromThread(
 export function dbIntakeDeps(ctx: { parsed?: ParsedGmailMessage | null; api?: Pick<GmailApi, "getAttachment" | "getMessage"> | null } = {}): IntakeDeps {
   return {
     enabled: intakeEnabled,
+    partnerCases: partnerCasesEnabled,
     settings: intakeSettings,
     facts: factsOf,
     claim: claimRow,

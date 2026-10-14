@@ -132,15 +132,16 @@ describe("o pedido à IA: uma só fonte, dados pessoais tapados", () => {
   });
   it("as certezas de caso vêm primeiro e são obrigatórias para o fornecedor (não as pode omitir); resposta sem elas vale 0", () => {
     const js = toProviderJsonSchema(mailRoutingSchema) as any;
-    expect(Object.keys(js.properties).slice(0, 2)).toEqual(["complaint", "lostItem"]);
+    // ronda 2: o sim/não de cada caso vem antes da certeza dele
+    expect(Object.keys(js.properties).slice(0, 4)).toEqual(["complaintMentioned", "complaint", "lostItemMentioned", "lostItem"]);
     expect(js.required).toEqual(expect.arrayContaining(["complaint", "lostItem", "box", "confidence", "reason"]));
     expect(mailRoutingSchema.parse({ box: "reservas", confidence: 0.9, reason: "x" })).toMatchObject({ complaint: 0, lostItem: 0 });
     // e o pedido pergunta-as ANTES da categoria, independentes dela
     expect(MAIL_ROUTING_SYSTEM.indexOf("complaint: 0 a 1")).toBeLessThan(MAIL_ROUTING_SYSTEM.indexOf("box: a chave"));
-    expect(MAIL_ROUTING_SYSTEM).toContain("responde-as sempre, mesmo que a categoria seja outra");
+    expect(MAIL_ROUTING_SYSTEM).toContain("responde-as sempre, mesmo que o assunto principal seja outro");
   });
   it("as avaliações publicadas (mesmo reencaminhadas) não contam como queixa — pelo sentido, no pedido", () => {
-    expect(MAIL_ROUTING_SYSTEM).toContain("Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) também é 0");
+    expect(MAIL_ROUTING_SYSTEM).toContain("Um aviso de uma avaliação publicada num site de avaliações (mesmo reencaminhado por um colega) é false");
   });
 });
 
@@ -357,9 +358,9 @@ describe("'Testar a triagem' tem teto de custo (por hora e por dia)", () => {
     for (let i = 0; i < MAIL_TRIAGE_EVAL_LIMITS.perHour; i++) expect((await checkRateLimit("triage-eval:user:1", MAIL_TRIAGE_EVAL_LIMITS, now)).allowed).toBe(true);
     expect((await checkRateLimit("triage-eval:user:1", MAIL_TRIAGE_EVAL_LIMITS, now)).allowed).toBe(false);
   });
-  it("o ecrã corre os DOIS corpora e diz que há limite", () => {
+  it("o ecrã corre TODOS os corpora (principal, controlo e o cego da ronda 2) e diz que há limite", () => {
     const card = src("client/src/components/mail/MailTriageEvalCard.tsx");
-    expect(card).toContain('{ key: "controlo", label: "Corpus de controlo (independente)" }');
+    expect(card).toContain("TRIAGE_CORPUS_KEYS.map((key) => ({ key, label: TRIAGE_CORPUS_LABELS[key] }))");
     expect(card).toContain("evalMut.mutateAsync({ offset, limit: BATCH, corpus: c.key })");
     expect(card).toContain("limite de vezes por hora");
   });

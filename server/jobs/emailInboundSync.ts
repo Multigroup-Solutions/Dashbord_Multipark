@@ -77,7 +77,9 @@ async function routeToModule(
   // O remetente do cabeçalho é muitas vezes o BACKOFFICE que reencaminha
   // (reservas@/info@ "Multipark") — só conta como cliente se for externo e
   // com nome próprio; senão os reencaminhamentos misturavam clientes.
-  const senderEmail = clientSignalEmail(ctx.fromEmail);
+  // Ronda 2: um parceiro (agência, hotel…) que escreve em nome do cliente não É o cliente —
+  // o email dele nunca fica na reclamação/perdido nem junta casos de clientes diferentes.
+  const senderEmail = ctx.aiIntake?.partnerSender ? undefined : clientSignalEmail(ctx.fromEmail);
   const senderName = senderEmail && !isGenericSenderName(ctx.fromName) ? ctx.fromName?.trim() : undefined;
   const bodyName = parsed.clientName && !isGenericSenderName(parsed.clientName) ? parsed.clientName.trim() : undefined;
   const clientName = bodyName || senderName || "Desconhecido";
@@ -593,6 +595,8 @@ export interface AiComplaintIntake {
   replyOnly?: boolean;
   /** 14 out 2026: certeza média → o caso nasce "Por confirmar (IA)". */
   uncertain?: boolean;
+  /** Ronda 2: o remetente é um parceiro em nome do cliente (o email dele não é o do cliente). */
+  partnerSender?: boolean;
 }
 
 export type InboundOutcome =

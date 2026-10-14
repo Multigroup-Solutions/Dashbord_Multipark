@@ -22,6 +22,7 @@ import { sql } from "drizzle-orm";
 import { aliasPipeline, canSeeMailbox, isAutomatedSender, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
 import { DIRECT_CASE_PIPELINES, bulkListMail, forwardedExternalSender, preTriageMail, senderKindOf } from "../../shared/mailTriage";
 import type { InboundAlias } from "../emailParse";
+import { readableMailText } from "../complaintEmail";
 import { gmailThreadIdToImap } from "./parse";
 import { syncAccount, type AccountSyncResult, type StoredEvent } from "./sync";
 import {
@@ -309,7 +310,9 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
       const target = await triageNewMessage(e, mailbox, {
         automated: automatedValue, pipeline: pipelineUsed, createdCase, routingRun, loadBudget, api, company,
         onCase: (r) => {
-          if (r.status === "created" || r.status === "linked") aiComplaint = true;
+          // Só a RECLAMAÇÃO tem o seu aviso ("Nova reclamação" / "por confirmar (IA)"). Ronda 2: um perdido
+          // aberto pela IA não avisa ninguém por si — o aviso de email novo vai a quem vê a caixa Perdidos.
+          if ((r.status === "created" || r.status === "linked") && "complaintId" in r) aiComplaint = true;
           if (r.status === "created" && "complaintId" in r) report.pipelineCreated++; // a triagem das reclamações novas corre no fim
         },
         onAi: () => { report.aiRouted = (report.aiRouted ?? 0) + 1; },
@@ -368,7 +371,7 @@ async function triageNewMessage(
   const p = e.parsed;
   // O que nunca é lido (enviado, pessoal, sistema, notificação de reserva) sai já, sem ir à BD.
   if (p.outbound || e.classification.personal || p.systemMail || ctx.automated >= 2) return null;
-  const text = p.text || p.snippet || "";
+  const text = readableMailText({ text: p.text, html: p.html, snippet: p.snippet });
   const senderKind = senderKindOf({ fromEmail: p.fromEmail, automated: ctx.automated }, ctx.company);
   const state = await threadTriageState(e.result.threadId, e.result.newThread);
   const pre = preTriageMail({
@@ -430,7 +433,7 @@ async function aliasNoiseByAi(
   const { dbEmailRoutingDeps, classifyEmailWithAi } = await import("../commsRouting");
   if (!(await dbEmailRoutingDeps.enabled())) return false;
   const p = e.parsed;
-  const text = p.text || p.snippet || "";
+  const text = readableMailText({ text: p.text, html: p.html, snippet: p.snippet });
   const msg = {
     threadId: e.result.threadId, messageId: e.result.messageId!, fromBoxKey: from.key, subject: p.subject ?? "", text,
     fromName: p.fromName ?? null, fromEmail: p.fromEmail ?? null, attachmentNames: [], projectId: null,

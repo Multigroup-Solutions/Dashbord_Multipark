@@ -1,7 +1,7 @@
 // Definições → Comunicação → "Testar a triagem" (14 out 2026; só o super
-// admin). Corre os DOIS corpora rotulados de emails — o principal e o de
-// controlo (escrito à parte, para a meta não ser medida só com os exemplos de
-// quem escreveu as regras) — pelo MESMO pedido e pelas mesmas regras de
+// admin). Corre os TRÊS corpora rotulados de emails — o principal, o de
+// controlo e o cego (escritos à parte, para a meta não ser medida só com os
+// exemplos de quem escreveu as regras) — pelo MESMO pedido e pelas mesmas regras de
 // produção, com o modelo real, por lotes (cada pedido cabe nos 60 s do
 // servidor), e mostra recall e precisão por categoria de cada um. Não cria
 // casos nem mexe na Comunicação; o resultado fica nos logs ("[triagem-eval]").
@@ -12,18 +12,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, FlaskConical, Loader2, XCircle } from "lucide-react";
-import { MAIL_TRIAGE_CATEGORY_LABELS, TRIAGE_RECALL_TARGET, parseTriageCategory } from "@shared/mailTriage";
+import { MAIL_TRIAGE_CATEGORY_LABELS, TRIAGE_CORPUS_KEYS, TRIAGE_CORPUS_LABELS, TRIAGE_RECALL_TARGET, parseTriageCategory, type TriageCorpusKey } from "@shared/mailTriage";
 
 type EvalItem = { id: string; expected: string; predicted: string | null; via: string; subject: string; note: string | null; reason: string | null; caseKind?: string | null; uncertain?: boolean; error?: string };
 type Metrics = {
   total: number; correct: number; failed: number; accuracy: number | null; recallComplaints: number | null; recallLostFound: number | null; passes: boolean; missing: number;
   byCategory: Array<{ category: string; label: string; support: number; predicted: number; correct: number; recall: number | null; precision: number | null }>;
 };
-type CorpusKey = "principal" | "controlo";
-const CORPORA: ReadonlyArray<{ key: CorpusKey; label: string }> = [
-  { key: "principal", label: "Corpus principal" },
-  { key: "controlo", label: "Corpus de controlo (independente)" },
-];
+type CorpusKey = TriageCorpusKey;
+const CORPORA: ReadonlyArray<{ key: CorpusKey; label: string }> = TRIAGE_CORPUS_KEYS.map((key) => ({ key, label: TRIAGE_CORPUS_LABELS[key] }));
 type CorpusResult = { key: CorpusKey; label: string; items: EvalItem[]; metrics: Metrics };
 
 const BATCH = 12;
@@ -80,13 +77,13 @@ export function MailTriageEvalCard() {
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           <FlaskConical className="h-4 w-4" /> Testar a triagem dos emails (IA)
           {results.length === CORPORA.length && (passesAll
-            ? <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:border-emerald-800"><CheckCircle2 className="h-3 w-3 mr-1" />Passa a meta nos dois</Badge>
+            ? <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:border-emerald-800"><CheckCircle2 className="h-3 w-3 mr-1" />Passa a meta em todos</Badge>
             : <Badge variant="outline" className="bg-red-100 text-red-800 border-red-200 dark:bg-red-950/50 dark:text-red-200 dark:border-red-800"><XCircle className="h-3 w-3 mr-1" />Abaixo da meta</Badge>)}
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Corre uns 200 emails de exemplo (já rotulados, em português, inglês, espanhol e francês), em dois conjuntos — o principal e um de controlo escrito à parte —, pelo mesmo pedido à IA e pelas mesmas regras de produção, com o modelo real.
+          Corre uns 260 emails de exemplo (já rotulados, em português, inglês, espanhol e francês), em três conjuntos — o principal, um de controlo e um cego, escritos à parte —, pelo mesmo pedido à IA e pelas mesmas regras de produção, com o modelo real.
           Uma reclamação ou um perdido só contam como reconhecidos quando o caso abriria de facto (os "Por confirmar (IA)" contam).
-          Não cria casos nem mexe na Comunicação; gasta um pouco de IA (uma leitura por email) e tem um limite de vezes por hora. Meta: mais de {Math.round(TRIAGE_RECALL_TARGET * 100)} % das reclamações e dos perdidos reconhecidos, nos dois conjuntos.
+          Não cria casos nem mexe na Comunicação; gasta um pouco de IA (uma leitura por email) e tem um limite de vezes por hora. Meta: mais de {Math.round(TRIAGE_RECALL_TARGET * 100)} % das reclamações e dos perdidos reconhecidos, em cada conjunto.
           O resultado fica também nos logs (linha "[triagem-eval]").
         </p>
       </CardHeader>

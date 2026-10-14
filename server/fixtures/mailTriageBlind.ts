@@ -13,6 +13,10 @@
  * parceiro em nome do cliente), 12 perdidos e 21 que NÃO são caso (urgências
  * normais, dúvidas de preço, elogios com sugestão, avisos automáticos, emails
  * internos, lixo). PT-PT na maioria, mais EN, ES, FR e um em PT-BR.
+ *
+ * `partner: true` (cg08, cg09, cg24, cg33): a agência / o hotel é um contacto
+ * das Parcerias — o pior caso para a meta (em produção o caso só abre com o
+ * interruptor AI_MAIL_PARTNER_CASES ligado; a avaliação mede com tudo ligado).
  */
 import type { TriageCorpusItem } from "./mailTriageCorpus";
 
@@ -93,13 +97,13 @@ export const TRIAGE_BLIND: readonly TriageCorpusItem[] = [
     expected: "reclamacoes", note: "resposta de uma linha por baixo da citação (promessa não cumprida)",
   },
   {
-    id: "cg08", lang: "en", box: "info", fromName: "Sunway Travel — Bookings", fromEmail: "bookings@sunwaytravel.co.uk",
+    id: "cg08", partner: true, lang: "en", box: "info", fromName: "Sunway Travel — Bookings", fromEmail: "bookings@sunwaytravel.co.uk",
     subject: "Client feedback – ref MP-77120",
     body: "Dear Multipark team,\n\nOur client Mr. Hughes (your ref MP-77120) informs us that his car was returned with 340 km more on the odometer than when he dropped it off. He is very upset and has asked us to take this up with you on his behalf.\n\nCould you please look into it and advise?\n\nKind regards,\nEmma Clarke\nSunway Travel",
     expected: "reclamacoes", note: "parceiro em nome do cliente",
   },
   {
-    id: "cg09", lang: "pt", box: "info", fromName: "Hotel Tejo Mar — Receção", fromEmail: "rececao@hoteltejomar.pt",
+    id: "cg09", partner: true, lang: "pt", box: "info", fromName: "Hotel Tejo Mar — Receção", fromEmail: "rececao@hoteltejomar.pt",
     subject: "Hóspede — transfer de hoje",
     body: "Bom dia,\n\nO nosso hóspede Sr. Valente, que usou o vosso transfer esta manhã, veio queixar-se à receção de que o motorista foi bastante mal-educado com a esposa por causa das malas. Pedimos que averiguem, porque recomendamos o vosso serviço aos nossos clientes.\n\nCumprimentos,\nReceção Hotel Tejo Mar",
     expected: "reclamacoes", note: "hotel parceiro em nome do hóspede",
@@ -206,7 +210,7 @@ export const TRIAGE_BLIND: readonly TriageCorpusItem[] = [
     expected: "reclamacoes", note: "calma, sem a palavra reclamação",
   },
   {
-    id: "cg24", lang: "fr", box: "info", fromName: "Voyages Lumière", fromEmail: "contact@voyageslumiere.fr",
+    id: "cg24", partner: true, lang: "fr", box: "info", fromName: "Voyages Lumière", fromEmail: "contact@voyageslumiere.fr",
     subject: "Réservation 49870 — Mme Dubois",
     body: "Bonjour,\n\nNotre cliente Mme Dubois (réservation 49870) nous signale avoir attendu 1h15 au terminal à son retour, sans aucune information. Merci de nous faire un retour afin que nous puissions lui répondre.\n\nBien cordialement,\nAgence Voyages Lumière",
     expected: "reclamacoes", note: "agência em nome da cliente",
@@ -278,7 +282,7 @@ export const TRIAGE_BLIND: readonly TriageCorpusItem[] = [
     expected: "perdidos", note: "resposta de uma linha (o objeto está implícito)",
   },
   {
-    id: "cg33", lang: "pt", box: "info", fromName: "Hotel Avenida Parque — Receção", fromEmail: "front.office@avenidaparquehotel.pt",
+    id: "cg33", partner: true, lang: "pt", box: "info", fromName: "Hotel Avenida Parque — Receção", fromEmail: "front.office@avenidaparquehotel.pt",
     subject: "Carteira de hóspede",
     body: "Boa tarde,\n\nUm hóspede nosso, o Sr. Almeida, deixou a carteira na vossa viatura de transfer esta manhã (saída do hotel às 9h). Podem confirmar se a encontraram? Pode ser deixada na nossa receção.\n\nObrigado",
     expected: "perdidos", note: "hotel em nome do hóspede",

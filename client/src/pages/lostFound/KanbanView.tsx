@@ -54,6 +54,8 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   const canEdit = can(user, "perdidos", "edit");
   const canManage = can(user, "perdidos", "manage");
   const [showArchived, setShowArchived] = useState(false);
+  // Ronda 2: só os casos que a IA criou com certeza média e ninguém confirmou.
+  const [onlyUnconfirmed, setOnlyUnconfirmed] = useState(false);
   const queryInput = useMemo(() => {
     const input: any = {};
     if (filterType !== "all") input.itemType = filterType;
@@ -65,7 +67,12 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
   }, [filterType, searchTerm, globalFilters.projectId, noProject, showArchived]);
 
   const listQ = trpc.lostFound.list.useQuery(queryInput);
-  const { data: items = [], isLoading } = listQ;
+  const { data: allItems = [], isLoading } = listQ;
+  const unconfirmedCount = useMemo(() => (allItems as any[]).filter((i) => Number(i.aiUnconfirmed ?? 0) === 1).length, [allItems]);
+  const items = useMemo(
+    () => (onlyUnconfirmed ? (allItems as any[]).filter((i) => Number(i.aiUnconfirmed ?? 0) === 1) : (allItems as any[])),
+    [allItems, onlyUnconfirmed],
+  );
   // O painel (envelhecimento, por tipo, condutores repetidos) é da cidade: quem só
   // vê os próprios casos não o pede (o servidor recusa) — 16c.
   const dashboardQ = trpc.lostFound.dashboard.useQuery(
@@ -218,6 +225,11 @@ export function KanbanView({ user, filterType, setFilterType, searchTerm, setSea
         <label className="flex items-center gap-1 text-sm cursor-pointer">
           <input type="checkbox" checked={noProject} onChange={e => setNoProject(e.target.checked)} /> Sem cidade
         </label>
+        {(unconfirmedCount > 0 || onlyUnconfirmed) && (
+          <label className="flex items-center gap-1 text-sm cursor-pointer text-violet-900 dark:text-violet-100" title="Casos que a IA criou a partir de um email sem ter a certeza — abre para confirmar ou arquivar">
+            <input type="checkbox" checked={onlyUnconfirmed} onChange={e => setOnlyUnconfirmed(e.target.checked)} /> Por confirmar (IA){unconfirmedCount ? ` (${unconfirmedCount})` : ""}
+          </label>
+        )}
         <div className="flex items-center gap-2">
           <Label>Tipo:</Label>
           <Select value={filterType} onValueChange={setFilterType}>
@@ -362,6 +374,7 @@ export function ItemCard({ item, onSelect, onMove, currentStatus, canMove, slaDa
         )}
         {item.projectId == null && <Badge variant="outline" className="text-[11px] text-red-600 border-red-300">Sem cidade</Badge>}
         {item.relatedComplaintId && <Badge variant="outline" className="text-[11px]">Reclamação #{item.relatedComplaintId}</Badge>}
+        {(item as any).origin === "ia" && <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-800 dark:text-violet-200" title="Criado a partir de um email que a IA viu como objeto perdido">IA</Badge>}
         {Number((item as any).aiUnconfirmed ?? 0) === 1 && <AiUnconfirmedBadge />}
 
         <div className="flex items-center gap-1 text-xs text-muted-foreground min-w-0">
