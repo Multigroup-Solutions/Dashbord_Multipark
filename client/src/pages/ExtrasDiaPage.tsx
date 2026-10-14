@@ -50,6 +50,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
+import { TimesProbeCard } from "./extrasDia/TimesProbeCard";
 import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
 import { LicenceWarning } from "./extrasDia/LicenceWarning";
 import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
@@ -243,6 +244,8 @@ export default function ExtrasDiaPage() {
       </Tabs>
 
       {tab === "pressao" && <PressureTab city={city} targetDate={targetDate || addDaysIso(baseDate, 1)} canEdit={access.canEdit} />}
+      {/* Plano 62, P0: diagnóstico dos tempos (calibração) — só o super admin. */}
+      {tab === "pressao" && user?.role === "super_admin" && <TimesProbeCard city={city} />}
 
       {tab === "dia" && isLoading && (
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>
