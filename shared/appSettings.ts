@@ -30,6 +30,12 @@ import { MAIL_BACKFILL_DEFAULTS, mailBackfillSettingsSchema } from "./mailTriage
 import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
 import { DEFAULT_SPEED_RULE, SPEED_RULE_SETTING_KEY, speedRuleSchema } from "./speedRules";
 import { PERF_RANK_WEIGHTS_KEY, rankWeightsReadSchema, rankWeightsSchema } from "./peoplePerformance";
+import { DEFAULT_PARK_ZONES, PARK_ZONE_KINDS, PARK_ZONE_RADIUS, p2TerminalConflicts, type ParkZonesMap } from "./serviceGps";
+import type { AirportFence } from "./pontoTerminal";
+import {
+  DEFAULT_GARAGE_ROLES, DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES, GARAGE_ROLES,
+  SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT,
+} from "./serviceTimes";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
 
@@ -224,6 +230,77 @@ const airportFenceSchema = z.object({
 export const terminalAirportsSchema = z.object({ lisbon: airportFenceSchema, porto: airportFenceSchema, faro: airportFenceSchema }, { error: "Indica os aeroportos de Lisboa, Porto e Faro." });
 export const TERMINAL_AIRPORTS_SETTING_KEY = "ponto.terminalAirports" as const;
 
+// ─── Tempos de entrega e de recolha (plano 62, P5) ──────────────────────────
+
+export const PARK_ZONES_SETTING_KEY = "operations.parkZones" as const;
+export const GARAGE_ROLES_SETTING_KEY = "operations.garageRoles" as const;
+export const SERVICE_TIMES_SETTING_KEYS = [
+  "serviceTimes.targetMinutes", "serviceTimes.pickupT2TargetMinutes", "serviceTimes.since", "serviceTimes.gpsSince",
+  "serviceTimes.useCalls", "serviceTimes.inBriefing", "serviceTimes.gpsGate",
+] as const;
+
+/**
+ * Exceção a uma zona da operação (Q6: as zonas vêm das garagens da
+ * Multipark): `label` = nome da garagem (ou de uma zona nova); centro, raio
+ * (50–1 000 m) e tipo só quando se querem mudar.
+ */
+const parkZoneSchema = z.object({
+  label: z.string({ error: "Indica a garagem (ex.: P2)." }).trim().min(1, "Indica a garagem (ex.: P2).").max(80, "Nome da garagem: máximo 80 caracteres."),
+  kind: z.enum(PARK_ZONE_KINDS as unknown as ["p2", "pd", "central", "coberto", "outra"], { error: "Tipo de zona: P2, PD, central, coberto ou outra." }).optional(),
+  lat: latSchema.optional(),
+  lng: lngSchema.optional(),
+  radiusM: z.number({ error: "Indica o raio da zona em metros." }).int("Raio em metros inteiros.")
+    .min(PARK_ZONE_RADIUS.min, `Raio mínimo da zona: ${PARK_ZONE_RADIUS.min} m.`).max(PARK_ZONE_RADIUS.max, `Raio máximo da zona: ${PARK_ZONE_RADIUS.max} m.`).optional(),
+  garages: z.array(z.string().trim().min(1, "Nome de garagem vazio.").max(80, "Nome de garagem: máximo 80 caracteres.")).max(20, "Máximo 20 garagens por zona.").optional(),
+}).refine((z0) => (z0.lat == null) === (z0.lng == null), { message: "Indica a latitude E a longitude (ou nenhuma, para usar as da Multipark)." });
+const parkZoneListSchema = z.array(parkZoneSchema).max(12, "Máximo 12 zonas por cidade.").superRefine((list, ctx) => {
+  const seen = new Set<string>();
+  for (const z0 of list) {
+    const k = matchKey(z0.label);
+    if (seen.has(k)) ctx.addIssue({ code: "custom", message: `Garagem repetida: ${z0.label}.` });
+    seen.add(k);
+  }
+});
+export const parkZonesSchema = z.object({ lisbon: parkZoneListSchema, porto: parkZoneListSchema, faro: parkZoneListSchema }, { error: "Indica as exceções de Lisboa, Porto e Faro (lista vazia = nenhuma)." });
+
+/** Papel de cada garagem nos tempos das recolhas (provisória / já num parque / parque certo). */
+export const garageRolesSchema = z.array(z.object({
+  garage: z.string({ error: "Nome da garagem em falta." }).trim().min(1, "Nome da garagem em falta.").max(80, "Nome da garagem: máximo 80 caracteres."),
+  role: z.enum(GARAGE_ROLES as unknown as ["provisoria", "parque", "final"], { error: "Papel: provisoria, parque ou final." }),
+})).max(60, "Máximo 60 garagens.").superRefine((list, ctx) => {
+  const seen = new Set<string>();
+  for (const g of list) {
+    const k = matchKey(g.garage);
+    if (seen.has(k)) ctx.addIssue({ code: "custom", message: `Garagem repetida: ${g.garage}.` });
+    seen.add(k);
+  }
+});
+
+/** Portão dos tempos com GPS (§8.1). */
+export const gpsGateSchema = z.object({
+  visible: z.boolean({ error: "visible: true ou false." }),
+  minCoveragePct: z.number({ error: "minCoveragePct: um número (%)." }).min(0, "minCoveragePct: entre 0 e 100.").max(100, "minCoveragePct: entre 0 e 100."),
+  minN: z.number({ error: "minN: um número." }).int("minN: número inteiro.").min(1, "minN: mínimo 1.").max(10000, "minN: máximo 10 000."),
+}).strict();
+
+const PARK_ZONE_CITY_LABEL: Record<string, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
+
+/**
+ * Zonas P2 a tocar numa zona do terminal → texto do erro (recusado ao
+ * gravar, §5.2); null = pode gravar. Recebe as zonas EM VIGOR (garagens da
+ * Multipark + exceções: effectiveParkZones). PURA (o servidor e o editor usam-na).
+ */
+export function parkZonesConflictError(zones: Partial<ParkZonesMap> | null | undefined, airports: Partial<Record<string, AirportFence>> | null | undefined): string | null {
+  const hits = p2TerminalConflicts(zones, airports);
+  if (!hits.length) return null;
+  const list = hits.map((h) => `${h.p2} toca na zona ${h.terminal} do terminal (${PARK_ZONE_CITY_LABEL[h.city] ?? h.city}, centros a ${h.distanceM} m)`).join("; ");
+  return `A zona P2 não pode tocar numa zona do terminal: ${list}. Afasta o centro ou diminui o raio — senão a saída do terminal e a paragem no P2 ficavam iguais.`;
+}
+
+const serviceDaySchema = z.string({ error: "Indica o dia (AAAA-MM-DD)." })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Dia no formato AAAA-MM-DD.")
+  .refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && d >= "2025-01-01", "Dia inválido (a partir de 2025).");
+
 /**
  * Template do WhatsApp do pedido de documentos em falta, por cidade:
  * "nome_do_modelo|pt_PT" ou vazio (= por configurar: só email). Pauta do
@@ -383,6 +460,88 @@ export const SETTINGS = {
     schema: parkIdListSchema,
     defaultValue: [],
     wiring: "live",
+  }),
+  // Plano 62 (P5): tempos de entrega e de recolha — zonas, garagens e parâmetros.
+  [PARK_ZONES_SETTING_KEY]: def({
+    key: PARK_ZONES_SETTING_KEY,
+    group: "operacao",
+    label: "Zonas da operação (GPS)",
+    description: "As zonas dos parques (P2, PD, central, coberto…) vêm das garagens da Multipark (o centro é o do link do mapa de cada garagem; o raio, o de omissão do tipo: P2 e coberto 150 m, PD e central 200 m). Aqui ficam só as EXCEÇÕES, por cidade: ajustar o raio (50 a 1 000 m), corrigir o centro ou o tipo de uma garagem, ou dar o centro a uma garagem que não tem coordenadas na Multipark (\"Sugerir\" propõe-no: posições da app nos movimentos das últimas 4 semanas, ou o parque). Servem aos tempos das recolhas (a saída do P2 pelo GPS quando a app não tem o início do movimento). Uma zona P2 que toque numa zona do terminal (Aeroportos → zonas) é recusada ao gravar: a saída do terminal e a paragem no P2 ficavam iguais.",
+    schema: parkZonesSchema,
+    defaultValue: DEFAULT_PARK_ZONES,
+    wiring: "live",
+  }),
+  [GARAGE_ROLES_SETTING_KEY]: def({
+    key: GARAGE_ROLES_SETTING_KEY,
+    group: "operacao",
+    label: "Papéis das garagens (tempos das recolhas)",
+    description: "Para onde vai o carro depois do check-in: a garagem PROVISÓRIA (P2 — conta-se o tempo até sair de lá), as que já são UM PARQUE (CENTRAL, CENTRAL COBERTO — o carro já está num dos parques e deixa de se medir) e as do PARQUE CERTO (PD, PD FORA, COBERTO — arrumado se o tipo de lugar bater: descobertos e toldo no PD, interior no coberto). Os nomes são os da app (não contam maiúsculas nem espaços). Uma garagem fora da lista conta como \"parque certo\" e fica marcada como \"garagem sem papel\".",
+    schema: garageRolesSchema,
+    defaultValue: DEFAULT_GARAGE_ROLES.map((g) => ({ ...g })),
+    wiring: "live",
+  }),
+  "serviceTimes.targetMinutes": def({
+    key: "serviceTimes.targetMinutes",
+    group: "operacao",
+    label: "Tempos: meta da entrega (minutos)",
+    description: "O nosso tempo de uma entrega = Fila + Trânsito (da chamada do cliente, ou do pendente, até o condutor chegar ao terminal). Conta para a % na meta. 15 por omissão.",
+    schema: z.number({ error: "Indica um número de minutos." }).int("Número inteiro de minutos.").min(5, "Mínimo 5 minutos.").max(120, "Máximo 120 minutos."),
+    defaultValue: DEFAULT_SERVICE_TARGET_MINUTES,
+    wiring: "live",
+  }),
+  "serviceTimes.pickupT2TargetMinutes": def({
+    key: "serviceTimes.pickupT2TargetMinutes",
+    group: "operacao",
+    label: "Tempos: recolha atrasada no T2 (minutos)",
+    description: "Uma recolha no Terminal 2 fica atrasada quando o condutor chega à zona T2 mais do que isto depois de o cliente ligar (ou do \"em recolha\"). Só no T2 (no T1 há sempre gente de manhã) e só com GPS: sem GPS fica sem medição, nunca \"a tempo\". 15 por omissão (decisão do Jorge).",
+    schema: z.number({ error: "Indica um número de minutos." }).int("Número inteiro de minutos.").min(1, "Mínimo 1 minuto.").max(120, "Máximo 120 minutos."),
+    defaultValue: DEFAULT_PICKUP_T2_TARGET_MINUTES,
+    wiring: "live",
+  }),
+  "serviceTimes.since": def({
+    key: "serviceTimes.since",
+    group: "operacao",
+    label: "Tempos: medir desde",
+    description: "Primeiro dia que o trabalho noturno dos tempos preenche para trás (sem GPS antes do dia do GPS). Mudar esta data não apaga nada.",
+    schema: serviceDaySchema,
+    defaultValue: SERVICE_TIMES_SINCE_DEFAULT,
+    wiring: "live",
+  }),
+  "serviceTimes.gpsSince": def({
+    key: "serviceTimes.gpsSince",
+    group: "operacao",
+    label: "Tempos: GPS desde",
+    description: "A partir deste dia o preenchimento para trás também lê os pontos GPS do Zello guardados (antes não há pontos). Os dias anteriores ficam com os tempos que não dependem do GPS (Fila, Total, Cliente das recolhas, P2, até arrumado).",
+    schema: serviceDaySchema,
+    defaultValue: SERVICE_TIMES_GPS_SINCE_DEFAULT,
+    wiring: "live",
+  }),
+  "serviceTimes.useCalls": def({
+    key: "serviceTimes.useCalls",
+    group: "operacao",
+    label: "Tempos: contar desde a chamada do cliente",
+    description: "Ligado (regra do Jorge): a Fila começa no mais cedo entre a chamada do cliente (central Vodafone ou WhatsApp, pelo telefone da reserva, até 60 min antes do pendente) e o pendente; nas recolhas, o mesmo com o \"em recolha\". Desligado: só o pendente (ou o \"em recolha\"). Só muda contas.",
+    schema: z.boolean({ error: "Ligado ou desligado." }),
+    defaultValue: true,
+    wiring: "live",
+  }),
+  "serviceTimes.inBriefing": def({
+    key: "serviceTimes.inBriefing",
+    group: "operacao",
+    label: "Tempos: linha no briefing por email",
+    description: "Uma linha \"ontem\" com os tempos de entrega e de recolha no briefing diário (vai por email). Desligado por omissão.",
+    schema: z.boolean({ error: "Ligado ou desligado." }),
+    defaultValue: false,
+    wiring: "store",
+  }),
+  "serviceTimes.gpsGate": def({
+    key: "serviceTimes.gpsGate",
+    group: "operacao",
+    label: "Tempos com GPS: portão",
+    description: "Os tempos que dependem do GPS (Trânsito, Cliente das entregas, Nosso, % na meta, No terminal, Até à 1.ª garagem, Atrasadas no T2) só aparecem a quem não é super admin com \"visible\": true e, por cidade e período, com a cobertura ≥ minCoveragePct % e pelo menos minN medições. Fechado (omissão): só o super admin os vê, com \"em calibração\". Abre-se depois da calibração (diagnóstico dos tempos) e do PR dos parâmetros.",
+    schema: gpsGateSchema,
+    defaultValue: { ...DEFAULT_GPS_GATE },
+    wiring: "store",
   }),
   "emails.handoverCc": def({
     key: "emails.handoverCc",
@@ -802,6 +961,10 @@ export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   "mail.systemSender",
   // o Desempenho só o super admin o vê (Jorge, 8 out 2026)
   PERF_RANK_WEIGHTS_KEY,
+  // Plano 62: zonas, garagens e parâmetros dos tempos (quem preenche é o super admin, Q6)
+  PARK_ZONES_SETTING_KEY,
+  GARAGE_ROLES_SETTING_KEY,
+  ...SERVICE_TIMES_SETTING_KEYS,
 ]);
 export function settingSuperAdminOnly(key: string): boolean {
   return SUPER_ADMIN_SETTING_KEYS.has(key);
