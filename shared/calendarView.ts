@@ -514,6 +514,26 @@ export function readableTextOn(hex: string): "#ffffff" | "#1f1f1f" {
 
 // ─── Novo evento ────────────────────────────────────────────────────────────
 
+// Repetição (Jorge, 14 out 2026: "eventos que se repetem"). O cliente só manda
+// a ESCOLHA (frequência + fim); a regra RRULE é montada aqui, a partir do dia
+// de início — nunca se aceita uma RRULE em texto vinda do browser.
+export const CALENDAR_REPEAT_FREQS = ["daily", "weekly", "monthly", "yearly"] as const;
+export type CalendarRepeatFreq = (typeof CALENDAR_REPEAT_FREQS)[number];
+/** "Termina após N vezes": de 2 a isto. */
+export const CALENDAR_MAX_REPEAT_COUNT = 730;
+/** "Termina em": no máximo isto depois do início. */
+export const CALENDAR_MAX_REPEAT_YEARS = 5;
+
+export const calendarRecurrenceSchema = z.object({
+  freq: z.enum(CALENDAR_REPEAT_FREQS),
+  end: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("never") }).strict(),
+    z.object({ kind: z.literal("until"), untilDay: z.string().regex(DAY_RE, "Data inválida.") }).strict(),
+    z.object({ kind: z.literal("count"), count: z.number().int().min(2, "Repete pelo menos 2 vezes.").max(CALENDAR_MAX_REPEAT_COUNT, `No máximo ${CALENDAR_MAX_REPEAT_COUNT} vezes.`) }).strict(),
+  ]).default({ kind: "never" }),
+}).strict();
+export type CalendarRecurrenceInput = z.input<typeof calendarRecurrenceSchema>;
+
 export const createCalendarEventSchema = z.object({
   title: z.string().trim().min(1, "Indica o título.").max(200),
   allDay: z.boolean().default(false),
@@ -527,6 +547,8 @@ export const createCalendarEventSchema = z.object({
   description: z.string().max(4000).optional(),
   guests: z.array(z.string().trim().max(254)).max(CALENDAR_MAX_GUESTS, `No máximo ${CALENDAR_MAX_GUESTS} convidados.`).default([]),
   withMeet: z.boolean().default(false),
+  /** Repetição (opcional; sem ela → "Não se repete"). */
+  recurrence: calendarRecurrenceSchema.nullish(),
 });
 export type CreateCalendarEventInput = z.input<typeof createCalendarEventSchema>;
 
@@ -550,6 +572,101 @@ export function normalizeGuests(raw: readonly string[], ownEmail?: string | null
   return { ok: true, guests: out };
 }
 
+// ─── Repetição: etiquetas e regra RRULE ─────────────────────────────────────
+
+const RRULE_BYDAY = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"] as const;
+/** "20261231T235959Z" (formato básico UTC do RFC 5545). PURA. */
+export function rruleUtcBasic(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z").replace(/[-:]/g, "");
+}
+const ptDate = (day: string) => `${day.slice(8, 10)}/${day.slice(5, 7)}/${day.slice(0, 4)}`;
+/** "à terça-feira" / "ao sábado". */
+const weekdayWithArticle = (day: string) => {
+  const i = weekdayIndex(day);
+  return `${i >= 5 ? "ao" : "à"} ${PT_WEEKDAYS_LONG[i]}`;
+};
+
+type RecurrenceChoice = { freq: CalendarRepeatFreq; end?: { kind: "never" } | { kind: "until"; untilDay: string } | { kind: "count"; count: number } };
+
+/** O texto de cada opção do "Repete", a partir do dia de início ("Todas as semanas à terça-feira"). PURA. */
+export function calendarRepeatLabel(freq: CalendarRepeatFreq, startDay: string): string {
+  if (freq === "daily") return "Todos os dias";
+  if (!isRealDay(startDay)) return { weekly: "Todas as semanas", monthly: "Todos os meses", yearly: "Todos os anos" }[freq];
+  if (freq === "weekly") return `Todas as semanas ${weekdayWithArticle(startDay)}`;
+  if (freq === "monthly") return `Todos os meses no dia ${dayNum(startDay)}`;
+  return `Todos os anos a ${dayNum(startDay)} de ${PT_MONTHS[monthOf(startDay)]}`;
+}
+
+/**
+ * Aviso para os dias que não existem em todos os meses/anos (regra do RFC 5545,
+ * igual no Google): "todos os meses no dia 31" salta os meses sem dia 31 (não
+ * passa para o último dia do mês); 29 de fevereiro só nos anos bissextos. PURA.
+ */
+export function calendarRepeatNote(freq: CalendarRepeatFreq, startDay: string): string | null {
+  if (!isRealDay(startDay)) return null;
+  if (freq === "monthly" && dayNum(startDay) >= 29) return `Nos meses sem dia ${dayNum(startDay)}, não há evento.`;
+  if (freq === "yearly" && startDay.slice(5) === "02-29") return "Só nos anos bissextos.";
+  return null;
+}
+
+/** "Todas as semanas à terça-feira · até 31/12/2026" / "· 10 vezes". PURA. */
+export function describeCalendarRecurrence(rec: RecurrenceChoice, startDay: string): string {
+  const base = calendarRepeatLabel(rec.freq, startDay);
+  const end = rec.end ?? { kind: "never" as const };
+  if (end.kind === "until") return `${base} · até ${ptDate(end.untilDay)}`;
+  if (end.kind === "count") return `${base} · ${end.count} vezes`;
+  return base;
+}
+
+/**
+ * A regra RRULE para o Google (`recurrence: ["RRULE:…"]`), montada só a partir
+ * da escolha validada e do dia de início:
+ *  - semanal → BYDAY do dia da semana do início; mensal → BYMONTHDAY do dia do
+ *    início (29–31: os meses sem esse dia ficam sem evento); anual → o mês e o
+ *    dia vêm do início;
+ *  - "Termina em <dia>" → UNTIL: com horas, o fim desse dia em Lisboa, em UTC
+ *    ("20261231T235959Z"); dia inteiro → a data ("20261231"), como o Google faz;
+ *  - "Termina após N vezes" → COUNT. PURA.
+ */
+export function buildCalendarRRule(rec: RecurrenceChoice, o: { startDay: string; allDay: boolean }): string {
+  const parts = [`FREQ=${rec.freq.toUpperCase()}`];
+  if (rec.freq === "weekly") parts.push(`BYDAY=${RRULE_BYDAY[weekdayIndex(o.startDay)]}`);
+  if (rec.freq === "monthly") parts.push(`BYMONTHDAY=${dayNum(o.startDay)}`);
+  const end = rec.end ?? { kind: "never" as const };
+  if (end.kind === "until") {
+    parts.push(`UNTIL=${o.allDay ? end.untilDay.replace(/-/g, "") : rruleUtcBasic(lisbonMidnightUtcMs(addDays(end.untilDay, 1)) - 1000)}`);
+  } else if (end.kind === "count") parts.push(`COUNT=${end.count}`);
+  return `RRULE:${parts.join(";")}`;
+}
+
+/** Quantos dias pode durar cada ocorrência sem chegar à seguinte. */
+const REPEAT_PERIOD_DAYS: Record<CalendarRepeatFreq, number> = { daily: 1, weekly: 7, monthly: 28, yearly: 365 };
+
+/** Valida a repetição de um evento já validado (escolha estrita, fim depois do início, nem demasiado longe). PURA. */
+function validateRecurrence(
+  raw: unknown,
+  ev: { startDay: string; endDay: string; allDay: boolean; startMs: number; endMs: number },
+): { ok: true; rule: string; label: string } | { ok: false; error: string } {
+  const r = calendarRecurrenceSchema.safeParse(raw);
+  if (!r.success) {
+    const issue = r.error.issues[0];
+    const own = !!issue && (issue.path.includes("count") || issue.path.includes("untilDay"));
+    return { ok: false, error: own ? issue.message : "Repetição inválida." };
+  }
+  const rec = r.data;
+  const period = REPEAT_PERIOD_DAYS[rec.freq];
+  const tooLong = ev.allDay ? daysInRange(ev.startDay, ev.endDay).length > period : ev.endMs - ev.startMs > period * DAY_MS;
+  if (tooLong) return { ok: false, error: `${calendarRepeatLabel(rec.freq, ev.startDay)}: cada evento tem de acabar antes de começar o seguinte.` };
+  if (rec.end.kind === "until") {
+    const u = rec.end.untilDay;
+    if (!isRealDay(u)) return { ok: false, error: "Data inválida." };
+    if (u < ev.startDay) return { ok: false, error: "A repetição tem de terminar depois do início." };
+    const limit = `${yearOf(ev.startDay) + CALENDAR_MAX_REPEAT_YEARS}${ev.startDay.slice(4)}`;
+    if (u > limit) return { ok: false, error: `A repetição termina no máximo ${CALENDAR_MAX_REPEAT_YEARS} anos depois do início.` };
+  }
+  return { ok: true, rule: buildCalendarRRule(rec, { startDay: ev.startDay, allDay: ev.allDay }), label: describeCalendarRecurrence(rec, ev.startDay) };
+}
+
 export interface ValidNewEvent {
   title: string;
   allDay: boolean;
@@ -562,6 +679,10 @@ export interface ValidNewEvent {
   location: string | null;
   description: string | null;
   withMeet: boolean;
+  /** `["RRULE:…"]` (montada aqui, nunca vinda do browser) ou null quando não se repete. */
+  recurrence: string[] | null;
+  /** "Todas as semanas à terça-feira · até 31/12/2026" (ou null). */
+  recurrenceLabel: string | null;
 }
 
 /**
@@ -593,6 +714,12 @@ export function validateNewCalendarEvent(input: CreateCalendarEventInput, o: { n
   if (startMs < o.nowMs - 366 * DAY_MS || startMs > o.nowMs + 5 * 366 * DAY_MS) return { ok: false, error: "Escolhe uma data entre o ano passado e daqui a cinco anos." };
   const g = normalizeGuests(input.guests ?? [], o.ownEmail);
   if (!g.ok) return g;
+  let rec: { rule: string; label: string } | null = null;
+  if (input.recurrence) {
+    const r = validateRecurrence(input.recurrence, { startDay: input.startDay, endDay: input.endDay, allDay, startMs, endMs });
+    if (!r.ok) return r;
+    rec = r;
+  }
   return {
     ok: true,
     value: {
@@ -606,6 +733,8 @@ export function validateNewCalendarEvent(input: CreateCalendarEventInput, o: { n
       location: String(input.location ?? "").trim().slice(0, 250) || null,
       description: String(input.description ?? "").trim().slice(0, 4000) || null,
       withMeet: !!input.withMeet,
+      recurrence: rec ? [rec.rule] : null,
+      recurrenceLabel: rec?.label ?? null,
     },
   };
 }
@@ -616,8 +745,10 @@ export function newCalendarEventBody(v: ValidNewEvent, o: { requestId: string; l
     summary: v.title,
     ...(v.description ? { description: v.description } : {}),
     ...(v.location ? { location: v.location } : {}),
-    start: v.allDay ? { date: v.startDay } : { dateTime: iso(v.startMs), timeZone: GOOGLE_TIMEZONE },
-    end: v.allDay ? { date: v.endDayExclusive } : { dateTime: iso(v.endMs), timeZone: GOOGLE_TIMEZONE },
+    // A repetição é expandida no fuso de start/end (o Google exige-o nos eventos que se repetem).
+    start: v.allDay ? { date: v.startDay, ...(v.recurrence ? { timeZone: GOOGLE_TIMEZONE } : {}) } : { dateTime: iso(v.startMs), timeZone: GOOGLE_TIMEZONE },
+    end: v.allDay ? { date: v.endDayExclusive, ...(v.recurrence ? { timeZone: GOOGLE_TIMEZONE } : {}) } : { dateTime: iso(v.endMs), timeZone: GOOGLE_TIMEZONE },
+    ...(v.recurrence ? { recurrence: v.recurrence } : {}),
     ...(v.guests.length ? { attendees: v.guests.map((email) => ({ email })) } : {}),
     ...(v.withMeet ? { conferenceData: { createRequest: { requestId: o.requestId, conferenceSolutionKey: { type: "hangoutsMeet" } } } } : {}),
     ...(o.link ? { source: { title: "Dashboard Multipark", url: o.link } } : {}),

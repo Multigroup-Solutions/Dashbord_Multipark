@@ -11,6 +11,7 @@ import { getDb, logActivity } from "./db";
 import { generateCentralSecret, hashCentralSecret } from "./centralSugar";
 import { CENTRAL_SUGAR_BASE_PATH, CENTRAL_SUGAR_FLAG, centralCallTotals, normalizeCentralUsername, parseContactRef } from "../shared/centralSugar";
 import { ENV } from "./_core/env";
+import { centralPersonHref, employeeFichaHref } from "../shared/centralRing";
 
 const superOnly = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin gere a central." });
@@ -44,11 +45,33 @@ async function callContacts(db: Db, refs: Array<string | null>): Promise<Map<str
   const list = (s: Set<number>) => sql.join([...s].map((n) => sql`${n}`), sql`, `);
   const read = async (q: ReturnType<typeof sql>) => rowsOf(await db.execute(q).catch(() => [[]]));
   if (ids.emp.size) for (const e of await read(sql`SELECT id, fullName FROM employees WHERE id IN (${list(ids.emp)})`))
-    out.set(`emp-${e.id}`, { name: String(e.fullName ?? `Ficha #${e.id}`), kind: "Equipa", href: "/rh" });
+    out.set(`emp-${e.id}`, { name: String(e.fullName ?? `Ficha #${e.id}`), kind: "Equipa", href: employeeFichaHref(Number(e.id)) });
   if (ids.crm.size) for (const c of await read(sql`SELECT id, displayName, firstName, lastName FROM crm_clients WHERE id IN (${list(ids.crm)})`))
     out.set(`crm-${c.id}`, { name: String(c.displayName || `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || `Cliente #${c.id}`), kind: "Cliente", href: `/clientes/${c.id}` });
   if (ids.ct.size) for (const c of await read(sql`SELECT id, name FROM crm_contacts WHERE id IN (${list(ids.ct)})`))
     out.set(`ct-${c.id}`, { name: String(c.name ?? `Contacto #${c.id}`), kind: "Contacto", href: "/clientes" });
+  return out;
+}
+
+/**
+ * Jorge (14 out 2026): o nome de quem atendeu/fez a chamada leva à ficha dessa
+ * pessoa. Conta da dashboard → ficha RH (a principal `employees.userId` ou uma
+ * conta extra em `employee_accounts`; a ficha ativa primeiro). Sem ficha → null.
+ */
+async function employeeOfUsers(db: Db, userIds: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  const ids = [...new Set(userIds.filter((n) => Number.isInteger(n) && n > 0))];
+  if (!ids.length) return out;
+  const list = sql.join(ids.map((n) => sql`${n}`), sql`, `);
+  const rows = rowsOf(await db.execute(sql`SELECT x.userId, x.employeeId FROM (
+        SELECT e.userId AS userId, e.id AS employeeId, e.isActive AS isActive, 0 AS viaAlias FROM employees e WHERE e.userId IN (${list})
+        UNION ALL
+        SELECT ea.userId AS userId, e.id AS employeeId, e.isActive AS isActive, 1 AS viaAlias FROM employee_accounts ea JOIN employees e ON e.id = ea.employeeId WHERE ea.userId IN (${list})
+      ) x ORDER BY x.isActive DESC, x.viaAlias ASC, x.employeeId ASC`).catch(() => [[]]));
+  for (const r of rows) {
+    const u = Number(r.userId);
+    if (!out.has(u)) out.set(u, Number(r.employeeId));
+  }
   return out;
 }
 
@@ -60,9 +83,10 @@ export const centralRouter = router({
     const enabled = isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
     const accounts = rowsOf(await db.execute(sql`SELECT a.id, a.username, a.label, a.userId, u.name AS userName, a.createdAt, a.lastUsedAt, a.revokedAt, rb.name AS revokedByName
         FROM central_accounts a LEFT JOIN users u ON u.id = a.userId LEFT JOIN users rb ON rb.id = a.revokedById ORDER BY a.revokedAt IS NOT NULL, a.username LIMIT 200`));
-    const calls = rowsOf(await db.execute(sql`SELECT c.id, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.subject, c.contactRef, c.source, u.name AS userName
+    const calls = rowsOf(await db.execute(sql`SELECT c.id, c.direction, c.held, c.startedAt, c.durationS, c.phone, c.subject, c.contactRef, c.source, u.name AS userName, c.userId
         FROM central_calls c LEFT JOIN users u ON u.id = c.userId ORDER BY c.startedAt DESC LIMIT 30`));
     const contacts = await callContacts(db, calls.map((c) => (c.contactRef ? String(c.contactRef) : null)));
+    const fichas = await employeeOfUsers(db, calls.map((c) => Number(c.userId)));
     const requests = rowsOf(await db.execute(sql`SELECT id, at, method, path, status, accountId, note, bodyJson FROM central_requests ORDER BY id DESC LIMIT 40`));
     return {
       enabled, hasSecret: !!ENV.cookieSecret, basePath: CENTRAL_SUGAR_BASE_PATH,
@@ -72,6 +96,8 @@ export const centralRouter = router({
       calls: calls.map((c) => ({ id: Number(c.id), direction: c.direction === "out" ? "out" as const : "in" as const, held: Number(c.held) === 1, startedAt: iso(c.startedAt),
         durationS: c.durationS == null ? null : Number(c.durationS), phone: c.phone ? String(c.phone) : null, subject: c.subject ? String(c.subject) : null,
         source: String(c.source), userName: c.userName ? String(c.userName) : null,
+        userId: c.userId == null ? null : Number(c.userId),
+        userHref: c.userId == null ? null : centralPersonHref(fichas.get(Number(c.userId)), Number(c.userId)),
         contact: c.contactRef ? contacts.get(String(c.contactRef)) ?? null : null })),
       requests: requests.map((q) => ({ id: Number(q.id), at: iso(q.at), method: String(q.method), path: String(q.path), status: Number(q.status),
         accountId: q.accountId == null ? null : Number(q.accountId), note: q.note ? String(q.note) : null, body: q.bodyJson ? String(q.bodyJson) : null })),
@@ -101,6 +127,8 @@ export const centralRouter = router({
           WHERE c.startedAt >= ${since} ${who != null ? sql`AND c.userId = ${who}` : sql``} ${input.direction ? sql`AND c.direction = ${input.direction}` : sql``}
           ORDER BY c.startedAt DESC LIMIT 500`));
       const contacts = await callContacts(db, calls.map((c) => (c.contactRef ? String(c.contactRef) : null)));
+      // Só quem vê a coluna "Quem" (todas as chamadas) precisa de saber a ficha de cada pessoa.
+      const fichas = seesAll ? await employeeOfUsers(db, calls.map((c) => Number(c.userId))) : new Map<number, number>();
       const hasAccount = rowsOf(await db.execute(sql`SELECT 1 AS x FROM central_accounts WHERE userId = ${ctx.user.id} AND revokedAt IS NULL LIMIT 1`)).length > 0;
       const people = seesAll
         ? rowsOf(await db.execute(sql`SELECT DISTINCT a.userId, u.name FROM central_accounts a LEFT JOIN users u ON u.id = a.userId ORDER BY u.name LIMIT 200`))
@@ -108,6 +136,7 @@ export const centralRouter = router({
         : [];
       const rows = calls.map((c) => ({
         id: Number(c.id), userId: Number(c.userId), userName: c.userName ? String(c.userName) : null,
+        userHref: seesAll ? centralPersonHref(fichas.get(Number(c.userId)), Number(c.userId)) : null,
         direction: c.direction === "out" ? "out" as const : "in" as const, held: Number(c.held) === 1, startedAt: iso(c.startedAt),
         durationS: c.durationS == null ? null : Number(c.durationS), phone: c.phone ? String(c.phone) : null,
         contact: c.contactRef ? contacts.get(String(c.contactRef)) ?? null : null,

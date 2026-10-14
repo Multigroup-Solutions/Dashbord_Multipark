@@ -16,7 +16,7 @@ export const CONVERSATION_STATUSES = ["aberto", "pendente", "resolvido"] as cons
 export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number];
 
 export const CONVERSATION_STATUS_LABELS: Record<ConversationStatus, string> = {
-  aberto: "Aberta",
+  aberto: "Por tratar",
   pendente: "Pendente",
   resolvido: "Resolvida",
 };

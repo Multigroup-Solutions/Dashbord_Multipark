@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowDownLeft, ArrowUpRight, Inbox, Loader2, Mail, AlertTriangle } from "lucide-react";
 import { CLIENT_MAIL_MAX, CLIENT_MAIL_PAGE, IDENTITY_SOURCE_LABELS } from "@shared/complaintClientMail";
 
-const STATUS_LABEL: Record<string, string> = { aberto: "Aberta", pendente: "Pendente", resolvido: "Resolvida" };
+const STATUS_LABEL: Record<string, string> = { aberto: "Por tratar", pendente: "Pendente", resolvido: "Resolvida" };
 
 export default function ComplaintClientMail({ complaintId }: { complaintId: number }) {
   const [limit, setLimit] = useState(CLIENT_MAIL_PAGE);
