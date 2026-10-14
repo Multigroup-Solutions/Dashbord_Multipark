@@ -677,6 +677,115 @@ export const opsPressureDays = mysqlTable("ops_pressure_days", {
 	uniqueIndex("uq_ops_pressure_day").on(table.parkGroup, table.part, table.day),
 ]);
 
+// 0685 (plano 62, P6): tempos de entrega e de recolha — uma linha por ciclo
+// fechado (entrega: CHECK_OUT/CANCEL; recolha: CHECK_IN/CANCEL), feita pelo
+// trabalho noturno service-times a partir da History da Multipark, das
+// chamadas e do GPS. Upsert; `voidedAt` quando o ciclo deixa de aparecer.
+// Q7: cada tempo guarda o seu condutor (médias por condutor e período).
+// Nunca coordenadas, telefones nem dados do cliente.
+export const serviceTimes = mysqlTable("service_times", {
+	id: int().autoincrement().primaryKey(),
+	/** entrega | recolha */
+	kind: varchar({ length: 8 }).notNull(),
+	bookingId: varchar({ length: 64 }).notNull(),
+	/** A linha da History que fecha o ciclo. */
+	anchorHistoryId: varchar({ length: 64 }).notNull(),
+	anchorAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	/** entregue | reaberta | recebido | cancelado */
+	outcome: varchar({ length: 12 }).notNull(),
+	bookingCode: varchar({ length: 40 }),
+	parkId: varchar({ length: 64 }),
+	cityKey: varchar({ length: 8 }),
+	parkGroup: varchar({ length: 40 }),
+	terminalClass: varchar({ length: 8 }),
+	/** Dia operacional (03h→03h de Lisboa) da hora de referência. */
+	opDay: date({ mode: 'string' }).notNull(),
+	refHour: tinyint(),
+	callAt: datetime({ mode: 'string', fsp: 3 }),
+	callSource: varchar({ length: 10 }),
+	callHeld: tinyint(),
+	/** Pendente (entregas) ou "em recolha" (recolhas). */
+	requestAt: datetime({ mode: 'string', fsp: 3 }),
+	requestCount: int().default(0).notNull(),
+	startSource: varchar({ length: 12 }),
+	customerMs: int(),
+	customerStatus: varchar({ length: 32 }),
+	zelloUsername: varchar({ length: 255 }),
+	gpsPoints: int(),
+	gpsMaxGapS: int(),
+	/** none | sameday | final */
+	gpsPass: varchar({ length: 10 }).default('none').notNull(),
+	flags: varchar({ length: 600 }),
+	startedAt: datetime({ mode: 'string', fsp: 3 }),
+	startAgentId: varchar({ length: 64 }),
+	startEmployeeId: int(),
+	startPlatform: varchar({ length: 10 }),
+	startRole: varchar({ length: 16 }),
+	arrivedAt: datetime({ mode: 'string', fsp: 3 }),
+	arrivedSource: varchar({ length: 24 }),
+	arrivedPrecisionS: int(),
+	buttonArrivedAt: datetime({ mode: 'string', fsp: 3 }),
+	buttonGapS: int(),
+	baggageWaitingAt: datetime({ mode: 'string', fsp: 3 }),
+	deliveredAt: datetime({ mode: 'string', fsp: 3 }),
+	deliverAgentId: varchar({ length: 64 }),
+	/** Q7: quem fez o check-out (o Cliente da entrega é dele). */
+	deliverEmployeeId: int(),
+	queueMs: int(),
+	transitMs: int(),
+	ourMs: int(),
+	totalMs: int(),
+	queueStatus: varchar({ length: 32 }),
+	transitStatus: varchar({ length: 32 }),
+	ourStatus: varchar({ length: 32 }),
+	checkInAt: datetime({ mode: 'string', fsp: 3 }),
+	checkInAgentId: varchar({ length: 64 }),
+	/** Q7: quem fez o check-in (Cliente da recolha e T2). */
+	checkInEmployeeId: int(),
+	/** Quem tirou o carro do terminal (no terminal, até à 1.ª garagem). */
+	driverEmployeeId: int(),
+	terminalExitAt: datetime({ mode: 'string', fsp: 3 }),
+	terminalExitSource: varchar({ length: 24 }),
+	terminalMs: int(),
+	terminalStatus: varchar({ length: 32 }),
+	firstGarage: varchar({ length: 80 }),
+	firstGarageRole: varchar({ length: 12 }),
+	firstGarageAt: datetime({ mode: 'string', fsp: 3 }),
+	toFirstGarageMs: int(),
+	p2ExitAt: datetime({ mode: 'string', fsp: 3 }),
+	p2Ms: int(),
+	p2Status: varchar({ length: 32 }),
+	/** Q7: quem tirou o carro do P2. */
+	p2EmployeeId: int(),
+	parkedGarage: varchar({ length: 80 }),
+	parkedAt: datetime({ mode: 'string', fsp: 3 }),
+	toParkedMs: int(),
+	/** arrumado | por_arrumar | sem_garagem | cancelado */
+	parkedStatus: varchar({ length: 16 }),
+	/** Q7: quem o arrumou no parque certo. */
+	parkedEmployeeId: int(),
+	spotType: varchar({ length: 12 }),
+	t2DriverArrivedAt: datetime({ mode: 'string', fsp: 3 }),
+	t2LateMs: int(),
+	t2Status: varchar({ length: 32 }),
+	calcVersion: int().notNull(),
+	/** Impressão digital das zonas, papéis das garagens e janela das chamadas. */
+	paramsHash: char({ length: 16 }).notNull(),
+	computedAt: datetime({ mode: 'string' }).notNull(),
+	voidedAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_service_times_cycle").on(table.kind, table.bookingId, table.anchorHistoryId),
+	index("idx_service_times_day_city").on(table.kind, table.opDay, table.cityKey),
+	index("idx_service_times_driver_day").on(table.startEmployeeId, table.opDay),
+	index("idx_service_times_deliver_day").on(table.deliverEmployeeId, table.opDay),
+	index("idx_service_times_pickup_driver_day").on(table.driverEmployeeId, table.opDay),
+	index("idx_service_times_checkin_day").on(table.checkInEmployeeId, table.opDay),
+	index("idx_service_times_p2_day").on(table.p2EmployeeId, table.opDay),
+	index("idx_service_times_parked_day").on(table.parkedEmployeeId, table.opDay),
+	index("idx_service_times_anchor").on(table.anchorAt),
+]);
+
 // 0595 (lote 41 + Jorge, 8 out 2026): o que a IA decidiu ao separar emails das
 // caixas partilhadas e conversas novas do WhatsApp pelas caixas — uma linha por
 // mensagem/conversa (sourceRef UNIQUE: nunca se classifica duas vezes), com a

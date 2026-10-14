@@ -188,6 +188,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0665", () => import("./migration_0665").then((m) => step(m.MIGRATION_0665_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0665))],
   ["0670", () => import("./migration_0670").then((m) => step(m.MIGRATION_0670_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0670))],
   ["0675", () => import("./migration_0675").then((m) => step(m.MIGRATION_0675_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0675))],
+  // Plano 62 (P6): service_times — tempos de entrega e de recolha por ciclo.
+  ["0685", () => import("./migration_0685").then((m) => step(m.MIGRATION_0685_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0685))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
