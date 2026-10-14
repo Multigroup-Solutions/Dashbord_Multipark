@@ -46,8 +46,23 @@ export interface FaqDeps {
   insert(rows: readonly NewFaq[]): Promise<number[]>;
   saveRun(r: FaqRunResult): Promise<void>;
   log(userId: number | null, details: string): Promise<void>;
+  /**
+   * Uma corrida de cada vez (semanal e "Gerar agora", em qualquer instância):
+   * devolve a chave do cadeado ou null se outra corrida o tem.
+   */
+  acquireLock(): Promise<string | null>;
+  releaseLock(token: string): Promise<void>;
+  /** "Gerar agora": limite de pedidos (FAQ_MANUAL_PER_HOUR / FAQ_MANUAL_PER_DAY, para toda a gente). */
+  manualRateOk(): Promise<boolean>;
   now(): Date;
 }
+
+/** "Gerar agora": no máximo 3 por hora e 8 por dia (cada corrida são até 3 pedidos à IA). */
+export const FAQ_MANUAL_PER_HOUR = 3;
+export const FAQ_MANUAL_PER_DAY = 8;
+/** O cadeado expira sozinho passado este tempo (uma corrida dura menos de 60 s). */
+const FAQ_LOCK_SECONDS = 150;
+const FAQ_LOCK_KEY = "faqRunLock";
 
 async function db() {
   const { getDb } = await import("./db");
@@ -144,6 +159,29 @@ export const realFaqDeps: FaqDeps = {
       await logActivity({ userId: userId ?? 0, action: "create", entity: "faq", entityId: null, details: details.slice(0, 300) } as any);
     } catch { /* auditoria nunca parte a corrida */ }
   },
+  async acquireLock() {
+    const d = await db();
+    const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    await d.execute(sql`INSERT IGNORE INTO kb_sync_state (stateKey, value) VALUES (${FAQ_LOCK_KEY}, NULL)`);
+    const res: any = await d.execute(sql`UPDATE kb_sync_state SET value = ${token}, updatedAt = NOW()
+      WHERE stateKey = ${FAQ_LOCK_KEY} AND (value IS NULL OR value = '' OR updatedAt < NOW() - INTERVAL ${FAQ_LOCK_SECONDS} SECOND)`);
+    const n = Number((Array.isArray(res) ? res[0] : res)?.affectedRows ?? 0);
+    return n === 1 ? token : null;
+  },
+  async releaseLock(token) {
+    try {
+      const d = await db();
+      await d.execute(sql`UPDATE kb_sync_state SET value = NULL WHERE stateKey = ${FAQ_LOCK_KEY} AND value = ${token}`);
+    } catch { /* expira sozinho */ }
+  },
+  async manualRateOk() {
+    try {
+      const { checkRateLimit } = await import("./_core/ai/rateLimit");
+      return (await checkRateLimit("kb_faq_now:all", { perHour: FAQ_MANUAL_PER_HOUR, perDay: FAQ_MANUAL_PER_DAY })).allowed;
+    } catch {
+      return false;
+    }
+  },
   now: () => new Date(),
 };
 
@@ -155,13 +193,29 @@ export async function runKbFaqGeneration(opts: { trigger: "weekly" | "manual"; u
   const now = deps.now();
   const out: FaqRunResult = { ok: true, skipped: null, docs: [], created: [], errors: [], ranAt: now.toISOString(), trigger: opts.trigger };
   const userId = opts.userId ?? null;
+  if (opts.trigger === "weekly" && !(await deps.weeklyOn().catch(() => false))) return { ...out, skipped: "desligado (Definições → Automações: Formação: FAQs novas da base de conhecimento)" };
+  if (!(await deps.aiAvailable().catch(() => false))) {
+    const r = { ...out, skipped: "IA desligada (Definições → Automações: IA: FAQs a partir da base de conhecimento)" };
+    await deps.saveRun(r).catch(() => undefined);
+    return r;
+  }
+  // Uma corrida de cada vez: sem isto, a semanal e um "Gerar agora" (ou dois
+  // cliques) liam as mesmas FAQs e gravavam as mesmas perguntas duas vezes.
+  const lock = await deps.acquireLock().catch(() => null);
+  // Semanal: "locked" faz o agendador tentar outra vez no tick seguinte.
+  if (!lock) return { ...out, skipped: opts.trigger === "weekly" ? "locked" : "já há uma geração a correr (a semanal ou outro «Gerar agora») — tenta daqui a um minuto" };
   try {
-    if (opts.trigger === "weekly" && !(await deps.weeklyOn())) return { ...out, skipped: "desligado (Definições → Automações: Formação: FAQs novas da base de conhecimento)" };
-    if (!(await deps.aiAvailable())) {
-      const r = { ...out, skipped: "IA desligada (Definições → Automações: IA: FAQs a partir da base de conhecimento)" };
-      await deps.saveRun(r).catch(() => undefined);
-      return r;
+    if (opts.trigger === "manual" && !(await deps.manualRateOk())) {
+      return { ...out, skipped: `limite do «Gerar agora» (${FAQ_MANUAL_PER_HOUR} por hora e ${FAQ_MANUAL_PER_DAY} por dia) — tenta mais tarde` };
     }
+    return await generateLocked(opts, deps, out, now, userId);
+  } finally {
+    await deps.releaseLock(lock).catch(() => undefined);
+  }
+}
+
+async function generateLocked(opts: { trigger: "weekly" | "manual"; deadlineAt?: number }, deps: FaqDeps, out: FaqRunResult, now: Date, userId: number | null): Promise<FaqRunResult> {
+  try {
     const docs = pickFaqDocs(await deps.loadDocs(), now, FAQ_WEEKLY_DOCS);
     out.docs = docs.map((d) => ({ id: d.id, title: d.title }));
     if (!docs.length) {

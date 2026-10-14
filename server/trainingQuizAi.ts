@@ -16,7 +16,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { isTrainingArea, sameSubarea, TRAINING_AREA_LABELS, effectiveArea, searchCatalog, type TrainingAreaId } from "../shared/trainingAreas";
 import type { KbViewer } from "../shared/knowledge";
-import { LIVE_QUIZ_MIN_VALID, pickExcerpts, questionKeyOf, validateLiveQuestions, type Excerpt, type LiveQuestion } from "./trainingAiRules";
+import { LIVE_QUIZ_MIN_VALID, isPublicKbVisibility, liveQuestionRestricted, pickExcerpts, questionKeyOf, validateLiveQuestions, type Excerpt, type LiveQuestion } from "./trainingAiRules";
 import { chunkManual } from "./trainingTutorRules";
 import { getDb } from "./db";
 
@@ -29,7 +29,8 @@ export interface QuizTopic {
 }
 
 export interface LiveQuizResult {
-  questions: Array<LiveQuestion & { sourceKbDocId: number | null; sourceManualId: number | null; sourceTitle: string | null }>;
+  /** `restricted`: pode ter saído de um documento que nem toda a gente vê (para quem gere e "Guardar nas fixas"). */
+  questions: Array<LiveQuestion & { sourceKbDocId: number | null; sourceManualId: number | null; sourceTitle: string | null; restricted: boolean }>;
   topicLabel: string;
 }
 
@@ -98,6 +99,19 @@ async function manualExcerpts(topic: QuizTopic, query: string): Promise<Excerpt[
   })));
 }
 
+/** Documentos da base de conhecimento que TODA a gente pode ver (id → sim/não). Falha → mapa vazio (= restritos). */
+export async function kbDocsPublic(ids: readonly number[]): Promise<Map<number, boolean>> {
+  const out = new Map<number, boolean>();
+  const clean = Array.from(new Set(ids.filter((x) => Number.isInteger(x) && x > 0)));
+  if (!clean.length) return out;
+  try {
+    const d = await db();
+    const rows = rowsOf(await d.execute(sql`SELECT d.id, d.visibilityRoles, d.visibilityCities FROM kb_documents d WHERE d.id IN (${sql.join(clean.map((x) => sql`${x}`), sql`, `)})`));
+    for (const r of rows) out.set(Number(r.id), isPublicKbVisibility(r.visibilityRoles, r.visibilityCities));
+  } catch { /* sem resposta: ficam como restritos */ }
+  return out;
+}
+
 /** Trechos da base de conhecimento visíveis para quem joga. Com tema: os mais parecidos; sem tema: ao acaso. */
 async function kbExcerpts(query: string | null, viewer: KbViewer): Promise<Excerpt[]> {
   if (query) {
@@ -157,10 +171,13 @@ export async function generateLiveQuiz(input: {
   if (!excerpts.length) return { result: null, reason: hasTopic(input.topic) ? `Não encontrei conteúdo sobre «${label}» na base de conhecimento.` : "A base de conhecimento ainda não tem conteúdo para perguntas." };
 
   const { redactPii } = await import("./_core/ai/pii");
+  // Que trechos vêm de documentos restritos (papel/cidade)? Os manuais são de toda a gente.
+  const pub = await kbDocsPublic(excerpts.map((e) => e.kbDocId ?? 0));
   const tagged = excerpts.map((e, i) => {
     const red = redactPii(e.text.slice(0, 2500));
-    return { tag: `S${i + 1}`, e, red };
+    return { tag: `S${i + 1}`, e, red, isPublic: e.kbDocId ? pub.get(e.kbDocId) === true : true };
   });
+  const publicByTag = new Map(tagged.map((t) => [t.tag, t.isPublic]));
   const recent = await recentAiQuestions(input.employeeId);
   const { runAi } = await import("./_core/ai/run");
   const { LIVE_QUIZ_SYSTEM, liveQuizInput, liveQuizResponseSchema } = await import("./_core/ai/prompts/trainingAi");
@@ -170,7 +187,7 @@ export async function generateLiveQuiz(input: {
     const r = await runAi({
       feature: "quiz_live",
       system: LIVE_QUIZ_SYSTEM,
-      input: liveQuizInput({ topic: label, excerpts: tagged.map((t) => ({ tag: t.tag, title: t.e.title, section: t.e.section, text: t.red.text })), n: input.n, recent, seed }),
+      input: liveQuizInput({ topic: redactPii(label).text, excerpts: tagged.map((t) => ({ tag: t.tag, title: t.e.title, section: t.e.section, text: t.red.text })), n: input.n, recent, seed }),
       schema: liveQuizResponseSchema,
       maxTokens: Math.min(6000, 700 + input.n * 380),
       temperature: 0.9,
@@ -209,44 +226,44 @@ export async function generateLiveQuiz(input: {
       topicLabel: label,
       questions: valid.map((q) => {
         const src = q.sourceTag ? byTag.get(q.sourceTag) : undefined;
-        return { ...q, sourceKbDocId: src?.kbDocId ?? null, sourceManualId: src?.manualId ?? null, sourceTitle: src ? src.title.slice(0, 300) : null };
+        return {
+          ...q, sourceKbDocId: src?.kbDocId ?? null, sourceManualId: src?.manualId ?? null, sourceTitle: src ? src.title.slice(0, 300) : null,
+          restricted: liveQuestionRestricted(q.sourceTag, publicByTag),
+        };
       }),
     },
   };
 }
 
 /**
- * Grava a tentativa e as perguntas (transação: ou fica tudo, ou nada).
- * Devolve o id da tentativa e os ids das perguntas, pela ordem.
+ * Grava as perguntas na tentativa JÁ RESERVADA (trainingAttempts reserva-a
+ * antes de chamar a IA, para o limite diário contar logo) — transação: ou
+ * ficam todas e a tentativa passa a apontar para elas, ou nada.
+ * Devolve os ids das perguntas, pela ordem.
  */
-export async function saveLiveQuizSession(input: {
+export async function saveLiveQuizQuestions(input: {
+  sessionId: number;
   employeeId: number;
-  categoryId: number | null;
-  startedAt: string;
   result: LiveQuizResult;
-}): Promise<{ sessionId: number; questionIds: number[] }> {
+}): Promise<{ questionIds: number[] }> {
   const d = await db();
   const { trainingAttemptSessions, trainingQuizAiQuestions } = await import("../drizzle/schema");
   const insertId = (r: any): number => Number(r?.[0]?.insertId ?? r?.insertId ?? 0);
   return d.transaction(async (tx) => {
-    const s = await tx.insert(trainingAttemptSessions).values({
-      employeeId: input.employeeId, kind: "quiz", categoryId: input.categoryId, questionIds: "[]", startedAt: input.startedAt, deadlineAt: null,
-      source: "ai", topic: input.result.topicLabel.slice(0, 160),
-    });
-    const sessionId = insertId(s);
-    if (!sessionId) throw new Error("Tentativa não gravada");
     const ids: number[] = [];
     let ord = 0;
     for (const q of input.result.questions) {
       const r = await tx.insert(trainingQuizAiQuestions).values({
-        sessionId, employeeId: input.employeeId, ord: ord++, question: q.question, optionA: q.optionA, optionB: q.optionB, optionC: q.optionC, optionD: q.optionD,
+        sessionId: input.sessionId, employeeId: input.employeeId, ord: ord++, question: q.question, optionA: q.optionA, optionB: q.optionB, optionC: q.optionC, optionD: q.optionD,
         correctOption: q.correctOption, explanation: q.explanation, difficulty: q.difficulty, points: 10, questionKey: questionKeyOf(q.question) || null,
-        sourceKbDocId: q.sourceKbDocId, sourceManualId: q.sourceManualId, sourceTitle: q.sourceTitle,
+        sourceKbDocId: q.sourceKbDocId, sourceManualId: q.sourceManualId, sourceTitle: q.sourceTitle, restricted: q.restricted ? 1 : 0,
       });
       ids.push(insertId(r));
     }
-    if (ids.some((x) => !x)) throw new Error("Perguntas não gravadas");
-    await tx.update(trainingAttemptSessions).set({ questionIds: JSON.stringify(ids) }).where(eq(trainingAttemptSessions.id, sessionId));
-    return { sessionId, questionIds: ids };
+    if (!ids.length || ids.some((x) => !x)) throw new Error("Perguntas não gravadas");
+    await tx.update(trainingAttemptSessions)
+      .set({ questionIds: JSON.stringify(ids), source: "ai", topic: input.result.topicLabel.slice(0, 160) })
+      .where(and(eq(trainingAttemptSessions.id, input.sessionId), eq(trainingAttemptSessions.employeeId, input.employeeId)));
+    return { questionIds: ids };
   });
 }

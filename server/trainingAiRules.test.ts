@@ -11,8 +11,8 @@ import {
   effectiveArea, guessTrainingArea, searchCatalog, searchTerms, subareaOptions, wordsMatch,
 } from "../shared/trainingAreas";
 import {
-  FAQ_WEEKLY_MAX, cleanAiText, isDuplicateFaq, parseStoredAnswers, pickExcerpts, pickFaqDocs, questionKeyOf, selectNewFaqs, shuffleOptions,
-  toPlayerQuestion, validateLiveQuestions, type FaqDocCandidate,
+  FAQ_WEEKLY_MAX, aiQuestionAccess, cleanAiText, isDuplicateFaq, isPublicKbVisibility, liveQuestionRestricted, optionLooksMarked, parseStoredAnswers,
+  pickExcerpts, pickFaqDocs, questionKeyOf, reservationWithinLimit, selectNewFaqs, shuffleOptions, toPlayerQuestion, validateLiveQuestions, type FaqDocCandidate,
 } from "./trainingAiRules";
 
 /** Gerador determinista (LCG) para os testes do acaso. */
@@ -187,5 +187,54 @@ describe("quiz da IA — perguntas e o que vai para o browser", () => {
     expect(parseStoredAnswers('[{"questionId":1,"answer":"a"},{"questionId":"x","answer":"B"},{"questionId":2,"answer":"E"}]')).toEqual([{ questionId: 1, answer: "A" }]);
     expect(parseStoredAnswers("não é json")).toEqual([]);
     expect(parseStoredAnswers(null)).toEqual([]);
+  });
+});
+
+describe("auditoria (14 out 2026) — documentos restritos, reservas e opções marcadas", () => {
+  it("documento de toda a gente: a mesma regra do SQL (NULL, '' ou '[]' nos papéis e nas cidades)", () => {
+    expect(isPublicKbVisibility(null, null)).toBe(true);
+    expect(isPublicKbVisibility("", "[]")).toBe(true);
+    expect(isPublicKbVisibility([], " [] ")).toBe(true);
+    expect(isPublicKbVisibility('["admin"]', null)).toBe(false);
+    expect(isPublicKbVisibility(null, '["Porto"]')).toBe(false);
+    // texto estranho (não é lista vazia) → restrito, como no SQL
+    expect(isPublicKbVisibility("lixo", null)).toBe(false);
+    expect(isPublicKbVisibility(["xpto"], null)).toBe(false);
+  });
+
+  it("pergunta restrita: com fonte conta o trecho; sem fonte, o pior caso do jogo", () => {
+    const pub = new Map([["S1", true], ["S2", false]]);
+    expect(liveQuestionRestricted("S1", pub)).toBe(false);
+    expect(liveQuestionRestricted("S2", pub)).toBe(true);
+    expect(liveQuestionRestricted(null, pub)).toBe(true);
+    expect(liveQuestionRestricted("S9", pub)).toBe(true);
+    expect(liveQuestionRestricted(null, new Map([["S1", true]]))).toBe(false);
+  });
+
+  it("quem gere vê: pública sim; restrita só com o documento que ela própria vê; sem fonte e restrita, nunca", () => {
+    expect(aiQuestionAccess({ restricted: 0, sourceKbDocId: null }, null)).toBe("public");
+    expect(aiQuestionAccess({ restricted: 1, sourceKbDocId: null }, null)).toBe("hidden");
+    expect(aiQuestionAccess({ restricted: 0, sourceKbDocId: 4 }, { isPublic: true, viewerCanSee: true })).toBe("public");
+    // o documento passou a restrito depois do jogo → conta o estado de agora
+    expect(aiQuestionAccess({ restricted: 0, sourceKbDocId: 4 }, { isPublic: false, viewerCanSee: true })).toBe("restricted_visible");
+    expect(aiQuestionAccess({ restricted: 1, sourceKbDocId: 4 }, { isPublic: false, viewerCanSee: false })).toBe("hidden");
+    expect(aiQuestionAccess({ restricted: 1, sourceKbDocId: 4 }, null)).toBe("hidden");
+  });
+
+  it("reserva do quiz: só as primeiras do dia de Lisboa (por id) valem", () => {
+    const now = new Date("2026-10-14T10:00:00Z");
+    const rows = [1, 2, 3, 4, 7, 8].map((id) => ({ id, startedAt: "2026-10-14 09:00:00" }));
+    expect(reservationWithinLimit(rows, 7, now, 5)).toBe(true);
+    expect(reservationWithinLimit(rows, 8, now, 5)).toBe(false);
+    // as de ontem (Lisboa) não contam: 23:30 UTC de 13 out = 00:30 de 14 em Lisboa → conta; 22:30 UTC → ontem
+    const edge = [{ id: 1, startedAt: "2026-10-13 22:30:00" }, { id: 2, startedAt: "2026-10-13 23:30:00" }];
+    expect(reservationWithinLimit(edge, 2, now, 1)).toBe(true);
+  });
+
+  it("opções «marcadas» como a certa", () => {
+    for (const t of ["No cofre (correta)", "✓ No cofre", "No cofre ✔", "*No cofre", "No cofre [certa]", "No cofre (resposta certa)"]) expect(optionLooksMarked(t), t).toBe(true);
+    for (const t of ["No cofre", "A resposta certa depende do turno", "Certamente no cofre", "5 * 2 minutos depois"]) expect(optionLooksMarked(t), t).toBe(false);
+    const raw = [{ question: "Onde ficam as chaves?", optionA: "No cofre ✓", optionB: "No carro", optionC: "Com o cliente", optionD: "No balcão", correctOption: "A" }];
+    expect(validateLiveQuestions(raw, { n: 5 })).toEqual([]);
   });
 });

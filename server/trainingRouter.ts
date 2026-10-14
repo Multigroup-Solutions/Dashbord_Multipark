@@ -407,13 +407,14 @@ export const trainingRouter = router({
   aiQuizQuestions: protectedProcedure.query(async ({ ctx }) => {
     requireAccess(ctx.user, "formacao", "manage");
     const { recentAiQuizQuestions } = await import("./trainingAttempts");
-    return recentAiQuizQuestions(40);
+    // Só as que esta pessoa pode ver (documentos restritos por papel/cidade ficam de fora).
+    return recentAiQuizQuestions(await kbViewerOf(ctx.user), 40);
   }),
-  /** Quem gere: guarda uma pergunta da IA na lista fixa, como rascunho. */
-  copyAiQuestionToBank: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+  /** Quem gere: guarda uma pergunta da IA na lista fixa, como rascunho (documento restrito → confirmar). */
+  copyAiQuestionToBank: protectedProcedure.input(z.object({ id: z.number().int().positive(), confirmRestricted: z.boolean().optional() })).mutation(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "manage");
     const { copyAiQuestionToBank } = await import("./trainingAttempts");
-    return copyAiQuestionToBank(input.id, ctx.user.id);
+    return copyAiQuestionToBank(input.id, ctx.user.id, await kbViewerOf(ctx.user), { confirmRestricted: input.confirmRestricted });
   }),
 
   // ─── Catálogo por área e procurar por tema (0660) ───────────────────────

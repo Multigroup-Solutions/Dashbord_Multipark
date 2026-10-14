@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./cityAccess", async (original) => ({ ...(await original<object>()), loadCityAccess: async () => ({ all: false, cityIds: [10], cityNames: ["Porto"], projectIds: [10], missingCostCenter: false }) }));
-const f = vi.hoisted(() => ({ startQuiz: vi.fn(), faqRun: vi.fn(), find: vi.fn(), catalog: vi.fn(), review: vi.fn() }));
+const f = vi.hoisted(() => ({ startQuiz: vi.fn(), faqRun: vi.fn(), find: vi.fn(), catalog: vi.fn(), review: vi.fn(), aiList: vi.fn(), copy: vi.fn() }));
 vi.mock("./db", async (original) => ({
   ...(await original<object>()),
   getUserPermissionOverrides: async () => ({}),
@@ -13,7 +13,7 @@ vi.mock("./db", async (original) => ({
   resolveProjectIds: async () => [10],
   logActivity: vi.fn(),
 }));
-vi.mock("./trainingAttempts", () => ({ startQuizAttempt: f.startQuiz, quizAttemptReview: f.review }));
+vi.mock("./trainingAttempts", () => ({ startQuizAttempt: f.startQuiz, quizAttemptReview: f.review, recentAiQuizQuestions: f.aiList, copyAiQuestionToBank: f.copy }));
 vi.mock("./trainingFaqAuto", () => ({ runKbFaqGeneration: f.faqRun, lastFaqRun: async () => null }));
 vi.mock("./trainingCatalog", () => ({ findTraining: f.find, loadCatalog: f.catalog }));
 
@@ -28,6 +28,8 @@ beforeEach(() => {
   f.find.mockResolvedValue({ q: "x", mode: "text", results: [], kb: [] });
   f.catalog.mockResolvedValue([]);
   f.review.mockResolvedValue({ review: [] });
+  f.aiList.mockResolvedValue([]);
+  f.copy.mockResolvedValue({ id: 1, restricted: false });
 });
 
 describe("rotas da formação com IA", () => {
@@ -69,5 +71,15 @@ describe("rotas da formação com IA", () => {
     await caller().training.catalog();
     expect(f.catalog).toHaveBeenCalledOnce();
     await expect(caller().training.findTraining({ q: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("perguntas da IA e «Guardar nas fixas»: levam a visibilidade de quem gere (documentos restritos) e a confirmação", async () => {
+    await caller("admin").training.aiQuizQuestions();
+    expect(f.aiList).toHaveBeenCalledWith(expect.objectContaining({ role: "admin" }), 40);
+    await caller("admin").training.copyAiQuestionToBank({ id: 5 });
+    expect(f.copy).toHaveBeenCalledWith(5, 123, expect.objectContaining({ role: "admin" }), { confirmRestricted: undefined });
+    await caller("admin").training.copyAiQuestionToBank({ id: 5, confirmRestricted: true });
+    expect(f.copy).toHaveBeenLastCalledWith(5, 123, expect.anything(), { confirmRestricted: true });
+    await expect(caller("extra").training.copyAiQuestionToBank({ id: 5 })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

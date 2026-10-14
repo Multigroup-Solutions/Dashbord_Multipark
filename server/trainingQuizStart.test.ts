@@ -13,6 +13,10 @@ import { quizQuestions, trainingAttemptSessions, trainingQuizAiQuestions } from 
 
 const h = vi.hoisted(() => ({
   tables: new Map<any, any[]>(),
+  /** Respostas por ordem para um select de uma tabela (simula outra instância a gravar entre dois selects). */
+  queue: new Map<any, any[][]>(),
+  execRows: [] as any[],
+  nextId: 77,
   inserts: [] as Array<{ table: any; values: any }>,
   updates: [] as Array<{ table: any; values: any }>,
   live: { available: vi.fn(), generate: vi.fn(), save: vi.fn() },
@@ -26,9 +30,10 @@ function chain(rows: any[]): any {
   return p;
 }
 const fakeDb = {
-  select: () => ({ from: (t: any) => chain(h.tables.get(t) ?? []) }),
-  insert: (t: any) => ({ values: (v: any) => { h.inserts.push({ table: t, values: v }); return Promise.resolve([{ insertId: 77 }]); } }),
-  update: (t: any) => ({ set: (v: any) => ({ where: () => { h.updates.push({ table: t, values: v }); return Promise.resolve([{ affectedRows: 1 }]); } }) }),
+  select: () => ({ from: (t: any) => chain(h.queue.get(t)?.length ? h.queue.get(t)!.shift()! : h.tables.get(t) ?? []) }),
+  insert: (t: any) => ({ values: (v: any) => { h.inserts.push({ table: t, values: v }); return Promise.resolve([{ insertId: h.nextId }]); } }),
+  update: (t: any) => ({ set: (v: any) => ({ where: () => { h.updates.push({ table: t, values: v }); const p: any = Promise.resolve([{ affectedRows: 1 }]); return p; } }) }),
+  execute: async () => [h.execRows],
 };
 
 vi.mock("./db", async (orig) => ({
@@ -41,10 +46,10 @@ vi.mock("./trainingPaths", () => ({ recordProgress: (...a: any[]) => h.recordPro
 vi.mock("./trainingQuizAi", () => ({
   liveQuizAvailable: (...a: any[]) => h.live.available(...a),
   generateLiveQuiz: (...a: any[]) => h.live.generate(...a),
-  saveLiveQuizSession: (...a: any[]) => h.live.save(...a),
+  saveLiveQuizQuestions: (...a: any[]) => h.live.save(...a),
 }));
 
-import { startQuizAttempt, submitAttempt } from "./trainingAttempts";
+import { copyAiQuestionToBank, quizAttemptReview, recentAiQuizQuestions, startQuizAttempt, submitAttempt } from "./trainingAttempts";
 
 const viewer = { role: "extra", allCities: false, cityNames: ["Lisboa"] };
 const BANK = Array.from({ length: 12 }, (_, i) => ({
@@ -57,29 +62,36 @@ const AI_QS = Array.from({ length: 10 }, (_, i) => ({
 
 beforeEach(() => {
   h.tables = new Map([[quizQuestions, BANK], [trainingAttemptSessions, []]]);
+  h.queue = new Map(); h.execRows = []; h.nextId = 77;
   h.inserts = []; h.updates = [];
   for (const f of Object.values(h.live)) f.mockReset();
   h.saveQuizAttempt.mockReset().mockResolvedValue({ id: 55 });
   h.recordProgress.mockReset().mockResolvedValue(undefined);
-  h.live.save.mockResolvedValue({ sessionId: 31, questionIds: AI_QS.map((_, i) => 500 + i) });
+  h.live.save.mockResolvedValue({ questionIds: AI_QS.map((_, i) => 500 + i) });
 });
 
 describe("começar um quiz", () => {
   it("com a IA: perguntas novas, gravadas no servidor — o browser não recebe a resposta certa", async () => {
     h.live.available.mockResolvedValue(true);
-    h.live.generate.mockResolvedValue({ result: { topicLabel: "Dashboard · Financeiro", questions: AI_QS }, reason: null });
+    h.live.generate.mockImplementation(async () => {
+      // quando a IA é chamada, a tentativa já está reservada
+      expect(h.inserts.filter((x) => x.table === trainingAttemptSessions)).toHaveLength(1);
+      return { result: { topicLabel: "Dashboard · Financeiro", questions: AI_QS }, reason: null };
+    });
     const r = await startQuizAttempt(7, { area: "dashboard", subarea: "Financeiro", viewer, userId: 3 });
     expect(r.source).toBe("ai");
-    expect(r.sessionId).toBe(31);
+    expect(r.sessionId).toBe(77);
     expect(r.topic).toBe("Dashboard · Financeiro");
     expect(r.questions.map((q) => q.id)).toEqual(AI_QS.map((_, i) => 500 + i));
     const json = JSON.stringify(r);
     expect(json).not.toContain("correctOption");
     expect(json).not.toContain("Porque o manual diz.");
     expect(h.live.generate).toHaveBeenCalledWith(expect.objectContaining({ topic: expect.objectContaining({ area: "dashboard", subarea: "Financeiro" }), viewer, employeeId: 7, n: 10 }));
-    expect(h.live.save).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 7, result: expect.objectContaining({ questions: AI_QS }) }));
-    // a lista fixa não foi usada
-    expect(h.inserts.filter((x) => x.table === trainingAttemptSessions)).toEqual([]);
+    expect(h.live.save).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 77, employeeId: 7, result: expect.objectContaining({ questions: AI_QS }) }));
+    // a tentativa foi reservada ANTES da IA (conta logo no limite do dia), sem perguntas ainda
+    const res = h.inserts.filter((x) => x.table === trainingAttemptSessions);
+    expect(res).toHaveLength(1);
+    expect(res[0].values).toMatchObject({ employeeId: 7, kind: "quiz", source: "ai", questionIds: "[]" });
   });
 
   it("a IA falha → perguntas fixas, com o aviso do porquê", async () => {
@@ -90,8 +102,11 @@ describe("começar um quiz", () => {
     expect(r.notice).toMatch(/lista fixa/);
     expect(r.questions).toHaveLength(10);
     expect(JSON.stringify(r)).not.toContain("correctOption");
-    const ins = h.inserts.find((x) => x.table === trainingAttemptSessions)!;
-    expect(ins.values).toMatchObject({ employeeId: 7, kind: "quiz", source: "bank" });
+    // a MESMA tentativa reservada passa a levar as fixas (não se cria outra)
+    expect(h.inserts.filter((x) => x.table === trainingAttemptSessions)).toHaveLength(1);
+    const upd = h.updates.find((x) => x.table === trainingAttemptSessions && x.values.source === "bank")!;
+    expect(JSON.parse(upd.values.questionIds)).toEqual(r.questions.map((q) => q.id));
+    expect(r.sessionId).toBe(77);
   });
 
   it("sem conteúdo para o tema → perguntas fixas e o motivo", async () => {
@@ -115,6 +130,32 @@ describe("começar um quiz", () => {
     h.live.available.mockResolvedValue(true);
     h.live.generate.mockResolvedValue({ result: null, reason: "A IA não fez perguntas suficientes desta vez." });
     await expect(startQuizAttempt(7, { viewer, userId: 3 })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("perguntas fixas") });
+    // a reserva fica anulada (não conta no limite do dia; nada se apaga)
+    expect(h.updates.find((x) => x.table === trainingAttemptSessions)?.values).toMatchObject({ source: "void" });
+  });
+
+  it("vários «Jogar» ao mesmo tempo: só as primeiras do dia valem — a reserva a mais é anulada e não chama a IA", async () => {
+    const now = new Date("2026-10-14T10:00:00Z");
+    const today = (id: number) => ({ id, startedAt: "2026-10-14 09:00:00" });
+    h.live.available.mockResolvedValue(true);
+    h.nextId = 80;
+    // 1.º select (antes de reservar): 4 do dia → pode. 2.º (depois de reservar): outra instância reservou a 79 entretanto.
+    h.queue.set(trainingAttemptSessions, [[1, 2, 3, 4].map(today), [1, 2, 3, 4, 79, 80].map(today)]);
+    await expect(startQuizAttempt(7, { viewer, userId: 3 }, now)).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(h.live.generate).not.toHaveBeenCalled();
+    expect(h.updates.find((x) => x.table === trainingAttemptSessions)?.values).toMatchObject({ source: "void" });
+  });
+
+  it("a reserva que ganhou a corrida segue para a IA", async () => {
+    const now = new Date("2026-10-14T10:00:00Z");
+    const today = (id: number) => ({ id, startedAt: "2026-10-14 09:00:00" });
+    h.live.available.mockResolvedValue(true);
+    h.live.generate.mockResolvedValue({ result: { topicLabel: "Tudo", questions: AI_QS }, reason: null });
+    h.nextId = 79;
+    h.queue.set(trainingAttemptSessions, [[1, 2, 3, 4].map(today), [1, 2, 3, 4, 79, 80].map(today)]);
+    const r = await startQuizAttempt(7, { viewer, userId: 3 }, now);
+    expect(r.source).toBe("ai");
+    expect(r.sessionId).toBe(79);
   });
 
   it("o limite de jogos por dia é verificado ANTES de chamar a IA", async () => {
@@ -123,6 +164,21 @@ describe("começar um quiz", () => {
     h.live.available.mockResolvedValue(true);
     await expect(startQuizAttempt(7, { viewer, userId: 3 }, now)).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
     expect(h.live.generate).not.toHaveBeenCalled();
+  });
+
+  it("IA desligada: como antes — sem perguntas fixas o erro é esse (antes do limite), e uma só gravação com as perguntas", async () => {
+    const now = new Date("2026-10-14T10:00:00Z");
+    h.live.available.mockResolvedValue(false);
+    h.tables.set(quizQuestions, []);
+    h.tables.set(trainingAttemptSessions, Array.from({ length: 5 }, () => ({ startedAt: "2026-10-14 08:00:00" })));
+    await expect(startQuizAttempt(7, { viewer, userId: 3 }, now)).rejects.toMatchObject({ code: "BAD_REQUEST", message: "Ainda não há perguntas publicadas." });
+    h.tables.set(quizQuestions, BANK);
+    h.tables.set(trainingAttemptSessions, []);
+    const r = await startQuizAttempt(7, { categoryId: null, viewer, userId: 3 }, now);
+    const ins = h.inserts.filter((x) => x.table === trainingAttemptSessions);
+    expect(ins).toHaveLength(1);
+    expect(JSON.parse(ins[0].values.questionIds)).toEqual(r.questions.map((q) => q.id));
+    expect(h.updates).toEqual([]);
   });
 
   it("a forma antiga (só a categoria) continua a funcionar", async () => {
@@ -159,5 +215,89 @@ describe("corrigir um quiz feito pela IA (no servidor)", () => {
   it("tentativa de outra pessoa → não encontrada", async () => {
     h.tables.set(trainingAttemptSessions, [session]);
     await expect(submitAttempt(8, 31, [{ questionId: 500, answer: "B" }])).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("perguntas de OUTRA tentativa não contam (ids que não foram servidos nesta)", async () => {
+    h.tables.set(trainingAttemptSessions, [session]);
+    await expect(submitAttempt(7, 31, [{ questionId: 900, answer: "B" }, { questionId: 500, answer: "B" }, { questionId: 501, answer: "B" }])).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(h.saveQuizAttempt).not.toHaveBeenCalled();
+  });
+
+  it("reserva ainda sem perguntas (a IA está a preparar) → não se corrige nada", async () => {
+    h.tables.set(trainingAttemptSessions, [{ ...session, questionIds: "[]" }]);
+    await expect(submitAttempt(7, 31, [])).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("a ser preparada") });
+    expect(h.saveQuizAttempt).not.toHaveBeenCalled();
+  });
+
+  it("reserva anulada → não encontrada (nem corrigir nem rever)", async () => {
+    h.tables.set(trainingAttemptSessions, [{ ...session, source: "void", submittedAt: "2026-10-14 10:00:00" }]);
+    await expect(submitAttempt(7, 31, [])).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(quizAttemptReview(7, 31)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("rever: só depois de submetida e corrigida (antes, a resposta certa não sai)", async () => {
+    h.tables.set(trainingAttemptSessions, [session]);
+    h.tables.set(trainingQuizAiQuestions, rows);
+    await expect(quizAttemptReview(7, 31)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    h.tables.set(trainingAttemptSessions, [{ ...session, submittedAt: "2026-10-14 10:05:00", resultId: 55, answersJson: JSON.stringify([{ questionId: 500, answer: "B" }]) }]);
+    const r = await quizAttemptReview(7, 31);
+    expect(r.review.map((x) => x.correctOption)).toEqual(["B", "B", "C"]);
+    expect(r.review[0]).toMatchObject({ yourAnswer: "B", correct: true });
+    await expect(quizAttemptReview(8, 31)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("perguntas da IA para quem gere — documentos restritos", () => {
+  const viewerTl = { role: "team_leader", allCities: false, cityNames: ["Lisboa"] };
+  const base = { sessionId: 31, question: "Q?", optionA: "a", optionB: "b", optionC: "c", optionD: "d", correctOption: "A", explanation: null, difficulty: "medium",
+    sourceTitle: "Doc", sourceManualId: null, createdAt: "2026-10-14 10:00:00", topic: "Tudo", answersJson: null, employeeId: 7 };
+
+  it("esconde as de documentos que quem vê não pode ver; marca as restritas que pode", async () => {
+    h.tables.set(trainingQuizAiQuestions, [
+      { ...base, id: 1, sourceKbDocId: null, restricted: 0 },          // manual / público
+      { ...base, id: 2, sourceKbDocId: 10, restricted: 0 },            // documento público
+      { ...base, id: 3, sourceKbDocId: 11, restricted: 1 },            // restrito que o TL vê
+      { ...base, id: 4, sourceKbDocId: 12, restricted: 1 },            // restrito só para admin
+      { ...base, id: 5, sourceKbDocId: null, restricted: 1 },          // sem fonte, jogo com material restrito
+    ]);
+    h.execRows = [
+      { id: 10, visibilityRoles: null, visibilityCities: "[]", canSee: 1 },
+      { id: 11, visibilityRoles: '["team_leader"]', visibilityCities: null, canSee: 1 },
+      { id: 12, visibilityRoles: '["admin"]', visibilityCities: null, canSee: 0 },
+    ];
+    const list = await recentAiQuizQuestions(viewerTl);
+    expect(list.map((q) => [q.id, q.restricted])).toEqual([[1, false], [2, false], [3, true]]);
+    expect(JSON.stringify(list)).not.toContain("answersJson");
+  });
+
+  it("«Guardar nas fixas» de uma restrita: pede confirmação; sem poder ver o documento, nem com confirmação", async () => {
+    h.tables.set(trainingQuizAiQuestions, [{ ...base, id: 3, sourceKbDocId: 11, restricted: 1 }]);
+    h.tables.set(quizQuestions, []);
+    h.execRows = [{ id: 11, visibilityRoles: '["team_leader"]', visibilityCities: null, canSee: 1 }];
+    // a ficha de quem jogou está no âmbito
+    const { employees } = await import("../drizzle/schema");
+    h.tables.set(employees, [{ id: 7 }]);
+    await expect(copyAiQuestionToBank(3, 1, viewerTl)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(h.inserts.filter((x) => x.table === quizQuestions)).toEqual([]);
+    const ok = await copyAiQuestionToBank(3, 1, viewerTl, { confirmRestricted: true });
+    expect(ok.restricted).toBe(true);
+    expect(h.inserts.find((x) => x.table === quizQuestions)?.values).toMatchObject({ published: 0, sourceKbDocId: 11 });
+
+    h.inserts = [];
+    h.execRows = [{ id: 11, visibilityRoles: '["admin"]', visibilityCities: null, canSee: 0 }];
+    await expect(copyAiQuestionToBank(3, 1, viewerTl, { confirmRestricted: true })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(h.inserts).toEqual([]);
+  });
+
+  it("«Guardar nas fixas» de uma pública: direto, como rascunho; repetida → aviso", async () => {
+    const { employees } = await import("../drizzle/schema");
+    h.tables.set(employees, [{ id: 7 }]);
+    h.tables.set(trainingQuizAiQuestions, [{ ...base, id: 2, sourceKbDocId: 10, restricted: 0 }]);
+    h.execRows = [{ id: 10, visibilityRoles: null, visibilityCities: null, canSee: 1 }];
+    h.tables.set(quizQuestions, []);
+    const r = await copyAiQuestionToBank(2, 1, viewerTl);
+    expect(r.restricted).toBe(false);
+    h.tables.set(quizQuestions, [{ id: 99 }]);
+    await expect(copyAiQuestionToBank(2, 1, viewerTl)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });

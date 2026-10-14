@@ -34,6 +34,9 @@ function deps(over: Partial<FaqDeps> = {}) {
     insert: vi.fn(async (rows: readonly any[]) => { inserted.push(...rows); return rows.map((_, i) => 100 + i); }),
     saveRun: vi.fn(async () => undefined),
     log: vi.fn(async () => undefined),
+    acquireLock: vi.fn(async () => "chave-1"),
+    releaseLock: vi.fn(async () => undefined),
+    manualRateOk: vi.fn(async () => true),
     now: () => now,
     ...over,
   };
@@ -123,5 +126,60 @@ describe("FAQs semanais da base de conhecimento", () => {
     const r = await runKbFaqGeneration({ trigger: "weekly" }, d);
     expect(r.ok).toBe(false);
     expect(r.errors[0]).toContain("Base de dados");
+  });
+
+  // ─── Auditoria (14 out 2026): uma corrida de cada vez e limite do "Gerar agora" ───
+
+  it("outra corrida com o cadeado: «Gerar agora» diz porquê e não chama a IA; a semanal pede para tentar outra vez", async () => {
+    const d = deps({ acquireLock: vi.fn(async () => null) });
+    const manual = await runKbFaqGeneration({ trigger: "manual", userId: 9 }, d);
+    expect(manual.skipped).toMatch(/já há uma geração a correr/);
+    const weekly = await runKbFaqGeneration({ trigger: "weekly" }, d);
+    expect(weekly.skipped).toBe("locked");
+    expect(d.loadDocs).not.toHaveBeenCalled();
+    expect(d.generate).not.toHaveBeenCalled();
+    expect(d.insert).not.toHaveBeenCalled();
+    expect(d.releaseLock).not.toHaveBeenCalled();
+  });
+
+  it("duas corridas ao mesmo tempo (semanal + «Gerar agora»): a segunda não grava as mesmas FAQs", async () => {
+    let held: string | null = null;
+    const inserted: any[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const shared = {
+      acquireLock: vi.fn(async () => { if (held) return null; held = "k"; return held; }),
+      releaseLock: vi.fn(async () => { held = null; }),
+      insert: vi.fn(async (rows: readonly any[]) => { inserted.push(...rows); return rows.map((_, i) => 100 + i); }),
+    };
+    const first = deps({ ...shared, generate: vi.fn(async (doc: { id: number }) => { await gate; return CANDIDATES[doc.id] ?? []; }) });
+    const second = deps(shared);
+    const p1 = runKbFaqGeneration({ trigger: "weekly" }, first);
+    await vi.waitFor(() => expect(held).toBe("k")); // a semanal já tem o cadeado e está à espera da IA
+    const r2 = await runKbFaqGeneration({ trigger: "manual", userId: 9 }, second);
+    release();
+    const r1 = await p1;
+    expect(r2.created).toEqual([]);
+    expect(r1.created).toHaveLength(3);
+    expect(new Set(inserted.map((x) => x.aiKey)).size).toBe(inserted.length);
+    expect(shared.releaseLock).toHaveBeenCalledOnce();
+    expect(held).toBeNull();
+  });
+
+  it("o cadeado é sempre libertado, mesmo com erro", async () => {
+    const d = deps({ loadDocs: vi.fn(async () => { throw new Error("BD"); }) });
+    await runKbFaqGeneration({ trigger: "weekly" }, d);
+    expect(d.releaseLock).toHaveBeenCalledWith("chave-1");
+  });
+
+  it("«Gerar agora» tem limite (por hora/dia); a semanal não usa esse limite", async () => {
+    const d = deps({ manualRateOk: vi.fn(async () => false) });
+    const r = await runKbFaqGeneration({ trigger: "manual", userId: 9 }, d);
+    expect(r.skipped).toMatch(/limite do «Gerar agora»/);
+    expect(d.generate).not.toHaveBeenCalled();
+    expect(d.releaseLock).toHaveBeenCalled();
+    const w = await runKbFaqGeneration({ trigger: "weekly" }, d);
+    expect(w.created.length).toBeGreaterThan(0);
+    expect(d.manualRateOk).toHaveBeenCalledTimes(1);
   });
 });

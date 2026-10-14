@@ -16,6 +16,12 @@
 //  - `training_quiz_ai_questions`: as perguntas que a IA fez para cada
 //    tentativa, com a resposta certa (nunca vai para o browser antes de
 //    responder) e o documento de origem. Só acréscimo; nunca se apaga.
+//    `restricted` = 1 quando pode ter saído de um documento restrito (papel ou
+//    cidade): quem gere só a vê se puder ver o documento (coluna à parte, em
+//    ALTER, para entrar também numa tabela criada antes desta revisão).
+//  - `training_attempt_sessions.source = 'void'`: reserva de um quiz da IA
+//    anulada (passou o limite do dia num clique duplo, ou não havia perguntas)
+//    — fica a linha, não conta no limite.
 //
 // Só acrescenta. ADD COLUMN / ADD INDEX / CREATE TABLE IF NOT EXISTS ignoram o que já existe.
 
@@ -56,6 +62,7 @@ export const MIGRATION_0660_STATEMENTS: string[] = [
     "KEY `idx_tqai_session` (`sessionId`, `ord`), " +
     "KEY `idx_tqai_employee` (`employeeId`, `createdAt`)" +
   ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  col("training_quiz_ai_questions", "restricted", "TINYINT NOT NULL DEFAULT 0"),
 ];
 
 /** ER_DUP_FIELDNAME (1060), ER_DUP_KEYNAME (1061), ER_TABLE_EXISTS_ERROR (1050). */

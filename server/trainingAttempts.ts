@@ -12,11 +12,12 @@ import {
 } from "./db";
 import { projectScope } from "./cityScope";
 import { gradeAssessment } from "./trainingAssessments";
+import type { KbViewer } from "../shared/knowledge";
 import {
   careerExamAttempts, careerExamQuestions, careerExams, employees, quizAttempts, quizQuestions, trainingAttemptSessions,
   trainingCertificates, trainingManuals, trainingPromotions, trainingQuizAiQuestions,
 } from "../drizzle/schema";
-import { parseStoredAnswers, toPlayerQuestion } from "./trainingAiRules";
+import { aiQuestionAccess, isPublicKbVisibility, parseStoredAnswers, reservationWithinLimit, toPlayerQuestion } from "./trainingAiRules";
 import {
   AttemptError, QUIZ_MAX_PER_DAY, QUIZ_QUESTIONS_PER_GAME, assertCanStartAttempt, attemptsLeftToday, certificateStatus,
   certificateValidUntil, lisbonDay, parseDbDate, pickQuestions, promotionPatch, rankBestScores, toDbDate, validateSubmission,
@@ -39,15 +40,20 @@ export const QUIZ_PASS_PCT = 70;
 
 // ─── Início de tentativa ───────────────────────────────────────────────────
 
+/** Reservas anuladas (quiz da IA, 0660) não contam no limite do dia. */
+const notVoid = sql`COALESCE(${trainingAttemptSessions.source}, '') <> 'void'`;
+
 /** Sessões iniciadas nas últimas 36h (chega para contar "hoje" em Lisboa). */
-async function recentStarts(employeeId: number, kind: "quiz" | "exam", examId: number | null, now: Date) {
+async function recentStartRows(employeeId: number, kind: "quiz" | "exam", examId: number | null, now: Date) {
   const d = await db();
   const since = toDbDate(new Date(now.getTime() - 36 * 3600_000));
-  const rows = await d.select({ startedAt: trainingAttemptSessions.startedAt }).from(trainingAttemptSessions)
+  return d.select({ id: trainingAttemptSessions.id, startedAt: trainingAttemptSessions.startedAt }).from(trainingAttemptSessions)
     .where(and(eq(trainingAttemptSessions.employeeId, employeeId), eq(trainingAttemptSessions.kind, kind),
       examId != null ? eq(trainingAttemptSessions.examId, examId) : undefined,
-      gte(trainingAttemptSessions.startedAt, since)));
-  return rows.map(r => r.startedAt);
+      gte(trainingAttemptSessions.startedAt, since), notVoid));
+}
+async function recentStarts(employeeId: number, kind: "quiz" | "exam", examId: number | null, now: Date) {
+  return (await recentStartRows(employeeId, kind, examId, now)).map(r => r.startedAt);
 }
 
 export async function startExamAttempt(employeeId: number, examId: number, now: Date = new Date()) {
@@ -89,19 +95,39 @@ export interface StartQuizOptions {
  * manuais (trainingQuizAi); se a IA falhar ou estiver desligada, usa a lista
  * fixa (Gerir perguntas) e diz porquê em `notice`. A resposta certa nunca
  * vai para o browser (toPlayerQuestion).
+ *
+ * Com a IA, a tentativa é RESERVADA antes do pedido (até 30 s): sem isso,
+ * vários "Jogar" ao mesmo tempo passavam todos o limite do dia e cada um
+ * pagava um pedido à IA. Com a IA desligada, fica tudo como antes.
  */
 export async function startQuizAttempt(employeeId: number, opts: StartQuizOptions | number | null = null, now: Date = new Date()) {
   const o: StartQuizOptions = typeof opts === "number" || opts == null ? { categoryId: opts ?? null } : opts;
   const categoryId = o.categoryId ?? null;
   const d = await db();
-  // O limite diário vem ANTES de chamar a IA (cada jogo é um pedido pago).
-  const starts = await recentStarts(employeeId, "quiz", null, now);
-  try { assertCanStartAttempt(starts, now, QUIZ_MAX_PER_DAY); } catch (e) { asTrpc(e); }
-  const attemptsLeft = attemptsLeftToday([...starts, now], now, QUIZ_MAX_PER_DAY);
+  const bankQuestions = async () => d.select().from(quizQuestions)
+    .where(and(eq(quizQuestions.published, 1), isNull(quizQuestions.archivedAt), categoryId ? eq(quizQuestions.categoryId, categoryId) : undefined));
+  const noQuestions = (notice: string | null) => new TRPCError({ code: "BAD_REQUEST", message: notice ? `${notice} E ainda não há perguntas fixas publicadas.` : "Ainda não há perguntas publicadas." });
 
-  let notice: string | null = null;
   const live = await import("./trainingQuizAi");
   if (o.viewer && await live.liveQuizAvailable()) {
+    // O limite diário vem ANTES de chamar a IA (cada jogo é um pedido pago).
+    const starts = await recentStarts(employeeId, "quiz", null, now);
+    try { assertCanStartAttempt(starts, now, QUIZ_MAX_PER_DAY); } catch (e) { asTrpc(e); }
+    const attemptsLeft = attemptsLeftToday([...starts, now], now, QUIZ_MAX_PER_DAY);
+    // 1) Reserva (conta logo no limite do dia).
+    const sessionId = insertId(await d.insert(trainingAttemptSessions).values({
+      employeeId, kind: "quiz", categoryId, questionIds: "[]", startedAt: toDbDate(now), deadlineAt: null, source: "ai",
+    }));
+    if (!sessionId) throw new Error("Tentativa não gravada");
+    const voidReservation = () => d.update(trainingAttemptSessions).set({ source: "void", submittedAt: toDbDate(now) })
+      .where(and(eq(trainingAttemptSessions.id, sessionId), isNull(trainingAttemptSessions.resultId))).catch(() => undefined);
+    // 2) Dois cliques ao mesmo tempo: só as primeiras do dia valem (por id).
+    if (!reservationWithinLimit(await recentStartRows(employeeId, "quiz", null, now), sessionId, now, QUIZ_MAX_PER_DAY)) {
+      await voidReservation();
+      throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `Já fizeste ${QUIZ_MAX_PER_DAY} tentativa(s) hoje. Volta a tentar amanhã.` });
+    }
+    // 3) A IA faz as perguntas; 4) se falhar, a mesma tentativa leva as fixas.
+    let notice: string | null = null;
     try {
       let categoryName: string | null = null;
       if (categoryId) {
@@ -114,9 +140,9 @@ export async function startQuizAttempt(employeeId: number, opts: StartQuizOption
         viewer: o.viewer, employeeId, userId: o.userId ?? 0, n: QUIZ_QUESTIONS_PER_GAME,
       });
       if (g.result) {
-        const saved = await live.saveLiveQuizSession({ employeeId, categoryId, startedAt: toDbDate(now), result: g.result });
+        const saved = await live.saveLiveQuizQuestions({ sessionId, employeeId, result: g.result });
         return {
-          sessionId: saved.sessionId, deadlineAt: null, timeLimitSeconds: null, attemptsLeft,
+          sessionId, deadlineAt: null, timeLimitSeconds: null, attemptsLeft,
           source: "ai" as const, topic: g.result.topicLabel, notice: null as string | null,
           questions: g.result.questions.map((q, i) => toPlayerQuestion({ ...q, id: saved.questionIds[i], points: 10 })),
         };
@@ -126,11 +152,25 @@ export async function startQuizAttempt(employeeId: number, opts: StartQuizOption
       console.warn("[Training] quiz da IA falhou — lista fixa:", String(err?.message ?? err).slice(0, 160));
       notice = "A IA não conseguiu preparar o quiz agora.";
     }
+    const qs = await bankQuestions();
+    if (!qs.length) { await voidReservation(); throw noQuestions(notice); }
+    const served = pickQuestions(qs, QUIZ_QUESTIONS_PER_GAME);
+    await d.update(trainingAttemptSessions).set({ source: "bank", topic: null, questionIds: JSON.stringify(served.map(q => q.id)) })
+      .where(eq(trainingAttemptSessions.id, sessionId));
+    return {
+      sessionId, deadlineAt: null, timeLimitSeconds: null, attemptsLeft,
+      source: "bank" as const, topic: null as string | null,
+      notice: notice ? `${notice} Hoje são perguntas da lista fixa.` : null,
+      questions: served.map(q => toPlayerQuestion(q)),
+    };
   }
 
-  const qs = await d.select().from(quizQuestions)
-    .where(and(eq(quizQuestions.published, 1), isNull(quizQuestions.archivedAt), categoryId ? eq(quizQuestions.categoryId, categoryId) : undefined));
-  if (!qs.length) throw new TRPCError({ code: "BAD_REQUEST", message: notice ? `${notice} E ainda não há perguntas fixas publicadas.` : "Ainda não há perguntas publicadas." });
+  // IA do quiz desligada: exatamente como antes (lista fixa; perguntas, depois o limite do dia).
+  const qs = await bankQuestions();
+  if (!qs.length) throw noQuestions(null);
+  const starts = await recentStarts(employeeId, "quiz", null, now);
+  try { assertCanStartAttempt(starts, now, QUIZ_MAX_PER_DAY); } catch (e) { asTrpc(e); }
+  const attemptsLeft = attemptsLeftToday([...starts, now], now, QUIZ_MAX_PER_DAY);
   const served = pickQuestions(qs, QUIZ_QUESTIONS_PER_GAME);
   const r = await d.insert(trainingAttemptSessions).values({
     employeeId, kind: "quiz", categoryId: categoryId ?? null, questionIds: JSON.stringify(served.map(q => q.id)), startedAt: toDbDate(now), deadlineAt: null,
@@ -138,8 +178,7 @@ export async function startQuizAttempt(employeeId: number, opts: StartQuizOption
   });
   return {
     sessionId: insertId(r), deadlineAt: null, timeLimitSeconds: null, attemptsLeft,
-    source: "bank" as const, topic: null as string | null,
-    notice: notice ? `${notice} Hoje são perguntas da lista fixa.` : null,
+    source: "bank" as const, topic: null as string | null, notice: null as string | null,
     questions: served.map(q => toPlayerQuestion(q)),
   };
 }
@@ -157,8 +196,10 @@ export interface SubmitResult {
 export async function submitAttempt(employeeId: number, sessionId: number, answers: { questionId: number; answer: "A" | "B" | "C" | "D" }[], now: Date = new Date()): Promise<SubmitResult> {
   const d = await db();
   const [s] = await d.select().from(trainingAttemptSessions).where(eq(trainingAttemptSessions.id, sessionId)).limit(1);
-  if (!s || s.employeeId !== employeeId) throw new TRPCError({ code: "NOT_FOUND", message: "Tentativa não encontrada." });
+  if (!s || s.employeeId !== employeeId || s.source === "void") throw new TRPCError({ code: "NOT_FOUND", message: "Tentativa não encontrada." });
   const servedIds: number[] = (() => { try { return (JSON.parse(s.questionIds) as unknown[]).map(Number).filter(Number.isFinite); } catch { return []; } })();
+  // Reserva do quiz da IA ainda sem perguntas (a IA está a prepará-las): nada para corrigir.
+  if (!servedIds.length && !s.submittedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta tentativa ainda está a ser preparada." });
   let mode: ReturnType<typeof validateSubmission> = "ok";
   try {
     mode = validateSubmission({ servedIds, answers, startedAt: s.startedAt, deadlineAt: s.deadlineAt, submittedAt: s.submittedAt, now });
@@ -301,7 +342,7 @@ export async function myQuizAttempts(employeeId: number, limit = 10) {
 export async function quizAttemptReview(employeeId: number, sessionId: number) {
   const d = await db();
   const [s] = await d.select().from(trainingAttemptSessions).where(eq(trainingAttemptSessions.id, sessionId)).limit(1);
-  if (!s || s.employeeId !== employeeId || s.kind !== "quiz" || !s.submittedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Tentativa não encontrada." });
+  if (!s || s.employeeId !== employeeId || s.kind !== "quiz" || !s.submittedAt || !s.resultId || s.source === "void") throw new TRPCError({ code: "NOT_FOUND", message: "Tentativa não encontrada." });
   const servedIds: number[] = (() => { try { return (JSON.parse(s.questionIds) as unknown[]).map(Number).filter(Number.isFinite); } catch { return []; } })();
   const rows = await servedQuestionRows(d, s, servedIds);
   const byId = new Map(rows.map(q => [q.id, q]));
@@ -317,33 +358,77 @@ export async function quizAttemptReview(employeeId: number, sessionId: number) {
   };
 }
 
-/** Quem gere a formação: as últimas perguntas feitas pela IA (para ver a qualidade). Sem nomes. */
-export async function recentAiQuizQuestions(limit = 40) {
+/**
+ * Documentos de origem das perguntas da IA: é de toda a gente? `viewer` pode
+ * vê-lo? (a mesma regra SQL da base de conhecimento; documentos apagados
+ * contam pela visibilidade que tinham).
+ */
+async function kbDocAccess(ids: readonly number[], viewer: KbViewer): Promise<Map<number, { isPublic: boolean; viewerCanSee: boolean }>> {
+  const out = new Map<number, { isPublic: boolean; viewerCanSee: boolean }>();
+  const clean = Array.from(new Set(ids.filter((x) => Number.isInteger(x) && x > 0)));
+  if (!clean.length) return out;
+  const d = await db();
+  const { kbVisibilitySql } = await import("./knowledge/store");
+  const res: any = await d.execute(sql`SELECT d.id, d.visibilityRoles, d.visibilityCities, (${kbVisibilitySql(viewer)}) AS canSee
+    FROM kb_documents d WHERE d.id IN (${sql.join(clean.map((x) => sql`${x}`), sql`, `)})`);
+  const list = Array.isArray(res) ? res[0] : res?.rows ?? res;
+  for (const r of Array.isArray(list) ? list : []) {
+    out.set(Number(r.id), { isPublic: isPublicKbVisibility(r.visibilityRoles, r.visibilityCities), viewerCanSee: Number(r.canSee) === 1 || r.canSee === true });
+  }
+  return out;
+}
+
+/**
+ * Quem gere a formação: as últimas perguntas feitas pela IA (para ver a
+ * qualidade). Sem nomes, só da sua cidade, só de tentativas já submetidas
+ * (a resposta certa de um jogo a decorrer não aparece a ninguém) e sem as
+ * que podem ter saído de documentos que esta pessoa não pode ver.
+ */
+export async function recentAiQuizQuestions(viewer: KbViewer, limit = 40) {
   const d = await db();
   const rows = await d.select({
     id: trainingQuizAiQuestions.id, sessionId: trainingQuizAiQuestions.sessionId, question: trainingQuizAiQuestions.question,
     optionA: trainingQuizAiQuestions.optionA, optionB: trainingQuizAiQuestions.optionB, optionC: trainingQuizAiQuestions.optionC, optionD: trainingQuizAiQuestions.optionD,
     correctOption: trainingQuizAiQuestions.correctOption, explanation: trainingQuizAiQuestions.explanation, difficulty: trainingQuizAiQuestions.difficulty,
     sourceTitle: trainingQuizAiQuestions.sourceTitle, sourceKbDocId: trainingQuizAiQuestions.sourceKbDocId, sourceManualId: trainingQuizAiQuestions.sourceManualId,
+    restricted: trainingQuizAiQuestions.restricted,
     createdAt: trainingQuizAiQuestions.createdAt, topic: trainingAttemptSessions.topic, answersJson: trainingAttemptSessions.answersJson,
   }).from(trainingQuizAiQuestions)
     .innerJoin(trainingAttemptSessions, eq(trainingAttemptSessions.id, trainingQuizAiQuestions.sessionId))
     .innerJoin(employees, eq(employees.id, trainingQuizAiQuestions.employeeId))
-    .where(projectScope(employees.projectId))
+    .where(and(projectScope(employees.projectId), sql`${trainingAttemptSessions.submittedAt} IS NOT NULL`, sql`${trainingAttemptSessions.resultId} IS NOT NULL`))
     .orderBy(desc(trainingQuizAiQuestions.id)).limit(Math.max(1, Math.min(100, limit)));
-  return rows.map(({ answersJson, ...r }) => {
+  const docs = await kbDocAccess(rows.map(r => r.sourceKbDocId ?? 0), viewer);
+  const out = [];
+  for (const { answersJson, restricted, ...r } of rows) {
+    const access = aiQuestionAccess({ restricted, sourceKbDocId: r.sourceKbDocId }, r.sourceKbDocId ? docs.get(r.sourceKbDocId) ?? null : null);
+    if (access === "hidden") continue;
     const a = parseStoredAnswers(answersJson).find(x => x.questionId === r.id);
-    return { ...r, answered: a ? (a.answer === r.correctOption ? "right" as const : "wrong" as const) : null };
-  });
+    out.push({ ...r, restricted: access === "restricted_visible", answered: a ? (a.answer === r.correctOption ? "right" as const : "wrong" as const) : null });
+  }
+  return out;
 }
 
-/** Copia uma pergunta da IA para a lista fixa, como RASCUNHO (quem gere revê e publica). */
-export async function copyAiQuestionToBank(id: number, userId: number) {
+/**
+ * Copia uma pergunta da IA para a lista fixa, como RASCUNHO (quem gere revê e
+ * publica). As fixas são para toda a gente: uma pergunta que pode ter saído de
+ * um documento restrito só passa com `confirmRestricted` (o ecrã avisa e pede
+ * confirmação) e só se quem copia puder ver esse documento.
+ */
+export async function copyAiQuestionToBank(id: number, userId: number, viewer: KbViewer, opts: { confirmRestricted?: boolean } = {}) {
   const d = await db();
   const [q] = await d.select().from(trainingQuizAiQuestions).where(eq(trainingQuizAiQuestions.id, id)).limit(1);
   if (!q) throw new TRPCError({ code: "NOT_FOUND", message: "Pergunta não encontrada." });
   const [emp] = await d.select({ id: employees.id }).from(employees).where(and(eq(employees.id, q.employeeId), projectScope(employees.projectId))).limit(1);
   if (!emp) throw new TRPCError({ code: "NOT_FOUND", message: "Pergunta não encontrada." });
+  const docs = await kbDocAccess(q.sourceKbDocId ? [q.sourceKbDocId] : [], viewer);
+  const access = aiQuestionAccess(q, q.sourceKbDocId ? docs.get(q.sourceKbDocId) ?? null : null);
+  if (access === "hidden") throw new TRPCError({ code: "NOT_FOUND", message: "Pergunta não encontrada." });
+  if (access === "restricted_visible" && !opts.confirmRestricted) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta pergunta saiu de um documento restrito (só alguns papéis ou cidades o veem). As perguntas fixas podem ser vistas por toda a gente — confirma para a guardar." });
+  }
+  const [dup] = await d.select({ id: quizQuestions.id }).from(quizQuestions).where(and(eq(quizQuestions.question, q.question), isNull(quizQuestions.archivedAt))).limit(1);
+  if (dup) throw new TRPCError({ code: "CONFLICT", message: "Esta pergunta já está nas perguntas fixas." });
   const correct = (["A", "B", "C", "D"] as const).includes(q.correctOption as any) ? (q.correctOption as "A" | "B" | "C" | "D") : "A";
   const difficulty = (["easy", "medium", "hard"] as const).includes(q.difficulty as any) ? (q.difficulty as "easy" | "medium" | "hard") : "medium";
   const r = await d.insert(quizQuestions).values({
@@ -351,8 +436,11 @@ export async function copyAiQuestionToBank(id: number, userId: number) {
     correctOption: correct, explanation: q.explanation ?? null, difficulty, points: 10, published: 0,
     sourceKbDocId: q.sourceKbDocId ?? null, sourceManualId: q.sourceManualId ?? null,
   });
-  await logActivity({ userId, action: "create", entity: "quiz_question", entityId: insertId(r), details: `Rascunho copiado de uma pergunta da IA: ${q.question.slice(0, 160)}` });
-  return { id: insertId(r) };
+  await logActivity({
+    userId, action: "create", entity: "quiz_question", entityId: insertId(r),
+    details: `Rascunho copiado de uma pergunta da IA${access === "restricted_visible" ? " (documento restrito — confirmado)" : ""}: ${q.question.slice(0, 160)}`,
+  });
+  return { id: insertId(r), restricted: access === "restricted_visible" };
 }
 
 // ─── Ranking ───────────────────────────────────────────────────────────────

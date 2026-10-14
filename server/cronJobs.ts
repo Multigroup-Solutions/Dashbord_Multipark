@@ -650,7 +650,8 @@ export async function kbFaqWeeklyCron(o: { deadlineAt: number }): Promise<CronJo
     return {
       httpStatus: 200,
       body: { ok: r.ok, ranAt: ranAt(), ...(r.skipped ? { skipped: r.skipped } : {}), docs: r.docs.length, created: r.created.length, ...(r.ok ? {} : { error: r.errors.join(" · ").slice(0, 300) || "falhou" }) },
-      done: true,
+      // Outra corrida (um "Gerar agora") tinha o cadeado: tenta no tick seguinte, não dá a semana por feita.
+      done: r.skipped !== "locked",
     };
   } catch (err) { return fail(err); }
 }

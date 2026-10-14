@@ -120,7 +120,8 @@ export interface FindDeps {
   aiAvailable(): Promise<boolean>;
   rateOk(userId: number): Promise<boolean>;
   aiPick(q: string, lines: string[], userId: number): Promise<Array<{ id: string; reason: string }>>;
-  kb(q: string, viewer: KbViewer): Promise<FindResult["kb"]>;
+  /** `embeddings`: pode usar o vetor da pergunta (um pedido de embeddings) — só dentro do limite de pedidos. */
+  kb(q: string, viewer: KbViewer, embeddings: boolean): Promise<FindResult["kb"]>;
 }
 
 export const realFindDeps: FindDeps = {
@@ -148,9 +149,10 @@ export const realFindDeps: FindDeps = {
     });
     return r.output.picks.map((p) => ({ id: p.id, reason: red.strip(p.reason) }));
   },
-  async kb(q, viewer) {
+  async kb(q, viewer, embeddings) {
     const { retrieveKnowledge } = await import("./knowledge/retrieve");
-    const r = await retrieveKnowledge({ question: q, viewer, topK: 6 });
+    // Fora do limite: só palavras-chave (sem pedido de embeddings).
+    const r = await retrieveKnowledge({ question: q, viewer, topK: 6, ...(embeddings ? {} : { embedQuery: null }) });
     const out: FindResult["kb"] = [];
     for (const h of r.hits) {
       if (out.some((x) => x.docId === h.docId)) continue;
@@ -169,13 +171,20 @@ export async function findTraining(input: { q: string; userId: number; viewer: K
   const q = String(input.q ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
   const empty: FindResult = { q, mode: "text", results: [], kb: [] };
   if (q.length < 2) return empty;
-  const [catalog, kb] = await Promise.all([deps.catalog(), deps.kb(q, input.viewer).catch(() => [] as FindResult["kb"])]);
+  // Um só pedido ao limitador por pesquisa (6/min, 60/dia): conta para a IA E para os embeddings da
+  // base de conhecimento — quem carrega muitas vezes fica com a pesquisa por palavras, sem custos.
+  const rateOk = q.length >= 3 ? await deps.rateOk(input.userId).catch(() => false) : false;
+  const [catalog, kb] = await Promise.all([deps.catalog(), deps.kb(q, input.viewer, rateOk).catch(() => [] as FindResult["kb"])]);
   const strip = ({ text: _t, ...rest }: CatalogItem & { text: string }): CatalogItem => rest;
-  const textHits = searchCatalog(q, catalog, 12);
+  // A categoria e o tipo também contam na pesquisa por palavras (o catálogo guarda-os noutros campos).
+  const textHits = searchCatalog(q, catalog.map((c) => ({
+    key: c.key, title: c.title, area: c.area, subarea: c.subarea, category: c.categoryName,
+    typeLabel: c.itemType === "video" ? "Vídeo" : MANUAL_TYPE_LABELS[c.manualType ?? "manual"] ?? "Manual", text: c.text, c,
+  })), 12).map((h) => ({ ...h, item: h.item.c }));
   const textResults = textHits.map((h) => ({ ...strip(h.item), reason: null as string | null }));
   if (catalog.length && q.length >= 3) {
     try {
-      if ((await deps.aiAvailable()) && (await deps.rateOk(input.userId))) {
+      if (rateOk && (await deps.aiAvailable())) {
         // Candidatos: os da pesquisa por palavras e, para o "sentido", o resto do catálogo (até 80).
         const seen = new Set(textHits.map((h) => h.item.key));
         const candidates = [...textHits.map((h) => h.item), ...catalog.filter((c) => !seen.has(c.key))].slice(0, 80);

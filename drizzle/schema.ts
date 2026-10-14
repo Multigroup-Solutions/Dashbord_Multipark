@@ -2693,7 +2693,8 @@ export const trainingAttemptSessions = mysqlTable("training_attempt_sessions", {
 	score: int(),
 	passed: tinyint(),
 	// 0660 — 'ai' = perguntas feitas pela IA para esta tentativa (training_quiz_ai_questions);
-	// NULL/'bank' = lista fixa. Tema pedido e respostas dadas (JSON, para rever).
+	// NULL/'bank' = lista fixa; 'void' = reserva anulada (não conta no limite do dia).
+	// Tema pedido e respostas dadas (JSON, para rever).
 	source: varchar({ length: 8 }),
 	topic: varchar({ length: 160 }),
 	answersJson: text(),
@@ -2720,6 +2721,9 @@ export const trainingQuizAiQuestions = mysqlTable("training_quiz_ai_questions", 
 	sourceKbDocId: int(),
 	sourceManualId: int(),
 	sourceTitle: varchar({ length: 300 }),
+	// 1 = pode ter saído de um documento restrito (papel/cidade): quem gere só a vê
+	// se puder ver o documento; "Guardar nas fixas" pede confirmação.
+	restricted: tinyint().default(0).notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [

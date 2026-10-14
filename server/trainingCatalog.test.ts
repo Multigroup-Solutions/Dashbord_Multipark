@@ -36,7 +36,7 @@ describe("procurar formação por tema", () => {
     expect(r.results[0]).toMatchObject({ id: 1, itemType: "manual", reason: "Explica como fechar a caixa no fim do turno." });
     expect(r.results[0]).not.toHaveProperty("text");
     expect(r.kb).toEqual([{ docId: 8, title: "Procedimento da caixa", section: null }]);
-    expect(d.kb).toHaveBeenCalledWith("como fecho o dia?", viewer);
+    expect(d.kb).toHaveBeenCalledWith("como fecho o dia?", viewer, true);
     // a IA só recebe linhas do catálogo (id | tipo | área | título | resumo)
     const lines = (d.aiPick as any).mock.calls[0][1] as string[];
     expect(lines).toContain(catalogLine(CATALOG[0]));
@@ -55,6 +55,9 @@ describe("procurar formação por tema", () => {
     const limited = deps({ rateOk: vi.fn(async () => false) });
     expect((await findTraining({ q: "entregar um carro", userId: 3, viewer }, limited)).mode).toBe("text");
     expect(limited.aiPick).not.toHaveBeenCalled();
+    // no limite, a base de conhecimento também não usa embeddings (sem custos a carregar muitas vezes)
+    expect(limited.kb).toHaveBeenCalledWith("entregar um carro", viewer, false);
+    expect(limited.rateOk).toHaveBeenCalledOnce();
   });
 
   it("a IA não inventa: ids fora do catálogo são ignorados; sem nenhum válido fica a pesquisa por palavras", async () => {
@@ -73,5 +76,15 @@ describe("procurar formação por tema", () => {
   it("resumos sem Markdown e sem ligações soltas", () => {
     expect(shortText("## Título\n**Negrito** e texto", 100)).toBe("Título Negrito e texto");
     expect(shortText("https://view.genially.com/abc")).toBe("");
+  });
+
+  it("por palavras também encontra pela categoria (o catálogo guarda-a em categoryName) e o resultado não leva campos internos", async () => {
+    const cat = [...CATALOG, item({ id: 4, title: "Boas práticas", categoryName: "Segurança no parque", text: "" })];
+    const r = await findTraining({ q: "segurança", userId: 3, viewer }, deps({ catalog: vi.fn(async () => cat), aiAvailable: vi.fn(async () => false) }));
+    expect(r.mode).toBe("text");
+    expect(r.results.map((x) => x.id)).toContain(4);
+    expect(r.results[0]).not.toHaveProperty("text");
+    expect(r.results[0]).not.toHaveProperty("c");
+    expect(r.results[0]).not.toHaveProperty("typeLabel");
   });
 });

@@ -12,6 +12,7 @@
 import { z } from "zod";
 import { kbPlainText } from "../shared/knowledge";
 import { matchKey, matchWords } from "../shared/textKey";
+import { lisbonDay, parseDbDate } from "./trainingRules";
 
 // ─── Comum ─────────────────────────────────────────────────────────────────
 
@@ -201,6 +202,8 @@ export interface LiveQuestion {
   difficulty: "easy" | "medium" | "hard";
   /** Trecho de onde saiu ("S1"…), se a IA disse e existe. */
   sourceTag: string | null;
+  /** Pode ter saído de um documento restrito (papel/cidade)? Preenchido por quem gera. */
+  restricted?: boolean;
 }
 
 const liveSchema = z.object({
@@ -246,6 +249,8 @@ export function validateLiveQuestions(raw: readonly unknown[], opts: { n: number
     const texts = [q.optionA, q.optionB, q.optionC, q.optionD].map((t) => cleanAiText(t, 300));
     if (texts.some((t) => !t)) continue;
     if (new Set(texts.map((t) => matchKey(t))).size !== 4) continue;
+    // Opção "marcada" como a certa (✓, "(correta)"…): a pergunta não serve.
+    if ([q.optionA, q.optionB, q.optionC, q.optionD].some(optionLooksMarked)) continue;
     const question = cleanAiText(q.question, 600);
     if (question.length < 8) continue;
     if (seen.some((p) => questionKeyOf(p) === questionKeyOf(question) || questionSimilarity(p, question) >= SAME_QUESTION_SIMILARITY)) continue;
@@ -298,6 +303,77 @@ export function pickExcerpts<T extends Excerpt>(list: readonly T[], opts: { maxC
 /** O que vai para o browser: a pergunta e as opções, NUNCA a resposta certa nem a explicação. PURA. */
 export function toPlayerQuestion(q: { id: number; question: string; optionA: string; optionB: string; optionC: string; optionD: string; points?: number | null; difficulty?: string | null }) {
   return { id: q.id, question: q.question, optionA: q.optionA, optionB: q.optionB, optionC: q.optionC, optionD: q.optionD, points: q.points ?? 10, difficulty: q.difficulty ?? "medium" };
+}
+
+/**
+ * A opção vem "marcada" como a certa? (um tema escrito pela pessoa pode pedir
+ * à IA "marca a certa" para subir no ranking — essas perguntas caem). PURA.
+ */
+export function optionLooksMarked(text: string | null | undefined): boolean {
+  const t = String(text ?? "");
+  if (/[✓✔✅☑]/u.test(t)) return true;
+  if (/^\s*\*/.test(t) || /\*\s*$/.test(t)) return true;
+  return /\((?:a\s+)?(?:correta|certa|verdadeira|resposta\s+certa)\)|\[(?:correta|certa)\]|(?:^|\s)(?:<-|←)\s*(?:correta|certa)/i.test(t);
+}
+
+// ─── Documentos restritos (papel/cidade) ────────────────────────────────────
+
+/**
+ * Visibilidade de um documento da base de conhecimento é "toda a gente"? A
+ * mesma regra do SQL (NULL, '' ou '[]' nos papéis E nas cidades). PURA.
+ */
+export function isPublicKbVisibility(rolesRaw: unknown, citiesRaw: unknown): boolean {
+  const empty = (raw: unknown): boolean => {
+    if (raw == null) return true;
+    if (Array.isArray(raw)) return raw.length === 0;
+    const s = String(raw).trim();
+    if (s === "" || s === "[]") return true;
+    try { const v = JSON.parse(s); return Array.isArray(v) && v.length === 0; } catch { return false; }
+  };
+  return empty(rolesRaw) && empty(citiesRaw);
+}
+
+/**
+ * Uma pergunta da IA pode ter saído de um documento restrito? Com a fonte
+ * (S1…) sabe-se de que trecho; sem fonte, conta o pior caso (algum trecho do
+ * jogo era restrito). `publicByTag`: trecho → é de toda a gente. PURA.
+ */
+export function liveQuestionRestricted(sourceTag: string | null | undefined, publicByTag: ReadonlyMap<string, boolean>): boolean {
+  if (sourceTag && publicByTag.has(sourceTag)) return !publicByTag.get(sourceTag);
+  for (const pub of publicByTag.values()) if (!pub) return true;
+  return false;
+}
+
+export type AiQuestionAccess = "public" | "restricted_visible" | "hidden";
+
+/**
+ * Quem gere a formação pode ver esta pergunta da IA? Pública → sim; restrita
+ * → só se a fonte for um documento conhecido que ESTA pessoa pode ver (sem
+ * fonte conhecida fica escondida). `doc`: o documento de origem agora (ou null). PURA.
+ */
+export function aiQuestionAccess(
+  q: { restricted?: number | boolean | null; sourceKbDocId?: number | null },
+  doc: { isPublic: boolean; viewerCanSee: boolean } | null,
+): AiQuestionAccess {
+  const flagged = !!q.restricted;
+  if (q.sourceKbDocId) {
+    if (!doc) return "hidden"; // documento que já não existe: não se sabe quem o podia ver
+    if (!flagged && doc.isPublic) return "public";
+    return doc.viewerCanSee ? "restricted_visible" : "hidden";
+  }
+  return flagged ? "hidden" : "public";
+}
+
+/**
+ * Reserva de uma tentativa (quiz da IA): a reserva só vale se for uma das
+ * primeiras `max` do dia de Lisboa (por id — dois cliques ao mesmo tempo não
+ * passam os dois do limite). `rows`: tentativas recentes não anuladas. PURA.
+ */
+export function reservationWithinLimit(rows: ReadonlyArray<{ id: number; startedAt: string | Date }>, ownId: number, now: Date, max: number): boolean {
+  if (!max || max <= 0) return true;
+  const today = lisbonDay(now);
+  const before = rows.filter((r) => r.id <= ownId && lisbonDay(parseDbDate(r.startedAt)) === today).length;
+  return before <= max;
 }
 
 /** Respostas guardadas na tentativa (JSON) → lista limpa. PURA. */
