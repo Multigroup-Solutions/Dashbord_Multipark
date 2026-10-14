@@ -22,12 +22,11 @@ import { getZelloGpsUsers, getZelloUserHistory, getZelloLocations } from "../zel
 import {
   createDailyDriverHistory,
   createGpsAlert,
-  getDefaultSpeedLimit,
 } from "../db";
 import { storagePut } from "../storage";
-import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, STOPPED_SPEED_KMH, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
+import { MAX_PLAUSIBLE_KMH, MIN_IMPLICIT_GAP_S, STOPPED_SPEED_KMH, asSpeedRule, gpsPointsFromGeoJson, splitByHolder, zelloAccuracyOk, zelloBattery, zelloSpeedKmh, zelloTimestamp } from "../zelloGps";
+import { SPEED_EXCESS_METRICS_VERSION, speedExcesses, speedThresholdOf, trustedMaxSpeed, type SpeedRule } from "../../shared/speedRules";
 import { addDays, lisbonDayOf, lisbonDayRangeUtc, zelloLatestDay } from "../../shared/lisbonDay";
-import { speedThresholdKmh } from "../../shared/gpsRules";
 
 /** Calculate distance between two GPS points using Haversine formula */
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -45,7 +44,7 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 }
 
 /** Process GeoJSON history data from Zello into driver metrics */
-function processGeoJsonHistory(data: any): {
+function processGeoJsonHistory(data: any, speedRule?: SpeedRule): {
   totalKm: number;
   hoursWorked: number;
   hoursStopped: number;
@@ -103,11 +102,11 @@ function processGeoJsonHistory(data: any): {
       const ts = zelloTimestamp(props);
       const accurate = zelloAccuracyOk(props);
 
-      // Filter GPS noise (>150 km/h is unrealistic for parking drivers) e pontos imprecisos
+      // Média: sem ruído (> 150 km/h) nem pontos imprecisos. A MÁXIMA vem no fim, sem picos
+      // falsos (shared/speedRules.ts — 14 out 2026: antes deitava fora tudo acima de 150).
       if (accurate && speed > 0 && speed <= MAX_PLAUSIBLE_KMH) {
         speedSum += speed;
         speedCount++;
-        if (speed > maxSpeed) maxSpeed = speed;
       }
       if (battery > 0) {
         batterySum += battery;
@@ -193,6 +192,9 @@ function processGeoJsonHistory(data: any): {
   // LineStrings (se algum dia voltarem) têm prioridade; senão usa os pontos
   if (totalKm === 0 && pointsKm > 0) totalKm = pointsKm;
 
+  // Máxima sem picos falsos (precisão, > 250 km/h, salto isolado) — a mesma regra dos excessos
+  maxSpeed = trustedMaxSpeed(gpsPointsFromGeoJson(data), { rule: speedRule }).maxSpeed;
+
   // Velocidades: se os reports não trazem speed, usa a implícita dos segmentos
   if (speedCount === 0 && implicitSpeeds.length > 0) {
     speedSum = implicitSpeeds.reduce((s, v) => s + v, 0);
@@ -227,25 +229,27 @@ export { processGeoJsonHistory };
  */
 // 3 = + GPS partido por quem tinha o PDA (Fase 3)
 // 4 = partes com minutos em movimento (0086) e dias de Lisboa nos intervalos do PDA
-export const DRIVER_METRICS_VERSION = 4;
+// 5 = (14 out 2026) velocidade máxima sem picos falsos e `speedViolations`/`violations`
+//     = EXCESSOS (shared/speedRules.ts), com o limite de Definições (120 km/h por
+//     omissão). Antes: PONTOS acima de um limite que sem `speed_limits` era 999.
+export const DRIVER_METRICS_VERSION = SPEED_EXCESS_METRICS_VERSION;
+/** A partir desta versão os excessos gravados são de confiança (o Desempenho e a Avaliação usam-nos). */
+export { SPEED_EXCESS_METRICS_VERSION };
 
-/** Excessos de velocidade num GeoJSON do Zello (já em km/h). */
-export function countSpeedViolations(data: any, threshold: number): number {
-  let n = 0;
-  for (const f of data?.features ?? []) {
-    if (!zelloAccuracyOk(f.properties)) continue;
-    const v = zelloSpeedKmh(f.properties);
-    if (v > threshold && v <= MAX_PLAUSIBLE_KMH) n++;
-  }
-  return n;
+/** Excessos de velocidade num GeoJSON do Zello (já em km/h) — excessos, não pontos (shared/speedRules.ts). */
+export function countSpeedViolations(data: any, rule: SpeedRule | number): number {
+  return speedExcesses(gpsPointsFromGeoJson(data), asSpeedRule(rule)).length;
 }
 
 /**
  * "Forçar re-divisão": volta a partir o GPS JÁ recolhido de um dia por quem
- * tinha cada PDA — para depois de corrigir check-ins de PDA. Só refaz as
- * partes (driver_day_shares) e o funcionário da linha; os km/velocidades da
- * linha não mudam (já estão em km/h — nada de ×3,6 outra vez). Retomável por
- * `afterId` (id da última linha feita) e com prazo.
+ * tinha cada PDA — para depois de corrigir check-ins de PDA. Refaz as partes
+ * (driver_day_shares) e o funcionário da linha; os km da linha não mudam (já
+ * estão em km/h — nada de ×3,6 outra vez). 14 out 2026: com o GeoJSON
+ * guardado, refaz também a máxima (sem picos) e os excessos da linha com o
+ * limite em vigor (metricsVersion 5) — é assim que um dia antigo passa a
+ * contar excessos na Avaliação. NÃO avisa ninguém (os avisos só saem na
+ * recolha). Retomável por `afterId` (id da última linha feita) e com prazo.
  */
 export async function resplitDriverDay(day: string, opts: { deadlineAt: number; afterId?: number }): Promise<{ processed: number; done: boolean; nextAfterId: number | null; errors: string[] }> {
   const { getDb, resolveZelloHoldersForDay, pdaIntervalsForDay, saveDriverShares, fixedZelloOwners } = await import("../db");
@@ -254,9 +258,8 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
   const db = await getDb();
   if (!db) return { processed: 0, done: true, nextAfterId: null, errors: ["BD indisponível"] };
   const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
-  const speedLimit = await getDefaultSpeedLimit();
-  // 14 out 2026: sem limite padrão na tabela vale o de omissão (120 km/h + 10 %), não 999
-  const threshold = speedThresholdKmh(speedLimit);
+  const { speedRuleNow } = await import("../speedRule");
+  const { rule: speedRule } = await speedRuleNow();
   const [holders, intervals, owners] = await Promise.all([resolveZelloHoldersForDay(day), pdaIntervalsForDay(day), fixedZelloOwners()]);
   const rows = rowsOf(await db.execute(sql`
     SELECT id, zelloUsername, geoJsonUrl FROM daily_driver_history
@@ -269,12 +272,16 @@ export async function resplitDriverDay(day: string, opts: { deadlineAt: number; 
     const zello = String(r.zelloUsername);
     try {
       const zi = intervals.get(zelloKey(zello)) ?? [];
-      if (r.geoJsonUrl && zi.length) {
+      if (r.geoJsonUrl) {
         const { storageReadableUrl } = await import("../storageSign");
         const resp = await fetch(await storageReadableUrl(String(r.geoJsonUrl)));
         if (!resp.ok) throw new Error(`GeoJSON HTTP ${resp.status}`);
         const data = await resp.json();
-        await saveDriverShares(Number(r.id), zello, day, splitByHolder(gpsPointsFromGeoJson(data), zi, threshold, owners.get(zelloKey(zello)) ?? null));
+        // 14 out 2026: refaz também a máxima (sem picos falsos) e os excessos da linha, com o limite em vigor
+        const pts = gpsPointsFromGeoJson(data);
+        await db.execute(sql`UPDATE daily_driver_history SET maxSpeed = ${String(trustedMaxSpeed(pts, { rule: speedRule }).maxSpeed)},
+            speedViolations = ${speedExcesses(pts, speedRule).length}, metricsVersion = ${DRIVER_METRICS_VERSION} WHERE id = ${r.id}`);
+        await saveDriverShares(Number(r.id), zello, day, zi.length ? splitByHolder(pts, zi, speedRule, owners.get(zelloKey(zello)) ?? null) : []);
       } else if (!zi.length) {
         await saveDriverShares(Number(r.id), zello, day, []); // já ninguém teve o PDA
       } // sem GeoJSON guardado não dá para partir de novo: ficam as partes que havia
@@ -380,10 +387,9 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
     // Fase 3: intervalos de cada pessoa em cada PDA → GPS partido por pessoa
     const intervals = await pdaIntervalsForDay(dateStr);
 
-    // Get speed limit for violation counting
-    const speedLimit = await getDefaultSpeedLimit();
-    // 14 out 2026: sem limite padrão na tabela vale o de omissão (120 km/h + 10 %), não 999
-    const threshold = speedThresholdKmh(speedLimit);
+    // Limite de velocidade (Definições → Parâmetros; 120 km/h + 10 % por omissão) — os excessos contam-se com ele
+    const { speedRuleNow } = await import("../speedRule");
+    const { rule: speedRule } = await speedRuleNow();
 
     console.log(`[DailyCollection] Processing ${nonAdminUsers.length} users for ${dateStr} (${pass})`);
 
@@ -393,8 +399,10 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
       try {
         // Fetch history from Zello
         const historyData = await getZelloUserHistory(user.name, startTs, endTs);
-        const metrics = processGeoJsonHistory(historyData);
-        const violations = countSpeedViolations(historyData, threshold);
+        const metrics = processGeoJsonHistory(historyData, speedRule);
+        const gpsPoints = gpsPointsFromGeoJson(historyData);
+        const excesses = speedExcesses(gpsPoints, speedRule);
+        const violations = excesses.length;
 
         // Store GeoJSON in S3 if we have data (a final substitui a provisória)
         let geoJsonUrl: string | null = null;
@@ -442,9 +450,22 @@ export async function collectDailyDriverData(targetDate: Date, opts?: { deadline
         if (historyId) {
           try {
             // Substitui as partes (DELETE + INSERT por historyId): sem PDA partilhado, nenhuma.
-            if (zIntervals?.length && historyData?.features) await saveDriverShares(Number(historyId), user.name, dateStr, splitByHolder(gpsPointsFromGeoJson(historyData), zIntervals, threshold, owners.get(zelloKey(user.name)) ?? null));
+            if (zIntervals?.length && historyData?.features) await saveDriverShares(Number(historyId), user.name, dateStr, splitByHolder(gpsPoints, zIntervals, speedRule, owners.get(zelloKey(user.name)) ?? null));
             else if (prev) await saveDriverShares(Number(historyId), user.name, dateStr, []);
           } catch (err) { console.warn(`[DailyCollection] partes do GPS ${user.name}:`, err); }
+        }
+
+        // 14 out 2026: excessos → registo + aviso às chefias (interruptor GPS_SPEED_ALERTS, desligado por omissão)
+        if (excesses.length) {
+          const { recordSpeedExcesses } = await import("../speedAlerts");
+          const { holderAtFn } = await import("../shiftGps");
+          const owner = owners.get(zelloKey(user.name)) ?? null;
+          const holderAt = zIntervals?.length ? holderAtFn(zIntervals, owner) : () => row.employeeId ?? owner;
+          await recordSpeedExcesses({
+            // o limite que os excessos passaram é o da regra COM a tolerância (120 + 10 % = 132 por omissão)
+            zello: user.name, displayName: user.fullName || user.name, day: dateStr, limitKmh: speedThresholdOf(speedRule), excesses,
+            employeeAt: holderAt,
+          });
         }
 
         driversProcessed++;

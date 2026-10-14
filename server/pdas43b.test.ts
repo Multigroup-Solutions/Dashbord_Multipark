@@ -90,8 +90,9 @@ describe("43b — o dono do PDA fica com o GPS fora dos check-ins", () => {
     const act = src("server/dayActivity.ts");
     expect(act).toContain("const owner = owners.get(zelloKey(zello));");
     const col = src("server/jobs/dailyDriverCollection.ts");
-    expect(col).toContain("splitByHolder(gpsPointsFromGeoJson(data), zi, threshold, owners.get(zelloKey(zello)) ?? null)");
-    expect(col).toContain("splitByHolder(gpsPointsFromGeoJson(historyData), zIntervals, threshold, owners.get(zelloKey(user.name)) ?? null)");
+    // 14 out 2026: o 3.º argumento é a regra do limite (Definições), já não um número
+    expect(col).toContain("splitByHolder(pts, zi, speedRule, owners.get(zelloKey(zello)) ?? null)");
+    expect(col).toContain("splitByHolder(gpsPoints, zIntervals, speedRule, owners.get(zelloKey(user.name)) ?? null)");
     expect(col).toContain("intervals.get(zelloKey(user.name))");
     const db = src("server/db.ts");
     expect(db).toContain(`const CHECKIN_ZELLO = sql.raw("COALESCE(NULLIF(c.zelloUsername, ''), NULLIF(p.zelloUsername, ''))");`);

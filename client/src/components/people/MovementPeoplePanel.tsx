@@ -1,8 +1,12 @@
 /**
  * Lote 42b — Pessoas → Condutores e agentes: primeiro a LISTA (uma linha por
  * pessoa, com os totais do período), depois o detalhe.
- *  - Condutores: recolhas, entregas, movimentos e km do GPS;
+ *  - Condutores: recolhas, entregas, movimentos, mudanças de lugar e km do GPS;
  *  - Agentes: todas as ações (reservas criadas, alterações, mudanças de lugar…).
+ * 14 out 2026 (Jorge): "Movimentos" = só os que tocam no parque (levar ao
+ * parque e entre garagens); "Mudanças de lugar" = o carro ficou na mesma
+ * garagem e só mudou de lugar — conta nas ações, não nos movimentos (regra em
+ * shared/multiparkMovements.ts → classifyMovement).
  * Clicar no NOME abre a ficha; clicar num NÚMERO abre a lista desses
  * movimentos. O filtro de cidade e marca é o do topo da app; aqui escolhe-se o
  * período e a pessoa. Quem gere o RH une/separa (Ligações) e tira da lista
@@ -43,7 +47,7 @@ type Row = {
   byType: Record<string, number>; lastAt: string | null; km: number | null;
 };
 
-/** O que cada coluna clicável mostra no detalhe (changeType da Multipark). */
+/** O que cada coluna clicável mostra no detalhe (changeType da Multipark; a mudança de lugar vem como SPOT_CHANGE). */
 const COLUMN_TYPES: Record<string, string[] | null> = {
   recolhas: ["CHECK_IN"],
   entregas: ["CHECK_OUT"],
@@ -131,7 +135,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
           : rows.length === 0 ? <p className="text-sm text-muted-foreground">Ninguém com movimentos neste período{person || q || rules.length ? " com esse filtro" : ""}.</p>
           : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[640px]">
+              <table className="w-full text-sm min-w-[720px]">
                 <thead><tr className="border-b text-left text-xs">
                   <Th k="name" label="Pessoa" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                   {mode === "agents" && <Th k="total" label="Ações" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />}

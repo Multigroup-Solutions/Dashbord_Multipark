@@ -80,7 +80,8 @@ describe("matriz de acessos — papéis do dono", () => {
     expect(sees("backoffice", "integracoes")).toBe(false);   // 19d (Jorge): hub só admin e super_admin
     expect(sees("frontoffice", "permissoes")).toBe(false);
     // Jorge (7 out 2026): o back office gere o RH nacional (sem ordenados); o front office continua a ver e editar.
-    for (const m of MODULES.map(x => x.id).filter(id => id !== "permissoes" && id !== "rh")) {
+    // 14 out 2026 (Jorge): Condutores e agentes só supervisor, back office, admin e super admin — o front office não.
+    for (const m of MODULES.map(x => x.id).filter(id => id !== "permissoes" && id !== "rh" && id !== "condutores_agentes")) {
       expect(MATRIX[m].frontoffice).toEqual(MATRIX[m].backoffice);
     }
     expect(can("backoffice", "rh", "manage")).toBe(true);

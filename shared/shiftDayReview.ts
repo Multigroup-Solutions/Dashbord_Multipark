@@ -15,7 +15,8 @@
  *     tempo parado no TURNO (picagens; sem elas, a escala) e a velocidade
  *     máxima numa entrega, com as regras da recolha (shared/gpsRules.ts).
  */
-import { MAX_PLAUSIBLE_KMH, MAX_SEGMENT_GAP_S, STOPPED_SPEED_KMH } from "./gpsRules";
+import { MAX_SEGMENT_GAP_S, STOPPED_SPEED_KMH } from "./gpsRules";
+import { DEFAULT_SPEED_RULE, speedExcesses, speedSpikes, trustedMaxSpeed } from "./speedRules";
 import { lisbonHoursSince, utcMs } from "./lisbonDay";
 import { lisbonLocalTimeUtcMs } from "./shiftHandover";
 import { matchKey } from "./textKey";
@@ -404,13 +405,14 @@ export const EMPTY_GPS_STATS: GpsWindowStats = { minutes: 0, movingMinutes: 0, s
  * (processGeoJsonHistory / splitByHolder): um troço entre dois pontos conta
  * quando os DOIS caem na mesma janela (e são da pessoa — `mine`) e estão a
  * menos de 1 h; anda se o ponto anterior ia a mais de 2 km/h, senão está
- * parado. Velocidade máxima e excessos pelo ponto (preciso, até 150 km/h;
- * excesso acima de `threshold`). PURA.
+ * parado. 14 out 2026: velocidade máxima sem picos falsos e `violations` =
+ * EXCESSOS acima de `threshold` (shared/speedRules.ts — `minPoints` pontos
+ * seguidos, 2 por omissão), não pontos. PURA.
  */
 export function gpsWindowStats(
   points: readonly WindowPoint[],
   windows: readonly TimeWindow[],
-  o: { threshold: number | null; mine?: (tsSec: number) => boolean },
+  o: { threshold: number | null; mine?: (tsSec: number) => boolean; minPoints?: number },
 ): GpsWindowStats {
   const ws = windows.filter((w) => w.endMs > w.startMs);
   const winOf = (tsSec: number) => {
@@ -418,26 +420,30 @@ export function gpsWindowStats(
     for (let i = 0; i < ws.length; i++) if (ms >= ws[i].startMs && ms < ws[i].endMs) return i;
     return -1;
   };
-  let moving = 0, stopped = 0, max = 0, maxAt: number | null = null, viol = 0, n = 0;
+  let moving = 0, stopped = 0, n = 0;
   let prev: { p: WindowPoint; w: number } | null = null;
-  for (const p of points) {
+  const insideIdx = new Set<number>();
+  points.forEach((p, i) => {
     const w = winOf(p.ts);
     const inside = w >= 0 && (!o.mine || o.mine(p.ts));
     if (inside) {
       n++;
-      if (p.accurate && p.speed > 0 && p.speed <= MAX_PLAUSIBLE_KMH) {
-        if (p.speed > max) { max = p.speed; maxAt = p.ts; }
-        if (o.threshold != null && p.speed > o.threshold) viol++;
-      }
+      insideIdx.add(i);
       if (prev && prev.w === w) {
         const dt = p.ts - prev.p.ts;
         if (dt > 0 && dt < MAX_SEGMENT_GAP_S) { if (prev.p.speed > STOPPED_SPEED_KMH) moving += dt; else stopped += dt; }
       }
     }
     prev = inside ? { p, w } : null;
-  }
+  });
+  // velocidades: os picos decidem-se com todos os pontos; o resto só dentro das janelas
+  const spikes = speedSpikes(points);
+  const include = (i: number) => insideIdx.has(i);
+  const rule = o.threshold != null ? { limitKmh: o.threshold, tolerancePercent: 0, minPoints: o.minPoints ?? DEFAULT_SPEED_RULE.minPoints } : undefined;
+  const top = trustedMaxSpeed(points, { include, spikes, rule });
+  const viol = rule ? speedExcesses(points, rule, { include, spikes }).length : 0;
   const m = (s: number) => Math.round(s / 6) / 10;
-  return { minutes: m(moving + stopped), movingMinutes: m(moving), stoppedMinutes: m(stopped), maxSpeed: Math.round(max * 100) / 100, maxAt, violations: viol, points: n };
+  return { minutes: m(moving + stopped), movingMinutes: m(moving), stoppedMinutes: m(stopped), maxSpeed: top.maxSpeed, maxAt: top.maxAt, violations: viol, points: n };
 }
 
 /** Junta as contas de vários ficheiros do dia (PDA + telemóvel, dia e dia seguinte). PURA. */

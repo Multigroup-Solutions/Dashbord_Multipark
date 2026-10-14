@@ -12,6 +12,17 @@
  */
 import { zelloKey } from "../shared/zelloKey";
 import { MAX_PLAUSIBLE_KMH, STOPPED_SPEED_KMH } from "../shared/gpsRules";
+import { speedExcesses, speedSpikes, trustedMaxSpeed, type SpeedRule } from "../shared/speedRules";
+
+/**
+ * 14 out 2026: o 3.º argumento das contas de velocidade é a REGRA do limite
+ * (shared/speedRules.ts); um número sozinho = esse limite, sem tolerância, e
+ * qualquer ponto de confiança acima dele conta (como antes, mas por excesso
+ * — pontos seguidos são UM excesso — e sem os picos falsos).
+ */
+export function asSpeedRule(r: SpeedRule | number): SpeedRule {
+  return typeof r === "number" ? { limitKmh: r, tolerancePercent: 0, minPoints: 1 } : r;
+}
 
 /** Velocidade de um report do Zello, em km/h. */
 export function zelloSpeedKmh(props: Record<string, any> | null | undefined): number {
@@ -76,7 +87,11 @@ export function holdersForDay(
 
 export interface GpsPoint { ts: number; speed: number; lat: number | null; lon: number | null; accurate: boolean }
 export interface HolderInterval { employeeId: number; start: number; end: number } // ms
-/** `minutes` = tempo com o PDA (entre pontos); `movingMinutes` = desse, a andar (> STOPPED_SPEED_KMH). */
+/**
+ * `minutes` = tempo com o PDA (entre pontos); `movingMinutes` = desse, a andar
+ * (> STOPPED_SPEED_KMH). 14 out 2026: `maxSpeed` sem picos falsos e
+ * `violations` = EXCESSOS (shared/speedRules.ts → speedExcesses), não pontos.
+ */
 export interface HolderShare { employeeId: number; minutes: number; movingMinutes: number; km: number; maxSpeed: number; avgSpeed: number; violations: number; points: number }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -110,30 +125,31 @@ export function gpsPointsFromGeoJson(data: any): GpsPoint[] {
  * troca de pessoa não entram em nenhuma parte — ficam no "resto" do dia
  * (linha do dia − soma das partes, ver `leftoverFromShares`).
  */
-export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], threshold: number, fallbackEmployeeId: number | null = null): HolderShare[] {
+export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], speedRule: SpeedRule | number, fallbackEmployeeId: number | null = null): HolderShare[] {
+  const rule = asSpeedRule(speedRule);
+  // os picos falsos decidem-se com TODOS os pontos (os vizinhos podem ser de outra pessoa)
+  const spikes = speedSpikes(points);
   // 43b: fora dos check-ins o PDA é do DONO (o Zello fixo da ficha), quando o tem — "se é deles, é para ficar ligado"
   const holderAt = (tsSec: number): number | null => {
     const ms = tsSec * 1000;
     for (const i of intervals) if (ms >= i.start && ms < i.end) return i.employeeId;
     return fallbackEmployeeId;
   };
-  const acc = new Map<number, { minutesS: number; movingS: number; km: number; max: number; sum: number; n: number; viol: number; points: number }>();
+  const acc = new Map<number, { minutesS: number; movingS: number; km: number; sum: number; n: number; points: number }>();
   const get = (id: number) => {
     let a = acc.get(id);
-    if (!a) { a = { minutesS: 0, movingS: 0, km: 0, max: 0, sum: 0, n: 0, viol: 0, points: 0 }; acc.set(id, a); }
+    if (!a) { a = { minutesS: 0, movingS: 0, km: 0, sum: 0, n: 0, points: 0 }; acc.set(id, a); }
     return a;
   };
+  const holders = points.map((p) => holderAt(p.ts));
   let prev: (GpsPoint & { holder: number | null }) | null = null;
-  for (const p of points) {
-    const holder = holderAt(p.ts);
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const holder = holders[i];
     if (holder != null) {
       const a = get(holder);
       a.points++;
-      if (p.accurate && p.speed > 0 && p.speed <= MAX_PLAUSIBLE_KMH) {
-        a.sum += p.speed; a.n++;
-        if (p.speed > a.max) a.max = p.speed;
-        if (p.speed > threshold) a.viol++;
-      }
+      if (p.accurate && p.speed > 0 && p.speed <= MAX_PLAUSIBLE_KMH) { a.sum += p.speed; a.n++; }
       if (prev && prev.holder === holder) {
         const dt = p.ts - prev.ts;
         if (dt > 0 && dt < 3600) {
@@ -154,9 +170,10 @@ export function splitByHolder(points: GpsPoint[], intervals: HolderInterval[], t
     minutes: Math.round(a.minutesS / 60),
     movingMinutes: Math.round(a.movingS / 60),
     km: Math.round(a.km * 100) / 100,
-    maxSpeed: Math.round(a.max * 100) / 100,
+    // sem picos falsos; acima do limite só os pontos de um excesso confirmado
+    maxSpeed: trustedMaxSpeed(points, { rule, spikes, include: (i) => holders[i] === employeeId }).maxSpeed,
     avgSpeed: a.n ? Math.round((a.sum / a.n) * 100) / 100 : 0,
-    violations: a.viol,
+    violations: speedExcesses(points, rule, { spikes, include: (i) => holders[i] === employeeId }).length,
     points: a.points,
   }));
 }

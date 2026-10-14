@@ -28,7 +28,7 @@ export const KIND_SOURCES: Record<string, string> = {
   extras_schedule_reply: "Extra responde \"não\" ao aviso de escala, carrega em \"Preciso de alterar\" na confirmação do turno, ou resposta que o sistema não percebeu.",
   handover: "Passagem de turno entregue (team leaders do turno seguinte) e lembrete de passagem em falta (team leaders do turno).",
   handover_missing: "Lembrete de passagem de turno em falta (supervisores da cidade).",
-  speed_alert: "Alerta de velocidade (API GPS, registo manual, verificação Zello).",
+  speed_alert: "Alerta de velocidade (API GPS, registo manual, verificação Zello) e, com o interruptor GPS_SPEED_ALERTS (desligado por omissão), os excessos que a recolha do GPS do Zello encontra: um aviso por pessoa e dia, com quantos e a máxima (limite em Definições → Parâmetros → Limite de velocidade).",
   gps_alert: "Condutor com GPS desligado no Zello.",
   driver_daily_report: "Fim da recolha diária do histórico GPS.",
   anomaly_bookings: "Deteção diária de anomalias nas reservas (só críticas).",

@@ -26,7 +26,7 @@ import { lisbonDayOf } from "@shared/lisbonDay";
 import {
   GROUP_VIEW, PERF_GROUPS, PERF_METRICS, PERF_PERIODS, periodTitle, rankPeople, shiftAnchor, MIN_HOURS_FOR_RATE,
   TEAM_COLUMNS, TEAM_GROUPS, TEAM_POINT_WEIGHTS, TEAM_WEIGHT_KEYS, TEAM_WEIGHT_LABELS, unweightedMetricsFor, PERF_RANK_WEIGHTS_KEY,
-  rankWeightSchema, rankWeightsSchema, teamWeightOverridesOf, weightOverridesOf, withTabOverrides,
+  balancedColumns, explainPersonTotals, rankWeightSchema, rankWeightsSchema, teamWeightOverridesOf, weightOverridesOf, withTabOverrides,
   type PerfGroup, type PerfMetric, type PerfPeriod, type RankMode, type RankWeightOverrides, type TeamPointWeights,
 } from "@shared/peoplePerformance";
 import { EVALUATION_POINTS, EVALUATION_RULES } from "@shared/evaluationRules";
@@ -279,7 +279,7 @@ export function PeoplePerformancePanel() {
 
           <div className="space-y-1 text-xs text-muted-foreground">
             <p>Pontos = soma ponderada do que a aba mede (nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação). Por hora só com {MIN_HOURS_FOR_RATE} h ou mais (ponto; sem ponto, a escala). Nota = 100 para o melhor.</p>
-            {d.speedLimit != null && <p>Limite de velocidade usado: {Math.round(d.speedLimit)} km/h (com a tolerância).</p>}
+            {d.speedLimit != null && <p>Limite de velocidade usado: {Math.round(d.speedLimit)} km/h (com a tolerância) — muda-se em Definições → Parâmetros → "Limite de velocidade (GPS do Zello)". A velocidade máxima já vem sem os picos falsos do GPS e, acima do limite, só de um excesso confirmado (pontos seguidos).</p>}
             <p>Emails: contam os enviados pela dashboard e os enviados da caixa Gmail pessoal de cada um (O meu email), cada email uma vez. Os enviados diretamente das caixas partilhadas (info@, reservas@…) fora da dashboard não têm autor e não contam.</p>
             {d.notes.map((n, i) => <p key={i}>{n}</p>)}
           </div>
@@ -444,15 +444,37 @@ function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
   const headRow = (title: string) => (
     <thead><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">{title}</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
   );
+  /** cabeçalho da 2.ª coluna de uma lista repartida: no telemóvel esconde-se (fica uma lista só) */
+  const contHead = (title: string) => (
+    <thead className="max-md:hidden"><tr className="bg-muted text-left text-[11px] font-bold uppercase text-muted-foreground"><th className="px-3 py-1.5">{title}</th><th className="px-3 py-1.5 text-right">Pontos</th></tr></thead>
+  );
   const row = (label: string, pts: React.ReactNode, note?: string, extra?: React.ReactNode) => (
     <tr key={label} className="border-t"><td className="px-3 py-1">{label}{note && <span className="ml-1 text-muted-foreground">({note})</span>}{extra}</td><td className="px-3 py-1 text-right font-semibold tabular-nums">{pts}</td></tr>
   );
+
+  const weightRow = (k: PerfMetric) => {
+    const label = PERF_METRICS[k]?.label ?? k;
+    if (!editing) {
+      const v = rw.weights[k] ?? 0;
+      return row(label, pointsText(k, v), PERF_METRICS[k]?.source, changedBadge((defaults[k] ?? 0) !== v, defaultText(k)));
+    }
+    const live = weightOf(draft[k]);
+    return row(label, cell(k, draft[k], (t) => setDraft((d) => ({ ...(d ?? {}), [k]: t })), label), PERF_METRICS[k]?.source,
+      <>{changedBadge(live != null && (defaults[k] ?? 0) !== live, defaultText(k))}<span className="ml-1 text-[11px] text-muted-foreground">omissão: {defaultText(k)}</span></>);
+  };
+  // 14 out 2026: a toda a largura — 2 colunas no computador, 1 no telemóvel (pela mesma ordem)
+  const weightColumns = balancedColumns(keys, 2);
 
   return (
     <Card>
       <details open>
         <summary className="cursor-pointer px-6 py-3 text-base font-semibold">Como se contam os pontos desta aba</summary>
-        <CardContent className="space-y-3 pt-0">
+        <CardContent className="space-y-4 pt-0" data-points-layout="full-width">
+          {/* a explicação por cima, a toda a largura */}
+          <div className="rounded-lg border-l-4 border-primary bg-muted/40 px-4 py-3 text-xs text-muted-foreground space-y-1">
+            <p>1 ponto ≈ 5 minutos de trabalho, a mesma escala da avaliação (recolha ou entrega +3, movimento entre parques +2, levar ao parque +5, mudança de lugar +1 — não é movimento). Horas e km não dão pontos. "Por hora" = pontos ÷ horas trabalhadas (com {MIN_HOURS_FOR_RATE} h ou mais). Nota = 100 para o melhor.</p>
+            {(group === "drivers" || group === "teamleaders") && <p>Excessos de velocidade: descontam −10 nos pontos da avaliação, que entram aqui (os alertas, as penalizações e 1 por dia com o GPS do Zello acima do limite). Os dias acima do limite só se mostram: não descontam outra vez.</p>}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             {!editing ? (
               <Button size="sm" variant="outline" onClick={startEdit} disabled={!rw.readable}
@@ -476,40 +498,37 @@ function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
           </div>
           {editing && <p className="text-xs text-muted-foreground">Escreve quanto vale cada coisa (ex.: 0,5). 0 = não conta; negativo = desconta. Os pontos da equipa valem para os team leaders e para a supervisão.</p>}
           {error && <p className="text-sm font-semibold text-destructive" role="alert">{error}</p>}
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <table className="w-full text-[13px]">
-                {headRow("Cada…")}
-                <tbody>{keys.map((k) => {
-                  const label = PERF_METRICS[k]?.label ?? k;
-                  if (!editing) {
-                    const v = rw.weights[k] ?? 0;
-                    return row(label, pointsText(k, v), PERF_METRICS[k]?.source, changedBadge((defaults[k] ?? 0) !== v, defaultText(k)));
-                  }
-                  const live = weightOf(draft[k]);
-                  return row(label, cell(k, draft[k], (t) => setDraft((d) => ({ ...(d ?? {}), [k]: t })), label), PERF_METRICS[k]?.source,
-                    <>{changedBadge(live != null && (defaults[k] ?? 0) !== live, defaultText(k))}<span className="ml-1 text-[11px] text-muted-foreground">omissão: {defaultText(k)}</span></>);
-                })}</tbody>
-              </table>
-              {editing && addable.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Select value={adding} onValueChange={setAdding}>
-                    <SelectTrigger className="h-8 w-64 text-xs" aria-label="Acrescentar uma coluna da aba que não conta"><SelectValue placeholder="Acrescentar uma coluna que não conta…" /></SelectTrigger>
-                    <SelectContent>{addable.map((k) => <SelectItem key={k} value={k}>{PERF_METRICS[k].label}</SelectItem>)}</SelectContent>
-                  </Select>
-                  <Button size="sm" variant="outline" disabled={!adding}
-                    onClick={() => { setDraft((d) => ({ ...(d ?? {}), [adding]: "1" })); setAdding(""); }}><Plus className="mr-1 h-4 w-4" />Acrescentar</Button>
-                </div>
-              )}
-              {missedOff && <p className="text-xs text-muted-foreground">Chamadas perdidas: aparecem mas não contam (a chamada toca em várias consolas).</p>}
-            </div>
-            <div className="space-y-4">
-              {shownEval && (
-                <table className="w-full text-[13px]">
-                  {headRow("Pontos da avaliação — cada…")}
-                  <tbody>{EVALUATION_RULES.map((r) => row(r.label, signed(EVALUATION_POINTS[r.key])))}</tbody>
+          <div className="space-y-2">
+            {/* os pesos da aba: em grelha a toda a largura (no telemóvel, uma coluna) */}
+            <div className="grid gap-x-6 gap-y-2 md:grid-cols-2" data-weights-grid>
+              {weightColumns.map((chunk, ci) => (
+                <table key={ci} className="w-full text-[13px]">
+                  {ci === 0 ? headRow("Cada…") : contHead("Cada…")}
+                  <tbody>{chunk.map(weightRow)}</tbody>
                 </table>
-              )}
+              ))}
+            </div>
+            {editing && addable.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={adding} onValueChange={setAdding}>
+                  <SelectTrigger className="h-8 w-64 text-xs" aria-label="Acrescentar uma coluna da aba que não conta"><SelectValue placeholder="Acrescentar uma coluna que não conta…" /></SelectTrigger>
+                  <SelectContent>{addable.map((k) => <SelectItem key={k} value={k}>{PERF_METRICS[k].label}</SelectItem>)}</SelectContent>
+                </Select>
+                <Button size="sm" variant="outline" disabled={!adding}
+                  onClick={() => { setDraft((d) => ({ ...(d ?? {}), [adding]: "1" })); setAdding(""); }}><Plus className="mr-1 h-4 w-4" />Acrescentar</Button>
+              </div>
+            )}
+            {missedOff && <p className="text-xs text-muted-foreground">Chamadas perdidas: aparecem mas não contam (a chamada toca em várias consolas).</p>}
+          </div>
+          {(shownEval || showTeam) && (
+            // ronda 2: sem a tabela da equipa (condutores), a da avaliação reparte-se pelas 2 colunas — nada fica vazio à direita
+            <div className="grid gap-x-6 gap-y-2 md:grid-cols-2" data-eval-grid>
+              {shownEval && (showTeam ? [EVALUATION_RULES] : balancedColumns(EVALUATION_RULES, 2)).map((chunk, ci) => (
+                <table key={`eval-${ci}`} className="w-full text-[13px]">
+                  {ci === 0 ? headRow("Pontos da avaliação — cada…") : contHead("Pontos da avaliação — cada…")}
+                  <tbody>{chunk.map((r) => row(r.label, signed(EVALUATION_POINTS[r.key])))}</tbody>
+                </table>
+              ))}
               {showTeam && (
                 <table className="w-full text-[13px]">
                   {headRow("Pontos da equipa — por dia, por pessoa da equipa")}
@@ -522,12 +541,21 @@ function PointsTable({ group, rw }: { group: PerfGroup; rw: RankWeightsView }) {
                   })}</tbody>
                 </table>
               )}
-              <p className="text-xs text-muted-foreground">1 ponto ≈ 5 minutos de trabalho, a mesma escala da avaliação (recolha ou entrega +3, movimento +2, levar ao parque +5). Horas e km não dão pontos. "Por hora" = pontos ÷ horas trabalhadas (com {MIN_HOURS_FOR_RATE} h ou mais). Nota = 100 para o melhor.</p>
             </div>
-          </div>
+          )}
         </CardContent>
       </details>
     </Card>
+  );
+}
+
+function PersonExplain({ t }: { t: Partial<Record<PerfMetric, number>> }) {
+  const lines = explainPersonTotals(t);
+  if (!lines.length) return null;
+  return (
+    <div className="rounded-lg border-l-4 border-primary bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-1" data-person-explain>
+      {lines.map((l, i) => <p key={i}>{l}</p>)}
+    </div>
   );
 }
 
@@ -567,6 +595,7 @@ function PersonDialog({ p, group, labels, hourly, from, onClose }: { p: Person; 
         {/* 49e: a que horas trabalha */}
         <HourBars byHour={p.byHour ?? []} byHourMultipark={p.byHourMultipark ?? []} />
         <HourlyNote hourly={hourly} from={from} />
+        <PersonExplain t={p.totals} />
         {shown.length === 0 ? <p className="text-sm text-muted-foreground">Nada registado neste período.</p> : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {shown.map((k) => (

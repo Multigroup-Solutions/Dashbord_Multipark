@@ -187,7 +187,9 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
   } catch { /* sem a tabela das reclamações: fica a regra antiga (dentro do período) */ }
 
   // 14 out 2026: a velocidade máxima do GPS do Zello por pessoa e dia (as partes do PDA; sem partes, a linha
-  // do dia) e o limiar (limite padrão ou o de omissão, 132 km/h) — um dia acima conta 1 excesso de velocidade.
+  // do dia) e o limiar (Definições → "Limite de velocidade (GPS do Zello)", 120 km/h + 10 % = 132 por omissão)
+  // — um dia acima conta 1 excesso de velocidade. Desde a recolha com metricsVersion 5 a máxima já vem sem
+  // picos falsos e, acima do limite, só de um excesso confirmado (shared/speedRules.ts).
   let gpsRows: any[] = [];
   try {
     gpsRows = [

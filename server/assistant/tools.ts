@@ -258,7 +258,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
   },
   {
     name: "minha_avaliacao",
-    description: "A avaliação individual da PRÓPRIA pessoa num intervalo: pontos, horas, recolhas, entregas, movimentos, atrasos, excessos de velocidade, reclamações e acidentes. Omissão: últimos 30 dias.",
+    description: "A avaliação individual da PRÓPRIA pessoa num intervalo: pontos, horas, recolhas, entregas, movimentos (levar ao parque e entre garagens), mudanças de lugar (mesma garagem: não são movimentos), atrasos à entrada, entregas atrasadas, excessos de velocidade, reclamações e acidentes. Omissão: últimos 30 dias.",
     parameters: { type: "object", properties: { ...rangeParams } },
     available: (ctx) => roleRank(ctx.user.role) >= ROLE_RANK.extra,
     async run(args, ctx) {

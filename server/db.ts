@@ -73,9 +73,7 @@ import {
   InsertInviteToken,
   payslipHistory,
   InsertPayslipHistory,
-  speedLimits,
   speedViolations,
-  InsertSpeedLimit,
   InsertSpeedViolation,
   dailyDriverHistory,
   InsertDailyDriverHistory,
@@ -5043,37 +5041,8 @@ export async function getProjectHierarchyManagers(projectId: number) {
 
 // ─── SPEED LIMITS & VIOLATIONS ──────────────────────────────────────────────
 
-export async function getSpeedLimits() {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(speedLimits).where(eq(speedLimits.isActive, 1));
-}
-
-export async function getDefaultSpeedLimit() {
-  const db = await getDb();
-  if (!db) return null;
-  const rows = await db.select().from(speedLimits).where(eq(speedLimits.isDefault, 1)).limit(1);
-  return rows[0] || null;
-}
-
-export async function createSpeedLimit(data: InsertSpeedLimit) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  const [result] = await db.insert(speedLimits).values(data);
-  return result.insertId;
-}
-
-export async function updateSpeedLimit(id: number, data: Partial<InsertSpeedLimit>) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.update(speedLimits).set({ ...data, updatedAt: toMysqlDateTime(new Date()) }).where(eq(speedLimits.id, id));
-}
-
-export async function deleteSpeedLimit(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.delete(speedLimits).where(eq(speedLimits.id, id));
-}
+// O limite de velocidade está em Definições → Parâmetros (gps.speedRule — server/speedRule.ts). A tabela
+// antiga speed_limits fica na BD (sem se apagar), mas já não é lida nem escrita (ronda 2, 14 out 2026).
 
 export async function recordSpeedViolation(data: InsertSpeedViolation) {
   const db = await getDb();

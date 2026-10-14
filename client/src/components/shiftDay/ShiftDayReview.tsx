@@ -24,7 +24,7 @@ import { COMPLIANCE_LABELS, type ComplianceStatus } from "@shared/shiftHandoverA
 import { DELIVERY_LATE_MIN, DELIVERY_VERY_LATE_MIN, PICKUP_LATE_MIN, deliveryBand, type TeamLine } from "@shared/shiftDayReview";
 
 const CITY_LABELS: Record<string, string> = HANDOVER_CITY_LABELS;
-const CHANGE_LABEL: Record<string, string> = { CHECK_IN: "Recolha", CHECK_OUT: "Entrega", MOVEMENT: "Movimento" };
+const CHANGE_LABEL: Record<string, string> = { CHECK_IN: "Recolha", CHECK_OUT: "Entrega", MOVEMENT: "Movimento", SPOT_CHANGE: "Mudança de lugar" };
 const BAND_TONE: Record<string, string> = { ok: "text-emerald-700", late: "text-amber-700 font-semibold", very_late: "text-red-700 font-semibold" };
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 

@@ -1,41 +1,41 @@
 /**
  * Jorge, 14 out 2026 — Condutores e agentes (Pessoas):
- *  - Condutores e Agentes só a supervisor, admin e super admin; Desempenho só o super admin;
+ *  - Condutores e Agentes só a supervisor, back office, admin e super admin; Desempenho só o super admin;
  *  - procurar pelo nome e filtros por parâmetros (coluna ≥ / ≤ valor);
  *  - o Desempenho escolhe as colunas (as que estão a zero para toda a gente escondem-se).
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { canSeePeopleMovements, canSeePeoplePerformance, PEOPLE_MOVEMENT_ROLES } from "../shared/peopleTabsAccess";
+import { condutoresTabs } from "../shared/condutoresAccess";
 import { foldName, matchesSearch, parseRuleValue, passesRules, upsertRule, type MetricRule } from "../shared/peopleFilters";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
 describe("quem vê Condutores, Agentes e Desempenho", () => {
-  it("Condutores e Agentes: supervisor, admin e super admin; os outros não", () => {
-    for (const r of ["supervisor", "admin", "super_admin"]) expect(canSeePeopleMovements({ role: r })).toBe(true);
-    for (const r of ["user", "extra", "condutor", "team_leader", "frontoffice", "backoffice", "", null]) expect(canSeePeopleMovements({ role: r as any })).toBe(false);
-    expect(canSeePeopleMovements(null)).toBe(false);
-    expect([...PEOPLE_MOVEMENT_ROLES]).toEqual(["supervisor", "admin", "super_admin"]);
+  // 14 out 2026 (2.º pedido do Jorge): o back office também vê Condutores e Agentes. A regra é o módulo
+  // `condutores_agentes` (shared/access.ts → shared/condutoresAccess.ts); os testes completos estão em
+  // server/condutoresAcesso.test.ts. Aqui só o resumo, para quem procura por este ficheiro.
+  it("Condutores e Agentes: supervisor, back office, admin e super admin; os outros não", () => {
+    for (const r of ["supervisor", "backoffice", "admin", "super_admin"]) expect(condutoresTabs({ role: r })).toContain("drivers");
+    for (const r of ["user", "extra", "condutor", "team_leader", "frontoffice", "", null]) expect(condutoresTabs({ role: r as any })).toEqual([]);
+    expect(condutoresTabs(null)).toEqual([]);
   });
   it("Desempenho: só o super admin", () => {
-    expect(canSeePeoplePerformance({ role: "super_admin" })).toBe(true);
-    for (const r of ["admin", "supervisor", "team_leader"]) expect(canSeePeoplePerformance({ role: r })).toBe(false);
+    expect(condutoresTabs({ role: "super_admin" })).toContain("performance");
+    for (const r of ["admin", "backoffice", "supervisor", "team_leader"]) expect(condutoresTabs({ role: r })).not.toContain("performance");
   });
-  it("o servidor recusa as consultas a quem não é supervisor ou acima", () => {
+  it("o servidor recusa as consultas a quem não tem o módulo", () => {
     const r = src("server/routers.ts");
     for (const name of ["checkoutDrivers", "movementPeople", "agentPeople", "agentHistory"]) {
       const i = r.indexOf(`${name}: protectedProcedure`);
       expect(i).toBeGreaterThan(0);
-      expect(r.slice(i, i + 1200)).toContain("requirePeopleMovements(ctx.user);");
+      expect(r.slice(i, i + 1200)).toContain('requireAccess(ctx.user, "condutores_agentes", "view");');
     }
-    expect(r).toMatch(/function requirePeopleMovements[\s\S]{0,200}canSeePeopleMovements\(user\)[\s\S]{0,80}FORBIDDEN/);
   });
-  it("a página, o menu e o botão Abrir agente seguem a mesma regra", () => {
-    expect(src("client/src/pages/CondutoresAgentesPage.tsx")).toContain("!canSeePeopleMovements(user as any)");
-    expect(src("client/src/pages/CondutoresAgentesPage.tsx")).toContain("const isSuper = canSeePeoplePerformance(user as any);");
-    expect(src("client/src/components/DashboardLayout.tsx")).toContain('path: "/pessoas/condutores-agentes", module: "criticas", roles: PEOPLE_MOVEMENT_ROLES');
-    expect(src("server/rhRouter.ts")).toContain("canOpenAgent: canAccess(ctx.user, 'criticas', 'view') && canSeePeopleMovements(ctx.user)");
+  it("já não há uma segunda regra por papéis (shared/peopleTabsAccess.ts saiu)", () => {
+    expect(existsSync(new URL("../shared/peopleTabsAccess.ts", import.meta.url))).toBe(false);
+    expect(src("client/src/components/DashboardLayout.tsx")).toContain('path: "/pessoas/condutores-agentes", module: "condutores_agentes" }');
+    expect(src("server/rhRouter.ts")).toContain("canOpenAgent: canAccess(ctx.user, 'condutores_agentes', 'view')");
   });
 });
 

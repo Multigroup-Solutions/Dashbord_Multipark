@@ -1,0 +1,154 @@
+/**
+ * Avisos de excesso de velocidade do GPS do Zello (Jorge, 14 out 2026: "porque
+ * é que os 141 não dão aviso nenhum?"). Antes só havia o "verificar agora"
+ * (sem ecrã) e os alertas da API externa — a recolha diária contava pontos
+ * acima de um limite que nem existia (999 km/h sem `speed_limits`) e nunca
+ * avisava ninguém.
+ *
+ * Interruptor GPS_SPEED_ALERTS — DESLIGADO por omissão (coisas novas que
+ * avisam gente entram desligadas). Com ele ligado, na recolha (provisória das
+ * 23h e final de D-2), por cada pessoa e dia com excessos:
+ *  - cada excesso fica em `speed_violations` (uma linha por excesso). As duas
+ *    passagens e a re-recolha não duplicam: um excesso já está registado
+ *    quando há uma linha da recolha do mesmo Zello que começa dentro dele (ou
+ *    até POSITION_MAX_GAP_S antes) — a final pode trazer pontos que a
+ *    provisória ainda não tinha e mudar um pouco o início do mesmo troço;
+ *  - UM aviso no sino ("Excesso de velocidade", tipo speed_alert → team leader
+ *    e supervisor da cidade da pessoa), com quantos e a máxima — só quando há
+ *    excessos novos E o dia é recente (até SPEED_ALERT_MAX_AGE_DAYS dias: as
+ *    duas passagens automáticas são de hoje e de D-2). Um "Recolher Dados" de
+ *    um dia antigo grava os excessos mas não manda avisos atrasados.
+ * Os pontos da Avaliação NÃO dependem disto (contam pelo que a recolha grava).
+ * Nunca lança.
+ */
+import { POSITION_MAX_GAP_S, type SpeedExcess } from "../shared/speedRules";
+
+export const GPS_SPEED_ALERTS_FLAG = "GPS_SPEED_ALERTS";
+/** Dias para trás em que ainda se avisa (a final é de D-2; mais antigo já não é aviso, é histórico). */
+export const SPEED_ALERT_MAX_AGE_DAYS = 3;
+
+export interface SpeedAlertInput {
+  zello: string;
+  displayName: string;
+  /** dia de Lisboa da recolha */
+  day: string;
+  /** o limite que os excessos passaram, JÁ com a tolerância (ex.: 132 = 120 + 10 %) */
+  limitKmh: number;
+  excesses: SpeedExcess[];
+  /** quem tinha o Zello nesse instante (s) — a parte do PDA, o dono ou a pessoa da linha */
+  employeeAt: (tsSec: number) => number | null;
+  employeeName?: (employeeId: number) => string | null;
+}
+
+export interface SpeedAlertDeps {
+  flagOn(): Promise<boolean>;
+  /** inícios ("YYYY-MM-DD HH:MM:SS" UTC) dos excessos que a RECOLHA já registou para este Zello em [fromUtc, toUtc] */
+  existingStarts(zello: string, fromUtc: string, toUtc: string): Promise<string[]>;
+  record(row: { zelloUsername: string; displayName: string; speed: string; speedLimit: number; excessPercent: string; latitude: string | null; longitude: string | null; notificationSent: number; occurredAt: string; notes: string }): Promise<unknown>;
+  notify(input: Record<string, any>): Promise<unknown>;
+  /** hoje em Lisboa ("YYYY-MM-DD") */
+  today(): string;
+}
+
+export type SpeedAlertOutcome = { outcome: "flag_off" | "none" | "already" | "notified" | "recorded_old"; recorded: number; notified: number };
+
+/** O dia ainda dá aviso (até SPEED_ALERT_MAX_AGE_DAYS dias antes de hoje)? PURA. */
+export function speedAlertDayIsRecent(day: string, today: string): boolean {
+  const ms = (d: string) => Date.parse(`${d}T00:00:00Z`);
+  if (!Number.isFinite(ms(day)) || !Number.isFinite(ms(today))) return false;
+  return ms(today) - ms(day) <= SPEED_ALERT_MAX_AGE_DAYS * 86_400_000;
+}
+
+const utcStamp = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 19).replace("T", " ");
+const utcSec = (stamp: string) => Date.parse(`${stamp.replace(" ", "T")}Z`) / 1000;
+/** Prefixo das notas das linhas gravadas pela recolha (o "verificar agora" manual não as escreve). */
+export const SPEED_EXCESS_NOTE_PREFIX = "GPS do Zello, ";
+
+/** O excesso já está registado? (uma linha da recolha que começa dentro dele, ou pouco antes). PURA. */
+export function excessAlreadyRecorded(e: Pick<SpeedExcess, "startTs" | "endTs">, recordedStartsSec: readonly number[]): boolean {
+  return recordedStartsSec.some((s) => s >= e.startTs - POSITION_MAX_GAP_S && s <= e.endTs);
+}
+const lisbonTime = (sec: number) => new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit" }).format(new Date(sec * 1000));
+const kmh = (v: number) => `${Math.round(v)} km/h`;
+
+/** Núcleo (dependências injetáveis nos testes). */
+export async function recordSpeedExcessesWith(deps: SpeedAlertDeps, input: SpeedAlertInput): Promise<SpeedAlertOutcome> {
+  if (!input.excesses.length) return { outcome: "none", recorded: 0, notified: 0 };
+  if (!(await deps.flagOn())) return { outcome: "flag_off", recorded: 0, notified: 0 };
+  const from = Math.min(...input.excesses.map((e) => e.startTs)) - POSITION_MAX_GAP_S;
+  const to = Math.max(...input.excesses.map((e) => e.endTs));
+  const seen = (await deps.existingStarts(input.zello, utcStamp(from), utcStamp(to))).map(utcSec).filter(Number.isFinite);
+  const fresh = input.excesses.filter((e) => !excessAlreadyRecorded(e, seen));
+  if (!fresh.length) return { outcome: "already", recorded: 0, notified: 0 };
+  // por pessoa (um PDA partilhado pode ter excessos de duas pessoas no mesmo dia)
+  const byPerson = new Map<string, { employeeId: number | null; list: SpeedExcess[] }>();
+  let recorded = 0;
+  for (const e of fresh) {
+    const employeeId = input.employeeAt(e.startTs);
+    const name = employeeId != null ? input.employeeName?.(employeeId) ?? null : null;
+    await deps.record({
+      zelloUsername: input.zello, displayName: input.displayName,
+      speed: String(e.maxSpeed), speedLimit: Math.round(input.limitKmh),
+      excessPercent: String(Math.min(999.99, Math.round(((e.maxSpeed - input.limitKmh) / input.limitKmh) * 10_000) / 100)),
+      latitude: e.lat != null ? String(e.lat) : null, longitude: e.lon != null ? String(e.lon) : null,
+      notificationSent: 1, occurredAt: utcStamp(e.startTs),
+      notes: `${SPEED_EXCESS_NOTE_PREFIX}${input.day}: ${e.points} ponto(s) acima de ${kmh(input.limitKmh)} entre ${lisbonTime(e.startTs)} e ${lisbonTime(e.endTs)}${employeeId != null ? ` · ficha #${employeeId}${name ? ` (${name})` : ""}` : ""}`.slice(0, 500),
+    });
+    recorded++;
+    const k = employeeId == null ? `z:${input.zello}` : `e:${employeeId}`;
+    const g = byPerson.get(k) ?? { employeeId, list: [] };
+    g.list.push(e);
+    byPerson.set(k, g);
+  }
+  if (!speedAlertDayIsRecent(input.day, deps.today())) return { outcome: "recorded_old", recorded, notified: 0 };
+  let notified = 0;
+  for (const g of byPerson.values()) {
+    const top = g.list.reduce((m, e) => (e.maxSpeed > m.maxSpeed ? e : m), g.list[0]);
+    const who = (g.employeeId != null ? input.employeeName?.(g.employeeId) : null) || input.displayName || input.zello;
+    await deps.notify({
+      kind: "speed_alert",
+      employeeId: g.employeeId,
+      title: "Excesso de velocidade",
+      body: `${who}: ${g.list.length} excesso(s) acima de ${kmh(input.limitKmh)} em ${input.day.split("-").reverse().join("/")} — máxima ${kmh(top.maxSpeed)} às ${lisbonTime(top.maxAt)} (GPS do Zello)`.slice(0, 500),
+      link: "/operacional",
+      entity: { type: "gps_speeding", id: `${input.zello}|${input.day}|${g.employeeId ?? ""}` },
+    });
+    notified++;
+  }
+  return { outcome: "notified", recorded, notified };
+}
+
+export async function recordSpeedExcesses(input: SpeedAlertInput): Promise<SpeedAlertOutcome | { outcome: "error"; recorded: 0; notified: 0 }> {
+  try {
+    return await recordSpeedExcessesWith({
+      async flagOn() {
+        const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+        await ensureFeatureFlagOverrides();
+        return isFeatureEnabled(GPS_SPEED_ALERTS_FLAG, { defaultEnabled: automationFlagDefault(GPS_SPEED_ALERTS_FLAG) });
+      },
+      async existingStarts(zello, fromUtc, toUtc) {
+        const { getDb } = await import("./db");
+        const { sql } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new Error("BD indisponível"); // sem saber o que já está registado não se grava nem avisa
+        const res: any = await db.execute(sql`SELECT DATE_FORMAT(occurredAt, '%Y-%m-%d %H:%i:%s') AS at FROM speed_violations
+          WHERE zelloUsername = ${zello} AND occurredAt >= ${fromUtc} AND occurredAt <= ${toUtc}
+            AND notes LIKE ${`${SPEED_EXCESS_NOTE_PREFIX}%`} LIMIT 500`);
+        const rows = ((Array.isArray(res) ? res[0] : res) as any[]) ?? [];
+        return rows.map((r) => String(r.at));
+      },
+      async record(row) {
+        const { recordSpeedViolation } = await import("./db");
+        return recordSpeedViolation(row as any);
+      },
+      async notify(n) {
+        const { notify } = await import("./notify");
+        return notify(n as any);
+      },
+      today: () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()),
+    }, input);
+  } catch (err) {
+    console.warn("[speedAlerts] falhou:", String((err as any)?.message ?? err).slice(0, 160));
+    return { outcome: "error", recorded: 0, notified: 0 };
+  }
+}

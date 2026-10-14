@@ -197,6 +197,7 @@ export const EVAL_RULE_FIELDS: { id: string; label: string; get: Getter }[] = [
   { id: "entregas", label: "Entregas", get: metric("entregas") },
   { id: "movements", label: "Movimentos", get: metric("movements") },
   { id: "parkingMoves", label: "Levar ao parque", get: metric("parkingMoves") },
+  { id: "spotChanges", label: "Mudanças de lugar", get: metric("spotChanges") },
   { id: "delays", label: "Atrasos", get: metric("delays") },
   { id: "lateServices", label: "Entregas atrasadas", get: metric("lateServices") },
   { id: "speedingEvents", label: "Excessos de velocidade", get: metric("speedingEvents") },

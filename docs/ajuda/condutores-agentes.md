@@ -1,14 +1,26 @@
 ---
-modulo: criticas
+modulo: condutores_agentes
 titulo: Condutores e agentes
 rotas: /pessoas/condutores-agentes
-palavras: procurar nome, pesquisar, filtros, parâmetros, colunas, esconder colunas, só ativos, mudanças de lugar, mudança de lugar, atraso à entrada, entregas atrasadas, km, quilómetros, km sem movimentos, pontos da equipa, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou, atividade por hora, horas do dia, a que horas trabalha, chamadas perdidas, chamadas devolvidas, minutos ao telefone, emails pessoais, pesos, editar pesos, pesos do ranking, pontos do ranking, quanto vale cada coisa, repor omissões, 1 ponto 5 minutos
+palavras: mudanças de lugar, mudança de lugar, quem vê condutores, acesso, dias acima do limite, limite de velocidade, 120 km/h, excesso de velocidade, picos do gps, dias com gps, dias sem gps, zello não ligado, atrasos, entregas atrasadas, km, quilómetros, km sem movimentos, pontos da equipa, recolhas, escolher condutor, filtro de cidade, filtro de marca, tirar da lista, ligações, condutores, agentes, ranking, entregas, checkout, performance, ações do agente, histórico do agente, pessoa, ficha, desempenho, desempenho por pessoa, cobranças de parceiros, cobranças de pro, avenças, quem registou, atividade por hora, horas do dia, a que horas trabalha, chamadas perdidas, chamadas devolvidas, minutos ao telefone, emails pessoais, pesos, editar pesos, pesos do ranking, pontos do ranking, quanto vale cada coisa, repor omissões, 1 ponto 5 minutos, procurar nome, pesquisar, filtros, parâmetros, colunas, esconder colunas, só ativos, atraso à entrada
 ---
 # Condutores e agentes
 
-Em **Pessoas → Condutores e agentes** (só **supervisor, admin e super admin**, nas tuas cidades; os team leaders, front office e back office não veem). Antes estavam nas Críticas.
+Em **Pessoas → Condutores e agentes**. Antes estavam nas Críticas.
+
+**Quem vê** (desde 14 out 2026)
+- **Condutores** e **Agentes**: supervisor (as cidades dele), back office, admin e super admin. Front office e team leader já não veem (nem no menu, nem pelo link direto, nem na pesquisa, nem pelo botão **Abrir agente** do RH, nem pelo MCP). Uma permissão por pessoa (**Definições → Permissões**, módulo "Condutores e agentes") dá ou tira o acesso.
+- **Desempenho**: só o super admin.
 
 **Procurar e filtrar** (nos três separadores): escreve um nome na caixa **Procurar pelo nome…** (sem acentos e por palavras: "joao alv" encontra "João Alves"). Em **Filtros** pões parâmetros, por exemplo **Por hora ≥ 8** ou **Entregas ≤ 5**: escolhe a coluna, ≥ ou ≤, o valor e **Pôr**. Podes juntar vários; ficam em chips por baixo, cada um com um × para tirar. Quem não tem valor numa coluna (ex.: "—" no Por hora) não passa nesse filtro.
+
+**Movimentos e mudanças de lugar** (contam-se assim em todo o lado: aqui, na Avaliação, no Desempenho, na Atividade do dia e no Resumo do dia)
+- Cada vez que um carro muda de sítio, a app Multipark grava duas linhas: o **início** e o **fim**. O início não conta (nem como ação). "Parque" é a **garagem** (PD, PD FORA, COBERTO, Central…).
+  - **Levar ao parque**: o carro foi arrumado (ainda não tinha garagem), por exemplo logo a seguir à recolha. É movimento (+5 na avaliação).
+  - **Movimento entre parques**: o carro mudou de garagem (ex.: PD → COBERTO). É movimento (+2).
+  - **Mudança de lugar**: o carro ficou na mesma garagem e só mudou de lugar (ex.: PD 26/3 → PD 70/1). **Conta como ação**, não como movimento (+1 na avaliação).
+- **Movimentos** = levar ao parque + entre parques. **Mudanças de lugar** têm coluna própria e abrem a lista delas.
+- Antes, as mudanças de lugar davam sempre 0 (procuravam outro tipo de registo, que a Multipark não usa) e cada deslocação contava como dois movimentos (o início e o fim).
 
 **Condutores**
 - Uma linha por pessoa com as **recolhas**, **entregas**, **movimentos**, **mudanças de lugar** e os **km do GPS** (Zello) no período, lidos ao vivo da Multipark. **Movimentos** = levar ao parque + entre garagens; dentro da mesma garagem conta só como **mudança de lugar**. Só aparece quem mexeu em carros (mudanças de lugar incluídas). As várias contas de agente da mesma ficha somam.
@@ -31,7 +43,7 @@ Em **Pessoas → Condutores e agentes** (só **supervisor, admin e super admin**
 - Tudo o que cada pessoa fez, por **dia, semana, mês ou ano** (setas para andar para trás e para a frente). Há uma aba por posto: **Back e front office**, **Supervisão**, **Team leaders** e **Condutores e extras**. A aba segue o papel da conta (front office, backoffice, supervisor, team leader); quem não tem um destes papéis fica pelo posto da ficha.
 - Junta três fontes:
   - **Multipark**, pela avaliação diária: recolhas, entregas, movimentos, "pôs em recolha/entrega", reservas criadas e alteradas, ocorrências.
-  - **Zello**: km, velocidade máxima, dias acima do limite (sem limite padrão em Operacional → velocidade, vale 120 km/h com 10 % de tolerância = 132 km/h).
+  - **Zello**: km, dias com GPS, velocidade máxima, dias acima do limite e dias de trabalho sem GPS. O limite está em **Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"** (120 km/h com 10 % de tolerância = 132 km/h por omissão).
   - **Dashboard**: horas (ponto ou escala), chamadas atendidas, feitas, perdidas e devolvidas e os minutos ao telefone, WhatsApp, emails enviados (pela dashboard e da caixa Gmail pessoal de cada um), respostas e fecho de reclamações, críticas Google respondidas, despesas lançadas e aprovadas, contagens e correções de caixa, tarefas, leads, passagens de turno, contas de parceiros, fechos de mês dos parceiros, extras do dia escalados, atualizações do CRM, perdidos e achados, dias como team leader e quantas pessoas tinha.
   - Também da **Multipark**: voos de regresso registados (as alterações à reserva que mexem no voo de regresso) e as cobranças, em duas colunas:
     - **Cobranças de parceiros**: os pagamentos de parceiros que um agente marcou e os créditos de parceiro lançados.
@@ -50,8 +62,8 @@ Em **Pessoas → Condutores e agentes** (só **supervisor, admin e super admin**
   - Para cada um mostra: dias com equipa, pessoas·dia, movimentos da equipa (recolhas, entregas e movimentos), custo da equipa (como na Atividade do dia), quem mexeu carros sem o Zello ligado, horas paradas (GPS), movimentos por pessoa·dia e € por movimento.
   - No supervisor mostra também as **extras a menos / a mais**: as horas·pessoa abaixo ou acima da previsão do Extras Dia. Só aparece com **Dia** ou **Semana**, porque a previsão é lida ao vivo, dia a dia.
   - **Pontos da equipa**: contam-se por dia e por pessoa da equipa, para uma equipa maior não ganhar só por ser maior. Por omissão, cada movimento dá +1, cada pessoa que mexeu carros sem Zello −20 e cada hora parada −2, sempre a dividir pelo número de pessoas da equipa (mudam-se em **Editar pesos**). Somam-se aos pontos do TL (que é avaliado também como condutor) e do supervisor.
-- **Como se contam os pontos desta aba**: a tabela de baixo mostra quanto vale cada coisa **agora** (com "alterado" ao lado do que já não é a omissão), os pontos da avaliação (recolha +3, movimento +2…) e os da equipa.
-  - A régua: **1 ponto ≈ 5 minutos de trabalho**, a mesma escala da avaliação (recolha ou entrega 3, movimento 2, levar ao parque 5). Por exemplo: reserva criada 2, email 1, chamada atendida 0,5 mais 0,2 por minuto ao telefone, fecho de mês de um parceiro 6, contagem de caixa 2. Horas e km não dão pontos.
+- **Como se contam os pontos desta aba**: em cima, a régua e o que conta; a seguir, quanto vale cada coisa **agora** (com "alterado" ao lado do que já não é a omissão), em duas colunas a toda a largura (no telemóvel, uma só); por baixo, lado a lado, os pontos da avaliação (recolha +3, movimento +2…) e os da equipa.
+  - A régua: **1 ponto ≈ 5 minutos de trabalho**, a mesma escala da avaliação (recolha ou entrega 3, movimento entre parques 2, levar ao parque 5, mudança de lugar 1). Por exemplo: reserva criada 2, email 1, chamada atendida 0,5 mais 0,2 por minuto ao telefone, fecho de mês de um parceiro 6, contagem de caixa 2. Horas e km não dão pontos.
   - **Mudar os pesos** (sem esperar por uma atualização da app; só o super admin):
     1. Abre a aba (ex.: **Back e front office**) e, em "Como se contam os pontos desta aba", carrega em **Editar pesos**.
     2. Cada linha passa a um número: escreve o novo peso (ex.: 0,5). **0 = não conta**; um número negativo desconta. Ao lado fica a omissão do código.
@@ -72,6 +84,27 @@ Em **Pessoas → Condutores e agentes** (só **supervisor, admin e super admin**
   - No detalhe de cada pessoa, um gráfico de barras das 0h às 23h, com "das 7h às 19h · pico às 10h" (quem faz a noite aparece "das 15h às 2h").
   - Ações = **Multipark** (recolhas, entregas, movimentos, pôr em recolha/entrega, reservas criadas e alterações) + **dashboard** (chamadas atendidas e feitas, emails, WhatsApp, reclamações, críticas, caixa, despesas, tarefas, leads…). As perdidas e os minutos não entram.
   - A Multipark por hora é guardada pela avaliação diária, a partir da mesma leitura de sempre. Só existe **desde que isto entrou** (o recálculo da noite enche os últimos 31 dias); antes disso o ecrã diz "por hora desde…" e só entra a dashboard.
+
+**O detalhe de uma pessoa: de onde vem cada número** (Desempenho → clicar na linha)
+- **Horas trabalhadas**: o ponto (sem os registos suspeitos); sem ponto, a escala. **Dias com trabalho**: dias com horas ou com ações.
+- **Pontos da avaliação**: a soma dos pontos de cada dia da Avaliação (com os ajustes).
+- **Recolhas, entregas, movimentos, levar ao parque, mudanças de lugar, pôs em recolha/entrega, alterações de reserva**: a Multipark, pela avaliação diária.
+- **Entregas atrasadas** (−5 cada, uma por entrega, contra quem a fez): feitas mais de 15 min depois da **hora marcada**; com o pedido do cliente depois da hora marcada (voo atrasado), ou sem hora marcada, mais de 30 min depois do **pedido**. Antes contava-se desde o pedido + 15 min, e quase todas as entregas davam atraso.
+- **Atrasos à entrada** (−5 cada): a 1.ª picagem depois da hora da escala, no máximo 1 por dia.
+- Por cima dos números, o detalhe explica em texto de onde vêm as entregas atrasadas, os atrasos à entrada, os excessos de velocidade e os dias sem GPS.
+- **Km (GPS)**, **velocidade máxima**: o GPS do Zello das partes de PDA da pessoa (e do Zello fixo da ficha). A máxima já não tem os picos falsos do GPS.
+- **Dias com GPS**: dias com pontos de GPS dela (dois PDAs no mesmo dia contam um dia). **Dias de trabalho sem GPS**: dias com trabalho e sem GPS, e porquê:
+  - **sem Zello ligado à pessoa**: a ficha não tem Zello fixo e nesse dia não leu nenhum PDA com o QR. Liga-o em **Atividade diária → Ao vivo → "Utilizadores Zello ↔ Pessoas"** (ou faz o check-in do PDA pelo QR).
+  - **com Zello mas sem GPS**: o Zello ou a localização estavam desligados, sem sinal, ou a recolha ainda não chegou a esse dia (o Zello só dá o dia completo 2 dias depois).
+- **Dias acima do limite**: dias em que a velocidade máxima do GPS passou o limite (a mesma regra dos excessos que descontam na Avaliação). Os dias recolhidos antes de 14 out 2026 contam pela máxima antiga (a nota por baixo da tabela diz quantos), até se voltarem a dividir.
+
+**Excessos de velocidade (GPS do Zello)**
+- **Limite**: em **Definições → Parâmetros → "Limite de velocidade (GPS do Zello)"**: **120 km/h** (o máximo em Portugal, nas autoestradas) com **10 % de tolerância** por omissão, ou seja **132 km/h**. O Zello não diz em que estrada se vai, por isso é um limite único (não há por tipo de via nem por cidade). As velocidades do Zello já vêm em km/h.
+- **Excesso** = pontos de GPS seguidos acima do limite (2 por omissão; um troço de autoestrada com uma descida curta é **um** excesso). Com o Zello a mandar pontos espaçados (de minutos em minutos), o mesmo troço sem nenhum ponto abaixo do limite pelo meio também é **um** excesso. Um ponto sozinho só conta se a distância percorrida até ao ponto ao lado (a pelo menos 30 s) o confirmar.
+- **Picos falsos** (nunca contam, nem para a máxima): pontos imprecisos (mais de 100 m), acima de 250 km/h, ou um salto isolado (sobe e desce mais de 15 km/h por segundo, ex.: 40 → 141 → 40 em 4 s). Antes deitava-se fora tudo acima de 150 km/h, e um 160 real desaparecia.
+- **Pontos**: na Avaliação, **1 excesso de velocidade (−10) por dia** em que a máxima do GPS passou o limite; se nesse dia já houver um alerta ou uma penalização de velocidade, o GPS não conta outra vez. Os dias acima do limite não descontam outra vez no Desempenho.
+- **Aviso**: com o interruptor **"Avisos de excesso de velocidade (GPS do Zello)"** ligado (Definições → Automações; desligado por omissão), cada excesso fica registado e o team leader e o supervisor da cidade recebem no sino "Excesso de velocidade", um por pessoa em cada recolha (a final, 2 dias depois, só volta a avisar se trouxer excessos que a das 23h ainda não tinha). Só avisa dias dos últimos 3; recolher à mão um dia antigo grava os excessos mas não avisa. O aviso não mexe nos pontos.
+- A recolha do Zello é às 23h (provisória) e a final 2 dias depois. Para refazer um dia recolhido antes de 14 out 2026 com a regra nova: **Atividade diária → Histórico Diário → Forçar re-divisão** desse dia e depois **Recalcular** a Avaliação.
 
 **Quando a leitura falha**
 - Mostra **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem dados".

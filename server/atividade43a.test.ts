@@ -36,12 +36,16 @@ describe("43a — trajeto", () => {
   });
 
   it("reduz um dia grande sem perder o início, o fim nem os excessos", () => {
-    const many = Array.from({ length: 10_000 }, (_, i) => pt(i, i === 7777 ? 140 : 50));
+    // 14 out 2026: um troço a 140 (20 pontos), não um ponto isolado — esse seria um pico falso do GPS
+    const many = Array.from({ length: 10_000 }, (_, i) => pt(i, i >= 7770 && i < 7790 ? 140 : 50));
     const r = downsampleTrack(many, 500, 120);
     expect(r.length).toBeLessThanOrEqual(501);
     expect(r[0].ts).toBe(1000);
     expect(r[r.length - 1].ts).toBe(1000 + 9999);
-    expect(r.some((p) => p.speed === 140)).toBe(true);
+    expect(r.filter((p) => p.speed === 140)).toHaveLength(20);
+    // um pico isolado (50 → 140 → 50 num segundo) aparece a 0, como o impossível
+    const spike = downsampleTrack([pt(0, 50), pt(1, 140), pt(2, 50)], 100, 120);
+    expect(spike.map((p) => p.speed)).toEqual([50, 0, 50]);
     // por ordem
     expect(r.every((p, i) => i === 0 || p.ts > r[i - 1].ts)).toBe(true);
   });

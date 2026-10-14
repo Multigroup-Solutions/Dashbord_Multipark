@@ -31,6 +31,7 @@ import { addDays, daysInRange, lisbonDayOf, lisbonDayRangeUtc, lisbonHoursSince 
 import { lisbonToday } from "../shared/expensePeriods";
 import { aggregateSpeedHistory, buildIdentityResolver, classifyActionShift, leftoverFromShares, type ShiftWindow, type SpeedEntry } from "./activityHelpers";
 import { matchKey } from "../shared/textKey";
+import { classifyMovement, displayChangeType, MOVEMENT_KIND_CHANGE_TYPES } from "../shared/multiparkMovements";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -113,21 +114,35 @@ export interface ActionReaders {
   legacy: (w: { from: string; to: string }) => Promise<ActivityActionRow[]>;
 }
 
-/** Ações da cópia local (só leitura — já não é alimentada). */
+/**
+ * Ações da cópia local (só leitura — já não é alimentada). Ronda 2 (14 out 2026): cada MOVEMENT com a
+ * MESMA regra da leitura ao vivo e da Avaliação (classifyMovement pelo modifiedFields): o início não é
+ * ação e a mudança de lugar vem como SPOT_CHANGE — também quando a Multipark não responde.
+ */
+export function legacyActionRowOf(r: Record<string, unknown>): ActivityActionRow | null {
+  let changeType = String(r.changeType ?? "").toUpperCase();
+  if (changeType === "MOVEMENT") {
+    changeType = displayChangeType(changeType, classifyMovement(r.modifiedFields));
+    if (changeType === MOVEMENT_KIND_CHANGE_TYPES.inicio) return null;
+  }
+  return {
+    agentUserId: r.agentUserId != null ? String(r.agentUserId) : null,
+    agentName: r.agentName != null ? String(r.agentName) : null,
+    changeType,
+    actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
+    n: 1,
+  };
+}
+
 async function legacyActionRows(w: { from: string; to: string }): Promise<ActivityActionRow[]> {
   const db = await getDb();
   if (!db) return [];
   return rowsOf(await db.execute(sql`
-    SELECT agentUserId, agentName, changeType, actionTime FROM multipark_booking_history
+    SELECT agentUserId, agentName, changeType, actionTime, modifiedFields FROM multipark_booking_history
      WHERE actionTime >= ${w.from} AND actionTime < ${w.to}
        AND agentName IS NOT NULL AND agentName != ''
-       AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}`)).map((r) => ({
-    agentUserId: r.agentUserId != null ? String(r.agentUserId) : null,
-    agentName: r.agentName != null ? String(r.agentName) : null,
-    changeType: String(r.changeType ?? "").toUpperCase(),
-    actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
-    n: 1,
-  }));
+       AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}`))
+    .map(legacyActionRowOf).filter((x): x is ActivityActionRow => !!x);
 }
 
 const DEFAULT_READERS: ActionReaders = { live: (w) => getActivityActionsLive(w), legacy: legacyActionRows };
@@ -155,6 +170,8 @@ export async function loadActivityActions(
   return { rows: [...(await readers.legacy(parts.legacy)), ...live.data.rows], source: "misto", notice };
 }
 
+// 14 out 2026: o MOVEMENT que é só mudança de lugar chega como SPOT_CHANGE (activityLive) e
+// cai nas "outras" ações — conta como ação, não como movimento (shared/multiparkMovements.ts).
 const CT: Record<string, "checkins" | "checkouts" | "movements" | "cancels"> = {
   CHECK_IN: "checkins", CHECKIN: "checkins",
   CHECK_OUT: "checkouts", CHECKOUT: "checkouts",
@@ -563,35 +580,31 @@ async function legacyDetail(range: { start: string; end: string }, w: { userIds?
 
 async function actionsOf(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, range: { start: string; end: string }, who: ReturnType<typeof sql>) {
   return rowsOf(await db.execute(sql`
-    SELECT h.bookingExternalId, h.changeType, h.actionTime, h.agentName, b.licensePlate, b.bookingNumber, b.parkName
+    SELECT h.historyId, h.bookingExternalId, h.changeType, h.actionTime, h.agentName, h.modifiedFields, b.licensePlate, b.bookingNumber, b.parkName
       FROM multipark_booking_history h LEFT JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
      WHERE h.actionTime >= ${range.start} AND h.actionTime < ${range.end} AND ${who}
        AND ${bookingHistoryScope(sql`h.bookingExternalId`)}
      ORDER BY h.actionTime LIMIT 500`)).map((r) => ({
-    bookingExternalId: String(r.bookingExternalId ?? ""), changeType: String(r.changeType ?? ""), actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
+    id: String(r.historyId ?? ""),
+    // ronda 2: a mesma regra da leitura ao vivo (o início fica de fora; a mudança de lugar com o seu nome)
+    bookingExternalId: String(r.bookingExternalId ?? ""), changeType: legacyActionRowOf(r)?.changeType ?? MOVEMENT_KIND_CHANGE_TYPES.inicio, actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
     agentName: r.agentName ? String(r.agentName) : null, licensePlate: r.licensePlate ? String(r.licensePlate) : null,
     bookingNumber: r.bookingNumber ? String(r.bookingNumber) : null, parkName: r.parkName ? String(r.parkName) : null,
-  }));
+  })).filter((x) => x.changeType !== MOVEMENT_KIND_CHANGE_TYPES.inicio);
 }
 
 // ─── Histórico de velocidade por pessoa ──────────────────────────────────────
 
 /**
- * Limiar de velocidade (km/h, com a tolerância): o limite padrão de
- * speed_limits; se a tabela não tiver nenhum, o de omissão (shared/gpsRules.ts
- * → 120 km/h + 10 % = 132). Erro a ler (ou sem BD) → null: sem limiar, e quem
- * chama diz-o numa nota (Jorge, 14 out 2026).
+ * Limite usado nos excessos (o mesmo da recolha): limite × (1 + tolerância),
+ * de Definições → Parâmetros → "Limite de velocidade (GPS do Zello)" — 120
+ * km/h com 10 % por omissão = 132 (14 out 2026; antes vinha da tabela
+ * `speed_limits`, sem ecrã). Erro a ler (ou sem BD) → null: sem limiar, e
+ * quem chama diz-o numa nota (a omissão só vale quando a leitura correu bem).
  */
 export async function speedThreshold(): Promise<number | null> {
-  const { getDefaultSpeedLimit } = await import("./db");
-  const { speedThresholdKmh } = await import("../shared/gpsRules");
-  // a omissão só vale quando a leitura correu bem e veio vazia; BD em baixo ou erro → sem limiar (null)
-  if (!(await getDb())) return null;
-  try {
-    return speedThresholdKmh(await getDefaultSpeedLimit());
-  } catch {
-    return null;
-  }
+  const { speedRuleRead } = await import("./speedRule");
+  return (await speedRuleRead())?.threshold ?? null;
 }
 
 export async function getPersonSpeedHistory(opts: { employeeId?: number; zelloUsername?: string; days: number }) {

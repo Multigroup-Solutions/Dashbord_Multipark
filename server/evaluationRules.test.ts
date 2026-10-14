@@ -182,15 +182,15 @@ describe("migração 0099", async () => {
 });
 
 describe("14 out 2026 — limite de velocidade por omissão", () => {
-  it("sem limite padrão: 120 km/h + 10 % = 132; com limite, o dele", async () => {
-    const { speedThresholdKmh, DEFAULT_SPEED_LIMIT_KMH, DEFAULT_SPEED_TOLERANCE_PERCENT, MAX_PLAUSIBLE_KMH } = await import("../shared/gpsRules");
-    expect([DEFAULT_SPEED_LIMIT_KMH, DEFAULT_SPEED_TOLERANCE_PERCENT]).toEqual([120, 10]);
-    expect(speedThresholdKmh(null)).toBe(132);
-    expect(speedThresholdKmh(undefined)).toBe(132);
-    expect(speedThresholdKmh({ maxSpeed: 100, tolerancePercent: 5 })).toBe(105);
-    expect(speedThresholdKmh({ maxSpeed: "90", tolerancePercent: null })).toBe(90);
-    expect(speedThresholdKmh({ maxSpeed: 0, tolerancePercent: 10 })).toBe(132); // limite inválido → omissão
-    expect(MAX_PLAUSIBLE_KMH).toBe(150); // o teto do ruído não mudou
+  it("sem valor gravado em Definições: 120 km/h + 10 % = 132; com valor, o dele", async () => {
+    // a omissão passou da tabela `speed_limits` (sem ecrã) para a definição gps.speedRule — o número é o mesmo
+    const { DEFAULT_SPEED_RULE, speedThresholdOf } = await import("../shared/speedRules");
+    const { MAX_PLAUSIBLE_KMH } = await import("../shared/gpsRules");
+    expect([DEFAULT_SPEED_RULE.limitKmh, DEFAULT_SPEED_RULE.tolerancePercent]).toEqual([120, 10]);
+    expect(speedThresholdOf(DEFAULT_SPEED_RULE)).toBe(132);
+    expect(speedThresholdOf({ limitKmh: 100, tolerancePercent: 5 })).toBe(105);
+    expect(speedThresholdOf({ limitKmh: 120, tolerancePercent: 0 })).toBe(120);
+    expect(MAX_PLAUSIBLE_KMH).toBe(150); // só para a média (a máxima usa o filtro de picos)
   });
 });
 

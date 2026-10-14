@@ -173,6 +173,8 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "formacao", label: "Formação", path: "/formacao", modules: ["formacao"], keywords: ["formacao", "manuais", "quiz", "tutor"], kind: "page" },
   { id: "conhecimento", label: "Base de conhecimento", path: "/formacao/conhecimento", modules: ["formacao"], action: "manage", keywords: ["base de conhecimento", "manuais", "procedimentos", "drive", "documentos"], kind: "page" },
   { id: "avaliacao", label: "Avaliação", path: "/avaliacao", modules: ["avaliacao", "avaliacao_operacional"], keywords: ["avaliacao", "pontuacao", "ranking", "avaliacao operacional", "movimentos", "mês", "mensal", "4 semanas"], kind: "page" },
+  // 14 out 2026: só quem tem o módulo próprio (supervisor, back office, admin e super admin) — o mesmo do menu.
+  { id: "condutores-agentes", label: "Condutores e agentes", path: "/pessoas/condutores-agentes", modules: ["condutores_agentes"], keywords: ["condutores", "agentes", "movimentos", "mudancas de lugar", "km", "desempenho"], kind: "page" },
   { id: "despesas", label: "Despesas", path: "/despesas", modules: ["despesas"], keywords: ["despesas", "faturas", "recibos"], kind: "page" },
   { id: "parcerias", label: "Parcerias", path: "/parcerias", modules: ["parcerias"], keywords: ["parcerias", "parceiros", "agencias"], kind: "page" },
   { id: "faturacao", label: "Faturação", path: "/faturacao", modules: ["faturacao"], keywords: ["faturacao", "faturas"], kind: "page" },

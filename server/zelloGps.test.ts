@@ -34,9 +34,12 @@ describe("velocidades do Zello (já em km/h)", () => {
     expect(m.maxSpeed).toBe(60);
     expect(m.avgSpeed).toBe(45);
   });
-  it("excessos contam em km/h", () => {
-    const data = { features: [pt(0, 0, { speed: 55 }), pt(0, 0, { speed: 40 }), pt(0, 0, { speed: 70, accuracy: 300 })] };
+  it("excessos contam em km/h (14 out 2026: excessos, não pontos; o impreciso não conta)", () => {
+    const data = { features: [pt(0, 0, { timestamp: 1000, speed: 55 }), pt(0, 0, { timestamp: 1060, speed: 40 }), pt(0, 0, { timestamp: 1120, speed: 70, accuracy: 300 })] };
     expect(countSpeedViolations(data, 50)).toBe(1);
+    // a regra completa: 2 pontos seguidos acima de 120
+    const hw = { features: [130, 135, 90, 140].map((v, i) => pt(0, 0, { timestamp: 1000 + i * 30, speed: v })) };
+    expect(countSpeedViolations(hw, { limitKmh: 120, tolerancePercent: 0, minPoints: 2 })).toBe(1); // 130, 135 e 140 com uma descida curta a 90 = 1 excesso
   });
 });
 
@@ -76,7 +79,7 @@ describe("Fase 3: GPS partido por quem tinha o PDA", () => {
   it("km, minutos, velocidades e excessos por pessoa; o salto na troca não conta para ninguém", () => {
     const r = Object.fromEntries(splitByHolder(pts, intervals, 50).map((s) => [s.employeeId, s]));
     expect(r[1]).toMatchObject({ minutes: 2, maxSpeed: 40, violations: 0, points: 3 });
-    expect(r[2]).toMatchObject({ minutes: 2, maxSpeed: 70, violations: 3, points: 3 });
+    expect(r[2]).toMatchObject({ minutes: 2, maxSpeed: 70, violations: 1, points: 3 }); // 3 pontos seguidos acima = 1 excesso
     expect(r[1].km).toBeCloseTo(1.0, 1);
     expect(r[2].km).toBeCloseTo(1.0, 1);
   });
