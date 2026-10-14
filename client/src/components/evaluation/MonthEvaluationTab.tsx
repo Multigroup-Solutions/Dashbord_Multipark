@@ -7,13 +7,13 @@
  * shared/operationalTabs.ts → canSeeEvaluationRanking); o servidor aplica-a.
  */
 import { ExportToSheetsButton } from "@/components/google/DriveActions";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Award, Clock, Download, RefreshCw, Trophy, Zap } from "lucide-react";
+import { Award, Clock, Download, Medal, RefreshCw, SearchX, Trophy, Zap } from "lucide-react";
 import DateRangeNav, { rangeFor, type DateGran } from "@/components/DateRangeNav";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useOpenEmployee } from "@/hooks/useOpenEmployee";
@@ -23,6 +23,8 @@ import { operationalDayOf } from "@shared/lisbonDay";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
 import { MovementSourceNotice } from "@/components/evaluation/DayEvaluationTab";
 import { EvaluationDrawer, RulesLegend, fmtDay, fmtNum, fmtPts, ptsClass } from "@/components/evaluation/EvaluationBreakdown";
+import { RankingFilterBar, useRankingFilter } from "@/components/evaluation/RankingFilterBar";
+import { describeFilter, filterRanking, groupRanking, isFilterActive, rankingCsv, rankingTotals, type EvalFilterView } from "@shared/evaluationFilters";
 
 export type MonthRange = { start: string; end: string; gran: DateGran };
 
@@ -98,6 +100,11 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "points", dir: -1 });
   const [drawer, setDrawer] = useState<{ id: number; name: string } | null>(null);
   const rows = q.data ?? [];
+  // 14 out 2026: pesquisa e filtros "como no Odoo" (shared/evaluationFilters.ts) — no ecrã, na hora.
+  const [flt, setFlt] = useRankingFilter();
+  const filterOnly: EvalFilterView = { text: flt.text, searches: flt.searches, groups: flt.groups, rules: flt.rules };
+  const active = isFilterActive(filterOnly);
+  const shownRows = useMemo(() => filterRanking(rows, flt), [rows, flt]);
 
   // posição do ranking é sempre pela pontuação total
   const rank = useMemo(() => {
@@ -121,12 +128,13 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
         case "weightedPerHour": return r.perHour.weightedPerHour ?? -Infinity;
       }
     };
-    return [...rows].sort((a, b) => {
+    return [...shownRows].sort((a, b) => {
       const va = val(a), vb = val(b);
       const c = typeof va === "string" ? va.localeCompare(String(vb)) : (va as number) - (vb as number);
       return c * sort.dir;
     });
-  }, [rows, sort]);
+  }, [shownRows, sort]);
+  const groups = flt.groupBy && flt.groupBy !== "none" ? groupRanking(sorted, flt.groupBy) : null;
   const toggle = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "name" ? 1 : -1 }));
   const th = (key: SortKey, label: string, cls = "text-right") => (
     <th className={`p-2 ${cls} cursor-pointer select-none whitespace-nowrap`} onClick={() => toggle(key)}>
@@ -134,36 +142,81 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
     </th>
   );
 
-  const totals = useMemo(() => ({
-    hours: rows.reduce((s, r) => s + r.metrics.hoursWorked, 0),
-    actions: rows.reduce((s, r) => s + r.metrics.actions, 0),
-    cost: rows.reduce((s, r) => s + r.metrics.cost, 0),
-  }), [rows]);
-  const top = rows[0];
+  // Os cartões do topo são das linhas que se veem (com filtro, só essas).
+  const totals = useMemo(() => rankingTotals(shownRows), [shownRows]);
+  const top = totals.best;
   // Sem dados (a carregar ou erro) os cartões dizem "—", nunca 0.
   const ready = !!q.data;
 
+  // CSV = o que se vê: filtrado, pela ordem do ecrã; com filtro, di-lo no topo e no nome.
   const exportCSV = () => {
-    const headers = ["Pos", "Colaborador", "Dias", "Horas", "Ações", "Recolhas", "Entregas", "Movimentos", "Levar ao parque", "Atrasos", "Velocidade", "Reclamações", "Acidentes", "Pts+", "Pts−", "Total", "Ações/h", "Pontos/h", "Custo"];
-    const lines = sorted.map((r) => [
-      rank.get(r.employeeId), r.employeeName, r.days, r.metrics.hoursWorked, r.metrics.actions, r.metrics.recolhas, r.metrics.entregas,
-      r.metrics.movements, r.metrics.parkingMoves, r.metrics.delays, r.metrics.speedingEvents, r.metrics.complaints, r.metrics.accidents,
-      r.score.positivePoints, r.score.negativePoints, r.score.totalPoints, r.perHour.actionsPerHour ?? "", r.perHour.pointsPerHour ?? "", r.metrics.cost,
-    ].map((v) => String(v ?? "").replace(/;/g, ",")).join(";"));
-    const blob = new Blob(["﻿" + [headers.join(";"), ...lines].join("\n")], { type: "text/csv;charset=utf-8;" });
+    const csv = rankingCsv(sorted, { rankOf: (id) => rank.get(id), filter: active ? describeFilter(filterOnly, rows) : null, total: rows.length });
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `avaliacao_${from}_${to}.csv`; a.click();
+    a.href = url; a.download = `avaliacao_${from}_${to}${active ? "_filtrado" : ""}.csv`; a.click();
     URL.revokeObjectURL(url);
+  };
+  const colCount = view === "totals" ? 9 : 7;
+
+  const renderRow = (r: (typeof rows)[number]) => {
+    const pos = rank.get(r.employeeId) ?? 0;
+    const m = r.metrics;
+    return (
+      <tr key={r.employeeId} className={`border-b hover:bg-muted/50 ${pos <= 3 ? "bg-yellow-50/30" : ""}`}>
+        <td className="p-2 font-bold text-center" title="Posição no ranking do período (sem filtro)">
+          {pos >= 1 && pos <= 3
+            ? <span className="inline-flex items-center justify-center"><Medal className={`h-5 w-5 ${pos === 1 ? "text-yellow-500" : pos === 2 ? "text-slate-400" : "text-amber-700"}`} aria-hidden /><span className="sr-only">{pos}</span></span>
+            : pos}
+        </td>
+        <td className="p-2 font-medium min-w-[160px]">
+          <button type="button" className="hover:underline text-left" title="Abrir ficha" onClick={() => openEmployee(r.employeeId)}>{r.employeeName}</button>
+          <span className="block text-[11px] text-muted-foreground font-normal">
+            {r.days} dia(s){r.adjustments > 0 && " · ajustado"}{r.openDisputes > 0 && ` · ${r.openDisputes} contestação(ões)`}
+          </span>
+        </td>
+        {view === "totals" ? (
+          <>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(m.hoursWorked)}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.actions}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.recolhas + m.entregas}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.movements}{m.parkingMoves > 0 && <span className="text-muted-foreground"> ({m.parkingMoves})</span>}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.delays || "—"}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.speedingEvents}/{m.complaints}/{m.accidents}</td>
+          </>
+        ) : (
+          <>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.hours)}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.actionsPerHour, 2)}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.weightedPerHour, 2)}</td>
+            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.pointsPerHour, 2)}</td>
+          </>
+        )}
+        <td className="p-2 text-right">
+          <button type="button" title="Ver de onde vem a pontuação"
+            className={`font-bold text-base tabular-nums whitespace-nowrap underline decoration-dotted underline-offset-4 ${ptsClass(r.score.totalPoints)}`}
+            onClick={() => setDrawer({ id: r.employeeId, name: r.employeeName })}>
+            {fmtPts(r.score.totalPoints)}
+          </button>
+        </td>
+      </tr>
+    );
   };
 
   return (
     <div className="space-y-4">
+      {/* 14 out 2026: pesquisa e filtros como no Odoo — mandam nos cartões, no ranking e nas exportações */}
+      {rows.length > 0 && (
+        <RankingFilterBar rows={rows} value={flt} onChange={setFlt} shown={shownRows.length}
+          extras={{ view, sort }}
+          onApplyExtras={(x) => { if (x.view) setView(x.view); if (x.sort) setSort(x.sort); }} />
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Clock className="w-4 h-4 shrink-0" /><span className="text-xs text-muted-foreground">Horas (ponto)</span></div><p className="text-xl font-bold tabular-nums truncate">{ready ? `${fmtNum(totals.hours)} h` : "—"}</p></Card>
         <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-blue-500" /><span className="text-xs text-muted-foreground">Ações</span></div><p className="text-xl font-bold tabular-nums truncate">{ready ? totals.actions : "—"}</p></Card>
         <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Zap className="w-4 h-4 shrink-0 text-amber-500" /><span className="text-xs text-muted-foreground">Custo</span></div><p className="text-xl font-bold tabular-nums truncate">{ready ? `${fmtNum(totals.cost, 0)} €` : "—"}</p></Card>
-        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Award className="w-4 h-4 shrink-0 text-yellow-600" /><span className="text-xs text-muted-foreground">Melhor</span></div>{top ? (<><p className="text-sm font-bold truncate" title={top.employeeName}>{top.employeeName}</p><p className="text-xs font-semibold tabular-nums text-muted-foreground">{fmtPts(top.score.totalPoints)} pts</p></>) : <p className="text-xl font-bold">—</p>}</Card>
+        <Card className="p-3 gap-1 min-w-0"><div className="flex items-center gap-2"><Award className="w-4 h-4 shrink-0 text-yellow-600" /><span className="text-xs text-muted-foreground">Melhor{active ? " (do filtro)" : ""}</span></div>{top ? (<><p className="text-sm font-bold truncate" title={top.employeeName}>{top.employeeName}</p><p className="text-xs font-semibold tabular-nums text-muted-foreground">{fmtPts(top.score.totalPoints)} pts</p></>) : <p className="text-xl font-bold">—</p>}</Card>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -172,8 +225,9 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
           <Button size="sm" variant={view === "perHour" ? "selected" : "ghost"} className="h-8" onClick={() => setView("perHour")}>Por hora</Button>
         </div>
         <div className="ml-auto flex flex-wrap justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={exportCSV} disabled={rows.length === 0}><Download className="w-4 h-4 mr-1" /> CSV</Button>
-          <ExportToSheetsButton input={{ report: "avaliacoes", from, to }} disabled={rows.length === 0} />
+          <Button variant="outline" size="sm" onClick={exportCSV} disabled={sorted.length === 0} title={active ? "Leva só as pessoas do filtro" : undefined}><Download className="w-4 h-4 mr-1" /> CSV{active ? " (filtrado)" : ""}</Button>
+          {/* a folha leva a cidade/marca do topo e o filtro do ecrã (aplicado no servidor com as mesmas regras) */}
+          <ExportToSheetsButton input={{ report: "avaliacoes", from, to, projectId, ...(active ? { filter: filterOnly } : {}) }} disabled={sorted.length === 0} />
           {isSupervisor && (
             <Button size="sm" disabled={recompute.isPending} onClick={() => recompute.mutate({ from, to })}>
               <RefreshCw className={`w-4 h-4 mr-1 ${recompute.isPending ? "animate-spin" : ""}`} /> {recompute.isPending ? "A recalcular..." : "Recalcular"}
@@ -192,15 +246,26 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
           <p className="text-muted-foreground">Sem dias calculados neste período.</p>
           <p className="text-xs text-muted-foreground mt-1">O recálculo automático corre todos os dias (último mês){isSupervisor ? "; para outro período usa Recalcular." : "."}</p>
         </Card>
+      ) : sorted.length === 0 ? (
+        <Card className="p-10 text-center">
+          <SearchX className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
+          <p className="text-muted-foreground">Ninguém cumpre este filtro neste período.</p>
+          <Button variant="outline" size="sm" className="mt-3 self-center" onClick={() => setFlt({ groupBy: flt.groupBy })}>Limpar o filtro</Button>
+        </Card>
       ) : (
         <Card>
-          <CardHeader><CardTitle className="text-base">Ranking — {from === to ? fmtDay(from) : `${fmtDay(from)} a ${fmtDay(to)}`}{view === "perHour" && " · por hora"}</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle className="text-base">
+              Ranking — {from === to ? fmtDay(from) : `${fmtDay(from)} a ${fmtDay(to)}`}{view === "perHour" && " · por hora"}
+              {active && <span className="font-normal text-muted-foreground"> · filtrado ({sorted.length} de {rows.length})</span>}
+            </CardTitle>
+          </CardHeader>
           <CardContent className="px-2 sm:px-6">
             <div className="overflow-x-auto">
               <table className="w-full text-sm min-w-[640px]">
                 <thead>
                   <tr className="border-b text-left">
-                    <th className="p-2 w-10">#</th>
+                    <th className="p-2 w-10" title="Posição no ranking do período (sem filtro)">#</th>
                     {th("name", "Colaborador", "text-left")}
                     {view === "totals" ? (
                       <>
@@ -224,45 +289,22 @@ function RankingView({ from, to, isSupervisor }: { from: string; to: string; isS
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map((r) => {
-                    const pos = rank.get(r.employeeId) ?? 0;
-                    const m = r.metrics;
-                    return (
-                      <tr key={r.employeeId} className={`border-b hover:bg-muted/50 ${pos <= 3 ? "bg-yellow-50/30" : ""}`}>
-                        <td className="p-2 font-bold text-center">{pos === 1 ? "🥇" : pos === 2 ? "🥈" : pos === 3 ? "🥉" : pos}</td>
-                        <td className="p-2 font-medium min-w-[160px]">
-                          <button type="button" className="hover:underline text-left" title="Abrir ficha" onClick={() => openEmployee(r.employeeId)}>{r.employeeName}</button>
-                          <span className="block text-[11px] text-muted-foreground font-normal">
-                            {r.days} dia(s){r.adjustments > 0 && " · ajustado"}{r.openDisputes > 0 && ` · ${r.openDisputes} contestação(ões)`}
-                          </span>
-                        </td>
-                        {view === "totals" ? (
-                          <>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(m.hoursWorked)}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.actions}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.recolhas + m.entregas}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.movements}{m.parkingMoves > 0 && <span className="text-muted-foreground"> ({m.parkingMoves})</span>}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.delays || "—"}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{m.speedingEvents}/{m.complaints}/{m.accidents}</td>
-                          </>
-                        ) : (
-                          <>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.hours)}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.actionsPerHour, 2)}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.weightedPerHour, 2)}</td>
-                            <td className="p-2 text-right tabular-nums whitespace-nowrap">{fmtNum(r.perHour.pointsPerHour, 2)}</td>
-                          </>
-                        )}
-                        <td className="p-2 text-right">
-                          <button type="button" title="Ver de onde vem a pontuação"
-                            className={`font-bold text-base tabular-nums whitespace-nowrap underline decoration-dotted underline-offset-4 ${ptsClass(r.score.totalPoints)}`}
-                            onClick={() => setDrawer({ id: r.employeeId, name: r.employeeName })}>
-                            {fmtPts(r.score.totalPoints)}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {groups
+                    ? groups.map((g) => (
+                      <Fragment key={`g-${g.key}`}>
+                        <tr className="border-b bg-muted/60">
+                          {/* telemóvel: a tabela desliza de lado; o subtotal fica preso à esquerda e quebra de linha (nunca cortado) */}
+                          <td colSpan={colCount} className="p-0 text-[13px]">
+                            <div className="sticky left-0 max-w-[calc(100vw-4rem)] p-2 whitespace-normal">
+                              <span className="font-semibold">{g.label}</span>
+                              <span className="text-muted-foreground"> · {g.totals.people} {g.totals.people === 1 ? "pessoa" : "pessoas"} · <span className={ptsClass(g.totals.points)}>{fmtPts(g.totals.points)} pts</span> · {fmtNum(g.totals.hours)} h · {g.totals.actions} ações</span>
+                            </div>
+                          </td>
+                        </tr>
+                        {g.rows.map(renderRow)}
+                      </Fragment>
+                    ))
+                    : sorted.map(renderRow)}
                 </tbody>
               </table>
             </div>

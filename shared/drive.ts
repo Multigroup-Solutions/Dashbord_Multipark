@@ -30,6 +30,7 @@
  * folha como CSV para as importações existentes.
  */
 import { crmQuerySchema } from "./crmFilters";
+import { evalFilterViewSchema, isFilterActive } from "./evaluationFilters";
 import { z } from "zod";
 import type { Action, ModuleId } from "./access";
 
@@ -602,7 +603,12 @@ export const sheetExportInputSchema = z.discriminatedUnion("report", [
     segment: z.enum(["all", "new", "recurring", "vip", "at_risk", "partner", "shared"]).nullable().optional(),
     projectId: z.number().optional(),
   }),
-  z.object({ report: z.literal("avaliacoes"), from: isoDay, to: isoDay }),
+  z.object({
+    report: z.literal("avaliacoes"), from: isoDay, to: isoDay,
+    /** 14 out 2026: a cidade/marca do topo e o filtro do ecrã (pesquisas, grupos, regras) — a folha leva o que se vê */
+    projectId: z.number().optional(),
+    filter: evalFilterViewSchema.optional(),
+  }),
 ]);
 export type SheetExportInput = z.infer<typeof sheetExportInputSchema>;
 
@@ -610,7 +616,9 @@ export type SheetExportInput = z.infer<typeof sheetExportInputSchema>;
 export function exportSpreadsheetName(input: SheetExportInput, today: string): string {
   const label = SHEET_EXPORT_LABELS[input.report];
   const period = "from" in input && "to" in input ? ` ${input.from} a ${input.to}` : "";
-  return sanitizeDriveName(`${label}${period} (exportado ${today})`, 150);
+  // a Avaliação filtrada di-lo logo no nome da folha
+  const filtered = input.report === "avaliacoes" && isFilterActive(input.filter) ? ", filtrado" : "";
+  return sanitizeDriveName(`${label}${period} (exportado ${today}${filtered})`, 150);
 }
 
 // ─── Links para abrir o Google Drive (menu "Drive" e a página /drive) ────────

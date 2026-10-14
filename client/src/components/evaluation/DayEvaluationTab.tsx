@@ -19,7 +19,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, ChevronRight, Download, MapPin, Pencil, Check, X, RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Download, MapPin, Pencil, Check, X, RefreshCw, Search } from "lucide-react";
+import { personMatches } from "@shared/evaluationFilters";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -75,6 +76,8 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
   const isSupervisor = !!user && can(user as any, "avaliacao", "edit");
   const [date, setDate] = useState(initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate) ? initialDate : operationalDayOf(Date.now()));
   const [scoreOf, setScoreOf] = useState<ScoreTarget | null>(null);
+  // 14 out 2026: procurar uma pessoa no dia (nome ou agente) — a mesma regra do ranking do Mês.
+  const [who, setWho] = useState("");
 
   const assignmentsQ = trpc.extrasDia.assignments.useQuery({ date, projectId });
   const assignments = assignmentsQ.data ?? [];
@@ -137,6 +140,24 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
           )}
         </div>
       </div>
+
+      {evaluation && evaluation.totals.people > 0 && (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <label htmlFor="aval-dia-q" className="sr-only">Procurar pessoa no dia</label>
+          <div className="flex h-10 w-full min-w-0 items-center gap-2 rounded-[10px] border-2 border-primary bg-card px-3 sm:w-[360px]">
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <input id="aval-dia-q" value={who} onChange={(e) => setWho(e.target.value)} autoComplete="off"
+              onKeyDown={(e) => { if (e.key === "Escape") setWho(""); }}
+              className="min-w-0 flex-1 border-0 bg-transparent text-sm font-medium outline-none" placeholder="Procurar pessoa (nome ou agente)…" />
+            {who && (
+              <button type="button" aria-label="Limpar a pesquisa" onClick={() => setWho("")} className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {who.trim() && <span className="text-xs text-muted-foreground">A pesquisa só esconde cartões: os totais e o CSV são do dia todo.</span>}
+        </div>
+      )}
 
       <MovementSourceNotice notice={evaluation?.notice} />
 
@@ -223,7 +244,7 @@ export default function DayEvaluationTab({ initialDate }: { initialDate?: string
 
       {evaluation?.shifts.map((s) => (
         s.drivers > 0 ? (
-          <ShiftSection key={s.shift} shiftEval={s} date={date} assignments={assignments} onScore={setScoreOf} />
+          <ShiftSection key={s.shift} shiftEval={s} date={date} assignments={assignments} onScore={setScoreOf} query={who} />
         ) : null
       ))}
 
@@ -297,11 +318,19 @@ function DayTeamSupervision({ date, projectId }: { date: string; projectId?: num
   );
 }
 
-function ShiftSection({ shiftEval, date, assignments, onScore }: {
-  shiftEval: any; date: string; assignments: any[]; onScore: (t: ScoreTarget) => void;
+/** A pessoa de um cartão cumpre a pesquisa? (nome da escala, agente e ids de agente) */
+function cardMatches(a: any, m: any, query: string): boolean {
+  if (!query.trim()) return true;
+  return personMatches([a?.personName, a?.multiparkAgentName, ...((m?.live?.agentUserIds ?? []) as string[])], query);
+}
+
+function ShiftSection({ shiftEval, date, assignments, onScore, query = "" }: {
+  shiftEval: any; date: string; assignments: any[]; onScore: (t: ScoreTarget) => void; query?: string;
 }) {
   const shiftLabel = shiftEval.shift === "morning" ? "Manhã (03–15)" : "Noite (15–03)";
-  const tlAssignment = shiftEval.tl ? assignments.find((a) => a.id === shiftEval.tl.assignmentId) : null;
+  const tlFound = shiftEval.tl ? assignments.find((a) => a.id === shiftEval.tl.assignmentId) : null;
+  const tlAssignment = tlFound && cardMatches(tlFound, shiftEval.tl, query) ? tlFound : null;
+  const members = (shiftEval.members as any[]).filter((m) => cardMatches(assignments.find((x) => x.id === m.assignmentId), m, query));
   return (
     <div className="space-y-2">
       <Card className={shiftEval.shift === "morning" ? "border-blue-200" : "border-indigo-200"}>
@@ -323,7 +352,10 @@ function ShiftSection({ shiftEval, date, assignments, onScore }: {
         </CardContent>
       </Card>
       {tlAssignment && <AgentCard assignment={tlAssignment} date={date} metrics={shiftEval.tl} onScore={onScore} />}
-      {shiftEval.members.map((m: any) => {
+      {query.trim() && !tlAssignment && members.length === 0 && (
+        <p className="px-1 text-xs text-muted-foreground">Ninguém com «{query.trim()}» neste turno.</p>
+      )}
+      {members.map((m: any) => {
         const a = assignments.find((x) => x.id === m.assignmentId);
         return a ? <AgentCard key={m.assignmentId} assignment={a} date={date} metrics={m} onScore={onScore} /> : null;
       })}

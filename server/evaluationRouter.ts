@@ -122,6 +122,14 @@ function scopedCityNames(): string[] | undefined {
   return a.cityNames ?? (a.cityName ? [a.cityName] : []);
 }
 
+/** A nossa BD (filtros guardados) — sem ela, erro claro. */
+async function filtersDb() {
+  const { getDb } = await import("./db");
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Base de dados indisponível." });
+  return db;
+}
+
 /** Máximo de dias do resumo vivo (uma leitura agregada na BD da Multipark). */
 export const LIVE_MOVEMENTS_MAX_DAYS = 62;
 
@@ -161,8 +169,17 @@ export const evaluationRouter = router({
     const openDisputes = await listDisputes({ status: "open", startDay: input.from, endDay: input.to, limit: 1000 });
     const openBy = new Map<number, number>();
     for (const o of openDisputes) openBy.set(o.employeeId, (openBy.get(o.employeeId) ?? 0) + 1);
+    // Filtros "como no Odoo" (14 out 2026): cidade, marca, agentes e equipa de cada
+    // linha (shared/evaluationFilters.ts). Nunca partem o ranking (falha → sem facetas).
+    const { loadRankingFacets, citiesOfDays } = await import("./evaluationRankingFacets");
+    const { mainTeamLeaders } = await import("../shared/evaluationTeam");
+    const { employees: facets, tlDays } = byEmp.size
+      ? await loadRankingFacets([...byEmp.keys()], input.from, input.to)
+      : { employees: new Map(), tlDays: [] };
+    const teams = mainTeamLeaders(Array.from(byEmp.values()).flat(), tlDays);
     return Array.from(byEmp.entries()).map(([employeeId, list]) => {
       const t = totalsOf(list);
+      const f = facets.get(employeeId);
       return {
         employeeId,
         employeeName: list[0].employeeName,
@@ -173,6 +190,11 @@ export const evaluationRouter = router({
         perHour: t.perHour,
         adjustments: list.reduce((s, d) => s + d.adjustments.length, 0),
         openDisputes: openBy.get(employeeId) ?? 0,
+        cities: citiesOfDays(list, f?.homeCity ?? null),
+        brand: f?.brand ?? null,
+        agents: f?.agents ?? [],
+        tlDays: list.filter((d) => d.isTeamLeader).length,
+        teamLeader: teams.get(employeeId) ?? null,
       };
     }).sort((a, b) => b.score.totalPoints - a.score.totalPoints || a.employeeName.localeCompare(b.employeeName));
   }),
@@ -285,6 +307,31 @@ export const evaluationRouter = router({
       await logActivity({ userId: ctx.user.id, action: input.hidden ? "hide_explanation" : "show_explanation", entity: "evaluation", entityId: input.employeeId, details: `${input.from}..${input.to}` });
       return { success: true };
     }),
+
+  /**
+   * Filtros guardados do ranking (14 out 2026, como no CRM): os meus + os
+   * partilhados, um "abrir com este" por pessoa. Quem vê o ranking.
+   */
+  savedFilters: protectedProcedure.query(async ({ ctx }) => {
+    requireOthers(ctx.user);
+    const { listSavedFiltersFor } = await import("./savedFilters");
+    return listSavedFiltersFor(await filtersDb(), ctx.user.id, "avaliacao");
+  }),
+  saveFilter: protectedProcedure
+    .input(z.object({ id: z.number().int().optional(), name: z.string().trim().min(1).max(128), payload: z.unknown(), shared: z.boolean(), isDefault: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      requireOthers(ctx.user);
+      const { saveFilterFor } = await import("./savedFilters");
+      try { return await saveFilterFor(await filtersDb(), ctx.user.id, "avaliacao", input); }
+      catch (err: any) { throw new TRPCError({ code: "BAD_REQUEST", message: String(err?.message ?? err) }); }
+    }),
+  deleteFilter: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    requireOthers(ctx.user);
+    const { deleteFilterFor } = await import("./savedFilters");
+    try { await deleteFilterFor(await filtersDb(), ctx.user.id, "avaliacao", input.id); }
+    catch (err: any) { throw new TRPCError({ code: "NOT_FOUND", message: String(err?.message ?? err) }); }
+    return { ok: true };
+  }),
 
   /** Recalcular um período (máx. 93 dias) — quem gere a Avaliação ("edit"). */
   recompute: protectedProcedure.input(rangeSchema).mutation(async ({ ctx, input }) => {
