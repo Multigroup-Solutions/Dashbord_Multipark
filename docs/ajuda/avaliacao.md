@@ -2,7 +2,7 @@
 modulo: avaliacao
 titulo: Avaliação (dia e mês)
 rotas: /avaliacao, /avaliacao-operacional
-palavras: avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
+palavras: pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
 ---
 # Avaliação
 
@@ -31,15 +31,40 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - Clicar nos pontos abre o detalhe das regras. Com ficha, é o mesmo detalhe do mês, com ajustes e contestações.
 - O lápis ao lado do agente muda o nome de agente associado à ficha. Só aparece a quem gere o RH.
 - **CSV** exporta o dia.
+- **Procurar pessoa** (por cima dos turnos): escreve o nome ou o agente e só ficam os cartões dessa pessoa. A pesquisa só esconde cartões: os totais e o CSV continuam a ser do dia todo.
 
 **Separador Mês**
 - O mesmo separador está também em **Operações → Actividade Diária → Avaliação do mês** (é uma cópia: o mesmo ecrã, os mesmos números e a mesma regra de acesso). Aqui na Avaliação continua igual.
 - Abre no **mês atual** (botão **Este mês**). Podes andar mês a mês ou escolher outro período. O link antigo `?tab=semanas` abre este separador.
 - O **filtro de cidade e marca** do topo da app conta: a cidade é a do dia na escala (quem é de Lisboa e fez um dia no Porto entra no Porto; sem escala, vale a cidade da ficha). A marca filtra os movimentos lidos da Multipark pelos parques dela; os pontos guardados são por cidade (as pessoas trabalham para todas as marcas da cidade).
 - **Ranking** por pontos, com a vista **Por hora**. Todas as colunas ordenam. Clicar no nome abre a ficha e clicar nos pontos abre o detalhe.
+- Por cima do ranking estão a **pesquisa e os filtros** (ver a seguir).
 - **Equipas — team leaders e supervisão**: por cidade (o supervisor), pessoas·dia, ações, pontos e média; e por team leader, os dias como TL, os pontos dele como condutor e os pontos e a média da equipa nesses dias (mesmo dia, cidade e turno). Todas as colunas ordenam.
 - **Movimentos na BD da Multipark**: tabela por pessoa, lida no momento, com ações, check-ins, movimentos, check-outs, reservas, check-ins/check-outs assinados, ocorrências, avaliações dos clientes e a última ação. Mostra no máximo 62 dias de cada vez.
 - **Recalcular** (quem gere a avaliação) volta a calcular o período já. Um período grande pode ficar a meio e o resto fica para o recálculo automático da noite.
+
+**Pesquisar e filtrar o ranking (como no Odoo)**
+- **Pesquisa**: escreve o nome ou o n.º de agente e o ranking filtra-se logo. Enquanto escreves aparece **Procurar «…» em**: Nome ou n.º de agente, Cidade, Marca, Posto ou Equipa (TL), com quantas pessoas encontra em cada. Escolhe uma e a pesquisa passa a **chip** (o Enter faz o mesmo, no nome). No mesmo campo, as pesquisas juntam com "ou"; em campos diferentes, com "e".
+- **Grupos**: **Cidade**, **Marca**, **Posto** (condutor, condutor sénior, extra, team leader), **Equipa** e **Só com…** (excessos de velocidade, reclamações, acidentes, atrasos, entregas atrasadas, contestações abertas, com ajustes, pontos negativos). No mesmo grupo junta com "ou" (Porto ou Faro); entre grupos, com "e" (Porto e só com reclamações).
+- **+ Regra**: regras sobre as colunas e as métricas: pontos (total, ganhos e perdidos), horas, dias, ações, recolhas e entregas, movimentos, levar ao parque, atrasos, entregas atrasadas, excessos de velocidade, reclamações, acidentes, custo, ações e pontos por hora, ocorrências, penalizações, contestações abertas e dias como TL.
+  - Operadores: **≥**, **≤**, **=**, **entre**, **tem** e **não tem**.
+  - Escolhe se cumprem **todas as regras** ou **pelo menos uma**.
+  - Exemplos: "Pontos ≥ 500 e Excessos de velocidade ≥ 1"; "Reclamações: tem".
+- Cada filtro aparece como **chip**: o **×** tira esse e **Limpar tudo** tira todos.
+- **Agrupar** por cidade, marca, posto ou equipa (TL), com o total de cada grupo (pessoas, horas, ações e pontos).
+  - A cidade de cada pessoa é a da escala onde fez mais dias; sem escala, a da ficha.
+  - A marca é a da ficha.
+  - A equipa é o TL com quem mais trabalhou (mesmo dia, cidade e turno). Quem só foi TL fica na própria equipa.
+- **Filtros guardados**: guarda o filtro com um nome. Leva também o agrupar, a vista (Totais ou Por hora) e a ordem.
+  - Podes **partilhá-lo com a equipa** (quem vê o ranking).
+  - **Abrir com este** marca um por omissão (um por pessoa). Aplica-se uma vez por sessão, se não tiveres já outro filtro.
+- Com filtro, os **cartões do topo** (Horas, Ações, Custo, Melhor), o **CSV** e o **Exportar para Sheets** levam só as pessoas filtradas, e dizem-no:
+  - o CSV tem o filtro na primeira linha (com "12 de 48 colaboradores") e "_filtrado" no nome;
+  - a folha tem "filtrado" no nome, o separador **Ranking (filtrado)** e um separador **Filtro**;
+  - a folha leva também o filtro de cidade e marca do topo.
+- A **posição (#)** é a do ranking do período, sem filtro.
+- O filtro fica enquanto o separador do browser estiver aberto, aqui e na Atividade diária → Avaliação do mês.
+- As **Equipas** e os **Movimentos na BD da Multipark**, por baixo, não seguem este filtro.
 
 **Se aparecer um aviso amarelo**, a base de dados da Multipark não respondeu.
 - O que está gravado **não é mexido**: nem o recálculo da noite nem o **Recalcular** gravam por cima. Antes podiam pôr zeros nos dias bons.
@@ -58,6 +83,8 @@ São as permissões de Definições → Permissões, iguais no ecrã e no servid
 - **Mês**: team leaders, só a **sua equipa** (condutores e extras abaixo deles, e eles próprios), supervisores, front e backoffice e a administração.
 - **Recalcular, ajustar e decidir contestações**: supervisores, front e backoffice e a administração. Ninguém ajusta nem decide a sua própria avaliação.
 - **A minha avaliação**: cada pessoa com ficha. Funciona mesmo sem centro de custos.
+- **Filtros guardados do ranking**: quem vê o Mês. Os partilhados aparecem a todos os que veem o Mês; só quem o criou o apaga.
+- **Contestações** tem **Procurar pessoa**, que filtra pelo nome.
 - Todos veem só os dados das suas cidades.
 - O link antigo `/avaliacao-operacional` abre o separador Dia.
 

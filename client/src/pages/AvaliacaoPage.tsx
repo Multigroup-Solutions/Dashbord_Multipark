@@ -23,7 +23,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Trophy } from "lucide-react";
+import { Search, Trophy, X } from "lucide-react";
+import { personMatches } from "@shared/evaluationFilters";
 import { can } from "@shared/access";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import DayEvaluationTab from "@/components/evaluation/DayEvaluationTab";
@@ -149,6 +150,9 @@ function DisputesView() {
   const [status, setStatus] = useState<"open" | "accepted" | "rejected">("open");
   const q = trpc.evaluation.disputes.list.useQuery({ status });
   const [resolving, setResolving] = useState<any>(null);
+  // 14 out 2026: procurar a pessoa (a mesma regra do ranking do Mês).
+  const [who, setWho] = useState("");
+  const list = (q.data ?? []).filter((d: any) => personMatches([d.employeeName], who));
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center gap-2 space-y-0">
@@ -161,11 +165,25 @@ function DisputesView() {
           ))}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
+        {(q.data ?? []).length > 0 && (
+          <div className="flex h-10 w-full min-w-0 items-center gap-2 rounded-[10px] border-2 border-primary bg-card px-3 sm:w-[360px]">
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <label htmlFor="aval-cont-q" className="sr-only">Procurar pessoa nas contestações</label>
+            <input id="aval-cont-q" value={who} onChange={(e) => setWho(e.target.value)} autoComplete="off"
+              className="min-w-0 flex-1 border-0 bg-transparent text-sm font-medium outline-none" placeholder="Procurar pessoa…" />
+            {who && (
+              <button type="button" aria-label="Limpar a pesquisa" onClick={() => setWho("")} className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
         {q.isLoading ? <p className="text-sm text-muted-foreground">A carregar...</p>
           : q.error ? <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="as contestações" />
           : (q.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground">Sem contestações.</p>
-          : <DisputeList disputes={q.data ?? []} onResolve={setResolving} />}
+          : list.length === 0 ? <p className="text-sm text-muted-foreground">Ninguém com «{who.trim()}» nestas contestações.</p>
+          : <DisputeList disputes={list} onResolve={setResolving} />}
       </CardContent>
       {resolving && (
         <ResolveDisputeDialog dispute={resolving} onClose={() => setResolving(null)}

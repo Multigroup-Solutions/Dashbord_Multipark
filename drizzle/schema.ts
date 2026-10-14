@@ -4382,12 +4382,15 @@ export const crmSavedFilters = mysqlTable("crm_saved_filters", {
 	payloadJson: text().notNull(),
 	shared: tinyint().default(0).notNull(),
 	isDefault: tinyint().default(0).notNull(),
+	// 0665: a página do filtro — "crm" (Clientes) ou "avaliacao" (Avaliação → Mês).
+	page: varchar({ length: 24 }).default('crm').notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	index("idx_crm_filters_user").on(table.userId),
 	index("idx_crm_filters_shared").on(table.shared),
+	index("idx_crm_filters_user_page").on(table.userId, table.page),
 ]);
 
 /** Email/telefone/matrícula retirados à mão de uma ficha: a carga não os volta a pôr. */

@@ -101,6 +101,7 @@ import {
   HardDrive,
   PhoneCall,
   Plane,
+  UserRound,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -961,6 +962,12 @@ function DashboardLayoutContent({
                   )}
                 </div>
                 <DropdownMenuSeparator />
+                {/* Jorge (14 out 2026): o "Perfil" da barra do telemóvel também no computador.
+                    /perfil é pessoal (shared/routeAccess.ts): abre para todos os papéis. */}
+                <DropdownMenuItem onClick={() => navigate("/perfil")} className="cursor-pointer">
+                  <UserRound className="mr-2 h-4 w-4" />
+                  <span>O meu perfil</span>
+                </DropdownMenuItem>
                 {pontoStatus === "out" && (
                   <DropdownMenuItem
                     onClick={() => { setPontoTerminal(false); setPontoMode("check_in"); }}
